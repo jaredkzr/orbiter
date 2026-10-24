@@ -23,14 +23,14 @@ bool TemporalAA::Init (vkc::Context *c)
 	sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 	VK_CHECK(vkCreateSampler (ctx->device, &sci, nullptr, &sampler));
 
-	VkDescriptorSetLayoutBinding b[5];
-	for (uint32_t i = 0; i < 4; i++) b[i] = { i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
-	b[4] = { 4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+	VkDescriptorSetLayoutBinding b[6];
+	for (uint32_t i = 0; i < 6; i++) b[i] = { i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+	b[4].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 5;
+	lci.bindingCount = 6;
 	lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &setLayout));
-	VkDescriptorPoolSize ps[2] = { { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8 }, { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 } };
+	VkDescriptorPoolSize ps[2] = { { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 10 }, { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 } };
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.maxSets = 2;
 	pci.poolSizeCount = 2;
@@ -66,7 +66,7 @@ void TemporalAA::Shutdown ()
 	ctx = nullptr;
 }
 
-void TemporalAA::CreateImages (VkImageView scene, VkImageView prepass, VkImageView velocity)
+void TemporalAA::CreateImages (VkImageView scene, VkImageView prepass, VkImageView velocity, VkImageView reactive)
 {
 	extent = ctx->RenderExtent();
 	for (auto &h : history) {
@@ -101,24 +101,25 @@ void TemporalAA::CreateImages (VkImageView scene, VkImageView prepass, VkImageVi
 	dai.pSetLayouts = l;
 	VK_CHECK(vkAllocateDescriptorSets (ctx->device, &dai, sets));
 	for (int i = 0; i < 2; i++) { // set i writes history[i], reads history[1-i]
-		VkDescriptorImageInfo ii[5] = {
+		VkDescriptorImageInfo ii[6] = {
 			{ sampler, scene, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
 			{ sampler, history[1-i].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
 			{ sampler, velocity, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
 			{ sampler, prepass, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
-			{ VK_NULL_HANDLE, history[i].view, VK_IMAGE_LAYOUT_GENERAL } };
-		VkWriteDescriptorSet wr[5]{};
-		for (uint32_t k = 0; k < 5; k++) {
+			{ VK_NULL_HANDLE, history[i].view, VK_IMAGE_LAYOUT_GENERAL },
+			{ sampler, reactive, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL } };
+		VkWriteDescriptorSet wr[6]{};
+		for (uint32_t k = 0; k < 6; k++) {
 			wr[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 			wr[k].dstSet = sets[i];
 			wr[k].dstBinding = k;
 			wr[k].descriptorCount = 1;
-			wr[k].descriptorType = k < 4 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+			wr[k].descriptorType = k != 4 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
 			wr[k].pImageInfo = &ii[k];
 		}
-		vkUpdateDescriptorSets (ctx->device, 5, wr, 0, nullptr);
+		vkUpdateDescriptorSets (ctx->device, 6, wr, 0, nullptr);
 	}
-	inputs[0] = scene, inputs[1] = prepass, inputs[2] = velocity;
+	inputs[0] = scene, inputs[1] = prepass, inputs[2] = velocity, inputs[3] = reactive;
 	generation = ctx->SwapchainGeneration();
 	fresh = true;
 }
@@ -132,12 +133,12 @@ void TemporalAA::DestroyImages ()
 	generation = ~0u;
 }
 
-VkImageView TemporalAA::Resolve (VkImageView scene, VkImageView prepass, VkImageView velocity,
+VkImageView TemporalAA::Resolve (VkImageView scene, VkImageView prepass, VkImageView velocity, VkImageView reactive,
 	const Mat4 &skyMotion, float fx, float fy, bool reset)
 {
-	if (generation != ctx->SwapchainGeneration() || inputs[0] != scene || inputs[1] != prepass || inputs[2] != velocity) {
+	if (generation != ctx->SwapchainGeneration() || inputs[0] != scene || inputs[1] != prepass || inputs[2] != velocity || inputs[3] != reactive) {
 		DestroyImages ();
-		CreateImages (scene, prepass, velocity);
+		CreateImages (scene, prepass, velocity, reactive);
 	}
 	ctx->EndTarget ();
 	VkCommandBuffer cmd = ctx->Cmd();

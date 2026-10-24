@@ -306,6 +306,8 @@ void Scene::Shutdown ()
 	taa.reset();
 	if (plumes) plumes->Shutdown ();
 	plumes.reset();
+	ctx->DestroyImage (reactive);
+	ctx->DestroyImage (reactiveMS);
 	if (vclouds) vclouds->Shutdown ();
 	vclouds.reset();
 	if (fsr) fsr->Shutdown ();
@@ -611,9 +613,45 @@ void Scene::DrawBillboards (VkTexture *tex, bool additive, const PVtx *v, size_t
 	vkCmdDraw (cmd, (uint32_t)n, 1, 0, 0);
 }
 
-void Scene::DrawPlumes (uint32_t owner)
+void Scene::EnsureReactiveMask ()
 {
-	plumes->Draw (owner, FrameSet (), camAtmSet, gc->TexMgr()->White());
+	if (reactiveGen == ctx->SwapchainGeneration ()) return;
+	vkDeviceWaitIdle (ctx->device);
+	ctx->DestroyImage (reactive);
+	ctx->DestroyImage (reactiveMS);
+	VkExtent2D e = ctx->RenderExtent ();
+	auto create = [this, e](VkSampleCountFlagBits samples, VkImageUsageFlags usage) {
+		vkc::Image im;
+		VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+		ici.imageType = VK_IMAGE_TYPE_2D;
+		ici.format = REACTIVE_FORMAT;
+		ici.extent = { e.width, e.height, 1 };
+		ici.mipLevels = 1;
+		ici.arrayLayers = 1;
+		ici.samples = samples;
+		ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+		ici.usage = usage;
+		VmaAllocationCreateInfo aci{};
+		aci.usage = VMA_MEMORY_USAGE_AUTO;
+		VK_CHECK(vmaCreateImage (ctx->allocator, &ici, &aci, &im.image, &im.alloc, nullptr));
+		VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+		vci.image = im.image;
+		vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		vci.format = REACTIVE_FORMAT;
+		vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &im.view));
+		return im;
+	};
+	reactive = create (VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+	if (ctx->sceneSamples != VK_SAMPLE_COUNT_1_BIT)
+		reactiveMS = create (ctx->sceneSamples, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT);
+	// (the images are written in every frame's scene before they are read)
+	VkImage img = reactive.image;
+	ctx->ImmediateSubmit ([img](VkCommandBuffer cmd) {
+		vkc::ImageBarrier (cmd, img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+	});
+	reactiveGen = ctx->SwapchainGeneration ();
 }
 
 void Scene::BuildSphere ()
@@ -884,6 +922,7 @@ void Scene::BeginFrame ()
 	ssr->EnsureSize (ao->PrepassView (), ao->MaterialView (), ao->VelocityView ());
 	ssr->BeginFrame ();
 	WriteSSRDescriptors ();
+	EnsureReactiveMask ();
 	if (rt) rt->BeginFrame ();
 	// the previous frame does not continue into this one (camera cut)
 	cameraCut = !havePrev || length (camPos - prevCamPos) > 5e3;
@@ -1241,12 +1280,18 @@ void Scene::Render ()
 	}
 
 	std::sort (list.begin(), list.end(), [](VObject *a, VObject *b) { return a->CamDist() > b->CamDist(); });
-	plumes->SetPrepass (ao->PrepassView ());
 	for (auto *vo : list) vo->Render (RenderPass::Transparent);
 
 	static const bool particles = !getenv ("ORBITER_VK_PARTICLES") || atoi (getenv ("ORBITER_VK_PARTICLES")) != 0;
 	if (particles)
 		for (auto *ps : gc->ParticleStreams()) ps->Render (this);
+
+	// effects that also write the reactive mask: engine plumes
+	vkc::Target rt{ reactive.image, reactive.view, REACTIVE_FORMAT, ctx->RenderExtent () };
+	vkc::Target rtMS{ reactiveMS.image, reactiveMS.view, REACTIVE_FORMAT, ctx->RenderExtent () };
+	ctx->BindSceneWithMask (rt, reactiveMS.image ? &rtMS : nullptr);
+	plumes->SetPrepass (ao->PrepassView ());
+	plumes->Draw (FrameSet (), camAtmSet, gc->TexMgr()->White());
 }
 
 VkImageView Scene::ResolveTemporal (VkExtent2D &size)
@@ -1267,6 +1312,7 @@ VkImageView Scene::ResolveTemporal (VkExtent2D &size)
 			in.color = ctx->SceneImage (), in.colorFormat = ctx->sceneFormat;
 			in.depth = ctx->DepthImage ();
 			in.velocity = ao->VelocityImage (), in.velocityFormat = AmbientOcclusion::VELOCITY_FORMAT;
+			in.reactive = reactive.image;
 			in.jitter[0] = jitterPixels[0], in.jitter[1] = jitterPixels[1];
 			in.frameTime = lastFrameTime < 0.0 ? 1.0f / 60.0f : (float)std::min (t - lastFrameTime, 0.5);
 			lastFrameTime = t;
@@ -1280,7 +1326,7 @@ VkImageView Scene::ResolveTemporal (VkExtent2D &size)
 			}
 		}
 		if (!up)
-			out = taa->Resolve (ctx->SceneView (), ao->PrepassView (), ao->VelocityView (), skyMotion,
+			out = taa->Resolve (ctx->SceneView (), ao->PrepassView (), ao->VelocityView (), reactive.view, skyMotion,
 				proj[0], -proj[5], reset);
 	}
 	// this frame's camera and object poses, for the next frame's motion

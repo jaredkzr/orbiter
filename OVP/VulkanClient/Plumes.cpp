@@ -272,14 +272,24 @@ bool PlumeRenderer::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout, Vk
 	cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
 	cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
 	cba.alphaBlendOp = VK_BLEND_OP_ADD;
+	// reactive mask (temporal anti-aliasing): the strongest contribution
+	VkPipelineColorBlendAttachmentState cbm{};
+	cbm.colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
+	cbm.blendEnable = VK_TRUE;
+	cbm.srcColorBlendFactor = cbm.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+	cbm.colorBlendOp = VK_BLEND_OP_MAX;
+	cbm.srcAlphaBlendFactor = cbm.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+	cbm.alphaBlendOp = VK_BLEND_OP_MAX;
+	VkPipelineColorBlendAttachmentState cbs[2] = { cba, cbm };
 	VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-	cb.attachmentCount = 1, cb.pAttachments = &cba;
+	cb.attachmentCount = 2, cb.pAttachments = cbs;
 	VkDynamicState dyn[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
 	VkPipelineDynamicStateCreateInfo dy{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
 	dy.dynamicStateCount = 2, dy.pDynamicStates = dyn;
 	VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-	rci.colorAttachmentCount = 1;
-	rci.pColorAttachmentFormats = &ctx->sceneFormat;
+	VkFormat formats[2] = { ctx->sceneFormat, VK_FORMAT_R8_UNORM }; // (Scene::REACTIVE_FORMAT)
+	rci.colorAttachmentCount = 2;
+	rci.pColorAttachmentFormats = formats;
 	rci.depthAttachmentFormat = ctx->depthFormat;
 	VkGraphicsPipelineCreateInfo gpi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
 	gpi.pNext = &rci;
@@ -526,7 +536,7 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner)
 	((uint32_t*)buf.mapped)[slot] = (uint32_t)list.size() + 1;
 
 	// bounding box (view space)
-	Entry en{ owner, index, p.tint, {} };
+	Entry en{ owner, index, p.tint, length (p.pos), {} };
 	static const int faces[6][4] = { { 0, 1, 3, 2 }, { 4, 6, 7, 5 }, { 0, 4, 5, 1 }, { 2, 3, 7, 6 }, { 0, 2, 6, 4 }, { 1, 5, 7, 3 } };
 	VECTOR3 corner[8];
 	for (int i = 0; i < 8; i++) {
@@ -544,26 +554,24 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner)
 	return (int)index;
 }
 
-void PlumeRenderer::Draw (uint32_t owner, VkDescriptorSet frameSet, VkDescriptorSet atmSet, VkTexture *white)
+void PlumeRenderer::Draw (VkDescriptorSet frameSet, VkDescriptorSet atmSet, VkTexture *white)
 {
-	if (!prepassView) return;
+	if (!prepassView || list.empty()) return;
 	VkCommandBuffer cmd = ctx->Cmd();
-	bool bound = false;
-	for (const Entry &en : list) {
-		if (en.owner != owner) continue;
-		if (!bound) {
-			vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
-			VkDescriptorSet s[2] = { frameSet, set };
-			vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 2, s, 0, nullptr);
-			vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 3, 1, &atmSet, 0, nullptr);
-			bound = true;
-		}
-		VkTexture *tex = en.tint ? en.tint : white;
+	std::vector<const Entry*> order;
+	for (const Entry &en : list) order.push_back (&en);
+	std::sort (order.begin(), order.end(), [](const Entry *a, const Entry *b) { return a->dist > b->dist; });
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+	VkDescriptorSet s[2] = { frameSet, set };
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 2, s, 0, nullptr);
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 3, 1, &atmSet, 0, nullptr);
+	for (const Entry *en : order) {
+		VkTexture *tex = en->tint ? en->tint : white;
 		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 2, 1, &tex->set, 0, nullptr);
-		vkc::Context::Transient vb = ctx->AllocTransient (sizeof(en.box));
-		memcpy (vb.ptr, en.box, sizeof(en.box));
+		vkc::Context::Transient vb = ctx->AllocTransient (sizeof(en->box));
+		memcpy (vb.ptr, en->box, sizeof(en->box));
 		vkCmdBindVertexBuffers (cmd, 0, 1, &vb.buffer, &vb.offset);
-		vkCmdPushConstants (cmd, layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(uint32_t), &en.index);
+		vkCmdPushConstants (cmd, layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(uint32_t), &en->index);
 		vkCmdDraw (cmd, 36, 1, 0, 0);
 	}
 }

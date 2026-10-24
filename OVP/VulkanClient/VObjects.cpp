@@ -483,8 +483,7 @@ void VVessel::CollectPlumes (PlumeRenderer &pr)
 
 void VVessel::RenderExhaust ()
 {
-	// plume volumes (collected before the prepass)
-	scene->DrawPlumes (id);
+	// (plume volumes: Scene::Render, after the transparent pass)
 	// flame billboards: exhaust textures hold the flame strip in u = [0, 1/4]
 	// (nozzle at v = 0) and a glow sprite in [1/2, 1] x [0, 1/2]
 	DWORD n = vessel->GetExhaustCount ();

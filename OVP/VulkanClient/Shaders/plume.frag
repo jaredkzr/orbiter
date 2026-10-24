@@ -26,6 +26,7 @@ layout(push_constant) uniform Draw {
 
 layout(location = 0) in vec3 vPos;
 layout(location = 0) out vec4 outColor;
+layout(location = 1) out float outReactive; // how much temporal filters should rely on this frame
 
 float Hash (uvec3 v)
 {
@@ -70,4 +71,6 @@ void main ()
 		col = col * Ta + a * Lin;
 	}
 	outColor = vec4 (col, a);
+	float lum = dot (col, vec3 (0.2126, 0.7152, 0.0722));
+	outReactive = clamp (max (a, lum / (1.0 + lum)), 0.0, 0.9);
 }

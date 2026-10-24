@@ -139,8 +139,12 @@ public:
 	VkTexture *DefaultExhaustTex () const { return exhaustTex; }
 	/// engine plume volumes (null: billboards)
 	class PlumeRenderer *Plumes () { return plumes && plumes->enabled ? plumes.get() : nullptr; }
-	/// draw the plume volumes of an object (transparent pass)
-	void DrawPlumes (uint32_t owner);
+	/// reactive mask of this frame (shader-read layout after Render): where
+	/// plumes and particles were drawn, which temporal filters should trust
+	/// their history less
+	static constexpr VkFormat REACTIVE_FORMAT = VK_FORMAT_R8_UNORM;
+	VkImageView ReactiveView () const { return reactive.view; }
+	VkImage ReactiveImage () const { return reactive.image; }
 	/// radial glow sprite (white, falling off to zero at the edge), full uv range
 	VkTexture *GlowTex () const { return glowTex; }
 	TileRenderer *Tiles () { return tiles.get(); }
@@ -201,6 +205,9 @@ private:
 	std::unique_ptr<class FsrUpscaler> fsr;
 	std::unique_ptr<class VolumetricClouds> vclouds;
 	std::unique_ptr<PlumeRenderer> plumes;
+	vkc::Image reactive, reactiveMS; // (multisampled: drawn to, resolved into reactive)
+	uint32_t reactiveGen = ~0u;
+	void EnsureReactiveMask ();
 	bool cloudsActive = false;   // volumetric clouds this frame
 	float ambientRGB[3] = {};
 	void RenderVolumetricClouds ();

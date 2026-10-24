@@ -203,6 +203,8 @@ VkImageView FsrUpscaler::Dispatch (const Inputs &in)
 	d.color = ffxGetResourceVK ((void*)in.color, Desc (in.colorFormat, rs, FFX_RESOURCE_USAGE_READ_ONLY), L"color", FFX_RESOURCE_STATE_COMPUTE_READ);
 	d.depth = ffxGetResourceVK ((void*)in.depth, Desc (ctx->depthFormat, rs, FFX_RESOURCE_USAGE_DEPTHTARGET), L"depth", FFX_RESOURCE_STATE_COMPUTE_READ);
 	d.motionVectors = ffxGetResourceVK ((void*)in.velocity, Desc (in.velocityFormat, rs, FFX_RESOURCE_USAGE_READ_ONLY), L"motion", FFX_RESOURCE_STATE_COMPUTE_READ);
+	if (in.reactive)
+		d.reactive = ffxGetResourceVK ((void*)in.reactive, Desc (VK_FORMAT_R8_UNORM, rs, FFX_RESOURCE_USAGE_READ_ONLY), L"reactive", FFX_RESOURCE_STATE_COMPUTE_READ);
 	d.output = ffxGetResourceVK ((void*)impl->output.image, Desc (OUTPUT_FORMAT, impl->displaySize, FFX_RESOURCE_USAGE_UAV), L"output", FFX_RESOURCE_STATE_COMPUTE_READ);
 	d.dilatedDepth = ffxGetResourceVK ((void*)impl->shared[0].img.image, impl->shared[0].desc, L"dilatedDepth", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
 	d.dilatedMotionVectors = ffxGetResourceVK ((void*)impl->shared[1].img.image, impl->shared[1].desc, L"dilatedMotion", FFX_RESOURCE_STATE_UNORDERED_ACCESS);

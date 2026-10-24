@@ -30,6 +30,7 @@ public:
 		VkImage color;         // HDR scene, render size, shader-read layout
 		VkImage depth;         // scene depth (inverted, infinite), render size, depth-attachment layout
 		VkImage velocity;      // screen motion [uv] (now - then), render size, shader-read layout
+		VkImage reactive;      // reactive mask (R8, render size, shader-read layout; or null)
 		VkFormat colorFormat, velocityFormat;
 		float jitter[2];       // [pixels]
 		float frameTime;       // [s]

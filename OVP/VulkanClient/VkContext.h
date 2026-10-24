@@ -79,6 +79,11 @@ namespace vkc {
 		/// The HDR colour image the 3D scene is rendered into (with the
 		/// backbuffer's depth buffer); kept in shader-read layout between scopes
 		void BindScene (bool withDepth);
+		/// The scene image (loaded) with a second colour target, cleared to 0
+		/// (same size and sample count as the scene; with multisampling,
+		/// `extraMS` is drawn to and resolved into `extra`), and the depth
+		/// buffer (loaded): effects that also write a mask (plumes, particles)
+		void BindSceneWithMask (const Target &extra, const Target *extraMS);
 		VkImageView SceneView () const { return sceneColor.view; }
 		VkImage SceneImage () const { return sceneColor.image; }
 		/// depth buffer of the scene (depth-attachment layout after the scene)

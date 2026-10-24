@@ -101,8 +101,8 @@ public:
 	int Add (const PlumeDraw &p, uint32_t owner);
 	/// The prepass image (view depth) the plumes are clipped against
 	void SetPrepass (VkImageView prepass);
-	/// Draw the plumes of an object (scene's rendering scope, transparent pass)
-	void Draw (uint32_t owner, VkDescriptorSet frameSet, VkDescriptorSet atmSet, VkTexture *white);
+	/// Draw the plumes, far to near (scene with reactive mask, Context::BindSceneWithMask)
+	void Draw (VkDescriptorSet frameSet, VkDescriptorSet atmSet, VkTexture *white);
 
 	/// plume buffer (plume.glsl), noise volumes
 	VkBuffer Buffer () const { return buf.buffer; }
@@ -121,7 +121,7 @@ public:
 
 private:
 	struct Params;
-	struct Entry { uint32_t owner, index; VkTexture *tint; float box[36 * 3]; };
+	struct Entry { uint32_t owner, index; VkTexture *tint; double dist; float box[36 * 3]; };
 	vkc::Context *ctx = nullptr;
 	vkc::Buffer buf;
 	uint32_t slot = 0;
