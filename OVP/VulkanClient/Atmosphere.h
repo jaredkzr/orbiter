@@ -70,6 +70,7 @@ private:
 	VkDescriptorSet sets[vkc::FRAMES_IN_FLIGHT] = {};
 	float groundColour[4] = { 0.5f, 0.5f, 0.5f, 0.0f };
 	float cloudParams[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	bool ripple = false; // wave normals on water
 };
 
 #endif // !__ATMOSPHERE_H

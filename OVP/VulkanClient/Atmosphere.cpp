@@ -26,6 +26,7 @@ namespace {
 		float misc[4];
 		float ground[4];
 		float cloud[4];
+		float water[4];
 	};
 
 	constexpr uint32_t MAX_ATMOSPHERES = 64; // plus one "no atmosphere" set
@@ -213,6 +214,8 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		present = true;
 	}
 
+	if (const bool *r = (const bool*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_SURFACERIPPLE)) ripple = *r;
+
 	AtmosphereRenderer *ar = scene->Atm();
 	for (uint32_t i = 0; i < vkc::FRAMES_IN_FLIGHT; i++) {
 		ubo[i] = ctx->CreateBuffer (sizeof(AtmUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
@@ -311,6 +314,16 @@ void Atmosphere::Update ()
 		if (const double *rot = (const double*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_CLOUDROTATION))
 			cloudParams[1] = (float)*rot;
 	memcpy (u.cloud, cloudParams, sizeof(cloudParams));
+	// wave pattern origin: the camera position snapped to 1 km, passed relative
+	// to the camera (small values, no loss of precision)
+	if (ripple) {
+		VECTOR3 origin = _V(std::floor (cam.x / 1000.0), std::floor (cam.y / 1000.0), std::floor (cam.z / 1000.0)) * 1000.0;
+		VECTOR3 rel = cam - origin;
+		u.water[0] = (float)rel.x, u.water[1] = (float)rel.y, u.water[2] = (float)rel.z;
+		u.water[3] = (float)fmod (oapiGetSimTime (), 3600.0);
+	} else {
+		u.water[3] = -1.0f;
+	}
 	u.misc[1] = (float)(1.0 / scene->ProjX());
 	u.misc[2] = (float)(1.0 / scene->ProjY());
 	memcpy (ubo[ctx->FrameIndex()].mapped, &u, sizeof(u));

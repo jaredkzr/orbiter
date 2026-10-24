@@ -33,3 +33,6 @@ Known gaps and limitations, to be addressed later.
   soft and coarse, not yet checked visually over broken cloud cover. Using
   the cloud quadtree tiles would sharpen them.
 - No terrain self-shadowing (mountains at low sun).
+
+## Water
+- Sun glitter and wave normals not yet checked in a view facing the sun.
