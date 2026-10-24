@@ -80,7 +80,14 @@ public:
 	void DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass,
 		const std::vector<Mat4> *groupTransforms = nullptr, const std::vector<uint8_t> *groupVisible = nullptr,
 		const std::vector<GroupTexOverride> *texOverride = nullptr);
-	void DrawSphere (const Mat4 &modelView, const float colour[4], bool unlit);
+	void DrawSphere (const Mat4 &modelView, const float colour[4], bool unlit, VkTexture *tex = nullptr);
+	VkBuffer SphereVtx () const { return sphereVtx.buffer; }
+	VkBuffer SphereIdx () const { return sphereIdx.buffer; }
+	uint32_t SphereNIdx () const { return sphereNIdx; }
+	/// draw indexed NTVERTEX geometry (32-bit indices) with a texture and
+	/// diffuse colour, opaque or alpha-blended
+	void DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &modelView,
+		VkTexture *tex, const float colour[4], bool unlit, bool blend);
 	double PixelSize (double size, double dist) const;
 
 	/// Fraction of the sun's disc visible from a global position (planets

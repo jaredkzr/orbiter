@@ -838,17 +838,23 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 	}
 }
 
-void Scene::DrawSphere (const Mat4 &modelView, const float colour[4], bool unlit)
+void Scene::DrawSphere (const Mat4 &modelView, const float colour[4], bool unlit, VkTexture *tex)
+{
+	DrawGeometry (sphereVtx.buffer, sphereIdx.buffer, sphereNIdx, modelView, tex, colour, unlit, false);
+}
+
+void Scene::DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &modelView,
+	VkTexture *tex, const float colour[4], bool unlit, bool blend)
 {
 	VkCommandBuffer cmd = ctx->Cmd();
-	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshOpaque);
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, blend ? meshBlend : meshOpaque);
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &frameSet[ctx->FrameIndex()], 0, nullptr);
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 2, 1, &camAtmSet, 0, nullptr);
-	VkDescriptorSet ws = gc->TexMgr()->White()->set;
-	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 1, 1, &ws, 0, nullptr);
+	VkDescriptorSet ts = (tex ? tex : gc->TexMgr()->White())->set;
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 1, 1, &ts, 0, nullptr);
 	VkDeviceSize ofs = 0;
-	vkCmdBindVertexBuffers (cmd, 0, 1, &sphereVtx.buffer, &ofs);
-	vkCmdBindIndexBuffer (cmd, sphereIdx.buffer, 0, VK_INDEX_TYPE_UINT32);
+	vkCmdBindVertexBuffers (cmd, 0, 1, &vb, &ofs);
+	vkCmdBindIndexBuffer (cmd, ib, 0, VK_INDEX_TYPE_UINT32);
 	MeshPushConstants pc{};
 	modelView.ToFloat (pc.modelView);
 	memcpy (pc.diffuse, colour, 4 * sizeof(float));
@@ -856,5 +862,5 @@ void Scene::DrawSphere (const Mat4 &modelView, const float colour[4], bool unlit
 	pc.pbr[1] = 1.0f; // matte, no reflections
 	pc.emissive[3] = unlit ? 1.0f : 0.0f;
 	vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
-	vkCmdDrawIndexed (cmd, sphereNIdx, 1, 0, 0, 0);
+	vkCmdDrawIndexed (cmd, nIdx, 1, 0, 0, 0);
 }

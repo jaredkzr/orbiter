@@ -8,6 +8,7 @@
 #include "PlanetSurface.h"
 #include "Atmosphere.h"
 #include "Shadows.h"
+#include "LegacyTex.h"
 #include <map>
 #include <random>
 #include "VesselAPI.h"
@@ -462,11 +463,106 @@ VPlanet::VPlanet (OBJHANDLE h, Scene *s, bool star)
 			const double *alt = (const double*)oapiGetObjectParam (hObj, OBJPRM_PLANET_CLOUDALT);
 			atmosphere->SetClouds (clouds->RootTexture (0), clouds->RootTexture (1), alt ? *alt : 0.0);
 		}
+		LoadLegacyTextures ();
 	}
 }
 
 VPlanet::~VPlanet ()
 {
+	TextureManager *tm = scene->Client()->TexMgr();
+	tm->Release (globalTex);
+	tm->Release (ringTex);
+	tm->Release (cloudTex);
+	if (ringNIdx) {
+		vkc::Context *c = scene->Client()->Ctx();
+		vkc::Buffer vb = ringVtx, ib = ringIdx;
+		c->DeferDestroy ([c, vb, ib]() mutable { c->DestroyBuffer (vb); c->DestroyBuffer (ib); });
+	}
+}
+
+void VPlanet::LoadLegacyTextures ()
+{
+	char name[256], path[512];
+	oapiGetObjectName (hObj, name, 256);
+	// .tex files live in the Textures directory, or in the planet texture directory
+	std::vector<std::string> dirs = { "Textures/" };
+	if (scene->Client()->PlanetTexturePath (name, path)) {
+		std::string d (path);
+		std::replace (d.begin(), d.end(), '\\', '/');
+		size_t sl = d.find_last_of ('/');
+		if (sl != std::string::npos) dirs.push_back (d.substr (0, sl + 1));
+	}
+	auto load = [&](const std::string &file, std::vector<std::vector<uint8_t>> &images) {
+		for (auto &d : dirs)
+			if (legacytex::Read (d + file, images)) return true;
+		return false;
+	};
+	TextureManager *tm = scene->Client()->TexMgr();
+	std::vector<std::vector<uint8_t>> images;
+	uint32_t w, h;
+	std::vector<uint8_t> rgba;
+
+	if (!surface && load (std::string (name) + ".tex", images) && legacytex::GlobalMap (images, w, h, rgba))
+		globalTex = tm->CreateRGBA (w, h, rgba.data());
+
+	const bool *hasClouds = (const bool*)oapiGetObjectParam (hObj, OBJPRM_PLANET_HASCLOUDS);
+	if (!clouds && hasClouds && *hasClouds && load (std::string (name) + "_cloud.tex", images) &&
+		legacytex::GlobalMap (images, w, h, rgba)) {
+		cloudTex = tm->CreateRGBA (w, h, rgba.data());
+		const double *alt = (const double*)oapiGetObjectParam (hObj, OBJPRM_PLANET_CLOUDALT);
+		cloudAlt = alt ? *alt : 0.0;
+	}
+
+	const bool *hasRings = (const bool*)oapiGetObjectParam (hObj, OBJPRM_PLANET_HASRINGS);
+	if (hasRings && *hasRings && load (std::string (name) + "_ring.tex", images) &&
+		legacytex::Decode (images.back(), w, h, rgba)) {
+		ringTex = tm->CreateRGBA (w, h, rgba.data());
+		BuildRing (*(const double*)oapiGetObjectParam (hObj, OBJPRM_PLANET_RINGMINRAD),
+		           *(const double*)oapiGetObjectParam (hObj, OBJPRM_PLANET_RINGMAXRAD));
+	}
+}
+
+void VPlanet::BuildRing (double irad, double orad)
+{
+	// Flat annulus in the equatorial plane (units of the planet radius). The
+	// ring texture is laid out for a ring of 16 straight sections: a radial
+	// line runs through it from (fo,0) at the outer section corner to (fi,1)
+	// at the inner radius. Every radial line of the annulus samples it that
+	// way, which keeps the bands circular.
+	const double alpha = PI / 16.0;
+	double nrad = orad / cos (alpha);
+	double fo = 0.5 * (1.0 - orad / nrad), fi = 0.5 * (1.0 - irad / nrad);
+	double t0 = (nrad - orad) / (nrad - irad);
+	const int N = 512;
+	std::vector<NTVERTEX> vtx;
+	std::vector<uint32_t> idx;
+	for (int i = 0; i <= N; i++) {
+		double phi = PI2 * i / N, c = cos (phi), s = sin (phi);
+		NTVERTEX vo{}, vi{};
+		vo.x = (float)(orad * c), vo.z = (float)(orad * s);
+		vi.x = (float)(irad * c), vi.z = (float)(irad * s);
+		vo.ny = vi.ny = 1.0f;
+		vo.tu = (float)(fo + (fi - fo) * t0), vo.tv = (float)t0;
+		vi.tu = (float)fi, vi.tv = 1.0f;
+		vtx.push_back (vo), vtx.push_back (vi);
+	}
+	for (int i = 0; i < N; i++) {
+		uint32_t a = 2 * i, b = a + 1, c = a + 2, d = a + 3;
+		idx.insert (idx.end(), { a, b, c, b, d, c });  // seen from above
+		idx.insert (idx.end(), { a, c, b, b, c, d });  // seen from below
+	}
+	vkc::Context *ctx = scene->Client()->Ctx();
+	ringVtx = ctx->CreateDeviceBuffer (vtx.data(), vtx.size() * sizeof(NTVERTEX), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+	ringIdx = ctx->CreateDeviceBuffer (idx.data(), idx.size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+	ringNIdx = (uint32_t)idx.size();
+}
+
+void VPlanet::RenderRing ()
+{
+	if (!ringNIdx || !ringTex) return;
+	Mat4 mv = scene->ModelView (gpos, grot) * Mat4::Scale (size, size, size);
+	const float white[4] = { 1, 1, 1, 1 };
+	scene->DrawGeometry (ringVtx.buffer, ringIdx.buffer, ringNIdx, mv, ringTex, white, false, true);
 }
 
 // ======================================================================
@@ -564,6 +660,17 @@ void VPlanet::Render (RenderPass pass)
 		if (isStar) { RenderGlow (); return; }
 		for (auto &b : bases) b->Render (pass);
 		if (clouds) clouds->Render (atmosphere.get());
+		if (scene->PixelSize (size, camDist) >= 0.5) {
+			if (cloudTex) {
+				// legacy cloud layer: longitude 0 of the map at the -x axis
+				double r = size + cloudAlt;
+				MATRIX3 R = mul (grot, _M(-1, 0, 0, 0, 1, 0, 0, 0, -1));
+				const float white[4] = { 1, 1, 1, 1 };
+				scene->DrawGeometry (scene->SphereVtx(), scene->SphereIdx(), scene->SphereNIdx(),
+					scene->ModelView (gpos, R) * Mat4::Scale (r, r, r), cloudTex, white, false, true);
+			}
+			RenderRing ();
+		}
 		return;
 	}
 	if (scene->PixelSize (size, camDist) < 0.5) return; // too small to see
@@ -579,6 +686,14 @@ void VPlanet::Render (RenderPass pass)
 	// densest) pointing at the camera, so that the facets match the surface there.
 	double radius = size;
 	MATRIX3 R = grot;
+	if (globalTex) {
+		// whole-sphere map: longitude -180 (left edge) at the mesh's u = 0
+		R = mul (grot, _M(-1, 0, 0, 0, 1, 0, 0, 0, -1));
+		Mat4 mv = scene->ModelView (gpos, R) * Mat4::Scale (size, size, size);
+		const float white[4] = { 1, 1, 1, 1 };
+		scene->DrawSphere (mv, white, false, globalTex);
+		return;
+	}
 	if (!isStar && camDist < 2.0 * size) {
 		double lng, lat, rad;
 		oapiGlobalToEqu (hObj, scene->CameraPos(), &lng, &lat, &rad);

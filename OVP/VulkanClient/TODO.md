@@ -36,3 +36,12 @@ Known gaps and limitations, to be addressed later.
 
 ## Water
 - Sun glitter and wave normals not yet checked in a view facing the sun.
+
+## Legacy planets and rings
+- Bodies without tiles use only level 4 of their .tex file (512x256 map);
+  the patch levels 5+ are not read.
+- Legacy cloud layers (Venus, Titan) are drawn opaque and only from above.
+- Rings: no ring shadow on the planet, no forward scattering when lit from
+  behind, and the unlit side shows only ambient light. The planet's shadow
+  on the rings comes from the atmosphere transmittance (bodies without an
+  atmosphere would not get it). High-resolution <name>_ring_N.dds not used.

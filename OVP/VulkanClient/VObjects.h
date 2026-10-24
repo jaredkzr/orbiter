@@ -117,6 +117,15 @@ private:
 	std::unique_ptr<PlanetSurface> surface; // tiled surface, if available
 	std::unique_ptr<PlanetSurface> clouds;  // tiled cloud layer, if available
 	std::vector<std::unique_ptr<VBase>> bases; // bases near the camera
+	class VkTexture *globalTex = nullptr;   // whole-sphere map (bodies without tiles)
+	class VkTexture *ringTex = nullptr;
+	class VkTexture *cloudTex = nullptr;    // legacy cloud layer
+	double cloudAlt = 0.0;
+	vkc::Buffer ringVtx, ringIdx;
+	uint32_t ringNIdx = 0;
+	void LoadLegacyTextures ();
+	void BuildRing (double irad, double orad);
+	void RenderRing ();
 	void UpdateBases ();
 	void RenderGlow ();
 };

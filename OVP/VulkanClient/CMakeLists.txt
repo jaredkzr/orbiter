@@ -100,6 +100,7 @@ add_library(VulkanClient SHARED
 	VkMesh.cpp
 	Scene.cpp
 	VObjects.cpp
+	LegacyTex.cpp
 	StarSphere.cpp
 	Draw2D.cpp
 	Sketchpad.cpp
