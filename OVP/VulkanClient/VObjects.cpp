@@ -17,6 +17,9 @@
 #include <cstring>
 #include <functional>
 #include <unordered_map>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 
 // ======================================================================
 // VObject
@@ -968,10 +971,139 @@ VBase::VBase (OBJHANDLE h, Scene *s) : hBase(h), scene(s)
 		if (bs[i]) ground.push_back (std::make_unique<VkMesh> (gc->Ctx(), gc->TexMgr(), bs[i]));
 	for (DWORD i = 0; i < nas; i++)
 		if (as[i]) structures.push_back (std::make_unique<VkMesh> (gc->Ctx(), gc->TexMgr(), as[i]));
+	ReadLights ();
 }
 
 VBase::~VBase ()
 {
+}
+
+namespace {
+	std::string BaseLower (std::string t) { for (auto &c : t) c = (char)tolower ((unsigned char)c); return t; }
+	std::string Trim (const std::string &t)
+	{
+		size_t a = t.find_first_not_of (" \t\r"), b = t.find_last_not_of (" \t\r");
+		return a == std::string::npos ? std::string () : t.substr (a, b - a + 1);
+	}
+}
+
+void VBase::ReadLights ()
+{
+	char name[256], pname[256];
+	oapiGetObjectName (hBase, name, 256);
+	oapiGetObjectName (oapiGetBasePlanet (hBase), pname, 256);
+	// the base's configuration: the file whose Name matches
+	std::error_code ec;
+	std::string cfg;
+	for (auto &e : std::filesystem::directory_iterator (std::string ("Config/") + pname + "/Base", ec)) {
+		std::ifstream f (e.path ());
+		std::string line;
+		for (int i = 0; i < 10 && std::getline (f, line); i++) {
+			auto eq = line.find ('=');
+			if (eq != std::string::npos && BaseLower (Trim (line.substr (0, eq))) == "name" && Trim (line.substr (eq + 1)) == name) {
+				cfg = e.path ().string ();
+				break;
+			}
+		}
+		if (!cfg.empty ()) break;
+	}
+	auto vec = [](std::istringstream &ss) { VECTOR3 v{}; ss >> v.x >> v.y >> v.z; return v; };
+	if (!cfg.empty ()) {
+		std::ifstream f (cfg);
+		std::string line, block;
+		VECTOR3 e1{}, e2{};
+		double width = 0.0, size = 1.0;
+		int count = 0;
+		float col[3] = { 1, 1, 1 };
+		while (std::getline (f, line)) {
+			std::istringstream ss (line);
+			std::string tag;
+			if (!(ss >> tag)) continue;
+			tag = BaseLower (tag);
+			if (tag == "runwaylights" || tag == "beaconarray") {
+				block = tag, width = 0.0, count = 0, size = 1.0, col[0] = col[1] = col[2] = 1.0f;
+			} else if (block.empty ()) {
+				continue;
+			} else if (tag == "end1") e1 = vec (ss);
+			else if (tag == "end2") e2 = vec (ss);
+			else if (tag == "width") ss >> width;
+			else if (tag == "count") ss >> count;
+			else if (tag == "size") ss >> size;
+			else if (tag == "col") ss >> col[0] >> col[1] >> col[2];
+			else if (tag == "end") {
+				VECTOR3 d = e2 - e1;
+				double len = length (d);
+				if (block == "runwaylights" && len > 0.0) {
+					// edge lights every 60 m (white), threshold lights (green, red)
+					VECTOR3 u = d / len, side = unit (crossp (u, _V(0, 1, 0))) * (0.5 * width + 2.0);
+					for (double t = 0.0; t <= len; t += 60.0)
+						for (int k = -1; k <= 1; k += 2)
+							lights.push_back ({ e1 + u * t + side * k + _V(0, 6, 0), { 1.0f, 0.95f, 0.8f }, 1.2f });
+					for (int k = -8; k <= 8; k++) {
+						VECTOR3 a = side * (k / 8.0);
+						lights.push_back ({ e1 + a + _V(0, 6, 0), { 0.2f, 1.0f, 0.3f }, 1.2f });
+						lights.push_back ({ e2 + a + _V(0, 6, 0), { 1.0f, 0.15f, 0.1f }, 1.2f });
+					}
+				} else if (block == "beaconarray" && count > 0) {
+					for (int i = 0; i < count; i++)
+						lights.push_back ({ e1 + d * (count > 1 ? (double)i / (count - 1) : 0.0) + _V(0, 6, 0), { col[0], col[1], col[2] }, (float)size });
+				}
+				block.clear ();
+			}
+		}
+	}
+	// floodlights (Vulkan client additions): FLOODLIGHT x y z dx dy dz range r g b umbra penumbra [deg]
+	std::string vk = std::string ("Config/VK/Bases/") + name + ".cfg";
+	for (auto &c : vk) if (c == ' ') c = '_';
+	std::ifstream f (vk);
+	std::string line;
+	while (std::getline (f, line)) {
+		if (auto c = line.find (';'); c != std::string::npos) line.resize (c);
+		std::istringstream ss (line);
+		std::string tag;
+		if (!(ss >> tag) || BaseLower (tag) != "floodlight") continue;
+		Flood fl{};
+		fl.pos = vec (ss), fl.dir = vec (ss);
+		ss >> fl.range >> fl.col[0] >> fl.col[1] >> fl.col[2] >> fl.umbra >> fl.penumbra;
+		if (!ss) continue;
+		fl.dir = unit (fl.dir), fl.umbra *= RAD, fl.penumbra *= RAD;
+		floods.push_back (fl);
+	}
+	if (!lights.empty () || !floods.empty ())
+		oapiWriteLogV ("VulkanClient: base %s: %zu lights, %zu floodlights", name, lights.size (), floods.size ());
+}
+
+bool VBase::Night () const
+{
+	// lights on when the sun is below a few degrees above the horizon
+	OBJHANDLE hSun = scene->Sun ();
+	if (!hSun) return false;
+	VECTOR3 gpos, sp, pp;
+	oapiGetGlobalPos (hBase, &gpos);
+	oapiGetGlobalPos (hSun, &sp);
+	oapiGetGlobalPos (oapiGetBasePlanet (hBase), &pp);
+	return dotp (unit (gpos - pp), unit (sp - gpos)) < 0.05;
+}
+
+void VBase::CollectLights (std::vector<LightSource> &out)
+{
+	if (floods.empty () || !Night ()) return;
+	VECTOR3 gpos, cam = scene->CameraPos ();
+	MATRIX3 grot;
+	oapiGetGlobalPos (hBase, &gpos);
+	oapiGetRotationMatrix (hBase, &grot);
+	for (const Flood &fl : floods) {
+		LightSource l{};
+		l.pos = gpos + mul (grot, fl.pos);
+		if (length (l.pos - cam) > fl.range + 10e3) continue;
+		l.dir = mul (grot, fl.dir);
+		l.spot = true;
+		l.range = fl.range;
+		l.att[0] = 1.0, l.att[1] = 0.0, l.att[2] = 1.0 / (0.04 * fl.range * fl.range);
+		l.umbra = fl.umbra, l.penumbra = fl.penumbra;
+		for (int k = 0; k < 3; k++) l.col[k] = fl.col[k];
+		out.push_back (l);
+	}
 }
 
 void VBase::Render (RenderPass pass)
@@ -985,6 +1117,29 @@ void VBase::Render (RenderPass pass)
 	Mat4 pulled = Mat4::Scale (1.0 - GROUND_DEPTH_PULL, 1.0 - GROUND_DEPTH_PULL, 1.0 - GROUND_DEPTH_PULL) * mv;
 	for (auto &m : ground) scene->DrawMesh (m.get(), pulled, pass);
 	for (auto &m : structures) scene->DrawMesh (m.get(), mv, pass);
+	// lights at night: glows (floodlights larger, and brighter towards their beam)
+	if (pass == RenderPass::Transparent && (!lights.empty () || !floods.empty ()) && Night ()) {
+		std::vector<PVtx> v;
+		auto glow = [&](const VECTOR3 &bp, const float *c, double size, float bright) {
+			VECTOR3 vp = scene->ViewPos (gpos + mul (grot, bp));
+			if (vp.z <= 0.0) return;
+			float h = (float)std::max (size, vp.z * 0.0015); // (a few pixels at least)
+			float x = (float)vp.x, y = (float)vp.y, z = (float)vp.z;
+			float r = c[0] * bright, g = c[1] * bright, b = c[2] * bright;
+			PVtx q[4] = {
+				{ x - h, y - h, z, 0.0f, 0.0f, r, g, b, 1 }, { x + h, y - h, z, 1.0f, 0.0f, r, g, b, 1 },
+				{ x + h, y + h, z, 1.0f, 1.0f, r, g, b, 1 }, { x - h, y + h, z, 0.0f, 1.0f, r, g, b, 1 } };
+			v.insert (v.end(), { q[0], q[1], q[2], q[0], q[2], q[3] });
+		};
+		for (const Light &l : lights) glow (l.pos, l.col, l.size, 4.0f);
+		VECTOR3 cam = scene->CameraPos ();
+		for (const Flood &fl : floods) {
+			VECTOR3 toCam = unit (cam - (gpos + mul (grot, fl.pos)));
+			double facing = std::max (0.0, dotp (toCam, mul (grot, fl.dir)));
+			glow (fl.pos, fl.col, 3.0 + 6.0 * facing, (float)(2.0 + 10.0 * facing));
+		}
+		scene->DrawBillboards (scene->GlowTex (), true, v.data (), v.size ());
+	}
 }
 
 bool VBase::RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n)
@@ -1091,6 +1246,11 @@ bool VPlanet::RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double
 		tPrev = ti;
 	}
 	return found;
+}
+
+void VPlanet::CollectLights (std::vector<LightSource> &lights)
+{
+	for (auto &b : bases) b->CollectLights (lights);
 }
 
 void VPlanet::PrepareFrame ()

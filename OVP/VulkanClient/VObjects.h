@@ -140,8 +140,18 @@ public:
 	void Render (RenderPass pass);
 	void RenderShadow (ShadowMap &sm);
 	bool RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n);
+	/// floodlights of the base, at night
+	void CollectLights (std::vector<LightSource> &lights);
 
 private:
+	/// lights of the base (base frame): runway edge lights and beacon arrays
+	/// from the base's configuration, floodlights from Config/VK/Bases
+	struct Light { VECTOR3 pos; float col[3]; float size; };
+	struct Flood { VECTOR3 pos, dir; float col[3]; double range, umbra, penumbra; };
+	std::vector<Light> lights;
+	std::vector<Flood> floods;
+	void ReadLights ();
+	bool Night () const;
 	OBJHANDLE hBase;
 	Scene *scene;
 	std::vector<std::unique_ptr<VkMesh>> ground;     // rendered before shadows (runways, pads)
@@ -158,6 +168,7 @@ public:
 	void RenderShadow (ShadowMap &sm) override;
 	void PrepareFrame () override;
 	bool RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n) override;
+	void CollectLights (std::vector<LightSource> &lights) override;
 	Atmosphere *GetAtmosphere () override { return atmosphere.get(); }
 	/// tiled cloud layer (or nullptr) and its altitude [m]
 	PlanetSurface *CloudLayer () const { return clouds.get(); }
