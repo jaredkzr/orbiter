@@ -1,0 +1,11 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Screen-space reflections, tracing, with hardware ray queries against the
+// vessels and bases (rt.glsl)
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#define RT
+#include "ssr_trace.glsl"

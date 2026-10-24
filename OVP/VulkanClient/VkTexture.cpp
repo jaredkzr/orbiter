@@ -215,6 +215,7 @@ void TextureManager::Release (VkTexture *tex)
 	vkc::Context *c = ctx;
 	VkDescriptorPool p = pool;
 	c->DeferDestroy ([this, c, p, tex]() {
+		if (onDestroy) onDestroy (tex);
 		FreeMaps (tex);
 		live.erase (tex);
 		if (tex->set) vkFreeDescriptorSets (c->device, p, 1, &tex->set);
@@ -225,6 +226,7 @@ void TextureManager::Release (VkTexture *tex)
 
 void TextureManager::Destroy (VkTexture *tex)
 {
+	if (onDestroy) onDestroy (tex);
 	FreeMaps (tex);
 	live.erase (tex);
 	if (tex->set) vkFreeDescriptorSets (ctx->device, pool, 1, &tex->set);

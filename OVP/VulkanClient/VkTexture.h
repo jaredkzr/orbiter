@@ -10,6 +10,7 @@
 
 #include "VkContext.h"
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -76,6 +77,8 @@ public:
 	void ReplaceImage (VkTexture *tex, const vkc::Image &img);
 
 	void AddRef (VkTexture *tex) { if (tex) tex->refs++; }
+	/// called for each texture before it is destroyed (GPU idle on it)
+	std::function<void(VkTexture*)> onDestroy;
 	void Release (VkTexture *tex);
 
 	VkDescriptorSetLayout Layout () const { return layout; }

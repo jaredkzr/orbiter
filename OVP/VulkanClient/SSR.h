@@ -20,6 +20,9 @@
 class ScreenReflections {
 public:
 	bool Init (vkc::Context *ctx);
+	/// Trace with hardware ray queries too (rt.glsl), with these set layouts:
+	/// frame, ray tracing scene, bindless textures, atmosphere
+	void InitRT (VkDescriptorSetLayout frame, VkDescriptorSetLayout rtScene, VkDescriptorSetLayout rtTex, VkDescriptorSetLayout atm);
 	void Shutdown ();
 
 	/// (Re)create the images for the current extent, with the prepass
@@ -34,6 +37,10 @@ public:
 	/// Trace and filter the reflections (outside rendering scopes, after the
 	/// prepass). fx, fy: projection factors; jitter: projection jitter (NDC)
 	void Compute (float fx, float fy, const float jitter[2], bool reset);
+	/// sets of the ray traced variant for the next Compute (frame, scene,
+	/// textures, atmosphere)
+	void SetRTSets (VkDescriptorSet frame, VkDescriptorSet rtScene, VkDescriptorSet rtTex, VkDescriptorSet atm)
+	{ rtSets[0] = frame, rtSets[1] = rtScene, rtSets[2] = rtTex, rtSets[3] = atm; }
 	/// Keep the rendered scene image (shader-read layout) as the source of
 	/// the next frame's reflections
 	void StoreColor (VkImage scene);
@@ -70,6 +77,9 @@ private:
 	VkDescriptorSet sets[2] = {};     // per history image written
 	std::vector<VkDescriptorSet> hizSets;
 	VkPipelineLayout layout = VK_NULL_HANDLE, hizPipeLayout = VK_NULL_HANDLE;
+	VkPipelineLayout rtLayout = VK_NULL_HANDLE;
+	VkPipeline traceRTPipe = VK_NULL_HANDLE;
+	VkDescriptorSet rtSets[4] = {};
 	VkPipeline hizPipe = VK_NULL_HANDLE, tracePipe = VK_NULL_HANDLE, resolvePipe = VK_NULL_HANDLE, temporalPipe = VK_NULL_HANDLE;
 };
 

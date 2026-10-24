@@ -1,7 +1,12 @@
 // Copyright (c) Martin Schweiger
 // Licensed under the MIT License
 
-// Per-frame uniform block (set 0, binding 0); must match FrameUniforms in Scene.cpp
+// Per-frame uniform block (set 0, binding 0; FRAME_SET selects another set);
+// must match FrameUniforms in Scene.cpp
+
+#ifndef FRAME_SET
+#define FRAME_SET 0
+#endif
 
 const int MAX_LIGHTS = 32;
 
@@ -13,7 +18,7 @@ struct LocalLight {
 	vec4 spot;   // cos(penumbra/2) (x)
 };
 
-layout(set = 0, binding = 0) uniform Frame {
+layout(set = FRAME_SET, binding = 0) uniform Frame {
 	mat4 proj;         // view -> clip (reversed z, infinite far plane)
 	vec4 sunDir;       // direction towards the sun, view space
 	vec4 sunColor;
@@ -30,10 +35,10 @@ layout(set = 0, binding = 0) uniform Frame {
 
 // ambient occlusion of opaque geometry (1: unoccluded); fragment shaders only
 #ifdef FRAME_AO
-layout(set = 0, binding = 3) uniform sampler2D aoMap;
+layout(set = FRAME_SET, binding = 3) uniform sampler2D aoMap;
 float AmbientOcclusion () { return frame.aoParams.w > 0.5 ? 1.0 : texture(aoMap, gl_FragCoord.xy * frame.aoParams.xy).r; }
 // screen-space reflections (same size as the occlusion image): reflected
 // radiance (rgb, premultiplied with a) and its confidence (a); ofs: offset [uv]
-layout(set = 0, binding = 5) uniform sampler2D ssrMap;
+layout(set = FRAME_SET, binding = 5) uniform sampler2D ssrMap;
 vec4 ScreenReflection (vec2 ofs) { return frame.probe.z > 0.5 ? texture(ssrMap, gl_FragCoord.xy * frame.aoParams.xy + ofs) : vec4(0.0); }
 #endif

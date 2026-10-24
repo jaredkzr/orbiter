@@ -179,6 +179,7 @@ private:
 	VkPipeline meshPrepass = VK_NULL_HANDLE;
 	std::unique_ptr<class AmbientOcclusion> ao;
 	std::unique_ptr<class ScreenReflections> ssr;
+	std::unique_ptr<class RTScene> rt;
 	bool cameraCut = true; // this frame does not continue the previous one
 	void WriteSSRDescriptors ();
 	std::unique_ptr<class TemporalAA> taa;

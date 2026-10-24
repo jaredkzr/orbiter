@@ -43,6 +43,13 @@ Known gaps and limitations, to be addressed later.
   instead. Water reflections are traced with the smooth surface and only
   displaced by the waves. Transparent groups and the probe faces get none.
   Off with MSAA. About 0.3 ms at 1080p (ORBITER_VK_PROFILE=1 logs GPU times).
+- Ray traced reflections (RayTracing.cpp, rt.glsl; with VK_KHR_ray_query,
+  ORBITER_VK_RT=0 or ORBITER_VK_RT_REFLECT=0 off): each reflection ray is
+  also traced against the opaque vessel and base groups of the prepass;
+  the screen-space hit is kept where it agrees, otherwise the traced hit is
+  shaded (texture, sun with traced shadow, ambient, emission, probe). Not in
+  the scene: terrain, transparent groups, particles. Hits get no local
+  lights, normal maps or aerial perspective. About +0.2 ms.
 - Material configuration files: only SPECULAR, SMOOTHNESS, METALNESS and
   REFLECT are used (FRESNEL and other entries are ignored).
 - Texture maps (_norm/_bump, _rghn, _metal, _spec, _refl, _emis, _transl,

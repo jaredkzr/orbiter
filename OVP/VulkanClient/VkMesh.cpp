@@ -8,14 +8,18 @@
 namespace {
 	constexpr DWORD SPEC_NONE = (DWORD)-1; // "no texture" / "default material" index
 
+	uint64_t nextMeshId = 1;
+
 	bool IsTransparent (const MATERIAL &m, const VkMesh::Group &g)
 	{
 		return m.diffuse.a < 0.999f || (g.usrFlag & VkMesh::GRP_ADDITIVE);
 	}
 }
 
+void (*VkMesh::onGeometryChange) (uint64_t id) = nullptr;
+
 VkMesh::VkMesh (vkc::Context *c, TextureManager *tm, MESHHANDLE h)
-	: ctx(c), texmgr(tm), hMesh(h)
+	: ctx(c), texmgr(tm), hMesh(h), id(nextMeshId++)
 {
 	// materials: slot 0 is the default (white, unlit by specular)
 	MATERIAL def{};
@@ -64,14 +68,21 @@ VkMesh::VkMesh (vkc::Context *c, TextureManager *tm, MESHHANDLE h)
 		}
 		groups.push_back (g);
 	}
+	// (ray traced reflections read the geometry too)
+	VkBufferUsageFlags rt = ctx->rayTracing ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+		VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT : 0;
 	if (!vtx.empty())
-		vbuf = ctx->CreateDeviceBuffer (vtx.data(), vtx.size() * sizeof(NTVERTEX), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-	if (!idx.empty())
-		ibuf = ctx->CreateDeviceBuffer (idx.data(), idx.size() * sizeof(uint16_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+		vbuf = ctx->CreateDeviceBuffer (vtx.data(), vtx.size() * sizeof(NTVERTEX), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | rt);
+	if (!idx.empty()) { // (padded to whole 32-bit words: the shaders read pairs of indices)
+		std::vector<uint16_t> pad (idx.begin(), idx.end());
+		if (pad.size() & 1) pad.push_back (0);
+		ibuf = ctx->CreateDeviceBuffer (pad.data(), pad.size() * sizeof(uint16_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT | rt);
+	}
 }
 
 VkMesh::~VkMesh ()
 {
+	if (onGeometryChange) onGeometryChange (id);
 	for (auto tex : textures) texmgr->Release (tex);
 	for (auto tex : cfgTextures) texmgr->Release (tex);
 	vkc::Context *c = ctx;
@@ -142,6 +153,7 @@ void VkMesh::ApplyMaterialConfig (const MaterialConfig &cfg, const std::string &
 			if (ibuf.buffer)
 				ctx->UpdateBuffer (ibuf.buffer, g.firstIndex * sizeof(uint16_t), idx.data() + g.firstIndex, (front.size() + side.size()) * sizeof(uint16_t));
 			g.nSide = (uint32_t)side.size();
+			geomVersion++;
 			g.sideTex = sideTex;
 			g.sideMaterial = sideMat;
 		}
@@ -163,6 +175,13 @@ int VkMesh::GetMaterial (DWORD matidx, MATERIAL *mat) const
 	if (matidx + 1 >= nTemplateMtrl) return 4;
 	*mat = materials[matidx + 1];
 	return 0;
+}
+
+uint32_t VkMesh::GroupVertexCount (uint32_t g) const
+{
+	if (g >= groups.size()) return 0;
+	int32_t end = g + 1 < groups.size() ? groups[g + 1].vertexOffset : (int32_t)vtx.size();
+	return (uint32_t)std::max (0, end - groups[g].vertexOffset);
 }
 
 int VkMesh::GetGroupData (DWORD grp, GROUPREQUESTSPEC *grs) const
@@ -219,6 +238,7 @@ int VkMesh::EditGroup (DWORD grp, GROUPEDITSPEC *ges)
 			vmin = std::min (vmin, vi);
 			vmax = std::max (vmax, vi);
 		}
+		if (vmin <= vmax) geomVersion++;
 		if (vmin <= vmax && vbuf.buffer)
 			ctx->UpdateBuffer (vbuf.buffer, (g.vertexOffset + vmin) * sizeof(NTVERTEX), gv + vmin, (vmax - vmin + 1) * sizeof(NTVERTEX));
 	}

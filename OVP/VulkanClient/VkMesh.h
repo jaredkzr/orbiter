@@ -54,6 +54,13 @@ public:
 	VkBuffer VertexBuffer () const { return vbuf.buffer; }
 	VkBuffer IndexBuffer () const { return ibuf.buffer; }
 	MESHHANDLE Template () const { return hMesh; }
+	/// unique over the session (ray tracing structures are keyed by it)
+	uint64_t Id () const { return id; }
+	/// incremented when vertices change
+	uint32_t GeomVersion () const { return geomVersion; }
+	uint32_t GroupVertexCount (uint32_t g) const;
+	/// called with the id of each mesh destroyed or edited (ray tracing)
+	static void (*onGeometryChange) (uint64_t id);
 
 	bool SetTexture (DWORD texidx, VkTexture *tex);
 	int GetGroupData (DWORD grp, GROUPREQUESTSPEC *grs) const;
@@ -65,6 +72,8 @@ private:
 	vkc::Context *ctx;
 	TextureManager *texmgr;
 	MESHHANDLE hMesh;
+	uint64_t id;
+	uint32_t geomVersion = 0;
 	vkc::Buffer vbuf, ibuf;
 	std::vector<Group> groups;
 	std::vector<MATERIAL> materials; // [0] = default material, [i+1] = mesh material i, then side materials

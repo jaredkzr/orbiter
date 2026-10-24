@@ -164,7 +164,18 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 	};
 	bool coherent = hasExt (VK_AMD_DEVICE_COHERENT_MEMORY_EXTENSION_NAME);
 	if (coherent) s13.pNext = &sCoh;
+	// hardware ray queries (reflections)
+	VkPhysicalDeviceAccelerationStructureFeaturesKHR sAS{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
+	VkPhysicalDeviceRayQueryFeaturesKHR sRQ{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
+	bool rtExt = hasExt (VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) && hasExt (VK_KHR_RAY_QUERY_EXTENSION_NAME) &&
+		hasExt (VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+	if (const char *e = getenv ("ORBITER_VK_RT")) rtExt = rtExt && atoi (e) != 0;
+	if (rtExt) sRQ.pNext = sf.pNext, sAS.pNext = &sRQ, sf.pNext = &sAS;
 	vkGetPhysicalDeviceFeatures2 (physicalDevice, &sf);
+	rayTracing = rtExt && sAS.accelerationStructure && sRQ.rayQuery && s12.bufferDeviceAddress &&
+		s12.runtimeDescriptorArray && s12.descriptorBindingPartiallyBound &&
+		s12.shaderSampledImageArrayNonUniformIndexing && s12.descriptorBindingSampledImageUpdateAfterBind;
+	oapiWriteLogV ("VulkanClient: hardware ray queries: %s", rayTracing ? "yes" : "no");
 
 	VkPhysicalDeviceCoherentMemoryFeaturesAMD fCoh{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COHERENT_MEMORY_FEATURES_AMD};
 	fCoh.deviceCoherentMemory = sCoh.deviceCoherentMemory;
@@ -179,6 +190,19 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 	VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
 	f2.pNext = &f12, f12.pNext = &f13;
 	if (coherent && sCoh.deviceCoherentMemory) f13.pNext = &fCoh;
+	VkPhysicalDeviceAccelerationStructureFeaturesKHR fAS{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR};
+	VkPhysicalDeviceRayQueryFeaturesKHR fRQ{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR};
+	if (rayTracing) {
+		fAS.accelerationStructure = VK_TRUE;
+		fRQ.rayQuery = VK_TRUE;
+		f12.bufferDeviceAddress = VK_TRUE;
+		f12.runtimeDescriptorArray = VK_TRUE;
+		f12.descriptorBindingPartiallyBound = VK_TRUE;
+		f12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+		f12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+		f12.descriptorBindingVariableDescriptorCount = s12.descriptorBindingVariableDescriptorCount;
+		fRQ.pNext = f2.pNext, fAS.pNext = &fRQ, f2.pNext = &fAS;
+	}
 	f2.features.samplerAnisotropy = deviceFeatures.samplerAnisotropy;
 	f2.features.textureCompressionBC = deviceFeatures.textureCompressionBC;
 	f2.features.largePoints = deviceFeatures.largePoints;
@@ -187,6 +211,11 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 	std::vector<const char*> devExt;
 	if (!offscreen) devExt.push_back (VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 	if (coherent && sCoh.deviceCoherentMemory) devExt.push_back (VK_AMD_DEVICE_COHERENT_MEMORY_EXTENSION_NAME);
+	if (rayTracing) {
+		devExt.push_back (VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+		devExt.push_back (VK_KHR_RAY_QUERY_EXTENSION_NAME);
+		devExt.push_back (VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+	}
 	VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
 	dci.pNext = &f2;
 	dci.queueCreateInfoCount = 1;
@@ -198,12 +227,21 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 		return false;
 	}
 	vkGetDeviceQueue (device, queueFamily, 0, &queue);
+	if (rayTracing) {
+		rt.createAS = (PFN_vkCreateAccelerationStructureKHR)vkGetDeviceProcAddr (device, "vkCreateAccelerationStructureKHR");
+		rt.destroyAS = (PFN_vkDestroyAccelerationStructureKHR)vkGetDeviceProcAddr (device, "vkDestroyAccelerationStructureKHR");
+		rt.buildSizes = (PFN_vkGetAccelerationStructureBuildSizesKHR)vkGetDeviceProcAddr (device, "vkGetAccelerationStructureBuildSizesKHR");
+		rt.cmdBuild = (PFN_vkCmdBuildAccelerationStructuresKHR)vkGetDeviceProcAddr (device, "vkCmdBuildAccelerationStructuresKHR");
+		rt.asAddress = (PFN_vkGetAccelerationStructureDeviceAddressKHR)vkGetDeviceProcAddr (device, "vkGetAccelerationStructureDeviceAddressKHR");
+		rayTracing = rt.createAS && rt.destroyAS && rt.buildSizes && rt.cmdBuild && rt.asAddress;
+	}
 
 	VmaAllocatorCreateInfo aci{};
 	aci.vulkanApiVersion = VK_API_VERSION_1_3;
 	aci.physicalDevice = physicalDevice;
 	aci.device = device;
 	aci.instance = instance;
+	if (rayTracing) aci.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
 	VK_CHECK(vmaCreateAllocator (&aci, &allocator));
 
 	// Per-frame resources
@@ -885,7 +923,7 @@ void Context::UpdateBuffer (VkBuffer dst, VkDeviceSize offset, const void *data,
 	EndTarget (); // transfers are not allowed inside a rendering scope
 
 	VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-	mb.srcStageMask = VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
+	mb.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; // (vertex input, ray tracing structure builds and shaders)
 	mb.srcAccessMask = 0; // write-after-read: execution dependency only
 	mb.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
 	mb.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
@@ -899,8 +937,9 @@ void Context::UpdateBuffer (VkBuffer dst, VkDeviceSize offset, const void *data,
 
 	mb.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
 	mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-	mb.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
-	mb.dstAccessMask = VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_INDEX_READ_BIT;
+	mb.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+	mb.dstAccessMask = VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_INDEX_READ_BIT | VK_ACCESS_2_SHADER_READ_BIT |
+		(rayTracing ? VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR : 0);
 	vkCmdPipelineBarrier2 (cmd, &dep);
 }
 
@@ -1031,6 +1070,13 @@ Buffer Context::CreateBuffer (VkDeviceSize size, VkBufferUsageFlags usage, bool 
 	VK_CHECK(vmaCreateBuffer (allocator, &bci, &aci, &buf.buffer, &buf.alloc, &info));
 	buf.mapped = info.pMappedData;
 	return buf;
+}
+
+VkDeviceAddress Context::BufferAddress (VkBuffer buf) const
+{
+	VkBufferDeviceAddressInfo ai{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+	ai.buffer = buf;
+	return vkGetBufferDeviceAddress (device, &ai);
 }
 
 void Context::DestroyBuffer (Buffer &buf)

@@ -4,6 +4,7 @@
 #include "Scene.h"
 #include "AO.h"
 #include "SSR.h"
+#include "RayTracing.h"
 #include "TAA.h"
 #include "Fsr.h"
 #include "Clouds.h"
@@ -117,7 +118,7 @@ bool Scene::Init ()
 	b[0].binding = 0;
 	b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	b[0].descriptorCount = 1;
-	b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+	b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT; // (ray traced reflections)
 	b[1].binding = 1;
 	b[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 	b[1].descriptorCount = SHADOW_CASCADES;
@@ -127,6 +128,7 @@ bool Scene::Init ()
 	b[2].descriptorCount = 1;
 	b[3] = b[2];
 	b[3].binding = 4; // environment probe
+	b[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 	b[4] = b[2];
 	b[4].binding = 5; // screen-space reflections
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
@@ -208,6 +210,15 @@ bool Scene::Init ()
 	atm->Init (ctx, gc->TexMgr());
 	vclouds = std::make_unique<VolumetricClouds>();
 	vclouds->Init (ctx, gc->TexMgr(), atm->SetLayout());
+	// ray traced reflections (hardware ray queries)
+	rt = std::make_unique<RTScene>();
+	if (rt->Init (ctx, gc->TexMgr()) && ssr->enabled) {
+		ssr->InitRT (frameLayout, rt->SetLayout(), rt->TextureLayout(), atm->SetLayout());
+		static RTScene *rtScene;
+		rtScene = rt.get();
+		VkMesh::onGeometryChange = [](uint64_t id) { if (rtScene) rtScene->ForgetMesh (id); };
+		gc->TexMgr()->onDestroy = [this](VkTexture *t) { if (rt) rt->ForgetTexture (t); };
+	}
 	CreatePipelines ();
 	BuildSphere ();
 	tiles = std::make_unique<TileRenderer>();
@@ -259,6 +270,10 @@ void Scene::Shutdown ()
 	stars.reset();
 	if (ao) ao->Shutdown ();
 	ao.reset();
+	VkMesh::onGeometryChange = nullptr;
+	if (gc->TexMgr()) gc->TexMgr()->onDestroy = nullptr;
+	if (rt) rt->Shutdown ();
+	rt.reset();
 	if (ssr) ssr->Shutdown ();
 	ssr.reset();
 	if (taa) taa->Shutdown ();
@@ -808,6 +823,7 @@ void Scene::BeginFrame ()
 	ssr->EnsureSize (ao->PrepassView (), ao->MaterialView (), ao->VelocityView ());
 	ssr->BeginFrame ();
 	WriteSSRDescriptors ();
+	if (rt) rt->BeginFrame ();
 	// the previous frame does not continue into this one (camera cut)
 	cameraCut = !havePrev || length (camPos - prevCamPos) > 5e3;
 
@@ -941,6 +957,11 @@ void Scene::RenderPrepass ()
 	ctx->GpuMark ("prepass");
 	if (ao->enabled) ao->Compute (proj[0], -proj[5]);
 	ctx->GpuMark ("ao");
+	if (rt && rt->Enabled ()) {
+		rt->Build ();
+		ctx->GpuMark ("rt build");
+		ssr->SetRTSets (frameSet[ctx->FrameIndex()], rt->Set (), rt->TextureSet (), camAtmSet);
+	}
 	ssr->Compute (proj[0], -proj[5], jitter, cameraCut);
 	ctx->GpuMark ("ssr");
 	RenderVolumetricClouds ();
@@ -1226,6 +1247,15 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 				vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 			}
 			vkCmdDrawIndexed (cmd, count, 1, first, grp.vertexOffset, 0);
+			if (pass == RenderPass::Depth && rt && rt->Enabled ()) { // into the ray tracing scene
+				RTScene::Material rm;
+				memcpy (rm.diffuse, pc.diffuse, sizeof(rm.diffuse));
+				memcpy (rm.emissive, pc.emissive, sizeof(rm.emissive));
+				rm.light = objLight;
+				memcpy (rm.pbr, pc.pbr, sizeof(rm.pbr));
+				rm.unlit = pc.emissive[3] > 0.5f;
+				rt->AddInstance (mesh, g, first, count, mv, tex, rm);
+			}
 		}
 	}
 }

@@ -158,6 +158,20 @@ namespace vkc {
 		VkPhysicalDeviceFeatures deviceFeatures{};
 		uint32_t swapchainImageCount = 0;
 
+		/// Hardware ray queries (acceleration structures, buffer device
+		/// addresses, bindless sampled images) are enabled; ORBITER_VK_RT=0
+		/// leaves them off
+		bool rayTracing = false;
+		struct RTFunctions {
+			PFN_vkCreateAccelerationStructureKHR createAS = nullptr;
+			PFN_vkDestroyAccelerationStructureKHR destroyAS = nullptr;
+			PFN_vkGetAccelerationStructureBuildSizesKHR buildSizes = nullptr;
+			PFN_vkCmdBuildAccelerationStructuresKHR cmdBuild = nullptr;
+			PFN_vkGetAccelerationStructureDeviceAddressKHR asAddress = nullptr;
+		} rt;
+		/// device address of a buffer (ray tracing)
+		VkDeviceAddress BufferAddress (VkBuffer buf) const;
+
 	private:
 		bool CreateSwapchain ();
 		void DestroySwapchain ();

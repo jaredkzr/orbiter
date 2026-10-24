@@ -7,6 +7,7 @@
 
 #include "ssr_hiz.comp.h"
 #include "ssr_trace.comp.h"
+#include "ssr_trace_rt.comp.h"
 #include "ssr_resolve.comp.h"
 #include "ssr_temporal.comp.h"
 
@@ -133,10 +134,30 @@ bool ScreenReflections::Init (vkc::Context *c)
 	return true;
 }
 
+void ScreenReflections::InitRT (VkDescriptorSetLayout frame, VkDescriptorSetLayout rtScene, VkDescriptorSetLayout rtTex, VkDescriptorSetLayout atm)
+{
+	VkDescriptorSetLayout sl[5] = { setLayout, frame, rtScene, rtTex, atm };
+	VkPushConstantRange pcr{ VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(SSRParams) };
+	VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+	plci.setLayoutCount = 5;
+	plci.pSetLayouts = sl;
+	plci.pushConstantRangeCount = 1;
+	plci.pPushConstantRanges = &pcr;
+	VK_CHECK(vkCreatePipelineLayout (ctx->device, &plci, nullptr, &rtLayout));
+	VkShaderModule cs = ctx->CreateShaderModule (spv_ssr_trace_rt_comp, spv_ssr_trace_rt_comp_size);
+	VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+	cpi.stage = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, cs, "main" };
+	cpi.layout = rtLayout;
+	VK_CHECK(vkCreateComputePipelines (ctx->device, VK_NULL_HANDLE, 1, &cpi, nullptr, &traceRTPipe));
+	vkDestroyShaderModule (ctx->device, cs, nullptr);
+}
+
 void ScreenReflections::Shutdown ()
 {
 	if (!ctx) return;
 	DestroyImages ();
+	if (traceRTPipe) vkDestroyPipeline (ctx->device, traceRTPipe, nullptr);
+	if (rtLayout) vkDestroyPipelineLayout (ctx->device, rtLayout, nullptr);
 	for (VkPipeline p : { hizPipe, tracePipe, resolvePipe, temporalPipe }) vkDestroyPipeline (ctx->device, p, nullptr);
 	vkDestroyPipelineLayout (ctx->device, layout, nullptr);
 	vkDestroyPipelineLayout (ctx->device, hizPipeLayout, nullptr);
@@ -313,13 +334,18 @@ void ScreenReflections::Compute (float fx, float fy, const float jitter[2], bool
 	}
 
 	uint32_t gx = (extent.width + 7) / 8, gy = (extent.height + 7) / 8;
+	bool rt = traceRTPipe && rtSets[0] && rtSets[1] && rtSets[2] && rtSets[3];
+	// (set 0 and the push constants are compatible between both layouts)
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &sets[cur], 0, nullptr);
-	for (VkPipeline pipe : { tracePipe, resolvePipe, temporalPipe }) {
+	if (rt) vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, rtLayout, 1, 4, rtSets, 0, nullptr);
+	for (VkPipeline pipe : { rt ? traceRTPipe : tracePipe, resolvePipe, temporalPipe }) {
+		VkPipelineLayout l = pipe == traceRTPipe ? rtLayout : layout;
 		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
-		vkCmdPushConstants (cmd, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
+		vkCmdPushConstants (cmd, l, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
 		vkCmdDispatch (cmd, gx, gy, 1);
 		MemoryBarrier (cmd, CS, VK_ACCESS_2_SHADER_WRITE_BIT, CS | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 	}
+	for (auto &s : rtSets) s = VK_NULL_HANDLE;
 }
 
 void ScreenReflections::StoreColor (VkImage scene)
