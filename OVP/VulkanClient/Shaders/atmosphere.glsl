@@ -16,7 +16,7 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 misc;          // x: atmosphere present, y: 1/fx, z: 1/fy
 	vec4 ground;        // planet colour (rgb), w: surface textures present
 	vec4 cloud;         // cloud layer radius, rotation angle, shadow depth, w: present
-	vec4 water;         // origin of the wave pattern (planet frame, near the camera), w: time [s] (< 0: no ripples)
+	vec4 water;         // camera relative to the 1 km-snapped origin of surface patterns, w: time [s] (< 0: no ripples)
 } atm;
 
 // planet surface (western and eastern hemisphere), for reflections

@@ -29,6 +29,41 @@ layout(location = 0) out vec4 outColor;
 #include "atmosphere.glsl"
 #include "brdf.glsl"
 
+// Periodic value noise (period in cells), for patterns anchored to the
+// 1 km-snapped origin (cell sizes divide 1 km)
+float Hash (ivec3 c)
+{
+	uint h = uint(c.x) * 73856093u ^ uint(c.y) * 19349663u ^ uint(c.z) * 83492791u;
+	h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+	return float(h & 0xffffu) / 65535.0;
+}
+
+float ValueNoise (vec3 p, float cell, int period)
+{
+	vec3 q = p / cell;
+	ivec3 i = ivec3(floor(q));
+	vec3 f = fract(q);
+	f = f * f * (3.0 - 2.0 * f);
+	float n[8];
+	for (int k = 0; k < 8; k++) {
+		ivec3 c = (i + ivec3(k & 1, (k >> 1) & 1, k >> 2)) % period;
+		n[k] = Hash(c + period);
+	}
+	return mix(mix(mix(n[0], n[1], f.x), mix(n[2], n[3], f.x), f.y),
+	           mix(mix(n[4], n[5], f.x), mix(n[6], n[7], f.x), f.y), f.z);
+}
+
+// Brightness variation of the ground close to the camera, where the surface
+// textures are blurry
+float GroundDetail (vec3 posView, float dist)
+{
+	float fade = 1.0 - smoothstep(300.0, 2000.0, dist);
+	if (fade <= 0.0 || atm.radii.x <= 0.0) return 1.0;
+	vec3 p = mat3(atm.viewToPlanet) * posView + atm.water.xyz;
+	float d = 0.4 * ValueNoise(p, 8.0, 125) + 0.6 * ValueNoise(p, 2.0, 500);
+	return mix(1.0, 0.65 + 0.7 * d, fade);
+}
+
 // Wave normal of water surfaces (view space). The waves run along integer
 // directions of the planet frame with wavelengths that divide 1 km, so the
 // pattern is continuous when its origin (snapped to 1 km) moves.
@@ -71,6 +106,7 @@ void main()
 		if (tile.params.z < 0.5) sunT *= CloudShadow(pPlanet); // terrain under the clouds
 	}
 	if (tile.params.z < 0.5) sunT *= SunShadow(vPosView, N); // terrain receives shadows
+	if (tile.params.z < 0.5) base *= GroundDetail(vPosView, length(vPosView));
 	vec3 col = base * (frame.ambient.rgb + frame.sunColor.rgb * sunT * max(ndl, 0.0) + LocalLighting(vPosView, N));
 
 	if (tile.params.z > 0.5) { // cloud layer: lit from above, also seen from below
