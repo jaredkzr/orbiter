@@ -32,6 +32,7 @@ struct MeshPushConstants {
 	float light[4];    // rgb: sunlight reaching the object
 	float pbr[4];      // metalness, roughness, reflectivity, dielectric F0 scale
 	float heat[4];     // xyz: direction of motion through the air (view), w: heating glow 0..1
+	float maps[4];     // x: flags of the additional texture maps present (TexMaps::flags)
 };
 
 enum class RenderPass { Opaque, Transparent };

@@ -3,6 +3,8 @@
 
 #include "VkTexture.h"
 #include "ImageIO.h"
+#include "LegacyTex.h"
+#include <cmath>
 #include <cctype>
 #include "OrbiterAPI.h"
 #include <algorithm>
@@ -35,6 +37,44 @@ namespace {
 	constexpr uint32_t DDPF_ALPHAPIXELS = 0x1;
 	constexpr uint32_t DDPF_FOURCC = 0x4;
 	constexpr uint32_t DDPF_RGB = 0x40;
+	constexpr uint32_t DDPF_ALPHA = 0x2;
+	constexpr uint32_t DDPF_LUMINANCE = 0x20000;
+	constexpr uint32_t DDPF_BUMPDUDV = 0x80000;
+
+	// file name suffixes of the additional maps, in MapSlot order
+	const char *const MAP_SUFFIX[MAP_COUNT] = { "norm", "rghn", "metal", "emis", "spec", "refl", "transl", "transm" };
+	// maps holding data rather than colours are sampled without sRGB decoding
+	const bool MAP_LINEAR[MAP_COUNT] = { true, true, true, false, false, false, false, false };
+
+	std::string NativePath (std::string p)
+	{
+		std::replace (p.begin(), p.end(), '\\', '/');
+		return p;
+	}
+
+	bool FileExists (const std::string &path)
+	{
+		FILE *f = fopen (NativePath (path).c_str(), "rb");
+		if (!f) return false;
+		fclose (f);
+		return true;
+	}
+
+	bool ReadFile (const std::string &path, std::vector<uint8_t> &data)
+	{
+		FILE *f = fopen (NativePath (path).c_str(), "rb");
+		if (!f) return false;
+		fseek (f, 0, SEEK_END);
+		long n = ftell (f);
+		fseek (f, 0, SEEK_SET);
+		data.clear();
+		if (n > 0) {
+			data.resize (n);
+			if (fread (data.data(), 1, n, f) != (size_t)n) data.clear();
+		}
+		fclose (f);
+		return !data.empty();
+	}
 
 	int strcasecmp_portable (const char *a, const char *b)
 	{
@@ -74,10 +114,16 @@ bool TextureManager::Init (vkc::Context *c)
 	lci.pBindings = &b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &layout));
 
-	VkDescriptorPoolSize ps{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8192 };
+	VkDescriptorSetLayoutBinding mb[MAP_COUNT];
+	for (uint32_t i = 0; i < MAP_COUNT; i++) mb[i] = { i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
+	lci.bindingCount = MAP_COUNT;
+	lci.pBindings = mb;
+	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &mapLayout));
+
+	VkDescriptorPoolSize ps{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8192 + 1024 * MAP_COUNT };
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-	pci.maxSets = 8192;
+	pci.maxSets = 8192 + 1024;
 	pci.poolSizeCount = 1;
 	pci.pPoolSizes = &ps;
 	VK_CHECK(vkCreateDescriptorPool (ctx->device, &pci, nullptr, &pool));
@@ -96,6 +142,11 @@ bool TextureManager::Init (vkc::Context *c)
 
 	const uint8_t px[4] = { 255, 255, 255, 255 };
 	white = CreateRGBA (1, 1, px);
+	const uint8_t nrm[4] = { 128, 128, 255, 255 };
+	std::vector<size_t> ofs = { 0 };
+	flatNormal = CreateImage (VK_FORMAT_R8G8B8A8_UNORM, 1, 1, 1, nrm, ofs, 4, false);
+	TexMaps none;
+	defaultMapSet = AllocMapSet (&none);
 	return true;
 }
 
@@ -104,12 +155,15 @@ void TextureManager::Shutdown ()
 	if (!ctx) return;
 	// textures still referenced elsewhere (e.g. by the core at a fast exit)
 	// are destroyed as well; later releases are ignored
+	for (auto *t : live) if (t->maps) { delete t->maps; t->maps = nullptr; } // map textures are in 'live' too
 	while (!live.empty()) Destroy (*live.begin());
 	cache.clear();
-	white = nullptr;
+	white = flatNormal = nullptr;
+	defaultMapSet = VK_NULL_HANDLE;
 	vkDestroySampler (ctx->device, sampler, nullptr);
 	vkDestroyDescriptorPool (ctx->device, pool, nullptr);
 	vkDestroyDescriptorSetLayout (ctx->device, layout, nullptr);
+	vkDestroyDescriptorSetLayout (ctx->device, mapLayout, nullptr);
 	ctx = nullptr;
 }
 
@@ -135,6 +189,7 @@ VkTexture *TextureManager::Load (const char *fname, bool shared, bool fullPath)
 			oapiWriteLogV ("VulkanClient: could not read %s", path.c_str());
 	} else {
 		tex = LoadDDS (path);
+		if (tex && shared) LoadMaps (tex, path);
 	}
 	if (tex && shared) {
 		tex->name = key;
@@ -151,6 +206,7 @@ void TextureManager::Release (VkTexture *tex)
 	vkc::Context *c = ctx;
 	VkDescriptorPool p = pool;
 	c->DeferDestroy ([this, c, p, tex]() {
+		FreeMaps (tex);
 		live.erase (tex);
 		if (tex->set) vkFreeDescriptorSets (c->device, p, 1, &tex->set);
 		c->DestroyImage (tex->img);
@@ -160,6 +216,7 @@ void TextureManager::Release (VkTexture *tex)
 
 void TextureManager::Destroy (VkTexture *tex)
 {
+	FreeMaps (tex);
 	live.erase (tex);
 	if (tex->set) vkFreeDescriptorSets (ctx->device, pool, 1, &tex->set);
 	ctx->DestroyImage (tex->img);
@@ -273,25 +330,111 @@ VkDescriptorSet TextureManager::AllocSet (VkImageView view)
 // ======================================================================
 // DDS loading
 
-VkTexture *TextureManager::LoadDDS (const std::string &path)
+VkTexture *TextureManager::LoadDDS (const std::string &path, bool linear, bool quiet)
 {
-	FILE *f = fopen (path.c_str(), "rb");
-	if (!f) return nullptr;
 	std::vector<uint8_t> file;
-	fseek (f, 0, SEEK_END);
-	long fsize = ftell (f);
-	fseek (f, 0, SEEK_SET);
-	if (fsize > 0) {
-		file.resize (fsize);
-		if (fread (file.data(), 1, fsize, f) != (size_t)fsize) file.clear();
-	}
-	fclose (f);
-	VkTexture *tex = CreateFromDDS (file.data(), file.size(), false);
-	if (!tex) oapiWriteLogV ("VulkanClient: could not load DDS file %s", path.c_str());
+	VkTexture *tex = nullptr;
+	DDSImage img;
+	if (ReadFile (path, file) && ParseDDS (file.data(), file.size(), img, linear))
+		tex = CreateImage (img.fmt, img.w, img.h, img.nMip, img.data, img.ofs, img.size, img.genMips);
+	if (!tex && !quiet) oapiWriteLogV ("VulkanClient: could not load DDS file %s", path.c_str());
 	return tex;
 }
 
-bool TextureManager::ParseDDS (const uint8_t *file, size_t fileSize, DDSImage &img) const
+// ======================================================================
+// Additional texture maps
+
+void TextureManager::LoadMaps (VkTexture *tex, const std::string &path)
+{
+	size_t dot = path.find_last_of ('.');
+	if (dot == std::string::npos) return;
+	std::string stem = path.substr (0, dot), ext = path.substr (dot);
+	TexMaps maps;
+	for (int i = 0; i < MAP_COUNT; i++) {
+		std::string mp = stem + "_" + MAP_SUFFIX[i] + ext;
+		VkTexture *m = nullptr;
+		if (FileExists (mp)) m = LoadDDS (mp, MAP_LINEAR[i]);
+		else if (i == MAP_NORM && FileExists (stem + "_bump" + ext)) m = LoadBumpAsNormal (stem + "_bump" + ext);
+		if (m) maps.tex[i] = m, maps.flags |= 1u << i;
+	}
+	if (!maps.flags) return;
+	tex->maps = new TexMaps (maps);
+	tex->maps->set = AllocMapSet (tex->maps);
+	oapiWriteLogV ("VulkanClient: texture maps for %s (flags 0x%02x)", path.c_str(), maps.flags);
+}
+
+VkTexture *TextureManager::LoadBumpAsNormal (const std::string &path)
+{
+	// height from the first channel (luminance, alpha, or the green channel of
+	// colour formats), converted to a tangent-space normal map: x along +u, y
+	// along +v (down the image, as in DirectX normal maps)
+	std::vector<uint8_t> file;
+	if (!ReadFile (path, file)) return nullptr;
+	uint32_t w = 0, h = 0;
+	std::vector<uint8_t> rgba;
+	DDSImage img;
+	if (!legacytex::Decode (file, w, h, rgba)) {
+		if (!ParseDDS (file.data(), file.size(), img, true) || img.converted.empty()) return nullptr;
+		w = img.w, h = img.h;
+		rgba = img.converted;
+	}
+	const float strength = 4.0f;
+	auto height = [&](int x, int y) {
+		x = (x + (int)w) % (int)w, y = (y + (int)h) % (int)h;
+		return rgba[((size_t)y * w + x) * 4 + 1] / 255.0f;
+	};
+	std::vector<uint8_t> nrm ((size_t)w * h * 4);
+	for (int y = 0; y < (int)h; y++)
+		for (int x = 0; x < (int)w; x++) {
+			float dx = (height (x + 1, y) - height (x - 1, y)) * 0.5f * strength;
+			float dy = (height (x, y + 1) - height (x, y - 1)) * 0.5f * strength;
+			float len = std::sqrt (dx * dx + dy * dy + 1.0f);
+			uint8_t *p = &nrm[((size_t)y * w + x) * 4];
+			p[0] = (uint8_t)std::lround ((-dx / len * 0.5f + 0.5f) * 255.0f);
+			p[1] = (uint8_t)std::lround ((-dy / len * 0.5f + 0.5f) * 255.0f);
+			p[2] = (uint8_t)std::lround ((1.0f / len * 0.5f + 0.5f) * 255.0f);
+			p[3] = 255;
+		}
+	std::vector<size_t> ofs = { 0 };
+	return CreateImage (VK_FORMAT_R8G8B8A8_UNORM, w, h, 1, nrm.data(), ofs, nrm.size(), true);
+}
+
+VkDescriptorSet TextureManager::AllocMapSet (const TexMaps *maps)
+{
+	VkDescriptorSet set = VK_NULL_HANDLE;
+	VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+	dai.descriptorPool = pool;
+	dai.descriptorSetCount = 1;
+	dai.pSetLayouts = &mapLayout;
+	VK_CHECK(vkAllocateDescriptorSets (ctx->device, &dai, &set));
+	VkDescriptorImageInfo dii[MAP_COUNT];
+	VkWriteDescriptorSet wr[MAP_COUNT]{};
+	for (uint32_t i = 0; i < MAP_COUNT; i++) {
+		VkTexture *t = maps->tex[i] ? maps->tex[i] : (i == MAP_NORM ? flatNormal : white);
+		dii[i] = { sampler, t->img.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		wr[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		wr[i].dstSet = set;
+		wr[i].dstBinding = i;
+		wr[i].descriptorCount = 1;
+		wr[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		wr[i].pImageInfo = &dii[i];
+	}
+	vkUpdateDescriptorSets (ctx->device, MAP_COUNT, wr, 0, nullptr);
+	return set;
+}
+
+void TextureManager::FreeMaps (VkTexture *tex)
+{
+	if (!tex->maps) return;
+	TexMaps *m = tex->maps;
+	tex->maps = nullptr;
+	if (m->set) vkFreeDescriptorSets (ctx->device, pool, 1, &m->set);
+	for (auto *t : m->tex)
+		if (t && live.count (t)) Destroy (t);
+	delete m;
+}
+
+bool TextureManager::ParseDDS (const uint8_t *file, size_t fileSize, DDSImage &img, bool linear) const
 {
 	if (fileSize < 4 + sizeof(DDSHeader) || memcmp (file, "DDS ", 4)) return false;
 	DDSHeader hdr;
@@ -307,11 +450,11 @@ bool TextureManager::ParseDDS (const uint8_t *file, size_t fileSize, DDSImage &i
 	if (hdr.pf.flags & DDPF_FOURCC) {
 		uint32_t blockBytes;
 		switch (hdr.pf.fourCC) {
-		case FourCC('D','X','T','1'): img.fmt = VK_FORMAT_BC1_RGBA_SRGB_BLOCK; blockBytes = 8;  break;
+		case FourCC('D','X','T','1'): img.fmt = linear ? VK_FORMAT_BC1_RGBA_UNORM_BLOCK : VK_FORMAT_BC1_RGBA_SRGB_BLOCK; blockBytes = 8;  break;
 		case FourCC('D','X','T','2'):
-		case FourCC('D','X','T','3'): img.fmt = VK_FORMAT_BC2_SRGB_BLOCK;      blockBytes = 16; break;
+		case FourCC('D','X','T','3'): img.fmt = linear ? VK_FORMAT_BC2_UNORM_BLOCK : VK_FORMAT_BC2_SRGB_BLOCK; blockBytes = 16; break;
 		case FourCC('D','X','T','4'):
-		case FourCC('D','X','T','5'): img.fmt = VK_FORMAT_BC3_SRGB_BLOCK;      blockBytes = 16; break;
+		case FourCC('D','X','T','5'): img.fmt = linear ? VK_FORMAT_BC3_UNORM_BLOCK : VK_FORMAT_BC3_SRGB_BLOCK; blockBytes = 16; break;
 		default: return false;
 		}
 		if (!ctx->deviceFeatures.textureCompressionBC) return false;
@@ -332,6 +475,38 @@ bool TextureManager::ParseDDS (const uint8_t *file, size_t fileSize, DDSImage &i
 		return true;
 	}
 
+	if (hdr.pf.flags & (DDPF_LUMINANCE | DDPF_ALPHA | DDPF_BUMPDUDV) && !(hdr.pf.flags & DDPF_RGB)) {
+		// 8-bit luminance or alpha (grey), or signed 2-channel V8U8 (normal
+		// map x, y; z reconstructed), converted to RGBA8
+		uint32_t bpp = hdr.pf.rgbBitCount / 8;
+		bool dudv = (hdr.pf.flags & DDPF_BUMPDUDV) != 0;
+		if ((dudv ? bpp != 2 : (bpp < 1 || bpp > 2)) || dataSize < (size_t)w * h * bpp) return false;
+		img.converted.resize ((size_t)w * h * 4);
+		for (size_t i = 0; i < (size_t)w * h; i++) {
+			uint8_t *o = &img.converted[i*4];
+			const uint8_t *px = data + i * bpp;
+			if (dudv) {
+				float x = (int8_t)px[0] / 127.0f, y = (int8_t)px[1] / 127.0f;
+				float z = std::sqrt (std::max (0.0f, 1.0f - x * x - y * y));
+				o[0] = (uint8_t)std::lround ((x * 0.5f + 0.5f) * 255.0f);
+				o[1] = (uint8_t)std::lround ((y * 0.5f + 0.5f) * 255.0f);
+				o[2] = (uint8_t)std::lround ((z * 0.5f + 0.5f) * 255.0f);
+				o[3] = 255;
+			} else {
+				uint8_t v = px[0];
+				o[0] = o[1] = o[2] = v;
+				o[3] = (hdr.pf.flags & DDPF_ALPHA) ? 255 : (bpp == 2 ? px[1] : 255);
+			}
+		}
+		img.fmt = linear || dudv ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R8G8B8A8_SRGB;
+		img.nMip = 1;
+		img.ofs.push_back (0);
+		img.data = img.converted.data();
+		img.size = img.converted.size();
+		img.genMips = true;
+		return true;
+	}
+
 	if (hdr.pf.flags & DDPF_RGB) {
 		// uncompressed: convert the top level to RGBA8 and generate the mip chain
 		uint32_t bpp = hdr.pf.rgbBitCount / 8;
@@ -346,7 +521,7 @@ bool TextureManager::ParseDDS (const uint8_t *file, size_t fileSize, DDSImage &i
 			img.converted[i*4+2] = Channel (px, hdr.pf.bMask);
 			img.converted[i*4+3] = hasAlpha ? Channel (px, hdr.pf.aMask) : 255;
 		}
-		img.fmt = VK_FORMAT_R8G8B8A8_SRGB;
+		img.fmt = linear ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R8G8B8A8_SRGB;
 		img.nMip = 1;
 		img.ofs.push_back (0);
 		img.data = img.converted.data();

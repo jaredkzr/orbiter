@@ -27,8 +27,12 @@ Known gaps and limitations, to be addressed later.
   (analytic environment); other vessels, bases and clouds are not reflected,
   and there is no glossy blur of the planet texture for rough surfaces.
 - Material configuration files: only SPECULAR, SMOOTHNESS, METALNESS and
-  REFLECT are used (FRESNEL and other entries are ignored). Normal,
-  roughness or metalness texture maps are not supported yet.
+  REFLECT are used (FRESNEL and other entries are ignored).
+- Texture maps (_norm/_bump, _rghn, _metal, _spec, _refl, _emis, _transl,
+  _transm) are loaded next to mesh textures. Normal maps are taken as
+  DirectX convention (green towards +v). Tested with generated maps only:
+  stock Orbiter ships none for vessels. DXT5nm-packed normal maps are not
+  detected. _heat is not used.
 
 ## Shadows
 - Cloud shadows use the level-4 cloud textures only (tens of km per texel):

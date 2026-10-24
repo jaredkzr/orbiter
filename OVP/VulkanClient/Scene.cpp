@@ -311,10 +311,10 @@ VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite
 
 void Scene::CreatePipelines ()
 {
-	VkDescriptorSetLayout sets[3] = { frameLayout, gc->TexMgr()->Layout(), atm->SetLayout() };
+	VkDescriptorSetLayout sets[4] = { frameLayout, gc->TexMgr()->Layout(), atm->SetLayout(), gc->TexMgr()->MapLayout() };
 	VkPushConstantRange pcr{ VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(MeshPushConstants) };
 	VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-	plci.setLayoutCount = 3;
+	plci.setLayoutCount = 4;
 	plci.pSetLayouts = sets;
 	plci.pushConstantRangeCount = 1;
 	plci.pPushConstantRanges = &pcr;
@@ -792,7 +792,7 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 	vkCmdBindIndexBuffer (cmd, mesh->IndexBuffer(), 0, VK_INDEX_TYPE_UINT16);
 
 	VkPipeline bound = VK_NULL_HANDLE;
-	VkDescriptorSet boundTex = VK_NULL_HANDLE;
+	VkDescriptorSet boundTex = VK_NULL_HANDLE, boundMaps = VK_NULL_HANDLE;
 	for (uint32_t g = 0; g < mesh->nGroup(); g++) {
 		const VkMesh::Group &grp = mesh->GetGroup (g);
 		if (!grp.nIndex || (grp.flags & VkMesh::GRP_HIDDEN) || (grp.usrFlag & 0x2)) continue;
@@ -814,6 +814,12 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 			vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 1, 1, &tex->set, 0, nullptr);
 			boundTex = tex->set;
 		}
+		const TexMaps *maps = ovr ? nullptr : tex->maps;
+		VkDescriptorSet ms = maps ? maps->set : gc->TexMgr()->DefaultMapSet();
+		if (ms != boundMaps) {
+			vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 3, 1, &ms, 0, nullptr);
+			boundMaps = ms;
+		}
 
 		const MATERIAL &m = mesh->Material (grp.material);
 		MeshPushConstants pc;
@@ -828,6 +834,8 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 		const PBRParams &pp = mesh->PBR (grp.material);
 		pc.pbr[0] = pp.metalness, pc.pbr[1] = pp.roughness, pc.pbr[2] = pp.reflectivity, pc.pbr[3] = pp.f0;
 		memcpy (pc.heat, objHeat, sizeof(objHeat));
+		pc.maps[0] = maps ? (float)maps->flags : 0.0f;
+		pc.maps[1] = pc.maps[2] = pc.maps[3] = 0.0f;
 		if (transparent && !ovr)
 			for (int k = 0; k < 3; k++) pc.emissive[k] += objGlassGlow[k];
 		if (ovr) { // self-illuminated display
@@ -853,6 +861,8 @@ void Scene::DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &m
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 2, 1, &camAtmSet, 0, nullptr);
 	VkDescriptorSet ts = (tex ? tex : gc->TexMgr()->White())->set;
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 1, 1, &ts, 0, nullptr);
+	VkDescriptorSet ms = gc->TexMgr()->DefaultMapSet();
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 3, 1, &ms, 0, nullptr);
 	VkDeviceSize ofs = 0;
 	vkCmdBindVertexBuffers (cmd, 0, 1, &vb, &ofs);
 	vkCmdBindIndexBuffer (cmd, ib, 0, VK_INDEX_TYPE_UINT32);
