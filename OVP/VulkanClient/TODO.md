@@ -184,9 +184,10 @@ Known gaps and limitations, to be addressed later.
 - Lens flare ghosts are discs from the bloom image, not aperture-shaped.
 
 ## Exposure
-- Auto-exposure (ORBITER_VK_AUTOEXPOSURE=0 disables it): the bloom and
-  lens-flare thresholds are in scene units, not relative to the adapted
-  exposure, so at night slightly dimmer lights bloom than by day.
+- Auto-exposure (ORBITER_VK_AUTOEXPOSURE=0 disables it). The bloom
+  threshold and the sun's lens flare (visibility test, ghost brightness)
+  are relative to the adapted exposure. With the camera in sunlight the
+  exposure is capped at 1.3 (daylight camera).
 
 ## Ambient occlusion
 - Screen-space, horizon based, from a single-sample depth prepass of
