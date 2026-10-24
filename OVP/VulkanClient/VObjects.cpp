@@ -639,6 +639,8 @@ void VBase::RenderShadow (ShadowMap &sm)
 
 void VPlanet::RenderShadow (ShadowMap &sm)
 {
+	// terrain casts only into maps near the surface
+	if (surface && camDist < size + 50e3) surface->RenderShadow (sm);
 	for (auto &b : bases) b->RenderShadow (sm);
 }
 

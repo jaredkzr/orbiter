@@ -177,6 +177,26 @@ void ShadowMap::DrawMesh (const VkMesh *mesh, const Mat4 &model,
 	}
 }
 
+void ShadowMap::DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &model)
+{
+	if (!active) return;
+	VkCommandBuffer cmd = ctx->Cmd();
+	VkDeviceSize ofs = 0;
+	vkCmdBindVertexBuffers (cmd, 0, 1, &vb, &ofs);
+	vkCmdBindIndexBuffer (cmd, ib, 0, VK_INDEX_TYPE_UINT16);
+	float f[16];
+	(lightVP * model).ToFloat (f);
+	vkCmdPushConstants (cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(f), f);
+	vkCmdDrawIndexed (cmd, nIdx, 1, 0, 0, 0);
+}
+
+bool ShadowMap::MayCast (const VECTOR3 &gpos, double rad) const
+{
+	// the shadow volume: the map's square across, from DEPTH_NEAR radii
+	// towards the sun to DEPTH_FAR beyond (tested as a bounding sphere)
+	return length (gpos - centre) - rad < radius * (DEPTH_NEAR + 1.5);
+}
+
 Mat4 ShadowMap::ReceiverMatrix (const VECTOR3 &camPos, const MATRIX3 &camRot) const
 {
 	// view space -> global relative to the shadow centre -> shadow clip -> texture coordinates

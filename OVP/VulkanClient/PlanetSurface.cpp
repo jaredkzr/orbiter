@@ -14,6 +14,7 @@
 #include "tile.frag.h"
 #include "prepass.frag.h"
 #include "AO.h"
+#include "Shadows.h"
 
 namespace {
 
@@ -658,6 +659,21 @@ void PlanetSurface::RenderDepth ()
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr->Layout(), 0, 1, &fs, 0, nullptr);
 	vkCmdBindIndexBuffer (cmd, tr->IndexBuffer(), 0, VK_INDEX_TYPE_UINT16);
 	for (Node *n : drawList) DrawNode (n);
+}
+
+void PlanetSurface::RenderShadow (ShadowMap &sm)
+{
+	Prepare ();
+	if (clouds) return;
+	double R = oapiGetSize (hPlanet);
+	for (Node *n : drawList) {
+		if (!n->vbuf.buffer) continue;
+		VECTOR3 gc = ppos + mul (prot, n->centre);
+		// tile extent, with a margin for its relief
+		double rad = n->angRadius * R * 1.5 + 10e3;
+		if (!sm.MayCast (gc, rad)) continue;
+		sm.DrawGeometry (n->vbuf.buffer, tr->IndexBuffer(), tr->IndexCount(), Mat4::FromRotTrans (prot, gc - sm.Centre()));
+	}
 }
 
 void PlanetSurface::Render (Atmosphere *atm)

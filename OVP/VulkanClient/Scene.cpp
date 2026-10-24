@@ -31,10 +31,8 @@ namespace {
 		float sunDir[4];
 		float sunColor[4];
 		float ambient[4];
-		float shadowMat[16];   // view space -> shadow map
-		float shadowParams[4]; // enabled, normal offset, depth bias, texel size
-		float shadowMat2[16];  // far cascade
-		float shadowParams2[4];
+		float shadowMat[3][16];   // view space -> shadow map, per cascade
+		float shadowParams[3][4]; // enabled, normal offset, depth bias, texel size
 		float aoParams[4];     // 1/width, 1/height of the occlusion image, fraction applied to direct light
 		float lightCount[4];
 		struct {
@@ -50,7 +48,9 @@ namespace {
 	// the camera distance (plus the target's size)
 	constexpr double SHADOW_RANGE = 1.5;
 	constexpr double SHADOW_RADIUS_MIN = 20.0, SHADOW_RADIUS_MAX = 5000.0; // [m]
-	constexpr double SHADOW_FAR_RADIUS = 4000.0; // far cascade around the camera [m]
+	// cascades around the camera [m]; each is used if the previous one is
+	// less than half its size
+	constexpr double SHADOW_CAM_RADIUS[2] = { 600.0, 4000.0 };
 
 	struct StarPushConstants {
 		float viewProj[16];
@@ -94,33 +94,32 @@ bool Scene::Init ()
 		oapiWriteLogError ("VulkanClient: device supports only %u bytes of push constants (%zu required)",
 			ctx->deviceProps.limits.maxPushConstantsSize, sizeof(MeshPushConstants));
 
-	shadows = std::make_unique<ShadowMap>();
-	shadows->Init (ctx);
-	shadowsFar = std::make_unique<ShadowMap>();
-	shadowsFar->Init (ctx);
+	for (auto &sm : shadows) {
+		sm = std::make_unique<ShadowMap>();
+		sm->Init (ctx);
+	}
 
-	// per-frame uniform buffer and the shadow map (set 0)
-	VkDescriptorSetLayoutBinding b[4]{};
+	// per-frame uniform buffer, the shadow maps and ambient occlusion (set 0)
+	VkDescriptorSetLayoutBinding b[3]{};
 	b[0].binding = 0;
 	b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	b[0].descriptorCount = 1;
 	b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 	b[1].binding = 1;
 	b[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-	b[1].descriptorCount = 1;
+	b[1].descriptorCount = SHADOW_CASCADES;
 	b[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 	b[2] = b[1];
-	b[2].binding = 2;
-	b[3] = b[1];
-	b[3].binding = 3; // ambient occlusion
+	b[2].binding = 3; // ambient occlusion
+	b[2].descriptorCount = 1;
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 4;
+	lci.bindingCount = 3;
 	lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &frameLayout));
 
 	VkDescriptorPoolSize ps[2] = {
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, vkc::FRAMES_IN_FLIGHT },
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 * vkc::FRAMES_IN_FLIGHT }
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, (SHADOW_CASCADES + 1) * vkc::FRAMES_IN_FLIGHT }
 	};
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.maxSets = vkc::FRAMES_IN_FLIGHT;
@@ -137,9 +136,10 @@ bool Scene::Init ()
 		dai.pSetLayouts = &frameLayout;
 		VK_CHECK(vkAllocateDescriptorSets (ctx->device, &dai, &frameSet[i]));
 		VkDescriptorBufferInfo dbi{ frameUbo[i].buffer, 0, sizeof(FrameUniforms) };
-		VkDescriptorImageInfo dii{ shadows->Sampler(), shadows->View(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-		VkDescriptorImageInfo dii2{ shadowsFar->Sampler(), shadowsFar->View(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-		VkWriteDescriptorSet wr[3]{};
+		VkDescriptorImageInfo dii[SHADOW_CASCADES];
+		for (int k = 0; k < SHADOW_CASCADES; k++)
+			dii[k] = { shadows[k]->Sampler(), shadows[k]->View(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		VkWriteDescriptorSet wr[2]{};
 		wr[0].sType = wr[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 		wr[0].dstSet = wr[1].dstSet = frameSet[i];
 		wr[0].dstBinding = 0;
@@ -147,13 +147,10 @@ bool Scene::Init ()
 		wr[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 		wr[0].pBufferInfo = &dbi;
 		wr[1].dstBinding = 1;
-		wr[1].descriptorCount = 1;
+		wr[1].descriptorCount = SHADOW_CASCADES;
 		wr[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-		wr[1].pImageInfo = &dii;
-		wr[2] = wr[1];
-		wr[2].dstBinding = 2;
-		wr[2].pImageInfo = &dii2;
-		vkUpdateDescriptorSets (ctx->device, 3, wr, 0, nullptr);
+		wr[1].pImageInfo = dii;
+		vkUpdateDescriptorSets (ctx->device, 2, wr, 0, nullptr);
 	}
 
 	ao = std::make_unique<AmbientOcclusion>();
@@ -205,10 +202,10 @@ void Scene::Shutdown ()
 	tiles.reset();
 	if (atm) atm->Shutdown ();
 	atm.reset();
-	if (shadows) shadows->Shutdown ();
-	shadows.reset();
-	if (shadowsFar) shadowsFar->Shutdown ();
-	shadowsFar.reset();
+	for (auto &sm : shadows) {
+		if (sm) sm->Shutdown ();
+		sm.reset();
+	}
 	if (stars) stars->Shutdown ();
 	stars.reset();
 	if (ao) ao->Shutdown ();
@@ -625,7 +622,11 @@ void Scene::UpdateCamera ()
 
 void Scene::RenderShadows ()
 {
-	shadowsValid = shadowsFarValid = false;
+	frameNo++;
+	for (bool &v : shadowValid) v = false;
+	// planet surfaces select their tiles and upload data first (transfers
+	// end rendering scopes, and shadow maps are cleared when bound)
+	for (auto &it : visuals) it.second->PrepareFrame ();
 	if (!hSun) return;
 	OBJHANDLE hTgt = oapiCameraTarget ();
 	VECTOR3 c = camPos;
@@ -634,22 +635,24 @@ void Scene::RenderShadows ()
 		oapiGetGlobalPos (hTgt, &c);
 		size = oapiGetSize (hTgt);
 	}
-	double r = std::clamp (SHADOW_RANGE * length (camPos - c) + 2.0 * size, SHADOW_RADIUS_MIN, SHADOW_RADIUS_MAX);
-	if (Sunlight (c) <= 0.0) return; // the region is in darkness anyway
 	VECTOR3 sp;
 	oapiGetGlobalPos (hSun, &sp);
-	shadows->Begin (c, r, unit (sp - c));
-	for (auto &it : visuals) it.second->RenderShadow (*shadows);
-	shadows->End ();
-	shadowsValid = true;
-
-	// far cascade around the camera, for structures beyond the near map
-	if (r < 0.5 * SHADOW_FAR_RADIUS) {
-		shadowsFar->Begin (camPos, SHADOW_FAR_RADIUS, unit (sp - camPos));
-		for (auto &it : visuals) it.second->RenderShadow (*shadowsFar);
-		shadowsFar->End ();
-		shadowsFarValid = true;
-	}
+	auto render = [&](int i, const VECTOR3 &centre, double radius) {
+		shadows[i]->Begin (centre, radius, unit (sp - centre));
+		for (auto &it : visuals) it.second->RenderShadow (*shadows[i]);
+		shadows[i]->End ();
+		shadowValid[i] = true;
+	};
+	// around the camera target
+	double r = std::clamp (SHADOW_RANGE * length (camPos - c) + 2.0 * size, SHADOW_RADIUS_MIN, SHADOW_RADIUS_MAX);
+	if (Sunlight (c) > 0.0) render (0, c, r); // else the region is in darkness anyway
+	// around the camera, for structures and terrain beyond the first map
+	if (Sunlight (camPos) <= 0.0) return;
+	for (int k = 0; k < 2; k++)
+		if (r < 0.5 * SHADOW_CAM_RADIUS[k]) {
+			render (k + 1, camPos, SHADOW_CAM_RADIUS[k]);
+			r = SHADOW_CAM_RADIUS[k];
+		}
 }
 
 double Scene::Sunlight (const VECTOR3 &gpos)
@@ -709,7 +712,6 @@ void Scene::WriteAODescriptors ()
 
 void Scene::BeginFrame ()
 {
-	frameNo++;
 	uint32_t fi = ctx->FrameIndex();
 	if (ao->EnsureSize ()) WriteAODescriptors (); // the GPU is idle then
 
@@ -756,8 +758,8 @@ void Scene::BeginFrame ()
 		prm[2] = (float)(texel / (6.0 * sm.Radius()));       // depth bias (one texel in depth units)
 		prm[3] = 1.0f / ShadowMap::SIZE;
 	};
-	if (shadowsValid) shadowUniforms (*shadows, fu.shadowMat, fu.shadowParams);
-	if (shadowsFarValid) shadowUniforms (*shadowsFar, fu.shadowMat2, fu.shadowParams2);
+	for (int i = 0; i < SHADOW_CASCADES; i++)
+		if (shadowValid[i]) shadowUniforms (*shadows[i], fu.shadowMat[i], fu.shadowParams[i]);
 	// local light sources, nearest to the camera first
 	std::vector<LightSource> ls;
 	for (auto &it : visuals) it.second->CollectLights (ls);
@@ -792,9 +794,7 @@ void Scene::BeginFrame ()
 void Scene::RenderPrepass ()
 {
 	if (!ao->enabled) return;
-	// planet surfaces select their tiles and upload data first (transfers
-	// end rendering scopes, and the prepass target is cleared when bound)
-	for (auto &it : visuals) it.second->PrepareFrame ();
+	// (planet surfaces were prepared before the shadow maps)
 	ao->BeginPrepass ();
 	for (auto &it : visuals) it.second->Render (RenderPass::Depth);
 	ao->Compute (proj[0], -proj[5]);

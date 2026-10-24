@@ -18,10 +18,8 @@ layout(set = 0, binding = 0) uniform Frame {
 	vec4 sunDir;       // direction towards the sun, view space
 	vec4 sunColor;
 	vec4 ambient;
-	mat4 shadowMat;    // view space -> shadow map (texture coordinates, depth)
-	vec4 shadowParams; // x: enabled, y: normal offset [m], z: depth bias, w: texel size
-	mat4 shadowMat2;   // far cascade
-	vec4 shadowParams2;
+	mat4 shadowMat[3];    // view space -> shadow map (texture coordinates, depth), per cascade
+	vec4 shadowParams[3]; // x: enabled, y: normal offset [m], z: depth bias, w: texel size
 	vec4 aoParams;     // 1/width, 1/height of the ambient occlusion image, z: fraction applied to direct light
 	vec4 lightCount;   // x: number of local lights
 	LocalLight lights[MAX_LIGHTS];

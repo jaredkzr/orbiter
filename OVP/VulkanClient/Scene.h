@@ -88,7 +88,7 @@ public:
 	void BeginFrame ();
 	/// Opaque geometry into the ambient occlusion prepass, and the occlusion
 	void RenderPrepass ();
-	/// incremented by BeginFrame
+	/// incremented at the start of each frame (RenderShadows)
 	uint64_t FrameNo () const { return frameNo; }
 	void DrawSphere (const Mat4 &modelView, const float colour[4], bool unlit, VkTexture *tex = nullptr);
 	VkBuffer SphereVtx () const { return sphereVtx.buffer; }
@@ -161,9 +161,11 @@ private:
 	VkTexture *glowTex = nullptr;
 	std::unique_ptr<TileRenderer> tiles;
 	std::unique_ptr<AtmosphereRenderer> atm;
-	std::unique_ptr<ShadowMap> shadows;      // near cascade, around the camera target
-	std::unique_ptr<ShadowMap> shadowsFar;   // far cascade, around the camera
-	bool shadowsValid = false, shadowsFarValid = false;
+	// shadow cascades: around the camera target, then around the camera
+	// (mid and far range)
+	static constexpr int SHADOW_CASCADES = 3;
+	std::unique_ptr<ShadowMap> shadows[SHADOW_CASCADES];
+	bool shadowValid[SHADOW_CASCADES] = {};
 	VkDescriptorSet camAtmSet = VK_NULL_HANDLE; // atmosphere for vessels and bases
 
 	// sphere geometry for planets

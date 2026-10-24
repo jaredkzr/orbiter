@@ -35,6 +35,10 @@ public:
 	/// centre (see Centre)
 	void DrawMesh (const VkMesh *mesh, const Mat4 &model,
 		const std::vector<Mat4> *groupTransforms = nullptr, const std::vector<uint8_t> *groupVisible = nullptr);
+	/// Draw indexed geometry (NTVERTEX, 16-bit indices), e.g. a terrain tile
+	void DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &model);
+	/// whether a sphere (global position, radius) may cast into the map
+	bool MayCast (const VECTOR3 &gpos, double rad) const;
 	const VECTOR3 &Centre () const { return centre; }
 	double Radius () const { return radius; }
 

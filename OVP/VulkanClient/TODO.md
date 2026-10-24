@@ -3,6 +3,8 @@
 Known gaps and limitations, to be addressed later.
 
 ## Atmosphere
+- Mars at twilight, seen from the surface: a bright band above the horizon
+  (sky shading between the mean-radius horizon and the terrain horizon?).
 - Multiple scattering is a cheap isotropic approximation; precomputed
   scattering tables would be more accurate (twilight colours in particular).
 
@@ -38,7 +40,10 @@ Known gaps and limitations, to be addressed later.
 - Cloud shadows use the level-4 cloud textures only (tens of km per texel):
   soft and coarse, not yet checked visually over broken cloud cover. Using
   the cloud quadtree tiles would sharpen them.
-- No terrain self-shadowing (mountains at low sun).
+- Terrain casts shadows only within the cascades (up to 4 km around the
+  camera, 16 km towards the sun); distant mountain shadows are missing.
+  Not yet verified on rugged terrain at low sun.
+- Saturn's rings cast no shadow on the planet.
 
 ## Water
 - Sun glitter and wave normals not yet checked in a view facing the sun.
