@@ -23,7 +23,7 @@
 
 namespace {
 
-	// Must match the Frame uniform block in the shaders
+	// Must match the Frame uniform block in frame.glsl
 	struct FrameUniforms {
 		float proj[16];
 		float sunDir[4];
@@ -31,6 +31,14 @@ namespace {
 		float ambient[4];
 		float shadowMat[16];   // view space -> shadow map
 		float shadowParams[4]; // enabled, normal offset, depth bias, texel size
+		float lightCount[4];
+		struct {
+			float pos[4];   // view space position, range
+			float dir[4];   // view space direction, type (1 point, 2 spot)
+			float col[4];   // colour times intensity
+			float att[4];   // attenuation coefficients, cos(umbra/2)
+			float spot[4];  // cos(penumbra/2)
+		} lights[MAX_LIGHTS];
 	};
 
 	// shadows are cast within this range of the camera target, in units of
@@ -129,10 +137,10 @@ bool Scene::Init ()
 		vkUpdateDescriptorSets (ctx->device, 2, wr, 0, nullptr);
 	}
 
-	CreatePipelines ();
-	BuildSphere ();
 	atm = std::make_unique<AtmosphereRenderer>();
 	atm->Init (ctx);
+	CreatePipelines ();
+	BuildSphere ();
 	tiles = std::make_unique<TileRenderer>();
 	tiles->Init (ctx, gc->TexMgr(), frameLayout, atm->SetLayout());
 	exhaustTex = gc->TexMgr()->Load ("Exhaust.dds");
@@ -271,10 +279,10 @@ VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite
 
 void Scene::CreatePipelines ()
 {
-	VkDescriptorSetLayout sets[2] = { frameLayout, gc->TexMgr()->Layout() };
+	VkDescriptorSetLayout sets[3] = { frameLayout, gc->TexMgr()->Layout(), atm->SetLayout() };
 	VkPushConstantRange pcr{ VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(MeshPushConstants) };
 	VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-	plci.setLayoutCount = 2;
+	plci.setLayoutCount = 3;
 	plci.pSetLayouts = sets;
 	plci.pushConstantRangeCount = 1;
 	plci.pPushConstantRanges = &pcr;
@@ -676,7 +684,34 @@ void Scene::Render ()
 		fu.shadowParams[2] = (float)(texel / (6.0 * shadows->Radius())); // depth bias (one texel in depth units)
 		fu.shadowParams[3] = 1.0f / ShadowMap::SIZE;
 	}
+	// local light sources, nearest to the camera first
+	std::vector<LightSource> ls;
+	for (auto &it : visuals) it.second->CollectLights (ls);
+	std::sort (ls.begin(), ls.end(), [this](const LightSource &a, const LightSource &b) {
+		return length (a.pos - camPos) - a.range < length (b.pos - camPos) - b.range;
+	});
+	int nl = (int)std::min (ls.size(), (size_t)MAX_LIGHTS);
+	fu.lightCount[0] = (float)nl;
+	for (int i = 0; i < nl; i++) {
+		const LightSource &l = ls[i];
+		VECTOR3 p = view.TransformPoint (l.pos - camPos), d = view.TransformPoint (l.dir);
+		auto &u = fu.lights[i];
+		u.pos[0] = (float)p.x, u.pos[1] = (float)p.y, u.pos[2] = (float)p.z, u.pos[3] = (float)l.range;
+		u.dir[0] = (float)d.x, u.dir[1] = (float)d.y, u.dir[2] = (float)d.z, u.dir[3] = l.spot ? 2.0f : 1.0f;
+		for (int k = 0; k < 3; k++) u.col[k] = l.col[k], u.att[k] = (float)l.att[k];
+		u.att[3] = (float)cos (0.5 * l.umbra);
+		u.spot[0] = (float)cos (0.5 * l.penumbra);
+	}
 	memcpy (frameUbo[fi].mapped, &fu, sizeof(fu));
+
+	// atmosphere of the planet the camera is at, for vessels and bases
+	camAtmSet = atm->NoAtmosphereSet ();
+	if (OBJHANDLE hp = oapiCameraProxyGbody ()) {
+		auto it = visuals.find (hp);
+		if (it != visuals.end())
+			if (Atmosphere *a = it->second->GetAtmosphere ())
+				if (a->Present ()) camAtmSet = a->Set ();
+	}
 
 	// background stars
 	float viewf[16], vp[16];
@@ -710,6 +745,7 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 	VkBuffer vb = mesh->VertexBuffer();
 	// billboards drawn in between use a different layout for set 0
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &frameSet[ctx->FrameIndex()], 0, nullptr);
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 2, 1, &camAtmSet, 0, nullptr);
 	vkCmdBindVertexBuffers (cmd, 0, 1, &vb, &ofs);
 	vkCmdBindIndexBuffer (cmd, mesh->IndexBuffer(), 0, VK_INDEX_TYPE_UINT16);
 
@@ -761,6 +797,7 @@ void Scene::DrawSphere (const Mat4 &modelView, const float colour[4], bool unlit
 	VkCommandBuffer cmd = ctx->Cmd();
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshOpaque);
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &frameSet[ctx->FrameIndex()], 0, nullptr);
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 2, 1, &camAtmSet, 0, nullptr);
 	VkDescriptorSet ws = gc->TexMgr()->White()->set;
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 1, 1, &ws, 0, nullptr);
 	VkDeviceSize ofs = 0;

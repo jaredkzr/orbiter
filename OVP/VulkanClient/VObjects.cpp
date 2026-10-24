@@ -267,12 +267,46 @@ void VVessel::RenderShadow (ShadowMap &sm)
 			sm.DrawMesh (rec.mesh.get(), model * Mat4::Translation (rec.ofs), &rec.grpTransform, &rec.grpVisible);
 }
 
+void VVessel::CollectLights (std::vector<LightSource> &lights)
+{
+	bool internal = oapiCameraInternal() && oapiCameraTarget() == hObj;
+	VECTOR3 cam = scene->CameraPos();
+	for (DWORD i = 0; i < vessel->LightEmitterCount(); i++) {
+		const LightEmitter *le = vessel->GetLightEmitter (i);
+		if (!le || !le->IsActive()) continue;
+		int vis = le->GetVisibility();
+		if (!(vis & (internal ? LightEmitter::VIS_COCKPIT : LightEmitter::VIS_EXTERNAL))) continue;
+		double in = le->GetIntensity();
+		if (in <= 0.0) continue;
+		LightSource l{};
+		l.pos = gpos + mul (grot, le->GetPosition());
+		if (le->GetType() == LightEmitter::LT_POINT) {
+			const PointLight *pl = (const PointLight*)le;
+			l.range = pl->GetRange();
+			for (int k = 0; k < 3; k++) l.att[k] = pl->GetAttenuation()[k];
+		} else if (le->GetType() == LightEmitter::LT_SPOT) {
+			const SpotLight *sl = (const SpotLight*)le;
+			l.range = sl->GetRange();
+			for (int k = 0; k < 3; k++) l.att[k] = sl->GetAttenuation()[k];
+			l.spot = true;
+			l.dir = mul (grot, le->GetDirection());
+			l.umbra = sl->GetUmbra();
+			l.penumbra = sl->GetPenumbra();
+		} else {
+			continue;
+		}
+		if (length (l.pos - cam) > l.range + 10e3) continue; // nothing in view can be lit
+		const COLOUR4 &c = le->GetDiffuseColour();
+		l.col[0] = (float)(c.r * in), l.col[1] = (float)(c.g * in), l.col[2] = (float)(c.b * in);
+		lights.push_back (l);
+	}
+}
+
 void VVessel::RenderExhaust ()
 {
 	// Exhaust textures hold the flame strip in u = [0, 1/4] (nozzle at v = 0)
 	// and a glow sprite in [1/2, 1] x [0, 1/2].
 	DWORD n = vessel->GetExhaustCount ();
-	if (!n) return;
 	static std::mt19937 rng (12345);
 	std::uniform_real_distribution<double> uni (0.0, 1.0);
 	std::map<VkTexture*, std::vector<PVtx>> batches;
@@ -305,6 +339,24 @@ void VVessel::RenderExhaust ()
 			{ x - h, y - h, z, 0.5f, 0.0f, 1, 1, 1, a }, { x + h, y - h, z, 1.0f, 0.0f, 1, 1, 1, a },
 			{ x + h, y + h, z, 1.0f, 0.5f, 1, 1, 1, a }, { x - h, y + h, z, 0.5f, 0.5f, 1, 1, 1, a } };
 		v.insert (v.end(), { g[0], g[1], g[2], g[0], g[2], g[3] });
+	}
+	// beacons: blinking glows, using the glow sprite of the default exhaust texture
+	double simt = oapiGetSimTime ();
+	for (DWORD i = 0; ; i++) {
+		const BEACONLIGHTSPEC *bs = vessel->GetBeacon (i);
+		if (!bs) break;
+		if (!bs->active || !bs->pos || !bs->col) continue;
+		if (bs->period > 0.0 && fmod (simt + bs->tofs, bs->period) > bs->duration) continue;
+		VECTOR3 vp = scene->ViewPos (gpos + mul (grot, *bs->pos));
+		// keep a minimum apparent size, so that beacons stay visible from afar
+		float h = (float)std::max (bs->size, vp.z * 0.002);
+		float x = (float)vp.x, y = (float)vp.y, z = (float)vp.z;
+		float r = (float)bs->col->x, g = (float)bs->col->y, b = (float)bs->col->z;
+		PVtx q[4] = {
+			{ x - h, y - h, z, 0.5f, 0.0f, r, g, b, 1 }, { x + h, y - h, z, 1.0f, 0.0f, r, g, b, 1 },
+			{ x + h, y + h, z, 1.0f, 0.5f, r, g, b, 1 }, { x - h, y + h, z, 0.5f, 0.5f, r, g, b, 1 } };
+		auto &v = batches[scene->DefaultExhaustTex ()];
+		v.insert (v.end(), { q[0], q[1], q[2], q[0], q[2], q[3] });
 	}
 	for (auto &b : batches) scene->DrawBillboards (b.first, true, b.second.data(), b.second.size());
 }

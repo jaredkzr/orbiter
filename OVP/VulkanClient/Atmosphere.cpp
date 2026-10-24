@@ -25,7 +25,7 @@ namespace {
 		float misc[4];
 	};
 
-	constexpr uint32_t MAX_ATMOSPHERES = 64;
+	constexpr uint32_t MAX_ATMOSPHERES = 64; // plus one "no atmosphere" set
 
 	// Rayleigh scattering of Earth's air is close to proportional to the
 	// square of its sky colour (AtmColor0), which is used to derive the
@@ -52,13 +52,28 @@ bool AtmosphereRenderer::Init (vkc::Context *c)
 	lci.pBindings = &b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &setLayout));
 
-	VkDescriptorPoolSize ps{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_ATMOSPHERES * vkc::FRAMES_IN_FLIGHT };
+	VkDescriptorPoolSize ps{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_ATMOSPHERES * vkc::FRAMES_IN_FLIGHT + 1 };
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-	pci.maxSets = MAX_ATMOSPHERES * vkc::FRAMES_IN_FLIGHT;
+	pci.maxSets = MAX_ATMOSPHERES * vkc::FRAMES_IN_FLIGHT + 1;
 	pci.poolSizeCount = 1;
 	pci.pPoolSizes = &ps;
 	VK_CHECK(vkCreateDescriptorPool (ctx->device, &pci, nullptr, &pool));
+
+	noneUbo = ctx->CreateBuffer (sizeof(AtmUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
+	memset (noneUbo.mapped, 0, sizeof(AtmUniforms));
+	VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+	dai.descriptorPool = pool;
+	dai.descriptorSetCount = 1;
+	dai.pSetLayouts = &setLayout;
+	VK_CHECK(vkAllocateDescriptorSets (ctx->device, &dai, &noneSet));
+	VkDescriptorBufferInfo dbi{ noneUbo.buffer, 0, sizeof(AtmUniforms) };
+	VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+	wr.dstSet = noneSet;
+	wr.descriptorCount = 1;
+	wr.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	wr.pBufferInfo = &dbi;
+	vkUpdateDescriptorSets (ctx->device, 1, &wr, 0, nullptr);
 
 	VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 	plci.setLayoutCount = 1;
@@ -130,6 +145,7 @@ void AtmosphereRenderer::Shutdown ()
 	vkDestroyPipelineLayout (ctx->device, skyLayout, nullptr);
 	vkDestroyDescriptorPool (ctx->device, pool, nullptr);
 	vkDestroyDescriptorSetLayout (ctx->device, setLayout, nullptr);
+	ctx->DestroyBuffer (noneUbo);
 	ctx = nullptr;
 }
 

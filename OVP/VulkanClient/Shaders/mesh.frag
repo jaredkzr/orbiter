@@ -4,16 +4,13 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
-layout(set = 0, binding = 0) uniform Frame {
-	mat4 proj;
-	vec4 sunDir;
-	vec4 sunColor;
-	vec4 ambient;
-	mat4 shadowMat;   // view space -> shadow map (texture coordinates, depth)
-	vec4 shadowParams; // x: enabled, y: normal offset [m], z: depth bias, w: texel size
-} frame;
+#include "frame.glsl"
 
 #include "shadow.glsl"
+#include "lights.glsl"
+
+#define ATM_SET 2
+#include "atmosphere.glsl"
 
 layout(set = 1, binding = 0) uniform sampler2D tex;
 
@@ -46,13 +43,22 @@ void main()
 	vec3 L = frame.sunDir.xyz;
 	float ndl = max(dot(N, L), 0.0);
 
+	// sunlight: eclipses, shadows, and extinction in the atmosphere of the
+	// planet near the camera
+	bool hasAtm = atm.misc.x > 0.5;
 	vec3 sun = frame.sunColor.rgb * draw.light.rgb * SunShadow(vPosView, N);
-	vec3 col = base * (frame.ambient.rgb + sun * ndl) + draw.emissive.rgb * texel.rgb;
+	if (hasAtm) sun *= SunTransmittance(mat3(atm.viewToPlanet) * vPosView + atm.camPos.xyz);
+	vec3 col = base * (frame.ambient.rgb + sun * ndl + LocalLighting(vPosView, N)) + draw.emissive.rgb * texel.rgb;
 
 	if (draw.specular.a > 0.0 && ndl > 0.0) {
 		vec3 V = normalize(-vPosView);
 		vec3 H = normalize(L + V);
 		col += draw.specular.rgb * sun * pow(max(dot(N, H), 0.0), draw.specular.a);
+	}
+	if (hasAtm) { // aerial perspective
+		vec3 T;
+		vec3 Lin = Inscatter(normalize(mat3(atm.viewToPlanet) * vPosView), length(vPosView), T);
+		col = col * T + AtmTonemap(Lin);
 	}
 	outColor = vec4(col, alpha);
 }

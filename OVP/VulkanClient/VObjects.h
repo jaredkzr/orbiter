@@ -16,6 +16,7 @@
 class VkMesh;
 class VESSEL;
 class ShadowMap;
+class Atmosphere;
 
 class VObject {
 public:
@@ -27,6 +28,8 @@ public:
 	virtual void Render (RenderPass pass) = 0;
 	virtual void RenderSky () {}
 	virtual void RenderShadow (ShadowMap &sm) {}
+	virtual void CollectLights (std::vector<LightSource> &lights) {}
+	virtual Atmosphere *GetAtmosphere () { return nullptr; }
 	virtual int VisEvent (DWORD msg, DWORD_PTR context) { return 0; }
 	virtual MESHHANDLE GetMesh (UINT idx) { return NULL; }
 
@@ -52,6 +55,7 @@ public:
 	void Update () override;
 	void Render (RenderPass pass) override;
 	void RenderShadow (ShadowMap &sm) override;
+	void CollectLights (std::vector<LightSource> &lights) override;
 	int VisEvent (DWORD msg, DWORD_PTR context) override;
 	MESHHANDLE GetMesh (UINT idx) override;
 
@@ -103,6 +107,7 @@ public:
 	void Render (RenderPass pass) override;
 	void RenderSky () override;
 	void RenderShadow (ShadowMap &sm) override;
+	Atmosphere *GetAtmosphere () override { return atmosphere.get(); }
 
 private:
 	float colour[4];

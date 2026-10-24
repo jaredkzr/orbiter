@@ -34,6 +34,17 @@ struct MeshPushConstants {
 
 enum class RenderPass { Opaque, Transparent };
 
+/// Local light source (vessel light emitter), global frame
+struct LightSource {
+	VECTOR3 pos, dir;
+	float col[3];
+	double range;
+	double att[3];
+	bool spot;
+	double umbra, penumbra; // full cone angles [rad]
+};
+constexpr int MAX_LIGHTS = 16; // must match frame.glsl
+
 /// Replacement texture for a mesh group, rendered unlit (e.g. VC MFD displays)
 struct GroupTexOverride {
 	uint32_t group;
@@ -121,6 +132,7 @@ private:
 	std::unique_ptr<AtmosphereRenderer> atm;
 	std::unique_ptr<ShadowMap> shadows;
 	bool shadowsValid = false;
+	VkDescriptorSet camAtmSet = VK_NULL_HANDLE; // atmosphere for vessels and bases
 
 	// sphere geometry for planets
 	vkc::Buffer sphereVtx, sphereIdx;

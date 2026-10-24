@@ -23,6 +23,8 @@ public:
 	VkDescriptorPool Pool () const { return pool; }
 	VkPipeline SkyPipeline () const { return skyPipeline; }
 	VkPipelineLayout SkyLayout () const { return skyLayout; }
+	/// set with uniform data for "no atmosphere"
+	VkDescriptorSet NoAtmosphereSet () const { return noneSet; }
 
 private:
 	vkc::Context *ctx = nullptr;
@@ -30,6 +32,8 @@ private:
 	VkDescriptorPool pool = VK_NULL_HANDLE;
 	VkPipelineLayout skyLayout = VK_NULL_HANDLE;
 	VkPipeline skyPipeline = VK_NULL_HANDLE;
+	vkc::Buffer noneUbo;
+	VkDescriptorSet noneSet = VK_NULL_HANDLE;
 };
 
 class Atmosphere {

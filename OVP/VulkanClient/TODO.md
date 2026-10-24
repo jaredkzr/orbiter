@@ -3,11 +3,8 @@
 Known gaps and limitations, to be addressed later.
 
 ## Atmosphere
-- The sky just above the horizon is too orange/yellow. The scattering model
-  is single-scattering only; a multiple-scattering approximation (or
-  precomputed scattering tables) would whiten the horizon.
-- Vessels are not affected by the atmosphere: no aerial perspective (haze)
-  and no attenuation of sunlight, unlike terrain and clouds.
+- Multiple scattering is a cheap isotropic approximation; precomputed
+  scattering tables would be more accurate (twilight colours in particular).
 
 ## Particle streams
 - Reentry plasma is implemented but has not been verified visually at peak
@@ -22,3 +19,8 @@ Known gaps and limitations, to be addressed later.
 - Windows build of the client: deferred. Needs a Windows test loop. On
   Windows the core reads input from its own render window (DirectInput and
   window messages), which has to be reconciled with the SDL window.
+
+## Vessel modules (not client issues)
+- DeltaGlider: NAVLIGHT/STROBELIGHT read from a scenario set the switch
+  state but don't activate the beacons (NavLight::clbkParseScenarioLine only
+  sets light_on); they light up only when the switch is operated.

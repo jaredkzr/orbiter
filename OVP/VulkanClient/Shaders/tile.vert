@@ -4,19 +4,13 @@
 // Planet surface tiles
 
 #version 450
+#extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec3 inPos;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec2 inUV;
 
-layout(set = 0, binding = 0) uniform Frame {
-	mat4 proj;
-	vec4 sunDir;
-	vec4 sunColor;
-	vec4 ambient;
-	mat4 shadowMat;   // view space -> shadow map (texture coordinates, depth)
-	vec4 shadowParams; // x: enabled, y: normal offset [m], z: depth bias, w: texel size
-} frame;
+#include "frame.glsl"
 
 layout(push_constant) uniform Tile {
 	mat4 modelView;

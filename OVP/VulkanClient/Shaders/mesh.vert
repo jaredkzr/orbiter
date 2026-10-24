@@ -2,15 +2,9 @@
 // Licensed under the MIT License
 
 #version 450
+#extension GL_GOOGLE_include_directive : require
 
-layout(set = 0, binding = 0) uniform Frame {
-	mat4 proj;       // view -> clip (reversed z, infinite far plane)
-	vec4 sunDir;     // direction towards the sun, view space
-	vec4 sunColor;
-	vec4 ambient;
-	mat4 shadowMat;   // view space -> shadow map (texture coordinates, depth)
-	vec4 shadowParams; // x: enabled, y: normal offset [m], z: depth bias, w: texel size
-} frame;
+#include "frame.glsl"
 
 layout(push_constant) uniform Draw {
 	mat4 modelView;  // object -> view (camera-relative, rotation and uniform scale)

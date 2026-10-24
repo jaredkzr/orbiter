@@ -4,16 +4,10 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
-layout(set = 0, binding = 0) uniform Frame {
-	mat4 proj;
-	vec4 sunDir;
-	vec4 sunColor;
-	vec4 ambient;
-	mat4 shadowMat;   // view space -> shadow map (texture coordinates, depth)
-	vec4 shadowParams; // x: enabled, y: normal offset [m], z: depth bias, w: texel size
-} frame;
+#include "frame.glsl"
 
 #include "shadow.glsl"
+#include "lights.glsl"
 
 layout(set = 1, binding = 0) uniform sampler2D surfTex;
 layout(set = 2, binding = 0) uniform sampler2D maskTex;
@@ -51,7 +45,7 @@ void main()
 		sunT = SunTransmittance(pPlanet);
 	}
 	if (tile.params.z < 0.5) sunT *= SunShadow(vPosView, N); // terrain receives shadows
-	vec3 col = base * (frame.ambient.rgb + frame.sunColor.rgb * sunT * max(ndl, 0.0));
+	vec3 col = base * (frame.ambient.rgb + frame.sunColor.rgb * sunT * max(ndl, 0.0) + LocalLighting(vPosView, N));
 
 	if (tile.params.z > 0.5) { // cloud layer: lit from above, also seen from below
 		float a = texture(surfTex, clamp(vUV * tile.surfUV.zw + tile.surfUV.xy, hs, 1.0 - hs)).a;
@@ -69,6 +63,9 @@ void main()
 		vec4 m = texture(maskTex, clamp(vUV * tile.maskUV.zw + tile.maskUV.xy, hm, 1.0 - hm));
 		// night lights fade in beyond the terminator
 		float night = clamp(0.2 - ndl * 4.0, 0.0, 1.0);
+		// the night light texture represents lights seen from altitude; close up
+		// it would flood the ground, so it fades out near the camera
+		night *= smoothstep(1000.0, 10000.0, length(vPosView));
 		col += m.rgb * night * tile.params.y;
 		// specular reflection on water (mask alpha 0)
 		if (m.a < 0.5 && ndl > 0.0) {
