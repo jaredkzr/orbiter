@@ -32,7 +32,17 @@ Known gaps and limitations, to be addressed later.
   not the focus vessel itself, stars, exhaust, volumetric clouds. Single
   probe without parallax correction: reflections of nearby large objects
   (e.g. the ISS seen from a docked shuttle) are positioned approximately.
-  No screen-space reflections yet. Disabled with MSAA (ORBITER_VK_TAA=0).
+  Disabled with MSAA (ORBITER_VK_TAA=0).
+- Screen-space reflections (SSR.cpp; ORBITER_VK_SSR=0 off,
+  ORBITER_VK_SSR_DEBUG=1 shows them alone, blue where none): one GGX ray per
+  reflective pixel through a depth pyramid, ratio-estimator resolve, temporal
+  accumulation; radiance from the previous frame. Usual limits: surfaces not
+  on screen (undersides seen in water) are missing and fall back to the
+  probe/sky, and where the depth test passes behind a visible surface
+  (assumed thickness 3% of depth) the camera-facing side is reflected
+  instead. Water reflections are traced with the smooth surface and only
+  displaced by the waves. Transparent groups and the probe faces get none.
+  Off with MSAA. About 0.3 ms at 1080p (ORBITER_VK_PROFILE=1 logs GPU times).
 - Material configuration files: only SPECULAR, SMOOTHNESS, METALNESS and
   REFLECT are used (FRESNEL and other entries are ignored).
 - Texture maps (_norm/_bump, _rghn, _metal, _spec, _refl, _emis, _transl,

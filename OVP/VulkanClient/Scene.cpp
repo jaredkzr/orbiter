@@ -3,6 +3,7 @@
 
 #include "Scene.h"
 #include "AO.h"
+#include "SSR.h"
 #include "TAA.h"
 #include "Fsr.h"
 #include "Clouds.h"
@@ -44,7 +45,7 @@ namespace {
 		float jitter[4];       // projection jitter (NDC), render size
 		float aoParams[4];     // 1/width, 1/height of the occlusion image, fraction applied to direct light, w: 1 = no occlusion
 		float viewToGlobal[16];// view space -> global frame (rotation), for the environment probe
-		float probe[4];        // x: environment probe valid, y: highest mip level
+		float probe[4];        // x: environment probe valid, y: highest mip level, z: screen-space reflections valid
 		float lightCount[4];
 		struct {
 			float pos[4];   // view space position, range
@@ -110,8 +111,9 @@ bool Scene::Init ()
 		sm->Init (ctx);
 	}
 
-	// per-frame uniform buffer, the shadow maps and ambient occlusion (set 0)
-	VkDescriptorSetLayoutBinding b[4]{};
+	// per-frame uniform buffer, the shadow maps, ambient occlusion, the
+	// environment probe and screen-space reflections (set 0)
+	VkDescriptorSetLayoutBinding b[5]{};
 	b[0].binding = 0;
 	b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	b[0].descriptorCount = 1;
@@ -125,14 +127,16 @@ bool Scene::Init ()
 	b[2].descriptorCount = 1;
 	b[3] = b[2];
 	b[3].binding = 4; // environment probe
+	b[4] = b[2];
+	b[4].binding = 5; // screen-space reflections
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 4;
+	lci.bindingCount = 5;
 	lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &frameLayout));
 
 	VkDescriptorPoolSize ps[2] = {
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 * vkc::FRAMES_IN_FLIGHT },
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * (SHADOW_CASCADES + 2) * vkc::FRAMES_IN_FLIGHT }
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * (SHADOW_CASCADES + 3) * vkc::FRAMES_IN_FLIGHT }
 	};
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.maxSets = 2 * vkc::FRAMES_IN_FLIGHT;
@@ -181,6 +185,11 @@ bool Scene::Init ()
 
 	ao = std::make_unique<AmbientOcclusion>();
 	ao->Init (ctx);
+	ssr = std::make_unique<ScreenReflections>();
+	ssr->Init (ctx);
+	ssr->EnsureSize (ao->PrepassView (), ao->MaterialView (), ao->VelocityView ());
+	ssr->BeginFrame ();
+	WriteSSRDescriptors ();
 	if (const char *e = getenv ("ORBITER_VK_TAA")) taaEnabled = atoi (e) != 0;
 	taa = std::make_unique<TemporalAA>();
 	taa->Init (ctx);
@@ -250,6 +259,8 @@ void Scene::Shutdown ()
 	stars.reset();
 	if (ao) ao->Shutdown ();
 	ao.reset();
+	if (ssr) ssr->Shutdown ();
+	ssr.reset();
 	if (taa) taa->Shutdown ();
 	taa.reset();
 	if (vclouds) vclouds->Shutdown ();
@@ -334,9 +345,9 @@ VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite
 		cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
 		cba.alphaBlendOp = VK_BLEND_OP_ADD;
 	}
-	VkPipelineColorBlendAttachmentState cbas[2] = { cba, cba };
+	VkPipelineColorBlendAttachmentState cbas[AmbientOcclusion::PREPASS_TARGETS] = { cba, cba, cba };
 	VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-	cb.attachmentCount = prepass ? 2 : 1;
+	cb.attachmentCount = prepass ? AmbientOcclusion::PREPASS_TARGETS : 1;
 	cb.pAttachments = cbas;
 
 	VkDynamicState dyn[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
@@ -345,9 +356,8 @@ VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite
 	dy.pDynamicStates = dyn;
 
 	VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-	const VkFormat prepassFmts[2] = { AmbientOcclusion::PREPASS_FORMAT, AmbientOcclusion::VELOCITY_FORMAT };
-	rci.colorAttachmentCount = prepass ? 2 : 1;
-	rci.pColorAttachmentFormats = prepass ? prepassFmts : &ctx->sceneFormat;
+	rci.colorAttachmentCount = prepass ? AmbientOcclusion::PREPASS_TARGETS : 1;
+	rci.pColorAttachmentFormats = prepass ? AmbientOcclusion::PrepassFormats () : &ctx->sceneFormat;
 	rci.depthAttachmentFormat = ctx->depthFormat;
 
 	VkGraphicsPipelineCreateInfo gpi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
@@ -775,10 +785,31 @@ void Scene::WriteAODescriptors ()
 	}
 }
 
+void Scene::WriteSSRDescriptors ()
+{
+	// (the sets of the current frame slot are not in use)
+	uint32_t fi = ctx->FrameIndex();
+	VkDescriptorImageInfo dii{ ssr->Sampler(), ssr->View(), VK_IMAGE_LAYOUT_GENERAL };
+	for (VkDescriptorSet set : { frameSet[fi], probeFrameSet[fi] }) {
+		VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+		wr.dstSet = set;
+		wr.dstBinding = 5;
+		wr.descriptorCount = 1;
+		wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		wr.pImageInfo = &dii;
+		vkUpdateDescriptorSets (ctx->device, 1, &wr, 0, nullptr);
+	}
+}
+
 void Scene::BeginFrame ()
 {
 	uint32_t fi = ctx->FrameIndex();
 	if (ao->EnsureSize ()) WriteAODescriptors (); // the GPU is idle then
+	ssr->EnsureSize (ao->PrepassView (), ao->MaterialView (), ao->VelocityView ());
+	ssr->BeginFrame ();
+	WriteSSRDescriptors ();
+	// the previous frame does not continue into this one (camera cut)
+	cameraCut = !havePrev || length (camPos - prevCamPos) > 5e3;
 
 	// sub-pixel projection jitter for temporal anti-aliasing (Halton 2, 3)
 	jitter[0] = jitter[1] = 0.0f;
@@ -812,6 +843,8 @@ void Scene::BeginFrame ()
 	FillFrameUniforms (&fu);
 	fu.probe[0] = probeFacesDone >= 6 ? 1.0f : 0.0f;
 	fu.probe[1] = (float)(EnvProbe::LEVELS - 1);
+	fu.probe[2] = ssr->Valid () && !cameraCut ? 1.0f : 0.0f;
+	fu.probe[3] = ssr->debug ? 1.0f : 0.0f;
 	memcpy (frameUbo[fi].mapped, &fu, sizeof(fu));
 	UpdateCamAtmSet ();
 }
@@ -904,9 +937,14 @@ void Scene::RenderPrepass ()
 	// (planet surfaces were prepared before the shadow maps)
 	ao->BeginPrepass ();
 	for (auto &it : visuals) it.second->Render (RenderPass::Depth);
+	ctx->EndTarget ();
+	ctx->GpuMark ("prepass");
 	if (ao->enabled) ao->Compute (proj[0], -proj[5]);
-	else ctx->EndTarget ();
+	ctx->GpuMark ("ao");
+	ssr->Compute (proj[0], -proj[5], jitter, cameraCut);
+	ctx->GpuMark ("ssr");
 	RenderVolumetricClouds ();
+	ctx->GpuMark ("clouds");
 }
 
 void Scene::RenderProbe ()
@@ -1058,6 +1096,7 @@ void Scene::Render ()
 
 VkImageView Scene::ResolveTemporal (VkExtent2D &size)
 {
+	ssr->StoreColor (ctx->SceneImage ()); // reflected in the next frame
 	VkImageView out = ctx->SceneView ();
 	size = ctx->RenderExtent ();
 	if (taaEnabled) {
@@ -1065,7 +1104,7 @@ VkImageView Scene::ResolveTemporal (VkExtent2D &size)
 		Mat4 rot = prevView * view.RigidInverse ();
 		Mat4 skyMotion = Mat4::FromFloat (prevProj) * rot;
 		// discard the history after a camera cut
-		bool reset = !havePrev || length (camPos - prevCamPos) > 5e3;
+		bool reset = cameraCut;
 		VkImageView up = VK_NULL_HANDLE;
 		if (useFsr) {
 			double t = std::chrono::duration<double> (std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -1167,10 +1206,14 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 			pc.diffuse[0] = pc.diffuse[1] = pc.diffuse[2] = pc.diffuse[3] = 1.0f;
 			pc.emissive[3] = 1.0f;
 		}
-		if (pass == RenderPass::Depth) { // model-view and motion (prepass.vert)
-			float pp[32];
+		if (pass == RenderPass::Depth) { // model-view, motion and material (prepass.vert/frag)
+			float pp[40];
 			memcpy (pp, pc.modelView, sizeof(pc.modelView));
 			memcpy (pp + 16, objMotion, sizeof(objMotion));
+			memcpy (pp + 32, pc.pbr, sizeof(pc.pbr));
+			pp[36] = pc.maps[0];
+			pp[37] = pc.emissive[3]; // unlit
+			pp[38] = pp[39] = 0.0f;
 			vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pp), pp);
 		} else {
 			vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);

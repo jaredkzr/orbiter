@@ -1,0 +1,45 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Screen-space reflections, temporal accumulation: the resolved reflections
+// are blended into the history, reprojected with the surface motion and
+// clamped to the neighbourhood of the current estimate.
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 3) uniform sampler2D velocity;
+layout(set = 0, binding = 7, rgba16f) uniform readonly image2D resolved;
+layout(set = 0, binding = 8) uniform sampler2D history;
+layout(set = 0, binding = 9, rgba16f) uniform writeonly image2D histOut;
+
+#include "ssr.glsl"
+
+void main ()
+{
+	ivec2 p = ivec2 (gl_GlobalInvocationID.xy);
+	ivec2 isz = ivec2 (pc.size);
+	if (p.x >= isz.x || p.y >= isz.y) return;
+	vec4 cur = imageLoad (resolved, p);
+	// neighbourhood statistics (mean and deviation)
+	vec4 m1 = vec4 (0.0), m2 = vec4 (0.0);
+	for (int y = -1; y <= 1; y++)
+		for (int x = -1; x <= 1; x++) {
+			vec4 c = imageLoad (resolved, clamp (p + ivec2 (x, y), ivec2 (0), isz - 1));
+			m1 += c;
+			m2 += c * c;
+		}
+	m1 /= 9.0;
+	vec4 sd = sqrt (max (m2 / 9.0 - m1 * m1, 0.0));
+	vec2 uv = (vec2 (p) + 0.5) / pc.size;
+	vec2 prev = uv - texelFetch (velocity, p, 0).xy;
+	vec4 res = cur;
+	if (pc.reset < 0.5 && all (greaterThanEqual (prev, vec2 (0.0))) && all (lessThanEqual (prev, vec2 (1.0)))) {
+		vec4 h = textureLod (history, prev, 0.0);
+		h = clamp (h, m1 - 1.25 * sd, m1 + 1.25 * sd);
+		res = mix (h, cur, 0.12);
+	}
+	imageStore (histOut, p, res);
+}

@@ -13,7 +13,7 @@
 #include "tile.vert.h"
 #include "tile.frag.h"
 #include "prepass.vert.h"
-#include "prepass.frag.h"
+#include "prepass_tile.frag.h"
 #include "AO.h"
 #include "Shadows.h"
 
@@ -181,8 +181,8 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 {
 	ctx = c;
 	VkDescriptorSetLayout sets[4] = { frameLayout, texmgr->Layout(), texmgr->Layout(), atmLayout };
-	// (the prepass pushes two matrices)
-	VkPushConstantRange pcr{ VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, (uint32_t)std::max (sizeof(TilePushConstants), 32 * sizeof(float)) };
+	// (the prepass pushes two matrices and the water mask's coordinates)
+	VkPushConstantRange pcr{ VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, (uint32_t)std::max (sizeof(TilePushConstants), 40 * sizeof(float)) };
 	VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 	plci.setLayoutCount = 4;
 	plci.pSetLayouts = sets;
@@ -263,18 +263,17 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 
 	// prepass: single-sampled normal and depth, and screen motion
 	VkShaderModule pvs = ctx->CreateShaderModule (spv_prepass_vert, spv_prepass_vert_size);
-	VkShaderModule pfs = ctx->CreateShaderModule (spv_prepass_frag, spv_prepass_frag_size);
+	VkShaderModule pfs = ctx->CreateShaderModule (spv_prepass_tile_frag, spv_prepass_tile_frag_size);
 	stages[0].module = pvs;
 	stages[1].module = pfs;
 	ds.depthWriteEnable = VK_TRUE;
 	cba.blendEnable = VK_FALSE;
-	VkPipelineColorBlendAttachmentState cbas[2] = { cba, cba };
-	cb.attachmentCount = 2;
+	VkPipelineColorBlendAttachmentState cbas[AmbientOcclusion::PREPASS_TARGETS] = { cba, cba, cba };
+	cb.attachmentCount = AmbientOcclusion::PREPASS_TARGETS;
 	cb.pAttachments = cbas;
 	ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-	const VkFormat prepassFmts[2] = { AmbientOcclusion::PREPASS_FORMAT, AmbientOcclusion::VELOCITY_FORMAT };
-	rci.colorAttachmentCount = 2;
-	rci.pColorAttachmentFormats = prepassFmts;
+	rci.colorAttachmentCount = AmbientOcclusion::PREPASS_TARGETS;
+	rci.pColorAttachmentFormats = AmbientOcclusion::PrepassFormats ();
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &depthPipeline));
 	vkDestroyShaderModule (ctx->device, pvs, nullptr);
 	vkDestroyShaderModule (ctx->device, pfs, nullptr);
@@ -768,10 +767,14 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 	mv.ToFloat (pc.modelView);
 	VkCommandBuffer cmd = ctx->Cmd();
 	if (prepass) {
-		// view-space motion of the planet frame (set by the planet's visual)
-		float pp[32];
+		// view-space motion of the planet frame (set by the planet's visual),
+		// and the water mask
+		float pp[40];
 		mv.ToFloat (pp);
 		memcpy (pp + 16, scene->ObjectMotion (), 16 * sizeof(float));
+		memcpy (pp + 32, pc.maskUV, sizeof(pc.maskUV));
+		memcpy (pp + 36, pc.params, sizeof(pc.params));
+		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr->Layout(), 2, 1, &mask->set, 0, nullptr);
 		vkCmdPushConstants (cmd, tr->Layout(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pp), pp);
 		VkDeviceSize ofs = 0;
 		vkCmdBindVertexBuffers (cmd, 0, 1, &n->vbuf.buffer, &ofs);

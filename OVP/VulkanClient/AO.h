@@ -18,6 +18,10 @@ class AmbientOcclusion {
 public:
 	static constexpr VkFormat PREPASS_FORMAT = VK_FORMAT_R32G32B32A32_SFLOAT;
 	static constexpr VkFormat VELOCITY_FORMAT = VK_FORMAT_R16G16_SFLOAT; // screen motion since the last frame [uv]
+	static constexpr VkFormat MATERIAL_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT; // shading normal (octahedral), roughness, reflectivity
+	static constexpr uint32_t PREPASS_TARGETS = 3;
+	/// colour formats of the prepass pipelines
+	static const VkFormat *PrepassFormats () { static const VkFormat f[PREPASS_TARGETS] = { PREPASS_FORMAT, VELOCITY_FORMAT, MATERIAL_FORMAT }; return f; }
 
 	bool Init (vkc::Context *ctx);
 	void Shutdown ();
@@ -27,7 +31,7 @@ public:
 	/// the GPU is idle then).
 	bool EnsureSize ();
 
-	/// Bind the prepass targets (normal and depth, velocity; cleared)
+	/// Bind the prepass targets (normal and depth, velocity, material; cleared)
 	void BeginPrepass ();
 	/// Ambient occlusion from the prepass (fx, fy: projection factors)
 	void Compute (float fx, float fy);
@@ -38,6 +42,7 @@ public:
 	/// prepass images (shader-read layout after the prepass)
 	VkImageView PrepassView () const { return prepassColor.view; }
 	VkImageView VelocityView () const { return velocity.view; }
+	VkImageView MaterialView () const { return material.view; }
 	VkImage VelocityImage () const { return velocity.image; }
 	VkExtent2D Extent () const { return extent; }
 
@@ -55,7 +60,7 @@ private:
 	vkc::Context *ctx = nullptr;
 	VkExtent2D extent{};
 	uint32_t generation = ~0u;
-	vkc::Image prepassColor, prepassDepth, velocity, aoRaw, aoFinal;
+	vkc::Image prepassColor, prepassDepth, velocity, material, aoRaw, aoFinal;
 	VkSampler sampler = VK_NULL_HANDLE;
 	VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
 	VkDescriptorPool pool = VK_NULL_HANDLE;

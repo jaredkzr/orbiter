@@ -187,15 +187,21 @@ void VulkanClient::clbkRenderScene ()
 	if (!ctx.BeginFrame ()) return;
 	frameActive = true;
 	r2d->Flush ();
+	ctx.GpuMark ("start");
 	scene->RenderShadows ();
+	ctx.GpuMark ("shadows");
 	scene->BeginFrame ();
 	scene->RenderPrepass ();
 	scene->RenderProbe ();
+	ctx.GpuMark ("probe");
 	ctx.BindScene (true);
 	scene->Render ();
+	ctx.GpuMark ("scene");
 	VkExtent2D sceneSize;
 	VkImageView sceneImage = scene->ResolveTemporal (sceneSize);
+	ctx.GpuMark ("temporal");
 	postfx->Apply (sceneImage, sceneSize);   // HDR scene -> backbuffer
+	ctx.GpuMark ("post");
 	Render2DOverlay (); // panels, MFDs and HUD
 }
 

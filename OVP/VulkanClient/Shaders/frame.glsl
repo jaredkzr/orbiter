@@ -23,7 +23,7 @@ layout(set = 0, binding = 0) uniform Frame {
 	vec4 jitter;       // xy: projection jitter (NDC), zw: render size [pixels]
 	vec4 aoParams;     // 1/width, 1/height of the ambient occlusion image, z: fraction applied to direct light, w: 1 = off
 	mat4 viewToGlobal; // view space -> global frame (rotation)
-	vec4 probe;        // x: environment probe valid, y: highest mip level
+	vec4 probe;        // x: environment probe valid, y: highest mip level, z: screen-space reflections valid, w: their debug view
 	vec4 lightCount;   // x: number of local lights
 	LocalLight lights[MAX_LIGHTS];
 } frame;
@@ -32,4 +32,8 @@ layout(set = 0, binding = 0) uniform Frame {
 #ifdef FRAME_AO
 layout(set = 0, binding = 3) uniform sampler2D aoMap;
 float AmbientOcclusion () { return frame.aoParams.w > 0.5 ? 1.0 : texture(aoMap, gl_FragCoord.xy * frame.aoParams.xy).r; }
+// screen-space reflections (same size as the occlusion image): reflected
+// radiance (rgb, premultiplied with a) and its confidence (a); ofs: offset [uv]
+layout(set = 0, binding = 5) uniform sampler2D ssrMap;
+vec4 ScreenReflection (vec2 ofs) { return frame.probe.z > 0.5 ? texture(ssrMap, gl_FragCoord.xy * frame.aoParams.xy + ofs) : vec4(0.0); }
 #endif

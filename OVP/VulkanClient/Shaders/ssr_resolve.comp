@@ -1,0 +1,82 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Screen-space reflections, spatial resolve: each pixel combines the rays
+// of its neighbours (ratio estimator: weighted by its own reflection lobe
+// over the density they were drawn with), which turns one noisy ray per
+// pixel into a much smoother estimate of the glossy reflection. Output:
+// reflected radiance (rgb, premultiplied) and confidence (a: the fraction of
+// the lobe the rays found in the image).
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D prepass;
+layout(set = 0, binding = 1) uniform sampler2D material;
+layout(set = 0, binding = 5, rgba32f) uniform readonly image2D hitImg;
+layout(set = 0, binding = 6, rgba16f) uniform readonly image2D colImg;
+layout(set = 0, binding = 7, rgba16f) uniform writeonly image2D resolved;
+
+#include "ssr.glsl"
+
+const int SAMPLES = 9;
+
+void main ()
+{
+	ivec2 p = ivec2 (gl_GlobalInvocationID.xy);
+	ivec2 isz = ivec2 (pc.size);
+	if (p.x >= isz.x || p.y >= isz.y) return;
+	vec4 d = texelFetch (prepass, p, 0);
+	vec4 m = texelFetch (material, p, 0);
+	float z = d.w;
+	if (z <= 0.0 || m.w <= 0.0 || m.z >= pc.maxRough) { imageStore (resolved, p, vec4 (0.0)); return; }
+	vec3 N = OctDecode (m.xy);
+	float rough = m.z, a = rough * rough;
+	vec3 P = ViewPos (vec2 (p) + 0.5, z);
+	vec3 V = normalize (-P);
+	float NoV = max (dot (N, V), 1e-3);
+
+	// neighbours on a rotated spiral, wider for rougher surfaces
+	float radius = mix (1.0, 7.0, clamp (rough * 2.5, 0.0, 1.0));
+	float rot = fract (52.9829189 * fract (dot (vec2 (p), vec2 (0.06711056, 0.00583715))) + 0.618034 * pc.frame) * 2.0 * PI;
+	vec3 sum = vec3 (0.0);
+	float wSum = 0.0, cwSum = 0.0, confSum = 0.0;
+	for (int i = 0; i < SAMPLES; i++) {
+		ivec2 q = p;
+		if (i > 0) {
+			float r = radius * sqrt (float (i) / float (SAMPLES - 1));
+			float ang = rot + float (i) * 2.39996323;
+			q = p + ivec2 (round (r * vec2 (cos (ang), sin (ang))));
+			q = clamp (q, ivec2 (0), isz - 1);
+		}
+		vec4 hq = imageLoad (hitImg, q);
+		if (hq.w == 0.0) continue; // not traced
+		if (i > 0) { // similar surfaces only
+			vec4 dq = texelFetch (prepass, q, 0);
+			if (abs (dq.w - z) > 0.05 * z || dot (dq.xyz, d.xyz) < 0.9) continue;
+		}
+		vec3 L = hq.w > 0.0 ? normalize (hq.xyz - P) : hq.xyz;
+		vec3 H = normalize (V + L);
+		float NoL = dot (N, L);
+		if (NoL <= 0.0) continue;
+		float w = GGX_D (max (dot (N, H), 0.0), a) * SmithG1 (NoL, a) / abs (hq.w);
+		vec4 c = imageLoad (colImg, q);
+		// against fireflies: radiance weighted down where it is bright
+		float cw = w * c.a / (1.0 + Luma (c.rgb));
+		sum += c.rgb * cw;
+		cwSum += cw;
+		wSum += w;
+		confSum += w * c.a;
+	}
+	vec4 res = vec4 (0.0);
+	if (wSum > 0.0 && cwSum > 0.0) {
+		res.rgb = sum / cwSum;
+		res.a = confSum / wSum;
+	}
+	// rough surfaces keep the environment probe's reflection
+	res.a *= 1.0 - smoothstep (0.6 * pc.maxRough, pc.maxRough, rough);
+	res.rgb *= res.a; // premultiplied (filtered and accumulated as such)
+	imageStore (resolved, p, res);
+}

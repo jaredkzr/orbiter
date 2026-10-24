@@ -1,0 +1,44 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Depth pyramid for screen-space reflections: the nearest view depth within
+// each cell (texel L of level n covers the pixels [L*2^n, (L+1)*2^n); the
+// last texel of a row or column also covers the remainder of odd sizes).
+// Level 0 is taken from the prepass, where no geometry counts as infinitely
+// far away.
+
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D prepass; // view normal (xyz), view depth (w; 0: none)
+layout(set = 0, binding = 1, r32f) uniform readonly image2D src;
+layout(set = 0, binding = 2, r32f) uniform writeonly image2D dst;
+
+layout(push_constant) uniform Params {
+	int level; // level being built
+} pc;
+
+const float FAR = 1e30;
+
+void main ()
+{
+	ivec2 p = ivec2 (gl_GlobalInvocationID.xy);
+	ivec2 size = imageSize (dst);
+	if (p.x >= size.x || p.y >= size.y) return;
+	float z;
+	if (pc.level == 0) {
+		z = texelFetch (prepass, p, 0).w;
+		if (z <= 0.0) z = FAR;
+	} else {
+		ivec2 s = imageSize (src);
+		ivec2 q = 2 * p;
+		// source texels covered (3 at the end of odd rows/columns)
+		ivec2 n = ivec2 (p.x == size.x - 1 && (s.x & 1) != 0 ? 3 : 2, p.y == size.y - 1 && (s.y & 1) != 0 ? 3 : 2);
+		z = FAR;
+		for (int y = 0; y < n.y; y++)
+			for (int x = 0; x < n.x; x++)
+				z = min (z, imageLoad (src, min (q + ivec2 (x, y), s - 1)).r);
+	}
+	imageStore (dst, p, vec4 (z));
+}

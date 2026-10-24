@@ -16,18 +16,6 @@
 layout(set = 1, binding = 0) uniform sampler2D tex;
 layout(set = 0, binding = 4) uniform samplerCube envProbe; // surroundings of the focus vessel (global frame)
 
-// additional texture maps (MapSlot order); missing ones are not sampled
-layout(set = 3, binding = 0) uniform sampler2D normMap;   // tangent-space normals (x: +u, y: +v)
-layout(set = 3, binding = 1) uniform sampler2D rghnMap;   // smoothness (green)
-layout(set = 3, binding = 2) uniform sampler2D metalMap;  // metalness (green)
-layout(set = 3, binding = 3) uniform sampler2D emisMap;   // emission, added
-layout(set = 3, binding = 4) uniform sampler2D specMap;   // specular colour, smoothness in alpha
-layout(set = 3, binding = 5) uniform sampler2D reflMap;   // reflection colour and mask
-layout(set = 3, binding = 6) uniform sampler2D translMap; // translucence (lit from behind)
-layout(set = 3, binding = 7) uniform sampler2D transmMap; // transmittance (sun shining through)
-const uint MAP_NORM = 1u, MAP_RGHN = 2u, MAP_METAL = 4u, MAP_EMIS = 8u,
-           MAP_SPEC = 16u, MAP_REFL = 32u, MAP_TRANSL = 64u, MAP_TRANSM = 128u;
-
 layout(push_constant) uniform Draw {
 	mat4 modelView;
 	vec4 diffuse;
@@ -46,21 +34,7 @@ layout(location = 2) in vec2 vUV;
 layout(location = 0) out vec4 outColor;
 
 #include "brdf.glsl"
-
-// Tangent frame from screen-space derivatives of position and texture
-// coordinates (no per-vertex tangents needed): T along +u, B along +v
-mat3 CotangentFrame (vec3 N, vec3 p, vec2 uv)
-{
-	vec3 dp1 = dFdx (p), dp2 = dFdy (p);
-	vec2 duv1 = dFdx (uv), duv2 = dFdy (uv);
-	vec3 dp2perp = cross (dp2, N), dp1perp = cross (N, dp1);
-	vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;
-	vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;
-	float det = dot (dp1, dp2perp); // orientation of the solution
-	float invmax = inversesqrt (max (max (dot (T, T), dot (B, B)), 1e-30));
-	float sgn = det < 0.0 ? -1.0 : 1.0;
-	return mat3 (T * (invmax * sgn), B * (invmax * sgn), N);
-}
+#include "material.glsl"
 
 // Analytic approximation of the pre-integrated environment BRDF (Karis)
 vec3 EnvBRDF (vec3 F0, float rough, float NoV)
@@ -106,38 +80,15 @@ void main()
 	}
 
 	uint maps = uint(draw.maps.x + 0.5);
-	vec3 N = normalize(vNormalView);
+	Material mat = SurfaceMaterial(vNormalView, vPosView, vUV, maps, draw.pbr);
+	vec3 N = mat.N;
 	vec3 V = normalize(-vPosView);
-	if (dot(N, V) < 0.0) N = -N; // double-sided surfaces
-	if ((maps & MAP_NORM) != 0u) {
-		vec3 n = texture(normMap, vUV).xyz * 2.0 - 1.0;
-		vec3 Np = normalize(CotangentFrame(N, vPosView, vUV) * n);
-		if (all(equal(Np, Np))) N = Np; // degenerate texture coordinates: keep N
-	}
 	vec3 L = frame.sunDir.xyz;
 	float NoL = max(dot(N, L), 0.0);
 	float NoV = max(dot(N, V), 1e-4);
-
-	float metal = draw.pbr.x;
-	float rough = draw.pbr.y;
-	float reflectivity = draw.pbr.z;
-	vec3 specTint = vec3(1.0);
-	if ((maps & MAP_SPEC) != 0u) {
-		vec4 sp = texture(specMap, vUV);
-		specTint = sp.rgb;
-		rough = 1.0 - sp.a;
-	}
-	if ((maps & MAP_RGHN) != 0u) rough = 1.0 - texture(rghnMap, vUV).g;
-	if ((maps & MAP_METAL) != 0u) metal = texture(metalMap, vUV).g;
-	rough = clamp(rough, 0.04, 1.0);
-	vec3 F0 = mix(vec3(0.04 * draw.pbr.w) * specTint, base, metal);
-	vec3 reflTint = vec3(1.0);
-	if ((maps & MAP_REFL) != 0u) {
-		reflTint = texture(reflMap, vUV).rgb;
-		reflectivity = 1.0; // the map masks the reflections per pixel
-	} else if ((maps & (MAP_RGHN | MAP_METAL)) != 0u) {
-		reflectivity = max(reflectivity, 1.0 - rough);
-	}
+	float metal = mat.metal, rough = mat.rough, reflectivity = mat.reflectivity;
+	vec3 F0 = mix(vec3(0.04 * draw.pbr.w) * mat.specTint, base, metal);
+	vec3 reflTint = mat.reflTint;
 
 	// sunlight: eclipses, shadows, and extinction in the atmosphere of the
 	// planet near the camera
@@ -161,7 +112,18 @@ void main()
 		vec3 env = frame.probe.x > 0.5
 			? textureLod(envProbe, mat3(frame.viewToGlobal) * R, rough * frame.probe.y).rgb
 			: Environment(normalize(mat3(atm.viewToPlanet) * R));
-		col += env * EnvBRDF(F0, rough, NoV) * reflectivity * reflTint * ao;
+		env *= ao;
+		// screen-space reflections where they found the reflected surface
+		// (prepass geometry only)
+		if (draw.maps.y < 0.5) {
+			vec4 s = ScreenReflection(vec2(0.0));
+			env = env * (1.0 - s.a) + s.rgb;
+			if (frame.probe.w > 0.5) { // debug view: reflections, blue where none
+				outColor = vec4(s.rgb + vec3(0.0, 0.0, 0.3) * (1.0 - s.a), 1.0);
+				return;
+			}
+		}
+		col += env * EnvBRDF(F0, rough, NoV) * reflectivity * reflTint;
 	}
 	col += draw.emissive.rgb * texel.rgb;
 	if ((maps & MAP_TRANSL) != 0u) // sunlight scattered through from behind

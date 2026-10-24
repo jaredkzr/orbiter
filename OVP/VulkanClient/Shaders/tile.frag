@@ -150,6 +150,15 @@ void main()
 				vec3 R = reflect(-V, Nw);
 				vec3 T;
 				vec3 sky = AtmTonemap(Inscatter(normalize(mat3(atm.viewToPlanet) * R), ATM_NONE, T));
+				// screen-space reflections (traced with the smooth surface),
+				// displaced by the waves
+				vec3 dN = Nw - N;
+				vec4 s = ScreenReflection(vec2(dN.x, -dN.y) * 0.03);
+				sky = sky * (1.0 - s.a) + s.rgb;
+				if (frame.probe.w > 0.5) { // debug view
+					outColor = vec4(s.rgb + vec3(0.0, 0.0, 0.3) * (1.0 - s.a), 1.0);
+					return;
+				}
 				col = mix(col, sky, fres);
 			}
 			float rough = mix(0.05, 0.3, smoothstep(2e3, 3e5, dist));

@@ -132,6 +132,12 @@ namespace vkc {
 
 		VkShaderModule CreateShaderModule (const unsigned char *code, size_t size);
 
+		/// GPU time profiling (ORBITER_VK_PROFILE=1): records a timestamp in
+		/// the current command buffer; the time since the previous mark is
+		/// attributed to `name` (a string literal) and averages are logged
+		/// periodically
+		void GpuMark (const char *name);
+
 		/// Read back the next presented frame. The callback receives the pixels
 		/// (4 bytes per pixel in colorFormat, rows top to bottom).
 		using CaptureFunc = std::function<void(const uint8_t *pixels, uint32_t w, uint32_t h, VkFormat fmt)>;
@@ -169,7 +175,15 @@ namespace vkc {
 			std::vector<Buffer> transient;
 			size_t transientChunk = 0;
 			VkDeviceSize transientUsed = 0;
+			VkQueryPool queries = VK_NULL_HANDLE; // timestamps (profiling)
+			std::vector<const char*> marks;
 		} frames[FRAMES_IN_FLIGHT];
+		static constexpr uint32_t MAX_MARKS = 64;
+		bool profiling = false;
+		double timestampPeriod = 1.0; // [ns]
+		uint32_t profFrames = 0;
+		std::vector<std::pair<const char*, double>> profSum; // [ms], in order of first appearance
+		void ReadTimestamps (Frame &f);
 
 		struct CurrentTarget {
 			bool active = false;

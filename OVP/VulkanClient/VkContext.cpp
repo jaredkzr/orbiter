@@ -223,6 +223,16 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 		fci.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 		VK_CHECK(vkCreateFence (device, &fci, nullptr, &f.inFlight));
 	}
+	if (const char *e = getenv ("ORBITER_VK_PROFILE")) profiling = atoi (e) != 0;
+	if (profiling) {
+		timestampPeriod = deviceProps.limits.timestampPeriod;
+		for (auto &f : frames) {
+			VkQueryPoolCreateInfo qci{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+			qci.queryType = VK_QUERY_TYPE_TIMESTAMP;
+			qci.queryCount = MAX_MARKS;
+			VK_CHECK(vkCreateQueryPool (device, &qci, nullptr, &f.queries));
+		}
+	}
 	VkCommandPoolCreateInfo upci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
 	upci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
 	upci.queueFamilyIndex = queueFamily;
@@ -250,6 +260,7 @@ void Context::Shutdown ()
 		vkDestroyCommandPool (device, frames[i].pool, nullptr);
 		vkDestroySemaphore (device, frames[i].imageAvailable, nullptr);
 		vkDestroyFence (device, frames[i].inFlight, nullptr);
+		if (frames[i].queries) vkDestroyQueryPool (device, frames[i].queries, nullptr);
 	}
 	vkDestroyCommandPool (device, uploadPool, nullptr);
 	DestroySwapchain ();
@@ -395,7 +406,7 @@ bool Context::CreateSwapchain ()
 	sci2.arrayLayers = 1;
 	sci2.samples = VK_SAMPLE_COUNT_1_BIT;
 	sci2.tiling = VK_IMAGE_TILING_OPTIMAL;
-	sci2.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+	sci2.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT; // (copied for reflections)
 	VK_CHECK(vmaCreateImage (allocator, &sci2, &aci, &sceneColor.image, &sceneColor.alloc, nullptr));
 	VkImageViewCreateInfo svci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
 	svci.image = sceneColor.image;
@@ -479,6 +490,10 @@ VkCommandBuffer Context::Rec ()
 		bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 		VK_CHECK(vkBeginCommandBuffer (f.cmd, &bi));
 		recording = true;
+		if (profiling) {
+			ReadTimestamps (f);
+			vkCmdResetQueryPool (f.cmd, f.queries, 0, MAX_MARKS);
+		}
 		bbState = BB_NONE;
 	}
 	return f.cmd;
@@ -510,6 +525,48 @@ bool Context::BeginFrame ()
 	inFrame = true;
 	bbState = BB_NONE;
 	return true;
+}
+
+void Context::GpuMark (const char *name)
+{
+	if (!profiling) return;
+	Frame &f = frames[frameIndex];
+	Rec ();
+	if (f.marks.size() >= MAX_MARKS) return;
+	vkCmdWriteTimestamp2 (f.cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, f.queries, (uint32_t)f.marks.size());
+	f.marks.push_back (name);
+}
+
+void Context::ReadTimestamps (Frame &f)
+{
+	// (the frame slot's fence was waited for)
+	uint32_t n = (uint32_t)f.marks.size();
+	if (n >= 2) {
+		uint64_t t[MAX_MARKS];
+		if (vkGetQueryPoolResults (device, f.queries, 0, n, sizeof(t), t, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+			for (uint32_t i = 1; i < n; i++) {
+				double ms = (double)(t[i] - t[i-1]) * timestampPeriod * 1e-6;
+				auto it = std::find_if (profSum.begin(), profSum.end(), [&](auto &p) { return !strcmp (p.first, f.marks[i]); });
+				if (it == profSum.end()) profSum.push_back ({ f.marks[i], ms });
+				else it->second += ms;
+			}
+			if (++profFrames == 120) {
+				char line[1024];
+				int len = snprintf (line, sizeof(line), "VulkanClient: GPU time [ms]:");
+				double total = 0.0;
+				for (auto &p : profSum) {
+					total += p.second / profFrames;
+					len += snprintf (line + len, sizeof(line) - len, " %s %.3f", p.first, p.second / profFrames);
+					if (len >= (int)sizeof(line)) break;
+				}
+				if (len < (int)sizeof(line)) snprintf (line + len, sizeof(line) - len, " | total %.3f", total);
+				oapiWriteLog (line);
+				profSum.clear ();
+				profFrames = 0;
+			}
+		}
+	}
+	f.marks.clear ();
 }
 
 void Context::SetViewportScissor (VkExtent2D ext)

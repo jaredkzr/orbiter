@@ -2,8 +2,8 @@
 // Licensed under the MIT License
 
 // Prepass of opaque geometry (meshes and terrain tiles): view position and
-// normal, and clip positions in this and the previous frame for the screen
-// motion (unjittered)
+// normal, clip positions in this and the previous frame for the screen
+// motion (unjittered), and texture coordinates (material)
 
 #version 450
 #extension GL_GOOGLE_include_directive : require
@@ -17,12 +17,13 @@ layout(push_constant) uniform Prepass {
 
 layout(location = 0) in vec3 inPos;
 layout(location = 1) in vec3 inNormal;
-layout(location = 2) in vec2 inUV; // (unused; part of the vertex format)
+layout(location = 2) in vec2 inUV;
 
 layout(location = 0) out vec3 vPosView;
 layout(location = 1) out vec3 vNormalView;
 layout(location = 2) out vec4 vClip;
 layout(location = 3) out vec4 vPrevClip;
+layout(location = 4) out vec2 vUV;
 
 void main()
 {
@@ -32,4 +33,5 @@ void main()
 	gl_Position = frame.proj * p;
 	vClip = gl_Position - vec4(frame.jitter.xy * gl_Position.w, 0.0, 0.0);
 	vPrevClip = pp.prevClipFromView * p;
+	vUV = inUV;
 }
