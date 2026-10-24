@@ -21,6 +21,7 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 water;         // camera relative to the 1 km-snapped origin of surface patterns, w: time [s] (< 0: no ripples)
 	vec4 ozone;         // absorption [1/m] (rgb): ozone layer, or (w = 1) aerosols (dust)
 	vec4 detail;        // procedural surface detail: type (0 none, 1 airless, 2 Mars, 3 Earth), strength, range [m]
+	vec4 aurora;        // geomagnetic north pole (unit, planet frame), w: aurora strength (0: none)
 } atm;
 
 // planet surface (western and eastern hemisphere), for reflections
@@ -133,6 +134,45 @@ vec3 Inscatter (vec3 d, float tMax, out vec3 T)
 		vec3 pc = o + d * clamp (tc, 0.0, tMax);
 		float night = smoothstep (0.1, -0.15, dot (normalize (pc), atm.sunDir.xyz));
 		glow = vec3 (0.25, 1.0, 0.35) * (path * 6e-9 * atm.misc.w * night);
+	}
+
+	// aurora: curtains along the auroral ovals (about 20 degrees from the
+	// geomagnetic poles), 100-250 km up, green below and red above, folded
+	// and drifting; marched through the shell on the night side
+	if (atm.aurora.w > 0.0) {
+		float ri = Rg + 100e3, ro = Rg + 250e3;
+		vec2 so = RaySphere (o, d, ro);
+		float a0 = max (so.x, 0.0), a1 = min (so.y, tMax);
+		if (a1 > a0) {
+			const int NA = 24;
+			float ds = (a1 - a0) / float (NA);
+			vec3 sum = vec3 (0.0);
+			vec3 pole = atm.aurora.xyz;
+			vec3 e1 = normalize (cross (pole, abs (pole.y) < 0.9 ? vec3 (0.0, 1.0, 0.0) : vec3 (1.0, 0.0, 0.0)));
+			vec3 e2 = cross (pole, e1);
+			float time = atm.water.w > 0.0 ? atm.water.w : 0.0;
+			for (int i = 0; i < NA; i++) {
+				vec3 p = o + d * (a0 + ds * (float (i) + 0.5));
+				float r = length (p);
+				if (r < ri) continue;
+				vec3 u = p / r;
+				float h = r - Rg;
+				float night = smoothstep (0.15, -0.1, dot (u, atm.sunDir.xyz));
+				if (night <= 0.0) continue;
+				// geomagnetic colatitude and longitude (both hemispheres)
+				float cl = acos (clamp (abs (dot (u, pole)), 0.0, 1.0));
+				float ml = atan (dot (u, e2), dot (u, e1));
+				// the oval, its edge folded by slow waves
+				float fold = 0.02 * sin (ml * 7.0 + time * 0.05) + 0.012 * sin (ml * 23.0 - time * 0.13);
+				float band = exp (-AtmSq ((cl - 0.36 - fold) / 0.012));
+				// rays along the curtain
+				float rays = 0.4 + 0.6 * pow (0.5 + 0.5 * sin (ml * 180.0 + 3.0 * sin (ml * 11.0 + time * 0.3)), 3.0);
+				float green = exp (-AtmSq ((h - 115e3) / 15e3)) + 0.3 * smoothstep (130e3, 110e3, h) * step (110e3, h);
+				float red = 0.35 * exp (-AtmSq ((h - 210e3) / 40e3));
+				sum += (vec3 (0.15, 1.0, 0.3) * green + vec3 (1.0, 0.15, 0.3) * red) * band * rays * night;
+			}
+			glow += sum * ds * 3e-7 * atm.aurora.w;
+		}
 	}
 
 	float mu = dot (d, atm.sunDir.xyz);

@@ -78,6 +78,7 @@ private:
 	float mieG = 0.76f, sunIntensity = 6.0f; // (sky radiance scale: physically about pi for a sunlit white surface of 1)
 	float airglow = 0.0f; // strength of the airglow layer (Earth)
 	float detail[4] = { 0, 0, 0, 0 }; // procedural surface detail (atmosphere.glsl)
+	float aurora[4] = { 0, 0, 0, 0 }; // geomagnetic pole, aurora strength
 	float ozone[4] = {};                  // ozone absorption [1/m] (Earth)
 	float groundAlbedo = 0.3f;            // for light reflected into the sky
 	vkc::Image transmittanceLut, multiscatLut; // precomputed tables

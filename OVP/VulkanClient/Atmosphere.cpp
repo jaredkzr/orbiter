@@ -31,6 +31,7 @@ namespace {
 		float water[4];
 		float ozone[4];
 		float detail[4];
+		float aurora[4];
 	};
 
 	const VkFormat LUT_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -316,6 +317,11 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		if (!strcmp (name, "Earth")) {
 			ozone[0] = 0.650e-6f, ozone[1] = 1.881e-6f, ozone[2] = 0.085e-6f;
 			airglow = 1.0f; // (the green oxygen line at about 95 km)
+			// aurora about the geomagnetic poles (north pole near 80.7 N, 72.7 W)
+			double plat = 80.7 * RAD, plng = -72.7 * RAD;
+			aurora[0] = (float)(cos (plat) * cos (plng)), aurora[1] = (float)sin (plat), aurora[2] = (float)(cos (plat) * sin (plng));
+			aurora[3] = 1.0f;
+			if (const char *e = getenv ("ORBITER_VK_AURORA")) aurora[3] = (float)atof (e);
 		}
 		if (!strcmp (name, "Mars")) {
 			// suspended dust: a vertical optical depth of about 0.5 over a
@@ -495,6 +501,7 @@ void Atmosphere::Update ()
 	u.misc[0] = present ? 1.0f : 0.0f;
 	u.misc[3] = airglow;
 	memcpy (u.detail, detail, sizeof(detail));
+	memcpy (u.aurora, aurora, sizeof(aurora));
 	memcpy (u.ozone, ozone, sizeof(ozone));
 	memcpy (u.ground, groundColour, sizeof(groundColour));
 	if (cloudParams[3] > 0.0f)

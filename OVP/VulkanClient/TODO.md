@@ -3,6 +3,16 @@
 Known gaps and limitations, to be addressed later.
 
 ## Atmosphere
+- Compared with photographs (2026-10-24): sky radiance scale 6 (was 16),
+  daylight exposure cap 1.3, Mars dust (butterscotch sky; no blue sunset
+  yet: needs colour-dependent forward scattering), airglow, aurora
+  (ORBITER_VK_AURORA scales it; fixed oval, no activity model), cloud-top
+  relief from the cloud density. The DG's HUD glass shows strongly green
+  at high night exposure.
+- Procedural surface detail (surfdetail.glsl, ORBITER_VK_SURFACE_DETAIL=0):
+  craters/rocks/grain; rocks read as pits without cast shadows; no
+  footprints or tracks. KSC's elevation data has 10-20 m bumps (canopy)
+  that look like hills from a few metres up.
 - Precomputed transmittance and multiple-scattering tables (Hillaire 2020);
   the single scattering is still ray-marched per pixel (16 steps). A
   sky-view table and an aerial-perspective volume would make it cheaper.
