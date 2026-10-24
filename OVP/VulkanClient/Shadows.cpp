@@ -167,7 +167,7 @@ void ShadowMap::DrawMesh (const VkMesh *mesh, const Mat4 &model,
 	Mat4 mvp0 = lightVP * model;
 	for (uint32_t g = 0; g < mesh->nGroup(); g++) {
 		const VkMesh::Group &grp = mesh->GetGroup (g);
-		if (!grp.nIndex || grp.transparent || (grp.flags & (VkMesh::GRP_HIDDEN | VkMesh::GRP_NOSHADOW)) || (grp.usrFlag & 0x2)) continue;
+		if (!grp.nIndex || grp.transparent || (grp.usrFlag & (VkMesh::GRP_HIDDEN | VkMesh::GRP_NOSHADOW))) continue;
 		if (groupVisible && g < groupVisible->size() && !(*groupVisible)[g]) continue;
 		Mat4 mvp = (groupTransforms && g < groupTransforms->size()) ? mvp0 * (*groupTransforms)[g] : mvp0;
 		float f[16];

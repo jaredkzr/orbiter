@@ -31,6 +31,7 @@ public:
 	};
 
 	/// Mesh group flags from the Orbiter mesh format
+	// group user flags (UsrFlag, the FLAG entry of mesh files)
 	static constexpr DWORD GRP_NOSHADOW = 0x1;
 	static constexpr DWORD GRP_HIDDEN   = 0x2;
 	static constexpr DWORD GRP_NOLIGHT  = 0x4;

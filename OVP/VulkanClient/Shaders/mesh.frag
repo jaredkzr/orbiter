@@ -14,6 +14,7 @@
 #include "atmosphere.glsl"
 
 layout(set = 1, binding = 0) uniform sampler2D tex;
+layout(set = 0, binding = 4) uniform samplerCube envProbe; // surroundings of the focus vessel (global frame)
 
 // additional texture maps (MapSlot order); missing ones are not sampled
 layout(set = 3, binding = 0) uniform sampler2D normMap;   // tangent-space normals (x: +u, y: +v)
@@ -157,7 +158,9 @@ void main()
 	if (reflectivity > 0.0) {
 		vec3 R = reflect(-V, N);
 		R = normalize(mix(R, N, rough * rough)); // rough surfaces: towards the normal
-		vec3 env = Environment(normalize(mat3(atm.viewToPlanet) * R));
+		vec3 env = frame.probe.x > 0.5
+			? textureLod(envProbe, mat3(frame.viewToGlobal) * R, rough * frame.probe.y).rgb
+			: Environment(normalize(mat3(atm.viewToPlanet) * R));
 		col += env * EnvBRDF(F0, rough, NoV) * reflectivity * reflTint * ao;
 	}
 	col += draw.emissive.rgb * texel.rgb;

@@ -140,7 +140,12 @@ public:
 	double ProjX () const { return proj[0]; }   ///< horizontal focal factor fx
 	double ProjY () const { return -proj[5]; }  ///< vertical focal factor fy
 	OBJHANDLE Sun () const { return hSun; }
-	VkDescriptorSet FrameSet () const { return frameSet[ctx->FrameIndex()]; }
+	VkDescriptorSet FrameSet () const { return inProbe ? probeFrameSet[ctx->FrameIndex()] : frameSet[ctx->FrameIndex()]; }
+	/// rendering the environment probe (not the main view)
+	bool InProbe () const { return inProbe; }
+	/// Render one face of the environment probe around the focus vessel
+	/// (after the prepass, outside rendering scopes)
+	void RenderProbe ();
 	/// screen pixels per radian at the view centre
 	double PixPerRad () const { return 0.5 * viewH / tanAperture; }
 
@@ -159,6 +164,14 @@ private:
 	VkDescriptorPool framePool = VK_NULL_HANDLE;
 	VkDescriptorSet frameSet[vkc::FRAMES_IN_FLIGHT] = {};
 	vkc::Buffer frameUbo[vkc::FRAMES_IN_FLIGHT];
+	VkDescriptorSet probeFrameSet[vkc::FRAMES_IN_FLIGHT] = {};
+	vkc::Buffer probeFrameUbo[vkc::FRAMES_IN_FLIGHT];
+	std::unique_ptr<class EnvProbe> probe;
+	bool inProbe = false, probeEnabled = true;
+	int probeFace = 0, probeFacesDone = 0;
+	OBJHANDLE probeTarget = nullptr;
+	void FillFrameUniforms (void *fu);
+	void UpdateCamAtmSet ();
 	VkPipelineLayout meshLayout = VK_NULL_HANDLE;
 	VkPipeline meshOpaque = VK_NULL_HANDLE;
 	VkPipeline meshBlend = VK_NULL_HANDLE;

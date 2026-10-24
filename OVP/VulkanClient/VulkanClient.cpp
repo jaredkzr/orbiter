@@ -190,6 +190,7 @@ void VulkanClient::clbkRenderScene ()
 	scene->RenderShadows ();
 	scene->BeginFrame ();
 	scene->RenderPrepass ();
+	scene->RenderProbe ();
 	ctx.BindScene (true);
 	scene->Render ();
 	VkExtent2D sceneSize;

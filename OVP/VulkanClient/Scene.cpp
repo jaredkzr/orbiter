@@ -6,6 +6,7 @@
 #include "TAA.h"
 #include "Fsr.h"
 #include "Clouds.h"
+#include "EnvProbe.h"
 #include "VObjects.h"
 #include "PlanetSurface.h"
 #include <chrono>
@@ -41,7 +42,9 @@ namespace {
 		float shadowMat[3][16];   // view space -> shadow map, per cascade
 		float shadowParams[3][4]; // enabled, normal offset, depth bias, texel size
 		float jitter[4];       // projection jitter (NDC), render size
-		float aoParams[4];     // 1/width, 1/height of the occlusion image, fraction applied to direct light
+		float aoParams[4];     // 1/width, 1/height of the occlusion image, fraction applied to direct light, w: 1 = no occlusion
+		float viewToGlobal[16];// view space -> global frame (rotation), for the environment probe
+		float probe[4];        // x: environment probe valid, y: highest mip level
 		float lightCount[4];
 		struct {
 			float pos[4];   // view space position, range
@@ -108,7 +111,7 @@ bool Scene::Init ()
 	}
 
 	// per-frame uniform buffer, the shadow maps and ambient occlusion (set 0)
-	VkDescriptorSetLayoutBinding b[3]{};
+	VkDescriptorSetLayoutBinding b[4]{};
 	b[0].binding = 0;
 	b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	b[0].descriptorCount = 1;
@@ -120,36 +123,47 @@ bool Scene::Init ()
 	b[2] = b[1];
 	b[2].binding = 3; // ambient occlusion
 	b[2].descriptorCount = 1;
+	b[3] = b[2];
+	b[3].binding = 4; // environment probe
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 3;
+	lci.bindingCount = 4;
 	lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &frameLayout));
 
 	VkDescriptorPoolSize ps[2] = {
-		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, vkc::FRAMES_IN_FLIGHT },
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, (SHADOW_CASCADES + 1) * vkc::FRAMES_IN_FLIGHT }
+		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 * vkc::FRAMES_IN_FLIGHT },
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * (SHADOW_CASCADES + 2) * vkc::FRAMES_IN_FLIGHT }
 	};
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-	pci.maxSets = vkc::FRAMES_IN_FLIGHT;
+	pci.maxSets = 2 * vkc::FRAMES_IN_FLIGHT;
 	pci.poolSizeCount = 2;
 	pci.pPoolSizes = ps;
 	VK_CHECK(vkCreateDescriptorPool (ctx->device, &pci, nullptr, &framePool));
+	probe = std::make_unique<EnvProbe>();
+	probe->Init (ctx);
+	if (const char *e = getenv ("ORBITER_VK_PROBE")) probeEnabled = atoi (e) != 0;
+	if (ctx->sceneSamples != VK_SAMPLE_COUNT_1_BIT) probeEnabled = false; // (pipelines are multisampled)
 
-	for (uint32_t i = 0; i < vkc::FRAMES_IN_FLIGHT; i++) {
-		frameUbo[i] = ctx->CreateBuffer (sizeof(FrameUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
-		memset (frameUbo[i].mapped, 0, sizeof(FrameUniforms));
+	// frame sets of the main view and of the environment probe
+	for (uint32_t j = 0; j < 2 * vkc::FRAMES_IN_FLIGHT; j++) {
+		uint32_t i = j % vkc::FRAMES_IN_FLIGHT;
+		bool forProbe = j >= vkc::FRAMES_IN_FLIGHT;
+		vkc::Buffer &ubo = forProbe ? probeFrameUbo[i] : frameUbo[i];
+		VkDescriptorSet &set = forProbe ? probeFrameSet[i] : frameSet[i];
+		ubo = ctx->CreateBuffer (sizeof(FrameUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
+		memset (ubo.mapped, 0, sizeof(FrameUniforms));
 		VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
 		dai.descriptorPool = framePool;
 		dai.descriptorSetCount = 1;
 		dai.pSetLayouts = &frameLayout;
-		VK_CHECK(vkAllocateDescriptorSets (ctx->device, &dai, &frameSet[i]));
-		VkDescriptorBufferInfo dbi{ frameUbo[i].buffer, 0, sizeof(FrameUniforms) };
+		VK_CHECK(vkAllocateDescriptorSets (ctx->device, &dai, &set));
+		VkDescriptorBufferInfo dbi{ ubo.buffer, 0, sizeof(FrameUniforms) };
 		VkDescriptorImageInfo dii[SHADOW_CASCADES];
 		for (int k = 0; k < SHADOW_CASCADES; k++)
 			dii[k] = { shadows[k]->Sampler(), shadows[k]->View(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-		VkWriteDescriptorSet wr[2]{};
-		wr[0].sType = wr[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-		wr[0].dstSet = wr[1].dstSet = frameSet[i];
+		VkDescriptorImageInfo pii{ probe->Sampler(), probe->CubeView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		VkWriteDescriptorSet wr[3]{};
+		for (auto &w : wr) w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, w.dstSet = set;
 		wr[0].dstBinding = 0;
 		wr[0].descriptorCount = 1;
 		wr[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -158,7 +172,11 @@ bool Scene::Init ()
 		wr[1].descriptorCount = SHADOW_CASCADES;
 		wr[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		wr[1].pImageInfo = dii;
-		vkUpdateDescriptorSets (ctx->device, 2, wr, 0, nullptr);
+		wr[2].dstBinding = 4;
+		wr[2].descriptorCount = 1;
+		wr[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		wr[2].pImageInfo = &pii;
+		vkUpdateDescriptorSets (ctx->device, 3, wr, 0, nullptr);
 	}
 
 	ao = std::make_unique<AmbientOcclusion>();
@@ -241,6 +259,9 @@ void Scene::Shutdown ()
 	ctx->DestroyBuffer (sphereVtx);
 	ctx->DestroyBuffer (sphereIdx);
 	for (auto &u : frameUbo) ctx->DestroyBuffer (u);
+	for (auto &u : probeFrameUbo) ctx->DestroyBuffer (u);
+	if (probe) probe->Shutdown ();
+	probe.reset();
 	VkPipeline pipes[] = { meshOpaque, meshBlend, meshAdditive, meshPrepass, starPipeline, particleAdditive, particleBlend };
 	for (auto p : pipes) if (p) vkDestroyPipeline (ctx->device, p, nullptr);
 	vkDestroyPipelineLayout (ctx->device, meshLayout, nullptr);
@@ -742,9 +763,10 @@ double Scene::PixelSize (double size, double dist) const
 void Scene::WriteAODescriptors ()
 {
 	VkDescriptorImageInfo dii{ ao->Sampler(), ao->View(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-	for (uint32_t i = 0; i < vkc::FRAMES_IN_FLIGHT; i++) {
+	for (uint32_t j = 0; j < 2 * vkc::FRAMES_IN_FLIGHT; j++) {
+		uint32_t i = j % vkc::FRAMES_IN_FLIGHT;
 		VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-		wr.dstSet = frameSet[i];
+		wr.dstSet = j < vkc::FRAMES_IN_FLIGHT ? frameSet[i] : probeFrameSet[i];
 		wr.dstBinding = 3;
 		wr.descriptorCount = 1;
 		wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -787,6 +809,28 @@ void Scene::BeginFrame ()
 
 	// frame uniforms
 	FrameUniforms fu{};
+	FillFrameUniforms (&fu);
+	fu.probe[0] = probeFacesDone >= 6 ? 1.0f : 0.0f;
+	fu.probe[1] = (float)(EnvProbe::LEVELS - 1);
+	memcpy (frameUbo[fi].mapped, &fu, sizeof(fu));
+	UpdateCamAtmSet ();
+}
+
+void Scene::UpdateCamAtmSet ()
+{
+	// atmosphere of the planet the camera is at, for vessels and bases
+	camAtmSet = atm->NoAtmosphereSet ();
+	if (OBJHANDLE hp = oapiCameraProxyGbody ()) {
+		auto it = visuals.find (hp);
+		if (it != visuals.end())
+			if (Atmosphere *a = it->second->GetAtmosphere ())
+				camAtmSet = a->Set (); // also without atmosphere: the planet is reflected
+	}
+}
+
+void Scene::FillFrameUniforms (void *pfu)
+{
+	FrameUniforms &fu = *(FrameUniforms*)pfu;
 	fu.jitter[0] = jitter[0], fu.jitter[1] = jitter[1];
 	fu.jitter[2] = (float)viewW, fu.jitter[3] = (float)viewH;
 	fu.aoParams[0] = 1.0f / ao->Extent().width;
@@ -851,18 +895,9 @@ void Scene::BeginFrame ()
 		u.att[3] = (float)cos (0.5 * l.umbra);
 		u.spot[0] = (float)cos (0.5 * l.penumbra);
 	}
-	memcpy (frameUbo[fi].mapped, &fu, sizeof(fu));
-
-	// atmosphere of the planet the camera is at, for vessels and bases
-	camAtmSet = atm->NoAtmosphereSet ();
-	if (OBJHANDLE hp = oapiCameraProxyGbody ()) {
-		auto it = visuals.find (hp);
-		if (it != visuals.end())
-			if (Atmosphere *a = it->second->GetAtmosphere ())
-				camAtmSet = a->Set (); // also without atmosphere: the planet is reflected
-	}
-
+	Mat4::FromRotTrans (camRot, _V(0, 0, 0)).ToFloat (fu.viewToGlobal);
 }
+
 
 void Scene::RenderPrepass ()
 {
@@ -872,6 +907,81 @@ void Scene::RenderPrepass ()
 	if (ao->enabled) ao->Compute (proj[0], -proj[5]);
 	else ctx->EndTarget ();
 	RenderVolumetricClouds ();
+}
+
+void Scene::RenderProbe ()
+{
+	if (!probeEnabled) return;
+	OBJHANDLE hT = oapiCameraTarget ();
+	if (!hT || oapiGetObjectType (hT) != OBJTP_VESSEL) { probeFacesDone = 0; return; }
+	if (hT != probeTarget) probeTarget = hT, probeFacesDone = 0;
+	VECTOR3 pos;
+	oapiGetGlobalPos (hT, &pos);
+
+	// camera of the cube face (Vulkan face order +x -x +y -y +z -z): right,
+	// up and forward axes (global frame)
+	static const VECTOR3 F[6][3] = {
+		{ {0,0,-1}, {0,1,0}, {1,0,0} },  { {0,0,1}, {0,1,0}, {-1,0,0} },
+		{ {1,0,0}, {0,0,-1}, {0,1,0} },  { {1,0,0}, {0,0,1}, {0,-1,0} },
+		{ {1,0,0}, {0,1,0}, {0,0,1} },   { {-1,0,0}, {0,1,0}, {0,0,-1} } };
+	int f = probeFace;
+	const VECTOR3 &r = F[f][0], &u = F[f][1], &fw = F[f][2];
+
+	// save the main view
+	VECTOR3 sCamPos = camPos;
+	MATRIX3 sCamRot = camRot;
+	Mat4 sView = view;
+	float sProj[16];
+	memcpy (sProj, proj, sizeof(proj));
+	uint32_t sW = viewW, sH = viewH;
+	double sTan = tanAperture;
+	VkDescriptorSet sAtm = camAtmSet;
+	bool sClouds = cloudsActive;
+
+	camPos = pos;
+	camRot = { r.x, u.x, fw.x,  r.y, u.y, fw.y,  r.z, u.z, fw.z }; // columns: camera axes
+	MATRIX3 vt = { camRot.m11, camRot.m21, camRot.m31, camRot.m12, camRot.m22, camRot.m32, camRot.m13, camRot.m23, camRot.m33 };
+	view = Mat4::FromRotTrans (vt, _V(0, 0, 0));
+	memset (proj, 0, sizeof(proj));
+	proj[0] = 1.0f, proj[5] = -1.0f, proj[11] = 1.0f, proj[14] = (float)nearPlane; // 90 degrees
+	viewW = viewH = EnvProbe::SIZE;
+	tanAperture = 1.0;
+	cloudsActive = false;
+	inProbe = true;
+
+	FrameUniforms fu{};
+	float sJit[2] = { jitter[0], jitter[1] };
+	jitter[0] = jitter[1] = 0.0f;
+	FillFrameUniforms (&fu);
+	jitter[0] = sJit[0], jitter[1] = sJit[1];
+	fu.aoParams[3] = 1.0f; // no ambient occlusion
+	fu.probe[0] = 0.0f;    // reflections from the analytic environment
+	memcpy (probeFrameUbo[ctx->FrameIndex()].mapped, &fu, sizeof(fu));
+	UpdateCamAtmSet ();
+
+	vkc::Target ft = probe->FaceTarget (), fd = probe->FaceDepth ();
+	ctx->SetSceneRedirect (&ft, &fd);
+	ctx->BindScene (true);
+	// (no stars: at the probe's resolution they would cover the sky with
+	// speckle, and their reflections are too faint to see)
+	for (auto &it : visuals) it.second->RenderSky ();
+	for (auto &it : visuals)
+		if (it.first != hT) it.second->Render (RenderPass::Opaque);
+	ctx->BindScene (true);
+	for (auto &it : visuals) // cloud layers (vessel exhaust and glass are left out)
+		if (dynamic_cast<VPlanet*>(it.second.get())) it.second->Render (RenderPass::Transparent);
+	ctx->SetSceneRedirect (nullptr, nullptr);
+	probe->StoreFace (f);
+	probe->Prefilter ();
+
+	// restore the main view
+	inProbe = false;
+	camPos = sCamPos, camRot = sCamRot, view = sView;
+	memcpy (proj, sProj, sizeof(proj));
+	viewW = sW, viewH = sH, tanAperture = sTan;
+	camAtmSet = sAtm, cloudsActive = sClouds;
+	probeFace = (probeFace + 1) % 6;
+	if (probeFacesDone < 6) probeFacesDone++;
 }
 
 float Scene::CloudFadeRadius () const
@@ -930,7 +1040,8 @@ void Scene::Render ()
 	for (auto *vo : list) vo->RenderSky ();
 
 	// scene geometry
-	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &frameSet[fi], 0, nullptr);
+	VkDescriptorSet fset = FrameSet ();
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &fset, 0, nullptr);
 	for (auto *vo : list) vo->Render (RenderPass::Opaque);
 
 	// volumetric clouds over the opaque scene
@@ -997,7 +1108,8 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 	VkDeviceSize ofs = 0;
 	VkBuffer vb = mesh->VertexBuffer();
 	// billboards drawn in between use a different layout for set 0
-	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &frameSet[ctx->FrameIndex()], 0, nullptr);
+	VkDescriptorSet fset = FrameSet ();
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &fset, 0, nullptr);
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 2, 1, &camAtmSet, 0, nullptr);
 	vkCmdBindVertexBuffers (cmd, 0, 1, &vb, &ofs);
 	vkCmdBindIndexBuffer (cmd, mesh->IndexBuffer(), 0, VK_INDEX_TYPE_UINT16);
@@ -1006,7 +1118,7 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 	VkDescriptorSet boundTex = VK_NULL_HANDLE, boundMaps = VK_NULL_HANDLE;
 	for (uint32_t g = 0; g < mesh->nGroup(); g++) {
 		const VkMesh::Group &grp = mesh->GetGroup (g);
-		if (!grp.nIndex || (grp.flags & VkMesh::GRP_HIDDEN) || (grp.usrFlag & 0x2)) continue;
+		if (!grp.nIndex || (grp.usrFlag & VkMesh::GRP_HIDDEN)) continue;
 		if (groupVisible && g < groupVisible->size() && !(*groupVisible)[g]) continue;
 		const GroupTexOverride *ovr = nullptr;
 		if (texOverride)
@@ -1016,7 +1128,7 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 		if (transparent != (pass == RenderPass::Transparent)) continue;
 
 		VkPipeline pipe = pass == RenderPass::Depth ? meshPrepass
-			: !transparent ? meshOpaque : (ovr || (grp.flags & VkMesh::GRP_ADDITIVE)) ? meshAdditive : meshBlend;
+			: !transparent ? meshOpaque : (ovr || (grp.usrFlag & VkMesh::GRP_ADDITIVE)) ? meshAdditive : meshBlend;
 		if (pipe != bound) {
 			vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
 			bound = pipe;
@@ -1039,7 +1151,7 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 		mv.ToFloat (pc.modelView);
 		pc.diffuse[0] = m.diffuse.r, pc.diffuse[1] = m.diffuse.g, pc.diffuse[2] = m.diffuse.b, pc.diffuse[3] = m.diffuse.a;
 		pc.emissive[0] = m.emissive.r, pc.emissive[1] = m.emissive.g, pc.emissive[2] = m.emissive.b;
-		pc.emissive[3] = (grp.flags & VkMesh::GRP_NOLIGHT) ? 1.0f : 0.0f;
+		pc.emissive[3] = (grp.usrFlag & VkMesh::GRP_NOLIGHT) ? 1.0f : 0.0f;
 		pc.specular[0] = m.specular.r, pc.specular[1] = m.specular.g, pc.specular[2] = m.specular.b;
 		pc.specular[3] = m.power;
 		pc.light[0] = pc.light[1] = pc.light[2] = objLight;
@@ -1077,7 +1189,8 @@ void Scene::DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &m
 {
 	VkCommandBuffer cmd = ctx->Cmd();
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, blend ? meshBlend : meshOpaque);
-	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &frameSet[ctx->FrameIndex()], 0, nullptr);
+	VkDescriptorSet fset = FrameSet ();
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &fset, 0, nullptr);
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 2, 1, &camAtmSet, 0, nullptr);
 	VkDescriptorSet ts = (tex ? tex : gc->TexMgr()->White())->set;
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 1, 1, &ts, 0, nullptr);

@@ -531,9 +531,59 @@ void Context::BindScene (bool withDepth)
 	BindMain (true, withDepth);
 }
 
+void Context::SetSceneRedirect (const Target *color, const Target *depth)
+{
+	EndTarget ();
+	redirect.active = color && depth;
+	if (redirect.active) redirect.color = *color, redirect.depth = *depth;
+	redirect.cleared = false;
+}
+
 void Context::BindMain (bool scene, bool withDepth)
 {
 	if (!inFrame) return;
+	if (scene && redirect.active) {
+		if (cur.active && cur.image == redirect.color.image) return;
+		EndTarget ();
+		VkCommandBuffer cmd = frames[frameIndex].cmd;
+		bool clear = !redirect.cleared;
+		ImageBarrier (cmd, redirect.color.image, VK_IMAGE_ASPECT_COLOR_BIT,
+			clear ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+			VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_TRANSFER_READ_BIT,
+			VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+		ImageBarrier (cmd, redirect.depth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+			clear ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+			VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+			VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+			VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+		VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+		color.imageView = redirect.color.view;
+		color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		color.loadOp = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+		color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		color.clearValue.color = {{ 0.0f, 0.0f, 0.0f, 1.0f }};
+		VkRenderingAttachmentInfo dep{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+		dep.imageView = redirect.depth.view;
+		dep.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+		dep.loadOp = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+		dep.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		dep.clearValue.depthStencil = { 0.0f, 0 };
+		VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+		ri.renderArea = { {0, 0}, redirect.color.extent };
+		ri.layerCount = 1;
+		ri.colorAttachmentCount = 1;
+		ri.pColorAttachments = &color;
+		ri.pDepthAttachment = &dep;
+		vkCmdBeginRendering (cmd, &ri);
+		SetViewportScissor (redirect.color.extent);
+		cur = CurrentTarget();
+		cur.active = true;
+		cur.image = redirect.color.image;
+		cur.format = redirect.color.format;
+		cur.extent = redirect.color.extent;
+		redirect.cleared = true;
+		return;
+	}
 	if (cur.backbuffer && cur.scene == scene && cur.depth == withDepth) return;
 	EndTarget ();
 	VkCommandBuffer cmd = frames[frameIndex].cmd;

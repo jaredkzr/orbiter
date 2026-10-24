@@ -86,6 +86,7 @@ set(SHADER_SRC
 	Shaders/cloudmap.frag
 	Shaders/clouds.comp
 	Shaders/cloudcomp.frag
+	Shaders/envfilter.comp
 )
 set(SHADER_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 set(SHADER_HEADERS)
@@ -118,6 +119,7 @@ add_library(VulkanClient SHARED
 	AO.cpp
 	TAA.cpp
 	Clouds.cpp
+	EnvProbe.cpp
 	Fsr.cpp
 	StarSphere.cpp
 	Draw2D.cpp

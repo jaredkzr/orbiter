@@ -10,7 +10,7 @@ namespace {
 
 	bool IsTransparent (const MATERIAL &m, const VkMesh::Group &g)
 	{
-		return m.diffuse.a < 0.999f || (g.flags & VkMesh::GRP_ADDITIVE);
+		return m.diffuse.a < 0.999f || (g.usrFlag & VkMesh::GRP_ADDITIVE);
 	}
 }
 

@@ -1,0 +1,63 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Prefiltered environment cube: mip level m from level m-1, convolved with
+// the GGX lobe of the roughness increment between the levels (the levels
+// accumulate to the lobe of roughness m / (levels - 1))
+
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform samplerCube src;     // level m-1 only
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2DArray dst;
+
+layout(push_constant) uniform Params {
+	int size;          // of level m
+	float roughness;   // incremental roughness
+} pc;
+
+const float PI = 3.14159265;
+
+vec3 FaceDir (int face, vec2 uv) // uv in [-1,1], Vulkan cube face layout
+{
+	if (face == 0) return vec3 (1.0, -uv.y, -uv.x);
+	if (face == 1) return vec3 (-1.0, -uv.y, uv.x);
+	if (face == 2) return vec3 (uv.x, 1.0, uv.y);
+	if (face == 3) return vec3 (uv.x, -1.0, -uv.y);
+	if (face == 4) return vec3 (uv.x, -uv.y, 1.0);
+	return vec3 (-uv.x, -uv.y, -1.0);
+}
+
+vec2 Hammersley (uint i, uint n)
+{
+	uint b = bitfieldReverse (i);
+	return vec2 (float (i) / float (n), float (b) * 2.3283064365386963e-10);
+}
+
+void main ()
+{
+	ivec3 id = ivec3 (gl_GlobalInvocationID);
+	if (id.x >= pc.size || id.y >= pc.size) return;
+	vec2 uv = (vec2 (id.xy) + 0.5) / float (pc.size) * 2.0 - 1.0;
+	vec3 N = normalize (FaceDir (id.z, uv));
+	vec3 up = abs (N.y) < 0.999 ? vec3 (0.0, 1.0, 0.0) : vec3 (1.0, 0.0, 0.0);
+	vec3 T = normalize (cross (up, N)), B = cross (N, T);
+	float a = max (pc.roughness * pc.roughness, 1e-4);
+	const uint COUNT = 48u;
+	vec3 sum = vec3 (0.0);
+	float wsum = 0.0;
+	for (uint i = 0u; i < COUNT; i++) {
+		vec2 xi = Hammersley (i, COUNT);
+		float phi = 2.0 * PI * xi.x;
+		float cosT = sqrt ((1.0 - xi.y) / (1.0 + (a * a - 1.0) * xi.y));
+		float sinT = sqrt (1.0 - cosT * cosT);
+		vec3 H = T * (sinT * cos (phi)) + B * (sinT * sin (phi)) + N * cosT;
+		vec3 L = reflect (-N, H);
+		float nl = dot (N, L);
+		if (nl <= 0.0) continue;
+		sum += textureLod (src, L, 0.0).rgb * nl;
+		wsum += nl;
+	}
+	imageStore (dst, id, vec4 (sum / max (wsum, 1e-4), 1.0));
+}

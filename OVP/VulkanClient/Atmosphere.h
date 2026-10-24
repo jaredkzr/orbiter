@@ -80,8 +80,11 @@ private:
 	float groundAlbedo = 0.3f;            // for light reflected into the sky
 	vkc::Image transmittanceLut, multiscatLut; // precomputed tables
 	bool visible = false;
-	vkc::Buffer ubo[vkc::FRAMES_IN_FLIGHT];
-	VkDescriptorSet sets[vkc::FRAMES_IN_FLIGHT] = {};
+	// per frame slot, for the main view and the environment probe
+	static constexpr uint32_t NSETS = 2 * vkc::FRAMES_IN_FLIGHT;
+	vkc::Buffer ubo[NSETS];
+	VkDescriptorSet sets[NSETS] = {};
+	uint32_t SetIndex () const;
 	float groundColour[4] = { 0.5f, 0.5f, 0.5f, 0.0f };
 	float cloudParams[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 	bool ripple = false; // wave normals on water

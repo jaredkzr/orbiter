@@ -69,7 +69,7 @@ bool AtmosphereRenderer::Init (vkc::Context *c, TextureManager *tm)
 	lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &setLayout));
 
-	const uint32_t nSets = MAX_ATMOSPHERES * vkc::FRAMES_IN_FLIGHT + 1;
+	const uint32_t nSets = MAX_ATMOSPHERES * 2 * vkc::FRAMES_IN_FLIGHT + 1;
 	VkDescriptorPoolSize ps[2] = {
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nSets },
 		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6 * nSets }
@@ -351,7 +351,7 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		lp.radii[0] = (float)radius, lp.radii[1] = (float)atmRadius, lp.radii[2] = groundAlbedo, lp.radii[3] = mieG;
 		ar->ComputeLuts (lp, transmittanceLut, multiscatLut);
 	}
-	for (uint32_t i = 0; i < vkc::FRAMES_IN_FLIGHT; i++) {
+	for (uint32_t i = 0; i < NSETS; i++) {
 		ubo[i] = ctx->CreateBuffer (sizeof(AtmUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
 		memset (ubo[i].mapped, 0, sizeof(AtmUniforms));
 		VkDescriptorSetLayout l = ar->SetLayout();
@@ -391,7 +391,7 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 void Atmosphere::SetClouds (VkTexture *west, VkTexture *east, double alt)
 {
 	if (!west || !east) return;
-	for (uint32_t i = 0; i < vkc::FRAMES_IN_FLIGHT; i++)
+	for (uint32_t i = 0; i < NSETS; i++)
 		scene->Atm()->WriteGround (sets[i], west, east, 3);
 	cloudParams[0] = (float)(radius + alt);
 	cloudParams[2] = 0.3f;
@@ -402,7 +402,7 @@ void Atmosphere::SetClouds (VkTexture *west, VkTexture *east, double alt)
 
 void Atmosphere::SetGround (VkTexture *west, VkTexture *east, const float colour[3])
 {
-	for (uint32_t i = 0; i < vkc::FRAMES_IN_FLIGHT; i++)
+	for (uint32_t i = 0; i < NSETS; i++)
 		scene->Atm()->WriteGround (sets[i], west, east);
 	for (int i = 0; i < 3; i++) groundColour[i] = colour[i];
 	groundColour[3] = (west && east) ? 1.0f : 0.0f;
@@ -414,7 +414,7 @@ Atmosphere::~Atmosphere ()
 	vkc::Image tl = transmittanceLut, ml = multiscatLut;
 	ctx->DeferDestroy ([c, tl, ml]() mutable { c->DestroyImage (tl); c->DestroyImage (ml); });
 	VkDescriptorPool pool = scene->Atm()->Pool();
-	for (uint32_t i = 0; i < vkc::FRAMES_IN_FLIGHT; i++) {
+	for (uint32_t i = 0; i < NSETS; i++) {
 		vkc::Buffer b = ubo[i];
 		VkDescriptorSet s = sets[i];
 		ctx->DeferDestroy ([c, b, s, pool]() mutable {
@@ -424,9 +424,14 @@ Atmosphere::~Atmosphere ()
 	}
 }
 
+uint32_t Atmosphere::SetIndex () const
+{
+	return ctx->FrameIndex() + (scene->InProbe () ? vkc::FRAMES_IN_FLIGHT : 0);
+}
+
 VkDescriptorSet Atmosphere::Set () const
 {
-	return sets[ctx->FrameIndex()];
+	return sets[SetIndex ()];
 }
 
 void Atmosphere::Update ()
@@ -476,7 +481,7 @@ void Atmosphere::Update ()
 	u.water[3] = ripple ? (float)fmod (oapiGetSimTime (), 3600.0) : -1.0f;
 	u.misc[1] = (float)(1.0 / scene->ProjX());
 	u.misc[2] = (float)(1.0 / scene->ProjY());
-	memcpy (ubo[ctx->FrameIndex()].mapped, &u, sizeof(u));
+	memcpy (ubo[SetIndex ()].mapped, &u, sizeof(u));
 
 	// the sky pass is needed when the atmosphere covers a noticeable part of the view
 	visible = present && scene->PixelSize (atmRadius, length (scene->CameraPos() - ppos)) > 2.0;

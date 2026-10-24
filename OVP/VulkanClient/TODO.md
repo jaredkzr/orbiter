@@ -26,9 +26,13 @@ Known gaps and limitations, to be addressed later.
   window messages), which has to be reconciled with the SDL window.
 
 ## Materials and reflections
-- Reflections show the sky and surface of the planet near the camera
-  (analytic environment); other vessels, bases and clouds are not reflected,
-  and there is no glossy blur of the planet texture for rough surfaces.
+- Reflections: environment cube probe (128^2, 6 prefiltered levels) at the
+  focus vessel, one face per frame (ORBITER_VK_PROBE=0: analytic sky and
+  ground only). Other vessels, bases, terrain and 2D clouds are reflected;
+  not the focus vessel itself, stars, exhaust, volumetric clouds. Single
+  probe without parallax correction: reflections of nearby large objects
+  (e.g. the ISS seen from a docked shuttle) are positioned approximately.
+  No screen-space reflections yet. Disabled with MSAA (ORBITER_VK_TAA=0).
 - Material configuration files: only SPECULAR, SMOOTHNESS, METALNESS and
   REFLECT are used (FRESNEL and other entries are ignored).
 - Texture maps (_norm/_bump, _rghn, _metal, _spec, _refl, _emis, _transl,
@@ -110,3 +114,10 @@ Known gaps and limitations, to be addressed later.
   volumes (the 2D cloud-shadow approximation remains). No lightning, no rain.
 - Cloud types are not distinguished (all cumulus-like); the layer alpha
   carries no height information.
+
+## Plume and exhaust overhaul (planned, after the current graphics list)
+- User request: overhaul plume and exhaust effects. Current state: billboard
+  particle streams (direction/spread fixed 2026-10-24), exhaust flame
+  sprites. Candidates: volumetric/shaded plume cones that expand with
+  ambient pressure (vacuum vs sea level), shock diamonds, heat shimmer,
+  soft particles (depth fade), lit/shadowed smoke, reactive mask for FSR.

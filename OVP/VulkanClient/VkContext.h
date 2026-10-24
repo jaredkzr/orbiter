@@ -94,6 +94,10 @@ namespace vkc {
 		/// contents are discarded afterwards
 		void BindTargetsWithDepth (const Target *colors, uint32_t nColor, const Target &depth, const float clearColor[4]);
 		void EndTarget ();
+		/// Redirect the scene target (BindScene) to another colour and depth
+		/// target, cleared on first use (environment probe faces); nullptr
+		/// ends the redirection. Same formats and sample count as the scene.
+		void SetSceneRedirect (const Target *color, const Target *depth);
 		bool BoundTo (VkImage image) const { return cur.active && !cur.backbuffer && cur.image == image; }
 		VkFormat BoundFormat () const { return cur.format; }
 		VkExtent2D BoundExtent () const { return cur.extent; }
@@ -198,6 +202,7 @@ namespace vkc {
 		VkExtent2D extent{};
 		VkExtent2D renderExtent{};
 		float renderScale = 1.0f;
+		struct { Target color, depth; bool active = false, cleared = false; } redirect;
 		VkCommandPool uploadPool = VK_NULL_HANDLE;
 		uint32_t frameIndex = 0;
 		uint32_t imageIndex = 0;
