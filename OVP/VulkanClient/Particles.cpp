@@ -19,6 +19,10 @@
 #include "particle_shadow_sum.comp.h"
 #include "particle_sortkeys.comp.h"
 #include "particle_sort.comp.h"
+#include "smoke_splat.comp.h"
+#include "smoke_resolve.comp.h"
+#include "smoke_march.frag.h"
+#include "post.vert.h"
 #include "gpuparticle.vert.h"
 #include "gpuparticle.frag.h"
 
@@ -29,6 +33,8 @@ namespace {
 	constexpr uint32_t SHADOW_NX = 192, SHADOW_NZ = 64;
 	constexpr double SHADOW_HALF_WIDTH = 1200.0, SHADOW_HALF_DEPTH = 1500.0; // [m]
 	constexpr double SMOKE_EXTINCTION = 0.2; // optical depth (towards the sun) per unit of particle opacity
+	// smoke volume (smokevol.glsl)
+	constexpr uint32_t VOL_X = 240, VOL_Y = 135, VOL_Z = 128;
 }
 
 // ======================================================================
@@ -132,6 +138,8 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 	sci.magFilter = sci.minFilter = VK_FILTER_NEAREST;
 	sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 	VK_CHECK(vkCreateSampler (ctx->device, &sci, nullptr, &clampSampler));
+	sci.magFilter = sci.minFilter = VK_FILTER_LINEAR;
+	VK_CHECK(vkCreateSampler (ctx->device, &sci, nullptr, &volSampler));
 
 	// smoke shadow grid: smoke per cell, optical depth towards the sun
 	auto image3D = [this](VkFormat fmt, VkImageUsageFlags usage) {
@@ -154,6 +162,39 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		return im;
 	};
 	shadowAccum = image3D (VK_FORMAT_R32_UINT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+	// smoke volume: accumulation (extinction, light), the resolved volume, columns
+	auto image = [this](VkImageType type, VkFormat fmt, VkExtent3D e, VkImageUsageFlags usage) {
+		vkc::Image im;
+		VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+		ici.imageType = type, ici.format = fmt, ici.extent = e;
+		ici.mipLevels = 1, ici.arrayLayers = 1;
+		ici.samples = VK_SAMPLE_COUNT_1_BIT;
+		ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+		ici.usage = usage;
+		VmaAllocationCreateInfo aci{};
+		aci.usage = VMA_MEMORY_USAGE_AUTO;
+		VK_CHECK(vmaCreateImage (ctx->allocator, &ici, &aci, &im.image, &im.alloc, nullptr));
+		VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+		vci.image = im.image, vci.viewType = type == VK_IMAGE_TYPE_3D ? VK_IMAGE_VIEW_TYPE_3D : VK_IMAGE_VIEW_TYPE_2D, vci.format = fmt;
+		vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &im.view));
+		return im;
+	};
+	for (auto &v : volAccum) v = image (VK_IMAGE_TYPE_3D, VK_FORMAT_R32_UINT, { VOL_X, VOL_Y, VOL_Z }, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+	volOut = image (VK_IMAGE_TYPE_3D, VK_FORMAT_R16G16B16A16_SFLOAT, { VOL_X, VOL_Y, VOL_Z }, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+	volColumns = image (VK_IMAGE_TYPE_2D, VK_FORMAT_R16G16_SFLOAT, { VOL_X, VOL_Y, 1 }, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+	{
+		VkImage vi[6] = { volAccum[0].image, volAccum[1].image, volAccum[2].image, volAccum[3].image, volOut.image, volColumns.image };
+		ctx->ImmediateSubmit ([vi](VkCommandBuffer cmd) {
+			VkClearColorValue zero{};
+			VkImageSubresourceRange r{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+			for (VkImage im : vi) {
+				vkc::ImageBarrier (cmd, im, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+					VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+				vkCmdClearColorImage (cmd, im, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &r);
+			}
+		});
+	}
 	shadowDepth = image3D (VK_FORMAT_R16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
 	VkImage gi[2] = { shadowAccum.image, shadowDepth.image };
 	ctx->ImmediateSubmit ([gi](VkCommandBuffer cmd) {
@@ -169,7 +210,7 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 	// pool, emissions, noise volumes, prepass, shadow grid
 	const VkShaderStageFlags CS = VK_SHADER_STAGE_COMPUTE_BIT;
 	// (8-10: sorting for drawing far to near: values, keys, ring of each block)
-	VkDescriptorSetLayoutBinding b[11] = {
+	VkDescriptorSetLayoutBinding b[19] = {
 		{ 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS | VK_SHADER_STAGE_VERTEX_BIT, nullptr },
 		{ 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS, nullptr },
 		{ 2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, CS, nullptr },
@@ -180,13 +221,22 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		{ 7, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, CS, nullptr },
 		{ 8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS | VK_SHADER_STAGE_VERTEX_BIT, nullptr },
 		{ 9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS, nullptr },
-		{ 10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS, nullptr } };
+		{ 10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS, nullptr },
+		// (11-18: smoke volume)
+		{ 11, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, CS, nullptr },
+		{ 12, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, CS, nullptr },
+		{ 13, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, CS, nullptr },
+		{ 14, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, CS, nullptr },
+		{ 15, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, CS, nullptr },
+		{ 16, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, CS, nullptr },
+		{ 17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
+		{ 18, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr } };
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 11, lci.pBindings = b;
+	lci.bindingCount = 19, lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &setLayout));
 	VkDescriptorPoolSize ps[3] = { { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5 * vkc::FRAMES_IN_FLIGHT },
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * vkc::FRAMES_IN_FLIGHT },
-		{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 * vkc::FRAMES_IN_FLIGHT } };
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6 * vkc::FRAMES_IN_FLIGHT },
+		{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 8 * vkc::FRAMES_IN_FLIGHT } };
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.maxSets = vkc::FRAMES_IN_FLIGHT, pci.poolSizeCount = 3, pci.pPoolSizes = ps;
 	VK_CHECK(vkCreateDescriptorPool (ctx->device, &pci, nullptr, &dpool));
@@ -223,6 +273,19 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 			sw[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, sw[k].pBufferInfo = &sbi[k];
 		}
 		vkUpdateDescriptorSets (ctx->device, 3, sw, 0, nullptr);
+		VkDescriptorImageInfo vi[8] = {
+			{ VK_NULL_HANDLE, volAccum[0].view, VK_IMAGE_LAYOUT_GENERAL }, { VK_NULL_HANDLE, volAccum[1].view, VK_IMAGE_LAYOUT_GENERAL },
+			{ VK_NULL_HANDLE, volAccum[2].view, VK_IMAGE_LAYOUT_GENERAL }, { VK_NULL_HANDLE, volAccum[3].view, VK_IMAGE_LAYOUT_GENERAL },
+			{ VK_NULL_HANDLE, volOut.view, VK_IMAGE_LAYOUT_GENERAL }, { VK_NULL_HANDLE, volColumns.view, VK_IMAGE_LAYOUT_GENERAL },
+			{ volSampler, volOut.view, VK_IMAGE_LAYOUT_GENERAL }, { volSampler, volColumns.view, VK_IMAGE_LAYOUT_GENERAL } };
+		VkWriteDescriptorSet vw[8]{};
+		for (uint32_t k = 0; k < 8; k++) {
+			vw[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			vw[k].dstSet = sets[i], vw[k].dstBinding = 11 + k, vw[k].descriptorCount = 1;
+			vw[k].descriptorType = k < 6 ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			vw[k].pImageInfo = &vi[k];
+		}
+		vkUpdateDescriptorSets (ctx->device, 8, vw, 0, nullptr);
 	}
 
 	auto layoutOf = [this](std::initializer_list<VkDescriptorSetLayout> l, VkShaderStageFlags stages, uint32_t pcSize) {
@@ -255,6 +318,8 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 	sortKeysPipe = compute (spv_particle_sortkeys_comp, spv_particle_sortkeys_comp_size, updateLayout);
 	sortLayout = layoutOf ({ setLayout }, CS, 3 * sizeof(uint32_t));
 	sortPipe = compute (spv_particle_sort_comp, spv_particle_sort_comp_size, sortLayout);
+	volSplatPipe = compute (spv_smoke_splat_comp, spv_smoke_splat_comp_size, updateLayout);
+	volResolvePipe = compute (spv_smoke_resolve_comp, spv_smoke_resolve_comp_size, updateLayout);
 
 	// drawing: quads (triangle strips) from the pool, premultiplied or additive,
 	// with the reactive mask
@@ -319,6 +384,55 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 	}
 	vkDestroyShaderModule (ctx->device, vs, nullptr);
 	vkDestroyShaderModule (ctx->device, fs, nullptr);
+
+	// smoke volume: the march over the scene (full screen; scene with the reactive mask)
+	if (const char *e = getenv ("ORBITER_VK_SMOKE")) {
+		std::string m = e;
+		smokeMode = m == "sprites" ? SMOKE_SPRITES : m == "screen" ? SMOKE_SCREEN : SMOKE_VOLUME;
+	}
+	volMarchLayout = layoutOf ({ frameLayout, setLayout }, VK_SHADER_STAGE_FRAGMENT_BIT, 16);
+	{
+		VkShaderModule mvs = ctx->CreateShaderModule (spv_post_vert, spv_post_vert_size);
+		VkShaderModule mfs = ctx->CreateShaderModule (spv_smoke_march_frag, spv_smoke_march_frag_size);
+		VkPipelineShaderStageCreateInfo ms2[2] = {
+			{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, mvs, "main" },
+			{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, mfs, "main" } };
+		VkPipelineInputAssemblyStateCreateInfo tri{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+		tri.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+		VkPipelineDepthStencilStateCreateInfo nods{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+		VkPipelineColorBlendAttachmentState cb[2]{};
+		cb[0].colorWriteMask = 0xF;
+		cb[0].blendEnable = VK_TRUE;
+		cb[0].srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+		cb[0].dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+		cb[0].colorBlendOp = VK_BLEND_OP_ADD;
+		cb[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+		cb[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+		cb[0].alphaBlendOp = VK_BLEND_OP_ADD;
+		cb[1].colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
+		cb[1].blendEnable = VK_TRUE;
+		cb[1].srcColorBlendFactor = cb[1].dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+		cb[1].colorBlendOp = VK_BLEND_OP_MAX;
+		cb[1].srcAlphaBlendFactor = cb[1].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+		cb[1].alphaBlendOp = VK_BLEND_OP_MAX;
+		VkPipelineColorBlendStateCreateInfo cbs{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+		cbs.attachmentCount = 2, cbs.pAttachments = cb;
+		VkGraphicsPipelineCreateInfo gpi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+		gpi.pNext = &rci;
+		gpi.stageCount = 2, gpi.pStages = ms2;
+		gpi.pVertexInputState = &vi;
+		gpi.pInputAssemblyState = &tri;
+		gpi.pViewportState = &vps;
+		gpi.pRasterizationState = &rs;
+		gpi.pMultisampleState = &ms;
+		gpi.pDepthStencilState = &nods;
+		gpi.pColorBlendState = &cbs;
+		gpi.pDynamicState = &dy;
+		gpi.layout = volMarchLayout;
+		VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &volMarchPipe));
+		vkDestroyShaderModule (ctx->device, mvs, nullptr);
+		vkDestroyShaderModule (ctx->device, mfs, nullptr);
+	}
 	return true;
 }
 
@@ -345,9 +459,10 @@ void ParticleSystem::InitRT (VkDescriptorSetLayout frameLayout, VkDescriptorSetL
 void ParticleSystem::Shutdown ()
 {
 	if (!ctx) return;
-	for (VkPipeline p : { emitPipe, updatePipe, updateRTPipe, lightPipe, lightRTPipe, splatPipe, sumPipe, sortKeysPipe, sortPipe, drawBlend, drawAdd })
+	for (VkPipeline p : { emitPipe, updatePipe, updateRTPipe, lightPipe, lightRTPipe, splatPipe, sumPipe, sortKeysPipe, sortPipe, drawBlend, drawAdd,
+		volSplatPipe, volResolvePipe, volMarchPipe })
 		if (p) vkDestroyPipeline (ctx->device, p, nullptr);
-	for (VkPipelineLayout l : { emitLayout, updateLayout, updateRTLayout, drawLayout, sortLayout })
+	for (VkPipelineLayout l : { emitLayout, updateLayout, updateRTLayout, drawLayout, sortLayout, volMarchLayout })
 		if (l) vkDestroyPipelineLayout (ctx->device, l, nullptr);
 	vkDestroyDescriptorPool (ctx->device, dpool, nullptr);
 	vkDestroyDescriptorSetLayout (ctx->device, setLayout, nullptr);
@@ -355,6 +470,10 @@ void ParticleSystem::Shutdown ()
 	vkDestroySampler (ctx->device, clampSampler, nullptr);
 	ctx->DestroyBuffer (pool);
 	for (auto &b : emitBuf) ctx->DestroyBuffer (b);
+	for (auto &v : volAccum) ctx->DestroyImage (v);
+	ctx->DestroyImage (volOut);
+	ctx->DestroyImage (volColumns);
+	if (volSampler) vkDestroySampler (ctx->device, volSampler, nullptr);
 	ctx->DestroyBuffer (sortVals);
 	ctx->DestroyBuffer (sortKeys);
 	for (auto &b : blockRingBuf) ctx->DestroyBuffer (b);
@@ -524,7 +643,7 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 			uint32_t count = std::min (e.count, e.capacity);
 			g.slab[0] = e.first, g.slab[1] = e.capacity, g.slab[2] = e.head, g.slab[3] = count;
 			g.misc[0] = seed++, g.misc[1] = (e.emissive ? 1u : 0u) | (e.reentry ? 2u : 0u) | (e.tinted ? 4u : 0u) | (e.planar ? 8u : 0u)
-				| (e.ballistic ? 16u : 0u) | (e.cold ? 32u : 0u);
+				| (e.ballistic ? 16u : 0u) | (e.cold ? 32u : 0u) | (e.volumetric ? 64u : 0u);
 			uint32_t rgb = 0;
 			for (int k = 0; k < 3; k++) rgb |= (uint32_t)std::lround (std::clamp (e.albedo[k], 0.0f, 1.0f) * 255.0f) << (8 * k);
 			g.misc[2] = rgb, g.misc[3] = 0;
@@ -557,6 +676,23 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	vkCmdDispatch (cmd, CAPACITY / 64, 1, 1);
 	barrier (CS, RW, CS, RW);
 
+	// smoke volume: volumetric particles into the froxels, resolved
+	if (smokeMode == SMOKE_VOLUME) {
+		VkClearColorValue z0{};
+		VkImageSubresourceRange rr{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		barrier (CS | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, RW, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+		for (auto &v : volAccum) vkCmdClearColorImage (cmd, v.image, VK_IMAGE_LAYOUT_GENERAL, &z0, 1, &rr);
+		barrier (VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, CS, RW);
+		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, volSplatPipe);
+		bindSets (updateLayout, false);
+		vkCmdDispatch (cmd, CAPACITY / 64, 1, 1);
+		barrier (CS, RW, CS, RW);
+		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, volResolvePipe);
+		vkCmdDispatch (cmd, (VOL_X + 7) / 8, (VOL_Y + 7) / 8, 1);
+		barrier (CS, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | CS, VK_ACCESS_2_SHADER_READ_BIT);
+		volNoise[0] = up.noiseOrg[0], volNoise[1] = up.noiseOrg[1], volNoise[2] = up.noiseOrg[2], volNoise[3] = up.bodyVel[3];
+	}
+
 	// draw order: far to near within each ring (bitonic sort over the used
 	// part of the pool)
 	uint32_t used = CAPACITY; // (up to the free space at the end of the pool)
@@ -587,7 +723,7 @@ void ParticleSystem::Draw (uint32_t first, uint32_t capacity, VkTexture *tex, bo
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, emissive ? drawAdd : drawBlend);
 	VkDescriptorSet s[3] = { frameSet, sets[ctx->FrameIndex ()], tex->set };
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawLayout, 0, 3, s, 0, nullptr);
-	uint32_t flags = (emissive ? 1u : 0u) | (tex == smokeTex ? 2u : 0u) | 4u;
+	uint32_t flags = (emissive ? 1u : 0u) | (tex == smokeTex ? 2u : 0u) | 4u | (smokeMode == SMOKE_VOLUME ? 8u : 0u);
 	struct { uint32_t first, flags; float alpha, pad; float body[12]; } pc{ first, flags, 1.0f, 0.0f, {} };
 	memcpy (pc.body, drawBody, sizeof(drawBody));
 	vkCmdPushConstants (cmd, drawLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
@@ -767,4 +903,15 @@ void VkParticleStream::Render (Scene *scene)
 {
 	if (!allocated || sys != client->Particles () || simTime - lastEmit > 1.5 * spec.lifetime + 0.1) return;
 	sys->Draw (first, capacity, tex, spec.ltype == PARTICLESTREAMSPEC::EMISSIVE, scene->FrameSet ());
+}
+
+void ParticleSystem::DrawVolume (VkDescriptorSet frameSet)
+{
+	if (!enabled || smokeMode != SMOKE_VOLUME || !prepassView) return;
+	VkCommandBuffer cmd = ctx->Cmd ();
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, volMarchPipe);
+	VkDescriptorSet s[2] = { frameSet, sets[ctx->FrameIndex ()] };
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, volMarchLayout, 0, 2, s, 0, nullptr);
+	vkCmdPushConstants (cmd, volMarchLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(volNoise), volNoise);
+	vkCmdDraw (cmd, 3, 1, 0, 0);
 }

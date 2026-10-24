@@ -1,0 +1,35 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Smoke volume: the accumulated extinction and light into a filterable
+// volume (light per extinction, extinction), and which columns hold smoke
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+#define FRAME_SET 1
+#include "frame.glsl"
+#include "smokevol.glsl"
+layout(set = 0, binding = 11, r32ui) uniform uimage3D volD;
+layout(set = 0, binding = 12, r32ui) uniform uimage3D volR;
+layout(set = 0, binding = 13, r32ui) uniform uimage3D volG;
+layout(set = 0, binding = 14, r32ui) uniform uimage3D volB;
+layout(set = 0, binding = 15, rgba16f) uniform writeonly image3D volOut;
+layout(set = 0, binding = 16, rg16f) uniform writeonly image2D volColumns; // smoke from, to (slice fractions; from > to: none)
+
+void main ()
+{
+	ivec2 xy = ivec2 (gl_GlobalInvocationID.xy);
+	if (any (greaterThanEqual (xy, VOL_SIZE.xy))) return;
+	int zmin = VOL_SIZE.z, zmax = -1;
+	for (int z = 0; z < VOL_SIZE.z; z++) {
+		ivec3 q = ivec3 (xy, z);
+		float d = float (imageLoad (volD, q).r) / VOL_FIXED;
+		vec3 c = vec3 (imageLoad (volR, q).r, imageLoad (volG, q).r, imageLoad (volB, q).r) / VOL_FIXED;
+		imageStore (volOut, q, vec4 (d > 0.0 ? c / d : vec3 (0.0), d));
+		if (d > 0.0) zmin = min (zmin, z), zmax = max (zmax, z);
+	}
+	imageStore (volColumns, xy, vec4 (float (zmin) / float (VOL_SIZE.z), float (zmax + 1) / float (VOL_SIZE.z), 0.0, 0.0));
+}

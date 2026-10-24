@@ -10,7 +10,7 @@ struct Particle {
 	vec4 velLife;  // velocity (global frame) [m/s], lifetime [s] (0: none)
 	vec4 shape;    // size at birth [m], growth [m/s], opacity at birth, slowdown in air [1/s]
 	vec3 light;    // sunlight reaching it
-	uint flags;    // bits 0-1: texture quadrant, 2: emissive, 3: tinted, 4: hot (rises), 5: ballistic (gravity),
+	uint flags;    // bits 0-1: texture quadrant, 2: emissive, 3: tinted, 4: hot (rises), 5: ballistic (gravity), 6: volumetric (smoke volume),
 	               // 8-31: colour of smoke (r, g, b 8 bits each)
 };
 
@@ -22,7 +22,7 @@ struct Emission { // must match ParticleSystem::GpuEmission
 	vec4 shape;    // size, growth, opacity, slowdown
 	uvec4 slab;    // first particle of the stream's pool, its capacity, first slot to write, count
 	uvec4 misc;    // seed, flags (1: emissive, 2: reentry quadrant, 4: tinted (hot smoke), 8: spread along a surface,
-	               //   16: ballistic, 32: cold (tinted, not rising)), smoke colour (rgb8), -
+	               //   16: ballistic, 32: cold (tinted, not rising), 64: volumetric), smoke colour (rgb8), -
 };
 
 layout(set = 0, binding = 0, std430) buffer ParticlePool { Particle particles[]; };

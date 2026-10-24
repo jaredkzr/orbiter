@@ -573,6 +573,7 @@ void VVessel::EmitSmoke (DWORD idx, int type, const PlumeDraw &pd, const PlumeIn
 		e.slowdown = atSurface ? 0.8 : ParticleSystem::ExhaustDrag (pd.airDensity);
 		e.first = r.first, e.capacity = r.capacity, e.head = r.head, e.count = std::min (n, r.capacity);
 		e.tinted = true;
+		e.volumetric = !rcs;
 		for (int k = 0; k < 3; k++) e.albedo[k] = c.smokeAlbedo[k];
 		sys->Queue (e);
 		r.head = (r.head + e.count) % r.capacity;
@@ -672,6 +673,7 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 			e.slowdown = 0.6;
 			e.first = r.first, e.capacity = r.capacity, e.head = r.head, e.count = std::min (cnt, r.capacity);
 			e.tinted = true; // (hot: rises)
+			e.volumetric = true;
 			e.albedo[0] = e.albedo[1] = e.albedo[2] = 0.97f;
 			sys->Queue (e);
 			r.head = (r.head + e.count) % r.capacity;
@@ -720,6 +722,7 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 		e.slowdown = air ? 2.0 : 0.0;
 		e.first = r.first, e.capacity = r.capacity, e.head = r.head, e.count = std::min (cnt, r.capacity);
 		e.tinted = true, e.cold = true, e.ballistic = true;
+		e.volumetric = air;
 		if (water) e.albedo[0] = e.albedo[1] = e.albedo[2] = 0.95f;
 		else DustColour (hp, e.albedo);
 		sys->Queue (e);

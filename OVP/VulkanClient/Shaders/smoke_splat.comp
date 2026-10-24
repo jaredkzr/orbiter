@@ -1,0 +1,70 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Smoke volume: each volumetric particle adds its extinction (and the
+// light it scatters) to the froxels it covers, with a smooth falloff
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 64) in;
+
+#include "particle_common.glsl"
+#include "smokevol.glsl"
+layout(set = 0, binding = 11, r32ui) uniform uimage3D volD;
+layout(set = 0, binding = 12, r32ui) uniform uimage3D volR;
+layout(set = 0, binding = 13, r32ui) uniform uimage3D volG;
+layout(set = 0, binding = 14, r32ui) uniform uimage3D volB;
+
+void main ()
+{
+	uint i = gl_GlobalInvocationID.x;
+	if (i >= uint (pc.omega.w)) return;
+	Particle p = particles[i];
+	if (p.velLife.w <= 0.0 || (p.flags & 64u) == 0u) return;
+	float a = ParticleAlpha (p), h = ParticleRadius (p);
+	if (a <= 0.002) return;
+	mat3 toView = transpose (mat3 (frame.viewToGlobal));
+	vec3 vp = toView * p.posAge.xyz;
+	if (vp.z + h < VOL_NEAR || vp.z - h > VOL_FAR) return;
+	vec3 c = VolCoord (vp);
+	// the particle's extent in froxels
+	vec3 ce = c * vec3 (VOL_SIZE);
+	float px = h * frame.proj[0][0] / max (vp.z, 0.1) * 0.5 * float (VOL_SIZE.x);
+	float py = h * abs (frame.proj[1][1]) / max (vp.z, 0.1) * 0.5 * float (VOL_SIZE.y);
+	float pz = (VolSlice (vp.z + h) - VolSlice (max (vp.z - h, VOL_NEAR))) * 0.5 * float (VOL_SIZE.z);
+	vec3 rad = vec3 (px, py, pz);
+	// (large particles are splatted at most 8 froxels across: the footprint
+	// kept round, its density raised to keep the projected opacity)
+	float big = max (max (rad.x, rad.y), rad.z);
+	if (big > 8.0) { a = min (a * big / 8.0, 4.0); rad *= 8.0 / big; }
+	ivec3 r = ivec3 (ceil (rad));
+	// (extinction: about the particle's opacity across its diameter)
+	float sigma = a * 1.4 / max (h, 0.1);
+	// light it scatters (as the sprites: sun with forward scattering, ambient)
+	float g = 0.35, cosT = dot (normalize (vp), frame.sunDir.xyz);
+	float phase = (1.0 - g * g) / pow (1.0 + g * g - 2.0 * g * cosT, 1.5);
+	vec3 col = p.light * (0.75 + 0.5 * phase) * 0.9 + frame.ambient.rgb;
+	if ((p.flags & 8u) != 0u)
+		col *= vec3 (float ((p.flags >> 8) & 0xffu), float ((p.flags >> 16) & 0xffu), float (p.flags >> 24)) / 255.0;
+	ivec3 c0 = ivec3 (floor (ce));
+	for (int z = -r.z; z <= r.z; z++)
+		for (int y = -r.y; y <= r.y; y++)
+			for (int x = -r.x; x <= r.x; x++) {
+				ivec3 q = c0 + ivec3 (x, y, z);
+				if (any (lessThan (q, ivec3 (0))) || any (greaterThanEqual (q, VOL_SIZE))) continue;
+				vec3 d = (vec3 (q) + 0.5 - ce) / max (rad, vec3 (0.5));
+				float d2 = dot (d, d);
+				if (d2 >= 1.0) continue;
+				float w = (1.0 - d2) * (1.0 - d2);
+				// (particles smaller than a froxel are spread over it)
+				float fill = clamp (rad.x * 2.0, 0.05, 1.0) * clamp (rad.y * 2.0, 0.05, 1.0) * clamp (rad.z * 2.0, 0.05, 1.0);
+				float s = sigma * w * fill;
+				uint u = uint (s * VOL_FIXED + 0.5);
+				if (u == 0u) continue;
+				imageAtomicAdd (volD, q, u);
+				imageAtomicAdd (volR, q, uint (s * col.r * VOL_FIXED + 0.5));
+				imageAtomicAdd (volG, q, uint (s * col.g * VOL_FIXED + 0.5));
+				imageAtomicAdd (volB, q, uint (s * col.b * VOL_FIXED + 0.5));
+			}
+}

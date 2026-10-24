@@ -17,6 +17,7 @@
 #include "GraphicsAPI.h"
 #include "VkContext.h"
 #include <cmath>
+#include <string>
 #include <random>
 #include <vector>
 
@@ -58,6 +59,7 @@ public:
 		bool tinted;          // smoke of a colour (albedo)
 		bool planar;          // the spread is along the surface with the normal -dir
 		bool ballistic;       // falls under gravity (dust)
+		bool volumetric;      // rendered in the smoke volume (large smoke)
 		bool cold;            // tinted, but does not rise (dust)
 		float albedo[3];
 	};
@@ -72,6 +74,11 @@ public:
 	void Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkDescriptorSet frameSet, VkDescriptorSet atmSet,
 		const VkDescriptorSet *rt, double simt);
 	void SetPrepass (VkImageView prepass);
+	/// Draw the smoke volume (scene with reactive mask, before the particles)
+	void DrawVolume (VkDescriptorSet frameSet);
+	/// rendering of volumetric particles (ORBITER_VK_SMOKE = sprites, volume, screen)
+	enum SmokeMode { SMOKE_SPRITES, SMOKE_VOLUME, SMOKE_SCREEN };
+	SmokeMode smokeMode = SMOKE_VOLUME;
 	/// Draw a stream's particles (scene with reactive mask)
 	void Draw (uint32_t first, uint32_t capacity, VkTexture *tex, bool emissive, VkDescriptorSet frameSet);
 
@@ -112,6 +119,11 @@ private:
 	VkPipelineLayout sortLayout = VK_NULL_HANDLE;
 	vkc::Buffer sortVals, sortKeys, blockRingBuf[vkc::FRAMES_IN_FLIGHT];
 	std::vector<uint32_t> blockRing; // first block of the ring of each block (free: the block itself)
+	vkc::Image volAccum[4], volOut, volColumns; // smoke volume
+	VkSampler volSampler = VK_NULL_HANDLE;
+	VkPipeline volSplatPipe = VK_NULL_HANDLE, volResolvePipe = VK_NULL_HANDLE, volMarchPipe = VK_NULL_HANDLE;
+	VkPipelineLayout volMarchLayout = VK_NULL_HANDLE;
+	float volNoise[4] = {};
 	VkPipeline drawBlend = VK_NULL_HANDLE, drawAdd = VK_NULL_HANDLE;
 	static constexpr uint32_t MAX_EMISSIONS = 4096;
 };

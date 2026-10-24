@@ -43,6 +43,7 @@ void main ()
 	if ((em.misc.y & 1u) != 0u) flags |= 4u;
 	if ((em.misc.y & 4u) != 0u) flags |= 8u | ((em.misc.y & 32u) != 0u ? 0u : 16u) | (em.misc.z << 8);
 	if ((em.misc.y & 16u) != 0u) flags |= 32u;
+	if ((em.misc.y & 64u) != 0u) flags |= 64u;
 	p.light = vec3 (1.0);
 	p.flags = flags;
 	particles[em.slab.x + (em.slab.z + i) % em.slab.y] = p;

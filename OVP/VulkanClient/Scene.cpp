@@ -1329,6 +1329,7 @@ void Scene::Render ()
 	vkc::Target rtMS{ reactiveMS.image, reactiveMS.view, REACTIVE_FORMAT, ctx->RenderExtent () };
 	ctx->BindSceneWithMask (rt, reactiveMS.image ? &rtMS : nullptr);
 	plumes->Draw (FrameSet (), camAtmSet, gc->TexMgr()->White());
+	particles->DrawVolume (FrameSet ());
 	for (auto *ps : gc->ParticleStreams()) ps->Render (this);
 	for (auto *vo : list) vo->DrawParticles ();
 }
