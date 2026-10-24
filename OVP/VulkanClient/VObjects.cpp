@@ -5,6 +5,7 @@
 #include "VkMesh.h"
 #include "VulkanClient.h"
 #include "Particles.h"
+#include "PlanetSurface.h"
 #include <map>
 #include <random>
 #include "VesselAPI.h"
@@ -332,12 +333,27 @@ VPlanet::VPlanet (OBJHANDLE h, Scene *s, bool star)
 			colour[0] = bc.r, colour[1] = bc.g, colour[2] = bc.b;
 			break;
 		}
+	if (!isStar) surface = PlanetSurface::Create (hObj, scene);
+}
+
+VPlanet::~VPlanet ()
+{
+}
+
+void VPlanet::Update ()
+{
+	VObject::Update ();
+	if (surface) surface->Update ();
 }
 
 void VPlanet::Render (RenderPass pass)
 {
 	if (pass != RenderPass::Opaque) return;
 	if (scene->PixelSize (size, camDist) < 0.5) return; // too small to see
+	if (surface) {
+		surface->Render ();
+		return;
+	}
 
 	// Until planetary surfaces are rendered from terrain tiles, a sphere stands
 	// in for the planet. Close to the surface it is drawn with the local surface

@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 class VkTexture {
 public:
@@ -42,6 +43,10 @@ public:
 	/// Create a texture from RGBA8 pixel data (sRGB)
 	VkTexture *CreateRGBA (uint32_t w, uint32_t h, const uint8_t *rgba);
 
+	/// Create a texture from a DDS file in memory. deferred: record the upload
+	/// into the current frame instead of waiting for it (texture streaming)
+	VkTexture *CreateFromDDS (const uint8_t *file, size_t size, bool deferred);
+
 	/// Create a render-target surface, cleared to opaque black
 	VkTexture *CreateSurface (uint32_t w, uint32_t h);
 
@@ -63,10 +68,20 @@ public:
 	VkTexture *White () const { return white; }
 
 private:
+	struct DDSImage {
+		VkFormat fmt = VK_FORMAT_UNDEFINED;
+		uint32_t w = 0, h = 0, nMip = 0;
+		std::vector<size_t> ofs;
+		const uint8_t *data = nullptr;
+		size_t size = 0;
+		bool genMips = false;
+		std::vector<uint8_t> converted;
+	};
+	bool ParseDDS (const uint8_t *file, size_t size, DDSImage &img) const;
 	VkTexture *LoadDDS (const std::string &path);
 	VkTexture *CreateImage (VkFormat fmt, uint32_t w, uint32_t h, uint32_t nMip,
 		const uint8_t *data, const std::vector<size_t> &mipOffsets, size_t dataSize, bool genMips,
-		const VkComponentMapping *swizzle = nullptr);
+		const VkComponentMapping *swizzle = nullptr, bool deferred = false);
 	VkDescriptorSet AllocSet (VkImageView view);
 	void Destroy (VkTexture *tex);
 

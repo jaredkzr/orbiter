@@ -282,79 +282,89 @@ VkTexture *TextureManager::LoadDDS (const std::string &path)
 		if (fread (file.data(), 1, fsize, f) != (size_t)fsize) file.clear();
 	}
 	fclose (f);
+	VkTexture *tex = CreateFromDDS (file.data(), file.size(), false);
+	if (!tex) oapiWriteLogV ("VulkanClient: could not load DDS file %s", path.c_str());
+	return tex;
+}
 
-	if (file.size() < 4 + sizeof(DDSHeader) || memcmp (file.data(), "DDS ", 4)) {
-		oapiWriteLogV ("VulkanClient: not a DDS file: %s", path.c_str());
-		return nullptr;
-	}
+bool TextureManager::ParseDDS (const uint8_t *file, size_t fileSize, DDSImage &img) const
+{
+	if (fileSize < 4 + sizeof(DDSHeader) || memcmp (file, "DDS ", 4)) return false;
 	DDSHeader hdr;
-	memcpy (&hdr, file.data() + 4, sizeof(hdr));
-	const uint8_t *data = file.data() + 4 + sizeof(hdr);
-	size_t dataSize = file.size() - 4 - sizeof(hdr);
+	memcpy (&hdr, file + 4, sizeof(hdr));
+	const uint8_t *data = file + 4 + sizeof(hdr);
+	size_t dataSize = fileSize - 4 - sizeof(hdr);
 	uint32_t w = hdr.width, h = hdr.height;
 	uint32_t nMip = std::max (1u, hdr.mipMapCount);
-	if (!w || !h) return nullptr;
+	if (!w || !h) return false;
+	img.w = w, img.h = h;
+	img.ofs.clear();
 
 	if (hdr.pf.flags & DDPF_FOURCC) {
-		VkFormat fmt;
 		uint32_t blockBytes;
 		switch (hdr.pf.fourCC) {
-		case FourCC('D','X','T','1'): fmt = VK_FORMAT_BC1_RGBA_SRGB_BLOCK; blockBytes = 8;  break;
+		case FourCC('D','X','T','1'): img.fmt = VK_FORMAT_BC1_RGBA_SRGB_BLOCK; blockBytes = 8;  break;
 		case FourCC('D','X','T','2'):
-		case FourCC('D','X','T','3'): fmt = VK_FORMAT_BC2_SRGB_BLOCK;      blockBytes = 16; break;
+		case FourCC('D','X','T','3'): img.fmt = VK_FORMAT_BC2_SRGB_BLOCK;      blockBytes = 16; break;
 		case FourCC('D','X','T','4'):
-		case FourCC('D','X','T','5'): fmt = VK_FORMAT_BC3_SRGB_BLOCK;      blockBytes = 16; break;
-		default:
-			oapiWriteLogV ("VulkanClient: unsupported DDS format in %s", path.c_str());
-			return nullptr;
+		case FourCC('D','X','T','5'): img.fmt = VK_FORMAT_BC3_SRGB_BLOCK;      blockBytes = 16; break;
+		default: return false;
 		}
-		if (!ctx->deviceFeatures.textureCompressionBC) {
-			oapiWriteLogV ("VulkanClient: device lacks BC texture support, cannot load %s", path.c_str());
-			return nullptr;
-		}
-		std::vector<size_t> ofs;
+		if (!ctx->deviceFeatures.textureCompressionBC) return false;
 		size_t pos = 0;
 		uint32_t mw = w, mh = h;
 		for (uint32_t i = 0; i < nMip; i++) {
 			size_t sz = (size_t)std::max (1u, (mw + 3) / 4) * std::max (1u, (mh + 3) / 4) * blockBytes;
-			if (pos + sz > dataSize) { nMip = i; break; }
-			ofs.push_back (pos);
+			if (pos + sz > dataSize) break;
+			img.ofs.push_back (pos);
 			pos += sz;
 			mw = std::max (1u, mw / 2), mh = std::max (1u, mh / 2);
 		}
-		if (!nMip) return nullptr;
-		return CreateImage (fmt, w, h, nMip, data, ofs, pos, false);
+		if (img.ofs.empty()) return false;
+		img.nMip = (uint32_t)img.ofs.size();
+		img.data = data;
+		img.size = pos;
+		img.genMips = false;
+		return true;
 	}
 
 	if (hdr.pf.flags & DDPF_RGB) {
 		// uncompressed: convert the top level to RGBA8 and generate the mip chain
 		uint32_t bpp = hdr.pf.rgbBitCount / 8;
-		if (bpp < 2 || bpp > 4 || dataSize < (size_t)w * h * bpp) {
-			oapiWriteLogV ("VulkanClient: unsupported DDS pixel format in %s", path.c_str());
-			return nullptr;
-		}
+		if (bpp < 2 || bpp > 4 || dataSize < (size_t)w * h * bpp) return false;
 		bool hasAlpha = (hdr.pf.flags & DDPF_ALPHAPIXELS) && hdr.pf.aMask;
-		std::vector<uint8_t> rgba ((size_t)w * h * 4);
+		img.converted.resize ((size_t)w * h * 4);
 		for (size_t i = 0; i < (size_t)w * h; i++) {
 			uint32_t px = 0;
 			memcpy (&px, data + i * bpp, bpp);
-			rgba[i*4+0] = Channel (px, hdr.pf.rMask);
-			rgba[i*4+1] = Channel (px, hdr.pf.gMask);
-			rgba[i*4+2] = Channel (px, hdr.pf.bMask);
-			rgba[i*4+3] = hasAlpha ? Channel (px, hdr.pf.aMask) : 255;
+			img.converted[i*4+0] = Channel (px, hdr.pf.rMask);
+			img.converted[i*4+1] = Channel (px, hdr.pf.gMask);
+			img.converted[i*4+2] = Channel (px, hdr.pf.bMask);
+			img.converted[i*4+3] = hasAlpha ? Channel (px, hdr.pf.aMask) : 255;
 		}
-		return CreateRGBA (w, h, rgba.data());
+		img.fmt = VK_FORMAT_R8G8B8A8_SRGB;
+		img.nMip = 1;
+		img.ofs.push_back (0);
+		img.data = img.converted.data();
+		img.size = img.converted.size();
+		img.genMips = true;
+		return true;
 	}
+	return false;
+}
 
-	oapiWriteLogV ("VulkanClient: unsupported DDS pixel format in %s", path.c_str());
-	return nullptr;
+VkTexture *TextureManager::CreateFromDDS (const uint8_t *file, size_t size, bool deferred)
+{
+	DDSImage img;
+	if (!ParseDDS (file, size, img)) return nullptr;
+	return CreateImage (img.fmt, img.w, img.h, img.nMip, img.data, img.ofs, img.size, img.genMips, nullptr, deferred);
 }
 
 // ======================================================================
 
 VkTexture *TextureManager::CreateImage (VkFormat fmt, uint32_t w, uint32_t h, uint32_t nMip,
 	const uint8_t *data, const std::vector<size_t> &mipOffsets, size_t dataSize, bool genMips,
-	const VkComponentMapping *swizzle)
+	const VkComponentMapping *swizzle, bool deferred)
 {
 	if (genMips && nMip == 1) {
 		uint32_t m = std::max (w, h);
@@ -381,11 +391,25 @@ VkTexture *TextureManager::CreateImage (VkFormat fmt, uint32_t w, uint32_t h, ui
 		return nullptr;
 	}
 
-	vkc::Buffer staging = ctx->CreateBuffer (dataSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
-	memcpy (staging.mapped, data, dataSize);
+	// The upload is either submitted and waited for immediately, or recorded
+	// into the current frame (streaming, without stalling the queue).
+	vkc::Buffer staging;
+	vkc::Context::Transient tr{};
+	VkBuffer stagingBuf;
+	VkDeviceSize stagingOfs = 0;
+	if (deferred) {
+		tr = ctx->AllocTransient (dataSize);
+		memcpy (tr.ptr, data, dataSize);
+		stagingBuf = tr.buffer;
+		stagingOfs = tr.offset;
+	} else {
+		staging = ctx->CreateBuffer (dataSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
+		memcpy (staging.mapped, data, dataSize);
+		stagingBuf = staging.buffer;
+	}
 	uint32_t nUpload = (uint32_t)mipOffsets.size();
 
-	ctx->ImmediateSubmit ([&](VkCommandBuffer cmd) {
+	auto record = [&](VkCommandBuffer cmd) {
 		auto barrier = [&](uint32_t mip, uint32_t count, VkImageLayout from, VkImageLayout to,
 			VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess, VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
 			VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -407,12 +431,12 @@ VkTexture *TextureManager::CreateImage (VkFormat fmt, uint32_t w, uint32_t h, ui
 		std::vector<VkBufferImageCopy> regions;
 		for (uint32_t i = 0; i < nUpload; i++) {
 			VkBufferImageCopy r{};
-			r.bufferOffset = mipOffsets[i];
+			r.bufferOffset = stagingOfs + mipOffsets[i];
 			r.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, i, 0, 1 };
 			r.imageExtent = { std::max (1u, w >> i), std::max (1u, h >> i), 1 };
 			regions.push_back (r);
 		}
-		vkCmdCopyBufferToImage (cmd, staging.buffer, tex->img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		vkCmdCopyBufferToImage (cmd, stagingBuf, tex->img.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 			(uint32_t)regions.size(), regions.data());
 
 		// generate remaining mip levels by successive blits
@@ -432,8 +456,15 @@ VkTexture *TextureManager::CreateImage (VkFormat fmt, uint32_t w, uint32_t h, ui
 		uint32_t first = (nUpload < nMip ? nMip - 1 : 0);
 		barrier (first, nMip - first, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 			VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-	});
-	ctx->DestroyBuffer (staging);
+	};
+	if (deferred) {
+		VkCommandBuffer cmd = ctx->Rec ();
+		ctx->EndTarget (); // transfers are recorded outside rendering scopes
+		record (cmd);
+	} else {
+		ctx->ImmediateSubmit (record);
+		ctx->DestroyBuffer (staging);
+	}
 
 	VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
 	vci.image = tex->img.image;

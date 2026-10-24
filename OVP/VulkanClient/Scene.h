@@ -19,6 +19,7 @@ class VObject;
 class VkMesh;
 class StarSphere;
 class VkTexture;
+class TileRenderer;
 
 /// Per-draw push constants of the mesh pipeline (must match mesh.vert/frag)
 struct MeshPushConstants {
@@ -72,6 +73,10 @@ public:
 	/// draw view-space billboard triangles (particles, exhaust flames)
 	void DrawBillboards (VkTexture *tex, bool additive, const struct PVtx *v, size_t n);
 	VkTexture *DefaultExhaustTex () const { return exhaustTex; }
+	TileRenderer *Tiles () { return tiles.get(); }
+	VkDescriptorSet FrameSet () const { return frameSet[ctx->FrameIndex()]; }
+	/// screen pixels per radian at the view centre
+	double PixPerRad () const { return 0.5 * viewH / tanAperture; }
 
 private:
 	void CreatePipelines ();
@@ -98,6 +103,7 @@ private:
 	VkPipeline particleAdditive = VK_NULL_HANDLE;
 	VkPipeline particleBlend = VK_NULL_HANDLE;
 	VkTexture *exhaustTex = nullptr;
+	std::unique_ptr<TileRenderer> tiles;
 
 	// sphere geometry for planets
 	vkc::Buffer sphereVtx, sphereIdx;

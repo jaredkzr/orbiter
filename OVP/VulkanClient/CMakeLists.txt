@@ -63,6 +63,8 @@ set(SHADER_SRC
 	Shaders/draw2d.frag
 	Shaders/particle.vert
 	Shaders/particle.frag
+	Shaders/tile.vert
+	Shaders/tile.frag
 )
 set(SHADER_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 set(SHADER_HEADERS)
@@ -96,6 +98,8 @@ add_library(VulkanClient SHARED
 	Sketchpad.cpp
 	Fonts.cpp
 	Particles.cpp
+	TileArchive.cpp
+	PlanetSurface.cpp
 	Input.cpp
 	ImageIO.cpp
 	Vma.cpp

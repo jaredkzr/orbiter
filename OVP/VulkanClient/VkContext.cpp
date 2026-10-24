@@ -127,6 +127,7 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation)
 	VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
 	f13.dynamicRendering = VK_TRUE;
 	f13.synchronization2 = VK_TRUE;
+	f13.shaderDemoteToHelperInvocation = VK_TRUE; // discard in the 2D shader
 	VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
 	f2.pNext = &f13;
 	f2.features.samplerAnisotropy = deviceFeatures.samplerAnisotropy;

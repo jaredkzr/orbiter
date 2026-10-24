@@ -8,6 +8,7 @@
 #include "VulkanClient.h"
 #include "StarSphere.h"
 #include "Particles.h"
+#include "PlanetSurface.h"
 #include <algorithm>
 #include <cstring>
 
@@ -103,6 +104,8 @@ bool Scene::Init ()
 
 	CreatePipelines ();
 	BuildSphere ();
+	tiles = std::make_unique<TileRenderer>();
+	tiles->Init (ctx, gc->TexMgr(), frameLayout);
 	exhaustTex = gc->TexMgr()->Load ("Exhaust.dds");
 
 	stars = std::make_unique<StarSphere> (gc);
@@ -122,6 +125,8 @@ void Scene::Shutdown ()
 	vkDeviceWaitIdle (ctx->device);
 	for (auto &it : visuals) gc->UnregisterVisObject (it.first);
 	visuals.clear();
+	if (tiles) tiles->Shutdown ();
+	tiles.reset();
 	if (stars) stars->Shutdown ();
 	stars.reset();
 	ctx->DestroyBuffer (sphereVtx);

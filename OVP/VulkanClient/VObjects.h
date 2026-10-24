@@ -72,14 +72,19 @@ private:
 
 // -----------------------------------------------------------------------
 
+class PlanetSurface;
+
 class VPlanet : public VObject {
 public:
 	VPlanet (OBJHANDLE hObj, Scene *scene, bool isStar);
+	~VPlanet ();
+	void Update () override;
 	void Render (RenderPass pass) override;
 
 private:
 	float colour[4];
 	bool isStar;
+	std::unique_ptr<PlanetSurface> surface; // tiled surface, if available
 };
 
 #endif // !__VOBJECTS_H
