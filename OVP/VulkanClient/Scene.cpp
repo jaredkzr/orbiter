@@ -783,6 +783,8 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 		pc.specular[0] = m.specular.r, pc.specular[1] = m.specular.g, pc.specular[2] = m.specular.b;
 		pc.specular[3] = m.power;
 		pc.light[0] = pc.light[1] = pc.light[2] = objLight;
+		if (transparent && !ovr)
+			for (int k = 0; k < 3; k++) pc.emissive[k] += objGlassGlow[k];
 		if (ovr) { // self-illuminated display
 			pc.diffuse[0] = pc.diffuse[1] = pc.diffuse[2] = pc.diffuse[3] = 1.0f;
 			pc.emissive[3] = 1.0f;

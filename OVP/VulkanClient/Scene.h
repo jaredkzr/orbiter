@@ -86,6 +86,8 @@ public:
 	/// may eclipse it); also sets the sunlight used by subsequent DrawMesh calls
 	double Sunlight (const VECTOR3 &gpos);
 	void SetObjectLight (double f) { objLight = (float)f; }
+	/// emission added to transparent (glass) groups of subsequent DrawMesh calls
+	void SetObjectGlassGlow (const float g[3]) { for (int i = 0; i < 3; i++) objGlassGlow[i] = g[i]; }
 	/// view-space position of a global point
 	VECTOR3 ViewPos (const VECTOR3 &gpos) const { return view.TransformPoint (gpos - camPos); }
 	/// view-space direction of a global direction
@@ -153,6 +155,7 @@ private:
 	std::map<OBJHANDLE, std::unique_ptr<VObject>> visuals;
 	OBJHANDLE hSun = nullptr;
 	float objLight = 1.0f;
+	float objGlassGlow[3] = { 0, 0, 0 };
 };
 
 #endif // !__SCENE_H

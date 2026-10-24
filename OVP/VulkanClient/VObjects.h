@@ -76,6 +76,7 @@ private:
 	std::vector<MeshRec> meshes;
 	// default (unanimated) positions of animated vertex lists, keyed by the list pointer
 	std::map<VECTOR3*, std::vector<VECTOR3>> vtxListDefaults;
+	float glassGlow[3] = { 0, 0, 0 }; // emission of transparent groups from interior lights
 };
 
 // -----------------------------------------------------------------------

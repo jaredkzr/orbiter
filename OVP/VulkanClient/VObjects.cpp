@@ -224,6 +224,7 @@ void VVessel::Render (RenderPass pass)
 	bool vc = internal && oapiCockpitMode() == COCKPIT_VIRTUAL;
 	Mat4 mv = scene->ModelView (gpos, grot);
 	scene->Sunlight (gpos);
+	scene->SetObjectGlassGlow (glassGlow);
 
 	// virtual cockpit displays: MFD and HUD surfaces replace the textures of the registered groups
 	std::vector<std::vector<GroupTexOverride>> ovr;
@@ -255,6 +256,8 @@ void VVessel::Render (RenderPass pass)
 		scene->DrawMesh (rec.mesh.get(), meshMv, pass, &rec.grpTransform, &rec.grpVisible,
 			(m < ovr.size() && !ovr[m].empty()) ? &ovr[m] : nullptr);
 	}
+	static const float noGlow[3] = { 0, 0, 0 };
+	scene->SetObjectGlassGlow (noGlow);
 	if (pass == RenderPass::Transparent) RenderExhaust ();
 }
 
@@ -271,6 +274,11 @@ namespace {
 	// beacons as light sources: half intensity at this many beacon radii
 	constexpr double BEACON_LIGHT_REACH = 8.0;
 	constexpr double BEACON_LIGHT_INTENSITY = 0.8;
+	// interior lights seen from outside: intensity factor, range factor, and
+	// the emission of the vessel's glass per unit of light
+	constexpr double INTERIOR_SPILL = 0.5;
+	constexpr double INTERIOR_SPILL_REACH = 4.0;
+	constexpr float INTERIOR_GLASS_GLOW = 0.6f;
 
 	bool BeaconLit (const BEACONLIGHTSPEC *bs, double simt)
 	{
@@ -281,15 +289,20 @@ namespace {
 
 void VVessel::CollectLights (std::vector<LightSource> &lights)
 {
+	glassGlow[0] = glassGlow[1] = glassGlow[2] = 0.0f;
 	bool internal = oapiCameraInternal() && oapiCameraTarget() == hObj;
 	VECTOR3 cam = scene->CameraPos();
 	for (DWORD i = 0; i < vessel->LightEmitterCount(); i++) {
 		const LightEmitter *le = vessel->GetLightEmitter (i);
 		if (!le || !le->IsActive()) continue;
 		int vis = le->GetVisibility();
-		if (!(vis & (internal ? LightEmitter::VIS_COCKPIT : LightEmitter::VIS_EXTERNAL))) continue;
+		// Interior lights seen from outside spill through the windows: a weaker
+		// light reaching further, and a glow of the vessel's glass.
+		bool spill = !internal && !(vis & LightEmitter::VIS_EXTERNAL);
+		if (internal && !(vis & LightEmitter::VIS_COCKPIT)) continue;
 		double in = le->GetIntensity();
 		if (in <= 0.0) continue;
+		if (spill) in *= INTERIOR_SPILL;
 		LightSource l{};
 		l.pos = gpos + mul (grot, le->GetPosition());
 		if (le->GetType() == LightEmitter::LT_POINT) {
@@ -307,9 +320,16 @@ void VVessel::CollectLights (std::vector<LightSource> &lights)
 		} else {
 			continue;
 		}
+		if (spill) {
+			l.range *= INTERIOR_SPILL_REACH;
+			l.att[1] /= INTERIOR_SPILL_REACH;
+			l.att[2] /= INTERIOR_SPILL_REACH * INTERIOR_SPILL_REACH;
+		}
 		if (length (l.pos - cam) > l.range + 10e3) continue; // nothing in view can be lit
 		const COLOUR4 &c = le->GetDiffuseColour();
 		l.col[0] = (float)(c.r * in), l.col[1] = (float)(c.g * in), l.col[2] = (float)(c.b * in);
+		if (spill)
+			for (int k = 0; k < 3; k++) glassGlow[k] += l.col[k] * INTERIOR_GLASS_GLOW;
 		lights.push_back (l);
 	}
 
