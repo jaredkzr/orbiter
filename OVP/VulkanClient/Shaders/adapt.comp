@@ -1,0 +1,68 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Meter the scene from the luminance histogram and adapt the exposure.
+// The metered luminance is the mean log luminance of the samples between
+// two percentiles, which leaves out the darkest parts and the sun's disc.
+// Near-black samples (empty space, stars) are left out altogether as long
+// as enough of the image is lit, so that a sunlit vessel or planet in front
+// of space is metered by itself.
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "exposure.glsl"
+
+layout(local_size_x = 1) in;
+
+layout(set = 0, binding = 1) buffer Histogram { uint bins[HIST_BINS]; } hist;
+layout(set = 0, binding = 2) buffer State { ExposureState s; } state;
+
+layout(push_constant) uniform Params {
+	float dt;          // time since the last frame [s]
+	float key;         // metered luminance mapped to this value
+	float minLogExp;   // exposure limits (log2)
+	float maxLogExp;
+	float lowPct;      // metering window (fractions of the weighted samples)
+	float highPct;
+	float speedUp;     // adaptation rates [1/s] towards brighter and darker scenes
+	float speedDown;
+	float strength;    // fraction of the luminance difference compensated
+	float darkLogLum;  // samples below this (log2) count as black
+	float minLitFrac;  // lit fraction of the image needed to ignore the black
+} pc;
+
+void main ()
+{
+	float total = 0.0, dark = 0.0;
+	int firstLit = int (ceil ((pc.darkLogLum - LOG_LUM_MIN) / LOG_LUM_RANGE * float (HIST_BINS - 2) + 1.0));
+	for (int i = 0; i < HIST_BINS; i++) {
+		float n = float (hist.bins[i]);
+		total += n;
+		if (i < firstLit) dark += n;
+	}
+	if (total <= 0.0) return;
+	int first = 0;
+	if (total - dark >= pc.minLitFrac * total) {
+		first = firstLit;
+		total -= dark;
+	}
+
+	float lo = total * pc.lowPct, hi = total * pc.highPct;
+	float acc = 0.0, sum = 0.0, wsum = 0.0;
+	for (int i = first; i < HIST_BINS; i++) {
+		float n = float (hist.bins[i]);
+		// part of this bin inside the window [lo, hi]
+		float w = max (min (acc + n, hi) - max (acc, lo), 0.0);
+		float logLum = i == 0 ? LOG_LUM_MIN : LOG_LUM_MIN + (float (i) - 0.5) / float (HIST_BINS - 2) * LOG_LUM_RANGE;
+		sum += w * logLum;
+		wsum += w;
+		acc += n;
+	}
+	float avg = wsum > 0.0 ? sum / wsum : LOG_LUM_MIN;
+	float target = clamp ((log2 (pc.key) - avg) * pc.strength, pc.minLogExp, pc.maxLogExp);
+
+	float cur = state.s.logExposure;
+	float rate = target < cur ? pc.speedUp : pc.speedDown; // scene brighter: exposure falls
+	state.s.logExposure = cur + (target - cur) * (1.0 - exp (-pc.dt * rate));
+	state.s.avgLogLum = avg;
+}

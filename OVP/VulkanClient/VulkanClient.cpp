@@ -14,6 +14,7 @@
 #include "Fonts.h"
 #include "Particles.h"
 #include "PostFX.h"
+#include <cmath>
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_vulkan.h"
@@ -205,6 +206,9 @@ bool VulkanClient::clbkDisplayFrame ()
 		if (!autoScreenshot.empty() && ++frameCount == autoScreenshotFrame) {
 			CaptureBackbuffer (autoScreenshot);
 			oapiWriteLogV ("VulkanClient: screenshot saved to %s", autoScreenshot.c_str());
+			float le, ll;
+			postfx->ExposureState (le, ll);
+			oapiWriteLogV ("VulkanClient: exposure %.3f (metered luminance %.4f)", std::exp2 (le), std::exp2 (ll));
 			// ORBITER_VK_SCREENSHOT_EXIT=1: end the session once the screenshot is taken
 			const char *ex = getenv ("ORBITER_VK_SCREENSHOT_EXIT");
 			if (ex && *ex && *ex != '0') oapiInputCloseRequest ();

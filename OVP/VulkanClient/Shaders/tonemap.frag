@@ -9,12 +9,15 @@
 
 layout(set = 0, binding = 0) uniform sampler2D scene;
 layout(set = 1, binding = 0) uniform sampler2D bloom;
+layout(set = 2, binding = 0) readonly buffer Exposure { float logExposure; float avgLogLum; } autoExp;
 
 layout(push_constant) uniform Params {
 	float exposure;
 	float bloomStrength;
 	float flareStrength;
 	float aspect;     // width / height
+	float autoExposure; // 1: scale by the adapted exposure
+	float pad0, pad1, pad2;
 } pc;
 
 layout(location = 0) in vec2 vUV;
@@ -67,5 +70,6 @@ void main ()
 {
 	vec3 c = texture (scene, vUV).rgb + texture (bloom, vUV).rgb * pc.bloomStrength;
 	if (pc.flareStrength > 0.0) c += Flare (vUV) * pc.flareStrength;
-	outColor = vec4 (Curve (max (c * pc.exposure, vec3 (0.0))), 1.0);
+	float exposure = pc.exposure * (pc.autoExposure > 0.5 ? exp2 (autoExp.logExposure) : 1.0);
+	outColor = vec4 (Curve (max (c * exposure, vec3 (0.0))), 1.0);
 }

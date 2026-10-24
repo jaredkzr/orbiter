@@ -53,3 +53,8 @@ Known gaps and limitations, to be addressed later.
   scene colour taken mid-frame, or a distortion buffer depth-tested against
   the multisampled depth). Deferred as a subtle effect for its cost.
 - Lens flare ghosts are discs from the bloom image, not aperture-shaped.
+
+## Exposure
+- Auto-exposure (ORBITER_VK_AUTOEXPOSURE=0 disables it): the bloom and
+  lens-flare thresholds are in scene units, not relative to the adapted
+  exposure, so at night slightly dimmer lights bloom than by day.

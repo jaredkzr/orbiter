@@ -1,0 +1,38 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Luminance histogram of the HDR scene image (every second pixel), with
+// samples near the image centre weighted more
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "exposure.glsl"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D scene;
+layout(set = 0, binding = 1) buffer Histogram { uint bins[HIST_BINS]; } hist;
+
+shared uint localBins[HIST_BINS];
+
+void main ()
+{
+	uint li = gl_LocalInvocationIndex;
+	localBins[li] = 0;
+	barrier ();
+
+	ivec2 size = textureSize (scene, 0);
+	ivec2 p = ivec2 (gl_GlobalInvocationID.xy) * 2;
+	if (p.x < size.x && p.y < size.y) {
+		vec3 c = texelFetch (scene, p, 0).rgb;
+		float lum = dot (c, vec3 (0.2126, 0.7152, 0.0722));
+		uint bin = 0;
+		if (lum > exp2 (LOG_LUM_MIN))
+			bin = uint (clamp ((log2 (lum) - LOG_LUM_MIN) / LOG_LUM_RANGE * float (HIST_BINS - 2) + 1.0, 1.0, float (HIST_BINS - 1)));
+		vec2 d = (vec2 (p) / vec2 (size) - 0.5) * 2.0;
+		uint w = 1u + uint (3.0 * max (1.0 - dot (d, d), 0.0)); // 1 at the edges, 4 at the centre
+		atomicAdd (localBins[bin], w);
+	}
+	barrier ();
+	if (localBins[li] != 0) atomicAdd (hist.bins[li], localBins[li]);
+}

@@ -72,6 +72,8 @@ set(SHADER_SRC
 	Shaders/bloom_down.frag
 	Shaders/bloom_up.frag
 	Shaders/tonemap.frag
+	Shaders/histogram.comp
+	Shaders/adapt.comp
 )
 set(SHADER_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 set(SHADER_HEADERS)
@@ -85,7 +87,7 @@ foreach(shader ${SHADER_SRC})
 		COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADER_OUT_DIR}
 		COMMAND ${GLSLANG_CMD} -V --target-env vulkan1.3 -o ${spv} ${CMAKE_CURRENT_SOURCE_DIR}/${shader}
 		COMMAND ${CMAKE_COMMAND} -DINPUT=${spv} -DOUTPUT=${hdr} -DSYMBOL=spv_${symbol} -P ${CMAKE_CURRENT_SOURCE_DIR}/EmbedFile.cmake
-		DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${shader} ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/atmosphere.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadow.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/frame.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/lights.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/brdf.glsl ${CMAKE_CURRENT_SOURCE_DIR}/EmbedFile.cmake ${GLSLANG_DEP}
+		DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${shader} ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/atmosphere.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadow.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/frame.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/lights.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/brdf.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/exposure.glsl ${CMAKE_CURRENT_SOURCE_DIR}/EmbedFile.cmake ${GLSLANG_DEP}
 		COMMENT "Compiling shader ${name}"
 	)
 	list(APPEND SHADER_HEADERS ${hdr})
