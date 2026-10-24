@@ -5,6 +5,7 @@
 #include "Scene.h"
 #include "VkTexture.h"
 #include "VulkanClient.h"
+#include "Atmosphere.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -172,13 +173,13 @@ void TileLoader::Process (const Request &req, Result &res)
 // ======================================================================
 // TileRenderer
 
-bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSetLayout frameLayout)
+bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout)
 {
 	ctx = c;
-	VkDescriptorSetLayout sets[3] = { frameLayout, texmgr->Layout(), texmgr->Layout() };
+	VkDescriptorSetLayout sets[4] = { frameLayout, texmgr->Layout(), texmgr->Layout(), atmLayout };
 	VkPushConstantRange pcr{ VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(TilePushConstants) };
 	VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-	plci.setLayoutCount = 3;
+	plci.setLayoutCount = 4;
 	plci.pSetLayouts = sets;
 	plci.pushConstantRangeCount = 1;
 	plci.pPushConstantRanges = &pcr;
@@ -554,7 +555,7 @@ void PlanetSurface::Select (Node *n)
 	}
 }
 
-void PlanetSurface::Render ()
+void PlanetSurface::Render (Atmosphere *atm)
 {
 	frame++;
 	oapiGetGlobalPos (hPlanet, &ppos);
@@ -594,6 +595,8 @@ void PlanetSurface::Render ()
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr->Pipeline());
 	VkDescriptorSet fs = scene->FrameSet ();
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr->Layout(), 0, 1, &fs, 0, nullptr);
+	VkDescriptorSet as = atm->Set ();
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr->Layout(), 3, 1, &as, 0, nullptr);
 	vkCmdBindIndexBuffer (cmd, tr->IndexBuffer(), 0, VK_INDEX_TYPE_UINT16);
 	for (Node *n : drawList) DrawNode (n);
 }

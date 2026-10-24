@@ -9,6 +9,7 @@
 #include "StarSphere.h"
 #include "Particles.h"
 #include "PlanetSurface.h"
+#include "Atmosphere.h"
 #include <algorithm>
 #include <cstring>
 
@@ -104,8 +105,10 @@ bool Scene::Init ()
 
 	CreatePipelines ();
 	BuildSphere ();
+	atm = std::make_unique<AtmosphereRenderer>();
+	atm->Init (ctx);
 	tiles = std::make_unique<TileRenderer>();
-	tiles->Init (ctx, gc->TexMgr(), frameLayout);
+	tiles->Init (ctx, gc->TexMgr(), frameLayout, atm->SetLayout());
 	exhaustTex = gc->TexMgr()->Load ("Exhaust.dds");
 
 	stars = std::make_unique<StarSphere> (gc);
@@ -127,6 +130,8 @@ void Scene::Shutdown ()
 	visuals.clear();
 	if (tiles) tiles->Shutdown ();
 	tiles.reset();
+	if (atm) atm->Shutdown ();
+	atm.reset();
 	if (stars) stars->Shutdown ();
 	stars.reset();
 	ctx->DestroyBuffer (sphereVtx);
@@ -577,11 +582,14 @@ void Scene::Render ()
 	MulMat4f (proj, viewf, vp);
 	stars->Render (cmd, starPipeline, starLayout, vp);
 
-	// scene geometry
-	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &frameSet[fi], 0, nullptr);
-
 	std::vector<VObject*> list;
 	for (auto &it : visuals) list.push_back (it.second.get());
+
+	// skies of planetary atmospheres, over the stars
+	for (auto *vo : list) vo->RenderSky ();
+
+	// scene geometry
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &frameSet[fi], 0, nullptr);
 	for (auto *vo : list) vo->Render (RenderPass::Opaque);
 
 	std::sort (list.begin(), list.end(), [](VObject *a, VObject *b) { return a->CamDist() > b->CamDist(); });

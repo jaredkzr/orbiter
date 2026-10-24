@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #version 450
+#extension GL_GOOGLE_include_directive : require
 
 layout(set = 0, binding = 0) uniform Frame {
 	mat4 proj;
@@ -26,6 +27,9 @@ layout(location = 2) in vec2 vUV;
 
 layout(location = 0) out vec4 outColor;
 
+#define ATM_SET 3
+#include "atmosphere.glsl"
+
 void main()
 {
 	vec3 N = normalize(vNormalView);
@@ -34,7 +38,15 @@ void main()
 	// clamp to the texel centres at the tile edges (the sampler wraps around)
 	vec2 hs = 0.5 / vec2(textureSize(surfTex, 0));
 	vec3 base = texture(surfTex, clamp(vUV * tile.surfUV.zw + tile.surfUV.xy, hs, 1.0 - hs)).rgb;
-	vec3 col = base * (frame.ambient.rgb + frame.sunColor.rgb * max(ndl, 0.0));
+	bool hasAtm = atm.misc.x > 0.5;
+	vec3 sunT = vec3(1.0);
+	vec3 pPlanet = vec3(0.0), dPlanet = vec3(0.0);
+	if (hasAtm) {
+		pPlanet = mat3(atm.viewToPlanet) * vPosView + atm.camPos.xyz;
+		dPlanet = normalize(mat3(atm.viewToPlanet) * vPosView);
+		sunT = SunTransmittance(pPlanet);
+	}
+	vec3 col = base * (frame.ambient.rgb + frame.sunColor.rgb * sunT * max(ndl, 0.0));
 
 	if (tile.params.x > 0.5) {
 		vec2 hm = 0.5 / vec2(textureSize(maskTex, 0));
@@ -46,8 +58,13 @@ void main()
 		if (m.a < 0.5 && ndl > 0.0) {
 			vec3 V = normalize(-vPosView);
 			vec3 H = normalize(L + V);
-			col += frame.sunColor.rgb * 0.35 * pow(max(dot(N, H), 0.0), 60.0);
+			col += frame.sunColor.rgb * sunT * 0.35 * pow(max(dot(N, H), 0.0), 60.0);
 		}
+	}
+	if (hasAtm) { // aerial perspective
+		vec3 T;
+		vec3 L = Inscatter(dPlanet, length(vPosView), T);
+		col = col * T + AtmTonemap(L);
 	}
 	outColor = vec4(col, 1.0);
 }

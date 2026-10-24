@@ -24,6 +24,7 @@ public:
 	OBJHANDLE Handle () const { return hObj; }
 	virtual void Update ();
 	virtual void Render (RenderPass pass) = 0;
+	virtual void RenderSky () {}
 	virtual int VisEvent (DWORD msg, DWORD_PTR context) { return 0; }
 	virtual MESHHANDLE GetMesh (UINT idx) { return NULL; }
 
@@ -73,6 +74,7 @@ private:
 // -----------------------------------------------------------------------
 
 class PlanetSurface;
+class Atmosphere;
 
 class VPlanet : public VObject {
 public:
@@ -80,10 +82,12 @@ public:
 	~VPlanet ();
 	void Update () override;
 	void Render (RenderPass pass) override;
+	void RenderSky () override;
 
 private:
 	float colour[4];
 	bool isStar;
+	std::unique_ptr<Atmosphere> atmosphere;
 	std::unique_ptr<PlanetSurface> surface; // tiled surface, if available
 };
 

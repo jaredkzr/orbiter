@@ -80,7 +80,7 @@ class TileRenderer {
 public:
 	static constexpr int GRID = 32; // quads per tile edge
 
-	bool Init (vkc::Context *ctx, TextureManager *texmgr, VkDescriptorSetLayout frameLayout);
+	bool Init (vkc::Context *ctx, TextureManager *texmgr, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout);
 	void Shutdown ();
 	TileLoader &Loader () { return *loader; }
 	VkPipeline Pipeline () const { return pipeline; }
@@ -105,7 +105,7 @@ public:
 
 	/// Accept loaded tiles (call before rendering)
 	void Update ();
-	void Render ();
+	void Render (class Atmosphere *atm);
 
 private:
 	struct Node {

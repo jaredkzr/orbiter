@@ -20,6 +20,7 @@ class VkMesh;
 class StarSphere;
 class VkTexture;
 class TileRenderer;
+class AtmosphereRenderer;
 
 /// Per-draw push constants of the mesh pipeline (must match mesh.vert/frag)
 struct MeshPushConstants {
@@ -74,6 +75,11 @@ public:
 	void DrawBillboards (VkTexture *tex, bool additive, const struct PVtx *v, size_t n);
 	VkTexture *DefaultExhaustTex () const { return exhaustTex; }
 	TileRenderer *Tiles () { return tiles.get(); }
+	AtmosphereRenderer *Atm () { return atm.get(); }
+	const MATRIX3 &CamRot () const { return camRot; }
+	double ProjX () const { return proj[0]; }   ///< horizontal focal factor fx
+	double ProjY () const { return -proj[5]; }  ///< vertical focal factor fy
+	OBJHANDLE Sun () const { return hSun; }
 	VkDescriptorSet FrameSet () const { return frameSet[ctx->FrameIndex()]; }
 	/// screen pixels per radian at the view centre
 	double PixPerRad () const { return 0.5 * viewH / tanAperture; }
@@ -104,6 +110,7 @@ private:
 	VkPipeline particleBlend = VK_NULL_HANDLE;
 	VkTexture *exhaustTex = nullptr;
 	std::unique_ptr<TileRenderer> tiles;
+	std::unique_ptr<AtmosphereRenderer> atm;
 
 	// sphere geometry for planets
 	vkc::Buffer sphereVtx, sphereIdx;

@@ -6,6 +6,7 @@
 #include "VulkanClient.h"
 #include "Particles.h"
 #include "PlanetSurface.h"
+#include "Atmosphere.h"
 #include <map>
 #include <random>
 #include "VesselAPI.h"
@@ -333,7 +334,10 @@ VPlanet::VPlanet (OBJHANDLE h, Scene *s, bool star)
 			colour[0] = bc.r, colour[1] = bc.g, colour[2] = bc.b;
 			break;
 		}
-	if (!isStar) surface = PlanetSurface::Create (hObj, scene);
+	if (!isStar) {
+		atmosphere = std::make_unique<Atmosphere> (hObj, scene);
+		surface = PlanetSurface::Create (hObj, scene);
+	}
 }
 
 VPlanet::~VPlanet ()
@@ -346,12 +350,19 @@ void VPlanet::Update ()
 	if (surface) surface->Update ();
 }
 
+void VPlanet::RenderSky ()
+{
+	if (!atmosphere) return;
+	atmosphere->Update ();
+	atmosphere->RenderSky ();
+}
+
 void VPlanet::Render (RenderPass pass)
 {
 	if (pass != RenderPass::Opaque) return;
 	if (scene->PixelSize (size, camDist) < 0.5) return; // too small to see
 	if (surface) {
-		surface->Render ();
+		surface->Render (atmosphere.get());
 		return;
 	}
 
