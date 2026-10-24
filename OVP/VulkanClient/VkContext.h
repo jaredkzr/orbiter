@@ -51,8 +51,14 @@ namespace vkc {
 
 	class Context {
 	public:
-		bool Init (SDL_Window *window, bool enableValidation);
+		/// offscreen: render into images instead of a window swapchain
+		/// (no presentation; the size is set with SetOffscreenExtent)
+		bool Init (SDL_Window *window, bool enableValidation, bool offscreen = false);
+		void SetOffscreenExtent (uint32_t w, uint32_t h) { offscreenExtent = { w, h }; }
+		bool Offscreen () const { return offscreen; }
 		void Shutdown ();
+		/// Wait for the GPU and run all pending deferred destructions
+		void Drain ();
 
 		// Frame control. All GPU work is recorded into the command buffer of
 		// the current frame slot, which is opened on demand (Rec), so that
@@ -149,6 +155,9 @@ namespace vkc {
 		enum { BB_NONE = 0, BB_COLOR = 1, BB_DEPTH = 2 };
 		int bbState = BB_NONE;   // backbuffer attachments initialised in this frame
 		bool recording = false;
+		bool offscreen = false;
+		VkExtent2D offscreenExtent{ 1280, 800 };
+		std::vector<Image> offImages;
 
 		SDL_Window *window = nullptr;
 		VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;

@@ -102,9 +102,10 @@ bool TextureManager::Init (vkc::Context *c)
 void TextureManager::Shutdown ()
 {
 	if (!ctx) return;
-	for (auto &it : cache) Destroy (it.second);
+	// textures still referenced elsewhere (e.g. by the core at a fast exit)
+	// are destroyed as well; later releases are ignored
+	while (!live.empty()) Destroy (*live.begin());
 	cache.clear();
-	if (white) Destroy (white);
 	white = nullptr;
 	vkDestroySampler (ctx->device, sampler, nullptr);
 	vkDestroyDescriptorPool (ctx->device, pool, nullptr);
@@ -149,7 +150,8 @@ void TextureManager::Release (VkTexture *tex)
 	if (!tex->name.empty()) cache.erase (tex->name);
 	vkc::Context *c = ctx;
 	VkDescriptorPool p = pool;
-	c->DeferDestroy ([c, p, tex]() {
+	c->DeferDestroy ([this, c, p, tex]() {
+		live.erase (tex);
 		if (tex->set) vkFreeDescriptorSets (c->device, p, 1, &tex->set);
 		c->DestroyImage (tex->img);
 		delete tex;
@@ -158,6 +160,7 @@ void TextureManager::Release (VkTexture *tex)
 
 void TextureManager::Destroy (VkTexture *tex)
 {
+	live.erase (tex);
 	if (tex->set) vkFreeDescriptorSets (ctx->device, pool, 1, &tex->set);
 	ctx->DestroyImage (tex->img);
 	delete tex;
@@ -212,6 +215,7 @@ VkTexture *TextureManager::CreateSurface (uint32_t w, uint32_t h)
 	tex->width = w, tex->height = h;
 	tex->format = VK_FORMAT_R8G8B8A8_SRGB;
 	tex->renderTarget = true;
+	live.insert (tex);
 	VkImage image = tex->img.image;
 	ctx->ImmediateSubmit ([image](VkCommandBuffer cmd) {
 		vkc::ImageBarrier (cmd, image, VK_IMAGE_ASPECT_COLOR_BIT,
@@ -374,6 +378,7 @@ VkTexture *TextureManager::CreateImage (VkFormat fmt, uint32_t w, uint32_t h, ui
 	VkTexture *tex = new VkTexture;
 	tex->width = w, tex->height = h;
 	tex->format = fmt;
+	live.insert (tex);
 
 	VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 	ici.imageType = VK_IMAGE_TYPE_2D;
@@ -387,6 +392,7 @@ VkTexture *TextureManager::CreateImage (VkFormat fmt, uint32_t w, uint32_t h, ui
 	VmaAllocationCreateInfo aci{};
 	aci.usage = VMA_MEMORY_USAGE_AUTO;
 	if (vmaCreateImage (ctx->allocator, &ici, &aci, &tex->img.image, &tex->img.alloc, nullptr) != VK_SUCCESS) {
+		live.erase (tex);
 		delete tex;
 		return nullptr;
 	}

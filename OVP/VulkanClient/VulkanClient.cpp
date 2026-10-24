@@ -7,6 +7,7 @@
 #include "VObjects.h"
 #include "VkMesh.h"
 #include "Input.h"
+#include "posix/OrbiterInput.h"
 #include "ImageIO.h"
 #include "Draw2D.h"
 #include "Sketchpad.h"
@@ -51,21 +52,37 @@ VulkanClient::VulkanClient (HINSTANCE hInstance)
 
 VulkanClient::~VulkanClient ()
 {
-	scene.reset();
-	if (ready) {
-		r2d->Shutdown();
-		r2d.reset();
-		fonts.reset();
-		texmgr.Shutdown();
-		ctx.Shutdown();
-	}
+	Teardown ();
 	if (window) SDL_DestroyWindow (window);
 	SDL_Quit();
+}
+
+void VulkanClient::Teardown ()
+{
+	// Must run before process exit: once the driver library has been
+	// finalised, Vulkan objects can no longer be destroyed.
+	scene.reset();
+	if (!ready) return;
+	DeleteStreams (true);
+	ctx.Drain();       // deferred releases still refer to texture manager resources
+	r2d->Shutdown();
+	r2d.reset();
+	fonts.reset();
+	ctx.Drain();
+	texmgr.Shutdown();
+	ctx.Shutdown();
+	ready = false;
 }
 
 bool VulkanClient::clbkInitialise ()
 {
 	if (!GraphicsClient::clbkInitialise ()) return false;
+
+	// Offscreen mode (ORBITER_VK_OFFSCREEN=1): nothing is shown and no display
+	// is required; frames are rendered into images (e.g. for screenshots)
+	const char *off = getenv ("ORBITER_VK_OFFSCREEN");
+	offscreen = off && *off && *off != '0';
+	if (offscreen) SDL_SetHint (SDL_HINT_VIDEO_DRIVER, "offscreen,dummy");
 
 	if (!SDL_Init (SDL_INIT_VIDEO)) {
 		oapiWriteLogError ("VulkanClient: SDL initialisation failed: %s", SDL_GetError());
@@ -76,13 +93,15 @@ bool VulkanClient::clbkInitialise ()
 	int h = vd->winh > 0 ? vd->winh : 800;
 	// The window and device exist for the lifetime of the client, so that
 	// modules can load textures before the simulation session starts.
-	window = SDL_CreateWindow ("Orbiter", w, h, SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN);
+	window = SDL_CreateWindow ("Orbiter", w, h, offscreen ? SDL_WINDOW_HIDDEN : (SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN));
 	if (!window) {
 		oapiWriteLogError ("VulkanClient: could not create window: %s", SDL_GetError());
 		return false;
 	}
 	const char *val = getenv ("ORBITER_VK_VALIDATION");
-	if (!ctx.Init (window, val && *val && *val != '0')) return false;
+	ctx.SetOffscreenExtent ((uint32_t)w, (uint32_t)h);
+	if (!ctx.Init (window, val && *val && *val != '0', offscreen)) return false;
+	if (offscreen) oapiWriteLogV ("VulkanClient: rendering offscreen (%dx%d)", w, h);
 	if (const char *shot = getenv ("ORBITER_VK_SCREENSHOT")) {
 		autoScreenshot = shot;
 		if (const char *n = getenv ("ORBITER_VK_SCREENSHOT_FRAME")) autoScreenshotFrame = (unsigned)atoi (n);
@@ -99,8 +118,10 @@ HWND VulkanClient::clbkCreateRenderWindow ()
 {
 	if (!ready) return NULL;
 	SDL_SetWindowTitle (window, "Orbiter (Vulkan)");
-	SDL_ShowWindow (window);
-	SDL_RaiseWindow (window);
+	if (!offscreen) {
+		SDL_ShowWindow (window);
+		SDL_RaiseWindow (window);
+	}
 	return (HWND)window;
 }
 
@@ -127,6 +148,7 @@ void VulkanClient::clbkDestroyRenderWindow (bool fastclose)
 {
 	GraphicsClient::clbkDestroyRenderWindow (fastclose);
 	if (window) SDL_HideWindow (window);
+	if (fastclose) Teardown (); // the application exits right after this
 }
 
 // ======================================================================
@@ -174,6 +196,9 @@ bool VulkanClient::clbkDisplayFrame ()
 		if (!autoScreenshot.empty() && ++frameCount == autoScreenshotFrame) {
 			CaptureBackbuffer (autoScreenshot);
 			oapiWriteLogV ("VulkanClient: screenshot saved to %s", autoScreenshot.c_str());
+			// ORBITER_VK_SCREENSHOT_EXIT=1: end the session once the screenshot is taken
+			const char *ex = getenv ("ORBITER_VK_SCREENSHOT_EXIT");
+			if (ex && *ex && *ex != '0') oapiInputCloseRequest ();
 		}
 		ctx.EndFrame ();
 	} else {
@@ -216,7 +241,10 @@ bool VulkanClient::clbkSaveSurfaceToImage (SURFHANDLE surf, const char *fname,
 void VulkanClient::clbkGetViewportSize (DWORD *width, DWORD *height) const
 {
 	int w = 0, h = 0;
-	if (window) SDL_GetWindowSizeInPixels (window, &w, &h);
+	if (offscreen) {
+		VkExtent2D e = ctx.Extent();
+		w = (int)e.width, h = (int)e.height;
+	} else if (window) SDL_GetWindowSizeInPixels (window, &w, &h);
 	*width = (DWORD)w, *height = (DWORD)h;
 }
 

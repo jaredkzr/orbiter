@@ -128,6 +128,7 @@ void Scene::Shutdown ()
 	vkDeviceWaitIdle (ctx->device);
 	for (auto &it : visuals) gc->UnregisterVisObject (it.first);
 	visuals.clear();
+	ctx->Drain (); // releases deferred by the visuals use the shared renderers' pools
 	if (tiles) tiles->Shutdown ();
 	tiles.reset();
 	if (atm) atm->Shutdown ();

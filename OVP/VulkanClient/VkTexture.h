@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class VkTexture {
@@ -91,6 +92,7 @@ private:
 	VkSampler sampler = VK_NULL_HANDLE;
 	VkTexture *white = nullptr;
 	std::unordered_map<std::string, VkTexture*> cache;
+	std::unordered_set<VkTexture*> live; // all existing textures
 };
 
 #endif // !__VKTEXTURE_H

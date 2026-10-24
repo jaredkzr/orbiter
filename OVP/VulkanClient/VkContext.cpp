@@ -27,14 +27,18 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback (VkDebugUtilsMessageSeverity
 // ======================================================================
 // Initialisation
 
-bool Context::Init (SDL_Window *wnd, bool enableValidation)
+bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 {
 	window = wnd;
+	offscreen = offscreenMode;
 
 	// Instance
-	Uint32 nSdlExt = 0;
-	const char *const *sdlExt = SDL_Vulkan_GetInstanceExtensions (&nSdlExt);
-	std::vector<const char*> extensions (sdlExt, sdlExt + nSdlExt);
+	std::vector<const char*> extensions;
+	if (!offscreen) {
+		Uint32 nSdlExt = 0;
+		const char *const *sdlExt = SDL_Vulkan_GetInstanceExtensions (&nSdlExt);
+		if (sdlExt) extensions.assign (sdlExt, sdlExt + nSdlExt);
+	}
 	std::vector<const char*> layers;
 	if (enableValidation) {
 		uint32_t nLayer = 0;
@@ -75,7 +79,7 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation)
 		if (createMessenger) createMessenger (instance, &dci, nullptr, &debugMessenger);
 	}
 
-	if (!SDL_Vulkan_CreateSurface (window, instance, nullptr, &surface)) {
+	if (!offscreen && !SDL_Vulkan_CreateSurface (window, instance, nullptr, &surface)) {
 		oapiWriteLogError ("VulkanClient: could not create window surface: %s", SDL_GetError());
 		return false;
 	}
@@ -95,8 +99,8 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation)
 		std::vector<VkQueueFamilyProperties> qprops (nq);
 		vkGetPhysicalDeviceQueueFamilyProperties (pd, &nq, qprops.data());
 		for (uint32_t q = 0; q < nq; q++) {
-			VkBool32 present = VK_FALSE;
-			vkGetPhysicalDeviceSurfaceSupportKHR (pd, q, surface, &present);
+			VkBool32 present = offscreen ? VK_TRUE : VK_FALSE;
+			if (!offscreen) vkGetPhysicalDeviceSurfaceSupportKHR (pd, q, surface, &present);
 			if ((qprops[q].queueFlags & VK_QUEUE_GRAPHICS_BIT) && present) {
 				int score = (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? 3 :
 				             props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? 2 : 1);
@@ -139,7 +143,7 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation)
 	dci.pNext = &f2;
 	dci.queueCreateInfoCount = 1;
 	dci.pQueueCreateInfos = &qci;
-	dci.enabledExtensionCount = 1;
+	dci.enabledExtensionCount = offscreen ? 0 : 1;
 	dci.ppEnabledExtensionNames = devExt;
 	if (vkCreateDevice (physicalDevice, &dci, nullptr, &device) != VK_SUCCESS) {
 		oapiWriteLogError ("VulkanClient: could not create logical device");
@@ -179,6 +183,14 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation)
 	return CreateSwapchain ();
 }
 
+void Context::Drain ()
+{
+	if (!device) return;
+	SubmitPending ();
+	vkDeviceWaitIdle (device);
+	for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) FlushDeferred (i);
+}
+
 void Context::Shutdown ()
 {
 	if (!device) return;
@@ -209,64 +221,97 @@ void Context::Shutdown ()
 
 bool Context::CreateSwapchain ()
 {
-	VkSurfaceCapabilitiesKHR caps;
-	VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR (physicalDevice, surface, &caps));
-
-	uint32_t nFmt = 0;
-	vkGetPhysicalDeviceSurfaceFormatsKHR (physicalDevice, surface, &nFmt, nullptr);
-	std::vector<VkSurfaceFormatKHR> fmts (nFmt);
-	vkGetPhysicalDeviceSurfaceFormatsKHR (physicalDevice, surface, &nFmt, fmts.data());
-	VkSurfaceFormatKHR fmt = fmts[0];
-	for (auto &f : fmts)
-		if ((f.format == VK_FORMAT_B8G8R8A8_SRGB || f.format == VK_FORMAT_R8G8B8A8_SRGB) &&
-			f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) { fmt = f; break; }
-	colorFormat = fmt.format;
-
-	if (caps.currentExtent.width != 0xFFFFFFFF) {
-		extent = caps.currentExtent;
+	if (offscreen) {
+		// render targets in place of a swapchain, one per frame in flight
+		colorFormat = VK_FORMAT_B8G8R8A8_SRGB;
+		extent = offscreenExtent;
+		swapchainImageCount = FRAMES_IN_FLIGHT;
+		offImages.resize (swapchainImageCount);
+		swapImages.resize (swapchainImageCount);
+		swapViews.resize (swapchainImageCount);
+		for (uint32_t i = 0; i < swapchainImageCount; i++) {
+			VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+			ici.imageType = VK_IMAGE_TYPE_2D;
+			ici.format = colorFormat;
+			ici.extent = { extent.width, extent.height, 1 };
+			ici.mipLevels = 1;
+			ici.arrayLayers = 1;
+			ici.samples = VK_SAMPLE_COUNT_1_BIT;
+			ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+			ici.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+			VmaAllocationCreateInfo aci{};
+			aci.usage = VMA_MEMORY_USAGE_AUTO;
+			VK_CHECK(vmaCreateImage (allocator, &ici, &aci, &offImages[i].image, &offImages[i].alloc, nullptr));
+			VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+			vci.image = offImages[i].image;
+			vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+			vci.format = colorFormat;
+			vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+			VK_CHECK(vkCreateImageView (device, &vci, nullptr, &offImages[i].view));
+			swapImages[i] = offImages[i].image;
+			swapViews[i] = offImages[i].view;
+		}
 	} else {
-		int w, h;
-		SDL_GetWindowSizeInPixels (window, &w, &h);
-		extent.width = std::clamp ((uint32_t)w, caps.minImageExtent.width, caps.maxImageExtent.width);
-		extent.height = std::clamp ((uint32_t)h, caps.minImageExtent.height, caps.maxImageExtent.height);
-	}
-	if (!extent.width || !extent.height) return false; // minimised
+		VkSurfaceCapabilitiesKHR caps;
+		VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR (physicalDevice, surface, &caps));
 
-	uint32_t nImg = std::max (caps.minImageCount + 1, 3u);
-	if (caps.maxImageCount) nImg = std::min (nImg, caps.maxImageCount);
+		uint32_t nFmt = 0;
+		vkGetPhysicalDeviceSurfaceFormatsKHR (physicalDevice, surface, &nFmt, nullptr);
+		std::vector<VkSurfaceFormatKHR> fmts (nFmt);
+		vkGetPhysicalDeviceSurfaceFormatsKHR (physicalDevice, surface, &nFmt, fmts.data());
+		VkSurfaceFormatKHR fmt = fmts[0];
+		for (auto &f : fmts)
+			if ((f.format == VK_FORMAT_B8G8R8A8_SRGB || f.format == VK_FORMAT_R8G8B8A8_SRGB) &&
+				f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) { fmt = f; break; }
+		colorFormat = fmt.format;
 
-	VkSwapchainCreateInfoKHR sci{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
-	sci.surface = surface;
-	sci.minImageCount = nImg;
-	sci.imageFormat = fmt.format;
-	sci.imageColorSpace = fmt.colorSpace;
-	sci.imageExtent = extent;
-	sci.imageArrayLayers = 1;
-	sci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-	sci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-	sci.preTransform = caps.currentTransform;
-	sci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-	sci.presentMode = VK_PRESENT_MODE_FIFO_KHR; // vsync, always supported
-	sci.clipped = VK_TRUE;
-	if (vkCreateSwapchainKHR (device, &sci, nullptr, &swapchain) != VK_SUCCESS) {
-		oapiWriteLogError ("VulkanClient: could not create swapchain");
-		return false;
-	}
+		if (caps.currentExtent.width != 0xFFFFFFFF) {
+			extent = caps.currentExtent;
+		} else {
+			int w, h;
+			SDL_GetWindowSizeInPixels (window, &w, &h);
+			extent.width = std::clamp ((uint32_t)w, caps.minImageExtent.width, caps.maxImageExtent.width);
+			extent.height = std::clamp ((uint32_t)h, caps.minImageExtent.height, caps.maxImageExtent.height);
+		}
+		if (!extent.width || !extent.height) return false; // minimised
 
-	vkGetSwapchainImagesKHR (device, swapchain, &swapchainImageCount, nullptr);
-	swapImages.resize (swapchainImageCount);
-	vkGetSwapchainImagesKHR (device, swapchain, &swapchainImageCount, swapImages.data());
-	swapViews.resize (swapchainImageCount);
-	renderFinished.resize (swapchainImageCount);
-	for (uint32_t i = 0; i < swapchainImageCount; i++) {
-		VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-		vci.image = swapImages[i];
-		vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-		vci.format = colorFormat;
-		vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-		VK_CHECK(vkCreateImageView (device, &vci, nullptr, &swapViews[i]));
-		VkSemaphoreCreateInfo semi{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
-		VK_CHECK(vkCreateSemaphore (device, &semi, nullptr, &renderFinished[i]));
+		uint32_t nImg = std::max (caps.minImageCount + 1, 3u);
+		if (caps.maxImageCount) nImg = std::min (nImg, caps.maxImageCount);
+
+		VkSwapchainCreateInfoKHR sci{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
+		sci.surface = surface;
+		sci.minImageCount = nImg;
+		sci.imageFormat = fmt.format;
+		sci.imageColorSpace = fmt.colorSpace;
+		sci.imageExtent = extent;
+		sci.imageArrayLayers = 1;
+		sci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+		sci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		sci.preTransform = caps.currentTransform;
+		sci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+		sci.presentMode = VK_PRESENT_MODE_FIFO_KHR; // vsync, always supported
+		sci.clipped = VK_TRUE;
+		if (vkCreateSwapchainKHR (device, &sci, nullptr, &swapchain) != VK_SUCCESS) {
+			oapiWriteLogError ("VulkanClient: could not create swapchain");
+			return false;
+		}
+
+		vkGetSwapchainImagesKHR (device, swapchain, &swapchainImageCount, nullptr);
+		swapImages.resize (swapchainImageCount);
+		vkGetSwapchainImagesKHR (device, swapchain, &swapchainImageCount, swapImages.data());
+		swapViews.resize (swapchainImageCount);
+		renderFinished.resize (swapchainImageCount);
+		for (uint32_t i = 0; i < swapchainImageCount; i++) {
+			VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+			vci.image = swapImages[i];
+			vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+			vci.format = colorFormat;
+			vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+			VK_CHECK(vkCreateImageView (device, &vci, nullptr, &swapViews[i]));
+			VkSemaphoreCreateInfo semi{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+			VK_CHECK(vkCreateSemaphore (device, &semi, nullptr, &renderFinished[i]));
+		}
+
 	}
 
 	// Depth buffer
@@ -294,6 +339,13 @@ bool Context::CreateSwapchain ()
 void Context::DestroySwapchain ()
 {
 	DestroyImage (depth);
+	if (offscreen) {
+		for (auto &img : offImages) DestroyImage (img);
+		offImages.clear();
+		swapImages.clear();
+		swapViews.clear();
+		return;
+	}
 	for (auto v : swapViews) vkDestroyImageView (device, v, nullptr);
 	for (auto s : renderFinished) vkDestroySemaphore (device, s, nullptr);
 	swapViews.clear();
@@ -355,11 +407,17 @@ VkCommandBuffer Context::Rec ()
 bool Context::BeginFrame ()
 {
 	if (inFrame) return true;
-	if (!swapchain || swapchainDirty) {
+	if ((!offscreen && !swapchain) || swapchainDirty) {
 		if (!RecreateSwapchain ()) return false;
 	}
 	Rec ();
 	Frame &f = frames[frameIndex];
+	if (offscreen) {
+		imageIndex = frameIndex;
+		inFrame = true;
+		bbState = BB_NONE;
+		return true;
+	}
 	VkResult res = vkAcquireNextImageKHR (device, swapchain, UINT64_MAX, f.imageAvailable, VK_NULL_HANDLE, &imageIndex);
 	if (res == VK_ERROR_OUT_OF_DATE_KHR) {
 		swapchainDirty = true;
@@ -553,11 +611,12 @@ void Context::EndFrame ()
 		region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
 		region.imageExtent = { extent.width, extent.height, 1 };
 		vkCmdCopyImageToBuffer (f.cmd, swapImages[imageIndex], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, capture.buffer, 1, &region);
-		ImageBarrier (f.cmd, swapImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
-			VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-			VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-			VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
-	} else {
+		if (!offscreen)
+			ImageBarrier (f.cmd, swapImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+				VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+				VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+				VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
+	} else if (!offscreen) {
 		ImageBarrier (f.cmd, swapImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
 			VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
 			VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
@@ -570,16 +629,16 @@ void Context::EndFrame ()
 	wait.semaphore = f.imageAvailable;
 	wait.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 	VkSemaphoreSubmitInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-	signal.semaphore = renderFinished[imageIndex];
+	signal.semaphore = offscreen ? VK_NULL_HANDLE : renderFinished[imageIndex];
 	signal.stageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
 	VkCommandBufferSubmitInfo cbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
 	cbi.commandBuffer = f.cmd;
 	VkSubmitInfo2 si{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-	si.waitSemaphoreInfoCount = 1;
+	si.waitSemaphoreInfoCount = offscreen ? 0 : 1;
 	si.pWaitSemaphoreInfos = &wait;
 	si.commandBufferInfoCount = 1;
 	si.pCommandBufferInfos = &cbi;
-	si.signalSemaphoreInfoCount = 1;
+	si.signalSemaphoreInfoCount = offscreen ? 0 : 1;
 	si.pSignalSemaphoreInfos = &signal;
 	vkResetFences (device, 1, &f.inFlight);
 	VK_CHECK(vkQueueSubmit2 (queue, 1, &si, f.inFlight));
@@ -593,6 +652,11 @@ void Context::EndFrame ()
 		DestroyBuffer (capture);
 	}
 
+	if (offscreen) {
+		inFrame = false;
+		frameIndex = (frameIndex + 1) % FRAMES_IN_FLIGHT;
+		return;
+	}
 	VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
 	pi.waitSemaphoreCount = 1;
 	pi.pWaitSemaphores = &renderFinished[imageIndex];

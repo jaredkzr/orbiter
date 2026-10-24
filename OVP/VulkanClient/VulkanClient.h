@@ -125,8 +125,10 @@ private:
 	void DeleteStreams (bool all);
 	bool ready = false;      // device initialised
 	bool imguiReady = false;
+	bool offscreen = false;   // render into images, without showing a window
 	bool frameActive = false; // a frame is being recorded
 	void CaptureBackbuffer (const std::string &path);
+	void Teardown ();
 	std::string autoScreenshot;   // ORBITER_VK_SCREENSHOT: file written at frame autoScreenshotFrame
 	unsigned autoScreenshotFrame = 60;
 	unsigned frameCount = 0;
