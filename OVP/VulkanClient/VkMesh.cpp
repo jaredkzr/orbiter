@@ -28,6 +28,8 @@ VkMesh::VkMesh (vkc::Context *c, TextureManager *tm, MESHHANDLE h)
 		materials.push_back (m ? *m : def);
 	}
 
+	for (auto &m : materials) pbr.push_back (PBRParams::FromMaterial (m));
+
 	// textures are owned by the mesh template; keep references while we use them
 	DWORD nTex = oapiMeshTextureCount (hMesh);
 	for (DWORD i = 0; i < nTex; i++) {
@@ -91,10 +93,19 @@ bool VkMesh::SetTexture (DWORD texidx, VkTexture *tex)
 	return true;
 }
 
+void VkMesh::ApplyMaterialConfig (const MaterialConfig &cfg, const std::string &meshName)
+{
+	int n = 0;
+	for (size_t i = 1; i < pbr.size(); i++)
+		if (cfg.Apply (meshName, (int)i - 1, pbr[i])) n++;
+	if (n) oapiWriteLogV ("VulkanClient: material configuration applied to %d materials of %s", n, meshName.c_str());
+}
+
 int VkMesh::SetMaterial (DWORD matidx, const MATERIAL *mat)
 {
 	if (matidx + 1 >= materials.size()) return 4;
 	materials[matidx + 1] = *mat;
+	pbr[matidx + 1] = PBRParams::FromMaterial (*mat);
 	for (auto &g : groups)
 		if (g.material == matidx + 1) g.transparent = IsTransparent (materials[g.material], g);
 	return 0;

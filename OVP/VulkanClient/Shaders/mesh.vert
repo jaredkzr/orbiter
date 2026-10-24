@@ -12,6 +12,7 @@ layout(push_constant) uniform Draw {
 	vec4 emissive;   // rgb: emissive colour, a: flags (1 = unlit)
 	vec4 specular;   // rgb: specular colour, a: specular power
 	vec4 light;     // rgb: sunlight reaching the object (eclipse)
+	vec4 pbr;       // metalness, roughness, reflectivity, dielectric F0 scale
 } draw;
 
 layout(location = 0) in vec3 inPos;

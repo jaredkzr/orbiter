@@ -14,7 +14,12 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 radii;         // planet radius, atmosphere radius, Mie asymmetry g, sun intensity
 	vec4 camC;          // |camPos|^2 - r^2 for the planet (x) and atmosphere (y) radius
 	vec4 misc;          // x: atmosphere present, y: 1/fx, z: 1/fy
+	vec4 ground;        // planet colour (rgb), w: surface textures present
 } atm;
+
+// planet surface (western and eastern hemisphere), for reflections
+layout(set = ATM_SET, binding = 1) uniform sampler2D atmGround0;
+layout(set = ATM_SET, binding = 2) uniform sampler2D atmGround1;
 
 const float ATM_PI = 3.14159265;
 const float ATM_NONE = 1e30;

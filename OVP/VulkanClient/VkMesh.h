@@ -10,6 +10,8 @@
 
 #include "VkContext.h"
 #include "OrbiterAPI.h"
+#include "MaterialConfig.h"
+#include <string>
 #include <vector>
 
 class VkTexture;
@@ -40,6 +42,9 @@ public:
 	uint32_t nGroup () const { return (uint32_t)groups.size(); }
 	const Group &GetGroup (uint32_t i) const { return groups[i]; }
 	const MATERIAL &Material (uint32_t i) const { return materials[i]; }
+	const PBRParams &PBR (uint32_t i) const { return pbr[i]; }
+	/// Apply material configuration for the mesh file the mesh was loaded from
+	void ApplyMaterialConfig (const MaterialConfig &cfg, const std::string &meshName);
 	VkBuffer VertexBuffer () const { return vbuf.buffer; }
 	VkBuffer IndexBuffer () const { return ibuf.buffer; }
 	MESHHANDLE Template () const { return hMesh; }
@@ -57,6 +62,7 @@ private:
 	vkc::Buffer vbuf, ibuf;
 	std::vector<Group> groups;
 	std::vector<MATERIAL> materials; // [0] = default material, [i+1] = mesh material i
+	std::vector<PBRParams> pbr;      // shading parameters, same indexing
 	std::vector<VkTexture*> textures; // mesh texture list (mesh texture index order)
 	std::vector<DWORD> groupTexIdx;  // per group: index into textures, or -1
 	std::vector<DWORD> groupMtrlIdx; // per group: material index of the template

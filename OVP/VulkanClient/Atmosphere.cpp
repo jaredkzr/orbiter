@@ -4,6 +4,7 @@
 #include "Atmosphere.h"
 #include "Scene.h"
 #include "VulkanClient.h"
+#include "VkTexture.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -23,6 +24,7 @@ namespace {
 		float radii[4];
 		float camC[4];
 		float misc[4];
+		float ground[4];
 	};
 
 	constexpr uint32_t MAX_ATMOSPHERES = 64; // plus one "no atmosphere" set
@@ -39,25 +41,36 @@ namespace {
 // ======================================================================
 // AtmosphereRenderer
 
-bool AtmosphereRenderer::Init (vkc::Context *c)
+bool AtmosphereRenderer::Init (vkc::Context *c, TextureManager *tm)
 {
 	ctx = c;
-	VkDescriptorSetLayoutBinding b{};
-	b.binding = 0;
-	b.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-	b.descriptorCount = 1;
-	b.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+	texmgr = tm;
+	VkDescriptorSetLayoutBinding b[3]{};
+	b[0].binding = 0;
+	b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	b[0].descriptorCount = 1;
+	b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+	for (int i = 1; i < 3; i++) {
+		b[i].binding = i;
+		b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		b[i].descriptorCount = 1;
+		b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+	}
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 1;
-	lci.pBindings = &b;
+	lci.bindingCount = 3;
+	lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &setLayout));
 
-	VkDescriptorPoolSize ps{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, MAX_ATMOSPHERES * vkc::FRAMES_IN_FLIGHT + 1 };
+	const uint32_t nSets = MAX_ATMOSPHERES * vkc::FRAMES_IN_FLIGHT + 1;
+	VkDescriptorPoolSize ps[2] = {
+		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nSets },
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * nSets }
+	};
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-	pci.maxSets = MAX_ATMOSPHERES * vkc::FRAMES_IN_FLIGHT + 1;
-	pci.poolSizeCount = 1;
-	pci.pPoolSizes = &ps;
+	pci.maxSets = nSets;
+	pci.poolSizeCount = 2;
+	pci.pPoolSizes = ps;
 	VK_CHECK(vkCreateDescriptorPool (ctx->device, &pci, nullptr, &pool));
 
 	noneUbo = ctx->CreateBuffer (sizeof(AtmUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
@@ -74,6 +87,7 @@ bool AtmosphereRenderer::Init (vkc::Context *c)
 	wr.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	wr.pBufferInfo = &dbi;
 	vkUpdateDescriptorSets (ctx->device, 1, &wr, 0, nullptr);
+	WriteGround (noneSet, texmgr->White(), texmgr->White());
 
 	VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 	plci.setLayoutCount = 1;
@@ -138,6 +152,22 @@ bool AtmosphereRenderer::Init (vkc::Context *c)
 	return true;
 }
 
+void AtmosphereRenderer::WriteGround (VkDescriptorSet set, VkTexture *west, VkTexture *east) const
+{
+	// the textures' own descriptor sets carry the sampler and view
+	VkCopyDescriptorSet cp[2]{};
+	VkTexture *t[2] = { west ? west : texmgr->White(), east ? east : texmgr->White() };
+	for (int i = 0; i < 2; i++) {
+		cp[i].sType = VK_STRUCTURE_TYPE_COPY_DESCRIPTOR_SET;
+		cp[i].srcSet = t[i]->set;
+		cp[i].srcBinding = 0;
+		cp[i].dstSet = set;
+		cp[i].dstBinding = 1 + i;
+		cp[i].descriptorCount = 1;
+	}
+	vkUpdateDescriptorSets (ctx->device, 0, nullptr, 2, cp);
+}
+
 void AtmosphereRenderer::Shutdown ()
 {
 	if (!ctx) return;
@@ -198,7 +228,16 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		wr.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 		wr.pBufferInfo = &dbi;
 		vkUpdateDescriptorSets (ctx->device, 1, &wr, 0, nullptr);
+		ar->WriteGround (sets[i], nullptr, nullptr);
 	}
+}
+
+void Atmosphere::SetGround (VkTexture *west, VkTexture *east, const float colour[3])
+{
+	for (uint32_t i = 0; i < vkc::FRAMES_IN_FLIGHT; i++)
+		scene->Atm()->WriteGround (sets[i], west, east);
+	for (int i = 0; i < 3; i++) groundColour[i] = colour[i];
+	groundColour[3] = (west && east) ? 1.0f : 0.0f;
 }
 
 Atmosphere::~Atmosphere ()
@@ -252,6 +291,7 @@ void Atmosphere::Update ()
 	u.radii[2] = mieG;
 	u.radii[3] = sunIntensity;
 	u.misc[0] = present ? 1.0f : 0.0f;
+	memcpy (u.ground, groundColour, sizeof(groundColour));
 	u.misc[1] = (float)(1.0 / scene->ProjX());
 	u.misc[2] = (float)(1.0 / scene->ProjY());
 	memcpy (ubo[ctx->FrameIndex()].mapped, &u, sizeof(u));

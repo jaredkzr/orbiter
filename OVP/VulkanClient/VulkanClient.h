@@ -12,6 +12,8 @@
 #include "GraphicsAPI.h"
 #include "VkContext.h"
 #include "VkTexture.h"
+#include "MaterialConfig.h"
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -68,6 +70,12 @@ public:
 	oapi::ParticleStream *clbkCreateReentryStream (PARTICLESTREAMSPEC *pss, OBJHANDLE hVessel) override;
 	const std::vector<VkParticleStream*> &ParticleStreams () const { return streams; }
 
+	// --- meshes ---
+	void clbkStoreMeshPersistent (MESHHANDLE hMesh, const char *fname) override;
+	/// file name of a mesh loaded by the core (empty if unknown)
+	std::string MeshName (MESHHANDLE hMesh) const;
+	const MaterialConfig &Materials () const { return materials; }
+
 	// --- 2D panels ---
 	void clbkRender2DPanel (SURFHANDLE *hSurf, MESHHANDLE hMesh, MATRIX3 *T, bool additive = false) override;
 	void clbkRender2DPanel (SURFHANDLE *hSurf, MESHHANDLE hMesh, MATRIX3 *T, float alpha, bool additive = false) override;
@@ -123,6 +131,8 @@ private:
 	std::unique_ptr<Renderer2D> r2d;
 	std::unique_ptr<FontManager> fonts;
 	std::unique_ptr<PostFX> postfx;
+	MaterialConfig materials;
+	std::map<MESHHANDLE, std::string> meshNames;
 	std::vector<VkParticleStream*> streams; // owned: the core only detaches them
 	void DeleteStreams (bool all);
 	bool ready = false;      // device initialised

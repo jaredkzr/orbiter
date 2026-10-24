@@ -30,6 +30,7 @@ struct MeshPushConstants {
 	float emissive[4]; // a: 1 = unlit
 	float specular[4]; // a: specular power
 	float light[4];    // rgb: sunlight reaching the object
+	float pbr[4];      // metalness, roughness, reflectivity, dielectric F0 scale
 };
 
 enum class RenderPass { Opaque, Transparent };

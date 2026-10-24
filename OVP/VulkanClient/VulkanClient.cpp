@@ -113,6 +113,8 @@ bool VulkanClient::clbkInitialise ()
 	r2d = std::make_unique<Renderer2D>();
 	if (!r2d->Init (&ctx, &texmgr)) return false;
 	fonts = std::make_unique<FontManager> (&texmgr);
+	materials.Load ("Config/GC");
+	oapiWriteLogV ("VulkanClient: material configuration for %zu meshes", materials.MeshCount());
 	postfx = std::make_unique<PostFX>();
 	if (!postfx->Init (&ctx)) return false;
 	ready = true;
@@ -343,6 +345,20 @@ int VulkanClient::clbkGetMeshGroup (DEVMESHHANDLE hMesh, DWORD grpidx, GROUPREQU
 int VulkanClient::clbkEditMeshGroup (DEVMESHHANDLE hMesh, DWORD grpidx, GROUPEDITSPEC *ges)
 {
 	return hMesh ? ((VkMesh*)hMesh)->EditGroup (grpidx, ges) : -2;
+}
+
+// ======================================================================
+// Meshes
+
+void VulkanClient::clbkStoreMeshPersistent (MESHHANDLE hMesh, const char *fname)
+{
+	if (hMesh && fname) meshNames[hMesh] = fname;
+}
+
+std::string VulkanClient::MeshName (MESHHANDLE hMesh) const
+{
+	auto it = meshNames.find (hMesh);
+	return it != meshNames.end() ? it->second : std::string();
 }
 
 // ======================================================================

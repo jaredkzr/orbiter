@@ -72,6 +72,9 @@ void VVessel::InsertMesh (UINT idx)
 	if (!hMesh) return;
 	VulkanClient *gc = scene->Client();
 	rec.mesh = std::make_unique<VkMesh> (gc->Ctx(), gc->TexMgr(), hMesh);
+	const char *mname = vessel->GetMeshName (idx);
+	std::string meshName = mname ? std::string (mname) : gc->MeshName (hMesh);
+	if (!meshName.empty()) rec.mesh->ApplyMaterialConfig (gc->Materials(), meshName);
 	vessel->GetMeshOffset (idx, rec.ofs);
 	rec.visMode = vessel->GetMeshVisibilityMode (idx);
 	rec.grpTransform.assign (rec.mesh->nGroup(), Mat4::Identity());
@@ -454,6 +457,7 @@ VPlanet::VPlanet (OBJHANDLE h, Scene *s, bool star)
 		atmosphere = std::make_unique<Atmosphere> (hObj, scene);
 		surface = PlanetSurface::Create (hObj, scene);
 		if (surface) clouds = PlanetSurface::Create (hObj, scene, true);
+		atmosphere->SetGround (surface ? surface->RootTexture (0) : nullptr, surface ? surface->RootTexture (1) : nullptr, colour);
 	}
 }
 

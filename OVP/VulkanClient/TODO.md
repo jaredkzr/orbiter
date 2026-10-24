@@ -19,3 +19,11 @@ Known gaps and limitations, to be addressed later.
 - Windows build of the client: deferred. Needs a Windows test loop. On
   Windows the core reads input from its own render window (DirectInput and
   window messages), which has to be reconciled with the SDL window.
+
+## Materials and reflections
+- Reflections show the sky and surface of the planet near the camera
+  (analytic environment); other vessels, bases and clouds are not reflected,
+  and there is no glossy blur of the planet texture for rough surfaces.
+- Material configuration files: only SPECULAR, SMOOTHNESS, METALNESS and
+  REFLECT are used (FRESNEL and other entries are ignored). Normal,
+  roughness or metalness texture maps are not supported yet.

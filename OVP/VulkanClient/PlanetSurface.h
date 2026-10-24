@@ -111,6 +111,8 @@ public:
 	/// Accept loaded tiles (call before rendering)
 	void Update ();
 	void Render (class Atmosphere *atm);
+	/// level 4 root texture of the western (0) or eastern (1) hemisphere
+	VkTexture *RootTexture (int i) const { return root[i] ? root[i]->surf : nullptr; }
 
 private:
 	struct Node {

@@ -110,6 +110,7 @@ add_library(VulkanClient SHARED
 	Atmosphere.cpp
 	Shadows.cpp
 	PostFX.cpp
+	MaterialConfig.cpp
 	Input.cpp
 	ImageIO.cpp
 	Vma.cpp

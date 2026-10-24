@@ -17,7 +17,9 @@ class Scene;
 /// Shared resources for atmosphere rendering (owned by the scene)
 class AtmosphereRenderer {
 public:
-	bool Init (vkc::Context *ctx);
+	bool Init (vkc::Context *ctx, class TextureManager *texmgr);
+	/// Write the ground textures of a set
+	void WriteGround (VkDescriptorSet set, class VkTexture *west, class VkTexture *east) const;
 	void Shutdown ();
 	VkDescriptorSetLayout SetLayout () const { return setLayout; }
 	VkDescriptorPool Pool () const { return pool; }
@@ -28,6 +30,7 @@ public:
 
 private:
 	vkc::Context *ctx = nullptr;
+	class TextureManager *texmgr = nullptr;
 	VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
 	VkDescriptorPool pool = VK_NULL_HANDLE;
 	VkPipelineLayout skyLayout = VK_NULL_HANDLE;
@@ -48,6 +51,9 @@ public:
 	void RenderSky ();
 	/// Descriptor set with this frame's uniform data
 	VkDescriptorSet Set () const;
+	/// Planet surface (hemisphere textures, level 4 tiles) and mean colour, used
+	/// for reflections of the planet. Call before the first use of the sets.
+	void SetGround (class VkTexture *west, class VkTexture *east, const float colour[3]);
 
 private:
 	OBJHANDLE hPlanet;
@@ -60,6 +66,7 @@ private:
 	bool visible = false;
 	vkc::Buffer ubo[vkc::FRAMES_IN_FLIGHT];
 	VkDescriptorSet sets[vkc::FRAMES_IN_FLIGHT] = {};
+	float groundColour[4] = { 0.5f, 0.5f, 0.5f, 0.0f };
 };
 
 #endif // !__ATMOSPHERE_H

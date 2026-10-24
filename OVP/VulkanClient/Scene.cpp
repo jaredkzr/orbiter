@@ -84,6 +84,9 @@ VkCommandBuffer Scene::Cmd () const
 bool Scene::Init ()
 {
 	ctx = gc->Ctx();
+	if (ctx->deviceProps.limits.maxPushConstantsSize < sizeof(MeshPushConstants))
+		oapiWriteLogError ("VulkanClient: device supports only %u bytes of push constants (%zu required)",
+			ctx->deviceProps.limits.maxPushConstantsSize, sizeof(MeshPushConstants));
 
 	shadows = std::make_unique<ShadowMap>();
 	shadows->Init (ctx);
@@ -138,7 +141,7 @@ bool Scene::Init ()
 	}
 
 	atm = std::make_unique<AtmosphereRenderer>();
-	atm->Init (ctx);
+	atm->Init (ctx, gc->TexMgr());
 	CreatePipelines ();
 	BuildSphere ();
 	tiles = std::make_unique<TileRenderer>();
@@ -726,7 +729,7 @@ void Scene::Render ()
 		auto it = visuals.find (hp);
 		if (it != visuals.end())
 			if (Atmosphere *a = it->second->GetAtmosphere ())
-				if (a->Present ()) camAtmSet = a->Set ();
+				camAtmSet = a->Set (); // also without atmosphere: the planet is reflected
 	}
 
 	// background stars
@@ -799,6 +802,8 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 		pc.specular[0] = m.specular.r, pc.specular[1] = m.specular.g, pc.specular[2] = m.specular.b;
 		pc.specular[3] = m.power;
 		pc.light[0] = pc.light[1] = pc.light[2] = objLight;
+		const PBRParams &pp = mesh->PBR (grp.material);
+		pc.pbr[0] = pp.metalness, pc.pbr[1] = pp.roughness, pc.pbr[2] = pp.reflectivity, pc.pbr[3] = pp.f0;
 		if (transparent && !ovr)
 			for (int k = 0; k < 3; k++) pc.emissive[k] += objGlassGlow[k];
 		if (ovr) { // self-illuminated display
@@ -825,6 +830,7 @@ void Scene::DrawSphere (const Mat4 &modelView, const float colour[4], bool unlit
 	modelView.ToFloat (pc.modelView);
 	memcpy (pc.diffuse, colour, 4 * sizeof(float));
 	pc.light[0] = pc.light[1] = pc.light[2] = 1.0f;
+	pc.pbr[1] = 1.0f; // matte, no reflections
 	pc.emissive[3] = unlit ? 1.0f : 0.0f;
 	vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 	vkCmdDrawIndexed (cmd, sphereNIdx, 1, 0, 0, 0);
