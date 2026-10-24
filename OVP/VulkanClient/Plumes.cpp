@@ -404,7 +404,7 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner)
 		double zs = std::max (z - stiff, 0.0), s = zs / (1.6 * bendScale);
 		return s < SC ? bendScale * s * s * s : bendScale * SC * SC * SC + 4.0 * (zs - 1.6 * bendScale * SC);
 	};
-	double bendLimit = 2.2 * (1.2 * bendScale + 4.0);
+	double bendLimit = 2.2 * (0.75 * bendScale + 2.5);
 	if (bendScale > 0.0) {
 		// the jet ends where it has mixed out
 		double lo = 0.0, hi = boxZ;
@@ -450,7 +450,7 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner)
 		double z = std::max (hitP.z, 0.0), bz = bendAt (z);
 		double sArc = sqrt (z * z + bz * bz), xi = sArc / len;
 		hitR = 1.0 + (rj - 1.0) * (1.0 - exp (-0.8 * sArc)) + sArc * spread + std::max (0.0, sArc - 0.5 * len) * mixSpread + 0.3 * bz;
-		double mixed = bendScale > 0.0 ? exp (-pow (bz / (1.2 * bendScale + 4.0), 2.0)) : 1.0;
+		double mixed = bendScale > 0.0 ? exp (-pow (bz / (0.75 * bendScale + 2.5), 2.0)) : 1.0;
 		hitHeat = exp (-3.0 * xi * xi) * (xi < 1.6 ? 1.0 : 0.0) * mixed;
 		// the spreading gas reaches further with more of the jet left
 		reach = 2.5 * hitR + 0.4 * std::max (0.0, 1.6 * len - sArc);

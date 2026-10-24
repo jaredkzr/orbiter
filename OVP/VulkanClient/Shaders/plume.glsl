@@ -98,7 +98,7 @@ vec4 PlumeMedium (PlumeParams P, vec3 p)
 	float fadeIn = smoothstep (-0.15, 0.1, x), fadeOut = smoothstep (1.6, 1.15, xi);
 	// a jet bent over by a crossflow entrains air several times faster than
 	// a free jet: it cools and dilutes within a few diameters of turning
-	if (P.bend.z > 0.0) fadeOut *= exp (-PlumeSq (bend / (1.2 * P.bend.z + 4.0)));
+	if (P.bend.z > 0.0) fadeOut *= exp (-PlumeSq (bend / (0.75 * P.bend.z + 2.5)));
 
 	// hot core, cooling as the jet mixes
 	float lam = mix (1.0, 0.3 + 1.4 * n2, min (turb, 1.0));
