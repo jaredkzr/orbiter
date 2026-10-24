@@ -47,3 +47,9 @@ Known gaps and limitations, to be addressed later.
   behind, and the unlit side shows only ambient light. The planet's shadow
   on the rings comes from the atmosphere transmittance (bodies without an
   atmosphere would not get it). High-resolution <name>_ring_N.dds not used.
+
+## Deferred effects
+- Engine heat shimmer: needs a screen-space distortion pass (a copy of the
+  scene colour taken mid-frame, or a distortion buffer depth-tested against
+  the multisampled depth). Deferred as a subtle effect for its cost.
+- Lens flare ghosts are discs from the bloom image, not aperture-shaped.
