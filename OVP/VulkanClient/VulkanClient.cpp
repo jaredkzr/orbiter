@@ -11,6 +11,7 @@
 #include "Draw2D.h"
 #include "Sketchpad.h"
 #include "Fonts.h"
+#include "Particles.h"
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_vulkan.h"
@@ -113,6 +114,7 @@ void VulkanClient::clbkPostCreation ()
 void VulkanClient::clbkCloseSession (bool fastclose)
 {
 	GraphicsClient::clbkCloseSession (fastclose);
+	DeleteStreams (true);
 	if (ready) {
 		r2d->Flush ();
 		ctx.SubmitPending ();
@@ -133,6 +135,11 @@ void VulkanClient::clbkDestroyRenderWindow (bool fastclose)
 void VulkanClient::clbkUpdate (bool running)
 {
 	if (window) input::ProcessEvents (window);
+	if (running) {
+		double dt = oapiGetSimStep ();
+		for (auto *ps : streams) ps->Update (dt);
+		DeleteStreams (false);
+	}
 	if (scene) scene->Update ();
 }
 
@@ -301,6 +308,58 @@ int VulkanClient::clbkGetMeshGroup (DEVMESHHANDLE hMesh, DWORD grpidx, GROUPREQU
 int VulkanClient::clbkEditMeshGroup (DEVMESHHANDLE hMesh, DWORD grpidx, GROUPEDITSPEC *ges)
 {
 	return hMesh ? ((VkMesh*)hMesh)->EditGroup (grpidx, ges) : -2;
+}
+
+// ======================================================================
+// Particle streams
+
+oapi::ParticleStream *VulkanClient::clbkCreateParticleStream (PARTICLESTREAMSPEC *pss)
+{
+	if (!ready) return NULL;
+	auto *ps = new VkParticleStream (this, &texmgr, pss, VkParticleStream::Kind::Generic);
+	streams.push_back (ps);
+	return ps;
+}
+
+oapi::ParticleStream *VulkanClient::clbkCreateExhaustStream (PARTICLESTREAMSPEC *pss,
+	OBJHANDLE hVessel, const double *lvl, const VECTOR3 *ref, const VECTOR3 *dir)
+{
+	if (!ready) return NULL;
+	auto *ps = new VkParticleStream (this, &texmgr, pss, VkParticleStream::Kind::Exhaust);
+	ps->Attach (hVessel, ref, dir, lvl);
+	streams.push_back (ps);
+	return ps;
+}
+
+oapi::ParticleStream *VulkanClient::clbkCreateExhaustStream (PARTICLESTREAMSPEC *pss,
+	OBJHANDLE hVessel, const double *lvl, const VECTOR3 &ref, const VECTOR3 &dir)
+{
+	if (!ready) return NULL;
+	auto *ps = new VkParticleStream (this, &texmgr, pss, VkParticleStream::Kind::Exhaust);
+	ps->Attach (hVessel, ref, dir, lvl);
+	streams.push_back (ps);
+	return ps;
+}
+
+oapi::ParticleStream *VulkanClient::clbkCreateReentryStream (PARTICLESTREAMSPEC *pss, OBJHANDLE hVessel)
+{
+	if (!ready) return NULL;
+	auto *ps = new VkParticleStream (this, &texmgr, pss, VkParticleStream::Kind::Reentry);
+	ps->Attach (hVessel, _V(0, 0, 0), _V(0, 0, 0), nullptr);
+	streams.push_back (ps);
+	return ps;
+}
+
+void VulkanClient::DeleteStreams (bool all)
+{
+	// Deleting a stream that is still attached notifies its vessel
+	// (ParticleStream destructor), so this is safe while vessels exist.
+	size_t n = 0;
+	for (auto *ps : streams) {
+		if (all || ps->Expired()) delete ps;
+		else streams[n++] = ps;
+	}
+	streams.resize (n);
 }
 
 // ======================================================================

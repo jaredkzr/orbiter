@@ -7,6 +7,7 @@
 #include "VkTexture.h"
 #include "VulkanClient.h"
 #include "StarSphere.h"
+#include "Particles.h"
 #include <algorithm>
 #include <cstring>
 
@@ -14,6 +15,8 @@
 #include "mesh.frag.h"
 #include "stars.vert.h"
 #include "stars.frag.h"
+#include "particle.vert.h"
+#include "particle.frag.h"
 
 namespace {
 
@@ -100,6 +103,7 @@ bool Scene::Init ()
 
 	CreatePipelines ();
 	BuildSphere ();
+	exhaustTex = gc->TexMgr()->Load ("Exhaust.dds");
 
 	stars = std::make_unique<StarSphere> (gc);
 	stars->Init (ctx);
@@ -123,9 +127,11 @@ void Scene::Shutdown ()
 	ctx->DestroyBuffer (sphereVtx);
 	ctx->DestroyBuffer (sphereIdx);
 	for (auto &u : frameUbo) ctx->DestroyBuffer (u);
-	VkPipeline pipes[] = { meshOpaque, meshBlend, meshAdditive, starPipeline };
+	VkPipeline pipes[] = { meshOpaque, meshBlend, meshAdditive, starPipeline, particleAdditive, particleBlend };
 	for (auto p : pipes) if (p) vkDestroyPipeline (ctx->device, p, nullptr);
 	vkDestroyPipelineLayout (ctx->device, meshLayout, nullptr);
+	vkDestroyPipelineLayout (ctx->device, particleLayout, nullptr);
+	gc->TexMgr()->Release (exhaustTex);
 	vkDestroyPipelineLayout (ctx->device, starLayout, nullptr);
 	vkDestroyDescriptorPool (ctx->device, framePool, nullptr);
 	vkDestroyDescriptorSetLayout (ctx->device, frameLayout, nullptr);
@@ -310,6 +316,105 @@ void Scene::CreatePipelines ()
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &starPipeline));
 	vkDestroyShaderModule (ctx->device, vs, nullptr);
 	vkDestroyShaderModule (ctx->device, fs, nullptr);
+
+	// billboards: view-space vertices, one texture
+	VkDescriptorSetLayout texLayout = gc->TexMgr()->Layout();
+	VkPushConstantRange ppcr{ VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(proj) };
+	VkPipelineLayoutCreateInfo plci2{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+	plci2.setLayoutCount = 1;
+	plci2.pSetLayouts = &texLayout;
+	plci2.pushConstantRangeCount = 1;
+	plci2.pPushConstantRanges = &ppcr;
+	VK_CHECK(vkCreatePipelineLayout (ctx->device, &plci2, nullptr, &particleLayout));
+	particleAdditive = CreateParticlePipeline (true);
+	particleBlend = CreateParticlePipeline (false);
+}
+
+VkPipeline Scene::CreateParticlePipeline (bool additive)
+{
+	VkShaderModule vs = ctx->CreateShaderModule (spv_particle_vert, spv_particle_vert_size);
+	VkShaderModule fs = ctx->CreateShaderModule (spv_particle_frag, spv_particle_frag_size);
+	VkPipelineShaderStageCreateInfo stages[2] = {
+		{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vs, "main" },
+		{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main" }
+	};
+	VkVertexInputBindingDescription bind{ 0, sizeof(PVtx), VK_VERTEX_INPUT_RATE_VERTEX };
+	VkVertexInputAttributeDescription attr[3] = {
+		{ 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(PVtx, x) },
+		{ 1, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(PVtx, u) },
+		{ 2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(PVtx, r) }
+	};
+	VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+	vi.vertexBindingDescriptionCount = 1;
+	vi.pVertexBindingDescriptions = &bind;
+	vi.vertexAttributeDescriptionCount = 3;
+	vi.pVertexAttributeDescriptions = attr;
+	VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+	ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+	VkPipelineViewportStateCreateInfo vps{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+	vps.viewportCount = 1;
+	vps.scissorCount = 1;
+	VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+	rs.polygonMode = VK_POLYGON_MODE_FILL;
+	rs.cullMode = VK_CULL_MODE_NONE;
+	rs.lineWidth = 1.0f;
+	VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+	ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+	VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+	ds.depthTestEnable = VK_TRUE;
+	ds.depthWriteEnable = VK_FALSE;
+	ds.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL; // reversed z
+	VkPipelineColorBlendAttachmentState cba{};
+	cba.colorWriteMask = 0xF;
+	cba.blendEnable = VK_TRUE;
+	cba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+	cba.dstColorBlendFactor = additive ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+	cba.colorBlendOp = VK_BLEND_OP_ADD;
+	cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+	cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+	cba.alphaBlendOp = VK_BLEND_OP_ADD;
+	VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+	cb.attachmentCount = 1;
+	cb.pAttachments = &cba;
+	VkDynamicState dyn[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+	VkPipelineDynamicStateCreateInfo dy{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+	dy.dynamicStateCount = 2;
+	dy.pDynamicStates = dyn;
+	VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+	rci.colorAttachmentCount = 1;
+	rci.pColorAttachmentFormats = &ctx->colorFormat;
+	rci.depthAttachmentFormat = ctx->depthFormat;
+	VkGraphicsPipelineCreateInfo gpi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+	gpi.pNext = &rci;
+	gpi.stageCount = 2;
+	gpi.pStages = stages;
+	gpi.pVertexInputState = &vi;
+	gpi.pInputAssemblyState = &ia;
+	gpi.pViewportState = &vps;
+	gpi.pRasterizationState = &rs;
+	gpi.pMultisampleState = &ms;
+	gpi.pDepthStencilState = &ds;
+	gpi.pColorBlendState = &cb;
+	gpi.pDynamicState = &dy;
+	gpi.layout = particleLayout;
+	VkPipeline pipe = VK_NULL_HANDLE;
+	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &pipe));
+	vkDestroyShaderModule (ctx->device, vs, nullptr);
+	vkDestroyShaderModule (ctx->device, fs, nullptr);
+	return pipe;
+}
+
+void Scene::DrawBillboards (VkTexture *tex, bool additive, const PVtx *v, size_t n)
+{
+	if (!n || !tex) return;
+	VkCommandBuffer cmd = ctx->Cmd();
+	vkc::Context::Transient vb = ctx->AllocTransient (n * sizeof(PVtx));
+	memcpy (vb.ptr, v, n * sizeof(PVtx));
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, additive ? particleAdditive : particleBlend);
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, particleLayout, 0, 1, &tex->set, 0, nullptr);
+	vkCmdBindVertexBuffers (cmd, 0, 1, &vb.buffer, &vb.offset);
+	vkCmdPushConstants (cmd, particleLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(proj), proj);
+	vkCmdDraw (cmd, (uint32_t)n, 1, 0, 0);
 }
 
 void Scene::BuildSphere ()
@@ -476,6 +581,8 @@ void Scene::Render ()
 
 	std::sort (list.begin(), list.end(), [](VObject *a, VObject *b) { return a->CamDist() > b->CamDist(); });
 	for (auto *vo : list) vo->Render (RenderPass::Transparent);
+
+	for (auto *ps : gc->ParticleStreams()) ps->Render (this);
 }
 
 void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass,
@@ -486,6 +593,8 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 	VkCommandBuffer cmd = ctx->Cmd();
 	VkDeviceSize ofs = 0;
 	VkBuffer vb = mesh->VertexBuffer();
+	// billboards drawn in between use a different layout for set 0
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &frameSet[ctx->FrameIndex()], 0, nullptr);
 	vkCmdBindVertexBuffers (cmd, 0, 1, &vb, &ofs);
 	vkCmdBindIndexBuffer (cmd, mesh->IndexBuffer(), 0, VK_INDEX_TYPE_UINT16);
 
@@ -535,6 +644,7 @@ void Scene::DrawSphere (const Mat4 &modelView, const float colour[4], bool unlit
 {
 	VkCommandBuffer cmd = ctx->Cmd();
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshOpaque);
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &frameSet[ctx->FrameIndex()], 0, nullptr);
 	VkDescriptorSet ws = gc->TexMgr()->White()->set;
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 1, 1, &ws, 0, nullptr);
 	VkDeviceSize ofs = 0;

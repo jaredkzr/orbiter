@@ -65,9 +65,18 @@ public:
 	void DrawSphere (const Mat4 &modelView, const float colour[4], bool unlit);
 	double PixelSize (double size, double dist) const;
 
+	/// view-space position of a global point
+	VECTOR3 ViewPos (const VECTOR3 &gpos) const { return view.TransformPoint (gpos - camPos); }
+	/// view-space direction of a global direction
+	VECTOR3 ViewDir (const VECTOR3 &gdir) const { return view.TransformPoint (gdir); }
+	/// draw view-space billboard triangles (particles, exhaust flames)
+	void DrawBillboards (VkTexture *tex, bool additive, const struct PVtx *v, size_t n);
+	VkTexture *DefaultExhaustTex () const { return exhaustTex; }
+
 private:
 	void CreatePipelines ();
 	VkPipeline CreateMeshPipeline (bool blend, bool additive, bool depthWrite);
+	VkPipeline CreateParticlePipeline (bool additive);
 	void UpdateCamera ();
 	void BuildSphere ();
 
@@ -85,6 +94,10 @@ private:
 	VkPipeline meshAdditive = VK_NULL_HANDLE;
 	VkPipelineLayout starLayout = VK_NULL_HANDLE;
 	VkPipeline starPipeline = VK_NULL_HANDLE;
+	VkPipelineLayout particleLayout = VK_NULL_HANDLE;
+	VkPipeline particleAdditive = VK_NULL_HANDLE;
+	VkPipeline particleBlend = VK_NULL_HANDLE;
+	VkTexture *exhaustTex = nullptr;
 
 	// sphere geometry for planets
 	vkc::Buffer sphereVtx, sphereIdx;

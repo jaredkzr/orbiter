@@ -14,11 +14,13 @@
 #include "VkTexture.h"
 #include <memory>
 #include <string>
+#include <vector>
 
 struct SDL_Window;
 class Scene;
 class Renderer2D;
 class FontManager;
+class VkParticleStream;
 
 class VulkanClient : public oapi::GraphicsClient {
 public:
@@ -55,6 +57,15 @@ public:
 	// --- screenshots ---
 	bool clbkSaveSurfaceToImage (SURFHANDLE surf, const char *fname,
 		oapi::ImageFileFormat fmt, float quality = 0.7f) override;
+
+	// --- particle streams ---
+	oapi::ParticleStream *clbkCreateParticleStream (PARTICLESTREAMSPEC *pss) override;
+	oapi::ParticleStream *clbkCreateExhaustStream (PARTICLESTREAMSPEC *pss,
+		OBJHANDLE hVessel, const double *lvl, const VECTOR3 *ref, const VECTOR3 *dir) override;
+	oapi::ParticleStream *clbkCreateExhaustStream (PARTICLESTREAMSPEC *pss,
+		OBJHANDLE hVessel, const double *lvl, const VECTOR3 &ref, const VECTOR3 &dir) override;
+	oapi::ParticleStream *clbkCreateReentryStream (PARTICLESTREAMSPEC *pss, OBJHANDLE hVessel) override;
+	const std::vector<VkParticleStream*> &ParticleStreams () const { return streams; }
 
 	// --- 2D panels ---
 	void clbkRender2DPanel (SURFHANDLE *hSurf, MESHHANDLE hMesh, MATRIX3 *T, bool additive = false) override;
@@ -110,6 +121,8 @@ private:
 	std::unique_ptr<Scene> scene;
 	std::unique_ptr<Renderer2D> r2d;
 	std::unique_ptr<FontManager> fonts;
+	std::vector<VkParticleStream*> streams; // owned: the core only detaches them
+	void DeleteStreams (bool all);
 	bool ready = false;      // device initialised
 	bool imguiReady = false;
 	bool frameActive = false; // a frame is being recorded

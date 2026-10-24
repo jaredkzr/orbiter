@@ -61,6 +61,8 @@ set(SHADER_SRC
 	Shaders/stars.frag
 	Shaders/draw2d.vert
 	Shaders/draw2d.frag
+	Shaders/particle.vert
+	Shaders/particle.frag
 )
 set(SHADER_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 set(SHADER_HEADERS)
@@ -93,6 +95,7 @@ add_library(VulkanClient SHARED
 	Draw2D.cpp
 	Sketchpad.cpp
 	Fonts.cpp
+	Particles.cpp
 	Input.cpp
 	ImageIO.cpp
 	Vma.cpp

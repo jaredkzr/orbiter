@@ -4,6 +4,9 @@
 #include "VObjects.h"
 #include "VkMesh.h"
 #include "VulkanClient.h"
+#include "Particles.h"
+#include <map>
+#include <random>
 #include "VesselAPI.h"
 #include <algorithm>
 #include <cctype>
@@ -248,6 +251,49 @@ void VVessel::Render (RenderPass pass)
 		scene->DrawMesh (rec.mesh.get(), meshMv, pass, &rec.grpTransform, &rec.grpVisible,
 			(m < ovr.size() && !ovr[m].empty()) ? &ovr[m] : nullptr);
 	}
+	if (pass == RenderPass::Transparent) RenderExhaust ();
+}
+
+void VVessel::RenderExhaust ()
+{
+	// Exhaust textures hold the flame strip in u = [0, 1/4] (nozzle at v = 0)
+	// and a glow sprite in [1/2, 1] x [0, 1/2].
+	DWORD n = vessel->GetExhaustCount ();
+	if (!n) return;
+	static std::mt19937 rng (12345);
+	std::uniform_real_distribution<double> uni (0.0, 1.0);
+	std::map<VkTexture*, std::vector<PVtx>> batches;
+	for (DWORD i = 0; i < n; i++) {
+		double lvl = vessel->GetExhaustLevel (i);
+		if (lvl <= 0.0) continue;
+		EXHAUSTSPEC es;
+		if (!vessel->GetExhaustSpec (i, &es) || !es.lpos || !es.ldir) continue;
+		VECTOR3 gd = mul (grot, *es.ldir);
+		VECTOR3 s0 = gpos + mul (grot, *es.lpos) - gd * es.lofs;
+		VECTOR3 s1 = s0 - gd * es.lsize;
+		float a = (float)(std::min (1.0, lvl) * (1.0 - es.modulate * uni (rng)));
+		VECTOR3 vs = scene->ViewPos (s0), ve = scene->ViewPos (s1);
+		VECTOR3 axis = ve - vs, mid = (vs + ve) * 0.5;
+		VECTOR3 perp = crossp (axis, mid);
+		double len = length (perp);
+		if (len < 1e-9) continue; // looking straight along the flame
+		perp *= 0.5 * es.wsize / len;
+		VkTexture *tex = es.tex ? (VkTexture*)es.tex : scene->DefaultExhaustTex ();
+		auto &v = batches[tex];
+		auto P = [&](const VECTOR3 &p, float u, float t) {
+			return PVtx{ (float)p.x, (float)p.y, (float)p.z, u, t, 1.0f, 1.0f, 1.0f, a };
+		};
+		PVtx q[4] = { P (vs + perp, 0.0f, 0.0f), P (vs - perp, 0.25f, 0.0f), P (ve - perp, 0.25f, 1.0f), P (ve + perp, 0.0f, 1.0f) };
+		v.insert (v.end(), { q[0], q[1], q[2], q[0], q[2], q[3] });
+		// glow at the nozzle, facing the camera
+		float h = (float)es.wsize;
+		float x = (float)vs.x, y = (float)vs.y, z = (float)vs.z;
+		PVtx g[4] = {
+			{ x - h, y - h, z, 0.5f, 0.0f, 1, 1, 1, a }, { x + h, y - h, z, 1.0f, 0.0f, 1, 1, 1, a },
+			{ x + h, y + h, z, 1.0f, 0.5f, 1, 1, 1, a }, { x - h, y + h, z, 0.5f, 0.5f, 1, 1, 1, a } };
+		v.insert (v.end(), { g[0], g[1], g[2], g[0], g[2], g[3] });
+	}
+	for (auto &b : batches) scene->DrawBillboards (b.first, true, b.second.data(), b.second.size());
 }
 
 // ======================================================================

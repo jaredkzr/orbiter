@@ -62,6 +62,7 @@ private:
 	void LoadMeshes ();
 	void InsertMesh (UINT idx);
 	void UpdateAnimations ();
+	void RenderExhaust ();
 
 	VESSEL *vessel;
 	std::vector<MeshRec> meshes;
