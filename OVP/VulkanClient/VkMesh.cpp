@@ -3,6 +3,7 @@
 
 #include "VkMesh.h"
 #include "VkTexture.h"
+#include <algorithm>
 
 namespace {
 	constexpr DWORD SPEC_NONE = (DWORD)-1; // "no texture" / "default material" index
@@ -36,8 +37,6 @@ VkMesh::VkMesh (vkc::Context *c, TextureManager *tm, MESHHANDLE h)
 	}
 
 	// geometry: all groups in one vertex and one index buffer
-	std::vector<NTVERTEX> vtx;
-	std::vector<uint16_t> idx;
 	DWORD nGrp = oapiMeshGroupCount (hMesh);
 	for (DWORD i = 0; i < nGrp; i++) {
 		MESHGROUP *mg = oapiMeshGroup (hMesh, i);
@@ -51,12 +50,14 @@ VkMesh::VkMesh (vkc::Context *c, TextureManager *tm, MESHHANDLE h)
 			g.usrFlag = mg->UsrFlag;
 			DWORD ti = (mg->TexIdx == SPEC_NONE || mg->TexIdx >= textures.size()) ? SPEC_NONE : mg->TexIdx;
 			groupTexIdx.push_back (ti);
+			groupMtrlIdx.push_back (mg->MtrlIdx);
 			g.tex = (ti == SPEC_NONE ? nullptr : textures[ti]);
 			g.transparent = IsTransparent (materials[g.material], g);
 			vtx.insert (vtx.end(), mg->Vtx, mg->Vtx + mg->nVtx);
 			idx.insert (idx.end(), mg->Idx, mg->Idx + mg->nIdx);
 		} else {
 			groupTexIdx.push_back (SPEC_NONE);
+			groupMtrlIdx.push_back (SPEC_NONE);
 		}
 		groups.push_back (g);
 	}
@@ -103,5 +104,65 @@ int VkMesh::GetMaterial (DWORD matidx, MATERIAL *mat) const
 {
 	if (matidx + 1 >= materials.size()) return 4;
 	*mat = materials[matidx + 1];
+	return 0;
+}
+
+int VkMesh::GetGroupData (DWORD grp, GROUPREQUESTSPEC *grs) const
+{
+	if (grp >= groups.size()) return 1;
+	const Group &g = groups[grp];
+	DWORD nv = (grp + 1 < groups.size() ? groups[grp+1].vertexOffset : (int32_t)vtx.size()) - g.vertexOffset;
+	int res = 0;
+	if (grs->nVtx && grs->Vtx) {
+		for (DWORD i = 0; i < grs->nVtx; i++) {
+			DWORD vi = grs->VtxPerm ? grs->VtxPerm[i] : i;
+			if (vi < nv) grs->Vtx[i] = vtx[g.vertexOffset + vi];
+			else res = 1;
+		}
+	}
+	if (grs->nIdx && grs->Idx) {
+		for (DWORD i = 0; i < grs->nIdx; i++) {
+			DWORD ii = grs->IdxPerm ? grs->IdxPerm[i] : i;
+			if (ii < g.nIndex) grs->Idx[i] = idx[g.firstIndex + ii];
+			else res = 1;
+		}
+	}
+	grs->MtrlIdx = groupMtrlIdx[grp];
+	grs->TexIdx = groupTexIdx[grp];
+	return res;
+}
+
+int VkMesh::EditGroup (DWORD grp, GROUPEDITSPEC *ges)
+{
+	if (grp >= groups.size()) return 1;
+	Group &g = groups[grp];
+	DWORD flag = ges->flags;
+	if (flag & GRPEDIT_SETUSERFLAG)      g.usrFlag = ges->UsrFlag;
+	else if (flag & GRPEDIT_ADDUSERFLAG) g.usrFlag |= ges->UsrFlag;
+	else if (flag & GRPEDIT_DELUSERFLAG) g.usrFlag &= ~ges->UsrFlag;
+
+	if ((flag & GRPEDIT_VTXMOD) && ges->Vtx) {
+		DWORD nv = (grp + 1 < groups.size() ? groups[grp+1].vertexOffset : (int32_t)vtx.size()) - g.vertexOffset;
+		NTVERTEX *gv = vtx.data() + g.vertexOffset;
+		DWORD vmin = nv, vmax = 0;
+		for (DWORD i = 0; i < ges->nVtx; i++) {
+			DWORD vi = ges->vIdx ? ges->vIdx[i] : i;
+			if (vi >= nv) continue;
+			NTVERTEX &v = gv[vi];
+			const NTVERTEX &s = ges->Vtx[i];
+			if (flag & GRPEDIT_VTXCRDX) v.x = s.x;   else if (flag & GRPEDIT_VTXCRDADDX) v.x += s.x;
+			if (flag & GRPEDIT_VTXCRDY) v.y = s.y;   else if (flag & GRPEDIT_VTXCRDADDY) v.y += s.y;
+			if (flag & GRPEDIT_VTXCRDZ) v.z = s.z;   else if (flag & GRPEDIT_VTXCRDADDZ) v.z += s.z;
+			if (flag & GRPEDIT_VTXNMLX) v.nx = s.nx; else if (flag & GRPEDIT_VTXNMLADDX) v.nx += s.nx;
+			if (flag & GRPEDIT_VTXNMLY) v.ny = s.ny; else if (flag & GRPEDIT_VTXNMLADDY) v.ny += s.ny;
+			if (flag & GRPEDIT_VTXNMLZ) v.nz = s.nz; else if (flag & GRPEDIT_VTXNMLADDZ) v.nz += s.nz;
+			if (flag & GRPEDIT_VTXTEXU) v.tu = s.tu; else if (flag & GRPEDIT_VTXTEXADDU) v.tu += s.tu;
+			if (flag & GRPEDIT_VTXTEXV) v.tv = s.tv; else if (flag & GRPEDIT_VTXTEXADDV) v.tv += s.tv;
+			vmin = std::min (vmin, vi);
+			vmax = std::max (vmax, vi);
+		}
+		if (vmin <= vmax && vbuf.buffer)
+			ctx->UpdateBuffer (vbuf.buffer, (g.vertexOffset + vmin) * sizeof(NTVERTEX), gv + vmin, (vmax - vmin + 1) * sizeof(NTVERTEX));
+	}
 	return 0;
 }

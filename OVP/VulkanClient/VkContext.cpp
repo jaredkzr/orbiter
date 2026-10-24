@@ -184,6 +184,8 @@ void Context::Shutdown ()
 	vkDeviceWaitIdle (device);
 	for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
 		FlushDeferred (i);
+		for (auto &b : frames[i].transient) DestroyBuffer (b);
+		frames[i].transient.clear();
 		vkDestroyCommandPool (device, frames[i].pool, nullptr);
 		vkDestroySemaphore (device, frames[i].imageAvailable, nullptr);
 		vkDestroyFence (device, frames[i].inFlight, nullptr);
@@ -310,7 +312,7 @@ bool Context::RecreateSwapchain ()
 // ======================================================================
 // Frames
 
-static void ImageBarrier (VkCommandBuffer cmd, VkImage image, VkImageAspectFlags aspect,
+void ImageBarrier (VkCommandBuffer cmd, VkImage image, VkImageAspectFlags aspect,
 	VkImageLayout from, VkImageLayout to,
 	VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
 	VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess)
@@ -331,16 +333,32 @@ static void ImageBarrier (VkCommandBuffer cmd, VkImage image, VkImageAspectFlags
 	vkCmdPipelineBarrier2 (cmd, &dep);
 }
 
+VkCommandBuffer Context::Rec ()
+{
+	Frame &f = frames[frameIndex];
+	if (!recording) {
+		vkWaitForFences (device, 1, &f.inFlight, VK_TRUE, UINT64_MAX);
+		FlushDeferred (frameIndex);
+		f.transientUsed = 0;
+		f.transientChunk = 0;
+		vkResetCommandBuffer (f.cmd, 0);
+		VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+		bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+		VK_CHECK(vkBeginCommandBuffer (f.cmd, &bi));
+		recording = true;
+		bbState = BB_NONE;
+	}
+	return f.cmd;
+}
+
 bool Context::BeginFrame ()
 {
-	inFrame = false;
+	if (inFrame) return true;
 	if (!swapchain || swapchainDirty) {
 		if (!RecreateSwapchain ()) return false;
 	}
+	Rec ();
 	Frame &f = frames[frameIndex];
-	vkWaitForFences (device, 1, &f.inFlight, VK_TRUE, UINT64_MAX);
-	FlushDeferred (frameIndex);
-
 	VkResult res = vkAcquireNextImageKHR (device, swapchain, UINT64_MAX, f.imageAvailable, VK_NULL_HANDLE, &imageIndex);
 	if (res == VK_ERROR_OUT_OF_DATE_KHR) {
 		swapchainDirty = true;
@@ -350,60 +368,177 @@ bool Context::BeginFrame ()
 		VK_CHECK(res);
 		return false;
 	}
-	vkResetFences (device, 1, &f.inFlight);
-
-	vkResetCommandBuffer (f.cmd, 0);
-	VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-	bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-	VK_CHECK(vkBeginCommandBuffer (f.cmd, &bi));
 	inFrame = true;
+	bbState = BB_NONE;
 	return true;
 }
 
-void Context::BeginRendering ()
+void Context::SetViewportScissor (VkExtent2D ext)
 {
 	VkCommandBuffer cmd = frames[frameIndex].cmd;
-	ImageBarrier (cmd, swapImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
-		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-		VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
-		VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-	ImageBarrier (cmd, depth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
-		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-		VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-		VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+	VkViewport vp{ 0.0f, 0.0f, (float)ext.width, (float)ext.height, 0.0f, 1.0f };
+	VkRect2D sc{ {0, 0}, ext };
+	vkCmdSetViewport (cmd, 0, 1, &vp);
+	vkCmdSetScissor (cmd, 0, 1, &sc);
+}
 
+void Context::BindBackbuffer (bool withDepth)
+{
+	if (!inFrame) return;
+	if (cur.backbuffer && cur.depth == withDepth) return;
+	EndTarget ();
+	VkCommandBuffer cmd = frames[frameIndex].cmd;
+
+	bool clearColor = !(bbState & BB_COLOR);
+	if (clearColor) {
+		ImageBarrier (cmd, swapImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+			VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+			VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
+			VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+		bbState |= BB_COLOR;
+	}
 	VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
 	color.imageView = swapViews[imageIndex];
 	color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-	color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	color.loadOp = clearColor ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
 	color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 	color.clearValue.color = {{ 0.0f, 0.0f, 0.0f, 1.0f }};
+
 	VkRenderingAttachmentInfo dep{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-	dep.imageView = depth.view;
-	dep.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-	dep.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-	dep.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-	dep.clearValue.depthStencil = { 0.0f, 0 }; // reversed z: far = 0
+	if (withDepth) {
+		bool clearDepth = !(bbState & BB_DEPTH);
+		if (clearDepth) {
+			ImageBarrier (cmd, depth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+				VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+				VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+				VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
+			bbState |= BB_DEPTH;
+		}
+		dep.imageView = depth.view;
+		dep.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+		dep.loadOp = clearDepth ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+		dep.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		dep.clearValue.depthStencil = { 0.0f, 0 }; // reversed z: far = 0
+	}
 
 	VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
 	ri.renderArea = { {0, 0}, extent };
 	ri.layerCount = 1;
 	ri.colorAttachmentCount = 1;
 	ri.pColorAttachments = &color;
-	ri.pDepthAttachment = &dep;
+	ri.pDepthAttachment = withDepth ? &dep : nullptr;
 	vkCmdBeginRendering (cmd, &ri);
+	SetViewportScissor (extent);
+	cur = CurrentTarget();
+	cur.active = true;
+	cur.backbuffer = true;
+	cur.depth = withDepth;
+	cur.format = colorFormat;
+	cur.extent = extent;
+}
 
-	VkViewport vp{ 0.0f, 0.0f, (float)extent.width, (float)extent.height, 0.0f, 1.0f };
-	VkRect2D sc{ {0, 0}, extent };
-	vkCmdSetViewport (cmd, 0, 1, &vp);
-	vkCmdSetScissor (cmd, 0, 1, &sc);
+void Context::BindTarget (const Target &t)
+{
+	if (cur.active && !cur.backbuffer && cur.image == t.image) return;
+	EndTarget ();
+	VkCommandBuffer cmd = Rec ();
+	// surfaces rest in shader-read layout between rendering scopes
+	ImageBarrier (cmd, t.image, VK_IMAGE_ASPECT_COLOR_BIT,
+		VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+		VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT,
+		VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+
+	VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+	color.imageView = t.view;
+	color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+	color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+	ri.renderArea = { {0, 0}, t.extent };
+	ri.layerCount = 1;
+	ri.colorAttachmentCount = 1;
+	ri.pColorAttachments = &color;
+	vkCmdBeginRendering (cmd, &ri);
+	SetViewportScissor (t.extent);
+	cur = CurrentTarget();
+	cur.active = true;
+	cur.image = t.image;
+	cur.format = t.format;
+	cur.extent = t.extent;
+}
+
+void Context::EndTarget ()
+{
+	if (!cur.active) return;
+	VkCommandBuffer cmd = frames[frameIndex].cmd;
+	vkCmdEndRendering (cmd);
+	if (!cur.backbuffer) {
+		ImageBarrier (cmd, cur.image, VK_IMAGE_ASPECT_COLOR_BIT,
+			VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+			VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_TRANSFER_READ_BIT);
+	}
+	cur = CurrentTarget();
+}
+
+Context::Transient Context::AllocTransient (VkDeviceSize size)
+{
+	constexpr VkDeviceSize CHUNK = 4u << 20;
+	Rec ();
+	Frame &f = frames[frameIndex];
+	size = (size + 15) & ~(VkDeviceSize)15;
+	while (true) {
+		if (f.transientChunk < f.transient.size()) {
+			Buffer &b = f.transient[f.transientChunk];
+			if (f.transientUsed + size <= b.size) {
+				Transient t{ b.buffer, f.transientUsed, (uint8_t*)b.mapped + f.transientUsed };
+				f.transientUsed += size;
+				return t;
+			}
+			f.transientChunk++;
+			f.transientUsed = 0;
+			continue;
+		}
+		f.transient.push_back (CreateBuffer (std::max (CHUNK, size),
+			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true));
+	}
+}
+
+void Context::UpdateBuffer (VkBuffer dst, VkDeviceSize offset, const void *data, VkDeviceSize size)
+{
+	if (!size) return;
+	Transient src = AllocTransient (size);
+	memcpy (src.ptr, data, size);
+	VkCommandBuffer cmd = Rec ();
+	EndTarget (); // transfers are not allowed inside a rendering scope
+
+	VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+	mb.srcStageMask = VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
+	mb.srcAccessMask = 0; // write-after-read: execution dependency only
+	mb.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+	mb.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+	VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+	dep.memoryBarrierCount = 1;
+	dep.pMemoryBarriers = &mb;
+	vkCmdPipelineBarrier2 (cmd, &dep);
+
+	VkBufferCopy region{ src.offset, offset, size };
+	vkCmdCopyBuffer (cmd, src.buffer, dst, 1, &region);
+
+	mb.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+	mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+	mb.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
+	mb.dstAccessMask = VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_INDEX_READ_BIT;
+	vkCmdPipelineBarrier2 (cmd, &dep);
 }
 
 void Context::EndFrame ()
 {
-	if (!inFrame) return;
+	if (!inFrame) { SubmitPending (); return; }
 	Frame &f = frames[frameIndex];
-	vkCmdEndRendering (f.cmd);
+	BindBackbuffer (false); // make sure the image was initialised even if nothing was drawn
+	EndTarget ();
 
 	Buffer capture;
 	if (captureCb) {
@@ -428,10 +563,11 @@ void Context::EndFrame ()
 			VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
 	}
 	VK_CHECK(vkEndCommandBuffer (f.cmd));
+	recording = false;
 
 	VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
 	wait.semaphore = f.imageAvailable;
-	wait.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+	wait.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 	VkSemaphoreSubmitInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
 	signal.semaphore = renderFinished[imageIndex];
 	signal.stageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
@@ -444,6 +580,7 @@ void Context::EndFrame ()
 	si.pCommandBufferInfos = &cbi;
 	si.signalSemaphoreInfoCount = 1;
 	si.pSignalSemaphoreInfos = &signal;
+	vkResetFences (device, 1, &f.inFlight);
 	VK_CHECK(vkQueueSubmit2 (queue, 1, &si, f.inFlight));
 
 	if (capture.buffer) {
@@ -466,6 +603,23 @@ void Context::EndFrame ()
 		swapchainDirty = true;
 
 	inFrame = false;
+	frameIndex = (frameIndex + 1) % FRAMES_IN_FLIGHT;
+}
+
+void Context::SubmitPending ()
+{
+	if (!recording || inFrame) return;
+	Frame &f = frames[frameIndex];
+	EndTarget ();
+	VK_CHECK(vkEndCommandBuffer (f.cmd));
+	recording = false;
+	VkCommandBufferSubmitInfo cbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+	cbi.commandBuffer = f.cmd;
+	VkSubmitInfo2 si{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+	si.commandBufferInfoCount = 1;
+	si.pCommandBufferInfos = &cbi;
+	vkResetFences (device, 1, &f.inFlight);
+	VK_CHECK(vkQueueSubmit2 (queue, 1, &si, f.inFlight));
 	frameIndex = (frameIndex + 1) % FRAMES_IN_FLIGHT;
 }
 

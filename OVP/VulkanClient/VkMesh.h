@@ -45,6 +45,8 @@ public:
 	MESHHANDLE Template () const { return hMesh; }
 
 	bool SetTexture (DWORD texidx, VkTexture *tex);
+	int GetGroupData (DWORD grp, GROUPREQUESTSPEC *grs) const;
+	int EditGroup (DWORD grp, GROUPEDITSPEC *ges);
 	int SetMaterial (DWORD matidx, const MATERIAL *mat);
 	int GetMaterial (DWORD matidx, MATERIAL *mat) const;
 
@@ -57,6 +59,9 @@ private:
 	std::vector<MATERIAL> materials; // [0] = default material, [i+1] = mesh material i
 	std::vector<VkTexture*> textures; // mesh texture list (mesh texture index order)
 	std::vector<DWORD> groupTexIdx;  // per group: index into textures, or -1
+	std::vector<DWORD> groupMtrlIdx; // per group: material index of the template
+	std::vector<NTVERTEX> vtx;       // CPU copies of the geometry, for group queries and edits
+	std::vector<uint16_t> idx;
 };
 
 #endif // !__VKMESH_H

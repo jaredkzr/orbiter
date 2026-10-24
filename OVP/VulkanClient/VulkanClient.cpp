@@ -8,6 +8,9 @@
 #include "VkMesh.h"
 #include "Input.h"
 #include "ImageIO.h"
+#include "Draw2D.h"
+#include "Sketchpad.h"
+#include "Fonts.h"
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_vulkan.h"
@@ -49,6 +52,9 @@ VulkanClient::~VulkanClient ()
 {
 	scene.reset();
 	if (ready) {
+		r2d->Shutdown();
+		r2d.reset();
+		fonts.reset();
 		texmgr.Shutdown();
 		ctx.Shutdown();
 	}
@@ -81,6 +87,9 @@ bool VulkanClient::clbkInitialise ()
 		if (const char *n = getenv ("ORBITER_VK_SCREENSHOT_FRAME")) autoScreenshotFrame = (unsigned)atoi (n);
 	}
 	if (!texmgr.Init (&ctx)) return false;
+	r2d = std::make_unique<Renderer2D>();
+	if (!r2d->Init (&ctx, &texmgr)) return false;
+	fonts = std::make_unique<FontManager> (&texmgr);
 	ready = true;
 	return true;
 }
@@ -104,7 +113,11 @@ void VulkanClient::clbkPostCreation ()
 void VulkanClient::clbkCloseSession (bool fastclose)
 {
 	GraphicsClient::clbkCloseSession (fastclose);
-	if (ready) vkDeviceWaitIdle (ctx.device);
+	if (ready) {
+		r2d->Flush ();
+		ctx.SubmitPending ();
+		vkDeviceWaitIdle (ctx.device);
+	}
 	scene.reset();
 }
 
@@ -129,26 +142,35 @@ void VulkanClient::clbkRenderScene ()
 	if (!ready || !scene) return;
 	if (!ctx.BeginFrame ()) return;
 	frameActive = true;
-	ctx.BeginRendering ();
+	r2d->Flush ();
+	ctx.BindBackbuffer (true);
 	scene->Render ();
+	Render2DOverlay (); // panels, MFDs and HUD
 }
 
 void VulkanClient::clbkImGuiRenderDrawData ()
 {
 	if (!imguiReady) return;
 	ImGui::Render ();
-	if (frameActive)
+	if (frameActive) {
+		r2d->Flush ();
+		ctx.BindBackbuffer (false);
 		ImGui_ImplVulkan_RenderDrawData (ImGui::GetDrawData(), ctx.Cmd());
+	}
 }
 
 bool VulkanClient::clbkDisplayFrame ()
 {
+	if (!ready) return false;
+	r2d->Flush ();
 	if (frameActive) {
 		if (!autoScreenshot.empty() && ++frameCount == autoScreenshotFrame) {
 			CaptureBackbuffer (autoScreenshot);
 			oapiWriteLogV ("VulkanClient: screenshot saved to %s", autoScreenshot.c_str());
 		}
 		ctx.EndFrame ();
+	} else {
+		ctx.SubmitPending (); // offscreen work recorded without a frame
 	}
 	frameActive = false;
 	return true;
@@ -271,6 +293,176 @@ int VulkanClient::clbkMeshMaterial (DEVMESHHANDLE hMesh, DWORD matidx, MATERIAL 
 	return hMesh ? ((VkMesh*)hMesh)->GetMaterial (matidx, mat) : 2;
 }
 
+int VulkanClient::clbkGetMeshGroup (DEVMESHHANDLE hMesh, DWORD grpidx, GROUPREQUESTSPEC *grs)
+{
+	return hMesh ? ((VkMesh*)hMesh)->GetGroupData (grpidx, grs) : -2;
+}
+
+int VulkanClient::clbkEditMeshGroup (DEVMESHHANDLE hMesh, DWORD grpidx, GROUPEDITSPEC *ges)
+{
+	return hMesh ? ((VkMesh*)hMesh)->EditGroup (grpidx, ges) : -2;
+}
+
+// ======================================================================
+// 2D panels
+
+void VulkanClient::clbkRender2DPanel (SURFHANDLE *hSurf, MESHHANDLE hMesh, MATRIX3 *T, bool additive)
+{
+	clbkRender2DPanel (hSurf, hMesh, T, 1.0f, additive);
+}
+
+void VulkanClient::clbkRender2DPanel (SURFHANDLE *hSurf, MESHHANDLE hMesh, MATRIX3 *T, float alpha, bool additive)
+{
+	if (!r2d || !hMesh || !r2d->Begin (nullptr)) return;
+	// Vertices are in panel pixels, mapped by scale and offset (the core adds
+	// a half-pixel offset for D3D pixel centres, which is removed here)
+	float sx = (float)T->m11, sy = (float)T->m22;
+	float tx = (float)T->m13 + 0.5f, ty = (float)T->m23 + 0.5f;
+	DWORD ngrp = oapiMeshGroupCount (hMesh);
+	for (DWORD g = 0; g < ngrp; g++) {
+		MESHGROUP *grp = oapiMeshGroup (hMesh, g);
+		if (!grp || (grp->UsrFlag & 2) || !grp->nIdx || !grp->Vtx) continue;
+		VkTexture *tex = nullptr;
+		if (grp->TexIdx >= TEXIDX_MFD0) {
+			DWORD mfd = grp->TexIdx - TEXIDX_MFD0;
+			if (mfd < MAXMFD && !(tex = (VkTexture*)GetMFDSurface ((int)mfd))) continue;
+		} else if (hSurf) {
+			tex = (VkTexture*)hSurf[grp->TexIdx];
+		} else {
+			tex = (VkTexture*)oapiGetTextureHandle (hMesh, grp->TexIdx + 1); // the mesh's own textures
+		}
+		DrawState2D st;
+		st.tex = tex;
+		st.blend = additive ? Blend2D::Additive : Blend2D::Alpha;
+		Vtx2D *v = r2d->AddTris (st, grp->nIdx);
+		if (!v) return;
+		for (DWORD i = 0; i < grp->nIdx; i++) {
+			const NTVERTEX &p = grp->Vtx[grp->Idx[i] < grp->nVtx ? grp->Idx[i] : 0];
+			v[i] = { sx * p.x + tx, sy * p.y + ty, p.tu, p.tv, 1.0f, 1.0f, 1.0f, alpha };
+		}
+	}
+}
+
+// ======================================================================
+// Surfaces
+
+SURFHANDLE VulkanClient::clbkLoadSurface (const char *fname, DWORD attrib, bool bPath)
+{
+	if (!ready) return NULL;
+	// surfaces that are drawn to get a private copy
+	bool writable = (attrib & (OAPISURFACE_RENDERTARGET | OAPISURFACE_GDI | OAPISURFACE_SKETCHPAD | OAPISURFACE_UNCOMPRESS)) != 0;
+	return (SURFHANDLE)texmgr.Load (fname, !writable, bPath);
+}
+
+SURFHANDLE VulkanClient::clbkCreateSurfaceEx (DWORD w, DWORD h, DWORD attrib)
+{
+	return ready ? (SURFHANDLE)texmgr.CreateSurface (w, h) : NULL;
+}
+
+SURFHANDLE VulkanClient::clbkCreateSurface (DWORD w, DWORD h, SURFHANDLE hTemplate)
+{
+	return ready ? (SURFHANDLE)texmgr.CreateSurface (w, h) : NULL;
+}
+
+SURFHANDLE VulkanClient::clbkCreateTexture (DWORD w, DWORD h)
+{
+	return ready ? (SURFHANDLE)texmgr.CreateSurface (w, h) : NULL;
+}
+
+bool VulkanClient::clbkSetSurfaceColourKey (SURFHANDLE surf, DWORD ckey)
+{
+	if (!surf) return false;
+	((VkTexture*)surf)->ckey = (ckey == SURF_NO_CK ? VkTexture::NO_CKEY : (ckey & 0xFFFFFF));
+	return true;
+}
+
+bool VulkanClient::clbkBlt (SURFHANDLE tgt, DWORD tgtx, DWORD tgty, SURFHANDLE src, DWORD flag) const
+{
+	VkTexture *s = (VkTexture*)src;
+	if (!r2d || !s) return false;
+	return r2d->Blit ((VkTexture*)tgt, tgtx, tgty, s->width, s->height, s, 0, 0, s->width, s->height, flag & BLT_SRCCOLORKEY);
+}
+
+bool VulkanClient::clbkBlt (SURFHANDLE tgt, DWORD tgtx, DWORD tgty, SURFHANDLE src, DWORD srcx, DWORD srcy, DWORD w, DWORD h, DWORD flag) const
+{
+	if (!r2d || !src) return false;
+	return r2d->Blit ((VkTexture*)tgt, tgtx, tgty, w, h, (VkTexture*)src, srcx, srcy, w, h, flag & BLT_SRCCOLORKEY);
+}
+
+bool VulkanClient::clbkScaleBlt (SURFHANDLE tgt, DWORD tgtx, DWORD tgty, DWORD tgtw, DWORD tgth,
+	SURFHANDLE src, DWORD srcx, DWORD srcy, DWORD srcw, DWORD srch, DWORD flag) const
+{
+	if (!r2d || !src) return false;
+	return r2d->Blit ((VkTexture*)tgt, tgtx, tgty, tgtw, tgth, (VkTexture*)src, srcx, srcy, srcw, srch, flag & BLT_SRCCOLORKEY);
+}
+
+bool VulkanClient::clbkFillSurface (SURFHANDLE surf, DWORD col) const
+{
+	if (!r2d) return false;
+	VkTexture *t = (VkTexture*)surf;
+	VkExtent2D ext = t ? VkExtent2D{ t->width, t->height } : ctx.Extent();
+	return r2d->Fill (t, 0, 0, ext.width, ext.height, col);
+}
+
+bool VulkanClient::clbkFillSurface (SURFHANDLE surf, DWORD tgtx, DWORD tgty, DWORD w, DWORD h, DWORD col) const
+{
+	return r2d ? r2d->Fill ((VkTexture*)surf, tgtx, tgty, w, h, col) : false;
+}
+
+// ======================================================================
+// Sketchpad and drawing tools
+
+oapi::Sketchpad *VulkanClient::clbkGetSketchpad (SURFHANDLE surf)
+{
+	if (!r2d) return NULL;
+	VkSketchpad *skp = new VkSketchpad (r2d.get(), fonts.get(), (VkTexture*)surf);
+	if (!skp->Valid()) {
+		delete skp;
+		return NULL;
+	}
+	return skp;
+}
+
+void VulkanClient::clbkReleaseSketchpad (oapi::Sketchpad *sp)
+{
+	delete (VkSketchpad*)sp; // flushes the drawing batch
+}
+
+oapi::Font *VulkanClient::clbkCreateFont (int height, bool prop, const char *face, FontStyle style, int orientation) const
+{
+	return fonts ? fonts->Create (height, prop, face, 0, 400, style, orientation, 0.0f) : NULL;
+}
+
+oapi::Font *VulkanClient::clbkCreateFontEx (int height, char *face, int width, int weight, FontStyle style, float spacing) const
+{
+	return fonts ? fonts->Create (height, true, face, width, weight, style, 0, spacing) : NULL;
+}
+
+void VulkanClient::clbkReleaseFont (oapi::Font *font) const
+{
+	delete font;
+}
+
+oapi::Pen *VulkanClient::clbkCreatePen (int style, int width, DWORD col) const
+{
+	return new VkPen (style, width, col);
+}
+
+void VulkanClient::clbkReleasePen (oapi::Pen *pen) const
+{
+	delete pen;
+}
+
+oapi::Brush *VulkanClient::clbkCreateBrush (DWORD col) const
+{
+	return new VkBrush (col);
+}
+
+void VulkanClient::clbkReleaseBrush (oapi::Brush *brush) const
+{
+	delete brush;
+}
+
 // ======================================================================
 // ImGui
 
@@ -301,7 +493,7 @@ void VulkanClient::clbkImGuiInit ()
 	ii.PipelineInfoMain.PipelineRenderingCreateInfo = { VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
 	ii.PipelineInfoMain.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
 	ii.PipelineInfoMain.PipelineRenderingCreateInfo.pColorAttachmentFormats = &ctx.colorFormat;
-	ii.PipelineInfoMain.PipelineRenderingCreateInfo.depthAttachmentFormat = ctx.depthFormat;
+	ii.PipelineInfoMain.PipelineRenderingCreateInfo.depthAttachmentFormat = VK_FORMAT_UNDEFINED; // drawn after the scene, without depth
 	ii.CheckVkResultFn = ImGuiCheckResult;
 	ImGui_ImplVulkan_Init (&ii);
 	imguiReady = true;

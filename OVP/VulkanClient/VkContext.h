@@ -35,19 +35,56 @@ namespace vkc {
 		VmaAllocation alloc = VK_NULL_HANDLE;
 	};
 
+	/// An offscreen colour image that can be rendered to. Between rendering
+	/// scopes it is kept in VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL.
+	struct Target {
+		VkImage image = VK_NULL_HANDLE;
+		VkImageView view = VK_NULL_HANDLE;
+		VkFormat format = VK_FORMAT_UNDEFINED;
+		VkExtent2D extent{};
+	};
+
+	void ImageBarrier (VkCommandBuffer cmd, VkImage image, VkImageAspectFlags aspect,
+		VkImageLayout from, VkImageLayout to,
+		VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
+		VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess);
+
 	class Context {
 	public:
 		bool Init (SDL_Window *window, bool enableValidation);
 		void Shutdown ();
 
-		// Frame control. BeginFrame returns false if no image could be acquired
-		// (e.g. the window is minimised); the frame is then skipped.
+		// Frame control. All GPU work is recorded into the command buffer of
+		// the current frame slot, which is opened on demand (Rec), so that
+		// offscreen surfaces can be drawn to between frames as well.
+		// BeginFrame acquires a swapchain image; it returns false if none
+		// could be acquired (e.g. the window is minimised). EndFrame presents
+		// the image, or just submits the recorded work if no frame was begun.
+		VkCommandBuffer Rec ();
 		bool BeginFrame ();
-		void BeginRendering ();
 		void EndFrame ();
+		void SubmitPending ();
 		bool InFrame () const { return inFrame; }
 
-		VkCommandBuffer Cmd () const { return frames[frameIndex].cmd; }
+		// Rendering scopes. Binding a target ends the current scope if it
+		// refers to a different target. The backbuffer is cleared on its
+		// first use in a frame.
+		void BindBackbuffer (bool withDepth);
+		void BindTarget (const Target &t);
+		void EndTarget ();
+		bool BoundTo (VkImage image) const { return cur.active && !cur.backbuffer && cur.image == image; }
+		VkFormat BoundFormat () const { return cur.format; }
+		VkExtent2D BoundExtent () const { return cur.extent; }
+
+		/// Host-visible memory valid for the current frame (vertex/index/uniform data)
+		struct Transient { VkBuffer buffer; VkDeviceSize offset; void *ptr; };
+		Transient AllocTransient (VkDeviceSize size);
+
+		/// Record an update of a device buffer region used as vertex/index
+		/// data, ordered with respect to earlier and later draws
+		void UpdateBuffer (VkBuffer dst, VkDeviceSize offset, const void *data, VkDeviceSize size);
+
+		VkCommandBuffer Cmd () { return Rec (); }
 		uint32_t FrameIndex () const { return frameIndex; }
 		VkExtent2D Extent () const { return extent; }
 
@@ -88,6 +125,7 @@ namespace vkc {
 		void DestroySwapchain ();
 		bool RecreateSwapchain ();
 		void FlushDeferred (uint32_t frame);
+		void SetViewportScissor (VkExtent2D ext);
 
 		struct Frame {
 			VkCommandPool pool = VK_NULL_HANDLE;
@@ -95,7 +133,22 @@ namespace vkc {
 			VkSemaphore imageAvailable = VK_NULL_HANDLE;
 			VkFence inFlight = VK_NULL_HANDLE;
 			std::vector<std::function<void()>> deferred;
+			std::vector<Buffer> transient;
+			size_t transientChunk = 0;
+			VkDeviceSize transientUsed = 0;
 		} frames[FRAMES_IN_FLIGHT];
+
+		struct CurrentTarget {
+			bool active = false;
+			bool backbuffer = false;
+			bool depth = false;
+			VkImage image = VK_NULL_HANDLE;
+			VkFormat format = VK_FORMAT_UNDEFINED;
+			VkExtent2D extent{};
+		} cur;
+		enum { BB_NONE = 0, BB_COLOR = 1, BB_DEPTH = 2 };
+		int bbState = BB_NONE;   // backbuffer attachments initialised in this frame
+		bool recording = false;
 
 		SDL_Window *window = nullptr;
 		VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;

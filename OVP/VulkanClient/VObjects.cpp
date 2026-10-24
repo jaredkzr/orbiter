@@ -217,7 +217,26 @@ void VVessel::Render (RenderPass pass)
 	bool internal = oapiCameraInternal() && oapiCameraTarget() == hObj;
 	bool vc = internal && oapiCockpitMode() == COCKPIT_VIRTUAL;
 	Mat4 mv = scene->ModelView (gpos, grot);
-	for (auto &rec : meshes) {
+
+	// virtual cockpit displays: MFD and HUD surfaces replace the textures of the registered groups
+	std::vector<std::vector<GroupTexOverride>> ovr;
+	if (vc) {
+		ovr.resize (meshes.size());
+		VulkanClient *gc = scene->Client();
+		for (int i = 0; i < MAXMFD; i++) {
+			const VCMFDSPEC *spec = nullptr;
+			SURFHANDLE surf = gc->GetVCMFDSurface (i, &spec);
+			if (surf && spec && spec->nmesh < meshes.size())
+				ovr[spec->nmesh].push_back ({ spec->ngroup, (VkTexture*)surf, false });
+		}
+		const VCHUDSPEC *hs = nullptr;
+		SURFHANDLE hud = gc->GetVCHUDSurface (&hs);
+		if (hud && hs && hs->nmesh < meshes.size())
+			ovr[hs->nmesh].push_back ({ hs->ngroup, (VkTexture*)hud, true });
+	}
+
+	for (size_t m = 0; m < meshes.size(); m++) {
+		MeshRec &rec = meshes[m];
 		if (!rec.mesh) continue;
 		bool visible;
 		if (!internal)
@@ -226,7 +245,8 @@ void VVessel::Render (RenderPass pass)
 			visible = (rec.visMode & MESHVIS_COCKPIT) || (vc && (rec.visMode & MESHVIS_VC)) || (rec.visMode & MESHVIS_EXTPASS);
 		if (!visible) continue;
 		Mat4 meshMv = mv * Mat4::Translation (rec.ofs);
-		scene->DrawMesh (rec.mesh.get(), meshMv, pass, &rec.grpTransform, &rec.grpVisible);
+		scene->DrawMesh (rec.mesh.get(), meshMv, pass, &rec.grpTransform, &rec.grpVisible,
+			(m < ovr.size() && !ovr[m].empty()) ? &ovr[m] : nullptr);
 	}
 }
 

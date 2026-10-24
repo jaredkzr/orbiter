@@ -112,15 +112,17 @@ void TextureManager::Shutdown ()
 	ctx = nullptr;
 }
 
-VkTexture *TextureManager::Load (const char *fname)
+VkTexture *TextureManager::Load (const char *fname, bool shared, bool fullPath)
 {
-	std::string key (fname);
-	auto it = cache.find (key);
-	if (it != cache.end()) {
-		it->second->refs++;
-		return it->second;
+	std::string key = (fullPath ? std::string (":") : std::string()) + fname;
+	if (shared) {
+		auto it = cache.find (key);
+		if (it != cache.end()) {
+			it->second->refs++;
+			return it->second;
+		}
 	}
-	std::string path = std::string ("Textures\\") + fname;
+	std::string path = fullPath ? std::string (fname) : std::string ("Textures\\") + fname;
 	VkTexture *tex = nullptr;
 	size_t len = path.size();
 	if (len > 4 && (!strcasecmp_portable (path.c_str() + len - 4, ".png"))) {
@@ -133,7 +135,7 @@ VkTexture *TextureManager::Load (const char *fname)
 	} else {
 		tex = LoadDDS (path);
 	}
-	if (tex) {
+	if (tex && shared) {
 		tex->name = key;
 		cache[key] = tex;
 	}
@@ -142,7 +144,7 @@ VkTexture *TextureManager::Load (const char *fname)
 
 void TextureManager::Release (VkTexture *tex)
 {
-	if (!tex || tex == white) return;
+	if (!tex || tex == white || !ctx) return;
 	if (--tex->refs > 0) return;
 	if (!tex->name.empty()) cache.erase (tex->name);
 	vkc::Context *c = ctx;
@@ -165,6 +167,103 @@ VkTexture *TextureManager::CreateRGBA (uint32_t w, uint32_t h, const uint8_t *rg
 {
 	std::vector<size_t> ofs = { 0 };
 	return CreateImage (VK_FORMAT_R8G8B8A8_SRGB, w, h, 1, rgba, ofs, (size_t)w * h * 4, true);
+}
+
+VkTexture *TextureManager::CreateCoverage (uint32_t w, uint32_t h, const uint8_t *data)
+{
+	std::vector<size_t> ofs = { 0 };
+	VkComponentMapping swz = { VK_COMPONENT_SWIZZLE_ONE, VK_COMPONENT_SWIZZLE_ONE, VK_COMPONENT_SWIZZLE_ONE, VK_COMPONENT_SWIZZLE_R };
+	return CreateImage (VK_FORMAT_R8_UNORM, w, h, 1, data, ofs, (size_t)w * h, false, &swz);
+}
+
+bool TextureManager::CreateTargetImage (uint32_t w, uint32_t h, vkc::Image &img)
+{
+	VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+	ici.imageType = VK_IMAGE_TYPE_2D;
+	ici.format = VK_FORMAT_R8G8B8A8_SRGB;
+	ici.extent = { w, h, 1 };
+	ici.mipLevels = 1;
+	ici.arrayLayers = 1;
+	ici.samples = VK_SAMPLE_COUNT_1_BIT;
+	ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+	ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+		VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+	VmaAllocationCreateInfo aci{};
+	aci.usage = VMA_MEMORY_USAGE_AUTO;
+	if (vmaCreateImage (ctx->allocator, &ici, &aci, &img.image, &img.alloc, nullptr) != VK_SUCCESS)
+		return false;
+	VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+	vci.image = img.image;
+	vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+	vci.format = ici.format;
+	vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+	VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &img.view));
+	return true;
+}
+
+VkTexture *TextureManager::CreateSurface (uint32_t w, uint32_t h)
+{
+	if (!w || !h) return nullptr;
+	VkTexture *tex = new VkTexture;
+	if (!CreateTargetImage (w, h, tex->img)) {
+		delete tex;
+		return nullptr;
+	}
+	tex->width = w, tex->height = h;
+	tex->format = VK_FORMAT_R8G8B8A8_SRGB;
+	tex->renderTarget = true;
+	VkImage image = tex->img.image;
+	ctx->ImmediateSubmit ([image](VkCommandBuffer cmd) {
+		vkc::ImageBarrier (cmd, image, VK_IMAGE_ASPECT_COLOR_BIT,
+			VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+		VkClearColorValue black = {{ 0.0f, 0.0f, 0.0f, 1.0f }};
+		VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		vkCmdClearColorImage (cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
+		vkc::ImageBarrier (cmd, image, VK_IMAGE_ASPECT_COLOR_BIT,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+			VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+	});
+	tex->set = AllocSet (tex->img.view);
+	return tex;
+}
+
+void TextureManager::ReplaceImage (VkTexture *tex, const vkc::Image &img)
+{
+	// Descriptor sets may still be referenced by recorded or executing
+	// command buffers, so the texture gets a new set rather than an update.
+	vkc::Context *c = ctx;
+	VkDescriptorPool p = pool;
+	vkc::Image old = tex->img;
+	VkDescriptorSet oldSet = tex->set;
+	c->DeferDestroy ([c, p, old, oldSet]() mutable {
+		if (oldSet) vkFreeDescriptorSets (c->device, p, 1, &oldSet);
+		c->DestroyImage (old);
+	});
+	tex->img = img;
+	tex->set = AllocSet (img.view);
+	tex->format = VK_FORMAT_R8G8B8A8_SRGB;
+	tex->renderTarget = true;
+}
+
+VkDescriptorSet TextureManager::AllocSet (VkImageView view)
+{
+	VkDescriptorSet set = VK_NULL_HANDLE;
+	VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+	dai.descriptorPool = pool;
+	dai.descriptorSetCount = 1;
+	dai.pSetLayouts = &layout;
+	VK_CHECK(vkAllocateDescriptorSets (ctx->device, &dai, &set));
+	VkDescriptorImageInfo dii{ sampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+	VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+	wr.dstSet = set;
+	wr.dstBinding = 0;
+	wr.descriptorCount = 1;
+	wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	wr.pImageInfo = &dii;
+	vkUpdateDescriptorSets (ctx->device, 1, &wr, 0, nullptr);
+	return set;
 }
 
 // ======================================================================
@@ -254,7 +353,8 @@ VkTexture *TextureManager::LoadDDS (const std::string &path)
 // ======================================================================
 
 VkTexture *TextureManager::CreateImage (VkFormat fmt, uint32_t w, uint32_t h, uint32_t nMip,
-	const uint8_t *data, const std::vector<size_t> &mipOffsets, size_t dataSize, bool genMips)
+	const uint8_t *data, const std::vector<size_t> &mipOffsets, size_t dataSize, bool genMips,
+	const VkComponentMapping *swizzle)
 {
 	if (genMips && nMip == 1) {
 		uint32_t m = std::max (w, h);
@@ -263,6 +363,7 @@ VkTexture *TextureManager::CreateImage (VkFormat fmt, uint32_t w, uint32_t h, ui
 
 	VkTexture *tex = new VkTexture;
 	tex->width = w, tex->height = h;
+	tex->format = fmt;
 
 	VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 	ici.imageType = VK_IMAGE_TYPE_2D;
@@ -339,20 +440,8 @@ VkTexture *TextureManager::CreateImage (VkFormat fmt, uint32_t w, uint32_t h, ui
 	vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
 	vci.format = fmt;
 	vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, nMip, 0, 1 };
+	if (swizzle) vci.components = *swizzle;
 	VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &tex->img.view));
-
-	VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-	dai.descriptorPool = pool;
-	dai.descriptorSetCount = 1;
-	dai.pSetLayouts = &layout;
-	VK_CHECK(vkAllocateDescriptorSets (ctx->device, &dai, &tex->set));
-	VkDescriptorImageInfo dii{ sampler, tex->img.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-	VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-	wr.dstSet = tex->set;
-	wr.dstBinding = 0;
-	wr.descriptorCount = 1;
-	wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-	wr.pImageInfo = &dii;
-	vkUpdateDescriptorSets (ctx->device, 1, &wr, 0, nullptr);
+	tex->set = AllocSet (tex->img.view);
 	return tex;
 }

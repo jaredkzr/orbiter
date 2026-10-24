@@ -18,6 +18,7 @@ class VulkanClient;
 class VObject;
 class VkMesh;
 class StarSphere;
+class VkTexture;
 
 /// Per-draw push constants of the mesh pipeline (must match mesh.vert/frag)
 struct MeshPushConstants {
@@ -28,6 +29,13 @@ struct MeshPushConstants {
 };
 
 enum class RenderPass { Opaque, Transparent };
+
+/// Replacement texture for a mesh group, rendered unlit (e.g. VC MFD displays)
+struct GroupTexOverride {
+	uint32_t group;
+	VkTexture *tex;
+	bool additive;
+};
 
 class Scene {
 public:
@@ -52,7 +60,8 @@ public:
 	/// object-to-view transform for an object at global position gpos with rotation grot
 	Mat4 ModelView (const VECTOR3 &gpos, const MATRIX3 &grot) const;
 	void DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass,
-		const std::vector<Mat4> *groupTransforms = nullptr, const std::vector<uint8_t> *groupVisible = nullptr);
+		const std::vector<Mat4> *groupTransforms = nullptr, const std::vector<uint8_t> *groupVisible = nullptr,
+		const std::vector<GroupTexOverride> *texOverride = nullptr);
 	void DrawSphere (const Mat4 &modelView, const float colour[4], bool unlit);
 	double PixelSize (double size, double dist) const;
 

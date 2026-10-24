@@ -9,16 +9,24 @@
 #define __VKTEXTURE_H
 
 #include "VkContext.h"
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 
 class VkTexture {
 public:
+	static constexpr uint32_t NO_CKEY = 0xFFFFFFFF;
+
 	vkc::Image img;
-	VkDescriptorSet set = VK_NULL_HANDLE; // sampler binding for the mesh pipeline
+	VkDescriptorSet set = VK_NULL_HANDLE; // sampler binding (mesh, 2D and ImGui pipelines)
 	uint32_t width = 0, height = 0;
+	VkFormat format = VK_FORMAT_UNDEFINED;
+	bool renderTarget = false;            // single-level RGBA8 image usable as colour attachment
+	uint32_t ckey = NO_CKEY;              // colour key for blits (0xRRGGBB)
 	std::string name;                     // cache key (empty if not cached)
 	int refs = 1;
+
+	vkc::Target AsTarget () const { return { img.image, img.view, format, { width, height } }; }
 };
 
 class TextureManager {
@@ -26,11 +34,27 @@ public:
 	bool Init (vkc::Context *ctx);
 	void Shutdown ();
 
-	/// Load a texture file from the Textures directory (cached by name)
-	VkTexture *Load (const char *fname);
+	/// Load a texture file from the Textures directory. Shared textures are
+	/// cached by name; unshared ones are private copies (e.g. for drawing on).
+	/// With fullPath, fname is relative to the Orbiter root instead.
+	VkTexture *Load (const char *fname, bool shared = true, bool fullPath = false);
 
 	/// Create a texture from RGBA8 pixel data (sRGB)
 	VkTexture *CreateRGBA (uint32_t w, uint32_t h, const uint8_t *rgba);
+
+	/// Create a render-target surface, cleared to opaque black
+	VkTexture *CreateSurface (uint32_t w, uint32_t h);
+
+	/// Create a coverage texture from 8-bit values, sampled as (1,1,1,value)
+	VkTexture *CreateCoverage (uint32_t w, uint32_t h, const uint8_t *data);
+
+	/// Create an RGBA8 render-target image (contents undefined, layout UNDEFINED)
+	bool CreateTargetImage (uint32_t w, uint32_t h, vkc::Image &img);
+
+	/// Replace the image of a texture by a render-target image of the same
+	/// size (in shader-read layout). The old image is released when the GPU
+	/// no longer uses it.
+	void ReplaceImage (VkTexture *tex, const vkc::Image &img);
 
 	void AddRef (VkTexture *tex) { if (tex) tex->refs++; }
 	void Release (VkTexture *tex);
@@ -41,7 +65,9 @@ public:
 private:
 	VkTexture *LoadDDS (const std::string &path);
 	VkTexture *CreateImage (VkFormat fmt, uint32_t w, uint32_t h, uint32_t nMip,
-		const uint8_t *data, const std::vector<size_t> &mipOffsets, size_t dataSize, bool genMips);
+		const uint8_t *data, const std::vector<size_t> &mipOffsets, size_t dataSize, bool genMips,
+		const VkComponentMapping *swizzle = nullptr);
+	VkDescriptorSet AllocSet (VkImageView view);
 	void Destroy (VkTexture *tex);
 
 	vkc::Context *ctx = nullptr;

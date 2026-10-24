@@ -17,6 +17,8 @@
 
 struct SDL_Window;
 class Scene;
+class Renderer2D;
+class FontManager;
 
 class VulkanClient : public oapi::GraphicsClient {
 public:
@@ -54,6 +56,34 @@ public:
 	bool clbkSaveSurfaceToImage (SURFHANDLE surf, const char *fname,
 		oapi::ImageFileFormat fmt, float quality = 0.7f) override;
 
+	// --- 2D panels ---
+	void clbkRender2DPanel (SURFHANDLE *hSurf, MESHHANDLE hMesh, MATRIX3 *T, bool additive = false) override;
+	void clbkRender2DPanel (SURFHANDLE *hSurf, MESHHANDLE hMesh, MATRIX3 *T, float alpha, bool additive = false) override;
+
+	// --- surfaces ---
+	SURFHANDLE clbkLoadSurface (const char *fname, DWORD attrib, bool bPath = false) override;
+	SURFHANDLE clbkCreateSurfaceEx (DWORD w, DWORD h, DWORD attrib) override;
+	SURFHANDLE clbkCreateSurface (DWORD w, DWORD h, SURFHANDLE hTemplate = NULL) override;
+	SURFHANDLE clbkCreateTexture (DWORD w, DWORD h) override;
+	bool clbkSetSurfaceColourKey (SURFHANDLE surf, DWORD ckey) override;
+	bool clbkBlt (SURFHANDLE tgt, DWORD tgtx, DWORD tgty, SURFHANDLE src, DWORD flag = 0) const override;
+	bool clbkBlt (SURFHANDLE tgt, DWORD tgtx, DWORD tgty, SURFHANDLE src, DWORD srcx, DWORD srcy, DWORD w, DWORD h, DWORD flag = 0) const override;
+	bool clbkScaleBlt (SURFHANDLE tgt, DWORD tgtx, DWORD tgty, DWORD tgtw, DWORD tgth,
+		SURFHANDLE src, DWORD srcx, DWORD srcy, DWORD srcw, DWORD srch, DWORD flag = 0) const override;
+	bool clbkFillSurface (SURFHANDLE surf, DWORD col) const override;
+	bool clbkFillSurface (SURFHANDLE surf, DWORD tgtx, DWORD tgty, DWORD w, DWORD h, DWORD col) const override;
+
+	// --- sketchpad and drawing tools ---
+	oapi::Sketchpad *clbkGetSketchpad (SURFHANDLE surf) override;
+	void clbkReleaseSketchpad (oapi::Sketchpad *sp) override;
+	oapi::Font *clbkCreateFont (int height, bool prop, const char *face, FontStyle style = FontStyle::FONT_NORMAL, int orientation = 0) const override;
+	oapi::Font *clbkCreateFontEx (int height, char *face, int width = 0, int weight = 400, FontStyle style = FontStyle::FONT_NORMAL, float spacing = 0.0f) const override;
+	void clbkReleaseFont (oapi::Font *font) const override;
+	oapi::Pen *clbkCreatePen (int style, int width, DWORD col) const override;
+	void clbkReleasePen (oapi::Pen *pen) const override;
+	oapi::Brush *clbkCreateBrush (DWORD col) const override;
+	void clbkReleaseBrush (oapi::Brush *brush) const override;
+
 	// --- textures and meshes ---
 	SURFHANDLE clbkLoadTexture (const char *fname, DWORD flags = 0) override;
 	void clbkReleaseTexture (SURFHANDLE hTex) override;
@@ -63,6 +93,8 @@ public:
 	bool clbkSetMeshTexture (DEVMESHHANDLE hMesh, DWORD texidx, SURFHANDLE tex) override;
 	int clbkSetMeshMaterial (DEVMESHHANDLE hMesh, DWORD matidx, const MATERIAL *mat) override;
 	int clbkMeshMaterial (DEVMESHHANDLE hMesh, DWORD matidx, MATERIAL *mat) override;
+	int clbkGetMeshGroup (DEVMESHHANDLE hMesh, DWORD grpidx, GROUPREQUESTSPEC *grs) override;
+	int clbkEditMeshGroup (DEVMESHHANDLE hMesh, DWORD grpidx, GROUPEDITSPEC *ges) override;
 
 	// --- ImGui ---
 	void clbkImGuiInit () override;
@@ -76,6 +108,8 @@ private:
 	vkc::Context ctx;
 	TextureManager texmgr;
 	std::unique_ptr<Scene> scene;
+	std::unique_ptr<Renderer2D> r2d;
+	std::unique_ptr<FontManager> fonts;
 	bool ready = false;      // device initialised
 	bool imguiReady = false;
 	bool frameActive = false; // a frame is being recorded

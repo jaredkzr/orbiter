@@ -479,7 +479,8 @@ void Scene::Render ()
 }
 
 void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass,
-	const std::vector<Mat4> *groupTransforms, const std::vector<uint8_t> *groupVisible)
+	const std::vector<Mat4> *groupTransforms, const std::vector<uint8_t> *groupVisible,
+	const std::vector<GroupTexOverride> *texOverride)
 {
 	if (!mesh->VertexBuffer() || !mesh->IndexBuffer()) return;
 	VkCommandBuffer cmd = ctx->Cmd();
@@ -492,16 +493,21 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 	VkDescriptorSet boundTex = VK_NULL_HANDLE;
 	for (uint32_t g = 0; g < mesh->nGroup(); g++) {
 		const VkMesh::Group &grp = mesh->GetGroup (g);
-		if (!grp.nIndex || (grp.flags & VkMesh::GRP_HIDDEN)) continue;
+		if (!grp.nIndex || (grp.flags & VkMesh::GRP_HIDDEN) || (grp.usrFlag & 0x2)) continue;
 		if (groupVisible && g < groupVisible->size() && !(*groupVisible)[g]) continue;
-		if (grp.transparent != (pass == RenderPass::Transparent)) continue;
+		const GroupTexOverride *ovr = nullptr;
+		if (texOverride)
+			for (auto &o : *texOverride)
+				if (o.group == g) { ovr = &o; break; }
+		bool transparent = ovr ? ovr->additive : grp.transparent;
+		if (transparent != (pass == RenderPass::Transparent)) continue;
 
-		VkPipeline pipe = !grp.transparent ? meshOpaque : (grp.flags & VkMesh::GRP_ADDITIVE) ? meshAdditive : meshBlend;
+		VkPipeline pipe = !transparent ? meshOpaque : (ovr || (grp.flags & VkMesh::GRP_ADDITIVE)) ? meshAdditive : meshBlend;
 		if (pipe != bound) {
 			vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
 			bound = pipe;
 		}
-		VkTexture *tex = grp.tex ? grp.tex : gc->TexMgr()->White();
+		VkTexture *tex = ovr ? ovr->tex : grp.tex ? grp.tex : gc->TexMgr()->White();
 		if (tex->set != boundTex) {
 			vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 1, 1, &tex->set, 0, nullptr);
 			boundTex = tex->set;
@@ -516,6 +522,10 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 		pc.emissive[3] = (grp.flags & VkMesh::GRP_NOLIGHT) ? 1.0f : 0.0f;
 		pc.specular[0] = m.specular.r, pc.specular[1] = m.specular.g, pc.specular[2] = m.specular.b;
 		pc.specular[3] = m.power;
+		if (ovr) { // self-illuminated display
+			pc.diffuse[0] = pc.diffuse[1] = pc.diffuse[2] = pc.diffuse[3] = 1.0f;
+			pc.emissive[3] = 1.0f;
+		}
 		vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 		vkCmdDrawIndexed (cmd, grp.nIndex, 1, grp.firstIndex, grp.vertexOffset, 0);
 	}
