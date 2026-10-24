@@ -65,9 +65,10 @@ Known gaps and limitations, to be addressed later.
   light them (atmosphere transmittance, planet shadow, RT vessel shadows).
   ORBITER_VK_PARTICLES=0 hides them, ORBITER_VK_PARTICLE_DENSITY (default
   4) sets how many smaller particles replace one.
-- No self-shadowing of smoke, no local lights on particles yet (engine
-  light), not sorted within a stream (premultiplied blending hides most
-  of it), not in reflections or the probe.
+- Smoke rendering (ORBITER_VK_SMOKE): sprites (lit, eroded, sorted puffs),
+  volume (default: large smoke in a froxel volume, ~0.7 ms more), screen
+  (blurred thickness buffer: smooth but blobby, and its half-resolution
+  blur bleeds over nearby vessels). Not in reflections or the probe.
 - Exhaust streams get a drag of at least 15/s * sqrt(rho/1.225) in air, so
   they sweep back with the airflow like the plumes.
 - Engine smoke (VVessel::EmitSmoke): each plume emits smoke of its class

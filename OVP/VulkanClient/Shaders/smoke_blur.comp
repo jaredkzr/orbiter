@@ -1,0 +1,31 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Screen-space smoke: separable Gaussian blur of the thickness buffer
+
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D src;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D dst;
+
+layout(push_constant) uniform Params {
+	ivec2 dir;
+	ivec2 size;
+} pc;
+
+void main ()
+{
+	ivec2 p = ivec2 (gl_GlobalInvocationID.xy);
+	if (any (greaterThanEqual (p, pc.size))) return;
+	const int R = 7;
+	vec4 sum = vec4 (0.0);
+	float wsum = 0.0;
+	for (int i = -R; i <= R; i++) {
+		float w = exp (-float (i * i) / (2.0 * 3.2 * 3.2));
+		sum += w * texelFetch (src, clamp (p + pc.dir * i, ivec2 (0), pc.size - 1), 0);
+		wsum += w;
+	}
+	imageStore (dst, p, sum / wsum);
+}

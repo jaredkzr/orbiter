@@ -76,6 +76,12 @@ public:
 	void SetPrepass (VkImageView prepass);
 	/// Draw the smoke volume (scene with reactive mask, before the particles)
 	void DrawVolume (VkDescriptorSet frameSet);
+	/// Screen-space smoke: thickness of the volumetric particles, blurred
+	/// (outside rendering scopes, after Simulate); its composite (scene with
+	/// reactive mask, before the particles)
+	void RenderScreenSmoke (VkDescriptorSet frameSet);
+	void DrawScreenSmoke (VkDescriptorSet frameSet);
+	void EnsureScreenSmoke ();
 	/// rendering of volumetric particles (ORBITER_VK_SMOKE = sprites, volume, screen)
 	enum SmokeMode { SMOKE_SPRITES, SMOKE_VOLUME, SMOKE_SCREEN };
 	SmokeMode smokeMode = SMOKE_VOLUME;
@@ -124,6 +130,12 @@ private:
 	VkPipeline volSplatPipe = VK_NULL_HANDLE, volResolvePipe = VK_NULL_HANDLE, volMarchPipe = VK_NULL_HANDLE;
 	VkPipelineLayout volMarchLayout = VK_NULL_HANDLE;
 	float volNoise[4] = {};
+	vkc::Image thick[2]; // screen-space smoke (half resolution)
+	uint32_t thickGen = ~0u, usedCount = 0;
+	VkDescriptorSetLayout blurSetLayout = VK_NULL_HANDLE;
+	VkDescriptorSet blurSets[2] = {};
+	VkPipelineLayout blurLayout = VK_NULL_HANDLE;
+	VkPipeline thickPipe = VK_NULL_HANDLE, blurPipe = VK_NULL_HANDLE, screenCompPipe = VK_NULL_HANDLE;
 	VkPipeline drawBlend = VK_NULL_HANDLE, drawAdd = VK_NULL_HANDLE;
 	static constexpr uint32_t MAX_EMISSIONS = 4096;
 };

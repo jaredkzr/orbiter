@@ -113,6 +113,9 @@ set(SHADER_SRC
 	Shaders/smoke_splat.comp
 	Shaders/smoke_resolve.comp
 	Shaders/smoke_march.frag
+	Shaders/smoke_thick.frag
+	Shaders/smoke_blur.comp
+	Shaders/smoke_screen.frag
 	Shaders/gpuparticle.vert
 	Shaders/gpuparticle.frag
 )

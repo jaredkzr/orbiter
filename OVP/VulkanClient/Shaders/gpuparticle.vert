@@ -21,7 +21,8 @@ layout(set = 1, binding = 8, std430) readonly buffer SortedR { uint sorted[]; };
 
 layout(push_constant) uniform Draw {
 	uint first;   // the stream's pool
-	uint flags;   // 1: emissive, 2: lit puffs (normal and thickness texture), 4: sorted, 8: volumetric particles are in the smoke volume
+	uint flags;   // 1: emissive, 2: lit puffs (normal and thickness texture), 4: sorted, 8: volumetric particles drawn otherwise,
+	              // 16: only volumetric particles (screen-space smoke)
 	float alpha;  // opacity factor
 	float pad;
 	vec4 bodyPos; // the planet nearby (camera-relative), w: present
@@ -54,7 +55,10 @@ void main ()
 	float a = life > 0.0 ? pc.alpha * shape.z * (1.0 - tl) * smoothstep (0.0, 0.08, tl) : 0.0;
 	if (a <= 0.002) { gl_Position = vec4 (0.0, 0.0, -2.0, 1.0); return; } // (outside the clip volume)
 	uint flags = pt.flags;
-	if ((flags & 64u) != 0u && (pc.flags & 8u) != 0u) { gl_Position = vec4 (0.0, 0.0, -2.0, 1.0); return; }
+	// (volumetric particles in the smoke volume or the screen-space smoke:
+	// not drawn as sprites; the screen-space pass draws only them)
+	bool vol = (flags & 64u) != 0u;
+	if ((vol && (pc.flags & 8u) != 0u) || (!vol && (pc.flags & 16u) != 0u)) { gl_Position = vec4 (0.0, 0.0, -2.0, 1.0); return; }
 	vec3 vp = transpose (mat3 (frame.viewToGlobal)) * posAge.xyz;
 	float h = 0.5 * (shape.x + shape.y * age);
 

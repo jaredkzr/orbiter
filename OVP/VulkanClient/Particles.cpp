@@ -22,6 +22,9 @@
 #include "smoke_splat.comp.h"
 #include "smoke_resolve.comp.h"
 #include "smoke_march.frag.h"
+#include "smoke_thick.frag.h"
+#include "smoke_blur.comp.h"
+#include "smoke_screen.frag.h"
 #include "post.vert.h"
 #include "gpuparticle.vert.h"
 #include "gpuparticle.frag.h"
@@ -210,7 +213,7 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 	// pool, emissions, noise volumes, prepass, shadow grid
 	const VkShaderStageFlags CS = VK_SHADER_STAGE_COMPUTE_BIT;
 	// (8-10: sorting for drawing far to near: values, keys, ring of each block)
-	VkDescriptorSetLayoutBinding b[19] = {
+	VkDescriptorSetLayoutBinding b[20] = {
 		{ 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS | VK_SHADER_STAGE_VERTEX_BIT, nullptr },
 		{ 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS, nullptr },
 		{ 2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, CS, nullptr },
@@ -230,15 +233,16 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		{ 15, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, CS, nullptr },
 		{ 16, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, CS, nullptr },
 		{ 17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
-		{ 18, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr } };
+		{ 18, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
+		{ 19, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr } }; // (screen-space smoke)
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 19, lci.pBindings = b;
+	lci.bindingCount = 20, lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &setLayout));
 	VkDescriptorPoolSize ps[3] = { { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5 * vkc::FRAMES_IN_FLIGHT },
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6 * vkc::FRAMES_IN_FLIGHT },
-		{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 8 * vkc::FRAMES_IN_FLIGHT } };
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 7 * vkc::FRAMES_IN_FLIGHT + 2 },
+		{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 8 * vkc::FRAMES_IN_FLIGHT + 2 } };
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-	pci.maxSets = vkc::FRAMES_IN_FLIGHT, pci.poolSizeCount = 3, pci.pPoolSizes = ps;
+	pci.maxSets = vkc::FRAMES_IN_FLIGHT + 2, pci.poolSizeCount = 3, pci.pPoolSizes = ps;
 	VK_CHECK(vkCreateDescriptorPool (ctx->device, &pci, nullptr, &dpool));
 	VkDescriptorSetLayout ls[vkc::FRAMES_IN_FLIGHT];
 	for (auto &l : ls) l = setLayout;
@@ -430,8 +434,65 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		gpi.pDynamicState = &dy;
 		gpi.layout = volMarchLayout;
 		VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &volMarchPipe));
+		// screen-space smoke: its composite (the same state)
+		VkShaderModule sfs = ctx->CreateShaderModule (spv_smoke_screen_frag, spv_smoke_screen_frag_size);
+		ms2[1].module = sfs;
+		VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &screenCompPipe));
+		vkDestroyShaderModule (ctx->device, sfs, nullptr);
 		vkDestroyShaderModule (ctx->device, mvs, nullptr);
 		vkDestroyShaderModule (ctx->device, mfs, nullptr);
+	}
+	{
+		// screen-space smoke: thickness of the volumetric particles (half
+		// resolution, additive, no depth), and the blur
+		VkShaderModule tvs = ctx->CreateShaderModule (spv_gpuparticle_vert, spv_gpuparticle_vert_size);
+		VkShaderModule tfs = ctx->CreateShaderModule (spv_smoke_thick_frag, spv_smoke_thick_frag_size);
+		VkPipelineShaderStageCreateInfo ts[2] = {
+			{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, tvs, "main" },
+			{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, tfs, "main" } };
+		VkPipelineColorBlendAttachmentState ab{};
+		ab.colorWriteMask = 0xF;
+		ab.blendEnable = VK_TRUE;
+		ab.srcColorBlendFactor = ab.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+		ab.srcAlphaBlendFactor = ab.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+		ab.colorBlendOp = ab.alphaBlendOp = VK_BLEND_OP_ADD;
+		VkPipelineColorBlendStateCreateInfo abs{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+		abs.attachmentCount = 1, abs.pAttachments = &ab;
+		VkPipelineMultisampleStateCreateInfo ms1{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+		ms1.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+		VkPipelineDepthStencilStateCreateInfo nods{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+		VkFormat tf = VK_FORMAT_R16G16B16A16_SFLOAT;
+		VkPipelineRenderingCreateInfo trci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+		trci.colorAttachmentCount = 1, trci.pColorAttachmentFormats = &tf;
+		VkPipelineInputAssemblyStateCreateInfo strip{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+		strip.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+		VkGraphicsPipelineCreateInfo gpi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+		gpi.pNext = &trci;
+		gpi.stageCount = 2, gpi.pStages = ts;
+		gpi.pVertexInputState = &vi;
+		gpi.pInputAssemblyState = &strip;
+		gpi.pViewportState = &vps;
+		gpi.pRasterizationState = &rs;
+		gpi.pMultisampleState = &ms1;
+		gpi.pDepthStencilState = &nods;
+		gpi.pColorBlendState = &abs;
+		gpi.pDynamicState = &dy;
+		gpi.layout = drawLayout;
+		VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &thickPipe));
+		vkDestroyShaderModule (ctx->device, tvs, nullptr);
+		vkDestroyShaderModule (ctx->device, tfs, nullptr);
+		VkDescriptorSetLayoutBinding bb[2] = {
+			{ 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr },
+			{ 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr } };
+		VkDescriptorSetLayoutCreateInfo blci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+		blci.bindingCount = 2, blci.pBindings = bb;
+		VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &blci, nullptr, &blurSetLayout));
+		VkDescriptorSetLayout bl[2] = { blurSetLayout, blurSetLayout };
+		VkDescriptorSetAllocateInfo bdai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+		bdai.descriptorPool = dpool, bdai.descriptorSetCount = 2, bdai.pSetLayouts = bl;
+		VK_CHECK(vkAllocateDescriptorSets (ctx->device, &bdai, blurSets));
+		blurLayout = layoutOf ({ blurSetLayout }, CS, 4 * sizeof(int32_t));
+		blurPipe = compute (spv_smoke_blur_comp, spv_smoke_blur_comp_size, blurLayout);
 	}
 	return true;
 }
@@ -460,9 +521,9 @@ void ParticleSystem::Shutdown ()
 {
 	if (!ctx) return;
 	for (VkPipeline p : { emitPipe, updatePipe, updateRTPipe, lightPipe, lightRTPipe, splatPipe, sumPipe, sortKeysPipe, sortPipe, drawBlend, drawAdd,
-		volSplatPipe, volResolvePipe, volMarchPipe })
+		volSplatPipe, volResolvePipe, volMarchPipe, thickPipe, blurPipe, screenCompPipe })
 		if (p) vkDestroyPipeline (ctx->device, p, nullptr);
-	for (VkPipelineLayout l : { emitLayout, updateLayout, updateRTLayout, drawLayout, sortLayout, volMarchLayout })
+	for (VkPipelineLayout l : { emitLayout, updateLayout, updateRTLayout, drawLayout, sortLayout, volMarchLayout, blurLayout })
 		if (l) vkDestroyPipelineLayout (ctx->device, l, nullptr);
 	vkDestroyDescriptorPool (ctx->device, dpool, nullptr);
 	vkDestroyDescriptorSetLayout (ctx->device, setLayout, nullptr);
@@ -471,6 +532,8 @@ void ParticleSystem::Shutdown ()
 	ctx->DestroyBuffer (pool);
 	for (auto &b : emitBuf) ctx->DestroyBuffer (b);
 	for (auto &v : volAccum) ctx->DestroyImage (v);
+	for (auto &t : thick) ctx->DestroyImage (t);
+	if (blurSetLayout) vkDestroyDescriptorSetLayout (ctx->device, blurSetLayout, nullptr);
 	ctx->DestroyImage (volOut);
 	ctx->DestroyImage (volColumns);
 	if (volSampler) vkDestroySampler (ctx->device, volSampler, nullptr);
@@ -520,6 +583,7 @@ void ParticleSystem::Queue (const Emission &e)
 
 void ParticleSystem::SetPrepass (VkImageView prepass)
 {
+	EnsureScreenSmoke (); // (before any of this frame's sets are bound)
 	if (prepass == prepassView) return;
 	if (prepassView) vkDeviceWaitIdle (ctx->device); // (the sets may be in use)
 	prepassView = prepass;
@@ -690,8 +754,8 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, volResolvePipe);
 		vkCmdDispatch (cmd, (VOL_X + 7) / 8, (VOL_Y + 7) / 8, 1);
 		barrier (CS, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | CS, VK_ACCESS_2_SHADER_READ_BIT);
-		volNoise[0] = up.noiseOrg[0], volNoise[1] = up.noiseOrg[1], volNoise[2] = up.noiseOrg[2], volNoise[3] = up.bodyVel[3];
 	}
+	volNoise[0] = up.noiseOrg[0], volNoise[1] = up.noiseOrg[1], volNoise[2] = up.noiseOrg[2], volNoise[3] = up.bodyVel[3];
 
 	// draw order: far to near within each ring (bitonic sort over the used
 	// part of the pool)
@@ -700,6 +764,7 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	uint32_t n = 1;
 	while (n < used) n <<= 1;
 	memcpy (blockRingBuf[fi].mapped, blockRing.data(), blockRing.size() * sizeof(uint32_t));
+	usedCount = used;
 	up.ground[2] = (float)n;
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, sortKeysPipe);
 	bindSets (updateLayout, false);
@@ -723,7 +788,7 @@ void ParticleSystem::Draw (uint32_t first, uint32_t capacity, VkTexture *tex, bo
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, emissive ? drawAdd : drawBlend);
 	VkDescriptorSet s[3] = { frameSet, sets[ctx->FrameIndex ()], tex->set };
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawLayout, 0, 3, s, 0, nullptr);
-	uint32_t flags = (emissive ? 1u : 0u) | (tex == smokeTex ? 2u : 0u) | 4u | (smokeMode == SMOKE_VOLUME ? 8u : 0u);
+	uint32_t flags = (emissive ? 1u : 0u) | (tex == smokeTex ? 2u : 0u) | 4u | (smokeMode != SMOKE_SPRITES ? 8u : 0u);
 	struct { uint32_t first, flags; float alpha, pad; float body[12]; } pc{ first, flags, 1.0f, 0.0f, {} };
 	memcpy (pc.body, drawBody, sizeof(drawBody));
 	vkCmdPushConstants (cmd, drawLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
@@ -910,6 +975,115 @@ void ParticleSystem::DrawVolume (VkDescriptorSet frameSet)
 	if (!enabled || smokeMode != SMOKE_VOLUME || !prepassView) return;
 	VkCommandBuffer cmd = ctx->Cmd ();
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, volMarchPipe);
+	VkDescriptorSet s[2] = { frameSet, sets[ctx->FrameIndex ()] };
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, volMarchLayout, 0, 2, s, 0, nullptr);
+	vkCmdPushConstants (cmd, volMarchLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(volNoise), volNoise);
+	vkCmdDraw (cmd, 3, 1, 0, 0);
+}
+
+void ParticleSystem::EnsureScreenSmoke ()
+{
+	if (smokeMode != SMOKE_SCREEN) return;
+	VkExtent2D re = ctx->RenderExtent ();
+	VkExtent2D e = { std::max (1u, re.width / 2), std::max (1u, re.height / 2) };
+	if (thickGen != ctx->SwapchainGeneration ()) {
+		vkDeviceWaitIdle (ctx->device);
+		for (auto &t : thick) ctx->DestroyImage (t);
+		for (auto &t : thick) {
+			VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+			ici.imageType = VK_IMAGE_TYPE_2D, ici.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+			ici.extent = { e.width, e.height, 1 };
+			ici.mipLevels = 1, ici.arrayLayers = 1, ici.samples = VK_SAMPLE_COUNT_1_BIT;
+			ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+			ici.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+			VmaAllocationCreateInfo aci{};
+			aci.usage = VMA_MEMORY_USAGE_AUTO;
+			VK_CHECK(vmaCreateImage (ctx->allocator, &ici, &aci, &t.image, &t.alloc, nullptr));
+			VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+			vci.image = t.image, vci.viewType = VK_IMAGE_VIEW_TYPE_2D, vci.format = ici.format;
+			vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+			VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &t.view));
+		}
+		VkImage a = thick[0].image, b = thick[1].image;
+		ctx->ImmediateSubmit ([a, b](VkCommandBuffer cmd) {
+			vkc::ImageBarrier (cmd, a, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+				VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+			vkc::ImageBarrier (cmd, b, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+				VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+		});
+		// blur sets: 0 reads a (shader-read) and writes b; 1 reads b and writes a (general)
+		VkDescriptorImageInfo ii[4] = { { volSampler, thick[0].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL }, { VK_NULL_HANDLE, thick[1].view, VK_IMAGE_LAYOUT_GENERAL },
+			{ volSampler, thick[1].view, VK_IMAGE_LAYOUT_GENERAL }, { VK_NULL_HANDLE, thick[0].view, VK_IMAGE_LAYOUT_GENERAL } };
+		VkWriteDescriptorSet wr[4]{};
+		for (int k = 0; k < 4; k++) {
+			wr[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			wr[k].dstSet = blurSets[k / 2], wr[k].dstBinding = k & 1, wr[k].descriptorCount = 1;
+			wr[k].descriptorType = (k & 1) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			wr[k].pImageInfo = &ii[k];
+		}
+		vkUpdateDescriptorSets (ctx->device, 4, wr, 0, nullptr);
+		VkDescriptorImageInfo ti{ volSampler, thick[0].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		for (VkDescriptorSet st : sets) {
+			VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+			w.dstSet = st, w.dstBinding = 19, w.descriptorCount = 1;
+			w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, w.pImageInfo = &ti;
+			vkUpdateDescriptorSets (ctx->device, 1, &w, 0, nullptr);
+		}
+		thickGen = ctx->SwapchainGeneration ();
+	}
+}
+
+void ParticleSystem::RenderScreenSmoke (VkDescriptorSet frameSet)
+{
+	if (!enabled || smokeMode != SMOKE_SCREEN || !prepassView || thickGen != ctx->SwapchainGeneration ()) return;
+	VkExtent2D re = ctx->RenderExtent ();
+	VkExtent2D e = { std::max (1u, re.width / 2), std::max (1u, re.height / 2) };
+	// thickness of the volumetric particles
+	ctx->BindTarget ({ thick[0].image, thick[0].view, VK_FORMAT_R16G16B16A16_SFLOAT, e });
+	VkCommandBuffer cmd = ctx->Cmd ();
+	VkClearAttachment ca{ VK_IMAGE_ASPECT_COLOR_BIT, 0, {} };
+	VkClearRect cr{ { { 0, 0 }, e }, 0, 1 };
+	vkCmdClearAttachments (cmd, 1, &ca, 1, &cr);
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, thickPipe);
+	VkDescriptorSet s[3] = { frameSet, sets[ctx->FrameIndex ()], smokeTex->set };
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawLayout, 0, 3, s, 0, nullptr);
+	struct { uint32_t first, flags; float alpha, pad; float body[12]; } pc{ 0, 16u, 1.0f, 0.0f, {} };
+	memcpy (pc.body, drawBody, sizeof(drawBody));
+	vkCmdPushConstants (cmd, drawLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+	vkCmdDraw (cmd, 4, usedCount, 0, 0);
+	ctx->EndTarget ();
+	// blur: horizontal (a -> b), vertical (b -> a)
+	auto barrier = [cmd](VkPipelineStageFlags2 src, VkAccessFlags2 srcA, VkPipelineStageFlags2 dst, VkAccessFlags2 dstA) {
+		VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+		mb.srcStageMask = src, mb.srcAccessMask = srcA, mb.dstStageMask = dst, mb.dstAccessMask = dstA;
+		VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+		dep.memoryBarrierCount = 1, dep.pMemoryBarriers = &mb;
+		vkCmdPipelineBarrier2 (cmd, &dep);
+	};
+	const VkPipelineStageFlags2 CS = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+	barrier (CS | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT, CS, VK_ACCESS_2_SHADER_WRITE_BIT);
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, blurPipe);
+	int32_t bp[4] = { 1, 0, (int32_t)e.width, (int32_t)e.height };
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, blurLayout, 0, 1, &blurSets[0], 0, nullptr);
+	vkCmdPushConstants (cmd, blurLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(bp), bp);
+	vkCmdDispatch (cmd, (e.width + 7) / 8, (e.height + 7) / 8, 1);
+	vkc::ImageBarrier (cmd, thick[0].image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+		CS, VK_ACCESS_2_SHADER_READ_BIT, CS, VK_ACCESS_2_SHADER_WRITE_BIT);
+	barrier (CS, VK_ACCESS_2_SHADER_WRITE_BIT, CS, VK_ACCESS_2_SHADER_READ_BIT);
+	bp[0] = 0, bp[1] = 1;
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, blurLayout, 0, 1, &blurSets[1], 0, nullptr);
+	vkCmdPushConstants (cmd, blurLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(bp), bp);
+	vkCmdDispatch (cmd, (e.width + 7) / 8, (e.height + 7) / 8, 1);
+	vkc::ImageBarrier (cmd, thick[0].image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		CS, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+		VK_ACCESS_2_SHADER_READ_BIT);
+}
+
+void ParticleSystem::DrawScreenSmoke (VkDescriptorSet frameSet)
+{
+	if (!enabled || smokeMode != SMOKE_SCREEN || thickGen != ctx->SwapchainGeneration ()) return;
+	VkCommandBuffer cmd = ctx->Cmd ();
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, screenCompPipe);
 	VkDescriptorSet s[2] = { frameSet, sets[ctx->FrameIndex ()] };
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, volMarchLayout, 0, 2, s, 0, nullptr);
 	vkCmdPushConstants (cmd, volMarchLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(volNoise), volNoise);

@@ -1154,6 +1154,7 @@ void Scene::RenderPrepass ()
 			sunDir = unit (sp - camPos);
 		}
 		particles->Simulate (camPos, sunDir, frameSet[ctx->FrameIndex()], camAtmSet, rtSets[0] ? rtSets : nullptr, oapiGetSimTime ());
+		particles->RenderScreenSmoke (frameSet[ctx->FrameIndex()]);
 		ctx->GpuMark ("particles");
 	}
 	RenderVolumetricClouds ();
@@ -1330,6 +1331,7 @@ void Scene::Render ()
 	ctx->BindSceneWithMask (rt, reactiveMS.image ? &rtMS : nullptr);
 	plumes->Draw (FrameSet (), camAtmSet, gc->TexMgr()->White());
 	particles->DrawVolume (FrameSet ());
+	particles->DrawScreenSmoke (FrameSet ());
 	for (auto *ps : gc->ParticleStreams()) ps->Render (this);
 	for (auto *vo : list) vo->DrawParticles ();
 }
