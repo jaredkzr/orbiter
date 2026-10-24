@@ -4,6 +4,7 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
+#define FRAME_AO
 #include "frame.glsl"
 
 #include "shadow.glsl"
@@ -109,7 +110,9 @@ void main()
 	}
 	if (tile.params.z < 0.5) sunT *= SunShadow(vPosView, N); // terrain receives shadows
 	if (tile.params.z < 0.5) base *= GroundDetail(vPosView, length(vPosView));
-	vec3 col = base * (frame.ambient.rgb + frame.sunColor.rgb * sunT * max(ndl, 0.0) + LocalLighting(vPosView, N));
+	float ao = tile.params.z < 0.5 ? AmbientOcclusion() : 1.0; // clouds are not in the prepass
+	float aoDirect = mix(1.0, ao, frame.aoParams.z); // contact darkening in direct light too
+	vec3 col = base * (frame.ambient.rgb * ao + (frame.sunColor.rgb * sunT * max(ndl, 0.0) + LocalLighting(vPosView, N)) * aoDirect);
 
 	if (tile.params.z > 0.5) { // cloud layer: lit from above, also seen from below
 		float a = texture(surfTex, clamp(vUV * tile.surfUV.zw + tile.surfUV.xy, hs, 1.0 - hs)).a;

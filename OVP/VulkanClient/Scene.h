@@ -35,7 +35,9 @@ struct MeshPushConstants {
 	float maps[4];     // x: flags of the additional texture maps present (TexMaps::flags)
 };
 
-enum class RenderPass { Opaque, Transparent };
+/// Opaque and transparent geometry of the main pass; Depth: opaque geometry
+/// into the ambient occlusion prepass
+enum class RenderPass { Opaque, Transparent, Depth };
 
 /// Local light source (vessel light emitter), global frame
 struct LightSource {
@@ -82,6 +84,12 @@ public:
 	void DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass,
 		const std::vector<Mat4> *groupTransforms = nullptr, const std::vector<uint8_t> *groupVisible = nullptr,
 		const std::vector<GroupTexOverride> *texOverride = nullptr);
+	/// Per-frame uniforms and state (after RenderShadows, before the prepass)
+	void BeginFrame ();
+	/// Opaque geometry into the ambient occlusion prepass, and the occlusion
+	void RenderPrepass ();
+	/// incremented by BeginFrame
+	uint64_t FrameNo () const { return frameNo; }
 	void DrawSphere (const Mat4 &modelView, const float colour[4], bool unlit, VkTexture *tex = nullptr);
 	VkBuffer SphereVtx () const { return sphereVtx.buffer; }
 	VkBuffer SphereIdx () const { return sphereIdx.buffer; }
@@ -123,7 +131,7 @@ public:
 
 private:
 	void CreatePipelines ();
-	VkPipeline CreateMeshPipeline (bool blend, bool additive, bool depthWrite);
+	VkPipeline CreateMeshPipeline (bool blend, bool additive, bool depthWrite, bool prepass = false);
 	VkPipeline CreateParticlePipeline (bool additive);
 	void UpdateCamera ();
 	void BuildSphere ();
@@ -140,6 +148,10 @@ private:
 	VkPipeline meshOpaque = VK_NULL_HANDLE;
 	VkPipeline meshBlend = VK_NULL_HANDLE;
 	VkPipeline meshAdditive = VK_NULL_HANDLE;
+	VkPipeline meshPrepass = VK_NULL_HANDLE;
+	std::unique_ptr<class AmbientOcclusion> ao;
+	uint64_t frameNo = 0;
+	void WriteAODescriptors ();
 	VkPipelineLayout starLayout = VK_NULL_HANDLE;
 	VkPipeline starPipeline = VK_NULL_HANDLE;
 	VkPipelineLayout particleLayout = VK_NULL_HANDLE;

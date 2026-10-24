@@ -86,6 +86,9 @@ namespace vkc {
 		/// Depth-only target (e.g. a shadow map), cleared to 1. Kept in
 		/// shader-read layout between rendering scopes.
 		void BindDepthTarget (const Target &t);
+		/// Colour target with its own (single-sample) depth buffer, both
+		/// cleared; the depth buffer's contents are discarded afterwards
+		void BindTargetWithDepth (const Target &color, const Target &depth, const float clearColor[4]);
 		void EndTarget ();
 		bool BoundTo (VkImage image) const { return cur.active && !cur.backbuffer && cur.image == image; }
 		VkFormat BoundFormat () const { return cur.format; }

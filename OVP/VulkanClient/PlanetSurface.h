@@ -85,6 +85,7 @@ public:
 	TileLoader &Loader () { return *loader; }
 	VkPipeline Pipeline () const { return pipeline; }
 	VkPipeline CloudPipeline () const { return cloudPipeline; }
+	VkPipeline DepthPipeline () const { return depthPipeline; }
 	VkPipelineLayout Layout () const { return layout; }
 	VkBuffer IndexBuffer () const { return ibuf.buffer; }
 	uint32_t IndexCount () const { return nIdx; }
@@ -96,6 +97,7 @@ private:
 	VkPipelineLayout layout = VK_NULL_HANDLE;
 	VkPipeline pipeline = VK_NULL_HANDLE;
 	VkPipeline cloudPipeline = VK_NULL_HANDLE;
+	VkPipeline depthPipeline = VK_NULL_HANDLE; // ambient occlusion prepass
 	vkc::Buffer ibuf;
 	uint32_t nIdx = 0;
 	std::unique_ptr<TileLoader> loader;
@@ -110,7 +112,12 @@ public:
 
 	/// Accept loaded tiles (call before rendering)
 	void Update ();
+	/// Tile selection, data requests and mesh updates, once per frame
+	/// (outside rendering scopes); called by the render functions if needed
+	void Prepare ();
 	void Render (class Atmosphere *atm);
+	/// opaque surface into the ambient occlusion prepass
+	void RenderDepth ();
 	/// level 4 root texture of the western (0) or eastern (1) hemisphere
 	VkTexture *RootTexture (int i) const { return root[i] ? root[i]->surf : nullptr; }
 
@@ -129,6 +136,7 @@ private:
 		int meshElevLvl = -1; // level of the elevation tile the mesh was built from (0: sphere)
 		uint64_t lastUsed = 0;
 	};
+	uint64_t preparedFrame = ~0ull;
 
 	PlanetSurface (OBJHANDLE hPlanet, Scene *scene, std::shared_ptr<PlanetLayers> layers, bool clouds);
 	Node *NewNode (int lvl, int ilat, int ilng, Node *parent);

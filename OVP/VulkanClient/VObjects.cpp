@@ -674,8 +674,18 @@ void VPlanet::RenderSky ()
 	atmosphere->RenderSky ();
 }
 
+void VPlanet::PrepareFrame ()
+{
+	if (surface) surface->Prepare ();
+}
+
 void VPlanet::Render (RenderPass pass)
 {
+	if (pass == RenderPass::Depth) {
+		if (surface && scene->PixelSize (size, camDist) >= 0.5) surface->RenderDepth ();
+		for (auto &b : bases) b->Render (pass);
+		return;
+	}
 	if (pass == RenderPass::Transparent) {
 		if (isStar) { RenderGlow (); return; }
 		for (auto &b : bases) b->Render (pass);

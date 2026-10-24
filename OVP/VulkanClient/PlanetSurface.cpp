@@ -12,6 +12,8 @@
 
 #include "tile.vert.h"
 #include "tile.frag.h"
+#include "prepass.frag.h"
+#include "AO.h"
 
 namespace {
 
@@ -255,6 +257,17 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
 	cba.alphaBlendOp = VK_BLEND_OP_ADD;
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &cloudPipeline));
+
+	// ambient occlusion prepass: single-sampled normal and depth
+	VkShaderModule pfs = ctx->CreateShaderModule (spv_prepass_frag, spv_prepass_frag_size);
+	stages[1].module = pfs;
+	ds.depthWriteEnable = VK_TRUE;
+	cba.blendEnable = VK_FALSE;
+	ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+	const VkFormat prepassFmt = AmbientOcclusion::PREPASS_FORMAT;
+	rci.pColorAttachmentFormats = &prepassFmt;
+	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &depthPipeline));
+	vkDestroyShaderModule (ctx->device, pfs, nullptr);
 	vkDestroyShaderModule (ctx->device, vs, nullptr);
 	vkDestroyShaderModule (ctx->device, fs, nullptr);
 
@@ -293,6 +306,7 @@ void TileRenderer::Shutdown ()
 	ctx->DestroyBuffer (ibuf);
 	vkDestroyPipeline (ctx->device, pipeline, nullptr);
 	vkDestroyPipeline (ctx->device, cloudPipeline, nullptr);
+	vkDestroyPipeline (ctx->device, depthPipeline, nullptr);
 	vkDestroyPipelineLayout (ctx->device, layout, nullptr);
 	ctx = nullptr;
 }
@@ -580,8 +594,10 @@ void PlanetSurface::Select (Node *n)
 	}
 }
 
-void PlanetSurface::Render (Atmosphere *atm)
+void PlanetSurface::Prepare ()
 {
+	if (preparedFrame == scene->FrameNo ()) return;
+	preparedFrame = scene->FrameNo ();
 	frame++;
 	oapiGetGlobalPos (hPlanet, &ppos);
 	oapiGetRotationMatrix (hPlanet, &prot);
@@ -629,6 +645,24 @@ void PlanetSurface::Render (Atmosphere *atm)
 		int srcLvl = src ? src->lvl : 0;
 		if (!n->vbuf.buffer || n->meshElevLvl != srcLvl) BuildMesh (n, src);
 	}
+}
+
+void PlanetSurface::RenderDepth ()
+{
+	// into the ambient occlusion prepass (bound by the caller)
+	Prepare ();
+	if (drawList.empty() || clouds) return;
+	VkCommandBuffer cmd = ctx->Cmd();
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr->DepthPipeline());
+	VkDescriptorSet fs = scene->FrameSet ();
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr->Layout(), 0, 1, &fs, 0, nullptr);
+	vkCmdBindIndexBuffer (cmd, tr->IndexBuffer(), 0, VK_INDEX_TYPE_UINT16);
+	for (Node *n : drawList) DrawNode (n);
+}
+
+void PlanetSurface::Render (Atmosphere *atm)
+{
+	Prepare ();
 	if (drawList.empty()) return;
 
 	ctx->BindScene (true);

@@ -27,6 +27,8 @@ public:
 	virtual void Update ();
 	virtual void Render (RenderPass pass) = 0;
 	virtual void RenderSky () {}
+	/// work before the frame's rendering scopes (data uploads)
+	virtual void PrepareFrame () {}
 	virtual void RenderShadow (ShadowMap &sm) {}
 	virtual void CollectLights (std::vector<LightSource> &lights) {}
 	virtual Atmosphere *GetAtmosphere () { return nullptr; }
@@ -109,6 +111,7 @@ public:
 	void Render (RenderPass pass) override;
 	void RenderSky () override;
 	void RenderShadow (ShadowMap &sm) override;
+	void PrepareFrame () override;
 	Atmosphere *GetAtmosphere () override { return atmosphere.get(); }
 
 private:

@@ -74,6 +74,9 @@ set(SHADER_SRC
 	Shaders/tonemap.frag
 	Shaders/histogram.comp
 	Shaders/adapt.comp
+	Shaders/prepass.frag
+	Shaders/ao.comp
+	Shaders/aoblur.comp
 )
 set(SHADER_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 set(SHADER_HEADERS)
@@ -103,6 +106,7 @@ add_library(VulkanClient SHARED
 	Scene.cpp
 	VObjects.cpp
 	LegacyTex.cpp
+	AO.cpp
 	StarSphere.cpp
 	Draw2D.cpp
 	Sketchpad.cpp

@@ -181,6 +181,8 @@ void VulkanClient::clbkRenderScene ()
 	frameActive = true;
 	r2d->Flush ();
 	scene->RenderShadows ();
+	scene->BeginFrame ();
+	scene->RenderPrepass ();
 	ctx.BindScene (true);
 	scene->Render ();
 	postfx->Apply ();   // HDR scene -> backbuffer

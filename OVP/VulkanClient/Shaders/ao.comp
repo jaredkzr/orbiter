@@ -1,0 +1,80 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Screen-space ambient occlusion from the depth prepass (horizon based).
+// For each pixel, points within a world-space radius are sampled along a
+// few directions in the image (rotated per pixel in a 4x4 pattern, which the
+// blur pass removes). Along each direction the highest elevation above the
+// surface's tangent plane (fading out towards the radius) is the occluded
+// fraction of that direction; the occlusion is their mean.
+
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D prepass; // view normal (xyz), view depth (w; 0: none)
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D aoOut;
+
+layout(push_constant) uniform Params {
+	vec2 focal;      // projection factors fx, fy
+	vec2 size;       // image size [pixels]
+	float radius;    // world-space radius [m]
+	float strength;
+	float maxDist;   // ambient occlusion fades out up to this view depth [m]
+	float bias;      // tangent-plane bias (cosine)
+} pc;
+
+const int DIRS = 6, STEPS = 4;
+const float PI = 3.14159265;
+
+vec3 ViewPos (vec2 pix, float z)
+{
+	vec2 ndc = pix / pc.size * 2.0 - 1.0;
+	return vec3 (ndc.x * z / pc.focal.x, -ndc.y * z / pc.focal.y, z);
+}
+
+void main ()
+{
+	ivec2 p = ivec2 (gl_GlobalInvocationID.xy);
+	if (p.x >= int (pc.size.x) || p.y >= int (pc.size.y)) return;
+	vec4 d = texelFetch (prepass, p, 0);
+	float z = d.w;
+	if (z <= 0.0 || z > pc.maxDist) { imageStore (aoOut, p, vec4 (1.0)); return; }
+	vec3 P = ViewPos (vec2 (p) + 0.5, z);
+	vec3 N = d.xyz;
+
+	// projected radius in pixels
+	float rpx = pc.radius * pc.focal.y / z * 0.5 * pc.size.y;
+	if (rpx < 1.5) { imageStore (aoOut, p, vec4 (1.0)); return; }
+	rpx = min (rpx, 0.1 * pc.size.y);
+
+	// 4x4 interleaved rotation and step offset
+	const int bayer[16] = int[] (0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
+	float idx = float (bayer[(p.x & 3) + 4 * (p.y & 3)]);
+	float rot = idx / 16.0 * 2.0 * PI / float (DIRS);
+	float jit = fract (idx * 0.618034);
+
+	float R2 = pc.radius * pc.radius;
+	float occ = 0.0;
+	for (int k = 0; k < DIRS; k++) {
+		float a = rot + float (k) * 2.0 * PI / float (DIRS);
+		vec2 dir = vec2 (cos (a), sin (a));
+		float horizon = 0.0;
+		for (int s = 0; s < STEPS; s++) {
+			float t = (float (s) + jit) / float (STEPS) * rpx + 1.0;
+			ivec2 q = ivec2 (vec2 (p) + 0.5 + dir * t);
+			if (q.x < 0 || q.y < 0 || q.x >= int (pc.size.x) || q.y >= int (pc.size.y)) break;
+			float zq = texelFetch (prepass, q, 0).w;
+			if (zq <= 0.0) continue;
+			vec3 v = ViewPos (vec2 (q) + 0.5, zq) - P;
+			float d2 = dot (v, v);
+			if (d2 > R2) continue;
+			float c = dot (N, v) * inversesqrt (d2 + 1e-6);
+			horizon = max (horizon, (c - pc.bias) / (1.0 - pc.bias) * (1.0 - d2 / R2));
+		}
+		occ += horizon;
+	}
+	float ao = 1.0 - pc.strength * occ / float (DIRS);
+	ao = mix (clamp (ao, 0.0, 1.0), 1.0, smoothstep (0.5 * pc.maxDist, pc.maxDist, z));
+	imageStore (aoOut, p, vec4 (ao));
+}

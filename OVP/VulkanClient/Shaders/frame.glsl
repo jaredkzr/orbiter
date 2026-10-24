@@ -22,6 +22,13 @@ layout(set = 0, binding = 0) uniform Frame {
 	vec4 shadowParams; // x: enabled, y: normal offset [m], z: depth bias, w: texel size
 	mat4 shadowMat2;   // far cascade
 	vec4 shadowParams2;
+	vec4 aoParams;     // 1/width, 1/height of the ambient occlusion image, z: fraction applied to direct light
 	vec4 lightCount;   // x: number of local lights
 	LocalLight lights[MAX_LIGHTS];
 } frame;
+
+// ambient occlusion of opaque geometry (1: unoccluded); fragment shaders only
+#ifdef FRAME_AO
+layout(set = 0, binding = 3) uniform sampler2D aoMap;
+float AmbientOcclusion () { return texture(aoMap, gl_FragCoord.xy * frame.aoParams.xy).r; }
+#endif

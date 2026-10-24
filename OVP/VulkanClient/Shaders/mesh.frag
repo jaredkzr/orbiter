@@ -4,6 +4,7 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
+#define FRAME_AO
 #include "frame.glsl"
 
 #include "shadow.glsl"
@@ -158,13 +159,15 @@ void main()
 	// diffuse (Orbiter's convention: albedo times N.L) and specular reflection
 	// of the sun, local lights, ambient, and reflections of the environment
 	vec3 diffuse = base * (1.0 - metal);
-	vec3 col = diffuse * (frame.ambient.rgb + sun * NoL + LocalLighting(vPosView, N));
+	float ao = draw.maps.y > 0.5 ? 1.0 : AmbientOcclusion();
+	float aoDirect = mix(1.0, ao, frame.aoParams.z); // contact darkening in direct light too
+	vec3 col = diffuse * (frame.ambient.rgb * ao + (sun * NoL + LocalLighting(vPosView, N)) * aoDirect);
 	col += sun * SpecularBRDF(N, V, L, F0, rough) * PI;
 	if (reflectivity > 0.0) {
 		vec3 R = reflect(-V, N);
 		R = normalize(mix(R, N, rough * rough)); // rough surfaces: towards the normal
 		vec3 env = Environment(normalize(mat3(atm.viewToPlanet) * R));
-		col += env * EnvBRDF(F0, rough, NoV) * reflectivity * reflTint;
+		col += env * EnvBRDF(F0, rough, NoV) * reflectivity * reflTint * ao;
 	}
 	col += draw.emissive.rgb * texel.rgb;
 	if ((maps & MAP_TRANSL) != 0u) // sunlight scattered through from behind

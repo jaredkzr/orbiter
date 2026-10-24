@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "Scene.h"
+#include "AO.h"
 #include "VObjects.h"
 #include "VkMesh.h"
 #include "VkTexture.h"
@@ -16,6 +17,7 @@
 
 #include "mesh.vert.h"
 #include "mesh.frag.h"
+#include "prepass.frag.h"
 #include "stars.vert.h"
 #include "stars.frag.h"
 #include "particle.vert.h"
@@ -33,6 +35,7 @@ namespace {
 		float shadowParams[4]; // enabled, normal offset, depth bias, texel size
 		float shadowMat2[16];  // far cascade
 		float shadowParams2[4];
+		float aoParams[4];     // 1/width, 1/height of the occlusion image, fraction applied to direct light
 		float lightCount[4];
 		struct {
 			float pos[4];   // view space position, range
@@ -97,7 +100,7 @@ bool Scene::Init ()
 	shadowsFar->Init (ctx);
 
 	// per-frame uniform buffer and the shadow map (set 0)
-	VkDescriptorSetLayoutBinding b[3]{};
+	VkDescriptorSetLayoutBinding b[4]{};
 	b[0].binding = 0;
 	b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	b[0].descriptorCount = 1;
@@ -108,14 +111,16 @@ bool Scene::Init ()
 	b[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 	b[2] = b[1];
 	b[2].binding = 2;
+	b[3] = b[1];
+	b[3].binding = 3; // ambient occlusion
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 3;
+	lci.bindingCount = 4;
 	lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &frameLayout));
 
 	VkDescriptorPoolSize ps[2] = {
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, vkc::FRAMES_IN_FLIGHT },
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * vkc::FRAMES_IN_FLIGHT }
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 * vkc::FRAMES_IN_FLIGHT }
 	};
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.maxSets = vkc::FRAMES_IN_FLIGHT;
@@ -150,6 +155,10 @@ bool Scene::Init ()
 		wr[2].pImageInfo = &dii2;
 		vkUpdateDescriptorSets (ctx->device, 3, wr, 0, nullptr);
 	}
+
+	ao = std::make_unique<AmbientOcclusion>();
+	ao->Init (ctx);
+	WriteAODescriptors ();
 
 	atm = std::make_unique<AtmosphereRenderer>();
 	atm->Init (ctx, gc->TexMgr());
@@ -202,10 +211,12 @@ void Scene::Shutdown ()
 	shadowsFar.reset();
 	if (stars) stars->Shutdown ();
 	stars.reset();
+	if (ao) ao->Shutdown ();
+	ao.reset();
 	ctx->DestroyBuffer (sphereVtx);
 	ctx->DestroyBuffer (sphereIdx);
 	for (auto &u : frameUbo) ctx->DestroyBuffer (u);
-	VkPipeline pipes[] = { meshOpaque, meshBlend, meshAdditive, starPipeline, particleAdditive, particleBlend };
+	VkPipeline pipes[] = { meshOpaque, meshBlend, meshAdditive, meshPrepass, starPipeline, particleAdditive, particleBlend };
 	for (auto p : pipes) if (p) vkDestroyPipeline (ctx->device, p, nullptr);
 	vkDestroyPipelineLayout (ctx->device, meshLayout, nullptr);
 	vkDestroyPipelineLayout (ctx->device, particleLayout, nullptr);
@@ -220,10 +231,11 @@ void Scene::Shutdown ()
 // ======================================================================
 // Pipelines
 
-VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite)
+VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite, bool prepass)
 {
 	VkShaderModule vs = ctx->CreateShaderModule (spv_mesh_vert, spv_mesh_vert_size);
-	VkShaderModule fs = ctx->CreateShaderModule (spv_mesh_frag, spv_mesh_frag_size);
+	VkShaderModule fs = prepass ? ctx->CreateShaderModule (spv_prepass_frag, spv_prepass_frag_size)
+	                            : ctx->CreateShaderModule (spv_mesh_frag, spv_mesh_frag_size);
 	VkPipelineShaderStageCreateInfo stages[2] = {
 		{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vs, "main" },
 		{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main" }
@@ -257,7 +269,7 @@ VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite
 	rs.lineWidth = 1.0f;
 
 	VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-	ms.rasterizationSamples = ctx->sceneSamples;
+	ms.rasterizationSamples = prepass ? VK_SAMPLE_COUNT_1_BIT : ctx->sceneSamples;
 
 	VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
 	ds.depthTestEnable = VK_TRUE;
@@ -286,7 +298,8 @@ VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite
 
 	VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
 	rci.colorAttachmentCount = 1;
-	rci.pColorAttachmentFormats = &ctx->sceneFormat;
+	const VkFormat prepassFmt = AmbientOcclusion::PREPASS_FORMAT;
+	rci.pColorAttachmentFormats = prepass ? &prepassFmt : &ctx->sceneFormat;
 	rci.depthAttachmentFormat = ctx->depthFormat;
 
 	VkGraphicsPipelineCreateInfo gpi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
@@ -323,6 +336,7 @@ void Scene::CreatePipelines ()
 	meshOpaque = CreateMeshPipeline (false, false, true);
 	meshBlend = CreateMeshPipeline (true, false, false);
 	meshAdditive = CreateMeshPipeline (true, true, false);
+	meshPrepass = CreateMeshPipeline (false, false, true, true);
 
 	// stars: points at infinity, drawn first without depth test
 	VkPushConstantRange spcr{ VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(StarPushConstants) };
@@ -679,13 +693,31 @@ double Scene::PixelSize (double size, double dist) const
 // ======================================================================
 // Rendering
 
-void Scene::Render ()
+void Scene::WriteAODescriptors ()
 {
-	VkCommandBuffer cmd = ctx->Cmd();
+	VkDescriptorImageInfo dii{ ao->Sampler(), ao->View(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+	for (uint32_t i = 0; i < vkc::FRAMES_IN_FLIGHT; i++) {
+		VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+		wr.dstSet = frameSet[i];
+		wr.dstBinding = 3;
+		wr.descriptorCount = 1;
+		wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		wr.pImageInfo = &dii;
+		vkUpdateDescriptorSets (ctx->device, 1, &wr, 0, nullptr);
+	}
+}
+
+void Scene::BeginFrame ()
+{
+	frameNo++;
 	uint32_t fi = ctx->FrameIndex();
+	if (ao->EnsureSize ()) WriteAODescriptors (); // the GPU is idle then
 
 	// frame uniforms
 	FrameUniforms fu{};
+	fu.aoParams[0] = 1.0f / ao->Extent().width;
+	fu.aoParams[1] = 1.0f / ao->Extent().height;
+	fu.aoParams[2] = ao->directFrac;
 	memcpy (fu.proj, proj, sizeof(proj));
 	VECTOR3 sunDir = _V(1, 0, 0);
 	if (hSun) {
@@ -755,6 +787,24 @@ void Scene::Render ()
 				camAtmSet = a->Set (); // also without atmosphere: the planet is reflected
 	}
 
+}
+
+void Scene::RenderPrepass ()
+{
+	if (!ao->enabled) return;
+	// planet surfaces select their tiles and upload data first (transfers
+	// end rendering scopes, and the prepass target is cleared when bound)
+	for (auto &it : visuals) it.second->PrepareFrame ();
+	ao->BeginPrepass ();
+	for (auto &it : visuals) it.second->Render (RenderPass::Depth);
+	ao->Compute (proj[0], -proj[5]);
+}
+
+void Scene::Render ()
+{
+	VkCommandBuffer cmd = ctx->Cmd();
+	uint32_t fi = ctx->FrameIndex();
+
 	// background stars
 	float viewf[16], vp[16];
 	view.ToFloat (viewf);
@@ -804,7 +854,8 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 		bool transparent = ovr ? ovr->additive : grp.transparent;
 		if (transparent != (pass == RenderPass::Transparent)) continue;
 
-		VkPipeline pipe = !transparent ? meshOpaque : (ovr || (grp.flags & VkMesh::GRP_ADDITIVE)) ? meshAdditive : meshBlend;
+		VkPipeline pipe = pass == RenderPass::Depth ? meshPrepass
+			: !transparent ? meshOpaque : (ovr || (grp.flags & VkMesh::GRP_ADDITIVE)) ? meshAdditive : meshBlend;
 		if (pipe != bound) {
 			vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
 			bound = pipe;
@@ -835,7 +886,8 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 		pc.pbr[0] = pp.metalness, pc.pbr[1] = pp.roughness, pc.pbr[2] = pp.reflectivity, pc.pbr[3] = pp.f0;
 		memcpy (pc.heat, objHeat, sizeof(objHeat));
 		pc.maps[0] = maps ? (float)maps->flags : 0.0f;
-		pc.maps[1] = pc.maps[2] = pc.maps[3] = 0.0f;
+		pc.maps[1] = transparent ? 1.0f : 0.0f; // not in the prepass: no ambient occlusion
+		pc.maps[2] = pc.maps[3] = 0.0f;
 		if (transparent && !ovr)
 			for (int k = 0; k < 3; k++) pc.emissive[k] += objGlassGlow[k];
 		if (ovr) { // self-illuminated display
@@ -872,6 +924,7 @@ void Scene::DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &m
 	pc.light[0] = pc.light[1] = pc.light[2] = 1.0f;
 	pc.pbr[1] = 1.0f; // matte, no reflections
 	pc.emissive[3] = unlit ? 1.0f : 0.0f;
+	pc.maps[1] = 1.0f; // not in the prepass: no ambient occlusion
 	vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 	vkCmdDrawIndexed (cmd, nIdx, 1, 0, 0, 0);
 }

@@ -62,3 +62,12 @@ Known gaps and limitations, to be addressed later.
 - Auto-exposure (ORBITER_VK_AUTOEXPOSURE=0 disables it): the bloom and
   lens-flare thresholds are in scene units, not relative to the adapted
   exposure, so at night slightly dimmer lights bloom than by day.
+
+## Ambient occlusion
+- Screen-space, horizon based, from a single-sample depth prepass of
+  vessels, bases and terrain (ORBITER_VK_AO=0 disables it;
+  ORBITER_VK_AO_STRENGTH, ORBITER_VK_AO_DIRECT tune it). 4 m radius, fades
+  out by 2 km. 60% of the occlusion is also applied to direct light (an
+  artistic choice for visible contact darkening in sunlight). Spatial blur
+  only: no temporal accumulation yet (would come with TAA).
+- The prepass draws the geometry a second time.

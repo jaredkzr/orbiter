@@ -600,6 +600,46 @@ void Context::BindTarget (const Target &t)
 	cur.extent = t.extent;
 }
 
+void Context::BindTargetWithDepth (const Target &t, const Target &d, const float clearColor[4])
+{
+	EndTarget ();
+	VkCommandBuffer cmd = Rec ();
+	ImageBarrier (cmd, t.image, VK_IMAGE_ASPECT_COLOR_BIT,
+		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+		VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT,
+		VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+	ImageBarrier (cmd, d.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+		VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+		VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+		VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+	VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+	color.imageView = t.view;
+	color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	for (int i = 0; i < 4; i++) color.clearValue.color.float32[i] = clearColor[i];
+	VkRenderingAttachmentInfo dep{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+	dep.imageView = d.view;
+	dep.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+	dep.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	dep.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	dep.clearValue.depthStencil = { 0.0f, 0 }; // reversed z: far = 0
+	VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+	ri.renderArea = { {0, 0}, t.extent };
+	ri.layerCount = 1;
+	ri.colorAttachmentCount = 1;
+	ri.pColorAttachments = &color;
+	ri.pDepthAttachment = &dep;
+	vkCmdBeginRendering (cmd, &ri);
+	SetViewportScissor (t.extent);
+	cur = CurrentTarget();
+	cur.active = true;
+	cur.image = t.image;
+	cur.format = t.format;
+	cur.extent = t.extent;
+}
+
 void Context::BindDepthTarget (const Target &t)
 {
 	EndTarget ();
