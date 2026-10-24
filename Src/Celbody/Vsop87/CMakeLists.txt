@@ -21,7 +21,11 @@ target_link_libraries(Vsop87
 	${ORBITER_LIB}
 )
 
-set(VSOP87_LIB $<TARGET_LINKER_FILE:Vsop87>)
+if(ORBITER_HEADLESS)
+	set(VSOP87_LIB Vsop87) # link by target name: ELF modules have no import library
+else()
+	set(VSOP87_LIB $<TARGET_LINKER_FILE:Vsop87>)
+endif()
 
 add_subdirectory(Sun)
 add_subdirectory(Mercury)

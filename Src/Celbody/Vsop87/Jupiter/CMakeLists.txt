@@ -23,7 +23,7 @@ target_include_directories(${CELBODY}
 
 target_link_libraries(${CELBODY}
 	${VSOP87_LIB}
-	$<TARGET_LINKER_FILE:Galsat>
+	$<IF:$<BOOL:${ORBITER_HEADLESS}>,Galsat,$<TARGET_LINKER_FILE:Galsat>>
 	${ORBITER_LIB}
 	${ORBITER_SDK_LIB}
 )

@@ -15,7 +15,7 @@
 #define __HST_H
 
 #define STRICT
-#include "orbitersdk.h"
+#include "Orbitersdk.h"
 
 // ==============================================================
 // Some parameters and capabilities

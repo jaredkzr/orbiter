@@ -164,7 +164,11 @@ void DlgOptions::DrawJoystick()
 	ImGui::SeparatorText("Joystick device");
 	DWORD ndev;
 	DIDEVICEINSTANCE* joylist;
+#ifdef _WIN32
 	g_pOrbiter->GetDInput()->GetJoysticks(&joylist, &ndev);
+#else
+	ndev = 0; joylist = NULL; // no DirectInput devices
+#endif
 	DWORD &jidx = g_pOrbiter->Cfg()->CfgJoystickPrm.Joy_idx;
 
 	const char *preview = "<Disabled>";

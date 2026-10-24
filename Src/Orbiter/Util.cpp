@@ -2,7 +2,12 @@
 // Licensed under the MIT License
 
 #include "Util.h"
+#ifdef _WIN32
 #include <shlobj.h>
+#else
+#include <filesystem>
+#include "Platform.h"
+#endif
 #include <sstream>
 #include <iomanip>
 #include <unordered_map>
@@ -39,6 +44,7 @@ bool MakePath (const char *fname)
 	for (i = len; i > 0; i--)
 		if (fname[i-1] == '\\') break;
 	if (!i) return false;
+#ifdef _WIN32
 	if (fname[0] != '\\' && fname[1] != ':') {
 		GetCurrentDirectory (256, cbuf);
 		len = strlen(cbuf);
@@ -47,6 +53,11 @@ bool MakePath (const char *fname)
 	strncpy_s (cbuf+len, 256-len, fname, i);
 	int res = SHCreateDirectoryEx (NULL, cbuf, NULL);
 	return res == ERROR_SUCCESS;
+#else
+	strncpy_s (cbuf, 256, fname, i);
+	std::error_code ec;
+	return std::filesystem::create_directories (orbiter::platform::ResolvePath (cbuf), ec);
+#endif
 }
 
 bool iequal(const std::string& s1, const std::string& s2)
@@ -62,6 +73,7 @@ bool iequal(const std::string& s1, const std::string& s2)
 }
 
 
+#ifdef _WIN32 // window layout helpers for Win32 dialogs
 RECT GetClientPos (HWND hWnd, HWND hChild)
 {
 	RECT r;
@@ -78,6 +90,7 @@ void SetClientPos (HWND hWnd, HWND hChild, RECT &r)
 {
 	MoveWindow (hChild, r.left, r.top, r.right-r.left, r.bottom-r.top, true);
 }
+#endif
 
 
 // ------------------------------------------------------------------------------

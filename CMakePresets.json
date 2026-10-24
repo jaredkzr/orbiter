@@ -82,6 +82,36 @@
       }
     },
     {
+      "name": "linux-headless-base",
+      "description": "Native build of the headless Orbiter (simulation core without graphics client)",
+      "inherits": "ninja-base",
+      "hidden": true,
+      "cacheVariables": {
+        "ORBITER_MAKE_DOC": false
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "linux-x64-headless-debug",
+      "displayName": "x64 Headless Debug",
+      "inherits": "linux-headless-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "linux-x64-headless-release",
+      "displayName": "x64 Headless Release",
+      "inherits": "linux-headless-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
       "name": "windows-x64-debug",
       "displayName": "x64 Debug",
       "inherits": "windows-base",
@@ -180,6 +210,16 @@
       "name": "linux-x64-asan",
       "displayName": "x64 ASan",
       "configurePreset": "linux-x64-asan"
+    },
+    {
+      "name": "linux-x64-headless-debug",
+      "displayName": "x64 Headless Debug",
+      "configurePreset": "linux-x64-headless-debug"
+    },
+    {
+      "name": "linux-x64-headless-release",
+      "displayName": "x64 Headless Release",
+      "configurePreset": "linux-x64-headless-release"
     }
   ],
   "testPresets": [
@@ -230,6 +270,16 @@
     {
       "name": "linux-x64-asan",
       "configurePreset": "linux-x64-asan",
+      "inherits": "test-base"
+    },
+    {
+      "name": "linux-x64-headless-debug",
+      "configurePreset": "linux-x64-headless-debug",
+      "inherits": "test-base"
+    },
+    {
+      "name": "linux-x64-headless-release",
+      "configurePreset": "linux-x64-headless-release",
       "inherits": "test-base"
     }
   ]

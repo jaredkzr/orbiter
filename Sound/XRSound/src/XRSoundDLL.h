@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "OrbiterSDK.h"
+#include "Orbitersdk.h"
 #include "XRSoundEngine.h"
 
 // Defines the master map of all known Orbiter vessels (handles) -> XRSoundEngine * for it.

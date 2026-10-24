@@ -5,7 +5,6 @@
 #include "Panel.h"
 #include "Pane.h"
 #include "Vessel.h"
-#include "Texture.h"
 #include "Log.h"
 
 using namespace std;
@@ -139,6 +138,7 @@ void Panel::MFDMoved ()
 
 void Panel::DefineBackground (HBITMAP hBmp, DWORD flag, DWORD _ck)
 {
+#ifdef _WIN32
 	if (!gc) return;
 
 	//HRESULT res;
@@ -213,6 +213,7 @@ void Panel::DefineBackground (HBITMAP hBmp, DWORD flag, DWORD _ck)
 	}
 
 	visible = true;
+#endif
 }
 
 void Panel::DefineArea (int aid, const RECT &pos, int draw_mode, int mouse_mode, int bkmode)
@@ -357,7 +358,7 @@ void Panel::RegisterMFD (int id, const MFDSPEC &spec)
 	mfd[id].exist = true;
 }
 
-void Panel::Point2Screen (long srcX, long srcY, long &tgtX, long &tgtY) const
+void Panel::Point2Screen (LONG srcX, LONG srcY, LONG &tgtX, LONG &tgtY) const
 {
 	if (scaled) {
 		srcX = (long)(srcX*scale);
@@ -420,10 +421,12 @@ bool Panel::ProcessMouse (UINT event, DWORD state, int x, int y)
 void Panel::GetMouseState (int &idx, int &state, int &mx, int &my) const
 {
 	if (mstate & PANEL_MOUSE_PRESSED) {
-		POINT pt;
+		POINT pt = {0, 0};
+#ifdef _WIN32
 		GetCursorPos (&pt);
 		if (cwnd) // need to subtract client window offset
 			ScreenToClient (cwnd, &pt);
+#endif
 		pt.x -= X0, pt.y -= Y0;
 		if (scaled) pt.x = (int)(pt.x*iscale), pt.y = (int)(pt.y*iscale);
 		mousex = pt.x - area[idx_mfocus]->pos.left;

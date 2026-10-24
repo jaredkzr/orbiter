@@ -10,6 +10,8 @@
 #define __CONFIG_CPP
 #define STRICT 1
 
+#include <algorithm>
+#include "Platform.h"
 #include <fstream>
 #include <iomanip>
 #include <string.h>
@@ -837,9 +839,13 @@ void Config::SetDefaults ()
 	bEchoAll = bEchoAll_default;
 	memset (&rLaunchpad, 0, sizeof(RECT));
 
+#ifdef _WIN32
 	RECT r;
 	GetWindowRect (GetDesktopWindow(), &r);
 	CfgDevPrm_default.WinW = r.right-r.left; CfgDevPrm_default.WinH = r.bottom-r.top;
+#else
+	CfgDevPrm_default.WinW = 1920; CfgDevPrm_default.WinH = 1080;
+#endif
 	// use the screen size as the default render window size
 
 	AmbientColour = 0x0c0c0c0c;
@@ -1390,32 +1396,32 @@ BOOL Config::Write (const char *fname) const
 char *Config::ConfigPath (const char *name) const
 {
 	strcpy (cfgpath+cfglen, name);
-	return strcat (cfgpath, ".cfg");
+	return orbiter::platform::ResolvePathInPlace (strcat (cfgpath, ".cfg"));
 }
 
 char *Config::ConfigPathNoext (const char *name)
 {
 	strcpy (cfgpath+cfglen, name);
-	return cfgpath;
+	return orbiter::platform::ResolvePathInPlace (cfgpath);
 }
 
 char *Config::MeshPath (const char *name)
 {
 	strcpy (mshpath+mshlen, name);
-	return strcat (mshpath, ".msh");
+	return orbiter::platform::ResolvePathInPlace (strcat (mshpath, ".msh"));
 }
 
 char *Config::TexPath (const char *name, const char *ext)
 {
 	strcpy (texpath+texlen, name);
-	return strcat (texpath, ext ? ext : ".dds");
+	return orbiter::platform::ResolvePathInPlace (strcat (texpath, ext ? ext : ".dds"));
 }
 
 char *Config::HTexPath (const char *name, const char *ext)
 {
 	if (!htxlen) return 0;
 	strcpy (htxpath+htxlen, name);
-	return strcat (htxpath, ext ? ext : ".dds");
+	return orbiter::platform::ResolvePathInPlace (strcat (htxpath, ext ? ext : ".dds"));
 }
 
 char* Config::PTexPath(const char* name, const char* ext)
@@ -1423,16 +1429,20 @@ char* Config::PTexPath(const char* name, const char* ext)
 	if (!ptxlen) return 0;
 	strcpy(ptxpath + ptxlen, name);
 	if (ext) strcat(ptxpath, ext);
-	return ptxpath;
+	return orbiter::platform::ResolvePathInPlace (ptxpath);
 }
 
 const char *Config::ScnPath (const char *name)
 {
+#ifdef _WIN32
 	if (name[1] == ':') { // assume full absolute path
+#else
+	if (name[0] == '/') { // absolute path
+#endif
 		return name;
 	} else {
 		strcpy (scnpath+scnlen, name);
-		return strcat (scnpath, ".scn");
+		return orbiter::platform::ResolvePathInPlace (strcat (scnpath, ".scn"));
 	}
 }
 

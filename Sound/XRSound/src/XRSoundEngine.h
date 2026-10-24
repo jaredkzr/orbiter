@@ -10,7 +10,7 @@
 
 #include <unordered_map>
 
-#include "OrbiterSDK.h"
+#include "Orbitersdk.h"
 #include "XRSoundEngine30.h"   // latest interface version 
 
 using namespace std;

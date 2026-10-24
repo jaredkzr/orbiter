@@ -6,7 +6,6 @@
 #include "Pane.h"
 #include "Camera.h"
 #include "Vessel.h"
-#include "Texture.h"
 #include "Log.h"
 #include "Util.h"
 
@@ -427,10 +426,12 @@ bool VirtualCockpit::ProcessMouse (UINT event, DWORD state, int x, int y)
 void VirtualCockpit::GetMouseState (int &idx, int &state, Vector &xs) const
 {
 	if (mstate & PANEL_MOUSE_PRESSED) {
-		POINT pt;
+		POINT pt = {0, 0};
+#ifdef _WIN32
 		GetCursorPos (&pt);
 		if (cwnd) // need to subtract client window offset
 			ScreenToClient (cwnd, &pt);
+#endif
 
 		// calculate ray intersection with current focus area
 		Vector gdir, ldir;

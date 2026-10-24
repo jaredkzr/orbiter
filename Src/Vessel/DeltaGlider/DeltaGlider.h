@@ -21,8 +21,9 @@
 
 #define STRICT 1
 
-#include "orbitersdk.h"
-#include "..\Common\Instrument.h"
+#include <memory>
+#include "Orbitersdk.h"
+#include "../Common/Instrument.h"
 
 // ==============================================================
 // Some vessel class caps
@@ -174,6 +175,7 @@ class DlgControl;
 // Interface for derived vessel class: DeltaGlider
 // ==========================================================
 
+class FuelMFD;
 class DeltaGlider: public ComponentVessel {
 	friend class FuelMFD;
 	friend class ThermalSubsystem;

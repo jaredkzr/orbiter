@@ -3,6 +3,8 @@
 
 #include "Memstat.h"
 
+#ifdef _WIN32
+
 bool MemStat::bLib = false;
 HMODULE MemStat::hLib = 0;
 
@@ -34,3 +36,29 @@ long MemStat::HeapUsage ()
 		return (long)pmc.WorkingSetSize;
 	} else return 0;
 }
+
+#else // !_WIN32
+
+#include <stdio.h>
+#include <unistd.h>
+
+MemStat::MemStat ()
+{
+}
+
+MemStat::~MemStat ()
+{
+}
+
+long MemStat::HeapUsage ()
+{
+	// resident set size, the closest equivalent of the Windows working set
+	long pages = 0, resident = 0;
+	FILE *f = fopen ("/proc/self/statm", "r");
+	if (!f) return 0;
+	if (fscanf (f, "%ld %ld", &pages, &resident) != 2) resident = 0;
+	fclose (f);
+	return resident * sysconf (_SC_PAGESIZE);
+}
+
+#endif // _WIN32

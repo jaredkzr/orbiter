@@ -12,7 +12,7 @@
 #ifndef __SHUTTLEA_H
 #define __SHUTTLEA_H
 
-#include "orbitersdk.h"
+#include "Orbitersdk.h"
 
 // ==========================================================
 // Some vessel class caps
@@ -107,6 +107,7 @@ class AttitudeReference;
 // Interface for derived vessel class: ShuttleA
 // ==========================================================
 
+class PodTiltPreset;
 class ShuttleA: public VESSEL4 {
 	friend class PodTiltPreset;
 

@@ -4,7 +4,9 @@
 #ifndef __LAUNCHPAD_H
 #define __LAUNCHPAD_H
 
+#ifdef _WIN32
 #include <CommCtrl.h>
+#endif
 #include "OrbiterAPI.h"
 #include "Config.h"
 

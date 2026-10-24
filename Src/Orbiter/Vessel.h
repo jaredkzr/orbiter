@@ -53,19 +53,15 @@ struct ScenarioData { // packed vessel state
 	DWORD size;             // size of the complete data block
 	DWORD flag;
 	BYTE fstate;            // flight status
-	union {
-		struct {
-			Vector rpos;    // reference body-relative position
-			Vector rvel;    // reference body-relative velocity
-			Vector arot;    // orientation (Euler angles)
-			Vector vrot;    // angular velocity
-		};
-		struct {
-			double lng;     // longitude of landing site [rad]
-			double lat;     // latitude of landing site [rad]
-			double hdg;     // orientation on the ground
-		};
-	};
+	// freeflight state
+	Vector rpos;            // reference body-relative position
+	Vector rvel;            // reference body-relative velocity
+	Vector arot;            // orientation (Euler angles)
+	Vector vrot;            // angular velocity
+	// landed state
+	double lng;             // longitude of landing site [rad]
+	double lat;             // latitude of landing site [rad]
+	double hdg;             // orientation on the ground
 	char buf[1];            // pointer to variable-length parameters
 };
 

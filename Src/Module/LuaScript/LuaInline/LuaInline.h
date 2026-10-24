@@ -24,6 +24,9 @@
 #define __LUAINLINE_H
 
 #include "Interpreter.h"
+#ifndef _WIN32
+#include <atomic>
+#endif
 
 // ==============================================================
 // class InterpreterList: interface
@@ -39,6 +42,9 @@ public:
 		bool termInterp;      // interpreter kill flag
 		bool singleCmd;       // terminate after single command
 		char *cmd;            // interpreter command
+#ifndef _WIN32
+		std::atomic<bool> threadDone; // interpreter thread has finished
+#endif
 		static unsigned int WINAPI InterpreterThreadProc (LPVOID context);
 	};
 

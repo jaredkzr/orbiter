@@ -27,6 +27,11 @@ target_include_directories(Orbitersdk
 	PUBLIC ${imgui_SOURCE_DIR}
 )
 
+if(ORBITER_HEADLESS)
+	target_include_directories(Orbitersdk PRIVATE ${ORBITER_SOURCE_SDK_INCLUDE_DIR})
+	target_link_libraries(Orbitersdk PUBLIC ${CMAKE_DL_LIBS})
+endif()
+
 
 # Copy library to its Orbitersdk/lib location so that external project integrated into the build can find it
 add_custom_command(TARGET Orbitersdk

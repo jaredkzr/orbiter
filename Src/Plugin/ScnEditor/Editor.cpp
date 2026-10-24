@@ -11,7 +11,7 @@
 // derived from ScnEditorTab.
 // ==============================================================
 
-#include "orbitersdk.h"
+#include "Orbitersdk.h"
 #include "resource.h"
 #include "Editor.h"
 #include "DlgCtrl.h"

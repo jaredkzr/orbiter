@@ -1,7 +1,7 @@
 // NPTestDlg.cpp : implementation file
 //
 
-#include "stdafx.h"
+#include "StdAfx.h"
 #include "NPTest.h"
 #include "NPTestDlg.h"
 

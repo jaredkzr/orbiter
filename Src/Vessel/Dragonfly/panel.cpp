@@ -1,12 +1,12 @@
 // Copyright (c) Martin Schweiger
 // Licensed under the MIT License
 
-#include "panel.h"
+#include "Panel.h"
 #include <windows.h>
 #include < GL\gl.h >
 #include <math.h>
 #include <stdio.h>
-#include "orbitersdk.h"
+#include "Orbitersdk.h"
 #include "resource.h"
 
 HFONT hFNT_Panel;

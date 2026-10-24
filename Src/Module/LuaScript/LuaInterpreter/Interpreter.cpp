@@ -7,8 +7,15 @@
 #include "VesselAPI.h"
 #include "MFDAPI.h"
 #include "DrawAPI.h"
+#ifdef ORBITER_HAS_GCCORE
 #include "gcCoreAPI.h"
+#else
+// declarations otherwise provided by gcCoreAPI.h
+using namespace oapi;
+typedef void *CAMERAHANDLE;
+#endif
 #include <list>
+#include <mutex>
 
 using std::min;
 using std::max;
@@ -67,15 +74,27 @@ Interpreter::Interpreter ()
 	lua_pushlightuserdata (L, this);
 	lua_setfield (L, LUA_REGISTRYINDEX, "interp");
 
+#ifdef _WIN32
 	hExecMutex = CreateMutex (NULL, TRUE, NULL);
 	hWaitMutex = CreateMutex (NULL, FALSE, NULL);
+#else
+	// Like Win32 mutexes, these are recursive and owned by the locking thread.
+	// The execution mutex is initially owned by the creating (Orbiter) thread.
+	hExecMutex = new std::recursive_mutex;
+	hWaitMutex = new std::recursive_mutex;
+	static_cast<std::recursive_mutex*>(hExecMutex)->lock();
+#endif
 
 }
 
 void Interpreter::LazyInitGCCore() {
 	if(gcCoreInitialized) return;
 	gcCoreInitialized = true;
+#ifdef ORBITER_HAS_GCCORE
 	pCore = gcGetCoreInterface();
+#else
+	pCore = nullptr; // graphics client core extensions not available
+#endif
 }
 
 static int traceback(lua_State *L) {
@@ -112,8 +131,13 @@ Interpreter::~Interpreter ()
 {
 	lua_close (L);
 
+#ifdef _WIN32
 	if (hExecMutex) CloseHandle (hExecMutex);
 	if (hWaitMutex) CloseHandle (hWaitMutex);
+#else
+	delete static_cast<std::recursive_mutex*>(hExecMutex);
+	delete static_cast<std::recursive_mutex*>(hWaitMutex);
+#endif
 }
 
 void Interpreter::Initialise ()
@@ -685,15 +709,26 @@ void Interpreter::WaitExec (DWORD timeout)
 {
 	// Called by orbiter thread or interpreter thread to wait its turn
 	// Orbiter waits for the script for 1 second to return
+#ifdef _WIN32
 	WaitForSingleObject (hWaitMutex, timeout); // wait for synchronisation mutex
 	WaitForSingleObject (hExecMutex, timeout); // wait for execution mutex
 	ReleaseMutex (hWaitMutex);              // release synchronisation mutex
+#else
+	// all callers wait without timeout
+	static_cast<std::recursive_mutex*>(hWaitMutex)->lock();   // wait for synchronisation mutex
+	static_cast<std::recursive_mutex*>(hExecMutex)->lock();   // wait for execution mutex
+	static_cast<std::recursive_mutex*>(hWaitMutex)->unlock(); // release synchronisation mutex
+#endif
 }
 
 void Interpreter::EndExec ()
 {
 	// called by orbiter thread or interpreter thread to hand over control
+#ifdef _WIN32
 	ReleaseMutex (hExecMutex);
+#else
+	static_cast<std::recursive_mutex*>(hExecMutex)->unlock();
+#endif
 }
 
 void Interpreter::frameskip (lua_State *L)
@@ -3870,10 +3905,12 @@ Do not use it in published modules!
 
 @function exit
 */
+OAPIFUNC void oapiExitOrbiter(int code); // implemented in the Orbiter core
+
 int Interpreter::oapiExit(lua_State* L)
 {
 	auto code = lua_tointeger(L, 1);
-	exit(code);
+	oapiExitOrbiter((int)code);
 	return 0; // compiler warnings
 }
 
@@ -6235,10 +6272,12 @@ int Interpreter::customcamera_collect(lua_State *L)
 {
 	CustomCamera_Lua *cc = (CustomCamera_Lua *)luaL_checkudata(L, 1, "CustomCamera.vtable");
 	luaL_unref(L, LUA_REGISTRYINDEX, cc->clbk);
+#ifdef ORBITER_HAS_GCCORE
 	LazyInitGCCore();
 	if(cc->hCam && pCore) { // in case the script did not delete the camera
 		pCore->DeleteCustomCamera(cc->hCam);
 	}
+#endif
 	return 0;
 }
 
@@ -6255,6 +6294,7 @@ static void lua_pushcustomcamera(lua_State *L, CAMERAHANDLE hCam)
 
 int Interpreter::oapi_setup_customcamera(lua_State *L)
 {
+#ifdef ORBITER_HAS_GCCORE
 	LazyInitGCCore();
 	if(pCore) {
 		CAMERAHANDLE hCam = nullptr;
@@ -6293,6 +6333,9 @@ int Interpreter::oapi_setup_customcamera(lua_State *L)
 		lua_pushnil(L);
 	}
 	return 1;
+#else
+	lua_pushnil(L); return 1;
+#endif
 }
 
 
@@ -6307,6 +6350,7 @@ Note : Always delete all cameras bound to a render surface before releasing the 
 */
 int Interpreter::oapi_delete_customcamera(lua_State *L)
 {
+#ifdef ORBITER_HAS_GCCORE
 	LazyInitGCCore();
 	if(pCore) {
 		CustomCamera_Lua *cc = (CustomCamera_Lua *)luaL_checkudata(L, 1, "CustomCamera.vtable");
@@ -6319,6 +6363,9 @@ int Interpreter::oapi_delete_customcamera(lua_State *L)
 		lua_pushnumber(L, -1);
 	}
 	return 1;
+#else
+	lua_pushnumber(L, -1); return 1;
+#endif
 }
 
 /***
@@ -6332,6 +6379,7 @@ Note : If multiple cameras are sharing the same rendering surface. Flickering wi
 */
 int Interpreter::oapi_customcamera_onoff(lua_State *L)
 {
+#ifdef ORBITER_HAS_GCCORE
 	LazyInitGCCore();
 	if(pCore) {
 		CustomCamera_Lua *cc = (CustomCamera_Lua *)luaL_checkudata(L, 1, "CustomCamera.vtable");
@@ -6339,6 +6387,9 @@ int Interpreter::oapi_customcamera_onoff(lua_State *L)
 		pCore->CustomCameraOnOff(cc->hCam, bOn);
 	}
 	return 0;
+#else
+	return 0;
+#endif
 }
 
 void Interpreter::customcamera_clbk(oapi::Sketchpad *skp, void *pParam)
@@ -6363,6 +6414,7 @@ Setup a custom camera overlay drawing callback.
 */
 int Interpreter::oapi_customcamera_overlay(lua_State *L)
 {
+#ifdef ORBITER_HAS_GCCORE
 	LazyInitGCCore();
 	if(pCore) {
 		CustomCamera_Lua *cc = (CustomCamera_Lua *)luaL_checkudata(L, 1, "CustomCamera.vtable");
@@ -6380,6 +6432,9 @@ int Interpreter::oapi_customcamera_overlay(lua_State *L)
 		pCore->CustomCameraOverlay(cc->hCam, customcamera_clbk, cc);
 	}
 	return 0;
+#else
+	return 0;
+#endif
 }
 
 /***

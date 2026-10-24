@@ -470,6 +470,7 @@ void Instrument_MapOld::LoadMap (Planet *p)
 
 SURFHANDLE Instrument_MapOld::LoadBitmap (const char *cbuf, int *w, int *h)
 {
+#ifdef _WIN32
 	if (!gc) return NULL;
 
 	// Load bitmap
@@ -495,6 +496,9 @@ SURFHANDLE Instrument_MapOld::LoadBitmap (const char *cbuf, int *w, int *h)
 	}
 	DeleteObject (hbm);
 	return surf;
+#else
+	return NULL;
+#endif
 }
 
 void Instrument_MapOld::SetZoom (bool newzoom)

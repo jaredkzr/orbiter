@@ -23,7 +23,7 @@ target_include_directories(${CELBODY}
 
 target_link_libraries(${CELBODY}
 	${VSOP87_LIB}
-	$<TARGET_LINKER_FILE:Satsat>
+	$<IF:$<BOOL:${ORBITER_HEADLESS}>,Satsat,$<TARGET_LINKER_FILE:Satsat>>
 	${ORBITER_LIB}
 	${ORBITER_SDK_LIB}
 )

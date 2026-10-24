@@ -693,8 +693,10 @@ void DefaultPanel::PressTrimButton (int btn)
 void DefaultPanel::GetButtonState (int &state, int &mfd, int &btn)
 {
 	if (activemfd >= 0 && mstate & PANEL_MOUSE_PRESSED) {
-		POINT pt;
+		POINT pt = {0, 0};
+#ifdef _WIN32
 		GetCursorPos (&pt);
+#endif
 		g_pOrbiter->ScreenToClient (&pt);
 		if (GetMFDButton (pt.x, pt.y, mfd, btn) && mfd == activemfd && btn == activebtn) {
 			if (btn < 12) {

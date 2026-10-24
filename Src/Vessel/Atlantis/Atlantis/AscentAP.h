@@ -28,6 +28,7 @@ struct ProfSample {
 // class AscentAP: ascent autopilot
 // ==============================================================
 
+class AscentApMfd;
 class AscentAP: public ImGuiDialog {
 	friend class AscentApMfd;
 

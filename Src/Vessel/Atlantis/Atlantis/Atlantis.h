@@ -13,6 +13,7 @@
 #ifndef __ATLANTIS_H
 #define __ATLANTIS_H
 
+#include <memory>
 #include "Orbitersdk.h"
 #include <math.h>
 
@@ -245,6 +246,8 @@ public:
 // Interface for derived vessel class: Atlantis
 // ==========================================================
 
+class AscentAP;
+class PayloadBayOp;
 class Atlantis: public VESSEL4 {
 	friend class AscentAP;
 	friend class PayloadBayOp;

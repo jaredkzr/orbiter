@@ -193,7 +193,15 @@ int main (int argc, char *argv[])
 	if (!strcmp(param.outname, "-")) strcpy(param.outname, "meshres.h");
 
 	char pwd[1024];
+#ifdef _WIN32
 	_fullpath(pwd, ".\\", 1024);
+#else
+	if (char *cwd = realpath(".", nullptr)) { // realpath needs a PATH_MAX buffer, so let it allocate
+		strncpy(pwd, cwd, sizeof(pwd) - 1);
+		pwd[sizeof(pwd) - 1] = '\0';
+		free(cwd);
+	} else pwd[0] = '\0';
+#endif
 	cout << "Current directory is " << pwd << endl;
 
 	cout << "Reading mesh from " << param.meshname << endl;

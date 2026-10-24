@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <windows.h>
 #include "vectors.h"
-#include "orbitersdk.h"
+#include "Orbitersdk.h"
 
 
 class Panel;

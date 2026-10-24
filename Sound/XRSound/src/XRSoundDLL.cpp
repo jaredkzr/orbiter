@@ -6,7 +6,7 @@
 // ==============================================================
 
 #define ORBITER_MODULE
-#include "OrbiterSDK.h"
+#include "Orbitersdk.h"
 #include "XRSoundDLL.h"
 #include "VesselXRSoundEngine.h"
 #include "ModuleXRSoundEngine.h"

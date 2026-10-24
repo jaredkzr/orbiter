@@ -38,7 +38,11 @@
 using std::min;
 using std::max;
 
+#ifdef _WIN32
 #define LOADBMP(id) (LoadBitmap (g_Param.hDLL, MAKEINTRESOURCE (id)))
+#else
+#define LOADBMP(id) ((HBITMAP)NULL) // no Win32 bitmap resources (panels require a graphics client)
+#endif
 
 // ==============================================================
 // Global parameters
@@ -2485,6 +2489,7 @@ DLLCLBK void ovcExit (VESSEL *vessel)
 	if (vessel) delete (ShuttleA*)vessel;
 }
 
+#ifdef _WIN32 // scenario editor pages (Win32 dialogs)
 // ==============================================================
 // Scenario editor interface
 // ==============================================================
@@ -2610,3 +2615,4 @@ DLLCLBK void secInit (HWND hEditor, OBJHANDLE hVessel)
 	EditorPageSpec eps1 = {"Animations", g_Param.hDLL, IDD_EDITOR_PG1, EdPg1Proc};
 	SendMessage (hEditor, WM_SCNEDITOR, SE_ADDPAGEBUTTON, (LPARAM)&eps1);
 }
+#endif // _WIN32

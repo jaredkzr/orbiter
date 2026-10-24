@@ -3249,6 +3249,7 @@ void Train2::UpdateShadow (Vector &fromsun, double az)
 
 void Train2::Render (LPDIRECT3DDEVICE7 dev, bool day)
 {
+#ifdef _WIN32
 	int i;
 	NTVERTEX *vtx = dyndata->rail;
 	DWORD ambient;
@@ -3274,12 +3275,15 @@ void Train2::Render (LPDIRECT3DDEVICE7 dev, bool day)
 
 	dev->SetRenderState (D3DRENDERSTATE_ALPHABLENDENABLE, FALSE);
 	if (!day) dev->SetRenderState (D3DRENDERSTATE_AMBIENT, ambient);
+#endif
 }
 
 void Train2::RenderShadow (LPDIRECT3DDEVICE7 dev)
 {
+#ifdef _WIN32
 	dev->DrawPrimitive (
 		D3DPT_TRIANGLESTRIP, D3DFVF_XYZ /*| D3DFVF_DIFFUSE*/, dyndata->rshvtx, (dyndata->ng+1)*2, NULL);
+#endif
 }
 
 // ==============================================================================
@@ -3337,6 +3341,7 @@ int SolarPlant::Read (istream &is)
 
 void SolarPlant::Render (LPDIRECT3DDEVICE7 dev, bool)
 {
+#ifdef _WIN32
 	int i, j;
 
 	// check for flashing panels
@@ -3365,13 +3370,16 @@ void SolarPlant::Render (LPDIRECT3DDEVICE7 dev, bool)
 				flash[i] = false;
 			}
 	dev->SetRenderState (D3DRENDERSTATE_ALPHABLENDENABLE, FALSE);
+#endif
 }
 
 void SolarPlant::RenderShadow (LPDIRECT3DDEVICE7 dev)
 {
+#ifdef _WIN32
 	if (have_shadows)
 		dev->DrawIndexedPrimitive (
 			D3DPT_TRIANGLELIST, D3DFVF_XYZ /*| D3DFVF_DIFFUSE*/, ShVtx, nShVtx, ShIdx, nShIdx, 0);
+#endif
 }
 
 void SolarPlant::Activate ()

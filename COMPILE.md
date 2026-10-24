@@ -102,6 +102,43 @@ the Kernels directory. They are offered in 7-zip format:
 - https://cdn.openorbiter.space/spice/Textures.7z
 
 
+BUILDING ON LINUX (HEADLESS)
+============================
+On Linux, Orbiter builds natively as a headless simulator: the full simulation
+core, celestial body modules, vessel modules and the Lua interpreter, but no
+graphics client. There is no launchpad, no Win32 dialogs, no keyboard/joystick
+input and no sound. A session is started from the command line and controlled
+through the console (type `help` for commands) or by a Lua script. This is
+meant for automated tests, server use and development of the simulation core.
+
+Prerequisites: a C++17 compiler (GCC or Clang), CMake 3.19 or later, Ninja and Git.
+
+```bash
+cmake --preset linux-x64-headless-release -DORBITER_SPICE_CELBODIES=OFF
+cmake --build --preset linux-x64-headless-release
+ctest --preset linux-x64-headless-release --output-on-failure
+```
+
+`ORBITER_SPICE_CELBODIES=OFF` selects the legacy VSOP87/ELP82 ephemeris modules,
+which need no additional data. With the default (ON), the SPICE kernels must be
+installed in the Kernels directory as described above.
+
+Run a scenario from the build directory (`out/build/linux-x64-headless-release`):
+
+```bash
+./Orbiter --scenariox="Delta-glider/Brighton Beach" --maxframes=1000 --fixedstep=0.1
+```
+
+Notes:
+- Plugin modules are built as `.so` files and found under the same names as
+  on Windows (e.g. `Modules\Celbody\Earth.dll` loads `Modules/Celbody/Earth.so`).
+- Orbiter and its add-ons use Windows-style file names (backslashes, case-insensitive).
+  On Linux these are translated when files are opened. Set `ORBITER_NO_PATH_COMPAT=1`
+  to disable the translation.
+- Platform-specific code lives in `Src/Platform`. Code that is only meaningful
+  with Win32 (dialogs, GDI drawing, DirectInput) is compiled only on Windows.
+
+
 TROUBLESHOOTING
 ===============
 * If you get errors during the build, in particular when building documentation (PDF from

@@ -99,7 +99,11 @@ void VectorMap::InitGDIResources ()
 
 	fontLabel = NULL;
 	// for default label size, query screen resolution
+#ifdef _WIN32
 	int screenh = GetSystemMetrics(SM_CYSCREEN);
+#else
+	int screenh = 1080;
+#endif
 	labelsize = screenh / 100;
 	SetLabelSize(labelsize);
  
@@ -1017,7 +1021,12 @@ void VectorMap::DrawCustomMarkerSet (oapi::Sketchpad *skp, int idx)
 				skp->Ellipse (x-2, y-2, x+3, y+3);
 				if (drawlabel && set->list->marker[i].label[0].size()) {
 					WCHAR wlabel[256];
+#ifdef _WIN32
 					MultiByteToWideChar(CP_UTF8, 0, set->list->marker[i].label[0].c_str(), -1, wlabel, 256);
+#else
+					if (mbstowcs(wlabel, set->list->marker[i].label[0].c_str(), 256) == (size_t)-1) wlabel[0] = 0;
+					wlabel[255] = 0;
+#endif
 					skp->TextW (x+3, y, wlabel, wcslen(wlabel));
 				}
 			}

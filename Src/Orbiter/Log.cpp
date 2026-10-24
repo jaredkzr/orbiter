@@ -5,8 +5,10 @@
 
 #include <string.h>
 #include <fstream>
-#include <Windows.h>
+#include <windows.h>
+#ifdef _WIN32
 #include <Psapi.h>
+#endif
 #include "Log.h"
 #include "Orbiter.h"
 
@@ -50,31 +52,36 @@ void LogOut (const char *msg, ...)
 
 void LogOutVA(const char *format, va_list ap)
 {
+	va_list ap2; // the argument list is consumed by each use
+	va_copy(ap2, ap);
 	FILE *f = fopen(logname, "a+t");
 	fprintf(f, "%010.3f: ", (timeGetTime() - t0) * 1e-3);
 	vfprintf(f, format, ap);
 	fputc('\n', f);
 	fclose(f);
 	if (logOut) {
-		vsnprintf(logs, 255, format, ap);
+		vsnprintf(logs, 255, format, ap2);
 		(*logOut)(logs);
 	}
+	va_end(ap2);
 }
 
 void LogOutFine (const char *msg, ...)
 {
 	if (finelog) {
-		va_list ap;
+		va_list ap, ap2;
 		va_start (ap, msg);
+		va_copy (ap2, ap); // the argument list is consumed by each use
 		FILE *f = fopen (logname, "a+t");
 		fprintf (f, "%010.3f: ", (timeGetTime() - t0) * 1e-3);
 		vfprintf (f, msg, ap);
 		fputc ('\n', f);
 		fclose (f);
 		if (logOut) {
-			vsnprintf (logs, 255, msg, ap);
+			vsnprintf (logs, 255, msg, ap2);
 			(*logOut)(logs);
 		}
+		va_end (ap2);
 		va_end (ap);
 	}
 }
@@ -141,14 +148,19 @@ void LogOut_WarningVA(const char* func, const char* file, int line, const char* 
 
 void LogOut_LastError (const char *func, const char *file, int line)
 {
+#ifdef _WIN32
 	DWORD err = GetLastError();
 	LPTSTR errString = NULL;
 	FormatMessage (FORMAT_MESSAGE_FROM_SYSTEM|FORMAT_MESSAGE_ALLOCATE_BUFFER|FORMAT_MESSAGE_IGNORE_INSERTS,NULL,err,MAKELANGID(LANG_NEUTRAL,SUBLANG_DEFAULT),(LPTSTR)&errString,0,NULL);
 	LogOut_Error (func, file, line, errString);
 	if (errString) LocalFree(errString);
+#else
+	LogOut_Error (func, file, line, "%s", GetLastModuleErrorString());
+#endif
 }
 
 void LogOut_DDErr (HRESULT hr, const char *func, const char *file, int line) {
+#ifdef _WIN32
 	if (hr == DD_OK) return;
 	static char errmsg[256] = ">>> ERROR: DDraw error ";
 	static char *err = errmsg+23;
@@ -279,9 +291,11 @@ void LogOut_DDErr (HRESULT hr, const char *func, const char *file, int line) {
 	sprintf (logs, ">>> [%s | %s | %d]", func, file, line);
 	LogOut();
 	LogOut ("---------------------------------------------------------------");
+#endif
 }
 
 void LogOut_DIErr (HRESULT hr, const char *func, const char *file, int line) {
+#ifdef _WIN32
 	static char errmsg[256] = ">>> ERROR: DInput error ";
 	static char *err = errmsg+24;
 	switch (hr) {
@@ -302,6 +316,7 @@ void LogOut_DIErr (HRESULT hr, const char *func, const char *file, int line) {
 	sprintf (logs, ">>> [%s | %s | %d]", func, file, line);
 	LogOut();
 	LogOut ("---------------------------------------------------------------");
+#endif
 }
 
 void LogOut_Warning(const char* func, const char* file, int line, const char* msg, ...)
@@ -329,6 +344,7 @@ void LogOut_Obsolete(const char* func, const char* msg)
 
 void PrintModules()
 {
+#ifdef _WIN32
 	HMODULE hMods[4096];
 	HANDLE hProcess;
 	DWORD cbNeeded;
@@ -390,6 +406,7 @@ void PrintModules()
 	}
 	CloseHandle(hProcess);
 	return;
+#endif
 }
 
 

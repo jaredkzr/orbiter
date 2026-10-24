@@ -11,7 +11,9 @@
 
 #define STRICT 1
 #include <windows.h>
+#ifdef _WIN32
 #include <mmsystem.h>
+#endif
 #include "Orbiter.h"
 #include "Body.h"
 #include "Mfd.h"
@@ -29,6 +31,11 @@
 
 class HUD;
 class Vessel;
+class DefaultPanel;
+class Panel2D;
+class Panel;
+class VirtualCockpit;
+class MenuInfoBar;
 
 struct MFDspec {        // panel MFD specs
 	Instrument *instr;  // pointer to MFD instance

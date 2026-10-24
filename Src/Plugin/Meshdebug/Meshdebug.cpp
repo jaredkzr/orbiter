@@ -15,7 +15,7 @@
 #define ORBITER_MODULE
 #include <windows.h>
 #include <commctrl.h>
-#include "orbitersdk.h"
+#include "Orbitersdk.h"
 #include "resource.h"
 #include <cstdio>
 

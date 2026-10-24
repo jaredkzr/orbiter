@@ -1,6 +1,7 @@
 // Copyright (c) Martin Schweiger
 // Licensed under the MIT License
 #define IMGUI_DEFINE_MATH_OPERATORS
+#include <algorithm>
 #include "OrbiterAPI.h"
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -91,7 +92,7 @@ public:
 		MenuItem(MenuItem&& other) noexcept {
 			*this = std::move(other);
 		}
-		MenuItem& MenuItem::operator=(MenuItem&& other) noexcept {
+		MenuItem& operator=(MenuItem&& other) noexcept {
 			label = std::move(other.label);
 			texture = other.texture;
 			other.texture = NULL;

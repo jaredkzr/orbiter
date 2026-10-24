@@ -8,8 +8,8 @@
 #include "panel.cpp"
 #include "math.h"
 #include "resource.h"
-#include "orbitersdk.h"
-#include "dragonfly.h"
+#include "Orbitersdk.h"
+#include "Dragonfly.h"
 
 using std::min;
 

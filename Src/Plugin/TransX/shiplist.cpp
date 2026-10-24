@@ -23,7 +23,7 @@
 #include <windows.h>
 #include <cstdio>
 #include <cmath>
-#include "orbitersdk.h"
+#include "Orbitersdk.h"
 #include "parser.h"
 #include "mapfunction.h"
 #include "shiplist.h"

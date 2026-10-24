@@ -5,9 +5,11 @@
 #define OAPI_IMPLEMENTATION
 
 #include "Orbiter.h"
+#ifdef _WIN32
 #include "Launchpad.h"
 #include "LpadTab.h"
 #include "TabVideo.h"
+#endif
 #include "Psys.h"
 #include "Pane.h"
 #include "VCockpit.h"
@@ -16,7 +18,9 @@
 #include "Log.h"
 #include "Util.h"
 #include "resource.h"
+#ifdef _WIN32
 #include <wincodec.h>
+#endif
 #include <filesystem>
 namespace fs = std::filesystem;
 
@@ -56,6 +60,7 @@ GraphicsClient::GraphicsClient (HINSTANCE hInstance): Module (hInstance)
 	surfBltTgt = RENDERTGT_NONE;
 	splashFont = 0;
 
+#ifdef _WIN32
     // Create WIC factory for formatted image output
     HRESULT hr = CoCreateInstance (
         CLSID_WICImagingFactory,
@@ -65,6 +70,10 @@ GraphicsClient::GraphicsClient (HINSTANCE hInstance): Module (hInstance)
     );
 	if (hr != S_OK)
 		m_pIWICFactory = NULL;
+#else
+	m_pIWICFactory = NULL; // WIC image coding is Windows-only
+	hVid = NULL;
+#endif
 		
 }
 
@@ -72,7 +81,9 @@ GraphicsClient::GraphicsClient (HINSTANCE hInstance): Module (hInstance)
 
 GraphicsClient::~GraphicsClient ()
 {
+#ifdef _WIN32
 	if (hVid) SetWindowLongPtr (hVid, GWLP_USERDATA, 0);
+#endif
 	if (splashFont) clbkReleaseFont (splashFont);
 }
 
@@ -80,6 +91,7 @@ GraphicsClient::~GraphicsClient ()
 
 bool GraphicsClient::clbkInitialise ()
 {
+#ifdef _WIN32
     // Register a window class for the render window
     WNDCLASS wndClass = {0, ::WndProc, 0, 0, hModule,
 		LoadIcon (g_pOrbiter->GetInstance(), MAKEINTRESOURCE(IDI_MAIN_ICON)),
@@ -92,6 +104,9 @@ bool GraphicsClient::clbkInitialise ()
 		hVid = g_pOrbiter->Launchpad()->GetTab(PG_VID)->TabWnd();
 		SetWindowLongPtr (hVid, GWLP_USERDATA, (LONG_PTR)this);
 	} else hVid = NULL;
+#else
+	hVid = NULL;
+#endif
 
 	// set default parameters from config data
 	Config *cfg = g_pOrbiter->Cfg();
@@ -107,9 +122,11 @@ bool GraphicsClient::clbkInitialise ()
 	VideoData.winw       = (int)cfg->CfgDevPrm.WinW;
 	VideoData.winh       = (int)cfg->CfgDevPrm.WinH;
 
+#ifdef _WIN32
 	char fname[256];
 	GetModuleFileName(hModule, fname, 256);
 	((orbiter::DefVideoTab*)g_pOrbiter->Launchpad()->GetTab(PG_VID))->OnGraphicsClientLoaded(this, fname);
+#endif
 
 	return true;
 }
@@ -270,6 +287,7 @@ const void *GraphicsClient::GetConfigParam (DWORD paramtype) const
 
 HWND GraphicsClient::clbkCreateRenderWindow ()
 {
+#ifdef _WIN32
 	HWND hWnd;
 
 	if (VideoData.fullscreen) {
@@ -282,6 +300,9 @@ HWND GraphicsClient::clbkCreateRenderWindow ()
 			CW_USEDEFAULT, CW_USEDEFAULT, VideoData.winw, VideoData.winh, 0, 0, hModule, (LPVOID)this);
 	}
 	return hWnd;
+#else
+	return NULL;
+#endif
 }
 
 // ======================================================================
@@ -327,6 +348,7 @@ bool GraphicsClient::ElevationGrid(ELEVHANDLE hElev, int ilat, int ilng, int lvl
 
 void GraphicsClient::ShowDefaultSplash ()
 {
+#ifdef _WIN32
 	const DWORD texcol = 0xA06060;
 	DWORD rw, rh;
 	clbkGetViewportSize (&rw, &rh);
@@ -364,12 +386,14 @@ void GraphicsClient::ShowDefaultSplash ()
 	clbkReleaseSketchpad (skp);
 
 	clbkDisplayFrame();
+#endif
 }
 
 // ======================================================================
 
 #define DIB_WIDTHBYTES(bits) ((((bits) + 31)>>5)<<2)
 
+#ifdef _WIN32
 // Image decoding engine: extract an image from a decoder and rescale it to the desired size
 // Return as bitmap
 HBITMAP ReadImageFromDecoder (IWICImagingFactory *m_pIWICFactory, IWICBitmapDecoder *piDecoder, UINT w, UINT h)
@@ -423,11 +447,13 @@ HBITMAP ReadImageFromDecoder (IWICImagingFactory *m_pIWICFactory, IWICBitmapDeco
 
 	return hDIBBitmap;
 }
+#endif // _WIN32
 
 // ======================================================================
 
 HBITMAP GraphicsClient::ReadImageFromMemory (BYTE *pBuf, DWORD nBuf, UINT w, UINT h)
 {
+#ifdef _WIN32
 	IWICBitmapDecoder *piDecoder = NULL;
 	
 	IWICStream *piStream;
@@ -444,12 +470,16 @@ HBITMAP GraphicsClient::ReadImageFromMemory (BYTE *pBuf, DWORD nBuf, UINT w, UIN
 		LOGOUT_WARN("Couldn't create decoder for memory image data");
 		return 0;
 	}
+#else
+	return NULL;
+#endif
 }
 
 // ======================================================================
 
 HBITMAP GraphicsClient::ReadImageFromFile (const char *fname, UINT w, UINT h)
 {
+#ifdef _WIN32
 	wchar_t wcbuf[256];
 	mbstowcs (wcbuf, fname, 256);
 
@@ -464,6 +494,9 @@ HBITMAP GraphicsClient::ReadImageFromFile (const char *fname, UINT w, UINT h)
 		LOGOUT_WARN("Couldn't create decoder for image file: %s (does it exist?)", fname);
 		return 0;
 	}
+#else
+	return NULL;
+#endif
 }
 
 // ======================================================================
@@ -471,6 +504,7 @@ HBITMAP GraphicsClient::ReadImageFromFile (const char *fname, UINT w, UINT h)
 bool GraphicsClient::WriteImageDataToFile (const ImageData &data,
 	const char *fname, ImageFileFormat fmt, float quality)
 {
+#ifdef _WIN32
 	const char *extension[4] = {".bmp", ".png", ".jpg", ".tif"};
 
 	const GUID FormatGUID[4] = {
@@ -544,6 +578,9 @@ bool GraphicsClient::WriteImageDataToFile (const ImageData &data,
 	piEncoder->Release();
 	piStream->Release();
 	return true;
+#else
+	return false;
+#endif
 }
 
 // ======================================================================
@@ -565,6 +602,7 @@ void GraphicsClient::clbkRender2DPanel (SURFHANDLE *hSurf, MESHHANDLE hMesh, MAT
 
 SURFHANDLE GraphicsClient::clbkCreateSurface (HBITMAP hBmp)
 {
+#ifdef _WIN32
 	BITMAP bm;
 	GetObject (hBmp, sizeof(bm), &bm);
 	SURFHANDLE surf = clbkCreateSurface (bm.bmWidth, bm.bmHeight);
@@ -575,6 +613,9 @@ SURFHANDLE GraphicsClient::clbkCreateSurface (HBITMAP hBmp)
 		}
 	}
 	return surf;
+#else
+	return NULL;
+#endif
 }
 
 // ======================================================================
@@ -604,6 +645,7 @@ int GraphicsClient::clbkEndBltGroup ()
 bool GraphicsClient::clbkCopyBitmap (SURFHANDLE pdds, HBITMAP hbm,
     int x, int y, int dx, int dy)
 {
+#ifdef _WIN32
     HDC                     hdcImage;
     HDC                     hdc;
     BITMAP                  bm;
@@ -641,12 +683,16 @@ bool GraphicsClient::clbkCopyBitmap (SURFHANDLE pdds, HBITMAP hbm,
     }
 	DeleteDC(hdcImage);
     return true;
+#else
+	return false;
+#endif
 }
 
 // ======================================================================
 
 HWND GraphicsClient::InitRenderWnd (HWND hWnd)
 {
+#ifdef _WIN32
 	if (!hWnd) { // create a dummy window
 		hWnd = CreateWindow (strWndClass, "",
 			WS_POPUP | WS_VISIBLE,
@@ -664,6 +710,7 @@ HWND GraphicsClient::InitRenderWnd (HWND hWnd)
 		strcat (title, cbuf);
 	}
 	SetWindowText (hWnd, title);
+#endif
 	hRenderWnd = hWnd;
 	return hRenderWnd;
 }
@@ -673,12 +720,16 @@ HWND GraphicsClient::InitRenderWnd (HWND hWnd)
 
 LRESULT GraphicsClient::RenderWndProc (HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+#ifdef _WIN32
 	switch (uMsg) {
 	// graphics-specific stuff to go here
 	default:
 		return g_pOrbiter->MsgProc (hWnd, uMsg, wParam, lParam);
 	}
     return DefWindowProc (hWnd, uMsg, wParam, lParam);
+#else
+	return 0;
+#endif
 }
 
 // ======================================================================
@@ -881,6 +932,7 @@ void ScreenAnnotation::Render ()
 // ======================================================================
 // Nonmember functions
 
+#ifdef _WIN32
 //-----------------------------------------------------------------------
 // Name: WndProc()
 // Desc: Static msg handler which passes messages from the render window
@@ -892,15 +944,18 @@ DLLEXPORT LRESULT CALLBACK WndProc (HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 	if (gc) return gc->RenderWndProc (hWnd, uMsg, wParam, lParam);
 	else return DefWindowProc (hWnd, uMsg, wParam, lParam);
 }
+#endif // _WIN32
 
 // ======================================================================
 
+#ifdef _WIN32
 DLLEXPORT INT_PTR CALLBACK LaunchpadVideoWndProc (HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
 	GraphicsClient *gc = (GraphicsClient*)GetWindowLongPtr (hWnd, GWLP_USERDATA);
 	if (gc) return gc->LaunchpadVideoWndProc (hWnd, uMsg, wParam, lParam);
 	else return FALSE;
 }
+#endif // _WIN32
 
 // ======================================================================
 // API interface: register/unregister the graphics client

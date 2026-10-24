@@ -4,7 +4,7 @@
 #define ORBITER_MODULE
 
 #include "OrbiterAPI.h"
-#include "CelbodyAPI.h"
+#include "CelBodyAPI.h"
 
 // ===========================================================
 // Local prototypes

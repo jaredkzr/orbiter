@@ -9,7 +9,9 @@
 #include "Select.h"
 #include "Keymap.h"
 #include <stdio.h>
+#ifdef _WIN32
 #include <commctrl.h>
+#endif
 #include "Mesh.h"
 #include "TimeData.h"
 #include <chrono>
@@ -29,6 +31,7 @@ class PlaybackEditor;
 class MemStat;
 class DDEServer;
 class ImageIO;
+class ScriptInterface;
 namespace orbiter {
 	class ConsoleNG;
 	class LaunchpadDialog;

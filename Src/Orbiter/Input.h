@@ -10,6 +10,8 @@
 
 #include "Di7frame.h"
 
+class Orbiter;
+
 class DInput {
 	friend class Orbiter;
 

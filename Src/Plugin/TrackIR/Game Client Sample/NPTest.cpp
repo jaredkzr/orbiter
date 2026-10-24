@@ -1,7 +1,7 @@
 // NPTest.cpp : Defines the class behaviors for the application.
 //
 
-#include "stdafx.h"
+#include "StdAfx.h"
 #include "NPTest.h"
 #include "NPTestDlg.h"
 

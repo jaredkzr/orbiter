@@ -922,7 +922,9 @@ void Orbiter::FRecorder_Play ()
 					g_pOrbiter->Timejump(tgtmjd, PROP_ORBITAL_FIXEDSURF);
 				}
 			} else if (!_strnicmp (s, "ENDSESSION", 10)) {
+#ifdef _WIN32
 				if (hRenderWnd) PostMessage (hRenderWnd, WM_CLOSE, 0, 0);
+#endif
 			}
 		}
 		*FRsys_stream >> frec_sys_simt; // read time for next event

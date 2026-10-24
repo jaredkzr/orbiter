@@ -359,6 +359,7 @@ void GraphMFD::SetAxisTitle (int g, int axis, char *title)
 
 void GraphMFD::Plot (HDC hDC, int g, int h0, int h1, const char *title)
 {
+#ifdef _WIN32
 	GRAPH &gf = graph[g];
 	char cbuf[64];
 	float minx, maxx, miny, maxy, ixrange, iyrange, f;
@@ -507,6 +508,7 @@ void GraphMFD::Plot (HDC hDC, int g, int h0, int h1, const char *title)
 		SetTextColor (hDC, 0x00FF00);
 		TextOut (hDC, (x0+x1)/2, y1, title, strlen(title));
 	}
+#endif
 }
 
 void GraphMFD::FindRange (float *d, int ndata, float &dmin, float &dmax) const

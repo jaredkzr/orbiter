@@ -21,12 +21,27 @@ extern PlanetarySystem* g_psys;
 extern Vessel* g_focusobj;
 extern TimeData td;
 
+static void ConsoleOut(const char* msg);
+#ifdef _WIN32
 static DWORD WINAPI InputProc(LPVOID);
 static INT_PTR CALLBACK ServerDlgProc(HWND, UINT, WPARAM, LPARAM);
-static void ConsoleOut(const char* msg);
 
 static HANDLE hMutex = 0;
 static HANDLE s_hStdO = NULL;
+#else
+#include <atomic>
+#include <chrono>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <poll.h>
+#include <unistd.h>
+
+static void InputThread();
+static std::mutex s_cmdMutex;        // protects cConsoleCmd
+static std::thread *s_inputThread = nullptr; // reads commands from stdin (not a static object: the process may exit while it runs)
+static std::atomic<bool> s_stopInput(false);
+#endif
 static char cConsoleCmd[1024] = "\0";
 static orbiter::ConsoleNG* s_console = NULL; // access to console instance from message callback functions
 
@@ -36,6 +51,7 @@ orbiter::ConsoleNG::ConsoleNG(Orbiter* pOrbiter)
     , m_hStatWnd(NULL)
     , m_hThread(NULL)
 {
+#ifdef _WIN32
     static PCSTR title = "Orbiter Server Console";
     static SIZE_T stackSize = 4096;
 
@@ -50,12 +66,19 @@ orbiter::ConsoleNG::ConsoleNG(Orbiter* pOrbiter)
     m_hThread = CreateThread(NULL, stackSize, InputProc, this, 0, &id);
     s_hStdO = GetStdHandle(STD_OUTPUT_HANDLE);
     SetLogOutFunc(&ConsoleOut); // clone log output to console
+#else
+    s_console = this;
+    s_stopInput = false;
+    s_inputThread = new std::thread(InputThread);
+    SetLogOutFunc(&ConsoleOut); // clone log output to console
+#endif
 }
 
 orbiter::ConsoleNG::~ConsoleNG()
 {
 	DestroyStatDlg();
 	SetLogOutFunc(0);
+#ifdef _WIN32
 	if (WaitForSingleObject(m_hThread, 1000) == WAIT_TIMEOUT) {
 		TerminateThread(m_hThread, 0);
 	}
@@ -65,6 +88,15 @@ orbiter::ConsoleNG::~ConsoleNG()
 	}
 	s_console = NULL;
 	s_hStdO = NULL;
+#else
+	s_stopInput = true;
+	if (s_inputThread) {
+		s_inputThread->join();
+		delete s_inputThread;
+		s_inputThread = nullptr;
+	}
+	s_console = NULL;
+#endif
 }
 
 bool orbiter::ConsoleNG::ParseCmd()
@@ -72,10 +104,18 @@ bool orbiter::ConsoleNG::ParseCmd()
 	if (!cConsoleCmd[0]) return false;
 	char cmd[1024], cbuf[256], * pc, * ppc;
 
+#ifdef _WIN32
 	WaitForSingleObject(hMutex, 1000);
 	strcpy(cmd, cConsoleCmd + 1);
 	cConsoleCmd[0] = '\0';
 	ReleaseMutex(hMutex);
+#else
+	{
+		std::lock_guard<std::mutex> lock(s_cmdMutex);
+		strcpy(cmd, cConsoleCmd + 1);
+		cConsoleCmd[0] = '\0';
+	}
+#endif
 
 	DWORD i;
 	if (!_strnicmp(cmd, "help", 4)) {
@@ -214,8 +254,12 @@ bool orbiter::ConsoleNG::ParseCmd()
 		Echo(cbuf);
 	}
 	else if (!_strnicmp(cmd, "gui", 3)) {
+#ifdef _WIN32
 		if (!DestroyStatDlg())
 			m_hStatWnd = CreateDialog(m_pOrbiter->GetInstance(), MAKEINTRESOURCE(IDD_SERVER), m_hWnd, ServerDlgProc);
+#else
+		Echo("The status dialog is not available on this platform.");
+#endif
 	}
 	else if (!_strnicmp(cmd, "dlg", 3)) {
 		DialogManager* pDlgMgr = m_pOrbiter->DlgMgr();
@@ -256,7 +300,9 @@ void orbiter::ConsoleNG::EchoIntro() const
 bool orbiter::ConsoleNG::DestroyStatDlg()
 {
 	if (m_hStatWnd) {
+#ifdef _WIN32
 		DestroyWindow(m_hStatWnd);
+#endif
 		m_hStatWnd = NULL;
 		return true;
 	}
@@ -265,6 +311,7 @@ bool orbiter::ConsoleNG::DestroyStatDlg()
 }
 
 
+#ifdef _WIN32
 DWORD WINAPI InputProc(LPVOID context)
 {
 	DWORD count, c;
@@ -295,7 +342,9 @@ DWORD WINAPI InputProc(LPVOID context)
 	}
 	return 0;
 }
+#endif // _WIN32
 
+#ifdef _WIN32
 INT_PTR CALLBACK ServerDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
 	switch (uMsg) {
@@ -323,7 +372,9 @@ INT_PTR CALLBACK ServerDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPara
 	}
 	return FALSE;
 }
+#endif // _WIN32
 
+#ifdef _WIN32
 void ConsoleOut(const char* msg)
 {
 	if (!s_hStdO) return;
@@ -337,3 +388,54 @@ void ConsoleOut(const char* msg)
 	SetConsoleTextAttribute(s_hStdO, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY);
 	WriteConsole(s_hStdO, "\n> ", 3, &count, NULL);
 }
+#endif // _WIN32
+
+#ifndef _WIN32
+
+// Read console commands from stdin. Polls with a timeout so that the thread
+// can be stopped when the session ends.
+void InputThread()
+{
+	std::string line;
+	char buf[1024];
+	while (!s_stopInput) {
+		pollfd pfd = { STDIN_FILENO, POLLIN, 0 };
+		int res = poll(&pfd, 1, 200);
+		if (res < 0) break;
+		if (res == 0) continue;
+		ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
+		if (n <= 0) break; // end of input
+		line.append(buf, n);
+		size_t eol;
+		while ((eol = line.find('\n')) != std::string::npos) {
+			std::string cmd = line.substr(0, eol);
+			line.erase(0, eol + 1);
+			if (!cmd.empty() && cmd.back() == '\r') cmd.pop_back();
+			// wait until the previous command has been consumed by the simulation loop
+			for (;;) {
+				{
+					std::lock_guard<std::mutex> lock(s_cmdMutex);
+					if (!cConsoleCmd[0]) {
+						cConsoleCmd[0] = 'x';
+						strncpy(cConsoleCmd + 1, cmd.c_str(), sizeof(cConsoleCmd) - 2);
+						cConsoleCmd[sizeof(cConsoleCmd) - 1] = '\0';
+						break;
+					}
+				}
+				if (s_stopInput) return;
+				std::this_thread::sleep_for(std::chrono::milliseconds(10));
+			}
+			if (cmd == "exit") return;
+		}
+	}
+}
+
+void ConsoleOut(const char* msg)
+{
+	if (!s_console) return;
+	fputs(msg, stdout);
+	fputs("\n> ", stdout);
+	fflush(stdout);
+}
+
+#endif // !_WIN32

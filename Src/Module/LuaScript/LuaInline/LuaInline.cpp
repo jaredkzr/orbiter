@@ -22,10 +22,15 @@
 
 #define STRICT
 #define ORBITER_MODULE
-#include "orbitersdk.h"
+#include "Orbitersdk.h"
 #include "LuaInline.h"
+#ifdef _WIN32
 #include <direct.h>
 #include <process.h>
+#else
+#include <chrono>
+#include <thread>
+#endif
 
 // ==============================================================
 // class InterpreterList::Environment: implementation
@@ -46,11 +51,25 @@ InterpreterList::Environment::~Environment()
 			interp->Terminate();
 			interp->EndExec(); // give the thread opportunity to close
 
+#ifdef _WIN32
 			if (WaitForSingleObject (hThread, 1000) != 0) {
 				oapiWriteLog((char*)"LuaInline: timeout while waiting for interpreter thread");
 				TerminateThread (hThread, 0);
 			}
 			CloseHandle (hThread);
+#else
+			std::thread *thread = static_cast<std::thread*>(hThread);
+			for (int i = 0; i < 100 && !threadDone; i++)
+				std::this_thread::sleep_for (std::chrono::milliseconds (10));
+			if (threadDone) {
+				thread->join();
+			} else {
+				// threads can't be terminated safely; leave it to process exit
+				oapiWriteLog((char*)"LuaInline: timeout while waiting for interpreter thread");
+				thread->detach();
+			}
+			delete thread;
+#endif
 		}
 		delete interp;
 	}
@@ -62,7 +81,13 @@ Interpreter *InterpreterList::Environment::CreateInterpreter ()
 	termInterp = false;
 	interp = new Interpreter ();
 	interp->Initialise();
+#ifdef _WIN32
 	hThread = (HANDLE)_beginthreadex (NULL, 4096, &InterpreterThreadProc, this, 0, &id);
+#else
+	(void)id;
+	threadDone = false;
+	hThread = new std::thread (InterpreterThreadProc, this);
+#endif
 	return interp;
 }
 
@@ -86,7 +111,11 @@ unsigned int WINAPI InterpreterList::Environment::InterpreterThreadProc (LPVOID 
 		interp->EndExec();  // return control
 	}
 	interp->EndExec();  // return mutex (is this necessary?)
+#ifdef _WIN32
 	_endthreadex(0);
+#else
+	env->threadDone = true;
+#endif
 	return 0;
 }
 

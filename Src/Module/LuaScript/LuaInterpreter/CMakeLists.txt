@@ -33,6 +33,7 @@ add_dependencies(LuaInterpreter
 
 if(ORBITER_BUILD_D3D9CLIENT)
   add_dependencies(LuaInterpreter	D3D9Client D3D9Client_Interface)
+  target_compile_definitions(LuaInterpreter PRIVATE ORBITER_HAS_GCCORE) # graphics client core extensions (gcCoreAPI.h)
 endif()
 
 if(ORBITER_BUILD_XRSOUND)

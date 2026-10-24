@@ -5,7 +5,11 @@
 #define __DLGCTRL_H
 
 #define STRICT 1
+#ifdef _WIN32
 #include "windows.h"
+#else
+#include "posix/win32compat.h"
+#endif
 
 void oapiRegisterCustomControls (HINSTANCE hInst);
 void oapiUnregisterCustomControls (HINSTANCE hInst);
@@ -36,6 +40,9 @@ int oapiGetSwitchState (HWND hCtrl);
 
 // ==================================================================================
 // ==================================================================================
+
+class PropertyGroup;
+class PropertyList;
 
 class PropertyItem {
 	friend class PropertyGroup;

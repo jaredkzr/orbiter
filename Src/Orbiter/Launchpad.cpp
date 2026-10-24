@@ -9,7 +9,7 @@
 #include <fstream>
 #include "Uxtheme.h"
 #include <commctrl.h>
-#include "Resource.h"
+#include "resource.h"
 #include "Orbiter.h"
 #include "Launchpad.h"
 #include "TabScenario.h"

@@ -546,6 +546,7 @@ void Mesh::ReleaseTextures ()
 
 DWORD Mesh::Render (LPDIRECT3DDEVICE7 dev)
 {
+#ifdef _WIN32
 	DWORD i, mi, pmi, ti, pti, zb = 0, gcount = 0, wrap, owrap = 0;
 
 	if (!GrpSetup) Setup();
@@ -596,6 +597,9 @@ DWORD Mesh::Render (LPDIRECT3DDEVICE7 dev)
 	if (owrap) dev->SetRenderState (D3DRENDERSTATE_WRAP0, 0);
 
 	return gcount;
+#else
+	return 0;
+#endif
 }
 
 istream &operator>> (istream &is, Mesh &mesh)

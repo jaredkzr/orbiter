@@ -10,6 +10,7 @@
 
 #define STRICT 1
 
+#include <memory>
 #include "OrbiterAPI.h"
 
 // =======================================================================

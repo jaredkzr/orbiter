@@ -1,6 +1,11 @@
 # Copyright (c) Martin Schweiger
 # Licensed under the MIT License
 
+if(ORBITER_HEADLESS)
+	include(Headless.cmake)
+	return()
+endif()
+
 # SAFESEH linker flag must be turned off because the DX7 libraries don't support it'
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -SAFESEH:NO")
 FetchContent_MakeAvailable(imgui)
@@ -123,6 +128,7 @@ set(common_src
 
 set(Orbiter_includes
 	${CMAKE_CURRENT_SOURCE_DIR}
+	${CMAKE_SOURCE_DIR}/Src/Platform
 	${CMAKE_SOURCE_DIR}/Orbitersdk/include
 	${CMAKE_SOURCE_DIR}/OVP
 	${CMAKE_CURRENT_BINARY_DIR}

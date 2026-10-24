@@ -113,17 +113,13 @@ private:
 
 		// mouse click area definition - currently only spherical click areas are supported
 		enum ClickMode { CMODE_NONE, CMODE_SPHERICAL, CMODE_QUAD } cmode;
-		union {
-			struct {
-				Vector cnt;   // centre of click area in local vessel coords
-				double rad;   // radius of click area
-			};
-			struct {
-				Vector p[4];            // corner points
-				float a, b, c, d;       // coeffs for equation of plane: ax+by+cz+d = 0
-				float u[4], v[4];       // coefficients for transforming to local quad frame
-			};
-		};
+		// CMODE_SPHERICAL parameters
+		Vector cnt;   // centre of click area in local vessel coords
+		double rad;   // radius of click area
+		// CMODE_QUAD parameters
+		Vector p[4];            // corner points
+		float a, b, c, d;       // coeffs for equation of plane: ax+by+cz+d = 0
+		float u[4], v[4];       // coefficients for transforming to local quad frame
 	} **area;
 	int narea, nareabuf;
 };

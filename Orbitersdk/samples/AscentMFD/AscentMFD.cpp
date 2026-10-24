@@ -14,7 +14,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <math.h>
-#include "orbitersdk.h"
+#include "Orbitersdk.h"
 #include "AscentMFD.h"
 
 // ==============================================================

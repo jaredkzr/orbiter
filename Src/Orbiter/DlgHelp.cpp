@@ -5,8 +5,10 @@
 // Help window
 // ======================================================================
 #include "DlgHelp.h"
+#ifdef _WIN32
 #include <htmlhelp.h>
 #include <io.h>
+#endif
 #include "imgui.h"
 
 // This is just a placeholder to call the HtmlHelp API
@@ -26,7 +28,12 @@ void DlgHelp::OpenHelp(const HELPCONTEXT *hc)
 
 	buf[255] = '\0';
 
+#ifdef _WIN32
 	if(!HtmlHelp (hWnd, buf, HH_DISPLAY_TOPIC, NULL)) {
 		oapiAddNotification(OAPINOTIF_ERROR, "Failed to open help", buf);
 	}
+#else
+	(void)hWnd;
+	oapiAddNotification(OAPINOTIF_ERROR, "Help is not available on this platform", buf); // CHM help is Windows-only
+#endif
 }

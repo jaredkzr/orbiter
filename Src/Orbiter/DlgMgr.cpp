@@ -7,13 +7,15 @@
 #include <stdio.h>
 #include "OrbiterAPI.h"
 #include "DlgMgr.h"
-#include "Resource.h"
+#include "resource.h"
 #include "Orbiter.h"
 #include "Log.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "imgui_extras.h"
+#ifdef _WIN32
 #include "imgui_impl_win32.h"
+#endif
 #include "implot.h"
 #include "IconsFontAwesome6.h"
 #include <chrono>
@@ -27,10 +29,12 @@ using namespace oapi;
 extern char DBG_MSG[256];
 extern Orbiter *g_pOrbiter;
 
+#ifdef _WIN32
 static int x_sizeframe = GetSystemMetrics (SM_CXSIZEFRAME);
 static int y_sizeframe = GetSystemMetrics (SM_CYSIZEFRAME);
 static int x_fixedframe = GetSystemMetrics (SM_CXFIXEDFRAME);
 static int y_fixedframe = GetSystemMetrics (SM_CYFIXEDFRAME);
+#endif
 
 static bool doflip = true;
 static void RenderNotifications();
@@ -83,6 +87,7 @@ void DialogManager::Init (HWND hAppWnd)
 
 void DialogManager::Clear ()
 {
+#ifdef _WIN32 // Win32 dialog windows (none exist on other platforms)
 	DIALOGENTRY *tmp;
 	while (firstEntry) {
 		tmp = firstEntry;
@@ -90,6 +95,7 @@ void DialogManager::Clear ()
 		delete tmp->dlg;
 		delete tmp;
 	}
+#endif
 	lastEntry = NULL;
 	if (nListBuf) {
 		delete []DlgList;
@@ -128,12 +134,17 @@ bool DialogManager::CloseDialog (HWND hDlg)
 
 void *DialogManager::GetDialogContext (HWND hDlg)
 {
+#ifdef _WIN32
 	DialogWin *dlg = (DialogWin*)GetWindowLongPtr (hDlg, DWLP_USER);
 	return (dlg ? dlg->GetContext() : 0);
+#else
+	return 0;
+#endif
 }
 
 DIALOGENTRY *DialogManager::AddWindow (HINSTANCE hInst, HWND hWnd, HWND hParent, DWORD flag)
 {
+#ifdef _WIN32
 	DIALOGENTRY *tmp = new DIALOGENTRY; TRACENEW
 	de_create = tmp;
 	tmp->dlg = new DialogWin (hInst, hWnd, hParent, flag);
@@ -153,15 +164,23 @@ DIALOGENTRY *DialogManager::AddWindow (HINSTANCE hInst, HWND hWnd, HWND hParent,
 	AddList (tmp->dlg->GetHwnd());
 
 	return tmp;
+#else
+	return NULL;
+#endif
 }
 
 HWND DialogManager::AddEntry (HINSTANCE hInst, int id, HWND hParent, DLGPROC pDlg, DWORD flag, void *context)
 {
+#ifdef _WIN32
 	return AddEntry (new DialogWin (hInst, hParent, id, pDlg, flag, context));
+#else
+	return NULL;
+#endif
 }
 
 HWND DialogManager::AddEntry (DialogWin *dlg)
 {
+#ifdef _WIN32
 	DIALOGENTRY *tmp = new DIALOGENTRY; TRACENEW
 	de_create = tmp;
 	tmp->dlg = dlg;
@@ -177,10 +196,14 @@ HWND DialogManager::AddEntry (DialogWin *dlg)
 	HWND hWnd = tmp->dlg->OpenWindow(); // is this the best place to create the window?
 	AddList (hWnd);
 	return hWnd;
+#else
+	return NULL;
+#endif
 }
 
 void DialogManager::AddEntryAsync (HINSTANCE hInst, int id, HWND hParent, DLGPROC pDlg, DWORD flag, void *context)
 {
+#ifdef _WIN32
 #ifdef USEDLGTHREAD
 	g_tdata.hInst = hInst;
 	g_tdata.hParent = hParent;
@@ -192,10 +215,12 @@ void DialogManager::AddEntryAsync (HINSTANCE hInst, int id, HWND hParent, DLGPRO
 #else
 	AddEntry (hInst, id, hParent, pDlg, flag, context);
 #endif
+#endif
 }
 
 bool DialogManager::DelEntry (HWND hDlg, HINSTANCE hInst, int id)
 {
+#ifdef _WIN32
 	DIALOGENTRY *tmp;
 	for (tmp = firstEntry; tmp; tmp = tmp->next) {
 		DialogWin *dlg = tmp->dlg;
@@ -213,10 +238,14 @@ bool DialogManager::DelEntry (HWND hDlg, HINSTANCE hInst, int id)
 		return true;
 	}
 	return false;
+#else
+	return false;
+#endif
 }
 
 void DialogManager::AddList (HWND hWnd)
 {
+#ifdef _WIN32
 	if (nList == nListBuf) { // grow buffer
 		HWND *tmp = new HWND[nListBuf += 16];
 		if (nList) {
@@ -226,10 +255,12 @@ void DialogManager::AddList (HWND hWnd)
 		DlgList = tmp;
 	}
 	DlgList[nList++] = hWnd;
+#endif
 }
 
 void DialogManager::DelList (HWND hWnd)
 {
+#ifdef _WIN32
 	DWORD i;
 	for (i = 0; i < nList; i++) {
 		if (DlgList[i] == hWnd) break;
@@ -240,10 +271,12 @@ void DialogManager::DelList (HWND hWnd)
 		DlgList[i] = NULL;
 		nList--;
 	}
+#endif
 }
 
 HWND DialogManager::GetNextEntry (HWND hWnd) const
 {
+#ifdef _WIN32
 	if (!hWnd) {
 		if (firstEntry) {
 			searchEntry = firstEntry;
@@ -259,10 +292,14 @@ HWND DialogManager::GetNextEntry (HWND hWnd) const
 		if (searchEntry) searchEntry = searchEntry->next;
 		return (searchEntry ? searchEntry->dlg->GetHwnd() : NULL);
 	}
+#else
+	return NULL;
+#endif
 }
 
 HWND DialogManager::IsEntry (HINSTANCE hInst, int id)
 {
+#ifdef _WIN32
 	DIALOGENTRY *tmp = firstEntry;
 	while (tmp) {
 		DialogWin *dlg = tmp->dlg;
@@ -271,24 +308,36 @@ HWND DialogManager::IsEntry (HINSTANCE hInst, int id)
 		tmp = tmp->next;
 	}
 	return 0;
+#else
+	return NULL;
+#endif
 }
 
 bool DialogManager::AddTitleButton (DWORD msg, HBITMAP hBmp, DWORD flag)
 {
+#ifdef _WIN32
 	return DialogWin::Create_AddTitleButton (msg, hBmp, flag);
+#else
+	return false;
+#endif
 }
 
 DWORD DialogManager::GetTitleButtonState (HWND hDlg, DWORD msg)
 {
+#ifdef _WIN32
 	DIALOGENTRY *tmp;
 	for (tmp = firstEntry; tmp; tmp = tmp->next)
 		if (hDlg == tmp->dlg->GetHwnd())
 			return tmp->dlg->GetTitleButtonState (msg);
 	return 0;
+#else
+	return 0;
+#endif
 }
 
 bool DialogManager::SetTitleButtonState (HWND hDlg, DWORD msg, DWORD state)
 {
+#ifdef _WIN32
 	state = (state ? 1:0);
 	if (DialogWin::Create_SetTitleButtonState (msg, state)) return true;
 
@@ -297,20 +346,27 @@ bool DialogManager::SetTitleButtonState (HWND hDlg, DWORD msg, DWORD state)
 		if (hDlg == de->dlg->GetHwnd())
 			return de->dlg->SetTitleButtonState (msg, state);
 	return false;
+#else
+	return false;
+#endif
 }
 
 void DialogManager::UpdateDialogs ()
 {
+#ifdef _WIN32
 	for (DIALOGENTRY *tmp = firstEntry; tmp; tmp = tmp->next) {
 		if (tmp->dlg->UpdateContinuously())
 			tmp->dlg->Update();
 	}
+#endif
 }
 
 void DialogManager::BroadcastMessage (DWORD msg, void *data)
 {
+#ifdef _WIN32
 	for (DIALOGENTRY *tmp = firstEntry; tmp; tmp = tmp->next)
 		tmp->dlg->Message (msg, data);
+#endif
 }
 
 //-----------------------------------------------------------------------------
@@ -319,6 +375,7 @@ void DialogManager::BroadcastMessage (DWORD msg, void *data)
 //-----------------------------------------------------------------------------
 INT_PTR OrbiterDefDialogProc (HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+#ifdef _WIN32
 	switch (uMsg) {
 	case WM_SETCURSOR:
 		// implements "focus follows mouse" behaviour
@@ -367,6 +424,9 @@ INT_PTR OrbiterDefDialogProc (HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 	//	} return (INT_PTR)GetStockObject (GRAY_BRUSH);
 	}
 	return FALSE;
+#else
+	return FALSE;
+#endif
 }
 
 // ====================================================================
@@ -375,18 +435,23 @@ INT_PTR OrbiterDefDialogProc (HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam
 
 void DialogManager::StartDialogThread ()
 {
+#ifdef _WIN32
 	DWORD WINAPI DlgThreadProc (void *data);
 	hThread = CreateThread (NULL, 2048, DlgThreadProc, this, 0, &thid);
 	hCreateDlg = CreateEvent (NULL, FALSE, FALSE, NULL);
+#endif
 }
 
 void DialogManager::DestroyDialogThread ()
 {
+#ifdef _WIN32
 	PostThreadMessage (thid, WM_QUIT, 0, 0);
 	CloseHandle (hThread);
 	CloseHandle (hCreateDlg);
+#endif
 }
 
+#ifdef _WIN32
 DWORD WINAPI DlgThreadProc (void *data)
 {
 	DialogManager *dlgmgr = (DialogManager*)data;
@@ -408,6 +473,7 @@ DWORD WINAPI DlgThreadProc (void *data)
 
 	return 0;
 }
+#endif // _WIN32
 
 // ====================================================================
 // End tread management
@@ -546,7 +612,9 @@ void DialogManager::InitImGui()
 	monoFont = io.Fonts->AddFontFromFileTTF(prm.ImGui_MonospacedFontFile, prm.ImGui_FontSize);
 	manuscriptFont = io.Fonts->AddFontFromFileTTF(prm.ImGui_ManuscriptFontFile, prm.ImGui_FontSize);
 
+#ifdef _WIN32
 	ImGui_ImplWin32_Init(hWnd);
+#endif
 	gc->clbkImGuiInit();
 }
 
@@ -555,7 +623,9 @@ void DialogManager::ShutdownImGui()
 	if(!gc) return;
 
 	gc->clbkImGuiShutdown();
+#ifdef _WIN32
 	ImGui_ImplWin32_Shutdown();
+#endif
 	ImPlot::DestroyContext();
 	ImGui::DestroyContext();
 }
@@ -565,7 +635,9 @@ void DialogManager::ImGuiNewFrame()
 	if(!gc) return;
 
 	gc->clbkImGuiNewFrame();
+#ifdef _WIN32
 	ImGui_ImplWin32_NewFrame();
+#endif
 	ImGui::NewFrame();
 
 	// Focus-follows-mouse: when the mouse is not over any ImGui window,

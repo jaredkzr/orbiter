@@ -42,8 +42,17 @@ else()
 endif()
 
 # This is important for building using vs generator (jarmonik)
-if (NOT ${CMAKE_GENERATOR} STREQUAL "Ninja")
+if (MSVC AND NOT ${CMAKE_GENERATOR} STREQUAL "Ninja")
 	add_compile_options(/MP)
+endif()
+
+# Non-Windows platforms build a headless Orbiter (simulation core without
+# graphics client, launchpad or Win32 dialogs). See Src/Platform.
+if(WIN32)
+	set(ORBITER_HEADLESS OFF)
+else()
+	set(ORBITER_HEADLESS ON)
+	set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 endif()
 
 # Define directories and file paths for some common binaries
@@ -153,11 +162,19 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/cmake/pdftex_fix.bat.in ${PDFTEX_CMD}
 # =====================================================================================
 
 set(OrbiterTgt Orbiter)
-set(ORBITER_LIB $<TARGET_LINKER_FILE:Orbiter>)
+if(ORBITER_HEADLESS)
+	set(ORBITER_LIB OrbiterCore) # see Src/Orbiter/Headless.cmake
+else()
+	set(ORBITER_LIB $<TARGET_LINKER_FILE:Orbiter>)
+endif()
 
 # =====================================================================================
 # Build Spice module for celbodies. If false, build legacy (VSOP87/ELP82,etc)
-set(SPICE_BUILD TRUE)
+option(ORBITER_SPICE_CELBODIES
+	"Build the SPICE celestial body module (requires SPICE kernels in Kernels/). Otherwise build the legacy VSOP87/ELP82 modules."
+	ON
+)
+set(SPICE_BUILD ${ORBITER_SPICE_CELBODIES})
 
 # =====================================================================================
 
@@ -220,6 +237,12 @@ option(ORBITER_TRACY_PROFILER
 	"Build orbiter with profiler support"
 	OFF
 )
+
+if(ORBITER_HEADLESS)
+	# Windows-only components
+	set(ORBITER_BUILD_D3D9CLIENT OFF)
+	set(ORBITER_BUILD_XRSOUND OFF)
+endif()
 
 include(cmake/tracy.cmake)
 
@@ -294,11 +317,15 @@ INSTALL(FILES LICENSE
 # Sub-projects
 add_subdirectory(Extern)
 add_subdirectory(Src)
-add_subdirectory(Utils)
-add_subdirectory(Orbitersdk)
-add_subdirectory(OVP)
-add_subdirectory(Sound)
-add_subdirectory(Html)
+if(ORBITER_HEADLESS)
+	add_subdirectory(Utils/meshc) # mesh compiler, used to build vessel modules
+else()
+	add_subdirectory(Utils)
+	add_subdirectory(Orbitersdk)
+	add_subdirectory(OVP)
+	add_subdirectory(Sound)
+	add_subdirectory(Html)
+endif()
 
 if(ORBITER_MAKE_DOC)
 	add_subdirectory(Doc)
@@ -310,7 +337,11 @@ endif()
 configure_file(${CMAKE_SOURCE_DIR}/cmake/CPackOptions.cmake.in
 	${CMAKE_BINARY_DIR}/OrbiterCPackOptions.cmake)
 
-set(CPACK_GENERATOR "WIX;ZIP")
+if(WIN32)
+	set(CPACK_GENERATOR "WIX;ZIP")
+else()
+	set(CPACK_GENERATOR "TGZ")
+endif()
 set(CPACK_PACKAGE_NAME OpenOrbiter)
 set(CPACK_PACKAGE_VENDOR Orbitersim)
 set(CPACK_PACKAGE_DESCRIPTION "Orbiter is an Open-source spaceflight simulator for Windows PCs.")
@@ -352,4 +383,9 @@ cpack_add_component(RuntimeLibraries
 if (ORBITER_MAKE_TESTS)
       enable_testing()
       add_subdirectory(Tests)
+endif()
+
+if(ORBITER_HEADLESS)
+	include(cmake/headless.cmake)
+	orbiter_fixup_modules(${CMAKE_SOURCE_DIR}/Src)
 endif()

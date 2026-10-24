@@ -25,7 +25,7 @@ extern "C" {
 #include <lua/lualib.h>
 #include <lua/lauxlib.h>
 }
-#include "orbitersdk.h"
+#include "Orbitersdk.h"
 #include <filesystem>
 namespace fs = std::filesystem;
 

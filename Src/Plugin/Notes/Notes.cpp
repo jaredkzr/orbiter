@@ -14,7 +14,7 @@
 
 #define ORBITER_MODULE
 #define IMGUI_DEFINE_MATH_OPERATORS
-#include "orbitersdk.h"
+#include "Orbitersdk.h"
 #include "imgui.h"
 #include "imgui_extras.h"
 #include <vector>

@@ -13,7 +13,7 @@
 #define __SOLARSAIL_H
 
 #define STRICT 1
-#include "orbitersdk.h"
+#include "Orbitersdk.h"
 
 #define MAXNBHR 6 // max node neighbours
 

@@ -43,7 +43,14 @@ bool load_kernel(const string& kernel_name)
 	char s[1024];
 	if (loaded_kernels.find(kernel_name) != loaded_kernels.end())
 		return true;
+#ifdef _WIN32
 	furnsh_c(kernel_name.c_str());
+#else
+	string kernel_path(kernel_name); // kernel paths in the config files use Windows separators
+	for (auto &c : kernel_path)
+		if (c == '\\') c = '/';
+	furnsh_c(kernel_path.c_str());
+#endif
 	if (failed_c())
 	{
 		getmsg_c("long", sizeof(s), s);
@@ -70,7 +77,7 @@ bool get_id(char* name, int* id)
 		else
 		{
 			long spiceIDlng;
-			if (sscanf_s(name, " %ld", &spiceIDlng) == 1)
+			if (sscanf(name, " %ld", &spiceIDlng) == 1)
 			{
 				*id = (int)spiceIDlng;
 				found = SPICETRUE;
@@ -100,7 +107,7 @@ public:
 		return atm;
 	};
 
-	void SpiceBody::show_error(char* s);
+	void show_error(char* s);
 
 private:
 	char body_name[256];
@@ -118,7 +125,7 @@ private:
 	double elts_end[8];
 	double elts_sys_begin[8];
 	double elts_sys_end[8];
-	void SpiceBody::Interpolate(double simt, double* r);
+	void Interpolate(double simt, double* r);
 	double interval;
 	int response = -1;
 	int prev_response = -1;
@@ -126,7 +133,7 @@ private:
 	double t_end = -1.0e99;
 	double sp_beg[12];
 	double sp_end[12];
-	double SpiceBody::calc_gm(double* state1, double* state2, double dt);
+	double calc_gm(double* state1, double* state2, double dt);
 	double gm, gm_sys;
 };
 

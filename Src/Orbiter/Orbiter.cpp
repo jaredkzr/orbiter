@@ -8,12 +8,18 @@
 #pragma comment(linker,"\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 #include <windows.h>
+#ifdef _WIN32
 #include <direct.h>
+#endif
+#include <algorithm>
 #include <stdio.h>
 #include <time.h>
 #include <fstream>
-#include <process.h> 
+#ifdef _WIN32
+#include <process.h>
+#endif
 #include "cmdline.h"
+#include "Platform.h"
 #include "D3d7util.h"
 #include "D3dmath.h"
 #include "Log.h"
@@ -44,7 +50,9 @@
 #include "GraphicsAPI.h"
 #include "ConsoleManager.h"
 #include "imgui.h"
+#ifdef _WIN32
 #include "imgui_impl_win32.h"
+#endif
 #include <filesystem>
 
 #include "Tracy.hpp"
@@ -138,13 +146,15 @@ HELPCONTEXT DefHelpContext = {
 // =======================================================================
 // Function prototypes
 
+#ifdef _WIN32
 HRESULT ConfirmDevice (DDCAPS*, D3DDEVICEDESC7*);
 
 //LRESULT CALLBACK WndProc3D (HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK BkMsgProc (HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam);
+void    SetEnvironmentVars ();
+#endif
 
 VOID    DestroyWorld ();
-void    SetEnvironmentVars ();
 HANDLE hMutex = 0;
 HANDLE hConsoleMutex = 0;
 
@@ -152,6 +162,7 @@ HANDLE hConsoleMutex = 0;
 // _matherr()
 // trap global math exceptions
 
+#ifdef _WIN32
 int _matherr(struct _exception *except )
 {
 	if (!strcmp (except->name, "acos")) {
@@ -160,6 +171,7 @@ int _matherr(struct _exception *except )
 	}
 	return 0;
 }
+#endif // _WIN32
 
 
 // =======================================================================
@@ -167,6 +179,7 @@ int _matherr(struct _exception *except )
 // Application entry containing message loop
 
 
+#ifdef _WIN32
 INT WINAPI WinMain (HINSTANCE hInstance, HINSTANCE, LPSTR strCmdLine, INT nCmdShow)
 {
 #ifdef _CRTDBG_MAP_ALLOC
@@ -220,7 +233,9 @@ INT WINAPI WinMain (HINSTANCE hInstance, HINSTANCE, LPSTR strCmdLine, INT nCmdSh
 	delete g_pOrbiter;
 	return 0;
 }
+#endif // _WIN32
 
+#ifdef _WIN32
 void SetEnvironmentVars ()
 {
 	// Set search path to "Modules" subdirectory so that DLLs are found
@@ -236,6 +251,7 @@ void SetEnvironmentVars ()
 	}
 	_getcwd (cwd, 512);
 }
+#endif // _WIN32
 
 // =======================================================================
 // InitializeWorld()
@@ -289,8 +305,10 @@ Orbiter::Orbiter ()
     //m_bAppUseZBuffer  = TRUE;
     //m_fnConfirmDevice = ConfirmDevice;
 
+#ifdef _WIN32
 	// Initialise timer
 	timeBeginPeriod(1);
+#endif
 
 	pDI             = new DInput(this); TRACENEW
 	pConfig         = new Config; TRACENEW
@@ -351,7 +369,11 @@ Orbiter::Orbiter ()
 			g_pOrbiter->OpenHelp (&DefHelpContext);			
 		});
 	RegisterMenuCmd("Save",     "MenuInfoBar/save.png",     [](void *) {g_pOrbiter->Quicksave();});
+#ifdef _WIN32
 	RegisterMenuCmd("Exit",     "MenuInfoBar/exit.png",     [](void *) {PostMessage(g_pOrbiter->GetRenderWnd(), WM_CLOSE, 0, 0);});
+#else
+	RegisterMenuCmd("Exit",     "MenuInfoBar/exit.png",     [](void *) {g_pOrbiter->CloseSession();});
+#endif
 
 }
 
@@ -364,6 +386,7 @@ Orbiter::~Orbiter ()
 	CloseApp ();
 }
 
+#ifdef _WIN32
 //-----------------------------------------------------------------------------
 // Name: Create()
 // Desc: This method selects a D3D device
@@ -449,6 +472,7 @@ HRESULT Orbiter::Create (HINSTANCE hInstance)
 	
 	return S_OK;
 }
+#endif // _WIN32
 
 //-----------------------------------------------------------------------------
 // Name: SaveConfig()
@@ -457,7 +481,9 @@ HRESULT Orbiter::Create (HINSTANCE hInstance)
 void Orbiter::SaveConfig ()
 {
 	pConfig->Write (); // save current settings
+#ifdef _WIN32
 	m_pLaunchpad->WriteExtraParams ();
+#endif
 }
 
 //-----------------------------------------------------------------------------
@@ -476,8 +502,10 @@ VOID Orbiter::CloseApp (bool fast_shutdown)
 		delete pDI;
 		if (memstat) delete memstat;
 		if (pConfig)  delete pConfig;
+#ifdef _WIN32
 		if (m_pLaunchpad) delete m_pLaunchpad;
 		if (hBk) DestroyWindow (hBk);
+#endif
 		if (pState)   delete pState;
 		if (script) delete script;
 		if (ncustomcmd) {
@@ -488,9 +516,13 @@ VOID Orbiter::CloseApp (bool fast_shutdown)
 			delete []customcmd;
 			customcmd = NULL;
 		}
+#ifdef _WIN32
 		oapiUnregisterCustomControls (hInst);
+#endif
 	}
+#ifdef _WIN32
 	timeEndPeriod (1);
+#endif
 }
 
 //-----------------------------------------------------------------------------
@@ -518,7 +550,7 @@ int Orbiter::GetVersion () const
 static bool FindStandaloneDll(const char *path, const char *name, char* cbufOut)
 {
 	sprintf (cbufOut, "%s\\%s.dll", path, name);
-	return fs::exists(cbufOut);
+	return fs::exists(orbiter::platform::ModulePath(cbufOut));
 }
 
 //! Finds module consisting of a plugin DLL inside a plugin-specific folder
@@ -527,7 +559,7 @@ static bool FindStandaloneDll(const char *path, const char *name, char* cbufOut)
 static bool FindDllInPluginFolder(const char *path, const char *name, char* cbufOut)
 {
 	sprintf(cbufOut, "%s\\%s\\%s.dll", path, name, name);
-	return fs::exists(cbufOut);
+	return fs::exists(orbiter::platform::ModulePath(cbufOut));
 }
 
 void Orbiter::LoadModules(const std::string& path, const std::list<std::string>& names)
@@ -538,9 +570,10 @@ void Orbiter::LoadModules(const std::string& path, const std::list<std::string>&
 
 void Orbiter::LoadModules(const std::string& path)
 {
-	for (const auto& entry : fs::directory_iterator(path)) {
+	std::error_code ec; // a missing module directory just means there's nothing to load
+	for (const auto& entry : fs::directory_iterator(orbiter::platform::ResolvePath(path), ec)) {
 		auto fpath = entry.path();
-		if (fpath.extension().string() == ".dll") {
+		if (fpath.extension().string() == orbiter::platform::ModuleExt) {
 			LoadModule(path.c_str(), fpath.stem().string().c_str());
 		}
 	}
@@ -668,10 +701,14 @@ VOID Orbiter::Launch (const char *scenario)
 {
 	PrintModules();
 
+#ifdef _WIN32
 	HCURSOR hCursor = SetCursor (LoadCursor (NULL, IDC_WAIT));
+#endif
 	bool have_state = false;
 	pConfig->Write (); // save current settings
+#ifdef _WIN32
 	m_pLaunchpad->WriteExtraParams ();
+#endif
 
 	if (!have_state && !pState->Read (ScnPath (scenario))) {
 		LOGOUT_ERR ("Scenario not found: %s", scenario);
@@ -681,7 +718,9 @@ VOID Orbiter::Launch (const char *scenario)
 	long m0 = memstat->HeapUsage();
 	CreateRenderWindow (pConfig, scenario);
 	simheapsize = memstat->HeapUsage()-m0;
+#ifdef _WIN32
 	SetCursor (hCursor);
+#endif
 }
 
 //-----------------------------------------------------------------------------
@@ -696,7 +735,9 @@ HWND Orbiter::CreateRenderWindow (Config *pCfg, const char *scenario)
 	LOGOUT("");
 	LOGOUT("**** Creating simulation session");
 
+#ifdef _WIN32
 	m_pLaunchpad->Hide(); // hide launchpad dialog while the render window is visible
+#endif
 	
 	if (gclient) {
 		if(pState->SplashScreen())
@@ -737,7 +778,9 @@ HWND Orbiter::CreateRenderWindow (Config *pCfg, const char *scenario)
 		snote_playback = gclient->clbkCreateAnnotation ();
 	}
 	else {
+#ifdef _WIN32
 		pDlgMgr = new DialogManager(this, m_pConsole->WindowHandle());
+#endif
 	}
 
 	// read simulation environment state
@@ -898,8 +941,10 @@ void Orbiter::CloseSession ()
 	}
 
 	if (pConfig->CfgDebugPrm.ShutdownMode == 0 && !bFastExit) { // normal cleanup
+#ifdef _WIN32
 		m_pLaunchpad->Show(); // show launchpad dialog again
 		m_pLaunchpad->ShowWaitPage (true, simheapsize);
+#endif
 		if (gclient) {
 			gclient->clbkCloseSession (false);
 			Base::DestroyStaticDeviceObjects ();
@@ -929,7 +974,9 @@ void Orbiter::CloseSession ()
 		pDI->DestroyDevices();
 		pDI->SetRenderWindow(NULL);
 
+#ifdef _WIN32
 		m_pLaunchpad->ShowWaitPage (false);
+#endif
 	} else {
 		if (pDlgMgr)  { delete pDlgMgr; pDlgMgr = 0; }
 		if (gclient) {
@@ -948,8 +995,12 @@ void Orbiter::CloseSession ()
 			exit (0); // just kill the process
 		} else {
 			LOGOUT("**** Respawning Orbiter process\r\n");
+#ifdef _WIN32
 			const char *name = "orbiter.exe";
 			_execl (name, name, "-l", NULL);   // respawn the process
+#else
+			exit (0); // no launchpad to return to
+#endif
 		}
 	}
 	LOGOUT("**** Closing simulation session");
@@ -998,6 +1049,7 @@ HRESULT Orbiter::Render3DEnvironment (bool hidedialogs)
     return S_OK;
 }
 
+#ifdef _WIN32
 //-----------------------------------------------------------------------------
 // Name: ScreenToClient()
 // Desc: Converts screen to client coordinates. In fullscreen mode they are identical
@@ -1007,7 +1059,9 @@ void Orbiter::ScreenToClient (POINT *pt) const
 	if (!IsFullscreen() && hRenderWnd)
 		::ScreenToClient (hRenderWnd, pt);
 }
+#endif // _WIN32
 
+#ifdef _WIN32
 //-----------------------------------------------------------------------------
 // Name: Run()
 // Desc: Message-processing loop. Idle time is used to render the scene.
@@ -1073,6 +1127,7 @@ INT Orbiter::Run ()
 	hRenderWnd = NULL;
     return msg.wParam;
 }
+#endif // _WIN32
 
 void Orbiter::SingleFrame ()
 {
@@ -1089,6 +1144,7 @@ void Orbiter::SingleFrame ()
 	}
 }
 
+#ifdef _WIN32
 void Orbiter::TerminateOnError ()
 {
 	LogOut (">>> TERMINATING <<<");
@@ -1098,7 +1154,9 @@ void Orbiter::TerminateOnError ()
 		"Orbiter: Critical Error", MB_OK | MB_ICONERROR);
 	exit (1);
 }
+#endif // _WIN32
 
+#ifdef _WIN32
 void Orbiter::UpdateServerWnd (HWND hWnd)
 {
 	char cbuf[256];
@@ -1117,7 +1175,9 @@ void Orbiter::UpdateServerWnd (HWND hWnd)
 	sprintf (cbuf, "%zd", g_psys->nVessel());
 	SetWindowText (GetDlgItem (hWnd, IDC_STATIC7), cbuf);
 }
+#endif // _WIN32
 
+#ifdef _WIN32
 void Orbiter::InitRotationMode ()
 {
 	bKeepFocus = true;
@@ -1141,7 +1201,9 @@ void Orbiter::InitRotationMode ()
 		ClipCursor (&rScreen);
 	}
 }
+#endif // _WIN32
 
+#ifdef _WIN32
 void Orbiter::ExitRotationMode ()
 {
 	bKeepFocus = false;
@@ -1157,6 +1219,7 @@ void Orbiter::ExitRotationMode ()
 		ClipCursor (NULL);
 	}
 }
+#endif // _WIN32
 
 void Orbiter::OnOptionChanged(DWORD cat, DWORD item)
 {
@@ -1803,9 +1866,14 @@ void Orbiter::EndTimeStep (bool running)
 	g_bForceUpdate = false;                        // clear flag
 
 	// check for termination of demo mode
-	if (SessionLimitReached())
+	if (SessionLimitReached()) {
+#ifdef _WIN32
 		if (hRenderWnd) PostMessage(hRenderWnd, WM_CLOSE, 0, 0);
 		else CloseSession();
+#else
+		CloseSession();
+#endif
+	}
 }
 
 bool Orbiter::SessionLimitReached() const
@@ -1966,8 +2034,11 @@ VOID Orbiter::UpdateWorld ()
 
 	g_bStateUpdate = false;
 
-	if (!KillVessels())  // kill any vessels marked for deletion
+	if (!KillVessels()) { // kill any vessels marked for deletion
+#ifdef _WIN32
 		if (hRenderWnd) DestroyWindow (hRenderWnd);
+#endif
+	}
 
 	//g_texmanager->OutputInfo();
 }
@@ -1977,6 +2048,7 @@ const char *Orbiter::KeyState() const
 	return simkstate;
 }
 
+#ifdef _WIN32
 //-----------------------------------------------------------------------------
 // Name: UserInput()
 // Desc: Process user input via DirectInput keyboard and joystick (but not
@@ -2054,6 +2126,7 @@ HRESULT Orbiter::UserInput ()
 
 	return S_OK;
 }
+#endif // _WIN32
 
 //-----------------------------------------------------------------------------
 // Name: SendKbdBuffered()
@@ -2303,7 +2376,9 @@ void Orbiter::KbdInputBuffered_System (char *kstate, DIDEVICEOBJECTDATA *dod, DW
 			if (bPlayback) EndPlayback();
 			else ToggleRecorder ();
 		} else if (keymap.IsLogicalKey (key, kstate, OAPI_LKEY_Quit)) {
+#ifdef _WIN32
 			if (hRenderWnd) PostMessage (hRenderWnd, WM_CLOSE, 0, 0);
+#endif
 		} else if (keymap.IsLogicalKey (key, kstate, OAPI_LKEY_SelectPrevVessel)) {
 			if (g_pfocusobj) SetFocusObject (g_pfocusobj);
 		}
@@ -2513,6 +2588,7 @@ void Orbiter::BroadcastBufferedKeyboardEvent (char *kstate, DIDEVICEOBJECTDATA *
 // Desc: Render window message handler
 //-----------------------------------------------------------------------------
 
+#ifdef _WIN32
 LRESULT Orbiter::MsgProc (HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
 	if (ImGui_ImplWin32_WndProcHandler(hWnd, uMsg, wParam, lParam))
@@ -2657,7 +2733,9 @@ LRESULT Orbiter::MsgProc (HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	}
     return DefWindowProc (hWnd, uMsg, wParam, lParam);
 }
+#endif // _WIN32
 
+#ifdef _WIN32
 //-----------------------------------------------------------------------------
 // Name: ActivateRoughType()
 // Desc: Suppress font smoothing
@@ -2675,7 +2753,9 @@ bool Orbiter::ActivateRoughType ()
 		return true;
 	} else return false;
 }
+#endif // _WIN32
 
+#ifdef _WIN32
 //-----------------------------------------------------------------------------
 // Name: DeactivateRoughType()
 // Desc: Re-enable font smoothing
@@ -2690,6 +2770,7 @@ bool Orbiter::DeactivateRoughType ()
 		return true;
 	} else return false;
 }
+#endif // _WIN32
 
 //-----------------------------------------------------------------------------
 // Name: AttachGraphicsClient()
@@ -2722,7 +2803,9 @@ bool Orbiter::RegisterWindow (HINSTANCE hInstance, HWND hWnd, DWORD flag)
 
 void Orbiter::UpdateDeallocationProgress()
 {
+#ifdef _WIN32
 	m_pLaunchpad->UpdateWaitProgress();
+#endif
 }
 
 HWND Orbiter::OpenDialog (int id, DLGPROC pDlg, void *context)
@@ -2779,6 +2862,7 @@ HWND Orbiter::IsDialog (HINSTANCE hInstance, DWORD resId)
 // Nonmember functions
 //=============================================================================
 
+#ifdef _WIN32
 INT_PTR CALLBACK BkMsgProc (HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
 	switch (uMsg) {
@@ -2790,3 +2874,4 @@ INT_PTR CALLBACK BkMsgProc (HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	}
 	return 0;
 }
+#endif // _WIN32

@@ -1,7 +1,7 @@
 #ifndef __TRACKIRCONFIG_H
 #define __TRACKIRCONFIG_H
 
-#include "orbitersdk.h"
+#include "Orbitersdk.h"
 #include "TrackIR.h"
 
 static const char *cfgfile = "TrackIR.cfg";

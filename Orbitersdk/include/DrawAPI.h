@@ -31,6 +31,12 @@
 #include "d3dx9.h"
 #endif
 
+#ifdef _MSC_VER
+#define OAPI_ALIGN16 __declspec(align(16))
+#else
+#define OAPI_ALIGN16 alignas(16)
+#endif
+
 /// \brief Poly object handle
 typedef void* HPOLY;
 
@@ -359,7 +365,7 @@ namespace oapi {
 	* \brief 32-bit floating point 4D vector type.
 	* \note This structure is compatible with the D3DXVECTOR4 type.
 	*/
-	typedef union __declspec(align(16)) FVECTOR4
+	typedef union OAPI_ALIGN16 FVECTOR4
 	{
 		DWORD dword_abgr() const
 		{
@@ -608,7 +614,7 @@ namespace oapi {
 	* \brief Float-valued 4x4 matrix.
 	* \note This structure is compatible with the D3DXMATRIX.
 	*/
-	typedef union __declspec(align(16)) FMATRIX4
+	typedef union OAPI_ALIGN16 FMATRIX4
 	{
 		FMATRIX4() {
 			m11 = m12 = m13, m14 = m21 = m22 = m23 = m24 = m31 = m32 = m33 = m34 = m41 = m42 = m43 = m44 = 0;
@@ -665,7 +671,9 @@ namespace oapi {
 		}
 
 		float data[16];
-		struct { FVECTOR4 _x, _y, _z, _p; };
+#ifdef _MSC_VER
+		struct { FVECTOR4 _x, _y, _z, _p; }; // MSVC extension: members with constructors in an anonymous struct
+#endif
 		struct { float m11, m12, m13, m14, m21, m22, m23, m24, m31, m32, m33, m34, m41, m42, m43, m44; };
 	} FMATRIX4;
 

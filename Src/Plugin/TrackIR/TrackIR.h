@@ -1,8 +1,8 @@
 #ifndef __TRACKIR_H
 #define __TRACKIR_H
 
-#include "orbitersdk.h"
-#include "camapi.h"
+#include "Orbitersdk.h"
+#include "CamAPI.h"
 
 // ==============================================================
 

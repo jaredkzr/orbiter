@@ -33,7 +33,11 @@ add_custom_command(
 	COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/tass17.dat ${CMAKE_BINARY_DIR}/Config/Saturn/Data/
 )
 
-set(SATSAT_LIB $<TARGET_LINKER_FILE:Satsat>)
+if(ORBITER_HEADLESS)
+	set(SATSAT_LIB Satsat) # link by target name: ELF modules have no import library
+else()
+	set(SATSAT_LIB $<TARGET_LINKER_FILE:Satsat>)
+endif()
 
 add_subdirectory(Mimas)
 add_subdirectory(Enceladus)

@@ -123,6 +123,7 @@ public:
 	}
 };
 
+class Atlantis;
 class PayloadBayOp: public ImGuiDialog {
 	friend class Atlantis;
 public:

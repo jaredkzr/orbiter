@@ -36,6 +36,8 @@ class Instrument;
  */
 // ======================================================================
 
+class Instrument_User;
+
 class OAPIFUNC MFD {
 	friend class MFD2;
 

@@ -236,9 +236,11 @@ void orbiter::CommandLine::ApplyOption(const Key* key, const std::string& value)
 void orbiter::CommandLine::PrintHelpAndExit() const
 {
 	// Get console output
+#ifdef _WIN32
 	if (AttachConsole(ATTACH_PARENT_PROCESS) || AllocConsole()) {
 		freopen("CONOUT$", "w", stdout);
 	}
+#endif
 
 	std::cout << "\nOrbiter Space Flight Simulator" << std::endl;
 	std::cout << "orbiter.exe [options]\n\n";

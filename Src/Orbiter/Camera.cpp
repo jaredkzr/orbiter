@@ -24,7 +24,9 @@
 #include "Log.h"
 #include "OrbiterAPI.h"
 #include "Vobject.h"
+#ifdef _WIN32
 #include <zmouse.h>
+#endif
 
 using namespace std;
 
@@ -69,7 +71,11 @@ Camera::Camera (double _nearplane, double _farplane)
 	has_tref = false;
 	movehead = false;
 	ExtCtrlMode = 0;
+#ifdef _WIN32
 	GetCursorPos (&pm);
+#else
+	pm.x = pm.y = 0;
+#endif
 	mmoveT = -1000.0;
 	ap_int = ap_ext = RAD*25.0;
 	ap = &ap_ext;
@@ -133,6 +139,7 @@ bool Camera::ProcessMouse (UINT event, DWORD state, DWORD x, DWORD y, const char
 
 void Camera::UpdateMouse ()
 {
+#ifdef _WIN32
 	POINT pt;
 	GetCursorPos (&pt);
 	if (pt.x != pm.x || pt.y != pm.y) {
@@ -164,6 +171,7 @@ void Camera::UpdateMouse ()
 			Rotate (dx * -0.001, dy * -0.001);
 		}
 	}
+#endif
 }
 
 void Camera::SetViewInternal ()

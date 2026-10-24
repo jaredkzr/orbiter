@@ -5,7 +5,9 @@
 #include "Panel2D.h"
 #include "Pane.h"
 #include "Vessel.h"
+#ifdef _WIN32
 #include <zmouse.h>
+#endif
 
 using namespace std;
 
@@ -359,10 +361,12 @@ bool Panel2D::ProcessMouse_OnRunning (UINT event, DWORD state, int x, int y, con
 void Panel2D::GetMouseState (int &idx, int &state, int &mx, int &my) const
 {
 	if (mstate & PANEL_MOUSE_PRESSED) {
-		POINT pt;
+		POINT pt = {0, 0};
+#ifdef _WIN32
 		GetCursorPos (&pt);
 		if (cwnd) // need to subtract client window offset
 			ScreenToClient (cwnd, &pt);
+#endif
 	    double tx, ty;  // transformed coordinates
 	    tx = ((double)pt.x-x0)/panelscale;
 	    ty = ((double)pt.y-y0)/panelscale;

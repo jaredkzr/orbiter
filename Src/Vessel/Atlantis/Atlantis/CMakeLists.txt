@@ -33,8 +33,8 @@ target_link_libraries(${VESSEL_NAME}
 	${ORBITER_LIB}
 	${ORBITER_SDK_LIB}
 	${ORBITER_DLGCTRL_LIB}
-	UxTheme.lib
-	$<TARGET_LINKER_FILE:Atlantis_Tank>
+	$<$<PLATFORM_ID:Windows>:UxTheme.lib>
+	$<IF:$<BOOL:${ORBITER_HEADLESS}>,Atlantis_Tank,$<TARGET_LINKER_FILE:Atlantis_Tank>>
 	imgui
 )
 

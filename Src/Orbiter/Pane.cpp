@@ -80,8 +80,6 @@ Pane::Pane (oapi::GraphicsClient *gclient, HWND hwnd, int width, int height, int
 	mfdTex_blank = NULL;
 	if (gc) {
 		mfdTex_blank = gc->clbkCreateTexture (2,2);
-		static DDBLTFX bltfx = {sizeof(DDBLTFX), 0};
-		bltfx.dwFillColor = 0;
 		gc->clbkFillSurface (mfdTex_blank, 0);
 	}
 }
@@ -1173,7 +1171,9 @@ void Pane::RepaintMFDButtons (INT_PTR id, Instrument *instr)
 void Pane::RegisterPanelBackground (HBITMAP hBmp, DWORD flag, DWORD ck)
 {
 	if (panel) panel->DefineBackground (hBmp, flag, ck);
+#ifdef _WIN32
 	DeleteObject ((HGDIOBJ)hBmp);
+#endif
 }
 
 void Pane::RegisterPanelBackground (SURFHANDLE hSurf, DWORD flag)

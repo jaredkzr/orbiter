@@ -14,7 +14,7 @@
 #include <vector>
 #include <functional>
 #include <algorithm>
-#include "orbitersdk.h"
+#include "Orbitersdk.h"
 #include "imgui.h"
 #include "imgui_extras.h"
 #include "implot.h"

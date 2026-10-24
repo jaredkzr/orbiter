@@ -33,7 +33,11 @@ add_custom_command(
 	COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/ephem_e15.dat ${CMAKE_BINARY_DIR}/Config/Jupiter/Data/
 )
 
-set(GALSAT_LIB $<TARGET_LINKER_FILE:Galsat>)
+if(ORBITER_HEADLESS)
+	set(GALSAT_LIB Galsat) # link by target name: ELF modules have no import library
+else()
+	set(GALSAT_LIB $<TARGET_LINKER_FILE:Galsat>)
+endif()
 
 add_subdirectory(Io)
 add_subdirectory(Europa)

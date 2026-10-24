@@ -151,7 +151,9 @@ install(DIRECTORY ${THUMBNAIL_SOURCE_DIR}/
 	DESTINATION ${ORBITER_INSTALL_ROOT_DIR}/Images/Vessels/Default
 )
 
-add_subdirectory(DGConfigurator)
+if(NOT ORBITER_HEADLESS) # Launchpad extension (Win32 UI)
+	add_subdirectory(DGConfigurator)
+endif()
 if(ORBITER_MAKE_DOC)
 	add_subdirectory(Help)
 endif()

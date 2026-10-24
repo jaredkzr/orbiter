@@ -177,7 +177,11 @@ void Instrument::GlobalInit (oapi::GraphicsClient *gc)
 		RGB(128,128,0), RGB(64,64,0), RGB(128,128,128)
 	};
 	for (i = 0; i < MAXPEN; i++) {
+#ifdef _WIN32
 		hdefpen[i] = CreatePen (PS_SOLID, 0, pencol[i]);
+#else
+		hdefpen[i] = NULL; // no GDI
+#endif
 	}
 }
 
@@ -185,8 +189,10 @@ void Instrument::GlobalExit (oapi::GraphicsClient *gc)
 {
 	int i, j;
 
+#ifdef _WIN32
 	for (i = 0; i < MAXPEN; i++)
 		DeleteObject (hdefpen[i]);
+#endif
 	for (i = 0; i < MAXDEFCOL; i++) {
 		for (j = 0; j < 2; j++) {
 			if (gc && draw[i][j].solidpen) gc->clbkReleasePen (draw[i][j].solidpen);
@@ -761,6 +767,7 @@ void Instrument::EndDraw (oapi::Sketchpad *skp)
 
 HDC Instrument::BeginDrawHDC ()
 {
+#ifdef _WIN32
 	HDC hDC;
 	if (gc && (hDC = gc->clbkGetSurfaceDC (surf))) {
 		SetTextColor (hDC, draw[0][0].col);
@@ -775,15 +782,20 @@ HDC Instrument::BeginDrawHDC ()
 	} else {
 		return 0;
 	}
+#else
+	return 0;
+#endif
 }
 
 void Instrument::EndDrawHDC (HDC hDC)
 {
+#ifdef _WIN32
 	if (gc && hDC) {
 		SelectObject (hDC, GetStockObject (NULL_PEN));
 		SelectObject (hDC, GetStockObject (NULL_BRUSH));
 		gc->clbkReleaseSurfaceDC (surf, hDC);
 	}
+#endif
 }
 
 bool Instrument::Update (double upDTscale)
@@ -841,8 +853,12 @@ oapi::Font *Instrument::GetDefaultFont (DWORD fontidx)
 
 HFONT Instrument::SelectDefaultFont (HDC hDC, DWORD i)
 {
+#ifdef _WIN32
 	// obsolete
 	return (i < 4 ? (HFONT)SelectObject (hDC, mfdfont[i]->GetGDIFont()) : 0);
+#else
+	return 0;
+#endif
 }
 
 oapi::Pen *Instrument::GetDefaultPen (DWORD colidx, DWORD intens, DWORD style)
@@ -860,8 +876,12 @@ oapi::Pen *Instrument::GetDefaultPen (DWORD colidx, DWORD intens, DWORD style)
 
 HPEN Instrument::SelectDefaultPen (HDC hDC, DWORD i)
 {
+#ifdef _WIN32
 	// obsolete
 	return (i < 6 ? (HPEN)SelectObject (hDC, hdefpen[i]) : 0);
+#else
+	return 0;
+#endif
 }
 
 DWORD Instrument::GetDefaultColour (DWORD colidx, DWORD intens) const
@@ -880,9 +900,11 @@ void Instrument::DisplayTitle (oapi::Sketchpad *skp, const char *title) const
 
 void Instrument::DisplayTitle (HDC hDC, const char *title) const
 {
+#ifdef _WIN32
 	// obsolete
 	SetTextColor (hDC, col_grey1);
 	TextOut (hDC, cw/2, 0, title, strlen(title));
+#endif
 }
 
 void Instrument::DisplayModes (int page)

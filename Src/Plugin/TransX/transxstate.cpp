@@ -20,7 +20,7 @@
 
 #define STRICT
 
-#include "orbitersdk.h"
+#include "Orbitersdk.h"
 #include <deque>
 #include "mfd.h"
 #include "intercept.h"

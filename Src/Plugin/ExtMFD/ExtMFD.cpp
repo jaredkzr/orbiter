@@ -14,7 +14,7 @@
 
 #define ORBITER_MODULE
 #include "MFDWindow.h"
-#include "orbitersdk.h"
+#include "Orbitersdk.h"
 
 // ==============================================================
 // Global variables

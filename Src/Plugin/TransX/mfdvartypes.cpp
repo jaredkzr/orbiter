@@ -24,7 +24,7 @@
 #include <cstdio>
 #include <cmath>
 #include <string>
-#include "orbitersdk.h"
+#include "Orbitersdk.h"
 #include "mfd.h"
 #include "mfdvartypes.h"
 #include "doublelink.h"

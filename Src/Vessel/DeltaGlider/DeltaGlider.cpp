@@ -36,7 +36,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <time.h>
-#include "OrbiterSDK.h"
+#include "Orbitersdk.h"
 #include <imgui.h>
 
 using std::min;
@@ -1769,6 +1769,7 @@ DLLCLBK void ovcExit (VESSEL *vessel)
 }
 
 
+#ifdef _WIN32 // scenario editor pages (Win32 dialogs)
 // ==============================================================
 // Scenario editor interface
 // ==============================================================
@@ -1965,6 +1966,7 @@ DLLCLBK void secInit (HWND hEditor, OBJHANDLE hVessel)
 		SendMessage (hEditor, WM_SCNEDITOR, SE_ADDPAGEBUTTON, (LPARAM)&eps3);
 	}
 }
+#endif // _WIN32
 
 // ==============================================================
 // Message callback function for damage dialog box

@@ -16,7 +16,7 @@
 
 #define STRICT 1
 #define ORBITER_MODULE
-#include "orbitersdk.h"
+#include "Orbitersdk.h"
 #include "resource.h"
 #include <stdio.h>
 

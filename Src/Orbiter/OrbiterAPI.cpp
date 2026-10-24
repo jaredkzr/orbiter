@@ -2001,7 +2001,9 @@ DLLEXPORT SURFHANDLE oapiCreateSurface (HBITMAP hBmp, bool release_bmp)
 	oapi::GraphicsClient *gc = g_pOrbiter->GetGraphicsClient();
 	SURFHANDLE surf = NULL;
 	if (gc) surf = gc->clbkCreateSurface (hBmp);
+#ifdef _WIN32
 	if (release_bmp) DeleteObject ((HGDIOBJ)hBmp);
+#endif
 	return surf;
 }
 
@@ -2036,7 +2038,9 @@ DLLEXPORT void oapiClearSurfaceColourKey (SURFHANDLE surf)
 	if (!surf) return;
 	oapi::GraphicsClient *gc = g_pOrbiter->GetGraphicsClient();
 	//if (gc) gc->clbClearSurfaceColourKey (surf); // TODO
+#ifdef _WIN32
 	((LPDIRECTDRAWSURFACE7)surf)->SetColorKey (DDCKEY_SRCBLT, 0);
+#endif
 }
 
 DLLEXPORT DWORD oapiGetColour (DWORD red, DWORD green, DWORD blue)
@@ -2126,17 +2130,29 @@ DLLEXPORT bool oapiAcceptDelayedKey (char key, double interval)
 
 DLLEXPORT LAUNCHPADITEM_HANDLE oapiRegisterLaunchpadItem (LaunchpadItem *item, LAUNCHPADITEM_HANDLE parent)
 {
+#ifdef _WIN32
 	return (LAUNCHPADITEM_HANDLE)g_pOrbiter->Launchpad()->RegisterExtraParam (item, (HTREEITEM)parent);
+#else
+	return NULL;
+#endif
 }
 
 DLLEXPORT bool oapiUnregisterLaunchpadItem (LaunchpadItem *item)
 {
+#ifdef _WIN32
 	return g_pOrbiter->Launchpad()->UnregisterExtraParam (item);
+#else
+	return false;
+#endif
 }
 
 DLLEXPORT LAUNCHPADITEM_HANDLE oapiFindLaunchpadItem (const char *name, LAUNCHPADITEM_HANDLE parent)
 {
+#ifdef _WIN32
 	return g_pOrbiter->Launchpad()->FindExtraParam (name, (HTREEITEM)parent);
+#else
+	return NULL;
+#endif
 }
 
 DLLEXPORT DWORD oapiRegisterCustomCmd (char *label, char *desc, CustomFunc func, void *context)
@@ -2339,7 +2355,14 @@ DLLEXPORT void oapiWriteLog (char *line)
 
 DLLEXPORT void oapiExitOrbiter(int code)
 {
+#ifdef _WIN32
 	exit(code);
+#else
+	// May be called from a script thread. Like ExitProcess on Windows, end the
+	// process without running module destructors while other threads are alive.
+	fflush(nullptr);
+	_exit(code);
+#endif
 }
 
 DLLEXPORT void oapiWriteLogV (const char *format, ...)
@@ -2571,10 +2594,10 @@ DLLEXPORT DWORD oapiDeflate (const BYTE *inp, DWORD ninp, BYTE *outp, DWORD nout
 
 DLLEXPORT DWORD oapiInflate (const BYTE *inp, DWORD ninp, BYTE *outp, DWORD noutp)
 {
-	DWORD ndata = noutp;
+	uLongf ndata = noutp;
 	if (uncompress (outp, &ndata, inp, ninp) != Z_OK)
 		return 0;
-	return ndata;
+	return (DWORD)ndata;
 }
 
 // ------------------------------------------------------------------------------

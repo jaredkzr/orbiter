@@ -26,7 +26,7 @@ target_include_directories(${VESSEL_NAME}
 target_link_libraries(${VESSEL_NAME}
 	${ORBITER_LIB}
 	${ORBITER_SDK_LIB}
-	$<TARGET_LINKER_FILE:Atlantis_SRB>
+	$<IF:$<BOOL:${ORBITER_HEADLESS}>,Atlantis_SRB,$<TARGET_LINKER_FILE:Atlantis_SRB>>
 )
 
 add_custom_command(

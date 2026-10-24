@@ -2,7 +2,9 @@
 // Licensed under the MIT License
 
 #include "Help.h"
+#ifdef _WIN32
 #include <htmlhelp.h>
+#endif
 #include <stdio.h>
 
 void OpenHelp (HWND hWnd, const char *file, const char *topic)
@@ -12,7 +14,9 @@ void OpenHelp (HWND hWnd, const char *file, const char *topic)
 		sprintf(topic_file, "%s.htm", topic);
 	else
 		strcpy(topic_file, topic);
+#ifdef _WIN32
 	HtmlHelp (hWnd, file, HH_DISPLAY_TOPIC, (DWORD_PTR)topic_file);
+#endif
 }
 
 void OpenDefaultHelp (HWND hWnd, const char *topic)
