@@ -445,8 +445,8 @@ void Vessel::ReadGenericCaps (ifstream &ifs)
 	RigidBody::ReadGenericCaps (ifs);
 
 	if (GetItemString(ifs, "MeshName", cbuf)) {
-		// preload mesh template
-		MESHHANDLE mesh = (MESHHANDLE)g_pOrbiter->meshmanager.LoadMesh(cbuf);
+		// preload mesh template (globally, so that the graphics client learns its file name)
+		MESHHANDLE mesh = (MESHHANDLE)g_pOrbiter->LoadMeshGlobal(cbuf);
 		if (mesh)
 			AddMesh(mesh);
 		else
