@@ -38,7 +38,10 @@ const float FLARE_THRESHOLD = 4.0;
 
 vec3 FlareSource (vec2 uv)
 {
-	return max (texture (bloom, uv).rgb - FLARE_THRESHOLD, vec3 (0.0));
+	// capped, so that a large bright source (the sun in a narrow field of
+	// view) does not make large bright ghosts
+	vec3 c = max (texture (bloom, uv).rgb - FLARE_THRESHOLD, vec3 (0.0));
+	return c / (1.0 + max (max (c.r, c.g), c.b) / 2.0);
 }
 
 vec3 Flare (vec2 uv)

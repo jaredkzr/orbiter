@@ -3,10 +3,11 @@
 Known gaps and limitations, to be addressed later.
 
 ## Atmosphere
-- Mars at twilight, seen from the surface: a bright band above the horizon
-  (sky shading between the mean-radius horizon and the terrain horizon?).
-- Multiple scattering is a cheap isotropic approximation; precomputed
-  scattering tables would be more accurate (twilight colours in particular).
+- Precomputed transmittance and multiple-scattering tables (Hillaire 2020);
+  the single scattering is still ray-marched per pixel (16 steps). A
+  sky-view table and an aerial-perspective volume would make it cheaper.
+  Ozone only for Earth. The 1-exp(-L) sky tonemapping (AtmTonemap) is
+  legacy; with auto-exposure the sky could be linear radiance.
 
 ## Particle streams
 - Reentry plasma is implemented but has not been verified visually at peak

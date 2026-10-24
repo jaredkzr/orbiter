@@ -1,0 +1,93 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Multiple-scattering table of an atmosphere (Hillaire 2020): for a point
+// at radius r and a sun at zenith cosine muS, the second-order luminance L2
+// and the transfer fraction f of isotropic scattering are integrated over
+// the sphere of directions; all orders sum to L2 / (1 - f).
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "atmlut.glsl"
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 64) in;
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D outLut;
+layout(set = 0, binding = 1) uniform sampler2D transmittanceLut;
+
+layout(push_constant) uniform Params {
+	vec4 betaR;
+	vec4 betaM;
+	vec4 ozone;
+	vec4 radii;   // planet radius, atmosphere radius, ground albedo, Mie asymmetry g
+} pc;
+
+shared vec3 sharedL[64];
+shared vec3 sharedF[64];
+
+const float PI = 3.14159265;
+
+vec3 SunTrans (float r, float mu)
+{
+	return texture (transmittanceLut, AtmTransmittanceUv (r, mu, pc.radii.x, pc.radii.y)).rgb;
+}
+
+void main ()
+{
+	ivec2 p = ivec2 (gl_GlobalInvocationID.xy);
+	uint k = gl_LocalInvocationID.z;
+	float Rg = pc.radii.x, Rt = pc.radii.y;
+	vec2 uv = (vec2 (p) + 0.5) / ATM_MULTISCAT_SIZE;
+	float muS = AtmUvToUnit (uv.x, ATM_MULTISCAT_SIZE.x) * 2.0 - 1.0;
+	float r = Rg + AtmUvToUnit (uv.y, ATM_MULTISCAT_SIZE.y) * (Rt - Rg);
+	r = clamp (r, Rg + 1.0, Rt - 1.0);
+	vec3 pos = vec3 (0.0, r, 0.0);
+	vec3 sun = vec3 (sqrt (max (1.0 - muS * muS, 0.0)), muS, 0.0);
+
+	// direction k of 64 (8 x 8 stratified on the sphere)
+	float a = (float (k % 8u) + 0.5) / 8.0, b = (float (k / 8u) + 0.5) / 8.0;
+	float cosTheta = 1.0 - 2.0 * b, phi = 2.0 * PI * a;
+	float sinTheta = sqrt (max (1.0 - cosTheta * cosTheta, 0.0));
+	vec3 d = vec3 (sinTheta * cos (phi), cosTheta, sinTheta * sin (phi));
+
+	// march to the ground or the top of the atmosphere
+	float bq = dot (pos, d);
+	float cg = r * r - Rg * Rg, ct = r * r - Rt * Rt;
+	float discG = bq * bq - cg;
+	bool hitsGround = discG >= 0.0 && -bq - sqrt (discG) > 0.0;
+	float tMax = hitsGround ? -bq - sqrt (discG) : -bq + sqrt (max (bq * bq - ct, 0.0));
+	const int N = 24;
+	float ds = tMax / float (N);
+	vec3 tau = vec3 (0.0), L = vec3 (0.0), F = vec3 (0.0);
+	const float isotropic = 1.0 / (4.0 * PI);
+	for (int i = 0; i < N; i++) {
+		vec3 q = pos + d * (ds * (float (i) + 0.5));
+		float rq = length (q);
+		vec3 dens = AtmDensities (rq - Rg, pc.betaR.w, pc.betaM.w);
+		vec3 scat = pc.betaR.rgb * dens.x + pc.betaM.rgb * dens.y;
+		vec3 ext = scat + pc.betaM.rgb * 0.1 * dens.y + pc.ozone.rgb * dens.z;
+		vec3 T = exp (-(tau + 0.5 * ext * ds));
+		tau += ext * ds;
+		float mu = dot (q, sun) / rq;
+		// sunlight at q (zero in the planet's shadow)
+		float bs = rq * mu;
+		bool shadow = mu < 0.0 && bs * bs - (rq * rq - Rg * Rg) >= 0.0;
+		vec3 Ts = shadow ? vec3 (0.0) : SunTrans (rq, mu);
+		L += T * scat * Ts * isotropic * ds;
+		F += T * scat * ds;
+	}
+	if (hitsGround) { // light reflected by the ground (Lambertian)
+		vec3 g = pos + d * tMax;
+		float mu = max (dot (normalize (g), sun), 0.0);
+		L += exp (-tau) * SunTrans (Rg, mu) * mu * pc.radii.z / PI;
+	}
+	// average over the sphere (isotropic phase: 1 / 4 pi per steradian)
+	sharedL[k] = L * (4.0 * PI / 64.0) * isotropic;
+	sharedF[k] = F * (4.0 * PI / 64.0) * isotropic;
+	barrier ();
+	if (k == 0u) {
+		vec3 L2 = vec3 (0.0), f = vec3 (0.0);
+		for (int i = 0; i < 64; i++) L2 += sharedL[i], f += sharedF[i];
+		vec3 psi = L2 / max (1.0 - f, vec3 (1e-3));
+		imageStore (outLut, p, vec4 (psi, 1.0));
+	}
+}

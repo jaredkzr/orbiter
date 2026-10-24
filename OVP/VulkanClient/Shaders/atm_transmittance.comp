@@ -1,0 +1,39 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Transmittance table of an atmosphere
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "atmlut.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D outLut;
+layout(set = 0, binding = 1) uniform sampler2D transmittanceLut; // (unused here)
+
+layout(push_constant) uniform Params {
+	vec4 betaR;   // Rayleigh scattering [1/m] (rgb), scale height [m]
+	vec4 betaM;   // Mie scattering [1/m] (rgb), scale height [m]
+	vec4 ozone;   // ozone absorption [1/m] (rgb)
+	vec4 radii;   // planet radius, atmosphere radius, ground albedo, Mie asymmetry g
+} pc;
+
+void main ()
+{
+	ivec2 p = ivec2 (gl_GlobalInvocationID.xy);
+	if (p.x >= int (ATM_TRANSMITTANCE_SIZE.x) || p.y >= int (ATM_TRANSMITTANCE_SIZE.y)) return;
+	float Rg = pc.radii.x, Rt = pc.radii.y;
+	float r, mu;
+	AtmTransmittanceRMu ((vec2 (p) + 0.5) / ATM_TRANSMITTANCE_SIZE, Rg, Rt, r, mu);
+	float t1 = AtmDistanceToTop (r, mu, Rt);
+	const int N = 64;
+	float ds = t1 / float (N);
+	vec3 tau = vec3 (0.0);
+	for (int i = 0; i < N; i++) {
+		float t = ds * (float (i) + 0.5);
+		float h = sqrt (r * r + t * t + 2.0 * r * mu * t) - Rg;
+		vec3 dens = AtmDensities (h, pc.betaR.w, pc.betaM.w);
+		tau += (pc.betaR.rgb * dens.x + pc.betaM.rgb * 1.1 * dens.y + pc.ozone.rgb * dens.z) * ds;
+	}
+	imageStore (outLut, p, vec4 (exp (-tau), 1.0));
+}

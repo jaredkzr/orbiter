@@ -1,9 +1,11 @@
 // Copyright (c) Martin Schweiger
 // Licensed under the MIT License
 
-// Single-scattering atmosphere (Rayleigh and Mie), ray-marched.
-// All positions are in the planet frame, in metres. The including shader
-// defines ATM_SET, the descriptor set of the atmosphere uniform block.
+// Atmosphere (Rayleigh, Mie, ozone): single scattering ray-marched along
+// the view, with sunlight transmittance and all higher scattering orders
+// from precomputed tables (atmlut.glsl). All positions are in the planet
+// frame, in metres. The including shader defines ATM_SET, the descriptor
+// set of the atmosphere uniform block.
 
 layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	mat4 viewToPlanet;  // view space -> planet frame (rotation)
@@ -17,6 +19,7 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 ground;        // planet colour (rgb), w: surface textures present
 	vec4 cloud;         // cloud layer radius, rotation angle, shadow depth, w: present
 	vec4 water;         // camera relative to the 1 km-snapped origin of surface patterns, w: time [s] (< 0: no ripples)
+	vec4 ozone;         // ozone absorption [1/m] (rgb)
 } atm;
 
 // planet surface (western and eastern hemisphere), for reflections
@@ -25,6 +28,11 @@ layout(set = ATM_SET, binding = 2) uniform sampler2D atmGround1;
 // cloud layer (western and eastern hemisphere), for cloud shadows
 layout(set = ATM_SET, binding = 3) uniform sampler2D atmCloud0;
 layout(set = ATM_SET, binding = 4) uniform sampler2D atmCloud1;
+// precomputed tables
+layout(set = ATM_SET, binding = 5) uniform sampler2D atmTransmittance;
+layout(set = ATM_SET, binding = 6) uniform sampler2D atmMultiscat;
+
+#include "atmlut.glsl"
 
 
 const float ATM_PI = 3.14159265;
@@ -47,31 +55,26 @@ vec2 RaySphere (vec3 o, vec3 d, float r)
 	return RaySphereC (o, d, (lo - r) * (lo + r));
 }
 
-// Optical depth (Rayleigh, Mie) from p towards the sun; x >= ATM_NONE if
-// the planet blocks the sun
-vec2 SunOpticalDepth (vec3 p)
+// Transmittance of sunlight arriving at p (radius r, sun zenith cosine muS).
+// Near the planet's shadow the sun sets gradually (its disc and refraction
+// spread the transition over about a degree), so that the shadow cast into
+// the air has no hard edge.
+vec3 AtmSunTransmittance (vec3 p, float r, float muS)
 {
-	vec3 s = atm.sunDir.xyz;
-	vec2 tp = RaySphere (p, s, atm.radii.x);
-	if (tp.x > 0.0 && tp.x <= tp.y) return vec2 (ATM_NONE);
-	float t1 = RaySphere (p, s, atm.radii.y).y;
-	if (t1 <= 0.0) return vec2 (0.0);
-	const int N = 4;
-	float ds = t1 / float (N);
-	vec2 od = vec2 (0.0);
-	for (int i = 0; i < N; i++) {
-		float h = length (p + s * (ds * (float (i) + 0.5))) - atm.radii.x;
-		od += exp (-max (h, 0.0) / vec2 (atm.betaR.w, atm.betaM.w)) * ds;
-	}
-	return od;
+	float Rg = atm.radii.x;
+	float rr = max (r, Rg);
+	float muH = -sqrt (max (1.0 - (Rg / rr) * (Rg / rr), 0.0)); // horizon
+	float vis = smoothstep (-0.01, 0.01, muS - muH);
+	if (vis <= 0.0) return vec3 (0.0);
+	rr = min (rr, atm.radii.y);
+	vec2 uv = AtmTransmittanceUv (rr, max (muS, muH + 1e-4), Rg, atm.radii.y);
+	return textureLod (atmTransmittance, uv, 0.0).rgb * vis;
 }
 
-// Transmittance of sunlight arriving at p
 vec3 SunTransmittance (vec3 p)
 {
-	vec2 od = SunOpticalDepth (p);
-	if (od.x >= ATM_NONE) return vec3 (0.0);
-	return exp (-(atm.betaR.rgb * od.x + atm.betaM.rgb * 1.1 * od.y));
+	float r = length (p);
+	return AtmSunTransmittance (p, r, dot (p, atm.sunDir.xyz) / r);
 }
 
 // Light scattered towards the camera along the view ray d up to distance
@@ -87,33 +90,48 @@ vec3 Inscatter (vec3 d, float tMax, out vec3 T)
 
 	const int N = 16;
 	float ds = (t1 - t0) / float (N);
-	vec2 od = vec2 (0.0);
+	vec3 tau = vec3 (0.0);
 	vec3 sumR = vec3 (0.0), sumM = vec3 (0.0), sumMS = vec3 (0.0);
+	float Rg = atm.radii.x, Rt = atm.radii.y;
 	for (int i = 0; i < N; i++) {
 		vec3 p = o + d * (t0 + ds * (float (i) + 0.5));
-		float h = length (p) - atm.radii.x;
-		vec2 dens = exp (-max (h, 0.0) / vec2 (atm.betaR.w, atm.betaM.w)) * ds;
-		od += dens;
-		vec2 ls = SunOpticalDepth (p);
-		if (ls.x >= ATM_NONE) continue; // in the planet's shadow
-		vec3 att = exp (-(atm.betaR.rgb * (od.x + ls.x) + atm.betaM.rgb * 1.1 * (od.y + ls.y)));
-		sumR += att * dens.x;
-		sumM += att * dens.y;
-		// Multiple scattering, approximated as isotropic light whose extinction
-		// along the view path is balanced by scattering into it from other
-		// directions. This keeps long horizontal paths from turning orange.
-		vec3 sunAtt = exp (-(atm.betaR.rgb * ls.x + atm.betaM.rgb * 1.1 * ls.y));
-		sumMS += sunAtt * (atm.betaR.rgb * dens.x + atm.betaM.rgb * dens.y) * exp (-atm.betaM.rgb * 1.1 * od.y);
+		float r = length (p);
+		vec3 dens = AtmDensities (r - Rg, atm.betaR.w, atm.betaM.w) * ds;
+		vec3 scat = atm.betaR.rgb * dens.x + atm.betaM.rgb * dens.y;
+		vec3 ext = scat + atm.betaM.rgb * 0.1 * dens.y + atm.ozone.rgb * dens.z;
+		vec3 Tv = exp (-(tau + 0.5 * ext)); // to the middle of the step
+		tau += ext;
+		float muS = dot (p, atm.sunDir.xyz) / r;
+		vec3 Ts = AtmSunTransmittance (p, r, muS);
+		sumR += Tv * Ts * dens.x;
+		sumM += Tv * Ts * dens.y;
+		// all higher orders, isotropic
+		vec3 psi = textureLod (atmMultiscat, AtmMultiscatUv (clamp (r, Rg, Rt), muS, Rg, Rt), 0.0).rgb;
+		sumMS += Tv * scat * psi;
 	}
-	T = exp (-(atm.betaR.rgb * od.x + atm.betaM.rgb * 1.1 * od.y));
+	T = exp (-tau);
 
 	float mu = dot (d, atm.sunDir.xyz);
 	float g = atm.radii.z;
 	float pR = 3.0 / (16.0 * ATM_PI) * (1.0 + mu * mu);
 	float pM = 3.0 / (8.0 * ATM_PI) * ((1.0 - g * g) * (1.0 + mu * mu)) /
 		((2.0 + g * g) * pow (max (1.0 + g * g - 2.0 * g * mu, 1e-4), 1.5));
-	const float MS_FACTOR = 0.25; // fraction of single-scattered light scattered again, per 4 pi
-	return atm.radii.w * (sumR * atm.betaR.rgb * pR + sumM * atm.betaM.rgb * pM + sumMS * MS_FACTOR / (4.0 * ATM_PI));
+	return atm.radii.w * (sumR * atm.betaR.rgb * pR + sumM * atm.betaM.rgb * pM + sumMS);
+}
+
+// Sunlit planet surface seen from afar, at the unit normal n (planet
+// frame): the level-4 surface map (or the planet colour), lit by the sun
+vec3 AtmGround (vec3 n)
+{
+	vec3 alb = atm.ground.rgb;
+	if (atm.ground.w > 0.5) {
+		float lat = asin (clamp (n.y, -1.0, 1.0)), lng = atan (n.z, n.x);
+		float v = (0.5 * ATM_PI - lat) / ATM_PI;
+		alb = lng < 0.0 ? texture (atmGround0, vec2 ((lng + ATM_PI) / ATM_PI, v)).rgb
+		                : texture (atmGround1, vec2 (lng / ATM_PI, v)).rgb;
+	}
+	vec3 sunT = atm.misc.x > 0.5 ? SunTransmittance (n * atm.radii.x) : vec3 (1.0);
+	return alb * sunT * max (dot (n, atm.sunDir.xyz), 0.0);
 }
 
 // Map scattered radiance into displayable range

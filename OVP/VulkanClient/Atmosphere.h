@@ -28,6 +28,13 @@ public:
 	/// set with uniform data for "no atmosphere"
 	VkDescriptorSet NoAtmosphereSet () const { return noneSet; }
 
+	/// Compute the transmittance and multiple-scattering tables of an
+	/// atmosphere (images created by the caller, storage usage)
+	struct LutParams { float betaR[4], betaM[4], ozone[4], radii[4]; };
+	void ComputeLuts (const LutParams &p, const vkc::Image &transmittance, const vkc::Image &multiscat);
+	/// sampler of the tables (linear, clamped)
+	VkSampler LutSampler () const { return lutSampler; }
+
 private:
 	vkc::Context *ctx = nullptr;
 	class TextureManager *texmgr = nullptr;
@@ -37,6 +44,10 @@ private:
 	VkPipeline skyPipeline = VK_NULL_HANDLE;
 	vkc::Buffer noneUbo;
 	VkDescriptorSet noneSet = VK_NULL_HANDLE;
+	VkSampler lutSampler = VK_NULL_HANDLE;
+	VkDescriptorSetLayout lutSetLayout = VK_NULL_HANDLE;
+	VkPipelineLayout lutLayout = VK_NULL_HANDLE;
+	VkPipeline transmittancePipe = VK_NULL_HANDLE, multiscatPipe = VK_NULL_HANDLE;
 };
 
 class Atmosphere {
@@ -65,6 +76,9 @@ private:
 	double radius = 0.0, atmRadius = 0.0;
 	float betaR[4] = {}, betaM[4] = {};
 	float mieG = 0.76f, sunIntensity = 16.0f;
+	float ozone[4] = {};                  // ozone absorption [1/m] (Earth)
+	float groundAlbedo = 0.3f;            // for light reflected into the sky
+	vkc::Image transmittanceLut, multiscatLut; // precomputed tables
 	bool visible = false;
 	vkc::Buffer ubo[vkc::FRAMES_IN_FLIGHT];
 	VkDescriptorSet sets[vkc::FRAMES_IN_FLIGHT] = {};

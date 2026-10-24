@@ -83,16 +83,7 @@ vec3 Environment (vec3 d)
 	vec3 col = vec3 (0.0);
 	if (tg.x > 0.0 && tg.x <= tg.y) {
 		tMax = tg.x;
-		vec3 n = normalize (o + d * tg.x);
-		vec3 alb = atm.ground.rgb;
-		if (atm.ground.w > 0.5) {
-			float lat = asin (clamp (n.y, -1.0, 1.0)), lng = atan (n.z, n.x);
-			float v = (0.5 * PI - lat) / PI;
-			alb = lng < 0.0 ? texture (atmGround0, vec2 ((lng + PI) / PI, v)).rgb
-			                : texture (atmGround1, vec2 (lng / PI, v)).rgb;
-		}
-		vec3 sunT = atm.misc.x > 0.5 ? SunTransmittance (o + d * tg.x) : vec3 (1.0);
-		col = alb * frame.sunColor.rgb * sunT * max (dot (n, atm.sunDir.xyz), 0.0);
+		col = AtmGround (normalize (o + d * tg.x)) * frame.sunColor.rgb;
 	}
 	if (atm.misc.x > 0.5) {
 		vec3 T;

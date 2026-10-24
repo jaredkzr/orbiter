@@ -11,6 +11,8 @@
 
 #include "sky.vert.h"
 #include "sky.frag.h"
+#include "atm_transmittance.comp.h"
+#include "atm_multiscat.comp.h"
 
 namespace {
 
@@ -27,7 +29,11 @@ namespace {
 		float ground[4];
 		float cloud[4];
 		float water[4];
+		float ozone[4];
 	};
+
+	const VkFormat LUT_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
+	const VkExtent2D TRANSMITTANCE_SIZE = { 256, 64 }, MULTISCAT_SIZE = { 32, 32 }; // as in atmlut.glsl
 
 	constexpr uint32_t MAX_ATMOSPHERES = 64; // plus one "no atmosphere" set
 
@@ -47,26 +53,26 @@ bool AtmosphereRenderer::Init (vkc::Context *c, TextureManager *tm)
 {
 	ctx = c;
 	texmgr = tm;
-	VkDescriptorSetLayoutBinding b[5]{};
+	VkDescriptorSetLayoutBinding b[7]{};
 	b[0].binding = 0;
 	b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	b[0].descriptorCount = 1;
 	b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-	for (int i = 1; i < 5; i++) {
+	for (int i = 1; i < 7; i++) { // ground, clouds, transmittance and multiple-scattering tables
 		b[i].binding = i;
 		b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		b[i].descriptorCount = 1;
 		b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 	}
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 5;
+	lci.bindingCount = 7;
 	lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &setLayout));
 
 	const uint32_t nSets = MAX_ATMOSPHERES * vkc::FRAMES_IN_FLIGHT + 1;
 	VkDescriptorPoolSize ps[2] = {
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nSets },
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * nSets }
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6 * nSets }
 	};
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
@@ -91,6 +97,39 @@ bool AtmosphereRenderer::Init (vkc::Context *c, TextureManager *tm)
 	vkUpdateDescriptorSets (ctx->device, 1, &wr, 0, nullptr);
 	WriteGround (noneSet, texmgr->White(), texmgr->White());
 	WriteGround (noneSet, texmgr->White(), texmgr->White(), 3);
+	WriteGround (noneSet, texmgr->White(), texmgr->White(), 5); // (tables unused without an atmosphere)
+
+	// precomputed tables: sampler and compute pipelines
+	VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+	sci.magFilter = sci.minFilter = VK_FILTER_LINEAR;
+	sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+	VK_CHECK(vkCreateSampler (ctx->device, &sci, nullptr, &lutSampler));
+	VkDescriptorSetLayoutBinding lb[2] = {
+		{ 0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr },
+		{ 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr } };
+	VkDescriptorSetLayoutCreateInfo llci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+	llci.bindingCount = 2;
+	llci.pBindings = lb;
+	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &llci, nullptr, &lutSetLayout));
+	VkPushConstantRange lpcr{ VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(LutParams) };
+	VkPipelineLayoutCreateInfo lplci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+	lplci.setLayoutCount = 1;
+	lplci.pSetLayouts = &lutSetLayout;
+	lplci.pushConstantRangeCount = 1;
+	lplci.pPushConstantRanges = &lpcr;
+	VK_CHECK(vkCreatePipelineLayout (ctx->device, &lplci, nullptr, &lutLayout));
+	auto compute = [this](const unsigned char *code, size_t size) {
+		VkShaderModule cs = ctx->CreateShaderModule (code, size);
+		VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+		cpi.stage = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, cs, "main" };
+		cpi.layout = lutLayout;
+		VkPipeline pipe = VK_NULL_HANDLE;
+		VK_CHECK(vkCreateComputePipelines (ctx->device, VK_NULL_HANDLE, 1, &cpi, nullptr, &pipe));
+		vkDestroyShaderModule (ctx->device, cs, nullptr);
+		return pipe;
+	};
+	transmittancePipe = compute (spv_atm_transmittance_comp, spv_atm_transmittance_comp_size);
+	multiscatPipe = compute (spv_atm_multiscat_comp, spv_atm_multiscat_comp_size);
 
 	VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 	plci.setLayoutCount = 1;
@@ -118,9 +157,9 @@ bool AtmosphereRenderer::Init (vkc::Context *c, TextureManager *tm)
 	VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
 	VkPipelineColorBlendAttachmentState cba{};
 	cba.colorWriteMask = 0xF;
-	cba.blendEnable = VK_TRUE; // the sky is added to the star background
+	cba.blendEnable = VK_TRUE; // the sky is added to the star background, the ground covers it
 	cba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-	cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+	cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
 	cba.colorBlendOp = VK_BLEND_OP_ADD;
 	cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
 	cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
@@ -171,9 +210,67 @@ void AtmosphereRenderer::WriteGround (VkDescriptorSet set, VkTexture *west, VkTe
 	vkUpdateDescriptorSets (ctx->device, 0, nullptr, 2, cp);
 }
 
+void AtmosphereRenderer::ComputeLuts (const LutParams &p, const vkc::Image &trans, const vkc::Image &ms)
+{
+	// one-off (at the creation of a planet's visual): a temporary descriptor
+	// pool, executed and waited for
+	VkDescriptorPoolSize ps[2] = { { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 }, { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 } };
+	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+	pci.maxSets = 2;
+	pci.poolSizeCount = 2;
+	pci.pPoolSizes = ps;
+	VkDescriptorPool tmpPool;
+	VK_CHECK(vkCreateDescriptorPool (ctx->device, &pci, nullptr, &tmpPool));
+	VkDescriptorSetLayout l[2] = { lutSetLayout, lutSetLayout };
+	VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+	dai.descriptorPool = tmpPool;
+	dai.descriptorSetCount = 2;
+	dai.pSetLayouts = l;
+	VkDescriptorSet s[2];
+	VK_CHECK(vkAllocateDescriptorSets (ctx->device, &dai, s));
+	VkDescriptorImageInfo tOut{ VK_NULL_HANDLE, trans.view, VK_IMAGE_LAYOUT_GENERAL };
+	VkDescriptorImageInfo tIn{ lutSampler, trans.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+	VkDescriptorImageInfo mOut{ VK_NULL_HANDLE, ms.view, VK_IMAGE_LAYOUT_GENERAL };
+	VkWriteDescriptorSet wr[4]{};
+	for (auto &w : wr) w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, w.descriptorCount = 1;
+	wr[0].dstSet = s[0], wr[0].dstBinding = 0, wr[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, wr[0].pImageInfo = &tOut;
+	wr[1].dstSet = s[0], wr[1].dstBinding = 1, wr[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, wr[1].pImageInfo = &tIn;
+	wr[2].dstSet = s[1], wr[2].dstBinding = 0, wr[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, wr[2].pImageInfo = &mOut;
+	wr[3].dstSet = s[1], wr[3].dstBinding = 1, wr[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, wr[3].pImageInfo = &tIn;
+	vkUpdateDescriptorSets (ctx->device, 4, wr, 0, nullptr);
+	VkPipeline tp = transmittancePipe, mp = multiscatPipe;
+	VkPipelineLayout pl = lutLayout;
+	VkImage ti = trans.image, mi = ms.image;
+	ctx->ImmediateSubmit ([&](VkCommandBuffer cmd) {
+		vkc::ImageBarrier (cmd, ti, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+			VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+		vkc::ImageBarrier (cmd, mi, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+			VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+		vkCmdPushConstants (cmd, pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
+		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, tp);
+		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &s[0], 0, nullptr);
+		vkCmdDispatch (cmd, (TRANSMITTANCE_SIZE.width + 7) / 8, (TRANSMITTANCE_SIZE.height + 7) / 8, 1);
+		vkc::ImageBarrier (cmd, ti, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+			VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, mp);
+		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &s[1], 0, nullptr);
+		vkCmdDispatch (cmd, MULTISCAT_SIZE.width, MULTISCAT_SIZE.height, 1);
+		vkc::ImageBarrier (cmd, mi, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+			VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+	});
+	vkDestroyDescriptorPool (ctx->device, tmpPool, nullptr);
+}
+
 void AtmosphereRenderer::Shutdown ()
 {
 	if (!ctx) return;
+	vkDestroyPipeline (ctx->device, transmittancePipe, nullptr);
+	vkDestroyPipeline (ctx->device, multiscatPipe, nullptr);
+	vkDestroyPipelineLayout (ctx->device, lutLayout, nullptr);
+	vkDestroyDescriptorSetLayout (ctx->device, lutSetLayout, nullptr);
+	vkDestroySampler (ctx->device, lutSampler, nullptr);
 	vkDestroyPipeline (ctx->device, skyPipeline, nullptr);
 	vkDestroyPipelineLayout (ctx->device, skyLayout, nullptr);
 	vkDestroyDescriptorPool (ctx->device, pool, nullptr);
@@ -212,11 +309,48 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		betaM[3] = (float)(H / 6.0);
 		atmRadius = radius + std::min (ac->altlimit > 0.0 ? ac->altlimit : 1e30, 12.0 * H);
 		present = true;
+		// Earth's ozone layer absorbs in the orange (the blue of the sky at twilight)
+		char name[64];
+		oapiGetObjectName (hPlanet, name, 64);
+		if (!strcmp (name, "Earth"))
+			ozone[0] = 0.650e-6f, ozone[1] = 1.881e-6f, ozone[2] = 0.085e-6f;
 	}
 
 	if (const bool *r = (const bool*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_SURFACERIPPLE)) ripple = *r;
 
 	AtmosphereRenderer *ar = scene->Atm();
+	if (present) {
+		auto image = [this](VkExtent2D e) {
+			vkc::Image im;
+			VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+			ici.imageType = VK_IMAGE_TYPE_2D;
+			ici.format = LUT_FORMAT;
+			ici.extent = { e.width, e.height, 1 };
+			ici.mipLevels = 1;
+			ici.arrayLayers = 1;
+			ici.samples = VK_SAMPLE_COUNT_1_BIT;
+			ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+			ici.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+			VmaAllocationCreateInfo aci{};
+			aci.usage = VMA_MEMORY_USAGE_AUTO;
+			VK_CHECK(vmaCreateImage (ctx->allocator, &ici, &aci, &im.image, &im.alloc, nullptr));
+			VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+			vci.image = im.image;
+			vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+			vci.format = LUT_FORMAT;
+			vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+			VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &im.view));
+			return im;
+		};
+		transmittanceLut = image (TRANSMITTANCE_SIZE);
+		multiscatLut = image (MULTISCAT_SIZE);
+		AtmosphereRenderer::LutParams lp{};
+		memcpy (lp.betaR, betaR, sizeof(betaR));
+		memcpy (lp.betaM, betaM, sizeof(betaM));
+		memcpy (lp.ozone, ozone, sizeof(ozone));
+		lp.radii[0] = (float)radius, lp.radii[1] = (float)atmRadius, lp.radii[2] = groundAlbedo, lp.radii[3] = mieG;
+		ar->ComputeLuts (lp, transmittanceLut, multiscatLut);
+	}
 	for (uint32_t i = 0; i < vkc::FRAMES_IN_FLIGHT; i++) {
 		ubo[i] = ctx->CreateBuffer (sizeof(AtmUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
 		memset (ubo[i].mapped, 0, sizeof(AtmUniforms));
@@ -235,6 +369,22 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		vkUpdateDescriptorSets (ctx->device, 1, &wr, 0, nullptr);
 		ar->WriteGround (sets[i], nullptr, nullptr);
 		ar->WriteGround (sets[i], nullptr, nullptr, 3);
+		ar->WriteGround (sets[i], nullptr, nullptr, 5);
+		if (present) {
+			VkDescriptorImageInfo ii[2] = {
+				{ ar->LutSampler(), transmittanceLut.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+				{ ar->LutSampler(), multiscatLut.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL } };
+			VkWriteDescriptorSet lw[2]{};
+			for (int k = 0; k < 2; k++) {
+				lw[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+				lw[k].dstSet = sets[i];
+				lw[k].dstBinding = 5 + k;
+				lw[k].descriptorCount = 1;
+				lw[k].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+				lw[k].pImageInfo = &ii[k];
+			}
+			vkUpdateDescriptorSets (ctx->device, 2, lw, 0, nullptr);
+		}
 	}
 }
 
@@ -261,6 +411,8 @@ void Atmosphere::SetGround (VkTexture *west, VkTexture *east, const float colour
 Atmosphere::~Atmosphere ()
 {
 	vkc::Context *c = ctx;
+	vkc::Image tl = transmittanceLut, ml = multiscatLut;
+	ctx->DeferDestroy ([c, tl, ml]() mutable { c->DestroyImage (tl); c->DestroyImage (ml); });
 	VkDescriptorPool pool = scene->Atm()->Pool();
 	for (uint32_t i = 0; i < vkc::FRAMES_IN_FLIGHT; i++) {
 		vkc::Buffer b = ubo[i];
@@ -309,6 +461,7 @@ void Atmosphere::Update ()
 	u.radii[2] = mieG;
 	u.radii[3] = sunIntensity;
 	u.misc[0] = present ? 1.0f : 0.0f;
+	memcpy (u.ozone, ozone, sizeof(ozone));
 	memcpy (u.ground, groundColour, sizeof(groundColour));
 	if (cloudParams[3] > 0.0f)
 		if (const double *rot = (const double*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_CLOUDROTATION))
