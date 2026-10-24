@@ -381,9 +381,10 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner)
 	double windAlong = dotp (p.wind, ez);
 	VECTOR3 cross = p.wind - ez * windAlong;
 	double qCross = 0.5 * p.airDensity * dotp (cross, cross);
-	double bendScale = 0.0, bx = 0.0, by = 0.0;
+	double bendScale = 0.0, bx = 0.0, by = 0.0, stiff = 0.0;
 	if (qCross > 1e-3 * qJet && qJet > 0.0) {
 		bendScale = 2.0 * sqrt (qJet / qCross); // r d (exit radii)
+		stiff = std::min (0.4 * bendScale, 6.0); // the hot core near the exit resists
 		VECTOR3 cu = unit (cross);
 		bx = dotp (cu, ex), by = dotp (cu, ey);
 	}
@@ -396,22 +397,30 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner)
 	// bounds of the visible volume (exit radii)
 	double boxZ = 1.6 * len;
 	double boxR = 1.8 * (std::max (rj, 1.0) + boxZ * spread + std::max (0.0, boxZ - 0.5 * len) * mixSpread) + 0.5;
-	double bendMax = 0.0;
+	// (PlumeBend in plume.glsl; beyond bendLimit the bent jet has mixed out)
+	auto bendAt = [&](double z) {
+		if (bendScale <= 0.0) return 0.0;
+		const double SC = 1.46;
+		double zs = std::max (z - stiff, 0.0), s = zs / (1.6 * bendScale);
+		return s < SC ? bendScale * s * s * s : bendScale * SC * SC * SC + 4.0 * (zs - 1.6 * bendScale * SC);
+	};
+	double bendLimit = 2.2 * (1.2 * bendScale + 4.0);
 	if (bendScale > 0.0) {
-		const double SC = 1.46; // (PlumeBend in plume.glsl)
-		double s = boxZ / (1.6 * bendScale);
-		bendMax = s < SC ? bendScale * s * s * s : bendScale * SC * SC * SC + 4.0 * (boxZ - 1.6 * bendScale * SC);
+		// the jet ends where it has mixed out
+		double lo = 0.0, hi = boxZ;
+		if (bendAt (hi) > bendLimit) {
+			for (int k = 0; k < 30; k++) {
+				double m = 0.5 * (lo + hi);
+				(bendAt (m) > bendLimit ? hi : lo) = m;
+			}
+			boxZ = hi;
+		}
 	}
+	double bendMax = std::min (bendAt (boxZ), bendLimit);
 	double bmin[3] = { -boxR + std::min (0.0, bx * bendMax), -boxR + std::min (0.0, by * bendMax), -0.2 };
 	double bmax[3] = { boxR + std::max (0.0, bx * bendMax), boxR + std::max (0.0, by * bendMax), boxZ };
 
 	// a surface in the way: along the (bent) jet axis, in segments
-	auto bendAt = [&](double z) {
-		if (bendScale <= 0.0) return 0.0;
-		const double SC = 1.46;
-		double s = z / (1.6 * bendScale);
-		return s < SC ? bendScale * s * s * s : bendScale * SC * SC * SC + 4.0 * (z - 1.6 * bendScale * SC);
-	};
 	auto axisPoint = [&](double z) { // plume space (exit radii)
 		double b = bendAt (z);
 		return _V(bx * b, by * b, z);
@@ -440,8 +449,9 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner)
 	if (hit) {
 		double z = std::max (hitP.z, 0.0), bz = bendAt (z);
 		double sArc = sqrt (z * z + bz * bz), xi = sArc / len;
-		hitR = 1.0 + (rj - 1.0) * (1.0 - exp (-0.8 * sArc)) + sArc * spread + std::max (0.0, sArc - 0.5 * len) * mixSpread + 0.15 * bz;
-		hitHeat = exp (-3.0 * xi * xi) * (xi < 1.6 ? 1.0 : 0.0);
+		hitR = 1.0 + (rj - 1.0) * (1.0 - exp (-0.8 * sArc)) + sArc * spread + std::max (0.0, sArc - 0.5 * len) * mixSpread + 0.3 * bz;
+		double mixed = bendScale > 0.0 ? exp (-pow (bz / (1.2 * bendScale + 4.0), 2.0)) : 1.0;
+		hitHeat = exp (-3.0 * xi * xi) * (xi < 1.6 ? 1.0 : 0.0) * mixed;
 		// the spreading gas reaches further with more of the jet left
 		reach = 2.5 * hitR + 0.4 * std::max (0.0, 1.6 * len - sArc);
 		double ext = 1.3 * reach + hitR;
@@ -481,7 +491,7 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner)
 	pc.misc2[0] = p.tint ? 0.35f : 0.0f;
 	pc.misc2[1] = (float)(p.seed % 1024);
 	pc.misc2[2] = p.sunlight;
-	pc.bend[0] = (float)bx, pc.bend[1] = (float)by, pc.bend[2] = (float)bendScale;
+	pc.bend[0] = (float)bx, pc.bend[1] = (float)by, pc.bend[2] = (float)bendScale, pc.bend[3] = (float)stiff;
 	if (hit) {
 		pc.hit[0] = (float)hitP.x, pc.hit[1] = (float)hitP.y, pc.hit[2] = (float)hitP.z, pc.hit[3] = (float)hitHeat;
 		pc.hitN[0] = (float)hitN.x, pc.hitN[1] = (float)hitN.y, pc.hitN[2] = (float)hitN.z, pc.hitN[3] = (float)hitR;

@@ -22,7 +22,7 @@ struct PlumeParams { // must match PlumeRenderer::Params
 	vec4 outer;    // afterburning emission (rgb), -
 	vec4 misc;     // time [s], turbulence drift [exit radii/s], smoke extinction, turbulence
 	vec4 misc2;    // texture tint amount, seed, sunlight reaching the plume, -
-	vec4 bend;     // crossflow direction (xy, plume space), bending scale (z; 0: none), -
+	vec4 bend;     // crossflow direction (xy, plume space), bending scale (z; 0: none), length of the stiff core (w)
 	vec4 boxMin;   // bounding box (plume space, exit radii)
 	vec4 boxMax;
 	vec4 hit;      // where the jet meets a surface (xyz, plume space), w: its heat there (0: no surface)
@@ -42,14 +42,16 @@ layout(set = PLUME_SET, binding = PLUME_BINDING + 2) uniform sampler3D plumeDeta
 float PlumeSq (float x) { return x * x; }
 
 // lateral displacement of the jet axis by the crossflow at distance x
-// (jet in crossflow: x / (r d) = 1.6 (y / (r d))^(1/3), slope capped)
+// (jet in crossflow: x / (r d) = 1.6 (y / (r d))^(1/3), slope capped),
+// after the jet's stiff core; the bent jet mixes out quickly (PlumeMedium)
 float PlumeBend (PlumeParams P, float x)
 {
 	float rd = P.bend.z;
 	if (rd <= 0.0) return 0.0;
 	const float SC = 1.46; // where the slope reaches 4
-	float s = max (x, 0.0) / (1.6 * rd);
-	return s < SC ? rd * s * s * s : rd * SC * SC * SC + 4.0 * (x - 1.6 * rd * SC);
+	float z = max (x - P.bend.w, 0.0);
+	float s = z / (1.6 * rd);
+	return s < SC ? rd * s * s * s : rd * SC * SC * SC + 4.0 * (z - 1.6 * rd * SC);
 }
 
 // slope of the jet axis (lateral displacement per distance) at x
@@ -57,7 +59,7 @@ float PlumeBendSlope (PlumeParams P, float x)
 {
 	float rd = P.bend.z;
 	if (rd <= 0.0) return 0.0;
-	float s = max (x, 0.0) / (1.6 * rd);
+	float s = max (x - P.bend.w, 0.0) / (1.6 * rd);
 	return min (1.875 * s * s, 4.0);
 }
 
@@ -84,7 +86,7 @@ vec4 PlumeMedium (PlumeParams P, vec3 p)
 
 	// envelope radius
 	float R = 1.0 + (rj - 1.0) * (1.0 - exp (-max (x, 0.0) * 0.8)) + max (x, 0.0) * spread
-		+ max (0.0, x - 0.5 * len) * P.diamond.w + 0.15 * bend;
+		+ max (0.0, x - 0.5 * len) * P.diamond.w + 0.3 * bend;
 	R *= 1.0 + 0.12 * D * sin (6.2831853 * x / cell) * exp (-x / (5.0 * cell));
 	R *= 1.0 + turb * (n1 - 0.5) * 0.9;
 	float u = r / R;
@@ -94,6 +96,9 @@ vec4 PlumeMedium (PlumeParams P, vec3 p)
 	float prof = (1.0 - smoothstep (1.0 - edge, 1.0 + edge, u)) * mix (1.0, exp (-1.2 * u * u), mixing);
 	float rho = prof / (R * R); // density relative to the exit
 	float fadeIn = smoothstep (-0.15, 0.1, x), fadeOut = smoothstep (1.6, 1.15, xi);
+	// a jet bent over by a crossflow entrains air several times faster than
+	// a free jet: it cools and dilutes within a few diameters of turning
+	if (P.bend.z > 0.0) fadeOut *= exp (-PlumeSq (bend / (1.2 * P.bend.z + 4.0)));
 
 	// hot core, cooling as the jet mixes
 	float lam = mix (1.0, 0.3 + 1.4 * n2, min (turb, 1.0));
