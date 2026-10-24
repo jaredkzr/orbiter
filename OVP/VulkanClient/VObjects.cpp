@@ -7,6 +7,7 @@
 #include "Particles.h"
 #include "PlanetSurface.h"
 #include "Atmosphere.h"
+#include "Shadows.h"
 #include <map>
 #include <random>
 #include "VesselAPI.h"
@@ -222,6 +223,7 @@ void VVessel::Render (RenderPass pass)
 	bool internal = oapiCameraInternal() && oapiCameraTarget() == hObj;
 	bool vc = internal && oapiCockpitMode() == COCKPIT_VIRTUAL;
 	Mat4 mv = scene->ModelView (gpos, grot);
+	scene->Sunlight (gpos);
 
 	// virtual cockpit displays: MFD and HUD surfaces replace the textures of the registered groups
 	std::vector<std::vector<GroupTexOverride>> ovr;
@@ -254,6 +256,15 @@ void VVessel::Render (RenderPass pass)
 			(m < ovr.size() && !ovr[m].empty()) ? &ovr[m] : nullptr);
 	}
 	if (pass == RenderPass::Transparent) RenderExhaust ();
+}
+
+void VVessel::RenderShadow (ShadowMap &sm)
+{
+	if (length (gpos - sm.Centre()) > sm.Radius() + size) return;
+	Mat4 model = Mat4::FromRotTrans (grot, gpos - sm.Centre());
+	for (auto &rec : meshes)
+		if (rec.mesh && (rec.visMode & MESHVIS_EXTERNAL))
+			sm.DrawMesh (rec.mesh.get(), model * Mat4::Translation (rec.ofs), &rec.grpTransform, &rec.grpVisible);
 }
 
 void VVessel::RenderExhaust ()
@@ -379,12 +390,28 @@ void VBase::Render (RenderPass pass)
 	oapiGetGlobalPos (hBase, &gpos);
 	oapiGetRotationMatrix (hBase, &grot);
 	Mat4 mv = scene->ModelView (gpos, grot);
+	scene->Sunlight (gpos);
 	Mat4 pulled = Mat4::Scale (1.0 - GROUND_DEPTH_PULL, 1.0 - GROUND_DEPTH_PULL, 1.0 - GROUND_DEPTH_PULL) * mv;
 	for (auto &m : ground) scene->DrawMesh (m.get(), pulled, pass);
 	for (auto &m : structures) scene->DrawMesh (m.get(), mv, pass);
 }
 
+void VBase::RenderShadow (ShadowMap &sm)
+{
+	VECTOR3 gpos;
+	MATRIX3 grot;
+	oapiGetGlobalPos (hBase, &gpos);
+	oapiGetRotationMatrix (hBase, &grot);
+	Mat4 model = Mat4::FromRotTrans (grot, gpos - sm.Centre());
+	for (auto &m : structures) sm.DrawMesh (m.get(), model);
+}
+
 // ======================================================================
+
+void VPlanet::RenderShadow (ShadowMap &sm)
+{
+	for (auto &b : bases) b->RenderShadow (sm);
+}
 
 void VPlanet::UpdateBases ()
 {

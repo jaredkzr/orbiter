@@ -14,6 +14,8 @@ layout(set = 0, binding = 0) uniform Frame {
 	vec4 sunDir;
 	vec4 sunColor;
 	vec4 ambient;
+	mat4 shadowMat;   // view space -> shadow map (texture coordinates, depth)
+	vec4 shadowParams; // x: enabled, y: normal offset [m], z: depth bias, w: texel size
 } frame;
 
 layout(push_constant) uniform Tile {

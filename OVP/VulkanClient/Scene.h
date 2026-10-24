@@ -21,6 +21,7 @@ class StarSphere;
 class VkTexture;
 class TileRenderer;
 class AtmosphereRenderer;
+class ShadowMap;
 
 /// Per-draw push constants of the mesh pipeline (must match mesh.vert/frag)
 struct MeshPushConstants {
@@ -28,6 +29,7 @@ struct MeshPushConstants {
 	float diffuse[4];
 	float emissive[4]; // a: 1 = unlit
 	float specular[4]; // a: specular power
+	float light[4];    // rgb: sunlight reaching the object
 };
 
 enum class RenderPass { Opaque, Transparent };
@@ -51,6 +53,8 @@ public:
 	void Update ();
 	/// Record the scene into the current frame's command buffer
 	void Render ();
+	/// Render the sun shadow map (before the main rendering scope)
+	void RenderShadows ();
 
 	VObject *GetVisual (OBJHANDLE hObj);
 	void DeleteVisual (OBJHANDLE hObj);
@@ -67,6 +71,10 @@ public:
 	void DrawSphere (const Mat4 &modelView, const float colour[4], bool unlit);
 	double PixelSize (double size, double dist) const;
 
+	/// Fraction of the sun's disc visible from a global position (planets
+	/// may eclipse it); also sets the sunlight used by subsequent DrawMesh calls
+	double Sunlight (const VECTOR3 &gpos);
+	void SetObjectLight (double f) { objLight = (float)f; }
 	/// view-space position of a global point
 	VECTOR3 ViewPos (const VECTOR3 &gpos) const { return view.TransformPoint (gpos - camPos); }
 	/// view-space direction of a global direction
@@ -111,6 +119,8 @@ private:
 	VkTexture *exhaustTex = nullptr;
 	std::unique_ptr<TileRenderer> tiles;
 	std::unique_ptr<AtmosphereRenderer> atm;
+	std::unique_ptr<ShadowMap> shadows;
+	bool shadowsValid = false;
 
 	// sphere geometry for planets
 	vkc::Buffer sphereVtx, sphereIdx;
@@ -130,6 +140,7 @@ private:
 	// visuals
 	std::map<OBJHANDLE, std::unique_ptr<VObject>> visuals;
 	OBJHANDLE hSun = nullptr;
+	float objLight = 1.0f;
 };
 
 #endif // !__SCENE_H

@@ -9,7 +9,11 @@ layout(set = 0, binding = 0) uniform Frame {
 	vec4 sunDir;
 	vec4 sunColor;
 	vec4 ambient;
+	mat4 shadowMat;   // view space -> shadow map (texture coordinates, depth)
+	vec4 shadowParams; // x: enabled, y: normal offset [m], z: depth bias, w: texel size
 } frame;
+
+#include "shadow.glsl"
 
 layout(set = 1, binding = 0) uniform sampler2D surfTex;
 layout(set = 2, binding = 0) uniform sampler2D maskTex;
@@ -46,6 +50,7 @@ void main()
 		dPlanet = normalize(mat3(atm.viewToPlanet) * vPosView);
 		sunT = SunTransmittance(pPlanet);
 	}
+	if (tile.params.z < 0.5) sunT *= SunShadow(vPosView, N); // terrain receives shadows
 	vec3 col = base * (frame.ambient.rgb + frame.sunColor.rgb * sunT * max(ndl, 0.0));
 
 	if (tile.params.z > 0.5) { // cloud layer: lit from above, also seen from below

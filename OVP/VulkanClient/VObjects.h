@@ -15,6 +15,7 @@
 
 class VkMesh;
 class VESSEL;
+class ShadowMap;
 
 class VObject {
 public:
@@ -25,6 +26,7 @@ public:
 	virtual void Update ();
 	virtual void Render (RenderPass pass) = 0;
 	virtual void RenderSky () {}
+	virtual void RenderShadow (ShadowMap &sm) {}
 	virtual int VisEvent (DWORD msg, DWORD_PTR context) { return 0; }
 	virtual MESHHANDLE GetMesh (UINT idx) { return NULL; }
 
@@ -49,6 +51,7 @@ public:
 
 	void Update () override;
 	void Render (RenderPass pass) override;
+	void RenderShadow (ShadowMap &sm) override;
 	int VisEvent (DWORD msg, DWORD_PTR context) override;
 	MESHHANDLE GetMesh (UINT idx) override;
 
@@ -83,6 +86,7 @@ public:
 	~VBase ();
 	OBJHANDLE Handle () const { return hBase; }
 	void Render (RenderPass pass);
+	void RenderShadow (ShadowMap &sm);
 
 private:
 	OBJHANDLE hBase;
@@ -98,6 +102,7 @@ public:
 	void Update () override;
 	void Render (RenderPass pass) override;
 	void RenderSky () override;
+	void RenderShadow (ShadowMap &sm) override;
 
 private:
 	float colour[4];

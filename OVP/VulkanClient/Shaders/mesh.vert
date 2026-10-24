@@ -8,6 +8,8 @@ layout(set = 0, binding = 0) uniform Frame {
 	vec4 sunDir;     // direction towards the sun, view space
 	vec4 sunColor;
 	vec4 ambient;
+	mat4 shadowMat;   // view space -> shadow map (texture coordinates, depth)
+	vec4 shadowParams; // x: enabled, y: normal offset [m], z: depth bias, w: texel size
 } frame;
 
 layout(push_constant) uniform Draw {
@@ -15,6 +17,7 @@ layout(push_constant) uniform Draw {
 	vec4 diffuse;    // material diffuse colour, alpha
 	vec4 emissive;   // rgb: emissive colour, a: flags (1 = unlit)
 	vec4 specular;   // rgb: specular colour, a: specular power
+	vec4 light;     // rgb: sunlight reaching the object (eclipse)
 } draw;
 
 layout(location = 0) in vec3 inPos;

@@ -526,12 +526,47 @@ void Context::BindTarget (const Target &t)
 	cur.extent = t.extent;
 }
 
+void Context::BindDepthTarget (const Target &t)
+{
+	EndTarget ();
+	VkCommandBuffer cmd = Rec ();
+	ImageBarrier (cmd, t.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+		VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+		VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT,
+		VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+		VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+	VkRenderingAttachmentInfo dep{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+	dep.imageView = t.view;
+	dep.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+	dep.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	dep.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	dep.clearValue.depthStencil = { 1.0f, 0 };
+	VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+	ri.renderArea = { {0, 0}, t.extent };
+	ri.layerCount = 1;
+	ri.pDepthAttachment = &dep;
+	vkCmdBeginRendering (cmd, &ri);
+	SetViewportScissor (t.extent);
+	cur = CurrentTarget();
+	cur.active = true;
+	cur.depthOnly = true;
+	cur.image = t.image;
+	cur.format = t.format;
+	cur.extent = t.extent;
+}
+
 void Context::EndTarget ()
 {
 	if (!cur.active) return;
 	VkCommandBuffer cmd = frames[frameIndex].cmd;
 	vkCmdEndRendering (cmd);
-	if (!cur.backbuffer) {
+	if (cur.depthOnly) {
+		ImageBarrier (cmd, cur.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+			VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+			VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+			VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+	} else if (!cur.backbuffer) {
 		ImageBarrier (cmd, cur.image, VK_IMAGE_ASPECT_COLOR_BIT,
 			VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 			VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,

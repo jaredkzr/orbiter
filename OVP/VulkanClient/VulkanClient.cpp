@@ -172,6 +172,7 @@ void VulkanClient::clbkRenderScene ()
 	if (!ctx.BeginFrame ()) return;
 	frameActive = true;
 	r2d->Flush ();
+	scene->RenderShadows ();
 	ctx.BindBackbuffer (true);
 	scene->Render ();
 	Render2DOverlay (); // panels, MFDs and HUD

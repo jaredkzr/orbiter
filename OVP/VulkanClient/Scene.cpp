@@ -10,6 +10,7 @@
 #include "Particles.h"
 #include "PlanetSurface.h"
 #include "Atmosphere.h"
+#include "Shadows.h"
 #include <algorithm>
 #include <cstring>
 
@@ -28,7 +29,14 @@ namespace {
 		float sunDir[4];
 		float sunColor[4];
 		float ambient[4];
+		float shadowMat[16];   // view space -> shadow map
+		float shadowParams[4]; // enabled, normal offset, depth bias, texel size
 	};
+
+	// shadows are cast within this range of the camera target, in units of
+	// the camera distance (plus the target's size)
+	constexpr double SHADOW_RANGE = 1.5;
+	constexpr double SHADOW_RADIUS_MIN = 20.0, SHADOW_RADIUS_MAX = 5000.0; // [m]
 
 	struct StarPushConstants {
 		float viewProj[16];
@@ -69,38 +77,56 @@ bool Scene::Init ()
 {
 	ctx = gc->Ctx();
 
-	// per-frame uniform buffer (set 0)
-	VkDescriptorSetLayoutBinding b{};
-	b.binding = 0;
-	b.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-	b.descriptorCount = 1;
-	b.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+	shadows = std::make_unique<ShadowMap>();
+	shadows->Init (ctx);
+
+	// per-frame uniform buffer and the shadow map (set 0)
+	VkDescriptorSetLayoutBinding b[2]{};
+	b[0].binding = 0;
+	b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	b[0].descriptorCount = 1;
+	b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+	b[1].binding = 1;
+	b[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	b[1].descriptorCount = 1;
+	b[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 1;
-	lci.pBindings = &b;
+	lci.bindingCount = 2;
+	lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &frameLayout));
 
-	VkDescriptorPoolSize ps{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, vkc::FRAMES_IN_FLIGHT };
+	VkDescriptorPoolSize ps[2] = {
+		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, vkc::FRAMES_IN_FLIGHT },
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, vkc::FRAMES_IN_FLIGHT }
+	};
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.maxSets = vkc::FRAMES_IN_FLIGHT;
-	pci.poolSizeCount = 1;
-	pci.pPoolSizes = &ps;
+	pci.poolSizeCount = 2;
+	pci.pPoolSizes = ps;
 	VK_CHECK(vkCreateDescriptorPool (ctx->device, &pci, nullptr, &framePool));
 
 	for (uint32_t i = 0; i < vkc::FRAMES_IN_FLIGHT; i++) {
 		frameUbo[i] = ctx->CreateBuffer (sizeof(FrameUniforms), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
+		memset (frameUbo[i].mapped, 0, sizeof(FrameUniforms));
 		VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
 		dai.descriptorPool = framePool;
 		dai.descriptorSetCount = 1;
 		dai.pSetLayouts = &frameLayout;
 		VK_CHECK(vkAllocateDescriptorSets (ctx->device, &dai, &frameSet[i]));
 		VkDescriptorBufferInfo dbi{ frameUbo[i].buffer, 0, sizeof(FrameUniforms) };
-		VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-		wr.dstSet = frameSet[i];
-		wr.descriptorCount = 1;
-		wr.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-		wr.pBufferInfo = &dbi;
-		vkUpdateDescriptorSets (ctx->device, 1, &wr, 0, nullptr);
+		VkDescriptorImageInfo dii{ shadows->Sampler(), shadows->View(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		VkWriteDescriptorSet wr[2]{};
+		wr[0].sType = wr[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		wr[0].dstSet = wr[1].dstSet = frameSet[i];
+		wr[0].dstBinding = 0;
+		wr[0].descriptorCount = 1;
+		wr[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		wr[0].pBufferInfo = &dbi;
+		wr[1].dstBinding = 1;
+		wr[1].descriptorCount = 1;
+		wr[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		wr[1].pImageInfo = &dii;
+		vkUpdateDescriptorSets (ctx->device, 2, wr, 0, nullptr);
 	}
 
 	CreatePipelines ();
@@ -133,6 +159,8 @@ void Scene::Shutdown ()
 	tiles.reset();
 	if (atm) atm->Shutdown ();
 	atm.reset();
+	if (shadows) shadows->Shutdown ();
+	shadows.reset();
 	if (stars) stars->Shutdown ();
 	stars.reset();
 	ctx->DestroyBuffer (sphereVtx);
@@ -541,6 +569,54 @@ void Scene::UpdateCamera ()
 	proj[14] = (float)nearPlane;   // z = near  ->  depth = near / z
 }
 
+void Scene::RenderShadows ()
+{
+	shadowsValid = false;
+	if (!hSun) return;
+	OBJHANDLE hTgt = oapiCameraTarget ();
+	VECTOR3 c = camPos;
+	double size = 0.0;
+	if (hTgt) {
+		oapiGetGlobalPos (hTgt, &c);
+		size = oapiGetSize (hTgt);
+	}
+	double r = std::clamp (SHADOW_RANGE * length (camPos - c) + 2.0 * size, SHADOW_RADIUS_MIN, SHADOW_RADIUS_MAX);
+	if (Sunlight (c) <= 0.0) return; // the region is in darkness anyway
+	VECTOR3 sp;
+	oapiGetGlobalPos (hSun, &sp);
+	shadows->Begin (c, r, unit (sp - c));
+	for (auto &it : visuals) it.second->RenderShadow (*shadows);
+	shadows->End ();
+	shadowsValid = true;
+}
+
+double Scene::Sunlight (const VECTOR3 &gpos)
+{
+	if (!hSun) return 1.0;
+	VECTOR3 sp;
+	oapiGetGlobalPos (hSun, &sp);
+	VECTOR3 s = sp - gpos;
+	double ds = length (s);
+	double as = asin (std::min (1.0, oapiGetSize (hSun) / ds)); // angular radius of the sun
+	double f = 1.0;
+	for (DWORD i = 0; i < oapiGetGbodyCount(); i++) {
+		OBJHANDLE h = oapiGetGbodyByIndex (i);
+		if (h == hSun) continue;
+		VECTOR3 pp;
+		oapiGetGlobalPos (h, &pp);
+		VECTOR3 p = pp - gpos;
+		double dp = length (p);
+		if (dp >= ds) continue; // behind the sun
+		double ap = asin (std::min (1.0, oapiGetSize (h) / dp)); // angular radius of the body
+		double theta = acos (std::clamp (dotp (s, p) / (ds * dp), -1.0, 1.0));
+		// linear transition across the penumbra
+		double vis = std::clamp ((theta - (ap - as)) / (2.0 * as), 0.0, 1.0);
+		f = std::min (f, vis);
+	}
+	objLight = (float)f;
+	return f;
+}
+
 Mat4 Scene::ModelView (const VECTOR3 &gpos, const MATRIX3 &grot) const
 {
 	return view * Mat4::FromRotTrans (grot, gpos - camPos);
@@ -574,7 +650,32 @@ void Scene::Render ()
 	VECTOR3 sv = view.TransformPoint (sunDir);
 	fu.sunDir[0] = (float)sv.x, fu.sunDir[1] = (float)sv.y, fu.sunDir[2] = (float)sv.z;
 	fu.sunColor[0] = fu.sunColor[1] = fu.sunColor[2] = 1.0f;
-	fu.ambient[0] = fu.ambient[1] = fu.ambient[2] = 0.03f;
+	// ambient light: the user's ambient level, plus skylight in daylight
+	// inside an atmosphere (tinted with the sky colour)
+	const DWORD *amb = (const DWORD*)gc->GetConfigParam (CFGPRM_AMBIENTLEVEL);
+	float a0 = std::max (0.01f, amb ? (float)*amb / 255.0f * 0.5f : 0.03f);
+	fu.ambient[0] = fu.ambient[1] = fu.ambient[2] = a0;
+	if (OBJHANDLE hp = oapiCameraProxyGbody ()) {
+		const ATMCONST *ac = oapiPlanetHasAtmosphere (hp) ? oapiGetPlanetAtmConstants (hp) : nullptr;
+		if (ac && ac->rho0 > 0.0) {
+			VECTOR3 pp;
+			oapiGetGlobalPos (hp, &pp);
+			ATMPARAM prm;
+			oapiGetPlanetAtmParams (hp, length (camPos - pp), &prm);
+			double f = 0.35 * std::sqrt (std::clamp (prm.rho / ac->rho0, 0.0, 1.0)) * Sunlight (camPos);
+			fu.ambient[0] += (float)(f * ac->color0.x);
+			fu.ambient[1] += (float)(f * ac->color0.y);
+			fu.ambient[2] += (float)(f * ac->color0.z);
+		}
+	}
+	if (shadowsValid) {
+		shadows->ReceiverMatrix (camPos, camRot).ToFloat (fu.shadowMat);
+		double texel = shadows->TexelSize ();
+		fu.shadowParams[0] = 1.0f;
+		fu.shadowParams[1] = (float)(1.5 * texel);      // normal offset [m]
+		fu.shadowParams[2] = (float)(texel / (6.0 * shadows->Radius())); // depth bias (one texel in depth units)
+		fu.shadowParams[3] = 1.0f / ShadowMap::SIZE;
+	}
 	memcpy (frameUbo[fi].mapped, &fu, sizeof(fu));
 
 	// background stars
@@ -645,6 +746,7 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 		pc.emissive[3] = (grp.flags & VkMesh::GRP_NOLIGHT) ? 1.0f : 0.0f;
 		pc.specular[0] = m.specular.r, pc.specular[1] = m.specular.g, pc.specular[2] = m.specular.b;
 		pc.specular[3] = m.power;
+		pc.light[0] = pc.light[1] = pc.light[2] = objLight;
 		if (ovr) { // self-illuminated display
 			pc.diffuse[0] = pc.diffuse[1] = pc.diffuse[2] = pc.diffuse[3] = 1.0f;
 			pc.emissive[3] = 1.0f;
@@ -667,6 +769,7 @@ void Scene::DrawSphere (const Mat4 &modelView, const float colour[4], bool unlit
 	MeshPushConstants pc{};
 	modelView.ToFloat (pc.modelView);
 	memcpy (pc.diffuse, colour, 4 * sizeof(float));
+	pc.light[0] = pc.light[1] = pc.light[2] = 1.0f;
 	pc.emissive[3] = unlit ? 1.0f : 0.0f;
 	vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 	vkCmdDrawIndexed (cmd, sphereNIdx, 1, 0, 0, 0);

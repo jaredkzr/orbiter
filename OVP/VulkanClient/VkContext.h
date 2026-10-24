@@ -77,6 +77,9 @@ namespace vkc {
 		// first use in a frame.
 		void BindBackbuffer (bool withDepth);
 		void BindTarget (const Target &t);
+		/// Depth-only target (e.g. a shadow map), cleared to 1. Kept in
+		/// shader-read layout between rendering scopes.
+		void BindDepthTarget (const Target &t);
 		void EndTarget ();
 		bool BoundTo (VkImage image) const { return cur.active && !cur.backbuffer && cur.image == image; }
 		VkFormat BoundFormat () const { return cur.format; }
@@ -148,6 +151,7 @@ namespace vkc {
 			bool active = false;
 			bool backbuffer = false;
 			bool depth = false;
+			bool depthOnly = false;
 			VkImage image = VK_NULL_HANDLE;
 			VkFormat format = VK_FORMAT_UNDEFINED;
 			VkExtent2D extent{};
