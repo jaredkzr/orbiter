@@ -4,6 +4,8 @@
 #include "Scene.h"
 #include "AO.h"
 #include "TAA.h"
+#include "Fsr.h"
+#include <chrono>
 #include "VObjects.h"
 #include "VkMesh.h"
 #include "VkTexture.h"
@@ -161,6 +163,15 @@ bool Scene::Init ()
 	if (const char *e = getenv ("ORBITER_VK_TAA")) taaEnabled = atoi (e) != 0;
 	taa = std::make_unique<TemporalAA>();
 	taa->Init (ctx);
+	// temporal upscaler: FSR 3 if built in (ORBITER_VK_UPSCALER = fsr or taa);
+	// it needs a single-sampled scene
+	fsr = std::make_unique<FsrUpscaler>();
+	if (taaEnabled && FsrUpscaler::Available () && ctx->sceneSamples == VK_SAMPLE_COUNT_1_BIT) {
+		const char *u = getenv ("ORBITER_VK_UPSCALER");
+		useFsr = !(u && !strcmp (u, "taa"));
+	}
+	if (useFsr) fsr->Init (ctx);
+	oapiWriteLogV ("VulkanClient: temporal anti-aliasing: %s", !taaEnabled ? "off" : useFsr ? "FSR 3" : "TAA");
 	WriteAODescriptors ();
 
 	atm = std::make_unique<AtmosphereRenderer>();
@@ -218,6 +229,8 @@ void Scene::Shutdown ()
 	ao.reset();
 	if (taa) taa->Shutdown ();
 	taa.reset();
+	if (fsr) fsr->Shutdown ();
+	fsr.reset();
 	ctx->DestroyBuffer (sphereVtx);
 	ctx->DestroyBuffer (sphereIdx);
 	for (auto &u : frameUbo) ctx->DestroyBuffer (u);
@@ -746,9 +759,16 @@ void Scene::BeginFrame ()
 			for (; i; i /= b) { f /= b; r += f * (i % b); }
 			return r;
 		};
-		jitterIndex = jitterIndex % 16 + 1;
-		jitter[0] = (float)((halton (jitterIndex, 2) - 0.5) * 2.0 / viewW);
-		jitter[1] = (float)((halton (jitterIndex, 3) - 0.5) * 2.0 / viewH);
+		if (useFsr) { // the upscaler's sequence (longer when upscaling)
+			FsrUpscaler::Jitter (jitterIndex++, viewW, ctx->Extent().width, jitterPixels[0], jitterPixels[1]);
+		} else {
+			jitterIndex = jitterIndex % 16 + 1;
+			jitterPixels[0] = (float)(halton (jitterIndex, 2) - 0.5);
+			jitterPixels[1] = (float)(halton (jitterIndex, 3) - 0.5);
+		}
+		// (Vulkan clip space: y down, as pixel rows)
+		jitter[0] = 2.0f * jitterPixels[0] / viewW;
+		jitter[1] = 2.0f * jitterPixels[1] / viewH;
 	}
 	proj[8] = jitter[0]; // clip.xy += jitter * z (= w)
 	proj[9] = jitter[1];
@@ -883,8 +903,28 @@ VkImageView Scene::ResolveTemporal (VkExtent2D &size)
 		Mat4 skyMotion = Mat4::FromFloat (prevProj) * rot;
 		// discard the history after a camera cut
 		bool reset = !havePrev || length (camPos - prevCamPos) > 5e3;
-		out = taa->Resolve (ctx->SceneView (), ao->PrepassView (), ao->VelocityView (), skyMotion,
-			proj[0], -proj[5], reset);
+		VkImageView up = VK_NULL_HANDLE;
+		if (useFsr) {
+			double t = std::chrono::duration<double> (std::chrono::steady_clock::now().time_since_epoch()).count();
+			FsrUpscaler::Inputs in{};
+			in.color = ctx->SceneImage (), in.colorFormat = ctx->sceneFormat;
+			in.depth = ctx->DepthImage ();
+			in.velocity = ao->VelocityImage (), in.velocityFormat = AmbientOcclusion::VELOCITY_FORMAT;
+			in.jitter[0] = jitterPixels[0], in.jitter[1] = jitterPixels[1];
+			in.frameTime = lastFrameTime < 0.0 ? 1.0f / 60.0f : (float)std::min (t - lastFrameTime, 0.5);
+			lastFrameTime = t;
+			in.nearPlane = (float)nearPlane;
+			in.fovY = (float)(2.0 * oapiCameraAperture ());
+			in.reset = reset;
+			up = fsr->Dispatch (in);
+			if (up) {
+				out = up;
+				size = ctx->Extent ();
+			}
+		}
+		if (!up)
+			out = taa->Resolve (ctx->SceneView (), ao->PrepassView (), ao->VelocityView (), skyMotion,
+				proj[0], -proj[5], reset);
 	}
 	// this frame's camera and object poses, for the next frame's motion
 	prevCamPos = camPos;

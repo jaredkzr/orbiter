@@ -163,7 +163,11 @@ private:
 	VkPipeline meshPrepass = VK_NULL_HANDLE;
 	std::unique_ptr<class AmbientOcclusion> ao;
 	std::unique_ptr<class TemporalAA> taa;
-	bool taaEnabled = true;
+	std::unique_ptr<class FsrUpscaler> fsr;
+	bool taaEnabled = true;  // temporal anti-aliasing (jitter, motion vectors)
+	bool useFsr = false;     // ... by the FSR 3 upscaler instead of our own
+	float jitterPixels[2] = { 0.0f, 0.0f };
+	double lastFrameTime = -1.0;
 	float objMotion[16] = {};
 	float jitter[2] = { 0.0f, 0.0f };     // projection jitter (NDC)
 	uint32_t jitterIndex = 0;

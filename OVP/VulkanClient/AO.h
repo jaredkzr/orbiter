@@ -38,6 +38,7 @@ public:
 	/// prepass images (shader-read layout after the prepass)
 	VkImageView PrepassView () const { return prepassColor.view; }
 	VkImageView VelocityView () const { return velocity.view; }
+	VkImage VelocityImage () const { return velocity.image; }
 	VkExtent2D Extent () const { return extent; }
 
 	bool enabled = true;

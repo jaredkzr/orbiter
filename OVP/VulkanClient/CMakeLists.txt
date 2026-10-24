@@ -110,6 +110,7 @@ add_library(VulkanClient SHARED
 	LegacyTex.cpp
 	AO.cpp
 	TAA.cpp
+	Fsr.cpp
 	StarSphere.cpp
 	Draw2D.cpp
 	Sketchpad.cpp
@@ -148,6 +149,16 @@ target_link_libraries(VulkanClient PRIVATE
 )
 
 add_dependencies(VulkanClient ${OrbiterTgt} Orbitersdk)
+
+# AMD FSR 3 upscaler (FidelityFX SDK, MIT)
+option(ORBITER_VK_FSR "Build the AMD FSR 3 upscaler into the Vulkan client" ON)
+if(ORBITER_VK_FSR)
+	include(ffx/FidelityFX.cmake)
+	if(FFX_FOUND)
+		target_link_libraries(VulkanClient PRIVATE ffx_fsr3_vk)
+		target_compile_definitions(VulkanClient PRIVATE VKC_HAVE_FSR=1)
+	endif()
+endif()
 
 set_target_properties(VulkanClient PROPERTIES
 	FOLDER OVP

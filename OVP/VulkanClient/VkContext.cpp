@@ -147,23 +147,52 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 	qci.queueCount = 1;
 	qci.pQueuePriorities = &prio;
 
+	// supported features: the upscaler's compute shaders use 16-bit
+	// arithmetic and wave size control where the device has them
+	VkPhysicalDeviceCoherentMemoryFeaturesAMD sCoh{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COHERENT_MEMORY_FEATURES_AMD};
+	VkPhysicalDeviceVulkan12Features s12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+	VkPhysicalDeviceVulkan13Features s13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+	VkPhysicalDeviceFeatures2 sf{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+	sf.pNext = &s12, s12.pNext = &s13;
+	uint32_t nExt = 0;
+	vkEnumerateDeviceExtensionProperties (physicalDevice, nullptr, &nExt, nullptr);
+	std::vector<VkExtensionProperties> exts (nExt);
+	vkEnumerateDeviceExtensionProperties (physicalDevice, nullptr, &nExt, exts.data());
+	auto hasExt = [&](const char *name) {
+		for (auto &e : exts) if (!strcmp (e.extensionName, name)) return true;
+		return false;
+	};
+	bool coherent = hasExt (VK_AMD_DEVICE_COHERENT_MEMORY_EXTENSION_NAME);
+	if (coherent) s13.pNext = &sCoh;
+	vkGetPhysicalDeviceFeatures2 (physicalDevice, &sf);
+
+	VkPhysicalDeviceCoherentMemoryFeaturesAMD fCoh{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COHERENT_MEMORY_FEATURES_AMD};
+	fCoh.deviceCoherentMemory = sCoh.deviceCoherentMemory;
+	VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+	f12.shaderFloat16 = s12.shaderFloat16;
 	VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
 	f13.dynamicRendering = VK_TRUE;
 	f13.synchronization2 = VK_TRUE;
 	f13.shaderDemoteToHelperInvocation = VK_TRUE; // discard in the 2D shader
+	f13.subgroupSizeControl = s13.subgroupSizeControl;
+	f13.computeFullSubgroups = s13.computeFullSubgroups;
 	VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
-	f2.pNext = &f13;
+	f2.pNext = &f12, f12.pNext = &f13;
+	if (coherent && sCoh.deviceCoherentMemory) f13.pNext = &fCoh;
 	f2.features.samplerAnisotropy = deviceFeatures.samplerAnisotropy;
 	f2.features.textureCompressionBC = deviceFeatures.textureCompressionBC;
 	f2.features.largePoints = deviceFeatures.largePoints;
+	f2.features.shaderInt16 = deviceFeatures.shaderInt16;
 
-	const char *devExt[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+	std::vector<const char*> devExt;
+	if (!offscreen) devExt.push_back (VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+	if (coherent && sCoh.deviceCoherentMemory) devExt.push_back (VK_AMD_DEVICE_COHERENT_MEMORY_EXTENSION_NAME);
 	VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
 	dci.pNext = &f2;
 	dci.queueCreateInfoCount = 1;
 	dci.pQueueCreateInfos = &qci;
-	dci.enabledExtensionCount = offscreen ? 0 : 1;
-	dci.ppEnabledExtensionNames = devExt;
+	dci.enabledExtensionCount = (uint32_t)devExt.size();
+	dci.ppEnabledExtensionNames = devExt.data();
 	if (vkCreateDevice (physicalDevice, &dci, nullptr, &device) != VK_SUCCESS) {
 		oapiWriteLogError ("VulkanClient: could not create logical device");
 		return false;
@@ -346,7 +375,7 @@ bool Context::CreateSwapchain ()
 	ici.arrayLayers = 1;
 	ici.samples = sceneSamples; // the depth buffer belongs to the (multisampled) scene
 	ici.tiling = VK_IMAGE_TILING_OPTIMAL;
-	ici.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+	ici.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT; // (read by the upscaler)
 	VmaAllocationCreateInfo aci{};
 	aci.usage = VMA_MEMORY_USAGE_AUTO;
 	VK_CHECK(vmaCreateImage (allocator, &ici, &aci, &depth.image, &depth.alloc, nullptr));

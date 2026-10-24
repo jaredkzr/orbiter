@@ -1,0 +1,192 @@
+#!/usr/bin/env python3
+# Copyright (c) Martin Schweiger
+# Licensed under the MIT License
+#
+# Generates the shader permutation headers of the FidelityFX SDK's Vulkan
+# backend (<pass>[_wave64][_16bit]_permutations.h) for the FSR 3 upscaler,
+# in place of the SDK's Windows-only shader compiler. Each pass is compiled
+# with glslangValidator for a chosen subset of the permutation options; the
+# descriptor reflection the backend needs is read from the SPIR-V.
+#
+# usage: ffx_gen_shaders.py <glslangValidator> <sdk dir> <output dir> <permutation-list>
+#   permutation-list: comma-separated option masks (bits in OPTIONS order);
+#   requests for masks not in the list fall back to the mask without bit 0
+#   (Lanczos lookup table -> reference Lanczos)
+
+import hashlib
+import os
+import struct
+import subprocess
+import sys
+
+OPTIONS = [  # permutation options, in key bit order
+    "FFX_FSR3UPSCALER_OPTION_REPROJECT_USE_LANCZOS_TYPE",
+    "FFX_FSR3UPSCALER_OPTION_HDR_COLOR_INPUT",
+    "FFX_FSR3UPSCALER_OPTION_LOW_RESOLUTION_MOTION_VECTORS",
+    "FFX_FSR3UPSCALER_OPTION_JITTERED_MOTION_VECTORS",
+    "FFX_FSR3UPSCALER_OPTION_INVERTED_DEPTH",
+    "FFX_FSR3UPSCALER_OPTION_APPLY_SHARPENING",
+]
+BASE_DEFINES = [
+    "FFX_GPU=1", "FFX_GLSL=1",
+    "FFX_FSR3UPSCALER_OPTION_UPSAMPLE_SAMPLERS_USE_DATA_HALF=0",
+    "FFX_FSR3UPSCALER_OPTION_ACCUMULATE_SAMPLERS_USE_DATA_HALF=0",
+    "FFX_FSR3UPSCALER_OPTION_REPROJECT_SAMPLERS_USE_DATA_HALF=1",
+    "FFX_FSR3UPSCALER_OPTION_POSTPROCESSLOCKSTATUS_SAMPLERS_USE_DATA_HALF=0",
+    "FFX_FSR3UPSCALER_OPTION_UPSAMPLE_USE_LANCZOS_TYPE=2",
+]
+
+# --- SPIR-V reflection (descriptor bindings) ---------------------------------
+
+def reflect(spv):
+    w = struct.unpack("<%dI" % (len(spv) // 4), spv)
+    names, deco, consts, types, ptrs, variables = {}, {}, {}, {}, {}, []
+    i = 5
+    while i < len(w):
+        op, n = w[i] & 0xFFFF, w[i] >> 16
+        a = w[i + 1:i + n]
+        if op == 5:  # OpName
+            names[a[0]] = bytes(struct.pack("<%dI" % (len(a) - 1), *a[1:])).split(b"\0")[0].decode()
+        elif op == 71:  # OpDecorate
+            deco.setdefault(a[0], {})[a[1]] = a[2] if len(a) > 2 else True
+        elif op == 43:  # OpConstant
+            consts[a[1]] = a[2]
+        elif op == 25:  # OpTypeImage
+            types[a[0]] = ("image", a[6])  # sampled: 1 sampled image, 2 storage
+        elif op == 26:
+            types[a[0]] = ("sampler",)
+        elif op == 27:
+            types[a[0]] = ("combined",)
+        elif op == 28:  # OpTypeArray
+            types[a[0]] = ("array", a[1], consts.get(a[2], 1))
+        elif op == 29:
+            types[a[0]] = ("array", a[1], 0)
+        elif op == 30:
+            types[a[0]] = ("struct",)
+        elif op == 32:  # OpTypePointer
+            ptrs[a[0]] = (a[1], a[2])
+        elif op == 59:  # OpVariable
+            variables.append((a[1], a[0], a[2]))
+        i += n
+    res = {k: [] for k in ("CBV", "TextureSRV", "TextureUAV", "BufferSRV", "BufferUAV", "Sampler", "RTAccelerationStructure")}
+    for vid, ptype, sc in variables:
+        d = deco.get(vid, {})
+        if 33 not in d:  # no Binding
+            continue
+        _, t = ptrs[ptype]
+        count = 1
+        while types.get(t, ("",))[0] == "array":
+            count *= types[t][2]
+            t = types[t][1]
+        kind = types.get(t, ("",))
+        name = names.get(vid) or names.get(t, "")
+        if kind[0] == "image":
+            cat = "TextureSRV" if kind[1] == 1 else "TextureUAV"
+        elif kind[0] == "sampler":
+            cat = "Sampler"
+        elif kind[0] == "struct":
+            td = deco.get(t, {})
+            if sc == 2 and 2 in td:  # Uniform + Block
+                cat = "CBV"
+            else:
+                cat = "BufferSRV" if 24 in d else "BufferUAV"
+        else:
+            raise RuntimeError("unsupported resource type for %s" % name)
+        res[cat].append((name, d[33], count, d.get(34, 0)))
+    for k in res:
+        res[k].sort(key=lambda r: (r[3], r[1]))
+    return res
+
+# --- compilation ---------------------------------------------------------------
+
+def compile_pass(glslang, src, incs, defines, out):
+    cmd = [glslang, "-V", "--target-env", "vulkan1.2", "-S", "comp", "-Os", "-o", out]
+    cmd += ["-I" + i for i in incs] + ["-D" + d for d in defines] + [src]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.stderr.write(r.stdout + r.stderr)
+        raise SystemExit("compilation failed: %s %s" % (src, " ".join(defines)))
+    with open(out, "rb") as f:
+        return f.read()
+
+def write_header(path, name, perms):
+    # perms: list of (mask, spv); identical binaries are shared
+    unique, index_of = [], {}
+    key_to_index = {}
+    for mask, spv in perms:
+        h = hashlib.md5(spv).hexdigest()
+        if h not in index_of:
+            index_of[h] = len(unique)
+            unique.append((h, spv, reflect(spv)))
+        key_to_index[mask] = index_of[h]
+    with open(path, "w") as f:
+        f.write("// generated by ffx_gen_shaders.py\n#include <stdint.h>\n\n")
+        for h, spv, refl in unique:
+            pn = "%s_%s" % (name, h)
+            for cat, items in refl.items():
+                if not items:
+                    continue
+                f.write("static const char* g_%s_%sResourceNames[] = { %s };\n" % (pn, cat, ", ".join('"%s"' % r[0] for r in items)))
+                for field, idx in (("Bindings", 1), ("Counts", 2), ("Sets", 3)):
+                    f.write("static const uint32_t g_%s_%sResource%s[] = { %s };\n" % (pn, cat, field, ", ".join(str(r[idx]) for r in items)))
+            f.write("static const uint32_t g_%s_size = %d;\n" % (pn, len(spv)))
+            f.write("static const unsigned char g_%s_data[] = {\n" % pn)
+            for k in range(0, len(spv), 24):
+                f.write("    " + ",".join("0x%02x" % b for b in spv[k:k + 24]) + ",\n")
+            f.write("};\n\n")
+        f.write("typedef union %s_PermutationKey {\n    struct {\n" % name)
+        for o in OPTIONS:
+            f.write("        uint32_t %s : 1;\n" % o)
+        f.write("    };\n    uint32_t index;\n} %s_PermutationKey;\n\n" % name)
+        f.write("typedef struct %s_PermutationInfo {\n    const uint32_t       blobSize;\n    const unsigned char* blobData;\n" % name)
+        for prefix, label in (("constantBuffer", "ConstantBuffers"), ("srvTexture", "SRVTextures"), ("uavTexture", "UAVTextures"),
+                              ("srvBuffer", "SRVBuffers"), ("uavBuffer", "UAVBuffers"), ("sampler", "Samplers"),
+                              ("rtAccelerationStructure", "RTAccelerationStructures")):
+            f.write("\n    const uint32_t  num%s;\n    const char**    %sNames;\n    const uint32_t* %sBindings;\n"
+                    "    const uint32_t* %sCounts;\n    const uint32_t* %sSpaces;\n" % (label, prefix, prefix, prefix, prefix))
+        f.write("} %s_PermutationInfo;\n\n" % name)
+        # permutations not generated: the reference Lanczos variant instead of
+        # the lookup-table one (bit 0), else the first permutation
+        f.write("static const uint32_t g_%s_IndirectionTable[] = {\n" % name)
+        for k in range(1 << len(OPTIONS)):
+            f.write("    %d,\n" % key_to_index.get(k, key_to_index.get(k & ~1, 0)))
+        f.write("};\n\n")
+        f.write("static const %s_PermutationInfo g_%s_PermutationInfo[] = {\n" % (name, name))
+        for h, spv, refl in unique:
+            pn = "%s_%s" % (name, h)
+            f.write("    { g_%s_size, g_%s_data, " % (pn, pn))
+            for cat in ("CBV", "TextureSRV", "TextureUAV", "BufferSRV", "BufferUAV", "Sampler", "RTAccelerationStructure"):
+                n = len(refl[cat])
+                if n:
+                    f.write("%d, g_%s_%sResourceNames, g_%s_%sResourceBindings, g_%s_%sResourceCounts, g_%s_%sResourceSets, "
+                            % (n, pn, cat, pn, cat, pn, cat, pn, cat))
+                else:
+                    f.write("0, 0, 0, 0, 0, ")
+            f.write("},\n")
+        f.write("};\n")
+
+def main():
+    glslang, sdk, out, masks = sys.argv[1], sys.argv[2], sys.argv[3], [int(m, 0) for m in sys.argv[4].split(",")]
+    gpu = os.path.join(sdk, "include", "FidelityFX", "gpu")
+    incs = [gpu, os.path.join(gpu, "fsr3upscaler")]
+    src_dir = os.path.join(sdk, "src", "backends", "vk", "shaders", "fsr3upscaler")
+    os.makedirs(out, exist_ok=True)
+    tmp = os.path.join(out, "spv")
+    os.makedirs(tmp, exist_ok=True)
+    for fn in sorted(os.listdir(src_dir)):
+        if not fn.endswith(".glsl"):
+            continue
+        name = fn[:-5]
+        for half in (0, 1):
+            perms = []
+            for mask in masks:
+                defs = BASE_DEFINES + ["FFX_HALF=%d" % half] + ["%s=%d" % (o, (mask >> b) & 1) for b, o in enumerate(OPTIONS)]
+                spv = compile_pass(glslang, os.path.join(src_dir, fn), incs, defs, os.path.join(tmp, "%s_%d_%d.spv" % (name, half, mask)))
+                perms.append((mask, spv))
+            suffix = "_16bit" if half else ""
+            # GLSL has no wave size selection: the wave64 tables share the binaries
+            write_header(os.path.join(out, "%s%s_permutations.h" % (name, suffix)), name + suffix, perms)
+            write_header(os.path.join(out, "%s_wave64%s_permutations.h" % (name, suffix)), name + "_wave64" + suffix, perms)
+
+if __name__ == "__main__":
+    main()

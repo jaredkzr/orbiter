@@ -80,6 +80,9 @@ namespace vkc {
 		/// backbuffer's depth buffer); kept in shader-read layout between scopes
 		void BindScene (bool withDepth);
 		VkImageView SceneView () const { return sceneColor.view; }
+		VkImage SceneImage () const { return sceneColor.image; }
+		/// depth buffer of the scene (depth-attachment layout after the scene)
+		VkImage DepthImage () const { return depth.image; }
 		/// incremented when the swapchain (and the scene image) is recreated
 		uint32_t SwapchainGeneration () const { return swapchainGeneration; }
 		void BindTarget (const Target &t);

@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <vector>
 
 // ======================================================================
@@ -134,6 +135,14 @@ bool TextureManager::Init (vkc::Context *c)
 	sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
 	sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
 	sci.maxLod = VK_LOD_CLAMP_NONE;
+	// with temporal anti-aliasing (ORBITER_VK_TAA, default on) the jittered
+	// frames accumulate texture detail: sharper mip selection, by the render
+	// scale and one level more
+	{
+		const char *taa = getenv ("ORBITER_VK_TAA");
+		if (!(taa && atoi (taa) == 0))
+			sci.mipLodBias = std::log2 (ctx->RenderScale ()) - 1.0f;
+	}
 	if (ctx->deviceFeatures.samplerAnisotropy) {
 		sci.anisotropyEnable = VK_TRUE;
 		sci.maxAnisotropy = std::min (8.0f, ctx->deviceProps.limits.maxSamplerAnisotropy);

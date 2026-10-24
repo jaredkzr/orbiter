@@ -77,7 +77,22 @@ Known gaps and limitations, to be addressed later.
   only: no temporal accumulation yet (would come with TAA).
 - The prepass draws the geometry a second time.
 
-## Temporal anti-aliasing
+## Temporal anti-aliasing and upscaling
+- AMD FSR 3.1 (FidelityFX SDK v1.1.4, fetched as a sparse checkout at
+  configure time; CMake option ORBITER_VK_FSR) is the default; our own TAA
+  is the fallback (ORBITER_VK_UPSCALER=taa) and is used when the SDK is not
+  built. ORBITER_VK_RENDER_SCALE (e.g. 0.67, 0.5) upscales with either.
+  ORBITER_VK_FSR_SHARPNESS (default 0.5), ORBITER_VK_FSR_DEBUG=1 shows
+  FSR's debug panels.
+- FSR shaders are built with our generator (tools/ffx_gen_shaders.py) and
+  glslang; the SDK is patched at configure time (context size for 4-byte
+  wchar_t, rgba16f luma history format) and built without
+  auto-vectorisation (misaligned scratch structures). The Lanczos lookup
+  table variant is not used: with it the history blurs (LUT texture upload
+  through the backend appears broken here); the reference Lanczos is used.
+- No reactive / transparency-and-composition masks yet (exhaust, particles
+  and glass rely on FSR's own shading-change detection).
+- FSR 4 (ML upscaler): revisit when its Vulkan SDK (2.4) is released.
 - On by default (ORBITER_VK_TAA=0 for 4x MSAA). Transparent surfaces,
   particles and exhaust take the motion of what is behind them (possible
   smearing on fast relative motion). Mesh animations are not in the motion
