@@ -405,46 +405,102 @@ void VVessel::CollectLights (std::vector<LightSource> &lights)
 	}
 }
 
+namespace {
+	// ray (global frame) against meshes in a frame at pos, rot
+	template <class Meshes, class Ofs>
+	bool MeshesRayHit (const Meshes &meshes, Ofs ofs, const VECTOR3 &pos, const MATRIX3 &rot,
+		const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n)
+	{
+		VECTOR3 lo = tmul (rot, o - pos), ld = tmul (rot, d);
+		bool found = false;
+		t = maxDist;
+		for (auto &m : meshes) {
+			const VkMesh *mesh = nullptr;
+			VECTOR3 mo{};
+			if (!ofs (m, mesh, mo) || !mesh) continue;
+			double tm;
+			VECTOR3 nm;
+			if (mesh->RayHit (lo - mo, ld, t, tm, nm)) t = tm, n = mul (rot, nm), found = true;
+		}
+		return found;
+	}
+}
+
+bool VVessel::RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n)
+{
+	// (bounding sphere first; animations are not followed)
+	VECTOR3 c = gpos - o;
+	double along = std::clamp (dotp (c, d), 0.0, maxDist);
+	if (length (c - d * along) > size) return false;
+	return MeshesRayHit (meshes, [](const MeshRec &r, const VkMesh *&m, VECTOR3 &ofs) {
+		if (!(r.visMode & MESHVIS_EXTERNAL)) return false;
+		m = r.mesh.get(), ofs = r.ofs;
+		return true;
+	}, gpos, grot, o, d, maxDist, t, n);
+}
+
+void VVessel::CollectPlumes (PlumeRenderer &pr)
+{
+	DWORD n = vessel->GetExhaustCount ();
+	plumeExhaust.assign (n, 0);
+	if (!pr.enabled) return;
+	VECTOR3 as;
+	vessel->GetAirspeedVector (FRAME_LOCAL, as);
+	VECTOR3 wind = scene->ViewDir (mul (grot, -as)); // the air past the vessel
+	double pa = vessel->GetAtmPressure (), rho = vessel->GetAtmDensity ();
+	float sun = (float)scene->Sunlight (gpos);
+	static std::mt19937 rng (54321);
+	std::uniform_real_distribution<double> uni (0.0, 1.0);
+	for (DWORD i = 0; i < n; i++) {
+		EXHAUSTSPEC es;
+		if (!vessel->GetExhaustSpec (i, &es) || !es.lpos || !es.ldir) continue;
+		PlumeOverride o = pr.config.Get (vessel, i);
+		PlumeType type = o.type >= 0 ? (PlumeType)o.type : PlumeConfig::Infer (vessel, es.th);
+		if (type == PlumeType::Texture) continue; // (the add-on's flame texture)
+		plumeExhaust[i] = 1;
+		double lvl = vessel->GetExhaustLevel (i);
+		if (lvl <= 0.0) continue;
+		VECTOR3 gd = mul (grot, *es.ldir);
+		PlumeDraw pd{};
+		pd.pos = scene->ViewPos (gpos + mul (grot, *es.lpos) - gd * es.lofs);
+		pd.dir = scene->ViewDir (-gd);
+		pd.wind = wind;
+		pd.exitRadius = 0.5 * es.wsize * o.scale;
+		pd.length = es.lsize * o.scale * o.length;
+		pd.level = std::min (1.0, lvl);
+		pd.thrust = es.th ? vessel->GetThrusterMax0 (es.th) : 0.0;
+		pd.ambientPressure = pa;
+		pd.airDensity = rho;
+		pd.type = type;
+		pd.brightness = o.brightness;
+		pd.flicker = (float)(1.0 - 0.5 * es.modulate * uni (rng));
+		pd.sunlight = sun;
+		pd.tint = es.tex ? (VkTexture*)es.tex : nullptr;
+		pd.seed = id * 131u + i * 977u;
+		pr.Add (pd, id);
+	}
+}
+
 void VVessel::RenderExhaust ()
 {
-	// Exhaust textures hold the flame strip in u = [0, 1/4] (nozzle at v = 0)
-	// and a glow sprite in [1/2, 1] x [0, 1/2].
+	// plume volumes (collected before the prepass)
+	scene->DrawPlumes (id);
+	// flame billboards: exhaust textures hold the flame strip in u = [0, 1/4]
+	// (nozzle at v = 0) and a glow sprite in [1/2, 1] x [0, 1/2]
 	DWORD n = vessel->GetExhaustCount ();
 	static std::mt19937 rng (12345);
 	std::uniform_real_distribution<double> uni (0.0, 1.0);
 	std::map<VkTexture*, std::vector<PVtx>> batches;
 	for (DWORD i = 0; i < n; i++) {
+		if (i < plumeExhaust.size() && plumeExhaust[i]) continue;
 		double lvl = vessel->GetExhaustLevel (i);
 		if (lvl <= 0.0) continue;
 		EXHAUSTSPEC es;
 		if (!vessel->GetExhaustSpec (i, &es) || !es.lpos || !es.ldir) continue;
 		VECTOR3 gd = mul (grot, *es.ldir);
 		VECTOR3 s0 = gpos + mul (grot, *es.lpos) - gd * es.lofs;
-		double flicker = 1.0 - es.modulate * uni (rng);
-		// a plume volume, unless the configuration keeps the add-on's look
-		if (PlumeRenderer *pr = scene->Plumes ()) {
-			PlumeOverride o = pr->config.Get (vessel, i);
-			PlumeType type = o.type >= 0 ? (PlumeType)o.type : PlumeConfig::Infer (vessel, es.th);
-			if (type != PlumeType::Texture) {
-				PlumeDraw pd{};
-				pd.pos = scene->ViewPos (s0);
-				pd.dir = scene->ViewDir (-gd);
-				pd.exitRadius = 0.5 * es.wsize * o.scale;
-				pd.length = es.lsize * o.scale * o.length;
-				pd.level = std::min (1.0, lvl);
-				pd.ambientPressure = vessel->GetAtmPressure ();
-				pd.type = type;
-				pd.brightness = o.brightness;
-				pd.flicker = (float)(1.0 - 0.5 * (1.0 - flicker));
-				pd.sunlight = scene->ObjectLight ();
-				pd.tint = es.tex ? (VkTexture*)es.tex : nullptr;
-				pd.seed = id * 131u + i * 977u;
-				scene->DrawPlume (pd);
-				continue;
-			}
-		}
 		VECTOR3 s1 = s0 - gd * es.lsize;
-		float a = (float)(std::min (1.0, lvl) * flicker);
+		float a = (float)(std::min (1.0, lvl) * (1.0 - es.modulate * uni (rng)));
 		VECTOR3 vs = scene->ViewPos (s0), ve = scene->ViewPos (s1);
 		VECTOR3 axis = ve - vs, mid = (vs + ve) * 0.5;
 		VECTOR3 perp = crossp (axis, mid);
@@ -674,6 +730,22 @@ void VBase::Render (RenderPass pass)
 	for (auto &m : structures) scene->DrawMesh (m.get(), mv, pass);
 }
 
+bool VBase::RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n)
+{
+	VECTOR3 gpos;
+	MATRIX3 grot;
+	oapiGetGlobalPos (hBase, &gpos);
+	oapiGetRotationMatrix (hBase, &grot);
+	auto get = [](const std::unique_ptr<VkMesh> &p, const VkMesh *&m, VECTOR3 &ofs) { m = p.get(), ofs = _V(0, 0, 0); return true; };
+	double t1, t2;
+	VECTOR3 n1, n2;
+	bool h1 = MeshesRayHit (ground, get, gpos, grot, o, d, maxDist, t1, n1);
+	bool h2 = MeshesRayHit (structures, get, gpos, grot, o, d, h1 ? t1 : maxDist, t2, n2);
+	if (h2) t = t2, n = n2;
+	else if (h1) t = t1, n = n1;
+	return h1 || h2;
+}
+
 void VBase::RenderShadow (ShadowMap &sm)
 {
 	VECTOR3 gpos;
@@ -723,6 +795,44 @@ void VPlanet::RenderSky ()
 	if (!atmosphere) return;
 	atmosphere->Update ();
 	atmosphere->RenderSky ();
+}
+
+bool VPlanet::RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n)
+{
+	bool found = false;
+	t = maxDist;
+	for (auto &b : bases) {
+		double tb;
+		VECTOR3 nb;
+		if (b->RayHit (o, d, t, tb, nb)) t = tb, n = nb, found = true;
+	}
+	// the terrain: the ray's altitude over the surface elevation
+	auto alt = [this](const VECTOR3 &p) {
+		VECTOR3 loc;
+		oapiGlobalToLocal (hObj, &p, &loc);
+		double rad = length (loc);
+		double lng = atan2 (loc.z, loc.x), lat = asin (std::clamp (loc.y / rad, -1.0, 1.0));
+		return rad - size - oapiSurfaceElevation (hObj, lng, lat);
+	};
+	double a0 = alt (o);
+	if (a0 < 0.0 || a0 > t) return found; // (beneath, or out of reach)
+	const int N = 8;
+	double tPrev = 0.0;
+	for (int i = 1; i <= N; i++) {
+		double ti = t * i / N, ai = alt (o + d * ti);
+		if (ai < 0.0) {
+			double lo = tPrev, hi = ti;
+			for (int k = 0; k < 10; k++) {
+				double m = 0.5 * (lo + hi);
+				(alt (o + d * m) < 0.0 ? hi : lo) = m;
+			}
+			t = 0.5 * (lo + hi);
+			n = unit (o + d * t - gpos); // (the local vertical)
+			return true;
+		}
+		tPrev = ti;
+	}
+	return found;
 }
 
 void VPlanet::PrepareFrame ()

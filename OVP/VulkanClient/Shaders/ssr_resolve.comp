@@ -17,6 +17,7 @@ layout(set = 0, binding = 0) uniform sampler2D prepass;
 layout(set = 0, binding = 1) uniform sampler2D material;
 layout(set = 0, binding = 5, rgba32f) uniform readonly image2D hitImg;
 layout(set = 0, binding = 6, rgba16f) uniform readonly image2D colImg;
+layout(set = 0, binding = 10, rgba16f) uniform readonly image2D plumeImg; // light of engine plumes along the rays
 layout(set = 0, binding = 7, rgba16f) uniform writeonly image2D resolved;
 
 #include "ssr.glsl"
@@ -42,7 +43,7 @@ void main ()
 	// neighbours on a rotated spiral, wider for rougher surfaces
 	float radius = mix (1.0, 7.0, clamp (rough * 2.5, 0.0, 1.0));
 	float rot = fract (52.9829189 * fract (dot (vec2 (p), vec2 (0.06711056, 0.00583715))) + 0.618034 * pc.frame) * 2.0 * PI;
-	vec3 sum = vec3 (0.0);
+	vec3 sum = vec3 (0.0), plume = vec3 (0.0);
 	float wSum = 0.0, cwSum = 0.0, confSum = 0.0;
 	for (int i = 0; i < SAMPLES; i++) {
 		ivec2 q = p;
@@ -64,6 +65,7 @@ void main ()
 		if (NoL <= 0.0) continue;
 		float w = GGX_D (max (dot (N, H), 0.0), a) * SmithG1 (NoL, a) / abs (hq.w);
 		vec4 c = imageLoad (colImg, q);
+		plume += w * imageLoad (plumeImg, q).rgb;
 		// against fireflies: radiance weighted down where it is bright
 		float cw = w * c.a / (1.0 + Luma (c.rgb));
 		sum += c.rgb * cw;
@@ -77,7 +79,11 @@ void main ()
 		res.a = confSum / wSum;
 	}
 	// rough surfaces keep the environment probe's reflection
-	res.a *= 1.0 - smoothstep (0.6 * pc.maxRough, pc.maxRough, rough);
+	float fade = 1.0 - smoothstep (0.6 * pc.maxRough, pc.maxRough, rough);
+	res.a *= fade;
 	res.rgb *= res.a; // premultiplied (filtered and accumulated as such)
+	// engine plumes in front of whatever is reflected (or not found): their
+	// light adds to it
+	if (wSum > 0.0) res.rgb += plume / wSum * fade;
 	imageStore (resolved, p, res);
 }

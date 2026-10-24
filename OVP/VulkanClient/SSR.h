@@ -41,6 +41,11 @@ public:
 	/// textures, atmosphere)
 	void SetRTSets (VkDescriptorSet frame, VkDescriptorSet rtScene, VkDescriptorSet rtTex, VkDescriptorSet atm)
 	{ rtSets[0] = frame, rtSets[1] = rtScene, rtSets[2] = rtTex, rtSets[3] = atm; }
+	/// engine plumes (plume.glsl): buffer, noise volumes; and the frame slot
+	/// of this frame's plumes. Reflected rays add the light of the plumes
+	/// they pass.
+	void SetPlumes (VkBuffer buf, VkDeviceSize size, VkImageView shapeNoise, VkImageView detailNoise);
+	void SetPlumeSlot (uint32_t s) { plumeSlot = s; }
 	/// Keep the rendered scene image (shader-read layout) as the source of
 	/// the next frame's reflections
 	void StoreColor (VkImage scene);
@@ -65,7 +70,13 @@ private:
 	VkExtent2D extent{};
 	uint32_t generation = ~0u;
 	uint32_t hizLevels = 0, colorLevels = 0;
+	void WritePlumes ();
 	vkc::Image hiz, hit, col, resolved, history[2], prevColor;
+	vkc::Image plumeLight; // plume light along each ray
+	VkBuffer plumeBuf = VK_NULL_HANDLE;
+	VkDeviceSize plumeBufSize = 0;
+	VkImageView plumeNoise[2] = {};
+	uint32_t plumeSlot = 0;
 	std::vector<VkImageView> hizMipViews;
 	int cur = 0;
 	bool haveColor = false; // prevColor holds a frame

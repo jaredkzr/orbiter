@@ -139,7 +139,8 @@ public:
 	VkTexture *DefaultExhaustTex () const { return exhaustTex; }
 	/// engine plume volumes (null: billboards)
 	class PlumeRenderer *Plumes () { return plumes && plumes->enabled ? plumes.get() : nullptr; }
-	void DrawPlume (const struct PlumeDraw &p);
+	/// draw the plume volumes of an object (transparent pass)
+	void DrawPlumes (uint32_t owner);
 	/// radial glow sprite (white, falling off to zero at the edge), full uv range
 	VkTexture *GlowTex () const { return glowTex; }
 	TileRenderer *Tiles () { return tiles.get(); }

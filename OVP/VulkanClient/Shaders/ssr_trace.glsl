@@ -20,8 +20,12 @@ layout(set = 0, binding = 3) uniform sampler2D velocity;  // screen motion since
 layout(set = 0, binding = 4) uniform sampler2D prevColor; // previous frame's scene (mipmapped)
 layout(set = 0, binding = 5, rgba32f) uniform writeonly image2D hitOut;
 layout(set = 0, binding = 6, rgba16f) uniform writeonly image2D colOut;
+layout(set = 0, binding = 10, rgba16f) uniform writeonly image2D plumeOut; // light of engine plumes along the ray
 
 #include "ssr.glsl"
+#define PLUME_SET 0
+#define PLUME_BINDING 11
+#include "plume.glsl"
 #ifdef RT
 #include "rt.glsl"
 #endif
@@ -63,6 +67,7 @@ void main ()
 	if (z <= 0.0 || m.w <= 0.0 || m.z >= pc.maxRough) {
 		imageStore (hitOut, p, vec4 (0.0));
 		imageStore (colOut, p, vec4 (0.0));
+		imageStore (plumeOut, p, vec4 (0.0));
 		return;
 	}
 	vec3 Ng = d.xyz;
@@ -172,6 +177,24 @@ void main ()
 		}
 	}
 #endif
+	// engine plumes between the surface and the hit: their emission (the
+	// rays are short and few: a coarse march)
+	vec3 plume = vec3 (0.0);
+	uint slot = uint (pc.plumeSlot), nPlumes = plumeCount[slot];
+	float tHit = hit ? length (q - o) : 1e5;
+	for (uint i = 0u; i < nPlumes; i++) {
+		PlumeParams P = plumes[slot * MAX_PLUMES + i];
+		vec3 lo, ld;
+		float t0, t1;
+		if (!PlumeBox (P, o, L, lo, ld, t0, t1)) continue;
+		t0 = max (t0, 0.0);
+		t1 = min (t1, tHit / P.shape.x);
+		if (t1 <= t0) continue;
+		int n = int (clamp (ceil ((t1 - t0) / 0.6), 6.0, 24.0));
+		PlumeLight l = MarchPlume (P, lo, ld, t0, t1, n, float (h.y & 0xffffu) / 65536.0, vec3 (0.0), vec3 (0.0), vec3 (0.0, 0.0, 1.0));
+		plume += l.emit;
+	}
 	imageStore (hitOut, p, hit ? vec4 (q, pdf) : vec4 (L, -pdf));
 	imageStore (colOut, p, col);
+	imageStore (plumeOut, p, vec4 (plume, 0.0));
 }

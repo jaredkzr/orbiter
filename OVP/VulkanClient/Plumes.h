@@ -15,6 +15,7 @@
 
 #include "VkContext.h"
 #include "VkMath.h"
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -70,10 +71,13 @@ private:
 struct PlumeDraw {
 	VECTOR3 pos;            // nozzle exit, view space [m]
 	VECTOR3 dir;            // flow direction, view space
+	VECTOR3 wind;           // velocity of the air relative to the nozzle, view space [m/s]
 	double exitRadius;      // [m]
 	double length;          // [m]
 	double level;           // 0..1
+	double thrust;          // at full level [N] (0: unknown)
 	double ambientPressure; // [Pa]
+	double airDensity;      // [kg/m^3]
 	PlumeType type;
 	float brightness;
 	float flicker;          // random brightness factor for this frame
@@ -82,22 +86,47 @@ struct PlumeDraw {
 	uint32_t seed;
 };
 
+/// The plumes of a frame: collected before the prepass (screen-space
+/// reflections march through them too), drawn in the transparent pass
 class PlumeRenderer {
 public:
+	static constexpr uint32_t MAX_PLUMES = 64; ///< per frame (plume.glsl)
+
 	bool Init (vkc::Context *ctx, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout texLayout,
-		VkImageView shapeNoise, VkImageView detailNoise);
+		VkDescriptorSetLayout atmLayout, VkImageView shapeNoise, VkImageView detailNoise);
 	void Shutdown ();
+	/// Start collecting the plumes of this frame
+	void BeginFrame (double simt);
+	/// Add a plume of the object owner; returns its index (-1: none)
+	int Add (const PlumeDraw &p, uint32_t owner);
 	/// The prepass image (view depth) the plumes are clipped against
 	void SetPrepass (VkImageView prepass);
-	/// Draw in the scene's rendering scope (transparent pass)
-	void Draw (const PlumeDraw &p, VkDescriptorSet frameSet, VkTexture *white, double simt);
+	/// Draw the plumes of an object (scene's rendering scope, transparent pass)
+	void Draw (uint32_t owner, VkDescriptorSet frameSet, VkDescriptorSet atmSet, VkTexture *white);
+
+	/// plume buffer (plume.glsl), noise volumes
+	VkBuffer Buffer () const { return buf.buffer; }
+	VkDeviceSize BufferSize () const;
+	VkImageView ShapeNoise () const { return shapeView; }
+	VkImageView DetailNoise () const { return detailView; }
+	/// frame slot of this frame's plumes in the buffer
+	uint32_t Slot () const { return slot; }
+	uint32_t Count () const { return (uint32_t)list.size(); }
 
 	bool enabled = true;
 	PlumeConfig config;
+	/// nearest surface along a ray (view space, |d| = 1) within maxDist,
+	/// other than the object owner's: distance and unit normal
+	std::function<bool (uint32_t owner, const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n)> rayCast;
 
 private:
-	struct Push;
+	struct Params;
+	struct Entry { uint32_t owner, index; VkTexture *tint; float box[36 * 3]; };
 	vkc::Context *ctx = nullptr;
+	vkc::Buffer buf;
+	uint32_t slot = 0;
+	double simt = 0.0;
+	std::vector<Entry> list;
 	VkSampler clampSampler = VK_NULL_HANDLE, repeatSampler = VK_NULL_HANDLE;
 	VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
 	VkDescriptorPool pool = VK_NULL_HANDLE;

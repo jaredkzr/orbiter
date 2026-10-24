@@ -235,7 +235,20 @@ bool Scene::Init ()
 	tiles->Init (ctx, gc->TexMgr(), frameLayout, atm->SetLayout());
 	exhaustTex = gc->TexMgr()->Load ("Exhaust.dds");
 	plumes = std::make_unique<PlumeRenderer>();
-	plumes->Init (ctx, frameLayout, gc->TexMgr()->Layout(), vclouds->ShapeNoiseView (), vclouds->DetailNoiseView ());
+	plumes->Init (ctx, frameLayout, gc->TexMgr()->Layout(), atm->SetLayout(), vclouds->ShapeNoiseView (), vclouds->DetailNoiseView ());
+	ssr->SetPlumes (plumes->Buffer (), plumes->BufferSize (), plumes->ShapeNoise (), plumes->DetailNoise ());
+	plumes->rayCast = [this](uint32_t owner, const VECTOR3 &vo, const VECTOR3 &vd, double maxDist, double &t, VECTOR3 &vn) {
+		VECTOR3 o = camPos + mul (camRot, vo), d = mul (camRot, vd);
+		bool found = false;
+		t = maxDist;
+		for (auto &it : visuals) {
+			if (it.second->Id () == owner) continue;
+			double ti;
+			VECTOR3 ni;
+			if (it.second->RayHit (o, d, t, ti, ni)) t = ti, vn = tmul (camRot, ni), found = true;
+		}
+		return found;
+	};
 	{
 		// glow sprite: bright core with a soft halo, zero at the edge
 		const int N = 128;
@@ -598,9 +611,9 @@ void Scene::DrawBillboards (VkTexture *tex, bool additive, const PVtx *v, size_t
 	vkCmdDraw (cmd, (uint32_t)n, 1, 0, 0);
 }
 
-void Scene::DrawPlume (const PlumeDraw &p)
+void Scene::DrawPlumes (uint32_t owner)
 {
-	plumes->Draw (p, FrameSet (), gc->TexMgr()->White(), oapiGetSimTime ());
+	plumes->Draw (owner, FrameSet (), camAtmSet, gc->TexMgr()->White());
 }
 
 void Scene::BuildSphere ()
@@ -901,6 +914,11 @@ void Scene::BeginFrame ()
 		prevProj[8] = prevProj[9] = 0.0f;
 	}
 	SetObjectMotion (Mat4::Identity (), Mat4::Identity ());
+
+	// engine plumes (reflections march through them)
+	plumes->BeginFrame (oapiGetSimTime ());
+	for (auto &it : visuals) it.second->CollectPlumes (*plumes);
+	ssr->SetPlumeSlot (plumes->Slot ());
 
 	// frame uniforms
 	FrameUniforms fu{};

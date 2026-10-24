@@ -14,7 +14,7 @@
 namespace {
 	struct SSRParams { // must match ssr.glsl
 		float focal[2], size[2], jitter[2];
-		float frame, levels, thickness, maxRough, reset, pad;
+		float frame, levels, thickness, maxRough, reset, plumeSlot;
 	};
 	constexpr VkFormat HIZ_FORMAT = VK_FORMAT_R32_SFLOAT;
 	constexpr VkFormat HIT_FORMAT = VK_FORMAT_R32G32B32A32_SFLOAT;
@@ -79,12 +79,13 @@ bool ScreenReflections::Init (vkc::Context *c)
 	VK_CHECK(vkCreateSampler (ctx->device, &sci, nullptr, &linear));
 
 	// trace, resolve and temporal passes
-	VkDescriptorSetLayoutBinding b[10];
+	// (10: plume emission along the rays, 11-13: the plumes, plume.glsl)
+	VkDescriptorSetLayoutBinding b[14];
 	const VkDescriptorType CIS = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, STO = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-	const VkDescriptorType types[10] = { CIS, CIS, CIS, CIS, CIS, STO, STO, STO, CIS, STO };
-	for (uint32_t i = 0; i < 10; i++) b[i] = { i, types[i], 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+	const VkDescriptorType types[14] = { CIS, CIS, CIS, CIS, CIS, STO, STO, STO, CIS, STO, STO, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, CIS, CIS };
+	for (uint32_t i = 0; i < 14; i++) b[i] = { i, types[i], 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 10;
+	lci.bindingCount = 14;
 	lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &setLayout));
 	// depth pyramid levels
@@ -97,10 +98,11 @@ bool ScreenReflections::Init (vkc::Context *c)
 	lci.pBindings = hb;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &hizLayout));
 
-	VkDescriptorPoolSize ps[2] = { { CIS, 2 * 6 + MAX_HIZ_LEVELS }, { STO, 2 * 4 + 2 * MAX_HIZ_LEVELS } };
+	VkDescriptorPoolSize ps[3] = { { CIS, 2 * 8 + MAX_HIZ_LEVELS }, { STO, 2 * 5 + 2 * MAX_HIZ_LEVELS },
+		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 } };
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.maxSets = 2 + MAX_HIZ_LEVELS;
-	pci.poolSizeCount = 2;
+	pci.poolSizeCount = 3;
 	pci.pPoolSizes = ps;
 	VK_CHECK(vkCreateDescriptorPool (ctx->device, &pci, nullptr, &pool));
 
@@ -205,6 +207,7 @@ void ScreenReflections::CreateImages (VkImageView prepass, VkImageView material,
 	hit = CreateImage (HIT_FORMAT, SU, 1);
 	col = CreateImage (COL_FORMAT, SU, 1);
 	resolved = CreateImage (COL_FORMAT, SU, 1);
+	plumeLight = CreateImage (COL_FORMAT, SU, 1);
 	for (auto &h : history) h = CreateImage (COL_FORMAT, SU | VK_IMAGE_USAGE_TRANSFER_DST_BIT, 1);
 	prevColor = CreateImage (ctx->sceneFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, colorLevels);
 	hizMipViews.resize (hizLevels);
@@ -219,7 +222,7 @@ void ScreenReflections::CreateImages (VkImageView prepass, VkImageView material,
 
 	// storage images live in general layout; the reflections start empty,
 	// the previous colour image rests in shader-read layout
-	std::vector<VkImage> gen = { hiz.image, hit.image, col.image, resolved.image };
+	std::vector<VkImage> gen = { hiz.image, hit.image, col.image, resolved.image, plumeLight.image };
 	VkImage h0 = history[0].image, h1 = history[1].image, pc = prevColor.image;
 	ctx->ImmediateSubmit ([&gen, h0, h1, pc](VkCommandBuffer cmd) {
 		for (VkImage im : gen)
@@ -275,6 +278,7 @@ void ScreenReflections::CreateImages (VkImageView prepass, VkImageView material,
 		add (sets[k], 7, VK_NULL_HANDLE, resolved.view, GEN);
 		add (sets[k], 8, linear, history[1 - k].view, GEN);
 		add (sets[k], 9, VK_NULL_HANDLE, history[k].view, GEN);
+		add (sets[k], 10, VK_NULL_HANDLE, plumeLight.view, GEN);
 	}
 	for (uint32_t i = 0; i < hizLevels; i++) {
 		add (hizSets[i], 0, nearest, prepass, RO);
@@ -284,6 +288,32 @@ void ScreenReflections::CreateImages (VkImageView prepass, VkImageView material,
 	vkUpdateDescriptorSets (ctx->device, (uint32_t)wr.size(), wr.data(), 0, nullptr);
 	haveColor = false;
 	generation = ctx->SwapchainGeneration();
+	WritePlumes ();
+}
+
+void ScreenReflections::SetPlumes (VkBuffer buf, VkDeviceSize size, VkImageView shapeNoise, VkImageView detailNoise)
+{
+	plumeBuf = buf, plumeBufSize = size;
+	plumeNoise[0] = shapeNoise, plumeNoise[1] = detailNoise;
+	WritePlumes ();
+}
+
+void ScreenReflections::WritePlumes ()
+{
+	if (!plumeBuf || generation == ~0u) return;
+	VkDescriptorBufferInfo bi{ plumeBuf, 0, plumeBufSize };
+	VkDescriptorImageInfo ii[2] = { { linear, plumeNoise[0], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+		{ linear, plumeNoise[1], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL } };
+	VkWriteDescriptorSet wr[6]{};
+	for (int k = 0; k < 2; k++)
+		for (int i = 0; i < 3; i++) {
+			VkWriteDescriptorSet &w = wr[k * 3 + i];
+			w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			w.dstSet = sets[k], w.dstBinding = 11 + i, w.descriptorCount = 1;
+			if (i == 0) w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, w.pBufferInfo = &bi;
+			else w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, w.pImageInfo = &ii[i - 1];
+		}
+	vkUpdateDescriptorSets (ctx->device, 6, wr, 0, nullptr);
 }
 
 void ScreenReflections::DestroyImages ()
@@ -293,7 +323,7 @@ void ScreenReflections::DestroyImages ()
 	vkResetDescriptorPool (ctx->device, pool, 0);
 	for (VkImageView v : hizMipViews) vkDestroyImageView (ctx->device, v, nullptr);
 	hizMipViews.clear ();
-	for (vkc::Image *im : { &hiz, &hit, &col, &resolved, &history[0], &history[1], &prevColor }) ctx->DestroyImage (*im);
+	for (vkc::Image *im : { &hiz, &hit, &col, &resolved, &plumeLight, &history[0], &history[1], &prevColor }) ctx->DestroyImage (*im);
 	generation = ~0u;
 }
 
@@ -317,7 +347,7 @@ void ScreenReflections::Compute (float fx, float fy, const float jitter[2], bool
 	if (!valid) return;
 	VkCommandBuffer cmd = ctx->Cmd();
 	SSRParams p{ { fx, fy }, { (float)extent.width, (float)extent.height }, { jitter[0], jitter[1] },
-		(float)(frameNo++ & 0xffff), (float)hizLevels, thickness, maxRough, (reset || !historyValid) ? 1.0f : 0.0f, 0.0f };
+		(float)(frameNo++ & 0xffff), (float)hizLevels, thickness, maxRough, (reset || !historyValid) ? 1.0f : 0.0f, (float)plumeSlot };
 	const VkPipelineStageFlags2 CS = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 	// the previous frame's passes and scene shaders are done with the images
 	MemoryBarrier (cmd, CS | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, RW, CS, RW);

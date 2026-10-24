@@ -178,21 +178,34 @@ PlumeOverride PlumeConfig::Get (VESSEL *v, unsigned idx)
 // ======================================================================
 // Renderer
 
-struct PlumeRenderer::Push {
+struct PlumeRenderer::Params { // plume.glsl
 	float toLocal[16]; // view -> plume space [m]: z along the flow, origin at the nozzle exit
 	float shape[4];    // exit radius [m], length, jet radius after the exit (expansion), spread (tan of the half angle)
-	float shape2[4];   // shock cell spacing, shock diamond strength, box length, box radius
+	float shape2[4];   // shock cell spacing, shock diamond strength, -, -
 	float core[4];     // core emission (rgb), vacuum fraction
 	float diamond[4];  // shock diamond emission (rgb), spread of the mixing layer
-	float outer[4];    // afterburning emission (rgb), ion beam (1)
+	float outer[4];    // afterburning emission (rgb), -
 	float misc[4];     // time [s], turbulence drift, smoke extinction, turbulence
 	float misc2[4];    // texture tint amount, seed, sunlight reaching the plume, -
+	float bend[4];     // crossflow direction (xy, plume space), bending scale, -
+	float boxMin[4];   // bounding box
+	float boxMax[4];
+	float hit[4];      // where the jet meets a surface, heat there (0: none)
+	float hitN[4];     // surface normal (towards the jet), jet radius there
+	float hit2[4];     // reach of the gas spreading along the surface
 };                     // (lengths in exit radii)
 
+VkDeviceSize PlumeRenderer::BufferSize () const
+{
+	return 16 + sizeof(Params) * MAX_PLUMES * vkc::FRAMES_IN_FLIGHT;
+}
+
 bool PlumeRenderer::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout texLayout,
-	VkImageView shapeNoise, VkImageView detailNoise)
+	VkDescriptorSetLayout atmLayout, VkImageView shapeNoise, VkImageView detailNoise)
 {
 	ctx = c;
+	buf = ctx->CreateBuffer (BufferSize (), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+	memset (buf.mapped, 0, BufferSize ());
 	shapeView = shapeNoise, detailView = detailNoise;
 	if (const char *e = getenv ("ORBITER_VK_PLUMES")) enabled = atoi (e) != 0;
 
@@ -204,25 +217,26 @@ bool PlumeRenderer::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout, Vk
 	sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 	VK_CHECK(vkCreateSampler (ctx->device, &sci, nullptr, &clampSampler));
 
-	VkDescriptorSetLayoutBinding b[3]{};
-	for (uint32_t i = 0; i < 3; i++)
-		b[i] = { i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
+	// prepass, plume buffer, noise volumes
+	VkDescriptorSetLayoutBinding b[4]{};
+	for (uint32_t i = 0; i < 4; i++)
+		b[i] = { i, i == 1 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 3;
+	lci.bindingCount = 4;
 	lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &setLayout));
-	VkDescriptorPoolSize ps{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 };
+	VkDescriptorPoolSize ps[2] = { { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 }, { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1 } };
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-	pci.maxSets = 1, pci.poolSizeCount = 1, pci.pPoolSizes = &ps;
+	pci.maxSets = 1, pci.poolSizeCount = 2, pci.pPoolSizes = ps;
 	VK_CHECK(vkCreateDescriptorPool (ctx->device, &pci, nullptr, &pool));
 	VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
 	dai.descriptorPool = pool, dai.descriptorSetCount = 1, dai.pSetLayouts = &setLayout;
 	VK_CHECK(vkAllocateDescriptorSets (ctx->device, &dai, &set));
 
-	VkDescriptorSetLayout sets[3] = { frameLayout, setLayout, texLayout };
-	VkPushConstantRange pcr{ VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Push) };
+	VkDescriptorSetLayout sets[4] = { frameLayout, setLayout, texLayout, atmLayout };
+	VkPushConstantRange pcr{ VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(uint32_t) };
 	VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-	plci.setLayoutCount = 3, plci.pSetLayouts = sets;
+	plci.setLayoutCount = 4, plci.pSetLayouts = sets;
 	plci.pushConstantRangeCount = 1, plci.pPushConstantRanges = &pcr;
 	VK_CHECK(vkCreatePipelineLayout (ctx->device, &plci, nullptr, &layout));
 
@@ -294,6 +308,7 @@ void PlumeRenderer::Shutdown ()
 	vkDestroyDescriptorSetLayout (ctx->device, setLayout, nullptr);
 	vkDestroySampler (ctx->device, clampSampler, nullptr);
 	vkDestroySampler (ctx->device, repeatSampler, nullptr);
+	ctx->DestroyBuffer (buf);
 	ctx = nullptr;
 }
 
@@ -306,19 +321,36 @@ void PlumeRenderer::SetPrepass (VkImageView prepass)
 		{ clampSampler, prepass, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
 		{ repeatSampler, shapeView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
 		{ repeatSampler, detailView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL } };
-	VkWriteDescriptorSet wr[3]{};
-	for (uint32_t i = 0; i < 3; i++) {
+	VkDescriptorBufferInfo bi{ buf.buffer, 0, BufferSize () };
+	VkWriteDescriptorSet wr[4]{};
+	const uint32_t binding[3] = { 0, 2, 3 };
+	for (uint32_t i = 0; i < 4; i++) {
 		wr[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-		wr[i].dstSet = set, wr[i].dstBinding = i, wr[i].descriptorCount = 1;
-		wr[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-		wr[i].pImageInfo = &ii[i];
+		wr[i].dstSet = set, wr[i].descriptorCount = 1;
+		if (i < 3) {
+			wr[i].dstBinding = binding[i];
+			wr[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			wr[i].pImageInfo = &ii[i];
+		} else {
+			wr[i].dstBinding = 1;
+			wr[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+			wr[i].pBufferInfo = &bi;
+		}
 	}
-	vkUpdateDescriptorSets (ctx->device, 3, wr, 0, nullptr);
+	vkUpdateDescriptorSets (ctx->device, 4, wr, 0, nullptr);
 }
 
-void PlumeRenderer::Draw (const PlumeDraw &p, VkDescriptorSet frameSet, VkTexture *white, double simt)
+void PlumeRenderer::BeginFrame (double t)
 {
-	if (!prepassView || p.level <= 0.0 || p.exitRadius <= 0.0) return;
+	slot = ctx->FrameIndex ();
+	simt = t;
+	list.clear ();
+	((uint32_t*)buf.mapped)[slot] = 0;
+}
+
+int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner)
+{
+	if (p.level <= 0.0 || p.exitRadius <= 0.0 || list.size() >= MAX_PLUMES) return -1;
 	const PlumeClass &c = PlumeConfig::Class (p.type);
 	double re = p.exitRadius;
 	bool ion = p.type == PlumeType::Ion;
@@ -334,9 +366,6 @@ void PlumeRenderer::Draw (const PlumeDraw &p, VkDescriptorSet frameSet, VkTextur
 	double cell = 2.6 * rj;
 	double lk = (log (k) - log (0.6)) / 1.3;
 	double diamonds = exp (-lk * lk) * (1.0 - vac);
-	// bounds of the visible volume (exit radii)
-	double boxZ = 1.6 * len;
-	double boxR = 1.8 * (std::max (rj, 1.0) + boxZ * spread + std::max (0.0, boxZ - 0.5 * len) * mixSpread) + 0.5;
 	double bright = p.level * p.brightness * p.flicker * (1.0 + (c.vacuumBrightness - 1.0) * vac);
 
 	// plume frame (view space)
@@ -345,7 +374,86 @@ void PlumeRenderer::Draw (const PlumeDraw &p, VkDescriptorSet frameSet, VkTextur
 	ex = unit (ex);
 	VECTOR3 ey = crossp (ez, ex);
 
-	Push pc{};
+	// the airflow: the jet's momentum flux (thrust over the exit area)
+	// against the dynamic pressure of the air across it (bending) and
+	// against it (a shorter, wider plume)
+	double qJet = p.thrust > 0.0 ? p.thrust * p.level / (PI * re * re) : 10.8 * c.exitPressure;
+	double windAlong = dotp (p.wind, ez);
+	VECTOR3 cross = p.wind - ez * windAlong;
+	double qCross = 0.5 * p.airDensity * dotp (cross, cross);
+	double bendScale = 0.0, bx = 0.0, by = 0.0;
+	if (qCross > 1e-3 * qJet && qJet > 0.0) {
+		bendScale = 2.0 * sqrt (qJet / qCross); // r d (exit radii)
+		VECTOR3 cu = unit (cross);
+		bx = dotp (cu, ex), by = dotp (cu, ey);
+	}
+	if (windAlong < 0.0 && qJet > 0.0) {
+		double qHead = 0.5 * p.airDensity * windAlong * windAlong;
+		len /= 1.0 + 4.0 * qHead / qJet;
+		spread += 0.3 * qHead / (qHead + qJet);
+	}
+
+	// bounds of the visible volume (exit radii)
+	double boxZ = 1.6 * len;
+	double boxR = 1.8 * (std::max (rj, 1.0) + boxZ * spread + std::max (0.0, boxZ - 0.5 * len) * mixSpread) + 0.5;
+	double bendMax = 0.0;
+	if (bendScale > 0.0) {
+		const double SC = 1.46; // (PlumeBend in plume.glsl)
+		double s = boxZ / (1.6 * bendScale);
+		bendMax = s < SC ? bendScale * s * s * s : bendScale * SC * SC * SC + 4.0 * (boxZ - 1.6 * bendScale * SC);
+	}
+	double bmin[3] = { -boxR + std::min (0.0, bx * bendMax), -boxR + std::min (0.0, by * bendMax), -0.2 };
+	double bmax[3] = { boxR + std::max (0.0, bx * bendMax), boxR + std::max (0.0, by * bendMax), boxZ };
+
+	// a surface in the way: along the (bent) jet axis, in segments
+	auto bendAt = [&](double z) {
+		if (bendScale <= 0.0) return 0.0;
+		const double SC = 1.46;
+		double s = z / (1.6 * bendScale);
+		return s < SC ? bendScale * s * s * s : bendScale * SC * SC * SC + 4.0 * (z - 1.6 * bendScale * SC);
+	};
+	auto axisPoint = [&](double z) { // plume space (exit radii)
+		double b = bendAt (z);
+		return _V(bx * b, by * b, z);
+	};
+	auto toView = [&](const VECTOR3 &q) { return p.pos + (ex * q.x + ey * q.y + ez * q.z) * re; };
+	bool hit = false;
+	VECTOR3 hitP{}, hitN{};
+	if (rayCast) {
+		const int SEG = 8;
+		const double z0 = 0.3; // (clear of the nozzle)
+		for (int i = 0; i < SEG && !hit; i++) {
+			VECTOR3 a = axisPoint (z0 + (boxZ - z0) * i / SEG), b = axisPoint (z0 + (boxZ - z0) * (i + 1) / SEG);
+			VECTOR3 va = toView (a), vb = toView (b);
+			double segLen = length (vb - va), t;
+			VECTOR3 n;
+			if (segLen > 0.0 && rayCast (owner, va, (vb - va) / segLen, segLen, t, n)) {
+				VECTOR3 q = va + (vb - va) * (t / segLen) - p.pos;
+				hitP = _V(dotp (q, ex), dotp (q, ey), dotp (q, ez)) / re;
+				hitN = _V(dotp (n, ex), dotp (n, ey), dotp (n, ez));
+				if (dotp (hitN, b - a) > 0.0) hitN = -hitN; // (facing the jet)
+				hit = true;
+			}
+		}
+	}
+	double hitHeat = 0.0, hitR = 0.0, reach = 0.0;
+	if (hit) {
+		double z = std::max (hitP.z, 0.0), bz = bendAt (z);
+		double sArc = sqrt (z * z + bz * bz), xi = sArc / len;
+		hitR = 1.0 + (rj - 1.0) * (1.0 - exp (-0.8 * sArc)) + sArc * spread + std::max (0.0, sArc - 0.5 * len) * mixSpread + 0.15 * bz;
+		hitHeat = exp (-3.0 * xi * xi) * (xi < 1.6 ? 1.0 : 0.0);
+		// the spreading gas reaches further with more of the jet left
+		reach = 2.5 * hitR + 0.4 * std::max (0.0, 1.6 * len - sArc);
+		double ext = 1.3 * reach + hitR;
+		for (int k = 0; k < 3; k++) {
+			double c = (&hitP.x)[k];
+			bmin[k] = std::min (bmin[k], c - ext), bmax[k] = std::max (bmax[k], c + ext);
+		}
+		bmax[2] = std::min (bmax[2], hitP.z + ext);
+		hit = hitHeat > 0.0;
+	}
+
+	Params pc{};
 	const VECTOR3 *e[3] = { &ex, &ey, &ez };
 	for (int i = 0; i < 3; i++) {
 		pc.toLocal[0 + i] = (float)e[i]->x;
@@ -355,17 +463,17 @@ void PlumeRenderer::Draw (const PlumeDraw &p, VkDescriptorSet frameSet, VkTextur
 	}
 	pc.toLocal[15] = 1.0f;
 	float sh[4] = { (float)re, (float)len, (float)rj, (float)spread };
-	float sh2[4] = { (float)cell, (float)diamonds, (float)boxZ, (float)boxR };
 	memcpy (pc.shape, sh, sizeof(sh));
-	memcpy (pc.shape2, sh2, sizeof(sh2));
+	pc.shape2[0] = (float)cell, pc.shape2[1] = (float)diamonds;
 	for (int i = 0; i < 3; i++) {
 		pc.core[i] = (float)(c.core[i] * c.coreBrightness * bright);
 		pc.diamond[i] = (float)(c.diamond[i] * c.diamondBrightness * bright);
 		pc.outer[i] = (float)(c.outer[i] * c.outerBrightness * bright * pow (air, 0.7));
+		pc.boxMin[i] = (float)bmin[i];
+		pc.boxMax[i] = (float)bmax[i];
 	}
 	pc.core[3] = (float)vac;
 	pc.diamond[3] = (float)mixSpread;
-	pc.outer[3] = ion ? 1.0f : 0.0f;
 	pc.misc[0] = (float)fmod (simt, 1000.0);
 	pc.misc[1] = c.flow;
 	pc.misc[2] = (float)(c.smoke * air);
@@ -373,31 +481,56 @@ void PlumeRenderer::Draw (const PlumeDraw &p, VkDescriptorSet frameSet, VkTextur
 	pc.misc2[0] = p.tint ? 0.35f : 0.0f;
 	pc.misc2[1] = (float)(p.seed % 1024);
 	pc.misc2[2] = p.sunlight;
+	pc.bend[0] = (float)bx, pc.bend[1] = (float)by, pc.bend[2] = (float)bendScale;
+	if (hit) {
+		pc.hit[0] = (float)hitP.x, pc.hit[1] = (float)hitP.y, pc.hit[2] = (float)hitP.z, pc.hit[3] = (float)hitHeat;
+		pc.hitN[0] = (float)hitN.x, pc.hitN[1] = (float)hitN.y, pc.hitN[2] = (float)hitN.z, pc.hitN[3] = (float)hitR;
+		pc.hit2[0] = (float)reach;
+	}
+
+	uint32_t index = slot * MAX_PLUMES + (uint32_t)list.size();
+	memcpy ((char*)buf.mapped + 16 + index * sizeof(Params), &pc, sizeof(pc));
+	((uint32_t*)buf.mapped)[slot] = (uint32_t)list.size() + 1;
 
 	// bounding box (view space)
-	float v[36 * 3];
+	Entry en{ owner, index, p.tint, {} };
 	static const int faces[6][4] = { { 0, 1, 3, 2 }, { 4, 6, 7, 5 }, { 0, 4, 5, 1 }, { 2, 3, 7, 6 }, { 0, 2, 6, 4 }, { 1, 5, 7, 3 } };
 	VECTOR3 corner[8];
 	for (int i = 0; i < 8; i++) {
-		double x = (i & 1) ? boxR : -boxR, y = (i & 2) ? boxR : -boxR, z = (i & 4) ? boxZ : -0.2;
+		double x = bmin[0] + (bmax[0] - bmin[0]) * (i & 1), y = bmin[1] + (bmax[1] - bmin[1]) * ((i >> 1) & 1);
+		double z = (i & 4) ? bmax[2] : bmin[2];
 		corner[i] = p.pos + (ex * x + ey * y + ez * z) * re;
 	}
 	int n = 0;
 	for (auto &f : faces) {
 		int idx[6] = { f[0], f[1], f[2], f[0], f[2], f[3] };
-		for (int i : idx) {
-			v[n++] = (float)corner[i].x, v[n++] = (float)corner[i].y, v[n++] = (float)corner[i].z;
-		}
+		for (int i : idx)
+			en.box[n++] = (float)corner[i].x, en.box[n++] = (float)corner[i].y, en.box[n++] = (float)corner[i].z;
 	}
+	list.push_back (en);
+	return (int)index;
+}
 
+void PlumeRenderer::Draw (uint32_t owner, VkDescriptorSet frameSet, VkDescriptorSet atmSet, VkTexture *white)
+{
+	if (!prepassView) return;
 	VkCommandBuffer cmd = ctx->Cmd();
-	vkc::Context::Transient vb = ctx->AllocTransient (sizeof(v));
-	memcpy (vb.ptr, v, sizeof(v));
-	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
-	VkTexture *tex = p.tint ? p.tint : white;
-	VkDescriptorSet sets[3] = { frameSet, set, tex->set };
-	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 3, sets, 0, nullptr);
-	vkCmdBindVertexBuffers (cmd, 0, 1, &vb.buffer, &vb.offset);
-	vkCmdPushConstants (cmd, layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
-	vkCmdDraw (cmd, 36, 1, 0, 0);
+	bool bound = false;
+	for (const Entry &en : list) {
+		if (en.owner != owner) continue;
+		if (!bound) {
+			vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+			VkDescriptorSet s[2] = { frameSet, set };
+			vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 2, s, 0, nullptr);
+			vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 3, 1, &atmSet, 0, nullptr);
+			bound = true;
+		}
+		VkTexture *tex = en.tint ? en.tint : white;
+		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 2, 1, &tex->set, 0, nullptr);
+		vkc::Context::Transient vb = ctx->AllocTransient (sizeof(en.box));
+		memcpy (vb.ptr, en.box, sizeof(en.box));
+		vkCmdBindVertexBuffers (cmd, 0, 1, &vb.buffer, &vb.offset);
+		vkCmdPushConstants (cmd, layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(uint32_t), &en.index);
+		vkCmdDraw (cmd, 36, 1, 0, 0);
+	}
 }

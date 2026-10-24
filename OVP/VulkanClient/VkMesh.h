@@ -62,6 +62,9 @@ public:
 	/// Distance along a ray (mesh frame) to its last intersection with the
 	/// mesh within maxDist, 0 if none (where a ray from inside leaves it)
 	double RayExit (const VECTOR3 &o, const VECTOR3 &d, double maxDist) const;
+	/// Nearest intersection of a ray (mesh frame, |d| = 1) with the mesh
+	/// within maxDist: distance t and the triangle's unit normal n
+	bool RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n) const;
 	/// groups that were ever drawn with an animation transform (separate
 	/// ray tracing instances)
 	mutable std::vector<uint8_t> rtAnimated;
@@ -88,6 +91,8 @@ private:
 	std::vector<DWORD> groupTexIdx;  // per group: index into textures, or -1
 	std::vector<DWORD> groupMtrlIdx; // per group: material index of the template
 	std::vector<NTVERTEX> vtx;       // CPU copies of the geometry, for group queries and edits
+	mutable VECTOR3 bbMin{}, bbMax{}; // bounding box (RayHit; computed when first needed)
+	mutable bool haveBB = false;
 	std::vector<uint16_t> idx;
 	std::vector<VkTexture*> cfgTextures; // textures loaded for the material configuration
 };

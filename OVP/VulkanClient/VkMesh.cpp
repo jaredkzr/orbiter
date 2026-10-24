@@ -213,6 +213,64 @@ double VkMesh::RayExit (const VECTOR3 &o, const VECTOR3 &d, double maxDist) cons
 	return last;
 }
 
+bool VkMesh::RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n) const
+{
+	if (!haveBB) {
+		bbMin = _V(1e30, 1e30, 1e30), bbMax = _V(-1e30, -1e30, -1e30);
+		for (auto &v : vtx) {
+			bbMin.x = std::min (bbMin.x, (double)v.x), bbMax.x = std::max (bbMax.x, (double)v.x);
+			bbMin.y = std::min (bbMin.y, (double)v.y), bbMax.y = std::max (bbMax.y, (double)v.y);
+			bbMin.z = std::min (bbMin.z, (double)v.z), bbMax.z = std::max (bbMax.z, (double)v.z);
+		}
+		haveBB = true;
+	}
+	// the bounding box first
+	double t0 = 0.0, t1 = maxDist;
+	for (int k = 0; k < 3; k++) {
+		double ok = (&o.x)[k], dk = (&d.x)[k], lo = (&bbMin.x)[k], hi = (&bbMax.x)[k];
+		if (fabs (dk) < 1e-12) {
+			if (ok < lo || ok > hi) return false;
+			continue;
+		}
+		double a = (lo - ok) / dk, b = (hi - ok) / dk;
+		if (a > b) std::swap (a, b);
+		t0 = std::max (t0, a), t1 = std::min (t1, b);
+		if (t0 > t1) return false;
+	}
+	bool found = false;
+	t = maxDist;
+	for (size_t gi = 0; gi < groups.size(); gi++) {
+		const Group &g = groups[gi];
+		if (g.usrFlag & GRP_HIDDEN) continue;
+		for (uint32_t k = 0; k + 2 < g.nIndex; k += 3) {
+			VECTOR3 p[3];
+			for (int j = 0; j < 3; j++) {
+				const NTVERTEX &v = vtx[g.vertexOffset + idx[g.firstIndex + k + j]];
+				p[j] = _V(v.x, v.y, v.z);
+			}
+			// Moeller-Trumbore
+			VECTOR3 e1 = p[1] - p[0], e2 = p[2] - p[0];
+			VECTOR3 h = crossp (d, e2);
+			double a = dotp (e1, h);
+			if (fabs (a) < 1e-12) continue;
+			double f = 1.0 / a;
+			VECTOR3 s = o - p[0];
+			double u = f * dotp (s, h);
+			if (u < 0.0 || u > 1.0) continue;
+			VECTOR3 q = crossp (s, e1);
+			double v = f * dotp (d, q);
+			if (v < 0.0 || u + v > 1.0) continue;
+			double tt = f * dotp (e2, q);
+			if (tt > 0.0 && tt < t) {
+				t = tt;
+				n = unit (crossp (e1, e2));
+				found = true;
+			}
+		}
+	}
+	return found;
+}
+
 int VkMesh::GetGroupData (DWORD grp, GROUPREQUESTSPEC *grs) const
 {
 	if (grp >= groups.size()) return 1;

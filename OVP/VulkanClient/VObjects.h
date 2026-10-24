@@ -31,6 +31,11 @@ public:
 	virtual void PrepareFrame () {}
 	virtual void RenderShadow (ShadowMap &sm) {}
 	virtual void CollectLights (std::vector<LightSource> &lights) {}
+	/// engine plumes of this frame (before the prepass)
+	virtual void CollectPlumes (class PlumeRenderer &pr) {}
+	/// nearest intersection of a ray (global frame, |d| = 1) with the
+	/// object's meshes (and those of its surface bases) within maxDist
+	virtual bool RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n) { return false; }
 	virtual Atmosphere *GetAtmosphere () { return nullptr; }
 	virtual int VisEvent (DWORD msg, DWORD_PTR context) { return 0; }
 	virtual MESHHANDLE GetMesh (UINT idx) { return NULL; }
@@ -68,6 +73,8 @@ public:
 	void Render (RenderPass pass) override;
 	void RenderShadow (ShadowMap &sm) override;
 	void CollectLights (std::vector<LightSource> &lights) override;
+	void CollectPlumes (PlumeRenderer &pr) override;
+	bool RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n) override;
 	int VisEvent (DWORD msg, DWORD_PTR context) override;
 	MESHHANDLE GetMesh (UINT idx) override;
 
@@ -94,6 +101,7 @@ private:
 	// default (unanimated) positions of animated vertex lists, keyed by the list pointer
 	std::map<VECTOR3*, std::vector<VECTOR3>> vtxListDefaults;
 	float glassGlow[3] = { 0, 0, 0 }; // emission of transparent groups from interior lights
+	std::vector<uint8_t> plumeExhaust; // exhausts drawn as plume volumes this frame
 };
 
 // -----------------------------------------------------------------------
@@ -109,6 +117,7 @@ public:
 	OBJHANDLE Handle () const { return hBase; }
 	void Render (RenderPass pass);
 	void RenderShadow (ShadowMap &sm);
+	bool RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n);
 
 private:
 	OBJHANDLE hBase;
@@ -126,6 +135,7 @@ public:
 	void RenderSky () override;
 	void RenderShadow (ShadowMap &sm) override;
 	void PrepareFrame () override;
+	bool RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n) override;
 	Atmosphere *GetAtmosphere () override { return atmosphere.get(); }
 	/// tiled cloud layer (or nullptr) and its altitude [m]
 	PlanetSurface *CloudLayer () const { return clouds.get(); }

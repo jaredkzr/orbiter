@@ -16,9 +16,17 @@ Known gaps and limitations, to be addressed later.
   ORBITER_VK_PLUME_TYPE forces a class for testing.
 - Plumes write no motion vectors or reactive mask: TAA/FSR may smear them
   over moving backgrounds (planned with the GPU particles).
-- Not affected yet by the airflow (no bending at speed in the atmosphere),
-  no aerial perspective, no light cast on the surroundings (engine light
-  planned), not in the ray traced scene or the environment probe.
+- Airflow bends plumes along a jet-in-crossflow trajectory (momentum flux
+  = thrust over exit area against the crossflow's dynamic pressure); a
+  headwind shortens and widens them. Haze applies at the plume's
+  emission-weighted distance. Reflection rays (SSR, RT hybrid) add the
+  emission of plumes they pass (coarse march, no smoke, no haze).
+- Surfaces: the jet axis is ray cast on the CPU (8 segments) against the
+  terrain (elevation sampling, vertical normal), bases and other vessels
+  (static meshes, no animations); the gas then spreads along the surface.
+  Dust, scorching and light on the surface are still missing (particles,
+  engine light).
+- Not in the environment probe; no light cast on the surroundings yet.
 - Smoke is lit by sun and ambient light without self-shadowing.
 - Bloom (threshold 1, strength 0.35) makes bright plumes in daylight very
   large; the bloom threshold should become exposure-relative.

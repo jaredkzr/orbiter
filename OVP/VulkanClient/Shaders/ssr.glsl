@@ -12,7 +12,7 @@ layout(push_constant) uniform Params {
 	float thickness; // assumed thickness of surfaces, relative to their depth
 	float maxRough;  // reflections fade out up to this roughness
 	float reset;     // 1: no valid history
-	float pad;
+	float plumeSlot; // frame slot of the engine plumes (plume.glsl)
 } pc;
 
 const float PI = 3.14159265;
