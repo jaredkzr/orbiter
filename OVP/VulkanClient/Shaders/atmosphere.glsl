@@ -15,11 +15,11 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 betaM;         // Mie scattering coefficients [1/m] (rgb), scale height [m] (w)
 	vec4 radii;         // planet radius, atmosphere radius, Mie asymmetry g, sun intensity
 	vec4 camC;          // |camPos|^2 - r^2 for the planet (x) and atmosphere (y) radius
-	vec4 misc;          // x: atmosphere present, y: 1/fx, z: 1/fy
+	vec4 misc;          // x: atmosphere present, y: 1/fx, z: 1/fy, w: airglow strength
 	vec4 ground;        // planet colour (rgb), w: surface textures present
 	vec4 cloud;         // cloud layer radius, rotation angle, shadow depth, w: present
 	vec4 water;         // camera relative to the 1 km-snapped origin of surface patterns, w: time [s] (< 0: no ripples)
-	vec4 ozone;         // ozone absorption [1/m] (rgb)
+	vec4 ozone;         // absorption [1/m] (rgb): ozone layer, or (w = 1) aerosols (dust)
 } atm;
 
 // planet surface (western and eastern hemisphere), for reflections
@@ -77,6 +77,8 @@ vec3 SunTransmittance (vec3 p)
 	return AtmSunTransmittance (p, r, dot (p, atm.sunDir.xyz) / r);
 }
 
+float AtmSq (float x) { return x * x; }
+
 // Light scattered towards the camera along the view ray d up to distance
 // tMax, and the transmittance T of that path
 vec3 Inscatter (vec3 d, float tMax, out vec3 T)
@@ -98,7 +100,7 @@ vec3 Inscatter (vec3 d, float tMax, out vec3 T)
 		float r = length (p);
 		vec3 dens = AtmDensities (r - Rg, atm.betaR.w, atm.betaM.w) * ds;
 		vec3 scat = atm.betaR.rgb * dens.x + atm.betaM.rgb * dens.y;
-		vec3 ext = scat + atm.betaM.rgb * 0.1 * dens.y + atm.ozone.rgb * dens.z;
+		vec3 ext = scat + atm.betaM.rgb * 0.1 * dens.y + atm.ozone.rgb * (atm.ozone.w > 0.5 ? dens.y : dens.z);
 		vec3 Tv = exp (-(tau + 0.5 * ext)); // to the middle of the step
 		tau += ext;
 		float muS = dot (p, atm.sunDir.xyz) / r;
@@ -111,12 +113,33 @@ vec3 Inscatter (vec3 d, float tMax, out vec3 T)
 	}
 	T = exp (-tau);
 
+	// airglow: a thin emitting shell (oxygen, 557.7 nm) about 95 km up, seen
+	// as a green line along the limb on the night side; the path length
+	// through the shell (between the radii at 90 and 100 km) up to tMax
+	vec3 glow = vec3 (0.0);
+	if (atm.misc.w > 0.0) {
+		float b2 = dot (o, o) - AtmSq (dot (o, d)); // squared distance of the ray's line from the centre
+		float tc = -dot (o, d);
+		float ro = Rg + 100e3, ri = Rg + 90e3;
+		float path = 0.0;
+		if (b2 < ro * ro) {
+			float ho = sqrt (ro * ro - b2), hi = b2 < ri * ri ? sqrt (ri * ri - b2) : 0.0;
+			// the two segments (before and after the closest point), clipped to [0, tMax]
+			path += max (0.0, min (tc - hi, tMax) - max (tc - ho, 0.0));
+			path += max (0.0, min (tc + ho, tMax) - max (tc + hi, 0.0));
+		}
+		// (lost in the sunlit sky: only where the shell is in the night)
+		vec3 pc = o + d * clamp (tc, 0.0, tMax);
+		float night = smoothstep (0.1, -0.15, dot (normalize (pc), atm.sunDir.xyz));
+		glow = vec3 (0.25, 1.0, 0.35) * (path * 6e-9 * atm.misc.w * night);
+	}
+
 	float mu = dot (d, atm.sunDir.xyz);
 	float g = atm.radii.z;
 	float pR = 3.0 / (16.0 * ATM_PI) * (1.0 + mu * mu);
 	float pM = 3.0 / (8.0 * ATM_PI) * ((1.0 - g * g) * (1.0 + mu * mu)) /
 		((2.0 + g * g) * pow (max (1.0 + g * g - 2.0 * g * mu, 1e-4), 1.5));
-	return atm.radii.w * (sumR * atm.betaR.rgb * pR + sumM * atm.betaM.rgb * pM + sumMS);
+	return atm.radii.w * (sumR * atm.betaR.rgb * pR + sumM * atm.betaM.rgb * pM + sumMS) + glow;
 }
 
 // Sunlit planet surface seen from afar, at the unit normal n (planet

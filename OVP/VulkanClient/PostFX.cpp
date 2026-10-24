@@ -399,7 +399,7 @@ void PostFX::Meter ()
 	AdaptParams ap;
 	ap.dt = dt;
 	ap.key = 0.45f;
-	ap.minLogExp = std::log2 (0.6f), ap.maxLogExp = std::log2 (4.0f);
+	ap.minLogExp = std::log2 (0.6f), ap.maxLogExp = std::log2 (std::max (maxExposure, 0.6f));
 	ap.lowPct = 0.5f, ap.highPct = 0.98f;
 	ap.speedUp = 3.0f, ap.speedDown = 1.2f;
 	ap.strength = 0.6f;

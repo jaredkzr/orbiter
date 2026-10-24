@@ -75,7 +75,8 @@ private:
 	bool present = false;
 	double radius = 0.0, atmRadius = 0.0;
 	float betaR[4] = {}, betaM[4] = {};
-	float mieG = 0.76f, sunIntensity = 16.0f;
+	float mieG = 0.76f, sunIntensity = 6.0f; // (sky radiance scale: physically about pi for a sunlit white surface of 1)
+	float airglow = 0.0f; // strength of the airglow layer (Earth)
 	float ozone[4] = {};                  // ozone absorption [1/m] (Earth)
 	float groundAlbedo = 0.3f;            // for light reflected into the sky
 	vkc::Image transmittanceLut, multiscatLut; // precomputed tables

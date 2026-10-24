@@ -64,7 +64,7 @@ void main ()
 		float rq = length (q);
 		vec3 dens = AtmDensities (rq - Rg, pc.betaR.w, pc.betaM.w);
 		vec3 scat = pc.betaR.rgb * dens.x + pc.betaM.rgb * dens.y;
-		vec3 ext = scat + pc.betaM.rgb * 0.1 * dens.y + pc.ozone.rgb * dens.z;
+		vec3 ext = scat + pc.betaM.rgb * 0.1 * dens.y + pc.ozone.rgb * (pc.ozone.w > 0.5 ? dens.y : dens.z);
 		vec3 T = exp (-(tau + 0.5 * ext * ds));
 		tau += ext * ds;
 		float mu = dot (q, sun) / rq;

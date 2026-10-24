@@ -78,14 +78,27 @@ vec3 WaterNormal (vec3 Nv, vec3 posView, float dist)
 	mat3 v2p = mat3 (atm.viewToPlanet);
 	vec3 p = v2p * posView + atm.water.xyz; // relative to the pattern origin
 	vec3 Np = v2p * Nv;
-	const vec4 W[6] = vec4[] (vec4 (1, 0, 0, 37), vec4 (0, 0, 1, 41), vec4 (1, 0, 1, 29),
-	                          vec4 (0, 1, 1, 53), vec4 (1, 1, 0, 97), vec4 (1, 0, -1, 113));
+	// a spectrum of waves in irregular directions (golden angle steps about
+	// the local vertical), wavelengths from 60 m down to 0.6 m, slopes of a
+	// light breeze; waves shorter than a few pixels fade out (no aliasing)
+	vec3 t1 = normalize (cross (Np, abs (Np.y) < 0.9 ? vec3 (0.0, 1.0, 0.0) : vec3 (1.0, 0.0, 0.0)));
+	vec3 t2 = cross (Np, t1);
+	// pixel size on the water [m] (stretched along the view at grazing angles)
+	float footprint = dist * 2.0 * atm.misc.z / max (frame.jitter.w, 1.0)
+		/ max (abs (dot (normalize (posView), Nv)), 0.05);
 	vec3 g = vec3 (0.0);
-	for (int i = 0; i < 6; i++) {
-		float k = 2.0 * PI * W[i].w / 1000.0;
-		float w = sqrt (9.81 * k * length (W[i].xyz)); // deep water dispersion
-		float ph = k * dot (p, W[i].xyz) + w * atm.water.w;
-		g += W[i].xyz * (0.05 / (1.0 + 0.4 * float (i))) * cos (ph);
+	const int NW = 14;
+	for (int i = 0; i < NW; i++) {
+		float lambda = 60.0 * pow (0.7, float (i));
+		float ang = float (i) * 2.39996 + 0.3 * sin (float (i) * 7.1);
+		// (mostly with the wind, from about one direction)
+		ang = 0.6 * sin (ang) + 0.2;
+		vec3 dir = t1 * cos (ang) + t2 * sin (ang);
+		float k = 2.0 * PI / lambda;
+		float w = sqrt (9.81 * k);
+		float ph = k * dot (p, dir) + w * atm.water.w + float (i) * 1.7;
+		float aa = 1.0 - smoothstep (2.0, 6.0, footprint / lambda * 4.0);
+		g += dir * (0.035 * cos (ph) * aa);
 	}
 	g -= Np * dot (g, Np); // slope in the tangent plane
 	return transpose (v2p) * normalize (Np - g * fade);
@@ -115,7 +128,10 @@ void main()
 	if (tile.params.z < 0.5) base *= GroundDetail(vPosView, length(vPosView));
 	float ao = tile.params.z < 0.5 ? AmbientOcclusion() : 1.0; // clouds are not in the prepass
 	float aoDirect = mix(1.0, ao, frame.aoParams.z); // contact darkening in direct light too
-	vec3 col = base * (frame.ambient.rgb * ao + (frame.sunColor.rgb * sunT * max(ndl, 0.0) + LocalLighting(vPosView, N, lv)) * aoDirect);
+	// the night side gets no skylight: only a fraction of the ambient level
+	// remains (moon and starlight)
+	float ambNight = tile.params.z < 0.5 ? mix(0.15, 1.0, smoothstep(-0.25, 0.0, ndl)) : 1.0;
+	vec3 col = base * (frame.ambient.rgb * ao * ambNight + (frame.sunColor.rgb * sunT * max(ndl, 0.0) + LocalLighting(vPosView, N, lv)) * aoDirect);
 
 	if (tile.params.z > 0.5) { // cloud layer: lit from above, also seen from below
 		float a = texture(surfTex, clamp(vUV * tile.surfUV.zw + tile.surfUV.xy, hs, 1.0 - hs)).a;
@@ -140,7 +156,11 @@ void main()
 		// the night light texture represents lights seen from altitude; close up
 		// it would flood the ground, so it fades out near the camera
 		night *= smoothstep(1000.0, 10000.0, length(vPosView));
-		col += m.rgb * night * tile.params.y;
+		// (the texture's lights are blurred averages of point sources: cores
+		// brightened, dim spill suppressed, so that cities stand out as in
+		// photographs)
+		float lm = max (m.r, max (m.g, m.b));
+		col += m.rgb * (3.0 * lm * smoothstep (0.04, 0.25, lm)) * night * tile.params.y;
 		// water (mask alpha 0): reflection of the sky and the sun's glitter,
 		// which spreads out when seen from afar
 		if (m.a < 0.5) {
@@ -151,6 +171,10 @@ void main()
 			float fres = 0.02 + 0.98 * pow(1.0 - NoV, 5.0);
 			if (hasAtm) {
 				vec3 R = reflect(-V, Nw);
+				// (reflections towards the water itself would see it again: kept
+				// above the horizon)
+				float rh = dot(R, N);
+				if (rh < 0.02) R = normalize(R + N * (0.02 - rh));
 				vec3 T;
 				vec3 sky = AtmTonemap(Inscatter(normalize(mat3(atm.viewToPlanet) * R), ATM_NONE, T));
 				// screen-space reflections (traced with the smooth surface),

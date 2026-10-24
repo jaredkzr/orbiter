@@ -312,8 +312,23 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		// Earth's ozone layer absorbs in the orange (the blue of the sky at twilight)
 		char name[64];
 		oapiGetObjectName (hPlanet, name, 64);
-		if (!strcmp (name, "Earth"))
+		if (!strcmp (name, "Earth")) {
 			ozone[0] = 0.650e-6f, ozone[1] = 1.881e-6f, ozone[2] = 0.085e-6f;
+			airglow = 1.0f; // (the green oxygen line at about 95 km)
+		}
+		if (!strcmp (name, "Mars")) {
+			// suspended dust: a vertical optical depth of about 0.5 over a
+			// scale height like the gas's, scattering mostly forward, and
+			// absorbing blue light (the butterscotch sky, blue sunsets)
+			const double tau = 0.4, scat[3] = { 0.96, 0.78, 0.48 }; // single-scattering albedo
+			for (int i = 0; i < 3; i++) {
+				betaM[i] = (float)(tau / H * scat[i]);
+				ozone[i] = (float)(tau / H * (1.0 - scat[i]));
+			}
+			betaM[3] = (float)H;
+			ozone[3] = 1.0f; // (absorption with the dust's profile)
+			mieG = 0.65f;
+		}
 	}
 
 	if (const bool *r = (const bool*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_SURFACERIPPLE)) ripple = *r;
@@ -464,8 +479,10 @@ void Atmosphere::Update ()
 	u.radii[0] = (float)radius;
 	u.radii[1] = (float)atmRadius;
 	u.radii[2] = mieG;
-	u.radii[3] = sunIntensity;
+	static const float skyScale = getenv ("ORBITER_VK_SKY_INTENSITY") ? (float)atof (getenv ("ORBITER_VK_SKY_INTENSITY")) : 0.0f;
+	u.radii[3] = skyScale > 0.0f ? skyScale : sunIntensity;
 	u.misc[0] = present ? 1.0f : 0.0f;
+	u.misc[3] = airglow;
 	memcpy (u.ozone, ozone, sizeof(ozone));
 	memcpy (u.ground, groundColour, sizeof(groundColour));
 	if (cloudParams[3] > 0.0f)

@@ -664,6 +664,33 @@ void PlanetSurface::Prepare ()
 		int srcLvl = src ? src->lvl : 0;
 		if (!n->vbuf.buffer || n->meshElevLvl != srcLvl) BuildMesh (n, src);
 	}
+	// (ORBITER_VK_TILE_DEBUG: the deepest tiles drawn and the deepest surface
+	// and elevation data among them)
+	static const bool debug = getenv ("ORBITER_VK_TILE_DEBUG") && atoi (getenv ("ORBITER_VK_TILE_DEBUG"));
+	if (debug && frame % 120 == 0 && !drawList.empty()) {
+		int maxLvl = 0, maxSurf = 0, maxElev = 0;
+		for (Node *n : drawList) {
+			maxLvl = std::max (maxLvl, n->lvl);
+			for (const Node *a = n; a; a = a->parent) if (a->surf) { maxSurf = std::max (maxSurf, a->lvl); break; }
+			if (const Node *e = ElevSource (n)) maxElev = std::max (maxElev, e->lvl);
+		}
+		char name[64];
+		oapiGetObjectName (hPlanet, name, 64);
+		oapiWriteLogV ("VulkanClient: tiles %s%s: %zu drawn, deepest level %d, surface data %d, elevation %d",
+			name, clouds ? " (clouds)" : "", drawList.size(), maxLvl, maxSurf, maxElev);
+		if (!clouds) {
+			// elevation under the camera: the mesh's against the core's
+			double lat = asin (camLocal.y / camDist), lng = atan2 (camLocal.z, camLocal.x);
+			for (Node *n : drawList) {
+				if (lat < n->latmin || lat > n->latmax || lng < n->lngmin || lng > n->lngmax) continue;
+				const Node *src = ElevSource (n);
+				oapiWriteLogV ("VulkanClient: elevation at the camera (%s): mesh %.1f m (level %d, tile %d/%d/%d, range %.0f..%.0f), core %.1f m",
+					name, src ? SampleElev (src, lat, lng) : 0.0, src ? src->lvl : 0, n->lvl, n->ilat, n->ilng,
+					src ? src->elev->emin : 0.0, src ? src->elev->emax : 0.0, oapiSurfaceElevation (hPlanet, lng, lat));
+				break;
+			}
+		}
+	}
 }
 
 void PlanetSurface::RenderDepth ()

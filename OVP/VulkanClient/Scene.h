@@ -163,6 +163,8 @@ public:
 	/// the sun's position on the screen (texture coordinates); false if
 	/// behind the camera or far off the screen
 	bool SunOnScreen (float uv[2]) const;
+	/// fraction of the sun's disc visible from the camera
+	double CameraSunlight () { return Sunlight (camPos); }
 	VkDescriptorSet FrameSet () const { return inProbe ? probeFrameSet[ctx->FrameIndex()] : frameSet[ctx->FrameIndex()]; }
 	/// rendering the environment probe (not the main view)
 	bool InProbe () const { return inProbe; }

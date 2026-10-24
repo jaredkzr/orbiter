@@ -30,6 +30,10 @@ public:
 	bool sunOnScreen = false;
 	float sunUV[2] = { 0.0f, 0.0f };
 	bool autoExposure = true;
+	/// highest exposure of the automatic exposure: with the camera in
+	/// sunlight, sunlit white stays just below full brightness (as a camera
+	/// exposed for daylight), so dark scenes (the ocean from orbit) stay dark
+	float maxExposure = 4.0f;
 
 	/// adapted exposure and metered scene luminance (log2), as of the last
 	/// completed frame

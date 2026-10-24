@@ -182,6 +182,10 @@ void VulkanClient::clbkUpdate (bool running)
 	if (scene) scene->Update ();
 }
 
+namespace {
+	constexpr double DAYLIGHT_MAX_EXPOSURE = 1.3; // with the camera in sunlight
+}
+
 void VulkanClient::clbkRenderScene ()
 {
 	frameActive = false;
@@ -203,6 +207,10 @@ void VulkanClient::clbkRenderScene ()
 	VkImageView sceneImage = scene->ResolveTemporal (sceneSize);
 	ctx.GpuMark ("temporal");
 	postfx->sunOnScreen = scene->SunOnScreen (postfx->sunUV);
+	{
+		double sl = scene->CameraSunlight ();
+		postfx->maxExposure = (float)std::exp2 (std::log2 (4.0) + (std::log2 (DAYLIGHT_MAX_EXPOSURE) - std::log2 (4.0)) * sl);
+	}
 	postfx->Apply (sceneImage, sceneSize);   // HDR scene -> backbuffer
 	ctx.GpuMark ("post");
 	Render2DOverlay (); // panels, MFDs and HUD

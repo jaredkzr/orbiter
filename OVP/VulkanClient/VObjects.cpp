@@ -643,7 +643,42 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 	}
 	if (hot > 0.0 && !onWater)
 		pr->Scorch (hp, hit, n, std::max (1.0, 0.12 * reach) * (0.7 + 0.3 * hot), 0.08 * hot * hot * dt);
-	if (kind != 0) { r.havePrev = false; return; } // (no dust from pads)
+	if (kind == 1) {
+		// launch pads: the sound suppression water flashes into steam under
+		// large engines, billowing out and rising in great white clouds
+		if (thrust < 5e5 || pd.ambientPressure < 5e4) { r.havePrev = false; return; }
+		double life = 25.0;
+		if (!EnsureRing (r, 120.0, life)) return;
+		double D = sys->density, sizeScale = std::pow (D, -1.0 / 3.0);
+		VECTOR3 vel;
+		vessel->GetGlobalVel (vel);
+		VECTOR3 src = hit + n * 2.0;
+		if (!r.havePrev) r.prev = src;
+		r.accum += 60.0 * D * std::min (1.0, strength * 2.0) * dt;
+		uint32_t cnt = (uint32_t)r.accum;
+		r.accum -= cnt;
+		if (cnt) {
+			ParticleSystem::Emission e{};
+			e.p0 = r.prev, e.p1 = src;
+			e.vel = vel, e.dir = -n;
+			e.v0 = 6.0, e.spread = 70.0;
+			e.planar = true;
+			e.lifetime = life, e.dt = dt;
+			e.size = 12.0 * sizeScale, e.growth = 3.5 * sizeScale;
+			e.alpha = 0.5 * std::min (1.0, 1.3 / (D * sizeScale * sizeScale));
+			e.slowdown = 0.6;
+			e.first = r.first, e.capacity = r.capacity, e.head = r.head, e.count = std::min (cnt, r.capacity);
+			e.tinted = true; // (hot: rises)
+			e.albedo[0] = e.albedo[1] = e.albedo[2] = 0.97f;
+			sys->Queue (e);
+			r.head = (r.head + e.count) % r.capacity;
+			r.lastEmit = oapiGetSimTime ();
+			r.life = life;
+		}
+		r.prev = src;
+		r.havePrev = true;
+		return;
+	}
 	// water: spray instead of dust (the sea's surface is at elevation 0)
 	VECTOR3 loc;
 	oapiGlobalToLocal (hp, &hit, &loc);

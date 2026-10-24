@@ -33,7 +33,7 @@ void main ()
 		float t = ds * (float (i) + 0.5);
 		float h = sqrt (r * r + t * t + 2.0 * r * mu * t) - Rg;
 		vec3 dens = AtmDensities (h, pc.betaR.w, pc.betaM.w);
-		tau += (pc.betaR.rgb * dens.x + pc.betaM.rgb * 1.1 * dens.y + pc.ozone.rgb * dens.z) * ds;
+		tau += (pc.betaR.rgb * dens.x + pc.betaM.rgb * 1.1 * dens.y + pc.ozone.rgb * (pc.ozone.w > 0.5 ? dens.y : dens.z)) * ds;
 	}
 	imageStore (outLut, p, vec4 (exp (-tau), 1.0));
 }
