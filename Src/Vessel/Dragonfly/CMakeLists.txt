@@ -4,7 +4,7 @@ set(TEXTURE2_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/Textures2)
 set(CONFIG_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/Config)
 set(THUMBNAIL_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/Thumbnail)
 
-if(OPENGL_FOUND) # OpenGL is required for this target
+if(OPENGL_FOUND AND OPENGL_GLU_FOUND) # OpenGL and GLU are required for this target
 
 add_library(Dragonfly SHARED
 	Dragonfly.cpp

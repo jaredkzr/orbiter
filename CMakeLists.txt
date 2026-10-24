@@ -244,6 +244,19 @@ if(ORBITER_HEADLESS)
 	set(ORBITER_BUILD_XRSOUND OFF)
 endif()
 
+# Vulkan client: built by default on non-Windows platforms when the SDL3
+# development package is installed
+find_package(SDL3 CONFIG QUIET)
+if(ORBITER_HEADLESS AND SDL3_FOUND)
+	set(VULKANCLIENT_DEFAULT ON)
+else()
+	set(VULKANCLIENT_DEFAULT OFF)
+endif()
+option(ORBITER_BUILD_VULKANCLIENT
+	"Build the Vulkan graphics client (SDL3 windowing)"
+	${VULKANCLIENT_DEFAULT}
+)
+
 include(cmake/tracy.cmake)
 
 if(ORBITER_BUILD_D3D9CLIENT)
@@ -317,6 +330,9 @@ INSTALL(FILES LICENSE
 # Sub-projects
 add_subdirectory(Extern)
 add_subdirectory(Src)
+if(ORBITER_BUILD_VULKANCLIENT)
+	add_subdirectory(OVP/VulkanClient)
+endif()
 if(ORBITER_HEADLESS)
 	add_subdirectory(Utils/meshc) # mesh compiler, used to build vessel modules
 else()

@@ -41,7 +41,7 @@ void DInput::SetRenderWindow (HWND hWnd)
 
 bool DInput::CreateKbdDevice ()
 {
-	return false;
+	return true; // keyboard input is passed in by the graphics client
 }
 
 bool DInput::CreateJoyDevice ()

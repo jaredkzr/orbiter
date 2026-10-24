@@ -283,3 +283,32 @@ __attribute__((visibility("default"))) int open64(const char *path, int flags, .
 }
 
 } // extern "C"
+
+// ======================================================================
+// Mouse state reported by the graphics client
+
+namespace {
+	int g_mouseX = 0, g_mouseY = 0;   // current position in the render window
+	int g_mouseDx = 0, g_mouseDy = 0; // accumulated relative motion
+}
+
+void orbiter::platform::SetMousePos(int x, int y)
+{
+	g_mouseX = x, g_mouseY = y;
+}
+
+void orbiter::platform::GetMousePos(int &x, int &y)
+{
+	x = g_mouseX, y = g_mouseY;
+}
+
+void orbiter::platform::AddMouseMotion(int dx, int dy)
+{
+	g_mouseDx += dx, g_mouseDy += dy;
+}
+
+void orbiter::platform::TakeMouseMotion(int &dx, int &dy)
+{
+	dx = g_mouseDx, dy = g_mouseDy;
+	g_mouseDx = g_mouseDy = 0;
+}

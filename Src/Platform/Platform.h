@@ -45,6 +45,13 @@ namespace platform {
 	/// Host file name of a plugin module given by its Windows file name:
 	/// a ".dll" extension is replaced by ModuleExt, and the path is resolved.
 	std::string ModulePath(const char *path);
+
+	/// Mouse state reported by the graphics client (Windows queries the cursor directly)
+	void SetMousePos(int x, int y);
+	void GetMousePos(int &x, int &y);
+	void AddMouseMotion(int dx, int dy);
+	/// Returns and resets the relative mouse motion accumulated since the last call
+	void TakeMouseMotion(int &dx, int &dy);
 #endif
 
 } // namespace platform

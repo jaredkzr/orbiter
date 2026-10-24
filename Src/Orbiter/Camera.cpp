@@ -10,6 +10,9 @@
 #include "resource.h"
 #include "D3dmath.h"
 #include "Camera.h"
+#ifndef _WIN32
+#include "Platform.h"
+#endif
 #include "Config.h"
 #include "Body.h"
 #include "Planet.h"
@@ -157,6 +160,32 @@ void Camera::UpdateMouse ()
 		SetCursorPos (x0-dx, y0-dy);
 		if (!(dx || dy)) return;
 
+		if (external_view) {
+			if (extmode == CAMERA_GROUNDOBSERVER) {
+				if (go.tgtlock) {
+					GroundObserverShift (dx*go.panspeed * -0.005, dy*go.panspeed * -0.005, 0.0);
+				} else
+					GroundObserverTilt (dx * -0.005, dy * -0.005);
+			} else {
+				if (dx) ShiftPhi (dx * -0.005);
+				if (dy) ShiftTheta (dy * -0.005);
+			}
+		} else {
+			Rotate (dx * -0.001, dy * -0.001);
+		}
+	}
+#else
+	// The graphics client reports the cursor position and the relative
+	// motion (the cursor is captured while the right button is held).
+	int x, y, dx, dy;
+	orbiter::platform::GetMousePos (x, y);
+	orbiter::platform::TakeMouseMotion (dx, dy);
+	if (x != pm.x || y != pm.y) {
+		pm.x = x, pm.y = y;
+		mmoveT = td.SysT0;
+	}
+
+	if (mbdown[1] && (dx || dy)) {
 		if (external_view) {
 			if (extmode == CAMERA_GROUNDOBSERVER) {
 				if (go.tgtlock) {

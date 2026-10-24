@@ -778,9 +778,7 @@ HWND Orbiter::CreateRenderWindow (Config *pCfg, const char *scenario)
 		snote_playback = gclient->clbkCreateAnnotation ();
 	}
 	else {
-#ifdef _WIN32
 		pDlgMgr = new DialogManager(this, m_pConsole->WindowHandle());
-#endif
 	}
 
 	// read simulation environment state

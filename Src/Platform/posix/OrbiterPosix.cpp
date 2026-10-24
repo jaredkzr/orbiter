@@ -4,9 +4,11 @@
 // =======================================================================
 // Platform-specific parts of class Orbiter for non-Windows platforms.
 //
-// Without a graphics client Orbiter runs as a headless server: the
-// scenario given on the command line (-s / --scenario) is launched
-// directly, and the session is controlled through the console (stdin).
+// There is no launchpad: the scenario given on the command line
+// (-s / --scenario) is launched directly. With a graphics client (loaded
+// as a plugin, e.g. -p VulkanClient), the client owns the render window
+// and passes user input to Orbiter (posix/OrbiterInput.h). Without one,
+// Orbiter runs as a headless server controlled through the console.
 // =======================================================================
 
 #include "Orbiter.h"
@@ -16,11 +18,22 @@
 #include "Mfd.h"
 #include "Memstat.h"
 #include "console_ng.h"
+#include "Camera.h"
+#include "Select.h"
+#include "Vessel.h"
+#include "Platform.h"
+#include "posix/OrbiterInput.h"
+#include "imgui.h"
 #include <cstdio>
 #include <string>
 #include <thread>
 
 extern const TCHAR *MasterConfigFile;
+extern Orbiter *g_pOrbiter;
+extern Camera *g_camera;
+extern Vessel *g_focusobj;
+extern Select *g_select;
+extern InputBox *g_input;
 
 // =======================================================================
 
@@ -76,17 +89,32 @@ INT Orbiter::Run ()
 		return 1;
 	}
 
-	// The console allows to control the session, since there is no launchpad
+	memset (platformKstate, 0, sizeof(platformKstate));
+	bPlatformClose = false;
+
+	// Without a graphics client, the console controls the session (there is no launchpad)
 	Launch (pConfig->CfgCmdlinePrm.LaunchScenario.c_str());
 
 	while (bSession) {
+		if (bAllowInput) bActive = true, bAllowInput = false;
 		if (BeginTimeStep (bRunning)) {
 			UpdateWorld();
-			EndTimeStep (bRunning);
+			EndTimeStep (bRunning); // the graphics client processes window events in clbkUpdate
+			if (bVisible) {
+				if (bActive) UserInput ();
+				Render3DEnvironment ();
+			}
+			if (bRunning && bCapture) {
+				CaptureVideoFrame ();
+			}
 		}
 		if (m_pConsole)
 			m_pConsole->ParseCmd();
-		if (!bRunning) // don't spin while paused
+		if (bPlatformClose) { // render window closed
+			bPlatformClose = false;
+			PreCloseSession ();
+			CloseSession ();
+		} else if (!bRunning && !bVisible) // don't spin while paused
 			std::this_thread::sleep_for (std::chrono::milliseconds (10));
 	}
 	return 0;
@@ -119,18 +147,117 @@ void Orbiter::ExitRotationMode ()
 
 //-----------------------------------------------------------------------------
 // Name: UserInput()
-// Desc: There are no input devices on this platform. Only reset the per-frame
-//       key and attitude control states; key events can still be injected
-//       through SendKbdBuffered/SendKbdImmediate.
+// Desc: Process keyboard input passed in by the graphics client, in the same
+//       way as DirectInput keyboard data on Windows. Mouse events are handled
+//       when they are reported (PlatformMouse).
 //-----------------------------------------------------------------------------
 HRESULT Orbiter::UserInput ()
 {
-	memset (simkstate, 0, 256);
-	for (int i = 0; i < 15; i++) {
-		ctrlKeyboard[i] = ctrlJoystick[i] = 0;
-		ctrlTotal[i] = 0;
+	DWORD i;
+	bool skipkbd = false;
+
+	memset(simkstate, 0, 256);
+	for (i = 0; i < 15; i++) ctrlKeyboard[i] = ctrlJoystick[i] = 0; // reset keyboard and joystick attitude requests
+
+	// skip keyboard if dialogs are open
+	if ((g_input && g_input->IsActive()) ||
+	    (g_select && g_select->IsActive())) skipkbd = true;
+
+	ImGuiIO& io = ImGui::GetIO();
+	bool imguiWantsKeyboard = io.WantCaptureKeyboard &&
+		(pConfig->CfgUIPrm.MouseFocusMode == 0 || io.WantCaptureMouse);
+
+	// immediate key interpretation
+	char buffer[256];
+	memcpy (buffer, platformKstate, 256);
+	if (!imguiWantsKeyboard)
+		for (i = 0; i < 256; i++)
+			simkstate[i] |= buffer[i];
+	bool consume = BroadcastImmediateKeyboardEvent (simkstate);
+	if (!skipkbd && !consume) {
+		KbdInputImmediate_System (simkstate);
+		if (bRunning) KbdInputImmediate_OnRunning (simkstate);
 	}
+
+	// buffered key events
+	DWORD nItems = (DWORD)platformKbuf.size();
+	if (nItems && !imguiWantsKeyboard) {
+		BroadcastBufferedKeyboardEvent (buffer, platformKbuf.data(), nItems);
+		if (!skipkbd) {
+			KbdInputBuffered_System (buffer, platformKbuf.data(), nItems);
+			if (bRunning) KbdInputBuffered_OnRunning (buffer, platformKbuf.data(), nItems);
+		}
+	}
+	platformKbuf.clear();
+
+	for (i = 0; i < 15; i++) ctrlTotal[i] = ctrlKeyboard[i]; // update attitude requests
+
+	g_camera->UpdateMouse();
+
+	// apply manual attitude control
+	g_focusobj->ApplyUserAttitudeControls (ctrlTotal);
+
 	return S_OK;
+}
+
+// =======================================================================
+// User input passed in by the graphics client
+
+void Orbiter::PlatformKey (DWORD key, bool down)
+{
+	if (key >= 256) return;
+	platformKstate[key] = (down ? (char)0x80 : 0);
+	DIDEVICEOBJECTDATA dod = {};
+	dod.dwOfs = key;
+	dod.dwData = (down ? 0x80 : 0);
+	dod.dwTimeStamp = timeGetTime();
+	platformKbuf.push_back (dod);
+}
+
+void Orbiter::PlatformMouse (UINT event, DWORD state, int x, int y)
+{
+	if (!bSession) return;
+	if (event != WM_MOUSEWHEEL)
+		orbiter::platform::SetMousePos (x, y);
+	ImGuiIO& io = ImGui::GetIO();
+	if (io.WantCaptureMouse && !bKeepFocus) return;
+	MouseEvent (event, state, x, y);
+}
+
+DLLEXPORT void oapiInputKey (DWORD key, bool down)
+{
+	g_pOrbiter->PlatformKey (key, down);
+}
+
+DLLEXPORT void oapiInputMouseButton (UINT event, int x, int y)
+{
+	g_pOrbiter->PlatformMouse (event, 0, x, y);
+}
+
+DLLEXPORT void oapiInputMouseMove (int x, int y, int dx, int dy)
+{
+	orbiter::platform::AddMouseMotion (dx, dy);
+	g_pOrbiter->PlatformMouse (WM_MOUSEMOVE, 0, x, y);
+}
+
+DLLEXPORT void oapiInputMouseWheel (int delta, int x, int y)
+{
+	g_pOrbiter->PlatformMouse (WM_MOUSEWHEEL, MAKEWPARAM (0, (WORD)(short)delta), x, y);
+}
+
+DLLEXPORT void oapiInputFocus (bool active)
+{
+	g_pOrbiter->PlatformFocus (active);
+}
+
+DLLEXPORT void oapiInputCloseRequest ()
+{
+	g_pOrbiter->PlatformCloseRequest ();
+}
+
+DLLEXPORT bool oapiInputMouseCaptured ()
+{
+	return g_pOrbiter->PlatformMouseCaptured ();
 }
 
 bool Orbiter::ActivateRoughType ()

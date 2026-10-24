@@ -318,6 +318,20 @@ public:
 
 	void OnOptionChanged(DWORD cat, DWORD item = 0);
 
+#ifndef _WIN32
+	// User input passed in by the graphics client (see Orbitersdk/include/posix/OrbiterInput.h)
+	void PlatformKey (DWORD key, bool down);
+	void PlatformMouse (UINT event, DWORD state, int x, int y);
+	void PlatformFocus (bool active) { bActive = active; }
+	void PlatformCloseRequest () { bPlatformClose = true; }
+	bool PlatformMouseCaptured () const { return bKeepFocus; }
+
+private:
+	char platformKstate[256];                   // current key state
+	std::vector<DIDEVICEOBJECTDATA> platformKbuf; // key events since the last frame
+	bool bPlatformClose;                        // session end requested by the client
+#endif
+
 protected:
 	HRESULT UserInput ();
 	void KbdInputImmediate_System    (char *kstate);

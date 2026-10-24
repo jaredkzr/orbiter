@@ -2255,6 +2255,8 @@ oapi::ParticleStream *Vessel::AddParticleStream (PARTICLESTREAMSPEC *pss, const 
 	if (!g_pOrbiter->Cfg()->CfgVisualPrm.bParticleStreams) return 0;
 	oapi::GraphicsClient *gc = g_pOrbiter->GetGraphicsClient ();
 	if (!gc) return 0;
+	oapi::ParticleStream *ps = gc->clbkCreateExhaustStream (pss, (OBJHANDLE)this, lvl, MakeVECTOR3(pos), MakeVECTOR3(-dir));
+	if (!ps) return 0; // not supported by the graphics client
 
 	oapi::ParticleStream **tmp = new oapi::ParticleStream*[ncontrail+1]; TRACENEW
 	if (ncontrail) {
@@ -2262,7 +2264,7 @@ oapi::ParticleStream *Vessel::AddParticleStream (PARTICLESTREAMSPEC *pss, const 
 		delete []contrail;
 	}
 	contrail = tmp;
-	contrail[ncontrail] = gc->clbkCreateExhaustStream (pss, (OBJHANDLE)this, lvl, MakeVECTOR3(pos), MakeVECTOR3(-dir));
+	contrail[ncontrail] = ps;
 	return contrail[ncontrail++];	
 }
 
@@ -2273,6 +2275,8 @@ oapi::ParticleStream *Vessel::AddExhaustStream (ThrustSpec *ts, PARTICLESTREAMSP
 	if (!g_pOrbiter->Cfg()->CfgVisualPrm.bParticleStreams) return 0;
 	oapi::GraphicsClient *gc = g_pOrbiter->GetGraphicsClient ();
 	if (!gc) return 0;
+	oapi::ParticleStream *ps = gc->clbkCreateExhaustStream (pss, (OBJHANDLE)this, &ts->level, &ts->ref, &ts->dir);
+	if (!ps) return 0; // not supported by the graphics client
 
 	oapi::ParticleStream **tmp = new oapi::ParticleStream*[ncontrail+1]; TRACENEW
 	if (ncontrail) {
@@ -2280,7 +2284,7 @@ oapi::ParticleStream *Vessel::AddExhaustStream (ThrustSpec *ts, PARTICLESTREAMSP
 		delete []contrail;
 	}
 	contrail = tmp;
-	contrail[ncontrail] = gc->clbkCreateExhaustStream (pss, (OBJHANDLE)this, &ts->level, &ts->ref, &ts->dir);
+	contrail[ncontrail] = ps;
 	if (pos) // local position reference
 		contrail[ncontrail]->SetFixedPos (MakeVECTOR3(*pos));
 	if (dir) // local direction reference
@@ -2329,6 +2333,8 @@ oapi::ParticleStream *Vessel::AddReentryStream (PARTICLESTREAMSPEC *pss)
 	if (!g_pOrbiter->Cfg()->CfgVisualPrm.bParticleStreams) return 0;
 	oapi::GraphicsClient *gc = g_pOrbiter->GetGraphicsClient ();
 	if (!gc) return 0;
+	oapi::ParticleStream *ps = gc->clbkCreateReentryStream (pss, (OBJHANDLE)this);
+	if (!ps) return 0; // not supported by the graphics client
 
 	oapi::ParticleStream **tmp = new oapi::ParticleStream*[nreentrystream+1]; TRACENEW
 	if (nreentrystream) {
@@ -2336,7 +2342,7 @@ oapi::ParticleStream *Vessel::AddReentryStream (PARTICLESTREAMSPEC *pss)
 		delete []reentrystream;
 	}
 	reentrystream = tmp;
-	reentrystream[nreentrystream] = gc->clbkCreateReentryStream (pss, (OBJHANDLE)this);
+	reentrystream[nreentrystream] = ps;
 	return reentrystream[nreentrystream++];
 }
 
