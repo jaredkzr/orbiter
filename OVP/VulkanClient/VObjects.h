@@ -76,6 +76,21 @@ private:
 class PlanetSurface;
 class Atmosphere;
 
+/// Surface base: generic structures supplied by the core as merged meshes
+class VBase {
+public:
+	VBase (OBJHANDLE hBase, Scene *scene);
+	~VBase ();
+	OBJHANDLE Handle () const { return hBase; }
+	void Render (RenderPass pass);
+
+private:
+	OBJHANDLE hBase;
+	Scene *scene;
+	std::vector<std::unique_ptr<VkMesh>> ground;     // rendered before shadows (runways, pads)
+	std::vector<std::unique_ptr<VkMesh>> structures; // rendered after shadows (buildings)
+};
+
 class VPlanet : public VObject {
 public:
 	VPlanet (OBJHANDLE hObj, Scene *scene, bool isStar);
@@ -90,6 +105,8 @@ private:
 	std::unique_ptr<Atmosphere> atmosphere;
 	std::unique_ptr<PlanetSurface> surface; // tiled surface, if available
 	std::unique_ptr<PlanetSurface> clouds;  // tiled cloud layer, if available
+	std::vector<std::unique_ptr<VBase>> bases; // bases near the camera
+	void UpdateBases ();
 };
 
 #endif // !__VOBJECTS_H

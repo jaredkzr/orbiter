@@ -606,9 +606,18 @@ void PlanetSurface::Render (Atmosphere *atm)
 	});
 
 	// data requests and mesh updates (transfers, outside the rendering scope)
+	// Tiles without data of their own use their nearest ancestor's, so the
+	// request goes to the deepest tile up the tree that has data.
+	auto requestUp = [this](Node *n, TileLoader::Kind kind) {
+		for (Node *a = n; a; a = a->parent) {
+			uint8_t &st = kind == TileLoader::SURF ? a->surfState : a->maskState;
+			if (st == 0) Request (a, kind);
+			if (st != 3) break; // loaded, pending, or deferred (too many requests)
+		}
+	};
 	for (Node *n : drawList) {
-		Request (n, TileLoader::SURF);
-		if (layers->mask) Request (n, TileLoader::MASK);
+		requestUp (n, TileLoader::SURF);
+		if (layers->mask) requestUp (n, TileLoader::MASK);
 		if (layers->elev) {
 			// the mesh grid is sampled from a tile three levels up, which has
 			// the same node spacing as the mesh (256 vs 32 intervals)

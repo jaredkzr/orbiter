@@ -345,9 +345,68 @@ VPlanet::~VPlanet ()
 {
 }
 
+// ======================================================================
+// VBase
+
+namespace {
+	constexpr double BASE_VIS_RANGE = 300e3;  // bases closer than this are rendered [m]
+	// Ground structures lie on the terrain; they are drawn pulled towards the
+	// camera by this fraction of their distance (a uniform scale in view space
+	// keeps their screen position), which avoids depth fighting.
+	constexpr double GROUND_DEPTH_PULL = 2e-4;
+}
+
+VBase::VBase (OBJHANDLE h, Scene *s) : hBase(h), scene(s)
+{
+	VulkanClient *gc = scene->Client();
+	MESHHANDLE *bs = nullptr, *as = nullptr;
+	DWORD nbs = 0, nas = 0;
+	gc->GetBaseStructures (hBase, &bs, &nbs, &as, &nas);
+	for (DWORD i = 0; i < nbs; i++)
+		if (bs[i]) ground.push_back (std::make_unique<VkMesh> (gc->Ctx(), gc->TexMgr(), bs[i]));
+	for (DWORD i = 0; i < nas; i++)
+		if (as[i]) structures.push_back (std::make_unique<VkMesh> (gc->Ctx(), gc->TexMgr(), as[i]));
+}
+
+VBase::~VBase ()
+{
+}
+
+void VBase::Render (RenderPass pass)
+{
+	VECTOR3 gpos;
+	MATRIX3 grot;
+	oapiGetGlobalPos (hBase, &gpos);
+	oapiGetRotationMatrix (hBase, &grot);
+	Mat4 mv = scene->ModelView (gpos, grot);
+	Mat4 pulled = Mat4::Scale (1.0 - GROUND_DEPTH_PULL, 1.0 - GROUND_DEPTH_PULL, 1.0 - GROUND_DEPTH_PULL) * mv;
+	for (auto &m : ground) scene->DrawMesh (m.get(), pulled, pass);
+	for (auto &m : structures) scene->DrawMesh (m.get(), mv, pass);
+}
+
+// ======================================================================
+
+void VPlanet::UpdateBases ()
+{
+	DWORD n = oapiGetBaseCount (hObj);
+	for (DWORD i = 0; i < n; i++) {
+		OBJHANDLE hb = oapiGetBaseByIndex (hObj, i);
+		VECTOR3 bp;
+		oapiGetGlobalPos (hb, &bp);
+		double d = length (bp - scene->CameraPos());
+		auto it = std::find_if (bases.begin(), bases.end(), [hb](const auto &b) { return b->Handle() == hb; });
+		bool have = it != bases.end();
+		if (!have && d < BASE_VIS_RANGE)
+			bases.push_back (std::make_unique<VBase> (hb, scene));
+		else if (have && d > BASE_VIS_RANGE * 1.2)
+			bases.erase (it);
+	}
+}
+
 void VPlanet::Update ()
 {
 	VObject::Update ();
+	if (!isStar) UpdateBases ();
 	if (surface) surface->Update ();
 	if (clouds) clouds->Update ();
 }
@@ -362,12 +421,14 @@ void VPlanet::RenderSky ()
 void VPlanet::Render (RenderPass pass)
 {
 	if (pass == RenderPass::Transparent) {
+		for (auto &b : bases) b->Render (pass);
 		if (clouds) clouds->Render (atmosphere.get());
 		return;
 	}
 	if (scene->PixelSize (size, camDist) < 0.5) return; // too small to see
 	if (surface) {
 		surface->Render (atmosphere.get());
+		for (auto &b : bases) b->Render (pass);
 		return;
 	}
 
