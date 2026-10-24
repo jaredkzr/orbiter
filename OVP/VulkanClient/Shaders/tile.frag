@@ -105,6 +105,17 @@ void main()
 	vec3 base = texture(surfTex, clamp(vUV * tile.surfUV.zw + tile.surfUV.xy, hs, 1.0 - hs)).rgb;
 	// procedural detail below the textures' resolution (terrain only)
 	if (tile.params.z < 0.5) SurfaceDetail(vPosView, length(vPosView), N, base);
+	else if (dot(vPosView, N) < 0.0) {
+		// cloud tops seen from above: relief from the cloud density (thicker
+		// clouds are taller; exaggerated for the texture's smoothness), shading their sides (surface
+		// gradient bump mapping from the screen-space derivatives)
+		float h = 5000.0 * texture(surfTex, clamp(vUV * tile.surfUV.zw + tile.surfUV.xy, hs, 1.0 - hs)).a;
+		vec3 sx = dFdx(vPosView), sy = dFdy(vPosView);
+		vec3 r1 = cross(sy, N), r2 = cross(N, sx);
+		float det = dot(sx, r1);
+		vec3 grad = sign(det) * (dFdx(h) * r1 + dFdy(h) * r2);
+		if (abs(det) > 1e-9) N = normalize(abs(det) * N - grad);
+	}
 	float ndl = dot(N, L);
 	bool hasAtm = atm.misc.x > 0.5;
 	vec3 sunT = vec3(1.0);
