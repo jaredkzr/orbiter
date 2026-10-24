@@ -77,7 +77,7 @@ vec3 Inscatter (vec3 d, float tMax, out vec3 T)
 	const int N = 16;
 	float ds = (t1 - t0) / float (N);
 	vec2 od = vec2 (0.0);
-	vec3 sumR = vec3 (0.0), sumM = vec3 (0.0);
+	vec3 sumR = vec3 (0.0), sumM = vec3 (0.0), sumMS = vec3 (0.0);
 	for (int i = 0; i < N; i++) {
 		vec3 p = o + d * (t0 + ds * (float (i) + 0.5));
 		float h = length (p) - atm.radii.x;
@@ -88,6 +88,11 @@ vec3 Inscatter (vec3 d, float tMax, out vec3 T)
 		vec3 att = exp (-(atm.betaR.rgb * (od.x + ls.x) + atm.betaM.rgb * 1.1 * (od.y + ls.y)));
 		sumR += att * dens.x;
 		sumM += att * dens.y;
+		// Multiple scattering, approximated as isotropic light whose extinction
+		// along the view path is balanced by scattering into it from other
+		// directions. This keeps long horizontal paths from turning orange.
+		vec3 sunAtt = exp (-(atm.betaR.rgb * ls.x + atm.betaM.rgb * 1.1 * ls.y));
+		sumMS += sunAtt * (atm.betaR.rgb * dens.x + atm.betaM.rgb * dens.y) * exp (-atm.betaM.rgb * 1.1 * od.y);
 	}
 	T = exp (-(atm.betaR.rgb * od.x + atm.betaM.rgb * 1.1 * od.y));
 
@@ -96,7 +101,8 @@ vec3 Inscatter (vec3 d, float tMax, out vec3 T)
 	float pR = 3.0 / (16.0 * ATM_PI) * (1.0 + mu * mu);
 	float pM = 3.0 / (8.0 * ATM_PI) * ((1.0 - g * g) * (1.0 + mu * mu)) /
 		((2.0 + g * g) * pow (max (1.0 + g * g - 2.0 * g * mu, 1e-4), 1.5));
-	return atm.radii.w * (sumR * atm.betaR.rgb * pR + sumM * atm.betaM.rgb * pM);
+	const float MS_FACTOR = 0.25; // fraction of single-scattered light scattered again, per 4 pi
+	return atm.radii.w * (sumR * atm.betaR.rgb * pR + sumM * atm.betaM.rgb * pM + sumMS * MS_FACTOR / (4.0 * ATM_PI));
 }
 
 // Map scattered radiance into displayable range
