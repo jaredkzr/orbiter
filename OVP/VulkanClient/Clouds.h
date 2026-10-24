@@ -45,6 +45,10 @@ public:
 	float brightness = 2.0f; // sun irradiance scale of the cloud lighting
 	float extinction = 0.03f; // [1/m] at full density
 
+	/// tileable noise volumes (shape: Perlin-Worley, detail: Worley fBm)
+	VkImageView ShapeNoiseView () const { return shapeNoise.view; }
+	VkImageView DetailNoiseView () const { return detailNoise.view; }
+
 	VkPipeline CoveragePipeline () const { return coveragePipe; }
 	VkPipelineLayout CoverageLayout () const { return coverageLayout; }
 

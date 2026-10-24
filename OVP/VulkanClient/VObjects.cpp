@@ -420,8 +420,31 @@ void VVessel::RenderExhaust ()
 		if (!vessel->GetExhaustSpec (i, &es) || !es.lpos || !es.ldir) continue;
 		VECTOR3 gd = mul (grot, *es.ldir);
 		VECTOR3 s0 = gpos + mul (grot, *es.lpos) - gd * es.lofs;
+		double flicker = 1.0 - es.modulate * uni (rng);
+		// a plume volume, unless the configuration keeps the add-on's look
+		if (PlumeRenderer *pr = scene->Plumes ()) {
+			PlumeOverride o = pr->config.Get (vessel, i);
+			PlumeType type = o.type >= 0 ? (PlumeType)o.type : PlumeConfig::Infer (vessel, es.th);
+			if (type != PlumeType::Texture) {
+				PlumeDraw pd{};
+				pd.pos = scene->ViewPos (s0);
+				pd.dir = scene->ViewDir (-gd);
+				pd.exitRadius = 0.5 * es.wsize * o.scale;
+				pd.length = es.lsize * o.scale * o.length;
+				pd.level = std::min (1.0, lvl);
+				pd.ambientPressure = vessel->GetAtmPressure ();
+				pd.type = type;
+				pd.brightness = o.brightness;
+				pd.flicker = (float)(1.0 - 0.5 * (1.0 - flicker));
+				pd.sunlight = scene->ObjectLight ();
+				pd.tint = es.tex ? (VkTexture*)es.tex : nullptr;
+				pd.seed = id * 131u + i * 977u;
+				scene->DrawPlume (pd);
+				continue;
+			}
+		}
 		VECTOR3 s1 = s0 - gd * es.lsize;
-		float a = (float)(std::min (1.0, lvl) * (1.0 - es.modulate * uni (rng)));
+		float a = (float)(std::min (1.0, lvl) * flicker);
 		VECTOR3 vs = scene->ViewPos (s0), ve = scene->ViewPos (s1);
 		VECTOR3 axis = ve - vs, mid = (vs + ve) * 0.5;
 		VECTOR3 perp = crossp (axis, mid);

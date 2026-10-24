@@ -11,6 +11,7 @@
 #include "VkContext.h"
 #include "VkMath.h"
 #include "RayTracing.h"
+#include "Plumes.h"
 #include <map>
 #include <memory>
 #include <vector>
@@ -110,6 +111,7 @@ public:
 	/// may eclipse it); also sets the sunlight used by subsequent DrawMesh calls
 	double Sunlight (const VECTOR3 &gpos);
 	void SetObjectLight (double f) { objLight = (float)f; }
+	float ObjectLight () const { return objLight; }
 	/// emission added to transparent (glass) groups of subsequent DrawMesh calls
 	void SetObjectGlassGlow (const float g[3]) { for (int i = 0; i < 3; i++) objGlassGlow[i] = g[i]; }
 	/// aerodynamic heating glow of subsequent DrawMesh calls: windward
@@ -135,6 +137,9 @@ public:
 	/// draw view-space billboard triangles (particles, exhaust flames)
 	void DrawBillboards (VkTexture *tex, bool additive, const struct PVtx *v, size_t n);
 	VkTexture *DefaultExhaustTex () const { return exhaustTex; }
+	/// engine plume volumes (null: billboards)
+	class PlumeRenderer *Plumes () { return plumes && plumes->enabled ? plumes.get() : nullptr; }
+	void DrawPlume (const struct PlumeDraw &p);
 	/// radial glow sprite (white, falling off to zero at the edge), full uv range
 	VkTexture *GlowTex () const { return glowTex; }
 	TileRenderer *Tiles () { return tiles.get(); }
@@ -194,6 +199,7 @@ private:
 	std::unique_ptr<class TemporalAA> taa;
 	std::unique_ptr<class FsrUpscaler> fsr;
 	std::unique_ptr<class VolumetricClouds> vclouds;
+	std::unique_ptr<PlumeRenderer> plumes;
 	bool cloudsActive = false;   // volumetric clouds this frame
 	float ambientRGB[3] = {};
 	void RenderVolumetricClouds ();

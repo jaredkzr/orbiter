@@ -234,6 +234,8 @@ bool Scene::Init ()
 	tiles = std::make_unique<TileRenderer>();
 	tiles->Init (ctx, gc->TexMgr(), frameLayout, atm->SetLayout());
 	exhaustTex = gc->TexMgr()->Load ("Exhaust.dds");
+	plumes = std::make_unique<PlumeRenderer>();
+	plumes->Init (ctx, frameLayout, gc->TexMgr()->Layout(), vclouds->ShapeNoiseView (), vclouds->DetailNoiseView ());
 	{
 		// glow sprite: bright core with a soft halo, zero at the edge
 		const int N = 128;
@@ -289,6 +291,8 @@ void Scene::Shutdown ()
 	ssr.reset();
 	if (taa) taa->Shutdown ();
 	taa.reset();
+	if (plumes) plumes->Shutdown ();
+	plumes.reset();
 	if (vclouds) vclouds->Shutdown ();
 	vclouds.reset();
 	if (fsr) fsr->Shutdown ();
@@ -592,6 +596,11 @@ void Scene::DrawBillboards (VkTexture *tex, bool additive, const PVtx *v, size_t
 	vkCmdBindVertexBuffers (cmd, 0, 1, &vb.buffer, &vb.offset);
 	vkCmdPushConstants (cmd, particleLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(proj), proj);
 	vkCmdDraw (cmd, (uint32_t)n, 1, 0, 0);
+}
+
+void Scene::DrawPlume (const PlumeDraw &p)
+{
+	plumes->Draw (p, FrameSet (), gc->TexMgr()->White(), oapiGetSimTime ());
 }
 
 void Scene::BuildSphere ()
@@ -1202,9 +1211,12 @@ void Scene::Render ()
 	}
 
 	std::sort (list.begin(), list.end(), [](VObject *a, VObject *b) { return a->CamDist() > b->CamDist(); });
+	plumes->SetPrepass (ao->PrepassView ());
 	for (auto *vo : list) vo->Render (RenderPass::Transparent);
 
-	for (auto *ps : gc->ParticleStreams()) ps->Render (this);
+	static const bool particles = !getenv ("ORBITER_VK_PARTICLES") || atoi (getenv ("ORBITER_VK_PARTICLES")) != 0;
+	if (particles)
+		for (auto *ps : gc->ParticleStreams()) ps->Render (this);
 }
 
 VkImageView Scene::ResolveTemporal (VkExtent2D &size)

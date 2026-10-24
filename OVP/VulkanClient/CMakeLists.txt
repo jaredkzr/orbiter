@@ -96,6 +96,8 @@ set(SHADER_SRC
 	Shaders/rtlight_filter.comp
 	Shaders/ssr_resolve.comp
 	Shaders/ssr_temporal.comp
+	Shaders/plume.vert
+	Shaders/plume.frag
 )
 set(SHADER_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 set(SHADER_HEADERS)
@@ -138,6 +140,7 @@ add_library(VulkanClient SHARED
 	Sketchpad.cpp
 	Fonts.cpp
 	Particles.cpp
+	Plumes.cpp
 	TileArchive.cpp
 	PlanetSurface.cpp
 	Atmosphere.cpp

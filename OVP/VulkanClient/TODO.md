@@ -9,6 +9,20 @@ Known gaps and limitations, to be addressed later.
   Ozone only for Earth. The 1-exp(-L) sky tonemapping (AtmTonemap) is
   legacy; with auto-exposure the sky could be linear radiance.
 
+## Engine plumes
+- Ray-marched plume volumes (Plumes.cpp, plume.frag; ORBITER_VK_PLUMES=0
+  restores the flame billboards). Engine classes are inferred from Isp and
+  thrust, overridable in Config/VK/Plumes/<class>.cfg (see README.txt);
+  ORBITER_VK_PLUME_TYPE forces a class for testing.
+- Plumes write no motion vectors or reactive mask: TAA/FSR may smear them
+  over moving backgrounds (planned with the GPU particles).
+- Not affected yet by the airflow (no bending at speed in the atmosphere),
+  no aerial perspective, no light cast on the surroundings (engine light
+  planned), not in the ray traced scene or the environment probe.
+- Smoke is lit by sun and ambient light without self-shadowing.
+- Bloom (threshold 1, strength 0.35) makes bright plumes in daylight very
+  large; the bloom threshold should become exposure-relative.
+
 ## Particle streams
 - Reentry plasma is implemented but has not been verified visually at peak
   heating.
