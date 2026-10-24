@@ -19,8 +19,3 @@ Known gaps and limitations, to be addressed later.
 - Windows build of the client: deferred. Needs a Windows test loop. On
   Windows the core reads input from its own render window (DirectInput and
   window messages), which has to be reconciled with the SDL window.
-
-## Vessel modules (not client issues)
-- DeltaGlider: NAVLIGHT/STROBELIGHT read from a scenario set the switch
-  state but don't activate the beacons (NavLight::clbkParseScenarioLine only
-  sets light_on); they light up only when the switch is operated.

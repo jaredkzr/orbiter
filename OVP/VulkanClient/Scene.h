@@ -43,7 +43,7 @@ struct LightSource {
 	bool spot;
 	double umbra, penumbra; // full cone angles [rad]
 };
-constexpr int MAX_LIGHTS = 16; // must match frame.glsl
+constexpr int MAX_LIGHTS = 32; // must match frame.glsl
 
 /// Replacement texture for a mesh group, rendered unlit (e.g. VC MFD displays)
 struct GroupTexOverride {

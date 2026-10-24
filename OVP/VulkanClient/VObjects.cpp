@@ -267,6 +267,18 @@ void VVessel::RenderShadow (ShadowMap &sm)
 			sm.DrawMesh (rec.mesh.get(), model * Mat4::Translation (rec.ofs), &rec.grpTransform, &rec.grpVisible);
 }
 
+namespace {
+	// beacons as light sources: half intensity at this many beacon radii
+	constexpr double BEACON_LIGHT_REACH = 8.0;
+	constexpr double BEACON_LIGHT_INTENSITY = 0.8;
+
+	bool BeaconLit (const BEACONLIGHTSPEC *bs, double simt)
+	{
+		if (!bs->active || !bs->pos || !bs->col) return false;
+		return bs->period <= 0.0 || fmod (simt + bs->tofs, bs->period) <= bs->duration;
+	}
+}
+
 void VVessel::CollectLights (std::vector<LightSource> &lights)
 {
 	bool internal = oapiCameraInternal() && oapiCameraTarget() == hObj;
@@ -298,6 +310,22 @@ void VVessel::CollectLights (std::vector<LightSource> &lights)
 		if (length (l.pos - cam) > l.range + 10e3) continue; // nothing in view can be lit
 		const COLOUR4 &c = le->GetDiffuseColour();
 		l.col[0] = (float)(c.r * in), l.col[1] = (float)(c.g * in), l.col[2] = (float)(c.b * in);
+		lights.push_back (l);
+	}
+
+	// lit beacons also illuminate their surroundings (mainly the vessel itself)
+	double simt = oapiGetSimTime ();
+	for (DWORD i = 0; ; i++) {
+		const BEACONLIGHTSPEC *bs = vessel->GetBeacon (i);
+		if (!bs) break;
+		if (!BeaconLit (bs, simt)) continue;
+		LightSource l{};
+		l.pos = gpos + mul (grot, *bs->pos);
+		double reach = BEACON_LIGHT_REACH * bs->size; // distance of half intensity
+		l.range = 4.0 * reach;
+		if (length (l.pos - cam) > l.range + 2e3) continue;
+		l.att[0] = 1.0, l.att[1] = 0.0, l.att[2] = 1.0 / (reach * reach);
+		for (int k = 0; k < 3; k++) l.col[k] = (float)((&bs->col->x)[k] * BEACON_LIGHT_INTENSITY);
 		lights.push_back (l);
 	}
 }
@@ -345,8 +373,7 @@ void VVessel::RenderExhaust ()
 	for (DWORD i = 0; ; i++) {
 		const BEACONLIGHTSPEC *bs = vessel->GetBeacon (i);
 		if (!bs) break;
-		if (!bs->active || !bs->pos || !bs->col) continue;
-		if (bs->period > 0.0 && fmod (simt + bs->tofs, bs->period) > bs->duration) continue;
+		if (!BeaconLit (bs, simt)) continue;
 		VECTOR3 vp = scene->ViewPos (gpos + mul (grot, *bs->pos));
 		// keep a minimum apparent size, so that beacons stay visible from afar
 		float h = (float)std::max (bs->size, vp.z * 0.002);

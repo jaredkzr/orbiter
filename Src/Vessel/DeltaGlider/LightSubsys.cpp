@@ -531,6 +531,7 @@ bool StrobeLight::clbkParseScenarioLine (const char *line)
 		int mode;
 		sscanf (line+11, "%d", &mode);
 		light_on = (mode != 0);
+		for (int i = 3; i <= 6; i++) DG()->beacon[i].active = light_on;
 		return true;
 	}
 	return false;
@@ -657,6 +658,7 @@ bool NavLight::clbkParseScenarioLine (const char *line)
 		int mode;
 		sscanf (line+8, "%d", &mode);
 		light_on = (mode != 0);
+		for (int i = 0; i <= 2; i++) DG()->beacon[i].active = light_on;
 		return true;
 	}
 	return false;

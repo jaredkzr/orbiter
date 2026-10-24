@@ -3,7 +3,7 @@
 
 // Per-frame uniform block (set 0, binding 0); must match FrameUniforms in Scene.cpp
 
-const int MAX_LIGHTS = 16;
+const int MAX_LIGHTS = 32;
 
 struct LocalLight {
 	vec4 pos;    // view space position (xyz), range (w)
