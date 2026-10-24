@@ -51,8 +51,15 @@ Known gaps and limitations, to be addressed later.
 - Engine smoke (VVessel::EmitSmoke): each plume emits smoke of its class
   where the flame ends, or spreads it along the surface the jet meets (pad
   clouds), with buoyancy; colours and densities after launch photographs.
-  No ground collision of particles, no water deluge steam, no smoke
-  self-shadowing yet.
+  No water deluge steam.
+- Smoke collides with the terrain (RT: ray along each particle's motion,
+  terrain only, from above; without RT: a sphere at the ground height under
+  the camera). Bases and vessels are left out (smoke would be trapped in
+  flame trenches).
+- Smoke self-shadowing: a sun-aligned grid (192x192x64, 2.4 x 3 km around
+  the camera) of smoke optical depth, summed towards the sun; two-lobe
+  attenuation for multiple scattering. Smoke farther away is unshadowed;
+  smoke casts no shadows on the ground or vessels.
 - Reentry plasma not verified visually at peak heating.
 
 ## Surface bases

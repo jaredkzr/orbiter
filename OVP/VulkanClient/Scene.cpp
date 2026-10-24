@@ -1144,7 +1144,13 @@ void Scene::RenderPrepass ()
 	ctx->GpuMark ("ssr");
 	{
 		VkDescriptorSet rtSets[2] = { rt && rt->Enabled () ? rt->Set () : VK_NULL_HANDLE, rt && rt->Enabled () ? rt->TextureSet () : VK_NULL_HANDLE };
-		particles->Simulate (camPos, frameSet[ctx->FrameIndex()], camAtmSet, rtSets[0] ? rtSets : nullptr, oapiGetSimTime ());
+		VECTOR3 sunDir = _V(1, 0, 0);
+		if (hSun) {
+			VECTOR3 sp;
+			oapiGetGlobalPos (hSun, &sp);
+			sunDir = unit (sp - camPos);
+		}
+		particles->Simulate (camPos, sunDir, frameSet[ctx->FrameIndex()], camAtmSet, rtSets[0] ? rtSets : nullptr, oapiGetSimTime ());
 		ctx->GpuMark ("particles");
 	}
 	RenderVolumetricClouds ();

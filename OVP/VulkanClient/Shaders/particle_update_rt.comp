@@ -1,7 +1,7 @@
 // Copyright (c) Martin Schweiger
 // Licensed under the MIT License
 
-// GPU particles: motion and lighting, with ray traced shadows of vessels and bases
+// GPU particles: motion, with collisions with the ray tracing scene
 
 #version 460
 #extension GL_GOOGLE_include_directive : require

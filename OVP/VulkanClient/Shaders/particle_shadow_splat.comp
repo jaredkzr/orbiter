@@ -1,0 +1,37 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// GPU particles, smoke shadows: each smoke particle adds its optical depth
+// (opacity times area over the cell's cross section) to the cells of the
+// sun-aligned grid it covers
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 64) in;
+
+#include "particle_common.glsl"
+
+void main ()
+{
+	uint i = gl_GlobalInvocationID.x;
+	if (i >= uint (pc.omega.w)) return;
+	Particle p = particles[i];
+	if (p.velLife.w <= 0.0 || (p.flags & 4u) != 0u) return;
+	vec3 sc = ShadowCoord (p.posAge.xyz);
+	if (any (lessThan (sc, vec3 (0.0))) || any (greaterThanEqual (sc, vec3 (1.0)))) return;
+	float a = ParticleAlpha (p), h = ParticleRadius (p);
+	float cell = 2.0 * pc.lightX.w / float (SHADOW_GRID.x);
+	float tau = a * 3.14159 * h * h / (cell * cell); // (spread over the cells it covers)
+	ivec3 c = ivec3 (sc * vec3 (SHADOW_GRID));
+	int r = int (min (ceil (h / cell - 0.5), 2.0));
+	float w = 1.0 / float ((2 * r + 1) * (2 * r + 1));
+	uint add = uint (tau * w * SHADOW_FIXED + 0.5);
+	if (add == 0u) return;
+	for (int y = -r; y <= r; y++)
+		for (int x = -r; x <= r; x++) {
+			ivec3 q = c + ivec3 (x, y, 0);
+			if (all (greaterThanEqual (q.xy, ivec2 (0))) && all (lessThan (q.xy, SHADOW_GRID.xy)))
+				imageAtomicAdd (shadowAccum, q, add);
+		}
+}

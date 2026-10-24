@@ -13,12 +13,20 @@
 #include "particle_emit.comp.h"
 #include "particle_update.comp.h"
 #include "particle_update_rt.comp.h"
+#include "particle_light.comp.h"
+#include "particle_light_rt.comp.h"
+#include "particle_shadow_splat.comp.h"
+#include "particle_shadow_sum.comp.h"
 #include "gpuparticle.vert.h"
 #include "gpuparticle.frag.h"
 
 namespace {
 	constexpr size_t PARTICLE_SIZE = 64; // (Particle in particles.glsl)
 	constexpr double NOISE_SCALE = 0.08; // turbulence noise coordinates per metre (eddies of about 12 m)
+	// smoke shadows: the grid (particle_common.glsl) around the camera
+	constexpr uint32_t SHADOW_NX = 192, SHADOW_NZ = 64;
+	constexpr double SHADOW_HALF_WIDTH = 1200.0, SHADOW_HALF_DEPTH = 1500.0; // [m]
+	constexpr double SMOKE_EXTINCTION = 0.2; // optical depth (towards the sun) per unit of particle opacity
 }
 
 // ======================================================================
@@ -29,8 +37,9 @@ struct ParticleSystem::GpuEmission { // particles.glsl
 	uint32_t slab[4], misc[4];
 };
 
-struct ParticleSystem::UpdateParams { // particle_update.glsl
+struct ParticleSystem::UpdateParams { // particle_common.glsl
 	float camShift[4], bodyPos[4], bodyVel[4], omega[4], noiseOrg[4];
+	float lightX[4], lightY[4], lightZ[4], ground[4];
 };
 
 bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout,
@@ -103,21 +112,58 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 	sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 	VK_CHECK(vkCreateSampler (ctx->device, &sci, nullptr, &clampSampler));
 
-	// pool, emissions, noise volumes, prepass
+	// smoke shadow grid: smoke per cell, optical depth towards the sun
+	auto image3D = [this](VkFormat fmt, VkImageUsageFlags usage) {
+		vkc::Image im;
+		VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+		ici.imageType = VK_IMAGE_TYPE_3D;
+		ici.format = fmt;
+		ici.extent = { SHADOW_NX, SHADOW_NX, SHADOW_NZ };
+		ici.mipLevels = 1, ici.arrayLayers = 1;
+		ici.samples = VK_SAMPLE_COUNT_1_BIT;
+		ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+		ici.usage = usage;
+		VmaAllocationCreateInfo aci{};
+		aci.usage = VMA_MEMORY_USAGE_AUTO;
+		VK_CHECK(vmaCreateImage (ctx->allocator, &ici, &aci, &im.image, &im.alloc, nullptr));
+		VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+		vci.image = im.image, vci.viewType = VK_IMAGE_VIEW_TYPE_3D, vci.format = fmt;
+		vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &im.view));
+		return im;
+	};
+	shadowAccum = image3D (VK_FORMAT_R32_UINT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+	shadowDepth = image3D (VK_FORMAT_R16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+	VkImage gi[2] = { shadowAccum.image, shadowDepth.image };
+	ctx->ImmediateSubmit ([gi](VkCommandBuffer cmd) {
+		VkClearColorValue zero{};
+		VkImageSubresourceRange r{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		for (VkImage im : gi) {
+			vkc::ImageBarrier (cmd, im, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+				VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+			vkCmdClearColorImage (cmd, im, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &r);
+		}
+	});
+
+	// pool, emissions, noise volumes, prepass, shadow grid
 	const VkShaderStageFlags CS = VK_SHADER_STAGE_COMPUTE_BIT;
-	VkDescriptorSetLayoutBinding b[5] = {
+	VkDescriptorSetLayoutBinding b[8] = {
 		{ 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS | VK_SHADER_STAGE_VERTEX_BIT, nullptr },
 		{ 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS, nullptr },
 		{ 2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, CS, nullptr },
 		{ 3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, CS, nullptr },
-		{ 4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr } };
+		{ 4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
+		{ 5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, CS, nullptr },
+		{ 6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, CS, nullptr },
+		{ 7, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, CS, nullptr } };
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 5, lci.pBindings = b;
+	lci.bindingCount = 8, lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &setLayout));
-	VkDescriptorPoolSize ps[2] = { { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * vkc::FRAMES_IN_FLIGHT },
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 * vkc::FRAMES_IN_FLIGHT } };
+	VkDescriptorPoolSize ps[3] = { { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * vkc::FRAMES_IN_FLIGHT },
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * vkc::FRAMES_IN_FLIGHT },
+		{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 * vkc::FRAMES_IN_FLIGHT } };
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-	pci.maxSets = vkc::FRAMES_IN_FLIGHT, pci.poolSizeCount = 2, pci.pPoolSizes = ps;
+	pci.maxSets = vkc::FRAMES_IN_FLIGHT, pci.poolSizeCount = 3, pci.pPoolSizes = ps;
 	VK_CHECK(vkCreateDescriptorPool (ctx->device, &pci, nullptr, &dpool));
 	VkDescriptorSetLayout ls[vkc::FRAMES_IN_FLIGHT];
 	for (auto &l : ls) l = setLayout;
@@ -128,14 +174,21 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		VkDescriptorBufferInfo bi[2] = { { pool.buffer, 0, VK_WHOLE_SIZE }, { emitBuf[i].buffer, 0, VK_WHOLE_SIZE } };
 		VkDescriptorImageInfo ii[2] = { { noiseSampler, shapeView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
 			{ noiseSampler, detailView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL } };
-		VkWriteDescriptorSet wr[4]{};
-		for (uint32_t k = 0; k < 4; k++) {
+		VkDescriptorImageInfo gii[3] = { { VK_NULL_HANDLE, shadowAccum.view, VK_IMAGE_LAYOUT_GENERAL },
+			{ VK_NULL_HANDLE, shadowDepth.view, VK_IMAGE_LAYOUT_GENERAL }, { noiseSampler, shadowDepth.view, VK_IMAGE_LAYOUT_GENERAL } };
+		VkWriteDescriptorSet wr[7]{};
+		for (uint32_t k = 0; k < 7; k++) {
 			wr[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-			wr[k].dstSet = sets[i], wr[k].dstBinding = k, wr[k].descriptorCount = 1;
+			wr[k].dstSet = sets[i], wr[k].descriptorCount = 1;
+			wr[k].dstBinding = k < 4 ? k : k + 1;
 			if (k < 2) wr[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, wr[k].pBufferInfo = &bi[k];
-			else wr[k].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, wr[k].pImageInfo = &ii[k - 2];
+			else if (k < 4) wr[k].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, wr[k].pImageInfo = &ii[k - 2];
+			else {
+				wr[k].descriptorType = k < 6 ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+				wr[k].pImageInfo = &gii[k - 4];
+			}
 		}
-		vkUpdateDescriptorSets (ctx->device, 4, wr, 0, nullptr);
+		vkUpdateDescriptorSets (ctx->device, 7, wr, 0, nullptr);
 	}
 
 	auto layoutOf = [this](std::initializer_list<VkDescriptorSetLayout> l, VkShaderStageFlags stages, uint32_t pcSize) {
@@ -162,6 +215,9 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 	updateLayout = layoutOf ({ setLayout, frameLayout, atmLayout }, CS, sizeof(UpdateParams));
 	emitPipe = compute (spv_particle_emit_comp, spv_particle_emit_comp_size, emitLayout);
 	updatePipe = compute (spv_particle_update_comp, spv_particle_update_comp_size, updateLayout);
+	lightPipe = compute (spv_particle_light_comp, spv_particle_light_comp_size, updateLayout);
+	splatPipe = compute (spv_particle_shadow_splat_comp, spv_particle_shadow_splat_comp_size, updateLayout);
+	sumPipe = compute (spv_particle_shadow_sum_comp, spv_particle_shadow_sum_comp_size, updateLayout);
 
 	// drawing: quads (triangle strips) from the pool, premultiplied or additive,
 	// with the reactive mask
@@ -237,18 +293,22 @@ void ParticleSystem::InitRT (VkDescriptorSetLayout frameLayout, VkDescriptorSetL
 	plci.setLayoutCount = 5, plci.pSetLayouts = l;
 	plci.pushConstantRangeCount = 1, plci.pPushConstantRanges = &pcr;
 	VK_CHECK(vkCreatePipelineLayout (ctx->device, &plci, nullptr, &updateRTLayout));
-	VkShaderModule cs = ctx->CreateShaderModule (spv_particle_update_rt_comp, spv_particle_update_rt_comp_size);
-	VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
-	cpi.stage = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, cs, "main" };
-	cpi.layout = updateRTLayout;
-	VK_CHECK(vkCreateComputePipelines (ctx->device, VK_NULL_HANDLE, 1, &cpi, nullptr, &updateRTPipe));
-	vkDestroyShaderModule (ctx->device, cs, nullptr);
+	auto compute = [this](const unsigned char *code, size_t size, VkPipeline &pipe) {
+		VkShaderModule cs = ctx->CreateShaderModule (code, size);
+		VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+		cpi.stage = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, cs, "main" };
+		cpi.layout = updateRTLayout;
+		VK_CHECK(vkCreateComputePipelines (ctx->device, VK_NULL_HANDLE, 1, &cpi, nullptr, &pipe));
+		vkDestroyShaderModule (ctx->device, cs, nullptr);
+	};
+	compute (spv_particle_update_rt_comp, spv_particle_update_rt_comp_size, updateRTPipe);
+	compute (spv_particle_light_rt_comp, spv_particle_light_rt_comp_size, lightRTPipe);
 }
 
 void ParticleSystem::Shutdown ()
 {
 	if (!ctx) return;
-	for (VkPipeline p : { emitPipe, updatePipe, updateRTPipe, drawBlend, drawAdd })
+	for (VkPipeline p : { emitPipe, updatePipe, updateRTPipe, lightPipe, lightRTPipe, splatPipe, sumPipe, drawBlend, drawAdd })
 		if (p) vkDestroyPipeline (ctx->device, p, nullptr);
 	for (VkPipelineLayout l : { emitLayout, updateLayout, updateRTLayout, drawLayout })
 		if (l) vkDestroyPipelineLayout (ctx->device, l, nullptr);
@@ -258,6 +318,8 @@ void ParticleSystem::Shutdown ()
 	vkDestroySampler (ctx->device, clampSampler, nullptr);
 	ctx->DestroyBuffer (pool);
 	for (auto &b : emitBuf) ctx->DestroyBuffer (b);
+	ctx->DestroyImage (shadowAccum);
+	ctx->DestroyImage (shadowDepth);
 	if (smokeTex) texmgr->Release (smokeTex);
 	ctx = nullptr;
 }
@@ -310,7 +372,7 @@ void ParticleSystem::SetPrepass (VkImageView prepass)
 	}
 }
 
-void ParticleSystem::Simulate (const VECTOR3 &camPos, VkDescriptorSet frameSet, VkDescriptorSet atmSet,
+void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkDescriptorSet frameSet, VkDescriptorSet atmSet,
 	const VkDescriptorSet *rt, double simt)
 {
 	VkCommandBuffer cmd = ctx->Cmd ();
@@ -347,6 +409,12 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, VkDescriptorSet frameSet, 
 		bp -= camPos;
 		up.bodyPos[0] = (float)bp.x, up.bodyPos[1] = (float)bp.y, up.bodyPos[2] = (float)bp.z, up.bodyPos[3] = (float)oapiGetSize (hp);
 		up.bodyVel[0] = (float)bv.x, up.bodyVel[1] = (float)bv.y, up.bodyVel[2] = (float)bv.z;
+		// the ground under the camera (collisions without ray tracing)
+		VECTOR3 loc;
+		oapiGlobalToLocal (hp, &camPos, &loc);
+		double rad = length (loc);
+		if (rad > 0.0)
+			up.ground[0] = (float)(oapiGetSize (hp) + oapiSurfaceElevation (hp, atan2 (loc.z, loc.x), asin (std::clamp (loc.y / rad, -1.0, 1.0))));
 		double T = oapiGetPlanetPeriod (hp);
 		if (T != 0.0) {
 			MATRIX3 R;
@@ -362,6 +430,12 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, VkDescriptorSet frameSet, 
 		up.noiseOrg[k] = (float)(q - floor (q));
 	}
 	up.noiseOrg[3] = (float)NOISE_SCALE;
+	// smoke shadow grid: axes across the sunlight and towards the sun
+	VECTOR3 lz = unit (sunDir);
+	VECTOR3 lx = unit (crossp (lz, fabs (lz.y) < 0.9 ? _V(0, 1, 0) : _V(1, 0, 0))), ly = crossp (lz, lx);
+	for (int k = 0; k < 3; k++)
+		up.lightX[k] = (float)(&lx.x)[k], up.lightY[k] = (float)(&ly.x)[k], up.lightZ[k] = (float)(&lz.x)[k];
+	up.lightX[3] = (float)SHADOW_HALF_WIDTH, up.lightY[3] = (float)SHADOW_HALF_DEPTH, up.lightZ[3] = (float)SMOKE_EXTINCTION;
 	pendingDt = 0.0;
 	bool useRT = rt && updateRTPipe;
 	VkPipelineLayout ul = useRT ? updateRTLayout : updateLayout;
@@ -373,6 +447,16 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, VkDescriptorSet frameSet, 
 		VkDescriptorSet s[3] = { set, frameSet, atmSet };
 		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, ul, 0, 3, s, 0, nullptr);
 	}
+	auto bindSets = [&](VkPipelineLayout l, bool withRT) {
+		if (withRT) {
+			VkDescriptorSet s[5] = { set, frameSet, rt[0], rt[1], atmSet };
+			vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, l, 0, 5, s, 0, nullptr);
+		} else {
+			VkDescriptorSet s[3] = { set, frameSet, atmSet };
+			vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, l, 0, 3, s, 0, nullptr);
+		}
+		vkCmdPushConstants (cmd, l, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(up), &up);
+	};
 	vkCmdPushConstants (cmd, ul, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(up), &up);
 	vkCmdDispatch (cmd, CAPACITY / 64, 1, 1);
 
@@ -405,6 +489,25 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, VkDescriptorSet frameSet, 
 		vkCmdDispatch (cmd, (maxCount + 63) / 64, n, 1);
 		queued.clear ();
 	}
+
+	// smoke shadows: smoke per cell of the grid, summed towards the sun
+	VkClearColorValue zero{};
+	VkImageSubresourceRange range{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+	barrier (CS, RW, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+	vkCmdClearColorImage (cmd, shadowAccum.image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &range);
+	barrier (VK_PIPELINE_STAGE_2_TRANSFER_BIT | CS, VK_ACCESS_2_TRANSFER_WRITE_BIT | RW, CS, RW);
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, splatPipe);
+	bindSets (updateLayout, false);
+	vkCmdDispatch (cmd, CAPACITY / 64, 1, 1);
+	barrier (CS, RW, CS, RW);
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, sumPipe);
+	vkCmdDispatch (cmd, (SHADOW_NX + 7) / 8, (SHADOW_NX + 7) / 8, 1);
+	barrier (CS, RW, CS, RW);
+
+	// sunlight on the particles
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, useRT ? lightRTPipe : lightPipe);
+	bindSets (ul, useRT);
+	vkCmdDispatch (cmd, CAPACITY / 64, 1, 1);
 	barrier (CS, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 }
 

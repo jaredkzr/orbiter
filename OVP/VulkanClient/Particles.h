@@ -66,7 +66,8 @@ public:
 	/// Move, emit and light the particles (outside rendering scopes, after
 	/// the ray tracing scene was built); rt: sets of the ray tracing scene
 	/// and textures (or null)
-	void Simulate (const VECTOR3 &camPos, VkDescriptorSet frameSet, VkDescriptorSet atmSet,
+	/// sunDir: towards the sun (global frame; smoke shadows)
+	void Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkDescriptorSet frameSet, VkDescriptorSet atmSet,
 		const VkDescriptorSet *rt, double simt);
 	void SetPrepass (VkImageView prepass);
 	/// Draw a stream's particles (scene with reactive mask)
@@ -102,6 +103,8 @@ private:
 	VkDescriptorSet sets[vkc::FRAMES_IN_FLIGHT] = {};
 	VkPipelineLayout emitLayout = VK_NULL_HANDLE, updateLayout = VK_NULL_HANDLE, updateRTLayout = VK_NULL_HANDLE, drawLayout = VK_NULL_HANDLE;
 	VkPipeline emitPipe = VK_NULL_HANDLE, updatePipe = VK_NULL_HANDLE, updateRTPipe = VK_NULL_HANDLE;
+	VkPipeline lightPipe = VK_NULL_HANDLE, lightRTPipe = VK_NULL_HANDLE, splatPipe = VK_NULL_HANDLE, sumPipe = VK_NULL_HANDLE;
+	vkc::Image shadowAccum, shadowDepth; // smoke shadow grid
 	VkPipeline drawBlend = VK_NULL_HANDLE, drawAdd = VK_NULL_HANDLE;
 	static constexpr uint32_t MAX_EMISSIONS = 4096;
 };

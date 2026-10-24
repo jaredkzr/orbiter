@@ -1,0 +1,24 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// GPU particles, smoke shadows: the optical depth from each cell of the
+// sun-aligned grid towards the sun (summed along the columns)
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+#include "particle_common.glsl"
+
+void main ()
+{
+	ivec2 c = ivec2 (gl_GlobalInvocationID.xy);
+	if (any (greaterThanEqual (c, SHADOW_GRID.xy))) return;
+	float sum = 0.0;
+	for (int z = SHADOW_GRID.z - 1; z >= 0; z--) { // (z grows towards the sun)
+		float own = float (imageLoad (shadowAccum, ivec3 (c, z)).r) / SHADOW_FIXED * pc.lightZ.w;
+		imageStore (shadowDepth, ivec3 (c, z), vec4 (sum + 0.5 * own));
+		sum += own;
+	}
+}

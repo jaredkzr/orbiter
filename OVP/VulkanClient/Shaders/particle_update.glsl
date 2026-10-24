@@ -1,34 +1,40 @@
 // Copyright (c) Martin Schweiger
 // Licensed under the MIT License
 
-// GPU particles: ageing and motion (drag towards the air, turbulence),
-// the shift to the new camera position, and the sunlight reaching each
-// particle: through the atmosphere, in the planet's shadow, and (with ray
-// queries) in the shadows of vessels and bases
+// GPU particles: ageing and motion (drag towards the air, turbulence,
+// rising hot smoke), the shift to the new camera position, and collisions
+// of smoke with the ground, bases and vessels: it slides along them
 // (included by particle_update.comp and particle_update_rt.comp)
 
 layout(local_size_x = 64) in;
 
-#include "particles.glsl"
-layout(set = 0, binding = 2) uniform sampler3D shapeNoise;
-layout(set = 0, binding = 3) uniform sampler3D detailNoise;
+#include "particle_common.glsl"
 
 #ifdef RT
-#include "rt.glsl" // (frame set 1, atmosphere set 4)
-#else
-#define FRAME_SET 1
-#include "frame.glsl"
-#define ATM_SET 2
-#include "atmosphere.glsl"
+// the nearest terrain along o + t d (view space), within tMax: distance and
+// normal (bases and vessels are left out: smoke deflected into a launch
+// pad's flame trench would be trapped under the deck, which in reality it
+// leaves through the trench's exits)
+bool RTSurface (vec3 o, vec3 d, float tMax, vec3 up, out float t, out vec3 N)
+{
+	rayQueryEXT rq;
+	rayQueryInitializeEXT (rq, tlas, gl_RayFlagsOpaqueEXT, 0x02, o, 0.0, d, tMax);
+	while (rayQueryProceedEXT (rq)) {}
+	if (rayQueryGetIntersectionTypeEXT (rq, true) != gl_RayQueryCommittedIntersectionTriangleEXT) return false;
+	t = rayQueryGetIntersectionTEXT (rq, true);
+	RTInstance r = inst[rayQueryGetIntersectionInstanceCustomIndexEXT (rq, true) + rayQueryGetIntersectionGeometryIndexEXT (rq, true)];
+	uint prim = uint (rayQueryGetIntersectionPrimitiveIndexEXT (rq, true));
+	vec3 v[3];
+	RTFloats f = RTFloats (r.vtx);
+	for (int k = 0; k < 3; k++) {
+		uint vi = RTIndex (r.idx, r.firstIndex + prim * 3u + uint (k)) * 8u;
+		v[k] = vec3 (f.f[vi], f.f[vi + 1u], f.f[vi + 2u]);
+	}
+	N = normalize (mat3 (rayQueryGetIntersectionObjectToWorldEXT (rq, true)) * cross (v[1] - v[0], v[2] - v[0]));
+	if (dot (N, up) < 0.0) N = -N; // (the upper side)
+	return true;
+}
 #endif
-
-layout(push_constant) uniform Params {
-	vec4 camShift;  // previous camera position - this one (global axes), w: step [s]
-	vec4 bodyPos;   // centre of the planet nearby (camera-relative), w: its radius (0: none)
-	vec4 bodyVel;   // its velocity (global frame), w: time [s]
-	vec4 omega;     // its angular velocity (global frame), w: number of particles
-	vec4 noiseOrg;  // turbulence noise coordinates of the camera position (xyz), w: their scale [1/m]
-} pc;
 
 void main ()
 {
@@ -40,9 +46,10 @@ void main ()
 	p.posAge.w += dt;
 	if (p.posAge.w >= p.velLife.w) { particles[i].velLife.w = 0.0; return; }
 
-	vec3 pos = p.posAge.xyz;
+	vec3 pos = p.posAge.xyz + pc.camShift.xyz; // (relative to the camera now)
 	vec3 vel = p.velLife.xyz;
-	if (p.shape.w > 0.0 && pc.bodyPos.w > 0.0 && dt > 0.0) {
+	bool inAir = p.shape.w > 0.0 && pc.bodyPos.w > 0.0;
+	if (inAir && dt > 0.0) {
 		// slowed down towards the velocity of the co-rotating air
 		vec3 air = pc.bodyVel.xyz + cross (pos - pc.bodyPos.xyz, pc.omega.xyz);
 		vel = air + (vel - air) * exp (-p.shape.w * dt);
@@ -55,28 +62,42 @@ void main ()
 		if ((p.flags & 16u) != 0u)
 			vel += normalize (pos - pc.bodyPos.xyz) * (4.0 * exp (-p.posAge.w / 6.0) * dt);
 	}
-	pos += vel * dt + pc.camShift.xyz;
-	p.posAge.xyz = pos;
-	p.velLife.xyz = vel;
-
-	// sunlight reaching the particle (not needed for emissive ones)
-	if ((p.flags & 4u) == 0u) {
-		mat3 toView = transpose (mat3 (frame.viewToGlobal));
-		vec3 vp = toView * pos;
-		vec3 sun = frame.sunColor.rgb;
-		if (atm.misc.x > 0.5) {
-			vec3 pp = mat3 (atm.viewToPlanet) * vp + atm.camPos.xyz;
-			sun *= SunTransmittance (pp) * CloudShadow (pp);
-		} else if (pc.bodyPos.w > 0.0) {
-			// airless: the planet's shadow (a cylinder behind it)
-			vec3 d = pos - pc.bodyPos.xyz, s = mat3 (frame.viewToGlobal) * frame.sunDir.xyz;
-			float along = dot (d, s);
-			if (along < 0.0) sun *= smoothstep (0.995 * pc.bodyPos.w, 1.005 * pc.bodyPos.w, length (d - s * along));
-		}
+	vec3 move = vel * dt;
+	// smoke in the air meets the ground: it stays above it (its centre a
+	// third of its size away) and slides along it
+	if (inAir && (p.flags & 4u) == 0u && dt > 0.0) {
+		float gap = 0.3 * ParticleRadius (p);
 #ifdef RT
-		sun *= RTSunVisible (vp + frame.sunDir.xyz * 0.5, frame.sunDir.xyz);
+		mat3 toView = transpose (mat3 (frame.viewToGlobal));
+		float len = length (move);
+		vec3 d = len > 1e-4 ? move / len : -normalize (pos - pc.bodyPos.xyz);
+		float t;
+		vec3 N;
+		// (only from above: smoke that starts beneath the terrain, e.g. in a
+		// flame trench below the tiles' surface, gets out)
+		vec3 upV = toView * normalize (pos - pc.bodyPos.xyz);
+		if (RTSurface (toView * pos, toView * d, len + gap, upV, t, N) && dot (toView * d, N) < 0.0) {
+			vec3 Ng = mat3 (frame.viewToGlobal) * N;
+			pos += d * max (t - gap, 0.0);
+			float into = dot (vel, Ng);
+			if (into < 0.0) vel -= Ng * into;
+			vel *= 0.85; // (friction)
+			move = vec3 (0.0);
+		}
+#else
+		// the ground under the camera, as a sphere
+		vec3 up = pos + move - pc.bodyPos.xyz;
+		float r = length (up);
+		if (pc.ground.x > 0.0 && r < pc.ground.x + gap) {
+			up /= r;
+			move += up * (pc.ground.x + gap - r);
+			float into = dot (vel, up);
+			if (into < 0.0) vel -= up * into;
+			vel *= 0.85;
+		}
 #endif
-		p.light = sun;
 	}
+	p.posAge.xyz = pos + move;
+	p.velLife.xyz = vel;
 	particles[i] = p;
 }

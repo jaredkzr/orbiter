@@ -1,0 +1,9 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// GPU particles: sunlight on smoke (screen-space lighting only)
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "particle_light.glsl"

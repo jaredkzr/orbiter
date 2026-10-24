@@ -66,7 +66,7 @@ void main ()
 		float g = 0.35, cosT = dot (normalize (vp), frame.sunDir.xyz);
 		float phase = (1.0 - g * g) / pow (1.0 + g * g - 2.0 * g * cosT, 1.5); // (times 4 pi)
 		// (smoke of large droplets scatters light many times: bright from any side)
-		col = pt.light * (0.55 + 0.45 * phase) * 0.9 + frame.ambient.rgb;
+		col = pt.light * (0.75 + 0.5 * phase) * 0.9 + frame.ambient.rgb;
 		if ((flags & 8u) != 0u) // smoke of a colour
 			col *= vec3 (float ((flags >> 8) & 0xffu), float ((flags >> 16) & 0xffu), float (flags >> 24)) / 255.0;
 	}
