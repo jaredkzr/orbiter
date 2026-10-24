@@ -71,6 +71,7 @@ private:
 	void InsertMesh (UINT idx);
 	void UpdateAnimations ();
 	void RenderExhaust ();
+	void SetHeating ();
 
 	VESSEL *vessel;
 	std::vector<MeshRec> meshes;

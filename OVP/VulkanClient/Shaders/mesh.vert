@@ -13,6 +13,7 @@ layout(push_constant) uniform Draw {
 	vec4 specular;   // rgb: specular colour, a: specular power
 	vec4 light;     // rgb: sunlight reaching the object (eclipse)
 	vec4 pbr;       // metalness, roughness, reflectivity, dielectric F0 scale
+	vec4 heat;      // xyz: direction of motion through the air (view), w: heating glow 0..1
 } draw;
 
 layout(location = 0) in vec3 inPos;

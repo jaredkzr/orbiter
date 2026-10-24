@@ -229,6 +229,7 @@ void VVessel::Render (RenderPass pass)
 	Mat4 mv = scene->ModelView (gpos, grot);
 	scene->Sunlight (gpos);
 	scene->SetObjectGlassGlow (glassGlow);
+	SetHeating ();
 
 	// virtual cockpit displays: MFD and HUD surfaces replace the textures of the registered groups
 	std::vector<std::vector<GroupTexOverride>> ovr;
@@ -262,7 +263,26 @@ void VVessel::Render (RenderPass pass)
 	}
 	static const float noGlow[3] = { 0, 0, 0 };
 	scene->SetObjectGlassGlow (noGlow);
+	scene->SetObjectHeat (_V(0, 0, 0), 0.0f);
 	if (pass == RenderPass::Transparent) RenderExhaust ();
+}
+
+void VVessel::SetHeating ()
+{
+	// stagnation-point heat flux (Sutton-Graves, 1 m nose radius) [W/m^2]
+	VESSEL *v = oapiGetVesselInterface (hObj);
+	VECTOR3 as;
+	v->GetAirspeedVector (FRAME_LOCAL, as);
+	double spd = length (as), rho = v->GetAtmDensity ();
+	double q = 1.74e-4 * sqrt (rho) * spd * spd * spd;
+	const double qMin = 1e5, qMax = 8e5; // glow onset, full glow
+	float t = (float)std::clamp ((q - qMin) / (qMax - qMin), 0.0, 1.0);
+	if (t <= 0.0f || spd <= 0.0) {
+		scene->SetObjectHeat (_V(0, 0, 0), 0.0f);
+		return;
+	}
+	VECTOR3 dir = scene->ViewDir (mul (grot, as / spd));
+	scene->SetObjectHeat (dir, t);
 }
 
 void VVessel::RenderShadow (ShadowMap &sm)

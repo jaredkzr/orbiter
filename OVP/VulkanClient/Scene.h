@@ -31,6 +31,7 @@ struct MeshPushConstants {
 	float specular[4]; // a: specular power
 	float light[4];    // rgb: sunlight reaching the object
 	float pbr[4];      // metalness, roughness, reflectivity, dielectric F0 scale
+	float heat[4];     // xyz: direction of motion through the air (view), w: heating glow 0..1
 };
 
 enum class RenderPass { Opaque, Transparent };
@@ -96,6 +97,10 @@ public:
 	void SetObjectLight (double f) { objLight = (float)f; }
 	/// emission added to transparent (glass) groups of subsequent DrawMesh calls
 	void SetObjectGlassGlow (const float g[3]) { for (int i = 0; i < 3; i++) objGlassGlow[i] = g[i]; }
+	/// aerodynamic heating glow of subsequent DrawMesh calls: windward
+	/// direction (view space) and strength 0..1
+	void SetObjectHeat (const VECTOR3 &dir, float strength)
+	{ objHeat[0] = (float)dir.x, objHeat[1] = (float)dir.y, objHeat[2] = (float)dir.z, objHeat[3] = strength; }
 	/// view-space position of a global point
 	VECTOR3 ViewPos (const VECTOR3 &gpos) const { return view.TransformPoint (gpos - camPos); }
 	/// view-space direction of a global direction
@@ -168,6 +173,7 @@ private:
 	OBJHANDLE hSun = nullptr;
 	float objLight = 1.0f;
 	float objGlassGlow[3] = { 0, 0, 0 };
+	float objHeat[4] = { 0, 0, 0, 0 };
 };
 
 #endif // !__SCENE_H

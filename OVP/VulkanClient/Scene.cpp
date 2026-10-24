@@ -827,6 +827,7 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 		pc.light[0] = pc.light[1] = pc.light[2] = objLight;
 		const PBRParams &pp = mesh->PBR (grp.material);
 		pc.pbr[0] = pp.metalness, pc.pbr[1] = pp.roughness, pc.pbr[2] = pp.reflectivity, pc.pbr[3] = pp.f0;
+		memcpy (pc.heat, objHeat, sizeof(objHeat));
 		if (transparent && !ovr)
 			for (int k = 0; k < 3; k++) pc.emissive[k] += objGlassGlow[k];
 		if (ovr) { // self-illuminated display

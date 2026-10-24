@@ -21,6 +21,7 @@ layout(push_constant) uniform Draw {
 	vec4 specular;
 	vec4 light;     // rgb: sunlight reaching the object (eclipse)
 	vec4 pbr;       // metalness, roughness, reflectivity, dielectric F0 scale
+	vec4 heat;      // xyz: direction of motion through the air (view), w: heating glow 0..1
 } draw;
 
 layout(location = 0) in vec3 vPosView;
@@ -115,6 +116,14 @@ void main()
 		col += env * EnvBRDF(F0, rough, NoV) * draw.pbr.z;
 	}
 	col += draw.emissive.rgb * texel.rgb;
+
+	// aerodynamic heating: surfaces facing the airflow glow, from dull red
+	// to orange-white
+	if (draw.heat.w > 0.0) {
+		float f = max(dot(normalize(vNormalView), draw.heat.xyz), 0.0);
+		float t = draw.heat.w;
+		col += vec3(1.0, 0.25 + 0.45 * t, 0.06 + 0.3 * t) * (4.0 * t * t * f);
+	}
 
 	if (hasAtm) { // aerial perspective
 		vec3 T;
