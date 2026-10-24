@@ -39,10 +39,13 @@ public:
 	/// remember the pose of this frame for the motion vectors of the next
 	void StorePrev () { prevGpos = gpos, prevGrot = grot, havePrev = true; }
 	double Size () const { return size; }
+	/// small number identifying the object (ray traced light shadows)
+	uint32_t Id () const { return id; }
 
 protected:
 	OBJHANDLE hObj;
 	Scene *scene;
+	uint32_t id;
 	VECTOR3 gpos{};
 	MATRIX3 grot{};
 	double size = 1.0;

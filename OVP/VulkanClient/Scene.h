@@ -10,6 +10,7 @@
 
 #include "VkContext.h"
 #include "VkMath.h"
+#include "RayTracing.h"
 #include <map>
 #include <memory>
 #include <vector>
@@ -47,6 +48,7 @@ struct LightSource {
 	double att[3];
 	bool spot;
 	double umbra, penumbra; // full cone angles [rad]
+	uint32_t owner;         // VObject::Id of the vessel carrying it
 };
 constexpr int MAX_LIGHTS = 32; // must match frame.glsl
 
@@ -135,6 +137,8 @@ public:
 	/// radial glow sprite (white, falling off to zero at the edge), full uv range
 	VkTexture *GlowTex () const { return glowTex; }
 	TileRenderer *Tiles () { return tiles.get(); }
+	/// ray tracing scene, if enabled (geometry of the prepass goes into it)
+	class RTScene *RT () const;
 	AtmosphereRenderer *Atm () { return atm.get(); }
 	const MATRIX3 &CamRot () const { return camRot; }
 	double ProjX () const { return proj[0]; }   ///< horizontal focal factor fx
@@ -180,6 +184,10 @@ private:
 	std::unique_ptr<class AmbientOcclusion> ao;
 	std::unique_ptr<class ScreenReflections> ssr;
 	std::unique_ptr<class RTScene> rt;
+	std::unique_ptr<class RTLighting> rtl;
+	std::vector<RTScene::Part> rtParts; // static groups of the mesh being drawn into the prepass
+	void WriteRTLightDescriptors ();
+	static void PlanetAlbedo (OBJHANDLE hp, float alb[3]);
 	bool cameraCut = true; // this frame does not continue the previous one
 	void WriteSSRDescriptors ();
 	std::unique_ptr<class TemporalAA> taa;
@@ -239,6 +247,7 @@ private:
 	float objLight = 1.0f;
 	float objGlassGlow[3] = { 0, 0, 0 };
 	float objHeat[4] = { 0, 0, 0, 0 };
+	uint32_t objOwner = 0;  // VObject::Id of the object being drawn into the prepass
 };
 
 #endif // !__SCENE_H

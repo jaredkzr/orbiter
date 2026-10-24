@@ -1,0 +1,37 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Ray traced lighting visibility, temporal accumulation: the noisy
+// estimates are blended into the history reprojected with the motion
+// vectors, which is discarded where the depth there differs (disocclusion)
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "rtlight.glsl"
+
+void main ()
+{
+	ivec2 p = ivec2 (gl_GlobalInvocationID.xy);
+	ivec2 sz = ivec2 (pc.size);
+	if (p.x >= sz.x || p.y >= sz.y) return;
+	float z = texelFetch (prepass, p, 0).w;
+	vec4 a = imageLoad (rawA, p);
+	vec4 l = imageLoad (rawL, p);
+	float w = 1.0;
+	if (pc.reset < 0.5 && z > 0.0) {
+		vec2 uv = (vec2 (p) + 0.5) / pc.size - texelFetch (velocity, p, 0).xy;
+		ivec2 q = ivec2 (floor (uv * pc.size));
+		if (all (greaterThanEqual (q, ivec2 (0))) && all (lessThan (q, sz))) {
+			vec4 ha = texelFetch (histA, q, 0);
+			// (the history's depth is that of the previous frame: a tolerance for motion)
+			if (abs (ha.w - z) < 0.04 * z + 0.05) {
+				w = 0.1;
+				a.xyz = mix (ha.xyz, a.xyz, w);
+				l = mix (texelFetch (histL, q, 0), l, w);
+			}
+		}
+	}
+	imageStore (accA, p, vec4 (a.xyz, z));
+	imageStore (accL, p, l);
+}

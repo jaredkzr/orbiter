@@ -5,6 +5,7 @@
 #include "AO.h"
 #include "SSR.h"
 #include "RayTracing.h"
+#include "RTLighting.h"
 #include "TAA.h"
 #include "Fsr.h"
 #include "Clouds.h"
@@ -46,7 +47,10 @@ namespace {
 		float jitter[4];       // projection jitter (NDC), render size
 		float aoParams[4];     // 1/width, 1/height of the occlusion image, fraction applied to direct light, w: 1 = no occlusion
 		float viewToGlobal[16];// view space -> global frame (rotation), for the environment probe
-		float probe[4];        // x: environment probe valid, y: highest mip level, z: screen-space reflections valid
+		float probe[4];        // x: environment probe valid, y: highest mip level, z: screen-space reflections valid, w: their debug view
+		float rt[4];           // x: ray traced lighting valid, y: shadowed local lights
+		float planetDir[4];    // direction to the planet nearby (view), w: sine of its angular radius
+		float planetLight[4];  // its irradiance at normal incidence, w: present
 		float lightCount[4];
 		struct {
 			float pos[4];   // view space position, range
@@ -114,7 +118,7 @@ bool Scene::Init ()
 
 	// per-frame uniform buffer, the shadow maps, ambient occlusion, the
 	// environment probe and screen-space reflections (set 0)
-	VkDescriptorSetLayoutBinding b[5]{};
+	VkDescriptorSetLayoutBinding b[7]{};
 	b[0].binding = 0;
 	b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	b[0].descriptorCount = 1;
@@ -131,14 +135,18 @@ bool Scene::Init ()
 	b[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 	b[4] = b[2];
 	b[4].binding = 5; // screen-space reflections
+	b[5] = b[2];
+	b[5].binding = 6; // ray traced lighting: sun, ambient occlusion, planet light
+	b[6] = b[2];
+	b[6].binding = 7; // ray traced lighting: local lights
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 5;
+	lci.bindingCount = 7;
 	lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &frameLayout));
 
 	VkDescriptorPoolSize ps[2] = {
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 * vkc::FRAMES_IN_FLIGHT },
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * (SHADOW_CASCADES + 3) * vkc::FRAMES_IN_FLIGHT }
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * (SHADOW_CASCADES + 5) * vkc::FRAMES_IN_FLIGHT }
 	};
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.maxSets = 2 * vkc::FRAMES_IN_FLIGHT;
@@ -214,11 +222,13 @@ bool Scene::Init ()
 	rt = std::make_unique<RTScene>();
 	if (rt->Init (ctx, gc->TexMgr()) && ssr->enabled) {
 		ssr->InitRT (frameLayout, rt->SetLayout(), rt->TextureLayout(), atm->SetLayout());
-		static RTScene *rtScene;
-		rtScene = rt.get();
-		VkMesh::onGeometryChange = [](uint64_t id) { if (rtScene) rtScene->ForgetMesh (id); };
 		gc->TexMgr()->onDestroy = [this](VkTexture *t) { if (rt) rt->ForgetTexture (t); };
 	}
+	// ray traced shadows, ambient occlusion and planet light
+	rtl = std::make_unique<RTLighting>();
+	if (rt->Enabled ()) rtl->Init (ctx, frameLayout, rt->SetLayout());
+	rtl->EnsureSize (ao->PrepassView (), ao->VelocityView (), ao->MaterialView ());
+	WriteRTLightDescriptors ();
 	CreatePipelines ();
 	BuildSphere ();
 	tiles = std::make_unique<TileRenderer>();
@@ -270,7 +280,8 @@ void Scene::Shutdown ()
 	stars.reset();
 	if (ao) ao->Shutdown ();
 	ao.reset();
-	VkMesh::onGeometryChange = nullptr;
+	if (rtl) rtl->Shutdown ();
+	rtl.reset();
 	if (gc->TexMgr()) gc->TexMgr()->onDestroy = nullptr;
 	if (rt) rt->Shutdown ();
 	rt.reset();
@@ -704,6 +715,7 @@ void Scene::RenderShadows ()
 	// end rendering scopes, and shadow maps are cleared when bound)
 	for (auto &it : visuals) it.second->PrepareFrame ();
 	if (!hSun) return;
+	if (rtl && rtl->Enabled ()) return; // ray traced shadows instead (glass and probe faces are unshadowed)
 	OBJHANDLE hTgt = oapiCameraTarget ();
 	VECTOR3 c = camPos;
 	double size = 0.0;
@@ -758,6 +770,11 @@ double Scene::Sunlight (const VECTOR3 &gpos)
 	return f;
 }
 
+RTScene *Scene::RT () const
+{
+	return rt && rt->Enabled () ? rt.get() : nullptr;
+}
+
 void Scene::SetObjectMotion (const Mat4 &modelView, const Mat4 &prevModelView)
 {
 	// view space now -> object -> view space then -> clip then
@@ -800,6 +817,27 @@ void Scene::WriteAODescriptors ()
 	}
 }
 
+void Scene::WriteRTLightDescriptors ()
+{
+	// (without ray tracing: the occlusion image, never read)
+	bool on = rtl && rtl->Enabled ();
+	VkDescriptorImageInfo dii[2] = {
+		{ on ? rtl->Sampler() : ao->Sampler(), on ? rtl->VisView() : ao->View(), on ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+		{ on ? rtl->Sampler() : ao->Sampler(), on ? rtl->LightView() : ao->View(), on ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL } };
+	for (uint32_t j = 0; j < 2 * vkc::FRAMES_IN_FLIGHT; j++) {
+		uint32_t i = j % vkc::FRAMES_IN_FLIGHT;
+		for (int k = 0; k < 2; k++) {
+			VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+			wr.dstSet = j < vkc::FRAMES_IN_FLIGHT ? frameSet[i] : probeFrameSet[i];
+			wr.dstBinding = 6 + k;
+			wr.descriptorCount = 1;
+			wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			wr.pImageInfo = &dii[k];
+			vkUpdateDescriptorSets (ctx->device, 1, &wr, 0, nullptr);
+		}
+	}
+}
+
 void Scene::WriteSSRDescriptors ()
 {
 	// (the sets of the current frame slot are not in use)
@@ -819,7 +857,8 @@ void Scene::WriteSSRDescriptors ()
 void Scene::BeginFrame ()
 {
 	uint32_t fi = ctx->FrameIndex();
-	if (ao->EnsureSize ()) WriteAODescriptors (); // the GPU is idle then
+	if (ao->EnsureSize ()) WriteAODescriptors (), WriteRTLightDescriptors (); // the GPU is idle then
+	if (rtl->EnsureSize (ao->PrepassView (), ao->VelocityView (), ao->MaterialView ())) WriteRTLightDescriptors ();
 	ssr->EnsureSize (ao->PrepassView (), ao->MaterialView (), ao->VelocityView ());
 	ssr->BeginFrame ();
 	WriteSSRDescriptors ();
@@ -861,6 +900,8 @@ void Scene::BeginFrame ()
 	fu.probe[1] = (float)(EnvProbe::LEVELS - 1);
 	fu.probe[2] = ssr->Valid () && !cameraCut ? 1.0f : 0.0f;
 	fu.probe[3] = ssr->debug ? 1.0f : 0.0f;
+	fu.rt[0] = rtl->Enabled () ? 1.0f : 0.0f;
+	fu.rt[1] = (float)RTLighting::SHADOWED_LIGHTS;
 	memcpy (frameUbo[fi].mapped, &fu, sizeof(fu));
 	UpdateCamAtmSet ();
 }
@@ -875,6 +916,21 @@ void Scene::UpdateCamAtmSet ()
 			if (Atmosphere *a = it->second->GetAtmosphere ())
 				camAtmSet = a->Set (); // also without atmosphere: the planet is reflected
 	}
+}
+
+void Scene::PlanetAlbedo (OBJHANDLE hp, float alb[3])
+{
+	// Bond albedo and tint of the bodies most often seen up close
+	char name[64];
+	oapiGetObjectName (hp, name, 64);
+	struct { const char *name; float a[3]; } tab[] = {
+		{ "Earth", { 0.27f, 0.30f, 0.36f } }, { "Moon", { 0.12f, 0.12f, 0.11f } },
+		{ "Mars", { 0.30f, 0.20f, 0.14f } }, { "Mercury", { 0.09f, 0.09f, 0.085f } },
+		{ "Venus", { 0.78f, 0.72f, 0.58f } }, { "Jupiter", { 0.36f, 0.33f, 0.28f } },
+		{ "Saturn", { 0.36f, 0.33f, 0.26f } }, { "Titan", { 0.27f, 0.22f, 0.14f } } };
+	for (auto &t : tab)
+		if (!strcmp (name, t.name)) { for (int k = 0; k < 3; k++) alb[k] = t.a[k]; return; }
+	alb[0] = alb[1] = alb[2] = 0.25f;
 }
 
 void Scene::FillFrameUniforms (void *pfu)
@@ -916,6 +972,26 @@ void Scene::FillFrameUniforms (void *pfu)
 		}
 	}
 	for (int k = 0; k < 3; k++) ambientRGB[k] = fu.ambient[k];
+	// sunlight reflected by the planet nearby (a Lambertian sphere, by its phase)
+	if (OBJHANDLE hp = oapiCameraProxyGbody ())
+		if (hp != hSun && hSun) {
+			VECTOR3 pp, sp;
+			oapiGetGlobalPos (hp, &pp);
+			oapiGetGlobalPos (hSun, &sp);
+			double R = oapiGetSize (hp);
+			VECTOR3 toP = pp - camPos;
+			double d = std::max (length (toP), R);
+			double alpha = acos (std::clamp (dotp (unit (sp - pp), unit (camPos - pp)), -1.0, 1.0));
+			double phase = (sin (alpha) + (PI - alpha) * cos (alpha)) / PI;
+			double e = (R / d) * (R / d) * phase;
+			float alb[3];
+			PlanetAlbedo (hp, alb);
+			VECTOR3 dv = view.TransformPoint (toP / length (toP));
+			fu.planetDir[0] = (float)dv.x, fu.planetDir[1] = (float)dv.y, fu.planetDir[2] = (float)dv.z;
+			fu.planetDir[3] = (float)std::min (1.0, R / d);
+			for (int k = 0; k < 3; k++) fu.planetLight[k] = (float)(e * alb[k]);
+			fu.planetLight[3] = e > 1e-5 ? 1.0f : 0.0f;
+		}
 	auto shadowUniforms = [this](const ShadowMap &sm, float *mat, float *prm) {
 		sm.ReceiverMatrix (camPos, camRot).ToFloat (mat);
 		double texel = sm.TexelSize ();
@@ -943,6 +1019,7 @@ void Scene::FillFrameUniforms (void *pfu)
 		for (int k = 0; k < 3; k++) u.col[k] = l.col[k], u.att[k] = (float)l.att[k];
 		u.att[3] = (float)cos (0.5 * l.umbra);
 		u.spot[0] = (float)cos (0.5 * l.penumbra);
+		u.spot[1] = (float)l.owner;
 	}
 	Mat4::FromRotTrans (camRot, _V(0, 0, 0)).ToFloat (fu.viewToGlobal);
 }
@@ -952,14 +1029,28 @@ void Scene::RenderPrepass ()
 {
 	// (planet surfaces were prepared before the shadow maps)
 	ao->BeginPrepass ();
-	for (auto &it : visuals) it.second->Render (RenderPass::Depth);
+	for (auto &it : visuals) {
+		objOwner = it.second->Id ();
+		it.second->Render (RenderPass::Depth);
+	}
+	objOwner = 0;
 	ctx->EndTarget ();
 	ctx->GpuMark ("prepass");
-	if (ao->enabled) ao->Compute (proj[0], -proj[5]);
+	if (ao->enabled && !rtl->Enabled ()) ao->Compute (proj[0], -proj[5]);
 	ctx->GpuMark ("ao");
 	if (rt && rt->Enabled ()) {
 		rt->Build ();
 		ctx->GpuMark ("rt build");
+		if (rtl->Enabled ()) {
+			double sunRadius = 0.0047;
+			if (hSun) {
+				VECTOR3 sp;
+				oapiGetGlobalPos (hSun, &sp);
+				sunRadius = asin (std::min (1.0, oapiGetSize (hSun) / length (sp - camPos)));
+			}
+			rtl->Compute (frameSet[ctx->FrameIndex()], rt->Set (), proj[0], -proj[5], jitter, (float)sunRadius, cameraCut);
+			ctx->GpuMark ("rt lighting");
+		}
 		ssr->SetRTSets (frameSet[ctx->FrameIndex()], rt->Set (), rt->TextureSet (), camAtmSet);
 	}
 	ssr->Compute (proj[0], -proj[5], jitter, cameraCut);
@@ -1176,6 +1267,7 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 
 	VkPipeline bound = VK_NULL_HANDLE;
 	VkDescriptorSet boundTex = VK_NULL_HANDLE, boundMaps = VK_NULL_HANDLE;
+	rtParts.clear ();
 	for (uint32_t g = 0; g < mesh->nGroup(); g++) {
 		const VkMesh::Group &grp = mesh->GetGroup (g);
 		if (!grp.nIndex || (grp.usrFlag & VkMesh::GRP_HIDDEN)) continue;
@@ -1248,16 +1340,29 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 			}
 			vkCmdDrawIndexed (cmd, count, 1, first, grp.vertexOffset, 0);
 			if (pass == RenderPass::Depth && rt && rt->Enabled ()) { // into the ray tracing scene
-				RTScene::Material rm;
+				RTScene::Part part;
+				part.geo = { mesh->Id(), mesh->GeomVersion(), mesh->VertexBuffer(),
+					(VkDeviceSize)grp.vertexOffset * sizeof(NTVERTEX), mesh->GroupVertexCount (g),
+					mesh->IndexBuffer(), first, count };
+				part.tex = tex;
+				RTScene::Material &rm = part.mat;
 				memcpy (rm.diffuse, pc.diffuse, sizeof(rm.diffuse));
 				memcpy (rm.emissive, pc.emissive, sizeof(rm.emissive));
 				rm.light = objLight;
 				memcpy (rm.pbr, pc.pbr, sizeof(rm.pbr));
 				rm.unlit = pc.emissive[3] > 0.5f;
-				rt->AddInstance (mesh, g, first, count, mv, tex, rm);
+				rm.owner = objOwner;
+				// static groups: one instance for the mesh (below); animated
+				// ones on their own
+				if (mesh->rtAnimated.size() != mesh->nGroup()) mesh->rtAnimated.assign (mesh->nGroup(), 0);
+				if (groupTransforms && g < groupTransforms->size() && !(*groupTransforms)[g].IsIdentity ())
+					mesh->rtAnimated[g] = 1;
+				if (mesh->rtAnimated[g]) rt->AddInstance (&part, 1, mv);
+				else rtParts.push_back (part);
 			}
 		}
 	}
+	if (!rtParts.empty()) rt->AddInstance (rtParts.data(), (uint32_t)rtParts.size(), modelView);
 }
 
 void Scene::DrawSphere (const Mat4 &modelView, const float colour[4], bool unlit, VkTexture *tex)

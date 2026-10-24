@@ -24,7 +24,7 @@ layout(location = 4) in vec2 vUV;
 
 layout(location = 0) out vec4 outData;
 layout(location = 1) out vec2 outVelocity; // screen motion since the last frame [uv]
-layout(location = 2) out vec4 outMaterial; // shading normal (octahedral), roughness, reflectivity
+layout(location = 2) out vec4 outMaterial; // shading normal (octahedral), roughness (negative: terrain), reflectivity
 
 vec2 OctEncode (vec3 n)
 {
@@ -55,5 +55,5 @@ void main()
 			rough = mix(0.05, 0.3, smoothstep(2e3, 3e5, dist));
 		}
 	}
-	outMaterial = vec4(OctEncode(n), rough, refl);
+	outMaterial = vec4(OctEncode(n), -rough, refl); // (negative roughness: terrain)
 }

@@ -93,7 +93,11 @@ void main()
 	// sunlight: eclipses, shadows, and extinction in the atmosphere of the
 	// planet near the camera
 	bool hasAtm = atm.misc.x > 0.5;
-	vec3 sun = frame.sunColor.rgb * draw.light.rgb * SunShadow(vPosView, N);
+	// ray traced visibility for prepass geometry, else the shadow maps
+	bool rtVis = RTLighting() && draw.maps.y < 0.5;
+	vec4 rv = rtVis ? RTVisibility() : vec4(1.0);
+	vec4 lv = rtVis ? RTLightVisibility() : vec4(1.0);
+	vec3 sun = frame.sunColor.rgb * draw.light.rgb * (rtVis ? rv.x : SunShadow(vPosView, N));
 	if (hasAtm) {
 		vec3 pPlanet = mat3(atm.viewToPlanet) * vPosView + atm.camPos.xyz;
 		sun *= SunTransmittance(pPlanet) * CloudShadow(pPlanet);
@@ -104,7 +108,8 @@ void main()
 	vec3 diffuse = base * (1.0 - metal);
 	float ao = draw.maps.y > 0.5 ? 1.0 : AmbientOcclusion();
 	float aoDirect = mix(1.0, ao, frame.aoParams.z); // contact darkening in direct light too
-	vec3 col = diffuse * (frame.ambient.rgb * ao + (sun * NoL + LocalLighting(vPosView, N)) * aoDirect);
+	vec3 col = diffuse * (frame.ambient.rgb * ao + (sun * NoL + LocalLighting(vPosView, N, lv)) * aoDirect);
+	col += diffuse * PlanetLight(N) * rv.z; // sunlight reflected by the planet nearby
 	col += sun * SpecularBRDF(N, V, L, F0, rough) * PI;
 	if (reflectivity > 0.0) {
 		vec3 R = reflect(-V, N);

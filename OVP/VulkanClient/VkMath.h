@@ -23,6 +23,13 @@ struct Mat4 {
 		return r;
 	}
 
+	bool IsIdentity () const
+	{
+		for (int i = 0; i < 16; i++)
+			if (m[i] != (i % 5 == 0 ? 1.0 : 0.0)) return false;
+		return true;
+	}
+
 	/// Rotation (3x3 rotation matrix) followed by translation
 	static Mat4 FromRotTrans (const MATRIX3 &R, const VECTOR3 &t)
 	{

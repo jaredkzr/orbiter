@@ -21,10 +21,11 @@ layout(set = 1, binding = 4) uniform samplerCube envProbe;
 
 struct RTInstance { // must match InstanceRecord in RayTracing.cpp
 	uvec2 vtx, idx;     // device addresses: group vertices, mesh indices (16 bit)
-	uint firstIndex, tex, flags, pad;
+	uint firstIndex, tex, flags, owner; // owner: VObject::Id (0: terrain)
 	vec4 diffuse;
 	vec4 emissive;      // rgb, w: sunlight reaching the object
 	vec4 pbr;           // metalness, roughness, reflectivity, F0 scale
+	vec4 uv;            // texture coordinates: offset, scale
 };
 const uint RT_UNLIT = 1u;
 
@@ -62,7 +63,8 @@ bool TraceRT (vec3 o, vec3 d, float tMin, out RTHit h)
 	while (rayQueryProceedEXT (rq)) {}
 	if (rayQueryGetIntersectionTypeEXT (rq, true) != gl_RayQueryCommittedIntersectionTriangleEXT) return false;
 	h.t = rayQueryGetIntersectionTEXT (rq, true);
-	RTInstance r = inst[rayQueryGetIntersectionInstanceCustomIndexEXT (rq, true)];
+	// (one record per geometry of the instance)
+	RTInstance r = inst[rayQueryGetIntersectionInstanceCustomIndexEXT (rq, true) + rayQueryGetIntersectionGeometryIndexEXT (rq, true)];
 	uint prim = uint (rayQueryGetIntersectionPrimitiveIndexEXT (rq, true));
 	vec2 bc = rayQueryGetIntersectionBarycentricsEXT (rq, true);
 	vec3 w = vec3 (1.0 - bc.x - bc.y, bc.x, bc.y);
@@ -81,7 +83,7 @@ bool TraceRT (vec3 o, vec3 d, float tMin, out RTHit h)
 
 	// texture detail: coarser for distant hits and rough reflections
 	float lod = clamp (log2 (1.0 + h.t * 0.05), 0.0, 6.0);
-	vec4 texel = textureLod (rtTex[nonuniformEXT (r.tex)], uv, lod);
+	vec4 texel = textureLod (rtTex[nonuniformEXT (r.tex)], uv * r.uv.zw + r.uv.xy, lod);
 	vec3 base = texel.rgb * r.diffuse.rgb;
 	if ((r.flags & RT_UNLIT) != 0u) { h.radiance = base; return true; }
 

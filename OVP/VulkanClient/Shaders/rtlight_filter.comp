@@ -1,0 +1,47 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Ray traced lighting visibility, spatial filter: a depth- and
+// normal-aware blur of the accumulated estimates (wider where the history
+// is short)
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "rtlight.glsl"
+
+void main ()
+{
+	ivec2 p = ivec2 (gl_GlobalInvocationID.xy);
+	ivec2 sz = ivec2 (pc.size);
+	if (p.x >= sz.x || p.y >= sz.y) return;
+	vec4 d = texelFetch (prepass, p, 0);
+	if (d.w <= 0.0) {
+		imageStore (outA, p, vec4 (1.0));
+		imageStore (outL, p, vec4 (1.0));
+		return;
+	}
+	// shadows (sun, local lights): close neighbours only, to keep their
+	// edges; ambient occlusion and planet light: wider
+	vec4 sa = vec4 (0.0), sl = vec4 (0.0);
+	float ws1 = 0.0, ws2 = 0.0;
+	for (int pass = 0; pass < 2; pass++)
+		for (int y = -2; y <= 2; y++)
+			for (int x = -2; x <= 2; x++) {
+				ivec2 q = clamp (p + ivec2 (x, y) * (pass + 1), ivec2 (0), sz - 1);
+				vec4 dq = texelFetch (prepass, q, 0);
+				float w = exp (-0.3 * float (x * x + y * y));
+				w *= step (abs (dq.w - d.w), 0.03 * d.w + 0.02) * pow (max (dot (dq.xyz, d.xyz), 0.0), 16.0);
+				vec4 va = imageLoad (accA, q);
+				if (pass == 0) {
+					sa.x += va.x * w;
+					sl += imageLoad (accL, q) * w;
+					ws1 += w;
+				} else {
+					sa.yz += va.yz * w;
+					ws2 += w;
+				}
+			}
+	imageStore (outA, p, vec4 (sa.x / ws1, sa.yz / ws2, 1.0));
+	imageStore (outL, p, sl / ws1);
+}

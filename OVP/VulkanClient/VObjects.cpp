@@ -24,6 +24,8 @@
 VObject::VObject (OBJHANDLE h, Scene *s)
 	: hObj(h), scene(s)
 {
+	static uint32_t nextId = 1;
+	id = nextId++ & 0xffffff; // (exact as a float)
 	size = oapiGetSize (hObj);
 }
 
@@ -340,6 +342,7 @@ void VVessel::CollectLights (std::vector<LightSource> &lights)
 		if (in <= 0.0) continue;
 		if (spill) in *= INTERIOR_SPILL;
 		LightSource l{};
+		l.owner = id;
 		l.pos = gpos + mul (grot, le->GetPosition());
 		if (le->GetType() == LightEmitter::LT_POINT) {
 			const PointLight *pl = (const PointLight*)le;
@@ -376,6 +379,7 @@ void VVessel::CollectLights (std::vector<LightSource> &lights)
 		if (!bs) break;
 		if (!BeaconLit (bs, simt)) continue;
 		LightSource l{};
+		l.owner = id;
 		l.pos = gpos + mul (grot, *bs->pos);
 		double reach = BEACON_LIGHT_REACH * bs->size; // distance of half intensity
 		l.range = 4.0 * reach;

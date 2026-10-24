@@ -58,6 +58,7 @@ void main ()
 	if (p.x >= int (pc.size.x) || p.y >= int (pc.size.y)) return;
 	vec4 d = texelFetch (prepass, p, 0);
 	vec4 m = texelFetch (material, p, 0);
+	m.z = abs (m.z); // (negative on terrain)
 	float z = d.w;
 	if (z <= 0.0 || m.w <= 0.0 || m.z >= pc.maxRough) {
 		imageStore (hitOut, p, vec4 (0.0));

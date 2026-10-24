@@ -26,7 +26,7 @@ layout(location = 4) in vec2 vUV;
 
 layout(location = 0) out vec4 outData;
 layout(location = 1) out vec2 outVelocity; // screen motion since the last frame [uv]
-layout(location = 2) out vec4 outMaterial; // shading normal (octahedral), roughness, reflectivity
+layout(location = 2) out vec4 outMaterial; // shading normal (octahedral), roughness (negative: terrain), reflectivity
 
 void main()
 {

@@ -91,6 +91,9 @@ set(SHADER_SRC
 	Shaders/ssr_hiz.comp
 	Shaders/ssr_trace.comp
 	Shaders/ssr_trace_rt.comp
+	Shaders/rtlight_trace.comp
+	Shaders/rtlight_temporal.comp
+	Shaders/rtlight_filter.comp
 	Shaders/ssr_resolve.comp
 	Shaders/ssr_temporal.comp
 )
@@ -106,7 +109,7 @@ foreach(shader ${SHADER_SRC})
 		COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADER_OUT_DIR}
 		COMMAND ${GLSLANG_CMD} -V --target-env vulkan1.3 -o ${spv} ${CMAKE_CURRENT_SOURCE_DIR}/${shader}
 		COMMAND ${CMAKE_COMMAND} -DINPUT=${spv} -DOUTPUT=${hdr} -DSYMBOL=spv_${symbol} -P ${CMAKE_CURRENT_SOURCE_DIR}/EmbedFile.cmake
-		DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${shader} ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/atmosphere.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadow.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/frame.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/lights.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/brdf.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/exposure.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/atmlut.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/material.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/ssr.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/ssr_trace.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/rt.glsl ${CMAKE_CURRENT_SOURCE_DIR}/EmbedFile.cmake ${GLSLANG_DEP}
+		DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${shader} ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/atmosphere.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadow.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/frame.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/lights.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/brdf.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/exposure.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/atmlut.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/material.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/ssr.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/ssr_trace.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/rt.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/rtlight.glsl ${CMAKE_CURRENT_SOURCE_DIR}/EmbedFile.cmake ${GLSLANG_DEP}
 		COMMENT "Compiling shader ${name}"
 	)
 	list(APPEND SHADER_HEADERS ${hdr})
@@ -125,6 +128,7 @@ add_library(VulkanClient SHARED
 	AO.cpp
 	SSR.cpp
 	RayTracing.cpp
+	RTLighting.cpp
 	TAA.cpp
 	Clouds.cpp
 	EnvProbe.cpp

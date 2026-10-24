@@ -58,6 +58,23 @@ Known gaps and limitations, to be addressed later.
   stock Orbiter ships none for vessels. DXT5nm-packed normal maps are not
   detected. _heat is not used.
 
+## Ray traced lighting
+- With hardware ray queries (RTLighting.cpp, rtlight_*.comp;
+  ORBITER_VK_RT_LIGHTING=0 falls back to shadow maps and screen-space AO):
+  per prepass pixel one ray each for the sun (disc sampled: soft, contact
+  hardening), ambient occlusion (vessels and bases only, 4 m), planet light
+  visibility, and up to 4 local lights; accumulated over frames (depth
+  tested reprojection) and filtered. Terrain tiles drawn into the prepass
+  are in the scene (casting and receiving). About 1.0-1.4 ms at 1080p.
+- Shadow maps are not rendered then: glass groups and the probe faces get
+  no sun shadows; transparent geometry has no traced visibility.
+- Local light shadows ignore the light's own vessel within 3 m of the
+  emitter (emitters sit inside hulls): its nearby parts cast no shadow.
+- Planet light: Lambert sphere by phase with tabulated albedos (Earth,
+  Moon, Mars, Mercury, Venus, Jupiter, Saturn, Titan; else 0.25); the
+  albedo is not taken from the surface below.
+- Shadow and AO accumulation lags fast-moving shadows by a few frames.
+
 ## Shadows
 - Cloud shadows use the level-4 cloud textures only (tens of km per texel):
   soft and coarse, not yet checked visually over broken cloud cover. Using

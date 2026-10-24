@@ -54,13 +54,15 @@ public:
 	VkBuffer VertexBuffer () const { return vbuf.buffer; }
 	VkBuffer IndexBuffer () const { return ibuf.buffer; }
 	MESHHANDLE Template () const { return hMesh; }
-	/// unique over the session (ray tracing structures are keyed by it)
+	/// ray tracing geometry id (RTNewGeometryId)
 	uint64_t Id () const { return id; }
 	/// incremented when vertices change
 	uint32_t GeomVersion () const { return geomVersion; }
 	uint32_t GroupVertexCount (uint32_t g) const;
-	/// called with the id of each mesh destroyed or edited (ray tracing)
-	static void (*onGeometryChange) (uint64_t id);
+	/// groups that were ever drawn with an animation transform (separate
+	/// ray tracing instances)
+	mutable std::vector<uint8_t> rtAnimated;
+
 
 	bool SetTexture (DWORD texidx, VkTexture *tex);
 	int GetGroupData (DWORD grp, GROUPREQUESTSPEC *grs) const;

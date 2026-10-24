@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "PlanetSurface.h"
+#include "RayTracing.h"
 #include "Scene.h"
 #include "VkTexture.h"
 #include "VulkanClient.h"
@@ -302,7 +303,9 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	skirt (sk + 2*V, [&](int k) { return (uint16_t)(k*V); });           // west column
 	skirt (sk + 3*V, [&](int k) { return (uint16_t)(k*V + G); });       // east column
 	nIdx = (uint32_t)idx.size();
-	ibuf = ctx->CreateDeviceBuffer (idx.data(), idx.size() * sizeof(uint16_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+	if (idx.size() & 1) idx.push_back (0); // (whole 32-bit words for ray tracing shaders; not drawn)
+	ibuf = ctx->CreateDeviceBuffer (idx.data(), idx.size() * sizeof(uint16_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
+		(ctx->rayTracing ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT : 0));
 
 	loader = std::make_unique<TileLoader>();
 	return true;
@@ -438,6 +441,8 @@ void PlanetSurface::FreeNode (Node *n)
 		vkc::Buffer b = n->vbuf;
 		ctx->DeferDestroy ([c, b]() mutable { c->DestroyBuffer (b); });
 		n->vbuf = vkc::Buffer();
+		RTForgetGeometry (n->rtId);
+		n->rtId = 0;
 	}
 }
 
@@ -535,9 +540,14 @@ void PlanetSurface::BuildMesh (Node *n, const Node *src)
 	}
 
 	VkDeviceSize size = vtx.size() * sizeof(NTVERTEX);
-	if (!n->vbuf.buffer)
-		n->vbuf = ctx->CreateBuffer (size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
+	if (!n->vbuf.buffer) {
+		n->vbuf = ctx->CreateBuffer (size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+			(ctx->rayTracing ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT : 0), false);
+		n->rtId = RTNewGeometryId ();
+	}
 	ctx->UpdateBuffer (n->vbuf.buffer, 0, vtx.data(), size);
+	n->nVtx = (uint32_t)vtx.size();
+	n->rtVersion++;
 	n->meshElevLvl = src ? src->lvl : 0;
 }
 
@@ -775,6 +785,16 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 		memcpy (pp + 32, pc.maskUV, sizeof(pc.maskUV));
 		memcpy (pp + 36, pc.params, sizeof(pc.params));
 		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr->Layout(), 2, 1, &mask->set, 0, nullptr);
+		if (RTScene *rt = scene->RT ()) { // into the ray tracing scene (without the skirts)
+			RTScene::Material rm{};
+			rm.diffuse[0] = rm.diffuse[1] = rm.diffuse[2] = rm.diffuse[3] = 1.0f;
+			rm.light = 1.0f;
+			rm.pbr[1] = 1.0f, rm.pbr[3] = 1.0f; // matte
+			memcpy (rm.uv, pc.surfUV, sizeof(rm.uv));
+			rm.unlit = false;
+			RTScene::Geometry geo{ n->rtId, n->rtVersion, n->vbuf.buffer, 0, n->nVtx, tr->IndexBuffer(), 0, tr->GridIndexCount() };
+			rt->AddInstance (geo, mv, surf, rm);
+		}
 		vkCmdPushConstants (cmd, tr->Layout(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pp), pp);
 		VkDeviceSize ofs = 0;
 		vkCmdBindVertexBuffers (cmd, 0, 1, &n->vbuf.buffer, &ofs);

@@ -2,7 +2,6 @@
 // Licensed under the MIT License
 
 #include "RayTracing.h"
-#include "VkMesh.h"
 #include "VkTexture.h"
 #include <algorithm>
 #include <cstdlib>
@@ -12,12 +11,25 @@ namespace {
 	// must match RTInstance in rt.glsl
 	struct InstanceRecord {
 		uint32_t vtx[2], idx[2];   // device addresses: group vertices, mesh indices
-		uint32_t firstIndex, tex, flags, pad;
+		uint32_t firstIndex, tex, flags, owner;
 		float diffuse[4];
 		float emissive[4];         // rgb, w: sunlight
 		float pbr[4];
+		float uv[4];               // texture coordinates: offset, scale
 	};
 	constexpr uint32_t FLAG_UNLIT = 1;
+	uint64_t nextGeometryId = 1;
+	RTScene *active = nullptr;
+}
+
+uint64_t RTNewGeometryId ()
+{
+	return nextGeometryId++;
+}
+
+void RTForgetGeometry (uint64_t id)
+{
+	if (active) active->ForgetGeometry (id);
 }
 
 bool RTScene::Init (vkc::Context *c, TextureManager *tm)
@@ -93,7 +105,7 @@ bool RTScene::Init (vkc::Context *c, TextureManager *tm)
 	for (auto &f : frames) {
 		f.instances = ctx->CreateBuffer (MAX_INSTANCES * sizeof(VkAccelerationStructureInstanceKHR),
 			VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
-		f.records = ctx->CreateBuffer (MAX_INSTANCES * sizeof(InstanceRecord), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+		f.records = ctx->CreateBuffer (MAX_RECORDS * sizeof(InstanceRecord), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
 		f.tlasBuf = ctx->CreateBuffer (sz.accelerationStructureSize,
 			VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
 		f.scratch = ctx->CreateBuffer (sz.buildScratchSize + scratchAlign,
@@ -123,13 +135,15 @@ bool RTScene::Init (vkc::Context *c, TextureManager *tm)
 		wr[1].pBufferInfo = &dbi;
 		vkUpdateDescriptorSets (ctx->device, 2, wr, 0, nullptr);
 	}
-	oapiWriteLogV ("VulkanClient: ray traced reflections (top level %.1f MB per frame)", sz.accelerationStructureSize / 1048576.0);
+	active = this;
+	oapiWriteLogV ("VulkanClient: ray tracing scene (top level %.1f MB per frame)", sz.accelerationStructureSize / 1048576.0);
 	return true;
 }
 
 void RTScene::Shutdown ()
 {
 	if (!ctx) return;
+	if (active == this) active = nullptr;
 	vkDeviceWaitIdle (ctx->device);
 	for (auto &it : blas) {
 		ctx->rt.destroyAS (ctx->device, it.second.as, nullptr);
@@ -164,16 +178,17 @@ void RTScene::DestroyBlas (Blas &b)
 	b = Blas();
 }
 
-void RTScene::ForgetMesh (uint64_t meshId)
+void RTScene::ForgetGeometry (uint64_t id)
 {
 	if (!ctx) return;
-	for (auto it = blas.begin(); it != blas.end(); ) {
-		if (std::get<0>(it->first) == meshId) {
+	// (ids are few per mesh: a linear search over the range of the id)
+	for (auto it = blas.lower_bound ({ id, 0ull }); it != blas.end() && it->first.first == id; ) {
+		{
 			Blas *b = &it->second;
 			builds.erase (std::remove_if (builds.begin(), builds.end(), [b](const BlasBuild &x) { return x.b == b; }), builds.end());
 			DestroyBlas (it->second);
 			it = blas.erase (it);
-		} else ++it;
+		}
 	}
 }
 
@@ -219,44 +234,66 @@ void RTScene::ForgetTexture (VkTexture *tex)
 
 void RTScene::BeginFrame ()
 {
-	nInst = 0;
+	nInst = nRec = 0;
 	builds.clear ();
+	// structures not used for a while (e.g. of changed group visibility)
+	frameCount++;
+	if (frameCount % 64 == 0)
+		for (auto it = blas.begin(); it != blas.end(); )
+			if (frameCount - it->second.lastUse > 256) { DestroyBlas (it->second); it = blas.erase (it); }
+			else ++it;
 }
 
-void RTScene::AddInstance (const VkMesh *mesh, uint32_t group, uint32_t firstIndex, uint32_t nIndex,
-	const Mat4 &modelView, VkTexture *tex, const Material &mat)
+void RTScene::AddInstance (const Part *parts, uint32_t nParts, const Mat4 &modelView)
 {
-	if (!ctx || nInst >= MAX_INSTANCES || nIndex < 3 || !mesh->VertexBuffer() || !mesh->IndexBuffer()) return;
-	const VkMesh::Group &g = mesh->GetGroup (group);
-	uint32_t nVtx = mesh->GroupVertexCount (group);
-	if (!nVtx) return;
-	VkDeviceAddress vaddr = ctx->BufferAddress (mesh->VertexBuffer()) + (VkDeviceAddress)g.vertexOffset * sizeof(NTVERTEX);
-	VkDeviceAddress iaddr = ctx->BufferAddress (mesh->IndexBuffer());
+	if (!ctx || nInst >= MAX_INSTANCES || !nParts || nRec + nParts > MAX_RECORDS) return;
+	struct Src { VkDeviceAddress vaddr, iaddr; const Part *p; };
+	std::vector<Src> src;
+	src.reserve (nParts);
+	uint64_t hash = 1469598103934665603ull, vhash = hash;
+	auto mix = [](uint64_t &h, uint64_t v) { h = (h ^ v) * 1099511628211ull; };
+	for (uint32_t i = 0; i < nParts; i++) {
+		const Geometry &g = parts[i].geo;
+		if (g.nIndex < 3 || !g.vb || !g.ib || !g.nVtx) continue;
+		src.push_back ({ ctx->BufferAddress (g.vb) + g.vbOffset, ctx->BufferAddress (g.ib), &parts[i] });
+		mix (hash, g.id), mix (hash, g.vbOffset), mix (hash, g.firstIndex), mix (hash, g.nIndex);
+		mix (vhash, g.version);
+	}
+	if (src.empty()) return;
 
-	// bottom level (built in this frame if new or outdated)
-	Blas &b = blas[{ mesh->Id(), firstIndex, nIndex }];
-	if (b.as && b.version != mesh->GeomVersion()) DestroyBlas (b);
+	// bottom level (built in this frame if new or changed)
+	Blas &b = blas[{ src[0].p->geo.id, hash }];
+	if (b.as && b.geomVersion != vhash) { // vertices edited: rebuild
+		for (auto &x : builds) if (x.b == &b) x.b = nullptr;
+		DestroyBlas (b);
+	}
 	if (!b.as) {
-		VkAccelerationStructureGeometryKHR geom{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
-		geom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-		geom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
-		auto &tri = geom.geometry.triangles;
-		tri.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-		tri.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-		tri.vertexData.deviceAddress = vaddr;
-		tri.vertexStride = sizeof(NTVERTEX);
-		tri.maxVertex = nVtx - 1;
-		tri.indexType = VK_INDEX_TYPE_UINT16;
-		tri.indexData.deviceAddress = iaddr + (VkDeviceAddress)firstIndex * sizeof(uint16_t);
+		BlasBuild bb;
+		bb.b = &b;
+		for (auto &s : src) {
+			const Geometry &g = s.p->geo;
+			VkAccelerationStructureGeometryKHR geom{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+			geom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+			geom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+			auto &tri = geom.geometry.triangles;
+			tri.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+			tri.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+			tri.vertexData.deviceAddress = s.vaddr;
+			tri.vertexStride = sizeof(NTVERTEX);
+			tri.maxVertex = g.nVtx - 1;
+			tri.indexType = VK_INDEX_TYPE_UINT16;
+			tri.indexData.deviceAddress = s.iaddr + (VkDeviceAddress)g.firstIndex * sizeof(uint16_t);
+			bb.geoms.push_back (geom);
+			bb.nPrim.push_back (g.nIndex / 3);
+		}
 		VkAccelerationStructureBuildGeometryInfoKHR bi{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
 		bi.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
 		bi.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
 		bi.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-		bi.geometryCount = 1;
-		bi.pGeometries = &geom;
-		uint32_t nPrim = nIndex / 3;
+		bi.geometryCount = (uint32_t)bb.geoms.size();
+		bi.pGeometries = bb.geoms.data();
 		VkAccelerationStructureBuildSizesInfoKHR sz{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
-		ctx->rt.buildSizes (ctx->device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &bi, &nPrim, &sz);
+		ctx->rt.buildSizes (ctx->device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &bi, bb.nPrim.data(), &sz);
 		b.buf = ctx->CreateBuffer (sz.accelerationStructureSize,
 			VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
 		VkAccelerationStructureCreateInfoKHR aci{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
@@ -267,36 +304,41 @@ void RTScene::AddInstance (const VkMesh *mesh, uint32_t group, uint32_t firstInd
 		VkAccelerationStructureDeviceAddressInfoKHR dai{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR};
 		dai.accelerationStructure = b.as;
 		b.addr = ctx->rt.asAddress (ctx->device, &dai);
-		b.version = mesh->GeomVersion();
-		builds.push_back ({ &b, geom, nPrim });
-		(void)sz.buildScratchSize;
+		b.geomVersion = vhash;
+		builds.push_back (std::move (bb));
 	}
+	b.lastUse = frameCount;
 
-	// instance, in view space
+	// instance, in view space; one record per part (geometry index)
 	Frame &f = frames[ctx->FrameIndex()];
 	VkAccelerationStructureInstanceKHR inst{};
 	float m[16];
 	modelView.ToFloat (m);
 	for (int r = 0; r < 3; r++)
 		for (int c = 0; c < 4; c++) inst.transform.matrix[r][c] = m[c * 4 + r];
-	inst.instanceCustomIndex = nInst;
-	inst.mask = 0xFF;
+	inst.instanceCustomIndex = nRec;
+	inst.mask = src[0].p->mat.owner ? 0x01 : 0x02; // objects, terrain
 	inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
 	inst.accelerationStructureReference = b.addr;
 	memcpy ((VkAccelerationStructureInstanceKHR*)f.instances.mapped + nInst, &inst, sizeof(inst));
-
-	InstanceRecord rec{};
-	rec.vtx[0] = (uint32_t)vaddr, rec.vtx[1] = (uint32_t)(vaddr >> 32);
-	rec.idx[0] = (uint32_t)iaddr, rec.idx[1] = (uint32_t)(iaddr >> 32);
-	rec.firstIndex = firstIndex;
-	rec.tex = TextureSlot (tex);
-	rec.flags = mat.unlit ? FLAG_UNLIT : 0;
-	memcpy (rec.diffuse, mat.diffuse, sizeof(rec.diffuse));
-	memcpy (rec.emissive, mat.emissive, 3 * sizeof(float));
-	rec.emissive[3] = mat.light;
-	memcpy (rec.pbr, mat.pbr, sizeof(rec.pbr));
-	memcpy ((InstanceRecord*)f.records.mapped + nInst, &rec, sizeof(rec));
 	nInst++;
+	for (auto &s : src) {
+		const Material &mat = s.p->mat;
+		InstanceRecord rec{};
+		rec.vtx[0] = (uint32_t)s.vaddr, rec.vtx[1] = (uint32_t)(s.vaddr >> 32);
+		rec.idx[0] = (uint32_t)s.iaddr, rec.idx[1] = (uint32_t)(s.iaddr >> 32);
+		rec.firstIndex = s.p->geo.firstIndex;
+		rec.tex = TextureSlot (s.p->tex);
+		rec.flags = mat.unlit ? FLAG_UNLIT : 0;
+		rec.owner = mat.owner;
+		memcpy (rec.diffuse, mat.diffuse, sizeof(rec.diffuse));
+		memcpy (rec.emissive, mat.emissive, 3 * sizeof(float));
+		rec.emissive[3] = mat.light;
+		memcpy (rec.pbr, mat.pbr, sizeof(rec.pbr));
+		memcpy (rec.uv, mat.uv, sizeof(rec.uv));
+		memcpy ((InstanceRecord*)f.records.mapped + nRec, &rec, sizeof(rec));
+		nRec++;
+	}
 }
 
 void RTScene::Build ()
@@ -318,9 +360,10 @@ void RTScene::Build ()
 	vkCmdPipelineBarrier2 (cmd, &dep);
 
 	// new bottom-level structures, each with its own scratch memory
+	builds.erase (std::remove_if (builds.begin(), builds.end(), [](const BlasBuild &x) { return !x.b; }), builds.end());
 	if (!builds.empty()) {
 		std::vector<VkAccelerationStructureBuildGeometryInfoKHR> infos (builds.size());
-		std::vector<VkAccelerationStructureBuildRangeInfoKHR> ranges (builds.size());
+		std::vector<std::vector<VkAccelerationStructureBuildRangeInfoKHR>> ranges (builds.size());
 		std::vector<const VkAccelerationStructureBuildRangeInfoKHR*> pr (builds.size());
 		VkDeviceSize total = 0;
 		std::vector<VkDeviceSize> ofs (builds.size());
@@ -330,15 +373,16 @@ void RTScene::Build ()
 			bi.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
 			bi.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
 			bi.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-			bi.geometryCount = 1;
-			bi.pGeometries = &builds[i].geom;
+			bi.geometryCount = (uint32_t)builds[i].geoms.size();
+			bi.pGeometries = builds[i].geoms.data();
 			bi.dstAccelerationStructure = builds[i].b->as;
 			VkAccelerationStructureBuildSizesInfoKHR sz{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
-			ctx->rt.buildSizes (ctx->device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &bi, &builds[i].nPrim, &sz);
+			ctx->rt.buildSizes (ctx->device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &bi, builds[i].nPrim.data(), &sz);
 			ofs[i] = total;
 			total += (sz.buildScratchSize + scratchAlign - 1) / scratchAlign * scratchAlign;
-			ranges[i] = { builds[i].nPrim, 0, 0, 0 };
-			pr[i] = &ranges[i];
+			ranges[i].resize (builds[i].nPrim.size());
+			for (size_t k = 0; k < ranges[i].size(); k++) ranges[i][k] = { builds[i].nPrim[k], 0, 0, 0 };
+			pr[i] = ranges[i].data();
 		}
 		vkc::Buffer scratch = ctx->CreateBuffer (total + scratchAlign, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
 		VkDeviceAddress sa = (ctx->BufferAddress (scratch.buffer) + scratchAlign - 1) / scratchAlign * scratchAlign;

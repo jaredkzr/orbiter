@@ -3,12 +3,11 @@
 
 #include "VkMesh.h"
 #include "VkTexture.h"
+#include "RayTracing.h"
 #include <algorithm>
 
 namespace {
 	constexpr DWORD SPEC_NONE = (DWORD)-1; // "no texture" / "default material" index
-
-	uint64_t nextMeshId = 1;
 
 	bool IsTransparent (const MATERIAL &m, const VkMesh::Group &g)
 	{
@@ -16,10 +15,8 @@ namespace {
 	}
 }
 
-void (*VkMesh::onGeometryChange) (uint64_t id) = nullptr;
-
 VkMesh::VkMesh (vkc::Context *c, TextureManager *tm, MESHHANDLE h)
-	: ctx(c), texmgr(tm), hMesh(h), id(nextMeshId++)
+	: ctx(c), texmgr(tm), hMesh(h), id(RTNewGeometryId ())
 {
 	// materials: slot 0 is the default (white, unlit by specular)
 	MATERIAL def{};
@@ -82,7 +79,7 @@ VkMesh::VkMesh (vkc::Context *c, TextureManager *tm, MESHHANDLE h)
 
 VkMesh::~VkMesh ()
 {
-	if (onGeometryChange) onGeometryChange (id);
+	RTForgetGeometry (id);
 	for (auto tex : textures) texmgr->Release (tex);
 	for (auto tex : cfgTextures) texmgr->Release (tex);
 	vkc::Context *c = ctx;

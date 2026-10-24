@@ -138,6 +138,9 @@ private:
 		std::unique_ptr<ElevGrid> elev;
 		uint8_t surfState = 0, maskState = 0, elevState = 0; // 0: unknown, 1: requested, 2: loaded, 3: missing
 		vkc::Buffer vbuf;
+		uint32_t nVtx = 0;
+		uint64_t rtId = 0;    // ray tracing geometry id of vbuf
+		uint32_t rtVersion = 0;
 		int meshElevLvl = -1; // level of the elevation tile the mesh was built from (0: sphere)
 		uint64_t lastUsed = 0;
 	};
