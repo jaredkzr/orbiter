@@ -132,6 +132,7 @@ namespace vkc {
 		VkFormat colorFormat = VK_FORMAT_B8G8R8A8_SRGB;
 		VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
 		VkFormat sceneFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+		VkSampleCountFlagBits sceneSamples = VK_SAMPLE_COUNT_1_BIT; ///< multisampling of scene pipelines
 		VkPhysicalDeviceProperties deviceProps{};
 		VkPhysicalDeviceFeatures deviceFeatures{};
 		uint32_t swapchainImageCount = 0;
@@ -167,6 +168,7 @@ namespace vkc {
 		} cur;
 		enum { BB_NONE = 0, BB_COLOR = 1, BB_DEPTH = 2, BB_SCENE = 4 };
 		Image sceneColor;
+		Image sceneColorMS; // multisampled scene colour (if multisampling is on)
 		uint32_t swapchainGeneration = 0;
 		int bbState = BB_NONE;   // backbuffer attachments initialised in this frame
 		bool recording = false;

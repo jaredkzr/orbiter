@@ -212,7 +212,7 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	rs.cullMode = VK_CULL_MODE_NONE; // terrain skirts face both ways
 	rs.lineWidth = 1.0f;
 	VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-	ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+	ms.rasterizationSamples = ctx->sceneSamples;
 	VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
 	ds.depthTestEnable = VK_TRUE;
 	ds.depthWriteEnable = VK_TRUE;

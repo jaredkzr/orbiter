@@ -7,6 +7,7 @@
 #include <SDL3/SDL_vulkan.h>
 #include <algorithm>
 #include <cstring>
+#include <cstdlib>
 
 namespace vkc {
 
@@ -120,6 +121,17 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 	vkGetPhysicalDeviceProperties (physicalDevice, &deviceProps);
 	vkGetPhysicalDeviceFeatures (physicalDevice, &deviceFeatures);
 	oapiWriteLogV ("VulkanClient: using device %s", deviceProps.deviceName);
+
+	// multisampling of the 3D scene (ORBITER_VK_MSAA = 1, 2, 4 or 8; default 4)
+	{
+		int req = 4;
+		if (const char *e = getenv ("ORBITER_VK_MSAA")) req = atoi (e);
+		VkSampleCountFlags ok = deviceProps.limits.framebufferColorSampleCounts & deviceProps.limits.framebufferDepthSampleCounts;
+		sceneSamples = VK_SAMPLE_COUNT_1_BIT;
+		for (int n = 8; n > 1; n >>= 1)
+			if (n <= req && (ok & n)) { sceneSamples = (VkSampleCountFlagBits)n; break; }
+		oapiWriteLogV ("VulkanClient: %dx multisampling", (int)sceneSamples);
+	}
 
 	// Logical device
 	float prio = 1.0f;
@@ -321,7 +333,7 @@ bool Context::CreateSwapchain ()
 	ici.extent = { extent.width, extent.height, 1 };
 	ici.mipLevels = 1;
 	ici.arrayLayers = 1;
-	ici.samples = VK_SAMPLE_COUNT_1_BIT;
+	ici.samples = sceneSamples; // the depth buffer belongs to the (multisampled) scene
 	ici.tiling = VK_IMAGE_TILING_OPTIMAL;
 	ici.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
 	VmaAllocationCreateInfo aci{};
@@ -351,6 +363,13 @@ bool Context::CreateSwapchain ()
 	svci.format = sceneFormat;
 	svci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
 	VK_CHECK(vkCreateImageView (device, &svci, nullptr, &sceneColor.view));
+	if (sceneSamples != VK_SAMPLE_COUNT_1_BIT) {
+		sci2.samples = sceneSamples;
+		sci2.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+		VK_CHECK(vmaCreateImage (allocator, &sci2, &aci, &sceneColorMS.image, &sceneColorMS.alloc, nullptr));
+		svci.image = sceneColorMS.image;
+		VK_CHECK(vkCreateImageView (device, &svci, nullptr, &sceneColorMS.view));
+	}
 	swapchainGeneration++;
 	return true;
 }
@@ -359,6 +378,7 @@ void Context::DestroySwapchain ()
 {
 	DestroyImage (depth);
 	DestroyImage (sceneColor);
+	DestroyImage (sceneColorMS);
 	if (offscreen) {
 		for (auto &img : offImages) DestroyImage (img);
 		offImages.clear();
@@ -494,6 +514,18 @@ void Context::BindMain (bool scene, bool withDepth)
 	VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
 	color.imageView = scene ? sceneColor.view : swapViews[imageIndex];
 	color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	if (scene && sceneColorMS.image) {
+		// render multisampled, resolved into the scene image at the end of the scope;
+		// the multisampled image stays in attachment layout
+		ImageBarrier (cmd, sceneColorMS.image, VK_IMAGE_ASPECT_COLOR_BIT,
+			clearColor ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+			VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+			VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+		color.imageView = sceneColorMS.view;
+		color.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+		color.resolveImageView = sceneColor.view;
+		color.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	}
 	color.loadOp = clearColor ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
 	color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 	color.clearValue.color = {{ 0.0f, 0.0f, 0.0f, 1.0f }};
@@ -508,6 +540,11 @@ void Context::BindMain (bool scene, bool withDepth)
 				VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
 			bbState |= BB_DEPTH;
 		}
+		else
+			ImageBarrier (cmd, depth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+				VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+				VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+				VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
 		dep.imageView = depth.view;
 		dep.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
 		dep.loadOp = clearDepth ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
