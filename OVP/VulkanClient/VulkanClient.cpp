@@ -109,6 +109,13 @@ bool VulkanClient::clbkInitialise ()
 	if (const char *shot = getenv ("ORBITER_VK_SCREENSHOT")) {
 		autoScreenshot = shot;
 		if (const char *n = getenv ("ORBITER_VK_SCREENSHOT_FRAME")) autoScreenshotFrame = (unsigned)atoi (n);
+		// ORBITER_VK_VIDEO=<dir>: also write the ORBITER_VK_VIDEO_FRAMES frames
+		// before the screenshot (frame_NNNNN.png; sim times in times.txt)
+		if (const char *v = getenv ("ORBITER_VK_VIDEO")) {
+			videoDir = v;
+			videoFrames = 300;
+			if (const char *n = getenv ("ORBITER_VK_VIDEO_FRAMES")) videoFrames = (unsigned)atoi (n);
+		}
 	}
 	if (!texmgr.Init (&ctx)) return false;
 	r2d = std::make_unique<Renderer2D>();
@@ -207,6 +214,15 @@ bool VulkanClient::clbkDisplayFrame ()
 	if (!ready) return false;
 	r2d->Flush ();
 	if (frameActive) {
+		if (!autoScreenshot.empty() && !videoDir.empty() && frameCount + 1 + videoFrames >= autoScreenshotFrame && frameCount + 1 < autoScreenshotFrame) {
+			char name[64];
+			snprintf (name, sizeof(name), "/frame_%05u.png", videoIndex++);
+			CaptureBackbuffer (videoDir + name);
+			if (FILE *f = fopen ((videoDir + "/times.txt").c_str(), videoIndex == 1 ? "w" : "a")) {
+				fprintf (f, "%.6f\n", oapiGetSimTime ());
+				fclose (f);
+			}
+		}
 		if (!autoScreenshot.empty() && ++frameCount == autoScreenshotFrame) {
 			CaptureBackbuffer (autoScreenshot);
 			oapiWriteLogV ("VulkanClient: screenshot saved to %s", autoScreenshot.c_str());

@@ -144,6 +144,9 @@ private:
 	std::string autoScreenshot;   // ORBITER_VK_SCREENSHOT: file written at frame autoScreenshotFrame
 	unsigned autoScreenshotFrame = 60;
 	unsigned frameCount = 0;
+	std::string videoDir;         // ORBITER_VK_VIDEO: frames written as PNGs before the screenshot frame
+	unsigned videoFrames = 0;     // ORBITER_VK_VIDEO_FRAMES
+	unsigned videoIndex = 0;
 };
 
 #endif // !__VULKANCLIENT_H

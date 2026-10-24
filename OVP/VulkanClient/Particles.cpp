@@ -170,16 +170,35 @@ void VkParticleStream::Update (double dt)
 	}
 	if (!havePrev) prevSrc = src - vel * dt;
 	havePrev = true;
-	emitAccum += spec.srcrate * dt;
+	// When the source moves through the air quickly, more particles are
+	// emitted, so that the trail stays continuous (spacing of about twice
+	// the particle size) instead of breaking into isolated puffs; their
+	// opacity is reduced to keep the trail's density.
+	double rate = spec.srcrate, alphaScale = 1.0;
+	if (kind != Kind::Reentry && hAtmRef && spec.srcsize > 0.0) {
+		VECTOR3 air;
+		if (oapiGetVesselInterface (hRef)->GetAirspeedVector (FRAME_GLOBAL, air)) {
+			double needed = length (air) / (2.0 * spec.srcsize);
+			if (needed > rate) {
+				alphaScale = std::max (0.35, std::sqrt (rate / needed));
+				rate = std::min (needed, 60.0);
+			}
+		}
+	}
+	alpha *= alphaScale;
+	emitAccum += rate * dt;
 	int nemit = (int)emitAccum;
 	emitAccum -= nemit;
 	std::uniform_real_distribution<double> uni (0.0, 1.0);
-	std::normal_distribution<double> gauss (0.0, 1.0);
-	double sigma = spec.srcspread * (spec.v0 + 1.0);
+	// the stream direction is the thrust direction: the exhaust leaves the
+	// other way. srcspread randomises the velocity by up to +-v0*srcspread/2
+	// per axis.
+	double spread = spec.srcspread * spec.v0;
 	for (int i = 0; i < nemit && particles.size() < MAX_PARTICLES; i++) {
 		double f = (i + uni (rng)) / nemit; // emission time within the step
 		Particle p;
-		p.vel = vel + dir * spec.v0 + _V(gauss (rng), gauss (rng), gauss (rng)) * sigma;
+		VECTOR3 dv = _V(uni (rng) - 0.5, uni (rng) - 0.5, uni (rng) - 0.5) * spread;
+		p.vel = vel - dir * spec.v0 + dv;
 		p.pos = prevSrc + (src - prevSrc) * f + p.vel * ((1.0 - f) * dt);
 		p.age = (1.0 - f) * dt;
 		p.life = std::max (0.01, spec.lifetime * (0.5 + uni (rng)));
