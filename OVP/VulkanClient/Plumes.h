@@ -47,6 +47,22 @@ struct PlumeClass {
 	float vacuumBrightness; // brightness factor in vacuum
 	float turbulence;
 	float flow;             // turbulence drift [exit radii/s]
+	// smoke (particles) where the flame ends, in air
+	float smokeAlbedo[3];   // colour
+	float smokeOpacity;     // opacity of a particle (at the specified density)
+	float smokeLife;        // [s]
+	float smokeAir0, smokeAir1; // fades in between these pressures [atm]
+};
+
+/// where a plume's flame ends and what it meets (PlumeRenderer::Add)
+struct PlumeInfo {
+	VECTOR3 end;            // end of the flame, view space [m]
+	VECTOR3 endDir;         // flow direction there (view space)
+	double endRadius;       // jet radius there [m]
+	bool hit;               // a surface in the way
+	VECTOR3 hitPos, hitN;   // where (view space), its normal (towards the jet)
+	double coverage;        // fraction of the jet blocked
+	double heat;            // heat of the jet at the surface (0..1)
 };
 
 class PlumeConfig {
@@ -97,8 +113,9 @@ public:
 	void Shutdown ();
 	/// Start collecting the plumes of this frame
 	void BeginFrame (double simt);
-	/// Add a plume of the object owner; returns its index (-1: none)
-	int Add (const PlumeDraw &p, uint32_t owner);
+	/// Add a plume of the object owner; returns its index (-1: none), and
+	/// where its flame ends (info, if given)
+	int Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info = nullptr);
 	/// The prepass image (view depth) the plumes are clipped against
 	void SetPrepass (VkImageView prepass);
 	/// Draw the plumes, far to near (scene with reactive mask, Context::BindSceneWithMask)

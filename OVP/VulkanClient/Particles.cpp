@@ -33,10 +33,56 @@ struct ParticleSystem::UpdateParams { // particle_update.glsl
 	float camShift[4], bodyPos[4], bodyVel[4], omega[4], noiseOrg[4];
 };
 
-bool ParticleSystem::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout,
+bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout,
 	VkDescriptorSetLayout texLayout, VkImageView shapeNoise, VkImageView detailNoise)
 {
-	ctx = c;
+	ctx = c, texmgr = tm;
+	{
+		// smoke puffs: clusters of soft blobs (cauliflower-like billows),
+		// broken up by noise, slightly darker inside
+		const int N = 256, Q = N / 2;
+		std::vector<uint8_t> px (N * N * 4);
+		std::mt19937 rng (4242);
+		std::uniform_real_distribution<double> uni (0.0, 1.0);
+		auto hash = [](int x, int y, int o) {
+			uint32_t h = (uint32_t)(x * 73856093) ^ (uint32_t)(y * 19349663) ^ (uint32_t)(o * 83492791);
+			h ^= h >> 13; h *= 0x5bd1e995; h ^= h >> 15;
+			return (h & 0xffff) / 65535.0;
+		};
+		auto vnoise = [&](double x, double y, int o) { // value noise, tiling not needed
+			int ix = (int)std::floor (x), iy = (int)std::floor (y);
+			double fx = x - ix, fy = y - iy;
+			fx = fx * fx * (3 - 2 * fx), fy = fy * fy * (3 - 2 * fy);
+			double a = hash (ix, iy, o), b = hash (ix + 1, iy, o), c2 = hash (ix, iy + 1, o), d = hash (ix + 1, iy + 1, o);
+			return (a + (b - a) * fx) + ((c2 + (d - c2) * fx) - (a + (b - a) * fx)) * fy;
+		};
+		for (int q = 0; q < 4; q++) {
+			struct Blob { double x, y, r; };
+			std::vector<Blob> blobs{ { 0.0, 0.0, 0.42 } };
+			for (int k = 0; k < 7; k++) {
+				double ang = uni (rng) * 6.2831853, d = 0.18 + 0.15 * uni (rng);
+				blobs.push_back ({ d * cos (ang), d * sin (ang), 0.16 + 0.12 * uni (rng) });
+			}
+			for (int y = 0; y < Q; y++)
+				for (int x = 0; x < Q; x++) {
+					double u = (x + 0.5) / Q * 2.0 - 1.0, v = (y + 0.5) / Q * 2.0 - 1.0;
+					double dens = 0.0;
+					for (auto &b : blobs) {
+						double dx = u - b.x, dy = v - b.y;
+						dens += std::exp (-(dx * dx + dy * dy) / (b.r * b.r) * 2.0);
+					}
+					double n = 0.0, amp = 0.5, f = 4.0;
+					for (int o = 0; o < 4; o++, amp *= 0.5, f *= 2.0) n += amp * vnoise (u * f + q * 17.0, v * f, o);
+					double a = std::clamp ((dens * (0.55 + 0.9 * n) - 0.25) * 1.4, 0.0, 1.0);
+					a *= std::clamp ((1.0 - std::sqrt (u * u + v * v)) * 4.0, 0.0, 1.0); // (zero at the edge)
+					double shade = std::clamp (0.7 + 0.35 * n + 0.1 * dens, 0.0, 1.0);
+					uint8_t *p = &px[((y + (q >> 1) * Q) * N + x + (q & 1) * Q) * 4];
+					p[0] = p[1] = p[2] = (uint8_t)std::lround (shade * 255.0);
+					p[3] = (uint8_t)std::lround (a * 255.0);
+				}
+		}
+		smokeTex = texmgr->CreateRGBA (N, N, px.data());
+	}
 	shapeView = shapeNoise, detailView = detailNoise;
 	if (const char *e = getenv ("ORBITER_VK_PARTICLES")) enabled = atoi (e) != 0;
 	if (const char *e = getenv ("ORBITER_VK_PARTICLE_DENSITY")) density = std::clamp ((float)atof (e), 1.0f, 16.0f);
@@ -212,6 +258,7 @@ void ParticleSystem::Shutdown ()
 	vkDestroySampler (ctx->device, clampSampler, nullptr);
 	ctx->DestroyBuffer (pool);
 	for (auto &b : emitBuf) ctx->DestroyBuffer (b);
+	if (smokeTex) texmgr->Release (smokeTex);
 	ctx = nullptr;
 }
 
@@ -346,7 +393,10 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, VkDescriptorSet frameSet, 
 			memcpy (g.p0, f0, 16), memcpy (g.p1, f1, 16), memcpy (g.vel, fv, 16), memcpy (g.dir, fd, 16), memcpy (g.shape, fs, 16);
 			uint32_t count = std::min (e.count, e.capacity);
 			g.slab[0] = e.first, g.slab[1] = e.capacity, g.slab[2] = e.head, g.slab[3] = count;
-			g.misc[0] = seed++, g.misc[1] = (e.emissive ? 1u : 0u) | (e.reentry ? 2u : 0u), g.misc[2] = g.misc[3] = 0;
+			g.misc[0] = seed++, g.misc[1] = (e.emissive ? 1u : 0u) | (e.reentry ? 2u : 0u) | (e.tinted ? 4u : 0u) | (e.planar ? 8u : 0u);
+			uint32_t rgb = 0;
+			for (int k = 0; k < 3; k++) rgb |= (uint32_t)std::lround (std::clamp (e.albedo[k], 0.0f, 1.0f) * 255.0f) << (8 * k);
+			g.misc[2] = rgb, g.misc[3] = 0;
 			maxCount = std::max (maxCount, count);
 		}
 		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, emitPipe);
@@ -526,7 +576,10 @@ void VkParticleStream::Update (double dt)
 	e.lifetime = spec.lifetime, e.dt = dt;
 	e.size = spec.srcsize * sizeScale, e.growth = spec.growthrate * sizeScale;
 	e.alpha = alpha * alphaScale * std::min (1.0, 1.3 / (D * sizeScale * sizeScale));
-	e.slowdown = hAtmRef ? spec.atmslowdown : 0.0;
+	// exhaust gas takes on the air's velocity quickly (as the plume bends)
+	e.slowdown = !hAtmRef ? 0.0 : kind == Kind::Exhaust
+		? std::max (spec.atmslowdown, ParticleSystem::ExhaustDrag (oapiGetVesselInterface (hRef)->GetAtmDensity ()))
+		: spec.atmslowdown;
 	e.first = first, e.capacity = capacity, e.head = head, e.count = std::min (n, capacity);
 	e.emissive = spec.ltype == PARTICLESTREAMSPEC::EMISSIVE;
 	e.reentry = kind == Kind::Reentry;

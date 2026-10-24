@@ -54,6 +54,9 @@ VVessel::VVessel (OBJHANDLE h, Scene *s)
 
 VVessel::~VVessel ()
 {
+	ParticleSystem *sys = scene->Particles ();
+	for (auto &r : smoke)
+		if (r.sys && r.sys == sys) sys->Free (r.first, r.capacity);
 	// restore animated vertex lists to their default state
 	for (auto &it : vtxListDefaults)
 		std::copy (it.second.begin(), it.second.end(), it.first);
@@ -449,6 +452,7 @@ void VVessel::CollectPlumes (PlumeRenderer &pr)
 	VECTOR3 wind = scene->ViewDir (mul (grot, -as)); // the air past the vessel
 	double pa = vessel->GetAtmPressure (), rho = vessel->GetAtmDensity ();
 	float sun = (float)scene->Sunlight (gpos);
+	double dt = oapiGetPause () ? 0.0 : oapiGetSimStep ();
 	static std::mt19937 rng (54321);
 	std::uniform_real_distribution<double> uni (0.0, 1.0);
 	for (DWORD i = 0; i < n; i++) {
@@ -477,8 +481,81 @@ void VVessel::CollectPlumes (PlumeRenderer &pr)
 		pd.sunlight = sun;
 		pd.tint = es.tex ? (VkTexture*)es.tex : nullptr;
 		pd.seed = id * 131u + i * 977u;
-		pr.Add (pd, id);
+		PlumeInfo info{};
+		if (pr.Add (pd, id, &info) >= 0) EmitSmoke (i, (int)type, pd, info, dt);
+		else if (i < smoke.size()) smoke[i].havePrev = false;
 	}
+}
+
+void VVessel::EmitSmoke (DWORD idx, int type, const PlumeDraw &pd, const PlumeInfo &info, double dt)
+{
+	ParticleSystem *sys = scene->Particles ();
+	if (!sys || !sys->enabled) return;
+	if (idx >= smoke.size()) smoke.resize (idx + 1);
+	SmokeRing &r = smoke[idx];
+	const PlumeClass &c = PlumeConfig::Class ((PlumeType)type);
+	double air = pd.ambientPressure / 101325.0;
+	double t = c.smokeAir1 > c.smokeAir0 ? std::clamp ((air - c.smokeAir0) / (c.smokeAir1 - c.smokeAir0), 0.0, 1.0) : (air > c.smokeAir0 ? 1.0 : 0.0);
+	double fade = c.smokeOpacity * t * t * (3.0 - 2.0 * t) * pd.level;
+	if (fade < 0.01 || dt <= 0.0) { r.havePrev = false; return; }
+	if (r.sys != sys) { // (the pool belongs to the scene)
+		r = SmokeRing{};
+		double want = 250.0 * sys->density * c.smokeLife * 1.2;
+		if (!sys->Allocate ((uint32_t)std::min (want, 65536.0), r.first, r.capacity)) return;
+		r.sys = sys;
+	}
+	// the smoke leaves the end of the flame, or spreads from the surface the
+	// jet meets
+	bool atSurface = info.hit && info.coverage > 0.5;
+	VECTOR3 src = scene->GlobalPos (atSurface ? info.hitPos : info.end);
+	VECTOR3 flow = scene->GlobalDir (atSurface ? info.hitN : info.endDir);
+	VECTOR3 vel;
+	vessel->GetGlobalVel (vel);
+	VECTOR3 as;
+	vessel->GetAirspeedVector (FRAME_LOCAL, as);
+	double D = sys->density, sizeScale = std::pow (D, -1.0 / 3.0);
+	double size = (atSurface ? 5.0 : 3.0) * info.endRadius * sizeScale;
+	double v0 = 40.0 * pd.level;
+	// spacing of a third of the particle size along the trail
+	double rate = std::clamp ((length (as) + v0) / (0.35 * std::max (size / sizeScale, 0.5)), 6.0, 250.0) * D;
+	if (atSurface) rate = 120.0 * D; // (a cloud building up around the point)
+	r.accum += rate * dt;
+	uint32_t n = (uint32_t)r.accum;
+	r.accum -= n;
+	if (!r.havePrev) r.prev = src - vel * dt;
+	if (n) {
+		ParticleSystem::Emission e{};
+		e.p0 = r.prev, e.p1 = src;
+		e.vel = vel, e.dir = -flow; // (emitted along -dir)
+		// (deflected by a surface: it spreads far along it, carried by the jet,
+		// and rises)
+		e.v0 = atSurface ? 4.0 : v0;
+		e.spread = atSurface ? 1.5 * v0 + 20.0 : 0.6 * v0;
+		e.planar = atSurface;
+		e.lifetime = c.smokeLife, e.dt = dt;
+		e.size = size, e.growth = 0.4 * size + 2.0 * sizeScale;
+		e.alpha = fade * std::min (1.0, 1.3 / (D * sizeScale * sizeScale));
+		e.slowdown = atSurface ? 0.8 : ParticleSystem::ExhaustDrag (pd.airDensity);
+		e.first = r.first, e.capacity = r.capacity, e.head = r.head, e.count = std::min (n, r.capacity);
+		e.tinted = true;
+		for (int k = 0; k < 3; k++) e.albedo[k] = c.smokeAlbedo[k];
+		sys->Queue (e);
+		r.head = (r.head + e.count) % r.capacity;
+		r.lastEmit = oapiGetSimTime ();
+		r.life = c.smokeLife;
+	}
+	r.prev = src;
+	r.havePrev = true;
+}
+
+void VVessel::DrawParticles ()
+{
+	ParticleSystem *sys = scene->Particles ();
+	if (!sys) return;
+	double simt = oapiGetSimTime ();
+	for (const SmokeRing &r : smoke)
+		if (r.sys == sys && simt - r.lastEmit < 1.5 * r.life + 0.1)
+			sys->Draw (r.first, r.capacity, sys->SmokeTexture (), false, scene->FrameSet ());
 }
 
 void VVessel::RenderExhaust ()

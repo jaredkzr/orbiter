@@ -22,8 +22,9 @@ public:
 	void Apply (VkImageView input, VkExtent2D inputSize);
 
 	float exposure = 1.0f;
-	float bloomStrength = 0.35f;
-	float bloomThreshold = 1.0f;
+	float bloomStrength = 0.2f;
+	float bloomThreshold = 1.2f; // displayed brightness (after exposure) above which light blooms
+	float bloomFalloff = 0.6f;   // contribution of each wider level of the glow
 	float flareStrength = 0.05f;
 	bool autoExposure = true;
 

@@ -31,8 +31,9 @@ Known gaps and limitations, to be addressed later.
   engine light).
 - Not in the environment probe; no light cast on the surroundings yet.
 - Smoke is lit by sun and ambient light without self-shadowing.
-- Bloom (threshold 1, strength 0.35) makes bright plumes in daylight very
-  large; the bloom threshold should become exposure-relative.
+- Bloom: threshold relative to the exposure (1.2 displayed), strength 0.2,
+  wider levels falling off by 0.6 (was 0.35 with all levels equal, which
+  hid bright flames in glare).
 
 ## Particle streams
 - GPU particles (Particles.cpp, particle_*.comp, gpuparticle.*): each
@@ -45,8 +46,13 @@ Known gaps and limitations, to be addressed later.
 - No self-shadowing of smoke, no local lights on particles yet (engine
   light), not sorted within a stream (premultiplied blending hides most
   of it), not in reflections or the probe.
-- Exhaust gas follows the add-on's atmslowdown; with low values it keeps
-  the vessel's velocity for a while (e.g. DG hover puffs at speed).
+- Exhaust streams get a drag of at least 15/s * sqrt(rho/1.225) in air, so
+  they sweep back with the airflow like the plumes.
+- Engine smoke (VVessel::EmitSmoke): each plume emits smoke of its class
+  where the flame ends, or spreads it along the surface the jet meets (pad
+  clouds), with buoyancy; colours and densities after launch photographs.
+  No ground collision of particles, no water deluge steam, no smoke
+  self-shadowing yet.
 - Reentry plasma not verified visually at peak heating.
 
 ## Surface bases

@@ -238,7 +238,7 @@ bool Scene::Init ()
 	plumes->Init (ctx, frameLayout, gc->TexMgr()->Layout(), atm->SetLayout(), vclouds->ShapeNoiseView (), vclouds->DetailNoiseView ());
 	ssr->SetPlumes (plumes->Buffer (), plumes->BufferSize (), plumes->ShapeNoise (), plumes->DetailNoise ());
 	particles = std::make_unique<ParticleSystem>();
-	particles->Init (ctx, frameLayout, atm->SetLayout(), gc->TexMgr()->Layout(), vclouds->ShapeNoiseView (), vclouds->DetailNoiseView ());
+	particles->Init (ctx, gc->TexMgr(), frameLayout, atm->SetLayout(), gc->TexMgr()->Layout(), vclouds->ShapeNoiseView (), vclouds->DetailNoiseView ());
 	if (rt->Enabled ()) particles->InitRT (frameLayout, rt->SetLayout(), rt->TextureLayout(), atm->SetLayout());
 	plumes->rayCast = [this](uint32_t owner, const VECTOR3 &vo, const VECTOR3 &vd, double maxDist, double &t, VECTOR3 &vn) {
 		VECTOR3 o = camPos + mul (camRot, vo), d = mul (camRot, vd);
@@ -1301,6 +1301,7 @@ void Scene::Render ()
 	ctx->BindSceneWithMask (rt, reactiveMS.image ? &rtMS : nullptr);
 	plumes->Draw (FrameSet (), camAtmSet, gc->TexMgr()->White());
 	for (auto *ps : gc->ParticleStreams()) ps->Render (this);
+	for (auto *vo : list) vo->DrawParticles ();
 }
 
 VkImageView Scene::ResolveTemporal (VkExtent2D &size)

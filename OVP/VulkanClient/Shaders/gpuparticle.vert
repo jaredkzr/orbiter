@@ -10,9 +10,12 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "frame.glsl"
-layout(set = 1, binding = 0, std430) readonly buffer ParticlePoolR {
-	vec4 data[]; // (Particle in particles.glsl: 4 vec4 each)
+struct Particle { // (particles.glsl)
+	vec4 posAge, velLife, shape;
+	vec3 light;
+	uint flags;
 };
+layout(set = 1, binding = 0, std430) readonly buffer ParticlePoolR { Particle particles[]; };
 
 layout(push_constant) uniform Draw {
 	uint first;   // the stream's pool
@@ -35,11 +38,12 @@ uint Hash (uint x)
 void main ()
 {
 	uint slot = pc.first + uint (gl_InstanceIndex);
-	vec4 posAge = data[slot * 4u], velLife = data[slot * 4u + 1u], shape = data[slot * 4u + 2u], light = data[slot * 4u + 3u];
+	Particle pt = particles[slot];
+	vec4 posAge = pt.posAge, velLife = pt.velLife, shape = pt.shape;
 	float age = posAge.w, life = velLife.w;
 	float a = life > 0.0 ? pc.alpha * shape.z * (1.0 - age / life) * smoothstep (0.0, 0.08, age / life) : 0.0;
 	if (a <= 0.002) { gl_Position = vec4 (0.0, 0.0, -2.0, 1.0); return; } // (outside the clip volume)
-	uint flags = floatBitsToUint (light.w);
+	uint flags = pt.flags;
 	vec3 vp = transpose (mat3 (frame.viewToGlobal)) * posAge.xyz;
 	float h = 0.5 * (shape.x + shape.y * age);
 
@@ -61,7 +65,10 @@ void main ()
 	} else {
 		float g = 0.35, cosT = dot (normalize (vp), frame.sunDir.xyz);
 		float phase = (1.0 - g * g) / pow (1.0 + g * g - 2.0 * g * cosT, 1.5); // (times 4 pi)
-		col = light.rgb * phase * 0.8 + frame.ambient.rgb;
+		// (smoke of large droplets scatters light many times: bright from any side)
+		col = pt.light * (0.55 + 0.45 * phase) * 0.9 + frame.ambient.rgb;
+		if ((flags & 8u) != 0u) // smoke of a colour
+			col *= vec3 (float ((flags >> 8) & 0xffu), float ((flags >> 16) & 0xffu), float (flags >> 24)) / 255.0;
 	}
 	vColor = vec4 (col, a);
 }

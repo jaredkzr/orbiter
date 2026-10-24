@@ -16,6 +16,7 @@
 
 #include "GraphicsAPI.h"
 #include "VkContext.h"
+#include <cmath>
 #include <random>
 #include <vector>
 
@@ -35,7 +36,7 @@ public:
 	static constexpr uint32_t CAPACITY = 1u << 18; ///< particles in the pool
 	static constexpr uint32_t BLOCK = 256;         ///< allocation unit
 
-	bool Init (vkc::Context *ctx, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout,
+	bool Init (vkc::Context *ctx, TextureManager *texmgr, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout,
 		VkDescriptorSetLayout texLayout, VkImageView shapeNoise, VkImageView detailNoise);
 	/// ray traced shadows (layouts of the ray tracing scene and its textures)
 	void InitRT (VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout rtScene, VkDescriptorSetLayout rtTex, VkDescriptorSetLayout atmLayout);
@@ -54,6 +55,9 @@ public:
 		double size, growth, alpha, slowdown;
 		uint32_t first, capacity, head, count;
 		bool emissive, reentry;
+		bool tinted;          // smoke of a colour (albedo)
+		bool planar;          // the spread is along the surface with the normal -dir
+		float albedo[3];
 	};
 	void Queue (const Emission &e);
 	/// simulation time passed (clbkUpdate)
@@ -68,6 +72,12 @@ public:
 	/// Draw a stream's particles (scene with reactive mask)
 	void Draw (uint32_t first, uint32_t capacity, VkTexture *tex, bool emissive, VkDescriptorSet frameSet);
 
+	/// billowing smoke puffs (four in the quadrants)
+	VkTexture *SmokeTexture () const { return smokeTex; }
+	/// drag of exhaust gas in air [1/s] at density rho [kg/m^3]: it takes
+	/// on the air's velocity within a fraction of a second at sea level
+	static double ExhaustDrag (double rho) { return 15.0 * std::sqrt (std::max (rho, 0.0) / 1.225); }
+
 	bool enabled = true;
 	float density = 4.0f; ///< particles per specified particle (smaller ones)
 
@@ -75,6 +85,8 @@ private:
 	struct GpuEmission;
 	struct UpdateParams;
 	vkc::Context *ctx = nullptr;
+	TextureManager *texmgr = nullptr;
+	VkTexture *smokeTex = nullptr;
 	vkc::Buffer pool;
 	vkc::Buffer emitBuf[vkc::FRAMES_IN_FLIGHT];
 	std::vector<Emission> queued;

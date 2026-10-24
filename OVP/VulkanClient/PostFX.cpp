@@ -342,17 +342,21 @@ void PostFX::Apply (VkImageView input, VkExtent2D inputSize)
 	if (autoExposure) Meter ();
 
 	// bloom: bright parts of the scene, downsampled into the level chain ...
+	// (the threshold is relative to the exposure: what looks bright blooms)
+	float le, ll;
+	ExposureState (le, ll);
+	float threshold = bloomThreshold / std::max (autoExposure ? std::exp2 (le) : exposure, 1e-3f);
 	for (int i = 0; i < LEVELS; i++) {
 		Level &l = levels[i];
 		ctx->BindTarget ({ l.img.image, l.img.view, BLOOM_FORMAT, l.extent });
 		VkExtent2D se = i ? levels[i-1].extent : inputSize;
-		float pc[4] = { 1.0f / se.width, 1.0f / se.height, i ? 0.0f : bloomThreshold, 0.5f * bloomThreshold };
+		float pc[4] = { 1.0f / se.width, 1.0f / se.height, i ? 0.0f : threshold, 0.5f * threshold };
 		Pass (downPipe, layout, i ? levels[i-1].set : sceneSet, pc, sizeof(pc));
 	}
 	// ... and added back up the chain with a widening blur
 	for (int i = LEVELS - 1; i > 0; i--) {
 		ctx->BindTarget ({ levels[i-1].img.image, levels[i-1].img.view, BLOOM_FORMAT, levels[i-1].extent });
-		float pc[4] = { 1.0f / levels[i].extent.width, 1.0f / levels[i].extent.height, 1.0f, 0.0f };
+		float pc[4] = { 1.0f / levels[i].extent.width, 1.0f / levels[i].extent.height, bloomFalloff, 0.0f };
 		Pass (upPipe, layout, levels[i].set, pc, sizeof(pc));
 	}
 

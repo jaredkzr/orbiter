@@ -9,7 +9,8 @@ struct Particle {
 	vec4 posAge;   // position (camera-relative, global axes) [m], age [s]
 	vec4 velLife;  // velocity (global frame) [m/s], lifetime [s] (0: none)
 	vec4 shape;    // size at birth [m], growth [m/s], opacity at birth, slowdown in air [1/s]
-	vec4 light;    // sunlight reaching it (rgb), w: flags (uint bits: 0-1 texture quadrant, 2 emissive)
+	vec3 light;    // sunlight reaching it
+	uint flags;    // bits 0-1: texture quadrant, 2: emissive, 3: tinted, 4: hot (rises), 8-31: colour of smoke (r, g, b 8 bits each)
 };
 
 struct Emission { // must match ParticleSystem::GpuEmission
@@ -19,7 +20,7 @@ struct Emission { // must match ParticleSystem::GpuEmission
 	vec4 dir;      // emission direction (opposite to the stream), w: step [s]
 	vec4 shape;    // size, growth, opacity, slowdown
 	uvec4 slab;    // first particle of the stream's pool, its capacity, first slot to write, count
-	uvec4 misc;    // seed, flags (1: emissive, 2: reentry quadrant), -, -
+	uvec4 misc;    // seed, flags (1: emissive, 2: reentry quadrant, 4: tinted (hot smoke), 8: spread along a surface), smoke colour (rgb8), -
 };
 
 layout(set = 0, binding = 0, std430) buffer ParticlePool { Particle particles[]; };

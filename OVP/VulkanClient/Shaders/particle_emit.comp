@@ -28,6 +28,10 @@ void main ()
 	// emission time within the step, velocity, and a spot within the source
 	float f = (float (i) + ParticleRand (s)) / float (em.slab.w);
 	vec3 dv = (vec3 (ParticleRand (s), ParticleRand (s), ParticleRand (s)) - 0.5) * em.p1.w;
+	if ((em.misc.y & 8u) != 0u) { // spreading along a surface (normal: -dir)
+		dv -= em.dir.xyz * dot (dv, em.dir.xyz);
+		dv *= 2.0 * sqrt (ParticleRand (s)) / max (length (dv) / (0.5 * em.p1.w), 1e-3);
+	}
 	vec3 v = em.vel.xyz - em.dir.xyz * em.p0.w + dv;
 	vec3 jitter = (vec3 (ParticleRand (s), ParticleRand (s), ParticleRand (s)) - 0.5) * em.shape.x;
 	Particle p;
@@ -37,6 +41,8 @@ void main ()
 	p.shape = em.shape;
 	uint flags = (em.misc.y & 2u) != 0u ? 1u : (ParticleHash (s) & 3u);
 	if ((em.misc.y & 1u) != 0u) flags |= 4u;
-	p.light = vec4 (1.0, 1.0, 1.0, uintBitsToFloat (flags));
+	if ((em.misc.y & 4u) != 0u) flags |= 8u | 16u | (em.misc.z << 8);
+	p.light = vec3 (1.0);
+	p.flags = flags;
 	particles[em.slab.x + (em.slab.z + i) % em.slab.y] = p;
 }

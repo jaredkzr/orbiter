@@ -51,14 +51,16 @@ void main ()
 		vec3 n = vec3 (texture (detailNoise, q).r, texture (detailNoise, q + vec3 (0.37, 0.71, 0.13)).r,
 			texture (detailNoise, q + vec3 (0.59, 0.23, 0.87)).r) - 0.5;
 		vel += n * (6.0 * p.shape.w * max (p.shape.x, 0.5) * dt);
+		// hot smoke rises, less as it cools and mixes
+		if ((p.flags & 16u) != 0u)
+			vel += normalize (pos - pc.bodyPos.xyz) * (4.0 * exp (-p.posAge.w / 6.0) * dt);
 	}
 	pos += vel * dt + pc.camShift.xyz;
 	p.posAge.xyz = pos;
 	p.velLife.xyz = vel;
 
 	// sunlight reaching the particle (not needed for emissive ones)
-	uint flags = floatBitsToUint (p.light.w);
-	if ((flags & 4u) == 0u) {
+	if ((p.flags & 4u) == 0u) {
 		mat3 toView = transpose (mat3 (frame.viewToGlobal));
 		vec3 vp = toView * pos;
 		vec3 sun = frame.sunColor.rgb;
@@ -74,7 +76,7 @@ void main ()
 #ifdef RT
 		sun *= RTSunVisible (vp + frame.sunDir.xyz * 0.5, frame.sunDir.xyz);
 #endif
-		p.light.rgb = sun;
+		p.light = sun;
 	}
 	particles[i] = p;
 }

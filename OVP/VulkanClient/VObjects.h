@@ -33,6 +33,8 @@ public:
 	virtual void CollectLights (std::vector<LightSource> &lights) {}
 	/// engine plumes of this frame (before the prepass)
 	virtual void CollectPlumes (class PlumeRenderer &pr) {}
+	/// particles of the object's own (engine smoke), in the scene with the reactive mask
+	virtual void DrawParticles () {}
 	/// nearest intersection of a ray (global frame, |d| = 1) with the
 	/// object's meshes (and those of its surface bases) within maxDist
 	virtual bool RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n) { return false; }
@@ -74,6 +76,7 @@ public:
 	void RenderShadow (ShadowMap &sm) override;
 	void CollectLights (std::vector<LightSource> &lights) override;
 	void CollectPlumes (PlumeRenderer &pr) override;
+	void DrawParticles () override;
 	bool RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n) override;
 	int VisEvent (DWORD msg, DWORD_PTR context) override;
 	MESHHANDLE GetMesh (UINT idx) override;
@@ -102,6 +105,16 @@ private:
 	std::map<VECTOR3*, std::vector<VECTOR3>> vtxListDefaults;
 	float glassGlow[3] = { 0, 0, 0 }; // emission of transparent groups from interior lights
 	std::vector<uint8_t> plumeExhaust; // exhausts drawn as plume volumes this frame
+	/// engine smoke: a ring of particles per exhaust
+	struct SmokeRing {
+		class ParticleSystem *sys = nullptr;
+		uint32_t first = 0, capacity = 0, head = 0;
+		double accum = 0.0, lastEmit = -1e30, life = 0.0;
+		bool havePrev = false;
+		VECTOR3 prev{};
+	};
+	std::vector<SmokeRing> smoke;
+	void EmitSmoke (DWORD idx, int type, const struct PlumeDraw &pd, const struct PlumeInfo &info, double dt);
 };
 
 // -----------------------------------------------------------------------

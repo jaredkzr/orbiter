@@ -17,18 +17,35 @@
 namespace {
 
 	// emission colours are linear; brightness 1 is about a sunlit white surface
+	// Flame: colours and brightness after photographs of launches (Shuttle
+	// SRBs and SSMEs, Saturn V, Falcon 9, Delta IV, Titan II, Proton).
+	// Smoke: white aluminium oxide and condensed water of solid motors in a
+	// dense, lasting column; tan soot of kerosene near the ground; steam of
+	// hydrogen and methane engines in dense air; brownish nitrogen dioxide
+	// of hypergolic propellants.
 	const PlumeClass classes[(int)PlumeType::Count] = {
 		//  name          pe [Pa]  core                 bright  diamonds             bright  afterburning        bright smoke  vac   turb  flow
-		{ "ion",          1.0,   { 0.35f, 0.55f, 1.0f }, 0.7f, { 0, 0, 0 },          0.0f, { 0, 0, 0 },          0.0f, 0.0f,  1.0f, 0.2f,  4.0f },
-		{ "plasma",       5e3,   { 0.55f, 0.62f, 1.0f }, 1.4f, { 0.85f, 0.8f, 1.0f }, 4.0f, { 0.8f, 0.55f, 1.0f }, 0.6f, 0.0f,  0.6f, 0.5f, 60.0f },
-		{ "hydrolox",     2e4,   { 0.45f, 0.55f, 1.0f }, 0.35f, { 1.0f, 0.82f, 0.7f }, 5.0f, { 1.0f, 0.55f, 0.3f }, 0.3f, 0.0f,  0.4f, 0.6f, 50.0f },
-		{ "methalox",     4e4,   { 0.40f, 0.50f, 1.0f }, 0.6f, { 0.9f, 0.75f, 1.0f }, 5.0f, { 1.0f, 0.5f, 0.2f },  0.8f, 0.0f,  0.5f, 0.7f, 45.0f },
-		{ "kerolox",      7e4,   { 1.0f, 0.55f, 0.22f }, 2.0f, { 1.0f, 0.85f, 0.6f }, 5.0f, { 1.0f, 0.45f, 0.12f }, 4.0f, 0.02f, 0.35f, 1.0f, 40.0f },
-		{ "hypergolic",   3e4,   { 1.0f, 0.55f, 0.45f }, 0.9f, { 1.0f, 0.75f, 0.6f }, 3.0f, { 1.0f, 0.5f, 0.3f },  1.2f, 0.01f, 0.5f, 0.7f, 45.0f },
-		{ "solid",        7e4,   { 1.0f, 0.85f, 0.6f }, 3.5f, { 1.0f, 0.9f, 0.7f }, 4.0f, { 1.0f, 0.6f, 0.25f }, 6.0f, 0.25f, 0.6f, 1.2f, 35.0f },
-		{ "rcs",          3e3,   { 0.9f, 0.85f, 0.8f },  0.9f, { 0, 0, 0 },          0.0f, { 1.0f, 0.6f, 0.4f },  0.3f, 0.0f,  1.0f, 0.5f, 30.0f },
-		{ "texture",      0.0,   { 1, 1, 1 },            1.0f, { 0, 0, 0 },          0.0f, { 0, 0, 0 },          0.0f, 0.0f,  1.0f, 0.0f,  0.0f },
+		//                smoke colour              opacity life  air0   air1
+		{ "ion",          1.0,   { 0.35f, 0.55f, 1.0f }, 0.7f, { 0, 0, 0 },          0.0f, { 0, 0, 0 },          0.0f, 0.0f,  1.0f, 0.2f,  4.0f,
+		                  { 0, 0, 0 },              0.0f,  0.0f, 0.0f,  1.0f },
+		{ "plasma",       5e3,   { 0.55f, 0.62f, 1.0f }, 1.4f, { 0.85f, 0.8f, 1.0f }, 4.0f, { 0.8f, 0.55f, 1.0f }, 0.6f, 0.0f,  0.6f, 0.5f, 60.0f,
+		                  { 0, 0, 0 },              0.0f,  0.0f, 0.0f,  1.0f },
+		{ "hydrolox",     2e4,   { 0.45f, 0.55f, 1.0f }, 0.35f, { 1.0f, 0.82f, 0.7f }, 5.0f, { 1.0f, 0.55f, 0.3f }, 0.3f, 0.0f,  0.4f, 0.6f, 50.0f,
+		                  { 0.96f, 0.96f, 0.96f },  0.30f, 12.0f, 0.4f, 0.9f },
+		{ "methalox",     4e4,   { 0.40f, 0.50f, 1.0f }, 0.6f, { 0.9f, 0.75f, 1.0f }, 5.0f, { 1.0f, 0.5f, 0.2f },  0.8f, 0.0f,  0.5f, 0.7f, 45.0f,
+		                  { 0.95f, 0.95f, 0.95f },  0.22f, 10.0f, 0.5f, 0.95f },
+		{ "kerolox",      7e4,   { 1.0f, 0.62f, 0.25f }, 2.5f, { 1.0f, 0.85f, 0.6f }, 5.0f, { 1.0f, 0.45f, 0.12f }, 4.0f, 0.02f, 0.35f, 1.0f, 40.0f,
+		                  { 0.58f, 0.49f, 0.40f },  0.45f, 10.0f, 0.6f, 0.95f },
+		{ "hypergolic",   3e4,   { 1.0f, 0.58f, 0.45f }, 0.9f, { 1.0f, 0.75f, 0.6f }, 3.0f, { 1.0f, 0.5f, 0.3f },  1.2f, 0.01f, 0.5f, 0.7f, 45.0f,
+		                  { 0.74f, 0.50f, 0.32f },  0.40f, 12.0f, 0.3f, 0.9f },
+		{ "solid",        7e4,   { 1.0f, 0.88f, 0.65f }, 6.0f, { 1.0f, 0.9f, 0.7f }, 4.0f, { 1.0f, 0.65f, 0.3f }, 6.0f, 0.25f, 0.6f, 1.2f, 35.0f,
+		                  { 0.95f, 0.95f, 0.93f },  0.85f, 40.0f, 0.0f, 0.05f },
+		{ "rcs",          3e3,   { 0.9f, 0.85f, 0.8f },  0.9f, { 0, 0, 0 },          0.0f, { 1.0f, 0.6f, 0.4f },  0.3f, 0.0f,  1.0f, 0.5f, 30.0f,
+		                  { 0, 0, 0 },              0.0f,  0.0f, 0.0f,  1.0f },
+		{ "texture",      0.0,   { 1, 1, 1 },            1.0f, { 0, 0, 0 },          0.0f, { 0, 0, 0 },          0.0f, 0.0f,  1.0f, 0.0f,  0.0f,
+		                  { 0, 0, 0 },              0.0f,  0.0f, 0.0f,  1.0f },
 	};
+
 
 	double Clamp01 (double x) { return std::clamp (x, 0.0, 1.0); }
 
@@ -358,7 +375,7 @@ void PlumeRenderer::BeginFrame (double t)
 	((uint32_t*)buf.mapped)[slot] = 0;
 }
 
-int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner)
+int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 {
 	if (p.level <= 0.0 || p.exitRadius <= 0.0 || list.size() >= MAX_PLUMES) return -1;
 	const PlumeClass &c = PlumeConfig::Class (p.type);
@@ -531,6 +548,24 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner)
 		pc.hit2[1] = (float)coverage;
 	}
 
+	if (info) {
+		// the end of the flame (where the core has cooled), and the surface
+		double zEnd = std::min (len, boxZ);
+		auto viewOf = [&](double z) {
+			double b = bendAt (z);
+			return p.pos + (ex * (bx * b) + ey * (by * b) + ez * z) * re;
+		};
+		info->end = viewOf (zEnd);
+		info->endDir = unit (viewOf (zEnd + 0.5) - viewOf (zEnd - 0.5));
+		info->endRadius = radiusAt (zEnd) * re;
+		info->hit = hit;
+		info->coverage = coverage;
+		info->heat = hitHeat;
+		if (hit) {
+			info->hitPos = p.pos + (ex * hitP.x + ey * hitP.y + ez * hitP.z) * re;
+			info->hitN = ex * hitN.x + ey * hitN.y + ez * hitN.z;
+		}
+	}
 	uint32_t index = slot * MAX_PLUMES + (uint32_t)list.size();
 	memcpy ((char*)buf.mapped + 16 + index * sizeof(Params), &pc, sizeof(pc));
 	((uint32_t*)buf.mapped)[slot] = (uint32_t)list.size() + 1;

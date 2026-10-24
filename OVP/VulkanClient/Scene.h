@@ -134,6 +134,9 @@ public:
 	VECTOR3 ViewPos (const VECTOR3 &gpos) const { return view.TransformPoint (gpos - camPos); }
 	/// view-space direction of a global direction
 	VECTOR3 ViewDir (const VECTOR3 &gdir) const { return view.TransformPoint (gdir); }
+	/// global position of a view-space point, global direction of a view-space direction
+	VECTOR3 GlobalPos (const VECTOR3 &vpos) const { return camPos + mul (camRot, vpos); }
+	VECTOR3 GlobalDir (const VECTOR3 &vdir) const { return mul (camRot, vdir); }
 	/// draw view-space billboard triangles (particles, exhaust flames)
 	void DrawBillboards (VkTexture *tex, bool additive, const struct PVtx *v, size_t n);
 	VkTexture *DefaultExhaustTex () const { return exhaustTex; }
