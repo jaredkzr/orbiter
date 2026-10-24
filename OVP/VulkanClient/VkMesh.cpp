@@ -29,6 +29,7 @@ VkMesh::VkMesh (vkc::Context *c, TextureManager *tm, MESHHANDLE h)
 	}
 
 	for (auto &m : materials) pbr.push_back (PBRParams::FromMaterial (m));
+	nTemplateMtrl = materials.size();
 
 	// textures are owned by the mesh template; keep references while we use them
 	DWORD nTex = oapiMeshTextureCount (hMesh);
@@ -72,6 +73,7 @@ VkMesh::VkMesh (vkc::Context *c, TextureManager *tm, MESHHANDLE h)
 VkMesh::~VkMesh ()
 {
 	for (auto tex : textures) texmgr->Release (tex);
+	for (auto tex : cfgTextures) texmgr->Release (tex);
 	vkc::Context *c = ctx;
 	vkc::Buffer vb = vbuf, ib = ibuf;
 	ctx->DeferDestroy ([c, vb, ib]() mutable {
@@ -96,14 +98,59 @@ bool VkMesh::SetTexture (DWORD texidx, VkTexture *tex)
 void VkMesh::ApplyMaterialConfig (const MaterialConfig &cfg, const std::string &meshName)
 {
 	int n = 0;
-	for (size_t i = 1; i < pbr.size(); i++)
+	size_t nMat = pbr.size();
+	for (size_t i = 1; i < nMat; i++)
 		if (cfg.Apply (meshName, (int)i - 1, pbr[i])) n++;
 	if (n) oapiWriteLogV ("VulkanClient: material configuration applied to %d materials of %s", n, meshName.c_str());
+
+	// texture replacements
+	for (size_t i = 1; i < nMat; i++) {
+		MaterialTextures t;
+		if (!cfg.Textures (meshName, (int)i - 1, pbr[i], t)) continue;
+		auto load = [&](const std::string &fn) -> VkTexture* {
+			VkTexture *tex = texmgr->Load (fn.c_str());
+			if (tex) cfgTextures.push_back (tex);
+			else oapiWriteLogV ("VulkanClient: texture %s of the material configuration of %s not found", fn.c_str(), meshName.c_str());
+			return tex;
+		};
+		VkTexture *tex = t.texture.empty() ? nullptr : load (t.texture);
+		VkTexture *sideTex = t.sideTexture.empty() ? nullptr : load (t.sideTexture);
+		uint32_t sideMat = 0;
+		if (sideTex) { // a material slot for the side
+			sideMat = (uint32_t)materials.size();
+			materials.push_back (materials[i]);
+			pbr.push_back (t.sidePBR);
+		}
+		for (Group &g : groups) {
+			if (g.material != i) continue;
+			if (tex) g.tex = tex;
+			if (!sideTex || g.nIndex < 3) continue;
+			// triangles facing the direction (by their vertex normals) to the end
+			std::vector<uint16_t> front, side;
+			for (uint32_t k = 0; k + 2 < g.nIndex; k += 3) {
+				const uint16_t *tri = &idx[g.firstIndex + k];
+				float d = 0.0f;
+				for (int j = 0; j < 3; j++) {
+					const NTVERTEX &v = vtx[g.vertexOffset + tri[j]];
+					d += v.nx * t.sideDir[0] + v.ny * t.sideDir[1] + v.nz * t.sideDir[2];
+				}
+				(d > 0.0f ? side : front).insert ((d > 0.0f ? side : front).end(), tri, tri + 3);
+			}
+			if (side.empty()) continue;
+			std::copy (front.begin(), front.end(), idx.begin() + g.firstIndex);
+			std::copy (side.begin(), side.end(), idx.begin() + g.firstIndex + front.size());
+			if (ibuf.buffer)
+				ctx->UpdateBuffer (ibuf.buffer, g.firstIndex * sizeof(uint16_t), idx.data() + g.firstIndex, (front.size() + side.size()) * sizeof(uint16_t));
+			g.nSide = (uint32_t)side.size();
+			g.sideTex = sideTex;
+			g.sideMaterial = sideMat;
+		}
+	}
 }
 
 int VkMesh::SetMaterial (DWORD matidx, const MATERIAL *mat)
 {
-	if (matidx + 1 >= materials.size()) return 4;
+	if (matidx + 1 >= nTemplateMtrl) return 4;
 	materials[matidx + 1] = *mat;
 	pbr[matidx + 1] = PBRParams::FromMaterial (*mat);
 	for (auto &g : groups)
@@ -113,7 +160,7 @@ int VkMesh::SetMaterial (DWORD matidx, const MATERIAL *mat)
 
 int VkMesh::GetMaterial (DWORD matidx, MATERIAL *mat) const
 {
-	if (matidx + 1 >= materials.size()) return 4;
+	if (matidx + 1 >= nTemplateMtrl) return 4;
 	*mat = materials[matidx + 1];
 	return 0;
 }

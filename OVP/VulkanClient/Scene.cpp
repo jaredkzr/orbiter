@@ -1172,53 +1172,61 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 			vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
 			bound = pipe;
 		}
-		VkTexture *tex = ovr ? ovr->tex : grp.tex ? grp.tex : gc->TexMgr()->White();
-		if (tex->set != boundTex) {
-			vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 1, 1, &tex->set, 0, nullptr);
-			boundTex = tex->set;
-		}
-		const TexMaps *maps = ovr ? nullptr : tex->maps;
-		VkDescriptorSet ms = maps ? maps->set : gc->TexMgr()->DefaultMapSet();
-		if (ms != boundMaps) {
-			vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 3, 1, &ms, 0, nullptr);
-			boundMaps = ms;
-		}
+		// the group, and the triangles with another texture and material
+		// (material configuration SIDE_TEXTURE)
+		bool split = grp.sideTex && grp.nSide && !ovr;
+		for (int part = 0; part < (split ? 2 : 1); part++) {
+			uint32_t mat = part ? grp.sideMaterial : grp.material;
+			uint32_t first = part ? grp.firstIndex + grp.nIndex - grp.nSide : grp.firstIndex;
+			uint32_t count = part ? grp.nSide : split ? grp.nIndex - grp.nSide : grp.nIndex;
+			VkTexture *tex = part ? grp.sideTex : ovr ? ovr->tex : grp.tex ? grp.tex : gc->TexMgr()->White();
+			if (tex->set != boundTex) {
+				vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 1, 1, &tex->set, 0, nullptr);
+				boundTex = tex->set;
+			}
+			const TexMaps *maps = ovr ? nullptr : tex->maps;
+			VkDescriptorSet ms = maps ? maps->set : gc->TexMgr()->DefaultMapSet();
+			if (ms != boundMaps) {
+				vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 3, 1, &ms, 0, nullptr);
+				boundMaps = ms;
+			}
 
-		const MATERIAL &m = mesh->Material (grp.material);
-		MeshPushConstants pc;
-		Mat4 mv = (groupTransforms && g < groupTransforms->size()) ? modelView * (*groupTransforms)[g] : modelView;
-		mv.ToFloat (pc.modelView);
-		pc.diffuse[0] = m.diffuse.r, pc.diffuse[1] = m.diffuse.g, pc.diffuse[2] = m.diffuse.b, pc.diffuse[3] = m.diffuse.a;
-		pc.emissive[0] = m.emissive.r, pc.emissive[1] = m.emissive.g, pc.emissive[2] = m.emissive.b;
-		pc.emissive[3] = (grp.usrFlag & VkMesh::GRP_NOLIGHT) ? 1.0f : 0.0f;
-		pc.specular[0] = m.specular.r, pc.specular[1] = m.specular.g, pc.specular[2] = m.specular.b;
-		pc.specular[3] = m.power;
-		pc.light[0] = pc.light[1] = pc.light[2] = objLight;
-		const PBRParams &pp = mesh->PBR (grp.material);
-		pc.pbr[0] = pp.metalness, pc.pbr[1] = pp.roughness, pc.pbr[2] = pp.reflectivity, pc.pbr[3] = pp.f0;
-		memcpy (pc.heat, objHeat, sizeof(objHeat));
-		pc.maps[0] = maps ? (float)maps->flags : 0.0f;
-		pc.maps[1] = transparent ? 1.0f : 0.0f; // not in the prepass: no ambient occlusion
-		pc.maps[2] = pc.maps[3] = 0.0f;
-		if (transparent && !ovr)
-			for (int k = 0; k < 3; k++) pc.emissive[k] += objGlassGlow[k];
-		if (ovr) { // self-illuminated display
-			pc.diffuse[0] = pc.diffuse[1] = pc.diffuse[2] = pc.diffuse[3] = 1.0f;
-			pc.emissive[3] = 1.0f;
+			const MATERIAL &m = mesh->Material (mat);
+			MeshPushConstants pc;
+			Mat4 mv = (groupTransforms && g < groupTransforms->size()) ? modelView * (*groupTransforms)[g] : modelView;
+			mv.ToFloat (pc.modelView);
+			pc.diffuse[0] = m.diffuse.r, pc.diffuse[1] = m.diffuse.g, pc.diffuse[2] = m.diffuse.b, pc.diffuse[3] = m.diffuse.a;
+			pc.emissive[0] = m.emissive.r, pc.emissive[1] = m.emissive.g, pc.emissive[2] = m.emissive.b;
+			pc.emissive[3] = (grp.usrFlag & VkMesh::GRP_NOLIGHT) ? 1.0f : 0.0f;
+			pc.specular[0] = m.specular.r, pc.specular[1] = m.specular.g, pc.specular[2] = m.specular.b;
+			pc.specular[3] = m.power;
+			pc.light[0] = pc.light[1] = pc.light[2] = objLight;
+			const PBRParams &pp = mesh->PBR (mat);
+			pc.pbr[0] = pp.metalness, pc.pbr[1] = pp.roughness, pc.pbr[2] = pp.reflectivity, pc.pbr[3] = pp.f0;
+			memcpy (pc.heat, objHeat, sizeof(objHeat));
+			pc.maps[0] = maps ? (float)maps->flags : 0.0f;
+			pc.maps[1] = transparent ? 1.0f : 0.0f; // not in the prepass: no ambient occlusion
+			pc.maps[2] = pc.maps[3] = 0.0f;
+			if (transparent && !ovr)
+				for (int k = 0; k < 3; k++) pc.emissive[k] += objGlassGlow[k];
+			if (ovr) { // self-illuminated display
+				pc.diffuse[0] = pc.diffuse[1] = pc.diffuse[2] = pc.diffuse[3] = 1.0f;
+				pc.emissive[3] = 1.0f;
+			}
+			if (pass == RenderPass::Depth) { // model-view, motion and material (prepass.vert/frag)
+				float pp[40];
+				memcpy (pp, pc.modelView, sizeof(pc.modelView));
+				memcpy (pp + 16, objMotion, sizeof(objMotion));
+				memcpy (pp + 32, pc.pbr, sizeof(pc.pbr));
+				pp[36] = pc.maps[0];
+				pp[37] = pc.emissive[3]; // unlit
+				pp[38] = pp[39] = 0.0f;
+				vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pp), pp);
+			} else {
+				vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+			}
+			vkCmdDrawIndexed (cmd, count, 1, first, grp.vertexOffset, 0);
 		}
-		if (pass == RenderPass::Depth) { // model-view, motion and material (prepass.vert/frag)
-			float pp[40];
-			memcpy (pp, pc.modelView, sizeof(pc.modelView));
-			memcpy (pp + 16, objMotion, sizeof(objMotion));
-			memcpy (pp + 32, pc.pbr, sizeof(pc.pbr));
-			pp[36] = pc.maps[0];
-			pp[37] = pc.emissive[3]; // unlit
-			pp[38] = pp[39] = 0.0f;
-			vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pp), pp);
-		} else {
-			vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
-		}
-		vkCmdDrawIndexed (cmd, grp.nIndex, 1, grp.firstIndex, grp.vertexOffset, 0);
 	}
 }
 

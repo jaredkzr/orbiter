@@ -122,6 +122,7 @@ bool VulkanClient::clbkInitialise ()
 	if (!r2d->Init (&ctx, &texmgr)) return false;
 	fonts = std::make_unique<FontManager> (&texmgr);
 	materials.Load ("Config/GC");
+	materials.Load ("Config/VK"); // (Vulkan client additions)
 	oapiWriteLogV ("VulkanClient: material configuration for %zu meshes", materials.MeshCount());
 	postfx = std::make_unique<PostFX>();
 	if (!postfx->Init (&ctx)) return false;

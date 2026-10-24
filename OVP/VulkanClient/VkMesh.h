@@ -28,6 +28,11 @@ public:
 		DWORD flags = 0;         // mesh group flags (see Orbiter mesh format)
 		DWORD usrFlag = 0;
 		bool transparent = false;
+		// triangles drawn with another texture and material (material
+		// configuration SIDE_TEXTURE): the last nSide indices of the group
+		uint32_t nSide = 0;
+		VkTexture *sideTex = nullptr;
+		uint32_t sideMaterial = 0;
 	};
 
 	/// Mesh group flags from the Orbiter mesh format
@@ -62,13 +67,15 @@ private:
 	MESHHANDLE hMesh;
 	vkc::Buffer vbuf, ibuf;
 	std::vector<Group> groups;
-	std::vector<MATERIAL> materials; // [0] = default material, [i+1] = mesh material i
+	std::vector<MATERIAL> materials; // [0] = default material, [i+1] = mesh material i, then side materials
+	size_t nTemplateMtrl = 0;        // default and mesh materials
 	std::vector<PBRParams> pbr;      // shading parameters, same indexing
 	std::vector<VkTexture*> textures; // mesh texture list (mesh texture index order)
 	std::vector<DWORD> groupTexIdx;  // per group: index into textures, or -1
 	std::vector<DWORD> groupMtrlIdx; // per group: material index of the template
 	std::vector<NTVERTEX> vtx;       // CPU copies of the geometry, for group queries and edits
 	std::vector<uint16_t> idx;
+	std::vector<VkTexture*> cfgTextures; // textures loaded for the material configuration
 };
 
 #endif // !__VKMESH_H

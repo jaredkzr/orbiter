@@ -64,6 +64,10 @@ void MaterialConfig::Load (const char *dir)
 			else if (tag == "METALNESS" && (ss >> a)) o.hasMetal = true, o.metal = a;
 			else if (tag == "REFLECT" && (ss >> a >> b >> c)) o.hasReflect = true, o.reflect = Luminance (a, b, c);
 			else if (tag == "SPECULAR" && (ss >> a >> b >> c >> d)) o.hasSpec = true, o.spec = Luminance (a, b, c), o.power = d;
+			else if (tag == "TEXTURE") ss >> o.texture;
+			else if (tag == "SIDE_TEXTURE" && (ss >> a >> b >> c >> o.sideTexture)) o.sideDir[0] = a, o.sideDir[1] = b, o.sideDir[2] = c;
+			else if (tag == "SIDE_SMOOTHNESS" && (ss >> a)) o.hasSideSmooth = true, o.sideSmooth = a;
+			else if (tag == "SIDE_METALNESS" && (ss >> a)) o.hasSideMetal = true, o.sideMetal = a;
 		}
 	}
 }
@@ -87,5 +91,23 @@ bool MaterialConfig::Apply (const std::string &meshName, int matIdx, PBRParams &
 	if (o.hasMetal) p.metalness = std::clamp (o.metal, 0.0f, 1.0f);
 	if (o.hasReflect) p.reflectivity = std::clamp (o.reflect * 4.0f, 0.0f, 1.0f);
 	else if (o.hasSmooth || o.hasMetal) p.reflectivity = std::max (p.reflectivity, 1.0f - p.roughness);
+	return true;
+}
+
+bool MaterialConfig::Textures (const std::string &meshName, int matIdx, const PBRParams &p, MaterialTextures &t) const
+{
+	auto it = meshes.find (Key (meshName));
+	if (it == meshes.end()) return false;
+	auto jt = it->second.find (matIdx);
+	if (jt == it->second.end()) return false;
+	const Override &o = jt->second;
+	if (o.texture.empty() && o.sideTexture.empty()) return false;
+	t.texture = o.texture;
+	t.sideTexture = o.sideTexture;
+	for (int i = 0; i < 3; i++) t.sideDir[i] = o.sideDir[i];
+	t.sidePBR = p;
+	if (o.hasSideSmooth) t.sidePBR.roughness = std::clamp (1.0f - o.sideSmooth, 0.04f, 1.0f);
+	if (o.hasSideMetal) t.sidePBR.metalness = std::clamp (o.sideMetal, 0.0f, 1.0f);
+	if (o.hasSideSmooth || o.hasSideMetal) t.sidePBR.reflectivity = std::max (t.sidePBR.reflectivity, 1.0f - t.sidePBR.roughness);
 	return true;
 }
