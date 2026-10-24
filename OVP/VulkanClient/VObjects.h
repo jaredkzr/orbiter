@@ -89,6 +89,7 @@ private:
 	bool isStar;
 	std::unique_ptr<Atmosphere> atmosphere;
 	std::unique_ptr<PlanetSurface> surface; // tiled surface, if available
+	std::unique_ptr<PlanetSurface> clouds;  // tiled cloud layer, if available
 };
 
 #endif // !__VOBJECTS_H

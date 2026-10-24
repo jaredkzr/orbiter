@@ -48,6 +48,17 @@ void main()
 	}
 	vec3 col = base * (frame.ambient.rgb + frame.sunColor.rgb * sunT * max(ndl, 0.0));
 
+	if (tile.params.z > 0.5) { // cloud layer: lit from above, also seen from below
+		float a = texture(surfTex, clamp(vUV * tile.surfUV.zw + tile.surfUV.xy, hs, 1.0 - hs)).a;
+		if (hasAtm) {
+			vec3 T;
+			vec3 L = Inscatter(dPlanet, length(vPosView), T);
+			col = col * T + AtmTonemap(L);
+		}
+		outColor = vec4(col, a);
+		return;
+	}
+
 	if (tile.params.x > 0.5) {
 		vec2 hm = 0.5 / vec2(textureSize(maskTex, 0));
 		vec4 m = texture(maskTex, clamp(vUV * tile.maskUV.zw + tile.maskUV.xy, hm, 1.0 - hm));

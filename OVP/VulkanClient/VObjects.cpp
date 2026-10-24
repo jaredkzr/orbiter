@@ -337,6 +337,7 @@ VPlanet::VPlanet (OBJHANDLE h, Scene *s, bool star)
 	if (!isStar) {
 		atmosphere = std::make_unique<Atmosphere> (hObj, scene);
 		surface = PlanetSurface::Create (hObj, scene);
+		if (surface) clouds = PlanetSurface::Create (hObj, scene, true);
 	}
 }
 
@@ -348,6 +349,7 @@ void VPlanet::Update ()
 {
 	VObject::Update ();
 	if (surface) surface->Update ();
+	if (clouds) clouds->Update ();
 }
 
 void VPlanet::RenderSky ()
@@ -359,7 +361,10 @@ void VPlanet::RenderSky ()
 
 void VPlanet::Render (RenderPass pass)
 {
-	if (pass != RenderPass::Opaque) return;
+	if (pass == RenderPass::Transparent) {
+		if (clouds) clouds->Render (atmosphere.get());
+		return;
+	}
 	if (scene->PixelSize (size, camDist) < 0.5) return; // too small to see
 	if (surface) {
 		surface->Render (atmosphere.get());

@@ -84,14 +84,18 @@ public:
 	void Shutdown ();
 	TileLoader &Loader () { return *loader; }
 	VkPipeline Pipeline () const { return pipeline; }
+	VkPipeline CloudPipeline () const { return cloudPipeline; }
 	VkPipelineLayout Layout () const { return layout; }
 	VkBuffer IndexBuffer () const { return ibuf.buffer; }
 	uint32_t IndexCount () const { return nIdx; }
+	/// indices of the tile grid without the skirts (which come last)
+	uint32_t GridIndexCount () const { return GRID * GRID * 6; }
 
 private:
 	vkc::Context *ctx = nullptr;
 	VkPipelineLayout layout = VK_NULL_HANDLE;
 	VkPipeline pipeline = VK_NULL_HANDLE;
+	VkPipeline cloudPipeline = VK_NULL_HANDLE;
 	vkc::Buffer ibuf;
 	uint32_t nIdx = 0;
 	std::unique_ptr<TileLoader> loader;
@@ -99,8 +103,9 @@ private:
 
 class PlanetSurface {
 public:
-	/// Returns nullptr if the planet has no tiled surface data
-	static std::unique_ptr<PlanetSurface> Create (OBJHANDLE hPlanet, Scene *scene);
+	/// Returns nullptr if the planet has no tiled surface data. With clouds,
+	/// the surface is the planet's cloud layer.
+	static std::unique_ptr<PlanetSurface> Create (OBJHANDLE hPlanet, Scene *scene, bool clouds = false);
 	~PlanetSurface ();
 
 	/// Accept loaded tiles (call before rendering)
@@ -123,7 +128,7 @@ private:
 		uint64_t lastUsed = 0;
 	};
 
-	PlanetSurface (OBJHANDLE hPlanet, Scene *scene, std::shared_ptr<PlanetLayers> layers);
+	PlanetSurface (OBJHANDLE hPlanet, Scene *scene, std::shared_ptr<PlanetLayers> layers, bool clouds);
 	Node *NewNode (int lvl, int ilat, int ilng, Node *parent);
 	void FreeNode (Node *n);
 	void PruneChildren (Node *n);
@@ -142,7 +147,8 @@ private:
 	TileRenderer *tr;
 	std::shared_ptr<PlanetLayers> layers;
 	std::unique_ptr<Node> root[2];
-	double radius;
+	bool clouds;
+	double radius;        // radius of the rendered sphere (mean radius, or cloud layer radius)
 	double maxElev = 0.0;
 	int maxLevel = 18;
 	uint64_t frame = 0;

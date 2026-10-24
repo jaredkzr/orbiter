@@ -244,6 +244,17 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	gpi.pDynamicState = &dy;
 	gpi.layout = layout;
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &pipeline));
+
+	// cloud layers: alpha blended, no depth writes
+	ds.depthWriteEnable = VK_FALSE;
+	cba.blendEnable = VK_TRUE;
+	cba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+	cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+	cba.colorBlendOp = VK_BLEND_OP_ADD;
+	cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+	cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+	cba.alphaBlendOp = VK_BLEND_OP_ADD;
+	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &cloudPipeline));
 	vkDestroyShaderModule (ctx->device, vs, nullptr);
 	vkDestroyShaderModule (ctx->device, fs, nullptr);
 
@@ -281,6 +292,7 @@ void TileRenderer::Shutdown ()
 	loader.reset ();
 	ctx->DestroyBuffer (ibuf);
 	vkDestroyPipeline (ctx->device, pipeline, nullptr);
+	vkDestroyPipeline (ctx->device, cloudPipeline, nullptr);
 	vkDestroyPipelineLayout (ctx->device, layout, nullptr);
 	ctx = nullptr;
 }
@@ -288,10 +300,14 @@ void TileRenderer::Shutdown ()
 // ======================================================================
 // PlanetSurface
 
-std::unique_ptr<PlanetSurface> PlanetSurface::Create (OBJHANDLE hPlanet, Scene *scene)
+std::unique_ptr<PlanetSurface> PlanetSurface::Create (OBJHANDLE hPlanet, Scene *scene, bool clouds)
 {
-	const int *engine = (const int*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_TILEENGINE);
+	const int *engine = (const int*)oapiGetObjectParam (hPlanet, clouds ? OBJPRM_PLANET_CLOUDTILEENGINE : OBJPRM_PLANET_TILEENGINE);
 	if (!engine || *engine < 2) return nullptr;
+	if (clouds) {
+		const bool *has = (const bool*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_HASCLOUDS);
+		if (!has || !*has) return nullptr;
+	}
 	char name[256], path[512];
 	oapiGetObjectName (hPlanet, name, 256);
 	if (!scene->Client()->PlanetTexturePath (name, path)) return nullptr;
@@ -300,32 +316,41 @@ std::unique_ptr<PlanetSurface> PlanetSurface::Create (OBJHANDLE hPlanet, Scene *
 	while (!dir.empty() && dir.back() == '/') dir.pop_back();
 
 	auto layers = std::make_shared<PlanetLayers>();
-	layers->surf = std::make_unique<TileLayer> (dir, TileLayer::SURF);
+	layers->surf = std::make_unique<TileLayer> (dir, clouds ? TileLayer::CLOUD : TileLayer::SURF);
 	if (!layers->surf->Valid() || !layers->surf->HasTile (4, 0, 0)) return nullptr;
-	layers->mask = std::make_unique<TileLayer> (dir, TileLayer::MASK);
-	if (!layers->mask->Valid()) layers->mask.reset();
-	layers->elev = std::make_unique<TileLayer> (dir, TileLayer::ELEV);
-	if (!layers->elev->Valid()) layers->elev.reset();
-	layers->elevMod = std::make_unique<TileLayer> (dir, TileLayer::ELEVMOD);
-	if (!layers->elevMod->Valid()) layers->elevMod.reset();
+	if (!clouds) {
+		layers->mask = std::make_unique<TileLayer> (dir, TileLayer::MASK);
+		if (!layers->mask->Valid()) layers->mask.reset();
+		layers->elev = std::make_unique<TileLayer> (dir, TileLayer::ELEV);
+		if (!layers->elev->Valid()) layers->elev.reset();
+		layers->elevMod = std::make_unique<TileLayer> (dir, TileLayer::ELEVMOD);
+		if (!layers->elevMod->Valid()) layers->elevMod.reset();
+	}
 
-	std::unique_ptr<PlanetSurface> ps (new PlanetSurface (hPlanet, scene, layers));
-	oapiWriteLogV ("VulkanClient: tiled surface for %s from %s%s%s", name, dir.c_str(),
+	std::unique_ptr<PlanetSurface> ps (new PlanetSurface (hPlanet, scene, layers, clouds));
+	oapiWriteLogV ("VulkanClient: tiled %s for %s from %s%s%s", clouds ? "cloud layer" : "surface", name, dir.c_str(),
 		layers->mask ? " (mask)" : "", layers->elev ? " (elevation)" : "");
 	return ps;
 }
 
-PlanetSurface::PlanetSurface (OBJHANDLE h, Scene *s, std::shared_ptr<PlanetLayers> l)
-	: hPlanet(h), scene(s), layers(std::move (l))
+PlanetSurface::PlanetSurface (OBJHANDLE h, Scene *s, std::shared_ptr<PlanetLayers> l, bool c)
+	: hPlanet(h), scene(s), layers(std::move (l)), clouds(c)
 {
 	ctx = scene->Client()->Ctx();
 	texmgr = scene->Client()->TexMgr();
 	tr = scene->Tiles();
 	radius = oapiGetSize (hPlanet);
-	if (const DWORD *ml = (const DWORD*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_SURFACEMAXLEVEL))
-		maxLevel = std::clamp ((int)*ml, 4, 21);
-	if (const double *me = (const double*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_MAXELEVATION))
-		maxElev = std::max (0.0, *me);
+	if (clouds) {
+		if (const double *alt = (const double*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_CLOUDALT))
+			radius += *alt;
+		if (const int *ml = (const int*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_CLOUDMAXLEVEL))
+			maxLevel = std::clamp (*ml, 4, 21);
+	} else {
+		if (const DWORD *ml = (const DWORD*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_SURFACEMAXLEVEL))
+			maxLevel = std::clamp ((int)*ml, 4, 21);
+		if (const double *me = (const double*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_MAXELEVATION))
+			maxElev = std::max (0.0, *me);
+	}
 
 	// The quadtree roots are loaded right away, so that the planet is never
 	// rendered without textures.
@@ -560,6 +585,13 @@ void PlanetSurface::Render (Atmosphere *atm)
 	frame++;
 	oapiGetGlobalPos (hPlanet, &ppos);
 	oapiGetRotationMatrix (hPlanet, &prot);
+	if (clouds) {
+		// the cloud layer rotates about the planet axis relative to the surface
+		const double *rot = (const double*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_CLOUDROTATION);
+		double a = rot ? *rot : 0.0, ca = cos (a), sa = sin (a);
+		MATRIX3 Ry = { ca, 0, -sa,  0, 1, 0,  sa, 0, ca };
+		prot = mul (prot, Ry);
+	}
 	camLocal = tmul (prot, scene->CameraPos() - ppos);
 	camDist = length (camLocal);
 	pixPerRad = scene->PixPerRad ();
@@ -592,7 +624,7 @@ void PlanetSurface::Render (Atmosphere *atm)
 
 	ctx->BindBackbuffer (true);
 	VkCommandBuffer cmd = ctx->Cmd();
-	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr->Pipeline());
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, clouds ? tr->CloudPipeline() : tr->Pipeline());
 	VkDescriptorSet fs = scene->FrameSet ();
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr->Layout(), 0, 1, &fs, 0, nullptr);
 	VkDescriptorSet as = atm->Set ();
@@ -622,6 +654,7 @@ void PlanetSurface::DrawNode (Node *n)
 	VkTexture *mask = layers->mask ? texFor (&Node::mask, pc.maskUV) : nullptr;
 	pc.params[0] = mask ? 1.0f : 0.0f;
 	pc.params[1] = 1.0f;
+	pc.params[2] = clouds ? 1.0f : 0.0f;
 	if (!mask) mask = texmgr->White ();
 
 	Mat4 mv = scene->ModelView (ppos + mul (prot, n->centre), prot);
@@ -632,5 +665,6 @@ void PlanetSurface::DrawNode (Node *n)
 	vkCmdPushConstants (cmd, tr->Layout(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 	VkDeviceSize ofs = 0;
 	vkCmdBindVertexBuffers (cmd, 0, 1, &n->vbuf.buffer, &ofs);
-	vkCmdDrawIndexed (cmd, tr->IndexCount(), 1, 0, 0, 0);
+	// skirts would show as bright seams in the blended cloud layer
+	vkCmdDrawIndexed (cmd, clouds ? tr->GridIndexCount() : tr->IndexCount(), 1, 0, 0, 0);
 }
