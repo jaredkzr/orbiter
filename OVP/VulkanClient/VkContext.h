@@ -76,6 +76,12 @@ namespace vkc {
 		// refers to a different target. The backbuffer is cleared on its
 		// first use in a frame.
 		void BindBackbuffer (bool withDepth);
+		/// The HDR colour image the 3D scene is rendered into (with the
+		/// backbuffer's depth buffer); kept in shader-read layout between scopes
+		void BindScene (bool withDepth);
+		VkImageView SceneView () const { return sceneColor.view; }
+		/// incremented when the swapchain (and the scene image) is recreated
+		uint32_t SwapchainGeneration () const { return swapchainGeneration; }
 		void BindTarget (const Target &t);
 		/// Depth-only target (e.g. a shadow map), cleared to 1. Kept in
 		/// shader-read layout between rendering scopes.
@@ -125,6 +131,7 @@ namespace vkc {
 		VkSurfaceKHR surface = VK_NULL_HANDLE;
 		VkFormat colorFormat = VK_FORMAT_B8G8R8A8_SRGB;
 		VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
+		VkFormat sceneFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 		VkPhysicalDeviceProperties deviceProps{};
 		VkPhysicalDeviceFeatures deviceFeatures{};
 		uint32_t swapchainImageCount = 0;
@@ -135,6 +142,7 @@ namespace vkc {
 		bool RecreateSwapchain ();
 		void FlushDeferred (uint32_t frame);
 		void SetViewportScissor (VkExtent2D ext);
+		void BindMain (bool scene, bool withDepth);
 
 		struct Frame {
 			VkCommandPool pool = VK_NULL_HANDLE;
@@ -152,11 +160,14 @@ namespace vkc {
 			bool backbuffer = false;
 			bool depth = false;
 			bool depthOnly = false;
+			bool scene = false;
 			VkImage image = VK_NULL_HANDLE;
 			VkFormat format = VK_FORMAT_UNDEFINED;
 			VkExtent2D extent{};
 		} cur;
-		enum { BB_NONE = 0, BB_COLOR = 1, BB_DEPTH = 2 };
+		enum { BB_NONE = 0, BB_COLOR = 1, BB_DEPTH = 2, BB_SCENE = 4 };
+		Image sceneColor;
+		uint32_t swapchainGeneration = 0;
 		int bbState = BB_NONE;   // backbuffer attachments initialised in this frame
 		bool recording = false;
 		bool offscreen = false;

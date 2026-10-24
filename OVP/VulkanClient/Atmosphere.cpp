@@ -117,7 +117,7 @@ bool AtmosphereRenderer::Init (vkc::Context *c)
 	dy.pDynamicStates = dyn;
 	VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
 	rci.colorAttachmentCount = 1;
-	rci.pColorAttachmentFormats = &ctx->colorFormat;
+	rci.pColorAttachmentFormats = &ctx->sceneFormat;
 	rci.depthAttachmentFormat = ctx->depthFormat;
 	VkGraphicsPipelineCreateInfo gpi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
 	gpi.pNext = &rci;

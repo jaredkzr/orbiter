@@ -144,6 +144,21 @@ bool Scene::Init ()
 	tiles = std::make_unique<TileRenderer>();
 	tiles->Init (ctx, gc->TexMgr(), frameLayout, atm->SetLayout());
 	exhaustTex = gc->TexMgr()->Load ("Exhaust.dds");
+	{
+		// glow sprite: bright core with a soft halo, zero at the edge
+		const int N = 128;
+		std::vector<uint8_t> px (N * N * 4);
+		for (int y = 0; y < N; y++)
+			for (int x = 0; x < N; x++) {
+				double dx = (x + 0.5) / N * 2.0 - 1.0, dy = (y + 0.5) / N * 2.0 - 1.0;
+				double r = std::sqrt (dx*dx + dy*dy);
+				double a = r < 1.0 ? (0.75 * std::exp (-r*r*40.0) + 0.25 * std::pow (1.0 - r, 3.0)) : 0.0;
+				uint8_t *p = &px[(y*N + x) * 4];
+				p[0] = p[1] = p[2] = 255;
+				p[3] = (uint8_t)std::lround (std::clamp (a, 0.0, 1.0) * 255.0);
+			}
+		glowTex = gc->TexMgr()->CreateRGBA (N, N, px.data());
+	}
 
 	stars = std::make_unique<StarSphere> (gc);
 	stars->Init (ctx);
@@ -179,6 +194,7 @@ void Scene::Shutdown ()
 	vkDestroyPipelineLayout (ctx->device, meshLayout, nullptr);
 	vkDestroyPipelineLayout (ctx->device, particleLayout, nullptr);
 	gc->TexMgr()->Release (exhaustTex);
+	gc->TexMgr()->Release (glowTex);
 	vkDestroyPipelineLayout (ctx->device, starLayout, nullptr);
 	vkDestroyDescriptorPool (ctx->device, framePool, nullptr);
 	vkDestroyDescriptorSetLayout (ctx->device, frameLayout, nullptr);
@@ -254,7 +270,7 @@ VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite
 
 	VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
 	rci.colorAttachmentCount = 1;
-	rci.pColorAttachmentFormats = &ctx->colorFormat;
+	rci.pColorAttachmentFormats = &ctx->sceneFormat;
 	rci.depthAttachmentFormat = ctx->depthFormat;
 
 	VkGraphicsPipelineCreateInfo gpi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
@@ -345,7 +361,7 @@ void Scene::CreatePipelines ()
 	dy.pDynamicStates = dyn;
 	VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
 	rci.colorAttachmentCount = 1;
-	rci.pColorAttachmentFormats = &ctx->colorFormat;
+	rci.pColorAttachmentFormats = &ctx->sceneFormat;
 	rci.depthAttachmentFormat = ctx->depthFormat;
 	VkGraphicsPipelineCreateInfo gpi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
 	gpi.pNext = &rci;
@@ -429,7 +445,7 @@ VkPipeline Scene::CreateParticlePipeline (bool additive)
 	dy.pDynamicStates = dyn;
 	VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
 	rci.colorAttachmentCount = 1;
-	rci.pColorAttachmentFormats = &ctx->colorFormat;
+	rci.pColorAttachmentFormats = &ctx->sceneFormat;
 	rci.depthAttachmentFormat = ctx->depthFormat;
 	VkGraphicsPipelineCreateInfo gpi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
 	gpi.pNext = &rci;

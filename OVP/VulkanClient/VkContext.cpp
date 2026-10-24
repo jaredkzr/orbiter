@@ -333,12 +333,32 @@ bool Context::CreateSwapchain ()
 	dvci.format = depthFormat;
 	dvci.subresourceRange = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
 	VK_CHECK(vkCreateImageView (device, &dvci, nullptr, &depth.view));
+
+	// HDR colour image for the 3D scene
+	VkImageCreateInfo sci2{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+	sci2.imageType = VK_IMAGE_TYPE_2D;
+	sci2.format = sceneFormat;
+	sci2.extent = { extent.width, extent.height, 1 };
+	sci2.mipLevels = 1;
+	sci2.arrayLayers = 1;
+	sci2.samples = VK_SAMPLE_COUNT_1_BIT;
+	sci2.tiling = VK_IMAGE_TILING_OPTIMAL;
+	sci2.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+	VK_CHECK(vmaCreateImage (allocator, &sci2, &aci, &sceneColor.image, &sceneColor.alloc, nullptr));
+	VkImageViewCreateInfo svci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+	svci.image = sceneColor.image;
+	svci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+	svci.format = sceneFormat;
+	svci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+	VK_CHECK(vkCreateImageView (device, &svci, nullptr, &sceneColor.view));
+	swapchainGeneration++;
 	return true;
 }
 
 void Context::DestroySwapchain ()
 {
 	DestroyImage (depth);
+	DestroyImage (sceneColor);
 	if (offscreen) {
 		for (auto &img : offImages) DestroyImage (img);
 		offImages.clear();
@@ -443,21 +463,36 @@ void Context::SetViewportScissor (VkExtent2D ext)
 
 void Context::BindBackbuffer (bool withDepth)
 {
+	BindMain (false, withDepth);
+}
+
+void Context::BindScene (bool withDepth)
+{
+	BindMain (true, withDepth);
+}
+
+void Context::BindMain (bool scene, bool withDepth)
+{
 	if (!inFrame) return;
-	if (cur.backbuffer && cur.depth == withDepth) return;
+	if (cur.backbuffer && cur.scene == scene && cur.depth == withDepth) return;
 	EndTarget ();
 	VkCommandBuffer cmd = frames[frameIndex].cmd;
 
-	bool clearColor = !(bbState & BB_COLOR);
-	if (clearColor) {
-		ImageBarrier (cmd, swapImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
-			VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-			VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
-			VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-		bbState |= BB_COLOR;
+	// The backbuffer and the HDR scene image are cleared on their first use in
+	// a frame. The scene image rests in shader-read layout between scopes.
+	int colorBit = scene ? BB_SCENE : BB_COLOR;
+	bool clearColor = !(bbState & colorBit);
+	VkImage image = scene ? sceneColor.image : swapImages[imageIndex];
+	VkImageLayout from = clearColor ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+	if (clearColor || scene) {
+		ImageBarrier (cmd, image, VK_IMAGE_ASPECT_COLOR_BIT,
+			from, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+			VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT,
+			VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+		bbState |= colorBit;
 	}
 	VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-	color.imageView = swapViews[imageIndex];
+	color.imageView = scene ? sceneColor.view : swapViews[imageIndex];
 	color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 	color.loadOp = clearColor ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
 	color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -491,8 +526,10 @@ void Context::BindBackbuffer (bool withDepth)
 	cur = CurrentTarget();
 	cur.active = true;
 	cur.backbuffer = true;
+	cur.scene = scene;
 	cur.depth = withDepth;
-	cur.format = colorFormat;
+	cur.image = image;
+	cur.format = scene ? sceneFormat : colorFormat;
 	cur.extent = extent;
 }
 
@@ -560,7 +597,12 @@ void Context::EndTarget ()
 	if (!cur.active) return;
 	VkCommandBuffer cmd = frames[frameIndex].cmd;
 	vkCmdEndRendering (cmd);
-	if (cur.depthOnly) {
+	if (cur.scene) {
+		ImageBarrier (cmd, cur.image, VK_IMAGE_ASPECT_COLOR_BIT,
+			VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+			VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+	} else if (cur.depthOnly) {
 		ImageBarrier (cmd, cur.image, VK_IMAGE_ASPECT_DEPTH_BIT,
 			VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 			VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,

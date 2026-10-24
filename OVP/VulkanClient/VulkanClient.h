@@ -21,6 +21,7 @@ class Scene;
 class Renderer2D;
 class FontManager;
 class VkParticleStream;
+class PostFX;
 
 class VulkanClient : public oapi::GraphicsClient {
 public:
@@ -121,6 +122,7 @@ private:
 	std::unique_ptr<Scene> scene;
 	std::unique_ptr<Renderer2D> r2d;
 	std::unique_ptr<FontManager> fonts;
+	std::unique_ptr<PostFX> postfx;
 	std::vector<VkParticleStream*> streams; // owned: the core only detaches them
 	void DeleteStreams (bool all);
 	bool ready = false;      // device initialised

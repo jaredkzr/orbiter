@@ -95,6 +95,8 @@ public:
 	/// draw view-space billboard triangles (particles, exhaust flames)
 	void DrawBillboards (VkTexture *tex, bool additive, const struct PVtx *v, size_t n);
 	VkTexture *DefaultExhaustTex () const { return exhaustTex; }
+	/// radial glow sprite (white, falling off to zero at the edge), full uv range
+	VkTexture *GlowTex () const { return glowTex; }
 	TileRenderer *Tiles () { return tiles.get(); }
 	AtmosphereRenderer *Atm () { return atm.get(); }
 	const MATRIX3 &CamRot () const { return camRot; }
@@ -130,6 +132,7 @@ private:
 	VkPipeline particleAdditive = VK_NULL_HANDLE;
 	VkPipeline particleBlend = VK_NULL_HANDLE;
 	VkTexture *exhaustTex = nullptr;
+	VkTexture *glowTex = nullptr;
 	std::unique_ptr<TileRenderer> tiles;
 	std::unique_ptr<AtmosphereRenderer> atm;
 	std::unique_ptr<ShadowMap> shadows;

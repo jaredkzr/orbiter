@@ -118,6 +118,7 @@ private:
 	std::unique_ptr<PlanetSurface> clouds;  // tiled cloud layer, if available
 	std::vector<std::unique_ptr<VBase>> bases; // bases near the camera
 	void UpdateBases ();
+	void RenderGlow ();
 };
 
 #endif // !__VOBJECTS_H

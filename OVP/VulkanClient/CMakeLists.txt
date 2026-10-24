@@ -68,6 +68,10 @@ set(SHADER_SRC
 	Shaders/sky.vert
 	Shaders/sky.frag
 	Shaders/shadow.vert
+	Shaders/post.vert
+	Shaders/bloom_down.frag
+	Shaders/bloom_up.frag
+	Shaders/tonemap.frag
 )
 set(SHADER_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 set(SHADER_HEADERS)
@@ -105,6 +109,7 @@ add_library(VulkanClient SHARED
 	PlanetSurface.cpp
 	Atmosphere.cpp
 	Shadows.cpp
+	PostFX.cpp
 	Input.cpp
 	ImageIO.cpp
 	Vma.cpp

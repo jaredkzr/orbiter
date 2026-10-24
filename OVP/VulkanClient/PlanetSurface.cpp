@@ -228,7 +228,7 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	dy.pDynamicStates = dyn;
 	VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
 	rci.colorAttachmentCount = 1;
-	rci.pColorAttachmentFormats = &ctx->colorFormat;
+	rci.pColorAttachmentFormats = &ctx->sceneFormat;
 	rci.depthAttachmentFormat = ctx->depthFormat;
 	VkGraphicsPipelineCreateInfo gpi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
 	gpi.pNext = &rci;
@@ -631,7 +631,7 @@ void PlanetSurface::Render (Atmosphere *atm)
 	}
 	if (drawList.empty()) return;
 
-	ctx->BindBackbuffer (true);
+	ctx->BindScene (true);
 	VkCommandBuffer cmd = ctx->Cmd();
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, clouds ? tr->CloudPipeline() : tr->Pipeline());
 	VkDescriptorSet fs = scene->FrameSet ();

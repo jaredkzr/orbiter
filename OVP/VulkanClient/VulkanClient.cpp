@@ -13,6 +13,7 @@
 #include "Sketchpad.h"
 #include "Fonts.h"
 #include "Particles.h"
+#include "PostFX.h"
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_vulkan.h"
@@ -67,6 +68,8 @@ void VulkanClient::Teardown ()
 	ctx.Drain();       // deferred releases still refer to texture manager resources
 	r2d->Shutdown();
 	r2d.reset();
+	postfx->Shutdown();
+	postfx.reset();
 	fonts.reset();
 	ctx.Drain();
 	texmgr.Shutdown();
@@ -110,6 +113,8 @@ bool VulkanClient::clbkInitialise ()
 	r2d = std::make_unique<Renderer2D>();
 	if (!r2d->Init (&ctx, &texmgr)) return false;
 	fonts = std::make_unique<FontManager> (&texmgr);
+	postfx = std::make_unique<PostFX>();
+	if (!postfx->Init (&ctx)) return false;
 	ready = true;
 	return true;
 }
@@ -173,8 +178,9 @@ void VulkanClient::clbkRenderScene ()
 	frameActive = true;
 	r2d->Flush ();
 	scene->RenderShadows ();
-	ctx.BindBackbuffer (true);
+	ctx.BindScene (true);
 	scene->Render ();
+	postfx->Apply ();   // HDR scene -> backbuffer
 	Render2DOverlay (); // panels, MFDs and HUD
 }
 

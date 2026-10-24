@@ -279,6 +279,11 @@ namespace {
 	constexpr double INTERIOR_SPILL = 0.5;
 	constexpr double INTERIOR_SPILL_REACH = 4.0;
 	constexpr float INTERIOR_GLASS_GLOW = 0.6f;
+	constexpr float BEACON_GLOW = 3.0f; // brightness of beacon sprites
+	constexpr float STAR_BRIGHTNESS = 20.0f;      // the sun's disc relative to lit white surfaces
+	constexpr float STAR_GLOW = 2.0f;             // brightness of the glow around it
+	constexpr double STAR_GLOW_SIZE = 6.0;        // glow radius [star radii]
+	constexpr double STAR_GLOW_MIN_ANGLE = 0.02;  // minimum glow radius [rad]
 
 	bool BeaconLit (const BEACONLIGHTSPEC *bs, double simt)
 	{
@@ -388,7 +393,7 @@ void VVessel::RenderExhaust ()
 			{ x + h, y + h, z, 1.0f, 0.5f, 1, 1, 1, a }, { x - h, y + h, z, 0.5f, 0.5f, 1, 1, 1, a } };
 		v.insert (v.end(), { g[0], g[1], g[2], g[0], g[2], g[3] });
 	}
-	// beacons: blinking glows, using the glow sprite of the default exhaust texture
+	// beacons: blinking glows
 	double simt = oapiGetSimTime ();
 	for (DWORD i = 0; ; i++) {
 		const BEACONLIGHTSPEC *bs = vessel->GetBeacon (i);
@@ -398,11 +403,12 @@ void VVessel::RenderExhaust ()
 		// keep a minimum apparent size, so that beacons stay visible from afar
 		float h = (float)std::max (bs->size, vp.z * 0.002);
 		float x = (float)vp.x, y = (float)vp.y, z = (float)vp.z;
-		float r = (float)bs->col->x, g = (float)bs->col->y, b = (float)bs->col->z;
+		// beacons are much brighter than lit surfaces (they bloom in HDR)
+		float r = (float)bs->col->x * BEACON_GLOW, g = (float)bs->col->y * BEACON_GLOW, b = (float)bs->col->z * BEACON_GLOW;
 		PVtx q[4] = {
-			{ x - h, y - h, z, 0.5f, 0.0f, r, g, b, 1 }, { x + h, y - h, z, 1.0f, 0.0f, r, g, b, 1 },
-			{ x + h, y + h, z, 1.0f, 0.5f, r, g, b, 1 }, { x - h, y + h, z, 0.5f, 0.5f, r, g, b, 1 } };
-		auto &v = batches[scene->DefaultExhaustTex ()];
+			{ x - h, y - h, z, 0.0f, 0.0f, r, g, b, 1 }, { x + h, y - h, z, 1.0f, 0.0f, r, g, b, 1 },
+			{ x + h, y + h, z, 1.0f, 1.0f, r, g, b, 1 }, { x - h, y + h, z, 0.0f, 1.0f, r, g, b, 1 } };
+		auto &v = batches[scene->GlowTex ()];
 		v.insert (v.end(), { q[0], q[1], q[2], q[0], q[2], q[3] });
 	}
 	for (auto &b : batches) scene->DrawBillboards (b.first, true, b.second.data(), b.second.size());
@@ -547,6 +553,7 @@ void VPlanet::RenderSky ()
 void VPlanet::Render (RenderPass pass)
 {
 	if (pass == RenderPass::Transparent) {
+		if (isStar) { RenderGlow (); return; }
 		for (auto &b : bases) b->Render (pass);
 		if (clouds) clouds->Render (atmosphere.get());
 		return;
@@ -581,5 +588,28 @@ void VPlanet::Render (RenderPass pass)
 		R = mul (grot, Q);
 	}
 	Mat4 mv = scene->ModelView (gpos, R) * Mat4::Scale (radius, radius, radius);
-	scene->DrawSphere (mv, colour, isStar);
+	if (isStar) {
+		// the sun's disc is far brighter than any lit surface
+		float c[4] = { colour[0] * STAR_BRIGHTNESS, colour[1] * STAR_BRIGHTNESS, colour[2] * STAR_BRIGHTNESS, 1.0f };
+		scene->DrawSphere (mv, c, true);
+	} else {
+		scene->DrawSphere (mv, colour, false);
+	}
+}
+
+void VPlanet::RenderGlow ()
+{
+	// glow around a star, with a minimum apparent size so that it remains
+	// visible when the disc itself is smaller than a pixel
+	VECTOR3 vp = scene->ViewPos (gpos);
+	if (vp.z <= 0.0) return;
+	double h = std::max (size * STAR_GLOW_SIZE, vp.z * STAR_GLOW_MIN_ANGLE);
+	// at its true distance, so that planets in front hide it (reversed float depth)
+	float x = (float)vp.x, y = (float)vp.y, z = (float)vp.z, hh = (float)h;
+	float r = colour[0] * STAR_GLOW, g = colour[1] * STAR_GLOW, b = colour[2] * STAR_GLOW;
+	PVtx q[4] = {
+		{ x - hh, y - hh, z, 0.0f, 0.0f, r, g, b, 1 }, { x + hh, y - hh, z, 1.0f, 0.0f, r, g, b, 1 },
+		{ x + hh, y + hh, z, 1.0f, 1.0f, r, g, b, 1 }, { x - hh, y + hh, z, 0.0f, 1.0f, r, g, b, 1 } };
+	PVtx v[6] = { q[0], q[1], q[2], q[0], q[2], q[3] };
+	scene->DrawBillboards (scene->GlowTex (), true, v, 6);
 }
