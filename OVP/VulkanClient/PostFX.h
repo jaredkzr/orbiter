@@ -23,6 +23,7 @@ public:
 	float exposure = 1.0f;
 	float bloomStrength = 0.35f;
 	float bloomThreshold = 1.0f;
+	float flareStrength = 0.05f;
 
 private:
 	static constexpr int LEVELS = 6;

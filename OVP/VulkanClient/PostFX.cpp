@@ -239,7 +239,8 @@ void PostFX::Apply ()
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tonePipe);
 	VkDescriptorSet sets[2] = { sceneSet, levels[0].set };
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, toneLayout, 0, 2, sets, 0, nullptr);
-	float pc[4] = { exposure, bloomStrength, 0.0f, 0.0f };
+	VkExtent2D be = ctx->Extent ();
+	float pc[4] = { exposure, bloomStrength, flareStrength, be.height ? (float)be.width / be.height : 1.0f };
 	vkCmdPushConstants (cmd, toneLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), pc);
 	vkCmdDraw (cmd, 3, 1, 0, 0);
 }

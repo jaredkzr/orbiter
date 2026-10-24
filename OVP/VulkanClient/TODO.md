@@ -11,6 +11,8 @@ Known gaps and limitations, to be addressed later.
   heating.
 
 ## Surface bases
+- Hull heating glow uses a stagnation-point flux estimate (1 m nose radius)
+  for the whole vessel; no heat soak after the flux drops.
 - Brighton Beach (Moon): part of the landing pad is hidden by terrain when
   seen from the ground camera. Possibly genuine (no Elev_mod flattening for
   the Moon in the basic pack), not yet compared with the D3D9 client.
