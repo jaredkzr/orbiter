@@ -6,11 +6,13 @@
 // shadows that harden at contact), ambient occlusion (a cosine-weighted
 // ray within a radius), the lit planet nearby (a ray to a random point of
 // its disc, vessels and bases only), and the local lights with shadows (a
-// ray to a random point of a small sphere around each).
+// ray from a random point of a small sphere around each).
 
 #version 460
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_ray_query : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 
 #include "rtlight.glsl"
 
@@ -20,6 +22,8 @@
 layout(set = 2, binding = 0) uniform accelerationStructureEXT tlas;
 struct RTInstance { uvec2 vtx, idx; uint firstIndex, tex, flags, owner; vec4 diffuse, emissive, pbr, uv; }; // (rt.glsl)
 layout(set = 2, binding = 1, std430) readonly buffer Instances { RTInstance inst[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer RTFloats { float f[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer RTUints { uint u[]; };
 
 const uint MASK_ALL = 0xFFu, MASK_OBJECTS = 0x01u; // (terrain: 0x02)
 const float PI = 3.14159265;
@@ -42,19 +46,37 @@ bool Occluded (vec3 o, vec3 d, float tMax, uint mask)
 	return rayQueryGetIntersectionTypeEXT (q, true) != gl_RayQueryCommittedIntersectionNoneEXT;
 }
 
-// Light from a local light at distance tMax: emitters sit in or on their
-// vessel's hull, whose surface near them does not count
-bool LightOccluded (vec3 o, vec3 d, float tMax, uint owner)
+// Interpolated vertex normal of a candidate hit (view space)
+vec3 CandidateNormal (rayQueryEXT q)
 {
-	// up to 3 m before the light: any surface; then all but the own hull
-	float tNear = tMax - 3.0;
-	if (tNear > 0.0 && Occluded (o, d, tNear, MASK_ALL)) return true;
+	RTInstance r = inst[rayQueryGetIntersectionInstanceCustomIndexEXT (q, false) + rayQueryGetIntersectionGeometryIndexEXT (q, false)];
+	uint prim = uint (rayQueryGetIntersectionPrimitiveIndexEXT (q, false));
+	vec2 bc = rayQueryGetIntersectionBarycentricsEXT (q, false);
+	vec3 w = vec3 (1.0 - bc.x - bc.y, bc.x, bc.y);
+	vec3 n = vec3 (0.0);
+	for (int k = 0; k < 3; k++) {
+		uint i = r.firstIndex + prim * 3u + uint (k);
+		uint word = RTUints (r.idx).u[i >> 1];
+		uint vi = ((i & 1u) != 0u ? word >> 16 : word & 0xffffu) * 8u;
+		RTFloats v = RTFloats (r.vtx);
+		n += w[k] * vec3 (v.f[vi + 3u], v.f[vi + 4u], v.f[vi + 5u]);
+	}
+	return mat3 (rayQueryGetIntersectionObjectToWorldEXT (q, false)) * n;
+}
+
+// Light from a local light at lp reaching o: traced from the light. Emitters
+// often sit inside their vessel's hull: surfaces the ray leaves from inside
+// (normal along the ray) do not block it, those it meets from outside do.
+bool LightOccluded (vec3 lp, vec3 o)
+{
+	vec3 d = o - lp;
+	float t = length (d);
+	d /= t;
 	rayQueryEXT q;
-	rayQueryInitializeEXT (q, tlas, gl_RayFlagsNoOpaqueEXT, MASK_ALL, o, max (tNear, 0.0), d, tMax);
+	rayQueryInitializeEXT (q, tlas, gl_RayFlagsNoOpaqueEXT, MASK_ALL, lp, 0.0, d, t);
 	while (rayQueryProceedEXT (q)) {
 		if (rayQueryGetIntersectionTypeEXT (q, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
-		uint ow = inst[rayQueryGetIntersectionInstanceCustomIndexEXT (q, false) + rayQueryGetIntersectionGeometryIndexEXT (q, false)].owner;
-		if (ow == owner) continue;
+		if (dot (CandidateNormal (q), d) > 0.0) continue; // leaving a surface
 		rayQueryConfirmIntersectionEXT (q);
 		rayQueryTerminateEXT (q);
 	}
@@ -133,9 +155,9 @@ void main ()
 		// a point within 0.15 m of the light: slightly soft shadows
 		vec4 r = vec4 (Hash4 (uvec3 (p, uint (pc.frame) * 4u + uint (i) + 101u))) / 4294967296.0;
 		vec3 j = (r.xyz * 2.0 - 1.0) * 0.15;
-		vec3 dir = l.pos.xyz + j - o;
-		float dl = length (dir);
-		lv[i] = LightOccluded (o, dir / dl, dl, uint (l.spot.y)) ? 0.0 : 1.0;
+		// (spot light emitters inside the hull: from where the beam leaves it)
+		vec3 lp = l.pos.xyz + (l.dir.w > 1.5 ? l.dir.xyz * l.spot.z : vec3 (0.0));
+		lv[i] = LightOccluded (lp + j, o) ? 0.0 : 1.0;
 	}
 	imageStore (rawA, p, vec4 (sun, ao, planet, 1.0));
 	imageStore (rawL, p, lv);

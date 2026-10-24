@@ -15,6 +15,10 @@ vec3 LocalLighting (vec3 posView, vec3 N, vec4 vis)
 		if (d > l.pos.w || d < 1e-4) continue;
 		L /= d;
 		float a = 1.0 / max(l.att.x + l.att.y * d + l.att.z * d * d, 1e-4);
+		// fading to nothing at the range (the attenuation alone does not)
+		float x = d / l.pos.w;
+		x = clamp(1.0 - x * x * x * x, 0.0, 1.0);
+		a *= x * x;
 		if (l.dir.w > 1.5) // spot: full intensity inside the umbra cone, none outside the penumbra
 			a *= smoothstep(l.spot.x, l.att.w, dot(-L, l.dir.xyz));
 		if (i < 4) a *= vis[i];

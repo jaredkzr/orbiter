@@ -1020,6 +1020,7 @@ void Scene::FillFrameUniforms (void *pfu)
 		u.att[3] = (float)cos (0.5 * l.umbra);
 		u.spot[0] = (float)cos (0.5 * l.penumbra);
 		u.spot[1] = (float)l.owner;
+		u.spot[2] = (float)l.shadowOfs;
 	}
 	Mat4::FromRotTrans (camRot, _V(0, 0, 0)).ToFloat (fu.viewToGlobal);
 }

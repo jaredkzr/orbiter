@@ -59,6 +59,9 @@ public:
 	/// incremented when vertices change
 	uint32_t GeomVersion () const { return geomVersion; }
 	uint32_t GroupVertexCount (uint32_t g) const;
+	/// Distance along a ray (mesh frame) to its last intersection with the
+	/// mesh within maxDist, 0 if none (where a ray from inside leaves it)
+	double RayExit (const VECTOR3 &o, const VECTOR3 &d, double maxDist) const;
 	/// groups that were ever drawn with an animation transform (separate
 	/// ray tracing instances)
 	mutable std::vector<uint8_t> rtAnimated;

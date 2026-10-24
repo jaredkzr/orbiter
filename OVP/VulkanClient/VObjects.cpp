@@ -325,6 +325,20 @@ namespace {
 	}
 }
 
+double VVessel::LightExit (const LightEmitter *le)
+{
+	auto it = lightExit.find (le);
+	if (it != lightExit.end()) return it->second;
+	VECTOR3 p = le->GetPosition(), d = le->GetDirection();
+	double exit = 0.0;
+	for (auto &rec : meshes)
+		if (rec.mesh && (rec.visMode & MESHVIS_EXTERNAL))
+			exit = std::max (exit, rec.mesh->RayExit (p - rec.ofs, d, 2.0 * size));
+	if (exit > 0.0) exit += 0.05;
+	lightExit[le] = exit;
+	return exit;
+}
+
 void VVessel::CollectLights (std::vector<LightSource> &lights)
 {
 	glassGlow[0] = glassGlow[1] = glassGlow[2] = 0.0f;
@@ -356,6 +370,7 @@ void VVessel::CollectLights (std::vector<LightSource> &lights)
 			l.dir = mul (grot, le->GetDirection());
 			l.umbra = sl->GetUmbra();
 			l.penumbra = sl->GetPenumbra();
+			l.shadowOfs = LightExit (le);
 		} else {
 			continue;
 		}

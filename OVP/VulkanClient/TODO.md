@@ -68,8 +68,10 @@ Known gaps and limitations, to be addressed later.
   are in the scene (casting and receiving). About 1.0-1.4 ms at 1080p.
 - Shadow maps are not rendered then: glass groups and the probe faces get
   no sun shadows; transparent geometry has no traced visibility.
-- Local light shadows ignore the light's own vessel within 3 m of the
-  emitter (emitters sit inside hulls): its nearby parts cast no shadow.
+- Local light shadows are traced from the light; surfaces the ray leaves
+  from inside do not block it (emitters inside hulls). Spot lights start
+  where their axis leaves the vessel's meshes (CPU ray cast, cached per
+  emitter; static mesh, no animation). Light shadow edges keep some grain.
 - Planet light: Lambert sphere by phase with tabulated albedos (Earth,
   Moon, Mars, Mercury, Venus, Jupiter, Saturn, Titan; else 0.25); the
   albedo is not taken from the surface below.

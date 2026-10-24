@@ -49,6 +49,7 @@ struct LightSource {
 	bool spot;
 	double umbra, penumbra; // full cone angles [rad]
 	uint32_t owner;         // VObject::Id of the vessel carrying it
+	double shadowOfs;       // shadow rays start this far along dir (spot light emitters inside the hull)
 };
 constexpr int MAX_LIGHTS = 32; // must match frame.glsl
 

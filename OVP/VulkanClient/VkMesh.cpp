@@ -5,6 +5,7 @@
 #include "VkTexture.h"
 #include "RayTracing.h"
 #include <algorithm>
+#include <cmath>
 
 namespace {
 	constexpr DWORD SPEC_NONE = (DWORD)-1; // "no texture" / "default material" index
@@ -179,6 +180,37 @@ uint32_t VkMesh::GroupVertexCount (uint32_t g) const
 	if (g >= groups.size()) return 0;
 	int32_t end = g + 1 < groups.size() ? groups[g + 1].vertexOffset : (int32_t)vtx.size();
 	return (uint32_t)std::max (0, end - groups[g].vertexOffset);
+}
+
+double VkMesh::RayExit (const VECTOR3 &o, const VECTOR3 &d, double maxDist) const
+{
+	double last = 0.0;
+	for (size_t gi = 0; gi < groups.size(); gi++) {
+		const Group &g = groups[gi];
+		if (g.usrFlag & GRP_HIDDEN) continue;
+		for (uint32_t k = 0; k + 2 < g.nIndex; k += 3) {
+			VECTOR3 p[3];
+			for (int j = 0; j < 3; j++) {
+				const NTVERTEX &v = vtx[g.vertexOffset + idx[g.firstIndex + k + j]];
+				p[j] = _V(v.x, v.y, v.z);
+			}
+			// Moeller-Trumbore
+			VECTOR3 e1 = p[1] - p[0], e2 = p[2] - p[0];
+			VECTOR3 h = crossp (d, e2);
+			double a = dotp (e1, h);
+			if (fabs (a) < 1e-12) continue;
+			double f = 1.0 / a;
+			VECTOR3 s = o - p[0];
+			double u = f * dotp (s, h);
+			if (u < 0.0 || u > 1.0) continue;
+			VECTOR3 q = crossp (s, e1);
+			double v = f * dotp (d, q);
+			if (v < 0.0 || u + v > 1.0) continue;
+			double t = f * dotp (e2, q);
+			if (t > 0.0 && t < maxDist) last = std::max (last, t);
+		}
+	}
+	return last;
 }
 
 int VkMesh::GetGroupData (DWORD grp, GROUPREQUESTSPEC *grs) const

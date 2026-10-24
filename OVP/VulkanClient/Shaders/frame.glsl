@@ -15,7 +15,7 @@ struct LocalLight {
 	vec4 dir;    // view space direction (xyz), type (w: 1 point, 2 spot)
 	vec4 col;    // colour times intensity
 	vec4 att;    // attenuation coefficients (xyz), cos(umbra/2) (w)
-	vec4 spot;   // cos(penumbra/2) (x), id of the vessel carrying it (y)
+	vec4 spot;   // cos(penumbra/2) (x), id of the vessel carrying it (y), shadow rays start this far along dir (z)
 };
 
 layout(set = FRAME_SET, binding = 0) uniform Frame {
