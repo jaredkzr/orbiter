@@ -35,6 +35,10 @@ Known gaps and limitations, to be addressed later.
   when among the first four lights. Smoke particles take local light
   unshadowed. ORBITER_VK_ENGINE_LIGHT=0 disables it. A long flame is a
   single point (no line light).
+- Heat shimmer (shimmer.frag, ORBITER_VK_SHIMMER=0): hot exhaust per pixel
+  from the plume buffer (10 steps per plume), the background displaced by
+  drifting noise; drawn before plumes and particles; single-sampled scenes
+  only. Not for smoke or particles' own heat.
 - Not in the environment probe.
 - Lens flare: only from the sun, while its disc is visible (was every
   very bright pixel, which gave ghosts of engine flames).
@@ -156,9 +160,6 @@ Known gaps and limitations, to be addressed later.
   atmosphere would not get it). High-resolution <name>_ring_N.dds not used.
 
 ## Deferred effects
-- Engine heat shimmer: needs a screen-space distortion pass (a copy of the
-  scene colour taken mid-frame, or a distortion buffer depth-tested against
-  the multisampled depth). Deferred as a subtle effect for its cost.
 - Lens flare ghosts are discs from the bloom image, not aperture-shaped.
 
 ## Exposure

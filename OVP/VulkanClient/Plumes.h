@@ -126,6 +126,11 @@ public:
 	/// Draw the plumes, far to near (scene with reactive mask, Context::BindSceneWithMask)
 	void Draw (VkDescriptorSet frameSet, VkDescriptorSet atmSet, VkTexture *white);
 
+	/// Heat shimmer: distort the scene drawn so far behind the hot exhaust
+	/// (before the plumes are drawn; outside rendering scopes or in the
+	/// scene's). fx, fy: projection factors; jitter: projection jitter (NDC)
+	void Shimmer (float fx, float fy, const float jitter[2]);
+
 	/// plume buffer (plume.glsl), noise volumes
 	VkBuffer Buffer () const { return buf.buffer; }
 	VkDeviceSize BufferSize () const;
@@ -136,6 +141,8 @@ public:
 	uint32_t Count () const { return (uint32_t)list.size(); }
 
 	bool enabled = true;
+	bool shimmer = true;          ///< heat shimmer (ORBITER_VK_SHIMMER)
+	float shimmerStrength = 3.0f; ///< displacement [pixels] at unit heat
 	PlumeConfig config;
 	/// nearest surface along a ray (view space, |d| = 1) within maxDist,
 	/// other than the object owner's: distance and unit normal
@@ -156,6 +163,16 @@ private:
 	VkPipelineLayout layout = VK_NULL_HANDLE;
 	VkPipeline pipe = VK_NULL_HANDLE;
 	VkImageView prepassView = VK_NULL_HANDLE, shapeView = VK_NULL_HANDLE, detailView = VK_NULL_HANDLE;
+	// heat shimmer: a copy of the scene, its set and pipeline
+	vkc::Image shimmerSrc;
+	uint32_t shimmerGen = ~0u;
+	VkDescriptorSetLayout shimmerSetLayout = VK_NULL_HANDLE;
+	VkDescriptorPool shimmerPool = VK_NULL_HANDLE;
+	VkDescriptorSet shimmerSet = VK_NULL_HANDLE;
+	VkPipelineLayout shimmerLayout = VK_NULL_HANDLE;
+	VkPipeline shimmerPipe = VK_NULL_HANDLE;
+	VkSampler linearClamp = VK_NULL_HANDLE;
+	void CreateShimmerSource ();
 };
 
 #endif // !__PLUMES_H

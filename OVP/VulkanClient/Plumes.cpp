@@ -13,6 +13,8 @@
 
 #include "plume.vert.h"
 #include "plume.frag.h"
+#include "post.vert.h"
+#include "shimmer.frag.h"
 
 namespace {
 
@@ -323,7 +325,123 @@ bool PlumeRenderer::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout, Vk
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &pipe));
 	vkDestroyShaderModule (ctx->device, vs, nullptr);
 	vkDestroyShaderModule (ctx->device, fs, nullptr);
+
+	// heat shimmer: source, plume buffer, noise volumes, prepass; a
+	// full-screen pass into the scene (single-sampled scenes only)
+	if (const char *e = getenv ("ORBITER_VK_SHIMMER")) shimmer = atoi (e) != 0;
+	if (ctx->sceneSamples != VK_SAMPLE_COUNT_1_BIT) shimmer = false;
+	{
+		VkSamplerCreateInfo lsc{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+		lsc.magFilter = lsc.minFilter = VK_FILTER_LINEAR;
+		lsc.addressModeU = lsc.addressModeV = lsc.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		VK_CHECK(vkCreateSampler (ctx->device, &lsc, nullptr, &linearClamp));
+		VkDescriptorSetLayoutBinding sb[5]{};
+		for (uint32_t i = 0; i < 5; i++)
+			sb[i] = { i, i == 1 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
+		VkDescriptorSetLayoutCreateInfo slci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+		slci.bindingCount = 5, slci.pBindings = sb;
+		VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &slci, nullptr, &shimmerSetLayout));
+		VkDescriptorPoolSize sps[2] = { { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 }, { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1 } };
+		VkDescriptorPoolCreateInfo spci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+		spci.maxSets = 1, spci.poolSizeCount = 2, spci.pPoolSizes = sps;
+		VK_CHECK(vkCreateDescriptorPool (ctx->device, &spci, nullptr, &shimmerPool));
+		VkDescriptorSetAllocateInfo sdai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+		sdai.descriptorPool = shimmerPool, sdai.descriptorSetCount = 1, sdai.pSetLayouts = &shimmerSetLayout;
+		VK_CHECK(vkAllocateDescriptorSets (ctx->device, &sdai, &shimmerSet));
+		VkPushConstantRange spcr{ VK_SHADER_STAGE_FRAGMENT_BIT, 0, 8 * sizeof(float) };
+		VkPipelineLayoutCreateInfo splci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+		splci.setLayoutCount = 1, splci.pSetLayouts = &shimmerSetLayout;
+		splci.pushConstantRangeCount = 1, splci.pPushConstantRanges = &spcr;
+		VK_CHECK(vkCreatePipelineLayout (ctx->device, &splci, nullptr, &shimmerLayout));
+		VkShaderModule svs = ctx->CreateShaderModule (spv_post_vert, spv_post_vert_size);
+		VkShaderModule sfs = ctx->CreateShaderModule (spv_shimmer_frag, spv_shimmer_frag_size);
+		VkPipelineShaderStageCreateInfo sst[2] = {
+			{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, svs, "main" },
+			{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, sfs, "main" } };
+		VkPipelineVertexInputStateCreateInfo svi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+		VkPipelineColorBlendAttachmentState scba{};
+		scba.colorWriteMask = 0x7; // (rgb: the alpha channel of the scene is kept)
+		VkPipelineColorBlendStateCreateInfo scb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+		scb.attachmentCount = 1, scb.pAttachments = &scba;
+		VkPipelineRenderingCreateInfo srci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+		srci.colorAttachmentCount = 1, srci.pColorAttachmentFormats = &ctx->sceneFormat;
+		srci.depthAttachmentFormat = ctx->depthFormat;
+		VkGraphicsPipelineCreateInfo sgpi = gpi;
+		sgpi.pNext = &srci;
+		sgpi.pStages = sst;
+		sgpi.pVertexInputState = &svi;
+		sgpi.pColorBlendState = &scb;
+		sgpi.layout = shimmerLayout;
+		VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &sgpi, nullptr, &shimmerPipe));
+		vkDestroyShaderModule (ctx->device, svs, nullptr);
+		vkDestroyShaderModule (ctx->device, sfs, nullptr);
+	}
 	return true;
+}
+
+void PlumeRenderer::CreateShimmerSource ()
+{
+	if (shimmerSrc.image) {
+		vkDeviceWaitIdle (ctx->device);
+		ctx->DestroyImage (shimmerSrc);
+	}
+	VkExtent2D e = ctx->RenderExtent ();
+	VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+	ici.imageType = VK_IMAGE_TYPE_2D;
+	ici.format = ctx->sceneFormat;
+	ici.extent = { e.width, e.height, 1 };
+	ici.mipLevels = 1, ici.arrayLayers = 1;
+	ici.samples = VK_SAMPLE_COUNT_1_BIT;
+	ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+	ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+	VmaAllocationCreateInfo aci{};
+	aci.usage = VMA_MEMORY_USAGE_AUTO;
+	VK_CHECK(vmaCreateImage (ctx->allocator, &ici, &aci, &shimmerSrc.image, &shimmerSrc.alloc, nullptr));
+	VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+	vci.image = shimmerSrc.image, vci.viewType = VK_IMAGE_VIEW_TYPE_2D, vci.format = ctx->sceneFormat;
+	vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+	VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &shimmerSrc.view));
+	VkImage img = shimmerSrc.image;
+	ctx->ImmediateSubmit ([img](VkCommandBuffer cmd) {
+		vkc::ImageBarrier (cmd, img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+	});
+	shimmerGen = ctx->SwapchainGeneration ();
+	prepassView = VK_NULL_HANDLE; // (the sets are written again with the prepass)
+}
+
+void PlumeRenderer::Shimmer (float fx, float fy, const float jitter[2])
+{
+	if (!shimmer || !shimmerPipe || list.empty() || !prepassView) return;
+	if (shimmerGen != ctx->SwapchainGeneration ()) return; // (the prepass sets the source up)
+	// the scene so far into the source
+	ctx->EndTarget ();
+	VkCommandBuffer cmd = ctx->Cmd ();
+	VkImage scene = ctx->SceneImage ();
+	VkExtent2D e = ctx->RenderExtent ();
+	vkc::ImageBarrier (cmd, scene, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+		VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT,
+		VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+	vkc::ImageBarrier (cmd, shimmerSrc.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
+		VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+	VkImageCopy cp{};
+	cp.srcSubresource = cp.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+	cp.extent = { e.width, e.height, 1 };
+	vkCmdCopyImage (cmd, scene, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, shimmerSrc.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cp);
+	vkc::ImageBarrier (cmd, scene, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+		VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+	vkc::ImageBarrier (cmd, shimmerSrc.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+		VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+	// the distorted background back into the scene
+	ctx->BindScene (true);
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shimmerPipe);
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shimmerLayout, 0, 1, &shimmerSet, 0, nullptr);
+	float pc[8] = { fx, fy, jitter[0], jitter[1], (float)e.width, (float)e.height, (float)slot, shimmerStrength };
+	vkCmdPushConstants (cmd, shimmerLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), pc);
+	vkCmdDraw (cmd, 3, 1, 0, 0);
 }
 
 void PlumeRenderer::Shutdown ()
@@ -336,11 +454,18 @@ void PlumeRenderer::Shutdown ()
 	vkDestroySampler (ctx->device, clampSampler, nullptr);
 	vkDestroySampler (ctx->device, repeatSampler, nullptr);
 	ctx->DestroyBuffer (buf);
+	if (shimmerPipe) vkDestroyPipeline (ctx->device, shimmerPipe, nullptr);
+	if (shimmerLayout) vkDestroyPipelineLayout (ctx->device, shimmerLayout, nullptr);
+	if (shimmerPool) vkDestroyDescriptorPool (ctx->device, shimmerPool, nullptr);
+	if (shimmerSetLayout) vkDestroyDescriptorSetLayout (ctx->device, shimmerSetLayout, nullptr);
+	if (linearClamp) vkDestroySampler (ctx->device, linearClamp, nullptr);
+	ctx->DestroyImage (shimmerSrc);
 	ctx = nullptr;
 }
 
 void PlumeRenderer::SetPrepass (VkImageView prepass)
 {
+	if (shimmerPipe && shimmerGen != ctx->SwapchainGeneration ()) CreateShimmerSource ();
 	if (prepass == prepassView) return;
 	if (prepassView) vkDeviceWaitIdle (ctx->device); // (the set may be in use)
 	prepassView = prepass;
@@ -365,6 +490,22 @@ void PlumeRenderer::SetPrepass (VkImageView prepass)
 		}
 	}
 	vkUpdateDescriptorSets (ctx->device, 4, wr, 0, nullptr);
+	if (shimmerSet) {
+		VkDescriptorImageInfo si[4] = {
+			{ linearClamp, shimmerSrc.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+			{ repeatSampler, shapeView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+			{ repeatSampler, detailView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+			{ clampSampler, prepass, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL } };
+		const uint32_t sbind[4] = { 0, 2, 3, 4 };
+		VkWriteDescriptorSet sw[5]{};
+		for (uint32_t i = 0; i < 5; i++) {
+			sw[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			sw[i].dstSet = shimmerSet, sw[i].descriptorCount = 1;
+			if (i < 4) sw[i].dstBinding = sbind[i], sw[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, sw[i].pImageInfo = &si[i];
+			else sw[i].dstBinding = 1, sw[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, sw[i].pBufferInfo = &bi;
+		}
+		vkUpdateDescriptorSets (ctx->device, 5, sw, 0, nullptr);
+	}
 }
 
 void PlumeRenderer::BeginFrame (double t)

@@ -1313,6 +1313,11 @@ void Scene::Render ()
 	std::sort (list.begin(), list.end(), [](VObject *a, VObject *b) { return a->CamDist() > b->CamDist(); });
 	for (auto *vo : list) vo->Render (RenderPass::Transparent);
 
+	// heat shimmer behind the exhaust (before the plumes and particles)
+	ctx->GpuMark ("scene");
+	plumes->Shimmer (proj[0], -proj[5], jitter);
+	ctx->GpuMark ("shimmer");
+
 	// effects that also write the reactive mask: engine plumes, particles
 	vkc::Target rt{ reactive.image, reactive.view, REACTIVE_FORMAT, ctx->RenderExtent () };
 	vkc::Target rtMS{ reactiveMS.image, reactiveMS.view, REACTIVE_FORMAT, ctx->RenderExtent () };

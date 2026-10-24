@@ -98,6 +98,7 @@ set(SHADER_SRC
 	Shaders/ssr_temporal.comp
 	Shaders/plume.vert
 	Shaders/plume.frag
+	Shaders/shimmer.frag
 	Shaders/particle_emit.comp
 	Shaders/particle_update.comp
 	Shaders/particle_update_rt.comp
