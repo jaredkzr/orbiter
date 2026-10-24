@@ -91,8 +91,13 @@ private:
 	std::vector<DWORD> groupTexIdx;  // per group: index into textures, or -1
 	std::vector<DWORD> groupMtrlIdx; // per group: material index of the template
 	std::vector<NTVERTEX> vtx;       // CPU copies of the geometry, for group queries and edits
-	mutable VECTOR3 bbMin{}, bbMax{}; // bounding box (RayHit; computed when first needed)
-	mutable bool haveBB = false;
+	// triangle hierarchy for RayHit (built when first needed; static geometry)
+	struct BvhNode { float lo[3], hi[3]; uint32_t first, count; }; // count 0: children at first, first + 1
+	struct BvhTri { float v[3][3]; };
+	mutable std::vector<BvhNode> bvh;
+	mutable std::vector<BvhTri> bvhTris;
+	mutable bool haveBvh = false;
+	void BuildBvh () const;
 	std::vector<uint16_t> idx;
 	std::vector<VkTexture*> cfgTextures; // textures loaded for the material configuration
 };

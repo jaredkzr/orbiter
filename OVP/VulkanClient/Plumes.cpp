@@ -192,7 +192,7 @@ struct PlumeRenderer::Params { // plume.glsl
 	float boxMax[4];
 	float hit[4];      // where the jet meets a surface, heat there (0: none)
 	float hitN[4];     // surface normal (towards the jet), jet radius there
-	float hit2[4];     // reach of the gas spreading along the surface
+	float hit2[4];     // reach of the gas spreading along the surface, fraction of the jet blocked
 };                     // (lengths in exit radii)
 
 VkDeviceSize PlumeRenderer::BufferSize () const
@@ -420,36 +420,58 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner)
 	double bmin[3] = { -boxR + std::min (0.0, bx * bendMax), -boxR + std::min (0.0, by * bendMax), -0.2 };
 	double bmax[3] = { boxR + std::max (0.0, bx * bendMax), boxR + std::max (0.0, by * bendMax), boxZ };
 
-	// a surface in the way: along the (bent) jet axis, in segments
-	auto axisPoint = [&](double z) { // plume space (exit radii)
-		double b = bendAt (z);
-		return _V(bx * b, by * b, z);
+	// a surface in the way: along the (bent) jet axis and along its edge
+	// (six lines at three quarters of the jet radius), in segments; the
+	// fraction of the lines blocked (the axis counting double) is how much
+	// of the jet the surface takes
+	auto radiusAt = [&](double z) { // jet radius (exit radii)
+		double bz = bendAt (z), sArc = sqrt (z * z + bz * bz);
+		return 1.0 + (rj - 1.0) * (1.0 - exp (-0.8 * sArc)) + sArc * spread + std::max (0.0, sArc - 0.5 * len) * mixSpread + 0.3 * bz;
 	};
 	auto toView = [&](const VECTOR3 &q) { return p.pos + (ex * q.x + ey * q.y + ez * q.z) * re; };
 	bool hit = false;
+	double coverage = 0.0;
 	VECTOR3 hitP{}, hitN{};
 	if (rayCast) {
-		const int SEG = 8;
+		const int SEG = 8, EDGE = 6;
 		const double z0 = 0.3; // (clear of the nozzle)
-		for (int i = 0; i < SEG && !hit; i++) {
-			VECTOR3 a = axisPoint (z0 + (boxZ - z0) * i / SEG), b = axisPoint (z0 + (boxZ - z0) * (i + 1) / SEG);
-			VECTOR3 va = toView (a), vb = toView (b);
-			double segLen = length (vb - va), t;
-			VECTOR3 n;
-			if (segLen > 0.0 && rayCast (owner, va, (vb - va) / segLen, segLen, t, n)) {
-				VECTOR3 q = va + (vb - va) * (t / segLen) - p.pos;
-				hitP = _V(dotp (q, ex), dotp (q, ey), dotp (q, ez)) / re;
-				hitN = _V(dotp (n, ex), dotp (n, ey), dotp (n, ez));
-				if (dotp (hitN, b - a) > 0.0) hitN = -hitN; // (facing the jet)
-				hit = true;
+		double wSum = 0.0;
+		VECTOR3 pSum{}, nSum{};
+		for (int k = 0; k <= EDGE; k++) {
+			double ang = 2.0 * PI * (k - 1) / EDGE, w = k ? 1.0 : 2.0;
+			double ox = k ? cos (ang) : 0.0, oy = k ? sin (ang) : 0.0;
+			auto pathPoint = [&](double z) {
+				double b = bendAt (z), r = 0.75 * radiusAt (z);
+				return _V(bx * b + ox * r, by * b + oy * r, z);
+			};
+			for (int i = 0; i < SEG; i++) {
+				VECTOR3 a = pathPoint (z0 + (boxZ - z0) * i / SEG), b = pathPoint (z0 + (boxZ - z0) * (i + 1) / SEG);
+				VECTOR3 va = toView (a), vb = toView (b);
+				double segLen = length (vb - va), t;
+				VECTOR3 n;
+				if (segLen > 0.0 && rayCast (owner, va, (vb - va) / segLen, segLen, t, n)) {
+					VECTOR3 q = va + (vb - va) * (t / segLen) - p.pos;
+					VECTOR3 hn = _V(dotp (n, ex), dotp (n, ey), dotp (n, ez));
+					if (dotp (hn, b - a) > 0.0) hn = -hn; // (facing the jet)
+					pSum += _V(dotp (q, ex), dotp (q, ey), dotp (q, ez)) / re * w;
+					nSum += hn * w;
+					wSum += w;
+					break;
+				}
 			}
+		}
+		if (wSum > 0.0) {
+			hit = true;
+			coverage = wSum / (EDGE + 2.0);
+			hitP = pSum / wSum;
+			hitN = length (nSum) > 1e-6 ? unit (nSum) : _V(0, 0, -1);
 		}
 	}
 	double hitHeat = 0.0, hitR = 0.0, reach = 0.0;
 	if (hit) {
 		double z = std::max (hitP.z, 0.0), bz = bendAt (z);
 		double sArc = sqrt (z * z + bz * bz), xi = sArc / len;
-		hitR = 1.0 + (rj - 1.0) * (1.0 - exp (-0.8 * sArc)) + sArc * spread + std::max (0.0, sArc - 0.5 * len) * mixSpread + 0.3 * bz;
+		hitR = radiusAt (z);
 		double mixed = bendScale > 0.0 ? exp (-pow (bz / (0.75 * bendScale + 2.5), 2.0)) : 1.0;
 		hitHeat = exp (-3.0 * xi * xi) * (xi < 1.6 ? 1.0 : 0.0) * mixed;
 		// the spreading gas reaches further with more of the jet left
@@ -496,6 +518,7 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner)
 		pc.hit[0] = (float)hitP.x, pc.hit[1] = (float)hitP.y, pc.hit[2] = (float)hitP.z, pc.hit[3] = (float)hitHeat;
 		pc.hitN[0] = (float)hitN.x, pc.hitN[1] = (float)hitN.y, pc.hitN[2] = (float)hitN.z, pc.hitN[3] = (float)hitR;
 		pc.hit2[0] = (float)reach;
+		pc.hit2[1] = (float)coverage;
 	}
 
 	uint32_t index = slot * MAX_PLUMES + (uint32_t)list.size();

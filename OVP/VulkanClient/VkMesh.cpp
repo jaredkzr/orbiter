@@ -213,48 +213,100 @@ double VkMesh::RayExit (const VECTOR3 &o, const VECTOR3 &d, double maxDist) cons
 	return last;
 }
 
-bool VkMesh::RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n) const
+void VkMesh::BuildBvh () const
 {
-	if (!haveBB) {
-		bbMin = _V(1e30, 1e30, 1e30), bbMax = _V(-1e30, -1e30, -1e30);
-		for (auto &v : vtx) {
-			bbMin.x = std::min (bbMin.x, (double)v.x), bbMax.x = std::max (bbMax.x, (double)v.x);
-			bbMin.y = std::min (bbMin.y, (double)v.y), bbMax.y = std::max (bbMax.y, (double)v.y);
-			bbMin.z = std::min (bbMin.z, (double)v.z), bbMax.z = std::max (bbMax.z, (double)v.z);
-		}
-		haveBB = true;
-	}
-	// the bounding box first
-	double t0 = 0.0, t1 = maxDist;
-	for (int k = 0; k < 3; k++) {
-		double ok = (&o.x)[k], dk = (&d.x)[k], lo = (&bbMin.x)[k], hi = (&bbMax.x)[k];
-		if (fabs (dk) < 1e-12) {
-			if (ok < lo || ok > hi) return false;
-			continue;
-		}
-		double a = (lo - ok) / dk, b = (hi - ok) / dk;
-		if (a > b) std::swap (a, b);
-		t0 = std::max (t0, a), t1 = std::min (t1, b);
-		if (t0 > t1) return false;
-	}
-	bool found = false;
-	t = maxDist;
-	for (size_t gi = 0; gi < groups.size(); gi++) {
-		const Group &g = groups[gi];
+	bvhTris.clear ();
+	for (const Group &g : groups) {
 		if (g.usrFlag & GRP_HIDDEN) continue;
 		for (uint32_t k = 0; k + 2 < g.nIndex; k += 3) {
-			VECTOR3 p[3];
+			BvhTri t;
 			for (int j = 0; j < 3; j++) {
 				const NTVERTEX &v = vtx[g.vertexOffset + idx[g.firstIndex + k + j]];
-				p[j] = _V(v.x, v.y, v.z);
+				t.v[j][0] = v.x, t.v[j][1] = v.y, t.v[j][2] = v.z;
 			}
+			bvhTris.push_back (t);
+		}
+	}
+	bvh.clear ();
+	haveBvh = true;
+	if (bvhTris.empty()) return;
+	// top-down, split at the median of the longest axis of the centroids
+	struct Item { uint32_t node, first, count; };
+	std::vector<Item> stack{ { 0, 0, (uint32_t)bvhTris.size() } };
+	bvh.push_back ({});
+	auto centre = [this](uint32_t i, int ax) { const BvhTri &t = bvhTris[i]; return t.v[0][ax] + t.v[1][ax] + t.v[2][ax]; };
+	while (!stack.empty()) {
+		Item it = stack.back();
+		stack.pop_back ();
+		BvhNode &n = bvh[it.node];
+		for (int ax = 0; ax < 3; ax++) n.lo[ax] = 1e30f, n.hi[ax] = -1e30f;
+		float clo[3] = { 1e30f, 1e30f, 1e30f }, chi[3] = { -1e30f, -1e30f, -1e30f };
+		for (uint32_t i = it.first; i < it.first + it.count; i++)
+			for (int ax = 0; ax < 3; ax++) {
+				for (int j = 0; j < 3; j++)
+					n.lo[ax] = std::min (n.lo[ax], bvhTris[i].v[j][ax]), n.hi[ax] = std::max (n.hi[ax], bvhTris[i].v[j][ax]);
+				float c = centre (i, ax);
+				clo[ax] = std::min (clo[ax], c), chi[ax] = std::max (chi[ax], c);
+			}
+		if (it.count <= 8) { n.first = it.first, n.count = it.count; continue; }
+		int ax = 0;
+		for (int k = 1; k < 3; k++) if (chi[k] - clo[k] > chi[ax] - clo[ax]) ax = k;
+		uint32_t mid = it.first + it.count / 2;
+		std::nth_element (bvhTris.begin() + it.first, bvhTris.begin() + mid, bvhTris.begin() + it.first + it.count,
+			[&](const BvhTri &a, const BvhTri &b) {
+				return a.v[0][ax] + a.v[1][ax] + a.v[2][ax] < b.v[0][ax] + b.v[1][ax] + b.v[2][ax];
+			});
+		uint32_t child = (uint32_t)bvh.size();
+		bvh[it.node].first = child, bvh[it.node].count = 0;
+		bvh.push_back ({});
+		bvh.push_back ({});
+		stack.push_back ({ child, it.first, mid - it.first });
+		stack.push_back ({ child + 1, mid, it.first + it.count - mid });
+	}
+}
+
+bool VkMesh::RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n) const
+{
+	if (!haveBvh) BuildBvh ();
+	if (bvh.empty()) return false;
+	double inv[3];
+	for (int k = 0; k < 3; k++) {
+		double dk = (&d.x)[k];
+		inv[k] = fabs (dk) > 1e-12 ? 1.0 / dk : (dk < 0.0 ? -1e12 : 1e12);
+	}
+	auto boxHit = [&](const BvhNode &b, double tMax) {
+		double t0 = 0.0, t1 = tMax;
+		for (int k = 0; k < 3; k++) {
+			double ok = (&o.x)[k];
+			double ta = (b.lo[k] - ok) * inv[k], tb = (b.hi[k] - ok) * inv[k];
+			if (ta > tb) std::swap (ta, tb);
+			t0 = std::max (t0, ta), t1 = std::min (t1, tb);
+			if (t0 > t1) return false;
+		}
+		return true;
+	};
+	bool found = false;
+	t = maxDist;
+	uint32_t stack[64];
+	int sp = 0;
+	stack[sp++] = 0;
+	while (sp) {
+		const BvhNode &b = bvh[stack[--sp]];
+		if (!boxHit (b, t)) continue;
+		if (b.count == 0) {
+			if (sp + 2 <= 64) stack[sp++] = b.first, stack[sp++] = b.first + 1;
+			continue;
+		}
+		for (uint32_t i = b.first; i < b.first + b.count; i++) {
+			const BvhTri &tr = bvhTris[i];
+			VECTOR3 p0 = _V(tr.v[0][0], tr.v[0][1], tr.v[0][2]);
+			VECTOR3 e1 = _V(tr.v[1][0], tr.v[1][1], tr.v[1][2]) - p0, e2 = _V(tr.v[2][0], tr.v[2][1], tr.v[2][2]) - p0;
 			// Moeller-Trumbore
-			VECTOR3 e1 = p[1] - p[0], e2 = p[2] - p[0];
 			VECTOR3 h = crossp (d, e2);
 			double a = dotp (e1, h);
 			if (fabs (a) < 1e-12) continue;
 			double f = 1.0 / a;
-			VECTOR3 s = o - p[0];
+			VECTOR3 s = o - p0;
 			double u = f * dotp (s, h);
 			if (u < 0.0 || u > 1.0) continue;
 			VECTOR3 q = crossp (s, e1);

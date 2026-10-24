@@ -27,7 +27,7 @@ struct PlumeParams { // must match PlumeRenderer::Params
 	vec4 boxMax;
 	vec4 hit;      // where the jet meets a surface (xyz, plume space), w: its heat there (0: no surface)
 	vec4 hitN;     // the surface normal (xyz, plume space, towards the jet), w: jet radius there
-	vec4 hit2;     // reach of the gas spreading along the surface, -, -, -
+	vec4 hit2;     // reach of the gas spreading along the surface, fraction of the jet blocked, -, -
 };
 
 const uint MAX_PLUMES = 64u; // per frame slot
@@ -127,12 +127,13 @@ vec4 PlumeMedium (PlumeParams P, vec3 p)
 	if (P.hit.w > 0.0) {
 		vec3 rel = p0 - P.hit.xyz;
 		float h = dot (rel, P.hitN.xyz), Rh = P.hitN.w;
-		m *= smoothstep (0.0, 0.4 * Rh, h);
+		float blocked = P.hit2.y;
+		m *= mix (1.0, smoothstep (0.0, 0.4 * Rh, h), blocked);
 		float rw = length (rel - h * P.hitN.xyz);
 		float reach = P.hit2.x;
 		float delta = 0.3 * Rh + 0.12 * rw; // layer thickness
 		float wall = exp (-max (h, 0.0) / delta) * smoothstep (-0.1 * Rh, 0.0, h) * exp (-PlumeSq (rw / reach))
-			* Rh / (delta * (Rh + rw));
+			* Rh / (delta * (Rh + rw)) * blocked;
 		float cool = exp (-rw / reach);
 		float lamW = 0.25 + 1.5 * n1 * n2 * 2.0;
 		vec3 ew = (P.core.rgb * P.hit.w * cool + P.outer.rgb * 0.5 * (1.0 - cool)) * wall * lamW;

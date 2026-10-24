@@ -916,8 +916,20 @@ void Scene::BeginFrame ()
 	SetObjectMotion (Mat4::Identity (), Mat4::Identity ());
 
 	// engine plumes (reflections march through them)
+	auto tc0 = std::chrono::steady_clock::now ();
 	plumes->BeginFrame (oapiGetSimTime ());
 	for (auto &it : visuals) it.second->CollectPlumes (*plumes);
+	{
+		// (ORBITER_VK_PROFILE: CPU time of the plume collection, surface tests included)
+		static const bool profile = getenv ("ORBITER_VK_PROFILE") && atoi (getenv ("ORBITER_VK_PROFILE"));
+		static double acc = 0.0;
+		static int n = 0;
+		acc += std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - tc0).count ();
+		if (profile && ++n == 120) {
+			oapiWriteLogV ("VulkanClient: plume collection (CPU) %.3f ms, %u plumes", acc / n, plumes->Count ());
+			acc = 0.0, n = 0;
+		}
+	}
 	ssr->SetPlumeSlot (plumes->Slot ());
 
 	// frame uniforms

@@ -21,9 +21,12 @@ Known gaps and limitations, to be addressed later.
   headwind shortens and widens them. Haze applies at the plume's
   emission-weighted distance. Reflection rays (SSR, RT hybrid) add the
   emission of plumes they pass (coarse march, no smoke, no haze).
-- Surfaces: the jet axis is ray cast on the CPU (8 segments) against the
+- Surfaces: the jet axis and six edge lines are ray cast on the CPU (8
+  segments each; mesh BVHs) against the
   terrain (elevation sampling, vertical normal), bases and other vessels
-  (static meshes, no animations); the gas then spreads along the surface.
+  (static meshes, no animations); the blocked fraction of the jet spreads
+  along the surface, the rest continues dimmed. CPU cost about 0.1-0.4 ms
+  for a few plumes (ORBITER_VK_PROFILE logs it).
   Dust, scorching and light on the surface are still missing (particles,
   engine light).
 - Not in the environment probe; no light cast on the surroundings yet.
