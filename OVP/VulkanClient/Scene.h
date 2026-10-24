@@ -160,6 +160,9 @@ public:
 	double ProjX () const { return proj[0]; }   ///< horizontal focal factor fx
 	double ProjY () const { return -proj[5]; }  ///< vertical focal factor fy
 	OBJHANDLE Sun () const { return hSun; }
+	/// the sun's position on the screen (texture coordinates); false if
+	/// behind the camera or far off the screen
+	bool SunOnScreen (float uv[2]) const;
 	VkDescriptorSet FrameSet () const { return inProbe ? probeFrameSet[ctx->FrameIndex()] : frameSet[ctx->FrameIndex()]; }
 	/// rendering the environment probe (not the main view)
 	bool InProbe () const { return inProbe; }

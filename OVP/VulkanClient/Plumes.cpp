@@ -551,11 +551,22 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 	if (info) {
 		// the end of the flame (where the core has cooled), and the surface
 		double zEnd = std::min (len, boxZ);
+		if (hit && coverage > 0.5) zEnd = std::min (zEnd, std::max (hitP.z, 0.3)); // (the jet ends at the surface)
 		auto viewOf = [&](double z) {
 			double b = bendAt (z);
 			return p.pos + (ex * (bx * b) + ey * (by * b) + ez * z) * re;
 		};
 		info->end = viewOf (zEnd);
+		// light: from about a third down the flame; the mean emission of the
+		// core (half of its peak, cooling along the flame), the afterburning
+		// and the shock diamonds
+		double zl = 0.3 * zEnd;
+		if (hit && coverage > 0.5) zl = 0.6 * zEnd; // (towards the bright spot where it meets the surface)
+		info->lightPos = viewOf (zl);
+		// (radiance through the jet: about 1.1 times the emission per exit radius)
+		for (int k = 0; k < 3; k++)
+			info->lightCol[k] = 1.1f * (0.5f * pc.core[k] + 0.35f * pc.outer[k] + (float)(0.05 * diamonds) * pc.diamond[k]);
+		info->lightArea = 2.0 * radiusAt (zl) * re * zEnd * re;
 		info->endDir = unit (viewOf (zEnd + 0.5) - viewOf (zEnd - 0.5));
 		info->endRadius = radiusAt (zEnd) * re;
 		info->hit = hit;

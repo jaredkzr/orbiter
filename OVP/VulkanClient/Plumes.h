@@ -63,6 +63,11 @@ struct PlumeInfo {
 	VECTOR3 hitPos, hitN;   // where (view space), its normal (towards the jet)
 	double coverage;        // fraction of the jet blocked
 	double heat;            // heat of the jet at the surface (0..1)
+	// the flame as a light source: where (view space), its mean emission
+	// (radiance), and the area of its side [m^2]
+	VECTOR3 lightPos;
+	float lightCol[3];
+	double lightArea;
 };
 
 class PlumeConfig {

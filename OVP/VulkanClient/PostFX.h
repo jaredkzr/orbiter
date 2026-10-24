@@ -26,6 +26,9 @@ public:
 	float bloomThreshold = 1.2f; // displayed brightness (after exposure) above which light blooms
 	float bloomFalloff = 0.6f;   // contribution of each wider level of the glow
 	float flareStrength = 0.05f;
+	/// the sun on the screen (texture coordinates of the scene), for the lens flare
+	bool sunOnScreen = false;
+	float sunUV[2] = { 0.0f, 0.0f };
 	bool autoExposure = true;
 
 	/// adapted exposure and metered scene luminance (log2), as of the last

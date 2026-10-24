@@ -29,7 +29,15 @@ Known gaps and limitations, to be addressed later.
   for a few plumes (ORBITER_VK_PROFILE logs it).
   Dust, scorching and light on the surface are still missing (particles,
   engine light).
-- Not in the environment probe; no light cast on the surroundings yet.
+- Engine light: each plume is a point light at its flame (where the jet
+  meets a surface, near that spot) with the irradiance of a glowing
+  cylinder (pi L near it, L A / d^2 farther away); ray traced shadows
+  when among the first four lights. Smoke particles take local light
+  unshadowed. ORBITER_VK_ENGINE_LIGHT=0 disables it. A long flame is a
+  single point (no line light).
+- Not in the environment probe.
+- Lens flare: only from the sun, while its disc is visible (was every
+  very bright pixel, which gave ghosts of engine flames).
 - Smoke is lit by sun and ambient light without self-shadowing.
 - Bloom: threshold relative to the exposure (1.2 displayed), strength 0.2,
   wider levels falling off by 0.6 (was 0.35 with all levels equal, which

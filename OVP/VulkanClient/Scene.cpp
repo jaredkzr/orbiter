@@ -1232,6 +1232,18 @@ void Scene::RenderProbe ()
 	if (probeFacesDone < 6) probeFacesDone++;
 }
 
+bool Scene::SunOnScreen (float uv[2]) const
+{
+	if (!hSun) return false;
+	VECTOR3 sp;
+	oapiGetGlobalPos (hSun, &sp);
+	VECTOR3 v = ViewDir (unit (sp - camPos));
+	if (v.z <= 1e-3) return false;
+	uv[0] = (float)(0.5 + 0.5 * proj[0] * v.x / v.z);
+	uv[1] = (float)(0.5 + 0.5 * proj[5] * v.y / v.z);
+	return uv[0] > -0.2f && uv[0] < 1.2f && uv[1] > -0.2f && uv[1] < 1.2f;
+}
+
 float Scene::CloudFadeRadius () const
 {
 	return cloudsActive ? (float)VolumetricClouds::RANGE : 0.0f;

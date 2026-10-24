@@ -390,6 +390,24 @@ void VVessel::CollectLights (std::vector<LightSource> &lights)
 		lights.push_back (l);
 	}
 
+	// engine plumes light their surroundings: an extended source of radiance
+	// L and side area A gives an irradiance of L A / d^2 farther away, up to
+	// about pi L right beside it (the light's attenuation is capped at 1)
+	static const bool engineLight = !getenv ("ORBITER_VK_ENGINE_LIGHT") || atoi (getenv ("ORBITER_VK_ENGINE_LIGHT")) != 0;
+	for (const PlumeLight &pl : plumeLights) {
+		if (!engineLight) break;
+		float peak = std::max (pl.col[0], std::max (pl.col[1], pl.col[2]));
+		if (peak <= 0.0f || pl.area <= 0.0) continue;
+		LightSource l{};
+		l.owner = id;
+		l.pos = pl.pos;
+		l.range = std::min (sqrt (pl.area * peak / 0.002), 5000.0); // (down to 0.2% of sunlight)
+		if (length (l.pos - cam) > l.range + 10e3) continue;
+		l.att[0] = 0.0, l.att[1] = 0.0, l.att[2] = PI / pl.area;
+		for (int k = 0; k < 3; k++) l.col[k] = (float)(PI * pl.col[k]);
+		lights.push_back (l);
+	}
+
 	// lit beacons also illuminate their surroundings (mainly the vessel itself)
 	double simt = oapiGetSimTime ();
 	for (DWORD i = 0; ; i++) {
@@ -446,6 +464,7 @@ void VVessel::CollectPlumes (PlumeRenderer &pr)
 {
 	DWORD n = vessel->GetExhaustCount ();
 	plumeExhaust.assign (n, 0);
+	plumeLights.clear ();
 	if (!pr.enabled) return;
 	VECTOR3 as;
 	vessel->GetAirspeedVector (FRAME_LOCAL, as);
@@ -482,7 +501,11 @@ void VVessel::CollectPlumes (PlumeRenderer &pr)
 		pd.tint = es.tex ? (VkTexture*)es.tex : nullptr;
 		pd.seed = id * 131u + i * 977u;
 		PlumeInfo info{};
-		if (pr.Add (pd, id, &info) >= 0) EmitSmoke (i, (int)type, pd, info, dt);
+		if (pr.Add (pd, id, &info) >= 0) {
+			EmitSmoke (i, (int)type, pd, info, dt);
+			PlumeLight pl{ scene->GlobalPos (info.lightPos), { info.lightCol[0], info.lightCol[1], info.lightCol[2] }, info.lightArea };
+			plumeLights.push_back (pl);
+		}
 		else if (i < smoke.size()) smoke[i].havePrev = false;
 	}
 }

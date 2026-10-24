@@ -114,6 +114,9 @@ private:
 		VECTOR3 prev{};
 	};
 	std::vector<SmokeRing> smoke;
+	/// plumes as light sources this frame (global position, emission, side area)
+	struct PlumeLight { VECTOR3 pos; float col[3]; double area; };
+	std::vector<PlumeLight> plumeLights;
 	void EmitSmoke (DWORD idx, int type, const struct PlumeDraw &pd, const struct PlumeInfo &info, double dt);
 };
 

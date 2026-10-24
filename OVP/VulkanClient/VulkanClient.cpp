@@ -202,6 +202,7 @@ void VulkanClient::clbkRenderScene ()
 	VkExtent2D sceneSize;
 	VkImageView sceneImage = scene->ResolveTemporal (sceneSize);
 	ctx.GpuMark ("temporal");
+	postfx->sunOnScreen = scene->SunOnScreen (postfx->sunUV);
 	postfx->Apply (sceneImage, sceneSize);   // HDR scene -> backbuffer
 	ctx.GpuMark ("post");
 	Render2DOverlay (); // panels, MFDs and HUD

@@ -67,6 +67,18 @@ void main ()
 		float phase = (1.0 - g * g) / pow (1.0 + g * g - 2.0 * g * cosT, 1.5); // (times 4 pi)
 		// (smoke of large droplets scatters light many times: bright from any side)
 		col = pt.light * (0.75 + 0.5 * phase) * 0.9 + frame.ambient.rgb;
+		// local lights (engine plumes): scattered in all directions, unshadowed
+		int nl = int (frame.lightCount.x);
+		for (int k = 0; k < nl; k++) {
+			LocalLight l = frame.lights[k];
+			float d = length (l.pos.xyz - vp);
+			if (d > l.pos.w) continue;
+			float a = min (1.0 / max (l.att.x + l.att.y * d + l.att.z * d * d, 1e-4), 1.0);
+			float x = clamp (1.0 - pow (d / l.pos.w, 4.0), 0.0, 1.0);
+			a *= x * x;
+			if (l.dir.w > 1.5) a *= smoothstep (l.spot.x, l.att.w, dot (normalize (vp - l.pos.xyz), l.dir.xyz));
+			col += l.col.rgb * (0.8 * a);
+		}
 		if ((flags & 8u) != 0u) // smoke of a colour
 			col *= vec3 (float ((flags >> 8) & 0xffu), float ((flags >> 16) & 0xffu), float (flags >> 24)) / 255.0;
 	}
