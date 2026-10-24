@@ -15,11 +15,16 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 camC;          // |camPos|^2 - r^2 for the planet (x) and atmosphere (y) radius
 	vec4 misc;          // x: atmosphere present, y: 1/fx, z: 1/fy
 	vec4 ground;        // planet colour (rgb), w: surface textures present
+	vec4 cloud;         // cloud layer radius, rotation angle, shadow depth, w: present
 } atm;
 
 // planet surface (western and eastern hemisphere), for reflections
 layout(set = ATM_SET, binding = 1) uniform sampler2D atmGround0;
 layout(set = ATM_SET, binding = 2) uniform sampler2D atmGround1;
+// cloud layer (western and eastern hemisphere), for cloud shadows
+layout(set = ATM_SET, binding = 3) uniform sampler2D atmCloud0;
+layout(set = ATM_SET, binding = 4) uniform sampler2D atmCloud1;
+
 
 const float ATM_PI = 3.14159265;
 const float ATM_NONE = 1e30;
@@ -114,4 +119,22 @@ vec3 Inscatter (vec3 d, float tMax, out vec3 T)
 vec3 AtmTonemap (vec3 L)
 {
 	return 1.0 - exp (-L);
+}
+
+// Fraction of sunlight passing the cloud layer above p (planet frame)
+float CloudShadow (vec3 p)
+{
+	if (atm.cloud.w < 0.5) return 1.0;
+	vec3 s = atm.sunDir.xyz;
+	vec2 tc = RaySphere (p, s, atm.cloud.x);
+	if (tc.y <= 0.0 || tc.x > tc.y) return 1.0; // above the clouds
+	vec3 q = normalize (p + s * tc.y);
+	const float PI_ = 3.14159265;
+	float lat = asin (clamp (q.y, -1.0, 1.0));
+	float lng = atan (q.z, q.x) - atm.cloud.y; // into the rotating cloud frame
+	lng = mod (lng + PI_, 2.0 * PI_) - PI_;
+	float v = (0.5 * PI_ - lat) / PI_;
+	float a = lng < 0.0 ? texture (atmCloud0, vec2 ((lng + PI_) / PI_, v)).a
+	                    : texture (atmCloud1, vec2 (lng / PI_, v)).a;
+	return 1.0 - atm.cloud.z * a;
 }

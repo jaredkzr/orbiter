@@ -114,7 +114,10 @@ void main()
 	// planet near the camera
 	bool hasAtm = atm.misc.x > 0.5;
 	vec3 sun = frame.sunColor.rgb * draw.light.rgb * SunShadow(vPosView, N);
-	if (hasAtm) sun *= SunTransmittance(mat3(atm.viewToPlanet) * vPosView + atm.camPos.xyz);
+	if (hasAtm) {
+		vec3 pPlanet = mat3(atm.viewToPlanet) * vPosView + atm.camPos.xyz;
+		sun *= SunTransmittance(pPlanet) * CloudShadow(pPlanet);
+	}
 
 	// diffuse (Orbiter's convention: albedo times N.L) and specular reflection
 	// of the sun, local lights, ambient, and reflections of the environment

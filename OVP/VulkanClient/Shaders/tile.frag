@@ -43,6 +43,7 @@ void main()
 		pPlanet = mat3(atm.viewToPlanet) * vPosView + atm.camPos.xyz;
 		dPlanet = normalize(mat3(atm.viewToPlanet) * vPosView);
 		sunT = SunTransmittance(pPlanet);
+		if (tile.params.z < 0.5) sunT *= CloudShadow(pPlanet); // terrain under the clouds
 	}
 	if (tile.params.z < 0.5) sunT *= SunShadow(vPosView, N); // terrain receives shadows
 	vec3 col = base * (frame.ambient.rgb + frame.sunColor.rgb * sunT * max(ndl, 0.0) + LocalLighting(vPosView, N));

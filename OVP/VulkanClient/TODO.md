@@ -27,3 +27,9 @@ Known gaps and limitations, to be addressed later.
 - Material configuration files: only SPECULAR, SMOOTHNESS, METALNESS and
   REFLECT are used (FRESNEL and other entries are ignored). Normal,
   roughness or metalness texture maps are not supported yet.
+
+## Shadows
+- Cloud shadows use the level-4 cloud textures only (tens of km per texel):
+  soft and coarse, not yet checked visually over broken cloud cover. Using
+  the cloud quadtree tiles would sharpen them.
+- No terrain self-shadowing (mountains at low sun).

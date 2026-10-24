@@ -458,6 +458,10 @@ VPlanet::VPlanet (OBJHANDLE h, Scene *s, bool star)
 		surface = PlanetSurface::Create (hObj, scene);
 		if (surface) clouds = PlanetSurface::Create (hObj, scene, true);
 		atmosphere->SetGround (surface ? surface->RootTexture (0) : nullptr, surface ? surface->RootTexture (1) : nullptr, colour);
+		if (clouds) {
+			const double *alt = (const double*)oapiGetObjectParam (hObj, OBJPRM_PLANET_CLOUDALT);
+			atmosphere->SetClouds (clouds->RootTexture (0), clouds->RootTexture (1), alt ? *alt : 0.0);
+		}
 	}
 }
 

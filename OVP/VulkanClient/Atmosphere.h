@@ -19,7 +19,7 @@ class AtmosphereRenderer {
 public:
 	bool Init (vkc::Context *ctx, class TextureManager *texmgr);
 	/// Write the ground textures of a set
-	void WriteGround (VkDescriptorSet set, class VkTexture *west, class VkTexture *east) const;
+	void WriteGround (VkDescriptorSet set, class VkTexture *west, class VkTexture *east, int binding = 1) const;
 	void Shutdown ();
 	VkDescriptorSetLayout SetLayout () const { return setLayout; }
 	VkDescriptorPool Pool () const { return pool; }
@@ -54,6 +54,8 @@ public:
 	/// Planet surface (hemisphere textures, level 4 tiles) and mean colour, used
 	/// for reflections of the planet. Call before the first use of the sets.
 	void SetGround (class VkTexture *west, class VkTexture *east, const float colour[3]);
+	/// Cloud layer (hemisphere textures) at the given altitude, for cloud shadows
+	void SetClouds (class VkTexture *west, class VkTexture *east, double alt);
 
 private:
 	OBJHANDLE hPlanet;
@@ -67,6 +69,7 @@ private:
 	vkc::Buffer ubo[vkc::FRAMES_IN_FLIGHT];
 	VkDescriptorSet sets[vkc::FRAMES_IN_FLIGHT] = {};
 	float groundColour[4] = { 0.5f, 0.5f, 0.5f, 0.0f };
+	float cloudParams[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 };
 
 #endif // !__ATMOSPHERE_H

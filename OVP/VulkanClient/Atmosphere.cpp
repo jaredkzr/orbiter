@@ -25,6 +25,7 @@ namespace {
 		float camC[4];
 		float misc[4];
 		float ground[4];
+		float cloud[4];
 	};
 
 	constexpr uint32_t MAX_ATMOSPHERES = 64; // plus one "no atmosphere" set
@@ -45,26 +46,26 @@ bool AtmosphereRenderer::Init (vkc::Context *c, TextureManager *tm)
 {
 	ctx = c;
 	texmgr = tm;
-	VkDescriptorSetLayoutBinding b[3]{};
+	VkDescriptorSetLayoutBinding b[5]{};
 	b[0].binding = 0;
 	b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	b[0].descriptorCount = 1;
 	b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-	for (int i = 1; i < 3; i++) {
+	for (int i = 1; i < 5; i++) {
 		b[i].binding = i;
 		b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		b[i].descriptorCount = 1;
 		b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 	}
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 3;
+	lci.bindingCount = 5;
 	lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &setLayout));
 
 	const uint32_t nSets = MAX_ATMOSPHERES * vkc::FRAMES_IN_FLIGHT + 1;
 	VkDescriptorPoolSize ps[2] = {
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nSets },
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * nSets }
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * nSets }
 	};
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
@@ -88,6 +89,7 @@ bool AtmosphereRenderer::Init (vkc::Context *c, TextureManager *tm)
 	wr.pBufferInfo = &dbi;
 	vkUpdateDescriptorSets (ctx->device, 1, &wr, 0, nullptr);
 	WriteGround (noneSet, texmgr->White(), texmgr->White());
+	WriteGround (noneSet, texmgr->White(), texmgr->White(), 3);
 
 	VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 	plci.setLayoutCount = 1;
@@ -152,7 +154,7 @@ bool AtmosphereRenderer::Init (vkc::Context *c, TextureManager *tm)
 	return true;
 }
 
-void AtmosphereRenderer::WriteGround (VkDescriptorSet set, VkTexture *west, VkTexture *east) const
+void AtmosphereRenderer::WriteGround (VkDescriptorSet set, VkTexture *west, VkTexture *east, int binding) const
 {
 	// the textures' own descriptor sets carry the sampler and view
 	VkCopyDescriptorSet cp[2]{};
@@ -162,7 +164,7 @@ void AtmosphereRenderer::WriteGround (VkDescriptorSet set, VkTexture *west, VkTe
 		cp[i].srcSet = t[i]->set;
 		cp[i].srcBinding = 0;
 		cp[i].dstSet = set;
-		cp[i].dstBinding = 1 + i;
+		cp[i].dstBinding = binding + i;
 		cp[i].descriptorCount = 1;
 	}
 	vkUpdateDescriptorSets (ctx->device, 0, nullptr, 2, cp);
@@ -229,7 +231,20 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		wr.pBufferInfo = &dbi;
 		vkUpdateDescriptorSets (ctx->device, 1, &wr, 0, nullptr);
 		ar->WriteGround (sets[i], nullptr, nullptr);
+		ar->WriteGround (sets[i], nullptr, nullptr, 3);
 	}
+}
+
+void Atmosphere::SetClouds (VkTexture *west, VkTexture *east, double alt)
+{
+	if (!west || !east) return;
+	for (uint32_t i = 0; i < vkc::FRAMES_IN_FLIGHT; i++)
+		scene->Atm()->WriteGround (sets[i], west, east, 3);
+	cloudParams[0] = (float)(radius + alt);
+	cloudParams[2] = 0.3f;
+	if (const float *d = (const float*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_CLOUDSHADOWCOL))
+		cloudParams[2] = std::clamp (*d, 0.0f, 1.0f);
+	cloudParams[3] = 1.0f;
 }
 
 void Atmosphere::SetGround (VkTexture *west, VkTexture *east, const float colour[3])
@@ -292,6 +307,10 @@ void Atmosphere::Update ()
 	u.radii[3] = sunIntensity;
 	u.misc[0] = present ? 1.0f : 0.0f;
 	memcpy (u.ground, groundColour, sizeof(groundColour));
+	if (cloudParams[3] > 0.0f)
+		if (const double *rot = (const double*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_CLOUDROTATION))
+			cloudParams[1] = (float)*rot;
+	memcpy (u.cloud, cloudParams, sizeof(cloudParams));
 	u.misc[1] = (float)(1.0 / scene->ProjX());
 	u.misc[2] = (float)(1.0 / scene->ProjY());
 	memcpy (ubo[ctx->FrameIndex()].mapped, &u, sizeof(u));
