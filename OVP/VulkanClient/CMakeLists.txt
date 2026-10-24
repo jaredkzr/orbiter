@@ -81,6 +81,11 @@ set(SHADER_SRC
 	Shaders/taa.comp
 	Shaders/atm_transmittance.comp
 	Shaders/atm_multiscat.comp
+	Shaders/cloudnoise.comp
+	Shaders/cloudmap.vert
+	Shaders/cloudmap.frag
+	Shaders/clouds.comp
+	Shaders/cloudcomp.frag
 )
 set(SHADER_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 set(SHADER_HEADERS)
@@ -112,6 +117,7 @@ add_library(VulkanClient SHARED
 	LegacyTex.cpp
 	AO.cpp
 	TAA.cpp
+	Clouds.cpp
 	Fsr.cpp
 	StarSphere.cpp
 	Draw2D.cpp

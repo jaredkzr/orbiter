@@ -120,6 +120,9 @@ public:
 	void RenderShadow (ShadowMap &sm) override;
 	void PrepareFrame () override;
 	Atmosphere *GetAtmosphere () override { return atmosphere.get(); }
+	/// tiled cloud layer (or nullptr) and its altitude [m]
+	PlanetSurface *CloudLayer () const { return clouds.get(); }
+	double CloudAlt () const;
 
 private:
 	float colour[4];

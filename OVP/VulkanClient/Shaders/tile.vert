@@ -16,7 +16,7 @@ layout(push_constant) uniform Tile {
 	mat4 modelView;
 	vec4 surfUV;   // offset (xy), scale (zw)
 	vec4 maskUV;
-	vec4 params;   // x: mask present, y: night light intensity
+	vec4 params;   // x: mask present, y: night light intensity, z: cloud layer, w: volumetric cloud range
 } tile;
 
 layout(location = 0) out vec3 vPosView;

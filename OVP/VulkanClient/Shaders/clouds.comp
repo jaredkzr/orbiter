@@ -1,0 +1,166 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Volumetric clouds near the camera, ray-marched at half resolution through
+// a shell between the cloud base and top. Where clouds are comes from the
+// coverage map (the planet's cloud tiles around the camera), their shape
+// from 3D noise. Lighting: sunlight through the atmosphere and the cloud
+// itself (a short march towards the sun), a two-lobe phase function, an
+// approximation of multiple scattering, and ambient skylight. The haze
+// between the camera and the clouds is applied here.
+// Output: light (rgb, premultiplied), transmittance (a).
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+#define ATM_SET 1
+#include "atmosphere.glsl"
+
+layout(set = 0, binding = 0) uniform sampler2D coverageMap;
+layout(set = 0, binding = 1) uniform sampler3D shapeNoise;
+layout(set = 0, binding = 2) uniform sampler3D detailNoise;
+layout(set = 0, binding = 3) uniform sampler2D prepass;   // view normal, view depth (w; 0: none)
+layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D outClouds;
+
+layout(push_constant) uniform Params {
+	vec4 shell;      // base radius, top radius, maximum distance [m], sun irradiance scale
+	vec4 mapCentre;  // coverage map centre (planet frame), w: half size [m]
+	vec4 mapEast;    // map x axis (planet frame), w: coverage scale
+	vec4 mapNorth;   // map y axis (planet frame), w: extinction [1/m] at full density
+	vec4 ambient;    // ambient light (rgb), w: frame index
+	vec4 proj;       // fx, fy, output width, height
+	vec4 noise;      // noise offset (wind, planet frame), w: shape noise frequency [1/m]
+} pc;
+
+const float PI = 3.14159265;
+
+float Remap (float v, float lo, float hi, float nlo, float nhi)
+{
+	return nlo + (v - lo) / (hi - lo) * (nhi - nlo);
+}
+
+// cloud density (0..1) at p (planet frame, radius r)
+float Density (vec3 p, float r, bool detail)
+{
+	float hf = (r - pc.shell.x) / (pc.shell.y - pc.shell.x);
+	if (hf <= 0.0 || hf >= 1.0) return 0.0;
+	vec3 q = p - pc.mapCentre.xyz;
+	vec2 mc = vec2 (dot (q, pc.mapEast.xyz), dot (q, pc.mapNorth.xyz)) / (2.0 * pc.mapCentre.w) + 0.5;
+	if (any (lessThan (mc, vec2 (0.0))) || any (greaterThan (mc, vec2 (1.0)))) return 0.0;
+	// the layer's alpha is a soft opacity: stretched into cloud fraction
+	float cov = smoothstep (0.15, 0.85, textureLod (coverageMap, mc, 0.0).r * pc.mapEast.w);
+	if (cov <= 0.01) return 0.0;
+	// rounded bases, tapering tops
+	float profile = smoothstep (0.0, 0.07, hf) * smoothstep (1.0, 0.3, hf);
+	vec3 np = (p + pc.noise.xyz) * pc.noise.w;
+	float shape = textureLod (shapeNoise, np, 0.0).r;
+	float d = clamp (Remap (shape * profile, 1.0 - cov, 1.0, 0.0, 1.0), 0.0, 1.0);
+	if (d <= 0.0 || !detail) return d;
+	// detail erodes the edges: wispy at the bottom, billowy at the top
+	float det = textureLod (detailNoise, np * 5.7, 0.0).r;
+	float erode = mix (1.0 - det, det, clamp (hf * 5.0, 0.0, 1.0));
+	return clamp (Remap (d, erode * 0.35, 1.0, 0.0, 1.0), 0.0, 1.0);
+}
+
+float HG (float c, float g)
+{
+	float g2 = g * g;
+	return (1.0 - g2) / (4.0 * PI * pow (max (1.0 + g2 - 2.0 * g * c, 1e-4), 1.5));
+}
+
+void main ()
+{
+	ivec2 px = ivec2 (gl_GlobalInvocationID.xy);
+	vec2 size = pc.proj.zw;
+	if (px.x >= int (size.x) || px.y >= int (size.y)) return;
+
+	// view ray (planet frame)
+	vec2 ndc = (vec2 (px) + 0.5) / size * 2.0 - 1.0;
+	vec3 dv = normalize (vec3 (ndc.x / pc.proj.x, -ndc.y / pc.proj.y, 1.0));
+	vec3 d = normalize (mat3 (atm.viewToPlanet) * dv);
+	vec3 o = atm.camPos.xyz;
+
+	// segment inside the cloud shell
+	vec2 tt = RaySphere (o, d, pc.shell.y);
+	vec2 tb = RaySphere (o, d, pc.shell.x);
+	float r0 = length (o);
+	float t0, t1;
+	if (tt.x > tt.y || tt.y <= 0.0) { imageStore (outClouds, px, vec4 (0.0, 0.0, 0.0, 1.0)); return; }
+	t0 = max (tt.x, 0.0), t1 = tt.y;
+	if (r0 < pc.shell.x) {
+		t0 = max (t0, tb.y);         // from the base upwards
+	} else if (tb.x < tb.y && tb.x > 0.0) {
+		t1 = min (t1, tb.x);         // down to the base
+	}
+	// the scene (nearest of the four full-resolution pixels) and the ground
+	float z = 1e30;
+	for (int k = 0; k < 4; k++) {
+		float zk = texelFetch (prepass, px * 2 + ivec2 (k & 1, k >> 1), 0).w;
+		if (zk > 0.0) z = min (z, zk);
+	}
+	if (z < 1e30) t1 = min (t1, z / dv.z);
+	vec2 tg = RaySphereC (o, d, atm.camC.x);
+	if (tg.x > 0.0 && tg.x <= tg.y) t1 = min (t1, tg.x);
+	t1 = min (t1, pc.shell.z);
+	if (t1 <= t0) { imageStore (outClouds, px, vec4 (0.0, 0.0, 0.0, 1.0)); return; }
+
+	// march, with steps growing with distance and a per-pixel, per-frame offset
+	float jitter = fract (52.9829189 * fract (dot (vec2 (px) + pc.ambient.w * vec2 (5.588238, 5.588238), vec2 (0.06711056, 0.00583715))));
+	const int N = 64;
+	vec3 sun = atm.sunDir.xyz;
+	float mu = dot (d, sun);
+	float phase = mix (HG (mu, 0.8), HG (mu, -0.25), 0.35);
+	float sigma = pc.mapNorth.w;
+	vec3 L = vec3 (0.0);
+	float T = 1.0, tWeighted = 0.0, wSum = 0.0;
+	float span = t1 - t0;
+	for (int i = 0; i < N && T > 0.01; i++) {
+		float a = (float (i) + jitter) / float (N), b = (float (i) + 1.0 + jitter) / float (N);
+		float ta = t0 + span * a * a, tb2 = t0 + span * b * b;
+		float dt = tb2 - ta;
+		vec3 p = o + d * (0.5 * (ta + tb2));
+		float r = length (p);
+		float dens = Density (p, r, true);
+		if (dens <= 0.0) continue;
+		float ext = sigma * dens;
+		// sunlight reaching p through the cloud (towards the sun, growing steps)
+		float od = 0.0, ds = 60.0, s = 0.0;
+		for (int k = 0; k < 6; k++) {
+			s += ds;
+			vec3 q = p + sun * (s - 0.5 * ds);
+			od += Density (q, length (q), k < 2) * ds;
+			ds *= 2.2;
+		}
+		od *= sigma;
+		vec3 sunAtm = AtmSunTransmittance (p, r, dot (p, sun) / r) * pc.shell.w;
+		// multiple scattering: octaves of weaker extinction and flatter phase
+		vec3 Ssun = vec3 (0.0);
+		float aa = 1.0, bb = 1.0, cc = 1.0;
+		for (int o2 = 0; o2 < 3; o2++) {
+			float ph = mix (HG (mu, 0.8 * cc), HG (mu, -0.25 * cc), 0.35);
+			Ssun += sunAtm * aa * ph * exp (-bb * od);
+			aa *= 0.5, bb *= 0.5, cc *= 0.5;
+		}
+		float hf = (r - pc.shell.x) / (pc.shell.y - pc.shell.x);
+		// light diffused through thick cloud (high scattering orders): the
+		// bases of overcast stay luminous
+		vec3 diffuse = sunAtm * (0.02 + 0.04 * hf);
+		vec3 S = ext * (Ssun + diffuse + pc.ambient.rgb * (0.4 + 0.6 * hf));
+		// energy-conserving integration over the step
+		float Tstep = exp (-ext * dt);
+		L += T * (S - S * Tstep) / max (ext, 1e-8);
+		float w = T * (1.0 - Tstep);
+		tWeighted += w * 0.5 * (ta + tb2);
+		wSum += w;
+		T *= Tstep;
+	}
+	if (wSum <= 0.0) { imageStore (outClouds, px, vec4 (0.0, 0.0, 0.0, 1.0)); return; }
+
+	// haze between the camera and the clouds (the scene behind already has it)
+	float tc = tWeighted / wSum;
+	vec3 Tair;
+	vec3 Lair = AtmTonemap (Inscatter (d, tc, Tair));
+	imageStore (outClouds, px, vec4 (L * Tair + (1.0 - T) * Lair, T));
+}

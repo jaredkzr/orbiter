@@ -116,6 +116,10 @@ void main()
 
 	if (tile.params.z > 0.5) { // cloud layer: lit from above, also seen from below
 		float a = texture(surfTex, clamp(vUV * tile.surfUV.zw + tile.surfUV.xy, hs, 1.0 - hs)).a;
+		// near the camera the volumetric clouds replace the layer
+		if (tile.params.w > 0.0) a *= smoothstep(0.75 * tile.params.w, tile.params.w, length(vPosView));
+		// seen from below: the underside, shaded by the cloud's own thickness
+		if (dot(vPosView, normalize(vNormalView)) > 0.0) col *= mix(1.0, 0.35, a);
 		if (hasAtm) {
 			vec3 T;
 			vec3 L = Inscatter(dPlanet, length(vPosView), T);

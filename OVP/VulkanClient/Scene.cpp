@@ -5,6 +5,9 @@
 #include "AO.h"
 #include "TAA.h"
 #include "Fsr.h"
+#include "Clouds.h"
+#include "VObjects.h"
+#include "PlanetSurface.h"
 #include <chrono>
 #include "VObjects.h"
 #include "VkMesh.h"
@@ -176,6 +179,8 @@ bool Scene::Init ()
 
 	atm = std::make_unique<AtmosphereRenderer>();
 	atm->Init (ctx, gc->TexMgr());
+	vclouds = std::make_unique<VolumetricClouds>();
+	vclouds->Init (ctx, gc->TexMgr(), atm->SetLayout());
 	CreatePipelines ();
 	BuildSphere ();
 	tiles = std::make_unique<TileRenderer>();
@@ -229,6 +234,8 @@ void Scene::Shutdown ()
 	ao.reset();
 	if (taa) taa->Shutdown ();
 	taa.reset();
+	if (vclouds) vclouds->Shutdown ();
+	vclouds.reset();
 	if (fsr) fsr->Shutdown ();
 	fsr.reset();
 	ctx->DestroyBuffer (sphereVtx);
@@ -815,6 +822,7 @@ void Scene::BeginFrame ()
 			fu.ambient[2] += (float)(f * ac->color0.z);
 		}
 	}
+	for (int k = 0; k < 3; k++) ambientRGB[k] = fu.ambient[k];
 	auto shadowUniforms = [this](const ShadowMap &sm, float *mat, float *prm) {
 		sm.ReceiverMatrix (camPos, camRot).ToFloat (mat);
 		double texel = sm.TexelSize ();
@@ -858,12 +866,50 @@ void Scene::BeginFrame ()
 
 void Scene::RenderPrepass ()
 {
-	if (!ao->enabled && !taaEnabled) return;
 	// (planet surfaces were prepared before the shadow maps)
 	ao->BeginPrepass ();
 	for (auto &it : visuals) it.second->Render (RenderPass::Depth);
 	if (ao->enabled) ao->Compute (proj[0], -proj[5]);
 	else ctx->EndTarget ();
+	RenderVolumetricClouds ();
+}
+
+float Scene::CloudFadeRadius () const
+{
+	return cloudsActive ? (float)VolumetricClouds::RANGE : 0.0f;
+}
+
+void Scene::RenderVolumetricClouds ()
+{
+	cloudsActive = false;
+	OBJHANDLE hp = oapiCameraProxyGbody ();
+	if (!hp || !vclouds->enabled) return;
+	auto it = visuals.find (hp);
+	if (it == visuals.end()) return;
+	VPlanet *vp = dynamic_cast<VPlanet*>(it->second.get());
+	Atmosphere *a = vp ? vp->GetAtmosphere () : nullptr;
+	if (!vp || !vp->CloudLayer () || !a || !a->Present ()) return;
+	VECTOR3 pp;
+	MATRIX3 prot;
+	oapiGetGlobalPos (hp, &pp);
+	oapiGetRotationMatrix (hp, &prot);
+	double R = oapiGetSize (hp);
+	VECTOR3 cam = tmul (prot, camPos - pp);
+	if (length (cam) - R > VolumetricClouds::MAX_CAM_ALT) return;
+	VolumetricClouds::Frame f{};
+	f.clouds = vp->CloudLayer ();
+	f.atmSet = a->Set ();
+	f.camPlanet = cam;
+	f.planetRadius = R;
+	f.cloudAlt = vp->CloudAlt ();
+	f.prepass = ao->PrepassView ();
+	f.fx = proj[0], f.fy = -proj[5];
+	for (int k = 0; k < 3; k++) f.ambient[k] = ambientRGB[k];
+	// slow drift of the cloud shapes
+	double t = fmod (oapiGetSimTime (), 1e5);
+	f.windOffset[0] = (float)(8.0 * t), f.windOffset[1] = 0.0f, f.windOffset[2] = (float)(5.0 * t);
+	vclouds->Render (f);
+	cloudsActive = true;
 }
 
 void Scene::Render ()
@@ -886,6 +932,12 @@ void Scene::Render ()
 	// scene geometry
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &frameSet[fi], 0, nullptr);
 	for (auto *vo : list) vo->Render (RenderPass::Opaque);
+
+	// volumetric clouds over the opaque scene
+	if (cloudsActive) {
+		ctx->BindScene (true);
+		vclouds->Composite ();
+	}
 
 	std::sort (list.begin(), list.end(), [](VObject *a, VObject *b) { return a->CamDist() > b->CamDist(); });
 	for (auto *vo : list) vo->Render (RenderPass::Transparent);

@@ -98,3 +98,15 @@ Known gaps and limitations, to be addressed later.
   particles and exhaust take the motion of what is behind them (possible
   smearing on fast relative motion). Mesh animations are not in the motion
   vectors (only whole-object motion). No sharpening pass yet.
+
+## Volumetric clouds
+- Ray-marched within 60 km when the camera is below 40 km (ORBITER_VK_CLOUDS=0
+  disables). Shell = 2D layer altitude +-1.5 km; coverage from the cloud tiles
+  (alpha stretched by smoothstep 0.15..0.85), shape from 3D noise (6 km).
+- Transition: the 2D layer fades in from 45 to 60 km; seen edge-on from below
+  an overcast deck it shows as a light band at the horizon.
+- Half-resolution, 64 steps + 6 light steps, no temporal reprojection of its
+  own (relies on TAA/FSR); cost not yet profiled. No cloud shadows from the
+  volumes (the 2D cloud-shadow approximation remains). No lightning, no rain.
+- Cloud types are not distinguished (all cumulus-like); the layer alpha
+  carries no height information.

@@ -685,6 +685,44 @@ void PlanetSurface::RenderShadow (ShadowMap &sm)
 	}
 }
 
+void PlanetSurface::RenderCoverage (const Mat4 &toMap, VkPipelineLayout layout, const VECTOR3 &mapCentre, double mapRadius)
+{
+	Prepare ();
+	// the tiles are in the cloud layer's frame (rotated about the axis
+	// relative to the planet)
+	MATRIX3 protPlanet;
+	oapiGetRotationMatrix (hPlanet, &protPlanet);
+	MATRIX3 R = mul (transp (protPlanet), prot);
+	VkCommandBuffer cmd = ctx->Cmd();
+	vkCmdBindIndexBuffer (cmd, tr->IndexBuffer(), 0, VK_INDEX_TYPE_UINT16);
+	for (Node *n : drawList) {
+		if (!n->vbuf.buffer) continue;
+		// only tiles reaching the map (the projection is orthographic: tiles
+		// elsewhere on the globe would land on it too)
+		if (length (mul (R, n->centre) - mapCentre) > mapRadius + n->angRadius * radius * 1.5) continue;
+		float uv[4];
+		VkTexture *surf = nullptr;
+		for (const Node *a = n; a; a = a->parent) {
+			if (!a->surf) continue;
+			int k = n->lvl - a->lvl;
+			float sc = 1.0f / (1 << k);
+			uv[0] = (n->ilng - (a->ilng << k)) * sc, uv[1] = (n->ilat - (a->ilat << k)) * sc;
+			uv[2] = uv[3] = sc;
+			surf = a->surf;
+			break;
+		}
+		if (!surf) continue;
+		float pc[20];
+		(toMap * Mat4::FromRotTrans (R, mul (R, n->centre))).ToFloat (pc);
+		memcpy (pc + 16, uv, sizeof(uv));
+		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &surf->set, 0, nullptr);
+		vkCmdPushConstants (cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), pc);
+		VkDeviceSize ofs = 0;
+		vkCmdBindVertexBuffers (cmd, 0, 1, &n->vbuf.buffer, &ofs);
+		vkCmdDrawIndexed (cmd, tr->GridIndexCount(), 1, 0, 0, 0);
+	}
+}
+
 void PlanetSurface::Render (Atmosphere *atm)
 {
 	Prepare ();
@@ -723,6 +761,7 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 	pc.params[0] = mask ? 1.0f : 0.0f;
 	pc.params[1] = 1.0f;
 	pc.params[2] = clouds ? 1.0f : 0.0f;
+	pc.params[3] = clouds ? scene->CloudFadeRadius () : 0.0f; // volumetric clouds take over within
 	if (!mask) mask = texmgr->White ();
 
 	Mat4 mv = scene->ModelView (ppos + mul (prot, n->centre), prot);

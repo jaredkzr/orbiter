@@ -1,0 +1,86 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Tileable 3D noise for volumetric clouds, generated once:
+// kind 0: shape noise, Perlin noise eroded by Worley noise (billowy)
+// kind 1: detail noise, Worley fBm
+
+#version 450
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+layout(set = 0, binding = 0, r8) uniform writeonly image3D outNoise;
+
+layout(push_constant) uniform Params {
+	int size;
+	int kind;
+} pc;
+
+uint Hash (uvec3 v)
+{
+	uint h = v.x * 0x8da6b343u ^ v.y * 0xd8163841u ^ v.z * 0xcb1ab31fu;
+	h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;
+	return h;
+}
+
+vec3 Hash3 (ivec3 c)
+{
+	uint h = Hash (uvec3 (c));
+	return vec3 (h & 0x3ffu, (h >> 10) & 0x3ffu, (h >> 20) & 0x3ffu) / 1023.0;
+}
+
+ivec3 Wrap (ivec3 c, int period) { return ((c % period) + period) % period; }
+
+// Worley noise (1 - distance to the nearest feature point), period in cells
+float Worley (vec3 p, int period)
+{
+	vec3 q = p * float (period);
+	ivec3 c = ivec3 (floor (q));
+	vec3 f = fract (q);
+	float d = 1.0;
+	for (int z = -1; z <= 1; z++)
+		for (int y = -1; y <= 1; y++)
+			for (int x = -1; x <= 1; x++) {
+				ivec3 o = ivec3 (x, y, z);
+				vec3 fp = vec3 (o) + Hash3 (Wrap (c + o, period));
+				d = min (d, length (fp - f));
+			}
+	return 1.0 - d;
+}
+
+// gradient (Perlin) noise in [-1,1], period in cells
+float Perlin (vec3 p, int period)
+{
+	vec3 q = p * float (period);
+	ivec3 c = ivec3 (floor (q));
+	vec3 f = fract (q);
+	vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+	float n[8];
+	for (int k = 0; k < 8; k++) {
+		ivec3 o = ivec3 (k & 1, (k >> 1) & 1, k >> 2);
+		vec3 g = normalize (Hash3 (Wrap (c + o, period)) * 2.0 - 1.0 + 1e-4);
+		n[k] = dot (g, f - vec3 (o));
+	}
+	return mix (mix (mix (n[0], n[1], u.x), mix (n[2], n[3], u.x), u.y),
+	            mix (mix (n[4], n[5], u.x), mix (n[6], n[7], u.x), u.y), u.z) * 1.5;
+}
+
+float Remap (float v, float lo, float hi, float nlo, float nhi)
+{
+	return nlo + (v - lo) / (hi - lo) * (nhi - nlo);
+}
+
+void main ()
+{
+	ivec3 id = ivec3 (gl_GlobalInvocationID);
+	if (any (greaterThanEqual (id, ivec3 (pc.size)))) return;
+	vec3 p = (vec3 (id) + 0.5) / float (pc.size);
+	float v;
+	if (pc.kind == 0) {
+		float perlin = 0.5 + 0.5 * (Perlin (p, 4) * 0.625 + Perlin (p, 8) * 0.25 + Perlin (p, 16) * 0.125);
+		float worley = Worley (p, 4) * 0.625 + Worley (p, 8) * 0.25 + Worley (p, 16) * 0.125;
+		v = clamp (Remap (perlin, worley - 1.0, 1.0, 0.0, 1.0), 0.0, 1.0);
+	} else {
+		v = Worley (p, 4) * 0.625 + Worley (p, 8) * 0.25 + Worley (p, 16) * 0.125;
+	}
+	imageStore (outNoise, id, vec4 (v));
+}

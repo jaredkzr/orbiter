@@ -57,12 +57,12 @@ bool AtmosphereRenderer::Init (vkc::Context *c, TextureManager *tm)
 	b[0].binding = 0;
 	b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	b[0].descriptorCount = 1;
-	b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+	b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 	for (int i = 1; i < 7; i++) { // ground, clouds, transmittance and multiple-scattering tables
 		b[i].binding = i;
 		b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		b[i].descriptorCount = 1;
-		b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+		b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT; // (volumetric clouds)
 	}
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
 	lci.bindingCount = 7;

@@ -120,6 +120,9 @@ public:
 	Mat4 PrevModelView (const VECTOR3 &gpos, const MATRIX3 &grot) const;
 	/// view space now -> clip space of the previous frame (unjittered)
 	const float *ObjectMotion () const { return objMotion; }
+	/// distance from the camera within which the 2D cloud layer gives way to
+	/// the volumetric clouds (0: none this frame)
+	float CloudFadeRadius () const;
 	/// temporal anti-aliasing active (projection jitter, motion vectors)
 	bool TemporalAAEnabled () const { return taaEnabled; }
 	/// view-space position of a global point
@@ -164,6 +167,10 @@ private:
 	std::unique_ptr<class AmbientOcclusion> ao;
 	std::unique_ptr<class TemporalAA> taa;
 	std::unique_ptr<class FsrUpscaler> fsr;
+	std::unique_ptr<class VolumetricClouds> vclouds;
+	bool cloudsActive = false;   // volumetric clouds this frame
+	float ambientRGB[3] = {};
+	void RenderVolumetricClouds ();
 	bool taaEnabled = true;  // temporal anti-aliasing (jitter, motion vectors)
 	bool useFsr = false;     // ... by the FSR 3 upscaler instead of our own
 	float jitterPixels[2] = { 0.0f, 0.0f };

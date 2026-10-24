@@ -686,6 +686,13 @@ void VPlanet::RenderSky ()
 void VPlanet::PrepareFrame ()
 {
 	if (surface) surface->Prepare ();
+	if (clouds) clouds->Prepare (); // (coverage map of the volumetric clouds)
+}
+
+double VPlanet::CloudAlt () const
+{
+	const double *alt = (const double*)oapiGetObjectParam (hObj, OBJPRM_PLANET_CLOUDALT);
+	return alt ? *alt : 0.0;
 }
 
 void VPlanet::Render (RenderPass pass)
