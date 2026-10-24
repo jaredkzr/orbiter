@@ -31,6 +31,8 @@ namespace {
 		float ambient[4];
 		float shadowMat[16];   // view space -> shadow map
 		float shadowParams[4]; // enabled, normal offset, depth bias, texel size
+		float shadowMat2[16];  // far cascade
+		float shadowParams2[4];
 		float lightCount[4];
 		struct {
 			float pos[4];   // view space position, range
@@ -45,6 +47,7 @@ namespace {
 	// the camera distance (plus the target's size)
 	constexpr double SHADOW_RANGE = 1.5;
 	constexpr double SHADOW_RADIUS_MIN = 20.0, SHADOW_RADIUS_MAX = 5000.0; // [m]
+	constexpr double SHADOW_FAR_RADIUS = 4000.0; // far cascade around the camera [m]
 
 	struct StarPushConstants {
 		float viewProj[16];
@@ -90,9 +93,11 @@ bool Scene::Init ()
 
 	shadows = std::make_unique<ShadowMap>();
 	shadows->Init (ctx);
+	shadowsFar = std::make_unique<ShadowMap>();
+	shadowsFar->Init (ctx);
 
 	// per-frame uniform buffer and the shadow map (set 0)
-	VkDescriptorSetLayoutBinding b[2]{};
+	VkDescriptorSetLayoutBinding b[3]{};
 	b[0].binding = 0;
 	b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	b[0].descriptorCount = 1;
@@ -101,14 +106,16 @@ bool Scene::Init ()
 	b[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 	b[1].descriptorCount = 1;
 	b[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+	b[2] = b[1];
+	b[2].binding = 2;
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 2;
+	lci.bindingCount = 3;
 	lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &frameLayout));
 
 	VkDescriptorPoolSize ps[2] = {
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, vkc::FRAMES_IN_FLIGHT },
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, vkc::FRAMES_IN_FLIGHT }
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * vkc::FRAMES_IN_FLIGHT }
 	};
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.maxSets = vkc::FRAMES_IN_FLIGHT;
@@ -126,7 +133,8 @@ bool Scene::Init ()
 		VK_CHECK(vkAllocateDescriptorSets (ctx->device, &dai, &frameSet[i]));
 		VkDescriptorBufferInfo dbi{ frameUbo[i].buffer, 0, sizeof(FrameUniforms) };
 		VkDescriptorImageInfo dii{ shadows->Sampler(), shadows->View(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-		VkWriteDescriptorSet wr[2]{};
+		VkDescriptorImageInfo dii2{ shadowsFar->Sampler(), shadowsFar->View(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		VkWriteDescriptorSet wr[3]{};
 		wr[0].sType = wr[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 		wr[0].dstSet = wr[1].dstSet = frameSet[i];
 		wr[0].dstBinding = 0;
@@ -137,7 +145,10 @@ bool Scene::Init ()
 		wr[1].descriptorCount = 1;
 		wr[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		wr[1].pImageInfo = &dii;
-		vkUpdateDescriptorSets (ctx->device, 2, wr, 0, nullptr);
+		wr[2] = wr[1];
+		wr[2].dstBinding = 2;
+		wr[2].pImageInfo = &dii2;
+		vkUpdateDescriptorSets (ctx->device, 3, wr, 0, nullptr);
 	}
 
 	atm = std::make_unique<AtmosphereRenderer>();
@@ -187,6 +198,8 @@ void Scene::Shutdown ()
 	atm.reset();
 	if (shadows) shadows->Shutdown ();
 	shadows.reset();
+	if (shadowsFar) shadowsFar->Shutdown ();
+	shadowsFar.reset();
 	if (stars) stars->Shutdown ();
 	stars.reset();
 	ctx->DestroyBuffer (sphereVtx);
@@ -598,7 +611,7 @@ void Scene::UpdateCamera ()
 
 void Scene::RenderShadows ()
 {
-	shadowsValid = false;
+	shadowsValid = shadowsFarValid = false;
 	if (!hSun) return;
 	OBJHANDLE hTgt = oapiCameraTarget ();
 	VECTOR3 c = camPos;
@@ -615,6 +628,14 @@ void Scene::RenderShadows ()
 	for (auto &it : visuals) it.second->RenderShadow (*shadows);
 	shadows->End ();
 	shadowsValid = true;
+
+	// far cascade around the camera, for structures beyond the near map
+	if (r < 0.5 * SHADOW_FAR_RADIUS) {
+		shadowsFar->Begin (camPos, SHADOW_FAR_RADIUS, unit (sp - camPos));
+		for (auto &it : visuals) it.second->RenderShadow (*shadowsFar);
+		shadowsFar->End ();
+		shadowsFarValid = true;
+	}
 }
 
 double Scene::Sunlight (const VECTOR3 &gpos)
@@ -695,14 +716,16 @@ void Scene::Render ()
 			fu.ambient[2] += (float)(f * ac->color0.z);
 		}
 	}
-	if (shadowsValid) {
-		shadows->ReceiverMatrix (camPos, camRot).ToFloat (fu.shadowMat);
-		double texel = shadows->TexelSize ();
-		fu.shadowParams[0] = 1.0f;
-		fu.shadowParams[1] = (float)(1.5 * texel);      // normal offset [m]
-		fu.shadowParams[2] = (float)(texel / (6.0 * shadows->Radius())); // depth bias (one texel in depth units)
-		fu.shadowParams[3] = 1.0f / ShadowMap::SIZE;
-	}
+	auto shadowUniforms = [this](const ShadowMap &sm, float *mat, float *prm) {
+		sm.ReceiverMatrix (camPos, camRot).ToFloat (mat);
+		double texel = sm.TexelSize ();
+		prm[0] = 1.0f;
+		prm[1] = (float)(1.5 * texel);                       // normal offset [m]
+		prm[2] = (float)(texel / (6.0 * sm.Radius()));       // depth bias (one texel in depth units)
+		prm[3] = 1.0f / ShadowMap::SIZE;
+	};
+	if (shadowsValid) shadowUniforms (*shadows, fu.shadowMat, fu.shadowParams);
+	if (shadowsFarValid) shadowUniforms (*shadowsFar, fu.shadowMat2, fu.shadowParams2);
 	// local light sources, nearest to the camera first
 	std::vector<LightSource> ls;
 	for (auto &it : visuals) it.second->CollectLights (ls);

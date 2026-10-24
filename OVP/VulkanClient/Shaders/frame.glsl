@@ -20,6 +20,8 @@ layout(set = 0, binding = 0) uniform Frame {
 	vec4 ambient;
 	mat4 shadowMat;    // view space -> shadow map (texture coordinates, depth)
 	vec4 shadowParams; // x: enabled, y: normal offset [m], z: depth bias, w: texel size
+	mat4 shadowMat2;   // far cascade
+	vec4 shadowParams2;
 	vec4 lightCount;   // x: number of local lights
 	LocalLight lights[MAX_LIGHTS];
 } frame;

@@ -136,8 +136,9 @@ private:
 	VkTexture *glowTex = nullptr;
 	std::unique_ptr<TileRenderer> tiles;
 	std::unique_ptr<AtmosphereRenderer> atm;
-	std::unique_ptr<ShadowMap> shadows;
-	bool shadowsValid = false;
+	std::unique_ptr<ShadowMap> shadows;      // near cascade, around the camera target
+	std::unique_ptr<ShadowMap> shadowsFar;   // far cascade, around the camera
+	bool shadowsValid = false, shadowsFarValid = false;
 	VkDescriptorSet camAtmSet = VK_NULL_HANDLE; // atmosphere for vessels and bases
 
 	// sphere geometry for planets
