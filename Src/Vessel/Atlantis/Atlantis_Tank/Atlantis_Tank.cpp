@@ -200,12 +200,16 @@ bool Atlantis_Tank::IgniteSRBs () const
 	bool ok = true;
 
 	for (int i = 0; i < 2; i++) {
-		if (pSRB[i]) {
-			ok = ok && pSRB[i]->Ignite ();
+		// (pSRB is set in clbkPreStep, which may not have run yet in the
+		// first time step, e.g. with the main engines at full thrust from
+		// the start)
+		Atlantis_SRB *srb = pSRB[i] ? pSRB[i] : GetSRB (i);
+		if (srb) {
+			ok = ok && srb->Ignite ();
 			if (ok) {
 				VECTOR3 dir = THRUSTGIMBAL_LAUNCH;
 				if (i) dir.y = -dir.y;
-				pSRB[i]->SetThrustGimbal (dir);
+				srb->SetThrustGimbal (dir);
 			}
 		} else
 			ok = false;
