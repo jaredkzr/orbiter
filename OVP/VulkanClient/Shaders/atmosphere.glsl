@@ -20,6 +20,7 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 cloud;         // cloud layer radius, rotation angle, shadow depth, w: present
 	vec4 water;         // camera relative to the 1 km-snapped origin of surface patterns, w: time [s] (< 0: no ripples)
 	vec4 ozone;         // absorption [1/m] (rgb): ozone layer, or (w = 1) aerosols (dust)
+	vec4 detail;        // procedural surface detail: type (0 none, 1 airless, 2 Mars, 3 Earth), strength, range [m]
 } atm;
 
 // planet surface (western and eastern hemisphere), for reflections

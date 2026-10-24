@@ -30,6 +30,7 @@ namespace {
 		float cloud[4];
 		float water[4];
 		float ozone[4];
+		float detail[4];
 	};
 
 	const VkFormat LUT_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -332,6 +333,16 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 	}
 
 	if (const bool *r = (const bool*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_SURFACERIPPLE)) ripple = *r;
+	{
+		// procedural surface detail close to the camera: craters and rocks
+		// on airless bodies, eroded craters and rocks on Mars, undulation and
+		// mottling on Earth; none on bodies with deep atmospheres (gas giants)
+		char name[64];
+		oapiGetObjectName (hPlanet, name, 64);
+		int type = !strcmp (name, "Earth") ? 3 : !strcmp (name, "Mars") ? 2 : !present ? 1 : 0;
+		if (const char *e = getenv ("ORBITER_VK_SURFACE_DETAIL")) if (!atoi (e)) type = 0;
+		detail[0] = (float)type, detail[1] = 1.0f, detail[2] = 3000.0f;
+	}
 
 	AtmosphereRenderer *ar = scene->Atm();
 	if (present) {
@@ -483,6 +494,7 @@ void Atmosphere::Update ()
 	u.radii[3] = skyScale > 0.0f ? skyScale : sunIntensity;
 	u.misc[0] = present ? 1.0f : 0.0f;
 	u.misc[3] = airglow;
+	memcpy (u.detail, detail, sizeof(detail));
 	memcpy (u.ozone, ozone, sizeof(ozone));
 	memcpy (u.ground, groundColour, sizeof(groundColour));
 	if (cloudParams[3] > 0.0f)

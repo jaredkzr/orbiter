@@ -56,16 +56,7 @@ float ValueNoise (vec3 p, float cell, int period)
 	           mix(mix(n[4], n[5], f.x), mix(n[6], n[7], f.x), f.y), f.z);
 }
 
-// Brightness variation of the ground close to the camera, where the surface
-// textures are blurry
-float GroundDetail (vec3 posView, float dist)
-{
-	float fade = 1.0 - smoothstep(300.0, 2000.0, dist);
-	if (fade <= 0.0 || atm.radii.x <= 0.0) return 1.0;
-	vec3 p = mat3(atm.viewToPlanet) * posView + atm.water.xyz;
-	float d = 0.4 * ValueNoise(p, 8.0, 125) + 0.6 * ValueNoise(p, 2.0, 500);
-	return mix(1.0, 0.65 + 0.7 * d, fade);
-}
+#include "surfdetail.glsl"
 
 // Wave normal of water surfaces (view space). The waves run along integer
 // directions of the planet frame with wavelengths that divide 1 km, so the
@@ -107,11 +98,14 @@ vec3 WaterNormal (vec3 Nv, vec3 posView, float dist)
 void main()
 {
 	vec3 N = normalize(vNormalView);
+	vec3 Ng = N; // (geometric: water, night side)
 	vec3 L = frame.sunDir.xyz;
-	float ndl = dot(N, L);
 	// clamp to the texel centres at the tile edges (the sampler wraps around)
 	vec2 hs = 0.5 / vec2(textureSize(surfTex, 0));
 	vec3 base = texture(surfTex, clamp(vUV * tile.surfUV.zw + tile.surfUV.xy, hs, 1.0 - hs)).rgb;
+	// procedural detail below the textures' resolution (terrain only)
+	if (tile.params.z < 0.5) SurfaceDetail(vPosView, length(vPosView), N, base);
+	float ndl = dot(N, L);
 	bool hasAtm = atm.misc.x > 0.5;
 	vec3 sunT = vec3(1.0);
 	vec3 pPlanet = vec3(0.0), dPlanet = vec3(0.0);
@@ -125,13 +119,15 @@ void main()
 	bool rtVis = RTLighting() && tile.params.z < 0.5;
 	vec4 lv = rtVis ? RTLightVisibility() : vec4(1.0);
 	if (tile.params.z < 0.5) sunT *= rtVis ? RTVisibility().x : SunShadow(vPosView, N);
-	if (tile.params.z < 0.5) base *= GroundDetail(vPosView, length(vPosView));
 	float ao = tile.params.z < 0.5 ? AmbientOcclusion() : 1.0; // clouds are not in the prepass
 	float aoDirect = mix(1.0, ao, frame.aoParams.z); // contact darkening in direct light too
 	// the night side gets no skylight: only a fraction of the ambient level
 	// remains (moon and starlight)
-	float ambNight = tile.params.z < 0.5 ? mix(0.15, 1.0, smoothstep(-0.25, 0.0, ndl)) : 1.0;
-	vec3 col = base * (frame.ambient.rgb * ao * ambNight + (frame.sunColor.rgb * sunT * max(ndl, 0.0) + LocalLighting(vPosView, N, lv)) * aoDirect);
+	float ambNight = tile.params.z < 0.5 ? mix(0.15, 1.0, smoothstep(-0.25, 0.0, dot(Ng, L))) : 1.0;
+	// regolith of airless bodies: no limb darkening, opposition surge
+	float sunRefl = int(atm.detail.x + 0.5) == DETAIL_AIRLESS && tile.params.z < 0.5
+		? RegolithReflectance(N, L, normalize(-vPosView), Ng) : max(ndl, 0.0);
+	vec3 col = base * (frame.ambient.rgb * ao * ambNight + (frame.sunColor.rgb * sunT * sunRefl + LocalLighting(vPosView, N, lv)) * aoDirect);
 
 	if (tile.params.z > 0.5) { // cloud layer: lit from above, also seen from below
 		float a = texture(surfTex, clamp(vUV * tile.surfUV.zw + tile.surfUV.xy, hs, 1.0 - hs)).a;
@@ -152,7 +148,7 @@ void main()
 		vec2 hm = 0.5 / vec2(textureSize(maskTex, 0));
 		vec4 m = texture(maskTex, clamp(vUV * tile.maskUV.zw + tile.maskUV.xy, hm, 1.0 - hm));
 		// night lights fade in beyond the terminator
-		float night = clamp(0.2 - ndl * 4.0, 0.0, 1.0);
+		float night = clamp(0.2 - dot(Ng, L) * 4.0, 0.0, 1.0);
 		// the night light texture represents lights seen from altitude; close up
 		// it would flood the ground, so it fades out near the camera
 		night *= smoothstep(1000.0, 10000.0, length(vPosView));
@@ -166,7 +162,7 @@ void main()
 		if (m.a < 0.5) {
 			float dist = length(vPosView);
 			vec3 V = normalize(-vPosView);
-			vec3 Nw = WaterNormal(N, vPosView, dist);
+			vec3 Nw = WaterNormal(Ng, vPosView, dist);
 			float NoV = max(dot(Nw, V), 1e-3);
 			float fres = 0.02 + 0.98 * pow(1.0 - NoV, 5.0);
 			if (hasAtm) {
