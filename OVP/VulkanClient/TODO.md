@@ -64,6 +64,17 @@ Known gaps and limitations, to be addressed later.
   where the flame ends, or spreads it along the surface the jet meets (pad
   clouds), with buoyancy; colours and densities after launch photographs.
   No water deluge steam.
+- Ground interaction (VVessel::EmitDust): a ray along each jet (reach
+  2.5 m * sqrt(thrust/kN)) finds the ground; bare terrain throws up dust in
+  the body's colour (ballistic under gravity; in vacuum low-angle streaks
+  that vanish where they land), water on Earth (elevation <= 0) spray.
+  Surface bases (pads, runways) get no dust; base ground meshes over
+  terrain count as bases.
+- Scorch marks (PlumeRenderer::Scorch, scorch.*): heat where hot jets meet
+  the ground or a pad accumulates into up to 128 marks per session (body
+  frame), drawn as decals multiplying the lit opaque scene. Not saved with
+  the scenario; they darken emission too.
+- RCS: vapour puffs (few, fast-growing, faint), also in vacuum.
 - Smoke collides with the terrain (RT: ray along each particle's motion,
   terrain only, from above; without RT: a sphere at the ground height under
   the camera). Bases and vessels are left out (smoke would be trapped in

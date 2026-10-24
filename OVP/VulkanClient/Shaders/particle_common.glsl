@@ -34,7 +34,7 @@ layout(push_constant) uniform Params {
 	vec4 lightX;    // shadow grid axes (global): across the sunlight, w: half width [m]
 	vec4 lightY;    //   w: half depth along the sunlight [m]
 	vec4 lightZ;    //   towards the sun, w: extinction per unit of smoke
-	vec4 ground;    // x: radius of the ground under the camera (no ray tracing)
+	vec4 ground;    // x: radius of the ground under the camera (no ray tracing), y: surface gravity [m/s^2]
 } pc;
 
 // current opacity and radius of a particle (as drawn)

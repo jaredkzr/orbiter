@@ -131,6 +131,12 @@ public:
 	/// scene's). fx, fy: projection factors; jitter: projection jitter (NDC)
 	void Shimmer (float fx, float fy, const float jitter[2]);
 
+	/// Scorch marks where hot jets meet the ground: add heat to the mark at a
+	/// global position (merged with a mark nearby), and draw them (scene's
+	/// rendering scope, after the opaque scene; camRot: camera axes)
+	void Scorch (OBJHANDLE body, const VECTOR3 &gpos, const VECTOR3 &gnormal, double radius, double amount);
+	void DrawScorch (const VECTOR3 &camPos, const MATRIX3 &camRot, VkDescriptorSet frameSet);
+
 	/// plume buffer (plume.glsl), noise volumes
 	VkBuffer Buffer () const { return buf.buffer; }
 	VkDeviceSize BufferSize () const;
@@ -145,8 +151,9 @@ public:
 	float shimmerStrength = 3.0f; ///< displacement [pixels] at unit heat
 	PlumeConfig config;
 	/// nearest surface along a ray (view space, |d| = 1) within maxDist,
-	/// other than the object owner's: distance and unit normal
-	std::function<bool (uint32_t owner, const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n)> rayCast;
+	/// other than the object owner's: distance, unit normal, and what was met
+	/// (kind, if given: 0 terrain, 1 a surface base, 2 a vessel)
+	std::function<bool (uint32_t owner, const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n, int *kind)> rayCast;
 
 private:
 	struct Params;
@@ -173,6 +180,10 @@ private:
 	VkPipeline shimmerPipe = VK_NULL_HANDLE;
 	VkSampler linearClamp = VK_NULL_HANDLE;
 	void CreateShimmerSource ();
+	struct Mark { OBJHANDLE body; VECTOR3 pos, normal; double radius, dark; uint32_t seed; }; // (body frame)
+	std::vector<Mark> marks;
+	VkPipelineLayout scorchLayout = VK_NULL_HANDLE;
+	VkPipeline scorchPipe = VK_NULL_HANDLE;
 };
 
 #endif // !__PLUMES_H

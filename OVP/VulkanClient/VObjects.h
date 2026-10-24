@@ -38,6 +38,8 @@ public:
 	/// nearest intersection of a ray (global frame, |d| = 1) with the
 	/// object's meshes (and those of its surface bases) within maxDist
 	virtual bool RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n) { return false; }
+	/// what the last successful RayHit met: 0 terrain, 1 a surface base, 2 a vessel
+	int LastHitKind () const { return lastHitKind; }
 	virtual Atmosphere *GetAtmosphere () { return nullptr; }
 	virtual int VisEvent (DWORD msg, DWORD_PTR context) { return 0; }
 	virtual MESHHANDLE GetMesh (UINT idx) { return NULL; }
@@ -60,6 +62,7 @@ protected:
 	VECTOR3 prevGpos{};
 	MATRIX3 prevGrot{};
 	bool havePrev = false;
+	int lastHitKind = 2;
 	/// set the prepass motion of this object (pose now and in the last frame)
 	void SetMotion () const;
 };
@@ -114,6 +117,9 @@ private:
 		VECTOR3 prev{};
 	};
 	std::vector<SmokeRing> smoke;
+	std::vector<SmokeRing> dust;   // dust (or spray) thrown up where a jet meets the ground
+	void EmitDust (DWORD idx, int type, const struct PlumeDraw &pd, double dt);
+	bool EnsureRing (SmokeRing &r, double rate, double life);
 	/// plumes as light sources this frame (global position, emission, side area)
 	struct PlumeLight { VECTOR3 pos; float col[3]; double area; };
 	std::vector<PlumeLight> plumeLights;

@@ -62,10 +62,12 @@ void main ()
 		if ((p.flags & 16u) != 0u)
 			vel += normalize (pos - pc.bodyPos.xyz) * (4.0 * exp (-p.posAge.w / 6.0) * dt);
 	}
+	bool ballistic = (p.flags & 32u) != 0u && pc.bodyPos.w > 0.0;
+	if (ballistic) vel -= normalize (pos - pc.bodyPos.xyz) * (pc.ground.y * dt); // (thrown dust falls back)
 	vec3 move = vel * dt;
-	// smoke in the air meets the ground: it stays above it (its centre a
-	// third of its size away) and slides along it
-	if (inAir && (p.flags & 4u) == 0u && dt > 0.0) {
+	// smoke in the air and dust meet the ground: they stay above it (their
+	// centre a third of their size away) and slide along it
+	if ((inAir || ballistic) && (p.flags & 4u) == 0u && dt > 0.0) {
 		float gap = 0.3 * ParticleRadius (p);
 #ifdef RT
 		mat3 toView = transpose (mat3 (frame.viewToGlobal));
@@ -77,11 +79,12 @@ void main ()
 		// flame trench below the tiles' surface, gets out)
 		vec3 upV = toView * normalize (pos - pc.bodyPos.xyz);
 		if (RTSurface (toView * pos, toView * d, len + gap, upV, t, N) && dot (toView * d, N) < 0.0) {
+			if (ballistic && !inAir) { particles[i].velLife.w = 0.0; return; } // (dust in vacuum: lands)
 			vec3 Ng = mat3 (frame.viewToGlobal) * N;
 			pos += d * max (t - gap, 0.0);
 			float into = dot (vel, Ng);
 			if (into < 0.0) vel -= Ng * into;
-			vel *= 0.85; // (friction)
+			vel *= ballistic ? 0.5 : 0.85; // (friction)
 			move = vec3 (0.0);
 		}
 #else
@@ -89,6 +92,7 @@ void main ()
 		vec3 up = pos + move - pc.bodyPos.xyz;
 		float r = length (up);
 		if (pc.ground.x > 0.0 && r < pc.ground.x + gap) {
+			if (ballistic && !inAir) { particles[i].velLife.w = 0.0; return; }
 			up /= r;
 			move += up * (pc.ground.x + gap - r);
 			float into = dot (vel, up);

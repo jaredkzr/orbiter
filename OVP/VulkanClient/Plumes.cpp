@@ -15,6 +15,8 @@
 #include "plume.frag.h"
 #include "post.vert.h"
 #include "shimmer.frag.h"
+#include "scorch.vert.h"
+#include "scorch.frag.h"
 
 namespace {
 
@@ -43,7 +45,7 @@ namespace {
 		{ "solid",        7e4,   { 1.0f, 0.88f, 0.65f }, 6.0f, { 1.0f, 0.9f, 0.7f }, 4.0f, { 1.0f, 0.65f, 0.3f }, 6.0f, 0.25f, 0.6f, 1.2f, 35.0f,
 		                  { 0.95f, 0.95f, 0.93f },  0.85f, 40.0f, 0.0f, 0.05f },
 		{ "rcs",          3e3,   { 0.9f, 0.85f, 0.8f },  0.9f, { 0, 0, 0 },          0.0f, { 1.0f, 0.6f, 0.4f },  0.3f, 0.0f,  1.0f, 0.5f, 30.0f,
-		                  { 0, 0, 0 },              0.0f,  0.0f, 0.0f,  1.0f },
+		                  { 0.93f, 0.90f, 0.84f },  0.30f, 1.2f, -2.0f, -1.0f }, // (vapour puffs, also in vacuum)
 		{ "texture",      0.0,   { 1, 1, 1 },            1.0f, { 0, 0, 0 },          0.0f, { 0, 0, 0 },          0.0f, 0.0f,  1.0f, 0.0f,  0.0f,
 		                  { 0, 0, 0 },              0.0f,  0.0f, 0.0f,  1.0f },
 	};
@@ -376,6 +378,44 @@ bool PlumeRenderer::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout, Vk
 		vkDestroyShaderModule (ctx->device, svs, nullptr);
 		vkDestroyShaderModule (ctx->device, sfs, nullptr);
 	}
+	{
+		// scorch marks: boxes around them, the scene multiplied by their colour
+		VkDescriptorSetLayout ml[2] = { frameLayout, setLayout };
+		VkPushConstantRange mpcr{ VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 12 * sizeof(float) };
+		VkPipelineLayoutCreateInfo mplci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+		mplci.setLayoutCount = 2, mplci.pSetLayouts = ml;
+		mplci.pushConstantRangeCount = 1, mplci.pPushConstantRanges = &mpcr;
+		VK_CHECK(vkCreatePipelineLayout (ctx->device, &mplci, nullptr, &scorchLayout));
+		VkShaderModule mvs = ctx->CreateShaderModule (spv_scorch_vert, spv_scorch_vert_size);
+		VkShaderModule mfs = ctx->CreateShaderModule (spv_scorch_frag, spv_scorch_frag_size);
+		VkPipelineShaderStageCreateInfo mst[2] = {
+			{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, mvs, "main" },
+			{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, mfs, "main" } };
+		VkPipelineVertexInputStateCreateInfo mvi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+		VkPipelineColorBlendAttachmentState mcba{};
+		mcba.colorWriteMask = 0x7;
+		mcba.blendEnable = VK_TRUE;
+		mcba.srcColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+		mcba.dstColorBlendFactor = VK_BLEND_FACTOR_SRC_COLOR;
+		mcba.colorBlendOp = VK_BLEND_OP_ADD;
+		mcba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+		mcba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+		mcba.alphaBlendOp = VK_BLEND_OP_ADD;
+		VkPipelineColorBlendStateCreateInfo mcb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+		mcb.attachmentCount = 1, mcb.pAttachments = &mcba;
+		VkPipelineRenderingCreateInfo mrci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+		mrci.colorAttachmentCount = 1, mrci.pColorAttachmentFormats = &ctx->sceneFormat;
+		mrci.depthAttachmentFormat = ctx->depthFormat;
+		VkGraphicsPipelineCreateInfo mgpi = gpi;
+		mgpi.pNext = &mrci;
+		mgpi.pStages = mst;
+		mgpi.pVertexInputState = &mvi;
+		mgpi.pColorBlendState = &mcb;
+		mgpi.layout = scorchLayout;
+		VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &mgpi, nullptr, &scorchPipe));
+		vkDestroyShaderModule (ctx->device, mvs, nullptr);
+		vkDestroyShaderModule (ctx->device, mfs, nullptr);
+	}
 	return true;
 }
 
@@ -454,6 +494,8 @@ void PlumeRenderer::Shutdown ()
 	vkDestroySampler (ctx->device, clampSampler, nullptr);
 	vkDestroySampler (ctx->device, repeatSampler, nullptr);
 	ctx->DestroyBuffer (buf);
+	if (scorchPipe) vkDestroyPipeline (ctx->device, scorchPipe, nullptr);
+	if (scorchLayout) vkDestroyPipelineLayout (ctx->device, scorchLayout, nullptr);
 	if (shimmerPipe) vkDestroyPipeline (ctx->device, shimmerPipe, nullptr);
 	if (shimmerLayout) vkDestroyPipelineLayout (ctx->device, shimmerLayout, nullptr);
 	if (shimmerPool) vkDestroyDescriptorPool (ctx->device, shimmerPool, nullptr);
@@ -617,7 +659,7 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 				VECTOR3 va = toView (a), vb = toView (b);
 				double segLen = length (vb - va), t;
 				VECTOR3 n;
-				if (segLen > 0.0 && rayCast (owner, va, (vb - va) / segLen, segLen, t, n)) {
+				if (segLen > 0.0 && rayCast (owner, va, (vb - va) / segLen, segLen, t, n, nullptr)) {
 					VECTOR3 q = va + (vb - va) * (t / segLen) - p.pos;
 					VECTOR3 hn = _V(dotp (n, ex), dotp (n, ey), dotp (n, ez));
 					if (dotp (hn, b - a) > 0.0) hn = -hn; // (facing the jet)
@@ -759,6 +801,60 @@ void PlumeRenderer::Draw (VkDescriptorSet frameSet, VkDescriptorSet atmSet, VkTe
 		memcpy (vb.ptr, en->box, sizeof(en->box));
 		vkCmdBindVertexBuffers (cmd, 0, 1, &vb.buffer, &vb.offset);
 		vkCmdPushConstants (cmd, layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(uint32_t), &en->index);
+		vkCmdDraw (cmd, 36, 1, 0, 0);
+	}
+}
+
+void PlumeRenderer::Scorch (OBJHANDLE body, const VECTOR3 &gpos, const VECTOR3 &gnormal, double radius, double amount)
+{
+	if (!body || amount <= 0.0) return;
+	VECTOR3 lp, bp;
+	MATRIX3 R;
+	oapiGetGlobalPos (body, &bp);
+	oapiGetRotationMatrix (body, &R);
+	lp = tmul (R, gpos - bp);
+	VECTOR3 ln = tmul (R, gnormal);
+	for (Mark &m : marks)
+		if (m.body == body && length (m.pos - lp) < 0.5 * std::max (m.radius, radius)) {
+			// (the mark moves towards the newer spot, grows and darkens)
+			double w = amount / (m.dark + amount + 1e-6);
+			m.pos = m.pos + (lp - m.pos) * w;
+			m.radius = std::max (m.radius, radius);
+			m.dark = std::min (1.0, m.dark + amount);
+			return;
+		}
+	if (marks.size() >= 128) marks.erase (marks.begin()); // (the oldest)
+	static uint32_t seed = 1;
+	marks.push_back ({ body, lp, unit (ln), radius, std::min (1.0, amount), seed++ });
+}
+
+void PlumeRenderer::DrawScorch (const VECTOR3 &camPos, const MATRIX3 &camRot, VkDescriptorSet frameSet)
+{
+	if (marks.empty() || !prepassView || !scorchPipe) return;
+	VkCommandBuffer cmd = ctx->Cmd ();
+	bool bound = false;
+	OBJHANDLE lastBody = nullptr;
+	VECTOR3 bp{};
+	MATRIX3 R{};
+	for (const Mark &m : marks) {
+		if (m.dark < 0.02) continue;
+		if (m.body != lastBody) {
+			oapiGetGlobalPos (m.body, &bp);
+			oapiGetRotationMatrix (m.body, &R);
+			lastBody = m.body;
+		}
+		VECTOR3 g = bp + mul (R, m.pos);
+		if (length (g - camPos) > 20e3 + m.radius) continue;
+		VECTOR3 c = tmul (camRot, g - camPos), n = tmul (camRot, mul (R, m.normal));
+		if (!bound) {
+			vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, scorchPipe);
+			VkDescriptorSet s2[2] = { frameSet, set };
+			vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, scorchLayout, 0, 2, s2, 0, nullptr);
+			bound = true;
+		}
+		float pc[12] = { (float)c.x, (float)c.y, (float)c.z, (float)m.radius,
+			(float)n.x, (float)n.y, (float)n.z, (float)m.dark, (float)(m.seed % 97) * 0.173f, 0, 0, 0 };
+		vkCmdPushConstants (cmd, scorchLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), pc);
 		vkCmdDraw (cmd, 36, 1, 0, 0);
 	}
 }

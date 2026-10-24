@@ -240,7 +240,7 @@ bool Scene::Init ()
 	particles = std::make_unique<ParticleSystem>();
 	particles->Init (ctx, gc->TexMgr(), frameLayout, atm->SetLayout(), gc->TexMgr()->Layout(), vclouds->ShapeNoiseView (), vclouds->DetailNoiseView ());
 	if (rt->Enabled ()) particles->InitRT (frameLayout, rt->SetLayout(), rt->TextureLayout(), atm->SetLayout());
-	plumes->rayCast = [this](uint32_t owner, const VECTOR3 &vo, const VECTOR3 &vd, double maxDist, double &t, VECTOR3 &vn) {
+	plumes->rayCast = [this](uint32_t owner, const VECTOR3 &vo, const VECTOR3 &vd, double maxDist, double &t, VECTOR3 &vn, int *kind) {
 		VECTOR3 o = camPos + mul (camRot, vo), d = mul (camRot, vd);
 		bool found = false;
 		t = maxDist;
@@ -248,7 +248,10 @@ bool Scene::Init ()
 			if (it.second->Id () == owner) continue;
 			double ti;
 			VECTOR3 ni;
-			if (it.second->RayHit (o, d, t, ti, ni)) t = ti, vn = tmul (camRot, ni), found = true;
+			if (it.second->RayHit (o, d, t, ti, ni)) {
+				t = ti, vn = tmul (camRot, ni), found = true;
+				if (kind) *kind = it.second->LastHitKind ();
+			}
 		}
 		return found;
 	};
@@ -1303,6 +1306,9 @@ void Scene::Render ()
 	VkDescriptorSet fset = FrameSet ();
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &fset, 0, nullptr);
 	for (auto *vo : list) vo->Render (RenderPass::Opaque);
+
+	// scorch marks on the ground (darkening the lit surface)
+	plumes->DrawScorch (camPos, camRot, FrameSet ());
 
 	// volumetric clouds over the opaque scene
 	if (cloudsActive) {

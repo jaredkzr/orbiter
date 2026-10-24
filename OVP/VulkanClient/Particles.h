@@ -57,6 +57,8 @@ public:
 		bool emissive, reentry;
 		bool tinted;          // smoke of a colour (albedo)
 		bool planar;          // the spread is along the surface with the normal -dir
+		bool ballistic;       // falls under gravity (dust)
+		bool cold;            // tinted, but does not rise (dust)
 		float albedo[3];
 	};
 	void Queue (const Emission &e);
@@ -94,6 +96,7 @@ private:
 	std::vector<std::pair<uint32_t, uint32_t>> freeList; // (first, capacity), in blocks of BLOCK
 	std::vector<std::pair<uint32_t, uint32_t>> toClear;  // newly allocated rings
 	double pendingDt = 0.0;
+	float drawBody[12] = {}; // the planet nearby, for drawing: position (camera-relative), velocity, angular velocity
 	VECTOR3 lastCam{};
 	bool haveCam = false;
 	VkSampler noiseSampler = VK_NULL_HANDLE, clampSampler = VK_NULL_HANDLE;

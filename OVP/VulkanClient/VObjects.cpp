@@ -55,8 +55,9 @@ VVessel::VVessel (OBJHANDLE h, Scene *s)
 VVessel::~VVessel ()
 {
 	ParticleSystem *sys = scene->Particles ();
-	for (auto &r : smoke)
-		if (r.sys && r.sys == sys) sys->Free (r.first, r.capacity);
+	for (auto *rings : { &smoke, &dust })
+		for (auto &r : *rings)
+			if (r.sys && r.sys == sys) sys->Free (r.first, r.capacity);
 	// restore animated vertex lists to their default state
 	for (auto &it : vtxListDefaults)
 		std::copy (it.second.begin(), it.second.end(), it.first);
@@ -503,6 +504,7 @@ void VVessel::CollectPlumes (PlumeRenderer &pr)
 		PlumeInfo info{};
 		if (pr.Add (pd, id, &info) >= 0) {
 			EmitSmoke (i, (int)type, pd, info, dt);
+			EmitDust (i, (int)type, pd, dt);
 			PlumeLight pl{ scene->GlobalPos (info.lightPos), { info.lightCol[0], info.lightCol[1], info.lightCol[2] }, info.lightArea };
 			plumeLights.push_back (pl);
 		}
@@ -521,12 +523,7 @@ void VVessel::EmitSmoke (DWORD idx, int type, const PlumeDraw &pd, const PlumeIn
 	double t = c.smokeAir1 > c.smokeAir0 ? std::clamp ((air - c.smokeAir0) / (c.smokeAir1 - c.smokeAir0), 0.0, 1.0) : (air > c.smokeAir0 ? 1.0 : 0.0);
 	double fade = c.smokeOpacity * t * t * (3.0 - 2.0 * t) * pd.level;
 	if (fade < 0.01 || dt <= 0.0) { r.havePrev = false; return; }
-	if (r.sys != sys) { // (the pool belongs to the scene)
-		r = SmokeRing{};
-		double want = 250.0 * sys->density * c.smokeLife * 1.2;
-		if (!sys->Allocate ((uint32_t)std::min (want, 65536.0), r.first, r.capacity)) return;
-		r.sys = sys;
-	}
+	if (!EnsureRing (r, 250.0, c.smokeLife)) return;
 	// the smoke leaves the end of the flame, or spreads from the surface the
 	// jet meets
 	bool atSurface = info.hit && info.coverage > 0.5;
@@ -545,6 +542,13 @@ void VVessel::EmitSmoke (DWORD idx, int type, const PlumeDraw &pd, const PlumeIn
 	r.accum += rate * dt;
 	uint32_t n = (uint32_t)r.accum;
 	r.accum -= n;
+	bool rcs = type == (int)PlumeType::RCS;
+	if (rcs) { // (vapour: a few puffs, expanding fast and thinning out within a second)
+		r.accum -= n;
+		r.accum += 60.0 * D * pd.level * dt;
+		n = (uint32_t)r.accum;
+		r.accum -= n;
+	}
 	if (!r.havePrev) r.prev = src - vel * dt;
 	if (n) {
 		ParticleSystem::Emission e{};
@@ -558,6 +562,11 @@ void VVessel::EmitSmoke (DWORD idx, int type, const PlumeDraw &pd, const PlumeIn
 		e.lifetime = c.smokeLife, e.dt = dt;
 		e.size = size, e.growth = 0.4 * size + 2.0 * sizeScale;
 		e.alpha = fade * std::min (1.0, 1.3 / (D * sizeScale * sizeScale));
+		if (rcs) {
+			e.v0 = 25.0, e.spread = 18.0;
+			e.size = 0.4 * sizeScale, e.growth = 7.0 * sizeScale;
+			e.alpha = 0.25 * pd.level;
+		}
 		e.slowdown = atSurface ? 0.8 : ParticleSystem::ExhaustDrag (pd.airDensity);
 		e.first = r.first, e.capacity = r.capacity, e.head = r.head, e.count = std::min (n, r.capacity);
 		e.tinted = true;
@@ -571,14 +580,128 @@ void VVessel::EmitSmoke (DWORD idx, int type, const PlumeDraw &pd, const PlumeIn
 	r.havePrev = true;
 }
 
+bool VVessel::EnsureRing (SmokeRing &r, double rate, double life)
+{
+	ParticleSystem *sys = scene->Particles ();
+	if (r.sys == sys) return true;
+	r = SmokeRing{}; // (the pool belongs to the scene)
+	double want = rate * sys->density * life * 1.2;
+	if (!sys->Allocate ((uint32_t)std::min (want, 65536.0), r.first, r.capacity)) return false;
+	r.sys = sys;
+	return true;
+}
+
+namespace {
+	// colour of dust thrown up from the surface of a body (fine dust is
+	// brighter than the surface); spray on water
+	void DustColour (OBJHANDLE hp, float c[3])
+	{
+		char name[64];
+		oapiGetObjectName (hp, name, 64);
+		struct { const char *name; float c[3]; } tab[] = {
+			{ "Earth", { 0.62f, 0.55f, 0.45f } }, { "Moon", { 0.52f, 0.51f, 0.49f } },
+			{ "Mars", { 0.66f, 0.45f, 0.31f } }, { "Mercury", { 0.45f, 0.44f, 0.42f } },
+			{ "Venus", { 0.60f, 0.50f, 0.38f } }, { "Titan", { 0.50f, 0.40f, 0.28f } } };
+		for (auto &t : tab)
+			if (!strcmp (name, t.name)) { for (int k = 0; k < 3; k++) c[k] = t.c[k]; return; }
+		c[0] = c[1] = c[2] = 0.5f;
+	}
+}
+
+void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
+{
+	ParticleSystem *sys = scene->Particles ();
+	PlumeRenderer *pr = scene->Plumes ();
+	if (idx >= dust.size()) dust.resize (idx + 1);
+	SmokeRing &r = dust[idx];
+	// a jet stirs up the ground within a distance growing with its thrust
+	double thrust = pd.thrust * pd.level;
+	if (!sys || !sys->enabled || !pr || !pr->rayCast || dt <= 0.0 || thrust < 1e3 ||
+		type == (int)PlumeType::RCS || type == (int)PlumeType::Ion) { r.havePrev = false; return; }
+	double reach = 2.5 * sqrt (thrust / 1e3);
+	double t;
+	VECTOR3 vn;
+	int kind = 2;
+	if (!pr->rayCast (id, pd.pos, unit (pd.dir), reach, t, vn, &kind) || kind == 2) { r.havePrev = false; return; }
+	double strength = (1.0 - t / reach) * (1.0 - t / reach);
+	OBJHANDLE hp = vessel->GetSurfaceRef ();
+	if (!hp || strength < 0.02) { r.havePrev = false; return; }
+	VECTOR3 hit = scene->GlobalPos (pd.pos + unit (pd.dir) * t);
+	VECTOR3 n = scene->GlobalDir (vn);
+	// the jet scorches the ground (or a pad) where it is still hot: close to
+	// the nozzle, darkening over seconds of firing
+	double hot = std::clamp (1.0 - t / (0.25 * reach), 0.0, 1.0);
+	bool onWater = false;
+	{
+		VECTOR3 l;
+		oapiGlobalToLocal (hp, &hit, &l);
+		double rl = length (l);
+		char nm[64];
+		oapiGetObjectName (hp, nm, 64);
+		onWater = kind == 0 && !strcmp (nm, "Earth") &&
+			oapiSurfaceElevation (hp, atan2 (l.z, l.x), asin (std::clamp (l.y / rl, -1.0, 1.0))) <= 0.0;
+	}
+	if (hot > 0.0 && !onWater)
+		pr->Scorch (hp, hit, n, std::max (1.0, 0.12 * reach) * (0.7 + 0.3 * hot), 0.08 * hot * hot * dt);
+	if (kind != 0) { r.havePrev = false; return; } // (no dust from pads)
+	// water: spray instead of dust (the sea's surface is at elevation 0)
+	VECTOR3 loc;
+	oapiGlobalToLocal (hp, &hit, &loc);
+	double rad = length (loc);
+	double elev = oapiSurfaceElevation (hp, atan2 (loc.z, loc.x), asin (std::clamp (loc.y / rad, -1.0, 1.0)));
+	char name[64];
+	oapiGetObjectName (hp, name, 64);
+	bool water = !strcmp (name, "Earth") && elev <= 0.0;
+	bool air = pd.ambientPressure > 100.0;
+
+	double life = air ? (water ? 3.0 : 10.0) : 5.0;
+	if (!EnsureRing (r, 250.0, life)) return;
+	double D = sys->density, sizeScale = std::pow (D, -1.0 / 3.0);
+	double radial = air ? 6.0 + 18.0 * strength : 30.0 + 70.0 * strength; // [m/s]
+	VECTOR3 vel;
+	vessel->GetGlobalVel (vel);
+	VECTOR3 src = hit + n * 0.3;
+	if (!r.havePrev) r.prev = src;
+	r.accum += (air ? 120.0 : 250.0) * D * std::min (1.0, 0.3 + strength) * dt;
+	uint32_t cnt = (uint32_t)r.accum;
+	r.accum -= cnt;
+	if (cnt) {
+		ParticleSystem::Emission e{};
+		e.p0 = r.prev, e.p1 = src;
+		// (thrown up from the ground, at rest with it: the vessel's velocity,
+		// close enough near the ground)
+		e.vel = vel;
+		e.dir = -n;
+		e.v0 = (air ? 0.12 : 0.025) * radial; // (low angles; in vacuum they would arc far)
+		e.spread = 2.0 * radial;
+		e.planar = true;
+		e.lifetime = life, e.dt = dt;
+		double size = air ? 4.0 : 0.6;
+		e.size = size * sizeScale, e.growth = (air ? 2.5 : 0.2) * sizeScale;
+		e.alpha = (air ? 0.22 : 0.45) * strength * std::min (1.0, 1.3 / (D * sizeScale * sizeScale));
+		e.slowdown = air ? 2.0 : 0.0;
+		e.first = r.first, e.capacity = r.capacity, e.head = r.head, e.count = std::min (cnt, r.capacity);
+		e.tinted = true, e.cold = true, e.ballistic = true;
+		if (water) e.albedo[0] = e.albedo[1] = e.albedo[2] = 0.95f;
+		else DustColour (hp, e.albedo);
+		sys->Queue (e);
+		r.head = (r.head + e.count) % r.capacity;
+		r.lastEmit = oapiGetSimTime ();
+		r.life = life;
+	}
+	r.prev = src;
+	r.havePrev = true;
+}
+
 void VVessel::DrawParticles ()
 {
 	ParticleSystem *sys = scene->Particles ();
 	if (!sys) return;
 	double simt = oapiGetSimTime ();
-	for (const SmokeRing &r : smoke)
-		if (r.sys == sys && simt - r.lastEmit < 1.5 * r.life + 0.1)
-			sys->Draw (r.first, r.capacity, sys->SmokeTexture (), false, scene->FrameSet ());
+	for (auto *rings : { &smoke, &dust })
+		for (const SmokeRing &r : *rings)
+			if (r.sys == sys && simt - r.lastEmit < 1.5 * r.life + 0.1)
+				sys->Draw (r.first, r.capacity, sys->SmokeTexture (), false, scene->FrameSet ());
 }
 
 void VVessel::RenderExhaust ()
@@ -903,7 +1026,7 @@ bool VPlanet::RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double
 	for (auto &b : bases) {
 		double tb;
 		VECTOR3 nb;
-		if (b->RayHit (o, d, t, tb, nb)) t = tb, n = nb, found = true;
+		if (b->RayHit (o, d, t, tb, nb)) t = tb, n = nb, found = true, lastHitKind = 1;
 	}
 	// the terrain: the ray's altitude over the surface elevation
 	auto alt = [this](const VECTOR3 &p) {
@@ -927,6 +1050,7 @@ bool VPlanet::RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double
 			}
 			t = 0.5 * (lo + hi);
 			n = unit (o + d * t - gpos); // (the local vertical)
+			lastHitKind = 0;
 			return true;
 		}
 		tPrev = ti;

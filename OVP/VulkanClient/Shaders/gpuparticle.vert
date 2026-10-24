@@ -22,6 +22,9 @@ layout(push_constant) uniform Draw {
 	uint flags;   // 1: emissive
 	float alpha;  // opacity factor
 	float pad;
+	vec4 bodyPos; // the planet nearby (camera-relative), w: present
+	vec4 bodyVel; // its velocity (global frame)
+	vec4 omega;   // its angular velocity (global frame)
 } pc;
 
 layout(location = 0) out vec2 vUV;
@@ -51,8 +54,32 @@ void main ()
 	uint hs = Hash (slot * 2654435761u);
 	float ang = float (hs & 0xffffu) / 65536.0 * 6.2831853 + age * (float ((hs >> 16) & 0xffu) / 255.0 - 0.5) * 0.6;
 	vec2 c = vec2 (float (gl_VertexIndex & 1), float (gl_VertexIndex >> 1)) * 2.0 - 1.0;
-	vec2 r = vec2 (cos (ang) * c.x - sin (ang) * c.y, sin (ang) * c.x + cos (ang) * c.y);
-	vec3 pos = vp + vec3 (r * h, 0.0);
+	vec2 r = vec2 (cos (ang) * c.x - sin (ang) * c.y, sin (ang) * c.x + cos (ang) * c.y) * h;
+	if ((flags & 32u) != 0u && pc.bodyPos.w > 0.5) {
+		// thrown dust: streaks along its motion over the ground (as seen in
+		// a frame's time)
+		vec3 vrel = velLife.xyz - pc.bodyVel.xyz - cross (posAge.xyz - pc.bodyPos.xyz, pc.omega.xyz);
+		vec3 vv = transpose (mat3 (frame.viewToGlobal)) * vrel;
+		vec3 n = normalize (vp);
+		vec3 sv = vv - n * dot (vv, n);
+		float len = length (sv);
+		if (len > 1e-3) {
+			vec3 ax = sv / len, ay = normalize (cross (n, ax));
+			float l = h + 0.05 * len;
+			a *= h / l; // (the same material spread along the streak)
+			vec3 pos3 = vp + ax * (c.x * l) + ay * (c.y * h);
+			gl_Position = frame.proj * vec4 (pos3, 1.0);
+			vec2 q = vec2 (float (flags & 1u), float ((flags >> 1) & 1u)) * 0.5;
+			vUV = q + (c * 0.5 + 0.5) * 0.5;
+			vPosView = pos3;
+			vSize = h;
+			vec3 col = pt.light * 0.9 + frame.ambient.rgb;
+			col *= vec3 (float ((flags >> 8) & 0xffu), float ((flags >> 16) & 0xffu), float (flags >> 24)) / 255.0;
+			vColor = vec4 (col, a);
+			return;
+		}
+	}
+	vec3 pos = vp + vec3 (r, 0.0);
 	gl_Position = frame.proj * vec4 (pos, 1.0);
 	vec2 q = vec2 (float (flags & 1u), float ((flags >> 1) & 1u)) * 0.5;
 	vUV = q + (c * 0.5 + 0.5) * 0.5;

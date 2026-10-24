@@ -14,6 +14,7 @@ layout(push_constant) uniform Draw {
 	uint flags;   // 1: emissive
 	float alpha;
 	float pad;
+	vec4 bodyPos, bodyVel, omega; // (vertex shader)
 } pc;
 
 layout(location = 0) in vec2 vUV;

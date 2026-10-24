@@ -99,6 +99,8 @@ set(SHADER_SRC
 	Shaders/plume.vert
 	Shaders/plume.frag
 	Shaders/shimmer.frag
+	Shaders/scorch.vert
+	Shaders/scorch.frag
 	Shaders/particle_emit.comp
 	Shaders/particle_update.comp
 	Shaders/particle_update_rt.comp

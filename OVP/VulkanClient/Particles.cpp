@@ -221,7 +221,7 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 
 	// drawing: quads (triangle strips) from the pool, premultiplied or additive,
 	// with the reactive mask
-	drawLayout = layoutOf ({ frameLayout, setLayout, texLayout }, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 16);
+	drawLayout = layoutOf ({ frameLayout, setLayout, texLayout }, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 64);
 	VkShaderModule vs = ctx->CreateShaderModule (spv_gpuparticle_vert, spv_gpuparticle_vert_size);
 	VkShaderModule fs = ctx->CreateShaderModule (spv_gpuparticle_frag, spv_gpuparticle_frag_size);
 	VkPipelineShaderStageCreateInfo stages[2] = {
@@ -415,6 +415,7 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 		double rad = length (loc);
 		if (rad > 0.0)
 			up.ground[0] = (float)(oapiGetSize (hp) + oapiSurfaceElevation (hp, atan2 (loc.z, loc.x), asin (std::clamp (loc.y / rad, -1.0, 1.0))));
+		up.ground[1] = (float)(GGRAV * oapiGetMass (hp) / (oapiGetSize (hp) * oapiGetSize (hp)));
 		double T = oapiGetPlanetPeriod (hp);
 		if (T != 0.0) {
 			MATRIX3 R;
@@ -424,6 +425,9 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 		}
 	}
 	up.bodyVel[3] = (float)fmod (simt, 1e4);
+	for (int k = 0; k < 3; k++)
+		drawBody[k] = up.bodyPos[k], drawBody[4 + k] = up.bodyVel[k], drawBody[8 + k] = up.omega[k];
+	drawBody[3] = up.bodyPos[3] > 0.0f ? 1.0f : 0.0f;
 	up.omega[3] = (float)CAPACITY;
 	for (int k = 0; k < 3; k++) {
 		double q = (&camPos.x)[k] * NOISE_SCALE;
@@ -477,7 +481,8 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 			memcpy (g.p0, f0, 16), memcpy (g.p1, f1, 16), memcpy (g.vel, fv, 16), memcpy (g.dir, fd, 16), memcpy (g.shape, fs, 16);
 			uint32_t count = std::min (e.count, e.capacity);
 			g.slab[0] = e.first, g.slab[1] = e.capacity, g.slab[2] = e.head, g.slab[3] = count;
-			g.misc[0] = seed++, g.misc[1] = (e.emissive ? 1u : 0u) | (e.reentry ? 2u : 0u) | (e.tinted ? 4u : 0u) | (e.planar ? 8u : 0u);
+			g.misc[0] = seed++, g.misc[1] = (e.emissive ? 1u : 0u) | (e.reentry ? 2u : 0u) | (e.tinted ? 4u : 0u) | (e.planar ? 8u : 0u)
+				| (e.ballistic ? 16u : 0u) | (e.cold ? 32u : 0u);
 			uint32_t rgb = 0;
 			for (int k = 0; k < 3; k++) rgb |= (uint32_t)std::lround (std::clamp (e.albedo[k], 0.0f, 1.0f) * 255.0f) << (8 * k);
 			g.misc[2] = rgb, g.misc[3] = 0;
@@ -518,7 +523,8 @@ void ParticleSystem::Draw (uint32_t first, uint32_t capacity, VkTexture *tex, bo
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, emissive ? drawAdd : drawBlend);
 	VkDescriptorSet s[3] = { frameSet, sets[ctx->FrameIndex ()], tex->set };
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawLayout, 0, 3, s, 0, nullptr);
-	struct { uint32_t first, flags; float alpha, pad; } pc{ first, emissive ? 1u : 0u, 1.0f, 0.0f };
+	struct { uint32_t first, flags; float alpha, pad; float body[12]; } pc{ first, emissive ? 1u : 0u, 1.0f, 0.0f, {} };
+	memcpy (pc.body, drawBody, sizeof(drawBody));
 	vkCmdPushConstants (cmd, drawLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 	vkCmdDraw (cmd, 4, capacity, 0, 0);
 }
