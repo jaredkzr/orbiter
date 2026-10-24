@@ -46,8 +46,10 @@ float ValueNoise (vec3 p, float cell, int period)
 	f = f * f * (3.0 - 2.0 * f);
 	float n[8];
 	for (int k = 0; k < 8; k++) {
-		ivec3 c = (i + ivec3(k & 1, (k >> 1) & 1, k >> 2)) % period;
-		n[k] = Hash(c + period);
+		// % is undefined for negative operands in GLSL: wrap explicitly
+		ivec3 c = i + ivec3(k & 1, (k >> 1) & 1, k >> 2);
+		c = c - period * ivec3(floor(vec3(c) / float(period)));
+		n[k] = Hash(c);
 	}
 	return mix(mix(mix(n[0], n[1], f.x), mix(n[2], n[3], f.x), f.y),
 	           mix(mix(n[4], n[5], f.x), mix(n[6], n[7], f.x), f.y), f.z);
