@@ -2,13 +2,20 @@
 // Licensed under the MIT License
 
 // =======================================================================
-// Particle streams (exhaust plumes, contrails, reentry plasma)
+// Particle streams (exhaust, contrails, reentry plasma), simulated on the
+// GPU: each stream owns a ring of particles in a shared pool. The CPU
+// decides how many particles a stream emits along its source's path in a
+// time step (as add-ons define them, PARTICLESTREAMSPEC); compute passes
+// create them and move them (drag towards the air, turbulence), and light
+// them (sunlight through the atmosphere, planet and vessel shadows). More,
+// smaller particles than specified are emitted (ORBITER_VK_PARTICLE_DENSITY).
 // =======================================================================
 
 #ifndef __PARTICLES_H
 #define __PARTICLES_H
 
 #include "GraphicsAPI.h"
+#include "VkContext.h"
 #include <random>
 #include <vector>
 
@@ -17,9 +24,74 @@ class Scene;
 class TextureManager;
 
 /// Billboard vertex: view-space position, texture coordinates, linear colour
+/// (flame billboards, beacons)
 struct PVtx {
 	float x, y, z, u, v;
 	float r, g, b, a;
+};
+
+class ParticleSystem {
+public:
+	static constexpr uint32_t CAPACITY = 1u << 18; ///< particles in the pool
+	static constexpr uint32_t BLOCK = 256;         ///< allocation unit
+
+	bool Init (vkc::Context *ctx, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout,
+		VkDescriptorSetLayout texLayout, VkImageView shapeNoise, VkImageView detailNoise);
+	/// ray traced shadows (layouts of the ray tracing scene and its textures)
+	void InitRT (VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout rtScene, VkDescriptorSetLayout rtTex, VkDescriptorSetLayout atmLayout);
+	void Shutdown ();
+
+	/// A ring of particles in the pool (first particle, capacity); false if full
+	bool Allocate (uint32_t want, uint32_t &first, uint32_t &capacity);
+	void Free (uint32_t first, uint32_t capacity);
+
+	/// particles emitted by a stream in a time step (global frame)
+	struct Emission {
+		VECTOR3 p0, p1;      // source at the start and the end of the step
+		VECTOR3 vel, dir;    // source velocity, direction opposite to the emission
+		double v0, spread;   // emission speed, velocity spread [m/s]
+		double lifetime, dt;
+		double size, growth, alpha, slowdown;
+		uint32_t first, capacity, head, count;
+		bool emissive, reentry;
+	};
+	void Queue (const Emission &e);
+	/// simulation time passed (clbkUpdate)
+	void AddTime (double dt) { pendingDt += dt; }
+
+	/// Move, emit and light the particles (outside rendering scopes, after
+	/// the ray tracing scene was built); rt: sets of the ray tracing scene
+	/// and textures (or null)
+	void Simulate (const VECTOR3 &camPos, VkDescriptorSet frameSet, VkDescriptorSet atmSet,
+		const VkDescriptorSet *rt, double simt);
+	void SetPrepass (VkImageView prepass);
+	/// Draw a stream's particles (scene with reactive mask)
+	void Draw (uint32_t first, uint32_t capacity, VkTexture *tex, bool emissive, VkDescriptorSet frameSet);
+
+	bool enabled = true;
+	float density = 4.0f; ///< particles per specified particle (smaller ones)
+
+private:
+	struct GpuEmission;
+	struct UpdateParams;
+	vkc::Context *ctx = nullptr;
+	vkc::Buffer pool;
+	vkc::Buffer emitBuf[vkc::FRAMES_IN_FLIGHT];
+	std::vector<Emission> queued;
+	std::vector<std::pair<uint32_t, uint32_t>> freeList; // (first, capacity), in blocks of BLOCK
+	std::vector<std::pair<uint32_t, uint32_t>> toClear;  // newly allocated rings
+	double pendingDt = 0.0;
+	VECTOR3 lastCam{};
+	bool haveCam = false;
+	VkSampler noiseSampler = VK_NULL_HANDLE, clampSampler = VK_NULL_HANDLE;
+	VkImageView shapeView = VK_NULL_HANDLE, detailView = VK_NULL_HANDLE, prepassView = VK_NULL_HANDLE;
+	VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
+	VkDescriptorPool dpool = VK_NULL_HANDLE;
+	VkDescriptorSet sets[vkc::FRAMES_IN_FLIGHT] = {};
+	VkPipelineLayout emitLayout = VK_NULL_HANDLE, updateLayout = VK_NULL_HANDLE, updateRTLayout = VK_NULL_HANDLE, drawLayout = VK_NULL_HANDLE;
+	VkPipeline emitPipe = VK_NULL_HANDLE, updatePipe = VK_NULL_HANDLE, updateRTPipe = VK_NULL_HANDLE;
+	VkPipeline drawBlend = VK_NULL_HANDLE, drawAdd = VK_NULL_HANDLE;
+	static constexpr uint32_t MAX_EMISSIONS = 4096;
 };
 
 class VkParticleStream : public oapi::ParticleStream {
@@ -29,36 +101,35 @@ public:
 	VkParticleStream (oapi::GraphicsClient *gc, TextureManager *texmgr, PARTICLESTREAMSPEC *pss, Kind kind);
 	~VkParticleStream ();
 
-	/// Advance the particles by the simulation step dt [s]
+	/// Emit the particles of the simulation step dt [s]
 	void Update (double dt);
-	/// Append camera-facing billboards to the scene
+	/// Draw the particles (scene with reactive mask)
 	void Render (Scene *scene);
 	/// Detached from its source and no particles left: can be deleted
-	bool Expired () const { return !hRef && particles.empty(); }
+	bool Expired () const;
 
 private:
-	struct Particle {
-		VECTOR3 pos, vel;     // global frame
-		double age, life;
-		float alpha0;
-		uint8_t sub;          // texture quadrant
-	};
 	double LevelAlpha (double lvl) const;
 	double AtmAlpha (double rho) const;
+	/// the ring of particles in the pool (allocated when first needed: the
+	/// pool belongs to the scene, which may not exist yet)
+	bool EnsureRing ();
 	bool SourceState (VECTOR3 &pos, VECTOR3 &dir, VECTOR3 &vel, double &lvl);
 
 	PARTICLESTREAMSPEC spec;
 	Kind kind;
 	TextureManager *texmgr;
+	class VulkanClient *client;
+	ParticleSystem *sys = nullptr; // (that of the ring)
 	VkTexture *tex = nullptr;
-	std::vector<Particle> particles;
+	uint32_t first = 0, capacity = 0, head = 0; // ring in the pool
+	bool allocated = false;
+	double lastEmit = -1e30, simTime = 0.0;     // [s]
 	std::mt19937 rng;
 	double emitAccum = 0.0;
 	bool havePrev = false;
 	VECTOR3 prevSrc{};
 	OBJHANDLE hAtmRef = nullptr;  // body whose atmosphere slows the particles
-	VECTOR3 sunDir{ 1, 0, 0 };    // for diffuse lighting
-	float light = 1.0f;
 	double reentryLevel = 0.0;
 };
 

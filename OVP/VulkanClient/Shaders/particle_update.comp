@@ -1,0 +1,9 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// GPU particles: motion and lighting (screen-space lighting only)
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "particle_update.glsl"

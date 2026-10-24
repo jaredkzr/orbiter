@@ -1,0 +1,10 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// GPU particles: motion and lighting, with ray traced shadows of vessels and bases
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#define RT
+#include "particle_update.glsl"

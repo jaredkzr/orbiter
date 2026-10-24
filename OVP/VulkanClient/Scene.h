@@ -137,6 +137,8 @@ public:
 	/// draw view-space billboard triangles (particles, exhaust flames)
 	void DrawBillboards (VkTexture *tex, bool additive, const struct PVtx *v, size_t n);
 	VkTexture *DefaultExhaustTex () const { return exhaustTex; }
+	/// GPU particles of the particle streams
+	class ParticleSystem *Particles () { return particles.get(); }
 	/// engine plume volumes (null: billboards)
 	class PlumeRenderer *Plumes () { return plumes && plumes->enabled ? plumes.get() : nullptr; }
 	/// reactive mask of this frame (shader-read layout after Render): where
@@ -205,6 +207,7 @@ private:
 	std::unique_ptr<class FsrUpscaler> fsr;
 	std::unique_ptr<class VolumetricClouds> vclouds;
 	std::unique_ptr<PlumeRenderer> plumes;
+	std::unique_ptr<class ParticleSystem> particles;
 	vkc::Image reactive, reactiveMS; // (multisampled: drawn to, resolved into reactive)
 	uint32_t reactiveGen = ~0u;
 	void EnsureReactiveMask ();

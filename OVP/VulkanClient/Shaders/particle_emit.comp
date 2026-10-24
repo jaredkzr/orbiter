@@ -1,0 +1,42 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// GPU particles: new particles along each stream's source path of the
+// step (one emission per workgroup row), written into the stream's ring
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 64) in;
+
+#include "particles.glsl"
+layout(set = 0, binding = 1, std430) readonly buffer Emissions { Emission emissions[]; };
+
+layout(push_constant) uniform Params {
+	uint count;   // emissions
+} pc;
+
+void main ()
+{
+	uint e = gl_WorkGroupID.y;
+	if (e >= pc.count) return;
+	Emission em = emissions[e];
+	uint i = gl_GlobalInvocationID.x;
+	if (i >= em.slab.w) return;
+	uint s = ParticleHash (em.misc.x * 7919u + i * 104729u);
+	float dt = em.dir.w;
+	// emission time within the step, velocity, and a spot within the source
+	float f = (float (i) + ParticleRand (s)) / float (em.slab.w);
+	vec3 dv = (vec3 (ParticleRand (s), ParticleRand (s), ParticleRand (s)) - 0.5) * em.p1.w;
+	vec3 v = em.vel.xyz - em.dir.xyz * em.p0.w + dv;
+	vec3 jitter = (vec3 (ParticleRand (s), ParticleRand (s), ParticleRand (s)) - 0.5) * em.shape.x;
+	Particle p;
+	p.posAge.xyz = mix (em.p0.xyz, em.p1.xyz, f) + v * ((1.0 - f) * dt) + jitter;
+	p.posAge.w = (1.0 - f) * dt;
+	p.velLife = vec4 (v, max (0.01, em.vel.w * (0.5 + ParticleRand (s))));
+	p.shape = em.shape;
+	uint flags = (em.misc.y & 2u) != 0u ? 1u : (ParticleHash (s) & 3u);
+	if ((em.misc.y & 1u) != 0u) flags |= 4u;
+	p.light = vec4 (1.0, 1.0, 1.0, uintBitsToFloat (flags));
+	particles[em.slab.x + (em.slab.z + i) % em.slab.y] = p;
+}

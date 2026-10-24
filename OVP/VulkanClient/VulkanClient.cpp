@@ -63,9 +63,9 @@ void VulkanClient::Teardown ()
 {
 	// Must run before process exit: once the driver library has been
 	// finalised, Vulkan objects can no longer be destroyed.
+	if (ready) DeleteStreams (true); // (their particles live in the scene's pool)
 	scene.reset();
 	if (!ready) return;
-	DeleteStreams (true);
 	ctx.Drain();       // deferred releases still refer to texture manager resources
 	r2d->Shutdown();
 	r2d.reset();
@@ -175,6 +175,7 @@ void VulkanClient::clbkUpdate (bool running)
 	if (window) input::ProcessEvents (window);
 	if (running) {
 		double dt = oapiGetSimStep ();
+		if (scene) scene->Particles ()->AddTime (dt);
 		for (auto *ps : streams) ps->Update (dt);
 		DeleteStreams (false);
 	}
@@ -431,6 +432,11 @@ oapi::ParticleStream *VulkanClient::clbkCreateReentryStream (PARTICLESTREAMSPEC 
 	ps->Attach (hVessel, _V(0, 0, 0), _V(0, 0, 0), nullptr);
 	streams.push_back (ps);
 	return ps;
+}
+
+ParticleSystem *VulkanClient::Particles () const
+{
+	return scene ? scene->Particles () : nullptr;
 }
 
 void VulkanClient::DeleteStreams (bool all)

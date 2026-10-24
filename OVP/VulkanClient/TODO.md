@@ -35,8 +35,19 @@ Known gaps and limitations, to be addressed later.
   large; the bloom threshold should become exposure-relative.
 
 ## Particle streams
-- Reentry plasma is implemented but has not been verified visually at peak
-  heating.
+- GPU particles (Particles.cpp, particle_*.comp, gpuparticle.*): each
+  stream owns a ring in a pool of 262144; emission counts are decided on
+  the CPU as before (PARTICLESTREAMSPEC), compute passes emit, move (air
+  drag, turbulence from the noise volumes, camera-relative positions) and
+  light them (atmosphere transmittance, planet shadow, RT vessel shadows).
+  ORBITER_VK_PARTICLES=0 hides them, ORBITER_VK_PARTICLE_DENSITY (default
+  4) sets how many smaller particles replace one.
+- No self-shadowing of smoke, no local lights on particles yet (engine
+  light), not sorted within a stream (premultiplied blending hides most
+  of it), not in reflections or the probe.
+- Exhaust gas follows the add-on's atmslowdown; with low values it keeps
+  the vessel's velocity for a while (e.g. DG hover puffs at speed).
+- Reentry plasma not verified visually at peak heating.
 
 ## Surface bases
 - Hull heating glow uses a stagnation-point flux estimate (1 m nose radius)

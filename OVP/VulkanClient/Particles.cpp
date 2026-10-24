@@ -3,34 +3,378 @@
 
 #include "Particles.h"
 #include "Scene.h"
+#include "VulkanClient.h"
 #include "VkTexture.h"
 #include "VesselAPI.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+
+#include "particle_emit.comp.h"
+#include "particle_update.comp.h"
+#include "particle_update_rt.comp.h"
+#include "gpuparticle.vert.h"
+#include "gpuparticle.frag.h"
 
 namespace {
+	constexpr size_t PARTICLE_SIZE = 64; // (Particle in particles.glsl)
+	constexpr double NOISE_SCALE = 0.08; // turbulence noise coordinates per metre (eddies of about 12 m)
+}
 
-	constexpr size_t MAX_PARTICLES = 5000;
+// ======================================================================
+// ParticleSystem
 
-	OBJHANDLE FindSun ()
-	{
-		for (DWORD i = 0; i < oapiGetGbodyCount(); i++) {
-			OBJHANDLE h = oapiGetGbodyByIndex (i);
-			if (oapiGetObjectType (h) == OBJTP_STAR) return h;
+struct ParticleSystem::GpuEmission { // particles.glsl
+	float p0[4], p1[4], vel[4], dir[4], shape[4];
+	uint32_t slab[4], misc[4];
+};
+
+struct ParticleSystem::UpdateParams { // particle_update.glsl
+	float camShift[4], bodyPos[4], bodyVel[4], omega[4], noiseOrg[4];
+};
+
+bool ParticleSystem::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout,
+	VkDescriptorSetLayout texLayout, VkImageView shapeNoise, VkImageView detailNoise)
+{
+	ctx = c;
+	shapeView = shapeNoise, detailView = detailNoise;
+	if (const char *e = getenv ("ORBITER_VK_PARTICLES")) enabled = atoi (e) != 0;
+	if (const char *e = getenv ("ORBITER_VK_PARTICLE_DENSITY")) density = std::clamp ((float)atof (e), 1.0f, 16.0f);
+
+	pool = ctx->CreateBuffer (CAPACITY * PARTICLE_SIZE, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
+	for (auto &b : emitBuf) b = ctx->CreateBuffer (MAX_EMISSIONS * sizeof(GpuEmission), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+	VkBuffer pb = pool.buffer;
+	ctx->ImmediateSubmit ([pb](VkCommandBuffer cmd) {
+		vkCmdFillBuffer (cmd, pb, 0, VK_WHOLE_SIZE, 0); // (lifetime 0: no particles)
+	});
+	freeList.push_back ({ 0, CAPACITY });
+
+	VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+	sci.magFilter = sci.minFilter = VK_FILTER_LINEAR;
+	sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	VK_CHECK(vkCreateSampler (ctx->device, &sci, nullptr, &noiseSampler));
+	sci.magFilter = sci.minFilter = VK_FILTER_NEAREST;
+	sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+	VK_CHECK(vkCreateSampler (ctx->device, &sci, nullptr, &clampSampler));
+
+	// pool, emissions, noise volumes, prepass
+	const VkShaderStageFlags CS = VK_SHADER_STAGE_COMPUTE_BIT;
+	VkDescriptorSetLayoutBinding b[5] = {
+		{ 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS | VK_SHADER_STAGE_VERTEX_BIT, nullptr },
+		{ 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS, nullptr },
+		{ 2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, CS, nullptr },
+		{ 3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, CS, nullptr },
+		{ 4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr } };
+	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+	lci.bindingCount = 5, lci.pBindings = b;
+	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &setLayout));
+	VkDescriptorPoolSize ps[2] = { { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * vkc::FRAMES_IN_FLIGHT },
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 * vkc::FRAMES_IN_FLIGHT } };
+	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+	pci.maxSets = vkc::FRAMES_IN_FLIGHT, pci.poolSizeCount = 2, pci.pPoolSizes = ps;
+	VK_CHECK(vkCreateDescriptorPool (ctx->device, &pci, nullptr, &dpool));
+	VkDescriptorSetLayout ls[vkc::FRAMES_IN_FLIGHT];
+	for (auto &l : ls) l = setLayout;
+	VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+	dai.descriptorPool = dpool, dai.descriptorSetCount = vkc::FRAMES_IN_FLIGHT, dai.pSetLayouts = ls;
+	VK_CHECK(vkAllocateDescriptorSets (ctx->device, &dai, sets));
+	for (uint32_t i = 0; i < vkc::FRAMES_IN_FLIGHT; i++) {
+		VkDescriptorBufferInfo bi[2] = { { pool.buffer, 0, VK_WHOLE_SIZE }, { emitBuf[i].buffer, 0, VK_WHOLE_SIZE } };
+		VkDescriptorImageInfo ii[2] = { { noiseSampler, shapeView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+			{ noiseSampler, detailView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL } };
+		VkWriteDescriptorSet wr[4]{};
+		for (uint32_t k = 0; k < 4; k++) {
+			wr[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			wr[k].dstSet = sets[i], wr[k].dstBinding = k, wr[k].descriptorCount = 1;
+			if (k < 2) wr[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, wr[k].pBufferInfo = &bi[k];
+			else wr[k].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, wr[k].pImageInfo = &ii[k - 2];
 		}
-		return nullptr;
+		vkUpdateDescriptorSets (ctx->device, 4, wr, 0, nullptr);
 	}
 
-	double Smoothstep (double e0, double e1, double x)
-	{
-		double t = std::clamp ((x - e0) / (e1 - e0), 0.0, 1.0);
-		return t * t * (3.0 - 2.0 * t);
-	}
+	auto layoutOf = [this](std::initializer_list<VkDescriptorSetLayout> l, VkShaderStageFlags stages, uint32_t pcSize) {
+		std::vector<VkDescriptorSetLayout> v (l);
+		VkPushConstantRange pcr{ stages, 0, pcSize };
+		VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+		plci.setLayoutCount = (uint32_t)v.size(), plci.pSetLayouts = v.data();
+		plci.pushConstantRangeCount = 1, plci.pPushConstantRanges = &pcr;
+		VkPipelineLayout pl;
+		VK_CHECK(vkCreatePipelineLayout (ctx->device, &plci, nullptr, &pl));
+		return pl;
+	};
+	auto compute = [this](const unsigned char *code, size_t size, VkPipelineLayout l) {
+		VkShaderModule cs = ctx->CreateShaderModule (code, size);
+		VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+		cpi.stage = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, cs, "main" };
+		cpi.layout = l;
+		VkPipeline p;
+		VK_CHECK(vkCreateComputePipelines (ctx->device, VK_NULL_HANDLE, 1, &cpi, nullptr, &p));
+		vkDestroyShaderModule (ctx->device, cs, nullptr);
+		return p;
+	};
+	emitLayout = layoutOf ({ setLayout }, CS, sizeof(uint32_t));
+	updateLayout = layoutOf ({ setLayout, frameLayout, atmLayout }, CS, sizeof(UpdateParams));
+	emitPipe = compute (spv_particle_emit_comp, spv_particle_emit_comp_size, emitLayout);
+	updatePipe = compute (spv_particle_update_comp, spv_particle_update_comp_size, updateLayout);
 
-} // namespace
+	// drawing: quads (triangle strips) from the pool, premultiplied or additive,
+	// with the reactive mask
+	drawLayout = layoutOf ({ frameLayout, setLayout, texLayout }, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 16);
+	VkShaderModule vs = ctx->CreateShaderModule (spv_gpuparticle_vert, spv_gpuparticle_vert_size);
+	VkShaderModule fs = ctx->CreateShaderModule (spv_gpuparticle_frag, spv_gpuparticle_frag_size);
+	VkPipelineShaderStageCreateInfo stages[2] = {
+		{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vs, "main" },
+		{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main" } };
+	VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+	VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+	ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+	VkPipelineViewportStateCreateInfo vps{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+	vps.viewportCount = 1, vps.scissorCount = 1;
+	VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+	rs.polygonMode = VK_POLYGON_MODE_FILL;
+	rs.cullMode = VK_CULL_MODE_NONE;
+	rs.lineWidth = 1.0f;
+	VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+	ms.rasterizationSamples = ctx->sceneSamples;
+	VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+	ds.depthTestEnable = VK_TRUE;
+	ds.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL; // reversed z
+	VkDynamicState dyn[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+	VkPipelineDynamicStateCreateInfo dy{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+	dy.dynamicStateCount = 2, dy.pDynamicStates = dyn;
+	VkFormat formats[2] = { ctx->sceneFormat, VK_FORMAT_R8_UNORM }; // (Scene::REACTIVE_FORMAT)
+	VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+	rci.colorAttachmentCount = 2, rci.pColorAttachmentFormats = formats;
+	rci.depthAttachmentFormat = ctx->depthFormat;
+	for (int additive = 0; additive < 2; additive++) {
+		VkPipelineColorBlendAttachmentState cb[2]{};
+		cb[0].colorWriteMask = 0xF;
+		cb[0].blendEnable = VK_TRUE;
+		cb[0].srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+		cb[0].dstColorBlendFactor = additive ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+		cb[0].colorBlendOp = VK_BLEND_OP_ADD;
+		cb[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+		cb[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+		cb[0].alphaBlendOp = VK_BLEND_OP_ADD;
+		cb[1].colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
+		cb[1].blendEnable = VK_TRUE;
+		cb[1].srcColorBlendFactor = cb[1].dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+		cb[1].colorBlendOp = VK_BLEND_OP_MAX;
+		cb[1].srcAlphaBlendFactor = cb[1].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+		cb[1].alphaBlendOp = VK_BLEND_OP_MAX;
+		VkPipelineColorBlendStateCreateInfo cbs{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+		cbs.attachmentCount = 2, cbs.pAttachments = cb;
+		VkGraphicsPipelineCreateInfo gpi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+		gpi.pNext = &rci;
+		gpi.stageCount = 2, gpi.pStages = stages;
+		gpi.pVertexInputState = &vi;
+		gpi.pInputAssemblyState = &ia;
+		gpi.pViewportState = &vps;
+		gpi.pRasterizationState = &rs;
+		gpi.pMultisampleState = &ms;
+		gpi.pDepthStencilState = &ds;
+		gpi.pColorBlendState = &cbs;
+		gpi.pDynamicState = &dy;
+		gpi.layout = drawLayout;
+		VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, additive ? &drawAdd : &drawBlend));
+	}
+	vkDestroyShaderModule (ctx->device, vs, nullptr);
+	vkDestroyShaderModule (ctx->device, fs, nullptr);
+	return true;
+}
+
+void ParticleSystem::InitRT (VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout rtScene, VkDescriptorSetLayout rtTex, VkDescriptorSetLayout atmLayout)
+{
+	VkDescriptorSetLayout l[5] = { setLayout, frameLayout, rtScene, rtTex, atmLayout };
+	VkPushConstantRange pcr{ VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(UpdateParams) };
+	VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+	plci.setLayoutCount = 5, plci.pSetLayouts = l;
+	plci.pushConstantRangeCount = 1, plci.pPushConstantRanges = &pcr;
+	VK_CHECK(vkCreatePipelineLayout (ctx->device, &plci, nullptr, &updateRTLayout));
+	VkShaderModule cs = ctx->CreateShaderModule (spv_particle_update_rt_comp, spv_particle_update_rt_comp_size);
+	VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+	cpi.stage = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, cs, "main" };
+	cpi.layout = updateRTLayout;
+	VK_CHECK(vkCreateComputePipelines (ctx->device, VK_NULL_HANDLE, 1, &cpi, nullptr, &updateRTPipe));
+	vkDestroyShaderModule (ctx->device, cs, nullptr);
+}
+
+void ParticleSystem::Shutdown ()
+{
+	if (!ctx) return;
+	for (VkPipeline p : { emitPipe, updatePipe, updateRTPipe, drawBlend, drawAdd })
+		if (p) vkDestroyPipeline (ctx->device, p, nullptr);
+	for (VkPipelineLayout l : { emitLayout, updateLayout, updateRTLayout, drawLayout })
+		if (l) vkDestroyPipelineLayout (ctx->device, l, nullptr);
+	vkDestroyDescriptorPool (ctx->device, dpool, nullptr);
+	vkDestroyDescriptorSetLayout (ctx->device, setLayout, nullptr);
+	vkDestroySampler (ctx->device, noiseSampler, nullptr);
+	vkDestroySampler (ctx->device, clampSampler, nullptr);
+	ctx->DestroyBuffer (pool);
+	for (auto &b : emitBuf) ctx->DestroyBuffer (b);
+	ctx = nullptr;
+}
+
+bool ParticleSystem::Allocate (uint32_t want, uint32_t &first, uint32_t &capacity)
+{
+	uint32_t n = std::max (BLOCK, (want + BLOCK - 1) / BLOCK * BLOCK);
+	for (size_t i = 0; i < freeList.size(); i++) {
+		auto &f = freeList[i];
+		if (f.second < n) continue;
+		first = f.first, capacity = n;
+		f.first += n, f.second -= n;
+		if (!f.second) freeList.erase (freeList.begin() + i);
+		toClear.push_back ({ first, capacity });
+		return true;
+	}
+	return false;
+}
+
+void ParticleSystem::Free (uint32_t first, uint32_t capacity)
+{
+	// (particles left in the ring are cleared when it is allocated again)
+	freeList.push_back ({ first, capacity });
+	std::sort (freeList.begin(), freeList.end());
+	std::vector<std::pair<uint32_t, uint32_t>> merged;
+	for (auto &f : freeList) {
+		if (!merged.empty() && merged.back().first + merged.back().second == f.first) merged.back().second += f.second;
+		else merged.push_back (f);
+	}
+	freeList.swap (merged);
+}
+
+void ParticleSystem::Queue (const Emission &e)
+{
+	if (e.count && queued.size() < MAX_EMISSIONS) queued.push_back (e);
+}
+
+void ParticleSystem::SetPrepass (VkImageView prepass)
+{
+	if (prepass == prepassView) return;
+	if (prepassView) vkDeviceWaitIdle (ctx->device); // (the sets may be in use)
+	prepassView = prepass;
+	VkDescriptorImageInfo ii{ clampSampler, prepass, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+	for (VkDescriptorSet s : sets) {
+		VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+		wr.dstSet = s, wr.dstBinding = 4, wr.descriptorCount = 1;
+		wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		wr.pImageInfo = &ii;
+		vkUpdateDescriptorSets (ctx->device, 1, &wr, 0, nullptr);
+	}
+}
+
+void ParticleSystem::Simulate (const VECTOR3 &camPos, VkDescriptorSet frameSet, VkDescriptorSet atmSet,
+	const VkDescriptorSet *rt, double simt)
+{
+	VkCommandBuffer cmd = ctx->Cmd ();
+	uint32_t fi = ctx->FrameIndex ();
+	VkDescriptorSet set = sets[fi];
+	auto barrier = [cmd](VkPipelineStageFlags2 src, VkAccessFlags2 srcA, VkPipelineStageFlags2 dst, VkAccessFlags2 dstA) {
+		VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+		mb.srcStageMask = src, mb.srcAccessMask = srcA, mb.dstStageMask = dst, mb.dstAccessMask = dstA;
+		VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+		dep.memoryBarrierCount = 1, dep.pMemoryBarriers = &mb;
+		vkCmdPipelineBarrier2 (cmd, &dep);
+	};
+	const VkPipelineStageFlags2 CS = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+	const VkAccessFlags2 RW = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+	// the previous frame's drawing is done with the pool
+	barrier (VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | CS, VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
+		VK_PIPELINE_STAGE_2_TRANSFER_BIT | CS, VK_ACCESS_2_TRANSFER_WRITE_BIT | RW);
+	// rings allocated since: no particles
+	for (auto &c : toClear)
+		vkCmdFillBuffer (cmd, pool.buffer, (VkDeviceSize)c.first * PARTICLE_SIZE, (VkDeviceSize)c.second * PARTICLE_SIZE, 0);
+	if (!toClear.empty()) barrier (VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, CS, RW);
+	toClear.clear ();
+
+	// move and light the existing particles
+	UpdateParams up{};
+	VECTOR3 shift = haveCam ? lastCam - camPos : _V(0, 0, 0);
+	lastCam = camPos, haveCam = true;
+	up.camShift[0] = (float)shift.x, up.camShift[1] = (float)shift.y, up.camShift[2] = (float)shift.z;
+	up.camShift[3] = (float)pendingDt;
+	if (OBJHANDLE hp = oapiCameraProxyGbody ()) { // the air of the planet nearby
+		VECTOR3 bp, bv;
+		oapiGetGlobalPos (hp, &bp);
+		oapiGetGlobalVel (hp, &bv);
+		bp -= camPos;
+		up.bodyPos[0] = (float)bp.x, up.bodyPos[1] = (float)bp.y, up.bodyPos[2] = (float)bp.z, up.bodyPos[3] = (float)oapiGetSize (hp);
+		up.bodyVel[0] = (float)bv.x, up.bodyVel[1] = (float)bv.y, up.bodyVel[2] = (float)bv.z;
+		double T = oapiGetPlanetPeriod (hp);
+		if (T != 0.0) {
+			MATRIX3 R;
+			oapiGetRotationMatrix (hp, &R);
+			VECTOR3 w = mul (R, _V(0, 1, 0)) * (PI2 / T);
+			up.omega[0] = (float)w.x, up.omega[1] = (float)w.y, up.omega[2] = (float)w.z;
+		}
+	}
+	up.bodyVel[3] = (float)fmod (simt, 1e4);
+	up.omega[3] = (float)CAPACITY;
+	for (int k = 0; k < 3; k++) {
+		double q = (&camPos.x)[k] * NOISE_SCALE;
+		up.noiseOrg[k] = (float)(q - floor (q));
+	}
+	up.noiseOrg[3] = (float)NOISE_SCALE;
+	pendingDt = 0.0;
+	bool useRT = rt && updateRTPipe;
+	VkPipelineLayout ul = useRT ? updateRTLayout : updateLayout;
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, useRT ? updateRTPipe : updatePipe);
+	if (useRT) {
+		VkDescriptorSet s[5] = { set, frameSet, rt[0], rt[1], atmSet };
+		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, ul, 0, 5, s, 0, nullptr);
+	} else {
+		VkDescriptorSet s[3] = { set, frameSet, atmSet };
+		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, ul, 0, 3, s, 0, nullptr);
+	}
+	vkCmdPushConstants (cmd, ul, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(up), &up);
+	vkCmdDispatch (cmd, CAPACITY / 64, 1, 1);
+
+	// new particles (at the end of the step: not moved again)
+	if (!queued.empty()) {
+		barrier (CS, RW, CS, RW);
+		GpuEmission *ge = (GpuEmission*)emitBuf[fi].mapped;
+		uint32_t maxCount = 0, n = 0;
+		static uint32_t seed = 1;
+		for (const Emission &e : queued) {
+			GpuEmission &g = ge[n++];
+			VECTOR3 p0 = e.p0 - camPos, p1 = e.p1 - camPos;
+			float f0[4] = { (float)p0.x, (float)p0.y, (float)p0.z, (float)e.v0 };
+			float f1[4] = { (float)p1.x, (float)p1.y, (float)p1.z, (float)e.spread };
+			float fv[4] = { (float)e.vel.x, (float)e.vel.y, (float)e.vel.z, (float)e.lifetime };
+			float fd[4] = { (float)e.dir.x, (float)e.dir.y, (float)e.dir.z, (float)e.dt };
+			float fs[4] = { (float)e.size, (float)e.growth, (float)e.alpha, (float)e.slowdown };
+			memcpy (g.p0, f0, 16), memcpy (g.p1, f1, 16), memcpy (g.vel, fv, 16), memcpy (g.dir, fd, 16), memcpy (g.shape, fs, 16);
+			uint32_t count = std::min (e.count, e.capacity);
+			g.slab[0] = e.first, g.slab[1] = e.capacity, g.slab[2] = e.head, g.slab[3] = count;
+			g.misc[0] = seed++, g.misc[1] = (e.emissive ? 1u : 0u) | (e.reentry ? 2u : 0u), g.misc[2] = g.misc[3] = 0;
+			maxCount = std::max (maxCount, count);
+		}
+		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, emitPipe);
+		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, emitLayout, 0, 1, &set, 0, nullptr);
+		vkCmdPushConstants (cmd, emitLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(n), &n);
+		vkCmdDispatch (cmd, (maxCount + 63) / 64, n, 1);
+		queued.clear ();
+	}
+	barrier (CS, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+}
+
+void ParticleSystem::Draw (uint32_t first, uint32_t capacity, VkTexture *tex, bool emissive, VkDescriptorSet frameSet)
+{
+	if (!enabled || !prepassView || !tex) return;
+	VkCommandBuffer cmd = ctx->Cmd ();
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, emissive ? drawAdd : drawBlend);
+	VkDescriptorSet s[3] = { frameSet, sets[ctx->FrameIndex ()], tex->set };
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawLayout, 0, 3, s, 0, nullptr);
+	struct { uint32_t first, flags; float alpha, pad; } pc{ first, emissive ? 1u : 0u, 1.0f, 0.0f };
+	vkCmdPushConstants (cmd, drawLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+	vkCmdDraw (cmd, 4, capacity, 0, 0);
+}
+
+// ======================================================================
+// VkParticleStream
 
 VkParticleStream::VkParticleStream (oapi::GraphicsClient *gc, TextureManager *tm, PARTICLESTREAMSPEC *pss, Kind k)
-	: oapi::ParticleStream (gc, pss), kind(k), texmgr(tm), rng((unsigned)(uintptr_t)this)
+	: oapi::ParticleStream (gc, pss), kind(k), texmgr(tm), client((VulkanClient*)gc), rng((unsigned)(uintptr_t)this)
 {
 	if (pss) spec = *pss;
 	else {
@@ -50,7 +394,30 @@ VkParticleStream::VkParticleStream (oapi::GraphicsClient *gc, TextureManager *tm
 
 VkParticleStream::~VkParticleStream ()
 {
+	if (allocated && sys == client->Particles ()) sys->Free (first, capacity);
 	texmgr->Release (tex);
+}
+
+bool VkParticleStream::EnsureRing ()
+{
+	ParticleSystem *ps = client->Particles ();
+	if (!ps) return false;
+	if (allocated && ps == sys) return true;
+	sys = ps;
+	head = 0;
+	// ring size: the most particles alive at once (the emission rate rises
+	// at speed in an atmosphere, up to 60 per second)
+	double rate = std::max (spec.srcrate, kind == Kind::Reentry ? 0.0 : 60.0) * sys->density;
+	double want = rate * std::max (spec.lifetime, 0.01) * 1.5 + 64.0;
+	allocated = sys->Allocate ((uint32_t)std::min (want, 65536.0), first, capacity);
+	if (!allocated) oapiWriteLogV ("VulkanClient: particle pool full");
+	return allocated;
+}
+
+bool VkParticleStream::Expired () const
+{
+	// (particles live up to 1.5 lifetimes)
+	return !hRef && simTime - lastEmit > 1.5 * spec.lifetime + 0.1;
 }
 
 double VkParticleStream::LevelAlpha (double lvl) const
@@ -112,58 +479,16 @@ bool VkParticleStream::SourceState (VECTOR3 &gpos, VECTOR3 &gdir, VECTOR3 &gvel,
 		v->GlobalRot (*dir, gdir);
 	}
 	lvl = LevelAlpha (lvl) * AtmAlpha (rho);
-
-	// lighting of diffuse (smoke) particles: day or night side of the planet
-	if (spec.ltype == PARTICLESTREAMSPEC::DIFFUSE) {
-		OBJHANDLE hPlanet = v->GetSurfaceRef ();
-		OBJHANDLE hSun = FindSun ();
-		if (hPlanet && hSun) {
-			VECTOR3 pp, sp;
-			oapiGetGlobalPos (hPlanet, &pp);
-			oapiGetGlobalPos (hSun, &sp);
-			VECTOR3 up = unit (gpos - pp), s = unit (sp - gpos);
-			light = (float)(0.15 + 0.85 * Smoothstep (-0.15, 0.1, dotp (up, s)));
-		}
-	}
 	return true;
 }
 
 void VkParticleStream::Update (double dt)
 {
 	if (dt <= 0.0) return;
-
-	// age and move existing particles; in an atmosphere they are slowed
-	// down towards the velocity of the co-rotating air
-	VECTOR3 bodyPos{}, bodyVel{}, omega{};
-	bool slow = hAtmRef && spec.atmslowdown > 0.0;
-	if (slow) {
-		oapiGetGlobalPos (hAtmRef, &bodyPos);
-		oapiGetGlobalVel (hAtmRef, &bodyVel);
-		double T = oapiGetPlanetPeriod (hAtmRef);
-		if (T != 0.0) {
-			MATRIX3 R;
-			oapiGetRotationMatrix (hAtmRef, &R);
-			omega = mul (R, _V(0, 1, 0)) * (PI2 / T);
-		}
-	}
-	double damp = slow ? std::exp (-spec.atmslowdown * dt) : 1.0;
-	size_t n = 0;
-	for (auto &p : particles) {
-		p.age += dt;
-		if (p.age >= p.life) continue;
-		if (slow) {
-			VECTOR3 air = bodyVel + crossp (p.pos - bodyPos, omega); // left-handed frame
-			p.vel = air + (p.vel - air) * damp;
-		}
-		p.pos += p.vel * dt;
-		particles[n++] = p;
-	}
-	particles.resize (n);
-
-	// emit new particles along the source path of this step
+	simTime += dt;
 	VECTOR3 src, dir, vel;
 	double alpha;
-	if (!SourceState (src, dir, vel, alpha) || alpha < 0.01) {
+	if (!EnsureRing () || !SourceState (src, dir, vel, alpha) || alpha < 0.01) {
 		havePrev = false;
 		emitAccum = 0.0;
 		return;
@@ -185,53 +510,34 @@ void VkParticleStream::Update (double dt)
 			}
 		}
 	}
-	alpha *= alphaScale;
-	emitAccum += rate * dt;
-	int nemit = (int)emitAccum;
-	emitAccum -= nemit;
-	std::uniform_real_distribution<double> uni (0.0, 1.0);
-	// the stream direction is the thrust direction: the exhaust leaves the
-	// other way. srcspread randomises the velocity by up to +-v0*srcspread/2
-	// per axis.
-	double spread = spec.srcspread * spec.v0;
-	for (int i = 0; i < nemit && particles.size() < MAX_PARTICLES; i++) {
-		double f = (i + uni (rng)) / nemit; // emission time within the step
-		Particle p;
-		VECTOR3 dv = _V(uni (rng) - 0.5, uni (rng) - 0.5, uni (rng) - 0.5) * spread;
-		p.vel = vel - dir * spec.v0 + dv;
-		p.pos = prevSrc + (src - prevSrc) * f + p.vel * ((1.0 - f) * dt);
-		p.age = (1.0 - f) * dt;
-		p.life = std::max (0.01, spec.lifetime * (0.5 + uni (rng)));
-		p.alpha0 = (float)alpha;
-		p.sub = kind == Kind::Reentry ? 1 : (uint8_t)(rng() & 3);
-		particles.push_back (p);
-	}
+	// more, smaller particles: about the same covered area and density
+	double D = sys->density, sizeScale = std::pow (D, -1.0 / 3.0);
+	emitAccum += rate * D * dt;
+	uint32_t n = (uint32_t)emitAccum;
+	emitAccum -= n;
+	if (!n) { prevSrc = src; return; }
+	ParticleSystem::Emission e{};
+	e.p0 = prevSrc, e.p1 = src;
+	e.vel = vel, e.dir = dir;
+	// (the stream direction is the thrust direction: the exhaust leaves the
+	// other way; srcspread randomises the velocity by up to +-v0*srcspread/2
+	// per axis)
+	e.v0 = spec.v0, e.spread = spec.srcspread * spec.v0;
+	e.lifetime = spec.lifetime, e.dt = dt;
+	e.size = spec.srcsize * sizeScale, e.growth = spec.growthrate * sizeScale;
+	e.alpha = alpha * alphaScale * std::min (1.0, 1.3 / (D * sizeScale * sizeScale));
+	e.slowdown = hAtmRef ? spec.atmslowdown : 0.0;
+	e.first = first, e.capacity = capacity, e.head = head, e.count = std::min (n, capacity);
+	e.emissive = spec.ltype == PARTICLESTREAMSPEC::EMISSIVE;
+	e.reentry = kind == Kind::Reentry;
+	sys->Queue (e);
+	head = (head + e.count) % capacity;
+	lastEmit = simTime;
 	prevSrc = src;
 }
 
 void VkParticleStream::Render (Scene *scene)
 {
-	if (particles.empty() || !tex) return;
-	bool emissive = (spec.ltype == PARTICLESTREAMSPEC::EMISSIVE);
-	float c = emissive ? 1.0f : light;
-	std::vector<PVtx> v;
-	v.reserve (particles.size() * 6);
-	for (const auto &p : particles) {
-		float t = (float)(p.age / p.life);
-		float a = p.alpha0 * (1.0f - t);
-		if (a <= 0.0f) continue;
-		float h = (float)(0.5 * (spec.srcsize + spec.growthrate * p.age));
-		VECTOR3 vp = scene->ViewPos (p.pos);
-		float x = (float)vp.x, y = (float)vp.y, z = (float)vp.z;
-		float u0 = (p.sub & 1) * 0.5f, v0 = (p.sub >> 1) * 0.5f;
-		PVtx q[4] = {
-			{ x - h, y - h, z, u0,        v0,        c, c, c, a },
-			{ x + h, y - h, z, u0 + 0.5f, v0,        c, c, c, a },
-			{ x + h, y + h, z, u0 + 0.5f, v0 + 0.5f, c, c, c, a },
-			{ x - h, y + h, z, u0,        v0 + 0.5f, c, c, c, a },
-		};
-		v.push_back (q[0]); v.push_back (q[1]); v.push_back (q[2]);
-		v.push_back (q[0]); v.push_back (q[2]); v.push_back (q[3]);
-	}
-	scene->DrawBillboards (tex, emissive, v.data(), v.size());
+	if (!allocated || sys != client->Particles () || simTime - lastEmit > 1.5 * spec.lifetime + 0.1) return;
+	sys->Draw (first, capacity, tex, spec.ltype == PARTICLESTREAMSPEC::EMISSIVE, scene->FrameSet ());
 }

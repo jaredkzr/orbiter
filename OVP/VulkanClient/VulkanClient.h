@@ -69,6 +69,8 @@ public:
 		OBJHANDLE hVessel, const double *lvl, const VECTOR3 &ref, const VECTOR3 &dir) override;
 	oapi::ParticleStream *clbkCreateReentryStream (PARTICLESTREAMSPEC *pss, OBJHANDLE hVessel) override;
 	const std::vector<VkParticleStream*> &ParticleStreams () const { return streams; }
+	/// GPU particles (null before the scene exists)
+	class ParticleSystem *Particles () const;
 
 	// --- meshes ---
 	void clbkStoreMeshPersistent (MESHHANDLE hMesh, const char *fname) override;

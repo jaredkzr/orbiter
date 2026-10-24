@@ -237,6 +237,9 @@ bool Scene::Init ()
 	plumes = std::make_unique<PlumeRenderer>();
 	plumes->Init (ctx, frameLayout, gc->TexMgr()->Layout(), atm->SetLayout(), vclouds->ShapeNoiseView (), vclouds->DetailNoiseView ());
 	ssr->SetPlumes (plumes->Buffer (), plumes->BufferSize (), plumes->ShapeNoise (), plumes->DetailNoise ());
+	particles = std::make_unique<ParticleSystem>();
+	particles->Init (ctx, frameLayout, atm->SetLayout(), gc->TexMgr()->Layout(), vclouds->ShapeNoiseView (), vclouds->DetailNoiseView ());
+	if (rt->Enabled ()) particles->InitRT (frameLayout, rt->SetLayout(), rt->TextureLayout(), atm->SetLayout());
 	plumes->rayCast = [this](uint32_t owner, const VECTOR3 &vo, const VECTOR3 &vd, double maxDist, double &t, VECTOR3 &vn) {
 		VECTOR3 o = camPos + mul (camRot, vo), d = mul (camRot, vd);
 		bool found = false;
@@ -304,6 +307,8 @@ void Scene::Shutdown ()
 	ssr.reset();
 	if (taa) taa->Shutdown ();
 	taa.reset();
+	if (particles) particles->Shutdown ();
+	particles.reset();
 	if (plumes) plumes->Shutdown ();
 	plumes.reset();
 	ctx->DestroyImage (reactive);
@@ -923,6 +928,9 @@ void Scene::BeginFrame ()
 	ssr->BeginFrame ();
 	WriteSSRDescriptors ();
 	EnsureReactiveMask ();
+	// (before any of their sets are bound in this frame's commands)
+	plumes->SetPrepass (ao->PrepassView ());
+	particles->SetPrepass (ao->PrepassView ());
 	if (rt) rt->BeginFrame ();
 	// the previous frame does not continue into this one (camera cut)
 	cameraCut = !havePrev || length (camPos - prevCamPos) > 5e3;
@@ -1134,6 +1142,11 @@ void Scene::RenderPrepass ()
 	}
 	ssr->Compute (proj[0], -proj[5], jitter, cameraCut);
 	ctx->GpuMark ("ssr");
+	{
+		VkDescriptorSet rtSets[2] = { rt && rt->Enabled () ? rt->Set () : VK_NULL_HANDLE, rt && rt->Enabled () ? rt->TextureSet () : VK_NULL_HANDLE };
+		particles->Simulate (camPos, frameSet[ctx->FrameIndex()], camAtmSet, rtSets[0] ? rtSets : nullptr, oapiGetSimTime ());
+		ctx->GpuMark ("particles");
+	}
 	RenderVolumetricClouds ();
 	ctx->GpuMark ("clouds");
 }
@@ -1282,16 +1295,12 @@ void Scene::Render ()
 	std::sort (list.begin(), list.end(), [](VObject *a, VObject *b) { return a->CamDist() > b->CamDist(); });
 	for (auto *vo : list) vo->Render (RenderPass::Transparent);
 
-	static const bool particles = !getenv ("ORBITER_VK_PARTICLES") || atoi (getenv ("ORBITER_VK_PARTICLES")) != 0;
-	if (particles)
-		for (auto *ps : gc->ParticleStreams()) ps->Render (this);
-
-	// effects that also write the reactive mask: engine plumes
+	// effects that also write the reactive mask: engine plumes, particles
 	vkc::Target rt{ reactive.image, reactive.view, REACTIVE_FORMAT, ctx->RenderExtent () };
 	vkc::Target rtMS{ reactiveMS.image, reactiveMS.view, REACTIVE_FORMAT, ctx->RenderExtent () };
 	ctx->BindSceneWithMask (rt, reactiveMS.image ? &rtMS : nullptr);
-	plumes->SetPrepass (ao->PrepassView ());
 	plumes->Draw (FrameSet (), camAtmSet, gc->TexMgr()->White());
+	for (auto *ps : gc->ParticleStreams()) ps->Render (this);
 }
 
 VkImageView Scene::ResolveTemporal (VkExtent2D &size)
