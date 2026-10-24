@@ -106,6 +106,10 @@ namespace vkc {
 		VkCommandBuffer Cmd () { return Rec (); }
 		uint32_t FrameIndex () const { return frameIndex; }
 		VkExtent2D Extent () const { return extent; }
+		/// size of the 3D scene images (the display size times the render
+		/// scale, ORBITER_VK_RENDER_SCALE; upscaled in post-processing)
+		VkExtent2D RenderExtent () const { return renderExtent; }
+		float RenderScale () const { return renderScale; }
 
 		// Resource helpers
 		Buffer CreateBuffer (VkDeviceSize size, VkBufferUsageFlags usage, bool hostVisible);
@@ -189,6 +193,8 @@ namespace vkc {
 		std::vector<VkSemaphore> renderFinished; // per swapchain image
 		Image depth;
 		VkExtent2D extent{};
+		VkExtent2D renderExtent{};
+		float renderScale = 1.0f;
 		VkCommandPool uploadPool = VK_NULL_HANDLE;
 		uint32_t frameIndex = 0;
 		uint32_t imageIndex = 0;

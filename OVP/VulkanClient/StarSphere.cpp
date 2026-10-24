@@ -43,7 +43,7 @@ void StarSphere::Shutdown ()
 void StarSphere::Render (VkCommandBuffer cmd, VkPipeline pipeline, VkPipelineLayout layout, const float *vp)
 {
 	memcpy (viewProj, vp, sizeof(viewProj));
-	VkExtent2D ext = ctx->Extent();
+	VkExtent2D ext = ctx->RenderExtent();
 	viewW = ext.width, viewH = ext.height;
 	if (!nStar) return;
 

@@ -19,7 +19,7 @@ public:
 
 	/// Tone-map an HDR image of the scene (the scene image, or the temporal
 	/// anti-aliasing output) into the backbuffer (within a frame)
-	void Apply (VkImageView input);
+	void Apply (VkImageView input, VkExtent2D inputSize);
 
 	float exposure = 1.0f;
 	float bloomStrength = 0.35f;

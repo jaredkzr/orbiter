@@ -615,7 +615,7 @@ void Scene::UpdateCamera ()
 	};
 	view = Mat4::FromRotTrans (vt, _V(0, 0, 0));
 
-	VkExtent2D ext = ctx->Extent();
+	VkExtent2D ext = ctx->RenderExtent();
 	viewW = std::max (1u, ext.width);
 	viewH = std::max (1u, ext.height);
 	tanAperture = tan (oapiCameraAperture());
@@ -873,9 +873,10 @@ void Scene::Render ()
 	for (auto *ps : gc->ParticleStreams()) ps->Render (this);
 }
 
-VkImageView Scene::ResolveTemporal ()
+VkImageView Scene::ResolveTemporal (VkExtent2D &size)
 {
 	VkImageView out = ctx->SceneView ();
+	size = ctx->RenderExtent ();
 	if (taaEnabled) {
 		// rotation from the view now to the view then, for directions (sky)
 		Mat4 rot = prevView * view.RigidInverse ();

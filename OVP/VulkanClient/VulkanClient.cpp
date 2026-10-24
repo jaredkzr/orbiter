@@ -185,7 +185,9 @@ void VulkanClient::clbkRenderScene ()
 	scene->RenderPrepass ();
 	ctx.BindScene (true);
 	scene->Render ();
-	postfx->Apply (scene->ResolveTemporal ());   // HDR scene -> backbuffer
+	VkExtent2D sceneSize;
+	VkImageView sceneImage = scene->ResolveTemporal (sceneSize);
+	postfx->Apply (sceneImage, sceneSize);   // HDR scene -> backbuffer
 	Render2DOverlay (); // panels, MFDs and HUD
 }
 

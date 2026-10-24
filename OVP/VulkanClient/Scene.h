@@ -90,7 +90,7 @@ public:
 	void RenderPrepass ();
 	/// Temporal anti-aliasing of the rendered scene (after Render). Returns
 	/// the image post-processing reads (the scene image if it is off).
-	VkImageView ResolveTemporal ();
+	VkImageView ResolveTemporal (VkExtent2D &size);
 	/// incremented at the start of each frame (RenderShadows)
 	uint64_t FrameNo () const { return frameNo; }
 	void DrawSphere (const Mat4 &modelView, const float colour[4], bool unlit, VkTexture *tex = nullptr);

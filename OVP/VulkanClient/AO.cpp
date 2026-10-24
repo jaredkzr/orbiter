@@ -104,7 +104,7 @@ vkc::Image AmbientOcclusion::CreateImage (VkFormat fmt, VkImageUsageFlags usage,
 
 void AmbientOcclusion::CreateImages ()
 {
-	extent = ctx->Extent();
+	extent = ctx->RenderExtent();
 	prepassColor = CreateImage (PREPASS_FORMAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
 	velocity = CreateImage (VELOCITY_FORMAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
 	prepassDepth = CreateImage (ctx->depthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);

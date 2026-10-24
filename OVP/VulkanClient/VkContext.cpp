@@ -6,6 +6,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <cstdlib>
 
@@ -121,6 +122,10 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 	vkGetPhysicalDeviceProperties (physicalDevice, &deviceProps);
 	vkGetPhysicalDeviceFeatures (physicalDevice, &deviceFeatures);
 	oapiWriteLogV ("VulkanClient: using device %s", deviceProps.deviceName);
+
+	if (const char *e = getenv ("ORBITER_VK_RENDER_SCALE"))
+		renderScale = std::clamp ((float)atof (e), 0.25f, 2.0f);
+	oapiWriteLogV ("VulkanClient: render scale %.2f", renderScale);
 
 	// multisampling of the 3D scene (ORBITER_VK_MSAA = 1, 2, 4 or 8; default
 	// none with temporal anti-aliasing (ORBITER_VK_TAA, on by default), else 4)
@@ -328,11 +333,15 @@ bool Context::CreateSwapchain ()
 
 	}
 
+	// scene images at the render size
+	renderExtent = { std::max (1u, (uint32_t)std::lround (extent.width * renderScale)),
+	                 std::max (1u, (uint32_t)std::lround (extent.height * renderScale)) };
+
 	// Depth buffer
 	VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 	ici.imageType = VK_IMAGE_TYPE_2D;
 	ici.format = depthFormat;
-	ici.extent = { extent.width, extent.height, 1 };
+	ici.extent = { renderExtent.width, renderExtent.height, 1 };
 	ici.mipLevels = 1;
 	ici.arrayLayers = 1;
 	ici.samples = sceneSamples; // the depth buffer belongs to the (multisampled) scene
@@ -352,7 +361,7 @@ bool Context::CreateSwapchain ()
 	VkImageCreateInfo sci2{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 	sci2.imageType = VK_IMAGE_TYPE_2D;
 	sci2.format = sceneFormat;
-	sci2.extent = { extent.width, extent.height, 1 };
+	sci2.extent = { renderExtent.width, renderExtent.height, 1 };
 	sci2.mipLevels = 1;
 	sci2.arrayLayers = 1;
 	sci2.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -555,13 +564,14 @@ void Context::BindMain (bool scene, bool withDepth)
 	}
 
 	VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
-	ri.renderArea = { {0, 0}, extent };
+	VkExtent2D ext = scene ? renderExtent : extent;
+	ri.renderArea = { {0, 0}, ext };
 	ri.layerCount = 1;
 	ri.colorAttachmentCount = 1;
 	ri.pColorAttachments = &color;
 	ri.pDepthAttachment = withDepth ? &dep : nullptr;
 	vkCmdBeginRendering (cmd, &ri);
-	SetViewportScissor (extent);
+	SetViewportScissor (ext);
 	cur = CurrentTarget();
 	cur.active = true;
 	cur.backbuffer = true;
@@ -569,7 +579,7 @@ void Context::BindMain (bool scene, bool withDepth)
 	cur.depth = withDepth;
 	cur.image = image;
 	cur.format = scene ? sceneFormat : colorFormat;
-	cur.extent = extent;
+	cur.extent = ext;
 }
 
 void Context::BindTarget (const Target &t)

@@ -329,7 +329,7 @@ void PostFX::Pass (VkPipeline pipe, VkPipelineLayout pl, VkDescriptorSet src, co
 	vkCmdDraw (cmd, 3, 1, 0, 0);
 }
 
-void PostFX::Apply (VkImageView input)
+void PostFX::Apply (VkImageView input, VkExtent2D inputSize)
 {
 	if (!ctx->InFrame()) return;
 	if (generation != ctx->SwapchainGeneration()) {
@@ -344,7 +344,7 @@ void PostFX::Apply (VkImageView input)
 	for (int i = 0; i < LEVELS; i++) {
 		Level &l = levels[i];
 		ctx->BindTarget ({ l.img.image, l.img.view, BLOOM_FORMAT, l.extent });
-		VkExtent2D se = i ? levels[i-1].extent : e;
+		VkExtent2D se = i ? levels[i-1].extent : inputSize;
 		float pc[4] = { 1.0f / se.width, 1.0f / se.height, i ? 0.0f : bloomThreshold, 0.5f * bloomThreshold };
 		Pass (downPipe, layout, i ? levels[i-1].set : sceneSet, pc, sizeof(pc));
 	}

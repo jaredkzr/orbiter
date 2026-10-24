@@ -68,7 +68,7 @@ void TemporalAA::Shutdown ()
 
 void TemporalAA::CreateImages (VkImageView scene, VkImageView prepass, VkImageView velocity)
 {
-	extent = ctx->Extent();
+	extent = ctx->RenderExtent();
 	for (auto &h : history) {
 		VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 		ici.imageType = VK_IMAGE_TYPE_2D;
