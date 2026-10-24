@@ -36,6 +36,8 @@ public:
 	virtual MESHHANDLE GetMesh (UINT idx) { return NULL; }
 
 	double CamDist () const { return camDist; }
+	/// remember the pose of this frame for the motion vectors of the next
+	void StorePrev () { prevGpos = gpos, prevGrot = grot, havePrev = true; }
 	double Size () const { return size; }
 
 protected:
@@ -45,6 +47,11 @@ protected:
 	MATRIX3 grot{};
 	double size = 1.0;
 	double camDist = 0.0;
+	VECTOR3 prevGpos{};
+	MATRIX3 prevGrot{};
+	bool havePrev = false;
+	/// set the prepass motion of this object (pose now and in the last frame)
+	void SetMotion () const;
 };
 
 // -----------------------------------------------------------------------

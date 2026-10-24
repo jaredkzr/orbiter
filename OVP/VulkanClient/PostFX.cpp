@@ -17,7 +17,7 @@
 
 namespace {
 	const VkFormat BLOOM_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
-	constexpr uint32_t MAX_SETS = 16;
+	constexpr uint32_t MAX_SETS = 32;
 	constexpr uint32_t HIST_BINS = 256; // as in exposure.glsl
 
 	// auto-exposure parameters (see adapt.comp)
@@ -266,25 +266,18 @@ void PostFX::CreateTargets ()
 		});
 		l.set = AllocSet (l.img.view);
 	}
-	sceneSet = AllocSet (ctx->SceneView());
 
-	// auto-exposure sets (the pool is reset with the targets)
+	// tone mapping's exposure state (the pool is reset with the targets)
 	VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
 	dai.descriptorPool = pool;
 	dai.descriptorSetCount = 1;
-	dai.pSetLayouts = &meterSetLayout;
-	VK_CHECK(vkAllocateDescriptorSets (ctx->device, &dai, &meterSet));
 	dai.pSetLayouts = &stateSetLayout;
 	VK_CHECK(vkAllocateDescriptorSets (ctx->device, &dai, &stateSet));
-	VkDescriptorImageInfo dii{ sampler, ctx->SceneView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-	VkDescriptorBufferInfo hbi{ histBuf.buffer, 0, VK_WHOLE_SIZE }, sbi{ stateBuf.buffer, 0, VK_WHOLE_SIZE };
-	VkWriteDescriptorSet wr[4]{};
-	for (auto &w : wr) w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, w.descriptorCount = 1;
-	wr[0].dstSet = meterSet, wr[0].dstBinding = 0, wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, wr[0].pImageInfo = &dii;
-	wr[1].dstSet = meterSet, wr[1].dstBinding = 1, wr[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, wr[1].pBufferInfo = &hbi;
-	wr[2].dstSet = meterSet, wr[2].dstBinding = 2, wr[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, wr[2].pBufferInfo = &sbi;
-	wr[3].dstSet = stateSet, wr[3].dstBinding = 0, wr[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, wr[3].pBufferInfo = &sbi;
-	vkUpdateDescriptorSets (ctx->device, 4, wr, 0, nullptr);
+	VkDescriptorBufferInfo sbi{ stateBuf.buffer, 0, VK_WHOLE_SIZE };
+	VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+	wr.dstSet = stateSet, wr.dstBinding = 0, wr.descriptorCount = 1;
+	wr.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, wr.pBufferInfo = &sbi;
+	vkUpdateDescriptorSets (ctx->device, 1, &wr, 0, nullptr);
 	generation = ctx->SwapchainGeneration();
 }
 
@@ -298,7 +291,33 @@ void PostFX::DestroyTargets ()
 		l.set = VK_NULL_HANDLE;
 	}
 	sceneSet = meterSet = stateSet = VK_NULL_HANDLE;
+	inputs.clear();
 	generation = ~0u;
+}
+
+void PostFX::SelectInput (VkImageView view)
+{
+	for (auto &in : inputs)
+		if (in.view == view) {
+			sceneSet = in.scene, meterSet = in.meter;
+			return;
+		}
+	InputSets in{ view, AllocSet (view), VK_NULL_HANDLE };
+	VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+	dai.descriptorPool = pool;
+	dai.descriptorSetCount = 1;
+	dai.pSetLayouts = &meterSetLayout;
+	VK_CHECK(vkAllocateDescriptorSets (ctx->device, &dai, &in.meter));
+	VkDescriptorImageInfo dii{ sampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+	VkDescriptorBufferInfo hbi{ histBuf.buffer, 0, VK_WHOLE_SIZE }, sbi{ stateBuf.buffer, 0, VK_WHOLE_SIZE };
+	VkWriteDescriptorSet wr[3]{};
+	for (auto &w : wr) w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, w.descriptorCount = 1, w.dstSet = in.meter;
+	wr[0].dstBinding = 0, wr[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, wr[0].pImageInfo = &dii;
+	wr[1].dstBinding = 1, wr[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, wr[1].pBufferInfo = &hbi;
+	wr[2].dstBinding = 2, wr[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, wr[2].pBufferInfo = &sbi;
+	vkUpdateDescriptorSets (ctx->device, 3, wr, 0, nullptr);
+	inputs.push_back (in);
+	sceneSet = in.scene, meterSet = in.meter;
 }
 
 void PostFX::Pass (VkPipeline pipe, VkPipelineLayout pl, VkDescriptorSet src, const void *pc, uint32_t pcSize)
@@ -310,13 +329,14 @@ void PostFX::Pass (VkPipeline pipe, VkPipelineLayout pl, VkDescriptorSet src, co
 	vkCmdDraw (cmd, 3, 1, 0, 0);
 }
 
-void PostFX::Apply ()
+void PostFX::Apply (VkImageView input)
 {
 	if (!ctx->InFrame()) return;
 	if (generation != ctx->SwapchainGeneration()) {
 		DestroyTargets ();
 		CreateTargets ();
 	}
+	SelectInput (input);
 	VkExtent2D e = ctx->Extent();
 	if (autoExposure) Meter ();
 

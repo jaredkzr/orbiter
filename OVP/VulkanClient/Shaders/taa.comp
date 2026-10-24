@@ -1,0 +1,119 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Temporal anti-aliasing: the jittered scene image of this frame is blended
+// into the history of earlier frames, reprojected along the motion vectors
+// of the prepass. The history is clipped to the colour range of the current
+// pixel's neighbourhood (in a luminance-compressed YCoCg space) so that it
+// cannot keep colours that are no longer there.
+
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D sceneTex;    // this frame (HDR, jittered)
+layout(set = 0, binding = 1) uniform sampler2D historyTex;  // the previous output
+layout(set = 0, binding = 2) uniform sampler2D velocityTex; // screen motion [uv]
+layout(set = 0, binding = 3) uniform sampler2D prepassTex;  // view normal, depth (w; 0: none)
+layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D outImg;
+
+layout(push_constant) uniform Params {
+	mat4 skyMotion;  // view direction now -> clip space of the previous frame
+	vec2 size;       // [pixels]
+	vec2 focal;      // projection factors fx, fy
+	float reset;     // 1: discard the history
+	float blend;     // weight of the current frame
+} pc;
+
+// reversible compression of HDR values, so that bright pixels don't
+// dominate the filters
+vec3 Compress (vec3 c) { return c / (1.0 + max (max (c.r, c.g), c.b)); }
+vec3 Expand (vec3 c) { return c / max (1.0 - max (max (c.r, c.g), c.b), 1e-4); }
+
+vec3 ToYCoCg (vec3 c)
+{
+	return vec3 (0.25 * c.r + 0.5 * c.g + 0.25 * c.b, 0.5 * c.r - 0.5 * c.b, -0.25 * c.r + 0.5 * c.g - 0.25 * c.b);
+}
+vec3 FromYCoCg (vec3 c)
+{
+	return vec3 (c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z);
+}
+
+// bicubic (Catmull-Rom) history sample from nine bilinear taps
+vec3 SampleHistory (vec2 uv)
+{
+	vec2 pos = uv * pc.size;
+	vec2 t1 = floor (pos - 0.5) + 0.5;
+	vec2 f = pos - t1;
+	vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+	vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+	vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+	vec2 w3 = f * f * (-0.5 + 0.5 * f);
+	vec2 w12 = w1 + w2;
+	vec2 t0 = (t1 - 1.0) / pc.size, t3 = (t1 + 2.0) / pc.size;
+	vec2 t12 = (t1 + w2 / w12) / pc.size;
+	vec3 r = vec3 (0.0);
+	r += texture (historyTex, vec2 (t0.x,  t0.y)).rgb  * w0.x  * w0.y;
+	r += texture (historyTex, vec2 (t12.x, t0.y)).rgb  * w12.x * w0.y;
+	r += texture (historyTex, vec2 (t3.x,  t0.y)).rgb  * w3.x  * w0.y;
+	r += texture (historyTex, vec2 (t0.x,  t12.y)).rgb * w0.x  * w12.y;
+	r += texture (historyTex, vec2 (t12.x, t12.y)).rgb * w12.x * w12.y;
+	r += texture (historyTex, vec2 (t3.x,  t12.y)).rgb * w3.x  * w12.y;
+	r += texture (historyTex, vec2 (t0.x,  t3.y)).rgb  * w0.x  * w3.y;
+	r += texture (historyTex, vec2 (t12.x, t3.y)).rgb  * w12.x * w3.y;
+	r += texture (historyTex, vec2 (t3.x,  t3.y)).rgb  * w3.x  * w3.y;
+	return max (r, vec3 (0.0));
+}
+
+void main ()
+{
+	ivec2 p = ivec2 (gl_GlobalInvocationID.xy);
+	ivec2 sz = ivec2 (pc.size);
+	if (p.x >= sz.x || p.y >= sz.y) return;
+	vec2 uv = (vec2 (p) + 0.5) / pc.size;
+
+	// neighbourhood statistics of the current frame; the motion is taken
+	// from the nearest surface around the pixel (edges keep their motion)
+	vec3 m1 = vec3 (0.0), m2 = vec3 (0.0);
+	vec3 cur = vec3 (0.0);
+	float nearest = 0.0;
+	ivec2 nearestPos = p;
+	for (int y = -1; y <= 1; y++)
+		for (int x = -1; x <= 1; x++) {
+			ivec2 q = clamp (p + ivec2 (x, y), ivec2 (0), sz - 1);
+			vec3 c = ToYCoCg (Compress (texelFetch (sceneTex, q, 0).rgb));
+			if (x == 0 && y == 0) cur = c;
+			m1 += c;
+			m2 += c * c;
+			float z = texelFetch (prepassTex, q, 0).w;
+			if (z > 0.0 && (nearest == 0.0 || z < nearest)) { nearest = z; nearestPos = q; }
+		}
+	vec3 mean = m1 / 9.0;
+	vec3 sigma = sqrt (max (m2 / 9.0 - mean * mean, vec3 (0.0)));
+
+	vec2 vel;
+	if (nearest > 0.0) {
+		vel = texelFetch (velocityTex, nearestPos, 0).xy;
+	} else { // sky: rotation of the view only
+		vec2 ndc = uv * 2.0 - 1.0;
+		vec3 dir = vec3 (ndc.x / pc.focal.x, -ndc.y / pc.focal.y, 1.0);
+		vec4 c = pc.skyMotion * vec4 (dir, 1.0);
+		vel = (ndc - c.xy / c.w) * 0.5;
+	}
+	vec2 prevUV = uv - vel;
+
+	vec3 result = cur;
+	if (pc.reset < 0.5 && all (greaterThanEqual (prevUV, vec2 (0.0))) && all (lessThanEqual (prevUV, vec2 (1.0)))) {
+		vec3 hist = ToYCoCg (Compress (SampleHistory (prevUV)));
+		// clip the history towards the mean into the neighbourhood's box
+		vec3 lo = mean - sigma, hi = mean + sigma;
+		vec3 d = hist - mean;
+		vec3 ext = max (hi - mean, vec3 (1e-5));
+		float k = max (max (abs (d.x) / ext.x, abs (d.y) / ext.y), abs (d.z) / ext.z);
+		if (k > 1.0) hist = mean + d / k;
+		result = mix (hist, cur, pc.blend);
+	}
+	vec3 rgb = Expand (max (FromYCoCg (result), vec3 (0.0)));
+	if (any (isnan (rgb))) rgb = vec3 (0.0);
+	imageStore (outImg, p, vec4 (rgb, 1.0));
+}

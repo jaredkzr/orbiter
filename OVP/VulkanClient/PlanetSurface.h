@@ -150,7 +150,7 @@ private:
 	const Node *ElevSource (const Node *n) const;
 	double SampleElev (const Node *src, double lat, double lng) const;
 	void BuildMesh (Node *n, const Node *elevSrc);
-	void DrawNode (Node *n);
+	void DrawNode (Node *n, bool prepass = false);
 
 	OBJHANDLE hPlanet;
 	Scene *scene;

@@ -3,6 +3,7 @@
 
 #include "Scene.h"
 #include "AO.h"
+#include "TAA.h"
 #include "VObjects.h"
 #include "VkMesh.h"
 #include "VkTexture.h"
@@ -17,6 +18,7 @@
 
 #include "mesh.vert.h"
 #include "mesh.frag.h"
+#include "prepass.vert.h"
 #include "prepass.frag.h"
 #include "stars.vert.h"
 #include "stars.frag.h"
@@ -33,6 +35,7 @@ namespace {
 		float ambient[4];
 		float shadowMat[3][16];   // view space -> shadow map, per cascade
 		float shadowParams[3][4]; // enabled, normal offset, depth bias, texel size
+		float jitter[4];       // projection jitter (NDC), render size
 		float aoParams[4];     // 1/width, 1/height of the occlusion image, fraction applied to direct light
 		float lightCount[4];
 		struct {
@@ -155,6 +158,9 @@ bool Scene::Init ()
 
 	ao = std::make_unique<AmbientOcclusion>();
 	ao->Init (ctx);
+	if (const char *e = getenv ("ORBITER_VK_TAA")) taaEnabled = atoi (e) != 0;
+	taa = std::make_unique<TemporalAA>();
+	taa->Init (ctx);
 	WriteAODescriptors ();
 
 	atm = std::make_unique<AtmosphereRenderer>();
@@ -210,6 +216,8 @@ void Scene::Shutdown ()
 	stars.reset();
 	if (ao) ao->Shutdown ();
 	ao.reset();
+	if (taa) taa->Shutdown ();
+	taa.reset();
 	ctx->DestroyBuffer (sphereVtx);
 	ctx->DestroyBuffer (sphereIdx);
 	for (auto &u : frameUbo) ctx->DestroyBuffer (u);
@@ -230,7 +238,8 @@ void Scene::Shutdown ()
 
 VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite, bool prepass)
 {
-	VkShaderModule vs = ctx->CreateShaderModule (spv_mesh_vert, spv_mesh_vert_size);
+	VkShaderModule vs = prepass ? ctx->CreateShaderModule (spv_prepass_vert, spv_prepass_vert_size)
+	                            : ctx->CreateShaderModule (spv_mesh_vert, spv_mesh_vert_size);
 	VkShaderModule fs = prepass ? ctx->CreateShaderModule (spv_prepass_frag, spv_prepass_frag_size)
 	                            : ctx->CreateShaderModule (spv_mesh_frag, spv_mesh_frag_size);
 	VkPipelineShaderStageCreateInfo stages[2] = {
@@ -284,9 +293,10 @@ VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite
 		cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
 		cba.alphaBlendOp = VK_BLEND_OP_ADD;
 	}
+	VkPipelineColorBlendAttachmentState cbas[2] = { cba, cba };
 	VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-	cb.attachmentCount = 1;
-	cb.pAttachments = &cba;
+	cb.attachmentCount = prepass ? 2 : 1;
+	cb.pAttachments = cbas;
 
 	VkDynamicState dyn[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
 	VkPipelineDynamicStateCreateInfo dy{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
@@ -294,9 +304,9 @@ VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite
 	dy.pDynamicStates = dyn;
 
 	VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-	rci.colorAttachmentCount = 1;
-	const VkFormat prepassFmt = AmbientOcclusion::PREPASS_FORMAT;
-	rci.pColorAttachmentFormats = prepass ? &prepassFmt : &ctx->sceneFormat;
+	const VkFormat prepassFmts[2] = { AmbientOcclusion::PREPASS_FORMAT, AmbientOcclusion::VELOCITY_FORMAT };
+	rci.colorAttachmentCount = prepass ? 2 : 1;
+	rci.pColorAttachmentFormats = prepass ? prepassFmts : &ctx->sceneFormat;
 	rci.depthAttachmentFormat = ctx->depthFormat;
 
 	VkGraphicsPipelineCreateInfo gpi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
@@ -682,6 +692,19 @@ double Scene::Sunlight (const VECTOR3 &gpos)
 	return f;
 }
 
+void Scene::SetObjectMotion (const Mat4 &modelView, const Mat4 &prevModelView)
+{
+	// view space now -> object -> view space then -> clip then
+	Mat4 m = Mat4::FromFloat (prevProj) * prevModelView * modelView.RigidInverse ();
+	m.ToFloat (objMotion);
+}
+
+Mat4 Scene::PrevModelView (const VECTOR3 &gpos, const MATRIX3 &grot) const
+{
+	if (!havePrev) return ModelView (gpos, grot);
+	return prevView * Mat4::FromRotTrans (grot, gpos - prevCamPos);
+}
+
 Mat4 Scene::ModelView (const VECTOR3 &gpos, const MATRIX3 &grot) const
 {
 	return view * Mat4::FromRotTrans (grot, gpos - camPos);
@@ -715,8 +738,30 @@ void Scene::BeginFrame ()
 	uint32_t fi = ctx->FrameIndex();
 	if (ao->EnsureSize ()) WriteAODescriptors (); // the GPU is idle then
 
+	// sub-pixel projection jitter for temporal anti-aliasing (Halton 2, 3)
+	jitter[0] = jitter[1] = 0.0f;
+	if (taaEnabled) {
+		auto halton = [](uint32_t i, uint32_t b) {
+			double f = 1.0, r = 0.0;
+			for (; i; i /= b) { f /= b; r += f * (i % b); }
+			return r;
+		};
+		jitterIndex = jitterIndex % 16 + 1;
+		jitter[0] = (float)((halton (jitterIndex, 2) - 0.5) * 2.0 / viewW);
+		jitter[1] = (float)((halton (jitterIndex, 3) - 0.5) * 2.0 / viewH);
+	}
+	proj[8] = jitter[0]; // clip.xy += jitter * z (= w)
+	proj[9] = jitter[1];
+	if (!havePrev) {
+		memcpy (prevProj, proj, sizeof(prevProj));
+		prevProj[8] = prevProj[9] = 0.0f;
+	}
+	SetObjectMotion (Mat4::Identity (), Mat4::Identity ());
+
 	// frame uniforms
 	FrameUniforms fu{};
+	fu.jitter[0] = jitter[0], fu.jitter[1] = jitter[1];
+	fu.jitter[2] = (float)viewW, fu.jitter[3] = (float)viewH;
 	fu.aoParams[0] = 1.0f / ao->Extent().width;
 	fu.aoParams[1] = 1.0f / ao->Extent().height;
 	fu.aoParams[2] = ao->directFrac;
@@ -793,11 +838,12 @@ void Scene::BeginFrame ()
 
 void Scene::RenderPrepass ()
 {
-	if (!ao->enabled) return;
+	if (!ao->enabled && !taaEnabled) return;
 	// (planet surfaces were prepared before the shadow maps)
 	ao->BeginPrepass ();
 	for (auto &it : visuals) it.second->Render (RenderPass::Depth);
-	ao->Compute (proj[0], -proj[5]);
+	if (ao->enabled) ao->Compute (proj[0], -proj[5]);
+	else ctx->EndTarget ();
 }
 
 void Scene::Render ()
@@ -825,6 +871,28 @@ void Scene::Render ()
 	for (auto *vo : list) vo->Render (RenderPass::Transparent);
 
 	for (auto *ps : gc->ParticleStreams()) ps->Render (this);
+}
+
+VkImageView Scene::ResolveTemporal ()
+{
+	VkImageView out = ctx->SceneView ();
+	if (taaEnabled) {
+		// rotation from the view now to the view then, for directions (sky)
+		Mat4 rot = prevView * view.RigidInverse ();
+		Mat4 skyMotion = Mat4::FromFloat (prevProj) * rot;
+		// discard the history after a camera cut
+		bool reset = !havePrev || length (camPos - prevCamPos) > 5e3;
+		out = taa->Resolve (ctx->SceneView (), ao->PrepassView (), ao->VelocityView (), skyMotion,
+			proj[0], -proj[5], reset);
+	}
+	// this frame's camera and object poses, for the next frame's motion
+	prevCamPos = camPos;
+	prevView = view;
+	memcpy (prevProj, proj, sizeof(prevProj));
+	prevProj[8] = prevProj[9] = 0.0f;
+	havePrev = true;
+	for (auto &it : visuals) it.second->StorePrev ();
+	return out;
 }
 
 void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass,
@@ -894,7 +962,14 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 			pc.diffuse[0] = pc.diffuse[1] = pc.diffuse[2] = pc.diffuse[3] = 1.0f;
 			pc.emissive[3] = 1.0f;
 		}
-		vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+		if (pass == RenderPass::Depth) { // model-view and motion (prepass.vert)
+			float pp[32];
+			memcpy (pp, pc.modelView, sizeof(pc.modelView));
+			memcpy (pp + 16, objMotion, sizeof(objMotion));
+			vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pp), pp);
+		} else {
+			vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+		}
 		vkCmdDrawIndexed (cmd, grp.nIndex, 1, grp.firstIndex, grp.vertexOffset, 0);
 	}
 }

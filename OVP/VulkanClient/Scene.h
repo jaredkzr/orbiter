@@ -88,6 +88,9 @@ public:
 	void BeginFrame ();
 	/// Opaque geometry into the ambient occlusion prepass, and the occlusion
 	void RenderPrepass ();
+	/// Temporal anti-aliasing of the rendered scene (after Render). Returns
+	/// the image post-processing reads (the scene image if it is off).
+	VkImageView ResolveTemporal ();
 	/// incremented at the start of each frame (RenderShadows)
 	uint64_t FrameNo () const { return frameNo; }
 	void DrawSphere (const Mat4 &modelView, const float colour[4], bool unlit, VkTexture *tex = nullptr);
@@ -110,6 +113,15 @@ public:
 	/// direction (view space) and strength 0..1
 	void SetObjectHeat (const VECTOR3 &dir, float strength)
 	{ objHeat[0] = (float)dir.x, objHeat[1] = (float)dir.y, objHeat[2] = (float)dir.z, objHeat[3] = strength; }
+	/// Motion of the next objects drawn into the prepass: their model-view
+	/// transform now and in the previous frame (rigid)
+	void SetObjectMotion (const Mat4 &modelView, const Mat4 &prevModelView);
+	/// model-view transform of the previous frame for an object pose then
+	Mat4 PrevModelView (const VECTOR3 &gpos, const MATRIX3 &grot) const;
+	/// view space now -> clip space of the previous frame (unjittered)
+	const float *ObjectMotion () const { return objMotion; }
+	/// temporal anti-aliasing active (projection jitter, motion vectors)
+	bool TemporalAAEnabled () const { return taaEnabled; }
 	/// view-space position of a global point
 	VECTOR3 ViewPos (const VECTOR3 &gpos) const { return view.TransformPoint (gpos - camPos); }
 	/// view-space direction of a global direction
@@ -150,6 +162,16 @@ private:
 	VkPipeline meshAdditive = VK_NULL_HANDLE;
 	VkPipeline meshPrepass = VK_NULL_HANDLE;
 	std::unique_ptr<class AmbientOcclusion> ao;
+	std::unique_ptr<class TemporalAA> taa;
+	bool taaEnabled = true;
+	float objMotion[16] = {};
+	float jitter[2] = { 0.0f, 0.0f };     // projection jitter (NDC)
+	uint32_t jitterIndex = 0;
+	// camera of the previous frame
+	bool havePrev = false;
+	VECTOR3 prevCamPos{};
+	Mat4 prevView;
+	float prevProj[16] = {};             // unjittered
 	uint64_t frameNo = 0;
 	void WriteAODescriptors ();
 	VkPipelineLayout starLayout = VK_NULL_HANDLE;

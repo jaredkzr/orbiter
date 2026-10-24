@@ -122,9 +122,11 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 	vkGetPhysicalDeviceFeatures (physicalDevice, &deviceFeatures);
 	oapiWriteLogV ("VulkanClient: using device %s", deviceProps.deviceName);
 
-	// multisampling of the 3D scene (ORBITER_VK_MSAA = 1, 2, 4 or 8; default 4)
+	// multisampling of the 3D scene (ORBITER_VK_MSAA = 1, 2, 4 or 8; default
+	// none with temporal anti-aliasing (ORBITER_VK_TAA, on by default), else 4)
 	{
-		int req = 4;
+		const char *taa = getenv ("ORBITER_VK_TAA");
+		int req = (taa && atoi (taa) == 0) ? 4 : 1;
 		if (const char *e = getenv ("ORBITER_VK_MSAA")) req = atoi (e);
 		VkSampleCountFlags ok = deviceProps.limits.framebufferColorSampleCounts & deviceProps.limits.framebufferDepthSampleCounts;
 		sceneSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -600,25 +602,29 @@ void Context::BindTarget (const Target &t)
 	cur.extent = t.extent;
 }
 
-void Context::BindTargetWithDepth (const Target &t, const Target &d, const float clearColor[4])
+void Context::BindTargetsWithDepth (const Target *ts, uint32_t n, const Target &d, const float clearColor[4])
 {
 	EndTarget ();
 	VkCommandBuffer cmd = Rec ();
-	ImageBarrier (cmd, t.image, VK_IMAGE_ASPECT_COLOR_BIT,
-		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-		VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT,
-		VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+	n = std::min (n, 4u);
+	VkRenderingAttachmentInfo color[4]{};
+	for (uint32_t i = 0; i < n; i++) {
+		ImageBarrier (cmd, ts[i].image, VK_IMAGE_ASPECT_COLOR_BIT,
+			VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+			VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT,
+			VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+		color[i].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+		color[i].imageView = ts[i].view;
+		color[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		color[i].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		color[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		for (int k = 0; k < 4; k++) color[i].clearValue.color.float32[k] = clearColor[k];
+	}
 	ImageBarrier (cmd, d.image, VK_IMAGE_ASPECT_DEPTH_BIT,
 		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
 		VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
 		VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
 		VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
-	VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-	color.imageView = t.view;
-	color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-	color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-	color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-	for (int i = 0; i < 4; i++) color.clearValue.color.float32[i] = clearColor[i];
 	VkRenderingAttachmentInfo dep{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
 	dep.imageView = d.view;
 	dep.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
@@ -626,18 +632,19 @@ void Context::BindTargetWithDepth (const Target &t, const Target &d, const float
 	dep.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 	dep.clearValue.depthStencil = { 0.0f, 0 }; // reversed z: far = 0
 	VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
-	ri.renderArea = { {0, 0}, t.extent };
+	ri.renderArea = { {0, 0}, ts[0].extent };
 	ri.layerCount = 1;
-	ri.colorAttachmentCount = 1;
-	ri.pColorAttachments = &color;
+	ri.colorAttachmentCount = n;
+	ri.pColorAttachments = color;
 	ri.pDepthAttachment = &dep;
 	vkCmdBeginRendering (cmd, &ri);
-	SetViewportScissor (t.extent);
+	SetViewportScissor (ts[0].extent);
 	cur = CurrentTarget();
 	cur.active = true;
-	cur.image = t.image;
-	cur.format = t.format;
-	cur.extent = t.extent;
+	cur.image = ts[0].image;
+	for (uint32_t i = 1; i < n; i++) cur.extra[i-1] = ts[i].image;
+	cur.format = ts[0].format;
+	cur.extent = ts[0].extent;
 }
 
 void Context::BindDepthTarget (const Target &t)
@@ -690,6 +697,11 @@ void Context::EndTarget ()
 			VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 			VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
 			VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_TRANSFER_READ_BIT);
+		for (VkImage x : cur.extra)
+			if (x) ImageBarrier (cmd, x, VK_IMAGE_ASPECT_COLOR_BIT,
+				VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+				VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+				VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 	}
 	cur = CurrentTarget();
 }

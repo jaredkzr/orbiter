@@ -86,6 +86,25 @@ struct Mat4 {
 	{
 		for (int i = 0; i < 16; i++) out[i] = (float)m[i];
 	}
+
+	static Mat4 FromFloat (const float *in)
+	{
+		Mat4 r;
+		for (int i = 0; i < 16; i++) r.m[i] = in[i];
+		return r;
+	}
+
+	/// Inverse of a rigid transform (rotation, optionally uniformly scaled, and translation)
+	Mat4 RigidInverse () const
+	{
+		double s2 = m[0]*m[0] + m[1]*m[1] + m[2]*m[2]; // squared scale
+		Mat4 r = Identity ();
+		for (int c = 0; c < 3; c++)
+			for (int rr = 0; rr < 3; rr++) r.m[c*4 + rr] = m[rr*4 + c] / s2;
+		for (int rr = 0; rr < 3; rr++)
+			r.m[12 + rr] = -(r.m[rr] * m[12] + r.m[4 + rr] * m[13] + r.m[8 + rr] * m[14]);
+		return r;
+	}
 };
 
 #endif // !__VKMATH_H

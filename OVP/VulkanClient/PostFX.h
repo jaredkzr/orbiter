@@ -17,8 +17,9 @@ public:
 	bool Init (vkc::Context *ctx);
 	void Shutdown ();
 
-	/// Tone-map the scene image into the backbuffer (within a frame)
-	void Apply ();
+	/// Tone-map an HDR image of the scene (the scene image, or the temporal
+	/// anti-aliasing output) into the backbuffer (within a frame)
+	void Apply (VkImageView input);
 
 	float exposure = 1.0f;
 	float bloomStrength = 0.35f;
@@ -55,6 +56,10 @@ private:
 	VkShaderModule vs = VK_NULL_HANDLE;
 	Level levels[LEVELS];
 	VkDescriptorSet sceneSet = VK_NULL_HANDLE;
+	// descriptor sets of input images (scene image, temporal history)
+	struct InputSets { VkImageView view; VkDescriptorSet scene, meter; };
+	std::vector<InputSets> inputs;
+	void SelectInput (VkImageView view);
 
 	// auto-exposure
 	VkDescriptorSetLayout meterSetLayout = VK_NULL_HANDLE; // scene, histogram, state

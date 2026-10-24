@@ -34,6 +34,12 @@ void VObject::Update ()
 	camDist = length (gpos - scene->CameraPos());
 }
 
+void VObject::SetMotion () const
+{
+	scene->SetObjectMotion (scene->ModelView (gpos, grot),
+		havePrev ? scene->PrevModelView (prevGpos, prevGrot) : scene->PrevModelView (gpos, grot));
+}
+
 // ======================================================================
 // VVessel
 
@@ -229,6 +235,7 @@ void VVessel::Render (RenderPass pass)
 	Mat4 mv = scene->ModelView (gpos, grot);
 	scene->Sunlight (gpos);
 	scene->SetObjectGlassGlow (glassGlow);
+	if (pass == RenderPass::Depth) SetMotion ();
 	SetHeating ();
 
 	// virtual cockpit displays: MFD and HUD surfaces replace the textures of the registered groups
@@ -684,6 +691,7 @@ void VPlanet::PrepareFrame ()
 void VPlanet::Render (RenderPass pass)
 {
 	if (pass == RenderPass::Depth) {
+		SetMotion (); // terrain and bases move with the planet
 		if (surface && scene->PixelSize (size, camDist) >= 0.5) surface->RenderDepth ();
 		for (auto &b : bases) b->Render (pass);
 		return;

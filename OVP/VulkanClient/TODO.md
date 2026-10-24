@@ -76,3 +76,9 @@ Known gaps and limitations, to be addressed later.
   artistic choice for visible contact darkening in sunlight). Spatial blur
   only: no temporal accumulation yet (would come with TAA).
 - The prepass draws the geometry a second time.
+
+## Temporal anti-aliasing
+- On by default (ORBITER_VK_TAA=0 for 4x MSAA). Transparent surfaces,
+  particles and exhaust take the motion of what is behind them (possible
+  smearing on fast relative motion). Mesh animations are not in the motion
+  vectors (only whole-object motion). No sharpening pass yet.

@@ -106,6 +106,7 @@ void AmbientOcclusion::CreateImages ()
 {
 	extent = ctx->Extent();
 	prepassColor = CreateImage (PREPASS_FORMAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+	velocity = CreateImage (VELOCITY_FORMAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
 	prepassDepth = CreateImage (ctx->depthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
 	aoRaw = CreateImage (VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
 	aoFinal = CreateImage (VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
@@ -113,9 +114,11 @@ void AmbientOcclusion::CreateImages ()
 	// the occlusion image starts unoccluded (it stays so while disabled);
 	// the intermediate image lives in general layout, the prepass image rests
 	// in shader-read layout
-	VkImage pc = prepassColor.image, raw = aoRaw.image, fin = aoFinal.image;
-	ctx->ImmediateSubmit ([pc, raw, fin](VkCommandBuffer cmd) {
+	VkImage pc = prepassColor.image, vel = velocity.image, raw = aoRaw.image, fin = aoFinal.image;
+	ctx->ImmediateSubmit ([pc, vel, raw, fin](VkCommandBuffer cmd) {
 		vkc::ImageBarrier (cmd, pc, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+		vkc::ImageBarrier (cmd, vel, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 			VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 		vkc::ImageBarrier (cmd, raw, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
 			VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
@@ -159,6 +162,7 @@ void AmbientOcclusion::DestroyImages ()
 	vkResetDescriptorPool (ctx->device, pool, 0);
 	ctx->DestroyImage (prepassColor);
 	ctx->DestroyImage (prepassDepth);
+	ctx->DestroyImage (velocity);
 	ctx->DestroyImage (aoRaw);
 	ctx->DestroyImage (aoFinal);
 	aoSet = blurSet = VK_NULL_HANDLE;
@@ -176,8 +180,9 @@ bool AmbientOcclusion::EnsureSize ()
 void AmbientOcclusion::BeginPrepass ()
 {
 	const float clear[4] = { 0.0f, 0.0f, 0.0f, 0.0f }; // depth 0: no geometry
-	ctx->BindTargetWithDepth ({ prepassColor.image, prepassColor.view, PREPASS_FORMAT, extent },
-		{ prepassDepth.image, prepassDepth.view, ctx->depthFormat, extent }, clear);
+	vkc::Target t[2] = { { prepassColor.image, prepassColor.view, PREPASS_FORMAT, extent },
+	                     { velocity.image, velocity.view, VELOCITY_FORMAT, extent } };
+	ctx->BindTargetsWithDepth (t, 2, { prepassDepth.image, prepassDepth.view, ctx->depthFormat, extent }, clear);
 }
 
 void AmbientOcclusion::Compute (float fx, float fy)
