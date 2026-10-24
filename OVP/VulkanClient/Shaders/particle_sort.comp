@@ -1,0 +1,30 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// GPU particles: one step of a bitonic sort of the keys (with the values)
+
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 8, std430) buffer SortVals { uint vals[]; };
+layout(set = 0, binding = 9, std430) buffer SortKeys { uint keys[]; };
+
+layout(push_constant) uniform Params {
+	uint j, k, n;
+} pc;
+
+void main ()
+{
+	uint i = gl_GlobalInvocationID.x;
+	if (i >= pc.n) return;
+	uint l = i ^ pc.j;
+	if (l <= i) return;
+	bool up = (i & pc.k) == 0u;
+	uint ki = keys[i], kl = keys[l];
+	if ((ki > kl) == up) {
+		keys[i] = kl, keys[l] = ki;
+		uint v = vals[i];
+		vals[i] = vals[l], vals[l] = v;
+	}
+}

@@ -108,6 +108,8 @@ set(SHADER_SRC
 	Shaders/particle_light_rt.comp
 	Shaders/particle_shadow_splat.comp
 	Shaders/particle_shadow_sum.comp
+	Shaders/particle_sortkeys.comp
+	Shaders/particle_sort.comp
 	Shaders/gpuparticle.vert
 	Shaders/gpuparticle.frag
 )

@@ -17,6 +17,8 @@
 #include "particle_light_rt.comp.h"
 #include "particle_shadow_splat.comp.h"
 #include "particle_shadow_sum.comp.h"
+#include "particle_sortkeys.comp.h"
+#include "particle_sort.comp.h"
 #include "gpuparticle.vert.h"
 #include "gpuparticle.frag.h"
 
@@ -47,8 +49,9 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 {
 	ctx = c, texmgr = tm;
 	{
-		// smoke puffs: clusters of soft blobs (cauliflower-like billows),
-		// broken up by noise, slightly darker inside
+		// smoke puffs: clusters of soft blobs (cauliflower-like billows) as a
+		// height field: normal (rg, sprite axes), thickness (b) and coverage
+		// (a), so that they can be lit and eroded (gpuparticle.frag)
 		const int N = 256, Q = N / 2;
 		std::vector<uint8_t> px (N * N * 4);
 		std::mt19937 rng (4242);
@@ -67,30 +70,42 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		};
 		for (int q = 0; q < 4; q++) {
 			struct Blob { double x, y, r; };
-			std::vector<Blob> blobs{ { 0.0, 0.0, 0.42 } };
-			for (int k = 0; k < 7; k++) {
-				double ang = uni (rng) * 6.2831853, d = 0.18 + 0.15 * uni (rng);
-				blobs.push_back ({ d * cos (ang), d * sin (ang), 0.16 + 0.12 * uni (rng) });
+			std::vector<Blob> blobs{ { 0.0, 0.0, 0.28 } };
+			for (int k = 0; k < 16; k++) {
+				double ang = uni (rng) * 6.2831853, d = 0.15 + 0.45 * uni (rng);
+				double r = 0.08 + 0.17 * uni (rng) * (1.0 - 0.6 * d);
+				blobs.push_back ({ d * cos (ang), d * sin (ang), r });
 			}
+			std::vector<double> H ((size_t)Q * Q), A ((size_t)Q * Q);
 			for (int y = 0; y < Q; y++)
 				for (int x = 0; x < Q; x++) {
 					double u = (x + 0.5) / Q * 2.0 - 1.0, v = (y + 0.5) / Q * 2.0 - 1.0;
-					double dens = 0.0;
+					// height: the union of spherical billows, roughened
+					double h = 0.0;
 					for (auto &b : blobs) {
-						double dx = u - b.x, dy = v - b.y;
-						dens += std::exp (-(dx * dx + dy * dy) / (b.r * b.r) * 2.0);
+						double dx = u - b.x, dy = v - b.y, r2 = b.r * b.r - dx * dx - dy * dy;
+						if (r2 > 0.0) h = std::max (h, std::sqrt (r2) + 0.3 * b.r);
 					}
-					double n = 0.0, amp = 0.5, f = 4.0;
+					double n = 0.0, amp = 0.5, f = 6.0;
 					for (int o = 0; o < 4; o++, amp *= 0.5, f *= 2.0) n += amp * vnoise (u * f + q * 17.0, v * f, o);
-					double a = std::clamp ((dens * (0.55 + 0.9 * n) - 0.25) * 1.4, 0.0, 1.0);
-					a *= std::clamp ((1.0 - std::sqrt (u * u + v * v)) * 4.0, 0.0, 1.0); // (zero at the edge)
-					double shade = std::clamp (0.7 + 0.35 * n + 0.1 * dens, 0.0, 1.0);
+					h *= 0.8 + 0.4 * n;
+					double edge = std::clamp ((1.0 - std::sqrt (u * u + v * v)) * 5.0, 0.0, 1.0);
+					H[(size_t)y * Q + x] = h * edge;
+					A[(size_t)y * Q + x] = std::clamp (h * 3.0, 0.0, 1.0) * edge;
+				}
+			for (int y = 0; y < Q; y++)
+				for (int x = 0; x < Q; x++) {
+					auto at = [&](int i, int j) { return H[(size_t)std::clamp (j, 0, Q - 1) * Q + std::clamp (i, 0, Q - 1)]; };
+					double dhdu = (at (x + 1, y) - at (x - 1, y)) * Q / 4.0, dhdv = (at (x, y + 1) - at (x, y - 1)) * Q / 4.0;
+					double nx = -dhdu, ny = -dhdv, nz = 1.0, l = std::sqrt (nx * nx + ny * ny + nz * nz);
 					uint8_t *p = &px[((y + (q >> 1) * Q) * N + x + (q & 1) * Q) * 4];
-					p[0] = p[1] = p[2] = (uint8_t)std::lround (shade * 255.0);
-					p[3] = (uint8_t)std::lround (a * 255.0);
+					p[0] = (uint8_t)std::lround ((nx / l * 0.5 + 0.5) * 255.0);
+					p[1] = (uint8_t)std::lround ((ny / l * 0.5 + 0.5) * 255.0);
+					p[2] = (uint8_t)std::lround (std::clamp (H[(size_t)y * Q + x] * 1.8, 0.0, 1.0) * 255.0);
+					p[3] = (uint8_t)std::lround (A[(size_t)y * Q + x] * 255.0);
 				}
 		}
-		smokeTex = texmgr->CreateRGBA (N, N, px.data());
+		smokeTex = texmgr->CreateRGBALinear (N, N, px.data());
 	}
 	shapeView = shapeNoise, detailView = detailNoise;
 	if (const char *e = getenv ("ORBITER_VK_PARTICLES")) enabled = atoi (e) != 0;
@@ -103,6 +118,12 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		vkCmdFillBuffer (cmd, pb, 0, VK_WHOLE_SIZE, 0); // (lifetime 0: no particles)
 	});
 	freeList.push_back ({ 0, CAPACITY });
+	// draw order: sorted slots, keys, the ring of each block (per frame)
+	sortVals = ctx->CreateBuffer (CAPACITY * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false);
+	sortKeys = ctx->CreateBuffer (CAPACITY * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false);
+	for (auto &b : blockRingBuf) b = ctx->CreateBuffer ((CAPACITY / BLOCK) * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+	blockRing.resize (CAPACITY / BLOCK);
+	for (uint32_t i = 0; i < blockRing.size(); i++) blockRing[i] = i;
 
 	VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
 	sci.magFilter = sci.minFilter = VK_FILTER_LINEAR;
@@ -147,19 +168,23 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 
 	// pool, emissions, noise volumes, prepass, shadow grid
 	const VkShaderStageFlags CS = VK_SHADER_STAGE_COMPUTE_BIT;
-	VkDescriptorSetLayoutBinding b[8] = {
+	// (8-10: sorting for drawing far to near: values, keys, ring of each block)
+	VkDescriptorSetLayoutBinding b[11] = {
 		{ 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS | VK_SHADER_STAGE_VERTEX_BIT, nullptr },
 		{ 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS, nullptr },
 		{ 2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, CS, nullptr },
-		{ 3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, CS, nullptr },
+		{ 3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, CS | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
 		{ 4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
 		{ 5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, CS, nullptr },
 		{ 6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, CS, nullptr },
-		{ 7, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, CS, nullptr } };
+		{ 7, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, CS, nullptr },
+		{ 8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS | VK_SHADER_STAGE_VERTEX_BIT, nullptr },
+		{ 9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS, nullptr },
+		{ 10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS, nullptr } };
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 8, lci.pBindings = b;
+	lci.bindingCount = 11, lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &setLayout));
-	VkDescriptorPoolSize ps[3] = { { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * vkc::FRAMES_IN_FLIGHT },
+	VkDescriptorPoolSize ps[3] = { { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5 * vkc::FRAMES_IN_FLIGHT },
 		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * vkc::FRAMES_IN_FLIGHT },
 		{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 * vkc::FRAMES_IN_FLIGHT } };
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -189,6 +214,15 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 			}
 		}
 		vkUpdateDescriptorSets (ctx->device, 7, wr, 0, nullptr);
+		VkDescriptorBufferInfo sbi[3] = { { sortVals.buffer, 0, VK_WHOLE_SIZE }, { sortKeys.buffer, 0, VK_WHOLE_SIZE },
+			{ blockRingBuf[i].buffer, 0, VK_WHOLE_SIZE } };
+		VkWriteDescriptorSet sw[3]{};
+		for (uint32_t k = 0; k < 3; k++) {
+			sw[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			sw[k].dstSet = sets[i], sw[k].dstBinding = 8 + k, sw[k].descriptorCount = 1;
+			sw[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, sw[k].pBufferInfo = &sbi[k];
+		}
+		vkUpdateDescriptorSets (ctx->device, 3, sw, 0, nullptr);
 	}
 
 	auto layoutOf = [this](std::initializer_list<VkDescriptorSetLayout> l, VkShaderStageFlags stages, uint32_t pcSize) {
@@ -218,6 +252,9 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 	lightPipe = compute (spv_particle_light_comp, spv_particle_light_comp_size, updateLayout);
 	splatPipe = compute (spv_particle_shadow_splat_comp, spv_particle_shadow_splat_comp_size, updateLayout);
 	sumPipe = compute (spv_particle_shadow_sum_comp, spv_particle_shadow_sum_comp_size, updateLayout);
+	sortKeysPipe = compute (spv_particle_sortkeys_comp, spv_particle_sortkeys_comp_size, updateLayout);
+	sortLayout = layoutOf ({ setLayout }, CS, 3 * sizeof(uint32_t));
+	sortPipe = compute (spv_particle_sort_comp, spv_particle_sort_comp_size, sortLayout);
 
 	// drawing: quads (triangle strips) from the pool, premultiplied or additive,
 	// with the reactive mask
@@ -308,9 +345,9 @@ void ParticleSystem::InitRT (VkDescriptorSetLayout frameLayout, VkDescriptorSetL
 void ParticleSystem::Shutdown ()
 {
 	if (!ctx) return;
-	for (VkPipeline p : { emitPipe, updatePipe, updateRTPipe, lightPipe, lightRTPipe, splatPipe, sumPipe, drawBlend, drawAdd })
+	for (VkPipeline p : { emitPipe, updatePipe, updateRTPipe, lightPipe, lightRTPipe, splatPipe, sumPipe, sortKeysPipe, sortPipe, drawBlend, drawAdd })
 		if (p) vkDestroyPipeline (ctx->device, p, nullptr);
-	for (VkPipelineLayout l : { emitLayout, updateLayout, updateRTLayout, drawLayout })
+	for (VkPipelineLayout l : { emitLayout, updateLayout, updateRTLayout, drawLayout, sortLayout })
 		if (l) vkDestroyPipelineLayout (ctx->device, l, nullptr);
 	vkDestroyDescriptorPool (ctx->device, dpool, nullptr);
 	vkDestroyDescriptorSetLayout (ctx->device, setLayout, nullptr);
@@ -318,6 +355,9 @@ void ParticleSystem::Shutdown ()
 	vkDestroySampler (ctx->device, clampSampler, nullptr);
 	ctx->DestroyBuffer (pool);
 	for (auto &b : emitBuf) ctx->DestroyBuffer (b);
+	ctx->DestroyBuffer (sortVals);
+	ctx->DestroyBuffer (sortKeys);
+	for (auto &b : blockRingBuf) ctx->DestroyBuffer (b);
 	ctx->DestroyImage (shadowAccum);
 	ctx->DestroyImage (shadowDepth);
 	if (smokeTex) texmgr->Release (smokeTex);
@@ -332,6 +372,7 @@ bool ParticleSystem::Allocate (uint32_t want, uint32_t &first, uint32_t &capacit
 		if (f.second < n) continue;
 		first = f.first, capacity = n;
 		f.first += n, f.second -= n;
+		for (uint32_t k = first / BLOCK; k < (first + n) / BLOCK; k++) blockRing[k] = first / BLOCK;
 		if (!f.second) freeList.erase (freeList.begin() + i);
 		toClear.push_back ({ first, capacity });
 		return true;
@@ -342,6 +383,7 @@ bool ParticleSystem::Allocate (uint32_t want, uint32_t &first, uint32_t &capacit
 void ParticleSystem::Free (uint32_t first, uint32_t capacity)
 {
 	// (particles left in the ring are cleared when it is allocated again)
+	for (uint32_t k = first / BLOCK; k < (first + capacity) / BLOCK; k++) blockRing[k] = k;
 	freeList.push_back ({ first, capacity });
 	std::sort (freeList.begin(), freeList.end());
 	std::vector<std::pair<uint32_t, uint32_t>> merged;
@@ -513,6 +555,28 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, useRT ? lightRTPipe : lightPipe);
 	bindSets (ul, useRT);
 	vkCmdDispatch (cmd, CAPACITY / 64, 1, 1);
+	barrier (CS, RW, CS, RW);
+
+	// draw order: far to near within each ring (bitonic sort over the used
+	// part of the pool)
+	uint32_t used = CAPACITY; // (up to the free space at the end of the pool)
+	for (auto &f : freeList) if (f.first + f.second == CAPACITY) used = std::max (f.first, BLOCK);
+	uint32_t n = 1;
+	while (n < used) n <<= 1;
+	memcpy (blockRingBuf[fi].mapped, blockRing.data(), blockRing.size() * sizeof(uint32_t));
+	up.ground[2] = (float)n;
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, sortKeysPipe);
+	bindSets (updateLayout, false);
+	vkCmdDispatch (cmd, (n + 63) / 64, 1, 1);
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, sortPipe);
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, sortLayout, 0, 1, &set, 0, nullptr);
+	for (uint32_t k = 2; k <= n; k <<= 1)
+		for (uint32_t j = k >> 1; j > 0; j >>= 1) {
+			barrier (CS, RW, CS, RW);
+			uint32_t pcs[3] = { j, k, n };
+			vkCmdPushConstants (cmd, sortLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pcs), pcs);
+			vkCmdDispatch (cmd, (n + 255) / 256, 1, 1);
+		}
 	barrier (CS, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 }
 
@@ -523,7 +587,8 @@ void ParticleSystem::Draw (uint32_t first, uint32_t capacity, VkTexture *tex, bo
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, emissive ? drawAdd : drawBlend);
 	VkDescriptorSet s[3] = { frameSet, sets[ctx->FrameIndex ()], tex->set };
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawLayout, 0, 3, s, 0, nullptr);
-	struct { uint32_t first, flags; float alpha, pad; float body[12]; } pc{ first, emissive ? 1u : 0u, 1.0f, 0.0f, {} };
+	uint32_t flags = (emissive ? 1u : 0u) | (tex == smokeTex ? 2u : 0u) | 4u;
+	struct { uint32_t first, flags; float alpha, pad; float body[12]; } pc{ first, flags, 1.0f, 0.0f, {} };
 	memcpy (pc.body, drawBody, sizeof(drawBody));
 	vkCmdPushConstants (cmd, drawLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 	vkCmdDraw (cmd, 4, capacity, 0, 0);

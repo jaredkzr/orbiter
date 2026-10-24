@@ -240,6 +240,12 @@ VkTexture *TextureManager::CreateRGBA (uint32_t w, uint32_t h, const uint8_t *rg
 	return CreateImage (VK_FORMAT_R8G8B8A8_SRGB, w, h, 1, rgba, ofs, (size_t)w * h * 4, true);
 }
 
+VkTexture *TextureManager::CreateRGBALinear (uint32_t w, uint32_t h, const uint8_t *rgba)
+{
+	std::vector<size_t> ofs = { 0 };
+	return CreateImage (VK_FORMAT_R8G8B8A8_UNORM, w, h, 1, rgba, ofs, (size_t)w * h * 4, true);
+}
+
 VkTexture *TextureManager::CreateCoverage (uint32_t w, uint32_t h, const uint8_t *data)
 {
 	std::vector<size_t> ofs = { 0 };

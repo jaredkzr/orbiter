@@ -108,6 +108,10 @@ private:
 	VkPipeline emitPipe = VK_NULL_HANDLE, updatePipe = VK_NULL_HANDLE, updateRTPipe = VK_NULL_HANDLE;
 	VkPipeline lightPipe = VK_NULL_HANDLE, lightRTPipe = VK_NULL_HANDLE, splatPipe = VK_NULL_HANDLE, sumPipe = VK_NULL_HANDLE;
 	vkc::Image shadowAccum, shadowDepth; // smoke shadow grid
+	VkPipeline sortKeysPipe = VK_NULL_HANDLE, sortPipe = VK_NULL_HANDLE;
+	VkPipelineLayout sortLayout = VK_NULL_HANDLE;
+	vkc::Buffer sortVals, sortKeys, blockRingBuf[vkc::FRAMES_IN_FLIGHT];
+	std::vector<uint32_t> blockRing; // first block of the ring of each block (free: the block itself)
 	VkPipeline drawBlend = VK_NULL_HANDLE, drawAdd = VK_NULL_HANDLE;
 	static constexpr uint32_t MAX_EMISSIONS = 4096;
 };

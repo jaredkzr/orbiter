@@ -1,0 +1,32 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// GPU particles: sort keys for drawing far to near within each stream's
+// ring: the ring (its first block, so that each ring's particles stay in
+// its range of the pool) and the distance from the camera (decreasing);
+// unused slots last within their ring
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 64) in;
+
+#include "particle_common.glsl"
+layout(set = 0, binding = 8, std430) buffer SortVals { uint vals[]; };
+layout(set = 0, binding = 9, std430) buffer SortKeys { uint keys[]; };
+layout(set = 0, binding = 10, std430) readonly buffer BlockRings { uint blockRing[]; }; // first block of the ring of each block
+
+void main ()
+{
+	uint i = gl_GlobalInvocationID.x;
+	if (i >= uint (pc.ground.z)) return; // (ground.z: the number of keys)
+	Particle p = particles[i];
+	uint low = 0x3FFFFFu;
+	if (p.velLife.w > 0.0) {
+		float z = max (dot (p.posAge.xyz, frame.viewToGlobal[2].xyz), 0.0);
+		float q = clamp (log2 (z + 1.0) / 17.0, 0.0, 1.0); // (up to about 130 km)
+		low = 0x3FFFFEu - uint (q * float (0x3FFFFE));
+	}
+	keys[i] = (blockRing[i >> 8] << 22) | low;
+	vals[i] = i;
+}
