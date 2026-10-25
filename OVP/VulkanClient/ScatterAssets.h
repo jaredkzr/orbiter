@@ -36,9 +36,16 @@ namespace scatter {
 	struct Asset {
 		Kind kind;
 		std::string name;
-		std::unique_ptr<VkMesh> mesh;
+		std::unique_ptr<VkMesh> mesh;            // full detail
+		std::vector<std::unique_ptr<VkMesh>> lods; // coarser levels of detail (may be empty)
 		double radius;  // horizontal extent [m]
 		double height;  // [m]
+		/// level of detail for a size on screen [pixels]
+		const VkMesh *ForPixels (double px) const
+		{
+			if (lods.empty() || px > 150.0) return mesh.get();
+			return (px > 40.0 || lods.size() < 2) ? lods[0].get() : lods[1].get();
+		}
 	};
 
 	/// Rock colouring of a body
@@ -48,8 +55,10 @@ namespace scatter {
 	public:
 		Library (vkc::Context *ctx, TextureManager *texmgr);
 		~Library ();
-		/// Generate the assets (rocks in the given style; vegetation if asked)
-		void Generate (RockStyle style, bool vegetation);
+		/// The assets of a body: rocks made with Blender (Utils/ScatterAssets,
+		/// listed in Config/VK/Scatter/<body>.cfg) if there are, else
+		/// generated in the given style; vegetation if asked
+		void Generate (const char *body, RockStyle style, bool vegetation);
 		const std::vector<Asset> &Assets () const { return assets; }
 
 	private:
@@ -58,6 +67,7 @@ namespace scatter {
 		std::vector<Asset> assets;
 		std::vector<VkTexture*> textures;
 		VkTexture *Texture (uint32_t w, uint32_t h, const std::vector<uint8_t> &rgba);
+		bool LoadRocks (const char *body);
 	};
 
 	/// Preview of the assets in rows on the ground next to the focus vessel

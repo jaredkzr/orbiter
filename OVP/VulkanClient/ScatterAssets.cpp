@@ -936,7 +936,38 @@ VkTexture *Library::Texture (uint32_t w, uint32_t h, const std::vector<uint8_t> 
 	return t;
 }
 
-void Library::Generate (RockStyle style, bool vegetation)
+bool Library::LoadRocks (const char *body)
+{
+	// Config/VK/Scatter/<body>.cfg: ROCK <mesh stem> <radius> <height> <triangles>...
+	std::string path = std::string ("Config/VK/Scatter/") + body + ".cfg";
+	FILE *f = fopen (path.c_str(), "r");
+	if (!f) return false;
+	char line[512];
+	int n = 0;
+	while (fgets (line, sizeof(line), f)) {
+		char stem[256];
+		double rad, h;
+		if (sscanf (line, "ROCK %255s %lf %lf", stem, &rad, &h) != 3) continue;
+		Asset a;
+		a.kind = Kind::ROCK, a.name = stem, a.radius = rad, a.height = h;
+		for (int k = 0; k < 3; k++) {
+			std::string m = std::string (stem) + "_lod" + std::to_string (k);
+			MESHHANDLE hm = oapiLoadMeshGlobal (m.c_str());
+			if (!hm) { oapiWriteLogError ("Scatter: cannot load mesh %s", m.c_str()); break; }
+			auto vm = std::make_unique<VkMesh> (ctx, texmgr, hm);
+			if (k == 0) a.mesh = std::move (vm);
+			else a.lods.push_back (std::move (vm));
+		}
+		if (!a.mesh) continue;
+		assets.push_back (std::move (a));
+		n++;
+	}
+	fclose (f);
+	oapiWriteLogV ("Scatter: %d rocks of %s from %s", n, body, path.c_str());
+	return n > 0;
+}
+
+void Library::Generate (const char *body, RockStyle style, bool vegetation)
 {
 	auto part = [&](Builder &b, VkTexture *tex, float roughness, float alphaTest = 0.0f) {
 		VkMesh::Part p;
@@ -965,7 +996,9 @@ void Library::Generate (RockStyle style, bool vegetation)
 		return t;
 	};
 
-	// rocks: the types of the body, pebbles to boulders, each with its own texture
+	// rocks: made with Blender, or the types of the body, pebbles to
+	// boulders, each with its own texture
+	bool loaded = LoadRocks (body);
 	struct RockSpec { const RockShape *shape; RockTex tex; double size; bool split; };
 	std::vector<RockSpec> rocks;
 	if (style == RockStyle::GRANITE) {
@@ -981,7 +1014,7 @@ void Library::Generate (RockStyle style, bool vegetation)
 		for (double sz : { 0.8, 1.5, 2.5 }) rocks.push_back ({ &MARS_SLAB, RockTex::MARS_SANDSTONE, sz, false });
 		for (double sz : { 0.7, 1.4, 2.4 }) rocks.push_back ({ &MARS_BASALT, RockTex::MARS_BASALT, sz, false });
 	}
-	for (size_t k = 0; k < rocks.size(); k++) {
+	for (size_t k = 0; k < rocks.size() && !loaded; k++) {
 		const RockSpec &rs = rocks[k];
 		Tex t = TypedRockTexture (rs.tex, 100 + (uint32_t)k);
 		VkTexture *tex = Texture (t.w, t.h, t.px);
@@ -1054,7 +1087,7 @@ Gallery::Gallery (Scene *s, OBJHANDLE hp): scene (s), hPlanet (hp)
 	oapiGetObjectName (hPlanet, name, 64);
 	RockStyle style = !strcmp (name, "Mars") ? RockStyle::MARS : !strcmp (name, "Earth") ? RockStyle::GRANITE : RockStyle::REGOLITH;
 	lib = std::make_unique<Library> (scene->Client()->Ctx(), scene->Client()->TexMgr());
-	lib->Generate (style, !strcmp (name, "Earth"));
+	lib->Generate (name, style, !strcmp (name, "Earth"));
 }
 
 Gallery::~Gallery () {}
@@ -1170,7 +1203,8 @@ void Gallery::Render (RenderPass pass)
 	for (const Item &it : items) {
 		VECTOR3 gpos = pp + mul (prot, it.pos);
 		scene->Sunlight (gpos);
-		scene->DrawMesh (it.asset->mesh.get(), scene->ModelView (gpos, mul (prot, it.rot)), pass);
+		double px = scene->PixelSize (std::max (it.asset->radius, it.asset->height), length (gpos - scene->CameraPos ()));
+		scene->DrawMesh (it.asset->ForPixels (px), scene->ModelView (gpos, mul (prot, it.rot)), pass);
 	}
 }
 

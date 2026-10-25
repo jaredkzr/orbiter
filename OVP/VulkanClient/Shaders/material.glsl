@@ -46,7 +46,10 @@ Material SurfaceMaterial (vec3 normalView, vec3 posView, vec2 uv, uint maps, vec
 	vec3 N = normalize (normalView);
 	if (dot (N, posView) > 0.0) N = -N; // double-sided surfaces
 	if ((maps & MAP_NORM) != 0u) {
-		vec3 n = texture (normMap, uv).xyz * 2.0 - 1.0;
+		// (z from x and y: two-channel maps such as BC5 have none)
+		vec3 n;
+		n.xy = texture (normMap, uv).xy * 2.0 - 1.0;
+		n.z = sqrt (max (0.0, 1.0 - dot (n.xy, n.xy)));
 		vec3 Np = normalize (CotangentFrame (N, posView, uv) * n);
 		if (all (equal (Np, Np))) N = Np; // degenerate texture coordinates: keep N
 	}

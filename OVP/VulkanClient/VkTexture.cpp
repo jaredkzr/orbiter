@@ -478,6 +478,8 @@ bool TextureManager::ParseDDS (const uint8_t *file, size_t fileSize, DDSImage &i
 		case FourCC('D','X','T','3'): img.fmt = linear ? VK_FORMAT_BC2_UNORM_BLOCK : VK_FORMAT_BC2_SRGB_BLOCK; blockBytes = 16; break;
 		case FourCC('D','X','T','4'):
 		case FourCC('D','X','T','5'): img.fmt = linear ? VK_FORMAT_BC3_UNORM_BLOCK : VK_FORMAT_BC3_SRGB_BLOCK; blockBytes = 16; break;
+		case FourCC('A','T','I','2'):
+		case FourCC('B','C','5','U'): img.fmt = VK_FORMAT_BC5_UNORM_BLOCK; blockBytes = 16; break; // (two channels: normal maps)
 		default: return false;
 		}
 		if (!ctx->deviceFeatures.textureCompressionBC) return false;
