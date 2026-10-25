@@ -69,13 +69,14 @@ if (ORBITER_TEST_EXE)
 	)
 	set_tests_properties(Scenario.SanityCheck PROPERTIES TIMEOUT 60)
 
-	# Register scenario tests
+	# Register scenario tests (with a fixed time step: repeatable, and not
+	# bound to real time)
 	file(GLOB TestScenarios "${CMAKE_SOURCE_DIR}/Scenarios/Tests/*.scn")
 	foreach(Scenario ${TestScenarios})
 		get_filename_component(test_name ${Scenario} NAME_WE)
 		add_test(
 			NAME "Scenario.${test_name}"
-			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${Scenario}"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${Scenario}" "--fixedstep=0.02"
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Scenario.${test_name} PROPERTIES TIMEOUT 60)

@@ -22,6 +22,7 @@
 #define __VESSEL_H
 
 #include <array>
+#include <vector>
 #include <fstream>
 
 #include "Vesselbase.h"
@@ -1613,6 +1614,16 @@ private:
 
 	double E0_comp;              // compression energy due to surface impact at current time step
 	mutable double E_comp;       // compression energy due to surface impact after last AddSurfaceForces call
+
+	// scratch values per touchdown point for AddSurfaceForces
+	struct ContactScratch {
+		std::vector<int> idx;     // points in contact
+		std::vector<double> depth, fn, flng, flat; // height above ground; normal, longitudinal, lateral force
+		void Resize (size_t n) {
+			if (idx.size() < n) idx.resize (n), depth.resize (n), fn.resize (n), flng.resize (n), flat.resize (n);
+		}
+	};
+	mutable ContactScratch contact_scratch;
 
 	double vd_forw, vd_back, vd_vert, vd_side;  // resistance constants against translation in atmosphere
 

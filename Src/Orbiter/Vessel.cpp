@@ -4300,14 +4300,8 @@ bool Vessel::AddSurfaceForces (Vector *F, Vector *M, const StateVectors *s, doub
 
 	int i, j;
 	double alt = 0, tdymin = 0;
-	static int *tidx = new int[3];
-	static double *tdy = new double[3];
-	static double *fn = new double[3];
-	static double *flng = new double[3];
-	static double *flat = new double[3];
-	static DWORD ntdy = 3;
 
-	static StateVectors ls; // local state
+	StateVectors ls; // local state
 	if (!proxybody) return false;
 	StateVectors ps = proxybody->InterpolateState (tfrac); // intermediate planet state; should probably be passed in as function argument
 	SurfParam surfp; // intermediate surface parameters; should probably be passed in as function argument
@@ -4338,19 +4332,12 @@ bool Vessel::AddSurfaceForces (Vector *F, Vector *M, const StateVectors *s, doub
 	Matrix T (s->R); // transformation vessel local -> planet local
 	T.tpremul (ps.R);
 
-	if (ntdy < ntouchdown_vtx) {
-		ntdy = ntouchdown_vtx;
-		delete []tidx;
-		tidx = new int[ntdy];
-		delete []tdy;
-		tdy = new double[ntdy];
-		delete []fn;
-		fn = new double[ntdy];
-		delete []flng;
-		flng = new double[ntdy];
-		delete []flat;
-		flat = new double[ntdy];
-	}
+	// per-point scratch values (owned by the vessel, so that vessels can be
+	// updated independently)
+	ContactScratch &cs = contact_scratch;
+	cs.Resize (ntouchdown_vtx);
+	int *tidx = cs.idx.data();
+	double *tdy = cs.depth.data(), *fn = cs.fn.data(), *flng = cs.flng.data(), *flat = cs.flat.data();
 
 	ElevationManager* emgr = (cbody->Type() == OBJTP_PLANET ? ((Planet*)cbody)->ElevMgr() : 0);
 	int reslvl = 1;
@@ -4384,7 +4371,7 @@ bool Vessel::AddSurfaceForces (Vector *F, Vector *M, const StateVectors *s, doub
 	}
 
 	// surface effects: friction and wheel brakes
-	double gv_lon, gv_lat, gv_n, fmax, mu;
+	double gv_lon, gv_lat, gv_n, mu;
 	double massdt = mass/dt;
 	double fn_tot_undamped = 0.0, fn_tot = 0.0, flng_tot = 0.0, flat_tot = 0.0;
 
@@ -4398,322 +4385,91 @@ bool Vessel::AddSurfaceForces (Vector *F, Vector *M, const StateVectors *s, doub
 	// lateral touchdown direction
 	Vector d2h (crossp (hn, d1h));
 
-	if (bDynamicGroundContact) {
+	DWORD ntouch = 0;
+	for (i = 0; i < ntouchdown_vtx; i++) {
+		if (tdy[i] < 0.0) { // ground contact on point i!
+			tdy[i] = max(tdy[i], -1.0); // DEBUG
+			tidx[ntouch++] = i;
+			Vector gv (surfp.groundvel_ship + crossp(touchdown_vtx[i].pos,s->omega)); // ground velocity of touchdown point in vessel frame
+			gv_n   = dotp (gv, hn);                                             // gv projected on horizon normal in vessel frame
+			gv_lon = dotp (gv, d1h);											// longitudinal speed component for touchdown point i
+			gv_lat = dotp (gv, d2h);											// lateral speed component
 
-//#define NEWCONTACTMODEL
-#ifdef NEWCONTACTMODEL // new version - experimental!
-		if (tdymin < 0.0) {
-			DWORD ntouch = 0;
-			double mueff_lng, mueff_lat, gv_hor;
-			double dt1 = max(dt, 1.0); // time to stop in case of Haftreibung
-			double massdt1 = mass/dt1;
-			for (i = 0; i < ntouchdown_vtx; i++) {
-				if (tdy[i] < 0.0) {
-					tidx[ntouch++] = i;
-					Vector gV (surfp.groundvel_ship + crossp(touchdown_vtx[i].pos,s->omega)); // ground velocity of touchdown point in vessel frame
-					gv_n   = dotp (gV, hn);                                             // gv projected on horizon normal in vessel frame
-					gv_lon = dotp (gV, d1h);											// longitudinal speed component for touchdown point i
-					gv_lat = dotp (gV, d2h);											// lateral speed component
+			fn[i] = -tdy[i]*touchdown_vtx[i].stiffness; 						// horizon-normal force component: gear compression forces
+			double maxpress = min (-tdy[i], 0.1)*touchdown_vtx[i].stiffness;
 
-					Vector gV_hor = d1h*gv_lon + d2h*gv_lat;
-					Vector gV_hor2 = gV - hn*gv_n;  // is this the same?
-
-					gv_hor = hypot(gv_lon,gv_lat);
-					Vector gV_hor0 (gV_hor/gv_hor);
-
-					fn[i] = -tdy[i]*touchdown_vtx[i].stiffness; 	// horizon-normal force component: gear compression forces
-
-					if (i < 3 && touchdown_vtx[i].mu_lng != touchdown_vtx[i].mu) {
-						flng[i] = fn[i] * touchdown_vtx[i].mu_lng;
-						if (gv_lon > 0.0) flng[i] = -flng[i];
-					} else
-						flng[i] = -gv_lon * fn[i] * touchdown_vtx[i].mu/dt1 * 1e-0;
-					flat[i] = -gv_lat * fn[i] * touchdown_vtx[i].mu/dt1 * 1e-0;
-
-					// vertical damping
-					fn[i] -= gv_n*touchdown_vtx[i].damping;
-					//fn[i] = max (fn[i], 0.0);
-					fn_tot += fn[i];
-
-					// debug
-					if (nforcevec < forcevecbuf) {
-						forcevec[nforcevec] = d1h*flng[i] + d2h*flat[i];
-						forcepos[nforcevec] = touchdown_vtx[i].pos;
-						nforcevec++;
-					}
-
-					flng_tot += flng[i];
-					flat_tot += flat[i];
-				}
-			}
-
-			double fmax = gv_hor * massdt1;
-			double fcur = hypot (flng_tot, flat_tot);
-			//sprintf (DBG_MSG, "fmax=%le, fcur=%le", fmax, fcur);
-			if (fcur > fmax) {
-				double scale = fmax/fcur;
-				flng_tot *= scale;
-				flat_tot *= scale;
-				for (i = 0; i < ntouch; i++) {
-					j = tidx[i];
-					flng[j] *= scale;
-					flat[j] *= scale;
-				}
-			}
-			*F += hn*fn_tot + d1h*flng_tot + d2h*flat_tot;
-
-			for (i = 0; i < ntouch; i++) {
-				j = tidx[i];
-				if (tdy[j] < 0.0) {
-					*M += crossp (hn*fn[j]+d1h*flng[j]+d2h*flat[j], touchdown_vtx[j].pos);
-				}
-			}
-		}
-
-#else
-
-		DWORD ntouch = 0;
-		for (i = 0; i < ntouchdown_vtx; i++) {
-			if (tdy[i] < 0.0) { // ground contact on point i!
-				tdy[i] = max(tdy[i], -1.0); // DEBUG
-				tidx[ntouch++] = i;
-				Vector gv (surfp.groundvel_ship + crossp(touchdown_vtx[i].pos,s->omega)); // ground velocity of touchdown point in vessel frame
-				gv_n   = dotp (gv, hn);                                             // gv projected on horizon normal in vessel frame
-				gv_lon = dotp (gv, d1h);											// longitudinal speed component for touchdown point i
-				gv_lat = dotp (gv, d2h);											// lateral speed component
-
-				fn[i] = -tdy[i]*touchdown_vtx[i].stiffness; 						// horizon-normal force component: gear compression forces
-				double maxpress = min (-tdy[i], 0.1)*touchdown_vtx[i].stiffness;
-
-				if (i < 3) {
-					mu = touchdown_vtx[i].mu_lng;
-					if (i && wbrake_level[i-1])
-						mu += (touchdown_vtx[i].mu - touchdown_vtx[i].mu_lng)*wbrake_level[i-1];
-				} else {
-					mu = touchdown_vtx[i].mu;
-				}
-				flng[i] = mu * maxpress;												// horizon-longitudinal force component: surface friction
-				if (fabs(gv_lon) < 10.0) flng[i] *= sqrt(fabs(0.1*gv_lon));             // cancel horizontal forces at low speeds
-				//flng[i] = min (flng[i], fabs(gv_lon) * fn[i] * mu/dt);
-				if (gv_lon > 0.0) flng[i] = -flng[i];
-				flng_tot += flng[i];
-
-				mu = touchdown_vtx[i].mu;
-				flat[i] = mu * maxpress;									// horizon-lateral force component: surface friction
-				if (fabs(gv_lat) < 10.0) flat[i] *= sqrt(fabs(0.1*gv_lat));
-				//flat[i] = min (flat[i], fabs(gv_lat) * fn[i] * mu/dt);
-				if (gv_lat > 0.0) flat[i] = -flat[i];
-				flat_tot += flat[i];
-
-				E_comp -= fn[i]*tdy[i]*0.5; // compression energy
-				fn_tot_undamped += fn[i];
-				fn[i] -= gv_n*touchdown_vtx[i].damping;
-				fn_tot += fn[i];
-
-				// debug
-				if (nforcevec < forcevecbuf) {
-					forcevec[nforcevec] = d1h*flng[i] + d2h*flat[i];
-					forcepos[nforcevec] = touchdown_vtx[i].pos;
-					nforcevec++;
-				}
-
+			if (i < 3) {
+				mu = touchdown_vtx[i].mu_lng;
+				if (i && wbrake_level[i-1])
+					mu += (touchdown_vtx[i].mu - touchdown_vtx[i].mu_lng)*wbrake_level[i-1];
 			} else {
-				fn[i] = flng[i] = flat[i] = 0.0;
+				mu = touchdown_vtx[i].mu;
 			}
-		}
+			flng[i] = mu * maxpress;												// horizon-longitudinal force component: surface friction
+			if (fabs(gv_lon) < 10.0) flng[i] *= sqrt(fabs(0.1*gv_lon));             // cancel horizontal forces at low speeds
+			//flng[i] = min (flng[i], fabs(gv_lon) * fn[i] * mu/dt);
+			if (gv_lon > 0.0) flng[i] = -flng[i];
+			flng_tot += flng[i];
 
-		// limit forces to avoid velocity reversal
-		gv_lon = dotp (surfp.groundvel_ship, d1h);
-		gv_lat = dotp (surfp.groundvel_ship, d2h);
-		gv_n   = dotp (surfp.groundvel_ship, hn);
-		double fmax_lon = -gv_lon * massdt;
-		if ((fmax_lon >= 0.0 && flng_tot > fmax_lon) || (fmax_lon <= 0.0 && flng_tot < fmax_lon)) {
-			double scale = fmax_lon/flng_tot;
-			flng_tot = fmax_lon;
-			for (i = 0; i < ntouch; i++)
-				flng[tidx[i]] *= scale;
-		}
-		double fmax_lat = -gv_lat * massdt;
-		if ((fmax_lat >= 0.0 && flat_tot > fmax_lat) || (fmax_lat <= 0.0 && flat_tot < fmax_lat)) {
-			double scale = fmax_lat/flat_tot;
-			flat_tot = fmax_lat;
-			for (i = 0; i < ntouch; i++)
-				flat[tidx[i]] *= scale;
-		}
-#ifdef UNDEF
-		// limit total energy for vertical compression
-		double d_eff = -E/fn_tot_undamped*2.0/ntouch; // effective compression depth
-		
-		E += 0.5*mass*gv_n*gv_n; // add current linear kinetic energy
-		E += 0.5*mass*dotp(s->omega*pmi, s->omega);
-		double dv = fn_tot/mass*dt;
-		double gv_n_new = gv_n + dv;
-		double d_eff_new = d_eff + dv*dt;
-		double E_new = (d_eff_new >= 0.0 ? 0.0 : d_eff_new * d_eff_new / d_eff * fn_tot_undamped * ntouch / 2.0);
-		E_new += 0.5 * mass * gv_n_new*gv_n_new;
-		if (E_new > E) {
-			double deltav = sqrt(2.0*(E_new-E)/mass);
-			double deltaf = deltav*mass/dt;
-			if (gv_n_new > 0.0) deltaf = -deltaf;
-			double fn_tot_new = fn_tot+deltaf;
-			double scale = fn_tot_new/fn_tot;
-			fn_tot = fn_tot_new;
-			for (i = 0; i < ntouch; i++)
-				fn[tidx[i]] *= scale;
-		}
-#endif
+			mu = touchdown_vtx[i].mu;
+			flat[i] = mu * maxpress;									// horizon-lateral force component: surface friction
+			if (fabs(gv_lat) < 10.0) flat[i] *= sqrt(fabs(0.1*gv_lat));
+			//flat[i] = min (flat[i], fabs(gv_lat) * fn[i] * mu/dt);
+			if (gv_lat > 0.0) flat[i] = -flat[i];
+			flat_tot += flat[i];
 
-		//double fmax_nml = -gv_n * massdt;
-		//if ((fmax_nml >= 0.0 && fn_tot > fmax_nml) || (fmax_nml <= 0.0 && fn_tot < fmax_nml)) {
-		//	double scale = fmax_nml/fn_tot;
-		//	fn_tot = fmax_nml;
-		//	for (i = 0; i < ntouch; i++)
-		//		fn[tidx[i]] *= scale;
-		//}
+			E_comp -= fn[i]*tdy[i]*0.5; // compression energy
+			fn_tot_undamped += fn[i];
+			fn[i] -= gv_n*touchdown_vtx[i].damping;
+			fn_tot += fn[i];
 
-		Vector M_surf, F_surf = hn*fn_tot + d1h*flng_tot + d2h*flat_tot;
-		for (i = 0; i < ntouch; i++) {
-			j = tidx[i];
-			M_surf += crossp (hn*fn[j]+d1h*flng[j]+d2h*flat[j], touchdown_vtx[j].pos);
-		}
-
-		// limit the change in angle over the current time step induced by impact forces
-		Vector dA = EulerInv_full (M_surf/mass, s->omega)*dt*dt;
-		double da = dA.length();
-		static double da_max = 0.0;
-		if (da > da_max) da_max = da;
-		if (da > 10.0*RAD) {
-			double scale = 10.0*RAD/da;
-			M_surf *= scale;
-		}
-
-
-#ifdef UNDEF
-		Vector V0 = surfp.groundvel_ship;
-		Vector V1 = V0 + F_surf * (dt/mass);
-		double E0_kin_lin = 0.5*mass*dotp(V0,V0);
-		double E1_kin_lin = 0.5*mass*dotp(V1,V1);
-		double dE_kin = E1_kin_lin-E0_kin_lin;                 // change in linear kinetic energy over time step
-		Vector W0 = s->omega;
-		Vector W1 = W0 + EulerInv_full (M_surf/mass, s->omega)*dt;
-		double E0_kin_rot = 0.5*mass*dotp(W0*pmi, W0);
-		double E1_kin_rot = 0.5*mass*dotp(W1*pmi, W1);
-		dE_kin += E1_kin_rot-E0_kin_rot;                       // change in rotational kinetic energy over time step
-		double dE_comp = E_comp-E0_comp;
-
-		if (dE_kin + dE_comp > 1e5) { // limit kinetic energy
-			double E1_kin_rot_fix = max(0, E1_kin_rot - (dE_kin+dE_comp-1e5));
-			double alpha = sqrt(E1_kin_rot_fix/E1_kin_rot);
-			Vector W1_fix = W1*alpha;
-			Vector Wdot = (W1_fix - W0)/dt;
-			Vector tau = Euler_full(Wdot, s->omega);
-			M_surf = tau*mass;
-
-			// sanity check
-			W1 = W0 + EulerInv_full (M_surf/mass, s->omega)*dt;
-			dE_kin -= E1_kin_rot;
-			E1_kin_rot = 0.5*mass*dotp(W1*pmi, W1);
-			dE_kin += E1_kin_rot;
-			double de = dE_kin + dE_comp;
-		}
-#endif
-
-		*F += F_surf;
-		*M += M_surf;
-
-		//sprintf (DBG_MSG, "dE_kin=%le, dE_comp=%le", dE_kin, dE_comp);
-
-#endif
-	} else {
-		double v1, v2;
-		for (i = 0; i < 3; i++) {
-			if (tdy[i] < 0.0) {
-				Vector gv (surfp.groundvel_ship + crossp(touchdown_vtx[i].pos,s->omega)); // ground velocity of touchdown point in vessel frame
-				v1 = dotp (gv, d1h); // longitudinal speed component for touchdown point i
-				v2 = dotp (gv, d2h); // lateral speed component
-
-				// longitudinal forces
-				flng[i] = touchdown_vtx[i].mu_lng * mass * 9.81;    // friction: generalise!
-				if (i && wbrake_level[i-1])        // wheel brake
-					flng[i] += wbrake_level[i-1]*max_wbrake_F*0.5;
-				if (v1 < 0.0) flng[i] = -flng[i];
-				flng_tot += flng[i];
-				if (fabs(flng[i]) > fabs(v1)*massdt*0.01) // hack: dampen angular component
-					flng[i] = v1*massdt*0.01;
-
-				// lateral forces
-				flat[i] = touchdown_vtx[i].mu * mass * 9.81;    // friction: generalise!
-				flat[i] *= 10.0; // TEMPORARY!!!
-				if (v2 < 0.0) flat[i] = -flat[i];
-				flat_tot += flat[i];
-				if (fabs(flat[i]) > fabs(v2)*massdt*0.01) // hack: dampen angular component
-					flat[i] = v2*massdt*0.01;
+			// debug
+			if (nforcevec < forcevecbuf) {
+				forcevec[nforcevec] = d1h*flng[i] + d2h*flat[i];
+				forcepos[nforcevec] = touchdown_vtx[i].pos;
+				nforcevec++;
 			}
-		}
 
-		// project ground speed vector into horizon plane (vessel frame)
-		Vector vh (sp.groundvel_ship - hn * dotp (sp.groundvel_ship, hn));
-		v1 = dotp (vh, d1h);
-		v2 = dotp (vh, d2h);
-		// limit linear force
-		fmax = v1*massdt;
-		if (flng_tot*fmax < 0.0) {
-			flng_tot = 0.0;
-		} else if (fabs(flng_tot) > fabs(fmax)) {
-			flng_tot = fmax;
-		}
-		fmax = v2*massdt;
-		if (flat_tot*fmax < 0.0) {
-			flat_tot = 0.0;
-		} else if (fabs(flat_tot) > fabs(fmax)) {
-			flat_tot = fmax;
-		}
-		// apply linear force
-		*F -= d1h*flng_tot + d2h*flat_tot;
-
-		// apply angular forces
-		for (i = 0; i < 3; i++) {
-			if (tdy[i] < 0.0) {
-				Vector f_attack(touchdown_vtx[i].pos);
-				//f_attack.y = 0.0; // hack to avoid nicking
-				Vector F(d1h*flng[i] + d2h*flat[i]);
-				*M -= crossp (F, f_attack);
-			}
+		} else {
+			fn[i] = flng[i] = flat[i] = 0.0;
 		}
 	}
 
+	// limit forces to avoid velocity reversal
+	gv_lon = dotp (surfp.groundvel_ship, d1h);
+	gv_lat = dotp (surfp.groundvel_ship, d2h);
+	gv_n   = dotp (surfp.groundvel_ship, hn);
+	double fmax_lon = -gv_lon * massdt;
+	if ((fmax_lon >= 0.0 && flng_tot > fmax_lon) || (fmax_lon <= 0.0 && flng_tot < fmax_lon)) {
+		double scale = fmax_lon/flng_tot;
+		flng_tot = fmax_lon;
+		for (i = 0; i < ntouch; i++)
+			flng[tidx[i]] *= scale;
+	}
+	double fmax_lat = -gv_lat * massdt;
+	if ((fmax_lat >= 0.0 && flat_tot > fmax_lat) || (fmax_lat <= 0.0 && flat_tot < fmax_lat)) {
+		double scale = fmax_lat/flat_tot;
+		flat_tot = fmax_lat;
+		for (i = 0; i < ntouch; i++)
+			flat[tidx[i]] *= scale;
+	}
 
+	Vector M_surf, F_surf = hn*fn_tot + d1h*flng_tot + d2h*flat_tot;
+	for (i = 0; i < ntouch; i++) {
+		j = tidx[i];
+		M_surf += crossp (hn*fn[j]+d1h*flng[j]+d2h*flat[j], touchdown_vtx[j].pos);
+	}
 
-#ifdef UNDEF  // TODO!!!
+	// limit the change in angle over the current time step induced by impact forces
+	Vector dA = EulerInv_full (M_surf/mass, s->omega)*dt*dt;
+	double da = dA.length();
+	if (da > 10.0*RAD) {
+		double scale = 10.0*RAD/da;
+		M_surf *= scale;
+	}
 
-	// nosewheel steering (experimental)
-	if (this == g_focusobj && nosesteering && py[0] < 0.5 && fabs (v1) > 0.2) {
-
-		static const double MAX_NOSE_MOVEMENT = 1.0;
-		double newdir = g_pOrbiter->ManCtrlLevel (THGROUP_ATT_YAWRIGHT, MANCTRL_ANYMODE) -
-		                g_pOrbiter->ManCtrlLevel (THGROUP_ATT_YAWLEFT, MANCTRL_ANYMODE);
-		double ddir = newdir-nosewheeldir;
-		if (fabs(ddir)/dt > MAX_NOSE_MOVEMENT) {
-			if (ddir > 0.0) newdir = nosewheeldir + MAX_NOSE_MOVEMENT*dt;
-			else            newdir = nosewheeldir - MAX_NOSE_MOVEMENT*dt;
-		}
-
-		if (newdir) {
-			static const double pos_scale = 1.0;
-			static const double fac = 5e1/pos_scale;
-			static const double vcrit = 10.0;
-			double fac2 = min (1.0, v1/vcrit);
-			double df = newdir*mass*fac*fac2;
-			double f1 = v1*mass/dt;
-			double df1 = df*df/(2.0*f1);
-			double df2 = sqrt (df*df-df1*df1);
-			if (newdir < 0) df2 = -df2;
-			if (v1 < 0) df2 = -df2;
-			AddForce (d2h*df2 - d1h*df1, (touchdown_pt[0]+touchdown_nm*cog_elev)*pos_scale);
-		}
-		nosewheeldir = newdir;
-	} else nosewheeldir = 0.0;
-#endif
+	*F += F_surf;
+	*M += M_surf;
 
 	return true;
 }
@@ -4778,103 +4534,6 @@ void Vessel::Update (bool force)
 	// update surface parameters
 	if (proxybody && fstatus != FLIGHTSTATUS_LANDED)
 		UpdateSurfParams();
-
-	if (proxyplanet && fstatus != FLIGHTSTATUS_LANDED && !bFRplayback) {
-
-		// handle planetary surface touchdown events
-		if (sp.alt < 2.0*size) {
-
-			// check for touchdown
-			Matrix T (sp.L2H); // T: vessel->horizon rotation matrix
-			T.tpostmul (proxyplanet->s1->R);
-			T.postmul (s1->R);
-
-			double py, pymin;
-			int imin;
-			for (i = 0; i < 3; i++) {
-				Vector p (mul (T, touchdown_vtx[i].pos));
-				py = p.y + sp.alt;                 // vertical position
-				if (!i || py < pymin) pymin = py, imin = i;
-			}
-
-			if (pymin < 0.0 && !bFRplayback && !bDynamicGroundContact) { // we have (at least partial) touchdown
-
-				// Step 1: rotate vessel towards sitting flat on the ground
-
-				// Calculate compressed touchdown points at equilibrium
-				double mg = GetWeight();
-				Vector tp_comp[3];
-				for (i = 0; i < 3; i++)
-					tp_comp[i] = touchdown_vtx[i].pos + touchdown_nm*(touchdown_vtx[i].compression*mg);
-
-				// equilibrium touchdown plane normal
-				Vector tnm_comp = crossp (tp_comp[0]-(tp_comp[1]+tp_comp[2])*0.5, tp_comp[2]-tp_comp[1]).unit();
-
-				// horizon normal in vessel frame
-				Vector horizon_nm (T.m21, T.m22, T.m23);
-				double tilt = acos (dotp (tnm_comp, horizon_nm));
-
-				if (tilt > 1e-10) {
-					// rotate rotation axis into vessel x-axis
-					Vector raxis (crossp (tnm_comp, horizon_nm).unit());
-					double theta = asin (raxis.y);
-					double phi   = atan2 (raxis.z, raxis.x);
-					double sint  = sin (theta), cost = cos (theta);
-					double sinp  = sin (phi), cosp = cos (phi);
-					Matrix R (cost*cosp, sint, cost*sinp,  -sint*cosp, cost, -sint*sinp,  -sinp, 0, cosp);
-					// rotate around x-axis to compensate tilt
-					double arm = touchdown_vtx[imin].pos.dist(touchdown_cg)/size;
-					// rotate around x-axis to compensate tilt
-					double dtilt = min (tilt, -pymin * arm * 0.03 /*0.005e-1*/);
-					double sina = sin(dtilt), cosa = cos(dtilt);
-					R.premul (Matrix (1,0,0,  0,cosa,-sina,  0,sina,cosa));
-					// rotate rotation axis back
-					R.premul (Matrix (cost*cosp, -sint*cosp, -sinp,  sint, cost, 0,  cost*sinp, -sint*sinp, cosp));
-
-					// modify angular velocity
-					Vector dv = raxis * (dtilt*td.iSimDT);
-					s1->omega -= dv;
-
-					// limit angular velocity when we are flat on the ground
-					if (tilt < 5.0*RAD) {
-						double maxv = tilt*tilt*50 + 0.1*RAD;
-						for (i = 0; i < 3; i++)
-							s1->omega.data[i] = min (maxv, max (-maxv, s1->omega.data[i]));
-					}
-
-					// update global rotation matrix
-					//s1->R.postmul (R);
-					//s1->Q.Set (s1->R);
-
-					//T.postmul (R);
-				}
-
-				// Update touchdown points for compression
-				for (i = 0; i < 3; i++) {
-					Vector p (mul (T, tp_comp[i]));
-					py = p.y + sp.alt;
-					if (!i || py < pymin) pymin = py, imin = i;
-				}
-
-				// Step 2: lift vessel altitude so that lowest touchdown point touches the ground
-				if (pymin < 0.0) {
-					sp.rad -= pymin;
-					sp.alt -= pymin;
-					Vector loc;
-					proxyplanet->EquatorialToLocal (sp.slng, sp.clng, sp.slat, sp.clat, sp.rad, loc);
-					Vector pgpos(s1->pos);
-					SetRPos (mul (proxyplanet->s1->R, loc) + proxyplanet->s1->pos);
-					Vector dv ((s1->pos-pgpos)*td.iSimDT);
-					double ay = mul (sp.L2H, tmul (proxyplanet->s1->R, acc)).y;
-					if (ay < 0) dv -= mul (proxyplanet->s1->R, tmul(sp.L2H, Vector (0, ay, 0)))*0.5*td.SimDT;
-					AddRVel (dv);
-				}
-
-				// update surface parameters
-				UpdateSurfParams();
-			}
-		}
-	}
 
 	if (td.SimT1 > commsT) {
 

@@ -1,0 +1,56 @@
+BEGIN_HYPERDESC
+<h1>Ground contact tests</h1>
+Delta-gliders on the SLF runway: at rest, dropped from 3 m, a hard
+landing (3 m/s down), and braking from 30 m/s. The script checks that
+they come to rest on their gear without sinking in, bouncing away or
+creeping.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Tests/ContactTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship REST
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET REST
+  MODE Extern
+  POS 4.0 -20.0 -30
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+REST:DeltaGlider
+  STATUS Landed Earth
+  POS -80.6838740 28.5988713
+  HEADING 330.01
+  GEAR 1 1.0000
+  PRPLEVEL 0:0.050 1:1.000
+END
+DROP:DeltaGlider
+  STATUS Landed Earth
+  POS -80.6851539 28.6008186
+  HEADING 330.01
+  GEAR 1 1.0000
+  PRPLEVEL 0:0.050 1:1.000
+END
+HARD:DeltaGlider
+  STATUS Landed Earth
+  POS -80.6864339 28.6027658
+  HEADING 330.01
+  GEAR 1 1.0000
+  PRPLEVEL 0:0.050 1:1.000
+END
+BRAKE:DeltaGlider
+  STATUS Landed Earth
+  POS -80.6877138 28.6047131
+  HEADING 330.01
+  GEAR 1 1.0000
+  PRPLEVEL 0:0.050 1:1.000
+END
+END_SHIPS

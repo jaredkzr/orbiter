@@ -196,7 +196,6 @@ void VesselBase::SetDefaultState ()
 	proxybody = 0;
 	proxyplanet = 0;
 	proxybase = 0;
-	bDynamicGroundContact = true;
 	bSurfaceContact = false;
 	LandingTest.testing = false;
 	proxyT    = -(double)rand()*100.0/(double)RAND_MAX - 1.0;
@@ -270,14 +269,10 @@ void VesselBase::CheckLanded ()
 				proxybody->LocalToEquatorial (prel, lng, lat, rad);
 				dir = LandedHeading (lng, lat);
 
-				if (bDynamicGroundContact) {
-					double alt = Altitude(); //rad - proxybody->Size();
-					Matrix lrot (s0->R);
-					lrot.tpremul (proxyplanet->s0->R);
-					InitLanded (proxyplanet, lng, lat, dir, &lrot, alt);
-				} else {
-					InitLanded (proxyplanet, lng, lat, dir);
-				}
+				double alt = Altitude(); //rad - proxybody->Size();
+				Matrix lrot (s0->R);
+				lrot.tpremul (proxyplanet->s0->R);
+				InitLanded (proxyplanet, lng, lat, dir, &lrot, alt);
 				if (proxybase) {
 					int pd = proxybase->ReportTouchdown (this, lng, lat);
 				}
