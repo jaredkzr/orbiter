@@ -1356,6 +1356,10 @@ public:
 		bool aligned = false;
 	};
 	const BurnState &Burn () const { return burn; }
+	bool MainEngines (double &thrust, double &ve, Vector &dir) const;
+	// combined vacuum thrust [N], exhaust velocity [m/s] and thrust direction
+	// (vessel frame) of the main engines with propellant; false if none
+	double BurnDuration (double dv) const; // [s] for velocity change dv (-1: no main engines)
 
 protected:
 	bool IsComponent () const { return supervessel != 0 || attach; }

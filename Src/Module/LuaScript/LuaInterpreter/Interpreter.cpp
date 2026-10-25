@@ -866,6 +866,7 @@ void Interpreter::LoadAPI ()
 		{"exit", oapiExit},
 		{"get_trajectoryevents", oapi_get_trajectoryevents},
 		{"set_trajectorytarget", oapi_set_trajectorytarget},
+		{"set_mapview", oapi_set_mapview},
 		{"open_inputbox", oapiOpenInputBox},
 		{"receive_input", oapiReceiveInput},
 		{"open_inputboxex", oapi_open_inputboxex},
@@ -3967,6 +3968,19 @@ int Interpreter::oapi_set_trajectorytarget (lua_State *L)
 {
 	oapiSetTrajectoryTarget (lua_isnil (L, 1) ? NULL : lua_toObject (L, 1));
 	return 0;
+}
+
+/***
+Switch the map view on or off.
+
+@function set_mapview
+@tparam bool on
+@treturn bool false if there is no map view (no graphics client)
+*/
+int Interpreter::oapi_set_mapview (lua_State *L)
+{
+	lua_pushboolean (L, oapiSetMapView (lua_toboolean (L, 1) != 0));
+	return 1;
 }
 
 static bool bInputClosed;

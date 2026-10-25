@@ -471,7 +471,8 @@ void Predictor::Predict (const Input &in, Context &c)
 	int ref[2] = { c.Ref (y[0].r), 0 };
 	if (nst > 1) { c.Bodies (t, y[1].r); ref[1] = c.Ref (y[1].r); c.Bodies (t, y[0].r); }
 	auto NewSeg = [&](std::vector<Segment> &segs, int r, int node) {
-		segs.push_back (Segment{in.bodies[r].body, node, {}});
+		int par = in.bodies[r].parent;
+		segs.push_back (Segment{in.bodies[r].body, node, {}, c.G[r], par >= 0 ? c.G[par] : Vector()});
 	};
 	NewSeg (pred->segs, ref[0], (int)nextNode - 1);
 	if (nst > 1) NewSeg (pred->target, ref[1], -1);
@@ -588,13 +589,13 @@ void Predictor::Predict (const Input &in, Context &c)
 				double f = rdot0 / (rdot0 - rdot1);
 				Vector re (pr + (r1 - pr) * f);
 				Event::Type type = (rdot0 < 0.0 ? Event::PERIAPSIS : Event::APOAPSIS);
-				pred->events.push_back (Event{type, tp + f * hs, rb.body, re, re.length() - rb.radius, 0.0, pred->segs.back().node});
+				pred->events.push_back (Event{type, tp + f * hs, rb.body, re, re.length() - rb.radius, 0.0, pred->segs.back().node, (int)pred->segs.size() - 1});
 			}
 			if (r1.length() < rb.radius) { // impact
 				double d0 = pr.length() - rb.radius, d1 = r1.length() - rb.radius;
 				double f = d0 / (d0 - d1);
 				Vector re (pr + (r1 - pr) * f);
-				pred->events.push_back (Event{Event::IMPACT, tp + f * hs, rb.body, re, 0.0, 0.0, pred->segs.back().node});
+				pred->events.push_back (Event{Event::IMPACT, tp + f * hs, rb.body, re, 0.0, 0.0, pred->segs.back().node, (int)pred->segs.size() - 1});
 				impact = true;
 			}
 			c.Bodies (t, y[0].r);
@@ -610,7 +611,7 @@ void Predictor::Predict (const Input &in, Context &c)
 				double dc = std::min (d, prevDist);
 				Vector rel;
 				RefState (ref[0], y[0], rel, v1);
-				pred->events.push_back (Event{Event::CLOSEST, tc, in.bodies[ref[0]].body, rel, dc, dvv.length(), pred->segs.back().node});
+				pred->events.push_back (Event{Event::CLOSEST, tc, in.bodies[ref[0]].body, rel, dc, dvv.length(), pred->segs.back().node, (int)pred->segs.size() - 1});
 			}
 			prevDist = d, prevRdot = rd;
 		}
@@ -620,7 +621,7 @@ void Predictor::Predict (const Input &in, Context &c)
 			const auto &nb = in.bodies[nref];
 			Vector rel (y[0].r - c.G[nref]);
 			pred->events.push_back (Event{enter ? Event::SOI_ENTER : Event::SOI_EXIT, t, nb.body, rel,
-				rel.length() - nb.radius, 0.0, pred->segs.back().node});
+				rel.length() - nb.radius, 0.0, pred->segs.back().node, (int)pred->segs.size()}); // (in the next segment)
 			AddPoint (pred->segs, ref[0], y[0], t); // (end of the old segment)
 			ref[0] = nref;
 			NewSeg (pred->segs, ref[0], pred->segs.back().node);

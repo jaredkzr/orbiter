@@ -50,6 +50,7 @@
 #include "GraphicsAPI.h"
 #include "ConsoleManager.h"
 #include "Trajectory.h"
+#include "MapView.h"
 #include "imgui.h"
 #ifdef _WIN32
 #include "imgui_impl_win32.h"
@@ -776,6 +777,8 @@ HWND Orbiter::CreateRenderWindow (Config *pCfg, const char *scenario)
 		pDlgMgr->AddEntry(g_select);
 		g_input = new InputBox(); TRACENEW
 		pDlgMgr->AddEntry(g_input);
+		mapView = new MapView(); TRACENEW
+		pDlgMgr->AddEntry(mapView);
 
 		// playback screen annotation manager
 		snote_playback = gclient->clbkCreateAnnotation ();
@@ -971,6 +974,7 @@ void Orbiter::CloseSession ()
 			nsnote = 0;
 		}
 
+		if (mapView)  { pDlgMgr->DelEntry (mapView); delete mapView; mapView = 0; }
 		if (g_input)  { delete g_input; g_input = 0; }
 		if (g_select) { delete g_select; g_select = 0; }
 		if (g_pane) { delete g_pane;   g_pane = 0; }
@@ -992,6 +996,7 @@ void Orbiter::CloseSession ()
 		m_pLaunchpad->ShowWaitPage (false);
 #endif
 	} else {
+		if (mapView)  { if (pDlgMgr) pDlgMgr->DelEntry (mapView); delete mapView; mapView = 0; }
 		if (pDlgMgr)  { delete pDlgMgr; pDlgMgr = 0; }
 		if (gclient) {
 			gclient->clbkCloseSession (true);
@@ -2390,6 +2395,7 @@ void Orbiter::KbdInputBuffered_System (char *kstate, DIDEVICEOBJECTDATA *dod, DW
 		else if (keymap.IsLogicalKey(key, kstate, OAPI_LKEY_DlgCustomCmd))         pDlgMgr->EnsureEntry<DlgFunction>();
 		else if (keymap.IsLogicalKey(key, kstate, OAPI_LKEY_DlgInfo))              pDlgMgr->EnsureEntry<DlgInfo>();
 		else if (keymap.IsLogicalKey(key, kstate, OAPI_LKEY_DlgMap))               pDlgMgr->EnsureEntry<DlgMap>();
+		else if (keymap.IsLogicalKey(key, kstate, OAPI_LKEY_MapView))              { if (mapView) mapView->Toggle(); }
 		else if (keymap.IsLogicalKey(key, kstate, OAPI_LKEY_DlgRecorder))          pDlgMgr->EnsureEntry<DlgRecorder>();
 		else if (keymap.IsLogicalKey(key, kstate, OAPI_LKEY_ToggleCamInternal))    SetView(g_focusobj, !g_camera->IsExternal());
 		else if (keymap.IsLogicalKey(key, kstate, OAPI_LKEY_DlgVisHelper))         pDlgMgr->EnsureEntry<DlgOptions>()->SwitchPage("Visual helpers");

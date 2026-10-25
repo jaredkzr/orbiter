@@ -43,6 +43,7 @@ namespace trajectory {
 		const CelestialBody *ref; // reference body
 		int node;                 // index of the node the segment starts at (-1: before the first)
 		std::vector<Point> pts;
+		Vector refG, parentG;     // global positions of ref and its parent at the segment's start
 	};
 
 	struct NodeState {
@@ -61,6 +62,7 @@ namespace trajectory {
 		double value;             // altitude above ref (CLOSEST: distance to the target) [m]
 		double speed;             // relative speed (CLOSEST) [m/s]
 		int node;                 // the segment's node index
+		int seg;                  // index of the segment it belongs to (in segs)
 	};
 
 	struct Prediction {

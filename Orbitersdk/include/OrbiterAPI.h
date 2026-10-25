@@ -3142,6 +3142,18 @@ OAPIFUNC int oapiGetTrajectoryEvents (OBJHANDLE hVessel, TRAJECTORYEVENT *ev, in
 OAPIFUNC void oapiSetTrajectoryTarget (OBJHANDLE hTarget);
 
 /**
+ * \brief Switches the map view (the focus vessel's trajectory and manoeuvre
+ *   nodes, seen from afar) on or off.
+ * \return false if there is no map view (no graphics client)
+ */
+OAPIFUNC bool oapiSetMapView (bool on);
+
+/**
+ * \brief Returns true while the map view is shown.
+ */
+OAPIFUNC bool oapiGetMapView ();
+
+/**
 * \brief Set a docking port to auto capture when in close proximity with some other docking port.
 * \param hDock docking port handle
 * \param enable Enable or disable auto capture
@@ -7221,7 +7233,8 @@ OAPIFUNC void oapiTriggerRedrawArea (int panel_id, int vc_id, int area_id);
 #define OAPI_LKEY_SelectPrevVessel 102 ///< switch focus to previous vessel
 #define OAPI_LKEY_DlgCapture       103 ///< open screen capture dialog
 #define OAPI_LKEY_DlgOptions       104 ///< open options dialog
-#define LKEY_COUNT 105                 ///< number of logical key definitions
+#define OAPI_LKEY_MapView          105 ///< toggle the map view (trajectories and manoeuvre nodes)
+#define LKEY_COUNT 106                 ///< number of logical key definitions
 //@}
 
 // ======================================================================

@@ -24,6 +24,7 @@
 #include "Mesh.h"
 #include "MenuInfoBar.h"
 #include "Trajectory.h"
+#include "MapView.h"
 #include <algorithm>
 #include <zlib.h>
 #include "DrawAPI.h"
@@ -398,6 +399,20 @@ DLLEXPORT int oapiGetTrajectoryEvents (OBJHANDLE hVessel, TRAJECTORYEVENT *ev, i
 DLLEXPORT void oapiSetTrajectoryTarget (OBJHANDLE hTarget)
 {
 	g_pOrbiter->SetPredictTarget ((const Body*)hTarget);
+}
+
+DLLEXPORT bool oapiSetMapView (bool on)
+{
+	MapView *mv = g_pOrbiter->GetMapView();
+	if (!mv) return false;
+	mv->SetOn (on);
+	return true;
+}
+
+DLLEXPORT bool oapiGetMapView ()
+{
+	MapView *mv = g_pOrbiter->GetMapView();
+	return mv && mv->IsOn();
 }
 
 DLLEXPORT void oapiSetAutoCapture(DOCKHANDLE hDock, bool enable)

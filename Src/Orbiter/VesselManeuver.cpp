@@ -60,6 +60,34 @@ void Vessel::ClearManeuverNodes ()
 	mnode_version++;
 }
 
+bool Vessel::MainEngines (double &thrust, double &ve, Vector &dir) const
+{
+	const ThrustGroupSpec *tgs = GetThrusterGroup (THGROUP_MAIN);
+	double F = 0.0, flow = 0.0;
+	dir.Set (0, 0, 0);
+	if (tgs) {
+		for (const ThrustSpec *ts : tgs->ts) {
+			if (!ts->tank || ts->tank->mass <= 0.0 || ts->isp0 <= 0.0) continue;
+			F += ts->maxth0;
+			flow += ts->maxth0 / (ts->isp0 * ts->tank->efficiency);
+			dir += MakeVector (ts->dir) * ts->maxth0;
+		}
+	}
+	if (F <= 0.0 || dir.length() <= 0.0) return false;
+	thrust = dir.length();
+	dir /= thrust;
+	ve = F / flow;
+	return true;
+}
+
+double Vessel::BurnDuration (double dv) const
+{
+	double thrust, ve;
+	Vector dir;
+	if (!MainEngines (thrust, ve, dir)) return -1.0;
+	return maneuver::BurnTime (dv, thrust, mass, ve);
+}
+
 // =======================================================================
 // Burn autopilot: turns the main engines' thrust direction into the
 // node's velocity change shortly before the node, and burns until the
@@ -76,25 +104,12 @@ void Vessel::UpdateBurn ()
 	const maneuver::Node &node = mnodes[0];
 	double tnode = (node.mjd - td.MJD_ref) * 86400.0;
 
-	// main engines: thrust, direction (vessel frame) and exhaust velocity
-	const ThrustGroupSpec *tgs = GetThrusterGroup (THGROUP_MAIN);
-	double F = 0.0, flow = 0.0;
+	double thrust, ve;
 	Vector dir;
-	if (tgs) {
-		for (const ThrustSpec *ts : tgs->ts) {
-			if (!ts->tank || ts->tank->mass <= 0.0) continue;
-			F += ts->maxth0;
-			flow += ts->maxth0 / (ts->isp0 * ts->tank->efficiency);
-			dir += MakeVector (ts->dir) * ts->maxth0;
-		}
-	}
-	if (F <= 0.0) { // no usable main engine
+	if (!MainEngines (thrust, ve, dir)) { // no usable main engine
 		burn.phase = BurnState::NONE;
 		return;
 	}
-	double thrust = dir.length();
-	dir /= thrust;
-	double ve = F / flow;
 
 	if (burn.phase == BurnState::NONE) {
 		// velocity change in the orbital frame at the node (two-body estimate)

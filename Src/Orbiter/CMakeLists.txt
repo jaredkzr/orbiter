@@ -82,6 +82,7 @@ set(common_src
 	VesselCollision.cpp
 	Maneuver.cpp
 	Trajectory.cpp
+	MapView.cpp
 	VesselManeuver.cpp
 	Vessel.cpp
 	Vesselbase.cpp

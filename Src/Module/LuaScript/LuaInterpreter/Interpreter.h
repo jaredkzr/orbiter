@@ -402,6 +402,7 @@ protected:
 	static int oapiExit(lua_State *L);
 	static int oapi_get_trajectoryevents (lua_State *L);
 	static int oapi_set_trajectorytarget (lua_State *L);
+	static int oapi_set_mapview (lua_State *L);
 	static int oapiOpenHelp (lua_State *L);
 	static int oapiOpenInputBox (lua_State *L);
 	static int oapiReceiveInput (lua_State *L);
