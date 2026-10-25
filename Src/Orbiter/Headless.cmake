@@ -69,6 +69,7 @@ set(headless_src
 	Trajectory.cpp
 	MapView.cpp
 	UiAnchor.cpp
+	TerrainDetail.cpp
 	Replay.cpp
 	VesselManeuver.cpp
 	Vessel.cpp

@@ -22,6 +22,8 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 ozone;         // absorption [1/m] (rgb): ozone layer, or (w = 1) aerosols (dust)
 	vec4 detail;        // procedural surface detail: type (0 none, 1 airless, 2 Mars, 3 Earth), strength, range [m]
 	vec4 aurora;        // geomagnetic north pole (unit, planet frame), w: aurora strength (0: none)
+	vec4 detailCamHi;   // camera position, planet frame (xyz), planet radius (w) [m]: high and
+	vec4 detailCamLo;   //   low parts of double precision values (terrain detail)
 } atm;
 
 // planet surface (western and eastern hemisphere), for reflections

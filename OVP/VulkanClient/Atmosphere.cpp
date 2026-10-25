@@ -32,6 +32,8 @@ namespace {
 		float ozone[4];
 		float detail[4];
 		float aurora[4];
+		float detailCamHi[4]; // camera position and radius in double precision (high and low parts)
+		float detailCamLo[4];
 	};
 
 	const VkFormat LUT_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -515,6 +517,13 @@ void Atmosphere::Update ()
 	VECTOR3 rel = cam - origin;
 	u.water[0] = (float)rel.x, u.water[1] = (float)rel.y, u.water[2] = (float)rel.z;
 	u.water[3] = ripple ? (float)fmod (oapiGetSimTime (), 3600.0) : -1.0f;
+	{
+		double v[4] = { cam.x, cam.y, cam.z, oapiGetSize (hPlanet) };
+		for (int k = 0; k < 4; k++) {
+			u.detailCamHi[k] = (float)v[k];
+			u.detailCamLo[k] = (float)(v[k] - (double)u.detailCamHi[k]);
+		}
+	}
 	u.misc[1] = (float)(1.0 / scene->ProjX());
 	u.misc[2] = (float)(1.0 / scene->ProjY());
 	memcpy (ubo[SetIndex ()].mapped, &u, sizeof(u));

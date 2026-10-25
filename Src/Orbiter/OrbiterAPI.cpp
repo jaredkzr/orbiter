@@ -26,6 +26,8 @@
 #include "Trajectory.h"
 #include "MapView.h"
 #include "Replay.h"
+#include "TerrainDetail.h"
+#include "elevmgr.h"
 #include <algorithm>
 #include <zlib.h>
 #include "DrawAPI.h"
@@ -1317,6 +1319,38 @@ DLLEXPORT double oapiSurfaceElevation (OBJHANDLE hPlanet, double lng, double lat
 	Planet *planet = (Planet*)body;
 	ElevationManager *emgr = planet->ElevMgr();
 	return (emgr ? emgr->Elevation (lat, lng) : 0.0);
+}
+
+static const TerrainDetail *PlanetDetail (OBJHANDLE hPlanet)
+{
+	Body *body = (Body*)hPlanet;
+	if (!body || body->Type() != OBJTP_PLANET) return nullptr;
+	ElevationManager *emgr = ((Planet*)body)->ElevMgr();
+	return emgr ? emgr->Detail () : nullptr;
+}
+
+DLLEXPORT double oapiSurfaceDetail (OBJHANDLE hPlanet, double lng, double lat, double spacing, double relief, double lambdaMin, double *amplitude)
+{
+	const TerrainDetail *det = PlanetDetail (hPlanet);
+	if (!det) {
+		if (amplitude) *amplitude = 0.0;
+		return 0.0;
+	}
+	return det->Height (lat, lng, spacing, relief, lambdaMin, amplitude);
+}
+
+DLLEXPORT void oapiSurfaceDetailSupported ()
+{
+	TerrainDetail::clientSupport = true;
+}
+
+DLLEXPORT bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, double *lambdaMin, double *hurst)
+{
+	const TerrainDetail *det = PlanetDetail (hPlanet);
+	if (!det) return false;
+	if (lambdaMin) *lambdaMin = det->LambdaMin ();
+	if (hurst) *hurst = det->Hurst ();
+	return true;
 }
 
 DLLEXPORT double oapiSurfaceElevationEx(OBJHANDLE hPlanet, double lng, double lat, int tgtlvl, std::vector<ElevationTile> *tilecache, VECTOR3 *nml, int *lvl)

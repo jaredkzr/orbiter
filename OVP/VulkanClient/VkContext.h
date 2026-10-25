@@ -169,6 +169,7 @@ namespace vkc {
 		/// addresses, bindless sampled images) are enabled; ORBITER_VK_RT=0
 		/// leaves them off
 		bool rayTracing = false;
+		bool shaderFloat64 = false; // double precision in shaders (terrain detail)
 		struct RTFunctions {
 			PFN_vkCreateAccelerationStructureKHR createAS = nullptr;
 			PFN_vkDestroyAccelerationStructureKHR destroyAS = nullptr;

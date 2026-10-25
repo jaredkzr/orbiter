@@ -4220,6 +4220,47 @@ OAPIFUNC ELEVHANDLE oapiElevationManager (OBJHANDLE hPlanet);
  */
 OAPIFUNC double oapiSurfaceElevation (OBJHANDLE hPlanet, double lng, double lat);
 
+/**
+ * \brief Procedural terrain detail: elevation finer than the planet's
+ *   elevation data, which the surface elevation functions include. For
+ *   graphics clients that build surface meshes from the elevation tiles, so
+ *   that the rendered surface matches the one vessels touch down on.
+ * \param hPlanet planet object handle
+ * \param lng longitude [rad]
+ * \param lat latitude [rad]
+ * \param spacing node spacing of the elevation tile used there [m] (latitude extent / 256)
+ * \param relief local relief there [m]: for each corner node of the tile's
+ *   cell containing the point, the largest absolute height difference to its
+ *   four neighbours, interpolated bilinearly over the cell
+ * \param lambdaMin shortest wavelength wanted [m] (e.g. a few times the mesh
+ *   node spacing); never below the one of the surface elevation (see
+ *   oapiSurfaceDetailParams)
+ * \param [out] amplitude if set, receives the amplitude factor A [m]: the
+ *   detail is a sum of noise octaves of wavelengths 2^j m with amplitudes
+ *   A*(lambda/spacing)^hurst (for shading finer octaves)
+ * \return Elevation [m] to add to the interpolated elevation data
+ * \note Returns 0 if the planet has no terrain detail (configuration:
+ *   TerrainDetail in Orbiter.cfg and the planet's file).
+ */
+OAPIFUNC double oapiSurfaceDetail (OBJHANDLE hPlanet, double lng, double lat, double spacing, double relief, double lambdaMin, double *amplitude = 0);
+
+/**
+ * \brief Parameters of the procedural terrain detail of a planet.
+ * \param [out] lambdaMin shortest wavelength in the surface elevation [m]
+ *   (finer detail may be added by shading)
+ * \param [out] hurst exponent of the octave amplitudes
+ * \return false if the planet has no terrain detail
+ */
+OAPIFUNC bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, double *lambdaMin, double *hurst);
+
+/**
+ * \brief A graphics client that renders the procedural terrain detail
+ *   (oapiSurfaceDetail) calls this when it is initialised. With other
+ *   graphics clients the surface elevation has no detail, so that vessels
+ *   stand on the ground that is drawn.
+ */
+OAPIFUNC void oapiSurfaceDetailSupported ();
+
 struct ElevationTile;
 
 /**

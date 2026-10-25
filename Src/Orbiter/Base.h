@@ -119,6 +119,9 @@ public:
 	// Return cosine of angle between surface normal and direction to
 	// the sun (which is assumed in the centre of the global coord system)
 
+	double FootprintRadius () const;
+	// distance of the farthest object, pad or runway end from the base centre [m]
+
 	inline Vector SunDirection () const
 	{ return (s1 ? tmul(s1->R, -s1->pos.unit()) : tmul (s0->R, -s0->pos.unit())); }
 	// Return vector pointing towards sun (= world coordiate origin) in

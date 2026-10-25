@@ -19,6 +19,7 @@
 #include "Camera.h"
 #include "Log.h"
 #include "Util.h"
+#include "TerrainDetail.h"
 
 #define UPDMODE_ANALYTIC 0
 #define UPDMODE_DYNAMIC  1
@@ -291,6 +292,12 @@ Planet::Planet (char *fname)
 	GetItemReal (ifs, "MinElevation", minelev);
 	GetItemReal (ifs, "MaxElevation", maxelev);
 	GetItemReal (ifs, "ElevationResolution", elev_res);
+	if (!GetItemReal (ifs, "TerrainDetail", detail_gain)) detail_gain = 0.35;
+	if (!g_pOrbiter->Cfg()->CfgVisualPrm.bTerrainDetail) detail_gain = 0.0;
+	// (only if the graphics client draws it, or without one)
+	if (g_pOrbiter->GetGraphicsClient() && !TerrainDetail::clientSupport) detail_gain = 0.0;
+	if (const char *nd = getenv ("ORBITER_NO_TERRAIN_DETAIL")) // (tests that need the plain elevation data)
+		if (*nd && *nd != '0') detail_gain = 0.0;
 
 	bHasRings = (GetItemReal (ifs, "RingMinRadius", ringmin) &&
 		         GetItemReal (ifs, "RingMaxRadius", ringmax));

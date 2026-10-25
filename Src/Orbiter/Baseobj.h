@@ -33,6 +33,9 @@ public:
 	BaseObject (const Base *_base);
 	virtual ~BaseObject() = default;
 
+	const Vector &RelPos () const { return relpos; }
+	// object position relative to the base frame
+
 	virtual int Read (std::istream &is);
 	// read object description from stream and return error flag (0=ok)
 

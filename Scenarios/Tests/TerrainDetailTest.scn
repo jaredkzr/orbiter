@@ -1,0 +1,25 @@
+BEGIN_HYPERDESC
+<h1>Procedural terrain detail</h1>
+Elevation profiles on Earth: in the Alps the detail must add relief
+below the resolution of the elevation data and stay continuous; the
+open sea and the ground around Cape Canaveral must stay as flat as the
+data. Needs Earth's elevation data (skipped without it).
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Tests/TerrainDetailTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship TD
+END_FOCUS
+
+BEGIN_SHIPS
+TD:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 6671000.0 0.00000 51.6 30.0 0.0 100.0 51982.6685767396
+  AROT 0 0 0
+END
+END_SHIPS

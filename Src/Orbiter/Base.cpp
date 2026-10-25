@@ -11,6 +11,8 @@
 #include "Mesh.h"
 #include "Log.h"
 #include "Util.h"
+#include <algorithm>
+#include <cmath>
 #include "GraphicsAPI.h"
 #include <fstream>
 
@@ -730,4 +732,24 @@ int Base::ReportTouchdown (VesselBase *vessel, double vlng, double vlat)
 double Base::CosSunAlt () const
 {
 	return (s0->R.m12*s0->pos.x + s0->R.m22*s0->pos.y + s0->R.m32*s0->pos.z) / (-s0->pos.length());
+}
+
+double Base::FootprintRadius () const
+{
+	double r = 0.0;
+	for (DWORD i = 0; i < nobj; i++) {
+		const Vector &p = obj[i]->RelPos();
+		r = std::max (r, std::hypot (p.x, p.z));
+	}
+	for (DWORD i = 0; i < npad; i++)
+		r = std::max (r, std::hypot (lspec[i].relpos.x, lspec[i].relpos.z));
+	double R = RefPlanet()->Size();
+	for (DWORD i = 0; i < nrwy; i++) {
+		for (int k = 0; k < 2; k++) {
+			double rlng = k ? rwy[i].lng2 : rwy[i].lng1, rlat = k ? rwy[i].lat2 : rwy[i].lat1;
+			double c = sin (lat) * sin (rlat) + cos (lat) * cos (rlat) * cos (rlng - lng);
+			r = std::max (r, R * acos (std::min (1.0, std::max (-1.0, c))));
+		}
+	}
+	return r;
 }

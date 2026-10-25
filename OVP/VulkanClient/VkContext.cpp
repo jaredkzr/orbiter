@@ -207,6 +207,8 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 	f2.features.textureCompressionBC = deviceFeatures.textureCompressionBC;
 	f2.features.largePoints = deviceFeatures.largePoints;
 	f2.features.shaderInt16 = deviceFeatures.shaderInt16;
+	f2.features.shaderFloat64 = deviceFeatures.shaderFloat64;
+	shaderFloat64 = deviceFeatures.shaderFloat64;
 	f2.features.independentBlend = deviceFeatures.independentBlend; // (colour and reactive mask of plumes and particles)
 
 	std::vector<const char*> devExt;

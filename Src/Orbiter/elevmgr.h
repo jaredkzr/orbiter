@@ -8,6 +8,7 @@
 #include "Vecmat.h"
 #include "ZTreeMgr.h"
 #include <vector>
+#include <memory>
 
 class CelestialBody;
 
@@ -68,6 +69,8 @@ public:
 	*/
 	void ElevationGrid (int ilat, int ilng, int lvl, int pilat, int pilng, int plvl, INT16 *pelev, float *elev, double *emean=0) const;
 	void ElevationGrid(int ilat, int ilng, int lvl, int pilat, int pilng, int plvl, INT16* pelev, INT16* elev, double* emean = 0) const;
+	/// procedural terrain detail (nullptr if off)
+	const class TerrainDetail *Detail () const;
 
 protected:
 	int  Quadrant(double lat, double lng, int lvl) const;
@@ -85,6 +88,8 @@ private:
 	ZTreeMgr *treeMgr[5];
 	bool bDirExists, bModExists;
 	mutable std::vector<ElevationTile> *local_cache = nullptr;
+	mutable std::unique_ptr<class TerrainDetail> detail;
+	mutable bool detailInit = false;
 };
 
 #endif // !__ELEVMGR_H

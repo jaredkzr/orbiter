@@ -93,6 +93,8 @@ if (ORBITER_TEST_EXE)
 		)
 		set_tests_properties(Scenario.${test_name} PROPERTIES TIMEOUT 60)
 	endforeach()
+	# (the slope test needs the slope of the elevation data, without procedural detail)
+	set_tests_properties(Scenario.ContactSlopeTest PROPERTIES ENVIRONMENT "ORBITER_NO_TERRAIN_DETAIL=1")
 
 	# Launchpad (in the Vulkan client's window, rendered offscreen; needs a
 	# Vulkan device): a scenario launched twice, returning to the launchpad
