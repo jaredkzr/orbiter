@@ -1073,3 +1073,9 @@ scatter::GroundScatter *Planet::Scatter () const
 	}
 	return scatter_.get();
 }
+
+void Planet::ClearScatter (const Vector &p, double radius)
+{
+	scatterClear.push_back ({ p, radius });
+	if (scatter_) scatter_->Clear (p, radius);
+}

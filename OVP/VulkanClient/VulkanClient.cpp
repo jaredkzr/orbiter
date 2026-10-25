@@ -87,6 +87,7 @@ bool VulkanClient::clbkInitialise ()
 {
 	if (!GraphicsClient::clbkInitialise ()) return false;
 	oapiSurfaceDetailSupported (); // (PlanetSurface: meshes and shading)
+	oapiScatterSupported ();       // (ScatterField: the ground scatter)
 
 	// Offscreen mode (ORBITER_VK_OFFSCREEN=1): nothing is shown and no display
 	// is required; frames are rendered into images (e.g. for screenshots)

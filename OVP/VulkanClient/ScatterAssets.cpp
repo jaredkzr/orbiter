@@ -70,7 +70,9 @@ namespace {
 	// ------------------------------------------------------------------
 	// geometry
 
-	// Triangles are wound clockwise seen from the front (Orbiter meshes)
+	// Triangles are wound as in Orbiter meshes: clockwise seen from the front
+	// in Orbiter's left-handed frames, i.e. the cross product of their edges
+	// (b - a) x (c - a) points out of the front
 	struct Builder {
 		std::vector<NTVERTEX> v;
 		std::vector<uint16_t> i;
@@ -87,7 +89,7 @@ namespace {
 		void Tri (uint16_t a, uint16_t b, uint16_t c, const VECTOR3 &out)
 		{
 			VECTOR3 pa = _V(v[a].x, v[a].y, v[a].z), pb = _V(v[b].x, v[b].y, v[b].z), pc = _V(v[c].x, v[c].y, v[c].z);
-			if (dotp (crossp (pb - pa, pc - pa), out) > 0.0) std::swap (b, c);
+			if (dotp (crossp (pb - pa, pc - pa), out) < 0.0) std::swap (b, c);
 			i.insert (i.end(), { a, b, c });
 		}
 		void Append (const Builder &o)
@@ -192,6 +194,58 @@ namespace {
 		b.Append (s);
 	}
 
+	// A ribbed column (cactus): from a along unit d, length len, radius
+	// r * profile(t) (t = 0 to 1 along it), ribs ridges around (radius up
+	// by a share ribDepth on them), closed by a dome of its radius at the
+	// end; texture u one rib per unit (ridge at 0.5), v vPerM per metre
+	template<typename F>
+	void RibbedColumn (Builder &b, const VECTOR3 &a, const VECTOR3 &d, double len, double r, F profile,
+		int ribs, int sidesPerRib, int rings, double ribDepth, double vPerM)
+	{
+		VECTOR3 t1 = unit (crossp (d, std::fabs (d.y) < 0.9 ? _V(0, 1, 0) : _V(1, 0, 0)));
+		VECTOR3 t2 = crossp (d, t1);
+		int n = ribs * sidesPerRib;
+		const int DOME = 4;
+		double rEnd = r * profile (1.0);
+		double body = std::max (0.0, len - rEnd);
+		// rings: along the body, then the dome (to a point)
+		std::vector<std::pair<double,double>> ring; // (distance along, radius)
+		for (int j = 0; j <= rings; j++) {
+			double s = body * j / rings;
+			ring.push_back ({ s, r * profile (len > 0 ? s / len : 0.0) });
+		}
+		for (int j = 1; j <= DOME; j++) {
+			double ph = 1.5707963 * j / DOME;
+			ring.push_back ({ body + rEnd * std::sin (ph), j == DOME ? 1e-4 : rEnd * std::cos (ph) });
+		}
+		auto P = [&](int j, double th) {
+			double m = 1.0 + ribDepth * std::cos (ribs * th);
+			return a + d * ring[j].first + (t1 * std::cos (th) + t2 * std::sin (th)) * (ring[j].second * m);
+		};
+		Builder s;
+		int nr = (int)ring.size();
+		for (int j = 0; j < nr; j++)
+			for (int k = 0; k <= n; k++) {
+				double th = TWOPI * k / n, dth = TWOPI / n * 0.5;
+				VECTOR3 p = P (j, th);
+				VECTOR3 dt = P (j, th + dth) - P (j, th - dth);
+				VECTOR3 ds = j == 0 ? P (1, th) - p : j == nr - 1 ? p - P (j - 1, th) : P (j + 1, th) - P (j - 1, th);
+				VECTOR3 nn = crossp (ds, dt);
+				VECTOR3 radial = t1 * std::cos (th) + t2 * std::sin (th);
+				if (j == nr - 1) nn = d;
+				else if (dotp (nn, radial + d * 0.01) < 0.0) nn = -nn;
+				s.Add (p, unit (nn), (double)k / sidesPerRib + 0.5, ring[j].first * vPerM);
+			}
+		for (int j = 0; j + 1 < nr; j++)
+			for (int k = 0; k < n; k++) {
+				uint16_t p0 = (uint16_t)(j * (n + 1) + k), p1 = p0 + 1, p2 = (uint16_t)(p0 + n + 1), p3 = p2 + 1;
+				VECTOR3 out = _V(s.v[p0].nx, s.v[p0].ny, s.v[p0].nz);
+				s.Tri (p0, p1, p2, out);
+				s.Tri (p1, p3, p2, out);
+			}
+		b.Append (s);
+	}
+
 	// ------------------------------------------------------------------
 	// textures (sRGB)
 
@@ -214,11 +268,11 @@ namespace {
 		return _V(std::cos (a) * su / TWOPI, std::sin (a) * su / TWOPI, v * sv);
 	}
 
-	Tex RockTexture (scatter::RockStyle style, uint32_t seed)
+	Tex RockTexture (vkscatter::RockStyle style, uint32_t seed)
 	{
 		Tex t (256, 256);
-		VECTOR3 base = style == scatter::RockStyle::REGOLITH ? _V(0.20, 0.19, 0.18)
-			: style == scatter::RockStyle::MARS ? _V(0.36, 0.20, 0.12) : _V(0.30, 0.29, 0.27);
+		VECTOR3 base = style == vkscatter::RockStyle::REGOLITH ? _V(0.20, 0.19, 0.18)
+			: style == vkscatter::RockStyle::MARS ? _V(0.36, 0.20, 0.12) : _V(0.30, 0.29, 0.27);
 		for (uint32_t y = 0; y < t.h; y++)
 			for (uint32_t x = 0; x < t.w; x++) {
 				double u = (x + 0.5) / t.w, v = (y + 0.5) / t.h;
@@ -228,12 +282,12 @@ namespace {
 				double crack = 1.0 - std::fabs (Fbm (Cyl (u, v, 10, 5), 3, seed + 3));
 				if (crack > 0.9) l *= 0.55 + 0.45 * (1.0 - (crack - 0.9) / 0.1);
 				VECTOR3 c = base * l;
-				if (style == scatter::RockStyle::GRANITE) {
+				if (style == vkscatter::RockStyle::GRANITE) {
 					// lichen patches, and dark mineral speckles
 					double li = Fbm (Cyl (u, v, 14, 7), 3, seed + 11);
 					if (li > 0.22) c = c * 0.4 + _V(0.32, 0.33, 0.14) * 0.6 * (0.8 + 0.4 * grain);
 					if (Noise (Cyl (u, v, 300, 150).x, Cyl (u, v, 300, 150).y, Cyl (u, v, 300, 150).z, seed + 5) > 0.55) c = c * 0.35;
-				} else if (style == scatter::RockStyle::MARS) {
+				} else if (style == vkscatter::RockStyle::MARS) {
 					// dust settled on the upper parts (v small: top)
 					double dust = std::clamp (0.6 - v + 0.3 * Fbm (Cyl (u, v, 8, 4), 2, seed + 13), 0.0, 1.0);
 					c = c * (1.0 - 0.6 * dust) + _V(0.48, 0.28, 0.16) * 0.6 * dust;
@@ -264,7 +318,7 @@ namespace {
 
 	Tex TypedRockTexture (RockTex type, uint32_t seed)
 	{
-		if (type == RockTex::GRANITE) return RockTexture (scatter::RockStyle::GRANITE, seed);
+		if (type == RockTex::GRANITE) return RockTexture (vkscatter::RockStyle::GRANITE, seed);
 		Tex t (512, 256);
 		for (uint32_t y = 0; y < t.h; y++)
 			for (uint32_t x = 0; x < t.w; x++) {
@@ -360,6 +414,34 @@ namespace {
 					double l = 0.7 + 0.5 * f + 0.15 * Noise (Cyl (u, v, 60, 60).x, Cyl (u, v, 60, 60).y, Cyl (u, v, 60, 60).z, seed + 2);
 					if (std::fabs (f) < 0.05) l *= 0.5;
 					c = colour * l;
+				}
+				t.Set (x, y, c.x, c.y, c.z);
+			}
+		return t;
+	}
+
+	// Cactus skin: one rib across u (ridge in the middle, grooves at the
+	// edges), areoles with spines along the ridge every 1/8 of v; pads
+	// (ribbed false): areoles in a staggered grid
+	Tex CactusTexture (uint32_t seed, const VECTOR3 &colour, bool ribbed)
+	{
+		Tex t (64, 256);
+		for (uint32_t y = 0; y < t.h; y++)
+			for (uint32_t x = 0; x < t.w; x++) {
+				double u = (x + 0.5) / t.w, v = (y + 0.5) / t.h;
+				double l = 0.85 + 0.15 * Fbm (Cyl (u, v, 2, 6), 3, seed);
+				if (ribbed) l *= 0.55 + 0.45 * std::pow (std::sin (3.14159 * u), 0.7); // (grooves darker)
+				VECTOR3 c = colour * l;
+				// areoles: tan felt with pale spines
+				double au = ribbed ? 0.5 : (std::fmod (std::floor (v * 8.0), 2.0) ? 0.25 : 0.75);
+				double av = (std::floor (v * 8.0) + 0.5) / 8.0;
+				double du = (u - au) * 64.0 / 256.0 * 8.0, dv = (v - av) * 8.0; // (in areole spacings)
+				double r = std::sqrt (du * du + dv * dv);
+				if (r < 0.09) c = _V(0.45, 0.38, 0.28);
+				else if (r < 0.38) {
+					double ang = std::atan2 (dv, du);
+					double sp = std::fabs (std::sin (ang * 4.0 + seed));
+					if (sp > 0.93) c = _V(0.62, 0.58, 0.48);
 				}
 				t.Set (x, y, c.x, c.y, c.z);
 			}
@@ -781,11 +863,14 @@ namespace {
 		}
 	};
 
-	void BranchMesh (Builder &b, const std::vector<Branch> &br, double minRad)
+	// (lod: coarser levels of detail leave out thinner branches, with fewer sides)
+	void BranchMesh (Builder &b, const std::vector<Branch> &br, double minRad, int lod = 0)
 	{
+		minRad *= lod == 0 ? 1.0 : lod == 1 ? 3.0 : 8.0;
 		for (const Branch &x : br) {
 			if (x.ra < minRad) continue; // (thin twigs: the cards show them)
 			int sides = x.ra > 0.15 ? 9 : x.ra > 0.05 ? 6 : 4;
+			if (lod) sides = std::max (3, sides - 2 * lod);
 			Cylinder (b, x.a, x.b, x.ra, x.rb, sides, length (x.b - x.a) / 1.5);
 		}
 	}
@@ -806,10 +891,14 @@ namespace {
 		}
 	}
 
-	enum class Species { OAK, POPLAR, BIRCH, ACACIA, SPRUCE, FIR, PINE, SHRUB_ROUND, SHRUB_SPREAD, SHRUB_TALL };
+	enum class Species { OAK, POPLAR, BIRCH, ACACIA, SPRUCE, FIR, PINE, SHRUB_ROUND, SHRUB_SPREAD, SHRUB_TALL,
+		CREOSOTE, SAGEBRUSH, SAGUARO, BARREL, PRICKLY_PEAR };
+	inline bool IsCactus (Species sp) { return sp == Species::SAGUARO || sp == Species::BARREL || sp == Species::PRICKLY_PEAR; }
 
 	// a tree or shrub of the species: bark and foliage parts
-	void Plant (Species sp, uint32_t seed, double height, Builder &bark, Builder &leaves)
+	// (lod: level of detail 0 to 2: the same plant with fewer branches; the
+	// foliage cards are thinned out afterwards, see ThinCards)
+	void Plant (Species sp, uint32_t seed, double height, Builder &bark, Builder &leaves, int lod = 0)
 	{
 		Rng r (seed);
 		auto lean = [&]() { return unit (_V(r.R (-0.12, 0.12), 1.0, r.R (-0.12, 0.12))); };
@@ -842,7 +931,7 @@ namespace {
 			}
 			// the leader continues up (not acacia)
 			if (sp != Species::ACACIA) g.Grow (top, lean (), crownLen * 0.9, trunkR * 0.75, 1);
-			BranchMesh (bark, g.branches, trunkR * 0.08);
+			BranchMesh (bark, g.branches, trunkR * 0.08, lod);
 			VECTOR3 cc = _V(0, 0, 0);
 			for (auto &lp : g.leafPoints) cc += lp.first;
 			cc = cc / std::max ((double)g.leafPoints.size(), 1.0);
@@ -854,7 +943,7 @@ namespace {
 		case Species::SPRUCE: case Species::FIR: case Species::PINE: {
 			// a straight trunk with whorls of drooping branches, needle sprays along them
 			double trunkR = height * 0.016;
-			Cylinder (bark, _V(0, -0.3, 0), _V(0, height, 0), trunkR, trunkR * 0.15, 8, height / 3.0);
+			Cylinder (bark, _V(0, -0.3, 0), _V(0, height, 0), trunkR, trunkR * 0.15, 8 - 2 * lod, height / 3.0);
 			double h0 = height * (sp == Species::PINE ? r.R (0.45, 0.6) : r.R (0.08, 0.15));
 			double lMax = height * (sp == Species::PINE ? 0.2 : sp == Species::FIR ? 0.24 : 0.27);
 			double y = h0;
@@ -875,9 +964,9 @@ namespace {
 					VECTOR3 a = _V(0, y, 0), b = a + d * l;
 					// a slight sag towards the tip
 					VECTOR3 m = (a + b) * 0.5 - _V(0, l * (sp == Species::SPRUCE ? 0.12 : 0.05), 0);
-					if (l > 0.6) {
-						Cylinder (bark, a, m, trunkR * 0.25, trunkR * 0.15, 4, 1.0);
-						Cylinder (bark, m, b, trunkR * 0.15, trunkR * 0.06, 4, 1.0);
+					if (l > 0.6 && lod < 2) {
+						Cylinder (bark, a, m, trunkR * 0.25, trunkR * 0.15, 4 - lod, 1.0);
+						if (!lod) Cylinder (bark, m, b, trunkR * 0.15, trunkR * 0.06, 4, 1.0);
 					}
 					for (double t = 0.15; t <= 1.0; t += 0.17)
 						pts.push_back ({ t < 0.5 ? a + (m - a) * (t / 0.5) : m + (b - m) * ((t - 0.5) / 0.5), unit (b - a) });
@@ -889,20 +978,112 @@ namespace {
 			double card = height * (sp == Species::PINE ? 0.06 : 0.045);
 			Foliage (leaves, r, pts, card, 2, _V(0, (h0 + height) * 0.5, 0), (height - h0) * 0.5);
 			} break;
+		case Species::SAGUARO: {
+			// a ribbed column with a few arms: out from it, bending up
+			int spr = lod == 0 ? 2 : 1, rings = lod == 0 ? 10 : lod == 1 ? 6 : 3;
+			int ribs = lod >= 2 ? 6 : 13;
+			double rad = height * 0.035;
+			auto straight = [](double) { return 1.0; };
+			auto taper = [](double t) { return 1.0 - 0.15 * t; };
+			RibbedColumn (bark, _V(0, -0.4, 0), _V(0, 1, 0), height + 0.4, rad, taper, ribs, spr, rings, 0.06, 2.5);
+			int arms = (int)(r.U () * 4.0);
+			double az0 = r.U () * TWOPI;
+			for (int k = 0; k < arms; k++) {
+				double az = az0 + TWOPI * k / std::max (arms, 1) + r.R (-0.5, 0.5);
+				VECTOR3 out = _V(std::cos (az), 0, std::sin (az));
+				double y0 = height * r.R (0.35, 0.6), ar = rad * r.R (0.65, 0.8);
+				double reach = rad + ar * r.R (1.5, 2.5);
+				VECTOR3 p0 = _V(0, y0, 0) + out * (rad * 0.5);
+				// out (slightly up), the elbow, then up
+				VECTOR3 d1 = unit (out + _V(0, 0.25, 0));
+				RibbedColumn (bark, p0, d1, reach, ar, straight, ribs, spr, std::max (2, rings / 3), 0.06, 2.5);
+				VECTOR3 p1 = p0 + d1 * (reach - ar * 0.6);
+				VECTOR3 d2 = unit (out + _V(0, 1.4, 0));
+				RibbedColumn (bark, p1, d2, ar * 2.5, ar, straight, ribs, spr, 2, 0.06, 2.5);
+				VECTOR3 p2 = p1 + d2 * (ar * 1.6);
+				double up = std::max (ar * 3.0, height * r.R (0.75, 0.92) - p2.y);
+				RibbedColumn (bark, p2, unit (_V(0, 1, 0) + out * 0.05), up, ar, straight, ribs, spr, std::max (2, rings / 2), 0.06, 2.5);
+			}
+			} break;
+		case Species::BARREL: {
+			// a squat ribbed barrel, widest in the middle
+			int spr = lod == 0 ? 2 : 1, ribs = lod >= 2 ? 8 : 18;
+			auto bulge = [](double t) { return 0.75 + 0.25 * std::sin (3.14159 * std::min (t * 1.2, 1.0)); };
+			double rad = height * 0.42;
+			RibbedColumn (bark, _V(0, -0.1, 0), unit (_V(r.R (-0.1, 0.1), 1, r.R (-0.1, 0.1))), height + 0.1, rad, bulge, ribs, spr,
+				lod == 0 ? 6 : 3, 0.09, 4.0);
+			} break;
+		case Species::PRICKLY_PEAR: {
+			// flat oval pads, each growing one or two from its rim
+			struct Pad { VECTOR3 c, up, face; double s; int depth; };
+			std::vector<Pad> todo;
+			int roots = 2 + (int)(r.U () * 3);
+			for (int k = 0; k < roots; k++) {
+				double az = r.U () * TWOPI;
+				VECTOR3 up = unit (_V(std::cos (az) * 0.4, 1.0, std::sin (az) * 0.4));
+				VECTOR3 face = unit (crossp (up, _V(std::cos (az + 1.5), 0, std::sin (az + 1.5))));
+				double s = height * 0.28;
+				todo.push_back ({ _V(std::cos (az) * 0.1, s * 0.8, std::sin (az) * 0.1), up, face, s, 0 });
+			}
+			int level = lod == 0 ? 2 : 1;
+			while (!todo.empty()) {
+				Pad p = todo.back ();
+				todo.pop_back ();
+				VECTOR3 side = unit (crossp (p.face, p.up));
+				Blob (bark, level, [&](const VECTOR3 &u) {
+					return p.c + side * (u.x * p.s * 0.75) + p.up * (u.y * p.s) + p.face * (u.z * p.s * 0.13);
+				}, 1.0, 1.5);
+				if (p.depth >= 2) continue;
+				int kids = 1 + (int)(r.U () * 2.0);
+				for (int k = 0; k < kids; k++) {
+					double a = r.R (-1.0, 1.0);
+					VECTOR3 dir = unit (p.up * std::cos (a) + side * std::sin (a));
+					VECTOR3 up = unit (dir + _V(0, 0.4, 0));
+					double t = r.R (-0.8, 0.8);
+					VECTOR3 face = unit (crossp (up, side * std::cos (t) + p.face * std::sin (t)));
+					double s = p.s * r.R (0.75, 0.95);
+					todo.push_back ({ p.c + dir * (p.s * 0.95) + up * (s * 0.8), up, face, s, p.depth + 1 });
+				}
+			}
+			} break;
 		default: {
 			// shrubs: stems from the ground, branching, foliage at their ends
-			Grower g{ r, 2, sp == Species::SHRUB_SPREAD ? 1.0 : 0.7, sp == Species::SHRUB_TALL ? 1.0 : 0.3, 0.6, 2 };
-			int stems = 4 + (int)(r.U () * 4);
+			// (desert bushes: creosote sparse and upright, sagebrush low and round)
+			bool creo = sp == Species::CREOSOTE, sage = sp == Species::SAGEBRUSH;
+			Grower g{ r, 2, sp == Species::SHRUB_SPREAD || sage ? 1.0 : creo ? 0.5 : 0.7, sp == Species::SHRUB_TALL || creo ? 1.0 : 0.3, 0.6, creo ? 3 : 2 };
+			int stems = creo ? 8 + (int)(r.U () * 5) : 4 + (int)(r.U () * 4);
 			for (int k = 0; k < stems; k++) {
 				double az = r.U () * TWOPI;
-				double el = sp == Species::SHRUB_SPREAD ? r.R (0.3, 0.7) : sp == Species::SHRUB_TALL ? r.R (1.1, 1.4) : r.R (0.6, 1.2);
+				double el = sp == Species::SHRUB_SPREAD ? r.R (0.3, 0.7) : sp == Species::SHRUB_TALL || creo ? r.R (1.1, 1.4) : r.R (0.6, 1.2);
 				VECTOR3 d = unit (_V(std::cos (az) * std::cos (el), std::sin (el), std::sin (az) * std::cos (el)));
 				g.Grow (_V(r.R (-0.1, 0.1), 0.0, r.R (-0.1, 0.1)), d, height * r.R (0.55, 0.75), height * 0.02, 1);
 			}
-			BranchMesh (bark, g.branches, height * 0.006);
-			Foliage (leaves, r, g.leafPoints, height * 0.35, 2, _V(0, height * 0.45, 0), height * 0.6);
+			BranchMesh (bark, g.branches, height * 0.006, lod);
+			Foliage (leaves, r, g.leafPoints, height * (creo ? 0.25 : 0.35), creo ? 1 : 2, _V(0, height * 0.45, 0), height * 0.6);
 			} break;
 		}
+	}
+
+	// every k-th foliage card (Card: 8 vertices, 12 indices), larger by
+	// sqrt(k) about its centre: about the same cover with fewer triangles
+	Builder ThinCards (const Builder &in, int k)
+	{
+		Builder out;
+		size_t n = in.v.size() / 8;
+		float s = (float)std::sqrt ((double)k);
+		for (size_t c = 0; c < n; c += k) {
+			uint16_t base = (uint16_t)out.v.size();
+			float cx = 0, cy = 0, cz = 0;
+			for (int j = 0; j < 4; j++) cx += in.v[c*8+j].x, cy += in.v[c*8+j].y, cz += in.v[c*8+j].z;
+			cx /= 4, cy /= 4, cz /= 4;
+			for (int j = 0; j < 8; j++) {
+				NTVERTEX v = in.v[c*8+j];
+				v.x = cx + (v.x - cx) * s, v.y = cy + (v.y - cy) * s, v.z = cz + (v.z - cz) * s;
+				out.v.push_back (v);
+			}
+			for (int j = 0; j < 12; j++) out.i.push_back (base + (in.i[c*12+j] - (uint16_t)(c*8)));
+		}
+		return out;
 	}
 
 	void Extent (const Builder &b, double &radius, double &height)
@@ -916,7 +1097,7 @@ namespace {
 
 } // namespace
 
-namespace scatter {
+namespace vkscatter {
 
 // ======================================================================
 // Library
@@ -1055,19 +1236,48 @@ void Library::Generate (const char *body, RockStyle style, bool vegetation)
 		{ Species::POPLAR,       Kind::BROADLEAF, "poplar",   16.0, LeafShape::SMALL, _V(0.07, 0.12, 0.035) },
 		{ Species::BIRCH,        Kind::BROADLEAF, "birch",    10.0, LeafShape::SMALL, _V(0.09, 0.14, 0.04) },
 		{ Species::ACACIA,       Kind::BROADLEAF, "acacia",    7.0, LeafShape::SMALL, _V(0.08, 0.10, 0.035) },
+		{ Species::CREOSOTE,     Kind::SHRUB, "creosote",     1.5, LeafShape::SMALL,  _V(0.07, 0.08, 0.03) },
+		{ Species::SAGEBRUSH,    Kind::SHRUB, "sagebrush",    0.9, LeafShape::SMALL,  _V(0.15, 0.17, 0.12) },
+		{ Species::SAGUARO,      Kind::CONIFER, "saguaro",    9.0, LeafShape::SMALL,  _V(0.10, 0.15, 0.08) },
+		{ Species::BARREL,       Kind::SHRUB, "barrel",       0.8, LeafShape::SMALL,  _V(0.12, 0.17, 0.07) },
+		{ Species::PRICKLY_PEAR, Kind::SHRUB, "pricklypear",  1.2, LeafShape::SMALL,  _V(0.12, 0.18, 0.06) },
 	};
+	// cactus skins: ribbed columns, pads
+	Tex ct = CactusTexture (41, _V(0.10, 0.15, 0.08), true);
+	VkTexture *cactusTex = Texture (ct.w, ct.h, ct.px);
+	Tex pt = CactusTexture (43, _V(0.12, 0.18, 0.06), false);
+	VkTexture *padTex = Texture (pt.w, pt.h, pt.px);
 	uint32_t seed = 5000;
 	for (const Spec &s : specs) {
-		VkTexture *leafTex = cardTexture (seed + 1, s.shape, s.colour);
+		bool cactus = IsCactus (s.sp);
+		VkTexture *leafTex = cactus ? nullptr : cardTexture (seed + 1, s.shape, s.colour);
+		VkTexture *bt = s.sp == Species::BIRCH ? birchTex : s.sp == Species::PRICKLY_PEAR ? padTex : cactus ? cactusTex : barkTex;
 		Builder bark, leaves;
 		Plant (s.sp, seed, s.height, bark, leaves);
 		double rad, h, rb, hb;
 		Extent (leaves, rad, h);
 		Extent (bark, rb, hb);
 		std::vector<VkMesh::Part> parts;
-		parts.push_back (part (bark, s.sp == Species::BIRCH ? birchTex : barkTex, 0.9f));
-		parts.push_back (part (leaves, leafTex, 0.75f, 0.5f));
+		parts.push_back (part (bark, bt, cactus ? 0.6f : 0.9f));
+		if (!leaves.i.empty()) parts.push_back (part (leaves, leafTex, 0.75f, 0.5f));
+		if (leaves.v.empty()) rad = rb, h = hb;
 		add (s.kind, s.name, std::move (parts), std::max (rad, rb), std::max (h, hb));
+		// coarser levels of detail: fewer branches, a third, a tenth and a
+		// fortieth of the cards
+		for (int lod = 1; lod <= 3; lod++) {
+			Builder lb, ll;
+			Plant (s.sp, seed, s.height, lb, ll, cactus ? lod : std::min (lod, 2));
+			Builder thin = ThinCards (ll, lod == 1 ? 3 : lod == 2 ? 10 : 40);
+			if (lod == 3 && !cactus) { // (the trunk alone, four-sided)
+				lb = Builder ();
+				double r0 = s.height * 0.02;
+				Cylinder (lb, _V(0, -0.3, 0), _V(0, s.height * (s.kind == Kind::CONIFER ? 0.9 : 0.45), 0), r0, r0 * 0.4, 4, s.height / 3.0);
+			}
+			std::vector<VkMesh::Part> lp;
+			if (!lb.i.empty()) lp.push_back (part (lb, bt, cactus ? 0.6f : 0.9f));
+			if (!thin.i.empty()) lp.push_back (part (thin, leafTex, 0.75f, 0.5f));
+			assets.back().lods.push_back (std::make_unique<VkMesh> (ctx, texmgr, lp));
+		}
 		seed += 97;
 	}
 }
@@ -1111,7 +1321,7 @@ void Gallery::Place ()
 		double e = oapiSurfaceElevation (hPlanet, lng, lat);
 		VECTOR3 up = _V(std::cos (lat) * std::cos (lng), std::sin (lat), std::cos (lat) * std::sin (lng));
 		VECTOR3 ea = _V(-std::sin (lng), 0.0, std::cos (lng));
-		VECTOR3 no = crossp (up, ea);
+		VECTOR3 no = crossp (ea, up); // (north: the frame east, up, north)
 		double yaw = rng.U () * TWOPI, c = std::cos (yaw), s = std::sin (yaw);
 		VECTOR3 x = ea * c + no * s, z = no * c - ea * s;
 		items.push_back ({ a, up * (R + e), _M(x.x, up.x, z.x, x.y, up.y, z.y, x.z, up.z, z.z) });
@@ -1219,4 +1429,4 @@ void Gallery::RenderShadow (ShadowMap &sm)
 		sm.DrawMesh (it.asset->mesh.get(), Mat4::FromRotTrans (mul (prot, it.rot), pp + mul (prot, it.pos) - sm.Centre()));
 }
 
-} // namespace scatter
+} // namespace vkscatter

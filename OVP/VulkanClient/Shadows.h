@@ -36,6 +36,9 @@ public:
 	/// centre (see Centre)
 	void DrawMesh (const VkMesh *mesh, const Mat4 &model,
 		const std::vector<Mat4> *groupTransforms = nullptr, const std::vector<uint8_t> *groupVisible = nullptr);
+	/// Draw instances of a mesh: transforms object -> global frame relative
+	/// to origin (rows of 3x4 matrices, Scene::INSTANCE_STRIDE bytes each)
+	void DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize instOfs, uint32_t count, const VECTOR3 &origin);
 	/// Draw indexed geometry (NTVERTEX, 16-bit indices), e.g. a terrain tile
 	void DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &model);
 	/// whether a sphere (global position, radius) may cast into the map
@@ -56,6 +59,7 @@ private:
 	VkPipeline pipeline = VK_NULL_HANDLE;
 	VkPipelineLayout alphaLayout = VK_NULL_HANDLE; // casters with alpha-tested textures (foliage)
 	VkPipeline alphaPipeline = VK_NULL_HANDLE;
+	VkPipeline instPipeline = VK_NULL_HANDLE;  // instanced casters (alpha-tested where textured)
 	bool active = false;
 	VECTOR3 centre{};
 	double radius = 1.0;

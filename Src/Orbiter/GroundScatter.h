@@ -14,12 +14,15 @@
 //   ROCK <mesh stem> <radius> <height> .. a rock (meshes <stem>_lod0..2;
 //                                         its collision hull: the convex
 //                                         hull of the coarsest level)
-//   PLANT <TREE|SHRUB|GRASS> <name> <height> <trunk radius> [<lat0> <lat1>]
+//   PLANT <TREE|SHRUB|GRASS> <name> <height> <trunk radius> [options]
 //                                         a plant made by the graphics
-//                                         client (by name); trees and shrubs
-//                                         grow between latitudes lat0 and
-//                                         lat1 [deg, absolute], fading 5 deg
-//                                         beyond
+//                                         client (by name). Options:
+//                                         lat=<a>:<b> latitudes [deg, absolute]
+//                                         it grows between, fading 5 deg beyond;
+//                                         lng=<a>:<b> longitudes [deg, -180 to
+//                                         180; a > b: across 180], fading 5 deg
+//                                         beyond; cover=<name> its habitat:
+//                                         only in layers of that cover
 //   LAYER <name> <kind> <min size> <max size> <cell> <spacing> <density>
 //         <range> <collide> <cover>
 //                                         objects of a kind and size range
@@ -33,7 +36,10 @@
 //                                         slopes), bare (rocky ground, from
 //                                         the surface texture), forest,
 //                                         bush, meadow (vegetation, from the
-//                                         surface texture; no water)
+//                                         surface texture; no water), arid
+//                                         (dry ground: tan to reddish, not
+//                                         dunes); plants with a habitat
+//                                         (cover=) only in layers of it
 //
 // Cells: rows of latitude <cell> m high, each split in longitude into
 // cells about <cell> m wide. Each cell's objects come from a hash of the
@@ -71,6 +77,8 @@ namespace scatter {
 		double radius, height; ///< horizontal extent, height [m]
 		double trunk = 0.0;    ///< trunk radius at the base [m] (trees)
 		double lat0 = 0.0, lat1 = 90.0; ///< latitude range [deg] (plants)
+		double lng0 = -180.0, lng1 = 180.0; ///< longitude range [deg] (plants)
+		std::string cover;     ///< habitat (layer cover; empty: any)
 		double Size () const { return std::max (2.0 * radius, height); }
 		convex::Polytope hull; ///< collision shape (object frame, unit scale)
 		bool hasHull = false;
@@ -81,7 +89,8 @@ namespace scatter {
 		Kind kind;
 		double minSize, maxSize, cell, spacing, density, range;
 		bool collide;
-		enum Cover { NONE, SLOPE, BARE, FOREST, BUSH, MEADOW } cover;
+		enum Cover { NONE, SLOPE, BARE, FOREST, BUSH, MEADOW, ARID } cover;
+		std::string coverName;
 		std::vector<int> assets; ///< assets of the layer
 		std::vector<double> weight; ///< their relative frequencies
 	};

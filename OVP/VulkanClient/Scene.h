@@ -12,6 +12,8 @@
 #include "VkMath.h"
 #include "RayTracing.h"
 #include "Plumes.h"
+#include <algorithm>
+#include <cmath>
 #include <map>
 #include <memory>
 #include <vector>
@@ -83,11 +85,31 @@ public:
 	VulkanClient *Client () const { return gc; }
 	VkCommandBuffer Cmd () const;
 	const VECTOR3 &CameraPos () const { return camPos; }
+	/// whether a sphere (centre relative to the camera, global frame) may be in view
+	bool SphereInView (const VECTOR3 &rel, double radius) const
+	{
+		double d = length (rel);
+		if (d <= radius) return true;
+		VECTOR3 fwd = { camRot.m13, camRot.m23, camRot.m33 };
+		double cosA = dotp (rel, fwd) / d;
+		double half = atan (tanAperture * sqrt (1.0 + (double)viewW * viewW / ((double)viewH * viewH)));
+		return acos (std::clamp (cosA, -1.0, 1.0)) < half + asin (std::min (1.0, radius / d));
+	}
 	/// object-to-view transform for an object at global position gpos with rotation grot
 	Mat4 ModelView (const VECTOR3 &gpos, const MATRIX3 &grot) const;
 	void DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass,
 		const std::vector<Mat4> *groupTransforms = nullptr, const std::vector<uint8_t> *groupVisible = nullptr,
 		const std::vector<GroupTexOverride> *texOverride = nullptr);
+	/// Instances of a mesh (opaque and alpha-tested groups; depth or opaque
+	/// pass): transforms object -> global frame relative to the camera, as
+	/// rows of a 3x4 matrix (INSTANCE_STRIDE bytes each), in buffer inst
+	/// from byte instOfs. Lit and moving as set for the current object.
+	static constexpr uint32_t INSTANCE_STRIDE = 48;
+	void DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize instOfs, uint32_t count, RenderPass pass);
+	/// A mesh into the ray tracing scene of this frame (without drawing it)
+	void AddMeshRT (const VkMesh *mesh, const Mat4 &modelView);
+	/// the camera's view matrix (global frame relative to the camera -> view)
+	const Mat4 &View () const { return view; }
 	/// Per-frame uniforms and state (after RenderShadows, before the prepass)
 	void BeginFrame ();
 	/// Opaque geometry into the ambient occlusion prepass, and the occlusion
@@ -176,7 +198,7 @@ public:
 
 private:
 	void CreatePipelines ();
-	VkPipeline CreateMeshPipeline (bool blend, bool additive, bool depthWrite, bool prepass = false);
+	VkPipeline CreateMeshPipeline (bool blend, bool additive, bool depthWrite, bool prepass = false, bool instanced = false);
 	VkPipeline CreateParticlePipeline (bool additive);
 	void UpdateCamera ();
 	void BuildSphere ();
@@ -202,6 +224,8 @@ private:
 	VkPipeline meshBlend = VK_NULL_HANDLE;
 	VkPipeline meshAdditive = VK_NULL_HANDLE;
 	VkPipeline meshPrepass = VK_NULL_HANDLE;
+	VkPipeline meshOpaqueInst = VK_NULL_HANDLE;  // instanced (ground scatter)
+	VkPipeline meshPrepassInst = VK_NULL_HANDLE;
 	std::unique_ptr<class AmbientOcclusion> ao;
 	std::unique_ptr<class ScreenReflections> ssr;
 	std::unique_ptr<class RTScene> rt;

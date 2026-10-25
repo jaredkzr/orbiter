@@ -3,6 +3,7 @@
 
 #include "VObjects.h"
 #include "ScatterAssets.h"
+#include "ScatterField.h"
 #include "VkMesh.h"
 #include "VulkanClient.h"
 #include "Particles.h"
@@ -1184,6 +1185,7 @@ void VPlanet::RenderShadow (ShadowMap &sm)
 	if (surface && camDist < size + 50e3) surface->RenderShadow (sm);
 	for (auto &b : bases) b->RenderShadow (sm);
 	if (gallery) gallery->RenderShadow (sm);
+	if (field) field->RenderShadow (sm);
 }
 
 void VPlanet::UpdateBases ()
@@ -1265,6 +1267,13 @@ void VPlanet::CollectLights (std::vector<LightSource> &lights)
 void VPlanet::PrepareFrame ()
 {
 	if (surface) surface->Prepare ();
+	// the ground scatter: made when the camera comes near the surface
+	if (surface && !fieldInit && camDist < size + 20e3) {
+		fieldInit = true;
+		field = std::make_unique<vkscatter::Field> (scene, hObj);
+		if (!field->Active ()) field.reset ();
+	}
+	if (field) field->Prepare ();
 	if (clouds) clouds->Prepare (); // (coverage map of the volumetric clouds)
 }
 
@@ -1277,10 +1286,10 @@ double VPlanet::CloudAlt () const
 void VPlanet::UpdateGallery ()
 {
 	// the gallery is on the planet the focus vessel stands on
-	if (gallery || !scatter::Gallery::Enabled ()) return;
+	if (gallery || !vkscatter::Gallery::Enabled ()) return;
 	OBJHANDLE hv = oapiGetFocusObject ();
 	if (hv && oapiGetVesselInterface (hv)->GetSurfaceRef () == hObj)
-		gallery = std::make_unique<scatter::Gallery> (scene, hObj);
+		gallery = std::make_unique<vkscatter::Gallery> (scene, hObj);
 }
 
 void VPlanet::Render (RenderPass pass)
@@ -1291,6 +1300,7 @@ void VPlanet::Render (RenderPass pass)
 		for (auto &b : bases) b->Render (pass);
 		UpdateGallery ();
 		if (gallery) gallery->Render (pass);
+		if (field) field->Render (pass);
 		return;
 	}
 	if (pass == RenderPass::Transparent) {
@@ -1316,6 +1326,7 @@ void VPlanet::Render (RenderPass pass)
 		for (auto &b : bases) b->Render (pass);
 		UpdateGallery ();
 		if (gallery) gallery->Render (pass);
+		if (field) field->Render (pass);
 		return;
 	}
 

@@ -233,9 +233,10 @@ def write_msh (path, obj, texture, roughness=0.9, alpha_card=False):
 		f.write ("MSHX1\nGROUPS 1\nMATERIAL 1\nTEXTURE 1\n")
 		f.write ("GEOM %d %d\n" % (len (verts), len (tris)))
 		for v in verts: f.write ("%.4f %.4f %.4f %.4f %.4f %.4f %.5f %.5f\n" % v)
-		# (the axis swap mirrors: Blender's counter-clockwise faces become
-		# Orbiter's clockwise ones)
-		for t in tris: f.write ("%d %d %d\n" % tuple (t))
+		# (Orbiter: the cross product of the edges (b - a) x (c - a) points
+		# out of the front, as in Blender; the axis swap mirrors, so the
+		# order is reversed)
+		for t in tris: f.write ("%d %d %d\n" % (t[0], t[2], t[1]))
 		f.write ("MATERIALS 1\nscatter\nMATERIAL scatter\n1 1 1 1\n1 1 1 1\n0 0 0 1 %g\n0 0 0 1\n" % ((1.0 - roughness) * 20.0))
 		f.write ("TEXTURES 1\n%s\n" % texture)
 	return len (verts), len (tris)

@@ -279,7 +279,18 @@ void GroundScatter::LoadAssets (const std::string &file)
 			std::string kind;
 			if (!(ss >> kind >> a.name >> a.height >> a.trunk)) continue;
 			a.kind = kind == "TREE" ? TREE : kind == "SHRUB" ? SHRUB : GRASS;
-			if (!(ss >> a.lat0 >> a.lat1)) a.lat0 = 0.0, a.lat1 = 90.0;
+			std::string opt;
+			while (ss >> opt) {
+				size_t eq = opt.find ('='), co = opt.find (':');
+				std::string key = opt.substr (0, eq);
+				if (eq == std::string::npos) continue;
+				std::string val = opt.substr (eq + 1);
+				if (key == "cover") a.cover = val;
+				else if (co != std::string::npos && (key == "lat" || key == "lng")) {
+					double x0 = atof (opt.substr (eq + 1, co - eq - 1).c_str()), x1 = atof (opt.substr (co + 1).c_str());
+					if (key == "lat") a.lat0 = x0, a.lat1 = x1; else a.lng0 = x0, a.lng1 = x1;
+				}
+			}
 			a.radius = a.height * (a.kind == TREE ? 0.3 : 0.5);
 			if (a.kind == TREE && a.trunk > 0.0) {
 				a.hull = Trunk (a.trunk, 0.55 * a.height);
@@ -297,7 +308,8 @@ void GroundScatter::LoadAssets (const std::string &file)
 			L.kind = kind == "ROCK" ? ROCK : kind == "TREE" ? TREE : kind == "SHRUB" ? SHRUB : GRASS;
 			L.collide = col != 0;
 			L.cover = cov == "slope" ? Layer::SLOPE : cov == "bare" ? Layer::BARE : cov == "forest" ? Layer::FOREST :
-				cov == "bush" ? Layer::BUSH : cov == "meadow" ? Layer::MEADOW : Layer::NONE;
+				cov == "bush" ? Layer::BUSH : cov == "meadow" ? Layer::MEADOW : cov == "arid" ? Layer::ARID : Layer::NONE;
+			L.coverName = cov;
 			L.cell = std::max (L.cell, 1.0);
 			L.spacing = std::clamp (L.spacing, 0.1, L.cell);
 			layers.push_back (L);
@@ -320,6 +332,7 @@ void GroundScatter::Load ()
 		for (size_t i = 0; i < assets.size(); i++) {
 			const Asset &a = assets[i];
 			if (a.kind != L.kind || a.Size() < L.minSize || a.Size() >= L.maxSize) continue;
+			if (!a.cover.empty() && a.cover != L.coverName) continue; // (another habitat)
 			L.assets.push_back ((int)i);
 			// (rocks: more small ones)
 			L.weight.push_back (a.kind == ROCK ? pow (a.Size(), -1.5) : 1.0);
@@ -386,14 +399,9 @@ double GroundScatter::Clearance (const Vector &dir) const
 			double r = b->FootprintRadius () + 150.0;
 			self->clear.push_back ({ Dir (lat, lng), r, r + 300.0 });
 		}
-		// (vessels that start landed on the planet)
-		if (g_psys)
-			for (Vessel *v : g_psys->GetVessels())
-				if (v->GetStatus() == FLIGHTSTATUS_LANDED && v->ProxyPlanet() == planet) {
-					Vector pl (tmul (planet->GRot(), v->GPos() - planet->GPos()));
-					double r = v->Size() * 1.5 + 10.0;
-					self->clear.push_back ({ pl.unit(), r, r * 1.2 });
-				}
+		// (vessels placed on the ground: Planet::ClearScatter)
+		for (auto &c : planet->ScatterClearings())
+			self->clear.push_back ({ c.first.unit(), c.second, c.second * 1.2 });
 	}
 	double f = 1.0;
 	for (const Clearing &c : clear) {
@@ -406,8 +414,7 @@ double GroundScatter::Clearance (const Vector &dir) const
 void GroundScatter::Clear (const Vector &p, double radius)
 {
 	if (!active) return;
-	Clearance (Vector (0, 1, 0)); // (bases first)
-	clear.push_back ({ p.unit(), radius, radius * 1.2 });
+	if (basesDone) clear.push_back ({ p.unit(), radius, radius * 1.2 }); // (else: with the bases, from the planet's list)
 	cells.clear();
 	generation++;
 }
@@ -430,6 +437,9 @@ double GroundScatter::CoverFactor (const Layer &L, const Vector &c, double water
 		return std::max (veg * SmoothStep (0.5, 0.25, lum), 0.35 * SmoothStep (0.2, 0.3, lum) * SmoothStep (0.6, 0.45, lum) * SmoothStep (0.15, 0.3, sat)) * (1.0 - snow);
 	case Layer::MEADOW: // green, lighter
 		return veg * SmoothStep (0.55, 0.3, lum) * (1.0 - snow);
+	case Layer::ARID:   // dry ground: tan to reddish, not green, not bright dunes or salt
+		return (1.0 - veg) * SmoothStep (0.15, 0.25, lum) * SmoothStep (0.62, 0.48, lum) * SmoothStep (0.1, 0.2, sat)
+			* (c.x > c.z ? 1.0 : 0.3) * (1.0 - snow);
 	default:            // bare: not green, not snow
 		return (1.0 - veg) * (1.0 - 0.8 * snow);
 	}
@@ -481,7 +491,19 @@ void GroundScatter::Make (int layer, int row, int col, CellData &cd)
 			std::vector<double> w (L.weight);
 			for (size_t k = 0; k < w.size(); k++) {
 				const Asset &a = assets[L.assets[k]];
-				if (a.kind != ROCK) w[k] *= SmoothStep (a.lat0 - 5.0, a.lat0, alat) * SmoothStep (a.lat1 + 5.0, a.lat1, alat);
+				if (a.kind != ROCK) {
+					w[k] *= SmoothStep (a.lat0 - 5.0, a.lat0, alat) * SmoothStep (a.lat1 + 5.0, a.lat1, alat);
+					if (a.lng0 > -180.0 || a.lng1 < 180.0) { // (distance outside the longitude range [deg])
+						double x = lng * DEG, out = 0.0;
+						bool wraps = a.lng0 > a.lng1;
+						bool in = wraps ? (x >= a.lng0 || x <= a.lng1) : (x >= a.lng0 && x <= a.lng1);
+						if (!in) {
+							auto dl = [](double p, double q) { double d = fabs (p - q); return std::min (d, 360.0 - d); };
+							out = std::min (dl (x, a.lng0), dl (x, a.lng1));
+						}
+						w[k] *= SmoothStep (5.0, 0.0, out);
+					}
+				}
 				wlat += w[k];
 			}
 			if (wlat <= 0.0) continue;

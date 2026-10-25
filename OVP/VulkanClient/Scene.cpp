@@ -28,6 +28,8 @@
 #include "mesh.vert.h"
 #include "mesh.frag.h"
 #include "prepass.vert.h"
+#include "prepass_inst.vert.h"
+#include "mesh_inst.vert.h"
 #include "prepass.frag.h"
 #include "stars.vert.h"
 #include "stars.frag.h"
@@ -326,7 +328,7 @@ void Scene::Shutdown ()
 	for (auto &u : probeFrameUbo) ctx->DestroyBuffer (u);
 	if (probe) probe->Shutdown ();
 	probe.reset();
-	VkPipeline pipes[] = { meshOpaque, meshBlend, meshAdditive, meshPrepass, starPipeline, particleAdditive, particleBlend };
+	VkPipeline pipes[] = { meshOpaque, meshBlend, meshAdditive, meshPrepass, meshOpaqueInst, meshPrepassInst, starPipeline, particleAdditive, particleBlend };
 	for (auto p : pipes) if (p) vkDestroyPipeline (ctx->device, p, nullptr);
 	vkDestroyPipelineLayout (ctx->device, meshLayout, nullptr);
 	vkDestroyPipelineLayout (ctx->device, particleLayout, nullptr);
@@ -341,10 +343,13 @@ void Scene::Shutdown ()
 // ======================================================================
 // Pipelines
 
-VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite, bool prepass)
+VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite, bool prepass, bool instanced)
 {
-	VkShaderModule vs = prepass ? ctx->CreateShaderModule (spv_prepass_vert, spv_prepass_vert_size)
-	                            : ctx->CreateShaderModule (spv_mesh_vert, spv_mesh_vert_size);
+	VkShaderModule vs = instanced ?
+		(prepass ? ctx->CreateShaderModule (spv_prepass_inst_vert, spv_prepass_inst_vert_size)
+		         : ctx->CreateShaderModule (spv_mesh_inst_vert, spv_mesh_inst_vert_size)) :
+		(prepass ? ctx->CreateShaderModule (spv_prepass_vert, spv_prepass_vert_size)
+		         : ctx->CreateShaderModule (spv_mesh_vert, spv_mesh_vert_size));
 	VkShaderModule fs = prepass ? ctx->CreateShaderModule (spv_prepass_frag, spv_prepass_frag_size)
 	                            : ctx->CreateShaderModule (spv_mesh_frag, spv_mesh_frag_size);
 	VkPipelineShaderStageCreateInfo stages[2] = {
@@ -352,16 +357,22 @@ VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite
 		{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main" }
 	};
 
-	VkVertexInputBindingDescription bind{ 0, sizeof(NTVERTEX), VK_VERTEX_INPUT_RATE_VERTEX };
-	VkVertexInputAttributeDescription attr[3] = {
+	VkVertexInputBindingDescription bind[2] = {
+		{ 0, sizeof(NTVERTEX), VK_VERTEX_INPUT_RATE_VERTEX },
+		{ 1, INSTANCE_STRIDE, VK_VERTEX_INPUT_RATE_INSTANCE } // (instanced: rows of the transform)
+	};
+	VkVertexInputAttributeDescription attr[6] = {
 		{ 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(NTVERTEX, x) },
 		{ 1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(NTVERTEX, nx) },
-		{ 2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(NTVERTEX, tu) }
+		{ 2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(NTVERTEX, tu) },
+		{ 3, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 0 },
+		{ 4, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 16 },
+		{ 5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 32 }
 	};
 	VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-	vi.vertexBindingDescriptionCount = 1;
-	vi.pVertexBindingDescriptions = &bind;
-	vi.vertexAttributeDescriptionCount = 3;
+	vi.vertexBindingDescriptionCount = instanced ? 2 : 1;
+	vi.pVertexBindingDescriptions = bind;
+	vi.vertexAttributeDescriptionCount = instanced ? 6 : 3;
 	vi.pVertexAttributeDescriptions = attr;
 
 	VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
@@ -448,6 +459,8 @@ void Scene::CreatePipelines ()
 	meshBlend = CreateMeshPipeline (true, false, false);
 	meshAdditive = CreateMeshPipeline (true, true, false);
 	meshPrepass = CreateMeshPipeline (false, false, true, true);
+	meshOpaqueInst = CreateMeshPipeline (false, false, true, false, true);
+	meshPrepassInst = CreateMeshPipeline (false, false, true, true, true);
 
 	// stars: points at infinity, drawn first without depth test
 	VkPushConstantRange spcr{ VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(StarPushConstants) };
@@ -1495,6 +1508,94 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 				else rtParts.push_back (part);
 			}
 		}
+	}
+	if (!rtParts.empty()) rt->AddInstance (rtParts.data(), (uint32_t)rtParts.size(), modelView);
+}
+
+void Scene::DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize instOfs, uint32_t count, RenderPass pass)
+{
+	if (!count || !mesh->VertexBuffer() || !mesh->IndexBuffer() || pass == RenderPass::Transparent) return;
+	VkCommandBuffer cmd = ctx->Cmd();
+	VkBuffer vbs[2] = { mesh->VertexBuffer(), inst };
+	VkDeviceSize ofs[2] = { 0, instOfs };
+	VkDescriptorSet fset = FrameSet ();
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &fset, 0, nullptr);
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 2, 1, &camAtmSet, 0, nullptr);
+	vkCmdBindVertexBuffers (cmd, 0, 2, vbs, ofs);
+	vkCmdBindIndexBuffer (cmd, mesh->IndexBuffer(), 0, VK_INDEX_TYPE_UINT16);
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pass == RenderPass::Depth ? meshPrepassInst : meshOpaqueInst);
+
+	// (the instances' transforms are relative to the camera, in the global
+	// frame: the view's rotation remains)
+	VkDescriptorSet boundTex = VK_NULL_HANDLE, boundMaps = VK_NULL_HANDLE;
+	for (uint32_t g = 0; g < mesh->nGroup(); g++) {
+		const VkMesh::Group &grp = mesh->GetGroup (g);
+		if (!grp.nIndex || grp.transparent || (grp.usrFlag & VkMesh::GRP_HIDDEN)) continue;
+		VkTexture *tex = grp.tex ? grp.tex : gc->TexMgr()->White();
+		if (tex->set != boundTex) {
+			vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 1, 1, &tex->set, 0, nullptr);
+			boundTex = tex->set;
+		}
+		const TexMaps *maps = tex->maps;
+		VkDescriptorSet ms = maps ? maps->set : gc->TexMgr()->DefaultMapSet();
+		if (ms != boundMaps) {
+			vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 3, 1, &ms, 0, nullptr);
+			boundMaps = ms;
+		}
+		const MATERIAL &m = mesh->Material (grp.material);
+		const PBRParams &pp = mesh->PBR (grp.material);
+		MeshPushConstants pc;
+		view.ToFloat (pc.modelView);
+		pc.diffuse[0] = m.diffuse.r, pc.diffuse[1] = m.diffuse.g, pc.diffuse[2] = m.diffuse.b, pc.diffuse[3] = m.diffuse.a;
+		pc.emissive[0] = m.emissive.r, pc.emissive[1] = m.emissive.g, pc.emissive[2] = m.emissive.b, pc.emissive[3] = 0.0f;
+		pc.specular[0] = m.specular.r, pc.specular[1] = m.specular.g, pc.specular[2] = m.specular.b, pc.specular[3] = m.power;
+		pc.light[0] = pc.light[1] = pc.light[2] = objLight;
+		pc.pbr[0] = pp.metalness, pc.pbr[1] = pp.roughness, pc.pbr[2] = pp.reflectivity, pc.pbr[3] = pp.f0;
+		memset (pc.heat, 0, sizeof(pc.heat));
+		pc.maps[0] = maps ? (float)maps->flags : 0.0f;
+		pc.maps[1] = 0.0f;
+		pc.maps[2] = grp.alphaTest;
+		pc.maps[3] = 0.0f;
+		if (pass == RenderPass::Depth) {
+			float pr[40];
+			memcpy (pr, pc.modelView, sizeof(pc.modelView));
+			memcpy (pr + 16, objMotion, sizeof(objMotion));
+			memcpy (pr + 32, pc.pbr, sizeof(pc.pbr));
+			pr[36] = pc.maps[0];
+			pr[37] = 0.0f;
+			pr[38] = grp.alphaTest;
+			pr[39] = 0.0f;
+			vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pr), pr);
+		} else {
+			vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+		}
+		vkCmdDrawIndexed (cmd, grp.nIndex, count, grp.firstIndex, grp.vertexOffset, 0);
+	}
+}
+
+void Scene::AddMeshRT (const VkMesh *mesh, const Mat4 &modelView)
+{
+	if (!rt || !rt->Enabled () || !mesh->VertexBuffer()) return;
+	rtParts.clear ();
+	for (uint32_t g = 0; g < mesh->nGroup(); g++) {
+		const VkMesh::Group &grp = mesh->GetGroup (g);
+		if (!grp.nIndex || grp.transparent || (grp.usrFlag & VkMesh::GRP_HIDDEN)) continue;
+		RTScene::Part part;
+		part.geo = { mesh->Id(), mesh->GeomVersion(), mesh->VertexBuffer(),
+			(VkDeviceSize)grp.vertexOffset * sizeof(NTVERTEX), mesh->GroupVertexCount (g),
+			mesh->IndexBuffer(), grp.firstIndex, grp.nIndex };
+		part.tex = grp.tex ? grp.tex : gc->TexMgr()->White();
+		const MATERIAL &m = mesh->Material (grp.material);
+		const PBRParams &pp = mesh->PBR (grp.material);
+		RTScene::Material &rm = part.mat;
+		rm.diffuse[0] = m.diffuse.r, rm.diffuse[1] = m.diffuse.g, rm.diffuse[2] = m.diffuse.b, rm.diffuse[3] = m.diffuse.a;
+		rm.emissive[0] = m.emissive.r, rm.emissive[1] = m.emissive.g, rm.emissive[2] = m.emissive.b;
+		rm.light = objLight;
+		rm.pbr[0] = pp.metalness, rm.pbr[1] = pp.roughness, rm.pbr[2] = pp.reflectivity, rm.pbr[3] = pp.f0;
+		rm.unlit = false;
+		rm.alphaTest = grp.alphaTest > 0.0f;
+		rm.owner = objOwner;
+		rtParts.push_back (part);
 	}
 	if (!rtParts.empty()) rt->AddInstance (rtParts.data(), (uint32_t)rtParts.size(), modelView);
 }

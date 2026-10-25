@@ -29,7 +29,7 @@ class Scene;
 class ShadowMap;
 enum class RenderPass;
 
-namespace scatter {
+namespace vkscatter {
 
 	enum class Kind { ROCK, GRASS, SHRUB, CONIFER, BROADLEAF };
 
@@ -89,6 +89,6 @@ namespace scatter {
 		bool placed = false;
 	};
 
-} // namespace scatter
+} // namespace vkscatter
 
 #endif // !__SCATTERASSETS_H

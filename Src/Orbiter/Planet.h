@@ -191,7 +191,10 @@ public:
 	ElevationManager *ElevMgr() const { return emgr; }
 	/// rocks and vegetation on the ground (GroundScatter.h; null if the planet has none)
 	scatter::GroundScatter *Scatter() const;
-	scatter::GroundScatter *ScatterIfMade() const { return scatter_.get(); }
+	/// clear the ground scatter around a point (planet frame) where a vessel
+	/// is placed on the ground (kept until the scatter is made)
+	void ClearScatter (const Vector &p, double radius);
+	const std::vector<std::pair<Vector,double>> &ScatterClearings () const { return scatterClear; }
 	TileManager2<CloudTile> *CloudMgr2() const { return cmgr2; }
 	void ForEach(int type, std::function<void(const fs::directory_entry&)> callback) {
 		extern Orbiter* g_pOrbiter;
@@ -314,6 +317,7 @@ private:
 	TerrainDetail::Overrides detail_cfg; // its parameters from the configuration file
 	mutable std::unique_ptr<scatter::GroundScatter> scatter_;
 	mutable bool scatterInit = false;
+	std::vector<std::pair<Vector,double>> scatterClear;
 };
 
 #endif // !__PLANET_H
