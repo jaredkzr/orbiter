@@ -44,8 +44,14 @@ namespace {
 		                  { 0.74f, 0.50f, 0.32f },  0.40f, 12.0f, 0.3f, 0.9f },
 		{ "solid",        7e4,   { 1.0f, 0.88f, 0.65f }, 6.0f, { 1.0f, 0.9f, 0.7f }, 4.0f, { 1.0f, 0.65f, 0.3f }, 6.0f, 0.25f, 0.6f, 1.2f, 35.0f,
 		                  { 0.95f, 0.95f, 0.93f },  0.85f, 40.0f, 0.0f, 0.05f },
-		{ "rcs",          3e3,   { 0.9f, 0.85f, 0.8f },  0.9f, { 0, 0, 0 },          0.0f, { 1.0f, 0.6f, 0.4f },  0.3f, 0.0f,  1.0f, 0.5f, 30.0f,
-		                  { 0.93f, 0.90f, 0.84f },  0.30f, 1.2f, -2.0f, -1.0f }, // (vapour puffs, also in vacuum)
+		// (hypergolic attitude thrusters: a narrow yellow-orange cone, after
+		// photographs of the Shuttle's and Dragon's RCS; a brief puff of
+		// unburnt propellant as they light)
+		{ "rcs",          3e3,   { 1.0f, 0.72f, 0.38f }, 1.6f, { 0, 0, 0 },          0.0f, { 1.0f, 0.6f, 0.4f },  0.3f, 0.0f,  1.0f, 0.4f, 30.0f,
+		                  { 0.93f, 0.90f, 0.84f },  0.30f, 0.2f, -2.0f, -1.0f },
+		// (cold gas, e.g. nitrogen: no flame; a faint frosty cone in sunlight)
+		{ "coldgas",      2e3,   { 0.02f, 0.02f, 0.025f }, 1.0f, { 0, 0, 0 },        0.0f, { 0, 0, 0 },          0.0f, 0.0f,  1.0f, 0.3f, 20.0f,
+		                  { 0.95f, 0.96f, 1.0f },   0.12f, 0.5f, -2.0f, -1.0f },
 		{ "texture",      0.0,   { 1, 1, 1 },            1.0f, { 0, 0, 0 },          0.0f, { 0, 0, 0 },          0.0f, 0.0f,  1.0f, 0.0f,  0.0f,
 		                  { 0, 0, 0 },              0.0f,  0.0f, 0.0f,  1.0f },
 	};
@@ -101,9 +107,10 @@ PlumeType PlumeConfig::Infer (VESSEL *v, void *thp)
 	THRUSTER_HANDLE th = (THRUSTER_HANDLE)thp;
 	if (!th) return PlumeType::Texture; // (an exhaust without a thruster: keep the add-on's look)
 	bool primary = InGroup (v, THGROUP_MAIN, th) || InGroup (v, THGROUP_RETRO, th) || InGroup (v, THGROUP_HOVER, th);
-	if (!primary && AttitudeIndex (v, th) >= 0) return PlumeType::RCS;
 	double isp = v->GetThrusterIsp0 (th), thrust = v->GetThrusterMax0 (th);
 	if (isp >= 1e6) return PlumeType::Texture; // (a helper, e.g. separation bolts)
+	if (isp < 1500.0) return PlumeType::ColdGas; // (compressed gas: no combustion)
+	if (!primary && AttitudeIndex (v, th) >= 0) return PlumeType::RCS;
 	if (isp >= 15e3) return thrust < 5e3 ? PlumeType::Ion : PlumeType::Plasma;
 	if (isp >= 4e3) return PlumeType::Hydrolox; // (and nuclear thermal: hot hydrogen)
 	if (isp >= 3.4e3) return PlumeType::Methalox;
@@ -570,9 +577,12 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 	double vac = ion ? 1.0 : Clamp01 ((log10 (k) - 0.5) / 3.0);
 	double air = Clamp01 (p.ambientPressure / 101325.0);
 	double rj = ion ? 1.0 : std::clamp (pow (k, 0.25), 0.7, 3.0);
-	double spread = ion ? 0.12 : 0.05 + 0.5 * vac;
+	// (attitude thrusters: the visible cone stays narrow in vacuum)
+	bool attitude = p.type == PlumeType::RCS || p.type == PlumeType::ColdGas;
+	double spread = ion ? 0.12 : 0.05 + (attitude ? 0.22 : 0.5) * vac;
 	double mixSpread = 0.08 * (1.0 - vac);
 	double len = p.length / re * (0.45 + 0.55 * p.level) * (1.0 - 0.3 * vac);
+	if (attitude) len *= 1.4; // (the cone stays visible for many nozzle lengths)
 	double cell = 2.6 * rj;
 	double lk = (log (k) - log (0.6)) / 1.3;
 	double diamonds = exp (-lk * lk) * (1.0 - vac);
@@ -707,6 +717,7 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 	float sh[4] = { (float)re, (float)len, (float)rj, (float)spread };
 	memcpy (pc.shape, sh, sizeof(sh));
 	pc.shape2[0] = (float)cell, pc.shape2[1] = (float)diamonds;
+	pc.shape2[2] = attitude ? 1.0f : 0.0f;
 	for (int i = 0; i < 3; i++) {
 		pc.core[i] = (float)(c.core[i] * c.coreBrightness * bright);
 		pc.diamond[i] = (float)(c.diamond[i] * c.diamondBrightness * bright);

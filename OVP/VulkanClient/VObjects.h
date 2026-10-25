@@ -113,6 +113,7 @@ private:
 		class ParticleSystem *sys = nullptr;
 		uint32_t first = 0, capacity = 0, head = 0;
 		double accum = 0.0, lastEmit = -1e30, life = 0.0;
+		double onTime = 0.0; // since the engine lit [s]
 		bool havePrev = false;
 		VECTOR3 prev{};
 	};

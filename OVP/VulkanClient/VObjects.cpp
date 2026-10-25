@@ -508,8 +508,11 @@ void VVessel::CollectPlumes (PlumeRenderer &pr)
 		if (pr.Add (pd, id, &info) >= 0) {
 			EmitSmoke (i, (int)type, pd, info, dt);
 			EmitDust (i, (int)type, pd, dt);
-			PlumeLight pl{ scene->GlobalPos (info.lightPos), { info.lightCol[0], info.lightCol[1], info.lightCol[2] }, info.lightArea };
-			plumeLights.push_back (pl);
+			// (a flame lights its surroundings; cold gas does not glow)
+			if (type != PlumeType::ColdGas) {
+				PlumeLight pl{ scene->GlobalPos (info.lightPos), { info.lightCol[0], info.lightCol[1], info.lightCol[2] }, info.lightArea };
+				plumeLights.push_back (pl);
+			}
 		}
 		else if (i < smoke.size()) smoke[i].havePrev = false;
 	}
@@ -542,16 +545,16 @@ void VVessel::EmitSmoke (DWORD idx, int type, const PlumeDraw &pd, const PlumeIn
 	// spacing of a third of the particle size along the trail
 	double rate = std::clamp ((length (as) + v0) / (0.35 * std::max (size / sizeScale, 0.5)), 6.0, 250.0) * D;
 	if (atSurface) rate = 120.0 * D; // (a cloud building up around the point)
-	r.accum += rate * dt;
-	uint32_t n = (uint32_t)r.accum;
-	r.accum -= n;
-	bool rcs = type == (int)PlumeType::RCS;
-	if (rcs) { // (vapour: a few puffs, expanding fast and thinning out within a second)
-		r.accum -= n;
-		r.accum += 60.0 * D * pd.level * dt;
-		n = (uint32_t)r.accum;
-		r.accum -= n;
+	bool rcs = type == (int)PlumeType::RCS, cold = type == (int)PlumeType::ColdGas;
+	r.onTime = r.havePrev ? r.onTime + dt : 0.0;
+	if (rcs || cold) {
+		// hypergolic jets: a brief puff of unburnt propellant as they light,
+		// then nothing lingers in vacuum; cold gas: a faint frosty stream
+		rate = (rcs ? (r.onTime < 0.08 ? 250.0 : 0.0) : 40.0) * D * pd.level;
 	}
+	r.accum += rate * dt;
+	uint32_t n = (uint32_t)std::max (r.accum, 0.0);
+	r.accum -= n;
 	if (!r.havePrev) r.prev = src - vel * dt;
 	if (n) {
 		ParticleSystem::Emission e{};
@@ -565,15 +568,16 @@ void VVessel::EmitSmoke (DWORD idx, int type, const PlumeDraw &pd, const PlumeIn
 		e.lifetime = c.smokeLife, e.dt = dt;
 		e.size = size, e.growth = 0.4 * size + 2.0 * sizeScale;
 		e.alpha = fade * std::min (1.0, 1.3 / (D * sizeScale * sizeScale));
-		if (rcs) {
-			e.v0 = 25.0, e.spread = 18.0;
-			e.size = 0.4 * sizeScale, e.growth = 7.0 * sizeScale;
-			e.alpha = 0.25 * pd.level;
+		if (rcs || cold) {
+			// (along the jet, spreading within its narrow cone)
+			e.v0 = rcs ? 60.0 : 30.0, e.spread = rcs ? 25.0 : 10.0;
+			e.size = (rcs ? 0.3 : 0.15) * sizeScale, e.growth = (rcs ? 5.0 : 2.0) * sizeScale;
+			e.alpha = (rcs ? 0.2 : 0.05) * pd.level;
 		}
 		e.slowdown = atSurface ? 0.8 : ParticleSystem::ExhaustDrag (pd.airDensity);
 		e.first = r.first, e.capacity = r.capacity, e.head = r.head, e.count = std::min (n, r.capacity);
 		e.tinted = true;
-		e.volumetric = !rcs;
+		e.volumetric = !rcs && !cold;
 		for (int k = 0; k < 3; k++) e.albedo[k] = c.smokeAlbedo[k];
 		sys->Queue (e);
 		r.head = (r.head + e.count) % r.capacity;
@@ -621,7 +625,7 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 	// a jet stirs up the ground within a distance growing with its thrust
 	double thrust = pd.thrust * pd.level;
 	if (!sys || !sys->enabled || !pr || !pr->rayCast || dt <= 0.0 || thrust < 1e3 ||
-		type == (int)PlumeType::RCS || type == (int)PlumeType::Ion) { r.havePrev = false; return; }
+		type == (int)PlumeType::RCS || type == (int)PlumeType::ColdGas || type == (int)PlumeType::Ion) { r.havePrev = false; return; }
 	double reach = 2.5 * sqrt (thrust / 1e3);
 	double t;
 	VECTOR3 vn;

@@ -6,6 +6,7 @@ whose shape follows the ambient pressure (a narrow jet with shock diamonds
 at sea level, a wide faint bell in vacuum). The engine class (propellant)
 is inferred from the thruster:
 
+  Isp < 1500 m/s                    coldgas (compressed gas, e.g. MMU)
   attitude thrusters only           rcs
   Isp >= 15000 m/s                  ion (thrust < 5 kN) or plasma
   Isp >= 4000 m/s                   hydrolox
@@ -24,7 +25,7 @@ A file <vessel class>.cfg in this folder overrides this per exhaust:
   EXHAUST indices count the vessel's exhausts in the order they were added
 
   keys:  TYPE        ion, plasma, hydrolox, methalox, kerolox, hypergolic,
-                     solid, rcs, or texture (keep the add-on's flame texture)
+                     solid, rcs, coldgas, or texture (keep the add-on's flame texture)
          SCALE       size factor (nozzle radius and length)
          LENGTH      length factor
          BRIGHTNESS  brightness factor

@@ -16,7 +16,7 @@
 struct PlumeParams { // must match PlumeRenderer::Params
 	mat4 toLocal;  // view -> plume space [m]
 	vec4 shape;    // exit radius [m], length, jet radius after the exit, spread (tan of the half angle)
-	vec4 shape2;   // shock cell spacing, shock diamond strength, -, -
+	vec4 shape2;   // shock cell spacing, shock diamond strength, attitude thruster cone (1), -
 	vec4 core;     // core emission (rgb), vacuum fraction
 	vec4 diamond;  // shock diamond emission (rgb), spread of the mixing layer
 	vec4 outer;    // afterburning emission (rgb), -
@@ -103,6 +103,15 @@ vec4 PlumeMedium (PlumeParams P, vec3 p)
 	// hot core, cooling as the jet mixes
 	float lam = mix (1.0, 0.3 + 1.4 * n2, min (turb, 1.0));
 	vec3 e = P.core.rgb * rho * exp (-3.0 * xi * xi) * lam;
+	if (P.shape2.z > 0.5) {
+		// attitude thrusters: a narrow cone whose brightness across falls off
+		// slowly (density times path, about 1/R), with a brighter axis
+		float cone = prof / R * exp (-1.6 * xi) * (0.35 + 0.65 * exp (-6.0 * u * u));
+		e = P.core.rgb * cone * 0.1 * lam;
+		// (white-hot where it leaves the nozzle)
+		float peak = max (P.core.r, max (P.core.g, P.core.b));
+		e += mix (P.core.rgb, vec3 (peak), 0.6) * (exp (-max (x, 0.0) / 1.2) * exp (-4.0 * u * u) * 0.5);
+	}
 	// shock cells: a bright Mach disc across the jet in each, and the
 	// oblique shocks between them (the diamonds)
 	if (D > 0.01) {

@@ -23,7 +23,7 @@
 class VESSEL;
 class VkTexture;
 
-enum class PlumeType { Ion, Plasma, Hydrolox, Methalox, Kerolox, Hypergolic, Solid, RCS, Texture, Count };
+enum class PlumeType { Ion, Plasma, Hydrolox, Methalox, Kerolox, Hypergolic, Solid, RCS, ColdGas, Texture, Count };
 
 /// Per-exhaust settings from the vessel's plume configuration
 struct PlumeOverride {
