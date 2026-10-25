@@ -104,10 +104,16 @@ public:
 	/// pass): transforms object -> global frame relative to the camera, as
 	/// rows of a 3x4 matrix (INSTANCE_STRIDE bytes each), in buffer inst
 	/// from byte instOfs. Lit and moving as set for the current object.
+	/// frameToView: if set, the transforms are in that frame instead (e.g. a
+	/// planet frame relative to an anchor: view * its rotation and position
+	/// relative to the camera). impostor: the mesh is a plant's impostor
+	/// (impostor_inst.vert), shrunk away over the last 15% of range [m].
 	static constexpr uint32_t INSTANCE_STRIDE = 48;
-	void DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize instOfs, uint32_t count, RenderPass pass);
+	void DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize instOfs, uint32_t count, RenderPass pass,
+		const Mat4 *frameToView = nullptr, bool impostor = false, float range = 0.0f);
 	/// A mesh into the ray tracing scene of this frame (without drawing it)
-	void AddMeshRT (const VkMesh *mesh, const Mat4 &modelView);
+	/// (shadowOnly: a stand-in that only blocks light)
+	void AddMeshRT (const VkMesh *mesh, const Mat4 &modelView, bool shadowOnly = false);
 	/// the camera's view matrix (global frame relative to the camera -> view)
 	const Mat4 &View () const { return view; }
 	/// Per-frame uniforms and state (after RenderShadows, before the prepass)
@@ -198,7 +204,7 @@ public:
 
 private:
 	void CreatePipelines ();
-	VkPipeline CreateMeshPipeline (bool blend, bool additive, bool depthWrite, bool prepass = false, bool instanced = false);
+	VkPipeline CreateMeshPipeline (bool blend, bool additive, bool depthWrite, bool prepass = false, bool instanced = false, bool impostor = false);
 	VkPipeline CreateParticlePipeline (bool additive);
 	void UpdateCamera ();
 	void BuildSphere ();
@@ -226,6 +232,8 @@ private:
 	VkPipeline meshPrepass = VK_NULL_HANDLE;
 	VkPipeline meshOpaqueInst = VK_NULL_HANDLE;  // instanced (ground scatter)
 	VkPipeline meshPrepassInst = VK_NULL_HANDLE;
+	VkPipeline meshOpaqueImp = VK_NULL_HANDLE;   // instanced impostors (far plants)
+	VkPipeline meshPrepassImp = VK_NULL_HANDLE;
 	std::unique_ptr<class AmbientOcclusion> ao;
 	std::unique_ptr<class ScreenReflections> ssr;
 	std::unique_ptr<class RTScene> rt;

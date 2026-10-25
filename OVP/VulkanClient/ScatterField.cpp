@@ -16,15 +16,24 @@ namespace {
 	const double SHADOW_RANGE = 300.0; // [m] rocks casting into the shadow maps
 	const double SHADOW_RANGE_PLANT = 150.0; // [m] plants (many, alpha-tested)
 	const double RT_RANGE = 150.0;     // [m] rocks in the ray tracing scene
-	const double RT_RANGE_PLANT = 60.0; // [m] plants (alpha-tested foliage: slow to trace)
-	const size_t RT_MAX = 2000;
+	const double RT_RANGE_PLANT = 260.0; // [m] plants (alpha-tested foliage: slow to trace)
+	const size_t RT_MAX = 4000;
 	// levels of detail: by size on screen [pixels]
+	const int SLOTS = 5; // per asset: levels of detail 0 to 3, impostor
+	const double FAR_DIST = 700.0;     // [m] far set: instances beyond this distance of its anchor
+	const double FAR_MOVE = 150.0;     // [m] new far set when the camera has moved this far from the anchor
+	const size_t FAR_NEWCELLS = 64;    // ... or this many candidate cells have come since,
+	const uint64_t FAR_MIN_FRAMES = 180; // ... and this many frames have passed since the last one
+	const double FAR_BUDGET = 0.0015;  // [s] building the far set per frame
+	const double RT_PROXY_MIN = 100.0;  // [m] plants with impostors from this distance of the far set's anchor ...
+	const double RT_PROXY_MAX = 1500.0; // ... to this: stand-ins in the ray tracing scene (the near ones are meshes)
+	const double FAR_THIN = 1500.0;    // [m] beyond: a share FAR_THIN/d of the far plants, wider (canopy kept, less overdraw)
 	inline int Lod (double px, size_t nLods)
 	{
 		int l = px > 400.0 ? 0 : px > 120.0 ? 1 : px > 30.0 ? 2 : 3;
 		return std::min (l, (int)nLods);
 	}
-	const double FETCH_BUDGET = 0.002; // [s] reading cells per frame (more while nothing is there yet)
+	const double FETCH_BUDGET = 0.003; // [s] reading cells per frame (more while nothing is there yet)
 
 	inline uint64_t Key (int layer, int row, int col)
 	{
@@ -82,6 +91,10 @@ Field::Field (Scene *s, OBJHANDLE hp): scene (s), hPlanet (hp)
 Field::~Field ()
 {
 	vkc::Context *ctx = scene->Client()->Ctx();
+	if (far.buf.buffer) {
+		vkc::Buffer bb = far.buf;
+		ctx->DeferDestroy ([ctx, bb]() mutable { ctx->DestroyBuffer (bb); });
+	}
 	for (auto &b : buf)
 		if (b.buffer) {
 			vkc::Buffer bb = b;
@@ -107,6 +120,8 @@ void Field::Fetch (int layer, int row, int col, Cell &c)
 	std::vector<SCATTERINSTANCE> in (n);
 	if (n) oapiScatterCell (hPlanet, layer, row, col, in.data(), n);
 	c.inst.clear();
+	c.allImp = true;
+	c.farBuild = c.farPending = 0;
 	VECTOR3 lo = _V(1e30, 1e30, 1e30), hi = _V(-1e30, -1e30, -1e30);
 	for (const SCATTERINSTANCE &s : in) {
 		if (s.asset < 0 || s.asset >= (int)kinds.size() || !kinds[s.asset].asset) continue;
@@ -118,6 +133,7 @@ void Field::Fetch (int layer, int row, int col, Cell &c)
 		for (int i = 0; i < 9; i++) x.R[i] = (float)(m[i] * f);
 		x.size = (float)(k.size * s.scale);
 		x.kind = (uint16_t)s.asset;
+		if (!k.asset->impostor) c.allImp = false;
 		for (int i = 0; i < 3; i++) lo.data[i] = std::min (lo.data[i], s.pos.data[i]), hi.data[i] = std::max (hi.data[i], s.pos.data[i]);
 		c.inst.push_back (x);
 	}
@@ -157,7 +173,7 @@ void Field::Prepare ()
 		for (int i = 0; i < n; i++) {
 			auto it = cells.find (Key (l, cl[2*i], cl[2*i+1]));
 			if (it != cells.end()) it->second.used = frame;
-			else missing.push_back ({ l, cl[2*i], cl[2*i+1], length (CellCentre (l, cl[2*i], cl[2*i+1]) - P) / layers[l].range });
+			else missing.push_back ({ l, cl[2*i], cl[2*i+1], length (CellCentre (l, cl[2*i], cl[2*i+1]) - P) }); // (nearest first, any layer)
 		}
 	}
 	std::sort (missing.begin(), missing.end(), [](const Missing &a, const Missing &b) { return a.d < b.d; });
@@ -172,6 +188,9 @@ void Field::Prepare ()
 	for (auto it = cells.begin(); it != cells.end(); )
 		if (frame - it->second.used > 120) it = cells.erase (it); else ++it;
 
+	// the far set: started, continued
+	BuildFar (P);
+
 	// the instances: in view (drawn), near (shadows), nearer (ray tracing)
 	MATRIX3 Rp;
 	oapiGetRotationMatrix (hPlanet, &Rp);
@@ -180,27 +199,32 @@ void Field::Prepare ()
 	origin = cam;
 	VECTOR3 d0 = gp - cam;
 	size_t nk = kinds.size();
-	std::vector<std::vector<float>> bucket (nk * 4), sbucket (nk * 4);
+	std::vector<std::vector<float>> bucket (nk * SLOTS), sbucket (nk * SLOTS);
 	for (auto &kv : cells) {
 		Cell &c = kv.second;
 		if (c.used != frame || c.inst.empty()) continue;
 		const SCATTERLAYER &L = layers[c.layer];
+		bool inFar = far.id && c.farBuild == far.id; // (its far instances: drawn by the far set)
+		if (inFar && c.allImp && length (c.centre - far.anchor) - c.radius > FAR_DIST) continue;
 		VECTOR3 rc = mul (Rp, c.centre) + d0;
 		double dc = length (rc);
 		if (dc - c.radius > L.range) continue;
 		bool inView = scene->SphereInView (rc, c.radius);
-		bool shadow = L.kind != SCATTER_GRASS && dc - c.radius < SHADOW_RANGE;
+		// (trees: impostors cast into the wide maps beyond the meshes)
+		bool shadow = L.kind != SCATTER_GRASS && (dc - c.radius < SHADOW_RANGE || L.kind == SCATTER_TREE);
 		if (!inView && !shadow) continue;
 		for (const Inst &x : c.inst) {
+			const Kind &k = kinds[x.kind];
+			if (inFar && k.asset->impostor && length (x.pos - far.anchor) > FAR_DIST) continue;
 			VECTOR3 rel = mul (Rp, x.pos) + d0;
 			double d = length (rel);
 			if (d > L.range) continue;
-			const Kind &k = kinds[x.kind];
 			// (shrunk away over the last 15% of the range)
 			double f = std::min (1.0, (L.range - d) / (0.15 * L.range));
 			double px = scene->PixelSize (x.size * f, d);
 			if (px < 1.0) continue;
 			int lod = Lod (px, k.asset->lods.size());
+			int slot = (lod == 3 && k.asset->impostor) ? 4 : lod;
 			// object -> global frame relative to the camera (rows)
 			float row[12];
 			for (int i = 0; i < 3; i++) {
@@ -208,11 +232,12 @@ void Field::Prepare ()
 					row[i*4+j] = (float)((Rp.data[i*3] * x.R[j] + Rp.data[i*3+1] * x.R[3+j] + Rp.data[i*3+2] * x.R[6+j]) * f);
 				row[i*4+3] = (float)rel.data[i];
 			}
-			if (inView) bucket[x.kind * 4 + lod].insert (bucket[x.kind * 4 + lod].end(), row, row + 12);
+			if (inView) bucket[x.kind * SLOTS + slot].insert (bucket[x.kind * SLOTS + slot].end(), row, row + 12);
 			if (shadow && d < (L.kind == SCATTER_ROCK ? SHADOW_RANGE : SHADOW_RANGE_PLANT)) { // (a level coarser)
 				int sl = std::min (lod + 1, (int)k.asset->lods.size());
-				sbucket[x.kind * 4 + sl].insert (sbucket[x.kind * 4 + sl].end(), row, row + 12);
-			}
+				sbucket[x.kind * SLOTS + sl].insert (sbucket[x.kind * SLOTS + sl].end(), row, row + 12);
+			} else if (shadow && L.kind == SCATTER_TREE && k.asset->impostor)
+				sbucket[x.kind * SLOTS + 4].insert (sbucket[x.kind * SLOTS + 4].end(), row, row + 12);
 			if (inView && d < (L.kind == SCATTER_ROCK ? RT_RANGE : RT_RANGE_PLANT) && L.kind != SCATTER_GRASS && rtInst.size() < RT_MAX) {
 				// (the mesh drawn: rays start on its surface)
 				const VkMesh *m = lod ? k.asset->lods[lod - 1].get() : k.asset->mesh.get();
@@ -247,12 +272,12 @@ void Field::Prepare ()
 	auto emit = [&](std::vector<std::vector<float>> &bk, std::vector<Batch> &out) {
 		for (size_t i = 0; i < bk.size(); i++) {
 			if (bk[i].empty()) continue;
-			const Kind &k = kinds[i / 4];
-			int lod = (int)(i % 4);
-			const VkMesh *m = lod ? k.asset->lods[lod - 1].get() : k.asset->mesh.get();
+			const Kind &k = kinds[i / SLOTS];
+			int slot = (int)(i % SLOTS);
+			const VkMesh *m = slot == 4 ? k.asset->impostor.get() : slot ? k.asset->lods[slot - 1].get() : k.asset->mesh.get();
 			uint32_t n = (uint32_t)(bk[i].size() / 12);
 			memcpy (dst + (size_t)at * 12, bk[i].data(), bk[i].size() * sizeof(float));
-			out.push_back ({ m, at, n });
+			out.push_back ({ m, at, n, k.kind, slot == 4 });
 			at += n;
 		}
 	};
@@ -262,25 +287,19 @@ void Field::Prepare ()
 	// (ORBITER_VK_PROFILE: instances and triangles drawn)
 	static const bool profile = getenv ("ORBITER_VK_PROFILE") && atoi (getenv ("ORBITER_VK_PROFILE"));
 	if (profile && frame % 240 == 0) {
-		uint64_t tri[4] = {}, ninst[4] = {}, stri = 0;
+		uint64_t tri[4] = {}, ninst[4] = {}, stri = 0, nfar = 0;
 		for (const Batch &b : batches) {
 			uint64_t t = 0;
 			for (uint32_t g = 0; g < b.mesh->nGroup(); g++) t += b.mesh->GetGroup (g).nIndex / 3;
-			int kk = 0;
-			for (size_t i = 0; i < kinds.size(); i++) {
-				const Asset *a = kinds[i].asset;
-				if (!a) continue;
-				bool mine = a->mesh.get() == b.mesh;
-				for (auto &l : a->lods) mine |= l.get() == b.mesh;
-				if (mine) { kk = kinds[i].kind; break; }
-			}
-			tri[kk] += t * b.count, ninst[kk] += b.count;
+			tri[b.kind] += t * b.count, ninst[b.kind] += b.count;
 		}
+		for (const Batch &b : far.batches) nfar += b.count;
 		for (const Batch &b : shadowBatches)
 			for (uint32_t g = 0; g < b.mesh->nGroup(); g++) stri += (uint64_t)b.mesh->GetGroup (g).nIndex / 3 * b.count;
-		oapiWriteLogV ("VulkanClient: ground scatter: %zu cells; drawn rocks %llu (%.2fM triangles), grass %llu (%.2fM), shrubs %llu (%.2fM), trees %llu (%.2fM); shadows %.2fM; ray traced %zu",
+		oapiWriteLogV ("VulkanClient: ground scatter: %zu cells; drawn rocks %llu (%.2fM triangles), grass %llu (%.2fM), shrubs %llu (%.2fM), trees %llu (%.2fM); shadows %.2fM; ray traced %zu; far set %llu",
 			cells.size(), (unsigned long long)ninst[0], tri[0] * 1e-6, (unsigned long long)ninst[1], tri[1] * 1e-6,
-			(unsigned long long)ninst[2], tri[2] * 1e-6, (unsigned long long)ninst[3], tri[3] * 1e-6, stri * 1e-6, rtInst.size());
+			(unsigned long long)ninst[2], tri[2] * 1e-6, (unsigned long long)ninst[3], tri[3] * 1e-6, stri * 1e-6, rtInst.size(),
+			(unsigned long long)nfar);
 	}
 }
 
@@ -290,19 +309,159 @@ void Field::Render (RenderPass pass)
 	vkc::Context *ctx = scene->Client()->Ctx();
 	const vkc::Buffer &B = buf[ctx->FrameIndex() % vkc::FRAMES_IN_FLIGHT];
 	for (const Batch &b : batches)
-		scene->DrawMeshInstanced (b.mesh, B.buffer, (VkDeviceSize)b.first * Scene::INSTANCE_STRIDE, b.count, pass);
+		scene->DrawMeshInstanced (b.mesh, B.buffer, (VkDeviceSize)b.first * Scene::INSTANCE_STRIDE, b.count, pass, nullptr, b.impostor);
+	// the far set: transforms in the planet frame relative to its anchor
+	if (far.id && !far.batches.empty()) {
+		MATRIX3 Rp;
+		oapiGetRotationMatrix (hPlanet, &Rp);
+		VECTOR3 gp;
+		oapiGetGlobalPos (hPlanet, &gp);
+		Mat4 fv = scene->View () * Mat4::FromRotTrans (Rp, gp + mul (Rp, far.anchor) - scene->CameraPos ());
+		for (const Batch &b : far.batches)
+			scene->DrawMeshInstanced (b.mesh, far.buf.buffer, (VkDeviceSize)b.first * Scene::INSTANCE_STRIDE, b.count, pass, &fv, true, b.range);
+		if (pass == RenderPass::Depth && far.rtProxy) scene->AddMeshRT (far.rtProxy.get(), fv, true);
+	}
 	if (pass == RenderPass::Depth)
 		for (const RTInst &r : rtInst) scene->AddMeshRT (r.mesh, scene->View () * r.M); // (the view of this pass)
 }
 
+void Field::BuildFar (const VECTOR3 &P)
+{
+	// start: the camera has moved from the anchor, or candidate cells have
+	// come that the far set does not have
+	if (!fb.active) {
+		size_t fresh = 0;
+		for (auto &kv : cells)
+			if (kv.second.allImp && !kv.second.inst.empty() && (!far.id || kv.second.farBuild != far.id)) fresh++;
+		bool moved = !far.id || length (P - far.anchor) > FAR_MOVE;
+		if (!fresh || (!moved && (fresh < FAR_NEWCELLS || frame - farFrame < FAR_MIN_FRAMES))) return;
+		farFrame = frame;
+		fb.active = true;
+		fb.id = std::max (far.id, fb.id) + 1;
+		fb.anchor = P;
+		fb.keys.clear();
+		for (auto &kv : cells)
+			if (kv.second.allImp && !kv.second.inst.empty()) fb.keys.push_back (kv.first);
+		fb.next = 0;
+		fb.bucket.assign (kinds.size(), {});
+		fb.range.assign (kinds.size(), 0.0f);
+		fb.proxy.clear();
+	}
+	// continue: the far instances of some cells
+	auto t0 = std::chrono::steady_clock::now();
+	while (fb.next < fb.keys.size()) {
+		auto it = cells.find (fb.keys[fb.next++]);
+		if (it == cells.end()) continue;
+		Cell &c = it->second;
+		const SCATTERLAYER &L = layers[c.layer];
+		c.farPending = fb.id;
+		bool rt = scene->Client()->Ctx()->rayTracing;
+		if (length (c.centre - fb.anchor) + c.radius < (rt ? RT_PROXY_MIN : FAR_DIST)) continue; // (nothing for the far set)
+		for (size_t n = 0; n < c.inst.size(); n++) {
+			const Inst &x = c.inst[n];
+			VECTOR3 rel = x.pos - fb.anchor;
+			double d = length (rel);
+			if (rt && d > RT_PROXY_MIN && d < RT_PROXY_MAX) {
+				// (a stand-in for the crown: a double cone, six-sided, 12 triangles)
+				const Asset *a = kinds[x.kind].asset;
+				if (fb.proxy.empty() || fb.proxy.back().vtx.size() + 8 > 65535) {
+					fb.proxy.emplace_back ();
+					fb.proxy.back().mat.diffuse = { 0.05f, 0.08f, 0.03f, 1.0f };
+				}
+				VkMesh::Part &pt = fb.proxy.back();
+				uint16_t b = (uint16_t)pt.vtx.size();
+				double lo = a->crownLo, hi = a->crownHi, mid = lo + 0.4 * (hi - lo), r = 0.7 * a->crownR;
+				auto put = [&](double ox, double oy, double oz, double nx, double ny, double nz) {
+					NTVERTEX v{};
+					for (int i = 0; i < 3; i++) {
+						(&v.x)[i] = (float)(x.R[i*3] * ox + x.R[i*3+1] * oy + x.R[i*3+2] * oz + rel.data[i]);
+						(&v.nx)[i] = (float)(x.R[i*3] * nx + x.R[i*3+1] * ny + x.R[i*3+2] * nz);
+					}
+					pt.vtx.push_back (v);
+				};
+				put (0, hi, 0, 0, 1, 0);
+				put (0, lo, 0, 0, -1, 0);
+				for (int k = 0; k < 6; k++) {
+					double ang = k * PI2 / 6.0;
+					put (r * cos (ang), mid, r * sin (ang), cos (ang), 0, sin (ang));
+				}
+				for (int k = 0; k < 6; k++) {
+					uint16_t r0 = b + 2 + k, r1 = b + 2 + (k + 1) % 6;
+					// (front faces outward as ray tracing sees them: shadow rays cull back faces)
+					pt.idx.insert (pt.idx.end(), { b, r1, r0, (uint16_t)(b + 1), r0, r1 });
+				}
+			}
+			if (d <= FAR_DIST) continue;
+			// (thinned out with distance: kept by a hash of the instance)
+			double keep = std::min (1.0, FAR_THIN / d);
+			uint64_t h = (it->first + n * 0x9e3779b97f4a7c15ull) * 0xbf58476d1ce4e5b9ull;
+			if ((double)(h >> 40) / (double)(1ull << 24) >= keep) continue;
+			float wide = (float)(1.0 / std::sqrt (keep));
+			float row[12];
+			for (int i = 0; i < 3; i++) {
+				for (int j = 0; j < 3; j++) row[i*4+j] = x.R[i*3+j] * (j == 1 ? 1.0f : wide);
+				row[i*4+3] = (float)rel.data[i];
+			}
+			fb.bucket[x.kind].insert (fb.bucket[x.kind].end(), row, row + 12);
+			fb.range[x.kind] = (float)L.range;
+		}
+		if (std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count() > FAR_BUDGET) return;
+	}
+	// done: upload, and the new set replaces the old one
+	vkc::Context *ctx = scene->Client()->Ctx();
+	size_t total = 0;
+	for (auto &b : fb.bucket) total += b.size();
+	Far nf;
+	nf.id = fb.id;
+	nf.anchor = fb.anchor;
+	if (total) {
+		nf.buf = ctx->CreateBuffer (total * sizeof(float), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
+		float *dst = (float*)nf.buf.mapped;
+		uint32_t at = 0;
+		for (size_t k = 0; k < fb.bucket.size(); k++) {
+			if (fb.bucket[k].empty()) continue;
+			uint32_t n = (uint32_t)(fb.bucket[k].size() / 12);
+			memcpy (dst + (size_t)at * 12, fb.bucket[k].data(), fb.bucket[k].size() * sizeof(float));
+			nf.batches.push_back ({ kinds[k].asset->impostor.get(), at, n, kinds[k].kind, true, fb.range[k] });
+			at += n;
+		}
+	}
+	if (far.buf.buffer) {
+		vkc::Buffer old = far.buf;
+		ctx->DeferDestroy ([ctx, old]() mutable { ctx->DestroyBuffer (old); });
+	}
+	if (!fb.proxy.empty()) nf.rtProxy = std::make_unique<VkMesh> (ctx, scene->Client()->TexMgr(), fb.proxy);
+	{
+		static const bool profile = getenv ("ORBITER_VK_PROFILE") && atoi (getenv ("ORBITER_VK_PROFILE"));
+		size_t ntri = 0;
+		for (auto &p : fb.proxy) ntri += p.idx.size() / 3;
+		if (profile) oapiWriteLogV ("VulkanClient: ground scatter far set %u: %zu cells, ray tracing stand-ins %zu triangles in %zu parts", fb.id, fb.keys.size(), ntri, fb.proxy.size());
+	}
+	fb.proxy.clear();
+	far = std::move (nf);
+	for (auto &kv : cells)
+		if (kv.second.farPending == far.id) kv.second.farBuild = far.id;
+	fb.active = false;
+	fb.bucket.clear();
+}
+
 void Field::RenderShadow (ShadowMap &sm)
 {
-	if (!active || shadowBatches.empty()) return;
-	if (length (sm.Centre() - origin) > sm.Radius() + SHADOW_RANGE) return;
+	if (!active || length (sm.Centre() - origin) > sm.Radius() + maxRange) return;
 	vkc::Context *ctx = scene->Client()->Ctx();
 	const vkc::Buffer &B = buf[ctx->FrameIndex() % vkc::FRAMES_IN_FLIGHT];
+	const MATRIX3 I = _M(1,0,0, 0,1,0, 0,0,1);
 	for (const Batch &b : shadowBatches)
-		sm.DrawMeshInstanced (b.mesh, B.buffer, (VkDeviceSize)b.first * Scene::INSTANCE_STRIDE, b.count, origin);
+		sm.DrawMeshInstanced (b.mesh, B.buffer, (VkDeviceSize)b.first * Scene::INSTANCE_STRIDE, b.count, I, origin, b.impostor);
+	// the far set: into the wide maps only (it begins FAR_DIST away)
+	if (far.id && sm.Radius() > FAR_DIST) {
+		MATRIX3 Rp;
+		oapiGetRotationMatrix (hPlanet, &Rp);
+		VECTOR3 gp;
+		oapiGetGlobalPos (hPlanet, &gp);
+		for (const Batch &b : far.batches)
+			sm.DrawMeshInstanced (b.mesh, far.buf.buffer, (VkDeviceSize)b.first * Scene::INSTANCE_STRIDE, b.count, Rp, gp + mul (Rp, far.anchor), true);
+	}
 }
 
 } // namespace vkscatter

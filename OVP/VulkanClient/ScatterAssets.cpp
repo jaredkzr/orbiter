@@ -758,8 +758,9 @@ namespace {
 		return b;
 	}
 
-	// a tuft of grass blades (two-sided)
-	Builder Grass (uint32_t seed)
+	// a tuft of grass blades (two-sided); coarser levels of detail: seg
+	// segments per blade, every n-th blade (wider, the same tuft otherwise)
+	Builder Grass (uint32_t seed, int SEG = 4, int every = 1)
 	{
 		Rng r (seed);
 		Builder b;
@@ -773,7 +774,8 @@ namespace {
 			VECTOR3 lean = unit (_V(std::cos (a) + r.R (-0.5, 0.5), 0.0, std::sin (a) + r.R (-0.5, 0.5)));
 			VECTOR3 side = _V(std::cos (yaw), 0.0, std::sin (yaw));
 			VECTOR3 face = unit (crossp (side, _V(0, 1, 0)));
-			const int SEG = 4;
+			if (k % every) continue; // (after all random numbers of the blade: the same tuft)
+			w *= std::sqrt ((double)every);
 			Builder s;
 			for (int i = 0; i <= SEG; i++) {
 				double t = (double)i / SEG;
@@ -1086,6 +1088,132 @@ namespace {
 		return out;
 	}
 
+	// ------------------------------------------------------------------
+	// impostors: plants far away as a picture on a quad
+
+	/// CPU copy of a texture (sRGB RGBA8)
+	struct CpuTex { uint32_t w = 0, h = 0; std::vector<uint8_t> px; };
+
+	/// A plant seen from IMP_VIEWS directions around it (side frames of an
+	/// atlas, IMP_FW x IMP_FH texels each, in a row) and from above (a
+	/// frame of IMP_TOP texels below them): colour with coverage, and
+	/// normals in each frame's tangent frame (x along +u, y along +v)
+	const int IMP_N = 512, IMP_FW = 64, IMP_FH = 128, IMP_TOP = 128, IMP_VIEWS = 8;
+	struct Impostor {
+		Canvas albedo{ IMP_N };
+		std::vector<uint8_t> normal;
+		double w = 0, y0 = 0, y1 = 0; // side quads: width, bottom, top [m]
+		double r = 0, yTop = 0;       // top quad: half size, height [m]
+	};
+	struct BakeSrc { const Builder *b; const CpuTex *tex; bool foliage; };
+
+	Impostor BakeImpostor (const std::vector<BakeSrc> &src)
+	{
+		Impostor imp;
+		imp.normal.assign ((size_t)IMP_N * IMP_N * 4, 0);
+		for (size_t i = 0; i < (size_t)IMP_N * IMP_N; i++)
+			imp.normal[i*4] = 128, imp.normal[i*4+1] = 128, imp.normal[i*4+2] = 255, imp.normal[i*4+3] = 255;
+		double rmax = 0.0, y0 = 1e9, y1 = -1e9, ysum = 0.0;
+		size_t nf = 0;
+		for (auto &s : src)
+			for (auto &v : s.b->v) {
+				rmax = std::max (rmax, std::hypot ((double)v.x, (double)v.z));
+				y0 = std::min (y0, (double)v.y), y1 = std::max (y1, (double)v.y);
+				if (s.foliage) ysum += v.y, nf++;
+			}
+		// (frames 1:2: square texels)
+		double W = std::max (2.0 * rmax, (y1 - y0) * 0.5), H = 2.0 * W;
+		imp.w = W, imp.y0 = y0, imp.y1 = y0 + H, imp.r = std::max (rmax, 0.1);
+		imp.yTop = nf ? ysum / nf : y0 + 0.6 * (y1 - y0);
+		std::vector<float> depth ((size_t)IMP_N * IMP_N, -1e30f);
+
+		for (int view = 0; view <= IMP_VIEWS; view++) {
+			VECTOR3 R, U, V;
+			double fx0, fy0, fw, fh, xmin, xr, ymax, yr;
+			if (view < IMP_VIEWS) {
+				double th = view * TWOPI / IMP_VIEWS;
+				V = _V(std::sin (th), 0, std::cos (th)), U = _V(0, 1, 0), R = crossp (U, V);
+				fx0 = view * IMP_FW, fy0 = 0, fw = IMP_FW, fh = IMP_FH;
+				xmin = -0.5 * W, xr = W, ymax = imp.y1, yr = H;
+			} else { // from above: u along +x, v along +z
+				V = _V(0, 1, 0), R = _V(1, 0, 0), U = _V(0, 0, -1);
+				fx0 = 0, fy0 = IMP_FH, fw = fh = IMP_TOP;
+				xmin = -imp.r, xr = 2.0 * imp.r, ymax = imp.r, yr = 2.0 * imp.r;
+			}
+			for (auto &s : src) {
+				const Builder &b = *s.b;
+				for (size_t t = 0; t + 2 < b.i.size(); t += 3) {
+					const NTVERTEX *v[3] = { &b.v[b.i[t]], &b.v[b.i[t+1]], &b.v[b.i[t+2]] };
+					double X[3], Y[3], D[3];
+					for (int k = 0; k < 3; k++) {
+						VECTOR3 p = _V(v[k]->x, v[k]->y, v[k]->z);
+						X[k] = fx0 + (dotp (p, R) - xmin) / xr * fw;
+						Y[k] = fy0 + (ymax - dotp (p, U)) / yr * fh;
+						D[k] = dotp (p, V);
+					}
+					double area = (X[1] - X[0]) * (Y[2] - Y[0]) - (X[2] - X[0]) * (Y[1] - Y[0]);
+					if (std::fabs (area) < 1e-12) continue;
+					int x0 = std::max ((int)std::floor (std::min ({ X[0], X[1], X[2] })), (int)fx0);
+					int x1 = std::min ((int)std::ceil (std::max ({ X[0], X[1], X[2] })), (int)(fx0 + fw) - 1);
+					int yy0 = std::max ((int)std::floor (std::min ({ Y[0], Y[1], Y[2] })), (int)fy0);
+					int yy1 = std::min ((int)std::ceil (std::max ({ Y[0], Y[1], Y[2] })), (int)(fy0 + fh) - 1);
+					for (int y = yy0; y <= yy1; y++)
+						for (int x = x0; x <= x1; x++) {
+							double px = x + 0.5, py = y + 0.5;
+							double w0 = ((X[1] - px) * (Y[2] - py) - (X[2] - px) * (Y[1] - py)) / area;
+							double w1 = ((X[2] - px) * (Y[0] - py) - (X[0] - px) * (Y[2] - py)) / area;
+							double w2 = 1.0 - w0 - w1;
+							if (w0 < 0.0 || w1 < 0.0 || w2 < 0.0) continue;
+							double d = w0 * D[0] + w1 * D[1] + w2 * D[2];
+							size_t idx = (size_t)y * IMP_N + x;
+							if (d <= depth[idx]) continue;
+							double u = w0 * v[0]->tu + w1 * v[1]->tu + w2 * v[2]->tu;
+							double vv = w0 * v[0]->tv + w1 * v[1]->tv + w2 * v[2]->tv;
+							const CpuTex &tx = *s.tex;
+							int tu = (((int)std::floor (u * tx.w)) % (int)tx.w + (int)tx.w) % (int)tx.w;
+							int tv = (((int)std::floor (vv * tx.h)) % (int)tx.h + (int)tx.h) % (int)tx.h;
+							const uint8_t *c = &tx.px[((size_t)tv * tx.w + tu) * 4];
+							if (s.foliage && c[3] < 128) continue;
+							depth[idx] = (float)d;
+							VECTOR3 n = _V(w0 * v[0]->nx + w1 * v[1]->nx + w2 * v[2]->nx,
+								w0 * v[0]->ny + w1 * v[1]->ny + w2 * v[2]->ny, w0 * v[0]->nz + w1 * v[1]->nz + w2 * v[2]->nz);
+							VECTOR3 nt = _V(dotp (n, R), -dotp (n, U), dotp (n, V));
+							if (nt.z < 0.0) nt = -nt; // (double-sided: towards the viewer)
+							nt = unit (nt);
+							// (the crown's inside darker: light from outside reaches it less)
+							VECTOR3 p = _V(w0 * v[0]->x + w1 * v[1]->x + w2 * v[2]->x, 0.0, w0 * v[0]->z + w1 * v[1]->z + w2 * v[2]->z);
+							double ao = s.foliage ? 0.55 + 0.45 * std::clamp (length (p) / (0.8 * imp.r), 0.0, 1.0) : 1.0;
+							imp.albedo.col[idx] = _V(std::pow (c[0] / 255.0, 2.2), std::pow (c[1] / 255.0, 2.2), std::pow (c[2] / 255.0, 2.2)) * ao;
+							imp.albedo.a[idx] = 1.0f;
+							uint8_t *q = &imp.normal[idx * 4];
+							q[0] = (uint8_t)std::lround ((nt.x * 0.5 + 0.5) * 255.0);
+							q[1] = (uint8_t)std::lround ((nt.y * 0.5 + 0.5) * 255.0);
+							q[2] = (uint8_t)std::lround ((nt.z * 0.5 + 0.5) * 255.0);
+						}
+				}
+			}
+		}
+		return imp;
+	}
+
+	/// The impostor meshes' geometry of view k: a quad through the plant's
+	/// axis facing that direction, and the top quad (each a part of its own)
+	Builder ImpostorQuads (const Impostor &imp, int k)
+	{
+		Builder b;
+		double th = k * TWOPI / IMP_VIEWS;
+		VECTOR3 V = _V(std::sin (th), 0, std::cos (th)), U = _V(0, 1, 0), R = crossp (U, V);
+		double u0 = (double)k * IMP_FW / IMP_N, u1 = (double)(k + 1) * IMP_FW / IMP_N, v1 = (double)IMP_FH / IMP_N;
+		uint16_t a = b.Add (R * (-0.5 * imp.w) + U * imp.y0, V, u0, v1), c = b.Add (R * (0.5 * imp.w) + U * imp.y0, V, u1, v1);
+		uint16_t d = b.Add (R * (0.5 * imp.w) + U * imp.y1, V, u1, 0.0), e = b.Add (R * (-0.5 * imp.w) + U * imp.y1, V, u0, 0.0);
+		b.Tri (a, c, d, V), b.Tri (a, d, e, V);
+		double tv0 = (double)IMP_FH / IMP_N, tv1 = (double)(IMP_FH + IMP_TOP) / IMP_N, tu1 = (double)IMP_TOP / IMP_N, r = imp.r;
+		uint16_t t0 = b.Add (_V(-r, imp.yTop, -r), U, 0.0, tv0), t1 = b.Add (_V(r, imp.yTop, -r), U, tu1, tv0);
+		uint16_t t2 = b.Add (_V(r, imp.yTop, r), U, tu1, tv1), t3 = b.Add (_V(-r, imp.yTop, r), U, 0.0, tv1);
+		b.Tri (t0, t1, t2, U), b.Tri (t0, t2, t3, U);
+		return b;
+	}
+
 	void Extent (const Builder &b, double &radius, double &height)
 	{
 		radius = 0.0, height = 0.0;
@@ -1167,11 +1295,13 @@ void Library::Generate (const char *body, RockStyle style, bool vegetation)
 		a.mesh = std::make_unique<VkMesh> (ctx, texmgr, parts);
 		assets.push_back (std::move (a));
 	};
-	auto cardTexture = [&](uint32_t seed, LeafShape shape, const VECTOR3 &colour) {
+	auto cardTexture = [&](uint32_t seed, LeafShape shape, const VECTOR3 &colour, CpuTex *cpu) {
 		Canvas cv (256);
 		Rng r (seed);
 		PaintSpray (cv, r, shape, colour);
 		MipChain m = CardMips (cv);
+		cpu->w = m.w, cpu->h = m.h;
+		cpu->px.assign (m.data.begin(), m.data.begin() + (size_t)m.w * m.h * 4);
 		VkTexture *t = texmgr->CreateRGBAMips (m.w, m.h, m.nMip, m.data.data(), m.ofs, m.data.size());
 		textures.push_back (t);
 		return t;
@@ -1218,12 +1348,22 @@ void Library::Generate (const char *body, RockStyle style, bool vegetation)
 		std::vector<VkMesh::Part> parts;
 		parts.push_back (part (b, grassTex, 0.7f));
 		add (Kind::GRASS, "grass" + std::to_string (k), std::move (parts), rad, h);
+		// coarser: two and one segments per blade, then half the blades
+		const int lseg[3] = { 2, 1, 1 }, levery[3] = { 1, 1, 2 };
+		for (int l = 0; l < 3; l++) {
+			Builder lb = Grass (2000 + k * 31, lseg[l], levery[l]);
+			std::vector<VkMesh::Part> lp;
+			lp.push_back (part (lb, grassTex, 0.7f));
+			assets.back().lods.push_back (std::make_unique<VkMesh> (ctx, texmgr, lp));
+		}
 	}
 
 	Tex bt = BarkTexture (17, _V(0.10, 0.07, 0.045), false);
 	VkTexture *barkTex = Texture (bt.w, bt.h, bt.px);
 	Tex wb = BarkTexture (29, _V(0.62, 0.60, 0.55), true);
 	VkTexture *birchTex = Texture (wb.w, wb.h, wb.px);
+	auto cpuOf = [](const Tex &t) { CpuTex c; c.w = t.w, c.h = t.h, c.px = t.px; return c; };
+	CpuTex barkCpu = cpuOf (bt), birchCpu = cpuOf (wb);
 	struct Spec { Species sp; Kind kind; const char *name; double height; LeafShape shape; VECTOR3 colour; };
 	const Spec specs[] = {
 		{ Species::SHRUB_ROUND,  Kind::SHRUB, "shrub_round",  1.4, LeafShape::SMALL,  _V(0.06, 0.10, 0.035) },
@@ -1247,21 +1387,43 @@ void Library::Generate (const char *body, RockStyle style, bool vegetation)
 	VkTexture *cactusTex = Texture (ct.w, ct.h, ct.px);
 	Tex pt = CactusTexture (43, _V(0.12, 0.18, 0.06), false);
 	VkTexture *padTex = Texture (pt.w, pt.h, pt.px);
+	CpuTex cactusCpu = cpuOf (ct);
 	uint32_t seed = 5000;
 	for (const Spec &s : specs) {
 		bool cactus = IsCactus (s.sp);
-		VkTexture *leafTex = cactus ? nullptr : cardTexture (seed + 1, s.shape, s.colour);
+		CpuTex leafCpu;
+		VkTexture *leafTex = cactus ? nullptr : cardTexture (seed + 1, s.shape, s.colour, &leafCpu);
 		VkTexture *bt = s.sp == Species::BIRCH ? birchTex : s.sp == Species::PRICKLY_PEAR ? padTex : cactus ? cactusTex : barkTex;
 		Builder bark, leaves;
 		Plant (s.sp, seed, s.height, bark, leaves);
 		double rad, h, rb, hb;
 		Extent (leaves, rad, h);
 		Extent (bark, rb, hb);
+		double crownLo = 1e9, crownHi = -1e9, crownR = 0.0; // (the crown: foliage, or the whole plant)
+		for (auto &v : (leaves.v.empty() ? bark : leaves).v)
+			crownLo = std::min (crownLo, (double)v.y), crownHi = std::max (crownHi, (double)v.y),
+			crownR = std::max (crownR, std::hypot ((double)v.x, (double)v.z));
+		// far away: impostors (trees and saguaros)
+		std::unique_ptr<VkMesh> imp0;
+		if (s.kind == Kind::CONIFER || s.kind == Kind::BROADLEAF) {
+			const CpuTex *bc = s.sp == Species::BIRCH ? &birchCpu : cactus ? &cactusCpu : &barkCpu;
+			Impostor imp = BakeImpostor ({ { &bark, bc, false }, { &leaves, &leafCpu, true } });
+			MipChain m = CardMips (imp.albedo);
+			VkTexture *it = texmgr->CreateRGBAMips (m.w, m.h, m.nMip, m.data.data(), m.ofs, m.data.size());
+			texmgr->SetNormalMap (it, IMP_N, IMP_N, imp.normal.data());
+			textures.push_back (it);
+			Builder q = ImpostorQuads (imp, 0); // (the shader turns it to the other views)
+			std::vector<VkMesh::Part> ip;
+			ip.push_back (part (q, it, cactus ? 0.6f : 0.8f, 0.5f));
+			imp0 = std::make_unique<VkMesh> (ctx, texmgr, ip);
+		}
 		std::vector<VkMesh::Part> parts;
 		parts.push_back (part (bark, bt, cactus ? 0.6f : 0.9f));
 		if (!leaves.i.empty()) parts.push_back (part (leaves, leafTex, 0.75f, 0.5f));
 		if (leaves.v.empty()) rad = rb, h = hb;
 		add (s.kind, s.name, std::move (parts), std::max (rad, rb), std::max (h, hb));
+		assets.back().impostor = std::move (imp0);
+		assets.back().crownLo = std::max (crownLo, 0.0), assets.back().crownHi = crownHi, assets.back().crownR = crownR;
 		// coarser levels of detail: fewer branches, a third, a tenth and a
 		// fortieth of the cards
 		for (int lod = 1; lod <= 3; lod++) {

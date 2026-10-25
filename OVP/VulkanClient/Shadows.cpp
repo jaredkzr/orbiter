@@ -10,6 +10,7 @@
 #include "shadow_alpha.vert.h"
 #include "shadow_alpha.frag.h"
 #include "shadow_inst.vert.h"
+#include "shadow_impostor_inst.vert.h"
 
 namespace {
 	// depth range of the shadow volume, in units of its radius: casters
@@ -156,6 +157,21 @@ bool ShadowMap::Init (vkc::Context *c, VkDescriptorSetLayout texLayout)
 	vi.pVertexAttributeDescriptions = iattr;
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &instPipeline));
 	vkDestroyShaderModule (ctx->device, ivs, nullptr);
+	// impostors: the normal tells the top quad
+	VkShaderModule pvs = ctx->CreateShaderModule (spv_shadow_impostor_inst_vert, spv_shadow_impostor_inst_vert_size);
+	astages[0].module = pvs;
+	VkVertexInputAttributeDescription pattr[6] = {
+		{ 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(NTVERTEX, x) },
+		{ 1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(NTVERTEX, nx) },
+		{ 2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(NTVERTEX, tu) },
+		{ 3, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 0 },
+		{ 4, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 16 },
+		{ 5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 32 }
+	};
+	vi.vertexAttributeDescriptionCount = 6;
+	vi.pVertexAttributeDescriptions = pattr;
+	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &impPipeline));
+	vkDestroyShaderModule (ctx->device, pvs, nullptr);
 	vkDestroyShaderModule (ctx->device, afs, nullptr);
 	return true;
 }
@@ -167,6 +183,7 @@ void ShadowMap::Shutdown ()
 	vkDestroyPipelineLayout (ctx->device, layout, nullptr);
 	vkDestroyPipeline (ctx->device, alphaPipeline, nullptr);
 	vkDestroyPipeline (ctx->device, instPipeline, nullptr);
+	vkDestroyPipeline (ctx->device, impPipeline, nullptr);
 	vkDestroyPipelineLayout (ctx->device, alphaLayout, nullptr);
 	vkDestroySampler (ctx->device, sampler, nullptr);
 	ctx->DestroyImage (depth);
@@ -176,6 +193,7 @@ void ShadowMap::Shutdown ()
 void ShadowMap::Begin (const VECTOR3 &c, double r, const VECTOR3 &sunDir)
 {
 	radius = r;
+	sun = sunDir;
 	// light frame: f points along the sunlight, ex/ey span the map
 	VECTOR3 f = -sunDir;
 	VECTOR3 ref = fabs (f.y) < 0.9 ? _V(0, 1, 0) : _V(1, 0, 0);
@@ -245,20 +263,27 @@ void ShadowMap::DrawMesh (const VkMesh *mesh, const Mat4 &model,
 
 void ShadowMap::DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize instOfs, uint32_t count, const VECTOR3 &origin)
 {
+	DrawMeshInstanced (mesh, inst, instOfs, count, _M(1,0,0, 0,1,0, 0,0,1), origin, false);
+}
+
+void ShadowMap::DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize instOfs, uint32_t count,
+	const MATRIX3 &R, const VECTOR3 &origin, bool impostor)
+{
 	if (!active || !count || !mesh->VertexBuffer() || !mesh->IndexBuffer()) return;
 	VkCommandBuffer cmd = ctx->Cmd();
 	VkBuffer vbs[2] = { mesh->VertexBuffer(), inst };
 	VkDeviceSize ofs[2] = { 0, instOfs };
 	vkCmdBindVertexBuffers (cmd, 0, 2, vbs, ofs);
 	vkCmdBindIndexBuffer (cmd, mesh->IndexBuffer(), 0, VK_INDEX_TYPE_UINT16);
-	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, instPipeline);
-	Mat4 mvp = lightVP * Mat4::FromRotTrans (_M(1,0,0, 0,1,0, 0,0,1), origin - centre);
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, impostor ? impPipeline : instPipeline);
+	Mat4 mvp = lightVP * Mat4::FromRotTrans (R, origin - centre);
+	VECTOR3 sl = tmul (R, sun); // (the sun in the frame of the transforms)
 	float f[20];
 	mvp.ToFloat (f);
 	for (uint32_t g = 0; g < mesh->nGroup(); g++) {
 		const VkMesh::Group &grp = mesh->GetGroup (g);
 		if (!grp.nIndex || grp.transparent || !grp.tex || (grp.usrFlag & (VkMesh::GRP_HIDDEN | VkMesh::GRP_NOSHADOW))) continue;
-		f[16] = grp.alphaTest, f[17] = f[18] = f[19] = 0.0f; // (0: no texels discarded)
+		f[16] = grp.alphaTest, f[17] = (float)sl.x, f[18] = (float)sl.y, f[19] = (float)sl.z; // (alpha 0: no texels discarded)
 		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, alphaLayout, 0, 1, &grp.tex->set, 0, nullptr);
 		vkCmdPushConstants (cmd, alphaLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 20 * sizeof(float), f);
 		vkCmdDrawIndexed (cmd, grp.nIndex, count, grp.firstIndex, grp.vertexOffset, 0);

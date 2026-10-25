@@ -38,6 +38,8 @@ namespace vkscatter {
 		std::string name;
 		std::unique_ptr<VkMesh> mesh;            // full detail
 		std::vector<std::unique_ptr<VkMesh>> lods; // coarser levels of detail (may be empty)
+		std::unique_ptr<VkMesh> impostor; // far away: pictures from 8 directions and above (impostor_inst.vert); may be null
+		double crownLo = 0.0, crownHi = 0.0, crownR = 0.0; // the crown's extent (plants with impostors) [m]
 		double radius;  // horizontal extent [m]
 		double height;  // [m]
 		/// level of detail for a size on screen [pixels]

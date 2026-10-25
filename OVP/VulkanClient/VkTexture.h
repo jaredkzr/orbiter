@@ -64,6 +64,10 @@ public:
 	VkTexture *CreateRGBAMips (uint32_t w, uint32_t h, uint32_t nMip, const uint8_t *data,
 		const std::vector<size_t> &mipOffsets, size_t dataSize);
 
+	/// Give a texture a tangent-space normal map (RGBA8 linear: x along +u,
+	/// y along +v, as in DirectX normal maps), with mip levels
+	void SetNormalMap (VkTexture *tex, uint32_t w, uint32_t h, const uint8_t *rgba);
+
 	/// Create a texture from a DDS file in memory. deferred: record the upload
 	/// into the current frame instead of waiting for it (texture streaming)
 	VkTexture *CreateFromDDS (const uint8_t *file, size_t size, bool deferred);

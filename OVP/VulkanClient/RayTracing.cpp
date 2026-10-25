@@ -318,8 +318,10 @@ void RTScene::AddInstance (const Part *parts, uint32_t nParts, const Mat4 &model
 	for (int r = 0; r < 3; r++)
 		for (int c = 0; c < 4; c++) inst.transform.matrix[r][c] = m[c * 4 + r];
 	inst.instanceCustomIndex = nRec;
-	inst.mask = src[0].p->mat.owner ? 0x01 : 0x02; // objects, terrain
-	inst.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+	inst.mask = src[0].p->mat.shadowOnly ? 0x04 : src[0].p->mat.owner ? 0x01 : 0x02; // stand-ins, objects, terrain
+	// (stand-ins: closed volumes whose back faces are culled by shadow rays,
+	// so that rays leaving them, e.g. from the plants they stand in for, pass)
+	inst.flags = src[0].p->mat.shadowOnly ? 0 : VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
 	inst.accelerationStructureReference = b.addr;
 	memcpy ((VkAccelerationStructureInstanceKHR*)f.instances.mapped + nInst, &inst, sizeof(inst));
 	nInst++;

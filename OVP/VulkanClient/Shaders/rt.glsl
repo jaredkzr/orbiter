@@ -69,7 +69,7 @@ bool RTCandidateSolid (rayQueryEXT q)
 float RTSunVisible (vec3 p, vec3 toSun)
 {
 	rayQueryEXT sq;
-	rayQueryInitializeEXT (sq, tlas, gl_RayFlagsTerminateOnFirstHitEXT, 0xFF, p, 0.0, toSun, 1e5);
+	rayQueryInitializeEXT (sq, tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsCullBackFacingTrianglesEXT, 0xFF, p, 0.0, toSun, 1e5);
 	while (rayQueryProceedEXT (sq))
 		if (rayQueryGetIntersectionTypeEXT (sq, false) == gl_RayQueryCandidateIntersectionTriangleEXT && RTCandidateSolid (sq))
 			rayQueryConfirmIntersectionEXT (sq);
@@ -79,7 +79,7 @@ float RTSunVisible (vec3 p, vec3 toSun)
 bool TraceRT (vec3 o, vec3 d, float tMin, out RTHit h)
 {
 	rayQueryEXT rq;
-	rayQueryInitializeEXT (rq, tlas, gl_RayFlagsNoneEXT, 0xFF, o, tMin, d, 1e5);
+	rayQueryInitializeEXT (rq, tlas, gl_RayFlagsNoneEXT, 0xFB, o, tMin, d, 1e5); // (no shadow stand-ins)
 	while (rayQueryProceedEXT (rq))
 		if (rayQueryGetIntersectionTypeEXT (rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT && RTCandidateSolid (rq))
 			rayQueryConfirmIntersectionEXT (rq);

@@ -43,6 +43,7 @@ public:
 		float uv[4] = { 0, 0, 1, 1 }; // texture coordinates: offset, scale
 		bool unlit;
 		bool alphaTest = false; // texture alpha decides where it is solid (foliage)
+		bool shadowOnly = false; // a stand-in that only blocks light (not seen in reflections; instance mask 0x04)
 		uint32_t owner = 0;   // VObject::Id (0: terrain)
 	};
 	/// Indexed triangles (NTVERTEX vertices, 16-bit indices)

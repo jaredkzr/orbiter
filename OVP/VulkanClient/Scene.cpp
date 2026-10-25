@@ -30,6 +30,8 @@
 #include "prepass.vert.h"
 #include "prepass_inst.vert.h"
 #include "mesh_inst.vert.h"
+#include "impostor_inst.vert.h"
+#include "prepass_impostor_inst.vert.h"
 #include "prepass.frag.h"
 #include "stars.vert.h"
 #include "stars.frag.h"
@@ -328,7 +330,7 @@ void Scene::Shutdown ()
 	for (auto &u : probeFrameUbo) ctx->DestroyBuffer (u);
 	if (probe) probe->Shutdown ();
 	probe.reset();
-	VkPipeline pipes[] = { meshOpaque, meshBlend, meshAdditive, meshPrepass, meshOpaqueInst, meshPrepassInst, starPipeline, particleAdditive, particleBlend };
+	VkPipeline pipes[] = { meshOpaque, meshBlend, meshAdditive, meshPrepass, meshOpaqueInst, meshPrepassInst, meshOpaqueImp, meshPrepassImp, starPipeline, particleAdditive, particleBlend };
 	for (auto p : pipes) if (p) vkDestroyPipeline (ctx->device, p, nullptr);
 	vkDestroyPipelineLayout (ctx->device, meshLayout, nullptr);
 	vkDestroyPipelineLayout (ctx->device, particleLayout, nullptr);
@@ -343,9 +345,12 @@ void Scene::Shutdown ()
 // ======================================================================
 // Pipelines
 
-VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite, bool prepass, bool instanced)
+VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite, bool prepass, bool instanced, bool impostor)
 {
-	VkShaderModule vs = instanced ?
+	VkShaderModule vs = impostor ?
+		(prepass ? ctx->CreateShaderModule (spv_prepass_impostor_inst_vert, spv_prepass_impostor_inst_vert_size)
+		         : ctx->CreateShaderModule (spv_impostor_inst_vert, spv_impostor_inst_vert_size)) :
+		instanced ?
 		(prepass ? ctx->CreateShaderModule (spv_prepass_inst_vert, spv_prepass_inst_vert_size)
 		         : ctx->CreateShaderModule (spv_mesh_inst_vert, spv_mesh_inst_vert_size)) :
 		(prepass ? ctx->CreateShaderModule (spv_prepass_vert, spv_prepass_vert_size)
@@ -461,6 +466,8 @@ void Scene::CreatePipelines ()
 	meshPrepass = CreateMeshPipeline (false, false, true, true);
 	meshOpaqueInst = CreateMeshPipeline (false, false, true, false, true);
 	meshPrepassInst = CreateMeshPipeline (false, false, true, true, true);
+	meshOpaqueImp = CreateMeshPipeline (false, false, true, false, true, true);
+	meshPrepassImp = CreateMeshPipeline (false, false, true, true, true, true);
 
 	// stars: points at infinity, drawn first without depth test
 	VkPushConstantRange spcr{ VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(StarPushConstants) };
@@ -1512,7 +1519,8 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 	if (!rtParts.empty()) rt->AddInstance (rtParts.data(), (uint32_t)rtParts.size(), modelView);
 }
 
-void Scene::DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize instOfs, uint32_t count, RenderPass pass)
+void Scene::DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize instOfs, uint32_t count, RenderPass pass,
+	const Mat4 *frameToView, bool impostor, float range)
 {
 	if (!count || !mesh->VertexBuffer() || !mesh->IndexBuffer() || pass == RenderPass::Transparent) return;
 	VkCommandBuffer cmd = ctx->Cmd();
@@ -1523,7 +1531,8 @@ void Scene::DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize i
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 2, 1, &camAtmSet, 0, nullptr);
 	vkCmdBindVertexBuffers (cmd, 0, 2, vbs, ofs);
 	vkCmdBindIndexBuffer (cmd, mesh->IndexBuffer(), 0, VK_INDEX_TYPE_UINT16);
-	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pass == RenderPass::Depth ? meshPrepassInst : meshOpaqueInst);
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pass == RenderPass::Depth ? (impostor ? meshPrepassImp : meshPrepassInst)
+		: (impostor ? meshOpaqueImp : meshOpaqueInst));
 
 	// (the instances' transforms are relative to the camera, in the global
 	// frame: the view's rotation remains)
@@ -1545,7 +1554,7 @@ void Scene::DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize i
 		const MATERIAL &m = mesh->Material (grp.material);
 		const PBRParams &pp = mesh->PBR (grp.material);
 		MeshPushConstants pc;
-		view.ToFloat (pc.modelView);
+		(frameToView ? *frameToView : view).ToFloat (pc.modelView);
 		pc.diffuse[0] = m.diffuse.r, pc.diffuse[1] = m.diffuse.g, pc.diffuse[2] = m.diffuse.b, pc.diffuse[3] = m.diffuse.a;
 		pc.emissive[0] = m.emissive.r, pc.emissive[1] = m.emissive.g, pc.emissive[2] = m.emissive.b, pc.emissive[3] = 0.0f;
 		pc.specular[0] = m.specular.r, pc.specular[1] = m.specular.g, pc.specular[2] = m.specular.b, pc.specular[3] = m.power;
@@ -1555,7 +1564,7 @@ void Scene::DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize i
 		pc.maps[0] = maps ? (float)maps->flags : 0.0f;
 		pc.maps[1] = 0.0f;
 		pc.maps[2] = grp.alphaTest;
-		pc.maps[3] = 0.0f;
+		pc.maps[3] = range;
 		if (pass == RenderPass::Depth) {
 			float pr[40];
 			memcpy (pr, pc.modelView, sizeof(pc.modelView));
@@ -1564,7 +1573,7 @@ void Scene::DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize i
 			pr[36] = pc.maps[0];
 			pr[37] = 0.0f;
 			pr[38] = grp.alphaTest;
-			pr[39] = 0.0f;
+			pr[39] = range;
 			vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pr), pr);
 		} else {
 			vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
@@ -1573,7 +1582,7 @@ void Scene::DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize i
 	}
 }
 
-void Scene::AddMeshRT (const VkMesh *mesh, const Mat4 &modelView)
+void Scene::AddMeshRT (const VkMesh *mesh, const Mat4 &modelView, bool shadowOnly)
 {
 	if (!rt || !rt->Enabled () || !mesh->VertexBuffer()) return;
 	rtParts.clear ();
@@ -1594,7 +1603,8 @@ void Scene::AddMeshRT (const VkMesh *mesh, const Mat4 &modelView)
 		rm.pbr[0] = pp.metalness, rm.pbr[1] = pp.roughness, rm.pbr[2] = pp.reflectivity, rm.pbr[3] = pp.f0;
 		rm.unlit = false;
 		rm.alphaTest = grp.alphaTest > 0.0f;
-		rm.owner = objOwner;
+		rm.owner = shadowOnly ? 0 : objOwner;
+		rm.shadowOnly = shadowOnly;
 		rtParts.push_back (part);
 	}
 	if (!rtParts.empty()) rt->AddInstance (rtParts.data(), (uint32_t)rtParts.size(), modelView);

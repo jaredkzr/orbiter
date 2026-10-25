@@ -72,8 +72,11 @@ set(SHADER_SRC
 	Shaders/shadow_alpha.vert
 	Shaders/shadow_alpha.frag
 	Shaders/shadow_inst.vert
+	Shaders/shadow_impostor_inst.vert
 	Shaders/mesh_inst.vert
 	Shaders/prepass_inst.vert
+	Shaders/impostor_inst.vert
+	Shaders/prepass_impostor_inst.vert
 	Shaders/post.vert
 	Shaders/bloom_down.frag
 	Shaders/bloom_up.frag

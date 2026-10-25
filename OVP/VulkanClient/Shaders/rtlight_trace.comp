@@ -63,7 +63,8 @@ uvec4 Hash4 (uvec3 v)
 bool Occluded (vec3 o, vec3 d, float tMax, uint mask)
 {
 	rayQueryEXT q;
-	rayQueryInitializeEXT (q, tlas, gl_RayFlagsTerminateOnFirstHitEXT, mask, o, 0.0, d, tMax);
+	// (back faces culled: only stand-ins have them, see RayTracing.cpp)
+	rayQueryInitializeEXT (q, tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsCullBackFacingTrianglesEXT, mask, o, 0.0, d, tMax);
 	while (rayQueryProceedEXT (q))
 		if (rayQueryGetIntersectionTypeEXT (q, false) == gl_RayQueryCandidateIntersectionTriangleEXT && CandidateSolid (q))
 			rayQueryConfirmIntersectionEXT (q);

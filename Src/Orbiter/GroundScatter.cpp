@@ -27,7 +27,7 @@ bool GroundScatter::clientSupport = false;
 
 namespace {
 
-	const size_t MAX_CELLS = 16384; // cached cells (all layers)
+	const size_t MAX_CELLS = 40000; // cached cells (all layers; forests a few km around)
 	const int COVER_LEVEL = 14;     // finest surface tile level read for the ground cover (about 40 m per texel on Earth)
 	const size_t COVER_TILES = 12;  // cached tiles per layer
 

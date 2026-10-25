@@ -386,6 +386,17 @@ void TextureManager::LoadMaps (VkTexture *tex, const std::string &path)
 	oapiWriteLogV ("VulkanClient: texture maps for %s (flags 0x%02x)", path.c_str(), maps.flags);
 }
 
+void TextureManager::SetNormalMap (VkTexture *tex, uint32_t w, uint32_t h, const uint8_t *rgba)
+{
+	FreeMaps (tex);
+	std::vector<size_t> ofs = { 0 };
+	TexMaps maps;
+	maps.tex[MAP_NORM] = CreateImage (VK_FORMAT_R8G8B8A8_UNORM, w, h, 1, rgba, ofs, (size_t)w * h * 4, true);
+	maps.flags = 1u << MAP_NORM;
+	tex->maps = new TexMaps (maps);
+	tex->maps->set = AllocMapSet (tex->maps);
+}
+
 VkTexture *TextureManager::LoadBumpAsNormal (const std::string &path)
 {
 	// height from the first channel (luminance, alpha, or the green channel of

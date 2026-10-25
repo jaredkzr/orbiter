@@ -10,6 +10,13 @@
 // and level of detail, faded out towards the end of the range, and drawn
 // instanced (depth prepass, opaque pass, shadow maps). Instances near the
 // camera also go into the ray tracing scene.
+//
+// Far plants (beyond FAR_DIST of an anchor) are impostors in a static
+// buffer (positions relative to the anchor, planet frame), built over a few
+// frames when the camera has moved from the anchor or new cells have come,
+// and drawn without per-instance work; the impostor shader picks their
+// views. Cells in a far set are drawn there beyond FAR_DIST of its anchor,
+// by the per-frame path within it.
 // =======================================================================
 
 #ifndef __SCATTERFIELD_H
@@ -51,8 +58,31 @@ namespace vkscatter {
 			VECTOR3 centre{};    // planet frame
 			double radius = 0.0;
 			uint64_t used = 0;   // frame
+			bool allImp = false; // all its instances have impostors (far-set candidates)
+			unsigned farBuild = 0, farPending = 0; // far set that has its far instances
 		};
-		struct Batch { const VkMesh *mesh; uint32_t first, count; };
+		struct Batch { const VkMesh *mesh; uint32_t first, count; int kind; bool impostor = false; float range = 0.0f; };
+
+		// far set (active), and the one being built
+		struct Far {
+			unsigned id = 0;
+			VECTOR3 anchor{};      // planet frame
+			vkc::Buffer buf;
+			std::vector<Batch> batches;
+			std::unique_ptr<VkMesh> rtProxy; // ray tracing: stand-ins of the plants (crowns) that block the sun
+		} far;
+		struct FarBuild {
+			bool active = false;
+			unsigned id = 0;
+			VECTOR3 anchor{};
+			std::vector<uint64_t> keys;
+			size_t next = 0;
+			std::vector<std::vector<float>> bucket; // per kind
+			std::vector<float> range;               // per kind: of its layer
+			std::vector<VkMesh::Part> proxy;        // (parts of up to 65535 vertices)
+		} fb;
+		void BuildFar (const VECTOR3 &P);
+		uint64_t farFrame = 0; // when the last far set was started
 
 		void Fetch (int layer, int row, int col, Cell &c);
 		VECTOR3 CellCentre (int layer, int row, int col) const;

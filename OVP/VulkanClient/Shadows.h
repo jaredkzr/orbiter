@@ -39,6 +39,10 @@ public:
 	/// Draw instances of a mesh: transforms object -> global frame relative
 	/// to origin (rows of 3x4 matrices, Scene::INSTANCE_STRIDE bytes each)
 	void DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize instOfs, uint32_t count, const VECTOR3 &origin);
+	/// the same, transforms in a frame given by its rotation R and origin
+	/// (global); impostor: a plant's impostor (shadow_impostor_inst.vert)
+	void DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize instOfs, uint32_t count,
+		const MATRIX3 &R, const VECTOR3 &origin, bool impostor);
 	/// Draw indexed geometry (NTVERTEX, 16-bit indices), e.g. a terrain tile
 	void DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &model);
 	/// whether a sphere (global position, radius) may cast into the map
@@ -60,6 +64,8 @@ private:
 	VkPipelineLayout alphaLayout = VK_NULL_HANDLE; // casters with alpha-tested textures (foliage)
 	VkPipeline alphaPipeline = VK_NULL_HANDLE;
 	VkPipeline instPipeline = VK_NULL_HANDLE;  // instanced casters (alpha-tested where textured)
+	VkPipeline impPipeline = VK_NULL_HANDLE;   // instanced impostors
+	VECTOR3 sun{};                             // direction to the sun (global)
 	bool active = false;
 	VECTOR3 centre{};
 	double radius = 1.0;
