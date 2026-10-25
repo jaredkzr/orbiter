@@ -6,7 +6,8 @@
 
 #include "Rigidbody.h"
 #include "elevmgr.h"
-#include "GroundContact.h"
+#include "ContactSolver.h"
+#include "CollisionHull.h"
 
 typedef enum {
 	FLIGHTSTATUS_FREEFLIGHT,
@@ -81,6 +82,7 @@ class Base;
 // Class VesselBase
 
 class VesselBase: public RigidBody {
+	friend class VesselCollider;
 public:
 	VesselBase ();
 	VesselBase (double _mass, double _size, const Vector &_pmi);
@@ -176,11 +178,43 @@ protected:
 	// Resolve ground contact after the step was propagated (GroundContact.h):
 	// impulses change the new velocities, and the new position follows them
 
-	virtual void CollectGroundContacts (const StateVectors &s, const StateVectors &sb, double h,
+	contact::Body ContactBody () const;
+	// The vessel as a body for the contact solver, after the step's propagation
+
+	void ApplyContactVelocity (const contact::Body &b, double h, bool groundFrame);
+	// Take on the velocities of a body resolved by the contact solver; the new
+	// position and orientation follow them over the step h (groundFrame:
+	// relative to the turning ground, close to a planet's surface)
+
+	virtual void ContactStateChanged () {}
+	// The new state (s1) was changed after the update, by the contacts with
+	// other vessels: update what depends on it
+
+	virtual void CollectHulls (const StateVectors &s, std::vector<collision::HullRef> &hulls) const {}
+	// Collision hulls of the vessel (or the components of a composite) at state s
+
+	virtual void CollectFreePorts (const StateVectors &s, std::vector<collision::Port> &ports) const {}
+	// Free docking ports at state s (vessel-vessel contacts are not made near
+	// two ports lined up with each other, so that the vessels can dock)
+
+	virtual void WakeFromContact () {}
+
+	virtual bool InPlayback () const { return false; }
+
+	virtual double CollisionRadius () const { return -1.0; }
+	// Bounding radius of the collision hulls about the centre of gravity
+	// (< 0: no hulls)
+	// state from a flight recording (not changed by contacts)
+	// Hit by another vessel while landed: become dynamic in the next step
+
+	bool contact_deferred = false; // ground contacts are resolved with the contacts with other vessels in this step
+
+	virtual void CollectGroundContacts (const StateVectors &s, const StateVectors &sb, int body, double h,
 		std::vector<contact::Point> &pts) const {}
 	// Touchdown points in contact, or about to be within the step h, with the
-	// ground, for the body with state sb that this vessel is (part of); s: this
-	// vessel's state. States at the start of the step.
+	// ground, for the body with state sb (index body in the solver) that this
+	// vessel is (part of); s: this vessel's state. States at the start of the
+	// step; vectors relative to the body's centre in the global frame's axes.
 
 	virtual TOUCHDOWN_VTX *HullvtxFirst () = 0;
 	virtual TOUCHDOWN_VTX *HullvtxNext () = 0;

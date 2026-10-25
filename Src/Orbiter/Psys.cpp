@@ -820,8 +820,15 @@ void PlanetarySystem::Update (bool force)
 	for (i = 0; i < stars       .size(); i++) stars       [i]->AbsTrueState();
 	for (i = 0; i < celestials  .size(); i++) celestials  [i]->Update (force);
 	for (i = 0; i < vessels     .size(); i++) vessels     [i]->UpdateBodyForces ();
+
+	// vessels that may touch each other in this step
+	std::vector<VesselBase*> all (supervessels.begin(), supervessels.end());
+	all.insert (all.end(), vessels.begin(), vessels.end());
+	collider.Begin (all, td.SimDT);
+
 	for (i = 0; i < supervessels.size(); i++) supervessels[i]->Update (force);
 	for (i = 0; i < vessels     .size(); i++) vessels     [i]->Update (force);
+	collider.Resolve (td.SimDT);
 }
 
 void PlanetarySystem::FinaliseUpdate ()

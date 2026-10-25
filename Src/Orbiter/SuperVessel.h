@@ -126,7 +126,7 @@ public:
 
 	void PostUpdate ();
 
-	void CollectGroundContacts (const StateVectors &s, const StateVectors &sb, double h,
+	void CollectGroundContacts (const StateVectors &s, const StateVectors &sb, int body, double h,
 		std::vector<contact::Point> &pts) const;
 
 	void NotifyShiftVesselOrigin (Vessel *vessel, const Vector &dr);
@@ -161,6 +161,12 @@ protected:
 	// Switch to active flight mode
 
 	bool CheckSurfaceContact () const;
+	void CollectHulls (const StateVectors &s, std::vector<collision::HullRef> &hulls) const;
+	void CollectFreePorts (const StateVectors &s, std::vector<collision::Port> &ports) const;
+	void ContactStateChanged ();
+	void WakeFromContact ();
+	bool InPlayback () const;
+	double CollisionRadius () const;
 	// Returns true if any part of the vessel is in contact with a planet surface
 	// Should be called only after update phase, and assumes that sp is up to date.
 

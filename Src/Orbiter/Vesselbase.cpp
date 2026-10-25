@@ -383,43 +383,59 @@ void VesselBase::ResolveContacts (double h)
 {
 	contact_force.Set (0,0,0);
 	contact_moment.Set (0,0,0);
-	if (!proxybody || IsComponent() || h <= 0.0) return;
+	if (!proxybody || IsComponent() || h <= 0.0 || contact_deferred) return;
 
 	contact_pts.clear();
-	CollectGroundContacts (*s0, *s0, h, contact_pts);
+	CollectGroundContacts (*s0, *s0, 0, h, contact_pts);
 	if (contact_pts.empty()) return;
 
+	std::vector<contact::Body> b (1, ContactBody());
+	std::vector<Vector> P, L;
+	contact::Solve (contact_pts, b, h, &P, &L);
+	if (!P[0].length() && !L[0].length() && !b[0].vp.length() && !b[0].wp.length()) return; // (no contact within the step)
+	ApplyContactVelocity (b[0], h, true);
+	contact_force = tmul (s0->R, P[0]/h);
+	contact_moment = tmul (s0->R, L[0]/h);
+}
+
+// ==============================================================
+
+contact::Body VesselBase::ContactBody () const
+{
 	contact::Body b;
 	b.mass = mass;
 	b.pmi = pmi;
-	Vector v0 (tmul (s0->R, s1->vel));
-	b.v = v0;
-	b.w = s1->omega;
-	Vector P, L;
-	contact::Solve (contact_pts, b, h, P, L);
-	if (!P.x && !P.y && !P.z && !L.x && !L.y && !L.z) return; // (no contact within the step)
+	b.R = s0->R;
+	b.v = s1->vel;
+	b.w = mul (s0->R, s1->omega);
+	return b;
+}
 
-	Vector dw (b.w - s1->omega);
-	s1->vel += mul (s0->R, b.v - v0);
-	s1->omega = b.w;
-	s1->Q.Rotate (dw*h);
+// ==============================================================
+
+void VesselBase::ApplyContactVelocity (const contact::Body &b, double h, bool groundFrame)
+{
+	Vector dv (b.v - s1->vel);
+	Vector dw (tmul (s0->R, b.w) - s1->omega);
+	s1->omega += dw;
+	s1->Q.Rotate ((dw + tmul (s0->R, b.wp))*h);
 	s1->R.Set (s1->Q);
-
-	// new position: moved over the step with the new velocity relative to the
-	// ground point under the vessel's centre (so that a vessel at rest stays
-	// at rest on the turning planet)
-	const StateVectors &P0 = *proxybody->s0, &P1 = *proxybody->s1;
-	Vector pl (tmul (P0.R, s0->pos - P0.pos)); // planet-local position at the start
-	double wrot = Pi2 / proxybody->RotT();
-	Vector g1 (P1.pos + mul (P1.R, pl));
-	Vector vg1 (P1.vel + mul (P1.R, Vector (-pl.z*wrot, 0, pl.x*wrot)));
-	Vector dx ((g1 - s1->pos) + (s1->vel - vg1)*h);
-	rpos_add += dx;
-	s1->pos = rpos_base + rpos_add;
-	rvel_add = s1->vel - rvel_base;
+	rvel_add += dv;
 	s1->vel = rvel_base + rvel_add;
 
-	contact_force = P/h;
-	contact_moment = L/h;
+	if (groundFrame && proxybody) {
+		// new position: moved over the step with the new velocity relative to
+		// the ground point under the vessel's centre (so that a vessel at rest
+		// stays at rest on the turning planet)
+		const StateVectors &P0 = *proxybody->s0, &P1 = *proxybody->s1;
+		Vector pl (tmul (P0.R, s0->pos - P0.pos)); // planet-local position at the start
+		double wrot = Pi2 / proxybody->RotT();
+		Vector g1 (P1.pos + mul (P1.R, pl));
+		Vector vg1 (P1.vel + mul (P1.R, Vector (-pl.z*wrot, 0, pl.x*wrot)));
+		rpos_add += (g1 - s1->pos) + (s1->vel - vg1 + b.vp)*h;
+	} else {
+		rpos_add += (dv + b.vp)*h;
+	}
+	s1->pos = rpos_base + rpos_add;
 }
 

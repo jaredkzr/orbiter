@@ -9,6 +9,7 @@
 #include "Base.h"
 #include "Star.h"
 #include "Planet.h"
+#include "VesselCollision.h"
 #include <functional>
 
 class Vessel;
@@ -225,6 +226,9 @@ private:
 
 	std::vector<SuperVessel*> supervessels;
 	// List of spacecraft groups (composite vessels)
+
+	VesselCollider collider;
+	// Collisions between vessels
 
 	std::vector< oapi::GraphicsClient::LABELLIST> m_labelList; ///< list of celestial markers
 	//oapi::GraphicsClient::LABELLIST *labellist;

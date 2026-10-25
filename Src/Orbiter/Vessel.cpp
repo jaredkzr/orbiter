@@ -3635,15 +3635,30 @@ void Vessel::InitOrbiting (const Vector &relr, const Vector &relv, const Vector 
 		cpos *= scale;
 	}
 
-	el->Calculate (cpos, cvel, td.SimT0);
-
 	// set rotation matrix from axis rotation vector
 	s0->R.Set (rot);
 	s0->Q.Set (s0->R);
 
 	if (_vrot) s0->omega.Set (*_vrot);
 
-	RPlace(cpos + cbody->GPos(), cvel + cbody->GVel());
+	if (g_bStateUpdate && s1 != s0) {
+		// during the state update (e.g. from a post-step callback): the state
+		// is given at the start of the step (relative to the reference body's
+		// current state), but the new state is that of the end of the step:
+		// moved over the step (in the reference body's central field)
+		double r = cpos.length(), h = td.SimDT;
+		Vector a (cpos * (-Ggrav * cbody->Mass() / (r*r*r)));
+		cpos += cvel*h + a*(0.5*h*h);
+		cvel += a*h;
+		el->Calculate (cpos, cvel, td.SimT1);
+		s1->R.Set (s0->R);
+		s1->Q.Set (s0->Q);
+		s1->omega.Set (s0->omega);
+		RPlace (cpos + cbody->s1->pos, cvel + cbody->s1->vel);
+	} else {
+		el->Calculate (cpos, cvel, td.SimT0);
+		RPlace (cpos + cbody->GPos(), cvel + cbody->GVel());
+	}
 }
 
 void Vessel::SetProxyplanet (Planet *pp)
@@ -4307,7 +4322,7 @@ void Vessel::UpdateAerodynamicForces_OLD ()
 // step h), for the contact solver: each against the terrain under it, along
 // the terrain's normal there
 
-void Vessel::CollectGroundContacts (const StateVectors &s, const StateVectors &sb, double h,
+void Vessel::CollectGroundContacts (const StateVectors &s, const StateVectors &sb, int body, double h,
 	std::vector<contact::Point> &pts) const
 {
 	nforcevec = 0;
@@ -4350,18 +4365,12 @@ void Vessel::CollectGroundContacts (const StateVectors &s, const StateVectors &s
 		}
 
 		contact::Point p;
-		p.r = tmul (sb.R, pg - sb.pos);
-		p.n = tmul (sb.R, mul (P0.R, nl));
-		Vector t1 (tmul (sb.R, mul (s.R, d1)));
-		t1 -= p.n * dotp (t1, p.n);
-		if (t1.length() < 1e-6) { // (rolling direction along the normal: any tangent)
-			t1 = crossp (p.n, fabs (p.n.x) < 0.9 ? Vector(1,0,0) : Vector(0,0,1));
-		}
-		p.t1 = t1.unit();
-		p.t2 = crossp (p.n, p.t1);
+		p.a = body, p.b = -1;
+		p.ra = pg - sb.pos;
+		p.n = mul (P0.R, nl);
+		contact::Tangents (p.n, mul (s.R, d1), p.t1, p.t2);
 		// velocity of the ground at the point
-		Vector vg (P1.vel + mul (P1.R, Vector (-pl.z*wrot, 0, pl.x*wrot)));
-		p.vg = tmul (sb.R, vg);
+		p.vs = P1.vel + mul (P1.R, Vector (-pl.z*wrot, 0, pl.x*wrot));
 		p.C = C;
 		p.k = tv.stiffness;
 		p.c = tv.damping;
@@ -4378,11 +4387,91 @@ void Vessel::CollectGroundContacts (const StateVectors &s, const StateVectors &s
 
 		// (force vectors for display: friction of the last step)
 		if (nforcevec < forcevecbuf && h > 0.0 && C <= 0.0) {
-			forcevec[nforcevec] = tmul (s.R, mul (sb.R, (p.t1*warm[1] + p.t2*warm[2]) / h));
+			forcevec[nforcevec] = tmul (s.R, (p.t1*warm[1] + p.t2*warm[2]) / h);
 			forcepos[nforcevec] = tv.pos;
 			nforcevec++;
 		}
 	}
+}
+
+// =======================================================================
+// Collision with other vessels
+
+const std::vector<collision::Hull> &Vessel::Hulls () const
+{
+	// (made again when the meshes change)
+	bool valid = hulls_valid && hull_crc == mesh_crc && hull_meshofs.size() == nmesh;
+	for (UINT i = 0; valid && i < nmesh; i++)
+		if (!meshlist[i] || hull_meshofs[i].dist2 (MakeVector (meshlist[i]->meshofs)) > 0.0) valid = false;
+	if (valid) return hulls;
+
+	hulls.clear();
+	hull_meshofs.assign (nmesh, Vector(0,0,0));
+	for (UINT i = 0; i < nmesh; i++)
+		if (meshlist[i]) hull_meshofs[i] = MakeVector (meshlist[i]->meshofs);
+	hull_crc = mesh_crc;
+	hulls_valid = true;
+	hull_bound = 0.0;
+	if (collision::ClassHulls (classname, hulls)) {
+		for (const collision::Hull &h : hulls) hull_bound = std::max (hull_bound, h.centre.length() + h.radius);
+		return hulls;
+	}
+
+	for (UINT i = 0; i < nmesh; i++) {
+		MeshList *ml = meshlist[i];
+		if (!ml || !(ml->vismode & MESHVIS_EXTERNAL)) continue;
+		// (the mesh template, or the globally loaded mesh of that name: read
+		// only, and not copied, which would release its textures when deleted)
+		const Mesh *mesh = ml->hMesh ? (const Mesh*)ml->hMesh :
+			ml->meshname[0] ? g_pOrbiter->LoadMeshGlobal (ml->meshname) : nullptr;
+		if (!mesh) continue;
+		std::string key (ml->meshname[0] ? ml->meshname : "");
+		if (key.empty()) { // (a mesh made by the vessel: by its address and size)
+			DWORD nv = 0;
+			for (DWORD g = 0; g < mesh->nGroup(); g++) nv += const_cast<Mesh*>(mesh)->GetGroup (g)->nVtx;
+			char cbuf[96];
+			sprintf (cbuf, "@%p/%u/%u", (void*)ml->hMesh, (unsigned)mesh->nGroup(), (unsigned)nv);
+			key = cbuf;
+		}
+		for (const collision::Hull &h : collision::MeshHulls (key, *mesh))
+			hulls.push_back (collision::Offset (h, hull_meshofs[i]));
+	}
+	hull_bound = 0.0;
+	for (const collision::Hull &h : hulls) hull_bound = std::max (hull_bound, h.centre.length() + h.radius);
+	return hulls;
+}
+
+double Vessel::CollisionRadius () const
+{
+	return Hulls().empty() ? -1.0 : hull_bound;
+}
+
+void Vessel::CollectHulls (const StateVectors &s, std::vector<collision::HullRef> &hl) const
+{
+	for (const collision::Hull &h : Hulls())
+		hl.push_back ({&h, s.R, s.pos});
+}
+
+void Vessel::CollectFreePorts (const StateVectors &s, std::vector<collision::Port> &ports) const
+{
+	for (DWORD i = 0; i < ndock; i++)
+		if (!dock[i]->mate) ports.push_back ({s.pos + mul (s.R, dock[i]->ref), mul (s.R, dock[i]->dir)});
+}
+
+void Vessel::ContactStateChanged ()
+{
+	if (proxybody) UpdateSurfParams();
+	if (cbody) {
+		cpos = s1->pos - cbody->s1->pos;
+		cvel = s1->vel - cbody->s1->vel;
+	}
+	el_valid = false;
+	UpdateAttachments();
+}
+
+void Vessel::WakeFromContact ()
+{
+	bForceActive = true; // (switches to free flight in the next update)
 }
 
 // =======================================================================

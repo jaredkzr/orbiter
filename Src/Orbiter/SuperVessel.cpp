@@ -15,6 +15,7 @@
 #include "Psys.h"
 #include "Log.h"
 #include <stdio.h>
+#include <algorithm>
 
 extern Orbiter *g_pOrbiter;
 extern TimeData td;
@@ -734,13 +735,64 @@ bool SuperVessel::Merge (Vessel *vessel1, int port1, Vessel *vessel2, int port2)
 
 // =======================================================================
 
-void SuperVessel::CollectGroundContacts (const StateVectors &s, const StateVectors &sb, double h,
+void SuperVessel::CollectHulls (const StateVectors &s, std::vector<collision::HullRef> &hulls) const
+{
+	StateVectors scomp;
+	for (DWORD comp = 0; comp < nv; comp++) {
+		ComponentStateVectors (&s, &scomp, comp);
+		vlist[comp].vessel->CollectHulls (scomp, hulls);
+	}
+}
+
+void SuperVessel::CollectFreePorts (const StateVectors &s, std::vector<collision::Port> &ports) const
+{
+	StateVectors scomp;
+	for (DWORD comp = 0; comp < nv; comp++) {
+		ComponentStateVectors (&s, &scomp, comp);
+		vlist[comp].vessel->CollectFreePorts (scomp, ports);
+	}
+}
+
+void SuperVessel::ContactStateChanged ()
+{
+	if (proxybody) UpdateSurfParams();
+	cpos = s1->pos - cbody->s1->pos;
+	cvel = s1->vel - cbody->s1->vel;
+	for (DWORD i = 0; i < nv; i++) {
+		ComponentStateVectors (s1, vlist[i].vessel->s1, i);
+		vlist[i].vessel->ContactStateChanged ();
+	}
+}
+
+double SuperVessel::CollisionRadius () const
+{
+	double r = -1.0;
+	for (DWORD i = 0; i < nv; i++) {
+		double rc = vlist[i].vessel->CollisionRadius ();
+		if (rc >= 0.0) r = std::max (r, (vlist[i].rpos - cg).length() + rc);
+	}
+	return r;
+}
+
+bool SuperVessel::InPlayback () const
+{
+	return nv && vlist[0].vessel->bFRplayback;
+}
+
+void SuperVessel::WakeFromContact ()
+{
+	for (DWORD i = 0; i < nv; i++) vlist[i].vessel->WakeFromContact ();
+}
+
+// =======================================================================
+
+void SuperVessel::CollectGroundContacts (const StateVectors &s, const StateVectors &sb, int body, double h,
 	std::vector<contact::Point> &pts) const
 {
 	StateVectors scomp;
 	for (DWORD comp = 0; comp < nv; comp++) {
 		ComponentStateVectors (&s, &scomp, comp);
-		vlist[comp].vessel->CollectGroundContacts (scomp, sb, h, pts);
+		vlist[comp].vessel->CollectGroundContacts (scomp, sb, body, h, pts);
 	}
 }
 

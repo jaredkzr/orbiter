@@ -2,53 +2,64 @@
 // Licensed under the MIT License
 
 // =======================================================================
-// Ground contact of a rigid body: touchdown points against the planet's
-// surface, resolved with impulses once per time step (after the body was
-// propagated without contact forces). Each point is a constraint along the
-// local terrain normal, softened by the point's stiffness and damping (an
-// implicit spring-damper, stable for any stiffness and time step), with
-// Coulomb friction along the rolling and lateral directions.
+// Contacts of rigid bodies, resolved with impulses once per time step
+// (after the bodies were propagated without contact forces): touchdown
+// points against the planet's surface, and vessels against each other.
+// Each contact is a constraint along its normal, softened by a stiffness
+// and damping where given (an implicit spring-damper, stable for any
+// stiffness and time step), with Coulomb friction along two tangents.
+// All vectors are in a common frame with the axes of the global frame.
 // =======================================================================
 
-#ifndef __GROUNDCONTACT_H
-#define __GROUNDCONTACT_H
+#ifndef __CONTACTSOLVER_H
+#define __CONTACTSOLVER_H
 
 #include "Vecmat.h"
 #include <vector>
 
 namespace contact {
 
-	/// A touchdown point in contact (or about to be) with the ground. All
-	/// vectors are in the frame of the body being resolved.
+	/// A rigid body taking part in contacts
+	struct Body {
+		double mass;  ///< [kg]
+		Vector pmi;   ///< principal moments of inertia per unit mass (body frame)
+		Matrix R;     ///< body frame -> common frame
+		Vector v;     ///< velocity of the centre of gravity
+		Vector w;     ///< angular velocity
+		Vector vp, wp; ///< (result) pseudo-velocities that remove penetration of rigid contacts: they move
+		               ///< the body over the step, but are not kept (no energy gained by the correction)
+	};
+
+	/// A point of contact of body a with body b, or with a fixed surface
+	/// (b < 0: the ground, or a vessel at rest on it), or about to be within
+	/// the step
 	struct Point {
-		Vector r;           ///< position relative to the centre of gravity
-		Vector n;           ///< terrain normal (out of the ground)
-		Vector t1, t2;      ///< tangents: longitudinal (rolling), lateral
-		Vector vg;          ///< velocity of the ground at the point
-		double C;           ///< distance above the ground at the start of the step (< 0: penetration) [m]
+		int a, b;           ///< bodies (b < 0: fixed surface)
+		Vector ra, rb;      ///< the point relative to the bodies' centres of gravity
+		Vector n;           ///< normal (from b towards a)
+		Vector t1, t2;      ///< tangents (t1: rolling direction of a wheel)
+		Vector vs;          ///< velocity of the fixed surface at the point (b < 0)
+		double C;           ///< separation at the start of the step (< 0: penetration) [m]
 		double k, c;        ///< stiffness [N/m], damping [N s/m] (k = 0: rigid)
 		double mu1, mu2;    ///< friction coefficients along t1, t2
-		double *warm;       ///< accumulated impulses of the previous step (normal, t1, t2), for warm starting
+		double *warm;       ///< impulses of the previous step (normal, t1, t2), for warm starting (or null)
 
 		// (solver)
 		double Kn, K1, K2;  // inverse effective mass along n, t1, t2
 		double gamma, bias; // softness, velocity bias of the normal constraint
+		double pbias, lp;   // rigid contacts: bias of the position correction, its accumulated pseudo-impulse
 		double ln, l1, l2;  // accumulated impulses
 	};
 
-	/// The body: mass properties and velocities (body frame)
-	struct Body {
-		double mass;
-		Vector pmi;   ///< principal moments of inertia per unit mass
-		Vector v;     ///< velocity of the centre of gravity
-		Vector w;     ///< angular velocity
-	};
+	/// Resolve the contacts over a time step h [s]: the bodies' velocities are
+	/// changed by the contact impulses. P, L (optional, one per body): total
+	/// impulse on each body and its moment about the centre of gravity.
+	void Solve (std::vector<Point> &pts, std::vector<Body> &bodies, double h,
+		std::vector<Vector> *P = nullptr, std::vector<Vector> *L = nullptr);
 
-	/// Resolve the contacts over a time step h [s]: the body's velocities
-	/// are changed by the contact impulses. Returns the total impulse P and
-	/// its moment L (about the centre of gravity), body frame.
-	void Solve (std::vector<Point> &pts, Body &b, double h, Vector &P, Vector &L);
+	/// Tangent directions for a normal n (t1 along d where possible)
+	void Tangents (const Vector &n, const Vector &d, Vector &t1, Vector &t2);
 
 } // namespace contact
 
-#endif // !__GROUNDCONTACT_H
+#endif // !__CONTACTSOLVER_H

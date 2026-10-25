@@ -1132,7 +1132,7 @@ public:
 	void UpdateRadiationForces ();
 	void UpdateAerodynamicForces ();
 	void UpdateAerodynamicForces_OLD ();
-	void CollectGroundContacts (const StateVectors &s, const StateVectors &sb, double h,
+	void CollectGroundContacts (const StateVectors &s, const StateVectors &sb, int body, double h,
 		std::vector<contact::Point> &pts) const;
 
 	void PostUpdate ();
@@ -1301,6 +1301,16 @@ protected:
 	void HoverHoldAltitude ();
 
 	bool CheckSurfaceContact () const;
+
+	const std::vector<collision::Hull> &Hulls () const;
+	// Collision hulls (vessel frame), made from the external meshes or read
+	// from Config/Collision/<class>.cfg when first needed
+	void CollectHulls (const StateVectors &s, std::vector<collision::HullRef> &hulls) const;
+	void CollectFreePorts (const StateVectors &s, std::vector<collision::Port> &ports) const;
+	void ContactStateChanged ();
+	void WakeFromContact ();
+	bool InPlayback () const { return bFRplayback; }
+	double CollisionRadius () const;
 	// Returns true if any part of the vessel is in contact with a planet surface
 	// Should be called only after update phase, and assumes that sp is up to date.
 
@@ -1614,6 +1624,13 @@ private:
 	// impulses on the touchdown points in the last step (normal, longitudinal,
 	// lateral; for warm starting the contact solver)
 	mutable std::vector<double> contact_warm;
+
+	// collision hulls and the mesh state they were made for
+	mutable std::vector<collision::Hull> hulls;
+	mutable std::vector<Vector> hull_meshofs;
+	mutable DWORD_PTR hull_crc = 0;
+	mutable bool hulls_valid = false;
+	mutable double hull_bound = 0.0; // bounding radius of the hulls about the vessel's origin
 
 	double vd_forw, vd_back, vd_vert, vd_side;  // resistance constants against translation in atmosphere
 
