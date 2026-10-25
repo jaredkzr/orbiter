@@ -30,7 +30,7 @@ namespace {
 		float maskUV[4];  // same for the mask texture
 		float params[4];  // x: mask present, y: night light intensity
 		float detail[4];  // terrain detail: data node spacing [m], shortest wavelength of the mesh [m], Hurst exponent, on
-		float morph[4];   // morph to the parent's mesh: start distance [m], 1/range [1/m] (0: none)
+		float morph[4];   // morph to the parent's mesh: start distance [m], 1/range [1/m] (0: none); z: sunlight (eclipses)
 		float vessel[4];  // nearest vessel on the ground (view space; w: present), also morphed from
 	};
 
@@ -831,6 +831,9 @@ void PlanetSurface::Prepare ()
 			// the same node spacing as the mesh (256 vs 32 intervals)
 			Node *e = n;
 			while (e->lvl > 4 && e->lvl > n->lvl - 3) e = e->parent;
+			// (where the data ends higher up, the deepest tile that has it, as
+			// the core uses: otherwise the mesh falls back to the root)
+			while (e->lvl > 4 && !layers->elev->HasTile (e->lvl, e->ilat, e->ilng)) e = e->parent;
 			Request (e, TileLoader::ELEV);
 		}
 		const Node *src = ElevSource (n);
@@ -1025,6 +1028,8 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 
 	Mat4 mv = scene->ModelView (ppos + mul (prot, n->centre), prot);
 	mv.ToFloat (pc.modelView);
+	// (a moon in its planet's shadow: the share of the sun's disc seen from the tile)
+	pc.morph[2] = prepass ? 1.0f : (float)scene->SunVisibility (ppos + mul (prot, n->centre), hPlanet);
 	if (pc.morph[1] > 0.0f && n->vessel >= 0 && n->vessel < (int)groundVessels.size()) {
 		VECTOR3 v = groundVessels[n->vessel] - n->centre; // (tile frame)
 		pc.vessel[0] = (float)(mv.m[0] * v.x + mv.m[4] * v.y + mv.m[8] * v.z + mv.m[12]);

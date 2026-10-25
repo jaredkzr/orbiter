@@ -164,7 +164,7 @@ namespace scatter {
 			uint64_t used = 0;
 		};
 		void Load ();
-		void LoadAssets (const std::string &file);
+		void LoadAssets (const std::string &file, bool included = false); // (included: listed by ASSETS)
 		void Make (int layer, int row, int col, CellData &cd);
 		double CoverFactor (const Layer &L, const Vector &rgb, double water, bool haveCover) const;
 		double Clearance (const Vector &dir) const; // 0 at bases and cleared ground, 1 away from them

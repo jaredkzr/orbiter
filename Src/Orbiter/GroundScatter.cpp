@@ -246,12 +246,12 @@ GroundScatter::GroundScatter (const Planet *p): planet (p), R (p->Size())
 
 GroundScatter::~GroundScatter () {}
 
-void GroundScatter::LoadAssets (const std::string &file)
+void GroundScatter::LoadAssets (const std::string &file, bool included)
 {
 	std::ifstream ifs (g_pOrbiter->Cfg()->ConfigPathNoext (("Scatter/" + file).c_str()));
 	if (!ifs.good()) {
-		LOGOUT_WARN ("Ground scatter: cannot read Config/Scatter/%s", file.c_str());
-		return;
+		if (included) LOGOUT_WARN ("Ground scatter: cannot read Config/Scatter/%s", file.c_str());
+		return; // (a planet without ground scatter)
 	}
 	std::string line;
 	while (std::getline (ifs, line)) {
@@ -298,7 +298,7 @@ void GroundScatter::LoadAssets (const std::string &file)
 			}
 		} else if (tok == "ASSETS") {
 			std::string f;
-			if (ss >> f) LoadAssets (f);
+			if (ss >> f) LoadAssets (f, true);
 			continue;
 		} else if (tok == "LAYER") {
 			Layer L;

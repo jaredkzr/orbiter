@@ -133,7 +133,7 @@ void main()
 	}
 	float ndl = dot(N, L);
 	bool hasAtm = atm.misc.x > 0.5;
-	vec3 sunT = vec3(1.0);
+	vec3 sunT = vec3(tile.morph.z); // (eclipses)
 	vec3 pPlanet = vec3(0.0), dPlanet = vec3(0.0);
 	if (hasAtm) {
 		pPlanet = mat3(atm.viewToPlanet) * vPosView + atm.camPos.xyz;

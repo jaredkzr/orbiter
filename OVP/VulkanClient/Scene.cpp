@@ -831,7 +831,7 @@ void Scene::RenderShadows ()
 		}
 }
 
-double Scene::Sunlight (const VECTOR3 &gpos)
+double Scene::SunVisibility (const VECTOR3 &gpos, OBJHANDLE exclude) const
 {
 	if (!hSun) return 1.0;
 	VECTOR3 sp;
@@ -842,7 +842,7 @@ double Scene::Sunlight (const VECTOR3 &gpos)
 	double f = 1.0;
 	for (DWORD i = 0; i < oapiGetGbodyCount(); i++) {
 		OBJHANDLE h = oapiGetGbodyByIndex (i);
-		if (h == hSun) continue;
+		if (h == hSun || h == exclude) continue;
 		VECTOR3 pp;
 		oapiGetGlobalPos (h, &pp);
 		VECTOR3 p = pp - gpos;
@@ -854,6 +854,12 @@ double Scene::Sunlight (const VECTOR3 &gpos)
 		double vis = std::clamp ((theta - (ap - as)) / (2.0 * as), 0.0, 1.0);
 		f = std::min (f, vis);
 	}
+	return f;
+}
+
+double Scene::Sunlight (const VECTOR3 &gpos)
+{
+	double f = SunVisibility (gpos);
 	objLight = (float)f;
 	return f;
 }

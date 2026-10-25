@@ -297,7 +297,9 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 	atmRadius = radius;
 
 	const ATMCONST *ac = oapiPlanetHasAtmosphere (hPlanet) ? oapiGetPlanetAtmConstants (hPlanet) : nullptr;
-	if (ac && ac->rho0 > 0.0 && ac->p0 > 0.0) {
+	// (tenuous atmospheres, e.g. Io's and Triton's, a ten thousandth of
+	// Earth's density: a black sky, as in vacuum)
+	if (ac && ac->rho0 > 1e-3 * EARTH_RHO0 && ac->p0 > 0.0) {
 		double g = GGRAV * oapiGetMass (hPlanet) / (radius * radius);
 		double H = ac->p0 / (ac->rho0 * g); // scale height [m]
 		double dens = std::clamp (ac->rho0 / EARTH_RHO0, 0.1, 10.0);

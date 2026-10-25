@@ -138,6 +138,9 @@ public:
 	/// Fraction of the sun's disc visible from a global position (planets
 	/// may eclipse it); also sets the sunlight used by subsequent DrawMesh calls
 	double Sunlight (const VECTOR3 &gpos);
+	/// the same, without setting the light of the objects drawn next
+	/// (exclude: a body not counted, e.g. the one the point is on)
+	double SunVisibility (const VECTOR3 &gpos, OBJHANDLE exclude = nullptr) const;
 	void SetObjectLight (double f) { objLight = (float)f; }
 	float ObjectLight () const { return objLight; }
 	/// emission added to transparent (glass) groups of subsequent DrawMesh calls
