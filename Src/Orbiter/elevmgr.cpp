@@ -431,11 +431,11 @@ double ElevationManager::Elevation (double lat, double lng, int reqlvl, std::vec
 					double dx = dlng * cbody->Size() * cos(lat);
 					double nx01 = eptr[1]-eptr[0];
 					double nx02 = eptr[elev_stride+1]-eptr[elev_stride];
-					double nx = w_lat*nx02 + (1.0-w_lat)*nx01;
+					double nx = (w_lat*nx02 + (1.0-w_lat)*nx01) * elev_res; // (elevation differences in metres)
 					Vector vnx(dx,nx,0);
 					double nz01 = eptr[elev_stride]-eptr[0];
 					double nz02 = eptr[elev_stride+1]-eptr[1];
-					double nz = w_lng*nz02 + (1.0-w_lng)*nz01;
+					double nz = (w_lng*nz02 + (1.0-w_lng)*nz01) * elev_res;
 					Vector vnz(0,nz,dz);
 					*normal = crossp(vnz,vnx).unit();
 				}
@@ -493,9 +493,10 @@ double ElevationManager::Elevation (double lat, double lng, int reqlvl, std::vec
 					double w0_lng = 1.0-w1_lng;
 					double dex = (dex00+dex10)*0.5*w0_lng + (dex01+dex11)*0.5*w1_lng;
 					double dez = (dez00+dez10)*0.5*w0_lat + (dez01+dez11)*0.5*w1_lat;
-					normal->x = -dex;
-					normal->z = -dez;
-					normal->y = 0.5*(dx+dz);
+					// (slopes: elevation differences in metres over the grid spacing)
+					normal->x = -dex * elev_res / dx;
+					normal->z = -dez * elev_res / dz;
+					normal->y = 1.0;
 					normal->unify();
 				}
 			}
