@@ -2,8 +2,10 @@ Collision hulls of vessel classes
 =================================
 
 Vessels collide with each other using convex hulls made automatically from
-their external meshes (one for each mesh group). A vessel class can replace
-them with its own hulls in a file named after the class:
+their external meshes (one for each mesh group). A vessel module can define
+its own hulls instead (VESSEL::AddCollisionHull, ClearCollisionHulls,
+ResetCollisionHulls; in Lua vessel:add_collisionhull etc.). A file named
+after the vessel class replaces both:
 
     Config/Collision/<classname>.cfg
 
@@ -27,5 +29,11 @@ A file containing just
 gives the class no hulls: its vessels pass through other vessels, as they
 did before Orbiter had vessel collisions.
 
-Contacts are not made close to two free docking ports lined up with each
-other, so that vessels can dock.
+Docking: two free docking ports capture each other only within the limits
+set in Orbiter.cfg (defaults shown):
+
+    DockingSpeedLimit = 0.5    ; relative speed of the ports [m/s]
+    DockingAngleLimit = 10     ; misalignment, approach and roll [deg]
+
+Contacts are not made close to two ports that would capture each other, so
+that vessels can dock; too fast or askew, they collide.

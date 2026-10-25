@@ -4411,7 +4411,10 @@ const std::vector<collision::Hull> &Vessel::Hulls () const
 	hull_crc = mesh_crc;
 	hulls_valid = true;
 	hull_bound = 0.0;
-	if (collision::ClassHulls (classname, hulls)) {
+	// (a class file takes precedence, then hulls defined by the vessel)
+	bool found = collision::ClassHulls (classname, hulls);
+	if (!found && hulls_custom) hulls = custom_hulls, found = true;
+	if (found) {
 		for (const collision::Hull &h : hulls) hull_bound = std::max (hull_bound, h.centre.length() + h.radius);
 		return hulls;
 	}
@@ -4438,6 +4441,25 @@ const std::vector<collision::Hull> &Vessel::Hulls () const
 	hull_bound = 0.0;
 	for (const collision::Hull &h : hulls) hull_bound = std::max (hull_bound, h.centre.length() + h.radius);
 	return hulls;
+}
+
+DWORD Vessel::AddCollisionHull (const VECTOR3 *pt, DWORD npt)
+{
+	if (!hulls_custom) custom_hulls.clear();
+	hulls_custom = true;
+	hulls_valid = false;
+	std::vector<Vector> p;
+	for (DWORD i = 0; i < npt; i++) p.push_back (MakeVector (pt[i]));
+	if (p.empty()) p.push_back (Vector(0,0,0));
+	custom_hulls.push_back (collision::MakeHull (p, collision::SKIN));
+	return (DWORD)custom_hulls.size() - 1;
+}
+
+void Vessel::SetCustomHulls (bool custom)
+{
+	hulls_custom = custom;
+	custom_hulls.clear();
+	hulls_valid = false;
 }
 
 double Vessel::CollisionRadius () const
@@ -7233,6 +7255,26 @@ void VESSEL::SetTouchdownPoints (const TOUCHDOWNVTX *tdvtx, DWORD ntdvtx) const
 {
 	dCHECK(ntdvtx >= 3, "VESSEL::SetTouchdownPoints: at least 3 points must be provided")
 	vessel->SetTouchdownPoints (tdvtx, ntdvtx);
+}
+
+DWORD VESSEL::AddCollisionHull (const VECTOR3 *pt, DWORD npt) const
+{
+	return vessel->AddCollisionHull (pt, npt);
+}
+
+void VESSEL::ClearCollisionHulls () const
+{
+	vessel->SetCustomHulls (true);
+}
+
+void VESSEL::ResetCollisionHulls () const
+{
+	vessel->SetCustomHulls (false);
+}
+
+DWORD VESSEL::GetCollisionHullCount () const
+{
+	return (DWORD)vessel->Hulls().size();
 }
 
 void VESSEL::GetTouchdownPoints (VECTOR3 &pt1, VECTOR3 &pt2, VECTOR3 &pt3) const

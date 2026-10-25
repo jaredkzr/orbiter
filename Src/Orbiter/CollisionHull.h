@@ -53,6 +53,8 @@ namespace collision {
 	/// other's axis
 	bool DockCapture (const Port &a, const Port &b, double maxOffset);
 
+	const double SKIN = 0.05; ///< [m] thickness added around each hull (thin parts, e.g. panels)
+
 	/// The hull of a set of points (with a skin of thickness 'skin' added)
 	Hull MakeHull (const std::vector<Vector> &pts, double skin);
 

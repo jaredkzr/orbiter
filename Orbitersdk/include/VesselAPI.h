@@ -437,6 +437,45 @@ public:
 	DWORD GetTouchdownPointCount () const;
 
 	/**
+	 * \brief Adds a collision hull for collisions with other vessels.
+	 * \param pt list of points in the vessel frame [<b>m</b>]
+	 * \param npt number of points (at least 1)
+	 * \return index of the hull
+	 * \note A vessel collides with other vessels by a set of convex hulls.
+	 *   By default they are made from the vessel's external meshes (one for
+	 *   each mesh group). Once hulls are added with this method, they
+	 *   replace those made from the meshes.
+	 * \note The hull is the convex shape around the points (slightly
+	 *   enlarged, by a few centimetres).
+	 * \note A file Config/Collision/<classname>.cfg, where present, takes
+	 *   precedence over hulls defined by the vessel.
+	 * \sa ClearCollisionHulls, ResetCollisionHulls, GetCollisionHullCount
+	 */
+	DWORD AddCollisionHull (const VECTOR3 *pt, DWORD npt) const;
+
+	/**
+	 * \brief Removes the vessel's collision hulls: it does not collide with
+	 *   other vessels (until hulls are added with AddCollisionHull).
+	 * \sa AddCollisionHull, ResetCollisionHulls
+	 */
+	void ClearCollisionHulls () const;
+
+	/**
+	 * \brief Returns to the default collision hulls, made from the vessel's
+	 *   external meshes.
+	 * \sa AddCollisionHull, ClearCollisionHulls
+	 */
+	void ResetCollisionHulls () const;
+
+	/**
+	 * \brief Returns the number of the vessel's collision hulls.
+	 * \return Number of hulls (0: the vessel does not collide with other
+	 *   vessels)
+	 * \sa AddCollisionHull
+	 */
+	DWORD GetCollisionHullCount () const;
+
+	/**
 	 * \brief Set friction coefficients for ground contact.
 	 * \param mu_lng friction coefficient in longitudinal direction.
 	 * \param mu_lat friction coefficient in lateral direction.

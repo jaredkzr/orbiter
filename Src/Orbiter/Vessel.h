@@ -1312,6 +1312,10 @@ protected:
 	bool InPlayback () const { return bFRplayback; }
 	double CollisionRadius () const;
 	collision::Port PortState (const StateVectors &s, DWORD i) const;
+	DWORD AddCollisionHull (const VECTOR3 *pt, DWORD npt);
+	// hull defined by the vessel (replaces those from the meshes)
+	void SetCustomHulls (bool custom);
+	// custom: no hulls but those added (cleared); false: hulls from the meshes
 	// docking port i in the global frame, at state s
 	// Returns true if any part of the vessel is in contact with a planet surface
 	// Should be called only after update phase, and assumes that sp is up to date.
@@ -1633,6 +1637,8 @@ private:
 	mutable DWORD_PTR hull_crc = 0;
 	mutable bool hulls_valid = false;
 	mutable double hull_bound = 0.0; // bounding radius of the hulls about the vessel's origin
+	bool hulls_custom = false;                   // hulls defined by the vessel (AddCollisionHull)
+	std::vector<collision::Hull> custom_hulls;
 
 	double vd_forw, vd_back, vd_vert, vd_side;  // resistance constants against translation in atmosphere
 

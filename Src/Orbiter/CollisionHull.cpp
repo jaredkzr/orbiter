@@ -18,7 +18,6 @@ extern Orbiter *g_pOrbiter;
 namespace collision {
 
 	namespace {
-		const double SKIN = 0.05;     // [m] thickness added around each hull (thin parts, e.g. panels)
 		const double MIN_EXTENT = 0.1; // [m] groups smaller than this are left out
 
 		// directions over the sphere: an icosahedron subdivided n times

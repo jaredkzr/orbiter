@@ -2,6 +2,8 @@ BEGIN_HYPERDESC
 <h1>Collisions between vessels</h1>
 On the SLF runway a delta-glider taxis into a parked Shuttle-A; in orbit
 a ShuttlePB pushes into another one. Neither may pass through the other.
+Two more pairs test the collision hull API: PB4's hulls are removed (PB3
+passes through it), PB6 is given a large box (PB5 meets it sooner).
 END_HYPERDESC
 
 BEGIN_ENVIRONMENT
@@ -45,6 +47,30 @@ END
 PB2:ShuttlePB
   STATUS Orbiting Earth
   ELEMENTS 6771000.0 0.00000 51.6 30.0 0.0 100.00010 51982.6685767396
+  AROT 0 0 0
+  PRPLEVEL 0:1.000
+END
+PB3:ShuttlePB
+  STATUS Orbiting Earth
+  ELEMENTS 6771000.0 0.00000 51.6 30.0 0.0 101.00000 51982.6685767396
+  AROT 0 0 0
+  PRPLEVEL 0:1.000
+END
+PB4:ShuttlePB
+  STATUS Orbiting Earth
+  ELEMENTS 6771000.0 0.00000 51.6 30.0 0.0 101.00010 51982.6685767396
+  AROT 0 0 0
+  PRPLEVEL 0:1.000
+END
+PB5:ShuttlePB
+  STATUS Orbiting Earth
+  ELEMENTS 6771000.0 0.00000 51.6 30.0 0.0 101.50000 51982.6685767396
+  AROT 0 0 0
+  PRPLEVEL 0:1.000
+END
+PB6:ShuttlePB
+  STATUS Orbiting Earth
+  ELEMENTS 6771000.0 0.00000 51.6 30.0 0.0 101.50010 51982.6685767396
   AROT 0 0 0
   PRPLEVEL 0:1.000
 END

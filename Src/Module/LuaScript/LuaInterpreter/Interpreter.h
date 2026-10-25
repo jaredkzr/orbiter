@@ -706,6 +706,10 @@ protected:
 	static int v_get_touchdownpointcount (lua_State *L);
 	static int v_get_touchdownpoints (lua_State *L);
 	static int v_set_touchdownpoints (lua_State *L);
+	static int v_add_collisionhull (lua_State *L);
+	static int v_clear_collisionhulls (lua_State *L);
+	static int v_reset_collisionhulls (lua_State *L);
+	static int v_get_collisionhullcount (lua_State *L);
 	static int v_set_visibilitylimit (lua_State *L);
 	static int v_get_clipradius (lua_State *L);
 	static int v_set_albedoRGB (lua_State *L);

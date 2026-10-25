@@ -251,6 +251,10 @@ void Interpreter::LoadVesselAPI ()
 		{"get_touchdownpointcount", v_get_touchdownpointcount},
 		{"get_touchdownpoints", v_get_touchdownpoints},
 		{"set_touchdownpoints", v_set_touchdownpoints},
+		{"add_collisionhull", v_add_collisionhull},
+		{"clear_collisionhulls", v_clear_collisionhulls},
+		{"reset_collisionhulls", v_reset_collisionhulls},
+		{"get_collisionhullcount", v_get_collisionhullcount},
 		{"set_visibilitylimit", v_set_visibilitylimit},
 		{"get_clipradius",v_get_clipradius},
 		{"set_albedoRGB", v_set_albedoRGB},
@@ -1319,6 +1323,87 @@ int Interpreter::v_get_touchdownpointcount (lua_State *L)
 	AssertMtdMinPrmCount(L, 1, funcname);
 	VESSEL *v = lua_tovessel_safe(L, 1, funcname);
 	lua_pushinteger(L, v->GetTouchdownPointCount());
+	return 1;
+}
+
+/***
+Add a collision hull.
+
+Adds a convex hull (the convex shape around the given points) for
+collisions with other vessels. Once hulls are added, they replace those made
+from the vessel's meshes.
+
+@function add_collisionhull
+@tparam table pts list of points (<i><b>@{types.vector|vector}</b></i>) in the vessel frame [m]
+@treturn int index of the hull
+@see vessel:clear_collisionhulls, vessel:reset_collisionhulls
+*/
+int Interpreter::v_add_collisionhull (lua_State *L)
+{
+	static const char *funcname = "add_collisionhull";
+	AssertMtdMinPrmCount(L, 2, funcname);
+	VESSEL *v = lua_tovessel_safe(L, 1, funcname);
+	ASSERT_SYNTAX(lua_istable(L, 2), "Argument 1: expected a table of vectors");
+	std::vector<VECTOR3> pts;
+	int n = (int)lua_objlen(L, 2);
+	for (int i = 1; i <= n; i++) {
+		lua_rawgeti(L, 2, i);
+		if (lua_isvector(L, -1)) pts.push_back(lua_tovector(L, -1));
+		lua_pop(L, 1);
+	}
+	ASSERT_SYNTAX(!pts.empty(), "Argument 1: expected at least one vector");
+	lua_pushinteger(L, v->AddCollisionHull(pts.data(), (DWORD)pts.size()));
+	return 1;
+}
+
+/***
+Remove the collision hulls.
+
+The vessel does not collide with other vessels (until hulls are added with
+add_collisionhull).
+
+@function clear_collisionhulls
+@see vessel:add_collisionhull, vessel:reset_collisionhulls
+*/
+int Interpreter::v_clear_collisionhulls (lua_State *L)
+{
+	static const char *funcname = "clear_collisionhulls";
+	AssertMtdMinPrmCount(L, 1, funcname);
+	VESSEL *v = lua_tovessel_safe(L, 1, funcname);
+	v->ClearCollisionHulls();
+	return 0;
+}
+
+/***
+Return to the default collision hulls.
+
+The vessel's collision hulls are made from its external meshes again.
+
+@function reset_collisionhulls
+@see vessel:add_collisionhull, vessel:clear_collisionhulls
+*/
+int Interpreter::v_reset_collisionhulls (lua_State *L)
+{
+	static const char *funcname = "reset_collisionhulls";
+	AssertMtdMinPrmCount(L, 1, funcname);
+	VESSEL *v = lua_tovessel_safe(L, 1, funcname);
+	v->ResetCollisionHulls();
+	return 0;
+}
+
+/***
+Get the number of collision hulls.
+
+@function get_collisionhullcount
+@treturn int number of hulls (0: the vessel does not collide with other vessels)
+@see vessel:add_collisionhull
+*/
+int Interpreter::v_get_collisionhullcount (lua_State *L)
+{
+	static const char *funcname = "get_collisionhullcount";
+	AssertMtdMinPrmCount(L, 1, funcname);
+	VESSEL *v = lua_tovessel_safe(L, 1, funcname);
+	lua_pushinteger(L, v->GetCollisionHullCount());
 	return 1;
 }
 
