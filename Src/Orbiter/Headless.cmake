@@ -63,6 +63,7 @@ set(headless_src
 	ContactSolver.cpp
 	CollisionHull.cpp
 	ConvexGeometry.cpp
+	ConvexDecomposition.cpp
 	VesselCollision.cpp
 	Vessel.cpp
 	Vesselbase.cpp

@@ -165,3 +165,75 @@ TEST_CASE("Distance agrees with sampling", "[collision]")
 		for (const auto &f : B.f) REQUIRE(dotp (f.n, qb) - f.d < 1e-6);
 	}
 }
+
+// ---------------------------------------------------------------------
+// Convex decomposition
+
+#include "ConvexDecomposition.h"
+
+// the surface of a box, as triangles
+static void AddBox (std::vector<convex::Triangle> &t, const Vector &lo, const Vector &hi)
+{
+	Vector c[8];
+	for (int k = 0; k < 8; k++) c[k] = Vector ((k & 1) ? hi.x : lo.x, (k & 2) ? hi.y : lo.y, (k & 4) ? hi.z : lo.z);
+	int q[6][4] = { {0,1,3,2}, {4,6,7,5}, {0,4,5,1}, {2,3,7,6}, {0,2,6,4}, {1,5,7,3} };
+	for (auto &f : q) {
+		t.push_back ({c[f[0]], c[f[1]], c[f[2]]});
+		t.push_back ({c[f[0]], c[f[2]], c[f[3]]});
+	}
+}
+
+static bool InsideAny (const std::vector<convex::Polytope> &P, const Vector &p)
+{
+	for (const auto &h : P) {
+		bool in = true;
+		for (const auto &f : h.f) if (dotp (f.n, p) - f.d > 1e-9) { in = false; break; }
+		if (in) return true;
+	}
+	return false;
+}
+
+TEST_CASE("Decomposition of a convex box: one part", "[collision]")
+{
+	std::vector<convex::Triangle> t;
+	AddBox (t, {-1,-1,-1}, {1,1,1});
+	convex::DecomposeParams prm;
+	auto parts = convex::Decompose (t, prm);
+	REQUIRE(parts.size() == 1);
+	REQUIRE_THAT(parts[0].volume, WithinAbs(8.0, 1e-9));
+}
+
+TEST_CASE("Decomposition of an L: two parts", "[collision]")
+{
+	std::vector<convex::Triangle> t;
+	AddBox (t, {0,0,0}, {4,1,1});
+	AddBox (t, {0,1,0}, {1,4,1});
+	convex::DecomposeParams prm;
+	auto parts = convex::Decompose (t, prm);
+	REQUIRE(parts.size() >= 2);
+	REQUIRE(parts.size() <= 4);
+	REQUIRE(!InsideAny (parts, {3, 3, 0.5}));  // (the corner opposite the L is free)
+	REQUIRE(InsideAny (parts, {3, 0.5, 0.5}));
+	REQUIRE(InsideAny (parts, {0.5, 3, 0.5}));
+}
+
+TEST_CASE("Decomposition of a U (a bay): the bay stays open", "[collision]")
+{
+	// floor and two walls of a 6 m wide, 3 m deep bay, 10 m long
+	std::vector<convex::Triangle> t;
+	AddBox (t, {-3.5, -0.5, 0}, {3.5, 0, 10});
+	AddBox (t, {-3.5, 0, 0}, {-3, 3, 10});
+	AddBox (t, {3, 0, 0}, {3.5, 3, 10});
+	convex::DecomposeParams prm;
+	auto one = convex::Concavity (t, [&]{ convex::Polytope P; std::vector<Vector> v; for (auto &x : t) v.push_back (x.a), v.push_back (x.b), v.push_back (x.c); convex::Build (v, P); return P; }());
+	REQUIRE(one > 2.5); // (its hull closes the bay: 3 m)
+	auto parts = convex::Decompose (t, prm);
+	REQUIRE(parts.size() >= 3);
+	for (double z : {1.0, 5.0, 9.0}) {
+		REQUIRE(!InsideAny (parts, {0, 1.5, z}));  // (in the bay)
+		REQUIRE(!InsideAny (parts, {2.5, 0.2, z}));
+	}
+	REQUIRE(InsideAny (parts, {0, -0.25, 5}));     // (the floor)
+	REQUIRE(InsideAny (parts, {-3.25, 2, 5}));     // (a wall)
+	for (const auto &p : parts) REQUIRE(convex::Concavity (t, p) >= 0.0);
+}

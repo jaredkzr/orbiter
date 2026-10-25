@@ -56,6 +56,7 @@ add_test_file(Lua.Interpreter)
 # dependencies but the vector maths)
 add_executable(Collision.Geometry Collision.Geometry.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/ConvexGeometry.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/ConvexDecomposition.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Vecmat.cpp)
 target_include_directories(Collision.Geometry PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter)
 target_link_libraries(Collision.Geometry Catch2::Catch2WithMain)

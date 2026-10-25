@@ -124,6 +124,13 @@ void VesselCollider::Resolve (double h)
 
 		double ra = HullRadius (ha, A->s0->pos), rb = HullRadius (hb, B->s0->pos);
 		double margin = SpeedBound (A, B, ra, rb)*h + 0.05;
+		// (only the hulls that reach the other vessel's bounding sphere)
+		auto Near = [&](std::vector<collision::HullRef> &hl, const Vector &c, double r) {
+			hl.erase (std::remove_if (hl.begin(), hl.end(), [&](const collision::HullRef &x) {
+				return (x.pos + mul (x.R, x.hull->centre)).dist (c) > x.hull->radius + collision::SKIN + r + margin; }), hl.end());
+		};
+		Near (ha, B->s0->pos, rb);
+		Near (hb, A->s0->pos, ra);
 		bool dynA = index.count (A) > 0, dynB = index.count (B) > 0;
 		Vector cgA (A->s0->pos - O), cgB (B->s0->pos - O);
 
