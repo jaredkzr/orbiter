@@ -219,7 +219,8 @@ struct {
 	{OAPI_KEY_F3      | KMOD_CTRL,                 "SelectPrevVessel"},
 	{OAPI_KEY_SYSRQ   | KMOD_CTRL,                 "DlgCapture"},
 	{OAPI_KEY_F6,                                  "DlgOptions"},
-	{OAPI_KEY_M,                                   "MapView"}
+	{OAPI_KEY_M,                                   "MapView"},
+	{OAPI_KEY_F5,                                  "Replay"}
 };
 
 Keymap::Keymap ()

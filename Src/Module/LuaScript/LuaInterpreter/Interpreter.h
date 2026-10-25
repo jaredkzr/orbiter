@@ -403,6 +403,12 @@ protected:
 	static int oapi_get_trajectoryevents (lua_State *L);
 	static int oapi_set_trajectorytarget (lua_State *L);
 	static int oapi_set_mapview (lua_State *L);
+	static int oapi_set_replay (lua_State *L);
+	static int oapi_get_replay (lua_State *L);
+	static int oapi_replay_seek (lua_State *L);
+	static int oapi_replay_export (lua_State *L);
+	static int oapi_replay_camerakey (lua_State *L);
+	static int oapi_replay_cinematic (lua_State *L);
 	static int oapiOpenHelp (lua_State *L);
 	static int oapiOpenInputBox (lua_State *L);
 	static int oapiReceiveInput (lua_State *L);

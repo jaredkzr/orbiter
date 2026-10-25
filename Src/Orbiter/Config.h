@@ -202,6 +202,7 @@ struct CFG_RECPLAYPRM {
 	bool   bReplayCam;			// use recorded camera events during playback?
 	bool   bSysInterval;		// sample in system time intervals?
 	bool   bShowNotes;			// show inflight notes during playback?
+	int    ReplayFrames;        // frames kept for the instant replay (0: no recording)
 };
 
 struct CFG_DEVPRM {

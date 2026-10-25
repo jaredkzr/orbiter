@@ -854,6 +854,16 @@ void PlanetarySystem::Timejump (const TimeJumpData& jump)
 		vessels[i]->Timejump(jump.dt, jump.mode);
 }
 
+void PlanetarySystem::UpdateCelestials ()
+{
+	size_t i;
+	for (i = 0; i < celestials.size(); i++) celestials[i]->BeginStateUpdate ();
+	for (i = 0; i < stars.size(); i++) stars[i]->RelTrueAndBaryState();
+	for (i = 0; i < stars.size(); i++) stars[i]->AbsTrueState();
+	for (i = 0; i < celestials.size(); i++) celestials[i]->Update (true);
+	for (i = 0; i < celestials.size(); i++) celestials[i]->EndStateUpdate ();
+}
+
 void PlanetarySystem::InitDeviceObjects ()
 {
 	for (DWORD i = 0; i < bodies.size(); i++)

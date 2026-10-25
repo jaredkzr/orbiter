@@ -128,6 +128,9 @@ public:
 	void FinaliseUpdate ();
 
 	void Timejump (const TimeJumpData& jump);
+	void UpdateCelestials ();
+	// Update the celestial bodies' states to the current time td (no vessels;
+	// replay of recorded states)
 	// Discontinuous step
 
 	void ScanGFieldSources (const Vector *gpos, const Body *exclude, GFieldData *gfd) const;

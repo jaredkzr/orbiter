@@ -25,6 +25,7 @@
 #include "MenuInfoBar.h"
 #include "Trajectory.h"
 #include "MapView.h"
+#include "Replay.h"
 #include <algorithm>
 #include <zlib.h>
 #include "DrawAPI.h"
@@ -413,6 +414,50 @@ DLLEXPORT bool oapiGetMapView ()
 {
 	MapView *mv = g_pOrbiter->GetMapView();
 	return mv && mv->IsOn();
+}
+
+DLLEXPORT bool oapiSetReplay (bool on)
+{
+	Replay *r = g_pOrbiter->GetReplay();
+	if (!r) return false;
+	if (on) return r->Active() || r->Enter();
+	r->Exit();
+	return true;
+}
+
+DLLEXPORT bool oapiGetReplay (double *mjd0, double *mjd1, double *mjd)
+{
+	Replay *r = g_pOrbiter->GetReplay();
+	if (!r || !r->Active()) return false;
+	if (mjd0) *mjd0 = td.MJD_ref + Day (r->Start());
+	if (mjd1) *mjd1 = td.MJD_ref + Day (r->End());
+	if (mjd) *mjd = td.MJD_ref + Day (r->Time());
+	return true;
+}
+
+DLLEXPORT void oapiReplayExport (double mjd0, double mjd1, int fps)
+{
+	Replay *r = g_pOrbiter->GetReplay();
+	if (r) r->Export ((mjd0 - td.MJD_ref) * 86400.0, (mjd1 - td.MJD_ref) * 86400.0, fps);
+}
+
+DLLEXPORT void oapiReplayCameraKey ()
+{
+	if (Replay *r = g_pOrbiter->GetReplay()) r->AddCameraKey ();
+}
+
+DLLEXPORT void oapiReplayCinematic (bool on)
+{
+	if (Replay *r = g_pOrbiter->GetReplay()) r->SetCinematic (on);
+}
+
+DLLEXPORT void oapiReplaySeek (double mjd)
+{
+	Replay *r = g_pOrbiter->GetReplay();
+	if (!r || !r->Active()) return;
+	r->SetPlaying (false);
+	r->Seek ((mjd - td.MJD_ref) * 86400.0);
+	r->ShowNow ();
 }
 
 DLLEXPORT void oapiSetAutoCapture(DOCKHANDLE hDock, bool enable)

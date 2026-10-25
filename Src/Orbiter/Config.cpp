@@ -178,7 +178,8 @@ CFG_RECPLAYPRM CfgRecPlayPrm_default = {
 	true,		// bReplayFocus (replay focus events?)
 	true,		// bReplayCam (replay camera events?)
 	true,		// bSysInterval (use system time for sampling intervals?)
-	true		// bShowNotes (show playback onscreen annotations?)
+	true,		// bShowNotes (show playback onscreen annotations?)
+	36000		// ReplayFrames (frames kept for the instant replay: 10 minutes at 60 fps)
 };
 
 CFG_DEVPRM CfgDevPrm_default = {
@@ -765,6 +766,7 @@ bool Config::Load(const char *fname)
 	GetBool (ifs, "ReplayCameraEvent", CfgRecPlayPrm.bReplayCam);
 	GetBool (ifs, "SystimeSampling", CfgRecPlayPrm.bSysInterval);
 	GetBool (ifs, "PlaybackNotes", CfgRecPlayPrm.bShowNotes);
+	GetInt (ifs, "ReplayFrames", CfgRecPlayPrm.ReplayFrames);
 
 	// font characteristics
 	if (GetReal (ifs, "DialogFont_Scale", d)) CfgFontPrm.dlgFont_Scale = (float)d;
@@ -1350,6 +1352,8 @@ BOOL Config::Write (const char *fname) const
 			ofs << "SystimeSampling = " << BoolStr (CfgRecPlayPrm.bSysInterval) << '\n';
 		if (CfgRecPlayPrm.bShowNotes != CfgRecPlayPrm_default.bShowNotes || bEchoAll)
 			ofs << "PlaybackNotes = " << BoolStr (CfgRecPlayPrm.bShowNotes) << '\n';
+		if (CfgRecPlayPrm.ReplayFrames != CfgRecPlayPrm_default.ReplayFrames || bEchoAll)
+			ofs << "ReplayFrames = " << CfgRecPlayPrm.ReplayFrames << '\n';
 	}
 
 	if (memcmp (&CfgFontPrm, &CfgFontPrm_default, sizeof(CFG_FONTPRM)) || bEchoAll) {

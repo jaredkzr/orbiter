@@ -31,33 +31,47 @@ namespace {
 
 } // namespace
 
-bool image::WritePNG (const std::string &path, uint32_t w, uint32_t h, const uint8_t *rgb)
+bool image::WritePNG (const std::string &path, uint32_t w, uint32_t h, const uint8_t *rgb, bool fast)
 {
-	// raw scanlines, each prefixed with filter type 0 (none)
+	// raw scanlines, each prefixed with its filter type: 0 (none), or for
+	// fast writing 2 (up: difference to the line above, which compresses
+	// well at a low compression level)
 	std::vector<uint8_t> raw;
-	raw.reserve ((size_t)h * (w * 3 + 1));
+	size_t stride = (size_t)w * 3;
+	raw.reserve ((size_t)h * (stride + 1));
 	for (uint32_t y = 0; y < h; y++) {
-		raw.push_back (0);
-		raw.insert (raw.end(), rgb + (size_t)y * w * 3, rgb + (size_t)(y + 1) * w * 3);
+		const uint8_t *line = rgb + y * stride;
+		if (fast && y > 0) {
+			raw.push_back (2);
+			const uint8_t *prev = line - stride;
+			for (size_t i = 0; i < stride; i++) raw.push_back ((uint8_t)(line[i] - prev[i]));
+		} else {
+			raw.push_back (0);
+			raw.insert (raw.end(), line, line + stride);
+		}
 	}
 	uLongf zlen = compressBound ((uLong)raw.size());
 	std::vector<uint8_t> z (zlen);
-	if (compress2 (z.data(), &zlen, raw.data(), (uLong)raw.size(), 6) != Z_OK) return false;
+	if (compress2 (z.data(), &zlen, raw.data(), (uLong)raw.size(), fast ? 1 : 6) != Z_OK) return false;
 	z.resize (zlen);
 
 	std::vector<uint8_t> png = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n' };
 	std::vector<uint8_t> ihdr;
 	Put32 (ihdr, w);
 	Put32 (ihdr, h);
-	ihdr.insert (ihdr.end(), { 8, 2, 0, 0, 0 }); // 8 bit, RGB, deflate, no filter, no interlace
+	ihdr.insert (ihdr.end(), { 8, 2, 0, 0, 0 }); // 8 bit, RGB, deflate, adaptive filtering (per line), no interlace
 	Chunk (png, "IHDR", ihdr);
 	Chunk (png, "IDAT", z);
 	Chunk (png, "IEND", {});
 
-	FILE *f = fopen (path.c_str(), "wb");
+	// (written to a temporary file and renamed, so that the file appears complete)
+	std::string tmp = path + ".part";
+	FILE *f = fopen (tmp.c_str(), "wb");
 	if (!f) return false;
 	bool ok = fwrite (png.data(), 1, png.size(), f) == png.size();
 	fclose (f);
+	if (ok) ok = rename (tmp.c_str(), path.c_str()) == 0;
+	else remove (tmp.c_str());
 	return ok;
 }
 

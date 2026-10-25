@@ -194,6 +194,7 @@ public:
 	const Body *PredictTarget () const { return predictTarget; }
 	void SetPredictTarget (const Body *target) { predictTarget = target; }
 	class MapView *GetMapView () const { return mapView; }
+	class Replay *GetReplay () const { return replay; }
 
 	// Onscreen annotation
 	inline oapi::ScreenAnnotation *SNotePB() const { return snote_playback; }
@@ -396,6 +397,7 @@ private:
 	std::unique_ptr<trajectory::Predictor> predictor; // (exists during a session)
 	const Body     *predictTarget = nullptr;
 	class MapView  *mapView = nullptr;      // map view and burn cue overlay (with a graphics client)
+	class Replay   *replay = nullptr;       // instant replay (with a graphics client)
 	Config         *pConfig;
 	State          *pState;
 	orbiter::LaunchpadDialog *m_pLaunchpad;

@@ -51,6 +51,7 @@
 #include "ConsoleManager.h"
 #include "Trajectory.h"
 #include "MapView.h"
+#include "Replay.h"
 #include "imgui.h"
 #ifdef _WIN32
 #include "imgui_impl_win32.h"
@@ -792,6 +793,10 @@ HWND Orbiter::CreateRenderWindow (Config *pCfg, const char *scenario)
 	else {
 		pDlgMgr = new DialogManager(this, m_pConsole->WindowHandle());
 	}
+	if (pConfig->CfgRecPlayPrm.ReplayFrames > 1) {
+		replay = new Replay ((size_t)pConfig->CfgRecPlayPrm.ReplayFrames); TRACENEW
+		pDlgMgr->AddEntry(replay);
+	}
 
 	// read simulation environment state
 	strcpy (ScenarioName, scenario);
@@ -935,6 +940,7 @@ void Orbiter::CloseSession ()
 {
 	DWORD i;
 
+	if (replay) replay->Exit (); // (the live state is saved)
 	bSession = false;
 	predictor.reset(); // (stops its thread before the world goes)
 	predictTarget = nullptr;
@@ -975,6 +981,7 @@ void Orbiter::CloseSession ()
 		}
 
 		if (mapView)  { pDlgMgr->DelEntry (mapView); delete mapView; mapView = 0; }
+		if (replay)   { pDlgMgr->DelEntry (replay); delete replay; replay = 0; }
 		if (g_input)  { delete g_input; g_input = 0; }
 		if (g_select) { delete g_select; g_select = 0; }
 		if (g_pane) { delete g_pane;   g_pane = 0; }
@@ -997,6 +1004,7 @@ void Orbiter::CloseSession ()
 #endif
 	} else {
 		if (mapView)  { if (pDlgMgr) pDlgMgr->DelEntry (mapView); delete mapView; mapView = 0; }
+		if (replay)   { if (pDlgMgr) pDlgMgr->DelEntry (replay); delete replay; replay = 0; }
 		if (pDlgMgr)  { delete pDlgMgr; pDlgMgr = 0; }
 		if (gclient) {
 			gclient->clbkCloseSession (true);
@@ -1130,7 +1138,7 @@ INT Orbiter::Run ()
 			}
         }
 		if (bRenderOnce && bVisible) {
-			if (FAILED (Render3DEnvironment ()))
+			if (FAILED (Render3DEnvironment (replay && replay->Exporting())))
 				if (hRenderWnd) DestroyWindow (hRenderWnd);
 			bRenderOnce = FALSE;
 		}
@@ -1258,7 +1266,9 @@ void Orbiter::OnOptionChanged(DWORD cat, DWORD item)
 //-----------------------------------------------------------------------------
 void Orbiter::Pause (bool bPause)
 {
-	if (bRunning != bPause) return;  // nothing to do
+	if (!bPause && replay && replay->Active()) return; // (held during the replay)
+	// (against the pending request: a pause and resume in the same frame cancel)
+	if (bRequestRunning != bPause) return;  // nothing to do
 	bRequestRunning = !bPause;
 }
 
@@ -1391,6 +1401,8 @@ bool Orbiter::KillVessels ()
 			// broadcast vessel destruction to all open dialogs
 			//if (gclient) gclient->clbkDialogBroadcast (MSG_KILLVESSEL, vessel);
 			if (pDlgMgr) pDlgMgr->BroadcastMessage (MSG_KILLVESSEL, vessel);
+			if (replay) replay->Forget (vessel);
+			if (predictTarget == vessel) predictTarget = nullptr;
 			// echo deletion on console window
 			if (m_pConsole) {
 				char cbuf[256];
@@ -2054,7 +2066,9 @@ VOID Orbiter::UpdateWorld ()
 	if (bRunning && td.SimDT) {
 		if (bPlayback) FRecorder_Play();
 		g_psys->Update (g_bForceUpdate);           // logical objects
+		if (replay) replay->Record ();
 	}
+	if (replay && replay->Active()) replay->Update ();
 	if (pDlgMgr) pDlgMgr->UpdateDialogs(); // SHOULD BE DONE BY GRAPHICS CLIENT!
 
 	// module post-timestep callbacks
@@ -2069,7 +2083,8 @@ VOID Orbiter::UpdateWorld ()
 	}
 
 	// trajectory prediction of the focus vessel
-	if (predictor && g_focusobj && bSession) predictor->Update (g_focusobj, predictTarget);
+	if (predictor && g_focusobj && bSession && !(replay && replay->Active()))
+		predictor->Update (g_focusobj, predictTarget);
 
 	//g_texmanager->OutputInfo();
 }
@@ -2396,6 +2411,7 @@ void Orbiter::KbdInputBuffered_System (char *kstate, DIDEVICEOBJECTDATA *dod, DW
 		else if (keymap.IsLogicalKey(key, kstate, OAPI_LKEY_DlgInfo))              pDlgMgr->EnsureEntry<DlgInfo>();
 		else if (keymap.IsLogicalKey(key, kstate, OAPI_LKEY_DlgMap))               pDlgMgr->EnsureEntry<DlgMap>();
 		else if (keymap.IsLogicalKey(key, kstate, OAPI_LKEY_MapView))              { if (mapView) mapView->Toggle(); }
+		else if (keymap.IsLogicalKey(key, kstate, OAPI_LKEY_Replay))               { if (replay) replay->Toggle(); }
 		else if (keymap.IsLogicalKey(key, kstate, OAPI_LKEY_DlgRecorder))          pDlgMgr->EnsureEntry<DlgRecorder>();
 		else if (keymap.IsLogicalKey(key, kstate, OAPI_LKEY_ToggleCamInternal))    SetView(g_focusobj, !g_camera->IsExternal());
 		else if (keymap.IsLogicalKey(key, kstate, OAPI_LKEY_DlgVisHelper))         pDlgMgr->EnsureEntry<DlgOptions>()->SwitchPage("Visual helpers");

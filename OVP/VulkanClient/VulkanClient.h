@@ -17,6 +17,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <future>
 
 struct SDL_Window;
 class Scene;
@@ -144,7 +145,8 @@ private:
 	bool windowShown = false;
 	void ShowWindow ();
 	void ApplyVideoMode ();
-	void CaptureBackbuffer (const std::string &path);
+	void CaptureBackbuffer (const std::string &path, bool async = false);
+	std::vector<std::future<void>> writers; // image files being written
 	void Teardown ();
 	std::string autoScreenshot;   // ORBITER_VK_SCREENSHOT: file written at frame autoScreenshotFrame
 	unsigned autoScreenshotFrame = 60;

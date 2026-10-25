@@ -216,6 +216,7 @@ class Vessel: public VesselBase {
 	friend class DefaultPanel;
 	friend class VVessel;
 	friend class SuperVessel;
+	friend class Replay;
 	friend class ExhaustStream;
 	friend class ReentryStream;
 	friend class Instrument_Landing;

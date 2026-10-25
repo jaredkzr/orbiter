@@ -125,6 +125,8 @@ namespace vkc {
 
 		// Resource helpers
 		Buffer CreateBuffer (VkDeviceSize size, VkBufferUsageFlags usage, bool hostVisible);
+		/// host-visible, cached buffer for reading back GPU results (transfer destination)
+		Buffer CreateReadbackBuffer (VkDeviceSize size);
 		void DestroyBuffer (Buffer &buf);
 		Buffer CreateDeviceBuffer (const void *data, VkDeviceSize size, VkBufferUsageFlags usage);
 		void DestroyImage (Image &img);

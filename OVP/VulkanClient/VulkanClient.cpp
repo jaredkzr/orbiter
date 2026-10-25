@@ -21,6 +21,8 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 #include <cstdlib>
+#include <future>
+#include <thread>
 #include <algorithm>
 
 static VulkanClient *g_client = nullptr;
@@ -62,6 +64,8 @@ VulkanClient::~VulkanClient ()
 
 void VulkanClient::Teardown ()
 {
+	for (auto &w : writers) w.wait ();
+	writers.clear ();
 	// Must run before process exit: once the driver library has been
 	// finalised, Vulkan objects can no longer be destroyed.
 	if (ready) DeleteStreams (true); // (their particles live in the scene's pool)
@@ -272,7 +276,7 @@ bool VulkanClient::clbkDisplayFrame ()
 		if (!autoScreenshot.empty() && !videoDir.empty() && frameCount + 1 + videoFrames >= autoScreenshotFrame && frameCount + 1 < autoScreenshotFrame) {
 			char name[64];
 			snprintf (name, sizeof(name), "/frame_%05u.png", videoIndex++);
-			CaptureBackbuffer (videoDir + name);
+			CaptureBackbuffer (videoDir + name, true);
 			if (FILE *f = fopen ((videoDir + "/times.txt").c_str(), videoIndex == 1 ? "w" : "a")) {
 				fprintf (f, "%.6f\n", oapiGetSimTime ());
 				fclose (f);
@@ -299,18 +303,30 @@ bool VulkanClient::clbkDisplayFrame ()
 // ======================================================================
 // Screenshots
 
-void VulkanClient::CaptureBackbuffer (const std::string &path)
+void VulkanClient::CaptureBackbuffer (const std::string &path, bool async)
 {
-	ctx.RequestCapture ([path](const uint8_t *px, uint32_t w, uint32_t h, VkFormat fmt) {
+	ctx.RequestCapture ([this, path, async](const uint8_t *px, uint32_t w, uint32_t h, VkFormat fmt) {
 		bool bgr = (fmt == VK_FORMAT_B8G8R8A8_SRGB || fmt == VK_FORMAT_B8G8R8A8_UNORM);
-		std::vector<uint8_t> rgb ((size_t)w * h * 3);
+		auto rgb = std::make_shared<std::vector<uint8_t>> ((size_t)w * h * 3);
+		uint8_t *d = rgb->data();
 		for (size_t i = 0; i < (size_t)w * h; i++) {
-			rgb[i*3+0] = px[i*4 + (bgr ? 2 : 0)];
-			rgb[i*3+1] = px[i*4 + 1];
-			rgb[i*3+2] = px[i*4 + (bgr ? 0 : 2)];
+			d[i*3+0] = px[i*4 + (bgr ? 2 : 0)];
+			d[i*3+1] = px[i*4 + 1];
+			d[i*3+2] = px[i*4 + (bgr ? 0 : 2)];
 		}
-		if (!image::WritePNG (path, w, h, rgb.data()))
-			oapiWriteLogError ("VulkanClient: could not write %s", path.c_str());
+		auto write = [path, w, h, rgb, async]() {
+			if (!image::WritePNG (path, w, h, rgb->data(), async))
+				oapiWriteLogError ("VulkanClient: could not write %s", path.c_str());
+		};
+		if (!async) { write (); return; }
+		// image sequences: encoded on worker threads (a few at a time)
+		writers.erase (std::remove_if (writers.begin(), writers.end(), [](std::future<void> &f) {
+			return f.wait_for (std::chrono::seconds (0)) == std::future_status::ready; }), writers.end());
+		while (writers.size() >= std::max (2u, std::thread::hardware_concurrency() / 2)) {
+			writers.front().wait ();
+			writers.erase (writers.begin());
+		}
+		writers.push_back (std::async (std::launch::async, write));
 	});
 }
 
@@ -321,7 +337,7 @@ bool VulkanClient::clbkSaveSurfaceToImage (SURFHANDLE surf, const char *fname,
 	if (surf || !fname || !ready) return false;
 	std::string path (fname);
 	std::replace (path.begin(), path.end(), '\\', '/'); // (core paths use Windows separators)
-	CaptureBackbuffer (path + ".png");
+	CaptureBackbuffer (path + ".png", true);
 	return true;
 }
 

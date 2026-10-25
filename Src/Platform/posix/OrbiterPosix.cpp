@@ -26,6 +26,7 @@
 #include "LaunchpadPosix.h"
 #include "DlgMgr.h"
 #include "Keymap.h"
+#include "Replay.h"
 #include "imgui.h"
 #include <cmath>
 #include <cstdio>
@@ -138,7 +139,7 @@ void Orbiter::RunSession (const std::string &scenario)
 			if (!bSession) break;   // (closed on reaching a session limit)
 			if (bVisible) {
 				if (bActive) UserInput ();
-				Render3DEnvironment ();
+				Render3DEnvironment (replay && replay->Exporting()); // (no user interface in exported frames)
 			}
 			if (bRunning && bCapture) {
 				CaptureVideoFrame ();

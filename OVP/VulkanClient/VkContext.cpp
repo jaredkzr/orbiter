@@ -1028,7 +1028,7 @@ void Context::EndFrame ()
 	Buffer capture;
 	if (captureCb) {
 		// copy the rendered image into a host buffer before presenting it
-		capture = CreateBuffer ((VkDeviceSize)extent.width * extent.height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
+		capture = CreateReadbackBuffer ((VkDeviceSize)extent.width * extent.height * 4);
 		ImageBarrier (f.cmd, swapImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
 			VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 			VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
@@ -1145,6 +1145,24 @@ Buffer Context::CreateBuffer (VkDeviceSize size, VkBufferUsageFlags usage, bool 
 	aci.usage = VMA_MEMORY_USAGE_AUTO;
 	if (hostVisible)
 		aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+	VmaAllocationInfo info{};
+	VK_CHECK(vmaCreateBuffer (allocator, &bci, &aci, &buf.buffer, &buf.alloc, &info));
+	buf.mapped = info.pMappedData;
+	return buf;
+}
+
+Buffer Context::CreateReadbackBuffer (VkDeviceSize size)
+{
+	// host-cached memory: read by the CPU (write-combined memory, as for
+	// uploads, is very slow to read)
+	Buffer buf;
+	buf.size = size;
+	VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+	bci.size = size;
+	bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+	VmaAllocationCreateInfo aci{};
+	aci.usage = VMA_MEMORY_USAGE_AUTO;
+	aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 	VmaAllocationInfo info{};
 	VK_CHECK(vmaCreateBuffer (allocator, &bci, &aci, &buf.buffer, &buf.alloc, &info));
 	buf.mapped = info.pMappedData;

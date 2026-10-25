@@ -3154,6 +3154,46 @@ OAPIFUNC bool oapiSetMapView (bool on);
 OAPIFUNC bool oapiGetMapView ();
 
 /**
+ * \brief Starts or ends the instant replay: the simulation is held and the
+ *   scene shows recorded states of the last minutes; ending it returns to
+ *   the live state.
+ * \return false if the replay could not be started (nothing recorded yet)
+ */
+OAPIFUNC bool oapiSetReplay (bool on);
+
+/**
+ * \brief Returns true while the instant replay is active, and the
+ *   recorded time span and current replay time [MJD].
+ */
+OAPIFUNC bool oapiGetReplay (double *mjd0 = NULL, double *mjd1 = NULL, double *mjd = NULL);
+
+/**
+ * \brief Shows the recorded state at time mjd (within the recorded span) and
+ *   pauses the replay there.
+ */
+OAPIFUNC void oapiReplaySeek (double mjd);
+
+/**
+ * \brief Exports the replay between mjd0 and mjd1 as an image sequence at
+ *   fps frames per second (and an MP4 video, if ffmpeg is available), in a
+ *   new folder in Images/. One frame is rendered per exported frame,
+ *   without the user interface. The replay must be active.
+ */
+OAPIFUNC void oapiReplayExport (double mjd0, double mjd1, int fps);
+
+/**
+ * \brief Adds a keyframe of the cinematic camera at the current replay time:
+ *   the camera's target, mode, distance, direction and field of view.
+ */
+OAPIFUNC void oapiReplayCameraKey ();
+
+/**
+ * \brief Switches the cinematic camera (the camera follows the keyframes
+ *   during the replay) on or off.
+ */
+OAPIFUNC void oapiReplayCinematic (bool on);
+
+/**
 * \brief Set a docking port to auto capture when in close proximity with some other docking port.
 * \param hDock docking port handle
 * \param enable Enable or disable auto capture
@@ -7234,7 +7274,8 @@ OAPIFUNC void oapiTriggerRedrawArea (int panel_id, int vc_id, int area_id);
 #define OAPI_LKEY_DlgCapture       103 ///< open screen capture dialog
 #define OAPI_LKEY_DlgOptions       104 ///< open options dialog
 #define OAPI_LKEY_MapView          105 ///< toggle the map view (trajectories and manoeuvre nodes)
-#define LKEY_COUNT 106                 ///< number of logical key definitions
+#define OAPI_LKEY_Replay           106 ///< toggle the instant replay
+#define LKEY_COUNT 107                 ///< number of logical key definitions
 //@}
 
 // ======================================================================

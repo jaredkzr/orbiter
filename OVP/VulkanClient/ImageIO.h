@@ -19,7 +19,8 @@ namespace image {
 	bool ReadPNG (const std::string &path, uint32_t &w, uint32_t &h, std::vector<uint8_t> &rgba);
 
 	/// Write 8-bit RGB pixels (rows top to bottom) as a PNG file
-	bool WritePNG (const std::string &path, uint32_t w, uint32_t h, const uint8_t *rgb);
+	/// fast: quick compression (larger files), e.g. for video frames
+	bool WritePNG (const std::string &path, uint32_t w, uint32_t h, const uint8_t *rgb, bool fast = false);
 
 } // namespace image
 

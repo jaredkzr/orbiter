@@ -867,6 +867,12 @@ void Interpreter::LoadAPI ()
 		{"get_trajectoryevents", oapi_get_trajectoryevents},
 		{"set_trajectorytarget", oapi_set_trajectorytarget},
 		{"set_mapview", oapi_set_mapview},
+		{"set_replay", oapi_set_replay},
+		{"get_replay", oapi_get_replay},
+		{"replay_seek", oapi_replay_seek},
+		{"replay_export", oapi_replay_export},
+		{"replay_camerakey", oapi_replay_camerakey},
+		{"replay_cinematic", oapi_replay_cinematic},
 		{"open_inputbox", oapiOpenInputBox},
 		{"receive_input", oapiReceiveInput},
 		{"open_inputboxex", oapi_open_inputboxex},
@@ -3981,6 +3987,90 @@ int Interpreter::oapi_set_mapview (lua_State *L)
 {
 	lua_pushboolean (L, oapiSetMapView (lua_toboolean (L, 1) != 0));
 	return 1;
+}
+
+/***
+Start or end the instant replay.
+
+@function set_replay
+@tparam bool on
+@treturn bool false if the replay could not be started (nothing recorded yet)
+*/
+int Interpreter::oapi_set_replay (lua_State *L)
+{
+	lua_pushboolean (L, oapiSetReplay (lua_toboolean (L, 1) != 0));
+	return 1;
+}
+
+/***
+State of the instant replay.
+
+@function get_replay
+@treturn table {mjd0, mjd1 = recorded span, mjd = replay time} while the replay is active, else nil
+*/
+int Interpreter::oapi_get_replay (lua_State *L)
+{
+	double mjd0, mjd1, mjd;
+	if (!oapiGetReplay (&mjd0, &mjd1, &mjd)) {
+		lua_pushnil (L);
+		return 1;
+	}
+	lua_createtable (L, 0, 3);
+	lua_pushnumber (L, mjd0); lua_setfield (L, -2, "mjd0");
+	lua_pushnumber (L, mjd1); lua_setfield (L, -2, "mjd1");
+	lua_pushnumber (L, mjd);  lua_setfield (L, -2, "mjd");
+	return 1;
+}
+
+/***
+Show a recorded time in the instant replay (and pause the replay there).
+
+@function replay_seek
+@tparam number mjd time [MJD] within the recorded span
+*/
+int Interpreter::oapi_replay_seek (lua_State *L)
+{
+	oapiReplaySeek (lua_tonumber (L, 1));
+	return 0;
+}
+
+/***
+Export the instant replay between two times as images (and a video, if
+ffmpeg is available) in a new folder in Images/.
+
+@function replay_export
+@tparam number mjd0 start [MJD]
+@tparam number mjd1 end [MJD]
+@tparam[opt=60] int fps frames per second
+*/
+/***
+Add a keyframe of the cinematic camera at the current replay time (the
+camera's target, mode, distance, direction and field of view).
+
+@function replay_camerakey
+*/
+int Interpreter::oapi_replay_camerakey (lua_State *L)
+{
+	oapiReplayCameraKey ();
+	return 0;
+}
+
+/***
+Switch the cinematic camera (following the keyframes during the replay) on or off.
+
+@function replay_cinematic
+@tparam bool on
+*/
+int Interpreter::oapi_replay_cinematic (lua_State *L)
+{
+	oapiReplayCinematic (lua_toboolean (L, 1) != 0);
+	return 0;
+}
+
+int Interpreter::oapi_replay_export (lua_State *L)
+{
+	oapiReplayExport (lua_tonumber (L, 1), lua_tonumber (L, 2), lua_isnumber (L, 3) ? (int)lua_tointeger (L, 3) : 60);
+	return 0;
 }
 
 static bool bInputClosed;
