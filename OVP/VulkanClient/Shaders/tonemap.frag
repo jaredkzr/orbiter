@@ -33,7 +33,7 @@ vec3 Curve (vec3 c)
 }
 
 // Lens flare of the sun: ghost images reflected through the image centre
-// at several scales, and a halo ring, while the sun's disc is visible
+// at several scales, while the sun's disc is visible
 // (bright in the scene image where it should be; engine flames and sunlit
 // clouds make none)
 vec2 SunUV () { return vec2 (pc.sunU, pc.sunV); }
@@ -66,9 +66,6 @@ vec3 Flare (vec2 uv, float vis)
 		float w = pow (max (1.0 - length ((g - 0.5) * a) / 0.9, 0.0), 2.0); // (fading towards the edges)
 		f += G[i].yzw * (smoothstep (r, 0.6 * r, d) * w * 2.0);
 	}
-	// halo: a faint ring around the sun
-	float dh = length ((uv - SunUV ()) * a);
-	f += vec3 (0.8, 0.9, 1.0) * (pow (max (1.0 - abs (dh - 0.3) / 0.05, 0.0), 2.0) * 0.6);
 	return f * vis;
 }
 
