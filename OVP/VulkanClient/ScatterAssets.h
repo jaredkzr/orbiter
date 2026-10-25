@@ -56,7 +56,7 @@ namespace scatter {
 		Library (vkc::Context *ctx, TextureManager *texmgr);
 		~Library ();
 		/// The assets of a body: rocks made with Blender (Utils/ScatterAssets,
-		/// listed in Config/VK/Scatter/<body>.cfg) if there are, else
+		/// listed in Config/Scatter/<body>_rocks.cfg) if there are, else
 		/// generated in the given style; vegetation if asked
 		void Generate (const char *body, RockStyle style, bool vegetation);
 		const std::vector<Asset> &Assets () const { return assets; }

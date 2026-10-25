@@ -85,6 +85,7 @@ set(common_src
 	MapView.cpp
 	UiAnchor.cpp
 	TerrainDetail.cpp
+	GroundScatter.cpp
 	Replay.cpp
 	VesselManeuver.cpp
 	Vessel.cpp

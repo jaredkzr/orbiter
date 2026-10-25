@@ -126,6 +126,7 @@ struct CFG_VISUALPRM {
 	double CSphereBgIntens;		// intensity of background image
 	int    ElevMode;            // elevation mode: 0=none, 1=linear, 2=cubic spline
 	bool   bTerrainDetail;      // procedural terrain detail finer than the elevation data
+	bool   bGroundScatter;      // rocks and vegetation on the ground (boulders and trees are obstacles)
 };
 
 struct CFG_CAPTUREPRM {

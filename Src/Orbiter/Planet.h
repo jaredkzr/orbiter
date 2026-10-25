@@ -23,6 +23,8 @@
 #include "Orbiter.h"
 #include "TerrainDetail.h"
 #include <functional>
+#include <memory>
+namespace scatter { class GroundScatter; }
 #include <filesystem>
 namespace fs = std::filesystem;
 
@@ -187,6 +189,9 @@ public:
 	TileManager *TileMgr() const { return tmgr; }
 	TileManager2<SurfTile> *SurfMgr2() const { return smgr2; }
 	ElevationManager *ElevMgr() const { return emgr; }
+	/// rocks and vegetation on the ground (GroundScatter.h; null if the planet has none)
+	scatter::GroundScatter *Scatter() const;
+	scatter::GroundScatter *ScatterIfMade() const { return scatter_.get(); }
 	TileManager2<CloudTile> *CloudMgr2() const { return cmgr2; }
 	void ForEach(int type, std::function<void(const fs::directory_entry&)> callback) {
 		extern Orbiter* g_pOrbiter;
@@ -307,6 +312,8 @@ private:
 	double elev_res;                  // target elevation resolution [m]
 	bool detail_on;                   // procedural terrain detail
 	TerrainDetail::Overrides detail_cfg; // its parameters from the configuration file
+	mutable std::unique_ptr<scatter::GroundScatter> scatter_;
+	mutable bool scatterInit = false;
 };
 
 #endif // !__PLANET_H

@@ -938,8 +938,8 @@ VkTexture *Library::Texture (uint32_t w, uint32_t h, const std::vector<uint8_t> 
 
 bool Library::LoadRocks (const char *body)
 {
-	// Config/VK/Scatter/<body>.cfg: ROCK <mesh stem> <radius> <height> <triangles>...
-	std::string path = std::string ("Config/VK/Scatter/") + body + ".cfg";
+	// Config/Scatter/<body>_rocks.cfg: ROCK <mesh stem> <radius> <height> <triangles>...
+	std::string path = std::string ("Config/Scatter/") + body + "_rocks.cfg";
 	FILE *f = fopen (path.c_str(), "r");
 	if (!f) return false;
 	char line[512];

@@ -1684,6 +1684,8 @@ private:
 	mutable DWORD_PTR hull_crc = 0;
 	mutable bool hulls_valid = false;
 	mutable double hull_bound = 0.0; // bounding radius of the hulls about the vessel's origin
+	mutable collision::Hull td_hull; // hull of the touchdown points (obstacles on the ground, if the vessel has no hulls)
+	mutable DWORD td_hull_n = (DWORD)-1;
 	bool hulls_custom = false;                   // hulls defined by the vessel (AddCollisionHull)
 	std::vector<collision::Hull> custom_hulls;
 

@@ -971,6 +971,7 @@ void Interpreter::LoadAPI ()
 		{"get_planetjcoeffcount", oapi_get_planetjcoeffcount},
 		{"get_planetjcoeff", oapi_get_planetjcoeff},
 		{"surface_elevation", oapi_surface_elevation},
+		{"scatter_objects", oapi_scatter_objects},
 		{"init_tilecache", oapi_init_tilecache},
 		{"release_tilecache", oapi_release_tilecache},
 
@@ -5139,6 +5140,67 @@ int Interpreter::oapi_surface_elevation (lua_State *L)
 		nret++;
 	}
 	return nret;
+}
+
+/***
+Objects of a planet's ground scatter (rocks, boulders, trees, shrubs, grass)
+within a distance of a point.
+@function scatter_objects
+@tparam handle hPlanet planet object handle
+@tparam number lng longitude [rad]
+@tparam number lat latitude [rad]
+@tparam number radius distance [m]
+@tparam[opt=false] bool collide only the obstacles (large boulders, trees)
+@treturn table list of {lng, lat, elev, dist, radius, height, name, kind, collide}
+*/
+int Interpreter::oapi_scatter_objects (lua_State *L)
+{
+	OBJHANDLE hPlanet;
+	ASSERT_SYNTAX (lua_islightuserdata (L,1), "Argument 1: invalid type (expected planet handle)");
+	ASSERT_SYNTAX (hPlanet = (OBJHANDLE)lua_toObject (L,1), "Argument 1: invalid object");
+	double lng = luaL_checknumber (L,2);
+	double lat = luaL_checknumber (L,3);
+	double radius = luaL_checknumber (L,4);
+	bool collideOnly = lua_gettop (L) >= 5 && lua_toboolean (L,5);
+	double R = oapiGetSize (hPlanet);
+	VECTOR3 p = _V(cos (lat) * cos (lng), sin (lat), cos (lat) * sin (lng)) * R;
+	lua_newtable (L);
+	int n = 0;
+	std::vector<int> cells;
+	std::vector<SCATTERINSTANCE> inst;
+	for (int l = 0; l < oapiScatterLayerCount (hPlanet); l++) {
+		SCATTERLAYER prm;
+		oapiScatterLayer (hPlanet, l, &prm);
+		if (collideOnly && !prm.collide) continue;
+		int nc = oapiScatterCells (hPlanet, l, p, radius, nullptr, 0);
+		cells.resize (2 * nc);
+		oapiScatterCells (hPlanet, l, p, radius, cells.data(), nc);
+		for (int c = 0; c < nc; c++) {
+			int ni = oapiScatterCell (hPlanet, l, cells[2*c], cells[2*c+1], nullptr, 0);
+			inst.resize (ni);
+			oapiScatterCell (hPlanet, l, cells[2*c], cells[2*c+1], inst.data(), ni);
+			for (const SCATTERINSTANCE &in : inst) {
+				VECTOR3 d = in.pos - _V(p.x, p.y, p.z) * (length (in.pos) / R);
+				double dist = length (d);
+				if (dist > radius) continue;
+				SCATTERASSET a;
+				oapiScatterAsset (hPlanet, in.asset, &a);
+				double r = length (in.pos);
+				lua_newtable (L);
+				lua_pushnumber (L, atan2 (in.pos.z, in.pos.x)); lua_setfield (L, -2, "lng");
+				lua_pushnumber (L, asin (in.pos.y / r)); lua_setfield (L, -2, "lat");
+				lua_pushnumber (L, r - R); lua_setfield (L, -2, "elev");
+				lua_pushnumber (L, dist); lua_setfield (L, -2, "dist");
+				lua_pushnumber (L, a.radius * in.scale); lua_setfield (L, -2, "radius");
+				lua_pushnumber (L, a.height * in.scale); lua_setfield (L, -2, "height");
+				lua_pushstring (L, a.name); lua_setfield (L, -2, "name");
+				lua_pushinteger (L, a.kind); lua_setfield (L, -2, "kind");
+				lua_pushboolean (L, prm.collide && a.collide); lua_setfield (L, -2, "collide");
+				lua_rawseti (L, -2, ++n);
+			}
+		}
+	}
+	return 1;
 }
 
 /***

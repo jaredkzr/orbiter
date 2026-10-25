@@ -3,6 +3,7 @@
 
 // Implementation of class PlanetarySystem
 
+#include "GroundScatter.h"
 #include <fstream>
 #include <stdio.h>
 #include <string.h>
@@ -393,6 +394,12 @@ size_t PlanetarySystem::AddVessel (Vessel *_vessel)
 {
 	vessels.emplace_back(_vessel);
 	AddBody (_vessel); // register in general list
+	// (a vessel placed on the ground: no rocks or trees under it)
+	if (_vessel->GetStatus() == FLIGHTSTATUS_LANDED && _vessel->ProxyPlanet())
+		if (scatter::GroundScatter *gs = _vessel->ProxyPlanet()->ScatterIfMade()) {
+			const Planet *pl = _vessel->ProxyPlanet();
+			gs->Clear (tmul (pl->GRot(), _vessel->GPos() - pl->GPos()), _vessel->Size() * 1.5 + 10.0);
+		}
 	g_bForceUpdate = true;
 	return vessels.size();
 }

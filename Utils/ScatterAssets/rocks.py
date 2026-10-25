@@ -6,7 +6,7 @@
 # High-poly shapes (fracture planes, remeshing, displacement) baked to game
 # meshes with three levels of detail into one atlas per body (colour with
 # ambient occlusion: BC1; normals: BC5), and a manifest for the Vulkan
-# client (Config/VK/Scatter/<Body>.cfg).
+# client (Config/Scatter/<Body>_rocks.cfg, listed by Config/Scatter/<Body>.cfg).
 #
 # Budgets (triangles of the levels of detail 0, 1, 2): pebbles about
 # 100/40/12, rocks 400-800 with 40% and 10%, boulders 1500-3000. Most of the
@@ -284,7 +284,7 @@ def main ():
 		radius = max (math.hypot (c.x, c.y) for c in xs)
 		height = max (c.z for c in xs)
 		lines.append ("ROCK Scatter\\%s\\%s %.3f %.3f %d %d %d" % (BODY, stem, radius, height, *counts))
-	cfg = os.path.join (ROOT, "Config", "VK", "Scatter", BODY + ".cfg")
+	cfg = os.path.join (ROOT, "Config", "Scatter", BODY + "_rocks.cfg")
 	os.makedirs (os.path.dirname (cfg), exist_ok=True)
 	with open (cfg, 'w') as f: f.write ("\n".join (lines) + "\n")
 	print ("SCATTER done: %s" % cfg)

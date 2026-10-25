@@ -4275,6 +4275,76 @@ OAPIFUNC bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, SURFDETAILPARAM *prm);
  */
 OAPIFUNC void oapiSurfaceDetailSupported ();
 
+/// Kinds of ground scatter objects
+enum SCATTERKIND { SCATTER_ROCK = 0, SCATTER_GRASS = 1, SCATTER_SHRUB = 2, SCATTER_TREE = 3 };
+
+/// A kind of object of a planet's ground scatter (Config/Scatter/<planet>.cfg)
+struct SCATTERASSET {
+	int kind;           ///< SCATTERKIND
+	const char *name;   ///< rocks: mesh stem (meshes <name>_lod0 to _lod2); plants: name of the plant
+	double radius;      ///< horizontal extent [m] (at scale 1)
+	double height;      ///< height [m] (at scale 1)
+	bool collide;       ///< vessels collide with it (large boulders, trees)
+};
+
+/// A layer of a planet's ground scatter: objects in cells of a grid
+struct SCATTERLAYER {
+	int kind;           ///< SCATTERKIND
+	double cell;        ///< cell size [m]
+	double range;       ///< distance up to which the objects are drawn [m]
+	bool collide;       ///< its objects are obstacles
+};
+
+/// An object of the ground scatter, in the planet frame (rotating with it)
+struct SCATTERINSTANCE {
+	int asset;          ///< index of its asset (oapiScatterAsset)
+	VECTOR3 pos;        ///< position of its origin (on the ground) [m]
+	MATRIX3 rot;        ///< object frame (x east, y up, z north) -> planet frame
+	double scale;       ///< size factor
+};
+
+/**
+ * \brief Ground scatter: rocks and vegetation placed on a planet's surface,
+ *   the same for physics and graphics clients. Large boulders and trees are
+ *   obstacles for vessels. A graphics client that draws the scatter calls
+ *   oapiScatterSupported when it is initialised; with other clients there
+ *   is none.
+ * \return number of assets of the planet (0: it has no ground scatter)
+ */
+OAPIFUNC int oapiScatterAssetCount (OBJHANDLE hPlanet);
+OAPIFUNC bool oapiScatterAsset (OBJHANDLE hPlanet, int idx, SCATTERASSET *asset);
+OAPIFUNC int oapiScatterLayerCount (OBJHANDLE hPlanet);
+OAPIFUNC bool oapiScatterLayer (OBJHANDLE hPlanet, int layer, SCATTERLAYER *prm);
+
+/**
+ * \brief Cells of a scatter layer within a distance of a point.
+ * \param pos point in the planet frame [m]
+ * \param radius distance [m]
+ * \param cells receives pairs (row, column), up to maxCells
+ * \return number of cells (may be more than maxCells)
+ */
+OAPIFUNC int oapiScatterCells (OBJHANDLE hPlanet, int layer, const VECTOR3 &pos, double radius, int *cells, int maxCells);
+
+/**
+ * \brief The objects of a cell of a scatter layer.
+ * \param inst receives up to maxInst objects (may be null to count them)
+ * \return number of objects in the cell
+ */
+OAPIFUNC int oapiScatterCell (OBJHANDLE hPlanet, int layer, int row, int col, SCATTERINSTANCE *inst, int maxInst);
+
+/**
+ * \brief Incremented whenever cells of the planet's scatter change (e.g.
+ *   the ground cleared under a vessel placed there): cells kept by a
+ *   client must then be read again.
+ */
+OAPIFUNC unsigned oapiScatterGeneration (OBJHANDLE hPlanet);
+
+/**
+ * \brief A graphics client that draws the ground scatter calls this when
+ *   it is initialised.
+ */
+OAPIFUNC void oapiScatterSupported ();
+
 struct ElevationTile;
 
 /**

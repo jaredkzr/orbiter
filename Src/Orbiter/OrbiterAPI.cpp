@@ -27,6 +27,7 @@
 #include "MapView.h"
 #include "Replay.h"
 #include "TerrainDetail.h"
+#include "GroundScatter.h"
 #include "elevmgr.h"
 #include <algorithm>
 #include <zlib.h>
@@ -1344,6 +1345,92 @@ DLLEXPORT double oapiSurfaceDetail (OBJHANDLE hPlanet, double lng, double lat, d
 DLLEXPORT void oapiSurfaceDetailSupported ()
 {
 	TerrainDetail::clientSupport = true;
+}
+
+static scatter::GroundScatter *PlanetScatter (OBJHANDLE hPlanet)
+{
+	Body *body = (Body*)hPlanet;
+	if (!body || body->Type() != OBJTP_PLANET) return nullptr;
+	return ((Planet*)body)->Scatter ();
+}
+
+DLLEXPORT int oapiScatterAssetCount (OBJHANDLE hPlanet)
+{
+	scatter::GroundScatter *gs = PlanetScatter (hPlanet);
+	return gs ? (int)gs->Assets().size() : 0;
+}
+
+DLLEXPORT bool oapiScatterAsset (OBJHANDLE hPlanet, int idx, SCATTERASSET *asset)
+{
+	scatter::GroundScatter *gs = PlanetScatter (hPlanet);
+	if (!gs || idx < 0 || idx >= (int)gs->Assets().size()) return false;
+	const scatter::Asset &a = gs->Assets()[idx];
+	asset->kind = a.kind;
+	asset->name = a.name.c_str();
+	asset->radius = a.radius;
+	asset->height = a.height;
+	asset->collide = false;
+	if (a.hasHull)
+		for (const scatter::Layer &L : gs->Layers())
+			if (L.collide && std::find (L.assets.begin(), L.assets.end(), idx) != L.assets.end()) asset->collide = true;
+	return true;
+}
+
+DLLEXPORT int oapiScatterLayerCount (OBJHANDLE hPlanet)
+{
+	scatter::GroundScatter *gs = PlanetScatter (hPlanet);
+	return gs ? (int)gs->Layers().size() : 0;
+}
+
+DLLEXPORT bool oapiScatterLayer (OBJHANDLE hPlanet, int layer, SCATTERLAYER *prm)
+{
+	scatter::GroundScatter *gs = PlanetScatter (hPlanet);
+	if (!gs || layer < 0 || layer >= (int)gs->Layers().size()) return false;
+	const scatter::Layer &L = gs->Layers()[layer];
+	prm->kind = L.kind;
+	prm->cell = L.cell;
+	prm->range = L.range;
+	prm->collide = L.collide;
+	return true;
+}
+
+DLLEXPORT int oapiScatterCells (OBJHANDLE hPlanet, int layer, const VECTOR3 &pos, double radius, int *cells, int maxCells)
+{
+	scatter::GroundScatter *gs = PlanetScatter (hPlanet);
+	if (!gs) return 0;
+	std::vector<std::pair<int,int>> cl;
+	gs->CellsNear (layer, MakeVector (pos), radius, cl);
+	for (int i = 0; i < (int)cl.size() && i < maxCells; i++)
+		cells[2*i] = cl[i].first, cells[2*i+1] = cl[i].second;
+	return (int)cl.size();
+}
+
+DLLEXPORT int oapiScatterCell (OBJHANDLE hPlanet, int layer, int row, int col, SCATTERINSTANCE *inst, int maxInst)
+{
+	scatter::GroundScatter *gs = PlanetScatter (hPlanet);
+	if (!gs) return 0;
+	const std::vector<scatter::Instance> &c = gs->Cell (layer, row, col);
+	if (inst)
+		for (int i = 0; i < (int)c.size() && i < maxInst; i++) {
+			const scatter::Instance &in = c[i];
+			inst[i].asset = in.asset;
+			inst[i].pos = MakeVECTOR3 (in.pos);
+			const Matrix &r = in.rot;
+			inst[i].rot = _M(r.m11, r.m12, r.m13, r.m21, r.m22, r.m23, r.m31, r.m32, r.m33);
+			inst[i].scale = in.scale;
+		}
+	return (int)c.size();
+}
+
+DLLEXPORT unsigned oapiScatterGeneration (OBJHANDLE hPlanet)
+{
+	scatter::GroundScatter *gs = PlanetScatter (hPlanet);
+	return gs ? gs->Generation () : 0;
+}
+
+DLLEXPORT void oapiScatterSupported ()
+{
+	scatter::GroundScatter::clientSupport = true;
 }
 
 DLLEXPORT bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, SURFDETAILPARAM *prm)

@@ -20,6 +20,7 @@
 #include "Log.h"
 #include "Util.h"
 #include "TerrainDetail.h"
+#include "GroundScatter.h"
 
 #define UPDMODE_ANALYTIC 0
 #define UPDMODE_DYNAMIC  1
@@ -1061,3 +1062,14 @@ void Planet::ClearModule ()
 	memset (&modIntf, 0, sizeof (modIntf));
 }
 #endif
+// ==============================================================
+
+scatter::GroundScatter *Planet::Scatter () const
+{
+	if (!scatterInit) {
+		scatterInit = true;
+		auto gs = std::make_unique<scatter::GroundScatter> (this);
+		if (gs->Active ()) scatter_ = std::move (gs);
+	}
+	return scatter_.get();
+}

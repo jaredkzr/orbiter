@@ -38,6 +38,7 @@
 #include "State.h"
 #include "Util.h"
 #include "elevmgr.h"
+#include "GroundScatter.h"
 #include <fstream>
 #include <iomanip>
 #include <stdio.h>
@@ -1142,6 +1143,7 @@ bool Vessel::SetTouchdownPoints (const TOUCHDOWNVTX *tdvtx, DWORD ntp)
 		if (ntouchdown_vtx) delete []touchdown_vtx;
 		touchdown_vtx = new TOUCHDOWN_VTX[ntouchdown_vtx = ntp];
 	}
+	td_hull_n = (DWORD)-1;
 	for (i = 0; i < ntp; i++) {
 		touchdown_vtx[i].pos.Set (MakeVector(tdvtx[i].pos));
 		touchdown_vtx[i].stiffness = tdvtx[i].stiffness;
@@ -4499,6 +4501,56 @@ void Vessel::CollectGroundContacts (const StateVectors &s, const StateVectors &s
 			nforcevec++;
 		}
 	}
+
+	// obstacles on the ground (boulders, trees: GroundScatter.h): the
+	// vessel's collision hulls (or the hull of its touchdown points) against
+	// theirs, rigid contacts
+	if (proxybody->Type() == OBJTP_PLANET)
+		if (scatter::GroundScatter *gs = ((Planet*)proxybody)->Scatter()) {
+			std::vector<collision::HullRef> hl;
+			CollectHulls (s, hl);
+			if (hl.empty()) {
+				if (td_hull_n != ntouchdown_vtx) {
+					std::vector<Vector> tp;
+					for (DWORD i = 0; i < ntouchdown_vtx; i++) tp.push_back (touchdown_vtx[i].pos);
+					td_hull = collision::MakeHull (tp);
+					td_hull_n = ntouchdown_vtx;
+				}
+				hl.push_back ({&td_hull, s.R, s.pos});
+			}
+			double bound = 0.0;
+			for (const collision::HullRef &x : hl)
+				bound = std::max (bound, (x.pos + mul (x.R, x.hull->centre)).dist (s.pos) + x.hull->radius + collision::SKIN);
+			Vector pc (tmul (P0.R, s.pos - P0.pos)); // (planet frame)
+			static std::vector<const scatter::Obstacle*> obst;
+			gs->Obstacles (pc, bound + margin, obst);
+			const Vector &O = s.pos; // (origin of the tests, for precision)
+			convex::Manifold mf;
+			for (const scatter::Obstacle *o : obst) {
+				convex::Placed po{&o->hull, P0.R, P0.pos - O, 0.0};
+				for (const collision::HullRef &x : hl) {
+					convex::Placed px{x.hull, x.R, x.pos - O, collision::SKIN};
+					if ((px.pos + mul (x.R, x.hull->centre)).dist (po.pos + mul (P0.R, o->hull.centre)) > x.hull->radius + o->hull.radius + collision::SKIN + margin)
+						continue;
+					if (!convex::Collide (px, po, margin, mf)) continue;
+					for (int k = 0; k < mf.npt; k++) {
+						Vector g (mf.pt[k] + O);
+						Vector pl (tmul (P0.R, g - P0.pos));
+						contact::Point p;
+						p.a = body, p.b = -1;
+						p.ra = g - sb.pos;
+						p.n = mf.n; // (out of the obstacle)
+						contact::Tangents (p.n, Vector (1,0,0), p.t1, p.t2);
+						p.vs = P1.vel + mul (P1.R, Vector (-pl.z*wrot, 0, pl.x*wrot));
+						p.C = mf.sep[k];
+						p.k = p.c = 0.0;
+						p.mu1 = p.mu2 = 0.6;
+						p.warm = nullptr;
+						pts.push_back (p);
+					}
+				}
+			}
+		}
 }
 
 // =======================================================================
