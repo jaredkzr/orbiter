@@ -131,10 +131,19 @@ void SurfaceDetail (vec3 posView, float dist, inout vec3 Nv, inout vec3 base)
 	float a0;
 	float h0 = DetailHeight (p, type, footprint, a0) * atm.detail.y * fade;
 #ifdef TERRAIN_DETAIL
-	// (with the terrain detail, which shades the relief down to the pixel:
-	// only the albedo; the normal from the screen-space derivatives of this
-	// height turns faceted at grazing angles)
+	// (with the terrain detail: rocks and grain only (it has the craters);
+	// their slope by differences along the ground at a fixed step, not the
+	// screen-space derivatives, which turn faceted at grazing angles)
 	if (tile.detail.w > 0.5) {
+		vec3 up = normalize (Np);
+		vec3 t1 = normalize (cross (up, abs (up.y) < 0.9 ? vec3 (0.0, 1.0, 0.0) : vec3 (1.0, 0.0, 0.0)));
+		vec3 t2 = cross (up, t1);
+		float e = max (0.25 * footprint, 0.01);
+		float a1, a2;
+		float hx = DetailHeight (p + t1 * e, type, footprint, a1) * atm.detail.y * fade;
+		float hy = DetailHeight (p + t2 * e, type, footprint, a2) * atm.detail.y * fade;
+		vec3 gp = t1 * ((hx - h0) / e) + t2 * ((hy - h0) / e);
+		Nv = normalize (Nv - transpose (v2p) * gp);
 		base *= mix (1.0, a0, fade);
 		return;
 	}

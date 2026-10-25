@@ -165,6 +165,17 @@ private:
 	double SurfaceElev (const Node *src, double lat, double lng, double lmin, double *amp = nullptr, double *fade = nullptr) const;
 	/// detailed: with the terrain detail's geometry (else only its shading)
 	void BuildMesh (Node *n, const Node *elevSrc, bool detailed = true);
+	/// a mesh's data, made on worker threads (ComputeMesh: no GPU calls) and
+	/// uploaded after (ApplyMesh)
+	struct MeshData {
+		std::vector<NTVERTEX> vtx;
+		std::vector<float> amp;
+		float detailSpacing = 0.0f, detailLmesh = 0.0f;
+		int elevLvl = 0;
+		bool detailed = false;
+	};
+	void ComputeMesh (const Node *n, const Node *src, bool detailed, MeshData &md) const;
+	void ApplyMesh (Node *n, MeshData &md);
 	void DrawNode (Node *n, bool prepass = false);
 	void BindVertices (const Node *n);
 

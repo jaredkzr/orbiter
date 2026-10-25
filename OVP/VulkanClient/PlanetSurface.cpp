@@ -2,6 +2,8 @@
 // Licensed under the MIT License
 
 #include "PlanetSurface.h"
+#include <atomic>
+#include <thread>
 #include <chrono>
 #include "RayTracing.h"
 #include "Scene.h"
@@ -34,7 +36,6 @@ namespace {
 		float vessel[4];  // nearest vessel on the ground (view space; w: present), also morphed from
 	};
 
-	constexpr double MESH_BUDGET = 4.0;     // time per frame for building meshes with the terrain detail [ms]
 	constexpr double SPLIT_PIXELS = 300.0;  // split tiles that cover more than this on screen (at resolution bias 0)
 	constexpr size_t MAX_OUTSTANDING = 24;  // tile requests in flight
 	constexpr int MAX_UPLOADS = 12;         // tiles accepted per frame
@@ -430,7 +431,7 @@ PlanetSurface::PlanetSurface (OBJHANDLE h, Scene *s, std::shared_ptr<PlanetLayer
 			maxElev = std::max (0.0, *me);
 		detail = oapiSurfaceDetailParams (hPlanet, &detailPrm);
 		// (finer meshes where the detail goes)
-		if (detail) maxLevel = std::clamp (std::max (maxLevel, detailPrm.level), 4, 24);
+		if (detail) maxLevel = std::clamp (std::max (maxLevel, detailPrm.level), 4, 26);
 		if (const int *em = (const int*)scene->Client()->GetConfigParam (CFGPRM_ELEVATIONMODE)) elevMode = *em;
 		// (PlanetResolutionBias: each step of +1 halves the tiles' screen size)
 		if (const double *rb = (const double*)scene->Client()->GetConfigParam (CFGPRM_RESOLUTIONBIAS))
@@ -599,6 +600,13 @@ double PlanetSurface::SurfaceElev (const Node *src, double lat, double lng, doub
 
 void PlanetSurface::BuildMesh (Node *n, const Node *src, bool detailed)
 {
+	MeshData md;
+	ComputeMesh (n, src, detailed, md);
+	ApplyMesh (n, md);
+}
+
+void PlanetSurface::ComputeMesh (const Node *n, const Node *src, bool detailed, MeshData &md) const
+{
 	const int G = TileRenderer::GRID, V = G + 1, W = G + 3; // W: grid with a one-node border
 	double dlat = (n->latmax - n->latmin) / G, dlng = (n->lngmax - n->lngmin) / G;
 	std::vector<VECTOR3> P ((size_t)W * W), D ((size_t)W * W);
@@ -699,11 +707,22 @@ void PlanetSurface::BuildMesh (Node *n, const Node *src, bool detailed)
 		copy (2*V, k, k, 0);
 		copy (3*V, k, k, G);
 	}
-	n->detailSpacing = src ? (float)(radius * (src->latmax - src->latmin) / (ElevGrid::N - 3))
+	md.detailSpacing = src ? (float)(radius * (src->latmax - src->latmin) / (ElevGrid::N - 3))
 		: (detail && !layers->elev ? (float)detailPrm.flatSpacing : 0.0f);
 	double lmesh = std::max (lmin, detailPrm.lambdaMin);
-	n->detailLmesh = (lmesh >= n->detailSpacing) ? 1e30f : (float)lmesh; // (none in the mesh)
+	md.detailLmesh = (lmesh >= md.detailSpacing) ? 1e30f : (float)lmesh; // (none in the mesh)
+	md.elevLvl = src ? src->lvl : 0;
+	md.detailed = detailed;
+	md.vtx = std::move (vtx);
+	md.amp = std::move (amp);
+}
 
+void PlanetSurface::ApplyMesh (Node *n, MeshData &md)
+{
+	std::vector<NTVERTEX> &vtx = md.vtx;
+	std::vector<float> &amp = md.amp;
+	n->detailSpacing = md.detailSpacing;
+	n->detailLmesh = md.detailLmesh;
 	VkDeviceSize vsize = vtx.size() * sizeof(NTVERTEX), size = vsize + amp.size() * sizeof(float);
 	if (!n->vbuf.buffer) {
 		n->vbuf = ctx->CreateBuffer (size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
@@ -714,8 +733,8 @@ void PlanetSurface::BuildMesh (Node *n, const Node *src, bool detailed)
 	ctx->UpdateBuffer (n->vbuf.buffer, vsize, amp.data(), amp.size() * sizeof(float));
 	n->nVtx = (uint32_t)vtx.size();
 	n->rtVersion++;
-	n->meshElevLvl = src ? src->lvl : 0;
-	n->meshDetailed = detailed;
+	n->meshElevLvl = md.elevLvl;
+	n->meshDetailed = md.detailed;
 }
 
 void PlanetSurface::Request (Node *n, TileLoader::Kind kind)
@@ -827,6 +846,7 @@ void PlanetSurface::Prepare ()
 	if (!std::isfinite (camDist)) return; // (no camera: keep the last selection)
 	pixPerRad = scene->PixPerRad ();
 
+
 	// vessels near the ground (directions from the planet centre), close
 	// enough to the camera that a mismatch of a few metres would show
 	// (farther away, the finest meshes would only alias)
@@ -862,7 +882,9 @@ void PlanetSurface::Prepare ()
 			if (st != 3) break; // loaded, pending, or deferred (too many requests)
 		}
 	};
-	double budget = MESH_BUDGET;
+	static const unsigned nThreads = std::max (1u, std::thread::hardware_concurrency () - 1);
+	const size_t maxJobs = 2 * nThreads;
+	std::vector<std::pair<Node*, const Node*>> jobs;
 	for (Node *n : drawList) {
 		requestUp (n, TileLoader::SURF);
 		if (layers->mask) requestUp (n, TileLoader::MASK);
@@ -878,19 +900,37 @@ void PlanetSurface::Prepare ()
 		}
 		const Node *src = ElevSource (n);
 		int srcLvl = src ? src->lvl : 0;
-		// Meshes with the terrain detail take long to build: within a time
-		// budget per frame (the nearest first), others get a plain mesh at
-		// once and the detail later
+		// Meshes with the terrain detail take long to build: a number per
+		// frame (the nearest first) on worker threads; others get a plain mesh
+		// at once and the detail later
 		bool rebuild = !n->vbuf.buffer || n->meshElevLvl != srcLvl;
-		bool detailed = !detail || clouds || !src || budget > 0.0;
-		if (rebuild || (!n->meshDetailed && detailed)) {
+		bool withDetail = detail && !clouds && (src || !layers->elev);
+		if (withDetail && (rebuild || !n->meshDetailed) && jobs.size() < maxJobs) {
+			jobs.push_back ({ n, src });
+		} else if (rebuild) {
 			auto t0 = std::chrono::steady_clock::now ();
-			BuildMesh (n, src, detailed);
-			double dt = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ();
-			if (detailed && detail && !clouds && src) budget -= dt;
-			meshTime += dt;
+			BuildMesh (n, src, !withDetail);
+			meshTime += std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ();
 			meshCount++;
 		}
+	}
+	if (!jobs.empty()) {
+		// (the core's terrain detail initialises itself on first use: here)
+		oapiSurfaceDetail (hPlanet, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0);
+		std::vector<MeshData> out (jobs.size());
+		std::atomic<size_t> next{ 0 };
+		auto work = [&]() {
+			for (size_t i; (i = next++) < jobs.size(); )
+				ComputeMesh (jobs[i].first, jobs[i].second, true, out[i]);
+		};
+		auto t0 = std::chrono::steady_clock::now ();
+		std::vector<std::thread> pool;
+		for (unsigned t = 1; t < nThreads && t < jobs.size(); t++) pool.emplace_back (work);
+		work ();
+		for (auto &t : pool) t.join ();
+		for (size_t i = 0; i < jobs.size(); i++) ApplyMesh (jobs[i].first, out[i]);
+		meshTime += std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ();
+		meshCount += (int)jobs.size();
 	}
 	// (ORBITER_VK_TILE_DEBUG: the deepest tiles drawn and the deepest surface
 	// and elevation data among them)

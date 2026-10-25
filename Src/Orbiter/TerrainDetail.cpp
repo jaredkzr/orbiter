@@ -92,7 +92,7 @@ namespace {
 		return (1.0 - 0.4 * r) * n + 0.8 * r * (0.35 - std::fabs (n));
 	}
 
-	constexpr double CRATER_D = 0.35; // typical crater diameter / cell size (weight against the data's resolution)
+	constexpr double CRATER_D = 0.22; // typical crater diameter / cell size (weight against the data's resolution)
 	constexpr double CRATER_G = 0.1;  // resolution a crater needs / cell size (sharp rims: the smallest
 	                                  // ones span six node spacings of a mesh whose lmin is four)
 
@@ -103,6 +103,66 @@ namespace {
 	// centre anywhere it fits, so that the cells don't show as rows): a bowl
 	// a fifth of the diameter deep with a raised rim, shallower when older.
 	// Height [m].
+	// A crater's shape (shared with the Vulkan client's terraindetail.glsl:
+	// keep them identical). After LROC and Apollo images of small craters
+	// (and depth/diameter measurements: fresh about 0.13 to 0.17, degraded
+	// below 0.08): most are degraded, subdued and wider, a few fresh with
+	// steep walls and a sharp rim; outlines not quite round (ellipticity
+	// and lobes), rims of uneven height. The profile is smooth across the
+	// rim (no crease).
+	struct CraterShape {
+		double rL;          // radius [cells]
+		double depth, rim;  // floor below and crest above the surroundings [radii]
+		double k;           // wall shape: (1 - x^2)^k (small: steep walls near the rim)
+		double wr;          // rim's outer width [radii]
+		double ecc, lobe;   // outline: ellipticity and three lobes
+		Vector a1, a2, a3;  // their axes, and of the rim's height variation (unit, lattice frame)
+		double age;         // degradation (0 fresh, 1 old)
+	};
+
+	Vector UnitFromHash (uint32_t h)
+	{
+		uint32_t h2 = Pcg (h), h3 = Pcg (h2);
+		Vector v (Unit16 (h) * 2.0 - 1.0, Unit16 (h2) * 2.0 - 1.0, Unit16 (h3) * 2.0 - 1.0);
+		double l = v.length();
+		return l > 1e-6 ? v / l : Vector (1, 0, 0);
+	}
+
+	// the crater of a cell (h4: its 4th hash), depth scale of the body
+	CraterShape MakeCrater (uint32_t h4, double depthScale)
+	{
+		CraterShape c;
+		c.rL = 0.06 + 0.10 * Unit16 (h4);
+		double u = Unit16 (h4 >> 16);
+		c.age = u;
+		c.depth = 0.32 * depthScale * (1.0 - 0.7 * c.age);        // (depth/diameter 0.16 to 0.05)
+		c.rim = 0.08 * depthScale * (1.0 - 0.85 * c.age);
+		c.k = 1.6 + 2.0 * c.age;
+		c.wr = 0.6 + 0.2 * c.age;
+		c.rL *= 1.0 + 0.12 * c.age;                               // (degradation widens)
+		uint32_t h5 = Pcg (h4 ^ 0x9e3779b9u), h6 = Pcg (h5), h7 = Pcg (h6);
+		c.ecc = 0.12 * Unit16 (h5);
+		c.lobe = 0.06 * Unit16 (h5 >> 16);
+		c.a1 = UnitFromHash (h5), c.a2 = UnitFromHash (h6), c.a3 = UnitFromHash (h7);
+		return c;
+	}
+
+	// height [radii] at offset v from the crater's centre [cells]
+	double CraterHeight (const CraterShape &c, const Vector &v)
+	{
+		double dist = v.length();
+		if (dist < 1e-9) return -c.depth;
+		Vector u = v / dist;
+		double c1 = dotp (u, c.a1), c2 = dotp (u, c.a2), c3 = dotp (u, c.a3);
+		double rr = c.rL * (1.0 + c.ecc * (2.0 * c1 * c1 - 1.0) + c.lobe * (4.0 * c2 * c2 * c2 - 3.0 * c2));
+		double x = dist / rr;
+		double rim = c.rim * (1.0 + 0.4 * c3);
+		if (x < 1.0) return rim - (rim + c.depth) * std::pow (1.0 - x * x, c.k);
+		double t = (x - 1.0) / c.wr;
+		if (t >= 1.0) return 0.0;
+		return rim * (1.0 - t * t) * (1.0 - t * t);
+	}
+
 	double CraterLayer (const Vector &d, int k, int layer, double R, double density, double depth)
 	{
 		int m = k - JMIN + 32 + 29 * layer;
@@ -112,16 +172,14 @@ namespace {
 		uint32_t h0 = Hash ((int32_t)fx, (int32_t)fy, (int32_t)fz, 1000u + (uint32_t)m);
 		if (Unit16 (h0) >= density) return 0.0;
 		uint32_t h1 = Pcg (h0), h2 = Pcg (h1), h3 = Pcg (h2), h4 = Pcg (h3);
-		double rL = 0.08 + 0.14 * Unit16 (h4), ext = 1.6 * rL;
+		CraterShape cs = MakeCrater (h4, depth);
+		// (the whole crater within its cell: its outline and rim, anywhere
+		// in the cell otherwise; where the surface slices its sphere)
+		double ext = cs.rL * (1.0 + cs.ecc + cs.lobe) * (1.0 + cs.wr);
 		Vector c (ext + (1.0 - 2.0 * ext) * Unit16 (h1), ext + (1.0 - 2.0 * ext) * Unit16 (h2), ext + (1.0 - 2.0 * ext) * Unit16 (h3));
-		double age = Unit16 (h4 >> 16);
-		double df = depth * (1.0 - 0.65 * age);
-		double x = (Vector (q.x - fx, q.y - fy, q.z - fz) - c).length() / rL;
-		double rm = rL * s, h = 0.0;
-		if (x < 1.0) h = rm * 0.4 * df * (x * x - 1.0);             // bowl
-		double t = (x - 1.0) / 0.6;
-		if (std::fabs (t) < 1.0) h += rm * 0.12 * df * (1.0 - t * t) * (1.0 - t * t); // rim
-		return h;
+		Vector v (q.x - fx - c.x, q.y - fy - c.y, q.z - fz - c.z);
+		if (v.length() >= ext) return 0.0;
+		return CraterHeight (cs, v) * cs.rL * s;
 	}
 
 } // namespace
@@ -188,9 +246,15 @@ TerrainDetail::Params TerrainDetail::Defaults (const Planet *planet)
 		p.gain = 0.35, p.ridge = 0.7, p.floor = 0.03;
 		p.craters = 0.15, p.craterDepth = 0.6, p.craterFresh = 0.3;
 	} else if (!planet->HasAtmosphere()) {
-		// airless: rounded by impacts, craters of all sizes
-		p.gain = 0.3, p.ridge = 0.3, p.floor = 0.03;
-		p.craters = 2.0, p.craterDepth = 1.0, p.craterFresh = 0.25;
+		// airless: rounded by impacts, craters of all sizes (in equilibrium:
+		// overlapping, mostly degraded)
+		// (the roughness at metre scales from the craters, as on the Moon,
+		// not continuous noise, which looks like ripples there: the noise
+		// falls off fast at small scales, H 1.2; the measured RMS slopes of
+		// the lunar maria, about 3 degrees at 25 m and 6 at 1 m, LOLA,
+		// Rosenburg 2011, met with the craters)
+		p.gain = 0.3, p.ridge = 0.3, p.floor = 0.05, p.hurst = 1.2;
+		p.craters = 4.0, p.craterDepth = 1.0, p.craterFresh = 0.25;
 	} else {
 		p.gain = 0.35, p.ridge = 1.0, p.floor = 0.02;
 	}
@@ -204,8 +268,8 @@ TerrainDetail::TerrainDetail (const Planet *pl, const Params &p): planet (pl), p
 	// quads per edge; by default nodes about 1.2 m apart, at least the
 	// planet's own resolution limit
 	if (prm.level <= 0)
-		prm.level = (int)std::lround (4.0 + std::log2 (radius * Pi / (32.0 * 1.2)));
-	prm.level = std::clamp (prm.level, (int)pl->MaxPatchLevel(), 24);
+		prm.level = (int)std::lround (4.0 + std::log2 (radius * Pi / (32.0 * 0.15)));
+	prm.level = std::clamp (prm.level, (int)pl->MaxPatchLevel(), 26);
 	double s = radius * Pi / std::ldexp (1.0, prm.level - 4) / 32.0;
 	// (planets without elevation data: the spacing of the coarsest tile
 	// level with nodes 2 km apart at most)

@@ -67,6 +67,14 @@ vec4 DetNoise (ivec3 i, vec3 f, uint seed)
 const int DET_JMIN = -4;
 
 float DetUnit16 (uint h) { return float (h & 0xffffu) / 65535.0; }
+// a unit vector from a hash (as TerrainDetail.cpp's UnitFromHash)
+vec3 DetUnitFromHash (uint h)
+{
+	uint h2 = DetPcg (h), h3 = DetPcg (h2);
+	vec3 v = vec3 (DetUnit16 (h), DetUnit16 (h2), DetUnit16 (h3)) * 2.0 - 1.0;
+	float l = length (v);
+	return l > 1e-6 ? v / l : vec3 (1.0, 0.0, 0.0);
+}
 
 // position in lattice m at scale R/size (as TerrainDetail.cpp's LatticePoint):
 // cell (out), position in it (returned); p, sg: the axis mapping
@@ -143,7 +151,7 @@ DetailSample TerrainDetailEval (dvec3 d, double R, float A, float fade, float sp
 	// (weights for the typical diameter, CRATER_D of the cell size, against
 	// the data and the pixels; for the resolution the rims need, CRATER_G,
 	// against the mesh, as TerrainDetail.cpp)
-	const float CRATER_D = 0.35, CRATER_G = 0.1;
+	const float CRATER_D = 0.22, CRATER_G = 0.1;
 	int k1 = min (16, int (floor (log2 (spacing / CRATER_D))));
 	for (int k = k1; k >= -2 && density > 0.0 && fade > 0.0; k--) {
 		float s = exp2 (float (k)), lambda = CRATER_D * s, lg = CRATER_G * s;
@@ -162,22 +170,43 @@ DetailSample TerrainDetailEval (dvec3 d, double R, float A, float fade, float sp
 			uint h0 = DetHash (cell, 1000u + uint (m));
 			if (DetUnit16 (h0) >= density / float (nl)) continue;
 			uint h1 = DetPcg (h0), h2 = DetPcg (h1), h3 = DetPcg (h2), h4 = DetPcg (h3);
-			float rL = 0.08 + 0.14 * DetUnit16 (h4), ext = 1.6 * rL;
-			vec3 c = ext + (1.0 - 2.0 * ext) * vec3 (DetUnit16 (h1), DetUnit16 (h2), DetUnit16 (h3));
+			// the crater's shape (as TerrainDetail.cpp's MakeCrater)
+			float rL = 0.06 + 0.10 * DetUnit16 (h4);
 			float age = DetUnit16 (h4 >> 16);
-			float df = atm.detailPrm.z * (1.0 - 0.65 * age);
+			float cdep = 0.32 * atm.detailPrm.z * (1.0 - 0.7 * age);
+			float crim = 0.08 * atm.detailPrm.z * (1.0 - 0.85 * age);
+			float ck = 1.6 + 2.0 * age, wr = 0.6 + 0.2 * age;
+			rL *= 1.0 + 0.12 * age;
+			uint h5 = DetPcg (h4 ^ 0x9e3779b9u), h6 = DetPcg (h5), h7 = DetPcg (h6);
+			float ecc = 0.12 * DetUnit16 (h5), lobe = 0.06 * DetUnit16 (h5 >> 16);
+			vec3 a1 = DetUnitFromHash (h5), a2 = DetUnitFromHash (h6), a3 = DetUnitFromHash (h7);
+			float ext = rL * (1.0 + ecc + lobe) * (1.0 + wr);
+			vec3 c = ext + (1.0 - 2.0 * ext) * vec3 (DetUnit16 (h1), DetUnit16 (h2), DetUnit16 (h3));
 			vec3 dv = f - c;
-			float dist = length (dv), x = dist / rL, rm = rL * s;
-			if (x >= 1.6) continue;
-			float dhdx = 0.0;
-			if (x < 1.0) dhdx = rm * 0.4 * df * 2.0 * x;          // bowl
-			float t = (x - 1.0) / 0.6;
-			if (abs (t) < 1.0) dhdx += rm * 0.12 * df * 2.0 * (1.0 - t * t) * (-2.0 * t) / 0.6; // rim
-			vec3 dhdq = dist > 1e-6 ? dv * (dhdx / (dist * rL)) : vec3 (0.0);
+			float dist = length (dv);
+			if (dist >= ext || dist < 1e-6) continue;
+			vec3 u = dv / dist;
+			float c1 = dot (u, a1), c2 = dot (u, a2);
+			float rr = rL * (1.0 + ecc * (2.0 * c1 * c1 - 1.0) + lobe * (4.0 * c2 * c2 * c2 - 3.0 * c2));
+			float x = dist / rr, rimH = crim * (1.0 + 0.4 * dot (u, a3));
+			float hx, dhx; // height and slope along x [radii]
+			if (x < 1.0) {
+				float q = 1.0 - x * x;
+				hx = rimH - (rimH + cdep) * pow (q, ck);
+				dhx = (rimH + cdep) * ck * pow (max (q, 1e-6), ck - 1.0) * 2.0 * x;
+			} else {
+				float t = (x - 1.0) / wr;
+				if (t >= 1.0) continue;
+				hx = rimH * (1.0 - t * t) * (1.0 - t * t);
+				dhx = rimH * 2.0 * (1.0 - t * t) * (-2.0 * t) / wr;
+			}
+			float rm = rL * s; // [m]
+			// (gradient along the radius: the outline's turn is left out)
+			vec3 dhdq = u * (dhx * rm / rr);
 			ds.grad += DetToPlanet (dhdq, p, sg) * (w / s);
 			// the rim's shadow in the bowl: shadowed where the rim towards
 			// the sun rises above the line to the sun (the shading can't
-			// cast shadows)
+			// cast shadows); its edge softened
 			if (x < 1.0) {
 				vec3 up = DetToLattice (vec3 (d), p, sg), sl = DetToLattice (sunP, p, sg);
 				float se = dot (sl, up); // sine of the sun's elevation
@@ -186,11 +215,11 @@ DetailSample TerrainDetailEval (dvec3 d, double R, float A, float fade, float sp
 				if (se > 0.0 && shl > 1e-4) {
 					sh /= shl;
 					vec3 dt = dv - up * dot (dv, up);
-					float b = dot (dt, sh), c = dot (dt, dt) - rL * rL;
-					float tr = -b + sqrt (max (b * b - c, 0.0)); // to the rim towards the sun [cells]
-					float rise = rm * 0.12 * df - rm * 0.4 * df * (x * x - 1.0); // rim crest above the point [m]
+					float b = dot (dt, sh), cc = dot (dt, dt) - rr * rr;
+					float tr = -b + sqrt (max (b * b - cc, 0.0)); // to the rim towards the sun [cells]
+					float rise = (rimH - hx) * rm;                // rim crest above the point [m]
 					float need = rise - tr * s * se / shl;
-					ds.shadow *= 1.0 - w * smoothstep (-0.04 * rm, 0.04 * rm, need);
+					ds.shadow *= 1.0 - w * smoothstep (-0.08 * rm * (rimH + cdep), 0.08 * rm * (rimH + cdep), need);
 				}
 			}
 			// fresh craters: bright ejecta about the rim

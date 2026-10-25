@@ -30,7 +30,8 @@
 //   TerrainDetailCraterDepth  depth scale (1: depth a fifth of the diameter)
 //   TerrainDetailCraterFresh  share of fresh craters (bright ejecta)
 //   TerrainDetailLevel        finest mesh level of the detail (default: about
-//                             1.2 m node spacing)
+//                             0.15 m node spacing: craters of a metre and
+//                             more deform the ground)
 // =======================================================================
 
 #ifndef __TERRAINDETAIL_H
