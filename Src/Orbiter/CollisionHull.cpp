@@ -147,15 +147,24 @@ namespace collision {
 		return hulls;
 	}
 
-	bool DockCapture (const Port &a, const Port &b, double maxOffset)
+	int DockCapture (const Port &a, const Port &b, double maxOffset, double *value, double *limit)
 	{
 		const CFG_PHYSICSPRM &prm = g_pOrbiter->Cfg()->CfgPhysicsPrm;
-		if ((a.vel - b.vel).length() > prm.DockSpeedLimit) return false;
-		double c = cos (prm.DockAngleLimit);
-		if (-dotp (a.dir, b.dir) < c) return false;  // (facing each other)
-		if (dotp (a.rot, b.rot) < c) return false;   // (turned alike about the axis)
+		auto refuse = [&](int reason, double v, double l) {
+			if (value) *value = v;
+			if (limit) *limit = l;
+			return reason;
+		};
+		double speed = (a.vel - b.vel).length();
+		if (speed > prm.DockSpeedLimit) return refuse (DOCKREFUSED_SPEED, speed, prm.DockSpeedLimit);
+		double approach = acos (std::clamp (-dotp (a.dir, b.dir), -1.0, 1.0)); // (facing each other)
+		if (approach > prm.DockAngleLimit) return refuse (DOCKREFUSED_APPROACH, approach, prm.DockAngleLimit);
+		double roll = acos (std::clamp (dotp (a.rot, b.rot), -1.0, 1.0));      // (turned alike about the axis)
+		if (roll > prm.DockAngleLimit) return refuse (DOCKREFUSED_ROLL, roll, prm.DockAngleLimit);
 		Vector d (b.pos - a.pos);
-		return (d - a.dir * dotp (d, a.dir)).length() <= maxOffset;
+		double offset = (d - a.dir * dotp (d, a.dir)).length();
+		if (offset > maxOffset) return refuse (DOCKREFUSED_OFFSET, offset, maxOffset);
+		return 0;
 	}
 
 	bool ClassHulls (const char *classname, std::vector<Hull> &hulls)

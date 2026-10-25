@@ -2109,8 +2109,26 @@ typedef union {
 //@{
 #define VMSG_LUAINTERPRETER    0x0001 ///< initialise Lua interpreter
 #define VMSG_LUAINSTANCE       0x0002 ///< create Lua vessel instance
+#define VMSG_DOCKREFUSED       0x0003 ///< docking refused: prm is the vessel's docking port index, context a pointer to a DOCKREFUSEDINFO
 #define VMSG_USER              0x1000 ///< base index for user-defined messages
 //@}
+
+/**
+ * \brief Why two docking ports did not capture each other (VMSG_DOCKREFUSED)
+ * \note The limits are set in Orbiter.cfg (DockingSpeedLimit, DockingAngleLimit).
+ */
+typedef struct {
+	OBJHANDLE hMate;   ///< the other vessel
+	DWORD mateport;    ///< its docking port index
+	int reason;        ///< DOCKREFUSED_SPEED, DOCKREFUSED_APPROACH or DOCKREFUSED_ROLL
+	double value;      ///< the relative speed [m/s] or misalignment [rad]
+	double limit;      ///< the limit it exceeded (same units)
+} DOCKREFUSEDINFO;
+
+#define DOCKREFUSED_SPEED     1 ///< the ports' relative speed is above the limit
+#define DOCKREFUSED_APPROACH  2 ///< the ports do not face each other closely enough
+#define DOCKREFUSED_ROLL      3 ///< the ports are turned against each other about the docking axis
+#define DOCKREFUSED_OFFSET    4 ///< the ports are off each other's axis
 
 
 // ===========================================================================

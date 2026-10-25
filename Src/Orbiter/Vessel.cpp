@@ -60,6 +60,8 @@ extern char DBG_MSG[256];
 
 const double KEYDELAY = 0.5;
 const double MIN_DOCK_DIST = 0.5;
+const double DOCK_REFUSE_DIST = 2.0;   // docking ports closing within this distance ...
+const double DOCK_REFUSE_OFFSET = 1.0; // ... and this offset from each other's axis are docking (or refused)
 
 const char noclass[] = "unknown";
 const double holdaltDT = 0.1; // update interval for "hold altitude" mode
@@ -2578,6 +2580,7 @@ PortSpec *Vessel::CreateDock (const Vector &pos, const Vector &dir, const Vector
 	dock[ndock]->mate = 0;
 	dock[ndock]->ids  = 0;
 	dock[ndock]->pending = 0;
+	dock[ndock]->refused = 0;
 	dock[ndock]->status = 0;
 	dock[ndock]->owner = this;
 	dock[ndock]->autodock = true;
@@ -4479,6 +4482,33 @@ void Vessel::CollectFreePorts (const StateVectors &s, std::vector<collision::Por
 		if (!dock[i]->mate) ports.push_back (PortState (s, i));
 }
 
+void Vessel::DockRefused (DWORD port, Vessel *mate, DWORD mateport, int reason, double value, double limit)
+{
+	// notify the vessel module
+	if (modIntf.v->Version() >= 2) {
+		DOCKREFUSEDINFO info = { (OBJHANDLE)mate, mateport, reason, value, limit };
+		((VESSEL3*)modIntf.v)->clbkGeneric (VMSG_DOCKREFUSED, (int)port, &info);
+	}
+	// tell the user
+	char cbuf[256];
+	switch (reason) {
+	case DOCKREFUSED_SPEED:
+		sprintf (cbuf, "%s: docking with %s refused: closing at %0.2f m/s (limit %0.2f)", name.c_str(), mate->Name(), value, limit);
+		break;
+	case DOCKREFUSED_APPROACH:
+		sprintf (cbuf, "%s: docking with %s refused: misaligned by %0.1f deg (limit %0.1f deg)", name.c_str(), mate->Name(), value*DEG, limit*DEG);
+		break;
+	case DOCKREFUSED_ROLL:
+		sprintf (cbuf, "%s: docking with %s refused: rolled by %0.1f deg (limit %0.1f deg)", name.c_str(), mate->Name(), value*DEG, limit*DEG);
+		break;
+	default:
+		sprintf (cbuf, "%s: docking with %s refused: %0.2f m off axis", name.c_str(), mate->Name(), value);
+		break;
+	}
+	if (this == g_focusobj) g_pOrbiter->ShowInfoMessage (cbuf);
+	else LOGOUT ("%s", cbuf);
+}
+
 collision::Port Vessel::PortState (const StateVectors &s, DWORD i) const
 {
 	return { s.pos + mul (s.R, dock[i]->ref), mul (s.R, dock[i]->dir), mul (s.R, dock[i]->rot),
@@ -4705,9 +4735,22 @@ void Vessel::PostUpdate ()
 						if (v->dock[k]->mate) continue; // dock already busy
 						collision::Port pk (v->PortState (*v->s0, k));
 						double d = pj.pos.dist (pk.pos);
+						bool closing = dotp (pj.vel - pk.vel, pk.pos - pj.pos) > 0.0;
+						if (d < DOCK_REFUSE_DIST && closing && dock[j]->refused != v && dock[j]->autodock && v->dock[k]->autodock) {
+							// an approach that cannot capture (too fast or askew: the
+							// vessels collide instead): reported once
+							double value, limit;
+							int refusal = collision::DockCapture (pj, pk, DOCK_REFUSE_OFFSET, &value, &limit);
+							if (refusal && refusal != DOCKREFUSED_OFFSET) {
+								dock[j]->refused = v;
+								DockRefused (j, v, k, refusal, value, limit);
+							}
+						} else if (dock[j]->refused == v && d > 2.0*DOCK_REFUSE_DIST) {
+							dock[j]->refused = 0; // (a new approach)
+						}
 						if (d >= MIN_DOCK_DIST) continue;
 						// capture only within the speed and alignment limits
-						bool capture = collision::DockCapture (pj, pk, MIN_DOCK_DIST);
+						bool capture = !collision::DockCapture (pj, pk, MIN_DOCK_DIST);
 						if (dockmode == 0) { // legacy docking mode
 							if (dotp (s0->vel - v->GVel(), pj.dir) < -0.01) continue; // moving away from dock
 							if (capture && dock[j]->autodock && v->dock[k]->autodock)

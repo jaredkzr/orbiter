@@ -70,6 +70,17 @@ local function main()
 	check("B", docked.B == nil, "does not dock (too fast)")
 	check("B", dmin.B > 18.0, "collides (does not pass through)")
 	check("C", docked.C == nil, "does not dock (misaligned)")
+
+	-- the refusals are reported (in the log, and to the vessel modules)
+	local f = io.open("Orbiter.log", "r")
+	local txt = f and f:read("*a") or ""
+	if f then f:close() end
+	local function count(pat) local n = 0; for _ in txt:gmatch(pat) do n = n + 1 end; return n end
+	local nB = count("B[12]: docking with B[12] refused: closing at")
+	local nC = count("C[12]: docking with C[12] refused: rolled by")
+	log(string.format("refusals reported: B %d, C %d", nB, nC))
+	check("B", nB == 2, "refusal reported once by each vessel")
+	check("C", nC == 2, "refusal reported once by each vessel")
 end
 
 -- (a script error ends the session too, as a failure)

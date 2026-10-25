@@ -50,8 +50,9 @@ namespace collision {
 	/// Whether two docking ports can capture each other: relative speed and
 	/// misalignment within the limits (Orbiter.cfg: DockingSpeedLimit,
 	/// DockingAngleLimit); lateral offset: also within maxOffset of each
-	/// other's axis
-	bool DockCapture (const Port &a, const Port &b, double maxOffset);
+	/// other's axis. Returns 0 if they can, otherwise the reason
+	/// (DOCKREFUSED_*), with the value that exceeded its limit.
+	int DockCapture (const Port &a, const Port &b, double maxOffset, double *value = nullptr, double *limit = nullptr);
 
 	const double SKIN = 0.05; ///< [m] thickness added around each hull (thin parts, e.g. panels)
 

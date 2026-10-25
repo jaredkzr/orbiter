@@ -118,7 +118,7 @@ void VesselCollider::Resolve (double h)
 		B->CollectFreePorts (*B->s0, pb);
 		for (const collision::Port &p : pa)
 			for (const collision::Port &q : pb) {
-				if (p.pos.dist (q.pos) > PORT_RANGE || !collision::DockCapture (p, q, PORT_OFFSET)) continue;
+				if (p.pos.dist (q.pos) > PORT_RANGE || collision::DockCapture (p, q, PORT_OFFSET)) continue;
 				excl.push_back (p.pos - O), excl.push_back (q.pos - O);
 			}
 

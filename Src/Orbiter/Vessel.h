@@ -133,6 +133,7 @@ typedef struct {      // docking port definition
 	Vector rot;             // longitudinal rotation alignment direction
 	Vessel *mate;           // vessel attached to port (NULL for none)
 	Vessel *pending;        // vessel being currently docked/undocked
+	Vessel *refused;        // vessel whose port refused to capture this one in the current approach (reported once)
 	Vessel *owner;			// vessel that's owns this docking port
 	int status;             // 0=normal (docked/free), 1=docking in progress, 2=undocking in progress
 	DWORD matedock;         // mate dock index
@@ -1312,6 +1313,9 @@ protected:
 	bool InPlayback () const { return bFRplayback; }
 	double CollisionRadius () const;
 	collision::Port PortState (const StateVectors &s, DWORD i) const;
+	void DockRefused (DWORD port, Vessel *mate, DWORD mateport, int reason, double value, double limit);
+	// docking port 'port' refused to capture port 'mateport' of mate: notify
+	// the module (VMSG_DOCKREFUSED) and the user
 	DWORD AddCollisionHull (const VECTOR3 *pt, DWORD npt);
 	// hull defined by the vessel (replaces those from the meshes)
 	void SetCustomHulls (bool custom);

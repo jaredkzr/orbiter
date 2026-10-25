@@ -187,6 +187,8 @@ public:
 	// Onscreen annotation
 	inline oapi::ScreenAnnotation *SNotePB() const { return snote_playback; }
 	oapi::ScreenAnnotation *CreateAnnotation (bool exclusive, double size, COLORREF col);
+	void ShowInfoMessage (const char *msg, double duration = 5.0);
+	// a short message on screen for duration seconds (system time), and in the log
 	bool DeleteAnnotation (oapi::ScreenAnnotation *sn);
 
 	// File locations - THESE FUNCTIONS ARE NOT THREADSAFE!
@@ -395,6 +397,8 @@ private:
 	oapi::ScreenAnnotation **snote;// onscreen annotations
 	DWORD           nsnote;        // number of annotations
 	oapi::ScreenAnnotation *snote_playback;// onscreen annotation during playback
+	oapi::ScreenAnnotation *snote_info;    // onscreen information message (ShowInfoMessage)
+	double snote_info_until;               // system time until which it is shown
 	ScriptInterface *script;
 	INTERPRETERHANDLE hScnInterp;
 
