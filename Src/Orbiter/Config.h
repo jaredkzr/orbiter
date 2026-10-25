@@ -78,6 +78,8 @@ struct CFG_PHYSICSPRM {
 	int    PropSubMax;			// max number of subsampling steps
 	double APropCouplingLimit;	// angle step limit for cross term suppresion
 	double APropTorqueLimit;	// angle step limit for torque suppression
+	double DockSpeedLimit;      // largest relative speed of two docking ports at capture [m/s]
+	double DockAngleLimit;      // largest misalignment of two docking ports at capture (approach and roll) [rad]
 };
 
 struct CFG_LOGICPRM {

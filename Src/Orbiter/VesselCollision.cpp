@@ -9,9 +9,10 @@
 
 namespace {
 	const double FRICTION = 0.4;        // friction coefficient between vessels
-	// two free docking ports facing each other, closer than PORT_RANGE and
-	// off each other's axis by less than PORT_OFFSET: no contacts within
-	// PORT_CLEARANCE of them (the vessels are docking)
+	// two free docking ports closer than PORT_RANGE, approaching each other
+	// within the docking limits (speed, alignment, PORT_OFFSET off each
+	// other's axis): no contacts within PORT_CLEARANCE of them (the vessels
+	// are docking; too fast or askew, they collide)
 	const double PORT_RANGE = 5.0;      // [m]
 	const double PORT_OFFSET = 1.0;     // [m]
 	const double PORT_CLEARANCE = 1.5;  // [m]
@@ -117,9 +118,7 @@ void VesselCollider::Resolve (double h)
 		B->CollectFreePorts (*B->s0, pb);
 		for (const collision::Port &p : pa)
 			for (const collision::Port &q : pb) {
-				Vector d (q.pos - p.pos);
-				if (d.length() > PORT_RANGE || dotp (p.dir, q.dir) > -0.8) continue;
-				if ((d - p.dir * dotp (d, p.dir)).length() > PORT_OFFSET) continue;
+				if (p.pos.dist (q.pos) > PORT_RANGE || !collision::DockCapture (p, q, PORT_OFFSET)) continue;
 				excl.push_back (p.pos - O), excl.push_back (q.pos - O);
 			}
 

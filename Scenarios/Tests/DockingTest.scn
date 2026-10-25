@@ -1,8 +1,9 @@
 BEGIN_HYPERDESC
 <h1>Docking with collisions</h1>
-Two delta-gliders in orbit, nose to nose, closing at 0.2 m/s with their
-docking ports lined up: they must dock (collisions between vessels are not
-made at docking ports lined up with each other).
+Pairs of delta-gliders in orbit, nose to nose: closing at 0.2 m/s with
+their docking ports lined up (they must dock), at 1.5 m/s (too fast: they
+must collide and not dock) and at 0.2 m/s turned by 25 degrees about the
+docking axis (misaligned: they must not dock).
 END_HYPERDESC
 
 BEGIN_ENVIRONMENT
@@ -12,11 +13,11 @@ BEGIN_ENVIRONMENT
 END_ENVIRONMENT
 
 BEGIN_FOCUS
-  Ship DG1
+  Ship A1
 END_FOCUS
 
 BEGIN_CAMERA
-  TARGET DG1
+  TARGET A1
   MODE Extern
   POS 4.0 -20.0 -30
   TRACKMODE TargetRelative
@@ -24,16 +25,44 @@ BEGIN_CAMERA
 END_CAMERA
 
 BEGIN_SHIPS
-DG1:DeltaGlider
+A1:DeltaGlider
   STATUS Orbiting Earth
   ELEMENTS 6771000.0 0.00000 51.6 30.0 0.0 100.0 51982.6685767396
   AROT 0 0 0
   NOSECONE 1 1.0000
   PRPLEVEL 0:1.000 1:1.000
 END
-DG2:DeltaGlider
+A2:DeltaGlider
   STATUS Orbiting Earth
   ELEMENTS 6771000.0 0.00000 51.6 30.0 0.0 100.002 51982.6685767396
+  AROT 0 0 0
+  NOSECONE 1 1.0000
+  PRPLEVEL 0:1.000 1:1.000
+END
+B1:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 6771000.0 0.00000 51.6 30.0 0.0 100.2 51982.6685767396
+  AROT 0 0 0
+  NOSECONE 1 1.0000
+  PRPLEVEL 0:1.000 1:1.000
+END
+B2:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 6771000.0 0.00000 51.6 30.0 0.0 100.202 51982.6685767396
+  AROT 0 0 0
+  NOSECONE 1 1.0000
+  PRPLEVEL 0:1.000 1:1.000
+END
+C1:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 6771000.0 0.00000 51.6 30.0 0.0 100.4 51982.6685767396
+  AROT 0 0 0
+  NOSECONE 1 1.0000
+  PRPLEVEL 0:1.000 1:1.000
+END
+C2:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 6771000.0 0.00000 51.6 30.0 0.0 100.402 51982.6685767396
   AROT 0 0 0
   NOSECONE 1 1.0000
   PRPLEVEL 0:1.000 1:1.000

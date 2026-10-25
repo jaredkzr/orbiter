@@ -1,6 +1,9 @@
--- Docking with collisions (Scenarios/Tests/DockingTest.scn): DG2 is placed
--- nose to nose with DG1, its docking port 3 m from DG1's, closing at
--- 0.2 m/s. They must dock within 30 s.
+-- Docking with collisions (Scenarios/Tests/DockingTest.scn): in each pair,
+-- the second delta-glider is placed nose to nose with the first, its
+-- docking port 3 m from the first's, closing along the docking axis.
+-- A: 0.2 m/s, lined up: must dock. B: 1.5 m/s: too fast, must not dock
+-- (the vessels collide). C: 0.2 m/s, turned by 25 degrees about the
+-- docking axis: must not dock.
 
 local failed = false
 
@@ -17,34 +20,56 @@ local function check(name, cond, msg)
 	end
 end
 
+-- place v2 nose to nose with v1, closing at speed, turned by roll about the
+-- docking axis
+local function approach(v1, v2, speed, roll)
+	local R = v1:get_rotationmatrix()
+	-- v2's frame: v1's turned by 180 degrees about its vertical, then by roll
+	-- about the longitudinal axis
+	local c, s = math.cos(roll), math.sin(roll)
+	local T = {m11 = -c, m12 = s, m13 = 0, m21 = s, m22 = c, m23 = 0, m31 = 0, m32 = 0, m33 = -1}
+	local R2 = mat.mmul(R, T)
+	local s1 = v1:get_status(2)
+	local st = v2:get_status(2)
+	-- (ports at (0,-0.49,10.076) in each vessel)
+	local port1 = mat.mul(R, {x = 0, y = -0.49, z = 10.076})
+	local port2 = mat.mul(R2, {x = 0, y = -0.49, z = 10.076})
+	local gap = mat.mul(R, {x = 0, y = 0, z = 3.0})
+	st.rpos = vec.sub(vec.add(vec.add(s1.rpos, port1), gap), port2)
+	st.rvel = vec.add(s1.rvel, mat.mul(R, {x = 0, y = 0, z = -speed}))
+	st.arot = {x = math.atan2(R2.m23, R2.m33), y = -math.asin(R2.m13), z = math.atan2(R2.m12, R2.m11)}
+	st.vrot = {x = 0, y = 0, z = 0}
+	v2:defset_status(st)
+end
+
 local function main()
-	local dg1, dg2 = vessel.get_interface("DG1"), vessel.get_interface("DG2")
+	local v = {}
+	for _, n in ipairs({"A1", "A2", "B1", "B2", "C1", "C2"}) do v[n] = vessel.get_interface(n) end
 	proc.wait_frames(2)
+	approach(v.A1, v.A2, 0.2, 0)
+	approach(v.B1, v.B2, 1.5, 0)
+	approach(v.C1, v.C2, 0.2, math.rad(25))
 
-	-- DG2: turned by 180 degrees about DG1's vertical axis, its port 3 m from
-	-- DG1's port along DG1's longitudinal axis
-	local R = dg1:get_rotationmatrix()
-	local R2 = {m11 = -R.m11, m12 = R.m12, m13 = -R.m13,
-	            m21 = -R.m21, m22 = R.m22, m23 = -R.m23,
-	            m31 = -R.m31, m32 = R.m32, m33 = -R.m33}
-	local s1 = dg1:get_status(2)
-	local s = dg2:get_status(2)
-	s.rpos = vec.add(s1.rpos, mat.mul(R, {x = 0, y = 0, z = 2 * 10.076 + 3.0}))
-	s.rvel = vec.add(s1.rvel, mat.mul(R, {x = 0, y = 0, z = -0.2}))
-	s.arot = {x = math.atan2(R2.m23, R2.m33), y = -math.asin(R2.m13), z = math.atan2(R2.m12, R2.m11)}
-	s.vrot = {x = 0, y = 0, z = 0}
-	dg2:defset_status(s)
-
-	local docked_at = nil
+	local docked = {}
+	local dmin = {B = 1e9}
 	local t0 = oapi.get_simtime()
 	while oapi.get_simtime() - t0 < 30.0 do
 		proc.wait_frames(1)
-		if not docked_at and dg1:get_dockstatus(dg1:get_dockhandle(0)) then
-			docked_at = oapi.get_simtime() - t0
+		for _, p in ipairs({"A", "B", "C"}) do
+			if not docked[p] and v[p .. "1"]:get_dockstatus(v[p .. "1"]:get_dockhandle(0)) then
+				docked[p] = oapi.get_simtime() - t0
+			end
 		end
+		dmin.B = math.min(dmin.B, vec.dist(oapi.get_globalpos(v.B1:get_handle()), oapi.get_globalpos(v.B2:get_handle())))
 	end
-	log(string.format("docked after %s s", docked_at and string.format("%.2f", docked_at) or "-"))
-	check("DG", docked_at ~= nil, "dock")
+	for _, p in ipairs({"A", "B", "C"}) do
+		log(string.format("%s: docked after %s s", p, docked[p] and string.format("%.2f", docked[p]) or "-"))
+	end
+	log(string.format("B: closest centres %.2f m", dmin.B))
+	check("A", docked.A ~= nil, "docks")
+	check("B", docked.B == nil, "does not dock (too fast)")
+	check("B", dmin.B > 18.0, "collides (does not pass through)")
+	check("C", docked.C == nil, "does not dock (misaligned)")
 end
 
 -- (a script error ends the session too, as a failure)

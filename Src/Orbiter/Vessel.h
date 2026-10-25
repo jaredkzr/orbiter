@@ -1311,6 +1311,8 @@ protected:
 	void WakeFromContact ();
 	bool InPlayback () const { return bFRplayback; }
 	double CollisionRadius () const;
+	collision::Port PortState (const StateVectors &s, DWORD i) const;
+	// docking port i in the global frame, at state s
 	// Returns true if any part of the vessel is in contact with a planet surface
 	// Should be called only after update phase, and assumes that sp is up to date.
 
@@ -1655,7 +1657,6 @@ private:
 	Base    *landtgt;         // landing target (base)
 	int   lstatus;            // landing/docking comms status (0=no contact, 1=contact,
 	DWORD nport;              // allocated landing pad/docking port no (>=0, (DWORD)-1=none)
-	UINT  scanvessel;         // next vessel to check for docking event
 
 	mutable bool surfprm_valid;
 	bool pyp_valid;

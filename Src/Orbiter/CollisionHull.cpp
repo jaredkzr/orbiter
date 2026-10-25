@@ -148,6 +148,17 @@ namespace collision {
 		return hulls;
 	}
 
+	bool DockCapture (const Port &a, const Port &b, double maxOffset)
+	{
+		const CFG_PHYSICSPRM &prm = g_pOrbiter->Cfg()->CfgPhysicsPrm;
+		if ((a.vel - b.vel).length() > prm.DockSpeedLimit) return false;
+		double c = cos (prm.DockAngleLimit);
+		if (-dotp (a.dir, b.dir) < c) return false;  // (facing each other)
+		if (dotp (a.rot, b.rot) < c) return false;   // (turned alike about the axis)
+		Vector d (b.pos - a.pos);
+		return (d - a.dir * dotp (d, a.dir)).length() <= maxOffset;
+	}
+
 	bool ClassHulls (const char *classname, std::vector<Hull> &hulls)
 	{
 		std::string name = std::string ("Collision/") + classname + ".cfg";

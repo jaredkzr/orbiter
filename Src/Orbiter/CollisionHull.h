@@ -43,8 +43,15 @@ namespace collision {
 
 	/// A free docking port (global frame)
 	struct Port {
-		Vector pos, dir; ///< position, approach direction (out of the vessel)
+		Vector pos, dir, rot; ///< position, approach direction (out of the vessel), longitudinal alignment
+		Vector vel;           ///< velocity of the port
 	};
+
+	/// Whether two docking ports can capture each other: relative speed and
+	/// misalignment within the limits (Orbiter.cfg: DockingSpeedLimit,
+	/// DockingAngleLimit); lateral offset: also within maxOffset of each
+	/// other's axis
+	bool DockCapture (const Port &a, const Port &b, double maxOffset);
 
 	/// The hull of a set of points (with a skin of thickness 'skin' added)
 	Hull MakeHull (const std::vector<Vector> &pts, double skin);

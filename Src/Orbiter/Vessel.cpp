@@ -297,7 +297,6 @@ void Vessel::SetDefaultState ()
 	undock_t            = -1000;
 	proxyvessel         = 0;
 	supervessel         = 0;
-	scanvessel          = 0;
 	attmode             = 1;
 	ctrlsurfmode        = 0;
 	for (i = 0; i < 6; i++)
@@ -4455,7 +4454,13 @@ void Vessel::CollectHulls (const StateVectors &s, std::vector<collision::HullRef
 void Vessel::CollectFreePorts (const StateVectors &s, std::vector<collision::Port> &ports) const
 {
 	for (DWORD i = 0; i < ndock; i++)
-		if (!dock[i]->mate) ports.push_back ({s.pos + mul (s.R, dock[i]->ref), mul (s.R, dock[i]->dir)});
+		if (!dock[i]->mate) ports.push_back (PortState (s, i));
+}
+
+collision::Port Vessel::PortState (const StateVectors &s, DWORD i) const
+{
+	return { s.pos + mul (s.R, dock[i]->ref), mul (s.R, dock[i]->dir), mul (s.R, dock[i]->rot),
+		s.vel + mul (s.R, crossp (dock[i]->ref, s.omega)) };
 }
 
 void Vessel::ContactStateChanged ()
@@ -4660,66 +4665,56 @@ void Vessel::PostUpdate ()
 
 	if (fstatus == FLIGHTSTATUS_FREEFLIGHT && td.SimT1 > undock_t+1.0) {
 
-		// check for vessel-vessel docking
-		// check one vessel per frame (this may not be enough if universe is densely
-		// populated. Instead there should be a list of vessels, sorted into 2 or 3 distance
-		// bins (eg < 10km, <1000km, rest) and 1 vessel per *bin* should be checked)
+		// check for vessel-vessel docking: all vessels close enough for their
+		// docking ports to meet
 
 		if (ndock) {
-			if (++scanvessel >= g_psys->nVessel()) scanvessel = 0;
-			Vessel *v = g_psys->GetVessel(scanvessel);
-			if (v != this && v->ndock && v->proxybody == proxybody) {
+			for (DWORD iv = 0; iv < g_psys->nVessel(); iv++) {
+				Vessel *v = g_psys->GetVessel(iv);
+				if (v == this || !v->ndock || v->proxybody != proxybody) continue;
 				double dst = s0->pos.dist (v->GPos());
+				if (dst > size + v->Size() + 1e3) continue; // not a candidate
 
-				if ((dst < 1.5 * (size + v->Size()) || (dst < size + v->Size() + 1e3))) { // valid candidate
-					Vector dref, gref, vref;
-					for (j = 0; j < ndock; j++) { // loop over my own docks
-						if (dock[j]->mate) continue; // dock already busy
+				Vector dref;
+				for (j = 0; j < ndock; j++) { // loop over my own docks
+					if (dock[j]->mate) continue; // dock already busy
+					collision::Port pj (PortState (*s0, j));
+					for (k = 0; k < v->ndock; k++) { // loop over other vessel's docks
+						if (v->dock[k]->mate) continue; // dock already busy
+						collision::Port pk (v->PortState (*v->s0, k));
+						double d = pj.pos.dist (pk.pos);
+						if (d >= MIN_DOCK_DIST) continue;
+						// capture only within the speed and alignment limits
+						bool capture = collision::DockCapture (pj, pk, MIN_DOCK_DIST);
 						if (dockmode == 0) { // legacy docking mode
-							if (dotp (s0->vel - v->GVel(), mul (s0->R, dock[j]->dir)) < -0.01) continue; // moving away from dock
-							for (k = 0; k < v->ndock; k++) { // loop over other vessel's docks
-								if (v->dock[k]->mate) continue; // dock already busy
-								dref.Set (tmul (v->GRot(), mul (s0->R, dock[j]->ref) + s0->pos - v->GPos()));
-								double d = dref.dist (v->dock[k]->ref);
-								if (d < MIN_DOCK_DIST) {
-									if (dock[j]->autodock && v->dock[k]->autodock)
-										Dock (v, j, k);
-								}
-							}
+							if (dotp (s0->vel - v->GVel(), pj.dir) < -0.01) continue; // moving away from dock
+							if (capture && dock[j]->autodock && v->dock[k]->autodock)
+								Dock (v, j, k);
 						} else { // new docking mode
-							for (k = 0; k < v->ndock; k++) { // loop over other vessel's docks
-								if (v->dock[k]->mate) continue; // dock already busy
-								gref.Set (mul (s0->R, dock[j]->ref) + s0->pos);            // my dock in global frame
-								vref.Set (mul (v->GRot(), v->dock[k]->ref) + v->GPos()); // target dock in global frame
-								//dref.Set (tmul (v->GRot(), mul (*grot, dock[j]->ref) + *gpos - v->GPos())); // my dock in the target's frame
-								double d = gref.dist(vref); //dref.dist (v->dock[k]->ref);
-								if (d < MIN_DOCK_DIST) {
-									if (dotp (s0->vel - v->GVel(), vref-gref) >= 0) { // on approach
-										dock[j]->pending = v;
-									} else if (dock[j]->pending == v) {
-										if (dock[j]->autodock && v->dock[k]->autodock)
-											Dock (v, j, k);
-									}
-								}
+							if (dotp (pj.vel - pk.vel, pk.pos - pj.pos) >= 0) { // on approach
+								dock[j]->pending = (capture ? v : nullptr);
+							} else if (dock[j]->pending == v) {
+								if (dock[j]->autodock && v->dock[k]->autodock)
+									Dock (v, j, k);
 							}
 						}
 					}
-					// update information about closest dock in range of our dock 0
-					if (closedock.vessel && closedock.vessel->ndock && closedock.dock < closedock.vessel->ndock) {
-						dref.Set (tmul (closedock.vessel->GRot(), mul (s0->R, dock[0]->ref) + s0->pos - closedock.vessel->GPos()));
-						closedock.dist = dref.dist (closedock.vessel->dock[closedock.dock]->ref);
-					} else {
-						closedock.dist = 1e50;
-					}
-					for (k = 0; k < v->ndock; k++) {
-						if (v->dock[k]->mate) continue;
-						dref.Set (tmul (v->GRot(), mul (s0->R, dock[0]->ref) + s0->pos - v->GPos()));
-						double d = dref.dist (v->dock[k]->ref);
-						if (d < closedock.dist) {
-							closedock.dist = d;
-							closedock.vessel = v;
-							closedock.dock = k;
-						}
+				}
+				// update information about closest dock in range of our dock 0
+				if (closedock.vessel && closedock.vessel->ndock && closedock.dock < closedock.vessel->ndock) {
+					dref.Set (tmul (closedock.vessel->GRot(), mul (s0->R, dock[0]->ref) + s0->pos - closedock.vessel->GPos()));
+					closedock.dist = dref.dist (closedock.vessel->dock[closedock.dock]->ref);
+				} else {
+					closedock.dist = 1e50;
+				}
+				for (k = 0; k < v->ndock; k++) {
+					if (v->dock[k]->mate) continue;
+					dref.Set (tmul (v->GRot(), mul (s0->R, dock[0]->ref) + s0->pos - v->GPos()));
+					double d = dref.dist (v->dock[k]->ref);
+					if (d < closedock.dist) {
+						closedock.dist = d;
+						closedock.vessel = v;
+						closedock.dock = k;
 					}
 				}
 			}
