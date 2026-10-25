@@ -65,6 +65,8 @@ ElevationManager::ElevationManager (const CelestialBody *_cbody)
 	auto x = std::filesystem::status(path);
 	bDirExists = std::filesystem::is_directory(x);
 
+	hasData = treeMgr[0] || bDirExists;
+
 	sprintf(fname, "%s\\Elev_mod", cbody->Name());
 	g_pOrbiter->Cfg()->PTexPath(path, fname);
 	auto y = std::filesystem::status(path);
@@ -324,6 +326,22 @@ double ElevationManager::Elevation (double lat, double lng, int reqlvl, std::vec
 	double e = 0.0, dh = 0.0;
 	if (reslvl) *reslvl = 0;
 	reqlvl = (reqlvl ? min (max(0,reqlvl-7), maxlvl) : maxlvl);
+
+	if (!hasData) { // (no elevation data: flat, with the procedural detail)
+		if (normal) *normal = Vector (0, 1, 0);
+		const TerrainDetail *det = Detail ();
+		if (!det) return 0.0;
+		double sp = det->FlatSpacing ();
+		dh = det->Height (lat, lng, 0.0, sp, 0.0);
+		if (normal && dh != 0.0) {
+			double d = 0.25 * det->LambdaMin(), R = cbody->Size();
+			double dlat = d / R, dlng = d / (R * max (cos (lat), 1e-6));
+			double sx = (det->Height (lat, lng + dlng, 0.0, sp, 0.0) - det->Height (lat, lng - dlng, 0.0, sp, 0.0)) / (2.0 * d);
+			double sz = (det->Height (lat + dlat, lng, 0.0, sp, 0.0) - det->Height (lat - dlat, lng, 0.0, sp, 0.0)) / (2.0 * d);
+			*normal = Vector (-sx, 1.0, -sz).unit();
+		}
+		return dh;
+	}
 
 	if (mode) {
 		ElevationTile *tile;

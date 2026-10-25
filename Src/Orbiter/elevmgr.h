@@ -87,6 +87,7 @@ private:
 	DWORD tilesource = 2; // bit 1: try loading from cache, bit 2: try loading from archive
 	ZTreeMgr *treeMgr[5];
 	bool bDirExists, bModExists;
+	bool hasData = true; // elevation tiles (archive or directory); else flat, with the detail on it
 	mutable std::vector<ElevationTile> *local_cache = nullptr;
 	mutable std::unique_ptr<class TerrainDetail> detail;
 	mutable bool detailInit = false;

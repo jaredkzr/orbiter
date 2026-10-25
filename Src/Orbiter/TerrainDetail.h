@@ -65,6 +65,9 @@ public:
 	static bool clientSupport;
 	/// shortest wavelength [m] (four times the node spacing of the finest mesh)
 	double LambdaMin () const { return lambdaMin; }
+	/// node spacing [m] to use for planets without elevation data (flat
+	/// data, relief 0: the detail's floor, wavelengths of a few km down)
+	double FlatSpacing () const { return flatSpacing; }
 
 	/// Detail elevation [m] at a point
 	/// \param lat, lng position [rad]
@@ -110,6 +113,7 @@ private:
 	Params prm;
 	double radius;
 	double lambdaMin;
+	double flatSpacing;
 	struct Flat { Vector dir; double r0, r1; }; // fully flat within r0, detail beyond r1 [m]
 	mutable std::vector<Flat> flats;
 	mutable bool basesDone = false;

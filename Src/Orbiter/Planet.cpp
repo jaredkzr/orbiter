@@ -686,7 +686,9 @@ void Planet::Setup ()
 	bEnableWind = g_pOrbiter->Cfg()->CfgPhysicsPrm.bAtmWind;
 	// should be done only once rather than for every planet
 
-	if (tmgr_version == 2)
+	// (and planets with only legacy textures: flat, with the procedural
+	// detail; not gas giants)
+	if (tmgr_version == 2 || mass < 1e25)
 		emgr = new ElevationManager(this);
 	for (DWORD i = 0; i < nbase; i++)
 		baselist[i]->Setup();

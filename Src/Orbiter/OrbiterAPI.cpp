@@ -1445,6 +1445,7 @@ DLLEXPORT bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, SURFDETAILPARAM *prm)
 	prm->craters = p.craters;
 	prm->craterDepth = p.craterDepth;
 	prm->craterFresh = p.craterFresh;
+	prm->flatSpacing = det->FlatSpacing ();
 	return true;
 }
 

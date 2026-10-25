@@ -346,7 +346,9 @@ void TileRenderer::Shutdown ()
 std::unique_ptr<PlanetSurface> PlanetSurface::Create (OBJHANDLE hPlanet, Scene *scene, bool clouds)
 {
 	const int *engine = (const int*)oapiGetObjectParam (hPlanet, clouds ? OBJPRM_PLANET_CLOUDTILEENGINE : OBJPRM_PLANET_TILEENGINE);
-	if (!engine || *engine < 2) return nullptr;
+	// (legacy texture format, engine 1: tiles made from the patch textures,
+	// for bodies with a surface; gas giants keep their textured sphere)
+	if (!engine || *engine < 1 || (*engine < 2 && oapiGetMass (hPlanet) > 1e25)) return nullptr;
 	if (clouds) {
 		const bool *has = (const bool*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_HASCLOUDS);
 		if (!has || !*has) return nullptr;
@@ -537,6 +539,10 @@ double PlanetSurface::SurfaceElev (const Node *src, double lat, double lng, doub
 {
 	if (amp) *amp = 0.0;
 	if (fade) *fade = 0.0;
+	if (!src) { // (no elevation data: flat, with the detail as the core has it)
+		if (clouds || !detail || layers->elev) return 0.0;
+		return oapiSurfaceDetail (hPlanet, lng, lat, 0.0, detailPrm.flatSpacing, 0.0, lmin, amp, fade);
+	}
 	double h = SampleElev (src, lat, lng);
 	if (clouds || !detail) return h;
 	// the relief of the data cell (as the core computes it for its elevation)
@@ -573,7 +579,7 @@ void PlanetSurface::BuildMesh (Node *n, const Node *src, bool detailed)
 			double lng = n->lngmin + (j - 1) * dlng;
 			VECTOR3 d = SurfaceDir (lat, lng);
 			double a = 0.0, f = 0.0;
-			double h = src ? SurfaceElev (src, lat, lng, lmin, &a, &f) : 0.0;
+			double h = SurfaceElev (src, lat, lng, lmin, &a, &f);
 			A[2 * (i*W + j)] = (float)a, A[2 * (i*W + j) + 1] = (float)f;
 			D[i*W + j] = d;
 			P[i*W + j] = d * (radius + h);
@@ -606,7 +612,7 @@ void PlanetSurface::BuildMesh (Node *n, const Node *src, bool detailed)
 		for (int i = 0; i <= G; i += 2)
 			for (int j = 0; j <= G; j += 2) {
 				double lat = std::clamp (n->latmax - i * dlat, -PI05, PI05), lng = n->lngmin + j * dlng;
-				T[i*V + j] = D[(i + 1) * W + (j + 1)] * (radius + (psrc ? SurfaceElev (psrc, lat, lng, lminP) : 0.0));
+				T[i*V + j] = D[(i + 1) * W + (j + 1)] * (radius + SurfaceElev (psrc, lat, lng, lminP));
 			}
 		for (int i = 0; i <= G; i++)
 			for (int j = 0; j <= G; j++) {
@@ -660,7 +666,8 @@ void PlanetSurface::BuildMesh (Node *n, const Node *src, bool detailed)
 		copy (2*V, k, k, 0);
 		copy (3*V, k, k, G);
 	}
-	n->detailSpacing = src ? (float)(radius * (src->latmax - src->latmin) / (ElevGrid::N - 3)) : 0.0f;
+	n->detailSpacing = src ? (float)(radius * (src->latmax - src->latmin) / (ElevGrid::N - 3))
+		: (detail && !layers->elev ? (float)detailPrm.flatSpacing : 0.0f);
 	double lmesh = std::max (lmin, detailPrm.lambdaMin);
 	n->detailLmesh = (lmesh >= n->detailSpacing) ? 1e30f : (float)lmesh; // (none in the mesh)
 
@@ -894,7 +901,7 @@ void PlanetSurface::Prepare ()
 						amp, n->detailSpacing, n->detailLmesh);
 				}
 				oapiWriteLogV ("VulkanClient: elevation at the camera (%s): mesh %.1f m (level %d, tile %d/%d/%d, range %.0f..%.0f), core %.1f m",
-					name, src ? SurfaceElev (src, lat, lng, 0.0) : 0.0, src ? src->lvl : 0, n->lvl, n->ilat, n->ilng,
+					name, SurfaceElev (src, lat, lng, 0.0), src ? src->lvl : 0, n->lvl, n->ilat, n->ilng,
 					src ? src->elev->emin : 0.0, src ? src->elev->emax : 0.0, oapiSurfaceElevation (hPlanet, lng, lat));
 				break;
 			}

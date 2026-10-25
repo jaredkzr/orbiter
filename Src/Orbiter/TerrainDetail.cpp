@@ -177,6 +177,10 @@ TerrainDetail::TerrainDetail (const Planet *pl, const Params &p): planet (pl), p
 		prm.level = (int)std::lround (4.0 + std::log2 (radius * Pi / (32.0 * 1.2)));
 	prm.level = std::clamp (prm.level, (int)pl->MaxPatchLevel(), 24);
 	double s = radius * Pi / std::ldexp (1.0, prm.level - 4) / 32.0;
+	// (planets without elevation data: the spacing of the coarsest tile
+	// level with nodes 2 km apart at most)
+	flatSpacing = radius * Pi / 256.0;
+	while (flatSpacing > 2000.0) flatSpacing *= 0.5;
 	lambdaMin = 4.0 * s;
 }
 
