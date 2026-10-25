@@ -65,7 +65,6 @@ set(SHADER_SRC
 	Shaders/particle.frag
 	Shaders/tile.vert
 	Shaders/tile.frag
-	Shaders/tile_fp64.frag
 	Shaders/sky.vert
 	Shaders/sky.frag
 	Shaders/shadow.vert

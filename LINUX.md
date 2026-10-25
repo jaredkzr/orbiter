@@ -31,12 +31,13 @@ sudo apt install build-essential cmake ninja-build git \
 
 | Device feature | Used for |
 | --- | --- |
-| `shaderFloat64` (double precision in shaders) | terrain detail shading, tile meshes built on the GPU |
-| `bufferDeviceAddress` | GPU tile meshes, ray tracing |
+| `bufferDeviceAddress` | tile meshes built on the GPU, ray tracing |
 | `VK_KHR_ray_query` + `VK_KHR_acceleration_structure` | ray-traced shadows, ambient occlusion, reflections |
 
 Without these features the client falls back to shadow maps, screen-space
-effects and terrain meshes built on the CPU.
+effects and terrain meshes built on the CPU. Shaders use single precision
+only: the terrain detail works from tile-relative coordinates, so GPUs with
+slow or missing 64-bit float support run it at full speed.
 
 **Planet data:** the repository has no planet textures. Use the textures of
 the Orbiter 2024 release (or the Orbiter 2016 high-resolution packs): the

@@ -22,14 +22,18 @@ const int NV = V * V + 4 * V; // vertices: grid, then the skirts
 const int NE = 5;             // per-vertex detail stream: amplitude, fade, morph target
 
 struct Job {
-	dvec4 centre;   // tile centre, planet frame [m]
-	dvec4 geo;      // lat of the top row, lng of the left column, row and column steps [rad]
+	ivec4 refI;     // the tile's reference point d0 R [m] (d0: the centre's direction), integer part
+	vec4 refF;      // ... fraction; w: the planet's radius R [m]
+	vec4 ll;        // latitude and longitude of the centre, row and column steps [rad]
+	vec4 off;       // offsets of the top row and left column from the centre [rad]; latitude limits (poles) relative to it
+	vec4 d0;        // d0 (xyz)
 	uvec2 outAddr;  // vertex buffer: NV vertices (8 floats), then NV detail records (NE floats)
 	uvec2 ptsAddr;  // per point: data elevation, amplitude, fade (W*W, then the parent's M*M)
 	vec4 sp;        // lmin, the parent's lmin, data spacing, the parent's data spacing [m]
-	vec4 misc;      // skirt depth [m], parent (1/0)
+	vec4 misc;      // skirt depth [m], parent (1/0), lsplit: the coarser detail is in the points' elevations [m],
+	                // href: the points' elevations are relative to it [m]
 };
-layout(buffer_reference, std430, buffer_reference_align = 32) readonly buffer Jobs { Job job[]; };
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Jobs { Job job[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Floats { float f[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) coherent buffer OutFloats { float f[]; };
 
@@ -38,30 +42,21 @@ layout(push_constant) uniform Params {
 	uvec2 pad;
 	vec4 prm;      // hurst, ridge, crater cells, crater depth
 	vec4 prm2;     // pebble cells
-	double R;      // planet radius [m]
 } pc;
 
-shared vec3 P[W * W]; // positions relative to the tile centre
+shared vec3 P[W * W]; // positions relative to the tile centre raised to href
 // (the morph targets go through the output: the detail stream's records)
 
-// sine and cosine in double precision (series; |x| <= pi)
-double DSin (double x)
+// The direction at latitude and longitude offsets (da, db) from the centre
+// (lat0, lng0), relative to the centre's: by the identities for differences
+// of sines and cosines, accurate in single precision for small offsets
+vec3 DirOffset (float lat0, float lng0, float da, float db)
 {
-	double x2 = x * x, t = x, s = x;
-	for (int n = 1; n <= 14; n++) { t *= -x2 / double ((2 * n) * (2 * n + 1)); s += t; }
-	return s;
-}
-double DCos (double x)
-{
-	double x2 = x * x, t = 1.0, s = 1.0;
-	for (int n = 1; n <= 14; n++) { t *= -x2 / double ((2 * n - 1) * (2 * n)); s += t; }
-	return s;
-}
-const double DPI05 = 1.5707963267948966LF;
-dvec3 Dir (double lat, double lng)
-{
-	double cl = DCos (lat);
-	return dvec3 (cl * DCos (lng), DSin (lat), cl * DSin (lng));
+	float sa = sin (0.5 * da), sb = sin (0.5 * db);
+	float dcl = -2.0 * sin (lat0 + 0.5 * da) * sa, dsl = 2.0 * cos (lat0 + 0.5 * da) * sa;
+	float dcn = -2.0 * sin (lng0 + 0.5 * db) * sb, dsn = 2.0 * cos (lng0 + 0.5 * db) * sb;
+	float cl0 = cos (lat0);
+	return vec3 (dcl * cos (lng0 + db) + cl0 * dcn, dsl, dcl * sin (lng0 + db) + cl0 * dsn);
 }
 
 // a morph target, in the vertex's detail record
@@ -82,34 +77,37 @@ void main ()
 	Floats pts = Floats (jb.ptsAddr);
 	OutFloats o = OutFloats (jb.outAddr);
 	uint tid = gl_LocalInvocationID.x;
-	double latmax = jb.geo.x, lngmin = jb.geo.y, dlat = jb.geo.z, dlng = jb.geo.w;
-	dvec3 C = jb.centre.xyz;
+	float R = jb.refF.w, dlat = jb.ll.z, dlng = jb.ll.w;
+	vec3 d0 = jb.d0.xyz;
 	bool parent = jb.misc.y > 0.5;
+	// offsets of grid point (i, j) from the centre (latitudes clamped at the poles)
+	#define DA(i) clamp (jb.off.x - float (i) * dlat, jb.off.w, jb.off.z)
+	#define DB(j) (jb.off.y + float (j) * dlng)
 
 	// the grid with a border of one node
 	for (uint k = tid; k < uint (W * W); k += 256u) {
 		int i = int (k) / W, j = int (k) % W;
-		double lat = clamp (latmax - double (i - 1) * dlat, -DPI05, DPI05);
-		double lng = lngmin + double (j - 1) * dlng;
-		dvec3 d = Dir (lat, lng);
+		vec3 dd = DirOffset (jb.ll.x, jb.ll.y, DA (i - 1), DB (j - 1));
+		DetPoint pt = DetPointAt (jb.refI.xyz, jb.refF.xyz, dd * R);
 		float h0 = pts.f[3 * k], A = pts.f[3 * k + 1], f = pts.f[3 * k + 2];
 		// (without the pebbles: the normals are of the ground under them; the
 		// shader shades the pebbles per pixel, their sharp edges would
 		// alias on the grid)
-		float h = h0 + DetHeight (d, pc.R, A, f, jb.sp.z, jb.sp.x, pc.prm, 0.0);
-		P[k] = vec3 (d * (pc.R + double (h)) - C);
+		float h = h0 + DetHeight (pt, A, f, jb.sp.z, jb.sp.x, jb.misc.z, pc.prm, 0.0);
+		// (d (R + href + h) - d0 (R + href): small, its rounding far below the
+		// node spacing; d0 href is added when the vertices are written)
+		P[k] = d0 * h + dd * (R + jb.misc.w + h);
 	}
 	// the parent's shape at its nodes (every second one)
 	if (parent) {
 		for (uint k = tid; k < uint (M * M); k += 256u) {
 			int i = 2 * (int (k) / M), j = 2 * (int (k) % M);
-			double lat = clamp (latmax - double (i) * dlat, -DPI05, DPI05);
-			double lng = lngmin + double (j) * dlng;
-			dvec3 d = Dir (lat, lng);
+			vec3 dd = DirOffset (jb.ll.x, jb.ll.y, DA (i), DB (j));
+			DetPoint pt = DetPointAt (jb.refI.xyz, jb.refF.xyz, dd * R);
 			uint q = uint (W * W) + k;
 			float h0 = pts.f[3 * q], A = pts.f[3 * q + 1], f = pts.f[3 * q + 2];
-			float h = h0 + DetHeight (d, pc.R, A, f, jb.sp.w, jb.sp.y, pc.prm, pc.prm2.x);
-			SetT (o, i * V + j, vec3 (d * (pc.R + double (h)) - C));
+			float h = h0 + DetHeight (pt, A, f, jb.sp.w, jb.sp.y, jb.misc.z, pc.prm, pc.prm2.x);
+			SetT (o, i * V + j, d0 * h + dd * (R + jb.misc.w + h));
 		}
 	}
 	memoryBarrierBuffer ();
@@ -133,19 +131,21 @@ void main ()
 	uint ampBase = uint (NV * 8);
 	for (uint k = tid; k < uint (V * V); k += 256u) {
 		int i = int (k) / V, j = int (k) % V;
-		uint pk0 = uint ((i + 1) * W + (j + 1));
-		dvec3 dd = Dir (clamp (latmax - double (i) * dlat, -DPI05, DPI05), lngmin + double (j) * dlng);
-		float peb = DetPebbles (dd, pc.R, pts.f[3 * pk0 + 2], jb.sp.z, jb.sp.x, pc.prm2.x, 0.0);
-		vec3 p = P[(i + 1) * W + (j + 1)] + vec3 (dd) * peb;
-		vec3 nm = cross (P[(i + 2) * W + (j + 1)] - P[i * W + (j + 1)], P[(i + 1) * W + (j + 2)] - P[(i + 1) * W + j]);
-		double lat = clamp (latmax - double (i) * dlat, -DPI05, DPI05);
-		vec3 d = vec3 (dd);
-		float len = length (nm);
-		nm = len > 1e-9 && abs (lat) < DPI05 - 1e-9 ? nm / len : d; // (at a pole the neighbours collapse: the vertical)
-		if (dot (nm, d) < 0.0) nm = -nm;
 		uint pk = uint ((i + 1) * W + (j + 1));
+		float da = DA (i);
+		vec3 dd = DirOffset (jb.ll.x, jb.ll.y, da, DB (j));
+		vec3 d = normalize (d0 + dd);
+		DetPoint pt = DetPointAt (jb.refI.xyz, jb.refF.xyz, dd * R);
+		float peb = DetPebbles (pt, pts.f[3 * pk + 2], jb.sp.z, jb.sp.x, pc.prm2.x, 0.0);
+		vec3 href0 = d0 * jb.misc.w;
+		vec3 p = P[pk] + d * peb + href0;
+		vec3 nm = cross (P[(i + 2) * W + (j + 1)] - P[i * W + (j + 1)], P[(i + 1) * W + (j + 2)] - P[(i + 1) * W + j]);
+		float len = length (nm);
+		bool pole = da >= jb.off.z || da <= jb.off.w; // (at a pole the neighbours collapse: the vertical)
+		nm = len > 1e-9 && !pole ? nm / len : d;
+		if (dot (nm, d) < 0.0) nm = -nm;
 		float A = pts.f[3 * pk + 1], f = pts.f[3 * pk + 2];
-		vec3 t = GetT (o, int (k));
+		vec3 t = GetT (o, int (k)) + href0;
 		// (the vertex, and its skirt copies on the edges)
 		for (int s = 0; s < 5; s++) {
 			int idx = -1;

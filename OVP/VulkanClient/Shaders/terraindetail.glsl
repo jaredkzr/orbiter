@@ -6,7 +6,8 @@
 // contain the octaves down to a few node spacings (oapiSurfaceDetail); the
 // shader adds the finer ones to the shading normal, evaluating the same
 // function, so that an octave keeps its shape when a finer mesh takes it
-// over. The sphere position needs double precision (1e-10 of the radius).
+// over. All in single precision: points as tile-relative offsets from a
+// reference point split into integer and fraction (DetPoint).
 // Requires atmosphere.glsl (atm) and the tile push constants.
 
 #include "detailcore.glsl"
@@ -19,12 +20,12 @@ struct DetailSample {
 };
 
 // The detail finer than the mesh (as TerrainDetail::Height)
-// d: unit direction (double), R: radius; A: noise amplitude factor [m],
+// pt: the point, d: its unit direction; A: noise amplitude factor [m],
 // fade: crater fade factor, spacing: node spacing of the elevation data
 // [m], lmesh: shortest wavelength in the mesh [m], hurst; footprint:
 // pixel size [m]
 // sunP: direction to the sun, planet frame
-DetailSample TerrainDetailEval (dvec3 d, double R, float A, float fade, float spacing, float lmesh, float hurst, float footprint, vec3 sunP)
+DetailSample TerrainDetailEval (DetPoint pt, vec3 d, float A, float fade, float spacing, float lmesh, float hurst, float footprint, vec3 sunP)
 {
 	DetailSample ds;
 	ds.grad = vec3 (0.0), ds.height = 0.0, ds.albedo = 1.0, ds.shadow = 1.0;
@@ -40,7 +41,7 @@ DetailSample TerrainDetailEval (dvec3 d, double R, float A, float fade, float sp
 		if (w <= 0.0) continue;
 		int m = j - DET_JMIN;
 		ivec3 cell, p; vec3 sg;
-		vec3 f = DetLattice (m, d, R * double (exp2 (float (-j))), cell, p, sg);
+		vec3 f = DetLattice (m, pt, j, cell, p, sg);
 		vec4 n = DetNoise (cell, f, uint (m));
 		// the octaves' shape (as TerrainDetail.cpp's Shape)
 		float r = atm.detailPrm.x * clamp (float (j - 3) / 3.0, 0.0, 1.0);
@@ -70,7 +71,7 @@ DetailSample TerrainDetailEval (dvec3 d, double R, float A, float fade, float sp
 		for (int l = 0; l < nl; l++) {
 			int m = k - DET_JMIN + 32 + 29 * l;
 			ivec3 cell, p; vec3 sg;
-			vec3 f = DetLattice (m, d, R * double (exp2 (float (-k))), cell, p, sg);
+			vec3 f = DetLattice (m, pt, k, cell, p, sg);
 			uint h0 = DetHash (cell, 1000u + uint (m));
 			if (DetUnit16 (h0) >= density / float (nl)) continue;
 			uint h1 = DetPcg (h0), h2 = DetPcg (h1), h3 = DetPcg (h2), h4 = DetPcg (h3);
@@ -112,7 +113,7 @@ DetailSample TerrainDetailEval (dvec3 d, double R, float A, float fade, float sp
 			// the sun rises above the line to the sun (the shading can't
 			// cast shadows); its edge softened
 			if (x < 1.0) {
-				vec3 up = DetToLattice (vec3 (d), p, sg), sl = DetToLattice (sunP, p, sg);
+				vec3 up = DetToLattice (d, p, sg), sl = DetToLattice (sunP, p, sg);
 				float se = dot (sl, up); // sine of the sun's elevation
 				vec3 sh = sl - up * se;
 				float shl = length (sh);
@@ -144,23 +145,32 @@ void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec2 Af
 {
 	if (tile.detail.w < 0.5 || (Af.x <= 0.0 && (Af.y <= 0.0 || atm.detailPrm.y <= 0.0))) return;
 	mat3 v2p = mat3 (atm.viewToPlanet);
-	dvec3 cam = dvec3 (atm.detailCamHi.xyz) + dvec3 (atm.detailCamLo.xyz);
-	double R = double (atm.detailCamHi.w) + double (atm.detailCamLo.w);
-	dvec3 q = cam + dvec3 (v2p * posView);
-	dvec3 d = q / length (q);
+	// the point on the sphere: from the tile's reference point D0 = d0 R
+	// (tile.refI + refF), the position relative to d0 (R + h0) (refRel):
+	// D - D0 = d0 R f + e R/(R+h0) (1 + f), f = (1 + u)^-1/2 - 1 (written
+	// without cancellation, exact also for the large offsets of coarse tiles)
+	vec3 e = v2p * posView - tile.refRel.xyz;
+	float R = tile.refF.w, Rh = tile.refRel.w;
+	vec3 d0 = normalize (vec3 (tile.refI.xyz) + tile.refF.xyz);
+	float u = 2.0 * dot (d0, e) / Rh + dot (e, e) / (Rh * Rh);
+	float su = sqrt (max (1.0 + u, 1e-6));
+	float fu = -u / (su * (1.0 + su));
+	vec3 dl = d0 * (R * fu) + e * ((R / Rh) * (1.0 + fu));
+	DetPoint pt = DetPointAt (tile.refI.xyz, tile.refF.xyz, dl);
+	vec3 d = normalize (d0 + dl / R);
 	float dist = length (posView);
 	// pixel size [m] (stretched along the view at grazing angles)
 	float footprint = dist * 2.0 * atm.misc.z / max (frame.jitter.w, 1.0)
 		/ max (abs (dot (posView / dist, Nv)), 0.1);
 	// (the mesh's band reaches twice as far when morphed to the parent's)
-	DetailSample ds = TerrainDetailEval (d, R, Af.x, Af.y, tile.detail.x, tile.detail.y * (1.0 + vMorph), tile.detail.z, footprint, atm.sunDir.xyz);
+	DetailSample ds = TerrainDetailEval (pt, d, Af.x, Af.y, tile.detail.x, tile.detail.y * (1.0 + vMorph), tile.detail.z, footprint, atm.sunDir.xyz);
 	// pebbles: their slopes per pixel (the meshes have their shape, but
 	// normals of the ground under them), by differences along the surface,
 	// with crags on their faces; down to stones of a few pixels
 	// (all stones of two pixels and more: the meshes have the larger ones'
 	// shape, but not their slopes)
 	if (tile.morph.w > 0.0 && footprint < 0.03 && Af.y > 0.0) {
-		vec3 df0 = vec3 (d);
+		vec3 df0 = d;
 		vec3 t1 = normalize (cross (df0, abs (df0.y) < 0.9 ? vec3 (0.0, 1.0, 0.0) : vec3 (1.0, 0.0, 0.0)));
 		vec3 t2 = cross (df0, t1);
 		float e = max (0.5 * footprint, 0.001);
@@ -176,7 +186,7 @@ void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec2 Af
 			for (int l = 0; l < nl; l++) {
 				int m = k - DET_JMIN + 64 + 29 * l;
 				ivec3 cell, p; vec3 sg;
-				vec3 f = DetLattice (m, d, R / double (s), cell, p, sg);
+				vec3 f = DetLattice (m, pt, k, cell, p, sg);
 				bool stone;
 				float h0 = DetPebbleCell (cell, m, k, tile.morph.w / float (nl), f, crag, stone);
 				if (!stone) continue;
@@ -193,7 +203,7 @@ void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec2 Af
 	sunShadow *= ds.shadow;
 	base *= clamp (1.0 + ds.height / max (Af.x, 1.0), 0.8, 1.2) * ds.albedo;
 	vec3 g = ds.grad;
-	vec3 df = vec3 (d);
+	vec3 df = d;
 	g -= df * dot (g, df);         // (along the surface)
 	vec3 gv = transpose (v2p) * g; // view space
 	gv -= Nv * dot (gv, Nv);

@@ -2,7 +2,7 @@
 // Licensed under the MIT License
 
 // Planet surface tiles (fragment shader body: tile.frag, and tile_fp64.frag
-// with the procedural terrain detail, which needs double precision)
+// with the procedural terrain detail)
 
 #define FRAME_AO
 #include "frame.glsl"
@@ -21,6 +21,9 @@ layout(push_constant) uniform Tile {
 	vec4 detail;
 	vec4 morph;
 	vec4 vessel;
+	ivec4 refI;    // terrain detail: the tile's reference point d0 R [m], integer part (xyz)
+	vec4 refF;     // ... fraction (xyz); w: the planet's radius R [m]
+	vec4 refRel;   // d0 (R + h0) relative to the camera, planet frame (xyz); w: R + h0 [m]
 } tile;
 
 layout(location = 0) in vec3 vPosView;

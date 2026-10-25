@@ -185,11 +185,17 @@ private:
 	/// a mesh made on the GPU (tile_mesh.comp): its record (as the shader's
 	/// Job) and the inputs per grid point, made on the CPU
 	struct GpuJob {
-		double centre[4], geo[4];
+		int32_t refI[4];     // reference point d0 R (d0: the centre's direction) [m]: integer part,
+		float refF[4];       // fraction; w: radius
+		float ll[4];         // centre latitude, longitude, row and column steps [rad]
+		float off[4];        // top row and left column offsets from the centre, latitude limits relative to it [rad]
+		float d0[4];
 		uint64_t outAddr, ptsAddr;
 		float sp[4], misc[4];
-		float pad[4];
 	};
+	/// a point d R split into integer metres and the fraction (single
+	/// precision lattices in the shaders: detailcore.glsl's DetPoint)
+	void SplitPoint (const VECTOR3 &D, int32_t I[3], float F[3]) const;
 	void PrepareGpuMesh (const Node *n, const Node *src, GpuJob &job, std::vector<float> &pts, MeshData &md) const;
 	/// the vertex buffer of a tile (made if needed)
 	void EnsureVertexBuffer (Node *n);

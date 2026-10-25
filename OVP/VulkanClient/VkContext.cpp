@@ -207,8 +207,6 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 	f2.features.textureCompressionBC = deviceFeatures.textureCompressionBC;
 	f2.features.largePoints = deviceFeatures.largePoints;
 	f2.features.shaderInt16 = deviceFeatures.shaderInt16;
-	f2.features.shaderFloat64 = deviceFeatures.shaderFloat64;
-	shaderFloat64 = deviceFeatures.shaderFloat64;
 	// (buffer device addresses also without ray tracing: tile meshes)
 	deviceAddress = s12.bufferDeviceAddress;
 	if (deviceAddress) f12.bufferDeviceAddress = VK_TRUE;

@@ -17,7 +17,6 @@
 
 #include "tile.vert.h"
 #include "tile.frag.h"
-#include "tile_fp64.frag.h"
 #include "prepass.vert.h"
 #include "prepass_tile.frag.h"
 #include "prepass_tile.vert.h"
@@ -35,6 +34,9 @@ namespace {
 		float detail[4];  // terrain detail: data node spacing [m], shortest wavelength of the mesh [m], Hurst exponent, on
 		float morph[4];   // morph to the parent's mesh: start distance [m], 1/range [1/m] (0: none); z: sunlight (eclipses); w: pebble cells
 		float vessel[4];  // nearest vessel on the ground (view space; w: present), also morphed from
+		int32_t refI[4];  // terrain detail: the tile's reference point d0 R [m], integer part
+		float refF[4];    // fraction; w: radius
+		float refRel[4];  // d0 (R + h0) relative to the camera (planet frame); w: R + h0
 	};
 
 	constexpr double SPLIT_PIXELS = 500.0;  // split tiles that cover more than this on screen (at resolution bias 0; GRID quads per edge)
@@ -224,10 +226,10 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 {
 	ctx = c;
 	// meshes with the terrain detail made on the GPU (ORBITER_VK_GPU_MESH=0: on the CPU)
-	bool gpuMesh = ctx->shaderFloat64 && ctx->deviceAddress;
+	bool gpuMesh = ctx->deviceAddress; // (single precision: no double precision needed)
 	if (const char *e = getenv ("ORBITER_VK_GPU_MESH")) gpuMesh = gpuMesh && atoi (e) != 0;
 	if (gpuMesh) {
-		VkPushConstantRange mpr{ VK_SHADER_STAGE_COMPUTE_BIT, 0, 64 };
+		VkPushConstantRange mpr{ VK_SHADER_STAGE_COMPUTE_BIT, 0, 48 };
 		VkPipelineLayoutCreateInfo mli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 		mli.pushConstantRangeCount = 1;
 		mli.pPushConstantRanges = &mpr;
@@ -252,8 +254,7 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 
 	VkShaderModule vs = ctx->CreateShaderModule (spv_tile_vert, spv_tile_vert_size);
 	// (with double precision: the terrain detail finer than the meshes)
-	VkShaderModule fs = ctx->shaderFloat64 ? ctx->CreateShaderModule (spv_tile_fp64_frag, spv_tile_fp64_frag_size)
-		: ctx->CreateShaderModule (spv_tile_frag, spv_tile_frag_size);
+	VkShaderModule fs = ctx->CreateShaderModule (spv_tile_frag, spv_tile_frag_size);
 	VkPipelineShaderStageCreateInfo stages[2] = {
 		{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vs, "main" },
 		{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main" }
@@ -765,24 +766,38 @@ void PlanetSurface::EnsureVertexBuffer (Node *n)
 	n->rtId = RTNewGeometryId ();
 }
 
+void PlanetSurface::SplitPoint (const VECTOR3 &D, int32_t I[3], float F[3]) const
+{
+	for (int k = 0; k < 3; k++) {
+		double fl = std::floor (D.data[k]);
+		I[k] = (int32_t)fl;
+		F[k] = (float)(D.data[k] - fl);
+	}
+}
+
 void PlanetSurface::PrepareGpuMesh (const Node *n, const Node *src, GpuJob &job, std::vector<float> &pts, MeshData &md) const
 {
 	const int G = TileRenderer::GRID, V = G + 1, W = G + 3, M = G / 2 + 1;
 	double dlat = (n->latmax - n->latmin) / G, dlng = (n->lngmax - n->lngmin) / G;
-	// (as ComputeMesh: the data's elevation, and the detail's amplitude and
-	// fade, without its octaves: lmin 1e30)
+	// (as ComputeMesh: the data's elevation, the detail's amplitude and
+	// fade, and its coarse layers, in double precision: wavelengths from
+	// lsplit, 40000 node spacings; the GPU adds the finer ones)
+	double lmin = 4.0 * radius * (n->latmax - n->latmin) / G;
+	double lsplit = std::max ({ 2.0 * lmin, detailPrm.lambdaMin, 1e4 * lmin });
 	pts.resize ((size_t)(W * W + M * M) * 3);
+	// (elevations relative to the tile's reference elevation href, so that
+	// their single precision rounding is far below the node spacing)
+	const float href = (float)SurfaceElev (src, 0.5 * (n->latmin + n->latmax), 0.5 * (n->lngmin + n->lngmax), lsplit);
 	for (int i = 0; i < W; i++) {
 		double lat = std::clamp (n->latmax - (i - 1) * dlat, -PI05, PI05);
 		for (int j = 0; j < W; j++) {
 			double lng = n->lngmin + (j - 1) * dlng;
 			double a = 0.0, f = 0.0;
 			float *p = &pts[3 * (i * W + j)];
-			p[0] = (float)SurfaceElev (src, lat, lng, 1e30, &a, &f);
+			p[0] = (float)(SurfaceElev (src, lat, lng, lsplit, &a, &f) - (double)href);
 			p[1] = (float)a, p[2] = (float)f;
 		}
 	}
-	double lmin = 4.0 * radius * (n->latmax - n->latmin) / G;
 	const Node *psrc = n->parent ? ElevSource (n->parent) : nullptr;
 	if (n->parent)
 		for (int i = 0; i < M; i++) {
@@ -790,21 +805,28 @@ void PlanetSurface::PrepareGpuMesh (const Node *n, const Node *src, GpuJob &job,
 			for (int j = 0; j < M; j++) {
 				double a = 0.0, f = 0.0;
 				float *p = &pts[3 * (W * W + i * M + j)];
-				p[0] = (float)SurfaceElev (psrc, lat, n->lngmin + 2 * j * dlng, 1e30, &a, &f);
+				p[0] = (float)(SurfaceElev (psrc, lat, n->lngmin + 2 * j * dlng, lsplit, &a, &f) - (double)href);
 				p[1] = (float)a, p[2] = (float)f;
 			}
 		}
 	auto spacingOf = [&](const Node *s) {
 		return s ? radius * (s->latmax - s->latmin) / (ElevGrid::N - 3) : (detail && !layers->elev ? detailPrm.flatSpacing : 0.0);
 	};
-	job.centre[0] = n->centre.x, job.centre[1] = n->centre.y, job.centre[2] = n->centre.z, job.centre[3] = 0.0;
-	job.geo[0] = n->latmax, job.geo[1] = n->lngmin, job.geo[2] = dlat, job.geo[3] = dlng;
+	// (the centre: d0 R; offsets from it in single precision)
+	double latc = 0.5 * (n->latmin + n->latmax), lngc = 0.5 * (n->lngmin + n->lngmax);
+	SplitPoint (n->centre, job.refI, job.refF);
+	job.refI[3] = 0, job.refF[3] = (float)radius;
+	job.ll[0] = (float)latc, job.ll[1] = (float)lngc, job.ll[2] = (float)dlat, job.ll[3] = (float)dlng;
+	job.off[0] = (float)(n->latmax - latc), job.off[1] = (float)(n->lngmin - lngc);
+	job.off[2] = (float)(PI05 - latc), job.off[3] = (float)(-PI05 - latc);
+	VECTOR3 d0 = n->centre / radius;
+	job.d0[0] = (float)d0.x, job.d0[1] = (float)d0.y, job.d0[2] = (float)d0.z, job.d0[3] = 0.0f;
 	job.sp[0] = (float)std::max (lmin, detailPrm.lambdaMin);
 	job.sp[1] = (float)std::max (2.0 * lmin, detailPrm.lambdaMin);
 	job.sp[2] = (float)spacingOf (src), job.sp[3] = (float)spacingOf (psrc);
 	job.misc[0] = (float)(radius * (n->latmax - n->latmin) * 0.02);
 	job.misc[1] = n->parent ? 1.0f : 0.0f;
-	job.misc[2] = job.misc[3] = 0.0f;
+	job.misc[2] = (float)lsplit, job.misc[3] = href;
 	job.outAddr = job.ptsAddr = 0;
 	md.detailSpacing = (float)spacingOf (src);
 	double lmesh = std::max (lmin, detailPrm.lambdaMin);
@@ -1017,7 +1039,7 @@ void PlanetSurface::Prepare ()
 		vkc::Context::Transient tj = ctx->AllocTransient (jobs.size() * sizeof(GpuJob) + 32);
 		VkDeviceAddress pa = ctx->BufferAddress (tp.buffer) + tp.offset;
 		VkDeviceAddress ja = ctx->BufferAddress (tj.buffer) + tj.offset;
-		size_t jalign = (size_t)((32 - (ja & 31)) & 31); // (the records' doubles: 32-byte aligned)
+		size_t jalign = (size_t)((16 - (ja & 15)) & 15); // (the records: 16-byte aligned)
 		ja += jalign;
 		size_t at = 0;
 		for (size_t i = 0; i < jobs.size(); i++) {
@@ -1045,19 +1067,18 @@ void PlanetSurface::Prepare ()
 			vkc::Buffer hb = ctx->CreateBuffer ((VkDeviceSize)NV * 13 * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
 			vkc::Context::Transient t1 = ctx->AllocTransient (sizeof(GpuJob) + 32);
 			VkDeviceAddress a1 = ctx->BufferAddress (t1.buffer) + t1.offset;
-			size_t al = (size_t)((32 - (a1 & 31)) & 31);
+			size_t al = (size_t)((16 - (a1 & 15)) & 15);
 			GpuJob one = gj[i];
 			one.outAddr = ctx->BufferAddress (hb.buffer);
 			memcpy ((uint8_t*)t1.ptr + al, &one, sizeof(one));
 			ctx->ImmediateSubmit ([&](VkCommandBuffer c) {
 				vkCmdBindPipeline (c, VK_PIPELINE_BIND_POINT_COMPUTE, tr->MeshPipeline ());
-				struct { uint64_t jobs, pad; float prm[4]; float prm2[4]; double R; double pad2; } q{};
+				struct { uint64_t jobs, pad; float prm[4]; float prm2[4]; } q{};
 				q.jobs = a1 + al;
 				q.prm[0] = (float)detailPrm.hurst, q.prm[1] = (float)detailPrm.ridge;
 				q.prm[2] = (float)detailPrm.craters, q.prm[3] = (float)detailPrm.craterDepth;
 				q.prm2[0] = (float)detailPrm.pebbles;
-				q.R = radius;
-				vkCmdPushConstants (c, tr->MeshLayout (), VK_SHADER_STAGE_COMPUTE_BIT, 0, 64, &q);
+				vkCmdPushConstants (c, tr->MeshLayout (), VK_SHADER_STAGE_COMPUTE_BIT, 0, 48, &q);
 				vkCmdDispatch (c, 1, 1, 1);
 			});
 			MeshData cpu;
@@ -1088,13 +1109,12 @@ void PlanetSurface::Prepare ()
 		dep.pMemoryBarriers = &mb;
 		vkCmdPipelineBarrier2 (cmd, &dep);
 		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, tr->MeshPipeline ());
-		struct { uint64_t jobs, pad; float prm[4]; float prm2[4]; double R; double pad2; } pc{};
+		struct { uint64_t jobs, pad; float prm[4]; float prm2[4]; } pc{};
 		pc.jobs = ja;
 		pc.prm[0] = (float)detailPrm.hurst, pc.prm[1] = (float)detailPrm.ridge;
 		pc.prm[2] = (float)detailPrm.craters, pc.prm[3] = (float)detailPrm.craterDepth;
 		pc.prm2[0] = (float)detailPrm.pebbles;
-		pc.R = radius;
-		vkCmdPushConstants (cmd, tr->MeshLayout (), VK_SHADER_STAGE_COMPUTE_BIT, 0, 64, &pc);
+		vkCmdPushConstants (cmd, tr->MeshLayout (), VK_SHADER_STAGE_COMPUTE_BIT, 0, 48, &pc);
 		vkCmdDispatch (cmd, (uint32_t)jobs.size(), 1, 1);
 		mb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 		mb.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
@@ -1301,6 +1321,15 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 	// (a moon in its planet's shadow: the share of the sun's disc seen from the tile)
 	pc.morph[2] = prepass ? 1.0f : (float)scene->SunVisibility (ppos + mul (prot, n->centre), hPlanet);
 	pc.morph[3] = detail && !clouds ? (float)detailPrm.pebbles : 0.0f; // (the pebbles shaded per pixel)
+	if (detail && !clouds) { // (the detail's reference point, single precision: terraindetail.glsl)
+		SplitPoint (n->centre, pc.refI, pc.refF);
+		pc.refF[3] = (float)radius;
+		const Node *es = ElevSource (n);
+		double h0 = es ? 0.5 * (es->elev->emin + es->elev->emax) : 0.0;
+		VECTOR3 rel = n->centre * ((radius + h0) / radius) - camLocal;
+		pc.refRel[0] = (float)rel.x, pc.refRel[1] = (float)rel.y, pc.refRel[2] = (float)rel.z;
+		pc.refRel[3] = (float)(radius + h0);
+	}
 	if (pc.morph[1] > 0.0f && n->vessel >= 0 && n->vessel < (int)groundVessels.size()) {
 		VECTOR3 v = groundVessels[n->vessel] - n->centre; // (tile frame)
 		pc.vessel[0] = (float)(mv.m[0] * v.x + mv.m[4] * v.y + mv.m[8] * v.z + mv.m[12]);
