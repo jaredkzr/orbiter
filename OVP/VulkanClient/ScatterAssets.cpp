@@ -1245,6 +1245,24 @@ VkTexture *Library::Texture (uint32_t w, uint32_t h, const std::vector<uint8_t> 
 	return t;
 }
 
+bool Library::LoadRock (const std::string &stem, double rad, double h)
+{
+	for (const Asset &a : assets) if (a.name == stem) return true;
+	Asset a;
+	a.kind = Kind::ROCK, a.name = stem, a.radius = rad, a.height = h;
+	for (int k = 0; k < 3; k++) {
+		std::string m = stem + "_lod" + std::to_string (k);
+		MESHHANDLE hm = oapiLoadMeshGlobal (m.c_str());
+		if (!hm) { oapiWriteLogError ("Scatter: cannot load mesh %s", m.c_str()); break; }
+		auto vm = std::make_unique<VkMesh> (ctx, texmgr, hm);
+		if (k == 0) a.mesh = std::move (vm);
+		else a.lods.push_back (std::move (vm));
+	}
+	if (!a.mesh) return false;
+	assets.push_back (std::move (a));
+	return true;
+}
+
 bool Library::LoadRocks (const char *body)
 {
 	// Config/Scatter/<body>_rocks.cfg: ROCK <mesh stem> <radius> <height> <triangles>...
@@ -1257,26 +1275,14 @@ bool Library::LoadRocks (const char *body)
 		char stem[256];
 		double rad, h;
 		if (sscanf (line, "ROCK %255s %lf %lf", stem, &rad, &h) != 3) continue;
-		Asset a;
-		a.kind = Kind::ROCK, a.name = stem, a.radius = rad, a.height = h;
-		for (int k = 0; k < 3; k++) {
-			std::string m = std::string (stem) + "_lod" + std::to_string (k);
-			MESHHANDLE hm = oapiLoadMeshGlobal (m.c_str());
-			if (!hm) { oapiWriteLogError ("Scatter: cannot load mesh %s", m.c_str()); break; }
-			auto vm = std::make_unique<VkMesh> (ctx, texmgr, hm);
-			if (k == 0) a.mesh = std::move (vm);
-			else a.lods.push_back (std::move (vm));
-		}
-		if (!a.mesh) continue;
-		assets.push_back (std::move (a));
-		n++;
+		if (LoadRock (stem, rad, h)) n++;
 	}
 	fclose (f);
 	oapiWriteLogV ("Scatter: %d rocks of %s from %s", n, body, path.c_str());
 	return n > 0;
 }
 
-void Library::Generate (const char *body, RockStyle style, bool vegetation)
+void Library::Generate (const char *body, RockStyle style, bool vegetation, bool ownRocks)
 {
 	auto part = [&](Builder &b, VkTexture *tex, float roughness, float alphaTest = 0.0f) {
 		VkMesh::Part p;
@@ -1309,7 +1315,7 @@ void Library::Generate (const char *body, RockStyle style, bool vegetation)
 
 	// rocks: made with Blender, or the types of the body, pebbles to
 	// boulders, each with its own texture
-	bool loaded = LoadRocks (body);
+	bool loaded = !ownRocks || LoadRocks (body); // (ownRocks: false when the core lists them, LoadRock)
 	struct RockSpec { const RockShape *shape; RockTex tex; double size; bool split; };
 	std::vector<RockSpec> rocks;
 	if (style == RockStyle::GRANITE) {

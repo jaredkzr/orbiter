@@ -1526,7 +1526,7 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 }
 
 void Scene::DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize instOfs, uint32_t count, RenderPass pass,
-	const Mat4 *frameToView, bool impostor, float range)
+	const Mat4 *frameToView, bool impostor, float range, const float *tint)
 {
 	if (!count || !mesh->VertexBuffer() || !mesh->IndexBuffer() || pass == RenderPass::Transparent) return;
 	VkCommandBuffer cmd = ctx->Cmd();
@@ -1562,6 +1562,7 @@ void Scene::DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize i
 		MeshPushConstants pc;
 		(frameToView ? *frameToView : view).ToFloat (pc.modelView);
 		pc.diffuse[0] = m.diffuse.r, pc.diffuse[1] = m.diffuse.g, pc.diffuse[2] = m.diffuse.b, pc.diffuse[3] = m.diffuse.a;
+		if (tint) for (int c = 0; c < 3; c++) pc.diffuse[c] *= tint[c];
 		pc.emissive[0] = m.emissive.r, pc.emissive[1] = m.emissive.g, pc.emissive[2] = m.emissive.b, pc.emissive[3] = 0.0f;
 		pc.specular[0] = m.specular.r, pc.specular[1] = m.specular.g, pc.specular[2] = m.specular.b, pc.specular[3] = m.power;
 		pc.light[0] = pc.light[1] = pc.light[2] = objLight;

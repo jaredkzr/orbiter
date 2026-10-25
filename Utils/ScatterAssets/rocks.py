@@ -115,6 +115,54 @@ def mat_granite ():
 		return mix (nt, lichen, m.outputs[2], ramp (nt, noise (nt, 30.0).outputs["Fac"], [(0.0, (0.11, 0.12, 0.07)), (1.0, (0.17, 0.18, 0.1))]))
 	return node_material ("granite", build)
 
+def mat_ice (dirty):
+	"""water ice: bright, bluish in the cracks; dirty: darker, dusted (the
+	ice moons of Jupiter and Saturn, Triton)"""
+	def build (nt):
+		clean = ramp (nt, noise (nt, 5.0, 3.0).outputs["Fac"], [(0.3, (0.55, 0.6, 0.66)), (0.7, (0.78, 0.8, 0.82))])
+		v = nt.nodes.new ('ShaderNodeTexVoronoi')
+		v.feature = 'DISTANCE_TO_EDGE'
+		v.inputs["Scale"].default_value = 7.0
+		cracks = ramp (nt, v.outputs["Distance"], [(0.0, (0.25, 0.32, 0.42)), (0.04, (1, 1, 1))])
+		m = nt.nodes.new ('ShaderNodeMix'); m.data_type = 'RGBA'; m.blend_type = 'MULTIPLY'
+		m.inputs["Factor"].default_value = 1.0
+		nt.links.new (clean, m.inputs[6]); nt.links.new (cracks, m.inputs[7])
+		if not dirty: return m.outputs[2]
+		dust = ramp (nt, noise (nt, 2.5).outputs["Fac"], [(0.3, (0.2, 0.19, 0.17)), (0.7, (0.34, 0.32, 0.29))])
+		return mix (nt, up_factor (nt, 0.3, 0.9), m.outputs[2], dust)
+	return node_material ("ice_dirty" if dirty else "ice", build)
+
+def mat_io ():
+	"""Io: dark silicate lava, sulfur deposits (yellow, white) on it"""
+	def build (nt):
+		rock = ramp (nt, noise (nt, 6.0).outputs["Fac"], [(0.3, (0.06, 0.055, 0.05)), (0.7, (0.12, 0.11, 0.09))])
+		sulfur = ramp (nt, noise (nt, 3.0, 4.0).outputs["Fac"], [(0.2, (0.55, 0.45, 0.12)), (0.6, (0.7, 0.62, 0.3)), (0.9, (0.8, 0.78, 0.6))])
+		patch = ramp (nt, noise (nt, 2.2).outputs["Fac"], [(0.45, (0, 0, 0)), (0.6, (1, 1, 1))])
+		m = nt.nodes.new ('ShaderNodeMath'); m.operation = 'MAXIMUM'
+		nt.links.new (up_factor (nt, 0.5, 0.95), m.inputs[0])
+		sep = nt.nodes.new ('ShaderNodeSeparateColor'); nt.links.new (patch, sep.inputs[0])
+		nt.links.new (sep.outputs[0], m.inputs[1])
+		return mix (nt, m.outputs[0], rock, sulfur)
+	return node_material ("io", build)
+
+def mat_venus ():
+	"""Venus: platy basalt (as at the Venera 13 and 14 sites), layered"""
+	def build (nt):
+		w = nt.nodes.new ('ShaderNodeTexWave')
+		w.wave_type = 'BANDS'; w.bands_direction = 'Z'
+		w.inputs["Scale"].default_value = 9.0
+		w.inputs["Distortion"].default_value = 2.0
+		return ramp (nt, w.outputs["Fac"], [(0.1, (0.07, 0.065, 0.06)), (0.5, (0.13, 0.12, 0.1)), (0.9, (0.17, 0.15, 0.12))])
+	return node_material ("venus", build)
+
+def mat_titan ():
+	"""Titan: water-ice cobbles, coated with organic dust"""
+	def build (nt):
+		ice = ramp (nt, noise (nt, 4.0).outputs["Fac"], [(0.3, (0.32, 0.3, 0.27)), (0.7, (0.45, 0.42, 0.37))])
+		dust = ramp (nt, noise (nt, 3.0).outputs["Fac"], [(0.3, (0.2, 0.13, 0.07)), (0.7, (0.3, 0.2, 0.1))])
+		return mix (nt, up_factor (nt, 0.2, 0.8), ice, dust)
+	return node_material ("titan", build)
+
 # ----------------------------------------------------------------------
 # shapes (z up; sizes in metres)
 
@@ -165,6 +213,30 @@ def shape (kind, size, rng):
 		al.remesh (obj, s / 70)
 		al.displace (obj, 'VORONOI', s * 0.02, -0.008 * s, 10) # (vesicles)
 		al.displace (obj, 'CLOUDS', s * 0.1, 0.012 * s, 11, noise_depth=2)
+	elif kind in ("ice", "iceslab"):
+		# fractured ice: a few planar fractures, crisp edges, faces nearly smooth
+		th = (0.6, 0.9) if kind == "ice" else (0.15, 0.3)
+		radii = (s / 2, s / 2 * rng.uniform (0.6, 1.0), s / 2 * rng.uniform (*th))
+		cuts = al.random_cuts (rng, radii, rng.randint (6, 10), (-0.5, 0.9), (0.45, 0.8))
+		if kind == "iceslab": cuts += [((0, 0, 1), radii[2] * 0.7), ((0, 0, -1), radii[2] * 0.7)]
+		obj = al.fractured_blob (kind, radii, cuts, rng)
+		al.remesh (obj, s / 80)
+		al.displace (obj, 'CLOUDS', s * 0.2, 0.006 * s, 15, noise_depth=2)
+	elif kind == "cobble":
+		# rounded by flow (Titan's riverbeds): a smooth flattened ellipsoid
+		radii = (s / 2, s / 2 * rng.uniform (0.65, 0.9), s / 2 * rng.uniform (0.4, 0.6))
+		obj = al.fractured_blob (kind, radii, [], rng, 4)
+		al.displace (obj, 'CLOUDS', s * 0.5, 0.04 * s, 16, noise_depth=1)
+		al.displace (obj, 'CLOUDS', s * 0.06, 0.004 * s, 17, noise_depth=2)
+	elif kind == "platy":
+		# Venus: a broken plate of layered basalt, its edges stepped
+		radii = (s / 2, s / 2 * rng.uniform (0.6, 1.0), s / 2 * rng.uniform (0.12, 0.2))
+		cuts = al.random_cuts (rng, radii, rng.randint (6, 9), (-0.15, 0.15), (0.5, 0.85))
+		cuts += [((0, 0, 1), radii[2] * 0.75), ((0, 0, -1), radii[2] * 0.75)]
+		obj = al.fractured_blob (kind, radii, cuts, rng)
+		al.remesh (obj, s / 90)
+		al.displace (obj, 'WOOD', s * 0.05, 0.008 * s, 18, wood_type='BANDS', noise_basis_2='SAW') # (layer steps)
+		al.displace (obj, 'CLOUDS', s * 0.05, 0.003 * s, 19, noise_depth=2)
 	else: # granite: weathered, rounded
 		radii = (s / 2, s / 2 * rng.uniform (0.6, 0.9), s / 2 * rng.uniform (0.5, 0.8))
 		obj = al.fractured_blob (kind, radii, al.random_cuts (rng, radii, rng.randint (5, 9), (-0.6, 0.95), (0.55, 0.85)), rng)
@@ -222,13 +294,25 @@ SETS = {
 	         ("ventifact", 0.6, 400, 0.125), ("ventifact", 1.2, 700, 0.25), ("ventifact", 2.0, 1200, 0.25),
 	         ("slab", 0.8, 300, 0.125), ("slab", 1.6, 500, 0.25),
 	         ("basalt", 0.7, 450, 0.125), ("basalt", 1.4, 800, 0.25), ("basalt", 2.4, 1500, 0.25)],
+	"Ice": [("ice", 0.3, 120, 0.125), ("ice", 0.6, 300, 0.125), ("ice", 1.0, 500, 0.25), ("ice", 1.8, 900, 0.25),
+	        ("ice", 3.0, 1600, 0.25), ("iceslab", 1.2, 400, 0.25), ("iceslab", 2.5, 800, 0.25), ("ice", 4.5, 2400, 0.5)],
+	"Io": [("float", 0.25, 100, 0.125), ("basalt", 0.6, 400, 0.125), ("basalt", 1.3, 800, 0.25), ("basalt", 2.4, 1500, 0.25),
+	       ("slab", 1.2, 400, 0.25), ("slab", 2.2, 700, 0.25), ("basalt", 3.5, 2200, 0.5)],
+	"Venus": [("platy", 0.3, 100, 0.125), ("platy", 0.6, 200, 0.125), ("platy", 1.0, 350, 0.25), ("platy", 1.6, 500, 0.25),
+	          ("platy", 2.5, 800, 0.25), ("basalt", 1.4, 800, 0.25), ("platy", 3.5, 1200, 0.5)],
+	"Titan": [("cobble", 0.08, 60, 0.0625), ("cobble", 0.15, 100, 0.0625), ("cobble", 0.25, 150, 0.125), ("cobble", 0.4, 200, 0.125),
+	          ("cobble", 0.7, 300, 0.25), ("ice", 1.4, 700, 0.25), ("ice", 2.5, 1200, 0.25)],
 	"Earth": [("granite", 0.4, 150, 0.0625), ("granite", 0.8, 400, 0.125), ("granite", 1.5, 800, 0.25),
 	          ("granite", 2.5, 1500, 0.25), ("granite", 4.0, 2500, 0.5)],
 }
-BURY = { "fragment": 0.1, "block": 0.15, "split": 0.12, "breccia": 0.25, "ventifact": 0.2, "slab": 0.3, "float": 0.3, "basalt": 0.18, "granite": 0.2 }
+BURY = { "ice": 0.15, "iceslab": 0.3, "cobble": 0.35, "platy": 0.35, "fragment": 0.1, "block": 0.15, "split": 0.12, "breccia": 0.25, "ventifact": 0.2, "slab": 0.3, "float": 0.3, "basalt": 0.18, "granite": 0.2 }
 
 def material_for (kind):
 	if BODY == "Moon": return mat_moon (kind == "breccia")
+	if BODY == "Ice": return mat_ice (False)
+	if BODY == "Io": return mat_io ()
+	if BODY == "Venus": return mat_venus ()
+	if BODY == "Titan": return mat_ice (True) if kind == "ice" else mat_titan ()
 	if BODY == "Mars": return mat_mars ("basalt" if kind == "basalt" else "ventifact" if kind == "ventifact" else "sandstone")
 	return mat_granite ()
 

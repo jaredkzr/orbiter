@@ -157,6 +157,36 @@ TerrainDetail::Params TerrainDetail::Defaults (const Planet *planet)
 		// wind-worn relief, old and shallow craters
 		p.gain = 0.4, p.ridge = 0.7, p.floor = 0.04;
 		p.craters = 0.8, p.craterDepth = 0.5, p.craterFresh = 0.03;
+	} else if (!strcmp (name, "Venus")) {
+		// volcanic plains; its atmosphere stops small impactors: no small craters
+		p.gain = 0.4, p.ridge = 0.6, p.floor = 0.03;
+	} else if (!strcmp (name, "Titan")) {
+		// plains of sediment and dunes, hardly any craters
+		p.gain = 0.3, p.ridge = 0.3, p.floor = 0.02;
+		p.craters = 0.02, p.craterDepth = 0.4, p.craterFresh = 0.0;
+	} else if (!strcmp (name, "Io")) {
+		// lava plains resurfaced faster than impacts crater them: no craters
+		p.gain = 0.35, p.ridge = 0.3, p.floor = 0.04;
+	} else if (!strcmp (name, "Europa")) {
+		// young ice: double ridges, few craters
+		p.gain = 0.4, p.ridge = 1.0, p.floor = 0.03;
+		p.craters = 0.05, p.craterDepth = 0.5, p.craterFresh = 0.3;
+	} else if (!strcmp (name, "Ganymede")) {
+		// grooved terrain over old cratered ice
+		p.gain = 0.35, p.ridge = 0.8, p.floor = 0.03;
+		p.craters = 1.0, p.craterDepth = 0.8, p.craterFresh = 0.3;
+	} else if (!strcmp (name, "Enceladus")) {
+		// ridged plains, craters on the old terrain only
+		p.gain = 0.35, p.ridge = 0.9, p.floor = 0.03;
+		p.craters = 0.6, p.craterDepth = 0.8, p.craterFresh = 0.3;
+	} else if (!strcmp (name, "Miranda")) {
+		// coronae: ridges and grooves among old craters
+		p.gain = 0.4, p.ridge = 1.0, p.floor = 0.04;
+		p.craters = 1.2, p.craterDepth = 0.9, p.craterFresh = 0.2;
+	} else if (!strcmp (name, "Triton")) {
+		// young icy plains, "cantaloupe" terrain, few craters
+		p.gain = 0.35, p.ridge = 0.7, p.floor = 0.03;
+		p.craters = 0.15, p.craterDepth = 0.6, p.craterFresh = 0.3;
 	} else if (!planet->HasAtmosphere()) {
 		// airless: rounded by impacts, craters of all sizes
 		p.gain = 0.3, p.ridge = 0.3, p.floor = 0.03;

@@ -1370,6 +1370,7 @@ DLLEXPORT bool oapiScatterAsset (OBJHANDLE hPlanet, int idx, SCATTERASSET *asset
 	asset->radius = a.radius;
 	asset->height = a.height;
 	asset->collide = false;
+	asset->tint = MakeVECTOR3 (a.tint);
 	if (a.hasHull)
 		for (const scatter::Layer &L : gs->Layers())
 			if (L.collide && std::find (L.assets.begin(), L.assets.end(), idx) != L.assets.end()) asset->collide = true;

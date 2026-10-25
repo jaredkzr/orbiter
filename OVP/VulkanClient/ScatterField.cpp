@@ -50,15 +50,18 @@ Field::Field (Scene *s, OBJHANDLE hp): scene (s), hPlanet (hp)
 	char name[64];
 	oapiGetObjectName (hPlanet, name, 64);
 
-	bool plants = false;
+	bool plants = false, rocks = false;
 	std::vector<SCATTERASSET> ca (na);
 	for (int i = 0; i < na; i++) {
 		oapiScatterAsset (hPlanet, i, &ca[i]);
-		if (ca[i].kind != SCATTER_ROCK) plants = true;
+		if (ca[i].kind != SCATTER_ROCK) plants = true; else rocks = true;
 	}
 	RockStyle style = !strcmp (name, "Mars") ? RockStyle::MARS : !strcmp (name, "Earth") ? RockStyle::GRANITE : RockStyle::REGOLITH;
 	lib = std::make_unique<Library> (scene->Client()->Ctx(), scene->Client()->TexMgr());
-	lib->Generate (name, style, plants);
+	lib->Generate (name, style, plants, !rocks);
+	// (the rocks the core lists, from any set)
+	for (int i = 0; i < na; i++)
+		if (ca[i].kind == SCATTER_ROCK) lib->LoadRock (ca[i].name, ca[i].radius, ca[i].height);
 
 	// the core's assets: meshes by name (rocks: mesh stems; plants: names)
 	kinds.resize (na);
@@ -66,6 +69,7 @@ Field::Field (Scene *s, OBJHANDLE hp): scene (s), hPlanet (hp)
 	for (int i = 0; i < na; i++) {
 		Kind &k = kinds[i];
 		k.kind = ca[i].kind;
+		for (int c = 0; c < 3; c++) k.tint[c] = (float)ca[i].tint.data[c];
 		k.size = std::max (2.0 * ca[i].radius, ca[i].height);
 		for (const Asset &a : lib->Assets())
 			if (a.name == ca[i].name) { k.asset = &a; break; }
@@ -277,7 +281,7 @@ void Field::Prepare ()
 			const VkMesh *m = slot == 4 ? k.asset->impostor.get() : slot ? k.asset->lods[slot - 1].get() : k.asset->mesh.get();
 			uint32_t n = (uint32_t)(bk[i].size() / 12);
 			memcpy (dst + (size_t)at * 12, bk[i].data(), bk[i].size() * sizeof(float));
-			out.push_back ({ m, at, n, k.kind, slot == 4 });
+			out.push_back ({ m, at, n, k.kind, slot == 4, 0.0f, k.tint });
 			at += n;
 		}
 	};
@@ -309,7 +313,7 @@ void Field::Render (RenderPass pass)
 	vkc::Context *ctx = scene->Client()->Ctx();
 	const vkc::Buffer &B = buf[ctx->FrameIndex() % vkc::FRAMES_IN_FLIGHT];
 	for (const Batch &b : batches)
-		scene->DrawMeshInstanced (b.mesh, B.buffer, (VkDeviceSize)b.first * Scene::INSTANCE_STRIDE, b.count, pass, nullptr, b.impostor);
+		scene->DrawMeshInstanced (b.mesh, B.buffer, (VkDeviceSize)b.first * Scene::INSTANCE_STRIDE, b.count, pass, nullptr, b.impostor, 0.0f, b.tint);
 	// the far set: transforms in the planet frame relative to its anchor
 	if (far.id && !far.batches.empty()) {
 		MATRIX3 Rp;
@@ -318,7 +322,7 @@ void Field::Render (RenderPass pass)
 		oapiGetGlobalPos (hPlanet, &gp);
 		Mat4 fv = scene->View () * Mat4::FromRotTrans (Rp, gp + mul (Rp, far.anchor) - scene->CameraPos ());
 		for (const Batch &b : far.batches)
-			scene->DrawMeshInstanced (b.mesh, far.buf.buffer, (VkDeviceSize)b.first * Scene::INSTANCE_STRIDE, b.count, pass, &fv, true, b.range);
+			scene->DrawMeshInstanced (b.mesh, far.buf.buffer, (VkDeviceSize)b.first * Scene::INSTANCE_STRIDE, b.count, pass, &fv, true, b.range, b.tint);
 		if (pass == RenderPass::Depth && far.rtProxy) scene->AddMeshRT (far.rtProxy.get(), fv, true);
 	}
 	if (pass == RenderPass::Depth)
@@ -422,7 +426,7 @@ void Field::BuildFar (const VECTOR3 &P)
 			if (fb.bucket[k].empty()) continue;
 			uint32_t n = (uint32_t)(fb.bucket[k].size() / 12);
 			memcpy (dst + (size_t)at * 12, fb.bucket[k].data(), fb.bucket[k].size() * sizeof(float));
-			nf.batches.push_back ({ kinds[k].asset->impostor.get(), at, n, kinds[k].kind, true, fb.range[k] });
+			nf.batches.push_back ({ kinds[k].asset->impostor.get(), at, n, kinds[k].kind, true, fb.range[k], kinds[k].tint });
 			at += n;
 		}
 	}

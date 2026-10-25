@@ -49,6 +49,37 @@ namespace {
 	// ------------------------------------------------------------------
 	// Elevation tile files (.elv)
 
+	// nodes without data (-32768, e.g. Vesta's unmapped north) filled from
+	// their neighbours pass by pass, exactly as the core does
+	// (ElevationManager: FillElevationGaps)
+	void FillElevationGaps (int16_t *e, int n)
+	{
+		const int16_t NODATA = -32768;
+		bool any = false;
+		for (int i = 0; i < n * n && !any; i++) any = e[i] == NODATA;
+		if (!any) return;
+		std::vector<int16_t> next (e, e + n * n);
+		for (int pass = 0; pass < 2 * n; pass++) {
+			bool left = false, changed = false;
+			for (int y = 0; y < n; y++)
+				for (int x = 0; x < n; x++) {
+					int i = y * n + x;
+					if (e[i] != NODATA) continue;
+					long sum = 0;
+					int cnt = 0;
+					if (x > 0 && e[i - 1] != NODATA) sum += e[i - 1], cnt++;
+					if (x < n - 1 && e[i + 1] != NODATA) sum += e[i + 1], cnt++;
+					if (y > 0 && e[i - n] != NODATA) sum += e[i - n], cnt++;
+					if (y < n - 1 && e[i + n] != NODATA) sum += e[i + n], cnt++;
+					if (cnt) next[i] = (int16_t)std::floor ((double)sum / cnt + 0.5), changed = true;
+					else left = true;
+				}
+			std::copy (next.begin(), next.end(), e);
+			if (!left || !changed) break;
+		}
+		for (int i = 0; i < n * n; i++) if (e[i] == NODATA) e[i] = 0;
+	}
+
 	bool DecodeElv (const std::vector<uint8_t> &d, ElevGrid &g, bool modify)
 	{
 		if (d.size() < 100 || memcmp (d.data(), "ELE\x01", 4)) return false;
@@ -71,9 +102,11 @@ namespace {
 				if (!modify || p[i] != 0xFF) g.h[i] = (float)(p[i] * scale + offset);
 		} else if (dtype == -16) {
 			if (d.size() < hdr + 2 * n) return false;
+			std::vector<int16_t> raw (n);
+			memcpy (raw.data(), p, 2 * n);
+			if (!modify) FillElevationGaps (raw.data(), N);
 			for (size_t i = 0; i < n; i++) {
-				int16_t v;
-				memcpy (&v, p + 2 * i, 2);
+				int16_t v = raw[i];
 				if (!modify || v != 0x7FFF) g.h[i] = (float)(v * scale + offset);
 			}
 		} else if (dtype == 0) {

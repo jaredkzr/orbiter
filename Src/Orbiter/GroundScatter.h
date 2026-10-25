@@ -10,7 +10,11 @@
 //
 // The assets and layers of a body are in Config/Scatter/<body>.cfg:
 //   ASSETS <file>                         asset list made by the tools
-//                                         (Utils/ScatterAssets: ROCK lines)
+//                                         (Utils/ScatterAssets: ROCK lines;
+//                                         sets shared between bodies)
+//   TINT <r> <g> <b>                      colour factor of the assets
+//                                         listed after it (a shared set on
+//                                         another body)
 //   ROCK <mesh stem> <radius> <height> .. a rock (meshes <stem>_lod0..2;
 //                                         its collision hull: the convex
 //                                         hull of the coarsest level)
@@ -79,6 +83,7 @@ namespace scatter {
 		double lat0 = 0.0, lat1 = 90.0; ///< latitude range [deg] (plants)
 		double lng0 = -180.0, lng1 = 180.0; ///< longitude range [deg] (plants)
 		std::string cover;     ///< habitat (layer cover; empty: any)
+		Vector tint = Vector (1, 1, 1); ///< colour factor
 		double Size () const { return std::max (2.0 * radius, height); }
 		convex::Polytope hull; ///< collision shape (object frame, unit scale)
 		bool hasHull = false;
@@ -165,6 +170,7 @@ namespace scatter {
 		};
 		void Load ();
 		void LoadAssets (const std::string &file, bool included = false); // (included: listed by ASSETS)
+		Vector tint = Vector (1, 1, 1); // (TINT: of the assets that follow)
 		void Make (int layer, int row, int col, CellData &cd);
 		double CoverFactor (const Layer &L, const Vector &rgb, double water, bool haveCover) const;
 		double Clearance (const Vector &dir) const; // 0 at bases and cleared ground, 1 away from them

@@ -45,6 +45,7 @@ namespace vkscatter {
 			double size = 0.0;   // largest extent at scale 1 [m]
 			double scale = 1.0;  // mesh -> core size (plants)
 			int kind = 0;        // SCATTERKIND
+			float tint[3] = { 1, 1, 1 }; // colour factor
 		};
 		struct Inst {
 			VECTOR3 pos;         // planet frame [m]
@@ -61,7 +62,7 @@ namespace vkscatter {
 			bool allImp = false; // all its instances have impostors (far-set candidates)
 			unsigned farBuild = 0, farPending = 0; // far set that has its far instances
 		};
-		struct Batch { const VkMesh *mesh; uint32_t first, count; int kind; bool impostor = false; float range = 0.0f; };
+		struct Batch { const VkMesh *mesh; uint32_t first, count; int kind; bool impostor = false; float range = 0.0f; const float *tint = nullptr; };
 
 		// far set (active), and the one being built
 		struct Far {

@@ -4286,6 +4286,7 @@ struct SCATTERASSET {
 	double radius;      ///< horizontal extent [m] (at scale 1)
 	double height;      ///< height [m] (at scale 1)
 	bool collide;       ///< vessels collide with it (large boulders, trees)
+	VECTOR3 tint;       ///< colour factor of its textures
 };
 
 /// A layer of a planet's ground scatter: objects in cells of a grid

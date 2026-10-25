@@ -352,7 +352,8 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		// mottling on Earth; none on bodies with deep atmospheres (gas giants)
 		char name[64];
 		oapiGetObjectName (hPlanet, name, 64);
-		int type = !strcmp (name, "Earth") ? 3 : !strcmp (name, "Mars") ? 2 : !present ? 1 : 0;
+		// (Venus and Titan: rocks and grain as on Mars, under their atmospheres)
+		int type = !strcmp (name, "Earth") ? 3 : !strcmp (name, "Mars") || !strcmp (name, "Venus") || !strcmp (name, "Titan") ? 2 : !present ? 1 : 0;
 		if (const char *e = getenv ("ORBITER_VK_SURFACE_DETAIL")) if (!atoi (e)) type = 0;
 		detail[0] = (float)type, detail[1] = 1.0f, detail[2] = 3000.0f;
 

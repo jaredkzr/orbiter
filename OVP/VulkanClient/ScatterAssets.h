@@ -60,7 +60,9 @@ namespace vkscatter {
 		/// The assets of a body: rocks made with Blender (Utils/ScatterAssets,
 		/// listed in Config/Scatter/<body>_rocks.cfg) if there are, else
 		/// generated in the given style; vegetation if asked
-		void Generate (const char *body, RockStyle style, bool vegetation);
+		void Generate (const char *body, RockStyle style, bool vegetation, bool ownRocks = true);
+		/// a rock made with Blender (meshes <stem>_lod0 to _lod2), if not loaded yet
+		bool LoadRock (const std::string &stem, double radius, double height);
 		const std::vector<Asset> &Assets () const { return assets; }
 
 	private:

@@ -2,6 +2,8 @@
 // Licensed under the MIT License
 
 #include "elevmgr.h"
+#include <algorithm>
+#include <cmath>
 #include "Celbody.h"
 #include "Planet.h"
 #include "Orbiter.h"
@@ -35,6 +37,40 @@ struct ELEVFILEHEADER { // file header for patch elevation data file
 };
 
 #pragma pack(pop)
+
+namespace {
+	// Elevation tiles may mark nodes without data with -32768 (Vesta: its
+	// unmapped north): filled from their neighbours, pass by pass (the
+	// average of the known ones, rounded), the same in graphics clients
+	// (PlanetSurface: DecodeElv)
+	void FillElevationGaps (INT16 *e, int n)
+	{
+		const INT16 NODATA = -32768;
+		bool any = false;
+		for (int i = 0; i < n * n && !any; i++) any = e[i] == NODATA;
+		if (!any) return;
+		std::vector<INT16> next (e, e + n * n);
+		for (int pass = 0; pass < 2 * n; pass++) {
+			bool left = false, changed = false;
+			for (int y = 0; y < n; y++)
+				for (int x = 0; x < n; x++) {
+					int i = y * n + x;
+					if (e[i] != NODATA) continue;
+					long sum = 0;
+					int cnt = 0;
+					if (x > 0 && e[i - 1] != NODATA) sum += e[i - 1], cnt++;
+					if (x < n - 1 && e[i + 1] != NODATA) sum += e[i + 1], cnt++;
+					if (y > 0 && e[i - n] != NODATA) sum += e[i - n], cnt++;
+					if (y < n - 1 && e[i + n] != NODATA) sum += e[i + n], cnt++;
+					if (cnt) next[i] = (INT16)std::floor ((double)sum / cnt + 0.5), changed = true;
+					else left = true;
+				}
+			std::copy (next.begin(), next.end(), e);
+			if (!left || !changed) break;
+		}
+		for (int i = 0; i < n * n; i++) if (e[i] == NODATA) e[i] = 0;
+	}
+}
 
 ElevationManager::ElevationManager (const CelestialBody *_cbody)
 : cbody(_cbody)
@@ -191,6 +227,7 @@ INT16 *ElevationManager::LoadElevationTile (int lvl, int ilat, int ilng, double 
 			}
 		}
 		if (elev) {
+			FillElevationGaps (elev, elev_stride);
 			if (scale != tgt_res) { // rescale the data
 				double rescale = scale/tgt_res;
 				for (i = 0; i < ndat; i++)

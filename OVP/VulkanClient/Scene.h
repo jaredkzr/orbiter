@@ -110,7 +110,7 @@ public:
 	/// (impostor_inst.vert), shrunk away over the last 15% of range [m].
 	static constexpr uint32_t INSTANCE_STRIDE = 48;
 	void DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize instOfs, uint32_t count, RenderPass pass,
-		const Mat4 *frameToView = nullptr, bool impostor = false, float range = 0.0f);
+		const Mat4 *frameToView = nullptr, bool impostor = false, float range = 0.0f, const float *tint = nullptr);
 	/// A mesh into the ray tracing scene of this frame (without drawing it)
 	/// (shadowOnly: a stand-in that only blocks light)
 	void AddMeshRT (const VkMesh *mesh, const Mat4 &modelView, bool shadowOnly = false);

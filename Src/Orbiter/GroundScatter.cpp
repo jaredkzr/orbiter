@@ -296,6 +296,10 @@ void GroundScatter::LoadAssets (const std::string &file, bool included)
 				a.hull = Trunk (a.trunk, 0.55 * a.height);
 				a.hasHull = true;
 			}
+		} else if (tok == "TINT") {
+			double r, g, b;
+			if (ss >> r >> g >> b) tint = Vector (r, g, b);
+			continue;
 		} else if (tok == "ASSETS") {
 			std::string f;
 			if (ss >> f) LoadAssets (f, true);
@@ -315,6 +319,7 @@ void GroundScatter::LoadAssets (const std::string &file, bool included)
 			layers.push_back (L);
 			continue;
 		} else continue;
+		a.tint = tint;
 		assets.push_back (std::move (a));
 	}
 }
