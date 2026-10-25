@@ -75,6 +75,7 @@ private:
 	bool present = false;
 	double radius = 0.0, atmRadius = 0.0;
 	float betaR[4] = {}, betaM[4] = {};
+	float overcastSky[3] = { 0, 0, 0 }; // diffuse radiance under an overcast (Venus, Titan)
 	float mieG = 0.76f, sunIntensity = 6.0f; // (sky radiance scale: physically about pi for a sunlit white surface of 1)
 	float airglow = 0.0f; // strength of the airglow layer (Earth)
 	float detail[4] = { 0, 0, 0, 0 }; // procedural surface detail (atmosphere.glsl)
@@ -93,5 +94,9 @@ private:
 	float cloudParams[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 	bool ripple = false; // wave normals on water
 };
+
+/// skylight of an overcast atmosphere (Venus, Titan): the ground's
+/// irradiance from the sky relative to the sun's above it; false for others
+bool OvercastSkylight (const char *planet, float rgb[3]);
 
 #endif // !__ATMOSPHERE_H

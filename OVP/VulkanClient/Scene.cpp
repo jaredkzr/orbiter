@@ -1081,9 +1081,17 @@ void Scene::FillFrameUniforms (void *pfu)
 			ATMPARAM prm;
 			oapiGetPlanetAtmParams (hp, length (camPos - pp), &prm);
 			double f = 0.35 * std::sqrt (std::clamp (prm.rho / ac->rho0, 0.0, 1.0)) * Sunlight (camPos);
-			fu.ambient[0] += (float)(f * ac->color0.x);
-			fu.ambient[1] += (float)(f * ac->color0.y);
-			fu.ambient[2] += (float)(f * ac->color0.z);
+			char pname[64];
+			oapiGetObjectName (hp, pname, 64);
+			float sky[3];
+			if (OvercastSkylight (pname, sky)) { // (under a cloud deck or haze: lit mostly by the sky)
+				double d = std::sqrt (std::clamp (prm.rho / ac->rho0, 0.0, 1.0)) * Sunlight (camPos);
+				for (int k = 0; k < 3; k++) fu.ambient[k] += (float)(d * sky[k]);
+			} else {
+				fu.ambient[0] += (float)(f * ac->color0.x);
+				fu.ambient[1] += (float)(f * ac->color0.y);
+				fu.ambient[2] += (float)(f * ac->color0.z);
+			}
 		}
 	}
 	for (int k = 0; k < 3; k++) ambientRGB[k] = fu.ambient[k];

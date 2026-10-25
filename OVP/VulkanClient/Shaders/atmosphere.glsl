@@ -25,7 +25,7 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 detailCamHi;   // camera position, planet frame (xyz), planet radius (w) [m]: high and
 	vec4 detailCamLo;   //   low parts of double precision values (terrain detail)
 	vec4 detailPrm;     // terrain detail: ridged share, crater cells, crater depth, fresh craters
-	vec4 surfPrm;       // x: colour saturation of the surface textures
+	vec4 surfPrm;       // x: colour saturation of the surface textures; yzw: diffuse radiance of overcast atmospheres (per unit sun intensity)
 } atm;
 
 // planet surface (western and eastern hemisphere), for reflections
@@ -113,8 +113,11 @@ vec3 Inscatter (vec3 d, float tMax, out vec3 T)
 		vec3 Ts = AtmSunTransmittance (p, r, muS);
 		sumR += Tv * Ts * dens.x;
 		sumM += Tv * Ts * dens.y;
-		// all higher orders, isotropic
+		// all higher orders, isotropic; under an overcast (Venus, Titan) the
+		// diffuse field the table cannot carry through the thick haze
+		// (where the sun is up)
 		vec3 psi = textureLod (atmMultiscat, AtmMultiscatUv (clamp (r, Rg, Rt), muS, Rg, Rt), 0.0).rgb;
+		psi += atm.surfPrm.yzw * smoothstep (-0.1, 0.15, muS);
 		sumMS += Tv * scat * psi;
 	}
 	T = exp (-tau);

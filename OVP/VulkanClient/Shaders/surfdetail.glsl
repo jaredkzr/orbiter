@@ -130,6 +130,15 @@ void SurfaceDetail (vec3 posView, float dist, inout vec3 Nv, inout vec3 base)
 	// the displaced surface)
 	float a0;
 	float h0 = DetailHeight (p, type, footprint, a0) * atm.detail.y * fade;
+#ifdef TERRAIN_DETAIL
+	// (with the terrain detail, which shades the relief down to the pixel:
+	// only the albedo; the normal from the screen-space derivatives of this
+	// height turns faceted at grazing angles)
+	if (tile.detail.w > 0.5) {
+		base *= mix (1.0, a0, fade);
+		return;
+	}
+#endif
 	vec3 q = posView + Nv * h0;
 	vec3 n = cross (dFdx (q), dFdy (q));
 	float ln = length (n);

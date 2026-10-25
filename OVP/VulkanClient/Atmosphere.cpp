@@ -51,7 +51,36 @@ namespace {
 	constexpr double MIE_BETA = 1.0e-5;    // [1/m] for Earth-like density
 	constexpr double EARTH_RHO0 = 1.225;   // [kg/m^3]
 
+	// Overcast atmospheres: a haze of an optical depth tau through the
+	// whole atmosphere (Venus: its cloud deck, Titan: its photochemical
+	// haze), scattering forward with the single-scattering albedo scat
+	// (absorbing blue: yellow-orange skies), and skylight: the ground lit
+	// mostly by the sky (irradiance relative to the sun's at the top).
+	// The sky model (single scattering of sunlight, and higher orders from
+	// it, Hillaire 2020) does not diffuse light through optically thick
+	// layers: the optical depths are kept moderate (also the gas's: density
+	// factor rayleigh), so that the sky stays lit, and the skylight term
+	// stands for the light diffused down.
+	struct Overcast { const char *name; double tau, scat[3], g, rayleigh; float sky[3]; };
+	const Overcast OVERCAST[] = {
+		{ "Venus", 2.0, { 0.98, 0.85, 0.55 }, 0.75f, 1.0, { 1.80f, 1.25f, 0.55f } },
+		{ "Titan", 1.2, { 0.96, 0.80, 0.52 }, 0.70f, 2.0, { 1.80f, 1.25f, 0.65f } },
+	};
+	const Overcast *FindOvercast (const char *name)
+	{
+		for (const Overcast &o : OVERCAST) if (!strcmp (o.name, name)) return &o;
+		return nullptr;
+	}
+
 } // namespace
+
+bool OvercastSkylight (const char *planet, float rgb[3])
+{
+	const Overcast *o = FindOvercast (planet);
+	if (!o) return false;
+	for (int i = 0; i < 3; i++) rgb[i] = o->sky[i];
+	return true;
+}
 
 // ======================================================================
 // AtmosphereRenderer
@@ -343,6 +372,17 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 			ozone[3] = 1.0f; // (absorption with the dust's profile)
 			mieG = 0.65f;
 		}
+		if (const Overcast *o = FindOvercast (name)) {
+			for (int i = 0; i < 3; i++) overcastSky[i] = o->sky[i];
+			for (int i = 0; i < 3; i++) {
+				betaR[i] = (float)(RAYLEIGH_K * col[i] * col[i] * o->rayleigh);
+				betaM[i] = (float)(o->tau / H * o->scat[i]);
+				ozone[i] = (float)(o->tau / H * (1.0 - o->scat[i]));
+			}
+			betaM[3] = (float)H;
+			ozone[3] = 1.0f;
+			mieG = o->g;
+		}
 	}
 
 	if (const bool *r = (const bool*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_SURFACERIPPLE)) ripple = *r;
@@ -360,7 +400,9 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		// colour saturation of the surface textures: the Moon's and
 		// Mercury's carry tints (green, purple) that the grey ground doesn't
 		// have; planet files may set it (SurfaceSaturation)
-		surfSaturation = !strcmp (name, "Moon") ? 0.3f : !strcmp (name, "Mercury") ? 0.5f : 1.0f;
+		// (Venus: the radar maps' false colour; its basalt is dark grey, the
+		// orange is the light's)
+		surfSaturation = !strcmp (name, "Moon") ? 0.3f : !strcmp (name, "Mercury") ? 0.5f : !strcmp (name, "Venus") ? 0.15f : 1.0f;
 		if (FILEHANDLE f = oapiOpenFile ((std::string (name) + ".cfg").c_str(), FILE_IN, CONFIG)) {
 			double v;
 			if (oapiReadItem_float (f, (char*)"SurfaceSaturation", v)) surfSaturation = (float)std::clamp (v, 0.0, 2.0);
@@ -548,7 +590,8 @@ void Atmosphere::Update ()
 		} else
 			u.detailPrm[0] = u.detailPrm[1] = u.detailPrm[2] = u.detailPrm[3] = 0.0f;
 	}
-	u.surfPrm[0] = surfSaturation, u.surfPrm[1] = u.surfPrm[2] = u.surfPrm[3] = 0.0f;
+	u.surfPrm[0] = surfSaturation;
+	for (int i = 0; i < 3; i++) u.surfPrm[1 + i] = overcastSky[i] / sunIntensity; // (deep in it: the skylight's radiance)
 	u.misc[1] = (float)(1.0 / scene->ProjX());
 	u.misc[2] = (float)(1.0 / scene->ProjY());
 	memcpy (ubo[SetIndex ()].mapped, &u, sizeof(u));
