@@ -14,6 +14,7 @@
 
 #ifdef ORBITER_TERRAIN_STREAMING
 #include <curl/curl.h>
+#include "zlib.h"
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
 #define STBI_ONLY_JPEG
@@ -30,7 +31,7 @@ namespace {
 	const int ELEV_N = 259;           // elevation grid (256 intervals and a one-sample border)
 	const int WORKERS = 4;
 	const size_t MAX_QUEUE = 512;
-	const size_t SRC_CACHE = 192;     // decoded source tiles kept in memory
+	const size_t SRC_CACHE_BYTES = 384u << 20; // decoded source data kept in memory
 	const double RETRY_FAILED = 300.0; // [s] before a failed tile is tried again
 
 	Stream *g_stream = nullptr;
@@ -233,7 +234,7 @@ namespace {
 	}
 
 	// HTTP GET; returns the status (0: no response)
-	long HttpGet (const std::string &url, std::vector<uint8_t> &out)
+	long HttpGet (const std::string &url, std::vector<uint8_t> &out, const std::string &range = "")
 	{
 		thread_local CURL *h = nullptr;
 		if (!h) h = curl_easy_init ();
@@ -248,6 +249,7 @@ namespace {
 		curl_easy_setopt (h, CURLOPT_WRITEFUNCTION, CurlWrite);
 		curl_easy_setopt (h, CURLOPT_WRITEDATA, &out);
 		curl_easy_setopt (h, CURLOPT_NOSIGNAL, 1L);
+		if (!range.empty()) curl_easy_setopt (h, CURLOPT_RANGE, range.c_str());
 		if (curl_easy_perform (h) != CURLE_OK) return 0;
 		long status = 0;
 		curl_easy_getinfo (h, CURLINFO_RESPONSE_CODE, &status);
@@ -261,12 +263,14 @@ namespace {
 struct Stream::SrcTile {
 	int w = 0, h = 0;
 	std::vector<uint8_t> rgb;   // RGB sources
+	std::vector<uint8_t> valid; // (S2COG) pixels with data
 	std::vector<float> elev;    // elevation sources [m]
 	bool empty = true;          // no data
 };
 
 int Source::MaxLevel () const
 {
+	if (enc == S2COG) return maxZoom;
 	// source pixels match Orbiter texels at level z+2 (surface: 512 texels
 	// per tile) or z+3 (elevation: 256 intervals per tile)
 	return layer == SURF ? maxZoom + 2 : maxZoom + 3;
@@ -309,7 +313,7 @@ Stream *Stream::Create (const std::string &cfgFile, const std::string &cacheDir,
 		std::getline (is, src.attribution);
 		src.attribution = Trim (src.attribution);
 		src.layer = (layer == "Elev" ? ELEV : SURF);
-		src.enc = (enc == "terrarium" ? Source::TERRARIUM : Source::RGB);
+		src.enc = (enc == "terrarium" ? Source::TERRARIUM : enc == "s2cog" ? Source::S2COG : Source::RGB);
 		s->sources.push_back (src);
 	}
 	if (s->sources.empty()) {
@@ -423,6 +427,7 @@ bool Stream::Make (const Job &job)
 {
 	const Source *s = Find (job.body, job.layer, job.lvl, job.ilat, job.ilng);
 	if (!s) return false;
+	if (s->enc == Source::S2COG) return job.layer == SURF && MakeSurfCog (*s, job);
 	return job.layer == SURF ? MakeSurf (*s, job) : MakeElev (*s, job);
 }
 
@@ -430,14 +435,7 @@ std::shared_ptr<const Stream::SrcTile> Stream::Fetch (const Source &s, int z, in
 {
 	char key[256];
 	snprintf (key, sizeof(key), "%s/%d/%d/%d", s.id.c_str(), z, x, y);
-	{
-		std::lock_guard<std::mutex> lock (srcMtx);
-		auto it = srcCache.find (key);
-		if (it != srcCache.end()) {
-			it->second.second = ++srcClock;
-			return it->second.first;
-		}
-	}
+	if (auto c = Cached (key)) return c;
 	auto t = std::make_shared<SrcTile>();
 #ifdef ORBITER_TERRAIN_STREAMING
 	// the source file: from the disk cache, or downloaded (an empty file
@@ -481,14 +479,32 @@ std::shared_ptr<const Stream::SrcTile> Stream::Fetch (const Source &s, int z, in
 		}
 	}
 #endif
+	Cache (key, t, t->rgb.size() + t->elev.size() * sizeof(float) + 64);
+	return t;
+}
+
+std::shared_ptr<const Stream::SrcTile> Stream::Cached (const std::string &key)
+{
 	std::lock_guard<std::mutex> lock (srcMtx);
-	srcCache[key] = { t, ++srcClock };
-	while (srcCache.size() > SRC_CACHE) {
+	auto it = srcCache.find (key);
+	if (it == srcCache.end()) return nullptr;
+	it->second.used = ++srcClock;
+	return it->second.tile;
+}
+
+void Stream::Cache (const std::string &key, std::shared_ptr<const SrcTile> t, size_t bytes)
+{
+	std::lock_guard<std::mutex> lock (srcMtx);
+	auto it = srcCache.find (key);
+	if (it != srcCache.end()) srcBytes -= it->second.bytes;
+	srcCache[key] = CacheEntry{ t, ++srcClock, bytes };
+	srcBytes += bytes;
+	while (srcBytes > SRC_CACHE_BYTES && srcCache.size() > 1) {
 		auto oldest = std::min_element (srcCache.begin(), srcCache.end(),
-			[](const auto &a, const auto &b) { return a.second.second < b.second.second; });
+			[](const auto &a, const auto &b) { return a.second.used < b.second.used; });
+		srcBytes -= oldest->second.bytes;
 		srcCache.erase (oldest);
 	}
-	return t;
 }
 
 // Samples a source at the given latitudes/longitudes (bilinear in the
@@ -592,6 +608,356 @@ bool Stream::MakeElev (const Source &s, const Job &job)
 	auto elv = EncodeElv (h, latmin, latmax, lngmin, lngmax);
 	if (!WriteFileAtomic (job.key, elv)) return false;
 	written += elv.size();
+	return true;
+}
+
+// =======================================================================
+// Sentinel-2 reflectance mosaics in cloud-optimised GeoTIFF cells of 1x1
+// degree (e.g. the ESA WorldCover 2021 S2 RGBNIR composite): 16-bit red,
+// green, blue (and NIR) reflectance x 10000, deflate-compressed tiles with
+// horizontal differencing, overviews. Read with HTTP range requests.
+
+struct Stream::CogHeader {
+	bool ok = false;
+	std::string url;
+	int spp = 0;
+	struct Level { int w = 0, h = 0, tw = 0, th = 0; std::vector<uint64_t> off, cnt; };
+	std::vector<Level> lv;   // full resolution, then the overviews
+};
+
+namespace {
+	std::string CellName (int clat, int clng)
+	{
+		char buf[16];
+		snprintf (buf, sizeof(buf), "%c%02d%c%03d", clat >= 0 ? 'N' : 'S', abs (clat), clng >= 0 ? 'E' : 'W', abs (clng));
+		return buf;
+	}
+
+	std::string Expand (std::string url, const std::string &key, const std::string &val)
+	{
+		for (size_t p; (p = url.find (key)) != std::string::npos; ) url.replace (p, key.size(), val);
+		return url;
+	}
+
+	// sRGB from reflectance (x 10000): a gentle curve, as true-colour images
+	uint8_t ToneS2 (int r)
+	{
+		static const std::vector<uint8_t> lut = [] {
+			std::vector<uint8_t> t (4096);
+			for (int i = 0; i < 4096; i++) {
+				double v = std::min (1.0, i * 4 / 10000.0 * 3.0);
+				t[i] = (uint8_t)lround (255.0 * pow (v, 1.0 / 1.5));
+			}
+			return t;
+		}();
+		return lut[std::clamp (r / 4, 0, 4095)];
+	}
+
+	// classic little-endian TIFF: the IFDs of the image and its overviews
+	bool ParseTiff (const std::vector<uint8_t> &d, std::vector<std::map<int, std::vector<uint64_t>>> &ifds)
+	{
+		if (d.size() < 8 || d[0] != 'I' || d[1] != 'I' || d[2] != 42) return false;
+		auto U16 = [&](size_t o) -> uint64_t { return o + 2 <= d.size() ? (uint64_t)(d[o] | d[o+1] << 8) : 0; };
+		auto U32 = [&](size_t o) -> uint64_t { return o + 4 <= d.size() ? (uint64_t)d[o] | (uint64_t)d[o+1] << 8 | (uint64_t)d[o+2] << 16 | (uint64_t)d[o+3] << 24 : 0; };
+		uint64_t off = U32 (4);
+		for (int n = 0; off && off + 2 <= d.size() && n < 16; n++) {
+			uint64_t cnt = U16 (off);
+			std::map<int, std::vector<uint64_t>> tags;
+			for (uint64_t i = 0; i < cnt; i++) {
+				size_t e = (size_t)(off + 2 + i * 12);
+				int tag = (int)U16 (e), typ = (int)U16 (e + 2);
+				uint64_t c = U32 (e + 4);
+				int size = (typ == 3 ? 2 : typ == 4 ? 4 : typ == 1 || typ == 2 || typ == 7 ? 1 : 8);
+				if (typ != 3 && typ != 4) { tags[tag] = {}; continue; } // (only integer tags are needed)
+				size_t vo = (c * size <= 4) ? e + 8 : (size_t)U32 (e + 8);
+				if (vo + c * size > d.size()) return false; // (beyond the header block)
+				std::vector<uint64_t> v (c);
+				for (uint64_t k = 0; k < c; k++) v[k] = (size == 2 ? U16 (vo + 2*k) : U32 (vo + 4*k));
+				tags[tag] = v;
+			}
+			ifds.push_back (tags);
+			off = U32 ((size_t)(off + 2 + cnt * 12));
+		}
+		return !ifds.empty();
+	}
+}
+
+std::shared_ptr<const Stream::CogHeader> Stream::CogHead (const Source &s, int clat, int clng)
+{
+	std::string cell = CellName (clat, clng);
+	std::string key = s.id + "/" + cell;
+	{
+		std::lock_guard<std::mutex> lock (srcMtx);
+		auto it = cogHeads.find (key);
+		if (it != cogHeads.end()) return it->second;
+	}
+	auto h = std::make_shared<CogHeader>();
+	h->url = Expand (Expand (s.url, "{cell}", cell), "{latband}", cell.substr (0, 3));
+#ifdef ORBITER_TERRAIN_STREAMING
+	std::string file = cacheDir + "/src/" + key + ".hdr";
+	std::vector<uint8_t> data;
+	std::error_code ec;
+	if (fs::exists (file, ec)) {
+		std::ifstream f (file, std::ios::binary);
+		data.assign (std::istreambuf_iterator<char> (f), {});
+	} else {
+		long status = HttpGet (h->url, data, "0-262143");
+		if (status == 0 || status >= 500 || status == 429) return nullptr; // (transient)
+		if (status != 200 && status != 206) data.clear();               // (no such cell: ocean)
+		WriteFileAtomic (file, data);
+	}
+	std::vector<std::map<int, std::vector<uint64_t>>> ifds;
+	if (!data.empty() && ParseTiff (data, ifds)) {
+		for (auto &t : ifds) {
+			auto get = [&](int tag) -> uint64_t { auto it = t.find (tag); return it != t.end() && !it->second.empty() ? it->second[0] : 0; };
+			if (get (259) != 8 || get (284) != 1 || !t.count (324) || !t.count (325)) continue; // deflate, interleaved, tiled
+			CogHeader::Level l;
+			l.w = (int)get (256), l.h = (int)get (257), l.tw = (int)get (322), l.th = (int)get (323);
+			l.off = t[324], l.cnt = t[325];
+			h->spp = (int)get (277);
+			if (l.tw > 0 && l.th > 0) h->lv.push_back (l);
+		}
+		h->ok = !h->lv.empty() && h->spp >= 3;
+	}
+#endif
+	std::lock_guard<std::mutex> lock (srcMtx);
+	cogHeads[key] = h;
+	return h;
+}
+
+std::shared_ptr<const Stream::SrcTile> Stream::CogBlock (const Source &s, const CogHeader &h, int clat, int clng, int k, int bx, int by)
+{
+	char key[256];
+	snprintf (key, sizeof(key), "%s/%s/%d/%d_%d", s.id.c_str(), CellName (clat, clng).c_str(), k, bx, by);
+	if (auto c = Cached (key)) return c;
+	const CogHeader::Level &l = h.lv[k];
+	int nbx = (l.w + l.tw - 1) / l.tw;
+	size_t idx = (size_t)by * nbx + bx;
+	if (idx >= l.off.size()) return nullptr;
+	auto t = std::make_shared<SrcTile>();
+#ifdef ORBITER_TERRAIN_STREAMING
+	std::string file = cacheDir + "/src/" + key + ".bin";
+	std::vector<uint8_t> z;
+	std::error_code ec;
+	if (fs::exists (file, ec)) {
+		std::ifstream f (file, std::ios::binary);
+		z.assign (std::istreambuf_iterator<char> (f), {});
+	} else if (l.cnt[idx] > 0) {
+		char range[64];
+		snprintf (range, sizeof(range), "%llu-%llu", (unsigned long long)l.off[idx], (unsigned long long)(l.off[idx] + l.cnt[idx] - 1));
+		long status = HttpGet (h.url, z, range);
+		if (status != 206 && status != 200) return nullptr;
+		WriteFileAtomic (file, z);
+		written += z.size();
+	}
+	size_t n = (size_t)l.tw * l.th * h.spp;
+	std::vector<uint16_t> raw (n);
+	uLongf len = (uLongf)(n * 2);
+	if (z.empty() || uncompress ((Bytef*)raw.data(), &len, z.data(), (uLong)z.size()) != Z_OK || len != n * 2) {
+		if (!z.empty()) return nullptr;
+		raw.assign (n, 0); // (no data in this block)
+	}
+	// undo the horizontal differencing (per sample, along each row)
+	for (int y = 0; y < l.th; y++) {
+		uint16_t *row = raw.data() + (size_t)y * l.tw * h.spp;
+		for (int x = 1; x < l.tw; x++)
+			for (int c = 0; c < h.spp; c++) row[x * h.spp + c] += row[(x - 1) * h.spp + c];
+	}
+	t->w = l.tw, t->h = l.th;
+	t->rgb.resize ((size_t)l.tw * l.th * 3);
+	t->valid.resize ((size_t)l.tw * l.th);
+	for (size_t i = 0; i < (size_t)l.tw * l.th; i++) {
+		const uint16_t *p = raw.data() + i * h.spp;
+		t->valid[i] = (p[0] || p[1] || p[2]) ? 1 : 0;
+		for (int c = 0; c < 3; c++) t->rgb[i*3 + c] = ToneS2 (p[c]);
+	}
+	t->empty = false;
+#endif
+	Cache (key, t, t->rgb.size() + t->valid.size() + 64);
+	return t;
+}
+
+bool Stream::MakeSurfCog (const Source &s, const Job &job)
+{
+	const double DEG = 180.0 / PI;
+	double latmin, latmax, lngmin, lngmax;
+	TileExtent (job.lvl, job.ilat, job.ilng, latmin, latmax, lngmin, lngmax);
+	double texel = (latmax - latmin) * DEG / SURF_N; // [deg]
+
+	// a cell's header for the overview levels (cells are alike)
+	int clat0 = (int)floor (0.5 * (latmin + latmax) * DEG), clng0 = (int)floor (0.5 * (lngmin + lngmax) * DEG);
+	std::shared_ptr<const CogHeader> h0;
+	for (int dy = 0; dy <= 1 && !(h0 && h0->ok); dy++)
+		for (int dx = 0; dx <= 1 && !(h0 && h0->ok); dx++) {
+			h0 = CogHead (s, clat0 - dy, clng0 + dx);
+			if (!h0) return false; // (transient failure)
+		}
+	if (!h0 || !h0->ok) return false;
+	// overview: the coarsest one with pixels not larger than the texels
+	int k = 0;
+	while (k + 1 < (int)h0->lv.size() && 1.0 / h0->lv[k + 1].w <= texel) k++;
+	const int cw = h0->lv[k].w, ch = h0->lv[k].h; // cell size at this level [px]
+
+	std::vector<uint8_t> rgb ((size_t)SURF_N * SURF_N * 3);
+	std::vector<uint8_t> valid ((size_t)SURF_N * SURF_N, 0);
+	bool failed = false;
+	int nvalid = 0;
+	std::shared_ptr<const CogHeader> lastH;
+	int lastCell[2] = {999, 999};
+	std::shared_ptr<const SrcTile> lastB;
+	int lastBlk[3] = {-1, -1, -1};
+	// pixel (gx, gy) of the global grid at level k (from 180 W, 90 N)
+	auto texelAt = [&](long gx, long gy, uint8_t *c) -> bool {
+		long cx = (long)floor ((double)gx / cw), cy = (long)floor ((double)gy / ch);
+		int clng = (int)(cx - 180), clat = (int)(89 - cy);
+		if (clat != lastCell[0] || clng != lastCell[1]) {
+			lastH = CogHead (s, clat, clng);
+			lastCell[0] = clat, lastCell[1] = clng;
+			lastBlk[0] = -1;
+			if (!lastH) failed = true;
+		}
+		if (!lastH || !lastH->ok || k >= (int)lastH->lv.size()) return false;
+		const CogHeader::Level &l = lastH->lv[k];
+		int lx = (int)(gx - cx * cw), ly = (int)(gy - cy * ch);
+		int bx = lx / l.tw, by = ly / l.th;
+		if (bx != lastBlk[0] || by != lastBlk[1] || lastBlk[2] != (int)(cx * 1000 + cy)) {
+			lastB = CogBlock (s, *lastH, clat, clng, k, bx, by);
+			lastBlk[0] = bx, lastBlk[1] = by, lastBlk[2] = (int)(cx * 1000 + cy);
+			if (!lastB) failed = true;
+		}
+		if (!lastB) return false;
+		size_t i = (size_t)(ly - by * l.th) * lastB->w + (lx - bx * l.tw);
+		if (!lastB->valid[i]) return false;
+		const uint8_t *p = lastB->rgb.data() + i * 3;
+		c[0] = p[0], c[1] = p[1], c[2] = p[2];
+		return true;
+	};
+	for (int i = 0; i < SURF_N && !failed; i++) {
+		double lat = (latmax - (i + 0.5) / SURF_N * (latmax - latmin)) * DEG;
+		double fy = (90.0 - lat) * ch - 0.5;
+		for (int j = 0; j < SURF_N; j++) {
+			double lng = (lngmin + (j + 0.5) / SURF_N * (lngmax - lngmin)) * DEG;
+			double fx = (lng + 180.0) * cw - 0.5;
+			long x0 = (long)floor (fx), y0 = (long)floor (fy);
+			double wx = fx - x0, wy = fy - y0;
+			uint8_t c[4][3];
+			bool v[4] = { texelAt (x0, y0, c[0]), texelAt (x0 + 1, y0, c[1]), texelAt (x0, y0 + 1, c[2]), texelAt (x0 + 1, y0 + 1, c[3]) };
+			double w[4] = { (1 - wx) * (1 - wy), wx * (1 - wy), (1 - wx) * wy, wx * wy }, ws = 0.0, acc[3] = {0, 0, 0};
+			for (int q = 0; q < 4; q++)
+				if (v[q]) { ws += w[q]; for (int m = 0; m < 3; m++) acc[m] += w[q] * c[q][m]; }
+			uint8_t *o = rgb.data() + ((size_t)i * SURF_N + j) * 3;
+			if (ws > 0.0) {
+				for (int m = 0; m < 3; m++) o[m] = (uint8_t)lround (acc[m] / ws);
+				valid[(size_t)i * SURF_N + j] = 1;
+				nvalid++;
+			}
+		}
+	}
+	if (failed || nvalid == 0) return false;
+	if (nvalid < SURF_N * SURF_N && !FillHoles (s.body, job, rgb, valid)) return false;
+	auto dds = EncodeDDS (std::move (rgb), SURF_N, SURF_N);
+	if (!WriteFileAtomic (job.key, dds)) return false;
+	written += dds.size();
+	return true;
+}
+
+// Texels without data: open water (at or below sea level, from the body's
+// elevation source) gets a sea colour; holes on land (e.g. masked shadows
+// or clouds) are filled from the surrounding texels (pull-push)
+bool Stream::FillHoles (const std::string &body, const Job &job, std::vector<uint8_t> &rgb, const std::vector<uint8_t> &valid)
+{
+	const int N = SURF_N;
+	double latmin, latmax, lngmin, lngmax;
+	TileExtent (job.lvl, job.ilat, job.ilng, latmin, latmax, lngmin, lngmax);
+
+	// water mask from the elevation source (on a coarser grid)
+	const Source *es = nullptr;
+	for (const Source &x : sources) if (x.body == body && x.layer == ELEV && x.enc == Source::TERRARIUM) { es = &x; break; }
+	const int M = 64; // (water mask resolution)
+	std::vector<uint8_t> water ((size_t)M * M, 0);
+	if (es) {
+		int z = std::clamp (job.lvl - 5, 0, es->maxZoom);
+		int ntile = 1 << z;
+		for (int i = 0; i < M; i++)
+			for (int j = 0; j < M; j++) {
+				double lat = latmax - (i + 0.5) / M * (latmax - latmin), lng = lngmin + (j + 0.5) / M * (lngmax - lngmin);
+				double x, y;
+				Mercator (lat, lng, z, x, y);
+				int tx = (((int)x >> 8) % ntile + ntile) % ntile, ty = std::clamp ((int)y >> 8, 0, ntile - 1);
+				auto t = Fetch (*es, z, tx, ty);
+				if (!t) return false; // (transient)
+				if (t->empty) continue;
+				float e = t->elev[(size_t)std::clamp ((int)y - ty * 256, 0, t->h - 1) * t->w + std::clamp ((int)x & 255, 0, t->w - 1)];
+				water[(size_t)i * M + j] = (e <= 0.5f);
+			}
+	}
+	auto isWater = [&](int i, int j) { return water[(size_t)(i * M / N) * M + (j * M / N)] != 0; };
+
+	// pull: a pyramid of weighted averages of the land texels with data
+	struct Lv { int n; std::vector<float> c, w; };
+	std::vector<Lv> pyr;
+	Lv l0{N, std::vector<float> ((size_t)N * N * 3), std::vector<float> ((size_t)N * N)};
+	for (int i = 0; i < N; i++)
+		for (int j = 0; j < N; j++) {
+			size_t k = (size_t)i * N + j;
+			if (valid[k]) {
+				l0.w[k] = 1.0f;
+				for (int m = 0; m < 3; m++) l0.c[k*3 + m] = rgb[k*3 + m];
+			}
+		}
+	pyr.push_back (std::move (l0));
+	while (pyr.back().n > 1) {
+		const Lv &a = pyr.back();
+		Lv b{a.n / 2, std::vector<float> ((size_t)(a.n / 2) * (a.n / 2) * 3), std::vector<float> ((size_t)(a.n / 2) * (a.n / 2))};
+		for (int i = 0; i < b.n; i++)
+			for (int j = 0; j < b.n; j++) {
+				float ws = 0.0f, c[3] = {0, 0, 0};
+				for (int di = 0; di < 2; di++)
+					for (int dj = 0; dj < 2; dj++) {
+						size_t k = (size_t)(2*i + di) * a.n + (2*j + dj);
+						ws += a.w[k];
+						for (int m = 0; m < 3; m++) c[m] += a.c[k*3 + m] * a.w[k];
+					}
+				size_t k = (size_t)i * b.n + j;
+				if (ws > 0.0f) for (int m = 0; m < 3; m++) b.c[k*3 + m] = c[m] / ws;
+				b.w[k] = std::min (1.0f, ws);
+			}
+		pyr.push_back (std::move (b));
+	}
+	// push: from the coarsest level down, texels without (full) weight take the coarser value
+	for (int l = (int)pyr.size() - 2; l >= 0; l--) {
+		Lv &a = pyr[l];
+		const Lv &b = pyr[l + 1];
+		for (int i = 0; i < a.n; i++)
+			for (int j = 0; j < a.n; j++) {
+				size_t k = (size_t)i * a.n + j;
+				float w = a.w[k];
+				if (w >= 1.0f) continue;
+				// (the coarser level, interpolated bilinearly: no blocks)
+				float fy = std::clamp ((i + 0.5f) * 0.5f - 0.5f, 0.0f, b.n - 1.0f), fx = std::clamp ((j + 0.5f) * 0.5f - 0.5f, 0.0f, b.n - 1.0f);
+				int y0 = (int)fy, x0 = (int)fx, y1 = std::min (y0 + 1, b.n - 1), x1 = std::min (x0 + 1, b.n - 1);
+				float wy = fy - y0, wx = fx - x0;
+				for (int m = 0; m < 3; m++) {
+					float c00 = b.c[((size_t)y0 * b.n + x0)*3 + m], c01 = b.c[((size_t)y0 * b.n + x1)*3 + m];
+					float c10 = b.c[((size_t)y1 * b.n + x0)*3 + m], c11 = b.c[((size_t)y1 * b.n + x1)*3 + m];
+					float cb = (c00 * (1 - wx) + c01 * wx) * (1 - wy) + (c10 * (1 - wx) + c11 * wx) * wy;
+					float own = w > 0.0f ? a.c[k*3 + m] : 0.0f;
+					a.c[k*3 + m] = own * w + cb * (1.0f - w);
+				}
+				a.w[k] = 1.0f;
+			}
+	}
+	for (int i = 0; i < N; i++)
+		for (int j = 0; j < N; j++) {
+			size_t k = (size_t)i * N + j;
+			if (valid[k]) continue;
+			uint8_t *o = rgb.data() + k * 3;
+			if (isWater (i, j) || pyr.back().w[0] <= 0.0f) {
+				o[0] = 14, o[1] = 28, o[2] = 48;
+			} else {
+				for (int m = 0; m < 3; m++) o[m] = (uint8_t)std::clamp ((int)lround (pyr[0].c[k*3 + m]), 0, 255);
+			}
+		}
 	return true;
 }
 

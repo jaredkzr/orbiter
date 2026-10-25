@@ -36,9 +36,9 @@ namespace terrain {
 	struct Source {
 		std::string body;
 		Layer layer;
-		enum Encoding { RGB, TERRARIUM } enc = RGB;
-		std::string url;         // template with {z}, {x}, {y}
-		int maxZoom = 0;         // finest zoom level of the source
+		enum Encoding { RGB, TERRARIUM, S2COG } enc = RGB;
+		std::string url;         // template with {z}, {x}, {y} (map tiles) or {cell}, {latband} (S2COG)
+		int maxZoom = 0;         // finest zoom level of the source (S2COG: finest Orbiter level)
 		int minLevel = 10;       // coarsest Orbiter level to make
 		double latmin = -90, latmax = 90, lngmin = -180, lngmax = 180; // coverage [deg]
 		std::string id;          // cache folder name
@@ -79,6 +79,13 @@ namespace terrain {
 		bool MakeElev (const Source &s, const Job &job);
 		const Source *Find (const std::string &body, Layer layer, int lvl, int ilat, int ilng) const;
 		std::shared_ptr<const SrcTile> Fetch (const Source &s, int z, int x, int y);
+		bool MakeSurfCog (const Source &s, const Job &job);
+		bool FillHoles (const std::string &body, const Job &job, std::vector<uint8_t> &rgb, const std::vector<uint8_t> &valid);
+		struct CogHeader;
+		std::shared_ptr<const CogHeader> CogHead (const Source &s, int clat, int clng);
+		std::shared_ptr<const SrcTile> CogBlock (const Source &s, const CogHeader &h, int clat, int clng, int k, int bx, int by);
+		std::shared_ptr<const SrcTile> Cached (const std::string &key);
+		void Cache (const std::string &key, std::shared_ptr<const SrcTile> t, size_t bytes);
 		void Prune ();
 
 		std::vector<Source> sources;
@@ -96,8 +103,11 @@ namespace terrain {
 		std::atomic<unsigned long long> written{0}; // bytes written since the last pruning
 
 		std::mutex srcMtx;             // in-memory cache of source tiles
-		std::map<std::string, std::pair<std::shared_ptr<const SrcTile>, unsigned>> srcCache;
+		struct CacheEntry { std::shared_ptr<const SrcTile> tile; unsigned used; size_t bytes; };
+		std::map<std::string, CacheEntry> srcCache;
+		size_t srcBytes = 0;
 		unsigned srcClock = 0;
+		std::map<std::string, std::shared_ptr<const CogHeader>> cogHeads;
 	};
 
 	/// The stream of the application (null if none)
