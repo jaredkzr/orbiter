@@ -141,6 +141,9 @@ private:
 	bool imguiReady = false;
 	bool offscreen = false;   // render into images, without showing a window
 	bool frameActive = false; // a frame is being recorded
+	bool windowShown = false;
+	void ShowWindow ();
+	void ApplyVideoMode ();
 	void CaptureBackbuffer (const std::string &path);
 	void Teardown ();
 	std::string autoScreenshot;   // ORBITER_VK_SCREENSHOT: file written at frame autoScreenshotFrame

@@ -7,6 +7,9 @@
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include <SDL3/SDL.h>
+#include <algorithm>
+#include <string>
+#include <vector>
 
 namespace {
 
@@ -129,7 +132,150 @@ namespace {
 		}
 	}
 
+	// ------------------------------------------------------------------
+	// Game controllers: gamepads (standard layout) and other joysticks, in
+	// the order they were connected
+
+	struct Controller {
+		SDL_JoystickID id;
+		SDL_Gamepad *pad = nullptr;
+		SDL_Joystick *joy = nullptr;
+		std::string name;
+	};
+	std::vector<Controller> controllers;
+	bool controllersChanged = true;
+
+	// virtual test gamepad (AttachTestGamepad): its state is set again before
+	// each update, since SDL resets triggers and buttons when it is opened
+	struct {
+		SDL_Joystick *joy = nullptr;
+		Sint16 axis[6];
+		unsigned int buttons = 0;
+	} testPad;
+
+	void UpdateTestGamepad ()
+	{
+		if (!testPad.joy) return;
+		for (int a = 0; a < 6; a++)
+			SDL_SetJoystickVirtualAxis (testPad.joy, a, testPad.axis[a]);
+		for (int b = 0; b < OAPI_PAD_NBUTTON; b++)
+			SDL_SetJoystickVirtualButton (testPad.joy, b, (testPad.buttons >> b) & 1);
+	}
+
+	void AddController (SDL_JoystickID id)
+	{
+		for (auto &c : controllers) if (c.id == id) return;
+		Controller c;
+		c.id = id;
+		if (SDL_IsGamepad (id)) {
+			if (!(c.pad = SDL_OpenGamepad (id))) return;
+			const char *n = SDL_GetGamepadName (c.pad);
+			c.name = n ? n : "Gamepad";
+		} else {
+			if (!(c.joy = SDL_OpenJoystick (id))) return;
+			const char *n = SDL_GetJoystickName (c.joy);
+			c.name = n ? n : "Joystick";
+		}
+		oapiWriteLogV ("VulkanClient: controller connected: %s (%s)", c.name.c_str(), c.pad ? "gamepad" : "joystick");
+		controllers.push_back (c);
+		controllersChanged = true;
+	}
+
+	void RemoveController (SDL_JoystickID id)
+	{
+		for (auto it = controllers.begin(); it != controllers.end(); ++it) {
+			if (it->id != id) continue;
+			oapiWriteLogV ("VulkanClient: controller disconnected: %s", it->name.c_str());
+			if (it->pad) SDL_CloseGamepad (it->pad);
+			if (it->joy) SDL_CloseJoystick (it->joy);
+			controllers.erase (it);
+			controllersChanged = true;
+			return;
+		}
+	}
+
+	void ReportControllers ()
+	{
+		if (controllersChanged) {
+			std::vector<const char*> names;
+			for (auto &c : controllers) names.push_back (c.name.c_str());
+			oapiInputControllers ((int)names.size(), names.data());
+			controllersChanged = false;
+		}
+		for (size_t i = 0; i < controllers.size(); i++) {
+			const Controller &c = controllers[i];
+			OAPI_CONTROLLERSTATE s{};
+			s.hat = -1;
+			auto SetButton = [&](int b, bool down) { if (down) s.buttons[b >> 5] |= 1u << (b & 31); };
+			if (c.pad) {
+				static const SDL_GamepadButton buttons[OAPI_PAD_NBUTTON] = {
+					SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_BUTTON_EAST, SDL_GAMEPAD_BUTTON_WEST, SDL_GAMEPAD_BUTTON_NORTH,
+					SDL_GAMEPAD_BUTTON_BACK, SDL_GAMEPAD_BUTTON_GUIDE, SDL_GAMEPAD_BUTTON_START,
+					SDL_GAMEPAD_BUTTON_LEFT_STICK, SDL_GAMEPAD_BUTTON_RIGHT_STICK,
+					SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER,
+					SDL_GAMEPAD_BUTTON_DPAD_UP, SDL_GAMEPAD_BUTTON_DPAD_DOWN,
+					SDL_GAMEPAD_BUTTON_DPAD_LEFT, SDL_GAMEPAD_BUTTON_DPAD_RIGHT,
+				};
+				static const SDL_GamepadAxis axes[6] = {
+					SDL_GAMEPAD_AXIS_LEFTX, SDL_GAMEPAD_AXIS_LEFTY, SDL_GAMEPAD_AXIS_RIGHTX,
+					SDL_GAMEPAD_AXIS_RIGHTY, SDL_GAMEPAD_AXIS_LEFT_TRIGGER, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER,
+				};
+				s.gamepad = true;
+				s.naxis = 6;
+				for (int a = 0; a < 6; a++)
+					s.axis[a] = std::max (-1.0f, SDL_GetGamepadAxis (c.pad, axes[a]) / 32767.0f);
+				for (int b = 0; b < OAPI_PAD_NBUTTON; b++)
+					SetButton (b, SDL_GetGamepadButton (c.pad, buttons[b]));
+			} else {
+				s.naxis = std::min (8, SDL_GetNumJoystickAxes (c.joy));
+				for (int a = 0; a < s.naxis; a++)
+					s.axis[a] = std::max (-1.0f, SDL_GetJoystickAxis (c.joy, a) / 32767.0f);
+				int nb = std::min (128, SDL_GetNumJoystickButtons (c.joy));
+				for (int b = 0; b < nb; b++)
+					SetButton (b, SDL_GetJoystickButton (c.joy, b));
+				if (SDL_GetNumJoystickHats (c.joy) > 0) {
+					static const struct { Uint8 mask; int dir; } hats[] = {
+						{SDL_HAT_UP, 0}, {SDL_HAT_RIGHTUP, 4500}, {SDL_HAT_RIGHT, 9000}, {SDL_HAT_RIGHTDOWN, 13500},
+						{SDL_HAT_DOWN, 18000}, {SDL_HAT_LEFTDOWN, 22500}, {SDL_HAT_LEFT, 27000}, {SDL_HAT_LEFTUP, 31500},
+					};
+					Uint8 h = SDL_GetJoystickHat (c.joy, 0);
+					for (auto &x : hats) if (h == x.mask) s.hat = x.dir;
+				}
+			}
+			oapiInputControllerState ((int)i, &s);
+		}
+	}
+
 } // namespace
+
+void input::AttachTestGamepad (const char *spec)
+{
+	float v[6] = {};
+	unsigned int buttons = 0;
+	sscanf (spec, "%f,%f,%f,%f,%f,%f,%u", v, v+1, v+2, v+3, v+4, v+5, &buttons);
+
+	SDL_VirtualJoystickDesc desc;
+	SDL_INIT_INTERFACE(&desc);
+	desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+	desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+	desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+	desc.name = "Virtual test gamepad";
+	SDL_JoystickID id = SDL_AttachVirtualJoystick (&desc);
+	SDL_Joystick *joy = id ? SDL_OpenJoystick (id) : nullptr;
+	if (!joy) {
+		oapiWriteLogError ("VulkanClient: could not attach a virtual gamepad: %s", SDL_GetError());
+		return;
+	}
+	// (raw axis values -32768 to 32767; the triggers' rest position is -32768)
+	for (int a = 0; a < 6; a++) {
+		float r = (a < 4) ? v[a] * 32767.0f : v[a] * 65535.0f - 32768.0f;
+		testPad.axis[a] = (Sint16)std::clamp (r, -32768.0f, 32767.0f);
+	}
+	testPad.buttons = buttons;
+	testPad.joy = joy; // (stays open)
+	UpdateTestGamepad ();
+	oapiWriteLogV ("VulkanClient: virtual test gamepad attached (%s)", spec);
+}
 
 bool input::ProcessEvents (SDL_Window *window)
 {
@@ -140,6 +286,7 @@ bool input::ProcessEvents (SDL_Window *window)
 	if (capture != SDL_GetWindowRelativeMouseMode (window))
 		SDL_SetWindowRelativeMouseMode (window, capture);
 
+	UpdateTestGamepad ();
 	SDL_Event ev;
 	while (SDL_PollEvent (&ev)) {
 		if (ImGui::GetCurrentContext())
@@ -182,7 +329,14 @@ bool input::ProcessEvents (SDL_Window *window)
 			SDL_GetMouseState (&mx, &my);
 			oapiInputMouseWheel ((int)(ev.wheel.y * 120.0f), (int)mx, (int)my);
 			} break;
+		case SDL_EVENT_JOYSTICK_ADDED:
+			AddController (ev.jdevice.which);
+			break;
+		case SDL_EVENT_JOYSTICK_REMOVED:
+			RemoveController (ev.jdevice.which);
+			break;
 		}
 	}
+	ReportControllers ();
 	return open;
 }

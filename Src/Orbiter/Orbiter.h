@@ -177,6 +177,7 @@ public:
 
 	// DirectInput components
 	inline CDIFramework7 *GetDInput() const { return pDI->GetDIFrame(); }
+	inline DInput *GetInput() const { return pDI; }
 	inline LPDIRECTINPUTDEVICE8 GetKbdDevice() const { return pDI->GetKbdDevice(); }
 	inline LPDIRECTINPUTDEVICE8 GetJoyDevice() const { return pDI->GetJoyDevice(); }
 
@@ -329,9 +330,15 @@ public:
 	bool PlatformMouseCaptured () const { return bKeepFocus; }
 
 private:
+	void GamepadInput ();
+	void SendLogicalKey (int lfunc);            // as if the key mapped to lfunc was pressed
+	bool RunLaunchpad (std::string &scenario);  // false: exit the application
+	void RunSession (const std::string &scenario);
 	char platformKstate[256];                   // current key state
 	std::vector<DIDEVICEOBJECTDATA> platformKbuf; // key events since the last frame
 	bool bPlatformClose;                        // session end requested by the client
+	unsigned int padButtons = 0;                // gamepad buttons held in the last frame
+	class PosixLaunchpad *m_pPosixLaunchpad = nullptr;
 #endif
 
 protected:

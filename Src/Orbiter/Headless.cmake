@@ -109,6 +109,7 @@ set(headless_src
 	ZTreeMgr.cpp
 # Platform layer
 	${PLATFORM_DIR}/posix/InputPosix.cpp
+	${PLATFORM_DIR}/posix/LaunchpadPosix.cpp
 	${PLATFORM_DIR}/posix/OrbiterPosix.cpp
 	${PLATFORM_DIR}/posix/PosixPlatform.cpp
 )

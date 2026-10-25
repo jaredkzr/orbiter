@@ -63,6 +63,52 @@ OAPIFUNC void oapiInputCloseRequest ();
  */
 OAPIFUNC bool oapiInputMouseCaptured ();
 
+/// Game controller buttons (OAPI_CONTROLLERSTATE::buttons of a gamepad)
+enum {
+	OAPI_PAD_A, OAPI_PAD_B, OAPI_PAD_X, OAPI_PAD_Y,
+	OAPI_PAD_BACK, OAPI_PAD_GUIDE, OAPI_PAD_START,
+	OAPI_PAD_LSTICK, OAPI_PAD_RSTICK, OAPI_PAD_LSHOULDER, OAPI_PAD_RSHOULDER,
+	OAPI_PAD_DPAD_UP, OAPI_PAD_DPAD_DOWN, OAPI_PAD_DPAD_LEFT, OAPI_PAD_DPAD_RIGHT,
+	OAPI_PAD_NBUTTON
+};
+
+/// Gamepad axes (OAPI_CONTROLLERSTATE::axis of a gamepad)
+enum {
+	OAPI_PAD_LEFTX, OAPI_PAD_LEFTY, OAPI_PAD_RIGHTX, OAPI_PAD_RIGHTY,
+	OAPI_PAD_LTRIGGER, OAPI_PAD_RTRIGGER
+};
+
+/// State of a game controller
+struct OAPI_CONTROLLERSTATE {
+	/// A gamepad (standard layout: axes and buttons OAPI_PAD_xxx), or a
+	/// joystick (axes X, Y, Z, Rx, Ry, Rz, slider 0, slider 1 and numbered buttons)
+	bool gamepad;
+	/// Axis positions, -1 to 1 (gamepad triggers 0 to 1; stick Y axes
+	/// positive towards the user)
+	float axis[8];
+	int naxis;
+	/// Button states, one bit per button
+	unsigned int buttons[4];
+	/// Hat switch: -1 centred, else the direction in hundredths of a
+	/// degree clockwise from forward
+	int hat;
+};
+
+/**
+ * \brief Report the connected game controllers (on startup and whenever
+ *   one is added or removed). Their order defines the joystick device
+ *   index of the configuration (index i is device i+1).
+ * \param n number of controllers
+ * \param names product names
+ */
+OAPIFUNC void oapiInputControllers (int n, const char *const *names);
+
+/**
+ * \brief Report the state of a game controller (once per frame).
+ * \param idx controller index (see oapiInputControllers)
+ */
+OAPIFUNC void oapiInputControllerState (int idx, const OAPI_CONTROLLERSTATE *state);
+
 #endif // !_WIN32
 
 #endif // !__ORBITERINPUT_H

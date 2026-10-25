@@ -23,7 +23,11 @@
 #include "Vessel.h"
 #include "Platform.h"
 #include "posix/OrbiterInput.h"
+#include "LaunchpadPosix.h"
+#include "DlgMgr.h"
+#include "Keymap.h"
 #include "imgui.h"
+#include <cmath>
 #include <cstdio>
 #include <string>
 #include <thread>
@@ -34,6 +38,7 @@ extern Camera *g_camera;
 extern Vessel *g_focusobj;
 extern Select *g_select;
 extern InputBox *g_input;
+extern TimeData td;
 
 // =======================================================================
 
@@ -70,6 +75,10 @@ HRESULT Orbiter::Create (HINSTANCE hInstance)
 	// preload startup plugin modules
 	LoadStartupModules();
 
+	// the launchpad (no scenario on the command line) needs a graphics client
+	if (!gclient && pConfig->CfgCmdlinePrm.LaunchScenario.empty())
+		LoadModule ("Modules\\Plugin", "VulkanClient");
+
 	bSysClearType = false;
 	memstat = new MemStat;
 
@@ -83,8 +92,13 @@ HRESULT Orbiter::Create (HINSTANCE hInstance)
 //-----------------------------------------------------------------------------
 INT Orbiter::Run ()
 {
-	if (pConfig->CfgCmdlinePrm.LaunchScenario.empty()) {
-		fprintf (stderr, "Orbiter: no scenario specified. Use -s <scenario> or --scenario=<scenario>.\n"
+	// Without a scenario on the command line, the launchpad selects one (in
+	// the graphics client's window); sessions then return to it.
+	std::string scenario = pConfig->CfgCmdlinePrm.LaunchScenario;
+	bool launchpad = scenario.empty();
+	if (launchpad && !gclient) {
+		fprintf (stderr, "Orbiter: no scenario specified. Use -s <scenario> or --scenario=<scenario>,\n"
+		                 "or load a graphics client (-p VulkanClient) for the launchpad.\n"
 		                 "Run with --help for a list of options.\n");
 		return 1;
 	}
@@ -92,14 +106,36 @@ INT Orbiter::Run ()
 	memset (platformKstate, 0, sizeof(platformKstate));
 	bPlatformClose = false;
 
-	// Without a graphics client, the console controls the session (there is no launchpad)
-	Launch (pConfig->CfgCmdlinePrm.LaunchScenario.c_str());
+	int nsession = 0;
+	do {
+		if (launchpad && !RunLaunchpad (scenario)) break;
+		RunSession (scenario);
+		if (launchpad) printf ("Launchpad: session %d closed\n", ++nsession);
+	} while (launchpad && !bFastExit);
+
+	if (m_pPosixLaunchpad) {
+		delete m_pPosixLaunchpad;
+		m_pPosixLaunchpad = nullptr;
+	}
+	pConfig->Write ();
+	return 0;
+}
+
+//-----------------------------------------------------------------------------
+// Name: RunSession()
+// Desc: Run a simulation session until it is closed. Without a graphics
+//       client, the console controls the session.
+//-----------------------------------------------------------------------------
+void Orbiter::RunSession (const std::string &scenario)
+{
+	Launch (scenario.c_str());
 
 	while (bSession) {
 		if (bAllowInput) bActive = true, bAllowInput = false;
 		if (BeginTimeStep (bRunning)) {
 			UpdateWorld();
 			EndTimeStep (bRunning); // the graphics client processes window events in clbkUpdate
+			if (!bSession) break;   // (closed on reaching a session limit)
 			if (bVisible) {
 				if (bActive) UserInput ();
 				Render3DEnvironment ();
@@ -117,7 +153,67 @@ INT Orbiter::Run ()
 		} else if (!bRunning && !bVisible) // don't spin while paused
 			std::this_thread::sleep_for (std::chrono::milliseconds (10));
 	}
-	return 0;
+}
+
+//-----------------------------------------------------------------------------
+// Name: RunLaunchpad()
+// Desc: Show the launchpad until the user launches a scenario (returned in
+//       `scenario`) or exits (returns false)
+//-----------------------------------------------------------------------------
+namespace {
+	// the launchpad as a dialog of the dialog manager, which runs the ImGui frame
+	class LaunchpadDlg : public ImGuiDialog {
+	public:
+		LaunchpadDlg (PosixLaunchpad *lp): ImGuiDialog ("Launchpad"), lp(lp) { active = true; }
+		void Display () override { action = lp->Draw (); }
+		void OnDraw () override {}
+		PosixLaunchpad *lp;
+		PosixLaunchpad::Action action = PosixLaunchpad::NONE;
+	};
+}
+
+bool Orbiter::RunLaunchpad (std::string &scenario)
+{
+	if (!m_pPosixLaunchpad) m_pPosixLaunchpad = new PosixLaunchpad (this);
+	else m_pPosixLaunchpad->Refresh ();
+
+	DialogManager *dlg = new DialogManager (this, NULL); // (ImGui context)
+	LaunchpadDlg lpdlg (m_pPosixLaunchpad);
+	dlg->AddEntry (&lpdlg);
+	PosixLaunchpad::Action action = PosixLaunchpad::NONE;
+	auto next = std::chrono::steady_clock::now();
+	while (action == PosixLaunchpad::NONE) {
+		gclient->clbkUpdate (false); // window events
+		platformKbuf.clear();
+		if (bPlatformClose) { // window closed
+			bPlatformClose = false;
+			action = PosixLaunchpad::EXIT;
+			break;
+		}
+		dlg->ImGuiNewFrame ();
+		action = lpdlg.action;
+		gclient->clbkRenderScene ();
+		gclient->clbkImGuiRenderDrawData ();
+		gclient->clbkDisplayFrame ();
+		// (at most 60 frames per second, e.g. without vertical sync)
+		next += std::chrono::microseconds (16667);
+		auto now = std::chrono::steady_clock::now();
+		if (next > now) std::this_thread::sleep_until (next);
+		else next = now;
+	}
+	m_pPosixLaunchpad->ReleaseResources ();
+	dlg->DelEntry (&lpdlg);
+	delete dlg;
+
+	if (action != PosixLaunchpad::LAUNCH) return false;
+	scenario = m_pPosixLaunchpad->Scenario ();
+
+	// video settings for the render window
+	const CFG_DEVPRM &d = pConfig->CfgDevPrm;
+	gclient->VideoData.fullscreen = d.bFullscreen;
+	gclient->VideoData.winw = (int)d.WinW;
+	gclient->VideoData.winh = (int)d.WinH;
+	return true;
 }
 
 void Orbiter::ScreenToClient (POINT *pt) const
@@ -192,12 +288,82 @@ HRESULT Orbiter::UserInput ()
 
 	for (i = 0; i < 15; i++) ctrlTotal[i] = ctrlKeyboard[i]; // update attitude requests
 
+	// joystick input
+	DIJOYSTATE2 js;
+	if (pDI->PollJoystick (&js)) {
+		UserJoyInput_System (&js);                  // general joystick functions
+		if (bRunning) UserJoyInput_OnRunning (&js); // joystick vessel control functions
+		for (i = 0; i < 15; i++) ctrlTotal[i] += ctrlJoystick[i]; // update thrust requests
+	}
+	GamepadInput ();
+
 	g_camera->UpdateMouse();
 
 	// apply manual attitude control
 	g_focusobj->ApplyUserAttitudeControls (ctrlTotal);
 
 	return S_OK;
+}
+
+//-----------------------------------------------------------------------------
+// Name: GamepadInput()
+// Desc: Gamepad functions beyond the joystick axes (see DInput::PollJoystick:
+//       left stick pitch and bank, shoulder buttons yaw): the right stick
+//       rotates the camera, the triggers set the main engine level and the
+//       buttons select functions, as their keys in the key map would.
+//-----------------------------------------------------------------------------
+void Orbiter::GamepadInput ()
+{
+	const OAPI_CONTROLLERSTATE *pad = pDI->Gamepad ();
+	if (!pad) {
+		padButtons = 0;
+		return;
+	}
+	auto Axis = [&](int i, double dz) {
+		double v = pad->axis[i], a = fabs (v);
+		return a <= dz ? 0.0 : copysign ((std::min (a, 1.0) - dz) / (1.0 - dz), v);
+	};
+
+	// right stick: camera rotation (up to 1.5 rad/s)
+	double rx = Axis (OAPI_PAD_RIGHTX, 0.15), ry = Axis (OAPI_PAD_RIGHTY, 0.15);
+	if (rx || ry)
+		g_camera->Rotate (1.5 * rx * fabs (rx) * td.SysDT, -1.5 * ry * fabs (ry) * td.SysDT, true);
+
+	// triggers: main (and retro) engine level, up to 0.5 per second
+	double th = Axis (OAPI_PAD_RTRIGGER, 0.05) - Axis (OAPI_PAD_LTRIGGER, 0.05);
+	if (th && bRunning)
+		g_focusobj->IncMainRetroLevel (0.5 * th * td.SimDT);
+
+	// buttons: functions on press
+	static const struct { int button, lkey; } map[] = {
+		{ OAPI_PAD_A,          OAPI_LKEY_NMKillrot },
+		{ OAPI_PAD_B,          OAPI_LKEY_RCSMode },
+		{ OAPI_PAD_X,          OAPI_LKEY_HUDMode },
+		{ OAPI_PAD_Y,          OAPI_LKEY_ToggleCamInternal },
+		{ OAPI_PAD_START,      OAPI_LKEY_Pause },
+		{ OAPI_PAD_BACK,       OAPI_LKEY_MainMenu },
+		{ OAPI_PAD_LSTICK,     OAPI_LKEY_NMHLevel },
+		{ OAPI_PAD_RSTICK,     OAPI_LKEY_CockpitResetCam },
+		{ OAPI_PAD_DPAD_UP,    OAPI_LKEY_IncSimSpeed },
+		{ OAPI_PAD_DPAD_DOWN,  OAPI_LKEY_DecSimSpeed },
+		{ OAPI_PAD_DPAD_LEFT,  OAPI_LKEY_NMPrograde },
+		{ OAPI_PAD_DPAD_RIGHT, OAPI_LKEY_NMRetrograde },
+	};
+	unsigned int pressed = pad->buttons[0] & ~padButtons;
+	padButtons = pad->buttons[0];
+	for (const auto &m : map)
+		if (pressed & (1u << m.button))
+			SendLogicalKey (m.lkey);
+}
+
+void Orbiter::SendLogicalKey (int lfunc)
+{
+	WORD k = keymap.Key (lfunc);
+	DWORD mod[3], nmod = 0;
+	if (k & KMOD_CTRL)  mod[nmod++] = (k & KMOD_LCTRL)  ? OAPI_KEY_LCONTROL : OAPI_KEY_RCONTROL;
+	if (k & KMOD_SHIFT) mod[nmod++] = (k & KMOD_LSHIFT) ? OAPI_KEY_LSHIFT   : OAPI_KEY_RSHIFT;
+	if (k & KMOD_ALT)   mod[nmod++] = (k & KMOD_LALT)   ? OAPI_KEY_LALT     : OAPI_KEY_RALT;
+	SendKbdBuffered (k & 0xFF, mod, nmod, false);
 }
 
 // =======================================================================

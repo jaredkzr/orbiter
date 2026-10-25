@@ -43,6 +43,9 @@ public:
 	// (kstate only used for modifier keys)
 	// if clearkey == true then key is set to 0 on return, if a match is found
 
+	WORD Key (int lfunc) const { return func[lfunc]; }
+	// key assigned to logical function lfunc (LOBYTE: key id; HIBYTE: modifier)
+
 private:
 	bool IsMatchingModifier (char *kstate, WORD key) const;
 

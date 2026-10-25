@@ -94,4 +94,17 @@ if (ORBITER_TEST_EXE)
 		set_tests_properties(Scenario.${test_name} PROPERTIES TIMEOUT 60)
 	endforeach()
 
+	# Launchpad (in the Vulkan client's window, rendered offscreen; needs a
+	# Vulkan device): a scenario launched twice, returning to the launchpad
+	if (ORBITER_HEADLESS AND ORBITER_BUILD_VULKANCLIENT)
+		add_test(
+			NAME "Launchpad.Cycle"
+			COMMAND ${ORBITER_TEST_EXE} "--maxframes=30"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Launchpad.Cycle PROPERTIES TIMEOUT 120
+			ENVIRONMENT "ORBITER_VK_OFFSCREEN=1;ORBITER_LAUNCHPAD_AUTO=Delta-glider/Smack!;ORBITER_LAUNCHPAD_RUNS=2"
+			PASS_REGULAR_EXPRESSION "Launchpad: session 2 closed")
+	endif()
+
 endif()

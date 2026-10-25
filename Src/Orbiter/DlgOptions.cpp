@@ -167,7 +167,7 @@ void DlgOptions::DrawJoystick()
 #ifdef _WIN32
 	g_pOrbiter->GetDInput()->GetJoysticks(&joylist, &ndev);
 #else
-	ndev = 0; joylist = NULL; // no DirectInput devices
+	g_pOrbiter->GetInput()->GetJoysticks(&joylist, &ndev); // (reported by the graphics client)
 #endif
 	DWORD &jidx = g_pOrbiter->Cfg()->CfgJoystickPrm.Joy_idx;
 

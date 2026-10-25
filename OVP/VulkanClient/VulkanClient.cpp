@@ -21,6 +21,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 #include <cstdlib>
+#include <algorithm>
 
 static VulkanClient *g_client = nullptr;
 
@@ -88,10 +89,16 @@ bool VulkanClient::clbkInitialise ()
 	offscreen = off && *off && *off != '0';
 	if (offscreen) SDL_SetHint (SDL_HINT_VIDEO_DRIVER, "offscreen,dummy");
 
-	if (!SDL_Init (SDL_INIT_VIDEO)) {
+	// Game controllers only with a visible window (offscreen runs are tests),
+	// or with a virtual test gamepad (ORBITER_VK_TEST_GAMEPAD, see input::AttachTestGamepad)
+	const char *testPad = getenv ("ORBITER_VK_TEST_GAMEPAD");
+	if (testPad) // (the hidden window never has the input focus)
+		SDL_SetHint (SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+	if (!SDL_Init ((offscreen && !testPad) ? SDL_INIT_VIDEO : SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
 		oapiWriteLogError ("VulkanClient: SDL initialisation failed: %s", SDL_GetError());
 		return false;
 	}
+	if (testPad) input::AttachTestGamepad (testPad);
 	const VIDEODATA *vd = GetVideoData();
 	int w = vd->winw > 0 ? vd->winw : 1280;
 	int h = vd->winh > 0 ? vd->winh : 800;
@@ -134,11 +141,32 @@ HWND VulkanClient::clbkCreateRenderWindow ()
 {
 	if (!ready) return NULL;
 	SDL_SetWindowTitle (window, "Orbiter (Vulkan)");
-	if (!offscreen) {
-		SDL_ShowWindow (window);
-		SDL_RaiseWindow (window);
-	}
+	ApplyVideoMode ();
+	ShowWindow ();
 	return (HWND)window;
+}
+
+void VulkanClient::ShowWindow ()
+{
+	if (offscreen || windowShown) return;
+	SDL_ShowWindow (window);
+	SDL_RaiseWindow (window);
+	windowShown = true;
+}
+
+void VulkanClient::ApplyVideoMode ()
+{
+	// window size and fullscreen (desktop resolution) from the video
+	// parameters, which the launchpad may have changed since the last session
+	if (offscreen) return;
+	const VIDEODATA *vd = GetVideoData();
+	SDL_SetWindowFullscreen (window, vd->fullscreen);
+	if (!vd->fullscreen && vd->winw > 0 && vd->winh > 0) {
+		int w, h;
+		SDL_GetWindowSize (window, &w, &h);
+		if (w != vd->winw || h != vd->winh) SDL_SetWindowSize (window, vd->winw, vd->winh);
+	}
+	SDL_SyncWindow (window);
 }
 
 void VulkanClient::clbkPostCreation ()
@@ -163,7 +191,7 @@ void VulkanClient::clbkCloseSession (bool fastclose)
 void VulkanClient::clbkDestroyRenderWindow (bool fastclose)
 {
 	GraphicsClient::clbkDestroyRenderWindow (fastclose);
-	if (window) SDL_HideWindow (window);
+	// (the window stays open for the launchpad; it is destroyed on exit)
 	if (fastclose) Teardown (); // the application exits right after this
 }
 
@@ -189,7 +217,16 @@ namespace {
 void VulkanClient::clbkRenderScene ()
 {
 	frameActive = false;
-	if (!ready || !scene) return;
+	if (!ready) return;
+	if (!scene) {
+		// no session (launchpad): a cleared frame for the user interface
+		ShowWindow ();
+		if (!ctx.BeginFrame ()) return;
+		frameActive = true;
+		r2d->Flush ();
+		ctx.BindBackbuffer (false);
+		return;
+	}
 	if (!ctx.BeginFrame ()) return;
 	frameActive = true;
 	r2d->Flush ();
@@ -282,7 +319,9 @@ bool VulkanClient::clbkSaveSurfaceToImage (SURFHANDLE surf, const char *fname,
 {
 	// only the render surface, saved as PNG regardless of the requested format
 	if (surf || !fname || !ready) return false;
-	CaptureBackbuffer (std::string (fname) + ".png");
+	std::string path (fname);
+	std::replace (path.begin(), path.end(), '\\', '/'); // (core paths use Windows separators)
+	CaptureBackbuffer (path + ".png");
 	return true;
 }
 
