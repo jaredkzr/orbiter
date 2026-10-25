@@ -27,6 +27,7 @@
 
 #include "Vesselbase.h"
 #include "Log.h"
+#include "Maneuver.h"
 
 class Elements;
 class CelestialBody;
@@ -1336,8 +1337,27 @@ protected:
 	// Returns true if any part of the vessel is in contact with a planet surface
 	// Should be called only after update phase, and assumes that sp is up to date.
 
+public:
 	bool ThrustEngaged () const { return m_bThrustEngaged; }
 
+	// manoeuvre nodes, in time order
+	const std::vector<maneuver::Node> &ManeuverNodes () const { return mnodes; }
+	DWORD AddManeuverNode (const maneuver::Node &node);  // returns its index
+	bool SetManeuverNode (DWORD idx, const maneuver::Node &node); // (index may change)
+	bool DelManeuverNode (DWORD idx);
+	void ClearManeuverNodes ();
+	DWORD ManeuverVersion () const { return mnode_version; } // incremented on each change
+
+	// burn autopilot (nodes with autoburn set): state of the next node's burn
+	struct BurnState {
+		enum Phase { NONE, ALIGN, BURN } phase = NONE;
+		double tstart = 0.0, tburn = 0.0; // start [simt] and estimated duration [s]
+		Vector dvg;                       // remaining velocity change (global) [m/s]
+		bool aligned = false;
+	};
+	const BurnState &Burn () const { return burn; }
+
+protected:
 	bool IsComponent () const { return supervessel != 0 || attach; }
 	const VesselBase *GetSuperStructure () const;
 
@@ -1661,6 +1681,11 @@ private:
 	mutable double hull_bound = 0.0; // bounding radius of the hulls about the vessel's origin
 	bool hulls_custom = false;                   // hulls defined by the vessel (AddCollisionHull)
 	std::vector<collision::Hull> custom_hulls;
+
+	std::vector<maneuver::Node> mnodes;          // manoeuvre nodes (time order)
+	DWORD mnode_version = 0;
+	BurnState burn;
+	void UpdateBurn ();                          // burn autopilot (in UpdateThrustForces)
 
 	double vd_forw, vd_back, vd_vert, vd_side;  // resistance constants against translation in atmosphere
 

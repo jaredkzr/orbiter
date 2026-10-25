@@ -864,6 +864,8 @@ void Interpreter::LoadAPI ()
 		{"write_log", oapiWriteLog},
 		{"open_help", oapiOpenHelp},
 		{"exit", oapiExit},
+		{"get_trajectoryevents", oapi_get_trajectoryevents},
+		{"set_trajectorytarget", oapi_set_trajectorytarget},
 		{"open_inputbox", oapiOpenInputBox},
 		{"receive_input", oapiReceiveInput},
 		{"open_inputboxex", oapi_open_inputboxex},
@@ -3912,6 +3914,59 @@ int Interpreter::oapiExit(lua_State* L)
 	auto code = lua_tointeger(L, 1);
 	oapiExitOrbiter((int)code);
 	return 0; // compiler warnings
+}
+
+/***
+Events of the predicted trajectory of the focus vessel.
+
+The trajectory with the vessel's manoeuvre nodes applied is predicted in the
+background; this returns nil until a prediction is available.
+
+@function get_trajectoryevents
+@tparam handle hVessel vessel handle (the focus vessel)
+@treturn table list of events in time order: {type=string ("periapsis",
+  "apoapsis", "soi_enter", "soi_exit", "impact", "closest"), mjd=number,
+  ref=handle (reference body), pos=vector (relative to ref) [m],
+  value=number (altitude [m]; closest: distance to the target),
+  speed=number (closest: relative speed [m/s]), node=int (the node the
+  trajectory part starts at, -1 before the first)}, or nil
+*/
+int Interpreter::oapi_get_trajectoryevents (lua_State *L)
+{
+	OBJHANDLE hVessel = lua_toObject (L, 1);
+	int n = oapiGetTrajectoryEvents (hVessel, NULL, 0);
+	if (n < 0) {
+		lua_pushnil (L);
+		return 1;
+	}
+	std::vector<TRAJECTORYEVENT> ev (n);
+	n = std::min (n, oapiGetTrajectoryEvents (hVessel, ev.data(), n));
+	static const char *types[] = { "periapsis", "apoapsis", "soi_enter", "soi_exit", "impact", "closest" };
+	lua_createtable (L, n, 0);
+	for (int i = 0; i < n; i++) {
+		lua_createtable (L, 0, 7);
+		lua_pushstring (L, types[ev[i].type]);   lua_setfield (L, -2, "type");
+		lua_pushnumber (L, ev[i].mjd);           lua_setfield (L, -2, "mjd");
+		lua_pushlightuserdata (L, ev[i].hRef);   lua_setfield (L, -2, "ref");
+		lua_pushvector (L, ev[i].pos);           lua_setfield (L, -2, "pos");
+		lua_pushnumber (L, ev[i].value);         lua_setfield (L, -2, "value");
+		lua_pushnumber (L, ev[i].speed);         lua_setfield (L, -2, "speed");
+		lua_pushinteger (L, ev[i].node);         lua_setfield (L, -2, "node");
+		lua_rawseti (L, -2, i + 1);
+	}
+	return 1;
+}
+
+/***
+Set the target of trajectory predictions (closest approaches).
+
+@function set_trajectorytarget
+@tparam handle hTarget celestial body or vessel handle (nil: none)
+*/
+int Interpreter::oapi_set_trajectorytarget (lua_State *L)
+{
+	oapiSetTrajectoryTarget (lua_isnil (L, 1) ? NULL : lua_toObject (L, 1));
+	return 0;
 }
 
 static bool bInputClosed;

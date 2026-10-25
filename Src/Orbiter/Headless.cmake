@@ -65,6 +65,9 @@ set(headless_src
 	ConvexGeometry.cpp
 	ConvexDecomposition.cpp
 	VesselCollision.cpp
+	Maneuver.cpp
+	Trajectory.cpp
+	VesselManeuver.cpp
 	Vessel.cpp
 	Vesselbase.cpp
 	Vesselstatus.cpp

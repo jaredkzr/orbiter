@@ -80,6 +80,7 @@ struct CFG_PHYSICSPRM {
 	double APropTorqueLimit;	// angle step limit for torque suppression
 	double DockSpeedLimit;      // largest relative speed of two docking ports at capture [m/s]
 	double DockAngleLimit;      // largest misalignment of two docking ports at capture (approach and roll) [rad]
+	double PredictionDays;      // longest trajectory prediction (map view, manoeuvre nodes) [days]
 };
 
 struct CFG_LOGICPRM {

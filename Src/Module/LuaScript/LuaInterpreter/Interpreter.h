@@ -400,6 +400,8 @@ protected:
 	static int oapiDbgOut (lua_State *L);
 	static int oapiWriteLog(lua_State* L);
 	static int oapiExit(lua_State *L);
+	static int oapi_get_trajectoryevents (lua_State *L);
+	static int oapi_set_trajectorytarget (lua_State *L);
 	static int oapiOpenHelp (lua_State *L);
 	static int oapiOpenInputBox (lua_State *L);
 	static int oapiReceiveInput (lua_State *L);
@@ -710,6 +712,12 @@ protected:
 	static int v_clear_collisionhulls (lua_State *L);
 	static int v_reset_collisionhulls (lua_State *L);
 	static int v_get_collisionhullcount (lua_State *L);
+	static int v_add_maneuvernode (lua_State *L);
+	static int v_get_maneuvernodecount (lua_State *L);
+	static int v_get_maneuvernode (lua_State *L);
+	static int v_set_maneuvernode (lua_State *L);
+	static int v_del_maneuvernode (lua_State *L);
+	static int v_clear_maneuvernodes (lua_State *L);
 	static int v_set_visibilitylimit (lua_State *L);
 	static int v_get_clipradius (lua_State *L);
 	static int v_set_albedoRGB (lua_State *L);

@@ -64,7 +64,8 @@ CFG_PHYSICSPRM CfgPhysicsPrm_default = {
 	30.0*RAD,	// APropCouplingLimit (angle step limit for cross term suppresion)
 	3600.0*RAD,	// APropTorqueLimit (angle step limit for torque suppression)
 	0.5,        // DockSpeedLimit (largest relative speed of docking ports at capture)
-	10.0*RAD    // DockAngleLimit (largest misalignment of docking ports at capture)
+	10.0*RAD,   // DockAngleLimit (largest misalignment of docking ports at capture)
+	400.0       // PredictionDays (longest trajectory prediction)
 };
 
 CFG_LOGICPRM CfgLogicPrm_default = {
@@ -597,6 +598,7 @@ bool Config::Load(const char *fname)
 	GetReal (ifs, "StabiliseSLimit", CfgPhysicsPrm.Stabilise_SLimit);
 	GetReal (ifs, "DockingSpeedLimit", CfgPhysicsPrm.DockSpeedLimit);
 	if (GetReal (ifs, "DockingAngleLimit", CfgPhysicsPrm.DockAngleLimit)) CfgPhysicsPrm.DockAngleLimit *= RAD;
+	GetReal (ifs, "PredictionDays", CfgPhysicsPrm.PredictionDays);
 	if (GetString (ifs, "PertPropSubsampling", cbuf))
 		sscanf (cbuf, "%d%lf", &CfgPhysicsPrm.PPropSubMax, &CfgPhysicsPrm.PPropSubLimit);
 	GetReal (ifs, "PertPropNonsphericalLimit", CfgPhysicsPrm.PPropStepLimit);
@@ -1194,6 +1196,8 @@ BOOL Config::Write (const char *fname) const
 			ofs << "DockingSpeedLimit = " << CfgPhysicsPrm.DockSpeedLimit << '\n';
 		if (CfgPhysicsPrm.DockAngleLimit != CfgPhysicsPrm_default.DockAngleLimit || bEchoAll)
 			ofs << "DockingAngleLimit = " << CfgPhysicsPrm.DockAngleLimit*DEG << '\n';
+		if (CfgPhysicsPrm.PredictionDays != CfgPhysicsPrm_default.PredictionDays || bEchoAll)
+			ofs << "PredictionDays = " << CfgPhysicsPrm.PredictionDays << '\n';
 #endif
 		if (CfgPhysicsPrm.PropSubMax != CfgPhysicsPrm_default.PropSubMax || bEchoAll)
 			ofs << "PropSubsampling = " << CfgPhysicsPrm.PropSubMax << '\n';

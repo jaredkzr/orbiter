@@ -49,6 +49,7 @@
 #include "DlgCtrl.h"
 #include "GraphicsAPI.h"
 #include "ConsoleManager.h"
+#include "Trajectory.h"
 #include "imgui.h"
 #ifdef _WIN32
 #include "imgui_impl_win32.h"
@@ -817,6 +818,10 @@ HWND Orbiter::CreateRenderWindow (Config *pCfg, const char *scenario)
 
 	g_psys->InitState (ScnPath (scenario));
 
+	predictor = std::make_unique<trajectory::Predictor>();
+	predictor->maxDays = pConfig->CfgPhysicsPrm.PredictionDays;
+	predictTarget = nullptr;
+
 	g_focusobj = 0;
 	Vessel *vfocus = g_psys->GetVessel (pState->Focus());
 	if (!vfocus)
@@ -928,6 +933,8 @@ void Orbiter::CloseSession ()
 	DWORD i;
 
 	bSession = false;
+	predictor.reset(); // (stops its thread before the world goes)
+	predictTarget = nullptr;
 
 	if      (bRecord)   ToggleRecorder();
 	else if (bPlayback) EndPlayback();
@@ -2055,6 +2062,9 @@ VOID Orbiter::UpdateWorld ()
 		if (hRenderWnd) DestroyWindow (hRenderWnd);
 #endif
 	}
+
+	// trajectory prediction of the focus vessel
+	if (predictor && g_focusobj && bSession) predictor->Update (g_focusobj, predictTarget);
 
 	//g_texmanager->OutputInfo();
 }

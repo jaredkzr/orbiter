@@ -115,6 +115,22 @@ public:
 	const Vector &Barycentre () const { return bpos; }
 	// Returns position of barycentre (planet + secondaries)
 
+	struct EphemState {
+		bool havetrue = false, havebary = false;
+		bool parentbary = false; // relative to the parent's barycentre (else its true position)
+		Vector cpos, cvel;       // true state
+		Vector bpos, bvel;       // barycentre state
+	};
+	bool EphemerisAtTime (double t, EphemState &s, const Elements *els = 0) const;
+	// The body's ephemeris relative to its parent at simulation time t, as
+	// used by RelTrueAndBaryState, without changing the body (for trajectory
+	// prediction; may be called from any thread). els: elements of a body
+	// without ephemeris module (a copy; the body's own are updated each step).
+	// Returns false if the body's state is not analytic.
+
+	bool HasEphemerisModule () const { return module != 0 || modIntf.oplanetEphemeris != 0; }
+	const Elements *ElementsPtr () const { return el; }
+
 	inline DWORD nJcoeff() const { return njcoeff; }
 	inline double Jcoeff (DWORD i) const { return jcoeff[i]; }
 	// returns number of coefficients and individual coefficients for planet

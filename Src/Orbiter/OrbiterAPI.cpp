@@ -23,6 +23,8 @@
 #include "resource.h"
 #include "Mesh.h"
 #include "MenuInfoBar.h"
+#include "Trajectory.h"
+#include <algorithm>
 #include <zlib.h>
 #include "DrawAPI.h"
 
@@ -369,6 +371,33 @@ DLLEXPORT DOCKHANDLE oapiGetDockHandle (OBJHANDLE hVessel, UINT n)
 DLLEXPORT OBJHANDLE oapiGetDockStatus (DOCKHANDLE dock)
 {
 	return (OBJHANDLE)((PortSpec*)dock)->mate;
+}
+
+DLLEXPORT int oapiGetTrajectoryEvents (OBJHANDLE hVessel, TRAJECTORYEVENT *ev, int nmax)
+{
+	trajectory::Predictor *pr = g_pOrbiter->Predictor();
+	auto pred = pr ? pr->Latest() : nullptr;
+	if (!pred || !pred->complete || (OBJHANDLE)pred->vessel != hVessel) return -1;
+	std::vector<const trajectory::Event*> evs;
+	for (const auto &e : pred->events) evs.push_back (&e);
+	std::stable_sort (evs.begin(), evs.end(), [](const trajectory::Event *a, const trajectory::Event *b) { return a->t < b->t; });
+	static const int type[] = { TRAJEVENT_PERIAPSIS, TRAJEVENT_APOAPSIS, TRAJEVENT_SOIENTER, TRAJEVENT_SOIEXIT, TRAJEVENT_IMPACT, TRAJEVENT_CLOSEST };
+	for (int i = 0; i < (int)evs.size() && i < nmax && ev; i++) {
+		const auto &e = *evs[i];
+		ev[i].type = type[e.type];
+		ev[i].mjd = td.MJD_ref + Day (e.t);
+		ev[i].hRef = (OBJHANDLE)e.ref;
+		ev[i].pos = _V(e.r.x, e.r.y, e.r.z);
+		ev[i].value = e.value;
+		ev[i].speed = e.speed;
+		ev[i].node = e.node;
+	}
+	return (int)evs.size();
+}
+
+DLLEXPORT void oapiSetTrajectoryTarget (OBJHANDLE hTarget)
+{
+	g_pOrbiter->SetPredictTarget ((const Body*)hTarget);
 }
 
 DLLEXPORT void oapiSetAutoCapture(DOCKHANDLE hDock, bool enable)

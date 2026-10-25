@@ -4141,6 +4141,9 @@ void Vessel::UpdateThrustForces ()
 
 	} // end navmode
 
+	// burn autopilot for manoeuvre nodes
+	if (!mnodes.empty()) UpdateBurn ();
+
 	double th;
 	TankSpec *ts;
 
@@ -6010,6 +6013,10 @@ void Vessel::WriteDefault (ostream &ofs) const
 	if (ctrlsurfmode)
 		ofs << "  AFCMODE " << ctrlsurfmode << endl;
 
+	for (const auto &n : mnodes)
+		ofs << "  MNODE " << setprecision(10) << n.mjd << ' ' << setprecision(4)
+			<< n.dv.x << ' ' << n.dv.y << ' ' << n.dv.z << (n.autoburn ? " AUTO" : "") << endl;
+
 	for (i =  0, needlabel = true; i < ntank; i++) {
 		double lvl;
 		if (lvl = GetPropellantLevel (tank[i])) {
@@ -7448,6 +7455,50 @@ void VESSEL::ResetCollisionHulls () const
 DWORD VESSEL::GetCollisionHullCount () const
 {
 	return (DWORD)vessel->Hulls().size();
+}
+
+static maneuver::Node MakeNode (const MANEUVERNODE &n)
+{
+	maneuver::Node node;
+	node.mjd = n.mjd;
+	node.dv = MakeVector (n.dv);
+	node.autoburn = n.autoburn;
+	return node;
+}
+
+DWORD VESSEL::AddManeuverNode (const MANEUVERNODE &node) const
+{
+	return vessel->AddManeuverNode (MakeNode (node));
+}
+
+DWORD VESSEL::GetManeuverNodeCount () const
+{
+	return (DWORD)vessel->ManeuverNodes().size();
+}
+
+bool VESSEL::GetManeuverNode (DWORD idx, MANEUVERNODE &node) const
+{
+	const auto &nodes = vessel->ManeuverNodes();
+	if (idx >= nodes.size()) return false;
+	node.mjd = nodes[idx].mjd;
+	node.dv = _V(nodes[idx].dv.x, nodes[idx].dv.y, nodes[idx].dv.z);
+	node.autoburn = nodes[idx].autoburn;
+	return true;
+}
+
+bool VESSEL::SetManeuverNode (DWORD idx, const MANEUVERNODE &node) const
+{
+	return vessel->SetManeuverNode (idx, MakeNode (node));
+}
+
+bool VESSEL::DelManeuverNode (DWORD idx) const
+{
+	return vessel->DelManeuverNode (idx);
+}
+
+void VESSEL::ClearManeuverNodes () const
+{
+	vessel->ClearManeuverNodes ();
 }
 
 void VESSEL::GetTouchdownPoints (VECTOR3 &pt1, VECTOR3 &pt2, VECTOR3 &pt3) const

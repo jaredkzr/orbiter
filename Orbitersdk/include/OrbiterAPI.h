@@ -2130,6 +2130,16 @@ typedef struct {
 #define DOCKREFUSED_ROLL      3 ///< the ports are turned against each other about the docking axis
 #define DOCKREFUSED_OFFSET    4 ///< the ports are off each other's axis
 
+/**
+ * \brief A manoeuvre node: a planned (impulsive) velocity change of a vessel
+ * \sa VESSEL::AddManeuverNode
+ */
+typedef struct {
+	double mjd;      ///< time of the velocity change [MJD]
+	VECTOR3 dv;      ///< velocity change [m/s]: x prograde, y orbit normal, z radial (outward), in the orbital frame of the reference body at the node
+	bool autoburn;   ///< flown by the burn autopilot
+} MANEUVERNODE;
+
 
 // ===========================================================================
 /// \ingroup defines
@@ -3088,6 +3098,48 @@ OAPIFUNC DOCKHANDLE oapiGetDockHandle (OBJHANDLE hVessel, UINT n);
  * \sa oapiGetDockHandle, VESSEL::GetDockStatus
  */
 OAPIFUNC OBJHANDLE oapiGetDockStatus (DOCKHANDLE dock);
+
+/**
+ * \brief An event of a predicted trajectory
+ * \sa oapiGetTrajectoryEvents
+ */
+typedef struct {
+	int type;        ///< TRAJEVENT_xxx
+	double mjd;      ///< time [MJD]
+	OBJHANDLE hRef;  ///< reference body (the body whose sphere of influence the vessel is in)
+	VECTOR3 pos;     ///< position relative to hRef (global frame orientation) [m]
+	double value;    ///< altitude above hRef's surface [m] (TRAJEVENT_CLOSEST: distance to the target)
+	double speed;    ///< TRAJEVENT_CLOSEST: relative speed [m/s]
+	int node;        ///< the manoeuvre node the part of the trajectory starts at (-1: before the first)
+} TRAJECTORYEVENT;
+
+#define TRAJEVENT_PERIAPSIS 0 ///< periapsis about hRef
+#define TRAJEVENT_APOAPSIS  1 ///< apoapsis about hRef
+#define TRAJEVENT_SOIENTER  2 ///< entering the sphere of influence of hRef
+#define TRAJEVENT_SOIEXIT   3 ///< leaving a sphere of influence (hRef: the body whose sphere it enters)
+#define TRAJEVENT_IMPACT    4 ///< reaching the surface of hRef
+#define TRAJEVENT_CLOSEST   5 ///< closest approach to the target (see oapiSetTrajectoryTarget)
+
+/**
+ * \brief Returns the events of the predicted trajectory of the focus vessel
+ *   (with its manoeuvre nodes applied): apsides, sphere of influence
+ *   changes, impact and closest approaches to the target.
+ * \param hVessel vessel (only the focus vessel's trajectory is predicted)
+ * \param ev array receiving the events, in time order (may be NULL)
+ * \param nmax size of the array
+ * \return number of events (may exceed nmax), or -1 if no prediction is
+ *   available for the vessel (yet)
+ * \note The prediction is made in the background and renewed when the
+ *   vessel's manoeuvre nodes change, periodically, and frequently while
+ *   it is under thrust.
+ */
+OAPIFUNC int oapiGetTrajectoryEvents (OBJHANDLE hVessel, TRAJECTORYEVENT *ev, int nmax);
+
+/**
+ * \brief Sets the target of trajectory predictions (closest approaches),
+ *   a celestial body or a vessel, or none (NULL).
+ */
+OAPIFUNC void oapiSetTrajectoryTarget (OBJHANDLE hTarget);
 
 /**
 * \brief Set a docking port to auto capture when in close proximity with some other docking port.

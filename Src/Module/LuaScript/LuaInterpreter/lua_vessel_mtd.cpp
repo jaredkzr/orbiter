@@ -255,6 +255,12 @@ void Interpreter::LoadVesselAPI ()
 		{"clear_collisionhulls", v_clear_collisionhulls},
 		{"reset_collisionhulls", v_reset_collisionhulls},
 		{"get_collisionhullcount", v_get_collisionhullcount},
+		{"add_maneuvernode", v_add_maneuvernode},
+		{"get_maneuvernodecount", v_get_maneuvernodecount},
+		{"get_maneuvernode", v_get_maneuvernode},
+		{"set_maneuvernode", v_set_maneuvernode},
+		{"del_maneuvernode", v_del_maneuvernode},
+		{"clear_maneuvernodes", v_clear_maneuvernodes},
 		{"set_visibilitylimit", v_set_visibilitylimit},
 		{"get_clipradius",v_get_clipradius},
 		{"set_albedoRGB", v_set_albedoRGB},
@@ -1405,6 +1411,121 @@ int Interpreter::v_get_collisionhullcount (lua_State *L)
 	VESSEL *v = lua_tovessel_safe(L, 1, funcname);
 	lua_pushinteger(L, v->GetCollisionHullCount());
 	return 1;
+}
+
+static MANEUVERNODE lua_tomaneuvernode (lua_State *L, int idx)
+{
+	MANEUVERNODE n;
+	lua_getfield (L, idx, "mjd");      n.mjd = lua_tonumber (L, -1);  lua_pop (L, 1);
+	lua_getfield (L, idx, "dv");       n.dv = lua_isnil (L, -1) ? _V(0,0,0) : lua_tovector (L, -1); lua_pop (L, 1);
+	lua_getfield (L, idx, "autoburn"); n.autoburn = lua_toboolean (L, -1) != 0; lua_pop (L, 1);
+	return n;
+}
+
+/***
+Add a manoeuvre node: a planned velocity change.
+
+@function add_maneuvernode
+@tparam table node {mjd=time [MJD], dv=@{types.vector|vector} [m/s] (x: prograde,
+  y: orbit normal, z: radial outward), autoburn=boolean (flown by the burn autopilot)}
+@treturn int index of the node (nodes are kept in time order)
+@see vessel:get_maneuvernode, vessel:del_maneuvernode
+*/
+int Interpreter::v_add_maneuvernode (lua_State *L)
+{
+	static const char *funcname = "add_maneuvernode";
+	AssertMtdMinPrmCount(L, 2, funcname);
+	VESSEL *v = lua_tovessel_safe(L, 1, funcname);
+	ASSERT_SYNTAX(lua_istable(L, 2), "Argument 1: expected a table");
+	lua_pushinteger(L, v->AddManeuverNode(lua_tomaneuvernode(L, 2)));
+	return 1;
+}
+
+/***
+Get the number of manoeuvre nodes.
+
+@function get_maneuvernodecount
+@treturn int number of nodes
+*/
+int Interpreter::v_get_maneuvernodecount (lua_State *L)
+{
+	static const char *funcname = "get_maneuvernodecount";
+	AssertMtdMinPrmCount(L, 1, funcname);
+	VESSEL *v = lua_tovessel_safe(L, 1, funcname);
+	lua_pushinteger(L, v->GetManeuverNodeCount());
+	return 1;
+}
+
+/***
+Get a manoeuvre node.
+
+@function get_maneuvernode
+@tparam int idx node index (0: the next node)
+@treturn table {mjd, dv, autoburn} (see @{add_maneuvernode}), or nil if idx is out of range
+*/
+int Interpreter::v_get_maneuvernode (lua_State *L)
+{
+	static const char *funcname = "get_maneuvernode";
+	AssertMtdMinPrmCount(L, 2, funcname);
+	VESSEL *v = lua_tovessel_safe(L, 1, funcname);
+	MANEUVERNODE n;
+	if (!v->GetManeuverNode((DWORD)lua_tointeger(L, 2), n)) {
+		lua_pushnil(L);
+		return 1;
+	}
+	lua_createtable(L, 0, 3);
+	lua_pushnumber(L, n.mjd);       lua_setfield(L, -2, "mjd");
+	lua_pushvector(L, n.dv);        lua_setfield(L, -2, "dv");
+	lua_pushboolean(L, n.autoburn); lua_setfield(L, -2, "autoburn");
+	return 1;
+}
+
+/***
+Change a manoeuvre node.
+
+@function set_maneuvernode
+@tparam int idx node index
+@tparam table node new parameters (see @{add_maneuvernode})
+@treturn bool false if idx is out of range
+*/
+int Interpreter::v_set_maneuvernode (lua_State *L)
+{
+	static const char *funcname = "set_maneuvernode";
+	AssertMtdMinPrmCount(L, 3, funcname);
+	VESSEL *v = lua_tovessel_safe(L, 1, funcname);
+	ASSERT_SYNTAX(lua_istable(L, 3), "Argument 2: expected a table");
+	lua_pushboolean(L, v->SetManeuverNode((DWORD)lua_tointeger(L, 2), lua_tomaneuvernode(L, 3)));
+	return 1;
+}
+
+/***
+Remove a manoeuvre node.
+
+@function del_maneuvernode
+@tparam int idx node index
+@treturn bool false if idx is out of range
+*/
+int Interpreter::v_del_maneuvernode (lua_State *L)
+{
+	static const char *funcname = "del_maneuvernode";
+	AssertMtdMinPrmCount(L, 2, funcname);
+	VESSEL *v = lua_tovessel_safe(L, 1, funcname);
+	lua_pushboolean(L, v->DelManeuverNode((DWORD)lua_tointeger(L, 2)));
+	return 1;
+}
+
+/***
+Remove all manoeuvre nodes.
+
+@function clear_maneuvernodes
+*/
+int Interpreter::v_clear_maneuvernodes (lua_State *L)
+{
+	static const char *funcname = "clear_maneuvernodes";
+	AssertMtdMinPrmCount(L, 1, funcname);
+	VESSEL *v = lua_tovessel_safe(L, 1, funcname);
+	v->ClearManeuverNodes();
+	return 0;
 }
 
 /***

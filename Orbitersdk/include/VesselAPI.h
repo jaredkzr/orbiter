@@ -476,6 +476,54 @@ public:
 	DWORD GetCollisionHullCount () const;
 
 	/**
+	 * \brief Adds a manoeuvre node: a planned velocity change, shown in the
+	 *   map view with the predicted trajectory after it.
+	 * \param node the node (see \ref MANEUVERNODE)
+	 * \return index of the node (nodes are kept in time order)
+	 * \note Nodes with autoburn set are flown by the burn autopilot: it
+	 *   turns the main engines into the burn direction shortly before the
+	 *   node and burns, centred on the node time, until the velocity change
+	 *   is reached; the node is then removed.
+	 * \note Nodes are saved with the vessel's state in scenarios (MNODE).
+	 * \sa GetManeuverNodeCount, GetManeuverNode, SetManeuverNode, DelManeuverNode
+	 */
+	DWORD AddManeuverNode (const MANEUVERNODE &node) const;
+
+	/**
+	 * \brief Returns the number of manoeuvre nodes.
+	 * \sa AddManeuverNode
+	 */
+	DWORD GetManeuverNodeCount () const;
+
+	/**
+	 * \brief Returns a manoeuvre node.
+	 * \param idx node index (0: the next node)
+	 * \param node receives the node
+	 * \return false if idx is out of range
+	 */
+	bool GetManeuverNode (DWORD idx, MANEUVERNODE &node) const;
+
+	/**
+	 * \brief Changes a manoeuvre node.
+	 * \param idx node index
+	 * \param node new parameters (a changed time may change the node order)
+	 * \return false if idx is out of range
+	 */
+	bool SetManeuverNode (DWORD idx, const MANEUVERNODE &node) const;
+
+	/**
+	 * \brief Removes a manoeuvre node.
+	 * \param idx node index
+	 * \return false if idx is out of range
+	 */
+	bool DelManeuverNode (DWORD idx) const;
+
+	/**
+	 * \brief Removes all manoeuvre nodes.
+	 */
+	void ClearManeuverNodes () const;
+
+	/**
 	 * \brief Set friction coefficients for ground contact.
 	 * \param mu_lng friction coefficient in longitudinal direction.
 	 * \param mu_lat friction coefficient in lateral direction.

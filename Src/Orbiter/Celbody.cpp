@@ -16,6 +16,7 @@
 #include "Log.h"
 #include "Orbitersdk.h"
 #include "PinesGrav.h"
+#include <mutex>
 
 using namespace std;
 
@@ -25,6 +26,10 @@ extern char DBG_MSG[256];
 
 void Pol2Crt (double *pol, double *crt, bool dopos, bool dovel);
 void InterpretEphemeris (double *data, int flg, Vector *pos, Vector *vel, Vector *bpos, Vector *bvel);
+
+// Ephemeris modules are not thread-safe: their calls are serialised (the
+// trajectory predictor calls them from its own thread)
+static std::recursive_mutex ephemMutex;
 
 // =======================================================================
 // class CelestialBody
@@ -547,8 +552,52 @@ void CelestialBody::GetRotation (double t, Matrix &rot) const
 	rot.premul (R_ecl);
 }
 
+bool CelestialBody::EphemerisAtTime (double t, EphemState &s, const Elements *els) const
+{
+	s = EphemState();
+	if (bDynamicPosVel) return false;
+	if (HasEphemerisModule()) {
+		double state[12];
+		int flg = ExternEphemeris (td.MJD_ref + Day(t), EPHEM_TRUEPOS | EPHEM_TRUEVEL | EPHEM_BARYPOS | EPHEM_BARYVEL, state);
+		if (!flg) return false;
+		bool havevel;
+		if (flg & EPHEM_BARYISTRUE) {
+			double *p = state;
+			if (flg & EPHEM_TRUEPOS) havevel = ((flg & EPHEM_TRUEVEL) != 0);
+			else p = state+6, havevel = ((flg & EPHEM_BARYVEL) != 0);
+			if (flg & EPHEM_POLAR) Pol2Crt (p, p, true, havevel);
+			s.cpos = s.bpos = Vector (p[0], p[1], p[2]);
+			if (havevel) s.cvel = s.bvel = Vector (p[3], p[4], p[5]);
+			s.havetrue = s.havebary = true;
+		} else {
+			if (flg & EPHEM_TRUEPOS) {
+				s.havetrue = true;
+				havevel = ((flg & EPHEM_TRUEVEL) != 0);
+				if (flg & EPHEM_POLAR) Pol2Crt (state, state, true, havevel);
+				s.cpos = Vector (state[0], state[1], state[2]);
+				if (havevel) s.cvel = Vector (state[3], state[4], state[5]);
+			}
+			if (flg & EPHEM_BARYPOS) {
+				s.havebary = true;
+				havevel = ((flg & EPHEM_BARYVEL) != 0);
+				if (flg & EPHEM_POLAR) Pol2Crt (state+6, state+6, true, havevel);
+				s.bpos = Vector (state[6], state[7], state[8]);
+				if (havevel) s.bvel = Vector (state[9], state[10], state[11]);
+			}
+		}
+		s.parentbary = ((flg & EPHEM_PARENTBARY) != 0);
+	} else {
+		if (!els) els = el;
+		if (!els) return false;
+		els->PosVel (s.bpos, s.bvel, t);
+		s.havebary = true;
+	}
+	return true;
+}
+
 int CelestialBody::ExternEphemeris (double mjd, int req, double *res) const
 {
+	std::lock_guard<std::recursive_mutex> lock (ephemMutex);
 	if (module)
 		return module->clbkEphemeris (mjd, req, res); // new interface
 	if (modIntf.oplanetEphemeris) {                   // OBSOLETE!
@@ -561,6 +610,7 @@ int CelestialBody::ExternEphemeris (double mjd, int req, double *res) const
 
 int CelestialBody::ExternFastEphemeris (double simt, int req, double *res) const
 {
+	std::lock_guard<std::recursive_mutex> lock (ephemMutex);
 	if (module) {
 		return module->clbkFastEphemeris (simt, req, res); // new interface
 	}

@@ -370,6 +370,14 @@ bool Vessel::ParseScenarioLineDirect (char *line)
 	} else if (!_strnicmp (line, "AFCMODE", 7)) {
 		sscanf (line+7, "%d", &ctrlsurfmode);
 		return true;
+	} else if (!_strnicmp (line, "MNODE", 5)) { // manoeuvre node: mjd dv_prograde dv_normal dv_radial [AUTO]
+		maneuver::Node n;
+		char flag[16] = "";
+		if (sscanf (line+5, "%lf%lf%lf%lf%15s", &n.mjd, &n.dv.x, &n.dv.y, &n.dv.z, flag) >= 4) {
+			n.autoburn = !_stricmp (flag, "AUTO");
+			AddManeuverNode (n);
+		}
+		return true;
 	} else if (!_strnicmp (line, "ATTACHED", 8)) {
 		char cbuf[256];
 		sscanf (line+8, "%d:%d,%s", &attach_status.ci, &attach_status.pi, cbuf);

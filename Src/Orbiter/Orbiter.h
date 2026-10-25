@@ -15,6 +15,7 @@
 #include "Mesh.h"
 #include "TimeData.h"
 #include <chrono>
+#include <memory>
 
 class DInput;
 class Config;
@@ -35,6 +36,9 @@ class ScriptInterface;
 namespace orbiter {
 	class ConsoleNG;
 	class LaunchpadDialog;
+}
+namespace trajectory {
+	class Predictor;
 }
 
 //-----------------------------------------------------------------------------
@@ -184,6 +188,11 @@ public:
 	// memory monitor
 	MemStat *memstat;
 	long simheapsize; // memory allocated during CreateRenderWindow
+
+	// trajectory prediction of the focus vessel (map view, manoeuvre nodes)
+	trajectory::Predictor *Predictor () const { return predictor.get(); }
+	const Body *PredictTarget () const { return predictTarget; }
+	void SetPredictTarget (const Body *target) { predictTarget = target; }
 
 	// Onscreen annotation
 	inline oapi::ScreenAnnotation *SNotePB() const { return snote_playback; }
@@ -383,6 +392,8 @@ protected:
     HRESULT DeleteDeviceObjects ();
 
 private:
+	std::unique_ptr<trajectory::Predictor> predictor; // (exists during a session)
+	const Body     *predictTarget = nullptr;
 	Config         *pConfig;
 	State          *pState;
 	orbiter::LaunchpadDialog *m_pLaunchpad;

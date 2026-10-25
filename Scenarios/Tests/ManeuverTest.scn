@@ -1,0 +1,35 @@
+BEGIN_HYPERDESC
+<h1>Manoeuvre node tests</h1>
+A delta-glider in a 300 km Earth orbit. A prograde node of 100 m/s:
+the predicted apoapsis is checked against the vis-viva equation; the
+burn autopilot then flies it, and the trajectory predicted afterwards
+must match the one predicted before.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Tests/ManeuverTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship GL-M
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET GL-M
+  MODE Extern
+  POS 4 0 -20
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+GL-M:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 6671000.0 0.00000 51.6 30.0 0.0 100.0 51982.6685767396
+  AROT 0 0 0
+  PRPLEVEL 0:1.000 1:1.000
+  NAVFREQ 0 0
+END
+END_SHIPS
