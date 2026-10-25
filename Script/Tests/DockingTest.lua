@@ -2,7 +2,8 @@
 -- the second delta-glider is placed nose to nose with the first, its
 -- docking port 3 m from the first's, closing along the docking axis.
 -- A: 0.2 m/s, lined up: must dock. B: 1.5 m/s: too fast, must not dock
--- (the vessels collide). C: 0.2 m/s, turned by 25 degrees about the
+-- at that speed (the vessels collide; once stopped against each other,
+-- they may still dock slowly). C: 0.2 m/s, turned by 25 degrees about the
 -- docking axis: must not dock.
 
 local failed = false
@@ -52,22 +53,26 @@ local function main()
 
 	local docked = {}
 	local dmin = {B = 1e9}
+	local vB, vB_dock = 0, nil -- (B's closing speed, and that when it docked)
 	local t0 = oapi.get_simtime()
 	while oapi.get_simtime() - t0 < 30.0 do
 		proc.wait_frames(1)
 		for _, p in ipairs({"A", "B", "C"}) do
 			if not docked[p] and v[p .. "1"]:get_dockstatus(v[p .. "1"]:get_dockhandle(0)) then
 				docked[p] = oapi.get_simtime() - t0
+				if p == "B" then vB_dock = vB end
 			end
 		end
 		dmin.B = math.min(dmin.B, vec.dist(oapi.get_globalpos(v.B1:get_handle()), oapi.get_globalpos(v.B2:get_handle())))
+		if not docked.B then vB = vec.length(vec.sub(oapi.get_globalvel(v.B1:get_handle()), oapi.get_globalvel(v.B2:get_handle()))) end
 	end
 	for _, p in ipairs({"A", "B", "C"}) do
 		log(string.format("%s: docked after %s s", p, docked[p] and string.format("%.2f", docked[p]) or "-"))
 	end
 	log(string.format("B: closest centres %.2f m", dmin.B))
 	check("A", docked.A ~= nil, "docks")
-	check("B", docked.B == nil, "does not dock (too fast)")
+	if vB_dock then log(string.format("B: docked at %.3f m/s", vB_dock)) end
+	check("B", docked.B == nil or vB_dock < 0.5, "does not dock while too fast")
 	check("B", dmin.B > 18.0, "collides (does not pass through)")
 	check("C", docked.C == nil, "does not dock (misaligned)")
 

@@ -52,6 +52,17 @@ endfunction()
 # Register unit tests
 add_test_file(Lua.Interpreter)
 
+# Convex geometry for collisions: compiled into the test (no Orbiter
+# dependencies but the vector maths)
+add_executable(Collision.Geometry Collision.Geometry.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/ConvexGeometry.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Vecmat.cpp)
+target_include_directories(Collision.Geometry PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter)
+target_link_libraries(Collision.Geometry Catch2::Catch2WithMain)
+set_target_properties(Collision.Geometry PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER_BINARY_ROOT_DIR}")
+add_test(NAME Collision.Geometry COMMAND $<TARGET_FILE:Collision.Geometry>)
+set_tests_properties(Collision.Geometry PROPERTIES TIMEOUT 60)
+
 # Scenario tests need an Orbiter executable that runs without graphics client
 if (ORBITER_HEADLESS)
 	set(ORBITER_TEST_EXE $<TARGET_FILE:${OrbiterTgt}>)

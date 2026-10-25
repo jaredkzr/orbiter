@@ -4418,7 +4418,7 @@ const std::vector<collision::Hull> &Vessel::Hulls () const
 	bool found = collision::ClassHulls (classname, hulls);
 	if (!found && hulls_custom) hulls = custom_hulls, found = true;
 	if (found) {
-		for (const collision::Hull &h : hulls) hull_bound = std::max (hull_bound, h.centre.length() + h.radius);
+		for (const collision::Hull &h : hulls) hull_bound = std::max (hull_bound, h.centre.length() + h.radius + collision::SKIN);
 		return hulls;
 	}
 
@@ -4442,7 +4442,7 @@ const std::vector<collision::Hull> &Vessel::Hulls () const
 			hulls.push_back (collision::Offset (h, hull_meshofs[i]));
 	}
 	hull_bound = 0.0;
-	for (const collision::Hull &h : hulls) hull_bound = std::max (hull_bound, h.centre.length() + h.radius);
+	for (const collision::Hull &h : hulls) hull_bound = std::max (hull_bound, h.centre.length() + h.radius + collision::SKIN);
 	return hulls;
 }
 
@@ -4454,7 +4454,7 @@ DWORD Vessel::AddCollisionHull (const VECTOR3 *pt, DWORD npt)
 	std::vector<Vector> p;
 	for (DWORD i = 0; i < npt; i++) p.push_back (MakeVector (pt[i]));
 	if (p.empty()) p.push_back (Vector(0,0,0));
-	custom_hulls.push_back (collision::MakeHull (p, collision::SKIN));
+	custom_hulls.push_back (collision::MakeHull (p));
 	return (DWORD)custom_hulls.size() - 1;
 }
 

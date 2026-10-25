@@ -77,6 +77,7 @@ set(common_src
 	SuperVessel.cpp
 	ContactSolver.cpp
 	CollisionHull.cpp
+	ConvexGeometry.cpp
 	VesselCollision.cpp
 	Vessel.cpp
 	Vesselbase.cpp

@@ -2,19 +2,17 @@
 // Licensed under the MIT License
 
 // =======================================================================
-// Collision shapes of vessels: a set of convex hulls, one for each group
-// of the vessel's external meshes (or as given in Config/Collision/
-// <class>.cfg). Each hull is bounded by planes in a fixed set of
-// directions (a discrete-orientation polytope) through the group's
-// extreme vertices, which also serve as its test points: a vessel touches
-// another where a test point of one is inside (or within a margin of) a
-// hull of the other.
+// Collision shapes of vessels: a set of convex hulls (ConvexGeometry.h),
+// one for each group of the vessel's external meshes (or as defined by the
+// vessel, or given in Config/Collision/<class>.cfg), each with a skin of
+// SKIN around it.
 // =======================================================================
 
 #ifndef __COLLISIONHULL_H
 #define __COLLISIONHULL_H
 
 #include "Vecmat.h"
+#include "ConvexGeometry.h"
 #include <string>
 #include <vector>
 
@@ -23,16 +21,7 @@ class Mesh;
 namespace collision {
 
 	/// A convex hull (in the frame of its vessel)
-	struct Hull {
-		std::vector<Vector> pts; ///< test points (extreme vertices)
-		std::vector<double> d;   ///< plane distances along the directions (Dirs): inside where dotp (Dirs()[i], p) <= d[i]
-		Vector centre;           ///< bounding sphere
-		double radius;
-
-		/// Signed distance of p (vessel frame) from the hull: the largest
-		/// distance outside any of its planes (< 0: inside); face: that plane
-		double Distance (const Vector &p, int &face) const;
-	};
+	typedef convex::Polytope Hull;
 
 	/// A hull placed in the global frame
 	struct HullRef {
@@ -56,11 +45,8 @@ namespace collision {
 
 	const double SKIN = 0.05; ///< [m] thickness added around each hull (thin parts, e.g. panels)
 
-	/// The hull of a set of points (with a skin of thickness 'skin' added)
-	Hull MakeHull (const std::vector<Vector> &pts, double skin);
-
-	/// Plane directions of the hulls
-	const std::vector<Vector> &Dirs ();
+	/// The convex hull of a set of points
+	Hull MakeHull (const std::vector<Vector> &pts);
 
 	/// Hulls of the groups of a mesh (mesh frame); cached by key (the mesh's
 	/// file name)

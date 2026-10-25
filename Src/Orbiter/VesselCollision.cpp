@@ -22,7 +22,7 @@ namespace {
 	{
 		double r = 0.0;
 		for (const auto &h : hl)
-			r = std::max (r, (h.pos + mul (h.R, h.hull->centre) - cg).length() + h.hull->radius);
+			r = std::max (r, (h.pos + mul (h.R, h.hull->centre) - cg).length() + h.hull->radius + collision::SKIN);
 		return r;
 	}
 
@@ -127,32 +127,30 @@ void VesselCollider::Resolve (double h)
 		bool dynA = index.count (A) > 0, dynB = index.count (B) > 0;
 		Vector cgA (A->s0->pos - O), cgB (B->s0->pos - O);
 
-		// test points of hull x (of vessel X) against hull y (of vessel Y)
+		// contacts of hull x (of vessel X) with hull y (of vessel Y)
+		convex::Manifold mf;
 		auto Test = [&](VesselBase *X, const collision::HullRef &x, bool dynX, const Vector &cgX,
 		                VesselBase *Y, const collision::HullRef &y, bool dynY, const Vector &cgY) {
-			Vector cx (x.pos - O + mul (x.R, x.hull->centre)), cy (y.pos - O + mul (y.R, y.hull->centre));
-			if (cx.dist (cy) > x.hull->radius + y.hull->radius + margin) return;
-			for (const Vector &q : x.hull->pts) {
-				Vector g (x.pos - O + mul (x.R, q));        // the point (relative to O)
-				Vector yl (tmul (y.R, g - (y.pos - O)));    // in the frame of hull y
-				int face;
-				double dist = y.hull->Distance (yl, face);
-				if (dist > margin) continue;
+			convex::Placed px{x.hull, x.R, x.pos - O, collision::SKIN}, py{y.hull, y.R, y.pos - O, collision::SKIN};
+			Vector cx (px.pos + mul (x.R, x.hull->centre)), cy (py.pos + mul (y.R, y.hull->centre));
+			if (cx.dist (cy) > x.hull->radius + y.hull->radius + 2.0*collision::SKIN + margin) return;
+			if (!convex::Collide (px, py, margin, mf)) return;
+			for (int k = 0; k < mf.npt; k++) {
+				const Vector &g = mf.pt[k];        // the point (relative to O)
 				bool skip = false;
 				for (const Vector &e : excl) if (g.dist (e) < PORT_CLEARANCE) { skip = true; break; }
 				if (skip) continue;
-				Vector n (mul (y.R, collision::Dirs()[face])); // out of hull y, towards x
 				contact::Point p;
-				p.C = dist;
+				p.C = mf.sep[k];
 				p.k = p.c = 0.0;
 				p.mu1 = p.mu2 = FRICTION;
 				p.warm = nullptr;
 				if (dynX) {
-					p.a = index[X], p.ra = g - cgX, p.n = n;
+					p.a = index[X], p.ra = g - cgX, p.n = mf.n;   // (out of y, towards x)
 					if (dynY) p.b = index[Y], p.rb = g - cgY;
 					else      p.b = -1, p.vs = LandedVel (Y, g + O);
-				} else {    // (X at rest: the point of contact acts on Y)
-					p.a = index[Y], p.ra = g - cgY, p.n = -n;
+				} else {    // (X at rest: the contact acts on Y)
+					p.a = index[Y], p.ra = g - cgY, p.n = -mf.n;
 					p.b = -1, p.vs = LandedVel (X, g + O);
 				}
 				contact::Tangents (p.n, Vector(1,0,0), p.t1, p.t2);
@@ -162,10 +160,8 @@ void VesselCollider::Resolve (double h)
 			}
 		};
 		for (const auto &x : ha)
-			for (const auto &y : hb) {
+			for (const auto &y : hb)
 				Test (A, x, dynA, cgA, B, y, dynB, cgB);
-				Test (B, y, dynB, cgB, A, x, dynA, cgA);
-			}
 	}
 
 	std::vector<Vector> P, L;
