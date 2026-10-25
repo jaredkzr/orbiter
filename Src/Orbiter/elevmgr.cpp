@@ -5,6 +5,7 @@
 #include "Celbody.h"
 #include "Planet.h"
 #include "Orbiter.h"
+#include "TerrainStream.h"
 #include <filesystem>
 
 using std::min;
@@ -114,6 +115,9 @@ bool ElevationManager::HasElevationTile(int lvl, int ilat, int ilng) const
 		if (treeMgr[0]) {
 			if (treeMgr[0]->Idx(lvl, ilat, ilng) != DWORD(-1)) return true;
 		}
+		// a streamed tile (requested if missing)
+		if (terrain::Stream *ts = terrain::Get())
+			if (ts->Request (cbody->Name(), terrain::ELEV, lvl, ilat, ilng) == terrain::READY) return true;
 	}
 	return false;
 }
@@ -159,6 +163,25 @@ INT16 *ElevationManager::LoadElevationTile (int lvl, int ilat, int ilng, double 
 					break;
 				}
 				fclose(f);
+			}
+		}
+		std::string spath;
+		if (!elev && !(treeMgr[0] && treeMgr[0]->Idx(lvl, ilat, ilng) != DWORD(-1))) {
+			// a streamed tile (finer than the installed ones)
+			if (terrain::Stream *ts = terrain::Get()) {
+				if (ts->Request (cbody->Name(), terrain::ELEV, lvl, ilat, ilng, &spath) == terrain::READY) {
+					if (FILE *f = fopen (spath.c_str(), "rb")) {
+						ELEVFILEHEADER hdr;
+						if (fread (&hdr, sizeof(ELEVFILEHEADER), 1, f) == 1 && hdr.dtype == -16) {
+							fseek (f, hdr.hdrsize, SEEK_SET);
+							elev = new INT16[ndat];
+							if (fread (elev, sizeof(INT16), ndat, f) != (size_t)ndat) { delete []elev; elev = 0; }
+							scale = hdr.scale;
+							offset = hdr.offset;
+						}
+						fclose (f);
+					}
+				}
 			}
 		}
 		if (!elev && treeMgr[0]) {
@@ -342,6 +365,8 @@ double ElevationManager::Elevation (double lat, double lng, int reqlvl, std::vec
 		ElevationTile *t = 0;
 
 		for (i = 0; i < ntile; i++) {
+			if (tile[i].data && tile[i].lvl < tile[i].tgtlvl && terrain::Get() &&
+				tile[i].streamVersion != terrain::Get()->Version()) continue; // (a finer streamed tile may have arrived)
 			if (tile[i].data &&
 				reqlvl == tile[i].tgtlvl && tile[i].mgr == this &&
 				lat >= tile[i].latmin && lat <= tile[i].latmax &&
@@ -379,6 +404,7 @@ double ElevationManager::Elevation (double lat, double lng, int reqlvl, std::vec
 					t->ilat = ilat;
 					t->ilng = ilng;
 					t->tgtlvl = reqlvl;
+					t->streamVersion = terrain::Get() ? terrain::Get()->Version() : 0;
 					t->latmin = (0.5-(double)(ilat+1)/double(nlat))*Pi;
 					t->latmax = (0.5-(double)ilat/double(nlat))*Pi;
 					t->lngmin = (double)ilng/(double)nlng*Pi2 - Pi;

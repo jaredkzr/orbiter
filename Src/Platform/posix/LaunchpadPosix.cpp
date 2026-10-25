@@ -5,6 +5,7 @@
 #include "Orbiter.h"
 #include "Config.h"
 #include "Input.h"
+#include "TerrainStream.h"
 #include "imgui.h"
 #include <algorithm>
 #include <cstring>
@@ -603,6 +604,15 @@ void PosixLaunchpad::DrawOptionsTab ()
 		ImGui::Checkbox ("Local light sources", &v.bLocalLight);
 		int amb = (int)v.AmbientLevel;
 		if (ImGui::SliderInt ("Ambient level", &amb, 0, 255)) cfg->SetAmbientLevel ((DWORD)amb);
+
+		ImGui::SeparatorText ("Streamed terrain");
+		CFG_PLANETRENDERPRM &pr = cfg->CfgPRenderPrm;
+		ImGui::Checkbox ("Stream finer terrain from online data", &pr.bTerrainStreaming);
+		ImGui::BeginDisabled (!pr.bTerrainStreaming);
+		float gb = (float)pr.TerrainCacheGB;
+		if (ImGui::SliderFloat ("Cache size [GB]", &gb, 1.0f, 200.0f, "%.0f", ImGuiSliderFlags_Logarithmic)) pr.TerrainCacheGB = gb;
+		ImGui::EndDisabled ();
+		ImGui::TextDisabled ("Takes effect when Orbiter is started again. Sources: Config/TerrainStream.cfg; cache: Cache/Terrain.");
 	}
 	else if (optionsPage == 1) {
 		CFG_PHYSICSPRM &p = cfg->CfgPhysicsPrm;
@@ -770,4 +780,11 @@ void PosixLaunchpad::DrawAboutTab ()
 	ImGui::Spacing ();
 	ImGui::TextUnformatted ("https://github.com/orbitersim/orbiter");
 	ImGui::TextUnformatted ("https://www.orbiter-forum.com");
+
+	// data sources of streamed terrain (their licences require attribution)
+	if (terrain::Stream *ts = terrain::Get()) {
+		ImGui::SeparatorText ("Streamed terrain data");
+		for (const auto &src : ts->Sources())
+			ImGui::BulletText ("%s", src.attribution.c_str());
+	}
 }

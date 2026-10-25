@@ -195,6 +195,7 @@ public:
 	void SetPredictTarget (const Body *target) { predictTarget = target; }
 	class MapView *GetMapView () const { return mapView; }
 	class Replay *GetReplay () const { return replay; }
+	void InitTerrainStream ();
 
 	// Onscreen annotation
 	inline oapi::ScreenAnnotation *SNotePB() const { return snote_playback; }

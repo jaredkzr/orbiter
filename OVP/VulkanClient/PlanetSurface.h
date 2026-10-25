@@ -46,6 +46,7 @@ public:
 		std::shared_ptr<PlanetLayers> planet;
 		Kind kind;
 		int lvl, ilat, ilng;
+		std::string path;           // a streamed tile's file (instead of the planet's layers)
 	};
 	struct Result {
 		Request req;
@@ -136,7 +137,7 @@ private:
 		double angRadius;     // angular radius of the tile [rad]
 		VkTexture *surf = nullptr, *mask = nullptr;
 		std::unique_ptr<ElevGrid> elev;
-		uint8_t surfState = 0, maskState = 0, elevState = 0; // 0: unknown, 1: requested, 2: loaded, 3: missing
+		uint8_t surfState = 0, maskState = 0, elevState = 0; // 0: unknown, 1: requested, 2: loaded, 3: missing, 4: streaming
 		vkc::Buffer vbuf;
 		uint32_t nVtx = 0;
 		uint64_t rtId = 0;    // ray tracing geometry id of vbuf
