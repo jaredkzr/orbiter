@@ -243,6 +243,91 @@ namespace {
 		return t;
 	}
 
+	// cellular noise on the texture cylinder: distance to the nearest and
+	// second nearest cell point, and the nearest cell's hash
+	void Worley (const VECTOR3 &p, uint32_t seed, double &d1, double &d2, uint32_t &id)
+	{
+		int ix = (int)std::floor (p.x), iy = (int)std::floor (p.y), iz = (int)std::floor (p.z);
+		d1 = d2 = 1e9, id = 0;
+		for (int dz = -1; dz <= 1; dz++)
+			for (int dy = -1; dy <= 1; dy++)
+				for (int dx = -1; dx <= 1; dx++) {
+					uint32_t h = Hash3 (ix + dx, iy + dy, iz + dz, seed);
+					VECTOR3 c = _V(ix + dx + (h & 0xff) / 255.0, iy + dy + ((h >> 8) & 0xff) / 255.0, iz + dz + ((h >> 16) & 0xff) / 255.0);
+					double d = length (c - p);
+					if (d < d1) d2 = d1, d1 = d, id = h;
+					else if (d < d2) d2 = d;
+				}
+	}
+
+	enum class RockTex { GRANITE, MOON, MOON_BRECCIA, MARS_BASALT, MARS_VENTIFACT, MARS_SANDSTONE };
+
+	Tex TypedRockTexture (RockTex type, uint32_t seed)
+	{
+		if (type == RockTex::GRANITE) return RockTexture (scatter::RockStyle::GRANITE, seed);
+		Tex t (512, 256);
+		for (uint32_t y = 0; y < t.h; y++)
+			for (uint32_t x = 0; x < t.w; x++) {
+				double u = (x + 0.5) / t.w, v = (y + 0.5) / t.h; // (v 0: top)
+				VECTOR3 c;
+				double grain = Noise (Cyl (u, v, 220, 110).x, Cyl (u, v, 220, 110).y, Cyl (u, v, 220, 110).z, seed + 9);
+				switch (type) {
+				case RockTex::MOON: case RockTex::MOON_BRECCIA: {
+					// neutral grey, rough: pits, lighter speckles; breccia:
+					// angular clasts of other greys in a darker matrix
+					double l = 1.0 + 0.22 * Fbm (Cyl (u, v, 8, 4), 3, seed) + 0.12 * grain;
+					c = _V(0.165, 0.16, 0.155) * l;
+					if (type == RockTex::MOON_BRECCIA) {
+						double d1, d2;
+						uint32_t id;
+						Worley (Cyl (u, v, 26, 13), seed + 4, d1, d2, id);
+						double clast = (id & 0xff) / 255.0;
+						if (clast < 0.45 && d2 - d1 > 0.08) c = _V(0.165, 0.16, 0.155) * (clast < 0.15 ? 0.75 : 1.12 + 0.4 * clast) * l;
+						else c = c * 0.92;
+					}
+					double pit = Noise (Cyl (u, v, 160, 80).x, Cyl (u, v, 160, 80).y, Cyl (u, v, 160, 80).z, seed + 5);
+					if (pit > 0.45) c = c * 0.45;
+					if (grain > 0.6) c = c * 1.35;
+					} break;
+				case RockTex::MARS_BASALT: {
+					// dark grey-blue, vesicular (pits), dust on the upper faces and in the pits
+					double l = 1.0 + 0.15 * Fbm (Cyl (u, v, 10, 5), 3, seed) + 0.1 * grain;
+					c = _V(0.085, 0.09, 0.10) * l;
+					double pit = Noise (Cyl (u, v, 120, 60).x, Cyl (u, v, 120, 60).y, Cyl (u, v, 120, 60).z, seed + 5);
+					double dust = std::clamp (0.4 - v + 0.35 * Fbm (Cyl (u, v, 6, 3), 3, seed + 13), 0.0, 1.0);
+					if (v < 0.08) dust = std::max (dust, 0.75); // (the faces pointing up)
+					if (pit > 0.4) dust = std::max (dust, 0.8);
+					c = c * (1.0 - 0.75 * dust) + _V(0.42, 0.25, 0.14) * (0.75 * dust);
+					if (pit > 0.4 && dust < 0.8) c = c * 0.5;
+					} break;
+				case RockTex::MARS_VENTIFACT: {
+					// grey-tan, fluted by the wind (streaks along one direction), crisp
+					// (flutes along the wind: long in u, narrow in v)
+					double flute = Noise (Cyl (u, v, 3, 90).x, Cyl (u, v, 3, 90).y, Cyl (u, v, 3, 90).z, seed + 2);
+					double l = 1.0 + 0.3 * flute + 0.12 * Fbm (Cyl (u, v, 6, 3), 2, seed) + 0.06 * grain;
+					c = _V(0.26, 0.22, 0.18) * l;
+					if (flute < -0.35) c = c * 0.6;
+					double dust = std::clamp (0.35 - v + 0.3 * Fbm (Cyl (u, v, 5, 3), 2, seed + 13), 0.0, 1.0);
+					c = c * (1.0 - 0.5 * dust) + _V(0.42, 0.26, 0.15) * (0.5 * dust);
+					} break;
+				case RockTex::MARS_SANDSTONE: {
+					// tan-orange with fine laminations (layers along v)
+					// (beds of differing tone down the sides, dark partings between them)
+					double vb = v * 9.0 + 0.6 * Fbm (Cyl (u, v, 3, 2), 2, seed);
+					double bed = vb - std::floor (vb);
+					uint32_t bh = Hash3 ((int)std::floor (vb), 0, 0, seed + 3);
+					double l = 0.8 + 0.35 * ((bh & 0xff) / 255.0) + 0.1 * Fbm (Cyl (u, v, 8, 4), 3, seed + 1) + 0.07 * grain;
+					c = _V(0.36, 0.23, 0.14) * l;
+					if (bed < 0.07 && v > 0.08) c = c * 0.45;
+					if (v < 0.08) c = c * 1.05 + _V(0.03, 0.01, 0.0); // (the dusty top)
+					} break;
+				default: break;
+				}
+				t.Set (x, y, c.x, c.y, c.z);
+			}
+		return t;
+	}
+
 	Tex GrassTexture (uint32_t seed)
 	{
 		Tex t (64, 256);
@@ -437,21 +522,54 @@ namespace {
 	// ------------------------------------------------------------------
 	// assets
 
-	// a rock of about the given size [m]: an ellipsoid cut by fracture
-	// planes (sharp edges: normals are not smoothed across them), with noise;
-	// partly buried
-	Builder Rock (uint32_t seed, double size)
+	// Rock shapes: an ellipsoid (radii relative to half the size), made
+	// irregular by noise, cut by fracture planes, roughened. Sharp edges:
+	// normals are only smoothed between faces within smoothDeg.
+	struct RockShape {
+		VECTOR3 radMin, radMax;
+		int cutMin, cutMax;        // random fracture planes
+		double elevMin, elevMax;   // sine of their normals' elevation
+		double offMin, offMax;     // their distance (share of the extent)
+		int facets;                // wind-cut facets (upward, around: pyramids, wedges)
+		double facetElevMin, facetElevMax, facetOffMin, facetOffMax;
+		double sharp;              // share of the material beyond a plane removed (1: flat faces)
+		double lumps, rough;       // noise before and after the cuts (share of the size)
+		double smoothDeg;
+		double bury;               // share of the height below ground
+		double knobs = 0.0;        // mid-scale relief after the cuts (share of the size)
+		double pits = 0.0;         // depth of pits (vesicles, impact pits; share of the size)
+	};
+
+	using Cut = std::pair<VECTOR3, double>;
+
+	Builder Rock (const RockShape &sh, uint32_t seed, double size, const std::vector<Cut> *extra = nullptr,
+		const VECTOR3 *scaleOverride = nullptr)
 	{
 		Rng r (seed);
-		VECTOR3 rad = _V(1.0, r.R (0.45, 0.85), r.R (0.6, 1.0)) * (0.5 * size);
-		int ncut = 6 + (int)(r.U () * 7);
-		std::vector<std::pair<VECTOR3, double>> cuts;
+		VECTOR3 rad = _V(r.R (sh.radMin.x, sh.radMax.x), r.R (sh.radMin.y, sh.radMax.y), r.R (sh.radMin.z, sh.radMax.z)) * (0.5 * size);
+		if (scaleOverride) rad = *scaleOverride;
+		auto extent = [&](const VECTOR3 &n) {
+			return std::sqrt (std::pow (n.x * rad.x, 2) + std::pow (n.y * rad.y, 2) + std::pow (n.z * rad.z, 2));
+		};
+		std::vector<Cut> cuts;
+		int ncut = sh.cutMin + (int)(r.U () * (sh.cutMax - sh.cutMin + 1));
 		for (int k = 0; k < ncut; k++) {
-			double a = r.U () * TWOPI, e = std::asin (r.R (-0.7, 0.98));
+			double a = r.U () * TWOPI, e = std::asin (r.R (sh.elevMin, sh.elevMax));
 			VECTOR3 n = _V(std::cos (e) * std::cos (a), std::sin (e), std::cos (e) * std::sin (a));
-			double ext = std::sqrt (std::pow (n.x * rad.x, 2) + std::pow (n.y * rad.y, 2) + std::pow (n.z * rad.z, 2));
-			cuts.push_back ({ n, ext * r.R (0.5, 0.82) });
+			cuts.push_back ({ n, extent (n) * r.R (sh.offMin, sh.offMax) });
 		}
+		// (facets < 0: 2 to -facets of them, mostly across the long axis:
+		// wedges and keels)
+		int nf = sh.facets >= 0 ? sh.facets : 2 + (int)(r.U () * (-sh.facets - 1));
+		double a0 = r.U () * TWOPI;
+		for (int k = 0; k < nf; k++) {
+			double a = sh.facets >= 0 ? a0 + TWOPI * k / nf + r.R (-0.35, 0.35)
+				: (k % 2 ? 3.14159 : 0.0) + r.R (-0.7, 0.7) + (k >= 2 ? r.U () * TWOPI : 0.0);
+			double e = std::asin (r.R (sh.facetElevMin, sh.facetElevMax));
+			VECTOR3 n = _V(std::cos (e) * std::cos (a), std::sin (e), std::cos (e) * std::sin (a));
+			cuts.push_back ({ n, extent (n) * r.R (sh.facetOffMin, sh.facetOffMax) });
+		}
+		if (extra) cuts.insert (cuts.end(), extra->begin(), extra->end());
 		uint32_t ns = r.Next ();
 		std::vector<VECTOR3> dir;
 		std::vector<std::array<int,3>> tri;
@@ -460,18 +578,21 @@ namespace {
 		for (size_t k = 0; k < dir.size(); k++) {
 			VECTOR3 d = dir[k];
 			VECTOR3 q = _V(d.x * rad.x, d.y * rad.y, d.z * rad.z);
-			q += d * (size * 0.035 * Fbm (d * 2.0, 2, ns)); // (irregular before the cuts)
+			q += d * (size * sh.lumps * Fbm (d * 2.0, 3, ns));
 			for (auto &c : cuts) {
 				double t = dotp (q, c.first) - c.second;
-				if (t > 0.0) q -= c.first * t; // flat fracture faces
+				if (t > 0.0) q -= c.first * (t * sh.sharp);
 			}
-			q += d * (size * 0.006 * Fbm (d * 14.0, 2, ns + 50)); // (rough faces)
+			q += d * (size * (sh.rough * Fbm (d * 14.0, 2, ns + 50) + sh.knobs * Fbm (d * 6.0, 2, ns + 70)));
+			if (sh.pits > 0.0) {
+				double pn = Noise (d.x * 22.0, d.y * 22.0, d.z * 22.0, ns + 90);
+				if (pn > 0.35) q -= d * (size * sh.pits * std::min (1.0, (pn - 0.35) / 0.15));
+			}
 			p[k] = q;
 		}
 		VECTOR3 c = _V(0, 0, 0);
 		for (auto &q : p) c += q;
 		c = c / (double)p.size();
-		// face normals; corner normals average the faces within 35 degrees
 		std::vector<VECTOR3> fn (tri.size());
 		std::vector<std::vector<int>> vf (p.size());
 		for (size_t f = 0; f < tri.size(); f++) {
@@ -480,28 +601,78 @@ namespace {
 			fn[f] = length (n) > 1e-12 ? unit (n) : unit (p[tri[f][0]] - c);
 			for (int k = 0; k < 3; k++) vf[tri[f][k]].push_back ((int)f);
 		}
-		const double COS_SMOOTH = std::cos (35.0 * 3.141592653589793 / 180.0);
+		const double COS_SMOOTH = std::cos (sh.smoothDeg * 3.141592653589793 / 180.0);
+		double py0 = 1e9, py1 = -1e9;
+		for (auto &q : p) py0 = std::min (py0, q.y), py1 = std::max (py1, q.y);
+		double ph = std::max (py1 - py0, 1e-6);
+		// Texture coordinates: faces pointing up flat, in the texture's top
+		// band (dust, the weathered surface); the others around the rock,
+		// height down the texture (layers, dust on the upper parts)
 		Builder b;
 		for (size_t f = 0; f < tri.size(); f++) {
 			uint16_t idx[3];
+			bool top = fn[f].y > 0.75;
 			double us[3];
-			for (int k = 0; k < 3; k++) us[k] = std::atan2 (dir[tri[f][k]].z, dir[tri[f][k]].x) / TWOPI + 0.5;
+			for (int k = 0; k < 3; k++) us[k] = std::atan2 (p[tri[f][k]].z - c.z, p[tri[f][k]].x - c.x) / TWOPI + 0.5;
 			double umax = std::max ({ us[0], us[1], us[2] });
 			for (int k = 0; k < 3; k++) {
 				int v = tri[f][k];
 				VECTOR3 n = _V(0, 0, 0);
 				for (int g : vf[v]) if (dotp (fn[g], fn[f]) > COS_SMOOTH) n += fn[g];
-				double u = us[k];
-				if (umax - u > 0.5) u += 1.0; // (across the seam)
-				double tv = std::acos (std::clamp (dir[v].y, -1.0, 1.0)) / 3.141592653589793;
-				idx[k] = b.Add (p[v], unit (n), u * 2.0, tv);
+				double tu, tv;
+				if (top) {
+					tu = 0.5 + (p[v].x - c.x) / size;
+					tv = 0.02 + 0.05 * ((p[v].z - c.z) / size + 0.5);
+				} else {
+					double u = us[k];
+					if (umax - u > 0.5) u += 1.0; // (across the seam)
+					tu = u * 2.0;
+					tv = 0.08 + 0.92 * (py1 - p[v].y) / ph;
+				}
+				idx[k] = b.Add (p[v], unit (n), tu, tv);
 			}
 			b.Tri (idx[0], idx[1], idx[2], fn[f]);
 		}
 		double ymin = 1e9, ymax = -1e9;
 		for (auto &v : b.v) ymin = std::min (ymin, (double)v.y), ymax = std::max (ymax, (double)v.y);
-		float sink = (float)(ymin + 0.2 * (ymax - ymin));
+		float sink = (float)(ymin + sh.bury * (ymax - ymin));
 		for (auto &v : b.v) v.y -= sink;
+		return b;
+	}
+
+	// shapes: Earth's weathered granite; the Moon's blocks, breccia and
+	// fragments; Mars' wind-cut ventifacts, sandstone slabs, basalt blocks
+	// and float
+	const RockShape GRANITE   = { {1, 0.45, 0.6}, {1, 0.85, 1.0}, 6, 12, -0.7, 0.98, 0.5, 0.82, 0, 0, 0, 0, 0, 0.85, 0.035, 0.006, 40, 0.2 };
+	const RockShape MOON_BLOCK = { {1, 0.6, 0.7}, {1, 0.9, 1.0}, 8, 14, -0.6, 0.98, 0.55, 0.85, 0, 0, 0, 0, 0, 1.0, 0.045, 0.014, 32, 0.15, 0.025, 0.012 };
+	const RockShape MOON_BRECCIA = { {1, 0.7, 0.75}, {1, 0.95, 1.0}, 4, 8, -0.5, 0.95, 0.6, 0.9, 0, 0, 0, 0, 0, 0.92, 0.09, 0.022, 40, 0.25, 0.035, 0.015 };
+	const RockShape MOON_FRAGMENT = { {1, 0.45, 0.55}, {1, 0.8, 1.0}, 8, 12, -0.8, 0.98, 0.4, 0.7, 0, 0, 0, 0, 0, 1.0, 0.02, 0.01, 25, 0.1 };
+	const RockShape MARS_VENTIFACT = { {1, 0.5, 0.45}, {1, 0.8, 0.65}, 3, 5, -0.6, 0.4, 0.55, 0.85, -3, 0.3, 0.75, 0.25, 0.5, 1.0, 0.015, 0.004, 18, 0.2 };
+	const RockShape MARS_SLAB = { {1, 0.14, 0.6}, {1, 0.24, 1.0}, 6, 9, -0.12, 0.12, 0.5, 0.8, 1, 0.97, 0.99, 0.6, 0.8, 1.0, 0.006, 0.003, 12, 0.3 };
+	const RockShape MARS_BASALT = { {1, 0.6, 0.7}, {1, 0.9, 1.0}, 7, 12, -0.5, 0.98, 0.5, 0.82, 0, 0, 0, 0, 0, 1.0, 0.025, 0.012, 25, 0.18, 0.01, 0.008 };
+	const RockShape MARS_FLOAT = { {1, 0.25, 0.6}, {1, 0.4, 1.0}, 6, 9, -0.3, 0.6, 0.45, 0.8, 0, 0, 0, 0, 0, 1.0, 0.012, 0.006, 22, 0.3 };
+
+	// a boulder split by a fracture through it, the pieces apart (as the
+	// Apollo 17 station 6 boulder)
+	Builder SplitBoulder (const RockShape &sh, uint32_t seed, double size)
+	{
+		Rng r (seed + 1);
+		double a = r.U () * TWOPI, e = r.R (-0.15, 0.25);
+		VECTOR3 n = unit (_V(std::cos (a) * std::cos (e), std::sin (e), std::sin (a) * std::cos (e)));
+		double gap = size * 0.06;
+		VECTOR3 rad = _V(1.0, r.R (sh.radMin.y, sh.radMax.y), r.R (sh.radMin.z, sh.radMax.z)) * (0.5 * size);
+		Builder b;
+		for (int side = 0; side < 2; side++) {
+			VECTOR3 nn = side ? -n : n;
+			// (each piece cut short of the centre: a plane through the
+			// centre would fold the surface beyond it; then moved apart)
+			double ext = std::sqrt (std::pow (nn.x * rad.x, 2) + std::pow (nn.y * rad.y, 2) + std::pow (nn.z * rad.z, 2));
+			std::vector<Cut> extra = { { nn, 0.08 * ext } };
+			Builder piece = Rock (sh, seed, size, &extra, &rad);
+			VECTOR3 shift = -nn * (0.08 * ext + gap * 0.5 + size * r.R (0.0, 0.04));
+			for (auto &v : piece.v) v.x += (float)shift.x, v.z += (float)shift.z;
+			b.Append (piece);
+		}
 		return b;
 	}
 
@@ -794,12 +965,28 @@ void Library::Generate (RockStyle style, bool vegetation)
 		return t;
 	};
 
-	// rocks: pebbles to boulders, each with its own texture
-	const double sizes[] = { 0.3, 0.5, 0.8, 1.2, 1.6, 2.2, 3.0, 4.0 };
-	for (int k = 0; k < 8; k++) {
-		Tex t = RockTexture (style, 100 + k);
+	// rocks: the types of the body, pebbles to boulders, each with its own texture
+	struct RockSpec { const RockShape *shape; RockTex tex; double size; bool split; };
+	std::vector<RockSpec> rocks;
+	if (style == RockStyle::GRANITE) {
+		for (double sz : { 0.3, 0.5, 0.8, 1.2, 1.6, 2.2, 3.0, 4.0 }) rocks.push_back ({ &GRANITE, RockTex::GRANITE, sz, false });
+	} else if (style == RockStyle::REGOLITH) {
+		for (double sz : { 0.15, 0.3, 0.5 }) rocks.push_back ({ &MOON_FRAGMENT, RockTex::MOON, sz, false });
+		for (double sz : { 0.9, 1.6, 2.6, 4.0 }) rocks.push_back ({ &MOON_BLOCK, RockTex::MOON, sz, false });
+		for (double sz : { 1.2, 2.2, 3.5 }) rocks.push_back ({ &MOON_BRECCIA, RockTex::MOON_BRECCIA, sz, false });
+		rocks.push_back ({ &MOON_BLOCK, RockTex::MOON_BRECCIA, 6.0, true });
+	} else {
+		for (double sz : { 0.12, 0.25, 0.4 }) rocks.push_back ({ &MARS_FLOAT, RockTex::MARS_SANDSTONE, sz, false });
+		for (double sz : { 0.6, 1.1, 1.8 }) rocks.push_back ({ &MARS_VENTIFACT, RockTex::MARS_VENTIFACT, sz, false });
+		for (double sz : { 0.8, 1.5, 2.5 }) rocks.push_back ({ &MARS_SLAB, RockTex::MARS_SANDSTONE, sz, false });
+		for (double sz : { 0.7, 1.4, 2.4 }) rocks.push_back ({ &MARS_BASALT, RockTex::MARS_BASALT, sz, false });
+	}
+	for (size_t k = 0; k < rocks.size(); k++) {
+		const RockSpec &rs = rocks[k];
+		Tex t = TypedRockTexture (rs.tex, 100 + (uint32_t)k);
 		VkTexture *tex = Texture (t.w, t.h, t.px);
-		Builder b = Rock (1000 + k * 17, sizes[k]);
+		uint32_t sd = 1000 + (uint32_t)k * 17;
+		Builder b = rs.split ? SplitBoulder (*rs.shape, sd, rs.size) : Rock (*rs.shape, sd, rs.size);
 		double rad, h;
 		Extent (b, rad, h);
 		std::vector<VkMesh::Part> parts;
@@ -900,8 +1087,14 @@ void Gallery::Place ()
 
 	const char *sel = getenv ("ORBITER_VK_SCATTER_GALLERY");
 	const char *names[] = { "rock", "grass", "shrub", "conifer", "broadleaf" };
-	int kindSel = -1;
-	for (int k = 0; k < 5; k++) if (!strcmp (sel, names[k])) kindSel = k;
+	int kindSel = -1, itemSel = -1;
+	for (int k = 0; k < 5; k++) {
+		size_t l = strlen (names[k]);
+		if (!strncmp (sel, names[k], l) && (sel[l] == '\0' || sel[l] == ':')) {
+			kindSel = k;
+			if (sel[l] == ':') itemSel = atoi (sel + l + 1); // (one asset, framed)
+		}
+	}
 	if (kindSel >= 0) {
 		VECTOR3 cam = tmul (prot, scene->CameraPos () - pp), ves = tmul (prot, gv - pp);
 		double clat, clng;
@@ -913,12 +1106,23 @@ void Gallery::Place ()
 		std::vector<const Asset*> row;
 		for (const Asset &a : lib->Assets()) if ((int)a.kind == kindSel) row.push_back (&a);
 		std::sort (row.begin(), row.end(), [](const Asset *a, const Asset *b) { return a->radius < b->radius; });
+		if (itemSel >= 0) {
+			if (itemSel < (int)row.size()) {
+				const Asset *a = row[itemSel];
+				double d = std::max (2.6 * a->radius, 1.8 * a->height) + 1.0;
+				double lat, lng;
+				latlng (cam + fwd * d, lat, lng);
+				put (a, lat, lng);
+			}
+			placed = true;
+			return;
+		}
 		// arcs of up to four, each wide enough for its largest asset
 		for (size_t i0 = 0; i0 < row.size(); i0 += 4) {
 			size_t i1 = std::min (row.size(), i0 + 4);
 			double w = 0.0, hmax = 0.0;
 			for (size_t i = i0; i < i1; i++) w += 2.0 * row[i]->radius + 0.6, hmax = std::max (hmax, row[i]->height);
-			double d = std::max ({ w / 1.0, hmax * 2.2, 3.0 });
+			double d = std::max ({ w / 0.75, hmax * 2.5, 3.0 }) + (i0 > 0 ? 3.0 : 0.0) * (double)(i0 / 4);
 			double x = -0.5 * w;
 			for (size_t i = i0; i < i1; i++) {
 				x += row[i]->radius + 0.3;
