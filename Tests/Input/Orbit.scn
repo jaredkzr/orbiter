@@ -1,0 +1,32 @@
+BEGIN_HYPERDESC
+<h1>Input test scene</h1>
+A delta-glider in a 300 km Earth orbit, for the scripted input tests
+(Tests/Input/*.input).
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship GL-I
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET GL-I
+  MODE Extern
+  POS 4 0 -20
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+GL-I:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 6671000.0 0.00000 51.6 30.0 0.0 100.0 51982.6685767396
+  AROT 0 0 0
+  PRPLEVEL 0:1.000 1:1.000
+  NAVFREQ 0 0
+END
+END_SHIPS

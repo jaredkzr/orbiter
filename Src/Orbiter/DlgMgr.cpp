@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include "OrbiterAPI.h"
 #include "DlgMgr.h"
+#include "UiAnchor.h"
 #include "resource.h"
 #include "Orbiter.h"
 #include "Log.h"
@@ -639,6 +640,7 @@ void DialogManager::ImGuiNewFrame()
 	ImGui_ImplWin32_NewFrame();
 #endif
 	ImGui::NewFrame();
+	uianchor::NewFrame();
 
 	// Focus-follows-mouse: when the mouse is not over any ImGui window,
 	// clear ImGui's internal focused window. Without this, clicking an

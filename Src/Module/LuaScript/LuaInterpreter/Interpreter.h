@@ -403,6 +403,7 @@ protected:
 	static int oapi_get_trajectoryevents (lua_State *L);
 	static int oapi_set_trajectorytarget (lua_State *L);
 	static int oapi_set_mapview (lua_State *L);
+	static int oapi_get_mapview (lua_State *L);
 	static int oapi_set_replay (lua_State *L);
 	static int oapi_get_replay (lua_State *L);
 	static int oapi_replay_seek (lua_State *L);

@@ -168,6 +168,7 @@ add_library(VulkanClient SHARED
 	PostFX.cpp
 	MaterialConfig.cpp
 	Input.cpp
+	TestInput.cpp
 	ImageIO.cpp
 	Vma.cpp
 	${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp

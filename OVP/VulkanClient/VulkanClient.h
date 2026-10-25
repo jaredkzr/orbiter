@@ -13,6 +13,7 @@
 #include "VkContext.h"
 #include "VkTexture.h"
 #include "MaterialConfig.h"
+#include "TestInput.h"
 #include <map>
 #include <memory>
 #include <string>
@@ -148,6 +149,7 @@ private:
 	void CaptureBackbuffer (const std::string &path, bool async = false);
 	std::vector<std::future<void>> writers; // image files being written
 	void Teardown ();
+	std::unique_ptr<TestInput> testInput; // ORBITER_VK_TEST_INPUT: scripted input (tests)
 	std::string autoScreenshot;   // ORBITER_VK_SCREENSHOT: file written at frame autoScreenshotFrame
 	unsigned autoScreenshotFrame = 60;
 	unsigned frameCount = 0;

@@ -83,6 +83,7 @@ set(common_src
 	Maneuver.cpp
 	Trajectory.cpp
 	MapView.cpp
+	UiAnchor.cpp
 	Replay.cpp
 	TerrainStream.cpp
 	VesselManeuver.cpp

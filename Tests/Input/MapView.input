@@ -1,0 +1,56 @@
+# Map view with the mouse and keyboard (Tests/Input/Orbit.scn): open the
+# map, add a manoeuvre node by clicking the trajectory, pull its prograde
+# and radial handles, move it along the trajectory, delete it in the node
+# panel and with the Delete key, close the map.
+
+lua v = vessel.get_focusinterface ()
+lua function node () return v:get_maneuvernode (0) end
+lua function dt (n) return (n.mjd - oapi.get_simmjd ()) * 86400 end
+wait 10
+
+key M
+waitfor @map.path.25
+lua check ("open", oapi.get_mapview (), "map view on")
+
+# a node a quarter along the visible trajectory
+click @map.path.25
+waitfor @map.node0.prograde
+lua n = node (); t0 = dt (n)
+lua check ("add", v:get_maneuvernodecount () == 1 and n.dv.x == 0 and n.dv.y == 0 and n.dv.z == 0 and t0 > 60 and t0 < 5400, string.format ("1 node, %.0f s ahead", t0))
+
+# pulling the prograde handle outwards adds prograde velocity change
+drag @map.node0.prograde @map.node0->@map.node0.prograde*3 40
+lua n = node (); dvx = n.dv.x
+lua check ("prograde", n.dv.x > 1 and math.abs (n.dv.y) < 1e-9 and math.abs (n.dv.z) < 1e-9, string.format ("dv %.2f %.2f %.2f m/s", n.dv.x, n.dv.y, n.dv.z))
+
+# the radial out handle changes the radial component only
+waitfor @map.node0.radialout
+drag @map.node0.radialout @map.node0->@map.node0.radialout*3 40
+lua n = node ()
+lua check ("radial", n.dv.z > 1 and n.dv.x == dvx and math.abs (n.dv.y) < 1e-9, string.format ("dv %.2f %.2f %.2f m/s", n.dv.x, n.dv.y, n.dv.z))
+
+# dragging the node to the middle of the path before it moves it earlier
+waitfor @map.path.50
+drag @map.node0 @map.path.50 30
+wait 2
+lua n = node (); t1 = dt (n)
+lua check ("move", t1 > 0.3 * t0 and t1 < 0.7 * t0 and n.dv.x == dvx, string.format ("node %.0f s ahead (was %.0f s)", t1, t0))
+
+# the node panel's Delete button
+click @map.panel.delete
+wait 2
+lua check ("delete", v:get_maneuvernodecount () == 0, string.format ("%d nodes", v:get_maneuvernodecount ()))
+
+# a second node, deleted with the Delete key (the new node is selected)
+waitfor @map.path.75
+click @map.path.75
+waitfor @map.node0.prograde
+lua check ("add2", v:get_maneuvernodecount () == 1, "node added")
+key Delete
+wait 2
+lua check ("delete_key", v:get_maneuvernodecount () == 0, string.format ("%d nodes", v:get_maneuvernodecount ()))
+
+key M
+wait 2
+lua check ("close", not oapi.get_mapview (), "map view off")
+exit

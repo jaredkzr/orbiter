@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "Replay.h"
+#include "UiAnchor.h"
 #include "Orbiter.h"
 #include "Psys.h"
 #include "Vessel.h"
@@ -350,17 +351,22 @@ void Replay::Display ()
 
 	ImGui::BeginDisabled (exporting);
 	if (ImGui::Button ("|<")) Seek (t0);
+	uianchor::SetItem ("replay.start");
 	ImGui::SameLine ();
 	if (ImGui::Button ("<<")) Seek (t - 10.0);
+	uianchor::SetItem ("replay.back");
 	ImGui::SameLine ();
 	if (ImGui::Button (playing ? "Pause" : "Play", ImVec2 (fs * 3.5f, 0))) {
 		if (!playing && t >= t1) t = t0;
 		playing = !playing;
 	}
+	uianchor::SetItem ("replay.play");
 	ImGui::SameLine ();
 	if (ImGui::Button (">>")) Seek (t + 10.0);
+	uianchor::SetItem ("replay.forward");
 	ImGui::SameLine ();
 	if (ImGui::Button (">|")) Seek (t1);
+	uianchor::SetItem ("replay.end");
 	ImGui::SameLine ();
 	static const double speeds[] = { 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 100.0 };
 	char sbuf[32];
@@ -375,33 +381,42 @@ void Replay::Display ()
 	}
 	ImGui::SameLine ();
 	ImGui::Checkbox ("Loop", &loop);
+	uianchor::SetItem ("replay.loop");
 
 	ImGui::SameLine (0, fs * 2.0f);
 	ImGui::Checkbox ("Cinematic camera", &cinematic);
+	uianchor::SetItem ("replay.cinematic");
 	ImGui::SameLine ();
 	if (ImGui::Button ("Add key")) AddKey ();
+	uianchor::SetItem ("replay.addkey");
 	ImGui::SameLine ();
 	ImGui::BeginDisabled (keys.empty());
 	if (ImGui::Button ("Delete key")) {
 		auto it = std::min_element (keys.begin(), keys.end(), [this](const CamKey &a, const CamKey &b) { return fabs (a.t - t) < fabs (b.t - t); });
 		if (it != keys.end()) keys.erase (it);
 	}
+	uianchor::SetItem ("replay.deletekey");
 	ImGui::EndDisabled ();
 
 	ImGui::SameLine (0, fs * 2.0f);
 	if (ImGui::Button ("In")) tIn = t, tOut = std::max (tOut, t);
+	uianchor::SetItem ("replay.in");
 	ImGui::SameLine ();
 	if (ImGui::Button ("Out")) tOut = t, tIn = std::min (tIn, t);
+	uianchor::SetItem ("replay.out");
 	ImGui::SameLine ();
 	int fpsIdx = (exportFps == 30 ? 0 : 1);
 	ImGui::SetNextItemWidth (fs * 4.5f);
 	if (ImGui::Combo ("##fps", &fpsIdx, "30 fps\0" "60 fps\0")) exportFps = (fpsIdx == 0 ? 30 : 60);
 	ImGui::SameLine ();
 	if (ImGui::Button ("Export video")) StartExport ();
+	uianchor::SetItem ("replay.export");
 	ImGui::EndDisabled ();
 
 	ImGui::SameLine (W - fs * 5.5f);
-	if (ImGui::Button ("Live", ImVec2 (fs * 4.5f, 0))) {
+	bool exit = ImGui::Button ("Live", ImVec2 (fs * 4.5f, 0));
+	uianchor::SetItem ("replay.live");
+	if (exit) {
 		ImGui::End ();
 		Exit ();
 		return;
@@ -419,11 +434,17 @@ void Replay::Display ()
 	dl->AddRectFilled (ImVec2 (p.x, yc - 3), ImVec2 (p.x + tw, yc + 3), IM_COL32(80, 80, 90, 255), 3.0f);
 	dl->AddRectFilled (ImVec2 (X (std::max (tIn, t0)), yc - 3), ImVec2 (X (std::min (tOut, t1)), yc + 3), IM_COL32(60, 120, 200, 255), 3.0f);
 	dl->AddRectFilled (ImVec2 (p.x, yc - 3), ImVec2 (X (t), yc + 3), IM_COL32(220, 70, 60, 255), 3.0f);
-	for (const CamKey &k : keys) {
-		float x = X (k.t);
+	for (size_t i = 0; i < keys.size(); i++) {
+		float x = X (keys[i].t);
 		dl->AddTriangleFilled (ImVec2 (x, yc - 4), ImVec2 (x - 5, yc - 12), ImVec2 (x + 5, yc - 12), IM_COL32(240, 210, 60, 255));
+		char name[32];
+		snprintf (name, sizeof(name), "replay.key%d", (int)i);
+		uianchor::Set (name, x, yc - 8);
 	}
 	dl->AddCircleFilled (ImVec2 (X (t), yc), 7.0f, IM_COL32(255, 255, 255, 255), 16);
+	uianchor::Set ("replay.timeline.lo", p.x, yc);
+	uianchor::Set ("replay.timeline.hi", p.x + tw, yc);
+	uianchor::Set ("replay.timeline.head", X (t), yc);
 	if (scrub && !exporting) {
 		float x = std::clamp (io.MousePos.x, p.x, p.x + tw);
 		Seek (t0 + (x - p.x) / tw * (t1 - t0));

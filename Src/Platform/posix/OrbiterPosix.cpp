@@ -264,7 +264,7 @@ HRESULT Orbiter::UserInput ()
 
 	ImGuiIO& io = ImGui::GetIO();
 	bool imguiWantsKeyboard = io.WantCaptureKeyboard &&
-		(pConfig->CfgUIPrm.MouseFocusMode == 0 || io.WantCaptureMouse);
+		(pConfig->CfgUIPrm.MouseFocusMode == 0 || ImGui::IsWindowHovered (ImGuiHoveredFlags_AnyWindow) || ImGui::IsAnyItemActive ());
 
 	// immediate key interpretation
 	char buffer[256];

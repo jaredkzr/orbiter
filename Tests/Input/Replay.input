@@ -1,0 +1,61 @@
+# Instant replay with the mouse and keyboard (Tests/Input/Orbit.scn):
+# record a burn, enter the replay with F5, pause and play, seek by
+# clicking and dragging the timeline, add a camera key, return to the
+# live simulation with the Live button.
+
+lua v = vessel.get_focusinterface ()
+lua function frac (r) return (r.mjd - r.mjd0) / (r.mjd1 - r.mjd0) end
+lua v:set_thrustergrouplevel (THGROUP.MAIN, 1)
+wait 300
+lua v:set_thrustergrouplevel (THGROUP.MAIN, 0)
+wait 50
+
+key F5
+waitfor @replay.live
+lua r = oapi.get_replay (); live = r.mjd1
+lua check ("enter", r ~= nil and (r.mjd1 - r.mjd0) * 86400 > 6, string.format ("%.2f s recorded", (r.mjd1 - r.mjd0) * 86400))
+
+# Pause: the replay time stands still
+click @replay.play
+lua m = oapi.get_replay ().mjd
+wait 20
+lua check ("pause", oapi.get_replay ().mjd == m, "replay time held")
+
+# a click a quarter along the timeline seeks there
+click @replay.timeline.lo->@replay.timeline.hi*0.25
+wait 2
+lua r = oapi.get_replay ()
+lua check ("seek", math.abs (frac (r) - 0.25) < 0.01, string.format ("at %.3f of the recording", frac (r)))
+lua check ("thrust", v:get_thrustergrouplevel (THGROUP.MAIN) > 0.99, "the engine burns at that time")
+
+# dragging the playhead to three quarters
+drag @replay.timeline.head @replay.timeline.lo->@replay.timeline.hi*0.75 20
+wait 2
+lua r = oapi.get_replay ()
+lua check ("scrub", math.abs (frac (r) - 0.75) < 0.01, string.format ("at %.3f of the recording", frac (r)))
+
+# Play: the replay time advances
+click @replay.play
+lua m = oapi.get_replay ().mjd
+wait 20
+lua check ("play", oapi.get_replay ().mjd > m, string.format ("advanced %.3f s", (oapi.get_replay ().mjd - m) * 86400))
+click @replay.play
+
+# a camera key appears on the timeline
+click @replay.addkey
+waitfor @replay.key0
+lua check ("key", true, "camera key added")
+
+# back to the live simulation
+click @replay.live
+wait 2
+lua check ("live", oapi.get_replay () == nil and math.abs (oapi.get_simmjd () - live) * 86400 < 0.1, string.format ("live at %+.3f s", (oapi.get_simmjd () - live) * 86400))
+lua check ("thrust_live", v:get_thrustergrouplevel (THGROUP.MAIN) < 0.01, "engine off again")
+
+# F5 enters and leaves the replay
+key F5
+waitfor @replay.live
+key F5
+wait 2
+lua check ("f5", oapi.get_replay () == nil, "replay left with F5")
+exit

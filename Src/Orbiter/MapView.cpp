@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "MapView.h"
+#include "UiAnchor.h"
 #include "Orbiter.h"
 #include "Camera.h"
 #include "Psys.h"
@@ -304,7 +305,10 @@ void MapView::DrawMap (const trajectory::Prediction *pred)
 	hoverPath = false;
 	float hoverDist = PICK_DIST;
 	ImVec2 mouse = io.MousePos;
-	bool mouseFree = !io.WantCaptureMouse || drag != Drag::NONE;
+	// (not io.WantCaptureMouse: the map sets it itself while the mouse is over the path or a handle)
+	bool overUi = ImGui::IsWindowHovered (ImGuiHoveredFlags_AnyWindow) || ImGui::IsAnyItemActive () ||
+		ImGui::IsPopupOpen ("", ImGuiPopupFlags_AnyPopupId);
+	bool mouseFree = !overUi || drag != Drag::NONE;
 	if (pred) {
 		for (const auto &seg : pred->segs) {
 			std::vector<Vector> pts;
@@ -325,6 +329,18 @@ void MapView::DrawMap (const trajectory::Prediction *pred)
 				if (p.t >= now) pts.push_back (rg + p.r), ts.push_back (p.t);
 			ImU32 col = (seg.node < 0 ? COL_PATH : COL_PATH_NODE);
 			DrawPath (dl, pts, col, 2.0f);
+			if (uianchor::Enabled() && &seg == &pred->segs.front()) {
+				// points a quarter, half and three quarters along the visible path (for input tests)
+				std::vector<ImVec2> vis;
+				for (const auto &p : pts) { ImVec2 sp; if (Project (p, sp) && !Occluded (p)) vis.push_back (sp); }
+				if (vis.size() > 4)
+					for (int q = 1; q <= 3; q++) {
+						char name[32];
+						snprintf (name, sizeof(name), "map.path.%d", q * 25);
+						const ImVec2 &sp = vis[vis.size() * q / 4];
+						uianchor::Set (name, sp.x, sp.y);
+					}
+			}
 
 			// hover: the closest point of the path to the mouse
 			if (mouseFree && drag == Drag::NONE) {
@@ -454,6 +470,9 @@ void MapView::DrawNodes (ImDrawList *dl, const trajectory::Prediction *pred)
 		char label[64];
 		snprintf (label, sizeof(label), "%.1f m/s", nodes[i].dv.length());
 		dl->AddText (ImVec2 (s.x + 12.0f, s.y + 4.0f), COL_TEXT, label);
+		char aname[48];
+		snprintf (aname, sizeof(aname), "map.node%d", (int)i);
+		uianchor::Set (aname, s.x, s.y);
 
 		bool overNode = Dist2 (mouse, s) < PICK_DIST * PICK_DIST * 2.0f;
 		if (overNode && drag == Drag::NONE) {
@@ -486,6 +505,9 @@ void MapView::DrawNodes (ImDrawList *dl, const trajectory::Prediction *pred)
 				dl->AddLine (s, h, cols[a] & IM_COL32(255, 255, 255, 120), 1.5f);
 				if (sg > 0) dl->AddCircleFilled (h, 7.0f, cols[a], 16);
 				else        dl->AddCircle (h, 7.0f, cols[a], 16, 2.5f);
+				static const char *anames[3][2] = {{"retrograde", "prograde"}, {"antinormal", "normal"}, {"radialin", "radialout"}};
+				snprintf (aname, sizeof(aname), "map.node%d.%s", (int)i, anames[a][sg > 0]);
+				uianchor::Set (aname, h.x, h.y);
 				bool over = Dist2 (mouse, h) < 100.0f;
 				if (over && drag == Drag::NONE) {
 					static const char *names[3][2] = {{"Retrograde", "Prograde"}, {"Antinormal", "Normal"}, {"Radial in", "Radial out"}};
@@ -653,14 +675,18 @@ void MapView::DrawPanels (const trajectory::Prediction *pred)
 		if (tb >= 0.0) ImGui::Text ("Burn %.1f s (main engines)", tb);
 		else ImGui::TextDisabled ("No main engines");
 		changed |= ImGui::Checkbox ("Burn autopilot", &n.autoburn);
+		uianchor::SetItem ("map.panel.autoburn");
 		if (selNode == 0) {
 			const auto &b = g_focusobj->Burn();
 			if (b.phase == Vessel::BurnState::ALIGN) ImGui::TextColored (ImVec4 (1, 0.8f, 0.3f, 1), "Turning to the burn direction");
 			else if (b.phase == Vessel::BurnState::BURN) ImGui::TextColored (ImVec4 (1, 0.5f, 0.2f, 1), "Burning: %.1f m/s left", b.dvg.length());
 		}
 		if (ImGui::Button ("Warp to node")) warpTo = tnode - std::max (0.0, tb) * 0.5 - 120.0;
+		uianchor::SetItem ("map.panel.warp");
 		ImGui::SameLine ();
-		if (ImGui::Button ("Delete")) {
+		bool del = ImGui::Button ("Delete");
+		uianchor::SetItem ("map.panel.delete");
+		if (del) {
 			g_focusobj->DelManeuverNode ((DWORD)selNode);
 			selNode = -1;
 			changed = false;

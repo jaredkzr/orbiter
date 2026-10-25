@@ -12,6 +12,7 @@
 
 #include "Input.h"
 #include "Orbiter.h"
+#include "UiAnchor.h"
 #include <cmath>
 #include <cstring>
 
@@ -185,4 +186,9 @@ DLLEXPORT void oapiInputControllers (int n, const char *const *names)
 DLLEXPORT void oapiInputControllerState (int idx, const OAPI_CONTROLLERSTATE *state)
 {
 	g_pOrbiter->GetInput()->SetControllerState (idx, state);
+}
+
+DLLEXPORT bool oapiInputUiAnchor (const char *name, float *x, float *y)
+{
+	return uianchor::Get (name, *x, *y);
 }

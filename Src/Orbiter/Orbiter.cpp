@@ -2143,9 +2143,11 @@ HRESULT Orbiter::UserInput ()
 		// When focus-follows-mouse is active and the mouse is not over any
 		// ImGui window, route keyboard input to the simulation even though
 		// ImGui's WantCaptureKeyboard may still be true (NavEnableKeyboard
-		// keeps ImGui's internal focus alive after a click).
+		// keeps ImGui's internal focus alive after a click). (Not
+		// io.WantCaptureMouse: overlays like the map view set it over their
+		// own graphics, which would block the keyboard there.)
 		bool imguiWantsKeyboard = io.WantCaptureKeyboard &&
-			(pConfig->CfgUIPrm.MouseFocusMode == 0 || io.WantCaptureMouse);
+			(pConfig->CfgUIPrm.MouseFocusMode == 0 || ImGui::IsWindowHovered (ImGuiHoveredFlags_AnyWindow) || ImGui::IsAnyItemActive ());
 
 		// keyboard input: immediate key interpretation
 		hr = didev->GetDeviceState (sizeof(buffer), &buffer);
@@ -2674,7 +2676,7 @@ LRESULT Orbiter::MsgProc (HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	case WM_KEYDOWN: {
 		ImGuiIO& io = ImGui::GetIO();
 		bool imguiWantsKbd = io.WantCaptureKeyboard &&
-			(pConfig->CfgUIPrm.MouseFocusMode == 0 || io.WantCaptureMouse);
+			(pConfig->CfgUIPrm.MouseFocusMode == 0 || ImGui::IsWindowHovered (ImGuiHoveredFlags_AnyWindow) || ImGui::IsAnyItemActive ());
 		if (imguiWantsKbd) {
 			return 0;
 		}

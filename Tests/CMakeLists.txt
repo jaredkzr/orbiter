@@ -105,6 +105,20 @@ if (ORBITER_TEST_EXE)
 		set_tests_properties(Launchpad.Cycle PROPERTIES TIMEOUT 120
 			ENVIRONMENT "ORBITER_VK_OFFSCREEN=1;ORBITER_NO_TERRAIN_STREAMING=1;ORBITER_LAUNCHPAD_AUTO=Delta-glider/Smack!;ORBITER_LAUNCHPAD_RUNS=2"
 			PASS_REGULAR_EXPRESSION "Launchpad: session 2 closed")
+
+		# Scripted mouse and keyboard input (Tests/Input/*.input, see
+		# OVP/VulkanClient/TestInput.h): the map view and the instant replay
+		file(GLOB InputTests "${CMAKE_SOURCE_DIR}/Tests/Input/*.input")
+		foreach(InputTest ${InputTests})
+			get_filename_component(test_name ${InputTest} NAME_WE)
+			add_test(
+				NAME "Input.${test_name}"
+				COMMAND ${ORBITER_TEST_EXE} -p VulkanClient "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Input/Orbit.scn" "--fixedstep=0.02"
+				WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+			)
+			set_tests_properties(Input.${test_name} PROPERTIES TIMEOUT 120
+				ENVIRONMENT "ORBITER_VK_OFFSCREEN=1;ORBITER_NO_TERRAIN_STREAMING=1;ORBITER_VK_TEST_INPUT=${InputTest}")
+		endforeach()
 	endif()
 
 endif()

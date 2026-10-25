@@ -867,6 +867,7 @@ void Interpreter::LoadAPI ()
 		{"get_trajectoryevents", oapi_get_trajectoryevents},
 		{"set_trajectorytarget", oapi_set_trajectorytarget},
 		{"set_mapview", oapi_set_mapview},
+		{"get_mapview", oapi_get_mapview},
 		{"set_replay", oapi_set_replay},
 		{"get_replay", oapi_get_replay},
 		{"replay_seek", oapi_replay_seek},
@@ -3986,6 +3987,18 @@ Switch the map view on or off.
 int Interpreter::oapi_set_mapview (lua_State *L)
 {
 	lua_pushboolean (L, oapiSetMapView (lua_toboolean (L, 1) != 0));
+	return 1;
+}
+
+/***
+Is the map view shown?
+
+@function get_mapview
+@treturn bool
+*/
+int Interpreter::oapi_get_mapview (lua_State *L)
+{
+	lua_pushboolean (L, oapiGetMapView ());
 	return 1;
 }
 

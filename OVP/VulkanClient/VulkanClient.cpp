@@ -103,6 +103,10 @@ bool VulkanClient::clbkInitialise ()
 		return false;
 	}
 	if (testPad) input::AttachTestGamepad (testPad);
+	if (const char *ti = getenv ("ORBITER_VK_TEST_INPUT")) {
+		testInput = std::make_unique<TestInput> ();
+		if (!testInput->Load (ti)) testInput.reset();
+	}
 	const VIDEODATA *vd = GetVideoData();
 	int w = vd->winw > 0 ? vd->winw : 1280;
 	int h = vd->winh > 0 ? vd->winh : 800;
@@ -184,6 +188,7 @@ void VulkanClient::clbkCloseSession (bool fastclose)
 {
 	GraphicsClient::clbkCloseSession (fastclose);
 	DeleteStreams (true);
+	if (testInput) testInput->SessionEnd ();
 	if (ready) {
 		r2d->Flush ();
 		ctx.SubmitPending ();
@@ -204,7 +209,10 @@ void VulkanClient::clbkDestroyRenderWindow (bool fastclose)
 
 void VulkanClient::clbkUpdate (bool running)
 {
-	if (window) input::ProcessEvents (window);
+	if (window) {
+		if (testInput && scene) testInput->Step (window);
+		input::ProcessEvents (window);
+	}
 	if (running) {
 		double dt = oapiGetSimStep ();
 		if (scene) scene->Particles ()->AddTime (dt);
@@ -281,6 +289,10 @@ bool VulkanClient::clbkDisplayFrame ()
 				fprintf (f, "%.6f\n", oapiGetSimTime ());
 				fclose (f);
 			}
+		}
+		if (testInput) {
+			std::string shot = testInput->TakeScreenshotRequest ();
+			if (!shot.empty()) CaptureBackbuffer (shot);
 		}
 		if (!autoScreenshot.empty() && ++frameCount == autoScreenshotFrame) {
 			CaptureBackbuffer (autoScreenshot);

@@ -325,9 +325,7 @@ bool input::ProcessEvents (SDL_Window *window)
 			oapiInputMouseMove ((int)ev.motion.x, (int)ev.motion.y, dx, dy);
 			} break;
 		case SDL_EVENT_MOUSE_WHEEL: {
-			float mx, my;
-			SDL_GetMouseState (&mx, &my);
-			oapiInputMouseWheel ((int)(ev.wheel.y * 120.0f), (int)mx, (int)my);
+			oapiInputMouseWheel ((int)(ev.wheel.y * 120.0f), (int)ev.wheel.mouse_x, (int)ev.wheel.mouse_y);
 			} break;
 		case SDL_EVENT_JOYSTICK_ADDED:
 			AddController (ev.jdevice.which);

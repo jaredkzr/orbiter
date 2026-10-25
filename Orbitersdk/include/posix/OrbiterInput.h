@@ -109,6 +109,16 @@ OAPIFUNC void oapiInputControllers (int n, const char *const *names);
  */
 OAPIFUNC void oapiInputControllerState (int idx, const OAPI_CONTROLLERSTATE *state);
 
+/**
+ * \brief Screen position of a named interactive element (e.g. "map.node0",
+ *   "replay.live"), published by the user interface while it is drawn;
+ *   for input tests.
+ * \param name element name
+ * \param x, y position [pixels]
+ * \return false if the element was not drawn in the last frame
+ */
+OAPIFUNC bool oapiInputUiAnchor (const char *name, float *x, float *y);
+
 #endif // !_WIN32
 
 #endif // !__ORBITERINPUT_H
