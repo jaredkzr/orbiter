@@ -71,6 +71,7 @@ vec3 Environment (vec3 d)
 void main()
 {
 	vec4 texel = texture(tex, vUV);
+	if (draw.maps.z > 0.0 && texel.a < draw.maps.z) discard; // alpha-tested (foliage)
 	vec3 base = texel.rgb * draw.diffuse.rgb;
 	float alpha = texel.a * draw.diffuse.a;
 

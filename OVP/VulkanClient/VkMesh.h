@@ -33,6 +33,7 @@ public:
 		uint32_t nSide = 0;
 		VkTexture *sideTex = nullptr;
 		uint32_t sideMaterial = 0;
+		float alphaTest = 0.0f;  // texture alpha below which fragments are discarded (foliage; 0: none)
 	};
 
 	/// Mesh group flags from the Orbiter mesh format
@@ -43,6 +44,19 @@ public:
 	static constexpr DWORD GRP_ADDITIVE = 0x8;
 
 	VkMesh (vkc::Context *ctx, TextureManager *texmgr, MESHHANDLE hMesh);
+
+	/// A group of generated geometry (procedural meshes): vertices,
+	/// triangles, texture (a reference is taken), material and shading
+	struct Part {
+		std::vector<NTVERTEX> vtx;
+		std::vector<uint16_t> idx;
+		VkTexture *tex = nullptr;
+		MATERIAL mat{ {1, 1, 1, 1}, {1, 1, 1, 1}, {0, 0, 0, 1}, {0, 0, 0, 1}, 0.0f };
+		PBRParams pbr;
+		float alphaTest = 0.0f;  // (see Group)
+	};
+	/// Mesh from generated geometry (no template mesh)
+	VkMesh (vkc::Context *ctx, TextureManager *texmgr, const std::vector<Part> &parts);
 	~VkMesh ();
 
 	uint32_t nGroup () const { return (uint32_t)groups.size(); }

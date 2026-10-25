@@ -113,7 +113,7 @@ bool Scene::Init ()
 
 	for (auto &sm : shadows) {
 		sm = std::make_unique<ShadowMap>();
-		sm->Init (ctx);
+		sm->Init (ctx, gc->TexMgr()->Layout());
 	}
 
 	// per-frame uniform buffer, the shadow maps, ambient occlusion, the
@@ -226,7 +226,7 @@ bool Scene::Init ()
 	}
 	// ray traced shadows, ambient occlusion and planet light
 	rtl = std::make_unique<RTLighting>();
-	if (rt->Enabled ()) rtl->Init (ctx, frameLayout, rt->SetLayout());
+	if (rt->Enabled ()) rtl->Init (ctx, frameLayout, rt->SetLayout(), rt->TextureLayout());
 	rtl->EnsureSize (ao->PrepassView (), ao->VelocityView (), ao->MaterialView ());
 	WriteRTLightDescriptors ();
 	CreatePipelines ();
@@ -1138,7 +1138,7 @@ void Scene::RenderPrepass ()
 				oapiGetGlobalPos (hSun, &sp);
 				sunRadius = asin (std::min (1.0, oapiGetSize (hSun) / length (sp - camPos)));
 			}
-			rtl->Compute (frameSet[ctx->FrameIndex()], rt->Set (), proj[0], -proj[5], jitter, (float)sunRadius, cameraCut);
+			rtl->Compute (frameSet[ctx->FrameIndex()], rt->Set (), rt->TextureSet (), proj[0], -proj[5], jitter, (float)sunRadius, cameraCut);
 			ctx->GpuMark ("rt lighting");
 		}
 		ssr->SetRTSets (frameSet[ctx->FrameIndex()], rt->Set (), rt->TextureSet (), camAtmSet);
@@ -1450,7 +1450,8 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 			memcpy (pc.heat, objHeat, sizeof(objHeat));
 			pc.maps[0] = maps ? (float)maps->flags : 0.0f;
 			pc.maps[1] = transparent ? 1.0f : 0.0f; // not in the prepass: no ambient occlusion
-			pc.maps[2] = pc.maps[3] = 0.0f;
+			pc.maps[2] = grp.alphaTest;
+			pc.maps[3] = 0.0f;
 			if (transparent && !ovr)
 				for (int k = 0; k < 3; k++) pc.emissive[k] += objGlassGlow[k];
 			if (ovr) { // self-illuminated display
@@ -1464,7 +1465,8 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 				memcpy (pp + 32, pc.pbr, sizeof(pc.pbr));
 				pp[36] = pc.maps[0];
 				pp[37] = pc.emissive[3]; // unlit
-				pp[38] = pp[39] = 0.0f;
+				pp[38] = grp.alphaTest;
+				pp[39] = 0.0f;
 				vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pp), pp);
 			} else {
 				vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
@@ -1482,6 +1484,7 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 				rm.light = objLight;
 				memcpy (rm.pbr, pc.pbr, sizeof(rm.pbr));
 				rm.unlit = pc.emissive[3] > 0.5f;
+				rm.alphaTest = grp.alphaTest > 0.0f;
 				rm.owner = objOwner;
 				// static groups: one instance for the mesh (below); animated
 				// ones on their own

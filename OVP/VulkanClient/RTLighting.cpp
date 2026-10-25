@@ -32,7 +32,7 @@ namespace {
 	}
 }
 
-bool RTLighting::Init (vkc::Context *c, VkDescriptorSetLayout frame, VkDescriptorSetLayout rtScene)
+bool RTLighting::Init (vkc::Context *c, VkDescriptorSetLayout frame, VkDescriptorSetLayout rtScene, VkDescriptorSetLayout rtTex)
 {
 	if (const char *e = getenv ("ORBITER_VK_RT_LIGHTING")) if (!atoi (e)) return false;
 	ctx = c;
@@ -59,9 +59,9 @@ bool RTLighting::Init (vkc::Context *c, VkDescriptorSetLayout frame, VkDescripto
 	VK_CHECK(vkCreateDescriptorPool (ctx->device, &pci, nullptr, &pool));
 
 	VkPushConstantRange pcr{ VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Params) };
-	VkDescriptorSetLayout tl[3] = { setLayout, frame, rtScene };
+	VkDescriptorSetLayout tl[4] = { setLayout, frame, rtScene, rtTex };
 	VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-	plci.setLayoutCount = 3;
+	plci.setLayoutCount = 4;
 	plci.pSetLayouts = tl;
 	plci.pushConstantRangeCount = 1;
 	plci.pPushConstantRanges = &pcr;
@@ -199,7 +199,7 @@ bool RTLighting::EnsureSize (VkImageView prepass, VkImageView velocity, VkImageV
 	return true;
 }
 
-void RTLighting::Compute (VkDescriptorSet frameSet, VkDescriptorSet rtSet, float fx, float fy, const float jitter[2],
+void RTLighting::Compute (VkDescriptorSet frameSet, VkDescriptorSet rtSet, VkDescriptorSet texSet, float fx, float fy, const float jitter[2],
 	float sunRadius, bool reset)
 {
 	if (!ctx) return;
@@ -215,8 +215,8 @@ void RTLighting::Compute (VkDescriptorSet frameSet, VkDescriptorSet rtSet, float
 	uint32_t gx = (extent.width + 7) / 8, gy = (extent.height + 7) / 8;
 	// (set 0 and the push constants are compatible between both layouts)
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, traceLayout, 0, 1, &sets[cur], 0, nullptr);
-	VkDescriptorSet s12[2] = { frameSet, rtSet };
-	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, traceLayout, 1, 2, s12, 0, nullptr);
+	VkDescriptorSet s123[3] = { frameSet, rtSet, texSet };
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, traceLayout, 1, 3, s123, 0, nullptr);
 	for (VkPipeline pipe : { tracePipe, temporalPipe, filterPipe }) {
 		VkPipelineLayout l = pipe == tracePipe ? traceLayout : layout;
 		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);

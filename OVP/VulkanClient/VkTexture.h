@@ -59,6 +59,10 @@ public:
 	VkTexture *CreateRGBA (uint32_t w, uint32_t h, const uint8_t *rgba);
 	/// the same, linear (data such as normals)
 	VkTexture *CreateRGBALinear (uint32_t w, uint32_t h, const uint8_t *rgba);
+	/// RGBA8 (sRGB) with the given mip levels (offsets into data; e.g.
+	/// alpha-tested foliage whose coverage the levels preserve)
+	VkTexture *CreateRGBAMips (uint32_t w, uint32_t h, uint32_t nMip, const uint8_t *data,
+		const std::vector<size_t> &mipOffsets, size_t dataSize);
 
 	/// Create a texture from a DDS file in memory. deferred: record the upload
 	/// into the current frame instead of waiting for it (texture streaming)

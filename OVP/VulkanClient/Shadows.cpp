@@ -3,9 +3,12 @@
 
 #include "Shadows.h"
 #include "VkMesh.h"
+#include "VkTexture.h"
 #include <cmath>
 
 #include "shadow.vert.h"
+#include "shadow_alpha.vert.h"
+#include "shadow_alpha.frag.h"
 
 namespace {
 	// depth range of the shadow volume, in units of its radius: casters
@@ -14,7 +17,7 @@ namespace {
 	const VkFormat DEPTH_FORMAT = VK_FORMAT_D32_SFLOAT;
 }
 
-bool ShadowMap::Init (vkc::Context *c)
+bool ShadowMap::Init (vkc::Context *c, VkDescriptorSetLayout texLayout)
 {
 	ctx = c;
 	VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
@@ -106,6 +109,32 @@ bool ShadowMap::Init (vkc::Context *c)
 	gpi.layout = layout;
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &pipeline));
 	vkDestroyShaderModule (ctx->device, vs, nullptr);
+
+	// alpha-tested casters: the texture decides where there is a shadow
+	VkPushConstantRange apcr{ VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 20 * sizeof(float) };
+	plci.pushConstantRangeCount = 1;
+	plci.pPushConstantRanges = &apcr;
+	plci.setLayoutCount = 1;
+	plci.pSetLayouts = &texLayout;
+	VK_CHECK(vkCreatePipelineLayout (ctx->device, &plci, nullptr, &alphaLayout));
+	VkShaderModule avs = ctx->CreateShaderModule (spv_shadow_alpha_vert, spv_shadow_alpha_vert_size);
+	VkShaderModule afs = ctx->CreateShaderModule (spv_shadow_alpha_frag, spv_shadow_alpha_frag_size);
+	VkPipelineShaderStageCreateInfo astages[2] = {
+		{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, avs, "main" },
+		{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, afs, "main" }
+	};
+	VkVertexInputAttributeDescription aattr[2] = {
+		{ 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(NTVERTEX, x) },
+		{ 2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(NTVERTEX, tu) }
+	};
+	vi.vertexAttributeDescriptionCount = 2;
+	vi.pVertexAttributeDescriptions = aattr;
+	gpi.stageCount = 2;
+	gpi.pStages = astages;
+	gpi.layout = alphaLayout;
+	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &alphaPipeline));
+	vkDestroyShaderModule (ctx->device, avs, nullptr);
+	vkDestroyShaderModule (ctx->device, afs, nullptr);
 	return true;
 }
 
@@ -114,6 +143,8 @@ void ShadowMap::Shutdown ()
 	if (!ctx) return;
 	vkDestroyPipeline (ctx->device, pipeline, nullptr);
 	vkDestroyPipelineLayout (ctx->device, layout, nullptr);
+	vkDestroyPipeline (ctx->device, alphaPipeline, nullptr);
+	vkDestroyPipelineLayout (ctx->device, alphaLayout, nullptr);
 	vkDestroySampler (ctx->device, sampler, nullptr);
 	ctx->DestroyImage (depth);
 	ctx = nullptr;
@@ -165,16 +196,28 @@ void ShadowMap::DrawMesh (const VkMesh *mesh, const Mat4 &model,
 	vkCmdBindVertexBuffers (cmd, 0, 1, &vb, &ofs);
 	vkCmdBindIndexBuffer (cmd, mesh->IndexBuffer(), 0, VK_INDEX_TYPE_UINT16);
 	Mat4 mvp0 = lightVP * model;
+	bool alphaBound = false;
 	for (uint32_t g = 0; g < mesh->nGroup(); g++) {
 		const VkMesh::Group &grp = mesh->GetGroup (g);
 		if (!grp.nIndex || grp.transparent || (grp.usrFlag & (VkMesh::GRP_HIDDEN | VkMesh::GRP_NOSHADOW))) continue;
 		if (groupVisible && g < groupVisible->size() && !(*groupVisible)[g]) continue;
 		Mat4 mvp = (groupTransforms && g < groupTransforms->size()) ? mvp0 * (*groupTransforms)[g] : mvp0;
-		float f[16];
+		float f[20];
 		mvp.ToFloat (f);
-		vkCmdPushConstants (cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(f), f);
+		bool alpha = grp.alphaTest > 0.0f && grp.tex;
+		if (alpha != alphaBound) {
+			vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, alpha ? alphaPipeline : pipeline);
+			alphaBound = alpha;
+		}
+		if (alpha) {
+			f[16] = grp.alphaTest, f[17] = f[18] = f[19] = 0.0f;
+			vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, alphaLayout, 0, 1, &grp.tex->set, 0, nullptr);
+			vkCmdPushConstants (cmd, alphaLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 20 * sizeof(float), f);
+		} else
+			vkCmdPushConstants (cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, 16 * sizeof(float), f);
 		vkCmdDrawIndexed (cmd, grp.nIndex, 1, grp.firstIndex, grp.vertexOffset, 0);
 	}
+	if (alphaBound) vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 }
 
 void ShadowMap::DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &model)

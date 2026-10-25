@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "VObjects.h"
+#include "ScatterAssets.h"
 #include "VkMesh.h"
 #include "VulkanClient.h"
 #include "Particles.h"
@@ -1182,6 +1183,7 @@ void VPlanet::RenderShadow (ShadowMap &sm)
 	// terrain casts only into maps near the surface
 	if (surface && camDist < size + 50e3) surface->RenderShadow (sm);
 	for (auto &b : bases) b->RenderShadow (sm);
+	if (gallery) gallery->RenderShadow (sm);
 }
 
 void VPlanet::UpdateBases ()
@@ -1272,12 +1274,23 @@ double VPlanet::CloudAlt () const
 	return alt ? *alt : 0.0;
 }
 
+void VPlanet::UpdateGallery ()
+{
+	// the gallery is on the planet the focus vessel stands on
+	if (gallery || !scatter::Gallery::Enabled ()) return;
+	OBJHANDLE hv = oapiGetFocusObject ();
+	if (hv && oapiGetVesselInterface (hv)->GetSurfaceRef () == hObj)
+		gallery = std::make_unique<scatter::Gallery> (scene, hObj);
+}
+
 void VPlanet::Render (RenderPass pass)
 {
 	if (pass == RenderPass::Depth) {
 		SetMotion (); // terrain and bases move with the planet
 		if (surface && scene->PixelSize (size, camDist) >= 0.5) surface->RenderDepth ();
 		for (auto &b : bases) b->Render (pass);
+		UpdateGallery ();
+		if (gallery) gallery->Render (pass);
 		return;
 	}
 	if (pass == RenderPass::Transparent) {
@@ -1301,6 +1314,8 @@ void VPlanet::Render (RenderPass pass)
 	if (surface) {
 		surface->Render (atmosphere.get());
 		for (auto &b : bases) b->Render (pass);
+		UpdateGallery ();
+		if (gallery) gallery->Render (pass);
 		return;
 	}
 

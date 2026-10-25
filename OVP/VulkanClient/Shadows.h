@@ -20,7 +20,8 @@ class ShadowMap {
 public:
 	static constexpr uint32_t SIZE = 4096;
 
-	bool Init (vkc::Context *ctx);
+	/// texLayout: descriptor set layout of textures (alpha-tested casters)
+	bool Init (vkc::Context *ctx, VkDescriptorSetLayout texLayout);
 	void Shutdown ();
 	VkImageView View () const { return depth.view; }
 	VkSampler Sampler () const { return sampler; }
@@ -53,6 +54,8 @@ private:
 	VkSampler sampler = VK_NULL_HANDLE;
 	VkPipelineLayout layout = VK_NULL_HANDLE;
 	VkPipeline pipeline = VK_NULL_HANDLE;
+	VkPipelineLayout alphaLayout = VK_NULL_HANDLE; // casters with alpha-tested textures (foliage)
+	VkPipeline alphaPipeline = VK_NULL_HANDLE;
 	bool active = false;
 	VECTOR3 centre{};
 	double radius = 1.0;

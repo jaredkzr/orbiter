@@ -14,6 +14,7 @@
 #include <vector>
 
 class VkMesh;
+namespace scatter { class Gallery; }
 class VESSEL;
 class ShadowMap;
 class Atmosphere;
@@ -182,6 +183,8 @@ private:
 	std::unique_ptr<PlanetSurface> surface; // tiled surface, if available
 	std::unique_ptr<PlanetSurface> clouds;  // tiled cloud layer, if available
 	std::vector<std::unique_ptr<VBase>> bases; // bases near the camera
+	std::unique_ptr<scatter::Gallery> gallery; // preview of the ground scatter assets (ORBITER_VK_SCATTER_GALLERY)
+	void UpdateGallery ();
 	class VkTexture *globalTex = nullptr;   // whole-sphere map (bodies without tiles)
 	class VkTexture *ringTex = nullptr;
 	class VkTexture *cloudTex = nullptr;    // legacy cloud layer

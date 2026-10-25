@@ -69,6 +69,8 @@ set(SHADER_SRC
 	Shaders/sky.vert
 	Shaders/sky.frag
 	Shaders/shadow.vert
+	Shaders/shadow_alpha.vert
+	Shaders/shadow_alpha.frag
 	Shaders/post.vert
 	Shaders/bloom_down.frag
 	Shaders/bloom_up.frag
@@ -170,6 +172,7 @@ add_library(VulkanClient SHARED
 	PostFX.cpp
 	MaterialConfig.cpp
 	Input.cpp
+	ScatterAssets.cpp
 	TestInput.cpp
 	ImageIO.cpp
 	Vma.cpp

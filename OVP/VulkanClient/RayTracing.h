@@ -42,6 +42,7 @@ public:
 		float pbr[4];       // metalness, roughness, reflectivity, F0 scale
 		float uv[4] = { 0, 0, 1, 1 }; // texture coordinates: offset, scale
 		bool unlit;
+		bool alphaTest = false; // texture alpha decides where it is solid (foliage)
 		uint32_t owner = 0;   // VObject::Id (0: terrain)
 	};
 	/// Indexed triangles (NTVERTEX vertices, 16-bit indices)

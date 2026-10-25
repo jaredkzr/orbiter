@@ -22,7 +22,8 @@ public:
 	static constexpr int SHADOWED_LIGHTS = 4;
 
 	/// frame: frame set layout; rtScene: ray tracing scene set layout
-	bool Init (vkc::Context *ctx, VkDescriptorSetLayout frame, VkDescriptorSetLayout rtScene);
+	/// rtTex: the ray tracing scene's bindless textures (alpha-tested foliage)
+	bool Init (vkc::Context *ctx, VkDescriptorSetLayout frame, VkDescriptorSetLayout rtScene, VkDescriptorSetLayout rtTex);
 	void Shutdown ();
 	bool Enabled () const { return ctx != nullptr; }
 
@@ -32,7 +33,7 @@ public:
 	bool EnsureSize (VkImageView prepass, VkImageView velocity, VkImageView material);
 	/// Trace and filter (outside rendering scopes, after the ray tracing
 	/// scene is built)
-	void Compute (VkDescriptorSet frameSet, VkDescriptorSet rtSet, float fx, float fy, const float jitter[2],
+	void Compute (VkDescriptorSet frameSet, VkDescriptorSet rtSet, VkDescriptorSet texSet, float fx, float fy, const float jitter[2],
 		float sunRadius, bool reset);
 
 	/// results (general layout)

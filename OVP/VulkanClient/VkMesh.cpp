@@ -78,6 +78,47 @@ VkMesh::VkMesh (vkc::Context *c, TextureManager *tm, MESHHANDLE h)
 	}
 }
 
+VkMesh::VkMesh (vkc::Context *c, TextureManager *tm, const std::vector<Part> &parts)
+	: ctx(c), texmgr(tm), hMesh(nullptr), id(RTNewGeometryId ())
+{
+	MATERIAL def{};
+	def.diffuse = { 1, 1, 1, 1 };
+	def.ambient = { 1, 1, 1, 1 };
+	materials.push_back (def);
+	pbr.push_back (PBRParams::FromMaterial (def));
+	for (const Part &p : parts) {
+		Group g;
+		g.firstIndex = (uint32_t)idx.size();
+		g.nIndex = (uint32_t)p.idx.size();
+		g.vertexOffset = (int32_t)vtx.size();
+		g.material = (uint32_t)materials.size();
+		materials.push_back (p.mat);
+		pbr.push_back (p.pbr);
+		if (p.tex) {
+			texmgr->AddRef (p.tex);
+			textures.push_back (p.tex);
+			groupTexIdx.push_back ((DWORD)textures.size() - 1);
+		} else groupTexIdx.push_back (SPEC_NONE);
+		groupMtrlIdx.push_back (SPEC_NONE);
+		g.tex = p.tex;
+		g.alphaTest = p.alphaTest;
+		g.transparent = IsTransparent (p.mat, g);
+		vtx.insert (vtx.end(), p.vtx.begin(), p.vtx.end());
+		idx.insert (idx.end(), p.idx.begin(), p.idx.end());
+		groups.push_back (g);
+	}
+	nTemplateMtrl = materials.size();
+	VkBufferUsageFlags rt = ctx->rayTracing ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+		VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT : 0;
+	if (!vtx.empty())
+		vbuf = ctx->CreateDeviceBuffer (vtx.data(), vtx.size() * sizeof(NTVERTEX), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | rt);
+	if (!idx.empty()) {
+		std::vector<uint16_t> pad (idx.begin(), idx.end());
+		if (pad.size() & 1) pad.push_back (0);
+		ibuf = ctx->CreateDeviceBuffer (pad.data(), pad.size() * sizeof(uint16_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT | rt);
+	}
+}
+
 VkMesh::~VkMesh ()
 {
 	RTForgetGeometry (id);

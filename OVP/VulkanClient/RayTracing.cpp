@@ -18,6 +18,7 @@ namespace {
 		float uv[4];               // texture coordinates: offset, scale
 	};
 	constexpr uint32_t FLAG_UNLIT = 1;
+	constexpr uint32_t FLAG_ALPHA = 2; // alpha-tested texture (foliage): not opaque to rays
 	uint64_t nextGeometryId = 1;
 	RTScene *active = nullptr;
 }
@@ -256,7 +257,7 @@ void RTScene::AddInstance (const Part *parts, uint32_t nParts, const Mat4 &model
 		const Geometry &g = parts[i].geo;
 		if (g.nIndex < 3 || !g.vb || !g.ib || !g.nVtx) continue;
 		src.push_back ({ ctx->BufferAddress (g.vb) + g.vbOffset, ctx->BufferAddress (g.ib), &parts[i] });
-		mix (hash, g.id), mix (hash, g.vbOffset), mix (hash, g.firstIndex), mix (hash, g.nIndex);
+		mix (hash, g.id), mix (hash, g.vbOffset), mix (hash, g.firstIndex), mix (hash, g.nIndex), mix (hash, parts[i].mat.alphaTest);
 		mix (vhash, g.version);
 	}
 	if (src.empty()) return;
@@ -274,7 +275,7 @@ void RTScene::AddInstance (const Part *parts, uint32_t nParts, const Mat4 &model
 			const Geometry &g = s.p->geo;
 			VkAccelerationStructureGeometryKHR geom{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
 			geom.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-			geom.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+			geom.flags = s.p->mat.alphaTest ? 0 : VK_GEOMETRY_OPAQUE_BIT_KHR; // (alpha-tested: decided in the shaders)
 			auto &tri = geom.geometry.triangles;
 			tri.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
 			tri.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
@@ -329,7 +330,7 @@ void RTScene::AddInstance (const Part *parts, uint32_t nParts, const Mat4 &model
 		rec.idx[0] = (uint32_t)s.iaddr, rec.idx[1] = (uint32_t)(s.iaddr >> 32);
 		rec.firstIndex = s.p->geo.firstIndex;
 		rec.tex = TextureSlot (s.p->tex);
-		rec.flags = mat.unlit ? FLAG_UNLIT : 0;
+		rec.flags = (mat.unlit ? FLAG_UNLIT : 0) | (mat.alphaTest ? FLAG_ALPHA : 0);
 		rec.owner = mat.owner;
 		memcpy (rec.diffuse, mat.diffuse, sizeof(rec.diffuse));
 		memcpy (rec.emissive, mat.emissive, 3 * sizeof(float));

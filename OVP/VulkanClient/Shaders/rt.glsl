@@ -28,6 +28,7 @@ struct RTInstance { // must match InstanceRecord in RayTracing.cpp
 	vec4 uv;            // texture coordinates: offset, scale
 };
 const uint RT_UNLIT = 1u;
+const uint RT_ALPHA = 2u; // alpha-tested texture (foliage): solid where the texture is
 
 layout(set = 2, binding = 0) uniform accelerationStructureEXT tlas;
 layout(set = 2, binding = 1, std430) readonly buffer Instances { RTInstance inst[]; };
@@ -47,20 +48,41 @@ uint RTIndex (uvec2 addr, uint i)
 	return (i & 1u) != 0u ? w >> 16 : w & 0xffffu;
 }
 
+// a candidate hit of a ray query on alpha-tested geometry is solid
+bool RTCandidateSolid (rayQueryEXT q)
+{
+	RTInstance r = inst[rayQueryGetIntersectionInstanceCustomIndexEXT (q, false) + rayQueryGetIntersectionGeometryIndexEXT (q, false)];
+	if ((r.flags & RT_ALPHA) == 0u) return true;
+	uint prim = uint (rayQueryGetIntersectionPrimitiveIndexEXT (q, false));
+	vec2 bc = rayQueryGetIntersectionBarycentricsEXT (q, false);
+	vec3 w = vec3 (1.0 - bc.x - bc.y, bc.x, bc.y);
+	vec2 uv = vec2 (0.0);
+	for (int k = 0; k < 3; k++) {
+		uint vi = RTIndex (r.idx, r.firstIndex + prim * 3u + uint (k)) * 8u;
+		RTFloats v = RTFloats (r.vtx);
+		uv += w[k] * vec2 (v.f[vi + 6u], v.f[vi + 7u]);
+	}
+	return textureLod (rtTex[nonuniformEXT (r.tex)], uv * r.uv.zw + r.uv.xy, 0.0).a >= 0.5;
+}
+
 // the sun is not hidden from p by vessels or bases
 float RTSunVisible (vec3 p, vec3 toSun)
 {
 	rayQueryEXT sq;
-	rayQueryInitializeEXT (sq, tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT, 0xFF, p, 0.0, toSun, 1e5);
-	while (rayQueryProceedEXT (sq)) {}
+	rayQueryInitializeEXT (sq, tlas, gl_RayFlagsTerminateOnFirstHitEXT, 0xFF, p, 0.0, toSun, 1e5);
+	while (rayQueryProceedEXT (sq))
+		if (rayQueryGetIntersectionTypeEXT (sq, false) == gl_RayQueryCandidateIntersectionTriangleEXT && RTCandidateSolid (sq))
+			rayQueryConfirmIntersectionEXT (sq);
 	return rayQueryGetIntersectionTypeEXT (sq, true) == gl_RayQueryCommittedIntersectionNoneEXT ? 1.0 : 0.0;
 }
 
 bool TraceRT (vec3 o, vec3 d, float tMin, out RTHit h)
 {
 	rayQueryEXT rq;
-	rayQueryInitializeEXT (rq, tlas, gl_RayFlagsOpaqueEXT, 0xFF, o, tMin, d, 1e5);
-	while (rayQueryProceedEXT (rq)) {}
+	rayQueryInitializeEXT (rq, tlas, gl_RayFlagsNoneEXT, 0xFF, o, tMin, d, 1e5);
+	while (rayQueryProceedEXT (rq))
+		if (rayQueryGetIntersectionTypeEXT (rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT && RTCandidateSolid (rq))
+			rayQueryConfirmIntersectionEXT (rq);
 	if (rayQueryGetIntersectionTypeEXT (rq, true) != gl_RayQueryCommittedIntersectionTriangleEXT) return false;
 	h.t = rayQueryGetIntersectionTEXT (rq, true);
 	// (one record per geometry of the instance)

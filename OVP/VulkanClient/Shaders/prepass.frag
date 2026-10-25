@@ -15,8 +15,10 @@ layout(push_constant) uniform Prepass {
 	mat4 modelView;
 	mat4 prevClipFromView;
 	vec4 pbr;  // metalness, roughness, reflectivity
-	vec4 maps; // x: flags of the additional texture maps present, y: 1 = unlit
+	vec4 maps; // x: flags of the additional texture maps present, y: 1 = unlit, z: alpha test (0: none)
 } pp;
+
+layout(set = 1, binding = 0) uniform sampler2D tex;
 
 layout(location = 0) in vec3 vPosView;
 layout(location = 1) in vec3 vNormalView;
@@ -30,6 +32,7 @@ layout(location = 2) out vec4 outMaterial; // shading normal (octahedral), rough
 
 void main()
 {
+	if (pp.maps.z > 0.0 && texture(tex, vUV).a < pp.maps.z) discard; // alpha-tested (foliage)
 	vec3 n = vNormalView;
 	if (dot(n, n) < 1e-12) n = cross(dFdx(vPosView), dFdy(vPosView));
 	n = normalize(n);
