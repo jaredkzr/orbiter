@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "PlanetSurface.h"
+#include "tile_mesh.comp.h"
 #include <atomic>
 #include <thread>
 #include <chrono>
@@ -36,7 +37,7 @@ namespace {
 		float vessel[4];  // nearest vessel on the ground (view space; w: present), also morphed from
 	};
 
-	constexpr double SPLIT_PIXELS = 300.0;  // split tiles that cover more than this on screen (at resolution bias 0)
+	constexpr double SPLIT_PIXELS = 500.0;  // split tiles that cover more than this on screen (at resolution bias 0; GRID quads per edge)
 	constexpr size_t MAX_OUTSTANDING = 24;  // tile requests in flight
 	constexpr int MAX_UPLOADS = 12;         // tiles accepted per frame
 	constexpr uint64_t PRUNE_FRAMES = 120;  // unused subtrees are released after this
@@ -222,6 +223,23 @@ void TileLoader::Process (const Request &req, Result &res)
 bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout)
 {
 	ctx = c;
+	// meshes with the terrain detail made on the GPU (ORBITER_VK_GPU_MESH=0: on the CPU)
+	bool gpuMesh = ctx->shaderFloat64 && ctx->deviceAddress;
+	if (const char *e = getenv ("ORBITER_VK_GPU_MESH")) gpuMesh = gpuMesh && atoi (e) != 0;
+	if (gpuMesh) {
+		VkPushConstantRange mpr{ VK_SHADER_STAGE_COMPUTE_BIT, 0, 64 };
+		VkPipelineLayoutCreateInfo mli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+		mli.pushConstantRangeCount = 1;
+		mli.pPushConstantRanges = &mpr;
+		VK_CHECK(vkCreatePipelineLayout (ctx->device, &mli, nullptr, &meshLayout));
+		VkShaderModule cs = ctx->CreateShaderModule (spv_tile_mesh_comp, spv_tile_mesh_comp_size);
+		VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+		cpi.stage = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, cs, "main" };
+		cpi.layout = meshLayout;
+		VK_CHECK(vkCreateComputePipelines (ctx->device, VK_NULL_HANDLE, 1, &cpi, nullptr, &meshPipe));
+		vkDestroyShaderModule (ctx->device, cs, nullptr);
+		oapiWriteLog ("VulkanClient: tile meshes with the terrain detail made on the GPU");
+	}
 	VkDescriptorSetLayout sets[4] = { frameLayout, texmgr->Layout(), texmgr->Layout(), atmLayout };
 	// (the prepass pushes two matrices and the water mask's coordinates)
 	VkPushConstantRange pcr{ VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, (uint32_t)std::max (sizeof(TilePushConstants), 48 * sizeof(float)) };
@@ -366,6 +384,8 @@ void TileRenderer::Shutdown ()
 {
 	if (!ctx) return;
 	loader.reset ();
+	if (meshPipe) vkDestroyPipeline (ctx->device, meshPipe, nullptr);
+	if (meshLayout) vkDestroyPipelineLayout (ctx->device, meshLayout, nullptr);
 	ctx->DestroyBuffer (ibuf);
 	vkDestroyPipeline (ctx->device, pipeline, nullptr);
 	vkDestroyPipeline (ctx->device, cloudPipeline, nullptr);
@@ -431,7 +451,7 @@ PlanetSurface::PlanetSurface (OBJHANDLE h, Scene *s, std::shared_ptr<PlanetLayer
 			maxElev = std::max (0.0, *me);
 		detail = oapiSurfaceDetailParams (hPlanet, &detailPrm);
 		// (finer meshes where the detail goes)
-		if (detail) maxLevel = std::clamp (std::max (maxLevel, detailPrm.level), 4, 26);
+		if (detail) maxLevel = std::clamp (std::max (maxLevel, detailPrm.level), 4, 28);
 		if (const int *em = (const int*)scene->Client()->GetConfigParam (CFGPRM_ELEVATIONMODE)) elevMode = *em;
 		// (PlanetResolutionBias: each step of +1 halves the tiles' screen size)
 		if (const double *rb = (const double*)scene->Client()->GetConfigParam (CFGPRM_RESOLUTIONBIAS))
@@ -723,18 +743,74 @@ void PlanetSurface::ApplyMesh (Node *n, MeshData &md)
 	std::vector<float> &amp = md.amp;
 	n->detailSpacing = md.detailSpacing;
 	n->detailLmesh = md.detailLmesh;
-	VkDeviceSize vsize = vtx.size() * sizeof(NTVERTEX), size = vsize + amp.size() * sizeof(float);
-	if (!n->vbuf.buffer) {
-		n->vbuf = ctx->CreateBuffer (size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-			(ctx->rayTracing ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT : 0), false);
-		n->rtId = RTNewGeometryId ();
-	}
+	VkDeviceSize vsize = vtx.size() * sizeof(NTVERTEX);
+	EnsureVertexBuffer (n);
 	ctx->UpdateBuffer (n->vbuf.buffer, 0, vtx.data(), vsize);
 	ctx->UpdateBuffer (n->vbuf.buffer, vsize, amp.data(), amp.size() * sizeof(float));
 	n->nVtx = (uint32_t)vtx.size();
 	n->rtVersion++;
 	n->meshElevLvl = md.elevLvl;
 	n->meshDetailed = md.detailed;
+}
+
+void PlanetSurface::EnsureVertexBuffer (Node *n)
+{
+	if (n->vbuf.buffer) return;
+	const int V = TileRenderer::GRID + 1;
+	const size_t nv = (size_t)V * V + 4 * V;
+	VkDeviceSize size = nv * (sizeof(NTVERTEX) + 5 * sizeof(float));
+	n->vbuf = ctx->CreateBuffer (size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+		(ctx->rayTracing ? VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR : 0) |
+		(ctx->rayTracing || ctx->deviceAddress ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT : 0), false);
+	n->rtId = RTNewGeometryId ();
+}
+
+void PlanetSurface::PrepareGpuMesh (const Node *n, const Node *src, GpuJob &job, std::vector<float> &pts, MeshData &md) const
+{
+	const int G = TileRenderer::GRID, V = G + 1, W = G + 3, M = G / 2 + 1;
+	double dlat = (n->latmax - n->latmin) / G, dlng = (n->lngmax - n->lngmin) / G;
+	// (as ComputeMesh: the data's elevation, and the detail's amplitude and
+	// fade, without its octaves: lmin 1e30)
+	pts.resize ((size_t)(W * W + M * M) * 3);
+	for (int i = 0; i < W; i++) {
+		double lat = std::clamp (n->latmax - (i - 1) * dlat, -PI05, PI05);
+		for (int j = 0; j < W; j++) {
+			double lng = n->lngmin + (j - 1) * dlng;
+			double a = 0.0, f = 0.0;
+			float *p = &pts[3 * (i * W + j)];
+			p[0] = (float)SurfaceElev (src, lat, lng, 1e30, &a, &f);
+			p[1] = (float)a, p[2] = (float)f;
+		}
+	}
+	double lmin = 4.0 * radius * (n->latmax - n->latmin) / G;
+	const Node *psrc = n->parent ? ElevSource (n->parent) : nullptr;
+	if (n->parent)
+		for (int i = 0; i < M; i++) {
+			double lat = std::clamp (n->latmax - 2 * i * dlat, -PI05, PI05);
+			for (int j = 0; j < M; j++) {
+				double a = 0.0, f = 0.0;
+				float *p = &pts[3 * (W * W + i * M + j)];
+				p[0] = (float)SurfaceElev (psrc, lat, n->lngmin + 2 * j * dlng, 1e30, &a, &f);
+				p[1] = (float)a, p[2] = (float)f;
+			}
+		}
+	auto spacingOf = [&](const Node *s) {
+		return s ? radius * (s->latmax - s->latmin) / (ElevGrid::N - 3) : (detail && !layers->elev ? detailPrm.flatSpacing : 0.0);
+	};
+	job.centre[0] = n->centre.x, job.centre[1] = n->centre.y, job.centre[2] = n->centre.z, job.centre[3] = 0.0;
+	job.geo[0] = n->latmax, job.geo[1] = n->lngmin, job.geo[2] = dlat, job.geo[3] = dlng;
+	job.sp[0] = (float)std::max (lmin, detailPrm.lambdaMin);
+	job.sp[1] = (float)std::max (2.0 * lmin, detailPrm.lambdaMin);
+	job.sp[2] = (float)spacingOf (src), job.sp[3] = (float)spacingOf (psrc);
+	job.misc[0] = (float)(radius * (n->latmax - n->latmin) * 0.02);
+	job.misc[1] = n->parent ? 1.0f : 0.0f;
+	job.misc[2] = job.misc[3] = 0.0f;
+	job.outAddr = job.ptsAddr = 0;
+	md.detailSpacing = (float)spacingOf (src);
+	double lmesh = std::max (lmin, detailPrm.lambdaMin);
+	md.detailLmesh = (lmesh >= md.detailSpacing) ? 1e30f : (float)lmesh;
+	md.elevLvl = src ? src->lvl : 0;
+	md.detailed = true;
 }
 
 void PlanetSurface::Request (Node *n, TileLoader::Kind kind)
@@ -884,15 +960,18 @@ void PlanetSurface::Prepare ()
 	};
 	static const unsigned nThreads = std::max (1u, std::thread::hardware_concurrency () - 1);
 	const size_t maxJobs = 2 * nThreads;
+	const bool gpu = tr->MeshPipeline () != VK_NULL_HANDLE;
+	const size_t maxGpuJobs = 96;
 	std::vector<std::pair<Node*, const Node*>> jobs;
 	for (Node *n : drawList) {
 		requestUp (n, TileLoader::SURF);
 		if (layers->mask) requestUp (n, TileLoader::MASK);
 		if (layers->elev) {
-			// the mesh grid is sampled from a tile three levels up, which has
-			// the same node spacing as the mesh (256 vs 32 intervals)
+			// the mesh grid is sampled from a tile some levels up, which has
+			// the same node spacing as the mesh (256 vs GRID intervals)
+			const int up = (int)std::lround (std::log2 (256.0 / TileRenderer::GRID));
 			Node *e = n;
-			while (e->lvl > 4 && e->lvl > n->lvl - 3) e = e->parent;
+			while (e->lvl > 4 && e->lvl > n->lvl - up) e = e->parent;
 			// (where the data ends higher up, the deepest tile that has it, as
 			// the core uses: otherwise the mesh falls back to the root)
 			while (e->lvl > 4 && !layers->elev->HasTile (e->lvl, e->ilat, e->ilng)) e = e->parent;
@@ -905,7 +984,9 @@ void PlanetSurface::Prepare ()
 		// at once and the detail later
 		bool rebuild = !n->vbuf.buffer || n->meshElevLvl != srcLvl;
 		bool withDetail = detail && !clouds && (src || !layers->elev);
-		if (withDetail && (rebuild || !n->meshDetailed) && jobs.size() < maxJobs) {
+		if (withDetail && gpu && (rebuild || !n->meshDetailed) && jobs.size() < maxGpuJobs) {
+			jobs.push_back ({ n, src });
+		} else if (withDetail && !gpu && (rebuild || !n->meshDetailed) && jobs.size() < maxJobs) {
 			jobs.push_back ({ n, src });
 		} else if (rebuild) {
 			auto t0 = std::chrono::steady_clock::now ();
@@ -914,7 +995,116 @@ void PlanetSurface::Prepare ()
 			meshCount++;
 		}
 	}
-	if (!jobs.empty()) {
+	if (!jobs.empty() && gpu) {
+		// the inputs per grid point (worker threads), then one dispatch
+		oapiSurfaceDetail (hPlanet, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0);
+		auto t0 = std::chrono::steady_clock::now();
+		std::vector<GpuJob> gj (jobs.size());
+		std::vector<std::vector<float>> pts (jobs.size());
+		std::vector<MeshData> md (jobs.size());
+		std::atomic<size_t> next{ 0 };
+		auto work = [&]() {
+			for (size_t i; (i = next++) < jobs.size(); )
+				PrepareGpuMesh (jobs[i].first, jobs[i].second, gj[i], pts[i], md[i]);
+		};
+		std::vector<std::thread> pool;
+		for (unsigned t = 1; t < nThreads && t < jobs.size(); t++) pool.emplace_back (work);
+		work ();
+		for (auto &t : pool) t.join ();
+		size_t nf = 0;
+		for (auto &p : pts) nf += p.size();
+		vkc::Context::Transient tp = ctx->AllocTransient (nf * sizeof(float));
+		vkc::Context::Transient tj = ctx->AllocTransient (jobs.size() * sizeof(GpuJob) + 32);
+		VkDeviceAddress pa = ctx->BufferAddress (tp.buffer) + tp.offset;
+		VkDeviceAddress ja = ctx->BufferAddress (tj.buffer) + tj.offset;
+		size_t jalign = (size_t)((32 - (ja & 31)) & 31); // (the records' doubles: 32-byte aligned)
+		ja += jalign;
+		size_t at = 0;
+		for (size_t i = 0; i < jobs.size(); i++) {
+			Node *n = jobs[i].first;
+			EnsureVertexBuffer (n);
+			memcpy ((float*)tp.ptr + at, pts[i].data(), pts[i].size() * sizeof(float));
+			gj[i].ptsAddr = pa + at * sizeof(float);
+			gj[i].outAddr = ctx->BufferAddress (n->vbuf.buffer);
+			at += pts[i].size();
+			n->detailSpacing = md[i].detailSpacing, n->detailLmesh = md[i].detailLmesh;
+			n->nVtx = (uint32_t)((TileRenderer::GRID + 1) * (TileRenderer::GRID + 1) + 4 * (TileRenderer::GRID + 1));
+			n->rtVersion++;
+			n->meshElevLvl = md[i].elevLvl;
+			n->meshDetailed = true;
+		}
+		memcpy ((uint8_t*)tj.ptr + jalign, gj.data(), gj.size() * sizeof(GpuJob));
+		// (ORBITER_VK_MESH_CHECK: the first meshes also made at once into
+		// host memory and compared with the CPU's)
+		static const bool check = getenv ("ORBITER_VK_MESH_CHECK") && atoi (getenv ("ORBITER_VK_MESH_CHECK"));
+		static int nChecked = 0;
+		for (size_t i = 0; check && i < jobs.size() && nChecked < 24; i++) {
+			if (jobs[i].first->lvl < 14 && nChecked % 3) continue;
+			nChecked++;
+			const int V = TileRenderer::GRID + 1, NV = V * V + 4 * V;
+			vkc::Buffer hb = ctx->CreateBuffer ((VkDeviceSize)NV * 13 * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
+			vkc::Context::Transient t1 = ctx->AllocTransient (sizeof(GpuJob) + 32);
+			VkDeviceAddress a1 = ctx->BufferAddress (t1.buffer) + t1.offset;
+			size_t al = (size_t)((32 - (a1 & 31)) & 31);
+			GpuJob one = gj[i];
+			one.outAddr = ctx->BufferAddress (hb.buffer);
+			memcpy ((uint8_t*)t1.ptr + al, &one, sizeof(one));
+			ctx->ImmediateSubmit ([&](VkCommandBuffer c) {
+				vkCmdBindPipeline (c, VK_PIPELINE_BIND_POINT_COMPUTE, tr->MeshPipeline ());
+				struct { uint64_t jobs, pad; float prm[4]; float prm2[4]; double R; double pad2; } q{};
+				q.jobs = a1 + al;
+				q.prm[0] = (float)detailPrm.hurst, q.prm[1] = (float)detailPrm.ridge;
+				q.prm[2] = (float)detailPrm.craters, q.prm[3] = (float)detailPrm.craterDepth;
+				q.prm2[0] = (float)detailPrm.pebbles;
+				q.R = radius;
+				vkCmdPushConstants (c, tr->MeshLayout (), VK_SHADER_STAGE_COMPUTE_BIT, 0, 64, &q);
+				vkCmdDispatch (c, 1, 1, 1);
+			});
+			MeshData cpu;
+			ComputeMesh (jobs[i].first, jobs[i].second, true, cpu);
+			const float *g = (const float*)hb.mapped;
+			double dp = 0.0, dn = 0.0, dt = 0.0, da = 0.0, relief = 0.0;
+			for (int k = 0; k < NV; k++) {
+				const NTVERTEX &v = cpu.vtx[k];
+				const float *w = g + 8 * k;
+				dp = std::max (dp, (double)std::max ({ std::fabs (v.x - w[0]), std::fabs (v.y - w[1]), std::fabs (v.z - w[2]) }));
+				dn = std::max (dn, (double)std::max ({ std::fabs (v.nx - w[3]), std::fabs (v.ny - w[4]), std::fabs (v.nz - w[5]) }));
+				const float *e = g + 8 * NV + 5 * k, *c = &cpu.amp[5 * k];
+				da = std::max (da, (double)std::max (std::fabs (e[0] - c[0]), std::fabs (e[1] - c[1])));
+				dt = std::max (dt, (double)std::max ({ std::fabs (e[2] - c[2]), std::fabs (e[3] - c[3]), std::fabs (e[4] - c[4]) }));
+			}
+			oapiWriteLogV ("VulkanClient: mesh check level %d: position %.4f m, normal %.5f, morph target %.4f m, detail stream %.5f",
+				jobs[i].first->lvl, dp, dn, dt, da);
+			ctx->DestroyBuffer (hb);
+		}
+		VkCommandBuffer cmd = ctx->Cmd ();
+		ctx->EndTarget ();
+		VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+		mb.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; // (earlier draws read the buffers: write after read)
+		mb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+		mb.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+		VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+		dep.memoryBarrierCount = 1;
+		dep.pMemoryBarriers = &mb;
+		vkCmdPipelineBarrier2 (cmd, &dep);
+		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, tr->MeshPipeline ());
+		struct { uint64_t jobs, pad; float prm[4]; float prm2[4]; double R; double pad2; } pc{};
+		pc.jobs = ja;
+		pc.prm[0] = (float)detailPrm.hurst, pc.prm[1] = (float)detailPrm.ridge;
+		pc.prm[2] = (float)detailPrm.craters, pc.prm[3] = (float)detailPrm.craterDepth;
+		pc.prm2[0] = (float)detailPrm.pebbles;
+		pc.R = radius;
+		vkCmdPushConstants (cmd, tr->MeshLayout (), VK_SHADER_STAGE_COMPUTE_BIT, 0, 64, &pc);
+		vkCmdDispatch (cmd, (uint32_t)jobs.size(), 1, 1);
+		mb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+		mb.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+		mb.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+		mb.dstAccessMask = VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_SHADER_READ_BIT |
+			(ctx->rayTracing ? VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR : 0);
+		vkCmdPipelineBarrier2 (cmd, &dep);
+		meshTime += std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ();
+		meshCount += (int)jobs.size();
+	} else if (!jobs.empty()) {
 		// (the core's terrain detail initialises itself on first use: here)
 		oapiSurfaceDetail (hPlanet, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0);
 		std::vector<MeshData> out (jobs.size());

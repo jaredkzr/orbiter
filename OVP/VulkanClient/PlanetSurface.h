@@ -78,7 +78,7 @@ private:
 /// Shared GPU resources for rendering tiles (owned by the scene)
 class TileRenderer {
 public:
-	static constexpr int GRID = 32; // quads per tile edge
+	static constexpr int GRID = 64; // quads per tile edge (tile_mesh.comp's G)
 
 	bool Init (vkc::Context *ctx, TextureManager *texmgr, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout);
 	void Shutdown ();
@@ -87,6 +87,10 @@ public:
 	VkPipeline CloudPipeline () const { return cloudPipeline; }
 	VkPipeline DepthPipeline () const { return depthPipeline; }
 	VkPipelineLayout Layout () const { return layout; }
+	/// tile meshes with the terrain detail made on the GPU (tile_mesh.comp;
+	/// null without double precision or buffer device addresses)
+	VkPipeline MeshPipeline () const { return meshPipe; }
+	VkPipelineLayout MeshLayout () const { return meshLayout; }
 	VkBuffer IndexBuffer () const { return ibuf.buffer; }
 	uint32_t IndexCount () const { return nIdx; }
 	/// indices of the tile grid without the skirts (which come last)
@@ -98,6 +102,8 @@ private:
 	VkPipeline pipeline = VK_NULL_HANDLE;
 	VkPipeline cloudPipeline = VK_NULL_HANDLE;
 	VkPipeline depthPipeline = VK_NULL_HANDLE; // ambient occlusion prepass
+	VkPipeline meshPipe = VK_NULL_HANDLE;
+	VkPipelineLayout meshLayout = VK_NULL_HANDLE;
 	vkc::Buffer ibuf;
 	uint32_t nIdx = 0;
 	std::unique_ptr<TileLoader> loader;
@@ -176,6 +182,17 @@ private:
 	};
 	void ComputeMesh (const Node *n, const Node *src, bool detailed, MeshData &md) const;
 	void ApplyMesh (Node *n, MeshData &md);
+	/// a mesh made on the GPU (tile_mesh.comp): its record (as the shader's
+	/// Job) and the inputs per grid point, made on the CPU
+	struct GpuJob {
+		double centre[4], geo[4];
+		uint64_t outAddr, ptsAddr;
+		float sp[4], misc[4];
+		float pad[4];
+	};
+	void PrepareGpuMesh (const Node *n, const Node *src, GpuJob &job, std::vector<float> &pts, MeshData &md) const;
+	/// the vertex buffer of a tile (made if needed)
+	void EnsureVertexBuffer (Node *n);
 	void DrawNode (Node *n, bool prepass = false);
 	void BindVertices (const Node *n);
 

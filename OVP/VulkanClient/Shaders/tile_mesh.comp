@@ -1,0 +1,163 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Tile meshes with the procedural terrain detail (PlanetSurface: as its
+// ComputeMesh does on the CPU). One workgroup per tile: the elevation of
+// the data, the detail's amplitude and fade come per grid point from the
+// CPU (cheap); here the detail's height (DetHeight, the core's function),
+// the positions, normals, skirts, the parent's shape for the morph, and
+// the per-vertex detail stream, written into the tile's vertex buffer.
+
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+
+#include "detailcore.glsl"
+
+layout(local_size_x = 256) in;
+
+const int G = 64, V = G + 1, W = G + 3, M = G / 2 + 1; // (G: TileRenderer::GRID)
+const int NV = V * V + 4 * V; // vertices: grid, then the skirts
+const int NE = 5;             // per-vertex detail stream: amplitude, fade, morph target
+
+struct Job {
+	dvec4 centre;   // tile centre, planet frame [m]
+	dvec4 geo;      // lat of the top row, lng of the left column, row and column steps [rad]
+	uvec2 outAddr;  // vertex buffer: NV vertices (8 floats), then NV detail records (NE floats)
+	uvec2 ptsAddr;  // per point: data elevation, amplitude, fade (W*W, then the parent's M*M)
+	vec4 sp;        // lmin, the parent's lmin, data spacing, the parent's data spacing [m]
+	vec4 misc;      // skirt depth [m], parent (1/0)
+};
+layout(buffer_reference, std430, buffer_reference_align = 32) readonly buffer Jobs { Job job[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Floats { float f[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) coherent buffer OutFloats { float f[]; };
+
+layout(push_constant) uniform Params {
+	uvec2 jobs;
+	uvec2 pad;
+	vec4 prm;      // hurst, ridge, crater cells, crater depth
+	vec4 prm2;     // pebble cells
+	double R;      // planet radius [m]
+} pc;
+
+shared vec3 P[W * W]; // positions relative to the tile centre
+// (the morph targets go through the output: the detail stream's records)
+
+// sine and cosine in double precision (series; |x| <= pi)
+double DSin (double x)
+{
+	double x2 = x * x, t = x, s = x;
+	for (int n = 1; n <= 14; n++) { t *= -x2 / double ((2 * n) * (2 * n + 1)); s += t; }
+	return s;
+}
+double DCos (double x)
+{
+	double x2 = x * x, t = 1.0, s = 1.0;
+	for (int n = 1; n <= 14; n++) { t *= -x2 / double ((2 * n - 1) * (2 * n)); s += t; }
+	return s;
+}
+const double DPI05 = 1.5707963267948966LF;
+dvec3 Dir (double lat, double lng)
+{
+	double cl = DCos (lat);
+	return dvec3 (cl * DCos (lng), DSin (lat), cl * DSin (lng));
+}
+
+// a morph target, in the vertex's detail record
+void SetT (OutFloats o, int idx, vec3 t)
+{
+	uint e = uint (NV * 8 + idx * NE);
+	o.f[e + 2] = t.x, o.f[e + 3] = t.y, o.f[e + 4] = t.z;
+}
+vec3 GetT (OutFloats o, int idx)
+{
+	uint e = uint (NV * 8 + idx * NE);
+	return vec3 (o.f[e + 2], o.f[e + 3], o.f[e + 4]);
+}
+
+void main ()
+{
+	Job jb = Jobs (pc.jobs).job[gl_WorkGroupID.x];
+	Floats pts = Floats (jb.ptsAddr);
+	OutFloats o = OutFloats (jb.outAddr);
+	uint tid = gl_LocalInvocationID.x;
+	double latmax = jb.geo.x, lngmin = jb.geo.y, dlat = jb.geo.z, dlng = jb.geo.w;
+	dvec3 C = jb.centre.xyz;
+	bool parent = jb.misc.y > 0.5;
+
+	// the grid with a border of one node
+	for (uint k = tid; k < uint (W * W); k += 256u) {
+		int i = int (k) / W, j = int (k) % W;
+		double lat = clamp (latmax - double (i - 1) * dlat, -DPI05, DPI05);
+		double lng = lngmin + double (j - 1) * dlng;
+		dvec3 d = Dir (lat, lng);
+		float h0 = pts.f[3 * k], A = pts.f[3 * k + 1], f = pts.f[3 * k + 2];
+		float h = h0 + DetHeight (d, pc.R, A, f, jb.sp.z, jb.sp.x, pc.prm, pc.prm2.x);
+		P[k] = vec3 (d * (pc.R + double (h)) - C);
+	}
+	// the parent's shape at its nodes (every second one)
+	if (parent) {
+		for (uint k = tid; k < uint (M * M); k += 256u) {
+			int i = 2 * (int (k) / M), j = 2 * (int (k) % M);
+			double lat = clamp (latmax - double (i) * dlat, -DPI05, DPI05);
+			double lng = lngmin + double (j) * dlng;
+			dvec3 d = Dir (lat, lng);
+			uint q = uint (W * W) + k;
+			float h0 = pts.f[3 * q], A = pts.f[3 * q + 1], f = pts.f[3 * q + 2];
+			float h = h0 + DetHeight (d, pc.R, A, f, jb.sp.w, jb.sp.y, pc.prm, pc.prm2.x);
+			SetT (o, i * V + j, vec3 (d * (pc.R + double (h)) - C));
+		}
+	}
+	memoryBarrierBuffer ();
+	barrier ();
+	// the vertices between the parent's: on its triangles' edges (its quads
+	// split from top right to bottom left); without a parent: the tile's own
+	for (uint k = tid; k < uint (V * V); k += 256u) {
+		int i = int (k) / V, j = int (k) % V;
+		if (!parent) { SetT (o, int (k), P[(i + 1) * W + (j + 1)]); continue; }
+		if (!((i & 1) != 0) && !((j & 1) != 0)) continue;
+		if ((i & 1) != 0 && (j & 1) != 0) SetT (o, int (k), (GetT (o, (i - 1) * V + j + 1) + GetT (o, (i + 1) * V + j - 1)) * 0.5);
+		else if ((i & 1) != 0)            SetT (o, int (k), (GetT (o, (i - 1) * V + j) + GetT (o, (i + 1) * V + j)) * 0.5);
+		else                              SetT (o, int (k), (GetT (o, i * V + j - 1) + GetT (o, i * V + j + 1)) * 0.5);
+	}
+	memoryBarrierBuffer ();
+	barrier ();
+
+	// vertices (NTVERTEX: position, normal, texture coordinates) and the
+	// detail stream; the skirts hang below the edges
+	float depth = jb.misc.x;
+	uint ampBase = uint (NV * 8);
+	for (uint k = tid; k < uint (V * V); k += 256u) {
+		int i = int (k) / V, j = int (k) % V;
+		vec3 p = P[(i + 1) * W + (j + 1)];
+		vec3 nm = cross (P[(i + 2) * W + (j + 1)] - P[i * W + (j + 1)], P[(i + 1) * W + (j + 2)] - P[(i + 1) * W + j]);
+		double lat = clamp (latmax - double (i) * dlat, -DPI05, DPI05);
+		vec3 d = vec3 (Dir (lat, lngmin + double (j) * dlng));
+		float len = length (nm);
+		nm = len > 1e-9 && abs (lat) < DPI05 - 1e-9 ? nm / len : d; // (at a pole the neighbours collapse: the vertical)
+		if (dot (nm, d) < 0.0) nm = -nm;
+		uint pk = uint ((i + 1) * W + (j + 1));
+		float A = pts.f[3 * pk + 1], f = pts.f[3 * pk + 2];
+		vec3 t = GetT (o, int (k));
+		// (the vertex, and its skirt copies on the edges)
+		for (int s = 0; s < 5; s++) {
+			int idx = -1;
+			if (s == 0) idx = int (k);
+			else if (s == 1 && i == 0) idx = V * V + j;
+			else if (s == 2 && i == G) idx = V * V + V + j;
+			else if (s == 3 && j == 0) idx = V * V + 2 * V + i;
+			else if (s == 4 && j == G) idx = V * V + 3 * V + i;
+			if (idx < 0) continue;
+			vec3 off = s == 0 ? vec3 (0.0) : d * depth;
+			vec3 pp = p - off, tt = t - off;
+			uint b = uint (idx) * 8u;
+			o.f[b] = pp.x, o.f[b + 1] = pp.y, o.f[b + 2] = pp.z;
+			o.f[b + 3] = nm.x, o.f[b + 4] = nm.y, o.f[b + 5] = nm.z;
+			o.f[b + 6] = float (j) / float (G), o.f[b + 7] = float (i) / float (G);
+			uint e = ampBase + uint (idx) * uint (NE);
+			o.f[e] = A, o.f[e + 1] = f;
+			o.f[e + 2] = tt.x, o.f[e + 3] = tt.y, o.f[e + 4] = tt.z;
+		}
+	}
+}

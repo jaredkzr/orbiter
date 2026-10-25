@@ -306,6 +306,7 @@ Planet::Planet (char *fname)
 		GetItemReal (ifs, "TerrainDetailCraters", o.craters);
 		GetItemReal (ifs, "TerrainDetailCraterDepth", o.craterDepth);
 		GetItemReal (ifs, "TerrainDetailCraterFresh", o.craterFresh);
+		GetItemReal (ifs, "TerrainDetailPebbles", o.pebbles);
 		int lvl;
 		if (GetItemInt (ifs, "TerrainDetailLevel", lvl)) o.level = lvl;
 		detail_on = g_pOrbiter->Cfg()->CfgVisualPrm.bTerrainDetail && !(o.gain == 0.0);

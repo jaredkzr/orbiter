@@ -4259,6 +4259,7 @@ struct SURFDETAILPARAM {
 	double craters;      ///< share of crater cells (0: none)
 	double craterDepth;  ///< crater depth scale
 	double craterFresh;  ///< share of fresh craters
+	double pebbles;      ///< pebble and clod cells per lattice cell (0: none)
 	double flatSpacing;  ///< node spacing to use where there is no elevation data [m] (elevation 0, relief 0)
 };
 

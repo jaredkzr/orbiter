@@ -170,6 +170,7 @@ namespace vkc {
 		/// leaves them off
 		bool rayTracing = false;
 		bool shaderFloat64 = false; // double precision in shaders (terrain detail)
+		bool deviceAddress = false; // buffer device addresses (ray tracing, tile meshes made on the GPU)
 		struct RTFunctions {
 			PFN_vkCreateAccelerationStructureKHR createAS = nullptr;
 			PFN_vkDestroyAccelerationStructureKHR destroyAS = nullptr;

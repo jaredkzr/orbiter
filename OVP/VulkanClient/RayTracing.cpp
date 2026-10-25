@@ -387,12 +387,21 @@ void RTScene::Build ()
 			for (size_t k = 0; k < ranges[i].size(); k++) ranges[i][k] = { builds[i].nPrim[k], 0, 0, 0 };
 			pr[i] = ranges[i].data();
 		}
-		vkc::Buffer scratch = ctx->CreateBuffer (total + scratchAlign, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
-		VkDeviceAddress sa = (ctx->BufferAddress (scratch.buffer) + scratchAlign - 1) / scratchAlign * scratchAlign;
-		for (size_t i = 0; i < builds.size(); i++) infos[i].scratchData.deviceAddress = sa + ofs[i];
-		ctx->rt.cmdBuild (cmd, (uint32_t)infos.size(), infos.data(), pr.data());
+		// (in batches of at most 256 MB of scratch memory: many new tiles at
+		// once must not need an allocation over the device's limit)
+		const VkDeviceSize MAX_SCRATCH = 256ull << 20;
 		vkc::Context *c = ctx;
-		ctx->DeferDestroy ([c, scratch]() mutable { c->DestroyBuffer (scratch); });
+		for (size_t b0 = 0; b0 < builds.size(); ) {
+			size_t b1 = b0 + 1;
+			while (b1 < builds.size() && ofs[b1] + ((b1 + 1 < builds.size() ? ofs[b1 + 1] : total) - ofs[b1]) - ofs[b0] <= MAX_SCRATCH) b1++;
+			VkDeviceSize size = (b1 < builds.size() ? ofs[b1] : total) - ofs[b0];
+			vkc::Buffer scratch = ctx->CreateBuffer (size + scratchAlign, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
+			VkDeviceAddress sa = (ctx->BufferAddress (scratch.buffer) + scratchAlign - 1) / scratchAlign * scratchAlign;
+			for (size_t i = b0; i < b1; i++) infos[i].scratchData.deviceAddress = sa + ofs[i] - ofs[b0];
+			ctx->rt.cmdBuild (cmd, (uint32_t)(b1 - b0), infos.data() + b0, pr.data() + b0);
+			ctx->DeferDestroy ([c, scratch]() mutable { c->DestroyBuffer (scratch); });
+			b0 = b1;
+		}
 		builds.clear ();
 		mb.srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
 		mb.srcAccessMask = VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;

@@ -154,6 +154,16 @@ void main()
 	float sunRefl = int(atm.detail.x + 0.5) == DETAIL_AIRLESS && tile.params.z < 0.5
 		? RegolithReflectance(N, L, normalize(-vPosView), Ng) : max(ndl, 0.0);
 	vec3 col = base * (frame.ambient.rgb * ao * ambNight + (frame.sunColor.rgb * sunT * sunRefl + LocalLighting(vPosView, N, lv)) * aoDirect);
+	// sunlight bounced by the ground around onto faces tilted away from the
+	// vertical (the shaded sides of stones and crater walls): a sunlit
+	// Lambertian half-space of the local albedo gives the irradiance
+	// albedo * E_sun * (1 - cos tilt) / 2
+	if (tile.params.z < 0.5) {
+		vec3 upV = normalize(transpose(mat3(atm.viewToPlanet)) * normalize(mat3(atm.viewToPlanet) * vPosView + atm.camPos.xyz));
+		float sunUp = max(dot(L, upV), 0.0);
+		float tiltF = 0.5 * (1.0 - clamp(dot(N, upV), -1.0, 1.0));
+		col += base * base * frame.sunColor.rgb * (sunUp * tiltF * ao) * (hasAtm ? SunTransmittance(pPlanet) : vec3(1.0)) * tile.morph.z;
+	}
 
 	if (tile.params.z > 0.5) { // cloud layer: lit from above, also seen from below
 		float a = texture(surfTex, clamp(vUV * tile.surfUV.zw + tile.surfUV.xy, hs, 1.0 - hs)).a;

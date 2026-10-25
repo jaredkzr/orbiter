@@ -29,9 +29,11 @@
 //   TerrainDetailCraters      crater cells per lattice cell (0: none; up to 4)
 //   TerrainDetailCraterDepth  depth scale (1: depth a fifth of the diameter)
 //   TerrainDetailCraterFresh  share of fresh craters (bright ejecta)
+//   TerrainDetailPebbles      pebble and clod cells per lattice cell (0: none;
+//                             up to 4): mounds of 2.5 to 12 cm radius
 //   TerrainDetailLevel        finest mesh level of the detail (default: about
-//                             0.15 m node spacing: craters of a metre and
-//                             more deform the ground)
+//                             2 cm node spacing: craters and pebbles are
+//                             relief close up)
 // =======================================================================
 
 #ifndef __TERRAINDETAIL_H
@@ -48,11 +50,12 @@ public:
 		double gain = 0.35, hurst = 1.0, ridge = 1.0, floor = 0.0;
 		bool sea = false;
 		double craters = 0.0, craterDepth = 1.0, craterFresh = 0.3;
+		double pebbles = 0.0; // pebble and clod cells per lattice cell (0: none; up to 4)
 		int level = 0;   // 0: default
 	};
 	/// Values set in a planet's configuration (NaN: not set)
 	struct Overrides {
-		double gain, hurst, ridge, floor, sea, craters, craterDepth, craterFresh, level;
+		double gain, hurst, ridge, floor, sea, craters, craterDepth, craterFresh, pebbles, level;
 		Overrides ();
 		void Apply (Params &p) const;
 	};

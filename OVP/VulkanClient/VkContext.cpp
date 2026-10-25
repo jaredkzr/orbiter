@@ -209,6 +209,9 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 	f2.features.shaderInt16 = deviceFeatures.shaderInt16;
 	f2.features.shaderFloat64 = deviceFeatures.shaderFloat64;
 	shaderFloat64 = deviceFeatures.shaderFloat64;
+	// (buffer device addresses also without ray tracing: tile meshes)
+	deviceAddress = s12.bufferDeviceAddress;
+	if (deviceAddress) f12.bufferDeviceAddress = VK_TRUE;
 	f2.features.independentBlend = deviceFeatures.independentBlend; // (colour and reactive mask of plumes and particles)
 
 	std::vector<const char*> devExt;
@@ -244,7 +247,7 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 	aci.physicalDevice = physicalDevice;
 	aci.device = device;
 	aci.instance = instance;
-	if (rayTracing) aci.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+	if (rayTracing || deviceAddress) aci.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
 	VK_CHECK(vmaCreateAllocator (&aci, &allocator));
 
 	// Per-frame resources
@@ -987,7 +990,8 @@ Context::Transient Context::AllocTransient (VkDeviceSize size)
 		}
 		f.transient.push_back (CreateBuffer (std::max (CHUNK, size),
 			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
-			VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true));
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+			(deviceAddress ? VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT : 0), true));
 	}
 }
 

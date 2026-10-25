@@ -97,6 +97,7 @@ namespace {
 	                                  // ones span six node spacings of a mesh whose lmin is four)
 
 	inline double Unit16 (uint32_t h) { return (h & 0xffffu) / 65535.0; }
+	constexpr double PEBBLE_G = 0.4;  // resolution a pebble needs / cell size
 
 	// One layer of craters (cells of size s = 2^k m): at most one crater per
 	// cell, inside it with its rim (radius 0.08 to 0.22 cell sizes, the
@@ -163,6 +164,38 @@ namespace {
 		return rim * (1.0 - t * t) * (1.0 - t * t);
 	}
 
+	// One layer of pebbles and clods (cells of size s = 2^k m): at most one
+	// per cell, an angular stone: its outline a polygon (five edges at
+	// random), a bevelled flat top, tilted (radius 0.12 to 0.24 cell sizes,
+	// height 0.25 to 0.55 times it). Fewer of the larger ones. Height [m].
+	double PebbleLayer (const Vector &d, int k, int layer, double R, double density)
+	{
+		int m = k - JMIN + 64 + 29 * layer;
+		double s = std::ldexp (1.0, k);
+		Vector q = LatticePoint (m, d, R / s);
+		double fx = std::floor (q.x), fy = std::floor (q.y), fz = std::floor (q.z);
+		uint32_t h0 = Hash ((int32_t)fx, (int32_t)fy, (int32_t)fz, 3000u + (uint32_t)m);
+		if (Unit16 (h0) >= density * (k == -1 ? 0.4 : k == -2 ? 0.7 : 1.0)) return 0.0;
+		uint32_t h1 = Pcg (h0), h2 = Pcg (h1), h3 = Pcg (h2), h4 = Pcg (h3);
+		double r = 0.12 + 0.12 * Unit16 (h4), hgt = 0.25 + 0.3 * Unit16 (h4 >> 16);
+		double ext = 1.05 * r;
+		Vector c (ext + (1.0 - 2.0 * ext) * Unit16 (h1), ext + (1.0 - 2.0 * ext) * Unit16 (h2), ext + (1.0 - 2.0 * ext) * Unit16 (h3));
+		Vector v (q.x - fx - c.x, q.y - fy - c.y, q.z - fz - c.z);
+		if (v.length() >= ext) return 0.0;
+		// the outline: the largest of five edge distances (a polygon)
+		double x = 0.0;
+		uint32_t he = h4;
+		for (int e = 0; e < 5; e++) {
+			he = Pcg (he ^ 0x51ed27u);
+			x = std::max (x, dotp (v, UnitFromHash (he)) / (r * (0.75 + 0.25 * Unit16 (he >> 16))));
+		}
+		if (x >= 1.0) return 0.0;
+		// a bevelled top (sides over the outer 60%), tilted
+		double top = std::min (1.0, (1.0 - x) / 0.6);
+		double tilt = 1.0 + 0.5 * dotp (v, UnitFromHash (Pcg (h3 ^ 0x2545f491u))) / r;
+		return hgt * r * s * top * std::max (tilt, 0.3);
+	}
+
 	double CraterLayer (const Vector &d, int k, int layer, double R, double density, double depth)
 	{
 		int m = k - JMIN + 32 + 29 * layer;
@@ -188,7 +221,7 @@ bool TerrainDetail::clientSupport = false;
 
 TerrainDetail::Overrides::Overrides ()
 {
-	gain = hurst = ridge = floor = sea = craters = craterDepth = craterFresh = level = std::nan ("");
+	gain = hurst = ridge = floor = sea = craters = craterDepth = craterFresh = pebbles = level = std::nan ("");
 }
 
 void TerrainDetail::Overrides::Apply (Params &p) const
@@ -201,6 +234,7 @@ void TerrainDetail::Overrides::Apply (Params &p) const
 	if (!std::isnan (craters)) p.craters = std::clamp (craters, 0.0, 4.0);
 	if (!std::isnan (craterDepth)) p.craterDepth = std::max (0.0, craterDepth);
 	if (!std::isnan (craterFresh)) p.craterFresh = std::clamp (craterFresh, 0.0, 1.0);
+	if (!std::isnan (pebbles)) p.pebbles = std::clamp (pebbles, 0.0, 4.0);
 	if (!std::isnan (level)) p.level = (int)level;
 }
 
@@ -215,6 +249,7 @@ TerrainDetail::Params TerrainDetail::Defaults (const Planet *planet)
 		// wind-worn relief, old and shallow craters
 		p.gain = 0.4, p.ridge = 0.7, p.floor = 0.04;
 		p.craters = 0.8, p.craterDepth = 0.5, p.craterFresh = 0.03;
+		p.pebbles = 2.0; // (the rover images: pebbles and float everywhere)
 	} else if (!strcmp (name, "Venus")) {
 		// volcanic plains; its atmosphere stops small impactors: no small craters
 		p.gain = 0.4, p.ridge = 0.6, p.floor = 0.03;
@@ -255,6 +290,7 @@ TerrainDetail::Params TerrainDetail::Defaults (const Planet *planet)
 		// Rosenburg 2011, met with the craters)
 		p.gain = 0.3, p.ridge = 0.3, p.floor = 0.05, p.hurst = 1.2;
 		p.craters = 4.0, p.craterDepth = 1.0, p.craterFresh = 0.25;
+		p.pebbles = 1.2; // (clods and fragments in the regolith)
 	} else {
 		p.gain = 0.35, p.ridge = 1.0, p.floor = 0.02;
 	}
@@ -268,8 +304,8 @@ TerrainDetail::TerrainDetail (const Planet *pl, const Params &p): planet (pl), p
 	// quads per edge; by default nodes about 1.2 m apart, at least the
 	// planet's own resolution limit
 	if (prm.level <= 0)
-		prm.level = (int)std::lround (4.0 + std::log2 (radius * Pi / (32.0 * 0.15)));
-	prm.level = std::clamp (prm.level, (int)pl->MaxPatchLevel(), 26);
+		prm.level = (int)std::lround (4.0 + std::log2 (radius * Pi / (32.0 * 0.02)));
+	prm.level = std::clamp (prm.level, (int)pl->MaxPatchLevel(), 28);
 	double s = radius * Pi / std::ldexp (1.0, prm.level - 4) / 32.0;
 	// (planets without elevation data: the spacing of the coarsest tile
 	// level with nodes 2 km apart at most)
@@ -349,6 +385,18 @@ double TerrainDetail::Height (double lat, double lng, double elev, double spacin
 			int nl = (int)std::ceil (prm.craters);
 			for (int l = 0; l < nl; l++)
 				h += w * f * CraterLayer (dir, k, l, radius, prm.craters / nl, prm.craterDepth);
+		}
+	}
+	// pebbles and clods (only where the mesh resolves them: PEBBLE_G)
+	if (prm.pebbles > 0.0) {
+		int nl = (int)std::ceil (prm.pebbles);
+		for (int k = -1; k >= -4; k--) {
+			double s = std::ldexp (1.0, k), lg = PEBBLE_G * s;
+			if (lg < 0.5 * lmin) break;
+			double w = SmoothStep (0.5 * lmin, lmin, lg) * SmoothStep (0.5, 1.5, std::log2 (spacing / s));
+			if (w <= 0.0) continue;
+			for (int l = 0; l < nl; l++)
+				h += w * f * PebbleLayer (dir, k, l, radius, prm.pebbles / nl);
 		}
 	}
 	return h;

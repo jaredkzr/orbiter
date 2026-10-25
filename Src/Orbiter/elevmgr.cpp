@@ -39,6 +39,12 @@ struct ELEVFILEHEADER { // file header for patch elevation data file
 #pragma pack(pop)
 
 namespace {
+	// The surface vessels touch: the terrain detail down to wavelengths of
+	// about wheel and footpad size (the meshes show the pebbles and smallest
+	// craters below it; a wheel rolls over them, a single contact point per
+	// wheel would feel each one as a step)
+	constexpr double PHYSICS_LMIN = 0.3;
+
 	// Elevation tiles may mark nodes without data with -32768 (Vesta: its
 	// unmapped north): filled from their neighbours, pass by pass (the
 	// average of the known ones, rounded), the same in graphics clients
@@ -369,12 +375,12 @@ double ElevationManager::Elevation (double lat, double lng, int reqlvl, std::vec
 		const TerrainDetail *det = Detail ();
 		if (!det) return 0.0;
 		double sp = det->FlatSpacing ();
-		dh = det->Height (lat, lng, 0.0, sp, 0.0);
+		dh = det->Height (lat, lng, 0.0, sp, 0.0, PHYSICS_LMIN);
 		if (normal && dh != 0.0) {
 			double d = 0.25 * det->LambdaMin(), R = cbody->Size();
 			double dlat = d / R, dlng = d / (R * max (cos (lat), 1e-6));
-			double sx = (det->Height (lat, lng + dlng, 0.0, sp, 0.0) - det->Height (lat, lng - dlng, 0.0, sp, 0.0)) / (2.0 * d);
-			double sz = (det->Height (lat + dlat, lng, 0.0, sp, 0.0) - det->Height (lat - dlat, lng, 0.0, sp, 0.0)) / (2.0 * d);
+			double sx = (det->Height (lat, lng + dlng, 0.0, sp, 0.0, PHYSICS_LMIN) - det->Height (lat, lng - dlng, 0.0, sp, 0.0, PHYSICS_LMIN)) / (2.0 * d);
+			double sz = (det->Height (lat + dlat, lng, 0.0, sp, 0.0, PHYSICS_LMIN) - det->Height (lat - dlat, lng, 0.0, sp, 0.0, PHYSICS_LMIN)) / (2.0 * d);
 			*normal = Vector (-sx, 1.0, -sz).unit();
 		}
 		return dh;
@@ -562,13 +568,13 @@ double ElevationManager::Elevation (double lat, double lng, int reqlvl, std::vec
 				double spacing = cbody->Size() * (t->latmax - t->latmin) / elev_grid;
 				double relief = TerrainDetail::Relief (elev_base + la*elev_stride + ln, elev_stride, elev_res, latidx - la, lngidx - ln);
 				double e0 = e * elev_res;
-				dh = det->Height (lat, lng, e0, spacing, relief);
+				dh = det->Height (lat, lng, e0, spacing, relief, PHYSICS_LMIN);
 				if (normal && dh != 0.0) {
 					// slopes of the detail by central differences
 					double d = 0.25 * det->LambdaMin(), R = cbody->Size();
 					double dlat = d / R, dlng = d / (R * max (cos (lat), 1e-6));
-					double sx = (det->Height (lat, lng + dlng, e0, spacing, relief) - det->Height (lat, lng - dlng, e0, spacing, relief)) / (2.0 * d);
-					double sz = (det->Height (lat + dlat, lng, e0, spacing, relief) - det->Height (lat - dlat, lng, e0, spacing, relief)) / (2.0 * d);
+					double sx = (det->Height (lat, lng + dlng, e0, spacing, relief, PHYSICS_LMIN) - det->Height (lat, lng - dlng, e0, spacing, relief, PHYSICS_LMIN)) / (2.0 * d);
+					double sz = (det->Height (lat + dlat, lng, e0, spacing, relief, PHYSICS_LMIN) - det->Height (lat - dlat, lng, e0, spacing, relief, PHYSICS_LMIN)) / (2.0 * d);
 					// (normal: x east, y up, z north; its x and z are minus the slopes times y)
 					*normal = Vector (normal->x / normal->y - sx, 1.0, normal->z / normal->y - sz).unit();
 				}

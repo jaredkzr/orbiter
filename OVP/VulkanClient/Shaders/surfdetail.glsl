@@ -87,7 +87,9 @@ float DetailHeight (vec3 p, int type, float footprint, out float albedo)
 			albedo *= mix (1.0, a, v);
 		}
 		float rd = type == DETAIL_MARS ? 0.6 : 0.15;
-		for (int i = 0; i < 3; i++) {
+		// (with the terrain detail, real rocks are the ground scatter's:
+		// these flat ones looked like decals)
+		for (int i = 0; i < 3 && craters; i++) {
 			float s = i == 0 ? 2.0 : i == 1 ? 1.0 : 0.5;
 			float v = VIS (s);
 			if (v <= 0.0) break;
