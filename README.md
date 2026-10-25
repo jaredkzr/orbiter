@@ -22,6 +22,9 @@ Orbiter is now published as an Open Source project under the MIT License (see
 
 D3D9Client graphics engine is licensed under LGPL, see [LGPL](./OVP/D3D9Client/LGPL.txt)
 
+## Linux
+Native Linux builds with the Vulkan graphics client: see [LINUX.md](./LINUX.md).
+
 ## Installation
 Hardware requirements needed by Orbiter:
 |  | Minimum requirements | Recommended requirements |
