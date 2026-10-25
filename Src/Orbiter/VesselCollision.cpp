@@ -44,6 +44,16 @@ void VesselCollider::Begin (const std::vector<VesselBase*> &bodies, double h)
 	// candidates: vessels with hulls, moving or at rest on the ground
 	struct Cand { VesselBase *v; double r; bool dyn; };
 	std::vector<Cand> cand;
+	// (releases of vessels that no longer exist, or are attached, docked)
+	releases.erase (std::remove_if (releases.begin(), releases.end(), [&](const Release &r) {
+		bool fa = false, fb = false;
+		for (VesselBase *v : bodies) {
+			if (v->IsComponent()) continue;
+			if (v == r.a) fa = true;
+			if (v == r.b) fb = true;
+		}
+		return !fa || !fb || r.clear; }), releases.end());
+
 	for (VesselBase *v : bodies) {
 		v->contact_deferred = false;
 		if (v->IsComponent()) continue;
@@ -134,6 +144,12 @@ void VesselCollider::Resolve (double h)
 		bool dynA = index.count (A) > 0, dynB = index.count (B) > 0;
 		Vector cgA (A->s0->pos - O), cgB (B->s0->pos - O);
 
+		// (a payload released from the other: hull pairs overlapping since)
+		Release *rel = nullptr;
+		for (Release &r : releases)
+			if ((r.a == A && r.b == B) || (r.a == B && r.b == A)) rel = &r;
+		bool touching = false;
+
 		// contacts of hull x (of vessel X) with hull y (of vessel Y)
 		convex::Manifold mf;
 		auto Test = [&](VesselBase *X, const collision::HullRef &x, bool dynX, const Vector &cgX,
@@ -142,6 +158,11 @@ void VesselCollider::Resolve (double h)
 			Vector cx (px.pos + mul (x.R, x.hull->centre)), cy (py.pos + mul (y.R, y.hull->centre));
 			if (cx.dist (cy) > x.hull->radius + y.hull->radius + 2.0*collision::SKIN + margin) return;
 			if (!convex::Collide (px, py, margin, mf)) return;
+			if (rel) {
+				// (released from each other: no contacts while any parts touch)
+				for (int k = 0; k < mf.npt; k++) if (mf.sep[k] < collision::SKIN) touching = true;
+				return;
+			}
 			for (int k = 0; k < mf.npt; k++) {
 				const Vector &g = mf.pt[k];        // the point (relative to O)
 				bool skip = false;
@@ -169,6 +190,7 @@ void VesselCollider::Resolve (double h)
 		for (const auto &x : ha)
 			for (const auto &y : hb)
 				Test (A, x, dynA, cgA, B, y, dynB, cgB);
+		if (rel && !touching) rel->clear = true; // (apart: they collide from now on)
 	}
 
 	std::vector<Vector> P, L;
@@ -192,4 +214,20 @@ void VesselCollider::Resolve (double h)
 		if (owner[k] && pts[k].ln > 0.0) owner[k]->WakeFromContact ();
 
 	for (VesselBase *v : dynamic) v->contact_deferred = false;
+}
+
+// ==============================================================
+
+void VesselCollider::Released (VesselBase *parent, VesselBase *payload)
+{
+	if (!parent || !payload || parent == payload) return;
+	Release r;
+	r.a = parent, r.b = payload;
+	releases.push_back (r);
+}
+
+void VesselCollider::Forget (VesselBase *v)
+{
+	releases.erase (std::remove_if (releases.begin(), releases.end(), [v](const Release &r) { return r.a == v || r.b == v; }), releases.end());
+	pairs.clear(), dynamic.clear();
 }

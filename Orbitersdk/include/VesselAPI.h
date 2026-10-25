@@ -568,6 +568,28 @@ public:
 	void SetPMI (const VECTOR3 &pmi) const;
 
 	/**
+	 * \brief Includes the attached payloads (child vessels) in the vessel's
+	 *   dynamics: their mass and their moments of inertia are added to the
+	 *   vessel's.
+	 * \param include true to include them, false to leave them out (the
+	 *   default: payloads are carried without mass, unless the vessel adds
+	 *   it itself, e.g. with SetEmptyMass)
+	 * \note The payloads' moments of inertia are added about the vessel's
+	 *   origin (the centre of mass is not moved). GetMass then includes the
+	 *   payloads; GetPMI and SetPMI refer to the vessel's own moments.
+	 * \note Attaching and detaching payloads conserves momentum: the
+	 *   vessel recoils from a payload released with an ejection velocity.
+	 * \sa AttachChild, DetachChild, AttachedMassIncluded
+	 */
+	void IncludeAttachedMass (bool include) const;
+
+	/**
+	 * \brief Whether the attached payloads are part of the vessel's dynamics.
+	 * \sa IncludeAttachedMass
+	 */
+	bool AttachedMassIncluded () const;
+
+	/**
 	 * \brief Returns the vessel's damping coefficient for gravity field
 	 *   gradient-induced torque.
 	 * \return Torque damping coefficient (>= 0)

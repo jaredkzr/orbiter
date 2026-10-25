@@ -229,6 +229,9 @@ private:
 
 	VesselCollider collider;
 	// Collisions between vessels
+public:
+	inline VesselCollider &Collider () { return collider; }
+private:
 
 	std::vector< oapi::GraphicsClient::LABELLIST> m_labelList; ///< list of celestial markers
 	//oapi::GraphicsClient::LABELLIST *labellist;

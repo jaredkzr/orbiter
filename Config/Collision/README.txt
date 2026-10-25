@@ -29,6 +29,14 @@ A file containing just
 gives the class no hulls: its vessels pass through other vessels, as they
 did before Orbiter had vessel collisions.
 
+Attached payloads (child vessels) collide as part of their parent. A
+payload released from its parent does not collide with it until the two
+are apart (a payload nested in a cradle or bay overlaps parts of it), and
+collides normally after that.
+
+Concave meshes (bays, forks) are split into convex parts automatically;
+the results are cached in Cache/Collision (safe to delete).
+
 Docking: two free docking ports capture each other only within the limits
 set in Orbiter.cfg (defaults shown):
 

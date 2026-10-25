@@ -868,20 +868,17 @@ void Atlantis::SeparateTank ()
 	RecordEvent ("JET", "ET");
 }
 
+// (the payloads' mass is part of the orbiter's dynamics: IncludeAttachedMass)
 void Atlantis::AttachChildWithMass(OBJHANDLE hChild, ATTACHMENTHANDLE attachment, ATTACHMENTHANDLE child_attachment)
 {
 	AttachChild(hChild, attachment, child_attachment);
-	SetEmptyMass(GetEmptyMass() + oapiGetEmptyMass(hChild));
 }
 
 
 void Atlantis::DetachChildWithMass(ATTACHMENTHANDLE attachment, double vel)
 {
-	OBJHANDLE hChild = GetAttachmentStatus(attachment);
-	if (hChild) {
+	if (GetAttachmentStatus(attachment))
 		DetachChild(attachment, vel);
-		SetEmptyMass(GetEmptyMass() - oapiGetEmptyMass(hChild));
-	}
 }
 
 void Atlantis::ToggleGrapple (void)
@@ -1411,6 +1408,7 @@ void Atlantis::clbkSetClassCaps (FILEHANDLE cfg)
 	SetSize (19.6);
 	SetEmptyMass (ORBITER_EMPTY_MASS);
 	SetPMI (_V(78.2,82.1,10.7));
+	IncludeAttachedMass (true); // (payloads in the bay or on the arm)
 	SetGravityGradientDamping (20.0);
 	SetCrossSections (ORBITER_CS);
 	SetRotDrag (_V(0.43,0.43,0.29)); // angular drag
@@ -1569,17 +1567,6 @@ void Atlantis::clbkPostCreation ()
 	VESSEL *pV;
 
 	VESSEL4::clbkPostCreation();
-
-	OBJHANDLE payload;
-	double drymass = ORBITER_EMPTY_MASS;
-	payload = GetAttachmentStatus(sat_attach);
-	if (payload)
-		drymass += oapiGetEmptyMass(payload);
-	payload = GetAttachmentStatus(rms_attach);
-	if (payload)
-		drymass += oapiGetEmptyMass(payload);
-	if (drymass != ORBITER_EMPTY_MASS)
-		SetEmptyMass(drymass);
 
 	if (status < 3) {
 		OBJHANDLE hET = GetDockStatus (GetDockHandle (1));

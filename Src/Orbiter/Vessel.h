@@ -1312,6 +1312,18 @@ protected:
 	void WakeFromContact ();
 	bool InPlayback () const { return bFRplayback; }
 	double CollisionRadius () const;
+
+	void IncludeAttachedMass (bool include);
+	// attached payloads' mass and inertia part of the vessel's dynamics
+	inline bool AttachedMassIncluded () const { return attached_mass; }
+	void AccumulatePayload (const Vector &ofs, const Matrix &rot, double &m, double I[3][3]) const;
+	// mass and inertia (about the root vessel's origin, its frame) of this
+	// vessel as a payload at ofs, turned by rot, and of its own payloads
+	double OwnMass () const { return emass + fmass; }
+	Vector OwnPMI () const { return pmi_own_set ? pmi_own : pmi; }
+	void SetOwnPMI (const Vector &p);
+	void AddVelocity (const Vector &dv);
+	// a velocity change (e.g. the recoil of releasing a payload), at any phase
 	collision::Port PortState (const StateVectors &s, DWORD i) const;
 	void DockRefused (DWORD port, Vessel *mate, DWORD mateport, int reason, double value, double limit);
 	// docking port 'port' refused to capture port 'mateport' of mate: notify
@@ -1580,6 +1592,12 @@ private:
 	AttachmentSpec *attach;                      // the current attachment to a parent, if applicable
 	Matrix attach_rrot;                          // rotation matrix from vessel to current parent
 	Vector attach_rpos;                          // position of vessel in current parent's frame
+
+	// attached payloads in the vessel's dynamics (IncludeAttachedMass)
+	bool attached_mass = false;                  // their mass and inertia are added to the vessel's
+	Vector pmi_own;                              // the vessel's own principal moments of inertia (SetPMI)
+	bool pmi_own_set = false;
+	double payload_mass = 0.0;                   // mass of the attached payloads
 
 	struct {                                     // this structure is used when parsing attachment
 		DWORD ci, pi;                            // info from a scenario to prepare deferred attachment

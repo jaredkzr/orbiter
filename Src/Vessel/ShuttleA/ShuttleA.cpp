@@ -694,7 +694,7 @@ void ShuttleA::ComputePayloadMass()
 
 		}
 	}
-	SetEmptyMass (EMPTY_MASS + payload_mass);
+	// (the payloads' mass is part of the dynamics: IncludeAttachedMass)
 
 }
 
@@ -1073,6 +1073,7 @@ void ShuttleA::clbkSetClassCaps (FILEHANDLE cfg)
 	SetSize (17.0);
 	SetClipRadius(19.0);
 	SetPMI (_V(86.6, 89.8, 5.5));
+	IncludeAttachedMass (true); // (cargo pods)
 	SetEmptyMass (EMPTY_MASS);
 	payload_mass = 0.0;
 	VECTOR3 r[2] = {{0,0,8}, {0,0,-8}};
@@ -1432,7 +1433,7 @@ void ShuttleA::clbkPostCreation ()
 	SetAnimation (anim_dock, dock_proc);
 	SetAnimation (anim_gear, gear_proc);
 
-	SetEmptyMass (EMPTY_MASS + payload_mass);
+	SetEmptyMass (EMPTY_MASS);
 }
 
 // --------------------------------------------------------------

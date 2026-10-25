@@ -399,6 +399,7 @@ size_t PlanetarySystem::AddVessel (Vessel *_vessel)
 
 bool PlanetarySystem::DelVessel (Vessel *_vessel)
 {
+	collider.Forget (_vessel);
 	size_t i;
 	for (i = 0; i < vessels.size(); i++) {
 		if (vessels[i] == _vessel)
@@ -423,6 +424,7 @@ void PlanetarySystem::AddSuperVessel (SuperVessel *sv)
 
 bool PlanetarySystem::DelSuperVessel (SuperVessel *sv)
 {
+	collider.Forget (sv);
 	size_t i;
 	for (i = 0; i < supervessels.size(); i++) {
 		if (supervessels[i] == sv)

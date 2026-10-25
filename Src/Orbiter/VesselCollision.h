@@ -29,10 +29,23 @@ public:
 	/// After the vessels' update: resolve their contacts over the step h
 	void Resolve (double h);
 
+	/// A payload was released from a vessel (the bodies they are part of):
+	/// they do not collide with each other until they are apart (a payload
+	/// nested in its mounting, whose convex parts may enclose it)
+	void Released (VesselBase *parent, VesselBase *payload);
+
+	/// A vessel is deleted
+	void Forget (VesselBase *v);
+
 private:
 	struct Pair { VesselBase *a, *b; };
 	std::vector<Pair> pairs;
 	std::vector<VesselBase*> dynamic; // bodies of the pairs that move
+	struct Release {
+		VesselBase *a, *b;
+		bool clear = false; // apart: collide from now on
+	};
+	std::vector<Release> releases;
 };
 
 #endif // !__VESSELCOLLISION_H

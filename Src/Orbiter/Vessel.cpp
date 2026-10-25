@@ -3059,7 +3059,15 @@ void Vessel::SetAttachmentParams (AttachmentSpec *as, const Vector &pos, const V
 
 bool Vessel::AttachChild (Vessel *child, AttachmentSpec *as, AttachmentSpec *asc, bool allow_loose)
 {
+	// (payloads in the vessel's dynamics: the joint velocity conserves momentum)
+	Vector vc (child->GVel()), vp (GVel());
 	if (!child->AttachToParent (this, as, asc, allow_loose)) return false;
+	if (attached_mass) {
+		UpdateMass();
+		double mc = 0.0, I[3][3] = {{0,0,0},{0,0,0},{0,0,0}};
+		child->AccumulatePayload (Vector(0,0,0), Matrix(1,0,0, 0,1,0, 0,0,1), mc, I);
+		if (mass > 0.0) AddVelocity ((vc - vp) * (mc / mass));
+	}
 	as->mate = child;
 	as->mate_attach = asc;
 	if (bFRrecord) {
@@ -3086,8 +3094,22 @@ bool Vessel::AttachToParent (Vessel *parent, AttachmentSpec *asp, AttachmentSpec
 bool Vessel::DetachChild (AttachmentSpec *asp, double v)
 {
 	if (!asp->mate) return false; // nothing attached
+	// (payloads in the vessel's dynamics: the recoil of the ejection)
+	Vessel *child = asp->mate;
+	Vector eject (0,0,0);
+	double mc = 0.0;
+	if (attached_mass && v && child->attach) {
+		const StateVectors *cs = (g_bStateUpdate && child->s1 && child->s1 != child->s0) ? child->s1 : child->s0;
+		eject = mul (cs->R, tmul (child->attach_rrot, child->attach->mate_attach->dir)) * v;
+		double I[3][3] = {{0,0,0},{0,0,0},{0,0,0}};
+		child->AccumulatePayload (Vector(0,0,0), Matrix(1,0,0, 0,1,0, 0,0,1), mc, I);
+	}
 	if (!asp->mate->DetachFromParent (v)) return false;
 	asp->mate = 0;
+	if (attached_mass) {
+		UpdateMass();
+		if (mc > 0.0 && mass > 0.0) AddVelocity (-eject * (mc / mass));
+	}
 	if (bFRrecord) {
 		DWORD pidx = GetAttachmentIndex (asp);
 		char cbuf[256];
@@ -3102,14 +3124,18 @@ bool Vessel::DetachFromParent (double v)
 	if (!attach || !proxybody) return false; // we are not attached to any parent
 	Vessel *prnt = attach->mate;
 
-	Vector vel(s0->vel);
+	// (during the state update, e.g. from a post-step callback, the new
+	// states are those of the end of the step)
+	bool upd = g_bStateUpdate && s1 && s1 != s0 && prnt->s1 && prnt->s1 != prnt->s0;
+	const StateVectors *st = upd ? s1 : s0, *ps = upd ? prnt->s1 : prnt->s0;
+	Vector vel(st->vel);
 	cbody = prnt->cbody;
-	vel += mul (prnt->GRot(), crossp (attach_rpos, prnt->s0->omega));
+	vel += mul (ps->R, crossp (attach_rpos, ps->omega));
 	if (v) { // ejection velocity
-		vel += mul (s0->R, tmul (attach_rrot, attach->mate_attach->dir)) * v;
+		vel += mul (st->R, tmul (attach_rrot, attach->mate_attach->dir)) * v;
 	}
 	//fstatus = FLIGHTSTATUS_FREEFLIGHT;
-	RPlace (s0->pos, vel);
+	RPlace (st->pos, vel);
 	UpdateProxies ();
 	sp.alt = s0->pos.dist (proxybody->GPos()) - proxybody->Size();
 	UpdateSurfParams ();
@@ -3117,6 +3143,11 @@ bool Vessel::DetachFromParent (double v)
 	attach->mate = 0;
 	attach->mate_attach->mate = 0;
 	attach = 0;
+
+	// (the body the payload was part of: the root of the attachments, or its composite)
+	Vessel *root = prnt;
+	while (root->attach) root = root->attach->mate;
+	g_psys->Collider().Released (root->supervessel ? (VesselBase*)root->supervessel : (VesselBase*)root, this);
 
 	if (bFRplayback) FRecorder_CheckEnd();
 	//bFRplayback = false;
@@ -3675,6 +3706,77 @@ void Vessel::UpdateMass ()
 	pfmass = fmass, fmass = 0.0;
 	for (DWORD i = 0; i < ntank; i++) fmass += tank[i]->mass;
 	mass = emass + fmass;
+
+	// attached payloads (if included): their mass, and their inertia about
+	// the vessel's origin (the vessel's centre of mass is not moved)
+	payload_mass = 0.0;
+	if (attached_mass) {
+		double m = 0.0, I[3][3] = {{0,0,0},{0,0,0},{0,0,0}};
+		Matrix E (1,0,0, 0,1,0, 0,0,1);
+		for (DWORD j = 0; j < ncattach; j++)
+			if (cattach[j]->mate) cattach[j]->mate->AccumulatePayload (cattach[j]->mate->attach_rpos, cattach[j]->mate->attach_rrot, m, I);
+		Vector po (OwnPMI());
+		if (m > 0.0) {
+			double M = mass + m;
+			pmi.Set ((mass*po.x + I[0][0]) / M, (mass*po.y + I[1][1]) / M, (mass*po.z + I[2][2]) / M);
+			payload_mass = m;
+			mass = M;
+		} else {
+			pmi.Set (po);
+		}
+	}
+}
+
+void Vessel::AccumulatePayload (const Vector &ofs, const Matrix &rot, double &m, double I[3][3]) const
+{
+	double mc = OwnMass();
+	Vector p (OwnPMI());
+	// (its own inertia, turned into the root's frame, and about the root's origin)
+	double D[3] = { mc*p.x, mc*p.y, mc*p.z };
+	const double R[3][3] = { {rot.m11, rot.m12, rot.m13}, {rot.m21, rot.m22, rot.m23}, {rot.m31, rot.m32, rot.m33} };
+	const double d[3] = { ofs.x, ofs.y, ofs.z };
+	double d2 = ofs.x*ofs.x + ofs.y*ofs.y + ofs.z*ofs.z;
+	for (int i = 0; i < 3; i++)
+		for (int j = 0; j < 3; j++) {
+			double v = 0.0;
+			for (int k = 0; k < 3; k++) v += R[i][k] * D[k] * R[j][k];
+			I[i][j] += v + mc * ((i == j ? d2 : 0.0) - d[i]*d[j]);
+		}
+	m += mc;
+	for (DWORD j = 0; j < ncattach; j++) {
+		const Vessel *c = cattach[j]->mate;
+		if (!c) continue;
+		Matrix r (rot);
+		r.postmul (c->attach_rrot);
+		c->AccumulatePayload (ofs + mul (rot, c->attach_rpos), r, m, I);
+	}
+}
+
+void Vessel::IncludeAttachedMass (bool include)
+{
+	if (!pmi_own_set) pmi_own = pmi, pmi_own_set = true;
+	attached_mass = include;
+	if (!include) pmi = pmi_own;
+	UpdateMass();
+}
+
+void Vessel::SetOwnPMI (const Vector &p)
+{
+	pmi_own = p, pmi_own_set = true;
+	pmi = p;
+	if (attached_mass) UpdateMass();
+}
+
+void Vessel::AddVelocity (const Vector &dv)
+{
+	if (supervessel || attach || fstatus != FLIGHTSTATUS_FREEFLIGHT) return; // (moved by its composite, parent, or at rest)
+	if (g_bStateUpdate && s1 != s0) {
+		rvel_base += dv;
+		s1->vel = rvel_base + rvel_add;
+	} else {
+		s0->vel += dv;
+		rvel_base += dv;
+	}
 }
 
 bool Vessel::SetNavMode (int mode, bool fromstream)
@@ -4467,13 +4569,30 @@ void Vessel::SetCustomHulls (bool custom)
 
 double Vessel::CollisionRadius () const
 {
-	return Hulls().empty() ? -1.0 : hull_bound;
+	double r = Hulls().empty() ? -1.0 : hull_bound;
+	for (DWORD j = 0; j < ncattach; j++) { // (attached payloads)
+		const Vessel *c = cattach[j]->mate;
+		if (!c) continue;
+		double rc = c->CollisionRadius();
+		if (rc >= 0.0) r = std::max (r, c->attach_rpos.length() + rc);
+	}
+	return r;
 }
 
 void Vessel::CollectHulls (const StateVectors &s, std::vector<collision::HullRef> &hl) const
 {
 	for (const collision::Hull &h : Hulls())
 		hl.push_back ({&h, s.R, s.pos});
+	// attached payloads: part of this body
+	for (DWORD j = 0; j < ncattach; j++) {
+		const Vessel *c = cattach[j]->mate;
+		if (!c) continue;
+		StateVectors sc;
+		sc.pos = s.pos + mul (s.R, c->attach_rpos);
+		sc.R.Set (s.R);
+		sc.R.postmul (c->attach_rrot);
+		c->CollectHulls (sc, hl);
+	}
 }
 
 void Vessel::CollectFreePorts (const StateVectors &s, std::vector<collision::Port> &ports) const
@@ -6172,9 +6291,10 @@ void VESSEL::GetRotDrag (VECTOR3 &rd) const
 
 void VESSEL::GetPMI (VECTOR3 &pmi) const
 {
-	pmi.x = vessel->pmi.x;
-	pmi.y = vessel->pmi.y;
-	pmi.z = vessel->pmi.z;
+	Vector p (vessel->OwnPMI());
+	pmi.x = p.x;
+	pmi.y = p.y;
+	pmi.z = p.z;
 }
 
 void VESSEL::GetCameraOffset (VECTOR3 &co) const
@@ -6957,7 +7077,17 @@ void VESSEL::SetBankMomentScale (double scale) const
 
 void VESSEL::SetPMI (const VECTOR3 &pmi) const
 {
-	vessel->pmi.Set (pmi.x, pmi.y, pmi.z);
+	vessel->SetOwnPMI (Vector (pmi.x, pmi.y, pmi.z));
+}
+
+void VESSEL::IncludeAttachedMass (bool include) const
+{
+	vessel->IncludeAttachedMass (include);
+}
+
+bool VESSEL::AttachedMassIncluded () const
+{
+	return vessel->AttachedMassIncluded ();
 }
 
 void VESSEL::SetAlbedoRGB (const VECTOR3 &albedo) const
