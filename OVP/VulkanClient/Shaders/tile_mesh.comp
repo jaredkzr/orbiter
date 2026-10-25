@@ -93,7 +93,10 @@ void main ()
 		double lng = lngmin + double (j - 1) * dlng;
 		dvec3 d = Dir (lat, lng);
 		float h0 = pts.f[3 * k], A = pts.f[3 * k + 1], f = pts.f[3 * k + 2];
-		float h = h0 + DetHeight (d, pc.R, A, f, jb.sp.z, jb.sp.x, pc.prm, pc.prm2.x);
+		// (without the pebbles: the normals are of the ground under them; the
+		// shader shades the pebbles per pixel, their sharp edges would
+		// alias on the grid)
+		float h = h0 + DetHeight (d, pc.R, A, f, jb.sp.z, jb.sp.x, pc.prm, 0.0);
 		P[k] = vec3 (d * (pc.R + double (h)) - C);
 	}
 	// the parent's shape at its nodes (every second one)
@@ -130,10 +133,13 @@ void main ()
 	uint ampBase = uint (NV * 8);
 	for (uint k = tid; k < uint (V * V); k += 256u) {
 		int i = int (k) / V, j = int (k) % V;
-		vec3 p = P[(i + 1) * W + (j + 1)];
+		uint pk0 = uint ((i + 1) * W + (j + 1));
+		dvec3 dd = Dir (clamp (latmax - double (i) * dlat, -DPI05, DPI05), lngmin + double (j) * dlng);
+		float peb = DetPebbles (dd, pc.R, pts.f[3 * pk0 + 2], jb.sp.z, jb.sp.x, pc.prm2.x, 0.0);
+		vec3 p = P[(i + 1) * W + (j + 1)] + vec3 (dd) * peb;
 		vec3 nm = cross (P[(i + 2) * W + (j + 1)] - P[i * W + (j + 1)], P[(i + 1) * W + (j + 2)] - P[(i + 1) * W + j]);
 		double lat = clamp (latmax - double (i) * dlat, -DPI05, DPI05);
-		vec3 d = vec3 (Dir (lat, lngmin + double (j) * dlng));
+		vec3 d = vec3 (dd);
 		float len = length (nm);
 		nm = len > 1e-9 && abs (lat) < DPI05 - 1e-9 ? nm / len : d; // (at a pole the neighbours collapse: the vertical)
 		if (dot (nm, d) < 0.0) nm = -nm;

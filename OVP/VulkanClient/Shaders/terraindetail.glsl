@@ -154,6 +154,42 @@ void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec2 Af
 		/ max (abs (dot (posView / dist, Nv)), 0.1);
 	// (the mesh's band reaches twice as far when morphed to the parent's)
 	DetailSample ds = TerrainDetailEval (d, R, Af.x, Af.y, tile.detail.x, tile.detail.y * (1.0 + vMorph), tile.detail.z, footprint, atm.sunDir.xyz);
+	// pebbles: their slopes per pixel (the meshes have their shape, but
+	// normals of the ground under them), by differences along the surface,
+	// with crags on their faces; down to stones of a few pixels
+	// (all stones of two pixels and more: the meshes have the larger ones'
+	// shape, but not their slopes)
+	if (tile.morph.w > 0.0 && footprint < 0.03 && Af.y > 0.0) {
+		vec3 df0 = vec3 (d);
+		vec3 t1 = normalize (cross (df0, abs (df0.y) < 0.9 ? vec3 (0.0, 1.0, 0.0) : vec3 (1.0, 0.0, 0.0)));
+		vec3 t2 = cross (df0, t1);
+		float e = max (0.5 * footprint, 0.001);
+		int nl = int (ceil (tile.morph.w));
+		vec3 g = vec3 (0.0);
+		float hs = 0.0;
+		for (int k = -1; k >= -4; k--) {
+			float s = exp2 (float (k));
+			float w = DetSmoothStep (1.5, 3.5, 0.18 * s / footprint) * DetSmoothStep (0.5, 1.5, log2 (tile.detail.x / s)) * Af.y;
+			if (w <= 0.0) continue;
+			// (the crags fade out when the stone is a few pixels)
+			float crag = 1.0 - smoothstep (0.015 * s, 0.04 * s, footprint);
+			for (int l = 0; l < nl; l++) {
+				int m = k - DET_JMIN + 64 + 29 * l;
+				ivec3 cell, p; vec3 sg;
+				vec3 f = DetLattice (m, d, R / double (s), cell, p, sg);
+				bool stone;
+				float h0 = DetPebbleCell (cell, m, k, tile.morph.w / float (nl), f, crag, stone);
+				if (!stone) continue;
+				vec3 o1 = DetToLattice (t1, p, sg) * (e / s), o2 = DetToLattice (t2, p, sg) * (e / s);
+				float h1 = DetPebbleCell (cell, m, k, tile.morph.w / float (nl), f + o1, crag, stone);
+				float h2 = DetPebbleCell (cell, m, k, tile.morph.w / float (nl), f + o2, crag, stone);
+				g += w * (t1 * ((h1 - h0) / e) + t2 * ((h2 - h0) / e));
+				hs += w * h0;
+			}
+		}
+		ds.grad += g;
+		ds.albedo *= mix (1.0, 0.9, smoothstep (0.001, 0.004, hs)); // (stones a little darker than the dust)
+	}
 	sunShadow *= ds.shadow;
 	base *= clamp (1.0 + ds.height / max (Af.x, 1.0), 0.8, 1.2) * ds.albedo;
 	vec3 g = ds.grad;

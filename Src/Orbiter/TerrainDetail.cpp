@@ -97,7 +97,8 @@ namespace {
 	                                  // ones span six node spacings of a mesh whose lmin is four)
 
 	inline double Unit16 (uint32_t h) { return (h & 0xffffu) / 65535.0; }
-	constexpr double PEBBLE_G = 0.4;  // resolution a pebble needs / cell size
+	constexpr double PEBBLE_G = 0.15; // resolution a pebble needs / cell size (six to twelve mesh nodes across: fewer alias)
+	constexpr double PEBBLE_SOFT = 0.08; // rounding of the pebbles' corners (outline units)
 
 	// One layer of craters (cells of size s = 2^k m): at most one crater per
 	// cell, inside it with its rim (radius 0.08 to 0.22 cell sizes, the
@@ -182,16 +183,18 @@ namespace {
 		Vector c (ext + (1.0 - 2.0 * ext) * Unit16 (h1), ext + (1.0 - 2.0 * ext) * Unit16 (h2), ext + (1.0 - 2.0 * ext) * Unit16 (h3));
 		Vector v (q.x - fx - c.x, q.y - fy - c.y, q.z - fz - c.z);
 		if (v.length() >= ext) return 0.0;
-		// the outline: the largest of five edge distances (a polygon)
+		// the outline: a smooth maximum of five edge distances (a polygon
+		// with rounded corners: sharp ones alias on the meshes' grid)
 		double x = 0.0;
 		uint32_t he = h4;
 		for (int e = 0; e < 5; e++) {
 			he = Pcg (he ^ 0x51ed27u);
-			x = std::max (x, dotp (v, UnitFromHash (he)) / (r * (0.75 + 0.25 * Unit16 (he >> 16))));
+			x += std::exp (dotp (v, UnitFromHash (he)) / (r * (0.75 + 0.25 * Unit16 (he >> 16))) / PEBBLE_SOFT);
 		}
+		x = PEBBLE_SOFT * std::log (x);
 		if (x >= 1.0) return 0.0;
-		// a bevelled top (sides over the outer 60%), tilted
-		double top = std::min (1.0, (1.0 - x) / 0.6);
+		// a bevelled top (sides over the outer 60%, rounded at both ends), tilted
+		double top = SmoothStep (0.0, 0.6, 1.0 - x);
 		double tilt = 1.0 + 0.5 * dotp (v, UnitFromHash (Pcg (h3 ^ 0x2545f491u))) / r;
 		return hgt * r * s * top * std::max (tilt, 0.3);
 	}

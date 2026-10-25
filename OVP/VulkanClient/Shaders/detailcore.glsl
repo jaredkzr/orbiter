@@ -110,17 +110,25 @@ vec3 DetToLattice (vec3 v, ivec3 p, vec3 sg)
 
 // (as TerrainDetail.cpp: octaves 2^j m, crater cells 2^k m)
 const int DET_JMAX = 20, DET_KMIN = -2, DET_KMAX = 16;
-const float DET_CRATER_D = 0.22, DET_CRATER_G = 0.1, DET_PEBBLE_G = 0.4;
+const float DET_CRATER_D = 0.22, DET_CRATER_G = 0.1, DET_PEBBLE_G = 0.15;
 
-// One layer of pebbles and clods [m] (as TerrainDetail.cpp's PebbleLayer)
-float DetPebbleLayer (dvec3 d, int k, int layer, double R, float density)
+float DetSmoothStep (float a, float b, float x)
 {
-	int m = k - DET_JMIN + 64 + 29 * layer;
+	float t = clamp ((x - a) / (b - a), 0.0, 1.0);
+	return t * t * (3.0 - 2.0 * t);
+}
+
+// A pebble cell (as TerrainDetail.cpp's PebbleLayer): the stone of the
+// cell (m: its lattice, k: its size 2^k m) at position f in the cell, if
+// it has one (stone: false); crag > 0, shading only: its faces roughened
+const float DET_PEBBLE_SOFT = 0.08;
+float DetPebbleCell (ivec3 cell, int m, int k, float density, vec3 f, float crag, out bool stone)
+{
+	stone = false;
 	float s = exp2 (float (k));
-	ivec3 cell, p; vec3 sg;
-	vec3 f = DetLattice (m, d, R / double (s), cell, p, sg);
 	uint h0 = DetHash (cell, 3000u + uint (m));
 	if (DetUnit16 (h0) >= density * (k == -1 ? 0.4 : k == -2 ? 0.7 : 1.0)) return 0.0;
+	stone = true;
 	uint h1 = DetPcg (h0), h2 = DetPcg (h1), h3 = DetPcg (h2), h4 = DetPcg (h3);
 	float r = 0.12 + 0.12 * DetUnit16 (h4), hgt = 0.25 + 0.3 * DetUnit16 (h4 >> 16);
 	float ext = 1.05 * r;
@@ -131,19 +139,35 @@ float DetPebbleLayer (dvec3 d, int k, int layer, double R, float density)
 	uint he = h4;
 	for (int e = 0; e < 5; e++) {
 		he = DetPcg (he ^ 0x51ed27u);
-		x = max (x, dot (v, DetUnitFromHash (he)) / (r * (0.75 + 0.25 * DetUnit16 (he >> 16))));
+		x += exp (dot (v, DetUnitFromHash (he)) / (r * (0.75 + 0.25 * DetUnit16 (he >> 16))) / DET_PEBBLE_SOFT);
 	}
+	x = DET_PEBBLE_SOFT * log (x);
 	if (x >= 1.0) return 0.0;
-	float top = min (1.0, (1.0 - x) / 0.6);
+	float top = DetSmoothStep (0.0, 0.6, 1.0 - x);
 	float tilt = 1.0 + 0.5 * dot (v, DetUnitFromHash (DetPcg (h3 ^ 0x2545f491u))) / r;
-	return hgt * r * s * top * max (tilt, 0.3);
+	float h = hgt * r * s * top * max (tilt, 0.3);
+	if (crag > 0.0) {
+		// (facets and pits: noise at a third and a sixth of the stone, in
+		// the cell's own coordinates)
+		vec3 q = v / (0.33 * r);
+		float n = DetNoise (ivec3 (floor (q)), fract (q), h4).w;
+		q *= 2.0;
+		n += 0.5 * DetNoise (ivec3 (floor (q)), fract (q), h4 + 1u).w;
+		h += crag * 0.05 * r * s * n * min (1.0, 5.0 * (1.0 - x));
+	}
+	return h;
 }
 
-float DetSmoothStep (float a, float b, float x)
+// One layer of pebbles and clods [m] (as TerrainDetail.cpp's PebbleLayer)
+float DetPebbleLayer (dvec3 d, int k, int layer, double R, float density, float crag)
 {
-	float t = clamp ((x - a) / (b - a), 0.0, 1.0);
-	return t * t * (3.0 - 2.0 * t);
+	int m = k - DET_JMIN + 64 + 29 * layer;
+	ivec3 cell, p; vec3 sg;
+	vec3 f = DetLattice (m, d, R / double (exp2 (float (k))), cell, p, sg);
+	bool stone;
+	return DetPebbleCell (cell, m, k, density, f, crag, stone);
 }
+
 
 // One crater layer's height [m] (as TerrainDetail.cpp's CraterLayer)
 float DetCraterLayer (dvec3 d, int k, int layer, double R, float density, float depthScale)
@@ -191,6 +215,23 @@ float DetCraterLayer (dvec3 d, int k, int layer, double R, float density, float 
 // spacing: node spacing of the data [m], lmin: shortest wavelength [m]
 // (at least the planet's lambdaMin); prm: hurst, ridge, crater cells,
 // crater depth
+// The pebbles' part of the detail [m] (crag: see DetPebbleLayer)
+float DetPebbles (dvec3 d, double R, float f, float spacing, float lmin, float pebbles, float crag)
+{
+	float h = 0.0;
+	if (pebbles <= 0.0 || f <= 0.0 || spacing <= 0.0) return 0.0;
+	int nl = int (ceil (pebbles));
+	for (int k = -1; k >= -4; k--) {
+		float s = exp2 (float (k)), lg = DET_PEBBLE_G * s;
+		if (lg < 0.5 * lmin) break;
+		float w = DetSmoothStep (0.5 * lmin, lmin, lg) * DetSmoothStep (0.5, 1.5, log2 (spacing / s));
+		if (w <= 0.0) continue;
+		for (int l = 0; l < nl; l++)
+			h += w * f * DetPebbleLayer (d, k, l, R, pebbles / float (nl), crag);
+	}
+	return h;
+}
+
 float DetHeight (dvec3 d, double R, float A, float f, float spacing, float lmin, vec4 prm, float pebbles)
 {
 	if (spacing <= 0.0 || f <= 0.0 || lmin >= spacing) return 0.0;
@@ -224,18 +265,7 @@ float DetHeight (dvec3 d, double R, float A, float f, float spacing, float lmin,
 				h += w * f * DetCraterLayer (d, k, l, R, prm.z / float (nl), prm.w);
 		}
 	}
-	if (pebbles > 0.0) {
-		int nl = int (ceil (pebbles));
-		for (int k = -1; k >= -4; k--) {
-			float s = exp2 (float (k)), lg = DET_PEBBLE_G * s;
-			if (lg < 0.5 * lmin) break;
-			float w = DetSmoothStep (0.5 * lmin, lmin, lg) * DetSmoothStep (0.5, 1.5, log2 (spacing / s));
-			if (w <= 0.0) continue;
-			for (int l = 0; l < nl; l++)
-				h += w * f * DetPebbleLayer (d, k, l, R, pebbles / float (nl));
-		}
-	}
-	return h;
+	return h + DetPebbles (d, R, f, spacing, lmin, pebbles, 0.0);
 }
 
 #endif

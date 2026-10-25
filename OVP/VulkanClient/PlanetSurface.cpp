@@ -33,7 +33,7 @@ namespace {
 		float maskUV[4];  // same for the mask texture
 		float params[4];  // x: mask present, y: night light intensity
 		float detail[4];  // terrain detail: data node spacing [m], shortest wavelength of the mesh [m], Hurst exponent, on
-		float morph[4];   // morph to the parent's mesh: start distance [m], 1/range [1/m] (0: none); z: sunlight (eclipses)
+		float morph[4];   // morph to the parent's mesh: start distance [m], 1/range [1/m] (0: none); z: sunlight (eclipses); w: pebble cells
 		float vessel[4];  // nearest vessel on the ground (view space; w: present), also morphed from
 	};
 
@@ -1300,6 +1300,7 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 	mv.ToFloat (pc.modelView);
 	// (a moon in its planet's shadow: the share of the sun's disc seen from the tile)
 	pc.morph[2] = prepass ? 1.0f : (float)scene->SunVisibility (ppos + mul (prot, n->centre), hPlanet);
+	pc.morph[3] = detail && !clouds ? (float)detailPrm.pebbles : 0.0f; // (the pebbles shaded per pixel)
 	if (pc.morph[1] > 0.0f && n->vessel >= 0 && n->vessel < (int)groundVessels.size()) {
 		VECTOR3 v = groundVessels[n->vessel] - n->centre; // (tile frame)
 		pc.vessel[0] = (float)(mv.m[0] * v.x + mv.m[4] * v.y + mv.m[8] * v.z + mv.m[12]);
