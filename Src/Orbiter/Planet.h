@@ -21,6 +21,7 @@
 #include "Nav.h"
 #include "GraphicsAPI.h"
 #include "Orbiter.h"
+#include "TerrainDetail.h"
 #include <functional>
 #include <filesystem>
 namespace fs = std::filesystem;
@@ -154,7 +155,8 @@ public:
 	inline DWORD MaxPatchLevel() const { return max_patch_level; }
 	inline double BBExcess() const { return bb_excess; }
 	inline double ElevationResolution() const { return elev_res; }
-	inline double TerrainDetailGain() const { return detail_gain; }
+	inline bool TerrainDetailOn() const { return detail_on; }
+	inline const TerrainDetail::Overrides &TerrainDetailCfg() const { return detail_cfg; }
 	inline int LabelFormat() const { return label_version; }
 	inline const oapi::GraphicsClient::LABELTYPE *LabelLegend() const { return labelLegend; }
 	inline int NumLabelLegend() const { return nLabelLegend; }
@@ -303,7 +305,8 @@ private:
 	TileManager2<CloudTile> *cmgr2;   // cloud layer manager
 	ElevationManager *emgr;           // elevation manager
 	double elev_res;                  // target elevation resolution [m]
-	double detail_gain;               // strength of the procedural terrain detail (0: none)
+	bool detail_on;                   // procedural terrain detail
+	TerrainDetail::Overrides detail_cfg; // its parameters from the configuration file
 };
 
 #endif // !__PLANET_H

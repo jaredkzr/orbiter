@@ -6,6 +6,7 @@
 #include "VulkanClient.h"
 #include "VkTexture.h"
 #include <algorithm>
+#include <string>
 #include <cmath>
 #include <cstring>
 
@@ -34,6 +35,8 @@ namespace {
 		float aurora[4];
 		float detailCamHi[4]; // camera position and radius in double precision (high and low parts)
 		float detailCamLo[4];
+		float detailPrm[4];   // terrain detail: ridge, craters, crater depth, fresh craters
+		float surfPrm[4];     // x: colour saturation of the surface textures
 	};
 
 	const VkFormat LUT_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -350,6 +353,16 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		int type = !strcmp (name, "Earth") ? 3 : !strcmp (name, "Mars") ? 2 : !present ? 1 : 0;
 		if (const char *e = getenv ("ORBITER_VK_SURFACE_DETAIL")) if (!atoi (e)) type = 0;
 		detail[0] = (float)type, detail[1] = 1.0f, detail[2] = 3000.0f;
+
+		// colour saturation of the surface textures: the Moon's and
+		// Mercury's carry tints (green, purple) that the grey ground doesn't
+		// have; planet files may set it (SurfaceSaturation)
+		surfSaturation = !strcmp (name, "Moon") ? 0.3f : !strcmp (name, "Mercury") ? 0.5f : 1.0f;
+		if (FILEHANDLE f = oapiOpenFile ((std::string (name) + ".cfg").c_str(), FILE_IN, CONFIG)) {
+			double v;
+			if (oapiReadItem_float (f, (char*)"SurfaceSaturation", v)) surfSaturation = (float)std::clamp (v, 0.0, 2.0);
+			oapiCloseFile (f, FILE_IN);
+		}
 	}
 
 	AtmosphereRenderer *ar = scene->Atm();
@@ -524,6 +537,15 @@ void Atmosphere::Update ()
 			u.detailCamLo[k] = (float)(v[k] - (double)u.detailCamHi[k]);
 		}
 	}
+	{
+		SURFDETAILPARAM dp;
+		if (oapiSurfaceDetailParams (hPlanet, &dp)) {
+			u.detailPrm[0] = (float)dp.ridge, u.detailPrm[1] = (float)dp.craters;
+			u.detailPrm[2] = (float)dp.craterDepth, u.detailPrm[3] = (float)dp.craterFresh;
+		} else
+			u.detailPrm[0] = u.detailPrm[1] = u.detailPrm[2] = u.detailPrm[3] = 0.0f;
+	}
+	u.surfPrm[0] = surfSaturation, u.surfPrm[1] = u.surfPrm[2] = u.surfPrm[3] = 0.0f;
 	u.misc[1] = (float)(1.0 / scene->ProjX());
 	u.misc[2] = (float)(1.0 / scene->ProjY());
 	memcpy (ubo[SetIndex ()].mapped, &u, sizeof(u));

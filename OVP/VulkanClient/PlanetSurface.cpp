@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "PlanetSurface.h"
+#include <chrono>
 #include "RayTracing.h"
 #include "Scene.h"
 #include "VkTexture.h"
@@ -16,6 +17,7 @@
 #include "tile_fp64.frag.h"
 #include "prepass.vert.h"
 #include "prepass_tile.frag.h"
+#include "prepass_tile.vert.h"
 #include "AO.h"
 #include "Shadows.h"
 
@@ -28,9 +30,12 @@ namespace {
 		float maskUV[4];  // same for the mask texture
 		float params[4];  // x: mask present, y: night light intensity
 		float detail[4];  // terrain detail: data node spacing [m], shortest wavelength of the mesh [m], Hurst exponent, on
+		float morph[4];   // morph to the parent's mesh: start distance [m], 1/range [1/m] (0: none)
+		float vessel[4];  // nearest vessel on the ground (view space; w: present), also morphed from
 	};
 
-	constexpr double SPLIT_PIXELS = 450.0;  // split tiles that cover more than this on screen
+	constexpr double MESH_BUDGET = 4.0;     // time per frame for building meshes with the terrain detail [ms]
+	constexpr double SPLIT_PIXELS = 300.0;  // split tiles that cover more than this on screen (at resolution bias 0)
 	constexpr size_t MAX_OUTSTANDING = 24;  // tile requests in flight
 	constexpr int MAX_UPLOADS = 12;         // tiles accepted per frame
 	constexpr uint64_t PRUNE_FRAMES = 120;  // unused subtrees are released after this
@@ -185,7 +190,7 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	ctx = c;
 	VkDescriptorSetLayout sets[4] = { frameLayout, texmgr->Layout(), texmgr->Layout(), atmLayout };
 	// (the prepass pushes two matrices and the water mask's coordinates)
-	VkPushConstantRange pcr{ VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, (uint32_t)std::max (sizeof(TilePushConstants), 40 * sizeof(float)) };
+	VkPushConstantRange pcr{ VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, (uint32_t)std::max (sizeof(TilePushConstants), 48 * sizeof(float)) };
 	VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 	plci.setLayoutCount = 4;
 	plci.pSetLayouts = sets;
@@ -204,18 +209,19 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	// (binding 1: the amplitude of the terrain detail, after the vertices)
 	VkVertexInputBindingDescription bind[2] = {
 		{ 0, sizeof(NTVERTEX), VK_VERTEX_INPUT_RATE_VERTEX },
-		{ 1, sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX }
+		{ 1, 5 * sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX }
 	};
-	VkVertexInputAttributeDescription attr[4] = {
+	VkVertexInputAttributeDescription attr[5] = {
 		{ 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(NTVERTEX, x) },
 		{ 1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(NTVERTEX, nx) },
 		{ 2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(NTVERTEX, tu) },
-		{ 3, 1, VK_FORMAT_R32_SFLOAT, 0 }
+		{ 3, 1, VK_FORMAT_R32G32_SFLOAT, 0 },
+		{ 4, 1, VK_FORMAT_R32G32B32_SFLOAT, 2 * sizeof(float) }
 	};
 	VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
 	vi.vertexBindingDescriptionCount = 2;
 	vi.pVertexBindingDescriptions = bind;
-	vi.vertexAttributeDescriptionCount = 4;
+	vi.vertexAttributeDescriptionCount = 5;
 	vi.pVertexAttributeDescriptions = attr;
 	VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
 	ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -272,7 +278,7 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &cloudPipeline));
 
 	// prepass: single-sampled normal and depth, and screen motion
-	VkShaderModule pvs = ctx->CreateShaderModule (spv_prepass_vert, spv_prepass_vert_size);
+	VkShaderModule pvs = ctx->CreateShaderModule (spv_prepass_tile_vert, spv_prepass_tile_vert_size);
 	VkShaderModule pfs = ctx->CreateShaderModule (spv_prepass_tile_frag, spv_prepass_tile_frag_size);
 	stages[0].module = pvs;
 	stages[1].module = pfs;
@@ -284,7 +290,8 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 	rci.colorAttachmentCount = AmbientOcclusion::PREPASS_TARGETS;
 	rci.pColorAttachmentFormats = AmbientOcclusion::PrepassFormats ();
-	vi.vertexBindingDescriptionCount = 1, vi.vertexAttributeDescriptionCount = 3; // (no terrain detail)
+	attr[3] = attr[4]; // (the morph target, not the terrain detail)
+	vi.vertexAttributeDescriptionCount = 4;
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &depthPipeline));
 	vkDestroyShaderModule (ctx->device, pvs, nullptr);
 	vkDestroyShaderModule (ctx->device, pfs, nullptr);
@@ -386,8 +393,13 @@ PlanetSurface::PlanetSurface (OBJHANDLE h, Scene *s, std::shared_ptr<PlanetLayer
 			maxLevel = std::clamp ((int)*ml, 4, 21);
 		if (const double *me = (const double*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_MAXELEVATION))
 			maxElev = std::max (0.0, *me);
-		detail = oapiSurfaceDetailParams (hPlanet, &detailLmin, &detailHurst);
+		detail = oapiSurfaceDetailParams (hPlanet, &detailPrm);
+		// (finer meshes where the detail goes)
+		if (detail) maxLevel = std::clamp (std::max (maxLevel, detailPrm.level), 4, 24);
 		if (const int *em = (const int*)scene->Client()->GetConfigParam (CFGPRM_ELEVATIONMODE)) elevMode = *em;
+		// (PlanetResolutionBias: each step of +1 halves the tiles' screen size)
+		if (const double *rb = (const double*)scene->Client()->GetConfigParam (CFGPRM_RESOLUTIONBIAS))
+			splitPixels = SPLIT_PIXELS * std::exp2 (-*rb);
 	}
 
 	// The quadtree roots are loaded right away, so that the planet is never
@@ -521,9 +533,10 @@ double PlanetSurface::SampleElev (const Node *src, double lat, double lng) const
 	return e0 * (1.0 - wy) + e1 * wy;
 }
 
-double PlanetSurface::SurfaceElev (const Node *src, double lat, double lng, double lmin, double *amp) const
+double PlanetSurface::SurfaceElev (const Node *src, double lat, double lng, double lmin, double *amp, double *fade) const
 {
 	if (amp) *amp = 0.0;
+	if (fade) *fade = 0.0;
 	double h = SampleElev (src, lat, lng);
 	if (clouds || !detail) return h;
 	// the relief of the data cell (as the core computes it for its elevation)
@@ -541,27 +554,27 @@ double PlanetSurface::SurfaceElev (const Node *src, double lat, double lng, doub
 	double r0 = node (e) * (1.0 - wx) + node (e + 1) * wx;
 	double r1 = node (e + N) * (1.0 - wx) + node (e + N + 1) * wx;
 	double relief = r0 * (1.0 - wy) + r1 * wy;
-	if (relief <= 0.0) return h;
 	double spacing = radius * (src->latmax - src->latmin) / (N - 3);
-	return h + oapiSurfaceDetail (hPlanet, lng, lat, spacing, relief, lmin, amp);
+	return h + oapiSurfaceDetail (hPlanet, lng, lat, h, spacing, relief, lmin, amp, fade);
 }
 
-void PlanetSurface::BuildMesh (Node *n, const Node *src)
+void PlanetSurface::BuildMesh (Node *n, const Node *src, bool detailed)
 {
 	const int G = TileRenderer::GRID, V = G + 1, W = G + 3; // W: grid with a one-node border
 	double dlat = (n->latmax - n->latmin) / G, dlng = (n->lngmax - n->lngmin) / G;
 	std::vector<VECTOR3> P ((size_t)W * W), D ((size_t)W * W);
-	std::vector<float> A ((size_t)W * W, 0.0f); // amplitude of the detail (the shader adds the finer octaves)
-	// detail down to a few node spacings of this mesh
-	double lmin = 4.0 * radius * (n->latmax - n->latmin) / G;
+	std::vector<float> A ((size_t)W * W * 2, 0.0f); // noise amplitude and crater fade of the detail (the shader adds the finer octaves)
+	// detail down to a few node spacings of this mesh (or none: the shader
+	// shades all of it)
+	double lmin = detailed ? 4.0 * radius * (n->latmax - n->latmin) / G : 1e30;
 	for (int i = 0; i < W; i++) {
 		double lat = std::clamp (n->latmax - (i - 1) * dlat, -PI05, PI05);
 		for (int j = 0; j < W; j++) {
 			double lng = n->lngmin + (j - 1) * dlng;
 			VECTOR3 d = SurfaceDir (lat, lng);
-			double a = 0.0;
-			double h = src ? SurfaceElev (src, lat, lng, lmin, &a) : 0.0;
-			A[i*W + j] = (float)a;
+			double a = 0.0, f = 0.0;
+			double h = src ? SurfaceElev (src, lat, lng, lmin, &a, &f) : 0.0;
+			A[2 * (i*W + j)] = (float)a, A[2 * (i*W + j) + 1] = (float)f;
 			D[i*W + j] = d;
 			P[i*W + j] = d * (radius + h);
 		}
@@ -581,6 +594,32 @@ void PlanetSurface::BuildMesh (Node *n, const Node *src)
 			v.nx = (float)nm.x, v.ny = (float)nm.y, v.nz = (float)nm.z;
 			v.tu = (float)j / G, v.tv = (float)i / G;
 		}
+	// Morph targets (continuous level of detail): where each vertex is on
+	// the parent tile's mesh (its elevation source and detail band; the
+	// vertices between the parent's on its triangles' edges). The vertex
+	// shader blends to them with the distance, so that a tile matches its
+	// coarser neighbours and changes smoothly to its parent's shape.
+	std::vector<VECTOR3> T ((size_t)V * V);
+	const Node *psrc = n->parent ? ElevSource (n->parent) : nullptr;
+	if (n->parent && !clouds) {
+		double lminP = detailed ? 2.0 * lmin : 1e30;
+		for (int i = 0; i <= G; i += 2)
+			for (int j = 0; j <= G; j += 2) {
+				double lat = std::clamp (n->latmax - i * dlat, -PI05, PI05), lng = n->lngmin + j * dlng;
+				T[i*V + j] = D[(i + 1) * W + (j + 1)] * (radius + (psrc ? SurfaceElev (psrc, lat, lng, lminP) : 0.0));
+			}
+		for (int i = 0; i <= G; i++)
+			for (int j = 0; j <= G; j++) {
+				if (!(i & 1) && !(j & 1)) continue;
+				if ((i & 1) && (j & 1))  // (the parent's quads are split from top right to bottom left)
+					T[i*V + j] = (T[(i - 1)*V + j + 1] + T[(i + 1)*V + j - 1]) * 0.5;
+				else if (i & 1) T[i*V + j] = (T[(i - 1)*V + j] + T[(i + 1)*V + j]) * 0.5;
+				else            T[i*V + j] = (T[i*V + j - 1] + T[i*V + j + 1]) * 0.5;
+			}
+	} else {
+		for (int i = 0; i <= G; i++)
+			for (int j = 0; j <= G; j++) T[i*V + j] = at (i, j);
+	}
 	// skirts hang below the tile edges to hide cracks between resolution levels
 	double depth = radius * (n->latmax - n->latmin) * 0.02;
 	auto skirt = [&](int base, int k, int i, int j) {
@@ -596,18 +635,33 @@ void PlanetSurface::BuildMesh (Node *n, const Node *src)
 		skirt (3*V, k, k, G);
 	}
 
-	// detail amplitudes after the vertices (vertex binding 1)
-	std::vector<float> amp (vtx.size());
+	// per-vertex data after the vertices (vertex binding 1): noise
+	// amplitude and crater fade of the terrain detail, morph target
+	// (relative to the tile centre)
+	const int NE = 5;
+	std::vector<float> amp (vtx.size() * NE);
 	for (int i = 0; i < V; i++)
-		for (int j = 0; j < V; j++) amp[i*V + j] = A[(i + 1) * W + (j + 1)];
+		for (int j = 0; j < V; j++) {
+			size_t a = (size_t)(i + 1) * W + (j + 1);
+			float *e = &amp[NE * (i*V + j)];
+			VECTOR3 t = T[i*V + j] - n->centre;
+			e[0] = A[2*a], e[1] = A[2*a + 1];
+			e[2] = (float)t.x, e[3] = (float)t.y, e[4] = (float)t.z;
+		}
+	auto copy = [&](int base, int k, int i, int j) {
+		float *e = &amp[NE * (V*V + base + k)];
+		memcpy (e, &amp[NE * (i*V + j)], NE * sizeof(float));
+		VECTOR3 d = D[(i + 1) * W + (j + 1)];
+		e[2] -= (float)(d.x * depth), e[3] -= (float)(d.y * depth), e[4] -= (float)(d.z * depth);
+	};
 	for (int k = 0; k < V; k++) {
-		amp[V*V + 0*V + k] = amp[0*V + k];
-		amp[V*V + 1*V + k] = amp[G*V + k];
-		amp[V*V + 2*V + k] = amp[k*V + 0];
-		amp[V*V + 3*V + k] = amp[k*V + G];
+		copy (0*V, k, 0, k);
+		copy (1*V, k, G, k);
+		copy (2*V, k, k, 0);
+		copy (3*V, k, k, G);
 	}
 	n->detailSpacing = src ? (float)(radius * (src->latmax - src->latmin) / (ElevGrid::N - 3)) : 0.0f;
-	double lmesh = std::max (lmin, detailLmin);
+	double lmesh = std::max (lmin, detailPrm.lambdaMin);
 	n->detailLmesh = (lmesh >= n->detailSpacing) ? 1e30f : (float)lmesh; // (none in the mesh)
 
 	VkDeviceSize vsize = vtx.size() * sizeof(NTVERTEX), size = vsize + amp.size() * sizeof(float);
@@ -621,6 +675,7 @@ void PlanetSurface::BuildMesh (Node *n, const Node *src)
 	n->nVtx = (uint32_t)vtx.size();
 	n->rtVersion++;
 	n->meshElevLvl = src ? src->lvl : 0;
+	n->meshDetailed = detailed;
 }
 
 void PlanetSurface::Request (Node *n, TileLoader::Kind kind)
@@ -672,14 +727,37 @@ void PlanetSurface::Select (Node *n)
 		if (ang - n->angRadius > horizon) return;
 	}
 
-	double dist = std::max (length (camLocal - n->centre) - radius * n->angRadius, 1.0);
+	// Distance: a lower bound for the points of the tile, between the
+	// lowest and highest elevation of its data (the closest point of a
+	// spherical shell segment, the tile approximated by a cap). The morph of
+	// the continuous level of detail relies on it being a lower bound.
+	double emin = 0.0, emax = 0.0;
+	if (!clouds) {
+		if (const Node *src = ElevSource (n)) emin = src->elev->emin, emax = src->elev->emax;
+		else emin = -maxElev, emax = maxElev;
+	}
+	auto lowerDist = [&](const VECTOR3 &p) {
+		double pr = length (p);
+		double cang = dotp (n->centre / radius, p / pr);
+		double gap = std::max (0.0, acos (std::clamp (cang, -1.0, 1.0)) - n->angRadius);
+		double r = std::clamp (pr * cos (gap), radius + emin, radius + emax);
+		return std::max (sqrt (std::max (0.0, pr * pr + r * r - 2.0 * pr * r * cos (gap))), 1.0);
+	};
+	double dist = lowerDist (camLocal);
 	double size = radius * (n->latmax - n->latmin);
-	// vessels on or near the ground stand on the finest mesh, which has the
-	// terrain detail of the ground contact, wherever the camera is
-	bool anchor = false;
-	for (const VECTOR3 &v : groundVessels)
-		if (dotp (v, n->centre) / radius > cos (n->angRadius + 300.0 / radius)) { anchor = true; break; }
-	if (n->lvl < maxLevel && (anchor || size / dist * pixPerRad > SPLIT_PIXELS)) {
+	bool split = size / dist * pixPerRad > splitPixels;
+	// Vessels on or near the ground stand on the finest mesh, which has the
+	// terrain detail of the ground contact, wherever the camera is: tiles
+	// are also split as if seen from the nearest one (graded, so the morph
+	// joins the levels)
+	n->vessel = -1;
+	double dv = 1e30;
+	for (size_t i = 0; i < groundVessels.size(); i++) {
+		double d = lowerDist (groundVessels[i]);
+		if (d < dv) dv = d, n->vessel = (int)i;
+	}
+	if (n->vessel >= 0 && size / dv * pixPerRad > splitPixels) split = true;
+	if (n->lvl < maxLevel && split) {
 		for (int c = 0; c < 4; c++) {
 			if (!n->child[c])
 				n->child[c].reset (NewNode (n->lvl + 1, 2 * n->ilat + (c >> 1), 2 * n->ilng + (c & 1), n));
@@ -706,10 +784,12 @@ void PlanetSurface::Prepare ()
 	}
 	camLocal = tmul (prot, scene->CameraPos() - ppos);
 	camDist = length (camLocal);
+	if (!std::isfinite (camDist)) return; // (no camera: keep the last selection)
 	pixPerRad = scene->PixPerRad ();
 
-	// vessels near the ground (directions from the planet centre), within
-	// sight of the camera
+	// vessels near the ground (directions from the planet centre), close
+	// enough to the camera that a mismatch of a few metres would show
+	// (farther away, the finest meshes would only alias)
 	groundVessels.clear ();
 	if (!clouds) {
 		for (DWORD i = 0; i < oapiGetVesselCount (); i++) {
@@ -718,8 +798,8 @@ void PlanetSurface::Prepare ()
 			oapiGetGlobalPos (hv, &gv);
 			VECTOR3 lv = tmul (prot, gv - ppos);
 			double r = length (lv);
-			if (r < radius + maxElev + 1000.0 && length (lv - camLocal) < 30000.0)
-				groundVessels.push_back (lv / r);
+			if (r < radius + maxElev + 1000.0 && length (lv - camLocal) < 3000.0)
+				groundVessels.push_back (lv);
 		}
 	}
 
@@ -742,6 +822,7 @@ void PlanetSurface::Prepare ()
 			if (st != 3) break; // loaded, pending, or deferred (too many requests)
 		}
 	};
+	double budget = MESH_BUDGET;
 	for (Node *n : drawList) {
 		requestUp (n, TileLoader::SURF);
 		if (layers->mask) requestUp (n, TileLoader::MASK);
@@ -754,7 +835,19 @@ void PlanetSurface::Prepare ()
 		}
 		const Node *src = ElevSource (n);
 		int srcLvl = src ? src->lvl : 0;
-		if (!n->vbuf.buffer || n->meshElevLvl != srcLvl) BuildMesh (n, src);
+		// Meshes with the terrain detail take long to build: within a time
+		// budget per frame (the nearest first), others get a plain mesh at
+		// once and the detail later
+		bool rebuild = !n->vbuf.buffer || n->meshElevLvl != srcLvl;
+		bool detailed = !detail || clouds || !src || budget > 0.0;
+		if (rebuild || (!n->meshDetailed && detailed)) {
+			auto t0 = std::chrono::steady_clock::now ();
+			BuildMesh (n, src, detailed);
+			double dt = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ();
+			if (detailed && detail && !clouds && src) budget -= dt;
+			meshTime += dt;
+			meshCount++;
+		}
 	}
 	// (ORBITER_VK_TILE_DEBUG: the deepest tiles drawn and the deepest surface
 	// and elevation data among them)
@@ -770,9 +863,11 @@ void PlanetSurface::Prepare ()
 		oapiGetObjectName (hPlanet, name, 64);
 		oapiWriteLogV ("VulkanClient: tiles %s%s: %zu drawn, deepest level %d, surface data %d, elevation %d",
 			name, clouds ? " (clouds)" : "", drawList.size(), maxLvl, maxSurf, maxElev);
+		oapiWriteLogV ("VulkanClient: meshes %s: %d built in the last 120 frames, %.2f ms each", name, meshCount, meshCount ? meshTime / meshCount : 0.0);
+		meshTime = 0.0, meshCount = 0;
 		for (const VECTOR3 &v : groundVessels) {
 			// the mesh under a vessel near the ground against the core's elevation
-			double lat = asin (v.y), lng = atan2 (v.z, v.x);
+			double lat = asin (v.y / length (v)), lng = atan2 (v.z, v.x);
 			for (Node *n : drawList) {
 				if (lat < n->latmin || lat > n->latmax || lng < n->lngmin || lng > n->lngmax) continue;
 				if (const Node *src = ElevSource (n)) {
@@ -917,19 +1012,37 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 	pc.params[1] = 1.0f;
 	pc.params[2] = clouds ? 1.0f : 0.0f;
 	pc.params[3] = clouds ? scene->CloudFadeRadius () : 0.0f; // volumetric clouds take over within
+	if (n->parent && !clouds) {
+		// morph to the parent's shape between 0.7 and 0.9 times the distance
+		// at which the parent is no longer split (where coarser neighbours
+		// begin; finer ones end within 0.7), from the camera or the nearest
+		// vessel on the ground (whichever is closer)
+		double D = radius * (n->parent->latmax - n->parent->latmin) * pixPerRad / splitPixels;
+		pc.morph[0] = (float)(0.7 * D);
+		pc.morph[1] = (float)(1.0 / (0.2 * D));
+	}
 	if (!mask) mask = texmgr->White ();
 
 	Mat4 mv = scene->ModelView (ppos + mul (prot, n->centre), prot);
 	mv.ToFloat (pc.modelView);
+	if (pc.morph[1] > 0.0f && n->vessel >= 0 && n->vessel < (int)groundVessels.size()) {
+		VECTOR3 v = groundVessels[n->vessel] - n->centre; // (tile frame)
+		pc.vessel[0] = (float)(mv.m[0] * v.x + mv.m[4] * v.y + mv.m[8] * v.z + mv.m[12]);
+		pc.vessel[1] = (float)(mv.m[1] * v.x + mv.m[5] * v.y + mv.m[9] * v.z + mv.m[13]);
+		pc.vessel[2] = (float)(mv.m[2] * v.x + mv.m[6] * v.y + mv.m[10] * v.z + mv.m[14]);
+		pc.vessel[3] = 1.0f;
+	}
 	VkCommandBuffer cmd = ctx->Cmd();
 	if (prepass) {
 		// view-space motion of the planet frame (set by the planet's visual),
 		// and the water mask
-		float pp[40];
+		float pp[48];
 		mv.ToFloat (pp);
 		memcpy (pp + 16, scene->ObjectMotion (), 16 * sizeof(float));
 		memcpy (pp + 32, pc.maskUV, sizeof(pc.maskUV));
 		memcpy (pp + 36, pc.params, sizeof(pc.params));
+		memcpy (pp + 40, pc.morph, sizeof(pc.morph));
+		memcpy (pp + 44, pc.vessel, sizeof(pc.vessel));
 		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr->Layout(), 2, 1, &mask->set, 0, nullptr);
 		if (RTScene *rt = scene->RT ()) { // into the ray tracing scene (without the skirts)
 			RTScene::Material rm{};
@@ -951,7 +1064,7 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 	if (detail && !clouds && n->detailSpacing > 0.0f) {
 		pc.detail[0] = n->detailSpacing;
 		pc.detail[1] = n->detailLmesh;
-		pc.detail[2] = (float)detailHurst;
+		pc.detail[2] = (float)detailPrm.hurst;
 		pc.detail[3] = 1.0f;
 	}
 	vkCmdPushConstants (cmd, tr->Layout(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);

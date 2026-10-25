@@ -27,12 +27,16 @@ wait 2
 lua r = oapi.get_replay ()
 lua check ("seek", math.abs (frac (r) - 0.25) < 0.01, string.format ("at %.3f of the recording", frac (r)))
 lua check ("thrust", v:get_thrustergrouplevel (THGROUP.MAIN) > 0.99, "the engine burns at that time")
+# (identical recorded attitudes once gave a NaN attitude: Quaternion::interp)
+lua local o = v:get_globalorientation (); check ("attitude", o.x == o.x and o.y == o.y and o.z == o.z, string.format ("%.3f %.3f %.3f", o.x, o.y, o.z))
 
 # dragging the playhead to three quarters
 drag @replay.timeline.head @replay.timeline.lo->@replay.timeline.hi*0.75 20
 wait 2
 lua r = oapi.get_replay ()
 lua check ("scrub", math.abs (frac (r) - 0.75) < 0.01, string.format ("at %.3f of the recording", frac (r)))
+lua local o = v:get_globalorientation (); check ("attitude_scrub", o.x == o.x and o.y == o.y and o.z == o.z, string.format ("%.3f %.3f %.3f", o.x, o.y, o.z))
+lua local p = v:get_globalpos (); check ("position_scrub", p.x == p.x and p.y == p.y and p.z == p.z, "finite position")
 
 # Play: the replay time advances
 click @replay.play

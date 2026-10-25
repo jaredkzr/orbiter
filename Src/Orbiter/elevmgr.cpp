@@ -506,13 +506,14 @@ double ElevationManager::Elevation (double lat, double lng, int reqlvl, std::vec
 				int la = min (lat0, elev_grid - 1), ln = min (lng0, elev_grid - 1);
 				double spacing = cbody->Size() * (t->latmax - t->latmin) / elev_grid;
 				double relief = TerrainDetail::Relief (elev_base + la*elev_stride + ln, elev_stride, elev_res, latidx - la, lngidx - ln);
-				dh = det->Height (lat, lng, spacing, relief);
+				double e0 = e * elev_res;
+				dh = det->Height (lat, lng, e0, spacing, relief);
 				if (normal && dh != 0.0) {
 					// slopes of the detail by central differences
 					double d = 0.25 * det->LambdaMin(), R = cbody->Size();
 					double dlat = d / R, dlng = d / (R * max (cos (lat), 1e-6));
-					double sx = (det->Height (lat, lng + dlng, spacing, relief) - det->Height (lat, lng - dlng, spacing, relief)) / (2.0 * d);
-					double sz = (det->Height (lat + dlat, lng, spacing, relief) - det->Height (lat - dlat, lng, spacing, relief)) / (2.0 * d);
+					double sx = (det->Height (lat, lng + dlng, e0, spacing, relief) - det->Height (lat, lng - dlng, e0, spacing, relief)) / (2.0 * d);
+					double sz = (det->Height (lat + dlat, lng, e0, spacing, relief) - det->Height (lat - dlat, lng, e0, spacing, relief)) / (2.0 * d);
 					// (normal: x east, y up, z north; its x and z are minus the slopes times y)
 					*normal = Vector (normal->x / normal->y - sx, 1.0, normal->z / normal->y - sz).unit();
 				}
@@ -530,8 +531,12 @@ const TerrainDetail *ElevationManager::Detail () const
 {
 	if (!detailInit) {
 		detailInit = true;
-		if (cbody->Type() == OBJTP_PLANET && ((Planet*)cbody)->TerrainDetailGain() > 0.0)
-			detail = std::make_unique<TerrainDetail> ((const Planet*)cbody, ((Planet*)cbody)->TerrainDetailGain());
+		if (cbody->Type() == OBJTP_PLANET && ((Planet*)cbody)->TerrainDetailOn()) {
+			const Planet *p = (const Planet*)cbody;
+			TerrainDetail::Params prm = TerrainDetail::Defaults (p);
+			p->TerrainDetailCfg().Apply (prm);
+			detail = std::make_unique<TerrainDetail> (p, prm);
+		}
 	}
 	return detail.get();
 }

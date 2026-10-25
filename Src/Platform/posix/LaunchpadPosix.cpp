@@ -593,6 +593,15 @@ void PosixLaunchpad::DrawOptionsTab ()
 		ImGui::EndDisabled ();
 		int lvl = (int)v.PlanetMaxLevel;
 		if (ImGui::SliderInt ("Max. resolution level", &lvl, 1, SURF_MAX_PATCHLEVEL2)) v.PlanetMaxLevel = (DWORD)lvl;
+		// level of detail: +1 halves the screen size of the surface tiles
+		float bias = (float)orbiter->Cfg()->CfgPRenderPrm.ResolutionBias;
+		if (ImGui::SliderFloat ("Resolution bias", &bias, -2.0f, 2.0f, "%+.1f"))
+			orbiter->Cfg()->CfgPRenderPrm.ResolutionBias = bias;
+		if (ImGui::IsItemHovered ()) ImGui::SetTooltip ("Higher: finer surface meshes farther from the camera (slower)");
+		ImGui::BeginDisabled (!elev);
+		ImGui::Checkbox ("Procedural terrain detail", &v.bTerrainDetail);
+		if (ImGui::IsItemHovered ()) ImGui::SetTooltip ("Relief and craters finer than the elevation data (also for ground contact)");
+		ImGui::EndDisabled ();
 
 		ImGui::SeparatorText ("Vessels and objects");
 		ImGui::Checkbox ("Vessel shadows", &v.bVesselShadows);

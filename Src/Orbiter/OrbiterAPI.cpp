@@ -1329,14 +1329,16 @@ static const TerrainDetail *PlanetDetail (OBJHANDLE hPlanet)
 	return emgr ? emgr->Detail () : nullptr;
 }
 
-DLLEXPORT double oapiSurfaceDetail (OBJHANDLE hPlanet, double lng, double lat, double spacing, double relief, double lambdaMin, double *amplitude)
+DLLEXPORT double oapiSurfaceDetail (OBJHANDLE hPlanet, double lng, double lat, double elev, double spacing, double relief,
+	double lambdaMin, double *amplitude, double *fade)
 {
 	const TerrainDetail *det = PlanetDetail (hPlanet);
 	if (!det) {
 		if (amplitude) *amplitude = 0.0;
+		if (fade) *fade = 0.0;
 		return 0.0;
 	}
-	return det->Height (lat, lng, spacing, relief, lambdaMin, amplitude);
+	return det->Height (lat, lng, elev, spacing, relief, lambdaMin, amplitude, fade);
 }
 
 DLLEXPORT void oapiSurfaceDetailSupported ()
@@ -1344,12 +1346,18 @@ DLLEXPORT void oapiSurfaceDetailSupported ()
 	TerrainDetail::clientSupport = true;
 }
 
-DLLEXPORT bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, double *lambdaMin, double *hurst)
+DLLEXPORT bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, SURFDETAILPARAM *prm)
 {
 	const TerrainDetail *det = PlanetDetail (hPlanet);
 	if (!det) return false;
-	if (lambdaMin) *lambdaMin = det->LambdaMin ();
-	if (hurst) *hurst = det->Hurst ();
+	const TerrainDetail::Params &p = det->Prm();
+	prm->lambdaMin = det->LambdaMin ();
+	prm->level = p.level;
+	prm->hurst = p.hurst;
+	prm->ridge = p.ridge;
+	prm->craters = p.craters;
+	prm->craterDepth = p.craterDepth;
+	prm->craterFresh = p.craterFresh;
 	return true;
 }
 

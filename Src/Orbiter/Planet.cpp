@@ -292,12 +292,26 @@ Planet::Planet (char *fname)
 	GetItemReal (ifs, "MinElevation", minelev);
 	GetItemReal (ifs, "MaxElevation", maxelev);
 	GetItemReal (ifs, "ElevationResolution", elev_res);
-	if (!GetItemReal (ifs, "TerrainDetail", detail_gain)) detail_gain = 0.35;
-	if (!g_pOrbiter->Cfg()->CfgVisualPrm.bTerrainDetail) detail_gain = 0.0;
-	// (only if the graphics client draws it, or without one)
-	if (g_pOrbiter->GetGraphicsClient() && !TerrainDetail::clientSupport) detail_gain = 0.0;
-	if (const char *nd = getenv ("ORBITER_NO_TERRAIN_DETAIL")) // (tests that need the plain elevation data)
-		if (*nd && *nd != '0') detail_gain = 0.0;
+	// procedural terrain detail (TerrainDetail.h): its parameters, and
+	// whether it is on (not with a graphics client that doesn't draw it)
+	{
+		TerrainDetail::Overrides &o = detail_cfg;
+		GetItemReal (ifs, "TerrainDetail", o.gain);
+		GetItemReal (ifs, "TerrainDetailHurst", o.hurst);
+		GetItemReal (ifs, "TerrainDetailRidge", o.ridge);
+		GetItemReal (ifs, "TerrainDetailFloor", o.floor);
+		bool b;
+		if (GetItemBool (ifs, "TerrainDetailSea", b)) o.sea = b ? 1.0 : 0.0;
+		GetItemReal (ifs, "TerrainDetailCraters", o.craters);
+		GetItemReal (ifs, "TerrainDetailCraterDepth", o.craterDepth);
+		GetItemReal (ifs, "TerrainDetailCraterFresh", o.craterFresh);
+		int lvl;
+		if (GetItemInt (ifs, "TerrainDetailLevel", lvl)) o.level = lvl;
+		detail_on = g_pOrbiter->Cfg()->CfgVisualPrm.bTerrainDetail && !(o.gain == 0.0);
+		if (g_pOrbiter->GetGraphicsClient() && !TerrainDetail::clientSupport) detail_on = false;
+		if (const char *nd = getenv ("ORBITER_NO_TERRAIN_DETAIL")) // (tests that need the plain elevation data)
+			if (*nd && *nd != '0') detail_on = false;
+	}
 
 	bHasRings = (GetItemReal (ifs, "RingMinRadius", ringmin) &&
 		         GetItemReal (ifs, "RingMaxRadius", ringmax));

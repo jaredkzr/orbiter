@@ -68,12 +68,17 @@ float DetailHeight (vec3 p, int type, float footprint, out float albedo)
 	float h = 0.0;
 	// (a scale shows when it covers several pixels)
 	#define VIS(s) (1.0 - smoothstep (0.15, 0.5, footprint / (s)))
+	// (craters: here unless the terrain detail has them, terraindetail.glsl)
+	bool craters = true;
+#ifdef TERRAIN_DETAIL
+	craters = !(tile.detail.w > 0.5 && atm.detailPrm.y > 0.0);
+#endif
 	if (type == DETAIL_AIRLESS || type == DETAIL_MARS) {
 		float dens = type == DETAIL_AIRLESS ? 1.0 : 0.12;
 		float fresh = type == DETAIL_AIRLESS ? 0.3 : 0.0;
 		const float S[6] = float[] (200.0, 62.5, 25.0, 8.0, 4.0, 2.0);
 		const float D[6] = float[] (0.35, 0.45, 0.55, 0.7, 0.75, 0.8);
-		for (int i = 0; i < 6; i++) {
+		for (int i = 0; i < 6 && craters; i++) {
 			float v = VIS (S[i]);
 			if (v <= 0.0) break;
 			float a = 1.0;

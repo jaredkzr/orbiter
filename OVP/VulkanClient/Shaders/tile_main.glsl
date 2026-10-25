@@ -19,12 +19,15 @@ layout(push_constant) uniform Tile {
 	vec4 maskUV;
 	vec4 params;
 	vec4 detail;
+	vec4 morph;
+	vec4 vessel;
 } tile;
 
 layout(location = 0) in vec3 vPosView;
 layout(location = 1) in vec3 vNormalView;
 layout(location = 2) in vec2 vUV;
-layout(location = 3) in float vDetailA;
+layout(location = 3) in vec2 vDetailA;
+layout(location = 4) in float vMorph;
 
 layout(location = 0) out vec4 outColor;
 
@@ -108,10 +111,13 @@ void main()
 	// clamp to the texel centres at the tile edges (the sampler wraps around)
 	vec2 hs = 0.5 / vec2(textureSize(surfTex, 0));
 	vec3 base = texture(surfTex, clamp(vUV * tile.surfUV.zw + tile.surfUV.xy, hs, 1.0 - hs)).rgb;
+	if (tile.params.z < 0.5 && atm.surfPrm.x != 1.0) // (the textures' colour tints, per planet)
+		base = max(mix(vec3(dot(base, vec3(0.2126, 0.7152, 0.0722))), base, atm.surfPrm.x), 0.0);
 	// procedural detail below the textures' resolution (terrain only)
+	float detailShadow = 1.0; // (shadows of the procedural craters)
 	if (tile.params.z < 0.5) {
 #ifdef TERRAIN_DETAIL
-		TerrainDetailShading(vPosView, N, base, vDetailA);
+		TerrainDetailShading(vPosView, N, base, vDetailA, detailShadow);
 #endif
 		SurfaceDetail(vPosView, length(vPosView), N, base);
 	} else if (dot(vPosView, N) < 0.0) {
@@ -138,7 +144,7 @@ void main()
 	// terrain receives shadows: ray traced, or from the shadow maps
 	bool rtVis = RTLighting() && tile.params.z < 0.5;
 	vec4 lv = rtVis ? RTLightVisibility() : vec4(1.0);
-	if (tile.params.z < 0.5) sunT *= rtVis ? RTVisibility().x : SunShadow(vPosView, N);
+	if (tile.params.z < 0.5) sunT *= (rtVis ? RTVisibility().x : SunShadow(vPosView, N)) * detailShadow;
 	float ao = tile.params.z < 0.5 ? AmbientOcclusion() : 1.0; // clouds are not in the prepass
 	float aoDirect = mix(1.0, ao, frame.aoParams.z); // contact darkening in direct light too
 	// the night side gets no skylight: only a fraction of the ambient level

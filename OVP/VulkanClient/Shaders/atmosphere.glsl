@@ -24,6 +24,8 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 aurora;        // geomagnetic north pole (unit, planet frame), w: aurora strength (0: none)
 	vec4 detailCamHi;   // camera position, planet frame (xyz), planet radius (w) [m]: high and
 	vec4 detailCamLo;   //   low parts of double precision values (terrain detail)
+	vec4 detailPrm;     // terrain detail: ridged share, crater cells, crater depth, fresh craters
+	vec4 surfPrm;       // x: colour saturation of the surface textures
 } atm;
 
 // planet surface (western and eastern hemisphere), for reflections

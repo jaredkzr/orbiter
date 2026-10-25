@@ -89,6 +89,7 @@ set(SHADER_SRC
 	Shaders/cloudcomp.frag
 	Shaders/envfilter.comp
 	Shaders/prepass_tile.frag
+	Shaders/prepass_tile.vert
 	Shaders/ssr_hiz.comp
 	Shaders/ssr_trace.comp
 	Shaders/ssr_trace_rt.comp

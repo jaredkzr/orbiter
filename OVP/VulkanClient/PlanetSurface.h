@@ -142,6 +142,8 @@ private:
 		uint64_t rtId = 0;    // ray tracing geometry id of vbuf
 		uint32_t rtVersion = 0;
 		int meshElevLvl = -1; // level of the elevation tile the mesh was built from (0: sphere)
+		bool meshDetailed = false; // the mesh has the terrain detail's geometry
+		int vessel = -1;      // nearest vessel on the ground (groundVessels)
 		float detailSpacing = 0.0f; // terrain detail: node spacing of the elevation data [m]
 		float detailLmesh = 0.0f;   // shortest detail wavelength in the mesh [m]
 		uint64_t lastUsed = 0;
@@ -158,9 +160,11 @@ private:
 	const Node *ElevSource (const Node *n) const;
 	double SampleElev (const Node *src, double lat, double lng) const;
 	/// elevation with procedural detail down to wavelength lmin [m]
-	/// (oapiSurfaceDetail); amp: receives the detail's amplitude factor
-	double SurfaceElev (const Node *src, double lat, double lng, double lmin, double *amp = nullptr) const;
-	void BuildMesh (Node *n, const Node *elevSrc);
+	/// (oapiSurfaceDetail); amp, fade: receive the noise amplitude factor
+	/// and the crater fade factor
+	double SurfaceElev (const Node *src, double lat, double lng, double lmin, double *amp = nullptr, double *fade = nullptr) const;
+	/// detailed: with the terrain detail's geometry (else only its shading)
+	void BuildMesh (Node *n, const Node *elevSrc, bool detailed = true);
 	void DrawNode (Node *n, bool prepass = false);
 	void BindVertices (const Node *n);
 
@@ -175,9 +179,11 @@ private:
 	double radius;        // radius of the rendered sphere (mean radius, or cloud layer radius)
 	double maxElev = 0.0;
 	int maxLevel = 18;
+	double meshTime = 0.0; int meshCount = 0; // (ORBITER_VK_TILE_DEBUG)
+	double splitPixels = 300.0; // split tiles that cover more than this on screen
 	int elevMode = 1;     // interpolation of the elevation data as in the core: 1 linear, 2 cubic spline
 	bool detail = false;  // procedural terrain detail (oapiSurfaceDetail)
-	double detailLmin = 0.0, detailHurst = 0.8; // its shortest wavelength in the core's elevation, octave exponent
+	SURFDETAILPARAM detailPrm{}; // its parameters
 	uint64_t frame = 0;
 	int requestsThisFrame = 0;
 
@@ -188,7 +194,7 @@ private:
 	double camDist = 0.0;
 	double pixPerRad = 1.0;
 	std::vector<Node*> drawList;
-	std::vector<VECTOR3> groundVessels; // directions of vessels near the ground (finest tiles under them)
+	std::vector<VECTOR3> groundVessels; // positions of vessels near the ground, planet frame (finest tiles under them)
 };
 
 #endif // !__PLANETSURFACE_H

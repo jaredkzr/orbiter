@@ -4222,12 +4222,14 @@ OAPIFUNC double oapiSurfaceElevation (OBJHANDLE hPlanet, double lng, double lat)
 
 /**
  * \brief Procedural terrain detail: elevation finer than the planet's
- *   elevation data, which the surface elevation functions include. For
- *   graphics clients that build surface meshes from the elevation tiles, so
- *   that the rendered surface matches the one vessels touch down on.
+ *   elevation data (fractal noise and craters), which the surface elevation
+ *   functions include. For graphics clients that build surface meshes from
+ *   the elevation tiles, so that the rendered surface matches the one
+ *   vessels touch down on.
  * \param hPlanet planet object handle
  * \param lng longitude [rad]
  * \param lat latitude [rad]
+ * \param elev elevation of the data there [m] (interpolated)
  * \param spacing node spacing of the elevation tile used there [m] (latitude extent / 256)
  * \param relief local relief there [m]: for each corner node of the tile's
  *   cell containing the point, the largest absolute height difference to its
@@ -4235,23 +4237,35 @@ OAPIFUNC double oapiSurfaceElevation (OBJHANDLE hPlanet, double lng, double lat)
  * \param lambdaMin shortest wavelength wanted [m] (e.g. a few times the mesh
  *   node spacing); never below the one of the surface elevation (see
  *   oapiSurfaceDetailParams)
- * \param [out] amplitude if set, receives the amplitude factor A [m]: the
- *   detail is a sum of noise octaves of wavelengths 2^j m with amplitudes
+ * \param [out] amplitude if set, receives the noise amplitude factor A [m]:
+ *   the noise is a sum of octaves of wavelengths 2^j m with amplitudes
  *   A*(lambda/spacing)^hurst (for shading finer octaves)
+ * \param [out] fade if set, receives the fade factor of the craters (0 at
+ *   surface bases, 1 away from them)
  * \return Elevation [m] to add to the interpolated elevation data
  * \note Returns 0 if the planet has no terrain detail (configuration:
  *   TerrainDetail in Orbiter.cfg and the planet's file).
  */
-OAPIFUNC double oapiSurfaceDetail (OBJHANDLE hPlanet, double lng, double lat, double spacing, double relief, double lambdaMin, double *amplitude = 0);
+OAPIFUNC double oapiSurfaceDetail (OBJHANDLE hPlanet, double lng, double lat, double elev, double spacing, double relief,
+	double lambdaMin, double *amplitude = 0, double *fade = 0);
+
+/// Parameters of the procedural terrain detail of a planet (see the
+/// TerrainDetail entries of the planet configuration files)
+struct SURFDETAILPARAM {
+	double lambdaMin;    ///< shortest wavelength in the surface elevation [m] (finer detail may be added by shading)
+	int level;           ///< finest mesh level of the detail
+	double hurst;        ///< exponent of the octave amplitudes
+	double ridge;        ///< ridged share of the octaves of 8 m and more
+	double craters;      ///< share of crater cells (0: none)
+	double craterDepth;  ///< crater depth scale
+	double craterFresh;  ///< share of fresh craters
+};
 
 /**
  * \brief Parameters of the procedural terrain detail of a planet.
- * \param [out] lambdaMin shortest wavelength in the surface elevation [m]
- *   (finer detail may be added by shading)
- * \param [out] hurst exponent of the octave amplitudes
  * \return false if the planet has no terrain detail
  */
-OAPIFUNC bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, double *lambdaMin, double *hurst);
+OAPIFUNC bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, SURFDETAILPARAM *prm);
 
 /**
  * \brief A graphics client that renders the procedural terrain detail

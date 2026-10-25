@@ -66,54 +66,150 @@ vec4 DetNoise (ivec3 i, vec3 f, uint seed)
 
 const int DET_JMIN = -4;
 
-// Gradient of the detail octaves finer than the mesh, planet frame [m/m]
-// (xyz), and their height [m] (w)
-// d: unit direction (double), R: radius; A: amplitude factor [m],
-// spacing: node spacing of the elevation data [m], lmesh: shortest
-// wavelength in the mesh [m], hurst; footprint: pixel size [m]
-vec4 TerrainDetailGrad (dvec3 d, double R, float A, float spacing, float lmesh, float hurst, float footprint)
+float DetUnit16 (uint h) { return float (h & 0xffffu) / 65535.0; }
+
+// position in lattice m at scale R/size (as TerrainDetail.cpp's LatticePoint):
+// cell (out), position in it (returned); p, sg: the axis mapping
+vec3 DetLattice (int m, dvec3 d, double scale, out ivec3 cell, out ivec3 p, out vec3 sg)
 {
 	const ivec3 P[6] = ivec3[] (ivec3 (0,1,2), ivec3 (1,2,0), ivec3 (2,0,1), ivec3 (0,2,1), ivec3 (1,0,2), ivec3 (2,1,0));
 	const vec3 S[4] = vec3[] (vec3 (1,1,1), vec3 (1,-1,-1), vec3 (-1,1,-1), vec3 (-1,-1,1));
-	vec3 grad = vec3 (0.0);
-	float height = 0.0;
+	int k = m % 24;
+	p = P[k % 6];
+	sg = S[k / 6] * ((k % 6) < 3 ? 1.0 : -1.0);
+	dvec3 q = dvec3 (sg.x * d[p.x], sg.y * d[p.y], sg.z * d[p.z]) * scale
+		+ dvec3 (double ((m * 37) & 63), double ((m * 23) & 63), double ((m * 53) & 63)) / 64.0;
+	dvec3 fl = floor (q);
+	cell = ivec3 (fl);
+	return vec3 (q - fl);
+}
+
+// a lattice gradient back to the planet frame (d moves by 1/R per metre
+// along the surface): dq_i/dd[p_i] = sg_i * scale
+vec3 DetToPlanet (vec3 g, ivec3 p, vec3 sg)
+{
+	vec3 r = vec3 (0.0);
+	r[p.x] += g.x * sg.x, r[p.y] += g.y * sg.y, r[p.z] += g.z * sg.z;
+	return r;
+}
+
+// a planet frame direction in the lattice (as DetLattice maps positions)
+vec3 DetToLattice (vec3 v, ivec3 p, vec3 sg)
+{
+	return vec3 (sg.x * v[p.x], sg.y * v[p.y], sg.z * v[p.z]);
+}
+
+struct DetailSample {
+	vec3 grad;     // gradient, planet frame [m/m]
+	float height;  // height of the noise [m]
+	float albedo;  // albedo factor of the craters (fresh ejecta)
+	float shadow;  // sunlight factor: shadows of the crater rims
+};
+
+// The detail finer than the mesh (as TerrainDetail::Height)
+// d: unit direction (double), R: radius; A: noise amplitude factor [m],
+// fade: crater fade factor, spacing: node spacing of the elevation data
+// [m], lmesh: shortest wavelength in the mesh [m], hurst; footprint:
+// pixel size [m]
+// sunP: direction to the sun, planet frame
+DetailSample TerrainDetailEval (dvec3 d, double R, float A, float fade, float spacing, float lmesh, float hurst, float footprint, vec3 sunP)
+{
+	DetailSample ds;
+	ds.grad = vec3 (0.0), ds.height = 0.0, ds.albedo = 1.0, ds.shadow = 1.0;
 	int j1 = min (20, int (floor (log2 (spacing))));
-	for (int j = j1; j >= DET_JMIN; j--) {
+	// noise octaves
+	for (int j = j1; j >= DET_JMIN && A > 0.0; j--) {
 		float lambda = exp2 (float (j));
-		float wA = 1.0 - smoothstep (0.08, 0.2, footprint / lambda); // (5 to 12 pixels: no aliasing, no grain)
+		float wA = 1.0 - smoothstep (0.15, 0.35, footprint / lambda); // (craters down to 3 to 7 pixels) // (5 to 12 pixels: no aliasing, no grain)
 		if (wA <= 0.0) break;
 		float wT = smoothstep (0.5, 1.5, log2 (spacing / lambda));
 		float wM = lambda >= 0.5 * lmesh ? smoothstep (0.5 * lmesh, lmesh, lambda) : 0.0;
 		float w = wA * wT * (1.0 - wM);
 		if (w <= 0.0) continue;
-		// the octave's lattice position (as TerrainDetail.cpp's OctavePoint)
-		int m = j - DET_JMIN, k = m % 24;
-		ivec3 p = P[k % 6];
-		vec3 sg = S[k / 6] * ((k % 6) < 3 ? 1.0 : -1.0);
-		double scale = R * double (exp2 (float (-j)));
-		dvec3 q = dvec3 (sg.x * d[p.x], sg.y * d[p.y], sg.z * d[p.z]) * scale
-			+ dvec3 (double ((m * 37) & 63), double ((m * 23) & 63), double ((m * 53) & 63)) / 64.0;
-		dvec3 fl = floor (q);
-		vec4 n = DetNoise (ivec3 (fl), vec3 (q - fl), uint (m));
-		float r = clamp (float (j - 3) / 3.0, 0.0, 1.0); // (the octaves' shape, as TerrainDetail.cpp's Shape)
-		n.xyz *= (1.0 - 0.4 * r) - 0.8 * r * sign (n.w);
+		int m = j - DET_JMIN;
+		ivec3 cell, p; vec3 sg;
+		vec3 f = DetLattice (m, d, R * double (exp2 (float (-j))), cell, p, sg);
+		vec4 n = DetNoise (cell, f, uint (m));
+		// the octaves' shape (as TerrainDetail.cpp's Shape)
+		float r = atm.detailPrm.x * clamp (float (j - 3) / 3.0, 0.0, 1.0);
 		float shape = (1.0 - 0.4 * r) * n.w + 0.8 * r * (0.35 - abs (n.w));
-		// back to the planet frame: dq_i/dd[p_i] = sg_i * scale, and d moves
-		// by 1/R per metre along the surface
-		vec3 g = vec3 (0.0);
-		g[p.x] += n.x * sg.x, g[p.y] += n.y * sg.y, g[p.z] += n.z * sg.z;
+		n.xyz *= (1.0 - 0.4 * r) - 0.8 * r * sign (n.w);
 		float a = A * pow (lambda / spacing, hurst);
-		grad += g * (a * w / lambda);
-		height += a * w * shape;
+		ds.grad += DetToPlanet (n.xyz, p, sg) * (a * w / lambda);
+		ds.height += a * w * shape;
 	}
-	return vec4 (grad, height);
+	// craters (as TerrainDetail.cpp's CraterLayer)
+	float density = atm.detailPrm.y;
+	// (weights for the typical diameter, CRATER_D of the cell size, against
+	// the data and the pixels; for the resolution the rims need, CRATER_G,
+	// against the mesh, as TerrainDetail.cpp)
+	const float CRATER_D = 0.35, CRATER_G = 0.1;
+	int k1 = min (16, int (floor (log2 (spacing / CRATER_D))));
+	for (int k = k1; k >= -2 && density > 0.0 && fade > 0.0; k--) {
+		float s = exp2 (float (k)), lambda = CRATER_D * s, lg = CRATER_G * s;
+		float wA = 1.0 - smoothstep (0.15, 0.35, footprint / lambda); // (craters down to 3 to 7 pixels)
+		if (wA <= 0.0) break;
+		float wT = smoothstep (0.5, 1.5, log2 (spacing / lambda));
+		float wM = lg >= 0.5 * lmesh ? smoothstep (0.5 * lmesh, lmesh, lg) : 0.0;
+		float w = wA * wT * (1.0 - wM) * fade;
+		if (w <= 0.0) continue;
+		// (densities above 1: several lattices)
+		int nl = int (ceil (density));
+		for (int l = 0; l < nl; l++) {
+			int m = k - DET_JMIN + 32 + 29 * l;
+			ivec3 cell, p; vec3 sg;
+			vec3 f = DetLattice (m, d, R * double (exp2 (float (-k))), cell, p, sg);
+			uint h0 = DetHash (cell, 1000u + uint (m));
+			if (DetUnit16 (h0) >= density / float (nl)) continue;
+			uint h1 = DetPcg (h0), h2 = DetPcg (h1), h3 = DetPcg (h2), h4 = DetPcg (h3);
+			float rL = 0.08 + 0.14 * DetUnit16 (h4), ext = 1.6 * rL;
+			vec3 c = ext + (1.0 - 2.0 * ext) * vec3 (DetUnit16 (h1), DetUnit16 (h2), DetUnit16 (h3));
+			float age = DetUnit16 (h4 >> 16);
+			float df = atm.detailPrm.z * (1.0 - 0.65 * age);
+			vec3 dv = f - c;
+			float dist = length (dv), x = dist / rL, rm = rL * s;
+			if (x >= 1.6) continue;
+			float dhdx = 0.0;
+			if (x < 1.0) dhdx = rm * 0.4 * df * 2.0 * x;          // bowl
+			float t = (x - 1.0) / 0.6;
+			if (abs (t) < 1.0) dhdx += rm * 0.12 * df * 2.0 * (1.0 - t * t) * (-2.0 * t) / 0.6; // rim
+			vec3 dhdq = dist > 1e-6 ? dv * (dhdx / (dist * rL)) : vec3 (0.0);
+			ds.grad += DetToPlanet (dhdq, p, sg) * (w / s);
+			// the rim's shadow in the bowl: shadowed where the rim towards
+			// the sun rises above the line to the sun (the shading can't
+			// cast shadows)
+			if (x < 1.0) {
+				vec3 up = DetToLattice (vec3 (d), p, sg), sl = DetToLattice (sunP, p, sg);
+				float se = dot (sl, up); // sine of the sun's elevation
+				vec3 sh = sl - up * se;
+				float shl = length (sh);
+				if (se > 0.0 && shl > 1e-4) {
+					sh /= shl;
+					vec3 dt = dv - up * dot (dv, up);
+					float b = dot (dt, sh), c = dot (dt, dt) - rL * rL;
+					float tr = -b + sqrt (max (b * b - c, 0.0)); // to the rim towards the sun [cells]
+					float rise = rm * 0.12 * df - rm * 0.4 * df * (x * x - 1.0); // rim crest above the point [m]
+					float need = rise - tr * s * se / shl;
+					ds.shadow *= 1.0 - w * smoothstep (-0.04 * rm, 0.04 * rm, need);
+				}
+			}
+			// fresh craters: bright ejecta about the rim
+			float fresh = atm.detailPrm.w;
+			if (age < fresh) {
+				float e = (x - 1.15) / 0.45;
+				if (abs (e) < 1.0) ds.albedo *= 1.0 + 0.4 * w * (1.0 - age / fresh) * (1.0 - e * e) * (1.0 - e * e);
+			}
+		}
+	}
+	return ds;
 }
 
 // Perturb the shading normal Nv (view space) of the surface at posView,
-// and its albedo (weathered: darker in the hollows, lighter on the crests)
-void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, float A)
+// and its albedo (weathered: darker in the hollows, lighter on the crests;
+// fresh crater ejecta)
+void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec2 Af, inout float sunShadow)
 {
-	if (tile.detail.w < 0.5 || A <= 0.0) return;
+	if (tile.detail.w < 0.5 || (Af.x <= 0.0 && (Af.y <= 0.0 || atm.detailPrm.y <= 0.0))) return;
 	mat3 v2p = mat3 (atm.viewToPlanet);
 	dvec3 cam = dvec3 (atm.detailCamHi.xyz) + dvec3 (atm.detailCamLo.xyz);
 	double R = double (atm.detailCamHi.w) + double (atm.detailCamLo.w);
@@ -123,9 +219,11 @@ void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, float A
 	// pixel size [m] (stretched along the view at grazing angles)
 	float footprint = dist * 2.0 * atm.misc.z / max (frame.jitter.w, 1.0)
 		/ max (abs (dot (posView / dist, Nv)), 0.1);
-	vec4 gh = TerrainDetailGrad (d, R, A, tile.detail.x, tile.detail.y, tile.detail.z, footprint);
-	vec3 g = gh.xyz;
-	base *= clamp (1.0 + gh.w / max (A, 1.0), 0.8, 1.2);
+	// (the mesh's band reaches twice as far when morphed to the parent's)
+	DetailSample ds = TerrainDetailEval (d, R, Af.x, Af.y, tile.detail.x, tile.detail.y * (1.0 + vMorph), tile.detail.z, footprint, atm.sunDir.xyz);
+	sunShadow *= ds.shadow;
+	base *= clamp (1.0 + ds.height / max (Af.x, 1.0), 0.8, 1.2) * ds.albedo;
+	vec3 g = ds.grad;
 	vec3 df = vec3 (d);
 	g -= df * dot (g, df);         // (along the surface)
 	vec3 gv = transpose (v2p) * g; // view space

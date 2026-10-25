@@ -651,7 +651,7 @@ void Quaternion::interp (const Quaternion &A, const Quaternion &B, double u)
 		dotAB = -dotAB;
 		sign = -1.0;
 	}
-	double omega = acos(dotAB);
+	double omega = acos(std::min(dotAB, 1.0)); // (rounding: identical unit quaternions may give a dot product above 1)
 
 	double sino = sin(omega);
 	double fa, fb;
