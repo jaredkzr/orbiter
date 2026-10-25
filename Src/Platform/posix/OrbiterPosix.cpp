@@ -76,8 +76,6 @@ HRESULT Orbiter::Create (HINSTANCE hInstance)
 	// preload startup plugin modules
 	LoadStartupModules();
 
-	InitTerrainStream ();
-
 	// the launchpad (no scenario on the command line) needs a graphics client
 	if (!gclient && pConfig->CfgCmdlinePrm.LaunchScenario.empty())
 		LoadModule ("Modules\\Plugin", "VulkanClient");

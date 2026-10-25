@@ -162,9 +162,7 @@ CFG_PLANETRENDERPRM CfgPRenderPrm_default = {
 	5,          // patch mesh resolution power
 	50,			// load frequency (Hz)
 	3,			// aniso mode (1=none)
-	0x0003,     // TileLoadFlags (load from individual tile files + compressed archives)
-	true,       // bTerrainStreaming (streamed tiles finer than the installed ones)
-	20.0        // TerrainCacheGB (size limit of the streamed tile cache)
+	0x0003      // TileLoadFlags (load from individual tile files + compressed archives)
 };
 
 CFG_MAPPRM CfgMapPrm_default = {
@@ -572,8 +570,6 @@ bool Config::Load(const char *fname)
 		CfgPRenderPrm.ResolutionBias = max (-2.0, min (2.0, d));
 	if (GetInt (ifs, "TileLoadFlags", i))
 		CfgPRenderPrm.TileLoadFlags = max (min(i, 3), 1);
-	GetBool (ifs, "TerrainStreaming", CfgPRenderPrm.bTerrainStreaming);
-	GetReal (ifs, "TerrainCacheGB", CfgPRenderPrm.TerrainCacheGB);
 
 	// map dialog parameters
 	if (GetInt (ifs, "MapDlgFlag", i))
@@ -1231,10 +1227,6 @@ BOOL Config::Write (const char *fname) const
 			ofs << "PlanetResolutionBias = " << CfgPRenderPrm.ResolutionBias << '\n';
 		if (CfgPRenderPrm.TileLoadFlags != CfgPRenderPrm_default.TileLoadFlags || bEchoAll)
 			ofs << "TileLoadFlags = " << CfgPRenderPrm.TileLoadFlags << '\n';
-		if (CfgPRenderPrm.bTerrainStreaming != CfgPRenderPrm_default.bTerrainStreaming || bEchoAll)
-			ofs << "TerrainStreaming = " << BoolStr (CfgPRenderPrm.bTerrainStreaming) << '\n';
-		if (CfgPRenderPrm.TerrainCacheGB != CfgPRenderPrm_default.TerrainCacheGB || bEchoAll)
-			ofs << "TerrainCacheGB = " << CfgPRenderPrm.TerrainCacheGB << '\n';
 	}
 
 	if (memcmp (&CfgMapPrm, &CfgMapPrm_default, sizeof (CFG_MAPPRM)) || bEchoAll) {

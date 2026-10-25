@@ -3194,21 +3194,6 @@ OAPIFUNC void oapiReplayCameraKey ();
 OAPIFUNC void oapiReplayCinematic (bool on);
 
 /**
- * \brief State of a streamed planetary tile (Orbiter tile tree indices),
- *   and a request for it: tiles finer than the installed archives can be
- *   made on demand from online data sets (Config/TerrainStream.cfg) into a
- *   disk cache.
- * \param hBody celestial body
- * \param layer 0: surface texture (DDS), 1: elevation (.elv)
- * \param lvl, ilat, ilng tile level and indices
- * \param path receives the tile file's path when it is available
- * \param len size of path
- * \return 1: available (path set), 0: being made (ask again later),
- *   -1: not available (no source, or streaming disabled)
- */
-OAPIFUNC int oapiTerrainTile (OBJHANDLE hBody, int layer, int lvl, int ilat, int ilng, char *path, int len);
-
-/**
 * \brief Set a docking port to auto capture when in close proximity with some other docking port.
 * \param hDock docking port handle
 * \param enable Enable or disable auto capture

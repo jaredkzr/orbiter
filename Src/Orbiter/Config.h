@@ -186,8 +186,6 @@ struct CFG_PLANETRENDERPRM {
 	int    LoadFrequency;       // tile load frequency
 	int    AnisoMode;
 	DWORD  TileLoadFlags;       // flags for planetary tile load mechanism
-	bool   bTerrainStreaming;   // make planetary tiles finer than the installed ones from online data
-	double TerrainCacheGB;      // size limit of the streamed tile cache [GB]
 };
 
 struct CFG_MAPPRM {

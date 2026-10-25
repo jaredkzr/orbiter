@@ -85,7 +85,6 @@ set(common_src
 	MapView.cpp
 	UiAnchor.cpp
 	Replay.cpp
-	TerrainStream.cpp
 	VesselManeuver.cpp
 	Vessel.cpp
 	Vesselbase.cpp
@@ -184,13 +183,6 @@ set_target_properties(Orbiter
 target_include_directories(Orbiter PUBLIC ${Orbiter_includes} ${TRACY_CLIENT_INCLUDE} ${imgui_SOURCE_DIR}/ ${imgui_SOURCE_DIR}/backends ${implot_SOURCE_DIR}/)
 
 target_link_libraries(Orbiter ${Orbiter_common_libs} ${Orbiter_libs} ${TRACY_CLIENT})
-
-# Streamed terrain (TerrainStream.cpp) needs libcurl (e.g. from vcpkg)
-find_package(CURL QUIET)
-if(CURL_FOUND)
-	target_compile_definitions(Orbiter PRIVATE ORBITER_TERRAIN_STREAMING)
-	target_link_libraries(Orbiter CURL::libcurl stb)
-endif()
 
 add_dependencies(Orbiter ${Orbiter_depends})
 

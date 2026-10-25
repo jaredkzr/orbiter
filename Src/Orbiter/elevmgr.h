@@ -32,12 +32,10 @@ struct ElevationTile {
 		quadrants = 0;
 		celldiag = false;
 		nmlidx = 0;
-		streamVersion = 0;
 	}
 
 	INT16 *data;
 	int lvl, tgtlvl;
-	unsigned streamVersion; // terrain stream version when loaded coarser than requested (finer ones may come)
 	double latmin, latmax;
 	double lngmin, lngmax;
 	double emin, emax;

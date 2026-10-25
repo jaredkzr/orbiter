@@ -79,7 +79,7 @@ if (ORBITER_TEST_EXE)
 		COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Scenarios/Delta-glider/Smack!.scn" "--maxframes=60"
 		WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 	)
-	set_tests_properties(Scenario.SanityCheck PROPERTIES TIMEOUT 60 ENVIRONMENT "ORBITER_NO_TERRAIN_STREAMING=1")
+	set_tests_properties(Scenario.SanityCheck PROPERTIES TIMEOUT 60)
 
 	# Register scenario tests (with a fixed time step: repeatable, and not
 	# bound to real time)
@@ -91,7 +91,7 @@ if (ORBITER_TEST_EXE)
 			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${Scenario}" "--fixedstep=0.02"
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
-		set_tests_properties(Scenario.${test_name} PROPERTIES TIMEOUT 60 ENVIRONMENT "ORBITER_NO_TERRAIN_STREAMING=1")
+		set_tests_properties(Scenario.${test_name} PROPERTIES TIMEOUT 60)
 	endforeach()
 
 	# Launchpad (in the Vulkan client's window, rendered offscreen; needs a
@@ -103,7 +103,7 @@ if (ORBITER_TEST_EXE)
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Launchpad.Cycle PROPERTIES TIMEOUT 120
-			ENVIRONMENT "ORBITER_VK_OFFSCREEN=1;ORBITER_NO_TERRAIN_STREAMING=1;ORBITER_LAUNCHPAD_AUTO=Delta-glider/Smack!;ORBITER_LAUNCHPAD_RUNS=2"
+			ENVIRONMENT "ORBITER_VK_OFFSCREEN=1;ORBITER_LAUNCHPAD_AUTO=Delta-glider/Smack!;ORBITER_LAUNCHPAD_RUNS=2"
 			PASS_REGULAR_EXPRESSION "Launchpad: session 2 closed")
 
 		# Scripted mouse and keyboard input (Tests/Input/*.input, see
@@ -117,7 +117,7 @@ if (ORBITER_TEST_EXE)
 				WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 			)
 			set_tests_properties(Input.${test_name} PROPERTIES TIMEOUT 120
-				ENVIRONMENT "ORBITER_VK_OFFSCREEN=1;ORBITER_NO_TERRAIN_STREAMING=1;ORBITER_VK_TEST_INPUT=${InputTest}")
+				ENVIRONMENT "ORBITER_VK_OFFSCREEN=1;ORBITER_VK_TEST_INPUT=${InputTest}")
 		endforeach()
 	endif()
 

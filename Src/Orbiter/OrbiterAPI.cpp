@@ -26,7 +26,6 @@
 #include "Trajectory.h"
 #include "MapView.h"
 #include "Replay.h"
-#include "TerrainStream.h"
 #include <algorithm>
 #include <zlib.h>
 #include "DrawAPI.h"
@@ -450,19 +449,6 @@ DLLEXPORT void oapiReplayCameraKey ()
 DLLEXPORT void oapiReplayCinematic (bool on)
 {
 	if (Replay *r = g_pOrbiter->GetReplay()) r->SetCinematic (on);
-}
-
-DLLEXPORT int oapiTerrainTile (OBJHANDLE hBody, int layer, int lvl, int ilat, int ilng, char *path, int len)
-{
-	terrain::Stream *ts = terrain::Get();
-	if (!ts || !hBody) return -1;
-	std::string p;
-	terrain::State st = ts->Request (((Body*)hBody)->Name(), layer == 1 ? terrain::ELEV : terrain::SURF, lvl, ilat, ilng, &p);
-	if (st == terrain::READY && path && len > 0) {
-		strncpy (path, p.c_str(), len - 1);
-		path[len - 1] = '\0';
-	}
-	return (int)st;
 }
 
 DLLEXPORT void oapiReplaySeek (double mjd)

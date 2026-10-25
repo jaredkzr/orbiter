@@ -50,7 +50,6 @@
 #include "GraphicsAPI.h"
 #include "ConsoleManager.h"
 #include "Trajectory.h"
-#include "TerrainStream.h"
 #include "MapView.h"
 #include "Replay.h"
 #include "imgui.h"
@@ -390,24 +389,6 @@ Orbiter::Orbiter ()
 Orbiter::~Orbiter ()
 {
 	CloseApp ();
-	delete terrain::Get ();
-	terrain::Set (nullptr);
-}
-
-//-----------------------------------------------------------------------------
-// Name: InitTerrainStream()
-// Desc: Streamed planetary tiles (Config/TerrainStream.cfg), if enabled
-//-----------------------------------------------------------------------------
-void Orbiter::InitTerrainStream ()
-{
-	if (terrain::Get() || !pConfig->CfgPRenderPrm.bTerrainStreaming) return;
-	const char *off = getenv ("ORBITER_NO_TERRAIN_STREAMING"); // (tests: no network, no cached downloads)
-	if (off && *off && *off != '0') return;
-	std::string cfg = std::string (pConfig->CfgDirPrm.ConfigDir) + "TerrainStream.cfg";
-#ifndef _WIN32
-	std::replace (cfg.begin(), cfg.end(), '\\', '/');
-#endif
-	terrain::Set (terrain::Stream::Create (cfg, "Cache/Terrain", pConfig->CfgPRenderPrm.TerrainCacheGB));
 }
 
 #ifdef _WIN32
@@ -482,8 +463,6 @@ HRESULT Orbiter::Create (HINSTANCE hInstance)
 
 	// preload startup plugin modules
 	LoadStartupModules();
-
-	InitTerrainStream ();
 
 	{
 		BOOL cleartype, ok;

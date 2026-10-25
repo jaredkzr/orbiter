@@ -2,7 +2,6 @@
 // Licensed under the MIT License
 
 #include "PlanetSurface.h"
-#include <fstream>
 #include "RayTracing.h"
 #include "Scene.h"
 #include "VkTexture.h"
@@ -31,7 +30,6 @@ namespace {
 
 	constexpr double SPLIT_PIXELS = 450.0;  // split tiles that cover more than this on screen
 	constexpr size_t MAX_OUTSTANDING = 24;  // tile requests in flight
-	constexpr uint8_t STREAMING = 4;        // tile state: being made by the terrain stream (poll again)
 	constexpr int MAX_UPLOADS = 12;         // tiles accepted per frame
 	constexpr uint64_t PRUNE_FRAMES = 120;  // unused subtrees are released after this
 
@@ -159,13 +157,6 @@ void TileLoader::Run ()
 void TileLoader::Process (const Request &req, Result &res)
 {
 	PlanetLayers &pl = *req.planet;
-	if (!req.path.empty()) { // streamed tile
-		std::ifstream f (req.path, std::ios::binary);
-		std::vector<uint8_t> d ((std::istreambuf_iterator<char> (f)), {});
-		if (req.kind == ELEV) res.ok = DecodeElv (d, res.elev, false);
-		else res.data = std::move (d), res.ok = !res.data.empty();
-		return;
-	}
 	switch (req.kind) {
 	case SURF:
 		res.ok = pl.surf && pl.surf->Read (req.lvl, req.ilat, req.ilng, res.data);
@@ -563,21 +554,12 @@ void PlanetSurface::BuildMesh (Node *n, const Node *src)
 void PlanetSurface::Request (Node *n, TileLoader::Kind kind)
 {
 	uint8_t &state = kind == TileLoader::SURF ? n->surfState : kind == TileLoader::MASK ? n->maskState : n->elevState;
-	if (state && state != STREAMING) return;
+	if (state) return;
 	TileLayer *layer = kind == TileLoader::SURF ? layers->surf.get() : kind == TileLoader::MASK ? layers->mask.get() : layers->elev.get();
-	std::string path;
-	if (!layer || !layer->HasTile (n->lvl, n->ilat, n->ilng)) {
-		// a finer tile than the installed ones may be streamed (surface and elevation)
-		if (kind == TileLoader::MASK || clouds) { state = 3; return; }
-		char buf[1024];
-		int st = oapiTerrainTile (hPlanet, kind == TileLoader::ELEV ? 1 : 0, n->lvl, n->ilat, n->ilng, buf, sizeof(buf));
-		if (st < 0) { state = 3; return; }
-		if (st == 0) { state = STREAMING; return; }
-		path = buf;
-	}
+	if (!layer || !layer->HasTile (n->lvl, n->ilat, n->ilng)) { state = 3; return; }
 	if (tr->Loader().Outstanding() >= MAX_OUTSTANDING) return;
 	state = 1;
-	tr->Loader().Push ({ layers, kind, n->lvl, n->ilat, n->ilng, path });
+	tr->Loader().Push ({ layers, kind, n->lvl, n->ilat, n->ilng });
 }
 
 void PlanetSurface::Update ()
@@ -664,9 +646,8 @@ void PlanetSurface::Prepare ()
 	auto requestUp = [this](Node *n, TileLoader::Kind kind) {
 		for (Node *a = n; a; a = a->parent) {
 			uint8_t &st = kind == TileLoader::SURF ? a->surfState : a->maskState;
-			if (st == 0 || st == STREAMING) Request (a, kind);
-			if (st != 3 && st != STREAMING) break; // loaded, pending, or deferred (too many requests)
-			// (while a tile is streamed, its ancestors' data is used)
+			if (st == 0) Request (a, kind);
+			if (st != 3) break; // loaded, pending, or deferred (too many requests)
 		}
 	};
 	for (Node *n : drawList) {

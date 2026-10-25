@@ -70,7 +70,6 @@ set(headless_src
 	MapView.cpp
 	UiAnchor.cpp
 	Replay.cpp
-	TerrainStream.cpp
 	VesselManeuver.cpp
 	Vessel.cpp
 	Vesselbase.cpp
@@ -139,15 +138,6 @@ target_include_directories(OrbiterCore PUBLIC
 )
 
 target_compile_definitions(OrbiterCore PRIVATE NOGRAPHICS)
-
-# Streamed terrain (TerrainStream.cpp) needs libcurl
-find_package(CURL QUIET)
-if(CURL_FOUND)
-	target_compile_definitions(OrbiterCore PRIVATE ORBITER_TERRAIN_STREAMING)
-	target_link_libraries(OrbiterCore PRIVATE CURL::libcurl stb)
-else()
-	message(STATUS "libcurl not found: no terrain streaming")
-endif()
 
 target_link_libraries(OrbiterCore
 	PRIVATE
