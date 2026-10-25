@@ -1123,8 +1123,12 @@ void Context::FlushDeferred (uint32_t frame)
 
 void Context::DeferDestroy (std::function<void()> fn)
 {
-	// destroyed when this frame slot comes round again, i.e. after its fence has signalled
-	frames[frameIndex].deferred.push_back (std::move (fn));
+	// destroyed when the slot of the last frame that may use the object comes
+	// round again, i.e. after its fence has signalled: while recording, the
+	// current frame; between frames, the frame submitted last (the current
+	// slot is flushed as soon as its recording starts)
+	uint32_t slot = recording ? frameIndex : (frameIndex + FRAMES_IN_FLIGHT - 1) % FRAMES_IN_FLIGHT;
+	frames[slot].deferred.push_back (std::move (fn));
 }
 
 // ======================================================================
