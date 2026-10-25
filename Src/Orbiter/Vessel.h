@@ -1132,9 +1132,8 @@ public:
 	void UpdateRadiationForces ();
 	void UpdateAerodynamicForces ();
 	void UpdateAerodynamicForces_OLD ();
-	bool AddSurfaceForces (Vector *F, Vector *M,
-		const StateVectors *s=NULL, double tfrac=1.0, double dt=0.0,
-		bool allow_groundcontact=true) const;
+	void CollectGroundContacts (const StateVectors &s, const StateVectors &sb, double h,
+		std::vector<contact::Point> &pts) const;
 
 	void PostUpdate ();
 	// called after all vessels have been updated (i.e. states are synced)
@@ -1612,18 +1611,9 @@ private:
 	bool nosesteering;           // nosewheel steering active?
 	double nosewheeldir;         // nosewheel orientation (-1..1)
 
-	double E0_comp;              // compression energy due to surface impact at current time step
-	mutable double E_comp;       // compression energy due to surface impact after last AddSurfaceForces call
-
-	// scratch values per touchdown point for AddSurfaceForces
-	struct ContactScratch {
-		std::vector<int> idx;     // points in contact
-		std::vector<double> depth, fn, flng, flat; // height above ground; normal, longitudinal, lateral force
-		void Resize (size_t n) {
-			if (idx.size() < n) idx.resize (n), depth.resize (n), fn.resize (n), flng.resize (n), flat.resize (n);
-		}
-	};
-	mutable ContactScratch contact_scratch;
+	// impulses on the touchdown points in the last step (normal, longitudinal,
+	// lateral; for warm starting the contact solver)
+	mutable std::vector<double> contact_warm;
 
 	double vd_forw, vd_back, vd_vert, vd_side;  // resistance constants against translation in atmosphere
 

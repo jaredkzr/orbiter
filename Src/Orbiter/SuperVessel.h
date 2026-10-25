@@ -126,8 +126,8 @@ public:
 
 	void PostUpdate ();
 
-	bool AddSurfaceForces (Vector *F, Vector *M,
-		const StateVectors *s = NULL, double tfrac = 1.0, double dt = 0.0) const;
+	void CollectGroundContacts (const StateVectors &s, const StateVectors &sb, double h,
+		std::vector<contact::Point> &pts) const;
 
 	void NotifyShiftVesselOrigin (Vessel *vessel, const Vector &dr);
 	// sent by a vessel to notify a shift of its local coordinate origin (i.e. its centre of mass)

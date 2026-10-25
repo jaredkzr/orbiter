@@ -1,0 +1,48 @@
+BEGIN_HYPERDESC
+<h1>Ground contact on a slope</h1>
+Delta-gliders dropped onto a 12 degree slope near Hadley Rille on the
+Moon: braked facing uphill, braked across the slope, and unbraked facing
+downhill. Needs the Moon's elevation data (skipped without it).
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Tests/ContactSlopeTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship UPHILL
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET UPHILL
+  MODE Extern
+  POS 4.0 -20.0 -30
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+UPHILL:DeltaGlider
+  STATUS Landed Moon
+  POS 3.7400 24.5000
+  HEADING 234.00
+  GEAR 1 1.0000
+  PRPLEVEL 0:0.300 1:1.000
+END
+ACROSS:DeltaGlider
+  STATUS Landed Moon
+  POS 3.8300 24.5000
+  HEADING 323.00
+  GEAR 1 1.0000
+  PRPLEVEL 0:0.300 1:1.000
+END
+DOWNHILL:DeltaGlider
+  STATUS Landed Moon
+  POS 3.8400 24.5000
+  HEADING 46.00
+  GEAR 1 1.0000
+  PRPLEVEL 0:0.300 1:1.000
+END
+END_SHIPS

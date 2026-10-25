@@ -379,50 +379,47 @@ bool VesselBase::SurfaceProximity () const
 
 // ==============================================================
 
-void VesselBase::SetPropagator (int &plevel, int &nstep) const
+void VesselBase::ResolveContacts (double h)
 {
-	RigidBody::SetPropagator (plevel, nstep);
-	if (bSurfaceContact) {
-		plevel = NumPropLevel()-1;
-		nstep = MaxSubStep(); // should be set according to (vertical?) speed
-		update_with_collision = true;
-	} else {
-		update_with_collision = false;
-	}
-	collision_during_update = false; // reset collision check
+	contact_force.Set (0,0,0);
+	contact_moment.Set (0,0,0);
+	if (!proxybody || IsComponent() || h <= 0.0) return;
+
+	contact_pts.clear();
+	CollectGroundContacts (*s0, *s0, h, contact_pts);
+	if (contact_pts.empty()) return;
+
+	contact::Body b;
+	b.mass = mass;
+	b.pmi = pmi;
+	Vector v0 (tmul (s0->R, s1->vel));
+	b.v = v0;
+	b.w = s1->omega;
+	Vector P, L;
+	contact::Solve (contact_pts, b, h, P, L);
+	if (!P.x && !P.y && !P.z && !L.x && !L.y && !L.z) return; // (no contact within the step)
+
+	Vector dw (b.w - s1->omega);
+	s1->vel += mul (s0->R, b.v - v0);
+	s1->omega = b.w;
+	s1->Q.Rotate (dw*h);
+	s1->R.Set (s1->Q);
+
+	// new position: moved over the step with the new velocity relative to the
+	// ground point under the vessel's centre (so that a vessel at rest stays
+	// at rest on the turning planet)
+	const StateVectors &P0 = *proxybody->s0, &P1 = *proxybody->s1;
+	Vector pl (tmul (P0.R, s0->pos - P0.pos)); // planet-local position at the start
+	double wrot = Pi2 / proxybody->RotT();
+	Vector g1 (P1.pos + mul (P1.R, pl));
+	Vector vg1 (P1.vel + mul (P1.R, Vector (-pl.z*wrot, 0, pl.x*wrot)));
+	Vector dx ((g1 - s1->pos) + (s1->vel - vg1)*h);
+	rpos_add += dx;
+	s1->pos = rpos_base + rpos_add;
+	rvel_add = s1->vel - rvel_base;
+	s1->vel = rvel_base + rvel_add;
+
+	contact_force = P/h;
+	contact_moment = L/h;
 }
 
-// =======================================================================
-
-bool VesselBase::ValidateStateUpdate (StateVectors *s)
-{
-	if (collision_during_update) {
-		if (!update_with_collision) {
-			update_with_collision = true;
-			collision_speed_checked = false;
-			bSurfaceContact = true;
-			return false;
-		} else if (!collision_speed_checked) {
-			collision_speed_checked = true;
-			double vsmax = -0.1 * MaxSubStep()/td.SimDT; // allow max 0.1m / substep surface penetration
-			Vector hn (tmul(GRot(), GPos()-proxybody->GPos()).unit());
-			double vs = dotp (sp.groundvel_ship, hn);
-			if (vs < vsmax) {
-				Vector gv(sp.groundvel_ship * (vsmax/vs)); // rescaled surface-relative velocity
-				gv = mul (GRot(), gv);                    // map to global
-				s0->vel += (gv - sp.groundvel_glob);
-				rvel_base += (gv - sp.groundvel_glob);
-				return false;
-			}
-		}
-	}
-	return true;
-}
-
-// =======================================================================
-
-bool VesselBase::AddSurfaceForces (Vector *F, Vector *M,
-	const StateVectors *s, double tfrac, double dt) const
-{
-	return false;
-}

@@ -6,6 +6,7 @@
 
 #include "Rigidbody.h"
 #include "elevmgr.h"
+#include "GroundContact.h"
 
 typedef enum {
 	FLIGHTSTATUS_FREEFLIGHT,
@@ -171,26 +172,24 @@ protected:
 
 	virtual const VesselBase *GetSuperStructure () const { return NULL; }
 
-	virtual void SetPropagator (int &plevel, int &nstep) const;
-	// set timestep propagator parameters; overrides defaults during ground contact
+	void ResolveContacts (double h);
+	// Resolve ground contact after the step was propagated (GroundContact.h):
+	// impulses change the new velocities, and the new position follows them
 
-	virtual bool ValidateStateUpdate (StateVectors *s);
-
-	virtual bool AddSurfaceForces (Vector *F, Vector *M,
-		const StateVectors *s = NULL, double tfrac = 1.0, double dt = 0.0) const;
-	// Return linear force F and angular moment M due to planet surface interaction,
-	// given state vectors s at fraction tfrac (0..1) of the current time step, with
-	// step interval dt.
+	virtual void CollectGroundContacts (const StateVectors &s, const StateVectors &sb, double h,
+		std::vector<contact::Point> &pts) const {}
+	// Touchdown points in contact, or about to be within the step h, with the
+	// ground, for the body with state sb that this vessel is (part of); s: this
+	// vessel's state. States at the start of the step.
 
 	virtual TOUCHDOWN_VTX *HullvtxFirst () = 0;
 	virtual TOUCHDOWN_VTX *HullvtxNext () = 0;
 	// Hull vertex iterator
 
-	// Behaviour flags
-
-	mutable bool update_with_collision;   // include surface contact forces in dynamic update
-	mutable bool collision_during_update; // surface contact during current step update?
-	mutable bool collision_speed_checked; // checked for valid speed during impact?
+	// Ground contact: force and moment of the last step (body frame), and
+	// the points of contact
+	Vector contact_force, contact_moment;
+	std::vector<contact::Point> contact_pts;
 
 	// Status flags
 	FlightStatus fstatus;

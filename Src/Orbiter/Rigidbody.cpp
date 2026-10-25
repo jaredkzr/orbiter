@@ -260,7 +260,7 @@ void RigidBody::Update (bool force)
 					arot.Set (EulerInv_full (tau, s1->omega));
 				}
 			} while (!ValidateStateUpdate (s1));
-			//s1->R.Set (s1->Q);
+			ResolveContacts (td.SimDT);
 
 			if (updcount++ == 1000) { // flush increments
 				rpos_base += rpos_add;

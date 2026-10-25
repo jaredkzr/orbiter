@@ -108,6 +108,10 @@ public:
 
 	virtual bool ValidateStateUpdate (StateVectors *s) { return true; }
 
+	virtual void ResolveContacts (double h) {}
+	// Called after the state was propagated over a step h without contact
+	// forces: resolves contacts by modifying the new state (s1)
+
 	virtual Vector GetPertAcc (const PertIntData &data, const Vector &pos, double tfrac);
 	// returns the gravity perturbation (on top of the spherical gravity field
 	// from cbody) at relative position pos, at fractional time tfrac within

@@ -60,6 +60,7 @@ set(headless_src
 # Vessel classes
 	FlightRecorder.cpp
 	SuperVessel.cpp
+	GroundContact.cpp
 	Vessel.cpp
 	Vesselbase.cpp
 	Vesselstatus.cpp

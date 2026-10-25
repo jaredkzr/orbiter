@@ -1,0 +1,58 @@
+BEGIN_HYPERDESC
+<h1>Ground contact of the stock vessels</h1>
+Shuttle-A, ShuttlePB, DG-S, a delta-glider with its gear up and the
+quadcopter on the SLF runway, released from their landed state: each must
+stay at rest, upright, on its touchdown points.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Tests/ContactVesselsTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship SHA
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET SHA
+  MODE Extern
+  POS 4.0 -20.0 -30
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+SHA:ShuttleA
+  STATUS Landed Earth
+  POS -80.6833620 28.5980924
+  HEADING 330.01
+  PRPLEVEL 0:0.100 1:1.000
+END
+PB:ShuttlePB
+  STATUS Landed Earth
+  POS -80.6841299 28.5992607
+  HEADING 330.01
+  PRPLEVEL 0:0.200
+END
+DGS:DG-S
+  STATUS Landed Earth
+  POS -80.6848979 28.6004291
+  HEADING 330.01
+  GEAR 1 1.0000
+  PRPLEVEL 0:0.100 1:1.000
+END
+BELLY:DeltaGlider
+  STATUS Landed Earth
+  POS -80.6856659 28.6015975
+  HEADING 330.01
+  GEAR 0 0.0000
+  PRPLEVEL 0:0.100 1:1.000
+END
+QUAD:Quadcopter
+  STATUS Landed Earth
+  POS -80.6864339 28.6027658
+  HEADING 330.01
+END
+END_SHIPS

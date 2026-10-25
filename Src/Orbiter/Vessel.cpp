@@ -911,10 +911,8 @@ void Vessel::SetRotationMatrix (const Matrix &R)
 void Vessel::GetIntermediateMoments (Vector &acc, Vector &tau, const StateVectors &state, double tfrac, double dt)
 {
 	// TODO: Move this up to VesselBase
-	Vector F(Flin_add); // linear forces excluding gravitational and ground contact forces
-	Vector M(Amom_add); // angular momentum excluding gravity gradient torque and ground contact torques
-	collision_during_update |=
-		AddSurfaceForces (&F, &M, &state, tfrac, dt, update_with_collision); // add ground contact forces and moments
+	Vector F(Flin_add); // linear forces excluding gravitational forces (ground contact: ResolveContacts)
+	Vector M(Amom_add); // angular momentum excluding gravity gradient torque
 	// note: we may want to remove aerodynamic forces from Flin_add/Amom_add and calculate
 	// intermediate states here instead
 	RigidBody::GetIntermediateMoments (acc, tau, state, tfrac, dt);  // get gravitational component
@@ -930,10 +928,8 @@ void Vessel::GetIntermediateMoments_pert (Vector &acc, Vector &tau,
 	StateVectors state(state_rel);
 	state.pos += cbody->InterpolatePosition (tfrac);
 
-	Vector F(Flin_add); // linear forces excluding gravitational and ground contact forces
-	Vector M(Amom_add); // angular momentum excluding gravity gradient torque and ground contact torques
-	collision_during_update |=
-		AddSurfaceForces (&F, &M, &state, tfrac, dt, update_with_collision); // add ground contact forces and moments
+	Vector F(Flin_add); // linear forces excluding gravitational forces (ground contact: ResolveContacts)
+	Vector M(Amom_add); // angular momentum excluding gravity gradient torque
 	// note: we may want to remove aerodynamic forces from Flin_add/Amom_add and calculate
 	// intermediate states here instead
 	RigidBody::GetIntermediateMoments_pert (acc, tau, state_rel, tfrac, dt, cbody);  // get gravitational component
@@ -945,9 +941,7 @@ void Vessel::GetIntermediateMoments_pert (Vector &acc, Vector &tau,
 
 Vector Vessel::GetTorque () const
 {
-	static Vector F(0,0,0);
-	Vector M(Amom);
-	AddSurfaceForces (&F, &M, s0, 0, 0);
+	Vector M(Amom + contact_moment);
 	return RigidBody::GetTorque() + M/mass;
 }
 
@@ -3484,6 +3478,14 @@ void Vessel::InitLanded (Planet *planet, double lng, double lat, double dir, con
 		nml = tmul (*hrot, tmul (L2H, Vector(0,1,0)));
 	}
 
+	// the terrain's slope at the site (the vessel is set down along it)
+	Vector tnml (0,1,0); // terrain normal (local horizon frame)
+	if (!hrot && planet->ElevMgr()) {
+		planet->ElevMgr()->Elevation (lat, lng, 0, nullptr, &tnml);
+		if (tnml.y > 0.2) cgelev /= tnml.y; // (the height of the centre above the terrain, vertically)
+		else tnml.Set (0,1,0);
+	}
+
 	proxybody = proxyplanet = planet;
 	sp.SetLanded (lng, lat, cgelev, dir, nml, planet);
 
@@ -3507,6 +3509,19 @@ void Vessel::InitLanded (Planet *planet, double lng, double lat, double dir, con
 			R.premul (Matrix (1, 0, 0,   0, cosa, -sina,   0, sina, cosa));
 			R.premul (Matrix (cosp, 0, -sinp,   0, 1, 0,   sinp, 0, cosp));
 			land_rot.postmul (R);
+		}
+
+		// tilt with the terrain: the local vertical turned onto the terrain normal
+		if (tnml.y < 1.0 - 1e-10) {
+			Vector up (sp.clat*sp.clng, sp.slat, sp.clat*sp.slng);
+			Vector nt (tmul (sp.L2H, tnml));
+			Vector k (crossp (up, nt));
+			double s = k.length(), c = dotp (up, nt), c1 = 1.0-c;
+			k /= s;
+			land_rot.premul (Matrix (
+				c + c1*k.x*k.x,       -s*k.z + c1*k.x*k.y,  s*k.y + c1*k.x*k.z,
+				s*k.z + c1*k.x*k.y,   c + c1*k.y*k.y,      -s*k.x + c1*k.y*k.z,
+				-s*k.y + c1*k.x*k.z,  s*k.x + c1*k.y*k.z,   c + c1*k.z*k.z));
 		}
 	}
 
@@ -4288,190 +4303,86 @@ void Vessel::UpdateAerodynamicForces_OLD ()
 }
 
 // =======================================================================
-// Forces caused by surface impact/friction
-// Supports subsampling at fractional timestep tfrac, for vessel position at pos
-// If tfrac==1, the full step is calculated
-// Note that no interpolation of rotation states is performed
+// Touchdown points in contact with the ground (or about to be within the
+// step h), for the contact solver: each against the terrain under it, along
+// the terrain's normal there
 
-bool Vessel::AddSurfaceForces (Vector *F, Vector *M, const StateVectors *s, double tfrac, double dt, bool allow_groundcontact) const
+void Vessel::CollectGroundContacts (const StateVectors &s, const StateVectors &sb, double h,
+	std::vector<contact::Point> &pts) const
 {
-	nforcevec = 0; // should move higher up
-	E_comp = 0.0;  // compression energy
+	nforcevec = 0;
+	if (!proxybody || !ntouchdown_vtx) return;
+	if (contact_warm.size() != 3*ntouchdown_vtx) contact_warm.assign (3*ntouchdown_vtx, 0.0);
 
-	int i, j;
-	double alt = 0, tdymin = 0;
-
-	StateVectors ls; // local state
-	if (!proxybody) return false;
-	StateVectors ps = proxybody->InterpolateState (tfrac); // intermediate planet state; should probably be passed in as function argument
-	SurfParam surfp; // intermediate surface parameters; should probably be passed in as function argument
-
-	if (!dt) dt = td.SimDT;
-
-	if (!s) { // full step, based on pre-step vessel position (but new planet position!)
-		ls.pos.Set (s0->pos);
-		ls.vel.Set (s0->vel);
-		ls.Q.Set (s0->Q);
-		ls.omega.Set (s0->omega);
-		s = &ls;
-	} else {    // partial step, based on intermediate position
-		// we need to propagate the gravbody backwards, since it has been updated already
+	const StateVectors &P0 = *proxybody->s0, &P1 = *proxybody->s1; // the planet at the start and end of the step
+	double alt = s.pos.dist (P0.pos) - proxybody->Size();
+	// (how close the points may come within the step)
+	double margin = (sp.groundspd + s.omega.length()*size)*h + 0.05;
+	if (alt - sp.elev > 2.0*size + margin + 1e3) { // no danger of surface contact
+		std::fill (contact_warm.begin(), contact_warm.end(), 0.0);
+		return;
 	}
-	alt = s->pos.dist (ps.pos) - proxybody->Size(); // altitude over normal zero
-	if (alt > sp.elev + 1e4) return false; // add safety margin
 
-	surfp.Set (*s, ps, proxybody, &etile, &windp); // intermediate surface parameters
-	alt = surfp.alt;
-	if (alt > 2.0*size) return false; // no danger of surface contact
-
-	// check for touchdown
-	//Matrix T (surfp.L2H);  // transformation vessel local -> horizon
-	//T.tpostmul (ps.R);
-	//T.postmul (s->R);
-
-	Matrix T (s->R); // transformation vessel local -> planet local
-	T.tpremul (ps.R);
-
-	// per-point scratch values (owned by the vessel, so that vessels can be
-	// updated independently)
-	ContactScratch &cs = contact_scratch;
-	cs.Resize (ntouchdown_vtx);
-	int *tidx = cs.idx.data();
-	double *tdy = cs.depth.data(), *fn = cs.fn.data(), *flng = cs.flng.data(), *flat = cs.flat.data();
-
-	ElevationManager* emgr = (cbody->Type() == OBJTP_PLANET ? ((Planet*)cbody)->ElevMgr() : 0);
+	ElevationManager *emgr = (proxybody->Type() == OBJTP_PLANET ? ((Planet*)proxybody)->ElevMgr() : 0);
 	int reslvl = 1;
 	if (emgr) reslvl = (int)(32.0-log(max(alt,100.0))*LOG2);
+	double wrot = Pi2 / proxybody->RotT();
 
-	Vector shift = tmul(ps.R, s->pos - ps.pos);
-	for (i = 0; i < ntouchdown_vtx; i++) {
-		Vector p (mul (T, touchdown_vtx[i].pos) + shift);
+	// rolling direction of the gear (vessel frame)
+	Vector d1 (touchdown_vtx[0].pos - (touchdown_vtx[1].pos+touchdown_vtx[2].pos)*0.5);
+
+	for (DWORD i = 0; i < ntouchdown_vtx; i++) {
+		const TOUCHDOWN_VTX &tv = touchdown_vtx[i];
+		double *warm = &contact_warm[3*i];
+		Vector pg (s.pos + mul (s.R, tv.pos));    // global position
+		Vector pl (tmul (P0.R, pg - P0.pos));      // planet-local position
 		double lng, lat, rad, elev = 0.0;
-		proxybody->LocalToEquatorial (p, lng, lat, rad);
-		if (emgr)
-			elev = emgr->Elevation (lat, lng, reslvl, &etile);
-		tdy[i] = rad - elev - proxybody->Size();
-		if (!i || tdy[i] < tdymin) {
-			tdymin = tdy[i];
+		proxybody->LocalToEquatorial (pl, lng, lat, rad);
+		Vector nh (0,1,0);                         // terrain normal (local horizon frame)
+		if (emgr) elev = emgr->Elevation (lat, lng, reslvl, &etile, &nh);
+		double slng = sin(lng), clng = cos(lng), slat = sin(lat), clat = cos(lat);
+		Matrix L2H (-slng,0,clng, clat*clng,slat,clat*slng, -slat*clng,clat,-slat*slng);
+		Vector nl (tmul (L2H, nh));                // terrain normal (planet frame)
+		double C = (rad - proxybody->Size() - elev) * dotp (nl, pl/rad); // distance above the terrain
+		if (C > margin) {
+			warm[0] = warm[1] = warm[2] = 0.0;
+			continue;
 		}
-	}
 
-	if (tdymin >= 0.0) return false;
-	if (!allow_groundcontact) return true;
-
-	// wheel brake levels
-	double wbrake_level[2];
-	for (i = 0; i < 2; i++) {
-		wbrake_level[i] = wbrake[i];
-		//if (wbrake_override[i]) {
-		//	wbrake_level[i] = wbrake_override[i];
-		//} else {
-		//	wbrake_level[i] = wbrake_permanent[i];
-		//}
-	}
-
-	// surface effects: friction and wheel brakes
-	double gv_lon, gv_lat, gv_n, mu;
-	double massdt = mass/dt;
-	double fn_tot_undamped = 0.0, fn_tot = 0.0, flng_tot = 0.0, flat_tot = 0.0;
-
-	// longitudinal touchdown direction - could be precalculated
-	Vector d1 ((touchdown_vtx[0].pos-(touchdown_vtx[1].pos+touchdown_vtx[2].pos)*0.5));
-	// horizon normal in vessel frame
-	//Vector hn (tmul (s->R, s->pos - ps.pos).unit());
-	Vector hn (tmul (T, tmul (surfp.L2H, surfp.surfnml)));
-	// project d1 (longitudinal touchdown direction) into horizon plane
-	Vector d1h ((d1 - hn * dotp (d1, hn)).unit());
-	// lateral touchdown direction
-	Vector d2h (crossp (hn, d1h));
-
-	DWORD ntouch = 0;
-	for (i = 0; i < ntouchdown_vtx; i++) {
-		if (tdy[i] < 0.0) { // ground contact on point i!
-			tdy[i] = max(tdy[i], -1.0); // DEBUG
-			tidx[ntouch++] = i;
-			Vector gv (surfp.groundvel_ship + crossp(touchdown_vtx[i].pos,s->omega)); // ground velocity of touchdown point in vessel frame
-			gv_n   = dotp (gv, hn);                                             // gv projected on horizon normal in vessel frame
-			gv_lon = dotp (gv, d1h);											// longitudinal speed component for touchdown point i
-			gv_lat = dotp (gv, d2h);											// lateral speed component
-
-			fn[i] = -tdy[i]*touchdown_vtx[i].stiffness; 						// horizon-normal force component: gear compression forces
-			double maxpress = min (-tdy[i], 0.1)*touchdown_vtx[i].stiffness;
-
-			if (i < 3) {
-				mu = touchdown_vtx[i].mu_lng;
-				if (i && wbrake_level[i-1])
-					mu += (touchdown_vtx[i].mu - touchdown_vtx[i].mu_lng)*wbrake_level[i-1];
-			} else {
-				mu = touchdown_vtx[i].mu;
-			}
-			flng[i] = mu * maxpress;												// horizon-longitudinal force component: surface friction
-			if (fabs(gv_lon) < 10.0) flng[i] *= sqrt(fabs(0.1*gv_lon));             // cancel horizontal forces at low speeds
-			//flng[i] = min (flng[i], fabs(gv_lon) * fn[i] * mu/dt);
-			if (gv_lon > 0.0) flng[i] = -flng[i];
-			flng_tot += flng[i];
-
-			mu = touchdown_vtx[i].mu;
-			flat[i] = mu * maxpress;									// horizon-lateral force component: surface friction
-			if (fabs(gv_lat) < 10.0) flat[i] *= sqrt(fabs(0.1*gv_lat));
-			//flat[i] = min (flat[i], fabs(gv_lat) * fn[i] * mu/dt);
-			if (gv_lat > 0.0) flat[i] = -flat[i];
-			flat_tot += flat[i];
-
-			E_comp -= fn[i]*tdy[i]*0.5; // compression energy
-			fn_tot_undamped += fn[i];
-			fn[i] -= gv_n*touchdown_vtx[i].damping;
-			fn_tot += fn[i];
-
-			// debug
-			if (nforcevec < forcevecbuf) {
-				forcevec[nforcevec] = d1h*flng[i] + d2h*flat[i];
-				forcepos[nforcevec] = touchdown_vtx[i].pos;
-				nforcevec++;
-			}
-
+		contact::Point p;
+		p.r = tmul (sb.R, pg - sb.pos);
+		p.n = tmul (sb.R, mul (P0.R, nl));
+		Vector t1 (tmul (sb.R, mul (s.R, d1)));
+		t1 -= p.n * dotp (t1, p.n);
+		if (t1.length() < 1e-6) { // (rolling direction along the normal: any tangent)
+			t1 = crossp (p.n, fabs (p.n.x) < 0.9 ? Vector(1,0,0) : Vector(0,0,1));
+		}
+		p.t1 = t1.unit();
+		p.t2 = crossp (p.n, p.t1);
+		// velocity of the ground at the point
+		Vector vg (P1.vel + mul (P1.R, Vector (-pl.z*wrot, 0, pl.x*wrot)));
+		p.vg = tmul (sb.R, vg);
+		p.C = C;
+		p.k = tv.stiffness;
+		p.c = tv.damping;
+		if (i < 3) { // gear: rolling friction, wheel brakes on the main gear
+			p.mu1 = tv.mu_lng;
+			if (i && wbrake[i-1])
+				p.mu1 += (tv.mu - tv.mu_lng) * wbrake[i-1];
 		} else {
-			fn[i] = flng[i] = flat[i] = 0.0;
+			p.mu1 = tv.mu;
+		}
+		p.mu2 = tv.mu;
+		p.warm = warm;
+		pts.push_back (p);
+
+		// (force vectors for display: friction of the last step)
+		if (nforcevec < forcevecbuf && h > 0.0 && C <= 0.0) {
+			forcevec[nforcevec] = tmul (s.R, mul (sb.R, (p.t1*warm[1] + p.t2*warm[2]) / h));
+			forcepos[nforcevec] = tv.pos;
+			nforcevec++;
 		}
 	}
-
-	// limit forces to avoid velocity reversal
-	gv_lon = dotp (surfp.groundvel_ship, d1h);
-	gv_lat = dotp (surfp.groundvel_ship, d2h);
-	gv_n   = dotp (surfp.groundvel_ship, hn);
-	double fmax_lon = -gv_lon * massdt;
-	if ((fmax_lon >= 0.0 && flng_tot > fmax_lon) || (fmax_lon <= 0.0 && flng_tot < fmax_lon)) {
-		double scale = fmax_lon/flng_tot;
-		flng_tot = fmax_lon;
-		for (i = 0; i < ntouch; i++)
-			flng[tidx[i]] *= scale;
-	}
-	double fmax_lat = -gv_lat * massdt;
-	if ((fmax_lat >= 0.0 && flat_tot > fmax_lat) || (fmax_lat <= 0.0 && flat_tot < fmax_lat)) {
-		double scale = fmax_lat/flat_tot;
-		flat_tot = fmax_lat;
-		for (i = 0; i < ntouch; i++)
-			flat[tidx[i]] *= scale;
-	}
-
-	Vector M_surf, F_surf = hn*fn_tot + d1h*flng_tot + d2h*flat_tot;
-	for (i = 0; i < ntouch; i++) {
-		j = tidx[i];
-		M_surf += crossp (hn*fn[j]+d1h*flng[j]+d2h*flat[j], touchdown_vtx[j].pos);
-	}
-
-	// limit the change in angle over the current time step induced by impact forces
-	Vector dA = EulerInv_full (M_surf/mass, s->omega)*dt*dt;
-	double da = dA.length();
-	if (da > 10.0*RAD) {
-		double scale = 10.0*RAD/da;
-		M_surf *= scale;
-	}
-
-	*F += F_surf;
-	*M += M_surf;
-
-	return true;
 }
 
 // =======================================================================
@@ -4591,7 +4502,6 @@ void Vessel::Update (bool force)
 	Amom.Set (Amom_add);    // store current torque
 	Flin_add.Set (0,0,0);   // reset linear force
 	Amom_add.Set (0,0,0);   // reset angular moments
-	E0_comp = E_comp;       // store compression energy
 	//for (i = 0; i < 2; i++) wbrake_override[i] = 0;
 	weight_valid = torque_valid = false;
 	bForceActive = false;

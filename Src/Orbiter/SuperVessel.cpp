@@ -415,7 +415,6 @@ void SuperVessel::GetIntermediateMoments (Vector &acc, Vector &tau,
 	// TODO: Move this up to VesselBase
 	Vector F(Flin);
 	Vector M(Amom);
-	AddSurfaceForces (&F, &M, &state, tfrac, dt); // add ground contact forces and moments
 	RigidBody::GetIntermediateMoments (acc, tau, state, tfrac, dt);  // get gravitational component
 	acc += mul (state.Q, F/mass);
 	tau += M/mass;
@@ -735,20 +734,14 @@ bool SuperVessel::Merge (Vessel *vessel1, int port1, Vessel *vessel2, int port2)
 
 // =======================================================================
 
-bool SuperVessel::AddSurfaceForces (Vector *F, Vector *M, const StateVectors *s, double tfrac, double dt) const
+void SuperVessel::CollectGroundContacts (const StateVectors &s, const StateVectors &sb, double h,
+	std::vector<contact::Point> &pts) const
 {
-	bool impact = false;
-	DWORD comp;
 	StateVectors scomp;
-	for (comp = 0; comp < nv; comp++) {
-		Vector Fcomp, Mcomp;
-		ComponentStateVectors (s, &scomp, comp);
-		if (vlist[comp].vessel->AddSurfaceForces (&Fcomp, &Mcomp, &scomp, tfrac, dt)) {
-			AddComponentForceAndMoment (F, M, &Fcomp, &Mcomp, comp);
-			impact = true;
-		}
+	for (DWORD comp = 0; comp < nv; comp++) {
+		ComponentStateVectors (&s, &scomp, comp);
+		vlist[comp].vessel->CollectGroundContacts (scomp, sb, h, pts);
 	}
-	return impact;
 }
 
 // =======================================================================
