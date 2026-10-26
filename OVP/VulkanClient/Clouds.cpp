@@ -30,7 +30,7 @@ namespace {
 	};
 
 	// ggclouds.comp's parameters (std430: arrays of vec4)
-	constexpr int GG_LAYERS = 4, GG_STORMS = 16, GG_TOWERS = 64;
+	constexpr int GG_LAYERS = 4, GG_STORMS = 16, GG_TOWERS = 64, GG_FLASHES = 8;
 	struct GGParams {
 		float layer[GG_LAYERS][4], albedo[GG_LAYERS][4], lmisc[GG_LAYERS][4];
 		float haze[4], hazeH[4];
@@ -38,6 +38,8 @@ namespace {
 		float storm[GG_STORMS][4], stormP[GG_STORMS][4];
 		float misc[4], misc2[4];
 		float tower[GG_TOWERS][4], towerP[GG_TOWERS][4];
+		float flash[GG_FLASHES][4]; // position (planet frame), brightness
+		float flashInfo[4];         // count, diffusion length [m]
 	};
 
 	uint32_t Pcg (uint32_t v)
@@ -519,6 +521,59 @@ void VolumetricClouds::RenderGasGiant (const GasGiantFrame &f)
 		}
 	}
 	g.misc2[3] = (float)nt;
+
+	// Lightning: each tower flashes at random (more often the stronger its
+	// storm), decided per 0.1 s of simulated time from hashes (the same
+	// flashes at any frame rate); a flash lasts 0.2-0.5 s, two to four
+	// strokes, somewhere in the tower's column between its base (the water
+	// deck) and 20 km below the 1-bar level
+	flashes.clear ();
+	{
+		const double SLOT = 0.1, MAXDUR = 0.6;
+		double t = f.time;
+		VECTOR3 pp;
+		MATRIX3 prot;
+		oapiGetGlobalPos (f.hPlanet, &pp);
+		oapiGetRotationMatrix (f.hPlanet, &prot);
+		struct Lit { VECTOR3 pl; double b; };
+		std::vector<Lit> lit;
+		for (int i = 0; i < nt; i++) {
+			double s = g.towerP[i][1];
+			double rate = 0.5 * s * s; // [1/s] (Juno: flashes every second or so in active storms)
+			VECTOR3 c = _V(g.tower[i][0], g.tower[i][1], g.tower[i][2]);
+			if (length (c * R - f.camPlanet) > 600e3) continue;
+			VECTOR3 e = unit (_V(-c.z, 0.0, c.x)), n = crossp (c, e);
+			uint32_t id = Pcg ((uint32_t)(g.towerP[i][2] * 10.0f) + 0x9e37u); // (the tower's identity: stable)
+			for (int64_t k = (int64_t)floor ((t - MAXDUR) / SLOT); k <= (int64_t)floor (t / SLOT); k++) {
+				uint32_t h0 = Pcg (id ^ Pcg ((uint32_t)k)), h1 = Pcg (h0), h2 = Pcg (h1), h3 = Pcg (h2);
+				if (Unit16 (h0) >= rate * SLOT) continue;
+				double t0 = (k + Unit16 (h0 >> 16)) * SLOT, dur = 0.2 + 0.3 * Unit16 (h1);
+				double age = t - t0;
+				if (age < 0.0 || age > dur) continue;
+				// (strokes: sharp rises, quick decays)
+				int ns = 2 + (int)(Unit16 (h1 >> 16) * 2.99);
+				double b = 0.0;
+				for (int j = 0; j < ns; j++) {
+					double ts = dur * j / ns + 0.03 * Unit16 (Pcg (h3 + j));
+					if (age >= ts) b = std::max (b, exp (-(age - ts) / 0.04));
+				}
+				double alt = (dk.decks.back().base + 10e3) + (std::min (-20e3, dk.towerTop) - dk.decks.back().base - 10e3) * Unit16 (h2);
+				double lean = 0.35 * (alt - dk.decks.back().base);
+				double rt = g.tower[i][3], a = PI2 * Unit16 (h2 >> 16), rr = 0.5 * rt * Unit16 (h3);
+				VECTOR3 pl = c * (R + alt) + e * (lean + rr * cos (a)) + n * (rr * sin (a));
+				lit.push_back ({ pl, b * (0.5 + 0.5 * Unit16 (h3 >> 16)) });
+			}
+		}
+		std::sort (lit.begin(), lit.end(), [&](const Lit &a, const Lit &b) {
+			return length (a.pl - f.camPlanet) < length (b.pl - f.camPlanet); });
+		int nf = std::min ((int)lit.size(), GG_FLASHES);
+		for (int i = 0; i < nf; i++) {
+			g.flash[i][0] = (float)lit[i].pl.x, g.flash[i][1] = (float)lit[i].pl.y, g.flash[i][2] = (float)lit[i].pl.z;
+			g.flash[i][3] = (float)lit[i].b;
+			flashes.push_back ({ pp + mul (prot, lit[i].pl), lit[i].b });
+		}
+		g.flashInfo[0] = (float)nf, g.flashInfo[1] = 5e3f;
+	}
 	g.misc2[0] = (float)dk.stretch, g.misc2[1] = (float)dk.tint, g.misc2[2] = (float)f.floorRadius;
 
 	VkCommandBuffer cmd = ctx->Cmd ();

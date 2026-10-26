@@ -69,6 +69,12 @@ public:
 	};
 	/// Ray-march a gas giant's decks (outside rendering scopes, after the prepass)
 	void RenderGasGiant (const GasGiantFrame &f);
+
+	/// Lightning in the storm towers near the camera (gas giants): the
+	/// flashes lit at the last RenderGasGiant: global position, brightness
+	/// (light source colour scale; 0: between strokes)
+	struct Flash { VECTOR3 gpos; double brightness; };
+	const std::vector<Flash> &Flashes () const { return flashes; }
 	/// Composite over the scene (in the scene's rendering scope)
 	void Composite ();
 
@@ -111,6 +117,7 @@ private:
 	VkPipelineLayout marchLayout = VK_NULL_HANDLE, compLayout = VK_NULL_HANDLE, coverageLayout = VK_NULL_HANDLE;
 	VkPipeline marchPipe = VK_NULL_HANDLE, compPipe = VK_NULL_HANDLE, coveragePipe = VK_NULL_HANDLE;
 	VkPipeline ggPipe = VK_NULL_HANDLE; // gas giant decks (ggclouds.comp)
+	std::vector<Flash> flashes;
 	vkc::Buffer ggBuf;                  // their parameters, one slot per frame in flight
 	bool active = false; // rendered this frame
 };

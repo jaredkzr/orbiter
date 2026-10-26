@@ -290,7 +290,7 @@ bool VulkanClient::clbkDisplayFrame ()
 		if (!autoScreenshot.empty() && !videoDir.empty() && frameCount + 1 + videoFrames >= autoScreenshotFrame && frameCount + 1 < autoScreenshotFrame) {
 			char name[64];
 			snprintf (name, sizeof(name), "/frame_%05u.png", videoIndex++);
-			CaptureBackbuffer (videoDir + name, true);
+			CaptureBackbuffer (videoDir + name, false); // (written before the next frame: none lost at exit)
 			if (FILE *f = fopen ((videoDir + "/times.txt").c_str(), videoIndex == 1 ? "w" : "a")) {
 				fprintf (f, "%.6f\n", oapiGetSimTime ());
 				fclose (f);

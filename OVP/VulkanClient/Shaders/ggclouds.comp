@@ -41,6 +41,8 @@ struct GGParams {
 	vec4 misc2;              // zonal stretch, map tint, floor radius [m], tower count
 	vec4 tower[MAX_TOWERS];  // base centre direction (planet frame), radius [m]
 	vec4 towerP[MAX_TOWERS]; // top radius [m], strength, noise offset, 0
+	vec4 flash[8];           // lightning: position (planet frame), brightness
+	vec4 flashInfo;          // count, diffusion length [m]
 };
 layout(std430, set = 0, binding = 5) readonly buffer GGBuf { GGParams gg[]; };
 
@@ -245,6 +247,19 @@ float Medium (vec3 x, bool detail, out vec3 alb, bool towerDetail)
 	return ext;
 }
 
+// light of the lightning flashes at p (in the cloud: diffused over about
+// the diffusion length about each flash)
+vec3 FlashLight (vec3 p)
+{
+	vec3 l = vec3 (0.0);
+	float ld = P.flashInfo.y;
+	for (int i = 0; i < int (P.flashInfo.x); i++) {
+		float d = length (p - P.flash[i].xyz);
+		l += P.flash[i].w * exp (-d / (4.0 * ld)) / (d * d + ld * ld);
+	}
+	return l * vec3 (0.80, 0.86, 1.0) * 1.2e10; // (bluish white; scale: a flash outshines the dim depths)
+}
+
 // optical depth of the decks and gas above radius r along a direction
 // with sine of elevation mu (mean densities)
 float ColumnAbove (float r, float mu)
@@ -344,7 +359,7 @@ void main ()
 			vec3 sunAtm = muS > -0.15 ? AtmSunTransmittance (p, max (r, atm.radii.x + 1.0), muS) * atm.radii.w : vec3 (0.0);
 			float od = ColumnAbove (r, max (muS, 0.0));
 			vec3 S = hz * P.haze.rgb * (sunAtm * mix (HG (mu, 0.6), 1.0 / (4.0 * PI), 0.5) * exp (-od)
-				+ pc.ambient.rgb * exp (-0.6 * ColumnAbove (r, 1.0)));
+				+ pc.ambient.rgb * exp (-0.6 * ColumnAbove (r, 1.0)) + FlashLight (p));
 			float Tstep = exp (-hz * dt);
 			L += T * (S - S * Tstep) / max (hz, 1e-12);
 			T *= Tstep;
@@ -379,7 +394,7 @@ void main ()
 		}
 		float above = ColumnAbove (r, 1.0);
 		vec3 sky = pc.ambient.rgb * exp (-0.6 * above) * (0.3 + 0.7 * clamp (muS + 0.2, 0.0, 1.0));
-		vec3 S = ext * alb * (Ssun + sky);
+		vec3 S = ext * alb * (Ssun + sky + FlashLight (p));
 		float Tstep = exp (-ext * dt);
 		L += T * (S - S * Tstep) / max (ext, 1e-12);
 		float w = T * (1.0 - Tstep);

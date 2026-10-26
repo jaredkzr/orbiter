@@ -1178,6 +1178,18 @@ void Scene::FillFrameUniforms (void *pfu)
 	// local light sources, nearest to the camera first
 	std::vector<LightSource> ls;
 	for (auto &it : visuals) it.second->CollectLights (ls);
+	// lightning in a gas giant's storms (the flashes of the last frame)
+	for (const VolumetricClouds::Flash &fl : vclouds->Flashes ()) {
+		if (fl.brightness <= 0.01) continue;
+		LightSource l{};
+		l.pos = fl.gpos, l.dir = _V(0, 1, 0);
+		for (int k = 0; k < 3; k++) l.col[k] = (float)(fl.brightness * 1.2e10 * (k == 0 ? 0.80 : k == 1 ? 0.86 : 1.0));
+		l.range = 300e3;
+		l.att[0] = 25e6, l.att[1] = 0.0, l.att[2] = 1.0; // (inverse square, softened within 5 km)
+		l.spot = false;
+		l.owner = 0, l.shadowOfs = 0.0;
+		ls.push_back (l);
+	}
 	std::sort (ls.begin(), ls.end(), [this](const LightSource &a, const LightSource &b) {
 		return length (a.pos - camPos) - a.range < length (b.pos - camPos) - b.range;
 	});
