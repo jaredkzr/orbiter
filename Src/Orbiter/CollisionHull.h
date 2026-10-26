@@ -13,6 +13,7 @@
 
 #include "Vecmat.h"
 #include "ConvexGeometry.h"
+#include "ConvexDecomposition.h"
 #include <string>
 #include <vector>
 
@@ -51,6 +52,12 @@ namespace collision {
 	/// Hulls of the groups of a mesh (mesh frame); cached by key (the mesh's
 	/// file name)
 	const std::vector<Hull> &MeshHulls (const std::string &key, const Mesh &mesh);
+
+	/// Convex parts of sets of triangles (each decomposed on its own; cached
+	/// on disk by their contents); label: for the log. Thread-safe without
+	/// the log (cached: set if they came from the cache).
+	std::vector<Hull> TriangleHulls (const std::string &label, const std::vector<std::vector<convex::Triangle>> &groups,
+		bool log = true, bool *cached = nullptr);
 
 	/// Hulls of a vessel class from Config/Collision/<classname>.cfg, if it
 	/// exists: false if there is none. A file with NONE gives no hulls (the

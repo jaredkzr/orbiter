@@ -2,12 +2,15 @@
 // Licensed under the MIT License
 
 // =======================================================================
-// Collisions between vessels. Before the vessels are updated, pairs that
-// may touch within the step are found (bounding spheres); those vessels
-// leave their ground contact to this pass. After the update, the contacts
+// Collisions between vessels, and with the structures of surface bases.
+// Before the vessels are updated, pairs that may touch within the step are
+// found (bounding spheres); those vessels leave their ground contact to
+// this pass. After the update, the contacts
 // between their collision hulls (CollisionHull.h) and with the ground are
 // resolved together (ContactSolver.h). Vessels at rest on the ground
-// (landed) are fixed obstacles, and become dynamic when hit. Contacts are
+// (landed) are fixed obstacles, and become dynamic when hit; base
+// structures (Base::CollisionHulls) are fixed. A vessel that starts inside
+// a structure (placed there) passes through that part until it is clear. Contacts are
 // not made close to free docking ports near each other, so that vessels
 // can dock.
 // =======================================================================
@@ -16,9 +19,11 @@
 #define __VESSELCOLLISION_H
 
 #include "Vesselbase.h"
+#include <set>
 #include <vector>
 
 class PlanetarySystem;
+class Base;
 
 class VesselCollider {
 public:
@@ -40,6 +45,11 @@ public:
 private:
 	struct Pair { VesselBase *a, *b; };
 	std::vector<Pair> pairs;
+	struct BasePair { VesselBase *v; const Base *base; };
+	std::vector<BasePair> basePairs;
+	// (vessel, structure part) overlapping when first met: passed through
+	// until apart
+	std::set<std::pair<const VesselBase*, const void*>> inside;
 	std::vector<VesselBase*> dynamic; // bodies of the pairs that move
 	struct Release {
 		VesselBase *a, *b;

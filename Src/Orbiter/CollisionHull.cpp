@@ -102,7 +102,6 @@ namespace collision {
 
 		// the groups' triangles (hidden groups and tiny ones left out)
 		std::vector<std::vector<convex::Triangle>> groups;
-		uint64_t h = Hash (1469598103934665603ull, &CACHE_VERSION, sizeof(CACHE_VERSION));
 		for (DWORD g = 0; g < mesh.nGroup(); g++) {
 			const GroupSpec *grp = const_cast<Mesh&>(mesh).GetGroup (g);
 			if (!grp || grp->nVtx < 3 || grp->nIdx < 3 || (grp->Flags & 0x2)) continue;
@@ -117,14 +116,26 @@ namespace collision {
 				const NTVERTEX *v[3] = { grp->Vtx + grp->Idx[k], grp->Vtx + grp->Idx[k+1], grp->Vtx + grp->Idx[k+2] };
 				t.push_back ({Vector (v[0]->x, v[0]->y, v[0]->z), Vector (v[1]->x, v[1]->y, v[1]->z), Vector (v[2]->x, v[2]->y, v[2]->z)});
 			}
-			for (const convex::Triangle &tr : t) h = Hash (h, &tr, sizeof(tr));
 			groups.push_back (std::move (t));
 		}
+		hulls = TriangleHulls (std::string ("mesh ") + key, groups);
+		return hulls;
+	}
+
+	std::vector<Hull> TriangleHulls (const std::string &label, const std::vector<std::vector<convex::Triangle>> &groups,
+		bool log, bool *cached)
+	{
+		std::vector<Hull> hulls;
+		uint64_t h = Hash (1469598103934665603ull, &CACHE_VERSION, sizeof(CACHE_VERSION));
+		for (const auto &t : groups)
+			for (const convex::Triangle &tr : t) h = Hash (h, &tr, sizeof(tr));
 
 		// decomposed into convex parts (cached on disk)
 		std::string path (CachePath (h));
+		if (cached) *cached = false;
 		if (LoadParts (path, hulls)) {
-			LOGOUT ("Collision hulls of mesh %s: %d (cached)", key.c_str(), (int)hulls.size());
+			if (log) LOGOUT ("Collision hulls of %s: %d (cached)", label.c_str(), (int)hulls.size());
+			if (cached) *cached = true;
 			return hulls;
 		}
 		convex::DecomposeParams prm;
@@ -132,7 +143,7 @@ namespace collision {
 			for (convex::Polytope &p : convex::Decompose (t, prm))
 				hulls.push_back (std::move (p));
 		SaveParts (path, hulls);
-		LOGOUT ("Collision hulls of mesh %s: %d from %d groups", key.c_str(), (int)hulls.size(), (int)groups.size());
+		if (log) LOGOUT ("Collision hulls of %s: %d from %d groups", label.c_str(), (int)hulls.size(), (int)groups.size());
 		return hulls;
 	}
 

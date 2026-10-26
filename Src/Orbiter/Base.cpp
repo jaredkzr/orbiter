@@ -15,6 +15,7 @@
 #include <cmath>
 #include "GraphicsAPI.h"
 #include <fstream>
+#include <chrono>
 
 using namespace std;
 
@@ -529,6 +530,75 @@ void Base::ScanObjectMeshes () const
 		}
 	}
 	objmsh_valid = true;
+}
+
+const std::vector<collision::Hull> &Base::CollisionHulls () const
+{
+	if (colState == 2) return colHulls;
+	if (colState == 1) {
+		if (colFuture.wait_for (std::chrono::seconds (0)) != std::future_status::ready) return colHulls;
+		colHulls = colFuture.get();
+		colRadius = 0.0;
+		for (const collision::Hull &h : colHulls)
+			colRadius = std::max (colRadius, h.centre.length() + h.radius);
+		LOGOUT ("Collision hulls of base %s: %d%s", Name(), (int)colHulls.size(), colCached ? " (cached)" : "");
+		colState = 2;
+		return colHulls;
+	}
+	colState = 1;
+	const double MIN_HEIGHT = 1.0; // [m] objects lower than this are flat (driven over)
+	std::vector<std::vector<convex::Triangle>> parts;
+	std::vector<NTVERTEX> vtx;
+	std::vector<WORD> idx;
+	for (DWORD i = 0; i < nobj; i++) {
+		BaseObject *bo = obj[i];
+		DWORD spec = bo->GetSpecs();
+		if (spec & (OBJSPEC_LPAD | OBJSPEC_RWY | OBJSPEC_UPDATEVERTEX | OBJSPEC_UNDERSHADOW)) continue;
+		bo->Activate();
+		std::vector<convex::Triangle> tris;
+		auto addTris = [&](const NTVERTEX *v, const WORD *ix, DWORD nidx) {
+			for (DWORD k = 0; k + 2 < nidx; k += 3)
+				tris.push_back ({Vector (v[ix[k]].x, v[ix[k]].y, v[ix[k]].z), Vector (v[ix[k+1]].x, v[ix[k+1]].y, v[ix[k+1]].z),
+				                 Vector (v[ix[k+2]].x, v[ix[k+2]].y, v[ix[k+2]].z)});
+		};
+		if (spec & OBJSPEC_EXPORTVERTEX) {
+			for (int j = 0; j < bo->nGroup(); j++) {
+				DWORD nvtx, nidx;
+				LONGLONG texid;
+				bool undersh, groundsh;
+				if (!bo->GetGroupSpec (j, nvtx, nidx, texid, undersh, groundsh) || undersh || !nvtx || !nidx) continue;
+				vtx.assign (nvtx, NTVERTEX{});
+				idx.assign (nidx, 0);
+				DWORD ofs = 0;
+				bo->ExportGroup (j, vtx.data(), idx.data(), ofs);
+				addTris (vtx.data(), idx.data(), nidx);
+			}
+		}
+		if (spec & OBJSPEC_EXPORTMESH) {
+			if (Mesh *m = bo->ExportMesh()) {
+				for (DWORD g = 0; g < m->nGroup(); g++) {
+					const GroupSpec *grp = m->GetGroup (g);
+					if (!grp || (grp->Flags & 0x2) || grp->nIdx < 3) continue; // (hidden)
+					addTris (grp->Vtx, grp->Idx, grp->nIdx);
+				}
+			}
+		}
+		if (tris.empty()) continue;
+		double ylo = 1e30, yhi = -1e30;
+		for (const convex::Triangle &t : tris)
+			for (const Vector *p : {&t.a, &t.b, &t.c}) ylo = std::min (ylo, p->y), yhi = std::max (yhi, p->y);
+		if (yhi - ylo < MIN_HEIGHT) continue;
+		parts.push_back (std::move (tris));
+	}
+	// (the objects' triangles are gathered here: base objects are not
+	// thread-safe; their decomposition goes to a worker, or is waited for
+	// with a fixed time step: repeatable runs)
+	bool *cached = &colCached;
+	colFuture = std::async (std::launch::async, [parts = std::move (parts), cached]() {
+		return collision::TriangleHulls ("base", parts, false, cached);
+	});
+	if (td.FixedStep() > 0.0) colFuture.wait ();
+	return CollisionHulls ();
 }
 
 void Base::Update (bool force)

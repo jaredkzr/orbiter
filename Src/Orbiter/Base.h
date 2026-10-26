@@ -9,6 +9,9 @@
 
 #include "Body.h"
 #include "Nav.h"
+#include "CollisionHull.h"
+#include <future>
+#include <vector>
 
 class Planet;
 class PlanetarySystem;
@@ -157,6 +160,15 @@ public:
 	// restructure the object elements. Can be used for shadow projection
 	// calculations
 
+	const std::vector<collision::Hull> &CollisionHulls () const;
+	// Collision hulls of the base's structures (base frame): the convex parts
+	// of each object; flat objects (runways, pads, ground markings) and
+	// moving ones are left out. Made in the background when first asked for
+	// (empty until they are ready; cached on disk)
+
+	double CollisionRadius () const { CollisionHulls (); return colRadius; }
+	// bounding radius of the collision hulls about the base's origin [m]
+
 	inline bool MapObjectsToSphere() const { return bObjmapsphere; }
 	// map base objects onto spherical planet surface?
 
@@ -195,6 +207,12 @@ private:
 
 	BaseObject **obj;              // list of base objects
 	DWORD nobj;                    // number of base objects
+
+	mutable std::vector<collision::Hull> colHulls; // collision hulls of the structures
+	mutable double colRadius = 0.0;
+	mutable int colState = 0;      // 0: not asked for, 1: being made, 2: ready
+	mutable std::future<std::vector<collision::Hull>> colFuture;
+	mutable bool colCached = false;
 
 	mutable Mesh *genmsh_os, *genmsh_us; // meshes for generic base structures (above/below shadows)
 	mutable Mesh **objmsh_os, **objmsh_us; // meshes for base structures (above/below shadows)

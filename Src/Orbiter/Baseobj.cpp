@@ -1138,7 +1138,7 @@ bool Hangar3::GetGroupSpec (int grp, DWORD &nvtx, DWORD &nidx, LONGLONG &_texid,
 
 void Hangar3::ExportGroup (int grp, NTVERTEX *vtx, WORD *idx, DWORD &idx_ofs)
 {
-	static WORD sidx0[60] = {0,6,1,1,6,5,1,5,2,2,5,4,2,4,3, // back wall
+	static WORD sidx0[36] = {0,6,1,1,6,5,1,5,2,2,5,4,2,4,3, // back wall
 	          				 7,8,14,8,9,14,9,10,16,16,10,17,10,11,17,11,12,15,12,13,15}; // front wall
 	static WORD sidx1[24] = {0,1,5,5,4,0,6,7,4,4,5,6,2,3,7,7,6,2,1,2,6,6,5,1}; // entry
 	static WORD sidx2[36] = {0,1,7,8,7,1,1,2,8,9,8,2,2,3,9,10,9,3,3,4,10,4,11,10,4,5,11,12,11,5,5,6,12,13,12,6}; // roof
@@ -1148,7 +1148,7 @@ void Hangar3::ExportGroup (int grp, NTVERTEX *vtx, WORD *idx, DWORD &idx_ofs)
 	switch (grp) {
 	case 0:
 		memcpy (vtx, dyndata->Vtx, 18*sizeof(NTVERTEX));
-		for (i = 0; i < 60; i++) *idx++ = sidx0[i] + iofs;
+		for (i = 0; i < 36; i++) *idx++ = sidx0[i] + iofs; // (as GetGroupSpec: was 60, past the group's indices)
 		return;
 	case 1:
 		memcpy (vtx, dyndata->Vtx+18, 8*sizeof(NTVERTEX));

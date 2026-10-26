@@ -3,6 +3,8 @@
 
 #include "VesselCollision.h"
 #include "Celbody.h"
+#include "Planet.h"
+#include "Base.h"
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -38,6 +40,7 @@ namespace {
 void VesselCollider::Begin (const std::vector<VesselBase*> &bodies, double h)
 {
 	pairs.clear();
+	basePairs.clear();
 	dynamic.clear();
 	if (h <= 0.0) return;
 
@@ -78,13 +81,31 @@ void VesselCollider::Begin (const std::vector<VesselBase*> &bodies, double h)
 					c->v->contact_deferred = true;
 				}
 		}
+
+	// moving vessels near the structures of surface bases
+	for (const Cand &c : cand) {
+		if (!c.dyn || !c.v->proxybody || c.v->proxybody->Type() != OBJTP_PLANET) continue;
+		const Planet *pl = (const Planet*)c.v->proxybody;
+		for (DWORD i = 0; i < pl->nBase(); i++) {
+			const Base *b = pl->GetBase (i);
+			double reach = c.r + c.v->GVel().dist (b->GVel())*h + 0.1;
+			// (cheap test with the base's size first: its hulls are made when first needed)
+			if (c.v->s0->pos.dist (b->GPos()) > b->Size() + 2e3 + reach) continue;
+			if (b->CollisionHulls().empty() || c.v->s0->pos.dist (b->GPos()) > b->CollisionRadius() + reach) continue;
+			basePairs.push_back ({c.v, b});
+			if (std::find (dynamic.begin(), dynamic.end(), c.v) == dynamic.end()) {
+				dynamic.push_back (c.v);
+				c.v->contact_deferred = true;
+			}
+		}
+	}
 }
 
 // ==============================================================
 
 void VesselCollider::Resolve (double h)
 {
-	if (pairs.empty()) return;
+	if (pairs.empty() && basePairs.empty()) return;
 
 	// bodies: the moving vessels of the pairs; positions relative to the
 	// first of them (precision)
@@ -193,6 +214,56 @@ void VesselCollider::Resolve (double h)
 		if (rel && !touching) rel->clear = true; // (apart: they collide from now on)
 	}
 
+	// contacts with base structures (fixed to the turning ground)
+	for (const BasePair &bp : basePairs) {
+		VesselBase *A = bp.v;
+		const Base *B = bp.base;
+		ha.clear();
+		A->CollectHulls (*A->s0, ha);
+		double ra = HullRadius (ha, A->s0->pos);
+		const Vector cgA (A->s0->pos - O);
+		const CelestialBody *cb = A->proxybody;
+		double wrot = Pi2 / cb->RotT();
+		double margin = ((A->GVel() - B->GVel()).length() + A->AngularVelocity().length()*ra)*h + 0.05;
+		convex::Manifold mf;
+		for (const collision::Hull &y : B->CollisionHulls()) {
+			Vector cy (B->GPos() + mul (B->GRot(), y.centre));
+			if (cy.dist (A->s0->pos) > y.radius + ra + collision::SKIN + margin) continue;
+			auto key = std::make_pair ((const VesselBase*)A, (const void*)&y);
+			bool wasInside = inside.count (key) > 0;
+			bool touching = false;
+			for (const auto &x : ha) {
+				convex::Placed px{x.hull, x.R, x.pos - O, collision::SKIN}, py{&y, B->GRot(), B->GPos() - O, 0.0};
+				Vector cx (px.pos + mul (x.R, x.hull->centre));
+				if (cx.dist (cy - O) > x.hull->radius + y.radius + collision::SKIN + margin) continue;
+				if (!convex::Collide (px, py, margin, mf)) continue;
+				for (int k = 0; k < mf.npt; k++) {
+					if (mf.sep[k] < collision::SKIN) touching = true;
+					// (deep in it when first met: placed inside, not driven in)
+					if (!wasInside && mf.sep[k] < -0.2) { inside.insert (key); wasInside = true; }
+				}
+				if (wasInside) continue;
+				for (int k = 0; k < mf.npt; k++) {
+					const Vector &g = mf.pt[k];
+					contact::Point p;
+					p.C = mf.sep[k];
+					p.k = p.c = 0.0;
+					p.mu1 = p.mu2 = FRICTION;
+					p.warm = nullptr;
+					p.a = index[A], p.ra = g - cgA, p.n = mf.n; // (out of the structure)
+					p.b = -1;
+					Vector pl (tmul (cb->s0->R, g + O - cb->s0->pos));
+					p.vs = cb->s1->vel + mul (cb->s1->R, Vector (-pl.z*wrot, 0, pl.x*wrot));
+					contact::Tangents (p.n, Vector(1,0,0), p.t1, p.t2);
+					owner.resize (pts.size(), nullptr);
+					pts.push_back (p);
+					owner.push_back (nullptr);
+				}
+			}
+			if (wasInside && !touching) inside.erase (key); // (clear of it: collides from now on)
+		}
+	}
+
 	std::vector<Vector> P, L;
 	contact::Solve (pts, bodies, h, &P, &L);
 
@@ -229,5 +300,6 @@ void VesselCollider::Released (VesselBase *parent, VesselBase *payload)
 void VesselCollider::Forget (VesselBase *v)
 {
 	releases.erase (std::remove_if (releases.begin(), releases.end(), [v](const Release &r) { return r.a == v || r.b == v; }), releases.end());
-	pairs.clear(), dynamic.clear();
+	for (auto it = inside.begin(); it != inside.end(); ) it = it->first == v ? inside.erase (it) : std::next (it);
+	pairs.clear(), basePairs.clear(), dynamic.clear();
 }
