@@ -373,6 +373,27 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	skirt (sk + 2*V, [&](int k) { return (uint16_t)(k*V); });           // west column
 	skirt (sk + 3*V, [&](int k) { return (uint16_t)(k*V + G); });       // east column
 	nIdx = (uint32_t)idx.size();
+	// a coarse version (every 4th node and skirt vertex) for the environment
+	// probe's small faces
+	const int C = 4;
+	coarseFirst = nIdx;
+	for (int i = 0; i < G; i += C)
+		for (int j = 0; j < G; j += C) {
+			uint16_t a = i*V + j, b = a + C, c = a + C*V, d = c + C;
+			idx.insert (idx.end(), { a, b, c, b, d, c });
+		}
+	auto coarseSkirt = [&](int base, auto edgeIdx) {
+		for (int k = 0; k < G; k += C) {
+			uint16_t e0 = edgeIdx (k), e1 = edgeIdx (k + C);
+			uint16_t s0 = base + k, s1 = base + k + C;
+			idx.insert (idx.end(), { e0, e1, s0, e1, s1, s0 });
+		}
+	};
+	coarseSkirt (sk + 0*V, [&](int k) { return (uint16_t)k; });
+	coarseSkirt (sk + 1*V, [&](int k) { return (uint16_t)(G*V + k); });
+	coarseSkirt (sk + 2*V, [&](int k) { return (uint16_t)(k*V); });
+	coarseSkirt (sk + 3*V, [&](int k) { return (uint16_t)(k*V + G); });
+	coarseCount = (uint32_t)idx.size() - coarseFirst;
 	if (idx.size() & 1) idx.push_back (0); // (whole 32-bit words for ray tracing shaders; not drawn)
 	ibuf = ctx->CreateDeviceBuffer (idx.data(), idx.size() * sizeof(uint16_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
 		(ctx->rayTracing ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT : 0));
@@ -1375,5 +1396,6 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 	vkCmdPushConstants (cmd, tr->Layout(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 	BindVertices (n);
 	// skirts would show as bright seams in the blended cloud layer
-	vkCmdDrawIndexed (cmd, clouds ? tr->GridIndexCount() : tr->IndexCount(), 1, 0, 0, 0);
+	if (scene->InProbe () && !clouds) vkCmdDrawIndexed (cmd, tr->CoarseIndexCount(), 1, tr->CoarseFirstIndex(), 0, 0);
+	else vkCmdDrawIndexed (cmd, clouds ? tr->GridIndexCount() : tr->IndexCount(), 1, 0, 0, 0);
 }

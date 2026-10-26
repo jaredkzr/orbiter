@@ -1253,6 +1253,7 @@ void Scene::RenderProbe ()
 	for (auto &it : visuals) it.second->RenderSky ();
 	for (auto &it : visuals)
 		if (it.first != hT) it.second->Render (RenderPass::Opaque);
+	ctx->GpuMark ("probe opaque");
 	ctx->BindScene (true);
 	for (auto &it : visuals) // cloud layers (vessel exhaust and glass are left out)
 		if (dynamic_cast<VPlanet*>(it.second.get())) it.second->Render (RenderPass::Transparent);
@@ -1336,11 +1337,17 @@ void Scene::Render ()
 
 	// skies of planetary atmospheres, over the stars
 	for (auto *vo : list) vo->RenderSky ();
+	ctx->GpuMark ("sky");
 
 	// scene geometry
 	VkDescriptorSet fset = FrameSet ();
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &fset, 0, nullptr);
-	for (auto *vo : list) vo->Render (RenderPass::Opaque);
+	for (auto *vo : list)
+		if (dynamic_cast<VPlanet*>(vo)) vo->Render (RenderPass::Opaque);
+	ctx->GpuMark ("planets");
+	for (auto *vo : list)
+		if (!dynamic_cast<VPlanet*>(vo)) vo->Render (RenderPass::Opaque);
+	ctx->GpuMark ("opaque");
 
 	// scorch marks on the ground (darkening the lit surface)
 	plumes->DrawScorch (camPos, camRot, FrameSet ());
@@ -1355,7 +1362,7 @@ void Scene::Render ()
 	for (auto *vo : list) vo->Render (RenderPass::Transparent);
 
 	// heat shimmer behind the exhaust (before the plumes and particles)
-	ctx->GpuMark ("scene");
+	ctx->GpuMark ("transparent");
 	plumes->Shimmer (proj[0], -proj[5], jitter);
 	ctx->GpuMark ("shimmer");
 

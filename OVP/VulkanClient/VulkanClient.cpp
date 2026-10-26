@@ -253,7 +253,7 @@ void VulkanClient::clbkRenderScene ()
 	ctx.GpuMark ("probe");
 	ctx.BindScene (true);
 	scene->Render ();
-	ctx.GpuMark ("scene");
+	ctx.GpuMark ("effects");
 	VkExtent2D sceneSize;
 	VkImageView sceneImage = scene->ResolveTemporal (sceneSize);
 	ctx.GpuMark ("temporal");

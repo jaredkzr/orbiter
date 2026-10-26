@@ -19,6 +19,61 @@ struct DetailSample {
 	float shadow;  // sunlight factor: shadows of the crater rims
 };
 
+// A pebble cell's height [m] (w) and its gradient in the cell [m per cell]
+// (xyz); the height as DetPebbleCell's (keep them identical)
+vec4 DetPebbleCellGrad (ivec3 cell, int m, int k, float density, vec3 f, float crag)
+{
+	float s = exp2 (float (k));
+	uint h0 = DetHash (cell, 3000u + uint (m));
+	if (DetUnit16 (h0) >= density * (k == -1 ? 0.4 : k == -2 ? 0.7 : 1.0)) return vec4 (0.0);
+	uint h1 = DetPcg (h0), h2 = DetPcg (h1), h3 = DetPcg (h2), h4 = DetPcg (h3);
+	float r = 0.12 + 0.12 * DetUnit16 (h4), hgt = 0.25 + 0.3 * DetUnit16 (h4 >> 16);
+	float ext = 1.05 * r;
+	vec3 c = ext + (1.0 - 2.0 * ext) * vec3 (DetUnit16 (h1), DetUnit16 (h2), DetUnit16 (h3));
+	vec3 v = f - c;
+	if (length (v) >= ext) return vec4 (0.0);
+	// the soft maximum of the facet planes, x, and its gradient (the
+	// planes' normals weighted by their shares of the sum)
+	float x = 0.0;
+	vec3 dx = vec3 (0.0);
+	uint he = h4;
+	for (int e = 0; e < 5; e++) {
+		he = DetPcg (he ^ 0x51ed27u);
+		vec3 n = DetUnitFromHash (he);
+		float re = r * (0.75 + 0.25 * DetUnit16 (he >> 16));
+		float t = exp (dot (v, n) / re / DET_PEBBLE_SOFT);
+		x += t;
+		dx += t * n / re;
+	}
+	dx /= x;
+	x = DET_PEBBLE_SOFT * log (x);
+	if (x >= 1.0) return vec4 (0.0);
+	float tt = clamp ((1.0 - x) / 0.6, 0.0, 1.0);
+	float top = tt * tt * (3.0 - 2.0 * tt);
+	vec3 dtop = -dx * (6.0 * tt * (1.0 - tt) / 0.6);
+	vec3 nt = DetUnitFromHash (DetPcg (h3 ^ 0x2545f491u));
+	float tilt = 1.0 + 0.5 * dot (v, nt) / r;
+	vec3 dtilt = tilt > 0.3 ? 0.5 * nt / r : vec3 (0.0);
+	tilt = max (tilt, 0.3);
+	float a = hgt * r * s;
+	float h = a * top * tilt;
+	vec3 dh = a * (dtop * tilt + top * dtilt);
+	if (crag > 0.0) {
+		vec3 q = v / (0.33 * r);
+		vec4 n1 = DetNoise (ivec3 (floor (q)), fract (q), h4);
+		q *= 2.0;
+		vec4 n2 = DetNoise (ivec3 (floor (q)), fract (q), h4 + 1u);
+		float n = n1.w + 0.5 * n2.w;
+		vec3 dn = (n1.xyz + n2.xyz) / (0.33 * r); // (the second octave: half the amplitude, twice the frequency)
+		float mf = min (1.0, 5.0 * (1.0 - x));
+		vec3 dmf = mf < 1.0 ? -5.0 * dx : vec3 (0.0);
+		float b = crag * 0.05 * r * s;
+		h += b * n * mf;
+		dh += b * (dn * mf + n * dmf);
+	}
+	return vec4 (dh, h);
+}
+
 // The detail finer than the mesh (as TerrainDetail::Height)
 // pt: the point, d: its unit direction; A: noise amplitude factor [m],
 // fade: crater fade factor, spacing: node spacing of the elevation data
@@ -84,12 +139,12 @@ DetailSample TerrainDetailEval (DetPoint pt, vec3 d, float A, float fade, float 
 			rL *= 1.0 + 0.12 * age;
 			uint h5 = DetPcg (h4 ^ 0x9e3779b9u), h6 = DetPcg (h5), h7 = DetPcg (h6);
 			float ecc = 0.12 * DetUnit16 (h5), lobe = 0.06 * DetUnit16 (h5 >> 16);
-			vec3 a1 = DetUnitFromHash (h5), a2 = DetUnitFromHash (h6), a3 = DetUnitFromHash (h7);
 			float ext = rL * (1.0 + ecc + lobe) * (1.0 + wr);
 			vec3 c = ext + (1.0 - 2.0 * ext) * vec3 (DetUnit16 (h1), DetUnit16 (h2), DetUnit16 (h3));
 			vec3 dv = f - c;
 			float dist = length (dv);
 			if (dist >= ext || dist < 1e-6) continue;
+			vec3 a1 = DetUnitFromHash (h5), a2 = DetUnitFromHash (h6), a3 = DetUnitFromHash (h7);
 			vec3 u = dv / dist;
 			float c1 = dot (u, a1), c2 = dot (u, a2);
 			float rr = rL * (1.0 + ecc * (2.0 * c1 * c1 - 1.0) + lobe * (4.0 * c2 * c2 * c2 - 3.0 * c2));
@@ -165,15 +220,11 @@ void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec2 Af
 	// (the mesh's band reaches twice as far when morphed to the parent's)
 	DetailSample ds = TerrainDetailEval (pt, d, Af.x, Af.y, tile.detail.x, tile.detail.y * (1.0 + vMorph), tile.detail.z, footprint, atm.sunDir.xyz);
 	// pebbles: their slopes per pixel (the meshes have their shape, but
-	// normals of the ground under them), by differences along the surface,
-	// with crags on their faces; down to stones of a few pixels
+	// normals of the ground under them), with crags on their faces; down
+	// to stones of a few pixels
 	// (all stones of two pixels and more: the meshes have the larger ones'
 	// shape, but not their slopes)
 	if (tile.morph.w > 0.0 && footprint < 0.03 && Af.y > 0.0) {
-		vec3 df0 = d;
-		vec3 t1 = normalize (cross (df0, abs (df0.y) < 0.9 ? vec3 (0.0, 1.0, 0.0) : vec3 (1.0, 0.0, 0.0)));
-		vec3 t2 = cross (df0, t1);
-		float e = max (0.5 * footprint, 0.001);
 		int nl = int (ceil (tile.morph.w));
 		vec3 g = vec3 (0.0);
 		float hs = 0.0;
@@ -187,14 +238,9 @@ void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec2 Af
 				int m = k - DET_JMIN + 64 + 29 * l;
 				ivec3 cell, p; vec3 sg;
 				vec3 f = DetLattice (m, pt, k, cell, p, sg);
-				bool stone;
-				float h0 = DetPebbleCell (cell, m, k, tile.morph.w / float (nl), f, crag, stone);
-				if (!stone) continue;
-				vec3 o1 = DetToLattice (t1, p, sg) * (e / s), o2 = DetToLattice (t2, p, sg) * (e / s);
-				float h1 = DetPebbleCell (cell, m, k, tile.morph.w / float (nl), f + o1, crag, stone);
-				float h2 = DetPebbleCell (cell, m, k, tile.morph.w / float (nl), f + o2, crag, stone);
-				g += w * (t1 * ((h1 - h0) / e) + t2 * ((h2 - h0) / e));
-				hs += w * h0;
+				vec4 hg = DetPebbleCellGrad (cell, m, k, tile.morph.w / float (nl), f, crag);
+				g += DetToPlanet (hg.xyz, p, sg) * (w / s);
+				hs += w * hg.w;
 			}
 		}
 		ds.grad += g;

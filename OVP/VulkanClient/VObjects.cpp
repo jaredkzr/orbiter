@@ -1323,10 +1323,12 @@ void VPlanet::Render (RenderPass pass)
 	if (scene->PixelSize (size, camDist) < 0.5) return; // too small to see
 	if (surface) {
 		surface->Render (atmosphere.get());
+		scene->GpuMark ("terrain");
 		for (auto &b : bases) b->Render (pass);
 		UpdateGallery ();
 		if (gallery) gallery->Render (pass);
 		if (field) field->Render (pass);
+		scene->GpuMark ("scatter");
 		return;
 	}
 

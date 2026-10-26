@@ -199,6 +199,7 @@ public:
 	VkDescriptorSet FrameSet () const { return inProbe ? probeFrameSet[ctx->FrameIndex()] : frameSet[ctx->FrameIndex()]; }
 	/// rendering the environment probe (not the main view)
 	bool InProbe () const { return inProbe; }
+	void GpuMark (const char *name) { if (!inProbe) ctx->GpuMark (name); }
 	/// Render one face of the environment probe around the focus vessel
 	/// (after the prepass, outside rendering scopes)
 	void RenderProbe ();

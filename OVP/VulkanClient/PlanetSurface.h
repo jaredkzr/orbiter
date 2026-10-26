@@ -95,6 +95,9 @@ public:
 	uint32_t IndexCount () const { return nIdx; }
 	/// indices of the tile grid without the skirts (which come last)
 	uint32_t GridIndexCount () const { return GRID * GRID * 6; }
+	/// a coarse grid with skirts (every 4th node: for small views)
+	uint32_t CoarseFirstIndex () const { return coarseFirst; }
+	uint32_t CoarseIndexCount () const { return coarseCount; }
 
 private:
 	vkc::Context *ctx = nullptr;
@@ -105,7 +108,7 @@ private:
 	VkPipeline meshPipe = VK_NULL_HANDLE;
 	VkPipelineLayout meshLayout = VK_NULL_HANDLE;
 	vkc::Buffer ibuf;
-	uint32_t nIdx = 0;
+	uint32_t nIdx = 0, coarseFirst = 0, coarseCount = 0;
 	std::unique_ptr<TileLoader> loader;
 };
 
