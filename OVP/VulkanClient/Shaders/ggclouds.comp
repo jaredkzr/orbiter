@@ -165,7 +165,10 @@ float Moat (vec3 u)
 		vec3 e = normalize (vec3 (-c.z, 0.0, c.x));
 		vec2 q = vec2 (dot (u - c, e), dot (u - c, cross (e, c)));
 		float spin = VortexRate (i, P.vortex.y * P.storm[i].w) * P.hazeH.z;
-		float arms = 0.5 + 0.5 * cos (3.0 * atan (q.y, q.x) - 4.0 * log (max (d, 0.05)) + P.stormP[i].y - 3.0 * mod (spin, 2.0 * PI));
+		// (the seed as an angle: the identity itself is too large a phase
+		// for float precision, and the arms would break where atan wraps)
+		float seed = 2.0 * PI * Unit (Pcg (uint (P.stormP[i].y)));
+		float arms = 0.5 + 0.5 * cos (3.0 * atan (q.y, q.x) - 4.0 * log (max (d, 0.05)) + seed - 3.0 * mod (spin, 2.0 * PI));
 		m = max (m, P.stormP[i].x * smoothstep (0.15, 0.45, d) * (1.0 - smoothstep (0.8, 1.4, d)) * mix (1.0, arms, 0.6));
 	}
 	return m;
