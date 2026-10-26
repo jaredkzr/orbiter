@@ -131,6 +131,11 @@ public:
 	uint32_t SphereNIdx () const { return sphereNIdx; }
 	/// draw indexed NTVERTEX geometry (32-bit indices) with a texture and
 	/// diffuse colour, opaque or alpha-blended
+	/// planetary rings (shadow: their shadow over the planet's sphere,
+	/// multiplied); ring: inner and outer radius [planet radii], sunlight
+	/// factor, texture layout (0 radial, 1 legacy); legacy: its fo, fi, nrad
+	void DrawRing (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &modelView, VkTexture *tex,
+		const float ring[4], const float legacy[4], bool shadow);
 	void DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &modelView,
 		VkTexture *tex, const float colour[4], bool unlit, bool blend);
 	double PixelSize (double size, double dist) const;
@@ -208,7 +213,9 @@ public:
 
 private:
 	void CreatePipelines ();
-	VkPipeline CreateMeshPipeline (bool blend, bool additive, bool depthWrite, bool prepass = false, bool instanced = false, bool impostor = false);
+	enum class MeshShader { Mesh, Ring, RingShadow };
+	VkPipeline CreateMeshPipeline (bool blend, bool additive, bool depthWrite, bool prepass = false, bool instanced = false, bool impostor = false,
+		MeshShader shader = MeshShader::Mesh);
 	VkPipeline CreateParticlePipeline (bool additive);
 	void UpdateCamera ();
 	void BuildSphere ();
@@ -233,6 +240,7 @@ private:
 	VkPipeline meshOpaque = VK_NULL_HANDLE;
 	VkPipeline meshBlend = VK_NULL_HANDLE;
 	VkPipeline meshAdditive = VK_NULL_HANDLE;
+	VkPipeline ringPipe = VK_NULL_HANDLE, ringShadowPipe = VK_NULL_HANDLE;
 	VkPipeline meshPrepass = VK_NULL_HANDLE;
 	VkPipeline meshOpaqueInst = VK_NULL_HANDLE;  // instanced (ground scatter)
 	VkPipeline meshPrepassInst = VK_NULL_HANDLE;

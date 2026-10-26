@@ -908,11 +908,37 @@ void VPlanet::LoadLegacyTextures ()
 	}
 
 	const bool *hasRings = (const bool*)oapiGetObjectParam (hObj, OBJPRM_PLANET_HASRINGS);
-	if (hasRings && *hasRings && load (std::string (name) + "_ring.tex", images) &&
-		legacytex::Decode (images.back(), w, h, rgba)) {
-		ringTex = tm->CreateRGBA (w, h, rgba.data());
-		BuildRing (*(const double*)oapiGetObjectParam (hObj, OBJPRM_PLANET_RINGMINRAD),
-		           *(const double*)oapiGetObjectParam (hObj, OBJPRM_PLANET_RINGMAXRAD));
+	if (hasRings && *hasRings) {
+		// a radial profile (<name>_ring_<size>.dds: one row of 32-bit pixels
+		// from the inner to the outer radius), else the legacy texture
+		for (int size : { 8192, 4096, 2048 }) {
+			for (auto &d : dirs) {
+				std::ifstream f (d + name + "_ring_" + std::to_string (size) + ".dds", std::ios::binary);
+				std::vector<uint8_t> dds ((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+				if (dds.size() < 128 + 4 * (size_t)size || memcmp (dds.data(), "DDS ", 4)) continue;
+				uint32_t hw[2], pf[8];
+				memcpy (hw, dds.data() + 12, 8);
+				memcpy (pf, dds.data() + 76, 32);
+				// (uncompressed 32-bit, B8G8R8A8)
+				if (hw[1] != (uint32_t)size || (pf[1] & 0x4) || pf[3] != 32 || pf[4] != 0xff0000) continue;
+				rgba.resize (4 * (size_t)size);
+				for (int i = 0; i < size; i++) {
+					const uint8_t *s = dds.data() + 128 + 4 * i;
+					rgba[4*i] = s[2], rgba[4*i+1] = s[1], rgba[4*i+2] = s[0], rgba[4*i+3] = 255;
+				}
+				ringTex = tm->CreateRGBA (size, 1, rgba.data());
+				break;
+			}
+			if (ringTex) break;
+		}
+		ringPrm[3] = 0.0f;
+		if (!ringTex && load (std::string (name) + "_ring.tex", images) && legacytex::Decode (images.back(), w, h, rgba)) {
+			ringTex = tm->CreateRGBA (w, h, rgba.data());
+			ringPrm[3] = 1.0f;
+		}
+		if (ringTex)
+			BuildRing (*(const double*)oapiGetObjectParam (hObj, OBJPRM_PLANET_RINGMINRAD),
+			           *(const double*)oapiGetObjectParam (hObj, OBJPRM_PLANET_RINGMAXRAD));
 	}
 }
 
@@ -927,6 +953,8 @@ void VPlanet::BuildRing (double irad, double orad)
 	double nrad = orad / cos (alpha);
 	double fo = 0.5 * (1.0 - orad / nrad), fi = 0.5 * (1.0 - irad / nrad);
 	double t0 = (nrad - orad) / (nrad - irad);
+	ringPrm[0] = (float)irad, ringPrm[1] = (float)orad, ringPrm[2] = 1.0f;
+	ringLegacy[0] = (float)fo, ringLegacy[1] = (float)fi, ringLegacy[2] = (float)nrad;
 	const int N = 512;
 	std::vector<NTVERTEX> vtx;
 	std::vector<uint32_t> idx;
@@ -955,8 +983,7 @@ void VPlanet::RenderRing ()
 {
 	if (!ringNIdx || !ringTex) return;
 	Mat4 mv = scene->ModelView (gpos, grot) * Mat4::Scale (size, size, size);
-	const float white[4] = { 1, 1, 1, 1 };
-	scene->DrawGeometry (ringVtx.buffer, ringIdx.buffer, ringNIdx, mv, ringTex, white, false, true);
+	scene->DrawRing (ringVtx.buffer, ringIdx.buffer, ringNIdx, mv, ringTex, ringPrm, ringLegacy, false);
 }
 
 // ======================================================================
@@ -1344,6 +1371,8 @@ void VPlanet::Render (RenderPass pass)
 		Mat4 mv = scene->ModelView (gpos, R) * Mat4::Scale (size, size, size);
 		const float white[4] = { 1, 1, 1, 1 };
 		scene->DrawSphere (mv, white, false, globalTex);
+		if (ringNIdx && ringTex) // (the rings' shadow over it)
+			scene->DrawRing (scene->SphereVtx(), scene->SphereIdx(), scene->SphereNIdx(), mv, ringTex, ringPrm, ringLegacy, true);
 		return;
 	}
 	if (!isStar && camDist < 2.0 * size) {

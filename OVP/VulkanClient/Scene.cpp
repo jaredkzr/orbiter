@@ -27,6 +27,9 @@
 
 #include "mesh.vert.h"
 #include "mesh.frag.h"
+#include "ring.vert.h"
+#include "ring.frag.h"
+#include "ringshadow.frag.h"
 #include "prepass.vert.h"
 #include "prepass_inst.vert.h"
 #include "mesh_inst.vert.h"
@@ -330,7 +333,7 @@ void Scene::Shutdown ()
 	for (auto &u : probeFrameUbo) ctx->DestroyBuffer (u);
 	if (probe) probe->Shutdown ();
 	probe.reset();
-	VkPipeline pipes[] = { meshOpaque, meshBlend, meshAdditive, meshPrepass, meshOpaqueInst, meshPrepassInst, meshOpaqueImp, meshPrepassImp, starPipeline, particleAdditive, particleBlend };
+	VkPipeline pipes[] = { meshOpaque, meshBlend, meshAdditive, ringPipe, ringShadowPipe, meshPrepass, meshOpaqueInst, meshPrepassInst, meshOpaqueImp, meshPrepassImp, starPipeline, particleAdditive, particleBlend };
 	for (auto p : pipes) if (p) vkDestroyPipeline (ctx->device, p, nullptr);
 	vkDestroyPipelineLayout (ctx->device, meshLayout, nullptr);
 	vkDestroyPipelineLayout (ctx->device, particleLayout, nullptr);
@@ -345,9 +348,10 @@ void Scene::Shutdown ()
 // ======================================================================
 // Pipelines
 
-VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite, bool prepass, bool instanced, bool impostor)
+VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite, bool prepass, bool instanced, bool impostor, MeshShader shader)
 {
-	VkShaderModule vs = impostor ?
+	VkShaderModule vs = shader != MeshShader::Mesh ? ctx->CreateShaderModule (spv_ring_vert, spv_ring_vert_size) :
+		impostor ?
 		(prepass ? ctx->CreateShaderModule (spv_prepass_impostor_inst_vert, spv_prepass_impostor_inst_vert_size)
 		         : ctx->CreateShaderModule (spv_impostor_inst_vert, spv_impostor_inst_vert_size)) :
 		instanced ?
@@ -355,8 +359,10 @@ VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite
 		         : ctx->CreateShaderModule (spv_mesh_inst_vert, spv_mesh_inst_vert_size)) :
 		(prepass ? ctx->CreateShaderModule (spv_prepass_vert, spv_prepass_vert_size)
 		         : ctx->CreateShaderModule (spv_mesh_vert, spv_mesh_vert_size));
-	VkShaderModule fs = prepass ? ctx->CreateShaderModule (spv_prepass_frag, spv_prepass_frag_size)
-	                            : ctx->CreateShaderModule (spv_mesh_frag, spv_mesh_frag_size);
+	VkShaderModule fs = shader == MeshShader::Ring ? ctx->CreateShaderModule (spv_ring_frag, spv_ring_frag_size) :
+		shader == MeshShader::RingShadow ? ctx->CreateShaderModule (spv_ringshadow_frag, spv_ringshadow_frag_size) :
+		prepass ? ctx->CreateShaderModule (spv_prepass_frag, spv_prepass_frag_size)
+		        : ctx->CreateShaderModule (spv_mesh_frag, spv_mesh_frag_size);
 	VkPipelineShaderStageCreateInfo stages[2] = {
 		{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vs, "main" },
 		{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main" }
@@ -413,6 +419,12 @@ VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite
 		cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
 		cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
 		cba.alphaBlendOp = VK_BLEND_OP_ADD;
+		if (shader == MeshShader::Ring) // (premultiplied)
+			cba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+		else if (shader == MeshShader::RingShadow) { // (multiplied)
+			cba.srcColorBlendFactor = VK_BLEND_FACTOR_ZERO, cba.dstColorBlendFactor = VK_BLEND_FACTOR_SRC_COLOR;
+			cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO, cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+		}
 	}
 	VkPipelineColorBlendAttachmentState cbas[AmbientOcclusion::PREPASS_TARGETS] = { cba, cba, cba };
 	VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
@@ -463,6 +475,8 @@ void Scene::CreatePipelines ()
 	meshOpaque = CreateMeshPipeline (false, false, true);
 	meshBlend = CreateMeshPipeline (true, false, false);
 	meshAdditive = CreateMeshPipeline (true, true, false);
+	ringPipe = CreateMeshPipeline (true, false, false, false, false, false, MeshShader::Ring);
+	ringShadowPipe = CreateMeshPipeline (true, false, false, false, false, false, MeshShader::RingShadow);
 	meshPrepass = CreateMeshPipeline (false, false, true, true);
 	meshOpaqueInst = CreateMeshPipeline (false, false, true, false, true);
 	meshPrepassInst = CreateMeshPipeline (false, false, true, true, true);
@@ -1635,6 +1649,25 @@ void Scene::AddMeshRT (const VkMesh *mesh, const Mat4 &modelView, bool shadowOnl
 void Scene::DrawSphere (const Mat4 &modelView, const float colour[4], bool unlit, VkTexture *tex)
 {
 	DrawGeometry (sphereVtx.buffer, sphereIdx.buffer, sphereNIdx, modelView, tex, colour, unlit, false);
+}
+
+void Scene::DrawRing (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &modelView, VkTexture *tex,
+	const float ring[4], const float legacy[4], bool shadow)
+{
+	VkCommandBuffer cmd = ctx->Cmd();
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadow ? ringShadowPipe : ringPipe);
+	VkDescriptorSet fset = FrameSet ();
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &fset, 0, nullptr);
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 1, 1, &tex->set, 0, nullptr);
+	VkDeviceSize ofs = 0;
+	vkCmdBindVertexBuffers (cmd, 0, 1, &vb, &ofs);
+	vkCmdBindIndexBuffer (cmd, ib, 0, VK_INDEX_TYPE_UINT32);
+	MeshPushConstants pc{}; // (ring.glsl's layout)
+	modelView.ToFloat (pc.modelView);
+	memcpy (pc.diffuse, ring, 4 * sizeof(float));
+	memcpy (pc.emissive, legacy, 4 * sizeof(float));
+	vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+	vkCmdDrawIndexed (cmd, nIdx, 1, 0, 0, 0);
 }
 
 void Scene::DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &modelView,

@@ -167,7 +167,6 @@ Known gaps and limitations, to be addressed later.
 - Terrain casts shadows only within the cascades (up to 4 km around the
   camera, 16 km towards the sun); distant mountain shadows are missing.
   Not yet verified on rugged terrain at low sun.
-- Saturn's rings cast no shadow on the planet.
 
 ## Water
 - Sun glitter and wave normals not yet checked in a view facing the sun.
@@ -176,10 +175,13 @@ Known gaps and limitations, to be addressed later.
 - Bodies without tiles use only level 4 of their .tex file (512x256 map);
   the patch levels 5+ are not read.
 - Legacy cloud layers (Venus, Titan) are drawn opaque and only from above.
-- Rings: no ring shadow on the planet, no forward scattering when lit from
-  behind, and the unlit side shows only ambient light. The planet's shadow
-  on the rings comes from the atmosphere transmittance (bodies without an
-  atmosphere would not get it). High-resolution <name>_ring_N.dds not used.
+- Rings (ring.frag, ringshadow.frag): a particle slab with single
+  scattering (reflected on the lit side, transmitted to the unlit side),
+  optical depth derived from the texture's brightness (no optical depth
+  data); the planet's shadow on them and their shadow on the planet are
+  geometric (spheres, no oblateness). <name>_ring_<size>.dds radial
+  profiles are used when present (assumed to span the ring radii). No
+  planetshine on the rings, no ring shadow on tiled planets.
 
 ## Deferred effects
 - Lens flare ghosts are discs from the bloom image, not aperture-shaped.

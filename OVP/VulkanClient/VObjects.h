@@ -193,6 +193,7 @@ private:
 	double cloudAlt = 0.0;
 	vkc::Buffer ringVtx, ringIdx;
 	uint32_t ringNIdx = 0;
+	float ringPrm[4] = {}, ringLegacy[4] = {}; // (Scene::DrawRing)
 	void LoadLegacyTextures ();
 	void BuildRing (double irad, double orad);
 	void RenderRing ();

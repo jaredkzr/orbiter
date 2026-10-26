@@ -25,6 +25,8 @@ layout(location = 0) out vec3 vPosView;
 layout(location = 1) out vec3 vNormalView;
 layout(location = 2) out vec2 vUV;
 
+invariant gl_Position; // (ring.vert draws over the same geometry)
+
 void main()
 {
 	vec4 p = draw.modelView * vec4(inPos, 1.0);
