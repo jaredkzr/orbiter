@@ -23,6 +23,11 @@ void main ()
 	vec3 L = AtmTonemap (Inscatter (d, tMax, T));
 	if (ground)
 		outColor = vec4 (AtmGround (normalize (atm.camPos.xyz + d * tg.x)) * T + L, 1.0);
-	else
-		outColor = vec4 (L, 0.0);
+	else {
+		// the stars through the air: dimmed by its extinction, and lost
+		// against a bright sky (their contrast with the background: none
+		// in daylight, the brightest come out in twilight)
+		const vec3 LUM = vec3 (0.2126, 0.7152, 0.0722);
+		outColor = vec4 (L, 1.0 - dot (T, LUM) * exp (-dot (L, LUM) / 0.02));
+	}
 }

@@ -33,8 +33,8 @@ namespace {
 		float ozone[4];
 		float detail[4];
 		float aurora[4];
-		float detailCamHi[4]; // camera position and radius in double precision (high and low parts)
-		float detailCamLo[4];
+		float mieLobe[4];     // aerosols' forward lobe: asymmetry per colour (rgb), share (w; 0: none)
+		float spare[4];
 		float detailPrm[4];   // terrain detail: ridge, craters, crater depth, fresh craters
 		float surfPrm[4];     // x: colour saturation of the surface textures
 	};
@@ -370,7 +370,11 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 			}
 			betaM[3] = (float)H;
 			ozone[3] = 1.0f; // (absorption with the dust's profile)
-			mieG = 0.65f;
+			// the dust's diffraction peak about the sun is narrower for blue
+			// light (about lambda / particle size): blue about the sun, the
+			// sky farther from it butterscotch (Curiosity's blue sunsets)
+			mieG = 0.55f;
+			mieLobe[0] = 0.84f, mieLobe[1] = 0.88f, mieLobe[2] = 0.92f, mieLobe[3] = 0.5f;
 		}
 		if (const Overcast *o = FindOvercast (name)) {
 			for (int i = 0; i < 3; i++) overcastSky[i] = o->sky[i];
@@ -575,13 +579,7 @@ void Atmosphere::Update ()
 	VECTOR3 rel = cam - origin;
 	u.water[0] = (float)rel.x, u.water[1] = (float)rel.y, u.water[2] = (float)rel.z;
 	u.water[3] = ripple ? (float)fmod (oapiGetSimTime (), 3600.0) : -1.0f;
-	{
-		double v[4] = { cam.x, cam.y, cam.z, oapiGetSize (hPlanet) };
-		for (int k = 0; k < 4; k++) {
-			u.detailCamHi[k] = (float)v[k];
-			u.detailCamLo[k] = (float)(v[k] - (double)u.detailCamHi[k]);
-		}
-	}
+	memcpy (u.mieLobe, mieLobe, sizeof(mieLobe));
 	{
 		SURFDETAILPARAM dp;
 		if (oapiSurfaceDetailParams (hPlanet, &dp)) {

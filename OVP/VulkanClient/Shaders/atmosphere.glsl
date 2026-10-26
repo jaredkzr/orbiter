@@ -22,8 +22,8 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 ozone;         // absorption [1/m] (rgb): ozone layer, or (w = 1) aerosols (dust)
 	vec4 detail;        // procedural surface detail: type (0 none, 1 airless, 2 Mars, 3 Earth), strength, range [m]
 	vec4 aurora;        // geomagnetic north pole (unit, planet frame), w: aurora strength (0: none)
-	vec4 detailCamHi;   // camera position, planet frame (xyz), planet radius (w) [m]: high and
-	vec4 detailCamLo;   //   low parts of double precision values (terrain detail)
+	vec4 mieLobe;       // aerosols' forward lobe: asymmetry g per colour (rgb), its share (w; 0: none)
+	vec4 spare;
 	vec4 detailPrm;     // terrain detail: ridged share, crater cells, crater depth, fresh craters
 	vec4 surfPrm;       // x: colour saturation of the surface textures; yzw: diffuse radiance of overcast atmospheres (per unit sun intensity)
 } atm;
@@ -46,6 +46,22 @@ const float ATM_NONE = 1e30;
 
 // Intersections of the ray o + t d (|d| = 1) with a sphere around the origin,
 // given c = |o|^2 - r^2 (computed accurately by the caller)
+// Mie phase function (Cornette-Shanks) at the cosine mu of the scattering
+// angle: asymmetry g (atm.radii.z), and for aerosols with a diffraction
+// peak a narrower forward lobe per colour (atm.mieLobe)
+float AtmCS (float g, float mu)
+{
+	return 3.0 / (8.0 * ATM_PI) * ((1.0 - g * g) * (1.0 + mu * mu)) /
+		((2.0 + g * g) * pow (max (1.0 + g * g - 2.0 * g * mu, 1e-4), 1.5));
+}
+vec3 AtmMiePhase (float mu)
+{
+	float p = AtmCS (atm.radii.z, mu);
+	if (atm.mieLobe.w <= 0.0) return vec3 (p);
+	vec3 lobe = vec3 (AtmCS (atm.mieLobe.r, mu), AtmCS (atm.mieLobe.g, mu), AtmCS (atm.mieLobe.b, mu));
+	return mix (vec3 (p), lobe, atm.mieLobe.w);
+}
+
 vec2 RaySphereC (vec3 o, vec3 d, float c)
 {
 	float b = dot (o, d);
@@ -183,10 +199,8 @@ vec3 Inscatter (vec3 d, float tMax, out vec3 T)
 	}
 
 	float mu = dot (d, atm.sunDir.xyz);
-	float g = atm.radii.z;
 	float pR = 3.0 / (16.0 * ATM_PI) * (1.0 + mu * mu);
-	float pM = 3.0 / (8.0 * ATM_PI) * ((1.0 - g * g) * (1.0 + mu * mu)) /
-		((2.0 + g * g) * pow (max (1.0 + g * g - 2.0 * g * mu, 1e-4), 1.5));
+	vec3 pM = AtmMiePhase (mu);
 	return atm.radii.w * (sumR * atm.betaR.rgb * pR + sumM * atm.betaM.rgb * pM + sumMS) + glow;
 }
 

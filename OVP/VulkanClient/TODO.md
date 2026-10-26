@@ -4,8 +4,8 @@ Known gaps and limitations, to be addressed later.
 
 ## Atmosphere
 - Compared with photographs (2026-10-24): sky radiance scale 6 (was 16),
-  daylight exposure cap 1.3, Mars dust (butterscotch sky; no blue sunset
-  yet: needs colour-dependent forward scattering), airglow, aurora
+  daylight exposure cap 1.3, Mars dust (butterscotch sky; blue about the
+  sun from a narrower forward lobe for blue light, AtmMiePhase), airglow, aurora
   (ORBITER_VK_AURORA scales it; fixed oval, no activity model), cloud-top
   relief from the cloud density. The DG's HUD glass shows strongly green
   at high night exposure.

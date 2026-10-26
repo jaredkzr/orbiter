@@ -76,6 +76,7 @@ private:
 	double radius = 0.0, atmRadius = 0.0;
 	float betaR[4] = {}, betaM[4] = {};
 	float overcastSky[3] = { 0, 0, 0 }; // diffuse radiance under an overcast (Venus, Titan)
+	float mieLobe[4] = {}; // aerosols' forward lobe per colour, its share (atmosphere.glsl's AtmMiePhase)
 	float mieG = 0.76f, sunIntensity = 6.0f; // (sky radiance scale: physically about pi for a sunlit white surface of 1)
 	float airglow = 0.0f; // strength of the airglow layer (Earth)
 	float detail[4] = { 0, 0, 0, 0 }; // procedural surface detail (atmosphere.glsl)
