@@ -131,7 +131,10 @@ float VortexRate (int i, float rho)
 // where the decks' cloud at u (east, north offsets [m]) came from tau [s]
 // ago: the storms' vortices turning it about their centres; and the
 // spiral they have wound it into (a standing twist, strongest at the
-// core)
+// core). swStretch: how much the turning's shear has drawn the cloud out
+// (the noise finer across the spiral by as much: its lookups filtered
+// accordingly)
+float swStretch = 1.0;
 vec2 Swirl (vec3 u, float tau)
 {
 	vec2 dsp = vec2 (0.0);
@@ -145,7 +148,16 @@ vec2 Swirl (vec3 u, float tau)
 		if (rho > 1.6 * Rs) continue;
 		float rc = P.vortex.y * Rs;
 		float twist = sign (c.y) * P.vortex.w * P.stormP[i].x * rc * rc / (rho * rho + rc * rc);
-		float a = -(VortexRate (i, rho) * tau + twist) * (1.0 - smoothstep (Rs, 1.6 * Rs, rho));
+		float fade = 1.0 - smoothstep (Rs, 1.6 * Rs, rho);
+		float w = VortexRate (i, rho);
+		float a = -(w * tau + twist) * fade;
+		// (rho da/drho: the rate falling as 1/rho^2 beyond the core, the
+		// twist as rc^2/(rho^2+rc^2); the fade's slope)
+		float dw = rho > rc ? -2.0 * w * tau : 0.0;
+		float dtw = -2.0 * twist * rho * rho / (rho * rho + rc * rc);
+		float x = clamp ((rho - Rs) / (0.6 * Rs), 0.0, 1.0);
+		float dfa = (w * tau + twist) * rho * 6.0 * x * (1.0 - x) / (0.6 * Rs);
+		swStretch = max (swStretch, 1.0 + abs ((dw + dtw) * fade) + abs (dfa));
 		vec2 q0 = mat2 (cos (a), sin (a), -sin (a), cos (a)) * q;
 		dsp += q0 - q;
 	}
@@ -326,7 +338,7 @@ float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, fl
 	// samples a single lookup)
 	// (the lookups' level: the noise 3 times finer vertically than
 	// meridionally, the zonal stretch coarser; the footprint taken between)
-	float lb = Lod (1.7 * L.w, SHAPE_N);
+	float lb = Lod (1.7 * L.w * swStretch, SHAPE_N);
 	if (coarse) {
 		float sh = textureLod (shapeNoise, vec3 (e0 - uj * t / P.misc2.x, n0, z0) * L.w, lb).r;
 		sh = clamp ((sh - 0.15) / 0.7, 0.0, 1.0);
@@ -355,7 +367,7 @@ float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, fl
 	// (sharp surfaces: full density a quarter of the way in, as cumulus)
 	float d = clamp ((shape * profile - (1.0 - cov)) / max (cov, 0.05) * 4.0, 0.0, 1.0);
 	if (d <= 0.0 || !detail) return d;
-	float ld = Lod (1.7 * 5.7 * L.w, DETAIL_N);
+	float ld = Lod (1.7 * 5.7 * L.w * swStretch, DETAIL_N);
 	float det = mix (textureLod (detailNoise, ROT * ROT * q2 * 5.7, ld).r, textureLod (detailNoise, ROT * ROT * q1 * 5.7, ld).r, w1);
 	return clamp ((d - 0.2 * det) / 0.8, 0.0, 1.0);
 }
@@ -391,6 +403,7 @@ float Medium (vec3 x, bool detail, out vec3 alb, bool towerDetail)
 	vec3 sum = vec3 (0.0);
 	int n = int (P.hazeH.y);
 	vec2 sw1 = vec2 (0.0), sw2 = vec2 (0.0);
+	swStretch = 1.0;
 	if (nMoat > 0 && !coarseLight) {
 		float t = P.hazeH.z;
 		sw1 = Swirl (u, fract (t / FLOW_PERIOD) * FLOW_PERIOD), sw2 = Swirl (u, fract (t / FLOW_PERIOD + 0.5) * FLOW_PERIOD);
@@ -635,8 +648,14 @@ void main ()
 		// (longer as the light fades: behind a veil the detail matters less)
 		float fine = clamp (0.02 * ta, 250.0, 8e3) * (1.0 + 2.0 * (1.0 - T.g));
 		bool thick = false;
+		float thickCap = 1e30; // (steps through a deck: at most a sixth of its depth vertically)
+		float muv = abs (ob + ta) / max (rc, 1.0); // (the ray's sine of elevation there)
 		for (int l = 0; l < int (P.hazeH.y); l++)
-			thick = thick || (P.layer[l].z >= 2e-5 && rc > P.layer[l].x && rc < P.layer[l].y);
+			if (P.layer[l].z >= 2e-5 && rc > P.layer[l].x && rc < P.layer[l].y) {
+				thick = true;
+				thickCap = min (thickCap, (P.layer[l].y - P.layer[l].x) / (6.0 * max (muv, 0.05)));
+			}
+		fine = min (fine, max (thickCap, 250.0));
 		float dt = fine;
 		if (!thick) {
 			// (to the next boundary of a deck: the spheres' crossings ahead)
