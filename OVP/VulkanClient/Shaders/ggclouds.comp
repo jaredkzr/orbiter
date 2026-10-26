@@ -40,7 +40,7 @@ struct GGParams {
 	vec4 misc;               // storm count, sun irradiance scale, 1-bar radius [m], tower top radius [m]
 	vec4 misc2;              // zonal stretch, map tint, floor radius [m], tower count
 	vec4 tower[MAX_TOWERS];  // base centre direction (planet frame), radius [m]
-	vec4 towerP[MAX_TOWERS]; // top radius [m], strength, noise offset, 0
+	vec4 towerP[MAX_TOWERS]; // top radius [m], strength, noise offset, anvil (1: the storm's tallest)
 	vec4 flash[8];           // lightning: position (planet frame), brightness
 	vec4 flashInfo;          // count, diffusion length [m]
 	vec4 prevRot[3];         // last frame's camera frame -> planet frame (columns)
@@ -135,7 +135,7 @@ float Moat (vec3 u)
 // about the axis (the vortex). q: tower-local horizontal position (east,
 // north) [m], dz: height above the level [m], rt: tower radius; Ld, Lu, W:
 // downwind, upwind and lateral reach [m], th: thickness [m]; nz: noise
-float Shelf (vec2 q, float dz, float rt, float Ld, float Lu, float W, float th, float nz, float seed, bool anvil)
+float Shelf (vec2 q, float dz, float rt, float Ld, float Lu, float W, float th, float nz, float seed, bool anvil, bool detail)
 {
 	float ex = q.x > 0.0 ? q.x / Ld : q.x / Lu, ey = q.y / W;
 	float e2 = ex * ex + ey * ey;
@@ -145,9 +145,10 @@ float Shelf (vec2 q, float dz, float rt, float Ld, float Lu, float W, float th, 
 	float bottom = -thick * (0.6 + 0.25 * nz) - (anvil ? 2.5e3 * max (nz, 0.0) : 0.0);
 	float v = smoothstep (bottom, bottom + 1e3, dz) * (1.0 - smoothstep (0.0, 1.5e3, dz - 0.15 * thick * nz));
 	// (its own lumps and frayed edges: noise over a third of the tower)
-	float sn = textureLod (shapeNoise, vec3 (q / (3.0 * rt), dz / 6e3 + seed * 0.1), 0.0).r - 0.5;
+	float sn = detail ? textureLod (shapeNoise, vec3 (q / (3.0 * rt), dz / 6e3 + seed * 0.1), 0.0).r - 0.5 : 0.0;
 	float edge = smoothstep (1.0, 0.6, e2 + (nz + 2.0 * sn) * mix (0.25, 0.7, clamp (ex, 0.0, 1.0)));
 	v *= 0.75 + 1.0 * sn;
+	if (!detail) return 0.8 * v * edge; // (for the light: without the arms)
 	float rho = length (q), ang = atan (q.y, q.x);
 	float arms = 0.65 + 0.35 * cos (2.0 * ang - 2.5 * log (max (rho, 0.2 * rt) / rt) + seed);
 	return v * edge * arms;
@@ -164,7 +165,7 @@ bool NearTower (int i, vec3 u, float r, float margin)
 	vec3 e = normalize (vec3 (-c.z, 0.0, c.x)), nn = cross (c, e);
 	vec2 h = vec2 (dot (u - c, e), dot (u - c, nn)) * P.misc.z - vec2 (0.35 * (r - baseR), 0.0);
 	float reach = 1.4 * rt;
-	if (r > top - 12e3 - margin) reach = 7.6 * rt;
+	if (r > top - 12e3 - margin) reach = P.towerP[i].w > 0.5 ? 7.6 * rt : 1.6 * rt;
 	for (int l = 0; l < int (P.hazeH.y); l++)
 		if (abs (r - P.layer[l].y) < 6e3 + margin) reach = max (reach, 3.2 * rt);
 	return length (h - vec2 (reach > 3.0 * rt ? 1.5 * rt : 0.0, 0.0)) < reach + margin;
@@ -186,7 +187,13 @@ float Towers (vec3 x, float r, vec3 u, bool detail)
 		// east with height: the jet's shear)
 		vec3 e = normalize (vec3 (-c.z, 0.0, c.x)), nn = cross (c, e);
 		vec2 h = vec2 (dot (u - c, e), dot (u - c, nn)) * R - vec2 (0.35 * (r - baseR), 0.0);
-		if (dot (h, h) > 50.0 * rt * rt) continue;
+		// (out of reach at this height: the column, a shelf near a deck's top,
+		// the anvil near the tower's top)
+		bool anvil = P.towerP[i].w > 0.5;
+		float reach = 1.4 * rt;
+		if (r > top - 12e3) reach = anvil ? 7.6 * rt : 1.6 * rt;
+		else for (int l = 0; l < int (P.hazeH.y); l++) if (abs (r - P.layer[l].y) < 6e3) reach = 3.2 * rt;
+		if (length (h - vec2 (reach > 3.0 * rt ? 1.5 * rt : 0.0, 0.0)) > reach) continue;
 		// the vortex: the tower turns with height, faster near its core
 		float rho = length (h);
 		float phi = 2.2 * hf + seed + 1.2 * rt / (rho + rt);
@@ -210,10 +217,10 @@ float Towers (vec3 x, float r, vec3 u, bool detail)
 		for (int l = 0; l < int (P.hazeH.y); l++) {
 			float lev = P.layer[l].y;
 			if (lev > top - 8e3 || lev < baseR + 5e3 || abs (r - lev) > 6e3) continue;
-			v = max (v, 0.8 * Shelf (h, r - lev, rt, 3.0 * rt, 1.0 * rt, 1.6 * rt, 4e3, nz, seed + float (l), false));
+			v = max (v, 0.8 * Shelf (h, r - lev, rt, 3.0 * rt, 1.0 * rt, 1.6 * rt, 4e3, nz, seed + float (l), false, detail));
 		}
-		if (r > top - 12e3)
-			v = max (v, Shelf (h - vec2 (1.5 * rt, 0.0), r - top, rt, 6.0 * rt, 1.6 * rt, 2.6 * rt, 8e3, nz, seed, true));
+		if (anvil && r > top - 12e3)
+			v = max (v, Shelf (h - vec2 (1.5 * rt, 0.0), r - top, rt, 6.0 * rt, 1.6 * rt, 2.6 * rt, 8e3, nz, seed, true, detail));
 		v *= 0.7 + 0.6 * nz;
 		dens = max (dens, clamp (v, 0.0, 1.0) * mix (0.6, 1.0, s));
 	}
@@ -248,11 +255,13 @@ float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, fl
 	if (cov <= 0.01) return 0.0;
 	// (flat bases, heaped tops: the profile falls over the upper 70 percent)
 	float profile = smoothstep (0.0, 0.08, hf) * smoothstep (1.0, 0.3, hf);
+	// (the light march takes the same shape, without the detail's
+	// erosion: the clouds shadow themselves where they are seen; for far
+	// samples a single lookup)
 	if (coarse) {
-		// (coarse, for the light: one lookup, one phase)
 		float sh = textureLod (shapeNoise, vec3 (e0 - uj * t / P.misc2.x, n0, z0) * L.w, 0.0).r;
 		sh = clamp ((sh - 0.15) / 0.7, 0.0, 1.0);
-		return clamp ((sh * profile - (1.0 - cov)) / max (cov, 0.05), 0.0, 1.0);
+		return clamp ((sh * profile - (1.0 - cov)) / max (cov, 0.05) * 4.0, 0.0, 1.0);
 	}
 	vec3 q1 = vec3 (e0 - uj * p1 * FLOW_PERIOD / P.misc2.x, n0, z0) * L.w;
 	vec3 q2 = vec3 (e0 - uj * p2 * FLOW_PERIOD / P.misc2.x, n0, z0) * L.w + vec3 (0.37, 0.71, 0.13);
@@ -261,11 +270,18 @@ float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, fl
 	vec3 warp = vec3 (textureLod (shapeNoise, qw, 0.0).r, textureLod (shapeNoise, qw + vec3 (0.5, 0.2, 0.7), 0.0).r,
 		textureLod (shapeNoise, qw + vec3 (0.3, 0.8, 0.1), 0.0).r) - 0.5;
 	q1 += warp * 0.7, q2 += warp * 0.7;
+	// (the deck's top rising and falling with the warp field: hills of
+	// cloud some 175 km across, valleys between them)
+	float hn = clamp (warp.y * 2.5 + 0.5, 0.0, 1.0);
+	float hft = hf / (0.6 + 0.4 * hn);
+	if (hft >= 1.0) return 0.0;
+	profile = smoothstep (0.0, 0.08, hf) * smoothstep (1.0, 0.3, hft);
 	// (two octaves: billows on the larger features)
 	float shape = mix (0.65 * textureLod (shapeNoise, q2, 0.0).r + 0.35 * textureLod (shapeNoise, ROT * q2 * 3.1, 0.0).r,
 	                   0.65 * textureLod (shapeNoise, q1, 0.0).r + 0.35 * textureLod (shapeNoise, ROT * q1 * 3.1, 0.0).r, w1);
 	shape = clamp ((shape - 0.15) / 0.7, 0.0, 1.0); // (the noise's range stretched)
-	float d = clamp ((shape * profile - (1.0 - cov)) / max (cov, 0.05), 0.0, 1.0);
+	// (sharp surfaces: full density a quarter of the way in, as cumulus)
+	float d = clamp ((shape * profile - (1.0 - cov)) / max (cov, 0.05) * 4.0, 0.0, 1.0);
 	if (d <= 0.0 || !detail) return d;
 	float det = mix (textureLod (detailNoise, ROT * ROT * q2 * 5.7, 0.0).r, textureLod (detailNoise, ROT * ROT * q1 * 5.7, 0.0).r, w1);
 	return clamp ((d - 0.2 * det) / 0.8, 0.0, 1.0);
@@ -277,6 +293,8 @@ float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, fl
 // takes its sample's)
 vec3 ctxMap;
 float ctxZone, ctxMoat;
+bool coarseLight = false; // (the light march of a far sample: coarse densities)
+bool lightTowers = false; // (the light march of a sample within the towers' shadows' reach)
 void SetContext (vec3 x)
 {
 	vec3 u = normalize (x);
@@ -295,7 +313,7 @@ float Medium (vec3 x, bool detail, out vec3 alb, bool towerDetail)
 	vec3 sum = vec3 (0.0);
 	int n = int (P.hazeH.y);
 	for (int i = 0; i < n; i++) {
-		float d = Deck (i, x, r, u, lat, lng, zone, moat, detail, !towerDetail);
+		float d = Deck (i, x, r, u, lat, lng, zone, moat, detail, coarseLight);
 		if (d <= 0.0) continue;
 		float e = P.layer[i].z * d;
 		// (the upper decks take the planet map's colour)
@@ -303,7 +321,7 @@ float Medium (vec3 x, bool detail, out vec3 alb, bool towerDetail)
 		if (i < 2) a = mix (a, a * mapc / max (dot (mapc, vec3 (0.333)), 0.05) * 0.8, P.misc2.y);
 		ext += e, sum += e * clamp (a, 0.0, 1.0);
 	}
-	float tw = Towers (x, r, u, towerDetail);
+	float tw = towerDetail || lightTowers ? Towers (x, r, u, towerDetail) : 0.0;
 	if (tw > 0.0) {
 		float e = 8e-4 * tw;
 		ext += e, sum += e * vec3 (0.95, 0.94, 0.92);
@@ -465,13 +483,22 @@ void main ()
 		float muS = dot (up, sun);
 		// (clear air between the decks, away from storms: the haze only,
 		// lit through the column above instead of a march towards the sun)
+		// (thin layers, hazes, are taken as uniform: the clear-air path)
 		bool inDeck = nearT;
-		for (int l = 0; l < int (P.hazeH.y) && !inDeck; l++) inDeck = r > P.layer[l].x && r < P.layer[l].y;
+		float thin = 0.0;
+		vec3 thinAlb = vec3 (0.0);
+		for (int l = 0; l < int (P.hazeH.y) && !inDeck; l++)
+			if (r > P.layer[l].x && r < P.layer[l].y) {
+				if (P.layer[l].z >= 2e-5) inDeck = true;
+				else thin += P.layer[l].z * 0.5 * P.albedo[l].w, thinAlb += P.layer[l].z * 0.5 * P.albedo[l].w * P.albedo[l].rgb;
+			}
 		if (!inDeck) {
-			float hz = P.haze.w * exp (-(r - P.misc.z) / P.hazeH.x);
+			float hg = P.haze.w * exp (-(r - P.misc.z) / P.hazeH.x);
+			float hz = hg + thin;
+			vec3 hzAlb = (hg * P.haze.rgb + thinAlb) / max (hz, 1e-12);
 			vec3 sunAtm = muS > -0.15 ? AtmSunTransmittance (p, max (r, atm.radii.x + 1.0), muS) * atm.radii.w : vec3 (0.0);
 			float od = ColumnAbove (r, max (muS, 0.0));
-			vec3 S = hz * P.haze.rgb * (sunAtm * mix (HG (mu, 0.6), 1.0 / (4.0 * PI), 0.5) * exp (-od)
+			vec3 S = hz * hzAlb * (sunAtm * mix (HG (mu, 0.6), 1.0 / (4.0 * PI), 0.5) * exp (-od)
 				+ pc.ambient.rgb * exp (-0.6 * ColumnAbove (r, 1.0)) + FlashLight (p));
 			float Tstep = exp (-hz * dt);
 			L += T * (S - S * Tstep) / max (hz, 1e-12);
@@ -485,13 +512,17 @@ void main ()
 		// the column above beyond it; the gas above the decks (tables)
 		float od = 0.0, ds = 2500.0, s = 0.0;
 		vec3 q = p;
-		for (int k = 0; k < 5; k++) {
+		coarseLight = ta > 250e3;
+		lightTowers = false;
+		for (int k = 0; k < nTower && !lightTowers; k++) lightTowers = NearTower (towerList[k], up, r, 100e3);
+		for (int k = 0; k < (coarseLight ? 3 : 5); k++) {
 			s += ds;
 			q = p + sun * (s - 0.5 * ds);
 			vec3 al;
 			od += Medium (q, false, al, false) * ds;
-			ds *= 2.0;
+			ds *= coarseLight ? 3.0 : 2.0;
 		}
+		coarseLight = false;
 		vec3 qe = p + sun * s;
 		float re = length (qe);
 		od += ColumnAbove (re, max (dot (qe / re, sun), 0.0));
@@ -499,16 +530,12 @@ void main ()
 		// light scattered in: the sun (phase, octaves of multiple
 		// scattering), skylight from above fading with the column over p
 		vec3 Ssun = vec3 (0.0);
-		// (powder: thin edges facing the sun darker, the light still to be
-		// scattered into them)
-		float powder = 1.0 - 0.7 * exp (-2.0 * od);
 		float aa = 1.0, bb = 1.0, cc = 1.0;
 		for (int o2 = 0; o2 < 3; o2++) {
 			float ph = mix (HG (mu, 0.75 * cc), HG (mu, -0.2 * cc), 0.3);
 			Ssun += sunAtm * aa * ph * exp (-bb * od);
 			aa *= 0.4, bb *= 0.5, cc *= 0.5;
 		}
-		Ssun *= powder;
 		float above = ColumnAbove (r, 1.0);
 		vec3 sky = pc.ambient.rgb * exp (-0.6 * above) * (0.3 + 0.7 * clamp (muS + 0.2, 0.0, 1.0));
 		vec3 S = ext * alb * (Ssun + sky + FlashLight (p));

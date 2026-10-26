@@ -557,8 +557,13 @@ void VolumetricClouds::RenderGasGiant (const GasGiantFrame &f)
 			g.towerP[nt][0] = (float)(baseR + (topR - baseR) * (0.55 + 0.45 * Unit16 (h1 >> 16)) * (0.7 + 0.3 * s));
 			g.towerP[nt][1] = (float)s;
 			g.towerP[nt][2] = (float)(7.1 * k + 3.3 * (cells[i].id % 97));
+			g.towerP[nt][3] = 0.0f;
 			nt++;
 		}
+		// (the cell's tallest tower carries its anvil: one per storm)
+		int first = nt - 6 < 0 ? 0 : nt - 6, best = first;
+		for (int k = first; k < nt; k++) if (g.towerP[k][0] > g.towerP[best][0]) best = k;
+		if (nt > first) g.towerP[best][3] = 1.0f;
 	}
 	g.misc2[3] = (float)nt;
 

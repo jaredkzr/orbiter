@@ -1,6 +1,6 @@
 -- A view of Jupiter's cloud decks from 40e3 m above the 1-bar level (24 N, in
 -- the eastward jet, 40 degrees of longitude from the subsolar point: the
--- sun about 45 degrees up), looking east, -25 degrees from the horizon; the
+-- sun about 45 degrees up), looking north (the sun at the side), 20 degrees down; the
 -- focus vessel 2 km ahead, drifting with the jet
 local hJ = oapi.get_objhandle("Jupiter")
 local R = oapi.get_size(hJ)
@@ -16,4 +16,4 @@ s.rvel = vec.sub(oapi.get_groundvector(hJ, vl, lat, 3), oapi.get_globalvel(hJ))
 s.vrot = {x = 0, y = 0, z = 0}
 v:defset_status(s)
 oapi.set_cameramode({mode = 'ground', ref = 'Jupiter', lng = math.deg(lng), lat = math.deg(lat), alt = 40000,
-	alt_above_ground = 0, phi = math.rad(90), tht = math.rad(-25)})
+	alt_above_ground = 0, phi = math.rad(0), tht = math.rad(-20)})
