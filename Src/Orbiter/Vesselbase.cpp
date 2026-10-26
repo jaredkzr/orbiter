@@ -203,6 +203,7 @@ void VesselBase::SetDefaultState ()
 
 	windp.pert_t = 0;
 	windp.pert_v.Set(0,0,0);
+	windp.pert_v2.Set(0,0,0);
 }
 
 // =======================================================================

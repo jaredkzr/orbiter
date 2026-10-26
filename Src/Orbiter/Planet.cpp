@@ -945,20 +945,29 @@ Vector Planet::WindVelocity (double lng, double lat, double alt, int frame, Wind
 	Vector wv(0,0,0);
 
 	if (gasgiant) {
-		// the jets and storms, and gusts (a time-correlated random
-		// perturbation per vessel, as large as the turbulence there)
+		// the jets and storms, and gusts: a random perturbation per vessel
+		// with the turbulence's rms (vertically half), in two parts with
+		// their own correlation times (Ornstein-Uhlenbeck processes, exact
+		// for any step: the gusts' strength independent of the frame rate):
+		// gusts of some seconds, and the chop of a fraction of one
 		double t = (td.MJD1 - 51544.5) * 86400.0;
 		wv = gasgiant->Wind (lng, lat, alt, t);
 		if (prm) {
 			double amp = gasgiant->Turbulence (lng, lat, alt, t);
-			const double corr_length = 2.0; // [s]
-			double tp = td.SimT1;
-			double corr = 1.0 - min (1.0, fabs (tp - prm->pert_t) / corr_length);
+			const double tauSlow = 2.0, tauFast = 0.25, shareFast = 0.25; // [s], [s], variance
+			double tp = td.SimT1, dt = fabs (tp - prm->pert_t);
+			if (dt > 10.0) dt = 10.0;
+			double aS = exp (-dt / tauSlow), aF = exp (-dt / tauFast);
+			double sS = amp * sqrt ((1.0 - shareFast) * (1.0 - aS * aS)), sF = amp * sqrt (shareFast * (1.0 - aF * aF));
+			auto gauss = []() {
+				double u1 = ((double)rand() + 1.0) / ((double)RAND_MAX + 2.0), u2 = (double)rand() / (double)RAND_MAX;
+				return sqrt (-2.0 * log (u1)) * cos (Pi2 * u2);
+			};
 			for (int dim = 0; dim < 3; dim++) {
-				double p = ((double)rand()/(double)RAND_MAX - 0.5) * 2.0 * amp * (dim == 1 ? 0.5 : 1.0);
-				p = corr * prm->pert_v.data[dim] + (1.0 - corr) * p;
-				prm->pert_v.data[dim] = p;
-				wv.data[dim] += p;
+				double f = dim == 1 ? 0.5 : 1.0;
+				prm->pert_v.data[dim] = aS * prm->pert_v.data[dim] + f * sS * gauss ();
+				prm->pert_v2.data[dim] = aF * prm->pert_v2.data[dim] + f * sF * gauss ();
+				wv.data[dim] += prm->pert_v.data[dim] + prm->pert_v2.data[dim];
 			}
 			prm->pert_t = tp;
 		}

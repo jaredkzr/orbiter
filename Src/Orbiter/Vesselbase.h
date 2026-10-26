@@ -71,6 +71,7 @@ struct SurfParam {//Surface-relative vessel state
 struct WindPrm {           // per-vessel wind parameters
 	double pert_t;            // time for wind perturbation vector
 	Vector pert_v;            // wind perturbation vector
+	Vector pert_v2;           // its fast part (gas giants: the chop)
 };
 
 // =======================================================================
