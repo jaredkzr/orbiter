@@ -66,6 +66,7 @@ public:
 		float fx, fy;
 		float sky[3];               // skylight above the decks
 		double time;                // [s]
+		MATRIX3 viewToPlanet;       // camera frame -> planet frame (rotation)
 	};
 	/// Ray-march a gas giant's decks (outside rendering scopes, after the prepass)
 	void RenderGasGiant (const GasGiantFrame &f);
@@ -117,6 +118,13 @@ private:
 	VkPipelineLayout marchLayout = VK_NULL_HANDLE, compLayout = VK_NULL_HANDLE, coverageLayout = VK_NULL_HANDLE;
 	VkPipeline marchPipe = VK_NULL_HANDLE, compPipe = VK_NULL_HANDLE, coveragePipe = VK_NULL_HANDLE;
 	VkPipeline ggPipe = VK_NULL_HANDLE; // gas giant decks (ggclouds.comp)
+	// (their temporal accumulation: history of light and transmittance, and
+	// the clouds' distance, ping-pong; the camera of the last frame)
+	vkc::Image ggHist[2], ggDepth[2];
+	int ggParity = 0;
+	bool ggHistValid = false;
+	VECTOR3 ggPrevCam{};
+	MATRIX3 ggPrevRot{};
 	std::vector<Flash> flashes;
 	vkc::Buffer ggBuf;                  // their parameters, one slot per frame in flight
 	bool active = false; // rendered this frame

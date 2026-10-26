@@ -43,13 +43,21 @@ struct GGParams {
 	vec4 towerP[MAX_TOWERS]; // top radius [m], strength, noise offset, 0
 	vec4 flash[8];           // lightning: position (planet frame), brightness
 	vec4 flashInfo;          // count, diffusion length [m]
+	vec4 prevRot[3];         // last frame's camera frame -> planet frame (columns)
+	vec4 prevCam;            // its position (planet frame); w: history valid (1), and the camera still: half the tiles marched (2)
 };
 layout(std430, set = 0, binding = 5) readonly buffer GGBuf { GGParams gg[]; };
+// temporal accumulation (ping-pong by parity): light and transmittance,
+// and the clouds' distance from the camera [m] (0: none)
+layout(set = 0, binding = 6) uniform sampler2D histIn[2];
+layout(set = 0, binding = 7) uniform sampler2D depthIn[2];
+layout(set = 0, binding = 8, rgba16f) uniform writeonly image2D histOut[2];
+layout(set = 0, binding = 9, r32f) uniform writeonly image2D depthOut[2];
 
 layout(push_constant) uniform Params {
 	vec4 proj;       // fx, fy, output width, height
 	vec4 ambient;    // skylight above the decks (rgb), w: frame index
-	vec4 slot;       // x: parameter slot (frame in flight)
+	vec4 slot;       // x: parameter slot (frame in flight), y: parity (history to write)
 } pc;
 
 const float PI = 3.14159265;
@@ -105,8 +113,14 @@ float Moat (vec3 u)
 	float R = P.misc.z;
 	for (int k = 0; k < nMoat; k++) {
 		int i = moatList[k];
-		float d = Ang (u, P.storm[i].xyz) * R / P.storm[i].w; // [cell radii]
-		m = max (m, P.stormP[i].x * smoothstep (0.15, 0.45, d) * (1.0 - smoothstep (0.8, 1.4, d)));
+		vec3 c = P.storm[i].xyz;
+		float d = Ang (u, c) * R / P.storm[i].w; // [cell radii]
+		if (d > 1.4) continue;
+		// (spiral arms: the storm's vortex winds the clearing up)
+		vec3 e = normalize (vec3 (-c.z, 0.0, c.x));
+		vec2 q = vec2 (dot (u - c, e), dot (u - c, cross (c, e)));
+		float arms = 0.5 + 0.5 * cos (3.0 * atan (q.y, q.x) - 4.0 * log (max (d, 0.05)) + P.stormP[i].y);
+		m = max (m, P.stormP[i].x * smoothstep (0.15, 0.45, d) * (1.0 - smoothstep (0.8, 1.4, d)) * mix (1.0, arms, 0.6));
 	}
 	return m;
 }
@@ -115,39 +129,91 @@ float Moat (vec3 u)
 // water clouds through the decks above to anvils (TOWERTOP), leaning with
 // the wind shear, their edges billowing (noise rising with the updraft).
 // Density 0..1 at x (radius r, direction u).
+// a shelf of a tower where it meets a stable level (a deck's top), or its
+// anvil (as an anvil of an Earth thunderstorm): spread flat, far downwind
+// (east) and little upwind, thinning and fraying downwind; spiral arms
+// about the axis (the vortex). q: tower-local horizontal position (east,
+// north) [m], dz: height above the level [m], rt: tower radius; Ld, Lu, W:
+// downwind, upwind and lateral reach [m], th: thickness [m]; nz: noise
+float Shelf (vec2 q, float dz, float rt, float Ld, float Lu, float W, float th, float nz, float seed, bool anvil)
+{
+	float ex = q.x > 0.0 ? q.x / Ld : q.x / Lu, ey = q.y / W;
+	float e2 = ex * ex + ey * ey;
+	if (e2 > 1.6) return 0.0;
+	float thick = th * (1.0 - 0.7 * clamp (ex, 0.0, 1.0));
+	// (a flat top; the underside lower near the tower, with pouches)
+	float bottom = -thick * (0.6 + 0.25 * nz) - (anvil ? 2.5e3 * max (nz, 0.0) : 0.0);
+	float v = smoothstep (bottom, bottom + 1e3, dz) * (1.0 - smoothstep (0.0, 1.5e3, dz - 0.15 * thick * nz));
+	// (its own lumps and frayed edges: noise over a third of the tower)
+	float sn = textureLod (shapeNoise, vec3 (q / (3.0 * rt), dz / 6e3 + seed * 0.1), 0.0).r - 0.5;
+	float edge = smoothstep (1.0, 0.6, e2 + (nz + 2.0 * sn) * mix (0.25, 0.7, clamp (ex, 0.0, 1.0)));
+	v *= 0.75 + 1.0 * sn;
+	float rho = length (q), ang = atan (q.y, q.x);
+	float arms = 0.65 + 0.35 * cos (2.0 * ang - 2.5 * log (max (rho, 0.2 * rt) / rt) + seed);
+	return v * edge * arms;
+}
+
+// whether a point (direction u, radius r) is within reach of tower i's
+// column, shelves or anvil, give or take margin [m]
+bool NearTower (int i, vec3 u, float r, float margin)
+{
+	vec3 c = P.tower[i].xyz;
+	float rt = P.tower[i].w, top = P.towerP[i].x;
+	float baseR = P.layer[int (P.hazeH.y) - 1].x;
+	if (r < baseR - margin || r > top + 6e3 + margin) return false;
+	vec3 e = normalize (vec3 (-c.z, 0.0, c.x)), nn = cross (c, e);
+	vec2 h = vec2 (dot (u - c, e), dot (u - c, nn)) * P.misc.z - vec2 (0.35 * (r - baseR), 0.0);
+	float reach = 1.4 * rt;
+	if (r > top - 12e3 - margin) reach = 7.6 * rt;
+	for (int l = 0; l < int (P.hazeH.y); l++)
+		if (abs (r - P.layer[l].y) < 6e3 + margin) reach = max (reach, 3.2 * rt);
+	return length (h - vec2 (reach > 3.0 * rt ? 1.5 * rt : 0.0, 0.0)) < reach + margin;
+}
+
 float Towers (vec3 x, float r, vec3 u, bool detail)
 {
 	float dens = 0.0;
 	float R = P.misc.z;
 	float baseR = P.layer[int (P.hazeH.y) - 1].x; // (the lowest deck's base)
-	if (r < baseR || r > P.misc.w + 4e3) return 0.0;
+	if (r < baseR || r > P.misc.w + 10e3) return 0.0;
 	for (int k = 0; k < nTower; k++) {
 		int i = towerList[k];
 		vec3 c = P.tower[i].xyz;
-		float rt = P.tower[i].w, top = P.towerP[i].x, s = P.towerP[i].y;
+		float rt = P.tower[i].w, top = P.towerP[i].x, s = P.towerP[i].y, seed = P.towerP[i].z;
 		float hf = (r - baseR) / (top - baseR);
-		if (hf <= 0.0 || hf >= 1.05) continue;
-		// (tangent plane at the tower: east, north [m])
+		if (hf <= 0.0 || r > top + 6e3) continue;
+		// (tangent plane at the tower: east, north [m]; the axis leaning
+		// east with height: the jet's shear)
 		vec3 e = normalize (vec3 (-c.z, 0.0, c.x)), nn = cross (c, e);
-		vec2 h = vec2 (dot (u - c, e), dot (u - c, nn)) * R;
-		// (leaning east with height: the jet's shear; the anvil, flaring
-		// over the top 16 km, blown further downwind)
-		float an = smoothstep (top - 16e3, top - 4e3, r);
-		vec2 tc = vec2 (0.35 * (r - baseR) + 1.2 * rt * an, 0.0);
-		float d = length (h - tc);
-		float rad = rt * (1.0 - 0.2 * hf) * (1.0 + 1.4 * an);
-		if (d > 1.6 * rad) continue;
-		// (billows a fifth of the tower across, and smaller ones on them,
+		vec2 h = vec2 (dot (u - c, e), dot (u - c, nn)) * R - vec2 (0.35 * (r - baseR), 0.0);
+		if (dot (h, h) > 50.0 * rt * rt) continue;
+		// the vortex: the tower turns with height, faster near its core
+		float rho = length (h);
+		float phi = 2.2 * hf + seed + 1.2 * rt / (rho + rt);
+		vec2 hr = mat2 (cos (phi), sin (phi), -sin (phi), cos (phi)) * h;
+		// (billows a fifth of the tower across, smaller ones on them,
 		// rising with the updraft)
 		float nz = 0.0;
 		if (detail) {
-			vec3 q = vec3 (h - tc, r - baseR - 25.0 * P.hazeH.z) / rt * 0.7 + vec3 (P.towerP[i].z);
-			nz = 0.6 * textureLod (shapeNoise, q, 0.0).r + 0.4 * textureLod (shapeNoise, ROT * q * 2.9, 0.0).r - 0.5;
+			vec3 q = vec3 (hr, r - baseR - 25.0 * P.hazeH.z) / rt * 0.35 + vec3 (seed);
+			nz = 0.7 * textureLod (shapeNoise, q, 0.0).r + 0.3 * textureLod (shapeNoise, ROT * q * 2.2, 0.0).r - 0.5;
 			nz = clamp (nz * 2.5, -0.6, 0.6); // (the noise's narrow range stretched)
 		}
-		float dd = d + nz * mix (0.7, 1.0, an) * rad;
-		// (a cauliflower top: its height varies by several km)
-		float v = smoothstep (rad, 0.7 * rad, dd) * smoothstep (0.0, 0.04, hf) * (1.0 - smoothstep (top - 4e3, top, r - 12e3 * nz));
+		// the column: lobed, asymmetric
+		float th = atan (hr.y, hr.x);
+		float rad = rt * (1.0 - 0.2 * hf) * (1.0 + 0.22 * sin (3.0 * th + seed) + 0.12 * sin (5.0 * th + 2.0 * seed));
+		float v = smoothstep (1.1 * rad, 0.55 * rad, rho + nz * 0.8 * rad) * smoothstep (0.0, 0.04, hf) * (1.0 - smoothstep (top - 4e3, top, r - 3e3 * nz));
+		// (the overshooting dome over the core)
+		float dome = top + 4e3 * (1.0 - min (rho * rho / (0.36 * rt * rt), 1.0));
+		v = max (v, smoothstep (0.6 * rt, 0.4 * rt, rho + nz * 0.3 * rt) * step (top - 6e3, r) * (1.0 - smoothstep (dome - 1.5e3, dome, r - 1e3 * nz)));
+		// shelves where it passes the decks' tops, and the anvil at its top
+		for (int l = 0; l < int (P.hazeH.y); l++) {
+			float lev = P.layer[l].y;
+			if (lev > top - 8e3 || lev < baseR + 5e3 || abs (r - lev) > 6e3) continue;
+			v = max (v, 0.8 * Shelf (h, r - lev, rt, 3.0 * rt, 1.0 * rt, 1.6 * rt, 4e3, nz, seed + float (l), false));
+		}
+		if (r > top - 12e3)
+			v = max (v, Shelf (h - vec2 (1.5 * rt, 0.0), r - top, rt, 6.0 * rt, 1.6 * rt, 2.6 * rt, 8e3, nz, seed, true));
 		v *= 0.7 + 0.6 * nz;
 		dens = max (dens, clamp (v, 0.0, 1.0) * mix (0.6, 1.0, s));
 	}
@@ -173,14 +239,15 @@ float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, fl
 	float t = P.hazeH.z;
 	float p1 = fract (t / FLOW_PERIOD), p2 = fract (t / FLOW_PERIOD + 0.5);
 	float w1 = 1.0 - abs (2.0 * p1 - 1.0);
-	float e0 = lng * R * cl / P.misc2.x, n0 = lat * R, z0 = (r - R) * 2.0;
+	float e0 = lng * R * cl / P.misc2.x, n0 = lat * R, z0 = (r - R) * 3.0;
 	// clearings: large holes in the deck (where its noise at ~600 km is low)
 	if (m.w > 0.0) {
 		float big = textureLod (shapeNoise, vec3 (e0 - uj * t / P.misc2.x, n0, float (i) * 3e5) / 600e3, 0.0).r;
 		cov *= smoothstep (m.w, m.w + 0.2, big);
 	}
 	if (cov <= 0.01) return 0.0;
-	float profile = smoothstep (0.0, 0.12, hf) * smoothstep (1.0, 0.55, hf);
+	// (flat bases, heaped tops: the profile falls over the upper 70 percent)
+	float profile = smoothstep (0.0, 0.08, hf) * smoothstep (1.0, 0.3, hf);
 	if (coarse) {
 		// (coarse, for the light: one lookup, one phase)
 		float sh = textureLod (shapeNoise, vec3 (e0 - uj * t / P.misc2.x, n0, z0) * L.w, 0.0).r;
@@ -280,17 +347,54 @@ float HG (float c, float g)
 	return (1.0 - g2) / (4.0 * PI * pow (max (1.0 + g2 - 2.0 * g * c, 1e-4), 1.5));
 }
 
+int cur, prv;
+
+void Store (ivec2 px, vec4 c, float depth)
+{
+	imageStore (outClouds, px, c);
+	imageStore (histOut[cur], px, c);
+	imageStore (depthOut[cur], px, vec4 (depth));
+}
+
+// the last frame's light and transmittance where the point x (planet
+// frame) was seen, and whether it is the same cloud (its distance then)
+bool History (vec3 x, float dist, out vec4 h)
+{
+	h = vec4 (0.0);
+	if (P.prevCam.w < 0.5) return false;
+	mat3 R = mat3 (P.prevRot[0].xyz, P.prevRot[1].xyz, P.prevRot[2].xyz);
+	vec3 v = transpose (R) * (x - P.prevCam.xyz);
+	if (v.z <= 0.0) return false;
+	vec2 uv = vec2 (v.x / v.z * pc.proj.x, -v.y / v.z * pc.proj.y) * 0.5 + 0.5;
+	if (any (lessThan (uv, vec2 (0.0))) || any (greaterThan (uv, vec2 (1.0)))) return false;
+	h = textureLod (histIn[prv], uv, 0.0);
+	float dp = textureLod (depthIn[prv], uv, 0.0).r;
+	float dn = dist > 0.0 ? length (x - P.prevCam.xyz) : 0.0;
+	if (dn == 0.0 || dp == 0.0) return (dn == 0.0) == (dp == 0.0);
+	return abs (dp - dn) < 0.15 * dn + 2e3;
+}
+
 void main ()
 {
 	ivec2 px = ivec2 (gl_GlobalInvocationID.xy);
 	vec2 size = pc.proj.zw;
 	if (px.x >= int (size.x) || px.y >= int (size.y)) return;
 	P = gg[int (pc.slot.x)];
+	cur = int (pc.slot.y), prv = 1 - cur;
 
 	vec2 ndc = (vec2 (px) + 0.5) / size * 2.0 - 1.0;
 	vec3 dv = normalize (vec3 (ndc.x / pc.proj.x, -ndc.y / pc.proj.y, 1.0));
 	vec3 d = normalize (mat3 (atm.viewToPlanet) * dv);
 	vec3 o = atm.camPos.xyz;
+	// every other 8x8 tile (alternating each frame: whole workgroups, so
+	// that the work is saved) takes the last frame's result where it is
+	// valid: half the pixels marched per frame
+	if (P.prevCam.w > 1.5 && ((gl_WorkGroupID.x + gl_WorkGroupID.y + uint (cur)) & 1u) == 1u) {
+		float dl = texelFetch (depthIn[prv], px, 0).r;
+		vec3 x = o + d * (dl > 0.0 ? dl : 1e7);
+		vec4 h;
+		if (History (x, dl, h)) { Store (px, h, dl > 0.0 ? length (x - o) : 0.0); return; }
+	}
 
 	// the segment within the decks' shell (above the floor), up to the
 	// scene and the march range
@@ -298,7 +402,7 @@ void main ()
 	for (int i = 1; i < int (P.hazeH.y); i++) topR = max (topR, P.layer[i].y + 5e3);
 	topR = max (topR, P.misc.w + 8e3);
 	vec2 tt = RaySphere (o, d, topR);
-	if (tt.x > tt.y || tt.y <= 0.0) { imageStore (outClouds, px, vec4 (0.0, 0.0, 0.0, 1.0)); return; }
+	if (tt.x > tt.y || tt.y <= 0.0) { Store (px, vec4 (0.0, 0.0, 0.0, 1.0), 0.0); return; }
 	float t0 = max (tt.x, 0.0), t1 = tt.y;
 	vec2 tf = RaySphere (o, d, P.misc2.z);
 	bool toFloor = tf.x < tf.y && tf.x > 0.0;
@@ -312,7 +416,7 @@ void main ()
 	if (scene) t1 = z / dv.z;
 	bool beyond = t1 > t0 + P.hazeH.w;
 	t1 = min (t1, t0 + P.hazeH.w);
-	if (t1 <= t0) { imageStore (outClouds, px, vec4 (0.0, 0.0, 0.0, 1.0)); return; }
+	if (t1 <= t0) { Store (px, vec4 (0.0, 0.0, 0.0, 1.0), 0.0); return; }
 
 	// the towers and storms the ray passes near (towers: within their
 	// reach, and the shadows they cast along it)
@@ -322,7 +426,7 @@ void main ()
 			float top = P.towerP[i].x;
 			vec3 mid = P.tower[i].xyz * (0.5 * (baseR + top));
 			float tq = clamp (dot (mid - o, d), t0, t1);
-			float reach = 3.2 * P.tower[i].w + 0.35 * (top - baseR) + 0.5 * (top - baseR) + 120e3;
+			float reach = 8.0 * P.tower[i].w + 0.35 * (top - baseR) + 0.5 * (top - baseR) + 120e3;
 			if (length (o + d * tq - mid) < reach) towerList[nTower++] = i;
 		}
 		for (int i = 0; i < int (P.misc.x) && nMoat < 4; i++) {
@@ -332,15 +436,27 @@ void main ()
 		}
 	}
 	float jitter = fract (52.9829189 * fract (dot (vec2 (px) + pc.ambient.w * vec2 (5.588238, 5.588238), vec2 (0.06711056, 0.00583715))));
+	// steps growing with distance; those passing near a tower subdivided
+	// (to about a hundredth of the distance: its billows resolved)
 	const int N = 72;
 	vec3 sun = atm.sunDir.xyz;
 	float mu = dot (d, sun);
 	vec3 L = vec3 (0.0);
 	float T = 1.0, tWeighted = 0.0, wSum = 0.0;
 	float span = t1 - t0;
+	float baseLow = P.layer[int (P.hazeH.y) - 1].x;
 	for (int i = 0; i < N && T > 0.005; i++) {
 		float a = (float (i) + jitter) / float (N), b = (float (i) + 1.0 + jitter) / float (N);
-		float ta = t0 + span * a * a, tb = t0 + span * b * b;
+		float sa = t0 + span * a * a, sb = t0 + span * b * b;
+		vec3 pm = o + d * (0.5 * (sa + sb));
+		float rm = length (pm);
+		bool nearT = false;
+		if (rm > baseLow && rm < P.misc.w + 10e3)
+			for (int k = 0; k < nTower && !nearT; k++)
+				nearT = NearTower (towerList[k], pm / rm, rm, 0.5 * (sb - sa));
+		int ns = nearT ? clamp (int (ceil ((sb - sa) / max (0.01 * sa, 500.0))), 1, 4) : 1;
+		for (int j = 0; j < ns && T > 0.005; j++) {
+		float ta = sa + (sb - sa) * float (j) / float (ns), tb = sa + (sb - sa) * float (j + 1) / float (ns);
 		float dt = tb - ta;
 		vec3 p = o + d * (0.5 * (ta + tb));
 		float r = length (p);
@@ -349,11 +465,8 @@ void main ()
 		float muS = dot (up, sun);
 		// (clear air between the decks, away from storms: the haze only,
 		// lit through the column above instead of a march towards the sun)
-		bool inDeck = false;
+		bool inDeck = nearT;
 		for (int l = 0; l < int (P.hazeH.y) && !inDeck; l++) inDeck = r > P.layer[l].x && r < P.layer[l].y;
-		if (!inDeck && r > P.layer[int (P.hazeH.y) - 1].x && r < P.misc.w + 4e3)
-			for (int k = 0; k < nTower && !inDeck; k++) // (near a tower)
-				inDeck = Ang (up, P.tower[towerList[k]].xyz) * P.misc.z < 3.0 * P.tower[towerList[k]].w + 0.35 * (r - P.layer[int (P.hazeH.y) - 1].x) + 20e3;
 		if (!inDeck) {
 			float hz = P.haze.w * exp (-(r - P.misc.z) / P.hazeH.x);
 			vec3 sunAtm = muS > -0.15 ? AtmSunTransmittance (p, max (r, atm.radii.x + 1.0), muS) * atm.radii.w : vec3 (0.0);
@@ -386,12 +499,16 @@ void main ()
 		// light scattered in: the sun (phase, octaves of multiple
 		// scattering), skylight from above fading with the column over p
 		vec3 Ssun = vec3 (0.0);
+		// (powder: thin edges facing the sun darker, the light still to be
+		// scattered into them)
+		float powder = 1.0 - 0.7 * exp (-2.0 * od);
 		float aa = 1.0, bb = 1.0, cc = 1.0;
 		for (int o2 = 0; o2 < 3; o2++) {
 			float ph = mix (HG (mu, 0.75 * cc), HG (mu, -0.2 * cc), 0.3);
 			Ssun += sunAtm * aa * ph * exp (-bb * od);
-			aa *= 0.5, bb *= 0.5, cc *= 0.5;
+			aa *= 0.4, bb *= 0.5, cc *= 0.5;
 		}
+		Ssun *= powder;
 		float above = ColumnAbove (r, 1.0);
 		vec3 sky = pc.ambient.rgb * exp (-0.6 * above) * (0.3 + 0.7 * clamp (muS + 0.2, 0.0, 1.0));
 		vec3 S = ext * alb * (Ssun + sky + FlashLight (p));
@@ -401,10 +518,11 @@ void main ()
 		tWeighted += w * 0.5 * (ta + tb);
 		wSum += w;
 		T *= Tstep;
+		}
 	}
 	// (beyond the march range downwards, or at the floor: the dark depths)
 	if ((toFloor || beyond) && !scene && dot (d, o) < 0.0) T *= toFloor ? 0.0 : 0.3;
-	if (wSum <= 0.0 && T > 0.999) { imageStore (outClouds, px, vec4 (0.0, 0.0, 0.0, 1.0)); return; }
+	if (wSum <= 0.0 && T > 0.999) { Store (px, vec4 (0.0, 0.0, 0.0, 1.0), 0.0); return; }
 
 	// the gas above the decks between the camera and them (the camera high above)
 	if (t0 > 0.0) {
@@ -412,5 +530,10 @@ void main ()
 		vec3 Lair = AtmTonemap (Inscatter (d, t0, Tair));
 		L = L * Tair + (1.0 - T) * Lair;
 	}
-	imageStore (outClouds, px, vec4 (L, T));
+	// blended with the history of the same cloud (the noise of the march
+	// and its jitter averaged over frames)
+	float dist = wSum > 0.0 ? tWeighted / wSum : 0.0;
+	vec4 res = vec4 (L, T), h;
+	if (History (o + d * (dist > 0.0 ? dist : 1e7), dist, h)) res = mix (h, res, P.flashInfo.x > 0.0 ? 0.7 : 0.3); // (flashes: little lag)
+	Store (px, res, dist);
 }

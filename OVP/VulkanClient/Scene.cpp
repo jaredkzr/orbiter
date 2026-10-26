@@ -1382,6 +1382,7 @@ void Scene::RenderVolumetricClouds ()
 		const ATMCONST *ac = oapiGetPlanetAtmConstants (hp);
 		for (int k = 0; k < 3; k++) f.sky[k] = 0.35f * (float)(ac ? (&ac->color0.x)[k] : 0.5) + 0.05f;
 		f.time = oapiGetSimTime ();
+		f.viewToPlanet = mul (transp (prot), camRot);
 		vclouds->RenderGasGiant (f);
 		cloudsActive = vclouds->Active ();
 		return;

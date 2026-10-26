@@ -40,6 +40,8 @@ namespace {
 		float tower[GG_TOWERS][4], towerP[GG_TOWERS][4];
 		float flash[GG_FLASHES][4]; // position (planet frame), brightness
 		float flashInfo[4];         // count, diffusion length [m]
+		float prevRot[3][4];        // last frame's camera frame -> planet frame (columns)
+		float prevCam[4];           // its position (planet frame); w: history valid
 	};
 
 	uint32_t Pcg (uint32_t v)
@@ -224,12 +226,17 @@ bool VolumetricClouds::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSe
 		coverageLayout, VK_FORMAT_R8_UNORM, true, false);
 
 	// ray-march: coverage, noise, prepass, output; the planet's atmosphere
-	VkDescriptorSetLayoutBinding mb[6];
+	VkDescriptorSetLayoutBinding mb[10];
 	for (uint32_t i = 0; i < 4; i++) mb[i] = { i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
 	mb[4] = { 4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
 	mb[5] = { 5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr }; // (gas giant decks)
+	// (gas giant decks' history: light and distance, read and written, two each)
+	mb[6] = { 6, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+	mb[7] = { 7, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+	mb[8] = { 8, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+	mb[9] = { 9, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 6, lci.pBindings = mb;
+	lci.bindingCount = 10, lci.pBindings = mb;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &marchSetLayout));
 	VkDescriptorSetLayout ml[2] = { marchSetLayout, atmLayout };
 	VkPushConstantRange mpcr{ VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(MarchParams) };
@@ -259,7 +266,7 @@ bool VolumetricClouds::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSe
 	compPipe = graphicsPipe (spv_post_vert, spv_post_vert_size, spv_cloudcomp_frag, spv_cloudcomp_frag_size,
 		compLayout, ctx->sceneFormat, false, true);
 
-	VkDescriptorPoolSize ps[3] = { { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5 }, { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 },
+	VkDescriptorPoolSize ps[3] = { { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 9 }, { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 5 },
 		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1 } };
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.maxSets = 2, pci.poolSizeCount = 3, pci.pPoolSizes = ps;
@@ -273,6 +280,7 @@ void VolumetricClouds::Shutdown ()
 	vkDeviceWaitIdle (ctx->device);
 	VkPipeline pipes[] = { marchPipe, compPipe, coveragePipe, ggPipe };
 	ctx->DestroyBuffer (ggBuf);
+	for (int k = 0; k < 2; k++) ctx->DestroyImage (ggHist[k]), ctx->DestroyImage (ggDepth[k]);
 	for (auto p : pipes) vkDestroyPipeline (ctx->device, p, nullptr);
 	VkPipelineLayout pls[] = { marchLayout, compLayout, coverageLayout };
 	for (auto p : pls) vkDestroyPipelineLayout (ctx->device, p, nullptr);
@@ -292,6 +300,7 @@ void VolumetricClouds::CreateOutput (VkImageView prepass)
 {
 	vkDeviceWaitIdle (ctx->device);
 	ctx->DestroyImage (output);
+	for (int k = 0; k < 2; k++) ctx->DestroyImage (ggHist[k]), ctx->DestroyImage (ggDepth[k]);
 	vkResetDescriptorPool (ctx->device, pool, 0);
 	VkExtent2D r = ctx->RenderExtent ();
 	outExtent = { (r.width + 1) / 2, (r.height + 1) / 2 };
@@ -301,6 +310,18 @@ void VolumetricClouds::CreateOutput (VkImageView prepass)
 		vkc::ImageBarrier (cmd, img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 			VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 	});
+	// (the gas giant decks' history: in the general layout, read and written)
+	for (int k = 0; k < 2; k++) {
+		ggHist[k] = CreateImage (VK_IMAGE_TYPE_2D, OUT_FORMAT, { outExtent.width, outExtent.height, 1 }, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+		ggDepth[k] = CreateImage (VK_IMAGE_TYPE_2D, VK_FORMAT_R32_SFLOAT, { outExtent.width, outExtent.height, 1 }, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+		VkImage hi = ggHist[k].image, di = ggDepth[k].image;
+		ctx->ImmediateSubmit ([hi, di](VkCommandBuffer cmd) {
+			for (VkImage im : { hi, di })
+				vkc::ImageBarrier (cmd, im, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+					VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+		});
+	}
+	ggHistValid = false;
 	VkDescriptorSetLayout l[2] = { marchSetLayout, compSetLayout };
 	VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
 	dai.descriptorPool = pool, dai.descriptorSetCount = 2, dai.pSetLayouts = l;
@@ -329,6 +350,24 @@ void VolumetricClouds::CreateOutput (VkImageView prepass)
 	gw.dstSet = marchSet, gw.dstBinding = 5, gw.descriptorCount = 1;
 	gw.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, gw.pBufferInfo = &gbi;
 	vkUpdateDescriptorSets (ctx->device, 1, &gw, 0, nullptr);
+	{
+		VkDescriptorImageInfo hs[2], ds[2], hw[2], dw[2];
+		for (int k = 0; k < 2; k++) {
+			hs[k] = { clampSampler, ggHist[k].view, VK_IMAGE_LAYOUT_GENERAL };
+			ds[k] = { clampSampler, ggDepth[k].view, VK_IMAGE_LAYOUT_GENERAL };
+			hw[k] = { VK_NULL_HANDLE, ggHist[k].view, VK_IMAGE_LAYOUT_GENERAL };
+			dw[k] = { VK_NULL_HANDLE, ggDepth[k].view, VK_IMAGE_LAYOUT_GENERAL };
+		}
+		VkWriteDescriptorSet w4[4]{};
+		const VkDescriptorImageInfo *inf[4] = { hs, ds, hw, dw };
+		for (int k = 0; k < 4; k++) {
+			w4[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			w4[k].dstSet = marchSet, w4[k].dstBinding = 6 + k, w4[k].descriptorCount = 2;
+			w4[k].descriptorType = k < 2 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+			w4[k].pImageInfo = inf[k];
+		}
+		vkUpdateDescriptorSets (ctx->device, 4, w4, 0, nullptr);
+	}
 	outPrepass = prepass;
 	generation = ctx->SwapchainGeneration ();
 }
@@ -456,6 +495,7 @@ bool VolumetricClouds::LoadDecks (const char *planet, Decks &dk)
 
 void VolumetricClouds::RenderGasGiant (const GasGiantFrame &f)
 {
+	if (!active) ggHistValid = false; // (not drawn last frame: no history)
 	active = false;
 	if (!enabled || !f.decks || f.decks->decks.empty()) return;
 	if (generation != ctx->SwapchainGeneration () || outPrepass != f.prepass) CreateOutput (f.prepass);
@@ -576,13 +616,37 @@ void VolumetricClouds::RenderGasGiant (const GasGiantFrame &f)
 	}
 	g.misc2[0] = (float)dk.stretch, g.misc2[1] = (float)dk.tint, g.misc2[2] = (float)f.floorRadius;
 
+	// the last frame's camera (temporal accumulation; not after a jump)
+	if (ggHistValid && length (f.camPlanet - ggPrevCam) > 50e3) ggHistValid = false;
+	const MATRIX3 &pr = ggHistValid ? ggPrevRot : f.viewToPlanet;
+	const double pm[9] = { pr.m11, pr.m21, pr.m31, pr.m12, pr.m22, pr.m32, pr.m13, pr.m23, pr.m33 }; // (columns)
+	for (int c = 0; c < 3; c++) for (int k = 0; k < 3; k++) g.prevRot[c][k] = (float)pm[c * 3 + k];
+	VECTOR3 pc0 = ggHistValid ? ggPrevCam : f.camPlanet;
+	g.prevCam[0] = (float)pc0.x, g.prevCam[1] = (float)pc0.y, g.prevCam[2] = (float)pc0.z, g.prevCam[3] = ggHistValid ? 1.0f : 0.0f;
+	// (half the tiles marched per frame only with the camera nearly still:
+	// moving fast, the reprojected tiles would not match the marched ones)
+	if (ggHistValid) {
+		VECTOR3 fz = _V(f.viewToPlanet.m13, f.viewToPlanet.m23, f.viewToPlanet.m33), pz = _V(pr.m13, pr.m23, pr.m33);
+		// (nor with lightning: the light changes from frame to frame)
+		if (length (f.camPlanet - pc0) < 200.0 && dotp (fz, pz) > cos (0.05 * RAD) && g.flashInfo[0] == 0.0f) g.prevCam[3] = 2.0f;
+	}
+
 	VkCommandBuffer cmd = ctx->Cmd ();
 	vkc::ImageBarrier (cmd, output.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
 		VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+	{
+		// (the history written last frame, read now)
+		VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+		mb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, mb.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+		mb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, mb.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+		VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+		dep.memoryBarrierCount = 1, dep.pMemoryBarriers = &mb;
+		vkCmdPipelineBarrier2 (cmd, &dep);
+	}
 	GGPush p{};
 	p.proj[0] = f.fx, p.proj[1] = f.fy, p.proj[2] = (float)outExtent.width, p.proj[3] = (float)outExtent.height;
 	p.ambient[0] = f.sky[0], p.ambient[1] = f.sky[1], p.ambient[2] = f.sky[2], p.ambient[3] = (float)(frameNo++ % 64);
-	p.slot[0] = (float)fi;
+	p.slot[0] = (float)fi, p.slot[1] = (float)ggParity;
 	VkDescriptorSet sets[2] = { marchSet, f.atmSet };
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, ggPipe);
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, marchLayout, 0, 2, sets, 0, nullptr);
@@ -591,5 +655,8 @@ void VolumetricClouds::RenderGasGiant (const GasGiantFrame &f)
 	vkc::ImageBarrier (cmd, output.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 		VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 	shadowMap[3] = 0.0f; // (no coverage map: the planet's 2D cloud shadows)
+	ggPrevCam = f.camPlanet, ggPrevRot = f.viewToPlanet;
+	ggHistValid = true;
+	ggParity ^= 1;
 	active = true;
 }
