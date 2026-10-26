@@ -109,6 +109,11 @@ private:
 	std::vector<std::pair<uint32_t, uint32_t>> freeList; // (first, capacity), in blocks of BLOCK
 	std::vector<std::pair<uint32_t, uint32_t>> toClear;  // newly allocated rings
 	double pendingDt = 0.0;
+	// nothing alive: no emissions since the last particle's lifetime ended
+	// (the passes are skipped then, after two more updates)
+	double aliveUntil = -1e30;
+	int idleUpdates = 0;
+	bool idle = false;
 	float drawBody[12] = {}; // the planet nearby, for drawing: position (camera-relative), velocity, angular velocity
 	VECTOR3 lastCam{};
 	bool haveCam = false;

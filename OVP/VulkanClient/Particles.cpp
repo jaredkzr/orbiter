@@ -621,6 +621,18 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	if (!toClear.empty()) barrier (VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, CS, RW);
 	toClear.clear ();
 
+	for (const Emission &e : queued) aliveUntil = std::max (aliveUntil, simt + 1.5 * e.lifetime + 1.0); // (particle_emit.comp: up to 1.5 lifetimes)
+	if (queued.empty() && simt > aliveUntil) {
+		if (idleUpdates >= 2) { // (the particles have been updated as dead)
+			idle = true;
+			lastCam = camPos, haveCam = true;
+			pendingDt = 0.0;
+			return;
+		}
+		idleUpdates++;
+	} else idleUpdates = 0;
+	idle = false;
+
 	// move and light the existing particles
 	UpdateParams up{};
 	VECTOR3 shift = haveCam ? lastCam - camPos : _V(0, 0, 0);
@@ -783,7 +795,7 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 
 void ParticleSystem::Draw (uint32_t first, uint32_t capacity, VkTexture *tex, bool emissive, VkDescriptorSet frameSet)
 {
-	if (!enabled || !prepassView || !tex) return;
+	if (!enabled || !prepassView || !tex || idle) return;
 	VkCommandBuffer cmd = ctx->Cmd ();
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, emissive ? drawAdd : drawBlend);
 	VkDescriptorSet s[3] = { frameSet, sets[ctx->FrameIndex ()], tex->set };
@@ -972,7 +984,7 @@ void VkParticleStream::Render (Scene *scene)
 
 void ParticleSystem::DrawVolume (VkDescriptorSet frameSet)
 {
-	if (!enabled || smokeMode != SMOKE_VOLUME || !prepassView) return;
+	if (!enabled || smokeMode != SMOKE_VOLUME || !prepassView || idle) return;
 	VkCommandBuffer cmd = ctx->Cmd ();
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, volMarchPipe);
 	VkDescriptorSet s[2] = { frameSet, sets[ctx->FrameIndex ()] };
@@ -1035,7 +1047,7 @@ void ParticleSystem::EnsureScreenSmoke ()
 
 void ParticleSystem::RenderScreenSmoke (VkDescriptorSet frameSet)
 {
-	if (!enabled || smokeMode != SMOKE_SCREEN || !prepassView || thickGen != ctx->SwapchainGeneration ()) return;
+	if (!enabled || smokeMode != SMOKE_SCREEN || !prepassView || idle || thickGen != ctx->SwapchainGeneration ()) return;
 	VkExtent2D re = ctx->RenderExtent ();
 	VkExtent2D e = { std::max (1u, re.width / 2), std::max (1u, re.height / 2) };
 	// thickness of the volumetric particles
@@ -1081,7 +1093,7 @@ void ParticleSystem::RenderScreenSmoke (VkDescriptorSet frameSet)
 
 void ParticleSystem::DrawScreenSmoke (VkDescriptorSet frameSet)
 {
-	if (!enabled || smokeMode != SMOKE_SCREEN || thickGen != ctx->SwapchainGeneration ()) return;
+	if (!enabled || idle || smokeMode != SMOKE_SCREEN || thickGen != ctx->SwapchainGeneration ()) return;
 	VkCommandBuffer cmd = ctx->Cmd ();
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, screenCompPipe);
 	VkDescriptorSet s[2] = { frameSet, sets[ctx->FrameIndex ()] };
