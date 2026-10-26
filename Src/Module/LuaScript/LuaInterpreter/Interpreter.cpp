@@ -970,6 +970,7 @@ void Interpreter::LoadAPI ()
 		{"get_windvector", oapi_get_windvector},
 		{"planet_hassurface", oapi_planet_hassurface},
 		{"get_storm", oapi_get_storm},
+		{"get_stormcells", oapi_get_stormcells},
 		{"get_crushpressure", oapi_get_crushpressure},
 		{"get_planetjcoeffcount", oapi_get_planetjcoeffcount},
 		{"get_planetjcoeff", oapi_get_planetjcoeff},
@@ -5049,6 +5050,39 @@ int Interpreter::oapi_get_storm(lua_State *L)
 	lua_pushnumber(L, s);
 	lua_pushnumber(L, u);
 	return 2;
+}
+
+/***
+The active storm cells of a gas giant within range of a point.
+
+@function get_stormcells
+@tparam handle hPlanet planet handle
+@tparam number lng longitude [rad]
+@tparam number lat latitude [rad]
+@tparam number range [m]
+@treturn table list of cells: {lng, lat [rad], radius [m], strength (0..1), updraft [m/s]}
+*/
+int Interpreter::oapi_get_stormcells(lua_State *L)
+{
+	OBJHANDLE hRef;
+	ASSERT_SYNTAX(lua_islightuserdata(L, 1), "Argument 1: invalid type (expected handle)");
+	ASSERT_SYNTAX(hRef = lua_toObject(L, 1), "Argument 1: invalid object");
+	double lng = luaL_checknumber(L, 2);
+	double lat = luaL_checknumber(L, 3);
+	double range = luaL_checknumber(L, 4);
+	STORMCELL c[64];
+	int n = oapiGetStormCells(hRef, lng, lat, range, c, 64);
+	lua_createtable(L, n, 0);
+	for (int i = 0; i < n; i++) {
+		lua_createtable(L, 0, 5);
+		lua_pushnumber(L, c[i].lng); lua_setfield(L, -2, "lng");
+		lua_pushnumber(L, c[i].lat); lua_setfield(L, -2, "lat");
+		lua_pushnumber(L, c[i].radius); lua_setfield(L, -2, "radius");
+		lua_pushnumber(L, c[i].strength); lua_setfield(L, -2, "strength");
+		lua_pushnumber(L, c[i].updraft); lua_setfield(L, -2, "updraft");
+		lua_rawseti(L, -2, i + 1);
+	}
+	return 1;
 }
 
 /***

@@ -10,6 +10,7 @@
 
 #include "VkMath.h"
 #include "Scene.h"
+#include "Clouds.h"
 #include <memory>
 #include <vector>
 
@@ -176,6 +177,8 @@ public:
 	Atmosphere *GetAtmosphere () override { return atmosphere.get(); }
 	/// tiled cloud layer (or nullptr) and its altitude [m]
 	PlanetSurface *CloudLayer () const { return clouds.get(); }
+	/// cloud decks of a gas giant (Config/VK/GasGiant), or null
+	const VolumetricClouds::Decks *Decks () const { return hasDecks ? &decks : nullptr; }
 	double CloudAlt () const;
 
 private:
@@ -190,6 +193,10 @@ private:
 	bool fieldInit = false;
 	void UpdateGallery ();
 	class VkTexture *globalTex = nullptr;   // whole-sphere map (bodies without tiles)
+	class VkTexture *groundTex[2] = {};     // ... its western and eastern hemispheres (atmosphere, cloud decks)
+	VolumetricClouds::Decks decks;
+	bool hasDecks = false;
+	bool DecksHide () const;                // the decks are drawn and the camera is below their clouds' top
 	class VkTexture *ringTex = nullptr;
 	class VkTexture *cloudTex = nullptr;    // legacy cloud layer
 	double cloudAlt = 0.0;

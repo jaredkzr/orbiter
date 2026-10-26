@@ -39,6 +39,12 @@ public:
 	struct Storm { double strength, updraft; };
 	Storm StormAt (double lng, double lat, double alt, double t) const;
 
+	/// The storm cells within range [m] of a point (active ones, up to max):
+	/// centre longitude and latitude [rad], radius [m], strength 0..1 (the
+	/// cell's activity), peak updraft [m/s]
+	struct Cell { double lng, lat, radius, strength, updraft; unsigned id; };
+	int StormCells (double lng, double lat, double range, double t, Cell *cells, int max) const;
+
 	/// The steady wind (local horizon frame: x east, y up, z north) [m/s]
 	Vector Wind (double lng, double lat, double alt, double t) const;
 

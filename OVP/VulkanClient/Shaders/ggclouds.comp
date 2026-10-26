@@ -1,0 +1,401 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Cloud decks of gas giants (Config/VK/GasGiant), ray-marched at half
+// resolution from the camera through the decks and the gas between and
+// below them. Each deck: cloud features from 3D noise in zonally stretched
+// coordinates, advected by the jets (two blended phases: they shear
+// without smearing over time); thickened in the zones and thinned in the
+// belts of the planet map; convective storm towers (the core's storm
+// cells) rising from the water clouds to anvils. Lighting: sunlight
+// through the decks (a march towards the sun, the column above it beyond
+// that) and the gas; skylight from above, fading with the column above;
+// multiple scattering approximated by octaves. Below the decks the light
+// fades to darkness.
+// Output: light (rgb, premultiplied), transmittance (a).
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+#define ATM_SET 1
+#include "atmosphere.glsl"
+
+layout(set = 0, binding = 1) uniform sampler3D shapeNoise;
+layout(set = 0, binding = 2) uniform sampler3D detailNoise;
+layout(set = 0, binding = 3) uniform sampler2D prepass;   // view normal, view depth (w; 0: none)
+layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D outClouds;
+
+const int MAX_LAYERS = 4, MAX_STORMS = 16, MAX_TOWERS = 64;
+struct GGParams {
+	vec4 layer[MAX_LAYERS];  // base, top radius [m], extinction [1/m], feature frequency [1/m]
+	vec4 albedo[MAX_LAYERS]; // rgb, coverage
+	vec4 lmisc[MAX_LAYERS];  // band contrast, towers (1: storm towers rise from it), jet factor at its height, clearings (0: none)
+	vec4 haze;               // albedo rgb, extinction at the 1-bar level [1/m]
+	vec4 hazeH;              // scale height [m], layer count, time [s], march range [m]
+	vec4 jets[16];           // eastward jet speed at the clouds, 64 latitudes from -90 to 90 degrees
+	vec4 storm[MAX_STORMS];  // centre direction (planet frame), radius [m]
+	vec4 stormP[MAX_STORMS]; // strength, seed, 0, 0
+	vec4 misc;               // storm count, sun irradiance scale, 1-bar radius [m], tower top radius [m]
+	vec4 misc2;              // zonal stretch, map tint, floor radius [m], tower count
+	vec4 tower[MAX_TOWERS];  // base centre direction (planet frame), radius [m]
+	vec4 towerP[MAX_TOWERS]; // top radius [m], strength, noise offset, 0
+};
+layout(std430, set = 0, binding = 5) readonly buffer GGBuf { GGParams gg[]; };
+
+layout(push_constant) uniform Params {
+	vec4 proj;       // fx, fy, output width, height
+	vec4 ambient;    // skylight above the decks (rgb), w: frame index
+	vec4 slot;       // x: parameter slot (frame in flight)
+} pc;
+
+const float PI = 3.14159265;
+const float FLOW_PERIOD = 1800.0; // [s] the advection phases' period
+
+GGParams P;
+
+// (octaves rotated against each other: the noise volumes' tiling hidden)
+const mat3 ROT = mat3 (0.788, 0.448, -0.422, -0.229, 0.855, 0.466, 0.571, -0.261, 0.778);
+
+float JetAt (float lat)
+{
+	float x = clamp ((lat / PI + 0.5) * 63.0, 0.0, 63.0);
+	int i = min (int (x), 62);
+	float f = x - float (i);
+	float a = P.jets[i >> 2][i & 3], b = P.jets[(i + 1) >> 2][(i + 1) & 3];
+	return mix (a, b, f);
+}
+
+// the planet map (bands): colour, and zone factor (bright zones 1, dark belts 0)
+vec3 MapColour (vec3 u, out float zone)
+{
+	float lat = asin (clamp (u.y, -1.0, 1.0)), lng = atan (u.z, u.x);
+	float v = (0.5 * PI - lat) / PI;
+	vec3 c = lng < 0.0 ? textureLod (atmGround0, vec2 ((lng + PI) / PI, v), 0.0).rgb
+	                   : textureLod (atmGround1, vec2 (lng / PI, v), 0.0).rgb;
+	float l = dot (c, vec3 (0.2126, 0.7152, 0.0722));
+	zone = smoothstep (0.25, 0.75, l / max (atm.ground.w > 0.5 ? 0.6 : 1.0, 1e-3));
+	return c;
+}
+
+uint Pcg (uint v)
+{
+	uint state = v * 747796405u + 2891336453u;
+	uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+	return (word >> 22u) ^ word;
+}
+float Unit (uint h) { return float (h & 0xffffu) / 65535.0; }
+
+// small angles between unit vectors [rad] (without acos)
+float Ang (vec3 a, vec3 b) { return length (a - b); }
+
+// (the storms and towers the pixel's ray passes near: main's selection)
+const int MAX_CAND = 12;
+int towerList[MAX_CAND], nTower = 0;
+int moatList[4], nMoat = 0;
+
+// the storm cells near a point: the clearing their downdrafts open in the
+// decks about them (0..1)
+float Moat (vec3 u)
+{
+	float m = 0.0;
+	float R = P.misc.z;
+	for (int k = 0; k < nMoat; k++) {
+		int i = moatList[k];
+		float d = Ang (u, P.storm[i].xyz) * R / P.storm[i].w; // [cell radii]
+		m = max (m, P.stormP[i].x * smoothstep (0.15, 0.45, d) * (1.0 - smoothstep (0.8, 1.4, d)));
+	}
+	return m;
+}
+
+// Convective towers of the storm cells: a few per cell, rising from the
+// water clouds through the decks above to anvils (TOWERTOP), leaning with
+// the wind shear, their edges billowing (noise rising with the updraft).
+// Density 0..1 at x (radius r, direction u).
+float Towers (vec3 x, float r, vec3 u, bool detail)
+{
+	float dens = 0.0;
+	float R = P.misc.z;
+	float baseR = P.layer[int (P.hazeH.y) - 1].x; // (the lowest deck's base)
+	if (r < baseR || r > P.misc.w + 4e3) return 0.0;
+	for (int k = 0; k < nTower; k++) {
+		int i = towerList[k];
+		vec3 c = P.tower[i].xyz;
+		float rt = P.tower[i].w, top = P.towerP[i].x, s = P.towerP[i].y;
+		float hf = (r - baseR) / (top - baseR);
+		if (hf <= 0.0 || hf >= 1.05) continue;
+		// (tangent plane at the tower: east, north [m])
+		vec3 e = normalize (vec3 (-c.z, 0.0, c.x)), nn = cross (c, e);
+		vec2 h = vec2 (dot (u - c, e), dot (u - c, nn)) * R;
+		// (leaning east with height: the jet's shear; the anvil, flaring
+		// over the top 16 km, blown further downwind)
+		float an = smoothstep (top - 16e3, top - 4e3, r);
+		vec2 tc = vec2 (0.35 * (r - baseR) + 1.2 * rt * an, 0.0);
+		float d = length (h - tc);
+		float rad = rt * (1.0 - 0.2 * hf) * (1.0 + 1.4 * an);
+		if (d > 1.6 * rad) continue;
+		// (billows a fifth of the tower across, and smaller ones on them,
+		// rising with the updraft)
+		float nz = 0.0;
+		if (detail) {
+			vec3 q = vec3 (h - tc, r - baseR - 25.0 * P.hazeH.z) / rt * 0.7 + vec3 (P.towerP[i].z);
+			nz = 0.6 * textureLod (shapeNoise, q, 0.0).r + 0.4 * textureLod (shapeNoise, ROT * q * 2.9, 0.0).r - 0.5;
+			nz = clamp (nz * 2.5, -0.6, 0.6); // (the noise's narrow range stretched)
+		}
+		float dd = d + nz * mix (0.7, 1.0, an) * rad;
+		// (a cauliflower top: its height varies by several km)
+		float v = smoothstep (rad, 0.7 * rad, dd) * smoothstep (0.0, 0.04, hf) * (1.0 - smoothstep (top - 4e3, top, r - 12e3 * nz));
+		v *= 0.7 + 0.6 * nz;
+		dens = max (dens, clamp (v, 0.0, 1.0) * mix (0.6, 1.0, s));
+	}
+	return dens;
+}
+
+// density 0..1 of deck i at x (planet frame, radius r, unit direction u,
+// latitude lat, zone factor; moat: the storms' clearing); detail: the
+// eroding detail noise
+float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, float moat, bool detail, bool coarse)
+{
+	vec4 L = P.layer[i];
+	vec4 m = P.lmisc[i];
+	float base = L.x, top = L.y;
+	float hf = (r - base) / (top - base);
+	if (hf <= 0.0 || hf >= 1.0) return 0.0;
+	float cov = clamp (P.albedo[i].w + m.x * (zone - 0.5) * 2.0, 0.0, 1.0);
+	cov *= 1.0 - 0.9 * moat;
+	// zonally stretched coordinates [m], advected by the jet (two phases)
+	float R = P.misc.z;
+	float cl = cos (lat);
+	float uj = JetAt (lat) * m.z;
+	float t = P.hazeH.z;
+	float p1 = fract (t / FLOW_PERIOD), p2 = fract (t / FLOW_PERIOD + 0.5);
+	float w1 = 1.0 - abs (2.0 * p1 - 1.0);
+	float e0 = lng * R * cl / P.misc2.x, n0 = lat * R, z0 = (r - R) * 2.0;
+	// clearings: large holes in the deck (where its noise at ~600 km is low)
+	if (m.w > 0.0) {
+		float big = textureLod (shapeNoise, vec3 (e0 - uj * t / P.misc2.x, n0, float (i) * 3e5) / 600e3, 0.0).r;
+		cov *= smoothstep (m.w, m.w + 0.2, big);
+	}
+	if (cov <= 0.01) return 0.0;
+	float profile = smoothstep (0.0, 0.12, hf) * smoothstep (1.0, 0.55, hf);
+	if (coarse) {
+		// (coarse, for the light: one lookup, one phase)
+		float sh = textureLod (shapeNoise, vec3 (e0 - uj * t / P.misc2.x, n0, z0) * L.w, 0.0).r;
+		sh = clamp ((sh - 0.15) / 0.7, 0.0, 1.0);
+		return clamp ((sh * profile - (1.0 - cov)) / max (cov, 0.05), 0.0, 1.0);
+	}
+	vec3 q1 = vec3 (e0 - uj * p1 * FLOW_PERIOD / P.misc2.x, n0, z0) * L.w;
+	vec3 q2 = vec3 (e0 - uj * p2 * FLOW_PERIOD / P.misc2.x, n0, z0) * L.w + vec3 (0.37, 0.71, 0.13);
+	// (warped by a field 7 periods across: the noise volume's repetition hidden)
+	vec3 qw = ROT * q1 * 0.143;
+	vec3 warp = vec3 (textureLod (shapeNoise, qw, 0.0).r, textureLod (shapeNoise, qw + vec3 (0.5, 0.2, 0.7), 0.0).r,
+		textureLod (shapeNoise, qw + vec3 (0.3, 0.8, 0.1), 0.0).r) - 0.5;
+	q1 += warp * 0.7, q2 += warp * 0.7;
+	// (two octaves: billows on the larger features)
+	float shape = mix (0.65 * textureLod (shapeNoise, q2, 0.0).r + 0.35 * textureLod (shapeNoise, ROT * q2 * 3.1, 0.0).r,
+	                   0.65 * textureLod (shapeNoise, q1, 0.0).r + 0.35 * textureLod (shapeNoise, ROT * q1 * 3.1, 0.0).r, w1);
+	shape = clamp ((shape - 0.15) / 0.7, 0.0, 1.0); // (the noise's range stretched)
+	float d = clamp ((shape * profile - (1.0 - cov)) / max (cov, 0.05), 0.0, 1.0);
+	if (d <= 0.0 || !detail) return d;
+	float det = mix (textureLod (detailNoise, ROT * ROT * q2 * 5.7, 0.0).r, textureLod (detailNoise, ROT * ROT * q1 * 5.7, 0.0).r, w1);
+	return clamp ((d - 0.2 * det) / 0.8, 0.0, 1.0);
+}
+
+// extinction [1/m] and scattering albedo of the decks, the towers and the
+// gas at x
+// (the planet map and the storms' moats change slowly: the light march
+// takes its sample's)
+vec3 ctxMap;
+float ctxZone, ctxMoat;
+void SetContext (vec3 x)
+{
+	vec3 u = normalize (x);
+	ctxMap = MapColour (u, ctxZone);
+	ctxMoat = Moat (u);
+}
+
+float Medium (vec3 x, bool detail, out vec3 alb, bool towerDetail)
+{
+	float r = length (x);
+	vec3 u = x / r;
+	float lat = asin (clamp (u.y, -1.0, 1.0)), lng = atan (u.z, u.x);
+	float zone = ctxZone, moat = ctxMoat;
+	vec3 mapc = ctxMap;
+	float ext = 0.0;
+	vec3 sum = vec3 (0.0);
+	int n = int (P.hazeH.y);
+	for (int i = 0; i < n; i++) {
+		float d = Deck (i, x, r, u, lat, lng, zone, moat, detail, !towerDetail);
+		if (d <= 0.0) continue;
+		float e = P.layer[i].z * d;
+		// (the upper decks take the planet map's colour)
+		vec3 a = P.albedo[i].rgb;
+		if (i < 2) a = mix (a, a * mapc / max (dot (mapc, vec3 (0.333)), 0.05) * 0.8, P.misc2.y);
+		ext += e, sum += e * clamp (a, 0.0, 1.0);
+	}
+	float tw = Towers (x, r, u, towerDetail);
+	if (tw > 0.0) {
+		float e = 8e-4 * tw;
+		ext += e, sum += e * vec3 (0.95, 0.94, 0.92);
+	}
+	float hz = P.haze.w * exp (-(r - P.misc.z) / P.hazeH.x);
+	ext += hz, sum += hz * P.haze.rgb;
+	alb = ext > 0.0 ? sum / ext : vec3 (0.0);
+	return ext;
+}
+
+// optical depth of the decks and gas above radius r along a direction
+// with sine of elevation mu (mean densities)
+float ColumnAbove (float r, float mu)
+{
+	float tau = 0.0;
+	int n = int (P.hazeH.y);
+	for (int i = 0; i < n; i++) {
+		float over = clamp (P.layer[i].y - max (r, P.layer[i].x), 0.0, P.layer[i].y - P.layer[i].x);
+		tau += P.layer[i].z * 0.35 * P.albedo[i].w * over;
+	}
+	tau += P.haze.w * P.hazeH.x * exp (-(r - P.misc.z) / P.hazeH.x);
+	return tau / max (mu, 0.08);
+}
+
+float HG (float c, float g)
+{
+	float g2 = g * g;
+	return (1.0 - g2) / (4.0 * PI * pow (max (1.0 + g2 - 2.0 * g * c, 1e-4), 1.5));
+}
+
+void main ()
+{
+	ivec2 px = ivec2 (gl_GlobalInvocationID.xy);
+	vec2 size = pc.proj.zw;
+	if (px.x >= int (size.x) || px.y >= int (size.y)) return;
+	P = gg[int (pc.slot.x)];
+
+	vec2 ndc = (vec2 (px) + 0.5) / size * 2.0 - 1.0;
+	vec3 dv = normalize (vec3 (ndc.x / pc.proj.x, -ndc.y / pc.proj.y, 1.0));
+	vec3 d = normalize (mat3 (atm.viewToPlanet) * dv);
+	vec3 o = atm.camPos.xyz;
+
+	// the segment within the decks' shell (above the floor), up to the
+	// scene and the march range
+	float topR = P.layer[0].y + 5e3;
+	for (int i = 1; i < int (P.hazeH.y); i++) topR = max (topR, P.layer[i].y + 5e3);
+	topR = max (topR, P.misc.w + 8e3);
+	vec2 tt = RaySphere (o, d, topR);
+	if (tt.x > tt.y || tt.y <= 0.0) { imageStore (outClouds, px, vec4 (0.0, 0.0, 0.0, 1.0)); return; }
+	float t0 = max (tt.x, 0.0), t1 = tt.y;
+	vec2 tf = RaySphere (o, d, P.misc2.z);
+	bool toFloor = tf.x < tf.y && tf.x > 0.0;
+	if (toFloor) t1 = min (t1, tf.x);
+	float z = 1e30;
+	for (int k = 0; k < 4; k++) {
+		float zk = texelFetch (prepass, px * 2 + ivec2 (k & 1, k >> 1), 0).w;
+		if (zk > 0.0) z = min (z, zk);
+	}
+	bool scene = z < 1e30 && z / dv.z < t1;
+	if (scene) t1 = z / dv.z;
+	bool beyond = t1 > t0 + P.hazeH.w;
+	t1 = min (t1, t0 + P.hazeH.w);
+	if (t1 <= t0) { imageStore (outClouds, px, vec4 (0.0, 0.0, 0.0, 1.0)); return; }
+
+	// the towers and storms the ray passes near (towers: within their
+	// reach, and the shadows they cast along it)
+	{
+		float R = P.misc.z, baseR = P.layer[int (P.hazeH.y) - 1].x;
+		for (int i = 0; i < int (P.misc2.w) && nTower < MAX_CAND; i++) {
+			float top = P.towerP[i].x;
+			vec3 mid = P.tower[i].xyz * (0.5 * (baseR + top));
+			float tq = clamp (dot (mid - o, d), t0, t1);
+			float reach = 3.2 * P.tower[i].w + 0.35 * (top - baseR) + 0.5 * (top - baseR) + 120e3;
+			if (length (o + d * tq - mid) < reach) towerList[nTower++] = i;
+		}
+		for (int i = 0; i < int (P.misc.x) && nMoat < 4; i++) {
+			vec3 cc = P.storm[i].xyz * R;
+			float tq = clamp (dot (cc - o, d), t0, t1);
+			if (length (o + d * tq - cc) < 1.4 * P.storm[i].w + 150e3) moatList[nMoat++] = i;
+		}
+	}
+	float jitter = fract (52.9829189 * fract (dot (vec2 (px) + pc.ambient.w * vec2 (5.588238, 5.588238), vec2 (0.06711056, 0.00583715))));
+	const int N = 72;
+	vec3 sun = atm.sunDir.xyz;
+	float mu = dot (d, sun);
+	vec3 L = vec3 (0.0);
+	float T = 1.0, tWeighted = 0.0, wSum = 0.0;
+	float span = t1 - t0;
+	for (int i = 0; i < N && T > 0.005; i++) {
+		float a = (float (i) + jitter) / float (N), b = (float (i) + 1.0 + jitter) / float (N);
+		float ta = t0 + span * a * a, tb = t0 + span * b * b;
+		float dt = tb - ta;
+		vec3 p = o + d * (0.5 * (ta + tb));
+		float r = length (p);
+		vec3 alb;
+		vec3 up = p / r;
+		float muS = dot (up, sun);
+		// (clear air between the decks, away from storms: the haze only,
+		// lit through the column above instead of a march towards the sun)
+		bool inDeck = false;
+		for (int l = 0; l < int (P.hazeH.y) && !inDeck; l++) inDeck = r > P.layer[l].x && r < P.layer[l].y;
+		if (!inDeck && r > P.layer[int (P.hazeH.y) - 1].x && r < P.misc.w + 4e3)
+			for (int k = 0; k < nTower && !inDeck; k++) // (near a tower)
+				inDeck = Ang (up, P.tower[towerList[k]].xyz) * P.misc.z < 3.0 * P.tower[towerList[k]].w + 0.35 * (r - P.layer[int (P.hazeH.y) - 1].x) + 20e3;
+		if (!inDeck) {
+			float hz = P.haze.w * exp (-(r - P.misc.z) / P.hazeH.x);
+			vec3 sunAtm = muS > -0.15 ? AtmSunTransmittance (p, max (r, atm.radii.x + 1.0), muS) * atm.radii.w : vec3 (0.0);
+			float od = ColumnAbove (r, max (muS, 0.0));
+			vec3 S = hz * P.haze.rgb * (sunAtm * mix (HG (mu, 0.6), 1.0 / (4.0 * PI), 0.5) * exp (-od)
+				+ pc.ambient.rgb * exp (-0.6 * ColumnAbove (r, 1.0)));
+			float Tstep = exp (-hz * dt);
+			L += T * (S - S * Tstep) / max (hz, 1e-12);
+			T *= Tstep;
+			continue;
+		}
+		SetContext (p);
+		float ext = Medium (p, ta < 200e3, alb, true);
+		if (ext <= 1e-9) continue;
+		// sunlight reaching p: a march towards the sun through the decks,
+		// the column above beyond it; the gas above the decks (tables)
+		float od = 0.0, ds = 2500.0, s = 0.0;
+		vec3 q = p;
+		for (int k = 0; k < 5; k++) {
+			s += ds;
+			q = p + sun * (s - 0.5 * ds);
+			vec3 al;
+			od += Medium (q, false, al, false) * ds;
+			ds *= 2.0;
+		}
+		vec3 qe = p + sun * s;
+		float re = length (qe);
+		od += ColumnAbove (re, max (dot (qe / re, sun), 0.0));
+		vec3 sunAtm = muS > -0.15 ? AtmSunTransmittance (p, max (r, atm.radii.x + 1.0), muS) * atm.radii.w : vec3 (0.0);
+		// light scattered in: the sun (phase, octaves of multiple
+		// scattering), skylight from above fading with the column over p
+		vec3 Ssun = vec3 (0.0);
+		float aa = 1.0, bb = 1.0, cc = 1.0;
+		for (int o2 = 0; o2 < 3; o2++) {
+			float ph = mix (HG (mu, 0.75 * cc), HG (mu, -0.2 * cc), 0.3);
+			Ssun += sunAtm * aa * ph * exp (-bb * od);
+			aa *= 0.5, bb *= 0.5, cc *= 0.5;
+		}
+		float above = ColumnAbove (r, 1.0);
+		vec3 sky = pc.ambient.rgb * exp (-0.6 * above) * (0.3 + 0.7 * clamp (muS + 0.2, 0.0, 1.0));
+		vec3 S = ext * alb * (Ssun + sky);
+		float Tstep = exp (-ext * dt);
+		L += T * (S - S * Tstep) / max (ext, 1e-12);
+		float w = T * (1.0 - Tstep);
+		tWeighted += w * 0.5 * (ta + tb);
+		wSum += w;
+		T *= Tstep;
+	}
+	// (beyond the march range downwards, or at the floor: the dark depths)
+	if ((toFloor || beyond) && !scene && dot (d, o) < 0.0) T *= toFloor ? 0.0 : 0.3;
+	if (wSum <= 0.0 && T > 0.999) { imageStore (outClouds, px, vec4 (0.0, 0.0, 0.0, 1.0)); return; }
+
+	// the gas above the decks between the camera and them (the camera high above)
+	if (t0 > 0.0) {
+		vec3 Tair;
+		vec3 Lair = AtmTonemap (Inscatter (d, t0, Tair));
+		L = L * Tair + (1.0 - T) * Lair;
+	}
+	imageStore (outClouds, px, vec4 (L, T));
+}

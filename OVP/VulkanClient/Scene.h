@@ -165,6 +165,9 @@ public:
 	/// the volumetric clouds (0: none this frame)
 	float CloudFadeRadius () const;
 	bool CloudsActive () const { return cloudsActive; }
+	/// sunlight reaching a point (global) through a gas giant's cloud decks
+	/// (the planet near the camera; 1 elsewhere)
+	double DeckTransmittance (const VECTOR3 &gpos) const;
 	const class VolumetricClouds *VClouds () const { return vclouds.get(); }
 	/// temporal anti-aliasing active (projection jitter, motion vectors)
 	bool TemporalAAEnabled () const { return taaEnabled; }

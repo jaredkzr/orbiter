@@ -505,6 +505,7 @@ protected:
 	static int oapi_get_windvector(lua_State* L);
 	static int oapi_planet_hassurface(lua_State* L);
 	static int oapi_get_storm(lua_State* L);
+	static int oapi_get_stormcells(lua_State* L);
 	static int oapi_get_crushpressure(lua_State* L);
 	static int oapi_get_planetjcoeffcount(lua_State* L);
 	static int oapi_get_planetjcoeff(lua_State* L);

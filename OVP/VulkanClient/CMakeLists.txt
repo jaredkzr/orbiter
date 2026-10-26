@@ -131,6 +131,7 @@ set(SHADER_SRC
 	Shaders/ring.vert
 	Shaders/ring.frag
 	Shaders/ringshadow.frag
+	Shaders/ggclouds.comp
 )
 set(SHADER_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 set(SHADER_HEADERS)

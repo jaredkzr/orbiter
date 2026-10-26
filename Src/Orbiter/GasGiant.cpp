@@ -125,12 +125,34 @@ double GasGiant::Jet (double lat) const
 GasGiant::Storm GasGiant::StormAt (double lng, double lat, double alt, double t) const
 {
 	Storm st{0.0, 0.0};
-	if (stormDensity <= 0.0 || stormSize <= 0.0) return st;
+	Cell c[16];
+	int n = StormCells (lng, lat, 0.0, t, c, 16);
+	double best = 0.0, up = 0.0;
+	for (int k = 0; k < n; k++) {
+		double dx = lng - c[k].lng;
+		dx -= Pi2 * floor (dx / Pi2 + 0.5);
+		double ex = dx * cos (c[k].lat) * radius, ey = (lat - c[k].lat) * radius;
+		double d2 = (ex * ex + ey * ey) / (c[k].radius * c[k].radius);
+		if (d2 > 4.0) continue;
+		double s = c[k].strength * exp (-d2);
+		if (s > best) best = s, up = c[k].updraft * exp (-2.0 * d2);
+	}
+	// (the updraft rises from the water clouds through the upper decks)
+	double vert = SmoothStep01 (-150e3, -60e3, alt) * (1.0 - SmoothStep01 (0.0, 40e3, alt - cloudAlt));
+	st.strength = best;
+	st.updraft = up * vert;
+	return st;
+}
+
+int GasGiant::StormCells (double lng, double lat, double range, double t, Cell *cells, int max) const
+{
+	if (stormDensity <= 0.0 || stormSize <= 0.0 || max <= 0) return 0;
 	// cells in latitude bands, each band drifting with its jet
 	double dlat = stormSize / radius;
+	int nb = (int)ceil (range / stormSize) + 1;
 	int j0 = (int)floor (lat / dlat);
-	double best = 0.0, up = 0.0;
-	for (int j = j0 - 1; j <= j0 + 1; j++) {
+	int count = 0;
+	for (int j = j0 - nb; j <= j0 + nb; j++) {
 		double latc = (j + 0.5) * dlat;
 		if (fabs (latc) >= Pi05) continue;
 		double cl = cos (latc);
@@ -140,33 +162,34 @@ GasGiant::Storm GasGiant::StormAt (double lng, double lat, double alt, double t)
 		double ld = lng - drift;
 		ld -= Pi2 * floor (ld / Pi2);
 		int i0 = (int)floor (ld / dl);
-		for (int di = -1; di <= 1; di++) {
+		int ni = std::min (n / 2, (int)ceil (range / (dl * cl * radius)) + 1);
+		for (int di = -ni; di <= ni; di++) {
 			int i = ((i0 + di) % n + n) % n;
 			uint32_t h0 = Pcg ((uint32_t)i + Pcg ((uint32_t)(j + 100000) + Pcg (0x5717u)));
 			if (Unit16 (h0) >= stormDensity) continue;
 			uint32_t h1 = Pcg (h0), h2 = Pcg (h1), h3 = Pcg (h2);
 			// centre, radius, life cycle
-			double cy = latc + (Unit16 (h1) - 0.5) * 0.6 * dlat;
-			double cx = (i + 0.2 + 0.6 * Unit16 (h1 >> 16)) * dl;
-			double rad = (0.15 + 0.25 * Unit16 (h2)) * stormSize;
+			Cell c;
+			c.lat = latc + (Unit16 (h1) - 0.5) * 0.6 * dlat;
+			c.lng = (i + 0.2 + 0.6 * Unit16 (h1 >> 16)) * dl + drift;
+			c.lng -= Pi2 * floor (c.lng / Pi2 + 0.5);
+			c.radius = (0.15 + 0.25 * Unit16 (h2)) * stormSize;
 			double period = (6.0 + 24.0 * Unit16 (h2 >> 16)) * 3600.0;
-			double phase = Unit16 (h3);
-			double dx = ld - cx;
+			double life = sin (Pi * (t / period + Unit16 (h3)));
+			c.strength = life * life;
+			c.updraft = stormUpdraft * c.strength;
+			c.id = Pcg (h3 ^ 0x2545f491u); // (the cell's identity: stable as it drifts)
+			if (c.strength < 0.02) continue;
+			// (within range of the point)
+			double dx = lng - c.lng;
 			dx -= Pi2 * floor (dx / Pi2 + 0.5);
-			double ex = dx * cl * radius, ey = (lat - cy) * radius;
-			double d2 = (ex * ex + ey * ey) / (rad * rad);
-			if (d2 > 4.0) continue;
-			double life = sin (Pi * (t / period + phase));
-			life *= life;
-			double s = life * exp (-d2);
-			if (s > best) best = s, up = stormUpdraft * life * exp (-2.0 * d2);
+			double ex = dx * cos (c.lat) * radius, ey = (lat - c.lat) * radius;
+			if (sqrt (ex * ex + ey * ey) > range + 2.0 * c.radius) continue;
+			cells[count++] = c;
+			if (count == max) return count;
 		}
 	}
-	// (the updraft rises from the water clouds through the upper decks)
-	double vert = SmoothStep01 (-150e3, -60e3, alt) * (1.0 - SmoothStep01 (0.0, 40e3, alt - cloudAlt));
-	st.strength = best;
-	st.updraft = up * vert;
-	return st;
+	return count;
 }
 
 Vector GasGiant::Wind (double lng, double lat, double alt, double t) const

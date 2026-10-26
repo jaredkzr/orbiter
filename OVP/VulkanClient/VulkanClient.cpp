@@ -261,6 +261,10 @@ void VulkanClient::clbkRenderScene ()
 	{
 		double sl = scene->CameraSunlight ();
 		postfx->maxExposure = (float)std::exp2 (std::log2 (4.0) + (std::log2 (DAYLIGHT_MAX_EXPOSURE) - std::log2 (4.0)) * sl);
+		// deep in a gas giant's clouds the eye adapts further (the dim
+		// light between the decks)
+		double dt = scene->DeckTransmittance (scene->CameraPos ());
+		if (dt < 1.0) postfx->maxExposure = std::max (postfx->maxExposure, (float)(4.0 + 12.0 * (1.0 - dt)));
 	}
 	postfx->Apply (sceneImage, sceneSize);   // HDR scene -> backbuffer
 	ctx.GpuMark ("post");

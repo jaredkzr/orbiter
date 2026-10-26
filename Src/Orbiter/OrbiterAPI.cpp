@@ -976,6 +976,18 @@ DLLEXPORT bool oapiGetStorm (OBJHANDLE hPlanet, double lng, double lat, double a
 	return gg != nullptr;
 }
 
+DLLEXPORT int oapiGetStormCells (OBJHANDLE hPlanet, double lng, double lat, double range, STORMCELL *cells, int max)
+{
+	Body *b = (Body*)hPlanet;
+	const GasGiant *gg = b->Type() == OBJTP_PLANET ? ((Planet*)b)->GetGasGiant () : nullptr;
+	if (!gg || max <= 0) return 0;
+	std::vector<GasGiant::Cell> c (max);
+	int n = gg->StormCells (lng, lat, range, (td.MJD1 - 51544.5) * 86400.0, c.data(), max);
+	for (int i = 0; i < n; i++)
+		cells[i] = { c[i].lng, c[i].lat, c[i].radius, c[i].strength, c[i].updraft, c[i].id };
+	return n;
+}
+
 DLLEXPORT double oapiGetCrushPressure (OBJHANDLE hPlanet)
 {
 	Body *b = (Body*)hPlanet;

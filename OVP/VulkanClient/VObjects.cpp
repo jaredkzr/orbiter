@@ -903,6 +903,7 @@ VPlanet::~VPlanet ()
 {
 	TextureManager *tm = scene->Client()->TexMgr();
 	tm->Release (globalTex);
+	for (auto *t : groundTex) if (t) tm->Release (t);
 	tm->Release (ringTex);
 	tm->Release (cloudTex);
 	if (ringNIdx) {
@@ -934,8 +935,21 @@ void VPlanet::LoadLegacyTextures ()
 	uint32_t w, h;
 	std::vector<uint8_t> rgba;
 
-	if (!surface && load (std::string (name) + ".tex", images) && legacytex::GlobalMap (images, w, h, rgba))
+	if (!surface && load (std::string (name) + ".tex", images) && legacytex::GlobalMap (images, w, h, rgba)) {
 		globalTex = tm->CreateRGBA (w, h, rgba.data());
+		// its hemispheres, for the atmosphere (reflections, the cloud decks' bands)
+		if (atmosphere && w >= 2) {
+			uint32_t hw = w / 2;
+			std::vector<uint8_t> half ((size_t)hw * h * 4);
+			for (int k = 0; k < 2; k++) {
+				for (uint32_t y = 0; y < h; y++)
+					memcpy (half.data() + (size_t)y * hw * 4, rgba.data() + ((size_t)y * w + k * hw) * 4, (size_t)hw * 4);
+				groundTex[k] = tm->CreateRGBA (hw, h, half.data());
+			}
+			atmosphere->SetGround (groundTex[0], groundTex[1], colour);
+		}
+	}
+	if (!oapiPlanetHasSurface (hObj)) hasDecks = VolumetricClouds::LoadDecks (name, decks);
 
 	const bool *hasClouds = (const bool*)oapiGetObjectParam (hObj, OBJPRM_PLANET_HASCLOUDS);
 	if (!clouds && hasClouds && *hasClouds && load (std::string (name) + "_cloud.tex", images) &&
@@ -1361,7 +1375,7 @@ void VPlanet::Render (RenderPass pass)
 {
 	if (pass == RenderPass::Depth) {
 		SetMotion (); // terrain and bases move with the planet
-		if (surface && scene->PixelSize (size, camDist) >= 0.5) surface->RenderDepth ();
+		if (surface && !DecksHide () && scene->PixelSize (size, camDist) >= 0.5) surface->RenderDepth ();
 		for (auto &b : bases) b->Render (pass);
 		UpdateGallery ();
 		if (gallery) gallery->Render (pass);
@@ -1371,7 +1385,8 @@ void VPlanet::Render (RenderPass pass)
 	if (pass == RenderPass::Transparent) {
 		if (isStar) { RenderGlow (); return; }
 		for (auto &b : bases) b->Render (pass);
-		if (clouds) clouds->Render (atmosphere.get());
+		// (a gas giant's 2D cloud layer: not while its decks are drawn)
+		if (clouds && !(hasDecks && scene->CloudsActive () && oapiCameraProxyGbody () == hObj)) clouds->Render (atmosphere.get());
 		if (scene->PixelSize (size, camDist) >= 0.5) {
 			if (cloudTex) {
 				// legacy cloud layer: longitude 0 of the map at the -x axis
@@ -1386,6 +1401,7 @@ void VPlanet::Render (RenderPass pass)
 		return;
 	}
 	if (scene->PixelSize (size, camDist) < 0.5) return; // too small to see
+	if (DecksHide ()) return; // (inside a gas giant's clouds: they are all there is)
 	if (surface) {
 		surface->Render (atmosphere.get());
 		scene->GpuMark ("terrain");
@@ -1439,16 +1455,25 @@ void VPlanet::Render (RenderPass pass)
 	}
 }
 
+bool VPlanet::DecksHide () const
+{
+	// (the decks are drawn in the prepass, before the scene: their state
+	// is this frame's)
+	return hasDecks && scene->CloudsActive () && oapiCameraProxyGbody () == hObj && camDist - size < decks.CloudTop ();
+}
+
 void VPlanet::RenderGlow ()
 {
 	// glow around a star, with a minimum apparent size so that it remains
 	// visible when the disc itself is smaller than a pixel
 	VECTOR3 vp = scene->ViewPos (gpos);
 	if (vp.z <= 0.0) return;
+	double dt = scene->DeckTransmittance (scene->CameraPos ()); // (deep in a gas giant's clouds)
+	if (dt < 1e-3) return;
 	double h = std::max (size * STAR_GLOW_SIZE, vp.z * STAR_GLOW_MIN_ANGLE);
 	// at its true distance, so that planets in front hide it (reversed float depth)
 	float x = (float)vp.x, y = (float)vp.y, z = (float)vp.z, hh = (float)h;
-	float r = colour[0] * STAR_GLOW, g = colour[1] * STAR_GLOW, b = colour[2] * STAR_GLOW;
+	float r = colour[0] * STAR_GLOW * (float)dt, g = colour[1] * STAR_GLOW * (float)dt, b = colour[2] * STAR_GLOW * (float)dt;
 	PVtx q[4] = {
 		{ x - hh, y - hh, z, 0.0f, 0.0f, r, g, b, 1 }, { x + hh, y - hh, z, 1.0f, 0.0f, r, g, b, 1 },
 		{ x + hh, y + hh, z, 1.0f, 1.0f, r, g, b, 1 }, { x - hh, y + hh, z, 0.0f, 1.0f, r, g, b, 1 } };

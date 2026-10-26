@@ -886,9 +886,29 @@ double Scene::SunVisibility (const VECTOR3 &gpos, OBJHANDLE exclude) const
 	return f;
 }
 
+double Scene::DeckTransmittance (const VECTOR3 &gpos) const
+{
+	OBJHANDLE hp = oapiCameraProxyGbody ();
+	if (!hp || !hSun) return 1.0;
+	auto it = visuals.find (hp);
+	if (it == visuals.end()) return 1.0;
+	const VPlanet *vp = dynamic_cast<const VPlanet*>(it->second.get());
+	const VolumetricClouds::Decks *dk = vp ? vp->Decks () : nullptr;
+	if (!dk) return 1.0;
+	VECTOR3 pp, sp;
+	oapiGetGlobalPos (hp, &pp);
+	oapiGetGlobalPos (hSun, &sp);
+	VECTOR3 r = gpos - pp;
+	double rl = length (r), alt = rl - oapiGetSize (hp);
+	if (alt > dk->Top () + 50e3) return 1.0;
+	double mu = dotp (r / rl, unit (sp - gpos));
+	if (mu < -0.1) return 0.0;
+	return exp (-dk->ColumnAbove (alt, mu));
+}
+
 double Scene::Sunlight (const VECTOR3 &gpos)
 {
-	double f = SunVisibility (gpos);
+	double f = SunVisibility (gpos) * DeckTransmittance (gpos);
 	objLight = (float)f;
 	return f;
 }
@@ -1327,6 +1347,33 @@ void Scene::RenderVolumetricClouds ()
 	if (it == visuals.end()) return;
 	VPlanet *vp = dynamic_cast<VPlanet*>(it->second.get());
 	Atmosphere *a = vp ? vp->GetAtmosphere () : nullptr;
+	if (vp && vp->Decks () && a && a->Present ()) {
+		// a gas giant: its cloud decks, within reach of them
+		const VolumetricClouds::Decks *dk = vp->Decks ();
+		VECTOR3 pp;
+		MATRIX3 prot;
+		oapiGetGlobalPos (hp, &pp);
+		oapiGetRotationMatrix (hp, &prot);
+		double R = oapiGetSize (hp);
+		VECTOR3 cam = tmul (prot, camPos - pp);
+		if (length (cam) - R > dk->Top () + 1500e3) return;
+		VolumetricClouds::GasGiantFrame f{};
+		f.hPlanet = hp;
+		f.decks = dk;
+		f.atmSet = a->Set ();
+		f.camPlanet = cam;
+		f.radius = R;
+		f.floorRadius = R - GG_FLOOR_DEPTH;
+		f.prepass = ao->PrepassView ();
+		f.fx = proj[0], f.fy = -proj[5];
+		// skylight above the decks: the sunlit haze's colour
+		const ATMCONST *ac = oapiGetPlanetAtmConstants (hp);
+		for (int k = 0; k < 3; k++) f.sky[k] = 0.35f * (float)(ac ? (&ac->color0.x)[k] : 0.5) + 0.05f;
+		f.time = oapiGetSimTime ();
+		vclouds->RenderGasGiant (f);
+		cloudsActive = vclouds->Active ();
+		return;
+	}
 	if (!vp || !vp->CloudLayer () || !a || !a->Present ()) return;
 	VECTOR3 pp;
 	MATRIX3 prot;

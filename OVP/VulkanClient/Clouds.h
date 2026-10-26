@@ -14,6 +14,7 @@
 
 #include "VkContext.h"
 #include "VkMath.h"
+#include <vector>
 
 class PlanetSurface;
 class TextureManager;
@@ -38,6 +39,36 @@ public:
 	};
 	/// Coverage map and ray-march (outside rendering scopes, after the prepass)
 	void Render (const Frame &f);
+
+	/// Cloud decks of a gas giant (Config/VK/GasGiant/<name>.cfg; altitudes
+	/// above the 1-bar level)
+	struct Deck { double base, top, ext, scale; float albedo[3], coverage, contrast; bool towers; float holes; };
+	struct Decks {
+		std::vector<Deck> decks;
+		float haze[3] = { 0.5f, 0.4f, 0.3f };
+		double hazeExt = 2e-6, hazeH = 30e3, towerTop = 15e3, stretch = 3.0, tint = 0.6;
+		double Top () const;      ///< top of the highest deck (not the haze) [m]
+		double CloudTop () const; ///< top of the highest cloud deck (extinction 1e-4/m or more)
+		/// optical depth of the decks and haze above altitude alt [m] along a
+		/// direction with sine of elevation mu (mean densities: as
+		/// ggclouds.comp's ColumnAbove)
+		double ColumnAbove (double alt, double mu) const;
+	};
+	static bool LoadDecks (const char *planet, Decks &d);
+	struct GasGiantFrame {
+		OBJHANDLE hPlanet;
+		const Decks *decks;
+		VkDescriptorSet atmSet;     // the planet's atmosphere
+		VECTOR3 camPlanet;          // camera position, planet frame
+		double radius;              // 1-bar radius [m]
+		double floorRadius;         // the atmosphere's floor [m]
+		VkImageView prepass;
+		float fx, fy;
+		float sky[3];               // skylight above the decks
+		double time;                // [s]
+	};
+	/// Ray-march a gas giant's decks (outside rendering scopes, after the prepass)
+	void RenderGasGiant (const GasGiantFrame &f);
 	/// Composite over the scene (in the scene's rendering scope)
 	void Composite ();
 
@@ -79,6 +110,8 @@ private:
 	VkDescriptorSet marchSet = VK_NULL_HANDLE, compSet = VK_NULL_HANDLE;
 	VkPipelineLayout marchLayout = VK_NULL_HANDLE, compLayout = VK_NULL_HANDLE, coverageLayout = VK_NULL_HANDLE;
 	VkPipeline marchPipe = VK_NULL_HANDLE, compPipe = VK_NULL_HANDLE, coveragePipe = VK_NULL_HANDLE;
+	VkPipeline ggPipe = VK_NULL_HANDLE; // gas giant decks (ggclouds.comp)
+	vkc::Buffer ggBuf;                  // their parameters, one slot per frame in flight
 	bool active = false; // rendered this frame
 };
 

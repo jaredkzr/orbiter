@@ -13,6 +13,11 @@
 #include "cloudmap.vert.h"
 #include "cloudmap.frag.h"
 #include "clouds.comp.h"
+#include "ggclouds.comp.h"
+#include <cstring>
+#include <string>
+#include <sstream>
+#include <fstream>
 #include "cloudcomp.frag.h"
 #include "post.vert.h"
 
@@ -23,6 +28,26 @@ namespace {
 	struct MarchParams {
 		float shell[4], mapCentre[4], mapEast[4], mapNorth[4], ambient[4], proj[4], noise[4];
 	};
+
+	// ggclouds.comp's parameters (std430: arrays of vec4)
+	constexpr int GG_LAYERS = 4, GG_STORMS = 16, GG_TOWERS = 64;
+	struct GGParams {
+		float layer[GG_LAYERS][4], albedo[GG_LAYERS][4], lmisc[GG_LAYERS][4];
+		float haze[4], hazeH[4];
+		float jets[64];
+		float storm[GG_STORMS][4], stormP[GG_STORMS][4];
+		float misc[4], misc2[4];
+		float tower[GG_TOWERS][4], towerP[GG_TOWERS][4];
+	};
+
+	uint32_t Pcg (uint32_t v)
+	{
+		uint32_t state = v * 747796405u + 2891336453u;
+		uint32_t word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+		return (word >> 22u) ^ word;
+	}
+	double Unit16 (uint32_t h) { return (h & 0xffffu) / 65535.0; }
+	struct GGPush { float proj[4], ambient[4], slot[4]; };
 }
 
 vkc::Image VolumetricClouds::CreateImage (VkImageType type, VkFormat fmt, VkExtent3D e, VkImageUsageFlags usage)
@@ -197,11 +222,12 @@ bool VolumetricClouds::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSe
 		coverageLayout, VK_FORMAT_R8_UNORM, true, false);
 
 	// ray-march: coverage, noise, prepass, output; the planet's atmosphere
-	VkDescriptorSetLayoutBinding mb[5];
+	VkDescriptorSetLayoutBinding mb[6];
 	for (uint32_t i = 0; i < 4; i++) mb[i] = { i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
 	mb[4] = { 4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+	mb[5] = { 5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr }; // (gas giant decks)
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 5, lci.pBindings = mb;
+	lci.bindingCount = 6, lci.pBindings = mb;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &marchSetLayout));
 	VkDescriptorSetLayout ml[2] = { marchSetLayout, atmLayout };
 	VkPushConstantRange mpcr{ VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(MarchParams) };
@@ -214,6 +240,12 @@ bool VolumetricClouds::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSe
 	cpi.layout = marchLayout;
 	VK_CHECK(vkCreateComputePipelines (ctx->device, VK_NULL_HANDLE, 1, &cpi, nullptr, &marchPipe));
 	vkDestroyShaderModule (ctx->device, cs, nullptr);
+	cs = ctx->CreateShaderModule (spv_ggclouds_comp, spv_ggclouds_comp_size);
+	cpi.stage.module = cs;
+	VK_CHECK(vkCreateComputePipelines (ctx->device, VK_NULL_HANDLE, 1, &cpi, nullptr, &ggPipe));
+	vkDestroyShaderModule (ctx->device, cs, nullptr);
+	ggBuf = ctx->CreateBuffer (vkc::FRAMES_IN_FLIGHT * sizeof(GGParams), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+	memset (ggBuf.mapped, 0, vkc::FRAMES_IN_FLIGHT * sizeof(GGParams));
 
 	// composite
 	VkDescriptorSetLayoutBinding cbnd{ 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
@@ -225,9 +257,10 @@ bool VolumetricClouds::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSe
 	compPipe = graphicsPipe (spv_post_vert, spv_post_vert_size, spv_cloudcomp_frag, spv_cloudcomp_frag_size,
 		compLayout, ctx->sceneFormat, false, true);
 
-	VkDescriptorPoolSize ps[2] = { { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5 }, { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 } };
+	VkDescriptorPoolSize ps[3] = { { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5 }, { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 },
+		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1 } };
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-	pci.maxSets = 2, pci.poolSizeCount = 2, pci.pPoolSizes = ps;
+	pci.maxSets = 2, pci.poolSizeCount = 3, pci.pPoolSizes = ps;
 	VK_CHECK(vkCreateDescriptorPool (ctx->device, &pci, nullptr, &pool));
 	return true;
 }
@@ -236,7 +269,8 @@ void VolumetricClouds::Shutdown ()
 {
 	if (!ctx) return;
 	vkDeviceWaitIdle (ctx->device);
-	VkPipeline pipes[] = { marchPipe, compPipe, coveragePipe };
+	VkPipeline pipes[] = { marchPipe, compPipe, coveragePipe, ggPipe };
+	ctx->DestroyBuffer (ggBuf);
 	for (auto p : pipes) vkDestroyPipeline (ctx->device, p, nullptr);
 	VkPipelineLayout pls[] = { marchLayout, compLayout, coverageLayout };
 	for (auto p : pls) vkDestroyPipelineLayout (ctx->device, p, nullptr);
@@ -288,6 +322,11 @@ void VolumetricClouds::CreateOutput (VkImageView prepass)
 		wr[i].pImageInfo = &ii[i];
 	}
 	vkUpdateDescriptorSets (ctx->device, 6, wr, 0, nullptr);
+	VkDescriptorBufferInfo gbi{ ggBuf.buffer, 0, VK_WHOLE_SIZE };
+	VkWriteDescriptorSet gw{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+	gw.dstSet = marchSet, gw.dstBinding = 5, gw.descriptorCount = 1;
+	gw.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, gw.pBufferInfo = &gbi;
+	vkUpdateDescriptorSets (ctx->device, 1, &gw, 0, nullptr);
 	outPrepass = prepass;
 	generation = ctx->SwapchainGeneration ();
 }
@@ -357,4 +396,145 @@ void VolumetricClouds::Composite ()
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compPipe);
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compLayout, 0, 1, &compSet, 0, nullptr);
 	vkCmdDraw (cmd, 3, 1, 0, 0);
+}
+
+// ======================================================================
+// Gas giants
+
+double VolumetricClouds::Decks::Top () const
+{
+	double t = 0.0;
+	for (const Deck &d : decks) t = std::max (t, d.top);
+	return std::max (t, towerTop);
+}
+
+double VolumetricClouds::Decks::CloudTop () const
+{
+	double t = -1e30;
+	for (const Deck &d : decks) if (d.ext >= 1e-4) t = std::max (t, d.top);
+	return t > -1e30 ? t : 0.0;
+}
+
+double VolumetricClouds::Decks::ColumnAbove (double alt, double mu) const
+{
+	double tau = 0.0;
+	for (const Deck &d : decks)
+		tau += d.ext * 0.35 * d.coverage * std::clamp (d.top - std::max (alt, d.base), 0.0, d.top - d.base);
+	tau += hazeExt * hazeH * exp (-alt / hazeH);
+	return tau / std::max (mu, 0.08);
+}
+
+bool VolumetricClouds::LoadDecks (const char *planet, Decks &dk)
+{
+	std::ifstream ifs (std::string ("Config/VK/GasGiant/") + planet + ".cfg");
+	if (!ifs) return false;
+	dk = Decks();
+	std::string line;
+	while (std::getline (ifs, line)) {
+		size_t c = line.find (';');
+		if (c != std::string::npos) line.erase (c);
+		std::istringstream ss (line);
+		std::string key;
+		if (!(ss >> key)) continue;
+		if (key == "LAYER") {
+			Deck d{};
+			int towers = 0;
+			if (ss >> d.base >> d.top >> d.ext >> d.scale >> d.albedo[0] >> d.albedo[1] >> d.albedo[2] >> d.coverage >> d.contrast >> towers) {
+				d.towers = towers != 0;
+				if (!(ss >> d.holes)) d.holes = 0.0f;
+				if (dk.decks.size() < (size_t)GG_LAYERS) dk.decks.push_back (d);
+			}
+		} else if (key == "HAZE") ss >> dk.haze[0] >> dk.haze[1] >> dk.haze[2] >> dk.hazeExt >> dk.hazeH;
+		else if (key == "TOWERTOP") ss >> dk.towerTop;
+		else if (key == "STRETCH") ss >> dk.stretch;
+		else if (key == "TINT") ss >> dk.tint;
+	}
+	return !dk.decks.empty();
+}
+
+void VolumetricClouds::RenderGasGiant (const GasGiantFrame &f)
+{
+	active = false;
+	if (!enabled || !f.decks || f.decks->decks.empty()) return;
+	if (generation != ctx->SwapchainGeneration () || outPrepass != f.prepass) CreateOutput (f.prepass);
+	const Decks &dk = *f.decks;
+	const double R = f.radius;
+	const double RANGE = 2000e3; // [m] the march's reach (the decks fade into the planet map beyond)
+
+	uint32_t fi = ctx->FrameIndex ();
+	GGParams &g = ((GGParams*)ggBuf.mapped)[fi];
+	memset (&g, 0, sizeof(g));
+	// the jets at the clouds, and their share at each deck's height
+	double cl = length (f.camPlanet);
+	double clng = atan2 (f.camPlanet.z, f.camPlanet.x), clat = asin (std::clamp (f.camPlanet.y / cl, -1.0, 1.0));
+	double ujMax = 0.0, latMax = 0.0;
+	for (int i = 0; i < 64; i++) {
+		double lat = (-90.0 + 180.0 * i / 63.0) * RAD;
+		g.jets[i] = (float)oapiGetWindVector (f.hPlanet, clng, lat, 0.0, 0).x;
+		if (fabs (g.jets[i]) > ujMax) ujMax = fabs (g.jets[i]), latMax = lat;
+	}
+	for (size_t i = 0; i < dk.decks.size(); i++) {
+		const Deck &d = dk.decks[i];
+		g.layer[i][0] = (float)(R + d.base), g.layer[i][1] = (float)(R + d.top);
+		g.layer[i][2] = (float)d.ext, g.layer[i][3] = (float)(1.0 / d.scale);
+		for (int k = 0; k < 3; k++) g.albedo[i][k] = d.albedo[k];
+		g.albedo[i][3] = d.coverage;
+		g.lmisc[i][0] = d.contrast, g.lmisc[i][1] = d.towers ? 1.0f : 0.0f, g.lmisc[i][3] = d.holes;
+		double um = oapiGetWindVector (f.hPlanet, clng, latMax, 0.5 * (d.base + d.top), 0).x;
+		g.lmisc[i][2] = ujMax > 0.0 ? (float)(um / oapiGetWindVector (f.hPlanet, clng, latMax, 0.0, 0).x) : 1.0f;
+	}
+	for (int k = 0; k < 3; k++) g.haze[k] = dk.haze[k];
+	g.haze[3] = (float)dk.hazeExt;
+	g.hazeH[0] = (float)dk.hazeH, g.hazeH[1] = (float)dk.decks.size();
+	g.hazeH[2] = (float)fmod (f.time, 1e5), g.hazeH[3] = (float)RANGE;
+	// the storm cells within range (their towers)
+	STORMCELL cells[GG_STORMS];
+	int ns = oapiGetStormCells (f.hPlanet, clng, clat, RANGE, cells, GG_STORMS);
+	for (int i = 0; i < ns; i++) {
+		double cla = cos (cells[i].lat);
+		g.storm[i][0] = (float)(cla * cos (cells[i].lng)), g.storm[i][1] = (float)sin (cells[i].lat), g.storm[i][2] = (float)(cla * sin (cells[i].lng));
+		g.storm[i][3] = (float)cells[i].radius;
+		g.stormP[i][0] = (float)cells[i].strength;
+		g.stormP[i][1] = (float)(cells[i].id & 0xffffffu); // (exact in a float)
+	}
+	g.misc[0] = (float)ns, g.misc[1] = 1.0f, g.misc[2] = (float)R, g.misc[3] = (float)(R + dk.towerTop);
+	// the storms' towers: six per cell about its centre (stable: hashed
+	// from the cell's identity), rising from the lowest deck's base
+	int nt = 0;
+	double baseR = R + dk.decks.back().base, topR = R + dk.towerTop;
+	for (int i = 0; i < ns && nt < GG_TOWERS; i++) {
+		VECTOR3 c = _V(g.storm[i][0], g.storm[i][1], g.storm[i][2]);
+		VECTOR3 e = unit (_V(-c.z, 0.0, c.x)), n = crossp (c, e);
+		double Rc = cells[i].radius, s = cells[i].strength;
+		for (int k = 0; k < 6 && nt < GG_TOWERS; k++) {
+			uint32_t h0 = Pcg (cells[i].id * 8u + (uint32_t)k), h1 = Pcg (h0);
+			double th = PI2 * Unit16 (h0), dist = 0.45 * Rc * sqrt (Unit16 (h0 >> 16));
+			VECTOR3 tdir = unit (c + (e * cos (th) + n * sin (th)) * (dist / R));
+			g.tower[nt][0] = (float)tdir.x, g.tower[nt][1] = (float)tdir.y, g.tower[nt][2] = (float)tdir.z;
+			g.tower[nt][3] = (float)(Rc * (0.05 + 0.06 * Unit16 (h1)) * (0.6 + 0.4 * s));
+			g.towerP[nt][0] = (float)(baseR + (topR - baseR) * (0.55 + 0.45 * Unit16 (h1 >> 16)) * (0.7 + 0.3 * s));
+			g.towerP[nt][1] = (float)s;
+			g.towerP[nt][2] = (float)(7.1 * k + 3.3 * (cells[i].id % 97));
+			nt++;
+		}
+	}
+	g.misc2[3] = (float)nt;
+	g.misc2[0] = (float)dk.stretch, g.misc2[1] = (float)dk.tint, g.misc2[2] = (float)f.floorRadius;
+
+	VkCommandBuffer cmd = ctx->Cmd ();
+	vkc::ImageBarrier (cmd, output.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+		VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+	GGPush p{};
+	p.proj[0] = f.fx, p.proj[1] = f.fy, p.proj[2] = (float)outExtent.width, p.proj[3] = (float)outExtent.height;
+	p.ambient[0] = f.sky[0], p.ambient[1] = f.sky[1], p.ambient[2] = f.sky[2], p.ambient[3] = (float)(frameNo++ % 64);
+	p.slot[0] = (float)fi;
+	VkDescriptorSet sets[2] = { marchSet, f.atmSet };
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, ggPipe);
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, marchLayout, 0, 2, sets, 0, nullptr);
+	vkCmdPushConstants (cmd, marchLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
+	vkCmdDispatch (cmd, (outExtent.width + 7) / 8, (outExtent.height + 7) / 8, 1);
+	vkc::ImageBarrier (cmd, output.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+	shadowMap[3] = 0.0f; // (no coverage map: the planet's 2D cloud shadows)
+	active = true;
 }

@@ -411,6 +411,19 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 			ozone[3] = 1.0f;
 			mieG = o->g;
 		}
+		if (!oapiPlanetHasSurface (hPlanet)) {
+			// gas giants: no ground at the 1-bar level (the planet's radius);
+			// the gas reaches down to a dark floor far below, where no
+			// sunlight arrives (the scattering coefficients are given at
+			// the floor: as dense there as the gas's profile makes it)
+			const double D = GG_FLOOR_DEPTH;
+			double f = exp (D / H);
+			betaM[3] = (float)H; // (the haze mixed through the gas)
+			for (int i = 0; i < 3; i++) betaR[i] *= (float)f, betaM[i] *= (float)f;
+			radius -= D;
+			groundAlbedo = 0.0f;
+			gasGiant = true;
+		}
 	}
 
 	if (const bool *r = (const bool*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_SURFACERIPPLE)) ripple = *r;

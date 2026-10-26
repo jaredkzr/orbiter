@@ -4173,6 +4173,29 @@ OAPIFUNC bool oapiPlanetHasSurface (OBJHANDLE hPlanet);
 OAPIFUNC bool oapiGetStorm (OBJHANDLE hPlanet, double lng, double lat, double alt, double *strength, double *updraft = NULL);
 
 	/**
+	* \brief A convective storm cell of a gas giant (see \ref oapiGetStormCells)
+	*/
+typedef struct {
+	double lng, lat;  ///< centre [rad]
+	double radius;    ///< [m]
+	double strength;  ///< activity 0..1
+	double updraft;   ///< peak updraft [m/s]
+	unsigned int id;  ///< identity (stable while the cell drifts and lives)
+} STORMCELL;
+
+	/**
+	* \brief The active storm cells of a gas giant within range of a point.
+	* \param hPlanet planet handle
+	* \param lng longitude [rad]
+	* \param lat latitude [rad]
+	* \param range [m]
+	* \param cells list to fill
+	* \param max its length
+	* \return number of cells (0 if the planet is not a gas giant)
+	*/
+OAPIFUNC int oapiGetStormCells (OBJHANDLE hPlanet, double lng, double lat, double range, STORMCELL *cells, int max);
+
+	/**
 	* \brief The pressure beyond which a gas giant's atmosphere crushes vessels
 	*   [Pa] (0: none). Not enforced yet.
 	*/

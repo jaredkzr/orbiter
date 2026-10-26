@@ -15,6 +15,9 @@
 class Scene;
 
 /// Shared resources for atmosphere rendering (owned by the scene)
+/// gas giants: depth of the scattering atmosphere's floor below the 1-bar level [m]
+constexpr double GG_FLOOR_DEPTH = 200e3;
+
 class AtmosphereRenderer {
 public:
 	bool Init (vkc::Context *ctx, class TextureManager *texmgr);
@@ -89,6 +92,7 @@ private:
 	float aurora[4] = { 0, 0, 0, 0 }; // geomagnetic pole, aurora strength
 	float ozone[4] = {};                  // ozone absorption [1/m] (Earth)
 	float groundAlbedo = 0.3f;            // for light reflected into the sky
+	bool gasGiant = false;                // no ground at the planet's radius (GG_FLOOR_DEPTH below it)
 	vkc::Image transmittanceLut, multiscatLut; // precomputed tables
 	bool visible = false;
 	// per frame slot, for the main view and the environment probe
