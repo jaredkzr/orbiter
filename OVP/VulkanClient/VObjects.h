@@ -91,6 +91,7 @@ private:
 		VECTOR3 ofs{};
 		WORD visMode = MESHVIS_EXTERNAL;
 		std::vector<Mat4> grpTransform; // animation transforms per group
+		std::vector<Mat4> prevGrpTransform; // ... in the last frame (motion vectors)
 		std::vector<uint8_t> grpVisible;
 	};
 	void LoadMeshes ();

@@ -101,6 +101,24 @@ struct Mat4 {
 		return r;
 	}
 
+	/// Inverse of an affine transform (linear part and translation)
+	Mat4 AffineInverse () const
+	{
+		// (column-major: element (row r, column c) at m[c*4 + r])
+		auto a = [this](int r, int c) { return m[c*4 + r]; };
+		double c00 = a(1,1)*a(2,2) - a(1,2)*a(2,1), c01 = a(1,2)*a(2,0) - a(1,0)*a(2,2), c02 = a(1,0)*a(2,1) - a(1,1)*a(2,0);
+		double det = a(0,0)*c00 + a(0,1)*c01 + a(0,2)*c02;
+		Mat4 r = Identity ();
+		if (fabs (det) < 1e-300) return r;
+		double id = 1.0 / det;
+		r.m[0] = c00 * id, r.m[1] = c01 * id, r.m[2] = c02 * id;
+		r.m[4] = (a(0,2)*a(2,1) - a(0,1)*a(2,2)) * id, r.m[5] = (a(0,0)*a(2,2) - a(0,2)*a(2,0)) * id, r.m[6] = (a(0,1)*a(2,0) - a(0,0)*a(2,1)) * id;
+		r.m[8] = (a(0,1)*a(1,2) - a(0,2)*a(1,1)) * id, r.m[9] = (a(0,2)*a(1,0) - a(0,0)*a(1,2)) * id, r.m[10] = (a(0,0)*a(1,1) - a(0,1)*a(1,0)) * id;
+		for (int rr = 0; rr < 3; rr++)
+			r.m[12 + rr] = -(r.m[rr] * m[12] + r.m[4 + rr] * m[13] + r.m[8 + rr] * m[14]);
+		return r;
+	}
+
 	/// Inverse of a rigid transform (rotation, optionally uniformly scaled, and translation)
 	Mat4 RigidInverse () const
 	{

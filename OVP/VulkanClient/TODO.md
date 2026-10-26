@@ -221,8 +221,10 @@ Known gaps and limitations, to be addressed later.
 - FSR 4 (ML upscaler): revisit when its Vulkan SDK (2.4) is released.
 - On by default (ORBITER_VK_TAA=0 for 4x MSAA). Transparent surfaces,
   particles and exhaust take the motion of what is behind them (possible
-  smearing on fast relative motion). Mesh animations are not in the motion
-  vectors (only whole-object motion). No sharpening pass yet.
+  smearing on fast relative motion). Animated mesh groups have their own
+  motion (last frame's animation transform); vertex lists animated by
+  vessels (LOCALVERTEXLIST) and edited vertices do not. No sharpening pass
+  yet.
 
 ## Volumetric clouds
 - Ray-marched within 60 km when the camera is below 40 km (ORBITER_VK_CLOUDS=0

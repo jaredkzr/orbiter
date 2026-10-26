@@ -190,6 +190,7 @@ namespace {
 void VVessel::UpdateAnimations ()
 {
 	for (auto &rec : meshes) {
+		rec.prevGrpTransform = rec.grpTransform;
 		std::fill (rec.grpTransform.begin(), rec.grpTransform.end(), Mat4::Identity());
 	}
 
@@ -277,7 +278,8 @@ void VVessel::Render (RenderPass pass)
 		if (!visible) continue;
 		Mat4 meshMv = mv * Mat4::Translation (rec.ofs);
 		scene->DrawMesh (rec.mesh.get(), meshMv, pass, &rec.grpTransform, &rec.grpVisible,
-			(m < ovr.size() && !ovr[m].empty()) ? &ovr[m] : nullptr);
+			(m < ovr.size() && !ovr[m].empty()) ? &ovr[m] : nullptr,
+			rec.prevGrpTransform.size() == rec.grpTransform.size() ? &rec.prevGrpTransform : nullptr);
 	}
 	static const float noGlow[3] = { 0, 0, 0 };
 	scene->SetObjectGlassGlow (noGlow);

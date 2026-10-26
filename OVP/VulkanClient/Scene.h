@@ -99,7 +99,7 @@ public:
 	Mat4 ModelView (const VECTOR3 &gpos, const MATRIX3 &grot) const;
 	void DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass,
 		const std::vector<Mat4> *groupTransforms = nullptr, const std::vector<uint8_t> *groupVisible = nullptr,
-		const std::vector<GroupTexOverride> *texOverride = nullptr);
+		const std::vector<GroupTexOverride> *texOverride = nullptr, const std::vector<Mat4> *prevGroupTransforms = nullptr);
 	/// Instances of a mesh (opaque and alpha-tested groups; depth or opaque
 	/// pass): transforms object -> global frame relative to the camera, as
 	/// rows of a 3x4 matrix (INSTANCE_STRIDE bytes each), in buffer inst

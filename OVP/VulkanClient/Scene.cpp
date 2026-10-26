@@ -1439,7 +1439,7 @@ VkImageView Scene::ResolveTemporal (VkExtent2D &size)
 
 void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass,
 	const std::vector<Mat4> *groupTransforms, const std::vector<uint8_t> *groupVisible,
-	const std::vector<GroupTexOverride> *texOverride)
+	const std::vector<GroupTexOverride> *texOverride, const std::vector<Mat4> *prevGroupTransforms)
 {
 	if (!mesh->VertexBuffer() || !mesh->IndexBuffer()) return;
 	VkCommandBuffer cmd = ctx->Cmd();
@@ -1518,6 +1518,13 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 				float pp[40];
 				memcpy (pp, pc.modelView, sizeof(pc.modelView));
 				memcpy (pp + 16, objMotion, sizeof(objMotion));
+				if (groupTransforms && prevGroupTransforms && g < groupTransforms->size() &&
+					memcmp ((*groupTransforms)[g].m, (*prevGroupTransforms)[g].m, sizeof(Mat4::m))) {
+					// an animated group: view now -> group -> view then (as the
+					// object's motion, with the group's last transform)
+					Mat4 gm = Mat4::FromFloat (objMotion) * modelView * (*prevGroupTransforms)[g] * mv.AffineInverse ();
+					gm.ToFloat (pp + 16);
+				}
 				memcpy (pp + 32, pc.pbr, sizeof(pc.pbr));
 				pp[36] = pc.maps[0];
 				pp[37] = pc.emissive[3]; // unlit
