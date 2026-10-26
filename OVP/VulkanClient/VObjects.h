@@ -179,6 +179,9 @@ public:
 	PlanetSurface *CloudLayer () const { return clouds.get(); }
 	/// cloud decks of a gas giant (Config/VK/GasGiant), or null
 	const VolumetricClouds::Decks *Decks () const { return hasDecks ? &decks : nullptr; }
+	/// its rings, when the camera is within its decks (drawn before their
+	/// composite: beyond them)
+	void RenderRingBehindDecks ();
 	double CloudAlt () const;
 
 private:
@@ -197,6 +200,7 @@ private:
 	VolumetricClouds::Decks decks;
 	bool hasDecks = false;
 	bool DecksHide () const;                // the decks are drawn and the camera is below their clouds' top
+	bool RingsBehindDecks () const;         // the camera in this planet's decks: its rings beyond them
 	class VkTexture *ringTex = nullptr;
 	class VkTexture *cloudTex = nullptr;    // legacy cloud layer
 	double cloudAlt = 0.0;

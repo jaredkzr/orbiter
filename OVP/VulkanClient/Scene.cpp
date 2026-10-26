@@ -1446,8 +1446,11 @@ void Scene::Render ()
 	// scorch marks on the ground (darkening the lit surface)
 	plumes->DrawScorch (camPos, camRot, FrameSet ());
 
-	// volumetric clouds over the opaque scene
+	// volumetric clouds over the opaque scene (a gas giant's rings, seen
+	// from within its decks, beyond them)
 	if (cloudsActive) {
+		for (auto *vo : list)
+			if (auto *vp = dynamic_cast<VPlanet*>(vo)) vp->RenderRingBehindDecks ();
 		ctx->BindScene (true);
 		vclouds->Composite ();
 	}

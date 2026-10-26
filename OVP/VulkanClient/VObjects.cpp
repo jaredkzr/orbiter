@@ -1396,7 +1396,7 @@ void VPlanet::Render (RenderPass pass)
 				scene->DrawGeometry (scene->SphereVtx(), scene->SphereIdx(), scene->SphereNIdx(),
 					scene->ModelView (gpos, R) * Mat4::Scale (r, r, r), cloudTex, white, false, true);
 			}
-			RenderRing ();
+			if (!RingsBehindDecks ()) RenderRing (); // (else before the decks: Scene)
 		}
 		return;
 	}
@@ -1453,6 +1453,16 @@ void VPlanet::Render (RenderPass pass)
 	} else {
 		scene->DrawSphere (mv, colour, false);
 	}
+}
+
+bool VPlanet::RingsBehindDecks () const
+{
+	return hasDecks && ringNIdx && scene->CloudsActive () && oapiCameraProxyGbody () == hObj;
+}
+
+void VPlanet::RenderRingBehindDecks ()
+{
+	if (RingsBehindDecks () && scene->PixelSize (size, camDist) >= 0.5) RenderRing ();
 }
 
 bool VPlanet::DecksHide () const
