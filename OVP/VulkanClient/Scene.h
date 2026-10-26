@@ -317,6 +317,7 @@ private:
 	// camera
 	VECTOR3 camPos{};
 	MATRIX3 camRot{};     // camera frame -> global
+	VECTOR3 shakeLP{}, shakeV{}; // the cockpit view's jolts: the vessel's aerodynamic acceleration, low-passed; the jolt, smoothed
 	Mat4 view;            // global direction -> view (rotation only)
 	float proj[16] = {};
 	double tanAperture = 1.0;

@@ -144,6 +144,7 @@ These are for testing and tuning (`1` turns a feature on, `0` off).
 | `ORBITER_VK_SCATTER_GALLERY=1\|rock\|grass\|shrub\|conifer\|broadleaf` | lay out the scatter assets next to the focus vessel |
 | `ORBITER_NO_TERRAIN_DETAIL=1`, `ORBITER_NO_SCATTER=1` | core: no procedural detail / no ground scatter |
 | `ORBITER_VK_GG_TESTFLASH=<m>` | gas giants: a steady lightning flash `m` metres ahead of the camera |
+| `ORBITER_VK_SHAKE=<f>` | scale of the cockpit view's jolts from turbulence and buffeting (`0` off) |
 
 Example: an offscreen screenshot of a test scene, validated and profiled:
 

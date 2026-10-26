@@ -801,6 +801,34 @@ void Scene::UpdateCamera ()
 {
 	oapiCameraGlobalPos (&camPos);
 	oapiCameraRotationMatrix (&camRot);
+	// in the cockpit, the view jolted by the vessel's aerodynamic jolts
+	// (turbulence, buffeting: its aerodynamic acceleration's change within
+	// about half a second; the head lagging, a few tenths of a degree per
+	// m/s^2); ORBITER_VK_SHAKE scales it (0: off)
+	{
+		static const double scale = getenv ("ORBITER_VK_SHAKE") ? atof (getenv ("ORBITER_VK_SHAKE")) : 1.0;
+		VESSEL *v = oapiCameraInternal () && scale > 0.0 ? oapiGetFocusInterface () : nullptr;
+		double dt = oapiGetSimStep ();
+		if (v && dt > 0.0 && oapiGetTimeAcceleration () <= 2.0) {
+			VECTOR3 L, D;
+			v->GetLiftVector (L);
+			v->GetDragVector (D);
+			VECTOR3 a = (L + D) / std::max (v->GetMass (), 1.0);
+			if (length (shakeLP) == 0.0) shakeLP = a; // (entering the cockpit: no jolt)
+			shakeLP += (a - shakeLP) * (1.0 - exp (-dt / 0.4));
+			shakeV += ((a - shakeLP) - shakeV) * (1.0 - exp (-dt / 0.04));
+			const double k = 0.25 * RAD * scale;
+			auto clampA = [](double x) { return std::clamp (x, -2.0 * RAD, 2.0 * RAD); };
+			double p = clampA (-k * shakeV.y), r = clampA (0.5 * k * shakeV.x), y = clampA (0.3 * k * shakeV.x - 0.2 * k * shakeV.z);
+			double cp = cos (p), sp = sin (p), cr = cos (r), sr = sin (r), cy = cos (y), sy = sin (y);
+			MATRIX3 Rx = { 1, 0, 0,  0, cp, -sp,  0, sp, cp };
+			MATRIX3 Ry = { cy, 0, sy,  0, 1, 0,  -sy, 0, cy };
+			MATRIX3 Rz = { cr, -sr, 0,  sr, cr, 0,  0, 0, 1 };
+			camRot = mul (camRot, mul (Ry, mul (Rx, Rz)));
+		} else if (!v) {
+			shakeLP = shakeV = _V(0, 0, 0);
+		}
+	}
 	// view = transpose(camRot): global direction -> camera frame
 	MATRIX3 vt = {
 		camRot.m11, camRot.m21, camRot.m31,
