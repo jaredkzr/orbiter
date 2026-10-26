@@ -712,7 +712,7 @@ void main ()
 			continue;
 		}
 		SetContext (p);
-		float ext = Medium (p, ta < 200e3, alb, true);
+		float ext = Medium (p, ta < 200e3, alb, nearT); // (the towers: only where the step passes near one)
 		if (ext <= 1e-9) continue;
 		// (the clouds, apart from the haze and the gas: those lit as in
 		// clear air, so that the paths agree where they meet)
@@ -734,7 +734,7 @@ void main ()
 			od += Medium (q, false, al, false) * ds;
 			ds *= coarseLight ? 3.0 : 2.0;
 		}
-		coarseLight = false;
+		coarseLight = false, lightTowers = false;
 		vec3 qe = p + sun * s;
 		float re = length (qe);
 		vec3 dirE, difE, dirP, difP, sdir, sdif;
