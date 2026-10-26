@@ -182,6 +182,7 @@ public:
 	class ParticleSystem *Particles () { return particles.get(); }
 	/// engine plume volumes (null: billboards)
 	class PlumeRenderer *Plumes () { return plumes && plumes->enabled ? plumes.get() : nullptr; }
+	class GroundTracks *Tracks () { return tracks.get(); }
 	/// reactive mask of this frame (shader-read layout after Render): where
 	/// plumes and particles were drawn, which temporal filters should trust
 	/// their history less
@@ -260,6 +261,7 @@ private:
 	std::unique_ptr<class TemporalAA> taa;
 	std::unique_ptr<class FsrUpscaler> fsr;
 	std::unique_ptr<class VolumetricClouds> vclouds;
+	std::unique_ptr<class GroundTracks> tracks;
 	std::unique_ptr<PlumeRenderer> plumes;
 	std::unique_ptr<class ParticleSystem> particles;
 	vkc::Image reactive, reactiveMS; // (multisampled: drawn to, resolved into reactive)

@@ -166,6 +166,7 @@ add_library(VulkanClient SHARED
 	RTLighting.cpp
 	TAA.cpp
 	Clouds.cpp
+	GroundTracks.cpp
 	EnvProbe.cpp
 	Fsr.cpp
 	StarSphere.cpp

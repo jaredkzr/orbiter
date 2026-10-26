@@ -9,6 +9,7 @@
 #include "TAA.h"
 #include "Fsr.h"
 #include "Clouds.h"
+#include "GroundTracks.h"
 #include "EnvProbe.h"
 #include "VObjects.h"
 #include "PlanetSurface.h"
@@ -125,7 +126,9 @@ bool Scene::Init ()
 
 	// per-frame uniform buffer, the shadow maps, ambient occlusion, the
 	// environment probe and screen-space reflections (set 0)
-	VkDescriptorSetLayoutBinding b[7]{};
+	tracks = std::make_unique<GroundTracks>();
+	tracks->Init (ctx);
+	VkDescriptorSetLayoutBinding b[8]{};
 	b[0].binding = 0;
 	b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	b[0].descriptorCount = 1;
@@ -146,18 +149,23 @@ bool Scene::Init ()
 	b[5].binding = 6; // ray traced lighting: sun, ambient occlusion, planet light
 	b[6] = b[2];
 	b[6].binding = 7; // ray traced lighting: local lights
+	b[7].binding = 8; // ground tracks (tile shading)
+	b[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	b[7].descriptorCount = 1;
+	b[7].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 7;
+	lci.bindingCount = 8;
 	lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &frameLayout));
 
-	VkDescriptorPoolSize ps[2] = {
+	VkDescriptorPoolSize ps[3] = {
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 * vkc::FRAMES_IN_FLIGHT },
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * (SHADOW_CASCADES + 5) * vkc::FRAMES_IN_FLIGHT }
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * (SHADOW_CASCADES + 5) * vkc::FRAMES_IN_FLIGHT },
+		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * vkc::FRAMES_IN_FLIGHT }
 	};
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.maxSets = 2 * vkc::FRAMES_IN_FLIGHT;
-	pci.poolSizeCount = 2;
+	pci.poolSizeCount = 3;
 	pci.pPoolSizes = ps;
 	VK_CHECK(vkCreateDescriptorPool (ctx->device, &pci, nullptr, &framePool));
 	probe = std::make_unique<EnvProbe>();
@@ -183,8 +191,13 @@ bool Scene::Init ()
 		for (int k = 0; k < SHADOW_CASCADES; k++)
 			dii[k] = { shadows[k]->Sampler(), shadows[k]->View(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 		VkDescriptorImageInfo pii{ probe->Sampler(), probe->CubeView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-		VkWriteDescriptorSet wr[3]{};
+		VkDescriptorBufferInfo tbi{ tracks->Buffer (i), 0, GroundTracks::BUFFER_SIZE };
+		VkWriteDescriptorSet wr[4]{};
 		for (auto &w : wr) w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, w.dstSet = set;
+		wr[3].dstBinding = 8;
+		wr[3].descriptorCount = 1;
+		wr[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		wr[3].pBufferInfo = &tbi;
 		wr[0].dstBinding = 0;
 		wr[0].descriptorCount = 1;
 		wr[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -197,7 +210,7 @@ bool Scene::Init ()
 		wr[2].descriptorCount = 1;
 		wr[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		wr[2].pImageInfo = &pii;
-		vkUpdateDescriptorSets (ctx->device, 3, wr, 0, nullptr);
+		vkUpdateDescriptorSets (ctx->device, 4, wr, 0, nullptr);
 	}
 
 	ao = std::make_unique<AmbientOcclusion>();
@@ -325,6 +338,7 @@ void Scene::Shutdown ()
 	ctx->DestroyImage (reactive);
 	ctx->DestroyImage (reactiveMS);
 	if (vclouds) vclouds->Shutdown ();
+	if (tracks) tracks->Shutdown ();
 	vclouds.reset();
 	if (fsr) fsr->Shutdown ();
 	fsr.reset();
@@ -975,6 +989,7 @@ void Scene::BeginFrame ()
 	// (before any of their sets are bound in this frame's commands)
 	plumes->SetPrepass (ao->PrepassView ());
 	particles->SetPrepass (ao->PrepassView ());
+	tracks->BeginFrame (fi, camPos, camRot);
 	if (rt) rt->BeginFrame ();
 	// the previous frame does not continue into this one (camera cut)
 	cameraCut = !havePrev || length (camPos - prevCamPos) > 5e3;

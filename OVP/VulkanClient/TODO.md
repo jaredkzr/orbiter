@@ -10,8 +10,12 @@ Known gaps and limitations, to be addressed later.
   relief from the cloud density. The DG's HUD glass shows strongly green
   at high night exposure.
 - Procedural surface detail (surfdetail.glsl, ORBITER_VK_SURFACE_DETAIL=0):
-  craters/rocks/grain; rocks read as pits without cast shadows; no
-  footprints or tracks. KSC's elevation data has 10-20 m bumps (canopy)
+  craters/rocks/grain; rocks read as pits without cast shadows.
+- Ground tracks (GroundTracks.cpp, tile_main.glsl's TrackShading): the
+  first three touchdown points of vessels on bare terrain within 3 km leave
+  grooves with raised edges and tread (shading only, not in the meshes or
+  physics), imprints where they touch down; 4096 segments per session, not
+  saved. Track size from the vessel's size and mass. KSC's elevation data has 10-20 m bumps (canopy)
   that look like hills from a few metres up.
 - Precomputed transmittance and multiple-scattering tables (Hillaire 2020);
   the single scattering is still ray-marched per pixel (16 steps). A

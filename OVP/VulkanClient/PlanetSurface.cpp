@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "PlanetSurface.h"
+#include "GroundTracks.h"
 #include "tile_mesh.comp.h"
 #include <atomic>
 #include <thread>
@@ -37,6 +38,7 @@ namespace {
 		int32_t refI[4];  // terrain detail: the tile's reference point d0 R [m], integer part
 		float refF[4];    // fraction; w: radius
 		float refRel[4];  // d0 (R + h0) relative to the camera (planet frame); w: R + h0
+		float tracks[4];  // ground tracks on the tile: first entry, count (GroundTracks)
 	};
 
 	constexpr double SPLIT_PIXELS = 500.0;  // split tiles that cover more than this on screen (at resolution bias 0; GRID quads per edge)
@@ -1351,6 +1353,8 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 		pc.refRel[0] = (float)rel.x, pc.refRel[1] = (float)rel.y, pc.refRel[2] = (float)rel.z;
 		pc.refRel[3] = (float)(radius + h0);
 	}
+	if (!prepass && !clouds && !scene->InProbe ())
+		if (GroundTracks *gt = scene->Tracks ()) gt->ForTile (hPlanet, ppos, prot, n->centre / radius, n->angRadius, pc.tracks);
 	if (pc.morph[1] > 0.0f && n->vessel >= 0 && n->vessel < (int)groundVessels.size()) {
 		VECTOR3 v = groundVessels[n->vessel] - n->centre; // (tile frame)
 		pc.vessel[0] = (float)(mv.m[0] * v.x + mv.m[4] * v.y + mv.m[8] * v.z + mv.m[12]);

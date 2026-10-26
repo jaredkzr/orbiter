@@ -97,6 +97,7 @@ private:
 	void LoadMeshes ();
 	void InsertMesh (UINT idx);
 	void UpdateAnimations ();
+	void UpdateTracks ();
 	void RenderExhaust ();
 	void SetHeating ();
 

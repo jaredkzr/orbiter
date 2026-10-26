@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "VObjects.h"
+#include "GroundTracks.h"
 #include "ScatterAssets.h"
 #include "ScatterField.h"
 #include "VkMesh.h"
@@ -136,6 +137,41 @@ void VVessel::Update ()
 {
 	VObject::Update ();
 	UpdateAnimations ();
+	UpdateTracks ();
+}
+
+void VVessel::UpdateTracks ()
+{
+	// wheels and gear on bare ground near the camera leave tracks
+	GroundTracks *gt = scene->Tracks ();
+	if (!gt) return;
+	DWORD n = std::min (vessel->GetTouchdownPointCount (), (DWORD)3); // (the gear: the first three)
+	OBJHANDLE hp = vessel->GetSurfaceRef ();
+	PlumeRenderer *pr = scene->Plumes ();
+	bool near = camDist < 3000.0 && hp && vessel->GroundContact ();
+	for (DWORD i = 0; i < n; i++) {
+		TOUCHDOWNVTX tv;
+		if (!near || !vessel->GetTouchdownPoint (tv, i)) { gt->NoContact (hObj, (int)i); continue; }
+		VECTOR3 g, pp;
+		vessel->Local2Global (tv.pos, g);
+		oapiGetGlobalPos (hp, &pp);
+		VECTOR3 up = unit (g - pp);
+		// the ground below the point: bare terrain only (not bases or vessels)
+		double t = 0.0;
+		VECTOR3 vn = scene->ViewDir (up);
+		int kind = 0;
+		if (pr && pr->rayCast) {
+			if (!pr->rayCast (id, scene->ViewPos (g + up), scene->ViewDir (-up), 1.5, t, vn, &kind) || kind != 0) {
+				gt->NoContact (hObj, (int)i);
+				continue;
+			}
+		} else t = 1.0;
+		// (track size from the vessel's size and mass: about 0.15 m wide and
+		// 2 cm deep for the delta-glider)
+		double hw = std::clamp (0.012 * size, 0.05, 0.4);
+		double depth = std::clamp (0.01 * std::cbrt (vessel->GetMass () / 1000.0), 0.008, 0.08);
+		gt->Contact (hObj, (int)i, hp, g + up * (1.0 - t), scene->GlobalDir (vn), hw, depth);
+	}
 }
 
 // ----------------------------------------------------------------------

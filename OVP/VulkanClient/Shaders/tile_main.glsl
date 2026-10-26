@@ -24,7 +24,16 @@ layout(push_constant) uniform Tile {
 	ivec4 refI;    // terrain detail: the tile's reference point d0 R [m], integer part (xyz)
 	vec4 refF;     // ... fraction (xyz); w: the planet's radius R [m]
 	vec4 refRel;   // d0 (R + h0) relative to the camera, planet frame (xyz); w: R + h0 [m]
+	vec4 tracks;   // ground tracks on the tile: first entry, count
 } tile;
+
+// ground tracks (GroundTracks.h), view space
+struct TrackSeg {
+	vec4 a;  // start; w: half width [m]
+	vec4 b;  // end; w: depth [m]
+	vec4 up; // surface normal; w: 0 track, 1 imprint
+};
+layout(std430, set = 0, binding = 8) readonly buffer Tracks { TrackSeg seg[]; } tracks;
 
 layout(location = 0) in vec3 vPosView;
 layout(location = 1) in vec3 vNormalView;
@@ -106,6 +115,54 @@ vec3 WaterNormal (vec3 Nv, vec3 posView, float dist)
 	return transpose (v2p) * normalize (Np - g * fade);
 }
 
+// Tracks of wheels and imprints of gear: a groove with raised edges (the
+// nearest segment), the tyres' tread across it, the disturbed soil a
+// little darker
+void TrackShading(vec3 P, inout vec3 N, inout vec3 base)
+{
+	int first = int(tile.tracks.x), count = int(tile.tracks.y);
+	if (count <= 0) return;
+	float best = 1.8;
+	vec3 off = vec3(0.0), dir = vec3(0.0);
+	float along = 0.0;
+	TrackSeg s;
+	for (int i = 0; i < count; i++) {
+		TrackSeg c = tracks.seg[first + i];
+		vec3 up = c.up.xyz;
+		vec3 ab = c.b.xyz - c.a.xyz, ap = P - c.a.xyz;
+		ab -= up * dot(ab, up), ap -= up * dot(ap, up);
+		float L2 = dot(ab, ab);
+		float t = L2 > 1e-8 ? clamp(dot(ap, ab) / L2, 0.0, 1.0) : 0.0;
+		vec3 o = ap - ab * t;
+		float x = length(o) / c.a.w;
+		if (x < best) {
+			best = x, off = o, s = c;
+			dir = L2 > 1e-8 ? ab / sqrt(L2) : vec3(0.0);
+			along = L2 > 1e-8 ? dot(ap, dir) : 0.0;
+		}
+	}
+	if (best >= 1.8) return;
+	float x = best, hw = s.a.w, depth = s.b.w;
+	vec3 lat = x > 1e-4 ? off / (x * hw) : vec3(0.0);
+	// profile [depths]: groove -(1 - x^2)^2, edges pushed up beside it
+	float q = max(1.0 - x * x, 0.0);
+	float e = exp(-pow((x - 1.2) / 0.3, 2.0));
+	float dhdx = 4.0 * x * q - 0.35 * e * 2.0 * (x - 1.2) / 0.09;
+	vec3 grad = lat * (depth * dhdx / hw);
+	// tread across the track (faded out when finer than the pixels)
+	float px = length(P) * 2.0 * atm.misc.z / max(frame.jitter.w, 1.0);
+	if (s.up.w < 0.5 && x < 1.0) {
+		const float PERIOD = 0.08;
+		float w = (1.0 - smoothstep(0.004, 0.012, px)) * smoothstep(1.0, 0.7, x);
+		grad += dir * (0.25 * depth * w * 6.2832 / PERIOD * cos(along * 6.2832 / PERIOD));
+	}
+	vec3 up = s.up.xyz;
+	grad -= up * dot(grad, up);
+	grad -= N * dot(grad, N);
+	N = normalize(N - grad);
+	base *= 1.0 - 0.15 * q; // (disturbed soil, darker)
+}
+
 void main()
 {
 	vec3 N = normalize(vNormalView);
@@ -122,6 +179,7 @@ void main()
 #ifdef TERRAIN_DETAIL
 		TerrainDetailShading(vPosView, N, base, vDetailA, detailShadow);
 #endif
+		TrackShading(vPosView, N, base);
 		SurfaceDetail(vPosView, length(vPosView), N, base);
 	} else if (dot(vPosView, N) < 0.0) {
 		// cloud tops seen from above: relief from the cloud density (thicker
