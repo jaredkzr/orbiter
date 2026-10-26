@@ -53,6 +53,8 @@ struct GGParams {
 	vec4 gasK;               // the gas's and aerosols' absorption per bar of the column above (rgb)
 	vec4 rayK;               // its Rayleigh scattering per bar (rgb)
 	vec4 vortex;             // the storms' peak swirl speed [m/s], core radius (share of the cell's), tower spin speed [m/s], spiral twist [rad]
+	vec4 bolt[128];           // lightning channels: vertices (planet frame), brightness (negative: a channel's first vertex)
+	vec4 boltInfo;           // vertex count
 };
 layout(std430, set = 0, binding = 5) readonly buffer GGBuf { GGParams gg[]; };
 // temporal accumulation (ping-pong by parity): light and transmittance,
@@ -480,6 +482,33 @@ float HG (float c, float g)
 
 int cur, prv;
 
+// Lightning channels the pixel's ray passes: where along it (the closest
+// approach to a segment), and their light there (a line glowing over its
+// width, at least the pixel's footprint: thin channels drawn without
+// aliasing; added in the march, behind the cloud in front of it)
+const int MAX_HITS = 8;
+float hitT[MAX_HITS];
+vec3 hitL[MAX_HITS];
+int nHit = 0;
+void BoltHits (vec3 o, vec3 d, float t0, float t1, float pixAng)
+{
+	for (int i = 1; i < int (P.boltInfo.x); i++) {
+		float br = P.bolt[i].w;
+		if (br <= 0.0) continue; // (a channel's first vertex: no segment to it)
+		vec3 a = P.bolt[i - 1].xyz, u = P.bolt[i].xyz - a, w0 = o - a;
+		float B = dot (d, u), C = dot (u, u), D = dot (d, w0), E = dot (u, w0);
+		float s = clamp ((E - B * D) / max (C - B * B, 1e-6 * C), 0.0, 1.0);
+		float t = s * B - D;
+		if (t < t0 || t > t1) continue;
+		float dist = length (o + d * t - (a + s * u));
+		float wd = max (30.0, 0.6 * t * pixAng);
+		if (dist > 3.0 * wd) continue;
+		vec3 l = vec3 (0.85, 0.9, 1.0) * 120.0 * br * min (1.0, 100.0 / wd) * exp (-dist * dist / (wd * wd));
+		if (nHit < MAX_HITS) { hitT[nHit] = t; hitL[nHit] = l; nHit++; }
+		else for (int k = 0; k < MAX_HITS; k++) if (dot (l, l) > dot (hitL[k], hitL[k])) { hitT[k] = t; hitL[k] = l; break; }
+	}
+}
+
 void Store (ivec2 px, vec4 c, float depth)
 {
 	imageStore (outClouds, px, c);
@@ -566,6 +595,7 @@ void main ()
 			if (length (o + d * tq - cc) < 1.4 * P.storm[i].w + 150e3) moatList[nMoat++] = i;
 		}
 	}
+	if (P.boltInfo.x > 0.0) BoltHits (o, d, t0, t1, 2.0 / (pc.proj.x * pc.proj.z));
 	float jitter = fract (52.9829189 * fract (dot (vec2 (px) + pc.ambient.w * vec2 (5.588238, 5.588238), vec2 (0.06711056, 0.00583715))));
 	// steps growing with distance; those passing near a tower subdivided
 	// (to about a hundredth of the distance: its billows resolved)
@@ -590,6 +620,9 @@ void main ()
 		for (int j = 0; j < ns && T.g > 0.005; j++) {
 		float ta = sa + (sb - sa) * float (j) / float (ns), tb = sa + (sb - sa) * float (j + 1) / float (ns);
 		float dt = tb - ta;
+		// (the lightning channels within the step, behind the cloud before it)
+		for (int k = 0; k < nHit; k++)
+			if ((hitT[k] >= ta || (i == 0 && j == 0)) && hitT[k] < tb) L += T * hitL[k];
 		vec3 p = o + d * (0.5 * (ta + tb));
 		float r = length (p);
 		vec3 alb;
@@ -620,7 +653,7 @@ void main ()
 			ColumnLight (col, max (muS, 0.0), dir, dif);
 			ColumnLight (col, 0.5, sdir, sdif);
 			vec3 S = hz * hzAlb * (sunAtm * (mix (HG (mu, 0.6), 1.0 / (4.0 * PI), 0.5) * dir + max (muS, 0.0) * dif / PI)
-				+ pc.ambient.rgb * (sdir + sdif) + FlashLight (p));
+				+ pc.ambient.rgb * (sdir + sdif) + 0.15 * FlashLight (p)); // (the flashes: diffused in the clouds, hardly in clear air)
 			vec3 Tstep = exp (-hz * dt);
 			L += T * (S - S * Tstep) / max (hz, vec3 (1e-12));
 			T *= Tstep;
@@ -680,7 +713,7 @@ void main ()
 		float ib, pb = Bar (r, ib);
 		vec3 ray = P.rayK.rgb * pb * ib;
 		vec3 extV = cE + hzE + ray + P.gasK.rgb * pb * ib;
-		S += (hzS + ray) * (sunAtm * (mix (HG (mu, 0.6), 1.0 / (4.0 * PI), 0.5) * dirP + max (muS, 0.0) * difP / PI) + sky + fl);
+		S += (hzS + ray) * (sunAtm * (mix (HG (mu, 0.6), 1.0 / (4.0 * PI), 0.5) * dirP + max (muS, 0.0) * difP / PI) + sky + 0.15 * fl);
 		vec3 Tstep = exp (-extV * dt);
 		L += T * (S - S * Tstep) / max (extV, vec3 (1e-12));
 		float w = T.g * (1.0 - Tstep.g);
@@ -691,7 +724,7 @@ void main ()
 	}
 	// (beyond the march range downwards, or at the floor: the dark depths)
 	if ((toFloor || beyond) && !scene && dot (d, o) < 0.0) T *= toFloor ? 0.0 : 0.3;
-	if (wSum <= 0.0 && T.g > 0.999) { Store (px, vec4 (0.0, 0.0, 0.0, 1.0), 0.0); return; }
+	if (wSum <= 0.0 && T.g > 0.999 && nHit == 0) { Store (px, vec4 (0.0, 0.0, 0.0, 1.0), 0.0); return; }
 
 	// the gas above the decks between the camera and them (the camera high above)
 	if (t0 > 0.0) {

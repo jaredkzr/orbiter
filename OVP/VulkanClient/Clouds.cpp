@@ -30,7 +30,7 @@ namespace {
 	};
 
 	// ggclouds.comp's parameters (std430: arrays of vec4)
-	constexpr int GG_LAYERS = 4, GG_STORMS = 16, GG_TOWERS = 64, GG_FLASHES = 8;
+	constexpr int GG_LAYERS = 4, GG_STORMS = 16, GG_TOWERS = 64, GG_FLASHES = 8, GG_BOLTV = 128;
 	struct GGParams {
 		float layer[GG_LAYERS][4], albedo[GG_LAYERS][4], lmisc[GG_LAYERS][4];
 		float haze[4], hazeH[4];
@@ -46,6 +46,8 @@ namespace {
 		float presInfo[4];          // the first of them [m], their spacing [m]
 		float gasK[4], rayK[4];     // the gas's absorption and Rayleigh scattering per bar (rgb)
 		float vortex[4];            // storms' swirl speed [m/s], core radius (share), tower spin speed [m/s], spiral twist [rad]
+		float bolt[GG_BOLTV][4];    // lightning channels: vertices (planet frame), brightness (negative: a channel's first vertex)
+		float boltInfo[4];          // vertex count
 	};
 
 	uint32_t Pcg (uint32_t v)
@@ -603,7 +605,7 @@ void VolumetricClouds::RenderGasGiant (const GasGiantFrame &f)
 		MATRIX3 prot;
 		oapiGetGlobalPos (f.hPlanet, &pp);
 		oapiGetRotationMatrix (f.hPlanet, &prot);
-		struct Lit { VECTOR3 pl; double b; };
+		struct Lit { VECTOR3 pl; double b; uint32_t seed; VECTOR3 up, out, n, edge; };
 		std::vector<Lit> lit;
 		for (int i = 0; i < nt; i++) {
 			double s = g.towerP[i][1];
@@ -629,8 +631,18 @@ void VolumetricClouds::RenderGasGiant (const GasGiantFrame &f)
 				double lean = 0.35 * (alt - dk.decks.back().base);
 				double rt = g.tower[i][3], a = PI2 * Unit16 (h2 >> 16), rr = 0.5 * rt * Unit16 (h3);
 				VECTOR3 pl = c * (R + alt) + e * (lean + rr * cos (a)) + n * (rr * sin (a));
-				lit.push_back ({ pl, b * (0.5 + 0.5 * Unit16 (h3 >> 16)) });
+				VECTOR3 out = unit (e * cos (a) + n * sin (a));
+				lit.push_back ({ pl, b * (0.5 + 0.5 * Unit16 (h3 >> 16)), Pcg (h3 ^ 0x5bd1e995u), c, out, unit (n * cos (a) - e * sin (a)),
+					c * (R + alt) + e * lean + out * (0.9 * rt) }); // (the tower's flank, out from the flash)
 			}
+		}
+		// (a test flash ahead of the camera, lit throughout: tuning the
+		// channels' look; ORBITER_VK_GG_TESTFLASH = its distance [m])
+		if (const char *tf = getenv ("ORBITER_VK_GG_TESTFLASH")) {
+			VECTOR3 fwd = _V(f.viewToPlanet.m13, f.viewToPlanet.m23, f.viewToPlanet.m33), up = unit (f.camPlanet);
+			VECTOR3 side = unit (crossp (up, fwd));
+			VECTOR3 pl = f.camPlanet + fwd * atof (tf);
+			lit.push_back ({ pl, 1.0, 0x1234567u, up, side, unit (crossp (side, up)), pl });
 		}
 		std::sort (lit.begin(), lit.end(), [&](const Lit &a, const Lit &b) {
 			return length (a.pl - f.camPlanet) < length (b.pl - f.camPlanet); });
@@ -641,6 +653,46 @@ void VolumetricClouds::RenderGasGiant (const GasGiantFrame &f)
 			flashes.push_back ({ pp + mul (prot, lit[i].pl), lit[i].b });
 		}
 		g.flashInfo[0] = (float)nf, g.flashInfo[1] = 5e3f;
+
+		// the channels of the flashes near the camera: a stroke 10-25 km
+		// long from the tower's flank by the flash into the clear air beside
+		// it (outwards from its axis, tilted up or down), jagged
+		// (midpoint displacement), with two branches (the same channel
+		// through the flash's strokes)
+		int nv = 0;
+		auto rnd = [](uint32_t &h) { h = Pcg (h); return Unit16 (h) * 2.0 - 1.0; };
+		const int NSEG = 32, NBR = 3, BRSEG = 9;
+		for (int i = 0; i < nf && nv + NSEG + 1 + NBR * (BRSEG + 1) <= GG_BOLTV; i++) {
+			const Lit &l = lit[i];
+			if (l.b < 0.02 || length (l.pl - f.camPlanet) > 400e3) continue;
+			uint32_t h = l.seed;
+			double len = 10e3 + 15e3 * (0.5 + 0.5 * rnd (h));
+			VECTOR3 axis = unit (l.out + l.up * (0.4 * rnd (h)) + l.n * (0.3 * rnd (h)));
+			// (rough at all scales: the displacement falling off slower than
+			// the segments shorten)
+			VECTOR3 p[NSEG + 1];
+			p[0] = l.edge, p[NSEG] = l.edge + axis * len;
+			for (int step = NSEG; step > 1; step /= 2)
+				for (int a = 0; a < NSEG; a += step) {
+					double amp = 0.22 * len * pow ((double)step / NSEG, 0.7);
+					p[a + step / 2] = (p[a] + p[a + step]) * 0.5 + l.up * (amp * rnd (h)) + l.n * (amp * rnd (h)) + axis * (0.3 * amp * rnd (h));
+				}
+			auto put = [&](const VECTOR3 &v, double b) {
+				g.bolt[nv][0] = (float)v.x, g.bolt[nv][1] = (float)v.y, g.bolt[nv][2] = (float)v.z, g.bolt[nv][3] = (float)b; nv++; };
+			for (int k = 0; k <= NSEG; k++) put (p[k], k == 0 ? -l.b : l.b);
+			for (int br = 0; br < NBR; br++) {
+				int a = 4 + (int)((0.5 + 0.5 * rnd (h)) * (NSEG - 8));
+				VECTOR3 q = p[a], dir = unit (axis + l.up * rnd (h) + l.n * rnd (h));
+				double seg = len * (0.25 + 0.15 * rnd (h)) / BRSEG;
+				put (q, -0.4 * l.b);
+				for (int k = 0; k < BRSEG; k++) {
+					dir = unit (dir + (l.up * rnd (h) + l.n * rnd (h) + axis * rnd (h)) * 0.7);
+					q += dir * seg;
+					put (q, 0.4 * l.b * (1.0 - (double)k / (BRSEG + 1)));
+				}
+			}
+		}
+		g.boltInfo[0] = (float)nv;
 	}
 	g.misc2[0] = (float)dk.stretch, g.misc2[1] = (float)dk.tint, g.misc2[2] = (float)f.floorRadius;
 	// the gas: pressure from the floor to above the decks, absorption and
