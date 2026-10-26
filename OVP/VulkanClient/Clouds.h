@@ -49,6 +49,16 @@ public:
 	VkImageView ShapeNoiseView () const { return shapeNoise.view; }
 	VkImageView DetailNoiseView () const { return detailNoise.view; }
 
+	/// for the clouds' shadows (atmosphere.glsl's CloudShadow): coverage map
+	/// and shape noise, and this frame's parameters (map centre, half size;
+	/// noise offset, scale; shell base and top radius, extinction, coverage
+	/// scale), valid if rendered this frame
+	VkImageView CoverageView () const { return coverage.view; }
+	VkSampler ClampSampler () const { return clampSampler; }
+	VkSampler RepeatSampler () const { return repeatSampler; }
+	bool Active () const { return active; }
+	float shadowMap[4] = {}, shadowNoise[4] = {}, shadowShell[4] = {};
+
 	VkPipeline CoveragePipeline () const { return coveragePipe; }
 	VkPipelineLayout CoverageLayout () const { return coverageLayout; }
 

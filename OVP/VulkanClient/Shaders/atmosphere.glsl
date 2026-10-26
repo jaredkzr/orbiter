@@ -23,7 +23,9 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 detail;        // procedural surface detail: type (0 none, 1 airless, 2 Mars, 3 Earth), strength, range [m]
 	vec4 aurora;        // geomagnetic north pole (unit, planet frame), w: aurora strength (0: none)
 	vec4 mieLobe;       // aerosols' forward lobe: asymmetry g per colour (rgb), its share (w; 0: none)
-	vec4 spare;
+	vec4 cloudMap;      // volumetric clouds near the camera: coverage map centre (planet frame), half size (w; 0: none)
+	vec4 cloudNoise;    //   shape noise offset (xyz), scale (w)
+	vec4 cloudShell;    //   shell base and top radius, extinction [1/m], coverage scale
 	vec4 detailPrm;     // terrain detail: ridged share, crater cells, crater depth, fresh craters
 	vec4 surfPrm;       // x: colour saturation of the surface textures; yzw: diffuse radiance of overcast atmospheres (per unit sun intensity)
 } atm;
@@ -37,6 +39,9 @@ layout(set = ATM_SET, binding = 4) uniform sampler2D atmCloud1;
 // precomputed tables
 layout(set = ATM_SET, binding = 5) uniform sampler2D atmTransmittance;
 layout(set = ATM_SET, binding = 6) uniform sampler2D atmMultiscat;
+// the volumetric clouds' coverage map and shape noise (Clouds.cpp)
+layout(set = ATM_SET, binding = 7) uniform sampler2D atmCloudMap;
+layout(set = ATM_SET, binding = 8) uniform sampler3D atmCloudShape;
 
 #include "atmlut.glsl"
 
@@ -240,5 +245,33 @@ float CloudShadow (vec3 p)
 	float v = (0.5 * PI_ - lat) / PI_;
 	float a = lng < 0.0 ? texture (atmCloud0, vec2 ((lng + PI_) / PI_, v)).a
 	                    : texture (atmCloud1, vec2 (lng / PI_, v)).a;
-	return 1.0 - atm.cloud.z * a;
+	if (atm.cloudMap.w <= 0.0) return 1.0 - atm.cloud.z * a;
+
+	// near the camera, the volumetric clouds: their density along the sun
+	// ray through the shell (as clouds.comp's, without the detail noise)
+	float base = atm.cloudShell.x, top = atm.cloudShell.y;
+	vec2 tt = RaySphere (p, s, top), tb = RaySphere (p, s, base);
+	float t0 = length (p) < base ? max (tb.y, 0.0) : 0.0, t1 = tt.y;
+	if (t1 <= t0) return 1.0;
+	vec3 C = atm.cloudMap.xyz, up = normalize (C);
+	vec3 east = normalize (cross (abs (up.y) < 0.999 ? vec3 (0.0, 1.0, 0.0) : vec3 (1.0, 0.0, 0.0), up));
+	vec3 north = cross (up, east);
+	const int N = 6;
+	float dt = (t1 - t0) / float (N), od = 0.0, edge = 0.0;
+	for (int i = 0; i < N; i++) {
+		vec3 x = p + s * (t0 + (float (i) + 0.5) * dt);
+		vec3 q = x - C;
+		vec2 mc = vec2 (dot (q, east), dot (q, north)) / atm.cloudMap.w;
+		edge = max (edge, max (abs (mc.x), abs (mc.y)));
+		if (edge >= 1.0) break;
+		float hf = (length (x) - base) / (top - base);
+		float profile = smoothstep (0.0, 0.07, hf) * smoothstep (1.0, 0.3, hf);
+		float cov = smoothstep (0.15, 0.85, textureLod (atmCloudMap, mc * 0.5 + 0.5, 0.0).r * atm.cloudShell.w);
+		if (cov <= 0.01) continue;
+		float shape = textureLod (atmCloudShape, (x + atm.cloudNoise.xyz) * atm.cloudNoise.w, 0.0).r;
+		od += clamp ((shape * profile - (1.0 - cov)) / cov, 0.0, 1.0) * dt;
+	}
+	float vol = 1.0 - exp (-atm.cloudShell.z * od);
+	// (the 2D layer towards the map's edge)
+	return 1.0 - atm.cloud.z * mix (vol, a, smoothstep (0.8, 1.0, edge));
 }

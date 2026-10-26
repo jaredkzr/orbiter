@@ -27,6 +27,10 @@ public:
 	VkPipelineLayout SkyLayout () const { return skyLayout; }
 	/// set with uniform data for "no atmosphere"
 	VkDescriptorSet NoAtmosphereSet () const { return noneSet; }
+	/// the volumetric clouds' coverage map and shape noise (for their
+	/// shadows), written into every set; call before atmospheres are made
+	void SetCloudVolume (VkImageView coverage, VkSampler covSampler, VkImageView shape, VkSampler shapeSampler);
+	void WriteCloudVolume (VkDescriptorSet set) const;
 
 	/// Compute the transmittance and multiple-scattering tables of an
 	/// atmosphere (images created by the caller, storage usage)
@@ -45,6 +49,7 @@ private:
 	vkc::Buffer noneUbo;
 	VkDescriptorSet noneSet = VK_NULL_HANDLE;
 	VkSampler lutSampler = VK_NULL_HANDLE;
+	VkDescriptorImageInfo cloudVol[2] = {};
 	VkDescriptorSetLayout lutSetLayout = VK_NULL_HANDLE;
 	VkPipelineLayout lutLayout = VK_NULL_HANDLE;
 	VkPipeline transmittancePipe = VK_NULL_HANDLE, multiscatPipe = VK_NULL_HANDLE;

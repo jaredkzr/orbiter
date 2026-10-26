@@ -161,12 +161,14 @@ Known gaps and limitations, to be addressed later.
 - Shadow and AO accumulation lags fast-moving shadows by a few frames.
 
 ## Shadows
-- Cloud shadows use the level-4 cloud textures only (tens of km per texel):
-  soft and coarse, not yet checked visually over broken cloud cover. Using
-  the cloud quadtree tiles would sharpen them.
-- Terrain casts shadows only within the cascades (up to 4 km around the
-  camera, 16 km towards the sun); distant mountain shadows are missing.
-  Not yet verified on rugged terrain at low sun.
+- Cloud shadows: within the volumetric clouds' range (60 km, camera below
+  40 km) the shell's density along the sun ray (6 samples of coverage map
+  and shape noise, without the detail noise); farther away the level-4
+  cloud textures (tens of km per texel, soft).
+- Terrain shadows: with ray tracing, every terrain tile within the horizon
+  is in the scene (sun rays to 1000 km), so distant mountains cast
+  shadows. The shadow-map fallback covers only the cascades (4 km around
+  the camera, 16 km towards the sun).
 
 ## Water
 - Sun glitter and wave normals not yet checked in a view facing the sun.
@@ -230,7 +232,8 @@ Known gaps and limitations, to be addressed later.
   an overcast deck it shows as a light band at the horizon.
 - Half-resolution, 64 steps + 6 light steps, no temporal reprojection of its
   own (relies on TAA/FSR); cost not yet profiled. No cloud shadows from the
-  volumes (the 2D cloud-shadow approximation remains). No lightning, no rain.
+  volumes on themselves beyond the light march; they shadow the ground
+  (CloudShadow). No lightning, no rain.
 - Cloud types are not distinguished (all cumulus-like); the layer alpha
   carries no height information.
 

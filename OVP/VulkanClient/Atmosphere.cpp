@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "Atmosphere.h"
+#include "Clouds.h"
 #include "Scene.h"
 #include "VulkanClient.h"
 #include "VkTexture.h"
@@ -34,7 +35,9 @@ namespace {
 		float detail[4];
 		float aurora[4];
 		float mieLobe[4];     // aerosols' forward lobe: asymmetry per colour (rgb), share (w; 0: none)
-		float spare[4];
+		float cloudMap[4];    // volumetric clouds (their shadows): coverage map centre, half size (w; 0: none)
+		float cloudNoise[4];  // shape noise offset, scale
+		float cloudShell[4];  // shell base, top radius, extinction, coverage scale
 		float detailPrm[4];   // terrain detail: ridge, craters, crater depth, fresh craters
 		float surfPrm[4];     // x: colour saturation of the surface textures
 	};
@@ -89,26 +92,26 @@ bool AtmosphereRenderer::Init (vkc::Context *c, TextureManager *tm)
 {
 	ctx = c;
 	texmgr = tm;
-	VkDescriptorSetLayoutBinding b[7]{};
+	VkDescriptorSetLayoutBinding b[9]{};
 	b[0].binding = 0;
 	b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	b[0].descriptorCount = 1;
 	b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
-	for (int i = 1; i < 7; i++) { // ground, clouds, transmittance and multiple-scattering tables
+	for (int i = 1; i < 9; i++) { // ground, clouds, transmittance and multiple-scattering tables, volumetric clouds' coverage and shape
 		b[i].binding = i;
 		b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		b[i].descriptorCount = 1;
 		b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT; // (volumetric clouds)
 	}
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 7;
+	lci.bindingCount = 9;
 	lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &setLayout));
 
 	const uint32_t nSets = MAX_ATMOSPHERES * 2 * vkc::FRAMES_IN_FLIGHT + 1;
 	VkDescriptorPoolSize ps[2] = {
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nSets },
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 6 * nSets }
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8 * nSets }
 	};
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
@@ -228,6 +231,27 @@ bool AtmosphereRenderer::Init (vkc::Context *c, TextureManager *tm)
 	vkDestroyShaderModule (ctx->device, vs, nullptr);
 	vkDestroyShaderModule (ctx->device, fs, nullptr);
 	return true;
+}
+
+void AtmosphereRenderer::SetCloudVolume (VkImageView coverage, VkSampler covSampler, VkImageView shape, VkSampler shapeSampler)
+{
+	cloudVol[0] = { covSampler, coverage, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+	cloudVol[1] = { shapeSampler, shape, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+	WriteCloudVolume (noneSet);
+}
+
+void AtmosphereRenderer::WriteCloudVolume (VkDescriptorSet set) const
+{
+	VkWriteDescriptorSet wr[2]{};
+	for (int k = 0; k < 2; k++) {
+		wr[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		wr[k].dstSet = set;
+		wr[k].dstBinding = 7 + k;
+		wr[k].descriptorCount = 1;
+		wr[k].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		wr[k].pImageInfo = &cloudVol[k];
+	}
+	vkUpdateDescriptorSets (ctx->device, 2, wr, 0, nullptr);
 }
 
 void AtmosphereRenderer::WriteGround (VkDescriptorSet set, VkTexture *west, VkTexture *east, int binding) const
@@ -466,6 +490,7 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		ar->WriteGround (sets[i], nullptr, nullptr);
 		ar->WriteGround (sets[i], nullptr, nullptr, 3);
 		ar->WriteGround (sets[i], nullptr, nullptr, 5);
+		ar->WriteCloudVolume (sets[i]);
 		if (present) {
 			VkDescriptorImageInfo ii[2] = {
 				{ ar->LutSampler(), transmittanceLut.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
@@ -580,6 +605,12 @@ void Atmosphere::Update ()
 	u.water[0] = (float)rel.x, u.water[1] = (float)rel.y, u.water[2] = (float)rel.z;
 	u.water[3] = ripple ? (float)fmod (oapiGetSimTime (), 3600.0) : -1.0f;
 	memcpy (u.mieLobe, mieLobe, sizeof(mieLobe));
+	if (scene->CloudsActive () && hPlanet == oapiCameraProxyGbody ()) {
+		const VolumetricClouds *vc = scene->VClouds ();
+		memcpy (u.cloudMap, vc->shadowMap, sizeof(u.cloudMap));
+		memcpy (u.cloudNoise, vc->shadowNoise, sizeof(u.cloudNoise));
+		memcpy (u.cloudShell, vc->shadowShell, sizeof(u.cloudShell));
+	}
 	{
 		SURFDETAILPARAM dp;
 		if (oapiSurfaceDetailParams (hPlanet, &dp)) {

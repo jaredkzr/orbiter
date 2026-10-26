@@ -164,6 +164,8 @@ public:
 	/// distance from the camera within which the 2D cloud layer gives way to
 	/// the volumetric clouds (0: none this frame)
 	float CloudFadeRadius () const;
+	bool CloudsActive () const { return cloudsActive; }
+	const class VolumetricClouds *VClouds () const { return vclouds.get(); }
 	/// temporal anti-aliasing active (projection jitter, motion vectors)
 	bool TemporalAAEnabled () const { return taaEnabled; }
 	/// view-space position of a global point

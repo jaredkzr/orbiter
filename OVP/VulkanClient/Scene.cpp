@@ -225,6 +225,7 @@ bool Scene::Init ()
 	atm->Init (ctx, gc->TexMgr());
 	vclouds = std::make_unique<VolumetricClouds>();
 	vclouds->Init (ctx, gc->TexMgr(), atm->SetLayout());
+	atm->SetCloudVolume (vclouds->CoverageView (), vclouds->ClampSampler (), vclouds->ShapeNoiseView (), vclouds->RepeatSampler ());
 	// ray traced reflections (hardware ray queries)
 	rt = std::make_unique<RTScene>();
 	if (rt->Init (ctx, gc->TexMgr()) && ssr->enabled) {

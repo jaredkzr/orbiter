@@ -344,6 +344,9 @@ void VolumetricClouds::Render (const Frame &f)
 	vkCmdDispatch (cmd, (outExtent.width + 7) / 8, (outExtent.height + 7) / 8, 1);
 	vkc::ImageBarrier (cmd, output.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
 		VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+	memcpy (shadowMap, p.mapCentre, sizeof(shadowMap));
+	memcpy (shadowNoise, p.noise, sizeof(shadowNoise));
+	shadowShell[0] = p.shell[0], shadowShell[1] = p.shell[1], shadowShell[2] = extinction, shadowShell[3] = p.mapEast[3];
 	active = true;
 }
 
