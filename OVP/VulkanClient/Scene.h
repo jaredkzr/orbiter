@@ -166,8 +166,9 @@ public:
 	float CloudFadeRadius () const;
 	bool CloudsActive () const { return cloudsActive; }
 	/// sunlight reaching a point (global) through a gas giant's cloud decks
-	/// (the planet near the camera; 1 elsewhere)
-	double DeckTransmittance (const VECTOR3 &gpos) const;
+	/// and gas (the planet near the camera; 1 elsewhere): the direct beam
+	/// and the diffuse light, or (direct) the beam only
+	double DeckTransmittance (const VECTOR3 &gpos, bool direct = false) const;
 	const class VolumetricClouds *VClouds () const { return vclouds.get(); }
 	/// temporal anti-aliasing active (projection jitter, motion vectors)
 	bool TemporalAAEnabled () const { return taaEnabled; }

@@ -47,12 +47,19 @@ public:
 		std::vector<Deck> decks;
 		float haze[3] = { 0.5f, 0.4f, 0.3f };
 		double hazeExt = 2e-6, hazeH = 30e3, towerTop = 15e3, stretch = 3.0, tint = 0.6;
+		float gasAbs[3] = { 0.06f, 0.09f, 0.15f };   // the gas's absorption per bar (rgb)
+		float gasRay[3] = { 0.055f, 0.09f, 0.19f };   // its Rayleigh scattering per bar (rgb)
+		double vortexV = 120.0, vortexCore = 0.3, towerSpin = 40.0, vortexTwist = 3.0;
 		double Top () const;      ///< top of the highest deck (not the haze) [m]
 		double CloudTop () const; ///< top of the highest cloud deck (extinction 1e-4/m or more)
 		/// optical depth of the decks and haze above altitude alt [m] along a
 		/// direction with sine of elevation mu (mean densities: as
 		/// ggclouds.comp's ColumnAbove)
 		double ColumnAbove (double alt, double mu) const;
+		/// the sunlight's share (green) reaching altitude alt [m] (pressure
+		/// bar [bar]) along a direction with sine of elevation mu: the
+		/// direct beam and the diffuse light (as ggclouds.comp's ColumnLight)
+		double Light (double alt, double mu, double bar, double *direct = nullptr) const;
 	};
 	static bool LoadDecks (const char *planet, Decks &d);
 	struct GasGiantFrame {
@@ -123,6 +130,7 @@ private:
 	vkc::Image ggHist[2], ggDepth[2];
 	int ggParity = 0;
 	bool ggHistValid = false;
+	int ggStill = 0; // frames the camera has been still (the half-tile march)
 	VECTOR3 ggPrevCam{};
 	MATRIX3 ggPrevRot{};
 	std::vector<Flash> flashes;

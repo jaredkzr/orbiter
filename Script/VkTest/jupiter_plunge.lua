@@ -2,7 +2,8 @@
 -- the strongest storm cell within 3000 km of a point in daylight (40
 -- degrees of longitude from the subsolar point, 24 N); the focus vessel at
 -- its centre; the camera, 150 km west of it, descends from 50 km above the
--- 1-bar level to 70 km below it in 10 s, looking at the storm
+-- 1-bar level to 150 km below it (into the dark under the water clouds) in
+-- 14 s, looking at the storm
 local hJ = oapi.get_objhandle("Jupiter")
 local R = oapi.get_size(hJ)
 local sub = oapi.global_to_equ(hJ, oapi.get_globalpos(oapi.get_objhandle("Sun")))
@@ -25,7 +26,7 @@ local clng = lng - 150e3 / (R * math.cos(lat))
 local t0 = oapi.get_simtime()
 while true do
 	local t = oapi.get_simtime() - t0
-	local alt = math.max(50e3 - 12e3 * t, -70e3)
+	local alt = math.max(50e3 - 14.3e3 * t, -150e3)
 	oapi.set_cameramode({mode = 'ground', ref = 'Jupiter', lng = math.deg(clng), lat = math.deg(lat), alt = alt,
 		alt_above_ground = 0})
 	proc.wait_frames(1)

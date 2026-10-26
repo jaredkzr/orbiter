@@ -1468,7 +1468,7 @@ void VPlanet::RenderGlow ()
 	// visible when the disc itself is smaller than a pixel
 	VECTOR3 vp = scene->ViewPos (gpos);
 	if (vp.z <= 0.0) return;
-	double dt = scene->DeckTransmittance (scene->CameraPos ()); // (deep in a gas giant's clouds)
+	double dt = scene->DeckTransmittance (scene->CameraPos (), true); // (deep in a gas giant's clouds: the sun's beam)
 	if (dt < 1e-3) return;
 	double h = std::max (size * STAR_GLOW_SIZE, vp.z * STAR_GLOW_MIN_ANGLE);
 	// at its true distance, so that planets in front hide it (reversed float depth)

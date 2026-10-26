@@ -6,14 +6,24 @@ LAYER base top extinction scale r g b coverage contrast towers [holes]
     base, top    altitude of the deck's base and top [m]
     extinction   [1/m] at full density (optical depth: extinction x thickness)
     scale        size of its cloud features [m] (zonally stretched by STRETCH)
-    r g b        albedo of its particles (tinted by the planet map's colour
-                 by TINT)
+    r g b        single-scattering albedo of its particles (tinted by the
+                 planet map's colour by TINT). Thick clouds multiply the
+                 absorption: 0.9999 looks white, 0.998/0.989/0.959 brown-
+                 orange (thin layers, extinction below 2e-5: their colour)
     coverage     cloud fraction 0..1
     contrast     how much belts (dark) and zones (bright) of the planet map
                  thin and thicken it, 0..1
     towers       convective storm towers rise from it (1) or not (0)
     holes        clearings: large holes (hundreds of km) in the deck, 0 (none)
                  to about 0.6 (mostly open)
+GAS ar ag ab sr sg sb
+    the gas: absorption (aerosols, chromophores, methane) and Rayleigh scattering (the
+    blues) per bar of the column above, rgb (optical depth; the light
+    fades and reddens with depth, the depths fog)
+VORTEX speed core spin twist
+    the storms' vortices: peak swirl speed [m/s], core radius (share of the
+    cell's radius), the towers' turning speed at their edge [m/s], the
+    spiral the vortex has wound the decks into (turn at the core) [rad]
 HAZE r g b extinction height
     the gas and haze between and below the decks: albedo, extinction at the
     1-bar level [1/m], scale height [m] (it thickens with depth)

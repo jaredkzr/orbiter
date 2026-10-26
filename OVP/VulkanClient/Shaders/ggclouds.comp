@@ -10,8 +10,11 @@
 // cells) rising from the water clouds to anvils. Lighting: sunlight
 // through the decks (a march towards the sun, the column above it beyond
 // that) and the gas; skylight from above, fading with the column above;
-// multiple scattering approximated by octaves. Below the decks the light
-// fades to darkness.
+// multiple scattering approximated by octaves (coloured by the particles'
+// albedo: brown where they absorb). Deeper, the light is diffuse, dimmed
+// and reddened by the clouds and the gas above (Rayleigh scattering,
+// methane absorption: pressure columns), fading to darkness. The storms'
+// vortices swirl the decks about them.
 // Output: light (rgb, premultiplied), transmittance (a).
 
 #version 450
@@ -45,6 +48,11 @@ struct GGParams {
 	vec4 flashInfo;          // count, diffusion length [m]
 	vec4 prevRot[3];         // last frame's camera frame -> planet frame (columns)
 	vec4 prevCam;            // its position (planet frame); w: history valid (1), and the camera still: half the tiles marched (2)
+	vec4 pres[4];            // log2 of the pressure [bar] at 16 radii (presInfo)
+	vec4 presInfo;           // the first of them [m], their spacing [m]
+	vec4 gasK;               // the gas's and aerosols' absorption per bar of the column above (rgb)
+	vec4 rayK;               // its Rayleigh scattering per bar (rgb)
+	vec4 vortex;             // the storms' peak swirl speed [m/s], core radius (share of the cell's), tower spin speed [m/s], spiral twist [rad]
 };
 layout(std430, set = 0, binding = 5) readonly buffer GGBuf { GGParams gg[]; };
 // temporal accumulation (ping-pong by parity): light and transmittance,
@@ -62,6 +70,7 @@ layout(push_constant) uniform Params {
 
 const float PI = 3.14159265;
 const float FLOW_PERIOD = 1800.0; // [s] the advection phases' period
+const float GC = 0.85; // asymmetry of the cloud particles' scattering
 
 GGParams P;
 
@@ -105,6 +114,41 @@ const int MAX_CAND = 12;
 int towerList[MAX_CAND], nTower = 0;
 int moatList[4], nMoat = 0;
 
+// the swirl of storm i's vortex at a distance rho [m] from its centre:
+// angular rate [rad/s] (a Rankine vortex: turning as a body within its
+// core, the speed falling off beyond; cyclonic: anticlockwise in the
+// north)
+float VortexRate (int i, float rho)
+{
+	float rc = P.vortex.y * P.storm[i].w;
+	float v = P.vortex.x * P.stormP[i].x * (rho < rc ? rho / rc : rc / rho);
+	return sign (P.storm[i].y) * v / max (rho, 1.0);
+}
+
+// where the decks' cloud at u (east, north offsets [m]) came from tau [s]
+// ago: the storms' vortices turning it about their centres; and the
+// spiral they have wound it into (a standing twist, strongest at the
+// core)
+vec2 Swirl (vec3 u, float tau)
+{
+	vec2 dsp = vec2 (0.0);
+	float R = P.misc.z;
+	for (int k = 0; k < nMoat; k++) {
+		int i = moatList[k];
+		vec3 c = P.storm[i].xyz;
+		vec3 e = normalize (vec3 (-c.z, 0.0, c.x));
+		vec2 q = vec2 (dot (u - c, e), dot (u - c, cross (e, c))) * R;
+		float rho = length (q), Rs = P.storm[i].w;
+		if (rho > 1.6 * Rs) continue;
+		float rc = P.vortex.y * Rs;
+		float twist = sign (c.y) * P.vortex.w * P.stormP[i].x * rc * rc / (rho * rho + rc * rc);
+		float a = -(VortexRate (i, rho) * tau + twist) * (1.0 - smoothstep (Rs, 1.6 * Rs, rho));
+		vec2 q0 = mat2 (cos (a), sin (a), -sin (a), cos (a)) * q;
+		dsp += q0 - q;
+	}
+	return dsp;
+}
+
 // the storm cells near a point: the clearing their downdrafts open in the
 // decks about them (0..1)
 float Moat (vec3 u)
@@ -116,10 +160,12 @@ float Moat (vec3 u)
 		vec3 c = P.storm[i].xyz;
 		float d = Ang (u, c) * R / P.storm[i].w; // [cell radii]
 		if (d > 1.4) continue;
-		// (spiral arms: the storm's vortex winds the clearing up)
+		// (spiral arms: the storm's vortex winds the clearing up, turning
+		// with it)
 		vec3 e = normalize (vec3 (-c.z, 0.0, c.x));
-		vec2 q = vec2 (dot (u - c, e), dot (u - c, cross (c, e)));
-		float arms = 0.5 + 0.5 * cos (3.0 * atan (q.y, q.x) - 4.0 * log (max (d, 0.05)) + P.stormP[i].y);
+		vec2 q = vec2 (dot (u - c, e), dot (u - c, cross (e, c)));
+		float spin = VortexRate (i, P.vortex.y * P.storm[i].w) * P.hazeH.z;
+		float arms = 0.5 + 0.5 * cos (3.0 * atan (q.y, q.x) - 4.0 * log (max (d, 0.05)) + P.stormP[i].y - 3.0 * mod (spin, 2.0 * PI));
 		m = max (m, P.stormP[i].x * smoothstep (0.15, 0.45, d) * (1.0 - smoothstep (0.8, 1.4, d)) * mix (1.0, arms, 0.6));
 	}
 	return m;
@@ -196,7 +242,10 @@ float Towers (vec3 x, float r, vec3 u, bool detail)
 		if (length (h - vec2 (reach > 3.0 * rt ? 1.5 * rt : 0.0, 0.0)) > reach) continue;
 		// the vortex: the tower turns with height, faster near its core
 		float rho = length (h);
-		float phi = 2.2 * hf + seed + 1.2 * rt / (rho + rt);
+		// (turning with the storm, south-up frame; the shelves slower, the
+		// anvil's outflow against it: anticyclonic, as Earth's)
+		float spin = sign (c.y) * P.vortex.z / rt * P.hazeH.z;
+		float phi = 2.2 * hf + seed + 1.2 * rt / (rho + rt) - mod (spin, 2.0 * PI);
 		vec2 hr = mat2 (cos (phi), sin (phi), -sin (phi), cos (phi)) * h;
 		// (billows a fifth of the tower across, smaller ones on them,
 		// rising with the updraft)
@@ -217,10 +266,10 @@ float Towers (vec3 x, float r, vec3 u, bool detail)
 		for (int l = 0; l < int (P.hazeH.y); l++) {
 			float lev = P.layer[l].y;
 			if (lev > top - 8e3 || lev < baseR + 5e3 || abs (r - lev) > 6e3) continue;
-			v = max (v, 0.8 * Shelf (h, r - lev, rt, 3.0 * rt, 1.0 * rt, 1.6 * rt, 4e3, nz, seed + float (l), false, detail));
+			v = max (v, 0.8 * Shelf (h, r - lev, rt, 3.0 * rt, 1.0 * rt, 1.6 * rt, 4e3, nz, seed + float (l) - 0.5 * mod (spin, 2.0 * PI), false, detail));
 		}
 		if (anvil && r > top - 12e3)
-			v = max (v, Shelf (h - vec2 (1.5 * rt, 0.0), r - top, rt, 6.0 * rt, 1.6 * rt, 2.6 * rt, 8e3, nz, seed, true, detail));
+			v = max (v, Shelf (h - vec2 (1.5 * rt, 0.0), r - top, rt, 6.0 * rt, 1.6 * rt, 2.6 * rt, 8e3, nz, seed + 0.3 * mod (spin, 2.0 * PI), true, detail));
 		v *= 0.7 + 0.6 * nz;
 		dens = max (dens, clamp (v, 0.0, 1.0) * mix (0.6, 1.0, s));
 	}
@@ -230,7 +279,7 @@ float Towers (vec3 x, float r, vec3 u, bool detail)
 // density 0..1 of deck i at x (planet frame, radius r, unit direction u,
 // latitude lat, zone factor; moat: the storms' clearing); detail: the
 // eroding detail noise
-float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, float moat, bool detail, bool coarse)
+float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, float moat, vec2 sw1, vec2 sw2, bool detail, bool coarse)
 {
 	vec4 L = P.layer[i];
 	vec4 m = P.lmisc[i];
@@ -263,8 +312,9 @@ float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, fl
 		sh = clamp ((sh - 0.15) / 0.7, 0.0, 1.0);
 		return clamp ((sh * profile - (1.0 - cov)) / max (cov, 0.05) * 4.0, 0.0, 1.0);
 	}
-	vec3 q1 = vec3 (e0 - uj * p1 * FLOW_PERIOD / P.misc2.x, n0, z0) * L.w;
-	vec3 q2 = vec3 (e0 - uj * p2 * FLOW_PERIOD / P.misc2.x, n0, z0) * L.w + vec3 (0.37, 0.71, 0.13);
+	// (and swirled by the storms' vortices: each phase's turn)
+	vec3 q1 = vec3 (e0 + (sw1.x - uj * p1 * FLOW_PERIOD) / P.misc2.x, n0 + sw1.y, z0) * L.w;
+	vec3 q2 = vec3 (e0 + (sw2.x - uj * p2 * FLOW_PERIOD) / P.misc2.x, n0 + sw2.y, z0) * L.w + vec3 (0.37, 0.71, 0.13);
 	// (warped by a field 7 periods across: the noise volume's repetition hidden)
 	vec3 qw = ROT * q1 * 0.143;
 	vec3 warp = vec3 (textureLod (shapeNoise, qw, 0.0).r, textureLod (shapeNoise, qw + vec3 (0.5, 0.2, 0.7), 0.0).r,
@@ -291,8 +341,10 @@ float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, fl
 // gas at x
 // (the planet map and the storms' moats change slowly: the light march
 // takes its sample's)
-vec3 ctxMap;
+vec3 ctxMap, mapAlb;
 float ctxZone, ctxMoat;
+vec3 mHaze; // (Medium's haze and thin layers: extinction-weighted albedo sum; extinction in w)
+float mHazeE;
 bool coarseLight = false; // (the light march of a far sample: coarse densities)
 bool lightTowers = false; // (the light march of a sample within the towers' shadows' reach)
 void SetContext (vec3 x)
@@ -300,6 +352,9 @@ void SetContext (vec3 x)
 	vec3 u = normalize (x);
 	ctxMap = MapColour (u, ctxZone);
 	ctxMoat = Moat (u);
+	vec3 rm = clamp (ctxMap / (atm.ground.w > 0.5 ? 0.6 : 1.0) * 0.97, 0.02, 0.995);
+	vec3 s = (1.0 - rm) / (1.0 + rm);
+	mapAlb = (1.0 - s * s) / (1.0 - GC * s * s);
 }
 
 float Medium (vec3 x, bool detail, out vec3 alb, bool towerDetail)
@@ -312,22 +367,39 @@ float Medium (vec3 x, bool detail, out vec3 alb, bool towerDetail)
 	float ext = 0.0;
 	vec3 sum = vec3 (0.0);
 	int n = int (P.hazeH.y);
+	vec2 sw1 = vec2 (0.0), sw2 = vec2 (0.0);
+	if (nMoat > 0 && !coarseLight) {
+		float t = P.hazeH.z;
+		sw1 = Swirl (u, fract (t / FLOW_PERIOD) * FLOW_PERIOD), sw2 = Swirl (u, fract (t / FLOW_PERIOD + 0.5) * FLOW_PERIOD);
+	}
+	float thin = 0.0;
+	vec3 thinA = vec3 (0.0);
 	for (int i = 0; i < n; i++) {
-		float d = Deck (i, x, r, u, lat, lng, zone, moat, detail, coarseLight);
+		// (thin layers, hazes, uniform: as the clear-air path takes them)
+		if (P.layer[i].z < 2e-5) {
+			if (r > P.layer[i].x && r < P.layer[i].y) {
+				float e = P.layer[i].z * 0.5 * P.albedo[i].w;
+				thin += e, thinA += e * P.albedo[i].rgb;
+			}
+			continue;
+		}
+		float d = Deck (i, x, r, u, lat, lng, zone, moat, sw1, sw2, detail, coarseLight);
 		if (d <= 0.0) continue;
 		float e = P.layer[i].z * d;
-		// (the upper decks take the planet map's colour)
+		// (the upper decks take the planet map's colour: chromophores, the
+		// albedo for which a thick cloud reflects it)
 		vec3 a = P.albedo[i].rgb;
-		if (i < 2) a = mix (a, a * mapc / max (dot (mapc, vec3 (0.333)), 0.05) * 0.8, P.misc2.y);
+		if (i < 2) a = mix (a, min (a, mapAlb), P.misc2.y);
 		ext += e, sum += e * clamp (a, 0.0, 1.0);
 	}
 	float tw = towerDetail || lightTowers ? Towers (x, r, u, towerDetail) : 0.0;
 	if (tw > 0.0) {
 		float e = 8e-4 * tw;
-		ext += e, sum += e * vec3 (0.95, 0.94, 0.92);
+		ext += e, sum += e * vec3 (0.9995, 0.999, 0.997); // (water and ammonia ice)
 	}
 	float hz = P.haze.w * exp (-(r - P.misc.z) / P.hazeH.x);
-	ext += hz, sum += hz * P.haze.rgb;
+	mHazeE = hz + thin, mHaze = hz * P.haze.rgb + thinA;
+	ext += mHazeE, sum += mHaze;
 	alb = ext > 0.0 ? sum / ext : vec3 (0.0);
 	return ext;
 }
@@ -345,18 +417,56 @@ vec3 FlashLight (vec3 p)
 	return l * vec3 (0.80, 0.86, 1.0) * 1.2e10; // (bluish white; scale: a flash outshines the dim depths)
 }
 
-// optical depth of the decks and gas above radius r along a direction
-// with sine of elevation mu (mean densities)
-float ColumnAbove (float r, float mu)
+// the gas's pressure at radius r [bar], and its gradient's scale (1/scale
+// height [1/m])
+float Bar (float r, out float invH)
 {
-	float tau = 0.0;
+	float x = clamp ((r - P.presInfo.x) / P.presInfo.y, 0.0, 15.0);
+	int i = min (int (x), 14);
+	float a = P.pres[i >> 2][i & 3], b = P.pres[(i + 1) >> 2][(i + 1) & 3];
+	// (the gradient at the nodes, interpolated: no steps between them)
+	int i0 = max (i - 1, 0), i2 = min (i + 2, 15);
+	float ga = (P.pres[i0 >> 2][i0 & 3] - b) / float (i + 1 - i0), gb = (a - P.pres[i2 >> 2][i2 & 3]) / float (i2 - i);
+	invH = mix (ga, gb, x - float (i)) * 0.693147 / P.presInfo.y;
+	return exp2 (mix (a, b, x - float (i)));
+}
+
+// the sunlight's share reaching radius r along a direction with sine of
+// elevation mu through the decks (mean densities), the haze and the gas
+// above (ColumnAt: their optical depths over r): the direct beam, and the
+// diffuse light (the clouds and gas as an absorbing, scattering slab:
+// diffusion; similarity scaling)
+struct Column { vec3 te, ta, ts; }; // extinction, absorption, scattering (similarity-scaled)
+Column ColumnAt (float r)
+{
+	float ib, pb = Bar (r, ib);
+	vec3 ta = P.gasK.rgb * pb, ts = P.rayK.rgb * pb; // absorption, scattering (similarity-scaled)
+	vec3 te = ta + ts;                                 // extinction of the beam
 	int n = int (P.hazeH.y);
 	for (int i = 0; i < n; i++) {
 		float over = clamp (P.layer[i].y - max (r, P.layer[i].x), 0.0, P.layer[i].y - P.layer[i].x);
-		tau += P.layer[i].z * 0.35 * P.albedo[i].w * over;
+		float tau = P.layer[i].z * 0.35 * P.albedo[i].w * over;
+		vec3 w = P.albedo[i].rgb;
+		te += tau, ta += tau * (1.0 - w), ts += tau * w * (1.0 - GC);
 	}
-	tau += P.haze.w * P.hazeH.x * exp (-(r - P.misc.z) / P.hazeH.x);
-	return tau / max (mu, 0.08);
+	float th = P.haze.w * P.hazeH.x * exp (-(r - P.misc.z) / P.hazeH.x);
+	te += th, ta += th * (1.0 - P.haze.rgb), ts += th * P.haze.rgb * 0.4;
+	return Column (te, ta, ts);
+}
+void ColumnLight (Column c, float mu, out vec3 dir, out vec3 dif)
+{
+	float m = max (mu, 0.08);
+	dir = exp (-c.te / m);
+	vec3 tot = exp (-sqrt (3.0 * c.ta * (c.ta + c.ts))) / (1.0 + 0.75 * c.ts / m);
+	dif = max (tot - dir, vec3 (0.0));
+}
+
+// multiply scattered light's colour: a thick cloud's reflectance for
+// particles of single-scattering albedo w
+vec3 MultiAlbedo (vec3 w)
+{
+	vec3 s = sqrt ((1.0 - w) / max (1.0 - GC * w, vec3 (1e-4)));
+	return (1.0 - s) / (1.0 + s);
 }
 
 float HG (float c, float g)
@@ -460,10 +570,11 @@ void main ()
 	vec3 sun = atm.sunDir.xyz;
 	float mu = dot (d, sun);
 	vec3 L = vec3 (0.0);
-	float T = 1.0, tWeighted = 0.0, wSum = 0.0;
+	vec3 T = vec3 (1.0); // (transmittance by colour: the gas's)
+	float tWeighted = 0.0, wSum = 0.0;
 	float span = t1 - t0;
 	float baseLow = P.layer[int (P.hazeH.y) - 1].x;
-	for (int i = 0; i < N && T > 0.005; i++) {
+	for (int i = 0; i < N && T.g > 0.005; i++) {
 		float a = (float (i) + jitter) / float (N), b = (float (i) + 1.0 + jitter) / float (N);
 		float sa = t0 + span * a * a, sb = t0 + span * b * b;
 		vec3 pm = o + d * (0.5 * (sa + sb));
@@ -473,7 +584,7 @@ void main ()
 			for (int k = 0; k < nTower && !nearT; k++)
 				nearT = NearTower (towerList[k], pm / rm, rm, 0.5 * (sb - sa));
 		int ns = nearT ? clamp (int (ceil ((sb - sa) / max (0.01 * sa, 500.0))), 1, 4) : 1;
-		for (int j = 0; j < ns && T > 0.005; j++) {
+		for (int j = 0; j < ns && T.g > 0.005; j++) {
 		float ta = sa + (sb - sa) * float (j) / float (ns), tb = sa + (sb - sa) * float (j + 1) / float (ns);
 		float dt = tb - ta;
 		vec3 p = o + d * (0.5 * (ta + tb));
@@ -493,21 +604,34 @@ void main ()
 				else thin += P.layer[l].z * 0.5 * P.albedo[l].w, thinAlb += P.layer[l].z * 0.5 * P.albedo[l].w * P.albedo[l].rgb;
 			}
 		if (!inDeck) {
+			// (the haze, and the gas: its Rayleigh scattering, the fog of the
+			// depths, and its absorption; by colour)
 			float hg = P.haze.w * exp (-(r - P.misc.z) / P.hazeH.x);
-			float hz = hg + thin;
-			vec3 hzAlb = (hg * P.haze.rgb + thinAlb) / max (hz, 1e-12);
+			float ib, pb = Bar (r, ib);
+			vec3 ray = P.rayK.rgb * pb * ib;
+			vec3 hz = hg + thin + ray + P.gasK.rgb * pb * ib;
+			vec3 hzAlb = (hg * P.haze.rgb + thinAlb + ray) / max (hz, vec3 (1e-12));
 			vec3 sunAtm = muS > -0.15 ? AtmSunTransmittance (p, max (r, atm.radii.x + 1.0), muS) * atm.radii.w : vec3 (0.0);
-			float od = ColumnAbove (r, max (muS, 0.0));
-			vec3 S = hz * hzAlb * (sunAtm * mix (HG (mu, 0.6), 1.0 / (4.0 * PI), 0.5) * exp (-od)
-				+ pc.ambient.rgb * exp (-0.6 * ColumnAbove (r, 1.0)) + FlashLight (p));
-			float Tstep = exp (-hz * dt);
-			L += T * (S - S * Tstep) / max (hz, 1e-12);
+			vec3 dir, dif, sdir, sdif;
+			Column col = ColumnAt (r);
+			ColumnLight (col, max (muS, 0.0), dir, dif);
+			ColumnLight (col, 0.5, sdir, sdif);
+			vec3 S = hz * hzAlb * (sunAtm * (mix (HG (mu, 0.6), 1.0 / (4.0 * PI), 0.5) * dir + max (muS, 0.0) * dif / PI)
+				+ pc.ambient.rgb * (sdir + sdif) + FlashLight (p));
+			vec3 Tstep = exp (-hz * dt);
+			L += T * (S - S * Tstep) / max (hz, vec3 (1e-12));
 			T *= Tstep;
 			continue;
 		}
 		SetContext (p);
 		float ext = Medium (p, ta < 200e3, alb, true);
 		if (ext <= 1e-9) continue;
+		// (the clouds, apart from the haze and the gas: those lit as in
+		// clear air, so that the paths agree where they meet)
+		float hzE = mHazeE;
+		vec3 hzS = mHaze;
+		float cE = max (ext - hzE, 0.0);
+		vec3 cAlb = cE > 1e-9 ? clamp ((ext * alb - hzS) / cE, 0.0, 1.0) : vec3 (1.0);
 		// sunlight reaching p: a march towards the sun through the decks,
 		// the column above beyond it; the gas above the decks (tables)
 		float od = 0.0, ds = 2500.0, s = 0.0;
@@ -525,23 +649,38 @@ void main ()
 		coarseLight = false;
 		vec3 qe = p + sun * s;
 		float re = length (qe);
-		od += ColumnAbove (re, max (dot (qe / re, sun), 0.0));
+		vec3 dirE, difE, dirP, difP, sdir, sdif;
+		ColumnLight (ColumnAt (re), max (dot (qe / re, sun), 0.0), dirE, difE);
+		Column col = ColumnAt (r);
+		ColumnLight (col, max (muS, 0.0), dirP, difP);
+		ColumnLight (col, 0.5, sdir, sdif);
 		vec3 sunAtm = muS > -0.15 ? AtmSunTransmittance (p, max (r, atm.radii.x + 1.0), muS) * atm.radii.w : vec3 (0.0);
-		// light scattered in: the sun (phase, octaves of multiple
-		// scattering), skylight from above fading with the column over p
-		vec3 Ssun = vec3 (0.0);
+		// light scattered in: the sun's beam (phase, octaves of multiple
+		// scattering in the cloud about p, coloured by the particles'
+		// albedo), the diffuse light from the column beyond the march
+		// (through the cloud about p); skylight
+		// (a thick cloud's colour is its multiple scattering's: each
+		// octave takes the cloud's reflectance, the higher ones deeper)
+		vec3 ms = MultiAlbedo (cAlb);
+		vec3 Ssun = vec3 (0.0), oc = ms / max (cAlb, vec3 (0.01));
 		float aa = 1.0, bb = 1.0, cc = 1.0;
 		for (int o2 = 0; o2 < 3; o2++) {
 			float ph = mix (HG (mu, 0.75 * cc), HG (mu, -0.2 * cc), 0.3);
-			Ssun += sunAtm * aa * ph * exp (-bb * od);
-			aa *= 0.4, bb *= 0.5, cc *= 0.5;
+			Ssun += aa * oc * ph * exp (-bb * od);
+			aa *= 0.4, bb *= 0.5, cc *= 0.5, oc *= sqrt (ms);
 		}
-		float above = ColumnAbove (r, 1.0);
-		vec3 sky = pc.ambient.rgb * exp (-0.6 * above) * (0.3 + 0.7 * clamp (muS + 0.2, 0.0, 1.0));
-		vec3 S = ext * alb * (Ssun + sky + FlashLight (p));
-		float Tstep = exp (-ext * dt);
-		L += T * (S - S * Tstep) / max (ext, 1e-12);
-		float w = T * (1.0 - Tstep);
+		Ssun = sunAtm * (Ssun * dirE + max (muS, 0.0) * difE * ms * exp (-0.25 * od) / PI);
+		vec3 sky = pc.ambient.rgb * (sdir + sdif);
+		vec3 fl = FlashLight (p);
+		vec3 S = cE * cAlb * (Ssun + sky * (0.3 + 0.7 * clamp (muS + 0.2, 0.0, 1.0)) + fl);
+		// the haze and the gas (Rayleigh scattering, absorption)
+		float ib, pb = Bar (r, ib);
+		vec3 ray = P.rayK.rgb * pb * ib;
+		vec3 extV = cE + hzE + ray + P.gasK.rgb * pb * ib;
+		S += (hzS + ray) * (sunAtm * (mix (HG (mu, 0.6), 1.0 / (4.0 * PI), 0.5) * dirP + max (muS, 0.0) * difP / PI) + sky + fl);
+		vec3 Tstep = exp (-extV * dt);
+		L += T * (S - S * Tstep) / max (extV, vec3 (1e-12));
+		float w = T.g * (1.0 - Tstep.g);
 		tWeighted += w * 0.5 * (ta + tb);
 		wSum += w;
 		T *= Tstep;
@@ -549,7 +688,7 @@ void main ()
 	}
 	// (beyond the march range downwards, or at the floor: the dark depths)
 	if ((toFloor || beyond) && !scene && dot (d, o) < 0.0) T *= toFloor ? 0.0 : 0.3;
-	if (wSum <= 0.0 && T > 0.999) { Store (px, vec4 (0.0, 0.0, 0.0, 1.0), 0.0); return; }
+	if (wSum <= 0.0 && T.g > 0.999) { Store (px, vec4 (0.0, 0.0, 0.0, 1.0), 0.0); return; }
 
 	// the gas above the decks between the camera and them (the camera high above)
 	if (t0 > 0.0) {
@@ -560,7 +699,7 @@ void main ()
 	// blended with the history of the same cloud (the noise of the march
 	// and its jitter averaged over frames)
 	float dist = wSum > 0.0 ? tWeighted / wSum : 0.0;
-	vec4 res = vec4 (L, T), h;
+	vec4 res = vec4 (L, dot (T, vec3 (0.2126, 0.7152, 0.0722))), h;
 	if (History (o + d * (dist > 0.0 ? dist : 1e7), dist, h)) res = mix (h, res, P.flashInfo.x > 0.0 ? 0.7 : 0.3); // (flashes: little lag)
 	Store (px, res, dist);
 }

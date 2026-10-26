@@ -886,7 +886,7 @@ double Scene::SunVisibility (const VECTOR3 &gpos, OBJHANDLE exclude) const
 	return f;
 }
 
-double Scene::DeckTransmittance (const VECTOR3 &gpos) const
+double Scene::DeckTransmittance (const VECTOR3 &gpos, bool direct) const
 {
 	OBJHANDLE hp = oapiCameraProxyGbody ();
 	if (!hp || !hSun) return 1.0;
@@ -903,7 +903,11 @@ double Scene::DeckTransmittance (const VECTOR3 &gpos) const
 	if (alt > dk->Top () + 50e3) return 1.0;
 	double mu = dotp (r / rl, unit (sp - gpos));
 	if (mu < -0.1) return 0.0;
-	return exp (-dk->ColumnAbove (alt, mu));
+	// (the direct beam and the diffuse light under the decks and the gas)
+	ATMPARAM prm;
+	oapiGetPlanetAtmParams (hp, rl, &prm);
+	double dir, l = dk->Light (alt, mu, prm.p / 1e5, &dir);
+	return direct ? dir : l;
 }
 
 double Scene::Sunlight (const VECTOR3 &gpos)

@@ -42,6 +42,10 @@ namespace {
 		float flashInfo[4];         // count, diffusion length [m]
 		float prevRot[3][4];        // last frame's camera frame -> planet frame (columns)
 		float prevCam[4];           // its position (planet frame); w: history valid
+		float pres[16];             // log2 of the pressure [bar] at 16 radii (presInfo)
+		float presInfo[4];          // the first of them [m], their spacing [m]
+		float gasK[4], rayK[4];     // the gas's absorption and Rayleigh scattering per bar (rgb)
+		float vortex[4];            // storms' swirl speed [m/s], core radius (share), tower spin speed [m/s], spiral twist [rad]
 	};
 
 	uint32_t Pcg (uint32_t v)
@@ -465,6 +469,23 @@ double VolumetricClouds::Decks::ColumnAbove (double alt, double mu) const
 	return tau / std::max (mu, 0.08);
 }
 
+double VolumetricClouds::Decks::Light (double alt, double mu, double bar, double *direct) const
+{
+	const double GC = 0.85;
+	double ta = gasAbs[1] * bar, ts = gasRay[1] * bar, te = ta + ts;
+	for (const Deck &d : decks) {
+		double tau = d.ext * 0.35 * d.coverage * std::clamp (d.top - std::max (alt, d.base), 0.0, d.top - d.base);
+		te += tau, ta += tau * (1.0 - d.albedo[1]), ts += tau * d.albedo[1] * (1.0 - GC);
+	}
+	double th = hazeExt * hazeH * exp (-alt / hazeH);
+	te += th, ta += th * (1.0 - haze[1]), ts += th * haze[1] * 0.4;
+	double m = std::max (mu, 0.08);
+	double dir = exp (-te / m);
+	double tot = exp (-sqrt (3.0 * ta * (ta + ts))) / (1.0 + 0.75 * ts / m);
+	if (direct) *direct = dir;
+	return std::max (dir, tot);
+}
+
 bool VolumetricClouds::LoadDecks (const char *planet, Decks &dk)
 {
 	std::ifstream ifs (std::string ("Config/VK/GasGiant/") + planet + ".cfg");
@@ -489,6 +510,8 @@ bool VolumetricClouds::LoadDecks (const char *planet, Decks &dk)
 		else if (key == "TOWERTOP") ss >> dk.towerTop;
 		else if (key == "STRETCH") ss >> dk.stretch;
 		else if (key == "TINT") ss >> dk.tint;
+		else if (key == "GAS") ss >> dk.gasAbs[0] >> dk.gasAbs[1] >> dk.gasAbs[2] >> dk.gasRay[0] >> dk.gasRay[1] >> dk.gasRay[2];
+		else if (key == "VORTEX") ss >> dk.vortexV >> dk.vortexCore >> dk.towerSpin >> dk.vortexTwist;
 	}
 	return !dk.decks.empty();
 }
@@ -620,6 +643,19 @@ void VolumetricClouds::RenderGasGiant (const GasGiantFrame &f)
 		g.flashInfo[0] = (float)nf, g.flashInfo[1] = 5e3f;
 	}
 	g.misc2[0] = (float)dk.stretch, g.misc2[1] = (float)dk.tint, g.misc2[2] = (float)f.floorRadius;
+	// the gas: pressure from the floor to above the decks, absorption and
+	// scattering per bar
+	{
+		double r0 = f.floorRadius, r1 = R + std::max (dk.Top (), dk.towerTop) + 20e3, dr = (r1 - r0) / 15.0;
+		for (int i = 0; i < 16; i++) {
+			ATMPARAM prm;
+			oapiGetPlanetAtmParams (f.hPlanet, r0 + dr * i, &prm);
+			g.pres[i] = (float)std::log2 (std::max (prm.p, 1e-3) / 1e5);
+		}
+		g.presInfo[0] = (float)r0, g.presInfo[1] = (float)dr;
+		for (int k = 0; k < 3; k++) g.gasK[k] = dk.gasAbs[k], g.rayK[k] = dk.gasRay[k];
+		g.vortex[0] = (float)dk.vortexV, g.vortex[1] = (float)dk.vortexCore, g.vortex[2] = (float)dk.towerSpin, g.vortex[3] = (float)dk.vortexTwist;
+	}
 
 	// the last frame's camera (temporal accumulation; not after a jump)
 	if (ggHistValid && length (f.camPlanet - ggPrevCam) > 50e3) ggHistValid = false;
@@ -630,11 +666,17 @@ void VolumetricClouds::RenderGasGiant (const GasGiantFrame &f)
 	g.prevCam[0] = (float)pc0.x, g.prevCam[1] = (float)pc0.y, g.prevCam[2] = (float)pc0.z, g.prevCam[3] = ggHistValid ? 1.0f : 0.0f;
 	// (half the tiles marched per frame only with the camera nearly still:
 	// moving fast, the reprojected tiles would not match the marched ones)
+	// (still for several frames: a camera moved only every other frame
+	// is not still)
+	bool still = false;
 	if (ggHistValid) {
 		VECTOR3 fz = _V(f.viewToPlanet.m13, f.viewToPlanet.m23, f.viewToPlanet.m33), pz = _V(pr.m13, pr.m23, pr.m33);
 		// (nor with lightning: the light changes from frame to frame)
-		if (length (f.camPlanet - pc0) < 200.0 && dotp (fz, pz) > cos (0.05 * RAD) && g.flashInfo[0] == 0.0f) g.prevCam[3] = 2.0f;
+		still = length (f.camPlanet - pc0) < 200.0 && dotp (fz, pz) > cos (0.05 * RAD) && g.flashInfo[0] == 0.0f
+			&& oapiGetTimeAcceleration () < 2.0; // (nor with the clouds moving fast)
 	}
+	ggStill = still ? ggStill + 1 : 0;
+	if (ggStill >= 4) g.prevCam[3] = 2.0f;
 
 	VkCommandBuffer cmd = ctx->Cmd ();
 	vkc::ImageBarrier (cmd, output.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
