@@ -143,6 +143,7 @@ These are for testing and tuning (`1` turns a feature on, `0` off).
 | `ORBITER_VK_UPSCALER=…`, `ORBITER_VK_TAA=0`, `ORBITER_VK_MSAA=<n>` | anti-aliasing and upscaling |
 | `ORBITER_VK_SCATTER_GALLERY=1\|rock\|grass\|shrub\|conifer\|broadleaf` | lay out the scatter assets next to the focus vessel |
 | `ORBITER_NO_TERRAIN_DETAIL=1`, `ORBITER_NO_SCATTER=1` | core: no procedural detail / no ground scatter |
+| `ORBITER_VK_GG_TESTFLASH=<m>` | gas giants: a steady lightning flash `m` metres ahead of the camera |
 
 Example: an offscreen screenshot of a test scene, validated and profiled:
 
@@ -158,6 +159,9 @@ ORBITER_VK_SCREENSHOT=/tmp/shot.png ORBITER_VK_SCREENSHOT_FRAME=400 ORBITER_VK_S
 - `field_*`: forest, desert and Moon scatter
 - `gallery_*`: the scatter assets of Earth, Moon and Mars
 - `orbit_Venus`, `orbit_Titan`: Venus and Titan from orbit
+- `jupiter_*`, `saturn_*`, `uranus_*`, `neptune_*`: the gas giants' cloud
+  decks (`_high` above them, `_storm` at a storm, `_plunge` a descent
+  through them)
 
 **Memory:** dense forest scenes can map more than 8 GB of virtual memory
 for the GPU, although only about 0.5 GB is resident. A `ulimit -v` cap

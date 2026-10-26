@@ -27,6 +27,7 @@ layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(set = 0, binding = 1) uniform sampler3D shapeNoise;
 layout(set = 0, binding = 2) uniform sampler3D detailNoise;
+const float SHAPE_N = 128.0, DETAIL_N = 32.0; // (the volumes' sizes: Clouds.cpp)
 layout(set = 0, binding = 3) uniform sampler2D prepass;   // view normal, view depth (w; 0: none)
 layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D outClouds;
 
@@ -180,6 +181,16 @@ float Moat (vec3 u)
 // water clouds through the decks above to anvils (TOWERTOP), leaning with
 // the wind shear, their edges billowing (noise rising with the updraft).
 // Density 0..1 at x (radius r, direction u).
+// the footprint of the view's sample [m] (a pixel's width at its
+// distance), and the mip level filtering a noise lookup to it (qPerM: the
+// lookup's coordinates per metre; size: the volume's texels per unit): far
+// away the fine noise averaged instead of aliased (streaks, hatching)
+float fpM = 0.0;
+float Lod (float qPerM, float size)
+{
+	return max (log2 (fpM * qPerM * size), 0.0);
+}
+
 // a shelf of a tower where it meets a stable level (a deck's top), or its
 // anvil (as an anvil of an Earth thunderstorm): spread flat, far downwind
 // (east) and little upwind, thinning and fraying downwind; spiral arms
@@ -196,7 +207,7 @@ float Shelf (vec2 q, float dz, float rt, float Ld, float Lu, float W, float th, 
 	float bottom = -thick * (0.6 + 0.25 * nz) - (anvil ? 2.5e3 * max (nz, 0.0) : 0.0);
 	float v = smoothstep (bottom, bottom + 1e3, dz) * (1.0 - smoothstep (0.0, 1.5e3, dz - 0.15 * thick * nz));
 	// (its own lumps and frayed edges: noise over a third of the tower)
-	float sn = detail ? textureLod (shapeNoise, vec3 (q / (3.0 * rt), dz / 6e3 + seed * 0.1), 0.0).r - 0.5 : 0.0;
+	float sn = detail ? textureLod (shapeNoise, vec3 (q / (3.0 * rt), dz / 6e3 + seed * 0.1), Lod (1.0 / (3.0 * rt), SHAPE_N)).r - 0.5 : 0.0;
 	float edge = smoothstep (1.0, 0.6, e2 + (nz + 2.0 * sn) * mix (0.25, 0.7, clamp (ex, 0.0, 1.0)));
 	v *= 0.75 + 1.0 * sn;
 	if (!detail) return 0.8 * v * edge; // (for the light: without the arms)
@@ -257,7 +268,8 @@ float Towers (vec3 x, float r, vec3 u, bool detail)
 		float nz = 0.0;
 		if (detail) {
 			vec3 q = vec3 (hr, r - baseR - 25.0 * P.hazeH.z) / rt * 0.35 + vec3 (seed);
-			nz = 0.7 * textureLod (shapeNoise, q, 0.0).r + 0.3 * textureLod (shapeNoise, ROT * q * 2.2, 0.0).r - 0.5;
+			float lq = Lod (0.35 / rt, SHAPE_N);
+			nz = 0.7 * textureLod (shapeNoise, q, lq).r + 0.3 * textureLod (shapeNoise, ROT * q * 2.2, lq + 1.14).r - 0.5;
 			nz = clamp (nz * 2.5, -0.6, 0.6); // (the noise's narrow range stretched)
 		}
 		// the column: lobed, asymmetric
@@ -303,7 +315,7 @@ float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, fl
 	float e0 = lng * R * cl / P.misc2.x, n0 = lat * R, z0 = (r - R) * 3.0;
 	// clearings: large holes in the deck (where its noise at ~600 km is low)
 	if (m.w > 0.0) {
-		float big = textureLod (shapeNoise, vec3 (e0 - uj * t / P.misc2.x, n0, float (i) * 3e5) / 600e3, 0.0).r;
+		float big = textureLod (shapeNoise, vec3 (e0 - uj * t / P.misc2.x, n0, float (i) * 3e5) / 600e3, Lod (1.0 / 600e3, SHAPE_N)).r;
 		cov *= smoothstep (m.w, m.w + 0.2, big);
 	}
 	if (cov <= 0.01) return 0.0;
@@ -312,8 +324,11 @@ float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, fl
 	// (the light march takes the same shape, without the detail's
 	// erosion: the clouds shadow themselves where they are seen; for far
 	// samples a single lookup)
+	// (the lookups' level: the noise 3 times finer vertically than
+	// meridionally, the zonal stretch coarser; the footprint taken between)
+	float lb = Lod (1.7 * L.w, SHAPE_N);
 	if (coarse) {
-		float sh = textureLod (shapeNoise, vec3 (e0 - uj * t / P.misc2.x, n0, z0) * L.w, 0.0).r;
+		float sh = textureLod (shapeNoise, vec3 (e0 - uj * t / P.misc2.x, n0, z0) * L.w, lb).r;
 		sh = clamp ((sh - 0.15) / 0.7, 0.0, 1.0);
 		return clamp ((sh * profile - (1.0 - cov)) / max (cov, 0.05) * 4.0, 0.0, 1.0);
 	}
@@ -322,8 +337,9 @@ float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, fl
 	vec3 q2 = vec3 (e0 + (sw2.x - uj * p2 * FLOW_PERIOD) / P.misc2.x, n0 + sw2.y, z0) * L.w + vec3 (0.37, 0.71, 0.13);
 	// (warped by a field 7 periods across: the noise volume's repetition hidden)
 	vec3 qw = ROT * q1 * 0.143;
-	vec3 warp = vec3 (textureLod (shapeNoise, qw, 0.0).r, textureLod (shapeNoise, qw + vec3 (0.5, 0.2, 0.7), 0.0).r,
-		textureLod (shapeNoise, qw + vec3 (0.3, 0.8, 0.1), 0.0).r) - 0.5;
+	float lw = max (lb - 2.8, 0.0);
+	vec3 warp = vec3 (textureLod (shapeNoise, qw, lw).r, textureLod (shapeNoise, qw + vec3 (0.5, 0.2, 0.7), lw).r,
+		textureLod (shapeNoise, qw + vec3 (0.3, 0.8, 0.1), lw).r) - 0.5;
 	q1 += warp * 0.7, q2 += warp * 0.7;
 	// (the deck's top rising and falling with the warp field: hills of
 	// cloud some 175 km across, valleys between them)
@@ -332,13 +348,15 @@ float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, fl
 	if (hft >= 1.0) return 0.0;
 	profile = smoothstep (0.0, 0.08, hf) * smoothstep (1.0, 0.3, hft);
 	// (two octaves: billows on the larger features)
-	float shape = mix (0.65 * textureLod (shapeNoise, q2, 0.0).r + 0.35 * textureLod (shapeNoise, ROT * q2 * 3.1, 0.0).r,
-	                   0.65 * textureLod (shapeNoise, q1, 0.0).r + 0.35 * textureLod (shapeNoise, ROT * q1 * 3.1, 0.0).r, w1);
+	float l2 = lb + 1.63;
+	float shape = mix (0.65 * textureLod (shapeNoise, q2, lb).r + 0.35 * textureLod (shapeNoise, ROT * q2 * 3.1, l2).r,
+	                   0.65 * textureLod (shapeNoise, q1, lb).r + 0.35 * textureLod (shapeNoise, ROT * q1 * 3.1, l2).r, w1);
 	shape = clamp ((shape - 0.15) / 0.7, 0.0, 1.0); // (the noise's range stretched)
 	// (sharp surfaces: full density a quarter of the way in, as cumulus)
 	float d = clamp ((shape * profile - (1.0 - cov)) / max (cov, 0.05) * 4.0, 0.0, 1.0);
 	if (d <= 0.0 || !detail) return d;
-	float det = mix (textureLod (detailNoise, ROT * ROT * q2 * 5.7, 0.0).r, textureLod (detailNoise, ROT * ROT * q1 * 5.7, 0.0).r, w1);
+	float ld = Lod (1.7 * 5.7 * L.w, DETAIL_N);
+	float det = mix (textureLod (detailNoise, ROT * ROT * q2 * 5.7, ld).r, textureLod (detailNoise, ROT * ROT * q1 * 5.7, ld).r, w1);
 	return clamp ((d - 0.2 * det) / 0.8, 0.0, 1.0);
 }
 
@@ -595,36 +613,70 @@ void main ()
 			if (length (o + d * tq - cc) < 1.4 * P.storm[i].w + 150e3) moatList[nMoat++] = i;
 		}
 	}
-	if (P.boltInfo.x > 0.0) BoltHits (o, d, t0, t1, 2.0 / (pc.proj.x * pc.proj.z));
+	float pixAng = 2.0 / (pc.proj.x * pc.proj.z); // (a pixel's angle)
+	if (P.boltInfo.x > 0.0) BoltHits (o, d, t0, t1, pixAng);
 	float jitter = fract (52.9829189 * fract (dot (vec2 (px) + pc.ambient.w * vec2 (5.588238, 5.588238), vec2 (0.06711056, 0.00583715))));
-	// steps growing with distance; those passing near a tower subdivided
-	// (to about a hundredth of the distance: its billows resolved)
-	const int N = 72;
+	// steps of about a fiftieth of the distance within the decks and near
+	// the towers (their billows resolved, not smeared along the rays into
+	// streaks); through the clear air long ones, to the next deck's
+	// boundary; at most MAXIT (the steps lengthened to reach the range)
+	const int MAXIT = 128;
+	float ob = dot (o, d), oc = dot (o, o);
 	vec3 sun = atm.sunDir.xyz;
 	float mu = dot (d, sun);
 	vec3 L = vec3 (0.0);
 	vec3 T = vec3 (1.0); // (transmittance by colour: the gas's)
 	float tWeighted = 0.0, wSum = 0.0;
-	float span = t1 - t0;
 	float baseLow = P.layer[int (P.hazeH.y) - 1].x;
-	for (int i = 0; i < N && T.g > 0.005; i++) {
-		float a = (float (i) + jitter) / float (N), b = (float (i) + 1.0 + jitter) / float (N);
-		float sa = t0 + span * a * a, sb = t0 + span * b * b;
-		vec3 pm = o + d * (0.5 * (sa + sb));
-		float rm = length (pm);
+	float tc = t0;
+	for (int it = 0; it < MAXIT && tc < t1 && T.g > 0.005; it++) {
+		float ta = tc;
+		float rc = sqrt (max (oc + ta * (2.0 * ob + ta), 0.0));
+		// (longer as the light fades: behind a veil the detail matters less)
+		float fine = clamp (0.02 * ta, 250.0, 8e3) * (1.0 + 2.0 * (1.0 - T.g));
+		bool thick = false;
+		for (int l = 0; l < int (P.hazeH.y); l++)
+			thick = thick || (P.layer[l].z >= 2e-5 && rc > P.layer[l].x && rc < P.layer[l].y);
+		float dt = fine;
+		if (!thick) {
+			// (to the next boundary of a deck: the spheres' crossings ahead)
+			float tn = max (0.08 * ta, 3e3);
+			for (int l = 0; l < int (P.hazeH.y); l++) {
+				if (P.layer[l].z < 2e-5) continue;
+				for (int e = 0; e < 2; e++) {
+					float Rb = e == 0 ? P.layer[l].x : P.layer[l].y;
+					float disc = ob * ob - oc + Rb * Rb;
+					if (disc <= 0.0) continue;
+					float sq = sqrt (disc);
+					float x1 = -ob - sq, x2 = -ob + sq;
+					float x = x1 > ta + 1.0 ? x1 : x2;
+					if (x > ta + 1.0) tn = min (tn, x - ta + 50.0);
+				}
+			}
+			dt = max (tn, fine);
+		}
+		dt = min (max (dt, (t1 - ta) / float (MAXIT - it)), t1 - ta);
+		// (near a tower: fine steps)
 		bool nearT = false;
-		if (rm > baseLow && rm < P.misc.w + 10e3)
-			for (int k = 0; k < nTower && !nearT; k++)
-				nearT = NearTower (towerList[k], pm / rm, rm, 0.5 * (sb - sa));
-		int ns = nearT ? clamp (int (ceil ((sb - sa) / max (0.01 * sa, 500.0))), 1, 4) : 1;
-		for (int j = 0; j < ns && T.g > 0.005; j++) {
-		float ta = sa + (sb - sa) * float (j) / float (ns), tb = sa + (sb - sa) * float (j + 1) / float (ns);
-		float dt = tb - ta;
+		{
+			vec3 pm = o + d * (ta + 0.5 * dt);
+			float rm = length (pm);
+			if (rm > baseLow && rm < P.misc.w + 10e3)
+				for (int k = 0; k < nTower && !nearT; k++)
+					nearT = NearTower (towerList[k], pm / rm, rm, 0.5 * dt);
+			if (nearT && dt > fine) dt = max (fine, (t1 - ta) / float (MAXIT - it));
+		}
+		float tb = ta + dt;
+		tc = tb;
+		{
 		// (the lightning channels within the step, behind the cloud before it)
 		for (int k = 0; k < nHit; k++)
-			if ((hitT[k] >= ta || (i == 0 && j == 0)) && hitT[k] < tb) L += T * hitL[k];
-		vec3 p = o + d * (0.5 * (ta + tb));
+			if ((hitT[k] >= ta || it == 0) && hitT[k] < tb) L += T * hitL[k];
+		// (the sample: anywhere within the step, a different place each
+		// frame; the history averages them)
+		vec3 p = o + d * (ta + jitter * dt);
 		float r = length (p);
+		fpM = (ta + jitter * dt) * pixAng;
 		vec3 alb;
 		vec3 up = p / r;
 		float muS = dot (up, sun);
@@ -717,7 +769,7 @@ void main ()
 		vec3 Tstep = exp (-extV * dt);
 		L += T * (S - S * Tstep) / max (extV, vec3 (1e-12));
 		float w = T.g * (1.0 - Tstep.g);
-		tWeighted += w * 0.5 * (ta + tb);
+		tWeighted += w * (ta + jitter * dt);
 		wSum += w;
 		T *= Tstep;
 		}

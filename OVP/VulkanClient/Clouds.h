@@ -109,16 +109,17 @@ public:
 
 private:
 	void CreateOutput (VkImageView prepass);
-	vkc::Image CreateImage (VkImageType type, VkFormat fmt, VkExtent3D e, VkImageUsageFlags usage);
+	vkc::Image CreateImage (VkImageType type, VkFormat fmt, VkExtent3D e, VkImageUsageFlags usage, uint32_t mips = 1);
 
 	vkc::Context *ctx = nullptr;
 	TextureManager *texmgr = nullptr;
 	vkc::Image shapeNoise, detailNoise, coverage, output;
+	VkImageView shapeMipView = VK_NULL_HANDLE, detailMipView = VK_NULL_HANDLE; // (the noise's mip chains)
 	VkExtent2D outExtent{};
 	uint32_t generation = ~0u;
 	VkImageView outPrepass = VK_NULL_HANDLE;
 	uint32_t frameNo = 0;
-	VkSampler repeatSampler = VK_NULL_HANDLE, clampSampler = VK_NULL_HANDLE;
+	VkSampler repeatSampler = VK_NULL_HANDLE, clampSampler = VK_NULL_HANDLE, mipSampler = VK_NULL_HANDLE;
 	VkDescriptorSetLayout marchSetLayout = VK_NULL_HANDLE, compSetLayout = VK_NULL_HANDLE;
 	VkDescriptorPool pool = VK_NULL_HANDLE;
 	VkDescriptorSet marchSet = VK_NULL_HANDLE, compSet = VK_NULL_HANDLE;

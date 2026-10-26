@@ -243,6 +243,25 @@ Known gaps and limitations, to be addressed later.
 - Cloud types are not distinguished (all cumulus-like); the layer alpha
   carries no height information.
 
+## Gas giants
+- Cloud decks below the camera are ray-marched (ggclouds.comp, Clouds.cpp's
+  RenderGasGiant): decks, haze and gas per planet in
+  Config/VK/GasGiant/<name>.cfg (see README.txt), storm towers with shelves
+  and anvils, vortex swirl, lightning flashes and channels. Light fades with
+  depth (pressure table from the core). The decks cover a 2000 km march range;
+  beyond it the planet map takes over.
+- Steps: about 2 percent of the distance in decks and near towers, long
+  jumps through clear air, at most 128 per ray; the noise is mip-filtered to
+  the pixel footprint. Half resolution, with temporal accumulation, and
+  half the 8x8 tiles reused when the camera is still.
+- Cost at 1080p (RX 9070 XT): Jupiter 4-10 ms, Saturn and Neptune storm
+  views about 13 ms (large towers). Goal: about 3 ms.
+- Distant towers vanish in the Rayleigh fog of the deep gas (about 75 km of
+  visibility at 6 bar), as they should. Uranus is bland, as Voyager saw it.
+- Not done: vessel lighting from flashes with RT shadows, turbulence (camera
+  shake, buffeting), comparison with Juno and Cassini images, crush depth
+  (no vessel destruction yet).
+
 ## Plume and exhaust overhaul (planned, after the current graphics list)
 - User request: overhaul plume and exhaust effects. Current state: billboard
   particle streams (direction/spread fixed 2026-10-24), exhaust flame

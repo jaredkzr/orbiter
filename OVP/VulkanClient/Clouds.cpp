@@ -58,16 +58,30 @@ namespace {
 	}
 	double Unit16 (uint32_t h) { return (h & 0xffffu) / 65535.0; }
 	struct GGPush { float proj[4], ambient[4], slot[4]; };
+	// a layout transition of one mip level of a colour image
+	void LevelBarrier (VkCommandBuffer cmd, VkImage im, uint32_t level, VkImageLayout from, VkImageLayout to,
+		VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess, VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess)
+	{
+		VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+		b.srcStageMask = srcStage, b.srcAccessMask = srcAccess, b.dstStageMask = dstStage, b.dstAccessMask = dstAccess;
+		b.oldLayout = from, b.newLayout = to;
+		b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		b.image = im;
+		b.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, level, 1, 0, 1 };
+		VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+		di.imageMemoryBarrierCount = 1, di.pImageMemoryBarriers = &b;
+		vkCmdPipelineBarrier2 (cmd, &di);
+	}
 }
 
-vkc::Image VolumetricClouds::CreateImage (VkImageType type, VkFormat fmt, VkExtent3D e, VkImageUsageFlags usage)
+vkc::Image VolumetricClouds::CreateImage (VkImageType type, VkFormat fmt, VkExtent3D e, VkImageUsageFlags usage, uint32_t mips)
 {
 	vkc::Image im;
 	VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 	ici.imageType = type;
 	ici.format = fmt;
 	ici.extent = e;
-	ici.mipLevels = 1;
+	ici.mipLevels = mips;
 	ici.arrayLayers = 1;
 	ici.samples = VK_SAMPLE_COUNT_1_BIT;
 	ici.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -95,10 +109,31 @@ bool VolumetricClouds::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSe
 	VK_CHECK(vkCreateSampler (ctx->device, &sci, nullptr, &repeatSampler));
 	sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 	VK_CHECK(vkCreateSampler (ctx->device, &sci, nullptr, &clampSampler));
+	sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+	sci.maxLod = VK_LOD_CLAMP_NONE;
+	VK_CHECK(vkCreateSampler (ctx->device, &sci, nullptr, &mipSampler));
 
 	// noise volumes, generated once
-	shapeNoise = CreateImage (VK_IMAGE_TYPE_3D, VK_FORMAT_R8_UNORM, { SHAPE_SIZE, SHAPE_SIZE, SHAPE_SIZE }, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
-	detailNoise = CreateImage (VK_IMAGE_TYPE_3D, VK_FORMAT_R8_UNORM, { DETAIL_SIZE, DETAIL_SIZE, DETAIL_SIZE }, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+	// (with mip chains, for the gas giants' march: the noise filtered to
+	// the pixels' footprint far away; the views of the other users take
+	// only the full resolution)
+	const uint32_t sizes[2] = { SHAPE_SIZE, DETAIL_SIZE };
+	vkc::Image *noise[2] = { &shapeNoise, &detailNoise };
+	VkImageView *mipViews[2] = { &shapeMipView, &detailMipView };
+	uint32_t mips[2];
+	for (int i = 0; i < 2; i++) {
+		mips[i] = 1;
+		while ((sizes[i] >> mips[i]) > 0) mips[i]++;
+		*noise[i] = CreateImage (VK_IMAGE_TYPE_3D, VK_FORMAT_R8_UNORM, { sizes[i], sizes[i], sizes[i] },
+			VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, mips[i]);
+		VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+		vci.image = noise[i]->image;
+		vci.viewType = VK_IMAGE_VIEW_TYPE_3D;
+		vci.format = VK_FORMAT_R8_UNORM;
+		vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, mips[i], 0, 1 };
+		VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, mipViews[i]));
+	}
 	{
 		VkDescriptorSetLayoutBinding b{ 0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
 		VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
@@ -140,15 +175,33 @@ bool VolumetricClouds::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSe
 		ctx->ImmediateSubmit ([&](VkCommandBuffer cmd) {
 			vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
 			for (int i = 0; i < 2; i++) {
-				vkc::ImageBarrier (cmd, imgs[i], VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+				LevelBarrier (cmd, imgs[i], 0, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
 					VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
 				int p[2] = { (int)(i ? DETAIL_SIZE : SHAPE_SIZE), i };
 				vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &s[i], 0, nullptr);
 				vkCmdPushConstants (cmd, pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), p);
 				uint32_t g = (uint32_t)(p[0] + 3) / 4;
 				vkCmdDispatch (cmd, g, g, g);
-				vkc::ImageBarrier (cmd, imgs[i], VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-					VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+				// the mip chain: each level halved from the one above (the
+				// volume tileable: 2:1 averages of whole texel pairs)
+				LevelBarrier (cmd, imgs[i], 0, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+					VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+				for (uint32_t m = 1; m < mips[i]; m++) {
+					LevelBarrier (cmd, imgs[i], m, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+						VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+					int32_t a = (int32_t)(sizes[i] >> (m - 1)), b = (int32_t)(sizes[i] >> m);
+					VkImageBlit bl{};
+					bl.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, m - 1, 0, 1 };
+					bl.srcOffsets[1] = { a, a, a };
+					bl.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, m, 0, 1 };
+					bl.dstOffsets[1] = { b, b, b };
+					vkCmdBlitImage (cmd, imgs[i], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, imgs[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl, VK_FILTER_LINEAR);
+					LevelBarrier (cmd, imgs[i], m, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+						VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+				}
+				for (uint32_t m = 0; m < mips[i]; m++)
+					LevelBarrier (cmd, imgs[i], m, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+						VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 			}
 		});
 		vkDestroyDescriptorPool (ctx->device, tmp, nullptr);
@@ -295,6 +348,9 @@ void VolumetricClouds::Shutdown ()
 	vkDestroyDescriptorSetLayout (ctx->device, compSetLayout, nullptr);
 	vkDestroySampler (ctx->device, repeatSampler, nullptr);
 	vkDestroySampler (ctx->device, clampSampler, nullptr);
+	vkDestroySampler (ctx->device, mipSampler, nullptr);
+	vkDestroyImageView (ctx->device, shapeMipView, nullptr);
+	vkDestroyImageView (ctx->device, detailMipView, nullptr);
 	ctx->DestroyImage (shapeNoise);
 	ctx->DestroyImage (detailNoise);
 	ctx->DestroyImage (coverage);
@@ -336,8 +392,8 @@ void VolumetricClouds::CreateOutput (VkImageView prepass)
 	marchSet = s[0], compSet = s[1];
 	VkDescriptorImageInfo ii[6] = {
 		{ clampSampler, coverage.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
-		{ repeatSampler, shapeNoise.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
-		{ repeatSampler, detailNoise.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+		{ mipSampler, shapeMipView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+		{ mipSampler, detailMipView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
 		{ clampSampler, prepass, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
 		{ VK_NULL_HANDLE, output.view, VK_IMAGE_LAYOUT_GENERAL },
 		{ clampSampler, output.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL } };
