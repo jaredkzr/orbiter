@@ -35,7 +35,7 @@ const int MAX_LAYERS = 4, MAX_STORMS = 16, MAX_TOWERS = 64;
 struct GGParams {
 	vec4 layer[MAX_LAYERS];  // base, top radius [m], extinction [1/m], feature frequency [1/m]
 	vec4 albedo[MAX_LAYERS]; // rgb, coverage
-	vec4 lmisc[MAX_LAYERS];  // band contrast, towers (1: storm towers rise from it), jet factor at its height, clearings (0: none)
+	vec4 lmisc[MAX_LAYERS];  // band contrast, zonal stretch (its own, times the planet's), jet factor at its height, clearings (0: none)
 	vec4 haze;               // albedo rgb, extinction at the 1-bar level [1/m]
 	vec4 hazeH;              // scale height [m], layer count, time [s], march range [m]
 	vec4 jets[16];           // eastward jet speed at the clouds, 64 latitudes from -90 to 90 degrees
@@ -308,8 +308,10 @@ float Towers (vec3 x, float r, vec3 u, bool detail)
 // density 0..1 of deck i at x (planet frame, radius r, unit direction u,
 // latitude lat, zone factor; moat: the storms' clearing); detail: the
 // eroding detail noise
+float deckHill = 0.5; // (Deck's: the height of the deck's top there, 0 (valley) .. 1 (hill))
 float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, float moat, vec2 sw1, vec2 sw2, bool detail, bool coarse)
 {
+	deckHill = 0.5;
 	vec4 L = P.layer[i];
 	vec4 m = P.lmisc[i];
 	float base = L.x, top = L.y;
@@ -324,10 +326,10 @@ float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, fl
 	float t = P.hazeH.z;
 	float p1 = fract (t / FLOW_PERIOD), p2 = fract (t / FLOW_PERIOD + 0.5);
 	float w1 = 1.0 - abs (2.0 * p1 - 1.0);
-	float e0 = lng * R * cl / P.misc2.x, n0 = lat * R, z0 = (r - R) * 3.0;
+	float e0 = lng * R * cl / (P.misc2.x * m.y), n0 = lat * R, z0 = (r - R) * 3.0; // (stretched zonally: the planet's, the deck's own)
 	// clearings: large holes in the deck (where its noise at ~600 km is low)
 	if (m.w > 0.0) {
-		float big = textureLod (shapeNoise, vec3 (e0 - uj * t / P.misc2.x, n0, float (i) * 3e5) / 600e3, Lod (1.0 / 600e3, SHAPE_N)).r;
+		float big = textureLod (shapeNoise, vec3 (e0 - uj * t / (P.misc2.x * m.y), n0, float (i) * 3e5) / 600e3, Lod (1.0 / 600e3, SHAPE_N)).r;
 		cov *= smoothstep (m.w, m.w + 0.2, big);
 	}
 	if (cov <= 0.01) return 0.0;
@@ -340,13 +342,13 @@ float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, fl
 	// meridionally, the zonal stretch coarser; the footprint taken between)
 	float lb = Lod (1.7 * L.w * swStretch, SHAPE_N);
 	if (coarse) {
-		float sh = textureLod (shapeNoise, vec3 (e0 - uj * t / P.misc2.x, n0, z0) * L.w, lb).r;
+		float sh = textureLod (shapeNoise, vec3 (e0 - uj * t / (P.misc2.x * m.y), n0, z0) * L.w, lb).r;
 		sh = clamp ((sh - 0.15) / 0.7, 0.0, 1.0);
 		return clamp ((sh * profile - (1.0 - cov)) / max (cov, 0.05) * 4.0, 0.0, 1.0);
 	}
 	// (and swirled by the storms' vortices: each phase's turn)
-	vec3 q1 = vec3 (e0 + (sw1.x - uj * p1 * FLOW_PERIOD) / P.misc2.x, n0 + sw1.y, z0) * L.w;
-	vec3 q2 = vec3 (e0 + (sw2.x - uj * p2 * FLOW_PERIOD) / P.misc2.x, n0 + sw2.y, z0) * L.w + vec3 (0.37, 0.71, 0.13);
+	vec3 q1 = vec3 (e0 + (sw1.x - uj * p1 * FLOW_PERIOD) / (P.misc2.x * m.y), n0 + sw1.y, z0) * L.w;
+	vec3 q2 = vec3 (e0 + (sw2.x - uj * p2 * FLOW_PERIOD) / (P.misc2.x * m.y), n0 + sw2.y, z0) * L.w + vec3 (0.37, 0.71, 0.13);
 	// (warped by a field 7 periods across: the noise volume's repetition hidden)
 	vec3 qw = ROT * q1 * 0.143;
 	float lw = max (lb - 2.8, 0.0);
@@ -356,6 +358,7 @@ float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, fl
 	// (the deck's top rising and falling with the warp field: hills of
 	// cloud some 175 km across, valleys between them)
 	float hn = clamp (warp.y * 2.5 + 0.5, 0.0, 1.0);
+	deckHill = hn;
 	float hft = hf / (0.6 + 0.4 * hn);
 	if (hft >= 1.0) return 0.0;
 	profile = smoothstep (0.0, 0.08, hf) * smoothstep (1.0, 0.3, hft);
@@ -425,7 +428,9 @@ float Medium (vec3 x, bool detail, out vec3 alb, bool towerDetail)
 		// (the upper decks take the planet map's colour: chromophores, the
 		// albedo for which a thick cloud reflects it)
 		vec3 a = P.albedo[i].rgb;
-		if (i < 2) a = mix (a, min (a, mapAlb), P.misc2.y);
+		// (the chromophores: the hills' fresh ice whiter, the valleys'
+		// older cloud more coloured, as Juno sees the cloud tops)
+		if (i < 2) a = mix (a, min (a, mapAlb), clamp (P.misc2.y * mix (1.6, 0.35, deckHill), 0.0, 1.0));
 		ext += e, sum += e * clamp (a, 0.0, 1.0);
 	}
 	float tw = towerDetail || lightTowers ? Towers (x, r, u, towerDetail) : 0.0;

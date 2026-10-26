@@ -562,6 +562,7 @@ bool VolumetricClouds::LoadDecks (const char *planet, Decks &dk)
 			if (ss >> d.base >> d.top >> d.ext >> d.scale >> d.albedo[0] >> d.albedo[1] >> d.albedo[2] >> d.coverage >> d.contrast >> towers) {
 				d.towers = towers != 0;
 				if (!(ss >> d.holes)) d.holes = 0.0f;
+				if (!(ss >> d.stretch)) d.stretch = 1.0f;
 				if (dk.decks.size() < (size_t)GG_LAYERS) dk.decks.push_back (d);
 			}
 		} else if (key == "HAZE") ss >> dk.haze[0] >> dk.haze[1] >> dk.haze[2] >> dk.hazeExt >> dk.hazeH;
@@ -602,7 +603,7 @@ void VolumetricClouds::RenderGasGiant (const GasGiantFrame &f)
 		g.layer[i][2] = (float)d.ext, g.layer[i][3] = (float)(1.0 / d.scale);
 		for (int k = 0; k < 3; k++) g.albedo[i][k] = d.albedo[k];
 		g.albedo[i][3] = d.coverage;
-		g.lmisc[i][0] = d.contrast, g.lmisc[i][1] = d.towers ? 1.0f : 0.0f, g.lmisc[i][3] = d.holes;
+		g.lmisc[i][0] = d.contrast, g.lmisc[i][1] = d.stretch, g.lmisc[i][3] = d.holes;
 		double um = oapiGetWindVector (f.hPlanet, clng, latMax, 0.5 * (d.base + d.top), 0).x;
 		g.lmisc[i][2] = ujMax > 0.0 ? (float)(um / oapiGetWindVector (f.hPlanet, clng, latMax, 0.0, 0).x) : 1.0f;
 	}

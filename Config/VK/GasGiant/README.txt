@@ -2,7 +2,7 @@ Cloud decks of gas giants (Vulkan client, Clouds.cpp: ray-marched when the
 camera is within RANGE of them). One file per planet, <Planet>.cfg.
 Altitudes are above the 1-bar level (the planet's radius) [m].
 
-LAYER base top extinction scale r g b coverage contrast towers [holes]
+LAYER base top extinction scale r g b coverage contrast towers [holes [stretch]]
     base, top    altitude of the deck's base and top [m]
     extinction   [1/m] at full density (optical depth: extinction x thickness)
     scale        size of its cloud features [m] (zonally stretched by STRETCH)
@@ -16,6 +16,8 @@ LAYER base top extinction scale r g b coverage contrast towers [holes]
     towers       convective storm towers rise from it (1) or not (0)
     holes        clearings: large holes (hundreds of km) in the deck, 0 (none)
                  to about 0.6 (mostly open)
+    stretch      its own zonal stretch, times STRETCH (default 1: e.g. Neptune's
+                 cirrus drawn out into streaks along the latitudes)
 GAS ar ag ab sr sg sb
     the gas: absorption (aerosols, chromophores, methane) and Rayleigh scattering (the
     blues) per bar of the column above, rgb (optical depth; the light

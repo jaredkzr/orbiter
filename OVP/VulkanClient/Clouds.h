@@ -42,7 +42,7 @@ public:
 
 	/// Cloud decks of a gas giant (Config/VK/GasGiant/<name>.cfg; altitudes
 	/// above the 1-bar level)
-	struct Deck { double base, top, ext, scale; float albedo[3], coverage, contrast; bool towers; float holes; };
+	struct Deck { double base, top, ext, scale; float albedo[3], coverage, contrast; bool towers; float holes, stretch; };
 	struct Decks {
 		std::vector<Deck> decks;
 		float haze[3] = { 0.5f, 0.4f, 0.3f };
