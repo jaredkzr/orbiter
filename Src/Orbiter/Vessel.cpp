@@ -4436,6 +4436,7 @@ void Vessel::CollectGroundContacts (const StateVectors &s, const StateVectors &s
 {
 	nforcevec = 0;
 	if (!proxybody || !ntouchdown_vtx) return;
+	if (proxybody->Type() == OBJTP_PLANET && !((const Planet*)proxybody)->HasSurface()) return; // (gas giants)
 	if (contact_warm.size() != 3*ntouchdown_vtx) contact_warm.assign (3*ntouchdown_vtx, 0.0);
 
 	const StateVectors &P0 = *proxybody->s0, &P1 = *proxybody->s1; // the planet at the start and end of the step
@@ -4968,6 +4969,7 @@ void Vessel::PostUpdate ()
 bool Vessel::CheckSurfaceContact () const
 {
 	if (!proxybody) return false; // sanity check
+	if (proxybody->Type() == OBJTP_PLANET && !((const Planet*)proxybody)->HasSurface()) return false;
 	double alt = Altitude();
 	if (alt > 2.0*size) return false;
 	Matrix T (sp.L2H);

@@ -4153,6 +4153,32 @@ OAPIFUNC VECTOR3 oapiGetGroundVector (OBJHANDLE hPlanet, double lng, double lat,
 OAPIFUNC VECTOR3 oapiGetWindVector (OBJHANDLE hPlanet, double lng, double lat, double alt, int frame = 0, double *windspeed = NULL);
 
 	/**
+	* \brief Whether a planet has a solid surface (false for gas giants, which
+	*   have a deep atmosphere instead: vessels descend through it).
+	* \param hPlanet planet handle
+	*/
+OAPIFUNC bool oapiPlanetHasSurface (OBJHANDLE hPlanet);
+
+	/**
+	* \brief The convective storm at a point of a gas giant's atmosphere (storm
+	*   cells drift with the jets and wax and wane over hours).
+	* \param hPlanet planet handle
+	* \param lng longitude [rad]
+	* \param lat latitude [rad]
+	* \param alt altitude above the 1-bar level [m]
+	* \param strength the storm's activity there, 0..1 (output)
+	* \param updraft its updraft there [m/s] (output, may be NULL)
+	* \return false if the planet is not a gas giant (outputs 0)
+	*/
+OAPIFUNC bool oapiGetStorm (OBJHANDLE hPlanet, double lng, double lat, double alt, double *strength, double *updraft = NULL);
+
+	/**
+	* \brief The pressure beyond which a gas giant's atmosphere crushes vessels
+	*   [Pa] (0: none). Not enforced yet.
+	*/
+OAPIFUNC double oapiGetCrushPressure (OBJHANDLE hPlanet);
+
+	/**
 	* \brief Returns the number of perturbation coefficients defined for a planet.
 	* \details Returns the number of perturbation coefficients defined for a planet to describe the
 	* latitude-dependent perturbation of its gaviational potential. A return value of 0 indicates

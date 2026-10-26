@@ -55,6 +55,7 @@ set(headless_src
 	PinesGrav.cpp
 	Celbody.cpp
 	Planet.cpp
+	GasGiant.cpp
 	Rigidbody.cpp
 	Star.cpp
 # Vessel classes

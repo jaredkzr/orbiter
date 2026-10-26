@@ -959,6 +959,30 @@ DLLEXPORT VECTOR3 oapiGetWindVector (OBJHANDLE hPlanet, double lng, double lat, 
 	return MakeVECTOR3 (((Planet*)hPlanet)->WindVelocity (lng, lat, alt, frame, 0, windspeed));
 }
 
+DLLEXPORT bool oapiPlanetHasSurface (OBJHANDLE hPlanet)
+{
+	Body *b = (Body*)hPlanet;
+	return b->Type() != OBJTP_PLANET || ((Planet*)b)->HasSurface();
+}
+
+DLLEXPORT bool oapiGetStorm (OBJHANDLE hPlanet, double lng, double lat, double alt, double *strength, double *updraft)
+{
+	Body *b = (Body*)hPlanet;
+	const GasGiant *gg = b->Type() == OBJTP_PLANET ? ((Planet*)b)->GetGasGiant () : nullptr;
+	GasGiant::Storm st{0.0, 0.0};
+	if (gg) st = gg->StormAt (lng, lat, alt, (td.MJD1 - 51544.5) * 86400.0);
+	if (strength) *strength = st.strength;
+	if (updraft) *updraft = st.updraft;
+	return gg != nullptr;
+}
+
+DLLEXPORT double oapiGetCrushPressure (OBJHANDLE hPlanet)
+{
+	Body *b = (Body*)hPlanet;
+	const GasGiant *gg = b->Type() == OBJTP_PLANET ? ((Planet*)b)->GetGasGiant () : nullptr;
+	return gg ? gg->CrushPressure () : 0.0;
+}
+
 // ===========================================================================
 // Aerodynamics helper functions
 

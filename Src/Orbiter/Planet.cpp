@@ -280,6 +280,20 @@ Planet::Planet (char *fname)
 		if (!GetItemVector (ifs, "AtmTintColor", tintcol))
 			tintcol.Set (fog.col.x*0.2, fog.col.y*0.2, fog.col.z*0.2);
 	}
+	{
+		// a gas giant: its own atmosphere model and winds, no solid surface
+		auto gg = std::make_unique<GasGiant>();
+		if (gg->Load (ifs, atm.R ? atm.R : 3615.0, atm.gamma ? atm.gamma : 1.4, Ggrav * mass / (size * size))) {
+			if (!AtmInterface) { // (defaults as for config parameters)
+				atm.altlimit = 3000e3, atm.horizonalt = 1000e3;
+				atm.R = 3615.0, atm.gamma = 1.4;
+			}
+			AtmInterface = 5;
+			atm.p0 = gg->Pressure1 (), atm.rho0 = gg->Density1 ();
+			gasgiant = std::move (gg);
+		}
+		ifs.clear (); ifs.seekg (0);
+	}
 
 	GetItemReal (ifs, "HorizonExcess", horizon_excess);
 	GetItemReal (ifs, "BBExcess", bb_excess);
@@ -875,6 +889,9 @@ bool Planet::GetAtmParam (double alt, double lng, double lat, ATMPARAM *prm) con
 		case 3:
 			module->clbkAtmParam (alt, prm);
 			return true;
+		case 5:
+			gasgiant->AtmParam (alt, prm);
+			return true;
 		case 4: {
 			ATMOSPHERE::PRM_IN prm_in;
 			ATMOSPHERE::PRM_OUT prm_out;
@@ -927,7 +944,25 @@ Vector Planet::WindVelocity (double lng, double lat, double alt, int frame, Wind
 {
 	Vector wv(0,0,0);
 
-	if (bEnableWind && HasAtmosphere()) {
+	if (gasgiant) {
+		// the jets and storms, and gusts (a time-correlated random
+		// perturbation per vessel, as large as the turbulence there)
+		double t = (td.MJD1 - 51544.5) * 86400.0;
+		wv = gasgiant->Wind (lng, lat, alt, t);
+		if (prm) {
+			double amp = gasgiant->Turbulence (lng, lat, alt, t);
+			const double corr_length = 2.0; // [s]
+			double tp = td.SimT1;
+			double corr = 1.0 - min (1.0, fabs (tp - prm->pert_t) / corr_length);
+			for (int dim = 0; dim < 3; dim++) {
+				double p = ((double)rand()/(double)RAND_MAX - 0.5) * 2.0 * amp * (dim == 1 ? 0.5 : 1.0);
+				p = corr * prm->pert_v.data[dim] + (1.0 - corr) * p;
+				prm->pert_v.data[dim] = p;
+				wv.data[dim] += p;
+			}
+			prm->pert_t = tp;
+		}
+	} else if (bEnableWind && HasAtmosphere()) {
 		
 		int k, dim;
 		DWORD r, rnd;

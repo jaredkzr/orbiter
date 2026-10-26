@@ -1,0 +1,38 @@
+BEGIN_HYPERDESC
+<h1>Gas giant atmosphere and winds</h1>
+Jupiter's deep atmosphere: two probes are dropped from 20 km above the
+1-bar level into the eastward jet at 24 N and the westward jet at 20 S.
+They must sink through altitude 0 (no solid surface), slow as the air
+thickens, and drift with their jets.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51983.45
+  Script Tests/GasGiantTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship NORTH
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET NORTH
+  MODE Extern
+  POS 4.0 -20.0 -30
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+NORTH:ShuttlePB
+  STATUS Orbiting Jupiter
+  ELEMENTS 80000000.0 0.00000 10.0 30.0 0.0 0.0 51983.45
+  PRPLEVEL 0:1.000
+END
+SOUTH:ShuttlePB
+  STATUS Orbiting Jupiter
+  ELEMENTS 80000000.0 0.00000 10.0 30.0 0.0 90.0 51983.45
+  PRPLEVEL 0:1.000
+END
+END_SHIPS

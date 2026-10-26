@@ -968,6 +968,9 @@ void Interpreter::LoadAPI ()
 		{"get_planetatmparams", oapi_get_planetatmparams},
 		{"get_groundvector", oapi_get_groundvector},
 		{"get_windvector", oapi_get_windvector},
+		{"planet_hassurface", oapi_planet_hassurface},
+		{"get_storm", oapi_get_storm},
+		{"get_crushpressure", oapi_get_crushpressure},
 		{"get_planetjcoeffcount", oapi_get_planetjcoeffcount},
 		{"get_planetjcoeff", oapi_get_planetjcoeff},
 		{"surface_elevation", oapi_surface_elevation},
@@ -5004,6 +5007,64 @@ int Interpreter::oapi_get_windvector(lua_State *L)
 	lua_pushvector(L, gv);
 	lua_pushnumber(L, windspeed);
 	return 2;
+}
+
+/***
+Whether a planet has a solid surface (false for gas giants).
+
+@function planet_hassurface
+@tparam handle hPlanet planet handle
+@treturn bool true if vessels can land on it
+*/
+int Interpreter::oapi_planet_hassurface(lua_State *L)
+{
+	OBJHANDLE hRef;
+	ASSERT_SYNTAX(lua_islightuserdata(L, 1), "Argument 1: invalid type (expected handle)");
+	ASSERT_SYNTAX(hRef = lua_toObject(L, 1), "Argument 1: invalid object");
+	lua_pushboolean(L, oapiPlanetHasSurface(hRef));
+	return 1;
+}
+
+/***
+The convective storm at a point of a gas giant's atmosphere.
+
+@function get_storm
+@tparam handle hPlanet planet handle
+@tparam number lng longitude [rad]
+@tparam number lat latitude [rad]
+@tparam number alt altitude above the 1-bar level [m]
+@treturn number storm activity there, 0..1 (nil if not a gas giant)
+@treturn number updraft there [m/s]
+*/
+int Interpreter::oapi_get_storm(lua_State *L)
+{
+	OBJHANDLE hRef;
+	ASSERT_SYNTAX(lua_islightuserdata(L, 1), "Argument 1: invalid type (expected handle)");
+	ASSERT_SYNTAX(hRef = lua_toObject(L, 1), "Argument 1: invalid object");
+	double lng = luaL_checknumber(L, 2);
+	double lat = luaL_checknumber(L, 3);
+	double alt = luaL_checknumber(L, 4);
+	double s, u;
+	if (!oapiGetStorm(hRef, lng, lat, alt, &s, &u)) { lua_pushnil(L); return 1; }
+	lua_pushnumber(L, s);
+	lua_pushnumber(L, u);
+	return 2;
+}
+
+/***
+The pressure beyond which a gas giant crushes vessels (not enforced yet).
+
+@function get_crushpressure
+@tparam handle hPlanet planet handle
+@treturn number pressure [Pa] (0: none)
+*/
+int Interpreter::oapi_get_crushpressure(lua_State *L)
+{
+	OBJHANDLE hRef;
+	ASSERT_SYNTAX(lua_islightuserdata(L, 1), "Argument 1: invalid type (expected handle)");
+	ASSERT_SYNTAX(hRef = lua_toObject(L, 1), "Argument 1: invalid object");
+	lua_pushnumber(L, oapiGetCrushPressure(hRef));
+	return 1;
 }
 
 /***

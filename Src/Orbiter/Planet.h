@@ -22,6 +22,7 @@
 #include "GraphicsAPI.h"
 #include "Orbiter.h"
 #include "TerrainDetail.h"
+#include "GasGiant.h"
 #include <functional>
 #include <memory>
 namespace scatter { class GroundScatter; }
@@ -133,6 +134,9 @@ public:
 	// reference to ecliptic reference
 
 	inline bool HasAtmosphere() const { return AtmInterface != 0; }
+	/// a gas giant (GasGiant.h): deep atmosphere, winds, no solid surface
+	inline const GasGiant *GetGasGiant () const { return gasgiant.get(); }
+	inline bool HasSurface () const { return !gasgiant; }
 	inline const ATMCONST *AtmParams () const { return (AtmInterface ? &atm : 0); }
 	// atmospheric parameters
 
@@ -268,6 +272,7 @@ protected:
 	double bb_excess;        // specifies how much to inflate the bounding box (1=double each side)
 	FogParam fog;            // distance fog render parameters
 	static bool bEnableWind; // allow atmospheric wind effects
+	std::unique_ptr<GasGiant> gasgiant;
 	oapi::GraphicsClient::LABELTYPE *labelLegend;  // label type legend (label_version >= 2)
 	int nLabelLegend;        // number of entries in legend
 
