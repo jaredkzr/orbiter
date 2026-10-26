@@ -910,6 +910,48 @@ double Scene::DeckTransmittance (const VECTOR3 &gpos, bool direct) const
 	return direct ? dir : l;
 }
 
+bool Scene::DeckPath (const VECTOR3 &a, const VECTOR3 &b, double &direct, double &diffuse) const
+{
+	direct = 1.0, diffuse = 0.0;
+	OBJHANDLE hp = oapiCameraProxyGbody ();
+	if (!hp) return false;
+	auto it = visuals.find (hp);
+	if (it == visuals.end()) return false;
+	const VPlanet *vp = dynamic_cast<const VPlanet*>(it->second.get());
+	const VolumetricClouds::Decks *dk = vp ? vp->Decks () : nullptr;
+	if (!dk) return false;
+	VECTOR3 pp;
+	oapiGetGlobalPos (hp, &pp);
+	double R = oapiGetSize (hp), len = length (b - a);
+	// optical depths along the segment (16 samples): the decks' and haze's
+	// mean extinction (as Decks::ColumnAbove), the gas's Rayleigh
+	// scattering and absorption (per bar, over the local scale height)
+	const int N = 16;
+	double ts = 0.0, tsr = 0.0, ta = 0.0;
+	for (int i = 0; i < N; i++) {
+		VECTOR3 x = a + (b - a) * ((i + 0.5) / N) - pp;
+		double rl = length (x), alt = rl - R, e = 0.0, ea = 0.0;
+		for (const VolumetricClouds::Deck &d : dk->decks)
+			if (alt > d.base && alt < d.top) e += d.ext * 0.35 * d.coverage, ea += d.ext * 0.35 * d.coverage * (1.0 - d.albedo[1]);
+		e += dk->hazeExt * exp (-alt / dk->hazeH);
+		ATMPARAM p0, p1;
+		oapiGetPlanetAtmParams (hp, rl, &p0);
+		oapiGetPlanetAtmParams (hp, rl + 1e3, &p1);
+		double bar = p0.p / 1e5, ib = p1.p > 0.0 ? log (p0.p / p1.p) / 1e3 : 0.0;
+		double ds = len / N;
+		ts += e * ds, tsr += dk->gasRay[1] * bar * ib * ds, ta += (ea + dk->gasAbs[1] * bar * ib) * ds;
+	}
+	// the beam: all of it; what the clouds scatter forwards and diffuse on
+	// (conservative scattering through a slab, as Decks::Light: the
+	// similarity-scaled depth; the absorption as in the diffusion)
+	const double GC = 0.85;
+	double tr = (1.0 - GC) * ts + tsr;
+	direct = exp (-(ts + tsr + ta));
+	double tot = exp (-sqrt (3.0 * ta * (ta + tr))) / (1.0 + 0.75 * tr);
+	diffuse = std::max (tot - direct, 0.0);
+	return true;
+}
+
 double Scene::Sunlight (const VECTOR3 &gpos)
 {
 	double f = SunVisibility (gpos) * DeckTransmittance (gpos);
@@ -1185,9 +1227,20 @@ void Scene::FillFrameUniforms (void *pfu)
 	// lightning in a gas giant's storms (the flashes of the last frame)
 	for (const VolumetricClouds::Flash &fl : vclouds->Flashes ()) {
 		if (fl.brightness <= 0.01) continue;
+		// (through the clouds between: the beam, shadowed by the vessels'
+		// meshes, and the diffused light, from all about: ambient)
+		double dir = 1.0, dif = 0.0;
+		DeckPath (fl.gpos, camPos, dir, dif);
+		const float tint[3] = { 0.80f, 0.86f, 1.0f };
+		double d2 = dotp (fl.gpos - camPos, fl.gpos - camPos);
+		for (int k = 0; k < 3; k++) {
+			float a = (float)(0.6 * dif * fl.brightness * 1.2e10 * tint[k] / (d2 + 25e6));
+			fu.ambient[k] += a;
+		}
+		if (dir < 1e-4) continue;
 		LightSource l{};
 		l.pos = fl.gpos, l.dir = _V(0, 1, 0);
-		for (int k = 0; k < 3; k++) l.col[k] = (float)(fl.brightness * 1.2e10 * (k == 0 ? 0.80 : k == 1 ? 0.86 : 1.0));
+		for (int k = 0; k < 3; k++) l.col[k] = (float)(dir * fl.brightness * 1.2e10 * tint[k]);
 		l.range = 300e3;
 		l.att[0] = 25e6, l.att[1] = 0.0, l.att[2] = 1.0; // (inverse square, softened within 5 km)
 		l.spot = false;

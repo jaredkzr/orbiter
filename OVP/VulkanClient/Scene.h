@@ -169,6 +169,10 @@ public:
 	/// and gas (the planet near the camera; 1 elsewhere): the direct beam
 	/// and the diffuse light, or (direct) the beam only
 	double DeckTransmittance (const VECTOR3 &gpos, bool direct = false) const;
+	/// light of a point source at a (global) reaching b through a gas
+	/// giant's decks and gas (green): the unscattered share (direct) and the
+	/// share diffused by the clouds on the way (diffuse); false if no decks
+	bool DeckPath (const VECTOR3 &a, const VECTOR3 &b, double &direct, double &diffuse) const;
 	const class VolumetricClouds *VClouds () const { return vclouds.get(); }
 	/// temporal anti-aliasing active (projection jitter, motion vectors)
 	bool TemporalAAEnabled () const { return taaEnabled; }
