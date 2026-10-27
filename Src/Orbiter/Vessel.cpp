@@ -892,6 +892,10 @@ void Vessel::SetGlobalOrientation (const Vector &arot)
 		           sinx*siny*cosz-cosx*sinz, sinx*siny*sinz+cosx*cosz, sinx*cosy,
 				   cosx*siny*cosz+sinx*sinz, cosx*siny*sinz-sinx*cosz, cosx*cosy);
 		s0->Q.Set (s0->R);
+		if (g_bStateUpdate && s1 && s1 != s0) { // (during the state update, e.g. a post-step script: the new state too)
+			s1->R.Set (s0->R);
+			s1->Q.Set (s0->Q);
+		}
 		UpdateAttachments();
 	}
 }
@@ -905,6 +909,10 @@ void Vessel::SetRotationMatrix (const Matrix &R)
 	} else {
 		s0->R.Set (R);
 		s0->Q.Set (R);
+		if (g_bStateUpdate && s1 && s1 != s0) { // (during the state update, e.g. a post-step script: the new state too)
+			s1->R.Set (R);
+			s1->Q.Set (R);
+		}
 		UpdateAttachments();
 	}
 }
@@ -4001,6 +4009,8 @@ void Vessel::UpdateBodyForces ()
 		if (sp.is_in_atm) UpdateAerodynamicForces ();
 		if (rpressure) UpdateRadiationForces ();
 	}
+	// (parts lost: the moments about the centre of gravity of what is left)
+	if (dmg.cg.x || dmg.cg.y || dmg.cg.z) Amom_add -= crossp (Flin_add, dmg.cg);
 	bForceActive |= (Flin_add.x || Flin_add.y || Flin_add.z || Amom_add.x || Amom_add.y || Amom_add.z);
 }
 
@@ -4159,6 +4169,10 @@ void Vessel::UpdateThrustForces ()
 	Thrust.Set (0,0,0);
 	for (auto it = m_thruster.begin(); it != m_thruster.end(); it++) {
 		ThrustSpec* thruster = *it;
+		if (!part_lost.empty() && ElementLost (thruster, MakeVector (thruster->ref))) { // (broken off)
+			thruster->level = thruster->level_permanent = thruster->level_override = 0.0;
+			continue;
+		}
 		if (thruster->level = max (0.0, min (1.0, thruster->level_permanent + thruster->level_override))) {
 			if ((ts = thruster->tank) && ts->mass) {     // fuel available?
 				th = thruster->maxth0 * thruster->level; // vacuum thrust
@@ -4261,6 +4275,9 @@ void Vessel::UpdateAerodynamicForces ()
 	const double mu = 1.7894e-5; // viscosity coefficient dummy - MAKE VARIABLE!
 	double Re0 = sp.atmrho * sp.airspd / mu; // template for Reynolds coefficient (to be multiplied by chord length)
 
+	// (parts lost: smaller cross sections and wings)
+	const Vector cs (this->cs.x*dmg.cs.x, this->cs.y*dmg.cs.y, this->cs.z*dmg.cs.z);
+
 	// damping of angular velocity
 	double dynpm = 0.5*sp.atmrho * (sp.airspd+30)*(sp.airspd+30); // modified dynamic pressure
 	double fac = dynpm * cs.y;
@@ -4301,37 +4318,37 @@ void Vessel::UpdateAerodynamicForces ()
 				af->cf (aoa, sp.atmM, Re0*af->c, &CL, &Cm, &CD);
 			else
 				((AirfoilCoeffFuncEx)af->cf)((VESSEL*)modIntf.v, aoa, sp.atmM, Re0*af->c, af->context, &CL, &Cm, &CD);
-			if (af->S) S = af->S;
+			if (af->S) S = af->S * dmg.liftV;
 			else       S = fabs(ddir.z)*cs.z + fabs(ddir.y)*cs.y; // use projected vessel CS as reference area
-			AddForce (ldir*(lift=(CL*sp.dynp*S)) + ddir*(drag=(CD*sp.dynp*S)), af->ref);
-			if (Cm) Amom_add.x += Cm*sp.dynp*af->S*af->c;
+			AddForce (ldir*(lift=(CL*sp.dynp*S)) + ddir*(drag=(CD*sp.dynp*S)), af->ref + dmg.refV);
+			if (Cm) Amom_add.x += Cm*sp.dynp*af->S*dmg.liftV*af->c;
 			Lift += lift, Drag += drag;
 		} else if (af->align == LIFT_HORIZONTAL) { // horizontal lift component
 			if (af->version == 0)
 				af->cf (beta, sp.atmM, Re0*af->c, &CL, &Cm, &CD);
 			else
 				((AirfoilCoeffFuncEx)af->cf)((VESSEL*)modIntf.v, beta, sp.atmM, Re0*af->c, af->context, &CL, &Cm, &CD);
-			if (af->S) S = af->S;
+			if (af->S) S = af->S * dmg.liftH;
 			else       S = fabs(ddir.z)*cs.z + fabs(ddir.x)*cs.z; // use projected vessel CS as reference area
-			AddForce (sdir*(side = (CL*sp.dynp*S)) + ddir*(drag=(CD*sp.dynp*S)), af->ref);
-			if (Cm) Amom_add.y += Cm*sp.dynp*af->S*af->c;
+			AddForce (sdir*(side = (CL*sp.dynp*S)) + ddir*(drag=(CD*sp.dynp*S)), af->ref + dmg.refH);
+			if (Cm) Amom_add.y += Cm*sp.dynp*af->S*dmg.liftH*af->c;
 			Drag += drag;
 			SideForce += side;
 		} else if (af->align == FORCE_AND_MOMENT) {
 			((AirfoilCoeffFuncEx2)af->cf)((VESSEL*)modIntf.v, -_V(sp.airvel_ship.unit().x, sp.airvel_ship.unit().y, sp.airvel_ship.unit().z), aoa, beta, gamma, sp.atmM, Re0 * af->c, af->context, &CA, &CN, &CY, &Cl, &Cm, &Cn);
-			if (af->S) S = af->S;
+			if (af->S) S = af->S * dmg.liftV;
 			else       S = fabs(ddir.z) * cs.z + fabs(ddir.x) * cs.z; // use projected vessel CS as reference area
 
 			Vector AeroForce((CY * S) * sp.dynp, (CN * S) * sp.dynp, -(CA * S) * sp.dynp);
 
-			AddForce(AeroForce, af->ref);
+			AddForce(AeroForce, af->ref + dmg.refV);
 			Lift = dotp(AeroForce, ldir);
 			Drag = dotp(AeroForce, ddir);
 			SideForce = dotp(AeroForce, sdir);
 			
-			Amom_add.x += Cm * sp.dynp * af->S * af->c;
-			Amom_add.y -= Cn * sp.dynp * af->S * af->c;
-			Amom_add.z -= Cl * sp.dynp * af->S * af->c;
+			Amom_add.x += Cm * sp.dynp * af->S * dmg.liftV * af->c;
+			Amom_add.y -= Cn * sp.dynp * af->S * dmg.liftV * af->c;
+			Amom_add.z -= Cl * sp.dynp * af->S * dmg.liftV * af->c;
 
 		}
 	}
@@ -4339,6 +4356,7 @@ void Vessel::UpdateAerodynamicForces ()
 	// airfoil control surfaces
 	for (i = 0; i < nctrlsurf; i++) {
 		double lvl = ctrlsurf_level[ctrlsurf[i]->ctrl].curr;
+		if (lvl && !part_lost.empty() && ElementLost (ctrlsurf[i], ctrlsurf[i]->ref)) lvl = 0.0; // (broken off)
 		if (lvl) {
 			double fac = ctrlsurf[i]->area * sp.dynp;
 			double cdrag = fabs (lvl) * fac;
@@ -4364,6 +4382,7 @@ void Vessel::UpdateAerodynamicForces ()
 	// user-defined drag elements
 	for (i = 0; i < ndragel; i++) {
 		double lvl = *dragel[i]->drag;
+		if (lvl && !part_lost.empty() && ElementLost (dragel[i], dragel[i]->ref)) lvl = 0.0; // (broken off)
 		if (lvl) {
 			CD = lvl*dragel[i]->factor;
 			drag = CD*sp.dynp;
@@ -4461,6 +4480,10 @@ void Vessel::CollectGroundContacts (const StateVectors &s, const StateVectors &s
 	for (DWORD i = 0; i < ntouchdown_vtx; i++) {
 		const TOUCHDOWN_VTX &tv = touchdown_vtx[i];
 		double *warm = &contact_warm[3*i];
+		if (!part_lost.empty() && ElementLost (&tv, tv.pos)) { // (broken off)
+			warm[0] = warm[1] = warm[2] = 0.0;
+			continue;
+		}
 		Vector pg (s.pos + mul (s.R, tv.pos));    // global position
 		Vector pl (tmul (P0.R, pg - P0.pos));      // planet-local position
 		double lng, lat, rad, elev = 0.0;
@@ -4502,6 +4525,42 @@ void Vessel::CollectGroundContacts (const StateVectors &s, const StateVectors &s
 			forcevec[nforcevec] = tmul (s.R, (p.t1*warm[1] + p.t2*warm[2]) / h);
 			forcepos[nforcevec] = tv.pos;
 			nforcevec++;
+		}
+	}
+
+	// damaged: the vertices of the hulls left are in contact with the ground
+	// too (the touchdown points on the parts lost are gone; the vessel
+	// rests on what is left), rigid contacts
+	if (!part_lost.empty()) {
+		const std::vector<collision::Hull> &hulls = Hulls();
+		double rmax = proxybody->Size() + sp.elev + margin + 200.0; // (no terrain lookups for points well above the ground)
+		for (size_t i = 0; i < hulls.size(); i++) {
+			if (PartLost (structure_.PartOfHull ((int)i))) continue;
+			for (const Vector &v : hulls[i].v) {
+				Vector pg (s.pos + mul (s.R, v));
+				Vector pl (tmul (P0.R, pg - P0.pos));
+				if (pl.length() > rmax) continue;
+				double lng, lat, rad, elev = 0.0;
+				proxybody->LocalToEquatorial (pl, lng, lat, rad);
+				Vector nh (0,1,0);
+				if (emgr) elev = emgr->Elevation (lat, lng, reslvl, &etile, &nh);
+				double slng = sin(lng), clng = cos(lng), slat = sin(lat), clat = cos(lat);
+				Matrix L2H (-slng,0,clng, clat*clng,slat,clat*slng, -slat*clng,clat,-slat*slng);
+				Vector nl (tmul (L2H, nh));
+				double C = (rad - proxybody->Size() - elev) * dotp (nl, pl/rad) - collision::SKIN;
+				if (C > margin) continue;
+				contact::Point p;
+				p.a = body, p.b = -1;
+				p.ra = pg - sb.pos;
+				p.n = mul (P0.R, nl);
+				contact::Tangents (p.n, Vector (1,0,0), p.t1, p.t2);
+				p.vs = P1.vel + mul (P1.R, Vector (-pl.z*wrot, 0, pl.x*wrot));
+				p.C = C;
+				p.k = p.c = 0.0;
+				p.mu1 = p.mu2 = 0.6;
+				p.warm = nullptr;
+				pts.push_back (p);
+			}
 		}
 	}
 
@@ -4695,15 +4754,48 @@ int Vessel::BreakPart (int part, double vsep)
 		}
 	}
 
-	// the piece, moving with the vessel's point where it is
+	// its moments of inertia about the vessel's origin (a thin shell, as
+	// the structure's mass is shared out by area)
+	double S[3] = {0,0,0}, area = 0.0;
+	for (const Debris::Group &g : groups)
+		for (size_t k = 0; k + 2 < g.vtx.size(); k += 3) {
+			Vector p[3];
+			for (int i = 0; i < 3; i++) p[i] = Vector (g.vtx[k+i].x, g.vtx[k+i].y, g.vtx[k+i].z);
+			double a = 0.5 * crossp (p[1]-p[0], p[2]-p[0]).length();
+			Vector sum (p[0] + p[1] + p[2]);
+			area += a;
+			for (int j = 0; j < 3; j++)
+				S[j] += a / 12.0 * (p[0].data[j]*p[0].data[j] + p[1].data[j]*p[1].data[j] + p[2].data[j]*p[2].data[j] + sum.data[j]*sum.data[j]);
+		}
+	Vector Ip;
+	if (area > 0.0) Ip.Set (m*(S[1]+S[2])/area, m*(S[0]+S[2])/area, m*(S[0]+S[1])/area);
+
+	// the piece, moving with the vessel's point where it is (the vessel
+	// turning about its centre of gravity)
 	const StateVectors &s = (g_bStateUpdate && s1 && s1 != s0) ? *s1 : *s0;
+	StateVectors sc (s);
+	sc.vel = s.vel - mul (s.R, crossp (dmg.cg, s.omega)); // (the velocity of the origin's point)
 	std::string dname = name + " " + parts[part].name;
-	Debris *d = new Debris (dname, name, m, cg, s, std::move (groups), pts);
+	Debris *d = new Debris (dname, name, m, cg, sc, std::move (groups), pts);
 	g_psys->AddDebris (d, this);
 
+	// what is left: its centre of gravity moves (the origin stays where it
+	// is), its velocity is that of the new centre of gravity (momentum
+	// conserved), and it loses the piece's inertia
+	double M = OwnMass();
+	Vector cg0 (dmg.cg), cg1 ((dmg.cg * M - cg * m) / (M - m));
+	AddVelocity (mul (s.R, crossp (cg1 - cg0, s.omega)));
+	Vector I0 (OwnPMI() * M);
+	auto Shift = [](const Vector &c, double mm) { return Vector (mm*(c.y*c.y + c.z*c.z), mm*(c.x*c.x + c.z*c.z), mm*(c.x*c.x + c.y*c.y)); };
+	Vector Ic (I0 + Shift (cg0, M) - Ip);               // (about the origin, without the piece)
+	Ic -= Shift (cg1, M - m);                            // (about the new centre of gravity)
+	Vector pmi1 (Ic / (M - m));
+	Vector pmi0 (OwnPMI());
+	for (int j = 0; j < 3; j++) pmi1.data[j] = std::max (pmi1.data[j], 0.1 * pmi0.data[j]);
+	dmg.cg = cg1;
+
 	// pushed apart (momentum conserved)
-	double M = mass;
-	Vector r (mul (s.R, cg));
+	Vector r (mul (s.R, cg - cg1));
 	Vector dir (r.length() > 1e-6 ? r.unit() : mul (s.R, Vector (0,1,0)));
 	if (vsep > 0.0 && M > m) {
 		d->AddVelocity (dir * (vsep * (M - m) / M));
@@ -4712,9 +4804,58 @@ int Vessel::BreakPart (int part, double vsep)
 
 	for (int p : piece) part_lost[p] = 1;
 	lost_mass += m;
+	lost_elements.clear();
 	UpdateMass ();
+	SetOwnPMI (pmi1);
+	UpdateDamageEffects ();
+
+	// (at rest on the ground: moving again, without the parts it stood on)
+	if (fstatus == FLIGHTSTATUS_LANDED) bForceActive = true;
+
+	// payloads attached to the piece are released
+	for (DWORD j = 0; j < ncattach; j++)
+		if (cattach[j]->mate && ElementLost (cattach[j], cattach[j]->ref)) DetachChild (cattach[j], 0.0);
+
 	LOGOUT ("%s: %s broke off (%d parts, %0.0f kg)", name.c_str(), parts[part].name.c_str(), (int)piece.size(), m);
+	if (modIntf.v->Version() >= 2) {
+		PARTLOSTINFO info = { (DWORD)part, (DWORD)piece.size(), m, (OBJHANDLE)d };
+		((VESSEL3*)modIntf.v)->clbkGeneric (VMSG_PARTLOST, part, &info);
+	}
 	return (int)piece.size();
+}
+
+bool Vessel::ElementLost (const void *e, const Vector &ref) const
+{
+	if (part_lost.empty()) return false;
+	auto it = lost_elements.find (e);
+	if (it != lost_elements.end() && it->second.first.dist2 (ref) == 0.0) return it->second.second;
+	bool lost = PartLost (structure_.PartAt (ref));
+	lost_elements[e] = { ref, lost };
+	return lost;
+}
+
+void Vessel::UpdateDamageEffects ()
+{
+	// the planform (projections along x, y, z) left, and the shift of its centre
+	const std::vector<structure::Part> &parts = structure_.Parts();
+	Vector tot, left, ct[3], cl[3];
+	for (size_t i = 0; i < parts.size(); i++) {
+		const structure::Part &p = parts[i];
+		for (int j = 0; j < 3; j++) {
+			tot.data[j] += p.proj.data[j], ct[j] += p.projc[j] * p.proj.data[j];
+			if (!PartLost ((int)i)) left.data[j] += p.proj.data[j], cl[j] += p.projc[j] * p.proj.data[j];
+		}
+	}
+	Vector shift[3];
+	for (int j = 0; j < 3; j++) {
+		dmg.cs.data[j] = tot.data[j] > 0.0 ? left.data[j] / tot.data[j] : 1.0;
+		if (tot.data[j] > 0.0 && left.data[j] > 0.0) {
+			shift[j] = cl[j] / left.data[j] - ct[j] / tot.data[j];
+			shift[j].data[j] = 0.0; // (in the plane)
+		}
+	}
+	dmg.liftV = dmg.cs.y, dmg.refV = shift[1]; // (lift along y: the planform in the xz plane)
+	dmg.liftH = dmg.cs.x, dmg.refH = shift[0]; // (side force along x: the yz plane)
 }
 
 bool Vessel::PartLost (int part) const
@@ -4775,7 +4916,7 @@ void Vessel::CollectHulls (const StateVectors &s, std::vector<collision::HullRef
 void Vessel::CollectFreePorts (const StateVectors &s, std::vector<collision::Port> &ports) const
 {
 	for (DWORD i = 0; i < ndock; i++)
-		if (!dock[i]->mate) ports.push_back (PortState (s, i));
+		if (!dock[i]->mate && !PortLost (i)) ports.push_back (PortState (s, i));
 }
 
 void Vessel::DockRefused (DWORD port, Vessel *mate, DWORD mateport, int reason, double value, double limit)
@@ -5025,10 +5166,10 @@ void Vessel::PostUpdate ()
 
 				Vector dref;
 				for (j = 0; j < ndock; j++) { // loop over my own docks
-					if (dock[j]->mate) continue; // dock already busy
+					if (dock[j]->mate || PortLost (j)) continue; // dock already busy (or broken off)
 					collision::Port pj (PortState (*s0, j));
 					for (k = 0; k < v->ndock; k++) { // loop over other vessel's docks
-						if (v->dock[k]->mate) continue; // dock already busy
+						if (v->dock[k]->mate || v->PortLost (k)) continue; // dock already busy
 						collision::Port pk (v->PortState (*v->s0, k));
 						double d = pj.pos.dist (pk.pos);
 						bool closing = dotp (pj.vel - pk.vel, pk.pos - pj.pos) > 0.0;
@@ -7651,6 +7792,7 @@ bool VESSEL::GetPartInfo (DWORD idx, PARTINFO *info) const
 	info->loadfactor = p.loadFactor;
 	info->strength = p.strength;
 	info->nhull = (DWORD)p.hulls.size();
+	info->projarea = _V(p.proj.x, p.proj.y, p.proj.z);
 	info->flags = vessel->PartLost ((int)idx) ? PART_LOST : 0;
 	return true;
 }

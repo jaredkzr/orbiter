@@ -454,6 +454,24 @@ namespace structure {
 			pt.radius = std::max (pt.radius, (cells[e] - pt.cg).length() + 0.87 * cs);
 		}
 
+		// projected areas (of a closed surface: half the sum of |n_j| over its area)
+		for (size_t t = 0; t < tris.size(); t++) {
+			const Triangle &tr = tris[t];
+			Vector n (crossp (tr.b - tr.a, tr.c - tr.a));
+			double a2 = n.length();
+			if (a2 <= 0.0) continue;
+			Vector c ((tr.a + tr.b + tr.c) / 3.0);
+			Part &pt = parts[triPart[t]];
+			for (int j = 0; j < 3; j++) {
+				double w = 0.25 * std::abs (n.data[j]); // (0.5 |n_j|/|n| * area, area = |n|/2)
+				pt.proj.data[j] += w;
+				pt.projc[j] += c * w;
+			}
+		}
+		for (Part &pt : parts)
+			for (int j = 0; j < 3; j++)
+				pt.projc[j] = pt.proj.data[j] > 0.0 ? pt.projc[j] / pt.proj.data[j] : pt.cg;
+
 		// the vessel's hulls: each to the part of the cell nearest its centre
 		for (int h = 0; h < nh; h++) {
 			hullPart[h] = PartAt (hulls[h].centre);

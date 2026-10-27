@@ -23,6 +23,7 @@
 
 #include <array>
 #include <vector>
+#include <map>
 #include <fstream>
 
 #include "Vesselbase.h"
@@ -1320,6 +1321,10 @@ protected:
 	// core part, and vessels docked or attached, do not break up).
 	bool PartLost (int part) const;
 	// a part has broken off
+	bool ElementLost (const void *e, const Vector &ref) const;
+	// an element (thruster, touchdown point, port...) at ref is on a part
+	// that has broken off (cached per element)
+	bool PortLost (DWORD i) const { return !part_lost.empty() && ElementLost (dock[i], dock[i]->ref); }
 	double StructMass () const { return std::max (emass - lost_mass, 0.0); }
 	// empty mass without the parts broken off
 	void CollectFreePorts (const StateVectors &s, std::vector<collision::Port> &ports) const;
@@ -1702,6 +1707,14 @@ private:
 	mutable double structure_emass = -1.0;
 	std::vector<char> part_lost;                 // parts broken off (empty: none)
 	double lost_mass = 0.0;                      // [kg] their mass
+	struct DamageEffects {                       // of the parts broken off
+		Vector cg;                               // centre of gravity of what is left (vessel frame; the origin stays)
+		Vector cs = Vector (1,1,1);              // fraction of the cross sections (x, y, z) left
+		double liftV = 1.0, liftH = 1.0;         // fraction of the planform left (airfoils with vertical, horizontal lift)
+		Vector refV, refH;                       // shift of their lift points
+	} dmg;
+	void UpdateDamageEffects ();
+	mutable std::map<const void*, std::pair<Vector,bool>> lost_elements; // (ElementLost cache)
 	struct ExtGroup {                            // a group of an external mesh
 		UINT mesh;
 		const Mesh *meshp;

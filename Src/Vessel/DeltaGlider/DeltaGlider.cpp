@@ -686,6 +686,10 @@ double DeltaGlider::GetMaxHoverThrust () const
 
 void DeltaGlider::TestDamage ()
 {
+	// (the core's structural damage model breaks the airframe instead: parts
+	// break off when overloaded)
+	if (GetPartCount() > 1) return;
+
 	bool newdamage = false;
 	double dt = oapiGetSimStep();
 
@@ -1711,6 +1715,9 @@ int DeltaGlider::clbkGeneric (int msgid, int prm, void *context)
 		return Lua_InitInterpreter (context);
 	case VMSG_LUAINSTANCE:
 		return Lua_InitInstance (context);
+	case VMSG_PARTLOST: // (a part broke off: the core has applied the loss)
+		ssys_failure->MWSActivate();
+		return 1;
 	}
 	return 0;
 }

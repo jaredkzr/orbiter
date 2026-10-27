@@ -2111,6 +2111,7 @@ typedef union {
 #define VMSG_LUAINTERPRETER    0x0001 ///< initialise Lua interpreter
 #define VMSG_LUAINSTANCE       0x0002 ///< create Lua vessel instance
 #define VMSG_DOCKREFUSED       0x0003 ///< docking refused: prm is the vessel's docking port index, context a pointer to a DOCKREFUSEDINFO
+#define VMSG_PARTLOST          0x0004 ///< a structural part broke off: prm is the part's index, context a pointer to a PARTLOSTINFO
 #define VMSG_USER              0x1000 ///< base index for user-defined messages
 //@}
 
@@ -2125,6 +2126,20 @@ typedef struct {
 	double value;      ///< the relative speed [m/s] or misalignment [rad]
 	double limit;      ///< the limit it exceeded (same units)
 } DOCKREFUSEDINFO;
+
+/**
+ * \brief A part broke off a vessel (VMSG_PARTLOST)
+ * \note The core has already applied the loss: the vessel's mass, centre of
+ *   gravity and inertia, thrusters, airfoils (planform), control surfaces,
+ *   drag elements, touchdown points and docking ports on the parts lost.
+ * \sa VESSEL::BreakPart, VESSEL::GetPartInfo
+ */
+typedef struct {
+	DWORD part;        ///< index of the part whose joint broke
+	DWORD nparts;      ///< number of parts broken off with it (the parts beyond it)
+	double mass;       ///< mass broken off [kg]
+	OBJHANDLE hDebris; ///< the piece of debris (see oapiGetDebrisInfo)
+} PARTLOSTINFO;
 
 #define DOCKREFUSED_SPEED     1 ///< the ports' relative speed is above the limit
 #define DOCKREFUSED_APPROACH  2 ///< the ports do not face each other closely enough
@@ -2145,6 +2160,7 @@ typedef struct {
 	double loadfactor; ///< design load factor of the joint to the parent [g]
 	double strength;   ///< strength of the joint to the parent [N] (0: core part)
 	DWORD nhull;       ///< number of collision hulls it is made of
+	VECTOR3 projarea;  ///< its area projected along x, y and z [m^2] (y: its share of the planform)
 	DWORD flags;       ///< state flags (PART_LOST)
 } PARTINFO;
 

@@ -47,6 +47,8 @@ namespace structure {
 		double mass = 0.0;       ///< [kg]
 		Vector cg;               ///< [m] its centre of gravity (vessel frame)
 		double radius = 0.0;     ///< [m] bounding radius about cg
+		Vector proj;             ///< [m^2] projected area along x, y, z (planform: y)
+		Vector projc[3];         ///< centres of those projections (vessel frame)
 		int parent = -1;         ///< the part it hangs from (-1: the core part)
 		double loadFactor = LOADFACTOR; ///< [g] design load factor of the joint to the parent
 		double subtreeMass = 0.0;///< [kg] its mass and that of the parts beyond it
