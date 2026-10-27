@@ -1,0 +1,46 @@
+BEGIN_HYPERDESC
+<h1>Vessel structure</h1>
+The structural parts of a Delta-glider, a Shuttle-PB and Atlantis (for
+damage): their masses add up to the empty mass, they form a tree from the
+core part at the origin, and the joints' strengths follow the load factor.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Tests/StructureTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship GL-01
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET GL-01
+  MODE Extern
+  POS 4.0 -20.0 -30
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+GL-01:DeltaGlider
+  STATUS Landed Earth
+  POS -80.6838740 28.5988713
+  HEADING 330.01
+  GEAR 1 1.0000
+  PRPLEVEL 0:0.050 1:1.000
+END
+PB-01:ShuttlePB
+  STATUS Landed Earth
+  POS -80.6851539 28.6008186
+  HEADING 330.01
+END
+STS-101:Atlantis
+  STATUS Landed Earth
+  POS -80.6877138 28.6047131
+  HEADING 330.01
+  CONFIGURATION 3
+  GEAR 1 1.0000
+END
+END_SHIPS

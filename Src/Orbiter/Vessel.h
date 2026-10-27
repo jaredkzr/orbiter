@@ -28,6 +28,7 @@
 #include "Vesselbase.h"
 #include "Log.h"
 #include "Maneuver.h"
+#include "Structure.h"
 
 class Elements;
 class CelestialBody;
@@ -1309,6 +1310,9 @@ protected:
 	// Collision hulls (vessel frame), made from the external meshes or read
 	// from Config/Collision/<class>.cfg when first needed
 	void CollectHulls (const StateVectors &s, std::vector<collision::HullRef> &hulls) const;
+	const structure::Model &Structure () const;
+	// Parts and joints of the vessel, for damage (Structure.h): made from the
+	// hulls and the external meshes when first needed
 	void CollectFreePorts (const StateVectors &s, std::vector<collision::Port> &ports) const;
 	void ContactStateChanged ();
 	void WakeFromContact ();
@@ -1683,6 +1687,10 @@ private:
 	mutable std::vector<Vector> hull_meshofs;
 	mutable DWORD_PTR hull_crc = 0;
 	mutable bool hulls_valid = false;
+	mutable unsigned hull_gen = 0;               // (counts the hulls made)
+	mutable structure::Model structure_;
+	mutable unsigned structure_gen = (unsigned)-1; // (hull_gen it was made for)
+	mutable double structure_emass = -1.0;
 	mutable double hull_bound = 0.0; // bounding radius of the hulls about the vessel's origin
 	mutable collision::Hull td_hull; // hull of the touchdown points (obstacles on the ground, if the vessel has no hulls)
 	mutable DWORD td_hull_n = (DWORD)-1;

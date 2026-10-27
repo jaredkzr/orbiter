@@ -4572,6 +4572,7 @@ const std::vector<collision::Hull> &Vessel::Hulls () const
 		if (meshlist[i]) hull_meshofs[i] = MakeVector (meshlist[i]->meshofs);
 	hull_crc = mesh_crc;
 	hulls_valid = true;
+	hull_gen++;
 	hull_bound = 0.0;
 	// (a class file takes precedence, then hulls defined by the vessel)
 	bool found = collision::ClassHulls (classname, hulls);
@@ -4603,6 +4604,39 @@ const std::vector<collision::Hull> &Vessel::Hulls () const
 	hull_bound = 0.0;
 	for (const collision::Hull &h : hulls) hull_bound = std::max (hull_bound, h.centre.length() + h.radius + collision::SKIN);
 	return hulls;
+}
+
+const structure::Model &Vessel::Structure () const
+{
+	const std::vector<collision::Hull> &h = Hulls();
+	if (structure_gen == hull_gen && structure_emass == emass) return structure_;
+	structure_gen = hull_gen;
+	structure_emass = emass;
+
+	// the triangles of the external meshes (vessel frame)
+	std::vector<structure::Triangle> tris;
+	for (UINT i = 0; i < nmesh; i++) {
+		MeshList *ml = meshlist[i];
+		if (!ml || !(ml->vismode & MESHVIS_EXTERNAL)) continue;
+		const Mesh *mesh = ml->hMesh ? (const Mesh*)ml->hMesh :
+			ml->meshname[0] ? g_pOrbiter->LoadMeshGlobal (ml->meshname) : nullptr;
+		if (!mesh) continue;
+		Vector ofs (MakeVector (ml->meshofs));
+		for (DWORD g = 0; g < mesh->nGroup(); g++) {
+			const GroupSpec *grp = const_cast<Mesh*>(mesh)->GetGroup (g);
+			if (!grp) continue;
+			for (DWORD k = 0; k + 2 < grp->nIdx; k += 3) {
+				const NTVERTEX *v[3] = { grp->Vtx + grp->Idx[k], grp->Vtx + grp->Idx[k+1], grp->Vtx + grp->Idx[k+2] };
+				tris.push_back ({ Vector (v[0]->x, v[0]->y, v[0]->z) + ofs, Vector (v[1]->x, v[1]->y, v[1]->z) + ofs,
+					Vector (v[2]->x, v[2]->y, v[2]->z) + ofs, (int)i, (int)g });
+			}
+		}
+	}
+	uint64_t seed = 1469598103934665603ull; // (FNV-1a of the name: the same parts each time)
+	for (char c : name) seed = (seed ^ (unsigned char)c) * 1099511628211ull;
+	structure_.Build (h, tris, emass, size, structure::ReadClassConfig (classname), seed);
+	LOGOUT ("Structure of %s: %d parts from %d hulls", name.c_str(), (int)structure_.Parts().size(), (int)h.size());
+	return structure_;
 }
 
 DWORD Vessel::AddCollisionHull (const VECTOR3 *pt, DWORD npt)
@@ -7510,6 +7544,34 @@ void VESSEL::ResetCollisionHulls () const
 DWORD VESSEL::GetCollisionHullCount () const
 {
 	return (DWORD)vessel->Hulls().size();
+}
+
+DWORD VESSEL::GetPartCount () const
+{
+	return (DWORD)vessel->Structure().Parts().size();
+}
+
+bool VESSEL::GetPartInfo (DWORD idx, PARTINFO *info) const
+{
+	const std::vector<structure::Part> &parts = vessel->Structure().Parts();
+	if (idx >= parts.size() || !info) return false;
+	const structure::Part &p = parts[idx];
+	memset (info, 0, sizeof(PARTINFO));
+	strncpy (info->name, p.name.c_str(), sizeof(info->name) - 1);
+	info->mass = p.mass;
+	info->cg = _V(p.cg.x, p.cg.y, p.cg.z);
+	info->radius = p.radius;
+	info->parent = p.parent;
+	info->loadfactor = p.loadFactor;
+	info->strength = p.strength;
+	info->nhull = (DWORD)p.hulls.size();
+	info->flags = 0;
+	return true;
+}
+
+int VESSEL::GetPartAt (const VECTOR3 &pos) const
+{
+	return vessel->Structure().PartAt (MakeVector (pos));
 }
 
 static maneuver::Node MakeNode (const MANEUVERNODE &n)

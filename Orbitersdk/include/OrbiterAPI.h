@@ -2131,6 +2131,23 @@ typedef struct {
 #define DOCKREFUSED_OFFSET    4 ///< the ports are off each other's axis
 
 /**
+ * \brief A structural part of a vessel (VESSEL::GetPartInfo)
+ * \note A joint's strength is the force it carries when the parts beyond it
+ *   are accelerated at the design load factor, times the safety factor.
+ */
+typedef struct {
+	char name[64];     ///< name (from Config/Damage/<class>.cfg, or from where the part lies)
+	double mass;       ///< mass [kg] (the empty mass shared out by surface area)
+	VECTOR3 cg;        ///< centre of gravity [m] (vessel frame)
+	double radius;     ///< bounding radius about cg [m]
+	int parent;        ///< index of the part it hangs from (-1: the core part)
+	double loadfactor; ///< design load factor of the joint to the parent [g]
+	double strength;   ///< strength of the joint to the parent [N] (0: core part)
+	DWORD nhull;       ///< number of collision hulls it is made of
+	DWORD flags;       ///< state flags (reserved)
+} PARTINFO;
+
+/**
  * \brief A manoeuvre node: a planned (impulsive) velocity change of a vessel
  * \sa VESSEL::AddManeuverNode
  */

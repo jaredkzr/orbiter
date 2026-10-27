@@ -725,6 +725,9 @@ protected:
 	static int v_clear_collisionhulls (lua_State *L);
 	static int v_reset_collisionhulls (lua_State *L);
 	static int v_get_collisionhullcount (lua_State *L);
+	static int v_get_partcount (lua_State *L);
+	static int v_get_partinfo (lua_State *L);
+	static int v_get_partat (lua_State *L);
 	static int v_add_maneuvernode (lua_State *L);
 	static int v_get_maneuvernodecount (lua_State *L);
 	static int v_get_maneuvernode (lua_State *L);

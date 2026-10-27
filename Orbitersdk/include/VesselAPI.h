@@ -476,6 +476,37 @@ public:
 	DWORD GetCollisionHullCount () const;
 
 	/**
+	 * \brief Returns the number of the vessel's structural parts: the pieces
+	 *   that can break off it when it is damaged.
+	 * \return Number of parts (at least 1: the core part)
+	 * \note The parts are made from the collision hulls (each mesh triangle
+	 *   belongs to the hull nearest to it, and the hulls are clustered into
+	 *   connected parts of similar size), unless set in
+	 *   Config/Damage/<classname>.cfg. They form a tree: part 0, the core
+	 *   part at the vessel's origin, is its root, and each other part hangs
+	 *   from its parent by a joint.
+	 * \sa GetPartInfo, GetPartAt
+	 */
+	DWORD GetPartCount () const;
+
+	/**
+	 * \brief Returns a description of a structural part.
+	 * \param idx part index (>= 0, < GetPartCount())
+	 * \param info the part's description (see \ref PARTINFO)
+	 * \return false if idx is out of range
+	 * \sa GetPartCount, GetPartAt
+	 */
+	bool GetPartInfo (DWORD idx, PARTINFO *info) const;
+
+	/**
+	 * \brief Returns the structural part at (or nearest to) a point.
+	 * \param pos point in the vessel frame [<b>m</b>]
+	 * \return part index (-1 if the vessel has no parts)
+	 * \sa GetPartCount, GetPartInfo
+	 */
+	int GetPartAt (const VECTOR3 &pos) const;
+
+	/**
 	 * \brief Adds a manoeuvre node: a planned velocity change, shown in the
 	 *   map view with the predicted trajectory after it.
 	 * \param node the node (see \ref MANEUVERNODE)

@@ -255,6 +255,9 @@ void Interpreter::LoadVesselAPI ()
 		{"clear_collisionhulls", v_clear_collisionhulls},
 		{"reset_collisionhulls", v_reset_collisionhulls},
 		{"get_collisionhullcount", v_get_collisionhullcount},
+		{"get_partcount", v_get_partcount},
+		{"get_partinfo", v_get_partinfo},
+		{"get_partat", v_get_partat},
 		{"add_maneuvernode", v_add_maneuvernode},
 		{"get_maneuvernodecount", v_get_maneuvernodecount},
 		{"get_maneuvernode", v_get_maneuvernode},
@@ -1410,6 +1413,77 @@ int Interpreter::v_get_collisionhullcount (lua_State *L)
 	AssertMtdMinPrmCount(L, 1, funcname);
 	VESSEL *v = lua_tovessel_safe(L, 1, funcname);
 	lua_pushinteger(L, v->GetCollisionHullCount());
+	return 1;
+}
+
+/***
+Get the number of structural parts (pieces that can break off when the
+vessel is damaged).
+
+@function get_partcount
+@treturn int number of parts (at least 1: the core part, index 0)
+@see vessel:get_partinfo, vessel:get_partat
+*/
+int Interpreter::v_get_partcount (lua_State *L)
+{
+	static const char *funcname = "get_partcount";
+	AssertMtdMinPrmCount(L, 1, funcname);
+	VESSEL *v = lua_tovessel_safe(L, 1, funcname);
+	lua_pushinteger(L, v->GetPartCount());
+	return 1;
+}
+
+/***
+Get a description of a structural part.
+
+The table has fields name, mass [kg], cg (vessel frame [m]), radius [m],
+parent (index, -1 for the core part), loadfactor [g], strength [N] (of the
+joint to the parent), nhull (number of collision hulls) and flags.
+
+@function get_partinfo
+@tparam int idx part index (>= 0)
+@treturn table description (nil if idx is out of range)
+@see vessel:get_partcount
+*/
+int Interpreter::v_get_partinfo (lua_State *L)
+{
+	static const char *funcname = "get_partinfo";
+	AssertMtdMinPrmCount(L, 2, funcname);
+	VESSEL *v = lua_tovessel_safe(L, 1, funcname);
+	int idx = (int)luamtd_tointeger_safe(L, 2, funcname);
+	PARTINFO info;
+	if (idx < 0 || !v->GetPartInfo((DWORD)idx, &info)) {
+		lua_pushnil(L);
+		return 1;
+	}
+	lua_newtable(L);
+	lua_pushstring(L, info.name);           lua_setfield(L, -2, "name");
+	lua_pushnumber(L, info.mass);           lua_setfield(L, -2, "mass");
+	lua_pushvector(L, info.cg);             lua_setfield(L, -2, "cg");
+	lua_pushnumber(L, info.radius);         lua_setfield(L, -2, "radius");
+	lua_pushinteger(L, info.parent);        lua_setfield(L, -2, "parent");
+	lua_pushnumber(L, info.loadfactor);     lua_setfield(L, -2, "loadfactor");
+	lua_pushnumber(L, info.strength);       lua_setfield(L, -2, "strength");
+	lua_pushinteger(L, info.nhull);         lua_setfield(L, -2, "nhull");
+	lua_pushinteger(L, info.flags);         lua_setfield(L, -2, "flags");
+	return 1;
+}
+
+/***
+Get the structural part at (or nearest to) a point.
+
+@function get_partat
+@tparam vector pos point in the vessel frame [m]
+@treturn int part index (-1 if none)
+@see vessel:get_partinfo
+*/
+int Interpreter::v_get_partat (lua_State *L)
+{
+	static const char *funcname = "get_partat";
+	AssertMtdMinPrmCount(L, 2, funcname);
+	VESSEL *v = lua_tovessel_safe(L, 1, funcname);
+	VECTOR3 pos = luamtd_tovector_safe(L, 2, funcname);
+	lua_pushinteger(L, v->GetPartAt(pos));
 	return 1;
 }
 
