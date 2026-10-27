@@ -248,19 +248,27 @@ Known gaps and limitations, to be addressed later.
   RenderGasGiant): decks, haze and gas per planet in
   Config/VK/GasGiant/<name>.cfg (see README.txt), storm towers with shelves
   and anvils, vortex swirl, lightning flashes and channels. Light fades with
-  depth (pressure table from the core). The decks cover a 2000 km march range;
-  beyond it the planet map takes over.
+  depth (pressure table from the core). The decks cover a 2000 km march range
+  (to the horizon from high above); REACH sets how high they are drawn
+  (Jupiter 10000 km, fading into the map's look and the cloud layer).
+- Jupiter after Juno: deck colours from the level-6 map (cloud layer frame),
+  a chromophore layer over the ammonia tops (CHROMO), the flow's folds and
+  lanes (FOLDS), pop-up domes about storms and in the belts (POPUPS),
+  anvils with ripples, lumps and fibrous outflow. Other giants: FOLDS and
+  POPUPS off (Saturn's haze hides them; its pop-ups looked lens-shaped).
 - Steps: about 2 percent of the distance in decks and near towers, long
   jumps through clear air, at most 128 per ray; the noise is mip-filtered to
   the pixel footprint. Half resolution, with temporal accumulation, and
   half the 8x8 tiles reused when the camera is still.
-- Cost at 1080p (RX 9070 XT): Jupiter 4-10 ms, Saturn and Neptune storm
-  views about 13 ms (large towers). Goal: about 3 ms.
+- Cost at 1080p (RX 9070 XT): Jupiter 5-8 ms (plunge start 13), Saturn and
+  Neptune storm views about 13 ms (large towers). Goal: about 3 ms.
 - Distant towers vanish in the Rayleigh fog of the deep gas (about 75 km of
   visibility at 6 bar), as they should. Uranus is bland, as Voyager saw it.
-- Not done: vessel lighting from flashes with RT shadows, turbulence (camera
-  shake, buffeting), comparison with Juno and Cassini images, crush depth
-  (no vessel destruction yet).
+- Open: below some 100 km over a zone the view is a flat haze; the low
+  "high" view is soft; anvils hard to read from the side; dome shadows faint
+  from afar (coarse light march); towers smoother than the pop-ups; a slight
+  brightness step where the decks start fading in (about 9000 km). Crush
+  depth (no vessel destruction yet).
 
 ## Plume and exhaust overhaul (planned, after the current graphics list)
 - User request: overhaul plume and exhaust effects. Current state: billboard
