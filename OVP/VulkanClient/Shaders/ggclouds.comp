@@ -30,6 +30,7 @@ layout(set = 0, binding = 2) uniform sampler3D detailNoise;
 const float SHAPE_N = 128.0, DETAIL_N = 32.0; // (the volumes' sizes: Clouds.cpp)
 const float NOISE_F = 6.0; // (the shape noise's features per unit, about)
 float noiseMean = 0.5;     // (its mean: main, from its coarsest level)
+float detailMean = 0.5;    // (the detail noise's)
 layout(set = 0, binding = 3) uniform sampler2D prepass;   // view normal, view depth (w; 0: none)
 layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D outClouds;
 
@@ -317,8 +318,10 @@ bool NearTower (int i, vec3 u, float r, float margin)
 	return length (h - vec2 (reach > 3.0 * rt ? 1.5 * rt : 0.0, 0.0)) < reach + margin;
 }
 
+float towerCrease = 0.0; // (Towers': the sample between the bulges (0: on one))
 float Towers (vec3 x, float r, vec3 u, bool detail)
 {
+	towerCrease = 0.0;
 	float dens = 0.0;
 	float R = P.misc.z;
 	float baseR = P.layer[int (P.hazeH.y) - 1].x; // (the lowest deck's base)
@@ -353,20 +356,27 @@ float Towers (vec3 x, float r, vec3 u, bool detail)
 		float phi = 2.2 * hf + seed + 1.2 * rt / (rho + rt) - mod (spin, 2.0 * PI);
 		vec2 hr = mat2 (cos (phi), sin (phi), -sin (phi), cos (phi)) * h;
 		// (billows a fifth of the tower across, smaller ones on them,
-		// rising with the updraft)
-		float nz = 0.0;
+		// rising with the updraft; the larger in the light march too: the
+		// billows shading each other, not a smooth column's light)
+		vec3 q = vec3 (hr, r - baseR - 25.0 * P.hazeH.z) / rt * 0.35 + vec3 (seed);
+		float lq = Lod (0.35 / rt, SHAPE_N);
+		float nz = 0.7 * textureLod (shapeNoise, q, lq).r + 0.3 * (detail ? textureLod (shapeNoise, ROT * q * 2.2, lq + 1.14).r : noiseMean) - 0.5;
+		nz = clamp (nz * 2.5, -0.6, 0.6); // (the noise's narrow range stretched)
+		// (and on them cauliflower: rounded bulges (the Worley noise's
+		// cells), some 3.5 and 1.5 km across, pushing the surface out)
+		float bl = 0.0;
 		if (detail) {
-			vec3 q = vec3 (hr, r - baseR - 25.0 * P.hazeH.z) / rt * 0.35 + vec3 (seed);
-			float lq = Lod (0.35 / rt, SHAPE_N);
-			nz = 0.7 * textureLod (shapeNoise, q, lq).r + 0.3 * textureLod (shapeNoise, ROT * q * 2.2, lq + 1.14).r - 0.5;
-			nz = clamp (nz * 2.5, -0.6, 0.6); // (the noise's narrow range stretched)
+			float lw = Lod (0.35 * 1.6 / rt, DETAIL_N);
+			bl = 0.65 * (textureLod (detailNoise, q * 1.6, lw).r - detailMean) + 0.35 * (textureLod (detailNoise, ROT * q * 4.0, lw + 1.32).r - detailMean);
+			bl = clamp (bl * 3.0, -0.5, 0.5);
 		}
 		// the column: lobed, asymmetric
 		float th = atan (hr.y, hr.x);
 		float rad = rt * (1.0 - 0.2 * hf) * (1.0 + 0.22 * sin (3.0 * th + seed) + 0.12 * sin (5.0 * th + 2.0 * seed));
 		// (its top rounded: a cauliflower cap, not a cut)
 		float cap = top - 5e3 * min (rho * rho / (rad * rad), 1.0);
-		float v = smoothstep (1.1 * rad, 0.55 * rad, rho + nz * 0.8 * rad) * smoothstep (0.0, 0.04, hf) * (1.0 - smoothstep (cap - 3e3, cap, r - 4e3 * nz));
+		// (a crisp surface, the bulges on it)
+		float v = smoothstep (1.0 * rad, 0.8 * rad, rho + nz * 0.8 * rad - bl * 0.45 * rad) * smoothstep (0.0, 0.04, hf) * (1.0 - smoothstep (cap - 1.5e3, cap, r - 4e3 * nz - bl * 3e3));
 		// (the overshooting dome over the core)
 		float dome = top + 4e3 * (1.0 - min (rho * rho / (0.36 * rt * rt), 1.0));
 		v = max (v, smoothstep (0.6 * rt, 0.4 * rt, rho + nz * 0.3 * rt) * step (top - 6e3, r) * (1.0 - smoothstep (dome - 1.5e3, dome, r - 1e3 * nz)));
@@ -379,6 +389,7 @@ float Towers (vec3 x, float r, vec3 u, bool detail)
 		if (anvil && r > top - 12e3)
 			v = max (v, Shelf (h - vec2 (1.5 * rt, 0.0), r - top, rt, 6.0 * rt, 1.6 * rt, 2.6 * rt, 8e3, nz, seed + 0.3 * mod (spin, 2.0 * PI), true, detail));
 		v *= 0.7 + 0.6 * nz;
+		if (v > dens) towerCrease = max (0.15 - bl, 0.0); // (between the bulges: in their shade)
 		dens = max (dens, clamp (v, 0.0, 1.0) * mix (0.6, 1.0, s));
 	}
 	lodBias = 0.0;
@@ -1135,6 +1146,7 @@ bool March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 		viewAlb = true;
 		float ext = Medium (p, ta < 200e3, alb, nearT); // (the towers: only where the step passes near one)
 		viewAlb = false;
+		float crease = nearT ? towerCrease : 0.0;
 		if (ext <= 1e-9) continue;
 		// (the clouds, apart from the haze and the gas: those lit as in
 		// clear air, so that the paths agree where they meet)
@@ -1160,6 +1172,9 @@ bool March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 			ds *= coarseLight ? 3.0 : 2.0;
 		}
 		if (!inDome) od += PopShadow (p, r, up, sun);
+		// (a tower's creases between its bulges: shaded by them, which the
+		// march's steps are too long to see)
+		od += 12.0 * crease;
 		popInLight = true;
 		coarseLight = false, lightTowers = false;
 		vec3 qe = p + sun * s;
@@ -1238,6 +1253,7 @@ void main ()
 	bool inside = px.x < int (pc.proj.z) && px.y < int (pc.proj.w);
 	P = gg[int (pc.slot.x)];
 	noiseMean = textureLod (shapeNoise, vec3 (0.5), log2 (SHAPE_N)).r;
+	detailMean = textureLod (detailNoise, vec3 (0.5), log2 (DETAIL_N)).r;
 	cur = int (pc.slot.y), prv = 1 - cur;
 	vec4 res = vec4 (0.0, 0.0, 0.0, 1.0);
 	float dist = 0.0;
