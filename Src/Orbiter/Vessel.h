@@ -1322,6 +1322,9 @@ protected:
 	// core part, and vessels docked or attached, do not break up).
 	bool PartLost (int part) const;
 	// a part has broken off
+	bool PartShown (int part) const;
+	// a part is shown (not broken off; in the instant replay: not by the
+	// time shown)
 	bool ElementLost (const void *e, const Vector &ref) const { return !part_lost.empty() && PartLost (ElementPart (e, ref)); }
 	// an element (thruster, touchdown point, port...) at ref is on a part
 	// that has broken off
@@ -1729,6 +1732,7 @@ private:
 	mutable unsigned structure_gen = (unsigned)-1; // (hull_gen it was made for)
 	mutable double structure_emass = -1.0;
 	std::vector<char> part_lost;                 // parts broken off (empty: none)
+	std::vector<std::pair<double,int>> lost_log; // when each part broke off [s simulation time] (instant replay)
 	double lost_mass = 0.0;                      // [kg] their mass
 	struct DamageEffects {                       // of the parts broken off
 		Vector cg;                               // centre of gravity of what is left (vessel frame; the origin stays)

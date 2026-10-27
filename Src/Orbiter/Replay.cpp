@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "Replay.h"
+#include "Debris.h"
 #include "UiAnchor.h"
 #include "Orbiter.h"
 #include "Psys.h"
@@ -75,8 +76,20 @@ void Replay::Record ()
 		for (UINT k = 0; k < v->nanim; k++) r.anim.push_back ((float)v->anim[k].state);
 		f.v.push_back (std::move (r));
 	}
+	for (size_t i = 0; i < g_psys->nDebris(); i++) {
+		Debris *d = g_psys->GetDebris (i);
+		if (!d->AtRest()) f.d.push_back ({ d, d->GPos(), d->GVel(), d->s0->Q });
+	}
 	frames.push_back (std::move (f));
 	while (frames.size() > maxFrames) frames.pop_front();
+}
+
+void Replay::Forget (const Debris *d)
+{
+	for (auto &f : frames)
+		f.d.erase (std::remove_if (f.d.begin(), f.d.end(), [d](const DebrisRec &r) { return r.d == d; }), f.d.end());
+	liveDebris.erase (std::remove_if (liveDebris.begin(), liveDebris.end(), [d](const LiveDebris &l) { return l.d == d; }), liveDebris.end());
+	keys.erase (std::remove_if (keys.begin(), keys.end(), [d](const CamKey &k) { return k.target == (const Body*)d; }), keys.end());
 }
 
 void Replay::Forget (const Vessel *v)
@@ -107,6 +120,15 @@ bool Replay::Enter ()
 		for (UINT k = 0; k < v->nanim; k++) l.anim.push_back (v->anim[k].state);
 		live.push_back (std::move (l));
 	}
+	liveDebris.clear();
+	for (size_t i = 0; i < g_psys->nDebris(); i++) {
+		Debris *d = g_psys->GetDebris (i);
+		LiveDebris l;
+		l.d = d;
+		l.s.Set (*d->s0);
+		l.cpos = d->cpos, l.cvel = d->cvel;
+		liveDebris.push_back (l);
+	}
 	active_ = true;
 	playing = true;
 	t = std::max (Start(), End() - 30.0);
@@ -132,6 +154,12 @@ void Replay::Exit ()
 		for (size_t k = 0; k < l.anim.size() && k < v->nanim; k++) v->anim[k].state = l.anim[k];
 	}
 	live.clear();
+	for (const LiveDebris &l : liveDebris) {
+		l.d->s0->Set (l.s);
+		l.d->cpos = l.cpos, l.d->cvel = l.cvel;
+		l.d->SetHidden (false);
+	}
+	liveDebris.clear();
 	if (liveRunning) g_pOrbiter->Pause (false);
 }
 
@@ -183,6 +211,32 @@ void Replay::Show (double simt)
 			v->m_thruster[k]->level = a.th[k] + (b->th[k] - a.th[k]) * u;
 		for (size_t k = 0; k < a.anim.size() && k < b->anim.size() && k < v->nanim; k++)
 			v->anim[k].state = a.anim[k] + (b->anim[k] - a.anim[k]) * u;
+	}
+
+	// debris: not there before it broke off; in motion as recorded; at
+	// rest where it is now
+	for (const LiveDebris &l : liveDebris) {
+		Debris *d = l.d;
+		d->SetHidden (simt < d->CreatedT());
+		if (d->Hidden()) continue;
+		const DebrisRec *a = nullptr, *b = nullptr;
+		for (const auto &r : f0.d) if (r.d == d) { a = &r; break; }
+		for (const auto &r : f1.d) if (r.d == d) { b = &r; break; }
+		StateVectors *s = d->s0;
+		if (a && b && dt > 0.0) {
+			s->pos = a->pos * h00 + a->vel * (h10 * dt) + b->pos * h01 + b->vel * (h11 * dt);
+			s->vel = a->pos * d00 + a->vel * d10 + b->pos * d01 + b->vel * d11;
+			Quaternion q;
+			q.interp (a->q, b->q, u);
+			s->SetRot (q);
+		} else if (a || b) {
+			const DebrisRec *r = a ? a : b;
+			s->pos = r->pos, s->vel = r->vel;
+			s->SetRot (r->q);
+		} else {
+			s->Set (l.s); // (at rest: as now)
+		}
+		if (d->cbody) d->cpos = s->pos - d->cbody->GPos(), d->cvel = s->vel - d->cbody->GVel();
 	}
 }
 

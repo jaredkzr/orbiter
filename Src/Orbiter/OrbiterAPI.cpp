@@ -169,7 +169,7 @@ DLLEXPORT bool oapiGetDebrisInfo (OBJHANDLE hDebris, DEBRISINFO *info)
 	strncpy (info->source, d->Source().c_str(), sizeof(info->source) - 1);
 	info->mass = d->Mass();
 	info->size = d->Size();
-	info->flags = d->AtRest() ? DEBRIS_ATREST : 0;
+	info->flags = (d->AtRest() ? DEBRIS_ATREST : 0) | (d->Hidden() ? DEBRIS_HIDDEN : 0);
 	return true;
 }
 

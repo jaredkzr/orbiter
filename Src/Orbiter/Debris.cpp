@@ -27,6 +27,7 @@ Debris::Debris (const std::string &_name, const std::string &_source, double m, 
 {
 	VesselBase::SetDefaultState ();
 	name = _name;
+	created_t = td.SimT1;
 
 	// the triangles about the centre of gravity; area and moments of
 	// inertia (a thin shell of uniform density)

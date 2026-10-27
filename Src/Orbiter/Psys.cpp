@@ -13,6 +13,7 @@
 #include "Psys.h"
 #include "Debris.h"
 #include "Camera.h"
+#include "Replay.h"
 #include "Orbiter.h"
 #include "TimeData.h"
 #include "Element.h"
@@ -161,10 +162,11 @@ void PlanetarySystem::DelDebris (Debris *d)
 	auto it = std::find (debris.begin(), debris.end(), d);
 	if (it == debris.end()) return;
 	debris.erase (it);
-	collider.Forget (d);
 	extern Camera *g_camera;
 	extern Vessel *g_focusobj;
 	extern Orbiter *g_pOrbiter;
+	collider.Forget (d);
+	if (Replay *rp = g_pOrbiter->GetReplay()) rp->Forget (d);
 	if (g_camera && g_camera->Target() == d) g_pOrbiter->SetView (g_focusobj, 1);
 	delete d;
 }

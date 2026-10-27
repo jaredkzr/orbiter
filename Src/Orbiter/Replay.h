@@ -34,6 +34,10 @@ public:
 	void Record ();
 	/// A vessel is about to be deleted: forget it
 	void Forget (const Vessel *v);
+	/// A piece of debris is about to be deleted: forget it
+	void Forget (const class Debris *d);
+	/// The replay time shown [s simulation time]
+	double Now () const { return t; }
 
 	bool Active () const { return active_; }
 	bool Exporting () const { return exporting; }
@@ -75,10 +79,22 @@ private:
 		std::vector<float> th;   // thruster levels
 		std::vector<float> anim; // animation states
 	};
+	struct DebrisRec {           // (pieces in motion; those at rest stay where they are)
+		class Debris *d;
+		Vector pos, vel;
+		Quaternion q;
+	};
 	struct Frame {
 		double simt;
 		std::vector<VesselRec> v;
+		std::vector<DebrisRec> d;
 	};
+	struct LiveDebris {
+		class Debris *d;
+		StateVectors s;
+		Vector cpos, cvel;
+	};
+	std::vector<LiveDebris> liveDebris;
 	struct Live {                // the live state at the start of the replay
 		Vessel *v;
 		StateVectors s;

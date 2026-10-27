@@ -4732,7 +4732,8 @@ int Interpreter::oapi_get_debris (lua_State *L)
 Return a description of a piece of debris.
 
 The table has fields name, source (the vessel it broke off), mass [kg],
-size [m] and atrest (true when at rest on the ground).
+size [m], atrest (true when at rest on the ground) and hidden (true when
+not shown: in the instant replay, not broken off by the time shown).
 
 @function get_debrisinfo
 @tparam handle hDebris debris handle
@@ -4753,6 +4754,7 @@ int Interpreter::oapi_get_debrisinfo (lua_State *L)
 	lua_pushnumber (L, info.mass);    lua_setfield (L, -2, "mass");
 	lua_pushnumber (L, info.size);    lua_setfield (L, -2, "size");
 	lua_pushboolean (L, (info.flags & DEBRIS_ATREST) != 0); lua_setfield (L, -2, "atrest");
+	lua_pushboolean (L, (info.flags & DEBRIS_HIDDEN) != 0); lua_setfield (L, -2, "hidden");
 	return 1;
 }
 

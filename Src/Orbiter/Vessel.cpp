@@ -4866,7 +4866,7 @@ int Vessel::BreakPart (int part, double vsep)
 	// conserved), and it loses the piece's inertia
 	double M = OwnMass();
 	if (M - m < 1e-3 * M) { // (nothing left: the vessel is gone)
-		for (int p : piece) part_lost[p] = 1;
+		for (int p : piece) part_lost[p] = 1, lost_log.push_back ({ td.SimT1, p });
 		lost_mass += m;
 		UpdateMass ();
 		return (int)piece.size();
@@ -4890,7 +4890,7 @@ int Vessel::BreakPart (int part, double vsep)
 		AddVelocity (dir * (-vsep * m / M));
 	}
 
-	for (int p : piece) part_lost[p] = 1;
+	for (int p : piece) part_lost[p] = 1, lost_log.push_back ({ td.SimT1, p });
 	lost_mass += m;
 	UpdateMass ();
 	SetOwnPMI (pmi1);
@@ -4909,6 +4909,17 @@ int Vessel::BreakPart (int part, double vsep)
 		((VESSEL3*)modIntf.v)->clbkGeneric (VMSG_PARTLOST, part, &info);
 	}
 	return (int)piece.size();
+}
+
+bool Vessel::PartShown (int part) const
+{
+	Replay *rp = g_pOrbiter->GetReplay();
+	if (rp && rp->Active()) {
+		for (const auto &e : lost_log)
+			if (e.second == part) return e.first > rp->Now();
+		return true;
+	}
+	return !PartLost (part);
 }
 
 int Vessel::ElementPart (const void *e, const Vector &ref) const
@@ -8119,7 +8130,7 @@ bool VESSEL::GetPartInfo (DWORD idx, PARTINFO *info) const
 	info->strength = p.strength;
 	info->nhull = (DWORD)p.hulls.size();
 	info->projarea = _V(p.proj.x, p.proj.y, p.proj.z);
-	info->flags = vessel->PartLost ((int)idx) ? PART_LOST : 0;
+	info->flags = (vessel->PartLost ((int)idx) ? PART_LOST : 0) | (vessel->PartShown ((int)idx) ? 0 : PART_HIDDEN);
 	info->load = vessel->PartLoad ((int)idx);
 	info->temp = vessel->PartTemp ((int)idx);
 	return true;

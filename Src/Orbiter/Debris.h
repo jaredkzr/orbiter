@@ -23,6 +23,7 @@
 class Mesh;
 
 class Debris: public VesselBase {
+	friend class Replay; // (its states shown in the instant replay)
 public:
 	/// The triangles of one group of a mesh of the vessel (debris frame)
 	struct Group {
@@ -44,6 +45,9 @@ public:
 	const std::vector<Group> &Groups () const { return groups; }
 	const std::vector<collision::Hull> &Hulls () const { return hulls; }
 	bool AtRest () const { return fstatus == FLIGHTSTATUS_LANDED; }
+	double CreatedT () const { return created_t; } ///< [s] simulation time it broke off
+	bool Hidden () const { return hidden; }        ///< not shown (instant replay: not broken off yet)
+	void SetHidden (bool h) { hidden = h; }
 
 	void Update (bool force = false) override;
 	void PostUpdate () override;
@@ -77,8 +81,10 @@ private:
 	Vector Fdrag, Mdrag;       // drag force (global) and torque (body frame) of the step
 	mutable bool touching = false;
 	bool wake = false;
-	double restTime = 0.0;
-	double proxyCheckT = 0.0;  // next check for the proxy bodies     // [s] how long it has been still on the ground
+	double restTime = 0.0;     // [s] how long it has been still on the ground
+	double proxyCheckT = 0.0;  // next check for the proxy bodies
+	double created_t = 0.0;    // [s] simulation time it broke off
+	bool hidden = false;
 };
 
 #endif // !__DEBRIS_H

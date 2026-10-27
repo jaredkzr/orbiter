@@ -2163,10 +2163,11 @@ typedef struct {
 	VECTOR3 projarea;  ///< its area projected along x, y and z [m^2] (y: its share of the planform)
 	double load;       ///< load of the joint in the last step, as a fraction of its strength (damage model on; > 1: it breaks)
 	double temp;       ///< temperature [K] (aerodynamic heating, radiative cooling; damage model on; 0: not known). Above the class's MAXTEMP (default 1800 K) the part fails
-	DWORD flags;       ///< state flags (PART_LOST)
+	DWORD flags;       ///< state flags (PART_LOST, PART_HIDDEN)
 } PARTINFO;
 
-#define PART_LOST 0x0001 ///< the part has broken off the vessel
+#define PART_LOST   0x0001 ///< the part has broken off the vessel
+#define PART_HIDDEN 0x0002 ///< the part is not shown (broken off; in the instant replay: by the time shown)
 
 /**
  * \brief A piece of debris: a part (or parts) broken off a vessel
@@ -2177,10 +2178,11 @@ typedef struct {
 	char source[64];   ///< name of the vessel it broke off
 	double mass;       ///< mass [kg]
 	double size;       ///< bounding radius [m]
-	DWORD flags;       ///< DEBRIS_ATREST
+	DWORD flags;       ///< DEBRIS_ATREST, DEBRIS_HIDDEN
 } DEBRISINFO;
 
 #define DEBRIS_ATREST 0x0001 ///< at rest on the ground
+#define DEBRIS_HIDDEN 0x0002 ///< not shown (in the instant replay: not broken off by the time shown)
 
 /**
  * \brief A manoeuvre node: a planned (impulsive) velocity change of a vessel
