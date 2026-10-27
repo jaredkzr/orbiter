@@ -260,15 +260,25 @@ Known gaps and limitations, to be addressed later.
   jumps through clear air, at most 128 per ray; the noise is mip-filtered to
   the pixel footprint. Half resolution, with temporal accumulation, and
   half the 8x8 tiles reused when the camera is still.
-- Cost at 1080p (RX 9070 XT): Jupiter 5-8 ms (plunge start 13), Saturn and
-  Neptune storm views about 13 ms (large towers). Goal: about 3 ms.
+- Sampling: white-noise jitter turned by the golden ratio, rays jittered
+  within the pixel, history (0.1 per frame) clipped to the 3x3
+  neighbourhood of the same cloud; moving, the neighbourhood's average.
+  Upsampled by a clamped Catmull-Rom filter. Noise or meridian seams:
+  longitudes blended across their wrap (the cloud layer's frame, the
+  planet's).
+- Light: the pop-up domes' shadows exact (ellipsoids), the towers' billows
+  in their light, the decks' white floor lighting undersides (anvils,
+  flanks). The cloud layer fades out over the decks; the decks' map look
+  matched to it (MAP_LOOK).
+- Cost at 1080p (RX 9070 XT): Jupiter 5-8 ms (plunge start 15), Saturn and
+  Neptune storm views about 14 ms (large towers). Goal: about 3 ms.
 - Distant towers vanish in the Rayleigh fog of the deep gas (about 75 km of
   visibility at 6 bar), as they should. Uranus is bland, as Voyager saw it.
-- Open: below some 100 km over a zone the view is a flat haze; the low
-  "high" view is soft; anvils hard to read from the side; dome shadows faint
-  from afar (coarse light march); towers smoother than the pop-ups; a slight
-  brightness step where the decks start fading in (about 9000 km). Crush
-  depth (no vessel destruction yet).
+- Open: the pop-ups and the decks seen at grazing angles keep a crumbly
+  texture (their finest noise thresholded); towers slender (some 180 km
+  tall, 5-30 km across: smoke-like from afar); the decks' own light some
+  10 percent brighter than the map's look (a gradual brightening from 3000
+  km down). Crush depth (no vessel destruction yet).
 
 ## Plume and exhaust overhaul (planned, after the current graphics list)
 - User request: overhaul plume and exhaust effects. Current state: billboard
