@@ -1096,7 +1096,10 @@ bool March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 		// frame; the history averages them)
 		vec3 p = o + d * (ta + jitter * dt);
 		float r = length (p);
-		fpM = (ta + jitter * dt) * pixAng;
+		// (the footprint: a grazing ray's pixel drawn out along the decks'
+		// level surfaces by 1/sin of its elevation; its geometric mean with
+		// the across: their finest noise filtered, not thresholded into crumbs)
+		fpM = (ta + jitter * dt) * pixAng * pow (max (muv, 0.06), -0.75);
 		vec3 alb;
 		vec3 up = p / r;
 		float muS = dot (up, sun);
