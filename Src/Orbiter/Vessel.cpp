@@ -787,6 +787,7 @@ void Vessel::ModulePostCreation ()
 	// now let the module do its post-creation stuff
 	if (modIntf.v->Version() >= 1)
 		((VESSEL2*)modIntf.v)->clbkPostCreation ();
+	ApplySavedDamage ();
 }
 
 // ==============================================================
@@ -4825,7 +4826,8 @@ int Vessel::BreakPart (int part, double vsep)
 			if (t >= tp.size()) break;
 			int sl = slot[tp[t]];
 			if (sl < 0) continue;
-			if (gi < 0) gi = (int)groups.size(), groups.push_back ({ e.meshp, e.group, {} });
+			if (gi < 0) gi = (int)groups.size(), groups.push_back ({ e.meshp, e.group, {}, {}, e.ofs });
+			groups[gi].tris.push_back (k / 3);
 			for (int j = 0; j < 3; j++) {
 				NTVERTEX v = grp->Vtx[grp->Idx[k+j]];
 				v.x += (float)e.ofs.x, v.y += (float)e.ofs.y, v.z += (float)e.ofs.z;
@@ -4857,8 +4859,11 @@ int Vessel::BreakPart (int part, double vsep)
 	StateVectors sc (s);
 	sc.vel = s.vel - mul (s.R, crossp (dmg.cg, s.omega)); // (the velocity of the origin's point)
 	std::string dname = name + " " + parts[part].name;
-	Debris *d = new Debris (dname, name, m, cg, sc, std::move (groups), pts);
-	g_psys->AddDebris (d, this);
+	Debris *d = nullptr;
+	if (!silent_break) {
+		d = new Debris (dname, name, m, cg, sc, std::move (groups), pts);
+		g_psys->AddDebris (d, this);
+	}
 	last_debris = d;
 
 	// what is left: its centre of gravity moves (the origin stays where it
@@ -4872,7 +4877,7 @@ int Vessel::BreakPart (int part, double vsep)
 		return (int)piece.size();
 	}
 	Vector cg0 (dmg.cg), cg1 ((dmg.cg * M - cg * m) / (M - m));
-	AddVelocity (mul (s.R, crossp (cg1 - cg0, s.omega)));
+	if (!silent_break) AddVelocity (mul (s.R, crossp (cg1 - cg0, s.omega)));
 	Vector I0 (OwnPMI() * M);
 	auto Shift = [](const Vector &c, double mm) { return Vector (mm*(c.y*c.y + c.z*c.z), mm*(c.x*c.x + c.z*c.z), mm*(c.x*c.x + c.y*c.y)); };
 	Vector Ic (I0 + Shift (cg0, M) - Ip);               // (about the origin, without the piece)
@@ -4885,7 +4890,7 @@ int Vessel::BreakPart (int part, double vsep)
 	// pushed apart (momentum conserved)
 	Vector r (mul (s.R, cg - cg1));
 	Vector dir (r.length() > 1e-6 ? r.unit() : mul (s.R, Vector (0,1,0)));
-	if (vsep > 0.0 && M > m) {
+	if (d && vsep > 0.0 && M > m) {
 		d->AddVelocity (dir * (vsep * (M - m) / M));
 		AddVelocity (dir * (-vsep * m / M));
 	}
@@ -4895,6 +4900,8 @@ int Vessel::BreakPart (int part, double vsep)
 	UpdateMass ();
 	SetOwnPMI (pmi1);
 	UpdateDamageEffects ();
+
+	if (silent_break) return (int)piece.size();
 
 	// (at rest on the ground: moving again, without the parts it stood on)
 	if (fstatus == FLIGHTSTATUS_LANDED) bForceActive = true;
@@ -5099,6 +5106,31 @@ void Vessel::UpdateHeating ()
 	}
 }
 
+void Vessel::ApplySavedDamage ()
+{
+	if (saved_lost.empty() && !saved_destroyed) return;
+	const std::vector<structure::Part> &parts = Structure().Parts();
+	if (saved_nparts != parts.size()) {
+		LOGOUT_WARN ("%s: the damage in the scenario is for %d parts, the vessel has %d: ignored", name.c_str(), (int)saved_nparts, (int)parts.size());
+	} else {
+		silent_break = true;
+		std::sort (saved_lost.rbegin(), saved_lost.rend()); // (the outermost first: one part each)
+		for (int j : saved_lost)
+			if (j > 0 && j < (int)parts.size()) BreakPart (j, 0.0);
+		if (saved_destroyed) {
+			breaking_up = true;
+			BreakPart (0, 0.0);
+			breaking_up = false;
+			destroyed = true;
+			enablefocus = false;
+			destroyed_t = -1e10; // (not in the replay)
+		}
+		silent_break = false;
+	}
+	saved_lost.clear();
+	saved_destroyed = false;
+}
+
 void Vessel::Destroy (const char *reason)
 {
 	if (destroyed || supervessel || attach) return;
@@ -5135,6 +5167,12 @@ void Vessel::FollowWreck ()
 	// (the ghost of a destroyed vessel moves with the largest piece of its
 	// wreck: what the focus vessel's instruments show)
 	if (wreck && !g_psys->isDebris (wreck)) wreck = nullptr;
+	if (!wreck) { // (e.g. read from a scenario: the largest piece of it)
+		for (size_t i = 0; i < g_psys->nDebris(); i++) {
+			Debris *d = g_psys->GetDebris (i);
+			if (d->Source() == name && (!wreck || d->Mass() > wreck->Mass())) wreck = d;
+		}
+	}
 	s1->Set (*s0);
 	if (wreck) { // (the wreck's state at the start of the step, moved over it: its new state is not known yet)
 		s1->vel.Set (wreck->GVel());
@@ -6668,6 +6706,15 @@ void Vessel::WriteDefault (ostream &ofs) const
 	for (const auto &n : mnodes)
 		ofs << "  MNODE " << setprecision(10) << n.mjd << ' ' << setprecision(4)
 			<< n.dv.x << ' ' << n.dv.y << ' ' << n.dv.z << (n.autoburn ? " AUTO" : "") << endl;
+
+	// parts lost (the number of parts first: they must match when read)
+	if (!part_lost.empty()) {
+		ofs << "  DAMAGE " << part_lost.size();
+		for (size_t j = 0; j < part_lost.size(); j++)
+			if (part_lost[j]) ofs << ' ' << j;
+		ofs << endl;
+	}
+	if (destroyed) ofs << "  DESTROYED" << endl;
 
 	for (i =  0, needlabel = true; i < ntank; i++) {
 		double lvl;

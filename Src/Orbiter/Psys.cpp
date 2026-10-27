@@ -88,6 +88,17 @@ void PlanetarySystem::InitState (const char *fname)
 			AddVessel (new Vessel (this, pc, pd, ifs)); TRACENEW
 		}
 	}
+	// pieces of debris
+	if (FindLine (ifs, "BEGIN_DEBRIS")) {
+		std::string line;
+		while (std::getline (ifs, line)) {
+			line.erase (0, line.find_first_not_of (" \t"));
+			line.erase (line.find_last_not_of (" \t\r") + 1);
+			if (!_stricmp (line.c_str(), "END_DEBRIS")) break;
+			if (_strnicmp (line.c_str(), "PIECE ", 6)) continue;
+			if (Debris *d = Debris::Read (ifs, line.substr (6))) AddDebris (d);
+		}
+	}
 }
 
 void PlanetarySystem::PostCreation ()
@@ -99,10 +110,17 @@ void PlanetarySystem::PostCreation ()
 
 void PlanetarySystem::Write (ostream &os)
 {
+	extern Vessel *g_focusobj;
 	os << "BEGIN_SHIPS" << endl;
 	for (size_t i = 0; i < vessels.size(); ++i)
-		vessels[i]->Write (os);
+		if (!vessels[i]->Destroyed() || vessels[i] == g_focusobj) // (destroyed: a ghost, kept only as the focus vessel)
+			vessels[i]->Write (os);
 	os << "END_SHIPS" << endl;
+	if (!debris.empty()) {
+		os << "\nBEGIN_DEBRIS" << endl;
+		for (const Debris *d : debris) d->Write (os);
+		os << "END_DEBRIS" << endl;
+	}
 }
 
 Body *PlanetarySystem::GetObj (const char *name, bool ignorecase)

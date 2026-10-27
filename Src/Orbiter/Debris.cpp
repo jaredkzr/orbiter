@@ -6,10 +6,16 @@
 #include "Planet.h"
 #include "Element.h"
 #include "elevmgr.h"
+#include "Mesh.h"
+#include "Orbiter.h"
+#include "Log.h"
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
+#include <sstream>
 
 extern PlanetarySystem *g_psys;
+extern Orbiter *g_pOrbiter;
 extern TimeData td;
 extern bool g_bStateUpdate;
 
@@ -33,6 +39,7 @@ Debris::Debris (const std::string &_name, const std::string &_source, double m, 
 	// inertia (a thin shell of uniform density)
 	double S[3] = {0,0,0};
 	for (Group &g : groups) {
+		g.ofs -= cg;
 		for (NTVERTEX &v : g.vtx) v.x -= (float)cg.x, v.y -= (float)cg.y, v.z -= (float)cg.z;
 		for (size_t k = 0; k + 2 < g.vtx.size(); k += 3) {
 			Vector p[3];
@@ -278,4 +285,120 @@ void Debris::CollectGroundContacts (const StateVectors &s, const StateVectors &s
 			p.warm = nullptr;
 			pts.push_back (p);
 		}
+}
+
+// =======================================================================
+// Scenarios
+
+void Debris::Write (std::ostream &os) const
+{
+	for (const Group &g : groups)
+		if (!g.mesh || !g.mesh->GetName() || !g.mesh->GetName()[0]) return; // (a mesh made by a module: not written)
+	os << "PIECE " << name << '\n';
+	os << "  SOURCE " << source << '\n';
+	os << std::setprecision (10) << "  MASS " << mass << '\n';
+	auto mat = [&](const Matrix &R) {
+		for (int i = 0; i < 9; i++) os << ' ' << R.data[i];
+		os << '\n';
+	};
+	if (AtRest() && proxyplanet) {
+		os << "  REST " << proxyplanet->Name() << ' ' << sp.ploc.x << ' ' << sp.ploc.y << ' ' << sp.ploc.z << '\n';
+		os << "  LROT";
+		mat (land_rot);
+	} else if (cbody) {
+		Vector p (GPos() - cbody->GPos()), v (GVel() - cbody->GVel());
+		os << "  STATE " << cbody->Name() << ' ' << p.x << ' ' << p.y << ' ' << p.z << ' ' << v.x << ' ' << v.y << ' ' << v.z << '\n';
+		os << "  ROT";
+		mat (s0->R);
+		os << "  VROT " << s0->omega.x << ' ' << s0->omega.y << ' ' << s0->omega.z << '\n';
+	}
+	for (const Group &g : groups) {
+		os << "  GROUP " << g.mesh->GetName() << ' ' << g.group << ' ' << g.ofs.x << ' ' << g.ofs.y << ' ' << g.ofs.z;
+		// (triangle indices, runs as a-b)
+		for (size_t i = 0; i < g.tris.size(); ) {
+			size_t j = i;
+			while (j + 1 < g.tris.size() && g.tris[j+1] == g.tris[j] + 1) j++;
+			os << ' ' << g.tris[i];
+			if (j > i) os << '-' << g.tris[j];
+			i = j + 1;
+		}
+		os << '\n';
+	}
+	for (const collision::Hull &h : hulls) {
+		os << "  HULL " << h.v.size();
+		for (const Vector &v : h.v) os << ' ' << v.x << ' ' << v.y << ' ' << v.z;
+		os << '\n';
+	}
+	os << "END\n";
+}
+
+Debris *Debris::Read (std::istream &is, const std::string &name)
+{
+	std::string line, source, ref;
+	double m = 0.0;
+	bool rest = false, state = false;
+	Vector p, v, w;
+	Matrix R (1,0,0, 0,1,0, 0,0,1);
+	std::vector<Group> groups;
+	std::vector<std::vector<Vector>> hullPts;
+	while (std::getline (is, line)) {
+		std::istringstream ss (line);
+		std::string tok;
+		if (!(ss >> tok)) continue;
+		if (tok == "END") break;
+		if (tok == "SOURCE") ss >> source;
+		else if (tok == "MASS") ss >> m;
+		else if (tok == "REST") { ss >> ref >> p.x >> p.y >> p.z; rest = true; }
+		else if (tok == "STATE") { ss >> ref >> p.x >> p.y >> p.z >> v.x >> v.y >> v.z; state = true; }
+		else if (tok == "ROT" || tok == "LROT") { for (int i = 0; i < 9; i++) ss >> R.data[i]; }
+		else if (tok == "VROT") ss >> w.x >> w.y >> w.z;
+		else if (tok == "GROUP") {
+			Group g;
+			std::string meshname;
+			ss >> meshname >> g.group >> g.ofs.x >> g.ofs.y >> g.ofs.z;
+			g.mesh = g_pOrbiter->LoadMeshGlobal (meshname.c_str());
+			GroupSpec *grp = g.mesh ? const_cast<Mesh*>(g.mesh)->GetGroup (g.group) : nullptr;
+			if (!grp) { LOGOUT_WARN ("Debris %s: no group %u in mesh %s", name.c_str(), (unsigned)g.group, meshname.c_str()); return nullptr; }
+			std::string run;
+			while (ss >> run) {
+				unsigned a = 0, b = 0;
+				int n = sscanf (run.c_str(), "%u-%u", &a, &b);
+				if (n < 1) continue;
+				if (n < 2) b = a;
+				for (unsigned k = a; k <= b && 3*k+2 < grp->nIdx; k++) {
+					g.tris.push_back (k);
+					for (int j = 0; j < 3; j++) {
+						NTVERTEX x = grp->Vtx[grp->Idx[3*k+j]];
+						x.x += (float)g.ofs.x, x.y += (float)g.ofs.y, x.z += (float)g.ofs.z;
+						g.vtx.push_back (x);
+					}
+				}
+			}
+			groups.push_back (std::move (g));
+		}
+		else if (tok == "HULL") {
+			size_t n = 0;
+			ss >> n;
+			std::vector<Vector> pts (n);
+			for (Vector &x : pts) ss >> x.x >> x.y >> x.z;
+			hullPts.push_back (std::move (pts));
+		}
+	}
+	CelestialBody *cb = g_psys->GetGravObj (ref.c_str());
+	if (!cb || m <= 0.0 || (!rest && !state)) return nullptr;
+	StateVectors s;
+	if (rest) { // (on the turning ground)
+		s.pos = cb->GPos() + mul (cb->GRot(), p);
+		s.vel = cb->GVel();
+		s.R.Set (cb->GRot());
+		s.R.postmul (R);
+	} else {
+		s.pos = cb->GPos() + p, s.vel = cb->GVel() + v;
+		s.R.Set (R);
+		s.omega = w;
+	}
+	s.Q.Set (s.R);
+	Debris *d = new Debris (name, source, m, Vector (0,0,0), s, std::move (groups), hullPts);
+	if (rest && cb->Type() == OBJTP_PLANET) d->InitLanded ((Planet*)cb, 0.0, 0.0, 0.0, &R);
+	return d;
 }

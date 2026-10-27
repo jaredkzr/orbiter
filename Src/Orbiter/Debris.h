@@ -30,6 +30,8 @@ public:
 		const Mesh *mesh;          ///< the vessel's mesh it came from
 		DWORD group;               ///< the group in that mesh
 		std::vector<NTVERTEX> vtx; ///< three vertices for each triangle
+		std::vector<DWORD> tris;   ///< the triangles' indices in the group (scenarios)
+		Vector ofs;                ///< the mesh's offset in the debris frame
 	};
 
 	/// A piece of mass m, centre of gravity at cg in the vessel's frame,
@@ -56,6 +58,15 @@ public:
 
 	/// Adds a velocity change (e.g. the push of the joint that broke)
 	void AddVelocity (const Vector &dv);
+
+	/// Writes the piece to a scenario (BEGIN_DEBRIS section): its state,
+	/// the triangles of the meshes it was made of (by the meshes' names) and
+	/// its hulls. Pieces of meshes without a name (made by a module) are
+	/// not written.
+	void Write (std::ostream &os) const;
+	/// Reads a piece from a scenario (after its PIECE line, up to END);
+	/// null if it cannot be made
+	static Debris *Read (std::istream &is, const std::string &name);
 
 protected:
 	void GetIntermediateMoments (Vector &acc, Vector &tau, const StateVectors &state, double tfrac, double dt) override;

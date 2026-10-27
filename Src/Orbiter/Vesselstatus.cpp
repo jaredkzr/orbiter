@@ -8,6 +8,7 @@
 
 #include "Orbiter.h"
 #include "Vessel.h"
+#include <sstream>
 #include "SuperVessel.h"
 #include "Config.h"
 #include "Pane.h"
@@ -377,6 +378,15 @@ bool Vessel::ParseScenarioLineDirect (char *line)
 			n.autoburn = !_stricmp (flag, "AUTO");
 			AddManeuverNode (n);
 		}
+		return true;
+	} else if (!_strnicmp (line, "DAMAGE", 6)) { // parts lost: number of parts, then the indices of those lost
+		std::istringstream ss (line+6);
+		ss >> saved_nparts;
+		int j;
+		while (ss >> j) saved_lost.push_back (j);
+		return true;
+	} else if (!_strnicmp (line, "DESTROYED", 9)) {
+		saved_destroyed = true;
 		return true;
 	} else if (!_strnicmp (line, "ATTACHED", 8)) {
 		char cbuf[256];

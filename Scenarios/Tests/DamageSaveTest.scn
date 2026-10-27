@@ -1,0 +1,51 @@
+BEGIN_HYPERDESC
+<h1>Saving damage</h1>
+Delta-gliders lose parts (one landed: its wing tip comes to rest beside
+it; one in orbit: its nose drifts away; one spun up in orbit breaks up),
+and the scenario is saved (the damage model on: the test sets
+ORBITER_DAMAGE=1). The
+test Scenario.DamageLoadTest loads it again and checks that the vessels'
+lost parts and the debris are as they were.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Tests/DamageSaveTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship GL-01
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET GL-01
+  MODE Extern
+  POS 4.0 -20.0 -30
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+GL-01:DeltaGlider
+  STATUS Landed Earth
+  POS -80.6838740 28.5988713
+  HEADING 330.01
+  GEAR 1 1.0000
+  PRPLEVEL 0:0.050 1:1.000
+END
+GL-02:DeltaGlider
+  STATUS Orbiting Earth
+  RPOS 3259578.50 697743.53 -5765488.27
+  RVEL 6438.832 1743.162 3914.279
+  AROT 96.69 -74.93 -5.17
+  PRPLEVEL 0:0.050 1:1.000
+END
+GONE:DeltaGlider
+  STATUS Orbiting Earth
+  RPOS 3260578.50 697743.53 -5765488.27
+  RVEL 6438.832 1743.162 3914.279
+  AROT 96.69 -74.93 -5.17
+  PRPLEVEL 0:0.050 1:1.000
+END
+END_SHIPS

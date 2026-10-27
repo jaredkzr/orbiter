@@ -63,3 +63,32 @@ GetPartInfo (in Lua vessel:get_partcount, get_partinfo: also the load of
 each joint and each part's temperature). VESSEL::BreakPart breaks a part
 off (vessel:break_part); the module is told of parts lost by
 VMSG_PARTLOST (clbkGeneric).
+
+Scenarios
+---------
+
+A vessel's lost parts are saved with it (the number of parts first, then
+the indices of those lost; they are read only if the vessel still has
+that many parts):
+
+    DAMAGE 10 8 9
+
+Debris is saved after the ships, each piece with its state (at rest: its
+position and orientation in the planet's frame; in motion: relative to
+its reference body) and the triangles of the vessel's meshes it was made
+of (by mesh file name, group, offset and triangle indices), and its hulls:
+
+    BEGIN_DEBRIS
+    PIECE GL-01 aft left section 2
+      SOURCE GL-01
+      MASS 847.66
+      REST Earth 905513.44 3049633.31 -5519923.72
+      LROT ...
+      GROUP DG\deltaglider 28 -8.2 0.1 1.6 12-40 52 ...
+      HULL 24 ...
+    END
+    END_DEBRIS
+
+Pieces of meshes made by a vessel module (without a file name) are not
+saved. A vessel that broke up is saved only if it is the focus vessel (as
+the ghost following its wreck, DESTROYED).

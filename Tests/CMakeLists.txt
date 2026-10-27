@@ -96,6 +96,15 @@ if (ORBITER_TEST_EXE)
 	# (the slope test needs the slope of the elevation data, without procedural
 	# detail, and no boulders in the way)
 	set_tests_properties(Scenario.ContactSlopeTest PROPERTIES ENVIRONMENT "ORBITER_NO_TERRAIN_DETAIL=1;ORBITER_NO_SCATTER=1")
+	# saving and loading damage: the save test writes the scenario the load
+	# test runs (in the build tree)
+	set_tests_properties(Scenario.DamageSaveTest PROPERTIES FIXTURES_SETUP DamageRoundtrip ENVIRONMENT "ORBITER_DAMAGE=1")
+	add_test(
+		NAME "Scenario.DamageLoadTest"
+		COMMAND ${ORBITER_TEST_EXE} "--scenariox=${ORBITER_BINARY_ROOT_DIR}/Scenarios/Tests/DamageRoundtrip.scn" "--fixedstep=0.02"
+		WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+	)
+	set_tests_properties(Scenario.DamageLoadTest PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED DamageRoundtrip)
 	# (the destruction test needs the damage model on)
 	set_tests_properties(Scenario.DestructionTest Scenario.FocusLossTest PROPERTIES ENVIRONMENT "ORBITER_DAMAGE=1")
 

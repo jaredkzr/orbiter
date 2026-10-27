@@ -1239,6 +1239,11 @@ public:
 	void IssueClearanceRequest ();
 	// ask current landing target for takeoff/landing clearance
 
+	bool Destroyed () const { return destroyed; }
+	// destroyed: a hidden ghost that follows the largest piece of its wreck
+	// (the focus vessel, until the user switches to another vessel; others
+	// while the instant replay still shows them), then deleted
+
 	inline double EmptyMass () const { return emass; }
 	inline void   SetEmptyMass (double m) { emass = m; UpdateMass(); }
 	// return/set empty vessel mass (excluding fuel and payload)
@@ -1337,10 +1342,6 @@ protected:
 	// a vessel overloaded at its core (or crushed) breaks up
 	void Destroy (const char *reason);
 	// breaks up: every part becomes a piece of debris, the vessel is deleted
-	bool Destroyed () const { return destroyed; }
-	// destroyed: a hidden ghost that follows the largest piece of its wreck
-	// (the focus vessel, until the user switches to another vessel; others
-	// while the instant replay still shows them), then deleted
 	Debris *Wreck () const { return wreck; }
 	void FollowWreck ();
 	float PartLoad (int part) const { return part >= 0 && part < (int)part_load.size() ? part_load[part] : 0.0f; }
@@ -1753,6 +1754,12 @@ private:
 	Debris *wreck = nullptr;                     // the largest piece of its wreck
 	Debris *last_debris = nullptr;               // (BreakPart: the piece made)
 	bool breaking_up = false;                    // (Destroy: the core part breaks off too)
+	bool silent_break = false;                   // (parts lost read from a scenario: no debris, no push, no message)
+	std::vector<int> saved_lost;                 // (scenario: DAMAGE, DESTROYED)
+	size_t saved_nparts = 0;
+	bool saved_destroyed = false;
+	void ApplySavedDamage ();
+	// the parts lost in a scenario (after the module made the vessel)
 	void RecordForce (const Vector &F, const void *e, const Vector &ref);
 	// a force of the vessel's on the part of element e at ref (loads)
 	struct ExtGroup {                            // a group of an external mesh
