@@ -274,11 +274,13 @@ Known gaps and limitations, to be addressed later.
   Neptune storm views about 14 ms (large towers). Goal: about 3 ms.
 - Distant towers vanish in the Rayleigh fog of the deep gas (about 75 km of
   visibility at 6 bar), as they should. Uranus is bland, as Voyager saw it.
-- Open: the pop-ups and the decks seen at grazing angles keep a crumbly
-  texture (their finest noise thresholded); towers slender (some 180 km
-  tall, 5-30 km across: smoke-like from afar); the decks' own light some
-  10 percent brighter than the map's look (a gradual brightening from 3000
-  km down). Crush depth (no vessel destruction yet).
+- Towers as cumulonimbus (1.8x the old radius, flaring with height,
+  domed caps); the noise's footprint drawn out at grazing angles (no
+  crumbs). The decks' own light is some 10 percent above the map's look,
+  spread over the descent (no visible ramp).
+- Open: anvils' ripple rings read as stacked terraces when seen edge-on;
+  wide columns can look boxy under an anvil. Crush depth (no vessel
+  destruction yet).
 
 ## Plume and exhaust overhaul (planned, after the current graphics list)
 - User request: overhaul plume and exhaust effects. Current state: billboard
