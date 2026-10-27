@@ -170,7 +170,34 @@ DLLEXPORT bool oapiGetDebrisInfo (OBJHANDLE hDebris, DEBRISINFO *info)
 	info->mass = d->Mass();
 	info->size = d->Size();
 	info->flags = (d->AtRest() ? DEBRIS_ATREST : 0) | (d->Hidden() ? DEBRIS_HIDDEN : 0);
+	info->serial = d->Serial();
+	info->ngroup = (DWORD)d->Groups().size();
 	return true;
+}
+
+DLLEXPORT bool oapiGetDebrisGroup (OBJHANDLE hDebris, DWORD i, DEBRISGROUP *grp)
+{
+	if (!grp || !g_psys->isDebris ((Body*)hDebris)) return false;
+	const Debris *d = (const Debris*)hDebris;
+	if (i >= d->Groups().size()) return false;
+	const Debris::Group &g = d->Groups()[i];
+	// (the mesh only if it is a global one: its textures stay)
+	grp->hMesh = (g.mesh && g.mesh->GetName() && g.mesh->GetName()[0]) ? (MESHHANDLE)g.mesh : NULL;
+	grp->group = g.group;
+	grp->vtx = g.vtx.data();
+	grp->nvtx = (DWORD)g.vtx.size();
+	grp->edge = g.edge.size() * 3 == g.vtx.size() ? g.edge.data() : nullptr;
+	return true;
+}
+
+DLLEXPORT DWORD oapiGetVesselDamageVersion (OBJHANDLE hVessel)
+{
+	return ((Vessel*)hVessel)->DamageVersion();
+}
+
+DLLEXPORT DWORD oapiGetVesselHiddenTriangles (OBJHANDLE hVessel, UINT mesh, DWORD grp, BYTE *mask, DWORD ntri)
+{
+	return ((Vessel*)hVessel)->HiddenTriangles (mesh, grp, mask, ntri);
 }
 
 DLLEXPORT const void *oapiGetObjectParam (OBJHANDLE hObj, DWORD paramtype)

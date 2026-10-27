@@ -99,6 +99,7 @@ void VVessel::InsertMesh (UINT idx)
 	rec.visMode = vessel->GetMeshVisibilityMode (idx);
 	rec.grpTransform.assign (rec.mesh->nGroup(), Mat4::Identity());
 	rec.grpVisible.assign (rec.mesh->nGroup(), 1);
+	damageVersion = 0; // (a new mesh: the parts broken off hidden again)
 }
 
 MESHHANDLE VVessel::GetMesh (UINT idx)
@@ -138,7 +139,27 @@ void VVessel::Update ()
 {
 	VObject::Update ();
 	UpdateAnimations ();
+	UpdateDamage ();
 	UpdateTracks ();
+}
+
+void VVessel::UpdateDamage ()
+{
+	// the triangles of parts broken off are not drawn
+	DWORD v = oapiGetVesselDamageVersion (hObj);
+	if (v == damageVersion) return;
+	damageVersion = v;
+	std::vector<BYTE> mask;
+	for (size_t m = 0; m < meshes.size(); m++) {
+		MeshRec &rec = meshes[m];
+		if (!rec.mesh) continue;
+		for (uint32_t g = 0; g < rec.mesh->nGroup(); g++) {
+			DWORD ntri = rec.mesh->GetGroup (g).nIndex / 3;
+			mask.assign (ntri, 0);
+			DWORD n = v ? oapiGetVesselHiddenTriangles (hObj, (UINT)m, g, mask.data(), ntri) : 0;
+			rec.mesh->SetHiddenTriangles (g, n ? mask.data() : nullptr);
+		}
+	}
 }
 
 void VVessel::UpdateTracks ()
@@ -340,6 +361,79 @@ void VVessel::SetHeating ()
 	}
 	VECTOR3 dir = scene->ViewDir (mul (grot, as / spd));
 	scene->SetObjectHeat (dir, t);
+}
+
+// ======================================================================
+// VDebris
+
+VDebris::VDebris (OBJHANDLE h, Scene *s, DWORD sn)
+	: VObject (h, s), serial (sn)
+{
+	DEBRISINFO info;
+	if (!oapiGetDebrisInfo (hObj, &info)) return;
+	std::vector<VkMesh::Part> parts;
+	for (DWORD i = 0; i < info.ngroup; i++) {
+		DEBRISGROUP dg;
+		if (!oapiGetDebrisGroup (hObj, i, &dg) || dg.nvtx < 3) continue;
+		// the texture and material of the vessel's mesh group
+		VkMesh::Part base;
+		if (dg.hMesh) {
+			if (MESHGROUP *mg = oapiMeshGroup (dg.hMesh, dg.group)) {
+				if (mg->MtrlIdx != (DWORD)-1) // (none: the default material)
+					if (MATERIAL *m = oapiMeshMaterial (dg.hMesh, mg->MtrlIdx)) base.mat = *m;
+				if (mg->TexIdx != (DWORD)-1)
+					base.tex = (VkTexture*)oapiGetTextureHandle (dg.hMesh, mg->TexIdx + 1);
+			}
+		}
+		base.pbr = PBRParams::FromMaterial (base.mat);
+		// the triangles at the fracture: charred (dark, rough)
+		VkMesh::Part charred = base;
+		for (float *c : { &charred.mat.diffuse.r, &charred.mat.diffuse.g, &charred.mat.diffuse.b,
+		                  &charred.mat.ambient.r, &charred.mat.ambient.g, &charred.mat.ambient.b }) *c *= 0.18f;
+		charred.mat.specular = { 0.02f, 0.02f, 0.02f, 1.0f };
+		charred.pbr = PBRParams::FromMaterial (charred.mat);
+		charred.pbr.roughness = 0.95f;
+		charred.pbr.metalness = 0.0f;
+		int cur[2] = { -1, -1 }; // (the parts being filled: plain, charred)
+		for (DWORD k = 0; k + 2 < dg.nvtx; k += 3) {
+			int c = dg.edge && dg.edge[k / 3] > 0.5f ? 1 : 0;
+			// (16-bit indices: a new part when one is full)
+			if (cur[c] < 0 || parts[cur[c]].vtx.size() + 3 > 65535) {
+				parts.push_back (c ? charred : base);
+				cur[c] = (int)parts.size() - 1;
+			}
+			VkMesh::Part &p = parts[cur[c]];
+			for (int j = 0; j < 3; j++) {
+				p.idx.push_back ((uint16_t)p.vtx.size());
+				p.vtx.push_back (dg.vtx[k + j]);
+			}
+		}
+	}
+	if (parts.empty()) return;
+	VulkanClient *gc = scene->Client();
+	mesh = std::make_unique<VkMesh> (gc->Ctx(), gc->TexMgr(), parts);
+}
+
+void VDebris::Update ()
+{
+	VObject::Update ();
+	DEBRISINFO info;
+	hidden = !oapiGetDebrisInfo (hObj, &info) || (info.flags & DEBRIS_HIDDEN);
+}
+
+void VDebris::Render (RenderPass pass)
+{
+	if (!mesh || hidden) return;
+	Mat4 mv = scene->ModelView (gpos, grot);
+	scene->Sunlight (gpos);
+	if (pass == RenderPass::Depth) SetMotion ();
+	scene->DrawMesh (mesh.get(), mv, pass);
+}
+
+void VDebris::RenderShadow (ShadowMap &sm)
+{
+	if (!mesh || hidden || length (gpos - sm.Centre()) > sm.Radius() + size) return;
+	sm.DrawMesh (mesh.get(), Mat4::FromRotTrans (grot, gpos - sm.Centre()));
 }
 
 void VVessel::RenderShadow (ShadowMap &sm)

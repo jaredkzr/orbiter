@@ -98,6 +98,8 @@ private:
 	void LoadMeshes ();
 	void InsertMesh (UINT idx);
 	void UpdateAnimations ();
+	void UpdateDamage ();
+	DWORD damageVersion = 0; // (the parts broken off shown so far: oapiGetVesselDamageVersion)
 	void UpdateTracks ();
 	void RenderExhaust ();
 	void SetHeating ();
@@ -129,6 +131,25 @@ private:
 	struct PlumeLight { VECTOR3 pos; float col[3]; double area; };
 	std::vector<PlumeLight> plumeLights;
 	void EmitSmoke (DWORD idx, int type, const struct PlumeDraw &pd, const struct PlumeInfo &info, double dt);
+};
+
+// -----------------------------------------------------------------------
+
+/// A piece broken off a vessel (oapiGetDebrisGroup): its triangles, with
+/// the textures and materials of the vessel's mesh; those at the fracture
+/// charred
+class VDebris : public VObject {
+public:
+	VDebris (OBJHANDLE hObj, Scene *scene, DWORD serial);
+	DWORD Serial () const { return serial; }
+	void Update () override;
+	void Render (RenderPass pass) override;
+	void RenderShadow (ShadowMap &sm) override;
+
+private:
+	DWORD serial;
+	bool hidden = false;
+	std::unique_ptr<VkMesh> mesh;
 };
 
 // -----------------------------------------------------------------------

@@ -177,6 +177,7 @@ void VkMesh::ApplyMaterialConfig (const MaterialConfig &cfg, const std::string &
 			if (!sideTex || g.nIndex < 3) continue;
 			// triangles facing the direction (by their vertex normals) to the end
 			std::vector<uint16_t> front, side;
+			std::vector<uint32_t> frontTri, sideTri; // (template triangle order)
 			for (uint32_t k = 0; k + 2 < g.nIndex; k += 3) {
 				const uint16_t *tri = &idx[g.firstIndex + k];
 				float d = 0.0f;
@@ -185,8 +186,13 @@ void VkMesh::ApplyMaterialConfig (const MaterialConfig &cfg, const std::string &
 					d += v.nx * t.sideDir[0] + v.ny * t.sideDir[1] + v.nz * t.sideDir[2];
 				}
 				(d > 0.0f ? side : front).insert ((d > 0.0f ? side : front).end(), tri, tri + 3);
+				(d > 0.0f ? sideTri : frontTri).push_back (k / 3);
 			}
 			if (side.empty()) continue;
+			size_t gi = &g - groups.data();
+			if (triOrder.size() < groups.size()) triOrder.resize (groups.size());
+			triOrder[gi] = frontTri;
+			triOrder[gi].insert (triOrder[gi].end(), sideTri.begin(), sideTri.end());
 			std::copy (front.begin(), front.end(), idx.begin() + g.firstIndex);
 			std::copy (side.begin(), side.end(), idx.begin() + g.firstIndex + front.size());
 			if (ibuf.buffer)
@@ -387,6 +393,33 @@ int VkMesh::GetGroupData (DWORD grp, GROUPREQUESTSPEC *grs) const
 	grs->MtrlIdx = groupMtrlIdx[grp];
 	grs->TexIdx = groupTexIdx[grp];
 	return res;
+}
+
+void VkMesh::SetHiddenTriangles (uint32_t grp, const uint8_t *mask)
+{
+	if (grp >= groups.size()) return;
+	const Group &g = groups[grp];
+	if (g.nIndex < 3) return;
+	if (idx0.empty()) {
+		if (!mask) return;
+		idx0 = idx;
+	}
+	const std::vector<uint32_t> *order = grp < triOrder.size() && !triOrder[grp].empty() ? &triOrder[grp] : nullptr;
+	bool changed = false;
+	for (uint32_t k = 0; k + 2 < g.nIndex; k += 3) {
+		uint32_t tri = order ? (*order)[k / 3] : k / 3;
+		const uint16_t *src = &idx0[g.firstIndex + k];
+		uint16_t *dst = &idx[g.firstIndex + k];
+		bool hide = mask && mask[tri] == 1;
+		for (int j = 0; j < 3; j++) {
+			uint16_t v = hide ? src[0] : src[j]; // (hidden: a degenerate triangle)
+			if (dst[j] != v) dst[j] = v, changed = true;
+		}
+	}
+	if (!changed) return;
+	geomVersion++;
+	if (ibuf.buffer)
+		ctx->UpdateBuffer (ibuf.buffer, g.firstIndex * sizeof(uint16_t), idx.data() + g.firstIndex, g.nIndex * sizeof(uint16_t));
 }
 
 int VkMesh::EditGroup (DWORD grp, GROUPEDITSPEC *ges)

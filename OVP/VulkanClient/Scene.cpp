@@ -14,6 +14,7 @@
 #include "VObjects.h"
 #include "PlanetSurface.h"
 #include <chrono>
+#include <set>
 #include "VObjects.h"
 #include "VkMesh.h"
 #include "VkTexture.h"
@@ -791,6 +792,32 @@ void Scene::Update ()
 			DeleteVisual (h);
 		}
 	}
+
+	// pieces of debris near the camera (not in the object list; handles of
+	// deleted pieces may be reused: told apart by their serial numbers)
+	std::set<OBJHANDLE> debris;
+	DWORD nd = oapiGetDebrisCount();
+	for (DWORD i = 0; i < nd; i++) {
+		OBJHANDLE h = oapiGetDebrisByIndex (i);
+		DEBRISINFO info;
+		if (!oapiGetDebrisInfo (h, &info)) continue;
+		debris.insert (h);
+		VECTOR3 p;
+		oapiGetGlobalPos (h, &p);
+		double range = std::max (VESSEL_VIS_MIN, info.size * VESSEL_VIS_RANGE);
+		auto it = visuals.find (h);
+		VDebris *vd = it != visuals.end() ? dynamic_cast<VDebris*>(it->second.get()) : nullptr;
+		if (vd && vd->Serial() != info.serial) visuals.erase (it), vd = nullptr;
+		double d = length (p - camPos);
+		bool want = vd ? d < range * 1.2 : d < range;
+		if (want && !vd) visuals[h] = std::make_unique<VDebris> (h, this, info.serial);
+		else if (!want && vd) visuals.erase (h);
+	}
+	for (auto it = visuals.begin(); it != visuals.end(); ) {
+		if (dynamic_cast<VDebris*>(it->second.get()) && !debris.count (it->first)) it = visuals.erase (it);
+		else ++it;
+	}
+
 	for (auto &it : visuals) it.second->Update();
 }
 

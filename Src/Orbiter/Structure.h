@@ -129,12 +129,18 @@ namespace structure {
 		/// The part of each triangle of the triangle list it was built from
 		const std::vector<int> &TrianglePart () const { return triPart; }
 
+		/// Parts next to a triangle (bit i: part i, for i < 64; its own part
+		/// too): a triangle next to a part that broke off is at the fracture
+		uint64_t TriangleNeighbours (size_t t) const { return t < triCell.size() ? cellNbr[triCell[t]] : 0; }
+
 	private:
 		std::vector<Part> parts; // (parents before children; the core part first)
 		std::vector<int> hullPart;
 		std::vector<int> triPart;
 		std::vector<Vector> cells;  // centres of the cells of the surface (Build)
 		std::vector<int> cellPart;  // the part of each
+		std::vector<uint64_t> cellNbr; // the parts in and next to each
+		std::vector<int> triCell;   // the cell of each triangle
 		double cellSize = 0.0;
 		bool indestructible = false;
 		double crushPressure = 0.0;

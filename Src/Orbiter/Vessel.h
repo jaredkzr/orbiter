@@ -1239,6 +1239,11 @@ public:
 	void IssueClearanceRequest ();
 	// ask current landing target for takeoff/landing clearance
 
+	DWORD DamageVersion () const;
+	// changes when the parts shown change (the number of parts not shown)
+	DWORD HiddenTriangles (UINT mesh, DWORD grp, BYTE *mask, DWORD ntri) const;
+	// for each triangle of a group of a mesh: 0 shown, 1 not shown (its part
+	// broke off), 2 shown at the fracture. Returns the number not shown.
 	bool Destroyed () const { return destroyed; }
 	// destroyed: a hidden ghost that follows the largest piece of its wreck
 	// (the focus vessel, until the user switches to another vessel; others
@@ -1770,6 +1775,7 @@ private:
 		Vector ofs;                              // the mesh's offset
 	};
 	void ExternalGroups (std::vector<ExtGroup> &eg) const;
+	mutable std::map<std::pair<UINT,DWORD>, size_t> group_tri; // (the structure's first triangle of each external group)
 	// the groups of the external meshes, in order (the structure's triangles)
 	mutable double hull_bound = 0.0; // bounding radius of the hulls about the vessel's origin
 	mutable collision::Hull td_hull; // hull of the touchdown points (obstacles on the ground, if the vessel has no hulls)

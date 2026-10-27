@@ -32,6 +32,7 @@ public:
 		std::vector<NTVERTEX> vtx; ///< three vertices for each triangle
 		std::vector<DWORD> tris;   ///< the triangles' indices in the group (scenarios)
 		Vector ofs;                ///< the mesh's offset in the debris frame
+		std::vector<float> edge;   ///< for each triangle: at the fracture (1) or not (0)
 	};
 
 	/// A piece of mass m, centre of gravity at cg in the vessel's frame,
@@ -48,6 +49,7 @@ public:
 	const std::vector<collision::Hull> &Hulls () const { return hulls; }
 	bool AtRest () const { return fstatus == FLIGHTSTATUS_LANDED; }
 	double CreatedT () const { return created_t; } ///< [s] simulation time it broke off
+	DWORD Serial () const { return serial; }        ///< (unique: handles may be reused)
 	bool Hidden () const { return hidden; }        ///< not shown (instant replay: not broken off yet)
 	void SetHidden (bool h) { hidden = h; }
 
@@ -95,6 +97,7 @@ private:
 	double restTime = 0.0;     // [s] how long it has been still on the ground
 	double proxyCheckT = 0.0;  // next check for the proxy bodies
 	double created_t = 0.0;    // [s] simulation time it broke off
+	DWORD serial;
 	bool hidden = false;
 };
 

@@ -2179,7 +2179,22 @@ typedef struct {
 	double mass;       ///< mass [kg]
 	double size;       ///< bounding radius [m]
 	DWORD flags;       ///< DEBRIS_ATREST, DEBRIS_HIDDEN
+	DWORD serial;      ///< unique number of the piece (handles of deleted pieces may be reused)
+	DWORD ngroup;      ///< number of groups of triangles (oapiGetDebrisGroup)
 } DEBRISINFO;
+
+/**
+ * \brief Triangles of a piece of debris from one group of a vessel's mesh
+ *   (for graphics clients)
+ * \sa oapiGetDebrisGroup
+ */
+typedef struct {
+	MESHHANDLE hMesh;     ///< the mesh they came from, for its textures and materials (NULL: a mesh made by a vessel module)
+	DWORD group;          ///< the group in that mesh
+	const NTVERTEX *vtx;  ///< three vertices for each triangle, in the piece's frame
+	DWORD nvtx;           ///< number of vertices
+	const float *edge;    ///< for each triangle: 1 at the fracture (charred), 0 not (NULL: none known)
+} DEBRISGROUP;
 
 #define DEBRIS_ATREST 0x0001 ///< at rest on the ground
 #define DEBRIS_HIDDEN 0x0002 ///< not shown (in the instant replay: not broken off by the time shown)
@@ -2737,6 +2752,37 @@ OAPIFUNC OBJHANDLE oapiGetDebrisByIndex (DWORD index);
  * \return false if hDebris is not a piece of debris
  */
 OAPIFUNC bool oapiGetDebrisInfo (OBJHANDLE hDebris, DEBRISINFO *info);
+
+/**
+ * \brief Returns a group of triangles of a piece of debris (for graphics
+ *   clients: the piece's geometry, with the mesh it came from).
+ * \param hDebris debris handle
+ * \param i group index (< DEBRISINFO::ngroup)
+ * \param grp the triangles (valid while the piece exists)
+ * \return false if hDebris is not a piece of debris or i out of range
+ */
+OAPIFUNC bool oapiGetDebrisGroup (OBJHANDLE hDebris, DWORD i, DEBRISGROUP *grp);
+
+/**
+ * \brief A number that changes when the parts of a vessel that are shown
+ *   change (parts broken off; in the instant replay, by the time shown).
+ *   Graphics clients update the triangles they draw when it changes.
+ * \sa oapiGetVesselHiddenTriangles
+ */
+OAPIFUNC DWORD oapiGetVesselDamageVersion (OBJHANDLE hVessel);
+
+/**
+ * \brief The triangles of a group of a vessel's mesh not to be drawn (their
+ *   part broke off).
+ * \param hVessel vessel handle
+ * \param mesh mesh index (as for VESSEL::GetMesh)
+ * \param grp group index
+ * \param mask for each triangle of the group (ntri): 0 shown, 1 not shown,
+ *   2 shown, at the fracture (charred)
+ * \param ntri number of triangles of the group
+ * \return number of triangles not shown
+ */
+OAPIFUNC DWORD oapiGetVesselHiddenTriangles (OBJHANDLE hVessel, UINT mesh, DWORD grp, BYTE *mask, DWORD ntri);
 
 /**
  * \brief Returns an object-specific configuration parameter.

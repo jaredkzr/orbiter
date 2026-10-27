@@ -130,6 +130,8 @@ namespace structure {
 		double emass, double size, const ClassConfig &cfg, uint64_t seed)
 	{
 		parts.clear();
+		triCell.clear();
+		cellNbr.clear();
 		crushPressure = cfg.crushPressure;
 		loadFactor = cfg.loadFactor, safety = cfg.safety;
 		maxTemp = cfg.maxTemp;
@@ -449,6 +451,13 @@ namespace structure {
 		cellPart.resize (ne);
 		for (int e = 0; e < ne; e++) cellPart[e] = num[label[e]];
 		for (size_t t = 0; t < tris.size(); t++) triPart[t] = cellPart[triCell[t]];
+		this->triCell = triCell;
+		cellNbr.assign (ne, 0);
+		for (int e = 0; e < ne; e++) {
+			if (cellPart[e] < 64) cellNbr[e] |= 1ull << cellPart[e];
+			for (int j : adj[e])
+				if (cellPart[j] < 64) cellNbr[e] |= 1ull << cellPart[j];
+		}
 
 		// bounding box of the vessel (names)
 		Vector lo (1e30, 1e30, 1e30), hi (-1e30, -1e30, -1e30);

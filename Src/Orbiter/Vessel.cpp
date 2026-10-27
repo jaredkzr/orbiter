@@ -4725,8 +4725,10 @@ const structure::Model &Vessel::Structure () const
 	std::vector<structure::Triangle> tris;
 	std::vector<ExtGroup> eg;
 	ExternalGroups (eg);
+	group_tri.clear();
 	for (const ExtGroup &e : eg) {
 		const GroupSpec *grp = (const GroupSpec*)e.grp;
+		group_tri[{e.mesh, e.group}] = tris.size();
 		for (DWORD k = 0; k + 2 < grp->nIdx; k += 3) {
 			const NTVERTEX *v[3] = { grp->Vtx + grp->Idx[k], grp->Vtx + grp->Idx[k+1], grp->Vtx + grp->Idx[k+2] };
 			tris.push_back ({ Vector (v[0]->x, v[0]->y, v[0]->z) + e.ofs, Vector (v[1]->x, v[1]->y, v[1]->z) + e.ofs,
@@ -4805,7 +4807,11 @@ int Vessel::BreakPart (int part, double vsep)
 		for (int c : parts[piece[i]].children)
 			if (!part_lost[c]) piece.push_back (c);
 	std::vector<int> slot (parts.size(), -1);
-	for (size_t i = 0; i < piece.size(); i++) slot[piece[i]] = (int)i;
+	uint64_t pieceMask = 0;
+	for (size_t i = 0; i < piece.size(); i++) {
+		slot[piece[i]] = (int)i;
+		if (piece[i] < 64) pieceMask |= 1ull << piece[i];
+	}
 	double m = 0.0;
 	Vector cg;
 	for (int p : piece) m += parts[p].mass, cg += parts[p].cg * parts[p].mass;
@@ -4826,8 +4832,9 @@ int Vessel::BreakPart (int part, double vsep)
 			if (t >= tp.size()) break;
 			int sl = slot[tp[t]];
 			if (sl < 0) continue;
-			if (gi < 0) gi = (int)groups.size(), groups.push_back ({ e.meshp, e.group, {}, {}, e.ofs });
+			if (gi < 0) gi = (int)groups.size(), groups.push_back ({ e.meshp, e.group, {}, {}, e.ofs, {} });
 			groups[gi].tris.push_back (k / 3);
+			groups[gi].edge.push_back ((sm.TriangleNeighbours (t) & ~pieceMask) ? 1.0f : 0.0f);
 			for (int j = 0; j < 3; j++) {
 				NTVERTEX v = grp->Vtx[grp->Idx[k+j]];
 				v.x += (float)e.ofs.x, v.y += (float)e.ofs.y, v.z += (float)e.ofs.z;
@@ -4916,6 +4923,36 @@ int Vessel::BreakPart (int part, double vsep)
 		((VESSEL3*)modIntf.v)->clbkGeneric (VMSG_PARTLOST, part, &info);
 	}
 	return (int)piece.size();
+}
+
+DWORD Vessel::DamageVersion () const
+{
+	if (part_lost.empty()) return 0;
+	DWORD n = 0;
+	for (size_t j = 0; j < part_lost.size(); j++)
+		if (!PartShown ((int)j)) n++;
+	return n;
+}
+
+DWORD Vessel::HiddenTriangles (UINT mesh, DWORD grp, BYTE *mask, DWORD ntri) const
+{
+	if (!mask) return 0;
+	memset (mask, 0, ntri);
+	if (part_lost.empty()) return 0;
+	auto it = group_tri.find ({mesh, grp});
+	if (it == group_tri.end()) return 0;
+	const std::vector<int> &tp = structure_.TrianglePart();
+	uint64_t hidden = 0;
+	for (size_t j = 0; j < part_lost.size() && j < 64; j++)
+		if (!PartShown ((int)j)) hidden |= 1ull << j;
+	DWORD n = 0;
+	for (DWORD k = 0; k < ntri; k++) {
+		size_t t = it->second + k;
+		if (t >= tp.size()) break;
+		if (!PartShown (tp[t])) mask[k] = 1, n++;
+		else if (structure_.TriangleNeighbours (t) & hidden) mask[k] = 2;
+	}
+	return n;
 }
 
 bool Vessel::PartShown (int part) const

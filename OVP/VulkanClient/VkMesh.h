@@ -84,6 +84,11 @@ public:
 	mutable std::vector<uint8_t> rtAnimated;
 
 
+	/// Triangles of a group not drawn (parts broken off a vessel): mask has
+	/// one entry per triangle of the template's group (1: hidden); null
+	/// shows them all again
+	void SetHiddenTriangles (uint32_t grp, const uint8_t *mask);
+
 	bool SetTexture (DWORD texidx, VkTexture *tex);
 	int GetGroupData (DWORD grp, GROUPREQUESTSPEC *grs) const;
 	int EditGroup (DWORD grp, GROUPEDITSPEC *ges);
@@ -113,6 +118,8 @@ private:
 	mutable bool haveBvh = false;
 	void BuildBvh () const;
 	std::vector<uint16_t> idx;
+	std::vector<uint16_t> idx0;                    // (the indices before triangles were hidden)
+	std::vector<std::vector<uint32_t>> triOrder;   // per group: the template's triangle at each position (if reordered)
 	std::vector<VkTexture*> cfgTextures; // textures loaded for the material configuration
 };
 
