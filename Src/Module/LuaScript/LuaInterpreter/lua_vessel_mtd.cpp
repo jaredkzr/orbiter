@@ -1439,7 +1439,10 @@ Get a description of a structural part.
 
 The table has fields name, mass [kg], cg (vessel frame [m]), radius [m],
 parent (index, -1 for the core part), loadfactor [g], strength [N] (of the
-joint to the parent), nhull (number of collision hulls) and flags.
+joint to the parent), nhull (number of collision hulls), flags (1: lost),
+projarea (area projected along x, y, z [m^2]), load (of the joint in
+the last step, as a fraction of its strength) and temp (temperature [K];
+damage model on).
 
 @function get_partinfo
 @tparam int idx part index (>= 0)
@@ -1466,7 +1469,10 @@ int Interpreter::v_get_partinfo (lua_State *L)
 	lua_pushnumber(L, info.loadfactor);     lua_setfield(L, -2, "loadfactor");
 	lua_pushnumber(L, info.strength);       lua_setfield(L, -2, "strength");
 	lua_pushinteger(L, info.nhull);         lua_setfield(L, -2, "nhull");
+	lua_pushvector(L, info.projarea);       lua_setfield(L, -2, "projarea");
 	lua_pushinteger(L, info.flags);         lua_setfield(L, -2, "flags");
+	lua_pushnumber(L, info.load);           lua_setfield(L, -2, "load");
+	lua_pushnumber(L, info.temp);           lua_setfield(L, -2, "temp");
 	return 1;
 }
 

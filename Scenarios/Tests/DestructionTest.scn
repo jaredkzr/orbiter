@@ -1,0 +1,82 @@
+BEGIN_HYPERDESC
+<h1>Destruction</h1>
+Structural loads with the damage model on (the test sets ORBITER_DAMAGE=1):
+Delta-gliders cruising, pulling up at full elevator and landing hard on
+their gear keep all their parts; one spun up to 6 rad/s about its long
+axis in orbit loses its wing tips; one dropped flat from 150 m breaks up
+on the ground; one entering the atmosphere steeply at 11 km/s heats up
+and fails; one below Jupiter's crush depth is crushed.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Tests/DestructionTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship PB
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET PB
+  MODE Extern
+  POS 4.0 -20.0 -30
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+PB:ShuttlePB
+  STATUS Landed Earth
+  POS -80.6200000 28.6400000
+  HEADING 330.01
+END
+CRUISE:DeltaGlider
+  STATUS Landed Earth
+  POS -80.6700000 28.6200000
+  HEADING 330.01
+  GEAR 0 0.0000
+  PRPLEVEL 0:0.500 1:1.000
+END
+PULL:DeltaGlider
+  STATUS Landed Earth
+  POS -80.6500000 28.6200000
+  HEADING 330.01
+  GEAR 0 0.0000
+  PRPLEVEL 0:0.500 1:1.000
+END
+DROP:DeltaGlider
+  STATUS Landed Earth
+  POS -80.6838740 28.5988713
+  HEADING 330.01
+  GEAR 0 0.0000
+  PRPLEVEL 0:0.050 1:1.000
+END
+HARD:DeltaGlider
+  STATUS Landed Earth
+  POS -80.6864339 28.6027658
+  HEADING 330.01
+  GEAR 1 1.0000
+  PRPLEVEL 0:0.050 1:1.000
+END
+HEAT:DeltaGlider
+  STATUS Landed Earth
+  POS -80.6000000 28.6200000
+  HEADING 330.01
+  GEAR 0 0.0000
+  PRPLEVEL 0:0.050 1:1.000
+END
+SPIN:DeltaGlider
+  STATUS Orbiting Earth
+  RPOS 3259578.50 697743.53 -5765488.27
+  RVEL 6438.832 1743.162 3914.279
+  AROT 96.69 -74.93 -5.17
+  PRPLEVEL 0:0.050 1:1.000
+END
+DEEP:DeltaGlider
+  STATUS Orbiting Jupiter
+  ELEMENTS 80000000.0 0.00000 10.0 30.0 0.0 0.0 51983.45
+  PRPLEVEL 0:0.050 1:1.000
+END
+END_SHIPS

@@ -266,6 +266,7 @@ void VesselCollider::Resolve (double h)
 
 	std::vector<Vector> P, L;
 	contact::Solve (pts, bodies, h, &P, &L);
+	for (VesselBase *v : dynamic) v->ContactsResolved (pts, index[v], h);
 
 	for (VesselBase *v : dynamic) {
 		int i = index[v];

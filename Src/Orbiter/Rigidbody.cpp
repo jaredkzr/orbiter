@@ -450,7 +450,9 @@ Vector RigidBody::GetTorque () const
 
 void RigidBody::SetAngVel (const Vector &omega)
 {
+	extern bool g_bStateUpdate;
 	s0->omega.Set (omega);
+	if (g_bStateUpdate && s1 && s1 != s0) s1->omega.Set (omega); // (during the state update, e.g. a post-step script: the new state too)
 }
 
 // =======================================================================

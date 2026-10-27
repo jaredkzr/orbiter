@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <map>
 #include <sstream>
@@ -26,6 +27,16 @@ namespace structure {
 
 	// =======================================================================
 
+	bool DamageEnabled ()
+	{
+		static int env = -1;
+		if (env < 0) {
+			const char *e = getenv ("ORBITER_DAMAGE");
+			env = (e && atoi (e) != 0) ? 1 : 0;
+		}
+		return env || g_pOrbiter->Cfg()->CfgLogicPrm.DamageSetting != 0;
+	}
+
 	ClassConfig ReadClassConfig (const char *classname)
 	{
 		ClassConfig cfg;
@@ -44,6 +55,8 @@ namespace structure {
 			else if (tok == "SAFETY") ss >> cfg.safety;
 			else if (tok == "PARTS") ss >> cfg.nparts;
 			else if (tok == "INDESTRUCTIBLE") cfg.indestructible = true;
+			else if (tok == "CRUSHPRESSURE") ss >> cfg.crushPressure;
+			else if (tok == "MAXTEMP") ss >> cfg.maxTemp;
 			else if (tok == "PART") {
 				// PART <name> BOX x0 y0 z0 x1 y1 z1 [LOADFACTOR g] [STRENGTH N]
 				// PART <name> GROUPS m:g m:g ... [LOADFACTOR g] [STRENGTH N]
@@ -117,6 +130,9 @@ namespace structure {
 		double emass, double size, const ClassConfig &cfg, uint64_t seed)
 	{
 		parts.clear();
+		crushPressure = cfg.crushPressure;
+		loadFactor = cfg.loadFactor, safety = cfg.safety;
+		maxTemp = cfg.maxTemp;
 		hullPart.assign (hulls.size(), 0);
 		triPart.assign (tris.size(), 0);
 		cells.clear();
@@ -507,9 +523,25 @@ namespace structure {
 		for (int i = 0; i < np; i++) {
 			Part &pt = parts[i];
 			if (pt.parent < 0) { pt.strength = 0.0; continue; }
-			double v = 1.0 + STRENGTH_SPREAD * (2.0 * Uniform (seed, i) - 1.0);
-			pt.strength = pt.loadFactor * cfg.safety * G0 * pt.subtreeMass * v;
-			if (namedOf[i] >= 0 && cfg.parts[namedOf[i]].strength > 0.0) pt.strength = cfg.parts[namedOf[i]].strength;
+			pt.spread = 1.0 + STRENGTH_SPREAD * (2.0 * Uniform (seed, i) - 1.0);
+			pt.strength = pt.loadFactor * cfg.safety * G0 * pt.subtreeMass * pt.spread;
+			if (namedOf[i] >= 0 && cfg.parts[namedOf[i]].strength > 0.0)
+				pt.strength = cfg.parts[namedOf[i]].strength, pt.fixed = true;
+		}
+	}
+
+	void Model::DesignCase (const std::vector<Vector> &F, const Vector &a, double extra)
+	{
+		if (F.size() != parts.size()) return;
+		std::vector<Vector> L (parts.size());
+		for (size_t j = parts.size(); j-- > 0; ) {
+			const Part &p = parts[j];
+			L[j] += a * (p.mass + (j == 0 ? extra : 0.0)) - F[j];
+			if (p.parent >= 0) L[p.parent] += L[j];
+		}
+		for (size_t j = 1; j < parts.size(); j++) {
+			Part &p = parts[j];
+			if (!p.fixed) p.strength = std::max (p.strength, safety * L[j].length() * p.spread);
 		}
 	}
 

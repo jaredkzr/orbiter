@@ -2161,6 +2161,8 @@ typedef struct {
 	double strength;   ///< strength of the joint to the parent [N] (0: core part)
 	DWORD nhull;       ///< number of collision hulls it is made of
 	VECTOR3 projarea;  ///< its area projected along x, y and z [m^2] (y: its share of the planform)
+	double load;       ///< load of the joint in the last step, as a fraction of its strength (damage model on; > 1: it breaks)
+	double temp;       ///< temperature [K] (aerodynamic heating, radiative cooling; damage model on; 0: not known). Above the class's MAXTEMP (default 1800 K) the part fails
 	DWORD flags;       ///< state flags (PART_LOST)
 } PARTINFO;
 

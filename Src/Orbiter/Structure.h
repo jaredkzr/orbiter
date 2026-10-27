@@ -16,9 +16,11 @@
 // and of all the parts beyond it. The empty mass is shared out by the
 // parts' surface area (thin shells).
 //
-// A joint's strength is the force it carries when the parts beyond it are
-// accelerated at the design load factor, times the safety factor (each
-// joint varied a little, so that symmetric parts do not fail together).
+// A joint's strength is the largest force it carries in the design load
+// cases, times the safety factor (each joint varied a little, so that
+// symmetric parts do not fail together): the parts beyond it accelerated
+// at the design load factor, and the cases of the vessel's own forces
+// (Vessel::Structure: aerodynamic, thrust, landing on the gear).
 //
 // Config/Damage/<class>.cfg overrides the defaults (see the README there).
 // =======================================================================
@@ -38,6 +40,14 @@ namespace structure {
 	const double LOADFACTOR = 6.0;       ///< design load factor [g], by default
 	const double SAFETY = 1.5;           ///< safety factor, by default
 	const double STRENGTH_SPREAD = 0.1;  ///< joints' strengths vary by up to this fraction
+	const double CRUSH_STROKE = 0.3;     ///< [m] rigid impacts decelerate the structure over this distance
+	const double CORE_FACTOR = 3.0;      ///< a joint at the core part loaded beyond this times its strength: the vessel breaks up
+	const double MAXTEMP = 1800.0;       ///< [K] a part this hot fails (by default)
+
+	/// Whether vessels can be damaged: the damage model is on (Orbiter.cfg
+	/// DamageModel, Launchpad option) or ORBITER_DAMAGE=1 is set (tests;
+	/// does not change the configuration)
+	bool DamageEnabled ();
 
 	/// A part of a vessel
 	struct Part {
@@ -53,6 +63,8 @@ namespace structure {
 		double loadFactor = LOADFACTOR; ///< [g] design load factor of the joint to the parent
 		double subtreeMass = 0.0;///< [kg] its mass and that of the parts beyond it
 		double strength = 0.0;   ///< [N] the joint's strength (0: core part)
+		double spread = 1.0;     ///< (its variation)
+		bool fixed = false;      ///< (strength given in the class's configuration)
 		std::vector<int> children;
 	};
 
@@ -62,6 +74,8 @@ namespace structure {
 		double safety = SAFETY;
 		int nparts = 0;              ///< number of automatic parts (0: from the vessel's size)
 		bool indestructible = false;
+		double crushPressure = 0.0;  ///< [Pa] external pressure the vessel withstands (0: the planet's GGCrushPressure)
+		double maxTemp = MAXTEMP;    ///< [K] temperature at which a part fails
 		struct Named {
 			std::string name;
 			bool box = false;
@@ -94,6 +108,17 @@ namespace structure {
 
 		const std::vector<Part> &Parts () const { return parts; }
 		bool Indestructible () const { return indestructible; }
+		double CrushPressure () const { return crushPressure; } ///< (0: the planet's)
+		double MaxTemp () const { return maxTemp; }             ///< [K]
+
+		/// A design load case: forces F on the parts (vessel frame; one per
+		/// part) while the vessel accelerates at a (without gravity); extra:
+		/// mass at the core part besides the structure (propellant). The
+		/// joints are made strong enough to carry it, times the safety factor.
+		void DesignCase (const std::vector<Vector> &F, const Vector &a, double extra);
+
+		double LoadFactor () const { return loadFactor; } ///< [g] the class's design load factor
+		double Safety () const { return safety; }
 
 		/// The part nearest to p (vessel frame; -1 if none)
 		int PartAt (const Vector &p) const;
@@ -112,6 +137,9 @@ namespace structure {
 		std::vector<int> cellPart;  // the part of each
 		double cellSize = 0.0;
 		bool indestructible = false;
+		double crushPressure = 0.0;
+		double loadFactor = LOADFACTOR, safety = SAFETY;
+		double maxTemp = MAXTEMP;
 	};
 
 	/// Signed distance of p from a convex polytope (< 0 inside; outside: a

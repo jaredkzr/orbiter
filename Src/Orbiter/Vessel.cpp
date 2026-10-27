@@ -4003,11 +4003,35 @@ void Vessel::UpdateBodyForces ()
 {
 	Lift = Drag = SideForce = 0.0;
 
+	// (damage model: the forces on each part in the step, for the loads of
+	// the joints)
+	loads_on = !destroyed && !supervessel && !attach && fstatus == FLIGHTSTATUS_FREEFLIGHT && structure::DamageEnabled();
+	if (loads_on) {
+		size_t np = Structure().Parts().size();
+		part_F.assign (np, Vector (0,0,0));
+		part_Fc.assign (np, Vector (0,0,0));
+		part_Frec.Set (0,0,0);
+		contact_tau.Set (0,0,0);
+	}
+
 	if (m_thruster.size()) UpdateThrustForces ();
 	if (CtrlSurfSyncMode) ApplyControlSurfaceLevels ();
 	if (fstatus != FLIGHTSTATUS_LANDED) {
 		if (sp.is_in_atm) UpdateAerodynamicForces ();
 		if (rpressure) UpdateRadiationForces ();
+	}
+	if (loads_on) {
+		// the other forces (aerodynamic, the module's own) shared by the parts
+		// by their area projected along each axis
+		const std::vector<structure::Part> &parts = structure_.Parts();
+		Vector Fr (Flin_add - part_Frec), A;
+		for (size_t j = 0; j < parts.size(); j++)
+			if (!PartLost ((int)j)) A += parts[j].proj;
+		for (size_t j = 0; j < parts.size(); j++) {
+			if (PartLost ((int)j)) continue;
+			const Vector &pa = parts[j].proj;
+			part_F[j] += Vector (A.x > 0.0 ? Fr.x*pa.x/A.x : 0.0, A.y > 0.0 ? Fr.y*pa.y/A.y : 0.0, A.z > 0.0 ? Fr.z*pa.z/A.z : 0.0);
+		}
 	}
 	// (parts lost: the moments about the centre of gravity of what is left)
 	if (dmg.cg.x || dmg.cg.y || dmg.cg.z) Amom_add -= crossp (Flin_add, dmg.cg);
@@ -4184,6 +4208,7 @@ void Vessel::UpdateThrustForces ()
 				F = MakeVector(thruster->dir * th);
 				Thrust += F;
 				Amom_add += crossp (F, MakeVector(thruster->ref));
+				if (loads_on) RecordForce (F, thruster, MakeVector (thruster->ref));
 				m_bThrustEngaged = true;
 			} else thruster->level = thruster->level_permanent = 0.0; // no fuel
 		}
@@ -4362,20 +4387,23 @@ void Vessel::UpdateAerodynamicForces ()
 			double cdrag = fabs (lvl) * fac;
 			double clift = -lvl * fac * ctrlsurf[i]->dCl;
 			// for now, we assume a fixed set of control axes. Should be freely definable
+			Vector Fc;
 			switch (ctrlsurf[i]->axis) {
 			case AIRCTRL_AXIS_XPOS: // horizontal control axis (+X), e.g. elevator, right aileron
-				AddForce (ldir*clift + ddir*cdrag, ctrlsurf[i]->ref);
+				Fc = ldir*clift + ddir*cdrag;
 				break;
 			case AIRCTRL_AXIS_XNEG: // horizontal control axis (-X), e.g. canards, left aileron
-				AddForce (ldir*(-clift) + ddir*cdrag, ctrlsurf[i]->ref);
+				Fc = ldir*(-clift) + ddir*cdrag;
 				break;
 			case AIRCTRL_AXIS_YPOS: // vertical control axis (+Y), e.g. rudder
-				AddForce (sdir*clift + ddir*cdrag, ctrlsurf[i]->ref);
+				Fc = sdir*clift + ddir*cdrag;
 				break;
 			case AIRCTRL_AXIS_YNEG: // vertical control axis (-Y)
-				AddForce (sdir*(-clift) + ddir*cdrag, ctrlsurf[i]->ref);
+				Fc = sdir*(-clift) + ddir*cdrag;
 				break;
 			}
+			AddForce (Fc, ctrlsurf[i]->ref);
+			if (loads_on) RecordForce (Fc, ctrlsurf[i], ctrlsurf[i]->ref);
 		}
 	}
 
@@ -4387,6 +4415,7 @@ void Vessel::UpdateAerodynamicForces ()
 			CD = lvl*dragel[i]->factor;
 			drag = CD*sp.dynp;
 			AddForce (ddir*drag, dragel[i]->ref);
+			if (loads_on) RecordForce (ddir*drag, dragel[i], dragel[i]->ref);
 			Drag += drag;
 		}
 	}
@@ -4705,6 +4734,57 @@ const structure::Model &Vessel::Structure () const
 	uint64_t seed = 1469598103934665603ull; // (FNV-1a of the name: the same parts each time)
 	for (char c : name) seed = (seed ^ (unsigned char)c) * 1099511628211ull;
 	structure_.Build (h, tris, emass, size, structure::ReadClassConfig (classname), seed);
+
+	// design load cases of the vessel's own forces: the joints carry them
+	// at the design load factor (aerodynamic forces along each axis, shared
+	// by the parts' projected areas), each group of engines at full thrust,
+	// and landing at LANDING_LF on the gear
+	const std::vector<structure::Part> &parts = structure_.Parts();
+	size_t np = parts.size();
+	if (np > 1) {
+		const double LANDING_LF = 3.0;
+		double M = std::max (mass, emass), extra = M - emass;
+		double n = structure_.LoadFactor() * structure::G0;
+		Vector A;
+		for (const structure::Part &p : parts) A += p.proj;
+		for (int k = 0; k < 3; k++) {
+			if (A.data[k] <= 0.0) continue;
+			std::vector<Vector> F (np);
+			Vector a;
+			a.data[k] = n;
+			for (size_t j = 0; j < np; j++) F[j].data[k] = M * n * parts[j].proj.data[k] / A.data[k];
+			structure_.DesignCase (F, a, extra);
+		}
+		for (THGROUP_TYPE g : { THGROUP_MAIN, THGROUP_RETRO, THGROUP_HOVER }) {
+			std::vector<Vector> F (np);
+			Vector Ft;
+			for (ThrustSpec *ts : m_thrusterGroupDef[g].ts) {
+				Vector f (MakeVector (ts->dir) * ts->maxth0);
+				int part = structure_.PartAt (MakeVector (ts->ref));
+				if (part < 0) continue;
+				F[part] += f, Ft += f;
+			}
+			if (Ft.length2() > 0.0) structure_.DesignCase (F, Ft / M, extra);
+		}
+		if (ntouchdown_vtx >= 3) {
+			// static reactions of the gear (three points, centre of gravity at the origin)
+			const Vector *t[3] = { &touchdown_vtx[0].pos, &touchdown_vtx[1].pos, &touchdown_vtx[2].pos };
+			double det = t[0]->x*(t[1]->z - t[2]->z) - t[1]->x*(t[0]->z - t[2]->z) + t[2]->x*(t[0]->z - t[1]->z);
+			double f[3] = { 1.0/3.0, 1.0/3.0, 1.0/3.0 };
+			if (fabs (det) > 1e-6) { // (shares: sum 1, no moment about the origin)
+				f[0] = (t[1]->x*t[2]->z - t[2]->x*t[1]->z) / det;
+				f[1] = (t[2]->x*t[0]->z - t[0]->x*t[2]->z) / det;
+				f[2] = (t[0]->x*t[1]->z - t[1]->x*t[0]->z) / det;
+			}
+			std::vector<Vector> F (np);
+			double W = M * LANDING_LF * structure::G0;
+			for (int i = 0; i < 3; i++) {
+				int part = structure_.PartAt (*t[i]);
+				if (part >= 0) F[part].y += W * std::max (0.0, f[i]);
+			}
+			structure_.DesignCase (F, Vector (0, LANDING_LF * structure::G0, 0), extra);
+		}
+	}
 	LOGOUT ("Structure of %s: %d parts from %d hulls", name.c_str(), (int)structure_.Parts().size(), (int)h.size());
 	return structure_;
 }
@@ -4713,7 +4793,7 @@ int Vessel::BreakPart (int part, double vsep)
 {
 	const structure::Model &sm = Structure();
 	const std::vector<structure::Part> &parts = sm.Parts();
-	if (part <= 0 || part >= (int)parts.size() || supervessel || attach) return 0;
+	if (part < 0 || (part == 0 && !breaking_up) || part >= (int)parts.size() || supervessel || attach) return 0;
 	if (part_lost.size() != parts.size()) part_lost.assign (parts.size(), 0);
 	if (part_lost[part]) return 0;
 
@@ -4783,6 +4863,12 @@ int Vessel::BreakPart (int part, double vsep)
 	// is), its velocity is that of the new centre of gravity (momentum
 	// conserved), and it loses the piece's inertia
 	double M = OwnMass();
+	if (M - m < 1e-3 * M) { // (nothing left: the vessel is gone)
+		for (int p : piece) part_lost[p] = 1;
+		lost_mass += m;
+		UpdateMass ();
+		return (int)piece.size();
+	}
 	Vector cg0 (dmg.cg), cg1 ((dmg.cg * M - cg * m) / (M - m));
 	AddVelocity (mul (s.R, crossp (cg1 - cg0, s.omega)));
 	Vector I0 (OwnPMI() * M);
@@ -4804,7 +4890,6 @@ int Vessel::BreakPart (int part, double vsep)
 
 	for (int p : piece) part_lost[p] = 1;
 	lost_mass += m;
-	lost_elements.clear();
 	UpdateMass ();
 	SetOwnPMI (pmi1);
 	UpdateDamageEffects ();
@@ -4824,14 +4909,200 @@ int Vessel::BreakPart (int part, double vsep)
 	return (int)piece.size();
 }
 
-bool Vessel::ElementLost (const void *e, const Vector &ref) const
+int Vessel::ElementPart (const void *e, const Vector &ref) const
 {
-	if (part_lost.empty()) return false;
-	auto it = lost_elements.find (e);
-	if (it != lost_elements.end() && it->second.first.dist2 (ref) == 0.0) return it->second.second;
-	bool lost = PartLost (structure_.PartAt (ref));
-	lost_elements[e] = { ref, lost };
-	return lost;
+	auto it = element_part.find (e);
+	if (it != element_part.end() && it->second.first.dist2 (ref) == 0.0) return it->second.second;
+	int part = Structure().PartAt (ref);
+	element_part[e] = { ref, part };
+	return part;
+}
+
+void Vessel::RecordForce (const Vector &F, const void *e, const Vector &ref)
+{
+	int part = ElementPart (e, ref);
+	if (part < 0 || part >= (int)part_F.size()) return;
+	part_F[part] += F;
+	part_Frec += F;
+}
+
+void Vessel::ContactsResolved (const std::vector<contact::Point> &pts, int index, double h)
+{
+	if (!loads_on || h <= 0.0 || part_Fc.empty()) return;
+	// Impacts are taken to decelerate the structure over a crush stroke
+	// (or the gear's stroke) rather than within the step (the contacts stop
+	// it within a step or two, whatever its length); the part of their
+	// impulse that supports the vessel's weight is kept.
+	Vector Jr;
+	for (const contact::Point &p : pts) {
+		if (p.a != index && p.b != index) continue;
+		Vector J (p.n*p.ln + p.t1*p.l1 + p.t2*p.l2);
+		Jr += (p.a == index ? J : -J);
+	}
+	double J = Jr.length(), sr = 1.0;
+	if (J > 0.0) {
+		double g = proxybody ? Ggrav * proxybody->Mass() / std::max (s0->pos.dist2 (proxybody->GPos()), 1.0) : 0.0;
+		double dv = J / mass;
+		sr = std::min (1.0, std::max (h * dv / (2.0 * structure::CRUSH_STROKE), mass * g * h / J));
+	}
+	const structure::Model &sm = structure_;
+	for (const contact::Point &p : pts) {
+		if (p.a != index && p.b != index) continue;
+		Vector Jp (p.n*p.ln + p.t1*p.l1 + p.t2*p.l2);
+		if (!Jp.length2()) continue;
+		Vector r (p.a == index ? p.ra : p.rb);
+		if (p.a != index) Jp = -Jp;
+		Vector F (tmul (s0->R, Jp) * (sr/h));
+		Vector rv (tmul (s0->R, r));
+		int part = sm.PartAt (rv);
+		if (part < 0 || part >= (int)part_Fc.size()) continue;
+		part_Fc[part] += F;
+		contact_tau += crossp (F, rv - dmg.cg);
+	}
+}
+
+void Vessel::UpdateStructuralLoads ()
+{
+	if (!loads_on || destroyed) return;
+	loads_on = false;
+	const structure::Model &sm = Structure();
+	const std::vector<structure::Part> &parts = sm.Parts();
+	size_t np = parts.size();
+	if (part_F.size() != np || part_Fc.size() != np || sm.Indestructible()) return;
+
+	// crushed by the pressure of a gas giant's deep atmosphere
+	if (proxyplanet && sp.is_in_atm) {
+		double pc = sm.CrushPressure();
+		if (pc <= 0.0 && proxyplanet->GetGasGiant()) pc = proxyplanet->GetGasGiant()->CrushPressure();
+		if (pc > 0.0 && sp.atmp > pc) {
+			char cbuf[128];
+			sprintf (cbuf, "crushed at %0.1f bar", sp.atmp * 1e-5);
+			Destroy (cbuf);
+			return;
+		}
+	}
+	if (np < 2) return;
+
+	// the motion of the step (without gravity), from the forces on the parts
+	Vector F;
+	for (size_t j = 0; j < np; j++) F += part_F[j] + part_Fc[j];
+	Vector a (F / mass);
+	Vector I (pmi * mass);
+	Vector tau (Amom + contact_tau);
+	Vector alpha (tau.x / I.x, tau.y / I.y, tau.z / I.z);
+	const Vector &w = s0->omega;
+	double mextra = mass - StructMass(); // (propellant and payloads: at the core)
+
+	// the load of each joint: what accelerates the parts beyond it beyond
+	// the forces acting on them
+	std::vector<Vector> L (np);
+	for (size_t j = np; j-- > 0; ) {
+		if (PartLost ((int)j)) continue;
+		const structure::Part &p = parts[j];
+		Vector r (p.cg - dmg.cg);
+		double m = p.mass + (j == 0 ? mextra : 0.0);
+		Vector aj (a + crossp (r, alpha) + crossp (crossp (r, w), w));
+		L[j] += aj * m - part_F[j] - part_Fc[j];
+		if (p.parent >= 0) L[p.parent] += L[j];
+	}
+	part_load.assign (np, 0.0f);
+	double coreMax = 0.0;
+	int worst = -1;
+	for (size_t j = 1; j < np; j++) {
+		if (PartLost ((int)j) || parts[j].strength <= 0.0) continue;
+		double r = L[j].length() / parts[j].strength;
+		part_load[j] = (float)r;
+		if (parts[j].parent == 0 && r > coreMax) coreMax = r, worst = (int)j;
+	}
+	double g = a.length() / structure::G0;
+	if (coreMax > structure::CORE_FACTOR) {
+		char cbuf[128];
+		sprintf (cbuf, "broke up at %0.0f g (%s overloaded %0.1fx)", g, parts[worst].name.c_str(), coreMax);
+		Destroy (cbuf);
+		return;
+	}
+	// overloaded joints break, the outermost first (pieces of their own; the
+	// joints further in no longer carry them)
+	for (size_t j = np; j-- > 1; ) {
+		if (PartLost ((int)j) || parts[j].strength <= 0.0) continue;
+		part_load[j] = (float)(L[j].length() / parts[j].strength);
+		if (part_load[j] <= 1.0f) continue;
+		for (int k = parts[j].parent; k >= 0; k = parts[k].parent) L[k] -= L[j];
+		char cbuf[256];
+		sprintf (cbuf, "%s: %s broke off at %0.1f g", name.c_str(), parts[j].name.c_str(), g);
+		if (this == g_focusobj) g_pOrbiter->ShowInfoMessage (cbuf);
+		else LOGOUT ("%s", cbuf);
+		BreakPart ((int)j, 0.5);
+	}
+}
+
+void Vessel::UpdateHeating ()
+{
+	// A lumped temperature of each part's skin: heated by the
+	// stagnation-point flux (Sutton-Graves, 1 m nose radius) over its area
+	// facing the flow (a fraction HEAT_SHARE of it on average), cooled by
+	// radiation from all its area; semi-implicit (stable at any time step).
+	const double KSG = 1.7415e-4;  // [kg^0.5 m^-1] Sutton-Graves constant (air)
+	const double HEAT_SHARE = 0.3; // mean flux / stagnation-point flux
+	const double SKIN_HEAT = 7.5e3; // [J/(m^2 K)] heat capacity of the skin per area (3 mm of aluminium)
+	const double EPS = 0.8;        // emissivity
+	const double SIGMA = 5.670374e-8;
+	const structure::Model &sm = Structure();
+	const std::vector<structure::Part> &parts = sm.Parts();
+	size_t np = parts.size();
+	double h = td.SimDT;
+	if (h <= 0.0 || sm.Indestructible()) return;
+	double Ta = (sp.is_in_atm && sp.atmT > 0.0) ? sp.atmT : 4.0; // (the sink)
+	if (part_temp.size() != np) part_temp.assign (np, std::max (Ta, 250.0));
+	double q = 0.0;
+	Vector d;
+	if (sp.is_in_atm && sp.atmrho > 0.0 && sp.airspd > 1.0) {
+		q = KSG * sqrt (sp.atmrho) * pow (sp.airspd, 3.0);
+		d = sp.airvel_ship / sp.airspd;
+	}
+	int hottest = -1;
+	for (size_t j = 0; j < np; j++) {
+		if (PartLost ((int)j)) continue;
+		const structure::Part &p = parts[j];
+		double A = std::max (p.area, 1e-3);
+		double C = A * SKIN_HEAT;
+		double Ain = fabs (d.x)*p.proj.x + fabs (d.y)*p.proj.y + fabs (d.z)*p.proj.z;
+		double T = part_temp[j];
+		double k = EPS * SIGMA * A;
+		double dT = h * (HEAT_SHARE*q*Ain - k*(T*T*T*T - Ta*Ta*Ta*Ta)) / C / (1.0 + h*4.0*k*T*T*T / C);
+		part_temp[j] = std::max (T + dT, std::min (Ta, T));
+		if (part_temp[j] > sm.MaxTemp() && (hottest < 0 || part_temp[j] > part_temp[hottest])) hottest = (int)j;
+	}
+	if (hottest < 0) return;
+	char cbuf[256];
+	if (hottest == 0) {
+		sprintf (cbuf, "burned up (%0.0f K)", part_temp[0]);
+		Destroy (cbuf);
+	} else {
+		sprintf (cbuf, "%s: %s burned off (%0.0f K)", name.c_str(), parts[hottest].name.c_str(), part_temp[hottest]);
+		if (this == g_focusobj) g_pOrbiter->ShowInfoMessage (cbuf);
+		else LOGOUT ("%s", cbuf);
+		BreakPart (hottest, 0.5);
+	}
+}
+
+void Vessel::Destroy (const char *reason)
+{
+	if (destroyed || supervessel || attach) return;
+	const std::vector<structure::Part> &parts = Structure().Parts();
+	if (part_lost.size() != parts.size()) part_lost.assign (parts.size(), 0);
+	destroyed = true;
+	char cbuf[256];
+	sprintf (cbuf, "%s was destroyed: %s", name.c_str(), reason);
+	LOGOUT ("%s", cbuf);
+	if (this == g_focusobj) g_pOrbiter->ShowInfoMessage (cbuf);
+	// every part a piece of its own, flying apart; then the core
+	breaking_up = true;
+	for (size_t j = parts.size(); j-- > 1; )
+		if (!part_lost[j]) BreakPart ((int)j, 2.0);
+	if (!part_lost[0]) BreakPart (0, 0.0);
+	breaking_up = false;
+	RequestDestruct ();
 }
 
 void Vessel::UpdateDamageEffects ()
@@ -5146,6 +5417,12 @@ void Vessel::PostUpdate ()
 	// module clbkPostStep is called for the vessel
 
 	VesselBase::PostUpdate ();
+
+	if (loads_on) {
+		UpdateStructuralLoads ();
+		if (!destroyed) UpdateHeating ();
+	}
+	if (destroyed) return;
 
 	DWORD j, k;
 
@@ -6431,7 +6708,8 @@ int VESSEL::GetFlightModel () const
 
 int VESSEL::GetDamageModel () const
 {
-	return g_pOrbiter->Cfg()->CfgLogicPrm.DamageSetting;
+	int d = g_pOrbiter->Cfg()->CfgLogicPrm.DamageSetting;
+	return d ? d : structure::DamageEnabled() ? 1 : 0; // (ORBITER_DAMAGE=1: tests)
 }
 
 bool VESSEL::GetEnableFocus () const
@@ -7794,6 +8072,8 @@ bool VESSEL::GetPartInfo (DWORD idx, PARTINFO *info) const
 	info->nhull = (DWORD)p.hulls.size();
 	info->projarea = _V(p.proj.x, p.proj.y, p.proj.z);
 	info->flags = vessel->PartLost ((int)idx) ? PART_LOST : 0;
+	info->load = vessel->PartLoad ((int)idx);
+	info->temp = vessel->PartTemp ((int)idx);
 	return true;
 }
 

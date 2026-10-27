@@ -1321,9 +1321,26 @@ protected:
 	// core part, and vessels docked or attached, do not break up).
 	bool PartLost (int part) const;
 	// a part has broken off
-	bool ElementLost (const void *e, const Vector &ref) const;
+	bool ElementLost (const void *e, const Vector &ref) const { return !part_lost.empty() && PartLost (ElementPart (e, ref)); }
 	// an element (thruster, touchdown point, port...) at ref is on a part
-	// that has broken off (cached per element)
+	// that has broken off
+	int ElementPart (const void *e, const Vector &ref) const;
+	// the part an element at ref is on (cached per element)
+	void ContactsResolved (const std::vector<contact::Point> &pts, int index, double h) override;
+	void UpdateStructuralLoads ();
+	// after the step (damage model on): the loads of the joints from the
+	// forces on the parts and the vessel's motion; overloaded joints break,
+	// a vessel overloaded at its core (or crushed) breaks up
+	void Destroy (const char *reason);
+	// breaks up: every part becomes a piece of debris, the vessel is deleted
+	bool Destroyed () const { return destroyed; }
+	float PartLoad (int part) const { return part >= 0 && part < (int)part_load.size() ? part_load[part] : 0.0f; }
+	// load of a part's joint / its strength in the last step
+	double PartTemp (int part) const { return part >= 0 && part < (int)part_temp.size() ? part_temp[part] : 0.0; }
+	// [K] temperature of a part (damage model on; 0: not known)
+	void UpdateHeating ();
+	// after the step: aerodynamic heating and radiative cooling of the
+	// parts; parts too hot fail
 	bool PortLost (DWORD i) const { return !part_lost.empty() && ElementLost (dock[i], dock[i]->ref); }
 	double StructMass () const { return std::max (emass - lost_mass, 0.0); }
 	// empty mass without the parts broken off
@@ -1714,7 +1731,17 @@ private:
 		Vector refV, refH;                       // shift of their lift points
 	} dmg;
 	void UpdateDamageEffects ();
-	mutable std::map<const void*, std::pair<Vector,bool>> lost_elements; // (ElementLost cache)
+	mutable std::map<const void*, std::pair<Vector,int>> element_part; // (ElementPart cache)
+	bool loads_on = false;                       // forces on the parts recorded in this step
+	std::vector<Vector> part_F, part_Fc;         // forces on the parts in the step (vessel frame): the vessel's own, contacts
+	Vector part_Frec;                            // (the vessel's own recorded on their parts)
+	Vector contact_tau;                          // moment of the contact forces about the centre of gravity
+	std::vector<float> part_load;                // load / strength of each part's joint in the last step
+	std::vector<double> part_temp;               // [K] temperature of each part
+	bool destroyed = false;
+	bool breaking_up = false;                    // (Destroy: the core part breaks off too)
+	void RecordForce (const Vector &F, const void *e, const Vector &ref);
+	// a force of the vessel's on the part of element e at ref (loads)
 	struct ExtGroup {                            // a group of an external mesh
 		UINT mesh;
 		const Mesh *meshp;

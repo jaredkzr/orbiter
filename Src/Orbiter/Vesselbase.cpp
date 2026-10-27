@@ -393,6 +393,7 @@ void VesselBase::ResolveContacts (double h)
 	std::vector<contact::Body> b (1, ContactBody());
 	std::vector<Vector> P, L;
 	contact::Solve (contact_pts, b, h, &P, &L);
+	ContactsResolved (contact_pts, 0, h);
 	if (!P[0].length() && !L[0].length() && !b[0].vp.length() && !b[0].wp.length()) return; // (no contact within the step)
 	ApplyContactVelocity (b[0], h, true);
 	contact_force = tmul (s0->R, P[0]/h);

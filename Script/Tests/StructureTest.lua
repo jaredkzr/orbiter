@@ -1,8 +1,9 @@
 -- Vessel structure (Scenarios/Tests/StructureTest.scn): the structural
 -- parts of some vessels. Their masses add up to the empty mass, part 0 is
 -- the core part (at the origin), parents come before their children, and
--- each joint's strength is the load of the parts beyond it at the design
--- load factor times the safety factor (within the spread of strengths).
+-- each joint's strength is at least the load of the parts beyond it at the
+-- design load factor times the safety factor (within the spread of
+-- strengths).
 
 local failed = false
 
@@ -46,9 +47,10 @@ local function structure(name, nmin, nmax)
 			if pa < 0 or pa >= i then order = false else sub[pa] = (sub[pa] or 0) + sub[i] end
 		end
 	end
+	-- (at least the inertial case; more where the vessel's own forces load it)
 	for i = 1, n - 1 do
 		local s0 = parts[i].loadfactor * SAFETY * G0 * sub[i]
-		if math.abs(parts[i].strength / s0 - 1) > SPREAD + 1e-9 then strength = false end
+		if parts[i].strength / s0 < 1 - SPREAD - 1e-9 then strength = false end
 	end
 	check(name, order, "parents come before their children")
 	check(name, strength, "joint strengths follow the load factor")
