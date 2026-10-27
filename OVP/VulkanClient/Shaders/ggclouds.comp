@@ -509,15 +509,25 @@ vec3 mHaze; // (Medium's haze and thin layers: extinction-weighted albedo sum; e
 float mHazeE;
 bool coarseLight = false; // (the light march of a far sample: coarse densities)
 bool lightTowers = false; // (the light march of a sample within the towers' shadows' reach)
+// the noise's coordinates from longitude jump by the circumference at a
+// meridian (the seam: the cloud layer's frame's, or the planet's): within
+// SEAM [rad] of it, the field blended with its continuation across
+const float SEAM = 0.05;
+float CloudLng (float lng) { return mod (lng - P.mapInfo.x + PI, 2.0 * PI) - PI; } // (the cloud layer's frame: -pi..pi)
+float SeamW (float a) { return 0.5 * smoothstep (PI - SEAM, PI, abs (a)); } // (the continuation's share)
+float OtherLng (float a) { return a - sign (a) * 2.0 * PI; }
+// (two fields about zero blended: their spread kept, not halved)
+vec2 SeamMix (vec2 a, vec2 b, float t) { return mix (a, b, t) / sqrt ((1.0 - t) * (1.0 - t) + t * t); }
+
 // the map's large folds: the band edges drawn into waves and eddies by
 // the flow, two octaves (some 400 and 120 km across, zonally stretched;
 // the finer folding the coarser's displaced field), their displacement
-// east and north [m] at latitude lat, longitude lng (the cloud layer's
-// frame: the map's features fixed in it)
-vec2 FlowWarp (float lat, float lng)
+// east and north [m] at latitude lat, longitude a in the cloud layer's
+// frame (the map's features fixed in it; FlowWarpAt: planet frame)
+vec2 FlowWarp (float lat, float a)
 {
 	float R = P.misc.z;
-	vec2 m = vec2 ((lng - P.mapInfo.x) * R * cos (lat), lat * R);
+	vec2 m = vec2 (a * R * cos (lat), lat * R);
 	vec2 w = vec2 (0.0);
 	for (int k = 0; k < 2; k++) {
 		float L = k == 0 ? 400e3 : 120e3;
@@ -528,6 +538,12 @@ vec2 FlowWarp (float lat, float lng)
 		w += n * 12.0 * (k == 0 ? vec2 (200e3, 150e3) : vec2 (60e3, 50e3));
 	}
 	return w;
+}
+vec2 FlowWarpAt (float lat, float lng)
+{
+	float a = CloudLng (lng), t = SeamW (a);
+	vec2 w = FlowWarp (lat, a);
+	return t > 0.0 ? SeamMix (w, FlowWarp (lat, OtherLng (a)), t) : w;
 }
 
 // the flow's folds within the bands: two marbled fields (about +-1) some
@@ -551,20 +567,27 @@ vec2 FoldField (vec2 m)
 // the chromophores' concentration about the map's (mean about 1): richer
 // in the lanes, poorer in the white tongues; filaments
 float ChromoVar (vec2 f) { return exp (0.6 * f.y - 0.4 * f.x); }
-// the folded coordinates [m] at latitude lat, longitude lng (the cloud
+// the folded coordinates [m] at latitude lat, longitude a (the cloud
 // layer's frame), displaced by w [m]
-vec2 FoldCoord (float lat, float lng, vec2 w) { return vec2 ((lng - P.mapInfo.x) * P.misc.z * cos (lat), lat * P.misc.z) + w; }
+vec2 FoldCoord (float lat, float a, vec2 w) { return vec2 (a * P.misc.z * cos (lat), lat * P.misc.z) + w; }
+// the folds at latitude lat, longitude lng (planet frame), displaced by w
+vec2 FoldsAt (float lat, float lng, vec2 w)
+{
+	float a = CloudLng (lng), t = SeamW (a);
+	vec2 f = FoldField (FoldCoord (lat, a, w));
+	return t > 0.0 ? clamp (SeamMix (f, FoldField (FoldCoord (lat, OtherLng (a), w)), t), -1.0, 1.0) : f;
+}
 
 void SetContext (vec3 x)
 {
 	vec3 u = normalize (x);
 	float lat = asin (clamp (u.y, -1.0, 1.0)), lng = atan (u.z, u.x);
-	ctxWarp = FlowWarp (lat, lng);
+	ctxWarp = FlowWarpAt (lat, lng);
 	ctxMap = MapColour (lat + ctxWarp.y / P.misc.z, lng + ctxWarp.x / (P.misc.z * max (cos (lat), 0.05)), fpM, ctxZone);
 	ctxMoat = Moat (u);
 	// (the bands folded: tongues of the zones' white cloud into the belts,
 	// lanes of the belts into the zones (Deck))
-	vec2 f = P.chromo.w > 0.0 || P.chromo.y > P.chromo.x ? FoldField (FoldCoord (lat, lng, ctxWarp)) : vec2 (0.0);
+	vec2 f = P.chromo.w > 0.0 || P.chromo.y > P.chromo.x ? FoldsAt (lat, lng, ctxWarp) : vec2 (0.0);
 	ctxFold = f;
 	ctxChromo = ChromoK (ctxMap) * ChromoVar (f) * ChromoAt (ctxZone);
 	chromoCtx = true;
@@ -581,7 +604,9 @@ float PopUp (vec3 x, float r, vec3 u, bool detail)
 	if (r < P.popup.z || r > P.popup.w) return 0.0;
 	float R = P.misc.z;
 	float lat = asin (clamp (u.y, -1.0, 1.0)), lng = atan (u.z, u.x);
-	vec2 m = FoldCoord (lat, lng, vec2 (0.0));
+	float a = CloudLng (lng);
+	if (abs (a) > PI - (POP_CELL + 40e3) / (R * max (cos (lat), 0.05))) return 0.0; // (none across the seam)
+	vec2 m = FoldCoord (lat, a, vec2 (0.0));
 	vec2 cell = floor (m / POP_CELL);
 	uint h = Pcg (uint (int (cell.x) & 0xffff) | (uint (int (cell.y) & 0xffff) << 16u));
 	uint h1 = Pcg (h), h2 = Pcg (h1), h3 = Pcg (h2);
@@ -641,6 +666,14 @@ float Medium (vec3 x, bool detail, out vec3 alb, bool towerDetail)
 			continue;
 		}
 		float d = Deck (i, x, r, u, lat, lng, zone, moat, sw1, sw2, detail, false);
+		// (the decks' own noise: the planet frame's seam)
+		float ts = SeamW (lng);
+		if (ts > 0.0) {
+			float h1 = deckHill, c1 = deckChrom;
+			vec2 f1 = deckFold;
+			d = mix (d, Deck (i, x, r, u, lat, OtherLng (lng), zone, moat, sw1, sw2, detail, false), ts);
+			deckHill = mix (h1, deckHill, ts), deckChrom = mix (c1, deckChrom, ts), deckFold = mix (f1, deckFold, ts);
+		}
 		if (d <= 0.0) continue;
 		float e = P.layer[i].z * d;
 		// (the upper decks take the planet map's colour: chromophores, the
@@ -1002,10 +1035,10 @@ bool March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 				chromoCtx = true;
 				float lat = asin (clamp (up.y, -1.0, 1.0)), lng = atan (up.z, up.x), zz;
 				bool inL = r > P.chromo.x;
-				vec2 w = inL ? FlowWarp (lat, lng) : vec2 (0.0);
+				vec2 w = inL ? FlowWarpAt (lat, lng) : vec2 (0.0);
 				ctxChromo = ChromoK (MapColour (lat + w.y / P.misc.z, lng + w.x / (P.misc.z * max (cos (lat), 0.05)), max (fpM, 20e3), zz));
 				if (inL) {
-					ctxFold = FoldField (FoldCoord (lat, lng, w));
+					ctxFold = FoldsAt (lat, lng, w);
 					ctxChromo *= ChromoVar (ctxFold) * ChromoAt (zz);
 				}
 			}
