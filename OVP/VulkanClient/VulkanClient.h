@@ -156,6 +156,9 @@ private:
 	std::string videoDir;         // ORBITER_VK_VIDEO: frames written as PNGs before the screenshot frame
 	unsigned videoFrames = 0;     // ORBITER_VK_VIDEO_FRAMES
 	unsigned videoIndex = 0;
+	FILE *frameTimes = nullptr;   // ORBITER_VK_FRAMETIMES: per frame, the wall-clock interval and GPU times
+	double lastFrameWall = -1.0;  // [s]
+	unsigned frameTimesCount = 0;
 };
 
 #endif // !__VULKANCLIENT_H

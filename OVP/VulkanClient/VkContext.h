@@ -145,6 +145,10 @@ namespace vkc {
 		/// periodically
 		void GpuMark (const char *name);
 
+		/// The GPU times [ms] of the last frame whose timestamps were read
+		/// (profiling; a frame or two behind the one recorded), per mark
+		const std::vector<std::pair<const char*, double>> &LastGpuTimes () const { return lastMarks; }
+
 		/// Read back the next presented frame. The callback receives the pixels
 		/// (4 bytes per pixel in colorFormat, rows top to bottom).
 		using CaptureFunc = std::function<void(const uint8_t *pixels, uint32_t w, uint32_t h, VkFormat fmt)>;
@@ -205,6 +209,7 @@ namespace vkc {
 		double timestampPeriod = 1.0; // [ns]
 		uint32_t profFrames = 0;
 		std::vector<std::pair<const char*, double>> profSum; // [ms], in order of first appearance
+		std::vector<std::pair<const char*, double>> lastMarks; // [ms], the last frame read
 		void ReadTimestamps (Frame &f);
 
 		struct CurrentTarget {

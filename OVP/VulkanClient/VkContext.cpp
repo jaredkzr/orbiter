@@ -586,8 +586,10 @@ void Context::ReadTimestamps (Frame &f)
 	if (n >= 2) {
 		uint64_t t[MAX_MARKS];
 		if (vkGetQueryPoolResults (device, f.queries, 0, n, sizeof(t), t, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+			lastMarks.clear ();
 			for (uint32_t i = 1; i < n; i++) {
 				double ms = (double)(t[i] - t[i-1]) * timestampPeriod * 1e-6;
+				lastMarks.push_back ({ f.marks[i], ms });
 				auto it = std::find_if (profSum.begin(), profSum.end(), [&](auto &p) { return !strcmp (p.first, f.marks[i]); });
 				if (it == profSum.end()) profSum.push_back ({ f.marks[i], ms });
 				else it->second += ms;

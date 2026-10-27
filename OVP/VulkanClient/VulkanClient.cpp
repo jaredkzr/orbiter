@@ -24,6 +24,8 @@
 #include <future>
 #include <thread>
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
 
 static VulkanClient *g_client = nullptr;
 
@@ -66,6 +68,7 @@ void VulkanClient::Teardown ()
 {
 	for (auto &w : writers) w.wait ();
 	writers.clear ();
+	if (frameTimes) { fclose (frameTimes); frameTimes = nullptr; }
 	// Must run before process exit: once the driver library has been
 	// finalised, Vulkan objects can no longer be destroyed.
 	if (ready) DeleteStreams (true); // (their particles live in the scene's pool)
@@ -123,6 +126,13 @@ bool VulkanClient::clbkInitialise ()
 	ctx.SetOffscreenExtent ((uint32_t)w, (uint32_t)h);
 	if (!ctx.Init (window, val && *val && *val != '0', offscreen)) return false;
 	if (offscreen) oapiWriteLogV ("VulkanClient: rendering offscreen (%dx%d)", w, h);
+	// ORBITER_VK_FRAMETIMES=<file>: a line per frame: the frame, the sim time,
+	// the wall-clock time since the previous frame [ms], and the GPU's times
+	// [ms] (with ORBITER_VK_PROFILE: total, then per mark; a frame or two behind)
+	if (const char *ft = getenv ("ORBITER_VK_FRAMETIMES")) {
+		frameTimes = fopen (ft, "w");
+		if (!frameTimes) oapiWriteLogError ("VulkanClient: could not write %s", ft);
+	}
 	if (const char *shot = getenv ("ORBITER_VK_SCREENSHOT")) {
 		autoScreenshot = shot;
 		if (const char *n = getenv ("ORBITER_VK_SCREENSHOT_FRAME")) autoScreenshotFrame = (unsigned)atoi (n);
@@ -286,6 +296,16 @@ bool VulkanClient::clbkDisplayFrame ()
 {
 	if (!ready) return false;
 	r2d->Flush ();
+	if (frameTimes && frameActive) {
+		double now = std::chrono::duration<double> (std::chrono::steady_clock::now().time_since_epoch()).count();
+		const auto &gpu = ctx.LastGpuTimes ();
+		double total = 0.0;
+		for (const auto &m : gpu) total += m.second;
+		fprintf (frameTimes, "%u %.6f %.3f %.3f", ++frameTimesCount, oapiGetSimTime (), lastFrameWall < 0.0 ? 0.0 : (now - lastFrameWall) * 1e3, total);
+		for (const auto &m : gpu) fprintf (frameTimes, " %s=%.3f", m.first, m.second);
+		fputc ('\n', frameTimes);
+		lastFrameWall = now;
+	}
 	if (frameActive) {
 		if (!autoScreenshot.empty() && !videoDir.empty() && frameCount + 1 + videoFrames >= autoScreenshotFrame && frameCount + 1 < autoScreenshotFrame) {
 			char name[64];
