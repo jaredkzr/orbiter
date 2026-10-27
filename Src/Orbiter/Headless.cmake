@@ -67,6 +67,7 @@ set(headless_src
 	ConvexDecomposition.cpp
 	VesselCollision.cpp
 	Structure.cpp
+	Debris.cpp
 	Maneuver.cpp
 	Trajectory.cpp
 	MapView.cpp

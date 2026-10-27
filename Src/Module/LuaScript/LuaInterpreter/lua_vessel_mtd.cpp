@@ -258,6 +258,7 @@ void Interpreter::LoadVesselAPI ()
 		{"get_partcount", v_get_partcount},
 		{"get_partinfo", v_get_partinfo},
 		{"get_partat", v_get_partat},
+		{"break_part", v_break_part},
 		{"add_maneuvernode", v_add_maneuvernode},
 		{"get_maneuvernodecount", v_get_maneuvernodecount},
 		{"get_maneuvernode", v_get_maneuvernode},
@@ -1484,6 +1485,29 @@ int Interpreter::v_get_partat (lua_State *L)
 	VESSEL *v = lua_tovessel_safe(L, 1, funcname);
 	VECTOR3 pos = luamtd_tovector_safe(L, 2, funcname);
 	lua_pushinteger(L, v->GetPartAt(pos));
+	return 1;
+}
+
+/***
+Break a part off the vessel.
+
+The joint of the part to its parent breaks: the part, with the parts beyond
+it still attached, becomes a piece of debris (see oapi.get_debris).
+
+@function break_part
+@tparam int idx part index (> 0: the core part does not break off)
+@tparam[opt=0] number vsep separation speed [m/s]
+@treturn int number of parts broken off (0: none)
+@see vessel:get_partinfo, oapi.get_debriscount
+*/
+int Interpreter::v_break_part (lua_State *L)
+{
+	static const char *funcname = "break_part";
+	AssertMtdMinPrmCount(L, 2, funcname);
+	VESSEL *v = lua_tovessel_safe(L, 1, funcname);
+	int idx = (int)luamtd_tointeger_safe(L, 2, funcname);
+	double vsep = lua_gettop(L) >= 3 ? luamtd_tonumber_safe(L, 3, funcname) : 0.0;
+	lua_pushinteger(L, idx > 0 ? v->BreakPart((DWORD)idx, vsep) : 0);
 	return 1;
 }
 

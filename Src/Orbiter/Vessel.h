@@ -1313,6 +1313,15 @@ protected:
 	const structure::Model &Structure () const;
 	// Parts and joints of the vessel, for damage (Structure.h): made from the
 	// hulls and the external meshes when first needed
+	int BreakPart (int part, double vsep = 0.0);
+	// The joint of a part to its parent breaks: the part and the parts
+	// beyond it still attached break off as a piece of debris, pushed apart
+	// at vsep [m/s]. Returns the number of parts broken off (0: none; the
+	// core part, and vessels docked or attached, do not break up).
+	bool PartLost (int part) const;
+	// a part has broken off
+	double StructMass () const { return std::max (emass - lost_mass, 0.0); }
+	// empty mass without the parts broken off
 	void CollectFreePorts (const StateVectors &s, std::vector<collision::Port> &ports) const;
 	void ContactStateChanged ();
 	void WakeFromContact ();
@@ -1325,7 +1334,7 @@ protected:
 	void AccumulatePayload (const Vector &ofs, const Matrix &rot, double &m, double I[3][3]) const;
 	// mass and inertia (about the root vessel's origin, its frame) of this
 	// vessel as a payload at ofs, turned by rot, and of its own payloads
-	double OwnMass () const { return emass + fmass; }
+	double OwnMass () const { return StructMass() + fmass; }
 	Vector OwnPMI () const { return pmi_own_set ? pmi_own : pmi; }
 	void SetOwnPMI (const Vector &p);
 	void AddVelocity (const Vector &dv);
@@ -1691,6 +1700,17 @@ private:
 	mutable structure::Model structure_;
 	mutable unsigned structure_gen = (unsigned)-1; // (hull_gen it was made for)
 	mutable double structure_emass = -1.0;
+	std::vector<char> part_lost;                 // parts broken off (empty: none)
+	double lost_mass = 0.0;                      // [kg] their mass
+	struct ExtGroup {                            // a group of an external mesh
+		UINT mesh;
+		const Mesh *meshp;
+		DWORD group;
+		const void *grp;                         // (its GroupSpec)
+		Vector ofs;                              // the mesh's offset
+	};
+	void ExternalGroups (std::vector<ExtGroup> &eg) const;
+	// the groups of the external meshes, in order (the structure's triangles)
 	mutable double hull_bound = 0.0; // bounding radius of the hulls about the vessel's origin
 	mutable collision::Hull td_hull; // hull of the touchdown points (obstacles on the ground, if the vessel has no hulls)
 	mutable DWORD td_hull_n = (DWORD)-1;

@@ -11,6 +11,9 @@
 
 #include "Config.h"
 #include "Psys.h"
+#include "Debris.h"
+#include "Camera.h"
+#include "Orbiter.h"
 #include "TimeData.h"
 #include "Element.h"
 #include "Vessel.h"
@@ -63,6 +66,9 @@ void PlanetarySystem::Clear ()
 		delete supervessels[i];
 	}
 	supervessels.clear();
+
+	for (Debris *d : debris) delete d;
+	debris.clear();
 }
 
 void PlanetarySystem::InitState (const char *fname)
@@ -131,6 +137,36 @@ bool PlanetarySystem::isObject (const Body *obj) const
 	for (DWORD i = 0; i < bodies.size(); i++)
 		if (bodies[i] == obj) return true;
 	return false;
+}
+
+bool PlanetarySystem::isDebris (const Body *b) const
+{
+	return std::find (debris.begin(), debris.end(), b) != debris.end();
+}
+
+void PlanetarySystem::AddDebris (Debris *d, VesselBase *from)
+{
+	// (too many: the oldest at rest go, then the oldest)
+	const size_t MAXDEBRIS = 512;
+	while (debris.size() >= MAXDEBRIS) {
+		auto it = std::find_if (debris.begin(), debris.end(), [](const Debris *x) { return x->AtRest(); });
+		DelDebris (it != debris.end() ? *it : debris.front());
+	}
+	debris.push_back (d);
+	if (from) collider.Released (from, d);
+}
+
+void PlanetarySystem::DelDebris (Debris *d)
+{
+	auto it = std::find (debris.begin(), debris.end(), d);
+	if (it == debris.end()) return;
+	debris.erase (it);
+	collider.Forget (d);
+	extern Camera *g_camera;
+	extern Vessel *g_focusobj;
+	extern Orbiter *g_pOrbiter;
+	if (g_camera && g_camera->Target() == d) g_pOrbiter->SetView (g_focusobj, 1);
+	delete d;
 }
 
 bool PlanetarySystem::isVessel (const Vessel *v) const
@@ -824,18 +860,22 @@ void PlanetarySystem::Update (bool force)
 {
 	DWORD i;
 	for (i = 0; i < bodies      .size(); i++) bodies      [i]->BeginStateUpdate ();
+	for (Debris *d : debris) d->BeginStateUpdate ();
 	for (i = 0; i < stars       .size(); i++) stars       [i]->RelTrueAndBaryState();
 	for (i = 0; i < stars       .size(); i++) stars       [i]->AbsTrueState();
 	for (i = 0; i < celestials  .size(); i++) celestials  [i]->Update (force);
 	for (i = 0; i < vessels     .size(); i++) vessels     [i]->UpdateBodyForces ();
+	for (Debris *d : debris) d->UpdateBodyForces ();
 
-	// vessels that may touch each other in this step
+	// vessels (and debris) that may touch each other in this step
 	std::vector<VesselBase*> all (supervessels.begin(), supervessels.end());
 	all.insert (all.end(), vessels.begin(), vessels.end());
+	all.insert (all.end(), debris.begin(), debris.end());
 	collider.Begin (all, td.SimDT);
 
 	for (i = 0; i < supervessels.size(); i++) supervessels[i]->Update (force);
 	for (i = 0; i < vessels     .size(); i++) vessels     [i]->Update (force);
+	for (Debris *d : debris) d->Update (force);
 	collider.Resolve (td.SimDT);
 }
 
@@ -843,8 +883,10 @@ void PlanetarySystem::FinaliseUpdate ()
 {
 	DWORD i;
 	for (i = 0; i < bodies.size(); i++) bodies[i]->EndStateUpdate ();
+	for (Debris *d : debris) d->EndStateUpdate ();
 	for (i = 0; i < supervessels.size(); i++) supervessels[i]->PostUpdate ();
 	for (i = 0; i < vessels.size(); i++) vessels[i]->PostUpdate ();
+	for (Debris *d : debris) d->PostUpdate ();
 }
 
 void PlanetarySystem::Timejump (const TimeJumpData& jump)
@@ -855,6 +897,9 @@ void PlanetarySystem::Timejump (const TimeJumpData& jump)
 	for (i = 0; i < stars.size(); i++) stars[i]->AbsTrueState();
 	for (i = 0; i < celestials.size(); i++) celestials[i]->Update (true);
 	for (i = 0; i < bodies.size(); i++) bodies[i]->EndStateUpdate ();
+	// (debris in flight is left behind: removed; at rest it stays on the ground)
+	for (size_t j = debris.size(); j-- > 0; )
+		if (!debris[j]->AtRest()) DelDebris (debris[j]);
 
 	for (i = 0; i < vessels.size(); i++)
 		vessels[i]->Timejump(jump.dt, jump.mode);

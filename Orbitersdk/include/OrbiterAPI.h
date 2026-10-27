@@ -1795,6 +1795,7 @@ typedef enum {
 #define OBJTP_STAR               3
 #define OBJTP_PLANET             4
 #define OBJTP_VESSEL            10
+#define OBJTP_DEBRIS            11 ///< a piece broken off a vessel
 #define OBJTP_SURFBASE          20
 
 /** *********************************************************************
@@ -2144,8 +2145,24 @@ typedef struct {
 	double loadfactor; ///< design load factor of the joint to the parent [g]
 	double strength;   ///< strength of the joint to the parent [N] (0: core part)
 	DWORD nhull;       ///< number of collision hulls it is made of
-	DWORD flags;       ///< state flags (reserved)
+	DWORD flags;       ///< state flags (PART_LOST)
 } PARTINFO;
+
+#define PART_LOST 0x0001 ///< the part has broken off the vessel
+
+/**
+ * \brief A piece of debris: a part (or parts) broken off a vessel
+ * \sa oapiGetDebrisCount, oapiGetDebrisByIndex, oapiGetDebrisInfo
+ */
+typedef struct {
+	char name[128];    ///< name (vessel name and part name)
+	char source[64];   ///< name of the vessel it broke off
+	double mass;       ///< mass [kg]
+	double size;       ///< bounding radius [m]
+	DWORD flags;       ///< DEBRIS_ATREST
+} DEBRISINFO;
+
+#define DEBRIS_ATREST 0x0001 ///< at rest on the ground
 
 /**
  * \brief A manoeuvre node: a planned (impulsive) velocity change of a vessel
@@ -2667,6 +2684,7 @@ OAPIFUNC DWORD oapiGetObjectCount ();
  *   <tr><td>OBJTP_PLANET</td><td>planet (used for all celestial bodies that are not stars,
  *       including moons, comets, etc.)</td></tr>
  *   <tr><td>OBJTP_VESSEL</td><td>vessel (spacecraft, space stations, etc.)</td></tr>
+ *   <tr><td>OBJTP_DEBRIS</td><td>debris (a piece broken off a vessel)</td></tr>
  *   <tr><td>OBJTP_SURFBASE</td><td>surface base (spaceport)</td></tr>
  *   </table>
  * \note This function searches through Orbiter's object list to determine if the
@@ -2674,6 +2692,31 @@ OAPIFUNC DWORD oapiGetObjectCount ();
  * \sa oapiGetObjectParam, oapiGetObjectCount
  */
 OAPIFUNC int oapiGetObjectType (OBJHANDLE hObj);
+
+/**
+ * \brief Returns the number of pieces of debris (parts broken off vessels).
+ * \note Debris are objects of their own (type OBJTP_DEBRIS), not vessels:
+ *   they are not in the vessel list, but their handles can be used with
+ *   oapiGetGlobalPos, oapiGetGlobalVel, oapiGetRotationMatrix and as
+ *   camera targets.
+ * \sa oapiGetDebrisByIndex, oapiGetDebrisInfo, VESSEL::BreakPart
+ */
+OAPIFUNC DWORD oapiGetDebrisCount ();
+
+/**
+ * \brief Returns the handle of a piece of debris.
+ * \param index index (>= 0, < oapiGetDebrisCount())
+ * \return handle (NULL if index is out of range)
+ */
+OAPIFUNC OBJHANDLE oapiGetDebrisByIndex (DWORD index);
+
+/**
+ * \brief Returns a description of a piece of debris.
+ * \param hDebris debris handle
+ * \param info description (see \ref DEBRISINFO)
+ * \return false if hDebris is not a piece of debris
+ */
+OAPIFUNC bool oapiGetDebrisInfo (OBJHANDLE hDebris, DEBRISINFO *info);
 
 /**
  * \brief Returns an object-specific configuration parameter.

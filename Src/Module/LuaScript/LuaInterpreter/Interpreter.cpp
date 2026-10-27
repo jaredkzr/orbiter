@@ -957,6 +957,9 @@ void Interpreter::LoadAPI ()
 		{"get_planetperiod", oapi_get_planetperiod},
 		{"get_planetatmconstants", oapi_get_planetatmconstants},
 		{"get_objecttype", oapi_get_objecttype},
+		{"get_debriscount", oapi_get_debriscount},
+		{"get_debris", oapi_get_debris},
+		{"get_debrisinfo", oapi_get_debrisinfo},
 		{"get_gbody", oapi_get_gbody},
 		{"get_gbodycount", oapi_get_gbodycount},
 		{"get_gbodyparent", oapi_get_gbodyparent},
@@ -1418,6 +1421,7 @@ void Interpreter::LoadAPI ()
 	lua_pushnumber (L, OBJTP_STAR); lua_setfield (L, -2, "STAR");
 	lua_pushnumber (L, OBJTP_PLANET); lua_setfield (L, -2, "PLANET");
 	lua_pushnumber (L, OBJTP_VESSEL); lua_setfield (L, -2, "VESSEL");
+	lua_pushnumber (L, OBJTP_DEBRIS); lua_setfield (L, -2, "DEBRIS");
 	lua_pushnumber (L, OBJTP_SURFBASE); lua_setfield (L, -2, "SURFBASE");
 	lua_setglobal (L, "OBJTP");
 
@@ -4690,6 +4694,65 @@ int Interpreter::oapi_get_planetatmconstants(lua_State* L)
 	} else {
 		lua_pushnil(L);
 	}
+	return 1;
+}
+
+/***
+Return the number of pieces of debris (parts broken off vessels).
+
+@function get_debriscount
+@treturn int number of pieces
+@see vessel:break_part, get_debris, get_debrisinfo
+*/
+int Interpreter::oapi_get_debriscount (lua_State *L)
+{
+	lua_pushinteger (L, oapiGetDebrisCount());
+	return 1;
+}
+
+/***
+Return the handle of a piece of debris.
+
+@function get_debris
+@tparam int idx index (>= 0)
+@treturn handle debris handle (nil if idx is out of range)
+@see get_debriscount
+*/
+int Interpreter::oapi_get_debris (lua_State *L)
+{
+	ASSERT_SYNTAX(lua_isnumber(L, 1), "Argument 1: invalid type (expected number)");
+	int idx = (int)lua_tointeger (L, 1);
+	OBJHANDLE h = idx >= 0 ? oapiGetDebrisByIndex ((DWORD)idx) : NULL;
+	if (h) lua_pushlightuserdata (L, h);
+	else lua_pushnil (L);
+	return 1;
+}
+
+/***
+Return a description of a piece of debris.
+
+The table has fields name, source (the vessel it broke off), mass [kg],
+size [m] and atrest (true when at rest on the ground).
+
+@function get_debrisinfo
+@tparam handle hDebris debris handle
+@treturn table description (nil if hDebris is not a piece of debris)
+@see get_debris
+*/
+int Interpreter::oapi_get_debrisinfo (lua_State *L)
+{
+	ASSERT_SYNTAX(lua_islightuserdata(L, 1), "Argument 1: invalid type (expected handle)");
+	DEBRISINFO info;
+	if (!oapiGetDebrisInfo (lua_toObject (L, 1), &info)) {
+		lua_pushnil (L);
+		return 1;
+	}
+	lua_newtable (L);
+	lua_pushstring (L, info.name);    lua_setfield (L, -2, "name");
+	lua_pushstring (L, info.source);  lua_setfield (L, -2, "source");
+	lua_pushnumber (L, info.mass);    lua_setfield (L, -2, "mass");
+	lua_pushnumber (L, info.size);    lua_setfield (L, -2, "size");
+	lua_pushboolean (L, (info.flags & DEBRIS_ATREST) != 0); lua_setfield (L, -2, "atrest");
 	return 1;
 }
 

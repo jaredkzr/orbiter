@@ -14,6 +14,7 @@
 
 class Vessel;
 class SuperVessel;
+class Debris;
 struct TimeJumpData;
 
 Vector SingleGacc (const Vector &rpos, const CelestialBody *body);
@@ -73,6 +74,15 @@ public:
 
 	bool isVessel (const Vessel *v) const;
 	// returns true if v is a registered vessel
+
+	size_t nDebris () const { return debris.size(); }
+	Debris *GetDebris (size_t i) const { return debris[i]; }
+	bool isDebris (const Body *b) const;
+	void AddDebris (Debris *d, VesselBase *from = nullptr);
+	// add a piece broken off a vessel ('from': it does not collide with
+	// the vessel until they are apart). The oldest pieces at rest are
+	// removed beyond MAXDEBRIS.
+	void DelDebris (Debris *d);
 
 	DWORD nBase(const Planet *planet) const { return planet->nBase(); }
 	Base *GetBase (const Planet *planet, DWORD i) { return planet->GetBase(i); }
@@ -229,6 +239,9 @@ private:
 
 	std::vector<SuperVessel*> supervessels;
 	// List of spacecraft groups (composite vessels)
+
+	std::vector<Debris*> debris;
+	// Pieces broken off vessels (not in 'bodies')
 
 	VesselCollider collider;
 	// Collisions between vessels

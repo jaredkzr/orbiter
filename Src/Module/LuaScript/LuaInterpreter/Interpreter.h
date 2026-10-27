@@ -491,6 +491,9 @@ protected:
 	// Planets
 	static int oapi_get_planetperiod(lua_State* L);
 	static int oapi_get_objecttype(lua_State* L);
+	static int oapi_get_debriscount (lua_State *L);
+	static int oapi_get_debris (lua_State *L);
+	static int oapi_get_debrisinfo (lua_State *L);
 	static int oapi_get_gbodyparent(lua_State* L);
 	static int oapi_get_gbody(lua_State* L);
 	static int oapi_get_gbodycount(lua_State* L);
@@ -728,6 +731,7 @@ protected:
 	static int v_get_partcount (lua_State *L);
 	static int v_get_partinfo (lua_State *L);
 	static int v_get_partat (lua_State *L);
+	static int v_break_part (lua_State *L);
 	static int v_add_maneuvernode (lua_State *L);
 	static int v_get_maneuvernodecount (lua_State *L);
 	static int v_get_maneuvernode (lua_State *L);

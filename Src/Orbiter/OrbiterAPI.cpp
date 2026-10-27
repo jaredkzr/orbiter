@@ -7,6 +7,7 @@
 #include "Orbiter.h"
 #include "Launchpad.h"
 #include "Psys.h"
+#include "Debris.h"
 #include "Camera.h"
 #include "Pane.h"
 #include "Defpanel.h"
@@ -144,8 +145,32 @@ DLLEXPORT int oapiGetObjectType (OBJHANDLE hObj)
 		if (body == g_psys->GetVessel(i))
 			return body->Type();
 	}
+	if (g_psys->isDebris (body)) return OBJTP_DEBRIS;
 
 	return OBJTP_INVALID;
+}
+
+DLLEXPORT DWORD oapiGetDebrisCount ()
+{
+	return (DWORD)g_psys->nDebris();
+}
+
+DLLEXPORT OBJHANDLE oapiGetDebrisByIndex (DWORD index)
+{
+	return index < g_psys->nDebris() ? (OBJHANDLE)g_psys->GetDebris (index) : NULL;
+}
+
+DLLEXPORT bool oapiGetDebrisInfo (OBJHANDLE hDebris, DEBRISINFO *info)
+{
+	if (!info || !g_psys->isDebris ((Body*)hDebris)) return false;
+	const Debris *d = (const Debris*)hDebris;
+	memset (info, 0, sizeof(DEBRISINFO));
+	strncpy (info->name, d->Name(), sizeof(info->name) - 1);
+	strncpy (info->source, d->Source().c_str(), sizeof(info->source) - 1);
+	info->mass = d->Mass();
+	info->size = d->Size();
+	info->flags = d->AtRest() ? DEBRIS_ATREST : 0;
+	return true;
 }
 
 DLLEXPORT const void *oapiGetObjectParam (OBJHANDLE hObj, DWORD paramtype)

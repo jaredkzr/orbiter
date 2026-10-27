@@ -507,6 +507,23 @@ public:
 	int GetPartAt (const VECTOR3 &pos) const;
 
 	/**
+	 * \brief Breaks a part off the vessel: the joint of the part to its
+	 *   parent breaks, and the part, with the parts beyond it still attached,
+	 *   becomes a piece of debris.
+	 * \param idx part index (> 0: the core part does not break off)
+	 * \param vsep separation speed [m/s] (the piece and the vessel are
+	 *   pushed apart along the line from the vessel's centre of gravity to
+	 *   the piece's; momentum is conserved)
+	 * \return number of parts broken off (0 if none: the part is lost
+	 *   already, or the vessel is docked or attached)
+	 * \note The vessel's mass is reduced by the piece's mass (GetEmptyMass
+	 *   still returns the mass set with SetEmptyMass). Its collision hulls
+	 *   of the parts broken off are removed.
+	 * \sa GetPartCount, GetPartInfo, oapiGetDebrisCount
+	 */
+	DWORD BreakPart (DWORD idx, double vsep = 0.0) const;
+
+	/**
 	 * \brief Adds a manoeuvre node: a planned velocity change, shown in the
 	 *   map view with the predicted trajectory after it.
 	 * \param node the node (see \ref MANEUVERNODE)

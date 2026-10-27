@@ -39,6 +39,7 @@
 #include "Util.h"
 #include "elevmgr.h"
 #include "GroundScatter.h"
+#include "Debris.h"
 #include <fstream>
 #include <iomanip>
 #include <stdio.h>
@@ -3708,7 +3709,7 @@ void Vessel::UpdateMass ()
 {
 	pfmass = fmass, fmass = 0.0;
 	for (DWORD i = 0; i < ntank; i++) fmass += tank[i]->mass;
-	mass = emass + fmass;
+	mass = StructMass() + fmass;
 
 	// attached payloads (if included): their mass, and their inertia about
 	// the vessel's origin (the vessel's centre of mass is not moved)
@@ -4606,30 +4607,40 @@ const std::vector<collision::Hull> &Vessel::Hulls () const
 	return hulls;
 }
 
-const structure::Model &Vessel::Structure () const
+void Vessel::ExternalGroups (std::vector<ExtGroup> &eg) const
 {
-	const std::vector<collision::Hull> &h = Hulls();
-	if (structure_gen == hull_gen && structure_emass == emass) return structure_;
-	structure_gen = hull_gen;
-	structure_emass = emass;
-
-	// the triangles of the external meshes (vessel frame)
-	std::vector<structure::Triangle> tris;
+	eg.clear();
 	for (UINT i = 0; i < nmesh; i++) {
 		MeshList *ml = meshlist[i];
 		if (!ml || !(ml->vismode & MESHVIS_EXTERNAL)) continue;
 		const Mesh *mesh = ml->hMesh ? (const Mesh*)ml->hMesh :
 			ml->meshname[0] ? g_pOrbiter->LoadMeshGlobal (ml->meshname) : nullptr;
 		if (!mesh) continue;
-		Vector ofs (MakeVector (ml->meshofs));
 		for (DWORD g = 0; g < mesh->nGroup(); g++) {
 			const GroupSpec *grp = const_cast<Mesh*>(mesh)->GetGroup (g);
-			if (!grp) continue;
-			for (DWORD k = 0; k + 2 < grp->nIdx; k += 3) {
-				const NTVERTEX *v[3] = { grp->Vtx + grp->Idx[k], grp->Vtx + grp->Idx[k+1], grp->Vtx + grp->Idx[k+2] };
-				tris.push_back ({ Vector (v[0]->x, v[0]->y, v[0]->z) + ofs, Vector (v[1]->x, v[1]->y, v[1]->z) + ofs,
-					Vector (v[2]->x, v[2]->y, v[2]->z) + ofs, (int)i, (int)g });
-			}
+			if (grp) eg.push_back ({ i, mesh, g, grp, MakeVector (ml->meshofs) });
+		}
+	}
+}
+
+const structure::Model &Vessel::Structure () const
+{
+	const std::vector<collision::Hull> &h = Hulls();
+	// (made again when the hulls or the empty mass change, unless damaged)
+	if (!part_lost.empty() || (structure_gen == hull_gen && structure_emass == emass)) return structure_;
+	structure_gen = hull_gen;
+	structure_emass = emass;
+
+	// the triangles of the external meshes (vessel frame)
+	std::vector<structure::Triangle> tris;
+	std::vector<ExtGroup> eg;
+	ExternalGroups (eg);
+	for (const ExtGroup &e : eg) {
+		const GroupSpec *grp = (const GroupSpec*)e.grp;
+		for (DWORD k = 0; k + 2 < grp->nIdx; k += 3) {
+			const NTVERTEX *v[3] = { grp->Vtx + grp->Idx[k], grp->Vtx + grp->Idx[k+1], grp->Vtx + grp->Idx[k+2] };
+			tris.push_back ({ Vector (v[0]->x, v[0]->y, v[0]->z) + e.ofs, Vector (v[1]->x, v[1]->y, v[1]->z) + e.ofs,
+				Vector (v[2]->x, v[2]->y, v[2]->z) + e.ofs, (int)e.mesh, (int)e.group });
 		}
 	}
 	uint64_t seed = 1469598103934665603ull; // (FNV-1a of the name: the same parts each time)
@@ -4637,6 +4648,78 @@ const structure::Model &Vessel::Structure () const
 	structure_.Build (h, tris, emass, size, structure::ReadClassConfig (classname), seed);
 	LOGOUT ("Structure of %s: %d parts from %d hulls", name.c_str(), (int)structure_.Parts().size(), (int)h.size());
 	return structure_;
+}
+
+int Vessel::BreakPart (int part, double vsep)
+{
+	const structure::Model &sm = Structure();
+	const std::vector<structure::Part> &parts = sm.Parts();
+	if (part <= 0 || part >= (int)parts.size() || supervessel || attach) return 0;
+	if (part_lost.size() != parts.size()) part_lost.assign (parts.size(), 0);
+	if (part_lost[part]) return 0;
+
+	// the piece: the part and the parts beyond it still attached
+	std::vector<int> piece (1, part);
+	for (size_t i = 0; i < piece.size(); i++)
+		for (int c : parts[piece[i]].children)
+			if (!part_lost[c]) piece.push_back (c);
+	std::vector<int> slot (parts.size(), -1);
+	for (size_t i = 0; i < piece.size(); i++) slot[piece[i]] = (int)i;
+	double m = 0.0;
+	Vector cg;
+	for (int p : piece) m += parts[p].mass, cg += parts[p].cg * parts[p].mass;
+	if (m <= 0.0) return 0;
+	cg /= m;
+
+	// its triangles (in the order the structure was made from them)
+	std::vector<Debris::Group> groups;
+	std::vector<std::vector<Vector>> pts (piece.size());
+	const std::vector<int> &tp = sm.TrianglePart();
+	std::vector<ExtGroup> eg;
+	ExternalGroups (eg);
+	size_t t = 0;
+	for (const ExtGroup &e : eg) {
+		const GroupSpec *grp = (const GroupSpec*)e.grp;
+		int gi = -1;
+		for (DWORD k = 0; k + 2 < grp->nIdx; k += 3, t++) {
+			if (t >= tp.size()) break;
+			int sl = slot[tp[t]];
+			if (sl < 0) continue;
+			if (gi < 0) gi = (int)groups.size(), groups.push_back ({ e.meshp, e.group, {} });
+			for (int j = 0; j < 3; j++) {
+				NTVERTEX v = grp->Vtx[grp->Idx[k+j]];
+				v.x += (float)e.ofs.x, v.y += (float)e.ofs.y, v.z += (float)e.ofs.z;
+				groups[gi].vtx.push_back (v);
+				pts[sl].push_back (Vector (v.x, v.y, v.z));
+			}
+		}
+	}
+
+	// the piece, moving with the vessel's point where it is
+	const StateVectors &s = (g_bStateUpdate && s1 && s1 != s0) ? *s1 : *s0;
+	std::string dname = name + " " + parts[part].name;
+	Debris *d = new Debris (dname, name, m, cg, s, std::move (groups), pts);
+	g_psys->AddDebris (d, this);
+
+	// pushed apart (momentum conserved)
+	double M = mass;
+	Vector r (mul (s.R, cg));
+	Vector dir (r.length() > 1e-6 ? r.unit() : mul (s.R, Vector (0,1,0)));
+	if (vsep > 0.0 && M > m) {
+		d->AddVelocity (dir * (vsep * (M - m) / M));
+		AddVelocity (dir * (-vsep * m / M));
+	}
+
+	for (int p : piece) part_lost[p] = 1;
+	lost_mass += m;
+	UpdateMass ();
+	LOGOUT ("%s: %s broke off (%d parts, %0.0f kg)", name.c_str(), parts[part].name.c_str(), (int)piece.size(), m);
+	return (int)piece.size();
+}
+
+bool Vessel::PartLost (int part) const
+{
+	return part >= 0 && part < (int)part_lost.size() && part_lost[part];
 }
 
 DWORD Vessel::AddCollisionHull (const VECTOR3 *pt, DWORD npt)
@@ -4672,8 +4755,11 @@ double Vessel::CollisionRadius () const
 
 void Vessel::CollectHulls (const StateVectors &s, std::vector<collision::HullRef> &hl) const
 {
-	for (const collision::Hull &h : Hulls())
-		hl.push_back ({&h, s.R, s.pos});
+	const std::vector<collision::Hull> &hulls = Hulls();
+	for (size_t i = 0; i < hulls.size(); i++) {
+		if (!part_lost.empty() && PartLost (structure_.PartOfHull ((int)i))) continue; // (broken off)
+		hl.push_back ({&hulls[i], s.R, s.pos});
+	}
 	// attached payloads: part of this body
 	for (DWORD j = 0; j < ncattach; j++) {
 		const Vessel *c = cattach[j]->mate;
@@ -7565,13 +7651,18 @@ bool VESSEL::GetPartInfo (DWORD idx, PARTINFO *info) const
 	info->loadfactor = p.loadFactor;
 	info->strength = p.strength;
 	info->nhull = (DWORD)p.hulls.size();
-	info->flags = 0;
+	info->flags = vessel->PartLost ((int)idx) ? PART_LOST : 0;
 	return true;
 }
 
 int VESSEL::GetPartAt (const VECTOR3 &pos) const
 {
 	return vessel->Structure().PartAt (MakeVector (pos));
+}
+
+DWORD VESSEL::BreakPart (DWORD idx, double vsep) const
+{
+	return (DWORD)vessel->BreakPart ((int)idx, vsep);
 }
 
 static maneuver::Node MakeNode (const MANEUVERNODE &n)
