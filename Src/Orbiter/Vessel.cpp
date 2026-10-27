@@ -3665,7 +3665,8 @@ void Vessel::InitOrbiting (const Vector &relr, const Vector &relv, const Vector 
 	} else {
 		rad = cpos.length();
 	}
-	if (rad < cbody->Size() + elev) {
+	bool surface = cbody->Type() != OBJTP_PLANET || ((Planet*)cbody)->HasSurface(); // (gas giants: none)
+	if (surface && rad < cbody->Size() + elev) {
 		double scale = (cbody->Size() + elev) / rad;
 		cpos *= scale;
 	}
