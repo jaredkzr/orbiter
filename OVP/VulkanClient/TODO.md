@@ -278,9 +278,14 @@ Known gaps and limitations, to be addressed later.
   domed caps); the noise's footprint drawn out at grazing angles (no
   crumbs). The decks' own light is some 10 percent above the map's look,
   spread over the descent (no visible ramp).
-- Open: anvils' ripple rings read as stacked terraces when seen edge-on;
-  wide columns can look boxy under an anvil. Crush depth (no vessel
-  destruction yet).
+- The "terraces" were the pop-up domes' (fixed: the steps' grid shifted
+  by the jitter). Open: in the plunge (frame 240, VkTest/jupiter_plunge)
+  a box-shaped face in the clear gap between decks 1 and 2: a distant
+  surface whose vertical edge in screen space ends where rays find no cloud
+  within range. Not the towers (remains with them off), pop-ups,
+  chromophores, prepass, tower/moat candidate lists, bounds or shadows;
+  next: the decks' noise/coverage there, the range and floor handling.
+  Crush depth (no vessel destruction yet).
 
 ## Plume and exhaust overhaul (planned, after the current graphics list)
 - User request: overhaul plume and exhaust effects. Current state: billboard
