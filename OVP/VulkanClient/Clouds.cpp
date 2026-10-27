@@ -659,7 +659,7 @@ void VolumetricClouds::RenderGasGiant (const GasGiantFrame &f)
 			double th = PI2 * Unit16 (h0), dist = 0.45 * Rc * sqrt (Unit16 (h0 >> 16));
 			VECTOR3 tdir = unit (c + (e * cos (th) + n * sin (th)) * (dist / R));
 			g.tower[nt][0] = (float)tdir.x, g.tower[nt][1] = (float)tdir.y, g.tower[nt][2] = (float)tdir.z;
-			g.tower[nt][3] = (float)(Rc * (0.05 + 0.06 * Unit16 (h1)) * (0.6 + 0.4 * s));
+			g.tower[nt][3] = (float)(1.8 * Rc * (0.05 + 0.06 * Unit16 (h1)) * (0.6 + 0.4 * s)); // (the column's radius: wide, cumulonimbus)
 			g.towerP[nt][0] = (float)(baseR + (topR - baseR) * (0.55 + 0.45 * Unit16 (h1 >> 16)) * (0.7 + 0.3 * s));
 			g.towerP[nt][1] = (float)s;
 			g.towerP[nt][2] = (float)(7.1 * k + 3.3 * (cells[i].id % 97));

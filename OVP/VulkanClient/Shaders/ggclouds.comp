@@ -303,19 +303,19 @@ bool NearTower (int i, vec3 u, float r, float margin)
 	if (r < baseR - margin || r > top + 6e3 + margin) return false;
 	vec3 e = normalize (vec3 (-c.z, 0.0, c.x)), nn = cross (c, e);
 	vec2 h = vec2 (dot (u - c, e), dot (u - c, nn)) * P.misc.z - vec2 (0.35 * (r - baseR), 0.0);
-	float reach = 1.4 * rt;
-	if (r > top - 18e3 - margin) {
-		reach = 1.6 * rt;
-		// (the anvil: its ellipse, drawn out downwind (Shelf))
-		if (P.towerP[i].w > 0.5) {
-			vec2 qa = h - vec2 (1.5 * rt, 0.0);
-			vec2 ea = qa / (vec2 (qa.x > 0.0 ? 6.0 * rt : 1.6 * rt, 2.6 * rt) + margin);
-			if (dot (ea, ea) < 3.2) return true;
-		}
+	float hf = clamp ((r - baseR) / (top - baseR), 0.0, 1.0), ra = 0.6 * rt;
+	// (the column, flaring with height (Towers))
+	if (length (h) < 1.45 * rt * (0.7 + 0.4 * hf) + margin) return true;
+	// (the anvil: its ellipse, drawn out downwind (Shelf))
+	if (r > top - 18e3 - margin && P.towerP[i].w > 0.5) {
+		vec2 qa = h - vec2 (1.5 * ra, 0.0);
+		vec2 ea = qa / (vec2 (qa.x > 0.0 ? 6.0 * ra : 1.6 * ra, 2.6 * ra) + margin);
+		if (dot (ea, ea) < 3.2) return true;
 	}
+	// (the shelves at the decks' tops)
 	for (int l = 0; l < int (P.hazeH.y); l++)
-		if (abs (r - P.layer[l].y) < 6e3 + margin) reach = max (reach, 3.2 * rt);
-	return length (h - vec2 (reach > 3.0 * rt ? 1.5 * rt : 0.0, 0.0)) < reach + margin;
+		if (abs (r - P.layer[l].y) < 6e3 + margin && length (h - vec2 (0.4 * rt, 0.0)) < 2.4 * rt + margin) return true;
+	return false;
 }
 
 float deckTopR = 0.0; // (the highest dense deck's cloud tops, about [m from the centre])
@@ -340,55 +340,58 @@ float Towers (vec3 x, float r, vec3 u, bool detail)
 		vec2 h = vec2 (dot (u - c, e), dot (u - c, nn)) * R - vec2 (0.35 * (r - baseR), 0.0);
 		// (out of reach at this height: the column, a shelf near a deck's top,
 		// the anvil near the tower's top)
+		// (rt the column's radius: a cumulonimbus, wide; ra the anvil's and
+		// rn the billows' scale, smaller)
 		bool anvil = P.towerP[i].w > 0.5;
-		float reach = 1.4 * rt;
-		if (r > top - 18e3) reach = 1.6 * rt;
-		else for (int l = 0; l < int (P.hazeH.y); l++) if (abs (r - P.layer[l].y) < 6e3) reach = 3.2 * rt;
-		// (the anvil: its ellipse, drawn out downwind (Shelf))
-		vec2 qa = h - vec2 (1.5 * rt, 0.0);
-		vec2 ea = qa / vec2 (qa.x > 0.0 ? 6.0 * rt : 1.6 * rt, 2.6 * rt);
+		float ra = 0.6 * rt, rn = 0.5 * rt;
+		bool inCol = length (h) < 1.45 * rt * (0.7 + 0.4 * hf);
+		bool inShelf = false;
+		for (int l = 0; l < int (P.hazeH.y); l++) inShelf = inShelf || (abs (r - P.layer[l].y) < 6e3 && length (h - vec2 (0.4 * rt, 0.0)) < 2.4 * rt);
+		vec2 qa = h - vec2 (1.5 * ra, 0.0);
+		vec2 ea = qa / vec2 (qa.x > 0.0 ? 6.0 * ra : 1.6 * ra, 2.6 * ra);
 		bool inAnvil = anvil && r > top - 18e3 && dot (ea, ea) < 3.2;
-		if (!inAnvil && length (h - vec2 (reach > 3.0 * rt ? 1.5 * rt : 0.0, 0.0)) > reach) continue;
+		if (!inCol && !inShelf && !inAnvil) continue;
 		// the vortex: the tower turns with height, faster near its core
 		float rho = length (h);
 		// (turning with the storm, south-up frame; the shelves slower, the
 		// anvil's outflow against it: anticyclonic, as Earth's)
-		float spin = sign (c.y) * P.vortex.z / rt * P.hazeH.z;
-		float phi = 2.2 * hf + seed + 1.2 * rt / (rho + rt) - mod (spin, 2.0 * PI);
+		float spin = sign (c.y) * P.vortex.z / rn * P.hazeH.z;
+		float phi = 2.2 * hf + seed + 1.2 * rn / (rho + rn) - mod (spin, 2.0 * PI);
 		vec2 hr = mat2 (cos (phi), sin (phi), -sin (phi), cos (phi)) * h;
 		// (billows a fifth of the tower across, smaller ones on them,
 		// rising with the updraft; the larger in the light march too: the
 		// billows shading each other, not a smooth column's light)
-		vec3 q = vec3 (hr, r - baseR - 25.0 * P.hazeH.z) / rt * 0.35 + vec3 (seed);
-		float lq = Lod (0.35 / rt, SHAPE_N);
+		vec3 q = vec3 (hr, r - baseR - 25.0 * P.hazeH.z) / rn * 0.35 + vec3 (seed);
+		float lq = Lod (0.35 / rn, SHAPE_N);
 		float nz = 0.7 * textureLod (shapeNoise, q, lq).r + 0.3 * (detail ? textureLod (shapeNoise, ROT * q * 2.2, lq + 1.14).r : noiseMean) - 0.5;
 		nz = clamp (nz * 2.5, -0.6, 0.6); // (the noise's narrow range stretched)
 		// (and on them cauliflower: rounded bulges (the Worley noise's
 		// cells), some 3.5 and 1.5 km across, pushing the surface out)
 		float bl = 0.0;
 		if (detail) {
-			float lw = Lod (0.35 * 1.6 / rt, DETAIL_N);
+			float lw = Lod (0.35 * 1.6 / rn, DETAIL_N);
 			bl = 0.65 * (textureLod (detailNoise, q * 1.6, lw).r - detailMean) + 0.35 * (textureLod (detailNoise, ROT * q * 4.0, lw + 1.32).r - detailMean);
 			bl = clamp (bl * 3.0, -0.5, 0.5);
 		}
-		// the column: lobed, asymmetric
+		// the column: lobed, asymmetric, flaring with height (as a
+		// cumulonimbus's, spreading under the stable air above)
 		float th = atan (hr.y, hr.x);
-		float rad = rt * (1.0 - 0.2 * hf) * (1.0 + 0.22 * sin (3.0 * th + seed) + 0.12 * sin (5.0 * th + 2.0 * seed));
+		float rad = rt * (0.7 + 0.4 * hf) * (1.0 + 0.12 * sin (3.0 * th + seed) + 0.06 * sin (5.0 * th + 2.0 * seed));
 		// (its top rounded: a cauliflower cap, not a cut)
-		float cap = top - 5e3 * min (rho * rho / (rad * rad), 1.0);
+		float cap = top - (5e3 + 0.35 * rad) * min (rho * rho / (rad * rad), 1.0);
 		// (a crisp surface, the bulges on it)
-		float v = smoothstep (1.0 * rad, 0.8 * rad, rho + nz * 0.8 * rad - bl * 0.45 * rad) * smoothstep (0.0, 0.04, hf) * (1.0 - smoothstep (cap - 1.5e3, cap, r - 4e3 * nz - bl * 3e3));
+		float v = smoothstep (1.0 * rad, 0.85 * rad, rho + nz * 0.45 * rad - bl * 0.25 * rad) * smoothstep (0.0, 0.04, hf) * (1.0 - smoothstep (cap - 1.5e3, cap, r - 4e3 * nz - bl * 3e3));
 		// (the overshooting dome over the core)
-		float dome = top + 4e3 * (1.0 - min (rho * rho / (0.36 * rt * rt), 1.0));
-		v = max (v, smoothstep (0.6 * rt, 0.4 * rt, rho + nz * 0.3 * rt) * step (top - 6e3, r) * (1.0 - smoothstep (dome - 1.5e3, dome, r - 1e3 * nz)));
+		float dome = top + 4e3 * (1.0 - min (rho * rho / (0.25 * rt * rt), 1.0));
+		v = max (v, smoothstep (0.5 * rt, 0.35 * rt, rho + nz * 0.25 * rt) * step (top - 6e3, r) * (1.0 - smoothstep (dome - 1.5e3, dome, r - 1e3 * nz)));
 		// shelves where it passes the decks' tops, and the anvil at its top
 		for (int l = 0; l < int (P.hazeH.y); l++) {
 			float lev = P.layer[l].y;
 			if (lev > top - 8e3 || lev < baseR + 5e3 || abs (r - lev) > 6e3) continue;
-			v = max (v, 0.8 * Shelf (h, r - lev, rt, 3.0 * rt, 1.0 * rt, 1.6 * rt, 4e3, nz, seed + float (l) - 0.5 * mod (spin, 2.0 * PI), false, detail));
+			v = max (v, 0.8 * Shelf (h, r - lev, rn, 1.8 * rt, 1.15 * rt, 1.4 * rt, 4e3, nz, seed + float (l) - 0.5 * mod (spin, 2.0 * PI), false, detail));
 		}
 		if (anvil && r > top - 18e3)
-			v = max (v, Shelf (h - vec2 (1.5 * rt, 0.0), r - top, rt, 6.0 * rt, 1.6 * rt, 2.6 * rt, 14e3, nz, seed + 0.3 * mod (spin, 2.0 * PI), true, detail));
+			v = max (v, Shelf (h - vec2 (1.5 * ra, 0.0), r - top, ra, 6.0 * ra, 1.6 * ra, 2.6 * ra, 14e3, nz, seed + 0.3 * mod (spin, 2.0 * PI), true, detail));
 		v *= 0.7 + 0.6 * nz;
 		if (v > dens) towerCrease = max (0.15 - bl, 0.0); // (between the bulges: in their shade)
 		dens = max (dens, clamp (v, 0.0, 1.0) * mix (0.6, 1.0, s));
@@ -992,7 +995,7 @@ bool March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 			float top = P.towerP[i].x;
 			vec3 mid = P.tower[i].xyz * (0.5 * (baseR + top));
 			float tq = clamp (dot (mid - o, d), t0, t1);
-			float reach = 8.0 * P.tower[i].w + 0.35 * (top - baseR) + 0.5 * (top - baseR) + 120e3;
+			float reach = 5.0 * P.tower[i].w + 0.35 * (top - baseR) + 0.5 * (top - baseR) + 120e3;
 			if (length (o + d * tq - mid) < reach) towerList[nTower++] = i;
 		}
 		for (int i = 0; i < int (P.misc.x) && nMoat < 4; i++) {
@@ -1209,10 +1212,10 @@ bool March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 		// from the lower hemisphere, through the cloud below the sample)
 		vec3 bounce = vec3 (0.0);
 		if (nearT && r > deckTopR && muS > 0.0) {
-			vec3 al;
-			lightTowers = true;
-			float odn = Medium (p - up * 1500.0, false, al, false) * 3000.0;
-			lightTowers = false;
+			// (above the tops only the towers below: their density alone)
+			vec3 pd = p - up * 1500.0;
+			float rd = length (pd);
+			float odn = 8e-4 * Towers (pd, rd, pd / rd, false) * 3000.0;
 			bounce = mix (0.45, 0.85, ctxZone) * sunAtm * muS * dirP / (2.0 * PI) * ms * exp (-0.5 * odn);
 		}
 		vec3 S = cE * cAlb * (Ssun + bounce + sky * (0.3 + 0.7 * clamp (muS + 0.2, 0.0, 1.0)) + fl);
