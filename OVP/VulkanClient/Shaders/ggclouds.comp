@@ -304,7 +304,7 @@ bool NearTower (int i, vec3 u, float r, float margin)
 	vec3 e = normalize (vec3 (-c.z, 0.0, c.x)), nn = cross (c, e);
 	vec2 h = vec2 (dot (u - c, e), dot (u - c, nn)) * P.misc.z - vec2 (0.35 * (r - baseR), 0.0);
 	float reach = 1.4 * rt;
-	if (r > top - 12e3 - margin) {
+	if (r > top - 18e3 - margin) {
 		reach = 1.6 * rt;
 		// (the anvil: its ellipse, drawn out downwind (Shelf))
 		if (P.towerP[i].w > 0.5) {
@@ -318,6 +318,7 @@ bool NearTower (int i, vec3 u, float r, float margin)
 	return length (h - vec2 (reach > 3.0 * rt ? 1.5 * rt : 0.0, 0.0)) < reach + margin;
 }
 
+float deckTopR = 0.0; // (the highest dense deck's cloud tops, about [m from the centre])
 float towerCrease = 0.0; // (Towers': the sample between the bulges (0: on one))
 float Towers (vec3 x, float r, vec3 u, bool detail)
 {
@@ -341,12 +342,12 @@ float Towers (vec3 x, float r, vec3 u, bool detail)
 		// the anvil near the tower's top)
 		bool anvil = P.towerP[i].w > 0.5;
 		float reach = 1.4 * rt;
-		if (r > top - 12e3) reach = 1.6 * rt;
+		if (r > top - 18e3) reach = 1.6 * rt;
 		else for (int l = 0; l < int (P.hazeH.y); l++) if (abs (r - P.layer[l].y) < 6e3) reach = 3.2 * rt;
 		// (the anvil: its ellipse, drawn out downwind (Shelf))
 		vec2 qa = h - vec2 (1.5 * rt, 0.0);
 		vec2 ea = qa / vec2 (qa.x > 0.0 ? 6.0 * rt : 1.6 * rt, 2.6 * rt);
-		bool inAnvil = anvil && r > top - 12e3 && dot (ea, ea) < 3.2;
+		bool inAnvil = anvil && r > top - 18e3 && dot (ea, ea) < 3.2;
 		if (!inAnvil && length (h - vec2 (reach > 3.0 * rt ? 1.5 * rt : 0.0, 0.0)) > reach) continue;
 		// the vortex: the tower turns with height, faster near its core
 		float rho = length (h);
@@ -386,8 +387,8 @@ float Towers (vec3 x, float r, vec3 u, bool detail)
 			if (lev > top - 8e3 || lev < baseR + 5e3 || abs (r - lev) > 6e3) continue;
 			v = max (v, 0.8 * Shelf (h, r - lev, rt, 3.0 * rt, 1.0 * rt, 1.6 * rt, 4e3, nz, seed + float (l) - 0.5 * mod (spin, 2.0 * PI), false, detail));
 		}
-		if (anvil && r > top - 12e3)
-			v = max (v, Shelf (h - vec2 (1.5 * rt, 0.0), r - top, rt, 6.0 * rt, 1.6 * rt, 2.6 * rt, 8e3, nz, seed + 0.3 * mod (spin, 2.0 * PI), true, detail));
+		if (anvil && r > top - 18e3)
+			v = max (v, Shelf (h - vec2 (1.5 * rt, 0.0), r - top, rt, 6.0 * rt, 1.6 * rt, 2.6 * rt, 14e3, nz, seed + 0.3 * mod (spin, 2.0 * PI), true, detail));
 		v *= 0.7 + 0.6 * nz;
 		if (v > dens) towerCrease = max (0.15 - bl, 0.0); // (between the bulges: in their shade)
 		dens = max (dens, clamp (v, 0.0, 1.0) * mix (0.6, 1.0, s));
@@ -1202,7 +1203,19 @@ bool March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 		Ssun = sunAtm * (Ssun * dirE + max (muS, 0.0) * difE * ms * exp (-0.25 * od) / PI);
 		vec3 sky = pc.ambient.rgb * (sdir + sdif);
 		vec3 fl = FlashLight (p);
-		vec3 S = cE * cAlb * (Ssun + sky * (0.3 + 0.7 * clamp (muS + 0.2, 0.0, 1.0)) + fl);
+		// (above the cloud tops, near a tower: the decks' white floor below
+		// lights the undersides (anvils, the columns' lower flanks): the
+		// sunlit floor's radiance (its albedo: zones white, belts darker)
+		// from the lower hemisphere, through the cloud below the sample)
+		vec3 bounce = vec3 (0.0);
+		if (nearT && r > deckTopR && muS > 0.0) {
+			vec3 al;
+			lightTowers = true;
+			float odn = Medium (p - up * 1500.0, false, al, false) * 3000.0;
+			lightTowers = false;
+			bounce = mix (0.45, 0.85, ctxZone) * sunAtm * muS * dirP / (2.0 * PI) * ms * exp (-0.5 * odn);
+		}
+		vec3 S = cE * cAlb * (Ssun + bounce + sky * (0.3 + 0.7 * clamp (muS + 0.2, 0.0, 1.0)) + fl);
 		// the haze and the gas (Rayleigh scattering, absorption)
 		float ib, pb = Bar (r, ib);
 		vec3 ray = P.rayK.rgb * pb * ib;
@@ -1254,6 +1267,8 @@ void main ()
 	P = gg[int (pc.slot.x)];
 	noiseMean = textureLod (shapeNoise, vec3 (0.5), log2 (SHAPE_N)).r;
 	detailMean = textureLod (detailNoise, vec3 (0.5), log2 (DETAIL_N)).r;
+	for (int i = 0; i < int (P.hazeH.y); i++)
+		if (P.layer[i].z >= 2e-5) deckTopR = max (deckTopR, P.layer[i].y - 0.25 * (P.layer[i].y - P.layer[i].x));
 	cur = int (pc.slot.y), prv = 1 - cur;
 	vec4 res = vec4 (0.0, 0.0, 0.0, 1.0);
 	float dist = 0.0;
