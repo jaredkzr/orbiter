@@ -236,9 +236,12 @@ float Moat (vec3 u)
 // lookup's coordinates per metre; size: the volume's texels per unit): far
 // away the fine noise averaged instead of aliased (streaks, hatching)
 float fpM = 0.0;
+// (the towers' and the pop-ups' noise a level coarser: their finest detail
+// over two pixels, not crumbs of one)
+float lodBias = 0.0;
 float Lod (float qPerM, float size)
 {
-	return max (log2 (fpM * qPerM * size), 0.0);
+	return max (log2 (fpM * qPerM * size) + lodBias, 0.0);
 }
 
 // a shelf of a tower where it meets a stable level (a deck's top), or its
@@ -317,6 +320,7 @@ float Towers (vec3 x, float r, vec3 u, bool detail)
 	float R = P.misc.z;
 	float baseR = P.layer[int (P.hazeH.y) - 1].x; // (the lowest deck's base)
 	if (r < baseR || r > P.misc.w + 10e3) return 0.0;
+	lodBias = 1.0;
 	for (int k = 0; k < nTower; k++) {
 		int i = towerList[k];
 		vec3 c = P.tower[i].xyz;
@@ -374,6 +378,7 @@ float Towers (vec3 x, float r, vec3 u, bool detail)
 		v *= 0.7 + 0.6 * nz;
 		dens = max (dens, clamp (v, 0.0, 1.0) * mix (0.6, 1.0, s));
 	}
+	lodBias = 0.0;
 	return dens;
 }
 
@@ -597,9 +602,11 @@ float PopUp (vec3 x, float r, vec3 u, bool detail)
 	float z = r - P.popup.z;
 	float q = clamp (1.0 - d * d / (rd * rd), -1.0, 1.0);
 	float prof = (4e3 + hd) * sign (q) * sqrt (abs (q)) - z;
+	lodBias = 1.0;
 	float lb = Lod (1.0 / 6e3, SHAPE_N);
 	float n = textureLod (shapeNoise, vec3 (m, r - R) / (6e3 * NOISE_F) + vec3 (0.0, 0.0, -0.02 * P.hazeH.z / 6e3), lb).r - noiseMean;
 	if (detail) n += 0.25 * (textureLod (detailNoise, vec3 (m, r - R) / 2.5e3 * 0.2, Lod (1.0 / 2.5e3, DETAIL_N)).r - 0.5);
+	lodBias = 0.0;
 	return clamp ((prof + 6.0 * n * (4e3 + hd)) / (0.15 * (4e3 + hd)), 0.0, 1.0);
 }
 
@@ -796,27 +803,34 @@ bool History (vec3 x, float dist, out vec4 h)
 	return abs (dp - dn) < 0.15 * dn + 2e3;
 }
 
-void main ()
+// the march for pixel px: its light and transmittance (res), the clouds'
+// distance (0: none), where they were seen (planet frame: the history's
+// point), and whether res is final (taken from the history, or empty: false)
+bool March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 {
-	ivec2 px = ivec2 (gl_GlobalInvocationID.xy);
 	vec2 size = pc.proj.zw;
-	if (px.x >= int (size.x) || px.y >= int (size.y)) return;
-	P = gg[int (pc.slot.x)];
-	noiseMean = textureLod (shapeNoise, vec3 (0.5), log2 (SHAPE_N)).r;
-	cur = int (pc.slot.y), prv = 1 - cur;
-
-	vec2 ndc = (vec2 (px) + 0.5) / size * 2.0 - 1.0;
+	res = vec4 (0.0, 0.0, 0.0, 1.0), dist = 0.0, hx = vec3 (0.0);
+	// (the ray through a different place within the pixel each frame (R2
+	// sequence): the history averages the pixel's area, the clouds' finest
+	// detail not aliased into grain)
+	vec2 sub = fract (vec2 (0.7548777, 0.5698403) * pc.ambient.w + 0.5);
+	vec2 ndc = (vec2 (px) + sub) / size * 2.0 - 1.0;
 	vec3 dv = normalize (vec3 (ndc.x / pc.proj.x, -ndc.y / pc.proj.y, 1.0));
 	vec3 d = normalize (mat3 (atm.viewToPlanet) * dv);
 	vec3 o = atm.camPos.xyz;
+	// (the history looked up where the pixel's centre saw the clouds: at
+	// the jittered ray's point it would be resampled off the texels' centres
+	// each frame, blurred)
+	vec2 ndcC = (vec2 (px) + 0.5) / size * 2.0 - 1.0;
+	vec3 dc = normalize (mat3 (atm.viewToPlanet) * normalize (vec3 (ndcC.x / pc.proj.x, -ndcC.y / pc.proj.y, 1.0)));
 	// every other 8x8 tile (alternating each frame: whole workgroups, so
 	// that the work is saved) takes the last frame's result where it is
 	// valid: half the pixels marched per frame
 	if (P.prevCam.w > 1.5 && ((gl_WorkGroupID.x + gl_WorkGroupID.y + uint (cur)) & 1u) == 1u) {
 		float dl = texelFetch (depthIn[prv], px, 0).r;
-		vec3 x = o + d * (dl > 0.0 ? dl : 1e7);
+		vec3 x = o + dc * (dl > 0.0 ? dl : 1e7);
 		vec4 h;
-		if (History (x, dl, h)) { Store (px, h, dl > 0.0 ? length (x - o) : 0.0); return; }
+		if (History (x, dl, h)) { res = h, dist = dl > 0.0 ? length (x - o) : 0.0; return false; }
 	}
 
 	// the segment within the decks' shell (above the floor), up to the
@@ -825,7 +839,7 @@ void main ()
 	for (int i = 1; i < int (P.hazeH.y); i++) topR = max (topR, P.layer[i].y + 5e3);
 	topR = max (topR, P.misc.w + 8e3);
 	vec2 tt = RaySphere (o, d, topR);
-	if (tt.x > tt.y || tt.y <= 0.0) { Store (px, vec4 (0.0, 0.0, 0.0, 1.0), 0.0); return; }
+	if (tt.x > tt.y || tt.y <= 0.0) return false;
 	float t0 = max (tt.x, 0.0), t1 = tt.y;
 	vec2 tf = RaySphere (o, d, P.misc2.z);
 	bool toFloor = tf.x < tf.y && tf.x > 0.0;
@@ -846,7 +860,7 @@ void main ()
 	if (scene) t1 = z / dv.z;
 	bool beyond = t1 > t0 + P.hazeH.w;
 	t1 = min (t1, t0 + P.hazeH.w);
-	if (t1 <= t0) { Store (px, vec4 (0.0, 0.0, 0.0, 1.0), 0.0); return; }
+	if (t1 <= t0) return false;
 
 	// the towers and storms the ray passes near (towers: within their
 	// reach, and the shadows they cast along it)
@@ -867,7 +881,10 @@ void main ()
 	}
 	float pixAng = 2.0 / (pc.proj.x * pc.proj.z); // (a pixel's angle)
 	if (P.boltInfo.x > 0.0) BoltHits (o, d, t0, t1, pixAng);
-	float jitter = fract (52.9829189 * fract (dot (vec2 (px) + pc.ambient.w * vec2 (5.588238, 5.588238), vec2 (0.06711056, 0.00583715))));
+	// (the samples' place within the steps: white noise over the pixels,
+	// turned by the golden ratio each frame; interleaved gradient noise
+	// left the steps' slices as diagonal streaks)
+	float jitter = fract (Unit (Pcg (uint (px.x) + 4099u * uint (px.y))) + 0.618034 * pc.ambient.w);
 	// steps of about a fiftieth of the distance within the decks and near
 	// the towers (their billows resolved, not smeared along the rays into
 	// streaks); through the clear air long ones, to the next deck's
@@ -1073,7 +1090,7 @@ void main ()
 	}
 	// (beyond the march range downwards, or at the floor: the dark depths)
 	if ((toFloor || beyond) && !scene && dot (d, o) < 0.0) T *= toFloor ? 0.0 : 0.3;
-	if (wSum <= 0.0 && T.g > 0.999 && nHit == 0) { Store (px, vec4 (0.0, 0.0, 0.0, 1.0), 0.0); return; }
+	if (wSum <= 0.0 && T.g > 0.999 && nHit == 0) return false;
 
 	// (from high above, the decks take the map's look, as the planet's
 	// cloud layer shows it: the hand-over seamless; less so as they come
@@ -1087,10 +1104,62 @@ void main ()
 	}
 	// blended with the history of the same cloud (the noise of the march
 	// and its jitter averaged over frames)
-	float dist = wSum > 0.0 ? tWeighted / wSum : 0.0;
+	dist = wSum > 0.0 ? tWeighted / wSum : 0.0;
 	// (fading out towards their reach: the planet's cloud layer behind)
 	L *= P.mapInfo.y, T = mix (vec3 (1.0), T, P.mapInfo.y);
-	vec4 res = vec4 (L, dot (T, vec3 (0.2126, 0.7152, 0.0722))), h;
-	if (History (o + d * (dist > 0.0 ? dist : 1e7), dist, h)) res = mix (h, res, P.flashInfo.x > 0.0 ? 0.7 : 0.3); // (flashes: little lag)
+	res = vec4 (L, dot (T, vec3 (0.2126, 0.7152, 0.0722)));
+	hx = o + dc * (dist > 0.0 ? dist : 1e7);
+	return true;
+}
+
+// the workgroup's marched pixels: the neighbourhood of each
+shared vec4 nbC[8][8];
+shared float nbD[8][8];
+
+void main ()
+{
+	ivec2 px = ivec2 (gl_GlobalInvocationID.xy), lp = ivec2 (gl_LocalInvocationID.xy);
+	bool inside = px.x < int (pc.proj.z) && px.y < int (pc.proj.w);
+	P = gg[int (pc.slot.x)];
+	noiseMean = textureLod (shapeNoise, vec3 (0.5), log2 (SHAPE_N)).r;
+	cur = int (pc.slot.y), prv = 1 - cur;
+	vec4 res = vec4 (0.0, 0.0, 0.0, 1.0);
+	float dist = 0.0;
+	vec3 hx;
+	bool marched = inside && March (px, res, dist, hx);
+	nbC[lp.y][lp.x] = res, nbD[lp.y][lp.x] = dist;
+	barrier ();
+	if (!inside) return;
+	if (!marched) { Store (px, res, dist); return; }
+	// the history clipped to the spread of the 3x3 neighbourhood of the
+	// same cloud (by distance): moving fast, the clouds seen there before
+	// smeared over the ones there now otherwise
+	vec4 f = vec4 (0.0), m2 = vec4 (0.0), fa = vec4 (0.0);
+	float ws = 0.0, wa = 0.0;
+	for (int dy = -1; dy <= 1; dy++)
+		for (int dx = -1; dx <= 1; dx++) {
+			ivec2 q = lp + ivec2 (dx, dy);
+			if (any (lessThan (q, ivec2 (0))) || any (greaterThan (q, ivec2 (7)))) continue;
+			float dq = nbD[q.y][q.x];
+			float w = (dx == 0 ? 2.0 : 1.0) * (dy == 0 ? 2.0 : 1.0);
+			vec4 c = nbC[q.y][q.x];
+			fa += w * c, wa += w;
+			if ((dq == 0.0) != (dist == 0.0) || abs (dq - dist) > 0.1 * dist + 1e3) continue;
+			f += w * c, m2 += w * c * c, ws += w;
+		}
+	f /= ws;
+	vec4 sd = sqrt (max (m2 / ws - f * f, vec4 (0.0)));
+	// (the camera moving, the history short: the sample the neighbourhood's
+	// average, its noise less; still, its own, sharp)
+	if (P.prevCam.w < 1.5) res = f;
+	vec4 h;
+	if (History (hx, dist, h)) {
+		h = clamp (h, f - 1.25 * sd, f + 1.25 * sd);
+		res = mix (h, res, P.flashInfo.x > 0.0 ? 0.7 : 0.1); // (flashes: little lag)
+	}
+	// (none: newly uncovered, or a cloud's edge, there one frame and not the
+	// next (the jitter): the whole neighbourhood's average, soft, not a
+	// single sample's speckle)
+	else res = fa / wa;
 	Store (px, res, dist);
 }
