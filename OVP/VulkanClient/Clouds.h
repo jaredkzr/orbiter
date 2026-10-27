@@ -14,6 +14,7 @@
 
 #include "VkContext.h"
 #include "VkMath.h"
+#include <algorithm>
 #include <vector>
 
 class PlanetSurface;
@@ -49,6 +50,16 @@ public:
 		double hazeExt = 2e-6, hazeH = 30e3, towerTop = 15e3, stretch = 3.0, tint = 0.6;
 		float gasAbs[3] = { 0.06f, 0.09f, 0.15f };   // the gas's absorption per bar (rgb)
 		float gasRay[3] = { 0.055f, 0.09f, 0.19f };   // its Rayleigh scattering per bar (rgb)
+		float gasDeep[3] = { 0.0f, 0.0f, 0.0f };      // more absorption per bar below gasDeepP (rgb)
+		double gasDeepP = 1.0;                        // [bar]
+		float mapLevels[3] = { 0.15f, 0.45f, 0.6f };  // the planet map's luminance: belts below, zones above; its white (VPlanet)
+		double chromoBase = 0.0, chromoTop = 0.0, chromoStrength = 1.0; // the chromophores' layer (none: top <= base)
+		float folds = 0.0, lanes = 0.0;               // the flow's folds within the bands, the clear lanes between them (0..1)
+		double reach = 1500e3;                        // the decks drawn up to this height above their top [m] (fading out over the upper 30 percent)
+		/// the gas's absorption optical depth above pressure bar [bar] (colour k)
+		double GasAbs (int k, double bar) const { return gasAbs[k] * bar + gasDeep[k] * std::max (bar - gasDeepP, 0.0); }
+		/// its absorption per bar there (the coefficient's)
+		double GasAbsRate (int k, double bar) const { return gasAbs[k] + (bar > gasDeepP ? gasDeep[k] : 0.0); }
 		double vortexV = 120.0, vortexCore = 0.3, towerSpin = 40.0, vortexTwist = 3.0;
 		double Top () const;      ///< top of the highest deck (not the haze) [m]
 		double CloudTop () const; ///< top of the highest cloud deck (extinction 1e-4/m or more)
@@ -77,6 +88,9 @@ public:
 	};
 	/// Ray-march a gas giant's decks (outside rendering scopes, after the prepass)
 	void RenderGasGiant (const GasGiantFrame &f);
+	/// their opacity this frame (fading out towards their reach: the
+	/// planet's cloud layer drawn behind them until opaque)
+	float DeckOpacity () const { return active ? ggOpacity : 0.0f; }
 
 	/// Lightning in the storm towers near the camera (gas giants): the
 	/// flashes lit at the last RenderGasGiant: global position, brightness
@@ -135,6 +149,7 @@ private:
 	VECTOR3 ggPrevCam{};
 	MATRIX3 ggPrevRot{};
 	std::vector<Flash> flashes;
+	float ggOpacity = 1.0f;
 	vkc::Buffer ggBuf;                  // their parameters, one slot per frame in flight
 	bool active = false; // rendered this frame
 };

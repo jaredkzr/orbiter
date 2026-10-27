@@ -967,7 +967,7 @@ bool Scene::DeckPath (const VECTOR3 &a, const VECTOR3 &b, double &direct, double
 		oapiGetPlanetAtmParams (hp, rl + 1e3, &p1);
 		double bar = p0.p / 1e5, ib = p1.p > 0.0 ? log (p0.p / p1.p) / 1e3 : 0.0;
 		double ds = len / N;
-		ts += e * ds, tsr += dk->gasRay[1] * bar * ib * ds, ta += (ea + dk->gasAbs[1] * bar * ib) * ds;
+		ts += e * ds, tsr += dk->gasRay[1] * bar * ib * ds, ta += (ea + dk->GasAbsRate (1, bar) * bar * ib) * ds;
 	}
 	// the beam: all of it; what the clouds scatter forwards and diffuse on
 	// (conservative scattering through a slab, as Decks::Light: the
@@ -1453,7 +1453,7 @@ void Scene::RenderVolumetricClouds ()
 		oapiGetRotationMatrix (hp, &prot);
 		double R = oapiGetSize (hp);
 		VECTOR3 cam = tmul (prot, camPos - pp);
-		if (length (cam) - R > dk->Top () + 1500e3) return;
+		if (length (cam) - R > dk->Top () + dk->reach) return;
 		VolumetricClouds::GasGiantFrame f{};
 		f.hPlanet = hp;
 		f.decks = dk;

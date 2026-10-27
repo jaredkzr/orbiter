@@ -48,6 +48,12 @@ namespace {
 		float vortex[4];            // storms' swirl speed [m/s], core radius (share), tower spin speed [m/s], spiral twist [rad]
 		float bolt[GG_BOLTV][4];    // lightning channels: vertices (planet frame), brightness (negative: a channel's first vertex)
 		float boltInfo[4];          // vertex count
+		float mapInfo[4];           // the cloud layer's rotation [rad], 0, 0, 0
+		float gasD[4];              // the gas's absorption per bar more below the pressure w [bar] (rgb)
+		float mapLevels[4];         // the map's luminance: belts below, zones above; its white
+		float mapCal[GG_LAYERS][4]; // the map's colour calibration for each deck (rgb)
+		float chromo[4];            // the chromophores' layer: base, top radius [m], strength
+		float chromoCal[4];         // ... the map's colour calibration at its top (rgb)
 	};
 
 	uint32_t Pcg (uint32_t v)
@@ -530,7 +536,7 @@ double VolumetricClouds::Decks::ColumnAbove (double alt, double mu) const
 double VolumetricClouds::Decks::Light (double alt, double mu, double bar, double *direct) const
 {
 	const double GC = 0.85;
-	double ta = gasAbs[1] * bar, ts = gasRay[1] * bar, te = ta + ts;
+	double ta = GasAbs (1, bar), ts = gasRay[1] * bar, te = ta + ts;
 	for (const Deck &d : decks) {
 		double tau = d.ext * 0.35 * d.coverage * std::clamp (d.top - std::max (alt, d.base), 0.0, d.top - d.base);
 		te += tau, ta += tau * (1.0 - d.albedo[1]), ts += tau * d.albedo[1] * (1.0 - GC);
@@ -569,7 +575,15 @@ bool VolumetricClouds::LoadDecks (const char *planet, Decks &dk)
 		else if (key == "TOWERTOP") ss >> dk.towerTop;
 		else if (key == "STRETCH") ss >> dk.stretch;
 		else if (key == "TINT") ss >> dk.tint;
-		else if (key == "GAS") ss >> dk.gasAbs[0] >> dk.gasAbs[1] >> dk.gasAbs[2] >> dk.gasRay[0] >> dk.gasRay[1] >> dk.gasRay[2];
+		else if (key == "CHROMO") ss >> dk.chromoBase >> dk.chromoTop >> dk.chromoStrength;
+		else if (key == "FOLDS") ss >> dk.folds >> dk.lanes;
+		else if (key == "REACH") ss >> dk.reach;
+		else if (key == "GAS") {
+			ss >> dk.gasAbs[0] >> dk.gasAbs[1] >> dk.gasAbs[2] >> dk.gasRay[0] >> dk.gasRay[1] >> dk.gasRay[2];
+			float d[3];
+			double p;
+			if (ss >> d[0] >> d[1] >> d[2] >> p) memcpy (dk.gasDeep, d, sizeof(d)), dk.gasDeepP = p;
+		}
 		else if (key == "VORTEX") ss >> dk.vortexV >> dk.vortexCore >> dk.towerSpin >> dk.vortexTwist;
 	}
 	return !dk.decks.empty();
@@ -583,13 +597,20 @@ void VolumetricClouds::RenderGasGiant (const GasGiantFrame &f)
 	if (generation != ctx->SwapchainGeneration () || outPrepass != f.prepass) CreateOutput (f.prepass);
 	const Decks &dk = *f.decks;
 	const double R = f.radius;
-	const double RANGE = 2000e3; // [m] the march's reach (the decks fade into the planet map beyond)
+	// the march's reach: 2000 km, from high above to the horizon (the
+	// decks fade into the planet map beyond)
+	double cl = length (f.camPlanet);
+	const double RANGE = std::max (2000e3, sqrt (std::max (cl * cl - R * R, 0.0)) + 2000e3);
+	// (fading out towards their reach, their folds first: the map's own
+	// look where the cloud layer takes over)
+	double hRel = (cl - R - dk.Top ()) / dk.reach;
+	ggOpacity = (float)std::clamp ((1.0 - hRel) / 0.3, 0.0, 1.0);
+	float foldFade = (float)std::clamp ((0.7 - hRel) / 0.4, 0.0, 1.0);
 
 	uint32_t fi = ctx->FrameIndex ();
 	GGParams &g = ((GGParams*)ggBuf.mapped)[fi];
 	memset (&g, 0, sizeof(g));
 	// the jets at the clouds, and their share at each deck's height
-	double cl = length (f.camPlanet);
 	double clng = atan2 (f.camPlanet.z, f.camPlanet.x), clat = asin (std::clamp (f.camPlanet.y / cl, -1.0, 1.0));
 	double ujMax = 0.0, latMax = 0.0;
 	for (int i = 0; i < 64; i++) {
@@ -752,6 +773,32 @@ void VolumetricClouds::RenderGasGiant (const GasGiantFrame &f)
 		g.boltInfo[0] = (float)nv;
 	}
 	g.misc2[0] = (float)dk.stretch, g.misc2[1] = (float)dk.tint, g.misc2[2] = (float)f.floorRadius;
+	// the planet map as seen from afar: the cloud layer's (it turns against
+	// the planet); its colours with the haze and the gas above each deck
+	// taken out (their absorption, there and back at about 40 degrees
+	// elevation): the decks' own colours, seen through them, match the map
+	{
+		const bool *hc = (const bool*)oapiGetObjectParam (f.hPlanet, OBJPRM_PLANET_HASCLOUDS);
+		const double *rot = (const double*)oapiGetObjectParam (f.hPlanet, OBJPRM_PLANET_CLOUDROTATION);
+		g.mapInfo[0] = hc && *hc && rot ? (float)*rot : 0.0f;
+		for (size_t i = 0; i <= dk.decks.size(); i++) {
+			double top = i < dk.decks.size() ? dk.decks[i].top : dk.chromoTop; // (the last: the chromophores')
+			ATMPARAM prm;
+			oapiGetPlanetAtmParams (f.hPlanet, R + top, &prm);
+			double bar = prm.p / 1e5;
+			for (int k = 0; k < 3; k++) {
+				double tau = dk.GasAbs (k, bar) + dk.hazeExt * dk.hazeH * exp (-top / dk.hazeH) * (1.0 - dk.haze[k]);
+				for (const Deck &d : dk.decks)
+					if (d.ext < 2e-5 && d.top > top)
+						tau += d.ext * 0.5 * d.coverage * (d.top - std::max (d.base, top)) * (1.0 - d.albedo[k]);
+				(i < dk.decks.size() ? g.mapCal[i] : g.chromoCal)[k] = (float)exp (std::min (2.0 * tau / 0.65, 2.0));
+			}
+		}
+		g.chromo[0] = (float)(R + dk.chromoBase), g.chromo[1] = (float)(R + dk.chromoTop), g.chromo[2] = (float)dk.chromoStrength;
+		g.chromo[3] = dk.folds * foldFade, g.chromoCal[3] = dk.lanes * foldFade;
+		g.mapInfo[1] = ggOpacity;
+		g.mapInfo[2] = (float)std::clamp ((hRel - 0.2) / 0.4, 0.0, 1.0);
+	}
 	// the gas: pressure from the floor to above the decks, absorption and
 	// scattering per bar
 	{
@@ -762,7 +809,9 @@ void VolumetricClouds::RenderGasGiant (const GasGiantFrame &f)
 			g.pres[i] = (float)std::log2 (std::max (prm.p, 1e-3) / 1e5);
 		}
 		g.presInfo[0] = (float)r0, g.presInfo[1] = (float)dr;
-		for (int k = 0; k < 3; k++) g.gasK[k] = dk.gasAbs[k], g.rayK[k] = dk.gasRay[k];
+		for (int k = 0; k < 3; k++) g.gasK[k] = dk.gasAbs[k], g.rayK[k] = dk.gasRay[k], g.gasD[k] = dk.gasDeep[k];
+		g.gasD[3] = (float)dk.gasDeepP;
+		for (int k = 0; k < 3; k++) g.mapLevels[k] = dk.mapLevels[k];
 		g.vortex[0] = (float)dk.vortexV, g.vortex[1] = (float)dk.vortexCore, g.vortex[2] = (float)dk.towerSpin, g.vortex[3] = (float)dk.vortexTwist;
 	}
 

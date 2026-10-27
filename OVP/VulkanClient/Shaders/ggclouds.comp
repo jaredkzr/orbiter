@@ -28,6 +28,8 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 1) uniform sampler3D shapeNoise;
 layout(set = 0, binding = 2) uniform sampler3D detailNoise;
 const float SHAPE_N = 128.0, DETAIL_N = 32.0; // (the volumes' sizes: Clouds.cpp)
+const float NOISE_F = 6.0; // (the shape noise's features per unit, about)
+float noiseMean = 0.5;     // (its mean: main, from its coarsest level)
 layout(set = 0, binding = 3) uniform sampler2D prepass;   // view normal, view depth (w; 0: none)
 layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D outClouds;
 
@@ -56,6 +58,12 @@ struct GGParams {
 	vec4 vortex;             // the storms' peak swirl speed [m/s], core radius (share of the cell's), tower spin speed [m/s], spiral twist [rad]
 	vec4 bolt[128];           // lightning channels: vertices (planet frame), brightness (negative: a channel's first vertex)
 	vec4 boltInfo;           // vertex count
+	vec4 mapInfo;            // the cloud layer's rotation about the axis [rad] (the map seen from afar); the decks' opacity (fading out towards their reach); their share of the map's look (from afar)
+	vec4 gasD;               // the gas's absorption per bar more below the pressure w [bar] (rgb)
+	vec4 mapLevels;          // the map's luminance: belts below x, zones above y; its white (z)
+	vec4 mapCal[MAX_LAYERS]; // the map's colour calibration for each deck (rgb: the haze and gas above it taken out)
+	vec4 chromo;             // the chromophores' layer: base, top radius [m] (none: top <= base), strength; the flow's folds' strength (0..1)
+	vec4 chromoCal;          // ... the map's colour calibration at its top (rgb); the lanes' (0..1)
 };
 layout(std430, set = 0, binding = 5) readonly buffer GGBuf { GGParams gg[]; };
 // temporal accumulation (ping-pong by parity): light and transmittance,
@@ -89,16 +97,45 @@ float JetAt (float lat)
 	return mix (a, b, f);
 }
 
-// the planet map (bands): colour, and zone factor (bright zones 1, dark belts 0)
-vec3 MapColour (vec3 u, out float zone)
+// the planet map (bands) at latitude lat, longitude lng (planet frame; the
+// map in the cloud layer's, which turns against it); its texels filtered
+// over the footprint fp [m]: colour, and zone factor (bright zones 1, dark
+// belts 0)
+vec3 MapColour (float lat, float lng, float fp, out float zone)
 {
-	float lat = asin (clamp (u.y, -1.0, 1.0)), lng = atan (u.z, u.x);
-	float v = (0.5 * PI - lat) / PI;
-	vec3 c = lng < 0.0 ? textureLod (atmGround0, vec2 ((lng + PI) / PI, v), 0.0).rgb
-	                   : textureLod (atmGround1, vec2 (lng / PI, v), 0.0).rgb;
+	lng = mod (lng - P.mapInfo.x + PI, 2.0 * PI) - PI;
+	float v = clamp ((0.5 * PI - lat) / PI, 0.0, 1.0);
+	float lod = max (log2 (fp * float (textureSize (atmGround0, 0).y) / (PI * P.misc.z)), 0.0);
+	vec3 c = lng < 0.0 ? textureLod (atmGround0, vec2 ((lng + PI) / PI, v), lod).rgb
+	                   : textureLod (atmGround1, vec2 (lng / PI, v), lod).rgb;
 	float l = dot (c, vec3 (0.2126, 0.7152, 0.0722));
-	zone = smoothstep (0.25, 0.75, l / max (atm.ground.w > 0.5 ? 0.6 : 1.0, 1e-3));
+	zone = smoothstep (P.mapLevels.x, P.mapLevels.y, l);
 	return c;
+}
+// the chromophores: a thin layer over the highest cloud deck absorbing
+// as the map's colour says (none under its white zones; the belts' brown),
+// after the "creme brulee" models of Jupiter's colours (Sromovsky and
+// Baines): the clouds, the gas below it and the light reaching them
+// coloured by it; its absorption [1/m] (rgb) for the map's colour c (there
+// and back through it above a white cloud: the map's colour)
+vec3 ChromoK (vec3 c)
+{
+	if (P.chromo.y <= P.chromo.x) return vec3 (0.0);
+	vec3 x = clamp (c * P.chromoCal.rgb / P.mapLevels.z, 0.03, 1.0);
+	return -log (x) * (0.325 * P.chromo.z / (P.chromo.y - P.chromo.x));
+}
+// ... the depth of it above radius r [m]
+float ChromoOver (float r) { return clamp (P.chromo.y - max (r, P.chromo.x), 0.0, P.chromo.y - P.chromo.x); }
+vec3 ctxChromo = vec3 (0.0); // (its absorption over the sample (ColumnAt: the light reaching it))
+bool chromoCtx = false;      // (... set (the ray's samples below the layer reuse it))
+
+// the albedo for which a thick cloud of deck i reflects the map's colour
+// (the haze and the gas above it taken out)
+vec3 MapAlbedo (vec3 c, int i)
+{
+	vec3 rm = clamp (c * P.mapCal[i].rgb / P.mapLevels.z * 0.97, 0.02, 0.995);
+	vec3 s = (1.0 - rm) / (1.0 + rm);
+	return (1.0 - s * s) / (1.0 - GC * s * s);
 }
 
 uint Pcg (uint v)
@@ -310,16 +347,35 @@ float Towers (vec3 x, float r, vec3 u, bool detail)
 // eroding detail noise
 float deckHill = 0.5; // (Deck's: the height of the deck's top there, 0 (valley) .. 1 (hill))
 float deckChrom = 0.5; // (Deck's: the colour field along the folds, about 0.3..0.7)
+vec2 ctxFold = vec2 (0.0); // (SetContext's: the flow's folds at the sample (FoldField))
+vec2 deckFold = vec2 (0.0);
+// (the lanes: where the flow's folds clear the upper decks and the
+// chromophores; 0 there, 1 elsewhere)
+float Lane (float zone) { return mix (1.0, smoothstep (-0.65, -0.4, ctxFold.x + 0.4 * (zone - 0.5)), P.chromoCal.w); }
+// (the masses of the zones' cloud, carried by the folds into the belts:
+// 1 there, 0 elsewhere; fresh, white: few chromophores over them)
+float Mass (float zone) { return smoothstep (-0.12, 0.12, zone - 0.5 + 0.8 * P.chromo.w * ctxFold.x); }
+float ChromoAt (float zone) { return Lane (zone) * (1.0 - 0.8 * Mass (zone)); } // (Deck's: its marbling's displacement east, north [m]: the map's colours folded with it)
 float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, float moat, vec2 sw1, vec2 sw2, bool detail, bool coarse)
 {
-	deckHill = 0.5, deckChrom = 0.5;
+	deckHill = 0.5, deckChrom = 0.5, deckFold = vec2 (0.0);
 	vec4 L = P.layer[i];
 	vec4 m = P.lmisc[i];
 	float base = L.x, top = L.y;
 	float hf = (r - base) / (top - base);
 	if (hf <= 0.0 || hf >= 1.0) return 0.0;
-	float cov = clamp (P.albedo[i].w + m.x * (zone - 0.5) * 2.0, 0.0, 1.0);
+	// (the band: the deck thickened in the zones, thinned in the belts (or
+	// the other way, contrast negative), switching sharply where the
+	// flow's folds carry the one into the other: masses of cloud, lanes
+	// between)
+	// (without folds: the map's bands only, gradual)
+	float band = m.x * mix ((zone - 0.5) * 2.0, 2.0 * Mass (zone) - 1.0, P.chromo.w);
+	float cov = clamp (P.albedo[i].w + band, 0.0, 1.0);
 	cov *= 1.0 - 0.9 * moat;
+	// (and the lanes between the folds: the highest cloud deck thinned
+	// to wisps, the one below thinner (Jupiter's dark blue-grey hot
+	// spots), rarer in the zones)
+	if (i < int (P.hazeH.y) - 1) cov *= mix (i == 1 ? 0.15 : 0.6, 1.0, Lane (zone));
 	// zonally stretched coordinates [m], advected by the jet (two phases)
 	float R = P.misc.z;
 	float cl = cos (lat);
@@ -328,10 +384,12 @@ float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, fl
 	float p1 = fract (t / FLOW_PERIOD), p2 = fract (t / FLOW_PERIOD + 0.5);
 	float w1 = 1.0 - abs (2.0 * p1 - 1.0);
 	float e0 = lng * R * cl / (P.misc2.x * m.y), n0 = lat * R, z0 = (r - R) * 3.0; // (stretched zonally: the planet's, the deck's own)
-	// clearings: large holes in the deck (where its noise at ~600 km is low)
+	// clearings: large holes in the deck (where its noise at ~600 km is low;
+	// fewer where its band thickens it)
 	if (m.w > 0.0) {
 		float big = textureLod (shapeNoise, vec3 (e0 - uj * t / (P.misc2.x * m.y), n0, float (i) * 3e5) / 600e3, Lod (1.0 / 600e3, SHAPE_N)).r;
-		cov *= smoothstep (m.w, m.w + 0.2, big);
+		float th = m.w - 0.5 * max (band, 0.0);
+		cov *= smoothstep (th, th + 0.2, big);
 	}
 	if (cov <= 0.01) return 0.0;
 	// (flat bases, heaped tops: the profile falls over the upper 70 percent)
@@ -365,6 +423,7 @@ float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, fl
 		textureLod (shapeNoise, qv + vec3 (0.2, 0.9, 0.5), lv).r) - 0.5;
 	vec3 disp = vec3 (warp.xy * 10.0 + warp2.xy * 3.0, warp.z * 2.0);
 	q1 += disp, q2 += disp;
+	deckFold = vec2 (disp.x * P.misc2.x * m.y, disp.y) / L.w;
 	// (the chromophores follow the folds: a broad field on the marbled
 	// coordinates)
 	deckChrom = textureLod (shapeNoise, ROT * q1 * 0.3, max (lb - 1.7, 0.0)).r;
@@ -385,6 +444,10 @@ float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, fl
 	// sharpening would only draw out the averaged noise's remains)
 	float sharp = mix (4.0, 1.0, clamp ((lb - 2.0) / 3.0, 0.0, 1.0));
 	float d = clamp ((shape * profile - (1.0 - cov)) / max (cov, 0.05) * sharp, 0.0, 1.0);
+	// (farther still, the noise averaged over the pixel: thresholded, its
+	// remains would draw its contours; the cloud's mean instead, its
+	// coverage, the large structures' (the bands, their folds))
+	d = mix (d, cov * profile, smoothstep (2.5, 4.5, lb));
 	if (d <= 0.0 || !detail) return d;
 	float ld = Lod (1.7 * 5.7 * L.w * swStretch, DETAIL_N);
 	float det = mix (textureLod (detailNoise, ROT * ROT * q2 * 5.7, ld).r, textureLod (detailNoise, ROT * ROT * q1 * 5.7, ld).r, w1);
@@ -395,20 +458,73 @@ float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, fl
 // gas at x
 // (the planet map and the storms' moats change slowly: the light march
 // takes its sample's)
-vec3 ctxMap, mapAlb;
+vec3 ctxMap;
 float ctxZone, ctxMoat;
+vec2 ctxWarp; // (the map's folds at x: its displacement east, north [m])
+bool viewAlb = false; // (a view sample: the decks' colours wanted, not only their density)
 vec3 mHaze; // (Medium's haze and thin layers: extinction-weighted albedo sum; extinction in w)
 float mHazeE;
 bool coarseLight = false; // (the light march of a far sample: coarse densities)
 bool lightTowers = false; // (the light march of a sample within the towers' shadows' reach)
+// the map's large folds: the band edges drawn into waves and eddies by
+// the flow, two octaves (some 400 and 120 km across, zonally stretched;
+// the finer folding the coarser's displaced field), their displacement
+// east and north [m] at latitude lat, longitude lng (the cloud layer's
+// frame: the map's features fixed in it)
+vec2 FlowWarp (float lat, float lng)
+{
+	float R = P.misc.z;
+	vec2 m = vec2 ((lng - P.mapInfo.x) * R * cos (lat), lat * R);
+	vec2 w = vec2 (0.0);
+	for (int k = 0; k < 2; k++) {
+		float L = k == 0 ? 400e3 : 120e3;
+		vec3 c = vec3 ((m + w) / vec2 (3.0 * L, L) / NOISE_F, 0.37 + 0.29 * float (k));
+		float lod = Lod (1.0 / (L * NOISE_F), SHAPE_N);
+		// (the noise's values, about +-0.06 about its mean, normalized)
+		vec2 n = vec2 (textureLod (shapeNoise, c, lod).r, textureLod (shapeNoise, c + vec3 (0.5, 0.2, 0.31), lod).r) - noiseMean;
+		w += n * 12.0 * (k == 0 ? vec2 (200e3, 150e3) : vec2 (60e3, 50e3));
+	}
+	return w;
+}
+
+// the flow's folds within the bands: two marbled fields (about +-1) some
+// 300 km across, zonally stretched, displaced by a coarser one (folded
+// coordinates m [m]): the white cloud's tongues and the dark lanes
+// between (x), the chromophores' filaments (y, some 75 km across)
+vec2 FoldField (vec2 m)
+{
+	// (sheared along the jets: the coordinates and the displacement
+	// stretched zonally, unrotated)
+	vec3 q = vec3 (m / vec2 (4.0 * 300e3, 300e3) / NOISE_F, 0.83);
+	float lod = Lod (1.0 / (300e3 * NOISE_F), SHAPE_N);
+	vec3 qw = q * vec3 (0.5, 0.4, 1.0);
+	float lw = max (lod - 1.3, 0.0);
+	vec2 w = vec2 (textureLod (shapeNoise, qw, lw).r, textureLod (shapeNoise, qw + vec3 (0.5, 0.2, 0.37), lw).r) - noiseMean;
+	vec3 q2 = q + vec3 (w * vec2 (20.0, 8.0), 0.0);
+	float v1 = 0.65 * textureLod (shapeNoise, q2, lod).r + 0.35 * textureLod (shapeNoise, q2 * vec3 (2.7, 2.7, 1.0) + vec3 (0.0, 0.0, 0.29), lod + 1.4).r - noiseMean;
+	float v2 = textureLod (shapeNoise, q2 * vec3 (4.0, 4.0, 1.0) + vec3 (0.31, 0.57, 0.11), lod + 2.0).r - noiseMean;
+	return clamp (vec2 (v1, v2) * 9.0, -1.0, 1.0); // (about +-0.06 the noise's spread: +-0.5)
+}
+// the chromophores' concentration about the map's (mean about 1): richer
+// in the lanes, poorer in the white tongues; filaments
+float ChromoVar (vec2 f) { return exp (0.6 * f.y - 0.4 * f.x); }
+// the folded coordinates [m] at latitude lat, longitude lng (the cloud
+// layer's frame), displaced by w [m]
+vec2 FoldCoord (float lat, float lng, vec2 w) { return vec2 ((lng - P.mapInfo.x) * P.misc.z * cos (lat), lat * P.misc.z) + w; }
+
 void SetContext (vec3 x)
 {
 	vec3 u = normalize (x);
-	ctxMap = MapColour (u, ctxZone);
+	float lat = asin (clamp (u.y, -1.0, 1.0)), lng = atan (u.z, u.x);
+	ctxWarp = FlowWarp (lat, lng);
+	ctxMap = MapColour (lat + ctxWarp.y / P.misc.z, lng + ctxWarp.x / (P.misc.z * max (cos (lat), 0.05)), fpM, ctxZone);
 	ctxMoat = Moat (u);
-	vec3 rm = clamp (ctxMap / (atm.ground.w > 0.5 ? 0.6 : 1.0) * 0.97, 0.02, 0.995);
-	vec3 s = (1.0 - rm) / (1.0 + rm);
-	mapAlb = (1.0 - s * s) / (1.0 - GC * s * s);
+	// (the bands folded: tongues of the zones' white cloud into the belts,
+	// lanes of the belts into the zones (Deck))
+	vec2 f = P.chromo.w > 0.0 || P.chromo.y > P.chromo.x ? FoldField (FoldCoord (lat, lng, ctxWarp)) : vec2 (0.0);
+	ctxFold = f;
+	ctxChromo = ChromoK (ctxMap) * ChromoVar (f) * ChromoAt (ctxZone);
+	chromoCtx = true;
 }
 
 float Medium (vec3 x, bool detail, out vec3 alb, bool towerDetail)
@@ -442,17 +558,20 @@ float Medium (vec3 x, bool detail, out vec3 alb, bool towerDetail)
 		if (d <= 0.0) continue;
 		float e = P.layer[i].z * d;
 		// (the upper decks take the planet map's colour: chromophores, the
-		// albedo for which a thick cloud reflects it)
+		// albedo for which a thick cloud reflects it; the map looked up
+		// where the large folds and the deck's own marbling take it, its
+		// colours drawn into the cloud's filaments)
 		vec3 a = P.albedo[i].rgb;
 		// (the chromophores: the hills' fresh ice whiter, the valleys'
 		// older cloud more coloured, as Juno sees the cloud tops)
-		// (the amount scales the absorption the map's colour implies: from
-		// a tenth on fresh tops to some 2.5 times in old cloud)
-		if (i < 2) {
-			float ch = P.misc2.y * mix (1.4, 0.3, deckHill) * clamp (0.1 + 5.0 * (deckChrom - 0.35), 0.1, 2.0);
-			// (even in the pale zones: the brown of the deck below at least)
-			vec3 chAlb = min (mapAlb, mix (vec3 (1.0), P.albedo[min (2, n - 1)].rgb, 0.5));
-			a = min (a, clamp (1.0 - (1.0 - chAlb) * ch, 0.0, 1.0));
+		// (the amount scales the absorption the map's colour implies,
+		// about it: on average the map's)
+		if (i < n - 1 && viewAlb) {
+			float R = P.misc.z, z;
+			vec2 off = ctxWarp + deckFold;
+			vec3 mc = MapColour (lat + off.y / R, lng + off.x / (R * max (cos (lat), 0.05)), fpM, z);
+			float ch = P.misc2.y * mix (1.35, 0.65, deckHill) * clamp (1.0 + 4.0 * (deckChrom - 0.5), 0.4, 1.6);
+			a = min (a, clamp (1.0 - (1.0 - MapAlbedo (mc, i)) * ch, 0.0, 1.0));
 		}
 		ext += e, sum += e * clamp (a, 0.0, 1.0);
 	}
@@ -495,6 +614,9 @@ float Bar (float r, out float invH)
 	return exp2 (mix (a, b, x - float (i)));
 }
 
+// the gas's absorption per bar at pressure pb [bar] (rgb)
+vec3 GasRate (float pb) { return P.gasK.rgb + (pb > P.gasD.w ? P.gasD.rgb : vec3 (0.0)); }
+
 // the sunlight's share reaching radius r along a direction with sine of
 // elevation mu through the decks (mean densities), the haze and the gas
 // above (ColumnAt: their optical depths over r): the direct beam, and the
@@ -504,7 +626,7 @@ struct Column { vec3 te, ta, ts; }; // extinction, absorption, scattering (simil
 Column ColumnAt (float r)
 {
 	float ib, pb = Bar (r, ib);
-	vec3 ta = P.gasK.rgb * pb, ts = P.rayK.rgb * pb; // absorption, scattering (similarity-scaled)
+	vec3 ta = P.gasK.rgb * pb + P.gasD.rgb * max (pb - P.gasD.w, 0.0) + ctxChromo * ChromoOver (r), ts = P.rayK.rgb * pb; // absorption, scattering (similarity-scaled)
 	vec3 te = ta + ts;                                 // extinction of the beam
 	int n = int (P.hazeH.y);
 	for (int i = 0; i < n; i++) {
@@ -599,6 +721,7 @@ void main ()
 	vec2 size = pc.proj.zw;
 	if (px.x >= int (size.x) || px.y >= int (size.y)) return;
 	P = gg[int (pc.slot.x)];
+	noiseMean = textureLod (shapeNoise, vec3 (0.5), log2 (SHAPE_N)).r;
 	cur = int (pc.slot.y), prv = 1 - cur;
 
 	vec2 ndc = (vec2 (px) + 0.5) / size * 2.0 - 1.0;
@@ -626,10 +749,17 @@ void main ()
 	vec2 tf = RaySphere (o, d, P.misc2.z);
 	bool toFloor = tf.x < tf.y && tf.x > 0.0;
 	if (toFloor) t1 = min (t1, tf.x);
+	// (not the planet's own surface: its map, about the 1-bar level, drawn
+	// from afar; the decks within the march's range are drawn instead,
+	// those below it too)
 	float z = 1e30;
 	for (int k = 0; k < 4; k++) {
-		float zk = texelFetch (prepass, px * 2 + ivec2 (k & 1, k >> 1), 0).w;
-		if (zk > 0.0) z = min (z, zk);
+		vec4 pk = texelFetch (prepass, px * 2 + ivec2 (k & 1, k >> 1), 0);
+		if (pk.w <= 0.0) continue;
+		vec3 xs = o + d * (pk.w / dv.z);
+		float rs = length (xs);
+		if (abs (rs - P.misc.z) < 30e3 && dot (mat3 (atm.viewToPlanet) * pk.xyz, xs / rs) > 0.95) continue;
+		z = min (z, pk.w);
 	}
 	bool scene = z < 1e30 && z / dv.z < t1;
 	if (scene) t1 = z / dv.z;
@@ -670,6 +800,8 @@ void main ()
 	float tWeighted = 0.0, wSum = 0.0;
 	float baseLow = P.layer[int (P.hazeH.y) - 1].x;
 	float tc = t0;
+	vec3 mapL = vec3 (0.0);
+	float mapW = 0.0;
 	for (int it = 0; it < MAXIT && tc < t1 && T.g > 0.005; it++) {
 		float ta = tc;
 		float rc = sqrt (max (oc + ta * (2.0 * ob + ta), 0.0));
@@ -684,14 +816,18 @@ void main ()
 				thickCap = min (thickCap, (P.layer[l].y - P.layer[l].x) / (6.0 * max (muv, 0.05)));
 			}
 		fine = min (fine, max (thickCap, 250.0));
+		// (the chromophores: a thin coat over the cloud tops, a grazing ray
+		// through them no longer than one at some 20 degrees elevation)
+		float chromoSlant = clamp (muv / 0.35, 0.2, 1.0);
 		float dt = fine;
 		if (!thick) {
 			// (to the next boundary of a deck: the spheres' crossings ahead)
 			float tn = max (0.08 * ta, 3e3);
-			for (int l = 0; l < int (P.hazeH.y); l++) {
-				if (P.layer[l].z < 2e-5) continue;
+			for (int l = 0; l <= int (P.hazeH.y); l++) {
+				if (l < int (P.hazeH.y) && P.layer[l].z < 2e-5) continue;
 				for (int e = 0; e < 2; e++) {
-					float Rb = e == 0 ? P.layer[l].x : P.layer[l].y;
+					// (and the chromophores' layer)
+					float Rb = l == int (P.hazeH.y) ? (e == 0 ? P.chromo.x : P.chromo.y) : e == 0 ? P.layer[l].x : P.layer[l].y;
 					float disc = ob * ob - oc + Rb * Rb;
 					if (disc <= 0.0) continue;
 					float sq = sqrt (disc);
@@ -744,7 +880,21 @@ void main ()
 			float hg = P.haze.w * exp (-(r - P.misc.z) / P.hazeH.x);
 			float ib, pb = Bar (r, ib);
 			vec3 ray = P.rayK.rgb * pb * ib;
-			vec3 hz = hg + thin + ray + P.gasK.rgb * pb * ib;
+			// (below the chromophores' top: their absorption, over the
+			// sample (the map where the flow folds it) and above it)
+			// (below it, the last sample's: they change slowly)
+			if (r < P.chromo.y && (r > P.chromo.x || !chromoCtx)) {
+				chromoCtx = true;
+				float lat = asin (clamp (up.y, -1.0, 1.0)), lng = atan (up.z, up.x), zz;
+				bool inL = r > P.chromo.x;
+				vec2 w = inL ? FlowWarp (lat, lng) : vec2 (0.0);
+				ctxChromo = ChromoK (MapColour (lat + w.y / P.misc.z, lng + w.x / (P.misc.z * max (cos (lat), 0.05)), max (fpM, 20e3), zz));
+				if (inL) {
+					ctxFold = FoldField (FoldCoord (lat, lng, w));
+					ctxChromo *= ChromoVar (ctxFold) * ChromoAt (zz);
+				}
+			}
+			vec3 hz = hg + thin + ray + GasRate (pb) * pb * ib + (r > P.chromo.x && r < P.chromo.y ? ctxChromo * chromoSlant : vec3 (0.0));
 			vec3 hzAlb = (hg * P.haze.rgb + thinAlb + ray) / max (hz, vec3 (1e-12));
 			vec3 sunAtm = muS > -0.15 ? AtmSunTransmittance (p, max (r, atm.radii.x + 1.0), muS) * atm.radii.w : vec3 (0.0);
 			vec3 dir, dif, sdir, sdif;
@@ -759,7 +909,9 @@ void main ()
 			continue;
 		}
 		SetContext (p);
+		viewAlb = true;
 		float ext = Medium (p, ta < 200e3, alb, nearT); // (the towers: only where the step passes near one)
+		viewAlb = false;
 		if (ext <= 1e-9) continue;
 		// (the clouds, apart from the haze and the gas: those lit as in
 		// clear air, so that the paths agree where they meet)
@@ -811,11 +963,14 @@ void main ()
 		// the haze and the gas (Rayleigh scattering, absorption)
 		float ib, pb = Bar (r, ib);
 		vec3 ray = P.rayK.rgb * pb * ib;
-		vec3 extV = cE + hzE + ray + P.gasK.rgb * pb * ib;
+		vec3 extV = cE + hzE + ray + GasRate (pb) * pb * ib + (r > P.chromo.x && r < P.chromo.y ? ctxChromo * chromoSlant : vec3 (0.0));
 		S += (hzS + ray) * (sunAtm * (mix (HG (mu, 0.6), 1.0 / (4.0 * PI), 0.5) * dirP + max (muS, 0.0) * difP / PI) + sky + 0.15 * fl);
 		vec3 Tstep = exp (-extV * dt);
 		L += T * (S - S * Tstep) / max (extV, vec3 (1e-12));
 		float w = T.g * (1.0 - Tstep.g);
+		// (the first cloud: the planet map there, lit as the map seen from
+		// afar)
+		if (mapW == 0.0 && w > 0.0) mapL = ctxMap * sunAtm * max (muS, 0.0) / PI, mapW = 1.0;
 		tWeighted += w * (ta + jitter * dt);
 		wSum += w;
 		T *= Tstep;
@@ -825,6 +980,10 @@ void main ()
 	if ((toFloor || beyond) && !scene && dot (d, o) < 0.0) T *= toFloor ? 0.0 : 0.3;
 	if (wSum <= 0.0 && T.g > 0.999 && nHit == 0) { Store (px, vec4 (0.0, 0.0, 0.0, 1.0), 0.0); return; }
 
+	// (from high above, the decks take the map's look, as the planet's
+	// cloud layer shows it: the hand-over seamless; less so as they come
+	// near, their own below some 2000 km)
+	if (mapW > 0.0) L = mix (L, mapL * (1.0 - T), P.mapInfo.z);
 	// the gas above the decks between the camera and them (the camera high above)
 	if (t0 > 0.0) {
 		vec3 Tair;
@@ -834,6 +993,8 @@ void main ()
 	// blended with the history of the same cloud (the noise of the march
 	// and its jitter averaged over frames)
 	float dist = wSum > 0.0 ? tWeighted / wSum : 0.0;
+	// (fading out towards their reach: the planet's cloud layer behind)
+	L *= P.mapInfo.y, T = mix (vec3 (1.0), T, P.mapInfo.y);
 	vec4 res = vec4 (L, dot (T, vec3 (0.2126, 0.7152, 0.0722))), h;
 	if (History (o + d * (dist > 0.0 ? dist : 1e7), dist, h)) res = mix (h, res, P.flashInfo.x > 0.0 ? 0.7 : 0.3); // (flashes: little lag)
 	Store (px, res, dist);

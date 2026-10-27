@@ -12,6 +12,7 @@
 #include "Atmosphere.h"
 #include "Shadows.h"
 #include "LegacyTex.h"
+#include "TileArchive.h"
 #include <map>
 #include <random>
 #include "VesselAPI.h"
@@ -867,6 +868,42 @@ namespace {
 		{ "Uranus",  0.62f, 0.82f, 0.88f },
 		{ "Neptune", 0.35f, 0.50f, 0.85f },
 	};
+
+	// a gas giant's map, for its decks: the (linear) luminance below which
+	// its belts lie and above which its zones (the quartiles), and its
+	// white (the brightest cloud: the 99th percentile), within 60 degrees
+	// of the equator, by area; from RGBA8 (sRGB) maps of w x h texels
+	// from pole to pole (e.g. hemispheres)
+	void MapLevels (std::initializer_list<const uint8_t*> maps, uint32_t w, uint32_t h, float out[3])
+	{
+		auto lin = [](uint8_t v) { double c = v / 255.0; return c <= 0.04045 ? c / 12.92 : pow ((c + 0.055) / 1.055, 2.4); };
+		double lut[256];
+		for (int i = 0; i < 256; i++) lut[i] = lin ((uint8_t)i);
+		std::vector<std::pair<float, float>> lw; // luminance, weight
+		for (const uint8_t *m : maps)
+			for (uint32_t y = 0; y < h; y += 2) {
+				double lat = PI05 - PI * (y + 0.5) / h;
+				if (fabs (lat) > 60.0 * RAD) continue;
+				for (uint32_t x = 0; x < w; x += 2) {
+					const uint8_t *p = m + ((size_t)y * w + x) * 4;
+					lw.push_back ({ (float)(0.2126 * lut[p[0]] + 0.7152 * lut[p[1]] + 0.0722 * lut[p[2]]), (float)cos (lat) });
+				}
+			}
+		if (lw.empty()) return;
+		std::sort (lw.begin(), lw.end());
+		double sum = 0.0;
+		for (auto &e : lw) sum += e.second;
+		const double q[3] = { 0.25, 0.75, 0.99 };
+		double acc = 0.0;
+		size_t i = 0;
+		for (int k = 0; k < 3; k++) {
+			for (; i < lw.size() - 1 && acc + lw[i].second < q[k] * sum; i++) acc += lw[i].second;
+			out[k] = lw[i].first;
+		}
+		// (a nearly uniform map: no bands to speak of)
+		float mid = 0.5f * (out[0] + out[1]);
+		out[0] = std::min (out[0], mid - 0.05f), out[1] = std::max (out[1], mid + 0.05f);
+	}
 }
 
 VPlanet::VPlanet (OBJHANDLE h, Scene *s, bool star)
@@ -950,6 +987,48 @@ void VPlanet::LoadLegacyTextures ()
 		}
 	}
 	if (!oapiPlanetHasSurface (hObj)) hasDecks = VolumetricClouds::LoadDecks (name, decks);
+	if (hasDecks && globalTex) MapLevels ({ rgba.data() }, w, h, decks.mapLevels);
+	// a gas giant's decks take their colours from its map: the finest
+	// complete level of its surface tiles (up to 6: 4096 x 2048 texels)
+	// instead of the level-4 roots, assembled into the two hemispheres
+	if (hasDecks && surface && atmosphere && scene->Client()->PlanetTexturePath (name, path)) {
+		std::string d (path);
+		std::replace (d.begin(), d.end(), '\\', '/');
+		while (!d.empty() && d.back() == '/') d.pop_back();
+		TileLayer layer (d, TileLayer::SURF);
+		std::vector<uint8_t> dds, px;
+		int lvl = 6;
+		for (; lvl > 4; lvl--) {
+			bool all = true;
+			for (int a = 0; a < (1 << (lvl - 4)) && all; a++)
+				for (int b = 0; b < (1 << (lvl - 3)) && all; b++) all = layer.HasTile (lvl, a, b);
+			if (all) break;
+		}
+		const int nlat = 1 << (lvl - 4), nlng = 1 << (lvl - 3);
+		uint32_t T = 0, hw = 0;
+		std::vector<uint8_t> half[2];
+		bool ok = lvl > 4;
+		for (int a = 0; a < nlat && ok; a++)
+			for (int b = 0; b < nlng && ok; b++) {
+				uint32_t tw, th;
+				ok = layer.Read (lvl, a, b, dds) && legacytex::Decode (dds, tw, th, px) && tw == th && (!T || tw == T);
+				if (!ok) break;
+				if (!T) {
+					T = tw, hw = T * nlng / 2;
+					for (auto &hm : half) hm.resize ((size_t)hw * T * nlat * 4);
+				}
+				int k = b / (nlng / 2), x0 = (b % (nlng / 2)) * T;
+				for (uint32_t y = 0; y < T; y++)
+					memcpy (half[k].data() + (((size_t)(a * T + y) * hw) + x0) * 4, px.data() + (size_t)y * T * 4, (size_t)T * 4);
+			}
+		if (ok) {
+			for (int k = 0; k < 2; k++) groundTex[k] = tm->CreateRGBA (hw, T * nlat, half[k].data());
+			MapLevels ({ half[0].data(), half[1].data() }, hw, T * nlat, decks.mapLevels);
+			atmosphere->SetGround (groundTex[0], groundTex[1], colour);
+			oapiWriteLogV ("VulkanClient: %s's decks coloured from its level-%d map (%u x %u; belts below %.3f, zones above %.3f, white %.3f)",
+				name, lvl, 2 * hw, T * nlat, decks.mapLevels[0], decks.mapLevels[1], decks.mapLevels[2]);
+		}
+	}
 
 	const bool *hasClouds = (const bool*)oapiGetObjectParam (hObj, OBJPRM_PLANET_HASCLOUDS);
 	if (!clouds && hasClouds && *hasClouds && load (std::string (name) + "_cloud.tex", images) &&
@@ -1386,7 +1465,9 @@ void VPlanet::Render (RenderPass pass)
 		if (isStar) { RenderGlow (); return; }
 		for (auto &b : bases) b->Render (pass);
 		// (a gas giant's 2D cloud layer: not while its decks are drawn)
-		if (clouds && !(hasDecks && scene->CloudsActive () && oapiCameraProxyGbody () == hObj)) clouds->Render (atmosphere.get());
+		// (while they fade in from afar, both)
+		if (clouds && !(hasDecks && scene->CloudsActive () && oapiCameraProxyGbody () == hObj && scene->VClouds ()->DeckOpacity () >= 1.0f))
+			clouds->Render (atmosphere.get());
 		if (scene->PixelSize (size, camDist) >= 0.5) {
 			if (cloudTex) {
 				// legacy cloud layer: longitude 0 of the map at the -x axis
