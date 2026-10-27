@@ -1023,6 +1023,11 @@ bool March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 	float tWeighted = 0.0, wSum = 0.0;
 	float baseLow = P.layer[int (P.hazeH.y) - 1].x;
 	float tc = t0;
+	// (the steps' grid itself shifted by the jitter, each frame anew, where
+	// it starts: at the shell, after a jump to a deck's boundary; fixed
+	// there, the first dense step's sample lay at the same depth below a
+	// surface every frame: light bands along the pop-up domes, terraces)
+	bool phase = true;
 	vec3 mapL = vec3 (0.0);
 	float mapW = 0.0;
 	for (int it = 0; it < MAXIT && tc < t1 && T.g > 0.005; it++) {
@@ -1048,6 +1053,7 @@ bool March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 		// through them no longer than one at some 20 degrees elevation)
 		float chromoSlant = clamp (muv / 0.35, 0.2, 1.0);
 		float dt = fine;
+		bool jumped = false; // (this step a jump through clear air)
 		if (!thick) {
 			// (to the next boundary of a deck: the spheres' crossings ahead)
 			float tn = max (0.08 * ta, 3e3);
@@ -1074,6 +1080,7 @@ bool March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 				}
 			}
 			dt = max (tn, fine);
+			if (tn > fine) phase = jumped = true;
 		}
 		dt = min (max (dt, (t1 - ta) / float (MAXIT - it)), t1 - ta);
 		// (near a tower: fine steps)
@@ -1086,6 +1093,7 @@ bool March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 					nearT = NearTower (towerList[k], pm / rm, rm, 0.5 * dt);
 			if (nearT && dt > fine) dt = max (fine, (t1 - ta) / float (MAXIT - it));
 		}
+		if (phase && !jumped) { dt = min (dt * (0.5 + jitter), t1 - ta); phase = false; }
 		float tb = ta + dt;
 		tc = tb;
 		{
