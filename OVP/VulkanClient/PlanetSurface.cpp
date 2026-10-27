@@ -1325,7 +1325,7 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 	if (!surf) return;
 	VkTexture *mask = layers->mask ? texFor (&Node::mask, pc.maskUV) : nullptr;
 	pc.params[0] = mask ? 1.0f : 0.0f;
-	pc.params[1] = 1.0f;
+	pc.params[1] = clouds ? layerAlpha : 1.0f; // (night lights' scale; a cloud layer's opacity)
 	pc.params[2] = clouds ? 1.0f : 0.0f;
 	pc.params[3] = clouds ? scene->CloudFadeRadius () : 0.0f; // volumetric clouds take over within
 	if (n->parent && !clouds) {

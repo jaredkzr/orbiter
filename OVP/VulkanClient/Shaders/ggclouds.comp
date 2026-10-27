@@ -83,6 +83,9 @@ layout(push_constant) uniform Params {
 const float PI = 3.14159265;
 const float FLOW_PERIOD = 1800.0; // [s] the advection phases' period
 const float GC = 0.85; // asymmetry of the cloud particles' scattering
+// (the map's look from afar as the planet's cloud layer draws it: some 20
+// percent darker than the decks' own light, matched at the hand-over)
+const float MAP_LOOK = 0.5;
 
 GGParams P;
 
@@ -1082,7 +1085,7 @@ bool March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 		float w = T.g * (1.0 - Tstep.g);
 		// (the first cloud: the planet map there, lit as the map seen from
 		// afar)
-		if (mapW == 0.0 && w > 0.0) mapL = ctxMap * sunAtm * max (muS, 0.0) / PI, mapW = 1.0;
+		if (mapW == 0.0 && w > 0.0) mapL = MAP_LOOK * ctxMap * sunAtm * max (muS, 0.0) / PI, mapW = 1.0;
 		tWeighted += w * (ta + jitter * dt);
 		wSum += w;
 		T *= Tstep;

@@ -1464,10 +1464,14 @@ void VPlanet::Render (RenderPass pass)
 	if (pass == RenderPass::Transparent) {
 		if (isStar) { RenderGlow (); return; }
 		for (auto &b : bases) b->Render (pass);
-		// (a gas giant's 2D cloud layer: not while its decks are drawn)
-		// (while they fade in from afar, both)
-		if (clouds && !(hasDecks && scene->CloudsActive () && oapiCameraProxyGbody () == hObj && scene->VClouds ()->DeckOpacity () >= 1.0f))
+		// (a gas giant's 2D cloud layer: not while its decks are drawn; while
+		// they fade in from afar, fading out over them (drawn after them: at
+		// full opacity it hid their fade, and vanished at once where it ended))
+		float deckOp = hasDecks && scene->CloudsActive () && oapiCameraProxyGbody () == hObj ? scene->VClouds ()->DeckOpacity () : 0.0f;
+		if (clouds && deckOp < 1.0f) {
+			clouds->layerAlpha = 1.0f - deckOp;
 			clouds->Render (atmosphere.get());
+		}
 		if (scene->PixelSize (size, camDist) >= 0.5) {
 			if (cloudTex) {
 				// legacy cloud layer: longitude 0 of the map at the -x axis

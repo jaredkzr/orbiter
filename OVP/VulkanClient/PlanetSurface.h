@@ -125,6 +125,9 @@ public:
 	/// (outside rendering scopes); called by the render functions if needed
 	void Prepare ();
 	void Render (class Atmosphere *atm);
+	/// a cloud layer's opacity (a gas giant's: fading out as its cloud decks
+	/// fade in over it)
+	float layerAlpha = 1.0f;
 	/// opaque surface into the ambient occlusion prepass
 	void RenderDepth ();
 	/// terrain tiles near the shadow region into a shadow map
