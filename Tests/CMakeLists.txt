@@ -97,7 +97,7 @@ if (ORBITER_TEST_EXE)
 	# detail, and no boulders in the way)
 	set_tests_properties(Scenario.ContactSlopeTest PROPERTIES ENVIRONMENT "ORBITER_NO_TERRAIN_DETAIL=1;ORBITER_NO_SCATTER=1")
 	# (the destruction test needs the damage model on)
-	set_tests_properties(Scenario.DestructionTest PROPERTIES ENVIRONMENT "ORBITER_DAMAGE=1")
+	set_tests_properties(Scenario.DestructionTest Scenario.FocusLossTest PROPERTIES ENVIRONMENT "ORBITER_DAMAGE=1")
 
 	# Launchpad (in the Vulkan client's window, rendered offscreen; needs a
 	# Vulkan device): a scenario launched twice, returning to the launchpad

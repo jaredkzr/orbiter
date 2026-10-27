@@ -38,7 +38,12 @@ local function maxload(v)
 	for i = 1, v:get_partcount() - 1 do m = math.max(m, v:get_partinfo(i).load) end
 	return m
 end
-local function exists(name) return oapi.get_objhandle(name) ~= nil end
+-- (a destroyed vessel is deleted, or kept as a ghost while the instant
+-- replay shows it: its core part lost)
+local function exists(name)
+	local h = oapi.get_objhandle(name)
+	return h ~= nil and vessel.get_interface(name):get_partinfo(0).flags % 2 == 0
+end
 
 -- vessels on the ground placed in the air, level as on the ground: alt
 -- [m] up, speed [m/s] forward, vs [m/s] vertical

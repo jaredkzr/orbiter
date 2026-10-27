@@ -40,6 +40,7 @@
 #include "elevmgr.h"
 #include "GroundScatter.h"
 #include "Debris.h"
+#include "Replay.h"
 #include <fstream>
 #include <iomanip>
 #include <stdio.h>
@@ -4858,6 +4859,7 @@ int Vessel::BreakPart (int part, double vsep)
 	std::string dname = name + " " + parts[part].name;
 	Debris *d = new Debris (dname, name, m, cg, sc, std::move (groups), pts);
 	g_psys->AddDebris (d, this);
+	last_debris = d;
 
 	// what is left: its centre of gravity moves (the origin stays where it
 	// is), its velocity is that of the new centre of gravity (momentum
@@ -5093,16 +5095,48 @@ void Vessel::Destroy (const char *reason)
 	if (part_lost.size() != parts.size()) part_lost.assign (parts.size(), 0);
 	destroyed = true;
 	char cbuf[256];
-	sprintf (cbuf, "%s was destroyed: %s", name.c_str(), reason);
+	sprintf (cbuf, "%s was destroyed: %s.", name.c_str(), reason);
 	LOGOUT ("%s", cbuf);
-	if (this == g_focusobj) g_pOrbiter->ShowInfoMessage (cbuf);
 	// every part a piece of its own, flying apart; then the core
 	breaking_up = true;
-	for (size_t j = parts.size(); j-- > 1; )
-		if (!part_lost[j]) BreakPart ((int)j, 2.0);
-	if (!part_lost[0]) BreakPart (0, 0.0);
+	double mmax = 0.0;
+	for (size_t j = parts.size(); j-- > 0; ) {
+		if (part_lost[j]) continue;
+		last_debris = nullptr;
+		BreakPart ((int)j, j ? 2.0 : 0.0);
+		if (last_debris && last_debris->Mass() > mmax) mmax = last_debris->Mass(), wreck = last_debris;
+	}
 	breaking_up = false;
-	RequestDestruct ();
+	destroyed_t = td.SimT0;
+
+	// (a ghost now; the camera follows the wreck)
+	if (this == g_focusobj && wreck) {
+		g_pOrbiter->SetView (wreck, 1);
+		g_camera->SetTrackMode (CAMERA_ABSDIRECTION);
+		char msg[300];
+		snprintf (msg, sizeof(msg), "%s Switch to another vessel with F3.", cbuf);
+		g_pOrbiter->ShowInfoMessage (msg);
+	}
+}
+
+void Vessel::FollowWreck ()
+{
+	// (the ghost of a destroyed vessel moves with the largest piece of its
+	// wreck: what the focus vessel's instruments show)
+	if (wreck && !g_psys->isDebris (wreck)) wreck = nullptr;
+	s1->Set (*s0);
+	if (wreck) { // (the wreck's state at the start of the step, moved over it: its new state is not known yet)
+		s1->vel.Set (wreck->GVel());
+		s1->pos.Set (wreck->GPos() + s1->vel * td.SimDT);
+	}
+	rpos_base = s1->pos, rpos_add.Set (0,0,0);
+	rvel_base = s1->vel, rvel_add.Set (0,0,0);
+	s1->omega.Set (0,0,0);
+	if (cbody) {
+		cpos = s1->pos - cbody->s1->pos;
+		cvel = s1->vel - cbody->s1->vel;
+	}
+	el_valid = false;
 }
 
 void Vessel::UpdateDamageEffects ()
@@ -5155,6 +5189,7 @@ void Vessel::SetCustomHulls (bool custom)
 
 double Vessel::CollisionRadius () const
 {
+	if (destroyed) return -1.0;
 	double r = Hulls().empty() ? -1.0 : hull_bound;
 	for (DWORD j = 0; j < ncattach; j++) { // (attached payloads)
 		const Vessel *c = cattach[j]->mate;
@@ -5248,6 +5283,8 @@ void Vessel::Update (bool force)
 	// to a parent vessel, its state is updated by the composite or parent
 	if (attach)
 		return;
+
+	if (destroyed) { FollowWreck (); return; }
 
 	int i;
 
@@ -5415,6 +5452,17 @@ void Vessel::PostUpdate ()
 {
 	// Called after all vessels have been updated, but before
 	// module clbkPostStep is called for the vessel
+
+	if (destroyed) {
+		// (the ghost goes when it is neither the focus vessel nor shown by
+		// the instant replay any more)
+		Replay *rp = g_pOrbiter->GetReplay();
+		if (this != g_focusobj) {
+			enablefocus = false; // (not offered as a focus vessel)
+			if (!KillPending() && (!rp || rp->Start() > destroyed_t)) RequestDestruct ();
+		}
+		return;
+	}
 
 	VesselBase::PostUpdate ();
 

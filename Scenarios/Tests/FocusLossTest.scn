@@ -1,0 +1,40 @@
+BEGIN_HYPERDESC
+<h1>Losing the focus vessel</h1>
+With the damage model on (the test sets ORBITER_DAMAGE=1) the focus
+Delta-glider, dropped flat from 150 m, breaks up: it stays the focus
+vessel as a hidden ghost moving with the largest piece of its wreck, which
+the camera follows. Switching to another vessel removes the ghost.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Tests/FocusLossTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship GL-01
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET GL-01
+  MODE Extern
+  POS 4.0 -20.0 -30
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+GL-01:DeltaGlider
+  STATUS Landed Earth
+  POS -80.6838740 28.5988713
+  HEADING 330.01
+  GEAR 0 0.0000
+  PRPLEVEL 0:0.050 1:1.000
+END
+PB:ShuttlePB
+  STATUS Landed Earth
+  POS -80.6200000 28.6400000
+  HEADING 330.01
+END
+END_SHIPS
