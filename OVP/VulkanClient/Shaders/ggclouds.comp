@@ -615,43 +615,101 @@ void SetContext (vec3 x)
 // decaying over some hours; dense about the storms, scattered in the
 // belts, rare in the zones (as Juno sees them); density 0..1 at x
 const float POP_CELL = 60e3;
-float PopUp (vec3 x, float r, vec3 u, bool detail)
+// the dome a cell of the grid (the cloud layer's frame, m [m]) would
+// have: its centre [m], radius, height over the band's base [m]; within its
+// cell (h: the cell's hash)
+void PopCell (vec2 cell, out vec2 c, out float rd, out float H, out uint h)
 {
-	if (r < P.popup.z || r > P.popup.w) return 0.0;
-	float R = P.misc.z;
-	float lat = asin (clamp (u.y, -1.0, 1.0)), lng = atan (u.z, u.x);
-	float a = CloudLng (lng);
-	if (abs (a) > PI - (POP_CELL + 40e3) / (R * max (cos (lat), 0.05))) return 0.0; // (none across the seam)
-	vec2 m = FoldCoord (lat, a, vec2 (0.0));
-	vec2 cell = floor (m / POP_CELL);
-	uint h = Pcg (uint (int (cell.x) & 0xffff) | (uint (int (cell.y) & 0xffff) << 16u));
+	h = Pcg (uint (int (cell.x) & 0xffff) | (uint (int (cell.y) & 0xffff) << 16u));
 	uint h1 = Pcg (h), h2 = Pcg (h1), h3 = Pcg (h2);
 	// (its life: rising, spreading, fading)
 	float life = sin (PI * fract (P.hazeH.z / 14400.0 + Unit (h3)));
-	float rd = mix (8e3, 25e3, Unit (h1)) * (0.6 + 0.4 * life);
-	vec2 c = (cell + 0.5) * POP_CELL + (vec2 (Unit (h2), Unit (h2 >> 16)) - 0.5) * (POP_CELL - 2.0 * rd);
-	float d = length (m - c);
-	if (d > 1.4 * rd) return 0.0;
-	// (how likely here: the storms near, the band)
+	rd = mix (8e3, 25e3, Unit (h1)) * (0.6 + 0.4 * life);
+	c = (cell + 0.5) * POP_CELL + (vec2 (Unit (h2), Unit (h2 >> 16)) - 0.5) * (POP_CELL - 2.0 * rd);
+	H = 4e3 + mix (5e3, 12e3, Unit (h1 >> 16)) * life;
+}
+// whether the cell (its dome's centre c, hash h) has it: how likely there
+// (the storms near, the band)
+bool PopHere (vec2 c, uint h)
+{
+	float R = P.misc.z;
 	float clat = c.y / R, clng = c.x / (R * max (cos (clat), 0.05)) + P.mapInfo.x, zone;
 	MapColour (clat, clng, 50e3, zone);
 	float p = mix (0.15, 0.02, zone);
 	vec3 cu = vec3 (cos (clat) * cos (clng), sin (clat), cos (clat) * sin (clng));
 	for (int i = 0; i < int (P.misc.x); i++)
 		p = max (p, 0.5 * P.stormP[i].x * (1.0 - smoothstep (0.8, 2.5, Ang (cu, P.storm[i].xyz) * R / P.storm[i].w)));
-	if (Unit (h >> 16) > p * P.popup.x) return 0.0;
+	return Unit (h >> 16) <= p * P.popup.x;
+}
+// (the seam: none within a cell and the domes' reach of it)
+bool PopSeam (float a, float lat) { return abs (a) > PI - (POP_CELL + 40e3) / (P.misc.z * max (cos (lat), 0.05)); }
+
+float PopUp (vec3 x, float r, vec3 u, bool detail)
+{
+	if (r < P.popup.z || r > P.popup.w) return 0.0;
+	float R = P.misc.z;
+	float lat = asin (clamp (u.y, -1.0, 1.0)), lng = atan (u.z, u.x);
+	float a = CloudLng (lng);
+	if (PopSeam (a, lat)) return 0.0;
+	vec2 m = FoldCoord (lat, a, vec2 (0.0));
+	vec2 c;
+	float rd, H;
+	uint h;
+	PopCell (floor (m / POP_CELL), c, rd, H, h);
+	float d = length (m - c);
+	if (d > 1.4 * rd || !PopHere (c, h)) return 0.0;
 	// (a dome rooted in the deck, rounded to its edge, billowing: lumps
 	// some 6 km across, rising with the updraft)
-	float hd = mix (5e3, 12e3, Unit (h1 >> 16)) * life;
 	float z = r - P.popup.z;
 	float q = clamp (1.0 - d * d / (rd * rd), -1.0, 1.0);
-	float prof = (4e3 + hd) * sign (q) * sqrt (abs (q)) - z;
+	float prof = H * sign (q) * sqrt (abs (q)) - z;
 	lodBias = 1.0;
 	float lb = Lod (1.0 / 6e3, SHAPE_N);
 	float n = textureLod (shapeNoise, vec3 (m, r - R) / (6e3 * NOISE_F) + vec3 (0.0, 0.0, -0.02 * P.hazeH.z / 6e3), lb).r - noiseMean;
 	if (detail) n += 0.25 * (textureLod (detailNoise, vec3 (m, r - R) / 2.5e3 * 0.2, Lod (1.0 / 2.5e3, DETAIL_N)).r - 0.5);
 	lodBias = 0.0;
-	return clamp ((prof + 6.0 * n * (4e3 + hd)) / (0.15 * (4e3 + hd)), 0.0, 1.0);
+	return clamp ((prof + 6.0 * n * H) / (0.15 * H), 0.0, 1.0);
+}
+
+// the domes' optical depth towards the sun from x (radius r, direction u):
+// the sun's ray through the cells it crosses below their tops, each dome
+// taken as its ellipsoid (exact, where the light march's steps, long far
+// away, would pass them by: their shadows faint)
+bool popInLight = true; // (Medium: the domes in the light march's densities; off: PopShadow's)
+float PopShadow (vec3 x, float r, vec3 u, vec3 sun)
+{
+	if (P.popup.x <= 0.0 || r > P.popup.w) return 0.0;
+	float su = dot (sun, u);
+	if (su < 0.03) return 0.0;
+	float lat = asin (clamp (u.y, -1.0, 1.0)), lng = atan (u.z, u.x);
+	float a = CloudLng (lng);
+	if (PopSeam (a, lat)) return 0.0;
+	vec2 m = FoldCoord (lat, a, vec2 (0.0));
+	vec3 e = normalize (vec3 (-u.z, 0.0, u.x)), nn = cross (e, u);
+	vec2 sh = vec2 (dot (sun, e), dot (sun, nn));
+	float z = r - P.popup.z;
+	float sMax = (P.popup.w - P.popup.z - z) / su; // (the ray's length below the tops)
+	float tau = 0.0;
+	vec2 last = vec2 (1e9);
+	for (int k = 0; k < 4; k++) {
+		vec2 cell = floor ((m + sh * sMax * float (k) / 3.0) / POP_CELL);
+		if (cell == last) continue;
+		last = cell;
+		vec2 c;
+		float rd, H;
+		uint h;
+		PopCell (cell, c, rd, H, h);
+		// (the ray in the ellipsoid's unit sphere)
+		vec3 O = vec3 ((m - c) / rd, z / H), D = vec3 (sh / rd, su / H);
+		float A = dot (D, D), B = dot (O, D), C = dot (O, O) - 1.0;
+		float disc = B * B - A * C;
+		if (disc <= 0.0) continue;
+		float sq = sqrt (disc);
+		float s1 = (-B - sq) / A, s2 = (-B + sq) / A;
+		if (s2 <= 0.0 || !PopHere (c, h)) continue;
+		tau += (s2 - max (s1, 0.0)) * 8e-4 * 0.8;
+	}
+	return tau;
 }
 
 float Medium (vec3 x, bool detail, out vec3 alb, bool towerDetail)
@@ -710,7 +768,7 @@ float Medium (vec3 x, bool detail, out vec3 alb, bool towerDetail)
 		}
 		ext += e, sum += e * clamp (a, 0.0, 1.0);
 	}
-	float pu = P.popup.x > 0.0 ? PopUp (x, r, u, detail) : 0.0;
+	float pu = P.popup.x > 0.0 && popInLight ? PopUp (x, r, u, detail) : 0.0;
 	if (pu > 0.0) {
 		float e = 8e-4 * pu;
 		ext += e, sum += e * vec3 (0.9999, 0.9998, 0.9995);
@@ -1030,7 +1088,8 @@ bool March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 		// (clear air between the decks, away from storms: the haze only,
 		// lit through the column above instead of a march towards the sun)
 		// (thin layers, hazes, are taken as uniform: the clear-air path)
-		bool inDeck = nearT || (P.popup.x > 0.0 && r > P.popup.z && r < P.popup.w && PopUp (p, r, up, false) > 0.0);
+		bool inDome = P.popup.x > 0.0 && r > P.popup.z && r < P.popup.w && PopUp (p, r, up, false) > 0.0;
+		bool inDeck = nearT || inDome;
 		float thin = 0.0;
 		vec3 thinAlb = vec3 (0.0);
 		for (int l = 0; l < int (P.hazeH.y) && !inDeck; l++)
@@ -1090,6 +1149,9 @@ bool March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 		coarseLight = ta > 250e3;
 		lightTowers = false;
 		for (int k = 0; k < nTower && !lightTowers; k++) lightTowers = NearTower (towerList[k], up, r, 100e3);
+		// (the pop-up domes: their shadows exact, not marched; within one,
+		// its soft edge marched)
+		popInLight = inDome;
 		for (int k = 0; k < (coarseLight ? 3 : 5); k++) {
 			s += ds;
 			q = p + sun * (s - 0.5 * ds);
@@ -1097,6 +1159,8 @@ bool March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 			od += Medium (q, false, al, false) * ds;
 			ds *= coarseLight ? 3.0 : 2.0;
 		}
+		if (!inDome) od += PopShadow (p, r, up, sun);
+		popInLight = true;
 		coarseLight = false, lightTowers = false;
 		vec3 qe = p + sun * s;
 		float re = length (qe);
