@@ -436,7 +436,7 @@ float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, fl
 	}
 	if (cov <= 0.01) return 0.0;
 	// (flat bases, heaped tops: the profile falls over the upper 70 percent)
-	float profile = smoothstep (0.0, 0.08, hf) * smoothstep (1.0, 0.3, hf);
+	float profile;
 	// (the light march takes the same shape, without the detail's
 	// erosion: the clouds shadow themselves where they are seen; for far
 	// samples a single lookup)
@@ -446,7 +446,8 @@ float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, fl
 	if (coarse) {
 		float sh = textureLod (shapeNoise, vec3 (e0 - uj * t / (P.misc2.x * m.y), n0, z0) * L.w, lb).r;
 		sh = clamp ((sh - 0.15) / 0.7, 0.0, 1.0);
-		return clamp ((sh * profile - (1.0 - cov)) / max (cov, 0.05) * 4.0, 0.0, 1.0);
+		float spc = smoothstep (0.0, 0.08, hf) * max (sh - 0.9 * (1.0 - smoothstep (1.0, 0.3, hf)), 0.0); // (as below)
+		return clamp ((spc - (1.0 - cov) - 0.08 * cov) / max (0.92 * cov, 0.05) * 4.0, 0.0, 1.0);
 	}
 	// (and swirled by the storms' vortices: each phase's turn)
 	vec3 q1 = vec3 (e0 + (sw1.x - uj * p1 * FLOW_PERIOD) / (P.misc2.x * m.y), n0 + sw1.y, z0) * L.w;
@@ -476,17 +477,32 @@ float Deck (int i, vec3 x, float r, vec3 u, float lat, float lng, float zone, fl
 	deckHill = hn;
 	float hft = hf / (0.6 + 0.4 * hn);
 	if (hft >= 1.0) return 0.0;
-	profile = smoothstep (0.0, 0.08, hf) * smoothstep (1.0, 0.3, hft);
+	float pTop = smoothstep (1.0, 0.3, hft);
+	profile = smoothstep (0.0, 0.08, hf) * pTop;
 	// (two octaves: billows on the larger features)
 	float l2 = lb + 1.63;
 	float shape = mix (0.65 * textureLod (shapeNoise, q2, lb).r + 0.35 * textureLod (shapeNoise, ROT * q2 * 3.1, l2).r,
 	                   0.65 * textureLod (shapeNoise, q1, lb).r + 0.35 * textureLod (shapeNoise, ROT * q1 * 3.1, l2).r, w1);
+	// (near, a third octave: billows some 3 km across on the tops, a zone's
+	// dense deck heaped into cells, not a smooth white plain)
+	float l3 = lb + 3.2;
+	if (l3 < 4.5) {
+		float b3 = mix (textureLod (shapeNoise, ROT * ROT * q2 * 9.3 + vec3 (0.21, 0.43, 0.65), l3).r,
+		                textureLod (shapeNoise, ROT * ROT * q1 * 9.3 + vec3 (0.21, 0.43, 0.65), l3).r, w1);
+		shape += 0.25 * (b3 - noiseMean) * (1.0 - smoothstep (3.0, 4.5, l3));
+	}
 	shape = clamp ((shape - 0.15) / 0.7, 0.0, 1.0); // (the noise's range stretched)
 	// (sharp surfaces: full density a quarter of the way in, as cumulus;
 	// far away, where the noise is averaged over the pixel, softer: the
 	// sharpening would only draw out the averaged noise's remains)
 	float sharp = mix (4.0, 1.0, clamp ((lb - 2.0) / 3.0, 0.0, 1.0));
-	float d = clamp ((shape * profile - (1.0 - cov)) / max (cov, 0.05) * sharp, 0.0, 1.0);
+	// (the top eroded by the profile, not scaled by it, and the faint tail
+	// over it cut: a dense deck (a zone's) otherwise a smooth fog some km
+	// deep, its relief (some 2 km) hidden; now its top where the noise and
+	// the profile cross the floor, some 6 km of relief: cells that shade)
+	const float FLOOR = 0.08;
+	float sp = smoothstep (0.0, 0.08, hf) * max (shape - 0.9 * (1.0 - pTop), 0.0);
+	float d = clamp ((sp - (1.0 - cov) - FLOOR * cov) / max ((1.0 - FLOOR) * cov, 0.05) * sharp, 0.0, 1.0);
 	// (farther still, the noise averaged over the pixel: thresholded, its
 	// remains would draw its contours; the cloud's mean instead, its
 	// coverage, the large structures' (the bands, their folds))
