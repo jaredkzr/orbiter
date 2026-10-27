@@ -57,3 +57,7 @@ REACH h         the decks are drawn up to h [m] above their top (their folds
                 above 70 percent: the planet's cloud layer takes over).
                 Default 1500e3 (planets with rings: the rings are drawn
                 behind the decks)
+POPUPS density  pop-up clouds: small convective domes (8-25 km across, rising
+                5-12 km above the highest deck's tops), dense about the
+                storms, scattered in the belts, rare in the zones, each
+                growing and fading over some hours; density 0..1. Default 0

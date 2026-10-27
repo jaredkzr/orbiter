@@ -61,6 +61,7 @@ struct GGParams {
 	vec4 mapInfo;            // the cloud layer's rotation about the axis [rad] (the map seen from afar); the decks' opacity (fading out towards their reach); their share of the map's look (from afar)
 	vec4 gasD;               // the gas's absorption per bar more below the pressure w [bar] (rgb)
 	vec4 mapLevels;          // the map's luminance: belts below x, zones above y; its white (z)
+	vec4 popup;              // pop-up clouds: density (0: none), the deck they rise from, the band's base and top radius [m]
 	vec4 mapCal[MAX_LAYERS]; // the map's colour calibration for each deck (rgb: the haze and gas above it taken out)
 	vec4 chromo;             // the chromophores' layer: base, top radius [m] (none: top <= base), strength; the flow's folds' strength (0..1)
 	vec4 chromoCal;          // ... the map's colour calibration at its top (rgb); the lanes' (0..1)
@@ -250,19 +251,36 @@ float Shelf (vec2 q, float dz, float rt, float Ld, float Lu, float W, float th, 
 {
 	float ex = q.x > 0.0 ? q.x / Ld : q.x / Lu, ey = q.y / W;
 	float e2 = ex * ex + ey * ey;
-	if (e2 > 1.6) return 0.0;
+	if (e2 > (anvil ? 3.2 : 1.6)) return 0.0;
 	float thick = th * (1.0 - 0.7 * clamp (ex, 0.0, 1.0));
+	// (the anvil's top: gravity waves rippling out from the overshooting
+	// dome over the core (1.5 tower radii upwind of its centre), bubbling
+	// lumps on it; its edge drawn out downwind into fibres)
+	float relief = 0.0, fib = 0.0;
+	if (anvil) {
+		float rc = length (q + vec2 (1.5 * rt, 0.0));
+		relief = 600.0 * cos (2.0 * PI * rc / (0.7 * rt) - P.hazeH.z / 300.0) * exp (-rc / (5.0 * rt)) * smoothstep (0.4 * rt, 1.0 * rt, rc);
+		if (detail) {
+			relief += 1.4e3 * 6.0 * (textureLod (shapeNoise, vec3 (q / (0.8 * rt * NOISE_F), seed * 0.1 + 0.5), Lod (1.0 / (0.8 * rt * NOISE_F), SHAPE_N)).r - noiseMean);
+			// (fibres: streaks along the outflow, bent by a broad warp)
+			vec2 qf = q + 1.5 * rt * 6.0 * vec2 (0.0, textureLod (shapeNoise, vec3 (q / (4.0 * rt * NOISE_F), seed * 0.1 + 0.7), Lod (1.0 / (4.0 * rt * NOISE_F), SHAPE_N)).r - noiseMean);
+			fib = 8.0 * (textureLod (shapeNoise, vec3 (qf / (vec2 (1.5, 0.3) * rt * NOISE_F), seed * 0.1 + 0.2), Lod (1.0 / (0.3 * rt * NOISE_F), SHAPE_N)).r - noiseMean);
+		}
+	}
 	// (a flat top; the underside lower near the tower, with pouches)
 	float bottom = -thick * (0.6 + 0.25 * nz) - (anvil ? 2.5e3 * max (nz, 0.0) : 0.0);
-	float v = smoothstep (bottom, bottom + 1e3, dz) * (1.0 - smoothstep (0.0, 1.5e3, dz - 0.15 * thick * nz));
+	float v = smoothstep (bottom, bottom + 1e3, dz) * (1.0 - smoothstep (0.0, anvil ? 700.0 : 1.5e3, dz - relief - 0.15 * thick * nz));
 	// (its own lumps and frayed edges: noise over a third of the tower)
 	float sn = detail ? textureLod (shapeNoise, vec3 (q / (3.0 * rt), dz / 6e3 + seed * 0.1), Lod (1.0 / (3.0 * rt), SHAPE_N)).r - 0.5 : 0.0;
-	float edge = smoothstep (1.0, 0.6, e2 + (nz + 2.0 * sn) * mix (0.25, 0.7, clamp (ex, 0.0, 1.0)));
+	float edge = smoothstep (1.0, 0.6, e2 + (nz + 2.0 * sn) * mix (0.25, 0.7, clamp (ex, 0.0, 1.0)) - 0.5 * fib * clamp (ex, 0.0, 1.0));
 	v *= 0.75 + 1.0 * sn;
+	// (downwind beyond it, a thin cirrus plume: streaks)
+	float plume = anvil && detail && ex > 0.3 ? 0.15 * smoothstep (-0.2, 0.6, fib) * smoothstep (3.0, 1.0, e2) * smoothstep (0.3, 0.8, ex)
+		* smoothstep (-0.5 * thick, -0.3 * thick, dz) * (1.0 - smoothstep (-800.0, 0.0, dz - relief)) : 0.0;
 	if (!detail) return 0.8 * v * edge; // (for the light: without the arms)
 	float rho = length (q), ang = atan (q.y, q.x);
 	float arms = 0.65 + 0.35 * cos (2.0 * ang - 2.5 * log (max (rho, 0.2 * rt) / rt) + seed);
-	return v * edge * arms;
+	return max (v * edge * arms, plume);
 }
 
 // whether a point (direction u, radius r) is within reach of tower i's
@@ -276,7 +294,7 @@ bool NearTower (int i, vec3 u, float r, float margin)
 	vec3 e = normalize (vec3 (-c.z, 0.0, c.x)), nn = cross (c, e);
 	vec2 h = vec2 (dot (u - c, e), dot (u - c, nn)) * P.misc.z - vec2 (0.35 * (r - baseR), 0.0);
 	float reach = 1.4 * rt;
-	if (r > top - 12e3 - margin) reach = P.towerP[i].w > 0.5 ? 7.6 * rt : 1.6 * rt;
+	if (r > top - 12e3 - margin) reach = P.towerP[i].w > 0.5 ? 11.5 * rt : 1.6 * rt;
 	for (int l = 0; l < int (P.hazeH.y); l++)
 		if (abs (r - P.layer[l].y) < 6e3 + margin) reach = max (reach, 3.2 * rt);
 	return length (h - vec2 (reach > 3.0 * rt ? 1.5 * rt : 0.0, 0.0)) < reach + margin;
@@ -302,7 +320,7 @@ float Towers (vec3 x, float r, vec3 u, bool detail)
 		// the anvil near the tower's top)
 		bool anvil = P.towerP[i].w > 0.5;
 		float reach = 1.4 * rt;
-		if (r > top - 12e3) reach = anvil ? 7.6 * rt : 1.6 * rt;
+		if (r > top - 12e3) reach = anvil ? 11.5 * rt : 1.6 * rt;
 		else for (int l = 0; l < int (P.hazeH.y); l++) if (abs (r - P.layer[l].y) < 6e3) reach = 3.2 * rt;
 		if (length (h - vec2 (reach > 3.0 * rt ? 1.5 * rt : 0.0, 0.0)) > reach) continue;
 		// the vortex: the tower turns with height, faster near its core
@@ -527,6 +545,47 @@ void SetContext (vec3 x)
 	chromoCtx = true;
 }
 
+// Pop-up clouds: small convective domes some 8-25 km across rising 5-12 km
+// above the highest deck's tops (fresh ammonia ice: white), one at most
+// in each cell of a 60 km grid (the cloud layer's frame), each growing and
+// decaying over some hours; dense about the storms, scattered in the
+// belts, rare in the zones (as Juno sees them); density 0..1 at x
+const float POP_CELL = 60e3;
+float PopUp (vec3 x, float r, vec3 u, bool detail)
+{
+	if (r < P.popup.z || r > P.popup.w) return 0.0;
+	float R = P.misc.z;
+	float lat = asin (clamp (u.y, -1.0, 1.0)), lng = atan (u.z, u.x);
+	vec2 m = FoldCoord (lat, lng, vec2 (0.0));
+	vec2 cell = floor (m / POP_CELL);
+	uint h = Pcg (uint (int (cell.x) & 0xffff) | (uint (int (cell.y) & 0xffff) << 16u));
+	uint h1 = Pcg (h), h2 = Pcg (h1), h3 = Pcg (h2);
+	// (its life: rising, spreading, fading)
+	float life = sin (PI * fract (P.hazeH.z / 14400.0 + Unit (h3)));
+	float rd = mix (8e3, 25e3, Unit (h1)) * (0.6 + 0.4 * life);
+	vec2 c = (cell + 0.5) * POP_CELL + (vec2 (Unit (h2), Unit (h2 >> 16)) - 0.5) * (POP_CELL - 2.0 * rd);
+	float d = length (m - c);
+	if (d > 1.4 * rd) return 0.0;
+	// (how likely here: the storms near, the band)
+	float clat = c.y / R, clng = c.x / (R * max (cos (clat), 0.05)) + P.mapInfo.x, zone;
+	MapColour (clat, clng, 50e3, zone);
+	float p = mix (0.15, 0.02, zone);
+	vec3 cu = vec3 (cos (clat) * cos (clng), sin (clat), cos (clat) * sin (clng));
+	for (int i = 0; i < int (P.misc.x); i++)
+		p = max (p, 0.5 * P.stormP[i].x * (1.0 - smoothstep (0.8, 2.5, Ang (cu, P.storm[i].xyz) * R / P.storm[i].w)));
+	if (Unit (h >> 16) > p * P.popup.x) return 0.0;
+	// (a dome rooted in the deck, rounded to its edge, billowing: lumps
+	// some 6 km across, rising with the updraft)
+	float hd = mix (5e3, 12e3, Unit (h1 >> 16)) * life;
+	float z = r - P.popup.z;
+	float q = clamp (1.0 - d * d / (rd * rd), -1.0, 1.0);
+	float prof = (4e3 + hd) * sign (q) * sqrt (abs (q)) - z;
+	float lb = Lod (1.0 / 6e3, SHAPE_N);
+	float n = textureLod (shapeNoise, vec3 (m, r - R) / (6e3 * NOISE_F) + vec3 (0.0, 0.0, -0.02 * P.hazeH.z / 6e3), lb).r - noiseMean;
+	if (detail) n += 0.25 * (textureLod (detailNoise, vec3 (m, r - R) / 2.5e3 * 0.2, Lod (1.0 / 2.5e3, DETAIL_N)).r - 0.5);
+	return clamp ((prof + 6.0 * n * (4e3 + hd)) / (0.15 * (4e3 + hd)), 0.0, 1.0);
+}
+
 float Medium (vec3 x, bool detail, out vec3 alb, bool towerDetail)
 {
 	float r = length (x);
@@ -574,6 +633,11 @@ float Medium (vec3 x, bool detail, out vec3 alb, bool towerDetail)
 			a = min (a, clamp (1.0 - (1.0 - MapAlbedo (mc, i)) * ch, 0.0, 1.0));
 		}
 		ext += e, sum += e * clamp (a, 0.0, 1.0);
+	}
+	float pu = P.popup.x > 0.0 ? PopUp (x, r, u, detail) : 0.0;
+	if (pu > 0.0) {
+		float e = 8e-4 * pu;
+		ext += e, sum += e * vec3 (0.9999, 0.9998, 0.9995);
 	}
 	float tw = towerDetail || lightTowers ? Towers (x, r, u, towerDetail) : 0.0;
 	if (tw > 0.0) {
@@ -815,6 +879,11 @@ void main ()
 				thick = true;
 				thickCap = min (thickCap, (P.layer[l].y - P.layer[l].x) / (6.0 * max (muv, 0.05)));
 			}
+		// (the pop-up clouds' band: fine steps)
+		if (P.popup.x > 0.0 && rc > P.popup.z && rc < P.popup.w) {
+			thick = true;
+			thickCap = min (thickCap, (P.popup.w - P.popup.z) / (5.0 * max (muv, 0.05)));
+		}
 		fine = min (fine, max (thickCap, 250.0));
 		// (the chromophores: a thin coat over the cloud tops, a grazing ray
 		// through them no longer than one at some 20 degrees elevation)
@@ -826,8 +895,17 @@ void main ()
 			for (int l = 0; l <= int (P.hazeH.y); l++) {
 				if (l < int (P.hazeH.y) && P.layer[l].z < 2e-5) continue;
 				for (int e = 0; e < 2; e++) {
-					// (and the chromophores' layer)
+					// (and the chromophores' layer, the pop-up clouds' band)
 					float Rb = l == int (P.hazeH.y) ? (e == 0 ? P.chromo.x : P.chromo.y) : e == 0 ? P.layer[l].x : P.layer[l].y;
+					if (l == int (P.hazeH.y) && P.popup.x > 0.0) {
+						float Rp = e == 0 ? P.popup.z : P.popup.w;
+						float dp = ob * ob - oc + Rp * Rp;
+						if (dp > 0.0) {
+							float x1 = -ob - sqrt (dp), x2 = -ob + sqrt (dp);
+							float xp = x1 > ta + 1.0 ? x1 : x2;
+							if (xp > ta + 1.0) tn = min (tn, xp - ta + 50.0);
+						}
+					}
 					float disc = ob * ob - oc + Rb * Rb;
 					if (disc <= 0.0) continue;
 					float sq = sqrt (disc);
@@ -866,7 +944,7 @@ void main ()
 		// (clear air between the decks, away from storms: the haze only,
 		// lit through the column above instead of a march towards the sun)
 		// (thin layers, hazes, are taken as uniform: the clear-air path)
-		bool inDeck = nearT;
+		bool inDeck = nearT || (P.popup.x > 0.0 && r > P.popup.z && r < P.popup.w && PopUp (p, r, up, false) > 0.0);
 		float thin = 0.0;
 		vec3 thinAlb = vec3 (0.0);
 		for (int l = 0; l < int (P.hazeH.y) && !inDeck; l++)

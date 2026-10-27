@@ -55,6 +55,7 @@ public:
 		float mapLevels[3] = { 0.15f, 0.45f, 0.6f };  // the planet map's luminance: belts below, zones above; its white (VPlanet)
 		double chromoBase = 0.0, chromoTop = 0.0, chromoStrength = 1.0; // the chromophores' layer (none: top <= base)
 		float folds = 0.0, lanes = 0.0;               // the flow's folds within the bands, the clear lanes between them (0..1)
+		float popups = 0.0f;                          // pop-up clouds over the highest deck: density 0..1
 		double reach = 1500e3;                        // the decks drawn up to this height above their top [m] (fading out over the upper 30 percent)
 		/// the gas's absorption optical depth above pressure bar [bar] (colour k)
 		double GasAbs (int k, double bar) const { return gasAbs[k] * bar + gasDeep[k] * std::max (bar - gasDeepP, 0.0); }

@@ -51,6 +51,7 @@ namespace {
 		float mapInfo[4];           // the cloud layer's rotation [rad], 0, 0, 0
 		float gasD[4];              // the gas's absorption per bar more below the pressure w [bar] (rgb)
 		float mapLevels[4];         // the map's luminance: belts below, zones above; its white
+		float popup[4];             // pop-up clouds: density, their deck, the band's base and top radius [m]
 		float mapCal[GG_LAYERS][4]; // the map's colour calibration for each deck (rgb)
 		float chromo[4];            // the chromophores' layer: base, top radius [m], strength
 		float chromoCal[4];         // ... the map's colour calibration at its top (rgb)
@@ -578,6 +579,7 @@ bool VolumetricClouds::LoadDecks (const char *planet, Decks &dk)
 		else if (key == "CHROMO") ss >> dk.chromoBase >> dk.chromoTop >> dk.chromoStrength;
 		else if (key == "FOLDS") ss >> dk.folds >> dk.lanes;
 		else if (key == "REACH") ss >> dk.reach;
+		else if (key == "POPUPS") ss >> dk.popups;
 		else if (key == "GAS") {
 			ss >> dk.gasAbs[0] >> dk.gasAbs[1] >> dk.gasAbs[2] >> dk.gasRay[0] >> dk.gasRay[1] >> dk.gasRay[2];
 			float d[3];
@@ -634,7 +636,8 @@ void VolumetricClouds::RenderGasGiant (const GasGiantFrame &f)
 	g.hazeH[2] = (float)fmod (f.time, 1e5), g.hazeH[3] = (float)RANGE;
 	// the storm cells within range (their towers)
 	STORMCELL cells[GG_STORMS];
-	int ns = oapiGetStormCells (f.hPlanet, clng, clat, RANGE, cells, GG_STORMS);
+	// (within 2000 km: their towers and moats; beyond, too small to matter)
+	int ns = oapiGetStormCells (f.hPlanet, clng, clat, std::min (RANGE, 2000e3), cells, GG_STORMS);
 	for (int i = 0; i < ns; i++) {
 		double cla = cos (cells[i].lat);
 		g.storm[i][0] = (float)(cla * cos (cells[i].lng)), g.storm[i][1] = (float)sin (cells[i].lat), g.storm[i][2] = (float)(cla * sin (cells[i].lng));
@@ -812,6 +815,13 @@ void VolumetricClouds::RenderGasGiant (const GasGiantFrame &f)
 		for (int k = 0; k < 3; k++) g.gasK[k] = dk.gasAbs[k], g.rayK[k] = dk.gasRay[k], g.gasD[k] = dk.gasDeep[k];
 		g.gasD[3] = (float)dk.gasDeepP;
 		for (int k = 0; k < 3; k++) g.mapLevels[k] = dk.mapLevels[k];
+		// (the pop-up clouds rise from the highest cloud deck)
+		for (size_t i = 0; i < dk.decks.size() && dk.popups > 0.0f; i++)
+			if (dk.decks[i].ext >= 2e-5) {
+				g.popup[0] = dk.popups, g.popup[1] = (float)i;
+				g.popup[2] = (float)(R + dk.decks[i].top - 4e3), g.popup[3] = (float)(R + dk.decks[i].top + 16e3);
+				break;
+			}
 		g.vortex[0] = (float)dk.vortexV, g.vortex[1] = (float)dk.vortexCore, g.vortex[2] = (float)dk.towerSpin, g.vortex[3] = (float)dk.vortexTwist;
 	}
 
