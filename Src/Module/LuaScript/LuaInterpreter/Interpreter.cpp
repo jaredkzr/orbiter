@@ -1875,6 +1875,10 @@ int Interpreter::AssertPrmType(lua_State *L, int idx, int prmno, int tp, const c
 		if (lua_isvector(L, idx))
 			return 1;
 
+	if (tp & PRMTP_MATRIX)
+		if (lua_ismatrix(L, idx))
+			return 1;
+
 	if (tp & PRMTP_USERDATA)
 		if (lua_isuserdata(L, idx))
 			return 1;
@@ -1898,6 +1902,8 @@ int Interpreter::AssertPrmType(lua_State *L, int idx, int prmno, int tp, const c
 		strcat(cbuf, " table or");
 	if (tp & PRMTP_VECTOR)
 		strcat(cbuf, " vector or");
+	if (tp & PRMTP_MATRIX)
+		strcat(cbuf, " matrix or");
 	if (tp & PRMTP_USERDATA)
 		strcat(cbuf, " userdata or");
 
