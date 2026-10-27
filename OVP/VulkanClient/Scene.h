@@ -191,6 +191,9 @@ public:
 	/// engine plume volumes (null: billboards)
 	class PlumeRenderer *Plumes () { return plumes && plumes->enabled ? plumes.get() : nullptr; }
 	class GroundTracks *Tracks () { return tracks.get(); }
+	/// particle textures of fires and sparks (made when first needed)
+	class VkTexture *FireTexture ();
+	class VkTexture *SparkTexture ();
 	/// reactive mask of this frame (shader-read layout after Render): where
 	/// plumes and particles were drawn, which temporal filters should trust
 	/// their history less
@@ -326,6 +329,7 @@ private:
 
 	// visuals
 	std::map<OBJHANDLE, std::unique_ptr<VObject>> visuals;
+	class VkTexture *fireTex = nullptr, *sparkTex = nullptr;
 	OBJHANDLE hSun = nullptr;
 	float objLight = 1.0f;
 	float objGlassGlow[3] = { 0, 0, 0 };

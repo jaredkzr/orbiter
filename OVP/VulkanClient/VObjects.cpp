@@ -414,11 +414,226 @@ VDebris::VDebris (OBJHANDLE h, Scene *s, DWORD sn)
 	mesh = std::make_unique<VkMesh> (gc->Ctx(), gc->TexMgr(), parts);
 }
 
+VDebris::~VDebris ()
+{
+	ParticleSystem *sys = scene->Particles ();
+	for (Ring *r : { &fire, &smoke, &sparks, &dust })
+		if (r->sys && r->sys == sys) sys->Free (r->first, r->capacity);
+}
+
 void VDebris::Update ()
 {
 	VObject::Update ();
-	DEBRISINFO info;
 	hidden = !oapiGetDebrisInfo (hObj, &info) || (info.flags & DEBRIS_HIDDEN);
+	if (!hidden) Effects ();
+}
+
+double VDebris::FireballRadius () const
+{
+	// (hydrocarbon fireballs: diameter about 5.8 m per cube root of kg)
+	return 2.9 * cbrt (std::max (info.fuel, 0.0));
+}
+
+bool VDebris::Emit (Ring &r, ParticleSystem::Emission e, uint32_t n, double ringLife)
+{
+	ParticleSystem *sys = scene->Particles ();
+	if (!sys || !sys->enabled || !n) return false;
+	if (r.sys != sys) {
+		Ring keep = r;
+		r = Ring{};
+		r.tex = keep.tex, r.emissive = keep.emissive;
+		r.prev = keep.prev, r.havePrev = keep.havePrev, r.accum = keep.accum;
+		uint32_t want = (uint32_t)std::clamp ((double)n * 4.0 + ringLife * 400.0 * sys->density, 512.0, 16384.0);
+		if (!sys->Allocate (want, r.first, r.capacity)) return false;
+		r.sys = sys;
+	}
+	// (particle_emit.comp: a particle emitted at fraction f of the step at
+	// mix (p0, p1, f) moves on with its velocity for the rest of the step:
+	// a source at rest in the global frame moves with the velocity given,
+	// e.g. the planet's orbital velocity, from p1 - vel dt to p1)
+	if (e.p0.x == e.p1.x && e.p0.y == e.p1.y && e.p0.z == e.p1.z) e.p0 = e.p1 - e.vel * e.dt;
+	e.first = r.first, e.capacity = r.capacity, e.head = r.head, e.count = std::min (n, r.capacity);
+	sys->Queue (e);
+	r.head = (r.head + e.count) % r.capacity;
+	r.lastEmit = oapiGetSimTime ();
+	r.life = std::max (r.life, e.lifetime);
+	return true;
+}
+
+void VDebris::Effects ()
+{
+	ParticleSystem *sys = scene->Particles ();
+	double dt = oapiGetSimStep ();
+	if (!sys || !sys->enabled || dt <= 0.0) return;
+	double simt = oapiGetSimTime ();
+	double D = sys->density, sz = std::pow (D, -1.0 / 3.0);
+	VECTOR3 vel;
+	oapiGetGlobalVel (hObj, &vel);
+	OBJHANDLE hp = oapiGetGbodyByName ((char*)"Earth");
+	{   // (the planet below: its atmosphere and up direction)
+		double dmin = 1e100;
+		for (DWORD i = 0; i < oapiGetGbodyCount(); i++) {
+			OBJHANDLE b = oapiGetGbodyByIndex (i);
+			VECTOR3 bp;
+			oapiGetGlobalPos (b, &bp);
+			double d = length (gpos - bp) - oapiGetSize (b);
+			if (d < dmin) dmin = d, hp = b;
+		}
+	}
+	VECTOR3 pp;
+	oapiGetGlobalPos (hp, &pp);
+	VECTOR3 up = unit (gpos - pp);
+	double alt = length (gpos - pp) - oapiGetSize (hp);
+	ATMPARAM atm{};
+	const ATMCONST *ac = oapiGetPlanetAtmConstants (hp);
+	if (ac) oapiGetPlanetAtmParams (hp, length (gpos - pp), 0, 0, &atm);
+	double rho = ac ? atm.rho : 0.0;
+	double drag = ParticleSystem::ExhaustDrag (rho);
+	if (fire.tex == nullptr) fire.tex = scene->FireTexture (), fire.emissive = true;
+	if (sparks.tex == nullptr) sparks.tex = scene->SparkTexture (), sparks.emissive = true;
+	if (smoke.tex == nullptr) smoke.tex = sys->SmokeTexture ();
+	if (dust.tex == nullptr) dust.tex = sys->SmokeTexture ();
+
+	// the fireball: propellant released as it broke off (if seen then)
+	if (!burst && info.fuel > 1.0 && simt - info.created < 0.5) {
+		burst = true;
+		double R = FireballRadius ();
+		flashT = info.created, flashR = R;
+		ParticleSystem::Emission e{};
+		e.p0 = e.p1 = gpos, e.vel = vel, e.dir = -up;
+		e.v0 = 0.2 * R, e.spread = R / 0.6;
+		e.lifetime = 1.6 + 0.04 * R, e.dt = dt;
+		e.size = 0.4 * R * sz, e.growth = 0.5 * R * sz;
+		e.alpha = 0.22, e.slowdown = 3.0;
+		e.emissive = true;
+		// (particles by the fireball's size: a piece's share of the propellant)
+		Emit (fire, e, (uint32_t)std::clamp (6.0 * R * D, 8.0 * D, 160.0 * D), e.lifetime);
+		// the black smoke rising from it
+		ParticleSystem::Emission m{};
+		m.p0 = m.p1 = gpos, m.vel = vel, m.dir = -up;
+		m.v0 = 0.25 * R, m.spread = R / 1.2;
+		m.lifetime = 14.0, m.dt = dt;
+		m.size = 0.6 * R * sz, m.growth = 0.35 * R * sz;
+		m.alpha = 0.6, m.slowdown = 1.0;
+		m.tinted = true, m.volumetric = true;
+		m.albedo[0] = m.albedo[1] = m.albedo[2] = 0.07f;
+		Emit (smoke, m, (uint32_t)std::clamp (3.0 * R * D, 6.0 * D, 80.0 * D), m.lifetime);
+	}
+	// on the ground: a scorch mark where it burned or crashed
+	if (!scorched && alt < 3.0 * size + 2.0 && (info.fuel > 1.0 || info.impact > 8.0) && scene->Tracks ()) {
+		scorched = true;
+		double R = info.fuel > 1.0 ? std::max (0.8 * FireballRadius (), 2.0 * size) : 1.2 * size;
+		scene->Tracks ()->Scorch (hp, gpos - up * (alt + 0.0), up, R, 0.04 * R);
+	}
+
+	// burning: fire and black smoke trailing from it
+	if (info.burn > 0.0) {
+		double f = std::min (1.0, info.burn / 4.0); // (dying down)
+		double s = std::max (0.6 * size, 0.5);
+		if (!fire.havePrev) fire.prev = gpos - vel * dt;
+		fire.accum += 45.0 * D * f * dt;
+		uint32_t n = (uint32_t)fire.accum;
+		fire.accum -= n;
+		if (n) {
+			ParticleSystem::Emission e{};
+			e.p0 = fire.prev, e.p1 = gpos, e.vel = vel, e.dir = -up;
+			e.v0 = 2.0, e.spread = 1.5;
+			e.lifetime = 0.7, e.dt = dt;
+			e.size = s * sz, e.growth = 0.8 * s * sz;
+			e.alpha = 0.35 * f, e.slowdown = std::max (drag, 0.5);
+			e.emissive = true;
+			Emit (fire, e, n, 0.7);
+		}
+		fire.prev = gpos, fire.havePrev = true;
+		if (rho > 1e-4) { // (smoke in air)
+			if (!smoke.havePrev) smoke.prev = gpos - vel * dt;
+			smoke.accum += 20.0 * D * f * dt;
+			uint32_t m = (uint32_t)smoke.accum;
+			smoke.accum -= m;
+			if (m) {
+				ParticleSystem::Emission e{};
+				e.p0 = smoke.prev, e.p1 = gpos, e.vel = vel, e.dir = -up;
+				e.v0 = 1.5, e.spread = 1.0;
+				e.lifetime = 12.0, e.dt = dt;
+				e.size = 1.2 * s * sz, e.growth = 0.6 * s * sz;
+				e.alpha = 0.7 * f, e.slowdown = std::max (drag, 0.3);
+				e.tinted = true, e.volumetric = true;
+				e.albedo[0] = e.albedo[1] = e.albedo[2] = 0.08f;
+				Emit (smoke, e, m, 12.0);
+			}
+			smoke.prev = gpos, smoke.havePrev = true;
+		}
+	} else fire.havePrev = smoke.havePrev = false;
+
+	// sliding on the ground: sparks (and a gouge); hitting it: dust
+	VECTOR3 contact = gpos - up * std::min (alt, 0.7 * size);
+	if (info.scrape > 3.0) {
+		double v = info.scrape;
+		sparks.accum += std::min (40.0 * v, 600.0) * D * dt;
+		uint32_t n = (uint32_t)sparks.accum;
+		sparks.accum -= n;
+		if (n) {
+			ParticleSystem::Emission e{};
+			e.p0 = e.p1 = contact, e.vel = vel, e.dir = -up;
+			e.v0 = 0.25 * v, e.spread = 0.35 * v;
+			e.lifetime = 0.5, e.dt = dt;
+			e.size = 0.06 * sz, e.growth = 0.0;
+			e.alpha = 1.0, e.slowdown = 0.5;
+			e.emissive = true, e.ballistic = true;
+			Emit (sparks, e, n, 0.5);
+		}
+		if (GroundTracks *gt = scene->Tracks ()) gt->Contact (hObj, 0, hp, contact, up, 0.25 * size, 0.08);
+	} else if (GroundTracks *gt = scene->Tracks ()) gt->NoContact (hObj, 0);
+	if (info.impact > 1.5 && rho > 1e-4) {
+		uint32_t n = (uint32_t)std::min (info.impact * 6.0 * D, 400.0);
+		ParticleSystem::Emission e{};
+		e.p0 = e.p1 = contact, e.vel = vel, e.dir = -up;
+		e.v0 = 0.3 * info.impact, e.spread = 0.6 * info.impact;
+		e.lifetime = 6.0, e.dt = dt;
+		e.size = 0.8 * size * sz, e.growth = 0.5 * size * sz;
+		e.alpha = 0.5, e.slowdown = 1.5;
+		e.tinted = true, e.cold = true, e.ballistic = false, e.planar = true, e.volumetric = true;
+		e.albedo[0] = 0.6f, e.albedo[1] = 0.53f, e.albedo[2] = 0.43f;
+		Emit (dust, e, n, 6.0);
+	}
+}
+
+void VDebris::CollectLights (std::vector<LightSource> &lights)
+{
+	// the fireball's light, fading over a second and a half; then the
+	// flames while it burns
+	double simt = oapiGetSimTime ();
+	double t = simt - flashT;
+	float I = 0.0f;
+	double range = 0.0;
+	if (t >= 0.0 && t < 1.5) {
+		I = (float)(std::min (1.0, flashR / 10.0) * 40.0 * exp (-3.0 * t));
+		range = 15.0 * std::max (flashR, 2.0);
+	}
+	if (info.burn > 0.0) {
+		float b = (float)(4.0 * std::min (1.0, info.burn / 4.0) * (0.85 + 0.15 * sin (simt * 23.0) * sin (simt * 7.3)));
+		if (b > I) I = b, range = 12.0 * std::max (size, 1.0);
+	}
+	if (I <= 0.01f) return;
+	LightSource l{};
+	l.pos = gpos, l.dir = _V(0, 0, 1);
+	l.col[0] = I, l.col[1] = 0.55f * I, l.col[2] = 0.2f * I;
+	l.range = range;
+	l.att[0] = 1.0, l.att[1] = 0.0, l.att[2] = 1.0 / std::max (range * range * 0.01, 1.0);
+	l.spot = false;
+	l.owner = id;
+	l.shadowOfs = 0.0;
+	lights.push_back (l);
+}
+
+void VDebris::DrawParticles ()
+{
+	ParticleSystem *sys = scene->Particles ();
+	if (!sys) return;
+	double simt = oapiGetSimTime ();
+	for (const Ring *r : { &smoke, &dust, &fire, &sparks })
+		if (r->sys == sys && simt - r->lastEmit < 1.5 * r->life + 0.1)
+			sys->Draw (r->first, r->capacity, r->tex, r->emissive, scene->FrameSet ());
 }
 
 void VDebris::Render (RenderPass pass)
@@ -427,7 +642,16 @@ void VDebris::Render (RenderPass pass)
 	Mat4 mv = scene->ModelView (gpos, grot);
 	scene->Sunlight (gpos);
 	if (pass == RenderPass::Depth) SetMotion ();
+	// hot (burned off, burning): glowing, most on its windward side
+	float glow = (float)std::clamp ((info.temp - 900.0) / 700.0, 0.0, 1.0);
+	if (glow > 0.0f) {
+		VECTOR3 v;
+		oapiGetGlobalVel (hObj, &v);
+		VECTOR3 d = length (v) > 1.0 ? unit (v) : _V(0, 1, 0);
+		scene->SetObjectHeat (scene->ViewDir (d), glow);
+	}
 	scene->DrawMesh (mesh.get(), mv, pass);
+	if (glow > 0.0f) scene->SetObjectHeat (_V(0, 0, 0), 0.0f);
 }
 
 void VDebris::RenderShadow (ShadowMap &sm)

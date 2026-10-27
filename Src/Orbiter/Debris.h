@@ -17,10 +17,12 @@
 #define __DEBRIS_H
 
 #include "Vesselbase.h"
+#include "TimeData.h"
 #include <string>
 #include <vector>
 
 class Mesh;
+extern TimeData td;
 
 class Debris: public VesselBase {
 	friend class Replay; // (its states shown in the instant replay)
@@ -50,6 +52,19 @@ public:
 	bool AtRest () const { return fstatus == FLIGHTSTATUS_LANDED; }
 	double CreatedT () const { return created_t; } ///< [s] simulation time it broke off
 	DWORD Serial () const { return serial; }        ///< (unique: handles may be reused)
+
+	/// Propellant burning in it [kg] (released when its vessel broke up),
+	/// burning for burnTime [s]
+	void Ignite (double fuel, double burnTime);
+	double Fuel () const { return fuel; }
+	double BurnLeft () const;                        ///< [s] (0: not burning)
+	/// Its temperature [K] when it broke off (hot parts, burned off)
+	void SetTemp (double T) { temp0 = T, tempT = td.SimT1; }
+	double Temp () const;                            ///< [K] cooling down
+	/// Ground contacts of the last step: the fastest sliding [m/s] and the
+	/// velocity change of the impact [m/s]
+	double Scrape () const { return scrape; }
+	double Impact () const { return impact; }
 	bool Hidden () const { return hidden; }        ///< not shown (instant replay: not broken off yet)
 	void SetHidden (bool h) { hidden = h; }
 
@@ -80,6 +95,7 @@ protected:
 	void CollectGroundContacts (const StateVectors &s, const StateVectors &sb, int body, double h,
 		std::vector<contact::Point> &pts) const override;
 	void WakeFromContact () override { wake = true; }
+	void ContactsResolved (const std::vector<contact::Point> &pts, int index, double h) override;
 	void ContactStateChanged () override;
 	TOUCHDOWN_VTX *HullvtxFirst () override { return nullptr; }
 	TOUCHDOWN_VTX *HullvtxNext () override { return nullptr; }
@@ -98,6 +114,9 @@ private:
 	double proxyCheckT = 0.0;  // next check for the proxy bodies
 	double created_t = 0.0;    // [s] simulation time it broke off
 	DWORD serial;
+	double fuel = 0.0, burnEnd = 0.0;
+	double temp0 = 0.0, tempT = 0.0;
+	double scrape = 0.0, impact = 0.0;
 	bool hidden = false;
 };
 

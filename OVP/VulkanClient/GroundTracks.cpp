@@ -46,14 +46,24 @@ void GroundTracks::Contact (OBJHANDLE vessel, int idx, OBJHANDLE body, const VEC
 	Point &p = points[{ vessel, idx }];
 	if (!p.contact || p.body != body) {
 		// touchdown: the imprint of the gear (wider and a little deeper)
-		Add ({ body, lp, lp, ln, 1.6 * halfWidth, 1.3 * depth, true });
+		Add ({ body, lp, lp, ln, 1.6 * halfWidth, 1.3 * depth, 1 });
 		p.body = body, p.last = lp, p.contact = true;
 		return;
 	}
 	double d = length (lp - p.last);
 	if (d < STEP) return;
-	if (d < JUMP) Add ({ body, p.last, lp, ln, halfWidth, depth, false });
+	if (d < JUMP) Add ({ body, p.last, lp, ln, halfWidth, depth, 0 });
 	p.last = lp;
+}
+
+void GroundTracks::Scorch (OBJHANDLE body, const VECTOR3 &gpos, const VECTOR3 &gnormal, double radius, double depth)
+{
+	VECTOR3 bp;
+	MATRIX3 R;
+	oapiGetGlobalPos (body, &bp);
+	oapiGetRotationMatrix (body, &R);
+	VECTOR3 lp = tmul (R, gpos - bp), ln = unit (tmul (R, gnormal));
+	Add ({ body, lp, lp, ln, radius, depth, 2 });
 }
 
 void GroundTracks::NoContact (OBJHANDLE vessel, int idx)
@@ -99,7 +109,7 @@ void GroundTracks::ForTile (OBJHANDLE body, const VECTOR3 &ppos, const MATRIX3 &
 		GpuSeg &e = g[used + n++];
 		e.a[0] = (float)a.x, e.a[1] = (float)a.y, e.a[2] = (float)a.z, e.a[3] = (float)s.hw;
 		e.b[0] = (float)b.x, e.b[1] = (float)b.y, e.b[2] = (float)b.z, e.b[3] = (float)s.depth;
-		e.up[0] = (float)u.x, e.up[1] = (float)u.y, e.up[2] = (float)u.z, e.up[3] = s.imprint ? 1.0f : 0.0f;
+		e.up[0] = (float)u.x, e.up[1] = (float)u.y, e.up[2] = (float)u.z, e.up[3] = (float)s.kind;
 	}
 	out[1] = (float)n;
 	used += n;

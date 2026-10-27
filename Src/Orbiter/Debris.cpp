@@ -95,6 +95,42 @@ Debris::~Debris ()
 {
 }
 
+void Debris::Ignite (double f, double burnTime)
+{
+	fuel = f;
+	burnEnd = td.SimT1 + burnTime;
+	temp0 = std::max (temp0, 1200.0), tempT = td.SimT1;
+}
+
+double Debris::BurnLeft () const
+{
+	return std::max (0.0, burnEnd - td.SimT0);
+}
+
+double Debris::Temp () const
+{
+	// (cooling with a time constant of 30 s towards the air's temperature;
+	// burning: at least 1000 K)
+	double Ta = sp.is_in_atm && sp.atmT > 0.0 ? sp.atmT : 250.0;
+	double T = temp0 > Ta ? Ta + (temp0 - Ta) * exp (-(td.SimT0 - tempT) / 30.0) : Ta;
+	return BurnLeft() > 0.0 ? std::max (T, 1000.0) : T;
+}
+
+void Debris::ContactsResolved (const std::vector<contact::Point> &pts, int index, double h)
+{
+	// the fastest sliding contact (sparks) and the impact (dust)
+	scrape = impact = 0.0;
+	double Jn = 0.0;
+	for (const contact::Point &p : pts) {
+		if (p.a != index || p.b >= 0 || p.ln <= 0.0) continue;
+		Vector v (s1->vel + mul (s1->R, crossp (tmul (s1->R, p.ra), s1->omega)) - p.vs);
+		Vector vt (v - p.n * dotp (v, p.n));
+		scrape = std::max (scrape, vt.length());
+		Jn += p.ln;
+	}
+	impact = Jn / mass;
+}
+
 void Debris::AddVelocity (const Vector &dv)
 {
 	if (fstatus == FLIGHTSTATUS_LANDED) wake = true;

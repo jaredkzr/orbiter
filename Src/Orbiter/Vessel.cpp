@@ -5089,7 +5089,9 @@ void Vessel::UpdateStructuralLoads ()
 		sprintf (cbuf, "%s: %s broke off at %0.1f g", name.c_str(), parts[j].name.c_str(), g);
 		if (this == g_focusobj) g_pOrbiter->ShowInfoMessage (cbuf);
 		else LOGOUT ("%s", cbuf);
+		last_debris = nullptr;
 		BreakPart ((int)j, 0.5);
+		if (last_debris && j < part_temp.size()) last_debris->SetTemp (part_temp[j]);
 	}
 }
 
@@ -5139,7 +5141,12 @@ void Vessel::UpdateHeating ()
 		sprintf (cbuf, "%s: %s burned off (%0.0f K)", name.c_str(), parts[hottest].name.c_str(), part_temp[hottest]);
 		if (this == g_focusobj) g_pOrbiter->ShowInfoMessage (cbuf);
 		else LOGOUT ("%s", cbuf);
+		last_debris = nullptr;
 		BreakPart (hottest, 0.5);
+		if (last_debris) {
+			last_debris->SetTemp (part_temp[hottest]);
+			last_debris->Ignite (0.0, 3.0);
+		}
 	}
 }
 
@@ -5177,14 +5184,20 @@ void Vessel::Destroy (const char *reason)
 	char cbuf[256];
 	sprintf (cbuf, "%s was destroyed: %s.", name.c_str(), reason);
 	LOGOUT ("%s", cbuf);
-	// every part a piece of its own, flying apart; then the core
+	// every part a piece of its own, flying apart; then the core. The
+	// propellant left burns in them (shared out by mass: the fireball)
+	double fuel = mass - StructMass() - payload_mass, mleft = std::max (StructMass(), 1.0);
 	breaking_up = true;
 	double mmax = 0.0;
 	for (size_t j = parts.size(); j-- > 0; ) {
 		if (part_lost[j]) continue;
 		last_debris = nullptr;
 		BreakPart ((int)j, j ? 2.0 : 0.0);
-		if (last_debris && last_debris->Mass() > mmax) mmax = last_debris->Mass(), wreck = last_debris;
+		if (!last_debris) continue;
+		if (last_debris->Mass() > mmax) mmax = last_debris->Mass(), wreck = last_debris;
+		double f = std::max (fuel, 0.0) * last_debris->Mass() / mleft;
+		if (f > 1.0) last_debris->Ignite (f, std::clamp (4.0 + 0.02 * f, 4.0, 60.0));
+		if ((int)j < (int)part_temp.size()) last_debris->SetTemp (part_temp[j]);
 	}
 	breaking_up = false;
 	destroyed_t = td.SimT0;

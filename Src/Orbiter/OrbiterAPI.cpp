@@ -172,6 +172,12 @@ DLLEXPORT bool oapiGetDebrisInfo (OBJHANDLE hDebris, DEBRISINFO *info)
 	info->flags = (d->AtRest() ? DEBRIS_ATREST : 0) | (d->Hidden() ? DEBRIS_HIDDEN : 0);
 	info->serial = d->Serial();
 	info->ngroup = (DWORD)d->Groups().size();
+	info->created = d->CreatedT();
+	info->fuel = d->Fuel();
+	info->burn = d->BurnLeft();
+	info->temp = d->Temp();
+	info->scrape = d->Scrape();
+	info->impact = d->Impact();
 	return true;
 }
 

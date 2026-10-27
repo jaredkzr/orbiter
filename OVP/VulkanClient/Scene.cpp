@@ -743,6 +743,53 @@ void Scene::BuildSphere ()
 }
 
 // ======================================================================
+// Particle textures of fires and sparks: soft round puffs, white-yellow at
+// the centre to orange and red at the rim (fire: billowing), additive
+
+VkTexture *Scene::FireTexture ()
+{
+	// (four puffs in the quadrants, as the particles pick one: SmokeTexture)
+	if (fireTex) return fireTex;
+	const int Q = 128, N = 2 * Q;
+	std::vector<uint8_t> px (N * N * 4);
+	for (int y = 0; y < N; y++)
+		for (int x = 0; x < N; x++) {
+			int k = (y / Q) * 2 + (x / Q);
+			double u = ((x % Q) + 0.5) / Q * 2.0 - 1.0, v = ((y % Q) + 0.5) / Q * 2.0 - 1.0;
+			double r = sqrt (u*u + v*v), a = atan2 (v, u) + 1.7 * k;
+			double billow = 0.14 * sin (5.0 * a + 3.0 * r + k) + 0.09 * sin ((11.0 + k) * a - 7.0 * r) + 0.05 * sin (23.0 * a + 13.0 * r);
+			double t = std::clamp (r * (1.0 + billow), 0.0, 1.0);
+			double alpha = pow (std::max (1.0 - t, 0.0), 1.6);
+			double heat = std::max (1.0 - 1.7 * t, 0.0); // (hot core)
+			uint8_t *p = &px[(y * N + x) * 4];
+			p[0] = (uint8_t)(255.0 * std::min (1.0, 0.95 + 0.05 * heat));
+			p[1] = (uint8_t)(255.0 * std::min (1.0, 0.32 + 0.6 * heat));
+			p[2] = (uint8_t)(255.0 * std::min (1.0, 0.06 + 0.55 * heat * heat));
+			p[3] = (uint8_t)(255.0 * alpha);
+		}
+	fireTex = gc->TexMgr()->CreateRGBA (N, N, px.data());
+	return fireTex;
+}
+
+VkTexture *Scene::SparkTexture ()
+{
+	if (sparkTex) return sparkTex;
+	const int Q = 16, N = 2 * Q;
+	std::vector<uint8_t> px (N * N * 4);
+	for (int y = 0; y < N; y++)
+		for (int x = 0; x < N; x++) {
+			double u = ((x % Q) + 0.5) / Q * 2.0 - 1.0, v = ((y % Q) + 0.5) / Q * 2.0 - 1.0;
+			double r = sqrt (u*u + v*v);
+			double alpha = exp (-r * r * 9.0);
+			uint8_t *p = &px[(y * N + x) * 4];
+			p[0] = 255, p[1] = (uint8_t)(255.0 * (0.75 + 0.25 * alpha)), p[2] = (uint8_t)(255.0 * (0.35 + 0.5 * alpha));
+			p[3] = (uint8_t)(255.0 * alpha);
+		}
+	sparkTex = gc->TexMgr()->CreateRGBA (N, N, px.data());
+	return sparkTex;
+}
+
+// ======================================================================
 // Visuals
 
 VObject *Scene::GetVisual (OBJHANDLE hObj)

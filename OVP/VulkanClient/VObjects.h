@@ -11,6 +11,7 @@
 #include "VkMath.h"
 #include "Scene.h"
 #include "Clouds.h"
+#include "Particles.h"
 #include <memory>
 #include <vector>
 
@@ -141,15 +142,39 @@ private:
 class VDebris : public VObject {
 public:
 	VDebris (OBJHANDLE hObj, Scene *scene, DWORD serial);
+	~VDebris ();
 	DWORD Serial () const { return serial; }
 	void Update () override;
 	void Render (RenderPass pass) override;
 	void RenderShadow (ShadowMap &sm) override;
+	void CollectLights (std::vector<LightSource> &lights) override;
+	void DrawParticles () override;
 
 private:
 	DWORD serial;
 	bool hidden = false;
 	std::unique_ptr<VkMesh> mesh;
+	DEBRISINFO info{};
+	/// effects: the fireball when it broke off (propellant burning), the
+	/// fire and smoke while it burns, sparks where it slides on the ground,
+	/// dust where it hits it
+	struct Ring {
+		class ParticleSystem *sys = nullptr;
+		uint32_t first = 0, capacity = 0, head = 0;
+		double accum = 0.0, lastEmit = -1e30, life = 0.0;
+		bool havePrev = false;
+		VECTOR3 prev{};
+		VkTexture *tex = nullptr;
+		bool emissive = false;
+	};
+	Ring fire, smoke, sparks, dust;
+	bool burst = false;      // the fireball (once)
+	double flashT = -1e30;   // [s] its flash
+	double flashR = 0.0;     // [m] fireball radius
+	bool scorched = false;   // (a scorch mark made)
+	void Effects ();
+	bool Emit (Ring &r, ParticleSystem::Emission e, uint32_t n, double ringLife);
+	double FireballRadius () const;
 };
 
 // -----------------------------------------------------------------------

@@ -144,6 +144,23 @@ void TrackShading(vec3 P, inout vec3 N, inout vec3 base)
 	if (best >= 1.8) return;
 	float x = best, hw = s.a.w, depth = s.b.w;
 	vec3 lat = x > 1e-4 ? off / (x * hw) : vec3(0.0);
+	if (s.up.w > 1.5) {
+		// scorch mark: blackened ground, ragged at its rim (a hash of the
+		// direction), a shallow crater with a low rim
+		float ang = atan(dot(lat, cross(s.up.xyz, normalize(abs(s.up.x) < 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0)))),
+			dot(lat, normalize(abs(s.up.x) < 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0))));
+		float rag = 0.15 * sin(ang * 7.0 + hw) + 0.1 * sin(ang * 13.0 + 2.0 * hw) + 0.06 * sin(ang * 29.0);
+		float burn = 1.0 - smoothstep(0.55 + rag, 1.05 + rag, x);
+		base *= mix(1.0, 0.12, burn);
+		float qc = max(1.0 - x * x, 0.0);
+		float ec = exp(-pow((x - 1.05) / 0.25, 2.0));
+		float dh = 4.0 * x * qc * 0.5 - 0.3 * ec * 2.0 * (x - 1.05) / 0.0625;
+		vec3 g = lat * (depth * dh / hw);
+		g -= s.up.xyz * dot(g, s.up.xyz);
+		g -= N * dot(g, N);
+		N = normalize(N - g);
+		return;
+	}
 	// profile [depths]: groove -(1 - x^2)^2, edges pushed up beside it
 	float q = max(1.0 - x * x, 0.0);
 	float e = exp(-pow((x - 1.2) / 0.3, 2.0));

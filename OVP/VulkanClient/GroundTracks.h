@@ -5,7 +5,8 @@
 // Tracks of wheels and imprints of landing gear on bare ground: segments
 // recorded in the body frame where a vessel's touchdown points meet the
 // terrain, shaded by the tile shader as grooves with raised edges
-// (tile_main.glsl's TrackShading). Per frame, the segments near each drawn
+// (tile_main.glsl's TrackShading), and scorch marks of fires and crashes.
+// Per frame, the segments near each drawn
 // tile are written in view space into a storage buffer (frame set binding
 // 8); the tile's push constants give its range. Not saved with the
 // scenario.
@@ -26,7 +27,7 @@ public:
 	struct GpuSeg {
 		float a[4];  // start; w: half width [m]
 		float b[4];  // end; w: depth [m]
-		float up[4]; // surface normal; w: 0 track, 1 imprint
+		float up[4]; // surface normal; w: 0 track, 1 imprint, 2 scorch mark
 	};
 	static constexpr uint32_t MAX_GPU = 4096;  // entries per frame (segments per tile, repeated)
 	static constexpr size_t MAX_SEGS = 4096;   // recorded segments (the oldest go first)
@@ -41,6 +42,9 @@ public:
 	void Contact (OBJHANDLE vessel, int idx, OBJHANDLE body, const VECTOR3 &gpos, const VECTOR3 &gnormal, double halfWidth, double depth);
 	/// ... not on the ground (or on a base)
 	void NoContact (OBJHANDLE vessel, int idx);
+	/// A scorch mark (a fireball on the ground, a crash): radius, depth of
+	/// the crater [m]
+	void Scorch (OBJHANDLE body, const VECTOR3 &gpos, const VECTOR3 &gnormal, double radius, double depth);
 
 	/// Start a frame (camera position and rotation, global frame)
 	void BeginFrame (uint32_t frame, const VECTOR3 &camPos, const MATRIX3 &camRot);
@@ -50,7 +54,7 @@ public:
 	void ForTile (OBJHANDLE body, const VECTOR3 &ppos, const MATRIX3 &prot, const VECTOR3 &centreDir, double angRadius, float out[2]);
 
 private:
-	struct Seg { OBJHANDLE body; VECTOR3 a, b, n; double hw, depth; bool imprint; };
+	struct Seg { OBJHANDLE body; VECTOR3 a, b, n; double hw, depth; int kind; }; // (kind: as GpuSeg::up.w)
 	struct Point { OBJHANDLE body = nullptr; VECTOR3 last{}; bool contact = false; };
 	vkc::Context *ctx = nullptr;
 	std::deque<Seg> segs;

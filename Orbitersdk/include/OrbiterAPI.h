@@ -2181,6 +2181,12 @@ typedef struct {
 	DWORD flags;       ///< DEBRIS_ATREST, DEBRIS_HIDDEN
 	DWORD serial;      ///< unique number of the piece (handles of deleted pieces may be reused)
 	DWORD ngroup;      ///< number of groups of triangles (oapiGetDebrisGroup)
+	double created;    ///< simulation time it broke off [s]
+	double fuel;       ///< propellant released into it when its vessel broke up [kg] (the fireball)
+	double burn;       ///< how long it goes on burning [s] (0: not burning)
+	double temp;       ///< its temperature [K] (hot when burned off or burning; cooling)
+	double scrape;     ///< in the last step: the fastest sliding of a ground contact [m/s] (sparks)
+	double impact;     ///< in the last step: its velocity change by ground contacts [m/s] (dust)
 } DEBRISINFO;
 
 /**
