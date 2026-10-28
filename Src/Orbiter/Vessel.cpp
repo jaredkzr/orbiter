@@ -42,6 +42,8 @@
 #include "Debris.h"
 #include "Replay.h"
 #include <fstream>
+#include <functional>
+#include <random>
 #include <iomanip>
 #include <stdio.h>
 #include <stdlib.h>
@@ -4901,6 +4903,19 @@ int Vessel::BreakPart (int part, double vsep)
 	if (d && vsep > 0.0 && M > m) {
 		d->AddVelocity (dir * (vsep * (M - m) / M));
 		AddVelocity (dir * (-vsep * m / M));
+	}
+	// torn off, it turns: about an axis at random, faster when pushed off
+	// harder and the smaller it is (its own frame)
+	const double BREAK_SPIN = 1.5; // [rad/s per m/s, m]
+	if (d) {
+		uint64_t hs = std::hash<std::string>() (dname) ^ (uint64_t)(td.SimT1 * 1e3);
+		std::mt19937_64 rng (hs);
+		std::normal_distribution<double> nd;
+		Vector ax (nd (rng), nd (rng), nd (rng));
+		if (ax.length() > 1e-9) {
+			double w = BREAK_SPIN * (0.5 + vsep) / std::max (d->Size(), 1.0);
+			d->SetAngVel (d->AngularVelocity() + ax.unit() * w);
+		}
 	}
 
 	for (int p : piece) part_lost[p] = 1, lost_log.push_back ({ td.SimT1, p });

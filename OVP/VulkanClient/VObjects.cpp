@@ -827,6 +827,13 @@ bool VDebris::Emit (Ring &r, ParticleSystem::Emission e, uint32_t n, double ring
 	return true;
 }
 
+namespace {
+	// the fireball's fire and smoke slow down alike in the air [1/s]
+	constexpr double FIREBALL_SLOWDOWN = 3.0;
+	// a burning piece's flames trail this many times its size behind it
+	constexpr double FLAME_LENGTH = 4.0;
+}
+
 void VDebris::Effects ()
 {
 	ParticleSystem *sys = scene->Particles ();
@@ -853,7 +860,7 @@ void VDebris::Effects ()
 	double alt = length (gpos - pp) - oapiGetSize (hp);
 	ATMPARAM atm{};
 	const ATMCONST *ac = oapiGetPlanetAtmConstants (hp);
-	if (ac) oapiGetPlanetAtmParams (hp, length (gpos - pp), 0, 0, &atm);
+	if (ac) oapiGetPlanetAtmParams (hp, length (gpos - pp), &atm); // (by radius)
 	double rho = ac ? atm.rho : 0.0;
 	double drag = ParticleSystem::ExhaustDrag (rho);
 	if (fire.tex == nullptr) fire.tex = scene->FireTexture (), fire.emissive = true;
@@ -869,9 +876,9 @@ void VDebris::Effects ()
 		ParticleSystem::Emission e{};
 		e.p0 = e.p1 = gpos, e.vel = vel, e.dir = -up;
 		e.v0 = 0.2 * R, e.spread = R / 0.6;
-		e.lifetime = 1.6 + 0.04 * R, e.dt = dt;
+		e.lifetime = 1.2 + 0.02 * R, e.dt = dt;
 		e.size = 0.4 * R * sz, e.growth = 0.5 * R * sz;
-		e.alpha = 0.22, e.slowdown = 3.0;
+		e.alpha = 0.22, e.slowdown = FIREBALL_SLOWDOWN;
 		e.emissive = true;
 		// (particles by the fireball's size: a piece's share of the propellant)
 		Emit (fire, e, (uint32_t)std::clamp (6.0 * R * D, 8.0 * D, 160.0 * D), e.lifetime);
@@ -881,7 +888,7 @@ void VDebris::Effects ()
 		m.v0 = 0.25 * R, m.spread = R / 1.2;
 		m.lifetime = 14.0, m.dt = dt;
 		m.size = 0.6 * R * sz, m.growth = 0.35 * R * sz;
-		m.alpha = 0.6, m.slowdown = 1.0;
+		m.alpha = 0.6, m.slowdown = FIREBALL_SLOWDOWN; // (staying with its fire)
 		m.tinted = true, m.volumetric = true;
 		m.albedo[0] = m.albedo[1] = m.albedo[2] = 0.07f;
 		Emit (smoke, m, (uint32_t)std::clamp (3.0 * R * D, 6.0 * D, 80.0 * D), m.lifetime);
@@ -893,19 +900,33 @@ void VDebris::Effects ()
 		scene->Tracks ()->Scorch (hp, gpos - up * (alt + 0.0), up, R, 0.04 * R);
 	}
 
-	// burning: fire and black smoke trailing from it
+	// burning: fire and black smoke trailing from it (by the second, and
+	// by the distance it moves through the air: an unbroken trail when fast)
+	VECTOR3 airVel = vel;
+	{
+		VECTOR3 bv;
+		oapiGetGlobalVel (hp, &bv);
+		MATRIX3 Rp;
+		oapiGetRotationMatrix (hp, &Rp);
+		VECTOR3 ax = mul (Rp, _V(0, 1, 0));
+		double prot = oapiGetPlanetPeriod (hp);
+		VECTOR3 rot = prot != 0.0 ? ax * (2.0 * PI / prot) : _V(0, 0, 0);
+		airVel = vel - (bv + crossp (rot, gpos - pp)); // (co-rotating air)
+	}
+	double airSpd = rho > 1e-6 ? length (airVel) : 0.0;
 	if (info.burn > 0.0) {
 		double f = std::min (1.0, info.burn / 4.0); // (dying down)
 		double s = std::max (0.6 * size, 0.5);
 		if (!fire.havePrev) fire.prev = gpos - vel * dt;
-		fire.accum += 45.0 * D * f * dt;
+		fire.accum += (45.0 + airSpd / (0.35 * s)) * D * f * dt;
 		uint32_t n = (uint32_t)fire.accum;
 		fire.accum -= n;
 		if (n) {
 			ParticleSystem::Emission e{};
 			e.p0 = fire.prev, e.p1 = gpos, e.vel = vel, e.dir = -up;
 			e.v0 = 2.0, e.spread = 1.5;
-			e.lifetime = 0.7, e.dt = dt;
+			// (the flames trail a few times its size behind it, however fast)
+			e.lifetime = std::clamp (FLAME_LENGTH * s / std::max (airSpd, 1.0), 0.15, 0.7), e.dt = dt;
 			e.size = s * sz, e.growth = 0.8 * s * sz;
 			e.alpha = 0.35 * f, e.slowdown = std::max (drag, 0.5);
 			e.emissive = true;
@@ -914,7 +935,7 @@ void VDebris::Effects ()
 		fire.prev = gpos, fire.havePrev = true;
 		if (rho > 1e-4) { // (smoke in air)
 			if (!smoke.havePrev) smoke.prev = gpos - vel * dt;
-			smoke.accum += 20.0 * D * f * dt;
+			smoke.accum += std::min (20.0 + airSpd / (0.3 * s), 400.0) * D * f * dt;
 			uint32_t m = (uint32_t)smoke.accum;
 			smoke.accum -= m;
 			if (m) {
@@ -923,8 +944,8 @@ void VDebris::Effects ()
 				e.v0 = 1.5, e.spread = 1.0;
 				e.lifetime = 12.0, e.dt = dt;
 				e.size = 1.2 * s * sz, e.growth = 0.6 * s * sz;
-				e.alpha = 0.7 * f, e.slowdown = std::max (drag, 0.3);
-				e.tinted = true, e.volumetric = true;
+				e.alpha = 0.5 * f, e.slowdown = std::max (drag, 0.3);
+				e.tinted = true; // (sprites: thin trails, the volume would draw them in beads)
 				e.albedo[0] = e.albedo[1] = e.albedo[2] = 0.08f;
 				Emit (smoke, e, m, 12.0);
 			}

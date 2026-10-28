@@ -110,7 +110,12 @@ private:
 	std::vector<collision::Hull> hulls;
 	double hullBound = 0.0;    // bounding radius of the hulls
 	double area = 0.0;         // [m^2] surface area of its triangles
-	Vector Fdrag, Mdrag;       // drag force (global) and torque (body frame) of the step
+	Vector Fdrag, Mdrag;       // aerodynamic force (global) and torque (body frame) of the step
+	/// its surface in panels for the aerodynamic forces (a part of its
+	/// triangles each: centre, normal, area; its frame)
+	struct Panel { Vector c, n; double a; };
+	std::vector<Panel> panels;
+	void MakePanels ();
 	mutable bool touching = false;
 	bool wake = false;
 	double restTime = 0.0;     // [s] how long it has been still on the ground

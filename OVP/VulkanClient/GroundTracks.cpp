@@ -97,10 +97,11 @@ void GroundTracks::ForTile (OBJHANDLE body, const VECTOR3 &ppos, const MATRIX3 &
 	GpuSeg *g = (GpuSeg*)buf[frame].mapped;
 	uint32_t n = 0;
 	double R = oapiGetSize (body);
-	double cosLim = cos (std::min (angRadius * 1.2 + 2.0 / R, PI));
 	for (uint32_t i : cand) {
 		const Seg &s = segs[i];
-		// (both ends tested: segments are short against tiles)
+		// (both ends tested: segments are short against tiles; their width
+		// too, as wide as the shading reaches: scorch marks are wide)
+		double cosLim = cos (std::min (angRadius * 1.2 + (2.0 + 1.8 * s.hw) / R, PI));
 		if (dotp (unit (s.a), centreDir) < cosLim && dotp (unit (s.b), centreDir) < cosLim) continue;
 		if (used + n >= MAX_GPU) break;
 		VECTOR3 a = tmul (camRot, ppos + mul (prot, s.a) - camPos);

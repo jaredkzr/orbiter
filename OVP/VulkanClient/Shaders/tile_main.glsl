@@ -145,13 +145,15 @@ void TrackShading(vec3 P, inout vec3 N, inout vec3 base)
 	float x = best, hw = s.a.w, depth = s.b.w;
 	vec3 lat = x > 1e-4 ? off / (x * hw) : vec3(0.0);
 	if (s.up.w > 1.5) {
-		// scorch mark: blackened ground, ragged at its rim (a hash of the
-		// direction), a shallow crater with a low rim
+		// scorch mark: blackened ground, most at its centre, its rim
+		// irregular (a few lobes, by the direction; phases from its size)
+		// and soft, a shallow crater with a low rim
 		float ang = atan(dot(lat, cross(s.up.xyz, normalize(abs(s.up.x) < 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0)))),
 			dot(lat, normalize(abs(s.up.x) < 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0))));
-		float rag = 0.15 * sin(ang * 7.0 + hw) + 0.1 * sin(ang * 13.0 + 2.0 * hw) + 0.06 * sin(ang * 29.0);
-		float burn = 1.0 - smoothstep(0.55 + rag, 1.05 + rag, x);
-		base *= mix(1.0, 0.12, burn);
+		float rag = 0.12 * sin(ang * 2.0 + 1.7 * hw) + 0.08 * sin(ang * 3.0 + 2.9 * hw) + 0.05 * sin(ang * 5.0 + 4.3 * hw)
+			+ 0.025 * sin(ang * 9.0 + 6.1 * hw);
+		float burn = 1.0 - smoothstep(0.2 + rag, 1.0 + rag, x);
+		base *= mix(1.0, 0.1, burn * (0.7 + 0.3 * burn));
 		float qc = max(1.0 - x * x, 0.0);
 		float ec = exp(-pow((x - 1.05) / 0.25, 2.0));
 		float dh = 4.0 * x * qc * 0.5 - 0.3 * ec * 2.0 * (x - 1.05) / 0.0625;

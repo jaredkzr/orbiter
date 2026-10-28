@@ -13,6 +13,8 @@
 #include <cmath>
 #include <iomanip>
 #include <sstream>
+#include <tuple>
+#include <map>
 
 extern PlanetarySystem *g_psys;
 extern Orbiter *g_pOrbiter;
@@ -20,7 +22,18 @@ extern TimeData td;
 extern bool g_bStateUpdate;
 
 namespace {
-	const double CD = 1.0;          // drag coefficient (tumbling)
+	const double CD = 1.0;          // drag coefficient (tumbling; without panels)
+	// aerodynamic panels: at most MAXPANELS, each a flat plate whose
+	// normal force coefficient rises as 2 pi sin(alpha) up to PLATE_CN; skin
+	// friction PLATE_CF (torn, rough). Each side of a skin counts half (a
+	// closed shell, a wing: both sides, together one plate)
+	const int MAXPANELS = 64;
+	const double PLATE_CN = 1.2;
+	const double PLATE_CF = 0.02;
+	// in one step the air changes its velocity by at most this fraction,
+	// its turning by at most MAX_DOMEGA [rad/s] (stiff for light pieces)
+	const double MAX_DV = 0.5;
+	const double MAX_DOMEGA = 1.0;
 	const double FRICTION = 0.6;    // with the ground
 	const double REST_SPEED = 0.05; // [m/s] slower than this (and turning slower than REST_OMEGA) ...
 	const double REST_OMEGA = 0.02; // [rad/s]
@@ -67,6 +80,7 @@ Debris::Debris (const std::string &_name, const std::string &_source, double m, 
 	for (const collision::Hull &h : hulls)
 		hullBound = std::max (hullBound, h.centre.length() + h.radius + collision::SKIN);
 	size = std::max (hullBound, 0.1);
+	MakePanels ();
 	if (hulls.empty()) hullBound = -1.0; // (no collisions)
 
 	// the state of the vessel's point at cg
@@ -146,6 +160,45 @@ void Debris::AddVelocity (const Vector &dv)
 
 // =======================================================================
 
+void Debris::MakePanels ()
+{
+	// the triangles merged by where they are and which way they face
+	// (cells of a grid, and the six directions), fewer if too many
+	panels.clear();
+	double cell = std::max (size, 0.1) * 0.5;
+	for (int pass = 0; pass < 6; pass++, cell *= 1.6) {
+		std::map<std::tuple<int,int,int,int>, std::pair<Vector, Vector>> acc; // (area-weighted centre, vector area)
+		std::map<std::tuple<int,int,int,int>, double> amass;
+		for (const Group &g : groups)
+			for (size_t k = 0; k + 2 < g.vtx.size(); k += 3) {
+				Vector p[3], vn;
+				for (int i = 0; i < 3; i++) {
+					p[i] = Vector (g.vtx[k+i].x, g.vtx[k+i].y, g.vtx[k+i].z);
+					vn += Vector (g.vtx[k+i].nx, g.vtx[k+i].ny, g.vtx[k+i].nz);
+				}
+				Vector an (crossp (p[1]-p[0], p[2]-p[0]) * 0.5);
+				double a = an.length();
+				if (a < 1e-9 || vn.length() < 1e-9) continue;
+				if (dotp (an, vn) < 0.0) an = -an; // (outward: as the vertex normals)
+				Vector c ((p[0] + p[1] + p[2]) / 3.0), u (an / a);
+				int axis = 0;
+				for (int j = 1; j < 3; j++) if (std::fabs (u.data[j]) > std::fabs (u.data[axis])) axis = j;
+				int dir = axis * 2 + (u.data[axis] < 0.0 ? 1 : 0);
+				auto key = std::make_tuple ((int)std::floor (c.x / cell), (int)std::floor (c.y / cell), (int)std::floor (c.z / cell), dir);
+				auto &e = acc[key];
+				e.first += c * a, e.second += an;
+				amass[key] += a;
+			}
+		if ((int)acc.size() > MAXPANELS && pass < 5) continue;
+		for (auto &it : acc) {
+			double a = it.second.second.length(), am = amass[it.first];
+			if (a < 1e-9 || am <= 0.0) continue;
+			panels.push_back ({ it.second.first / am, it.second.second / a, a });
+		}
+		break;
+	}
+}
+
 void Debris::UpdateBodyForces ()
 {
 	Fdrag.Set (0,0,0);
@@ -153,9 +206,39 @@ void Debris::UpdateBodyForces ()
 	if (fstatus != FLIGHTSTATUS_FREEFLIGHT || !proxybody || !sp.is_in_atm || sp.atmrho <= 0.0) return;
 	double v = sp.airspd;
 	if (v < 1e-3) return;
+	double h = td.SimDT;
+	if (!panels.empty()) {
+		// each panel a flat plate in the air it meets (the piece's motion
+		// and its turning): lift, drag and the torques that make it tumble
+		// (and damp its tumbling)
+		double q = 0.5 * sp.atmrho;
+		Vector vb (tmul (s0->R, sp.airvel_glob)), w (s0->omega), F, M;
+		for (const Panel &p : panels) {
+			Vector vp (vb + crossp (w, p.c));
+			double vl = vp.length();
+			if (vl < 1e-6) continue;
+			Vector u (vp / vl);
+			double s = dotp (p.n, u);  // (sin of the angle of attack)
+			double cn = std::copysign (std::min (2.0 * Pi * std::fabs (s), PLATE_CN), s);
+			Vector f (p.n * (-0.5 * q * vl * vl * p.a * cn));        // (pressure, normal to it)
+			f += (u - p.n * s) * (-0.5 * q * vl * vl * p.a * PLATE_CF); // (friction, along it)
+			F += f;
+			M += crossp (p.c, f);
+		}
+		// (not more than the air can do in a step: stiff for light pieces)
+		if (h > 0.0) {
+			double fmax = MAX_DV * mass * v / h, fl = F.length();
+			if (fl > fmax) F *= fmax / fl;
+			double I = mass * std::min ({pmi.x, pmi.y, pmi.z});
+			double mmax = I * (MAX_DOMEGA + 0.5 * w.length()) / h, ml = M.length();
+			if (ml > mmax) M *= mmax / ml;
+		}
+		Fdrag = mul (s0->R, F);
+		Mdrag = M;
+		return;
+	}
 	double A = std::max (0.25 * area, 1e-4); // (mean cross section of a closed surface)
 	double F = 0.5 * sp.atmrho * v * v * CD * A;
-	double h = td.SimDT;
 	if (h > 0.0) F = std::min (F, 0.5 * mass * v / h); // (no reversal within the step)
 	Fdrag = sp.airvel_glob * (-F / v);
 
