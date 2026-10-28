@@ -9,7 +9,8 @@
 // their surface is sampled into the cells of a grid, and the cells are
 // clustered into parts of similar size which are connected (cells next to
 // each other); vessels symmetric about their x = 0 plane get symmetric
-// parts. Each triangle belongs to the part of the cell of its centre, each
+// parts. Each triangle belongs to the part of the cell of its centre (the
+// triangles of a small mesh group, such as a door, all to one part), each
 // collision hull (CollisionHull.h) to the part nearest its centre. The parts form a tree, rooted at the core
 // part (the one at the vessel's origin, its centre of gravity): each part
 // hangs from its parent by a joint, which carries the loads of the part
@@ -43,6 +44,7 @@ namespace structure {
 	const double CRUSH_STROKE = 0.3;     ///< [m] rigid impacts decelerate the structure over this distance
 	const double CORE_FACTOR = 3.0;      ///< a joint at the core part loaded beyond this times its strength: the vessel breaks up
 	const double MAXTEMP = 1800.0;       ///< [K] a part this hot fails (by default)
+	const double SMALL_GROUP = 0.3;      ///< mesh groups smaller than this times the vessel's size are not cut (all in one part)
 
 	/// Whether vessels can be damaged: the damage model is on (Orbiter.cfg
 	/// DamageModel, Launchpad option) or ORBITER_DAMAGE=1 is set (tests;

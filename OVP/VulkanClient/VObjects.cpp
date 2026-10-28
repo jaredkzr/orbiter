@@ -13,6 +13,7 @@
 #include "Shadows.h"
 #include "LegacyTex.h"
 #include "TileArchive.h"
+#include "Fracture.h"
 #include <map>
 #include <random>
 #include "VesselAPI.h"
@@ -21,6 +22,8 @@
 #include <cstring>
 #include <functional>
 #include <unordered_map>
+#include <set>
+#include <tuple>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -147,19 +150,153 @@ void VVessel::UpdateDamage ()
 {
 	// the triangles of parts broken off are not drawn
 	DWORD v = oapiGetVesselDamageVersion (hObj);
-	if (v == damageVersion) return;
-	damageVersion = v;
-	std::vector<BYTE> mask;
+	if (v != damageVersion) {
+		damageVersion = v;
+		for (size_t m = 0; m < meshes.size(); m++) {
+			MeshRec &rec = meshes[m];
+			if (!rec.mesh) continue;
+			rec.hidden.resize (rec.mesh->nGroup());
+			for (uint32_t g = 0; g < rec.mesh->nGroup(); g++) {
+				std::vector<BYTE> &mask = rec.hidden[g];
+				DWORD ntri = rec.mesh->GetGroup (g).nIndex / 3;
+				mask.assign (ntri, 0);
+				DWORD n = v ? oapiGetVesselHiddenTriangles (hObj, (UINT)m, g, mask.data(), ntri) : 0;
+				if (!n) mask.clear ();
+				rec.mesh->SetHiddenTriangles (g, n ? mask.data() : nullptr);
+			}
+		}
+		wallsDirty = true;
+	} else if (v && !wallsDirty) {
+		// the walls are made for the vessel as posed: again when it moves
+		// (a door opening away from the skin next to it)
+		// (only groups at the gaps: not every control surface in flight)
+		for (const MeshRec &rec : meshes)
+			if (rec.wallPose.size() == rec.grpTransform.size()) {
+				for (size_t g = 0; g < rec.wallPose.size() && !wallsDirty; g++)
+					if (g < rec.wallWatch.size() && rec.wallWatch[g])
+						for (int i = 0; i < 16; i++)
+							if (fabs (rec.wallPose[g].m[i] - rec.grpTransform[g].m[i]) > 1e-4) { wallsDirty = true; break; }
+			} else if (rec.mesh) wallsDirty = true;
+	}
+	double t = oapiGetSysTime ();
+	if (wallsDirty && t - wallsBuilt >= 0.2) { // (not every frame while it moves)
+		BuildWalls ();
+		wallsDirty = false, wallsBuilt = t;
+	}
+}
+
+namespace {
+	// the inside of the skin is drawn within about this times the vessel's
+	// size of the gaps where parts broke off
+	constexpr double INSIDE_REACH = 0.15;
+}
+
+void VVessel::BuildWalls ()
+{
+	std::vector<fracture::Tri> tris; // (the skin, vessel frame, as posed)
+	std::vector<std::pair<size_t, uint32_t>> srcs; // (mesh and group of each source)
+	std::vector<std::vector<NTVERTEX>> inside;     // (the inside of the skin, by source)
+	struct InsideOf { size_t tri; const NTVERTEX *vtx; const WORD *idx; };
+	std::vector<InsideOf> insideOf;                 // (kept triangles that may show their inside)
+	bool cut = false;
 	for (size_t m = 0; m < meshes.size(); m++) {
 		MeshRec &rec = meshes[m];
-		if (!rec.mesh) continue;
-		for (uint32_t g = 0; g < rec.mesh->nGroup(); g++) {
+		rec.walls.reset ();
+		rec.wallGroup.clear ();
+		rec.wallPose = rec.grpTransform;
+		rec.wallWatch.assign (rec.grpTransform.size(), 0);
+		for (size_t g = 0; g < rec.hidden.size() && g < rec.wallWatch.size(); g++)
+			if (!rec.hidden[g].empty()) rec.wallWatch[g] = 1;
+		if (!rec.mesh || !damageVersion || !(rec.visMode & MESHVIS_EXTERNAL)) continue;
+		MESHHANDLE hm = rec.mesh->Template ();
+		if (!hm) continue;
+		for (uint32_t g = 0; g < rec.mesh->nGroup() && g < rec.hidden.size(); g++) {
+			const std::vector<BYTE> &mask = rec.hidden[g];
+			MESHGROUP *mg = oapiMeshGroup (hm, g);
 			DWORD ntri = rec.mesh->GetGroup (g).nIndex / 3;
-			mask.assign (ntri, 0);
-			DWORD n = v ? oapiGetVesselHiddenTriangles (hObj, (UINT)m, g, mask.data(), ntri) : 0;
-			rec.mesh->SetHiddenTriangles (g, n ? mask.data() : nullptr);
+			if (!mg || mg->nIdx / 3 != ntri) continue;
+			cut |= !mask.empty();
+			uint32_t src = (uint32_t)srcs.size();
+			srcs.push_back ({ m, g });
+			const VkMesh::Group &vg = rec.mesh->GetGroup (g);
+			inside.emplace_back ();
+			bool solid = !vg.transparent && !(vg.usrFlag & (VkMesh::GRP_HIDDEN | VkMesh::GRP_ADDITIVE));
+			const Mat4 &M = g < rec.grpTransform.size() ? rec.grpTransform[g] : Mat4::Identity();
+			for (DWORD k = 0; k < ntri; k++) {
+				fracture::Tri t;
+				VECTOR3 nm{};
+				bool ok = true;
+				for (int j = 0; j < 3; j++) {
+					WORD i = mg->Idx[k * 3 + j];
+					if (i >= mg->nVtx) { ok = false; break; }
+					const NTVERTEX &vx = mg->Vtx[i];
+					VECTOR3 p = _V(vx.x, vx.y, vx.z);
+					t.p[j] = M.TransformPoint (p) + rec.ofs;
+					nm += M.TransformPoint (p + _V(vx.nx, vx.ny, vx.nz)) - M.TransformPoint (p);
+				}
+				if (!ok || length (nm) < 1e-9) continue;
+				t.n = unit (nm);
+				t.src = src;
+				t.kept = mask.empty() || mask[k] != 1;
+				tris.push_back (t);
+				if (t.kept && solid) insideOf.push_back ({ tris.size() - 1, &mg->Vtx[0], &mg->Idx[k * 3] });
+			}
 		}
 	}
+	if (!cut) return;
+	// the inside of the skin near the gaps (only there: elsewhere the vessel
+	// looks as it did, e.g. through its windows)
+	{
+		double cell = INSIDE_REACH * size;
+		auto key = [cell] (const VECTOR3 &p) {
+			return std::make_tuple ((int64_t)std::floor (p.x / cell), (int64_t)std::floor (p.y / cell), (int64_t)std::floor (p.z / cell));
+		};
+		std::set<std::tuple<int64_t,int64_t,int64_t>> near;
+		for (const fracture::Tri &t : tris)
+			if (!t.kept) {
+				auto [x, y, z] = key ((t.p[0] + t.p[1] + t.p[2]) / 3.0);
+				for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) for (int k = -1; k <= 1; k++)
+					near.insert ({ x + i, y + j, z + k });
+			}
+		double ofs = 0.15 * fracture::WallDepth (size);
+		for (const InsideOf &io : insideOf) {
+			const fracture::Tri &t = tris[io.tri];
+			if (near.count (key ((t.p[0] + t.p[1] + t.p[2]) / 3.0)))
+				fracture::AddInside (io.vtx[io.idx[0]], io.vtx[io.idx[1]], io.vtx[io.idx[2]], ofs, inside[t.src]);
+		}
+	}
+	// walls along the cuts, each moving with the group it is cut in
+	std::vector<std::vector<NTVERTEX>> walls;
+	fracture::Walls (tris, fracture::WallDepth (size), 1e-3, (uint32_t)std::hash<std::string>() (vessel->GetName ()), walls);
+	std::vector<std::vector<VkMesh::Part>> parts (meshes.size());
+	for (size_t s = 0; s < walls.size(); s++) {
+		if (walls[s].empty()) continue;
+		auto [m, g] = srcs[s];
+		// back to the frame of the group, unposed
+		const MeshRec &rec = meshes[m];
+		Mat4 Mi = g < rec.grpTransform.size() ? rec.grpTransform[g].AffineInverse () : Mat4::Identity();
+		VECTOR3 o = Mi.TransformPoint (_V(0, 0, 0));
+		for (NTVERTEX &vx : walls[s]) {
+			VECTOR3 p = Mi.TransformPoint (_V(vx.x, vx.y, vx.z) - rec.ofs);
+			VECTOR3 n = unit (Mi.TransformPoint (_V(vx.nx, vx.ny, vx.nz)) - o);
+			vx.x = (float)p.x, vx.y = (float)p.y, vx.z = (float)p.z;
+			vx.nx = (float)n.x, vx.ny = (float)n.y, vx.nz = (float)n.z;
+		}
+		fracture::AddParts (walls[s], parts[m]);
+		meshes[m].wallGroup.resize (parts[m].size(), g);
+	}
+	for (size_t s = 0; s < inside.size(); s++) {
+		auto [m, g] = srcs[s];
+		fracture::AddParts (inside[s], parts[m], true);
+		meshes[m].wallGroup.resize (parts[m].size(), g);
+	}
+	for (MeshRec &rec : meshes)
+		for (uint32_t g : rec.wallGroup)
+			if (g < rec.wallWatch.size()) rec.wallWatch[g] = 1;
+	VulkanClient *gc = scene->Client();
+	for (size_t m = 0; m < meshes.size(); m++)
+		if (!parts[m].empty())
+			meshes[m].walls = std::make_unique<VkMesh> (gc->Ctx(), gc->TexMgr(), parts[m]);
 }
 
 void VVessel::UpdateTracks ()
@@ -338,6 +475,10 @@ void VVessel::Render (RenderPass pass)
 		scene->DrawMesh (rec.mesh.get(), meshMv, pass, &rec.grpTransform, &rec.grpVisible,
 			(m < ovr.size() && !ovr[m].empty()) ? &ovr[m] : nullptr,
 			rec.prevGrpTransform.size() == rec.grpTransform.size() ? &rec.prevGrpTransform : nullptr);
+		if (rec.walls) {
+			WallTransforms (rec);
+			scene->DrawMesh (rec.walls.get(), meshMv, pass, &wallTf, &wallVis, nullptr, &wallPrevTf);
+		}
 	}
 	static const float noGlow[3] = { 0, 0, 0 };
 	scene->SetObjectGlassGlow (noGlow);
@@ -409,6 +550,43 @@ VDebris::VDebris (OBJHANDLE h, Scene *s, DWORD sn)
 			}
 		}
 	}
+	// walls along the cut edges (as deep as on the vessel it broke off)
+	std::vector<fracture::Tri> tris;
+	for (DWORD i = 0; i < info.ngroup; i++) {
+		DEBRISGROUP dg;
+		if (!oapiGetDebrisGroup (hObj, i, &dg) || !dg.edge) continue;
+		for (DWORD k = 0; k + 2 < dg.nvtx; k += 3) {
+			fracture::Tri t;
+			VECTOR3 n{};
+			for (int j = 0; j < 3; j++) {
+				const NTVERTEX &v = dg.vtx[k + j];
+				t.p[j] = _V(v.x, v.y, v.z);
+				n += _V(v.nx, v.ny, v.nz);
+			}
+			if (length (n) < 1e-9) continue;
+			t.n = unit (n);
+			t.open = dg.edge[k / 3] > 0.5f;
+			tris.push_back (t);
+		}
+	}
+	OBJHANDLE hSrc = oapiGetVesselByName (info.source);
+	double depth = fracture::WallDepth (hSrc ? oapiGetSize (hSrc) : info.size);
+	std::vector<NTVERTEX> inside; // (of the skin, but not of its windows)
+	for (DWORD i = 0; i < info.ngroup; i++) {
+		DEBRISGROUP dg;
+		if (!oapiGetDebrisGroup (hObj, i, &dg)) continue;
+		if (dg.hMesh)
+			if (MESHGROUP *mg = oapiMeshGroup (dg.hMesh, dg.group))
+				if (mg->MtrlIdx != (DWORD)-1)
+					if (MATERIAL *m = oapiMeshMaterial (dg.hMesh, mg->MtrlIdx))
+						if (m->diffuse.a < 0.999f) continue;
+		for (DWORD k = 0; k + 2 < dg.nvtx; k += 3)
+			fracture::AddInside (dg.vtx[k], dg.vtx[k + 1], dg.vtx[k + 2], 0.15 * depth, inside);
+	}
+	std::vector<std::vector<NTVERTEX>> walls;
+	fracture::Walls (tris, depth, 1e-3, serial, walls);
+	for (auto &w : walls) fracture::AddParts (w, parts);
+	fracture::AddParts (inside, parts, true);
 	if (parts.empty()) return;
 	VulkanClient *gc = scene->Client();
 	mesh = std::make_unique<VkMesh> (gc->Ctx(), gc->TexMgr(), parts);
@@ -665,8 +843,26 @@ void VVessel::RenderShadow (ShadowMap &sm)
 	if (length (gpos - sm.Centre()) > sm.Radius() + size) return;
 	Mat4 model = Mat4::FromRotTrans (grot, gpos - sm.Centre());
 	for (auto &rec : meshes)
-		if (rec.mesh && (rec.visMode & MESHVIS_EXTERNAL))
+		if (rec.mesh && (rec.visMode & MESHVIS_EXTERNAL)) {
 			sm.DrawMesh (rec.mesh.get(), model * Mat4::Translation (rec.ofs), &rec.grpTransform, &rec.grpVisible);
+			if (rec.walls) {
+				WallTransforms (rec);
+				sm.DrawMesh (rec.walls.get(), model * Mat4::Translation (rec.ofs), &wallTf, &wallVis);
+			}
+		}
+}
+
+void VVessel::WallTransforms (const MeshRec &rec)
+{
+	// the walls move with the groups they are cut in
+	size_t n = rec.wallGroup.size();
+	wallTf.resize (n), wallPrevTf.resize (n), wallVis.resize (n);
+	for (size_t i = 0; i < n; i++) {
+		uint32_t g = rec.wallGroup[i];
+		wallTf[i] = g < rec.grpTransform.size() ? rec.grpTransform[g] : Mat4::Identity();
+		wallPrevTf[i] = g < rec.prevGrpTransform.size() ? rec.prevGrpTransform[g] : wallTf[i];
+		wallVis[i] = g < rec.grpVisible.size() ? rec.grpVisible[g] : 1;
+	}
 }
 
 namespace {

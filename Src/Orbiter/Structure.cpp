@@ -451,6 +451,26 @@ namespace structure {
 		cellPart.resize (ne);
 		for (int e = 0; e < ne; e++) cellPart[e] = num[label[e]];
 		for (size_t t = 0; t < tris.size(); t++) triPart[t] = cellPart[triCell[t]];
+		// small groups of the meshes (doors, struts, antennas: pieces of their
+		// own) are not cut: all to the part with most of their area
+		{
+			std::map<std::pair<int,int>, std::vector<size_t>> grp;
+			for (size_t t = 0; t < tris.size(); t++) grp[{ tris[t].mesh, tris[t].group }].push_back (t);
+			for (auto &g : grp) {
+				Vector glo (1e30, 1e30, 1e30), ghi (-1e30, -1e30, -1e30);
+				std::map<int, double> area;
+				for (size_t t : g.second) {
+					const Triangle &tr = tris[t];
+					for (const Vector *v : { &tr.a, &tr.b, &tr.c })
+						for (int i = 0; i < 3; i++) glo.data[i] = std::min (glo.data[i], v->data[i]), ghi.data[i] = std::max (ghi.data[i], v->data[i]);
+					area[triPart[t]] += crossp (tr.b - tr.a, tr.c - tr.a).length();
+				}
+				if (area.size() < 2 || (ghi - glo).length() > SMALL_GROUP * size) continue;
+				int best = std::max_element (area.begin(), area.end(),
+					[] (const std::pair<const int,double> &a, const std::pair<const int,double> &b) { return a.second < b.second; })->first;
+				for (size_t t : g.second) triPart[t] = best;
+			}
+		}
 		this->triCell = triCell;
 		cellNbr.assign (ne, 0);
 		for (int e = 0; e < ne; e++) {

@@ -95,7 +95,18 @@ private:
 		std::vector<Mat4> grpTransform; // animation transforms per group
 		std::vector<Mat4> prevGrpTransform; // ... in the last frame (motion vectors)
 		std::vector<uint8_t> grpVisible;
+		std::unique_ptr<VkMesh> walls;  // along the cuts where parts broke off (Fracture.h)
+		std::vector<uint32_t> wallGroup; // the group each of its parts is cut in
+		std::vector<Mat4> wallPose;      // (the group transforms they were made for)
+		std::vector<uint8_t> wallWatch;  // (groups at the gaps: made again when they move)
+		std::vector<std::vector<BYTE>> hidden; // per group: oapiGetVesselHiddenTriangles (empty: none)
 	};
+	void BuildWalls ();
+	bool wallsDirty = false;
+	double wallsBuilt = -1e30;
+	std::vector<Mat4> wallTf, wallPrevTf; // (the walls' group transforms, while drawing)
+	std::vector<uint8_t> wallVis;
+	void WallTransforms (const MeshRec &rec);
 	void LoadMeshes ();
 	void InsertMesh (UINT idx);
 	void UpdateAnimations ();

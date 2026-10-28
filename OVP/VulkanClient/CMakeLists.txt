@@ -168,6 +168,7 @@ add_library(VulkanClient SHARED
 	TAA.cpp
 	Clouds.cpp
 	GroundTracks.cpp
+	Fracture.cpp
 	EnvProbe.cpp
 	Fsr.cpp
 	StarSphere.cpp
