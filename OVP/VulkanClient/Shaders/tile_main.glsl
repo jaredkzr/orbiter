@@ -126,6 +126,10 @@ void TrackShading(vec3 P, inout vec3 N, inout vec3 base)
 	vec3 off = vec3(0.0), dir = vec3(0.0);
 	float along = 0.0;
 	TrackSeg s;
+	// scorch marks overlap: blended (the darkest burn, the craters' slopes
+	// added), not the nearest alone (seams where one meets the next)
+	float burnMax = 0.0;
+	vec3 scorchGrad = vec3(0.0);
 	for (int i = 0; i < count; i++) {
 		TrackSeg c = tracks.seg[first + i];
 		vec3 up = c.up.xyz;
@@ -135,34 +139,39 @@ void TrackShading(vec3 P, inout vec3 N, inout vec3 base)
 		float t = L2 > 1e-8 ? clamp(dot(ap, ab) / L2, 0.0, 1.0) : 0.0;
 		vec3 o = ap - ab * t;
 		float x = length(o) / c.a.w;
+		if (c.up.w > 1.5) {
+			if (x >= 1.8) continue;
+			// scorch mark: blackened ground, most at its centre, its rim
+			// irregular (a few lobes, by the direction; phases from its size)
+			// and soft, a shallow crater with a low rim
+			float hw = c.a.w, depth = c.b.w;
+			vec3 lat = x > 1e-4 ? o / (x * hw) : vec3(0.0);
+			vec3 ref = normalize(abs(up.x) < 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0));
+			float ang = atan(dot(lat, cross(up, ref)), dot(lat, ref));
+			float rag = 0.12 * sin(ang * 2.0 + 1.7 * hw) + 0.08 * sin(ang * 3.0 + 2.9 * hw) + 0.05 * sin(ang * 5.0 + 4.3 * hw)
+				+ 0.025 * sin(ang * 9.0 + 6.1 * hw);
+			burnMax = max(burnMax, 1.0 - smoothstep(0.2 + rag, 1.0 + rag, x));
+			float qc = max(1.0 - x * x, 0.0);
+			float ec = exp(-pow((x - 1.05) / 0.25, 2.0));
+			float dh = 4.0 * x * qc * 0.5 - 0.3 * ec * 2.0 * (x - 1.05) / 0.0625;
+			vec3 g = lat * (depth * dh / hw);
+			scorchGrad += g - up * dot(g, up);
+			continue;
+		}
 		if (x < best) {
 			best = x, off = o, s = c;
 			dir = L2 > 1e-8 ? ab / sqrt(L2) : vec3(0.0);
 			along = L2 > 1e-8 ? dot(ap, dir) : 0.0;
 		}
 	}
+	if (burnMax > 0.0 || dot(scorchGrad, scorchGrad) > 0.0) {
+		base *= mix(1.0, 0.1, burnMax * (0.7 + 0.3 * burnMax));
+		vec3 g = scorchGrad - N * dot(scorchGrad, N);
+		N = normalize(N - g);
+	}
 	if (best >= 1.8) return;
 	float x = best, hw = s.a.w, depth = s.b.w;
 	vec3 lat = x > 1e-4 ? off / (x * hw) : vec3(0.0);
-	if (s.up.w > 1.5) {
-		// scorch mark: blackened ground, most at its centre, its rim
-		// irregular (a few lobes, by the direction; phases from its size)
-		// and soft, a shallow crater with a low rim
-		float ang = atan(dot(lat, cross(s.up.xyz, normalize(abs(s.up.x) < 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0)))),
-			dot(lat, normalize(abs(s.up.x) < 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0))));
-		float rag = 0.12 * sin(ang * 2.0 + 1.7 * hw) + 0.08 * sin(ang * 3.0 + 2.9 * hw) + 0.05 * sin(ang * 5.0 + 4.3 * hw)
-			+ 0.025 * sin(ang * 9.0 + 6.1 * hw);
-		float burn = 1.0 - smoothstep(0.2 + rag, 1.0 + rag, x);
-		base *= mix(1.0, 0.1, burn * (0.7 + 0.3 * burn));
-		float qc = max(1.0 - x * x, 0.0);
-		float ec = exp(-pow((x - 1.05) / 0.25, 2.0));
-		float dh = 4.0 * x * qc * 0.5 - 0.3 * ec * 2.0 * (x - 1.05) / 0.0625;
-		vec3 g = lat * (depth * dh / hw);
-		g -= s.up.xyz * dot(g, s.up.xyz);
-		g -= N * dot(g, N);
-		N = normalize(N - g);
-		return;
-	}
 	// profile [depths]: groove -(1 - x^2)^2, edges pushed up beside it
 	float q = max(1.0 - x * x, 0.0);
 	float e = exp(-pow((x - 1.2) / 0.3, 2.0));

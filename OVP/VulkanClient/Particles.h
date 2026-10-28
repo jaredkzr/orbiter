@@ -61,6 +61,8 @@ public:
 		bool ballistic;       // falls under gravity (dust)
 		bool volumetric;      // rendered in the smoke volume (large smoke)
 		bool cold;            // tinted, but does not rise (dust)
+		bool speck;           // small bits (fragments, sparks): at least about a pixel, under gravity, not streaked; lit ones glint
+		bool spherical;       // the spread is the same in all directions (a sphere, not a cube)
 		float albedo[3];
 	};
 	void Queue (const Emission &e);

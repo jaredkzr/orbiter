@@ -194,6 +194,7 @@ public:
 	/// particle textures of fires and sparks (made when first needed)
 	class VkTexture *FireTexture ();
 	class VkTexture *SparkTexture ();
+	class VkTexture *FragmentTexture (); ///< small bits of debris: a shard in each quadrant (white, hard edged)
 	/// reactive mask of this frame (shader-read layout after Render): where
 	/// plumes and particles were drawn, which temporal filters should trust
 	/// their history less
@@ -329,12 +330,13 @@ private:
 
 	// visuals
 	std::map<OBJHANDLE, std::unique_ptr<VObject>> visuals;
-	class VkTexture *fireTex = nullptr, *sparkTex = nullptr;
+	class VkTexture *fireTex = nullptr, *sparkTex = nullptr, *fragTex = nullptr;
 	OBJHANDLE hSun = nullptr;
 	float objLight = 1.0f;
 	float objGlassGlow[3] = { 0, 0, 0 };
 	float objHeat[4] = { 0, 0, 0, 0 };
 	uint32_t objOwner = 0;  // VObject::Id of the object being drawn into the prepass
+	float objVel[3] = { 0, 0, 0 }; // and its velocity (global frame)
 };
 
 #endif // !__SCENE_H

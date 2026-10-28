@@ -16,6 +16,7 @@ namespace {
 		float emissive[4];         // rgb, w: sunlight
 		float pbr[4];
 		float uv[4];               // texture coordinates: offset, scale
+		float vel[4];              // velocity of the object (global frame) [m/s]
 	};
 	constexpr uint32_t FLAG_UNLIT = 1;
 	constexpr uint32_t FLAG_ALPHA = 2; // alpha-tested texture (foliage): not opaque to rays
@@ -339,6 +340,7 @@ void RTScene::AddInstance (const Part *parts, uint32_t nParts, const Mat4 &model
 		rec.emissive[3] = mat.light;
 		memcpy (rec.pbr, mat.pbr, sizeof(rec.pbr));
 		memcpy (rec.uv, mat.uv, sizeof(rec.uv));
+		memcpy (rec.vel, mat.vel, sizeof(mat.vel));
 		memcpy ((InstanceRecord*)f.records.mapped + nRec, &rec, sizeof(rec));
 		nRec++;
 	}

@@ -21,7 +21,7 @@
 #include "frame.glsl"
 
 layout(set = 2, binding = 0) uniform accelerationStructureEXT tlas;
-struct RTInstance { uvec2 vtx, idx; uint firstIndex, tex, flags, owner; vec4 diffuse, emissive, pbr, uv; }; // (rt.glsl)
+struct RTInstance { uvec2 vtx, idx; uint firstIndex, tex, flags, owner; vec4 diffuse, emissive, pbr, uv, vel; }; // (rt.glsl)
 layout(set = 2, binding = 1, std430) readonly buffer Instances { RTInstance inst[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer RTFloats { float f[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer RTUints { uint u[]; };
@@ -60,8 +60,16 @@ uvec4 Hash4 (uvec3 v)
 	return x;
 }
 
+// a ray the traversal can take: finite (NaN or infinite origins and
+// directions can keep the hardware's traversal from ending: the GPU hangs)
+bool RayFinite (vec3 o, vec3 d, float tMax)
+{
+	return all (lessThan (abs (o), vec3 (1e30))) && all (lessThan (abs (d), vec3 (1e30))) && dot (d, d) > 0.0 && tMax < 1e30;
+}
+
 bool Occluded (vec3 o, vec3 d, float tMax, uint mask)
 {
+	if (!RayFinite (o, d, tMax)) return false;
 	rayQueryEXT q;
 	// (back faces culled: only stand-ins have them, see RayTracing.cpp)
 	rayQueryInitializeEXT (q, tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsCullBackFacingTrianglesEXT, mask, o, 0.0, d, tMax);
@@ -97,6 +105,7 @@ bool LightOccluded (vec3 lp, vec3 o)
 	vec3 d = o - lp;
 	float t = length (d);
 	d /= t;
+	if (!RayFinite (lp, d, t)) return false;
 	rayQueryEXT q;
 	rayQueryInitializeEXT (q, tlas, gl_RayFlagsNoOpaqueEXT, MASK_ALL, lp, 0.0, d, t);
 	while (rayQueryProceedEXT (q)) {
@@ -112,6 +121,7 @@ bool LightOccluded (vec3 lp, vec3 o)
 // distance of a hit (the first found, not necessarily the nearest; tMax if none)
 float HitDist (vec3 o, vec3 d, float tMax, uint mask)
 {
+	if (!RayFinite (o, d, tMax)) return tMax;
 	rayQueryEXT q;
 	rayQueryInitializeEXT (q, tlas, gl_RayFlagsTerminateOnFirstHitEXT, mask, o, 0.0, d, tMax);
 	while (rayQueryProceedEXT (q))

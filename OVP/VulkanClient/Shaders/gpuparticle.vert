@@ -61,6 +61,13 @@ void main ()
 	if ((vol && (pc.flags & 8u) != 0u) || (!vol && (pc.flags & 16u) != 0u)) { gl_Position = vec4 (0.0, 0.0, -2.0, 1.0); return; }
 	vec3 vp = transpose (mat3 (frame.viewToGlobal)) * posAge.xyz;
 	float h = 0.5 * (shape.x + shape.y * age);
+	if ((flags & 128u) != 0u) {
+		// specks: at least about a pixel across (fainter for it: a bright
+		// spark stays bright, a tiny fragment shows mostly as it glints)
+		float px = 2.0 * length (posAge.xyz) / (frame.proj[1][1] * max (frame.jitter.w, 1.0));
+		float hmin = 1.0 * px;
+		if (h < hmin) a *= clamp (4.0 * (h / hmin) * (h / hmin), (flags & 4u) != 0u ? 0.3 : 0.6, 1.0), h = hmin;
+	}
 
 	// corner, turned by an angle of this particle (slowly turning)
 	uint hs = Hash (slot * 2654435761u);
@@ -103,6 +110,17 @@ void main ()
 	float g = 0.35, cosT = dot (normalize (vp), frame.sunDir.xyz);
 	float phase = (1.0 - g * g) / pow (1.0 + g * g - 2.0 * g * cosT, 1.5); // (times 4 pi)
 	vSun = pt.light * (0.75 + 0.5 * phase) * 0.9;
+	float ambScale = 1.0;
+	if ((flags & 132u) == 128u) {
+		// a tumbling fragment: its lit face and its dark side turning
+		// towards the camera in turn (seen against any background), and
+		// sunlight glinting off it now and then
+		uint gh = Hash (slot * 747796405u + 1u);
+		float w = 3.0 + 12.0 * float (gh & 0xffu) / 255.0, ph0 = float ((gh >> 8) & 0xffffu) / 65536.0 * 6.2831853;
+		float s = abs (sin (age * w + ph0)), face = 0.5 + 0.5 * sin (age * w * 0.5 + 1.7 * ph0);
+		vSun = pt.light * (0.05 + 1.1 * face * face + 6.0 * pow (s, 40.0));
+		ambScale = 0.3 + face;
+	}
 	vec3 amb = frame.ambient.rgb;
 	// local lights (engine plumes): scattered in all directions, unshadowed
 	int nl = int (frame.lightCount.x);
@@ -116,6 +134,6 @@ void main ()
 		if (l.dir.w > 1.5) la *= smoothstep (l.spot.x, l.att.w, dot (normalize (vp - l.pos.xyz), l.dir.xyz));
 		amb += l.col.rgb * (0.8 * la);
 	}
-	vAmb = amb;
+	vAmb = amb * ambScale;
 	vColor = vec4 (albedo, a);
 }

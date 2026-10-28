@@ -14,6 +14,7 @@
 #include "VObjects.h"
 #include "PlanetSurface.h"
 #include <chrono>
+#include <random>
 #include <set>
 #include "VObjects.h"
 #include "VkMesh.h"
@@ -789,6 +790,41 @@ VkTexture *Scene::SparkTexture ()
 	return sparkTex;
 }
 
+VkTexture *Scene::FragmentTexture ()
+{
+	if (fragTex) return fragTex;
+	// a shard in each quadrant: an irregular polygon, sharp (one texel of
+	// edge), lighter towards one corner (a lit face)
+	const int Q = 32, N = 2 * Q;
+	std::vector<uint8_t> px (N * N * 4, 0);
+	std::mt19937 rng (1234);
+	std::uniform_real_distribution<double> U (0.0, 1.0);
+	for (int q = 0; q < 4; q++) {
+		int nv = 5 + q % 3;
+		std::vector<double> ang (nv), rad (nv);
+		for (int k = 0; k < nv; k++) ang[k] = (k + 0.3 + 0.4 * U (rng)) / nv * 2.0 * PI, rad[k] = 0.45 + 0.45 * U (rng);
+		int ox = (q & 1) * Q, oy = (q >> 1) * Q;
+		for (int y = 0; y < Q; y++)
+			for (int x = 0; x < Q; x++) {
+				double u = (x + 0.5) / Q * 2.0 - 1.0, v = (y + 0.5) / Q * 2.0 - 1.0;
+				double a = atan2 (v, u); if (a < 0.0) a += 2.0 * PI;
+				double r = sqrt (u*u + v*v);
+				// (the polygon's edge in this direction)
+				int k = 0;
+				while (k + 1 < nv && ang[k + 1] < a) k++;
+				int k0 = a < ang[0] ? nv - 1 : k, k1 = (k0 + 1) % nv;
+				double a0 = ang[k0], a1 = ang[k1] + (k1 == 0 ? 2.0 * PI : 0.0), aa = a < a0 ? a + 2.0 * PI : a;
+				double f = (aa - a0) / std::max (a1 - a0, 1e-6), edge = rad[k0] + (rad[k1] - rad[k0]) * f;
+				double alpha = std::clamp ((edge - r) * Q * 0.5 + 0.5, 0.0, 1.0);
+				uint8_t *p = &px[((oy + y) * N + ox + x) * 4];
+				uint8_t c = (uint8_t)(255.0 * (0.75 + 0.25 * std::clamp (0.5 - 0.35 * (u + v), 0.0, 1.0)));
+				p[0] = p[1] = p[2] = c, p[3] = (uint8_t)(255.0 * alpha);
+			}
+	}
+	fragTex = gc->TexMgr()->CreateRGBA (N, N, px.data());
+	return fragTex;
+}
+
 // ======================================================================
 // Visuals
 
@@ -1376,9 +1412,13 @@ void Scene::RenderPrepass ()
 	ao->BeginPrepass ();
 	for (auto &it : visuals) {
 		objOwner = it.second->Id ();
+		VECTOR3 v{};
+		if (it.second->Handle ()) oapiGetGlobalVel (it.second->Handle (), &v);
+		objVel[0] = (float)v.x, objVel[1] = (float)v.y, objVel[2] = (float)v.z;
 		it.second->Render (RenderPass::Depth);
 	}
 	objOwner = 0;
+	objVel[0] = objVel[1] = objVel[2] = 0.0f;
 	ctx->EndTarget ();
 	ctx->GpuMark ("prepass");
 	if (ao->enabled && !rtl->Enabled ()) ao->Compute (proj[0], -proj[5]);
@@ -1786,6 +1826,7 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 				rm.unlit = pc.emissive[3] > 0.5f;
 				rm.alphaTest = grp.alphaTest > 0.0f;
 				rm.owner = objOwner;
+				memcpy (rm.vel, objVel, sizeof(rm.vel));
 				// static groups: one instance for the mesh (below); animated
 				// ones on their own
 				if (mesh->rtAnimated.size() != mesh->nGroup()) mesh->rtAnimated.assign (mesh->nGroup(), 0);
@@ -1885,6 +1926,7 @@ void Scene::AddMeshRT (const VkMesh *mesh, const Mat4 &modelView, bool shadowOnl
 		rm.unlit = false;
 		rm.alphaTest = grp.alphaTest > 0.0f;
 		rm.owner = shadowOnly ? 0 : objOwner;
+		memcpy (rm.vel, objVel, sizeof(rm.vel));
 		rm.shadowOnly = shadowOnly;
 		rtParts.push_back (part);
 	}

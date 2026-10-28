@@ -26,7 +26,15 @@ struct RTInstance { // must match InstanceRecord in RayTracing.cpp
 	vec4 emissive;      // rgb, w: sunlight reaching the object
 	vec4 pbr;           // metalness, roughness, reflectivity, F0 scale
 	vec4 uv;            // texture coordinates: offset, scale
+	vec4 vel;           // velocity of the object (global frame) [m/s] (0 for terrain)
 };
+// a ray the traversal can take: finite (NaN or infinite origins and
+// directions can keep the hardware's traversal from ending: the GPU hangs)
+bool RayFinite (vec3 o, vec3 d, float tMax)
+{
+	return all (lessThan (abs (o), vec3 (1e30))) && all (lessThan (abs (d), vec3 (1e30))) && dot (d, d) > 0.0 && tMax < 1e30;
+}
+
 const uint RT_UNLIT = 1u;
 const uint RT_ALPHA = 2u; // alpha-tested texture (foliage): solid where the texture is
 
@@ -68,6 +76,7 @@ bool RTCandidateSolid (rayQueryEXT q)
 // the sun is not hidden from p by vessels or bases
 float RTSunVisible (vec3 p, vec3 toSun)
 {
+	if (!RayFinite (p, toSun, 1e5)) return 1.0;
 	rayQueryEXT sq;
 	rayQueryInitializeEXT (sq, tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsCullBackFacingTrianglesEXT, 0xFF, p, 0.0, toSun, 1e5);
 	while (rayQueryProceedEXT (sq))
@@ -78,6 +87,7 @@ float RTSunVisible (vec3 p, vec3 toSun)
 
 bool TraceRT (vec3 o, vec3 d, float tMin, out RTHit h)
 {
+	if (!RayFinite (o, d, 1e5) || !(tMin < 1e5)) return false;
 	rayQueryEXT rq;
 	rayQueryInitializeEXT (rq, tlas, gl_RayFlagsNoneEXT, 0xFB, o, tMin, d, 1e5); // (no shadow stand-ins)
 	while (rayQueryProceedEXT (rq))

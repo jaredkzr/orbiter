@@ -28,6 +28,11 @@ void main ()
 	// emission time within the step, velocity, and a spot within the source
 	float f = (float (i) + ParticleRand (s)) / float (em.slab.w);
 	vec3 dv = (vec3 (ParticleRand (s), ParticleRand (s), ParticleRand (s)) - 0.5) * em.p1.w;
+	if ((em.misc.y & 256u) != 0u) { // (a sphere: a direction at random, speeds up to half the spread, more of the slower ones)
+		float z = 2.0 * ParticleRand (s) - 1.0, ph = 6.2831853 * ParticleRand (s);
+		float r = sqrt (max (1.0 - z * z, 0.0)), u = ParticleRand (s);
+		dv = vec3 (r * cos (ph), r * sin (ph), z) * (0.5 * em.p1.w * (0.1 + 0.9 * u * u));
+	}
 	if ((em.misc.y & 8u) != 0u) { // spreading along a surface (normal: -dir)
 		dv -= em.dir.xyz * dot (dv, em.dir.xyz);
 		dv *= 2.0 * sqrt (ParticleRand (s)) / max (length (dv) / (0.5 * em.p1.w), 1e-3);
@@ -44,6 +49,7 @@ void main ()
 	if ((em.misc.y & 4u) != 0u) flags |= 8u | ((em.misc.y & 32u) != 0u ? 0u : 16u) | (em.misc.z << 8);
 	if ((em.misc.y & 16u) != 0u) flags |= 32u;
 	if ((em.misc.y & 64u) != 0u) flags |= 64u;
+	if ((em.misc.y & 128u) != 0u) flags |= 128u;
 	p.light = vec3 (1.0);
 	p.flags = flags;
 	particles[em.slab.x + (em.slab.z + i) % em.slab.y] = p;

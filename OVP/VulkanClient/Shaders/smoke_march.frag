@@ -34,12 +34,14 @@ float Hash (uvec2 v)
 void main ()
 {
 	// the smoke's depth range in this column and its neighbours (the volume
-	// is filtered across froxels)
-	vec2 texel = 1.0 / vec2 (VOL_SIZE.xy);
+	// is filtered across froxels); the columns' own ranges (filtered, the
+	// ranges of neighbours at other depths would blend into one holding
+	// neither: blocks missing along the ground)
+	ivec2 col = ivec2 (vUV * vec2 (VOL_SIZE.xy));
 	vec2 rng = vec2 (1.0, 0.0);
 	for (int y = -1; y <= 1; y++)
 		for (int x = -1; x <= 1; x++) {
-			vec2 c = textureLod (volColumns, vUV + vec2 (x, y) * texel, 0.0).rg;
+			vec2 c = texelFetch (volColumns, clamp (col + ivec2 (x, y), ivec2 (0), VOL_SIZE.xy - 1), 0).rg;
 			if (c.x < c.y) rng = vec2 (min (rng.x, c.x), max (rng.y, c.y));
 		}
 	if (rng.x >= rng.y) discard;

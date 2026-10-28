@@ -19,6 +19,7 @@
 #include "OrbiterAPI.h"
 #include <deque>
 #include <map>
+#include <tuple>
 #include <vector>
 
 class GroundTracks {
@@ -29,7 +30,7 @@ public:
 		float b[4];  // end; w: depth [m]
 		float up[4]; // surface normal; w: 0 track, 1 imprint, 2 scorch mark
 	};
-	static constexpr uint32_t MAX_GPU = 4096;  // entries per frame (segments per tile, repeated)
+	static constexpr uint32_t MAX_GPU = 16384; // entries per frame (segments per tile, repeated)
 	static constexpr size_t MAX_SEGS = 4096;   // recorded segments (the oldest go first)
 
 	bool Init (vkc::Context *ctx);
@@ -66,6 +67,8 @@ private:
 	// segments of the body near the camera this frame (indices into segs)
 	OBJHANDLE candBody = nullptr;
 	std::vector<uint32_t> cand;
+	// the entries of the tiles this frame (first, count), by centre and radius
+	std::map<std::tuple<double, double, double, double>, std::pair<uint32_t, uint32_t>> tiles;
 	void Add (const Seg &s);
 };
 

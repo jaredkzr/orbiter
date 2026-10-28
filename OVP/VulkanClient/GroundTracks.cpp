@@ -77,6 +77,7 @@ void GroundTracks::BeginFrame (uint32_t f, const VECTOR3 &cp, const MATRIX3 &cr)
 	frame = f, used = 0;
 	camPos = cp, camRot = cr;
 	candBody = nullptr;
+	tiles.clear ();
 }
 
 void GroundTracks::ForTile (OBJHANDLE body, const VECTOR3 &ppos, const MATRIX3 &prot, const VECTOR3 &centreDir, double angRadius, float out[2])
@@ -84,16 +85,23 @@ void GroundTracks::ForTile (OBJHANDLE body, const VECTOR3 &ppos, const MATRIX3 &
 	out[0] = (float)used, out[1] = 0.0f;
 	if (segs.empty() || !buf[frame].mapped) return;
 	if (candBody != body) {
-		// this body's segments near the camera
+		// this body's segments near the camera (scorch marks first: kept if
+		// the entries run out)
 		candBody = body;
 		cand.clear ();
+		tiles.clear ();
 		VECTOR3 cl = tmul (prot, camPos - ppos);
 		for (uint32_t i = 0; i < segs.size(); i++) {
 			const Seg &s = segs[i];
 			if (s.body == body && length (s.a - cl) < RANGE) cand.push_back (i);
 		}
+		std::stable_partition (cand.begin(), cand.end(), [this](uint32_t i) { return segs[i].kind == 2; });
 	}
 	if (cand.empty()) return;
+	// (a tile drawn again in the frame: depth prepass, shadows, main pass)
+	auto key = std::make_tuple (centreDir.x, centreDir.y, centreDir.z, angRadius);
+	auto it = tiles.find (key);
+	if (it != tiles.end()) { out[0] = (float)it->second.first, out[1] = (float)it->second.second; return; }
 	GpuSeg *g = (GpuSeg*)buf[frame].mapped;
 	uint32_t n = 0;
 	double R = oapiGetSize (body);
@@ -113,5 +121,6 @@ void GroundTracks::ForTile (OBJHANDLE body, const VECTOR3 &ppos, const MATRIX3 &
 		e.up[0] = (float)u.x, e.up[1] = (float)u.y, e.up[2] = (float)u.z, e.up[3] = (float)s.kind;
 	}
 	out[1] = (float)n;
+	tiles[key] = { used, n };
 	used += n;
 }
