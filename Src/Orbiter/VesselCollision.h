@@ -36,8 +36,11 @@ public:
 
 	/// A payload was released from a vessel (the bodies they are part of):
 	/// they do not collide with each other until they are apart (a payload
-	/// nested in its mounting, whose convex parts may enclose it)
-	void Released (VesselBase *parent, VesselBase *payload);
+	/// nested in its mounting, whose convex parts may enclose it). A piece
+	/// broken off (piece true) that has not come apart from its vessel once
+	/// they have settled (a vessel resting on a piece under it) is pushed
+	/// out of it, slowly.
+	void Released (VesselBase *parent, VesselBase *payload, bool piece = false);
 
 	/// A vessel is deleted
 	void Forget (VesselBase *v);
@@ -54,6 +57,9 @@ private:
 	struct Release {
 		VesselBase *a, *b;
 		bool clear = false; // apart: collide from now on
+		bool piece = false; // (a piece broken off its vessel)
+		double t = 0.0;     // (simulation time released)
+		bool settled = false; // (a piece: settled against its vessel, pushed out of it)
 	};
 	std::vector<Release> releases;
 };

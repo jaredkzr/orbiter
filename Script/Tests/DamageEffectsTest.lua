@@ -28,14 +28,20 @@ local function wait(t)
 end
 
 -- landed: the nose (with the nose gear) breaks off; the glider tips onto its nose
+-- (onto the piece under it, which pushes it up again once they settle: the
+-- lowest pitch)
 local function nose()
 	local v = vessel.get_interface("NOSE")
 	local p0 = v:get_pitch()
 	local part = v:get_partat({x=0, y=-1, z=9})
 	local n = v:break_part(part, 0)
-	wait(8)
-	local p1 = v:get_pitch()
-	log(string.format("NOSE: %d parts lost ('%s'), pitch %.2f -> %.2f deg", n, v:get_partinfo(part).name, math.deg(p0), math.deg(p1)))
+	local p1 = p0
+	local t0 = oapi.get_simtime()
+	while oapi.get_simtime() - t0 < 8 do
+		proc.wait_frames(1)
+		p1 = math.min(p1, v:get_pitch())
+	end
+	log(string.format("NOSE: %d parts lost ('%s'), pitch %.2f -> %.2f deg (lowest)", n, v:get_partinfo(part).name, math.deg(p0), math.deg(p1)))
 	check("NOSE", n >= 1 and p1 < p0 - math.rad(2), "tips forward without its nose gear")
 end
 

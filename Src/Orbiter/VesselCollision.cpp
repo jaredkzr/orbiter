@@ -5,9 +5,12 @@
 #include "Celbody.h"
 #include "Planet.h"
 #include "Base.h"
+#include "TimeData.h"
 #include <algorithm>
 #include <cmath>
 #include <map>
+
+extern TimeData td;
 
 namespace {
 	const double FRICTION = 0.4;        // friction coefficient between vessels
@@ -18,6 +21,12 @@ namespace {
 	const double PORT_RANGE = 5.0;      // [m]
 	const double PORT_OFFSET = 1.0;     // [m]
 	const double PORT_CLEARANCE = 1.5;  // [m]
+	// a piece broken off a vessel, not apart from it after SETTLE_T [s],
+	// moving slower than SETTLE_V [m/s] against it: pushed out of it at
+	// PUSH_OUT [m/s] at most
+	const double SETTLE_T = 1.0;
+	const double SETTLE_V = 0.5;
+	const double PUSH_OUT = 0.5;
 
 	// bounding sphere of a vessel's hulls (about its centre of gravity)
 	double HullRadius (const std::vector<collision::HullRef> &hl, const Vector &cg)
@@ -169,6 +178,8 @@ void VesselCollider::Resolve (double h)
 		Release *rel = nullptr;
 		for (Release &r : releases)
 			if ((r.a == A && r.b == B) || (r.a == B && r.b == A)) rel = &r;
+		if (rel && rel->piece && !rel->settled && td.SimT0 - rel->t > SETTLE_T && SpeedBound (A, B, ra, rb) < SETTLE_V)
+			rel->settled = true;
 		bool touching = false;
 
 		// contacts of hull x (of vessel X) with hull y (of vessel Y)
@@ -182,7 +193,7 @@ void VesselCollider::Resolve (double h)
 			if (rel) {
 				// (released from each other: no contacts while any parts touch)
 				for (int k = 0; k < mf.npt; k++) if (mf.sep[k] < collision::SKIN) touching = true;
-				return;
+				if (!rel->settled) return;
 			}
 			for (int k = 0; k < mf.npt; k++) {
 				const Vector &g = mf.pt[k];        // the point (relative to O)
@@ -190,7 +201,7 @@ void VesselCollider::Resolve (double h)
 				for (const Vector &e : excl) if (g.dist (e) < PORT_CLEARANCE) { skip = true; break; }
 				if (skip) continue;
 				contact::Point p;
-				p.C = mf.sep[k];
+				p.C = rel ? std::max (mf.sep[k], -PUSH_OUT * h) : mf.sep[k]; // (a piece settled in its vessel: slowly out)
 				p.k = p.c = 0.0;
 				p.mu1 = p.mu2 = FRICTION;
 				p.warm = nullptr;
@@ -290,11 +301,11 @@ void VesselCollider::Resolve (double h)
 
 // ==============================================================
 
-void VesselCollider::Released (VesselBase *parent, VesselBase *payload)
+void VesselCollider::Released (VesselBase *parent, VesselBase *payload, bool piece)
 {
 	if (!parent || !payload || parent == payload) return;
 	Release r;
-	r.a = parent, r.b = payload;
+	r.a = parent, r.b = payload, r.piece = piece, r.t = td.SimT0;
 	releases.push_back (r);
 }
 

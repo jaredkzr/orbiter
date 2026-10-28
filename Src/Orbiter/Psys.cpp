@@ -172,7 +172,7 @@ void PlanetarySystem::AddDebris (Debris *d, VesselBase *from)
 		DelDebris (it != debris.end() ? *it : debris.front());
 	}
 	debris.push_back (d);
-	if (from) collider.Released (from, d);
+	if (from) collider.Released (from, d, true);
 }
 
 void PlanetarySystem::DelDebris (Debris *d)
