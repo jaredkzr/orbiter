@@ -2188,6 +2188,9 @@ typedef struct {
 	double scrape;     ///< in the last step: the fastest sliding of a ground contact [m/s] (sparks)
 	double impact;     ///< in the last step: its velocity change by ground contacts [m/s] (dust)
 	unsigned long long parts; ///< the parts of the source vessel it is made of (bit i: part i, for i < 64; 0: not known)
+	double hit;        ///< the hardest blow by another body (vessel or piece) when it broke off or since: closing speed [m/s] (fragments, sparks)
+	double hitT;       ///< simulation time of that blow [s]
+	VECTOR3 hitpos;    ///< where it was struck: relative to its centre of gravity, in its own frame [m] (oapiLocalToGlobal)
 } DEBRISINFO;
 
 /**

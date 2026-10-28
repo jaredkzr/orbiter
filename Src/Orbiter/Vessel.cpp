@@ -4016,6 +4016,12 @@ void Vessel::UpdateBodyForces ()
 		part_Fc.assign (np, Vector (0,0,0));
 		part_Frec.Set (0,0,0);
 		contact_tau.Set (0,0,0);
+		contact_sr = 1.0;
+		part_vx.assign (np, Vector (0,0,0));
+		part_jx.assign (np, 0.0);
+		part_hit.assign (np, 0.0);
+		part_hitpos.assign (np, Vector (0,0,0));
+		vel_pre = s0->vel;
 	}
 
 	if (m_thruster.size()) UpdateThrustForces ();
@@ -4872,6 +4878,11 @@ int Vessel::BreakPart (int part, double vsep)
 	if (!silent_break) {
 		d = new Debris (dname, name, m, cg, sc, std::move (groups), pts);
 		d->SetParts (pieceMask);
+		// (struck: where, how hard)
+		int hp = -1;
+		for (int p : piece)
+			if (p < (int)part_hit.size() && part_hit[p] > 0.0 && (hp < 0 || part_hit[p] > part_hit[hp])) hp = p;
+		if (hp >= 0) d->SetHit (part_hit[hp], part_hitpos[hp] - cg); // (from the piece's centre of gravity)
 		g_psys->AddDebris (d, this);
 	}
 	last_debris = d;
@@ -4999,7 +5010,7 @@ void Vessel::RecordForce (const Vector &F, const void *e, const Vector &ref)
 	part_Frec += F;
 }
 
-void Vessel::ContactsResolved (const std::vector<contact::Point> &pts, int index, double h)
+void Vessel::ContactsResolved (const std::vector<contact::Point> &pts, int index, double h, const std::vector<contact::Body> *pre)
 {
 	if (!loads_on || h <= 0.0 || part_Fc.empty()) return;
 	// Impacts are taken to decelerate the structure over a crush stroke
@@ -5018,6 +5029,7 @@ void Vessel::ContactsResolved (const std::vector<contact::Point> &pts, int index
 		double dv = J / mass;
 		sr = std::min (1.0, std::max (h * dv / (2.0 * structure::CRUSH_STROKE), mass * g * h / J));
 	}
+	contact_sr = std::min (contact_sr, sr);
 	const structure::Model &sm = structure_;
 	for (const contact::Point &p : pts) {
 		if (p.a != index && p.b != index) continue;
@@ -5031,7 +5043,23 @@ void Vessel::ContactsResolved (const std::vector<contact::Point> &pts, int index
 		if (part < 0 || part >= (int)part_Fc.size()) continue;
 		part_Fc[part] += F;
 		contact_tau += crossp (F, rv - dmg.cg);
+		// (what it touched: its velocity there before the step)
+		if (part < (int)part_vx.size()) {
+			int o = p.a == index ? p.b : p.a;
+			Vector vo;
+			if (o < 0) vo = p.vs;
+			else if (pre && o < (int)pre->size()) vo = (*pre)[o].v + crossp (p.a == index ? p.rb : p.ra, (*pre)[o].w);
+			else continue;
+			double w = Jp.length();
+			part_vx[part] += vo * w, part_jx[part] += w;
+			if (pre && index < (int)pre->size() && part < (int)part_hit.size()) {
+				const contact::Body &me = (*pre)[index];
+				double v = fabs (dotp (me.v + crossp (r, me.w) - vo, p.n));
+				if (v > part_hit[part]) part_hit[part] = v, part_hitpos[part] = rv;
+			}
+		}
 	}
+	if (pre && index >= 0 && index < (int)pre->size()) vel_pre = (*pre)[index].v;
 }
 
 void Vessel::UpdateStructuralLoads ()
@@ -5078,6 +5106,11 @@ void Vessel::UpdateStructuralLoads ()
 		L[j] += aj * m - part_F[j] - part_Fc[j];
 		if (p.parent >= 0) L[p.parent] += L[j];
 	}
+	// A joint passes on at most its strength: what it could not pass on
+	// stays with the parts beyond it (the struck part takes the blow; one
+	// torn off by an impact flies off with it). Over the whole impulse of
+	// the contacts, not the share of it taken as force in the step.
+	double hJ = td.SimDT / std::max (contact_sr, 1e-6);
 	part_load.assign (np, 0.0f);
 	double coreMax = 0.0;
 	int worst = -1;
@@ -5089,9 +5122,57 @@ void Vessel::UpdateStructuralLoads ()
 	}
 	double g = a.length() / structure::G0;
 	if (coreMax > structure::CORE_FACTOR) {
+		// (all apart: each part keeps the forces on itself alone)
+		break_J.assign (np, Vector (0,0,0));
+		for (size_t j = 0; j < np; j++) {
+			if (PartLost ((int)j)) continue;
+			const structure::Part &p = parts[j];
+			Vector r (p.cg - dmg.cg);
+			double m = p.mass + (j == 0 ? mextra : 0.0);
+			Vector aj (a + crossp (r, alpha) + crossp (crossp (r, w), w));
+			break_J[j] = (part_F[j] + part_Fc[j] - aj * m) * hJ;
+		}
+		// (bounded: none pushed beyond what it hit, or back beyond where it
+		// was; what is taken off one way is taken off the other way too)
+		const StateVectors &s = (g_bStateUpdate && s1 && s1 != s0) ? *s1 : *s0;
+		std::vector<Vector> dv (np);
+		Vector S;
+		for (size_t j = 0; j < np; j++) {
+			if (PartLost ((int)j)) continue;
+			double m = parts[j].mass + (j == 0 ? mextra : 0.0);
+			dv[j] = BoundKept (std::vector<int> (1, (int)j), mul (s.R, break_J[j]) / m);
+			S += dv[j] * m;
+		}
+		if (S.length() > 0.0) {
+			Vector u (S.unit());
+			double pos = 0.0, neg = 0.0;
+			for (size_t j = 0; j < np; j++) {
+				if (PartLost ((int)j)) continue;
+				double m = parts[j].mass + (j == 0 ? mextra : 0.0), x = dotp (dv[j], u) * m;
+				if (x > 0.0) pos += x; else neg -= x;
+			}
+			double f = pos > 0.0 ? std::min (1.0, neg / pos) : 1.0;
+			for (size_t j = 0; j < np; j++)
+				if (dotp (dv[j], u) > 0.0) dv[j] *= f;
+			// (what is left over, across that direction, shared by all by
+			// mass: the core, the last piece, would take it otherwise)
+			Vector R;
+			double Mt = 0.0;
+			for (size_t j = 0; j < np; j++) {
+				if (PartLost ((int)j)) continue;
+				double m = parts[j].mass + (j == 0 ? mextra : 0.0);
+				R += dv[j] * m, Mt += m;
+			}
+			if (Mt > 0.0)
+				for (size_t j = 0; j < np; j++)
+					if (!PartLost ((int)j)) dv[j] -= R / Mt;
+		}
+		for (size_t j = 0; j < np; j++)
+			if (!PartLost ((int)j)) break_J[j] = tmul (s.R, dv[j]) * (parts[j].mass + (j == 0 ? mextra : 0.0));
 		char cbuf[128];
 		sprintf (cbuf, "broke up at %0.0f g (%s overloaded %0.1fx)", g, parts[worst].name.c_str(), coreMax);
 		Destroy (cbuf);
+		break_J.clear ();
 		return;
 	}
 	// overloaded joints break, the outermost first (pieces of their own; the
@@ -5105,10 +5186,53 @@ void Vessel::UpdateStructuralLoads ()
 		sprintf (cbuf, "%s: %s broke off at %0.1f g", name.c_str(), parts[j].name.c_str(), g);
 		if (this == g_focusobj) g_pOrbiter->ShowInfoMessage (cbuf);
 		else LOGOUT ("%s", cbuf);
+		Vector Jx (-L[j] * ((1.0 - parts[j].strength / L[j].length()) * hJ)); // (the impulse the joint did not pass on)
+		{   // (bounded by what the parts beyond it touched)
+			std::vector<int> sub (1, (int)j);
+			for (size_t i = 0; i < sub.size(); i++)
+				for (int c : parts[sub[i]].children) if (!PartLost (c)) sub.push_back (c);
+			double m = 0.0;
+			for (int k : sub) m += parts[k].mass;
+			const StateVectors &s = (g_bStateUpdate && s1 && s1 != s0) ? *s1 : *s0;
+			Jx = tmul (s.R, BoundKept (sub, mul (s.R, Jx) / m)) * m;
+		}
 		last_debris = nullptr;
 		BreakPart ((int)j, 0.5);
-		if (last_debris && j < part_temp.size()) last_debris->SetTemp (part_temp[j]);
+		if (last_debris) {
+			if (j < part_temp.size()) last_debris->SetTemp (part_temp[j]);
+			KeepImpulse (last_debris, Jx);
+		}
 	}
+}
+
+Vector Vessel::BoundKept (const std::vector<int> &ps, const Vector &dv) const
+{
+	// velocity change dv (global) of parts ps breaking loose, on top of the
+	// vessel's after the step: not beyond its velocity before the step, or
+	// that of what they touched (they are stopped by it at most, and push
+	// it at most up to their own speed)
+	double d = dv.length();
+	if (d <= 0.0) return dv;
+	Vector u (dv / d);
+	const StateVectors &s = (g_bStateUpdate && s1 && s1 != s0) ? *s1 : *s0;
+	double v = dotp (s.vel, u), lim = std::max (dotp (vel_pre, u), v);
+	for (int k : ps)
+		if (k < (int)part_jx.size() && part_jx[k] > 0.0)
+			lim = std::max (lim, dotp (part_vx[k] / part_jx[k], u));
+	return u * std::min (d, std::max (lim - v, 0.0));
+}
+
+void Vessel::KeepImpulse (Debris *d, const Vector &J)
+{
+	// a piece just broken off keeps impulse J (vessel frame) it was given
+	// as part of the vessel: taken back from what is left (momentum
+	// conserved)
+	if (!d || (destroyed && !breaking_up)) return;
+	const StateVectors &s = (g_bStateUpdate && s1 && s1 != s0) ? *s1 : *s0;
+	Vector Jg (mul (s.R, J));
+	d->AddVelocity (Jg / d->Mass());
+	double M = OwnMass();
+	if (M > 1e-3) AddVelocity (-Jg / M);
 }
 
 void Vessel::UpdateHeating ()
@@ -5205,11 +5329,17 @@ void Vessel::Destroy (const char *reason)
 	double fuel = mass - StructMass() - payload_mass, mleft = std::max (StructMass(), 1.0);
 	breaking_up = true;
 	double mmax = 0.0;
+	const Vector vstart (((g_bStateUpdate && s1 && s1 != s0) ? s1 : s0)->vel);
 	for (size_t j = parts.size(); j-- > 0; ) {
 		if (part_lost[j]) continue;
 		last_debris = nullptr;
+		// (the pieces' velocities from the vessel's before it broke up: what is
+		// left of it has moved on as the pieces took their impulses)
+		const StateVectors &sv = (g_bStateUpdate && s1 && s1 != s0) ? *s1 : *s0;
+		Vector drift (sv.vel - vstart);
 		BreakPart ((int)j, j ? 2.0 : 0.0);
 		if (!last_debris) continue;
+		if (j < break_J.size() && j > 0) KeepImpulse (last_debris, break_J[j] - tmul (sv.R, drift) * last_debris->Mass());
 		if (last_debris->Mass() > mmax) mmax = last_debris->Mass(), wreck = last_debris;
 		double f = std::max (fuel, 0.0) * last_debris->Mass() / mleft;
 		if (f > 1.0) last_debris->Ignite (f, std::clamp (4.0 + 0.02 * f, 4.0, 60.0));

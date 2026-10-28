@@ -130,8 +130,28 @@ double Debris::Temp () const
 	return BurnLeft() > 0.0 ? std::max (T, 1000.0) : T;
 }
 
-void Debris::ContactsResolved (const std::vector<contact::Point> &pts, int index, double h)
+void Debris::SetHit (double v, const Vector &local)
 {
+	if (hitT == td.SimT1 && v <= hit) return; // (the hardest of the step)
+	hit = v, hitT = td.SimT1, hitPos = local;
+}
+
+void Debris::ContactsResolved (const std::vector<contact::Point> &pts, int index, double h, const std::vector<contact::Body> *pre)
+{
+	// struck by another body: the closing speed (fragments, sparks)
+	if (pre && index >= 0 && index < (int)pre->size()) {
+		for (const contact::Point &p : pts) {
+			if (p.a != index && p.b != index) continue;
+			bool isA = p.a == index;
+			int o = isA ? p.b : p.a;
+			if (o < 0 || o >= (int)pre->size()) continue;
+			const contact::Body &me = (*pre)[index], &ot = (*pre)[o];
+			const Vector &r = isA ? p.ra : p.rb, &ro = isA ? p.rb : p.ra;
+			double v = fabs (dotp ((me.v + crossp (r, me.w)) - (ot.v + crossp (ro, ot.w)), p.n));
+			if (v > 1.0) SetHit (v, tmul (s0->R, r));
+		}
+	}
+
 	// the fastest sliding contact (sparks) and the impact (dust)
 	scrape = impact = 0.0;
 	double Jn = 0.0;

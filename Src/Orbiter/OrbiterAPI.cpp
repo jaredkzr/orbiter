@@ -179,6 +179,9 @@ DLLEXPORT bool oapiGetDebrisInfo (OBJHANDLE hDebris, DEBRISINFO *info)
 	info->scrape = d->Scrape();
 	info->impact = d->Impact();
 	info->parts = d->Parts();
+	info->hit = d->Hit();
+	info->hitT = d->HitT();
+	info->hitpos = _V(d->HitPos().x, d->HitPos().y, d->HitPos().z);
 	return true;
 }
 

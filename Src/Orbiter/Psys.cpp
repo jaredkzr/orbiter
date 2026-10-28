@@ -171,6 +171,11 @@ void PlanetarySystem::AddDebris (Debris *d, VesselBase *from)
 		auto it = std::find_if (debris.begin(), debris.end(), [](const Debris *x) { return x->AtRest(); });
 		DelDebris (it != debris.end() ? *it : debris.front());
 	}
+	// (released from its vessel, and from the pieces broken off it in the
+	// same step: they overlap where they were joined, and pass through each
+	// other until apart)
+	for (Debris *e : debris)
+		if (e->CreatedT() == d->CreatedT() && e->Source() == d->Source()) collider.Released (e, d, true);
 	debris.push_back (d);
 	if (from) collider.Released (from, d, true);
 }

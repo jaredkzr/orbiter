@@ -1340,8 +1340,10 @@ protected:
 	// that has broken off
 	int ElementPart (const void *e, const Vector &ref) const;
 	// the part an element at ref is on (cached per element)
-	void ContactsResolved (const std::vector<contact::Point> &pts, int index, double h) override;
+	void ContactsResolved (const std::vector<contact::Point> &pts, int index, double h, const std::vector<contact::Body> *pre = nullptr) override;
 	void UpdateStructuralLoads ();
+	void KeepImpulse (class Debris *d, const Vector &J);
+	Vector BoundKept (const std::vector<int> &parts, const Vector &dv) const;
 	// after the step (damage model on): the loads of the joints from the
 	// forces on the parts and the vessel's motion; overloaded joints break,
 	// a vessel overloaded at its core (or crushed) breaks up
@@ -1752,6 +1754,13 @@ private:
 	std::vector<Vector> part_F, part_Fc;         // forces on the parts in the step (vessel frame): the vessel's own, contacts
 	Vector part_Frec;                            // (the vessel's own recorded on their parts)
 	Vector contact_tau;                          // moment of the contact forces about the centre of gravity
+	std::vector<Vector> part_vx;                 // velocity of what each part touched in the step, before (global; weighted by the impulse)
+	std::vector<double> part_jx;                 // ... the impulses' sum (0: not touched)
+	std::vector<double> part_hit;                // closing speed of the hardest blow on each part in the step (fragments)
+	std::vector<Vector> part_hitpos;             // ... where (vessel frame)
+	Vector vel_pre;                              // its velocity before the contacts of the step (global)
+	double contact_sr = 1.0;                     // share of the contacts' impulse taken as force in the step (crush stroke)
+	std::vector<Vector> break_J;                 // the impulse each part keeps when it breaks loose (vessel frame; Destroy)
 	std::vector<float> part_load;                // load / strength of each part's joint in the last step
 	std::vector<double> part_temp;               // [K] temperature of each part
 	bool destroyed = false;

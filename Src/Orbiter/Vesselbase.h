@@ -188,7 +188,8 @@ protected:
 	// relative to the turning ground, close to a planet's surface)
 
 	virtual void ContactStateChanged () {}
-	virtual void ContactsResolved (const std::vector<contact::Point> &pts, int index, double h) {}
+	/// (pre: the bodies' velocities before the contacts, if known)
+	virtual void ContactsResolved (const std::vector<contact::Point> &pts, int index, double h, const std::vector<contact::Body> *pre = nullptr) {}
 	// the contacts of the step were resolved (index: the body's in pts; the
 	// impulses are in the points), e.g. for structural loads
 	// The new state (s1) was changed after the update, by the contacts with

@@ -68,6 +68,13 @@ public:
 	bool Hidden () const { return hidden; }        ///< not shown (instant replay: not broken off yet)
 	/// The parts of its vessel it is made of (bit i: part i, i < 64; 0: not known)
 	uint64_t Parts () const { return parts; }
+	/// Struck by another body (vessel or piece): closing speed [m/s], where
+	/// (its frame, from its centre of gravity), when [s] (the latest blow
+	/// of a step, the hardest)
+	void SetHit (double v, const Vector &local);
+	double Hit () const { return hit; }
+	double HitT () const { return hitT; }
+	const Vector &HitPos () const { return hitPos; } ///< (its frame, from its centre of gravity)
 	void SetParts (uint64_t mask) { parts = mask; }
 	void SetHidden (bool h) { hidden = h; }
 
@@ -98,7 +105,7 @@ protected:
 	void CollectGroundContacts (const StateVectors &s, const StateVectors &sb, int body, double h,
 		std::vector<contact::Point> &pts) const override;
 	void WakeFromContact () override { wake = true; }
-	void ContactsResolved (const std::vector<contact::Point> &pts, int index, double h) override;
+	void ContactsResolved (const std::vector<contact::Point> &pts, int index, double h, const std::vector<contact::Body> *pre = nullptr) override;
 	void ContactStateChanged () override;
 	TOUCHDOWN_VTX *HullvtxFirst () override { return nullptr; }
 	TOUCHDOWN_VTX *HullvtxNext () override { return nullptr; }
@@ -127,6 +134,8 @@ private:
 	double scrape = 0.0, impact = 0.0;
 	bool hidden = false;
 	uint64_t parts = 0;
+	double hit = 0.0, hitT = -1e10;
+	Vector hitPos;
 };
 
 #endif // !__DEBRIS_H
