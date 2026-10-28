@@ -178,6 +178,7 @@ DLLEXPORT bool oapiGetDebrisInfo (OBJHANDLE hDebris, DEBRISINFO *info)
 	info->temp = d->Temp();
 	info->scrape = d->Scrape();
 	info->impact = d->Impact();
+	info->parts = d->Parts();
 	return true;
 }
 
@@ -193,6 +194,7 @@ DLLEXPORT bool oapiGetDebrisGroup (OBJHANDLE hDebris, DWORD i, DEBRISGROUP *grp)
 	grp->vtx = g.vtx.data();
 	grp->nvtx = (DWORD)g.vtx.size();
 	grp->edge = g.edge.size() * 3 == g.vtx.size() ? g.edge.data() : nullptr;
+	grp->ofs = _V(g.ofs.x, g.ofs.y, g.ofs.z);
 	return true;
 }
 

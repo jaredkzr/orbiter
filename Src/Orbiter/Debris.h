@@ -66,6 +66,9 @@ public:
 	double Scrape () const { return scrape; }
 	double Impact () const { return impact; }
 	bool Hidden () const { return hidden; }        ///< not shown (instant replay: not broken off yet)
+	/// The parts of its vessel it is made of (bit i: part i, i < 64; 0: not known)
+	uint64_t Parts () const { return parts; }
+	void SetParts (uint64_t mask) { parts = mask; }
 	void SetHidden (bool h) { hidden = h; }
 
 	void Update (bool force = false) override;
@@ -118,6 +121,7 @@ private:
 	double temp0 = 0.0, tempT = 0.0;
 	double scrape = 0.0, impact = 0.0;
 	bool hidden = false;
+	uint64_t parts = 0;
 };
 
 #endif // !__DEBRIS_H

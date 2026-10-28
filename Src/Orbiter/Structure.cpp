@@ -124,6 +124,11 @@ namespace structure {
 
 	namespace {
 		typedef std::tuple<int,int,int> Cell;
+		uint64_t CellKey (int x, int y, int z)
+		{
+			return (uint64_t)(uint32_t)(x + 0x100000) << 42 | (uint64_t)(uint32_t)(y + 0x100000) << 21 | (uint32_t)(z + 0x100000);
+		}
+		const int NEAR_SHELLS = 6; // (PartAt: the cells searched about a point; beyond, all)
 	}
 
 	void Model::Build (const std::vector<convex::Polytope> &hulls, const std::vector<Triangle> &tris,
@@ -139,6 +144,7 @@ namespace structure {
 		triPart.assign (tris.size(), 0);
 		cells.clear();
 		cellPart.clear();
+		cellIndex.clear();
 		indestructible = cfg.indestructible;
 		const int nh = (int)hulls.size();
 
@@ -185,6 +191,8 @@ namespace structure {
 				}
 		}
 		const int ne = (int)cells.size();
+		for (int e = 0; e < ne; e++)
+			cellIndex[CellKey ((int)std::floor (cells[e].x / cs), (int)std::floor (cells[e].y / cs), (int)std::floor (cells[e].z / cs))] = e;
 		if (!ne) { // (no triangles: a single part)
 			Part core;
 			core.name = "core";
@@ -576,15 +584,33 @@ namespace structure {
 
 	int Model::PartAt (const Vector &x) const
 	{
-		// (the part of the nearest cell)
+		// (the part of the nearest cell; of equally near ones the first)
 		int best = -1;
 		double bd = 1e30;
-		for (size_t e = 0; e < cells.size(); e++) {
+		auto Try = [&](int e) {
 			double d = (cells[e] - x).length2();
-			if (d < bd) bd = d, best = cellPart[e];
+			if (d < bd || (d == bd && e < best)) bd = d, best = e;
+		};
+		const double cs = cellSize;
+		if (cellIndex.size() == cells.size() && cs > 0.0 && std::fabs (x.x / cs) < 1e5 && std::fabs (x.y / cs) < 1e5 && std::fabs (x.z / cs) < 1e5) {
+			// (in shells about its own place in the grid: done when the next
+			// shell is farther than the nearest cell found)
+			int cx = (int)std::floor (x.x / cs), cy = (int)std::floor (x.y / cs), cz = (int)std::floor (x.z / cs);
+			for (int r = 0; r <= NEAR_SHELLS; r++) {
+				for (int i = -r; i <= r; i++)
+					for (int j = -r; j <= r; j++)
+						for (int k = -r; k <= r; k++) {
+							if (std::max ({std::abs (i), std::abs (j), std::abs (k)}) != r) continue;
+							auto it = cellIndex.find (CellKey (cx + i, cy + j, cz + k));
+							if (it != cellIndex.end()) Try (it->second);
+						}
+				if (best >= 0 && std::sqrt (bd) <= (r + 0.5) * cs) return cellPart[best];
+			}
 		}
-		if (best < 0 && !parts.empty()) best = 0;
-		return best;
+		best = -1, bd = 1e30;
+		for (size_t e = 0; e < cells.size(); e++) Try ((int)e);
+		if (best < 0) return parts.empty() ? -1 : 0;
+		return cellPart[best];
 	}
 
 } // namespace structure

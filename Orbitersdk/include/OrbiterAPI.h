@@ -2187,6 +2187,7 @@ typedef struct {
 	double temp;       ///< its temperature [K] (hot when burned off or burning; cooling)
 	double scrape;     ///< in the last step: the fastest sliding of a ground contact [m/s] (sparks)
 	double impact;     ///< in the last step: its velocity change by ground contacts [m/s] (dust)
+	unsigned long long parts; ///< the parts of the source vessel it is made of (bit i: part i, for i < 64; 0: not known)
 } DEBRISINFO;
 
 /**
@@ -2200,6 +2201,7 @@ typedef struct {
 	const NTVERTEX *vtx;  ///< three vertices for each triangle, in the piece's frame
 	DWORD nvtx;           ///< number of vertices
 	const float *edge;    ///< for each triangle: 1 at the fracture (charred), 0 not (NULL: none known)
+	VECTOR3 ofs;          ///< the mesh's offset in the piece's frame (the group's vertices are its own plus this)
 } DEBRISGROUP;
 
 #define DEBRIS_ATREST 0x0001 ///< at rest on the ground

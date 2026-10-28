@@ -164,7 +164,9 @@ void VVessel::UpdateDamage ()
 				if (!n) mask.clear ();
 				rec.mesh->SetHiddenTriangles (g, n ? mask.data() : nullptr);
 			}
+			rec.cutState.clear (), rec.cutKeep.clear (), rec.cutLose.clear ();
 		}
+		if (v && fracture::CutTriangles ()) CutGroups ();
 		wallsDirty = true;
 	} else if (v && !wallsDirty) {
 		// the walls are made for the vessel as posed: again when it moves
@@ -189,6 +191,81 @@ namespace {
 	// the inside of the skin is drawn within about this times the vessel's
 	// size of the gaps where parts broke off
 	constexpr double INSIDE_REACH = 0.15;
+
+	/// A part with the texture and material of a group of a mesh
+	VkMesh::Part GroupPart (const VkMesh &mesh, uint32_t g)
+	{
+		const VkMesh::Group &grp = mesh.GetGroup (g);
+		VkMesh::Part p;
+		p.tex = grp.tex;
+		p.mat = mesh.Material (grp.material);
+		p.pbr = mesh.PBR (grp.material);
+		p.alphaTest = grp.alphaTest;
+		return p;
+	}
+
+	/// Groups whose triangles are cut along the torn surface: drawn, opaque
+	/// (the same on the vessel and on the pieces: from the mesh template)
+	bool Cuttable (MESHHANDLE hm, DWORD g)
+	{
+		MESHGROUP *mg = oapiMeshGroup (hm, g);
+		if (!mg || (mg->UsrFlag & (VkMesh::GRP_HIDDEN | VkMesh::GRP_ADDITIVE))) return false;
+		if (mg->MtrlIdx != (DWORD)-1)
+			if (MATERIAL *m = oapiMeshMaterial (hm, mg->MtrlIdx))
+				if (m->diffuse.a < 0.999f) return false;
+		return true;
+	}
+}
+
+void VVessel::CutGroups ()
+{
+	// the parts not shown
+	DWORD np = vessel->GetPartCount ();
+	std::vector<uint8_t> gone (np, 0);
+	bool any = false;
+	for (DWORD k = 0; k < np; k++) {
+		PARTINFO pi;
+		if (vessel->GetPartInfo (k, &pi) && (pi.flags & PART_HIDDEN)) gone[k] = 1, any = true;
+	}
+	if (!any) return;
+	fracture::Field field (vessel, size, (uint32_t)std::hash<std::string>() (vessel->GetName ()));
+	auto side = [&] (const VECTOR3 &p) { int k = field.PartAt (p); return k < 0 || k >= (int)np || !gone[k]; };
+	// the groups with triangles shown and not shown: each triangle cut
+	// where the surface passes through it (the vessel's frame, unposed:
+	// as the structure was made)
+	for (size_t m = 0; m < meshes.size(); m++) {
+		MeshRec &rec = meshes[m];
+		if (!rec.mesh || !(rec.visMode & MESHVIS_EXTERNAL)) continue;
+		MESHHANDLE hm = rec.mesh->Template ();
+		if (!hm) continue;
+		uint32_t ng = std::min (rec.mesh->nGroup(), (uint32_t)rec.hidden.size());
+		rec.cutState.assign (ng, {}), rec.cutKeep.assign (ng, {}), rec.cutLose.assign (ng, {});
+		for (uint32_t g = 0; g < ng; g++) {
+			std::vector<BYTE> &mask = rec.hidden[g];
+			if (mask.empty() || !Cuttable (hm, g)) continue;
+			bool shown = std::any_of (mask.begin(), mask.end(), [] (BYTE b) { return b != 1; });
+			MESHGROUP *mg = oapiMeshGroup (hm, g);
+			if (!shown || !mg || mg->nIdx / 3 != mask.size()) continue;
+			std::vector<uint8_t> &state = rec.cutState[g];
+			state.assign (mask.size(), 0);
+			for (size_t k = 0; k < mask.size(); k++) {
+				NTVERTEX v[3];
+				bool ok = true;
+				for (int j = 0; j < 3 && ok; j++) {
+					WORD i = mg->Idx[k * 3 + j];
+					if (i >= mg->nVtx) ok = false;
+					else v[j] = mg->Vtx[i];
+				}
+				if (!ok) continue;
+				int r = fracture::Cut (v, rec.ofs, side, field.Resolution(), rec.cutKeep[g], rec.cutLose[g]);
+				bool hid = mask[k] == 1;
+				if ((r == 0 && !hid) || (r == 1 && hid)) continue; // (as it was)
+				if (r != 2) (r ? rec.cutLose[g] : rec.cutKeep[g]).insert ((r ? rec.cutLose[g] : rec.cutKeep[g]).end(), v, v + 3);
+				state[k] = 1, mask[k] = 1;
+			}
+			rec.mesh->SetHiddenTriangles (g, mask.data());
+		}
+	}
 }
 
 void VVessel::BuildWalls ()
@@ -196,7 +273,7 @@ void VVessel::BuildWalls ()
 	std::vector<fracture::Tri> tris; // (the skin, vessel frame, as posed)
 	std::vector<std::pair<size_t, uint32_t>> srcs; // (mesh and group of each source)
 	std::vector<std::vector<NTVERTEX>> inside;     // (the inside of the skin, by source)
-	struct InsideOf { size_t tri; const NTVERTEX *vtx; const WORD *idx; };
+	struct InsideOf { size_t tri; const NTVERTEX *a, *b, *c; };
 	std::vector<InsideOf> insideOf;                 // (kept triangles that may show their inside)
 	bool cut = false;
 	for (size_t m = 0; m < meshes.size(); m++) {
@@ -222,7 +299,9 @@ void VVessel::BuildWalls ()
 			inside.emplace_back ();
 			bool solid = !vg.transparent && !(vg.usrFlag & (VkMesh::GRP_HIDDEN | VkMesh::GRP_ADDITIVE));
 			const Mat4 &M = g < rec.grpTransform.size() ? rec.grpTransform[g] : Mat4::Identity();
+			const std::vector<uint8_t> *state = g < rec.cutState.size() && !rec.cutState[g].empty() ? &rec.cutState[g] : nullptr;
 			for (DWORD k = 0; k < ntri; k++) {
+				if (state && (*state)[k]) continue; // (drawn by its pieces)
 				fracture::Tri t;
 				VECTOR3 nm{};
 				bool ok = true;
@@ -239,8 +318,26 @@ void VVessel::BuildWalls ()
 				t.src = src;
 				t.kept = mask.empty() || mask[k] != 1;
 				tris.push_back (t);
-				if (t.kept && solid) insideOf.push_back ({ tris.size() - 1, &mg->Vtx[0], &mg->Idx[k * 3] });
+				if (t.kept && solid) insideOf.push_back ({ tris.size() - 1, &mg->Vtx[mg->Idx[k * 3]], &mg->Vtx[mg->Idx[k * 3 + 1]], &mg->Vtx[mg->Idx[k * 3 + 2]] });
 			}
+			// the pieces of the triangles cut
+			if (state)
+				for (int kept = 0; kept < 2; kept++) {
+					const std::vector<NTVERTEX> &pc = kept ? rec.cutKeep[g] : rec.cutLose[g];
+					for (size_t k = 0; k + 2 < pc.size(); k += 3) {
+						fracture::Tri t;
+						for (int j = 0; j < 3; j++) t.p[j] = M.TransformPoint (_V(pc[k + j].x, pc[k + j].y, pc[k + j].z)) + rec.ofs;
+						VECTOR3 nm = crossp (t.p[1] - t.p[0], t.p[2] - t.p[0]);
+						if (length (nm) < 1e-12) continue;
+						VECTOR3 vn = _V(pc[k].nx + pc[k + 1].nx + pc[k + 2].nx, pc[k].ny + pc[k + 1].ny + pc[k + 2].ny, pc[k].nz + pc[k + 1].nz + pc[k + 2].nz);
+						t.n = unit (nm);
+						if (dotp (t.n, M.TransformPoint (vn) - M.TransformPoint (_V(0, 0, 0))) < 0.0) t.n = -t.n;
+						t.src = src;
+						t.kept = kept != 0;
+						tris.push_back (t);
+						if (t.kept && solid) insideOf.push_back ({ tris.size() - 1, &pc[k], &pc[k + 1], &pc[k + 2] });
+					}
+				}
 		}
 	}
 	if (!cut) return;
@@ -262,7 +359,7 @@ void VVessel::BuildWalls ()
 		for (const InsideOf &io : insideOf) {
 			const fracture::Tri &t = tris[io.tri];
 			if (near.count (key ((t.p[0] + t.p[1] + t.p[2]) / 3.0)))
-				fracture::AddInside (io.vtx[io.idx[0]], io.vtx[io.idx[1]], io.vtx[io.idx[2]], ofs, inside[t.src]);
+				fracture::AddInside (*io.a, *io.b, *io.c, ofs, inside[t.src]);
 		}
 	}
 	// walls along the cuts, each moving with the group it is cut in
@@ -289,6 +386,12 @@ void VVessel::BuildWalls ()
 		auto [m, g] = srcs[s];
 		fracture::AddParts (inside[s], parts[m], true);
 		meshes[m].wallGroup.resize (parts[m].size(), g);
+		// the pieces of its triangles cut, on the vessel (its texture and material)
+		const MeshRec &rec = meshes[m];
+		if (g < rec.cutKeep.size() && !rec.cutKeep[g].empty()) {
+			fracture::AddParts (rec.cutKeep[g], parts[m], GroupPart (*rec.mesh, g));
+			meshes[m].wallGroup.resize (parts[m].size(), g);
+		}
 	}
 	for (MeshRec &rec : meshes)
 		for (uint32_t g : rec.wallGroup)
@@ -507,11 +610,76 @@ void VVessel::SetHeating ()
 // ======================================================================
 // VDebris
 
+void VDebris::CutPiece (const VESSEL *src, const DEBRISINFO &info, std::vector<PieceCut> &cuts)
+{
+	// the offset of each group's mesh in the vessel (its frame: where the
+	// structure's parts are)
+	std::vector<DEBRISGROUP> dgs (info.ngroup);
+	std::vector<VECTOR3> vofs (info.ngroup);
+	std::vector<uint8_t> found (info.ngroup, 0);
+	for (DWORD i = 0; i < info.ngroup; i++) {
+		if (!oapiGetDebrisGroup (hObj, i, &dgs[i]) || !dgs[i].hMesh) continue;
+		for (UINT m = 0; m < src->GetMeshCount (); m++) {
+			MESHHANDLE hm = src->GetMeshTemplate (m);
+			if (!hm)
+				if (const char *name = src->GetMeshName (m)) hm = oapiLoadMeshGlobal (name);
+			if (hm == dgs[i].hMesh) { src->GetMeshOffset (m, vofs[i]); found[i] = 1; break; }
+		}
+	}
+	// its parts (not known for pieces from scenarios: those lost where its
+	// triangles are)
+	DWORD np = src->GetPartCount ();
+	unsigned long long mine = info.parts;
+	if (!mine)
+		for (DWORD i = 0; i < info.ngroup; i++) {
+			if (!found[i]) continue;
+			const DEBRISGROUP &dg = dgs[i];
+			for (DWORD k = 0; k + 2 < dg.nvtx; k += 3) {
+				VECTOR3 c = (_V(dg.vtx[k].x, dg.vtx[k].y, dg.vtx[k].z) + _V(dg.vtx[k + 1].x, dg.vtx[k + 1].y, dg.vtx[k + 1].z) +
+					_V(dg.vtx[k + 2].x, dg.vtx[k + 2].y, dg.vtx[k + 2].z)) / 3.0 - dg.ofs + vofs[i];
+				int p = src->GetPartAt (c);
+				PARTINFO pi;
+				if (p >= 0 && p < 64 && src->GetPartInfo ((DWORD)p, &pi) && (pi.flags & PART_LOST)) mine |= 1ull << p;
+			}
+		}
+	if (!mine) return;
+	fracture::Field field (src, oapiGetSize (src->GetHandle ()), (uint32_t)std::hash<std::string>() (std::string (info.source)));
+	auto side = [&] (const VECTOR3 &p) { int k = field.PartAt (p); return k >= 0 && k < 64 && k < (int)np && ((mine >> k) & 1); };
+	// the groups only partly in it: all the triangles of the mesh's group
+	// cut where the surface passes through them
+	for (DWORD i = 0; i < info.ngroup; i++) {
+		const DEBRISGROUP &dg = dgs[i];
+		if (!found[i] || !Cuttable (dg.hMesh, dg.group)) continue;
+		MESHGROUP *mg = oapiMeshGroup (dg.hMesh, dg.group);
+		if (!mg || mg->nIdx / 3 <= dg.nvtx / 3) continue;
+		PieceCut &c = cuts[i];
+		c.on = true;
+		for (DWORD k = 0; k + 2 < mg->nIdx; k += 3) {
+			NTVERTEX v[3];
+			bool ok = true;
+			for (int j = 0; j < 3 && ok; j++) {
+				WORD x = mg->Idx[k + j];
+				if (x >= mg->nVtx) ok = false;
+				else v[j] = mg->Vtx[x];
+			}
+			if (!ok) continue;
+			int r = fracture::Cut (v, vofs[i], side, field.Resolution(), c.keep, c.lose);
+			if (r != 2) (r ? c.lose : c.keep).insert ((r ? c.lose : c.keep).end(), v, v + 3);
+		}
+		// (in the piece's frame)
+		for (auto *pc : { &c.keep, &c.lose })
+			for (NTVERTEX &x : *pc) x.x += (float)dg.ofs.x, x.y += (float)dg.ofs.y, x.z += (float)dg.ofs.z;
+	}
+}
+
 VDebris::VDebris (OBJHANDLE h, Scene *s, DWORD sn)
 	: VObject (h, s), serial (sn)
 {
 	DEBRISINFO info;
 	if (!oapiGetDebrisInfo (hObj, &info)) return;
+	OBJHANDLE hSrc = oapiGetVesselByName (info.source);
+	std::vector<PieceCut> cuts (info.ngroup);
+	if (hSrc && fracture::CutTriangles ()) CutPiece (oapiGetVesselInterface (hSrc), info, cuts);
 	std::vector<VkMesh::Part> parts;
 	for (DWORD i = 0; i < info.ngroup; i++) {
 		DEBRISGROUP dg;
@@ -535,6 +703,10 @@ VDebris::VDebris (OBJHANDLE h, Scene *s, DWORD sn)
 		charred.pbr = PBRParams::FromMaterial (charred.mat);
 		charred.pbr.roughness = 0.95f;
 		charred.pbr.metalness = 0.0f;
+		if (cuts[i].on) { // (its pieces of the triangles cut)
+			fracture::AddParts (cuts[i].keep, parts, base);
+			continue;
+		}
 		int cur[2] = { -1, -1 }; // (the parts being filled: plain, charred)
 		for (DWORD k = 0; k + 2 < dg.nvtx; k += 3) {
 			int c = dg.edge && dg.edge[k / 3] > 0.5f ? 1 : 0;
@@ -553,6 +725,22 @@ VDebris::VDebris (OBJHANDLE h, Scene *s, DWORD sn)
 	// walls along the cut edges (as deep as on the vessel it broke off)
 	std::vector<fracture::Tri> tris;
 	for (DWORD i = 0; i < info.ngroup; i++) {
+		if (cuts[i].on) {
+			for (int kept = 0; kept < 2; kept++) {
+				const std::vector<NTVERTEX> &pc = kept ? cuts[i].keep : cuts[i].lose;
+				for (size_t k = 0; k + 2 < pc.size(); k += 3) {
+					fracture::Tri t;
+					for (int j = 0; j < 3; j++) t.p[j] = _V(pc[k + j].x, pc[k + j].y, pc[k + j].z);
+					VECTOR3 nm = crossp (t.p[1] - t.p[0], t.p[2] - t.p[0]);
+					if (length (nm) < 1e-12) continue;
+					t.n = unit (nm);
+					if (dotp (t.n, _V(pc[k].nx + pc[k + 1].nx + pc[k + 2].nx, pc[k].ny + pc[k + 1].ny + pc[k + 2].ny, pc[k].nz + pc[k + 1].nz + pc[k + 2].nz)) < 0.0) t.n = -t.n;
+					t.kept = kept != 0;
+					tris.push_back (t);
+				}
+			}
+			continue;
+		}
 		DEBRISGROUP dg;
 		if (!oapiGetDebrisGroup (hObj, i, &dg) || !dg.edge) continue;
 		for (DWORD k = 0; k + 2 < dg.nvtx; k += 3) {
@@ -569,7 +757,6 @@ VDebris::VDebris (OBJHANDLE h, Scene *s, DWORD sn)
 			tris.push_back (t);
 		}
 	}
-	OBJHANDLE hSrc = oapiGetVesselByName (info.source);
 	double depth = fracture::WallDepth (hSrc ? oapiGetSize (hSrc) : info.size);
 	std::vector<NTVERTEX> inside; // (of the skin, but not of its windows)
 	for (DWORD i = 0; i < info.ngroup; i++) {
@@ -580,8 +767,10 @@ VDebris::VDebris (OBJHANDLE h, Scene *s, DWORD sn)
 				if (mg->MtrlIdx != (DWORD)-1)
 					if (MATERIAL *m = oapiMeshMaterial (dg.hMesh, mg->MtrlIdx))
 						if (m->diffuse.a < 0.999f) continue;
-		for (DWORD k = 0; k + 2 < dg.nvtx; k += 3)
-			fracture::AddInside (dg.vtx[k], dg.vtx[k + 1], dg.vtx[k + 2], 0.15 * depth, inside);
+		const NTVERTEX *vtx = cuts[i].on ? cuts[i].keep.data() : dg.vtx;
+		size_t nvtx = cuts[i].on ? cuts[i].keep.size() : dg.nvtx;
+		for (size_t k = 0; k + 2 < nvtx; k += 3)
+			fracture::AddInside (vtx[k], vtx[k + 1], vtx[k + 2], 0.15 * depth, inside);
 	}
 	std::vector<std::vector<NTVERTEX>> walls;
 	fracture::Walls (tris, depth, 1e-3, serial, walls);

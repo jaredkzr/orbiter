@@ -4869,6 +4869,7 @@ int Vessel::BreakPart (int part, double vsep)
 	Debris *d = nullptr;
 	if (!silent_break) {
 		d = new Debris (dname, name, m, cg, sc, std::move (groups), pts);
+		d->SetParts (pieceMask);
 		g_psys->AddDebris (d, this);
 	}
 	last_debris = d;

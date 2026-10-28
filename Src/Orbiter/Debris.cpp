@@ -335,6 +335,7 @@ void Debris::Write (std::ostream &os) const
 	os << "PIECE " << name << '\n';
 	os << "  SOURCE " << source << '\n';
 	os << std::setprecision (10) << "  MASS " << mass << '\n';
+	if (parts) os << "  PARTS " << parts << '\n';
 	auto mat = [&](const Matrix &R) {
 		for (int i = 0; i < 9; i++) os << ' ' << R.data[i];
 		os << '\n';
@@ -374,6 +375,7 @@ Debris *Debris::Read (std::istream &is, const std::string &name)
 {
 	std::string line, source, ref;
 	double m = 0.0;
+	uint64_t parts = 0;
 	bool rest = false, state = false;
 	Vector p, v, w;
 	Matrix R (1,0,0, 0,1,0, 0,0,1);
@@ -386,6 +388,7 @@ Debris *Debris::Read (std::istream &is, const std::string &name)
 		if (tok == "END") break;
 		if (tok == "SOURCE") ss >> source;
 		else if (tok == "MASS") ss >> m;
+		else if (tok == "PARTS") ss >> parts;
 		else if (tok == "REST") { ss >> ref >> p.x >> p.y >> p.z; rest = true; }
 		else if (tok == "STATE") { ss >> ref >> p.x >> p.y >> p.z >> v.x >> v.y >> v.z; state = true; }
 		else if (tok == "ROT" || tok == "LROT") { for (int i = 0; i < 9; i++) ss >> R.data[i]; }
@@ -437,6 +440,7 @@ Debris *Debris::Read (std::istream &is, const std::string &name)
 	}
 	s.Q.Set (s.R);
 	Debris *d = new Debris (name, source, m, Vector (0,0,0), s, std::move (groups), hullPts);
+	d->SetParts (parts);
 	if (rest && cb->Type() == OBJTP_PLANET) d->InitLanded ((Planet*)cb, 0.0, 0.0, 0.0, &R);
 	return d;
 }

@@ -100,7 +100,13 @@ private:
 		std::vector<Mat4> wallPose;      // (the group transforms they were made for)
 		std::vector<uint8_t> wallWatch;  // (groups at the gaps: made again when they move)
 		std::vector<std::vector<BYTE>> hidden; // per group: oapiGetVesselHiddenTriangles (empty: none)
+		// triangles cut along the torn surface between the parts (Fracture.h),
+		// per group: those drawn by their pieces instead (1), and the pieces
+		// on the vessel and broken off (the group's frame)
+		std::vector<std::vector<uint8_t>> cutState;
+		std::vector<std::vector<NTVERTEX>> cutKeep, cutLose;
 	};
+	void CutGroups ();
 	void BuildWalls ();
 	bool wallsDirty = false;
 	double wallsBuilt = -1e30;
@@ -185,6 +191,11 @@ private:
 	bool scorched = false;   // (a scorch mark made)
 	void Effects ();
 	bool Emit (Ring &r, ParticleSystem::Emission e, uint32_t n, double ringLife);
+	/// its groups cut along the torn surface between the vessel's parts
+	/// (Fracture.h), where they are only partly in it: its pieces of their
+	/// triangles, and the others' (its frame)
+	struct PieceCut { bool on = false; std::vector<NTVERTEX> keep, lose; };
+	void CutPiece (const VESSEL *src, const DEBRISINFO &info, std::vector<PieceCut> &cuts);
 	double FireballRadius () const;
 };
 

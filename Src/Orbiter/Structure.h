@@ -33,6 +33,7 @@
 #include "ConvexGeometry.h"
 #include <string>
 #include <vector>
+#include <unordered_map>
 #include <cstdint>
 
 namespace structure {
@@ -143,6 +144,7 @@ namespace structure {
 		std::vector<int> cellPart;  // the part of each
 		std::vector<uint64_t> cellNbr; // the parts in and next to each
 		std::vector<int> triCell;   // the cell of each triangle
+		std::unordered_map<uint64_t,int> cellIndex; // (PartAt: the cell in each place of the grid)
 		double cellSize = 0.0;
 		bool indestructible = false;
 		double crushPressure = 0.0;
