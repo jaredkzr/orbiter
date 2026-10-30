@@ -14,7 +14,9 @@
 //   cratering: the same share of the ground at each size), fresh and
 //   degraded ones
 //
-// Both fade out around surface bases. Wavelengths reach down to
+// Both fade out around surface bases; the noise mostly on built-up
+// ground (procedural cities, Cities.h), where the data are also levelled to
+// the ground under their buildings and trees (CityMap::Ground). Wavelengths reach down to
 // lambdaMin, four node spacings of the finest mesh of the detail
 // (TerrainDetailLevel): the geometry shows them, and the ground contact
 // matches what is seen. Finer detail is left to shading (the Vulkan
@@ -40,9 +42,11 @@
 #define __TERRAINDETAIL_H
 
 #include "Vecmat.h"
+#include <mutex>
 #include <vector>
 
 class Planet;
+namespace cities { class CityMap; }
 
 class TerrainDetail {
 public:
@@ -85,6 +89,13 @@ public:
 	double Height (double lat, double lng, double elev, double spacing, double relief, double lmin = 0.0,
 		double *amplitude = nullptr, double *fade = nullptr) const;
 
+	/// Share (0-1) of the data's elevation replaced by the ground under the
+	/// cities' buildings at a point (Height levels built-up ground to
+	/// CityMap::Ground where the data's nodes are spacing [m] apart: the
+	/// data are surface models, with the buildings and trees on it); its
+	/// slopes are the rest's
+	double Levelled (double lat, double lng, double spacing) const;
+
 	/// Local relief at a point inside a cell of an elevation grid: the
 	/// largest height difference of each corner node to its neighbours,
 	/// interpolated over the cell. The grid must have a border of one node
@@ -110,7 +121,10 @@ public:
 	}
 
 private:
-	double Fade (const Vector &dir) const; // 0 at the surface bases, 1 away from them
+	/// the noise's fade factor: 0 at the surface bases, 1 away from them and
+	/// built-up ground (only if built is given: its share, times wb);
+	/// bases: the bases' part
+	double Fade (const Vector &dir, double *bases = nullptr, double *built = nullptr, double wb = 1.0) const;
 	void InitBases () const;
 
 	const Planet *planet;
@@ -118,9 +132,17 @@ private:
 	double radius;
 	double lambdaMin;
 	double flatSpacing;
-	struct Flat { Vector dir; double r0, r1; }; // fully flat within r0, detail beyond r1 [m]
+	struct Pad { Vector dir; double g; };     // a landing pad: its centre, its level (the data's there) [m]
+	struct Grade { Vector dir, along, across; double hl, hw, g0, gl, gw; }; // graded ground: centre, axes, half extents [m], level g0 + gl s + gw t
+	struct Flat { Vector dir; double r0, r1; std::vector<Pad> pads; std::vector<Grade> grades; double reach; }; // fully flat within r0, detail beyond r1; pads and grades within reach [m]
 	mutable std::vector<Flat> flats;
-	mutable bool basesDone = false;
+	/// landing pads and graded ground (Base::Grades): the ground levelled
+	/// to the pad's level within PAD_R0 of it, blended back to the data's
+	/// by PAD_R1; graded areas likewise, blended over GRADE_BLEND (the share
+	/// of the level returned; g: the level)
+	double PadLevel (const Vector &dir, double &g) const;
+	mutable cities::CityMap *cities = nullptr; // (flattened where built up)
+	mutable std::once_flag basesOnce;          // (any thread)
 };
 
 #endif // !__TERRAINDETAIL_H

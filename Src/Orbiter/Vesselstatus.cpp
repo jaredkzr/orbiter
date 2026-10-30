@@ -595,9 +595,20 @@ void Vessel::SetState2 (const void *status)
 			lstatus = 1;
 			proxybase = landtgt;
 		}
-		if (vs->arot.x <= 4.0) { // extended information available
-			Matrix lrot;
+		bool ext = vs->arot.x <= 4.0; // extended information available
+		Matrix lrot;
+		if (ext) {
 			lrot.Set (MakeVector(vs->arot));
+			// (the orientation is in the planet's frame, valid at the site it
+			// was read at: a vessel moved elsewhere with it, as from a status
+			// read and written back with a new position, would be set down
+			// tilted by the angle between the sites; then it is set down anew)
+			double slng = sin(vs->surf_lng), clng = cos(vs->surf_lng), slat = sin(vs->surf_lat), clat = cos(vs->surf_lat);
+			Vector up (clat*clng, slat, clat*slng);   // the site's vertical (planet frame)
+			Vector vup (lrot.m12, lrot.m22, lrot.m32); // the vessel's y axis (planet frame)
+			if (dotp (up, vup) < cos (20.0*RAD)) ext = false;
+		}
+		if (ext) {
 			double alt = vs->vrot.x;
 			InitLanded ((Planet*)cbody, vs->surf_lng, vs->surf_lat, vs->surf_hdg, &lrot, alt);
 		} else {

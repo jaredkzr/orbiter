@@ -857,6 +857,12 @@ void Interpreter::LoadAPI ()
 		{"get_objhandle", oapiGetObjectHandle},
 		{"get_objcount", oapiGetObjectCount},
 		{"get_objname", oapiGetObjectName},
+		{"get_basecount", oapi_get_basecount},
+		{"get_basebyindex", oapi_get_basebyindex},
+		{"get_basebyname", oapi_get_basebyname},
+		{"get_baseequpos", oapi_get_baseequpos},
+		{"get_basepadcount", oapi_get_basepadcount},
+		{"get_basepadequpos", oapi_get_basepadequpos},
 		{"create_annotation", oapiCreateAnnotation},
 		{"del_annotation", oapiDelAnnotation},
 		{"get_annotations", oapiGetAnnotations},
@@ -979,6 +985,7 @@ void Interpreter::LoadAPI ()
 		{"get_planetjcoeff", oapi_get_planetjcoeff},
 		{"surface_elevation", oapi_surface_elevation},
 		{"scatter_objects", oapi_scatter_objects},
+		{"city_buildings", oapi_city_buildings},
 		{"init_tilecache", oapi_init_tilecache},
 		{"release_tilecache", oapi_release_tilecache},
 
@@ -2960,6 +2967,109 @@ int Interpreter::oapiGetObjectName (lua_State *L)
 		lua_pushstring (L, name);
 	} else lua_pushnil (L);
 	return 1;
+}
+
+/***
+Returns the number of surface bases of a planet.
+@function get_basecount
+@tparam handle hplanet planet handle
+@treturn int number of bases
+*/
+int Interpreter::oapi_get_basecount (lua_State *L)
+{
+	OBJHANDLE hP;
+	ASSERT_SYNTAX(lua_islightuserdata (L,1) && (hP = lua_toObject (L,1)), "Argument 1: invalid object");
+	lua_pushinteger (L, ::oapiGetBaseCount (hP));
+	return 1;
+}
+
+/***
+Returns a surface base of a planet by its index.
+@function get_basebyindex
+@tparam handle hplanet planet handle
+@tparam int index base index (0 <= index < get_basecount(hplanet))
+@treturn handle base handle (nil if out of range)
+*/
+int Interpreter::oapi_get_basebyindex (lua_State *L)
+{
+	OBJHANDLE hP;
+	ASSERT_SYNTAX(lua_islightuserdata (L,1) && (hP = lua_toObject (L,1)), "Argument 1: invalid object");
+	ASSERT_SYNTAX(lua_isnumber (L,2), "Argument 2: invalid type (expected number)");
+	int i = (int)lua_tointeger (L,2);
+	OBJHANDLE hB = (i >= 0 && i < (int)::oapiGetBaseCount (hP) ? ::oapiGetBaseByIndex (hP, i) : 0);
+	if (hB) lua_pushlightuserdata (L, hB); else lua_pushnil (L);
+	return 1;
+}
+
+/***
+Returns a surface base of a planet by its name.
+@function get_basebyname
+@tparam handle hplanet planet handle
+@tparam string name base name
+@treturn handle base handle (nil if not found)
+*/
+int Interpreter::oapi_get_basebyname (lua_State *L)
+{
+	OBJHANDLE hP;
+	ASSERT_SYNTAX(lua_islightuserdata (L,1) && (hP = lua_toObject (L,1)), "Argument 1: invalid object");
+	ASSERT_SYNTAX(lua_isstring (L,2), "Argument 2: invalid type (expected string)");
+	char name[256];
+	strncpy (name, lua_tostring (L,2), 255); name[255] = '\0';
+	OBJHANDLE hB = ::oapiGetBaseByName (hP, name);
+	if (hB) lua_pushlightuserdata (L, hB); else lua_pushnil (L);
+	return 1;
+}
+
+/***
+Returns the position of a surface base.
+@function get_baseequpos
+@tparam handle hbase base handle
+@treturn number longitude [rad]
+@treturn number latitude [rad]
+@treturn number distance from the planet's centre [m]
+*/
+int Interpreter::oapi_get_baseequpos (lua_State *L)
+{
+	OBJHANDLE hB;
+	ASSERT_SYNTAX(lua_islightuserdata (L,1) && (hB = lua_toObject (L,1)), "Argument 1: invalid object");
+	double lng, lat, rad;
+	::oapiGetBaseEquPos (hB, &lng, &lat, &rad);
+	lua_pushnumber (L, lng); lua_pushnumber (L, lat); lua_pushnumber (L, rad);
+	return 3;
+}
+
+/***
+Returns the number of landing pads of a surface base.
+@function get_basepadcount
+@tparam handle hbase base handle
+@treturn int number of pads
+*/
+int Interpreter::oapi_get_basepadcount (lua_State *L)
+{
+	OBJHANDLE hB;
+	ASSERT_SYNTAX(lua_islightuserdata (L,1) && (hB = lua_toObject (L,1)), "Argument 1: invalid object");
+	lua_pushinteger (L, ::oapiGetBasePadCount (hB));
+	return 1;
+}
+
+/***
+Returns the position of a landing pad of a surface base.
+@function get_basepadequpos
+@tparam handle hbase base handle
+@tparam int pad pad index (0 <= pad < get_basepadcount(hbase))
+@treturn number longitude [rad] (nil if out of range)
+@treturn number latitude [rad]
+@treturn number distance from the planet's centre [m]
+*/
+int Interpreter::oapi_get_basepadequpos (lua_State *L)
+{
+	OBJHANDLE hB;
+	ASSERT_SYNTAX(lua_islightuserdata (L,1) && (hB = lua_toObject (L,1)), "Argument 1: invalid object");
+	ASSERT_SYNTAX(lua_isnumber (L,2), "Argument 2: invalid type (expected number)");
+	double lng, lat, rad;
+	if (!::oapiGetBasePadEquPos (hB, (DWORD)lua_tointeger (L,2), &lng, &lat, &rad)) { lua_pushnil (L); return 1; }
+	lua_pushnumber (L, lng); lua_pushnumber (L, lat); lua_pushnumber (L, rad);
+	return 3;
 }
 
 /***
@@ -5364,6 +5474,61 @@ int Interpreter::oapi_scatter_objects (lua_State *L)
 				lua_pushboolean (L, prm.collide && a.collide); lua_setfield (L, -2, "collide");
 				lua_rawseti (L, -2, ++n);
 			}
+		}
+	}
+	return 1;
+}
+
+/***
+Buildings of a planet's procedural cities within a distance of a point.
+@function city_buildings
+@tparam handle hPlanet planet object handle
+@tparam number lng longitude [rad]
+@tparam number lat latitude [rad]
+@tparam number radius distance [m] (of the centres of their footprints)
+@treturn table list of {lng, lat, elev, dist, width, depth, height, kind, style, hdg}
+  (hdg: direction of the building's x axis [rad, from north towards east])
+*/
+int Interpreter::oapi_city_buildings (lua_State *L)
+{
+	OBJHANDLE hPlanet;
+	ASSERT_SYNTAX (lua_islightuserdata (L,1), "Argument 1: invalid type (expected planet handle)");
+	ASSERT_SYNTAX (hPlanet = (OBJHANDLE)lua_toObject (L,1), "Argument 1: invalid object");
+	double lng = luaL_checknumber (L,2);
+	double lat = luaL_checknumber (L,3);
+	double radius = luaL_checknumber (L,4);
+	double R = oapiGetSize (hPlanet);
+	VECTOR3 p = _V(cos (lat) * cos (lng), sin (lat), cos (lat) * sin (lng)) * R;
+	lua_newtable (L);
+	int n = 0;
+	int nc = oapiCityCells (hPlanet, p, radius, nullptr, 0);
+	std::vector<int> cells (2 * nc);
+	oapiCityCells (hPlanet, p, radius, cells.data(), nc);
+	std::vector<CITYBUILDING> b;
+	for (int c = 0; c < nc; c++) {
+		int nb = oapiCityCell (hPlanet, cells[2*c], cells[2*c+1], 0.0, nullptr, 0);
+		b.resize (nb);
+		oapiCityCell (hPlanet, cells[2*c], cells[2*c+1], 0.0, b.data(), nb);
+		for (const CITYBUILDING &x : b) {
+			double r = length (x.pos);
+			double dist = length (x.pos - p * (r / R));
+			if (dist > radius) continue;
+			double bl = atan2 (x.pos.z, x.pos.x), ba = asin (x.pos.y / r);
+			// (x axis: east and north components)
+			VECTOR3 ax = _V(x.rot.m11, x.rot.m21, x.rot.m31);
+			VECTOR3 E = _V(-sin (bl), 0, cos (bl)), N = _V(-sin (ba) * cos (bl), cos (ba), -sin (ba) * sin (bl));
+			lua_newtable (L);
+			lua_pushnumber (L, bl); lua_setfield (L, -2, "lng");
+			lua_pushnumber (L, ba); lua_setfield (L, -2, "lat");
+			lua_pushnumber (L, r - R); lua_setfield (L, -2, "elev");
+			lua_pushnumber (L, dist); lua_setfield (L, -2, "dist");
+			lua_pushnumber (L, x.width); lua_setfield (L, -2, "width");
+			lua_pushnumber (L, x.depth); lua_setfield (L, -2, "depth");
+			lua_pushnumber (L, x.height); lua_setfield (L, -2, "height");
+			lua_pushinteger (L, x.kind); lua_setfield (L, -2, "kind");
+			lua_pushinteger (L, x.style); lua_setfield (L, -2, "style");
+			lua_pushnumber (L, atan2 (dotp (ax, E), dotp (ax, N))); lua_setfield (L, -2, "hdg");
+			lua_rawseti (L, -2, ++n);
 		}
 	}
 	return 1;

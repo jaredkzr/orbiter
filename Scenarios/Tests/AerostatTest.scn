@@ -1,0 +1,42 @@
+BEGIN_HYPERDESC
+<h1>The floating base on Venus</h1>
+Aphrodite (Utils/BaseKit/offworld.py aerostat) floats 55 km up; its deck
+is the ground for vessels over it. A delta-glider landed on pad 1 must
+stay there; another hops off pad 2 on its hover engines and must come
+down on the deck again, not fall through it.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51983.25
+  Script Tests/AerostatTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship A1
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET A1
+  MODE Extern
+  POS 4.0 -20.0 -30
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+A1:DeltaGlider
+  STATUS Landed Venus
+  BASE Aphrodite:1
+  HEADING 0.00
+  GEAR 1 1.0000
+  PRPLEVEL 0:0.050 1:1.000
+END
+A2:DeltaGlider
+  STATUS Landed Venus
+  BASE Aphrodite:2
+  HEADING 120.00
+  GEAR 1 1.0000
+  PRPLEVEL 0:0.050 1:1.000
+END
+END_SHIPS

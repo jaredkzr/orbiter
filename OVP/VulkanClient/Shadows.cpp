@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "Shadows.h"
+#include "Scene.h"
 #include "VkMesh.h"
 #include "VkTexture.h"
 #include <cmath>
@@ -11,6 +12,7 @@
 #include "shadow_alpha.frag.h"
 #include "shadow_inst.vert.h"
 #include "shadow_impostor_inst.vert.h"
+#include "shadow_building.vert.h"
 
 namespace {
 	// depth range of the shadow volume, in units of its radius: casters
@@ -172,6 +174,32 @@ bool ShadowMap::Init (vkc::Context *c, VkDescriptorSetLayout texLayout)
 	vi.pVertexAttributeDescriptions = pattr;
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &impPipeline));
 	vkDestroyShaderModule (ctx->device, pvs, nullptr);
+	// buildings of the cities (building.glsl): depth only
+	VkShaderModule bvs = ctx->CreateShaderModule (spv_shadow_building_vert, spv_shadow_building_vert_size);
+	stage.module = bvs;
+	VkVertexInputBindingDescription bbind[2] = {
+		{ 0, Scene::BUILDING_VERTEX, VK_VERTEX_INPUT_RATE_VERTEX },
+		{ 1, Scene::BUILDING_INSTANCE, VK_VERTEX_INPUT_RATE_INSTANCE }
+	};
+	VkVertexInputAttributeDescription battr[8] = {
+		{ 0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0 },
+		{ 1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12 },
+		{ 2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 24 },
+		{ 3, 0, VK_FORMAT_R32G32B32_SFLOAT, 40 },
+		{ 4, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 0 },
+		{ 5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 16 },
+		{ 6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 32 },
+		{ 7, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 48 }
+	};
+	vi.vertexBindingDescriptionCount = 2;
+	vi.pVertexBindingDescriptions = bbind;
+	vi.vertexAttributeDescriptionCount = 8;
+	vi.pVertexAttributeDescriptions = battr;
+	gpi.stageCount = 1;
+	gpi.pStages = &stage;
+	gpi.layout = layout;
+	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &bldPipeline));
+	vkDestroyShaderModule (ctx->device, bvs, nullptr);
 	vkDestroyShaderModule (ctx->device, afs, nullptr);
 	return true;
 }
@@ -184,6 +212,7 @@ void ShadowMap::Shutdown ()
 	vkDestroyPipeline (ctx->device, alphaPipeline, nullptr);
 	vkDestroyPipeline (ctx->device, instPipeline, nullptr);
 	vkDestroyPipeline (ctx->device, impPipeline, nullptr);
+	vkDestroyPipeline (ctx->device, bldPipeline, nullptr);
 	vkDestroyPipelineLayout (ctx->device, alphaLayout, nullptr);
 	vkDestroySampler (ctx->device, sampler, nullptr);
 	ctx->DestroyImage (depth);
@@ -288,6 +317,23 @@ void ShadowMap::DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSi
 		vkCmdPushConstants (cmd, alphaLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 20 * sizeof(float), f);
 		vkCmdDrawIndexed (cmd, grp.nIndex, count, grp.firstIndex, grp.vertexOffset, 0);
 	}
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+}
+
+void ShadowMap::DrawBuildings (VkBuffer vb, VkBuffer ib, uint32_t firstIndex, uint32_t nIndex, VkBuffer inst, VkDeviceSize instOfs,
+	uint32_t count, const MATRIX3 &R, const VECTOR3 &origin)
+{
+	if (!active || !count || !nIndex) return;
+	VkCommandBuffer cmd = ctx->Cmd();
+	VkBuffer vbs[2] = { vb, inst };
+	VkDeviceSize ofs[2] = { 0, instOfs };
+	vkCmdBindVertexBuffers (cmd, 0, 2, vbs, ofs);
+	vkCmdBindIndexBuffer (cmd, ib, 0, VK_INDEX_TYPE_UINT16);
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bldPipeline);
+	float f[16];
+	(lightVP * Mat4::FromRotTrans (R, origin - centre)).ToFloat (f);
+	vkCmdPushConstants (cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(f), f);
+	vkCmdDrawIndexed (cmd, nIndex, count, firstIndex, 0, 0);
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 }
 

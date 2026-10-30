@@ -74,6 +74,7 @@ set(headless_src
 	UiAnchor.cpp
 	TerrainDetail.cpp
 	GroundScatter.cpp
+	Cities.cpp
 	Replay.cpp
 	VesselManeuver.cpp
 	Vessel.cpp

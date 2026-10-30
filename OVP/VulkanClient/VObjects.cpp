@@ -5,6 +5,7 @@
 #include "GroundTracks.h"
 #include "ScatterAssets.h"
 #include "ScatterField.h"
+#include "CityField.h"
 #include "VkMesh.h"
 #include "VulkanClient.h"
 #include "Particles.h"
@@ -1979,7 +1980,7 @@ namespace {
 	// Ground structures lie on the terrain; they are drawn pulled towards the
 	// camera by this fraction of their distance (a uniform scale in view space
 	// keeps their screen position), which avoids depth fighting.
-	constexpr double GROUND_DEPTH_PULL = 2e-4;
+	constexpr double GROUND_DEPTH_PULL = 1e-3;
 }
 
 VBase::VBase (OBJHANDLE h, Scene *s) : hBase(h), scene(s)
@@ -2198,6 +2199,7 @@ void VPlanet::RenderShadow (ShadowMap &sm)
 	for (auto &b : bases) b->RenderShadow (sm);
 	if (gallery) gallery->RenderShadow (sm);
 	if (field) field->RenderShadow (sm);
+	if (cities) cities->RenderShadow (sm);
 }
 
 void VPlanet::UpdateBases ()
@@ -2286,6 +2288,13 @@ void VPlanet::PrepareFrame ()
 		if (!field->Active ()) field.reset ();
 	}
 	if (field) field->Prepare ();
+	// the cities: likewise
+	if (surface && !citiesInit && camDist < size + 30e3) {
+		citiesInit = true;
+		cities = std::make_unique<vkcity::Field> (scene, hObj);
+		if (!cities->Active ()) cities.reset ();
+	}
+	if (cities) cities->Prepare ();
 	if (clouds) clouds->Prepare (); // (coverage map of the volumetric clouds)
 }
 
@@ -2313,11 +2322,13 @@ void VPlanet::Render (RenderPass pass)
 		UpdateGallery ();
 		if (gallery) gallery->Render (pass);
 		if (field) field->Render (pass);
+		if (cities) cities->Render (pass);
 		return;
 	}
 	if (pass == RenderPass::Transparent) {
 		if (isStar) { RenderGlow (); return; }
 		for (auto &b : bases) b->Render (pass);
+		if (cities) cities->Render (pass); // (street lamps)
 		// (a gas giant's 2D cloud layer: not while its decks are drawn; while
 		// they fade in from afar, fading out over them (drawn after them: at
 		// full opacity it hid their fade, and vanished at once where it ended))
@@ -2349,6 +2360,8 @@ void VPlanet::Render (RenderPass pass)
 		if (gallery) gallery->Render (pass);
 		if (field) field->Render (pass);
 		scene->GpuMark ("scatter");
+		if (cities) cities->Render (pass);
+		scene->GpuMark ("cities");
 		return;
 	}
 

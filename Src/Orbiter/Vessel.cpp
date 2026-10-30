@@ -39,6 +39,7 @@
 #include "Util.h"
 #include "elevmgr.h"
 #include "GroundScatter.h"
+#include "Cities.h"
 #include "Debris.h"
 #include "Replay.h"
 #include <fstream>
@@ -4603,11 +4604,13 @@ void Vessel::CollectGroundContacts (const StateVectors &s, const StateVectors &s
 		}
 	}
 
-	// obstacles on the ground (boulders, trees: GroundScatter.h): the
-	// vessel's collision hulls (or the hull of its touchdown points) against
-	// theirs, rigid contacts
-	if (proxybody->Type() == OBJTP_PLANET)
-		if (scatter::GroundScatter *gs = ((Planet*)proxybody)->Scatter()) {
+	// obstacles on the ground (boulders, trees: GroundScatter.h; buildings:
+	// Cities.h): the vessel's collision hulls (or the hull of its touchdown
+	// points) against theirs, rigid contacts
+	if (proxybody->Type() == OBJTP_PLANET) {
+		scatter::GroundScatter *gs = ((Planet*)proxybody)->Scatter();
+		cities::CityMap *cm = ((Planet*)proxybody)->Cities();
+		if (gs || cm) {
 			std::vector<collision::HullRef> hl;
 			CollectHulls (s, hl);
 			if (hl.empty()) {
@@ -4624,14 +4627,24 @@ void Vessel::CollectGroundContacts (const StateVectors &s, const StateVectors &s
 				bound = std::max (bound, (x.pos + mul (x.R, x.hull->centre)).dist (s.pos) + x.hull->radius + collision::SKIN);
 			Vector pc (tmul (P0.R, s.pos - P0.pos)); // (planet frame)
 			static std::vector<const scatter::Obstacle*> obst;
-			gs->Obstacles (pc, bound + margin, obst);
+			static std::vector<const convex::Polytope*> hulls, bld;
+			hulls.clear();
+			if (gs) {
+				gs->Obstacles (pc, bound + margin, obst);
+				for (const scatter::Obstacle *o : obst) hulls.push_back (&o->hull);
+			}
+			if (cm) {
+				cm->Obstacles (pc, bound + margin, bld);
+				hulls.insert (hulls.end(), bld.begin(), bld.end());
+			}
 			const Vector &O = s.pos; // (origin of the tests, for precision)
 			convex::Manifold mf;
-			for (const scatter::Obstacle *o : obst) {
-				convex::Placed po{&o->hull, P0.R, P0.pos - O, 0.0};
+			for (const convex::Polytope *oh : hulls) {
+				const convex::Polytope &oHull = *oh;
+				convex::Placed po{&oHull, P0.R, P0.pos - O, 0.0};
 				for (const collision::HullRef &x : hl) {
 					convex::Placed px{x.hull, x.R, x.pos - O, collision::SKIN};
-					if ((px.pos + mul (x.R, x.hull->centre)).dist (po.pos + mul (P0.R, o->hull.centre)) > x.hull->radius + o->hull.radius + collision::SKIN + margin)
+					if ((px.pos + mul (x.R, x.hull->centre)).dist (po.pos + mul (P0.R, oHull.centre)) > x.hull->radius + oHull.radius + collision::SKIN + margin)
 						continue;
 					if (!convex::Collide (px, po, margin, mf)) continue;
 					for (int k = 0; k < mf.npt; k++) {
@@ -4652,6 +4665,7 @@ void Vessel::CollectGroundContacts (const StateVectors &s, const StateVectors &s
 				}
 			}
 		}
+	}
 }
 
 // =======================================================================

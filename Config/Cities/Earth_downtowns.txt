@@ -1,0 +1,295 @@
+; Downtowns of Earth's cities: where their skylines are (Src/Orbiter/Cities.h)
+; lat lng [deg]  height [m] (typical tall buildings; 60 or less: dense mid-rise centre)
+; radius [m] (of the core)  grid (bearing of the streets, deg east of north; *: the region's style)  name
+;
+; North America
+40.755  -73.984  300 1800   29  New York Midtown
+40.709  -74.011  300  900    *  New York Lower Manhattan
+40.718  -74.035  180  700    *  Jersey City
+40.692  -73.987  140  700    *  Brooklyn Downtown
+41.881  -87.630  330 1500    0  Chicago Loop
+43.648  -79.381  260 1300  -16  Toronto
+34.050 -118.255  230  900   37  Los Angeles
+34.150 -118.140   60  700    *  Pasadena
+37.791 -122.399  200  900   45  San Francisco
+47.607 -122.335  200  900   32  Seattle
+29.758  -95.366  230 1000   45  Houston
+29.740  -95.460  150  700    *  Houston Uptown
+32.781  -96.799  200  900   45  Dallas
+32.755  -97.330  140  600    *  Fort Worth
+33.760  -84.388  200 1500    0  Atlanta
+25.770  -80.193  200 1200    0  Miami
+42.355  -71.060  180  900    *  Boston
+39.953  -75.165  220  900    0  Philadelphia
+44.977  -93.268  190  700   45  Minneapolis
+39.745 -104.992  160  800   45  Denver
+33.449 -112.073  120  700    0  Phoenix
+32.716 -117.163  120  700    0  San Diego
+36.115 -115.173  160 1500    0  Las Vegas
+42.331  -83.046  160  700    *  Detroit
+40.442  -79.996  160  600    *  Pittsburgh
+35.227  -80.843  200  700   45  Charlotte
+38.900  -77.030   45 1800    0  Washington
+38.895  -77.070  110  500    *  Rosslyn
+45.502  -73.567  180  900   35  Montreal
+49.285 -123.118  150 1000   45  Vancouver
+51.047 -114.066  200  700    0  Calgary
+53.544 -113.490  140  700    0  Edmonton
+45.421  -75.697  100  800    *  Ottawa
+49.895  -97.138  110  600    *  Winnipeg
+46.810  -71.210   80  600    *  Quebec
+36.162  -86.778  140  600    *  Nashville
+30.267  -97.743  160  700    0  Austin
+39.099  -94.583  140  600    0  Kansas City
+38.627  -90.193  160  600    *  St. Louis
+41.499  -81.694  160  600    *  Cleveland
+39.768  -86.158  140  600    0  Indianapolis
+39.962  -82.999  140  600    0  Columbus
+29.951  -90.071  140  600    *  New Orleans
+27.947  -82.458  140  600    0  Tampa
+28.541  -81.379  110  600    0  Orlando
+40.761 -111.891  110  600    0  Salt Lake City
+45.519 -122.679  140  600    *  Portland
+29.425  -98.494  120  600    *  San Antonio
+39.289  -76.612  120  700    0  Baltimore
+39.101  -84.512  150  600    0  Cincinnati
+43.039  -87.906  150  600    0  Milwaukee
+35.468  -97.516  200  500    0  Oklahoma City
+36.154  -95.992  150  500    *  Tulsa
+38.578 -121.494  110  500   45  Sacramento
+21.307 -157.858  120 1000    *  Honolulu
+61.218 -149.890   80 1000    0  Anchorage
+; Latin America
+19.427  -99.168  200 2000    *  Mexico City
+25.670 -100.310  160 1000    0  Monterrey
+20.675 -103.390  120 1000    0  Guadalajara
+ 8.982  -79.520  220 1500    *  Panama City
+23.135  -82.380   60 1200    *  Havana
+18.450  -66.070   80 1000    *  San Juan
+18.470  -69.940   80 1200    *  Santo Domingo
+14.600  -90.510   80 1200    *  Guatemala City
+-23.561 -46.656  150 3000    *  Sao Paulo
+-22.905 -43.177  140 1500    *  Rio de Janeiro
+-34.603 -58.375  150 2000    0  Buenos Aires
+-33.415 -70.605  200 1500    *  Santiago
+-12.095 -77.030  120 1500    *  Lima
+ 4.660  -74.055  140 2500    *  Bogota
+10.495  -66.880  160 2000    *  Caracas
+ 6.210  -75.570  120 1500    *  Medellin
+-0.180  -78.480  100 1500    *  Quito
+-34.905 -56.190  100 1200    *  Montevideo
+-15.790 -47.880   80 2000    *  Brasilia
+-19.920 -43.940  120 1500    *  Belo Horizonte
+-30.030 -51.230  100 1000    *  Porto Alegre
+-8.060  -34.880  120 1500    *  Recife
+-12.980 -38.460  100 1500    *  Salvador
+-3.730  -38.490  100 1500    *  Fortaleza
+-16.500 -68.130  100  800    *  La Paz
+-25.280 -57.635  100  800    *  Asuncion
+-2.190  -79.880  100 1000    *  Guayaquil
+ 3.450  -76.530  100 1000    *  Cali
+10.990  -74.800  100 1000    *  Barranquilla
+10.400  -75.550  120  800    *  Cartagena
+; Europe
+51.514   -0.083  230 1000    *  London City
+51.505   -0.020  230  600    *  London Canary Wharf
+51.510   -0.150   35 3500    *  London West End
+48.890    2.240  200  700    *  Paris La Defense
+48.860    2.340   30 4500    *  Paris
+50.112    8.672  220  800    *  Frankfurt
+55.749   37.537  300  600    *  Moscow City
+55.755   37.618   45 4000    *  Moscow
+41.080   29.010  200 1500    *  Istanbul Levent
+41.010   28.970   30 2500    *  Istanbul
+40.477   -3.688  230  500    *  Madrid Cuatro Torres
+40.418   -3.700   40 2500    *  Madrid
+41.390    2.170   35 3000   45  Barcelona
+45.484    9.190  200  700    *  Milan Porta Nuova
+45.464    9.190   35 2000    *  Milan
+51.920    4.480  150  800    *  Rotterdam
+52.340    4.870  100  600    *  Amsterdam Zuidas
+52.370    4.890   25 1800    *  Amsterdam
+50.855    4.355  120  900    *  Brussels
+52.231   21.005  200  900    *  Warsaw
+48.208   16.373   30 2000    *  Vienna
+48.234   16.413  200  400    *  Vienna Donau City
+52.520   13.400   40 4000    *  Berlin
+48.137   11.575   35 2500    *  Munich
+53.550    9.990   35 2500    *  Hamburg
+41.900   12.490   30 3000    *  Rome
+37.980   23.730   30 3000    *  Athens
+38.720   -9.140   30 2000    *  Lisbon
+50.080   14.430   30 2000    *  Prague
+47.500   19.050   35 2500    *  Budapest
+53.480   -2.240  150  700    *  Manchester
+52.480   -1.900  120  800    *  Birmingham
+53.405   -2.990  100  700    *  Liverpool
+53.800   -1.550  100  700    *  Leeds
+53.350   -6.260   30 2000    *  Dublin
+45.760    4.860  160  700    *  Lyon
+43.300    5.370  100 1000    *  Marseille
+50.450   30.520  120 2000    *  Kyiv
+44.430   26.100  100 1500    *  Bucharest
+42.690   23.320  100 1200    *  Sofia
+44.810   20.460   60 1500    *  Belgrade
+45.810   15.980   40 1200    *  Zagreb
+40.850   14.270   50 1500    *  Naples
+45.070    7.680   30 1500    0  Turin
+39.470   -0.375   60 1500    *  Valencia
+37.390   -5.990   30 1500    *  Seville
+41.150   -8.610   30 1200    *  Porto
+47.370    8.540   60 1200    *  Zurich
+46.200    6.140   40 1000    *  Geneva
+50.940    6.960   40 1500    *  Cologne
+51.225    6.780  100  900    *  Dusseldorf
+48.780    9.180   40 1200    *  Stuttgart
+53.900   27.560  100 1500    *  Minsk
+50.060   19.940   30 1200    *  Krakow
+40.630   22.950   40 1500    *  Thessaloniki
+55.680   12.570   30 2000    *  Copenhagen
+55.950   -3.190   25 1500    *  Edinburgh
+55.860   -4.250   30 1500    *  Glasgow
+57.150   -2.100   25 1000    *  Aberdeen
+59.330   18.060   40 2500    *  Stockholm
+57.710   11.970   40 1500    *  Gothenburg
+59.910   10.750   60 1500    *  Oslo
+60.390    5.320   30 1000    *  Bergen
+63.430   10.400   25  800    *  Trondheim
+60.170   24.940   35 2000    *  Helsinki
+61.500   23.760   30 1000    *  Tampere
+60.450   22.270   25  900    *  Turku
+59.440   24.750   60 1000    *  Tallinn
+56.950   24.110   30 1500    *  Riga
+54.690   25.280   40 1200    *  Vilnius
+64.150  -21.940   30 1500    *  Reykjavik
+59.940   30.310   40 4000    *  Saint Petersburg
+56.840   60.610  100 1500    *  Yekaterinburg
+56.330   44.000   60 1500    *  Nizhny Novgorod
+58.010   56.250   60 1500    *  Perm
+56.010   92.870   80 1500    *  Krasnoyarsk
+55.030   82.920  100 1500    *  Novosibirsk
+55.790   49.120   60 1500    *  Kazan
+64.540   40.540   40 1000    *  Arkhangelsk
+68.970   33.080   40 1000    *  Murmansk
+40.380   49.850  150 1500    *  Baku
+41.710   44.790   80 1500    *  Tbilisi
+43.240   76.920  120 1500    *  Almaty
+41.310   69.270  100 1500    *  Tashkent
+51.130   71.430  160 1500    *  Astana
+; Middle East and Africa
+25.197   55.274  350 1500    *  Dubai Downtown
+25.080   55.140  300 1200    *  Dubai Marina
+24.490   54.360  250 1500    *  Abu Dhabi
+25.320   51.530  250 1200    *  Doha West Bay
+24.710   46.670  250 2000    *  Riyadh
+21.540   39.170  150 2000    *  Jeddah
+29.375   47.980  250 1200    *  Kuwait City
+26.230   50.580  200 1000    *  Manama
+32.070   34.790  200 1200    *  Tel Aviv
+33.890   35.500  100 1500    *  Beirut
+31.950   35.910  100 1500    *  Amman
+35.730   51.400  120 3000    *  Tehran
+33.310   44.390   60 2500    *  Baghdad
+30.045   31.240  120 2500    *  Cairo
+33.590   -7.620  100 1500    *  Casablanca
+36.760    3.060   60 1500    *  Algiers
+36.800   10.180   60 1200    *  Tunis
+ 6.430    3.420  120 1500    *  Lagos
+-1.285   36.820  150 1200    *  Nairobi
+-26.200  28.045  200 1500    *  Johannesburg
+-26.107  28.056  150  800    *  Sandton
+-33.920  18.420  100 1000    *  Cape Town
+-29.860  31.030  100 1000    *  Durban
+ 9.010   38.760  100 2000    *  Addis Ababa
+ 5.560   -0.200   80 1500    *  Accra
+ 5.320   -4.020  100 1000    *  Abidjan
+14.690  -17.440   60 1200    *  Dakar
+-4.320   15.310   80 1500    *  Kinshasa
+-8.810   13.230  120 1200    *  Luanda
+-6.815   39.290  100 1200    *  Dar es Salaam
+15.580   32.530   60 1500    *  Khartoum
+ 0.315   32.580   60 1500    *  Kampala
+24.850   67.030  120 2500    *  Karachi
+31.550   74.340   60 2500    *  Lahore
+33.710   73.060   80 2000    *  Islamabad
+; South Asia
+18.990   72.820  200 3000    *  Mumbai
+28.630   77.220   60 3000    *  Delhi
+28.470   77.070  120 2000    *  Gurgaon
+12.970   77.600   80 2500    *  Bangalore
+13.060   80.250   60 2500    *  Chennai
+22.570   88.360   60 3000    *  Kolkata
+17.440   78.380  120 2500    *  Hyderabad
+18.520   73.860   60 2000    *  Pune
+23.030   72.580   60 2000    *  Ahmedabad
+23.780   90.410   80 3000    *  Dhaka
+ 6.930   79.850  150 1200    *  Colombo
+27.710   85.320   30 2000    *  Kathmandu
+; East and Southeast Asia
+35.690  139.695  220 1000    *  Tokyo Shinjuku
+35.682  139.766  200 1500    *  Tokyo Marunouchi
+35.660  139.740  200 1200    *  Tokyo Minato
+35.660  139.700  120  800    *  Tokyo Shibuya
+34.700  135.495  180 1500    *  Osaka Umeda
+35.170  136.880  180 1200    *  Nagoya
+35.457  139.633  200  800    *  Yokohama
+33.590  130.400  100 1500    *  Fukuoka
+43.060  141.350  100 1500    0  Sapporo
+34.690  135.195  100 1000    *  Kobe
+35.010  135.760   30 2500    0  Kyoto
+37.566  126.980  200 2000    *  Seoul
+37.500  127.030  200 2000    *  Seoul Gangnam
+37.525  126.925  220  900    *  Seoul Yeouido
+35.160  129.160  250 1200    *  Busan Haeundae
+37.390  126.640  200 1000    *  Incheon Songdo
+39.910  116.460  250 1500    0  Beijing CBD
+39.915  116.360  120 1000    0  Beijing Financial Street
+31.236  121.505  400 1200    *  Shanghai Pudong
+31.230  121.470  200 2500    *  Shanghai Puxi
+22.540  114.050  300 2000    0  Shenzhen Futian
+22.545  114.110  250 1000    *  Shenzhen Luohu
+22.520  113.940  250 1500    *  Shenzhen Nanshan
+23.120  113.320  300 1500    *  Guangzhou Tianhe
+22.280  114.160  300 1000    *  Hong Kong Central
+22.300  114.170  200 1500    *  Hong Kong Kowloon
+30.580  114.270  250 2000    *  Wuhan
+29.560  106.580  250 1500    *  Chongqing
+30.660  104.065  220 2500    *  Chengdu
+39.120  117.200  250 1500    *  Tianjin
+32.050  118.780  250 1500    *  Nanjing
+30.270  120.165  200 2000    *  Hangzhou
+34.260  108.940  120 2500    0  Xi'an
+41.800  123.430  200 2000    *  Shenyang
+45.760  126.630  150 2000    *  Harbin
+38.915  121.610  200 1500    *  Dalian
+36.070  120.380  200 1500    *  Qingdao
+24.480  118.090  200 1500    *  Xiamen
+31.320  120.670  200 1500    *  Suzhou
+34.760  113.730  200 2000    *  Zhengzhou
+28.200  112.980  200 1500    *  Changsha
+25.040  102.710  150 1500    *  Kunming
+47.920  106.920   80 1500    *  Ulaanbaatar
+25.033  121.565  200 1500    *  Taipei
+22.620  120.300  200 1200    *  Kaohsiung
+22.190  113.540  150 1000    *  Macau
+ 1.283  103.851  250 1200    *  Singapore
+ 3.155  101.712  300 1500    *  Kuala Lumpur
+-6.210  106.820  220 2500    *  Jakarta
+13.740  100.540  200 2500    *  Bangkok
+14.555  121.025  200 1200    *  Manila Makati
+14.550  121.050  150  800    *  Manila Bonifacio
+10.775  106.700  200 1500    *  Ho Chi Minh City
+21.030  105.850   60 2500    *  Hanoi
+21.017  105.784  250  600    *  Hanoi Keangnam
+16.800   96.155   40 2000    *  Yangon
+11.560  104.920   80 1500    *  Phnom Penh
+-7.260  112.750  100 1500    *  Surabaya
+; Oceania
+-33.865  151.210  200 1200    *  Sydney
+-37.815  144.960  200 1200   20  Melbourne
+-27.470  153.025  200  900    *  Brisbane
+-31.953  115.858  180  800    *  Perth
+-28.000  153.430  200 1000    *  Gold Coast
+-36.848  174.765  150  800    *  Auckland
+-34.928  138.600  100  800    0  Adelaide
+-41.290  174.780   80  700    *  Wellington

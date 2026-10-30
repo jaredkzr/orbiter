@@ -394,6 +394,12 @@ protected:
 	static int oapiGetObjectHandle (lua_State *L);
 	static int oapiGetObjectCount (lua_State *L);
 	static int oapiGetObjectName (lua_State *L);
+	static int oapi_get_basecount (lua_State *L);
+	static int oapi_get_basebyindex (lua_State *L);
+	static int oapi_get_basebyname (lua_State *L);
+	static int oapi_get_baseequpos (lua_State *L);
+	static int oapi_get_basepadcount (lua_State *L);
+	static int oapi_get_basepadequpos (lua_State *L);
 	static int oapiCreateAnnotation (lua_State *L);
 	static int oapiDelAnnotation (lua_State *L);
 	static int oapiGetAnnotations (lua_State *L);
@@ -514,6 +520,7 @@ protected:
 	static int oapi_get_planetjcoeff(lua_State* L);
 	static int oapi_surface_elevation(lua_State* L);
 	static int oapi_scatter_objects(lua_State* L);
+	static int oapi_city_buildings(lua_State* L);
 
 	// Vessel functions
 	static int oapi_get_propellanthandle (lua_State *L);

@@ -111,6 +111,29 @@ public:
 	static constexpr uint32_t INSTANCE_STRIDE = 48;
 	void DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize instOfs, uint32_t count, RenderPass pass,
 		const Mat4 *frameToView = nullptr, bool impostor = false, float range = 0.0f, const float *tint = nullptr);
+	/// Buildings of the procedural cities (CityKit; building.vert): indices
+	/// [firstIndex, +nIndex) of a shape in ib (vertices in vb,
+	/// BUILDING_VERTEX bytes each), count instances (BUILDING_INSTANCE bytes
+	/// each) in inst from byte instOfs, in the frame frameToView maps to the
+	/// view; kit: the set of the kit's material array; hour: the local
+	/// solar time [h] (lit windows at night). Lit and moving as set for the
+	/// current object.
+	static constexpr uint32_t BUILDING_VERTEX = 52, BUILDING_INSTANCE = 80;
+	void DrawBuildings (VkBuffer vb, VkBuffer ib, uint32_t firstIndex, uint32_t nIndex, VkBuffer inst, VkDeviceSize instOfs,
+		uint32_t count, RenderPass pass, const Mat4 &frameToView, VkDescriptorSet kit, float hour = 12.0f);
+	/// Street lamps of the cities (lamp.vert): count instances in buf (four
+	/// floats each: position, LED or not) in the frame frameToView maps to
+	/// the view, with origin centre (planet frame); sun: direction to the sun
+	/// (planet frame); drawn from fadeFrom fading out to range [m], halfSize
+	/// [m], brightness bright
+	void DrawLamps (VkBuffer buf, uint32_t count, const Mat4 &frameToView, const VECTOR3 &centre, const VECTOR3 &sun,
+		float fadeFrom, float range, float halfSize, float bright);
+	/// The road map of the cities around the camera (CityField; tile
+	/// shading): textures of its fine and coarse level (r: asphalt, g:
+	/// pavement; null: none), on the tangent plane at centre (planet frame)
+	/// with axes X, Y (planet frame, unit), their sizes [m]
+	void SetCityMap (VkTexture *fine, VkTexture *coarse, VkTexture *far, OBJHANDLE hPlanet, const VECTOR3 &centre,
+		const VECTOR3 &X, const VECTOR3 &Y, double fineSize, double coarseSize, double farSize);
 	/// A mesh into the ray tracing scene of this frame (without drawing it)
 	/// (shadowOnly: a stand-in that only blocks light)
 	void AddMeshRT (const VkMesh *mesh, const Mat4 &modelView, bool shadowOnly = false);
@@ -228,10 +251,10 @@ public:
 
 private:
 	void CreatePipelines ();
-	enum class MeshShader { Mesh, Ring, RingShadow };
+	enum class MeshShader { Mesh, Ring, RingShadow, Building };
 	VkPipeline CreateMeshPipeline (bool blend, bool additive, bool depthWrite, bool prepass = false, bool instanced = false, bool impostor = false,
 		MeshShader shader = MeshShader::Mesh);
-	VkPipeline CreateParticlePipeline (bool additive);
+	VkPipeline CreateParticlePipeline (bool additive, bool lamps = false);
 	void UpdateCamera ();
 	void BuildSphere ();
 
@@ -261,6 +284,10 @@ private:
 	VkPipeline meshPrepassInst = VK_NULL_HANDLE;
 	VkPipeline meshOpaqueImp = VK_NULL_HANDLE;   // instanced impostors (far plants)
 	VkPipeline meshPrepassImp = VK_NULL_HANDLE;
+	VkPipeline buildOpaque = VK_NULL_HANDLE;     // buildings of the cities
+	VkPipeline buildPrepass = VK_NULL_HANDLE;
+	VkPipeline lampPipe = VK_NULL_HANDLE;         // street lamps
+	VkPipelineLayout lampLayout = VK_NULL_HANDLE;
 	std::unique_ptr<class AmbientOcclusion> ao;
 	std::unique_ptr<class ScreenReflections> ssr;
 	std::unique_ptr<class RTScene> rt;
@@ -270,6 +297,13 @@ private:
 	static void PlanetAlbedo (OBJHANDLE hp, float alb[3]);
 	bool cameraCut = true; // this frame does not continue the previous one
 	void WriteSSRDescriptors ();
+	void WriteCityDescriptors ();
+	VkTexture *cityMap[3] = {}, *cityNone = nullptr;
+	VkTexture *cityBound[vkc::FRAMES_IN_FLIGHT][3];
+	VkSampler citySampler = VK_NULL_HANDLE;
+	OBJHANDLE cityPlanet = nullptr;
+	VECTOR3 cityCentre{}, cityX{}, cityY{};
+	double citySize[3] = { 1.0, 1.0, 1.0 };
 	std::unique_ptr<class TemporalAA> taa;
 	std::unique_ptr<class FsrUpscaler> fsr;
 	std::unique_ptr<class VolumetricClouds> vclouds;

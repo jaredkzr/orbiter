@@ -4534,6 +4534,83 @@ OAPIFUNC unsigned oapiScatterGeneration (OBJHANDLE hPlanet);
  */
 OAPIFUNC void oapiScatterSupported ();
 
+/// Kinds of city buildings
+enum CITYKIND { CITY_HOUSE = 0, CITY_LOWRISE = 1, CITY_MIDRISE = 2, CITY_TOWER = 3, CITY_INDUSTRIAL = 4 };
+
+/// A building of a planet's procedural cities, in the planet frame (rotating with it)
+struct CITYBUILDING {
+	VECTOR3 pos;        ///< centre of its footprint on the ground [m]
+	MATRIX3 rot;        ///< building frame (x along its front, y up, z back) -> planet frame
+	double width;       ///< extent along x [m]
+	double depth;       ///< extent along z [m]
+	double height;      ///< height above pos [m]
+	double sunk;        ///< part of the height below the ground at pos [m]
+	double storeyHeight;///< [m]
+	int storeys;        ///< storeys above the ground; the height above them is the roof's (pitched roof, parapet)
+	int kind;           ///< CITYKIND
+	int style;          ///< its region's style (oapiCityStyle)
+	unsigned seed;      ///< for its looks
+};
+
+/**
+ * \brief Procedural cities: buildings on a planet's built-up ground (from
+ *   its night lights), the same for physics and graphics clients; vessels
+ *   collide with them. A graphics client that draws them calls
+ *   oapiCitySupported when it is initialised; with other clients there are
+ *   none.
+ * \return size of the cells the buildings are kept in [m] (0: the planet
+ *   has no cities)
+ */
+OAPIFUNC double oapiCityCellSize (OBJHANDLE hPlanet);
+
+/**
+ * \brief Name of a building style of a planet's cities (Config/Cities/<planet>.cfg)
+ * \return null if there is no such style
+ */
+OAPIFUNC const char *oapiCityStyle (OBJHANDLE hPlanet, int style);
+
+/**
+ * \brief Cells within a distance of a point.
+ * \param pos point in the planet frame [m]
+ * \param cells receives pairs (row, column), up to maxCells
+ * \return number of cells (may be more than maxCells)
+ */
+OAPIFUNC int oapiCityCells (OBJHANDLE hPlanet, const VECTOR3 &pos, double radius, int *cells, int maxCells);
+
+/**
+ * \brief The buildings of a cell at least minHeight [m] tall.
+ * \param b receives up to maxB buildings (may be null to count them)
+ * \return number of buildings
+ */
+OAPIFUNC int oapiCityCell (OBJHANDLE hPlanet, int row, int col, double minHeight, CITYBUILDING *b, int maxB);
+
+/// A piece of a street's centre line, in the planet frame (its ends on the ground)
+struct CITYSTREET {
+	VECTOR3 a, b;       ///< ends [m]
+	double width;       ///< [m]
+	int kind;           ///< 0 street, 1 avenue
+};
+
+/**
+ * \brief The streets of a cell (about its built-up blocks).
+ * \param s receives up to maxS pieces (may be null to count them)
+ * \return number of pieces
+ */
+OAPIFUNC int oapiCityStreets (OBJHANDLE hPlanet, int row, int col, CITYSTREET *s, int maxS);
+
+/**
+ * \brief Incremented whenever cells of the planet's cities change (e.g. the
+ *   ground cleared under a vessel placed there): cells kept by a client
+ *   must then be read again.
+ */
+OAPIFUNC unsigned oapiCityGeneration (OBJHANDLE hPlanet);
+
+/**
+ * \brief A graphics client that draws the cities calls this when it is
+ *   initialised.
+ */
+OAPIFUNC void oapiCitySupported ();
+
 struct ElevationTile;
 
 /**

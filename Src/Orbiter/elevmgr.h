@@ -71,6 +71,18 @@ public:
 	void ElevationGrid(int ilat, int ilng, int lvl, int pilat, int pilng, int plvl, INT16* pelev, INT16* elev, double* emean = 0) const;
 	/// procedural terrain detail (nullptr if off)
 	const class TerrainDetail *Detail () const;
+	/// the data alone: without the procedural detail and the graphics
+	/// client's filter (clbkFilterElevation); with a tile cache of its
+	/// own, safe on another thread
+	void SetNoDetail ();
+	/**
+	* \brief A deck of a floating base: inside the circle about (lat, lng)
+	*   the ground (for vessels, Elevation) is at least elev; not in the
+	*   terrain's meshes
+	* \param radius [m]
+	* \param elev above the mean radius [m]
+	*/
+	void AddDeck (double lat, double lng, double radius, double elev);
 
 protected:
 	int  Quadrant(double lat, double lng, int lvl) const;
@@ -78,6 +90,8 @@ protected:
 	INT16 *LoadElevationTile (int lvl, int ilat, int ilng, double tgt_res) const;
 	bool LoadElevationTile_mod (int lvl, int ilat, int ilng, double tgt_res, INT16 *elev) const;
 	bool HasElevationTile(int lvl, int ilat, int ilng) const;
+	/// the terrain alone (Elevation without the decks)
+	double Terrain (double lat, double lng, int reqlvl, std::vector<ElevationTile> *tilecache, Vector *normal, int *lvl) const;
 
 private:
 	const CelestialBody *cbody;
@@ -91,6 +105,9 @@ private:
 	mutable std::vector<ElevationTile> *local_cache = nullptr;
 	mutable std::unique_ptr<class TerrainDetail> detail;
 	mutable bool detailInit = false;
+	bool dataOnly = false; // (SetNoDetail)
+	struct Deck { double lng, slat, clat, cosr, elev; };
+	std::vector<Deck> decks; // (AddDeck)
 };
 
 #endif // !__ELEVMGR_H

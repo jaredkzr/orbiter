@@ -43,6 +43,10 @@ public:
 	/// (global); impostor: a plant's impostor (shadow_impostor_inst.vert)
 	void DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize instOfs, uint32_t count,
 		const MATRIX3 &R, const VECTOR3 &origin, bool impostor);
+	/// Buildings of the cities (Scene::DrawBuildings), in the frame with
+	/// rotation R and origin (global, relative to the camera)
+	void DrawBuildings (VkBuffer vb, VkBuffer ib, uint32_t firstIndex, uint32_t nIndex, VkBuffer inst, VkDeviceSize instOfs,
+		uint32_t count, const MATRIX3 &R, const VECTOR3 &origin);
 	/// Draw indexed geometry (NTVERTEX, 16-bit indices), e.g. a terrain tile
 	void DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &model);
 	/// whether a sphere (global position, radius) may cast into the map
@@ -65,6 +69,7 @@ private:
 	VkPipeline alphaPipeline = VK_NULL_HANDLE;
 	VkPipeline instPipeline = VK_NULL_HANDLE;  // instanced casters (alpha-tested where textured)
 	VkPipeline impPipeline = VK_NULL_HANDLE;   // instanced impostors
+	VkPipeline bldPipeline = VK_NULL_HANDLE;   // buildings of the cities
 	VECTOR3 sun{};                             // direction to the sun (global)
 	bool active = false;
 	VECTOR3 centre{};

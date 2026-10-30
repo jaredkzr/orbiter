@@ -31,7 +31,11 @@ local function main()
 	oapi.replay_seek(mjd3)
 	local p = v:get_globalpos()
 	local d = dist(p, p3)
-	check("position", d < 0.01, string.format("%.6f m from the recorded position", d))
+	-- (the replay is sought by the date: its double holds about 0.6 us at
+	-- MJD 52000, rounded twice (here and to the replay's time), at the 30
+	-- km/s of the Earth about the sun up to 4 cm; which, depends on the step
+	-- the script started in)
+	check("position", d < 0.05, string.format("%.6f m from the recorded position", d))
 	check("time", math.abs(oapi.get_simmjd() - mjd3) * 86400 < 1e-3, string.format("shown at %+.4f s", (oapi.get_simmjd() - mjd3) * 86400))
 	check("thrust", v:get_thrustergrouplevel(THGROUP.MAIN) > 0.99, string.format("main engine at %.2f", v:get_thrustergrouplevel(THGROUP.MAIN)))
 

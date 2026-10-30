@@ -2,8 +2,9 @@
 -- elevation profiles. In the Alps the detail adds relief below the
 -- resolution of the elevation data (cells of about 150 m: without detail
 -- the profile is smooth at 25 m), without steps; the open sea and the
--- ground at Cape Canaveral (a surface base) stay as flat as the data. On
--- the Moon's mare near Hadley Rille craters roughen the flat ground.
+-- ground at Cape Canaveral (a surface base) and in Paris (a city) stay
+-- about as flat as the data. On the Moon's mare near Hadley Rille craters
+-- roughen the flat ground.
 -- Skipped (passes) without elevation data.
 
 local failed = false
@@ -62,9 +63,36 @@ local function main()
 	local _, _, smin, smax = stats(profile(r(-40), r(30), r(30), 5000, 25))
 	check("sea", smax - smin < 1e-6, string.format("range %.6f m", smax - smin))
 
-	-- no detail at a surface base (the roughness of the data alone)
-	local _, krough = stats(profile(r(-80.675), r(28.5), 0, 3000, 25))
+	-- no detail at a surface base (the roughness of the data alone; the
+	-- ground about its landing pads, levelled on purpose, left out)
+	local kh = profile(r(-80.675), r(28.5), 0, 3000, 25)
+	local hb = oapi.get_basebyname(E, "Cape Canaveral")
+	if hb then
+		local R = oapi.get_size(E)
+		local pads = {}
+		for p = 0, oapi.get_basepadcount(hb) - 1 do pads[#pads+1] = { oapi.get_basepadequpos(hb, p) } end
+		local kept = {}
+		for i = 1, #kh do
+			local lat = r(28.5) + (i - 1) * 25 / R
+			local near = false
+			for _, pd in ipairs(pads) do
+				local dn, de = (lat - pd[2]) * R, (r(-80.675) - pd[1]) * R * math.cos(lat)
+				if dn * dn + de * de < 100 * 100 then near = true end
+			end
+			if not near then kept[#kept+1] = kh[i] end
+		end
+		kh = kept
+	end
+	local _, krough = stats(kh)
 	check("base", krough < 0.6, string.format("roughness at Cape Canaveral: %.3f m", krough))
+
+	-- built-up ground is graded (with the procedural cities): central Paris
+	-- about as smooth as the data (0.09 m; 0.26 m with the detail)
+	local blds = oapi.city_buildings(E, r(2.33), r(48.865), 300)
+	if blds and #blds > 0 then
+		local _, prough = stats(profile(r(2.33), r(48.865), r(30), 3000, 25))
+		check("city", prough < 0.15, string.format("roughness at 25 m in Paris: %.3f m", prough))
+	end
 
 	-- the Moon's mare near Hadley Rille: craters (about 0.03 m roughness at
 	-- 5 m without the detail), and continuous through them

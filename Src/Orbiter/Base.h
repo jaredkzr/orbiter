@@ -66,7 +66,23 @@ public:
 	// Return equatoral coordinates
 
 	inline double Elevation() const { return elev; }
-	// Return mean base elevation
+	// Return mean base elevation (a floating base's: its altitude)
+
+	/// Graded ground (BEGIN_GRADE: "x z length width bearing [plane [group]]"
+	/// per line; centre in the base frame (x south, z east) [m], length along
+	/// the bearing [deg from north]): the terrain within levelled to the
+	/// data's mean there, or (plane 1) to the plane fitted to them (runways
+	/// on a slope), blended back to the data's ground about it. Areas of one
+	/// group (> 0) share a level: the mean over all of them. Landing pads in
+	/// a level area take its level
+	struct Grade { double x, z, len, wid, bearing; bool plane; int group; };
+	const std::vector<Grade> &Grades () const { return grades; }
+
+	inline bool Floating() const { return floating; }
+	// A floating base (ALTITUDE in its file): an aerostat; its origin at its
+	// altitude above the mean radius, its objects about it (not on the
+	// ground). Its decks (BEGIN_DECKS: circles "x z radius height" in the
+	// base frame) are the ground for vessels over them (ElevationManager::AddDeck)
 
 	void Rel_EquPos (const Vector &relpos, double &_lng, double &_lat) const;
 	// converts a base-relative position into longitude/latitude
@@ -186,6 +202,10 @@ private:
 	//const Planet *planet;
 	double rad, lng, lat;          // equatorial coords of the base
 	double elev;                   // mean elevation of the base
+	bool floating = false;         // a floating base (ALTITUDE)
+	struct Deck { double x, z, r, h; };
+	std::vector<Deck> decks;       // a floating base's decks (base frame)
+	std::vector<Grade> grades;     // graded ground (base frame)
 	Vector rpos;                   // base position in local planet frame
 	Matrix rrot;                   // rotation matrix in local planet frame
 	double objscale;               // size of "typical" base object (for camera-distance dependent render cutoff)

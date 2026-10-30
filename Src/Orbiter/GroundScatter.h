@@ -114,6 +114,10 @@ namespace scatter {
 		int asset;
 	};
 
+	/// DXT1 (BC1) blocks of a DDS image -> RGBA8 (r in the low byte; alpha 0:
+	/// the transparent texels of 3-colour blocks)
+	bool DecodeDXT1 (const uint8_t *data, size_t n, std::vector<uint32_t> &px, int &w, int &h);
+
 	/// Ground cover from the surface texture and water mask tiles
 	class Cover {
 	public:
@@ -121,6 +125,8 @@ namespace scatter {
 		~Cover ();
 		/// colour (linear 0-1) and water (0 or 1) at a point; false if there are no tiles
 		bool Sample (double lat, double lng, Vector &rgb, double &water);
+		/// whether there is a water mask tile at a point
+		bool HasMask (double lat, double lng) { return Get (1, lat, lng) != nullptr; }
 	private:
 		struct Tile { int lvl, ilat, ilng; std::vector<uint32_t> px; int w = 0, h = 0; uint64_t used = 0; };
 		const Tile *Get (int layer, double lat, double lng);

@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "elevmgr.h"
+#include "PolarElevation.h"
 #include <algorithm>
 #include <cmath>
 #include "Celbody.h"
@@ -244,6 +245,7 @@ INT16 *ElevationManager::LoadElevationTile (int lvl, int ilat, int ilng, double 
 				for (i = 0; i < ndat; i++)
 					elev[i] += sofs;
 			}
+			oapi::PolarElevationRows (elev, elev_stride, lvl, ilat); // (towards the poles: rows resampled)
 		}
 	}
 	return elev;
@@ -366,6 +368,33 @@ bool ElevationManager::LoadElevationTile_mod (int lvl, int ilat, int ilng, doubl
 
 double ElevationManager::Elevation (double lat, double lng, int reqlvl, std::vector<ElevationTile> *tilecache, Vector *normal, int *reslvl) const
 {
+	double e = Terrain (lat, lng, reqlvl, tilecache, normal, reslvl);
+	if (!decks.empty() && !dataOnly) {
+		double R = cbody->Size();
+		double slat = sin (lat), clat = cos (lat);
+		for (const Deck &d : decks) {
+			if (d.elev <= e) continue;
+			// (great-circle distance to the deck's centre)
+			double c = slat * d.slat + clat * d.clat * cos (lng - d.lng);
+			if (c < d.cosr) continue;
+			e = d.elev;
+			if (normal) *normal = Vector (0, 1, 0);
+		}
+	}
+	return e;
+}
+
+void ElevationManager::AddDeck (double lat, double lng, double radius, double elev)
+{
+	Deck d;
+	d.lng = lng, d.slat = sin (lat), d.clat = cos (lat);
+	d.cosr = cos (radius / cbody->Size());
+	d.elev = elev;
+	decks.push_back (d);
+}
+
+double ElevationManager::Terrain (double lat, double lng, int reqlvl, std::vector<ElevationTile> *tilecache, Vector *normal, int *reslvl) const
+{
 	double e = 0.0, dh = 0.0;
 	if (reslvl) *reslvl = 0;
 	reqlvl = (reqlvl ? min (max(0,reqlvl-7), maxlvl) : maxlvl);
@@ -462,7 +491,7 @@ double ElevationManager::Elevation (double lat, double lng, int reqlvl, std::vec
 					//oapiWriteLogV("LoadTile[0x%X]: lvl=%d, flags=0x%X, q=%d, i(%d, %d)", t, lvl, t->quadrants, q, ilng, ilat);
 
 					// still need to store emin and emax
-					auto gc = g_pOrbiter->GetGraphicsClient();
+					auto gc = dataOnly ? nullptr : g_pOrbiter->GetGraphicsClient(); // (data only: any thread)
 					if (gc) gc->clbkFilterElevation((OBJHANDLE)cbody, ilat, ilng, lvl, elev_res, t->data);
 					break;
 				}
@@ -570,6 +599,10 @@ double ElevationManager::Elevation (double lat, double lng, int reqlvl, std::vec
 				double e0 = e * elev_res;
 				dh = det->Height (lat, lng, e0, spacing, relief, PHYSICS_LMIN);
 				if (normal && dh != 0.0) {
+					// (levelled ground: the data's slopes replaced by the ground's,
+					// which the differences below give)
+					double lv = det->Levelled (lat, lng, spacing);
+					if (lv > 0.0) *normal = Vector (normal->x * (1.0 - lv), normal->y, normal->z * (1.0 - lv)).unit();
 					// slopes of the detail by central differences
 					double d = 0.25 * det->LambdaMin(), R = cbody->Size();
 					double dlat = d / R, dlng = d / (R * max (cos (lat), 1e-6));
@@ -586,6 +619,13 @@ double ElevationManager::Elevation (double lat, double lng, int reqlvl, std::vec
 		}
 	}
 	return e*elev_res + dh;
+}
+
+void ElevationManager::SetNoDetail ()
+{
+	detailInit = true;
+	detail.reset ();
+	dataOnly = true;
 }
 
 const TerrainDetail *ElevationManager::Detail () const

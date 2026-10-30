@@ -33,6 +33,7 @@ layout(set = FRAME_SET, binding = 0) uniform Frame {
 	vec4 planetDir;    // light of the planet nearby: direction to its centre (view space), w: sine of its angular radius
 	vec4 planetLight;  // its irradiance at normal incidence (rgb), w: 1 = present
 	vec4 lightCount;   // x: number of local lights
+	vec4 city[4];      // the cities' road map (CityField): centre (view space), w: present; axes x, y (view space); x, y, z: 1/size of its fine and coarse level and the far map [1/m]
 	LocalLight lights[MAX_LIGHTS];
 } frame;
 
@@ -52,6 +53,8 @@ float AmbientOcclusion ()
 // screen-space reflections (same size as the occlusion image): reflected
 // radiance (rgb, premultiplied with a) and its confidence (a); ofs: offset [uv]
 layout(set = FRAME_SET, binding = 5) uniform sampler2D ssrMap;
+// the cities' road map: fine and coarse level (r: asphalt, g: pavement)
+layout(set = FRAME_SET, binding = 9) uniform sampler2D cityMap[3]; // fine, coarse road map; far built-up map
 vec4 ScreenReflection (vec2 ofs) { return frame.probe.z > 0.5 ? texture(ssrMap, gl_FragCoord.xy * frame.aoParams.xy + ofs) : vec4(0.0); }
 bool RTLighting () { return frame.rt.x > 0.5; }
 vec4 RTVisibility () { return texture(rtVisMap, gl_FragCoord.xy * frame.aoParams.xy); }

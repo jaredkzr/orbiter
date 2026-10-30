@@ -18,6 +18,8 @@ struct SDL_Window;
 namespace vkc {
 
 	void Check (VkResult res, const char *what);
+	/// the memory heaps' use, to the log
+	void LogHeaps ();
 #define VK_CHECK(expr) vkc::Check((expr), #expr)
 
 	constexpr uint32_t FRAMES_IN_FLIGHT = 2;

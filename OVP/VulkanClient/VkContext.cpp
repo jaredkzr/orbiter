@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "VkContext.h"
+#include <vector>
 #include "OrbiterAPI.h"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -12,10 +13,32 @@
 
 namespace vkc {
 
+static VmaAllocator g_allocator = VK_NULL_HANDLE; // (for the report of Check)
+
+void LogHeaps ()
+{
+	if (!g_allocator) return;
+	VmaBudget b[VK_MAX_MEMORY_HEAPS];
+	vmaGetHeapBudgets (g_allocator, b);
+	const VkPhysicalDeviceMemoryProperties *mp;
+	vmaGetMemoryProperties (g_allocator, &mp);
+	for (uint32_t i = 0; i < mp->memoryHeapCount; i++)
+		oapiWriteLogV ("VulkanClient: heap %u: %u allocations, %llu MB in blocks, %llu MB used (driver: %llu of %llu MB)", i, b[i].statistics.allocationCount,
+			(unsigned long long)(b[i].statistics.blockBytes >> 20), (unsigned long long)(b[i].usage >> 20),
+			(unsigned long long)(b[i].usage >> 20), (unsigned long long)(b[i].budget >> 20));
+}
+
 void Check (VkResult res, const char *what)
 {
 	if (res != VK_SUCCESS)
 		oapiWriteLogError ("VulkanClient: %s failed (VkResult %d)", what, (int)res);
+	// (out of memory, or over the heap limits set below: stop here, before a
+	// runaway can starve the system; the driver can hang a process killed later)
+	if (res == VK_ERROR_OUT_OF_DEVICE_MEMORY || res == VK_ERROR_OUT_OF_HOST_MEMORY) {
+		LogHeaps ();
+		oapiWriteLogError ("VulkanClient: out of GPU memory (heap limits: ORBITER_VK_HEAP_LIMIT_MB); stopping");
+		std::abort ();
+	}
 }
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback (VkDebugUtilsMessageSeverityFlagBitsEXT severity,
@@ -246,7 +269,24 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 	aci.device = device;
 	aci.instance = instance;
 	if (rayTracing || deviceAddress) aci.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+	// Heap limits: allocations past them fail (and Check stops the client)
+	// rather than spilling video memory into system memory until the system
+	// runs out. Device memory: 90% of it; the others (system memory the GPU
+	// sees): 4 GB. ORBITER_VK_HEAP_LIMIT_MB: one limit for all heaps.
+	VkPhysicalDeviceMemoryProperties mp;
+	vkGetPhysicalDeviceMemoryProperties (physicalDevice, &mp);
+	std::vector<VkDeviceSize> heapLimit (mp.memoryHeapCount);
+	const char *lim = getenv ("ORBITER_VK_HEAP_LIMIT_MB");
+	for (uint32_t i = 0; i < mp.memoryHeapCount; i++) {
+		VkDeviceSize sz = mp.memoryHeaps[i].size;
+		if (lim && atoi (lim) > 0) heapLimit[i] = std::min (sz, (VkDeviceSize)atoi (lim) << 20);
+		else if (mp.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) heapLimit[i] = sz / 10 * 9;
+		else heapLimit[i] = std::min (sz, (VkDeviceSize)4 << 30);
+		oapiWriteLogV ("VulkanClient: memory heap %u: %llu MB, limit %llu MB", i, (unsigned long long)(sz >> 20), (unsigned long long)(heapLimit[i] >> 20));
+	}
+	aci.pHeapSizeLimit = heapLimit.data();
 	VK_CHECK(vmaCreateAllocator (&aci, &allocator));
+	g_allocator = allocator;
 
 	// Per-frame resources
 	for (auto &f : frames) {

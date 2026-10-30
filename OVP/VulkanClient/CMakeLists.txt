@@ -77,6 +77,11 @@ set(SHADER_SRC
 	Shaders/prepass_inst.vert
 	Shaders/impostor_inst.vert
 	Shaders/prepass_impostor_inst.vert
+	Shaders/building.vert
+	Shaders/building.frag
+	Shaders/prepass_building.vert
+	Shaders/shadow_building.vert
+	Shaders/lamp.vert
 	Shaders/post.vert
 	Shaders/bloom_down.frag
 	Shaders/bloom_up.frag
@@ -145,7 +150,7 @@ foreach(shader ${SHADER_SRC})
 		COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADER_OUT_DIR}
 		COMMAND ${GLSLANG_CMD} -V --target-env vulkan1.3 -o ${spv} ${CMAKE_CURRENT_SOURCE_DIR}/${shader}
 		COMMAND ${CMAKE_COMMAND} -DINPUT=${spv} -DOUTPUT=${hdr} -DSYMBOL=spv_${symbol} -P ${CMAKE_CURRENT_SOURCE_DIR}/EmbedFile.cmake
-		DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${shader} ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/atmosphere.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadow.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/frame.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/lights.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/brdf.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/exposure.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/atmlut.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/material.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/ssr.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/ssr_trace.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/rt.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/rtlight.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/plume.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/particles.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/particle_update.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/particle_common.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/particle_light.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/surfdetail.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/tile_main.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/terraindetail.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/detailcore.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/smokevol.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/ring.glsl ${CMAKE_CURRENT_SOURCE_DIR}/EmbedFile.cmake ${GLSLANG_DEP}
+		DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${shader} ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/atmosphere.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadow.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/frame.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/lights.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/brdf.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/exposure.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/atmlut.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/material.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/meshshade.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/building.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/ssr.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/ssr_trace.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/rt.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/rtlight.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/plume.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/particles.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/particle_update.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/particle_common.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/particle_light.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/surfdetail.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/tile_main.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/terraindetail.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/detailcore.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/smokevol.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/ring.glsl ${CMAKE_CURRENT_SOURCE_DIR}/EmbedFile.cmake ${GLSLANG_DEP}
 		COMMENT "Compiling shader ${name}"
 	)
 	list(APPEND SHADER_HEADERS ${hdr})
@@ -186,6 +191,8 @@ add_library(VulkanClient SHARED
 	Input.cpp
 	ScatterAssets.cpp
 	ScatterField.cpp
+	CityField.cpp
+	CityKit.cpp
 	TestInput.cpp
 	ImageIO.cpp
 	Vma.cpp

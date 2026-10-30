@@ -59,6 +59,12 @@ public:
 	VkTexture *CreateRGBA (uint32_t w, uint32_t h, const uint8_t *rgba);
 	/// the same, linear (data such as normals)
 	VkTexture *CreateRGBALinear (uint32_t w, uint32_t h, const uint8_t *rgba);
+	/// RGBA8 linear, with mip levels; the upload recorded into the current
+	/// frame (no wait)
+	VkTexture *CreateRGBADeferred (uint32_t w, uint32_t h, const uint8_t *rgba);
+	/// An array of RGBA8 linear layers (sampler2DArray; layers one after
+	/// another in rgba), with mip levels
+	VkTexture *CreateArrayLinear (uint32_t w, uint32_t h, uint32_t layers, const uint8_t *rgba);
 	/// RGBA8 (sRGB) with the given mip levels (offsets into data; e.g.
 	/// alpha-tested foliage whose coverage the levels preserve)
 	VkTexture *CreateRGBAMips (uint32_t w, uint32_t h, uint32_t nMip, const uint8_t *data,
@@ -69,8 +75,10 @@ public:
 	void SetNormalMap (VkTexture *tex, uint32_t w, uint32_t h, const uint8_t *rgba);
 
 	/// Create a texture from a DDS file in memory. deferred: record the upload
-	/// into the current frame instead of waiting for it (texture streaming)
-	VkTexture *CreateFromDDS (const uint8_t *file, size_t size, bool deferred);
+	/// into the current frame instead of waiting for it (texture streaming);
+	/// clampEdges: sampled clamped to its edges instead of repeated (tiles of
+	/// a planet's surface, which a wide filter footprint must not wrap round)
+	VkTexture *CreateFromDDS (const uint8_t *file, size_t size, bool deferred, bool clampEdges = false);
 
 	/// Create a render-target surface, cleared to opaque black
 	VkTexture *CreateSurface (uint32_t w, uint32_t h);
@@ -118,14 +126,16 @@ private:
 	void FreeMaps (VkTexture *tex);
 	VkTexture *CreateImage (VkFormat fmt, uint32_t w, uint32_t h, uint32_t nMip,
 		const uint8_t *data, const std::vector<size_t> &mipOffsets, size_t dataSize, bool genMips,
-		const VkComponentMapping *swizzle = nullptr, bool deferred = false);
-	VkDescriptorSet AllocSet (VkImageView view);
+		const VkComponentMapping *swizzle = nullptr, bool deferred = false, uint32_t layers = 1,
+		bool clampEdges = false);
+	VkDescriptorSet AllocSet (VkImageView view, bool clampEdges = false);
 	void Destroy (VkTexture *tex);
 
 	vkc::Context *ctx = nullptr;
 	VkDescriptorSetLayout layout = VK_NULL_HANDLE;
 	VkDescriptorPool pool = VK_NULL_HANDLE;
-	VkSampler sampler = VK_NULL_HANDLE;
+	VkSampler sampler = VK_NULL_HANDLE;      // repeating
+	VkSampler clampSampler = VK_NULL_HANDLE; // the same, clamped to the edges
 	VkTexture *white = nullptr;
 	VkTexture *flatNormal = nullptr;
 	VkDescriptorSetLayout mapLayout = VK_NULL_HANDLE;

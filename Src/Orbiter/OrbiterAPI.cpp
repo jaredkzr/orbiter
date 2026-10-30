@@ -29,6 +29,7 @@
 #include "Replay.h"
 #include "TerrainDetail.h"
 #include "GroundScatter.h"
+#include "Cities.h"
 #include "elevmgr.h"
 #include <algorithm>
 #include <zlib.h>
@@ -1531,6 +1532,82 @@ DLLEXPORT unsigned oapiScatterGeneration (OBJHANDLE hPlanet)
 DLLEXPORT void oapiScatterSupported ()
 {
 	scatter::GroundScatter::clientSupport = true;
+}
+
+static cities::CityMap *PlanetCities (OBJHANDLE hPlanet)
+{
+	Body *body = (Body*)hPlanet;
+	if (!body || body->Type() != OBJTP_PLANET) return nullptr;
+	return ((Planet*)body)->Cities ();
+}
+
+DLLEXPORT double oapiCityCellSize (OBJHANDLE hPlanet)
+{
+	cities::CityMap *cm = PlanetCities (hPlanet);
+	return cm ? cm->CellSize () : 0.0;
+}
+
+DLLEXPORT const char *oapiCityStyle (OBJHANDLE hPlanet, int style)
+{
+	cities::CityMap *cm = PlanetCities (hPlanet);
+	if (!cm || style < 0 || style >= (int)cm->Styles().size()) return nullptr;
+	return cm->Styles()[style].name.c_str();
+}
+
+DLLEXPORT int oapiCityCells (OBJHANDLE hPlanet, const VECTOR3 &pos, double radius, int *cells, int maxCells)
+{
+	cities::CityMap *cm = PlanetCities (hPlanet);
+	if (!cm) return 0;
+	std::vector<std::pair<int,int>> cl;
+	cm->CellsNear (MakeVector (pos), radius, cl);
+	for (int i = 0; i < (int)cl.size() && i < maxCells; i++)
+		cells[2*i] = cl[i].first, cells[2*i+1] = cl[i].second;
+	return (int)cl.size();
+}
+
+DLLEXPORT int oapiCityCell (OBJHANDLE hPlanet, int row, int col, double minHeight, CITYBUILDING *b, int maxB)
+{
+	cities::CityMap *cm = PlanetCities (hPlanet);
+	if (!cm) return 0;
+	const std::vector<cities::Building> &c = cm->Cell (row, col, minHeight);
+	if (b)
+		for (int i = 0; i < (int)c.size() && i < maxB; i++) {
+			const cities::Building &x = c[i];
+			b[i].pos = MakeVECTOR3 (x.pos);
+			const Matrix &r = x.rot;
+			b[i].rot = _M(r.m11, r.m12, r.m13, r.m21, r.m22, r.m23, r.m31, r.m32, r.m33);
+			b[i].width = x.w, b[i].depth = x.d, b[i].height = x.h;
+			b[i].sunk = x.sunk, b[i].storeyHeight = x.storey, b[i].storeys = x.storeys;
+			b[i].kind = x.kind, b[i].style = x.style;
+			b[i].seed = x.seed;
+		}
+	return (int)c.size();
+}
+
+DLLEXPORT int oapiCityStreets (OBJHANDLE hPlanet, int row, int col, CITYSTREET *s, int maxS)
+{
+	cities::CityMap *cm = PlanetCities (hPlanet);
+	if (!cm) return 0;
+	const std::vector<cities::Street> &c = cm->Streets (row, col);
+	if (s)
+		for (int i = 0; i < (int)c.size() && i < maxS; i++) {
+			s[i].a = MakeVECTOR3 (c[i].a);
+			s[i].b = MakeVECTOR3 (c[i].b);
+			s[i].width = c[i].width;
+			s[i].kind = c[i].kind;
+		}
+	return (int)c.size();
+}
+
+DLLEXPORT unsigned oapiCityGeneration (OBJHANDLE hPlanet)
+{
+	cities::CityMap *cm = PlanetCities (hPlanet);
+	return cm ? cm->Generation () : 0;
+}
+
+DLLEXPORT void oapiCitySupported ()
+{
+	cities::CityMap::clientSupport = true;
 }
 
 DLLEXPORT bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, SURFDETAILPARAM *prm)

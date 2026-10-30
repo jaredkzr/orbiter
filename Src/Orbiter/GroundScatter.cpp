@@ -6,6 +6,7 @@
 #include "Config.h"
 #include "Planet.h"
 #include "Base.h"
+#include "Cities.h"
 #include "Vessel.h"
 #include "Psys.h"
 #include "Mesh.h"
@@ -63,44 +64,6 @@ namespace {
 		return ((uint64_t)layer << 56) | ((uint64_t)(uint32_t)row << 28) | (uint64_t)(uint32_t)col;
 	}
 
-	/// DXT1 (BC1) blocks of a DDS image -> RGBA8 (r in the low byte)
-	bool DecodeDDS (const uint8_t *data, size_t n, std::vector<uint32_t> &px, int &w, int &h)
-	{
-		if (n < 128 || memcmp (data, "DDS ", 4) || memcmp (data + 84, "DXT1", 4)) return false;
-		uint32_t hh, ww;
-		memcpy (&hh, data + 12, 4);
-		memcpy (&ww, data + 16, 4);
-		w = (int)ww, h = (int)hh;
-		if (w < 4 || h < 4 || n < 128 + (size_t)(w / 4) * (h / 4) * 8) return false;
-		px.assign ((size_t)w * h, 0);
-		const uint8_t *b = data + 128;
-		auto rgb = [](uint16_t c) {
-			uint32_t r = (c >> 11) & 31, g = (c >> 5) & 63, bl = c & 31;
-			return Vector ((r << 3 | r >> 2), (g << 2 | g >> 4), (bl << 3 | bl >> 2));
-		};
-		auto pack = [](const Vector &c, uint32_t a) {
-			return (uint32_t)c.x | (uint32_t)c.y << 8 | (uint32_t)c.z << 16 | a << 24;
-		};
-		for (int by = 0; by < h / 4; by++)
-			for (int bx = 0; bx < w / 4; bx++, b += 8) {
-				uint16_t c0 = b[0] | b[1] << 8, c1 = b[2] | b[3] << 8;
-				uint32_t bits = b[4] | b[5] << 8 | b[6] << 16 | (uint32_t)b[7] << 24;
-				Vector e0 = rgb (c0), e1 = rgb (c1);
-				uint32_t pal[4];
-				pal[0] = pack (e0, 255), pal[1] = pack (e1, 255);
-				if (c0 > c1) {
-					pal[2] = pack ((e0 * 2.0 + e1) / 3.0, 255);
-					pal[3] = pack ((e0 + e1 * 2.0) / 3.0, 255);
-				} else {
-					pal[2] = pack ((e0 + e1) * 0.5, 255);
-					pal[3] = 0; // (transparent)
-				}
-				for (int k = 0; k < 16; k++)
-					px[(size_t)(by * 4 + k / 4) * w + bx * 4 + k % 4] = pal[(bits >> (2 * k)) & 3];
-			}
-		return true;
-	}
-
 	/// a convex polytope scaled, rotated and moved (p' = R s p + pos)
 	convex::Polytope Transform (const convex::Polytope &P, const Matrix &R, double s, const Vector &pos)
 	{
@@ -131,6 +94,44 @@ namespace {
 	}
 
 } // namespace
+
+/// DXT1 (BC1) blocks of a DDS image -> RGBA8 (r in the low byte)
+bool DecodeDXT1 (const uint8_t *data, size_t n, std::vector<uint32_t> &px, int &w, int &h)
+{
+	if (n < 128 || memcmp (data, "DDS ", 4) || memcmp (data + 84, "DXT1", 4)) return false;
+	uint32_t hh, ww;
+	memcpy (&hh, data + 12, 4);
+	memcpy (&ww, data + 16, 4);
+	w = (int)ww, h = (int)hh;
+	if (w < 4 || h < 4 || n < 128 + (size_t)(w / 4) * (h / 4) * 8) return false;
+	px.assign ((size_t)w * h, 0);
+	const uint8_t *b = data + 128;
+	auto rgb = [](uint16_t c) {
+		uint32_t r = (c >> 11) & 31, g = (c >> 5) & 63, bl = c & 31;
+		return Vector ((r << 3 | r >> 2), (g << 2 | g >> 4), (bl << 3 | bl >> 2));
+	};
+	auto pack = [](const Vector &c, uint32_t a) {
+		return (uint32_t)c.x | (uint32_t)c.y << 8 | (uint32_t)c.z << 16 | a << 24;
+	};
+	for (int by = 0; by < h / 4; by++)
+		for (int bx = 0; bx < w / 4; bx++, b += 8) {
+			uint16_t c0 = b[0] | b[1] << 8, c1 = b[2] | b[3] << 8;
+			uint32_t bits = b[4] | b[5] << 8 | b[6] << 16 | (uint32_t)b[7] << 24;
+			Vector e0 = rgb (c0), e1 = rgb (c1);
+			uint32_t pal[4];
+			pal[0] = pack (e0, 255), pal[1] = pack (e1, 255);
+			if (c0 > c1) {
+				pal[2] = pack ((e0 * 2.0 + e1) / 3.0, 255);
+				pal[3] = pack ((e0 + e1 * 2.0) / 3.0, 255);
+			} else {
+				pal[2] = pack ((e0 + e1) * 0.5, 255);
+				pal[3] = 0; // (transparent)
+			}
+			for (int k = 0; k < 16; k++)
+				px[(size_t)(by * 4 + k / 4) * w + bx * 4 + k % 4] = pal[(bits >> (2 * k)) & 3];
+		}
+	return true;
+}
 
 // =======================================================================
 // Cover
@@ -166,7 +167,7 @@ bool Cover::Load (int layer, int lvl, int ilat, int ilng, Tile &t)
 		BYTE *buf = nullptr;
 		DWORD n = tree[layer]->ReadData (lvl, ilat, ilng, &buf);
 		if (n) {
-			bool ok = DecodeDDS (buf, n, t.px, t.w, t.h);
+			bool ok = DecodeDXT1 (buf, n, t.px, t.w, t.h);
 			tree[layer]->ReleaseData (buf);
 			if (ok) return true;
 		}
@@ -179,7 +180,7 @@ bool Cover::Load (int layer, int lvl, int ilat, int ilng, Tile &t)
 		std::ifstream ifs (path, std::ios::binary);
 		if (ifs.good()) {
 			std::vector<uint8_t> d ((std::istreambuf_iterator<char> (ifs)), std::istreambuf_iterator<char> ());
-			if (DecodeDDS (d.data(), d.size(), t.px, t.w, t.h)) return true;
+			if (DecodeDXT1 (d.data(), d.size(), t.px, t.w, t.h)) return true;
 		}
 	}
 	return false;
@@ -489,6 +490,15 @@ void GroundScatter::Make (int layer, int row, int col, CellData &cd)
 			p *= CoverFactor (L, rgb, water, have);
 			if (u >= p * coverMax) continue;
 
+			// cities: fewer plants on built-up ground; none in buildings
+			double urban = 0.0;
+			cities::CityMap *cm = (L.kind == TREE || L.kind == SHRUB || L.collide) ? planet->Cities () : nullptr;
+			if (cm) {
+				urban = cm->Urban (dir);
+				if (L.kind != ROCK) p *= 1.0 - 0.75 * urban;
+				if (u >= p * coverMax) continue;
+			}
+
 			// the asset (plants: by latitude)
 			double alat = fabs (lat) * DEG;
 			double pick = rnd () * wsum, wlat = 0.0;
@@ -548,6 +558,7 @@ void GroundScatter::Make (int layer, int row, int col, CellData &cd)
 			in.rot = Matrix (xr.x, up.x, zr.x, xr.y, up.y, zr.y, xr.z, up.z, zr.z);
 			in.scale = exp (log (0.75) + rnd () * (log (1.3) - log (0.75)));
 			in.pos = dir * (R + elev);
+			if (urban > 0.0 && cm->Occupied (in.pos, assets[asset].radius * in.scale + 1.0)) continue;
 			cd.inst.push_back (in);
 		}
 }

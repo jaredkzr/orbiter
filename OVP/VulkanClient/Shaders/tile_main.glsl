@@ -191,22 +191,122 @@ void TrackShading(vec3 P, inout vec3 N, inout vec3 base)
 	base *= 1.0 - 0.15 * q; // (disturbed soil, darker)
 }
 
+// Streets of the cities around the camera (CityField): the road map over
+// the tangent plane at its centre, a fine level within a coarse one
+// irradiance under a street lamp (the sun's: 1)
+const float CITY_LAMP_IRR = 0.3;
+
+// The cities' streets on the ground (CityField's road map: r asphalt, g
+// pavement, b light of the street lamps, a its share of white LED light);
+// returns the lamps' light (irradiance, for the night); cover: where the
+// map lies (1; fading out at its edges), where the cities' own lights
+// replace the night light texture
+vec3 cityEmis = vec3(0.0); // (CityGround: the roof carpet's lit windows)
+float cityCarpet = 0.0;     // (CityGround: the roof carpet's share)
+vec3 CityGround (vec3 posView, inout vec3 base, out float cover)
+{
+	cover = 0.0;
+	if (frame.city[0].w < 0.5) return vec3(0.0);
+	vec3 d = posView - frame.city[0].xyz;
+	vec2 p = vec2(dot(d, frame.city[1].xyz), dot(d, frame.city[2].xyz));
+	// Beyond the small buildings (building.vert's fade, 1.3 to 2.3 km): a
+	// carpet of roofs where the ground is built up (the far map: the streets'
+	// share about), in the blocks between the streets (the road map, where
+	// it reaches), so that the city drawn in three dimensions continues
+	// flat; lit windows at night (cityEmis)
+	vec2 ud = p * frame.city[3].z + 0.5;
+	float ed = max(abs(ud.x - 0.5), abs(ud.y - 0.5));
+	float wc = ed < 0.5 ? smoothstep(1800.0, 2600.0, length(posView)) * smoothstep(0.5, 0.45, ed) : 0.0;
+	float built = wc > 0.0 ? smoothstep(0.10, 0.30, texture(cityMap[2], ud).r) : 0.0;
+	cityCarpet = wc * built;
+	vec2 uc = p * frame.city[3].y + 0.5;
+	float ec = max(abs(uc.x - 0.5), abs(uc.y - 0.5));
+	vec4 m = vec4(0.0);
+	float fade = 0.0;
+	if (ec < 0.5) {
+		m = texture(cityMap[1], uc);
+		vec2 uf = p * frame.city[3].x + 0.5;
+		float ef = max(abs(uf.x - 0.5), abs(uf.y - 0.5));
+		if (ef < 0.5) m = mix(texture(cityMap[0], uf), m, smoothstep(0.4, 0.5, ef));
+		fade = smoothstep(0.5, 0.4, ec);
+		cover = fade;
+	}
+	float w = wc * built * (1.0 - max(m.r, m.g) * fade);
+	if (w > 0.0) {
+		vec2 q = p / 14.0;
+		ivec2 c = ivec2(floor(q));
+		vec2 f = fract(q);
+		float h = Hash(ivec3(c, 7));
+		vec3 roof = h < 0.35 ? vec3(0.40, 0.39, 0.38) : h < 0.55 ? vec3(0.27, 0.27, 0.29)
+			: h < 0.72 ? vec3(0.50, 0.30, 0.22) : h < 0.88 ? vec3(0.36, 0.40, 0.44) : vec3(0.17, 0.25, 0.14);
+		roof *= 0.85 + 0.3 * Hash(ivec3(c, 8));
+		float gap = 1.0 - smoothstep(0.0, 0.12, min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y))); // (the buildings' sides, in shade)
+		roof *= 1.0 - 0.45 * gap;
+		base = mix(base, roof, 0.85 * w);
+		float lit = Hash(ivec3(c, 9)) < 0.35 ? 1.0 : 0.0;
+		cityEmis = vec3(1.0, 0.78, 0.5) * (0.04 * lit * w);
+	}
+	if (fade <= 0.0) return vec3(0.0);
+	base = mix(base, vec3(0.20, 0.19, 0.18), m.g * fade); // pavement
+	base = mix(base, vec3(0.055, 0.055, 0.06), m.r * fade); // asphalt
+	// (sodium lamps orange, LEDs white)
+	vec3 lamp = mix(vec3(1.0, 0.55, 0.18), vec3(0.85, 0.9, 1.0), m.a);
+	return lamp * (CITY_LAMP_IRR * m.b * fade);
+}
+
+// Texture gradients towards the poles: the textures' texels (equal steps
+// of longitude and latitude) narrow to slivers, cos(lat) as wide as they are
+// long; the columns' own noise showed as streaks along the meridians. The
+// footprint is widened east-west to at least one texel's length (in metres)
+// north-south, which the anisotropic filter averages (at once, the mip levels
+// further on). cos(lat): the ratio of the surface's change along u (longitude)
+// to v (latitude), from the screen derivatives (a tile spans equal angles).
+vec2 polarGx, polarGy;
+bool polarDone = false;
+void PolarGradients(vec2 uvT, vec2 hs)
+{
+	vec2 gx = dFdx(uvT), gy = dFdy(uvT);
+	polarGx = gx, polarGy = gy, polarDone = true;
+	vec3 px = dFdx(vPosView), py = dFdy(vPosView);
+	vec2 ux = dFdx(vUV), uy = dFdy(vUV);
+	float det = ux.x * uy.y - uy.x * ux.y;
+	if (abs(det) < 1e-20) return;
+	vec3 dPdu = (px * uy.y - py * ux.y) / det, dPdv = (py * ux.x - px * uy.x) / det;
+	float lv = length(dPdv);
+	if (lv <= 0.0) return;
+	float c = clamp(length(dPdu) / lv, 1e-3, 1.0);
+	float w = smoothstep(0.5, 0.25, c); // (from 60 degrees on: none at lower latitudes)
+	if (w <= 0.0) return;
+	float su = max(abs(gx.x), abs(gy.x)), sv = max(max(abs(gx.y), abs(gy.y)), 2.0 * hs.y);
+	polarGx = mix(gx, vec2(max(su, sv / c), 0.0), w);
+	polarGy = mix(gy, vec2(0.0, sv), w);
+}
+vec2 PolarGradX(vec2 uvT, vec2 hs) { if (!polarDone) PolarGradients(uvT, hs); return polarGx; }
+vec2 PolarGradY(vec2 uvT, vec2 hs) { if (!polarDone) PolarGradients(uvT, hs); return polarGy; }
+
 void main()
 {
 	vec3 N = normalize(vNormalView);
 	vec3 Ng = N; // (geometric: water, night side)
 	vec3 L = frame.sunDir.xyz;
-	// clamp to the texel centres at the tile edges (the sampler wraps around)
+	// clamp to the texel centres at the tile edges (the tiles' sampler clamps
+	// there too: the footprint widened towards the poles, about a hundred
+	// texels east-west, wrapped round to the tile's far edge and showed as a
+	// band along every tile edge)
 	vec2 hs = 0.5 / vec2(textureSize(surfTex, 0));
-	vec3 base = texture(surfTex, clamp(vUV * tile.surfUV.zw + tile.surfUV.xy, hs, 1.0 - hs)).rgb;
+	vec2 uvT = clamp(vUV * tile.surfUV.zw + tile.surfUV.xy, hs, 1.0 - hs);
+	vec3 base = textureGrad(surfTex, uvT, PolarGradX(uvT, hs), PolarGradY(uvT, hs)).rgb;
 	if (tile.params.z < 0.5 && atm.surfPrm.x != 1.0) // (the textures' colour tints, per planet)
 		base = max(mix(vec3(dot(base, vec3(0.2126, 0.7152, 0.0722))), base, atm.surfPrm.x), 0.0);
 	// procedural detail below the textures' resolution (terrain only)
 	float detailShadow = 1.0; // (shadows of the procedural craters)
+	vec3 cityLight = vec3(0.0); // (street lamps)
+	float cityCover = 0.0;
 	if (tile.params.z < 0.5) {
 #ifdef TERRAIN_DETAIL
 		TerrainDetailShading(vPosView, N, base, vDetailA, detailShadow);
 #endif
+		cityLight = CityGround(vPosView, base, cityCover);
 		TrackShading(vPosView, N, base);
 		SurfaceDetail(vPosView, length(vPosView), N, base);
 	} else if (dot(vPosView, N) < 0.0) {
@@ -243,6 +343,9 @@ void main()
 	float sunRefl = int(atm.detail.x + 0.5) == DETAIL_AIRLESS && tile.params.z < 0.5
 		? RegolithReflectance(N, L, normalize(-vPosView), Ng) : max(ndl, 0.0);
 	vec3 col = base * (frame.ambient.rgb * ao * ambNight + (frame.sunColor.rgb * sunT * sunRefl + LocalLighting(vPosView, N, lv)) * aoDirect);
+	// street lamps, lit when the sun is down
+	col += base * cityLight * smoothstep(0.05, -0.03, dot(Ng, L));
+	col += cityEmis * smoothstep(0.05, -0.03, dot(Ng, L));
 	// sunlight bounced by the ground around onto faces tilted away from the
 	// vertical (the shaded sides of stones and crater walls): a sunlit
 	// Lambertian half-space of the local albedo gives the irradiance
@@ -277,11 +380,23 @@ void main()
 		// the night light texture represents lights seen from altitude; close up
 		// it would flood the ground, so it fades out near the camera
 		night *= smoothstep(1000.0, 10000.0, length(vPosView));
+		// (where the cities draw their own lights: theirs; near them, the
+		// texture's brightness for views from orbit toned down to theirs)
+		// (the cities' lights: of the buildings drawn, of all of them only so
+		// near as the small ones, building.vert's fade at 3 km, and of the
+		// roof carpet beyond; elsewhere the texture's)
+		night *= (1.0 - max(cityCover * (1.0 - smoothstep(1300.0, 2300.0, length(vPosView))), cityCarpet)) * mix(0.15, 1.0, smoothstep(8000.0, 80000.0, length(vPosView)));
 		// (the texture's lights are blurred averages of point sources: cores
 		// brightened, dim spill suppressed, so that cities stand out as in
-		// photographs)
-		float lm = max (m.r, max (m.g, m.b));
-		col += m.rgb * (3.0 * lm * smoothstep (0.04, 0.25, lm)) * night * tile.params.y;
+		// photographs; the finest levels' halftone of lit texels blurred
+		// further: a glow, not dots)
+		vec2 muv = vUV * tile.maskUV.zw + tile.maskUV.xy, mt = 2.0 * hm; // (a texel)
+		vec3 ml = vec3(0.0);
+		for (int i = -1; i <= 1; i++)
+			for (int j = -1; j <= 1; j++)
+				ml += texture(maskTex, clamp(muv + vec2(i, j) * 1.5 * mt, hm, 1.0 - hm)).rgb * ((i == 0 ? 2.0 : 1.0) * (j == 0 ? 2.0 : 1.0) / 16.0);
+		float lm = max (ml.r, max (ml.g, ml.b));
+		col += ml * (3.0 * lm * smoothstep (0.04, 0.25, lm)) * night * tile.params.y;
 		// water (mask alpha 0): reflection of the sky and the sun's glitter,
 		// which spreads out when seen from afar
 		if (m.a < 0.5) {

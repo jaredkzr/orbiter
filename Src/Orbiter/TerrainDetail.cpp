@@ -4,6 +4,10 @@
 #include "TerrainDetail.h"
 #include "Planet.h"
 #include "Base.h"
+#include "Cities.h"
+#include "elevmgr.h"
+#include <memory>
+#include <map>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -220,6 +224,13 @@ namespace {
 
 } // namespace
 
+// built-up ground levelled where the data's nodes are closer than this [m]
+// (fully below half of it; coarser data, far away, hardly show the
+// buildings)
+static const double LEVEL_SPACING = 200.0;
+// ... and its noise subdued (fully below half of it)
+static const double BUILT_SPACING = 400.0;
+
 bool TerrainDetail::clientSupport = false;
 
 TerrainDetail::Overrides::Overrides ()
@@ -317,27 +328,137 @@ TerrainDetail::TerrainDetail (const Planet *pl, const Params &p): planet (pl), p
 	lambdaMin = 4.0 * s;
 }
 
+namespace {
+	constexpr double PAD_R0 = 30.0; // landing pads: level within [m]
+	constexpr double PAD_R1 = 80.0; // and blended back to the data's ground by [m]
+	constexpr double GRADE_BLEND = 50.0; // graded ground: blended back over [m]
+}
+
 void TerrainDetail::InitBases () const
 {
-	basesDone = true;
+	cities = planet->Cities ();
+	// (the pads' levels: the data at their centres, from a manager of its
+	// own without the detail; this is called from within the planet's)
+	std::unique_ptr<ElevationManager> raw;
 	for (DWORD i = 0; i < planet->nBase(); i++) {
 		const Base *b = planet->GetBase (i);
 		double lng, lat;
 		b->EquPos (lng, lat);
 		double r = b->FootprintRadius () + 300.0;
-		flats.push_back ({ Vector (cos (lat) * cos (lng), sin (lat), cos (lat) * sin (lng)), r, r * 1.5 + 1000.0 });
+		Flat fl{ Vector (cos (lat) * cos (lng), sin (lat), cos (lat) * sin (lng)), r, r * 1.5 + 1000.0, {}, {}, r * 1.5 + 1000.0 };
+		if (!b->Floating ()) { // (a floating base's pads: on its decks)
+			for (DWORD k = 0; k < b->nPad (); k++) {
+				double plng, plat;
+				b->Pad_EquPos (k, plng, plat);
+				if (!raw) raw = std::make_unique<ElevationManager> (planet), raw->SetNoDetail ();
+				// (the level: the data's mean over the pad, not a point of it, which
+				// a surface model's bumps would set off from the ground about it)
+				double g = 0.0;
+				int n = 0;
+				for (double rr : { 0.0, 0.5 * PAD_R0, PAD_R0 })
+					for (int a = 0; a < (rr > 0.0 ? 8 : 1); a++, n++) {
+						double ang = Pi2 * a / 8.0;
+						g += raw->Elevation (plat + rr * cos (ang) / radius, plng + rr * sin (ang) / (radius * std::max (cos (plat), 1e-6)));
+					}
+				fl.pads.push_back ({ Vector (cos (plat) * cos (plng), sin (plat), cos (plat) * sin (plng)), g / n });
+			}
+		}
+		std::map<int, std::pair<double, int>> groupSum; // (graded areas of a group: their samples' sum, count)
+		std::vector<int> groupOf;
+		if (!b->Floating ()) { // graded ground: the data's mean, or a plane fitted to them
+			for (const Base::Grade &gr : b->Grades ()) {
+				double glng, glat;
+				b->Rel_EquPos (Vector (gr.x, 0.0, gr.z), glng, glat);
+				Vector c (cos (glat) * cos (glng), sin (glat), cos (glat) * sin (glng));
+				Vector east (-sin (glng), 0.0, cos (glng));
+				Vector north (-sin (glat) * cos (glng), cos (glat), -sin (glat) * sin (glng));
+				double br = gr.bearing * RAD;
+				Grade g;
+				g.dir = c;
+				g.along = north * cos (br) + east * sin (br);
+				g.across = north * (-sin (br)) + east * cos (br);
+				g.hl = 0.5 * gr.len, g.hw = 0.5 * gr.wid;
+				if (!raw) raw = std::make_unique<ElevationManager> (planet), raw->SetNoDetail ();
+				const int NS = 9, NT = 5;
+				double se = 0.0, sse = 0.0, tse = 0.0, ss = 0.0, tt = 0.0;
+				for (int i = 0; i < NS; i++)
+					for (int k = 0; k < NT; k++) {
+						double s = g.hl * (2.0 * i / (NS - 1) - 1.0), tq = g.hw * (2.0 * k / (NT - 1) - 1.0);
+						Vector p = (c * radius + g.along * s + g.across * tq).unit();
+						double e = raw->Elevation (asin (p.y), atan2 (p.z, p.x));
+						se += e, sse += s * e, tse += tq * e, ss += s * s, tt += tq * tq;
+					}
+				g.g0 = se / (NS * NT);
+				g.gl = gr.plane && ss > 0.0 ? sse / ss : 0.0;
+				g.gw = gr.plane && tt > 0.0 ? tse / tt : 0.0;
+				if (gr.group > 0) groupSum[gr.group].first += se, groupSum[gr.group].second += NS * NT, g.gl = g.gw = 0.0;
+				groupOf.push_back (gr.group);
+				fl.grades.push_back (g);
+				fl.reach = std::max (fl.reach, (c - fl.dir).length () * radius + g.hl + g.hw + GRADE_BLEND); // (graded ground far out)
+			}
+		}
+		for (size_t k = 0; k < fl.grades.size(); k++) // (a group: one level)
+			if (groupOf[k] > 0) fl.grades[k].g0 = groupSum[groupOf[k]].first / groupSum[groupOf[k]].second;
+		for (Pad &p : fl.pads) // (pads in a level area: its level)
+			for (const Grade &gr : fl.grades) {
+				if (gr.gl != 0.0 || gr.gw != 0.0) continue;
+				Vector off = (p.dir - gr.dir) * radius;
+				if (fabs (dotp (off, gr.along)) <= gr.hl && fabs (dotp (off, gr.across)) <= gr.hw) { p.g = gr.g0; break; }
+			}
+		flats.push_back (std::move (fl));
 	}
 }
 
-double TerrainDetail::Fade (const Vector &dir) const
+double TerrainDetail::PadLevel (const Vector &dir, double &g) const
 {
-	if (!basesDone) InitBases ();
+	std::call_once (basesOnce, [this]() { InitBases (); });
+	double w = 0.0;
+	for (const Flat &fl : flats) {
+		if ((dir - fl.dir).length() * radius > fl.reach) continue;
+		for (const Pad &p : fl.pads) {
+			double d = (dir - p.dir).length() * radius;
+			if (d >= PAD_R1) continue;
+			double wp = SmoothStep (PAD_R1, PAD_R0, d);
+			if (wp > w) w = wp, g = p.g;
+		}
+		for (const Grade &gr : fl.grades) {
+			Vector off = (dir - gr.dir) * radius;
+			double s = dotp (off, gr.along), tq = dotp (off, gr.across);
+			double ds = std::max (0.0, fabs (s) - gr.hl), dt = std::max (0.0, fabs (tq) - gr.hw);
+			double d = sqrt (ds * ds + dt * dt);
+			if (d >= GRADE_BLEND) continue;
+			double wg = SmoothStep (GRADE_BLEND, 0.0, d);
+			if (wg > w) w = wg, g = gr.g0 + gr.gl * std::clamp (s, -gr.hl, gr.hl) + gr.gw * std::clamp (tq, -gr.hw, gr.hw);
+		}
+	}
+	return w;
+}
+
+double TerrainDetail::Fade (const Vector &dir, double *bases, double *built, double wb) const
+{
+	std::call_once (basesOnce, [this]() { InitBases (); });
 	double f = 1.0;
 	for (const Flat &fl : flats) {
 		double d = (dir - fl.dir).length() * radius;
 		if (d < fl.r1) f = std::min (f, SmoothStep (fl.r0, fl.r1, d));
 	}
-	return f;
+	if (bases) *bases = f;
+	// built-up ground is graded: most of the relief gone (not asked: none)
+	double b = built && cities && f > 0.0 ? wb * cities->Built (dir) : 0.0;
+	if (built) *built = b;
+	return f * (1.0 - 0.85 * b);
+}
+
+double TerrainDetail::Levelled (double lat, double lng, double spacing) const
+{
+	Vector dir (cos (lat) * cos (lng), sin (lat), cos (lat) * sin (lng));
+	double g, lp = PadLevel (dir, g); // (landing pads)
+	if (!cities) return lp;
+	double wl = SmoothStep (LEVEL_SPACING, 0.5 * LEVEL_SPACING, spacing);
+	if (wl <= 0.0) return lp;
+	double fb, b;
+	Fade (dir, &fb, &b, SmoothStep (BUILT_SPACING, 0.5 * BUILT_SPACING, spacing));
+	return std::max (lp, fb * b * wl);
 }
 
 double TerrainDetail::Height (double lat, double lng, double elev, double spacing, double relief, double lmin,
@@ -347,15 +468,30 @@ double TerrainDetail::Height (double lat, double lng, double elev, double spacin
 	if (fade) *fade = 0.0;
 	if (spacing <= 0.0) return 0.0;
 	Vector dir (cos (lat) * cos (lng), sin (lat), cos (lat) * sin (lng));
-	double f = Fade (dir);
-	if (f <= 0.0) return 0.0;
+	// (built-up ground: where the data resolve it; further out, coarser
+	// data, the difference does not show)
+	double wb = SmoothStep (BUILT_SPACING, 0.5 * BUILT_SPACING, spacing);
+	double fb, built = 0.0;
+	double f = Fade (dir, &fb, wb > 0.0 ? &built : nullptr, wb);
+	// built-up ground levelled to the ground the data's buildings and trees
+	// stand on (surface models)
+	double lev = 0.0;
+	double wl = fb * built * SmoothStep (LEVEL_SPACING, 0.5 * LEVEL_SPACING, spacing);
+	if (wl > 0.0 && (!prm.sea || fabs (elev) > 0.25)) { // (not the sea; holes in the data are)
+		double g = cities->Ground (lat, lng);
+		if (!std::isnan (g)) lev = wl * (g - elev);
+	}
+	// landing pads: level
+	double gp, wp = PadLevel (dir, gp);
+	if (wp > 0.0) lev = lev * (1.0 - wp) + wp * (gp - elev);
+	if (f <= 0.0) return lev;
 	if (fade) *fade = f;
 	// plains get the floor's relief (not the sea)
 	if (prm.floor > 0.0 && (!prm.sea || elev > 1.0)) relief = std::max (relief, prm.floor * spacing);
 	double A = prm.gain * std::max (relief, 0.0) * f; // amplitude at the data's node spacing
 	if (amplitude) *amplitude = A;
 	lmin = std::max (lmin, lambdaMin);
-	if (lmin >= spacing) return 0.0;
+	if (lmin >= spacing) return lev;
 
 	// Fractal noise continuing the spectrum of the data below its node
 	// spacing: amplitude relief*(lambda/spacing)^H, phased in over an octave
@@ -402,5 +538,5 @@ double TerrainDetail::Height (double lat, double lng, double elev, double spacin
 				h += w * f * PebbleLayer (dir, k, l, radius, prm.pebbles / nl);
 		}
 	}
-	return h;
+	return h + lev;
 }

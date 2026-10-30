@@ -111,7 +111,8 @@ CFG_VISUALPRM CfgVisualPrm_default = {
 	0.3,		// CSphereBgIntens (intensity of celestial sphere background image)
 	2,			// ElevMode (cubic spline)
 	true,		// bTerrainDetail (procedural terrain detail)
-	true		// bGroundScatter (rocks and vegetation on the ground)
+	true,		// bGroundScatter (rocks and vegetation on the ground)
+	true		// bCities (procedural cities on built-up ground)
 };
 
 CFG_CAPTUREPRM CfgCapturePrm_default = {
@@ -669,6 +670,7 @@ bool Config::Load(const char *fname)
 		CfgVisualPrm.ElevMode = i;
 	GetBool (ifs, "TerrainDetail", CfgVisualPrm.bTerrainDetail);
 	GetBool (ifs, "GroundScatter", CfgVisualPrm.bGroundScatter);
+	GetBool (ifs, "Cities", CfgVisualPrm.bCities);
 	GetBool(ifs, "EnableBackgroundStars", CfgVisualPrm.bUseStarDots);
 	if (GetString(ifs, "StarPrm", cbuf)) {
 		sscanf(cbuf, "%lf%lf%lf%d", &CfgVisualPrm.StarPrm.mag_hi, &CfgVisualPrm.StarPrm.mag_lo, &CfgVisualPrm.StarPrm.brt_min, &i);
@@ -1092,6 +1094,8 @@ BOOL Config::Write (const char *fname) const
 			ofs << "TerrainDetail = " << BoolStr(CfgVisualPrm.bTerrainDetail) << '\n';
 		if (CfgVisualPrm.bGroundScatter != CfgVisualPrm_default.bGroundScatter || bEchoAll)
 			ofs << "GroundScatter = " << BoolStr(CfgVisualPrm.bGroundScatter) << '\n';
+		if (CfgVisualPrm.bCities != CfgVisualPrm_default.bCities || bEchoAll)
+			ofs << "Cities = " << BoolStr(CfgVisualPrm.bCities) << '\n';
 	}
 
 	if (memcmp (&CfgCapturePrm, &CfgCapturePrm_default, sizeof(CFG_CAPTUREPRM)) || bEchoAll) {

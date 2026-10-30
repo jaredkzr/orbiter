@@ -25,7 +25,9 @@
 #include "GasGiant.h"
 #include <functional>
 #include <memory>
+#include <mutex>
 namespace scatter { class GroundScatter; }
+namespace cities { class CityMap; }
 #include <filesystem>
 namespace fs = std::filesystem;
 
@@ -199,6 +201,8 @@ public:
 	/// is placed on the ground (kept until the scatter is made)
 	void ClearScatter (const Vector &p, double radius);
 	const std::vector<std::pair<Vector,double>> &ScatterClearings () const { return scatterClear; }
+	/// procedural cities (Cities.h; null if the planet has none)
+	cities::CityMap *Cities() const;
 	TileManager2<CloudTile> *CloudMgr2() const { return cmgr2; }
 	void ForEach(int type, std::function<void(const fs::directory_entry&)> callback) {
 		extern Orbiter* g_pOrbiter;
@@ -322,6 +326,8 @@ private:
 	TerrainDetail::Overrides detail_cfg; // its parameters from the configuration file
 	mutable std::unique_ptr<scatter::GroundScatter> scatter_;
 	mutable bool scatterInit = false;
+	mutable std::unique_ptr<cities::CityMap> cities_;
+	mutable std::once_flag citiesOnce; // (TerrainDetail asks from the client's threads)
 	std::vector<std::pair<Vector,double>> scatterClear;
 };
 

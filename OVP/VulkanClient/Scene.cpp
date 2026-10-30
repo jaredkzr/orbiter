@@ -38,6 +38,10 @@
 #include "mesh_inst.vert.h"
 #include "impostor_inst.vert.h"
 #include "prepass_impostor_inst.vert.h"
+#include "building.vert.h"
+#include "building.frag.h"
+#include "prepass_building.vert.h"
+#include "lamp.vert.h"
 #include "prepass.frag.h"
 #include "stars.vert.h"
 #include "stars.frag.h"
@@ -62,6 +66,7 @@ namespace {
 		float planetDir[4];    // direction to the planet nearby (view), w: sine of its angular radius
 		float planetLight[4];  // its irradiance at normal incidence, w: present
 		float lightCount[4];
+		float city[4][4];      // the cities' road map (CityField): centre (view), w: present; axes x, y (view); 1/size of its levels
 		struct {
 			float pos[4];   // view space position, range
 			float dir[4];   // view space direction, type (1 point, 2 spot)
@@ -130,7 +135,7 @@ bool Scene::Init ()
 	// environment probe and screen-space reflections (set 0)
 	tracks = std::make_unique<GroundTracks>();
 	tracks->Init (ctx);
-	VkDescriptorSetLayoutBinding b[8]{};
+	VkDescriptorSetLayoutBinding b[9]{};
 	b[0].binding = 0;
 	b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	b[0].descriptorCount = 1;
@@ -155,14 +160,17 @@ bool Scene::Init ()
 	b[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	b[7].descriptorCount = 1;
 	b[7].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+	b[8] = b[2];
+	b[8].binding = 9; // the cities' road map: fine and coarse level, and the far built-up map (tile shading)
+	b[8].descriptorCount = 3;
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 8;
+	lci.bindingCount = 9;
 	lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &frameLayout));
 
 	VkDescriptorPoolSize ps[3] = {
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 * vkc::FRAMES_IN_FLIGHT },
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * (SHADOW_CASCADES + 5) * vkc::FRAMES_IN_FLIGHT },
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * (SHADOW_CASCADES + 8) * vkc::FRAMES_IN_FLIGHT }, // (+1: the cities' far map)
 		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * vkc::FRAMES_IN_FLIGHT }
 	};
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -213,6 +221,21 @@ bool Scene::Init ()
 		wr[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		wr[2].pImageInfo = &pii;
 		vkUpdateDescriptorSets (ctx->device, 4, wr, 0, nullptr);
+	}
+
+	// the cities' road map: none yet (a black texel), sampled with mip levels
+	{
+		const uint8_t none[4] = { 0, 0, 0, 0 };
+		cityNone = gc->TexMgr()->CreateRGBALinear (1, 1, none);
+		VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+		sci.magFilter = sci.minFilter = VK_FILTER_LINEAR;
+		sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+		sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		sci.maxLod = VK_LOD_CLAMP_NONE;
+		sci.anisotropyEnable = ctx->deviceFeatures.samplerAnisotropy;
+		sci.maxAnisotropy = 8.0f;
+		VK_CHECK(vkCreateSampler (ctx->device, &sci, nullptr, &citySampler));
+		for (auto &b : cityBound) b[0] = b[1] = b[2] = nullptr;
 	}
 
 	ao = std::make_unique<AmbientOcclusion>();
@@ -350,12 +373,15 @@ void Scene::Shutdown ()
 	for (auto &u : probeFrameUbo) ctx->DestroyBuffer (u);
 	if (probe) probe->Shutdown ();
 	probe.reset();
-	VkPipeline pipes[] = { meshOpaque, meshBlend, meshAdditive, ringPipe, ringShadowPipe, meshPrepass, meshOpaqueInst, meshPrepassInst, meshOpaqueImp, meshPrepassImp, starPipeline, particleAdditive, particleBlend };
+	VkPipeline pipes[] = { meshOpaque, meshBlend, meshAdditive, ringPipe, ringShadowPipe, meshPrepass, meshOpaqueInst, meshPrepassInst, meshOpaqueImp, meshPrepassImp, buildOpaque, buildPrepass, lampPipe, starPipeline, particleAdditive, particleBlend };
 	for (auto p : pipes) if (p) vkDestroyPipeline (ctx->device, p, nullptr);
 	vkDestroyPipelineLayout (ctx->device, meshLayout, nullptr);
 	vkDestroyPipelineLayout (ctx->device, particleLayout, nullptr);
+	vkDestroyPipelineLayout (ctx->device, lampLayout, nullptr);
 	gc->TexMgr()->Release (exhaustTex);
 	gc->TexMgr()->Release (glowTex);
+	gc->TexMgr()->Release (cityNone);
+	if (citySampler) vkDestroySampler (ctx->device, citySampler, nullptr);
 	vkDestroyPipelineLayout (ctx->device, starLayout, nullptr);
 	vkDestroyDescriptorPool (ctx->device, framePool, nullptr);
 	vkDestroyDescriptorSetLayout (ctx->device, frameLayout, nullptr);
@@ -367,7 +393,11 @@ void Scene::Shutdown ()
 
 VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite, bool prepass, bool instanced, bool impostor, MeshShader shader)
 {
-	VkShaderModule vs = shader != MeshShader::Mesh ? ctx->CreateShaderModule (spv_ring_vert, spv_ring_vert_size) :
+	bool building = shader == MeshShader::Building;
+	VkShaderModule vs = building ?
+		(prepass ? ctx->CreateShaderModule (spv_prepass_building_vert, spv_prepass_building_vert_size)
+		         : ctx->CreateShaderModule (spv_building_vert, spv_building_vert_size)) :
+		shader != MeshShader::Mesh ? ctx->CreateShaderModule (spv_ring_vert, spv_ring_vert_size) :
 		impostor ?
 		(prepass ? ctx->CreateShaderModule (spv_prepass_impostor_inst_vert, spv_prepass_impostor_inst_vert_size)
 		         : ctx->CreateShaderModule (spv_impostor_inst_vert, spv_impostor_inst_vert_size)) :
@@ -378,8 +408,9 @@ VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite
 		         : ctx->CreateShaderModule (spv_mesh_vert, spv_mesh_vert_size));
 	VkShaderModule fs = shader == MeshShader::Ring ? ctx->CreateShaderModule (spv_ring_frag, spv_ring_frag_size) :
 		shader == MeshShader::RingShadow ? ctx->CreateShaderModule (spv_ringshadow_frag, spv_ringshadow_frag_size) :
-		prepass ? ctx->CreateShaderModule (spv_prepass_frag, spv_prepass_frag_size)
-		        : ctx->CreateShaderModule (spv_mesh_frag, spv_mesh_frag_size);
+		prepass ? ctx->CreateShaderModule (spv_prepass_frag, spv_prepass_frag_size) :
+		building ? ctx->CreateShaderModule (spv_building_frag, spv_building_frag_size)
+		         : ctx->CreateShaderModule (spv_mesh_frag, spv_mesh_frag_size);
 	VkPipelineShaderStageCreateInfo stages[2] = {
 		{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vs, "main" },
 		{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main" }
@@ -402,6 +433,29 @@ VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite
 	vi.pVertexBindingDescriptions = bind;
 	vi.vertexAttributeDescriptionCount = instanced ? 6 : 3;
 	vi.pVertexAttributeDescriptions = attr;
+	// buildings: shapes stretched by the instances (building.glsl)
+	VkVertexInputBindingDescription bbind[2] = {
+		{ 0, BUILDING_VERTEX, VK_VERTEX_INPUT_RATE_VERTEX },
+		{ 1, BUILDING_INSTANCE, VK_VERTEX_INPUT_RATE_INSTANCE }
+	};
+	VkVertexInputAttributeDescription battr[10] = {
+		{ 0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0 },
+		{ 1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12 },
+		{ 2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 24 },
+		{ 3, 0, VK_FORMAT_R32G32B32_SFLOAT, 40 },
+		{ 4, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 0 },
+		{ 5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 16 },
+		{ 6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 32 },
+		{ 7, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 48 },
+		{ 8, 1, VK_FORMAT_R32G32_SFLOAT, 64 },
+		{ 9, 1, VK_FORMAT_R32G32_UINT, 72 }
+	};
+	if (building) {
+		vi.vertexBindingDescriptionCount = 2;
+		vi.pVertexBindingDescriptions = bbind;
+		vi.vertexAttributeDescriptionCount = prepass ? 8 : 10;
+		vi.pVertexAttributeDescriptions = battr;
+	}
 
 	VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
 	ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
@@ -499,6 +553,8 @@ void Scene::CreatePipelines ()
 	meshPrepassInst = CreateMeshPipeline (false, false, true, true, true);
 	meshOpaqueImp = CreateMeshPipeline (false, false, true, false, true, true);
 	meshPrepassImp = CreateMeshPipeline (false, false, true, true, true, true);
+	buildOpaque = CreateMeshPipeline (false, false, true, false, true, false, MeshShader::Building);
+	buildPrepass = CreateMeshPipeline (false, false, true, true, true, false, MeshShader::Building);
 
 	// stars: points at infinity, drawn first without depth test
 	VkPushConstantRange spcr{ VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(StarPushConstants) };
@@ -583,11 +639,17 @@ void Scene::CreatePipelines ()
 	VK_CHECK(vkCreatePipelineLayout (ctx->device, &plci2, nullptr, &particleLayout));
 	particleAdditive = CreateParticlePipeline (true);
 	particleBlend = CreateParticlePipeline (false);
+	// street lamps: instanced glows, positions in a planet frame
+	VkPushConstantRange lpcr{ VK_SHADER_STAGE_VERTEX_BIT, 0, 2 * 64 + 3 * 16 };
+	plci2.pPushConstantRanges = &lpcr;
+	VK_CHECK(vkCreatePipelineLayout (ctx->device, &plci2, nullptr, &lampLayout));
+	lampPipe = CreateParticlePipeline (true, true);
 }
 
-VkPipeline Scene::CreateParticlePipeline (bool additive)
+VkPipeline Scene::CreateParticlePipeline (bool additive, bool lamps)
 {
-	VkShaderModule vs = ctx->CreateShaderModule (spv_particle_vert, spv_particle_vert_size);
+	VkShaderModule vs = lamps ? ctx->CreateShaderModule (spv_lamp_vert, spv_lamp_vert_size)
+	                          : ctx->CreateShaderModule (spv_particle_vert, spv_particle_vert_size);
 	VkShaderModule fs = ctx->CreateShaderModule (spv_particle_frag, spv_particle_frag_size);
 	VkPipelineShaderStageCreateInfo stages[2] = {
 		{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vs, "main" },
@@ -604,6 +666,14 @@ VkPipeline Scene::CreateParticlePipeline (bool additive)
 	vi.pVertexBindingDescriptions = &bind;
 	vi.vertexAttributeDescriptionCount = 3;
 	vi.pVertexAttributeDescriptions = attr;
+	// (lamps: a vec4 per instance)
+	VkVertexInputBindingDescription lbind{ 0, 16, VK_VERTEX_INPUT_RATE_INSTANCE };
+	VkVertexInputAttributeDescription lattr{ 0, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 0 };
+	if (lamps) {
+		vi.pVertexBindingDescriptions = &lbind;
+		vi.vertexAttributeDescriptionCount = 1;
+		vi.pVertexAttributeDescriptions = &lattr;
+	}
 	VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
 	ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 	VkPipelineViewportStateCreateInfo vps{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
@@ -651,7 +721,7 @@ VkPipeline Scene::CreateParticlePipeline (bool additive)
 	gpi.pDepthStencilState = &ds;
 	gpi.pColorBlendState = &cb;
 	gpi.pDynamicState = &dy;
-	gpi.layout = particleLayout;
+	gpi.layout = lamps ? lampLayout : particleLayout;
 	VkPipeline pipe = VK_NULL_HANDLE;
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &pipe));
 	vkDestroyShaderModule (ctx->device, vs, nullptr);
@@ -670,6 +740,28 @@ void Scene::DrawBillboards (VkTexture *tex, bool additive, const PVtx *v, size_t
 	vkCmdBindVertexBuffers (cmd, 0, 1, &vb.buffer, &vb.offset);
 	vkCmdPushConstants (cmd, particleLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(proj), proj);
 	vkCmdDraw (cmd, (uint32_t)n, 1, 0, 0);
+}
+
+void Scene::DrawLamps (VkBuffer buf, uint32_t count, const Mat4 &frameToView, const VECTOR3 &centre, const VECTOR3 &sun,
+	float fadeFrom, float range, float halfSize, float bright)
+{
+	if (!count || !buf) return;
+	VkCommandBuffer cmd = ctx->Cmd();
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, lampPipe);
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, lampLayout, 0, 1, &glowTex->set, 0, nullptr);
+	VkDeviceSize ofs = 0;
+	vkCmdBindVertexBuffers (cmd, 0, 1, &buf, &ofs);
+	float pc[44];
+	frameToView.ToFloat (pc);
+	memcpy (pc + 16, proj, sizeof(float) * 16);
+	// (glows at least about 1.5 pixels across)
+	VkExtent2D e = ctx->RenderExtent ();
+	pc[32] = (float)centre.x, pc[33] = (float)centre.y, pc[34] = (float)centre.z;
+	pc[35] = 1.5f / (std::max (proj[5] < 0.0f ? -proj[5] : proj[5], 1e-3f) * (float)e.height);
+	pc[36] = (float)sun.x, pc[37] = (float)sun.y, pc[38] = (float)sun.z, pc[39] = bright;
+	pc[40] = fadeFrom, pc[41] = range, pc[42] = halfSize, pc[43] = 0.0f;
+	vkCmdPushConstants (cmd, lampLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), pc);
+	vkCmdDraw (cmd, 6, count, 0, 0);
 }
 
 void Scene::EnsureReactiveMask ()
@@ -1181,9 +1273,40 @@ void Scene::WriteSSRDescriptors ()
 	}
 }
 
+void Scene::SetCityMap (VkTexture *fine, VkTexture *coarse, VkTexture *far, OBJHANDLE hPlanet, const VECTOR3 &centre,
+	const VECTOR3 &X, const VECTOR3 &Y, double fineSize, double coarseSize, double farSize)
+{
+	cityMap[0] = fine, cityMap[1] = coarse, cityMap[2] = far;
+	cityPlanet = hPlanet;
+	cityCentre = centre, cityX = X, cityY = Y;
+	citySize[0] = fineSize, citySize[1] = coarseSize, citySize[2] = farSize;
+}
+
+void Scene::WriteCityDescriptors ()
+{
+	// (the sets of the current frame slot are not in use)
+	uint32_t fi = ctx->FrameIndex();
+	VkTexture *t[3];
+	for (int k = 0; k < 3; k++) t[k] = cityMap[k] ? cityMap[k] : cityNone;
+	if (cityBound[fi][0] == t[0] && cityBound[fi][1] == t[1] && cityBound[fi][2] == t[2]) return;
+	for (int k = 0; k < 3; k++) cityBound[fi][k] = t[k];
+	VkDescriptorImageInfo dii[3];
+	for (int k = 0; k < 3; k++) dii[k] = { citySampler, t[k]->img.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+	for (VkDescriptorSet set : { frameSet[fi], probeFrameSet[fi] }) {
+		VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+		wr.dstSet = set;
+		wr.dstBinding = 9;
+		wr.descriptorCount = 3;
+		wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		wr.pImageInfo = dii;
+		vkUpdateDescriptorSets (ctx->device, 1, &wr, 0, nullptr);
+	}
+}
+
 void Scene::BeginFrame ()
 {
 	uint32_t fi = ctx->FrameIndex();
+	WriteCityDescriptors ();
 	if (ao->EnsureSize ()) WriteAODescriptors (), WriteRTLightDescriptors (); // the GPU is idle then
 	if (rtl->EnsureSize (ao->PrepassView (), ao->VelocityView (), ao->MaterialView ())) WriteRTLightDescriptors ();
 	ssr->EnsureSize (ao->PrepassView (), ao->MaterialView (), ao->VelocityView ());
@@ -1285,6 +1408,18 @@ void Scene::PlanetAlbedo (OBJHANDLE hp, float alb[3])
 void Scene::FillFrameUniforms (void *pfu)
 {
 	FrameUniforms &fu = *(FrameUniforms*)pfu;
+	// the cities' road map: its centre and axes in view space
+	if (cityMap[0] && cityMap[1] && cityMap[2] && cityPlanet) {
+		MATRIX3 Rp;
+		oapiGetRotationMatrix (cityPlanet, &Rp);
+		VECTOR3 gp;
+		oapiGetGlobalPos (cityPlanet, &gp);
+		VECTOR3 o = view.TransformPoint (gp + mul (Rp, cityCentre) - camPos);
+		VECTOR3 x = view.TransformPoint (mul (Rp, cityX)), y = view.TransformPoint (mul (Rp, cityY));
+		for (int k = 0; k < 3; k++) fu.city[0][k] = (float)o.data[k], fu.city[1][k] = (float)x.data[k], fu.city[2][k] = (float)y.data[k];
+		fu.city[0][3] = 1.0f;
+		fu.city[3][0] = (float)(1.0 / citySize[0]), fu.city[3][1] = (float)(1.0 / citySize[1]), fu.city[3][2] = (float)(1.0 / citySize[2]);
+	}
 	fu.jitter[0] = jitter[0], fu.jitter[1] = jitter[1];
 	fu.jitter[2] = (float)viewW, fu.jitter[3] = (float)viewH;
 	fu.aoParams[0] = 1.0f / ao->Extent().width;
@@ -1902,6 +2037,42 @@ void Scene::DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize i
 		}
 		vkCmdDrawIndexed (cmd, grp.nIndex, count, grp.firstIndex, grp.vertexOffset, 0);
 	}
+}
+
+void Scene::DrawBuildings (VkBuffer vb, VkBuffer ib, uint32_t firstIndex, uint32_t nIndex, VkBuffer inst, VkDeviceSize instOfs,
+	uint32_t count, RenderPass pass, const Mat4 &frameToView, VkDescriptorSet kit, float hour)
+{
+	if (!count || !nIndex || pass == RenderPass::Transparent) return;
+	VkCommandBuffer cmd = ctx->Cmd();
+	VkBuffer vbs[2] = { vb, inst };
+	VkDeviceSize ofs[2] = { 0, instOfs };
+	VkDescriptorSet fset = FrameSet ();
+	VkDescriptorSet ms = gc->TexMgr()->DefaultMapSet();
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &fset, 0, nullptr);
+	// (the prepass reads a plain texture there: prepass.frag)
+	VkDescriptorSet tset = pass == RenderPass::Depth ? gc->TexMgr()->White()->set : kit;
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 1, 1, &tset, 0, nullptr);
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 2, 1, &camAtmSet, 0, nullptr);
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 3, 1, &ms, 0, nullptr);
+	vkCmdBindVertexBuffers (cmd, 0, 2, vbs, ofs);
+	vkCmdBindIndexBuffer (cmd, ib, 0, VK_INDEX_TYPE_UINT16);
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pass == RenderPass::Depth ? buildPrepass : buildOpaque);
+	MeshPushConstants pc{};
+	frameToView.ToFloat (pc.modelView);
+	pc.diffuse[0] = pc.diffuse[1] = pc.diffuse[2] = pc.diffuse[3] = 1.0f;
+	pc.light[0] = pc.light[1] = pc.light[2] = objLight;
+	pc.pbr[0] = 0.0f, pc.pbr[1] = 0.8f, pc.pbr[2] = 0.0f, pc.pbr[3] = 1.0f;
+	pc.heat[0] = hour; // (building.frag: the windows lit at night)
+	if (pass == RenderPass::Depth) {
+		float pr[40] = {};
+		memcpy (pr, pc.modelView, sizeof(pc.modelView));
+		memcpy (pr + 16, objMotion, sizeof(objMotion));
+		memcpy (pr + 32, pc.pbr, sizeof(pc.pbr));
+		vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pr), pr);
+	} else {
+		vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+	}
+	vkCmdDrawIndexed (cmd, nIndex, count, firstIndex, 0, 0);
 }
 
 void Scene::AddMeshRT (const VkMesh *mesh, const Mat4 &modelView, bool shadowOnly)

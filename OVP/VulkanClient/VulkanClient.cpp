@@ -91,6 +91,7 @@ bool VulkanClient::clbkInitialise ()
 	if (!GraphicsClient::clbkInitialise ()) return false;
 	oapiSurfaceDetailSupported (); // (PlanetSurface: meshes and shading)
 	oapiScatterSupported ();       // (ScatterField: the ground scatter)
+	oapiCitySupported ();          // (CityField: the cities)
 
 	// Offscreen mode (ORBITER_VK_OFFSCREEN=1): nothing is shown and no display
 	// is required; frames are rendered into images (e.g. for screenshots)
@@ -321,6 +322,7 @@ bool VulkanClient::clbkDisplayFrame ()
 			if (!shot.empty()) CaptureBackbuffer (shot);
 		}
 		if (!autoScreenshot.empty() && ++frameCount == autoScreenshotFrame) {
+			vkc::LogHeaps ();
 			CaptureBackbuffer (autoScreenshot);
 			oapiWriteLogV ("VulkanClient: screenshot saved to %s", autoScreenshot.c_str());
 			float le, ll;

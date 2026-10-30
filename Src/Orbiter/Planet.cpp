@@ -21,6 +21,7 @@
 #include "Util.h"
 #include "TerrainDetail.h"
 #include "GroundScatter.h"
+#include "Cities.h"
 
 #define UPDMODE_ANALYTIC 0
 #define UPDMODE_DYNAMIC  1
@@ -1125,4 +1126,14 @@ void Planet::ClearScatter (const Vector &p, double radius)
 {
 	scatterClear.push_back ({ p, radius });
 	if (scatter_) scatter_->Clear (p, radius);
+	if (cities_) cities_->Clear (p, radius);
+}
+
+cities::CityMap *Planet::Cities () const
+{
+	std::call_once (citiesOnce, [this]() {
+		auto cm = std::make_unique<cities::CityMap> (this);
+		if (cm->Active ()) cities_ = std::move (cm);
+	});
+	return cities_.get();
 }

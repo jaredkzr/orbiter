@@ -127,6 +127,7 @@ struct CFG_VISUALPRM {
 	int    ElevMode;            // elevation mode: 0=none, 1=linear, 2=cubic spline
 	bool   bTerrainDetail;      // procedural terrain detail finer than the elevation data
 	bool   bGroundScatter;      // rocks and vegetation on the ground (boulders and trees are obstacles)
+	bool   bCities;             // procedural cities on built-up ground (buildings are obstacles)
 };
 
 struct CFG_CAPTUREPRM {

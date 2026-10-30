@@ -17,6 +17,7 @@
 
 class VkMesh;
 namespace vkscatter { class Gallery; class Field; }
+namespace vkcity { class Field; }
 class VESSEL;
 class ShadowMap;
 class Atmosphere;
@@ -271,6 +272,8 @@ private:
 	std::unique_ptr<vkscatter::Gallery> gallery; // preview of the ground scatter assets (ORBITER_VK_SCATTER_GALLERY)
 	std::unique_ptr<vkscatter::Field> field;     // the ground scatter around the camera
 	bool fieldInit = false;
+	std::unique_ptr<vkcity::Field> cities;       // the procedural cities around the camera
+	bool citiesInit = false;
 	void UpdateGallery ();
 	class VkTexture *globalTex = nullptr;   // whole-sphere map (bodies without tiles)
 	class VkTexture *groundTex[2] = {};     // ... its western and eastern hemispheres (atmosphere, cloud decks)

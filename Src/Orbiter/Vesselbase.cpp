@@ -157,7 +157,7 @@ void SurfParam::SetLanded (double _lng, double _lat, double _alt, double _dir, c
 
 	if (is_in_atm = (planet && planet->HasAtmosphere() && rad < planet->AtmRadLimit())) {
 		ATMPARAM prm;
-		planet->GetAtmParam (alt, lng, lat, &prm);
+		planet->GetAtmParam (rad - ref->Size(), lng, lat, &prm); // (above the mean radius, as in flight: not above the ground, a floating base's deck)
 		atmT   = prm.T;
 		atmp   = prm.p;
 		atmrho = prm.rho;
@@ -259,9 +259,13 @@ void VesselBase::CheckLanded ()
 			double dt = td.SimT0 - LandingTest.testt;
 			if (dt < 0.1) return;
 			double dst2 = prel.dist2 (LandingTest.surfpos);
-			double dangle = angle (s0->Q, LandingTest.surfrot);
+			Matrix rrel (s0->R); // (orientation in the planet's frame: its rotation is not the vessel's)
+			rrel.tpremul (proxybody->s0->R);
+			Quaternion qrel;
+			qrel.Set (rrel);
+			double dangle = angle (qrel, LandingTest.surfrot);
 			LandingTest.surfpos = prel;
-			LandingTest.surfrot.Set (s0->Q);
+			LandingTest.surfrot.Set (qrel);
 			if (dst2/dt > 1e-4 || dangle/dt > 1e-4) {
 				LandingTest.testt = td.SimT0; // still moving -> reset timer
 			} else if (td.SimT0 - LandingTest.testt > 5.0) {
@@ -284,7 +288,9 @@ void VesselBase::CheckLanded ()
 			LandingTest.testing = true;
 			LandingTest.testt = td.SimT0;
 			LandingTest.surfpos.Set (tmul(proxybody->s0->R, s0->pos - proxybody->s0->pos));
-			LandingTest.surfrot.Set (s0->Q); // should really subtract proxybody rotation here
+			Matrix rrel (s0->R); // (in the planet's frame)
+			rrel.tpremul (proxybody->s0->R);
+			LandingTest.surfrot.Set (rrel);
 		}
 	}
 }

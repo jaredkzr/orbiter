@@ -2,6 +2,8 @@
 // Licensed under the MIT License
 
 #include "PlanetSurface.h"
+#include "PolarElevation.h"
+#include <functional>
 #include "GroundTracks.h"
 #include "tile_mesh.comp.h"
 #include <atomic>
@@ -213,6 +215,7 @@ void TileLoader::Process (const Request &req, Result &res)
 	case ELEV: {
 		std::vector<uint8_t> d;
 		res.ok = pl.elev && pl.elev->Read (req.lvl, req.ilat, req.ilng, d) && DecodeElv (d, res.elev, false);
+		if (res.ok) oapi::PolarElevationRows (res.elev.h.data(), ElevGrid::N, req.lvl, req.ilat); // (as the core: towards the poles, rows resampled)
 		if (res.ok && pl.elevMod && pl.elevMod->HasTile (req.lvl, req.ilat, req.ilng) &&
 			pl.elevMod->Read (req.lvl, req.ilat, req.ilng, d))
 			DecodeElv (d, res.elev, true);
@@ -396,7 +399,16 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	coarseSkirt (sk + 2*V, [&](int k) { return (uint16_t)(k*V); });
 	coarseSkirt (sk + 3*V, [&](int k) { return (uint16_t)(k*V + G); });
 	coarseCount = (uint32_t)idx.size() - coarseFirst;
+	// the ray tracing scene's grid: every 2nd node, no skirts (a quarter of
+	// the triangles: of each tile's acceleration structure, thousands of them)
 	if (idx.size() & 1) idx.push_back (0); // (whole 32-bit words for ray tracing shaders; not drawn)
+	rtFirst = (uint32_t)idx.size();
+	for (int i = 0; i < G; i += 2)
+		for (int j = 0; j < G; j += 2) {
+			uint16_t a = i*V + j, b = a + 2, c = a + 2*V, d = c + 2;
+			idx.insert (idx.end(), { a, b, c, b, d, c });
+		}
+	rtCount = (uint32_t)idx.size() - rtFirst;
 	ibuf = ctx->CreateDeviceBuffer (idx.data(), idx.size() * sizeof(uint16_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
 		(ctx->rayTracing ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT : 0));
 
@@ -488,11 +500,11 @@ PlanetSurface::PlanetSurface (OBJHANDLE h, Scene *s, std::shared_ptr<PlanetLayer
 		root[i].reset (NewNode (4, 0, i, nullptr));
 		Node *n = root[i].get();
 		std::vector<uint8_t> d;
-		if (layers->surf->Read (4, 0, i, d) && (n->surf = texmgr->CreateFromDDS (d.data(), d.size(), true)))
+		if (layers->surf->Read (4, 0, i, d) && (n->surf = texmgr->CreateFromDDS (d.data(), d.size(), true, true)))
 			n->surfState = 2;
 		else
 			n->surfState = 3;
-		if (layers->mask && layers->mask->Read (4, 0, i, d) && (n->mask = texmgr->CreateFromDDS (d.data(), d.size(), true)))
+		if (layers->mask && layers->mask->Read (4, 0, i, d) && (n->mask = texmgr->CreateFromDDS (d.data(), d.size(), true, true)))
 			n->maskState = 2;
 		ElevGrid g;
 		if (layers->elev && layers->elev->Read (4, 0, i, d) && DecodeElv (d, g, false)) {
@@ -592,7 +604,11 @@ double PlanetSurface::SampleElev (const Node *src, double lat, double lng) const
 	fy = std::clamp (fy, 0.0, N - 1.000001);
 	int x0 = (int)fx, y0 = (int)fy;
 	double wx = fx - x0, wy = fy - y0;
-	if (elevMode == 2) {
+	// (beyond the tile's edge nodes, e.g. the border of a mesh at the edge
+	// of its source tile, from which its normals are taken: linear, from the
+	// border nodes, which the spline lacks the neighbours for. Clamped to the
+	// edge, the slope there was halved: a line of shading along every edge.)
+	if (elevMode == 2 && fx >= 1.0 && fx <= N - 2.0 && fy >= 1.0 && fy <= N - 2.0) {
 		// cubic spline (Catmull-Rom), as the core interpolates (ElevationManager)
 		x0 = std::clamp (x0, 1, N - 3), y0 = std::clamp (y0, 1, N - 3);
 		wx = std::clamp (fx - x0, 0.0, 1.0), wy = std::clamp (fy - y0, 0.0, 1.0);
@@ -878,12 +894,12 @@ void PlanetSurface::Update ()
 		if (!node) continue; // released in the meantime
 		switch (res.req.kind) {
 		case TileLoader::SURF:
-			node->surf = res.ok ? texmgr->CreateFromDDS (res.data.data(), res.data.size(), true) : nullptr;
+			node->surf = res.ok ? texmgr->CreateFromDDS (res.data.data(), res.data.size(), true, true) : nullptr;
 			node->surfState = node->surf ? 2 : 3;
 			n++;
 			break;
 		case TileLoader::MASK:
-			node->mask = res.ok ? texmgr->CreateFromDDS (res.data.data(), res.data.size(), true) : nullptr;
+			node->mask = res.ok ? texmgr->CreateFromDDS (res.data.data(), res.data.size(), true, true) : nullptr;
 			node->maskState = node->mask ? 2 : 3;
 			n++;
 			break;
@@ -920,11 +936,28 @@ void PlanetSurface::Select (Node *n)
 		double pr = length (p);
 		double cang = dotp (n->centre / radius, p / pr);
 		double gap = std::max (0.0, acos (std::clamp (cang, -1.0, 1.0)) - n->angRadius);
+		// (and from the tile's latitude-longitude box: the cap about a tile
+		// narrowed to a sliver by a pole takes in its neighbours on either
+		// side, so that all of them would be split)
+		double plat = asin (std::clamp (p.y / pr, -1.0, 1.0)), plng = atan2 (p.z, p.x);
+		double glat = std::max (0.0, std::max (n->latmin - plat, plat - n->latmax));
+		double dl = plng - 0.5 * (n->lngmin + n->lngmax);
+		dl = fabs (dl - PI2 * std::floor ((dl + PI) / PI2));
+		double glng = std::max (0.0, dl - 0.5 * (n->lngmax - n->lngmin));
+		double cm = cos (std::min (PI05, std::max ({ fabs (n->latmin), fabs (n->latmax), fabs (plat) })));
+		gap = std::max (gap, sqrt (glat * glat + glng * cm * glng * cm));
 		double r = std::clamp (pr * cos (gap), radius + emin, radius + emax);
 		return std::max (sqrt (std::max (0.0, pr * pr + r * r - 2.0 * pr * r * cos (gap))), 1.0);
 	};
 	double dist = lowerDist (camLocal);
-	double size = radius * (n->latmax - n->latmin);
+	// Size: from the tile's area (the mean of its sides). Towards the poles
+	// tiles narrow to slivers: split by their north-south side alone, ever
+	// more of them would be needed for the same ground (at 89.5 deg, 50 times
+	// as many: gigabytes of meshes)
+	double hgt = radius * (n->latmax - n->latmin);
+	double wid = radius * cos (std::min (fabs (n->latmin), fabs (n->latmax))) * (n->lngmax - n->lngmin);
+	if (n->latmin < 0.0 && n->latmax > 0.0) wid = radius * (n->lngmax - n->lngmin);
+	double size = sqrt (hgt * std::min (wid, hgt));
 	bool split = size / dist * pixPerRad > splitPixels;
 	// Vessels on or near the ground stand on the finest mesh, which has the
 	// terrain detail of the ground contact, wherever the camera is: tiles
@@ -936,7 +969,12 @@ void PlanetSurface::Select (Node *n)
 		double d = lowerDist (groundVessels[i]);
 		if (d < dv) dv = d, n->vessel = (int)i;
 	}
-	if (n->vessel >= 0 && size / dv * pixPerRad > splitPixels) split = true;
+	// (down to tiles of 10 m: mesh nodes 0.15 m apart, half the shortest
+	// wavelength of the ground contact's detail, elevmgr PHYSICS_LMIN;
+	// finer ones only for the camera: thousands of them, each in the ray
+	// tracing scene)
+	constexpr double VESSEL_TILE = 10.0;
+	if (n->vessel >= 0 && size > VESSEL_TILE && size / dv * pixPerRad > splitPixels) split = true;
 	if (n->lvl < maxLevel && split) {
 		for (int c = 0; c < 4; c++) {
 			if (!n->child[c])
@@ -988,6 +1026,17 @@ void PlanetSurface::Prepare ()
 	for (auto &r : root) Select (r.get());
 	for (auto &r : root) PruneChildren (r.get());
 
+	static const bool profileTree = getenv ("ORBITER_VK_PROFILE") && atoi (getenv ("ORBITER_VK_PROFILE"));
+	if (profileTree && frame % 100 == 0) { // (what the tile tree holds)
+		size_t nn = 0, nb = 0, ns = 0, nm = 0, ne = 0;
+		std::function<void (const Node *)> walk = [&](const Node *n) {
+			nn++; nb += n->vbuf.buffer ? 1 : 0; ns += n->surf ? 1 : 0; nm += n->mask ? 1 : 0; ne += n->elev ? 1 : 0;
+			for (auto &c : n->child) if (c) walk (c.get());
+		};
+		for (auto &r : root) if (r) walk (r.get());
+		oapiWriteLogV ("VulkanClient: %s tiles: %zu drawn, %zu nodes, %zu meshes, %zu surface, %zu mask textures, %zu elevation grids",
+			clouds ? "cloud" : "surface", drawList.size(), nn, nb, ns, nm, ne);
+	}
 	// nearest tiles first, so that they get their data first
 	std::sort (drawList.begin(), drawList.end(), [this](Node *a, Node *b) {
 		return length (camLocal - a->centre) < length (camLocal - b->centre);
@@ -1008,6 +1057,11 @@ void PlanetSurface::Prepare ()
 	const bool gpu = tr->MeshPipeline () != VK_NULL_HANDLE;
 	const size_t maxGpuJobs = 96;
 	std::vector<std::pair<Node*, const Node*>> jobs;
+	// (meshes made at once: a number per frame, the nearest first; each is
+	// staged in memory of the frame, which a jump to a new place would
+	// otherwise fill with thousands of them)
+	constexpr int MAX_PLAIN_MESHES = 256;
+	int plainBuilt = 0;
 	for (Node *n : drawList) {
 		requestUp (n, TileLoader::SURF);
 		if (layers->mask) requestUp (n, TileLoader::MASK);
@@ -1033,7 +1087,8 @@ void PlanetSurface::Prepare ()
 			jobs.push_back ({ n, src });
 		} else if (withDetail && !gpu && (rebuild || !n->meshDetailed) && jobs.size() < maxJobs) {
 			jobs.push_back ({ n, src });
-		} else if (rebuild) {
+		} else if (rebuild && plainBuilt < MAX_PLAIN_MESHES) {
+			plainBuilt++;
 			auto t0 = std::chrono::steady_clock::now ();
 			BuildMesh (n, src, !withDetail);
 			meshTime += std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ();
@@ -1307,6 +1362,7 @@ void PlanetSurface::BindVertices (const Node *n)
 
 void PlanetSurface::DrawNode (Node *n, bool prepass)
 {
+	if (!n->vbuf.buffer) return; // (its mesh not made yet: a number per frame)
 	// texture: the tile's own, or the matching part of the nearest ancestor's
 	auto texFor = [n](VkTexture *Node::*member, float uv[4]) -> VkTexture * {
 		for (const Node *a = n; a; a = a->parent) {
@@ -1381,7 +1437,7 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 			rm.pbr[1] = 1.0f, rm.pbr[3] = 1.0f; // matte
 			memcpy (rm.uv, pc.surfUV, sizeof(rm.uv));
 			rm.unlit = false;
-			RTScene::Geometry geo{ n->rtId, n->rtVersion, n->vbuf.buffer, 0, n->nVtx, tr->IndexBuffer(), 0, tr->GridIndexCount() };
+			RTScene::Geometry geo{ n->rtId, n->rtVersion, n->vbuf.buffer, 0, n->nVtx, tr->IndexBuffer(), tr->RTFirstIndex(), tr->RTIndexCount() };
 			rt->AddInstance (geo, mv, surf, rm);
 		}
 		vkCmdPushConstants (cmd, tr->Layout(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pp), pp);

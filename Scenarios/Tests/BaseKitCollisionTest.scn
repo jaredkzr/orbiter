@@ -1,0 +1,33 @@
+BEGIN_HYPERDESC
+<h1>Collisions with the launch complex kit</h1>
+A delta-glider driven into the side of the assembly building of Jiuquan
+(Utils/BaseKit) must be stopped by it.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51983.25
+  Script Tests/BaseKitCollisionTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship GL
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET GL
+  MODE Extern
+  POS 4.0 -20.0 -30
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+GL:DeltaGlider
+  STATUS Landed Earth
+  POS 100.2950 40.9600
+  HEADING 0.00
+  GEAR 1 1.0000
+  PRPLEVEL 0:0.300 1:1.000
+END
+END_SHIPS

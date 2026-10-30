@@ -98,6 +98,10 @@ public:
 	/// a coarse grid with skirts (every 4th node: for small views)
 	uint32_t CoarseFirstIndex () const { return coarseFirst; }
 	uint32_t CoarseIndexCount () const { return coarseCount; }
+	/// the grid at every 2nd node, without skirts, for the ray tracing scene
+	/// (first index even: whole 32-bit words)
+	uint32_t RTFirstIndex () const { return rtFirst; }
+	uint32_t RTIndexCount () const { return rtCount; }
 
 private:
 	vkc::Context *ctx = nullptr;
@@ -108,7 +112,7 @@ private:
 	VkPipeline meshPipe = VK_NULL_HANDLE;
 	VkPipelineLayout meshLayout = VK_NULL_HANDLE;
 	vkc::Buffer ibuf;
-	uint32_t nIdx = 0, coarseFirst = 0, coarseCount = 0;
+	uint32_t nIdx = 0, coarseFirst = 0, coarseCount = 0, rtFirst = 0, rtCount = 0;
 	std::unique_ptr<TileLoader> loader;
 };
 

@@ -6,6 +6,7 @@
 #include "Baseobj.h"
 #include "Vessel.h"
 #include "Planet.h"
+#include "elevmgr.h"
 #include "Psys.h"
 #include "Astro.h"
 #include "Mesh.h"
@@ -70,6 +71,31 @@ Base::Base (char *fname, Planet *_planet, double _lng, double _lat)
 
 	// map base objects onto sphere (take into account planet curvature)?
 	if (!GetItemBool (ifs, "MAPOBJECTSTOSPHERE", bObjmapsphere)) bObjmapsphere = false;
+
+	// a floating base: its altitude, its decks
+	if (GetItemReal (ifs, "ALTITUDE", elev)) floating = true;
+	ifs.clear (); // (an item not found leaves the stream failed: FindLine would not rewind it)
+	if (floating && FindLine (ifs, "BEGIN_DECKS")) {
+		for (;;) {
+			if (!ifs.getline (cbuf, 256) || !_strnicmp (trim_string (cbuf), "END_DECKS", 9)) break;
+			Deck d;
+			if (sscanf (cbuf, "%lf%lf%lf%lf", &d.x, &d.z, &d.r, &d.h) == 4) decks.push_back (d);
+		}
+	}
+
+	// graded ground
+	if (FindLine (ifs, "BEGIN_GRADE")) {
+		for (;;) {
+			if (!ifs.getline (cbuf, 256) || !_strnicmp (trim_string (cbuf), "END_GRADE", 9)) break;
+			Grade g;
+			int plane = 0, group = 0;
+			if (sscanf (cbuf, "%lf%lf%lf%lf%lf%d%d", &g.x, &g.z, &g.len, &g.wid, &g.bearing, &plane, &group) >= 5) {
+				g.plane = plane != 0;
+				g.group = group;
+				grades.push_back (g);
+			}
+		}
+	}
 
 	// read list of VOR transmitters into planet data base
 	if (FindLine (ifs, "BEGIN_NAVBEACON")) {
@@ -292,10 +318,18 @@ void Base::DestroyDeviceObjects ()
 
 void Base::Setup ()
 {
-	elev = RefPlanet()->Elevation (lng, lat); 
+	if (!floating) elev = RefPlanet()->Elevation (lng, lat);
 	if (elev) {
 		rad += elev;
 		cbody->EquatorialToLocal (lng, lat, rad, rpos);
+	}
+
+	if (ElevationManager *emgr = ((Planet*)cbody)->ElevMgr()) {
+		for (const Deck &d : decks) {
+			double dlng, dlat;
+			Rel_EquPos (Vector (d.x, 0, d.z), dlng, dlat);
+			emgr->AddDeck (dlat, dlng, d.r, elev + d.h);
+		}
 	}
 
 	for (DWORD i = 0; i < nobj; i++)
@@ -375,7 +409,7 @@ void Base::Attach (Planet *_parent)
 	double slng = sin(lng), clng = cos(lng);
 	double slat = sin(lat), clat = cos(lat);
 	rad = cbody->Size(); // dist from planet centre
-	elev = 0.0;
+	if (!floating) elev = 0.0;
 	cbody->EquatorialToLocal (slng, clng, slat, clat, rad, rpos);
 	s0->vel.Set (0,0,0);                         // base is fixed to ground
 	rrot.Set ( clng*slat, clng*clat, -slng,   // rotate from local
@@ -622,18 +656,23 @@ void Base::Update (bool force)
 
 void Base::Rel_EquPos (const Vector &relpos, double &_lng, double &_lat) const
 {
-	_lng = lng + relpos.z/(cbody->Size()*cos(lat));
-	_lat = lat - relpos.x/cbody->Size();
+	// (the point of the base's tangent plane, where its objects are drawn,
+	// projected to the sphere: exact also near the poles)
+	double R = cbody->Size();
+	double slng = sin(lng), clng = cos(lng), slat = sin(lat), clat = cos(lat);
+	double px = R*clat*clng + relpos.x*slat*clng - relpos.z*slng;
+	double py = R*slat      - relpos.x*clat;
+	double pz = R*clat*slng + relpos.x*slat*slng + relpos.z*clng;
+	_lng = atan2 (pz, px);
+	_lat = atan2 (py, hypot (px, pz));
 }
 
 void Base::Pad_EquPos (DWORD padno, double &_lng, double &_lat) const
 {
 	_lng = lng;
 	_lat = lat;
-	if (padno < npad) {
-		_lng += lspec[padno].relpos.z/(cbody->Size()*cos(lat));
-		_lat -= lspec[padno].relpos.x/cbody->Size();
-	}
+	if (padno < npad)
+		Rel_EquPos (lspec[padno].relpos, _lng, _lat);
 }
 
 bool Base::GetGenericTexture (LONGLONG id, SURFHANDLE &daytex, SURFHANDLE &nighttex) const
