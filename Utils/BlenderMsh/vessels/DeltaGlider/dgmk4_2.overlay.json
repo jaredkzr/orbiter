@@ -1,0 +1,612 @@
+{
+	"comment": "DeltaGlider dgmk4_2 / dgmk4_2_ns: markings redrawn as vectors (coordinates: the 512 px stock texture's texels)",
+	"symbols": [
+		{
+			"type": "fill",
+			"comment": "wing root, soot around the hatch: white panels",
+			"material": "white paint",
+			"from": [
+				"heat shield grey",
+				"red paint",
+				"dark metal",
+				"black"
+			],
+			"points": [
+				[
+					50,
+					219
+				],
+				[
+					68,
+					220
+				],
+				[
+					68,
+					250.5
+				],
+				[
+					104,
+					241.5
+				],
+				[
+					145,
+					250.5
+				],
+				[
+					146,
+					219
+				],
+				[
+					152,
+					219
+				],
+				[
+					168,
+					310
+				],
+				[
+					44,
+					310
+				],
+				[
+					46,
+					250
+				]
+			]
+		},
+		{
+			"type": "trefoil",
+			"rect": [
+				360,
+				108,
+				8,
+				8
+			],
+			"bg": [
+				246,
+				226,
+				40
+			],
+			"fg": [
+				20,
+				20,
+				20
+			],
+			"radius": 0.6,
+			"clear": "white paint",
+			"clear_margin": 1
+		},
+		{
+			"type": "trefoil",
+			"rect": [
+				392,
+				108,
+				8,
+				8
+			],
+			"bg": [
+				246,
+				226,
+				40
+			],
+			"fg": [
+				20,
+				20,
+				20
+			],
+			"radius": 0.6,
+			"clear": "white paint",
+			"clear_margin": 1
+		},
+		{
+			"type": "text",
+			"rect": [
+				8,
+				32,
+				20,
+				8
+			],
+			"text": "DANGER",
+			"bg": [
+				246,
+				222,
+				50
+			],
+			"fg": [
+				200,
+				96,
+				10
+			],
+			"fill": 0.85,
+			"radius": 0.4
+		},
+		{
+			"type": "text",
+			"rect": [
+				408,
+				68,
+				21,
+				8
+			],
+			"text": "DANGER",
+			"bg": [
+				246,
+				222,
+				50
+			],
+			"fg": [
+				200,
+				96,
+				10
+			],
+			"fill": 0.85,
+			"radius": 0.4
+		},
+		{
+			"type": "text",
+			"rect": [
+				437,
+				377,
+				5,
+				21
+			],
+			"text": "RESCUE",
+			"fg": [
+				214,
+				58,
+				48
+			],
+			"rotate": 90,
+			"fill": 0.95,
+			"clear": "white paint"
+		},
+		{
+			"type": "text",
+			"rect": [
+				500,
+				445,
+				5,
+				19
+			],
+			"text": "RESCUE",
+			"fg": [
+				214,
+				58,
+				48
+			],
+			"rotate": 90,
+			"fill": 0.95,
+			"clear": "white paint"
+		},
+		{
+			"type": "polyline",
+			"points": [
+				[
+					388.4,
+					363.5
+				],
+				[
+					388.6,
+					359.6
+				],
+				[
+					389.8,
+					357.4
+				],
+				[
+					392.2,
+					356.1
+				],
+				[
+					398.0,
+					355.8
+				]
+			],
+			"width": 1.2,
+			"fg": [
+				226,
+				30,
+				20
+			],
+			"arrow": true,
+			"head": 3.2,
+			"clear": "white paint",
+			"clear_margin": 0.6
+		},
+		{
+			"type": "polyline",
+			"points": [
+				[
+					371.6,
+					363.5
+				],
+				[
+					371.4,
+					359.6
+				],
+				[
+					370.2,
+					357.4
+				],
+				[
+					367.8,
+					356.1
+				],
+				[
+					362.0,
+					355.8
+				]
+			],
+			"width": 1.2,
+			"fg": [
+				226,
+				30,
+				20
+			],
+			"arrow": true,
+			"head": 3.2,
+			"clear": "white paint",
+			"clear_margin": 0.6
+		},
+		{
+			"type": "disc",
+			"rect": [
+				338,
+				366,
+				13,
+				12
+			],
+			"fg": [
+				221,
+				180,
+				126
+			],
+			"ring": [
+				150,
+				40,
+				26
+			],
+			"ring_width": 0.5,
+			"clear": "red paint"
+		},
+		{
+			"type": "disc",
+			"rect": [
+				411,
+				366,
+				13,
+				12
+			],
+			"fg": [
+				221,
+				180,
+				126
+			],
+			"ring": [
+				150,
+				40,
+				26
+			],
+			"ring_width": 0.5,
+			"clear": "red paint"
+		},
+		{
+			"type": "disc",
+			"rect": [
+				343,
+				394,
+				13,
+				12
+			],
+			"fg": [
+				221,
+				180,
+				126
+			],
+			"ring": [
+				150,
+				40,
+				26
+			],
+			"ring_width": 0.5,
+			"clear": "red paint"
+		},
+		{
+			"type": "disc",
+			"rect": [
+				406,
+				394,
+				13,
+				12
+			],
+			"fg": [
+				221,
+				180,
+				126
+			],
+			"ring": [
+				150,
+				40,
+				26
+			],
+			"ring_width": 0.5,
+			"clear": "red paint"
+		},
+		{
+			"type": "polyline",
+			"points": [
+				[
+					361,
+					349.5
+				],
+				[
+					372,
+					349.5
+				],
+				[
+					374,
+					352
+				],
+				[
+					376.5,
+					364.5
+				]
+			],
+			"width": 0.9,
+			"fg": [
+				24,
+				24,
+				24
+			],
+			"dash": [
+				1.8,
+				1.4
+			],
+			"clear": "white paint",
+			"clear_margin": 0.4
+		},
+		{
+			"type": "polyline",
+			"points": [
+				[
+					361,
+					359.5
+				],
+				[
+					365.5,
+					361
+				],
+				[
+					366.5,
+					364.5
+				]
+			],
+			"width": 0.9,
+			"fg": [
+				24,
+				24,
+				24
+			],
+			"dash": [
+				1.8,
+				1.4
+			],
+			"clear": "white paint",
+			"clear_margin": 0.4
+		},
+		{
+			"type": "polyline",
+			"points": [
+				[
+					342,
+					346.5
+				],
+				[
+					357.5,
+					346.5
+				]
+			],
+			"width": 0.9,
+			"fg": [
+				24,
+				24,
+				24
+			],
+			"dash": [
+				1.8,
+				1.4
+			],
+			"clear": "red paint",
+			"clear_margin": 0.4
+		},
+		{
+			"type": "polyline",
+			"points": [
+				[
+					342,
+					357.5
+				],
+				[
+					357.5,
+					357.5
+				]
+			],
+			"width": 0.9,
+			"fg": [
+				24,
+				24,
+				24
+			],
+			"dash": [
+				1.8,
+				1.4
+			],
+			"clear": "red paint",
+			"clear_margin": 0.4
+		},
+		{
+			"type": "polyline",
+			"points": [
+				[
+					399,
+					349.5
+				],
+				[
+					388,
+					349.5
+				],
+				[
+					386,
+					352
+				],
+				[
+					383.5,
+					364.5
+				]
+			],
+			"width": 0.9,
+			"fg": [
+				24,
+				24,
+				24
+			],
+			"dash": [
+				1.8,
+				1.4
+			],
+			"clear": "white paint",
+			"clear_margin": 0.4
+		},
+		{
+			"type": "polyline",
+			"points": [
+				[
+					399,
+					359.5
+				],
+				[
+					394.5,
+					361
+				],
+				[
+					393.5,
+					364.5
+				]
+			],
+			"width": 0.9,
+			"fg": [
+				24,
+				24,
+				24
+			],
+			"dash": [
+				1.8,
+				1.4
+			],
+			"clear": "white paint",
+			"clear_margin": 0.4
+		},
+		{
+			"type": "polyline",
+			"points": [
+				[
+					418,
+					346.5
+				],
+				[
+					402.5,
+					346.5
+				]
+			],
+			"width": 0.9,
+			"fg": [
+				24,
+				24,
+				24
+			],
+			"dash": [
+				1.8,
+				1.4
+			],
+			"clear": "red paint",
+			"clear_margin": 0.4
+		},
+		{
+			"type": "polyline",
+			"points": [
+				[
+					418,
+					357.5
+				],
+				[
+					402.5,
+					357.5
+				]
+			],
+			"width": 0.9,
+			"fg": [
+				24,
+				24,
+				24
+			],
+			"dash": [
+				1.8,
+				1.4
+			],
+			"clear": "red paint",
+			"clear_margin": 0.4
+		},
+		{
+			"type": "text",
+			"rect": [
+				369,
+				340.5,
+				22,
+				3.5
+			],
+			"text": "NO STEP",
+			"fg": [
+				120,
+				120,
+				120
+			],
+			"fill": 0.85,
+			"clear": "white paint"
+		},
+		{
+			"type": "text",
+			"rect": [
+				339,
+				338.5,
+				18,
+				3.5
+			],
+			"text": "NO STEP",
+			"fg": [
+				70,
+				22,
+				16
+			],
+			"fill": 0.8,
+			"clear": "red paint"
+		},
+		{
+			"type": "text",
+			"rect": [
+				403,
+				338.5,
+				18,
+				3.5
+			],
+			"text": "NO STEP",
+			"fg": [
+				70,
+				22,
+				16
+			],
+			"fill": 0.8,
+			"clear": "red paint"
+		}
+	],
+	"suppress": []
+}

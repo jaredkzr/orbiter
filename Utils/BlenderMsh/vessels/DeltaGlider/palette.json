@@ -1,0 +1,258 @@
+{
+	"lines": 0.8,
+	"bump": 0.8,
+	"materials": [
+		{
+			"name": "red paint",
+			"colors": [
+				[
+					196,
+					52,
+					34
+				],
+				[
+					150,
+					45,
+					28
+				],
+				[
+					171,
+					103,
+					76
+				]
+			],
+			"rough": 0.42,
+			"metal": 0.0,
+			"detail": "paint",
+			"flatten": 0.25,
+			"wear": [
+				140,
+				138,
+				132
+			],
+			"fasteners": true,
+			"seam": 0.8
+		},
+		{
+			"name": "white paint",
+			"colors": [
+				[
+					248,
+					246,
+					248
+				],
+				[
+					228,
+					227,
+					229
+				],
+				[
+					217,
+					220,
+					221
+				]
+			],
+			"rough": 0.48,
+			"metal": 0.0,
+			"detail": "paint",
+			"flatten": 0.2,
+			"wear": [
+				150,
+				150,
+				146
+			],
+			"fasteners": true
+		},
+		{
+			"name": "heat shield grey",
+			"colors": [
+				[
+					126,
+					130,
+					132
+				],
+				[
+					101,
+					105,
+					107
+				],
+				[
+					170,
+					169,
+					169
+				],
+				[
+					175,
+					179,
+					177
+				],
+				[
+					120,
+					111,
+					107
+				],
+				[
+					97,
+					95,
+					90
+				],
+				[
+					78,
+					72,
+					66
+				],
+				[
+					76,
+					79,
+					72
+				]
+			],
+			"rough": 0.62,
+			"metal": 0.1,
+			"detail": "rough",
+			"flatten": 0.0,
+			"wears": false,
+			"fasteners": true
+		},
+		{
+			"name": "dark metal",
+			"colors": [
+				[
+					48,
+					47,
+					47
+				],
+				[
+					30,
+					30,
+					30
+				]
+			],
+			"rough": 0.5,
+			"metal": 0.35,
+			"detail": "metal",
+			"flatten": 0.0,
+			"wears": false,
+			"fasteners": false,
+			"only_sharp": true
+		},
+		{
+			"name": "primer green",
+			"colors": [
+				[
+					83,
+					119,
+					88
+				]
+			],
+			"rough": 0.6,
+			"metal": 0.0,
+			"detail": "paint",
+			"flatten": 0.0,
+			"wear": [
+				160,
+				160,
+				155
+			],
+			"fasteners": false
+		},
+		{
+			"name": "insulation",
+			"colors": [
+				[
+					201,
+					158,
+					104
+				],
+				[
+					206,
+					164,
+					121
+				]
+			],
+			"rough": 0.9,
+			"metal": 0.0,
+			"detail": "rough",
+			"flatten": 0.0,
+			"wears": false,
+			"fasteners": false
+		},
+		{
+			"name": "black",
+			"colors": [
+				[
+					14,
+					14,
+					12
+				]
+			],
+			"rough": 0.6,
+			"metal": 0.0,
+			"detail": "none",
+			"flatten": 0.0,
+			"wears": false,
+			"fasteners": false,
+			"only_sharp": true
+		},
+		{
+			"name": "hazard yellow",
+			"colors": [
+				[
+					244,
+					226,
+					58
+				],
+				[
+					250,
+					232,
+					80
+				],
+				[
+					240,
+					210,
+					40
+				]
+			],
+			"rough": 0.5,
+			"metal": 0.0,
+			"detail": "paint",
+			"wears": false,
+			"fasteners": false,
+			"z": 1,
+			"pattern": {
+				"color": [
+					226,
+					82,
+					30
+				],
+				"period": 8.0,
+				"angle": -45,
+				"duty": 0.32
+			}
+		}
+	],
+	"sharpen": 0.8,
+	"line_width": 0.45,
+	"straighten": 0.6,
+	"fastener_spacing": 4.0,
+	"fastener_offset": 1.1,
+	"fastener_radius": 0.17,
+	"grime": 1.0,
+	"wear": 0.0,
+	"seam_grime": 0.08,
+	"groove_depth": 0.6,
+	"line_sharpness": 0.12,
+	"line_contrast": 4.0,
+	"seam_shade": 0.74,
+	"wear_reach": 0.5,
+	"shade_blur": 0.7,
+	"chip_size": 0.8,
+	"vote_tolerance": 8.0,
+	"sharp_edge": 0.02,
+	"line_min_length": 8.0,
+	"spur": 2.5,
+	"join_gap": 2.5,
+	"join_long": 12.0,
+	"join_corner": 6.0,
+	"panel_cover": 0.5
+}

@@ -1,0 +1,399 @@
+{
+	"comment": "DeltaGlider hull, designed anew (texdesign.py): white primary structure, red upper wings and lower fuselage sides, graphite heat shield tiles below, grey carbon leading edges and nose cap",
+	"finishes": {
+		"white": {
+			"color": [
+				226,
+				228,
+				224
+			],
+			"smooth": 0.38,
+			"grain": "paint"
+		},
+		"red": {
+			"color": [
+				172,
+				36,
+				28
+			],
+			"smooth": 0.4,
+			"grain": "paint"
+		},
+		"graphite": {
+			"color": [
+				48,
+				49,
+				52
+			],
+			"smooth": 0.12,
+			"grain": "rough"
+		},
+		"carbon": {
+			"color": [
+				64,
+				66,
+				70
+			],
+			"smooth": 0.22,
+			"grain": "rough"
+		},
+		"metal": {
+			"color": [
+				150,
+				152,
+				156
+			],
+			"smooth": 0.55,
+			"metal": 1.0,
+			"grain": "metal"
+		},
+		"darkmetal": {
+			"color": [
+				72,
+				72,
+				74
+			],
+			"smooth": 0.45,
+			"metal": 1.0,
+			"grain": "metal"
+		},
+		"radiator": {
+			"color": [
+				212,
+				214,
+				216
+			],
+			"smooth": 0.62,
+			"metal": 0.5,
+			"grain": "metal"
+		},
+		"walkway": {
+			"color": [
+				58,
+				60,
+				62
+			],
+			"smooth": 0.08,
+			"grain": "rough"
+		},
+		"yellow": {
+			"color": [
+				236,
+				196,
+				40
+			],
+			"smooth": 0.35
+		}
+	},
+	"zones": [
+		[
+			"white",
+			""
+		],
+		[
+			"red",
+			"(ax > 1.5) & (ax < 8.3) & (ny > 0.1) & (y < 0.3)"
+		],
+		[
+			"red",
+			"(ax < 2.5) & (np.abs (nx) > 0.45) & (y < 0.55) & (ny > -0.4)"
+		],
+		[
+			"graphite",
+			"(ny < -0.4) | ((y < -0.95) & (ny < 0.5)) | (np.char.find (label, 'Cover') >= 0) & (y < -1.0)"
+		],
+		[
+			"carbon",
+			"(nz > 0.55) & (ny > -0.4) & (ax > 1.6) & (ax < 8.3)"
+		],
+		[
+			"carbon",
+			"z > 9.75"
+		],
+		[
+			"metal",
+			"(mat == 16) | (mat == 17)"
+		],
+		[
+			"darkmetal",
+			"(mat == 16) & (z < -6.5)"
+		],
+		[
+			"radiator",
+			"(mat == 12) & (z < -3.9) & (z > -5.1)"
+		]
+	],
+	"seams": [
+		{
+			"axis": "z",
+			"start": -7.0,
+			"step": 1.25,
+			"end": 9.0,
+			"where": "(ax < 2.4) & (ny > -0.4) & (mat != 16) & (mat != 17)"
+		},
+		{
+			"axis": "x",
+			"at": [
+				-7.2,
+				-6.0,
+				-4.8,
+				-3.6,
+				-2.4,
+				2.4,
+				3.6,
+				4.8,
+				6.0,
+				7.2
+			],
+			"where": "(ax > 2.2) & (ny > -0.4) & (ax < 8.3)",
+			"rivets": 0.1
+		},
+		{
+			"axis": "z",
+			"at": [
+				-3.5,
+				-1.0,
+				1.5,
+				3.5
+			],
+			"where": "(ax > 2.4) & (ny > -0.4) & (ax < 8.3)",
+			"rivets": 0.1
+		},
+		{
+			"axis": "z",
+			"at": [
+				-6.0
+			],
+			"where": "(ax > 4.1) & (ax < 8.3)",
+			"width": 0.02
+		},
+		{
+			"axis": "y",
+			"at": [
+				0.55
+			],
+			"where": "(ax < 2.5) & (np.abs (nx) > 0.45) & (ny > -0.4)"
+		},
+		{
+			"axis": "x",
+			"at": [
+				-0.6,
+				0.6
+			],
+			"where": "(ny > 0.6) & (ax < 1.0) & (z < 4.0)"
+		}
+	],
+	"tiles": [
+		{
+			"where": "ny < -0.4",
+			"size": 0.3,
+			"gap": 0.008,
+			"vary": 0.07
+		}
+	],
+	"panels": [
+		{
+			"plane": "side",
+			"center": [
+				6.2,
+				0.1
+			],
+			"size": [
+				1.1,
+				0.5
+			],
+			"radius": 0.06,
+			"rivets": 0.06
+		},
+		{
+			"plane": "side",
+			"center": [
+				-2.0,
+				0.2
+			],
+			"size": [
+				1.4,
+				0.45
+			],
+			"radius": 0.06,
+			"rivets": 0.06
+		},
+		{
+			"plane": "top",
+			"center": [
+				4.2,
+				-2.4
+			],
+			"size": [
+				0.8,
+				1.2
+			],
+			"radius": 0.06,
+			"rivets": 0.06
+		},
+		{
+			"plane": "top",
+			"center": [
+				5.8,
+				-4.2
+			],
+			"size": [
+				0.6,
+				0.8
+			],
+			"radius": 0.05,
+			"rivets": 0.06
+		},
+		{
+			"plane": "top",
+			"center": [
+				0.0,
+				-1.5
+			],
+			"size": [
+				1.0,
+				0.7
+			],
+			"radius": 0.08,
+			"mirror": false,
+			"where": "y > 0.5"
+		}
+	],
+	"decals": [
+		{
+			"type": "frame",
+			"plane": "top",
+			"center": [
+				3.1,
+				0.2
+			],
+			"size": [
+				0.9,
+				3.4
+			],
+			"fg": [
+				50,
+				52,
+				54
+			],
+			"line": 0.04,
+			"dash": [
+				0.15,
+				0.1
+			],
+			"rotate": 90
+		},
+		{
+			"type": "text",
+			"plane": "top",
+			"center": [
+				4.4,
+				0.2
+			],
+			"size": [
+				1.6,
+				0.18
+			],
+			"text": "NO STEP",
+			"fg": [
+				60,
+				20,
+				16
+			],
+			"rotate": 90
+		},
+		{
+			"type": "trefoil",
+			"plane": "top",
+			"center": [
+				0.45,
+				-3.2
+			],
+			"size": [
+				0.22,
+				0.22
+			],
+			"fg": [
+				20,
+				20,
+				20
+			],
+			"bg": [
+				236,
+				196,
+				40
+			],
+			"radius": 0.02,
+			"where": "y > 0.5"
+		},
+		{
+			"type": "stripes",
+			"plane": "side",
+			"center": [
+				-6.6,
+				0.0
+			],
+			"size": [
+				0.9,
+				0.12
+			],
+			"fg": [
+				30,
+				30,
+				30
+			],
+			"bg": [
+				236,
+				196,
+				40
+			],
+			"period": 0.12
+		},
+		{
+			"type": "text",
+			"plane": "top",
+			"center": [
+				0.0,
+				3.75
+			],
+			"size": [
+				0.75,
+				0.13
+			],
+			"text": "RESCUE",
+			"fg": [
+				190,
+				40,
+				30
+			],
+			"mirror": false,
+			"where": "y > 1.5"
+		},
+		{
+			"type": "arrow",
+			"plane": "top",
+			"center": [
+				0.0,
+				3.95
+			],
+			"size": [
+				0.24,
+				0.14
+			],
+			"fg": [
+				190,
+				40,
+				30
+			],
+			"rotate": 90,
+			"mirror": false,
+			"where": "y > 1.5"
+		}
+	],
+	"soot": [],
+	"grime": 0.035,
+	"seam_shade": 0.62,
+	"seam_depth": 1.0,
+	"rivet_height": 0.25,
+	"bump": 0.004
+}
