@@ -40,6 +40,12 @@ private:
 	bool SelectTarget (char *name);
 	void SetTarget (const Body *target);        // set target body for target elements
 	void CycleModes();
+	void NodeButton (oapi::Sketchpad *skp); // "Node": a manoeuvre node at the next node of the planes
+
+	// the plane change at the next node of the planes (ORBIT mode)
+	bool nodeValid = false;
+	double nodeMjd = 0.0;
+	Vector nodeDv;  // in the node frame (prograde, normal, radial)
 
 	enum Mode { ORBIT, BALLISTIC, SURFACE } mode;
 	bool automode;

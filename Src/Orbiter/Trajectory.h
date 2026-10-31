@@ -68,6 +68,7 @@ namespace trajectory {
 	struct Prediction {
 		double t0 = 0.0;          // simulation time of the vessel's state it starts from
 		double t1 = 0.0;          // end of the prediction
+		Vector rEnd, vEnd;        // the vessel's global state at t1
 		std::vector<Segment> segs;
 		std::vector<NodeState> nodes;
 		std::vector<Event> events;
@@ -98,11 +99,16 @@ namespace trajectory {
 		/// Longest prediction [days] (Orbiter.cfg: PredictionDays)
 		double maxDays = 400.0;
 
-	private:
 		struct Input;
 		struct Context;
+		/// Snapshot of a vessel (its nodes, and target) and of the bodies
+		/// for a prediction (simulation thread); null if the vessel isn't in flight
+		static std::shared_ptr<Input> Snapshot (const Vessel *v, const Body *target, double days);
+		/// A prediction (any thread); null if aborted
+		static std::shared_ptr<Prediction> Compute (const Input &in, Context &ctx, const std::atomic<bool> &abort);
+
+	private:
 		void Run ();
-		void Predict (const Input &in, Context &ctx);
 
 		std::thread worker;
 		mutable std::mutex mtx;
@@ -120,6 +126,31 @@ namespace trajectory {
 		double lastRequestSys = -1e10;      // system time of the last request
 		double lastRequestSim = -1e10;
 		unsigned int serial = 0;
+	};
+
+	/// Predictions of a vessel's path with other manoeuvre nodes than its own,
+	/// off the simulation thread (manoeuvre planning). The vessel and the
+	/// bodies are taken at construction (simulation thread); Predict may then
+	/// be called on any one thread.
+	class Sandbox {
+	public:
+		Sandbox (const Vessel *v, const Body *target, double days);
+		~Sandbox ();
+		bool Valid () const { return in != nullptr; }
+		/// Simulation time and MJD of the snapshot
+		double T0 () const;
+		double MJD0 () const { return mjd0; }
+		/// Prediction with these nodes (replacing the vessel's), for up to days
+		std::shared_ptr<const Prediction> Predict (const std::vector<maneuver::Node> &nodes, double days, const std::atomic<bool> *abort = nullptr);
+		/// The body whose closest approaches are reported (one of the snapshot's bodies)
+		void SetTarget (const CelestialBody *target);
+		/// Move the snapshot to a later time [MJD] (before all the nodes of later
+		/// predictions): the coast to it is integrated once, not with each prediction
+		bool Advance (double mjd, const std::atomic<bool> *abort = nullptr);
+	private:
+		std::shared_ptr<Predictor::Input> in;
+		std::unique_ptr<Predictor::Context> ctx;
+		double mjd0 = 0.0;
 	};
 
 } // namespace trajectory

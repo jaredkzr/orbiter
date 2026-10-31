@@ -21,6 +21,7 @@ public:
 	VkPen (int style, int width, DWORD col);
 	int style;      ///< 0: invisible, 1: solid, 2: dashed
 	float width;    ///< [pixels]
+	float fwidth;   ///< fractional width for the anti-aliased functions (may be < 1)
 	float col[4];   ///< linear colour
 };
 
@@ -64,6 +65,12 @@ public:
 	void StretchRect (const SURFHANDLE hSrc, const LPRECT src = NULL, const LPRECT tgt = NULL) override;
 	void ColorKey (const SURFHANDLE hSrc, const LPRECT src, int tx, int ty) override;
 
+	// version 4: anti-aliased drawing at fractional positions, images
+	int GetVersion () override { return 4; }
+	void PolylineF (const oapi::FVECTOR2 *pt, int npt, bool closed = false) override;
+	void PolygonF (const oapi::FVECTOR2 *pt, int npt) override;
+	void Image (const DWORD *pix, int w, int h, float x0, float y0, float x1, float y1, bool smooth = true) override;
+
 	bool Valid () const { return valid; }
 
 private:
@@ -75,6 +82,10 @@ private:
 	void Fill (const P *pts, int n);
 	void Tri (const DrawState2D &st, P a, P b, P c, const float col[4]);
 	void Segment (P a, P b, float w, const float col[4]);
+	/// anti-aliased stroke: a strip with mitred joints and soft edges
+	void StrokeAA (const P *pts, int n, bool closed, float w, const float col[4]);
+	/// anti-aliased fill: the polygon and a soft fringe outside its edges
+	void FillAA (const P *pts, int n, const float col[4]);
 	VkFont *CurrentFont ();
 
 	Renderer2D *r2d;

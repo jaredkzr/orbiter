@@ -574,6 +574,16 @@ bool Instrument_Map::UnselectTarget ()
 
 // =======================================================================
 
+bool Instrument_Map::ProcessPointer (const MFDPOINTER &p)
+{
+	if (p.event != MFD_POINTER_WHEEL) return false;
+	for (int i = 0; i < (int)fabs (p.wheel) && i < 4; i++)
+		if (p.wheel > 0.0f) ZoomIn (); else ZoomOut ();
+	if (fabs (p.wheel) < 1.0f) { if (p.wheel > 0.0f) ZoomIn (); else ZoomOut (); }
+	Refresh ();
+	return true;
+}
+
 void Instrument_Map::ZoomIn ()
 {
 	if (zoom < 128) {

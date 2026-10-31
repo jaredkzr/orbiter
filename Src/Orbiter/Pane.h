@@ -97,6 +97,13 @@ public:
 	// set HUD defaults for drawing objects (font, text colour, pen)
 
 	bool MFDConsumeKeyBuffered (int id, DWORD key);
+
+	/// Mouse events on the MFD displays of the cockpit (WM_xxx events); true
+	/// if an MFD used the event
+	bool MFDPointer (UINT event, DWORD state, int x, int y);
+	/// An MFD field is being edited: keys go to MFDEditKey
+	bool MFDEditing ();
+	bool MFDEditKey (DWORD key);
 	// Process a buffered key for MFD id
 
 	bool ProcessMouse_System(UINT event, DWORD state, DWORD x, DWORD y, const char *kstate);
@@ -303,6 +310,16 @@ private:
 		MESHHANDLE mesh2d;
 		SURFHANDLE tex;
 	} blinkmesh;
+
+	// MFD display under a screen point: id, position in the display (0..1).
+	// unbounded: the position for display id, also outside of it
+	bool MFDAt (int x, int y, int &id, float &u, float &v, bool unbounded = false);
+	// screen position of a display position (u, v: 0..1); not for all cockpit modes
+	bool MFDToScreen (int id, float u, float v, float &x, float &y);
+	void PublishMFDAnchors (); // (tests) "mfd<id>.<name>"
+	int ptrMfd = -1;           // MFD under the pointer (or capturing it)
+	bool ptrCapture = false;   // a pressed button was used by ptrMfd: it gets all events until released
+	DWORD ptrButtons = 0;      // buttons held
 };
 
 // =======================================================================

@@ -1,0 +1,35 @@
+BEGIN_HYPERDESC
+<h1>Transfer planning: a flight by Venus to Mars</h1>
+A delta-glider in a 300 km Earth orbit in August 2023. The script plans
+the route to a 500 km Mars orbit by a Venus flyby, arms its nodes and flies
+them with the burn autopilot: the ejection, the correction after the flyby
+and the others computed shortly before they are due, the capture; then it
+checks the Venus flyby and the Mars orbit.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 60196.0
+  Script Tests/RouteFlightTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship GL-F
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET GL-F
+  MODE Extern
+  POS 4 0 -20
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+GL-F:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 6671000.0 0.00000 28.5 0.0 0.0 0.0 60196.0
+  AROT 0 0 0
+  PRPLEVEL 0:1.000 1:1.000
+END
+END_SHIPS

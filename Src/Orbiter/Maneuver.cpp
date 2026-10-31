@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "Maneuver.h"
+#include <algorithm>
 #include <cmath>
 
 void maneuver::Frame (const Vector &r, const Vector &v, Vector &pro, Vector &nml, Vector &rad)
@@ -50,6 +51,17 @@ bool maneuver::Kepler (const Vector &r0, const Vector &v0, double mu, double dt,
 	double smu = sqrt (mu);
 	double rv = dotp (r0, v0) / smu;
 	double alpha = 2.0 / r0l - dotp (v0, v0) / mu; // 1/a
+	// ellipse: within one period (the iteration fails over many), and the
+	// anomaly bracketed (Newton steps outside the bracket bisect it: needed
+	// near radial orbits)
+	double lo = -1e300, hi = 1e300;
+	if (alpha > 1e-12) {
+		double P = Pi2 / (smu * alpha * sqrt (alpha));
+		if (fabs (dt) > P) dt = fmod (dt, P);
+		if (dt == 0.0) return true;
+		if (dt > 0.0) lo = 0.0, hi = Pi2 / sqrt (alpha);
+		else lo = -Pi2 / sqrt (alpha), hi = 0.0;
+	}
 
 	// initial guess of the universal anomaly
 	double chi;
@@ -71,13 +83,15 @@ bool maneuver::Kepler (const Vector &r0, const Vector &v0, double mu, double dt,
 	// Newton iteration
 	double psi = 0.0, c2 = 0.5, c3 = 1.0/6.0, rl = r0l;
 	bool ok = false;
-	for (int i = 0; i < 100; i++) {
+	for (int i = 0; i < 200; i++) {
 		psi = chi * chi * alpha;
 		c2 = C2 (psi), c3 = C3 (psi);
 		rl = chi*chi*c2 + rv*chi*(1.0 - psi*c3) + r0l*(1.0 - psi*c2);
 		double f = smu*dt - (chi*chi*chi*c3 + rv*chi*chi*c2 + r0l*chi*(1.0 - psi*c3));
-		double dchi = f / rl;
-		chi += dchi;
+		if (f > 0.0) lo = std::max (lo, chi); else hi = std::min (hi, chi); // (time increases with chi)
+		double dchi = f / rl, cn = chi + dchi;
+		if (!(cn > lo && cn < hi) && lo > -1e299 && hi < 1e299) cn = 0.5 * (lo + hi), dchi = cn - chi;
+		chi = cn;
 		if (fabs (dchi) < 1e-9 * (1.0 + fabs (chi))) { ok = true; break; }
 	}
 	psi = chi * chi * alpha;

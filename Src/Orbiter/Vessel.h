@@ -217,6 +217,7 @@ class Vessel: public VesselBase {
 	friend class VESSEL3;
 	friend class Pane;
 	friend class DefaultPanel;
+	friend class VirtualCockpit;
 	friend class VVessel;
 	friend class SuperVessel;
 	friend class Replay;
@@ -1513,6 +1514,7 @@ protected:
 	// returns template handle for pre-loaded mesh, or NULL if not available
 
 	const char *GetMeshName (UINT idx) const;
+	Vector GetMeshOffset (UINT idx) const; // offset of a mesh in vessel coordinates
 	// returns mesh name for on-demand mesh, or NULL for pre-loaded mesh
 
 	Mesh *CopyMeshFromTemplate (UINT idx);

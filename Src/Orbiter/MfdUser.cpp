@@ -5,6 +5,7 @@
 
 #include "Orbiter.h"
 #include "MfdUser.h"
+#include "MFDUI.h"
 #include "Config.h"
 #include "Astro.h"
 #include "Select.h"
@@ -48,9 +49,11 @@ Instrument_User::Instrument_User (Pane *_pane, INT_PTR _id, const Spec &spec, Ve
 		mfd = (MFD*)msgproc (OAPI_MSG_MFD_OPENED, _id, MAKEWPARAM(IW, IH), (LPARAM)vessel->GetModuleInterface());
 	try {
 		mfd2 = dynamic_cast<MFD2*>(mfd); // will return 0 if not an MFD2 instance
+		mfd3 = dynamic_cast<MFD3*>(mfd);
 	}
 	catch(...) {
 		mfd2 = 0;
+		mfd3 = 0;
 	}
 	mfd->instr = this;
 	mfd->cw = cw;
@@ -68,6 +71,7 @@ Instrument_User::Instrument_User (Pane *_pane, INT_PTR _id, const Spec &spec, Ve
 	name    = 0;
 	selkey  = '.';
 	mfd = mfd2 = 0;
+	mfd3 = 0;
 }
 
 Instrument_User::~Instrument_User ()
@@ -85,6 +89,16 @@ void Instrument_User::UpdateDraw (oapi::Sketchpad *skp)
 		HDC hDC = skp->GetDC ();
 		if (hDC) mfd->Update (hDC); // this should directly use skp
 	}
+}
+
+bool Instrument_User::ProcessPointer (const MFDPOINTER &p)
+{
+	return mfd3 && mfd3->ConsumePointer (p);
+}
+
+mfdui::Context *Instrument_User::UIContext ()
+{
+	return mfd3 ? &mfd3->UI () : 0;
 }
 
 void Instrument_User::UpdateDraw (HDC hDC)
@@ -115,9 +129,11 @@ bool Instrument_User::ReadParams (ifstream &ifs)
 		mfd = (MFD*)msgproc (OAPI_MSG_MFD_OPENED, id, MAKEWPARAM(IW, IH), (LPARAM)vessel->GetModuleInterface());
 	try {
 		mfd2 = dynamic_cast<MFD2*>(mfd); // will return 0 if not an MFD2 instance
+		mfd3 = dynamic_cast<MFD3*>(mfd);
 	}
 	catch(...) {
 		mfd2 = 0;
+		mfd3 = 0;
 	}
 	mfd->instr = this;
 	mfd->cw = cw;
@@ -184,6 +200,29 @@ HFONT MFD::SelectDefaultFont (HDC hDC, DWORD i) const
 	return instr->SelectDefaultFont (hDC, i);
 }
 
+
+// =======================================================================
+// Implementation of module interface class MFD3: pointer input, widgets
+// =======================================================================
+
+MFD3::MFD3 (DWORD w, DWORD h, VESSEL *vessel): MFD2 (w, h, vessel), ui(0)
+{}
+
+MFD3::~MFD3 ()
+{
+	delete ui;
+}
+
+mfdui::Context &MFD3::UI ()
+{
+	if (!ui) ui = new mfdui::Context;
+	return *ui;
+}
+
+void MFD3::RedrawLive (double seconds)
+{
+	if (instr) instr->RedrawLive (seconds);
+}
 
 // =======================================================================
 // Impementation of module interface class MFD

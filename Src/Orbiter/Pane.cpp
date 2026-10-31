@@ -14,6 +14,7 @@
 #include "D3dmath.h"
 #include "Log.h"
 #include "DlgMgr.h"
+#include "UiAnchor.h"
 #include <assert.h>
 
 using namespace std;
@@ -141,6 +142,120 @@ bool Pane::MFDConsumeKeyBuffered (int id, DWORD key)
 	} else if (mfd[id].instr) {
 		return mfd[id].instr->ConsumeKeyBuffered (key);
 	}
+	return false;
+}
+
+bool Pane::MFDAt (int x, int y, int &id, float &u, float &v, bool unbounded)
+{
+	switch (panelmode) {
+	case 1: return defpanel && defpanel->MFDAt (x, y, id, u, v, unbounded);
+	case 2:
+		if (panel2d) return panel2d->MFDAt (x, y, id, u, v, unbounded);
+		if (panel) return panel->MFDAt (x, y, id, u, v, unbounded);
+		return false;
+	case 3: return vcockpit && vcockpit->MFDAt (x, y, id, u, v, unbounded);
+	}
+	return false;
+}
+
+bool Pane::MFDPointer (UINT event, DWORD state, int x, int y)
+{
+	MFDPOINTER p = {};
+	switch (event) {
+	case WM_LBUTTONDOWN: p.event = MFD_POINTER_DOWN, p.button = 0, ptrButtons |= 1; break;
+	case WM_RBUTTONDOWN: p.event = MFD_POINTER_DOWN, p.button = 1, ptrButtons |= 2; break;
+	case WM_LBUTTONUP:   p.event = MFD_POINTER_UP,   p.button = 0, ptrButtons &= ~1u; break;
+	case WM_RBUTTONUP:   p.event = MFD_POINTER_UP,   p.button = 1, ptrButtons &= ~2u; break;
+	case WM_MOUSEMOVE:   p.event = MFD_POINTER_MOVE; break;
+	case WM_MOUSEWHEEL:  p.event = MFD_POINTER_WHEEL, p.wheel = (short)HIWORD (state) / 120.0f; break;
+	default: return false;
+	}
+	p.buttons = ptrButtons;
+
+	auto Leave = [&]() {
+		if (ptrMfd >= 0 && ptrMfd < MAXMFD && mfd[ptrMfd].instr) {
+			MFDPOINTER l = {};
+			l.event = MFD_POINTER_LEAVE;
+			l.x = l.y = -1.0f;
+			mfd[ptrMfd].instr->ConsumePointer (l);
+		}
+		ptrMfd = -1;
+	};
+
+	int id = ptrMfd;
+	float u, v;
+	if (ptrCapture) {
+		if (!MFDAt (x, y, id, u, v, true)) { // the display is gone
+			ptrCapture = false;
+			Leave ();
+			return false;
+		}
+	} else if (!MFDAt (x, y, id, u, v)) {
+		Leave ();
+		return false;
+	} else if (id != ptrMfd) {
+		Leave ();
+		ptrMfd = id;
+	}
+	Instrument *in = (id >= 0 && id < MAXMFD) ? mfd[id].instr : 0;
+	if (!in) return false;
+	p.x = u * in->Width ();
+	p.y = v * in->Height ();
+	bool used = in->ConsumePointer (p);
+	if (p.event == MFD_POINTER_DOWN && used) ptrCapture = true;
+	if (p.event == MFD_POINTER_UP && !ptrButtons) {
+		used = used || ptrCapture;
+		ptrCapture = false;
+	}
+	return used;
+}
+
+bool Pane::MFDToScreen (int id, float u, float v, float &x, float &y)
+{
+	switch (panelmode) {
+	case 1: return defpanel && defpanel->MFDToScreen (id, u, v, x, y);
+	case 2:
+		if (panel2d) return panel2d->MFDToScreen (id, u, v, x, y);
+		return panel && panel->MFDToScreen (id, u, v, x, y);
+	case 3: return vcockpit && vcockpit->MFDToScreen (id, u, v, x, y);
+	}
+	return false;
+}
+
+void Pane::PublishMFDAnchors ()
+{
+	std::vector<std::pair<std::string, oapi::FVECTOR2>> list;
+	char name[256];
+	for (int i = 0; i < MAXMFD; i++) {
+		Instrument *in = mfd[i].instr;
+		if (!in || in->Width () <= 0 || in->Height () <= 0) continue;
+		float x, y;
+		if (MFDToScreen (i, 0.0f, 0.0f, x, y)) { snprintf (name, sizeof (name), "mfd%d.tl", i); uianchor::Set (name, x, y); }
+		if (MFDToScreen (i, 1.0f, 1.0f, x, y)) { snprintf (name, sizeof (name), "mfd%d.br", i); uianchor::Set (name, x, y); }
+		in->Anchors (list);
+		for (auto &a : list)
+			if (MFDToScreen (i, a.second.x / in->Width (), a.second.y / in->Height (), x, y)) {
+				snprintf (name, sizeof (name), "mfd%d.%s", i, a.first.c_str());
+				uianchor::Set (name, x, y);
+			}
+	}
+}
+
+bool Pane::MFDEditing ()
+{
+	for (int i = 0; i < MAXMFD; i++)
+		if (mfd[i].instr && mfd[i].instr->Editing ()) return true;
+	for (DWORD i = 0; i < nemfd; i++)
+		if (emfd[i]->instr && emfd[i]->instr->Editing ()) return true;
+	return false;
+}
+
+bool Pane::MFDEditKey (DWORD key)
+{
+	for (int i = 0; i < MAXMFD; i++)
+		if (mfd[i].instr && mfd[i].instr->Editing ()) return mfd[i].instr->EditKey (key);
+	for (DWORD i = 0; i < nemfd; i++)
+		if (emfd[i]->instr && emfd[i]->instr->Editing ()) return emfd[i]->instr->EditKey (key);
 	return false;
 }
 
@@ -539,6 +654,7 @@ void Pane::Update (double simt, double syst)
 				mfd[i].instr->Update (mfd[i].upDTscale);
 			}
 		}
+		if (uianchor::Enabled ()) PublishMFDAnchors ();
 		if (panel2d) {
 			int idx, aid, mstate, mx, my;
 			void *context;

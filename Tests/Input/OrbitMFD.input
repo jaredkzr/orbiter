@@ -1,0 +1,63 @@
+# Orbit MFD with the mouse (glass cockpit, Tests/Input/OrbitMFD.scn): add a
+# manoeuvre node by clicking the orbit, change its velocity change with the
+# wheel, by dragging, with the keypad and with the keyboard, delete it.
+
+lua v = vessel.get_focusinterface ()
+lua function node () return v:get_maneuvernode (0) end
+lua function dt (n) return (n.mjd - oapi.get_simmjd ()) * 86400 end
+lua T = 2 * math.pi * math.sqrt (6671000^3 / 3.986004418e14)
+wait 10
+
+# a click on the orbit a quarter period ahead adds a node there
+waitfor @mfd0.orbit.25
+click @mfd0.orbit.25
+waitfor @mfd0.Prograde
+lua n = node ()
+lua check ("add", v:get_maneuvernodecount () == 1 and n.dv.x == 0 and math.abs (dt (n) / T - 0.25) < 0.02, string.format ("%d node, %.3f periods ahead", v:get_maneuvernodecount (), dt (n) / T))
+
+# the wheel over a number field: 1 m/s per notch
+move @mfd0.Prograde
+wheel 3
+wait 5
+lua check ("wheel", math.abs (node ().dv.x - 3) < 1e-9, string.format ("prograde %.2f m/s", node ().dv.x))
+
+# dragging it to the right adds steps
+drag @mfd0.Prograde @mfd0.Prograde->@mfd0.Normal*0.5 20
+wait 5
+lua check ("drag", node ().dv.x > 5, string.format ("prograde %.2f m/s", node ().dv.x))
+
+# a click opens the keypad: 12.5 m/s radial
+click @mfd0.Radial
+waitfor @mfd0.keypad.OK
+click @mfd0.keypad.CLR
+click @mfd0.keypad.1
+click @mfd0.keypad.2
+click @mfd0.keypad..
+click @mfd0.keypad.5
+click @mfd0.keypad.OK
+wait 5
+lua check ("keypad", math.abs (node ().dv.z - 12.5) < 1e-9, string.format ("radial %.2f m/s", node ().dv.z))
+
+# typed on the keyboard while the keypad is open: -7 m/s normal
+click @mfd0.Normal
+waitfor @mfd0.keypad.OK
+click @mfd0.keypad.CLR
+key 7
+key -
+key Return
+wait 5
+lua check ("keys", math.abs (node ().dv.y + 7) < 1e-9, string.format ("normal %.2f m/s", node ().dv.y))
+lua check ("keys_held", v:get_thrustergrouplevel (THGROUP.MAIN) == 0, "no thrust from the typed keys")
+
+# the wheel over the graph zooms without changing the node
+move @mfd0.orbit.50
+wheel 2
+wait 5
+lua check ("zoom", v:get_maneuvernodecount () == 1, "node kept")
+
+# the panel's Delete button
+waitfor @mfd0.delete
+click @mfd0.delete
+wait 5
+lua check ("delete", v:get_maneuvernodecount () == 0, string.format ("%d nodes", v:get_maneuvernodecount ()))
+exit

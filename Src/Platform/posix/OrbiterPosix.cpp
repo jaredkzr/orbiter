@@ -27,10 +27,13 @@
 #include "DlgMgr.h"
 #include "Keymap.h"
 #include "Replay.h"
+#include "Pane.h"
 #include "imgui.h"
 #include <cmath>
 #include <cstdio>
 #include <string>
+
+extern Pane *g_pane;
 #include <thread>
 
 extern const TCHAR *MasterConfigFile;
@@ -270,7 +273,9 @@ HRESULT Orbiter::UserInput ()
 	if (!imguiWantsKeyboard)
 		for (i = 0; i < 256; i++)
 			simkstate[i] |= buffer[i];
-	bool consume = BroadcastImmediateKeyboardEvent (simkstate);
+	// a field of an MFD display is being edited: it takes the keys
+	bool mfdEdit = g_pane && g_pane->MFDEditing ();
+	bool consume = mfdEdit || BroadcastImmediateKeyboardEvent (simkstate);
 	if (!skipkbd && !consume) {
 		KbdInputImmediate_System (simkstate);
 		if (bRunning) KbdInputImmediate_OnRunning (simkstate);
@@ -278,7 +283,10 @@ HRESULT Orbiter::UserInput ()
 
 	// buffered key events
 	DWORD nItems = (DWORD)platformKbuf.size();
-	if (nItems && !imguiWantsKeyboard) {
+	if (nItems && !imguiWantsKeyboard && mfdEdit) {
+		for (DWORD k = 0; k < nItems; k++)
+			if (platformKbuf[k].dwData & 0x80) g_pane->MFDEditKey (platformKbuf[k].dwOfs);
+	} else if (nItems && !imguiWantsKeyboard) {
 		BroadcastBufferedKeyboardEvent (buffer, platformKbuf.data(), nItems);
 		if (!skipkbd) {
 			KbdInputBuffered_System (buffer, platformKbuf.data(), nItems);

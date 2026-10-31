@@ -1,0 +1,44 @@
+# Transfer Planner MFD (glass cockpit, Tests/Input/PlannerMFD.scn): search
+# transfers to Mars, pick another one in the porkchop chart, return to the
+# optimum, make the manoeuvre nodes, look at the other pages.
+
+lua v = vessel.get_focusinterface ()
+lua hv = v:get_handle ()
+wait 10
+
+waitfor @mfd0.search
+click @mfd0.search
+waitfor @mfd0.porkchop
+wait 10
+lua ti = oapi.transfer_info (hv); best = ti.dep
+lua check ("search", ti.valid and ti.dep > 51990 and ti.dep < 52040 and ti.tof > 150 and ti.tof < 320, string.format ("departure MJD %.1f, %.0f days, %.0f m/s", ti.dep, ti.tof, ti.dv_total))
+
+# a click in the chart selects that transfer
+click @mfd0.porkchop.tl->@mfd0.porkchop.br*0.7
+wait 10
+lua ti = oapi.transfer_info (hv)
+lua check ("select", ti.valid and math.abs (ti.dep - best) > 1, string.format ("departure MJD %.1f (optimum %.1f)", ti.dep, best))
+click @mfd0.optimum
+wait 10
+lua ti = oapi.transfer_info (hv)
+lua check ("optimum", math.abs (ti.dep - best) < 1e-6, string.format ("departure MJD %.1f", ti.dep))
+
+# the launch windows page
+click @mfd0.page.2
+waitfor @mfd0.windows
+lua check ("windows", true, "windows page")
+
+# nodes from the Burn page
+click @mfd0.page.4
+waitfor @mfd0.nodes
+click @mfd0.nodes
+waitfor @mfd0.correct
+lua ti = oapi.transfer_info (hv)
+lua check ("nodes", ti.plan_valid and v:get_maneuvernodecount () == 2 and math.abs (ti.peri_alt - 300e3) < 15e3, string.format ("%d nodes, periapsis %.1f km", v:get_maneuvernodecount (), ti.peri_alt / 1000))
+
+click @mfd0.page.6
+wait 10
+click @mfd0.page.0
+waitfor @mfd0.search
+lua check ("pages", true, "budget and setup pages")
+exit

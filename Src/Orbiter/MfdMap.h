@@ -24,6 +24,7 @@ public:
 	bool KeyBuffered (DWORD key);
 	bool KeyImmediate (char *kstate);
 	bool ProcessButton (int bt, int event);
+	bool ProcessPointer (const MFDPOINTER &p);
 	const char *BtnLabel (int bt) const;
 	int BtnMenu (const MFDBUTTONMENU **menu) const;
 	bool Update (double upDTscale);

@@ -64,6 +64,11 @@ public:
 	bool SetClickZone_Quadrilateral (int i, const Vector &p1, const Vector &p2, const Vector &p3, const Vector &p4);
 
 	bool ProcessMouse (UINT event, DWORD state, int x, int y);
+
+	/// MFD display under a screen point, by the mouse ray and the triangles of
+	/// the display's mesh group (u, v: position in it, 0..1)
+	bool MFDAt (int x, int y, int &mfd, float &u, float &v, bool unbounded);
+	bool MFDToScreen (int mfd, float u, float v, float &x, float &y);
 	void GetMouseState (int &idx, int &state, Vector &xs) const;
 	inline void SetMouseState (int state) { mstate = state; }
 

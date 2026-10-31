@@ -144,6 +144,7 @@ void DefaultPanel::SetGeometry ()
 				mfdx0 = min (mfdx0, viewW/2 + (viewH*45)/100 + btnw + gapw + 0.5f);
 		}
 		float mfdx1 = mfdx0 + (float)mfdw;
+		mfdr[n][0] = mfdx0 + 0.5f, mfdr[n][1] = mfdy0 + 0.5f, mfdr[n][2] = mfdx1 + 0.5f, mfdr[n][3] = mfdy1 + 0.5f;
 		Vtx = new NTVERTEX[nVtx = 4];
 		Idx = new WORD[nIdx = 6];
 		memset (Vtx, 0, nVtx*sizeof(NTVERTEX));
@@ -580,6 +581,30 @@ bool DefaultPanel::ProcessMouse (UINT event, DWORD state, int x, int y)
 		}
 	}
 	return false;
+}
+
+bool DefaultPanel::MFDAt (int x, int y, int &mfd, float &u, float &v, bool unbounded) const
+{
+	for (int i = 0; i < 2; i++) {
+		if (unbounded && i != mfd) continue;
+		if (!pane->mfd[i].instr) continue;
+		const float *r = mfdr[i];
+		float uu = (x + 0.5f - r[0]) / (r[2] - r[0]), vv = (y + 0.5f - r[1]) / (r[3] - r[1]);
+		if (unbounded || (uu >= 0.0f && uu < 1.0f && vv >= 0.0f && vv < 1.0f)) {
+			mfd = i, u = uu, v = vv;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool DefaultPanel::MFDToScreen (int mfd, float u, float v, float &x, float &y) const
+{
+	if (mfd < 0 || mfd > 1) return false;
+	const float *r = mfdr[mfd];
+	x = r[0] + u * (r[2] - r[0]);
+	y = r[1] + v * (r[3] - r[1]);
+	return true;
 }
 
 bool DefaultPanel::GetMFDButton (int mx, int my, int &mfd, int &btn) const

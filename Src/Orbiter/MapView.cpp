@@ -10,6 +10,7 @@
 #include "Vessel.h"
 #include "Trajectory.h"
 #include "Maneuver.h"
+#include "Transfer.h"
 #include "Astro.h"
 #include <algorithm>
 #include <cmath>
@@ -171,11 +172,19 @@ void MapView::DrawPath (ImDrawList *dl, const std::vector<Vector> &pts, ImU32 co
 		}
 		run.clear();
 	};
-	for (const Vector &p : pts) {
+	for (size_t i = 0; i < pts.size(); i++) {
+		const Vector &p = pts[i];
 		ImVec2 s;
 		if (!Project (p, s) || Occluded (p)) { flush (); continue; }
 		if (s.x < -4*W || s.x > 5*W || s.y < -4*H || s.y > 5*H) { flush (); continue; }
+		// (points closer than a pixel to the last one are left out: long paths, such
+		// as weeks in a low orbit, would exceed the draw list's 16-bit vertex indices)
+		if (!dashed && !run.empty() && i + 1 < pts.size()) {
+			float dx = s.x - run.back().x, dy = s.y - run.back().y;
+			if (dx*dx + dy*dy < 1.0f) continue;
+		}
 		run.push_back (s);
+		if (run.size() >= 8000) { ImVec2 last = run.back(); flush (); run.push_back (last); }
 	}
 	flush ();
 }
@@ -184,6 +193,12 @@ void MapView::DrawMarker (ImDrawList *dl, const Vector &gp, ImU32 col, const cha
 {
 	ImVec2 s;
 	if (!Project (gp, s) || Occluded (gp)) return;
+	if (s.x < -W || s.x > 2.0f * W || s.y < -H || s.y > 2.0f * H) return;
+	// one marker of a kind per spot: zoomed out, months of a low orbit put
+	// thousands of apsides on a few pixels (and the draw list's 16-bit
+	// indices overflow: what is drawn after them vanishes)
+	long long cell = ((long long)(int)floorf (s.x / 5.0f) << 32) ^ ((long long)((int)floorf (s.y / 5.0f) & 0xFFFFF) << 4) ^ (long long)(shape & 0xF);
+	if (!marked.insert (cell).second) return;
 	const float r = 6.0f;
 	switch (shape) {
 	case SHAPE_DIAMOND:
@@ -265,6 +280,7 @@ void MapView::Display ()
 
 	UpdateWarp ();
 	labels.clear();
+	marked.clear();
 	if (on) DrawMap (pred.get());
 	else DrawBurnCue (pred.get());
 }
@@ -403,6 +419,7 @@ void MapView::DrawMap (const trajectory::Prediction *pred)
 	if (const Body *tgt = g_pOrbiter->PredictTarget())
 		if (tgt->Type() == OBJTP_VESSEL) DrawMarker (dl, tgt->GPos(), COL_TARGET, tgt->Name(), SHAPE_TRIANGLE);
 
+	DrawTransferPlan (dl);
 	DrawNodes (dl, pred);
 
 	// add a node: click on the trajectory
@@ -424,13 +441,23 @@ void MapView::DrawMap (const trajectory::Prediction *pred)
 
 void MapView::DrawBodyOrbits (ImDrawList *dl)
 {
-	// the map body's moons, the body's own orbit, and the bodies around the Sun if it is the map body
+	// the map body's moons (the planets if it is the Sun); when the view is
+	// large enough for the body's own orbit, that orbit and its siblings'
+	// (the other planets about the Sun, or the other moons), dimmer
 	std::vector<const CelestialBody*> bodies;
 	for (DWORD i = 0; i < mapRef->nSecondary(); i++) bodies.push_back (mapRef->Secondary (i));
-	// (the body's own orbit only when the view is large enough for it)
-	if (mapRef->Primary() && (camPos - mapRef->GPos()).length() > 0.02 * (mapRef->GPos() - mapRef->Primary()->GPos()).length())
+	size_t nown = bodies.size();
+	const CelestialBody *par = mapRef->Primary();
+	if (par && (camPos - mapRef->GPos()).length() > 0.02 * (mapRef->GPos() - par->GPos()).length()) {
 		bodies.push_back (mapRef);
-	for (const CelestialBody *b : bodies) {
+		for (DWORD i = 0; i < par->nSecondary(); i++)
+			if (par->Secondary (i) != mapRef) bodies.push_back (par->Secondary (i));
+		DrawMarker (dl, par->GPos(), COL_ORBIT, par->Name(), SHAPE_CIRCLE);
+	}
+	const ImU32 COL_SIBLING = (COL_ORBIT & 0x00FFFFFF) | (0x70u << 24);
+	for (size_t k = 0; k < bodies.size(); k++) {
+		const CelestialBody *b = bodies[k];
+		ImU32 col = (k < nown || b == mapRef) ? COL_ORBIT : COL_SIBLING;
 		const CelestialBody *p = b->Primary();
 		Vector r0 (b->GPos() - p->GPos()), v0 (b->GVel() - p->GVel());
 		double mu = Ggrav * (p->Mass() + b->Mass());
@@ -445,8 +472,153 @@ void MapView::DrawBodyOrbits (ImDrawList *dl)
 			maneuver::Kepler (r0, v0, mu, T * i / n, r, v);
 			pts.push_back (p->GPos() + r);
 		}
-		DrawPath (dl, pts, COL_ORBIT, 1.0f);
-		if (b != mapRef) DrawMarker (dl, b->GPos(), COL_ORBIT, b->Name(), SHAPE_CIRCLE);
+		// (orbits too small to see at this scale: not drawn)
+		double ext = (camPos - p->GPos()).length() * tanAp / H * 2.0; // [m per pixel]
+		if (a < 4.0 * ext) continue;
+		DrawPath (dl, pts, col, 1.0f);
+		if (b != mapRef) DrawMarker (dl, b->GPos(), col, b->Name(), SHAPE_CIRCLE);
+	}
+}
+
+void MapView::Centre (const CelestialBody *cb)
+{
+	if (!on || !cb || !g_focusobj || cb == mapRef) return;
+	// the extent: the vessel, and a transfer the planner has to or by this body's satellites
+	double rmax = (g_focusobj->GPos() - cb->GPos()).length();
+	if (transfer::Planner *pl = g_pOrbiter->TransferPlanner (g_focusobj, false)) {
+		std::vector<const CelestialBody*> bs;
+		if (pl->settings.target) bs.push_back (pl->settings.target);
+		transfer::Route rt = pl->GetRoute ();
+		for (const auto &f : rt.flybys) bs.push_back (f.body);
+		for (const CelestialBody *b : bs)
+			for (const CelestialBody *q = b; q; q = q->Primary())
+				if (q->Primary() == cb) { rmax = std::max (rmax, (q->GPos() - cb->GPos()).length()); break; }
+	}
+	for (DWORD i = 0; i < cb->nSecondary() && rmax <= 0.0; i++)
+		rmax = std::max (rmax, (cb->Secondary (i)->GPos() - cb->GPos()).length());
+	mapRef = cb;
+	g_pOrbiter->SetView ((Body*)cb, 1);
+	g_camera->SetTrackMode (CAMERA_GLOBALFRAME);
+	g_camera->SetDistance (std::clamp (1.25 * rmax / (g_camera->TanAperture() * cb->Size()), 2.5, 1e7));
+	g_camera->ChangeDist (1.0); // (SetDistance only stores it: this moves the camera there)
+}
+
+void MapView::DrawTransferPlan (ImDrawList *dl)
+{
+	transfer::Planner *pl = g_pOrbiter->TransferPlanner (g_focusobj, false);
+	if (!pl || !pl->settings.target) return;
+	transfer::Solution s = pl->Selected ();
+	const CelestialBody *central = pl->Central (), *dep = pl->Departure ();
+	if (!s.valid || !central || !dep) return;
+	bool sibling = pl->CurrentKind () == transfer::KIND_SIBLING;
+	const ImU32 COL = IM_COL32 (255, 200, 60, 230);
+	char label[96];
+
+	// the transfer conic (planned, two-body), about the central body; a
+	// route: each leg (and the conic after its manoeuvre), the flyby bodies
+	// where they will be at the flybys
+	transfer::Route rt = pl->GetRoute ();
+	if (rt.valid) {
+		const ImU32 COL2 = IM_COL32 (255, 150, 40, 230);
+		for (size_t k = 0; k < rt.legs.size(); k++) {
+			const transfer::RouteLeg &lg = rt.legs[k];
+			double tm = (lg.dsmMjd > 0.0) ? lg.dsmMjd : lg.t1;
+			std::vector<Vector> pts;
+			const int n = 160;
+			Vector rm, vm;
+			for (int i = 0; i <= n; i++) {
+				Vector r, v;
+				if (maneuver::Kepler (lg.r0, lg.v0, s.mu, (tm - lg.t0) * 86400.0 * i / n, r, v)) pts.push_back (central->GPos() + r), rm = r, vm = v;
+			}
+			if (lg.dsmMjd > 0.0) {
+				vm += lg.dsmDvVec;
+				for (int i = 1; i <= n; i++) {
+					Vector r, v;
+					if (maneuver::Kepler (rm, vm, s.mu, (lg.t1 - tm) * 86400.0 * i / n, r, v)) pts.push_back (central->GPos() + r);
+				}
+				if (lg.dsmDv >= 0.5) {
+					snprintf (label, sizeof (label), "Manoeuvre %.0f m/s", lg.dsmDv);
+					DrawMarker (dl, central->GPos() + rm, COL, label, SHAPE_DIAMOND);
+				}
+			}
+			DrawPath (dl, pts, (k % 2) ? COL2 : COL, 1.5f, true);
+		}
+		for (const auto &f : rt.flybys) {
+			struct tm t = *mjddate (f.mjd);
+			snprintf (label, sizeof (label), "%s flyby %02d/%02d/%04d, %.0f km", f.body->Name(), t.tm_mday, std::clamp (t.tm_mon, 1, 12), t.tm_year + 1900, f.alt * 1e-3);
+			// (the leg ends where the body will be)
+			for (const auto &lg : rt.legs)
+				if (fabs (lg.t1 - f.mjd) < 1e-6) {
+					Vector re, ve;
+					double tm = (lg.dsmMjd > 0.0) ? lg.dsmMjd : lg.t0;
+					Vector r0 (lg.r0), v0 (lg.v0);
+					if (lg.dsmMjd > 0.0 && maneuver::Kepler (lg.r0, lg.v0, s.mu, (tm - lg.t0) * 86400.0, re, ve)) r0 = re, v0 = ve + lg.dsmDvVec;
+					if (maneuver::Kepler (r0, v0, s.mu, (lg.t1 - tm) * 86400.0, re, ve)) DrawMarker (dl, central->GPos() + re, COL, label, SHAPE_CIRCLE);
+				}
+		}
+	} else {
+		std::vector<Vector> pts;
+		const int n = 160;
+		for (int i = 0; i <= n; i++) {
+			Vector r, v;
+			if (maneuver::Kepler (s.r1, s.v1, s.mu, s.tof * 86400.0 * i / n, r, v)) pts.push_back (central->GPos() + r);
+		}
+		DrawPath (dl, pts, COL, 1.5f, true);
+	}
+	if (sibling) {
+		snprintf (label, sizeof (label), "%s at departure", dep->Name());
+		DrawMarker (dl, central->GPos() + s.r1, COL, label, SHAPE_SQUARE);
+	}
+	snprintf (label, sizeof (label), "%s at arrival", pl->settings.target->Name());
+	DrawMarker (dl, central->GPos() + s.r2, COL, label, SHAPE_SQUARE);
+
+	// on the ground: the planned parking orbit of the chosen launch, the
+	// insertion, the ejection burn
+	transfer::LaunchPlan lp = pl->Launch ();
+	if (lp.landed) {
+		if (lp.sel < 0) return;
+		const transfer::LaunchOpportunity &o = lp.opp[lp.sel];
+		Vector c (dep->GPos());
+		double mu = Ggrav * dep->Mass();
+		double T = 2.0 * Pi * sqrt (pow (o.rIns.length(), 3) / mu);
+		std::vector<Vector> orb;
+		for (int i = 0; i <= 120; i++) {
+			Vector r, v;
+			if (maneuver::Kepler (o.rIns, o.vIns, mu, T * i / 120, r, v)) orb.push_back (c + r);
+		}
+		DrawPath (dl, orb, COL, 1.5f, true);
+		DrawMarker (dl, g_focusobj->GPos(), COL, "Launch site", SHAPE_TRIANGLE);
+		DrawMarker (dl, c + o.rIns, COL, "Insertion", SHAPE_CIRCLE);
+		Vector rb, vb;
+		if (maneuver::Kepler (o.rIns, o.vIns, mu, (o.burnMjd - o.insMjd) * 86400.0, rb, vb)) {
+			Vector dvg (maneuver::ToGlobal (o.burnDv, rb, vb));
+			DrawMarker (dl, c + rb, COL, "Burn", SHAPE_DIAMOND);
+			DrawPath (dl, { c + rb, c + rb + dvg.unit() * (rb.length() * 0.6) }, COL, 2.5f);
+		}
+		if (sibling) {
+			double len = o.rIns.length() * 6.0;
+			DrawPath (dl, { c, c + s.vinfDepVec.unit() * len }, IM_COL32 (255, 255, 255, 160), 1.0f, true);
+			DrawMarker (dl, c + s.vinfDepVec.unit() * len, IM_COL32 (255, 255, 255, 160), "Departure asymptote", SHAPE_CROSS);
+		}
+		return;
+	}
+
+	// at the departure body: the burn point, its direction, the asymptote
+	if (s.burnValid) {
+		Vector c (dep->GPos());
+		double mu = Ggrav * dep->Mass();
+		Vector r0 (g_focusobj->GPos() - c), v0 (g_focusobj->GVel() - dep->GVel()), rb, vb;
+		if (maneuver::Kepler (r0, v0, mu, (s.burnMjd - td.MJD1) * 86400.0, rb, vb)) {
+			Vector dvg (maneuver::ToGlobal (s.burnDv, rb, vb));
+			DrawMarker (dl, c + rb, COL, "Burn", SHAPE_DIAMOND);
+			double len = rb.length() * 0.6;
+			DrawPath (dl, { c + rb, c + rb + dvg.unit() * len }, COL, 2.5f);
+		}
+		if (sibling) {
+			double len = r0.length() * 6.0;
+			DrawPath (dl, { c, c + s.vinfDepVec.unit() * len }, IM_COL32 (255, 255, 255, 160), 1.0f, true);
+			DrawMarker (dl, c + s.vinfDepVec.unit() * len, IM_COL32 (255, 255, 255, 160), "Departure asymptote", SHAPE_CROSS);
+		}
 	}
 }
 
@@ -617,6 +789,14 @@ void MapView::DrawPanels (const trajectory::Prediction *pred)
 			}
 			ImGui::EndCombo ();
 		}
+		// the map's centre: the reference body or one of its parents
+		ImGui::SetNextItemWidth (ImGui::GetFontSize() * 12.0f);
+		if (ImGui::BeginCombo ("Centre", mapRef ? mapRef->Name() : "-")) {
+			for (const CelestialBody *c = ref; c; c = c->Primary())
+				if (ImGui::Selectable (c->Name(), c == mapRef)) Centre (c);
+			ImGui::EndCombo ();
+		}
+		uianchor::SetItem ("map.panel.centre");
 		if (!pred) ImGui::TextDisabled ("Predicting...");
 		ImGui::TextDisabled ("Click the trajectory to add a node. M: close the map");
 	}

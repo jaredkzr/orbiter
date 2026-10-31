@@ -2,6 +2,8 @@
 // Licensed under the MIT License
 
 #include "MfdTransfer.h"
+#include "MFDUI.h"
+#include "Maneuver.h"
 #include "Pane.h"
 #include "Celbody.h"
 #include "Psys.h"
@@ -148,6 +150,7 @@ void Instrument_Transfer::UpdateDraw (oapi::Sketchpad *skp)
 	dv_manip = false;
 	scale = pixrad / (!bTarget || shpel->ApDist() > tgtel->ApDist() ? shpel->ApDist() : tgtel->ApDist());
 	Matrix irot (IRotMatrix (shpel->cost, shpel->sint, shpel->cosi, shpel->sini));
+	ejRot = irot, ejScale = scale;
 
 	// ship orbit
 	Matrix rot1 (RotMatrix (shpel->coso, shpel->sino, shpel->cost, shpel->sint, shpel->cosi, shpel->sini));
@@ -323,6 +326,8 @@ void Instrument_Transfer::UpdateDraw (oapi::Sketchpad *skp)
 		skp->Text (x1, y, cbuf, strlen(cbuf)); y += ch;
 	}
 
+	if (enable_hyp) Interactive (skp, dte);
+
 	if (bTarget) {
 		// normals of the two orbital planes
 		Vector nm1 = crossp (sv, sp);
@@ -337,6 +342,57 @@ void Instrument_Transfer::UpdateDraw (oapi::Sketchpad *skp)
 		sprintf (cbuf, "RInc%7.2fº", Deg(reli));
 		skp->Text (x0, IH-(3*ch)/2, cbuf, strlen(cbuf));
 	}
+}
+
+bool Instrument_Transfer::ProcessPointer (const MFDPOINTER &p)
+{
+	// (the widgets took their events): the wheel over the display changes the
+	// ejection delta-v by 1 m/s per notch, dragging moves the ejection point
+	if (!enable_hyp || !elref || ejScale <= 0.0) return false;
+	switch (p.event) {
+	case MFD_POINTER_WHEEL:
+		deltav += p.wheel;
+		dv_manip = true;
+		Refresh ();
+		return true;
+	case MFD_POINTER_DOWN:
+	case MFD_POINTER_MOVE:
+		if (!(p.buttons & 1)) return false;
+		{	// the longitude whose ejection point is nearest to the pointer
+			double best = 1e30, lng = l_eject;
+			for (int i = 0; i < 360; i++) {
+				double l = i * RAD;
+				Vector P, V;
+				shpel->PosVel_TA (P, V, l - shpel->omegab);
+				Vector q (mul (ejRot, P));
+				double dx = ICNTX + q.x * ejScale - p.x, dy = ICNTY - q.z * ejScale - p.y;
+				if (dx*dx + dy*dy < best) best = dx*dx + dy*dy, lng = l;
+			}
+			l_eject = lng;
+			dv_manip = true;
+			RedrawLive (0.3);
+		}
+		return true;
+	}
+	return false;
+}
+
+void Instrument_Transfer::Interactive (oapi::Sketchpad *skp, double dte)
+{
+	// "Node": the ejection burn as a manoeuvre node (prograde)
+	if (src != vessel) return;
+	mfdui::Context &ui = UI ();
+	ui.Begin (skp, (float)IW, (float)IH);
+	float u = ui.Unit ();
+	mfdui::Rect r (IW - u * 4.6f, IH - u * 2.9f, IW - u * 0.3f, IH - u * 1.7f);
+	if (ui.Button ("node", r, "Node")) {
+		maneuver::Node n;
+		n.mjd = td.MJD1 + dte / 86400.0;
+		n.dv = Vector (deltav, 0.0, 0.0);
+		vessel->AddManeuverNode (n);
+	}
+	ui.Tooltip ("Add a manoeuvre node for the ejection burn. Wheel: dv; drag: ejection point");
+	ui.End ();
 }
 
 void Instrument_Transfer::DisplayOrbit (oapi::Sketchpad *skp, oapi::IVECTOR2 *p) const

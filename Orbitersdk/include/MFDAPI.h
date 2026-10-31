@@ -40,6 +40,7 @@ class Instrument_User;
 
 class OAPIFUNC MFD {
 	friend class MFD2;
+	friend class MFD3;
 
 public:
 	/** 
@@ -409,6 +410,81 @@ public:
 
 
 // ======================================================================
+// Pointer input on MFD displays
+// ======================================================================
+
+/**
+ * \defgroup mfdpointer Pointer events on MFD displays
+ * Mouse (or gamepad cursor) events on the display area of an MFD: in the
+ * glass cockpit, on 2D panels, in virtual cockpits and in MFD windows.
+ * \sa MFD3::ConsumePointer
+ */
+//@{
+#define MFD_POINTER_DOWN   1 ///< a button was pressed over the display
+#define MFD_POINTER_UP     2 ///< a button was released (also outside the display, after a DOWN on it)
+#define MFD_POINTER_MOVE   3 ///< the pointer moved (hovering, or dragging after a DOWN)
+#define MFD_POINTER_WHEEL  4 ///< the mouse wheel turned over the display
+#define MFD_POINTER_LEAVE  5 ///< the pointer left the display
+//@}
+
+/**
+ * \brief A pointer event on an MFD display
+ * \sa MFD3::ConsumePointer
+ */
+typedef struct {
+	int event;     ///< MFD_POINTER_xxx
+	float x, y;    ///< position in display pixels ((0,0): top left corner, W, H: bottom right)
+	int button;    ///< DOWN, UP: 0 left, 1 right
+	DWORD buttons; ///< buttons held (bit 0: left, bit 1: right)
+	float wheel;   ///< WHEEL: notches turned (positive: away from the user)
+} MFDPOINTER;
+
+namespace mfdui { class Context; }
+
+// ======================================================================
+// class MFD3
+// ======================================================================
+
+/**
+ * \brief MFD mode with pointer input and the MFD widget toolkit.
+ *
+ * Derive from MFD3 instead of MFD2 for displays the user can click, drag
+ * and scroll on. The widgets of the toolkit (buttons, tabs, number fields,
+ * lists, plots: see MFDUI.h) get their pointer events automatically;
+ * ConsumePointer is called for the events none of them took.
+ * \note Existing MFD and MFD2 modes are unaffected.
+ */
+class OAPIFUNC MFD3: public MFD2 {
+public:
+	MFD3 (DWORD w, DWORD h, VESSEL *vessel);
+	~MFD3 ();
+
+	/**
+	 * \brief Pointer event on the display that no widget took.
+	 * \return true if the event was used (the display is then redrawn soon,
+	 *   and the event is not passed on to the cockpit or the camera)
+	 */
+	virtual bool ConsumePointer (const MFDPOINTER &p) { return false; }
+
+	/**
+	 * \brief The widget toolkit of this display (see MFDUI.h). Use it between
+	 *   Begin and End in Update.
+	 */
+	mfdui::Context &UI ();
+
+	/**
+	 * \brief Redraw the display at the frame rate for a while (e.g. while
+	 *   something moves), instead of at the MFD update interval.
+	 * \param seconds [s] of system time
+	 */
+	void RedrawLive (double seconds = 0.5);
+
+private:
+	mfdui::Context *ui;
+};
+
+
+// ======================================================================
 // class GraphMFD
 // ======================================================================
 
@@ -662,6 +738,13 @@ public:
 
     /*! \b TODO */
 	virtual void clbkFocusChanged (OBJHANDLE hFocus);
+
+	/**
+	 * \brief Passes a pointer event on the display to the MFD mode.
+	 * \return true if the mode used it
+	 * \note Coordinates are in display pixels (0..DW, 0..DH).
+	 */
+	bool ProcessPointer (const MFDPOINTER &p);
 
 protected:
 	OBJHANDLE hVessel; //!< vessel associated with the MFD

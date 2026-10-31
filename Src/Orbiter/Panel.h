@@ -80,6 +80,8 @@ public:
 	{ w = mfd[id].w, h = mfd[id].h; }
 
 	bool ProcessMouse (UINT event, DWORD state, int x, int y);
+	bool MFDAt (int x, int y, int &mfd, float &u, float &v, bool unbounded) const;
+	bool MFDToScreen (int mfd, float u, float v, float &x, float &y) const;
 
 	void GetMouseState (int &idx, int &state, int &mx, int &my) const;
 	//{ idx = idx_mfocus; state = mstate; mx = mousex, my = mousey; }

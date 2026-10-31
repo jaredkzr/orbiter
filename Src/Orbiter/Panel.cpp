@@ -119,6 +119,29 @@ void Panel::Move (LONG dx, LONG dy)
 	MFDMoved();
 }
 
+bool Panel::MFDAt (int x, int y, int &id, float &u, float &v, bool unbounded) const
+{
+	for (int i = 0; i < MAXMFD; i++) {
+		if (unbounded && i != id) continue;
+		if (!mfd[i].exist || !pane->mfd[i].instr || mfd[i].w <= 0 || mfd[i].h <= 0) continue;
+		float uu = (x + 0.5f - (mfd[i].panel_pos.left + X0)) / mfd[i].w;
+		float vv = (y + 0.5f - (mfd[i].panel_pos.top + Y0)) / mfd[i].h;
+		if (unbounded || (uu >= 0.0f && uu < 1.0f && vv >= 0.0f && vv < 1.0f)) {
+			id = i, u = uu, v = vv;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool Panel::MFDToScreen (int i, float u, float v, float &x, float &y) const
+{
+	if (i < 0 || i >= MAXMFD || !mfd[i].exist) return false;
+	x = mfd[i].panel_pos.left + X0 + u * mfd[i].w;
+	y = mfd[i].panel_pos.top + Y0 + v * mfd[i].h;
+	return true;
+}
+
 void Panel::MFDMoved ()
 {
 	for (int i = 0; i < MAXMFD; i++) {

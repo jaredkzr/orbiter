@@ -8,6 +8,7 @@
 #include "Vessel.h"
 #include "Log.h"
 #include "Util.h"
+#include "Mesh.h"
 
 using namespace std;
 
@@ -343,6 +344,89 @@ bool VirtualCockpit::SetClickZone_Quadrilateral (int i,
 
 	area[i]->cmode = Area::CMODE_QUAD;
 	return true;
+}
+
+bool VirtualCockpit::MFDAt (int x, int y, int &id, float &u, float &v, bool unbounded)
+{
+	Vessel *vessel = g_focusobj;
+	if (!vessel) return false;
+	// vessel-local mouse ray
+	Vector gdir;
+	g_camera->ViewportToGlobalDir (x, y, gdir);
+	Vector ldir (tmul (vessel->GRot(), gdir));
+	Vector cpos (tmul (vessel->GRot(), *g_camera->GPosPtr() - vessel->GPos()));
+
+	double best = 1e30;
+	bool found = false;
+	for (int i = 0; i < MAXMFD; i++) {
+		if (unbounded && i != id) continue;
+		if (!pane->mfd[i].exist || !pane->mfd[i].instr) continue;
+		DWORD nmesh = pane->mfd[i].prm.nmesh, ngroup = pane->mfd[i].prm.ngroup;
+		Mesh *mesh = (Mesh*)vessel->GetMeshTemplate (nmesh);
+		if (!mesh) {
+			const char *name = vessel->GetMeshName (nmesh);
+			if (name && *name) mesh = (Mesh*)g_pOrbiter->LoadMeshGlobal (name);
+		}
+		if (!mesh) continue;
+		GroupSpec *grp = mesh->GetGroup (ngroup);
+		if (!grp || grp->nIdx < 3) continue;
+		Vector o (cpos - vessel->GetMeshOffset (nmesh)); // ray origin in mesh coordinates
+		for (DWORD t = 0; t + 2 < grp->nIdx; t += 3) {
+			const NTVERTEX &a = grp->Vtx[grp->Idx[t]], &b = grp->Vtx[grp->Idx[t+1]], &c = grp->Vtx[grp->Idx[t+2]];
+			Vector p0 (a.x, a.y, a.z), e1 (Vector (b.x, b.y, b.z) - p0), e2 (Vector (c.x, c.y, c.z) - p0);
+			// Moller-Trumbore
+			Vector pv (crossp (ldir, e2));
+			double det = dotp (e1, pv);
+			if (fabs (det) < 1e-12) continue;
+			Vector tv (o - p0);
+			double b1 = dotp (tv, pv) / det;
+			Vector qv (crossp (tv, e1));
+			double b2 = dotp (ldir, qv) / det;
+			double dist = dotp (e2, qv) / det;
+			if (dist <= 0.0) continue;
+			if (!unbounded && (b1 < 0.0 || b2 < 0.0 || b1 + b2 > 1.0)) continue;
+			if (dist >= best) continue;
+			double b0 = 1.0 - b1 - b2;
+			best = dist;
+			id = i;
+			u = (float)(b0*a.tu + b1*b.tu + b2*c.tu);
+			v = (float)(b0*a.tv + b1*b.tv + b2*c.tv);
+			found = true;
+			if (unbounded) return true;
+		}
+	}
+	return found;
+}
+
+bool VirtualCockpit::MFDToScreen (int id, float u, float v, float &x, float &y)
+{
+	Vessel *vessel = g_focusobj;
+	if (!vessel || id < 0 || id >= MAXMFD || !pane->mfd[id].exist) return false;
+	DWORD nmesh = pane->mfd[id].prm.nmesh, ngroup = pane->mfd[id].prm.ngroup;
+	Mesh *mesh = (Mesh*)vessel->GetMeshTemplate (nmesh);
+	if (!mesh) {
+		const char *name = vessel->GetMeshName (nmesh);
+		if (name && *name) mesh = (Mesh*)g_pOrbiter->LoadMeshGlobal (name);
+	}
+	GroupSpec *grp = mesh ? mesh->GetGroup (ngroup) : 0;
+	if (!grp) return false;
+	// the triangle containing (u, v) in texture space
+	for (DWORD t = 0; t + 2 < grp->nIdx; t += 3) {
+		const NTVERTEX &a = grp->Vtx[grp->Idx[t]], &b = grp->Vtx[grp->Idx[t+1]], &c = grp->Vtx[grp->Idx[t+2]];
+		double det = (b.tu-a.tu)*(c.tv-a.tv) - (c.tu-a.tu)*(b.tv-a.tv);
+		if (fabs (det) < 1e-12) continue;
+		double b1 = ((u-a.tu)*(c.tv-a.tv) - (c.tu-a.tu)*(v-a.tv)) / det;
+		double b2 = ((b.tu-a.tu)*(v-a.tv) - (u-a.tu)*(b.tv-a.tv)) / det;
+		if (b1 < -1e-6 || b2 < -1e-6 || b1 + b2 > 1.0 + 1e-6) continue;
+		double b0 = 1.0 - b1 - b2;
+		Vector p (b0*a.x + b1*b.x + b2*c.x, b0*a.y + b1*b.y + b2*c.y, b0*a.z + b1*b.z + b2*c.z);
+		Vector g (vessel->GPos() + mul (vessel->GRot(), p + vessel->GetMeshOffset (nmesh)));
+		double sx, sy;
+		if (!g_camera->GlobalToViewport (g, sx, sy)) return false;
+		x = (float)sx, y = (float)sy;
+		return true;
+	}
+	return false;
 }
 
 bool VirtualCockpit::ProcessMouse (UINT event, DWORD state, int x, int y)

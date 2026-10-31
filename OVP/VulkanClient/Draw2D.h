@@ -55,6 +55,7 @@ public:
 	/// target to a render-target surface if required.
 	bool Begin (VkTexture *tgt);
 	VkTexture *Target () const { return target; }
+	TextureManager *Textures () const { return texmgr; }
 	VkExtent2D TargetSize () const;
 
 	/// Append triangles to the batch of the current target

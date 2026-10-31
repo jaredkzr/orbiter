@@ -43,6 +43,13 @@ The function of the buttons to the left and right of the display depends on the 
 Function buttons for the two main MFD instruments can also be activated with \Shift-key combinations. On pressing the MNU button below the bottom edge of the screen (keyboard shortcut: \Shift\keystroke{`}) a short description of all function buttons for this mode is displayed, together with the keyboard shortcuts to activate them. Pressing MNU again, or pressing a function button, restores the display.\\
 In glass cockpit view, and in most instrument panels in Orbiter, each MFD has 12 function buttons, but individual spacecraft can adopt a different layout in their panels. If an MFD mode assigns more function buttons than are physically present, pressing MNU repeatedly cycles through the available function pages.\\
 \\
+\textbf{Pointing at the display}\\
+Many MFD modes can also be operated on the display itself: with the mouse in the glass cockpit, on 2D panels and in the virtual cockpit (where the mouse pointer is traced to the display surface), or with a gamepad (pressing the right stick switches the gamepad cursor on and off: the right stick then moves the pointer, A and B are the left and right mouse buttons, the d-pad up and down turn the wheel). Displays that support it show buttons, tabs, lists and number fields: a click on a number field opens a keypad (values can also be typed on the keyboard while it is open), the mouse wheel or dragging sideways changes it step by step. Charts can be zoomed with the wheel (over an axis: only that axis) and panned by dragging; a \textit{Reset} button returns to the original view. Hovering over an element shows a tooltip.\\
+Among the standard modes, the Orbit MFD shows the vessel's manoeuvre nodes and the orbits after them (a click on the orbit adds a node, which can then be edited in a panel on the display, or dragged along the orbit), the Align Orbital Plane and Transfer modes have a \textit{Node} button that adds a manoeuvre node for the burn they compute, and the wheel zooms the Map and Docking displays.\\
+\\
+\textbf{MFD windows}\\
+Additional MFDs can be opened in windows of their own inside the simulation window, with the \textit{MFD} entry of the main menu. Any number of them can be open; they can be moved, docked and resized (the display is drawn again at the new size once the window size settles), and they have the same buttons and pointer input as the cockpit MFDs. The windows open at the end of a session are opened again in the next one (they are listed in MFDWindows.cfg).\\
+\\
 \textbf{Colour customisation}\\
 The default colour schemes for MFD displays can be modified by editing the Config\textbackslash MFD\textbackslash default.cfg text file. Note that some add-on MFD Modes may define their own colour scheme which cannot be customised.
 
@@ -988,6 +995,61 @@ Using the Transfer MFD for Earth to Moon orbits should be straightforward. For i
 \item Immediately before the ejection burn, switch the source orbit to your ship, so that Dv can be estimated.
 \end{itemize}
 
+
+
+\subsection{Transfer Planner}
+\label{ssec:mfd_planner}
+The \textit{Transfer Planner} MFD mode (\Shift\keystroke{P}) plans transfers from the vessel's orbit to another body: to a planet with the same parent as the body the vessel orbits (for example from an Earth orbit to Mars), or to a moon of that body (from an Earth orbit to the Moon). It plans from the parking orbit, or from the ground: when to launch and in which direction. It finds the launch windows, shows the velocity change over departure date and flight time as a \textit{porkchop} chart, computes the ejection burn from the parking orbit, and makes the manoeuvre nodes of the whole flight: the ejection, mid-course corrections and the capture into an orbit about the target. The nodes can be flown by the burn autopilot. The display is operated with the mouse (see \textit{Pointing at the display} above) or with the function buttons. Its pages are selected with the tabs at the top:
+
+\begin{itemize}
+\item \textbf{Setup:} the target, the objective (the least total velocity change, ejection and capture; or the least ejection velocity change, for a flyby or an aerocapture), the periapsis and apoapsis altitudes of the orbit at the target (equal: a circular orbit), the plane of the arrival (the target's equator, or as the trajectory arrives) and the mid-course corrections (when, as a part of the flight time). \textit{Search} computes the launch windows and the chart of the first good window.
+\item \textbf{Chart:} the porkchop chart: the velocity change (blue: least, red: most) over departure date (horizontal) and flight time (vertical), with contours. The cross marks the optimum. Hovering shows the date, flight time and velocity change; a click selects that transfer. \textit{Optimum} selects the optimum again; \textit{Make nodes} makes the manoeuvre nodes of the selected transfer, \textit{Make \& arm} also hands them to the burn autopilot.
+\item \textbf{Dates:} the least velocity change for each departure date over the next years, with the launch windows marked. A click makes a chart around that date.
+\item \textbf{Launch:} for a vessel on the ground: the launches into a parking orbit from which the selected transfer leaves without a plane change. The parking orbit must contain the direction the transfer leaves in (the departure asymptote, or for a moon the direction to it at the arrival); as the launch site turns with the planet, a launch into such an orbit is cheapest at certain times of the day, usually twice (heading north-east and south-east) or, if the site's latitude is higher than the inclination needed, once (due east). The page lists these opportunities around the departure with the lift-off time, the heading (azimuth from north), the orbit's inclination and the total velocity change; for the chosen one it shows the coast in orbit, the ejection (time and velocity change), and the ascent: the orbital speed less the ground's speed for a launch due east (without gravity and drag losses), and the extra a launch on this heading costs. The parking orbit altitude, the ascent time (lift-off to insertion) and the least coast before the ejection can be set at the top. Fly the ascent at the given time and heading; once in orbit, \textit{Search} and \textit{Make nodes} plan the ejection from the orbit as flown. On the ground, the Burn page and the map view show the planned parking orbit, the insertion, the ejection burn and the departure asymptote.
+\item \textbf{Burn:} the selected transfer: the time of the ejection burn and the countdown to it, the arrival, the flight time, the departure energy C3 and the hyperbolic excess speed, the ejection and capture velocity changes and the burn's components (prograde, normal, radial). The diagram shows the parking orbit from above, the burn point and direction, the departure direction and the direction to the parent body. If the parking orbit is not aligned with the departure direction, the burn includes a plane change, which is reported.
+\item \textbf{Cruise:} the burns of the plan (ejection, corrections, capture) with their times and velocity changes, the predicted arrival (periapsis altitude against the target, inclination and the least inclination the arrival allows) and the B-plane: the targeted point and the predicted one. \textit{Correct now} computes the next correction from the trajectory as flown.
+\item \textbf{Budget:} the velocity changes of the plan (with a reserve for corrections) against the velocity change the vessel's main engines can give with its propellant, and the margin.
+\end{itemize}
+
+\noindent
+The search uses patched conics (Lambert's problem between the two bodies, a hyperbolic ejection from the parking orbit). \textit{Make nodes} then refines the ejection with the trajectory prediction of the map view (the gravity of all bodies), until the predicted trajectory passes the target at the chosen periapsis; the capture burn is placed at that periapsis. Since a long coast in a low orbit drifts from any prediction, the ejection is targeted again about two orbits before it. Corrections are computed shortly before they are due, from the trajectory as flown, and become manoeuvre nodes if they are needed (switch this off in Setup to compute them only with \textit{Correct now}). The planned transfer is drawn in the map view: the transfer orbit, the departure and target bodies where they will be at departure and arrival, the ejection burn and the departure asymptote.
+
+\begin{table}[H]
+	\centering
+	\begin{tabular}{lll}
+	\hline\rule{0pt}{2.5ex}
+	\textbf{Button} & \textbf{Key} & \textbf{Function}\\
+	\hline\rule{0pt}{2.5ex}
+	PG & \Shift\keystroke{P} & Next page\\
+	TGT & \Shift\keystroke{T} & Next target\\
+	SRC & \Shift\keystroke{S} & Search transfers\\
+	NOD & \Shift\keystroke{N} & Make the manoeuvre nodes of the selected transfer\\
+	ARM & \Shift\keystroke{A} & Fly the plan's nodes with the burn autopilot (on/off)\\
+	COR & \Shift\keystroke{C} & Compute the next correction now\\
+	OPT & \Shift\keystroke{O} & Select the optimum\\
+	CLR & \Shift\keystroke{X} & Remove the plan's nodes\\
+	\hline
+	\end{tabular}
+\end{table}
+
+\subsubsection{Gravity assists}
+\label{sssec:mfd_planner_assists}
+Switching on \textit{Advanced: gravity assists} on the Setup page plans routes that fly by other bodies on the way, as planetary missions do (Galileo reached Jupiter by Venus and twice by Earth; a tour of Jupiter's moons goes from one moon to the next). The flyby bodies orbit the same parent as the target: planets for a target planet, moons for a target moon (from an orbit about the planet, or from an orbit about another moon). With the switch off, the planner works as described above. With it on, the \textbf{Route} page takes the place of the chart:
+
+\begin{itemize}
+\item \textbf{The flybys:} the list of the flyby bodies in order, each with the least periapsis altitude allowed (by default the altitude of a parking orbit; set it for the selected flyby with the field below the buttons). Choose a body and \textit{Add} it after the selected flyby; \textit{Remove} takes the selected one out. A body may appear more than once (a return to Earth a year or two after leaving it).
+\item \textbf{Options:} \textit{Manoeuvres}: one deep-space manoeuvre on each leg, the flybys unpowered; otherwise a flyby whose incoming and outgoing speeds differ, or which must turn the trajectory more than the body can at the least altitude, is \textit{powered}: a burn at the periapsis. \textit{revs}: full revolutions about the parent allowed on a leg (more routes, such as resonant returns; but a leg of many months may pass a planet again, which the planning cannot target through, so 0 is the default). \textit{d max}: the longest flight in days (0: no limit).
+\item \textit{Search} finds the best route by these flybys; \textit{Suggest} searches routes with up to three flybys among the bodies whose orbits lie between half the smaller and 1.6 times the larger of the departure's and the target's, and lists the best few with the direct transfer for comparison (a click on one searches that route). \textit{Make nodes} targets the route and makes its nodes.
+\item \textbf{The route:} the departure, each flyby (date, periapsis altitude, the turn, the excess speeds in and out, the burn of a powered flyby, and after \textit{Make nodes} the predicted altitude), the manoeuvres, the arrival and the total. A leg that passes close to another body is reported.
+\end{itemize}
+
+\noindent
+The Dates page shows the route's velocity change by departure date near the best route (a click chooses that date); Burn shows the ejection; Cruise lists the burns and the flybys in time order with the predicted periapsis of each against its target; Budget adds the flyby burns or manoeuvres; the map view draws each leg, the flyby bodies where they will be at the flybys, and the manoeuvres. The map is centred on the body the vessel orbits; choose the Sun (or the planet, for a tour of its moons) as the \textit{Centre} in the map's panel to see the whole route among the planets' orbits. The map traces the orbits of the centre body's moons (the planets, about the Sun), and, zoomed out far enough, the centre body's own orbit and those of its neighbours.
+
+The search uses patched conics: Lambert's problem for each leg, the flybys as hyperbolas about the bodies, optimised over the departure date and the legs' times (and the manoeuvres' times and the departure velocity) by a global search. Routes whose legs pass close to another body (where the patched conics no longer describe the flight) are avoided. \textit{Make nodes} then targets each encounter in turn with the trajectory prediction: the ejection (or the first leg's manoeuvre) aims at the first flyby's B-plane point, the point that turns the trajectory as planned; a correction after each flyby (or the next leg's manoeuvre) aims at the next encounter; powered flybys become nodes at the periapses, the capture the last node. As with direct transfers, the corrections are computed again shortly before they are due. A flyby amplifies small errors, so the corrections after flybys are usually larger than those of a direct transfer; and in a planet's system of moons the patched conics are rough, so the correction after a moon flyby can be a hundred metres per second. Where an encounter cannot be targeted from far away (a slow arrival at a large planet with moons), the planner says the route is \textit{partly targeted}: the corrections on the way, closer in, aim at it again.
+
+\noindent
+Scripts can use the planner too: see the oapi.transfer\_search, transfer\_select, transfer\_nodes, transfer\_correct, transfer\_info, and for routes transfer\_route, transfer\_flybys, transfer\_suggest, transfer\_suggestions and transfer\_use\_suggestion functions of the Lua interface.
 
 
 \subsection{TransX}

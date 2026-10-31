@@ -41,6 +41,8 @@ private:
 	bool SelectRef (char *str);
 	bool SelectSrc (const char *str);
 	bool SetNstep (int np);
+	bool ProcessPointer (const MFDPOINTER &p);
+	void Interactive (oapi::Sketchpad *skp, double dte);
 	static bool ClbkEnter_Tgt (Select*, int, char*, void*);
 	static bool ClbkEnter_Ref (Select *menu, int item, char *str, void *data);
 	static bool ClbkEnter_Src (Select *menu, int item, char *str, void *data);
@@ -59,6 +61,9 @@ private:
 	int ICNTX, ICNTY, pixrad;    // instrument centre, orbit radius [pixel]
 	double tbdown, tbpress;      // time of last button down/button press event
 	bool dv_manip;               // manual manipulation of delta-v?
+	double l_drag = -1.0;        // ejection longitude being dragged to (-1: none)
+	Matrix ejRot;                // projection of the last draw (for dragging)
+	double ejScale = 0.0;
 
 	// numerical trajectory data
 	bool enable_num; // toggle numerical trajectory

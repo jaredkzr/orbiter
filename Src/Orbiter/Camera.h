@@ -277,6 +277,8 @@ public:
 	// Return product ProjectionMatrix * ViewMatrix
 
 	void ViewportToGlobalDir (double sx, double sy, Vector &gdir) const;
+	// Viewport position of a global position (inverse of ViewportToGlobalDir); false if behind the camera
+	bool GlobalToViewport (const Vector &gpos, double &sx, double &sy) const;
 	// converts viewport coordinates (pixels) into a direction vector
 	// in the global frame
 

@@ -17,16 +17,19 @@ namespace {
 
 	float Cross (float ax, float ay, float bx, float by) { return ax * by - ay * bx; }
 
+	// opacity of a colour 0xAABBGGRR (alpha 0: opaque, as for colours without one)
+	float AlphaOf (DWORD c) { DWORD a = c >> 24; return a ? a / 255.0f : 1.0f; }
+
 } // namespace
 
-VkPen::VkPen (int s, int w, DWORD c) : oapi::Pen (s, w, c), style(s), width((float)std::max (1, w))
+VkPen::VkPen (int s, int w, DWORD c) : oapi::Pen (s, w, c), style(s), width((float)std::max (1, w)), fwidth(width)
 {
-	ColorRefToLinear (c, 1.0f, col);
+	ColorRefToLinear (c, AlphaOf (c), col);
 }
 
 VkBrush::VkBrush (DWORD c) : oapi::Brush (c)
 {
-	ColorRefToLinear (c, 1.0f, col);
+	ColorRefToLinear (c, AlphaOf (c), col);
 }
 
 // ======================================================================
@@ -95,7 +98,7 @@ DWORD VkSketchpad::SetTextColor (DWORD col)
 {
 	DWORD prev = textColRef;
 	textColRef = col;
-	ColorRefToLinear (col, 1.0f, textCol);
+	ColorRefToLinear (col, AlphaOf (col), textCol);
 	return prev;
 }
 
@@ -147,6 +150,7 @@ void VkSketchpad::QuickPen (DWORD color, float width, DWORD style)
 {
 	quickPen = std::make_unique<VkPen> ((int)style, (int)std::lround (width), color);
 	quickPen->width = std::max (1.0f, width);
+	quickPen->fwidth = width;
 	pen = quickPen.get();
 }
 
@@ -472,4 +476,179 @@ void VkSketchpad::ColorKey (const SURFHANDLE hSrc, const LPRECT src, int tx, int
 		s, src->left, src->top, src->right - src->left, src->bottom - src->top, true);
 	r2d->Flush (); // the colour key is part of the batch state
 	s->ckey = prev;
+}
+
+// ======================================================================
+// Version 4: anti-aliased drawing
+
+namespace {
+	struct V2 { float x, y; };
+	V2 Norm (float x, float y) { float l = std::sqrt (x*x + y*y); return l > 1e-6f ? V2{ x / l, y / l } : V2{ 0.0f, 0.0f }; }
+}
+
+void VkSketchpad::StrokeAA (const P *in, int n, bool closed, float w, const float col[4])
+{
+	// drop repeated points
+	std::vector<P> p;
+	p.reserve (n);
+	for (int i = 0; i < n; i++)
+		if (p.empty() || std::fabs (in[i].x - p.back().x) + std::fabs (in[i].y - p.back().y) > 1e-3f) p.push_back (in[i]);
+	if (closed && p.size() > 2 && std::fabs (p.front().x - p.back().x) + std::fabs (p.front().y - p.back().y) <= 1e-3f) p.pop_back ();
+	int m = (int)p.size();
+	if (m < 2) return;
+	if (m == 2) closed = false;
+
+	// core half width and fringe; thin lines: full fringe, reduced opacity
+	float alpha = std::min (1.0f, w);
+	float hw = std::max (0.0f, 0.5f * w - 0.5f);
+	float fr = 1.0f;
+	float c1[4] = { col[0], col[1], col[2], col[3] * alpha };
+	float c0[4] = { col[0], col[1], col[2], 0.0f };
+
+	// segment directions
+	int nseg = closed ? m : m - 1;
+	std::vector<V2> dir (nseg);
+	for (int i = 0; i < nseg; i++) {
+		const P &a = p[i], &b = p[(i + 1) % m];
+		dir[i] = Norm (b.x - a.x, b.y - a.y);
+	}
+	// per vertex: position (ends extended by half a pixel) and mitred normal
+	std::vector<P> pos (m);
+	std::vector<V2> nrm (m);
+	for (int i = 0; i < m; i++) {
+		V2 d0, d1;
+		bool hasIn = closed || i > 0, hasOut = closed || i < m - 1;
+		if (hasIn) d0 = dir[(i + nseg - 1) % nseg];
+		if (hasOut) d1 = dir[i % nseg];
+		if (!hasIn) d0 = d1;
+		if (!hasOut) d1 = d0;
+		V2 n0 = { -d0.y, d0.x }, n1 = { -d1.y, d1.x };
+		V2 nm = Norm (n0.x + n1.x, n0.y + n1.y);
+		float cs = nm.x * n1.x + nm.y * n1.y;
+		float miter = (cs > 0.25f) ? 1.0f / cs : 4.0f; // limit
+		nrm[i] = { nm.x * miter, nm.y * miter };
+		pos[i] = p[i];
+		if (!closed && i == 0) pos[i] = { p[i].x - d1.x * 0.5f, p[i].y - d1.y * 0.5f };
+		if (!closed && i == m - 1) pos[i] = { p[i].x + d0.x * 0.5f, p[i].y + d0.y * 0.5f };
+	}
+
+	DrawState2D st = SolidState ();
+	auto Vtx = [&](Vtx2D &v, const P &q, const V2 &nn, float off, const float c[4]) {
+		v = { q.x + nn.x * off, q.y + nn.y * off, 0, 0, c[0], c[1], c[2], c[3] };
+	};
+	// rows across the strip: -(hw+fr), -hw, +hw, +(hw+fr)
+	const float off[4] = { -(hw + fr), -hw, hw, hw + fr };
+	const float *rc[4] = { c0, c1, c1, c0 };
+	for (int s = 0; s < nseg; s++) {
+		int a = s, b = (s + 1) % m;
+		int bands = (hw > 0.0f) ? 3 : 2;
+		Vtx2D *v = r2d->AddTris (st, 6 * 3);
+		if (!v) return;
+		int k = 0;
+		for (int band = 0; band < 3; band++) {
+			int r0 = band, r1 = band + 1;
+			if (bands == 2 && band == 1) { // zero-width core: degenerate
+				for (int q = 0; q < 6; q++) Vtx (v[k++], pos[a], nrm[a], 0.0f, c0);
+				continue;
+			}
+			Vtx2D va, vb, vc, vd;
+			Vtx (va, pos[a], nrm[a], off[r0], rc[r0]);
+			Vtx (vb, pos[b], nrm[b], off[r0], rc[r0]);
+			Vtx (vc, pos[b], nrm[b], off[r1], rc[r1]);
+			Vtx (vd, pos[a], nrm[a], off[r1], rc[r1]);
+			v[k++] = va, v[k++] = vb, v[k++] = vc;
+			v[k++] = va, v[k++] = vc, v[k++] = vd;
+		}
+	}
+}
+
+void VkSketchpad::FillAA (const P *pts, int n, const float col[4])
+{
+	if (n < 3) return;
+	// the polygon itself, with the brush colour
+	VkBrush *keep = brush;
+	VkBrush tmp (0);
+	memcpy (tmp.col, col, sizeof (tmp.col));
+	brush = &tmp;
+	Fill (pts, n);
+	brush = keep;
+
+	// soft fringe outside each edge
+	float area = 0.0f;
+	for (int i = 0; i < n; i++) area += Cross (pts[i].x, pts[i].y, pts[(i + 1) % n].x, pts[(i + 1) % n].y);
+	float sgn = (area >= 0.0f) ? 1.0f : -1.0f; // outward normal of edge d: sgn * (d.y, -d.x)
+	std::vector<V2> en (n);
+	for (int i = 0; i < n; i++) {
+		const P &a = pts[i], &b = pts[(i + 1) % n];
+		V2 d = Norm (b.x - a.x, b.y - a.y);
+		en[i] = { sgn * d.y, -sgn * d.x };
+	}
+	float c0[4] = { col[0], col[1], col[2], 0.0f };
+	DrawState2D st = SolidState ();
+	for (int i = 0; i < n; i++) {
+		int j = (i + 1) % n;
+		V2 na = Norm (en[(i + n - 1) % n].x + en[i].x, en[(i + n - 1) % n].y + en[i].y);
+		V2 nb = Norm (en[i].x + en[j].x, en[i].y + en[j].y);
+		Vtx2D *v = r2d->AddTris (st, 6);
+		if (!v) return;
+		const P &a = pts[i], &b = pts[j];
+		Vtx2D va{ a.x, a.y, 0, 0, col[0], col[1], col[2], col[3] };
+		Vtx2D vb{ b.x, b.y, 0, 0, col[0], col[1], col[2], col[3] };
+		Vtx2D vc{ b.x + nb.x, b.y + nb.y, 0, 0, c0[0], c0[1], c0[2], 0.0f };
+		Vtx2D vd{ a.x + na.x, a.y + na.y, 0, 0, c0[0], c0[1], c0[2], 0.0f };
+		v[0] = va, v[1] = vb, v[2] = vc, v[3] = va, v[4] = vc, v[5] = vd;
+	}
+}
+
+void VkSketchpad::PolylineF (const oapi::FVECTOR2 *pt, int npt, bool closed)
+{
+	if (!pen || pen->style == 0 || npt < 2) return;
+	std::vector<P> p (npt);
+	for (int i = 0; i < npt; i++) p[i] = { pt[i].x + ox, pt[i].y + oy };
+	if (pen->style == 2) { // dashed: the basic stroke
+		dashPos = 0.0f;
+		Stroke (p.data(), npt, closed);
+		return;
+	}
+	StrokeAA (p.data(), npt, closed, pen->fwidth, pen->col);
+}
+
+void VkSketchpad::PolygonF (const oapi::FVECTOR2 *pt, int npt)
+{
+	if (npt < 3) return;
+	std::vector<P> p (npt);
+	for (int i = 0; i < npt; i++) p[i] = { pt[i].x + ox, pt[i].y + oy };
+	if (brush) FillAA (p.data(), npt, brush->col);
+	if (pen && pen->style) {
+		if (pen->style == 2) { dashPos = 0.0f; Stroke (p.data(), npt, true); }
+		else StrokeAA (p.data(), npt, true, pen->fwidth, pen->col);
+	}
+}
+
+void VkSketchpad::Image (const DWORD *pix, int w, int h, float x0, float y0, float x1, float y1, bool smooth)
+{
+	if (!pix || w < 1 || h < 1) return;
+	TextureManager *tm = r2d->Textures ();
+	if (!tm) return;
+	std::vector<uint8_t> rgba ((size_t)w * h * 4);
+	for (size_t i = 0; i < (size_t)w * h; i++) {
+		DWORD c = pix[i];
+		rgba[4*i+0] = (uint8_t)(c & 0xFF);
+		rgba[4*i+1] = (uint8_t)((c >> 8) & 0xFF);
+		rgba[4*i+2] = (uint8_t)((c >> 16) & 0xFF);
+		rgba[4*i+3] = (uint8_t)(c >> 24);
+	}
+	VkTexture *tex = tm->CreateRGBA ((uint32_t)w, (uint32_t)h, rgba.data());
+	if (!tex) return;
+	DrawState2D st = SolidState ();
+	st.tex = tex;
+	st.fetch = !smooth;
+	float white[4] = { 1, 1, 1, 1 };
+	x0 += ox, x1 += ox, y0 += oy, y1 += oy;
+	if (smooth)
+		r2d->Quad (st, x0, y0, x1, y1, 0.0f, 0.0f, 1.0f, 1.0f, white);
+	else
+		r2d->Quad (st, x0, y0, x1, y1, 0.0f, 0.0f, (float)w, (float)h, white);
+	r2d->Flush (); // the texture is released below (its destruction waits for the frame)
+	tm->Release (tex);
 }

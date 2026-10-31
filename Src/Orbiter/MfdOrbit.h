@@ -9,6 +9,7 @@
 #define __MFD_ORBIT_H
 
 #include "Mfd.h"
+#include <vector>
 
 class Instrument_Orbit: public Instrument {
 public:
@@ -35,6 +36,17 @@ protected:
 
 private:
 	void DisplayOrbit (oapi::Sketchpad *skp, int which, oapi::IVECTOR2 *p);
+
+	// anti-aliased orbit graphs and pointer interaction (clients with
+	// Sketchpad version 4): orbits, manoeuvre nodes and the orbits after them
+	void DisplayOrbitF (int which, const Elements *el, const Matrix &irot, bool dashed = false, DWORD col = 0);
+	void SampleOrbit (const Elements *el, const Matrix &irot, std::vector<oapi::FVECTOR2> &pt, std::vector<double> *ta) const;
+	oapi::FVECTOR2 ToScreen (const Vector &p, const Matrix &irot) const; // element-frame position
+	Vector ToElFrame (const Vector &v) const;   // global orientation -> element frame
+	Vector FromElFrame (const Vector &v) const;
+	double TimeToTA (const Elements *el, double ta) const; // [s] until the true anomaly is reached
+	void DrawInteractive (const Matrix &irot);
+	void DrawNodePanel ();
 	void DisplayElements (oapi::Sketchpad *skp, const Elements *el, int x, int y);
 	void SetRef (const CelestialBody *ref);
 	bool SelectRef (char *str);
@@ -63,6 +75,9 @@ private:
 	double scale;  // scaling factor for world->screen mapping
 	int pixrad;    // max pixel radius for orbit display
 	int elref_rad; // pixel radius of central object
+	double zoom = 1.0; // graph zoom (mouse wheel)
+	int selNode = -1;  // selected manoeuvre node (-1: none)
+	bool v4 = false;   // drawing with the anti-aliased functions
 
 	// GDI resources
 	oapi::Brush *brush[2];

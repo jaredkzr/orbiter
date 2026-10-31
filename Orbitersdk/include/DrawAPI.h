@@ -1709,6 +1709,39 @@ public:
 	* \Note Only works in perspective projection
 	*/
 	virtual void SetWorldBillboard(const FVECTOR3& wpos, float scl = 1.0f, bool bFixed = true, const FVECTOR3 *index = NULL) { assert(false); }
+
+	/**
+	 * \name Version 4: anti-aliased drawing at fractional pixel positions
+	 * Only available if GetVersion() >= 4 (check before calling: older
+	 * graphics clients don't have these functions). The colours of pens,
+	 * brushes and text may carry an opacity in the top byte (0xAABBGGRR;
+	 * 0 is taken as opaque, as for older code).
+	 */
+	//@{
+	/**
+	 * \brief Draws a polyline with the current pen, anti-aliased.
+	 * \param pt vertices [pixels, fractional; the pixel (i,j) covers i..i+1, j..j+1]
+	 * \param npt number of vertices
+	 * \param closed connect the last vertex to the first
+	 * \note The origin (SetOrigin) is applied.
+	 */
+	virtual void PolylineF (const FVECTOR2 *pt, int npt, bool closed = false) { assert(false); }
+
+	/**
+	 * \brief Fills a simple polygon with the current brush and outlines it
+	 *   with the current pen (if any), anti-aliased.
+	 */
+	virtual void PolygonF (const FVECTOR2 *pt, int npt) { assert(false); }
+
+	/**
+	 * \brief Draws an image from memory, scaled to a rectangle.
+	 * \param pix w x h pixels, rows from the top, each 0xAABBGGRR (alpha 0: transparent)
+	 * \param x0, y0, x1, y1 target rectangle [pixels, fractional]
+	 * \param smooth bilinear filtering (otherwise nearest pixel)
+	 * \note The image is copied: the caller may free pix afterwards.
+	 */
+	virtual void Image (const DWORD *pix, int w, int h, float x0, float y0, float x1, float y1, bool smooth = true) { assert(false); }
+	//@}
 private:
 	SURFHANDLE surf;
 };

@@ -1,0 +1,39 @@
+# MFD windows (Tests/Input/Orbit.scn, external view): open one, add a
+# manoeuvre node by clicking the orbit in it, switch its mode with SEL,
+# power it off and on, resize it, close it.
+
+lua v = vessel.get_focusinterface ()
+wait 10
+lua slot = oapi.open_mfdwindow (MFDMODE.ORBIT)
+lua check ("open", slot == 0 and oapi.get_mfdwindowmode (slot) == MFDMODE.ORBIT, string.format ("slot %d mode %d", slot, oapi.get_mfdwindowmode (slot)))
+
+# pointer input on the display
+waitfor @mfdwin0.orbit.25
+click @mfdwin0.orbit.25
+waitfor @mfdwin0.Prograde
+lua check ("node", v:get_maneuvernodecount () == 1, string.format ("%d nodes", v:get_maneuvernodecount ()))
+move @mfdwin0.Prograde
+wheel 4
+wait 5
+lua check ("wheel", math.abs (v:get_maneuvernode (0).dv.x - 4) < 1e-9, string.format ("prograde %.2f m/s", v:get_maneuvernode (0).dv.x))
+
+# resizing: the display is recreated at the new size, in the same mode
+drag @mfdwin0.window.br @mfdwin0.window.br->@mfdwin0.window.title*-0.6 20
+wait 40
+waitfor @mfdwin0.orbit.25
+lua check ("resize", oapi.get_mfdwindowmode (slot) == MFDMODE.ORBIT, "orbit MFD after resizing")
+
+# PWR off and on
+click @mfdwin0.btn.PWR
+wait 5
+lua check ("off", oapi.get_mfdwindowmode (slot) == MFDMODE.NONE, "off")
+click @mfdwin0.btn.PWR
+wait 5
+lua check ("on", oapi.get_mfdwindowmode (slot) == MFDMODE.ORBIT, "on again")
+
+# closing
+lua oapi.close_mfdwindow (slot)
+wait 5
+lua check ("close", oapi.get_mfdwindowmode (slot) == MFDMODE.NONE, "closed")
+lua check ("reopen", oapi.open_mfdwindow (MFDMODE.SURFACE) == 0 and oapi.get_mfdwindowmode (0) == MFDMODE.SURFACE, "slot 0 reused")
+exit

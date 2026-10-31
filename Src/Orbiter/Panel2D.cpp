@@ -176,6 +176,61 @@ int Panel2D::RegisterMFDGeometry (int MFD_id, int nmesh, int ngroup)
 	return 0;
 }
 
+bool Panel2D::MFDAt (int x, int y, int &id, float &u, float &v, bool unbounded) const
+{
+	if (!hBkgMesh || !visible) return false;
+	Mesh *mesh = (Mesh*)hBkgMesh;
+	double px = x + 0.5, py = y + 0.5;
+	for (int i = 0; i < MAXMFD; i++) {
+		if (unbounded && i != id) continue;
+		if (mfdspec[i].nmsh < 0 || !pane->mfd[i].instr) continue;
+		GroupSpec *grp = mesh->GetGroup (mfdspec[i].ngrp);
+		if (!grp || grp->nIdx < 3) continue;
+		// barycentric coordinates in the screen projection of the group's triangles
+		for (DWORD t = 0; t + 2 < grp->nIdx; t += 3) {
+			double sx[3], sy[3];
+			for (int k = 0; k < 3; k++) {
+				const NTVERTEX &vt = grp->Vtx[grp->Idx[t+k]];
+				sx[k] = transf.m11*vt.x + transf.m12*vt.y + transf.m13;
+				sy[k] = transf.m21*vt.x + transf.m22*vt.y + transf.m23;
+			}
+			double det = (sx[1]-sx[0])*(sy[2]-sy[0]) - (sx[2]-sx[0])*(sy[1]-sy[0]);
+			if (fabs (det) < 1e-9) continue;
+			double b1 = ((px-sx[0])*(sy[2]-sy[0]) - (sx[2]-sx[0])*(py-sy[0])) / det;
+			double b2 = ((sx[1]-sx[0])*(py-sy[0]) - (px-sx[0])*(sy[1]-sy[0])) / det;
+			double b0 = 1.0 - b1 - b2;
+			if (!unbounded && (b0 < 0.0 || b1 < 0.0 || b2 < 0.0)) continue;
+			const NTVERTEX &a = grp->Vtx[grp->Idx[t]], &b = grp->Vtx[grp->Idx[t+1]], &c = grp->Vtx[grp->Idx[t+2]];
+			id = i;
+			u = (float)(b0*a.tu + b1*b.tu + b2*c.tu);
+			v = (float)(b0*a.tv + b1*b.tv + b2*c.tv);
+			return true;
+		}
+	}
+	return false;
+}
+
+bool Panel2D::MFDToScreen (int id, float u, float v, float &x, float &y) const
+{
+	if (!hBkgMesh || id < 0 || id >= MAXMFD || mfdspec[id].nmsh < 0) return false;
+	GroupSpec *grp = ((Mesh*)hBkgMesh)->GetGroup (mfdspec[id].ngrp);
+	if (!grp) return false;
+	for (DWORD t = 0; t + 2 < grp->nIdx; t += 3) {
+		const NTVERTEX &a = grp->Vtx[grp->Idx[t]], &b = grp->Vtx[grp->Idx[t+1]], &c = grp->Vtx[grp->Idx[t+2]];
+		double det = (b.tu-a.tu)*(c.tv-a.tv) - (c.tu-a.tu)*(b.tv-a.tv);
+		if (fabs (det) < 1e-12) continue;
+		double b1 = ((u-a.tu)*(c.tv-a.tv) - (c.tu-a.tu)*(v-a.tv)) / det;
+		double b2 = ((b.tu-a.tu)*(v-a.tv) - (u-a.tu)*(b.tv-a.tv)) / det;
+		if (b1 < -1e-6 || b2 < -1e-6 || b1 + b2 > 1.0 + 1e-6) continue;
+		double b0 = 1.0 - b1 - b2;
+		double px = b0*a.x + b1*b.x + b2*c.x, py = b0*a.y + b1*b.y + b2*c.y;
+		x = (float)(transf.m11*px + transf.m12*py + transf.m13 - 0.5);
+		y = (float)(transf.m21*px + transf.m22*py + transf.m23 - 0.5);
+		return true;
+	}
+	return false;
+}
+
 Instrument::Spec Panel2D::GetMFDSpec (int MFD_id) const
 {
 	Instrument::Spec spec;

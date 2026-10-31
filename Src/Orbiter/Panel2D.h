@@ -73,6 +73,10 @@ public:
 	 */
 	int SetBackground (SURFHANDLE *hSurface, DWORD nsurf, MESHHANDLE hMesh, DWORD width, DWORD height, DWORD baseline, DWORD scrollflag);
 
+	/// MFD display under a screen point (u, v: position in it, 0..1)
+	bool MFDAt (int x, int y, int &mfd, float &u, float &v, bool unbounded) const;
+	bool MFDToScreen (int mfd, float u, float v, float &x, float &y) const;
+
 	/**
 	 * \brief Set panel scaling factors
 	 * \param scale1 default scale factor

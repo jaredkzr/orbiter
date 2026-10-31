@@ -1,0 +1,33 @@
+BEGIN_HYPERDESC
+<h1>Transfer planning: gravity assists</h1>
+A delta-glider in a 300 km Earth orbit in February 2023. The script plans a
+route to Mars by a Venus flyby (patched conics, then each encounter targeted
+in full gravity) and searches routes to Jupiter with up to three flybys.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 60000.0
+  Script Tests/RoutePlanTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship GL-R
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET GL-R
+  MODE Extern
+  POS 4 0 -20
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+GL-R:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 6671000.0 0.00000 28.5 0.0 0.0 0.0 60000.0
+  AROT 0 0 0
+  PRPLEVEL 0:1.000 1:1.000
+END
+END_SHIPS

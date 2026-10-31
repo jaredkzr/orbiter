@@ -24,7 +24,7 @@ namespace {
 	const double ATOL_V = 1e-4;     // [m/s]
 	const double MAX_ANGLE = 1.5*RAD; // largest step as an angle about the reference body
 	const size_t MAX_STEPS = 400000;
-	const int MAX_SOI_CHANGES = 8;
+	const int MAX_SOI_CHANGES = 16;
 	const double MOON_RANGE = 40.0;   // moons pull while the vessel is within this many orbit radii of their planet
 }
 
@@ -59,6 +59,7 @@ struct Predictor::Input {
 	int targetIdx = -1;                   // target celestial body index
 	std::vector<BodySnap> bodies;
 	double tmax = 0.0;
+	bool toEnd = false;                   // up to tmax (not ending after a bound orbit without nodes)
 	unsigned int serial = 0;
 	const Vessel *vessel = nullptr;
 };
@@ -172,6 +173,26 @@ struct Predictor::Context {
 		for (size_t i = 0; i < n; i++)
 			if (in->bodies[i].analytic) Rel ((int)i, in->t0, rel0[i], relv0[i]);
 		if (nsample > 2000000) cache.clear(), nsample = 0; // (bound the memory)
+	}
+
+	// global states of all the bodies at time t (parents first)
+	void AllBodies (double t)
+	{
+		for (size_t i = 0; i < in->bodies.size(); i++) {
+			const auto &b = in->bodies[i];
+			active[i] = 1;
+			if (!b.analytic) { G[i] = b.g0 + b.gv0 * (t - in->t0), GV[i] = b.gv0; continue; }
+			Vector p, v;
+			Rel ((int)i, t, p, v);
+			Vector dp (p - rel0[i]), dv (v - relv0[i]);
+			if (b.parent >= 0) {
+				const auto &pb = in->bodies[b.parent];
+				dp += G[b.parent] - pb.g0;
+				dv += GV[b.parent] - pb.gv0;
+			}
+			G[i] = b.g0 + dp, GV[i] = b.gv0 + dv;
+		}
+		tEval = -1e100;
 	}
 
 	// global states of the bodies acting on a vessel at r at time t (parents first)
@@ -311,19 +332,10 @@ void Predictor::Reset ()
 	lastNodeVersion = ~0u;
 }
 
-void Predictor::Update (const Vessel *v, const Body *target)
+std::shared_ptr<Predictor::Input> Predictor::Snapshot (const Vessel *v, const Body *target, double days)
 {
-	if (!v) return;
-	double sys = td.SysT1, sim = td.SimT1;
-	bool changed = (v != lastVessel || target != lastTarget || v->ManeuverVersion() != lastNodeVersion);
-	bool thrust = v->ThrustEngaged() || v->Burn().phase == Vessel::BurnState::BURN;
-	auto cur = Latest();
-	bool stale = cur && sim > cur->t0 + 0.5 * (cur->t1 - cur->t0);
-	bool due = (thrust ? sys - lastRequestSys > 0.2 : sys - lastRequestSys > 5.0) ||
-		(stale && sys - lastRequestSys > 0.2) || (!cur && sys - lastRequestSys > 1.0);
-	if (!changed && !due) return;
-	if (v->GetStatus() != FLIGHTSTATUS_FREEFLIGHT) return; // (landed: nothing to predict)
-
+	if (!v || v->GetStatus() != FLIGHTSTATUS_FREEFLIGHT) return nullptr;
+	double sim = td.SimT1;
 	auto in = std::make_shared<Input>();
 	in->t0 = sim;
 	in->vessel = v;
@@ -335,7 +347,7 @@ void Predictor::Update (const Vessel *v, const Body *target)
 		in->burnDvg = v->Burn().dvg;
 	}
 	in->target = target;
-	in->tmax = sim + maxDays * 86400.0;
+	in->tmax = sim + days * 86400.0;
 
 	size_t n = g_psys->nGrav();
 	in->bodies.resize (n);
@@ -380,13 +392,31 @@ void Predictor::Update (const Vessel *v, const Body *target)
 		for (int c : in->bodies[i].children)
 			if (c < (int)i) {
 				LOGOUT_WARN ("Trajectory prediction: body order not parent-first; skipping");
-				return;
+				return nullptr;
 			}
 
 	if (const Vessel *tv = dynamic_cast<const Vessel*> (target)) {
 		in->targetVessel = true;
 		in->tr0 = tv->GPos(), in->tv0 = tv->GVel();
 	}
+	return in;
+}
+
+void Predictor::Update (const Vessel *v, const Body *target)
+{
+	if (!v) return;
+	double sys = td.SysT1, sim = td.SimT1;
+	bool changed = (v != lastVessel || target != lastTarget || v->ManeuverVersion() != lastNodeVersion);
+	bool thrust = v->ThrustEngaged() || v->Burn().phase == Vessel::BurnState::BURN;
+	auto cur = Latest();
+	bool stale = cur && sim > cur->t0 + 0.5 * (cur->t1 - cur->t0);
+	bool due = (thrust ? sys - lastRequestSys > 0.2 : sys - lastRequestSys > 5.0) ||
+		(stale && sys - lastRequestSys > 0.2) || (!cur && sys - lastRequestSys > 1.0);
+	if (!changed && !due) return;
+	if (v->GetStatus() != FLIGHTSTATUS_FREEFLIGHT) return; // (landed: nothing to predict)
+
+	auto in = Snapshot (v, target, maxDays);
+	if (!in) return;
 	in->serial = ++serial;
 
 	{
@@ -414,7 +444,11 @@ void Predictor::Run ()
 			pending.reset();
 			abort = false;
 		}
-		Predict (*in, *ctx);
+		auto pred = Compute (*in, *ctx, abort);
+		if (pred) {
+			std::lock_guard<std::mutex> lock (mtx);
+			latest = pred;
+		}
 	}
 }
 
@@ -436,7 +470,7 @@ namespace {
 	const double e1 = 71.0/57600, e3 = -71.0/16695, e4 = 71.0/1920, e5 = -17253.0/339200, e6 = 22.0/525, e7 = -1.0/40;
 }
 
-void Predictor::Predict (const Input &in, Context &c)
+std::shared_ptr<Prediction> Predictor::Compute (const Input &in, Context &c, const std::atomic<bool> &abort)
 {
 	auto pred = std::make_shared<Prediction>();
 	pred->t0 = in.t0;
@@ -520,6 +554,7 @@ void Predictor::Predict (const Input &in, Context &c)
 			hmax = in.nodeT[nextNode] - t;
 			toNode = true;
 		}
+		if (in.toEnd && t + std::min (h, hmax) > in.tmax) hmax = std::max (in.tmax - t, 1e-3); // (end at tmax: Sandbox::Advance)
 		double hs = std::min (h, hmax);
 		if (hs <= 0.0) hs = 1e-3;
 
@@ -662,7 +697,7 @@ void Predictor::Predict (const Input &in, Context &c)
 
 		// end: impact, horizon, or a full revolution after the last node
 		if (impact || t >= in.tmax || soiChanges > MAX_SOI_CHANGES) break;
-		if (nextNode >= in.nodeT.size() && sweep >= 2.0 * Pi) {
+		if (nextNode >= in.nodeT.size() && sweep >= 2.0 * Pi && !in.toEnd) {
 			// (bound orbit completed; not if an SOI exit is still ahead)
 			Vector rr3, rv3;
 			RefState (ref[0], y[0], rr3, rv3);
@@ -675,10 +710,77 @@ void Predictor::Predict (const Input &in, Context &c)
 			if (sweep >= 4.0 * Pi) break;
 		}
 	}
-	if (abort) return;
+	if (abort) return nullptr;
 
 	pred->t1 = t;
+	pred->rEnd = y[0].r, pred->vEnd = y[0].v;
 	pred->complete = true;
-	std::lock_guard<std::mutex> lock (mtx);
-	latest = pred;
+	return pred;
+}
+
+// =======================================================================
+// Sandbox
+
+Sandbox::Sandbox (const Vessel *v, const Body *target, double days)
+{
+	in = Predictor::Snapshot (v, target, days);
+	if (in) {
+		ctx = std::make_unique<Predictor::Context>();
+		mjd0 = td.MJD_ref + in->t0 / 86400.0;
+	}
+}
+
+Sandbox::~Sandbox () {}
+
+double Sandbox::T0 () const { return in ? in->t0 : 0.0; }
+
+bool Sandbox::Advance (double mjd, const std::atomic<bool> *abort)
+{
+	if (!in) return false;
+	double t1 = (mjd - td.MJD_ref) * 86400.0;
+	static const std::atomic<bool> never (false);
+	// (in parts: a prediction ends after so many steps, months in a low orbit)
+	while (in->t0 < t1 - 1.0) {
+		if (abort && *abort) return false;
+		Predictor::Input run (*in);
+		run.nodes.clear (), run.nodeT.clear ();
+		run.burningNode = -1;
+		run.targetVessel = false;
+		run.tmax = t1;
+		run.toEnd = true;
+		auto p = Predictor::Compute (run, *ctx, abort ? *abort : never);
+		if (!p || p->t1 <= in->t0 + 1.0) return false;
+		// the snapshot moved there: the vessel, and the bodies as the prediction had them
+		ctx->Begin (run);
+		ctx->AllBodies (p->t1);
+		for (size_t i = 0; i < in->bodies.size(); i++) in->bodies[i].g0 = ctx->G[i], in->bodies[i].gv0 = ctx->GV[i];
+		in->t0 = p->t1;
+		in->r0 = p->rEnd, in->v0 = p->vEnd;
+		in->burningNode = -1;
+		mjd0 = td.MJD_ref + in->t0 / 86400.0;
+	}
+	return true;
+}
+
+void Sandbox::SetTarget (const CelestialBody *target)
+{
+	if (!in) return;
+	in->target = target;
+	in->targetIdx = -1;
+	for (size_t i = 0; i < in->bodies.size(); i++)
+		if (in->bodies[i].body == target) in->targetIdx = (int)i;
+}
+
+std::shared_ptr<const Prediction> Sandbox::Predict (const std::vector<maneuver::Node> &nodes, double days, const std::atomic<bool> *abort)
+{
+	if (!in) return nullptr;
+	Predictor::Input run (*in);
+	run.nodes = nodes;
+	run.nodeT.clear ();
+	for (const auto &n : nodes) run.nodeT.push_back ((n.mjd - td.MJD_ref) * 86400.0);
+	run.burningNode = -1;
+	run.tmax = in->t0 + days * 86400.0;
+	run.toEnd = true; // (planning: multi-revolution arcs, coasts before a later encounter)
+	static const std::atomic<bool> never (false);
+	return Predictor::Compute (run, *ctx, abort ? *abort : never);
 }

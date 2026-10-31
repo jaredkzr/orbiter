@@ -16,6 +16,7 @@
 #include "TimeData.h"
 #include <chrono>
 #include <memory>
+#include <map>
 
 class DInput;
 class Config;
@@ -40,6 +41,7 @@ namespace orbiter {
 namespace trajectory {
 	class Predictor;
 }
+namespace transfer { class Planner; }
 
 //-----------------------------------------------------------------------------
 // Structure for module callback functions
@@ -194,6 +196,9 @@ public:
 	const Body *PredictTarget () const { return predictTarget; }
 	void SetPredictTarget (const Body *target) { predictTarget = target; }
 	class MapView *GetMapView () const { return mapView; }
+	class MfdWindows *GetMfdWindows () const { return mfdWindows.get(); }
+	/// The transfer planner of a vessel (created on request)
+	transfer::Planner *TransferPlanner (Vessel *v, bool create = true);
 	class Replay *GetReplay () const { return replay; }
 
 	// Onscreen annotation
@@ -397,6 +402,8 @@ private:
 	std::unique_ptr<trajectory::Predictor> predictor; // (exists during a session)
 	const Body     *predictTarget = nullptr;
 	class MapView  *mapView = nullptr;      // map view and burn cue overlay (with a graphics client)
+	std::unique_ptr<class MfdWindows> mfdWindows; // MFD windows (with a graphics client)
+	std::map<const Vessel*, std::unique_ptr<transfer::Planner>> planners; // transfer planners of vessels
 	class Replay   *replay = nullptr;       // instant replay (with a graphics client)
 	Config         *pConfig;
 	State          *pState;

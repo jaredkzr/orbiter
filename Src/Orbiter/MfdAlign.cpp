@@ -2,6 +2,8 @@
 // Licensed under the MIT License
 
 #include "MfdAlign.h"
+#include "MFDUI.h"
+#include "Maneuver.h"
 #include "Pane.h"
 #include "Planet.h"
 #include "Psys.h"
@@ -245,6 +247,24 @@ void Instrument_OPlaneAlign::UpdateDraw (oapi::Sketchpad *skp)
 	if (an_is_closest != an_is_next)
 		T0 -= (mode == SURFACE ? elref->RotT() : shpel->OrbitT());
 
+	// the exact plane change at the next node of the planes, as a manoeuvre
+	// node: the velocity there turned about the line of nodes into the target plane
+	nodeValid = false;
+	if (mode == ORBIT && have_intersection && reli > 1e-6) {
+		double tn = an_is_next ? tra : trd;
+		Vector rn, vn;
+		shpel->PosVel_TA (rn, vn, tn);
+		Vector k (rn.unit ());
+		auto Rot = [&](const Vector &v, double th) {
+			return v * cos (th) + crossp (k, v) * sin (th) + k * (dotp (k, v) * (1.0 - cos (th)));
+		};
+		double th = (dotp (Rot (nm1, reli), nm2) > dotp (Rot (nm1, -reli), nm2)) ? reli : -reli;
+		Vector dvg (Rot (vn, th) - vn);
+		nodeDv = maneuver::FromGlobal (dvg, rn, vn);
+		nodeMjd = td.MJD1 + (an_is_next ? Tan : Tdn) / 86400.0;
+		nodeValid = true;
+	}
+
 	// orbital speeds
 	double van = (mode == SURFACE ? vsurf : shpel->Spd_TA(tra));
 	double vdn = (mode == SURFACE ? vsurf : shpel->Spd_TA(trd));
@@ -415,6 +435,26 @@ void Instrument_OPlaneAlign::UpdateDraw (oapi::Sketchpad *skp)
 	skp->Text (CX+x, CY-y-ch/2, "P", 1);
 	pphi = Aan;
 	pT = td.SimT1;
+	NodeButton (skp);
+}
+
+void Instrument_OPlaneAlign::NodeButton (oapi::Sketchpad *skp)
+{
+	if (!nodeValid) return;
+	mfdui::Context &ui = UI ();
+	ui.Begin (skp, (float)IW, (float)IH);
+	float u = ui.Unit ();
+	mfdui::Rect r (IW - u * 4.6f, IH - u * 1.45f, IW - u * 0.3f, IH - u * 0.25f);
+	if (ui.Button ("node", r, "Node")) {
+		maneuver::Node n;
+		n.mjd = nodeMjd;
+		n.dv = nodeDv;
+		vessel->AddManeuverNode (n);
+	}
+	char tip[96];
+	snprintf (tip, sizeof (tip), "Add a manoeuvre node for the plane change (%.1f m/s)", nodeDv.length ());
+	ui.Tooltip (tip);
+	ui.End ();
 }
 
 bool Instrument_OPlaneAlign::GetTimingsFromSurface(double &Tan, double &Aan, double &Tdn, double &Adn, double &VSurf)

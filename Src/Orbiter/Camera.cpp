@@ -623,6 +623,15 @@ void Camera::ViewportToGlobalDir (double sx, double sy, Vector &gdir) const
 	gdir.Set (mul (grot, s.unit()));
 }
 
+bool Camera::GlobalToViewport (const Vector &gpos, double &sx, double &sy) const
+{
+	Vector s (tmul (grot, gpos - *GPosPtr()));
+	if (s.z <= 0.0) return false;
+	sx = s.x / s.z * h05 / tan_ap + w05 - 0.5;
+	sy = h05 - s.y / s.z * h05 / tan_ap - 0.5;
+	return true;
+}
+
 void Camera::SetDefaultCockpitDir (const Vector &dir, double tilt)
 {
 	isStdDir = (dir.x == 0 && dir.y == 0 && dir.z > 0 && tilt == 0.0);

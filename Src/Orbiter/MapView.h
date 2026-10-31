@@ -3,8 +3,9 @@
 
 // =======================================================================
 // Map view: the camera looks at the focus vessel's reference body from
-// afar, with the predicted trajectory (trajectory::Predictor), the orbits
-// of nearby bodies, events (apsides, sphere of influence changes, closest
+// afar (or at one of its parents), with the predicted trajectory
+// (trajectory::Predictor), the orbits of the body's moons and, zoomed out,
+// of the body and its siblings (the planets), events (apsides, sphere of influence changes, closest
 // approaches, impact) and manoeuvre nodes drawn over the scene. Nodes are
 // added by clicking the trajectory and edited with handles (prograde,
 // normal, radial) or in the node panel.
@@ -24,6 +25,7 @@
 #include "imgui.h"
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 class Body;
@@ -40,6 +42,9 @@ public:
 	bool IsOn () const { return on; }
 	void Toggle ();
 	void SetOn (bool on);
+	/// Centre the map on a body (the vessel's reference body, or one of its
+	/// parents: the Sun for the planets' orbits and an interplanetary route)
+	void Centre (const CelestialBody *cb);
 
 private:
 	// projection of a global position to the screen; false if behind the camera
@@ -58,6 +63,9 @@ private:
 	void DrawMap (const trajectory::Prediction *pred);
 	void DrawBodyOrbits (ImDrawList *dl);
 	void DrawNodes (ImDrawList *dl, const trajectory::Prediction *pred);
+	// the transfer selected in the vessel's transfer planner: its conic,
+	// the bodies at departure and arrival, the ejection burn and asymptote
+	void DrawTransferPlan (ImDrawList *dl);
 	void DrawPanels (const trajectory::Prediction *pred);
 	void DrawBurnCue (const trajectory::Prediction *pred);
 	void UpdateWarp ();
@@ -78,6 +86,7 @@ private:
 	float W = 0, H = 0;
 	std::vector<std::pair<Vector, double>> occluders; // spheres (global position, radius)
 	std::vector<ImVec4> labels;                        // label rectangles placed in this frame
+	std::unordered_set<long long> marked;              // screen cells (and shapes) with a marker in this frame
 
 	// interaction
 	int selNode = -1;

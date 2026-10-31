@@ -23,6 +23,7 @@ public:
 	void SetSize (const Spec &spec);
 	bool KeyBuffered (DWORD key);
 	bool ProcessButton (int bt, int event);
+	bool ProcessPointer (const MFDPOINTER &p);
 	const char *BtnLabel (int bt) const;
 	int BtnMenu (const MFDBUTTONMENU **menu) const;
 

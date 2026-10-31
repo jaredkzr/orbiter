@@ -3456,6 +3456,12 @@ const MESHHANDLE Vessel::GetMeshTemplate (UINT idx) const
 	else return NULL;
 }
 
+Vector Vessel::GetMeshOffset (UINT idx) const
+{
+	if (idx < nmesh && meshlist[idx]) return MakeVector (meshlist[idx]->meshofs);
+	return Vector ();
+}
+
 const char *Vessel::GetMeshName (UINT idx) const
 {
 	if (idx < nmesh && meshlist[idx]->meshname[0]) return meshlist[idx]->meshname;
@@ -4629,11 +4635,14 @@ void Vessel::CollectGroundContacts (const StateVectors &s, const StateVectors &s
 			static std::vector<const scatter::Obstacle*> obst;
 			static std::vector<const convex::Polytope*> hulls, bld;
 			hulls.clear();
-			if (gs) {
+			// (a step reaching this far, as under high time acceleration, can't resolve
+			// rocks, trees or buildings; and a query this wide would list cells by the million)
+			bool small = bound + margin < 2e4;
+			if (gs && small) {
 				gs->Obstacles (pc, bound + margin, obst);
 				for (const scatter::Obstacle *o : obst) hulls.push_back (&o->hull);
 			}
-			if (cm) {
+			if (cm && small) {
 				cm->Obstacles (pc, bound + margin, bld);
 				hulls.insert (hulls.end(), bld.begin(), bld.end());
 			}

@@ -1970,8 +1970,9 @@ typedef union {
 #define MFD_OSYNC                8 ///< Orbit synchronisation MFD mode
 #define MFD_TRANSFER             9 ///< Transfer orbit MFD mode
 #define MFD_COMMS               10 ///< Communications MFD mode
+#define MFD_PLANNER             11 ///< Transfer planner MFD mode
 #define MFD_USERTYPE            64 ///< User-defined MFD mode
-#define BUILTIN_MFD_MODES       10 ///< Number of built-in MFD modes
+#define BUILTIN_MFD_MODES       11 ///< Number of built-in MFD modes
 //@}
 
 // ===========================================================================
@@ -3286,9 +3287,211 @@ OAPIFUNC void oapiSetTrajectoryTarget (OBJHANDLE hTarget);
 OAPIFUNC bool oapiSetMapView (bool on);
 
 /**
+ * \brief Centres the map view on a body: the focus vessel's reference body
+ *   or one of its parents (the Sun shows the planets' orbits).
+ * \return false if the map view is off or the body is not one of these
+ */
+OAPIFUNC bool oapiSetMapCentre (OBJHANDLE hBody);
+
+/**
  * \brief Returns true while the map view is shown.
  */
 OAPIFUNC bool oapiGetMapView ();
+
+/**
+ * \brief Opens an MFD window (an MFD in a window of its own inside the
+ *   render window, resizable, with its buttons and pointer input).
+ * \param mode MFD mode (MFD_xxx) to open it in
+ * \return window slot (>= 0), or -1 if there are no MFD windows (no
+ *   graphics client)
+ */
+OAPIFUNC int oapiOpenMFDWindow (int mode);
+
+/**
+ * \brief Closes an MFD window.
+ * \param slot window slot (see oapiOpenMFDWindow)
+ */
+OAPIFUNC bool oapiCloseMFDWindow (int slot);
+
+/**
+ * \brief Mode of the MFD in a window (MFD_NONE if the window is closed or off)
+ */
+OAPIFUNC int oapiGetMFDWindowMode (int slot);
+
+/**
+ * \brief State of a vessel's transfer planner (see oapiTransferSearch)
+ */
+typedef struct {
+	int job;              ///< running computation: 0 none, 1 search, 2 targeting, 3 correction, 4 route suggestions
+	float progress;       ///< of the computation (0..1)
+	unsigned int serial;  ///< incremented with each finished computation
+	int valid;            ///< a transfer was found (the selected one is described)
+	double dep;           ///< departure [MJD]
+	double tof;           ///< time of flight [days]
+	double dvEject;       ///< [m/s] ejection from the parking orbit
+	double dvCapture;     ///< [m/s] capture at the target
+	double dvTotal;       ///< [m/s] as counted by the objective
+	double c3;            ///< [m^2/s^2] departure energy (transfers to other planets)
+	double vinfArr;       ///< [m/s] arrival hyperbolic excess speed
+	double burnMjd;       ///< ejection burn [MJD]
+	VECTOR3 burnDv;       ///< ejection burn (prograde, normal, radial) [m/s]
+	int planValid;        ///< manoeuvre nodes were made
+	double arrMjd;        ///< predicted arrival periapsis [MJD]
+	double periAlt;       ///< predicted periapsis altitude [m]
+	double periTarget;    ///< targeted periapsis altitude [m]
+	double incl;          ///< predicted inclination at arrival (to the target's equator) [rad]
+	double inclMin;       ///< least inclination the arrival asymptote allows [rad]
+	int nCorrections;     ///< corrections computed
+	double nextMjd;       ///< next burn of the plan (node or correction to compute) [MJD] (0: none)
+	int nextRole;         ///< its role: 0 ejection, 1 correction, 2 capture, 3 powered flyby, 4 deep-space manoeuvre
+	char message[128];    ///< last result or error
+	int nFlyby;           ///< flybys of the selected route (0: a direct transfer)
+	double dvFlyby;       ///< [m/s] powered flybys of the route
+	double dvDsm;         ///< [m/s] deep-space manoeuvres of the route
+} TRANSFERINFO;
+
+/**
+ * \brief Starts a transfer search for a vessel: the launch windows over the
+ *   next years and the best transfer of the first good window (computed in
+ *   the background; see oapiTransferInfo).
+ * \param hVessel vessel (in orbit about its departure body)
+ * \param hTarget target: a body with the same parent as the vessel's
+ *   reference body, or a moon of it
+ * \param objective 0: least total velocity change (ejection + capture),
+ *   1: least ejection velocity change (flyby, aerocapture)
+ * \param capAlt periapsis altitude at the target [m] (0: default)
+ * \param capApo apoapsis altitude of the capture orbit [m] (0: circular)
+ * \return false if no transfer is possible from here to this target
+ */
+OAPIFUNC bool oapiTransferSearch (OBJHANDLE hVessel, OBJHANDLE hTarget, int objective, double capAlt, double capApo);
+
+/**
+ * \brief Selects a transfer of the search (departure [MJD], time of flight
+ *   [days]); dep < 0: the optimum.
+ */
+OAPIFUNC bool oapiTransferSelect (OBJHANDLE hVessel, double dep, double tof);
+
+/**
+ * \brief Makes the manoeuvre nodes of the selected transfer (replacing the
+ *   vessel's): ejection (refined with the numerical trajectory prediction to
+ *   reach the target periapsis), capture; corrections are computed shortly
+ *   before they are due. Computed in the background.
+ * \param arm fly the nodes with the burn autopilot
+ */
+OAPIFUNC bool oapiTransferMakeNodes (OBJHANDLE hVessel, bool arm);
+
+/**
+ * \brief Computes the next correction burn of the transfer now.
+ */
+OAPIFUNC bool oapiTransferCorrect (OBJHANDLE hVessel);
+
+/**
+ * \brief State of a vessel's transfer planner.
+ * \return false if the vessel has no planner
+ */
+OAPIFUNC bool oapiTransferInfo (OBJHANDLE hVessel, TRANSFERINFO *info);
+
+/// \brief oapiTransferSetRoute flag: one deep-space manoeuvre per leg (else powered flybys)
+#define TRANSFER_ROUTE_DSM 0x0001
+
+/**
+ * \brief Sets the route of a vessel's transfer planner: gravity assists
+ *   (the planner's advanced mode). The next oapiTransferSearch optimises the
+ *   route (patched conics); oapiTransferMakeNodes then targets each flyby in
+ *   full gravity.
+ * \param hVessel vessel
+ * \param hFlyby the flyby bodies in order (moons or planets orbiting the
+ *   target's parent; a body may appear more than once)
+ * \param nFlyby their number (0: direct transfers, the advanced mode off)
+ * \param minAlt least periapsis altitude of each flyby [m] (NULL or 0: default)
+ * \param flags TRANSFER_ROUTE_DSM
+ * \param maxRevs full revolutions about the central body per leg (0-3)
+ * \param maxTof longest flight [days] (0: no limit)
+ */
+OAPIFUNC bool oapiTransferSetRoute (OBJHANDLE hVessel, const OBJHANDLE *hFlyby, int nFlyby, const double *minAlt, DWORD flags, int maxRevs, double maxTof);
+
+/**
+ * \brief A flyby of the selected route (see oapiTransferFlyby)
+ */
+typedef struct {
+	OBJHANDLE hBody;      ///< the body flown by
+	double mjd;           ///< planned periapsis [MJD]
+	double alt;           ///< planned periapsis altitude [m]
+	double minAlt;        ///< least altitude allowed [m]
+	double turn;          ///< turn of the excess velocity [rad]
+	double vinfIn, vinfOut; ///< excess speeds [m/s]
+	double dv;            ///< powered flyby: burn at the periapsis [m/s]
+	double predMjd;       ///< predicted periapsis (after oapiTransferMakeNodes; 0: none) [MJD]
+	double predAlt;       ///< predicted periapsis altitude [m]
+} TRANSFERFLYBY;
+
+/**
+ * \brief Flybys of the selected route.
+ * \param i flyby (0 ... count-1)
+ * \param f receives the flyby (may be NULL to get the count)
+ * \return number of flybys (0: no route)
+ */
+OAPIFUNC int oapiTransferFlyby (OBJHANDLE hVessel, int i, TRANSFERFLYBY *f);
+
+/**
+ * \brief Starts a search for routes to the target of the last
+ *   oapiTransferSearch with up to three flybys (in the background; job 4 of
+ *   TRANSFERINFO). See oapiTransferSuggestion.
+ */
+OAPIFUNC bool oapiTransferSuggest (OBJHANDLE hVessel);
+
+/**
+ * \brief A route found by oapiTransferSuggest
+ */
+typedef struct {
+	int nFlyby;           ///< flybys (0: the direct transfer, for comparison)
+	OBJHANDLE hFlyby[6];  ///< the flyby bodies in order
+	double dv;            ///< [m/s] as counted by the objective
+	double dep;           ///< departure [MJD]
+	double tof;           ///< flight time [days]
+} TRANSFERSUGGESTION;
+
+/**
+ * \brief Routes found by oapiTransferSuggest, best first.
+ * \return number of routes
+ */
+OAPIFUNC int oapiTransferSuggestion (OBJHANDLE hVessel, int i, TRANSFERSUGGESTION *s);
+
+/**
+ * \brief Takes a route found by oapiTransferSuggest (its flybys, see
+ *   oapiTransferSetRoute) and searches it again from the suggestion.
+ */
+OAPIFUNC bool oapiTransferUseSuggestion (OBJHANDLE hVessel, int i);
+
+/**
+ * \brief A launch from the surface into a parking orbit for the selected
+ *   transfer (see oapiTransferLaunch)
+ */
+typedef struct {
+	double launchMjd;     ///< lift-off [MJD]
+	double azimuth;       ///< launch heading from north, clockwise [rad]
+	double incl;          ///< parking orbit inclination to the equator [rad]
+	double insMjd;        ///< orbit insertion [MJD]
+	VECTOR3 rIns, vIns;   ///< insertion state relative to the departure body (ecliptic frame) [m, m/s]
+	double burnMjd;       ///< ejection burn [MJD]
+	VECTOR3 burnDv;       ///< ejection burn (prograde, normal, radial) [m/s]
+	double dvEject;       ///< [m/s]
+	double dvPenalty;     ///< ascent velocity change above a launch due east [m/s]
+	double dvTotal;       ///< penalty + ejection + capture (by the objective) [m/s]
+	double tof;           ///< flight time from the ejection [days]
+	int selected;         ///< the chosen opportunity
+} TRANSFERLAUNCH;
+
+/**
+ * \brief Launch opportunities of a landed vessel for the selected transfer:
+ *   lift-off times and headings into a parking orbit that contains the
+ *   transfer's departure direction.
+ * \param hVessel vessel (on the surface of its departure body)
+ * \param i opportunity (0 ... count-1, by lift-off time)
+ * \param l receives the opportunity (may be NULL to get the count)
+ * \return number of opportunities (0: the vessel is not landed, or no transfer selected)
+ */
+OAPIFUNC int oapiTransferLaunch (OBJHANDLE hVessel, int i, TRANSFERLAUNCH *l);
 
 /**
  * \brief Starts or ends the instant replay: the simulation is held and the

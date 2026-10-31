@@ -64,6 +64,29 @@ set_target_properties(Collision.Geometry PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${
 add_test(NAME Collision.Geometry COMMAND $<TARGET_FILE:Collision.Geometry>)
 set_tests_properties(Collision.Geometry PROPERTIES TIMEOUT 60)
 
+# Conics of transfer planning (Lambert, departure hyperbola, B-plane)
+add_executable(Transfer.Conics Transfer.Conics.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Conics.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Maneuver.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Vecmat.cpp)
+target_include_directories(Transfer.Conics PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter)
+target_link_libraries(Transfer.Conics Catch2::Catch2WithMain)
+set_target_properties(Transfer.Conics PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER_BINARY_ROOT_DIR}")
+add_test(NAME Transfer.Conics COMMAND $<TARGET_FILE:Transfer.Conics>)
+set_tests_properties(Transfer.Conics PROPERTIES TIMEOUT 60)
+
+# Gravity-assist routes (patched conics, optimiser; the Cassini1 benchmark)
+add_executable(Transfer.Routes Transfer.Routes.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Routes.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Conics.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Maneuver.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Vecmat.cpp)
+target_include_directories(Transfer.Routes PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter)
+target_link_libraries(Transfer.Routes Catch2::Catch2WithMain)
+set_target_properties(Transfer.Routes PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER_BINARY_ROOT_DIR}")
+add_test(NAME Transfer.Routes COMMAND $<TARGET_FILE:Transfer.Routes>)
+set_tests_properties(Transfer.Routes PROPERTIES TIMEOUT 300)
+
 # Scenario tests need an Orbiter executable that runs without graphics client
 if (ORBITER_HEADLESS)
 	set(ORBITER_TEST_EXE $<TARGET_FILE:${OrbiterTgt}>)
@@ -99,6 +122,12 @@ if (ORBITER_TEST_EXE)
 	# (every pad of every base: and the bases' collision hulls are made anew
 	# where their files changed, which is minutes on the first run)
 	set_tests_properties(Scenario.BasePadsTest PROPERTIES TIMEOUT 600)
+	# transfer planning: searches and targeting, flights to the Moon and to Mars
+	set_tests_properties(Scenario.TransferPlanTest Scenario.TransferFlightTest PROPERTIES TIMEOUT 180)
+	set_tests_properties(Scenario.TransferMarsFlightTest PROPERTIES TIMEOUT 400)
+	# gravity assists: route search, full-gravity targeting, suggestions
+	set_tests_properties(Scenario.RoutePlanTest PROPERTIES TIMEOUT 180)
+	set_tests_properties(Scenario.RouteFlightTest PROPERTIES TIMEOUT 1000)
 	# saving and loading damage: the save test writes the scenario the load
 	# test runs (in the build tree)
 	set_tests_properties(Scenario.DamageSaveTest PROPERTIES FIXTURES_SETUP DamageRoundtrip ENVIRONMENT "ORBITER_DAMAGE=1")
@@ -130,13 +159,18 @@ if (ORBITER_TEST_EXE)
 		file(GLOB InputTests "${CMAKE_SOURCE_DIR}/Tests/Input/*.input")
 		foreach(InputTest ${InputTests})
 			get_filename_component(test_name ${InputTest} NAME_WE)
+			# the scene: <test>.scn if there is one, else Orbit.scn
+			set(InputScene "${CMAKE_SOURCE_DIR}/Tests/Input/Orbit.scn")
+			if (EXISTS "${CMAKE_SOURCE_DIR}/Tests/Input/${test_name}.scn")
+				set(InputScene "${CMAKE_SOURCE_DIR}/Tests/Input/${test_name}.scn")
+			endif()
 			add_test(
 				NAME "Input.${test_name}"
-				COMMAND ${ORBITER_TEST_EXE} -p VulkanClient "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Input/Orbit.scn" "--fixedstep=0.02"
+				COMMAND ${ORBITER_TEST_EXE} -p VulkanClient "--scenariox=${InputScene}" "--fixedstep=0.02"
 				WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 			)
 			set_tests_properties(Input.${test_name} PROPERTIES TIMEOUT 120
-				ENVIRONMENT "ORBITER_VK_OFFSCREEN=1;ORBITER_VK_SKY=0;ORBITER_VK_TEST_INPUT=${InputTest}")
+				ENVIRONMENT "ORBITER_VK_OFFSCREEN=1;ORBITER_VK_SKY=0;ORBITER_MFD_WINDOWS=0;ORBITER_VK_TEST_INPUT=${InputTest}")
 		endforeach()
 
 		# The simulated sky (needs its data, Config/CSphere/Sky, else left

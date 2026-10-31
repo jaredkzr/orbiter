@@ -26,6 +26,8 @@
 #include "MenuInfoBar.h"
 #include "Trajectory.h"
 #include "MapView.h"
+#include "MfdWindow.h"
+#include "Transfer.h"
 #include "Replay.h"
 #include "TerrainDetail.h"
 #include "GroundScatter.h"
@@ -477,10 +479,187 @@ DLLEXPORT bool oapiSetMapView (bool on)
 	return true;
 }
 
+DLLEXPORT bool oapiSetMapCentre (OBJHANDLE hBody)
+{
+	MapView *mv = g_pOrbiter->GetMapView();
+	if (!mv || !mv->IsOn () || !g_focusobj) return false;
+	for (const CelestialBody *c = g_focusobj->ElRef (); c; c = c->Primary ())
+		if ((OBJHANDLE)c == hBody) { mv->Centre (c); return true; }
+	return false;
+}
+
 DLLEXPORT bool oapiGetMapView ()
 {
 	MapView *mv = g_pOrbiter->GetMapView();
 	return mv && mv->IsOn();
+}
+
+DLLEXPORT int oapiOpenMFDWindow (int mode)
+{
+	MfdWindows *mw = g_pOrbiter->GetMfdWindows();
+	if (!mw) return -1;
+	DlgMfdWindow *w = mw->Open (mode);
+	return w ? w->Slot () : -1;
+}
+
+DLLEXPORT bool oapiCloseMFDWindow (int slot)
+{
+	MfdWindows *mw = g_pOrbiter->GetMfdWindows();
+	DlgMfdWindow *w = mw ? mw->Window (slot) : nullptr;
+	if (!w || !w->IsActive ()) return false;
+	w->OnClose ();
+	return true;
+}
+
+DLLEXPORT bool oapiTransferSearch (OBJHANDLE hVessel, OBJHANDLE hTarget, int objective, double capAlt, double capApo)
+{
+	Vessel *v = (Vessel*)hVessel;
+	Body *t = (Body*)hTarget;
+	if (!v || !t || !(t->Type() == OBJTP_PLANET)) return false;
+	transfer::Planner *pl = g_pOrbiter->TransferPlanner (v);
+	if (!pl) return false;
+	pl->settings.target = (const CelestialBody*)t;
+	pl->settings.objective = objective;
+	pl->settings.capAlt = capAlt;
+	pl->settings.capApo = capApo;
+	return pl->Search ();
+}
+
+DLLEXPORT bool oapiTransferSelect (OBJHANDLE hVessel, double dep, double tof)
+{
+	transfer::Planner *pl = g_pOrbiter->TransferPlanner ((Vessel*)hVessel, false);
+	if (!pl) return false;
+	pl->Select (dep, tof);
+	return pl->Selected().valid;
+}
+
+DLLEXPORT bool oapiTransferMakeNodes (OBJHANDLE hVessel, bool arm)
+{
+	transfer::Planner *pl = g_pOrbiter->TransferPlanner ((Vessel*)hVessel, false);
+	return pl && pl->MakeNodes (arm);
+}
+
+DLLEXPORT bool oapiTransferCorrect (OBJHANDLE hVessel)
+{
+	transfer::Planner *pl = g_pOrbiter->TransferPlanner ((Vessel*)hVessel, false);
+	return pl && pl->Correct ();
+}
+
+DLLEXPORT bool oapiTransferInfo (OBJHANDLE hVessel, TRANSFERINFO *info)
+{
+	transfer::Planner *pl = g_pOrbiter->TransferPlanner ((Vessel*)hVessel, false);
+	if (!pl || !info) return false;
+	memset (info, 0, sizeof (TRANSFERINFO));
+	transfer::Status st = pl->GetStatus ();
+	info->job = (int)st.job;
+	info->progress = st.progress;
+	info->serial = st.serial;
+	strncpy (info->message, st.message.c_str(), sizeof (info->message) - 1);
+	transfer::Solution s = pl->Selected ();
+	info->valid = s.valid ? 1 : 0;
+	info->dep = s.dep, info->tof = s.tof;
+	info->dvEject = s.burnValid ? s.burnDvMag : s.dvEject;
+	info->dvCapture = s.dvCapture, info->dvTotal = s.dvTotal;
+	info->c3 = s.c3, info->vinfArr = s.vinfArr;
+	info->burnMjd = s.burnMjd;
+	info->burnDv = _V(s.burnDv.x, s.burnDv.y, s.burnDv.z);
+	transfer::Plan p = pl->GetPlan ();
+	info->planValid = p.valid ? 1 : 0;
+	info->arrMjd = p.arrMjd, info->periAlt = p.periAlt, info->periTarget = p.periTarget, info->incl = p.incl, info->inclMin = p.inclMin;
+	for (const auto &n : p.nodes) if (n.role == transfer::ROLE_MCC && n.done) info->nCorrections++;
+	double now = td.MJD0;
+	for (const auto &n : p.nodes)
+		if (n.mjd > now && (!info->nextMjd || n.mjd < info->nextMjd)) info->nextMjd = n.mjd, info->nextRole = n.role;
+	transfer::Route r = pl->GetRoute ();
+	if (r.valid) info->nFlyby = (int)r.flybys.size (), info->dvFlyby = r.dvFlyby, info->dvDsm = r.dvDsm;
+	return true;
+}
+
+DLLEXPORT bool oapiTransferSetRoute (OBJHANDLE hVessel, const OBJHANDLE *hFlyby, int nFlyby, const double *minAlt, DWORD flags, int maxRevs, double maxTof)
+{
+	Vessel *v = (Vessel*)hVessel;
+	if (!v) return false;
+	transfer::Planner *pl = g_pOrbiter->TransferPlanner (v);
+	if (!pl) return false;
+	transfer::Settings &s = pl->settings;
+	s.flybys.clear (), s.flybyAlt.clear ();
+	for (int i = 0; i < nFlyby; i++) {
+		Body *b = (Body*)hFlyby[i];
+		if (!b || b->Type () != OBJTP_PLANET) return false;
+		s.flybys.push_back ((const CelestialBody*)b);
+		s.flybyAlt.push_back (minAlt ? minAlt[i] : 0.0);
+	}
+	s.assists = nFlyby > 0;
+	s.dsm = (flags & TRANSFER_ROUTE_DSM) != 0;
+	s.maxRevs = std::clamp (maxRevs, 0, 3);
+	s.maxTof = maxTof;
+	return true;
+}
+
+DLLEXPORT int oapiTransferFlyby (OBJHANDLE hVessel, int i, TRANSFERFLYBY *f)
+{
+	transfer::Planner *pl = g_pOrbiter->TransferPlanner ((Vessel*)hVessel, false);
+	if (!pl) return 0;
+	transfer::Route r = pl->GetRoute ();
+	if (!r.valid) return 0;
+	if (f && i >= 0 && i < (int)r.flybys.size ()) {
+		const transfer::RouteFlyby &fb = r.flybys[i];
+		memset (f, 0, sizeof (TRANSFERFLYBY));
+		f->hBody = (OBJHANDLE)fb.body;
+		f->mjd = fb.mjd, f->alt = fb.alt, f->minAlt = fb.minAlt, f->turn = fb.turn;
+		f->vinfIn = fb.vinfIn, f->vinfOut = fb.vinfOut, f->dv = fb.dv + fb.dvTurn;
+		transfer::Plan p = pl->GetPlan ();
+		if (p.valid && i < (int)p.flybys.size ()) f->predMjd = p.flybys[i].mjd, f->predAlt = p.flybys[i].alt;
+	}
+	return (int)r.flybys.size ();
+}
+
+DLLEXPORT bool oapiTransferSuggest (OBJHANDLE hVessel)
+{
+	transfer::Planner *pl = g_pOrbiter->TransferPlanner ((Vessel*)hVessel, false);
+	return pl && pl->settings.target && pl->Suggest ();
+}
+
+DLLEXPORT bool oapiTransferUseSuggestion (OBJHANDLE hVessel, int i)
+{
+	transfer::Planner *pl = g_pOrbiter->TransferPlanner ((Vessel*)hVessel, false);
+	return pl && pl->UseSuggestion (i);
+}
+
+DLLEXPORT int oapiTransferSuggestion (OBJHANDLE hVessel, int i, TRANSFERSUGGESTION *s)
+{
+	transfer::Planner *pl = g_pOrbiter->TransferPlanner ((Vessel*)hVessel, false);
+	if (!pl) return 0;
+	std::vector<transfer::Suggestion> sg = pl->Suggestions ();
+	if (s && i >= 0 && i < (int)sg.size ()) {
+		memset (s, 0, sizeof (TRANSFERSUGGESTION));
+		for (size_t k = 0; k < sg[i].flybys.size () && k < 6; k++) s->hFlyby[s->nFlyby++] = (OBJHANDLE)sg[i].flybys[k];
+		s->dv = sg[i].dv, s->dep = sg[i].dep, s->tof = sg[i].tof;
+	}
+	return (int)sg.size ();
+}
+
+DLLEXPORT int oapiTransferLaunch (OBJHANDLE hVessel, int i, TRANSFERLAUNCH *l)
+{
+	transfer::Planner *pl = g_pOrbiter->TransferPlanner ((Vessel*)hVessel, false);
+	if (!pl) return 0;
+	transfer::LaunchPlan lp = pl->Launch ();
+	if (l && i >= 0 && i < (int)lp.opp.size()) {
+		const transfer::LaunchOpportunity &o = lp.opp[i];
+		l->launchMjd = o.launchMjd, l->azimuth = o.azimuth, l->incl = o.incl, l->insMjd = o.insMjd;
+		l->rIns = _V(o.rIns.x, o.rIns.y, o.rIns.z), l->vIns = _V(o.vIns.x, o.vIns.y, o.vIns.z);
+		l->burnMjd = o.burnMjd, l->burnDv = _V(o.burnDv.x, o.burnDv.y, o.burnDv.z);
+		l->dvEject = o.dvEject, l->dvPenalty = o.dvPenalty, l->dvTotal = o.dvTotal, l->tof = o.tof;
+		l->selected = (i == lp.sel) ? 1 : 0;
+	}
+	return (int)lp.opp.size();
+}
+
+DLLEXPORT int oapiGetMFDWindowMode (int slot)
+{
+	MfdWindows *mw = g_pOrbiter->GetMfdWindows();
+	DlgMfdWindow *w = mw ? mw->Window (slot) : nullptr;
+	return (w && w->IsActive ()) ? w->Mode () : MFD_NONE;
 }
 
 DLLEXPORT bool oapiSetReplay (bool on)

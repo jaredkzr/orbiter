@@ -7,6 +7,10 @@
 #include "Psys.h"
 #include "Select.h"
 #include "Log.h"
+#include "Maneuver.h"
+#include "MFDUI.h"
+#include <algorithm>
+#include <cmath>
 
 using namespace std;
 
@@ -294,8 +298,13 @@ void Instrument_Orbit::UpdateDraw (oapi::Sketchpad *skp)
 		if (projmode == PRJ_TGT) projmode = PRJ_SHIP;
 	}
 
+	scale *= zoom;
 	if (elref)
 		elref_rad = (int)(elref->Size() * scale + 0.5);
+
+	v4 = skp->GetVersion () >= 4;
+	mfdui::Context &ui = UI ();
+	ui.Begin (skp, (float)IW, (float)IH);
 
 	if (dispmode != DISP_LIST) { // draw orbit graphs
 		bool eclproj;
@@ -314,6 +323,14 @@ void Instrument_Orbit::UpdateDraw (oapi::Sketchpad *skp)
 			irot.Set (IMatrix());
 			eclproj = true;
 		}
+		if (v4) {
+			ui.Circle ((float)ICNTX, (float)ICNTY, (float)(elref->Size() * scale), draw[2][1].col, 1.0f);
+			if (bValidTgtEl) DisplayOrbitF (1, tgtel, irot);
+			if (bValidShpEl) {
+				DisplayOrbitF (0, shpel, irot);
+				DrawInteractive (irot);
+			}
+		} else {
 		skp->SetPen (GetDefaultPen (2, 1));
 		skp->Ellipse (ICNTX-elref_rad, ICNTY-elref_rad, ICNTX+elref_rad, ICNTY+elref_rad);
 		if (bValidShpEl) {
@@ -327,6 +344,7 @@ void Instrument_Orbit::UpdateDraw (oapi::Sketchpad *skp)
 			if (!eclproj) rot2.premul (irot);
 			UpdateOrbitGraph (ICNTX, ICNTY, IW, IH, scale, tgtel, rot2, irot, o_pt2);
 			DisplayOrbit (skp, 1, o_pt2);
+		}
 		}
 	} else {
 		skp->SetTextColor (draw[2][0].col);
@@ -363,6 +381,8 @@ void Instrument_Orbit::UpdateDraw (oapi::Sketchpad *skp)
 			DisplayElements (skp, tgtel, IW-(cw*23)/2, (ch*5)/2);
 		}
 	}
+	if (v4 && dispmode != DISP_LIST && bValidShpEl) DrawNodePanel ();
+	ui.End ();
 }
 
 void Instrument_Orbit::DisplayElements (oapi::Sketchpad *skp, const Elements *el, int x, int y)
@@ -548,4 +568,301 @@ void Instrument_Orbit::WriteParams (ostream &ofs) const
 		ofs << "  ALT" << endl;
 	if (elref) ofs << "  REF " << elref->Name() << endl;
 	if (tgt) ofs << "  TARGET " << tgt->Name() << endl;
+}
+
+// =======================================================================
+// Anti-aliased graphs and pointer interaction
+
+Vector Instrument_Orbit::ToElFrame (const Vector &v) const
+{
+	return (frmmode == FRM_EQU && elref) ? tmul (elref->RotObliq(), v) : v;
+}
+
+Vector Instrument_Orbit::FromElFrame (const Vector &v) const
+{
+	return (frmmode == FRM_EQU && elref) ? mul (elref->RotObliq(), v) : v;
+}
+
+oapi::FVECTOR2 Instrument_Orbit::ToScreen (const Vector &p, const Matrix &irot) const
+{
+	Vector q (mul (irot, p));
+	return oapi::FVECTOR2 ((float)(ICNTX + 0.5 + q.x * scale), (float)(ICNTY + 0.5 - q.z * scale));
+}
+
+void Instrument_Orbit::SampleOrbit (const Elements *el, const Matrix &irot, std::vector<oapi::FVECTOR2> &pt, std::vector<double> *ta) const
+{
+	const int N = 360;
+	pt.clear ();
+	if (ta) ta->clear ();
+	Vector pos, vel;
+	double e = el->e;
+	if (e < 1.0) {
+		double f = sqrt ((1.0 + e) / (1.0 - e));
+		for (int i = 0; i < N; i++) {
+			double E = Pi2 * i / N;           // eccentric anomaly: dense near periapsis
+			double t = 2.0 * atan (f * tan (0.5 * E));
+			el->PosVel_TA (pos, vel, t);
+			pt.push_back (ToScreen (pos, irot));
+			if (ta) ta->push_back (t);
+		}
+	} else {
+		double p = el->P();
+		double radmax = 1.5 * std::max (IW, IH) / scale;
+		double c = (p / radmax - 1.0) / e;
+		double tmax = (c > -1.0 && c < 1.0) ? acos (c) : acos (-1.0 / e) * 0.98;
+		for (int i = 0; i <= N; i++) {
+			double t = -tmax + 2.0 * tmax * i / N;
+			el->PosVel_TA (pos, vel, t);
+			pt.push_back (ToScreen (pos, irot));
+			if (ta) ta->push_back (t);
+		}
+	}
+}
+
+double Instrument_Orbit::TimeToTA (const Elements *el, double ta) const
+{
+	double M = el->MeanAnomaly_from_TrueAnomaly (ta), M0 = el->MeanAnm ();
+	if (el->e < 1.0) {
+		double T = el->OrbitT ();
+		double dt = (M - M0) / Pi2 * T;
+		dt = fmod (dt, T);
+		if (dt < 0.0) dt += T;
+		return dt;
+	}
+	double n = sqrt (el->Mu () / fabs (el->a * el->a * el->a));
+	return (M - M0) / n;
+}
+
+void Instrument_Orbit::DisplayOrbitF (int which, const Elements *el, const Matrix &irot, bool dashed, DWORD col)
+{
+	mfdui::Context &ui = UI ();
+	if (!col) col = draw[which][0].col;
+	std::vector<oapi::FVECTOR2> pt;
+	SampleOrbit (el, irot, pt, nullptr);
+	bool closed = el->e < 1.0;
+	if (dashed) {
+		for (size_t i = 0; i + 1 < pt.size(); i += 6)
+			ui.Polyline (&pt[i], (int)std::min ((size_t)4, pt.size() - i), col, 1.5f);
+	} else {
+		ui.Polyline (pt.data(), (int)pt.size(), col, 1.5f, closed);
+	}
+	Vector pos, vel;
+	el->PosVel_TA (pos, vel, 0.0); // periapsis
+	oapi::FVECTOR2 pe = ToScreen (pos, irot);
+	float a = std::max (3.0f, ui.Unit () * 0.22f);
+	ui.Circle (pe.x, pe.y, a, col, 1.0f, true);
+	if (closed) {
+		el->PosVel_TA (pos, vel, Pi);
+		oapi::FVECTOR2 ap = ToScreen (pos, irot);
+		ui.Circle (ap.x, ap.y, a, col, 1.2f);
+	}
+	if (dashed) return;
+	oapi::FVECTOR2 c ((float)ICNTX + 0.5f, (float)ICNTY + 0.5f);
+	oapi::FVECTOR2 r = ToScreen (el->RVec(), irot);
+	ui.Line (c.x, c.y, r.x, r.y, col, 1.0f);
+	Vector asc, desc;
+	bool ha = el->AscendingNode (asc), hd = el->DescendingNode (desc);
+	if (ha && hd) {
+		oapi::FVECTOR2 pa = ToScreen (asc, irot), pd = ToScreen (desc, irot);
+		ui.FillRect (mfdui::Rect (pa.x - a, pa.y - a, pa.x + a, pa.y + a), draw[which][1].col);
+		ui.FrameRect (mfdui::Rect (pa.x - a, pa.y - a, pa.x + a, pa.y + a), col);
+		ui.FrameRect (mfdui::Rect (pd.x - a, pd.y - a, pd.x + a, pd.y + a), col);
+		// line of nodes (dashed)
+		float dx = pd.x - pa.x, dy = pd.y - pa.y, len = sqrtf (dx*dx + dy*dy);
+		for (float s = 0.0f; s < len; s += 9.0f) {
+			float s1 = std::min (len, s + 5.0f);
+			ui.Line (pa.x + dx * s / len, pa.y + dy * s / len, pa.x + dx * s1 / len, pa.y + dy * s1 / len, draw[which][1].col, 1.0f);
+		}
+	}
+}
+
+namespace {
+	void FmtTime (char *buf, size_t n, double dt)
+	{
+		const char *sgn = dt < 0.0 ? "-" : "";
+		dt = fabs (dt);
+		int d = (int)(dt / 86400.0);
+		dt -= d * 86400.0;
+		int h = (int)(dt / 3600.0), m = (int)((dt - h * 3600.0) / 60.0), s = (int)(dt - h * 3600.0 - m * 60.0);
+		if (d) snprintf (buf, n, "%s%dd %02d:%02d:%02d", sgn, d, h, m, s);
+		else snprintf (buf, n, "%s%02d:%02d:%02d", sgn, h, m, s);
+	}
+}
+
+void Instrument_Orbit::DrawInteractive (const Matrix &irot)
+{
+	mfdui::Context &ui = UI ();
+	float u = ui.Unit ();
+	DWORD accent = draw[1][0].col; // yellow
+	const double mu = shpel->Mu ();
+
+	// the graph: wheel zooms, a click on the orbit adds a node
+	float wheel = 0.0f;
+	int f = ui.Area ("graph", mfdui::Rect (0.0f, 0.0f, (float)IW, (float)IH), 0, 0, &wheel);
+	if (f & mfdui::AREA_WHEEL) {
+		zoom = std::clamp (zoom * pow (1.25, (double)wheel), 1.0 / 64.0, 64.0);
+		RedrawLive (0.2);
+	}
+
+	std::vector<oapi::FVECTOR2> pt;
+	std::vector<double> ta;
+	SampleOrbit (shpel, irot, pt, &ta);
+	// (tests) points of the orbit ahead: "orbit.<percent of the period>"
+	if (shpel->e < 1.0) {
+		double T = shpel->OrbitT ();
+		for (int pc = 5; pc < 100; pc += 5) {
+			int best = -1;
+			double bd = 1e30;
+			for (size_t i = 0; i < ta.size(); i++) {
+				double d = fabs (TimeToTA (shpel, ta[i]) - T * pc / 100.0);
+				if (d < bd) bd = d, best = (int)i;
+			}
+			char nm[32];
+			snprintf (nm, sizeof (nm), "orbit.%d", pc);
+			if (best >= 0) Anchor (nm, pt[best].x, pt[best].y);
+		}
+	}
+	auto Nearest = [&](float x, float y, float rmax) {
+		int best = -1;
+		float bd = rmax * rmax;
+		for (size_t i = 0; i < pt.size(); i++) {
+			float dx = pt[i].x - x, dy = pt[i].y - y, d = dx*dx + dy*dy;
+			if (d < bd) bd = d, best = (int)i;
+		}
+		return best;
+	};
+
+	// manoeuvre nodes along the trajectory (two-body, about elref)
+	const std::vector<maneuver::Node> &nodes = vessel->ManeuverNodes ();
+	if (selNode >= (int)nodes.size()) selNode = -1;
+	Vector r = FromElFrame (shpel->RVec ()), v = FromElFrame (shpel->VVec ());
+	double t = td.MJD1;
+	bool nodeHover = false;
+	for (size_t i = 0; i < nodes.size(); i++) {
+		const maneuver::Node &nd = nodes[i];
+		double dt = (nd.mjd - t) * 86400.0;
+		if (nd.mjd < td.MJD0) continue; // past
+		Vector rn, vn;
+		if (!maneuver::Kepler (r, v, mu, dt, rn, vn)) break;
+		Vector dvg = maneuver::ToGlobal (nd.dv, rn, vn);
+		r = rn, v = vn + dvg, t = nd.mjd;
+		// the orbit after the node
+		Elements post (*shpel);
+		post.Calculate (ToElFrame (r), ToElFrame (v), td.SimT1 + (nd.mjd - td.MJD1) * 86400.0);
+		bool sel = ((int)i == selNode);
+		DisplayOrbitF (1, &post, irot, true, sel ? draw[2][0].col : accent);
+		// node marker
+		oapi::FVECTOR2 m = ToScreen (ToElFrame (rn), irot);
+		float a = u * 0.38f;
+		char id[32];
+		snprintf (id, sizeof (id), "node%d", (int)i);
+		float dx, dy;
+		int nf = ui.Area (id, mfdui::Rect (m.x - a * 1.4f, m.y - a * 1.4f, m.x + a * 1.4f, m.y + a * 1.4f), &dx, &dy);
+		if (nf & mfdui::AREA_HOVER) nodeHover = true;
+		if (nf & (mfdui::AREA_CLICKED | mfdui::AREA_PRESSED)) selNode = (int)i;
+		if ((nf & mfdui::AREA_DRAG) && i == 0) {
+			// move the first node along the current orbit
+			float px, py;
+			if (ui.PointerPos (&px, &py)) {
+				int k = Nearest (px, py, u * 6.0f);
+				if (k >= 0) {
+					maneuver::Node n2 = nd;
+					n2.mjd = td.MJD1 + TimeToTA (shpel, ta[k]) / 86400.0;
+					vessel->SetManeuverNode ((DWORD)i, n2);
+					selNode = 0;
+				}
+			}
+		}
+		oapi::FVECTOR2 dm[4] = { { m.x, m.y - a }, { m.x + a, m.y }, { m.x, m.y + a }, { m.x - a, m.y } };
+		ui.FillPolygon (dm, 4, sel ? draw[2][0].col : accent);
+		ui.Polyline (dm, 4, 0x000000, 1.0f, true);
+		if (nf & mfdui::AREA_HOVER) {
+			char tip[64], tbuf[32];
+			FmtTime (tbuf, sizeof (tbuf), (nd.mjd - td.MJD0) * 86400.0);
+			snprintf (tip, sizeof (tip), "Node %d  T-%s  dv %.1f m/s", (int)i + 1, tbuf, nd.dv.length ());
+			ui.ShowTooltip (tip);
+		}
+	}
+
+	// the pointer on the orbit: time and altitude there; click: new node
+	float px, py;
+	if (!nodeHover && (f & mfdui::AREA_HOVER) && ui.PointerPos (&px, &py)) {
+		int k = Nearest (px, py, u * 0.7f);
+		if (k >= 0) {
+			double dt = TimeToTA (shpel, ta[k]);
+			Vector pos, vel;
+			shpel->PosVel_TA (pos, vel, ta[k]);
+			ui.Circle (pt[k].x, pt[k].y, u * 0.25f, draw[2][0].col, 1.5f);
+			char tip[96], tbuf[32];
+			FmtTime (tbuf, sizeof (tbuf), dt);
+			snprintf (tip, sizeof (tip), "T+%s  alt %.0f km", tbuf, (pos.length () - elref->Size ()) * 1e-3);
+			ui.ShowTooltip (tip);
+			if (f & mfdui::AREA_CLICKED) {
+				float cx, cy;
+				ui.ClickPos (&cx, &cy);
+				int kc = Nearest (cx, cy, u * 0.9f);
+				if (kc >= 0 && dt > 0.0) {
+					maneuver::Node nd;
+					nd.mjd = td.MJD1 + TimeToTA (shpel, ta[kc]) / 86400.0;
+					nd.dv = Vector ();
+					selNode = (int)vessel->AddManeuverNode (nd);
+				}
+			}
+		} else if (f & mfdui::AREA_CLICKED) {
+			selNode = -1;
+		}
+	}
+}
+
+void Instrument_Orbit::DrawNodePanel ()
+{
+	const std::vector<maneuver::Node> &nodes = vessel->ManeuverNodes ();
+	if (selNode < 0 || selNode >= (int)nodes.size()) return;
+	mfdui::Context &ui = UI ();
+	float u = ui.Unit ();
+	maneuver::Node nd = nodes[selNode];
+
+	// three rows above the bottom line: node, controls, velocity change
+	mfdui::Rect panel (u * 0.3f, IH - u * 5.0f, IW - u * 0.3f, IH - u * 1.5f);
+	ui.Area ("nodepanel", panel); // (takes the clicks the widgets don't)
+	ui.FillRect (panel, 0x061006);
+	ui.FrameRect (panel, draw[1][0].col);
+	mfdui::Rect in = panel.Inset (u * 0.2f);
+	char buf[96], tbuf[32];
+	FmtTime (tbuf, sizeof (tbuf), (nd.mjd - td.MJD0) * 86400.0);
+	snprintf (buf, sizeof (buf), "Node %d   T-%s", selNode + 1, tbuf);
+	mfdui::Rect r0 = in.Row (0, 3, u * 0.1f), r1 = in.Row (1, 3, u * 0.1f), r2 = in.Row (2, 3, u * 0.1f);
+	ui.TextIn (r0, buf, draw[1][0].col, mfdui::ALIGN_LEFT | mfdui::ALIGN_MIDDLE);
+	snprintf (buf, sizeof (buf), "dv %.1f m/s", nd.dv.length ());
+	ui.TextIn (r0, buf, draw[1][0].col, mfdui::ALIGN_RIGHT | mfdui::ALIGN_MIDDLE);
+
+	bool changed = false;
+	bool ab = nd.autoburn;
+	if (ui.Toggle ("autoburn", r1.Left (r1.W() * 0.5f), "Autoburn", &ab)) nd.autoburn = ab, changed = true;
+	ui.Tooltip ("Fly this burn with the burn autopilot");
+	if (ui.Button ("delete", r1.Right (u * 4.0f), "Delete")) {
+		vessel->DelManeuverNode ((DWORD)selNode);
+		selNode = -1;
+		return;
+	}
+	if (ui.Button ("close", r1.CutRight (u * 4.3f).Right (u * 3.0f), "Close")) {
+		selNode = -1;
+		return;
+	}
+
+	static const char *lbl[3] = { "Pro", "Nml", "Rad" };
+	static const char *ids[3] = { "Prograde", "Normal", "Radial" };
+	double comp[3] = { nd.dv.x, nd.dv.y, nd.dv.z };
+	mfdui::NumberSpec dvs (1.0, -1e5, 1e5, "%.1f");
+	for (int k = 0; k < 3; k++) {
+		mfdui::Rect c = r2.Col (k, 3, u * 0.25f);
+		float lw = ui.TextWidth ("Nml", mfdui::FONT_SMALL) + u * 0.7f;
+		ui.TextIn (c.Left (lw), lbl[k], draw[0][1].col, mfdui::ALIGN_LEFT | mfdui::ALIGN_MIDDLE, mfdui::FONT_SMALL);
+		if (ui.Number (ids[k], c.CutLeft (lw), &comp[k], dvs)) changed = true;
+		ui.Tooltip ("m/s. Wheel or drag: 1 m/s steps; click: type a value");
+	}
+	if (changed) {
+		nd.dv = Vector (comp[0], comp[1], comp[2]);
+		vessel->SetManeuverNode ((DWORD)selNode, nd);
+	}
 }

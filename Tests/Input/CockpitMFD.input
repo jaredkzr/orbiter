@@ -1,0 +1,32 @@
+# MFD pointer input in the virtual cockpit and on the 2D panel
+# (Tests/Input/OrbitMFD.scn): the displays are found by the mouse ray on the
+# MFD's mesh group (virtual cockpit) and on the panel mesh (2D panel). A
+# click on the Orbit MFD's orbit adds a node, the node panel deletes it.
+
+lua v = vessel.get_focusinterface ()
+wait 10
+
+# virtual cockpit
+lua oapi.set_cameramode ({mode = "cockpit", cockpitmode = "vc"})
+wait 20
+lua check ("vc", oapi.cockpit_mode () == COCKPIT.VIRTUAL, string.format ("cockpit mode %d", oapi.cockpit_mode ()))
+waitfor @mfd0.orbit.25
+click @mfd0.orbit.25
+waitfor @mfd0.delete
+lua check ("vc_add", v:get_maneuvernodecount () == 1, string.format ("%d nodes", v:get_maneuvernodecount ()))
+click @mfd0.delete
+wait 5
+lua check ("vc_delete", v:get_maneuvernodecount () == 0, string.format ("%d nodes", v:get_maneuvernodecount ()))
+
+# 2D panel
+lua oapi.set_cameramode ({mode = "cockpit", cockpitmode = "panel2d"})
+wait 20
+lua check ("panel", oapi.cockpit_mode () == COCKPIT.PANELS, string.format ("cockpit mode %d", oapi.cockpit_mode ()))
+waitfor @mfd0.orbit.25
+click @mfd0.orbit.25
+waitfor @mfd0.delete
+lua check ("panel_add", v:get_maneuvernodecount () == 1, string.format ("%d nodes", v:get_maneuvernodecount ()))
+click @mfd0.delete
+wait 5
+lua check ("panel_delete", v:get_maneuvernodecount () == 0, string.format ("%d nodes", v:get_maneuvernodecount ()))
+exit

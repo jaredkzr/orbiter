@@ -51,12 +51,23 @@
 #include "ConsoleManager.h"
 #include "Trajectory.h"
 #include "MapView.h"
+#include "MfdWindow.h"
+#include "Transfer.h"
 #include "Replay.h"
 #include "imgui.h"
 #ifdef _WIN32
 #include "imgui_impl_win32.h"
 #endif
 #include <filesystem>
+
+// file of the MFD windows kept between sessions (ORBITER_MFD_WINDOWS: another
+// file, or 0: none)
+static const char *MfdWindowsFile ()
+{
+	const char *e = getenv ("ORBITER_MFD_WINDOWS");
+	if (e && !strcmp (e, "0")) return nullptr;
+	return (e && *e) ? e : "MFDWindows.cfg";
+}
 
 #include "Tracy.hpp"
 
@@ -367,6 +378,7 @@ Orbiter::Orbiter ()
 	RegisterMenuCmd("Info",     "MenuInfoBar/info.png",     [](void *) {g_pOrbiter->DlgMgr()->EnsureEntry<DlgInfo>();});
 	RegisterMenuCmd("Options",  "MenuInfoBar/options.png",  [](void *) {g_pOrbiter->DlgMgr()->EnsureEntry<DlgOptions>();});
 	RegisterMenuCmd("Map",      "MenuInfoBar/map.png",      [](void *) {g_pOrbiter->DlgMgr()->EnsureEntry<DlgMap>();});
+	RegisterMenuCmd("MFD",      "MenuInfoBar/Default/ExtMFD.png", [](void *) {if (g_pOrbiter->GetMfdWindows()) g_pOrbiter->GetMfdWindows()->Open();});
 	RegisterMenuCmd("Record",   "MenuInfoBar/record.png",   [](void *) {g_pOrbiter->DlgMgr()->EnsureEntry<DlgRecorder>();});
 	RegisterMenuCmd("Help",     "MenuInfoBar/help.png",     [](void *) {
 			extern HELPCONTEXT DefHelpContext;
@@ -780,6 +792,7 @@ HWND Orbiter::CreateRenderWindow (Config *pCfg, const char *scenario)
 		pDlgMgr->AddEntry(g_input);
 		mapView = new MapView(); TRACENEW
 		pDlgMgr->AddEntry(mapView);
+		mfdWindows = std::make_unique<MfdWindows> (pDlgMgr);
 
 		// playback screen annotation manager
 		snote_playback = gclient->clbkCreateAnnotation ();
@@ -909,6 +922,10 @@ HWND Orbiter::CreateRenderWindow (Config *pCfg, const char *scenario)
 	if (m_pConsole)
 		m_pConsole->EchoIntro();
 
+	// the MFD windows of the last session
+	if (mfdWindows)
+		if (const char *path = MfdWindowsFile ()) mfdWindows->Restore (path);
+
 	// suppress throttle update on launch
 	if (pDI->joyprop.bThrottle && pCfg->CfgJoystickPrm.bThrottleIgnore) {
 		DIJOYSTATE2 js;
@@ -943,12 +960,17 @@ void Orbiter::CloseSession ()
 	if (replay) replay->Exit (); // (the live state is saved)
 	bSession = false;
 	predictor.reset(); // (stops its thread before the world goes)
+	planners.clear();  // (as their workers)
 	predictTarget = nullptr;
 
 	if      (bRecord)   ToggleRecorder();
 	else if (bPlayback) EndPlayback();
 	const char* desc = pConfig->CfgDebugPrm.bSaveExitScreen ? "CurrentState_img" : "CurrentState";
 	SaveScenario (CurrentScenario, desc, 2);
+	if (mfdWindows) {
+		if (const char *path = MfdWindowsFile ()) mfdWindows->Save (path);
+		mfdWindows->CloseAll ();
+	}
 	if (hScnInterp) {
 		script->DelInterpreter (hScnInterp);
 		hScnInterp = NULL;
@@ -981,6 +1003,7 @@ void Orbiter::CloseSession ()
 		}
 
 		if (mapView)  { pDlgMgr->DelEntry (mapView); delete mapView; mapView = 0; }
+		mfdWindows.reset ();
 		if (replay)   { pDlgMgr->DelEntry (replay); delete replay; replay = 0; }
 		if (g_input)  { delete g_input; g_input = 0; }
 		if (g_select) { delete g_select; g_select = 0; }
@@ -1403,6 +1426,7 @@ bool Orbiter::KillVessels ()
 			if (pDlgMgr) pDlgMgr->BroadcastMessage (MSG_KILLVESSEL, vessel);
 			if (replay) replay->Forget (vessel);
 			if (predictTarget == vessel) predictTarget = nullptr;
+			planners.erase (vessel);
 			// echo deletion on console window
 			if (m_pConsole) {
 				char cbuf[256];
@@ -1414,6 +1438,15 @@ bool Orbiter::KillVessels ()
 		}
 	}
 	return true;
+}
+
+transfer::Planner *Orbiter::TransferPlanner (Vessel *v, bool create)
+{
+	if (!v) return nullptr;
+	auto it = planners.find (v);
+	if (it != planners.end()) return it->second.get();
+	if (!create) return nullptr;
+	return (planners[v] = std::make_unique<transfer::Planner> (v)).get();
 }
 
 void Orbiter::NotifyObjectJump (const Body *obj, const Vector &shift)
@@ -2086,6 +2119,10 @@ VOID Orbiter::UpdateWorld ()
 	if (predictor && g_focusobj && bSession && !(replay && replay->Active()))
 		predictor->Update (g_focusobj, predictTarget);
 
+	// transfer planners: results of their workers, corrections due
+	if (bSession && !(replay && replay->Active()))
+		for (auto &p : planners) p.second->Update ();
+
 	//g_texmanager->OutputInfo();
 }
 
@@ -2137,7 +2174,9 @@ HRESULT Orbiter::UserInput ()
 		if (SUCCEEDED (hr) && !imguiWantsKeyboard)
 			for (i = 0; i < 256; i++)
 				simkstate[i] |= buffer[i];
-		bool consume = BroadcastImmediateKeyboardEvent (simkstate);
+		// a field of an MFD display is being edited: it takes the keys
+		bool mfdEdit = g_pane && g_pane->MFDEditing ();
+		bool consume = mfdEdit || BroadcastImmediateKeyboardEvent (simkstate);
 		if (!skipkbd && !consume) {
 			KbdInputImmediate_System (simkstate);
 			if (bRunning) KbdInputImmediate_OnRunning (simkstate);
@@ -2147,7 +2186,10 @@ HRESULT Orbiter::UserInput ()
 		hr = didev->GetDeviceData (sizeof(DIDEVICEOBJECTDATA), dod, &dwItems, 0);
 		if ((hr == DIERR_NOTACQUIRED || hr == DIERR_INPUTLOST) && SUCCEEDED (didev->Acquire()))
 			hr = didev->GetDeviceData (sizeof(DIDEVICEOBJECTDATA), dod, &dwItems, 0);
-		if (SUCCEEDED (hr) && !imguiWantsKeyboard) {
+		if (SUCCEEDED (hr) && !imguiWantsKeyboard && mfdEdit) {
+			for (DWORD k = 0; k < dwItems; k++)
+				if (dod[k].dwData & 0x80) g_pane->MFDEditKey (dod[k].dwOfs);
+		} else if (SUCCEEDED (hr) && !imguiWantsKeyboard) {
 			BroadcastBufferedKeyboardEvent (buffer, dod, dwItems);
 			if (!skipkbd) {
 				KbdInputBuffered_System (buffer, dod, dwItems);
@@ -2586,6 +2628,7 @@ bool Orbiter::MouseEvent (UINT event, DWORD state, DWORD x, DWORD y)
 	}
 
 	if (BroadcastMouseEvent (event, state, x, y)) return true;
+	if (g_pane && g_pane->MFDPointer (event, state, x, y)) return true; // the MFD displays (also while paused)
 	if (event == WM_MOUSEMOVE) return false; // may be lifted later
 
 	if (bRunning) {

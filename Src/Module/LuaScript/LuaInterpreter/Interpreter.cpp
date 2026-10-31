@@ -874,6 +874,20 @@ void Interpreter::LoadAPI ()
 		{"set_trajectorytarget", oapi_set_trajectorytarget},
 		{"set_mapview", oapi_set_mapview},
 		{"get_mapview", oapi_get_mapview},
+		{"open_mfdwindow", oapi_open_mfdwindow},
+		{"close_mfdwindow", oapi_close_mfdwindow},
+		{"get_mfdwindowmode", oapi_get_mfdwindowmode},
+		{"transfer_search", oapi_transfer_search},
+		{"transfer_select", oapi_transfer_select},
+		{"transfer_nodes", oapi_transfer_nodes},
+		{"transfer_correct", oapi_transfer_correct},
+		{"transfer_info", oapi_transfer_info},
+		{"transfer_launches", oapi_transfer_launches},
+		{"transfer_route", oapi_transfer_route},
+		{"transfer_flybys", oapi_transfer_flybys},
+		{"transfer_suggest", oapi_transfer_suggest},
+		{"transfer_suggestions", oapi_transfer_suggestions},
+		{"transfer_use_suggestion", oapi_transfer_use_suggestion},
 		{"set_replay", oapi_set_replay},
 		{"get_replay", oapi_get_replay},
 		{"replay_seek", oapi_replay_seek},
@@ -4107,11 +4121,18 @@ Switch the map view on or off.
 
 @function set_mapview
 @tparam bool on
+@tparam[opt] handle centre the body to centre the map on: the focus vessel's
+  reference body or one of its parents (handle or name)
 @treturn bool false if there is no map view (no graphics client)
 */
 int Interpreter::oapi_set_mapview (lua_State *L)
 {
-	lua_pushboolean (L, oapiSetMapView (lua_toboolean (L, 1) != 0));
+	bool ok = oapiSetMapView (lua_toboolean (L, 1) != 0);
+	if (ok && lua_gettop (L) >= 2 && !lua_isnil (L, 2)) {
+		OBJHANDLE h = lua_isstring (L, 2) ? oapiGetObjectByName ((char*)lua_tostring (L, 2)) : lua_toObject (L, 2);
+		ok = h && oapiSetMapCentre (h);
+	}
+	lua_pushboolean (L, ok);
 	return 1;
 }
 
@@ -4124,6 +4145,313 @@ Is the map view shown?
 int Interpreter::oapi_get_mapview (lua_State *L)
 {
 	lua_pushboolean (L, oapiGetMapView ());
+	return 1;
+}
+
+/***
+Open an MFD window.
+
+@function open_mfdwindow
+@tparam int mode MFD mode (MFDMODE.xxx)
+@treturn int window slot (-1: no MFD windows without a graphics client)
+*/
+int Interpreter::oapi_open_mfdwindow (lua_State *L)
+{
+	lua_pushinteger (L, oapiOpenMFDWindow ((int)luaL_checkinteger (L, 1)));
+	return 1;
+}
+
+/***
+Close an MFD window.
+
+@function close_mfdwindow
+@tparam int slot window slot
+@treturn bool false if the window wasn't open
+*/
+int Interpreter::oapi_close_mfdwindow (lua_State *L)
+{
+	lua_pushboolean (L, oapiCloseMFDWindow ((int)luaL_checkinteger (L, 1)));
+	return 1;
+}
+
+/***
+Mode of the MFD in a window.
+
+@function get_mfdwindowmode
+@tparam int slot window slot
+@treturn int MFD mode (MFDMODE.xxx; MFDMODE.NONE if the window is closed or off)
+*/
+int Interpreter::oapi_get_mfdwindowmode (lua_State *L)
+{
+	lua_pushinteger (L, oapiGetMFDWindowMode ((int)luaL_checkinteger (L, 1)));
+	return 1;
+}
+
+/***
+Start a transfer search for a vessel: the launch windows over the next years
+and the best transfer of the first window (computed in the background: see
+transfer_info).
+
+@function transfer_search
+@tparam handle hVessel vessel in orbit about its departure body
+@tparam handle hTarget target (a body with the same parent, or a moon of the departure body)
+@tparam[opt=0] int objective 0: least total velocity change, 1: least ejection
+@tparam[opt=0] number alt periapsis altitude at the target [m] (0: default)
+@tparam[opt=0] number apo apoapsis altitude of the capture orbit [m] (0: circular)
+@treturn bool false if no transfer is possible
+*/
+int Interpreter::oapi_transfer_search (lua_State *L)
+{
+	OBJHANDLE hv = lua_toObject (L, 1), ht = lua_toObject (L, 2);
+	int obj = (int)luaL_optinteger (L, 3, 0);
+	double alt = luaL_optnumber (L, 4, 0.0), apo = luaL_optnumber (L, 5, 0.0);
+	lua_pushboolean (L, hv && ht && oapiTransferSearch (hv, ht, obj, alt, apo));
+	return 1;
+}
+
+/***
+Select a transfer of the search.
+
+@function transfer_select
+@tparam handle hVessel
+@tparam number dep departure [MJD] (< 0: the optimum)
+@tparam number tof time of flight [days]
+@treturn bool
+*/
+int Interpreter::oapi_transfer_select (lua_State *L)
+{
+	OBJHANDLE hv = lua_toObject (L, 1);
+	lua_pushboolean (L, hv && oapiTransferSelect (hv, luaL_checknumber (L, 2), luaL_optnumber (L, 3, 0.0)));
+	return 1;
+}
+
+/***
+Make the manoeuvre nodes of the selected transfer (computed in the background).
+
+@function transfer_nodes
+@tparam handle hVessel
+@tparam[opt=false] bool arm fly them with the burn autopilot
+@treturn bool
+*/
+int Interpreter::oapi_transfer_nodes (lua_State *L)
+{
+	OBJHANDLE hv = lua_toObject (L, 1);
+	lua_pushboolean (L, hv && oapiTransferMakeNodes (hv, lua_toboolean (L, 2) != 0));
+	return 1;
+}
+
+/***
+Compute the next correction burn of the transfer now.
+
+@function transfer_correct
+@tparam handle hVessel
+@treturn bool
+*/
+int Interpreter::oapi_transfer_correct (lua_State *L)
+{
+	OBJHANDLE hv = lua_toObject (L, 1);
+	lua_pushboolean (L, hv && oapiTransferCorrect (hv));
+	return 1;
+}
+
+/***
+State of a vessel's transfer planner.
+
+@function transfer_info
+@tparam handle hVessel
+@treturn table fields job (0 none, 1 search, 2 targeting, 3 correction, 4 suggestions), progress,
+  serial, valid, dep, tof, dv_eject, dv_capture, dv_total, c3, vinf_arr, burn_mjd,
+  burn_dv (vector), plan_valid, arr_mjd, peri_alt, peri_target, incl,
+  ncorrections, next_mjd, next_role (0 ejection, 1 correction, 2 capture, 3 flyby,
+  4 deep-space manoeuvre), nflyby, dv_flyby, dv_dsm, message; nil if the vessel has no planner
+*/
+int Interpreter::oapi_transfer_info (lua_State *L)
+{
+	OBJHANDLE hv = lua_toObject (L, 1);
+	TRANSFERINFO ti;
+	if (!hv || !oapiTransferInfo (hv, &ti)) { lua_pushnil (L); return 1; }
+	lua_newtable (L);
+	auto num = [&](const char *k, double v) { lua_pushnumber (L, v); lua_setfield (L, -2, k); };
+	num ("job", ti.job); num ("progress", ti.progress); num ("serial", ti.serial);
+	lua_pushboolean (L, ti.valid); lua_setfield (L, -2, "valid");
+	num ("dep", ti.dep); num ("tof", ti.tof);
+	num ("dv_eject", ti.dvEject); num ("dv_capture", ti.dvCapture); num ("dv_total", ti.dvTotal);
+	num ("c3", ti.c3); num ("vinf_arr", ti.vinfArr); num ("burn_mjd", ti.burnMjd);
+	lua_pushvector (L, ti.burnDv); lua_setfield (L, -2, "burn_dv");
+	lua_pushboolean (L, ti.planValid); lua_setfield (L, -2, "plan_valid");
+	num ("arr_mjd", ti.arrMjd); num ("peri_alt", ti.periAlt); num ("peri_target", ti.periTarget);
+	num ("incl", ti.incl); num ("incl_min", ti.inclMin); num ("ncorrections", ti.nCorrections);
+	num ("next_mjd", ti.nextMjd); num ("next_role", ti.nextRole);
+	num ("nflyby", ti.nFlyby); num ("dv_flyby", ti.dvFlyby); num ("dv_dsm", ti.dvDsm);
+	lua_pushstring (L, ti.message); lua_setfield (L, -2, "message");
+	return 1;
+}
+
+/***
+Set the route of a vessel's transfer planner: gravity assists (the
+advanced mode). The next transfer_search optimises the route; transfer_nodes
+then targets each flyby in full gravity.
+
+@function transfer_route
+@tparam handle hVessel
+@tparam table flybys the flyby bodies in order (handles or names; empty: direct transfers)
+@tparam[opt] table opts fields dsm (bool: deep-space manoeuvres instead of powered flybys),
+  revs (full revolutions per leg, default 0), maxtof (longest flight [days], 0: none),
+  alts (least altitude of each flyby [m])
+@treturn bool false if a body is invalid
+*/
+int Interpreter::oapi_transfer_route (lua_State *L)
+{
+	OBJHANDLE hv = lua_toObject (L, 1);
+	luaL_checktype (L, 2, LUA_TTABLE);
+	std::vector<OBJHANDLE> fb;
+	std::vector<double> alt;
+	int n = (int)lua_objlen (L, 2);
+	for (int i = 1; i <= n; i++) {
+		lua_rawgeti (L, 2, i);
+		OBJHANDLE h = lua_isstring (L, -1) ? oapiGetObjectByName ((char*)lua_tostring (L, -1)) : lua_toObject (L, -1);
+		lua_pop (L, 1);
+		if (!h) { lua_pushboolean (L, 0); return 1; }
+		fb.push_back (h);
+	}
+	DWORD flags = 0;
+	int revs = 0;
+	double maxtof = 0.0;
+	if (lua_istable (L, 3)) {
+		lua_getfield (L, 3, "dsm"); if (lua_toboolean (L, -1)) flags |= TRANSFER_ROUTE_DSM; lua_pop (L, 1);
+		lua_getfield (L, 3, "revs"); if (lua_isnumber (L, -1)) revs = (int)lua_tointeger (L, -1); lua_pop (L, 1);
+		lua_getfield (L, 3, "maxtof"); if (lua_isnumber (L, -1)) maxtof = lua_tonumber (L, -1); lua_pop (L, 1);
+		lua_getfield (L, 3, "alts");
+		if (lua_istable (L, -1))
+			for (int i = 1; i <= n; i++) { lua_rawgeti (L, -1, i); alt.push_back (lua_isnumber (L, -1) ? lua_tonumber (L, -1) : 0.0); lua_pop (L, 1); }
+		lua_pop (L, 1);
+	}
+	lua_pushboolean (L, hv && oapiTransferSetRoute (hv, fb.data(), n, alt.empty() ? NULL : alt.data(), flags, revs, maxtof));
+	return 1;
+}
+
+/***
+Flybys of the selected route.
+
+@function transfer_flybys
+@tparam handle hVessel
+@treturn table list of {body (name), mjd, alt (planned periapsis [MJD], [m]), min_alt,
+  turn [rad], vinf_in, vinf_out, dv (powered flyby), pred_mjd, pred_alt (predicted after
+  transfer_nodes; 0 before)}
+*/
+int Interpreter::oapi_transfer_flybys (lua_State *L)
+{
+	OBJHANDLE hv = lua_toObject (L, 1);
+	int n = hv ? oapiTransferFlyby (hv, 0, NULL) : 0;
+	lua_createtable (L, n, 0);
+	for (int i = 0; i < n; i++) {
+		TRANSFERFLYBY f;
+		oapiTransferFlyby (hv, i, &f);
+		lua_createtable (L, 0, 10);
+		char name[256];
+		::oapiGetObjectName (f.hBody, name, 256);
+		lua_pushstring (L, name); lua_setfield (L, -2, "body");
+		auto num = [&](const char *k, double v) { lua_pushnumber (L, v); lua_setfield (L, -2, k); };
+		num ("mjd", f.mjd); num ("alt", f.alt); num ("min_alt", f.minAlt); num ("turn", f.turn);
+		num ("vinf_in", f.vinfIn); num ("vinf_out", f.vinfOut); num ("dv", f.dv);
+		num ("pred_mjd", f.predMjd); num ("pred_alt", f.predAlt);
+		lua_rawseti (L, -2, i + 1);
+	}
+	return 1;
+}
+
+/***
+Search routes to the target of the last transfer_search with up to three
+flybys (in the background: job 4 of transfer_info).
+
+@function transfer_suggest
+@tparam handle hVessel
+@treturn bool
+*/
+int Interpreter::oapi_transfer_suggest (lua_State *L)
+{
+	OBJHANDLE hv = lua_toObject (L, 1);
+	lua_pushboolean (L, hv && oapiTransferSuggest (hv));
+	return 1;
+}
+
+/***
+Take a route found by transfer_suggest and search it again from the
+suggestion (in the background).
+
+@function transfer_use_suggestion
+@tparam handle hVessel
+@tparam int i the route (1: the first of transfer_suggestions)
+@treturn bool
+*/
+int Interpreter::oapi_transfer_use_suggestion (lua_State *L)
+{
+	OBJHANDLE hv = lua_toObject (L, 1);
+	lua_pushboolean (L, hv && oapiTransferUseSuggestion (hv, (int)luaL_checkinteger (L, 2) - 1));
+	return 1;
+}
+
+/***
+Routes found by transfer_suggest, best first.
+
+@function transfer_suggestions
+@tparam handle hVessel
+@treturn table list of {flybys (list of names; empty: the direct transfer), dv, dep, tof}
+*/
+int Interpreter::oapi_transfer_suggestions (lua_State *L)
+{
+	OBJHANDLE hv = lua_toObject (L, 1);
+	int n = hv ? oapiTransferSuggestion (hv, 0, NULL) : 0;
+	lua_createtable (L, n, 0);
+	for (int i = 0; i < n; i++) {
+		TRANSFERSUGGESTION s;
+		oapiTransferSuggestion (hv, i, &s);
+		lua_createtable (L, 0, 4);
+		lua_createtable (L, s.nFlyby, 0);
+		for (int k = 0; k < s.nFlyby; k++) {
+			char name[256];
+			::oapiGetObjectName (s.hFlyby[k], name, 256);
+			lua_pushstring (L, name);
+			lua_rawseti (L, -2, k + 1);
+		}
+		lua_setfield (L, -2, "flybys");
+		auto num = [&](const char *k, double v) { lua_pushnumber (L, v); lua_setfield (L, -2, k); };
+		num ("dv", s.dv); num ("dep", s.dep); num ("tof", s.tof);
+		lua_rawseti (L, -2, i + 1);
+	}
+	return 1;
+}
+
+/***
+Launch opportunities of a landed vessel for the selected transfer (see
+transfer_search): lift-off times and headings into a parking orbit that
+contains the transfer's departure direction.
+
+@function transfer_launches
+@tparam handle hVessel
+@treturn table list of {launch_mjd, azimuth [rad], incl [rad], ins_mjd, rins, vins
+  (insertion state relative to the departure body), burn_mjd, burn_dv (vector),
+  dv_eject, dv_penalty (above a launch due east), dv_total, tof, selected}
+*/
+int Interpreter::oapi_transfer_launches (lua_State *L)
+{
+	OBJHANDLE hv = lua_toObject (L, 1);
+	int n = hv ? oapiTransferLaunch (hv, 0, NULL) : 0;
+	lua_createtable (L, n, 0);
+	for (int i = 0; i < n; i++) {
+		TRANSFERLAUNCH l;
+		oapiTransferLaunch (hv, i, &l);
+		lua_createtable (L, 0, 14);
+		auto num = [&](const char *k, double v) { lua_pushnumber (L, v); lua_setfield (L, -2, k); };
+		num ("launch_mjd", l.launchMjd); num ("azimuth", l.azimuth); num ("incl", l.incl); num ("ins_mjd", l.insMjd);
+		lua_pushvector (L, l.rIns); lua_setfield (L, -2, "rins");
+		lua_pushvector (L, l.vIns); lua_setfield (L, -2, "vins");
+		num ("burn_mjd", l.burnMjd);
+		lua_pushvector (L, l.burnDv); lua_setfield (L, -2, "burn_dv");
+		num ("dv_eject", l.dvEject); num ("dv_penalty", l.dvPenalty); num ("dv_total", l.dvTotal); num ("tof", l.tof);
+		lua_pushboolean (L, l.selected); lua_setfield (L, -2, "selected");
+		lua_rawseti (L, -2, i + 1);
+	}
 	return 1;
 }
 

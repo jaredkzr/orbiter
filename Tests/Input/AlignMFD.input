@@ -1,0 +1,33 @@
+# Align Plane MFD (glass cockpit, Tests/Input/AlignMFD.scn): its Node button
+# adds a manoeuvre node at the next node of the planes whose velocity change
+# puts the orbit into the target's plane (the Moon's). Checked here by
+# turning the circular orbit to the node and applying the node's dv.
+
+lua v = vessel.get_focusinterface ()
+lua E = oapi.get_objhandle ("Earth"); M = oapi.get_objhandle ("Moon")
+lua function cross (a, b) return {x = a.y*b.z - a.z*b.y, y = a.z*b.x - a.x*b.z, z = a.x*b.y - a.y*b.x} end
+lua function dot (a, b) return a.x*b.x + a.y*b.y + a.z*b.z end
+lua function len (a) return math.sqrt (dot (a, a)) end
+lua function add (a, b, s) return {x = a.x + s*b.x, y = a.y + s*b.y, z = a.z + s*b.z} end
+lua function unit (a) local l = len (a); return {x = a.x/l, y = a.y/l, z = a.z/l} end
+lua function angle (a, b) return math.deg (math.acos (math.min (1, math.max (-1, dot (unit (a), unit (b)))))) end
+wait 10
+
+waitfor @mfd0.node
+lua r0 = oapi.get_relativepos (v:get_handle (), E); v0 = oapi.get_relativevel (v:get_handle (), E); t0 = oapi.get_simmjd ()
+lua hm = cross (oapi.get_relativepos (M, E), oapi.get_relativevel (M, E))
+lua reli0 = angle (cross (r0, v0), hm)
+click @mfd0.node
+wait 5
+lua check ("add", v:get_maneuvernodecount () == 1, string.format ("%d nodes", v:get_maneuvernodecount ()))
+
+lua n = v:get_maneuvernode (0)
+lua dt = (n.mjd - t0) * 86400; w = len (v0) / len (r0); th = w * dt
+lua r = add ({x = r0.x*math.cos (th), y = r0.y*math.cos (th), z = r0.z*math.cos (th)}, unit (v0), len (r0) * math.sin (th))
+lua vv = add ({x = v0.x*math.cos (th), y = v0.y*math.cos (th), z = v0.z*math.cos (th)}, unit (r0), -len (v0) * math.sin (th))
+lua pro = unit (vv); nml = unit (cross (vv, r)); rad = unit (add (unit (r), pro, -dot (unit (r), pro)))
+lua dv = add (add ({x = pro.x*n.dv.x, y = pro.y*n.dv.x, z = pro.z*n.dv.x}, nml, n.dv.y), rad, n.dv.z)
+lua reli1 = angle (cross (r, add (vv, dv, 1)), hm)
+lua check ("plane", reli0 > 5 and reli1 < 0.05 and dt > 0 and dt < 5422, string.format ("relative inclination %.2f -> %.4f deg, node %.0f s ahead, dv %.0f m/s", reli0, reli1, dt, len (dv)))
+lua check ("speed", math.abs (len (add (vv, dv, 1)) - len (vv)) < 0.01, "speed kept")
+exit

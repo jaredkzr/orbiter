@@ -27,6 +27,8 @@ public:
 	inline int BtnMenu (const MFDBUTTONMENU **menu) const { return (mfd ? mfd->ButtonMenu (menu) : 0); }
 	void UpdateDraw (oapi::Sketchpad *skp);
 	void UpdateDraw (HDC hDC);
+	bool ProcessPointer (const MFDPOINTER &p);
+	mfdui::Context *UIContext ();
 
 protected:
 	bool ReadParams (std::ifstream &ifs);
@@ -38,6 +40,7 @@ private:
 	char selkey;
 	MFD *mfd; // pointer to module interface
 	MFD2 *mfd2; // pointer to version 2 interface (0 if not applicable)
+	MFD3 *mfd3; // pointer to version 3 interface (0 if not applicable)
 	OAPI_MSGTYPE (*msgproc)(UINT,UINT,WPARAM,LPARAM);
 };
 

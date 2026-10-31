@@ -8,6 +8,7 @@
 #include "imgui_impl_sdl3.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -194,7 +195,107 @@ namespace {
 		}
 	}
 
-	void ReportControllers ()
+	// Gamepad cursor: the right stick's button switches it on and off; while
+	// on, the right stick moves the mouse pointer, A and B are the left and
+	// right mouse buttons and the d-pad's up and down turn the wheel. These
+	// don't reach Orbiter's gamepad functions meanwhile (camera, A/B, d-pad).
+	struct PadCursor {
+		bool on = false;
+		bool prevToggle = false, prevA = false, prevB = false, prevUp = false, prevDown = false;
+		float x = -1.0f, y = -1.0f;
+		Uint64 lastTicks = 0;
+	} padCursor;
+
+	void PushMotion (SDL_Window *window, float x, float y, float dx, float dy)
+	{
+		SDL_Event e;
+		SDL_zero (e);
+		e.type = SDL_EVENT_MOUSE_MOTION;
+		e.motion.timestamp = SDL_GetTicksNS ();
+		e.motion.windowID = SDL_GetWindowID (window);
+		e.motion.x = x, e.motion.y = y;
+		e.motion.xrel = dx, e.motion.yrel = dy;
+		SDL_PushEvent (&e);
+	}
+
+	void PushButton (SDL_Window *window, Uint8 button, bool down, float x, float y)
+	{
+		SDL_Event e;
+		SDL_zero (e);
+		e.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+		e.button.timestamp = SDL_GetTicksNS ();
+		e.button.windowID = SDL_GetWindowID (window);
+		e.button.button = button;
+		e.button.down = down;
+		e.button.clicks = 1;
+		e.button.x = x, e.button.y = y;
+		SDL_PushEvent (&e);
+	}
+
+	void PushWheel (SDL_Window *window, float w, float x, float y)
+	{
+		SDL_Event e;
+		SDL_zero (e);
+		e.type = SDL_EVENT_MOUSE_WHEEL;
+		e.wheel.timestamp = SDL_GetTicksNS ();
+		e.wheel.windowID = SDL_GetWindowID (window);
+		e.wheel.y = w;
+		e.wheel.mouse_x = x, e.wheel.mouse_y = y;
+		SDL_PushEvent (&e);
+	}
+
+	void UpdatePadCursor (SDL_Window *window, OAPI_CONTROLLERSTATE &s)
+	{
+		PadCursor &c = padCursor;
+		auto Btn = [&](int b) { return (s.buttons[b >> 5] >> (b & 31)) & 1u; };
+		auto Clear = [&](int b) { s.buttons[b >> 5] &= ~(1u << (b & 31)); };
+		bool toggle = Btn (OAPI_PAD_RSTICK);
+		if (toggle && !c.prevToggle) {
+			c.on = !c.on;
+			if (c.on) {
+				int w, h;
+				SDL_GetWindowSize (window, &w, &h);
+				float mx, my;
+				SDL_GetMouseState (&mx, &my);
+				c.x = (mx > 0.0f || my > 0.0f) ? mx : 0.5f * w;
+				c.y = (mx > 0.0f || my > 0.0f) ? my : 0.5f * h;
+				c.lastTicks = SDL_GetTicks ();
+			}
+			oapiWriteLogV ("VulkanClient: gamepad cursor %s", c.on ? "on" : "off");
+		}
+		c.prevToggle = toggle;
+		Clear (OAPI_PAD_RSTICK);
+		if (!c.on) return;
+
+		Uint64 now = SDL_GetTicks ();
+		float dt = std::min (0.1f, (now - c.lastTicks) * 1e-3f);
+		c.lastTicks = now;
+		auto Axis = [](float v) { float a = std::fabs (v); return a < 0.15f ? 0.0f : std::copysign ((a - 0.15f) / 0.85f, v); };
+		float ax = Axis (s.axis[OAPI_PAD_RIGHTX]), ay = Axis (s.axis[OAPI_PAD_RIGHTY]);
+		if (ax || ay) {
+			int w, h;
+			SDL_GetWindowSize (window, &w, &h);
+			const float speed = 1.2f * h; // [pixels/s] at full deflection (squared response)
+			float dx = ax * std::fabs (ax) * speed * dt, dy = ay * std::fabs (ay) * speed * dt;
+			float nx = std::clamp (c.x + dx, 0.0f, (float)w - 1.0f), ny = std::clamp (c.y + dy, 0.0f, (float)h - 1.0f);
+			if (nx != c.x || ny != c.y) {
+				if (SDL_GetWindowFlags (window) & SDL_WINDOW_INPUT_FOCUS) SDL_WarpMouseInWindow (window, nx, ny); // (the visible cursor)
+				else PushMotion (window, nx, ny, nx - c.x, ny - c.y);
+				c.x = nx, c.y = ny;
+			}
+		}
+		bool a = Btn (OAPI_PAD_A), b = Btn (OAPI_PAD_B), up = Btn (OAPI_PAD_DPAD_UP), down = Btn (OAPI_PAD_DPAD_DOWN);
+		if (a != c.prevA) PushButton (window, SDL_BUTTON_LEFT, a, c.x, c.y);
+		if (b != c.prevB) PushButton (window, SDL_BUTTON_RIGHT, b, c.x, c.y);
+		if (up && !c.prevUp) PushWheel (window, 1.0f, c.x, c.y);
+		if (down && !c.prevDown) PushWheel (window, -1.0f, c.x, c.y);
+		c.prevA = a, c.prevB = b, c.prevUp = up, c.prevDown = down;
+		// (hidden from Orbiter's gamepad functions)
+		s.axis[OAPI_PAD_RIGHTX] = s.axis[OAPI_PAD_RIGHTY] = 0.0f;
+		Clear (OAPI_PAD_A), Clear (OAPI_PAD_B), Clear (OAPI_PAD_DPAD_UP), Clear (OAPI_PAD_DPAD_DOWN);
+	}
+
+	void ReportControllers (SDL_Window *window)
 	{
 		if (controllersChanged) {
 			std::vector<const char*> names;
@@ -226,6 +327,7 @@ namespace {
 					s.axis[a] = std::max (-1.0f, SDL_GetGamepadAxis (c.pad, axes[a]) / 32767.0f);
 				for (int b = 0; b < OAPI_PAD_NBUTTON; b++)
 					SetButton (b, SDL_GetGamepadButton (c.pad, buttons[b]));
+				if (i == 0) UpdatePadCursor (window, s);
 			} else {
 				s.naxis = std::min (8, SDL_GetNumJoystickAxes (c.joy));
 				for (int a = 0; a < s.naxis; a++)
@@ -335,6 +437,6 @@ bool input::ProcessEvents (SDL_Window *window)
 			break;
 		}
 	}
-	ReportControllers ();
+	ReportControllers (window);
 	return open;
 }

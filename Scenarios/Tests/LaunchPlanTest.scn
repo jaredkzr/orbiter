@@ -1,0 +1,42 @@
+BEGIN_HYPERDESC
+<h1>Transfer planning: launch windows</h1>
+Delta-gliders on the ground at Baikonur and at Cape Canaveral in March 2001.
+The script plans a transfer to the Moon from Baikonur and one to Mars from
+Cape Canaveral: the launch
+opportunities into a parking orbit that contains the transfer's departure
+direction. For each, it then puts the glider into the planned parking orbit at its
+insertion time and checks that the ejection from there needs no plane change.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Tests/LaunchPlanTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship GL-L
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET GL-L
+  MODE Extern
+  POS 4 0 -20
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+GL-L:DeltaGlider
+  STATUS Landed Earth
+  POS -80.6826150 28.5969630
+  HEADING 90.00
+  PRPLEVEL 0:1.000 1:1.000
+END
+GL-B:DeltaGlider
+  STATUS Landed Earth
+  POS 63.342 45.920
+  HEADING 90.00
+  PRPLEVEL 0:1.000 1:1.000
+END
+END_SHIPS

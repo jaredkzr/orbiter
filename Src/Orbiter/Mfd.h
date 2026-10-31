@@ -21,7 +21,14 @@
 #include "Vessel.h"
 #include "Element.h"
 #include "Select.h"
+#include "MFDAPI.h"
 #include <d3d.h>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace mfdui { class Context; }
 
 #define ELN 256           // polygon resolution for orbit trajectory
 #define ELNH (ELN/2)
@@ -89,6 +96,22 @@ public:
 	virtual void OptionChanged(DWORD cat, DWORD item);
 
 	virtual bool ProcessButton (int bt, int event) { return false; }
+
+	/// Pointer event on the display (from the pane or an MFD window): to the
+	/// widgets of the display, then to ProcessPointer. True if used.
+	bool ConsumePointer (const MFDPOINTER &p);
+	/// Pointer event that no widget took
+	virtual bool ProcessPointer (const MFDPOINTER &p) { return false; }
+	/// The display's widget toolkit, if it uses one
+	virtual mfdui::Context *UIContext () { return ui.get(); }
+	/// A field of the display is being edited: keys should go to EditKey
+	bool Editing ();
+	bool EditKey (DWORD key);
+	/// Redraw at the frame rate for a while [s of system time]
+	void RedrawLive (double seconds = 0.5);
+	/// (tests) Named display positions of the last redraw: the widgets, and
+	/// points published with Anchor [display pixels]
+	void Anchors (std::vector<std::pair<std::string, oapi::FVECTOR2>> &list) const;
 	// used to process buttons in the frame of the MFD (panel mode)
 
 	const char *ButtonLabel (int bt);
@@ -119,6 +142,8 @@ public:
 	virtual void VesselChanged (Vessel *_vessel);
 	void SetSize (const Spec &spec, bool defer_alloc = false);
 	SURFHANDLE Surface () { return surf; }
+	int Width () const { return IW; }
+	int Height () const { return IH; }
 	SURFHANDLE Texture () { return tex; }
 
 	bool IsRuningInExternMFD() const { return (id > MAXMFD || id < 0); }
@@ -183,6 +208,9 @@ public:
 	// obsolete
 
 	static int ModeFromName (char *name, MFDMODESPECEX **spec = NULL);
+
+	/// Name of a registered mode (NULL if none)
+	static const char *ModeName (int id);
 	// Returns the id of an instrument mode, given its name
 	// If spec is defined, it points to the mode specs on return
 	// If no mode matches the key, return value is MFD_NONE
@@ -265,6 +293,11 @@ protected:
 
 	bool FindScnHeader (std::ifstream &ifs) const;
 
+	/// The widget toolkit of the display (created on first use)
+	mfdui::Context &UI ();
+	/// (tests) Publish a named position on the display during UpdateDraw
+	void Anchor (const char *name, float x, float y);
+
 	virtual bool ReadParams (std::ifstream &ifs) = 0;
 	virtual void WriteParams (std::ostream &ofs) const = 0;
 
@@ -323,6 +356,10 @@ private:
 	double lastkeytime;         // time of last buffered key
 	bool showmenu;              // show button menu instead of regular MFD display
 	bool pageonmenu;            // combine menu and page buttons
+
+	std::unique_ptr<mfdui::Context> ui; // widget toolkit (core modes)
+	double liveUntil = -1.0;    // redraw at the frame rate until this system time
+	std::vector<std::pair<std::string, oapi::FVECTOR2>> anchors; // (tests)
 
 	static DWORD nDisabledModes;  // number of disabled MFD modes
 	static int *DisabledModes;    // list of disabled MFD modes

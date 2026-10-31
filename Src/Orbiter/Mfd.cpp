@@ -18,6 +18,9 @@
 #include "MfdAlign.h"
 #include "MfdSync.h"
 #include "MfdTransfer.h"
+#include "MfdPlanner.h"
+#include "MFDUI.h"
+#include "UiAnchor.h"
 #include "MfdUser.h"
 #include "Log.h"
 #include "Util.h"
@@ -75,6 +78,7 @@ Instrument *Instrument::Create (int type, Pane *_pane,
 	case MFD_OSYNC:       TRACENEW return new Instrument_OSync       (_pane, _id, spec, _vessel, restore);
 	case MFD_TRANSFER:    TRACENEW return new Instrument_Transfer    (_pane, _id, spec, _vessel);
 	case MFD_COMMS:       TRACENEW return new Instrument_Comms       (_pane, _id, spec, _vessel);
+	case MFD_PLANNER:     TRACENEW return new Instrument_Planner     (_pane, _id, spec, _vessel);
 	case MFD_USERTYPE:    TRACENEW return new Instrument_User        (_pane, _id, spec, _vessel); // generic user type
 	}
 
@@ -120,6 +124,7 @@ Instrument *Instrument::Create (ifstream &ifs, Pane *_pane,
 			else if (!_strnicmp (pc, "Docking", 7))  instr = Create (MFD_DOCKING, _pane, _id, spec, _vessel);
 			else if (!_strnicmp (pc, "OAlign", 6))   instr = Create (MFD_OPLANEALIGN, _pane, _id, spec, _vessel, false);
 			else if (!_strnicmp (pc, "OSync", 5))    instr = Create (MFD_OSYNC, _pane, _id, spec, _vessel, false);
+			else if (!_strnicmp (pc, "Planner", 7))  instr = Create (MFD_PLANNER, _pane, _id, spec, _vessel);
 			else if (!_strnicmp (pc, "Transfer", 8)) instr = Create (MFD_TRANSFER, _pane, _id, spec, _vessel);
 			else if (!_strnicmp (pc, "COM/NAV", 4))  instr = Create (MFD_COMMS, _pane, _id, spec, _vessel);
 			else if (!_strnicmp (pc, "User", 4))     instr = Create (MFD_USERTYPE, _pane, _id, spec, _vessel);
@@ -213,7 +218,8 @@ void Instrument::RegisterBuiltinModes ()
 		{(char*)"Align Planes", OAPI_KEY_A, 0, 0},
 		{(char*)"Sync Orbit",   OAPI_KEY_Y, 0, 0},
 		{(char*)"Transfer",     OAPI_KEY_X, 0, 0},
-		{(char*)"COM/NAV",      OAPI_KEY_C, 0, 0}
+		{(char*)"COM/NAV",      OAPI_KEY_C, 0, 0},
+		{(char*)"Transfer Planner", OAPI_KEY_P, 0, 0}
 	};
 	static MFDMODESPEC def_oldmode[BUILTIN_MFD_MODES] = { // obsolete
 		{(char*)"Orbit",        OAPI_KEY_O, 0},
@@ -225,7 +231,8 @@ void Instrument::RegisterBuiltinModes ()
 		{(char*)"Align Planes", OAPI_KEY_A, 0},
 		{(char*)"Sync Orbit",   OAPI_KEY_Y, 0},
 		{(char*)"Transfer",     OAPI_KEY_X, 0},
-		{(char*)"COM/NAV",      OAPI_KEY_C, 0}
+		{(char*)"COM/NAV",      OAPI_KEY_C, 0},
+		{(char*)"Transfer Planner", OAPI_KEY_P, 0}
 	};
 
 	static int def_id[BUILTIN_MFD_MODES] = {
@@ -239,6 +246,7 @@ void Instrument::RegisterBuiltinModes ()
 		MFD_OSYNC,
 		MFD_TRANSFER,
 		MFD_COMMS,
+		MFD_PLANNER,
 	};
 	if (nGlobalModes) {
 		for (DWORD i = BUILTIN_MFD_MODES; i < nGlobalModes; i++)
@@ -274,6 +282,13 @@ int Instrument::ModeFromNameOld (char *name, MFDMODESPEC **spec)
 		}
 	}
 	return MFD_NONE;
+}
+
+const char *Instrument::ModeName (int id)
+{
+	for (DWORD i = 0; i < nGlobalModes; i++)
+		if (GlobalMode[i].id == id) return GlobalMode[i].spec->name;
+	return NULL;
 }
 
 int Instrument::ModeFromName (char *name, MFDMODESPECEX **spec)
@@ -801,7 +816,10 @@ void Instrument::EndDrawHDC (HDC hDC)
 bool Instrument::Update (double upDTscale)
 {
 	if (!gc) return false;
-	bool tstep = (td.SimT1 >= updT && td.SysT1 >= updSysT);
+	bool live = td.SysT1 < liveUntil;
+	if (mfdui::Context *c = UIContext ())
+		live = live || c->Dirty () || c->Dragging ();
+	bool tstep = live || (td.SimT1 >= updT && td.SysT1 >= updSysT);
 	if (tstep && !showmenu && modepage < 0) {
 		dT = td.SimT1 - pT; // actual update interval
 		pT = td.SimT1;
@@ -811,6 +829,9 @@ bool Instrument::Update (double upDTscale)
 		if (use_skp_interface) {
 			oapi::Sketchpad *skp = BeginDraw();
 			if (skp) {
+				bool rec = uianchor::Enabled ();
+				if (rec) anchors.clear ();
+				if (rec) if (mfdui::Context *c = UIContext ()) c->RecordIds (true);
 				UpdateDraw (skp);
 				EndDraw (skp);
 			}
@@ -826,6 +847,60 @@ bool Instrument::Update (double upDTscale)
 		updSysT = td.SysT1 + 0.1; // don't exceed 10Hz update rate
 		return true;
 	} else return false;
+}
+
+mfdui::Context &Instrument::UI ()
+{
+	if (!ui) ui = std::make_unique<mfdui::Context> ();
+	return *ui;
+}
+
+bool Instrument::ConsumePointer (const MFDPOINTER &p)
+{
+	if (modepage >= 0 || showmenu) return false;
+	bool used = false;
+	mfdui::Context *c = UIContext ();
+	if (c) used = c->Pointer (p);
+	if (!used) used = ProcessPointer (p);
+	if (used || (c && c->Dirty ())) RedrawLive (0.3);
+	return used;
+}
+
+bool Instrument::Editing ()
+{
+	mfdui::Context *c = UIContext ();
+	return c && c->Editing ();
+}
+
+bool Instrument::EditKey (DWORD key)
+{
+	mfdui::Context *c = UIContext ();
+	if (!c || !c->Key (key)) return false;
+	RedrawLive (0.3);
+	return true;
+}
+
+void Instrument::Anchor (const char *name, float x, float y)
+{
+	if (uianchor::Enabled ()) anchors.emplace_back (name, oapi::FVECTOR2 (x, y));
+}
+
+void Instrument::Anchors (std::vector<std::pair<std::string, oapi::FVECTOR2>> &list) const
+{
+	list = anchors;
+	if (mfdui::Context *c = const_cast<Instrument*>(this)->UIContext ()) {
+		for (int i = 0; i < c->WidgetCount (); i++) {
+			mfdui::Rect r = c->WidgetRect (i);
+			list.emplace_back (c->WidgetId (i), oapi::FVECTOR2 (r.CX(), r.CY()));
+			list.emplace_back (std::string (c->WidgetId (i)) + ".tl", oapi::FVECTOR2 (r.x0, r.y0));
+			list.emplace_back (std::string (c->WidgetId (i)) + ".br", oapi::FVECTOR2 (r.x1, r.y1));
+		}
+	}
+}
+
+void Instrument::RedrawLive (double seconds)
+{
+	liveUntil = std::max (liveUntil, td.SysT0 + seconds);
 }
 
 void Instrument::Timejump ()

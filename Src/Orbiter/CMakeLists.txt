@@ -85,6 +85,9 @@ set(common_src
 	Debris.cpp
 	Maneuver.cpp
 	Trajectory.cpp
+	Transfer.cpp
+	Conics.cpp
+	Routes.cpp
 	MapView.cpp
 	UiAnchor.cpp
 	TerrainDetail.cpp
@@ -119,6 +122,9 @@ set(common_src
 	MfdSurface.cpp
 	MfdSync.cpp
 	MfdTransfer.cpp
+	MfdPlanner.cpp
+	MfdUI.cpp
+	MfdWindow.cpp
 	MfdUser.cpp
 # API implementations
 	CamAPI.cpp

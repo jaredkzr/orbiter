@@ -119,6 +119,15 @@ int Instrument_Docking::ProcessMessage (int msg, void *data)
 	return 0;
 }
 
+bool Instrument_Docking::ProcessPointer (const MFDPOINTER &p)
+{
+	// the wheel switches the scale (in: x10, out: normal)
+	if (p.event != MFD_POINTER_WHEEL) return false;
+	scale = (p.wheel > 0.0f) ? 1 : 0;
+	Refresh ();
+	return true;
+}
+
 void Instrument_Docking::UpdateDraw (oapi::Sketchpad *skp)
 {
 	int i, len, rd, x0, x1, y0, y1, xc, yc, x = cw/2, y = ch;

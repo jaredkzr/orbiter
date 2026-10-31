@@ -31,6 +31,9 @@ public:
 	void Render ();
 
 	bool ProcessMouse (UINT event, DWORD state, int x, int y);
+	/// MFD display under a screen point (u, v: position in it, 0..1)
+	bool MFDAt (int x, int y, int &mfd, float &u, float &v, bool unbounded) const;
+	bool MFDToScreen (int mfd, float u, float v, float &x, float &y) const;
 	void GetButtonState (int &state, int &mfd, int &btn);
 	inline void SetMouseState (int state) { mstate = state; }
 	inline void SetNavDisplayMode (int mode) { navdispmode = mode; }
@@ -82,6 +85,7 @@ private:
 	float blockdx;                       // engine info block offset from left
 	float blockdy;                       // engine info block offset from top
 	float btnx[2][2], btny[6];
+	float mfdr[2][4];                    // MFD display rectangles (x0, y0, x1, y1) [pixel]
 	float bbtnx[2][3], bbtny;            // MFD bottom button geometry parameters
 	int /*nvbw, nvbh,*/ nvby;                // navmode button geometry
 	bool nvbstate[7];                    // navbutton states

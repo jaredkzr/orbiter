@@ -89,6 +89,11 @@ bool ExternMFD::SendKey (DWORD key)
 	return false;
 }
 
+bool ExternMFD::ProcessPointer (const MFDPOINTER &p)
+{
+	return instr && instr->ConsumePointer (p);
+}
+
 bool ExternMFD::Resize (const MFDSPEC &spec)
 {
 	bool active = (instr != 0);
