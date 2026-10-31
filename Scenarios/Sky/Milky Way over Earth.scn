@@ -1,0 +1,35 @@
+BEGIN_HYPERDESC
+<h1>Milky Way over Earth</h1>
+<p>A Delta-glider in Earth's shadow before dawn, 420 km above S&atilde;o Paulo: the city lights below, the centre of the Milky Way high above (Vulkan client).</p>
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.2083
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship GL-01
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET GL-01
+  MODE Extern
+  POS 2.4 -0.00 8.00
+  TRACKMODE TargetRelative
+  FOV 70
+END_CAMERA
+
+BEGIN_HUD
+  TYPE Orbit
+END_HUD
+
+BEGIN_SHIPS
+GL-01:DeltaGlider
+  STATUS Orbiting Earth
+  RPOS -6203224.677 -1904508.947 -2002630.841
+  RVEL 2336.774 60.699 -7295.971
+  AROT 179.523 -17.759 -73.567
+  PRPLEVEL 0:0.8 1:0.9
+END
+END_SHIPS

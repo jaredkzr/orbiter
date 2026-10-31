@@ -1,0 +1,57 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// The ionisation fronts of the nebulae's hot stars (nebula.glsl): along
+// each direction of a source's front table, the radius within which the
+// gas recombines as fast as the star ionises it (its share of the star's
+// ionising photons: the integral of n^2 r^2 dr reaches Q / (4 pi alpha_B)).
+// The gas is the smooth dust map's times the clumps, and the natal cloud's.
+// (Mode 1: the extinction A_V from the Sun to each star instead.)
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#define NEB_FRONT_PASS
+#include "galaxy.glsl"
+#include "nebula.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// per ionising source: xyz: position [pc]; w: Q / (4 pi alpha_B) [cm^-6 pc^3];
+// radii of its natal cloud's core and envelope [pc] (0: none), -, -
+struct Ion { vec4 a, b; };
+layout(std430, set = 0, binding = 2) readonly buffer Ions { Ion ion[]; };
+layout(std430, set = 0, binding = 3) writeonly buffer NebFronts { float nebFront[]; };
+
+layout(push_constant) uniform Params {
+	uint nIon;
+	uint mode;
+} pc;
+
+void main ()
+{
+	uint id = gl_GlobalInvocationID.x;
+	if (pc.mode == 1u) {
+		if (id < pc.nIon) nebFront[id] = GalExtinction (vec3 (0.0), ion[id].a.xyz);
+		return;
+	}
+	if (id >= pc.nIon * uint (NEB_DIRS * NEB_DIRS)) return;
+	uint i = id / uint (NEB_DIRS * NEB_DIRS), k = id % uint (NEB_DIRS * NEB_DIRS);
+	vec3 dir = NebOctDir ((vec2 (float (k % uint (NEB_DIRS)), float (k / uint (NEB_DIRS))) + 0.5) / float (NEB_DIRS));
+	vec3 c = ion[i].a.xyz;
+	float budget = ion[i].a.w, rMax = gal.neb[0].z;
+	vec2 r0 = ion[i].b.xy;
+	float r = 0.0, U = 0.0, cell;
+	for (int n = 0; n < 2000 && r < rMax; n++) {
+		float dr = clamp (0.02 * r, 0.01, 1.0);
+		float rm = r + 0.5 * dr;
+		vec3 x = c + dir * rm;
+		float gas, dust;
+		NebClump (x, dr, gas, dust);
+		float ne = NebIonGas (GalDust (x, cell), rm, r0, 0.0) * gas;
+		float dU = ne * ne * rm * rm * dr;
+		if (U + dU >= budget) { r += dr * (budget - U) / dU; U = budget; break; }
+		U += dU;
+		r += dr;
+	}
+	nebFront[id] = min (r, rMax);
+}

@@ -1,0 +1,35 @@
+BEGIN_HYPERDESC
+<h1>In Saturn's shadow</h1>
+<p>A Delta-glider in Saturn's shadow, looking back at the planet's night side and its rings lit from behind, against the Milky Way (Vulkan client).</p>
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.53
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship GL-03
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET GL-03
+  MODE Extern
+  POS 1.8 -24.23 -6.25
+  TRACKMODE TargetRelative
+  FOV 75
+END_CAMERA
+
+BEGIN_HUD
+  TYPE Orbit
+END_HUD
+
+BEGIN_SHIPS
+GL-03:DeltaGlider
+  STATUS Orbiting Saturn
+  RPOS 124237543.0 -10434266.1 228158188.5
+  RVEL -10607.748 0.000 5776.170
+  AROT 180.000 28.569 180.000
+  PRPLEVEL 0:0.8 1:0.9
+END
+END_SHIPS

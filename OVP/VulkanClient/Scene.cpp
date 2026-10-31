@@ -21,12 +21,17 @@
 #include "VkTexture.h"
 #include "VulkanClient.h"
 #include "StarSphere.h"
+#include "StarField.h"
+#include "StarCatalogue.h"
+#include "GalaxySky.h"
 #include "Particles.h"
 #include "PlanetSurface.h"
 #include "Atmosphere.h"
 #include "Shadows.h"
 #include <algorithm>
 #include <cstring>
+#include <fstream>
+#include <sstream>
 
 #include "mesh.vert.h"
 #include "mesh.frag.h"
@@ -43,8 +48,6 @@
 #include "prepass_building.vert.h"
 #include "lamp.vert.h"
 #include "prepass.frag.h"
-#include "stars.vert.h"
-#include "stars.frag.h"
 #include "particle.vert.h"
 #include "particle.frag.h"
 
@@ -83,11 +86,6 @@ namespace {
 	// cascades around the camera [m]; each is used if the previous one is
 	// less than half its size
 	constexpr double SHADOW_CAM_RADIUS[2] = { 600.0, 4000.0 };
-
-	struct StarPushConstants {
-		float viewProj[16];
-		float pointSize;
-	};
 
 	// Distance up to which vessel visuals are kept, in units of the vessel size
 	constexpr double VESSEL_VIS_RANGE = 5e3;
@@ -320,6 +318,89 @@ bool Scene::Init ()
 	stars = std::make_unique<StarSphere> (gc);
 	stars->Init (ctx);
 
+	// the diffuse light of the Milky Way, seen from the camera's place in
+	// the Galaxy. Its radiance relative to a sunlit white surface at 1 AU
+	// (4.0e4 cd/m^2): 1 S10 (V = 27.78 mag/arcsec^2) is 8.4e-7 cd/m^2,
+	// raised by the dark-adapted eye's gain (2^20.5, ORBITER_VK_SKY_GAIN: log2)
+	{
+		double g = 20.5;
+		if (const char *e = getenv ("ORBITER_VK_SKY_GAIN")) g = atof (e);
+		skyDarkGain = 2.1e-11 * std::exp2 (g);
+	}
+	// (the 3D star catalogue draws the stars brighter than the limit; the
+	// Milky Way leaves them out. ORBITER_VK_SKY=0: no sky, for tests)
+	skySettings.Load (gc);
+	const char *noSky = getenv ("ORBITER_VK_SKY");
+	std::unique_ptr<galactic::StarCatalogue> cat;
+	if (!noSky || atoi (noSky)) cat = StarField::Load ();
+	if (cat) galaxy = std::make_unique<GalaxySky> ();
+	if (galaxy && galaxy->Init (ctx, SkyObserver (), *cat, skySettings)) {
+		galactic::Observer o = SkyObserver ();
+		starField = std::make_unique<StarField> ();
+		if (!starField->Init (ctx, *galaxy, *cat, o, std::sqrt (o.pos[0] * o.pos[0] + o.pos[1] * o.pos[1] + o.pos[2] * o.pos[2]) < 0.01)) {
+			oapiWriteLogError ("VulkanClient: the stars could not be set up");
+			starField.reset ();
+		}
+		cat.reset ();
+		// ORBITER_VK_SKY_PROBE=file.png: the baked sky's brightness in some
+		// directions (log) and the whole sky as an image
+		if (const char *e = getenv ("ORBITER_VK_SKY_PROBE")) {
+			struct { const char *name; double l, b; } dirs[] = {
+				{ "north Galactic pole", 0, 90 }, { "south Galactic pole", 0, -90 },
+				{ "Galactic centre", 0, 0 }, { "Baade's window", 1.0, -3.9 }, { "Sgr star cloud", 7, -1.5 },
+				{ "Scutum cloud", 27, -2 }, { "Cygnus", 77, 1 }, { "Cygnus rift", 70, 0 }, { "anticentre", 180, 0 },
+				{ "Carina", 287, -1 }, { "Coalsack", 301, -1 }, { "Orion (b = -20)", 209, -19 }, { "l = 90, b = 30", 90, 30 } };
+			std::vector<std::array<double, 2>> lb;
+			for (auto &d : dirs) lb.push_back ({ d.l, d.b });
+			std::vector<std::array<float, GalaxySky::NBAND>> v;
+			if (galaxy->Probe (lb, v, e))
+				for (size_t i = 0; i < v.size(); i++)
+					oapiWriteLogV ("VulkanClient: sky at l = %5.1f, b = %5.1f (%s): S10 %.1f %.1f %.1f %.1f", dirs[i].l, dirs[i].b, dirs[i].name, v[i][0], v[i][1], v[i][2], v[i][3]);
+		}
+		// ORBITER_VK_SKY_CHECK=file (test): the baked sky against reference
+		// values (lines: l b band S10 tolerance name; tolerance a fraction)
+		// and the zodiacal light against the measured (within 30%)
+		if (const char *e = getenv ("ORBITER_VK_SKY_CHECK")) {
+			// (to the log and to the standard output: the test's)
+			auto report = [](const char *fmt, auto... a) {
+				char buf[512];
+				snprintf (buf, sizeof(buf), fmt, a...);
+				oapiWriteLogV ("VulkanClient: %s", buf);
+				printf ("%s\n", buf);
+				fflush (stdout);
+			};
+			struct Ref { double l, b, s10, tol; int band; std::string name; };
+			std::vector<Ref> refs;
+			std::ifstream ifs (e);
+			std::string line;
+			while (std::getline (ifs, line)) {
+				if (line.empty () || line[0] == ';') continue;
+				std::istringstream ss (line);
+				Ref r;
+				if (!(ss >> r.l >> r.b >> r.band >> r.s10 >> r.tol)) continue;
+				std::getline (ss >> std::ws, r.name);
+				refs.push_back (r);
+			}
+			std::vector<std::array<double, 2>> lb;
+			for (auto &r : refs) lb.push_back ({ r.l, r.b });
+			std::vector<std::array<float, GalaxySky::NBAND>> v;
+			int pass = 0, n = (int)refs.size () + 1;
+			if (refs.size () && galaxy->Probe (lb, v)) {
+				for (size_t i = 0; i < refs.size (); i++) {
+					double x = v[i][std::clamp (refs[i].band, 0, GalaxySky::NBAND - 1)];
+					bool ok = std::abs (x / refs[i].s10 - 1.0) <= refs[i].tol;
+					pass += ok;
+					report ("sky check %s: %.1f S10 (reference %.1f +- %.0f%%) %s", refs[i].name.c_str (), x, refs[i].s10, refs[i].tol * 100.0, ok ? "ok" : "FAILED");
+				}
+			}
+			double zd = galaxy->ZodiacalLight ().Deviation ();
+			pass += zd <= 0.3;
+			report ("sky check zodiacal light: within %.0f%% of the measured %s", zd * 100.0, zd <= 0.3 ? "ok" : "FAILED");
+			report ("sky check: %d of %d %s", pass, n, pass == n && refs.size () ? "passed" : "FAILED");
+		}
+	}
+	else galaxy.reset ();
+
 	// the sun lights the scene
 	for (DWORD i = 0; i < oapiGetGbodyCount(); i++) {
 		OBJHANDLE h = oapiGetGbodyByIndex (i);
@@ -345,6 +426,10 @@ void Scene::Shutdown ()
 	}
 	if (stars) stars->Shutdown ();
 	stars.reset();
+	if (starField) starField->Shutdown ();
+	starField.reset();
+	if (galaxy) galaxy->Shutdown ();
+	galaxy.reset();
 	if (ao) ao->Shutdown ();
 	ao.reset();
 	if (rtl) rtl->Shutdown ();
@@ -373,7 +458,7 @@ void Scene::Shutdown ()
 	for (auto &u : probeFrameUbo) ctx->DestroyBuffer (u);
 	if (probe) probe->Shutdown ();
 	probe.reset();
-	VkPipeline pipes[] = { meshOpaque, meshBlend, meshAdditive, ringPipe, ringShadowPipe, meshPrepass, meshOpaqueInst, meshPrepassInst, meshOpaqueImp, meshPrepassImp, buildOpaque, buildPrepass, lampPipe, starPipeline, particleAdditive, particleBlend };
+	VkPipeline pipes[] = { meshOpaque, meshBlend, meshAdditive, ringPipe, ringShadowPipe, meshPrepass, meshOpaqueInst, meshPrepassInst, meshOpaqueImp, meshPrepassImp, buildOpaque, buildPrepass, lampPipe, particleAdditive, particleBlend };
 	for (auto p : pipes) if (p) vkDestroyPipeline (ctx->device, p, nullptr);
 	vkDestroyPipelineLayout (ctx->device, meshLayout, nullptr);
 	vkDestroyPipelineLayout (ctx->device, particleLayout, nullptr);
@@ -382,7 +467,6 @@ void Scene::Shutdown ()
 	gc->TexMgr()->Release (glowTex);
 	gc->TexMgr()->Release (cityNone);
 	if (citySampler) vkDestroySampler (ctx->device, citySampler, nullptr);
-	vkDestroyPipelineLayout (ctx->device, starLayout, nullptr);
 	vkDestroyDescriptorPool (ctx->device, framePool, nullptr);
 	vkDestroyDescriptorSetLayout (ctx->device, frameLayout, nullptr);
 	ctx = nullptr;
@@ -555,78 +639,6 @@ void Scene::CreatePipelines ()
 	meshPrepassImp = CreateMeshPipeline (false, false, true, true, true, true);
 	buildOpaque = CreateMeshPipeline (false, false, true, false, true, false, MeshShader::Building);
 	buildPrepass = CreateMeshPipeline (false, false, true, true, true, false, MeshShader::Building);
-
-	// stars: points at infinity, drawn first without depth test
-	VkPushConstantRange spcr{ VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(StarPushConstants) };
-	VkPipelineLayoutCreateInfo slci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-	slci.pushConstantRangeCount = 1;
-	slci.pPushConstantRanges = &spcr;
-	VK_CHECK(vkCreatePipelineLayout (ctx->device, &slci, nullptr, &starLayout));
-
-	VkShaderModule vs = ctx->CreateShaderModule (spv_stars_vert, spv_stars_vert_size);
-	VkShaderModule fs = ctx->CreateShaderModule (spv_stars_frag, spv_stars_frag_size);
-	VkPipelineShaderStageCreateInfo stages[2] = {
-		{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vs, "main" },
-		{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main" }
-	};
-	VkVertexInputBindingDescription bind{ 0, 6 * sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX };
-	VkVertexInputAttributeDescription attr[2] = {
-		{ 0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0 },
-		{ 1, 0, VK_FORMAT_R32G32B32_SFLOAT, 3 * sizeof(float) }
-	};
-	VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-	vi.vertexBindingDescriptionCount = 1;
-	vi.pVertexBindingDescriptions = &bind;
-	vi.vertexAttributeDescriptionCount = 2;
-	vi.pVertexAttributeDescriptions = attr;
-	VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-	ia.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
-	VkPipelineViewportStateCreateInfo vps{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
-	vps.viewportCount = 1;
-	vps.scissorCount = 1;
-	VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-	rs.polygonMode = VK_POLYGON_MODE_FILL;
-	rs.cullMode = VK_CULL_MODE_NONE;
-	rs.lineWidth = 1.0f;
-	VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-	ms.rasterizationSamples = ctx->sceneSamples;
-	VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-	VkPipelineColorBlendAttachmentState cba{};
-	cba.colorWriteMask = 0xF;
-	cba.blendEnable = VK_TRUE; // additive, so overlapping stars accumulate
-	cba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-	cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
-	cba.colorBlendOp = VK_BLEND_OP_ADD;
-	cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-	cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-	cba.alphaBlendOp = VK_BLEND_OP_ADD;
-	VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-	cb.attachmentCount = 1;
-	cb.pAttachments = &cba;
-	VkDynamicState dyn[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
-	VkPipelineDynamicStateCreateInfo dy{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-	dy.dynamicStateCount = 2;
-	dy.pDynamicStates = dyn;
-	VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-	rci.colorAttachmentCount = 1;
-	rci.pColorAttachmentFormats = &ctx->sceneFormat;
-	rci.depthAttachmentFormat = ctx->depthFormat;
-	VkGraphicsPipelineCreateInfo gpi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-	gpi.pNext = &rci;
-	gpi.stageCount = 2;
-	gpi.pStages = stages;
-	gpi.pVertexInputState = &vi;
-	gpi.pInputAssemblyState = &ia;
-	gpi.pViewportState = &vps;
-	gpi.pRasterizationState = &rs;
-	gpi.pMultisampleState = &ms;
-	gpi.pDepthStencilState = &ds;
-	gpi.pColorBlendState = &cb;
-	gpi.pDynamicState = &dy;
-	gpi.layout = starLayout;
-	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &starPipeline));
-	vkDestroyShaderModule (ctx->device, vs, nullptr);
-	vkDestroyShaderModule (ctx->device, fs, nullptr);
 
 	// billboards: view-space vertices, one texture
 	VkDescriptorSetLayout texLayout = gc->TexMgr()->Layout();
@@ -1003,6 +1015,24 @@ void Scene::UpdateCamera ()
 {
 	oapiCameraGlobalPos (&camPos);
 	oapiCameraRotationMatrix (&camRot);
+	// ORBITER_VK_SKY_LOOK=l,b: the view turned to Galactic longitude l,
+	// latitude b [deg], Galactic north up (for tests of the sky)
+	if (const char *e = getenv ("ORBITER_VK_SKY_LOOK")) {
+		double l, b;
+		if (sscanf (e, "%lf,%lf", &l, &b) == 2) {
+			double G[3][3];
+			galactic::EclipticToGalactic (G);
+			auto toEcl = [&](double x, double y, double z) {
+				return _V(G[0][0] * x + G[1][0] * y + G[2][0] * z, G[0][1] * x + G[1][1] * y + G[2][1] * z, G[0][2] * x + G[1][2] * y + G[2][2] * z);
+			};
+			l *= RAD, b *= RAD;
+			VECTOR3 f = toEcl (cos (b) * cos (l), cos (b) * sin (l), sin (b));
+			VECTOR3 n = toEcl (0, 0, 1);
+			VECTOR3 u = unit (n - f * dotp (n, f));
+			VECTOR3 r = crossp (u, f);
+			camRot = _M(r.x, u.x, f.x, r.y, u.y, f.y, r.z, u.z, f.z);
+		}
+	}
 	// in the cockpit, the view jolted by the vessel's aerodynamic jolts
 	// (turbulence, buffeting: its aerodynamic acceleration's change within
 	// about half a second; the head lagging, a few tenths of a degree per
@@ -1303,6 +1333,51 @@ void Scene::WriteCityDescriptors ()
 	}
 }
 
+void Scene::SkyOptionsChanged ()
+{
+	skySettings.LoadOptions (gc);
+	if (galaxy) galaxy->SetStarLimit (skySettings.starLimit);
+	if (starField) starField->SetLimit (skySettings.starLimit);
+}
+
+galactic::Observer Scene::SkyObserver () const
+{
+	galactic::Observer o;
+	o.mjd = oapiGetSimMJD ();
+	// ORBITER_VK_SKY_OBSERVER=x,y,z[,t]: heliocentric Galactic position [pc]
+	// (for tests: the sky seen from elsewhere in the Galaxy), reached from
+	// the Sun in t seconds of simulation time if given
+	if (const char *e = getenv ("ORBITER_VK_SKY_OBSERVER")) {
+		double t = 0.0;
+		int n = sscanf (e, "%lf,%lf,%lf,%lf", &o.pos[0], &o.pos[1], &o.pos[2], &t);
+		if (n >= 3) {
+			if (n == 4 && t > 0.0) {
+				double f = std::clamp (oapiGetSimTime () / t, 0.0, 1.0);
+				for (auto &x : o.pos) x *= f;
+			}
+			return o;
+		}
+	}
+	// (from the Sun)
+	VECTOR3 sp = _V(0, 0, 0);
+	if (hSun) oapiGetGlobalPos (hSun, &sp);
+	double p[3] = { camPos.x - sp.x, camPos.y - sp.y, camPos.z - sp.z };
+	galactic::GlobalToGalactic (p, o.pos);
+	return o;
+}
+
+void Scene::SkyAdapt (float avgLogLum, double dt)
+{
+	// an image metered brighter than 2^-5 (lit objects in view) dims the
+	// sky by 2 stops per stop; adapting to the light is fast, to the dark
+	// slow. (The sky raised by the settings does not dim itself: the
+	// threshold rises with it.)
+	double boost = std::log2 (std::max (skySettings.intensity, 1e-3f)) + (skySettings.enhanced ? skySettings.gain : 0.0);
+	double target = std::clamp ((avgLogLum + 5.0 - std::max (boost, 0.0)) * 2.0, 0.0, 16.0);
+	double rate = target > skyDim ? 2.0 : 0.3;
+	skyDim += (target - skyDim) * (1.0 - std::exp (-dt * rate));
+}
+
 void Scene::BeginFrame ()
 {
 	uint32_t fi = ctx->FrameIndex();
@@ -1318,6 +1393,16 @@ void Scene::BeginFrame ()
 	particles->SetPrepass (ao->PrepassView ());
 	tracks->BeginFrame (fi, camPos, camRot);
 	if (rt) rt->BeginFrame ();
+	ctx->GpuMark ("begin");
+	if (galaxy) galaxy->Update (SkyObserver (), oapiGetSysStep ());
+	ctx->GpuMark ("skybake");
+	if (starField && skySettings.stars) {
+		// (the Sun is drawn as a body; the catalogue's Sun only far from it,
+		// where the observer is placed elsewhere)
+		galactic::Observer o = SkyObserver ();
+		starField->Update (o, std::sqrt (o.pos[0] * o.pos[0] + o.pos[1] * o.pos[1] + o.pos[2] * o.pos[2]) < 0.01);
+		ctx->GpuMark ("starselect");
+	}
 	// the previous frame does not continue into this one (camera cut)
 	cameraCut = !havePrev || length (camPos - prevCamPos) > 5e3;
 
@@ -1754,7 +1839,38 @@ void Scene::Render ()
 	float viewf[16], vp[16];
 	view.ToFloat (viewf);
 	MulMat4f (proj, viewf, vp);
-	stars->Render (cmd, starPipeline, starLayout, vp);
+	if (galaxy) {
+		// view -> ecliptic (camRot) -> Galactic
+		double G[3][3], R[3][3];
+		galactic::EclipticToGalactic (G);
+		for (int i = 0; i < 3; i++)
+			for (int j = 0; j < 3; j++)
+				R[i][j] = G[i][0] * camRot.data[j] + G[i][1] * camRot.data[3 + j] + G[i][2] * camRot.data[6 + j];
+		float gain = (float)(skyDarkGain * std::exp2 (-skyDim));
+		if (skySettings.milkyWay) {
+			GalaxySky::Display d;
+			d.gain = gain * skySettings.intensity;
+			if (skySettings.enhanced) {
+				d.gain *= std::exp2 (skySettings.gain);
+				d.contrast = skySettings.contrast, d.highlight = skySettings.highlight, d.saturation = skySettings.saturation;
+				d.camera = true;
+			}
+			galaxy->Render (cmd, R, (float)ProjX (), (float)ProjY (), d);
+		}
+		if (starField && skySettings.stars) {
+			// Galactic direction -> ecliptic (G^T) -> clip
+			float gvp[16];
+			for (int r = 0; r < 4; r++) {
+				for (int c = 0; c < 3; c++)
+					gvp[c * 4 + r] = (float)(vp[r] * G[c][0] + vp[4 + r] * G[c][1] + vp[8 + r] * G[c][2]);
+				gvp[12 + r] = vp[12 + r];
+			}
+			ctx->GpuMark ("milky way");
+			starField->Render (cmd, gvp, (float)ProjX (), (float)ProjY (), gain, galaxy->ShownLimit ());
+			ctx->GpuMark ("stars");
+		}
+	}
+	stars->SetView (vp);
 
 	std::vector<VObject*> list;
 	for (auto &it : visuals) list.push_back (it.second.get());

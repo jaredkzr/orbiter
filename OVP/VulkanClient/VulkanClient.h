@@ -39,6 +39,7 @@ public:
 	bool clbkInitialise () override;
 	HWND clbkCreateRenderWindow () override;
 	void clbkPostCreation () override;
+	void clbkOptionChanged (DWORD cat, DWORD item) override;
 	void clbkCloseSession (bool fastclose) override;
 	void clbkDestroyRenderWindow (bool fastclose) override;
 	bool clbkUseLaunchpadVideoTab () const override { return false; }

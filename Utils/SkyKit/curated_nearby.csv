@@ -1,0 +1,7 @@
+# Curated values for nearby stars, overriding the catalogues' (where they
+# are poor: bright binaries and the like). Applied by build_stars.py.
+# hip: Hipparcos number (0: none); source_id: Gaia DR3 (0: none);
+# plx, plx_err: parallax [mas]; ref: source.
+hip,source_id,plx,plx_err,ref
+71683,0,747.17,0.61,"alpha Cen A: Kervella et al. 2016, A&A 594, A107 (the system's parallax)"
+71681,0,747.17,0.61,"alpha Cen B: Kervella et al. 2016, A&A 594, A107 (the system's parallax)"

@@ -9,9 +9,11 @@
 #define __SCENE_H
 
 #include "VkContext.h"
+#include "GalacticFrame.h"
 #include "VkMath.h"
 #include "RayTracing.h"
 #include "Plumes.h"
+#include "SkySettings.h"
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -22,6 +24,8 @@ class VulkanClient;
 class VObject;
 class VkMesh;
 class StarSphere;
+class StarField;
+class GalaxySky;
 class VkTexture;
 class TileRenderer;
 class AtmosphereRenderer;
@@ -239,6 +243,11 @@ public:
 	bool SunOnScreen (float uv[2]) const;
 	/// fraction of the sun's disc visible from the camera
 	double CameraSunlight () { return Sunlight (camPos); }
+	/// The eye's adaptation for the sky: the scene's metered luminance
+	/// (log2, of the last frames) dims the Milky Way seen against it
+	void SkyAdapt (float avgLogLum, double dt);
+	/// Orbiter's celestial sphere options have changed
+	void SkyOptionsChanged ();
 	VkDescriptorSet FrameSet () const { return inProbe ? probeFrameSet[ctx->FrameIndex()] : frameSet[ctx->FrameIndex()]; }
 	/// rendering the environment probe (not the main view)
 	bool InProbe () const { return inProbe; }
@@ -330,8 +339,6 @@ private:
 	float prevProj[16] = {};             // unjittered
 	uint64_t frameNo = 0;
 	void WriteAODescriptors ();
-	VkPipelineLayout starLayout = VK_NULL_HANDLE;
-	VkPipeline starPipeline = VK_NULL_HANDLE;
 	VkPipelineLayout particleLayout = VK_NULL_HANDLE;
 	VkPipeline particleAdditive = VK_NULL_HANDLE;
 	VkPipeline particleBlend = VK_NULL_HANDLE;
@@ -351,6 +358,12 @@ private:
 	uint32_t sphereNIdx = 0;
 
 	std::unique_ptr<StarSphere> stars;
+	std::unique_ptr<GalaxySky> galaxy;
+	std::unique_ptr<StarField> starField; // (the catalogue's stars)
+	SkySettings skySettings;
+	double skyDim = 0.0;      // the sky's dimming by light adaptation [stops]
+	double skyDarkGain = 0.0; // scene radiance of 1 S10 to the dark-adapted eye
+	galactic::Observer SkyObserver () const;
 
 	// camera
 	VECTOR3 camPos{};

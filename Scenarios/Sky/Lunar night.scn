@@ -1,0 +1,36 @@
+BEGIN_HYPERDESC
+<h1>Lunar night</h1>
+<p>A Delta-glider on the Moon near Brighton Beach at new moon: lit only by the full Earth, under the Milky Way (Vulkan client).</p>
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51993.10
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship GL-02
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET GL-02
+  MODE Extern
+  POS 4 90 6
+  TRACKMODE Ground Moon
+  GROUNDLOCATION -33.2994 41.19955 0.4
+  FOV 75.00
+END_CAMERA
+
+BEGIN_HUD
+  TYPE Surface
+END_HUD
+
+BEGIN_SHIPS
+GL-02:DeltaGlider
+  STATUS Landed Moon
+  POS -33.3000000 41.2000000
+  HEADING 30
+  GEAR 1 1.0000
+  PRPLEVEL 0:1.000 1:1.000
+END
+END_SHIPS

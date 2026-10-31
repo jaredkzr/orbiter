@@ -1,0 +1,43 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// The zodiacal light seen from the observer, into a small cube map
+// (Galactic frame, S10 per spectral band, as the Milky Way's): sunlight
+// scattered by the zodiacal cloud (zodiacal.glsl), scaled to the measured
+// brightness at 1 AU, a little redder than sunlight.
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "zodiacal.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image2DArray cube;
+
+layout(push_constant) uniform Params {
+	vec4 observer;      // xyz: heliocentric ecliptic [AU]; w: S10 per model unit
+	vec4 eclFromGal[3]; // rows of the rotation Galactic -> ecliptic; w of the first: face size
+	vec4 colour;        // per band, relative to sunlight's
+} pc;
+
+vec3 FaceDir (int face, vec2 uv) // (as sky_bake.comp)
+{
+	if (face == 0) return vec3 (1.0, -uv.y, -uv.x);
+	if (face == 1) return vec3 (-1.0, -uv.y, uv.x);
+	if (face == 2) return vec3 (uv.x, 1.0, uv.y);
+	if (face == 3) return vec3 (uv.x, -1.0, -uv.y);
+	if (face == 4) return vec3 (uv.x, -uv.y, 1.0);
+	return vec3 (-uv.x, -uv.y, -1.0);
+}
+
+void main ()
+{
+	int size = int (pc.eclFromGal[0].w);
+	ivec3 px = ivec3 (gl_GlobalInvocationID);
+	if (px.x >= size || px.y >= size) return;
+	vec2 uv = (vec2 (px.xy) + 0.5) / float (size) * 2.0 - 1.0;
+	vec3 g = normalize (FaceDir (px.z, uv));
+	vec3 d = vec3 (dot (pc.eclFromGal[0].xyz, g), dot (pc.eclFromGal[1].xyz, g), dot (pc.eclFromGal[2].xyz, g));
+	float I = ZodLight (pc.observer.xyz, d, 64) * pc.observer.w;
+	imageStore (cube, px, min (I * pc.colour, vec4 (60000.0)));
+}

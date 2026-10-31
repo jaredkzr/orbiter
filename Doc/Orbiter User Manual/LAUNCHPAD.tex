@@ -282,6 +282,20 @@ Using a higher magnitude value for the max. brightness setting will render stars
 \item \textbf{Background map:} An additional global background image can be projected onto the celestial sphere. By default, Orbiter uses a synthetic image of faint stars created from the ESA Gaia mission to provide a Milky Way background. (Credit: Starmap 2020, see above). Alternatively, a number of different all-sky surveys at specific wavelengths from infrared to gamma-ray can be shown for special effects. The brightness slider allows to adjust the intensity of the background map.
 \end{itemize}
 
+\noindent
+\textbf{The simulated sky (Vulkan client).} The Vulkan graphics client does not use the star map and background images. It simulates the sky from wherever the camera is: the stars of a 3D catalogue (Hipparcos and Gaia, with fainter stars generated from models of the Galaxy's star populations), the diffuse light of the Milky Way traced through a 3D map of the Galaxy's dust, the nebulae lit by their stars, the nearby galaxies and globular clusters, and the zodiacal light of the solar system's dust. The options of this page apply as follows:
+\begin{itemize}
+\item \textbf{Background stars: show as pixels} switches the stars on and off. The min. brightness magnitude is the faintest star drawn as a point (default 8); the light of the fainter stars joins the diffuse light. The other star display parameters do not apply: the stars' brightness is physical.
+\item \textbf{Background map} switches the diffuse light (the Milky Way, the nebulae, the galaxies and the zodiacal light) on and off; the brightness slider scales it (0.3: as measured).
+\end{itemize}
+Further settings are in \textit{Config/VK/Sky.cfg}:
+\begin{itemize}
+\item \textbf{DisplayMode:} \textit{Realistic} shows the sky as the dark-adapted eye sees it: the nebulae are faint, and lit objects in view outshine the sky. \textit{Enhanced} shows it as a long-exposure photograph: in a camera's colours (the red of the nebulae's hydrogen), the diffuse light's contrast raised, its brightest parts compressed and its colours deepened (\textit{EnhancedContrast}, \textit{EnhancedHighlights}, \textit{EnhancedSaturation}, \textit{EnhancedGain}); the stars are unchanged.
+\item \textbf{Nebulae, Galaxies, ZodiacalLight:} switch these parts of the diffuse light on and off.
+\item \textbf{BakeBudget:} far from the Sun the sky is computed again as the camera moves (every 0.5 parsec). Where the graphics card has a separate compute queue this runs alongside the rendering; otherwise each frame spends at most about this much GPU time on it [ms].
+\end{itemize}
+The sky's data (\textit{Config/CSphere/Sky}) are built with the tools in \textit{Utils/SkyKit}. The first computation of the sky is kept in \textit{Cache/VulkanClient/Sky} for a faster start.
+
 
 \subsubsection{Visual helpers}
 Orbiter has the ability to show a number of visual cues in the simulation window to provide additional information to the user.

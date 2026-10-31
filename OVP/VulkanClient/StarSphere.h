@@ -2,7 +2,8 @@
 // Licensed under the MIT License
 
 // =======================================================================
-// Celestial sphere: background stars
+// Celestial sphere: Orbiter's markers and labels (the stars and the
+// Milky Way are drawn by StarField and GalaxySky)
 // =======================================================================
 
 #ifndef __STARSPHERE_H
@@ -19,15 +20,14 @@ public:
 
 	void Init (vkc::Context *ctx);
 	void Shutdown ();
-	void Render (VkCommandBuffer cmd, VkPipeline pipeline, VkPipelineLayout layout, const float *viewProj);
+	/// the frame's view and projection, for the markers
+	void SetView (const float *viewProj);
 
 protected:
 	bool EclDir2WindowPos (const VECTOR3 &dir, int &x, int &y) const override;
 
 private:
 	vkc::Context *ctx = nullptr;
-	vkc::Buffer vbuf;
-	uint32_t nStar = 0;
 	float viewProj[16] = {};
 	uint32_t viewW = 1, viewH = 1;
 };

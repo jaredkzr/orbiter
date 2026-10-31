@@ -3,6 +3,7 @@
 
 #define ORBITER_MODULE
 #include "VulkanClient.h"
+#include "SkySettings.h"
 #include "Scene.h"
 #include "VObjects.h"
 #include "VkMesh.h"
@@ -89,6 +90,14 @@ void VulkanClient::Teardown ()
 bool VulkanClient::clbkInitialise ()
 {
 	if (!GraphicsClient::clbkInitialise ()) return false;
+	// the sky's data are required (ORBITER_VK_SKY=0: no sky, for tests)
+	const char *noSky = getenv ("ORBITER_VK_SKY");
+	if (!noSky || atoi (noSky)) {
+		std::vector<std::string> missing = SkySettings::MissingData ();
+		for (auto &m : missing)
+			oapiWriteLogError ("VulkanClient: missing sky data: %s (built by Utils/SkyKit)", m.c_str ());
+		if (missing.size ()) return false;
+	}
 	oapiSurfaceDetailSupported (); // (PlanetSurface: meshes and shading)
 	oapiScatterSupported ();       // (ScatterField: the ground scatter)
 	oapiCitySupported ();          // (CityField: the cities)
@@ -197,6 +206,12 @@ void VulkanClient::clbkPostCreation ()
 	scene->Init ();
 }
 
+void VulkanClient::clbkOptionChanged (DWORD cat, DWORD item)
+{
+	GraphicsClient::clbkOptionChanged (cat, item);
+	if (cat == OPTCAT_CELSPHERE && scene) scene->SkyOptionsChanged ();
+}
+
 void VulkanClient::clbkCloseSession (bool fastclose)
 {
 	GraphicsClient::clbkCloseSession (fastclose);
@@ -263,6 +278,11 @@ void VulkanClient::clbkRenderScene ()
 	scene->RenderProbe ();
 	ctx.GpuMark ("probe");
 	ctx.BindScene (true);
+	if (postfx->autoExposure) {
+		float le, ll;
+		postfx->ExposureState (le, ll);
+		scene->SkyAdapt (ll, oapiGetSysStep ());
+	}
 	scene->Render ();
 	ctx.GpuMark ("effects");
 	VkExtent2D sceneSize;

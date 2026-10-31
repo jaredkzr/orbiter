@@ -112,7 +112,9 @@ if (ORBITER_TEST_EXE)
 	set_tests_properties(Scenario.DestructionTest Scenario.FocusLossTest PROPERTIES ENVIRONMENT "ORBITER_DAMAGE=1")
 
 	# Launchpad (in the Vulkan client's window, rendered offscreen; needs a
-	# Vulkan device): a scenario launched twice, returning to the launchpad
+	# Vulkan device): a scenario launched twice, returning to the launchpad.
+	# (These tests leave out the simulated sky, ORBITER_VK_SKY=0: its data,
+	# Config/CSphere/Sky, are built locally by Utils/SkyKit.)
 	if (ORBITER_HEADLESS AND ORBITER_BUILD_VULKANCLIENT)
 		add_test(
 			NAME "Launchpad.Cycle"
@@ -120,7 +122,7 @@ if (ORBITER_TEST_EXE)
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Launchpad.Cycle PROPERTIES TIMEOUT 120
-			ENVIRONMENT "ORBITER_VK_OFFSCREEN=1;ORBITER_LAUNCHPAD_AUTO=Delta-glider/Smack!;ORBITER_LAUNCHPAD_RUNS=2"
+			ENVIRONMENT "ORBITER_VK_OFFSCREEN=1;ORBITER_VK_SKY=0;ORBITER_LAUNCHPAD_AUTO=Delta-glider/Smack!;ORBITER_LAUNCHPAD_RUNS=2"
 			PASS_REGULAR_EXPRESSION "Launchpad: session 2 closed")
 
 		# Scripted mouse and keyboard input (Tests/Input/*.input, see
@@ -134,8 +136,24 @@ if (ORBITER_TEST_EXE)
 				WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 			)
 			set_tests_properties(Input.${test_name} PROPERTIES TIMEOUT 120
-				ENVIRONMENT "ORBITER_VK_OFFSCREEN=1;ORBITER_VK_TEST_INPUT=${InputTest}")
+				ENVIRONMENT "ORBITER_VK_OFFSCREEN=1;ORBITER_VK_SKY=0;ORBITER_VK_TEST_INPUT=${InputTest}")
 		endforeach()
+
+		# The simulated sky (needs its data, Config/CSphere/Sky, else left
+		# out): the bake's brightness in some directions against reference
+		# values (Tests/Sky/reference.txt), the zodiacal light against the
+		# measured
+		if (EXISTS "${ORBITER_BINARY_ROOT_DIR}/Config/CSphere/Sky/stars.bin")
+			add_test(
+				NAME "Sky.Check"
+				COMMAND ${ORBITER_TEST_EXE} -p VulkanClient "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Sky/Sky.scn" "--maxframes=5"
+				WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+			)
+			set_tests_properties(Sky.Check PROPERTIES TIMEOUT 120
+				ENVIRONMENT "ORBITER_VK_OFFSCREEN=1;ORBITER_VK_SKY_CACHE=0;ORBITER_VK_SKY_CHECK=${CMAKE_SOURCE_DIR}/Tests/Sky/reference.txt"
+				PASS_REGULAR_EXPRESSION "sky check: [0-9]+ of [0-9]+ passed"
+				FAIL_REGULAR_EXPRESSION "FAILED")
+		endif()
 	endif()
 
 endif()

@@ -1,0 +1,35 @@
+BEGIN_HYPERDESC
+<h1>Toward the galactic centre</h1>
+<p>A Delta-glider 30 AU from the Sun, as far out as Neptune, headed for the centre of the Milky Way (Vulkan client).</p>
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.53
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship GL-04
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET GL-04
+  MODE Extern
+  POS 2.6 12.41 6.68
+  TRACKMODE TargetRelative
+  FOV 70
+END_CAMERA
+
+BEGIN_HUD
+  TYPE Orbit
+END_HUD
+
+BEGIN_SHIPS
+GL-04:DeltaGlider
+  STATUS Orbiting Sun
+  RPOS -4487936121000.0 0.0 0.0
+  RVEL -0.000 0.000 -5437.916
+  AROT 180.000 -1.940 180.000
+  PRPLEVEL 0:0.8 1:0.9
+END
+END_SHIPS

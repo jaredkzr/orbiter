@@ -1,0 +1,4 @@
+BEGIN_HYPERDESC
+<h1>Sky</h1>
+<p>The simulated sky of the Vulkan client: the stars, the Milky Way, the nebulae, the nearby galaxies and the zodiacal light, seen from around the solar system. The sky is faint, as the dark-adapted eye sees it, where nothing lit is in view; set <i>DisplayMode = Enhanced</i> in Config/VK/Sky.cfg for a long-exposure photograph's view.</p>
+END_HYPERDESC

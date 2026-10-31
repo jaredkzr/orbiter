@@ -1,0 +1,45 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Selection of the catalogue stars seen from the observer brighter than
+// the limiting magnitude (through the dust), into the list the star field
+// draws from: (star, A_V). Run over a part of the stars per dispatch (every
+// n'th: alike in cost), so that a new selection can be spread over frames.
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "galaxy.glsl"
+#include "starfield.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(std430, set = 0, binding = 2) readonly buffer Stars { Star stars[]; };
+layout(std430, set = 0, binding = 3) buffer List { StarListHeader head; uvec2 entries[]; } list;
+
+layout(push_constant) uniform Params {
+	vec4 observer; // xyz: heliocentric Galactic position [pc]; w: limiting magnitude
+	uint part;     // this dispatch's stars: every nParts'th from part
+	uint nParts;
+	uint atSun;    // the observer is at the Sun: the catalogue's extinction
+	uint hideSun;  // the Sun is drawn as a body
+	uint nStar;
+	uint pad0, pad1, pad2;
+} pc;
+
+void main ()
+{
+	uint i = gl_GlobalInvocationID.x * pc.nParts + pc.part;
+	if (i >= pc.nStar) return;
+	Star s = stars[i];
+	if (StarIsSun (s) && pc.hideSun != 0u) return;
+	vec3 d = s.pos - pc.observer.xyz;
+	float r = length (d);
+	float m0 = StarAbsMag (s) + StarDistModulus (r);
+	bool near = r < 2.0; // (always: their brightness changes fast as the observer moves)
+	if (m0 >= pc.observer.w && !near) return;
+	// (from elsewhere than the Sun: fewer samples on short paths)
+	float A = pc.atSun != 0u ? StarAvSun (s) : GalExtinctionN (pc.observer.xyz, s.pos, clamp (int (r * 0.25), 8, 64));
+	if (m0 + A >= pc.observer.w && !near) return;
+	uint k = atomicAdd (list.head.instanceCount, 1u);
+	if (k < list.head.capacity) list.entries[k] = uvec2 (i, floatBitsToUint (A));
+}

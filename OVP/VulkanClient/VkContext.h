@@ -126,12 +126,29 @@ namespace vkc {
 		float RenderScale () const { return renderScale; }
 
 		// Resource helpers
-		Buffer CreateBuffer (VkDeviceSize size, VkBufferUsageFlags usage, bool hostVisible);
+		/// (shared: also used on the async compute queue, AsyncCompute)
+		Buffer CreateBuffer (VkDeviceSize size, VkBufferUsageFlags usage, bool hostVisible, bool shared = false);
 		/// host-visible, cached buffer for reading back GPU results (transfer destination)
 		Buffer CreateReadbackBuffer (VkDeviceSize size);
 		void DestroyBuffer (Buffer &buf);
-		Buffer CreateDeviceBuffer (const void *data, VkDeviceSize size, VkBufferUsageFlags usage);
+		Buffer CreateDeviceBuffer (const void *data, VkDeviceSize size, VkBufferUsageFlags usage, bool shared = false);
 		void DestroyImage (Image &img);
+
+		/// Async compute: a queue of another family (or a second one of the
+		/// graphics family) for long background work (VK_NULL_HANDLE if the
+		/// device has none, or ORBITER_VK_ASYNC_COMPUTE=0). Resources used
+		/// on both are created shared (concurrent between the families).
+		VkQueue AsyncCompute () const { return computeQueue; }
+		uint32_t ComputeFamily () const { return computeFamily; }
+		void Share (VkBufferCreateInfo &bci) const;
+		void Share (VkImageCreateInfo &ici) const;
+		/// A timeline semaphore the graphics queue signals with each frame's
+		/// submission: the value of the frame being recorded
+		VkSemaphore FrameTimeline () const { return frameTimeline; }
+		uint64_t FrameValue () const { return frameValue + 1; }
+		/// The next frame's submission waits for a timeline semaphore's value
+		/// (the results of async work) before stage
+		void WaitBeforeFrame (VkSemaphore timeline, uint64_t value, VkPipelineStageFlags2 stage);
 
 		/// Record and execute a command buffer, waiting for completion (resource uploads)
 		void ImmediateSubmit (const std::function<void(VkCommandBuffer)> &record);
@@ -161,6 +178,12 @@ namespace vkc {
 		VkDevice device = VK_NULL_HANDLE;
 		VkQueue queue = VK_NULL_HANDLE;
 		uint32_t queueFamily = 0;
+		VkQueue computeQueue = VK_NULL_HANDLE;
+		uint32_t computeFamily = 0;
+		uint32_t sharedFamilies[2] = {}; // (concurrent sharing: if the families differ)
+		VkSemaphore frameTimeline = VK_NULL_HANDLE;
+		uint64_t frameValue = 0;        // signalled by the last frame submitted
+		std::vector<VkSemaphoreSubmitInfo> frameWaits;
 		VmaAllocator allocator = VK_NULL_HANDLE;
 		VkSurfaceKHR surface = VK_NULL_HANDLE;
 		VkFormat colorFormat = VK_FORMAT_B8G8R8A8_SRGB;

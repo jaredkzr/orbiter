@@ -1,0 +1,161 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// The stars the catalogue lacks, generated: those too faint to be in it
+// (seen from the Sun) that are brighter than the limiting magnitude seen
+// from the observer, drawn from the Galaxy model's luminosity functions.
+// Space is cut into cells (per luminosity function row: a cube of them
+// around the observer, as wide as such stars are seen); each cell's stars
+// are drawn from a generator seeded by the cell and the row, so a place
+// always has the same stars. Globular clusters have rows of their own:
+// their stars of a luminosity function row, drawn from the cluster's
+// Plummer sphere (seeded by the cluster, the row and the star). They are
+// appended to the selection list (as star_select.comp's) and to the buffer
+// of generated stars.
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "galaxy.glsl"
+#include "starfield.glsl"
+
+layout(local_size_x = 64) in;
+
+struct GenRow {
+	vec4 a;      // M_V of the bin's centre, number of stars per pc^3 in the bin (at the Sun), temperature index, population
+	             // (cluster rows: number of the cluster's stars in the bin; population -1)
+	ivec4 cell0; // xyz: first cell of the cube (cell coordinates); w: cells per axis
+	vec4 b;      // cell edge [pc], radius within which such stars are seen [pc], G - V, - (clusters: tidal radius, -)
+	uvec4 c;     // first work item, row identifier (seed), - (clusters: the cluster's seed, the row's), -
+	vec4 d;      // clusters: centre [pc], Plummer radius [pc]
+};
+
+const uint CLUSTER_STARS_PER_ITEM = 64u; // (as StarField.cpp)
+
+layout(std430, set = 0, binding = 5) readonly buffer Rows { GenRow rows[]; };
+layout(std430, set = 0, binding = 3) buffer List { StarListHeader head; uvec2 entries[]; } list;
+layout(std430, set = 0, binding = 4) buffer Gen { StarGenHeader head; Star stars[]; } gen;
+
+layout(push_constant) uniform Params {
+	vec4 observer;  // xyz: heliocentric Galactic position [pc]; w: limiting magnitude
+	uint nRows;
+	uint nWork;     // cells of all rows
+	uint part;      // this dispatch's cells: every nParts'th from part (alike in cost)
+	uint nParts;
+	float catLimit; // the catalogue holds the stars brighter than this (G, seen from the Sun) ...
+	float catNear;  // ... and all within this distance of the Sun [pc]
+} pc;
+
+// extinction samples on a path of length r: few (statistical stars)
+int Steps (float r) { return clamp (int (r * 0.08), 4, 24); }
+
+uvec3 Pcg3d (uvec3 v)
+{
+	v = v * 1664525u + 1013904223u;
+	v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+	v ^= v >> 16u;
+	v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
+	return v;
+}
+
+float Rand (inout uvec3 s)
+{
+	s = Pcg3d (s);
+	return (float (s.x >> 8) + 0.5) * (1.0 / 16777216.0);
+}
+
+int Poisson (float lambda, inout uvec3 s)
+{
+	if (lambda < 30.0) {
+		float L = exp (-lambda), p = 1.0;
+		int k = 0;
+		do { k++; p *= Rand (s); } while (p > L && k < 200);
+		return k - 1;
+	}
+	// (normal approximation)
+	float u1 = Rand (s), u2 = Rand (s);
+	float z = sqrt (-2.0 * log (u1)) * cos (6.2831853 * u2);
+	return max (0, int (round (lambda + sqrt (lambda) * z)));
+}
+
+// A generated star at p of absolute magnitude M (temperature index tIdx)
+// into the lists, if seen from the observer and not the catalogue's
+void Emit (vec3 p, float M, float tIdx, float gMinusV)
+{
+	vec3 o = pc.observer.xyz;
+	float r = length (p - o);
+	float m0 = M + StarDistModulus (r);
+	if (m0 >= pc.observer.w) return;
+	float rs = length (p);
+	if (rs < pc.catNear) return;
+	// (in the catalogue: bright enough from the Sun, through the dust)
+	float gSun = M + StarDistModulus (rs) + gMinusV;
+	float aSun = 0.0;
+	if (gSun < pc.catLimit) {
+		aSun = GalExtinctionN (vec3 (0.0), p, Steps (rs));
+		if (gSun + 0.8 * aSun < pc.catLimit) return;
+	}
+	float A = GalExtinctionN (o, p, Steps (r));
+	if (m0 + A >= pc.observer.w) return;
+	uint g = atomicAdd (gen.head.count, 1u);
+	if (g >= gen.head.capacity) return;
+	uint mq = uint (clamp ((M + 12.0) * 100.0 + 0.5, 0.0, 4095.0));
+	uint tq = uint (clamp (tIdx + 0.5, 0.0, float (STAR_NTEMP - 1)));
+	uint aq = uint (clamp (aSun * 100.0 + 0.5, 0.0, 2047.0));
+	gen.stars[g] = Star (p, mq | (tq << 12) | (aq << 20));
+	uint e = atomicAdd (list.head.instanceCount, 1u);
+	if (e < list.head.capacity) list.entries[e] = uvec2 (g | STAR_GENERATED, floatBitsToUint (A));
+}
+
+// a work item of a cluster row: its stars [local * per item, + per item)
+void ClusterStars (GenRow row, uint local)
+{
+	uvec3 s0 = Pcg3d (uvec3 (row.c.y, row.c.z, 0xFFFFFFFFu));
+	uint n = uint (row.a.y) + (Rand (s0) < fract (row.a.y) ? 1u : 0u);
+	uint k0 = local * CLUSTER_STARS_PER_ITEM, k1 = min (k0 + CLUSTER_STARS_PER_ITEM, n);
+	float a = row.d.w, rt = row.b.x;
+	for (uint k = k0; k < k1; k++) {
+		// (all the star's random numbers first: the same stars whatever the observer)
+		uvec3 s = Pcg3d (uvec3 (row.c.y, row.c.z, k));
+		float u = max (Rand (s), 1e-6);
+		float r = a * inversesqrt (max (pow (u, -2.0 / 3.0) - 1.0, 1e-6)); // (Plummer: the mass within r)
+		float z = 2.0 * Rand (s) - 1.0, phi = 6.2831853 * Rand (s);
+		float M = row.a.x + Rand (s) - 0.5;
+		float tj = Rand (s);
+		if (r > rt) continue;
+		float q = sqrt (max (1.0 - z * z, 0.0));
+		Emit (row.d.xyz + r * vec3 (q * cos (phi), q * sin (phi), z), M, row.a.z + (tj - 0.5) * 6.0, row.b.z);
+	}
+}
+
+void main ()
+{
+	uint w = gl_GlobalInvocationID.x * pc.nParts + pc.part;
+	if (w >= pc.nWork) return;
+	int j = 0;
+	while (j + 1 < int (pc.nRows) && w >= rows[j + 1].c.x) j++;
+	GenRow row = rows[j];
+	uint local = w - row.c.x;
+	if (row.a.w < 0.0) { ClusterStars (row, local); return; }
+	int K = row.cell0.w;
+	ivec3 ci = row.cell0.xyz + ivec3 (int (local) % K, (int (local) / K) % K, int (local) / (K * K));
+	float c = row.b.x, rVis = row.b.y;
+	vec3 lo = vec3 (ci) * c;
+	vec3 o = pc.observer.xyz;
+
+	// cells beyond the reach of the observer's sight, or within the
+	// catalogue's complete neighbourhood of the Sun
+	if (length (max (max (lo - o, o - (lo + c)), 0.0)) > rVis) return;
+	if (length (max (abs (lo), abs (lo + c))) < pc.catNear) return;
+
+	float lambda = dot (GalPopDensity (lo + 0.5 * c), GalPopMask (row.a.w)) * row.a.y * c * c * c;
+	if (!(lambda > 0.0)) return;
+	uvec3 s = Pcg3d (uvec3 (ci) + uvec3 (0u, 0u, row.c.y * 0x9E3779B9u));
+	int n = Poisson (lambda, s);
+	for (int k = 0; k < n; k++) {
+		// (all the star's random numbers first: the same stars whatever the observer)
+		vec3 p = lo + c * vec3 (Rand (s), Rand (s), Rand (s));
+		float M = row.a.x + Rand (s) - 0.5;
+		float tj = Rand (s);
+		Emit (p, M, row.a.z + (tj - 0.5) * 6.0, row.b.z);
+	}
+}

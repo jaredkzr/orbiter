@@ -163,12 +163,38 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 		oapiWriteLogV ("VulkanClient: %dx multisampling", (int)sceneSamples);
 	}
 
-	// Logical device
-	float prio = 1.0f;
-	VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
-	qci.queueFamilyIndex = queueFamily;
-	qci.queueCount = 1;
-	qci.pQueuePriorities = &prio;
+	// Logical device: the graphics queue, and a queue for async compute (of
+	// a compute family, else a second of the graphics family), low priority
+	float prio[2] = { 1.0f, 0.0f };
+	VkDeviceQueueCreateInfo qci[2]{};
+	uint32_t nQueueInfo = 1;
+	qci[0].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+	qci[0].queueFamilyIndex = queueFamily;
+	qci[0].queueCount = 1;
+	qci[0].pQueuePriorities = prio;
+	int computeIndex = -1; // (in its family)
+	{
+		const char *e = getenv ("ORBITER_VK_ASYNC_COMPUTE");
+		uint32_t nq = 0;
+		vkGetPhysicalDeviceQueueFamilyProperties (physicalDevice, &nq, nullptr);
+		std::vector<VkQueueFamilyProperties> qp (nq);
+		vkGetPhysicalDeviceQueueFamilyProperties (physicalDevice, &nq, qp.data());
+		if (!e || atoi (e)) {
+			for (uint32_t q = 0; q < nq && computeIndex < 0; q++)
+				if ((qp[q].queueFlags & VK_QUEUE_COMPUTE_BIT) && !(qp[q].queueFlags & VK_QUEUE_GRAPHICS_BIT) && qp[q].timestampValidBits)
+					computeFamily = q, computeIndex = 0;
+			if (computeIndex < 0 && qp[queueFamily].queueCount > 1)
+				computeFamily = queueFamily, computeIndex = 1;
+		}
+		if (computeIndex == 1) qci[0].queueCount = 2;
+		else if (computeIndex == 0) {
+			qci[1].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+			qci[1].queueFamilyIndex = computeFamily;
+			qci[1].queueCount = 1;
+			qci[1].pQueuePriorities = prio + 1;
+			nQueueInfo = 2;
+		}
+	}
 
 	// supported features: the upscaler's compute shaders use 16-bit
 	// arithmetic and wave size control where the device has them
@@ -204,6 +230,7 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 	fCoh.deviceCoherentMemory = sCoh.deviceCoherentMemory;
 	VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
 	f12.shaderFloat16 = s12.shaderFloat16;
+	f12.timelineSemaphore = VK_TRUE;
 	VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
 	f13.dynamicRendering = VK_TRUE;
 	f13.synchronization2 = VK_TRUE;
@@ -245,8 +272,8 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 	}
 	VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
 	dci.pNext = &f2;
-	dci.queueCreateInfoCount = 1;
-	dci.pQueueCreateInfos = &qci;
+	dci.queueCreateInfoCount = nQueueInfo;
+	dci.pQueueCreateInfos = qci;
 	dci.enabledExtensionCount = (uint32_t)devExt.size();
 	dci.ppEnabledExtensionNames = devExt.data();
 	if (vkCreateDevice (physicalDevice, &dci, nullptr, &device) != VK_SUCCESS) {
@@ -254,6 +281,16 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 		return false;
 	}
 	vkGetDeviceQueue (device, queueFamily, 0, &queue);
+	if (computeIndex >= 0) vkGetDeviceQueue (device, computeFamily, (uint32_t)computeIndex, &computeQueue);
+	sharedFamilies[0] = queueFamily, sharedFamilies[1] = computeFamily;
+	oapiWriteLogV ("VulkanClient: async compute: %s", computeIndex < 0 ? "no" : computeFamily != queueFamily ? "a compute queue" : "a second graphics queue");
+	{
+		VkSemaphoreTypeCreateInfo tci{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+		tci.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+		VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+		sci.pNext = &tci;
+		VK_CHECK(vkCreateSemaphore (device, &sci, nullptr, &frameTimeline));
+	}
 	if (rayTracing) {
 		rt.createAS = (PFN_vkCreateAccelerationStructureKHR)vkGetDeviceProcAddr (device, "vkCreateAccelerationStructureKHR");
 		rt.destroyAS = (PFN_vkDestroyAccelerationStructureKHR)vkGetDeviceProcAddr (device, "vkDestroyAccelerationStructureKHR");
@@ -345,6 +382,7 @@ void Context::Shutdown ()
 		if (frames[i].queries) vkDestroyQueryPool (device, frames[i].queries, nullptr);
 	}
 	vkDestroyCommandPool (device, uploadPool, nullptr);
+	vkDestroySemaphore (device, frameTimeline, nullptr);
 	DestroySwapchain ();
 	vmaDestroyAllocator (allocator);
 	vkDestroyDevice (device, nullptr);
@@ -1097,21 +1135,29 @@ void Context::EndFrame ()
 	VK_CHECK(vkEndCommandBuffer (f.cmd));
 	recording = false;
 
-	VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-	wait.semaphore = f.imageAvailable;
-	wait.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-	VkSemaphoreSubmitInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-	signal.semaphore = offscreen ? VK_NULL_HANDLE : renderFinished[imageIndex];
-	signal.stageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
+	std::vector<VkSemaphoreSubmitInfo> waits = std::move (frameWaits);
+	frameWaits.clear ();
+	if (!offscreen) {
+		VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+		wait.semaphore = f.imageAvailable;
+		wait.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+		waits.push_back (wait);
+	}
+	VkSemaphoreSubmitInfo signal[2] = { {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO}, {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO} };
+	signal[0].semaphore = frameTimeline;
+	signal[0].value = ++frameValue;
+	signal[0].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+	signal[1].semaphore = offscreen ? VK_NULL_HANDLE : renderFinished[imageIndex];
+	signal[1].stageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
 	VkCommandBufferSubmitInfo cbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
 	cbi.commandBuffer = f.cmd;
 	VkSubmitInfo2 si{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
-	si.waitSemaphoreInfoCount = offscreen ? 0 : 1;
-	si.pWaitSemaphoreInfos = &wait;
+	si.waitSemaphoreInfoCount = (uint32_t)waits.size ();
+	si.pWaitSemaphoreInfos = waits.data ();
 	si.commandBufferInfoCount = 1;
 	si.pCommandBufferInfos = &cbi;
-	si.signalSemaphoreInfoCount = offscreen ? 0 : 1;
-	si.pSignalSemaphoreInfos = &signal;
+	si.signalSemaphoreInfoCount = offscreen ? 1 : 2;
+	si.pSignalSemaphoreInfos = signal;
 	vkResetFences (device, 1, &f.inFlight);
 	VK_CHECK(vkQueueSubmit2 (queue, 1, &si, f.inFlight));
 
@@ -1150,14 +1196,45 @@ void Context::SubmitPending ()
 	EndTarget ();
 	VK_CHECK(vkEndCommandBuffer (f.cmd));
 	recording = false;
+	std::vector<VkSemaphoreSubmitInfo> waits = std::move (frameWaits);
+	frameWaits.clear ();
+	VkSemaphoreSubmitInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+	signal.semaphore = frameTimeline;
+	signal.value = ++frameValue;
+	signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 	VkCommandBufferSubmitInfo cbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
 	cbi.commandBuffer = f.cmd;
 	VkSubmitInfo2 si{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+	si.waitSemaphoreInfoCount = (uint32_t)waits.size ();
+	si.pWaitSemaphoreInfos = waits.data ();
 	si.commandBufferInfoCount = 1;
 	si.pCommandBufferInfos = &cbi;
+	si.signalSemaphoreInfoCount = 1;
+	si.pSignalSemaphoreInfos = &signal;
 	vkResetFences (device, 1, &f.inFlight);
 	VK_CHECK(vkQueueSubmit2 (queue, 1, &si, f.inFlight));
 	frameIndex = (frameIndex + 1) % FRAMES_IN_FLIGHT;
+}
+
+void Context::WaitBeforeFrame (VkSemaphore timeline, uint64_t value, VkPipelineStageFlags2 stage)
+{
+	VkSemaphoreSubmitInfo w{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+	w.semaphore = timeline, w.value = value, w.stageMask = stage;
+	frameWaits.push_back (w);
+}
+
+void Context::Share (VkBufferCreateInfo &bci) const
+{
+	if (!computeQueue || computeFamily == queueFamily) return;
+	bci.sharingMode = VK_SHARING_MODE_CONCURRENT;
+	bci.queueFamilyIndexCount = 2, bci.pQueueFamilyIndices = sharedFamilies;
+}
+
+void Context::Share (VkImageCreateInfo &ici) const
+{
+	if (!computeQueue || computeFamily == queueFamily) return;
+	ici.sharingMode = VK_SHARING_MODE_CONCURRENT;
+	ici.queueFamilyIndexCount = 2, ici.pQueueFamilyIndices = sharedFamilies;
 }
 
 void Context::FlushDeferred (uint32_t frame)
@@ -1180,13 +1257,14 @@ void Context::DeferDestroy (std::function<void()> fn)
 // ======================================================================
 // Resource helpers
 
-Buffer Context::CreateBuffer (VkDeviceSize size, VkBufferUsageFlags usage, bool hostVisible)
+Buffer Context::CreateBuffer (VkDeviceSize size, VkBufferUsageFlags usage, bool hostVisible, bool shared)
 {
 	Buffer buf;
 	buf.size = size;
 	VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
 	bci.size = size;
 	bci.usage = usage;
+	if (shared) Share (bci);
 	VmaAllocationCreateInfo aci{};
 	aci.usage = VMA_MEMORY_USAGE_AUTO;
 	if (hostVisible)
@@ -1228,11 +1306,11 @@ void Context::DestroyBuffer (Buffer &buf)
 	buf = Buffer();
 }
 
-Buffer Context::CreateDeviceBuffer (const void *data, VkDeviceSize size, VkBufferUsageFlags usage)
+Buffer Context::CreateDeviceBuffer (const void *data, VkDeviceSize size, VkBufferUsageFlags usage, bool shared)
 {
 	Buffer staging = CreateBuffer (size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
 	memcpy (staging.mapped, data, size);
-	Buffer buf = CreateBuffer (size, usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
+	Buffer buf = CreateBuffer (size, usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false, shared);
 	ImmediateSubmit ([&](VkCommandBuffer cmd) {
 		VkBufferCopy region{ 0, 0, size };
 		vkCmdCopyBuffer (cmd, staging.buffer, buf.buffer, 1, &region);

@@ -57,8 +57,6 @@ endif()
 set(SHADER_SRC
 	Shaders/mesh.vert
 	Shaders/mesh.frag
-	Shaders/stars.vert
-	Shaders/stars.frag
 	Shaders/draw2d.vert
 	Shaders/draw2d.frag
 	Shaders/particle.vert
@@ -137,6 +135,15 @@ set(SHADER_SRC
 	Shaders/ring.frag
 	Shaders/ringshadow.frag
 	Shaders/ggclouds.comp
+	Shaders/sky_bake.comp
+	Shaders/milkyway.vert
+	Shaders/milkyway.frag
+	Shaders/star_select.comp
+	Shaders/star_gen.comp
+	Shaders/nebula_front.comp
+	Shaders/zodiacal.comp
+	Shaders/starfield.vert
+	Shaders/starfield.frag
 )
 set(SHADER_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
 set(SHADER_HEADERS)
@@ -150,7 +157,7 @@ foreach(shader ${SHADER_SRC})
 		COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADER_OUT_DIR}
 		COMMAND ${GLSLANG_CMD} -V --target-env vulkan1.3 -o ${spv} ${CMAKE_CURRENT_SOURCE_DIR}/${shader}
 		COMMAND ${CMAKE_COMMAND} -DINPUT=${spv} -DOUTPUT=${hdr} -DSYMBOL=spv_${symbol} -P ${CMAKE_CURRENT_SOURCE_DIR}/EmbedFile.cmake
-		DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${shader} ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/atmosphere.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadow.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/frame.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/lights.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/brdf.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/exposure.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/atmlut.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/material.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/meshshade.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/building.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/ssr.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/ssr_trace.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/rt.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/rtlight.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/plume.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/particles.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/particle_update.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/particle_common.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/particle_light.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/surfdetail.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/tile_main.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/terraindetail.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/detailcore.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/smokevol.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/ring.glsl ${CMAKE_CURRENT_SOURCE_DIR}/EmbedFile.cmake ${GLSLANG_DEP}
+		DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${shader} ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/atmosphere.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadow.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/frame.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/lights.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/brdf.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/exposure.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/atmlut.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/material.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/meshshade.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/building.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/ssr.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/ssr_trace.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/rt.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/rtlight.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/plume.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/particles.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/particle_update.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/particle_common.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/particle_light.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/surfdetail.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/tile_main.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/terraindetail.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/detailcore.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/smokevol.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/ring.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/galaxy.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/starfield.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/nebula.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/skyobjects.glsl ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/zodiacal.glsl ${CMAKE_CURRENT_SOURCE_DIR}/EmbedFile.cmake ${GLSLANG_DEP}
 		COMMENT "Compiling shader ${name}"
 	)
 	list(APPEND SHADER_HEADERS ${hdr})
@@ -177,6 +184,12 @@ add_library(VulkanClient SHARED
 	EnvProbe.cpp
 	Fsr.cpp
 	StarSphere.cpp
+	GalaxySky.cpp
+	StarField.cpp
+	Nebulae.cpp
+	SkyObjects.cpp
+	Zodiacal.cpp
+	SkySettings.cpp
 	Draw2D.cpp
 	Sketchpad.cpp
 	Fonts.cpp

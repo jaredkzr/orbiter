@@ -1,0 +1,161 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// The diffuse light of the Milky Way seen from the observer, into a cube
+// map (Galactic frame) of surface brightness per spectral band, in S10
+// units (stars of V = 10 per square degree, of the Sun's colour in each
+// band): rays marched from the observer through the model's stars and
+// dust. Only the stars too faint to be drawn as points (fainter than the
+// limiting magnitude from the observer, through the dust) add their light.
+// The nebulae's light (nebula.glsl) is added along the ray where it passes
+// through the spheres their stars light, behind the dust in front of them;
+// so is the light of the other galaxies and the globular clusters
+// (skyobjects.glsl).
+// One block of rows of one face per dispatch, so that the bake can be
+// spread over frames.
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "galaxy.glsl"
+#include "nebula.glsl"
+#include "skyobjects.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2DArray cube;
+
+layout(push_constant) uniform Params {
+	vec4 observer; // xyz: heliocentric Galactic position [pc]; w: limiting magnitude
+	int face;
+	int row0;      // first row of this block
+	int size;      // of a face
+	int pad;
+} pc;
+
+const float SMAX = 60000.0;       // [pc]
+const float S10_PER_LSUN = 3.579; // S10 of 1 L_sun / pc^2 along a ray (V = 4.83 at 10 pc, per deg^2)
+
+vec3 FaceDir (int face, vec2 uv) // uv in [-1,1], Vulkan cube face layout
+{
+	if (face == 0) return vec3 (1.0, -uv.y, -uv.x);
+	if (face == 1) return vec3 (-1.0, -uv.y, uv.x);
+	if (face == 2) return vec3 (uv.x, 1.0, uv.y);
+	if (face == 3) return vec3 (uv.x, -1.0, -uv.y);
+	if (face == 4) return vec3 (uv.x, -uv.y, 1.0);
+	return vec3 (-uv.x, -uv.y, -1.0);
+}
+
+float Hash (uvec2 p)
+{
+	uint h = p.x * 1664525u + p.y * 1013904223u;
+	h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;
+	return float (h) * 2.3283064365386963e-10;
+}
+
+// map resolution at h (no sampling)
+float CellAt (vec3 h)
+{
+	if (length (h) >= gal.dust2.z) return 1e9;
+	for (int l = 0; l < GAL_NLEVEL; l++) {
+		vec3 u = (h - gal.levelOrigin[l].xyz) / gal.levelSize[l].xyz;
+		if (all (greaterThanEqual (u, vec3 (0.0))) && all (lessThan (u, vec3 (1.0))))
+			return gal.levelSize[l].w;
+	}
+	return 1e9;
+}
+
+void main ()
+{
+	ivec2 px = ivec2 (gl_GlobalInvocationID.xy) + ivec2 (0, pc.row0);
+	if (px.x >= pc.size || px.y >= pc.size) return;
+	vec2 uv = (vec2 (px) + 0.5) / float (pc.size) * 2.0 - 1.0;
+	vec3 d = normalize (FaceDir (pc.face, uv));
+	vec3 o = pc.observer.xyz;
+	float mLim = pc.observer.w;
+
+	// the nebulae the ray passes through: their spheres' entries and exits,
+	// by entry
+	const int MAXHIT = 16;
+	float hitIn[MAXHIT], hitOut[MAXHIT], hitA[MAXHIT];
+	int hitSrc[MAXHIT];
+	int nHit = 0;
+	{
+		int t = NEB_TILE, n = pc.size / t;
+		int tile = (pc.face * n + px.y / t) * n + px.x / t;
+		for (uint e = nebTile[tile]; e < nebTile[tile + 1]; e++) {
+			int si = int (nebTile[e]);
+			vec3 c = neb[si].pos.xyz - o;
+			float R = neb[si].pos.w;
+			float tc = dot (c, d), b2 = dot (c, c) - tc * tc;
+			if (b2 >= R * R) continue;
+			float hw = sqrt (R * R - b2);
+			float s0 = max (tc - hw, 0.0), s1 = tc + hw;
+			if (s1 <= s0) continue;
+			int k = nHit;
+			if (nHit == MAXHIT) { // (full: the farthest goes)
+				if (s0 >= hitIn[MAXHIT - 1]) continue;
+				k = MAXHIT - 1;
+			} else nHit++;
+			for (; k > 0 && hitIn[k - 1] > s0; k--)
+				hitIn[k] = hitIn[k - 1], hitOut[k] = hitOut[k - 1], hitSrc[k] = hitSrc[k - 1];
+			hitIn[k] = s0, hitOut[k] = s1, hitSrc[k] = si;
+		}
+	}
+	int nextHit = 0; // (the first not reached yet)
+
+	// the galaxies and clusters it passes through, by entry
+	const int MAXOBJ = 4;
+	float objIn[MAXOBJ], objOut[MAXOBJ], objA[MAXOBJ];
+	int objIdx[MAXOBJ];
+	int nObj = 0;
+	for (uint i = 0u; i < skyHead.x; i++) {
+		vec3 c = skyObj[i].pos.xyz - o;
+		float R = skyObj[i].pos.w;
+		float tc = dot (c, d), b2 = dot (c, c) - tc * tc;
+		if (b2 >= R * R || tc + R <= 0.0) continue;
+		float hw = sqrt (R * R - b2), s0 = max (tc - hw, 0.0);
+		int k = nObj;
+		if (nObj == MAXOBJ) {
+			if (s0 >= objIn[MAXOBJ - 1]) continue;
+			k = MAXOBJ - 1;
+		} else nObj++;
+		for (; k > 0 && objIn[k - 1] > s0; k--)
+			objIn[k] = objIn[k - 1], objOut[k] = objOut[k - 1], objIdx[k] = objIdx[k - 1];
+		objIn[k] = s0, objOut[k] = tc + hw, objIdx[k] = int (i);
+	}
+	int nextObj = 0;
+
+	vec4 L = vec4 (0.0);
+	float A = 0.0; // extinction so far (A_V) [mag]
+	bool opaque = false;
+	float s = 0.5 * Hash (uvec2 (px) + uvec2 (pc.face * 7919, 0));
+	for (int i = 0; i < 4000 && s < SMAX; i++) {
+		vec3 h = o + d * s;
+		float ds = max (0.5, 0.02 * s);
+		ds = max (0.5, min (ds, 0.7 * CellAt (h)));
+		vec3 hm = h + d * (0.5 * ds);
+		float cell;
+		float rho = GalDust (hm, cell);
+		for (; nextHit < nHit && hitIn[nextHit] < s + ds; nextHit++)
+			hitA[nextHit] = A + rho * max (hitIn[nextHit] - s, 0.0);
+		for (; nextObj < nObj && objIn[nextObj] < s + ds; nextObj++)
+			objA[nextObj] = A + rho * max (objIn[nextObj] - s, 0.0);
+		float Am = A + 0.5 * rho * ds;
+		float sm = s + 0.5 * ds;
+		float mCut = mLim - 5.0 * log (sm / 10.0) / log (10.0) - Am;
+		vec4 j = GalEmission (hm, vec3 (mCut));
+		vec4 T = exp (-0.921 * Am * gal.extinction); // 0.921: ln 10 / 2.5
+		L += j * T * ds;
+		A += rho * ds;
+		s += ds;
+		if (A * gal.extinction.w > 40.0) { opaque = true; break; }
+	}
+	// (beyond the march: behind all of the Milky Way's dust)
+	if (!opaque) for (; nextObj < nObj; nextObj++) objA[nextObj] = A;
+	float pix = 2.0 / float (pc.size); // (a texel's angle, about)
+	for (int k = 0; k < nextHit; k++)
+		L += NebChord (hitSrc[k], o, d, hitIn[k], hitOut[k], hitA[k], pix, Hash (uvec2 (px) + uvec2 (k * 977, pc.face * 131)));
+	for (int k = 0; k < nextObj; k++)
+		L += SkyObjectLight (objIdx[k], o, d, objIn[k], objOut[k], objA[k], pix, Hash (uvec2 (px) + uvec2 (k * 613 + 7, pc.face * 59)), mLim);
+	imageStore (cube, ivec3 (px, pc.face), min (L * S10_PER_LSUN, vec4 (60000.0))); // (half floats)
+}
