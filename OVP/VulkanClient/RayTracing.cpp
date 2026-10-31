@@ -108,6 +108,8 @@ bool RTScene::Init (vkc::Context *c, TextureManager *tm)
 		f.instances = ctx->CreateBuffer (MAX_INSTANCES * sizeof(VkAccelerationStructureInstanceKHR),
 			VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
 		f.records = ctx->CreateBuffer (MAX_RECORDS * sizeof(InstanceRecord), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+		f.transforms = ctx->CreateBuffer (MAX_RECORDS * sizeof(VkTransformMatrixKHR),
+			VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
 		f.tlasBuf = ctx->CreateBuffer (sz.accelerationStructureSize,
 			VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, false);
 		f.scratch = ctx->CreateBuffer (sz.buildScratchSize + scratchAlign,
@@ -154,7 +156,7 @@ void RTScene::Shutdown ()
 	blas.clear ();
 	for (auto &f : frames) {
 		ctx->rt.destroyAS (ctx->device, f.tlas, nullptr);
-		for (vkc::Buffer *b : { &f.instances, &f.records, &f.tlasBuf, &f.scratch }) ctx->DestroyBuffer (*b);
+		for (vkc::Buffer *b : { &f.instances, &f.records, &f.transforms, &f.tlasBuf, &f.scratch }) ctx->DestroyBuffer (*b);
 	}
 	vkDestroyDescriptorPool (ctx->device, pool, nullptr);
 	vkDestroyDescriptorSetLayout (ctx->device, setLayout, nullptr);
@@ -236,20 +238,32 @@ void RTScene::ForgetTexture (VkTexture *tex)
 
 void RTScene::BeginFrame ()
 {
-	nInst = nRec = 0;
+	nInst = nRec = nXform = 0;
 	builds.clear ();
-	// structures not used for a while (e.g. of changed group visibility)
+	// structures not used for a while (e.g. of changed group visibility;
+	// clusters soon: their parts change)
 	frameCount++;
-	if (frameCount % 64 == 0)
+	if (frameCount % 8 == 0)
 		for (auto it = blas.begin(); it != blas.end(); )
-			if (frameCount - it->second.lastUse > 256) { DestroyBlas (it->second); it = blas.erase (it); }
+			if (frameCount - it->second.lastUse > it->second.linger) { DestroyBlas (it->second); it = blas.erase (it); }
 			else ++it;
 }
 
 void RTScene::AddInstance (const Part *parts, uint32_t nParts, const Mat4 &modelView)
 {
+	Add (0, parts, nullptr, nParts, modelView);
+}
+
+void RTScene::AddCluster (uint64_t key, const Part *parts, const float (*offsets)[3], uint32_t nParts, const Mat4 &modelView)
+{
+	Add (key, parts, offsets, nParts, modelView);
+}
+
+void RTScene::Add (uint64_t key, const Part *parts, const float (*offsets)[3], uint32_t nParts, const Mat4 &modelView)
+{
 	if (!ctx || nInst >= MAX_INSTANCES || !nParts || nRec + nParts > MAX_RECORDS) return;
-	struct Src { VkDeviceAddress vaddr, iaddr; const Part *p; };
+	if (offsets && nXform + nParts > MAX_RECORDS) return;
+	struct Src { VkDeviceAddress vaddr, iaddr; const Part *p; const float *ofs; };
 	std::vector<Src> src;
 	src.reserve (nParts);
 	uint64_t hash = 1469598103934665603ull, vhash = hash;
@@ -257,14 +271,23 @@ void RTScene::AddInstance (const Part *parts, uint32_t nParts, const Mat4 &model
 	for (uint32_t i = 0; i < nParts; i++) {
 		const Geometry &g = parts[i].geo;
 		if (g.nIndex < 3 || !g.vb || !g.ib || !g.nVtx) continue;
-		src.push_back ({ ctx->BufferAddress (g.vb) + g.vbOffset, ctx->BufferAddress (g.ib), &parts[i] });
+		src.push_back ({ ctx->BufferAddress (g.vb) + g.vbOffset, ctx->BufferAddress (g.ib), &parts[i], offsets ? offsets[i] : nullptr });
 		mix (hash, g.id), mix (hash, g.vbOffset), mix (hash, g.firstIndex), mix (hash, g.nIndex), mix (hash, parts[i].mat.alphaTest);
 		mix (vhash, g.version);
+		if (offsets) {
+			uint32_t o[3];
+			memcpy (o, offsets[i], sizeof(o));
+			mix (vhash, o[0]), mix (vhash, o[1]), mix (vhash, o[2]);
+		}
 	}
 	if (src.empty()) return;
 
-	// bottom level (built in this frame if new or changed)
-	Blas &b = blas[{ src[0].p->geo.id, hash }];
+	// bottom level (built in this frame if new or changed). A cluster's is
+	// kept under its key: its parts are in the version, so that a change
+	// rebuilds it in place (a structure per set of parts would linger).
+	if (key) mix (vhash, hash);
+	Blas &b = key ? blas[{ key, 0ull }] : blas[{ src[0].p->geo.id, hash }];
+	if (key) b.linger = 16;
 	if (b.as && b.geomVersion != vhash) { // vertices edited: rebuild
 		for (auto &x : builds) if (x.b == &b) x.b = nullptr;
 		DestroyBlas (b);
@@ -272,6 +295,7 @@ void RTScene::AddInstance (const Part *parts, uint32_t nParts, const Mat4 &model
 	if (!b.as) {
 		BlasBuild bb;
 		bb.b = &b;
+		Frame &f = frames[ctx->FrameIndex()];
 		for (auto &s : src) {
 			const Geometry &g = s.p->geo;
 			VkAccelerationStructureGeometryKHR geom{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
@@ -285,6 +309,14 @@ void RTScene::AddInstance (const Part *parts, uint32_t nParts, const Mat4 &model
 			tri.maxVertex = g.nVtx - 1;
 			tri.indexType = VK_INDEX_TYPE_UINT16;
 			tri.indexData.deviceAddress = s.iaddr + (VkDeviceAddress)g.firstIndex * sizeof(uint16_t);
+			if (s.ofs) { // (read by the build in this frame)
+				VkTransformMatrixKHR t{};
+				t.matrix[0][0] = t.matrix[1][1] = t.matrix[2][2] = 1.0f;
+				for (int r = 0; r < 3; r++) t.matrix[r][3] = s.ofs[r];
+				memcpy ((VkTransformMatrixKHR*)f.transforms.mapped + nXform, &t, sizeof(t));
+				tri.transformData.deviceAddress = ctx->BufferAddress (f.transforms.buffer) + nXform * sizeof(VkTransformMatrixKHR);
+				nXform++;
+			}
 			bb.geoms.push_back (geom);
 			bb.nPrim.push_back (g.nIndex / 3);
 		}

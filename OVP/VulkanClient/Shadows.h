@@ -48,7 +48,7 @@ public:
 	void DrawBuildings (VkBuffer vb, VkBuffer ib, uint32_t firstIndex, uint32_t nIndex, VkBuffer inst, VkDeviceSize instOfs,
 		uint32_t count, const MATRIX3 &R, const VECTOR3 &origin);
 	/// Draw indexed geometry (NTVERTEX, 16-bit indices), e.g. a terrain tile
-	void DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &model);
+	void DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &model, uint32_t firstIdx = 0);
 	/// whether a sphere (global position, radius) may cast into the map
 	bool MayCast (const VECTOR3 &gpos, double rad) const;
 	const VECTOR3 &Centre () const { return centre; }

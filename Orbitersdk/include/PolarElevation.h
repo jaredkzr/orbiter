@@ -11,7 +11,10 @@
 // Each row is resampled at every m-th node (m: powers of two about
 // 0.5/cos(lat), the two nearest blended), linearly in between: nodes about as far apart along the rows
 // as across them. The nodes kept are multiples of m in each tile, whose
-// edges (node 0 and 256) are too: no seams between tiles.
+// edges (node 0 and 256) are too: no seams between tiles. The border nodes
+// beyond the edges continue the row's first and last segments (the next
+// nodes kept, the neighbours', are not in the tile): slopes at the edges
+// are the tile's own, not of a step to a raw node.
 //
 // For the core (ElevationManager) and the graphics clients alike: the same
 // ground for the vessels as on screen.
@@ -61,8 +64,10 @@ namespace oapi {
 				double t = (double)(j - j0) / m;
 				return at (j0) * (1.0 - t) + at (j0 + m) * t;
 			};
+			auto res = [&](int j) { return dec (j, m0) * (1.0 - f) + dec (j, m1) * f; };
 			for (int k = 0; k < stride; k++) {
-				double v = dec (k - 1, m0) * (1.0 - f) + dec (k - 1, m1) * f;
+				int j = k - 1;
+				double v = j < 0 ? 2.0 * res (0) - res (1) : j > G ? 2.0 * res (G) - res (G - 1) : res (j);
 				if (std::is_integral<T>::value) p[k] = (T)std::lround (v);
 				else p[k] = (T)v;
 			}

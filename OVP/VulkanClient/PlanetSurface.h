@@ -92,16 +92,17 @@ public:
 	VkPipeline MeshPipeline () const { return meshPipe; }
 	VkPipelineLayout MeshLayout () const { return meshLayout; }
 	VkBuffer IndexBuffer () const { return ibuf.buffer; }
-	uint32_t IndexCount () const { return nIdx; }
-	/// indices of the tile grid without the skirts (which come last)
-	uint32_t GridIndexCount () const { return GRID * GRID * 6; }
+	/// The tile grid taking every 2^c-th column (c < NCOLS): its indices
+	/// from first, gridCount without the skirts (which come last), count
+	/// with them; and every 2nd row and column of it (at most every GRID-th),
+	/// without skirts, for the ray tracing scene (rtFirst even: whole 32-bit
+	/// words)
+	static constexpr int NCOLS = 7;
+	struct Grid { uint32_t first, gridCount, count, rtFirst, rtCount; };
+	const Grid &Columns (int c) const { return grids[c]; }
 	/// a coarse grid with skirts (every 4th node: for small views)
 	uint32_t CoarseFirstIndex () const { return coarseFirst; }
 	uint32_t CoarseIndexCount () const { return coarseCount; }
-	/// the grid at every 2nd node, without skirts, for the ray tracing scene
-	/// (first index even: whole 32-bit words)
-	uint32_t RTFirstIndex () const { return rtFirst; }
-	uint32_t RTIndexCount () const { return rtCount; }
 
 private:
 	vkc::Context *ctx = nullptr;
@@ -112,7 +113,8 @@ private:
 	VkPipeline meshPipe = VK_NULL_HANDLE;
 	VkPipelineLayout meshLayout = VK_NULL_HANDLE;
 	vkc::Buffer ibuf;
-	uint32_t nIdx = 0, coarseFirst = 0, coarseCount = 0, rtFirst = 0, rtCount = 0;
+	Grid grids[NCOLS]{};
+	uint32_t coarseFirst = 0, coarseCount = 0;
 	std::unique_ptr<TileLoader> loader;
 };
 
@@ -150,6 +152,7 @@ private:
 		double latmin, latmax, lngmin, lngmax;
 		VECTOR3 centre;       // tile centre on the mean sphere, planet frame
 		double angRadius;     // angular radius of the tile [rad]
+		int cols = 0;         // grid columns taken: every 2^cols-th (TileRenderer::Columns)
 		VkTexture *surf = nullptr, *mask = nullptr;
 		std::unique_ptr<ElevGrid> elev;
 		uint8_t surfState = 0, maskState = 0, elevState = 0; // 0: unknown, 1: requested, 2: loaded, 3: missing
@@ -163,6 +166,9 @@ private:
 		float detailSpacing = 0.0f; // terrain detail: node spacing of the elevation data [m]
 		float detailLmesh = 0.0f;   // shortest detail wavelength in the mesh [m]
 		uint64_t lastUsed = 0;
+		bool drawn = false;   // in this frame's draw list (lastUsed: this frame)
+		uint32_t rtTris = 0;  // ray tracing triangles of the tiles drawn of this one and its descendants
+		uint64_t rtCluster = 0; // ray tracing key of the cluster of drawn tiles under this one
 	};
 	uint64_t preparedFrame = ~0ull;
 
@@ -170,7 +176,10 @@ private:
 	Node *NewNode (int lvl, int ilat, int ilng, Node *parent);
 	void FreeNode (Node *n);
 	void PruneChildren (Node *n);
-	void Select (Node *n);
+	/// a tile's size for the level of detail [m]: split where it would cover more than splitPixels
+	double SplitSize (const Node *n) const;
+	/// returns rtTris (the tiles drawn of n and its descendants: their ray tracing triangles)
+	uint32_t Select (Node *n);
 	void Request (Node *n, TileLoader::Kind kind);
 	Node *Find (int lvl, int ilat, int ilng) const;
 	const Node *ElevSource (const Node *n) const;
@@ -209,7 +218,15 @@ private:
 	void PrepareGpuMesh (const Node *n, const Node *src, GpuJob &job, std::vector<float> &pts, MeshData &md) const;
 	/// the vertex buffer of a tile (made if needed)
 	void EnsureVertexBuffer (Node *n);
+	/// whether a tile may be in the camera's view
+	bool InView (const Node *n) const;
+	/// texture of a tile: its own, or the matching part (uv: offset, scale) of its nearest ancestor's
+	static VkTexture *TexFor (const Node *n, VkTexture *Node::*member, float uv[4]);
 	void DrawNode (Node *n, bool prepass = false);
+	/// all drawn tiles into the ray tracing scene, in clusters (with those
+	/// out of view: they cast shadows into it)
+	void AddRTClusters (Node *n, class RTScene *rt);
+	void GatherDrawn (Node *n, std::vector<Node*> &out) const;
 	void BindVertices (const Node *n);
 
 	OBJHANDLE hPlanet;

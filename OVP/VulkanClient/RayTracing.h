@@ -77,6 +77,12 @@ public:
 	void AddInstance (const Part *parts, uint32_t nParts, const Mat4 &modelView);
 	void AddInstance (const Geometry &geo, const Mat4 &modelView, VkTexture *tex, const Material &mat)
 	{ Part p{ geo, tex, mat }; AddInstance (&p, 1, modelView); }
+	/// An instance of parts each moved by its own offset in the instance's
+	/// frame (e.g. terrain tiles about a point of their planet: one bottom-
+	/// level structure for neighbouring tiles instead of an instance each,
+	/// whose boxes overlap). Kept under key (RTNewGeometryId; forgotten with
+	/// RTForgetGeometry) and rebuilt in place when the parts change.
+	void AddCluster (uint64_t key, const Part *parts, const float (*offsets)[3], uint32_t nParts, const Mat4 &modelView);
 	/// Build the acceleration structures of this frame (outside rendering
 	/// scopes; before the shaders that trace)
 	void Build ();
@@ -103,7 +109,9 @@ private:
 		VkDeviceAddress addr = 0;
 		uint64_t geomVersion = 0; // of the parts' vertices
 		uint64_t lastUse = 0;     // frame
+		uint32_t linger = 256;    // frames kept unused
 	};
+	void Add (uint64_t key, const Part *parts, const float (*offsets)[3], uint32_t nParts, const Mat4 &modelView);
 	uint64_t frameCount = 0;
 	uint32_t TextureSlot (VkTexture *tex);
 	void DestroyBlas (Blas &b);
@@ -121,11 +129,11 @@ private:
 	std::vector<BlasBuild> builds; // new this frame
 	// top level, per frame in flight
 	struct Frame {
-		vkc::Buffer instances, records, tlasBuf, scratch;
+		vkc::Buffer instances, records, transforms, tlasBuf, scratch;
 		VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
 		VkDescriptorSet set = VK_NULL_HANDLE;
 	} frames[vkc::FRAMES_IN_FLIGHT];
-	uint32_t nInst = 0, nRec = 0;
+	uint32_t nInst = 0, nRec = 0, nXform = 0;
 	// bindless textures
 	std::unordered_map<VkTexture*, std::pair<uint32_t, VkImageView>> texSlots;
 	std::vector<uint32_t> freeSlots;

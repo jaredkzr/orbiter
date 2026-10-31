@@ -139,7 +139,11 @@ void main ()
 		float peb = DetPebbles (pt, pts.f[3 * pk + 2], jb.sp.z, jb.sp.x, pc.prm2.x, 0.0);
 		vec3 href0 = d0 * jb.misc.w;
 		vec3 p = P[pk] + d * peb + href0;
-		vec3 nm = cross (P[(i + 2) * W + (j + 1)] - P[i * W + (j + 1)], P[(i + 1) * W + (j + 2)] - P[(i + 1) * W + j]);
+		// (across the columns drawn, K: one-sided at the edges of a tile
+		// taking every K-th; finer, their noise would differ from a neighbour's)
+		int K = jb.refI.w;
+		vec3 nm = K > 1 ? cross (P[(i + 2) * W + (j + 1)] - P[i * W + (j + 1)], P[(i + 1) * W + min (j + K, G) + 1] - P[(i + 1) * W + max (j - K, 0) + 1])
+			: cross (P[(i + 2) * W + (j + 1)] - P[i * W + (j + 1)], P[(i + 1) * W + (j + 2)] - P[(i + 1) * W + j]);
 		float len = length (nm);
 		bool pole = da >= jb.off.z || da <= jb.off.w; // (at a pole the neighbours collapse: the vertical)
 		nm = len > 1e-9 && !pole ? nm / len : d;

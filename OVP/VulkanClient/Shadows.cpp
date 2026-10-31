@@ -337,7 +337,7 @@ void ShadowMap::DrawBuildings (VkBuffer vb, VkBuffer ib, uint32_t firstIndex, ui
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 }
 
-void ShadowMap::DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &model)
+void ShadowMap::DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &model, uint32_t firstIdx)
 {
 	if (!active) return;
 	VkCommandBuffer cmd = ctx->Cmd();
@@ -347,7 +347,7 @@ void ShadowMap::DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat
 	float f[16];
 	(lightVP * model).ToFloat (f);
 	vkCmdPushConstants (cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(f), f);
-	vkCmdDrawIndexed (cmd, nIdx, 1, 0, 0, 0);
+	vkCmdDrawIndexed (cmd, nIdx, 1, firstIdx, 0, 0);
 }
 
 bool ShadowMap::MayCast (const VECTOR3 &gpos, double rad) const

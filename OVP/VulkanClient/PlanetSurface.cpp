@@ -15,6 +15,7 @@
 #include "VulkanClient.h"
 #include "Atmosphere.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 
@@ -357,58 +358,77 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	vkDestroyShaderModule (ctx->device, fs, nullptr);
 
 	// shared index buffer: (G+1)^2 grid vertices, then the skirt vertices of
-	// the north, south, west and east edges, (G+1) each
+	// the north, south, west and east edges, (G+1) each. Variants take every
+	// 2^c-th column (tiles narrowed by a pole: their columns would be far
+	// closer together than their rows), each the grid, then its skirts; their
+	// edges keep all columns (fans to the next row), so that they meet
+	// their neighbours' (and their children's morph) whatever these take.
 	const int G = GRID, V = G + 1;
 	std::vector<uint16_t> idx;
-	for (int i = 0; i < G; i++)
-		for (int j = 0; j < G; j++) {
-			uint16_t a = i*V + j, b = a + 1, c = a + V, d = c + 1;
-			idx.insert (idx.end(), { a, b, c, b, d, c });
-		}
-	auto skirt = [&](int base, auto edgeIdx) {
-		for (int k = 0; k < G; k++) {
-			uint16_t e0 = edgeIdx (k), e1 = edgeIdx (k + 1);
-			uint16_t s0 = base + k, s1 = base + k + 1;
+	auto skirt = [&](int base, auto edgeIdx, int step) {
+		for (int k = 0; k < G; k += step) {
+			uint16_t e0 = edgeIdx (k), e1 = edgeIdx (k + step);
+			uint16_t s0 = base + k, s1 = base + k + step;
 			idx.insert (idx.end(), { e0, e1, s0, e1, s1, s0 });
 		}
 	};
-	int sk = V * V;
-	skirt (sk + 0*V, [&](int k) { return (uint16_t)k; });               // north row
-	skirt (sk + 1*V, [&](int k) { return (uint16_t)(G*V + k); });       // south row
-	skirt (sk + 2*V, [&](int k) { return (uint16_t)(k*V); });           // west column
-	skirt (sk + 3*V, [&](int k) { return (uint16_t)(k*V + G); });       // east column
-	nIdx = (uint32_t)idx.size();
+	const int sk = V * V;
+	auto north = [&](int k) { return (uint16_t)k; };
+	auto south = [&](int k) { return (uint16_t)(G*V + k); };
+	auto west = [&](int k) { return (uint16_t)(k*V); };
+	auto east = [&](int k) { return (uint16_t)(k*V + G); };
+	for (int v = 0; v < NCOLS; v++) {
+		const int K = 1 << v;
+		Grid &g = grids[v];
+		g.first = (uint32_t)idx.size();
+		for (int i = 0; i < G; i++)
+			for (int j = 0; j < G; j += K) {
+				uint16_t a = i*V + j, b = a + K, c = a + V, d = c + K;
+				if (K == 1 || (i > 0 && i < G - 1)) { idx.insert (idx.end(), { a, b, c, b, d, c }); continue; }
+				const int h = K / 2;
+				if (i == 0) { // (all columns above)
+					for (int t = j; t < j + K; t++) idx.insert (idx.end(), { (uint16_t)t, (uint16_t)(t + 1), t < j + h ? c : d });
+					idx.insert (idx.end(), { (uint16_t)(j + h), d, c });
+				} else {      // (all columns below)
+					for (int t = j; t < j + K; t++) idx.insert (idx.end(), { t < j + h ? a : b, (uint16_t)(c + t - j + 1), (uint16_t)(c + t - j) });
+					idx.insert (idx.end(), { a, b, (uint16_t)(c + h) });
+				}
+			}
+		g.gridCount = (uint32_t)idx.size() - g.first;
+		skirt (sk + 0*V, north, 1);
+		skirt (sk + 1*V, south, 1);
+		skirt (sk + 2*V, west, 1);
+		skirt (sk + 3*V, east, 1);
+		g.count = (uint32_t)idx.size() - g.first;
+	}
 	// a coarse version (every 4th node and skirt vertex) for the environment
 	// probe's small faces
 	const int C = 4;
-	coarseFirst = nIdx;
+	coarseFirst = (uint32_t)idx.size();
 	for (int i = 0; i < G; i += C)
 		for (int j = 0; j < G; j += C) {
 			uint16_t a = i*V + j, b = a + C, c = a + C*V, d = c + C;
 			idx.insert (idx.end(), { a, b, c, b, d, c });
 		}
-	auto coarseSkirt = [&](int base, auto edgeIdx) {
-		for (int k = 0; k < G; k += C) {
-			uint16_t e0 = edgeIdx (k), e1 = edgeIdx (k + C);
-			uint16_t s0 = base + k, s1 = base + k + C;
-			idx.insert (idx.end(), { e0, e1, s0, e1, s1, s0 });
-		}
-	};
-	coarseSkirt (sk + 0*V, [&](int k) { return (uint16_t)k; });
-	coarseSkirt (sk + 1*V, [&](int k) { return (uint16_t)(G*V + k); });
-	coarseSkirt (sk + 2*V, [&](int k) { return (uint16_t)(k*V); });
-	coarseSkirt (sk + 3*V, [&](int k) { return (uint16_t)(k*V + G); });
+	skirt (sk + 0*V, north, C);
+	skirt (sk + 1*V, south, C);
+	skirt (sk + 2*V, west, C);
+	skirt (sk + 3*V, east, C);
 	coarseCount = (uint32_t)idx.size() - coarseFirst;
-	// the ray tracing scene's grid: every 2nd node, no skirts (a quarter of
-	// the triangles: of each tile's acceleration structure, thousands of them)
-	if (idx.size() & 1) idx.push_back (0); // (whole 32-bit words for ray tracing shaders; not drawn)
-	rtFirst = (uint32_t)idx.size();
-	for (int i = 0; i < G; i += 2)
-		for (int j = 0; j < G; j += 2) {
-			uint16_t a = i*V + j, b = a + 2, c = a + 2*V, d = c + 2;
-			idx.insert (idx.end(), { a, b, c, b, d, c });
-		}
-	rtCount = (uint32_t)idx.size() - rtFirst;
+	// the ray tracing scene's grids: every 2nd row and column (of the
+	// variant: at most every 64th), no skirts (a quarter of the triangles)
+	for (int v = 0; v < NCOLS; v++) {
+		const int K = std::min (G, 2 << v);
+		Grid &g = grids[v];
+		if (idx.size() & 1) idx.push_back (0); // (whole 32-bit words for ray tracing shaders; not drawn)
+		g.rtFirst = (uint32_t)idx.size();
+		for (int i = 0; i < G; i += 2)
+			for (int j = 0; j < G; j += K) {
+				uint16_t a = i*V + j, b = a + K, c = a + 2*V, d = c + K;
+				idx.insert (idx.end(), { a, b, c, b, d, c });
+			}
+		g.rtCount = (uint32_t)idx.size() - g.rtFirst;
+	}
 	ibuf = ctx->CreateDeviceBuffer (idx.data(), idx.size() * sizeof(uint16_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
 		(ctx->rayTracing ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT : 0));
 
@@ -541,6 +561,10 @@ PlanetSurface::Node *PlanetSurface::NewNode (int lvl, int ilat, int ilng, Node *
 		for (double lng : { n->lngmin, n->lngmax })
 			a = std::max (a, acos (std::clamp (dotp (c, SurfaceDir (lat, lng)), -1.0, 1.0)));
 	n->angRadius = a;
+	// columns taken (TileRenderer::Grid): no closer together than the rows
+	// (at the wider edge; latitude and longitude steps are the same angle)
+	double ratio = n->latmin < 0.0 && n->latmax > 0.0 ? 1.0 : cos (std::min (fabs (n->latmin), fabs (n->latmax)));
+	while (n->cols + 1 < TileRenderer::NCOLS && ratio * (2 << n->cols) <= 1.0) n->cols++;
 	n->lastUsed = frame;
 	return n;
 }
@@ -560,6 +584,8 @@ void PlanetSurface::FreeNode (Node *n)
 		RTForgetGeometry (n->rtId);
 		n->rtId = 0;
 	}
+	if (n->rtCluster) RTForgetGeometry (n->rtCluster);
+	n->rtCluster = 0;
 }
 
 void PlanetSurface::PruneChildren (Node *n)
@@ -691,7 +717,11 @@ void PlanetSurface::ComputeMesh (const Node *n, const Node *src, bool detailed, 
 	for (int i = 0; i < V; i++)
 		for (int j = 0; j < V; j++) {
 			VECTOR3 dir = D[(i + 1) * W + (j + 1)];
-			VECTOR3 nm = crossp (at (i + 1, j) - at (i - 1, j), at (i, j + 1) - at (i, j - 1));
+			// (across the columns drawn: one-sided at the edges of a tile taking
+			// every K-th; finer, their noise would differ from a neighbour's)
+			const int K = 1 << n->cols;
+			VECTOR3 nm = K > 1 ? crossp (at (i + 1, j) - at (i - 1, j), at (i, std::min (j + K, G)) - at (i, std::max (j - K, 0)))
+				: crossp (at (i + 1, j) - at (i - 1, j), at (i, j + 1) - at (i, j - 1));
 			double len = length (nm);
 			nm = len > 1e-9 ? nm / len : dir;
 			if (dotp (nm, dir) < 0.0) nm = -nm;
@@ -854,7 +884,7 @@ void PlanetSurface::PrepareGpuMesh (const Node *n, const Node *src, GpuJob &job,
 	// (the centre: d0 R; offsets from it in single precision)
 	double latc = 0.5 * (n->latmin + n->latmax), lngc = 0.5 * (n->lngmin + n->lngmax);
 	SplitPoint (n->centre, job.refI, job.refF);
-	job.refI[3] = 0, job.refF[3] = (float)radius;
+	job.refI[3] = 1 << n->cols, job.refF[3] = (float)radius; // (the columns drawn: the normals' stencil)
 	job.ll[0] = (float)latc, job.ll[1] = (float)lngc, job.ll[2] = (float)dlat, job.ll[3] = (float)dlng;
 	job.off[0] = (float)(n->latmax - latc), job.off[1] = (float)(n->lngmin - lngc);
 	job.off[2] = (float)(PI05 - latc), job.off[3] = (float)(-PI05 - latc);
@@ -911,16 +941,30 @@ void PlanetSurface::Update ()
 	}
 }
 
-void PlanetSurface::Select (Node *n)
+double PlanetSurface::SplitSize (const Node *n) const
+{
+	// From the tile's area (the mean of its sides). Towards the poles tiles
+	// narrow to slivers: split by their north-south side alone, ever more of
+	// them would be needed for the same ground (at 89.5 deg, 50 times as
+	// many: gigabytes of meshes)
+	double hgt = radius * (n->latmax - n->latmin);
+	double wid = radius * cos (std::min (fabs (n->latmin), fabs (n->latmax))) * (n->lngmax - n->lngmin);
+	if (n->latmin < 0.0 && n->latmax > 0.0) wid = radius * (n->lngmax - n->lngmin);
+	return sqrt (hgt * std::min (wid, hgt));
+}
+
+uint32_t PlanetSurface::Select (Node *n)
 {
 	n->lastUsed = frame;
+	n->drawn = false;
+	n->rtTris = 0;
 
 	// horizon culling: compare the angle between the tile and the camera
 	// direction with the horizon angle (extended by the highest mountains)
 	if (camDist > radius) {
 		double horizon = acos (radius / camDist) + acos (radius / (radius + maxElev + 1.0));
 		double ang = acos (std::clamp (dotp (n->centre / radius, camLocal / camDist), -1.0, 1.0));
-		if (ang - n->angRadius > horizon) return;
+		if (ang - n->angRadius > horizon) return 0;
 	}
 
 	// Distance: a lower bound for the points of the tile, between the
@@ -950,14 +994,7 @@ void PlanetSurface::Select (Node *n)
 		return std::max (sqrt (std::max (0.0, pr * pr + r * r - 2.0 * pr * r * cos (gap))), 1.0);
 	};
 	double dist = lowerDist (camLocal);
-	// Size: from the tile's area (the mean of its sides). Towards the poles
-	// tiles narrow to slivers: split by their north-south side alone, ever
-	// more of them would be needed for the same ground (at 89.5 deg, 50 times
-	// as many: gigabytes of meshes)
-	double hgt = radius * (n->latmax - n->latmin);
-	double wid = radius * cos (std::min (fabs (n->latmin), fabs (n->latmax))) * (n->lngmax - n->lngmin);
-	if (n->latmin < 0.0 && n->latmax > 0.0) wid = radius * (n->lngmax - n->lngmin);
-	double size = sqrt (hgt * std::min (wid, hgt));
+	double size = SplitSize (n);
 	bool split = size / dist * pixPerRad > splitPixels;
 	// Vessels on or near the ground stand on the finest mesh, which has the
 	// terrain detail of the ground contact, wherever the camera is: tiles
@@ -979,11 +1016,14 @@ void PlanetSurface::Select (Node *n)
 		for (int c = 0; c < 4; c++) {
 			if (!n->child[c])
 				n->child[c].reset (NewNode (n->lvl + 1, 2 * n->ilat + (c >> 1), 2 * n->ilng + (c & 1), n));
-			Select (n->child[c].get());
+			n->rtTris += Select (n->child[c].get());
 		}
 	} else {
 		drawList.push_back (n);
+		n->drawn = true;
+		n->rtTris = tr->Columns (n->cols).rtCount / 3;
 	}
+	return n->rtTris;
 }
 
 void PlanetSurface::Prepare ()
@@ -1280,7 +1320,60 @@ void PlanetSurface::RenderDepth ()
 	VkDescriptorSet fs = scene->FrameSet ();
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr->Layout(), 0, 1, &fs, 0, nullptr);
 	vkCmdBindIndexBuffer (cmd, tr->IndexBuffer(), 0, VK_INDEX_TYPE_UINT16);
-	for (Node *n : drawList) DrawNode (n, true);
+	size_t nv = 0;
+	for (Node *n : drawList) if (InView (n)) DrawNode (n, true), nv++;
+	static const bool profile = getenv ("ORBITER_VK_PROFILE") && atoi (getenv ("ORBITER_VK_PROFILE"));
+	if (profile && frame % 100 == 0) oapiWriteLogV ("VulkanClient: surface tiles in view: %zu of %zu", nv, drawList.size());
+	if (RTScene *rt = scene->RT ())
+		for (auto &r : root) if (r) AddRTClusters (r.get(), rt);
+}
+
+void PlanetSurface::GatherDrawn (Node *n, std::vector<Node*> &out) const
+{
+	if (n->lastUsed != frame || !n->rtTris) return;
+	if (n->drawn) { out.push_back (n); return; }
+	for (auto &c : n->child) if (c) GatherDrawn (c.get(), out);
+}
+
+void PlanetSurface::AddRTClusters (Node *n, RTScene *rt)
+{
+	// Each tile an instance of its own: their boxes overlap (most of all the
+	// slivers about a pole, all reaching it), and long rays (the sun's, low
+	// over the ground) descend into hundreds of them. Instead, the tiles under
+	// a node with up to RT_CLUSTER triangles between them (64 tiles of all
+	// columns; more of those narrowed by a pole) are one structure, moved
+	// from the node's centre (their meshes are about their own). A tile that
+	// changes rebuilds its cluster's (ORBITER_VK_RT_CLUSTER: the triangles).
+	static const uint32_t RT_CLUSTER = getenv ("ORBITER_VK_RT_CLUSTER") ? std::max (1, atoi (getenv ("ORBITER_VK_RT_CLUSTER"))) : 131072;
+	if (n->lastUsed != frame || !n->rtTris) return;
+	if (n->rtTris > RT_CLUSTER && !n->drawn) {
+		for (auto &c : n->child) if (c) AddRTClusters (c.get(), rt);
+		return;
+	}
+	std::vector<Node*> tiles;
+	GatherDrawn (n, tiles);
+	std::vector<RTScene::Part> parts;
+	std::vector<std::array<float, 3>> ofs;
+	parts.reserve (tiles.size());
+	ofs.reserve (tiles.size());
+	for (Node *t : tiles) {
+		if (!t->vbuf.buffer) continue;
+		RTScene::Part p{};
+		p.tex = TexFor (t, &Node::surf, p.mat.uv);
+		if (!p.tex) continue;
+		p.geo = { t->rtId, t->rtVersion, t->vbuf.buffer, 0, t->nVtx, tr->IndexBuffer(), tr->Columns (t->cols).rtFirst, tr->Columns (t->cols).rtCount }; // (without the skirts)
+		p.mat.diffuse[0] = p.mat.diffuse[1] = p.mat.diffuse[2] = p.mat.diffuse[3] = 1.0f;
+		p.mat.light = 1.0f;
+		p.mat.pbr[1] = 1.0f, p.mat.pbr[3] = 1.0f; // matte
+		p.mat.unlit = false;
+		parts.push_back (p);
+		VECTOR3 d = t->centre - n->centre;
+		ofs.push_back ({ (float)d.x, (float)d.y, (float)d.z });
+	}
+	if (parts.empty()) return;
+	if (!n->rtCluster) n->rtCluster = RTNewGeometryId ();
+	rt->AddCluster (n->rtCluster, parts.data(), reinterpret_cast<const float (*)[3]> (ofs.data()), (uint32_t)parts.size(),
+		scene->ModelView (ppos + mul (prot, n->centre), prot));
 }
 
 void PlanetSurface::RenderShadow (ShadowMap &sm)
@@ -1294,7 +1387,8 @@ void PlanetSurface::RenderShadow (ShadowMap &sm)
 		// tile extent, with a margin for its relief
 		double rad = n->angRadius * R * 1.5 + 10e3;
 		if (!sm.MayCast (gc, rad)) continue;
-		sm.DrawGeometry (n->vbuf.buffer, tr->IndexBuffer(), tr->IndexCount(), Mat4::FromRotTrans (prot, gc - sm.Centre()));
+		const TileRenderer::Grid &g = tr->Columns (n->cols);
+		sm.DrawGeometry (n->vbuf.buffer, tr->IndexBuffer(), g.count, Mat4::FromRotTrans (prot, gc - sm.Centre()), g.first);
 	}
 }
 
@@ -1332,7 +1426,7 @@ void PlanetSurface::RenderCoverage (const Mat4 &toMap, VkPipelineLayout layout, 
 		vkCmdPushConstants (cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), pc);
 		VkDeviceSize ofs = 0;
 		vkCmdBindVertexBuffers (cmd, 0, 1, &n->vbuf.buffer, &ofs);
-		vkCmdDrawIndexed (cmd, tr->GridIndexCount(), 1, 0, 0, 0);
+		vkCmdDrawIndexed (cmd, tr->Columns (n->cols).gridCount, 1, tr->Columns (n->cols).first, 0, 0);
 	}
 }
 
@@ -1349,7 +1443,21 @@ void PlanetSurface::Render (Atmosphere *atm)
 	VkDescriptorSet as = atm->Set ();
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr->Layout(), 3, 1, &as, 0, nullptr);
 	vkCmdBindIndexBuffer (cmd, tr->IndexBuffer(), 0, VK_INDEX_TYPE_UINT16);
-	for (Node *n : drawList) DrawNode (n);
+	for (Node *n : drawList) if (InView (n)) DrawNode (n);
+}
+
+bool PlanetSurface::InView (const Node *n) const
+{
+	// a sphere about the tile: its cap, raised to the highest and lowered to
+	// the lowest elevation of its data (with a margin for the terrain detail
+	// and the skirts)
+	double emin = 0.0, emax = 0.0;
+	if (!clouds) {
+		if (const Node *src = ElevSource (n)) emin = src->elev->emin, emax = src->elev->emax;
+		else emin = -maxElev, emax = maxElev;
+	}
+	double rad = n->angRadius * (radius + std::max (emax, 0.0)) + std::max (-emin, emax) + 100.0;
+	return scene->SphereInView (ppos + mul (prot, n->centre) - scene->CameraPos (), rad * 1.01);
 }
 
 void PlanetSurface::BindVertices (const Node *n)
@@ -1360,22 +1468,25 @@ void PlanetSurface::BindVertices (const Node *n)
 	vkCmdBindVertexBuffers (ctx->Cmd(), 0, 2, b, ofs);
 }
 
+VkTexture *PlanetSurface::TexFor (const Node *n, VkTexture *Node::*member, float uv[4])
+{
+	for (const Node *a = n; a; a = a->parent) {
+		if (!(a->*member)) continue;
+		int k = n->lvl - a->lvl;
+		float s = 1.0f / (1 << k);
+		uv[0] = (n->ilng - (a->ilng << k)) * s;
+		uv[1] = (n->ilat - (a->ilat << k)) * s;
+		uv[2] = uv[3] = s;
+		return a->*member;
+	}
+	return nullptr;
+}
+
 void PlanetSurface::DrawNode (Node *n, bool prepass)
 {
 	if (!n->vbuf.buffer) return; // (its mesh not made yet: a number per frame)
 	// texture: the tile's own, or the matching part of the nearest ancestor's
-	auto texFor = [n](VkTexture *Node::*member, float uv[4]) -> VkTexture * {
-		for (const Node *a = n; a; a = a->parent) {
-			if (!(a->*member)) continue;
-			int k = n->lvl - a->lvl;
-			float s = 1.0f / (1 << k);
-			uv[0] = (n->ilng - (a->ilng << k)) * s;
-			uv[1] = (n->ilat - (a->ilat << k)) * s;
-			uv[2] = uv[3] = s;
-			return a->*member;
-		}
-		return nullptr;
-	};
+	auto texFor = [n](VkTexture *Node::*member, float uv[4]) { return TexFor (n, member, uv); };
 	TilePushConstants pc{};
 	VkTexture *surf = texFor (&Node::surf, pc.surfUV);
 	if (!surf) return;
@@ -1389,7 +1500,9 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 		// at which the parent is no longer split (where coarser neighbours
 		// begin; finer ones end within 0.7), from the camera or the nearest
 		// vessel on the ground (whichever is closer)
-		double D = radius * (n->parent->latmax - n->parent->latmin) * pixPerRad / splitPixels;
+		// (by the size the split goes by: near a pole, a sliver's length would
+		// put the morph far beyond its coarser neighbours, leaving cracks)
+		double D = SplitSize (n->parent) * pixPerRad / splitPixels;
 		pc.morph[0] = (float)(0.7 * D);
 		pc.morph[1] = (float)(1.0 / (0.2 * D));
 	}
@@ -1430,19 +1543,9 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 		memcpy (pp + 40, pc.morph, sizeof(pc.morph));
 		memcpy (pp + 44, pc.vessel, sizeof(pc.vessel));
 		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr->Layout(), 2, 1, &mask->set, 0, nullptr);
-		if (RTScene *rt = scene->RT ()) { // into the ray tracing scene (without the skirts)
-			RTScene::Material rm{};
-			rm.diffuse[0] = rm.diffuse[1] = rm.diffuse[2] = rm.diffuse[3] = 1.0f;
-			rm.light = 1.0f;
-			rm.pbr[1] = 1.0f, rm.pbr[3] = 1.0f; // matte
-			memcpy (rm.uv, pc.surfUV, sizeof(rm.uv));
-			rm.unlit = false;
-			RTScene::Geometry geo{ n->rtId, n->rtVersion, n->vbuf.buffer, 0, n->nVtx, tr->IndexBuffer(), tr->RTFirstIndex(), tr->RTIndexCount() };
-			rt->AddInstance (geo, mv, surf, rm);
-		}
 		vkCmdPushConstants (cmd, tr->Layout(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pp), pp);
 		BindVertices (n);
-		vkCmdDrawIndexed (cmd, tr->IndexCount(), 1, 0, 0, 0);
+		vkCmdDrawIndexed (cmd, tr->Columns (n->cols).count, 1, tr->Columns (n->cols).first, 0, 0);
 		return;
 	}
 	VkDescriptorSet sets[2] = { surf->set, mask->set };
@@ -1457,5 +1560,8 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 	BindVertices (n);
 	// skirts would show as bright seams in the blended cloud layer
 	if (scene->InProbe () && !clouds) vkCmdDrawIndexed (cmd, tr->CoarseIndexCount(), 1, tr->CoarseFirstIndex(), 0, 0);
-	else vkCmdDrawIndexed (cmd, clouds ? tr->GridIndexCount() : tr->IndexCount(), 1, 0, 0, 0);
+	else {
+		const TileRenderer::Grid &g = tr->Columns (n->cols);
+		vkCmdDrawIndexed (cmd, clouds ? g.gridCount : g.count, 1, g.first, 0, 0);
+	}
 }
