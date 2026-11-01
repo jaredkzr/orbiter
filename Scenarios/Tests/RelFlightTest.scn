@@ -1,0 +1,46 @@
+BEGIN_HYPERDESC
+<h1>Relativistic flight: the ideal drive</h1>
+A delta-glider in solar orbit, far from the planets, accelerates at
+10,000 g for half an hour of simulation time to half the speed of light:
+its clock, speed and distance against hyperbolic motion, then its clock
+coasting against 1/gamma, and the drive saved in a scenario. Another, in
+lunar orbit, drives into the Moon at 10^6 g under time warp: the whole
+fall within one frame, found along its path. A third passes Earth at
+0.3 c, 10,000 km out: bent by post-Newtonian gravity.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Tests/RelFlightTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship REL
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET REL
+  MODE Extern
+  POS 4 0 -20
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+REL:DeltaGlider
+  STATUS Orbiting Sun
+  ELEMENTS 1.5e11 0.00000 0.0 0.0 0.0 90.0 51982.6685767396
+  AROT 0 0 0
+END
+FLY:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 7.0e6 0.00000 0.0 0.0 0.0 0.0 51982.6685767396
+  AROT 0 0 0
+END
+IMP:DeltaGlider
+  STATUS Orbiting Moon
+  ELEMENTS 1.0e7 0.00000 0.0 0.0 0.0 0.0 51982.6685767396
+  AROT 0 0 0
+END
+END_SHIPS

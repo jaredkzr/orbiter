@@ -362,6 +362,14 @@ void Instrument_Orbit::UpdateDraw (oapi::Sketchpad *skp)
 	skp->SetTextColor (draw[!dominant ? 3 : gfrac < 0.0 ? 1 : 0][0].col);
 	skp->Text ((IW-cw*6)/2, IH-(3*ch)/2, cbuf, 6);
 
+	// relativistic flight (the ideal drive, or faster than any orbit): a
+	// conic about the reference body describes nothing
+	if (vessel->Relativistic ()) {
+		skp->SetTextColor (draw[1][0].col);
+		static const char *rel = "RELATIVISTIC: CONICS N/A";
+		skp->Text ((IW-cw*(int)strlen (rel))/2, IH-(5*ch)/2, rel, (int)strlen (rel));
+	}
+
 	if (dispmode != DISP_GRAPH) { // list ship and target orbit parameters
 		if (bValidShpEl) {
 			skp->SetTextColor (draw[0][0].col);

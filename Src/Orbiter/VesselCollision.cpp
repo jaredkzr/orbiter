@@ -80,9 +80,12 @@ void VesselCollider::Begin (const std::vector<VesselBase*> &bodies, double h)
 		for (size_t j = i+1; j < cand.size(); j++) {
 			const Cand &a = cand[i], &b = cand[j];
 			if (!a.dyn && !b.dyn) continue;
+			// (a relativistic vessel: a step reaches millions of km; contacts
+			// can't resolve such passes; its impacts on bodies: RelFlight.cpp)
+			if (a.v->Relativistic() || b.v->Relativistic()) continue;
 			double d = a.v->s0->pos.dist (b.v->s0->pos);
 			double reach = a.r + b.r + SpeedBound (a.v, b.v, a.r, b.r)*h + 0.1;
-			if (d > reach) continue;
+			if (!(d <= reach)) continue; // (also a state gone bad: not paired with every vessel)
 			pairs.push_back ({a.v, b.v});
 			for (const Cand *c : {&a, &b})
 				if (c->dyn && std::find (dynamic.begin(), dynamic.end(), c->v) == dynamic.end()) {
@@ -93,7 +96,7 @@ void VesselCollider::Begin (const std::vector<VesselBase*> &bodies, double h)
 
 	// moving vessels near the structures of surface bases
 	for (const Cand &c : cand) {
-		if (!c.dyn || !c.v->proxybody || c.v->proxybody->Type() != OBJTP_PLANET) continue;
+		if (!c.dyn || !c.v->proxybody || c.v->proxybody->Type() != OBJTP_PLANET || c.v->Relativistic()) continue;
 		const Planet *pl = (const Planet*)c.v->proxybody;
 		for (DWORD i = 0; i < pl->nBase(); i++) {
 			const Base *b = pl->GetBase (i);

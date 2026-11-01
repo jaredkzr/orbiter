@@ -418,6 +418,12 @@ protected:
 	static int oapi_transfer_nodes (lua_State *L);
 	static int oapi_transfer_correct (lua_State *L);
 	static int oapi_transfer_info (lua_State *L);
+	static int oapi_set_reldrive (lua_State *L);
+	static int oapi_get_relstate (lua_State *L);
+	static int oapi_set_shipclock (lua_State *L);
+	static int oapi_reltrip_set (lua_State *L);
+	static int oapi_reltrip_engage (lua_State *L);
+	static int oapi_reltrip_info (lua_State *L);
 	static int oapi_transfer_launches (lua_State *L);
 	static int oapi_transfer_route (lua_State *L);
 	static int oapi_transfer_flybys (lua_State *L);

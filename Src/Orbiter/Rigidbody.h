@@ -112,6 +112,33 @@ public:
 	// Called after the state was propagated over a step h without contact
 	// forces: resolves contacts by modifying the new state (s1)
 
+	// Relativistic flight (RelFlight.cpp): special relativity and first
+	// post-Newtonian gravity of all the celestial bodies, impacts found
+	// along the path, the clock carried along
+	virtual bool Relativistic () const { return false; }
+	// whether the body moves relativistically (driven by the ideal drive,
+	// or faster than any natural orbit)
+	virtual Vector ProperAccel (const StateVectors &s, double t) const { return Vector(); }
+	// acceleration felt on board in state s at simulation time t
+	// (non-gravitational; global frame)
+	virtual double DriveCutoff () const { return 0.0; }
+	// simulation time at which a drive stops within the step (0: none)
+	virtual bool RelImpact (const CelestialBody *body, const Vector &rpos, const Vector &rvel) { return false; }
+	// a relativistic step hits the surface of body (position and velocity
+	// relative to it at the impact): true if handled (the step ends there,
+	// the body has set its own state)
+	virtual void RelDiverged () {}
+	// a relativistic step could not be integrated (dropped): stop what drives the body
+	inline double ClockOffset () const { return clockOfs; }
+	inline void SetClockOffset (double ofs) { clockOfs = clockOfs1 = ofs; }
+	// the clock carried along: its time less the simulation time [s] (at
+	// the state s0; during the update phase the step computes clockOfs1,
+	// adopted with the state at its end)
+	void BeginStateUpdate () override;
+	void EndStateUpdate () override;
+	static double Potential (const Vector &gpos);
+	// gravitational potential of the celestial bodies at gpos (end of the step)
+
 	virtual Vector GetPertAcc (const PertIntData &data, const Vector &pos, double tfrac);
 	// returns the gravity perturbation (on top of the spherical gravity field
 	// from cbody) at relative position pos, at fractional time tfrac within
@@ -236,6 +263,12 @@ protected:
 	static bool bGPerturb;    // nonspherical gravity effects
 
 	GFieldData gfielddata;  // used for dynamic grav updates
+
+	void RelativisticUpdate ();
+	// the step of a relativistic body (RelFlight.cpp)
+	bool relStep = false;   // this step was relativistic (its clock is updated)
+	double clockOfs = 0.0;  // the clock carried along less the simulation time [s] (state s0)
+	double clockOfs1 = 0.0; // the same at the end of the step (state s1)
 
 private:
 	static void SetupPropagationModes ();

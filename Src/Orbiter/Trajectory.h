@@ -123,6 +123,8 @@ namespace trajectory {
 		const Vessel *lastVessel = nullptr;
 		const Body *lastTarget = nullptr;
 		unsigned int lastNodeVersion = ~0u;
+		bool lastDriveOn = false;      // the ideal drive at the last request (relativistic travel)
+		double lastDriveAccel = 0.0;
 		double lastRequestSys = -1e10;      // system time of the last request
 		double lastRequestSim = -1e10;
 		unsigned int serial = 0;

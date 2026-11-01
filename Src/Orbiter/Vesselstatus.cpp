@@ -8,6 +8,7 @@
 
 #include "Orbiter.h"
 #include "Vessel.h"
+#include "RelTravel.h"
 #include <sstream>
 #include "SuperVessel.h"
 #include "Config.h"
@@ -384,6 +385,30 @@ bool Vessel::ParseScenarioLineDirect (char *line)
 		ss >> saved_nparts;
 		int j;
 		while (ss >> j) saved_lost.push_back (j);
+		return true;
+	} else if (!_strnicmp (line, "RELDRIVE", 8)) { // ideal drive: proper acceleration [m/s^2] [ON]
+		double a = 0.0;
+		char flag[16] = "";
+		if (sscanf (line+8, "%lf%15s", &a, flag) >= 1)
+			SetRelDrive (a, !_stricmp (flag, "ON"));
+		return true;
+	} else if (!_strnicmp (line, "RELTRIP", 7)) { // trip autopilot: target arrival altitude accel fastest triptime phase arrive_mjd
+		char name[256];
+		int arr = 0, fastest = 1, ph = 0;
+		double alt = 0.0, acc = 0.0, ttrip = 0.0, mjdArr = 0.0;
+		if (sscanf (line+7, "%255s%d%lf%lf%d%lf%d%lf", name, &arr, &alt, &acc, &fastest, &ttrip, &ph, &mjdArr) >= 6) {
+			reltravel::Controller *c = RelTrip ();
+			c->settings.targetName = name, c->settings.target = nullptr;
+			c->settings.arrival = arr, c->settings.altitude = alt, c->settings.accel = acc;
+			c->settings.fastest = fastest != 0, c->settings.tripTime = ttrip;
+			if (mjdArr > 0.0) c->SetArriveT ((mjdArr - td.MJD_ref) * 86400.0);
+			// (an engaged trip continues, re-aligned first)
+			if (ph > reltravel::PH_IDLE && ph < reltravel::PH_ARRIVED) c->SetPhase (reltravel::PH_ALIGN);
+		}
+		return true;
+	} else if (!_strnicmp (line, "CLOCK", 5)) { // the clock carried along less the simulation time [s]
+		double ofs = 0.0;
+		if (sscanf (line+5, "%lf", &ofs) == 1) SetClockOffset (ofs);
 		return true;
 	} else if (!_strnicmp (line, "DESTROYED", 9)) {
 		saved_destroyed = true;

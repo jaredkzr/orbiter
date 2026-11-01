@@ -211,8 +211,16 @@ void RigidBody::Update (bool force)
 			gfielddata.updt = td.SimT0 + gfielddata_updt_interval;
 		}
 
+		relStep = false;
+		if (Relativistic ()) {
+
+			// (special relativity, post-Newtonian gravity: RelFlight.cpp)
+			RelativisticUpdate ();
+			relStep = true;
+			el_valid = bOrbitStabilised = false;
+
 		// First check if we should do a stabilised state update
-		if (bCanUpdateStabilised &&
+		} else if (bCanUpdateStabilised &&
 			ostep > g_pOrbiter->Cfg()->CfgPhysicsPrm.Stabilise_SLimit &&
 			g_psys->GetGravityContribution (cbody, cpos+cbody->GPos()) > 1-g_pOrbiter->Cfg()->CfgPhysicsPrm.Stabilise_PLimit) {
 

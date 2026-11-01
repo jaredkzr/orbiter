@@ -226,7 +226,8 @@ bool VesselBase::Activate (bool force)
 void VesselBase::PostUpdate ()
 {
 	// Check periodically for proxy-bodies
-	if (fstatus == FLIGHTSTATUS_FREEFLIGHT && td.SimT1 > proxyT) {
+	// (each step while relativistic: a fast vessel crosses spheres of influence within seconds)
+	if (fstatus == FLIGHTSTATUS_FREEFLIGHT && (td.SimT1 > proxyT || Relativistic())) {
 		UpdateProxies ();
 		proxyT = td.SimT1 + 100.0;  // update every 100 seconds
 	}

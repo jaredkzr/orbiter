@@ -1052,6 +1052,41 @@ The search uses patched conics: Lambert's problem for each leg, the flybys as hy
 Scripts can use the planner too: see the oapi.transfer\_search, transfer\_select, transfer\_nodes, transfer\_correct, transfer\_info, and for routes transfer\_route, transfer\_flybys, transfer\_suggest, transfer\_suggestions and transfer\_use\_suggestion functions of the Lua interface.
 
 
+\subsection{Relativistic Travel}
+\label{ssec:mfd_reltravel}
+The \textit{Relativistic Travel} MFD mode (\Shift\keystroke{R}) controls an \textit{ideal drive}: a proper acceleration (the acceleration felt on board) along the vessel's $z$ axis, either way, of up to a million g, needing no propellant. No real engine can do this, and no crew could survive more than a few g for long; the drive lets any vessel reach a sizeable part of the speed of light within the Solar System, where the effects of relativity become real parts of the flight. While the drive is on, or the vessel moves faster than any natural orbit (0.003 $c$), the vessel flies relativistically: its motion follows special relativity (its speed approaches but never reaches $c$), gravity includes the first relativistic correction (it bends a vessel moving at speed $v$ by the factor $1 + v^2/c^2$ more than Newton's gravity: up to twice as much near the speed of light), the trajectory prediction of the map view follows the same equations, and its clock runs slow by its speed and by gravity. The Orbit MFD's conic elements describe no such flight and are marked as not applicable. The pages:
+
+\begin{itemize}
+\item \textbf{Target:} the trip's target, any body (moons are listed under their planets) or another vessel; the arrival: \textit{at rest} relative to the target at an altitude above it, \textit{in orbit} (circular, at that altitude) or \textit{passing} it at speed at that altitude (a flyby).
+\item \textbf{Trip:} the acceleration and the timing: as soon as possible, or a set trip time (the burns are then shorter, with a coast between them). The plan: the arrival on the Solar System's clock and on the ship's, the arrival date, the top speed and its Lorentz factor $\gamma$, and the speed plotted against Solar System time and against ship time: the faster the trip, the more the ship's clock falls behind. \textit{Engage} hands the trip to the autopilot.
+\item \textbf{Flight:} the speed relative to the target, $\gamma$ and the rapidity; the drive and the g-load it means for a crew; the ship's clock and how far it is behind the Solar System's; the distance to the target, as measured in the Solar System and as measured on board (contracted along the motion); the time to the arrival on both clocks. With the autopilot disengaged, the drive can be run by hand (on, acceleration, reversed).
+\item \textbf{Cost:} what a real rocket would need for the trip: the velocity change (the change of rapidity, in units of $c$); for a photon rocket (matter and antimatter annihilated into a beam of light, the best any rocket can do) the mass ratio, the propellant, its antimatter and the energy; and the mass ratio and propellant for any other exhaust speed (fusion: a few percent of $c$).
+\end{itemize}
+
+\noindent
+The autopilot turns the vessel (with its attitude thrusters if it has propellant for them, otherwise the drive turns it), waits if need be until the path leads away from the body it starts from, then drives. Since the drive pushes either way, the deceleration needs no turn at the midpoint: the drive reverses. The trip is solved again at every step from the vessel's state, so gravity and the lag of the attitude are corrected as they arise; the drive cancels gravity on the way (the trip is planned free of it). The deceleration brakes the vessel to the arrival point: a constant proper deceleration $a$ stops a vessel of Lorentz factor $\gamma$ within $c^2(\gamma - 1)/a$, so the autopilot coasts until the remaining distance asks the drive's deceleration, then brakes at exactly what the distance asks (holding a quarter of the drive in reserve). Time warp is lowered ahead of the burns' ends. Hitting a body at speed destroys the vessel (with damage simulation on), or sets it down on the ground and stops the drive.
+
+\begin{table}[H]
+	\centering
+	\begin{tabular}{lll}
+	\hline\rule{0pt}{2.5ex}
+	\textbf{Button} & \textbf{Key} & \textbf{Function}\\
+	\hline\rule{0pt}{2.5ex}
+	PG & \Shift\keystroke{P} & Next page\\
+	TGT & \Shift\keystroke{T} & Next target\\
+	ENG & \Shift\keystroke{E} & Engage or disengage the autopilot\\
+	ARR & \Shift\keystroke{A} & Next arrival: at rest, in orbit, passing\\
+	AC+ & \Shift\keystroke{U} & Acceleration $\times$10\\
+	AC- & \Shift\keystroke{D} & Acceleration $\div$10\\
+	DRV & \Shift\keystroke{M} & The drive by hand (on/off)\\
+	\hline
+	\end{tabular}
+\end{table}
+
+\noindent
+Some numbers: Earth to Mars at their closest takes about two days at 1 g, at a top speed of 0.003 $c$; at 1,000 g about 1.6 hours at 0.09 $c$; at a million g about five minutes at 0.98 $c$, while the ship's clock counts less than half of that time. Scripts can use the drive and the autopilot: see oapi.set\_reldrive, get\_relstate, set\_shipclock, reltrip\_set, reltrip\_engage and reltrip\_info in the Lua interface.
+
+
 \subsection{TransX}
 \label{ssec:mfd_transx}
 The TransX MFD mode allows for the planning and execution of plan of maneuvers, designed to get a vessel to a target, either directly or via a "gravity-assist" fly-by of celestial bodies.\\

@@ -1,0 +1,53 @@
+BEGIN_HYPERDESC
+<h1>Relativistic travel: the trip autopilot</h1>
+Delta-gliders in a 300 km Earth orbit fly trips with the ideal drive's
+autopilot (Relativistic Travel MFD): into orbits about Mars at 1,000 g
+(500 km) and at 100,000 g (700 km; 0.85 c), to rest 1,000 km above the Moon at
+10 g, past Mars 1,000 km out at 1,000 g, and to the Moon in a set time.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Tests/RelTripTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship T1
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET T1
+  MODE Extern
+  POS 4 0 -20
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+T1:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 6671000.0 0.00000 28.5 0.0 0.0 0.0 51982.6685767396
+  AROT 0 0 0
+END
+T2:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 6671000.0 0.00000 28.5 0.0 0.0 90.0 51982.6685767396
+  AROT 0 0 0
+END
+T3:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 6671000.0 0.00000 28.5 0.0 0.0 180.0 51982.6685767396
+  AROT 0 0 0
+END
+T4:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 6671000.0 0.00000 28.5 0.0 0.0 270.0 51982.6685767396
+  AROT 0 0 0
+END
+T5:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 6671000.0 0.00000 51.6 30.0 0.0 45.0 51982.6685767396
+  AROT 0 0 0
+END
+END_SHIPS

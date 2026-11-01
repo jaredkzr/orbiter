@@ -705,6 +705,7 @@ void Interpreter::LoadVesselAPI ()
 	lua_pushnumber(L, MFD_OSYNC);              lua_setfield(L, -2, "OSYNC");
 	lua_pushnumber(L, MFD_TRANSFER);           lua_setfield(L, -2, "TRANSFER");
 	lua_pushnumber(L, MFD_PLANNER);            lua_setfield(L, -2, "PLANNER");
+	lua_pushnumber(L, MFD_RELTRAVEL);          lua_setfield(L, -2, "RELTRAVEL");
 	lua_pushnumber(L, MFD_COMMS);              lua_setfield(L, -2, "COMMS");
 	lua_pushnumber(L, MFD_USERTYPE);           lua_setfield(L, -2, "USERTYPE");
 	lua_setglobal(L, "MFDMODE");

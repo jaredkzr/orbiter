@@ -87,6 +87,16 @@ set_target_properties(Transfer.Routes PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORB
 add_test(NAME Transfer.Routes COMMAND $<TARGET_FILE:Transfer.Routes>)
 set_tests_properties(Transfer.Routes PROPERTIES TIMEOUT 300)
 
+# Special relativity of relativistic flight (boosts, light, motion, trips)
+add_executable(Relativity.Kinematics Relativity.Kinematics.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Relativity.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Vecmat.cpp)
+target_include_directories(Relativity.Kinematics PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter)
+target_link_libraries(Relativity.Kinematics Catch2::Catch2WithMain)
+set_target_properties(Relativity.Kinematics PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER_BINARY_ROOT_DIR}")
+add_test(NAME Relativity.Kinematics COMMAND $<TARGET_FILE:Relativity.Kinematics>)
+set_tests_properties(Relativity.Kinematics PROPERTIES TIMEOUT 120)
+
 # Scenario tests need an Orbiter executable that runs without graphics client
 if (ORBITER_HEADLESS)
 	set(ORBITER_TEST_EXE $<TARGET_FILE:${OrbiterTgt}>)
@@ -128,6 +138,9 @@ if (ORBITER_TEST_EXE)
 	# gravity assists: route search, full-gravity targeting, suggestions
 	set_tests_properties(Scenario.RoutePlanTest PROPERTIES TIMEOUT 180)
 	set_tests_properties(Scenario.RouteFlightTest PROPERTIES TIMEOUT 1000)
+	# relativistic flight: the ideal drive, clocks, impacts at speed, prediction
+	set_tests_properties(Scenario.RelFlightTest PROPERTIES TIMEOUT 120)
+	set_tests_properties(Scenario.RelTripTest PROPERTIES TIMEOUT 400)
 	# saving and loading damage: the save test writes the scenario the load
 	# test runs (in the build tree)
 	set_tests_properties(Scenario.DamageSaveTest PROPERTIES FIXTURES_SETUP DamageRoundtrip ENVIRONMENT "ORBITER_DAMAGE=1")

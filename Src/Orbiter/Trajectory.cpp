@@ -9,6 +9,7 @@
 #include "Element.h"
 #include "Astro.h"
 #include "Log.h"
+#include "Relativity.h"
 #include <algorithm>
 #include <cmath>
 #include <unordered_map>
@@ -60,6 +61,8 @@ struct Predictor::Input {
 	std::vector<BodySnap> bodies;
 	double tmax = 0.0;
 	bool toEnd = false;                   // up to tmax (not ending after a bound orbit without nodes)
+	bool rel = false;                     // relativistic vessel: post-Newtonian gravity, the ideal drive
+	Vector relAlpha;                      // the drive's proper acceleration (global; kept over the prediction)
 	unsigned int serial = 0;
 	const Vessel *vessel = nullptr;
 };
@@ -244,6 +247,34 @@ struct Predictor::Context {
 		return acc;
 	}
 
+	// a relativistic vessel at r moving at v: post-Newtonian gravity
+	// (relative to each body's motion) and proper acceleration alpha, as
+	// the simulation flies it (RelFlight.cpp)
+	Vector RelAccel (double t, const Vector &r, const Vector &v, const Vector &alpha)
+	{
+		if (t != tEval) Bodies (t, r);
+		Vector vv (v);
+		double s = v.length();
+		if (s >= 0.999999999 * relativity::C) vv *= 0.999999999 * relativity::C / s; // (an integration step past c)
+		size_t n = in->bodies.size();
+		thread_local std::vector<Vector> g;
+		g.assign (n, Vector());
+		double phi = 0.0;
+		for (size_t i = 0; i < n; i++) {
+			if (!active[i]) continue;
+			const auto &b = in->bodies[i];
+			Vector rp (G[i] - r);
+			double d = std::max (rp.length(), 1.0);
+			g[i] = rp * (b.mu / (d*d*d));
+			if (b.nJ) g[i] += Zonal (b, rp, d);
+			phi -= b.mu / d;
+		}
+		Vector a;
+		for (size_t i = 0; i < n; i++)
+			if (active[i]) a += relativity::PNAccel (g[i], phi, vv - GV[i]);
+		return a + relativity::CoordAccel (alpha, vv);
+	}
+
 	// J2-J4 perturbation (as SingleGacc_perturbation)
 	static Vector Zonal (const Input::BodySnap &b, const Vector &rpos, double d)
 	{
@@ -348,6 +379,10 @@ std::shared_ptr<Predictor::Input> Predictor::Snapshot (const Vessel *v, const Bo
 	}
 	in->target = target;
 	in->tmax = sim + days * 86400.0;
+	if ((in->rel = v->Relativistic())) {
+		const Vessel::RelDrive &rd = v->GetRelDrive();
+		if (rd.on) in->relAlpha = mul (v->GRot(), Vector (0, 0, rd.accel));
+	}
 
 	size_t n = g_psys->nGrav();
 	in->bodies.resize (n);
@@ -406,8 +441,10 @@ void Predictor::Update (const Vessel *v, const Body *target)
 {
 	if (!v) return;
 	double sys = td.SysT1, sim = td.SimT1;
-	bool changed = (v != lastVessel || target != lastTarget || v->ManeuverVersion() != lastNodeVersion);
-	bool thrust = v->ThrustEngaged() || v->Burn().phase == Vessel::BurnState::BURN;
+	const Vessel::RelDrive &rd = v->GetRelDrive();
+	bool changed = (v != lastVessel || target != lastTarget || v->ManeuverVersion() != lastNodeVersion ||
+		rd.on != lastDriveOn || rd.accel != lastDriveAccel);
+	bool thrust = v->ThrustEngaged() || v->Burn().phase == Vessel::BurnState::BURN || (rd.on && rd.accel != 0.0);
 	auto cur = Latest();
 	bool stale = cur && sim > cur->t0 + 0.5 * (cur->t1 - cur->t0);
 	bool due = (thrust ? sys - lastRequestSys > 0.2 : sys - lastRequestSys > 5.0) ||
@@ -428,6 +465,7 @@ void Predictor::Update (const Vessel *v, const Body *target)
 	lastVessel = v;
 	lastTarget = target;
 	lastNodeVersion = v->ManeuverVersion();
+	lastDriveOn = rd.on, lastDriveAccel = rd.accel;
 	lastRequestSys = sys;
 	lastRequestSim = sim;
 }
@@ -533,7 +571,7 @@ std::shared_ptr<Prediction> Predictor::Compute (const Input &in, Context &c, con
 		for (int i = 0; i < nst; i++) {
 			out[i][0] = s[i].v;
 			if (i > 0) c.tEval = -1e100; // (the bodies' activity depends on the position)
-			out[i][1] = c.Accel (tt, s[i].r);
+			out[i][1] = (i == 0 && in.rel) ? c.RelAccel (tt, s[i].r, s[i].v, in.relAlpha) : c.Accel (tt, s[i].r);
 		}
 		if (nst > 1) c.tEval = -1e100;
 	};

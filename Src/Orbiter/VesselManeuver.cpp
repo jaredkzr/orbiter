@@ -89,6 +89,76 @@ double Vessel::BurnDuration (double dv) const
 }
 
 // =======================================================================
+// Attitude: a vessel axis turned towards a global direction with the
+// attitude thrusters (overrides; no roll)
+
+double Vessel::SteerTowards (const Vector &gdir, const Vector &axis)
+{
+	Vector tgtv (tmul (GRot(), gdir)); // (vessel frame)
+	// target in a frame with the axis as z axis (the vessel frame for the
+	// axis +z), assuming the attitude axes of the vessel frame
+	Vector e3 (axis), e2 (Vector (0, 1, 0) - axis * axis.y);
+	if (e2.length() < 1e-3) e2 = Vector (0, 0, -1) - axis * (-axis.z);
+	e2.unify();
+	Vector e1 (crossp (e2, e3));
+	Vector tgt (dotp (tgtv, e1), dotp (tgtv, e2), dotp (tgtv, e3));
+	double err = acos (std::clamp (tgt.z, -1.0, 1.0));
+
+	const double dvmax = 5.0*RAD;   // max angular velocity [rad/s]
+	const double alpha0 = 20.0*RAD; // angle below which the rate is reduced
+	const double f0 = dvmax / alpha0;
+	double v1, dth;
+	if ((v1 = f0 * asin (std::clamp (tgt.y, -1.0, 1.0))) >= 0.0) dth = (std::min (v1, dvmax) - s0->omega.x) / max_angular_moment[1];
+	else                                                          dth = (std::max (v1,-dvmax) - s0->omega.x) / max_angular_moment[0];
+	if (tgt.z < 0.0) dth = (dvmax - s0->omega.x) / max_angular_moment[1]; // (pointing away: turn)
+	if ((dth *= td.iSimDT * pmi.x * mass) >= 0.0) SetThrusterGroupOverride (THGROUP_ATT_PITCHUP,   std::min ( dth, 0.5));
+	else                                           SetThrusterGroupOverride (THGROUP_ATT_PITCHDOWN, std::min (-dth, 0.5));
+	if ((v1 = -f0 * atan2 (tgt.x, tgt.z)) >= 0.0) dth = (std::min (v1, dvmax) - s0->omega.y) / max_angular_moment[3];
+	else                                          dth = (std::max (v1,-dvmax) - s0->omega.y) / max_angular_moment[2];
+	if ((dth *= td.iSimDT * pmi.y * mass) >= 0.0) SetThrusterGroupOverride (THGROUP_ATT_YAWLEFT,  std::min ( dth, 0.5));
+	else                                           SetThrusterGroupOverride (THGROUP_ATT_YAWRIGHT, std::min (-dth, 0.5));
+	dth = -s0->omega.z / max_angular_moment[s0->omega.z <= 0.0 ? 5 : 4] * td.iSimDT * pmi.z * mass; // no roll
+	if (dth >= 0.0) SetThrusterGroupOverride (THGROUP_ATT_BANKRIGHT, std::min ( dth, 0.5));
+	else            SetThrusterGroupOverride (THGROUP_ATT_BANKLEFT,  std::min (-dth, 0.5));
+	return err;
+}
+
+double Vessel::TurnTowards (const Vector &gdir, const Vector &axis, double maxAngle)
+{
+	const Matrix &R = GRot();
+	Vector a (mul (R, axis));
+	double err = acos (std::clamp (dotp (a, gdir), -1.0, 1.0));
+	if (err < 1e-9) return 0.0;
+	// (the shortest turn: about a x gdir, towards gdir)
+	Vector k (crossp (a, gdir));
+	if (k.length() < 1e-9) {
+		k = crossp (a, Vector (1, 0, 0));
+		if (k.length() < 1e-3) k = crossp (a, Vector (0, 1, 0));
+	}
+	k.unify();
+	double th = std::min (err, maxAngle), c = cos (th), sn = sin (th);
+	auto rot = [&](const Vector &v) { return v * c + crossp (k, v) * sn + k * (dotp (k, v) * (1.0 - c)); };
+	// (the vessel's axes: the columns of R)
+	Vector x (rot (Vector (R.m11, R.m21, R.m31))), y (rot (Vector (R.m12, R.m22, R.m32))), z (rot (Vector (R.m13, R.m23, R.m33)));
+	SetRotationMatrix (Matrix (x.x, y.x, z.x, x.y, y.y, z.y, x.z, y.z, z.z));
+	SetAngVel (Vector (0, 0, 0));
+	return err - th;
+}
+
+bool Vessel::AttitudeThrustersUsable () const
+{
+	for (int g : { THGROUP_ATT_PITCHUP, THGROUP_ATT_PITCHDOWN, THGROUP_ATT_YAWLEFT, THGROUP_ATT_YAWRIGHT }) {
+		const ThrustGroupSpec *tgs = GetThrusterGroup ((THGROUP_TYPE)g);
+		bool any = false;
+		if (tgs)
+			for (const ThrustSpec *ts : tgs->ts)
+				if (ts->tank && ts->tank->mass > 0.0 && ts->maxth0 > 0.0) { any = true; break; }
+		if (!any) return false;
+	}
+	return true;
+}
+
+// =======================================================================
 // Burn autopilot: turns the main engines' thrust direction into the
 // node's velocity change shortly before the node, and burns until the
 // velocity change is reached (centred on the node time). It uses
@@ -140,32 +210,7 @@ void Vessel::UpdateBurn ()
 
 	// attitude: the thrust direction towards the remaining velocity change
 	double dvrem = burn.dvg.length();
-	Vector tgtv (tmul (GRot(), burn.dvg / std::max (dvrem, 1e-9))); // (vessel frame)
-	// target in a frame with the thrust direction as z axis (the vessel frame
-	// for thrust along +z), assuming the attitude axes of the vessel frame
-	Vector e3 (dir), e2 (Vector (0, 1, 0) - dir * dir.y);
-	if (e2.length() < 1e-3) e2 = Vector (0, 0, -1) - dir * (-dir.z);
-	e2.unify();
-	Vector e1 (crossp (e2, e3));
-	Vector tgt (dotp (tgtv, e1), dotp (tgtv, e2), dotp (tgtv, e3));
-	double err = acos (std::clamp (tgt.z, -1.0, 1.0));
-
-	const double dvmax = 5.0*RAD;   // max angular velocity [rad/s]
-	const double alpha0 = 20.0*RAD; // angle below which the rate is reduced
-	const double f0 = dvmax / alpha0;
-	double v1, dth;
-	if ((v1 = f0 * asin (std::clamp (tgt.y, -1.0, 1.0))) >= 0.0) dth = (std::min (v1, dvmax) - s0->omega.x) / max_angular_moment[1];
-	else                                                          dth = (std::max (v1,-dvmax) - s0->omega.x) / max_angular_moment[0];
-	if (tgt.z < 0.0) dth = (dvmax - s0->omega.x) / max_angular_moment[1]; // (pointing away: turn)
-	if ((dth *= td.iSimDT * pmi.x * mass) >= 0.0) SetThrusterGroupOverride (THGROUP_ATT_PITCHUP,   std::min ( dth, 0.5));
-	else                                           SetThrusterGroupOverride (THGROUP_ATT_PITCHDOWN, std::min (-dth, 0.5));
-	if ((v1 = -f0 * atan2 (tgt.x, tgt.z)) >= 0.0) dth = (std::min (v1, dvmax) - s0->omega.y) / max_angular_moment[3];
-	else                                          dth = (std::max (v1,-dvmax) - s0->omega.y) / max_angular_moment[2];
-	if ((dth *= td.iSimDT * pmi.y * mass) >= 0.0) SetThrusterGroupOverride (THGROUP_ATT_YAWLEFT,  std::min ( dth, 0.5));
-	else                                           SetThrusterGroupOverride (THGROUP_ATT_YAWRIGHT, std::min (-dth, 0.5));
-	dth = -s0->omega.z / max_angular_moment[s0->omega.z <= 0.0 ? 5 : 4] * td.iSimDT * pmi.z * mass; // no roll
-	if (dth >= 0.0) SetThrusterGroupOverride (THGROUP_ATT_BANKRIGHT, std::min ( dth, 0.5));
-	else            SetThrusterGroupOverride (THGROUP_ATT_BANKLEFT,  std::min (-dth, 0.5));
+	double err = SteerTowards (burn.dvg / std::max (dvrem, 1e-9), dir);
 
 	burn.aligned = (err < ALIGN_LIMIT && s0->omega.length() < 0.5*RAD);
 

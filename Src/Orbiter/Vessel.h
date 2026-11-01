@@ -210,6 +210,8 @@ typedef void (*VESSEL_Exit)(VESSEL *vessel);
 // =======================================================================
 // Class Vessel
 
+namespace reltravel { class Controller; }
+
 class Vessel: public VesselBase {
 	friend class Orbiter;
 	friend class VESSEL;
@@ -1394,6 +1396,28 @@ protected:
 public:
 	bool ThrustEngaged () const { return m_bThrustEngaged; }
 
+	// Relativistic travel (RelFlight.cpp, Vessel.cpp): the ideal drive, a
+	// proper acceleration along the vessel's z axis, either way (negative:
+	// reversed; the Relativistic Travel MFD's; no propellant). While it is on, or the vessel moves
+	// faster than any natural orbit, the vessel flies relativistically.
+	struct RelDrive {
+		bool on = false;
+		double accel = 0.0; // proper acceleration along +z [m/s^2] (negative: along -z)
+		double until = 0.0; // simulation time at which it stops (0: not set; the trip autopilot's burn ends within a step)
+	};
+	static constexpr double RELDRIVE_MAX_ACCEL = 1.25e6 * 9.80665; // [m/s^2] (trips plan up to 10^6 g: a reserve for the autopilot)
+	static constexpr double REL_SPEED = 0.003 * 299792458.0;    // above this: relativistic without the drive [m/s]
+	const RelDrive &GetRelDrive () const { return reldrive; }
+	bool SetRelDrive (double accel, bool on); // false if refused (docked, attached)
+	bool Relativistic () const override;
+	Vector ProperAccel (const StateVectors &s, double t) const override;
+	double DriveCutoff () const override;
+	void SetRelDriveCutoff (double t) { reldrive.until = t; }
+	bool RelImpact (const CelestialBody *body, const Vector &rpos, const Vector &rvel) override;
+	void RelDiverged () override;
+	reltravel::Controller *RelTrip (bool create = true);  // the trip autopilot (created on demand)
+	const reltravel::Controller *RelTripIf () const { return reltrip.get(); }
+
 	// manoeuvre nodes, in time order
 	const std::vector<maneuver::Node> &ManeuverNodes () const { return mnodes; }
 	DWORD AddManeuverNode (const maneuver::Node &node);  // returns its index
@@ -1414,6 +1438,16 @@ public:
 	// combined vacuum thrust [N], exhaust velocity [m/s] and thrust direction
 	// (vessel frame) of the main engines with propellant; false if none
 	double BurnDuration (double dv) const; // [s] for velocity change dv (-1: no main engines)
+	double SteerTowards (const Vector &gdir, const Vector &axis);
+	double TurnTowards (const Vector &gdir, const Vector &axis, double maxAngle);
+	// turns the vessel itself (no thrusters: the ideal drive's attitude
+	// control) by at most maxAngle [rad] so that axis points towards gdir,
+	// no roll; returns the remaining angle [rad]
+	bool AttitudeThrustersUsable () const;
+	// whether the pitch and yaw attitude thrusters have propellant
+	// turns the vessel axis 'axis' (vessel frame, unit) towards the global
+	// direction gdir (unit) with the attitude thrusters (overrides, no
+	// roll); returns the angle between them [rad]
 
 protected:
 	bool IsComponent () const { return supervessel != 0 || attach; }
@@ -1794,6 +1828,8 @@ private:
 	bool hulls_custom = false;                   // hulls defined by the vessel (AddCollisionHull)
 	std::vector<collision::Hull> custom_hulls;
 
+	RelDrive reldrive;                           // the ideal drive (relativistic travel)
+	std::unique_ptr<reltravel::Controller> reltrip; // its trip autopilot
 	std::vector<maneuver::Node> mnodes;          // manoeuvre nodes (time order)
 	DWORD mnode_version = 0;
 	BurnState burn;

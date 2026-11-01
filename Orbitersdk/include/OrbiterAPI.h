@@ -1971,8 +1971,9 @@ typedef union {
 #define MFD_TRANSFER             9 ///< Transfer orbit MFD mode
 #define MFD_COMMS               10 ///< Communications MFD mode
 #define MFD_PLANNER             11 ///< Transfer planner MFD mode
+#define MFD_RELTRAVEL           12 ///< Relativistic travel MFD mode
 #define MFD_USERTYPE            64 ///< User-defined MFD mode
-#define BUILTIN_MFD_MODES       11 ///< Number of built-in MFD modes
+#define BUILTIN_MFD_MODES       12 ///< Number of built-in MFD modes
 //@}
 
 // ===========================================================================
@@ -3390,6 +3391,91 @@ OAPIFUNC bool oapiTransferCorrect (OBJHANDLE hVessel);
  * \return false if the vessel has no planner
  */
 OAPIFUNC bool oapiTransferInfo (OBJHANDLE hVessel, TRANSFERINFO *info);
+
+/**
+ * \brief State of a vessel's relativistic travel: the ideal drive and the
+ *   clock carried along (see oapiGetRelState).
+ */
+typedef struct {
+	DWORD flags;     ///< RELSTATE_DRIVE: the drive is on; RELSTATE_RELATIVISTIC: the vessel flies relativistically
+	double accel;    ///< the drive's proper acceleration along +z [m/s^2] (negative: along -z)
+	double speed;    ///< speed in the global frame [m/s]
+	double gamma;    ///< Lorentz factor of that speed
+	double clockOfs; ///< the vessel's clock less the simulation time [s] (proper time, incl. gravitational time dilation)
+	double shipMJD;  ///< the vessel's clock as a date
+} RELSTATE;
+#define RELSTATE_DRIVE        0x0001
+#define RELSTATE_RELATIVISTIC 0x0002
+
+/**
+ * \brief Sets a vessel's ideal drive (relativistic travel): a proper
+ *   acceleration along the vessel's z axis, either way, needing no propellant. While it
+ *   is on, or the vessel moves faster than any natural orbit (0.003 c), the
+ *   vessel flies relativistically (special relativity, post-Newtonian
+ *   gravity, its own clock).
+ * \param accel proper acceleration along +z [m/s^2] (negative: along -z; at most 1.25 10^6 g)
+ * \param on drive on
+ * \return false if refused (docked or attached vessels)
+ */
+OAPIFUNC bool oapiSetRelDrive (OBJHANDLE hVessel, double accel, bool on);
+
+/**
+ * \brief State of a vessel's relativistic travel.
+ */
+OAPIFUNC bool oapiGetRelState (OBJHANDLE hVessel, RELSTATE *state);
+
+/**
+ * \brief Sets the clock a vessel carries along: its time less the simulation time [s].
+ */
+OAPIFUNC bool oapiSetShipClock (OBJHANDLE hVessel, double clockOfs);
+
+/**
+ * \brief A trip of the ideal drive's autopilot (relativistic travel, see oapiRelTripSet).
+ */
+typedef struct {
+	OBJHANDLE hTarget; ///< celestial body or vessel
+	int arrival;       ///< 0: at rest at the altitude, 1: in a circular orbit at the altitude, 2: passing at the altitude
+	double altitude;   ///< above the target's surface [m]
+	double accel;      ///< proper acceleration [m/s^2] (at most 10^6 g)
+	int fastest;       ///< nonzero: as soon as possible; else arriving after tripTime
+	double tripTime;   ///< [s] (Solar System time)
+} RELTRIPSPEC;
+
+/**
+ * \brief State of the trip autopilot: the plan (while engaged the
+ *   autopilot's, else a preview from the current state).
+ */
+typedef struct {
+	int phase;         ///< 0 idle, 1 aligning, 2 accelerating, 3 coasting, 4 decelerating, 5 arrived, 6 no trip
+	int planOk;        ///< nonzero: the plan is valid
+	double arriveMJD;  ///< arrival (Solar System time)
+	double tripTime;   ///< time to the arrival from now (Solar System) [s]
+	double shipTime;   ///< the same on the vessel's clock [s]
+	double vmax;       ///< top speed [m/s]
+	double properDv;   ///< acceleration x burn time [m/s] (the cost of a real rocket)
+	double attErr;     ///< attitude error of the drive [rad]
+	char message[128];
+	OBJHANDLE hTarget; ///< the settings (RELTRIPSPEC)
+	int arrival;
+	double altitude, accel, setTime;
+	int fastest;
+} RELTRIPINFO;
+
+/**
+ * \brief Sets the trip of a vessel's ideal-drive autopilot (relativistic travel).
+ */
+OAPIFUNC bool oapiRelTripSet (OBJHANDLE hVessel, const RELTRIPSPEC *spec);
+
+/**
+ * \brief Engages or disengages the trip autopilot.
+ * \return false if refused (no target, docked or attached)
+ */
+OAPIFUNC bool oapiRelTripEngage (OBJHANDLE hVessel, bool on);
+
+/**
+ * \brief State of the trip autopilot (and its plan).
+ */
+OAPIFUNC bool oapiRelTripInfo (OBJHANDLE hVessel, RELTRIPINFO *info);
 
 /// \brief oapiTransferSetRoute flag: one deep-space manoeuvre per leg (else powered flybys)
 #define TRANSFER_ROUTE_DSM 0x0001

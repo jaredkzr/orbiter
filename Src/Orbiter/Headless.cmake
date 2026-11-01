@@ -72,6 +72,9 @@ set(headless_src
 	Trajectory.cpp
 	Transfer.cpp
 	Conics.cpp
+	RelTravel.cpp
+	RelFlight.cpp
+	Relativity.cpp
 	Routes.cpp
 	MapView.cpp
 	UiAnchor.cpp
@@ -107,6 +110,7 @@ set(headless_src
 	MfdSurface.cpp
 	MfdSync.cpp
 	MfdTransfer.cpp
+	MfdRelTravel.cpp
 	MfdPlanner.cpp
 	MfdUI.cpp
 	MfdWindow.cpp

@@ -23,6 +23,8 @@
 #include <algorithm>
 #include "Orbiter.h"
 #include "Vessel.h"
+#include "Relativity.h"
+#include "RelTravel.h"
 #include "SuperVessel.h"
 #include "Config.h"
 #include "Camera.h"
@@ -4017,6 +4019,7 @@ void Vessel::UpdateBodyForces ()
 	// (damage model: the forces on each part in the step, for the loads of
 	// the joints)
 	loads_on = !destroyed && !supervessel && !attach && fstatus == FLIGHTSTATUS_FREEFLIGHT && structure::DamageEnabled();
+	if (reldrive.on && reldrive.accel != 0.0) bForceActive = true; // (the ideal drive: a landed vessel takes off)
 	if (loads_on) {
 		size_t np = Structure().Parts().size();
 		part_F.assign (np, Vector (0,0,0));
@@ -4198,6 +4201,9 @@ void Vessel::UpdateThrustForces ()
 
 	// burn autopilot for manoeuvre nodes
 	if (!mnodes.empty()) UpdateBurn ();
+
+	// the trip autopilot of the ideal drive (relativistic travel)
+	if (reltrip) reltrip->Update ();
 
 	double th;
 	TankSpec *ts;
@@ -5555,6 +5561,7 @@ void Vessel::Update (bool force)
 	if (destroyed) { FollowWreck (); return; }
 
 	int i;
+	relStep = false;
 
 	if (fstatus == FLIGHTSTATUS_FREEFLIGHT) {
 
@@ -5600,6 +5607,13 @@ void Vessel::Update (bool force)
 
 	} else { // should not get here
 	}
+
+	// the drive cut off within the step
+	if (reldrive.until > 0.0 && td.SimT1 >= reldrive.until) reldrive.on = false, reldrive.until = 0.0;
+
+	// the clock carried along (a relativistic step has run it)
+	if (!relStep)
+		clockOfs1 = clockOfs + relativity::ClockRateMinus1 (s1->vel.length2(), Potential (s1->pos)) * td.SimDT;
 
 	// update surface parameters
 	if (proxybody && fstatus != FLIGHTSTATUS_LANDED)
@@ -5690,6 +5704,7 @@ void Vessel::UpdatePassive ()
 	s->Q.Set (s->R);
 	s->omega.Set (tmul (attach_rrot, ps->omega));
 	acc.Set (prnt->acc);
+	clockOfs1 = prnt->clockOfs1; // (carried along)
 
 	Flin.Set (Flin_add);    // store current linear force
 	Amom.Set (Amom_add);    // store current torque
@@ -6773,7 +6788,7 @@ bool Vessel::GetStateEx (void *status)
 
 void Vessel::EndStateUpdate ()
 {
-	Body::EndStateUpdate();
+	RigidBody::EndStateUpdate(); // (the state, the clock)
 	for (int i = 0; i < 2; i++) {
 		wbrake[i] = (wbrake_override[i] ? wbrake_override[i] : wbrake_permanent[i]);;
 		wbrake_override[i] = 0.0;
@@ -6925,6 +6940,20 @@ void Vessel::WriteDefault (ostream &ofs) const
 	for (const auto &n : mnodes)
 		ofs << "  MNODE " << setprecision(10) << n.mjd << ' ' << setprecision(4)
 			<< n.dv.x << ' ' << n.dv.y << ' ' << n.dv.z << (n.autoburn ? " AUTO" : "") << endl;
+
+	// relativistic travel: the ideal drive, the clock carried along (less
+	// the simulation time; written from a second: every clock drifts by
+	// milliseconds a day in the Sun's potential)
+	if (reldrive.on || reldrive.accel != 0.0)
+		ofs << "  RELDRIVE " << setprecision(10) << reldrive.accel << (reldrive.on ? " ON" : "") << endl;
+	if (fabs (clockOfs) >= 1.0)
+		ofs << "  CLOCK " << setprecision(15) << clockOfs << endl;
+	if (reltrip && reltrip->settings.target) {
+		const reltravel::Settings &rs = reltrip->settings;
+		ofs << "  RELTRIP " << rs.target->Name() << ' ' << rs.arrival << ' ' << setprecision(10) << rs.altitude << ' ' << rs.accel
+			<< ' ' << (rs.fastest ? 1 : 0) << ' ' << rs.tripTime << ' ' << reltrip->GetPhase()
+			<< ' ' << setprecision(15) << (reltrip->ArriveT() > 0.0 ? td.MJD_ref + reltrip->ArriveT() / 86400.0 : 0.0) << endl;
+	}
 
 	// parts lost (the number of parts first: they must match when read)
 	if (!part_lost.empty()) {

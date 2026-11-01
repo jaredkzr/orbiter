@@ -27,6 +27,8 @@
 #include "Trajectory.h"
 #include "MapView.h"
 #include "MfdWindow.h"
+#include "Relativity.h"
+#include "RelTravel.h"
 #include "Transfer.h"
 #include "Replay.h"
 #include "TerrainDetail.h"
@@ -543,6 +545,82 @@ DLLEXPORT bool oapiTransferCorrect (OBJHANDLE hVessel)
 {
 	transfer::Planner *pl = g_pOrbiter->TransferPlanner ((Vessel*)hVessel, false);
 	return pl && pl->Correct ();
+}
+
+DLLEXPORT bool oapiSetRelDrive (OBJHANDLE hVessel, double accel, bool on)
+{
+	Vessel *v = (Vessel*)hVessel;
+	if (!v || !g_psys->isVessel (v)) return false;
+	return v->SetRelDrive (accel, on);
+}
+
+DLLEXPORT bool oapiGetRelState (OBJHANDLE hVessel, RELSTATE *state)
+{
+	Vessel *v = (Vessel*)hVessel;
+	if (!v || !state || !g_psys->isVessel (v)) return false;
+	memset (state, 0, sizeof (RELSTATE));
+	const Vessel::RelDrive &d = v->GetRelDrive ();
+	if (d.on) state->flags |= RELSTATE_DRIVE;
+	if (v->Relativistic ()) state->flags |= RELSTATE_RELATIVISTIC;
+	state->accel = d.accel;
+	state->speed = v->GVel ().length ();
+	state->gamma = relativity::Gamma (state->speed);
+	state->clockOfs = v->ClockOffset ();
+	state->shipMJD = td.MJD0 + state->clockOfs / 86400.0;
+	return true;
+}
+
+DLLEXPORT bool oapiSetShipClock (OBJHANDLE hVessel, double clockOfs)
+{
+	Vessel *v = (Vessel*)hVessel;
+	if (!v || !g_psys->isVessel (v)) return false;
+	v->SetClockOffset (clockOfs);
+	return true;
+}
+
+DLLEXPORT bool oapiRelTripSet (OBJHANDLE hVessel, const RELTRIPSPEC *spec)
+{
+	Vessel *v = (Vessel*)hVessel;
+	if (!v || !spec || !g_psys->isVessel (v)) return false;
+	reltravel::Settings &rs = v->RelTrip()->settings;
+	rs.target = (const Body*)spec->hTarget, rs.targetName.clear();
+	rs.arrival = std::clamp (spec->arrival, 0, 2);
+	rs.altitude = std::max (spec->altitude, 0.0);
+	rs.accel = std::clamp (spec->accel, 0.0, reltravel::MAX_ACCEL);
+	rs.fastest = spec->fastest != 0;
+	rs.tripTime = std::max (spec->tripTime, 1.0);
+	return true;
+}
+
+DLLEXPORT bool oapiRelTripEngage (OBJHANDLE hVessel, bool on)
+{
+	Vessel *v = (Vessel*)hVessel;
+	if (!v || !g_psys->isVessel (v)) return false;
+	return v->RelTrip()->Engage (on);
+}
+
+DLLEXPORT bool oapiRelTripInfo (OBJHANDLE hVessel, RELTRIPINFO *info)
+{
+	Vessel *v = (Vessel*)hVessel;
+	if (!v || !info || !g_psys->isVessel (v)) return false;
+	memset (info, 0, sizeof (RELTRIPINFO));
+	reltravel::Controller *c = v->RelTrip ();
+	const reltravel::Plan &p = c->Engaged () ? c->Current () : c->Preview ();
+	info->phase = c->GetPhase ();
+	info->planOk = p.ok ? 1 : 0;
+	double ts, tt;
+	if (c->Remaining (ts, tt)) {
+		info->arriveMJD = td.MJD0 + ts / 86400.0;
+		info->tripTime = ts, info->shipTime = tt;
+	}
+	if (p.ok) info->vmax = p.trip.vmax, info->properDv = p.trip.properDv;
+	info->attErr = c->AttitudeError ();
+	const reltravel::Settings &rs = c->settings;
+	info->hTarget = (OBJHANDLE)rs.target, info->arrival = rs.arrival;
+	info->altitude = rs.altitude, info->accel = rs.accel;
+	info->fastest = rs.fastest ? 1 : 0, info->setTime = rs.tripTime;
+	strncpy (info->message, c->Message ().c_str(), sizeof (info->message) - 1);
+	return true;
 }
 
 DLLEXPORT bool oapiTransferInfo (OBJHANDLE hVessel, TRANSFERINFO *info)

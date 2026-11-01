@@ -1,0 +1,68 @@
+# Relativistic Travel MFD (glass cockpit, Tests/Input/RelTravelMFD.scn): a
+# target picked from the list, the arrival and acceleration changed, the
+# trip engaged and disengaged, the drive by hand, the cost page.
+
+lua v = vessel.get_focusinterface ()
+lua hv = v:get_handle ()
+wait 10
+
+# the target: the first in the list (the Sun), then back to Mars by the scenario's
+waitfor @mfd0.targets
+click @mfd0.targets.tl->@mfd0.targets.br*0.03
+wait 5
+lua ri = oapi.reltrip_info (hv)
+lua check ("target", ri.target == oapi.get_objhandle ("Sun"), "the Sun picked from the list")
+lua oapi.reltrip_set (hv, {target = "Mars", arrival = "orbit", alt = 500e3, accel = 1000 * 9.80665})
+
+# the arrival: a choice (its list by the keyboard: up from "In orbit")
+waitfor @mfd0.arrival
+click @mfd0.arrival
+wait 5
+key Up
+key Return
+wait 5
+lua ri = oapi.reltrip_info (hv)
+lua check ("arrival", ri.arrival == "rest", "at rest picked")
+
+# the acceleration: the wheel over its field
+click @mfd0.page.1
+waitfor @mfd0.accel
+move @mfd0.accel
+wheel 3
+wait 5
+lua ri = oapi.reltrip_info (hv)
+lua check ("accel", ri.accel > 1000 * 9.80665 * 1.2, string.format ("acceleration %.0f g", ri.accel / 9.80665))
+lua check ("plan", ri.ok and ri.time > 0, string.format ("a trip planned: %.0f s", ri.time))
+
+# engage on the Trip page, disengage on the Flight page
+click @mfd0.engage
+wait 10
+lua ri = oapi.reltrip_info (hv)
+lua check ("engage", ri.phase ~= "Idle", "engaged: " .. ri.phase)
+click @mfd0.page.2
+waitfor @mfd0.engage2
+click @mfd0.engage2
+wait 10
+lua ri = oapi.reltrip_info (hv)
+lua check ("disengage", ri.phase == "Idle", "disengaged: " .. ri.phase)
+
+# the drive by hand
+waitfor @mfd0.manual
+click @mfd0.manual
+wait 5
+lua rs = oapi.get_relstate (hv)
+lua check ("manual", rs.drive and rs.accel > 0, string.format ("drive on, %.3g g", rs.accel / 9.80665))
+click @mfd0.reverse
+wait 5
+lua rs = oapi.get_relstate (hv)
+lua check ("reverse", rs.drive and rs.accel < 0, string.format ("reversed, %.3g g", rs.accel / 9.80665))
+click @mfd0.manual
+wait 5
+lua rs = oapi.get_relstate (hv)
+lua check ("off", not rs.drive, "drive off")
+
+# the cost of the trip
+click @mfd0.page.3
+waitfor @mfd0.exhaust
+lua check ("cost", true, "cost page")
+exit

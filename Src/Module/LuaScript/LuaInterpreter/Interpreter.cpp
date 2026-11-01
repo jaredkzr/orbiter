@@ -882,6 +882,12 @@ void Interpreter::LoadAPI ()
 		{"transfer_nodes", oapi_transfer_nodes},
 		{"transfer_correct", oapi_transfer_correct},
 		{"transfer_info", oapi_transfer_info},
+		{"set_reldrive", oapi_set_reldrive},
+		{"get_relstate", oapi_get_relstate},
+		{"set_shipclock", oapi_set_shipclock},
+		{"reltrip_set", oapi_reltrip_set},
+		{"reltrip_engage", oapi_reltrip_engage},
+		{"reltrip_info", oapi_reltrip_info},
 		{"transfer_launches", oapi_transfer_launches},
 		{"transfer_route", oapi_transfer_route},
 		{"transfer_flybys", oapi_transfer_flybys},
@@ -4284,6 +4290,155 @@ int Interpreter::oapi_transfer_info (lua_State *L)
 	num ("next_mjd", ti.nextMjd); num ("next_role", ti.nextRole);
 	num ("nflyby", ti.nFlyby); num ("dv_flyby", ti.dvFlyby); num ("dv_dsm", ti.dvDsm);
 	lua_pushstring (L, ti.message); lua_setfield (L, -2, "message");
+	return 1;
+}
+
+/***
+Set a vessel's ideal drive (relativistic travel): a proper acceleration
+along the vessel's z axis, either way, needing no propellant. While it is on, or the
+vessel moves faster than 0.003 c, the vessel flies relativistically.
+
+@function set_reldrive
+@tparam handle hVessel
+@tparam number accel proper acceleration along +z [m/s^2] (negative: along -z; at most 1.25 10^6 g)
+@tparam bool on
+@treturn bool false if refused (docked or attached vessels)
+*/
+int Interpreter::oapi_set_reldrive (lua_State *L)
+{
+	OBJHANDLE hv = lua_toObject (L, 1);
+	double a = luaL_checknumber (L, 2);
+	bool on = lua_toboolean (L, 3) != 0;
+	lua_pushboolean (L, hv && oapiSetRelDrive (hv, a, on));
+	return 1;
+}
+
+/***
+State of a vessel's relativistic travel.
+
+@function get_relstate
+@tparam handle hVessel
+@treturn table fields drive (bool: on), relativistic (bool), accel [m/s^2],
+  speed [m/s, global frame], gamma, clockofs (the vessel's clock less the
+  simulation time [s]), shipmjd; nil for an invalid vessel
+*/
+int Interpreter::oapi_get_relstate (lua_State *L)
+{
+	OBJHANDLE hv = lua_toObject (L, 1);
+	RELSTATE rs;
+	if (!hv || !oapiGetRelState (hv, &rs)) { lua_pushnil (L); return 1; }
+	lua_newtable (L);
+	auto num = [&](const char *k, double v) { lua_pushnumber (L, v); lua_setfield (L, -2, k); };
+	lua_pushboolean (L, (rs.flags & RELSTATE_DRIVE) != 0); lua_setfield (L, -2, "drive");
+	lua_pushboolean (L, (rs.flags & RELSTATE_RELATIVISTIC) != 0); lua_setfield (L, -2, "relativistic");
+	num ("accel", rs.accel); num ("speed", rs.speed); num ("gamma", rs.gamma);
+	num ("clockofs", rs.clockOfs); num ("shipmjd", rs.shipMJD);
+	return 1;
+}
+
+/***
+Set the clock a vessel carries along.
+
+@function set_shipclock
+@tparam handle hVessel
+@tparam number ofs the vessel's clock less the simulation time [s]
+@treturn bool
+*/
+int Interpreter::oapi_set_shipclock (lua_State *L)
+{
+	OBJHANDLE hv = lua_toObject (L, 1);
+	lua_pushboolean (L, hv && oapiSetShipClock (hv, luaL_checknumber (L, 2)));
+	return 1;
+}
+
+/***
+Set the trip of a vessel's ideal-drive autopilot (relativistic travel).
+
+@function reltrip_set
+@tparam handle hVessel
+@tparam table spec fields target (handle or name), arrival ("rest", "orbit"
+  or "flyby"), alt (above the target's surface [m]), accel (proper
+  acceleration [m/s^2]), time (trip time [s]: arrive after it; nil: as soon
+  as possible)
+@treturn bool
+*/
+int Interpreter::oapi_reltrip_set (lua_State *L)
+{
+	OBJHANDLE hv = lua_toObject (L, 1);
+	luaL_checktype (L, 2, LUA_TTABLE);
+	RELTRIPSPEC rs = {};
+	rs.accel = 1000.0 * 9.80665, rs.altitude = 1e6, rs.fastest = 1, rs.tripTime = 86400.0;
+	lua_getfield (L, 2, "target");
+	if (lua_isstring (L, -1)) rs.hTarget = oapiGetObjectByName ((char*)lua_tostring (L, -1));
+	else if (lua_islightuserdata (L, -1)) rs.hTarget = (OBJHANDLE)lua_touserdata (L, -1);
+	lua_pop (L, 1);
+	lua_getfield (L, 2, "arrival");
+	if (lua_isstring (L, -1)) {
+		const char *a = lua_tostring (L, -1);
+		rs.arrival = !strcmp (a, "orbit") ? 1 : !strcmp (a, "flyby") ? 2 : 0;
+	}
+	lua_pop (L, 1);
+	lua_getfield (L, 2, "alt");
+	if (lua_isnumber (L, -1)) rs.altitude = lua_tonumber (L, -1);
+	lua_pop (L, 1);
+	lua_getfield (L, 2, "accel");
+	if (lua_isnumber (L, -1)) rs.accel = lua_tonumber (L, -1);
+	lua_pop (L, 1);
+	lua_getfield (L, 2, "time");
+	if (lua_isnumber (L, -1)) rs.fastest = 0, rs.tripTime = lua_tonumber (L, -1);
+	lua_pop (L, 1);
+	lua_pushboolean (L, hv && rs.hTarget && oapiRelTripSet (hv, &rs));
+	return 1;
+}
+
+/***
+Engage or disengage a vessel's trip autopilot.
+
+@function reltrip_engage
+@tparam handle hVessel
+@tparam bool on
+@treturn bool false if refused
+*/
+int Interpreter::oapi_reltrip_engage (lua_State *L)
+{
+	OBJHANDLE hv = lua_toObject (L, 1);
+	lua_pushboolean (L, hv && oapiRelTripEngage (hv, lua_toboolean (L, 2) != 0));
+	return 1;
+}
+
+/***
+State of a vessel's trip autopilot and its plan (engaged: the autopilot's;
+else a preview from the current state).
+
+@function reltrip_info
+@tparam handle hVessel
+@treturn table fields phase ("Idle", "Aligning", "Accelerating", "Coasting",
+  "Decelerating", "Arrived", "No trip"), phase_id, ok (plan valid), arr_mjd,
+  time (to the arrival [s]), shiptime (the same on the vessel's clock [s]),
+  vmax [m/s], dv (proper velocity change [m/s]), atterr [rad], message;
+  the settings: target (handle), arrival ("rest", "orbit", "flyby"), alt,
+  accel, fastest (bool), settime [s]
+*/
+int Interpreter::oapi_reltrip_info (lua_State *L)
+{
+	OBJHANDLE hv = lua_toObject (L, 1);
+	RELTRIPINFO ri;
+	if (!hv || !oapiRelTripInfo (hv, &ri)) { lua_pushnil (L); return 1; }
+	static const char *ph[] = { "Idle", "Aligning", "Accelerating", "Coasting", "Decelerating", "Arrived", "No trip" };
+	lua_newtable (L);
+	auto num = [&](const char *k, double v) { lua_pushnumber (L, v); lua_setfield (L, -2, k); };
+	lua_pushstring (L, ri.phase >= 0 && ri.phase <= 6 ? ph[ri.phase] : "-"); lua_setfield (L, -2, "phase");
+	num ("phase_id", ri.phase);
+	lua_pushboolean (L, ri.planOk); lua_setfield (L, -2, "ok");
+	num ("arr_mjd", ri.arriveMJD); num ("time", ri.tripTime); num ("shiptime", ri.shipTime);
+	num ("vmax", ri.vmax); num ("dv", ri.properDv); num ("atterr", ri.attErr);
+	lua_pushstring (L, ri.message); lua_setfield (L, -2, "message");
+	if (ri.hTarget) { lua_pushlightuserdata (L, ri.hTarget); lua_setfield (L, -2, "target"); }
+	static const char *arr[] = { "rest", "orbit", "flyby" };
+	lua_pushstring (L, arr[ri.arrival < 0 ? 0 : ri.arrival > 2 ? 2 : ri.arrival]); lua_setfield (L, -2, "arrival");
+	num ("alt", ri.altitude); num ("accel", ri.accel);
+	lua_pushboolean (L, ri.fastest); lua_setfield (L, -2, "fastest");
+	num ("settime", ri.setTime);
 	return 1;
 }
 
