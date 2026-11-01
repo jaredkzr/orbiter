@@ -109,6 +109,9 @@ public:
 	virtual bool ValidateStateUpdate (StateVectors *s) { return true; }
 
 	virtual void ResolveContacts (double h) {}
+	virtual bool SurfaceImpact () { return false; }
+	// Called after a step's propagation, before the contacts: true if the step
+	// hit the ground and the body has handled it (the contacts are skipped)
 	// Called after the state was propagated over a step h without contact
 	// forces: resolves contacts by modifying the new state (s1)
 

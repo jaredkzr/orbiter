@@ -4641,9 +4641,10 @@ void Vessel::CollectGroundContacts (const StateVectors &s, const StateVectors &s
 			static std::vector<const scatter::Obstacle*> obst;
 			static std::vector<const convex::Polytope*> hulls, bld;
 			hulls.clear();
-			// (a step reaching this far, as under high time acceleration, can't resolve
-			// rocks, trees or buildings; and a query this wide would list cells by the million)
-			bool small = bound + margin < 2e4;
+			// (a step reaching this far, as under high time acceleration or a fall
+			// at kilometres a second, can't resolve rocks, trees or buildings; and
+			// a query this wide lists them by the thousand: the terrain alone)
+			bool small = bound + margin < VesselBase::OBSTACLE_REACH;
 			if (gs && small) {
 				gs->Obstacles (pc, bound + margin, obst);
 				for (const scatter::Obstacle *o : obst) hulls.push_back (&o->hull);

@@ -179,6 +179,26 @@ protected:
 	// Resolve ground contact after the step was propagated (GroundContact.h):
 	// impulses change the new velocities, and the new position follows them
 
+	static constexpr double OBSTACLE_REACH = 500.0;
+	// [m] a step moving the vessel farther than this over the ground (high
+	// time acceleration, a fall at kilometres a second) leaves out the
+	// obstacles on the ground (rocks, buildings), and its impact on the
+	// terrain is found along its path (SurfaceImpact) rather than by contacts
+
+	bool SurfaceImpact () override;
+	// A long step that ends below the terrain: the impact, found along the
+	// step's path over the turning planet; handled by Impacted (true)
+
+	virtual void Impacted (const Vector &gpos, const Vector &gvel, double speed);
+	// The impact of a long step at gpos (global; on the terrain) at speed
+	// [m/s] relative to the ground (gvel: the ground's velocity there). By
+	// default the vessel comes to rest there, and is landed after the step.
+
+	bool landPending = false;
+	void TakePendingLanding ();
+	// (after the update phase: a vessel set down by an impact is landed,
+	// before contacts over long steps could throw it about)
+
 	contact::Body ContactBody () const;
 	// The vessel as a body for the contact solver, after the step's propagation
 

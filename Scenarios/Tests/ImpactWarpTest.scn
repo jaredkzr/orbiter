@@ -1,0 +1,45 @@
+BEGIN_HYPERDESC
+<h1>Impacts under high time acceleration</h1>
+Delta-gliders hit the Moon under time acceleration, where a step moves a
+vessel kilometres over the ground: one falling from 1,000 km at 1,000x,
+one on an orbit whose periapsis is below the ground at 10,000x (the
+stabilised propagator). Each must be set down on the terrain and landed,
+in normal time, without its state going bad; a third, in a high orbit,
+must keep flying.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Tests/ImpactWarpTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship HIGH
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET HIGH
+  MODE Extern
+  POS 4 0 -20
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+FALL:DeltaGlider
+  STATUS Orbiting Moon
+  ELEMENTS 1.0e7 0.00000 0.0 0.0 0.0 0.0 51982.6685767396
+  AROT 0 0 0
+END
+DIVE:DeltaGlider
+  STATUS Orbiting Moon
+  ELEMENTS 2.5e6 0.40000 30.0 0.0 0.0 180.0 51982.6685767396
+  AROT 0 0 0
+END
+HIGH:DeltaGlider
+  STATUS Orbiting Moon
+  ELEMENTS 3.0e6 0.00000 60.0 0.0 0.0 90.0 51982.6685767396
+  AROT 0 0 0
+END
+END_SHIPS

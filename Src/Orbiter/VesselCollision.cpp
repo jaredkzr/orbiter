@@ -101,6 +101,7 @@ void VesselCollider::Begin (const std::vector<VesselBase*> &bodies, double h)
 		for (DWORD i = 0; i < pl->nBase(); i++) {
 			const Base *b = pl->GetBase (i);
 			double reach = c.r + c.v->GVel().dist (b->GVel())*h + 0.1;
+			if (reach - c.r > VesselBase::OBSTACLE_REACH) continue; // (a step this long can't resolve structures: as Vessel's obstacles)
 			// (cheap test with the base's size first: its hulls are made when first needed)
 			if (c.v->s0->pos.dist (b->GPos()) > b->Size() + 2e3 + reach) continue;
 			if (b->CollisionHulls().empty() || c.v->s0->pos.dist (b->GPos()) > b->CollisionRadius() + reach) continue;

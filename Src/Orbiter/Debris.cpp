@@ -316,6 +316,7 @@ void Debris::Update (bool force)
 
 void Debris::PostUpdate ()
 {
+	TakePendingLanding ();
 	// (proxy bodies checked periodically, as for vessels)
 	if (fstatus == FLIGHTSTATUS_FREEFLIGHT && td.SimT1 > proxyCheckT) {
 		UpdateProxies ();

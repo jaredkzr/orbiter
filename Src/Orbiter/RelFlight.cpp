@@ -290,6 +290,24 @@ bool Vessel::RelImpact (const CelestialBody *body, const Vector &rpos, const Vec
 	return true;
 }
 
+void Vessel::Impacted (const Vector &gpos, const Vector &gvel, double speed)
+{
+	// A long step's impact (high time acceleration): at crash speed with the
+	// damage simulation, destroyed where it hit; else set down there
+	char cbuf[256];
+	sprintf (cbuf, "hit %s at %.0f m/s", proxybody ? proxybody->Name() : "the ground", speed);
+	VesselBase::Impacted (gpos, gvel, speed);
+	reldrive.on = false;
+	if (reltrip) reltrip->Abort (cbuf);
+	if (structure::DamageEnabled() && speed > CRASH_SPEED) {
+		Destroy (cbuf);
+	} else if (speed > CRASH_SPEED) {
+		strcat (cbuf, ": set down");
+		if (this == g_focusobj) g_pOrbiter->ShowInfoMessage (cbuf);
+	}
+	LOGOUT ("%s %s (a step of %.1f s)", Name(), cbuf, td.SimDT);
+}
+
 void Vessel::RelDiverged ()
 {
 	reldrive.on = false;

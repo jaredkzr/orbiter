@@ -2,8 +2,11 @@
 // Licensed under the MIT License
 
 #include "Orbiter.h"
+#include <algorithm>
+#include <cmath>
 #include "Vesselbase.h"
 #include "Psys.h"
+#include "Planet.h"
 
 using std::max;
 
@@ -225,6 +228,7 @@ bool VesselBase::Activate (bool force)
 
 void VesselBase::PostUpdate ()
 {
+	TakePendingLanding ();
 	// Check periodically for proxy-bodies
 	// (each step while relativistic: a fast vessel crosses spheres of influence within seconds)
 	if (fstatus == FLIGHTSTATUS_FREEFLIGHT && (td.SimT1 > proxyT || Relativistic())) {
@@ -405,6 +409,64 @@ void VesselBase::ResolveContacts (double h)
 	ApplyContactVelocity (b[0], h, true);
 	contact_force = tmul (s0->R, P[0]/h);
 	contact_moment = tmul (s0->R, L[0]/h);
+}
+
+// ==============================================================
+
+bool VesselBase::SurfaceImpact ()
+{
+	if (!proxybody || IsComponent() || proxybody->Type() != OBJTP_PLANET) return false;
+	const Planet *pl = (const Planet*)proxybody;
+	if (!pl->HasSurface()) return false;
+	const StateVectors &P0 = *pl->s0, &P1 = *pl->s1;
+	if (td.SimDT <= 0.0) return false;
+	// the step's path over the ground (planet frame: the ground turns with it)
+	Vector p0 (tmul (P0.R, s0->pos - P0.pos)), p1 (tmul (P1.R, s1->pos - P1.pos));
+	Vector dp (p1 - p0);
+	double travel = dp.length();
+	if (travel <= OBSTACLE_REACH) return false; // (the contacts take it)
+	auto elev = [&](const Vector &p) {
+		double lng, lat, rad;
+		pl->LocalToEquatorial (p, lng, lat, rad);
+		return pl->Elevation (lng, lat);
+	};
+	double R = pl->Size(), rs = R + elev (p1);
+	if (p1.length() >= rs || p0.length() < rs) return false; // (above the ground at the end, or below it from the start)
+	// where the path meets the terrain's sphere (the end point's elevation)
+	double A = dp.length2(), B = 2.0 * dotp (p0, dp), C = p0.length2() - rs * rs;
+	double disc = std::max (0.0, B*B - 4.0*A*C);
+	double f = std::clamp ((-B - std::sqrt (disc)) / (2.0 * A), 0.0, 1.0);
+	Vector pi (p0 + dp * f);
+	Vector up (pi.unit());
+	Vector ps (up * (R + elev (pi) + size)); // (on the terrain, the vessel's size above it)
+	Vector g1 (mul (P1.R, ps) + P1.pos);
+	Vector g0 (mul (P0.R, ps) + P0.pos);
+	Vector gvel ((g1 - g0) / td.SimDT); // (the ground point's velocity)
+	Impacted (g1, gvel, travel / td.SimDT);
+	return true;
+}
+
+void VesselBase::Impacted (const Vector &gpos, const Vector &gvel, double speed)
+{
+	// at rest on the ground
+	s1->pos = gpos, s1->vel = gvel;
+	rpos_base = gpos, rpos_add.Set (0, 0, 0);
+	rvel_base = gvel, rvel_add.Set (0, 0, 0);
+	s1->omega.Set (0, 0, 0);
+	acc.Set (0, 0, 0);
+	el_valid = false;
+	landPending = true;
+}
+
+void VesselBase::TakePendingLanding ()
+{
+	if (!landPending) return;
+	landPending = false;
+	if (fstatus != FLIGHTSTATUS_FREEFLIGHT || !proxyplanet || IsComponent()) return;
+	Vector pl (tmul (proxyplanet->s0->R, s0->pos - proxyplanet->s0->pos));
+	double lng, lat, rad;
+	proxyplanet->LocalToEquatorial (pl, lng, lat, rad);
+	InitLanded (proxyplanet, lng, lat, LandedHeading (lng, lat));
 }
 
 // ==============================================================

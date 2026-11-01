@@ -245,6 +245,7 @@ void RigidBody::Update (bool force)
 			s1->R.Set (s1->Q);
 			GetIntermediateMoments (acc, tau, *s1, 1, dt);
 			el_valid = bOrbitStabilised = true;
+			SurfaceImpact (); // (the ground: a stabilised step is long)
 
 		} else { // do a dynamic state vector integration
 
@@ -268,7 +269,7 @@ void RigidBody::Update (bool force)
 					arot.Set (EulerInv_full (tau, s1->omega));
 				}
 			} while (!ValidateStateUpdate (s1));
-			ResolveContacts (td.SimDT);
+			if (!SurfaceImpact ()) ResolveContacts (td.SimDT);
 
 			if (updcount++ == 1000) { // flush increments
 				rpos_base += rpos_add;

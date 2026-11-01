@@ -1407,6 +1407,7 @@ public:
 	};
 	static constexpr double RELDRIVE_MAX_ACCEL = 1.25e6 * 9.80665; // [m/s^2] (trips plan up to 10^6 g: a reserve for the autopilot)
 	static constexpr double REL_SPEED = 0.003 * 299792458.0;    // above this: relativistic without the drive [m/s]
+	static constexpr double CRASH_SPEED = 20.0; // [m/s] a long step's impact faster than this destroys the vessel (damage simulation on)
 	const RelDrive &GetRelDrive () const { return reldrive; }
 	bool SetRelDrive (double accel, bool on); // false if refused (docked, attached)
 	bool Relativistic () const override;
@@ -1415,6 +1416,7 @@ public:
 	void SetRelDriveCutoff (double t) { reldrive.until = t; }
 	bool RelImpact (const CelestialBody *body, const Vector &rpos, const Vector &rvel) override;
 	void RelDiverged () override;
+	void Impacted (const Vector &gpos, const Vector &gvel, double speed) override;
 	reltravel::Controller *RelTrip (bool create = true);  // the trip autopilot (created on demand)
 	const reltravel::Controller *RelTripIf () const { return reltrip.get(); }
 
