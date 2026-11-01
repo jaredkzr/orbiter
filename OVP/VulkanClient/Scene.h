@@ -113,6 +113,10 @@ public:
 	/// or bx,by,bz (global frame): a velocity [c] forced (tests, pictures)
 	bool RelView () const { return relOn; }
 	VkImageView PrepassView () const; ///< linear view depth in w (the relativistic view's vessel pixels)
+	/// Relativistic view: a radiance (linear RGB) of something at rest at
+	/// gpos (global), as seen: Doppler shifted (unchanged when off). For
+	/// what is not in the prepass (the Sun): the rest is shifted after the scene
+	void RelShiftColour (const VECTOR3 &gpos, float rgb[3]) const;
 	/// the camera's own vessel in view space: centre, radius (0: none)
 	void RelSelfView (float out[4]) const;
 	const VECTOR3 &RelBeta () const { return relBeta; } ///< the camera's velocity [c], global frame (0: off)
@@ -232,7 +236,12 @@ public:
 	VECTOR3 GlobalPos (const VECTOR3 &vpos) const { return camPos + mul (camRot, vpos); }
 	VECTOR3 GlobalDir (const VECTOR3 &vdir) const { return mul (camRot, vdir); }
 	/// draw view-space billboard triangles (particles, exhaust flames)
-	void DrawBillboards (VkTexture *tex, bool additive, const struct PVtx *v, size_t n);
+	/// (seen: the vertices are where they are seen already: not aberrated
+	/// again in the relativistic view)
+	void DrawBillboards (VkTexture *tex, bool additive, const struct PVtx *v, size_t n, bool seen = false);
+	/// Relativistic view: where a point at rest at view position p is seen
+	/// (aberrated, at the distance of its light's emission; unchanged when off)
+	VECTOR3 RelApparentView (const VECTOR3 &p) const;
 	VkTexture *DefaultExhaustTex () const { return exhaustTex; }
 	/// GPU particles of the particle streams
 	class ParticleSystem *Particles () { return particles.get(); }

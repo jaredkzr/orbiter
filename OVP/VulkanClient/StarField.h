@@ -36,7 +36,9 @@ public:
 	/// Advance the selection (outside rendering scopes): starts a new one
 	/// when the observer has moved far enough from the current one's (or
 	/// the limit has changed)
-	void Update (const galactic::Observer &obs, bool hideSun);
+	/// (relativistic view: beta, the observer's velocity, Galactic, units
+	/// of c: brightnesses seen moving; a change selects them again)
+	void Update (const galactic::Observer &obs, bool hideSun, const double beta[3] = nullptr);
 
 	/// Draw the stars (in the scene pass). galViewProj: Galactic direction
 	/// -> clip (column-major); fx, fy: the projection's scale; gain: scene
@@ -67,6 +69,8 @@ private:
 	float catLimit = 0.0f, catNear = 0.0f;  // the catalogue's completeness
 	int front = 0;
 	galactic::Observer listObs, selObs, curObs;
+	double listBeta[3] = { 0, 0, 0 }, selBeta[3] = { 0, 0, 0 }; // relativistic view: the velocities selected for
+	float ext[4] = { 0, 0, 0, 0 };          // extinction per band per A_V
 	bool selecting = false, selHideSun = true, listHideSun = true;
 	int selPart = 0;
 	uint32_t genRowCount = 0, genWork = 0; // of the selection under way

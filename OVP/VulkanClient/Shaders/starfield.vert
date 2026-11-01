@@ -4,12 +4,16 @@
 // The catalogue stars selected (star_select.comp) as point-spread sprites:
 // each star's light (in the four bands, dimmed and reddened by the dust)
 // spread over a few pixels by a Gaussian, at its direction from the
-// observer this frame.
+// observer this frame. In the relativistic view, as seen moving: at its
+// aberrated direction, its light that of a star D times as hot (D: the
+// Doppler factor), its flux scaled (relsky.glsl), the dust's extinction at
+// the wavelengths that are shifted into each band.
 
 #version 450
 #extension GL_GOOGLE_include_directive : require
 #include "starfield.glsl"
 #include "relativity.glsl"
+#include "relsky.glsl"
 
 layout(std430, set = 0, binding = 0) readonly buffer Stars { Star stars[]; };
 layout(std430, set = 0, binding = 1) readonly buffer List { StarListHeader head; uvec2 entries[]; } list;
@@ -46,12 +50,27 @@ void main ()
 	vec3 d = s.pos - pc.observer.xyz;
 	float r = length (d);
 	float m0 = StarAbsMag (s) + StarDistModulus (r);
-	if (m0 + A >= pc.observer.w) return;
-	vec4 clip = pc.viewProj * vec4 (RelAberrate (d / r, pc.misc.yzw), 0.0); // (relativistic view: as seen)
+	vec3 n = d / r;
+	// (relativistic view: the Doppler factor, the star's colour and flux, the dust's extinction shifted)
+	float D = 1.0;
+	vec4 band = col.band[StarTempIndex (s)], ext = col.extinction;
+	float AV = A; // (V seen)
+	if (dot (pc.misc.yzw, pc.misc.yzw) > 0.0) {
+		D = inversesqrt (max (1.0 - dot (pc.misc.yzw, pc.misc.yzw), 1e-12)) * (1.0 + dot (n, pc.misc.yzw));
+		float ti = clamp (StarTempIndexShifted (StarTempIndex (s), D), 0.0, float (STAR_NTEMP - 1));
+		int i0 = min (int (ti), STAR_NTEMP - 2);
+		band = mix (col.band[i0], col.band[i0 + 1], ti - float (i0));
+		m0 -= 2.5 * log2 (RelStarBoostV (StarTempOfIndex (float (StarTempIndex (s))), D)) * 0.30103;
+		ext = vec4 (RelExtinction (col.extinction, REL_BAND_C.x * D), RelExtinction (col.extinction, REL_BAND_C.y * D),
+			RelExtinction (col.extinction, REL_BAND_C.z * D), RelExtinction (col.extinction, REL_BAND_C.w * D));
+		AV = A * RelExtinction (col.extinction, 550.0 * D) / max (RelExtinction (col.extinction, 550.0), 1e-3);
+	}
+	if (m0 + AV >= pc.observer.w) return;
+	vec4 clip = pc.viewProj * vec4 (RelAberrate (n, pc.misc.yzw), 0.0); // (relativistic view: as seen)
 	if (clip.w <= 1e-4) return;
 
-	// light per band [S10 deg^2], reddened
-	vec4 F = exp2 (-1.328771 * (m0 - 10.0)) * col.band[StarTempIndex (s)] * exp2 (-1.328771 * A * col.extinction);
+	// light per band [S10 deg^2], reddened (ext: per A_V, at the wavelengths seen in the bands)
+	vec4 F = exp2 (-1.328771 * (m0 - 10.0)) * band * exp2 (-1.328771 * A * ext);
 	vec3 rgb = vec3 (dot (col.rgb[0], F), dot (col.rgb[1], F), dot (col.rgb[2], F));
 	// a pixel's solid angle shrinks off the axis as cos^3 (clip.w: the cosine)
 	vRadiance = rgb * (pc.sprite.w / (clip.w * clip.w * clip.w));

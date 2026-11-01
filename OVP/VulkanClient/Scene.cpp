@@ -745,7 +745,7 @@ VkPipeline Scene::CreateParticlePipeline (bool additive, bool lamps)
 	return pipe;
 }
 
-void Scene::DrawBillboards (VkTexture *tex, bool additive, const PVtx *v, size_t n)
+void Scene::DrawBillboards (VkTexture *tex, bool additive, const PVtx *v, size_t n, bool seen)
 {
 	if (!n || !tex) return;
 	VkCommandBuffer cmd = ctx->Cmd();
@@ -756,7 +756,7 @@ void Scene::DrawBillboards (VkTexture *tex, bool additive, const PVtx *v, size_t
 	vkCmdBindVertexBuffers (cmd, 0, 1, &vb.buffer, &vb.offset);
 	float ppc[20];
 	memcpy (ppc, proj, sizeof(proj));
-	VECTOR3 bv = RelBetaView ();
+	VECTOR3 bv = seen ? _V(0, 0, 0) : RelBetaView ();
 	ppc[16] = (float)bv.x, ppc[17] = (float)bv.y, ppc[18] = (float)bv.z, ppc[19] = 0.0f;
 	vkCmdPushConstants (cmd, particleLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ppc), ppc);
 	vkCmdDraw (cmd, (uint32_t)n, 1, 0, 0);
@@ -1186,6 +1186,28 @@ namespace {
 	}
 }
 
+VECTOR3 Scene::RelApparentView (const VECTOR3 &p) const
+{
+	if (!relOn) return p;
+	VECTOR3 b = RelBetaView ();
+	double r = length (p), b2 = dotp (b, b);
+	if (r <= 0.0 || b2 <= 0.0) return p;
+	VECTOR3 n = p / r;
+	double g = 1.0 / std::sqrt (1.0 - b2), nb = dotp (n, b);
+	VECTOR3 a = (n + b * (g * g / (g + 1.0) * nb + g)) / (g * (1.0 + nb)); // (as relativity.glsl's RelAberrate)
+	return a * (r * g * (1.0 + nb));
+}
+
+void Scene::RelShiftColour (const VECTOR3 &gpos, float rgb[3]) const
+{
+	if (!relOn) return;
+	VECTOR3 n = unit (gpos - camPos);
+	double b2 = dotp (relBeta, relBeta), D = (1.0 + dotp (n, relBeta)) / std::sqrt (1.0 - b2);
+	double in[3] = { rgb[0], rgb[1], rgb[2] }, out[3];
+	DopplerShiftRGB (in, D, out);
+	for (int k = 0; k < 3; k++) rgb[k] = (float)out[k];
+}
+
 void Scene::ObservedPos (OBJHANDLE h, VECTOR3 &p) const
 {
 	oapiGetGlobalPos (h, &p);
@@ -1512,7 +1534,11 @@ void Scene::BeginFrame ()
 		// (the Sun is drawn as a body; the catalogue's Sun only far from it,
 		// where the observer is placed elsewhere)
 		galactic::Observer o = SkyObserver ();
-		starField->Update (o, std::sqrt (o.pos[0] * o.pos[0] + o.pos[1] * o.pos[1] + o.pos[2] * o.pos[2]) < 0.01);
+		// (relativistic view: the velocity in the Galactic frame, brightnesses seen moving)
+		double G[3][3], bg[3] = { 0.0, 0.0, 0.0 };
+		galactic::EclipticToGalactic (G);
+		for (int i = 0; i < 3 && relOn; i++) bg[i] = G[i][0] * relBeta.x + G[i][1] * relBeta.y + G[i][2] * relBeta.z;
+		starField->Update (o, std::sqrt (o.pos[0] * o.pos[0] + o.pos[1] * o.pos[1] + o.pos[2] * o.pos[2]) < 0.01, bg);
 		ctx->GpuMark ("starselect");
 	}
 	// the previous frame does not continue into this one (camera cut)

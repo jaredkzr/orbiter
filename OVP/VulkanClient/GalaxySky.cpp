@@ -304,6 +304,15 @@ bool GalaxySky::LoadModel (const std::string &path, std::vector<float> &buf)
 	}
 
 	memcpy (this->bands, bands, sizeof(bands));
+	// (the relativistic view's spectral shift has them built in: relsky.glsl)
+	{
+		const double REL_BANDS[NBAND][2] = { { 380, 460 }, { 460, 540 }, { 540, 620 }, { 620, 720 } };
+		for (int b = 0; b < NBAND; b++)
+			if (bands[b][0] != REL_BANDS[b][0] || bands[b][1] != REL_BANDS[b][1]) {
+				oapiWriteLog ((char*)"VulkanClient: galaxy.cfg BANDS differ from Shaders/relsky.glsl's: the relativistic view's colours are off");
+				break;
+			}
+	}
 	for (int b = 0; b < NBAND; b++) extinction[b] = (float)ext[b];
 
 	buf.resize (sizeof(Model) / sizeof(float));

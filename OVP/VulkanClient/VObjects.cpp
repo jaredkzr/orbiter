@@ -2401,6 +2401,7 @@ void VPlanet::Render (RenderPass pass)
 	if (isStar) {
 		// the sun's disc is far brighter than any lit surface
 		float c[4] = { colour[0] * STAR_BRIGHTNESS, colour[1] * STAR_BRIGHTNESS, colour[2] * STAR_BRIGHTNESS, 1.0f };
+		scene->RelShiftColour (gpos, c); // (relativistic view: not in the prepass, shifted here)
 		scene->DrawSphere (mv, c, true);
 	} else {
 		scene->DrawSphere (mv, colour, false);
@@ -2428,17 +2429,20 @@ void VPlanet::RenderGlow ()
 {
 	// glow around a star, with a minimum apparent size so that it remains
 	// visible when the disc itself is smaller than a pixel
-	VECTOR3 vp = scene->ViewPos (gpos);
+	// (relativistic view: about where the star is seen, round: glare is the optics')
+	VECTOR3 vp = scene->RelApparentView (scene->ViewPos (gpos));
 	if (vp.z <= 0.0) return;
 	double dt = scene->DeckTransmittance (scene->CameraPos (), true); // (deep in a gas giant's clouds: the sun's beam)
 	if (dt < 1e-3) return;
 	double h = std::max (size * STAR_GLOW_SIZE, vp.z * STAR_GLOW_MIN_ANGLE);
 	// at its true distance, so that planets in front hide it (reversed float depth)
 	float x = (float)vp.x, y = (float)vp.y, z = (float)vp.z, hh = (float)h;
-	float r = colour[0] * STAR_GLOW * (float)dt, g = colour[1] * STAR_GLOW * (float)dt, b = colour[2] * STAR_GLOW * (float)dt;
+	float gc[3] = { colour[0], colour[1], colour[2] };
+	scene->RelShiftColour (gpos, gc); // (relativistic view: as the disc)
+	float r = gc[0] * STAR_GLOW * (float)dt, g = gc[1] * STAR_GLOW * (float)dt, b = gc[2] * STAR_GLOW * (float)dt;
 	PVtx q[4] = {
 		{ x - hh, y - hh, z, 0.0f, 0.0f, r, g, b, 1 }, { x + hh, y - hh, z, 1.0f, 0.0f, r, g, b, 1 },
 		{ x + hh, y + hh, z, 1.0f, 1.0f, r, g, b, 1 }, { x - hh, y + hh, z, 0.0f, 1.0f, r, g, b, 1 } };
 	PVtx v[6] = { q[0], q[1], q[2], q[0], q[2], q[3] };
-	scene->DrawBillboards (scene->GlowTex (), true, v, 6);
+	scene->DrawBillboards (scene->GlowTex (), true, v, 6, true);
 }

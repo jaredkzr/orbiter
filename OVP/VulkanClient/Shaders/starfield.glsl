@@ -34,5 +34,10 @@ uint StarTempIndex (Star s) { return (s.packed >> 12) & 0xffu; }
 float StarAvSun (Star s) { return float ((s.packed >> 20) & 0x7ffu) * 0.01; }
 bool StarIsSun (Star s) { return (s.packed >> 31) != 0u; }
 
+// temperature [K] of a (fractional) temperature index
+float StarTempOfIndex (float i) { return exp2 (3.321928 * (STAR_LOGT0 + (STAR_LOGT1 - STAR_LOGT0) * i / float (STAR_NTEMP - 1))); }
+// the temperature index of a temperature times D (relativistic view: a star's colour seen at Doppler factor D)
+float StarTempIndexShifted (uint i, float D) { return float (i) + log2 (D) * 0.30103 * float (STAR_NTEMP - 1) / (STAR_LOGT1 - STAR_LOGT0); }
+
 // 5 log10 (r / 10 pc)
 float StarDistModulus (float r) { return 1.50515 * log2 (max (r, 1e-6)) - 5.0; }

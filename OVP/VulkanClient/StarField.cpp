@@ -41,8 +41,27 @@ namespace {
 	struct GpuStar { float pos[3]; uint32_t packed; };
 	struct ListHeader { uint32_t vertexCount, instanceCount, firstVertex, firstInstance, capacity, pad[3]; };
 
-	struct SelectPush { float obs[4]; uint32_t part, nParts, atSun, hideSun, nStar, pad[3]; };
-	struct GenPush { float obs[4]; uint32_t nRows, nWork, part, nParts; float catLimit, catNear, pad[2]; };
+	struct SelectPush { float obs[4]; uint32_t part, nParts, atSun, hideSun, nStar, pad[3]; float beta[4], ext[4]; };
+	struct GenPush { float obs[4]; uint32_t nRows, nWork, part, nParts; float catLimit, catNear, pad[2]; float beta[4], ext[4]; };
+	constexpr double RESELECT_U = 0.03;              // relativistic view: change of the proper velocity (gamma beta, relative
+	                                                 // to its size, at least 1) that starts a new selection
+
+	// Relativistic view: the factor on a black body's V band flux (temperature
+	// T [K]) seen at Doppler factor D (as relsky.glsl's RelStarBoostV)
+	double StarBoostV (double T, double D)
+	{
+		auto logPlanck = [](double l, double T) {
+			double um = l * 1e-3, x = 14387.77 / (um * T);
+			return -5.0 * std::log (um) - (x > 20.0 ? x : std::log (std::expm1 (x)));
+		};
+		double s0 = 0.0, s1 = 0.0;
+		for (int k = 0; k < 4; k++) {
+			double l = 505.0 + 90.0 * (k + 0.5) * 0.25;
+			s0 += std::exp (logPlanck (l, T) - logPlanck (550.0, T));
+			s1 += std::exp (logPlanck (l, D * T) - logPlanck (550.0, T));
+		}
+		return s1 / (s0 * D * D);
+	}
 	struct GenHeader { uint32_t count, capacity, pad[2]; };
 	struct GenRow { float a[4]; int32_t cell0[4]; float b[4]; uint32_t c[4]; float d[4]; };
 	constexpr int GEN_ROWS = 1024;                   // (field rows, then cluster rows)
@@ -66,6 +85,11 @@ namespace {
 	double Dist (const double *a, const double *b)
 	{
 		return std::sqrt ((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]));
+	}
+
+	double Norm (const double *a)
+	{
+		return std::sqrt (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
 	}
 }
 
@@ -114,7 +138,7 @@ bool StarField::Init (vkc::Context *c, const GalaxySky &sky, const galactic::Sta
 		std::vector<float> cb (4 * (3 + 1 + NTEMP));
 		for (int k = 0; k < 3; k++)
 			for (int b = 0; b < GalaxySky::NBAND; b++) cb[k * 4 + b] = sky.BandColour ()[k][b];
-		for (int b = 0; b < GalaxySky::NBAND; b++) cb[12 + b] = sky.Extinction ()[b];
+		for (int b = 0; b < GalaxySky::NBAND; b++) cb[12 + b] = ext[b] = sky.Extinction ()[b];
 		for (int t = 0; t < NTEMP; t++)
 			sky.BandLight (std::pow (10.0, LOGT0 + (LOGT1 - LOGT0) * t / (NTEMP - 1)), &cb[16 + t * 4]);
 		colours = ctx->CreateDeviceBuffer (cb.data(), cb.size() * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
@@ -339,7 +363,8 @@ void StarField::Select (VkCommandBuffer cmd, int l, int part, int nParts)
 		barrier (VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, RW);
 		// the generator's work (none to do at the Sun)
 		genWork = 0;
-		if (!atSun) GenRows (genRowCount, genWork);
+		// (relativistic view: stars too faint for the catalogue may be brightened)
+		if (!atSun || Norm (selBeta) > 1e-3) GenRows (genRowCount, genWork);
 	}
 	else barrier (VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, RW, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, RW);
 
@@ -351,6 +376,8 @@ void StarField::Select (VkCommandBuffer cmd, int l, int part, int nParts)
 		p.nRows = genRowCount, p.nWork = genWork;
 		p.part = (uint32_t)part, p.nParts = (uint32_t)nParts;
 		p.catLimit = catLimit, p.catNear = catNear;
+		for (int k = 0; k < 3; k++) p.beta[k] = (float)selBeta[k];
+		for (int k = 0; k < 4; k++) p.ext[k] = ext[k];
 		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, genPipe);
 		vkCmdPushConstants (cmd, selectPL, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
 		vkCmdDispatch (cmd, (genWork / nParts + 64) / 64, 1, 1);
@@ -363,6 +390,8 @@ void StarField::Select (VkCommandBuffer cmd, int l, int part, int nParts)
 	uint32_t count = (nStar - (uint32_t)part + (uint32_t)nParts - 1) / (uint32_t)nParts;
 	p.atSun = atSun;
 	p.hideSun = selHideSun;
+	for (int k = 0; k < 3; k++) p.beta[k] = (float)selBeta[k];
+	for (int k = 0; k < 4; k++) p.ext[k] = ext[k];
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, selectPipe);
 	vkCmdPushConstants (cmd, selectPL, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(p), &p);
 	vkCmdDispatch (cmd, (count + 255) / 256, 1, 1);
@@ -380,10 +409,13 @@ bool StarField::GenRows (uint32_t &nRows, uint32_t &nWork)
 	GenRow *rows = (GenRow*)genRows.mapped;
 	const uint32_t maxRows = (uint32_t)(genRows.size / sizeof(GenRow));
 	nRows = nWork = 0;
+	// (relativistic view: seen as far as the brightest of them ahead, at the largest Doppler factor)
+	double b = Norm (selBeta), dMax = b > 0.0 ? std::sqrt ((1.0 + b) / (1.0 - b)) : 1.0;
 	for (size_t i = 0; i < lfRows.size() && nRows < maxRows; i++) {
 		const auto &r = lfRows[i];
 		if (r.M - 0.5 < GEN_BRIGHTEST) continue;
-		double rVis = std::pow (10.0, (selLimit + MARGIN - (r.M - 0.5)) / 5.0 + 1.0);
+		double boost = b > 0.0 ? std::max (0.0, 2.5 * std::log10 (std::max (StarBoostV (r.T * 0.9, dMax), StarBoostV (r.T * 1.1, dMax)))) : 0.0;
+		double rVis = std::pow (10.0, (selLimit + MARGIN + boost - (r.M - 0.5)) / 5.0 + 1.0);
 		double n = std::pow (10.0, r.logn);
 		double cell = std::min (rVis / GEN_CELLS, std::cbrt (GEN_PER_CELL / n));
 		cell = std::max (cell, 2.0 * rVis / (GEN_MAX_K - 1));
@@ -414,7 +446,8 @@ bool StarField::GenRows (uint32_t &nRows, uint32_t &nWork)
 		double dmin = std::max (Dist (cl.pos, selObs.pos) - cl.rt, 1.0);
 		for (size_t i = 0; i < lfRows.size(); i++) {
 			const auto &r = lfRows[i];
-			if (r.pop != 2 || r.M - 0.5 + 5.0 * std::log10 (dmin / 10.0) >= selLimit + MARGIN) continue;
+			double boost = b > 0.0 ? std::max (0.0, 2.5 * std::log10 (StarBoostV (r.T, dMax))) : 0.0;
+			if (r.pop != 2 || r.M - 0.5 + 5.0 * std::log10 (dmin / 10.0) >= selLimit + MARGIN + boost) continue;
 			double n = cl.volume * std::pow (10.0, r.logn);
 			if (n >= 0.01) cand.push_back ({ c, i, r.M, n });
 		}
@@ -448,14 +481,26 @@ void StarField::SetLimit (float m)
 	selectAgain = true;
 }
 
-void StarField::Update (const galactic::Observer &obs, bool hideSun)
+void StarField::Update (const galactic::Observer &obs, bool hideSun, const double beta[3])
 {
 	if (!ready) return;
 	curObs = obs;
+	double bt[3] = { 0.0, 0.0, 0.0 };
+	if (beta) for (int k = 0; k < 3; k++) bt[k] = beta[k];
 	if (!selecting) {
 		// (a selection under way for an old limit is finished first)
-		if (Dist (obs.pos, listObs.pos) < RESELECT_DIST && hideSun == listHideSun && !selectAgain) return;
+		// relativistic view: again when the proper velocity has changed
+		// (brightnesses with it)
+		auto u = [](const double *b, double *out) {
+			double g = 1.0 / std::sqrt (std::max (1.0 - b[0] * b[0] - b[1] * b[1] - b[2] * b[2], 1e-12));
+			for (int k = 0; k < 3; k++) out[k] = g * b[k];
+		};
+		double u0[3], u1[3];
+		u (listBeta, u0), u (bt, u1);
+		bool moved = Dist (u0, u1) > RESELECT_U * std::max (1.0, Norm (u0));
+		if (Dist (obs.pos, listObs.pos) < RESELECT_DIST && hideSun == listHideSun && !selectAgain && !moved) return;
 		selecting = true, selPart = 0, selObs = obs, selHideSun = hideSun, selectAgain = false, selLimit = wantLimit;
+		for (int k = 0; k < 3; k++) selBeta[k] = bt[k];
 	}
 	int back = 1 - front;
 	int nParts = (int)((nStar + STARS_PER_FRAME - 1) / STARS_PER_FRAME);
@@ -464,6 +509,7 @@ void StarField::Update (const galactic::Observer &obs, bool hideSun)
 	Select (cmd, back, selPart, nParts);
 	if (++selPart >= nParts) {
 		front = back, listObs = selObs, listHideSun = selHideSun, limit = selLimit;
+		for (int k = 0; k < 3; k++) listBeta[k] = selBeta[k];
 		selecting = false;
 		if (getenv ("ORBITER_VK_SKY_LOG"))
 			oapiWriteLogV ("VulkanClient: stars selected from (%.2f, %.2f, %.2f) pc", selObs.pos[0], selObs.pos[1], selObs.pos[2]);

@@ -7,7 +7,9 @@
 // zodiacal light (its own cube, alike). The enhanced display treats the
 // light as a long-exposure photograph's processing does: the contrast
 // raised about a pivot, the brightest compressed (a shoulder, so that a
-// nebula's core keeps its colour), the colours deepened.
+// nebula's core keeps its colour), the colours deepened. In the
+// relativistic view the light comes from its direction at rest, Doppler
+// shifted in its bands (relsky.glsl).
 
 #version 450
 #extension GL_GOOGLE_include_directive : require
@@ -20,6 +22,7 @@ layout(set = 0, binding = 1) uniform samplerCube skyB;
 layout(set = 0, binding = 2) uniform samplerCube zodiacal;
 
 #include "relativity.glsl"
+#include "relsky.glsl"
 
 layout(push_constant) uniform Params {
 	vec4 galFromView[3]; // rows of the rotation view -> Galactic (xyz); w: the camera's velocity (view, units of c)
@@ -33,11 +36,14 @@ void main ()
 	// inverse of the projection (x' = fx x / z, y' = -fy y / z)
 	vec3 v = normalize (vec3 (vNdc.x * pc.proj.x, -vNdc.y * pc.proj.y, 1.0));
 	// (relativistic view: the camera's velocity in the rows' w, view space: the direction at rest)
-	v = RelTrueDirOf (v, vec3 (pc.galFromView[0].w, pc.galFromView[1].w, pc.galFromView[2].w));
+	vec3 beta = vec3 (pc.galFromView[0].w, pc.galFromView[1].w, pc.galFromView[2].w);
+	float D = RelDopplerSeen (v, beta);
+	v = RelTrueDirOf (v, beta);
 	vec3 d = vec3 (dot (pc.galFromView[0].xyz, v), dot (pc.galFromView[1].xyz, v), dot (pc.galFromView[2].xyz, v));
 	vec4 b = texture (skyA, d);
 	if (pc.proj.z > 0.0) b = mix (b, texture (skyB, d), pc.proj.z);
 	b += pc.proj.w * texture (zodiacal, d);
+	b = RelShiftBands (b, D);
 	vec3 c = max (vec3 (dot (pc.colour[0], b), dot (pc.colour[1], b), dot (pc.colour[2], b)), vec3 (0.0));
 	if (pc.tone.w > 0.0 || pc.tone.y != 1.0 || pc.tone.z != 1.0) {
 		float Y = max (dot (c, vec3 (0.2126, 0.7152, 0.0722)), 1e-20);

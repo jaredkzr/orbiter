@@ -2,9 +2,11 @@
 // Licensed under the MIT License
 
 // Relativistic view: the HDR scene Doppler shifted per pixel (doppler.glsl),
-// by the direction it is seen in; the camera's own vessel (moving with it)
-// unchanged. Its pixels: their position rebuilt from the prepass' linear
-// depth, within the vessel's sphere.
+// by the direction it is seen in: the geometry (in the prepass). The sky
+// (the Milky Way, the stars, an atmosphere's sky) and the Sun are shifted
+// as they are drawn, in their spectra; the camera's own vessel (moving with
+// it) is unchanged: its pixels, their position rebuilt from the prepass'
+// linear depth, within the vessel's sphere.
 
 #version 450
 #extension GL_GOOGLE_include_directive : require
@@ -30,7 +32,8 @@ void main ()
 	vec2 ndc = vUV * 2.0 - 1.0;
 	vec3 d = normalize (vec3 (ndc.x * pc.beta.w, -ndc.y * pc.misc.x, 1.0));
 	float z = texelFetch (prepass, ivec2 (vUV * vec2 (textureSize (prepass, 0))), 0).w; // (32-bit float: no filtering)
-	if (pc.self.w > 0.0 && z > 0.0) {
+	if (!(z > 0.0)) { outColor = c; return; } // (the sky: shifted already)
+	if (pc.self.w > 0.0) {
 		vec3 p = d * (z / d.z);
 		if (distance (p, pc.self.xyz) < pc.self.w) { outColor = c; return; }
 	}

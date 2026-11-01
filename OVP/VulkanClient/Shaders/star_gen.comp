@@ -11,12 +11,14 @@
 // their stars of a luminosity function row, drawn from the cluster's
 // Plummer sphere (seeded by the cluster, the row and the star). They are
 // appended to the selection list (as star_select.comp's) and to the buffer
-// of generated stars.
+// of generated stars. In the relativistic view, by their brightness seen
+// moving (as star_select.comp's).
 
 #version 450
 #extension GL_GOOGLE_include_directive : require
 #include "galaxy.glsl"
 #include "starfield.glsl"
+#include "relsky.glsl"
 
 layout(local_size_x = 64) in;
 
@@ -43,6 +45,9 @@ layout(push_constant) uniform Params {
 	uint nParts;
 	float catLimit; // the catalogue holds the stars brighter than this (G, seen from the Sun) ...
 	float catNear;  // ... and all within this distance of the Sun [pc]
+	float pad0, pad1;
+	vec4 beta;      // relativistic view: the observer's velocity (Galactic, units of c; 0: at rest)
+	vec4 ext;       // extinction per band per A_V
 } pc;
 
 // extinction samples on a path of length r: few (statistical stars)
@@ -84,6 +89,11 @@ void Emit (vec3 p, float M, float tIdx, float gMinusV)
 	vec3 o = pc.observer.xyz;
 	float r = length (p - o);
 	float m0 = M + StarDistModulus (r);
+	float D = 1.0;
+	if (dot (pc.beta.xyz, pc.beta.xyz) > 0.0) {
+		D = inversesqrt (max (1.0 - dot (pc.beta.xyz, pc.beta.xyz), 1e-12)) * (1.0 + dot ((p - o) / r, pc.beta.xyz));
+		m0 -= 2.5 * log2 (RelStarBoostV (StarTempOfIndex (clamp (tIdx, 0.0, float (STAR_NTEMP - 1))), D)) * 0.30103;
+	}
 	if (m0 >= pc.observer.w) return;
 	float rs = length (p);
 	if (rs < pc.catNear) return;
@@ -95,7 +105,8 @@ void Emit (vec3 p, float M, float tIdx, float gMinusV)
 		if (gSun + 0.8 * aSun < pc.catLimit) return;
 	}
 	float A = GalExtinctionN (o, p, Steps (r));
-	if (m0 + A >= pc.observer.w) return;
+	float AV = D == 1.0 ? A : A * RelExtinction (pc.ext, 550.0 * D) / max (RelExtinction (pc.ext, 550.0), 1e-3);
+	if (m0 + AV >= pc.observer.w) return;
 	uint g = atomicAdd (gen.head.count, 1u);
 	if (g >= gen.head.capacity) return;
 	uint mq = uint (clamp ((M + 12.0) * 100.0 + 0.5, 0.0, 4095.0));
