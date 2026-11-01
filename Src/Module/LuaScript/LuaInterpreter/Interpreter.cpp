@@ -885,6 +885,9 @@ void Interpreter::LoadAPI ()
 		{"set_reldrive", oapi_set_reldrive},
 		{"get_relstate", oapi_get_relstate},
 		{"set_shipclock", oapi_set_shipclock},
+		{"set_shipwarp", oapi_set_shipwarp},
+		{"get_namedstar", oapi_get_namedstar},
+		{"get_shipwarp", oapi_get_shipwarp},
 		{"reltrip_set", oapi_reltrip_set},
 		{"reltrip_engage", oapi_reltrip_engage},
 		{"reltrip_info", oapi_reltrip_info},
@@ -4352,12 +4355,74 @@ int Interpreter::oapi_set_shipclock (lua_State *L)
 }
 
 /***
+Set a ship-time warp: time acceleration on the focus vessel's own clock
+(the simulation's follows it; beyond 10^5 only in deep space). Setting the
+simulation's time acceleration ends it.
+
+@function set_shipwarp
+@tparam number warp on the vessel's clock (0.1 to 10^9; 0: off)
+*/
+int Interpreter::oapi_set_shipwarp (lua_State *L)
+{
+	oapiSetShipWarp (luaL_checknumber (L, 1));
+	return 0;
+}
+
+/***
+A named star (interstellar travel), as at the current simulation time.
+
+@function get_namedstar
+@tparam string|number star name, or index (0: the Galactic Centre)
+@treturn table fields name, index (in the sky's catalogue), teff [K], lum
+  (bolometric [L_sun]), lumv (V band), radius [m], pos, vel (global frame
+  [m], [m/s]); nil if none
+*/
+int Interpreter::oapi_get_namedstar (lua_State *L)
+{
+	int idx = -1;
+	if (lua_isnumber (L, 1)) idx = (int)lua_tointeger (L, 1);
+	else if (lua_isstring (L, 1)) {
+		std::string want = lua_tostring (L, 1);
+		for (int i = 0; i < oapiNamedStarCount (); i++) {
+			NAMEDSTAR s;
+			if (oapiGetNamedStar (i, &s) && want == s.name) { idx = i; break; }
+		}
+	}
+	NAMEDSTAR s;
+	if (idx < 0 || !oapiGetNamedStar (idx, &s)) { lua_pushnil (L); return 1; }
+	lua_newtable (L);
+	lua_pushstring (L, s.name); lua_setfield (L, -2, "name");
+	lua_pushinteger (L, s.index); lua_setfield (L, -2, "index");
+	lua_pushnumber (L, s.teff); lua_setfield (L, -2, "teff");
+	lua_pushnumber (L, s.lum); lua_setfield (L, -2, "lum");
+	lua_pushnumber (L, s.lumV); lua_setfield (L, -2, "lumv");
+	lua_pushnumber (L, s.radius); lua_setfield (L, -2, "radius");
+	lua_pushvector (L, s.pos); lua_setfield (L, -2, "pos");
+	lua_pushvector (L, s.vel); lua_setfield (L, -2, "vel");
+	return 1;
+}
+
+/***
+The ship-time warp (0: off).
+
+@function get_shipwarp
+@treturn number
+*/
+int Interpreter::oapi_get_shipwarp (lua_State *L)
+{
+	lua_pushnumber (L, oapiGetShipWarp ());
+	return 1;
+}
+
+/***
 Set the trip of a vessel's ideal-drive autopilot (relativistic travel).
 
 @function reltrip_set
 @tparam handle hVessel
-@tparam table spec fields target (handle or name), arrival ("rest", "orbit"
-  or "flyby"), alt (above the target's surface [m]), accel (proper
+@tparam table spec fields target (handle or name; a name no object has: a
+  named star), star (a named star, or "Galactic Centre": interstellar
+  travel), arrival ("rest", "orbit" or "flyby"), alt (above the target's
+  surface [m]; a star: the distance from it, nil its default), accel (proper
   acceleration [m/s^2]), time (trip time [s]: arrive after it; nil: as soon
   as possible)
 @treturn bool
@@ -4368,10 +4433,18 @@ int Interpreter::oapi_reltrip_set (lua_State *L)
 	luaL_checktype (L, 2, LUA_TTABLE);
 	RELTRIPSPEC rs = {};
 	rs.accel = 1000.0 * 9.80665, rs.altitude = 1e6, rs.fastest = 1, rs.tripTime = 86400.0;
+	std::string star;
 	lua_getfield (L, 2, "target");
-	if (lua_isstring (L, -1)) rs.hTarget = oapiGetObjectByName ((char*)lua_tostring (L, -1));
-	else if (lua_islightuserdata (L, -1)) rs.hTarget = (OBJHANDLE)lua_touserdata (L, -1);
+	if (lua_isstring (L, -1)) {
+		// (a body or vessel by name, else a named star)
+		rs.hTarget = oapiGetObjectByName ((char*)lua_tostring (L, -1));
+		if (!rs.hTarget) star = lua_tostring (L, -1);
+	} else if (lua_islightuserdata (L, -1)) rs.hTarget = (OBJHANDLE)lua_touserdata (L, -1);
 	lua_pop (L, 1);
+	lua_getfield (L, 2, "star");
+	if (lua_isstring (L, -1)) star = lua_tostring (L, -1), rs.hTarget = 0;
+	lua_pop (L, 1);
+	if (!rs.hTarget && !star.empty ()) rs.star = star.c_str (), rs.altitude = 0.0;
 	lua_getfield (L, 2, "arrival");
 	if (lua_isstring (L, -1)) {
 		const char *a = lua_tostring (L, -1);
@@ -4387,7 +4460,7 @@ int Interpreter::oapi_reltrip_set (lua_State *L)
 	lua_getfield (L, 2, "time");
 	if (lua_isnumber (L, -1)) rs.fastest = 0, rs.tripTime = lua_tonumber (L, -1);
 	lua_pop (L, 1);
-	lua_pushboolean (L, hv && rs.hTarget && oapiRelTripSet (hv, &rs));
+	lua_pushboolean (L, hv && (rs.hTarget || rs.star) && oapiRelTripSet (hv, &rs));
 	return 1;
 }
 
@@ -4416,8 +4489,9 @@ else a preview from the current state).
   "Decelerating", "Arrived", "No trip"), phase_id, ok (plan valid), arr_mjd,
   time (to the arrival [s]), shiptime (the same on the vessel's clock [s]),
   vmax [m/s], dv (proper velocity change [m/s]), atterr [rad], message;
-  the settings: target (handle), arrival ("rest", "orbit", "flyby"), alt,
-  accel, fastest (bool), settime [s]
+  the settings: target (handle), star (a named star's name), arrival
+  ("rest", "orbit", "flyby"), alt, accel, fastest (bool), settime [s];
+  distance and speed (relative to the target now [m], [m/s])
 */
 int Interpreter::oapi_reltrip_info (lua_State *L)
 {
@@ -4434,6 +4508,9 @@ int Interpreter::oapi_reltrip_info (lua_State *L)
 	num ("vmax", ri.vmax); num ("dv", ri.properDv); num ("atterr", ri.attErr);
 	lua_pushstring (L, ri.message); lua_setfield (L, -2, "message");
 	if (ri.hTarget) { lua_pushlightuserdata (L, ri.hTarget); lua_setfield (L, -2, "target"); }
+	if (ri.star[0]) { lua_pushstring (L, ri.star); lua_setfield (L, -2, "star"); }
+	lua_pushnumber (L, ri.distance); lua_setfield (L, -2, "distance");
+	lua_pushnumber (L, ri.speed); lua_setfield (L, -2, "speed");
 	static const char *arr[] = { "rest", "orbit", "flyby" };
 	lua_pushstring (L, arr[ri.arrival < 0 ? 0 : ri.arrival > 2 ? 2 : ri.arrival]); lua_setfield (L, -2, "arrival");
 	num ("alt", ri.altitude); num ("accel", ri.accel);

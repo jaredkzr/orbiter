@@ -141,6 +141,8 @@ if (ORBITER_TEST_EXE)
 	# relativistic flight: the ideal drive, clocks, impacts at speed, prediction
 	set_tests_properties(Scenario.RelFlightTest PROPERTIES TIMEOUT 120)
 	set_tests_properties(Scenario.RelTripTest PROPERTIES TIMEOUT 400)
+	# interstellar flight: deep space, ship-time warp, a trip to a star
+	set_tests_properties(Scenario.InterstellarTest PROPERTIES TIMEOUT 400)
 	# saving and loading damage: the save test writes the scenario the load
 	# test runs (in the build tree)
 	set_tests_properties(Scenario.DamageSaveTest PROPERTIES FIXTURES_SETUP DamageRoundtrip ENVIRONMENT "ORBITER_DAMAGE=1")

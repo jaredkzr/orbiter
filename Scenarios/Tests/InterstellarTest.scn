@@ -1,0 +1,39 @@
+BEGIN_HYPERDESC
+<h1>Interstellar flight: deep space, ship-time warp</h1>
+A delta-glider 2000 AU from the Sun (deep space) accelerates at 1 g for a
+year of its own time under a ship-time warp of 10^6: its clock, speed and
+distance against hyperbolic motion. Meanwhile the world follows conics:
+a vessel in low Earth orbit keeps its orbit over the years. Back in the
+Solar System the time acceleration stays within Orbiter's limit.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Tests/InterstellarTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship DS
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET DS
+  MODE Extern
+  POS 4 0 -20
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+DS:DeltaGlider
+  STATUS Orbiting Sun
+  ELEMENTS 3.0e14 0.00000 0.0 0.0 0.0 90.0 51982.6685767396
+  AROT 0 0 0
+END
+LEO:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 7.0e6 0.00000 0.0 0.0 0.0 0.0 51982.6685767396
+  AROT 0 0 0
+END
+END_SHIPS

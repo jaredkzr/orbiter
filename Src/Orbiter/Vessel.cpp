@@ -872,11 +872,12 @@ void Vessel::RPlace_individual (const Vector &rpos, const Vector &rvel)
 	fstatus = FLIGHTSTATUS_FREEFLIGHT;
 	bSurfaceContact = false;
 	RigidBody::RPlace (rpos, rvel);
-	cpos = s0->pos - cbody->GPos();
- 	cvel = s0->vel - cbody->GVel();
+	// (the new state: s1, the step's end during the state update, else s0)
+	cpos = s1->pos - cbody->s1->pos;
+	cvel = s1->vel - cbody->s1->vel;
 
-	g_psys->ScanGFieldSources (&s0->pos, this, &gfielddata);
-	acc = g_psys->Gacc (s0->pos, this, &gfielddata); // init acceleration due to G-field
+	g_psys->ScanGFieldSources (&s1->pos, this, &gfielddata);
+	acc = g_psys->Gacc (s1->pos, this, &gfielddata); // init acceleration due to G-field
 	el_valid = bOrbitStabilised = false; // force update of osculating elements
 
 	// Now update all passively attached child vessels
@@ -6949,9 +6950,12 @@ void Vessel::WriteDefault (ostream &ofs) const
 		ofs << "  RELDRIVE " << setprecision(10) << reldrive.accel << (reldrive.on ? " ON" : "") << endl;
 	if (fabs (clockOfs) >= 1.0)
 		ofs << "  CLOCK " << setprecision(15) << clockOfs << endl;
-	if (reltrip && reltrip->settings.target) {
+	if (reltrip && reltrip->HasTarget ()) {
 		const reltravel::Settings &rs = reltrip->settings;
-		ofs << "  RELTRIP " << rs.target->Name() << ' ' << rs.arrival << ' ' << setprecision(10) << rs.altitude << ' ' << rs.accel
+		// (a star: "star:" and its name, '_' for ' ')
+		std::string tn = rs.star >= 0 ? "star:" + reltrip->TargetName () : reltrip->TargetName ();
+		std::replace (tn.begin(), tn.end(), ' ', '_');
+		ofs << "  RELTRIP " << tn << ' ' << rs.arrival << ' ' << setprecision(10) << rs.altitude << ' ' << rs.accel
 			<< ' ' << (rs.fastest ? 1 : 0) << ' ' << rs.tripTime << ' ' << reltrip->GetPhase()
 			<< ' ' << setprecision(15) << (reltrip->ArriveT() > 0.0 ? td.MJD_ref + reltrip->ArriveT() / 86400.0 : 0.0) << endl;
 	}

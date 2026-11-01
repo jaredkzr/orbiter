@@ -26,9 +26,11 @@ layout(push_constant) uniform Params {
 	uint atSun;    // the observer is at the Sun: the catalogue's extinction
 	uint hideSun;  // the Sun is drawn as a body
 	uint nStar;
-	uint pad0, pad1, pad2;
+	float years;   // since the catalogue's epoch (the stars' motion)
+	uint pad1, pad2;
 	vec4 beta;     // relativistic view: the observer's velocity (Galactic, units of c; 0: at rest)
 	vec4 ext;      // extinction per band per A_V
+	uvec4 excl;    // stars drawn as bodies elsewhere (~0: none)
 } pc;
 
 void main ()
@@ -37,7 +39,9 @@ void main ()
 	if (i >= pc.nStar) return;
 	Star s = stars[i];
 	if (StarIsSun (s) && pc.hideSun != 0u) return;
-	vec3 d = s.pos - pc.observer.xyz;
+	if (any (equal (uvec4 (i), pc.excl))) return;
+	vec3 sp = StarSeenPos (s, pc.observer.xyz, pc.years);
+	vec3 d = sp - pc.observer.xyz;
 	float r = length (d);
 	float m0 = StarAbsMag (s) + StarDistModulus (r);
 	bool near = r < 2.0; // (always: their brightness changes fast as the observer moves)
@@ -48,7 +52,7 @@ void main ()
 	}
 	if (m0 >= pc.observer.w && !near) return;
 	// (from elsewhere than the Sun: fewer samples on short paths)
-	float A = pc.atSun != 0u ? StarAvSun (s) : GalExtinctionN (pc.observer.xyz, s.pos, clamp (int (r * 0.25), 8, 64));
+	float A = pc.atSun != 0u ? StarAvSun (s) : GalExtinctionN (pc.observer.xyz, sp, clamp (int (r * 0.25), 8, 64));
 	float AV = D == 1.0 ? A : A * RelExtinction (pc.ext, 550.0 * D) / max (RelExtinction (pc.ext, 550.0), 1e-3);
 	if (m0 + AV >= pc.observer.w && !near) return;
 	uint k = atomicAdd (list.head.instanceCount, 1u);

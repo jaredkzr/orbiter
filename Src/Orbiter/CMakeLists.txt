@@ -89,6 +89,7 @@ set(common_src
 	Conics.cpp
 	RelTravel.cpp
 	RelFlight.cpp
+	StarTargets.cpp
 	Relativity.cpp
 	Routes.cpp
 	MapView.cpp

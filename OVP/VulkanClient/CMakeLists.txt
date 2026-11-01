@@ -139,6 +139,7 @@ set(SHADER_SRC
 	Shaders/sky_bake.comp
 	Shaders/milkyway.vert
 	Shaders/milkyway.frag
+	Shaders/cosmicbg.frag
 	Shaders/star_select.comp
 	Shaders/star_gen.comp
 	Shaders/nebula_front.comp

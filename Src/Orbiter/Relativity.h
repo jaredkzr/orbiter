@@ -27,6 +27,8 @@ namespace relativity {
 
 	const double C = 299792458.0; ///< speed of light [m/s]
 	const double G0 = 9.80665;    ///< standard gravity [m/s^2]
+	const double LY = C * 365.25 * 86400.0; ///< light year (Julian) [m]
+	const double PC = 3.0856775814913673e16; ///< parsec [m]
 
 	// ===================================================================
 	// Speeds

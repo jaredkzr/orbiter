@@ -155,7 +155,35 @@ public:
 	void NotifyObjectSize (const Body *obj);
 
 	void SetWarpFactor (double warp, bool force = false, double delay = 0.0);
-	// Set time acceleration factor
+	// Set time acceleration factor (on Orbiter's clock: ends a ship-time warp)
+
+	static constexpr double MinWarpLimit = 0.1;
+	static constexpr double MaxWarpLimit = 1e5;      // (Orbiter's clock; beyond only in deep space, ship-time warp)
+	static constexpr double DeepWarpLimit = 1e15;    // in deep space
+	static constexpr double ShipWarpLimit = 1e9;     // ship-time warp
+	static constexpr double DeepSpaceG = 1e-8;       // [m/s^2] deep space: the bodies' gravity below this (~770 AU from the Sun)
+
+	void SetShipWarp (double warp);
+	// Ship-time warp: time acceleration on the focus vessel's own clock
+	// (its proper time), Orbiter's then follows (warp / the clock's rate,
+	// up to MaxWarpLimit, DeepWarpLimit in deep space). 0: off.
+	double ShipWarp () const { return shipWarp; }
+
+	void CapWarp (double warp);
+	// Lower the time acceleration (Orbiter's clock) to at most warp (a ship-
+	// time warp in proportion)
+
+	static bool DeepSpace (const Vector &gpos);
+	// Whether a point is in deep space (the bodies' gravity below DeepSpaceG)
+
+	static bool WorldParked (const Vector &gpos);
+	// Whether a body in free flight at gpos follows a conic about its
+	// reference body: out of deep space, at time accelerations beyond
+	// MaxWarpLimit (no integration over such steps), or while the global
+	// frame's origin is away from the Solar System (positions there are
+	// coarse: the conics keep them exact)
+
+	static constexpr double OriginRange = 1e12; // [m] the global frame's origin moves to the focus in deep space when it is this far
 
 	VOID SetFOV (double fov, bool limit_range = true);
 	// Set camera field of view to fov (vertical half-screen) [rad]
@@ -393,6 +421,15 @@ protected:
 
 	void ApplyWarpFactor ();
 	// broadcast new warp factor to components and modules
+
+	void UpdateShipWarp ();
+	// Before a step: Orbiter's time acceleration from the ship-time warp
+	double shipWarp = 0.0;
+
+	void UpdateOrigin ();
+	// Before a step: the global frame's origin near the focus in deep space,
+	// back at the Solar System's barycentre elsewhere
+	static int originSettle; // steps the world stays parked after the origin returned
 
     HRESULT InitDeviceObjects ();
 	HRESULT RestoreDeviceObjects ();

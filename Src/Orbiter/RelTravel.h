@@ -51,9 +51,10 @@ namespace reltravel {
 
 	struct Settings {
 		const Body *target = nullptr;
-		std::string targetName;      ///< (until resolved, e.g. read from a scenario)
+		int star = -1;               ///< else a named star (StarTargets.h; arrival: at rest or passing)
+		std::string targetName;      ///< (until resolved, e.g. read from a scenario; a star: "star:<name>")
 		int arrival = ARRIVE_REST;
-		double altitude = 1e6;       ///< above the target's surface [m]
+		double altitude = 1e6;       ///< above the target's surface [m] (a star: the distance from it)
 		double accel = 1000.0 * relativity::G0; ///< proper acceleration [m/s^2]
 		bool fastest = true;         ///< as soon as possible (else: after tripTime)
 		double tripTime = 86400.0;   ///< trip time when not fastest [s] (Solar System time)
@@ -92,16 +93,27 @@ namespace reltravel {
 		void SetPhase (int ph) { phase = ph; aligned = guided = stopped = false; }
 		void Abort (const char *msg); ///< stop the trip (e.g. on an impact)
 
+		/// The target (resolved): a body, else a named star
+		bool HasTarget () const { return settings.target || settings.star >= 0; }
+		std::string TargetName () const;
+		/// The target's state at simulation time t (global frame)
+		void TargetState (double t, Vector &x, Vector &v) const;
+		void SetTarget (const Body *b);
+		void SetStar (int i);          ///< (the arrival distance: the star's default)
+
 		/// State of a body (or vessel) at simulation time t, extrapolated
 		/// from now along conics about its primaries (relativistic vessels:
 		/// straight)
 		static void BodyState (const Body *b, double t, Vector &x, Vector &v);
 
-	private:
+		/// Resolve a target known by name (read from a scenario); false: none
 		bool Resolve ();
+
+	private:
 		bool Solve (Plan &p, double tArr, const Plan *warm = nullptr);
 		void Stop (int ph, const char *msg);
 		double Point (const Vector &dir);              // the drive's axis towards dir: the attitude error
+		bool IdealTurns () const;                      // turned by the ideal drive (no attitude thrusters, or steps too long for them)
 		void Drive (const Vector &alpha, double tEnd); // the drive at alpha (throttled by the attitude error), cut off at tEnd
 		void LimitWarp (double tEvent);
 		void Guide ();                                 // after the first burn: guided to the arrival
@@ -115,9 +127,12 @@ namespace reltravel {
 		relativity::TargetFunc arrival; // the arrival state (fixed when guided)
 		Vector lastAlpha;
 		int fails = 0;
+		int replans = 0;               // new approaches after stopping short
 		double tArrive = 0.0;
 		double attErr = 0.0;
 		double driveSign = 1.0;        // the drive's end pointed: +z, or reversed (-z)
+		double warpRestore = 0.0;      // the ship-time warp to return to after an event (0: none)
+		double warpLastSet = 0.0;      // the ship-time warp as last left here
 		Plan preview, cur;
 		std::string message;
 	};

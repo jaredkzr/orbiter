@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Download the source data of the simulated sky into a cache directory.
 
-  fetch.py [--cache DIR] [dust] [gaia] [hip] [teff] [harris]
+  fetch.py [--cache DIR] [dust] [gaia] [hip] [teff] [harris] [iau]
 
 dust: Edenhofer et al. (2024) 3D dust map, posterior mean only (the 1.25 kpc
       map and the 2 kpc map), raw big-endian float32 plus the shell radii.
@@ -13,6 +13,7 @@ hip:  Hipparcos new reduction (astrometry, Hp, colours) and the original
       catalogue's V magnitudes, spectral types and multiplicity.
 teff: Pecaut & Mamajek's table of dwarf colours and temperatures.
 harris: Harris's catalogue of Milky Way globular clusters (2010 edition).
+iau:  the IAU Catalog of Star Names (WGSN; E. Mamajek's text version).
 
 The Hipparcos tables come from the ESA Gaia archive (the CDS mirror is
 often unreachable). Files already present are skipped.
@@ -41,6 +42,7 @@ GAIA_GMAX = 12.5
 NEARBY_PLX = 40  # [mas]
 MAMAJEK = 'https://www.pas.rochester.edu/~emamajek/EEM_dwarf_UBVIJHK_colors_Teff.txt'
 HARRIS = 'https://physics.mcmaster.ca/~harris/mwgc.dat'  # Milky Way globular clusters (Harris 1996, 2010 edition)
+IAU_CSN = 'https://www.pas.rochester.edu/~emamajek/WGSN/IAU-CSN.txt'  # IAU Catalog of Star Names (WGSN)
 GAIA_COLUMNS = ('source_id, ra, dec, parallax, parallax_error, pmra, pmdec, radial_velocity, '
                 'phot_g_mean_mag, phot_bp_mean_mag, phot_rp_mean_mag, ruwe')
 
@@ -202,13 +204,20 @@ def fetch_harris(cache):
     download(HARRIS, os.path.join(d, 'mwgc.dat'))
 
 
+def fetch_iau(cache):
+    d = os.path.join(cache, 'iau')
+    os.makedirs(d, exist_ok=True)
+    download(IAU_CSN, os.path.join(d, 'IAU-CSN.txt'))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--cache', default=os.path.expanduser('~/orbiter-data/skykit'))
-    ap.add_argument('what', nargs='*', default=['dust', 'gaia', 'hip', 'teff', 'harris'])
+    ap.add_argument('what', nargs='*', default=['dust', 'gaia', 'hip', 'teff', 'harris', 'iau'])
     a = ap.parse_args()
     for w in a.what:
-        {'dust': fetch_dust, 'gaia': fetch_gaia, 'hip': fetch_hip, 'teff': fetch_teff, 'harris': fetch_harris}[w](a.cache)
+        {'dust': fetch_dust, 'gaia': fetch_gaia, 'hip': fetch_hip, 'teff': fetch_teff, 'harris': fetch_harris,
+         'iau': fetch_iau}[w](a.cache)
 
 
 if __name__ == '__main__':

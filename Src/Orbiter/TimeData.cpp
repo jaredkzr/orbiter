@@ -66,8 +66,9 @@ void TimeData::BeginStep (double deltat, bool running)
 		SimDT = (bFixedStep ? fixed_step : SysDT) * TWarp;
 		iSimDT = 1.0/SimDT;
 		if ((SimT1_inc += SimDT) > 1e6) {
-			SimT1_ofs += 1e6;
-			SimT1_inc -= 1e6;
+			double whole = floor (SimT1_inc * 1e-6) * 1e6; // (steps of any length: ship-time warp)
+			SimT1_ofs += whole;
+			SimT1_inc -= whole;
 		}
 		SimT1 = SimT1_ofs + SimT1_inc;
 		MJD1 = MJD_ref + Day (SimT1);

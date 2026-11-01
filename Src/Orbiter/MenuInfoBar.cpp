@@ -675,7 +675,14 @@ public:
 				p3.x += size.x/4.5f*1.5f;
 				drawList->AddTriangleFilled(p1, p2, p3, ImGui::ColorConvertFloat4ToU32(ImVec4(1.0,1.0,1.0,alpha)));
 				char buf[64];
-				sprintf(buf, "%0.*fx", td.Warp() < 9.99 ? 1:0, td.Warp());
+				auto fmt = [](char *b, double w) {
+					if (w >= 1e6) sprintf (b, "%0.3gx", w);
+					else sprintf (b, "%0.*fx", w < 9.99 ? 1:0, w);
+				};
+				if (g_pOrbiter->ShipWarp() > 0.0) { // (ship-time warp: on the focus vessel's clock)
+					fmt (buf, g_pOrbiter->ShipWarp());
+					strcat (buf, " ship");
+				} else fmt (buf, td.Warp());
 				drawList->AddText(pos + ImVec2(size.x + 2,0), ImGui::ColorConvertFloat4ToU32(ImVec4(1.0,1.0,1.0,alpha)), buf);
 			}
 			break;

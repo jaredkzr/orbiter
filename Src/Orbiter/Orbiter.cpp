@@ -51,6 +51,7 @@
 #include "ConsoleManager.h"
 #include "Trajectory.h"
 #include "MapView.h"
+#include "Relativity.h"
 #include "MfdWindow.h"
 #include "Transfer.h"
 #include "Replay.h"
@@ -108,8 +109,6 @@ extern BOOL     g_bAppUseZBuffer;
 extern BOOL     g_bAppUseBackBuffer;
 double          g_nearplane      = 5.0;
 double          g_farplane       = 5e6;
-const double    MinWarpLimit     = 0.1;  // make variable
-const double    MaxWarpLimit     = 1e5;  // make variable
 DWORD           g_qsaveid        = 0;
 DWORD           g_customcmdid    = 0;
 int             g_iCursorShowCount = 0;
@@ -1473,6 +1472,7 @@ void Orbiter::NotifyObjectSize (const Body *obj)
 //-----------------------------------------------------------------------------
 void Orbiter::SetWarpFactor (double warp, bool force, double delay)
 {
+	shipWarp = 0.0; // (Orbiter's clock from here)
 	if (warp == td.Warp())
 		return; // nothing to do
 	if (bPlayback && pConfig->CfgRecPlayPrm.bReplayWarp && !force) return;
@@ -1505,6 +1505,10 @@ void Orbiter::SetWarpFactor (double warp, bool force, double delay)
 void Orbiter::IncWarpFactor ()
 {
 	const double EPS = 1e-6;
+	if (shipWarp > 0.0) {
+		SetShipWarp (pow (10.0, floor (log10 (shipWarp)+EPS)+1.0));
+		return;
+	}
 	double logw = log10 (td.Warp());
 	SetWarpFactor (pow (10.0, floor (logw+EPS)+1.0));
 }
@@ -1516,8 +1520,104 @@ void Orbiter::IncWarpFactor ()
 void Orbiter::DecWarpFactor ()
 {
 	const double EPS = 1e-6;
+	if (shipWarp > 0.0) {
+		SetShipWarp (pow (10.0, ceil (log10 (shipWarp)-EPS)-1.0));
+		return;
+	}
 	double logw = log10 (td.Warp());
 	SetWarpFactor (pow (10.0, ceil (logw-EPS)-1.0));
+}
+
+//-----------------------------------------------------------------------------
+// Ship-time warp: time acceleration on the focus vessel's clock
+//-----------------------------------------------------------------------------
+void Orbiter::SetShipWarp (double warp)
+{
+	if (warp <= 0.0) {
+		if (shipWarp > 0.0) {
+			shipWarp = 0.0;
+			if (td.Warp() > MaxWarpLimit) SetWarpFactor (MaxWarpLimit, true);
+			if (m_pConsole) m_pConsole->Echo ("Ship-time warp off");
+		}
+		return;
+	}
+	shipWarp = std::clamp (warp, MinWarpLimit, ShipWarpLimit);
+	UpdateShipWarp ();
+	if (m_pConsole) {
+		char cbuf[256];
+		sprintf (cbuf, "Ship-time warp set to %0.4g", shipWarp);
+		m_pConsole->Echo (cbuf);
+	}
+}
+
+void Orbiter::CapWarp (double warp)
+{
+	if (td.Warp() <= warp) return;
+	if (shipWarp > 0.0) {
+		shipWarp = std::max (MinWarpLimit, shipWarp * warp / td.Warp());
+		td.SetWarp (warp, 0.0);
+		ApplyWarpFactor ();
+	} else SetWarpFactor (warp);
+}
+
+bool Orbiter::DeepSpace (const Vector &gpos)
+{
+	if (!g_psys) return false;
+	return g_psys->Gacc (gpos).length() < DeepSpaceG;
+}
+
+int Orbiter::originSettle = 0;
+
+bool Orbiter::WorldParked (const Vector &gpos)
+{
+	bool moved = originSettle > 0 || (g_psys && g_psys->Origin().length2() > 0.0);
+	if (!moved && td.Warp() <= MaxWarpLimit * (1.0 + 1e-9)) return false;
+	return !DeepSpace (gpos);
+}
+
+void Orbiter::UpdateOrigin ()
+{
+	// Precision far from the Sun: doubles resolve 4 m at a parsec, 32 km at
+	// 8 kpc. In deep space the global frame's origin follows the focus
+	// (moved to it whenever it is OriginRange away); elsewhere it is the
+	// Solar System's barycentre. While it is away, the vessels about the
+	// bodies follow their conics (exact relative to their reference bodies,
+	// WorldParked), for a few steps after it returned too (their positions
+	// recovered from the conics).
+	if (!g_psys) return;
+	const Vector &o = g_psys->Origin ();
+	Vector delta;
+	// (deep space, with a margin to leave it once the origin moved)
+	bool deep = g_focusobj && g_psys->Gacc (g_focusobj->GPos ()).length () < DeepSpaceG * (o.length2 () > 0.0 ? 2.0 : 1.0);
+	if (deep) {
+		if (g_focusobj->GPos ().length () > OriginRange) delta = g_focusobj->GPos ();
+	} else if (o.length2 () > 0.0) {
+		delta = -o;
+		originSettle = 2;
+	}
+	if (delta.length2 () > 0.0) {
+		g_psys->ShiftOrigin (delta);
+		if (g_psys->Origin ().length2 () == 0.0)
+			LOGOUT ("Global frame: origin back at the Solar System's barycentre");
+	} else if (originSettle > 0) originSettle--;
+}
+
+void Orbiter::UpdateShipWarp ()
+{
+	if (shipWarp <= 0.0) return;
+	// (Orbiter's clock per the vessel's: dt/dtau, from its speed and the
+	// potential; the vessel's own step stays bounded on its clock)
+	double rate = 1.0, wmax = MaxWarpLimit;
+	if (g_focusobj) {
+		double phi = RigidBody::Potential (g_focusobj->GPos());
+		rate = 1.0 / (1.0 + relativity::ClockRateMinus1 (g_focusobj->GVel().length2(), phi));
+		if (DeepSpace (g_focusobj->GPos())) wmax = DeepWarpLimit;
+	}
+	double w = std::clamp (shipWarp * rate, MinWarpLimit, wmax);
+	if (fabs (w - td.Warp()) > 1e-6 * w) {
+		td.SetWarp (w, 0.0);
+		ApplyWarpFactor ();
+	}
 }
 
 //-----------------------------------------------------------------------------
@@ -1912,6 +2012,7 @@ bool Orbiter::BeginTimeStep (bool running)
 	if(deltat>0.1) deltat=0.1; // Prevent huge deltat when using breakpoints
 
 	time_prev = time_curr;
+	if (running) UpdateShipWarp ();
 	td.BeginStep (deltat, running);
 
 	if (!running) return true;
@@ -2091,7 +2192,8 @@ void Orbiter::ModulePostStep ()
 //-----------------------------------------------------------------------------
 VOID Orbiter::UpdateWorld ()
 {
-	// module pre-timestep callbacks
+	// the global frame's origin (deep space), then module pre-timestep callbacks
+	if (bRunning && td.SimDT) UpdateOrigin ();
 	if (bRunning) ModulePreStep ();
 
 	// update world

@@ -219,10 +219,12 @@ void RigidBody::Update (bool force)
 			relStep = true;
 			el_valid = bOrbitStabilised = false;
 
-		// First check if we should do a stabilised state update
-		} else if (bCanUpdateStabilised &&
+		// First check if we should do a stabilised state update (always at
+		// time accelerations beyond Orbiter's limit: a ship-time warp in deep
+		// space; the world then follows conics)
+		} else if ((cbody && Orbiter::WorldParked (s0->pos)) || (bCanUpdateStabilised &&
 			ostep > g_pOrbiter->Cfg()->CfgPhysicsPrm.Stabilise_SLimit &&
-			g_psys->GetGravityContribution (cbody, cpos+cbody->GPos()) > 1-g_pOrbiter->Cfg()->CfgPhysicsPrm.Stabilise_PLimit) {
+			g_psys->GetGravityContribution (cbody, cpos+cbody->GPos()) > 1-g_pOrbiter->Cfg()->CfgPhysicsPrm.Stabilise_PLimit)) {
 
 			nPropSubsteps = 1; // for now
 			double dt = td.SimDT/nPropSubsteps;

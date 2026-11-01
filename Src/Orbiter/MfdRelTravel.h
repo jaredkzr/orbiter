@@ -16,6 +16,8 @@
 #define __MFDRELTRAVEL_H
 
 #include "Mfd.h"
+#include <string>
+#include <vector>
 
 namespace reltravel { class Controller; }
 
@@ -51,6 +53,10 @@ private:
 	double exhaust = 0.1;  // Cost: the exhaust speed compared [c]
 	double manualG = 1.0;  // Flight: the manual drive [g]
 	bool manualRev = false;
+	int targetKind = 0;    // Target: 0 the Solar System's bodies and vessels, 1 named stars
+	std::vector<int> starOrder;           // (the stars nearest first, their labels)
+	std::vector<std::string> starLabel;
+	double starOrderT = -1e10;
 
 	static struct SavePrm {
 		Vessel *usr = nullptr;

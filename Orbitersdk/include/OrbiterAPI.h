@@ -3430,15 +3430,57 @@ OAPIFUNC bool oapiGetRelState (OBJHANDLE hVessel, RELSTATE *state);
 OAPIFUNC bool oapiSetShipClock (OBJHANDLE hVessel, double clockOfs);
 
 /**
+ * \brief Sets a ship-time warp: time acceleration on the focus vessel's own
+ *   clock (its proper time). The simulation's time acceleration then follows
+ *   it each step (warp / the clock's rate): up to 10^5, beyond in deep space
+ *   (where the bodies' gravity is below 10^-8 m/s^2), where vessels about
+ *   the bodies follow conics. Setting the simulation's time acceleration
+ *   (oapiSetTimeAcceleration) ends it.
+ * \param warp time acceleration on the vessel's clock (0.1 to 10^9; 0: off)
+ */
+OAPIFUNC void oapiSetShipWarp (double warp);
+
+/**
+ * \brief The ship-time warp (0: off).
+ */
+OAPIFUNC double oapiGetShipWarp ();
+
+/**
+ * \brief A named star (interstellar travel: Config/CSphere/Sky/stars_named.csv),
+ *   as at the current simulation time.
+ */
+typedef struct {
+	const char *name;  ///< e.g. "Sirius" (valid while the session runs)
+	int index;         ///< in the sky's star catalogue (stars.bin; -1: a point, the Galactic Centre)
+	double teff;       ///< effective temperature [K] (0: not a star)
+	double lum;        ///< bolometric luminosity [L_sun] (as a black body)
+	double lumV;       ///< V band luminosity [L_sun,V]
+	double radius;     ///< [m]
+	VECTOR3 pos, vel;  ///< global frame [m], [m/s]
+} NAMEDSTAR;
+
+/**
+ * \brief Number of named stars (the targets of interstellar travel; the
+ *   first is the Galactic Centre).
+ */
+OAPIFUNC int oapiNamedStarCount ();
+
+/**
+ * \brief A named star, as at the current simulation time.
+ */
+OAPIFUNC bool oapiGetNamedStar (int i, NAMEDSTAR *star);
+
+/**
  * \brief A trip of the ideal drive's autopilot (relativistic travel, see oapiRelTripSet).
  */
 typedef struct {
 	OBJHANDLE hTarget; ///< celestial body or vessel
 	int arrival;       ///< 0: at rest at the altitude, 1: in a circular orbit at the altitude, 2: passing at the altitude
-	double altitude;   ///< above the target's surface [m]
+	double altitude;   ///< above the target's surface [m] (a star: the distance from it; 0: its default, where its light is the Sun's at 1 AU)
 	double accel;      ///< proper acceleration [m/s^2] (at most 10^6 g)
 	int fastest;       ///< nonzero: as soon as possible; else arriving after tripTime
 	double tripTime;   ///< [s] (Solar System time)
+	const char *star;  ///< with hTarget NULL: a named star (or "Galactic Centre"; interstellar travel: arrival at rest or passing)
 } RELTRIPSPEC;
 
 /**
@@ -3459,6 +3501,9 @@ typedef struct {
 	int arrival;
 	double altitude, accel, setTime;
 	int fastest;
+	char star[64];     ///< the target star's name ("": a body)
+	double distance;   ///< to the target now [m]
+	double speed;      ///< relative to the target now [m/s]
 } RELTRIPINFO;
 
 /**

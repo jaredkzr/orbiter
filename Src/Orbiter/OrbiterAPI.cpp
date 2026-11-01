@@ -29,6 +29,7 @@
 #include "MfdWindow.h"
 #include "Relativity.h"
 #include "RelTravel.h"
+#include "StarTargets.h"
 #include "Transfer.h"
 #include "Replay.h"
 #include "TerrainDetail.h"
@@ -578,14 +579,54 @@ DLLEXPORT bool oapiSetShipClock (OBJHANDLE hVessel, double clockOfs)
 	return true;
 }
 
+DLLEXPORT void oapiSetShipWarp (double warp)
+{
+	g_pOrbiter->SetShipWarp (warp);
+}
+
+DLLEXPORT double oapiGetShipWarp ()
+{
+	return g_pOrbiter->ShipWarp ();
+}
+
+DLLEXPORT int oapiNamedStarCount ()
+{
+	return (int)startargets::Get ().Stars ().size ();
+}
+
+DLLEXPORT bool oapiGetNamedStar (int i, NAMEDSTAR *star)
+{
+	const startargets::Catalogue &cat = startargets::Get ();
+	if (!star || i < 0 || i >= (int)cat.Stars ().size ()) return false;
+	const startargets::Star &s = cat.Stars ()[i];
+	star->name = s.name.c_str ();
+	star->index = (int)s.index;
+	star->teff = s.teff;
+	star->lum = cat.Luminosity (i);
+	star->lumV = s.IsStar () ? std::pow (10.0, -0.4 * (s.mv - 4.83)) : 0.0;
+	star->radius = cat.Radius (i);
+	Vector x, v;
+	cat.State (i, td.SimT0, x, v);
+	star->pos = _V(x.x, x.y, x.z), star->vel = _V(v.x, v.y, v.z);
+	return true;
+}
+
 DLLEXPORT bool oapiRelTripSet (OBJHANDLE hVessel, const RELTRIPSPEC *spec)
 {
 	Vessel *v = (Vessel*)hVessel;
 	if (!v || !spec || !g_psys->isVessel (v)) return false;
-	reltravel::Settings &rs = v->RelTrip()->settings;
-	rs.target = (const Body*)spec->hTarget, rs.targetName.clear();
+	reltravel::Controller *c = v->RelTrip ();
+	reltravel::Settings &rs = c->settings;
 	rs.arrival = std::clamp (spec->arrival, 0, 2);
-	rs.altitude = std::max (spec->altitude, 0.0);
+	if (spec->hTarget || !spec->star) {
+		c->SetTarget ((const Body*)spec->hTarget);
+		rs.altitude = std::max (spec->altitude, 0.0);
+	} else {
+		int i = startargets::Get ().Find (spec->star);
+		if (i < 0) return false;
+		c->SetStar (i);
+		if (spec->altitude > 0.0) rs.altitude = spec->altitude;
+	}
 	rs.accel = std::clamp (spec->accel, 0.0, reltravel::MAX_ACCEL);
 	rs.fastest = spec->fastest != 0;
 	rs.tripTime = std::max (spec->tripTime, 1.0);
@@ -619,6 +660,13 @@ DLLEXPORT bool oapiRelTripInfo (OBJHANDLE hVessel, RELTRIPINFO *info)
 	info->hTarget = (OBJHANDLE)rs.target, info->arrival = rs.arrival;
 	info->altitude = rs.altitude, info->accel = rs.accel;
 	info->fastest = rs.fastest ? 1 : 0, info->setTime = rs.tripTime;
+	if (rs.star >= 0) strncpy (info->star, c->TargetName ().c_str(), sizeof (info->star) - 1);
+	if (c->HasTarget ()) {
+		Vector x, vv;
+		c->TargetState (td.SimT0, x, vv);
+		info->distance = (x - v->GPos ()).length ();
+		info->speed = relativity::AddVelocity (-vv, v->GVel ()).length ();
+	}
 	strncpy (info->message, c->Message ().c_str(), sizeof (info->message) - 1);
 	return true;
 }

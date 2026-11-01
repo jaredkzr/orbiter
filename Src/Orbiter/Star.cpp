@@ -10,6 +10,7 @@
 #include "Star.h"
 #include "Camera.h"
 #include "Log.h"
+#include "Psys.h"
 
 using namespace std;
 
@@ -56,8 +57,10 @@ void Star::Update (bool force)
 
 Vector Star::Pos2Barycentre (Vector &pos)
 {
-	// by definition, the barycentre of stars (root objects) is the origin
-	return Vector();
+	// by definition, the barycentre of stars (root objects) is the
+	// barycentre of the system: the global frame's origin unless it moved
+	extern PlanetarySystem *g_psys;
+	return g_psys ? -g_psys->Origin () : Vector();
 }
 
 Vector4 Star::GetLightColor ()

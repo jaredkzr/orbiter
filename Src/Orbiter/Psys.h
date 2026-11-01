@@ -154,6 +154,13 @@ public:
 	// gravity field at gpos for time t
 
 	Vector Gacc (const Vector &gpos, const Body *exclude = 0, const GFieldData *gfd = 0) const;
+
+	/// The global frame's origin relative to the barycentre of the system
+	/// (its root stars'): kept near the focus in deep space, for precision
+	/// far from the Sun (Orbiter::UpdateOrigin); else zero
+	const Vector &Origin () const { return origin; }
+	/// Move the origin by delta: every body's global position shifts by -delta
+	void ShiftOrigin (const Vector &delta);
 	// Acceleration vector due to gravitational forces at global position gpos for current time t0.
 	// If exclude != 0 then this object is omitted (to avoid objects interrogating themselves)
 	// If gfd != 0 then only g-sources from this list are computed
@@ -226,6 +233,7 @@ public:
 private:
 	std::string m_Name; // system's name
 
+	Vector origin;
 	std::vector<Body*  > bodies;
 	std::vector<Star*  > stars;
 	std::vector<Planet*> planets;

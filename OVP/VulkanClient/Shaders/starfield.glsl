@@ -5,10 +5,35 @@
 // them from Config/CSphere/Sky/stars.bin)
 
 struct Star {
-	vec3 pos;    // heliocentric Galactic [pc], at the observer's epoch
-	uint packed; // M_V: bits 0-11 ((M_V + 12) * 100); temperature index: 12-19;
-	             // A_V from the Sun: 20-30 (* 100); the Sun: bit 31
+	float px, py, pz; // heliocentric Galactic [pc]: as seen from the Sun at the catalogue's epoch
+	uint packed;      // M_V: bits 0-11 ((M_V + 12) * 100); temperature index: 12-19;
+	                  // A_V from the Sun: 20-30 (* 100); the Sun: bit 31
+	uint vel;         // velocity relative to the Sun (Galactic, km/s): x + 1024 in bits 0-10,
+	                  // y + 1024 in 11-21, z + 512 in 22-31
 };
+const uint STAR_VEL_ZERO = 1024u | (1024u << 11) | (512u << 22);
+const float STAR_LY_PER_PC = 3.2615638, STAR_PC_PER_KMS_YEAR = 1.0227122e-6;
+
+vec3 StarPos0 (Star s) { return vec3 (s.px, s.py, s.pz); }
+vec3 StarVel (Star s) { return vec3 (float (s.vel & 0x7ffu) - 1024.0, float ((s.vel >> 11) & 0x7ffu) - 1024.0, float (s.vel >> 22) - 512.0); }
+
+// A star's position [pc] as seen from obs, `years' after the catalogue's
+// epoch: where it was when the light now arriving left it (the catalogue
+// has it where it was seen from the Sun, d0/c after its light left).
+// Moving at v: now at X = p0 + v (years + d0/c); seen at p0 + v (years +
+// (d0 - |X - obs|)/c).
+vec3 StarSeenPos (Star s, vec3 obs, float years)
+{
+	vec3 p0 = StarPos0 (s);
+	if (s.vel == STAR_VEL_ZERO) return p0;
+	vec3 v = StarVel (s) * STAR_PC_PER_KMS_YEAR; // [pc/yr]
+	float d0 = length (p0) * STAR_LY_PER_PC;    // [yr]
+	vec3 X = p0 + v * (years + d0);
+	return p0 + v * (years + d0 - length (X - obs) * STAR_LY_PER_PC);
+}
+
+// the two glare halos' shares of a star's light
+const vec2 STAR_GLARE_FRAC = vec2 (0.08, 0.02);
 
 // header of a selection list: the indirect draw's arguments, then the
 // list's capacity

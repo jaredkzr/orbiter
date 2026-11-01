@@ -85,6 +85,7 @@ namespace {
 
 	// shadows are cast within this range of the camera target, in units of
 	// the camera distance (plus the target's size)
+	constexpr double COSMIC_BG_DOPPLER = 1.5; // the extragalactic background drawn where seen at a larger Doppler factor (at rest: ~1/30 of the darkest sky)
 	constexpr double SHADOW_RANGE = 1.5;
 	constexpr double SHADOW_RADIUS_MIN = 20.0, SHADOW_RADIUS_MAX = 5000.0; // [m]
 	// cascades around the camera [m]; each is used if the previous one is
@@ -1198,6 +1199,77 @@ VECTOR3 Scene::RelApparentView (const VECTOR3 &p) const
 	return a * (r * g * (1.0 + nb));
 }
 
+void Scene::StarDiscRGB (double teff, float rgb[3])
+{
+	// (a black body at T is the Sun's spectrum seen at Doppler factor T / T_sun)
+	double one[3] = { 1.0, 1.0, 1.0 }, c[3];
+	DopplerShiftRGB (one, teff / 5772.0, c);
+	for (int k = 0; k < 3; k++) rgb[k] = (float)c[k];
+}
+
+void Scene::UpdateNearStars ()
+{
+	nearStars.clear ();
+	constexpr double AU_M = 1.49597870700e11;
+	// the Sun
+	light = StarLight ();
+	if (hSun) {
+		oapiGetGlobalPos (hSun, &light.pos);
+		light.radius = oapiGetSize (hSun);
+		double d = std::max (length (light.pos - camPos), 1.0);
+		light.flux = (AU_M / d) * (AU_M / d);
+	}
+	sunAsBody = light.flux >= NEAR_FLUX;
+	// named stars near the camera (the first entry is the Galactic Centre: a point)
+	int n = oapiNamedStarCount ();
+	for (int i = 1; i < n; i++) {
+		NAMEDSTAR s;
+		if (!oapiGetNamedStar (i, &s) || s.teff <= 0.0 || s.index < 0) continue;
+		double d = std::max (length (s.pos - camPos), 1.0);
+		double flux = s.lumV * (AU_M / d) * (AU_M / d);
+		if (flux < NEAR_FLUX) continue;
+		nearStars.push_back (NearStar{ s.index, s.pos, s.radius, s.teff, flux, d });
+		if (flux > light.flux) {
+			light.pos = s.pos, light.radius = s.radius, light.teff = s.teff, light.flux = flux;
+			light.sun = false;
+		}
+	}
+}
+
+void Scene::RenderNearStars (bool transparent)
+{
+	// as the Sun (VPlanet): a disc far brighter than any lit surface, and
+	// glare about it with a least apparent size
+	constexpr float STAR_BRIGHTNESS = 20.0f, STAR_GLOW = 2.0f;
+	constexpr double STAR_GLOW_SIZE = 6.0, STAR_GLOW_MIN_ANGLE = 0.02;
+	for (const NearStar &s : nearStars) {
+		float c[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+		StarDiscRGB (s.teff, c);
+		RelShiftColour (s.pos, c);
+		if (!transparent) {
+			if (PixelSize (s.radius, s.dist) < 0.5) continue;
+			float d[4] = { c[0] * STAR_BRIGHTNESS, c[1] * STAR_BRIGHTNESS, c[2] * STAR_BRIGHTNESS, 1.0f };
+			MATRIX3 I = _M(1, 0, 0, 0, 1, 0, 0, 0, 1);
+			DrawSphere (ModelView (s.pos, I) * Mat4::Scale (s.radius, s.radius, s.radius), d, true);
+			continue;
+		}
+		VECTOR3 vp = RelApparentView (ViewPos (s.pos));
+		if (vp.z <= 0.0) continue;
+		// (its glare: the optics' response to its light, of its colour, as the
+		// Sun's while it is a body: not its disc's radiance, a red dwarf's a
+		// few hundredths of the Sun's; at least of the minimum size)
+		double h = std::max (s.radius * STAR_GLOW_SIZE, vp.z * STAR_GLOW_MIN_ANGLE);
+		double f = STAR_GLOW / std::max (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2], 1e-6);
+		float x = (float)vp.x, y = (float)vp.y, z = (float)vp.z, hh = (float)h;
+		float r = (float)(c[0] * f), g = (float)(c[1] * f), b = (float)(c[2] * f);
+		PVtx q[4] = {
+			{ x - hh, y - hh, z, 0.0f, 0.0f, r, g, b, 1 }, { x + hh, y - hh, z, 1.0f, 0.0f, r, g, b, 1 },
+			{ x + hh, y + hh, z, 1.0f, 1.0f, r, g, b, 1 }, { x - hh, y + hh, z, 0.0f, 1.0f, r, g, b, 1 } };
+		PVtx v[6] = { q[0], q[1], q[2], q[0], q[2], q[3] };
+		DrawBillboards (GlowTex (), true, v, 6, true);
+	}
+}
+
 void Scene::RelShiftColour (const VECTOR3 &gpos, float rgb[3]) const
 {
 	if (!relOn) return;
@@ -1234,8 +1306,7 @@ void Scene::RenderShadows ()
 		oapiGetGlobalPos (hTgt, &c);
 		size = oapiGetSize (hTgt);
 	}
-	VECTOR3 sp;
-	oapiGetGlobalPos (hSun, &sp);
+	VECTOR3 sp = light.pos; // (the light: the Sun, or a star near the camera)
 	auto render = [&](int i, const VECTOR3 &centre, double radius) {
 		shadows[i]->Begin (centre, radius, unit (sp - centre));
 		for (auto &it : visuals) it.second->RenderShadow (*shadows[i]);
@@ -1256,7 +1327,7 @@ void Scene::RenderShadows ()
 
 double Scene::SunVisibility (const VECTOR3 &gpos, OBJHANDLE exclude) const
 {
-	if (!hSun) return 1.0;
+	if (!hSun || !light.sun) return 1.0; // (another star's light: no bodies about it)
 	VECTOR3 sp;
 	oapiGetGlobalPos (hSun, &sp);
 	VECTOR3 s = sp - gpos;
@@ -1530,6 +1601,7 @@ void Scene::BeginFrame ()
 	ctx->GpuMark ("begin");
 	if (galaxy) galaxy->Update (SkyObserver (), oapiGetSysStep ());
 	ctx->GpuMark ("skybake");
+	UpdateNearStars ();
 	if (starField && skySettings.stars) {
 		// (the Sun is drawn as a body; the catalogue's Sun only far from it,
 		// where the observer is placed elsewhere)
@@ -1538,7 +1610,11 @@ void Scene::BeginFrame ()
 		double G[3][3], bg[3] = { 0.0, 0.0, 0.0 };
 		galactic::EclipticToGalactic (G);
 		for (int i = 0; i < 3 && relOn; i++) bg[i] = G[i][0] * relBeta.x + G[i][1] * relBeta.y + G[i][2] * relBeta.z;
-		starField->Update (o, std::sqrt (o.pos[0] * o.pos[0] + o.pos[1] * o.pos[1] + o.pos[2] * o.pos[2]) < 0.01, bg);
+		// (the stars drawn as bodies left out: the Sun while bright, those near)
+		std::vector<int> excl;
+		for (const NearStar &s : nearStars) excl.push_back (s.index);
+		starField->SetExcluded (excl);
+		starField->Update (o, sunAsBody, bg);
 		ctx->GpuMark ("starselect");
 	}
 	// the previous frame does not continue into this one (camera cut)
@@ -1665,17 +1741,21 @@ void Scene::FillFrameUniforms (void *pfu)
 	fu.aoParams[1] = 1.0f / ao->Extent().height;
 	fu.aoParams[2] = ao->directFrac;
 	memcpy (fu.proj, proj, sizeof(proj));
+	// the light: the Sun, or a star near the camera; in its colour, the
+	// Sun's white, fading where its flux falls below the Sun's at 100 AU
 	VECTOR3 sunDir = _V(1, 0, 0);
-	if (hSun) {
-		VECTOR3 sp;
-		oapiGetGlobalPos (hSun, &sp);
-		sunDir = sp - camPos;
+	if (hSun || !light.sun) {
+		sunDir = light.pos - camPos;
 		double len = length (sunDir);
 		if (len > 0) sunDir /= len;
 	}
 	VECTOR3 sv = view.TransformPoint (sunDir);
 	fu.sunDir[0] = (float)sv.x, fu.sunDir[1] = (float)sv.y, fu.sunDir[2] = (float)sv.z;
-	fu.sunColor[0] = fu.sunColor[1] = fu.sunColor[2] = 1.0f;
+	float lightRGB[3];
+	StarDiscRGB (light.teff, lightRGB);
+	double lightLum = 0.2126 * lightRGB[0] + 0.7152 * lightRGB[1] + 0.0722 * lightRGB[2];
+	double lightScale = std::min (1.0, light.flux / NEAR_FLUX) / std::max (lightLum, 1e-6);
+	for (int k = 0; k < 3; k++) fu.sunColor[k] = (float)(lightRGB[k] * lightScale);
 	// relativistic view: the sunlight on the camera's own vessel in its frame,
 	// from the aberrated direction, Doppler shifted (radiance), on a disc 1/D^2
 	// the solid angle (irradiance)
@@ -1685,9 +1765,11 @@ void Scene::FillFrameUniforms (void *pfu)
 		VECTOR3 n = (sunDir + relBeta * (g * g / (g + 1.0) * nb + g)) / (g * (1.0 + nb));
 		VECTOR3 nv = view.TransformPoint (unit (n));
 		for (int k = 0; k < 3; k++) fu.relSunDir[k] = (float)nv.data[k];
-		double D = g * (1.0 + nb), one[3] = { 1.0, 1.0, 1.0 }, c[3];
-		DopplerShiftRGB (one, D, c);
-		for (int k = 0; k < 3; k++) fu.relSunColor[k] = (float)(c[k] / (D * D));
+		// (a black body of T seen at D: one of D T)
+		double D = g * (1.0 + nb);
+		float c[3];
+		StarDiscRGB (light.teff * D, c);
+		for (int k = 0; k < 3; k++) fu.relSunColor[k] = (float)(c[k] * lightScale / (D * D));
 	}
 	// ambient light: the user's ambient level, plus skylight in daylight
 	// inside an atmosphere (tinted with the sky colour)
@@ -1815,11 +1897,8 @@ void Scene::RenderPrepass ()
 		ctx->GpuMark ("rt build");
 		if (rtl->Enabled () && !relOn) {
 			double sunRadius = 0.0047;
-			if (hSun) {
-				VECTOR3 sp;
-				oapiGetGlobalPos (hSun, &sp);
-				sunRadius = asin (std::min (1.0, oapiGetSize (hSun) / length (sp - camPos)));
-			}
+			if (hSun || !light.sun) // (the light's disc)
+				sunRadius = asin (std::min (1.0, light.radius / std::max (length (light.pos - camPos), 1.0)));
 			rtl->Compute (frameSet[ctx->FrameIndex()], rt->Set (), rt->TextureSet (), proj[0], -proj[5], jitter, (float)sunRadius, cameraCut);
 			ctx->GpuMark ("rt lighting");
 		}
@@ -1830,11 +1909,7 @@ void Scene::RenderPrepass ()
 	{
 		VkDescriptorSet rtSets[2] = { rt && rt->Enabled () ? rt->Set () : VK_NULL_HANDLE, rt && rt->Enabled () ? rt->TextureSet () : VK_NULL_HANDLE };
 		VECTOR3 sunDir = _V(1, 0, 0);
-		if (hSun) {
-			VECTOR3 sp;
-			oapiGetGlobalPos (hSun, &sp);
-			sunDir = unit (sp - camPos);
-		}
+		if (hSun || !light.sun) sunDir = unit (light.pos - camPos);
 		particles->Simulate (camPos, sunDir, frameSet[ctx->FrameIndex()], camAtmSet, rtSets[0] ? rtSets : nullptr, oapiGetSimTime ());
 		particles->RenderScreenSmoke (frameSet[ctx->FrameIndex()]);
 		ctx->GpuMark ("particles");
@@ -2024,9 +2099,31 @@ void Scene::Render ()
 			}
 			VECTOR3 bv = RelBetaView ();
 			float bvf[3] = { (float)bv.x, (float)bv.y, (float)bv.z };
-			galaxy->Render (cmd, R, (float)ProjX (), (float)ProjY (), d, bvf);
+			if (!getenv ("ORBITER_VK_SKY_COSMIC_ONLY")) galaxy->Render (cmd, R, (float)ProjX (), (float)ProjY (), d, bvf);
+			// the extragalactic background, seen moving relative to the cosmic
+			// microwave background: the Solar System's barycentre at 369.82 km/s
+			// towards l 264.021, b 48.253 (Planck 2018), the camera's velocity
+			// added (relativistically); drawn where it is shifted to be seen
+			{
+				const double DEG = 3.14159265358979323846 / 180.0;
+				double l = 264.021 * DEG, b = 48.253 * DEG, gd[3] = { std::cos (b) * std::cos (l), std::cos (b) * std::sin (l), std::sin (b) };
+				VECTOR3 V = _V(G[0][0] * gd[0] + G[1][0] * gd[1] + G[2][0] * gd[2],
+				               G[0][1] * gd[0] + G[1][1] * gd[1] + G[2][1] * gd[2],
+				               G[0][2] * gd[0] + G[1][2] * gd[1] + G[2][2] * gd[2]) * (369.82e3 / 299792458.0);
+				VECTOR3 v = relOn ? relBeta : _V(0, 0, 0);
+				double gV = 1.0 / std::sqrt (1.0 - dotp (V, V)), Vv = dotp (V, v);
+				VECTOR3 u = (V + v / gV + V * (gV / (1.0 + gV) * Vv)) / (1.0 + Vv);
+				double ul = std::min (length (u), 1.0 - 1e-15);
+				// (ORBITER_VK_SKY_COSMIC=0: none; ORBITER_VK_SKY_COSMIC_ONLY: it alone, the Milky Way and the stars left out)
+				const char *ce = getenv ("ORBITER_VK_SKY_COSMIC");
+				if ((!ce || atoi (ce) != 0) && std::sqrt ((1.0 + ul) / (1.0 - ul)) > COSMIC_BG_DOPPLER) {
+					VECTOR3 uv = view.TransformPoint (u);
+					float uvf[3] = { (float)uv.x, (float)uv.y, (float)uv.z };
+					galaxy->RenderBackground (cmd, (float)ProjX (), (float)ProjY (), d, uvf);
+				}
+			}
 		}
-		if (starField && skySettings.stars) {
+		if (starField && skySettings.stars && !getenv ("ORBITER_VK_SKY_COSMIC_ONLY")) {
 			// Galactic direction -> ecliptic (G^T) -> clip
 			float gvp[16];
 			for (int r = 0; r < 4; r++) {
@@ -2056,6 +2153,7 @@ void Scene::Render ()
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &fset, 0, nullptr);
 	for (auto *vo : list)
 		if (dynamic_cast<VPlanet*>(vo)) vo->Render (RenderPass::Opaque);
+	RenderNearStars (false);
 	ctx->GpuMark ("planets");
 	for (auto *vo : list)
 		if (!dynamic_cast<VPlanet*>(vo)) vo->Render (RenderPass::Opaque);
@@ -2074,6 +2172,7 @@ void Scene::Render ()
 	}
 
 	std::sort (list.begin(), list.end(), [](VObject *a, VObject *b) { return a->CamDist() > b->CamDist(); });
+	RenderNearStars (true); // (glare: the farthest)
 	for (auto *vo : list) vo->Render (RenderPass::Transparent);
 
 	// heat shimmer behind the exhaust (before the plumes and particles)

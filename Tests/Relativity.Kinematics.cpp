@@ -20,7 +20,6 @@ using Catch::Matchers::WithinRel;
 
 namespace {
 	const double YEAR = 365.25 * 86400.0;
-	const double LY = C * YEAR;
 	const double AU = 1.495978707e11;
 
 	Vector RandomUnit (std::mt19937 &rng)

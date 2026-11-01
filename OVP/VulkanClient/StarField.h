@@ -39,6 +39,9 @@ public:
 	/// (relativistic view: beta, the observer's velocity, Galactic, units
 	/// of c: brightnesses seen moving; a change selects them again)
 	void Update (const galactic::Observer &obs, bool hideSun, const double beta[3] = nullptr);
+	/// Stars (indices) not drawn: drawn as bodies elsewhere (at most MAX_EXCLUDED)
+	void SetExcluded (const std::vector<int> &idx);
+	static constexpr int MAX_EXCLUDED = 4;
 
 	/// Draw the stars (in the scene pass). galViewProj: Galactic direction
 	/// -> clip (column-major); fx, fy: the projection's scale; gain: scene
@@ -68,7 +71,10 @@ private:
 	std::vector<SkyObjects::Cluster> clusters; // globular clusters
 	float catLimit = 0.0f, catNear = 0.0f;  // the catalogue's completeness
 	int front = 0;
+	uint32_t excluded[MAX_EXCLUDED] = { ~0u, ~0u, ~0u, ~0u };
 	galactic::Observer listObs, selObs, curObs;
+	double catEpoch = 2016.0; // [Julian years] the catalogue's
+	double Years (const galactic::Observer &o) const { return (o.mjd - 51544.5) / 365.25 + 2000.0 - catEpoch; } // since the catalogue's epoch
 	double listBeta[3] = { 0, 0, 0 }, selBeta[3] = { 0, 0, 0 }; // relativistic view: the velocities selected for
 	float ext[4] = { 0, 0, 0, 0 };          // extinction per band per A_V
 	bool selecting = false, selHideSun = true, listHideSun = true;

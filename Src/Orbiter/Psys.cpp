@@ -914,6 +914,14 @@ void PlanetarySystem::FinaliseUpdate ()
 	for (Debris *d : debris) d->PostUpdate ();
 }
 
+void PlanetarySystem::ShiftOrigin (const Vector &delta)
+{
+	origin += delta;
+	for (Body *b : bodies) b->ShiftOrigin (delta);
+	for (SuperVessel *sv : supervessels) sv->ShiftOrigin (delta);
+	for (Debris *d : debris) d->ShiftOrigin (delta);
+}
+
 void PlanetarySystem::Timejump (const TimeJumpData& jump)
 {
 	DWORD i;

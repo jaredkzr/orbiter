@@ -13,6 +13,7 @@
 #include "Astro.h"
 #include "Maneuver.h"
 #include "Log.h"
+#include "StarTargets.h"
 #include <algorithm>
 #include <cmath>
 
@@ -31,7 +32,9 @@ namespace reltravel {
 		const double EPS_TAU = 1e-4;           // [s] a burn shorter than this is done
 		const int MAX_FAILS = 100;             // steps without a trip before giving up
 		const double EVENT_FRAMES = 30.0;      // time warp lowered when a burn's end is fewer steps ahead
+		const double RESTORE_FRAMES = 100.0;   // a ship-time warp lowered for an event raised back when the next is more steps ahead (x10)
 		const double IDEAL_TURN_RATE = 5.0 * RAD; // [rad/s] turns without attitude thrusters
+		const double MAX_RCS_STEP = 10.0;      // [s] longer steps on the vessel's clock: turns without attitude thrusters
 		const double FLIP_COAST = 10.0;        // [s] coast planned between the burns (the drive reverses: no turn; a margin)
 		const double REVERSE_HYST = 0.5;       // the drive's end changes when the other is this much nearer (cosine)
 		const double FREEZE_FRAMES = 3.0;      // the guidance is held over the last steps
@@ -43,6 +46,9 @@ namespace reltravel {
 		const double HOLD_LEAD = 300.0;        // [s] until this long before the braking
 		const double STOP_DIST = 10.0;         // [m] arrived when this close to the point,
 		const double STOP_SPEED = 1.0;         // [m/s] and this slow relative to it
+		const double REPLAN_MISS = 1000.0;     // [m] stopped farther from the arrival: a new approach
+		const int MAX_REPLANS = 5;
+		const double REPLAN_BRAKE = 0.01;      // (braking at less than this part of the drive)
 
 		/// Arrival later than the soonest (T0 from now) by this, for a coast
 		/// of FLIP_COAST between the burns: the coast grows as sqrt (2 T0 dT)
@@ -95,11 +101,41 @@ namespace reltravel {
 
 	bool Controller::Resolve ()
 	{
-		if (!settings.target && !settings.targetName.empty()) {
-			settings.target = g_psys->GetObj (settings.targetName.c_str(), true);
-			if (settings.target) settings.targetName.clear();
+		if (!settings.target && settings.star < 0 && !settings.targetName.empty()) {
+			const std::string &n = settings.targetName;
+			if (!n.compare (0, 5, "star:")) settings.star = startargets::Get ().Find (n.c_str() + 5);
+			else settings.target = g_psys->GetObj (n.c_str(), true);
+			if (HasTarget ()) settings.targetName.clear();
 		}
+		if (settings.star >= 0) return settings.star < (int)startargets::Get ().Stars ().size ();
 		return settings.target && settings.target != vessel;
+	}
+
+	std::string Controller::TargetName () const
+	{
+		if (settings.star >= 0 && settings.star < (int)startargets::Get ().Stars ().size ())
+			return startargets::Get ().Stars ()[settings.star].name;
+		return settings.target ? settings.target->Name () : settings.targetName;
+	}
+
+	void Controller::TargetState (double t, Vector &x, Vector &v) const
+	{
+		if (settings.star >= 0) startargets::Get ().State (settings.star, t, x, v);
+		else if (settings.target) BodyState (settings.target, t, x, v);
+		else x = v = Vector ();
+	}
+
+	void Controller::SetTarget (const Body *b)
+	{
+		settings.target = b, settings.star = -1, settings.targetName.clear ();
+		if (settings.altitude > 1e12) settings.altitude = 1e6; // (from a star's distance)
+	}
+
+	void Controller::SetStar (int i)
+	{
+		settings.target = nullptr, settings.star = i, settings.targetName.clear ();
+		if (i >= 0) settings.altitude = startargets::Get ().ArrivalDistance (i);
+		if (settings.arrival == ARRIVE_ORBIT) settings.arrival = ARRIVE_REST; // (a point: no orbit)
 	}
 
 	bool Controller::Solve (Plan &p, double tArr, const Plan *warm)
@@ -108,6 +144,7 @@ namespace reltravel {
 		p.planned = td.SimT0;
 		if (!Resolve ()) return false;
 		const Body *tg = settings.target;
+		const int star = settings.star;
 		relativity::State &s = p.spec.start;
 		s.t = td.SimT0, s.tau = 0.0;
 		s.x = vessel->GPos(), s.u = UOfVelocity (vessel->GVel());
@@ -122,14 +159,16 @@ namespace reltravel {
 
 		// arrival: on the side the vessel comes from, at the altitude (a
 		// flyby: beside the target, across the approach)
-		Vector a (vessel->GPos() - tg->GPos());
+		Vector tx, tv;
+		TargetState (td.SimT0, tx, tv);
+		Vector a (vessel->GPos() - tx);
 		a = a.length() > 1.0 ? a.unit() : Vector (1, 0, 0);
 		if (settings.arrival == ARRIVE_FLYBY) {
 			Vector n (crossp (a, Vector (0, 1, 0)));
 			if (n.length() < 1e-3) n = crossp (a, Vector (1, 0, 0));
 			a = n.unit();
 		}
-		double r = tg->Size() + settings.altitude;
+		double r = (tg ? tg->Size() : 0.0) + settings.altitude; // (a star: from its centre)
 		const CelestialBody *cb = dynamic_cast<const CelestialBody*> (tg);
 		bool orbit = settings.arrival == ARRIVE_ORBIT && cb && cb->Mass() > 0.0;
 		Vector vorb;
@@ -140,8 +179,9 @@ namespace reltravel {
 			if (t.length() < 1e-3) t = crossp (Vector (1, 0, 0), a);
 			vorb = t.unit() * std::sqrt (Ggrav * cb->Mass() / r);
 		}
-		p.spec.target = [tg, a, r, orbit, vorb](double t, Vector &x, Vector &v) {
-			BodyState (tg, t, x, v);
+		p.spec.target = [tg, star, a, r, orbit, vorb](double t, Vector &x, Vector &v) {
+			if (star >= 0) startargets::Get ().State (star, t, x, v);
+			else BodyState (tg, t, x, v);
 			x += a * r;
 			if (orbit) v += vorb;
 		};
@@ -192,9 +232,9 @@ namespace reltravel {
 		tArrive = settings.fastest ? 0.0 : td.SimT0 + settings.tripTime;
 		phase = PH_ALIGN;
 		aligned = guided = stopped = false;
-		fails = 0;
+		fails = replans = 0;
 		message = "Engaged";
-		LOGOUT ("Relativistic travel: %s to %s, %.4g g, %s", vessel->Name(), settings.target->Name(),
+		LOGOUT ("Relativistic travel: %s to %s, %.4g g, %s", vessel->Name(), TargetName ().c_str(),
 			settings.accel / G0, settings.fastest ? "as soon as possible" : "at a set time");
 		return true;
 	}
@@ -228,8 +268,17 @@ namespace reltravel {
 		// (-z towards dir: +z away from it; attitude thrusters if they can,
 		// else the ideal drive turns the vessel)
 		Vector tgt (dir * driveSign);
-		if (vessel->AttitudeThrustersUsable ()) return vessel->SteerTowards (tgt, Vector (0, 0, 1));
+		if (!IdealTurns ()) return vessel->SteerTowards (tgt, Vector (0, 0, 1));
 		return vessel->TurnTowards (tgt, Vector (0, 0, 1), IDEAL_TURN_RATE * td.SimDT);
+	}
+
+	bool Controller::IdealTurns () const
+	{
+		// (attitude thrusters can't hold an attitude over steps this long on
+		// the vessel's clock; under a ship-time warp the trip is the drive's
+		// throughout, the final corrections too)
+		double shipStep = td.SimDT / Gamma (vessel->GVel().length());
+		return !vessel->AttitudeThrustersUsable () || shipStep > MAX_RCS_STEP || g_pOrbiter->ShipWarp () > 0.0;
 	}
 
 	void Controller::Drive (const Vector &alpha, double tEnd)
@@ -250,12 +299,26 @@ namespace reltravel {
 
 	void Controller::LimitWarp (double tEvent)
 	{
-		// time warp: lowered ahead of an event (a burn's end, the arrival), and while turning far
+		// time warp: lowered ahead of an event (a burn's end, the arrival), and
+		// while turning far. A ship-time warp lowered for an event is raised
+		// back once the next is far (a trip of years spans many events' worth
+		// of steps); one the user changed is left as set.
 		double w = td.Warp();
-		if (w <= 1.0) return;
 		double frames = (tEvent - td.SimT0) / std::max (td.SimDT, 1e-9);
-		if (frames < EVENT_FRAMES) g_pOrbiter->SetWarpFactor (std::max (1.0, w * 0.1));
-		else if (attErr > 5.0 * RAD && w > 10.0) g_pOrbiter->SetWarpFactor (10.0);
+		double sw = g_pOrbiter->ShipWarp ();
+		if (sw != warpLastSet) warpRestore = 0.0; // (the user's)
+		if (w > 1.0 && frames < EVENT_FRAMES) {
+			// (to the event in EVENT_FRAMES steps: approached geometrically)
+			if (sw > 0.0 && warpRestore <= 0.0) warpRestore = sw;
+			g_pOrbiter->CapWarp (std::max (1.0, w * std::max (0.1, frames / EVENT_FRAMES)));
+		} else if (w > 10.0 && attErr > 5.0 * RAD && !IdealTurns ()) {
+			if (sw > 0.0 && warpRestore <= 0.0) warpRestore = sw;
+			g_pOrbiter->CapWarp (10.0);
+		} else if (sw > 0.0 && warpRestore > sw && frames > 10.0 * RESTORE_FRAMES) {
+			g_pOrbiter->SetShipWarp (std::min (warpRestore, sw * 10.0));
+		}
+		if (warpRestore > 0.0 && g_pOrbiter->ShipWarp () >= warpRestore) warpRestore = 0.0;
+		warpLastSet = g_pOrbiter->ShipWarp ();
 	}
 
 	void Controller::Update ()
@@ -267,7 +330,7 @@ namespace reltravel {
 		// arrived (a flyby: at the time; a rendezvous: braked to rest, Guide)
 		if (guided && now >= tArrive - 1e-6 && (settings.arrival == ARRIVE_FLYBY || stopped)) {
 			char buf[128];
-			snprintf (buf, sizeof (buf), "Arrived at %s", settings.target->Name());
+			snprintf (buf, sizeof (buf), "Arrived at %s", TargetName ().c_str());
 			Stop (PH_ARRIVED, buf);
 			return;
 		}
@@ -319,7 +382,9 @@ namespace reltravel {
 		}
 		phase = PH_BURN1;
 		Drive (alpha, tEnd);
-		LimitWarp (tEnd);
+		// (the time warp against the arrival: the burn's end falls within a
+		// step exactly, the drive cut off there)
+		LimitWarp (std::max (tEnd, tArrive > now ? tArrive : tr.tArrive));
 		// the first burn ends in this step: guided from here to the arrival
 		if (tEnd <= td.SimT1 || tr.burns[0].dtau <= EPS_TAU) {
 			guided = true;
@@ -375,6 +440,23 @@ namespace reltravel {
 			Vector side (r - n * D);
 			double areq = D > 0.0 ? C * C * gm1 / D : DRIVE_MARGIN * settings.accel;
 			double amax = std::min (DRIVE_MARGIN * settings.accel, Vessel::RELDRIVE_MAX_ACCEL);
+			// (stopped short: the braking asks next to nothing of the drive, a
+			// miss left that it doesn't take out: a fresh trip from here,
+			// rather than creeping the rest)
+			double miss = r.length();
+			if (phase == PH_BURN2 && miss > REPLAN_MISS && areq < REPLAN_BRAKE * settings.accel && replans < MAX_REPLANS) {
+				replans++;
+				LOGOUT ("Relativistic travel: %s stopped %.3g km short of the arrival: a new approach", vessel->Name(), miss * 1e-3);
+				guided = stopped = false;
+				tArrive = 0.0;
+				phase = PH_BURN1;
+				cur = Plan (), fails = 0; // (no warm start from the long trip's plan)
+				vessel->SetRelDrive (settings.accel, false);
+				// (the time warp down to the hop: ~2 sqrt (miss / a) long)
+				double hop = 2.0 * std::sqrt (miss / settings.accel);
+				g_pOrbiter->CapWarp (std::max (1.0, hop / (3.0 * EVENT_FRAMES * std::max (td.SimDT / std::max (td.Warp (), 1e-9), 1e-3))));
+				return;
+			}
 			burn = phase == PH_BURN2 || areq >= BRAKE_START * settings.accel;
 			double a = burn ? std::min (areq, amax) : settings.accel;
 			double tstop = us / std::max (a, 1e-9);

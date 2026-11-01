@@ -2325,6 +2325,7 @@ void VPlanet::Render (RenderPass pass)
 		if (cities) cities->Render (pass);
 		return;
 	}
+	if (isStar && !scene->SunAsBody ()) return; // (far: a point of the star field)
 	if (pass == RenderPass::Transparent) {
 		if (isStar) { RenderGlow (); return; }
 		for (auto &b : bases) b->Render (pass);

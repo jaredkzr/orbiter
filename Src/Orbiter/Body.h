@@ -162,6 +162,11 @@ public:
 
 	inline const Vector &Acceleration() const { return acc; };
 
+	/// The global frame's origin moved by delta (PlanetarySystem::ShiftOrigin):
+	/// the body's global positions follow
+	void ShiftOrigin (const Vector &delta)
+	{ sv[0].pos -= delta; sv[1].pos -= delta; rpos_base -= delta; }
+
 protected:
 	double mass { 0.0 };         // current body mass [kg]
 	double size { 0.0 };         // (mean) body radius [m]

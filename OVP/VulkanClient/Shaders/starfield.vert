@@ -28,7 +28,7 @@ layout(push_constant) uniform Draw {
 	mat4 viewProj;  // Galactic direction -> clip
 	vec4 observer;  // xyz: heliocentric Galactic position [pc]; w: limiting magnitude
 	vec4 sprite;    // xy: 2 / viewport size [px]; z: core sigma [px]; w: radiance of 1 S10 deg^2 on a pixel at the centre
-	vec4 glare;     // xy: sigma of the two glare halos [px]; zw: their fractions of the light
+	vec4 glare;     // xy: sigma of the two glare halos [px]; z: years since the catalogue's epoch
 	vec4 misc;      // x: radiance of 1 S10; yzw: the camera's velocity (Galactic, units of c)
 } pc;
 
@@ -47,7 +47,7 @@ void main ()
 	uvec2 e = list.entries[k];
 	Star s = (e.x & STAR_GENERATED) != 0u ? gen.stars[e.x & ~STAR_GENERATED] : stars[e.x];
 	float A = uintBitsToFloat (e.y);
-	vec3 d = s.pos - pc.observer.xyz;
+	vec3 d = StarSeenPos (s, pc.observer.xyz, pc.glare.z) - pc.observer.xyz;
 	float r = length (d);
 	float m0 = StarAbsMag (s) + StarDistModulus (r);
 	vec3 n = d / r;
@@ -82,7 +82,7 @@ void main ()
 	float thr = GLARE_MIN * pc.misc.x;
 	for (int i = 0; i < 2; i++) {
 		float sg = pc.glare[i];
-		float peak = lum * pc.glare[i + 2] / (6.2831853 * sg * sg);
+		float peak = lum * STAR_GLARE_FRAC[i] / (6.2831853 * sg * sg);
 		if (peak > thr) R = max (R, sg * sqrt (2.0 * log (peak / thr)));
 	}
 	R = min (R, 512.0);

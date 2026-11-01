@@ -61,6 +61,9 @@ public:
 	/// galFromView: rotation view -> Galactic, row-major; fx, fy: the
 	/// projection's scale
 	void Render (VkCommandBuffer cmd, const double galFromView[3][3], float fx, float fy, const Display &display, const float relBetaView[3] = nullptr);
+	/// The extragalactic background light seen moving at betaView (relative
+	/// to the cosmic microwave background, view space, units of c), added
+	void RenderBackground (VkCommandBuffer cmd, float fx, float fy, const Display &display, const float betaView[3]);
 
 	/// Surface brightness [S10 per band] of the current bake in a Galactic
 	/// direction (CPU readback, for tests); writes an equirectangular image
@@ -195,7 +198,7 @@ private:
 	VkDescriptorSet bakeSet[2] = {};   // per target cube
 	VkDescriptorSet drawSet[2][2] = {}; // per front cube: [0] the front cube alone, [1] fading to the other
 	VkPipelineLayout bakePL = VK_NULL_HANDLE, drawPL = VK_NULL_HANDLE;
-	VkPipeline bakePipe = VK_NULL_HANDLE, drawPipe = VK_NULL_HANDLE;
+	VkPipeline bakePipe = VK_NULL_HANDLE, drawPipe = VK_NULL_HANDLE, bgPipe = VK_NULL_HANDLE;
 };
 
 #endif // !__GALAXYSKY_H

@@ -419,6 +419,9 @@ protected:
 	static int oapi_transfer_correct (lua_State *L);
 	static int oapi_transfer_info (lua_State *L);
 	static int oapi_set_reldrive (lua_State *L);
+	static int oapi_set_shipwarp (lua_State *L);
+	static int oapi_get_shipwarp (lua_State *L);
+	static int oapi_get_namedstar (lua_State *L);
 	static int oapi_get_relstate (lua_State *L);
 	static int oapi_set_shipclock (lua_State *L);
 	static int oapi_reltrip_set (lua_State *L);

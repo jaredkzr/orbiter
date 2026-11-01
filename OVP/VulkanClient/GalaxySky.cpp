@@ -18,6 +18,7 @@
 #include "sky_bake.comp.h"
 #include "milkyway.vert.h"
 #include "milkyway.frag.h"
+#include "cosmicbg.frag.h"
 
 namespace {
 	constexpr int MAX_DISKS = 4, MAX_ARMS = 12, NPOP = 3, NLF = 257, NLEVEL = 3;
@@ -599,6 +600,11 @@ void GalaxySky::CreatePipelines ()
 		gpi.pColorBlendState = &cb, gpi.pDynamicState = &dy;
 		gpi.layout = drawPL;
 		VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &drawPipe));
+		// (the extragalactic background seen moving: alike, its own shader)
+		VkShaderModule bfs = ctx->CreateShaderModule (spv_cosmicbg_frag, spv_cosmicbg_frag_size);
+		stages[1].module = bfs;
+		VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &bgPipe));
+		vkDestroyShaderModule (ctx->device, bfs, nullptr);
 		vkDestroyShaderModule (ctx->device, vs, nullptr);
 		vkDestroyShaderModule (ctx->device, fs, nullptr);
 	}
@@ -807,6 +813,7 @@ void GalaxySky::Shutdown ()
 	asyncPool = VK_NULL_HANDLE, asyncCmd = VK_NULL_HANDLE, asyncDone = VK_NULL_HANDLE;
 	vkDestroyPipeline (ctx->device, bakePipe, nullptr);
 	vkDestroyPipeline (ctx->device, drawPipe, nullptr);
+	vkDestroyPipeline (ctx->device, bgPipe, nullptr);
 	vkDestroyPipelineLayout (ctx->device, bakePL, nullptr);
 	vkDestroyPipelineLayout (ctx->device, drawPL, nullptr);
 	vkDestroyDescriptorPool (ctx->device, pool, nullptr);
@@ -1013,6 +1020,20 @@ void GalaxySky::Render (VkCommandBuffer cmd, const double R[3][3], float fx, flo
 	p.tone[0] = PIVOT_S10 * dsp.gain, p.tone[1] = dsp.contrast, p.tone[2] = dsp.saturation, p.tone[3] = dsp.highlight;
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawPipe);
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawPL, 0, 1, &drawSet[front][fade > 0.0f ? 1 : 0], 0, nullptr);
+	vkCmdPushConstants (cmd, drawPL, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(p), &p);
+	vkCmdDraw (cmd, 3, 1, 0, 0);
+}
+
+void GalaxySky::RenderBackground (VkCommandBuffer cmd, float fx, float fy, const Display &dsp, const float betaView[3])
+{
+	if (!ready || !bgPipe) return;
+	struct { float beta[4]; float proj[4]; float colour[3][4]; } p{};
+	for (int i = 0; i < 3; i++) p.beta[i] = betaView[i];
+	p.proj[0] = 1.0f / fx, p.proj[1] = 1.0f / fy;
+	for (int k = 0; k < 3; k++)
+		for (int b = 0; b < NBAND; b++) p.colour[k][b] = (dsp.camera ? cameraColour : bandColour)[k][b] * dsp.gain;
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bgPipe);
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawPL, 0, 1, &drawSet[front][0], 0, nullptr);
 	vkCmdPushConstants (cmd, drawPL, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(p), &p);
 	vkCmdDraw (cmd, 3, 1, 0, 0);
 }

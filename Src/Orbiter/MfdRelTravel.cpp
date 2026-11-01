@@ -10,6 +10,7 @@
 #include "Psys.h"
 #include "Astro.h"
 #include "Util.h"
+#include "StarTargets.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -125,14 +126,14 @@ bool Instrument_RelTravel::Update (double upDTscale)
 void Instrument_RelTravel::UpdateDraw (oapi::Sketchpad *skp)
 {
 	reltravel::Controller *c = Trip ();
+	c->Resolve (); // (a target read by name)
 	mfdui::Context &ui = UI ();
 	ui.Begin (skp, (float)IW, (float)IH);
 	float u = ui.Unit ();
 
 	// title and the autopilot's state
 	char buf[160];
-	const Body *tgt = c->settings.target;
-	snprintf (buf, sizeof (buf), "Relativistic travel > %s", tgt ? tgt->Name() : "?");
+	snprintf (buf, sizeof (buf), "Relativistic travel > %s", c->HasTarget () ? c->TargetName ().c_str() : "?");
 	ui.TextIn (Rect (0.0f, 0.0f, IW * 0.68f, u), buf, col_grey1, mfdui::ALIGN_LEFT | mfdui::ALIGN_MIDDLE);
 	int ph = c->GetPhase ();
 	ui.TextIn (Rect (IW * 0.68f, 0.0f, IW - u * 0.3f, u), reltravel::PhaseName (ph),
@@ -166,41 +167,91 @@ void Instrument_RelTravel::DrawTarget (const RLayout &L)
 	float lw = a.W() * 0.36f;
 	bool engaged = c->Engaged ();
 
-	std::vector<const Body*> list;
-	std::vector<std::string> names;
-	Targets (vessel, list, names);
+	// the Solar System's bodies and vessels, or the named stars (by distance)
+	static const char *kinds[2] = { "Solar System", "Stars" };
+	if (s.star >= 0) targetKind = 1;
+	ui.Tabs ("kind", Rect (a.x0, a.y0, a.x1, a.y0 + rh - gap), kinds, 2, &targetKind);
+	Rect lr (a.x0, a.y0 + rh, a.x1, a.y1 - 3.0f * rh);
 	std::vector<const char*> items;
 	int sel = -1;
-	for (size_t i = 0; i < list.size(); i++) {
-		items.push_back (names[i].c_str());
-		if (list[i] == s.target) sel = (int)i;
+	if (targetKind == 0) {
+		std::vector<const Body*> list;
+		std::vector<std::string> names;
+		Targets (vessel, list, names);
+		for (size_t i = 0; i < list.size(); i++) {
+			items.push_back (names[i].c_str());
+			if (list[i] == s.target) sel = (int)i;
+		}
+		if (ui.List ("targets", lr, items.data(), (int)items.size(), &sel) && sel >= 0 && !engaged) c->SetTarget (list[sel]);
+		ui.Tooltip ("The trip's target: any body, or another vessel");
+	} else {
+		const startargets::Catalogue &cat = startargets::Get ();
+		if (starOrder.size () != cat.Stars ().size () || td.SysT0 - starOrderT > 2.0) {
+			// (by distance from the vessel now; light years)
+			std::vector<std::pair<double, int>> d;
+			for (int i = 0; i < (int)cat.Stars ().size (); i++) {
+				Vector x, v;
+				cat.State (i, td.SimT0, x, v);
+				d.emplace_back ((x - vessel->GPos ()).length (), i);
+			}
+			std::sort (d.begin (), d.end ());
+			starOrder.clear (), starLabel.clear ();
+			for (auto &e : d) {
+				char b[128];
+				const startargets::Star &st = cat.Stars ()[e.second];
+				snprintf (b, sizeof (b), "%-22s %10.4g ly  %s", st.name.c_str (), e.first / LY, st.designation.c_str ());
+				starOrder.push_back (e.second), starLabel.push_back (b);
+			}
+			starOrderT = td.SysT0;
+		}
+		for (size_t k = 0; k < starOrder.size (); k++) {
+			items.push_back (starLabel[k].c_str ());
+			if (starOrder[k] == s.star) sel = (int)k;
+		}
+		if (ui.List ("stars", lr, items.data(), (int)items.size(), &sel) && sel >= 0 && !engaged) c->SetStar (starOrder[sel]);
+		ui.Tooltip ("Named stars (IAU names and common ones), nearest first, and the Galactic Centre: arriving at rest near one, or passing it");
 	}
-	Rect lr (a.x0, a.y0, a.x1, a.y1 - 3.0f * rh);
-	if (!engaged && ui.List ("targets", lr, items.data(), (int)items.size(), &sel) && sel >= 0) s.target = list[sel];
-	else if (engaged) ui.List ("targets", lr, items.data(), (int)items.size(), &sel);
-	ui.Tooltip ("The trip's target: any body, or another vessel");
 
 	auto R = [&](int i) { return Rect (a.x0, a.y1 - (3 - i) * rh, a.x1, a.y1 - (3 - i) * rh + rh - gap); };
 	auto Label = [&](const Rect &r, const char *t) {
 		ui.TextIn (r.Left (lw), t, ui.Colour (mfdui::DIM), mfdui::ALIGN_LEFT | mfdui::ALIGN_MIDDLE, mfdui::FONT_SMALL);
 	};
-	bool vesselTarget = dynamic_cast<const Vessel*> (s.target) != nullptr;
+	bool noOrbit = dynamic_cast<const Vessel*> (s.target) != nullptr || s.star >= 0; // (vessels, star points)
 	static const char *arr[3] = { "At rest", "In orbit", "Passing (flyby)" };
 	Label (R(0), "Arrival");
 	int ar = s.arrival;
 	if (ui.Choice ("arrival", R(0).CutLeft (lw), arr, 3, &ar) && !engaged)
-		s.arrival = (vesselTarget && ar == reltravel::ARRIVE_ORBIT) ? reltravel::ARRIVE_REST : ar;
+		s.arrival = (noOrbit && ar == reltravel::ARRIVE_ORBIT) ? reltravel::ARRIVE_REST : ar;
 	ui.Tooltip ("At rest relative to the target, in a circular orbit about it, or passing it at speed");
-	Label (R(1), s.arrival == reltravel::ARRIVE_FLYBY ? "Passing at" : "Altitude");
 	double alt = s.altitude;
-	if (ui.Number ("altitude", R(1).CutLeft (lw), &alt, mfdui::NumberSpec (0.1, 0.0, 1e12, "%.0f", "km", 1e-3, true)) && !engaged)
-		s.altitude = std::max (alt, 0.0);
-	ui.Tooltip ("Above the target's surface");
-	if (s.target) {
-		char buf[128];
-		double d = (s.target->GPos() - vessel->GPos()).length();
-		if (d >= 0.01 * AU) snprintf (buf, sizeof (buf), "%s: %.4f AU away", s.target->Name(), d / AU);
-		else snprintf (buf, sizeof (buf), "%s: %.0f km away", s.target->Name(), d * 1e-3);
+	if (s.star >= 0) {
+		// (a star: the distance from it; its default where its light is the Sun's at 1 AU)
+		Label (R(1), s.arrival == reltravel::ARRIVE_FLYBY ? "Passing at" : "Distance");
+		if (ui.Number ("distance", R(1).CutLeft (lw), &alt, mfdui::NumberSpec (0.1, 0.001 * AU, 1e7 * AU, "%.4g", "AU", 1.0 / AU, true)) && !engaged)
+			s.altitude = alt;
+		ui.Tooltip ("From the star; at first where its light is as bright as the Sun's at Earth");
+	} else {
+		Label (R(1), s.arrival == reltravel::ARRIVE_FLYBY ? "Passing at" : "Altitude");
+		if (ui.Number ("altitude", R(1).CutLeft (lw), &alt, mfdui::NumberSpec (0.1, 0.0, 1e12, "%.0f", "km", 1e-3, true)) && !engaged)
+			s.altitude = std::max (alt, 0.0);
+		ui.Tooltip ("Above the target's surface");
+	}
+	if (c->HasTarget ()) {
+		char buf[160];
+		Vector x, v;
+		c->TargetState (td.SimT0, x, v);
+		double d = (x - vessel->GPos()).length();
+		std::string n = c->TargetName ();
+		if (d >= 0.01 * LY) snprintf (buf, sizeof (buf), "%s: %.5g ly away", n.c_str(), d / LY);
+		else if (d >= 0.01 * AU) snprintf (buf, sizeof (buf), "%s: %.4f AU away", n.c_str(), d / AU);
+		else snprintf (buf, sizeof (buf), "%s: %.0f km away", n.c_str(), d * 1e-3);
+		if (s.star >= 0) {
+			const startargets::Star &st = startargets::Get ().Stars ()[s.star];
+			if (st.IsStar ()) {
+				size_t l = strlen (buf);
+				snprintf (buf + l, sizeof (buf) - l, "  (%.0f K, %.3g L_sun)", st.teff, startargets::Get ().Luminosity (s.star));
+			}
+		}
 		ui.TextIn (R(2), buf, ui.Colour (mfdui::INFO), mfdui::ALIGN_LEFT | mfdui::ALIGN_MIDDLE, mfdui::FONT_SMALL);
 	}
 }
@@ -234,9 +285,11 @@ void Instrument_RelTravel::DrawTrip (const RLayout &L)
 	Rect tr = R(1).CutLeft (lw);
 	if (ui.Choice ("timing", s.fastest ? tr : tr.Left (tr.W() * 0.55f), timing, 2, &tm) && !engaged) s.fastest = tm == 0;
 	if (!s.fastest) {
-		double h = s.tripTime / 3600.0;
-		if (ui.Number ("triptime", tr.CutLeft (tr.W() * 0.57f), &h, mfdui::NumberSpec (0.05, 0.01, 1e7, "%.3g", "h", 1.0, true)) && !engaged)
-			s.tripTime = std::max (h, 0.01) * 3600.0;
+		// (interstellar: in years)
+		bool yr = s.star >= 0;
+		double unit = yr ? 365.25 * 86400.0 : 3600.0, h = s.tripTime / unit;
+		if (ui.Number ("triptime", tr.CutLeft (tr.W() * 0.57f), &h, mfdui::NumberSpec (0.05, 0.01 * 3600.0 / unit, 1e7, "%.3g", yr ? "yr" : "h", 1.0, true)) && !engaged)
+			s.tripTime = std::max (h * unit, 36.0);
 		ui.Tooltip ("Solar System time to the arrival: the burns are shorter, with a coast between");
 	}
 
@@ -251,7 +304,7 @@ void Instrument_RelTravel::DrawTrip (const RLayout &L)
 		FmtDate (b2, sizeof (b2), td.MJD0 + ts / 86400.0);
 		Row (ui, R(3), "Arrival date", b2, ui.Colour (mfdui::TEXT));
 	} else {
-		Row (ui, R(2), "Arrival", s.target ? "no trip found" : "no target", ui.Colour (mfdui::ALERT));
+		Row (ui, R(2), "Arrival", c->HasTarget () ? "no trip found" : "no target", ui.Colour (mfdui::ALERT));
 	}
 	if (p.ok) {
 		if (p.trip.vmax >= 0.001 * C) snprintf (buf, sizeof (buf), "%.5f c   gamma %.4g", p.trip.vmax / C, Gamma (p.trip.vmax));
@@ -265,27 +318,32 @@ void Instrument_RelTravel::DrawTrip (const RLayout &L)
 		const int N = 120;
 		std::vector<double> t (N + 1), tau (N + 1), beta (N + 1);
 		double t0 = p.spec.start.t, bmax = 0.0;
+		// (the time axis in hours, days or years by the trip's length)
+		double T = p.trip.tArrive - t0, unit = 3600.0;
+		const char *uname = "hours";
+		if (T > 2.0 * 365.25 * 86400.0) unit = 365.25 * 86400.0, uname = "years";
+		else if (T > 2.0 * 86400.0) unit = 86400.0, uname = "days";
 		for (int i = 0; i <= N; i++) {
 			relativity::State st = TripState (p.spec, p.trip, p.trip.tauArrive * i / N);
-			t[i] = (st.t - t0) / 3600.0, tau[i] = (st.tau - p.spec.start.tau) / 3600.0;
+			t[i] = (st.t - t0) / unit, tau[i] = (st.tau - p.spec.start.tau) / unit;
 			beta[i] = st.V().length() / C;
 			bmax = std::max (bmax, beta[i]);
 		}
 		mfdui::PlotSpec spec (0.0, std::max (t[N], 1e-6), 0.0, std::max (bmax * 1.1, 1e-6));
-		spec.xlabel = "hours";
+		spec.xlabel = uname;
 		if (ui.BeginPlot ("speed", plot, spec)) {
 			ui.PlotLine (t.data(), beta.data(), N + 1, ui.Colour (mfdui::TEXT), 1.5f);
 			ui.PlotLine (tau.data(), beta.data(), N + 1, ui.Colour (mfdui::INFO), 1.5f);
 			ui.EndPlot ();
 		}
-		// (legend, top right)
-		Rect lg (plot.x1 - a.W() * 0.42f, plot.y0, plot.x1, plot.y0 + u * 0.8f);
+		// (legend, mid-height in the middle: clear of the curves' rise and fall)
+		Rect lg (plot.x0 + plot.W() * 0.3f, plot.y0 + plot.H() * 0.35f, plot.x0 + plot.W() * 0.3f + a.W() * 0.42f, plot.y0 + plot.H() * 0.35f + u * 0.8f);
 		ui.TextIn (lg.Left (lg.W() * 0.5f), "speed (c):", ui.Colour (mfdui::DIM), mfdui::ALIGN_RIGHT | mfdui::ALIGN_MIDDLE, mfdui::FONT_SMALL);
 		ui.TextIn (lg.CutLeft (lg.W() * 0.52f), "Solar Sys.", ui.Colour (mfdui::TEXT), mfdui::ALIGN_LEFT | mfdui::ALIGN_MIDDLE, mfdui::FONT_SMALL);
 		ui.TextIn (Rect (lg.x0, lg.y1, lg.x1, lg.y1 + u * 0.8f).CutLeft (lg.W() * 0.52f), "ship", ui.Colour (mfdui::INFO), mfdui::ALIGN_LEFT | mfdui::ALIGN_MIDDLE, mfdui::FONT_SMALL);
 	}
 	Rect br (a.x0, a.y1 - rh + gap, a.x0 + a.W() * 0.5f, a.y1);
-	if (ui.Button ("engage", br, engaged ? "Disengage" : "Engage", engaged, s.target != nullptr)) Action (2);
+	if (ui.Button ("engage", br, engaged ? "Disengage" : "Engage", engaged, c->HasTarget ())) Action (2);
 	ui.Tooltip ("The autopilot flies the trip: it turns the vessel, drives, and stops at the arrival");
 }
 
@@ -306,10 +364,14 @@ void Instrument_RelTravel::DrawFlight (const RLayout &L)
 	// speed (relative to the target, if any; else the Solar System's frame)
 	Vector vrel (vessel->GVel());
 	Vector r;
-	if (s.target) vrel = AddVelocity (-s.target->GVel(), vessel->GVel()), r = s.target->GPos() - vessel->GPos();
+	if (c->HasTarget ()) {
+		Vector tx, tv;
+		c->TargetState (td.SimT0, tx, tv);
+		vrel = AddVelocity (-tv, vessel->GVel()), r = tx - vessel->GPos();
+	}
 	double v = vrel.length(), gam = Gamma (v);
 	FmtSpeed (b2, sizeof (b2), v);
-	Row (ui, R(0), s.target ? "Speed (target)" : "Speed", b2, acc);
+	Row (ui, R(0), c->HasTarget () ? "Speed (target)" : "Speed", b2, acc);
 	snprintf (buf, sizeof (buf), "%.6g   rapidity %.4g", gam, Rapidity (std::min (v, 0.999999999999 * C)));
 	Row (ui, R(1), "Lorentz factor", buf, txt);
 
@@ -331,12 +393,16 @@ void Instrument_RelTravel::DrawFlight (const RLayout &L)
 	ui.Tooltip ("The ship's clock less Solar System time: time dilation by speed and gravity");
 
 	// distance: in the Solar System's frame, and in the ship's (contracted along the motion)
-	if (s.target) {
+	if (c->HasTarget ()) {
 		double D = r.length();
 		Vector n (v > 0.0 ? vrel / v : Vector ());
 		double par = dotp (r, n);
 		double Dship = std::sqrt (std::max (0.0, D * D - par * par) + (par / gam) * (par / gam));
-		auto fd = [](char *bf, size_t nn, double x) { if (x >= 0.01 * AU) snprintf (bf, nn, "%.5f AU", x / AU); else snprintf (bf, nn, "%.0f km", x * 1e-3); };
+		auto fd = [](char *bf, size_t nn, double x) {
+			if (x >= 0.01 * LY) snprintf (bf, nn, "%.5g ly", x / LY);
+			else if (x >= 0.01 * AU) snprintf (bf, nn, "%.5f AU", x / AU);
+			else snprintf (bf, nn, "%.0f km", x * 1e-3);
+		};
 		fd (b2, sizeof (b2), D), fd (b3, sizeof (b3), Dship);
 		snprintf (buf, sizeof (buf), "%s   ship %s", b2, b3);
 		Row (ui, R(6), "Distance", buf, txt);
@@ -348,9 +414,29 @@ void Instrument_RelTravel::DrawFlight (const RLayout &L)
 		}
 	}
 
+	// time warp on the ship's clock (Orbiter's follows: beyond 1e5 in deep space only)
+	{
+		Rect wr (R(8));
+		ui.TextIn (wr.Left (wr.W() * 0.38f), "Time warp", ui.Colour (mfdui::DIM), mfdui::ALIGN_LEFT | mfdui::ALIGN_MIDDLE, mfdui::FONT_SMALL);
+		Rect wv (wr.CutLeft (wr.W() * 0.38f));
+		bool ship = g_pOrbiter->ShipWarp () > 0.0;
+		if (ui.Toggle ("shipwarp", wv.Left (wv.W() * 0.36f), "Ship", &ship)) Action (8);
+		ui.Tooltip ("Time warp on the ship's clock: Solar System time runs faster by the time dilation (beyond 1e5 only in deep space, where vessels about the planets follow their orbits)");
+		if (ship) {
+			double w = g_pOrbiter->ShipWarp ();
+			if (ui.Number ("shipwarpv", wv.CutLeft (wv.W() * 0.38f).Left (wv.W() * 0.3f), &w, mfdui::NumberSpec (9.0, Orbiter::MinWarpLimit, Orbiter::ShipWarpLimit, "%.3g", "x", 1.0, true)))
+				g_pOrbiter->SetShipWarp (w);
+			snprintf (buf, sizeof (buf), "SolSys %.3gx", td.Warp());
+			ui.TextIn (wv.CutLeft (wv.W() * 0.7f), buf, txt, mfdui::ALIGN_LEFT | mfdui::ALIGN_MIDDLE, mfdui::FONT_SMALL);
+		} else {
+			snprintf (buf, sizeof (buf), "%.3gx", td.Warp());
+			ui.TextIn (wv.CutLeft (wv.W() * 0.38f), buf, txt, mfdui::ALIGN_LEFT | mfdui::ALIGN_MIDDLE, mfdui::FONT_SMALL);
+		}
+	}
+
 	// engage, or the drive by hand
 	Rect br (a.x0, a.y1 - 2.0f * rh, a.x1, a.y1 - rh - gap);
-	if (ui.Button ("engage2", br.Left (a.W() * 0.48f), c->Engaged () ? "Disengage" : "Engage", c->Engaged (), s.target != nullptr)) Action (2);
+	if (ui.Button ("engage2", br.Left (a.W() * 0.48f), c->Engaged () ? "Disengage" : "Engage", c->Engaged (), c->HasTarget ())) Action (2);
 	if (!c->Engaged ()) {
 		Rect mr (a.x0, a.y1 - rh, a.x1, a.y1);
 		bool on = d.on;
@@ -421,7 +507,7 @@ void Instrument_RelTravel::CycleTarget (int dir)
 	int i = 0;
 	for (size_t k = 0; k < list.size(); k++) if (list[k] == c->settings.target) i = (int)k;
 	i = (i + dir + (int)list.size()) % (int)list.size();
-	c->settings.target = list[i];
+	c->SetTarget (list[i]);
 	Refresh ();
 }
 
@@ -437,6 +523,10 @@ void Instrument_RelTravel::Action (int what)
 	case 5: if (!c->Engaged ()) c->settings.accel = std::max (c->settings.accel * 0.1, 0.01 * G0); break;
 	case 6: if (!c->Engaged ()) vessel->SetRelDrive ((manualRev ? -1.0 : 1.0) * manualG * G0, true); break;
 	case 7: if (!c->Engaged ()) vessel->SetRelDrive (vessel->GetRelDrive ().accel, false); break;
+	case 8: // ship-time warp on (at Orbiter's current warp) / off
+		if (g_pOrbiter->ShipWarp () > 0.0) g_pOrbiter->SetShipWarp (0.0);
+		else g_pOrbiter->SetShipWarp (std::max (1.0, td.Warp ()));
+		break;
 	}
 	Refresh ();
 }
@@ -451,36 +541,38 @@ bool Instrument_RelTravel::KeyBuffered (DWORD key)
 	case OAPI_KEY_U: Action (4); return true;
 	case OAPI_KEY_D: Action (5); return true;
 	case OAPI_KEY_M: Action (vessel->GetRelDrive ().on ? 7 : 6); return true;
+	case OAPI_KEY_W: Action (8); return true;
 	}
 	return false;
 }
 
 bool Instrument_RelTravel::ProcessButton (int bt, int event)
 {
-	static const DWORD btkey[7] = { OAPI_KEY_P, OAPI_KEY_T, OAPI_KEY_E, OAPI_KEY_A, OAPI_KEY_U, OAPI_KEY_D, OAPI_KEY_M };
-	if (event & PANEL_MOUSE_LBDOWN && bt >= 0 && bt < 7) return KeyBuffered (btkey[bt]);
+	static const DWORD btkey[8] = { OAPI_KEY_P, OAPI_KEY_T, OAPI_KEY_E, OAPI_KEY_A, OAPI_KEY_U, OAPI_KEY_D, OAPI_KEY_M, OAPI_KEY_W };
+	if (event & PANEL_MOUSE_LBDOWN && bt >= 0 && bt < 8) return KeyBuffered (btkey[bt]);
 	return false;
 }
 
 const char *Instrument_RelTravel::BtnLabel (int bt) const
 {
-	static const char *label[7] = { "PG", "TGT", "ENG", "ARR", "AC+", "AC-", "DRV" };
-	return (bt >= 0 && bt < 7) ? label[bt] : 0;
+	static const char *label[8] = { "PG", "TGT", "ENG", "ARR", "AC+", "AC-", "DRV", "SWP" };
+	return (bt >= 0 && bt < 8) ? label[bt] : 0;
 }
 
 int Instrument_RelTravel::BtnMenu (const MFDBUTTONMENU **menu) const
 {
-	static const MFDBUTTONMENU mnu[7] = {
+	static const MFDBUTTONMENU mnu[8] = {
 		{ "Next page", 0, 'P' },
 		{ "Next target", 0, 'T' },
 		{ "Engage/disengage", "the autopilot", 'E' },
 		{ "Arrival: rest,", "orbit, flyby", 'A' },
 		{ "Acceleration x10", 0, 'U' },
 		{ "Acceleration /10", 0, 'D' },
-		{ "Drive by hand", "on/off", 'M' }
+		{ "Drive by hand", "on/off", 'M' },
+		{ "Ship-time warp", "on/off", 'W' }
 	};
 	if (menu) *menu = mnu;
-	return 7;
+	return 8;
 }
 
 bool Instrument_RelTravel::ReadParams (std::ifstream &ifs)

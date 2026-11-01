@@ -30,19 +30,19 @@ namespace {
 	constexpr float PSF_SIGMA = 0.6f;                // [px]
 	// glare (light scattered in the eye or the optics, which makes bright
 	// stars look big): two wide halos, sigma [screen heights], fraction
-	constexpr float GLARE_SIGMA[2] = { 0.0035f, 0.018f }, GLARE_FRAC[2] = { 0.08f, 0.02f };
-	constexpr double PC_PER_KMS_YEAR = 1.0227122e-6; // 1 km/s for a year [pc]
+	constexpr float GLARE_SIGMA[2] = { 0.0035f, 0.018f }; // (their shares: starfield.glsl)
+	constexpr double RESELECT_YEARS = 200.0;         // time that starts a new selection (the stars' motion: 0.02 pc at 100 km/s)
 	constexpr double GEN_BRIGHTEST = 2.5;            // M_V: brighter stars are not generated (seen too far)
 	constexpr int GEN_CELLS = 6;                     // cells across the radius a row's stars are seen within, at least
 	constexpr double GEN_PER_CELL = 16.0;            // stars per cell, at most ~ (at the Sun's density: the work of a thread)
 	constexpr int GEN_MAX_K = 64;                    // cells per axis, at most
 	constexpr uint32_t GEN_CAPACITY = 2u << 20;      // generated stars
 
-	struct GpuStar { float pos[3]; uint32_t packed; };
+	struct GpuStar { float pos[3]; uint32_t packed, vel; }; // (starfield.glsl: Star)
 	struct ListHeader { uint32_t vertexCount, instanceCount, firstVertex, firstInstance, capacity, pad[3]; };
 
-	struct SelectPush { float obs[4]; uint32_t part, nParts, atSun, hideSun, nStar, pad[3]; float beta[4], ext[4]; };
-	struct GenPush { float obs[4]; uint32_t nRows, nWork, part, nParts; float catLimit, catNear, pad[2]; float beta[4], ext[4]; };
+	struct SelectPush { float obs[4]; uint32_t part, nParts, atSun, hideSun, nStar; float years; uint32_t pad[2]; float beta[4], ext[4]; uint32_t excl[4]; };
+	struct GenPush { float obs[4]; uint32_t nRows, nWork, part, nParts; float catLimit, catNear, pad[2]; float beta[4], ext[4]; uint32_t pad2[4]; };
 	constexpr double RESELECT_U = 0.03;              // relativistic view: change of the proper velocity (gamma beta, relative
 	                                                 // to its size, at least 1) that starts a new selection
 
@@ -111,8 +111,10 @@ bool StarField::Init (vkc::Context *c, const GalaxySky &sky, const galactic::Sta
 	catLimit = cat.CompleteMag (), catNear = cat.CompleteDist ();
 	lfRows = sky.LFRows ();
 
-	// the stars at the observer's epoch, packed
-	double years = (obs.mjd - 51544.5) / 365.25 + 2000.0 - cat.Epoch ();
+	// the stars as seen from the Sun at the catalogue's epoch, their
+	// velocities (where they are seen from elsewhere at other times:
+	// starfield.glsl, StarSeenPos), packed
+	catEpoch = cat.Epoch ();
 	std::vector<GpuStar> gs (nStar);
 	const auto &sec = cat.Sectors ();
 	const uint16_t *pos = cat.RawPos (), *logT = cat.RawLogT (), *flags = cat.RawFlags ();
@@ -124,7 +126,9 @@ bool StarField::Init (vkc::Context *c, const GalaxySky &sky, const galactic::Sta
 		double v[3];
 		cat.Velocity (i, v);
 		for (int k = 0; k < 3; k++)
-			gs[i].pos[k] = (float)((s.index[k] + pos[i * 3 + k] / 65536.0) * edge + v[k] * years * PC_PER_KMS_YEAR);
+			gs[i].pos[k] = (float)((s.index[k] + pos[i * 3 + k] / 65536.0) * edge);
+		auto q = [&](int k, int bias, int hi) { return (uint32_t)std::clamp ((int)std::lround (v[k]) + bias, 0, hi); };
+		gs[i].vel = q (0, 1024, 2047) | (q (1, 1024, 2047) << 11) | (q (2, 512, 1023) << 22);
 		uint32_t m = (uint32_t)std::clamp ((int)std::lround ((mv[i] * 1e-3 + 12.0) * 100.0), 0, 4095);
 		uint32_t t = (uint32_t)std::clamp ((int)std::lround ((logT[i] * 1e-4 - LOGT0) / (LOGT1 - LOGT0) * (NTEMP - 1)), 0, NTEMP - 1);
 		uint32_t a = (uint32_t)std::clamp ((int)std::lround (cat.ExtinctionFromSun (i) * 100.0), 0, 2047);
@@ -390,6 +394,8 @@ void StarField::Select (VkCommandBuffer cmd, int l, int part, int nParts)
 	uint32_t count = (nStar - (uint32_t)part + (uint32_t)nParts - 1) / (uint32_t)nParts;
 	p.atSun = atSun;
 	p.hideSun = selHideSun;
+	p.years = (float)Years (selObs);
+	for (int k = 0; k < MAX_EXCLUDED; k++) p.excl[k] = excluded[k];
 	for (int k = 0; k < 3; k++) p.beta[k] = (float)selBeta[k];
 	for (int k = 0; k < 4; k++) p.ext[k] = ext[k];
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, selectPipe);
@@ -481,6 +487,16 @@ void StarField::SetLimit (float m)
 	selectAgain = true;
 }
 
+void StarField::SetExcluded (const std::vector<int> &idx)
+{
+	uint32_t e[MAX_EXCLUDED];
+	for (int k = 0; k < MAX_EXCLUDED; k++) e[k] = k < (int)idx.size () ? (uint32_t)idx[k] : ~0u;
+	if (memcmp (e, excluded, sizeof (e))) {
+		memcpy (excluded, e, sizeof (e));
+		selectAgain = true;
+	}
+}
+
 void StarField::Update (const galactic::Observer &obs, bool hideSun, const double beta[3])
 {
 	if (!ready) return;
@@ -498,7 +514,8 @@ void StarField::Update (const galactic::Observer &obs, bool hideSun, const doubl
 		double u0[3], u1[3];
 		u (listBeta, u0), u (bt, u1);
 		bool moved = Dist (u0, u1) > RESELECT_U * std::max (1.0, Norm (u0));
-		if (Dist (obs.pos, listObs.pos) < RESELECT_DIST && hideSun == listHideSun && !selectAgain && !moved) return;
+		bool aged = std::fabs (Years (obs) - Years (listObs)) > RESELECT_YEARS;
+		if (Dist (obs.pos, listObs.pos) < RESELECT_DIST && hideSun == listHideSun && !selectAgain && !moved && !aged) return;
 		selecting = true, selPart = 0, selObs = obs, selHideSun = hideSun, selectAgain = false, selLimit = wantLimit;
 		for (int k = 0; k < 3; k++) selBeta[k] = bt[k];
 	}
@@ -529,10 +546,8 @@ void StarField::Render (VkCommandBuffer cmd, const float galViewProj[16], float 
 	// a pixel at the centre: (2 / (fx W)) (2 / (fy H)) rad^2
 	double pixDeg2 = 4.0 / (fx * ext.width * fy * ext.height) * std::pow (180.0 / 3.14159265358979323846, 2.0);
 	p.sprite[3] = (float)(gain / pixDeg2);
-	for (int k = 0; k < 2; k++) {
-		p.glare[k] = GLARE_SIGMA[k] * ext.height;
-		p.glare[k + 2] = GLARE_FRAC[k];
-	}
+	for (int k = 0; k < 2; k++) p.glare[k] = GLARE_SIGMA[k] * ext.height;
+	p.glare[2] = (float)Years (curObs); // (the stars' motion)
 	p.misc[0] = gain;
 	for (int k = 0; k < 3; k++) p.misc[1 + k] = relBetaGal ? relBetaGal[k] : 0.0f; // (relativistic view: aberrated directions)
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawPipe);

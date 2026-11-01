@@ -1,0 +1,18 @@
+# Common names of well-known stars the IAU Catalog of Star Names leaves
+# unnamed (mostly nearby: catalogue designations in common use). Applied by
+# build_names.py after the IAU names (an IAU name of the same star wins).
+# hip: Hipparcos number; name: as shown.
+hip,name
+8102,Tau Ceti
+104214,61 Cygni A
+104217,61 Cygni B
+108870,Epsilon Indi A
+1475,Groombridge 34 A
+54035,Lalande 21185
+36208,Luyten's Star
+57548,Ross 128
+24186,Kapteyn's Star
+110893,Kruger 60 A
+91768,Struve 2398 A
+91772,Struve 2398 B
+3829,Van Maanen's Star

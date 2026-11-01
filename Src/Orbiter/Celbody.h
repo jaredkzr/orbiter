@@ -175,6 +175,26 @@ protected:
 	int ExternEphemeris (double mjd, int req, double *res) const;
 	// Try to obtain ephemeris data at mjd from external module
 	// req contains data request flags, return value contains satisfied requests
+	// (beyond the module's range: FallbackEphemeris)
+
+	int ModuleEphemeris (double mjd, int req, double *res) const;
+	// The module's ephemeris at mjd, whatever the date
+
+	int FallbackEphemeris (double mjd, int req, double *res) const;
+	// Beyond the module's range (ephemRange about J2000): the state at the
+	// range's edge, carried on along a conic about the parent (theories such
+	// as VSOP87 diverge some millennia out; interstellar travel reaches
+	// years far beyond). Cartesian; the barycentre's state where the module
+	// gives one (the true state then follows from the moons'), else the true
+
+	double ephemRange;
+	// [days] range of the ephemeris module about J2000 (0: unlimited; config
+	// EphemerisRange [years], default 3000)
+
+	struct EphemFallback { bool valid = false; int flg = 0; double edge = 0.0; Vector p, v, bp, bv; };
+	mutable EphemFallback ephemFallback[2]; // (before, after the range)
+
+	bool EphemOutOfRange (double mjd) const { return ephemRange > 0.0 && fabs (mjd - 51544.5) > ephemRange; }
 
 	int ExternFastEphemeris (double simt, int req, double *res) const;
 	// Try to obtain fast sequential ephemeris data at simt from

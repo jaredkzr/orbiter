@@ -268,6 +268,25 @@ public:
 	double ProjX () const { return proj[0]; }   ///< horizontal focal factor fx
 	double ProjY () const { return -proj[5]; }  ///< vertical focal factor fy
 	OBJHANDLE Sun () const { return hSun; }
+
+	/// Interstellar travel: the stars drawn as bodies (discs and glare) and
+	/// the light: a star is a body while its light at the camera is at least
+	/// the Sun's at 100 AU (NEAR_FLUX of the Sun's at 1 AU), else a point of
+	/// the star field. The light is the brightest of them (the Sun, else a
+	/// named star near the camera: Orbiter's core, oapiGetNamedStar), in its
+	/// colour, fading as its flux falls below NEAR_FLUX.
+	static constexpr double NEAR_FLUX = 1e-4;
+	struct StarLight {
+		VECTOR3 pos{};          ///< global position
+		double radius = 0.0;    ///< [m]
+		double teff = 5772.0;   ///< [K]
+		double flux = 1.0;      ///< V band, relative to the Sun's at 1 AU
+		bool sun = true;        ///< the Sun (Orbiter's star body)
+	};
+	const StarLight &Light () const { return light; }
+	bool SunAsBody () const { return sunAsBody; }
+	/// a black body's disc radiance (RGB) relative to the Sun's (5772 K)
+	static void StarDiscRGB (double teff, float rgb[3]);
 	/// the sun's position on the screen (texture coordinates); false if
 	/// behind the camera or far off the screen
 	bool SunOnScreen (float uv[2]) const;
@@ -394,6 +413,14 @@ private:
 	double skyDim = 0.0;      // the sky's dimming by light adaptation [stops]
 	double skyDarkGain = 0.0; // scene radiance of 1 S10 to the dark-adapted eye
 	galactic::Observer SkyObserver () const;
+
+	// interstellar travel: named stars drawn as bodies, the light
+	struct NearStar { int index; VECTOR3 pos; double radius, teff, flux, dist; };
+	std::vector<NearStar> nearStars;
+	StarLight light;
+	bool sunAsBody = true;
+	void UpdateNearStars ();
+	void RenderNearStars (bool transparent);
 
 	// camera
 	VECTOR3 camPos{};

@@ -22,13 +22,18 @@ photometry of all stars brighter than V = 5.5). Each star gets:
   excess (flag SPECTRAL): their colours hardly vary with temperature, and
   the dust map misses much of the dust close around them. (The client's
   nebulae are ionised by these stars.) Where their parallax says little,
-  their distance follows from the absolute magnitude of the type.
+  their distance follows from the absolute magnitude of the type. A type at
+  odds with the parallax (a companion's) is not used.
 - its space velocity (heliocentric Galactic [km/s]; no radial part where
   Gaia has no radial velocity).
 - a stable identifier (the Gaia DR3 source_id, else 2^63 + the Hipparcos
   number; the Sun: 2^63) and its Hipparcos number where it has one.
 
 The Sun is in the catalogue (flag SUN), at the origin.
+
+Beside stars.bin, stars_ref.csv holds the Hipparcos stars and those within
+25 pc in full precision (stars.bin rounds positions to 0.0015 pc), for
+build_names.py.
 
 The file format is in Orbitersdk/include/StarCatalogue.h. Stars are grouped
 in cubic sectors of 100 pc (by sector, brightest first in each), their
@@ -58,6 +63,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '..', '..'))
 
 SECTOR = 100.0          # sector edge [pc]
+SPT_PLX_SIGMA = 5.0     # a hot star's type is ignored where the distance it implies is this many sigma off the parallax
+SPT_MV_SCATTER = 1.0    # [mag] scatter of the absolute magnitudes of a spectral type (in that sigma)
 EPOCH = 2016.0          # [Julian year] of the positions
 HIP_EPOCH = 1991.25
 PLX_ZP = -0.017         # Gaia parallax zero point [mas] (Lindegren et al. 2021): add 0.017
@@ -369,10 +376,12 @@ def merge(g, h, dw):
         out[k] = np.concatenate([out[k], hip_part[k]])
     # curated values for nearby stars
     cur = pd.read_csv(os.path.join(HERE, 'curated_nearby.csv'), comment='#')
+    out['curated'] = np.zeros(len(out['id']), bool)
     for _, c in cur.iterrows():
         sel = ((out['hip'] == c.hip) & (c.hip > 0)) | ((out['id'] == np.uint64(c.source_id)) & (c.source_id > 0))
         out['plx'][sel], out['plx_err'][sel] = c.plx, c.plx_err
         out['flags'][sel] |= F_NEARBY
+        out['curated'][sel] = True
     print(f'  {len(cur)} curated nearby stars')
     return out
 
@@ -410,6 +419,11 @@ def draw_distance(s):
             cdf /= cdf[:, -1:]
             k = (cdf < uu[i0:i0 + 20000, None]).sum(axis=1)
             r[j] = rg[np.minimum(k, len(rg) - 1)]
+    # curated parallaxes (a system's components share theirs): at it, not
+    # drawn (independent draws would split a binary along the line of sight)
+    if 'curated' in s:
+        cur = s['curated']
+        r[cur] = 1000.0 / plx[cur]
     # no parallax: a red-clump giant's absolute magnitude (M_V = 0.8)
     none = np.isnan(r)
     r[none] = 10.0 ** ((s['V'][none] - 0.8) / 5.0 + 1.0)
@@ -538,6 +552,16 @@ def main():
     sp = ~np.isnan(ts) & ~np.isnan(s['colour'])
     c00 = np.where(gaia, dw.bprp_of_bv(np.nan_to_num(bv0, nan=0.0)), bv0)
     av_sp = np.maximum(s['colour'] - c00, 0.0) / np.where(gaia, E_BPRP, E_BV)
+    # (not where the type is at odds with the parallax: the type of a
+    # companion, its colour the brighter star's, e.g. Almach: B8V of a K
+    # giant's colour, placed by it at 3.6 pc instead of 120)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        r_type = 10.0 ** ((s['V'] - av_sp - mv0) / 5.0 + 1.0)
+        sig = np.hypot(s['plx_err'], SPT_MV_SCATTER * 0.4605 * np.abs(s['plx'])) # (a magnitude's scatter: 46% in distance)
+        odd = np.abs(1000.0 / r_type - s['plx']) > SPT_PLX_SIGMA * sig
+    odd &= sp & (s['plx_err'] > 0)
+    sp &= ~odd
+    print(f'  {odd.sum()} spectral types at odds with their parallaxes: ignored')
     teff[sp] = ts[sp]
     mv[sp] += av[sp] - av_sp[sp]
     av[sp] = av_sp[sp]
@@ -599,6 +623,21 @@ def main():
         hp['index'], hp['hip'] = hipidx, hip[hipidx]
         f.write(hp.tobytes())
     os.replace(out + '.part', out)
+
+    # the reference table: full precision (stars.bin rounds positions to
+    # 0.0015 pc) for the Hipparcos stars and those within 25 pc, by index in
+    # stars.bin: for build_names.py (named stars: trip targets, drawn as
+    # suns close by)
+    ref = os.path.splitext(out)[0] + '_ref.csv'
+    sel = np.nonzero((hip > 0) | (np.linalg.norm(pos, axis=1) < 25.0) | (flags & F_SUN != 0))[0]
+    with open(ref + '.part', 'w') as f:
+        f.write('# stars.bin reference (build_stars.py): heliocentric Galactic position [pc] (epoch %.1f), velocity [km/s]\n' % EPOCH)
+        f.write('index,id,hip,x,y,z,vx,vy,vz,mv,teff,av,flags\n')
+        for i in sel:
+            f.write('%d,%d,%d,%.15g,%.15g,%.15g,%.6g,%.6g,%.6g,%.4f,%.1f,%.4f,%d\n' % (
+                i, ids[i], hip[i], pos[i, 0], pos[i, 1], pos[i, 2], vel[i, 0], vel[i, 1], vel[i, 2], mv[i], teff[i], av[i], flags[i]))
+    os.replace(ref + '.part', ref)
+    print(f'{ref}: {len(sel)} stars')
 
     vis = mv + 5 * np.log10(np.maximum(np.linalg.norm(pos, axis=1), 1e-6) / 10) + av
     print(f'{out}: {n} stars in {len(first)} sectors, {os.path.getsize(out) / 1e6:.0f} MB, {time.time() - t0:.0f} s')

@@ -16,7 +16,12 @@
 #include "Log.h"
 #include "Orbitersdk.h"
 #include "PinesGrav.h"
+#include "Psys.h"
+#include "Maneuver.h"
+#include <algorithm>
 #include <mutex>
+
+extern PlanetarySystem *g_psys;
 
 using namespace std;
 
@@ -61,6 +66,11 @@ CelestialBody::CelestialBody (char *fname)
 
 	if (GetItemString (ifs, "Module", cbuf))
 		RegisterModule (cbuf);
+	{
+		double yr = 3000.0; // (VSOP87: within 1" over 2000-6000 years of J2000 by planet)
+		GetItemReal (ifs, "EphemerisRange", yr);
+		ephemRange = std::max (yr, 0.0) * 365.25;
+	}
 
 	GetItemReal (ifs, "SidRotPeriod", rot_T);
 	GetItemReal (ifs, "SidRotOffset", Dphi);
@@ -174,6 +184,7 @@ CelestialBody::~CelestialBody ()
 
 void CelestialBody::DefaultParam ()
 {
+	ephemRange        = 0.0;   // (no module: unlimited)
 	eps_ref           = 0.0;   // precession reference is ecliptic normal
 	lan_ref           = 0.0;
 	eps_rel           = 0.0;   // obliquity of axis against reference
@@ -423,6 +434,8 @@ void CelestialBody::AbsTrueState()
 	if (cbody) {
 		s1->pos += cbody->s1->pos;
 		s1->vel += cbody->s1->vel;
+	} else if (g_psys) {
+		s1->pos -= g_psys->Origin (); // (a root: relative to the global frame's origin)
 	}
 	for (i = 0; i < nsecondary; i++)
 		secondary[i]->AbsTrueState();
@@ -597,6 +610,49 @@ bool CelestialBody::EphemerisAtTime (double t, EphemState &s, const Elements *el
 
 int CelestialBody::ExternEphemeris (double mjd, int req, double *res) const
 {
+	if (EphemOutOfRange (mjd) && HasEphemerisModule ())
+		return FallbackEphemeris (mjd, req, res);
+	return ModuleEphemeris (mjd, req, res);
+}
+
+int CelestialBody::FallbackEphemeris (double mjd, int req, double *res) const
+{
+	std::lock_guard<std::recursive_mutex> lock (ephemMutex);
+	int side = mjd > 51544.5 ? 1 : 0;
+	EphemFallback &f = ephemFallback[side];
+	if (!f.valid) {
+		f.edge = 51544.5 + (side ? ephemRange : -ephemRange);
+		double r[12] = {0};
+		int flg = ModuleEphemeris (f.edge, EPHEM_TRUEPOS | EPHEM_TRUEVEL | EPHEM_BARYPOS | EPHEM_BARYVEL, r);
+		InterpretEphemeris (r, flg, &f.p, &f.v, &f.bp, &f.bv);
+		f.flg = flg & ~EPHEM_POLAR;
+		f.valid = true;
+		LOGOUT ("%s: beyond its ephemeris (MJD %.0f): carried on along a conic about %s", Name(), f.edge,
+			cbody ? cbody->Name() : "the barycentre (held)");
+	}
+	// (a root: held where it was)
+	double dt = (mjd - f.edge) * 86400.0;
+	double mu = cbody ? Ggrav * (cbody->Mass() + Mass()) : 0.0;
+	auto carry = [&](const Vector &p0, const Vector &v0, double *out) {
+		Vector p (p0), v (v0);
+		if (mu <= 0.0) v.Set (0, 0, 0);
+		else if (!maneuver::Kepler (p0, v0, mu, dt, p, v)) p = p0 + v0 * dt, v = v0;
+		out[0] = p.x, out[1] = p.y, out[2] = p.z, out[3] = v.x, out[4] = v.y, out[5] = v.z;
+	};
+	int flg = f.flg;
+	const int BARY = EPHEM_BARYPOS | EPHEM_BARYVEL, TRUE_ = EPHEM_TRUEPOS | EPHEM_TRUEVEL;
+	if ((flg & BARY) == BARY && !(flg & EPHEM_BARYISTRUE)) {
+		carry (f.bp, f.bv, res + 6);
+		flg &= ~TRUE_;
+	} else {
+		carry (f.p, f.v, res);
+		flg = (flg & ~BARY) | TRUE_;
+	}
+	return flg;
+}
+
+int CelestialBody::ModuleEphemeris (double mjd, int req, double *res) const
+{
 	std::lock_guard<std::recursive_mutex> lock (ephemMutex);
 	if (module)
 		return module->clbkEphemeris (mjd, req, res); // new interface
@@ -610,6 +666,7 @@ int CelestialBody::ExternEphemeris (double mjd, int req, double *res) const
 
 int CelestialBody::ExternFastEphemeris (double simt, int req, double *res) const
 {
+	if (EphemOutOfRange (td.MJD_ref + Day (simt))) return 0; // (ExternEphemeris: the fallback)
 	std::lock_guard<std::recursive_mutex> lock (ephemMutex);
 	if (module) {
 		return module->clbkFastEphemeris (simt, req, res); // new interface
