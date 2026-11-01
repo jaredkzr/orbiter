@@ -1107,6 +1107,13 @@ A black hole is a body of a planetary system (\texttt{BlackHole1 = name} in the 
 
 Scripts: get\_relstate's strongfield, holer, clockrate, tidal, hover and inside fields; reltrip\_set with the hole as target.
 
+\subsubsection{Other star systems}
+The Solar System shares its world with its neighbours, each a file of \texttt{Config/Systems} listing its stars and black holes (\texttt{Star1}, \texttt{BlackHole1}, \ldots): Alpha Centauri (A and B on their 80-year orbit, Proxima), Barnard's Star, Epsilon Eridani, TRAPPIST-1, the Galactic Centre (Sgr A*, $4.1 \times 10^6$ solar masses, and thirteen S-stars on their measured orbits about it) and Nyx, a fictional black hole of $10^5$ solar masses 80 light years away towards Sagittarius, fed by Hemera, a red dwarf on a 2.4-hour orbit that fills its Roche lobe. A star of the sky's catalogue becomes a body with \texttt{Catalogue = name}; a star of a binary names the other with \texttt{Binary} and gives the pair's visual orbit (\texttt{Orbit = P T e a i $\Omega$ $\omega$}: period and time of periastron in years, $a$ in arcseconds, angles in degrees); a star orbiting another names it with \texttt{Primary} (\texttt{OrbitAU}: $a$ in AU); a body of no catalogue is placed with \texttt{Place = l b d} (Galactic longitude and latitude in degrees, distance in parsecs) and \texttt{Velocity}. The stars move as the catalogue has them, the bodies about them on their orbits.
+
+\textbf{Travelling there.} The Stars page of the Relativistic Travel MFD lists them with the other named stars; one of the world is the trip's target as a body: arriving \textit{in orbit} about it, or \textit{at rest}, held there on the drive against its gravity. In another system the bodies page lists that system (titled with its name) instead of the Solar System. The global frame's origin moves to the system the vessel is in; the vessels of other systems wait on their orbits.
+
+\textbf{Seeing them} (Vulkan client). A star near the camera is drawn as a body: its limb darkened, granulation where the camera is close enough, spot groups in its active latitudes (a red dwarf heavily spotted, flaring now and then), a star filling its Roche lobe drawn out towards its companion; the eye adapts to a disc that fills the view. Up to four stars light the scene: the brightest casts the shadow maps, the others light it too, with ray traced shadows where the GPU traces rays. At Nyx the stream of gas from Hemera curls to the rim of the accretion disc, where it strikes it in a hot spot.
+
 
 \subsection{TransX}
 \label{ssec:mfd_transx}

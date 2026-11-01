@@ -30,6 +30,7 @@ namespace {
 		float inner[4];
 		float disc[4];
 		float roots[4];
+		float stream[4];
 	};
 }
 
@@ -281,6 +282,7 @@ void BlackHoleLens::Trace (const Frame &f)
 	p.inner[3] = (float)(frame++ % 64);
 	p.disc[0] = (float)f.discTK, p.disc[1] = (float)f.discIn, p.disc[2] = (float)f.discOut;
 	p.disc[3] = (float)std::fmod (f.time, 1e6); // (the turbulence's phases repeat long before)
+	p.stream[0] = (float)f.streamPhi, p.stream[1] = (float)f.streamA, p.stream[2] = (float)f.streamHot, p.stream[3] = (float)f.streamL1;
 	{
 		const double PI = 3.14159265358979323846;
 		double ac = std::acos (std::clamp (f.a, -1.0, 1.0));

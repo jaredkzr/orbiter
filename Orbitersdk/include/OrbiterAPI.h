@@ -3434,6 +3434,7 @@ typedef struct {
 	double discTempScale; ///< T_K [K]: the disc's temperature T (r) = T_K Q(sqrt (r/M))^(1/4), Q Page and Thorne's flux shape (M = 1)
 	double discTmax;    ///< the disc's hottest [K]
 	double discLuminosity; ///< [W]
+	OBJHANDLE donor;    ///< a star feeding the disc (orbiting the hole, filling its Roche lobe: a stream from it to the disc's rim); NULL: none
 } BLACKHOLEINFO;
 
 /**
@@ -3491,12 +3492,13 @@ OAPIFUNC double oapiGetShipWarp ();
  */
 typedef struct {
 	const char *name;  ///< e.g. "Sirius" (valid while the session runs)
-	int index;         ///< in the sky's star catalogue (stars.bin; -1: a point, the Galactic Centre)
+	int index;         ///< in the sky's star catalogue (stars.bin; -1: none: a point, the Galactic Centre, or a star of the world placed by its configuration)
 	double teff;       ///< effective temperature [K] (0: not a star)
 	double lum;        ///< bolometric luminosity [L_sun] (as a black body)
 	double lumV;       ///< V band luminosity [L_sun,V]
 	double radius;     ///< [m]
 	VECTOR3 pos, vel;  ///< global frame [m], [m/s]
+	OBJHANDLE body;    ///< the star body of the world it is (Config/Systems; its state, radius, temperature then), or NULL
 } NAMEDSTAR;
 
 /**

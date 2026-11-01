@@ -140,6 +140,7 @@ set(SHADER_SRC
 	Shaders/milkyway.vert
 	Shaders/milkyway.frag
 	Shaders/cosmicbg.frag
+	Shaders/star.frag
 	Shaders/lens_trace.comp
 	Shaders/lens_stars.comp
 	Shaders/lenssky.frag

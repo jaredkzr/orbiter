@@ -31,6 +31,7 @@
 #include "Relativity.h"
 #include "RelTravel.h"
 #include "StarTargets.h"
+#include "Star.h"
 #include "Transfer.h"
 #include "Replay.h"
 #include "TerrainDetail.h"
@@ -569,6 +570,12 @@ DLLEXPORT bool oapiGetBlackHoleInfo (OBJHANDLE hBody, BLACKHOLEINFO *info)
 	info->strongRange = bh->StrongRange ();
 	info->discRate = bh->DiscRate (), info->discOuter = bh->DiscOuter ();
 	info->discTempScale = bh->DiscTempScale (), info->discTmax = bh->DiscTmax (), info->discLuminosity = bh->DiscLuminosity ();
+	// (the star orbiting it whose Roche lobe it fills: its disc's donor)
+	info->donor = NULL;
+	for (size_t k = 0; g_psys && k < g_psys->nStar (); k++) {
+		const Star *s = g_psys->GetStar ((int)k);
+		if (s->OrbitPrimary () == bh && bh->DiscRate () > 0.0) { info->donor = (OBJHANDLE)s; break; }
+	}
 	return true;
 }
 
@@ -639,6 +646,23 @@ DLLEXPORT bool oapiGetNamedStar (int i, NAMEDSTAR *star)
 	Vector x, v;
 	cat.State (i, td.SimT0, x, v);
 	star->pos = _V(x.x, x.y, x.z), star->vel = _V(v.x, v.y, v.z);
+	star->body = NULL;
+	// a star of the world (Config/Systems): as the body (its own radius,
+	// temperature and luminosity, a binary's member where it is)
+	for (size_t k = 0; g_psys && k < g_psys->nStar (); k++) {
+		const Star *b = g_psys->GetStar ((int)k);
+		if (b->CatalogueIndex () != i) continue;
+		star->radius = b->Size ();
+		if (b->Teff () > 0.0) star->teff = b->Teff ();
+		if (b->Luminosity () > 0.0) {
+			if (star->lum > 0.0) star->lumV *= b->Luminosity () / star->lum;
+			star->lum = b->Luminosity ();
+		}
+		const Vector &gp = b->GPos (), &gv = b->GVel ();
+		star->pos = _V(gp.x, gp.y, gp.z), star->vel = _V(gv.x, gv.y, gv.z);
+		star->body = (OBJHANDLE)b;
+		break;
+	}
 	return true;
 }
 

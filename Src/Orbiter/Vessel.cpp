@@ -885,6 +885,17 @@ void Vessel::RPlace_individual (const Vector &rpos, const Vector &rvel)
 	// Now update all passively attached child vessels
 	UpdateAttachments();
 	UpdateProxies();
+	// (during the state update the proxies looked at the old state, s0: the
+	// reference body by the new one, the proxies again after the step)
+	if (s1 != s0) {
+		double gfrac;
+		if (CelestialBody *ref = g_psys->GetDominantGravitySource (s1->pos, gfrac)) {
+			SetOrbitReference (ref);
+			cpos = s1->pos - cbody->s1->pos;
+			cvel = s1->vel - cbody->s1->vel;
+		}
+		proxyT = -1e100;
+	}
 	UpdateSurfParams();
 }
 
@@ -6139,7 +6150,7 @@ double Vessel::IlluminationFactor () const
 	lightfac = 1.0;
 
 	const CelestialBody *cb = proxyplanet;
-	Star *sun = g_psys->GetStar(0);   // should really loop over all suns
+	Star *sun = g_psys->BrightestStar (s0->pos); // (the star whose light matters here)
 	if (!cb || !sun) {                // sanity check
 		lightfac_T1 = lightfac_T0+updt;
 		return lightfac;

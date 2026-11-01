@@ -229,15 +229,20 @@ bool ThermalSubsystem::clbkParseScenarioLine (const char *line)
 double ThermalSubsystem::SolarRadiation(VECTOR3 *sdir)
 {
 	// Check if we are in the shadow of the closest celestial body
-	// For simplicity, assume sun position is at origin
-	VECTOR3 Ppos, Vpos;
+	// (positions relative to the sun: the global frame's origin may be elsewhere)
+	const OBJHANDLE hSun = oapiGetGbodyByIndex(0);
+	VECTOR3 Ppos, Vpos, Spos;
 	double vdist, pdist, prad, srad;
+	oapiGetGlobalPos(hSun, &Spos);
 	DG()->GetGlobalPos(Vpos);
+	Vpos -= Spos;
 	vdist = length(Vpos); // distance from sun
+	if (vdist <= 0.0) return 0.0;
 	OBJHANDLE hObj = DG()->GetSurfaceRef();
 	while (hObj && oapiGetObjectType(hObj) == OBJTP_PLANET) {
 		prad = oapiGetSize(hObj);
 		oapiGetGlobalPos(hObj, &Ppos);
+		Ppos -= Spos;
 		pdist = length(Ppos);
 		if (vdist > pdist) {
 			double d = length(crossp(Ppos, Ppos-Vpos))/vdist;
@@ -250,7 +255,6 @@ double ThermalSubsystem::SolarRadiation(VECTOR3 *sdir)
 		DG()->GetRotationMatrix(Vrot);
 		*sdir = tmul(Vrot, Vpos / -vdist);
 	}
-	const OBJHANDLE hSun = oapiGetGbodyByIndex(0);
 	srad = oapiGetSize(hSun);
 	const double Hsun = 62499432.6; // should be queried from hSun
 	return Hsun * (srad*srad)/(vdist*vdist);

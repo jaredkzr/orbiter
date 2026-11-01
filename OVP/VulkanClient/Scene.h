@@ -271,6 +271,21 @@ public:
 	/// the sky seen through a black hole with an accretion disc (the exposure adapts to it)
 	bool LensDisc () const { return lensOn && lensDisc; }
 
+	/// A star's disc (Shaders/star.frag): its photosphere's radiance at the
+	/// disc's centre rgb (scene, relativistic shift applied), modelView with
+	/// its rotation and radius; its temperature [K] (activity: spots,
+	/// flares), seed (its pattern)
+	/// a star's photosphere (Shaders/star.frag); modelView: its frame (an
+	/// ellipsoid: drawn out by a tide); tide: towards the companion in that
+	/// frame (null: none)
+	void DrawStar (const Mat4 &modelView, const float rgb[3], double teff, double radius, uint32_t seed, const VECTOR3 *tide = nullptr);
+	/// a star's flares now (cool dwarfs: Proxima Centauri's ~ a few an hour,
+	/// rare large ones), deterministic in time: the two brightest (direction
+	/// in its frame, brightness relative to its disc's centre), the light's
+	/// rise (1: none)
+	struct StarFlare { VECTOR3 dir{}; double bright = 0.0; };
+	static void StarFlares (uint32_t seed, double teff, double t, StarFlare out[2], double &boost);
+
 	/// scene radiance of a star's surface as bright as the Sun's (a disc far
 	/// brighter than any lit surface; the scale of the stars and accretion
 	/// discs drawn as bodies)
@@ -283,6 +298,20 @@ public:
 	/// named star near the camera: Orbiter's core, oapiGetNamedStar), in its
 	/// colour, fading as its flux falls below NEAR_FLUX.
 	static constexpr double NEAR_FLUX = 1e-4;
+	/// a star's glare sprite's half size at view depth z: glowSize radii, at
+	/// least minAngle; near the star (its disc large) at most reaching
+	/// STAR_GLARE_REACH beyond its limb (the disc's own light blooms)
+	static double StarGlowSize (double radius, double z, double glowSize, double minAngle)
+	{
+		return std::min (std::max (radius * glowSize, z * minAngle), radius + z * STAR_GLARE_REACH);
+	}
+	static constexpr double STAR_GLARE_REACH = 0.12;
+	/// a star's glare sprite's strength by its disc's radius in pixels: whole
+	/// for a small disc, gone for a large one (its own light blooms)
+	static double StarGlowFade (double pixelRadius) { return 1.0 - std::clamp ((pixelRadius - 20.0) / 60.0, 0.0, 1.0); }
+	/// the angular radius [rad] of the largest star disc (the Sun's or a near
+	/// star's) in or about the view (0: none); the exposure adapts to a large one
+	double StarDiscAngle (double *teff = nullptr) const;
 	struct StarLight {
 		VECTOR3 pos{};          ///< global position
 		double radius = 0.0;    ///< [m]
@@ -290,8 +319,19 @@ public:
 		double flux = 1.0;      ///< V band, relative to the Sun's at 1 AU
 		bool sun = true;        ///< the Sun (Orbiter's star body)
 		bool disc = false;      ///< a black hole's accretion disc
+		double flare = 1.0;     ///< the light's rise in a flare (Scene::StarFlares)
 	};
 	const StarLight &Light () const { return light; }
+	/// further lights (another star of a binary, a disc), brightest first:
+	/// diffuse light, ray traced shadows (Shaders/lights.glsl, type 3)
+	const std::vector<StarLight> &ExtraLights () const { return extraLights; }
+	static constexpr size_t MAX_EXTRA_LIGHTS = 3;
+	/// (an extra light's least flux, of the light's: its light 1/1000 of the
+	/// light's after the compression, EXTRA_LIGHT_GAMMA)
+	static constexpr double EXTRA_LIGHT_MIN = 1e-4;
+	/// extra lights' brightness relative to the light: their flux ratio to
+	/// this power (the eye's compression, as the light's own)
+	static constexpr double EXTRA_LIGHT_GAMMA = 0.75;
 	bool SunAsBody () const { return sunAsBody; }
 	/// a black body's disc radiance (RGB) relative to the Sun's (5772 K)
 	static void StarDiscRGB (double teff, float rgb[3]);
@@ -317,7 +357,7 @@ public:
 
 private:
 	void CreatePipelines ();
-	enum class MeshShader { Mesh, Ring, RingShadow, Building };
+	enum class MeshShader { Mesh, Ring, RingShadow, Building, Star };
 	VkPipeline CreateMeshPipeline (bool blend, bool additive, bool depthWrite, bool prepass = false, bool instanced = false, bool impostor = false,
 		MeshShader shader = MeshShader::Mesh);
 	VkPipeline CreateParticlePipeline (bool additive, bool lamps = false);
@@ -341,6 +381,7 @@ private:
 	void FillFrameUniforms (void *fu);
 	void UpdateCamAtmSet ();
 	VkPipelineLayout meshLayout = VK_NULL_HANDLE;
+	VkPipeline starPipe = VK_NULL_HANDLE; // (star discs: star.frag)
 	VkPipeline meshOpaque = VK_NULL_HANDLE;
 	VkPipeline meshBlend = VK_NULL_HANDLE;
 	VkPipeline meshAdditive = VK_NULL_HANDLE;
@@ -429,12 +470,15 @@ private:
 	galactic::Observer SkyObserver () const;
 
 	// interstellar travel: named stars drawn as bodies, the light
-	struct NearStar { int index; VECTOR3 pos; double radius, teff, flux, dist; };
+	struct NearStar { int index; uint32_t seed; VECTOR3 pos; double radius, teff, flux, dist; OBJHANDLE body; }; // (index: the star field's, -1: none)
 	std::vector<NearStar> nearStars;
 	StarLight light;
+	std::vector<StarLight> extraLights;
 	bool sunAsBody = true;
 	void UpdateNearStars ();
 	void RenderNearStars (bool transparent);
+	/// a star feeding a black hole's disc (its donor): its frame, x towards the hole, y the orbit's axis
+	bool DonorFrame (OBJHANDLE body, const VECTOR3 &pos, VECTOR3 &x, VECTOR3 &y) const;
 
 	// camera
 	VECTOR3 camPos{};

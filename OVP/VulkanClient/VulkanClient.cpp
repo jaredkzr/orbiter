@@ -252,6 +252,7 @@ void VulkanClient::clbkUpdate (bool running)
 
 namespace {
 	constexpr double DAYLIGHT_MAX_EXPOSURE = 1.3; // with the camera in sunlight
+	constexpr double STAR_DISC_DISPLAY = 0.9; // a large star disc's centre, displayed
 }
 
 void VulkanClient::clbkRenderScene ()
@@ -298,8 +299,28 @@ void VulkanClient::clbkRenderScene ()
 		if (dt < 1.0) postfx->maxExposure = std::max (postfx->maxExposure, (float)(4.0 + 4.0 * (1.0 - dt)));
 		// (a black hole's accretion disc in the lens: the eye adapts to it)
 		bool disc = scene->LensDisc ();
+		// (a star's disc large in view, many times brighter than lit
+		// surfaces: the eye adapts to it, its photosphere's detail seen)
+		// (the exposure then brings the disc's centre to about full
+		// brightness: the photosphere's granulation, spots and limb seen;
+		// lit surfaces near it, their light compressed, dimmer)
+		double teff = 5772.0;
+		double sa = scene->StarDiscAngle (&teff);
+		double fill = std::clamp ((sa - 0.02) / 0.08, 0.0, 1.0);
+		fill = fill * fill * (3.0 - 2.0 * fill);
 		postfx->minExposure = disc ? 1e-4f : 0.6f;
 		postfx->adaptStrength = disc ? 0.9f : 0.6f;
+		if (fill > 0.0 && !disc) {
+			float c[3];
+			Scene::StarDiscRGB (teff, c);
+			// (its brightest channel: a red dwarf's red unsaturated, its colour kept)
+			double lum = Scene::STAR_BRIGHTNESS * std::max ({ (double)c[0], (double)c[1], (double)c[2], 1e-3 });
+			double target = std::log2 (STAR_DISC_DISPLAY / lum);
+			// (a red dwarf's disc, dimmer than the Sun's, as bright: the eye adapts up)
+			auto blend = [&](float e) { return (float)std::exp2 (std::log2 (e) + (target - std::log2 (e)) * fill); };
+			postfx->maxExposure = blend (postfx->maxExposure);
+			postfx->minExposure = blend (postfx->minExposure);
+		}
 	}
 	// relativistic view: the Doppler shift, before the exposure
 	postfx->rel.on = scene->RelView ();

@@ -100,14 +100,20 @@ def main():
             continue
         if i not in named:
             named[i] = (s['name'], s['desig'], s['con'])
+    byid = {g: i for i, g in enumerate(ids)}
     with open(os.path.join(here, 'curated_names.csv')) as f:
         for row in csv.DictReader(line for line in f if not line.startswith('#')):
-            i = byhip.get(int(row['hip']), -1)
+            # (a Hipparcos number, or gaia:<Gaia DR3 source id> for a star Hipparcos missed)
+            key = row['hip']
+            if key.startswith('gaia:'):
+                i, desig = byid.get(int(key[5:]), -1), f"Gaia DR3 {key[5:]}"
+            else:
+                i, desig = byhip.get(int(key), -1), f"HIP {key}"
             if i < 0 or dist[i] > CURATED_MAX_PC:
-                print(f"curated name {row['name']}: HIP {row['hip']} not found within {CURATED_MAX_PC} pc", file=sys.stderr)
+                print(f"curated name {row['name']}: {desig} not found within {CURATED_MAX_PC} pc", file=sys.stderr)
                 continue
             if i not in named:
-                named[i] = (row['name'], f"HIP {row['hip']}", '')
+                named[i] = (row['name'], desig, '')
 
     with open(out + '.part', 'w', encoding='utf-8') as f:
         f.write('# Named stars (build_names.py): IAU Catalog of Star Names (WGSN, CC BY 4.0) and curated_names.csv;\n')

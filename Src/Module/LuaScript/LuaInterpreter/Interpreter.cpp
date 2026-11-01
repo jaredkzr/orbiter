@@ -4387,7 +4387,8 @@ A named star (interstellar travel), as at the current simulation time.
 @tparam string|number star name, or index (0: the Galactic Centre)
 @treturn table fields name, index (in the sky's catalogue), teff [K], lum
   (bolometric [L_sun]), lumv (V band), radius [m], pos, vel (global frame
-  [m], [m/s]); nil if none
+  [m], [m/s]), body (the star body of the world it is, Config/Systems; if
+  any); nil if none
 */
 int Interpreter::oapi_get_namedstar (lua_State *L)
 {
@@ -4411,6 +4412,7 @@ int Interpreter::oapi_get_namedstar (lua_State *L)
 	lua_pushnumber (L, s.radius); lua_setfield (L, -2, "radius");
 	lua_pushvector (L, s.pos); lua_setfield (L, -2, "pos");
 	lua_pushvector (L, s.vel); lua_setfield (L, -2, "vel");
+	if (s.body) { lua_pushlightuserdata (L, s.body); lua_setfield (L, -2, "body"); }
 	return 1;
 }
 

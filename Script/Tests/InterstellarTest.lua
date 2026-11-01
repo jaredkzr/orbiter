@@ -167,7 +167,9 @@ local function main()
 	local ct0, cc0 = oapi.get_simtime(), oapi.get_relstate(hv).clockofs
 	oapi.set_shipwarp(1e7)
 	local tw = oapi.get_systime()
-	until_(function() ri = oapi.reltrip_info(hv); return ri.phase == "Arrived" or ri.phase == "No trip" end, 240)
+	-- (Barnard's Star a body of the world, Config/Systems: held at rest
+	-- against its gravity there)
+	until_(function() ri = oapi.reltrip_info(hv); return ri.phase == "Arrived" or ri.phase == "Holding" or ri.phase == "No trip" end, 240)
 	local trip = oapi.get_simtime() - ct0
 	local ship = trip + oapi.get_relstate(hv).clockofs - cc0
 	-- (as it arrived: then drifting at what speed was left, under the time warp)
@@ -176,9 +178,18 @@ local function main()
 	local expect = 2 * C / G0 * math.log(1 + G0 * (d0 - ri.alt) / (2 * C * C) + math.sqrt((1 + G0 * (d0 - ri.alt) / (2 * C * C)) ^ 2 - 1))
 	log(string.format("%s after %.4f years on board (flip-and-burn %.4f), %.4f years in the Solar System, %.1f s: %.6f AU from the star (%.6f), %.3f m/s",
 		ri.phase, ship / YEAR, expect / YEAR, trip / YEAR, oapi.get_systime() - tw, ri.distance / AU, ri.alt / AU, ri.speed))
-	check("arrived", ri.phase == "Arrived", "arrived")
-	check("there", math.abs(ri.distance - ri.alt) < 1e-5 * ri.alt and ri.speed < 1,
-		string.format("at rest at the distance: %.1f m off, %.4f m/s", ri.distance - ri.alt, ri.speed))
+	check("arrived", ri.phase == "Arrived" or ri.phase == "Holding", "arrived")
+	-- (held: settled on the arrival point within minutes; the distance
+	-- from the star's centre, the altitude above its surface)
+	local hb = oapi.get_objhandle("Barnard")
+	local R = hb and oapi.get_size(hb) or 0
+	if ri.phase == "Holding" then
+		local t0 = oapi.get_simtime()
+		until_(function() ri = oapi.reltrip_info(hv)
+			return oapi.get_simtime() - t0 > 240 end, 120)
+	end
+	check("there", math.abs(ri.distance - R - ri.alt) < 1e-5 * ri.alt and ri.speed < 1,
+		string.format("at rest at the distance: %.1f m off, %.4f m/s", ri.distance - R - ri.alt, ri.speed))
 	check("shiptime", math.abs(ship / expect - 1) < 0.01, "time on board")
 
 	-- 5. the Solar System beyond its theories (VSOP87 and the moons'

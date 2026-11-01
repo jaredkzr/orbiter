@@ -159,8 +159,16 @@ public:
 	/// (its root stars'): kept near the focus in deep space, for precision
 	/// far from the Sun (Orbiter::UpdateOrigin); else zero
 	const Vector &Origin () const { return origin; }
+	/// the simulation time the origin last moved (the stars' motion is
+	/// measured from it: their states smooth near it, Catalogue::State)
+	double OriginTime () const { return originT; }
 	/// Move the origin by delta: every body's global position shifts by -delta
 	void ShiftOrigin (const Vector &delta);
+	/// the system the origin is at (its root body, near the origin: the
+	/// focus is in it), else none (the Solar System's barycentre, or the
+	/// origin following the focus in deep space)
+	const CelestialBody *OriginRoot () const { return originRoot; }
+	void SetOriginRoot (const CelestialBody *root) { originRoot = root; }
 	// Acceleration vector due to gravitational forces at global position gpos for current time t0.
 	// If exclude != 0 then this object is omitted (to avoid objects interrogating themselves)
 	// If gfd != 0 then only g-sources from this list are computed
@@ -198,6 +206,8 @@ public:
 	// if defined, dominant returns true if the body is the major contributor
 
 	Vector GetMomentumFlux (const Vector &gpos) const;
+	Star *BrightestStar (const Vector &gpos) const;
+	// the star whose light is the brightest at gpos (none: null)
 	// returns the momentum flux [N/m^2] due to solar radiation at position gpos.
 	// - assumes single radiation source at origin
 	// - source luminosity is fixed to L=3.846e26 W (sun)
@@ -234,6 +244,8 @@ private:
 	std::string m_Name; // system's name
 
 	Vector origin;
+	double originT = 0.0;
+	const CelestialBody *originRoot = nullptr;
 	std::vector<Body*  > bodies;
 	std::vector<Star*  > stars;
 	std::vector<Planet*> planets;

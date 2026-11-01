@@ -263,6 +263,11 @@ void RTScene::Add (uint64_t key, const Part *parts, const float (*offsets)[3], u
 {
 	if (!ctx || nInst >= MAX_INSTANCES || !nParts || nRec + nParts > MAX_RECORDS) return;
 	if (offsets && nXform + nParts > MAX_RECORDS) return;
+	// (an instance far off: no shadow or reflection of it to trace; another
+	// star system's objects parsecs away would give the structure bounds
+	// beyond float's range, NaN in the traces)
+	const double *t = &modelView.m[12];
+	if (t[0] * t[0] + t[1] * t[1] + t[2] * t[2] > RT_FAR * RT_FAR) return;
 	struct Src { VkDeviceAddress vaddr, iaddr; const Part *p; const float *ofs; };
 	std::vector<Src> src;
 	src.reserve (nParts);

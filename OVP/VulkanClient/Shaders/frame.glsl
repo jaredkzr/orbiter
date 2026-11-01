@@ -14,9 +14,9 @@ const int MAX_LIGHTS = 32;
 
 struct LocalLight {
 	vec4 pos;    // view space position (xyz), range (w)
-	vec4 dir;    // view space direction (xyz), type (w: 1 point, 2 spot)
+	vec4 dir;    // view space direction (xyz), type (w: 1 point, 2 spot, 3 a star: directional, towards it)
 	vec4 col;    // colour times intensity
-	vec4 att;    // attenuation coefficients (xyz), cos(umbra/2) (w)
+	vec4 att;    // attenuation coefficients (xyz), cos(umbra/2) (w; a star: its angular radius)
 	vec4 spot;   // cos(penumbra/2) (x), id of the vessel carrying it (y), shadow rays start this far along dir (z)
 };
 

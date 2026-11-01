@@ -35,6 +35,16 @@ public:
 	void DefaultParam ();
 	virtual void Setup ();
 	virtual int Type() const { return OBJTP_CBODY; }
+	/// A root body placed by a law of its own rather than an ephemeris (a
+	/// star of the sky's catalogue, Star): its state at simulation time t,
+	/// relative to the global frame's origin (false: not such a body)
+	virtual bool AnchoredState (double t, Vector &x, Vector &v) const { return false; }
+	/// the root body of the system this body belongs to (itself, a root)
+	const CelestialBody *Root () const;
+	/// the star system it belongs to, by its first root: a system of several
+	/// roots (Config/Systems: a binary, Proxima with Alpha Centauri) is one
+	const CelestialBody *System () const { const CelestialBody *r = Root (); return r->sysPrimary ? r->sysPrimary : r; }
+	void SetSystemPrimary (const CelestialBody *p) { sysPrimary = p; }
 	virtual void Update (bool force);
 
 	CELBODY *GetModuleInterface() { return module; }
@@ -220,6 +230,7 @@ protected:
 	void RegisterModule (char *dllname);
 	void ClearModule ();
 	CELBODY *module;         // pointer to module interface class, if available
+	const CelestialBody *sysPrimary = nullptr; // a root's system's first root (another star of a binary)
 
 	bool bFixedElements;
 	// Set this to true if the object's elements never change

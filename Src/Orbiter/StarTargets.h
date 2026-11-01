@@ -38,6 +38,7 @@ namespace startargets {
 		double vel[3] = {0, 0, 0}; ///< [km/s]
 		double mv = 0.0;         ///< absolute visual magnitude
 		double teff = 0.0;       ///< effective temperature [K] (0: not a star)
+		int follow = -1;         ///< an entry of a world's star orbiting another (Primary =): the other's place (its own: the body's)
 		bool IsStar () const { return teff > 0.0; }
 	};
 
@@ -62,6 +63,11 @@ namespace startargets {
 		double Luminosity (int i) const;
 		/// Radius [m] of star i (from its luminosity and temperature)
 		double Radius (int i) const;
+		/// Add an entry (a star or black hole of the world placed by its
+		/// configuration, Config/Systems); its index (one of the name: replaced)
+		int Add (const Star &s);
+		/// absolute visual magnitude of a black body of luminosity lum [L_sun], temperature teff
+		static double AbsMagV (double lum, double teff);
 
 	private:
 		std::vector<Star> stars;
@@ -70,6 +76,8 @@ namespace startargets {
 
 	/// The named stars, read on first use
 	const Catalogue &Get ();
+	/// (Catalogue::Add on the named stars)
+	int AddEntry (const Star &s);
 
 } // namespace startargets
 

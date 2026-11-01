@@ -217,7 +217,7 @@ void RigidBody::RelativisticUpdate ()
 		double ht = h * 0.5 * (1.0 / g0 + 1.0 / GammaOfU (u));
 		s1->Q.Rotate (s1->omega * ht);
 		s1->omega += arot * ht;
-		s1->pos = rpos_base + rpos_add + d;
+		s1->pos = x0 + d;
 		s1->vel = VelocityOfU (u);
 		s1->R.Set (s1->Q);
 	}
@@ -226,11 +226,14 @@ void RigidBody::RelativisticUpdate ()
 	Vector accDummy, tau;
 	GetIntermediateMoments (accDummy, tau, *s1, 1.0, dt);
 	arot.Set (EulerInv_full (tau, s1->omega));
-	rpos_add += d;
+	// (the new state as the step's change from the old, the base reset to it:
+	// accumulated over a trip, the increments would grow to parsecs, each
+	// step's change rounded to metres there, a drift of hundreds of m/s)
 	Vector v1 (VelocityOfU (u));
-	rvel_add += v1 - v0;
-	s1->pos = rpos_base + rpos_add;
-	s1->vel = rvel_base + rvel_add;
+	s1->pos = x0 + d;
+	s1->vel = v1;
+	rpos_base = s1->pos, rpos_add.Set (0, 0, 0);
+	rvel_base = s1->vel, rvel_add.Set (0, 0, 0);
 	acc = (v1 - v0) / dt;
 	// ground contacts: at a landing's speeds only (their search reaches
 	// speed x step: a fast pass would find the ground everywhere; its
@@ -366,10 +369,9 @@ void RigidBody::KerrUpdate (const BlackHole *bh, const std::vector<Source> &src,
 	s1->pos = x1, s1->vel = v1;
 	GetIntermediateMoments (accDummy, torque, *s1, 1.0, dt);
 	arot.Set (EulerInv_full (torque, s1->omega));
-	rpos_add += x1 - x0;
-	rvel_add += v1 - v0;
-	s1->pos = rpos_base + rpos_add;
-	s1->vel = rvel_base + rvel_add;
+	s1->pos = x1, s1->vel = v1; // (the base reset: as RelativisticUpdate)
+	rpos_base = s1->pos, rpos_add.Set (0, 0, 0);
+	rvel_base = s1->vel, rvel_add.Set (0, 0, 0);
 	acc = (v1 - v0) / dt;
 }
 

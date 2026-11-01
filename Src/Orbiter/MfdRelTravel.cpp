@@ -89,8 +89,11 @@ namespace {
 					add (c, depth + 1);
 				}
 		};
+		// (the vessel's own star system: the Sun's, or the one it is in; the
+		// others are reached through the stars)
+		const CelestialBody *home = self && self->ElRef () ? self->ElRef ()->System () : nullptr;
 		for (const CelestialBody *c : cel)
-			if (!c->ElRef() || c->ElRef() == c) { list.push_back (c), names.push_back (c->Name()); add (c, 1); }
+			if ((!c->ElRef() || c->ElRef() == c) && (!home || c->System () == home)) { list.push_back (c), names.push_back (c->Name()); add (c, 1); }
 		for (size_t i = 0; i < g_psys->nVessel(); i++) {
 			const Vessel *v = g_psys->GetVessel ((int)i);
 			if (v != self) list.push_back (v), names.push_back (std::string ("[vessel] ") + v->Name());
@@ -168,8 +171,12 @@ void Instrument_RelTravel::DrawTarget (const RLayout &L)
 	float lw = a.W() * 0.36f;
 	bool engaged = c->Engaged ();
 
-	// the Solar System's bodies and vessels, or the named stars (by distance)
-	static const char *kinds[2] = { "Solar System", "Stars" };
+	// the bodies and vessels of the vessel's star system (the Solar System,
+	// or the one it is in: its root star's name), or the named stars (by distance)
+	const CelestialBody *home = vessel->ElRef () ? vessel->ElRef ()->System () : nullptr;
+	std::string sysName = !home || home == g_psys->GetStar (0) ? std::string ("Solar System") :
+		dynamic_cast<const Star*> (home) && !((const Star*)home)->SystemName ().empty () ? ((const Star*)home)->SystemName () : std::string (home->Name ()) + " system";
+	const char *kinds[2] = { sysName.c_str (), "Stars" };
 	if (s.star >= 0) targetKind = 1;
 	ui.Tabs ("kind", Rect (a.x0, a.y0, a.x1, a.y0 + rh - gap), kinds, 2, &targetKind);
 	Rect lr (a.x0, a.y0 + rh, a.x1, a.y1 - 3.0f * rh);
@@ -207,7 +214,7 @@ void Instrument_RelTravel::DrawTarget (const RLayout &L)
 		}
 		for (size_t k = 0; k < starOrder.size (); k++) {
 			items.push_back (starLabel[k].c_str ());
-			if (starOrder[k] == s.star) sel = (int)k;
+			if (starOrder[k] == s.star || (s.target && reltravel::Controller::StarBody (starOrder[k]) == s.target)) sel = (int)k; // (a star of the world: its body)
 		}
 		if (ui.List ("stars", lr, items.data(), (int)items.size(), &sel) && sel >= 0 && !engaged) c->SetStar (starOrder[sel]);
 		ui.Tooltip ("Named stars (IAU names and common ones), nearest first, and the Galactic Centre: arriving at rest near one, or passing it");

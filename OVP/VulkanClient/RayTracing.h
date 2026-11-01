@@ -74,6 +74,8 @@ public:
 	/// static groups of a mesh: one bottom-level structure for all keeps
 	/// rays from descending into many overlapping ones). The instance mask
 	/// is that of the first part's owner.
+	/// [m] instances farther from the camera are left out
+	static constexpr double RT_FAR = 1e10;
 	void AddInstance (const Part *parts, uint32_t nParts, const Mat4 &modelView);
 	void AddInstance (const Geometry &geo, const Mat4 &modelView, VkTexture *tex, const Material &mat)
 	{ Part p{ geo, tex, mat }; AddInstance (&p, 1, modelView); }

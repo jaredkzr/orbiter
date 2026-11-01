@@ -438,14 +438,24 @@ void CelestialBody::AbsTrueState()
 
 	s1->pos = cpos;
 	s1->vel = cvel;
+	Vector ax, av;
 	if (cbody) {
 		s1->pos += cbody->s1->pos;
 		s1->vel += cbody->s1->vel;
+	} else if (AnchoredState (td.SimT1, ax, av)) {
+		s1->pos = ax, s1->vel = av; // (a star of the catalogue: its own law)
 	} else if (g_psys) {
 		s1->pos -= g_psys->Origin (); // (a root: relative to the global frame's origin)
 	}
 	for (i = 0; i < nsecondary; i++)
 		secondary[i]->AbsTrueState();
+}
+
+const CelestialBody *CelestialBody::Root () const
+{
+	const CelestialBody *b = this;
+	while (b->cbody) b = b->cbody;
+	return b;
 }
 
 void CelestialBody::Update (bool force)
@@ -576,6 +586,20 @@ bool CelestialBody::EphemerisAtTime (double t, EphemState &s, const Elements *el
 {
 	s = EphemState();
 	if (bDynamicPosVel) return false;
+	// a star of the sky's catalogue: its own law (relative to the global
+	// frame's origin); a root body without an ephemeris: at rest at the
+	// system's barycentre
+	Vector ax, av;
+	if (AnchoredState (t, ax, av)) {
+		s.cpos = s.bpos = ax, s.cvel = s.bvel = av;
+		s.havetrue = s.havebary = true;
+		return true;
+	}
+	if (!cbody && !HasEphemerisModule()) {
+		s.cpos = s.bpos = g_psys ? -g_psys->Origin () : Vector ();
+		s.havetrue = s.havebary = true;
+		return true;
+	}
 	if (HasEphemerisModule()) {
 		double state[12];
 		int flg = ExternEphemeris (td.MJD_ref + Day(t), EPHEM_TRUEPOS | EPHEM_TRUEVEL | EPHEM_BARYPOS | EPHEM_BARYVEL, state);

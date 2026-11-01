@@ -27,6 +27,7 @@
 
 class Vessel;
 class Body;
+class Star;
 
 namespace reltravel {
 
@@ -100,7 +101,9 @@ namespace reltravel {
 		/// The target's state at simulation time t (global frame)
 		void TargetState (double t, Vector &x, Vector &v) const;
 		void SetTarget (const Body *b);
-		void SetStar (int i);          ///< (the arrival distance: the star's default)
+		void SetStar (int i);          ///< (the arrival distance: the star's default; a star of the world: its body)
+		/// the star body of named star i (a star of Config/Systems), or none
+		static const Star *StarBody (int i);
 
 		/// State of a body (or vessel) at simulation time t, extrapolated
 		/// from now along conics about its primaries (relativistic vessels:

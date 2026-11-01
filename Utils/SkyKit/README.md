@@ -36,7 +36,7 @@ their systems' distances.
 | `Config/CSphere/Sky/galaxies.cfg` | hand-written | models of the Local Group's brightest galaxies (LMC, SMC, M31, M32, M110, M33): distance, orientation, luminosity, components, dust; proper motions of the Clouds' members |
 | `Config/CSphere/Sky/globulars.csv` | `build_clusters.py` | the Milky Way's globular clusters: position, M_V, Plummer and tidal radii, [Fe/H] (154) |
 | `Config/CSphere/Sky/stars_ref.csv` | `build_stars.py` | full-precision positions and velocities of the Hipparcos stars and those within 25 pc (by index in `stars.bin`) |
-| `Config/CSphere/Sky/stars_named.csv` | `build_names.py` | named stars: IAU names and `curated_names.csv`, with their positions and velocities (423) |
+| `Config/CSphere/Sky/stars_named.csv` | `build_names.py` | named stars: IAU names and `curated_names.csv`, with their positions and velocities (424) |
 | `Utils/SkyKit/curated_nearby.csv` | hand-written | parallaxes of nearby stars where the catalogues' are poor (a system's components at one distance) |
 | `Utils/SkyKit/curated_names.csv` | hand-written | common names of well-known stars the IAU leaves unnamed (Tau Ceti, 61 Cygni, ...) |
 

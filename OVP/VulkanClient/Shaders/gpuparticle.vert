@@ -126,6 +126,7 @@ void main ()
 	int nl = int (frame.lightCount.x);
 	for (int k = 0; k < nl; k++) {
 		LocalLight l = frame.lights[k];
+		if (l.dir.w > 2.5) { amb += l.col.rgb * 0.8; continue; } // (a star: from afar)
 		float d = length (l.pos.xyz - vp);
 		if (d > l.pos.w) continue;
 		float la = min (1.0 / max (l.att.x + l.att.y * d + l.att.z * d * d, 1e-4), 1.0);

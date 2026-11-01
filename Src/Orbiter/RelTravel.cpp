@@ -15,6 +15,7 @@
 #include "Maneuver.h"
 #include "Log.h"
 #include "StarTargets.h"
+#include "Star.h"
 #include <algorithm>
 #include <cmath>
 
@@ -35,6 +36,7 @@ namespace reltravel {
 		const double EVENT_FRAMES = 30.0;      // time warp lowered when a burn's end is fewer steps ahead
 		const double RESTORE_FRAMES = 100.0;   // a ship-time warp lowered for an event raised back when the next is more steps ahead (x10)
 		const double IDEAL_TURN_RATE = 5.0 * RAD; // [rad/s] turns without attitude thrusters
+		const double HOLD_TURN_RATE = 30.0 * RAD; // [rad/s] holding (falling while it turns)
 		const double MAX_RCS_STEP = 10.0;      // [s] longer steps on the vessel's clock: turns without attitude thrusters
 		const double FLIP_COAST = 10.0;        // [s] coast planned between the burns (the drive reverses: no turn; a margin)
 		const double REVERSE_HYST = 0.5;       // the drive's end changes when the other is this much nearer (cosine)
@@ -49,10 +51,12 @@ namespace reltravel {
 		const double STOP_SPEED = 1.0;         // [m/s] and this slow relative to it
 		const double REPLAN_MISS = 1000.0;     // [m] stopped farther from the arrival: a new approach
 		const int MAX_REPLANS = 5;
+		const double HOLD_CATCH = 1e-3;        // (at rest by a star: stopped this part of the distance short, held and drawn there)
 		const double REPLAN_BRAKE = 0.01;      // (braking at less than this part of the drive)
 		const double BH_ARRIVE_R = 20.0;       // [M] arrival by a black hole: at least this far out,
 		const double BH_HOVER_SHARE = 0.25;    // and where staying at rest takes at most this part of the drive
 		const double HOLD_TIME = 10.0;         // [s] holding at rest: the position's correction time
+		const double HOLD_TIME_STAR = 30.0;    // [s] (by a star)
 		const double TRIM_TIME = 2.0;          // [s] an orbit by a black hole trimmed to circular: the velocity's correction time,
 		const double TRIM_TOL = 1e-5;          // until within this part of the orbital speed,
 		const double TRIM_MAX = 120.0;         // [s] or for at most this long
@@ -112,7 +116,10 @@ namespace reltravel {
 	{
 		if (!settings.target && settings.star < 0 && !settings.targetName.empty()) {
 			const std::string &n = settings.targetName;
-			if (!n.compare (0, 5, "star:")) settings.star = startargets::Get ().Find (n.c_str() + 5);
+			if (!n.compare (0, 5, "star:")) {
+				settings.star = startargets::Get ().Find (n.c_str() + 5);
+				if (const Star *b = StarBody (settings.star)) settings.target = b, settings.star = -1; // (saved before it was a body)
+			}
 			else settings.target = g_psys->GetObj (n.c_str(), true);
 			if (HasTarget ()) settings.targetName.clear();
 		}
@@ -184,27 +191,58 @@ namespace reltravel {
 	{
 		// at rest relative to the hole, at the arrival point: the drive's
 		// acceleration of an observer at rest there, and corrections back to
-		// the point (critically damped over HOLD_TIME)
+		// the point (critically damped over HOLD_TIME); by a star: against
+		// its gravity (Newton's)
 		const BlackHole *bh = vessel->StrongFieldHole ();
-		if (!bh || vessel->InsideHorizon ()) { Stop (PH_FAILED, "Can't hold position"); return; }
-		Vector rp (vessel->GPos () - bh->GPos ()), rv (vessel->GVel () - bh->GVel ());
+		const Body *tb = bh ? (const Body*)bh : settings.target;
+		if (!tb || vessel->InsideHorizon ()) { Stop (PH_FAILED, "Can't hold position"); return; }
+		Vector rp (vessel->GPos () - tb->GPos ()), rv (vessel->GVel () - tb->GVel ());
 		if (!holdSet) holdPos = rp, holdSet = true;
 		Vector hover;
-		if (!bh->HoverAccel (rp, hover)) { Stop (PH_FAILED, "Can't hold position: within the ergosphere"); return; }
-		double w = 2.0 / HOLD_TIME;
-		Vector alpha (hover + (holdPos - rp) * (w * w) - rv * (2.0 * w));
+		if (!bh) hover = -Gravity (vessel->GPos (), vessel->GVel ());
+		else if (!bh->HoverAccel (rp, hover)) { Stop (PH_FAILED, "Can't hold position: within the ergosphere"); return; }
+		// (by a star the hover is weak, the corrections would swing the
+		// thrust about faster than the vessel turns: gentler, and at most
+		// half the hover, the thrust within 30 deg of it)
+		double w = 2.0 / (bh ? HOLD_TIME : HOLD_TIME_STAR);
+		Vector corr ((holdPos - rp) * (w * w) - rv * (2.0 * w));
+		if (!bh) {
+			// (towards the point at a speed it can stop from with the
+			// correction available: sqrt (2 a d), else w d, then matched)
+			double cmax = 0.5 * hover.length ();
+			Vector dp (holdPos - rp);
+			double d = dp.length ();
+			Vector vd (d > 0.0 ? dp * (std::min (w * d, std::sqrt (cmax * d)) / d) : Vector ());
+			corr = (vd - rv) * (2.0 * w);
+			if (corr.length () > cmax) corr *= cmax / corr.length ();
+		}
+		Vector alpha (hover + corr);
 		attErr = Point (alpha.unit ());
 		Drive (alpha, td.SimT1 + 1.0);
 		char buf[128];
-		snprintf (buf, sizeof (buf), "Holding at rest by %s: %.3g g", bh->Name (), alpha.length () / G0);
+		snprintf (buf, sizeof (buf), "Holding at rest by %s: %.3g g", tb->Name (), alpha.length () / G0);
 		message = buf;
 	}
 
 	void Controller::SetStar (int i)
 	{
+		// a star of the world (Config/Systems): the body (its own place, a
+		// binary's member's; an orbit about it), at the star's default distance
+		if (const Star *b = StarBody (i)) {
+			SetTarget (b);
+			settings.altitude = std::max (startargets::Get ().ArrivalDistance (i) - b->Size (), b->Size ());
+			return;
+		}
 		settings.target = nullptr, settings.star = i, settings.targetName.clear ();
 		if (i >= 0) settings.altitude = startargets::Get ().ArrivalDistance (i);
 		if (settings.arrival == ARRIVE_ORBIT) settings.arrival = ARRIVE_REST; // (a point: no orbit)
+	}
+
+	const Star *Controller::StarBody (int i)
+	{
+		for (size_t k = 0; i >= 0 && g_psys && k < g_psys->nStar (); k++)
+			if (g_psys->GetStar ((int)k)->CatalogueIndex () == i) return g_psys->GetStar ((int)k);
+		return nullptr;
 	}
 
 	bool Controller::Solve (Plan &p, double tArr, const Plan *warm)
@@ -345,7 +383,7 @@ namespace reltravel {
 		// else the ideal drive turns the vessel)
 		Vector tgt (dir * driveSign);
 		if (!IdealTurns ()) return vessel->SteerTowards (tgt, Vector (0, 0, 1));
-		return vessel->TurnTowards (tgt, Vector (0, 0, 1), IDEAL_TURN_RATE * td.SimDT);
+		return vessel->TurnTowards (tgt, Vector (0, 0, 1), (phase == PH_HOLD ? HOLD_TURN_RATE : IDEAL_TURN_RATE) * td.SimDT);
 	}
 
 	bool Controller::IdealTurns () const
@@ -412,13 +450,15 @@ namespace reltravel {
 		if (guided && now >= tArrive - 1e-6 && (settings.arrival == ARRIVE_FLYBY || stopped)) {
 			char buf[128];
 			snprintf (buf, sizeof (buf), "Arrived at %s", TargetName ().c_str());
-			// (at rest by a black hole: held there)
+			// (at rest by a black hole, or a star (its gravity: falling in
+			// else): held there)
 			const BlackHole *bh = settings.target && settings.target->Type () == OBJTP_BLACKHOLE ? (const BlackHole*)settings.target : nullptr;
-			if (bh && settings.arrival == ARRIVE_REST && vessel->StrongFieldHole () == bh) {
+			bool star = settings.target && settings.target->Type () == OBJTP_STAR;
+			if (settings.arrival == ARRIVE_REST && ((bh && vessel->StrongFieldHole () == bh) || star)) {
 				LOGOUT ("Relativistic travel: %s %s: holding there", vessel->Name(), buf);
 				if (vessel == g_focusobj) g_pOrbiter->ShowInfoMessage (buf);
 				phase = PH_HOLD;
-				holdPos = vessel->GPos () - bh->GPos (), holdSet = true;
+				holdPos = vessel->GPos () - settings.target->GPos (), holdSet = true;
 				Hold ();
 				return;
 			}
@@ -541,6 +581,19 @@ namespace reltravel {
 			// miss left that it doesn't take out: a fresh trip from here,
 			// rather than creeping the rest)
 			double miss = r.length();
+			// (at rest by a star, stopped a little short: held, drawn to the
+			// arrival point; its gravity would spoil a short new approach)
+			bool starRest = settings.arrival == ARRIVE_REST && settings.target && settings.target->Type () == OBJTP_STAR;
+			if (starRest && phase == PH_BURN2 && miss > STOP_DIST && miss < HOLD_CATCH * settings.altitude && areq < REPLAN_BRAKE * settings.accel) {
+				char buf[128];
+				snprintf (buf, sizeof (buf), "Arrived at %s", TargetName ().c_str());
+				LOGOUT ("Relativistic travel: %s %s (%.3g km short): holding there", vessel->Name(), buf, miss * 1e-3);
+				if (vessel == g_focusobj) g_pOrbiter->ShowInfoMessage (buf);
+				phase = PH_HOLD, guided = false;
+				holdPos = xt - vt * tgo - settings.target->GPos (), holdSet = true;
+				Hold ();
+				return;
+			}
 			if (phase == PH_BURN2 && miss > REPLAN_MISS && areq < REPLAN_BRAKE * settings.accel && replans < MAX_REPLANS) {
 				replans++;
 				LOGOUT ("Relativistic travel: %s stopped %.3g km short of the arrival: a new approach", vessel->Name(), miss * 1e-3);

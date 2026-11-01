@@ -1568,10 +1568,12 @@ bool Orbiter::DeepSpace (const Vector &gpos)
 
 int Orbiter::originSettle = 0;
 
-bool Orbiter::WorldParked (const Vector &gpos)
+bool Orbiter::WorldParked (const Vector &gpos, const CelestialBody *root)
 {
 	bool moved = originSettle > 0 || (g_psys && g_psys->Origin().length2() > 0.0);
 	if (!moved && td.Warp() <= MaxWarpLimit * (1.0 + 1e-9)) return false;
+	// (in the system the origin is at, at a usual time warp: flown as ever)
+	if (root && g_psys && root == g_psys->OriginRoot () && originSettle <= 0 && td.Warp() <= MaxWarpLimit * (1.0 + 1e-9)) return false;
 	return !DeepSpace (gpos);
 }
 
@@ -1584,21 +1586,36 @@ void Orbiter::UpdateOrigin ()
 	// bodies follow their conics (exact relative to their reference bodies,
 	// WorldParked), for a few steps after it returned too (their positions
 	// recovered from the conics).
+	// In another star system (the focus's reference body's root is not the
+	// Sun's) the origin is at that system's root, moved to it again when it
+	// has moved OriginRange from it; the vessels of other systems are parked.
 	if (!g_psys) return;
 	const Vector &o = g_psys->Origin ();
 	Vector delta;
 	// (deep space, with a margin to leave it once the origin moved)
 	bool deep = g_focusobj && g_psys->Gacc (g_focusobj->GPos ()).length () < DeepSpaceG * (o.length2 () > 0.0 ? 2.0 : 1.0);
+	const CelestialBody *sunRoot = g_psys->nStar () ? g_psys->GetStar (0) : nullptr;
+	const CelestialBody *home = g_focusobj && g_focusobj->ElRef () ? g_focusobj->ElRef ()->Root () : nullptr;
+	const CelestialBody *root = g_psys->OriginRoot ();
 	if (deep) {
-		if (g_focusobj->GPos ().length () > OriginRange) delta = g_focusobj->GPos ();
+		if (g_focusobj->GPos ().length () > OriginRange) delta = g_focusobj->GPos (), root = nullptr;
+	} else if (home && home != sunRoot) {
+		if (root != home || home->GPos ().length () > OriginRange) {
+			delta = home->GPos ();
+			if (root != home) originSettle = 2;
+			root = home;
+		}
 	} else if (o.length2 () > 0.0) {
-		delta = -o;
+		delta = -o, root = nullptr;
 		originSettle = 2;
 	}
 	if (delta.length2 () > 0.0) {
 		g_psys->ShiftOrigin (delta);
+		g_psys->SetOriginRoot (root);
 		if (g_psys->Origin ().length2 () == 0.0)
 			LOGOUT ("Global frame: origin back at the Solar System's barycentre");
+		else if (root)
+			LOGOUT ("Global frame: origin at %s", root->Name ());
 	} else if (originSettle > 0) originSettle--;
 }
 

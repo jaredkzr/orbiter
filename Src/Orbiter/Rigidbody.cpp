@@ -117,6 +117,18 @@ void RigidBody::SetOrbitReference (CelestialBody *body)
 	}
 }
 
+bool RigidBody::ConicDefined () const
+{
+	// (a radial state, as at rest relative to the body, has no orbital plane:
+	// its elements are undefined; nearly radial, the eccentricity rounds to
+	// 1 and the elements' formulas fail: the semi-latus rectum h^2/mu a
+	// tiny part of the distance)
+	if (!cbody) return false;
+	double mu = Ggrav * (cbody->Mass () + mass), r = cpos.length ();
+	double h2 = crossp (cpos, cvel).length2 ();
+	return mu > 0.0 && r > 0.0 && h2 / mu > 1e-6 * r;
+}
+
 const Elements *RigidBody::Els () const
 {
 	extern bool g_bStateUpdate;
@@ -222,7 +234,7 @@ void RigidBody::Update (bool force)
 		// First check if we should do a stabilised state update (always at
 		// time accelerations beyond Orbiter's limit: a ship-time warp in deep
 		// space; the world then follows conics)
-		} else if ((cbody && Orbiter::WorldParked (s0->pos)) || (bCanUpdateStabilised &&
+		} else if ((cbody && Orbiter::WorldParked (s0->pos, cbody->Root ()) && ConicDefined ()) || (bCanUpdateStabilised &&
 			ostep > g_pOrbiter->Cfg()->CfgPhysicsPrm.Stabilise_SLimit &&
 			g_psys->GetGravityContribution (cbody, cpos+cbody->GPos()) > 1-g_pOrbiter->Cfg()->CfgPhysicsPrm.Stabilise_PLimit)) {
 

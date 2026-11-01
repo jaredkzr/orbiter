@@ -128,10 +128,13 @@ namespace startargets {
 
 	void Catalogue::State (int i, double simt, Vector &x, Vector &v) const
 	{
-		// (as its place at the epoch relative to the global frame's origin,
-		// constant between the origin's moves, and its motion since: smooth
-		// in time to millimetres near it; their sum in heliocentric metres
-		// would be 8 m coarse at 2 pc)
+		// (as its place relative to the global frame's origin when the origin
+		// last moved, constant between the moves (its rounding too), and its
+		// motion since: smooth in time near it. Its place at the epoch and
+		// its motion since the epoch (light-time years: 1e13 m and more)
+		// added each step would jitter by millimetres, its velocity by m/s;
+		// their sum in heliocentric metres would be 8 m coarse at 2 pc)
+		if (stars[i].follow >= 0 && stars[i].follow != i) { State (stars[i].follow, simt, x, v); return; }
 		const Star &s = stars[i];
 		double R[3][3];
 		galactic::EclipticToGalactic (R);
@@ -140,12 +143,14 @@ namespace startargets {
 			               (R[0][1] * g[0] + R[1][1] * g[1] + R[2][1] * g[2]) * scale,
 			               (R[0][2] * g[0] + R[1][2] * g[1] + R[2][2] * g[2]) * scale);
 		};
-		double years = (td.MJD_ref - 51544.5) / 365.25 + 2000.0 - epoch + simt / (365.25 * 86400.0);
+		double t0 = g_psys ? g_psys->OriginTime () : 0.0;
+		double years0 = (td.MJD_ref - 51544.5) / 365.25 + 2000.0 - epoch + t0 / (365.25 * 86400.0);
 		double d0 = std::sqrt (s.pos[0] * s.pos[0] + s.pos[1] * s.pos[1] + s.pos[2] * s.pos[2]) * LY_PER_PC;
 		v = toEcl (s.vel, 1e3);
 		x = toEcl (s.pos, galactic::PARSEC);
 		if (g_psys) x -= g_psys->Origin ();
-		x += v * ((years + d0) * 365.25 * 86400.0);
+		x += v * ((years0 + d0) * 365.25 * 86400.0);
+		x += v * (simt - t0);
 	}
 
 	double Catalogue::Luminosity (int i) const
@@ -168,6 +173,25 @@ namespace startargets {
 	{
 		if (!stars[i].IsStar ()) return GC_ARRIVAL * galactic::PARSEC;
 		return std::clamp (std::sqrt (Luminosity (i)), 0.02, 1e4) * AU;
+	}
+
+	int Catalogue::Add (const Star &s)
+	{
+		int i = Find (s.name.c_str ());
+		if (i > 0) { stars[i] = s; return i; }
+		stars.push_back (s);
+		return (int)stars.size () - 1;
+	}
+
+	double Catalogue::AbsMagV (double lum, double teff)
+	{
+		if (lum <= 0.0 || teff <= 0.0) return 99.0;
+		return MV_SUN - 2.5 * std::log10 (lum * VFraction (teff) / VFraction (TSUN));
+	}
+
+	int AddEntry (const Star &s)
+	{
+		return const_cast<Catalogue&> (Get ()).Add (s);
 	}
 
 	const Catalogue &Get ()

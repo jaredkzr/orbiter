@@ -47,7 +47,9 @@ struct Predictor::Input {
 		double soi = 1e100;               // Laplace sphere radius
 		double orbitRadius = 0.0;         // distance from the parent
 		double hstep = 3600.0;            // ephemeris sample interval [s]
+		bool remote = false;              // of another star system than the vessel's (left out: its pull ~1e-13 m/s^2)
 	};
+	int rootIdx = 0;                      // the root body of the vessel's system
 	double t0 = 0.0;
 	Vector r0, v0;                        // vessel state (global)
 	std::vector<maneuver::Node> nodes;
@@ -205,8 +207,8 @@ struct Predictor::Context {
 		double dt = t - in->t0;
 		for (size_t i = 0; i < n; i++) {
 			const auto &b = in->bodies[i];
-			bool act = true;
-			if (b.parent >= 0 && in->bodies[b.parent].parent >= 0) {
+			bool act = !b.remote;
+			if (act && b.parent >= 0 && in->bodies[b.parent].parent >= 0) {
 				// a moon: only near its planet
 				int par = b.parent;
 				act = active[par] && (r - G[par]).length() < MOON_RANGE * b.orbitRadius;
@@ -312,9 +314,15 @@ struct Predictor::Context {
 	// (requires Bodies at this time)
 	int Ref (const Vector &r) const
 	{
-		int cur = -1;
-		for (size_t i = 0; i < in->bodies.size(); i++)
-			if (in->bodies[i].parent < 0) { cur = (int)i; break; }
+		// (the roots of the vessel's system, a binary's stars: the one pulling hardest)
+		int cur = in->rootIdx;
+		double gmax = -1.0;
+		for (size_t i = 0; i < in->bodies.size(); i++) {
+			const auto &b = in->bodies[i];
+			if (b.parent >= 0 || b.remote || !active[i]) continue;
+			double d2 = std::max ((r - G[i]).length2 (), 1.0), g = b.mu / d2;
+			if (g > gmax) gmax = g, cur = (int)i;
+		}
 		for (;;) {
 			int next = -1;
 			for (int c : in->bodies[cur].children)
@@ -398,6 +406,10 @@ std::shared_ptr<Predictor::Input> Predictor::Snapshot (const Vessel *v, const Bo
 			for (int j = 0; j < b.nJ; j++) b.J[j] = cb->Jcoeff (j);
 		}
 		b.poleY = mul (cb->GRot(), Vector (0, 1, 0));
+		// (another star system: the vessel's is its reference body's)
+		const CelestialBody *vr = v->ElRef () ? v->ElRef ()->Root () : nullptr;
+		b.remote = vr && cb->System () != vr->System ();
+		if (cb == vr) in->rootIdx = (int)i;
 		b.rotAxis = cb->RotAxis();
 		CelestialBody::EphemState es;
 		b.analytic = cb->HasEphemerisModule() || (cb->ElementsPtr() && cb->EphemerisAtTime (sim, es));

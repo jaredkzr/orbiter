@@ -77,6 +77,8 @@ public:
 	// reset reference object for element calculation to "body"
 
 	const Elements *Els() const;
+	/// the state relative to the reference body has an orbital plane (not radial, not at rest)
+	bool ConicDefined () const;
 	// Returns pointer to orbital elements (after updating them, if
 	// necessary), or NULL if not supported
 

@@ -176,12 +176,12 @@ public:
 	static bool DeepSpace (const Vector &gpos);
 	// Whether a point is in deep space (the bodies' gravity below DeepSpaceG)
 
-	static bool WorldParked (const Vector &gpos);
+	static bool WorldParked (const Vector &gpos, const class CelestialBody *root = nullptr);
 	// Whether a body in free flight at gpos follows a conic about its
 	// reference body: out of deep space, at time accelerations beyond
 	// MaxWarpLimit (no integration over such steps), or while the global
-	// frame's origin is away from the Solar System (positions there are
-	// coarse: the conics keep them exact)
+	// frame's origin is away from its system (root: its reference body's
+	// root; positions there are coarse: the conics keep them exact)
 
 	static constexpr double OriginRange = 1e12; // [m] the global frame's origin moves to the focus in deep space when it is this far
 

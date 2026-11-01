@@ -44,7 +44,39 @@ layout(std140, set = 0, binding = 1) uniform Params {
 	vec4 inner;   // x: r- [M] (inside the horizon: lost there); y: the camera inside (1); z: the prograde photon orbit [M]; w: the frame (mod 64)
 	vec4 disc;    // x: T_K [K] (0: no disc); y, z: its inner (the ISCO) and outer radius [M]; w: time [M]
 	vec4 roots;   // x0 = sqrt (r_ISCO), x1, x2, x3: the roots of x^3 - 3x + 2a = 0
+	vec4 stream;  // a donor's stream: its azimuth, distance [M] (0: none), the hot spot's radius [M] (the disc's rim), the inner Lagrange point's [M]
 } P;
+
+// The stream from the donor's inner Lagrange point to the disc's rim, in
+// the disc's plane: curving ahead of the donor as it falls (the Coriolis
+// force of the turning binary), narrowing; shock-heated where it strikes the
+// rim: the hot spot. Its temperature [K] and brightness (0: none) at r, phi
+const float T_L1 = 3500.0, T_RIM = 6500.0, T_HOT = 8000.0; // (the hot spot about as bright as the disc's inner parts)
+vec2 Stream (float r, float phi, float dist)
+{
+	if (P.stream.y <= 0.0) return vec2 (0.0);
+	float rL1 = P.stream.w, rH = P.stream.z;
+	float s = (rL1 - r) / max (rL1 - rH, 1e-3); // (0 at L1, 1 at the rim)
+	if (s < -0.02 || s > 1.15) return vec2 (0.0);
+	float sc = clamp (s, 0.0, 1.0);
+	float phs = P.stream.x + 0.9 * pow (sc, 1.5); // (the centre line)
+	// (its half width [M]: a tenth of the donor's size at L1, narrowing; at
+	// least three pixels across (the lens map's grid: two), then fainter: its light kept)
+	float w0 = 0.15 * (1.0 - 0.5 * sc);
+	float wpx = 1.5 * 2.0 * 2.0 * P.proj.x / P.proj.w * dist;
+	float wm = max (w0, wpx);
+	float dph = mod (phi - phs + 3.14159265, 6.2831853) - 3.14159265;
+	vec2 res = vec2 (0.0);
+	float u = dph * r / wm;
+	if (abs (u) < 1.0 && s <= 1.0) res = vec2 (mix (T_L1, T_RIM, sc * sc), 0.5 * (1.0 - u * u) * (w0 / wm));
+	// (the hot spot: on the rim where the stream meets it, drawn out along it)
+	float phh = P.stream.x + 0.9;
+	float dh = mod (phi - phh + 3.14159265, 6.2831853) - 3.14159265;
+	float hr = max (0.015 * rH, wpx), e = (r - rH) / hr, f = dh * rH / max (0.05 * rH, wpx);
+	float h2 = e * e + f * f;
+	if (h2 < 1.0) res = vec2 (T_HOT * (1.0 - 0.3 * h2), 0.8 * (1.0 - h2) * min (1.0, 0.015 * rH / hr));
+	return res;
+}
 
 // Page & Thorne's flux shape at r (M = 1): F = 3 Mdot / (8 pi) Q
 float DiscQ (float r, float a)
@@ -214,6 +246,23 @@ void main ()
 			// filter smooths the edge)
 			vec2 fid = vec2 (id) + vec2 (5.588238, 3.1) * P.inner.w;
 			float dith = fract (52.9829189 * fract (dot (fid, vec2 (0.06711056, 0.00583715))));
+			// (beyond the glowing disc: the donor's stream, the hot spot)
+			if (!(rc >= P.disc.y && rc <= P.disc.z && dith < edge) && P.stream.y > 0.0) {
+				vec2 st = Stream (rc, atan (xc.y, xc.x), length (xc - P.cam.xyz));
+				if (st.y > 0.0) {
+					float Om = 1.0 / (rc * sqrt (rc) + a); // (moving about as the disc's gas)
+					vec3 V = vec3 (-Om * xc.y, Om * xc.x, 0.0);
+					float r2c = rc * rc, rac = r2c + a * a;
+					float fc = 2.0 * r2c * rc / (r2c * r2c + a * a * xc.z * xc.z);
+					vec3 lc = vec3 ((rc * xc.x + a * xc.y) / rac, (rc * xc.y - a * xc.x) / rac, xc.z / rc);
+					float nrm = 1.0 - dot (V, V) - fc * (1.0 + dot (lc, V)) * (1.0 + dot (lc, V));
+					if (nrm > 0.0) {
+						float pu = inversesqrt (nrm) * (p.w + dot (p.xyz, V));
+						imageStore (lensMap, id, vec4 (st.x / max (pu, 1e-6), st.y, rc, -1.0));
+						return;
+					}
+				}
+			}
 			if (rc >= P.disc.y && rc <= P.disc.z && dith < edge) {
 				float Om = 1.0 / (rc * sqrt (rc) + a);
 				vec3 V = vec3 (-Om * xc.y, Om * xc.x, 0.0);

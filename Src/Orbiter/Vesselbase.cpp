@@ -430,8 +430,12 @@ bool VesselBase::SurfaceImpact ()
 		pl->LocalToEquatorial (p, lng, lat, rad);
 		return pl->Elevation (lng, lat);
 	};
-	double R = pl->Size(), rs = R + elev (p1);
-	if (p1.length() >= rs || p0.length() < rs) return false; // (above the ground at the end, or below it from the start)
+	double R = pl->Size();
+	// (the step's end far above the ground (an elevation 100 km and more is
+	// none's): nothing to look up; a vessel placed parsecs away its elevation NaN)
+	if (!(p1.length() < R + 100e3)) return false;
+	double rs = R + elev (p1);
+	if (!std::isfinite (rs) || !(p1.length() < rs) || !(p0.length() >= rs)) return false; // (above the ground at the end, or below it from the start)
 	// where the path meets the terrain's sphere (the end point's elevation)
 	double A = dp.length2(), B = 2.0 * dotp (p0, dp), C = p0.length2() - rs * rs;
 	double disc = std::max (0.0, B*B - 4.0*A*C);

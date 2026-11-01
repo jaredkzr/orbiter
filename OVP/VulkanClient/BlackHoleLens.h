@@ -43,6 +43,11 @@ public:
 		double discTK = 0.0;     ///< the accretion disc's temperature scale [K] (0: none)
 		double discIn = 0.0, discOut = 0.0; ///< its edges (the ISCO, the outer)
 		double time = 0.0;       ///< (the disc's turbulence: simulation time in masses)
+		/// the stream from a donor star filling its Roche lobe to the disc's
+		/// rim, and the hot spot where it strikes it (disc plane, masses):
+		/// the donor's azimuth and distance (0: no stream), the hot spot's
+		/// radius, the inner Lagrange point's
+		double streamPhi = 0.0, streamA = 0.0, streamHot = 0.0, streamL1 = 0.0;
 	};
 
 	bool Init (vkc::Context *ctx, GalaxySky *sky, StarField *stars);

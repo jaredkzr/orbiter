@@ -1,7 +1,9 @@
 // Copyright (c) Martin Schweiger
 // Licensed under the MIT License
 
-// Diffuse light from local light sources (vessel lights). Requires frame.glsl.
+// Diffuse light from local light sources (vessel lights), and from the
+// extra stars (a binary's other star, a black hole's disc: directional, type
+// 3, first in the list). Requires frame.glsl.
 
 // vis: visibility of the first four lights (ray traced shadows)
 vec3 LocalLighting (vec3 posView, vec3 N, vec4 vis)
@@ -10,6 +12,10 @@ vec3 LocalLighting (vec3 posView, vec3 N, vec4 vis)
 	int n = int(frame.lightCount.x);
 	for (int i = 0; i < n; i++) {
 		LocalLight l = frame.lights[i];
+		if (l.dir.w > 2.5) { // a star: from its direction, unattenuated
+			sum += l.col.rgb * (i < 4 ? vis[i] : 1.0) * max (dot (N, l.dir.xyz), 0.0);
+			continue;
+		}
 		vec3 L = l.pos.xyz - posView;
 		float d = length(L);
 		if (d > l.pos.w || d < 1e-4) continue;

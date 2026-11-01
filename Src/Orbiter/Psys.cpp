@@ -8,6 +8,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <algorithm>
+#include <cstdlib>
+#include <vector>
+#include <filesystem>
 
 #include "Config.h"
 #include "Psys.h"
@@ -266,6 +269,40 @@ bool PlanetarySystem::Read (char *fname, const Config* config, OutputLoadStatusC
 		ScanMoons (ifs, planet, planet->Name());
 	}
 
+	// the Solar System's neighbours (Config/Systems/<name>.cfg, each a system
+	// of stars and black holes of the sky's catalogue, StarN / BlackHoleN =
+	// their files relative to Config): in the same world (ORBITER_NO_NEIGHBOURS=1:
+	// left out)
+	if (!_stricmp (m_Name.c_str(), "Sol") && !(getenv ("ORBITER_NO_NEIGHBOURS") && atoi (getenv ("ORBITER_NO_NEIGHBOURS")))) {
+		std::error_code ec;
+		std::filesystem::path dir = std::filesystem::path (config->ConfigPath ("Systems/x")).parent_path ();
+		std::vector<std::filesystem::path> files;
+		for (const auto &e : std::filesystem::directory_iterator (dir, ec))
+			if (e.is_regular_file () && e.path ().extension () == ".cfg") files.push_back (e.path ());
+		std::sort (files.begin (), files.end ());
+		for (const auto &f : files) {
+			std::ifstream sfs (f);
+			std::string sysname = f.stem ().string ();
+			if (GetItemString (sfs, "Name", cbuf)) sysname = trim_string (cbuf);
+			int n = 0;
+			const CelestialBody *primary = nullptr; // (the system's root: its first)
+			for (const char *kind : { "BlackHole", "Star" }) // (black holes first: the stars about them name them)
+				for (i = 0;; i++) {
+					sprintf (label, "%s%d", kind, i+1);
+					if (!GetItemString (sfs, label, cbuf)) break;
+					OutputLoadStatus (cbuf, outputLoadStatus, callbackContext);
+					Star *st = !strcmp (kind, "Star") ? new Star (cbuf) : new BlackHole (cbuf);
+					AddStar (st);
+					st->SetSystemName (sysname);
+					st->LinkPrimary (this);
+					if (primary) st->SetSystemPrimary (primary);
+					else primary = st;
+					n++;
+				}
+			LOGOUT ("Neighbouring system %s: %d bodies", sysname.c_str(), n);
+		}
+	}
+
 	for (j = 0; j < stars.size(); j++) stars[j]->RelTrueAndBaryState();
 	for (j = 0; j < stars.size(); j++) stars[j]->AbsTrueState();
 
@@ -456,8 +493,15 @@ void PlanetarySystem::AddGrav (CelestialBody *newBody)
 	//While the sorting was technically more efficient this way (since most of the list was already sorted anyways),
 	//it doesn't really matter much since this function is not called very often.
 	//And this is just so much more readable.
+	// (the system's first star, the Sun, stays first whatever the masses of
+	// the neighbouring systems' stars and black holes: modules and plugins
+	// take gravity body 0 for the central star)
 	celestials.emplace_back(newBody);
-	std::sort(celestials.begin(), celestials.end(), [](CelestialBody* a, CelestialBody* b) { return a->Mass() > b->Mass(); });
+	const CelestialBody *central = stars.empty() ? nullptr : stars[0];
+	std::stable_sort(celestials.begin(), celestials.end(), [central](CelestialBody* a, CelestialBody* b) {
+		if ((a == central) != (b == central)) return a == central;
+		return a->Mass() > b->Mass();
+	});
 }
 
 size_t PlanetarySystem::AddVessel (Vessel *_vessel)
@@ -883,11 +927,31 @@ double PlanetarySystem::GetGravityContribution (const Body *body, const Vector &
 
 Vector PlanetarySystem::GetMomentumFlux (const Vector &gpos) const
 {
-	const double L = 3.846e26;      // sun luminosity [W] - SHOULD BE CONFIGURABLE!
-	const double F = L/(4.0*PI*C0); // radiation force at unit distance
-	double r2 = gpos.length2();
-	double p  = F/r2;               // radiation pressure at distance r
-	return gpos * (p/sqrt(r2));
+	// the stars' light (each at its luminosity; the Sun's, if none given:
+	// 3.846e26 W), from where they are (the global frame's origin may be
+	// elsewhere)
+	Vector flux;
+	for (const Star *s : stars) {
+		if (s->Type () != OBJTP_STAR) continue; // (black holes)
+		double L = s->Luminosity () > 0.0 ? s->Luminosity () * 3.828e26 : 3.846e26;
+		Vector r (gpos - s->GPos ());
+		double r2 = std::max (r.length2 (), 1.0);
+		flux += r * (L / (4.0 * PI * C0) / r2 / std::sqrt (r2));
+	}
+	return flux;
+}
+
+Star *PlanetarySystem::BrightestStar (const Vector &gpos) const
+{
+	Star *best = nullptr;
+	double bmax = 0.0;
+	for (Star *s : stars) {
+		if (s->Type () != OBJTP_STAR) continue;
+		double L = s->Luminosity () > 0.0 ? s->Luminosity () : 1.0;
+		double b = L / std::max ((s->GPos () - gpos).length2 (), 1.0);
+		if (b > bmax) bmax = b, best = s;
+	}
+	return best;
 }
 
 void PlanetarySystem::Update (bool force)
@@ -926,6 +990,7 @@ void PlanetarySystem::FinaliseUpdate ()
 void PlanetarySystem::ShiftOrigin (const Vector &delta)
 {
 	origin += delta;
+	originT = td.SimT0;
 	for (Body *b : bodies) b->ShiftOrigin (delta);
 	for (SuperVessel *sv : supervessels) sv->ShiftOrigin (delta);
 	for (Debris *d : debris) d->ShiftOrigin (delta);

@@ -39,6 +39,7 @@
 #include "mesh.frag.h"
 #include "ring.vert.h"
 #include "ring.frag.h"
+#include "star.frag.h"
 #include "ringshadow.frag.h"
 #include "prepass.vert.h"
 #include "prepass_inst.vert.h"
@@ -479,7 +480,7 @@ void Scene::Shutdown ()
 	for (auto &u : probeFrameUbo) ctx->DestroyBuffer (u);
 	if (probe) probe->Shutdown ();
 	probe.reset();
-	VkPipeline pipes[] = { meshOpaque, meshBlend, meshAdditive, ringPipe, ringShadowPipe, meshPrepass, meshOpaqueInst, meshPrepassInst, meshOpaqueImp, meshPrepassImp, buildOpaque, buildPrepass, lampPipe, particleAdditive, particleBlend };
+	VkPipeline pipes[] = { starPipe, meshOpaque, meshBlend, meshAdditive, ringPipe, ringShadowPipe, meshPrepass, meshOpaqueInst, meshPrepassInst, meshOpaqueImp, meshPrepassImp, buildOpaque, buildPrepass, lampPipe, particleAdditive, particleBlend };
 	for (auto p : pipes) if (p) vkDestroyPipeline (ctx->device, p, nullptr);
 	vkDestroyPipelineLayout (ctx->device, meshLayout, nullptr);
 	vkDestroyPipelineLayout (ctx->device, particleLayout, nullptr);
@@ -502,7 +503,7 @@ VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite
 	VkShaderModule vs = building ?
 		(prepass ? ctx->CreateShaderModule (spv_prepass_building_vert, spv_prepass_building_vert_size)
 		         : ctx->CreateShaderModule (spv_building_vert, spv_building_vert_size)) :
-		shader != MeshShader::Mesh ? ctx->CreateShaderModule (spv_ring_vert, spv_ring_vert_size) :
+		shader != MeshShader::Mesh && shader != MeshShader::Star ? ctx->CreateShaderModule (spv_ring_vert, spv_ring_vert_size) :
 		impostor ?
 		(prepass ? ctx->CreateShaderModule (spv_prepass_impostor_inst_vert, spv_prepass_impostor_inst_vert_size)
 		         : ctx->CreateShaderModule (spv_impostor_inst_vert, spv_impostor_inst_vert_size)) :
@@ -511,7 +512,8 @@ VkPipeline Scene::CreateMeshPipeline (bool blend, bool additive, bool depthWrite
 		         : ctx->CreateShaderModule (spv_mesh_inst_vert, spv_mesh_inst_vert_size)) :
 		(prepass ? ctx->CreateShaderModule (spv_prepass_vert, spv_prepass_vert_size)
 		         : ctx->CreateShaderModule (spv_mesh_vert, spv_mesh_vert_size));
-	VkShaderModule fs = shader == MeshShader::Ring ? ctx->CreateShaderModule (spv_ring_frag, spv_ring_frag_size) :
+	VkShaderModule fs = shader == MeshShader::Star ? ctx->CreateShaderModule (spv_star_frag, spv_star_frag_size) :
+		shader == MeshShader::Ring ? ctx->CreateShaderModule (spv_ring_frag, spv_ring_frag_size) :
 		shader == MeshShader::RingShadow ? ctx->CreateShaderModule (spv_ringshadow_frag, spv_ringshadow_frag_size) :
 		prepass ? ctx->CreateShaderModule (spv_prepass_frag, spv_prepass_frag_size) :
 		building ? ctx->CreateShaderModule (spv_building_frag, spv_building_frag_size)
@@ -649,6 +651,7 @@ void Scene::CreatePipelines ()
 	VK_CHECK(vkCreatePipelineLayout (ctx->device, &plci, nullptr, &meshLayout));
 
 	meshOpaque = CreateMeshPipeline (false, false, true);
+	starPipe = CreateMeshPipeline (false, false, true, false, false, false, MeshShader::Star);
 	meshBlend = CreateMeshPipeline (true, false, false);
 	meshAdditive = CreateMeshPipeline (true, true, false);
 	ringPipe = CreateMeshPipeline (true, false, false, false, false, false, MeshShader::Ring);
@@ -1305,6 +1308,20 @@ void Scene::UpdateLens ()
 		for (double r = 1.5 * f.discIn; r < f.discOut; r *= 1.02)
 			if (bi.discTempScale * std::pow (K.DiscFluxShape (r), 0.25) < DISC_T_MIN) { f.discOut = r; break; }
 		f.time = oapiGetSimTime () * C / bi.M;
+		// (a donor star: its stream to the disc's rim, where it strikes the
+		// hot spot; the inner Lagrange point by Eggleton's Roche lobe)
+		if (bi.donor) {
+			VECTOR3 dp;
+			oapiGetGlobalPos (bi.donor, &dp);
+			VECTOR3 r = (dp - hp) / bi.M;
+			double x = dotp (r, bi.ex), y = dotp (r, bi.ey);
+			double q = oapiGetMass (bi.donor) / bi.mass, q3 = std::cbrt (q), q23 = q3 * q3;
+			double rl = 0.49 * q23 / (0.6 * q23 + std::log1p (q3));
+			f.streamA = std::sqrt (x * x + y * y);
+			f.streamPhi = std::atan2 (y, x);
+			f.streamL1 = f.streamA * (1.0 - rl);
+			f.streamHot = bi.discOuter / bi.M;
+		}
 	}
 	lens->Trace (f);
 	lensOn = true;
@@ -1314,29 +1331,38 @@ void Scene::UpdateNearStars ()
 {
 	nearStars.clear ();
 	constexpr double AU_M = 1.49597870700e11;
-	// the Sun
-	light = StarLight ();
-	if (!hSun) light.flux = 0.0; // (a system without the Sun: no light but what is found below)
+	// the candidates: the Sun, the named stars near the camera, black holes'
+	// accretion discs; the brightest the light (shadow maps, the sky's
+	// scattering, specular), the next MAX_EXTRA_LIGHTS of note extra lights
+	std::vector<StarLight> cand;
+	sunAsBody = false;
 	if (hSun) {
-		oapiGetGlobalPos (hSun, &light.pos);
-		light.radius = oapiGetSize (hSun);
-		double d = std::max (length (light.pos - camPos), 1.0);
-		light.flux = (AU_M / d) * (AU_M / d);
+		StarLight l;
+		oapiGetGlobalPos (hSun, &l.pos);
+		l.radius = oapiGetSize (hSun);
+		double d = std::max (length (l.pos - camPos), 1.0);
+		l.flux = (AU_M / d) * (AU_M / d);
+		sunAsBody = l.flux >= NEAR_FLUX;
+		cand.push_back (l);
 	}
-	sunAsBody = light.flux >= NEAR_FLUX;
-	// named stars near the camera (the first entry is the Galactic Centre: a point)
+	// (the first named star is the Galactic Centre: a point)
 	int n = oapiNamedStarCount ();
 	for (int i = 1; i < n; i++) {
 		NAMEDSTAR s;
-		if (!oapiGetNamedStar (i, &s) || s.teff <= 0.0 || s.index < 0) continue;
+		// (a star of the world placed by its configuration, Hemera, the
+		// S-stars: no point of the star field's, index -1)
+		if (!oapiGetNamedStar (i, &s) || s.teff <= 0.0) continue;
 		double d = std::max (length (s.pos - camPos), 1.0);
 		double flux = s.lumV * (AU_M / d) * (AU_M / d);
 		if (flux < NEAR_FLUX) continue;
-		nearStars.push_back (NearStar{ s.index, s.pos, s.radius, s.teff, flux, d });
-		if (flux > light.flux) {
-			light.pos = s.pos, light.radius = s.radius, light.teff = s.teff, light.flux = flux;
-			light.sun = false;
-		}
+		uint32_t seed = s.index >= 0 ? (uint32_t)s.index : 0x40000000u + (uint32_t)i;
+		nearStars.push_back (NearStar{ s.index, seed, s.pos, s.radius, s.teff, flux, d, s.body });
+		StarLight l;
+		l.pos = s.pos, l.radius = s.radius, l.teff = s.teff, l.flux = flux;
+		l.sun = false;
+		StarFlare fl[2];
+		StarFlares (seed, s.teff, oapiGetSimTime (), fl, l.flare);
+		cand.push_back (l);
 	}
 	// black holes' accretion discs: light from the hole's direction, of the
 	// colour of their hot inner gas, the disc's luminosity foreshortened by
@@ -1352,12 +1378,19 @@ void Scene::UpdateNearStars ()
 		VECTOR3 dv = camPos - hp;
 		double d = std::max (length (dv), 10.0 * bi.M);
 		double ci = std::max (std::fabs (dotp (dv, bi.axis)) / std::max (length (dv), 1.0), 0.2);
-		double flux = bi.discLuminosity / 3.828e26 * 2.0 * ci * (AU_M / d) * (AU_M / d);
-		if (flux > light.flux) {
-			light.pos = hp, light.radius = 10.0 * bi.M, light.teff = 0.8 * bi.discTmax, light.flux = flux;
-			light.sun = false, light.disc = true;
-		}
+		StarLight l;
+		l.pos = hp, l.radius = 10.0 * bi.M, l.teff = 0.8 * bi.discTmax;
+		l.flux = bi.discLuminosity / 3.828e26 * 2.0 * ci * (AU_M / d) * (AU_M / d);
+		l.sun = false, l.disc = true;
+		cand.push_back (l);
 	}
+	std::stable_sort (cand.begin (), cand.end (), [](const StarLight &a, const StarLight &b) { return a.flux > b.flux; });
+	light = StarLight ();
+	if (cand.empty ()) light.flux = 0.0; // (no light)
+	else light = cand[0];
+	extraLights.clear ();
+	for (size_t k = 1; k < cand.size () && extraLights.size () < MAX_EXTRA_LIGHTS; k++)
+		if (cand[k].flux > EXTRA_LIGHT_MIN * light.flux) extraLights.push_back (cand[k]);
 }
 
 void Scene::RenderNearStars (bool transparent)
@@ -1372,9 +1405,22 @@ void Scene::RenderNearStars (bool transparent)
 		RelShiftColour (s.pos, c);
 		if (!transparent) {
 			if (PixelSize (s.radius, s.dist) < 0.5) continue;
-			float d[4] = { c[0] * STAR_BRIGHTNESS, c[1] * STAR_BRIGHTNESS, c[2] * STAR_BRIGHTNESS, 1.0f };
-			MATRIX3 I = _M(1, 0, 0, 0, 1, 0, 0, 0, 1);
-			DrawSphere (ModelView (s.pos, I) * Mat4::Scale (s.radius, s.radius, s.radius), d, true);
+			float d[3] = { c[0] * STAR_BRIGHTNESS, c[1] * STAR_BRIGHTNESS, c[2] * STAR_BRIGHTNESS };
+			// (its photosphere, turning: a G star in ~25 days, cool dwarfs slower)
+			double P = (s.teff < 4000.0 ? 80.0 : s.teff < 5300.0 ? 40.0 : 25.0) * 86400.0;
+			double ang = std::fmod (oapiGetSimTime (), P) / P * 6.283185307179586;
+			MATRIX3 R = _M(std::cos (ang), 0, -std::sin (ang), 0, 1, 0, std::sin (ang), 0, std::cos (ang));
+			// (a black hole's donor, filling its Roche lobe: turning with its
+			// orbit, drawn out towards the hole, its x axis; y the orbit's axis)
+			VECTOR3 hx, hy;
+			if (DonorFrame (s.body, s.pos, hx, hy)) {
+				VECTOR3 hz = crossp (hx, hy);
+				R = _M(hx.x, hy.x, hz.x, hx.y, hy.y, hz.y, hx.z, hy.z, hz.z);
+				const VECTOR3 tide = _V(1, 0, 0);
+				DrawStar (ModelView (s.pos, R) * Mat4::Scale (1.3 * s.radius, 0.92 * s.radius, s.radius), d, s.teff, s.radius, s.seed, &tide);
+				continue;
+			}
+			DrawStar (ModelView (s.pos, R) * Mat4::Scale (s.radius, s.radius, s.radius), d, s.teff, s.radius, s.seed);
 			continue;
 		}
 		VECTOR3 vp = RelApparentView (ViewPos (s.pos));
@@ -1382,8 +1428,10 @@ void Scene::RenderNearStars (bool transparent)
 		// (its glare: the optics' response to its light, of its colour, as the
 		// Sun's while it is a body: not its disc's radiance, a red dwarf's a
 		// few hundredths of the Sun's; at least of the minimum size)
-		double h = std::max (s.radius * STAR_GLOW_SIZE, vp.z * STAR_GLOW_MIN_ANGLE);
+		double h = StarGlowSize (s.radius, vp.z, STAR_GLOW_SIZE, STAR_GLOW_MIN_ANGLE);
 		double f = STAR_GLOW / std::max (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2], 1e-6);
+		f *= StarGlowFade (PixelSize (s.radius, s.dist));
+		if (f <= 0.0) continue;
 		float x = (float)vp.x, y = (float)vp.y, z = (float)vp.z, hh = (float)h;
 		float r = (float)(c[0] * f), g = (float)(c[1] * f), b = (float)(c[2] * f);
 		PVtx q[4] = {
@@ -1392,6 +1440,46 @@ void Scene::RenderNearStars (bool transparent)
 		PVtx v[6] = { q[0], q[1], q[2], q[0], q[2], q[3] };
 		DrawBillboards (GlowTex (), true, v, 6, true);
 	}
+}
+
+double Scene::StarDiscAngle (double *teff) const
+{
+	double best = 0.0;
+	auto look = [&](const VECTOR3 &p, double radius, double T) {
+		VECTOR3 r = p - camPos;
+		double d = length (r);
+		if (d <= radius) return;
+		double a = std::asin (radius / d);
+		VECTOR3 v = ViewDir (r / d);
+		double off = std::acos (std::clamp (v.z, -1.0, 1.0)); // (from the view's axis)
+		if (off - a < 0.75 && a > best) { // (about a 60 deg view's corners)
+			best = a;
+			if (teff) *teff = T;
+		}
+	};
+	if (hSun && sunAsBody) {
+		VECTOR3 sp;
+		oapiGetGlobalPos (hSun, &sp);
+		look (sp, oapiGetSize (hSun), 5772.0);
+	}
+	for (const NearStar &s : nearStars) look (s.pos, s.radius, s.teff);
+	return best;
+}
+
+bool Scene::DonorFrame (OBJHANDLE body, const VECTOR3 &pos, VECTOR3 &x, VECTOR3 &y) const
+{
+	if (!body) return false;
+	for (DWORD i = 0; i < oapiGetGbodyCount (); i++) {
+		OBJHANDLE h = oapiGetGbodyByIndex (i);
+		BLACKHOLEINFO bi;
+		if (oapiGetObjectType (h) != OBJTP_BLACKHOLE || !oapiGetBlackHoleInfo (h, &bi) || bi.donor != body) continue;
+		VECTOR3 hp;
+		oapiGetGlobalPos (h, &hp);
+		x = unit (hp - pos);
+		y = unit (bi.axis - x * dotp (bi.axis, x));
+		return true;
+	}
+	return false;
 }
 
 void Scene::RelShiftColour (const VECTOR3 &gpos, float rgb[3]) const
@@ -1738,7 +1826,7 @@ void Scene::BeginFrame ()
 		for (int i = 0; i < 3 && relOn; i++) bg[i] = G[i][0] * relBeta.x + G[i][1] * relBeta.y + G[i][2] * relBeta.z;
 		// (the stars drawn as bodies left out: the Sun while bright, those near)
 		std::vector<int> excl;
-		for (const NearStar &s : nearStars) excl.push_back (s.index);
+		for (const NearStar &s : nearStars) if (s.index >= 0) excl.push_back (s.index);
 		starField->SetExcluded (excl);
 		starField->Update (o, sunAsBody, bg);
 		ctx->GpuMark ("starselect");
@@ -1885,6 +1973,13 @@ void Scene::FillFrameUniforms (void *pfu)
 	// brightness, the exposure adapted to it: its light brighter than the
 	// Sun's at 1 AU, compressed)
 	if (light.disc && light.flux > 1.0) lightScale *= std::min (10.0, 1.0 + 2.0 * std::log10 (light.flux));
+	// (as near a star: within a few of its radii its disc fills much of the
+	// sky, the exposure adapted to it; inside Mercury's orbit as before)
+	else if (light.flux > 10.0) lightScale *= std::min (10.0, 1.0 + 2.0 * std::log10 (light.flux / 10.0));
+	// (the extra lights: as bright as the light's white, times their flux
+	// ratio compressed, in their colours)
+	double extraBase = lightScale * std::max (lightLum, 1e-6);
+	lightScale *= light.flare; // (a flaring red dwarf: its light rises)
 	for (int k = 0; k < 3; k++) fu.sunColor[k] = (float)(lightRGB[k] * lightScale);
 	// relativistic view: the sunlight on the camera's own vessel in its frame,
 	// from the aberrated direction, Doppler shifted (radiance), on a disc 1/D^2
@@ -1993,12 +2088,29 @@ void Scene::FillFrameUniforms (void *pfu)
 	std::sort (ls.begin(), ls.end(), [this](const LightSource &a, const LightSource &b) {
 		return length (a.pos - camPos) - a.range < length (b.pos - camPos) - b.range;
 	});
-	int nl = (int)std::min (ls.size(), (size_t)MAX_LIGHTS);
-	fu.lightCount[0] = (float)nl;
+	// the extra lights first (directional, ray traced shadows: the first four)
+	int ne = 0;
+	for (const StarLight &x : extraLights) {
+		VECTOR3 r = x.pos - camPos;
+		double d = std::max (length (r), 1.0);
+		VECTOR3 dv = view.TransformPoint (r / d);
+		float rgb[3];
+		StarDiscRGB (x.teff, rgb);
+		double lum = std::max (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2], 1e-6);
+		double sc = extraBase / lum * std::pow (x.flux / std::max (light.flux, 1e-30), EXTRA_LIGHT_GAMMA) * x.flare;
+		auto &u = fu.lights[ne++];
+		u = {};
+		u.pos[3] = 1e30f;
+		u.dir[0] = (float)dv.x, u.dir[1] = (float)dv.y, u.dir[2] = (float)dv.z, u.dir[3] = 3.0f;
+		for (int k = 0; k < 3; k++) u.col[k] = (float)(rgb[k] * sc);
+		u.att[3] = (float)std::asin (std::min (1.0, x.radius / d)); // (its angular radius: soft shadows)
+	}
+	int nl = (int)std::min (ls.size(), (size_t)(MAX_LIGHTS - ne));
+	fu.lightCount[0] = (float)(nl + ne);
 	for (int i = 0; i < nl; i++) {
 		const LightSource &l = ls[i];
 		VECTOR3 p = view.TransformPoint (l.pos - camPos), d = view.TransformPoint (l.dir);
-		auto &u = fu.lights[i];
+		auto &u = fu.lights[ne + i];
 		u.pos[0] = (float)p.x, u.pos[1] = (float)p.y, u.pos[2] = (float)p.z, u.pos[3] = (float)l.range;
 		u.dir[0] = (float)d.x, u.dir[1] = (float)d.y, u.dir[2] = (float)d.z, u.dir[3] = l.spot ? 2.0f : 1.0f;
 		for (int k = 0; k < 3; k++) u.col[k] = l.col[k], u.att[k] = (float)l.att[k];
@@ -2626,6 +2738,76 @@ void Scene::AddMeshRT (const VkMesh *mesh, const Mat4 &modelView, bool shadowOnl
 		rtParts.push_back (part);
 	}
 	if (!rtParts.empty()) rt->AddInstance (rtParts.data(), (uint32_t)rtParts.size(), modelView);
+}
+
+void Scene::DrawStar (const Mat4 &modelView, const float rgb[3], double teff, double radius, uint32_t seed, const VECTOR3 *tide)
+{
+	VkCommandBuffer cmd = ctx->Cmd();
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, starPipe);
+	VkDescriptorSet fset = FrameSet ();
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &fset, 0, nullptr);
+	VkDescriptorSet ts = gc->TexMgr()->White()->set;
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 1, 1, &ts, 0, nullptr);
+	VkDeviceSize ofs = 0;
+	vkCmdBindVertexBuffers (cmd, 0, 1, &sphereVtx.buffer, &ofs);
+	vkCmdBindIndexBuffer (cmd, sphereIdx.buffer, 0, VK_INDEX_TYPE_UINT32);
+	MeshPushConstants pc{}; // (star.frag's layout)
+	modelView.ToFloat (pc.modelView);
+	for (int k = 0; k < 3; k++) pc.diffuse[k] = rgb[k];
+	pc.diffuse[3] = 1.0f;
+	// activity: cool dwarfs spotted and flaring, the Sun moderately
+	double act = teff < 3900.0 ? 0.8 : teff < 5300.0 ? 0.45 : teff < 6500.0 ? 0.3 : 0.1;
+	double t = oapiGetSimTime ();
+	pc.emissive[0] = (float)act;
+	pc.emissive[1] = (float)std::fmod (t, 6e5); // (granules' evolution: ~10 min; repeats after a week)
+	pc.emissive[2] = (float)std::clamp (1e6 / std::max (radius, 1.0), 1e-4, 0.02); // (granules ~1000 km)
+	pc.emissive[3] = (float)(seed % 997);
+	StarFlare fl[2];
+	double boost;
+	StarFlares (seed, teff, t, fl, boost);
+	float *slot[2] = { pc.specular, pc.light };
+	for (int k = 0; k < 2; k++) {
+		slot[k][0] = (float)fl[k].dir.x, slot[k][1] = (float)fl[k].dir.y, slot[k][2] = (float)fl[k].dir.z;
+		slot[k][3] = (float)fl[k].bright;
+	}
+	pc.pbr[0] = 0.06f; // (a flare's angular radius on the star)
+	if (tide) pc.heat[0] = (float)tide->x, pc.heat[1] = (float)tide->y, pc.heat[2] = (float)tide->z, pc.heat[3] = 1.0f;
+	vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+	vkCmdDrawIndexed (cmd, sphereNIdx, 1, 0, 0, 0);
+}
+
+void Scene::StarFlares (uint32_t seed, double teff, double t, StarFlare out[2], double &boost)
+{
+	out[0] = out[1] = StarFlare ();
+	boost = 1.0;
+	if (teff >= 4000.0) return; // (flares of hotter stars are faint against their discs)
+	auto hash = [](uint64_t x) {
+		x += 0x9e3779b97f4a7c15ull;
+		x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ull;
+		x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
+		x ^= x >> 31;
+		return (double)(x >> 11) / (double)(1ull << 53);
+	};
+	// (per hour: a flare starting with probability RATE; brightness falling
+	// as a power law, rare large ones; rising over 30 s, fading over
+	// minutes to an hour)
+	const double RATE = 0.6, HOUR = 3600.0;
+	int64_t b0 = (int64_t)std::floor (t / HOUR);
+	for (int64_t b = b0 - 3; b <= b0; b++) {
+		uint64_t k = ((uint64_t)seed << 40) ^ (uint64_t)b * 0x100000001b3ull;
+		if (hash (k) >= RATE) continue;
+		double start = ((double)b + hash (k + 1)) * HOUR, dt = t - start;
+		if (dt < 0.0) continue;
+		double amp = std::min (30.0, 0.4 * std::pow (std::max (hash (k + 2), 1e-3), -1.2));
+		double tau = 180.0 + 1500.0 * hash (k + 3);
+		double f = dt < 30.0 ? amp * dt / 30.0 : amp * std::exp (-(dt - 30.0) / tau);
+		if (f < 1e-3) continue;
+		double lat = std::asin ((2.0 * hash (k + 4) - 1.0) * 0.7), lon = 6.283185307 * hash (k + 5);
+		StarFlare s{ _V(std::cos (lat) * std::cos (lon), std::sin (lat), std::cos (lat) * std::sin (lon)), f };
+		boost += f * 0.003 * 0.06 * 0.06 / 0.0036; // (its share of the disc's light, ~patch area)
+		if (s.bright > out[0].bright) out[1] = out[0], out[0] = s;
+		else if (s.bright > out[1].bright) out[1] = s;
+	}
 }
 
 void Scene::DrawSphere (const Mat4 &modelView, const float colour[4], bool unlit, VkTexture *tex)

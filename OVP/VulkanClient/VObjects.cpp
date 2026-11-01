@@ -2317,7 +2317,8 @@ void VPlanet::Render (RenderPass pass)
 {
 	if (pass == RenderPass::Depth) {
 		SetMotion (); // terrain and bases move with the planet
-		if (surface && !DecksHide () && scene->PixelSize (size, camDist) >= 0.5) surface->RenderDepth ();
+		// (a star: its disc, a sphere of its own, writes its depth; its tiles' would fight it)
+		if (surface && !isStar && !DecksHide () && scene->PixelSize (size, camDist) >= 0.5) surface->RenderDepth ();
 		for (auto &b : bases) b->Render (pass);
 		UpdateGallery ();
 		if (gallery) gallery->Render (pass);
@@ -2326,6 +2327,7 @@ void VPlanet::Render (RenderPass pass)
 		return;
 	}
 	if (isStar && !scene->SunAsBody ()) return; // (far: a point of the star field)
+	if (isStar && hObj != scene->Sun ()) return; // (the other stars: drawn as near stars, Scene)
 	if (pass == RenderPass::Transparent) {
 		if (isStar) { RenderGlow (); return; }
 		for (auto &b : bases) b->Render (pass);
@@ -2400,10 +2402,11 @@ void VPlanet::Render (RenderPass pass)
 	}
 	Mat4 mv = scene->ModelView (gpos, R) * Mat4::Scale (radius, radius, radius);
 	if (isStar) {
-		// the sun's disc is far brighter than any lit surface
+		// the sun's disc is far brighter than any lit surface: its photosphere
+		// (star.frag: limb darkening, granulation, spots)
 		float c[4] = { colour[0] * STAR_BRIGHTNESS, colour[1] * STAR_BRIGHTNESS, colour[2] * STAR_BRIGHTNESS, 1.0f };
 		scene->RelShiftColour (gpos, c); // (relativistic view: not in the prepass, shifted here)
-		scene->DrawSphere (mv, c, true);
+		scene->DrawStar (mv, c, 5772.0, radius, 1u);
 	} else {
 		scene->DrawSphere (mv, colour, false);
 	}
@@ -2435,11 +2438,13 @@ void VPlanet::RenderGlow ()
 	if (vp.z <= 0.0) return;
 	double dt = scene->DeckTransmittance (scene->CameraPos (), true); // (deep in a gas giant's clouds: the sun's beam)
 	if (dt < 1e-3) return;
-	double h = std::max (size * STAR_GLOW_SIZE, vp.z * STAR_GLOW_MIN_ANGLE);
+	double h = Scene::StarGlowSize (size, vp.z, STAR_GLOW_SIZE, STAR_GLOW_MIN_ANGLE);
 	// at its true distance, so that planets in front hide it (reversed float depth)
 	float x = (float)vp.x, y = (float)vp.y, z = (float)vp.z, hh = (float)h;
 	float gc[3] = { colour[0], colour[1], colour[2] };
 	scene->RelShiftColour (gpos, gc); // (relativistic view: as the disc)
+	dt *= Scene::StarGlowFade (scene->PixelSize (size, camDist));
+	if (dt <= 0.0) return;
 	float r = gc[0] * STAR_GLOW * (float)dt, g = gc[1] * STAR_GLOW * (float)dt, b = gc[2] * STAR_GLOW * (float)dt;
 	PVtx q[4] = {
 		{ x - hh, y - hh, z, 0.0f, 0.0f, r, g, b, 1 }, { x + hh, y - hh, z, 1.0f, 0.0f, r, g, b, 1 },

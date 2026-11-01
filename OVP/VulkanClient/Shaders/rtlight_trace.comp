@@ -186,6 +186,12 @@ void main ()
 	int nl = min (int (pc.nLights), int (frame.lightCount.x));
 	for (int i = 0; i < nl; i++) {
 		LocalLight l = frame.lights[i];
+		if (l.dir.w > 2.5) { // a star: towards it over its disc (soft), objects only, far
+			if (dot (N, l.dir.xyz) <= 0.0) continue;
+			vec4 rs = vec4 (Hash4 (uvec3 (p, uint (pc.frame) * 4u + uint (i) + 101u))) / 4294967296.0;
+			lv[i] = Occluded (o, InCone (l.dir.xyz, sin (l.att.w), rs.xy), 1e6, MASK_OBJECTS) ? 0.0 : 1.0;
+			continue;
+		}
 		vec3 Lv = l.pos.xyz - o;
 		float dist = length (Lv);
 		if (dist > l.pos.w || dist < 1e-3 || dot (N, Lv) <= 0.0) continue;
