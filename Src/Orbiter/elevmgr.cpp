@@ -143,8 +143,8 @@ bool ElevationManager::TileIdx (double lat, double lng, int lvl, int *ilat, int 
 	int nlat = 1 << lvl;
 	int nlng = 2 << lvl;
 
-	*ilat = (int)((Pi05-lat)/Pi * nlat);
-	*ilng = (int)((lng+Pi)/Pi2 * nlng);
+	*ilat = std::clamp ((int)((Pi05-lat)/Pi * nlat), 0, nlat-1); // (the poles and the date line: the last tile)
+	*ilng = std::clamp ((int)((lng+Pi)/Pi2 * nlng), 0, nlng-1);
 	return true;
 }
 
@@ -398,6 +398,12 @@ double ElevationManager::Terrain (double lat, double lng, int reqlvl, std::vecto
 	double e = 0.0, dh = 0.0;
 	if (reslvl) *reslvl = 0;
 	reqlvl = (reqlvl ? min (max(0,reqlvl-7), maxlvl) : maxlvl);
+	// (any longitude, wrapped; latitudes beyond the poles held there: the
+	// tile and its samples must contain the point; callers sampling about a
+	// point, e.g. across the date line, pass these)
+	if (!std::isfinite (lat) || !std::isfinite (lng)) return 0.0;
+	if (lng < -Pi || lng >= Pi) lng -= Pi2 * floor ((lng + Pi) / Pi2);
+	lat = std::clamp (lat, -Pi05, Pi05);
 
 	if (!hasData) { // (no elevation data: flat, with the procedural detail)
 		if (normal) *normal = Vector (0, 1, 0);
@@ -501,8 +507,8 @@ double ElevationManager::Terrain (double lat, double lng, int reqlvl, std::vecto
 
 		if (t->data) {
 			INT16 *elev_base = t->data+elev_stride+1; // strip padding
-			double latidx = (lat-t->latmin) * elev_grid/(t->latmax-t->latmin);
-			double lngidx = (lng-t->lngmin) * elev_grid/(t->lngmax-t->lngmin);
+			double latidx = std::clamp ((lat-t->latmin) * elev_grid/(t->latmax-t->latmin), 0.0, elev_grid - 1e-9);
+			double lngidx = std::clamp ((lng-t->lngmin) * elev_grid/(t->lngmax-t->lngmin), 0.0, elev_grid - 1e-9);
 			int lat0 = (int)latidx;
 			int lng0 = (int)lngidx;
 			INT16 *eptr = elev_base + lat0*elev_stride + lng0;

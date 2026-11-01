@@ -11,8 +11,11 @@
 #include "cmdline.h"
 #include "Log.h"
 #include <clocale>
+#include <csignal>
 #include <cstdio>
 #include <string>
+#include <execinfo.h>
+#include <unistd.h>
 
 extern Orbiter *g_pOrbiter;
 extern char cwd[512];
@@ -33,9 +36,25 @@ static std::string JoinArguments (int argc, char *argv[])
 	return cmdline;
 }
 
+// A fatal signal: the backtrace to stderr (kept by the test runner), then
+// the default action (a core dump, if enabled)
+static void CrashHandler (int sig)
+{
+	static const char msg[] = "Orbiter: fatal signal; backtrace:\n";
+	ssize_t w = write (STDERR_FILENO, msg, sizeof(msg) - 1);
+	(void)w;
+	void *frames[64];
+	int n = backtrace (frames, 64);
+	backtrace_symbols_fd (frames, n, STDERR_FILENO);
+	signal (sig, SIG_DFL);
+	raise (sig);
+}
+
 int main (int argc, char *argv[])
 {
 	if (!getcwd (cwd, sizeof(cwd))) cwd[0] = '\0';
+	for (int sig : { SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGABRT })
+		signal (sig, CrashHandler);
 
 	g_pOrbiter = new Orbiter; // application instance
 
