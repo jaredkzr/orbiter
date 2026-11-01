@@ -1,0 +1,236 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// The sky seen near a black hole: each ray traced from the camera back
+// through the hole's spacetime (kerr.glsl) to where it comes from, at the
+// corners of a grid over the image (BlackHoleLens). Written per corner:
+// the direction it comes from far away (Galactic) and the shift g of its
+// light (frequency seen over that of a source at rest far away: gravity
+// and the camera's motion); 0 where it comes from the hole (its shadow).
+// - The camera's frame (its 4-velocity and axes, Kerr-Schild components)
+//   turns a view direction into the ray's momentum: aberration included.
+// - Far from the hole (beyond R_IN), rays that pass it widely are bent by
+//   the weak field's 2M (1 + cos psi) / b (camera to infinity); the others
+//   are carried straight to the sphere of R_IN, then traced; leaving
+//   beyond R_OUT the rest of the bending, (2M/b) (1 - sqrt (r^2 - b^2)/r),
+//   is added.
+// - Steps of affine parameter a fraction of r (RK4), longer where the
+//   field is weak (the fraction grows as sqrt (r / 6M)).
+// - The accretion disc (if any): a thin disc in the equatorial plane from
+//   the ISCO to its outer edge, opaque; a ray crossing it there takes its
+//   light: a black body of Novikov-Thorne's temperature (Page & Thorne's
+//   flux), seen at g T (g: the shift between the gas, orbiting at Kerr's
+//   prograde Omega, and the camera), and the brightness of its turbulence
+//   (noise sheared at Omega, its two phases cross-faded every few orbits).
+//   Written: (g T, brightness, r, -1). The disc is opaque where it is hot
+//   enough to be seen (its outer edge then: Scene, DISC_T_MIN), dithered over
+//   its last tenth; a crossing is found to a substep of its step.
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "kerr.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(rgba32f, set = 0, binding = 0) writeonly uniform image2D lensMap;
+layout(std140, set = 0, binding = 1) uniform Params {
+	vec4 cam;     // xyz: the camera's position [M]; w: the spin a [M]
+	vec4 e[4];    // the camera's frame: e[0] its 4-velocity, e[1..3] its axes (xyz: space, w: t; contravariant)
+	vec4 v2k[3];  // rows: view direction -> components on e[1..3]
+	vec4 k2g[3];  // rows: Kerr axes -> Galactic
+	vec4 proj;    // 1/fx, 1/fy, the grid's spacing [px], the image's width [px]
+	vec4 size;    // the image's height [px], the grid's width and height, r+ [M]
+	vec4 lim;     // R_IN, R_OUT [M], steps at most, step (fraction of r);
+	vec4 inner;   // x: r- [M] (inside the horizon: lost there); y: the camera inside (1); z: the prograde photon orbit [M]; w: the frame (mod 64)
+	vec4 disc;    // x: T_K [K] (0: no disc); y, z: its inner (the ISCO) and outer radius [M]; w: time [M]
+	vec4 roots;   // x0 = sqrt (r_ISCO), x1, x2, x3: the roots of x^3 - 3x + 2a = 0
+} P;
+
+// Page & Thorne's flux shape at r (M = 1): F = 3 Mdot / (8 pi) Q
+float DiscQ (float r, float a)
+{
+	float x = sqrt (r), x0 = P.roots.x, x1 = P.roots.y, x2 = P.roots.z, x3 = P.roots.w;
+	if (x <= x0) return 0.0;
+	float t1 = 3.0 * (x1 - a) * (x1 - a) / (x1 * (x1 - x2) * (x1 - x3)) * log ((x - x1) / (x0 - x1));
+	float t2 = 3.0 * (x2 - a) * (x2 - a) / (x2 * (x2 - x1) * (x2 - x3)) * log ((x - x2) / (x0 - x2));
+	float t3 = 3.0 * (x3 - a) * (x3 - a) / (x3 * (x3 - x1) * (x3 - x2)) * log ((x - x3) / (x0 - x3));
+	float br = x - x0 - 1.5 * a * log (x / x0) - t1 - t2 - t3;
+	return max (br, 0.0) / (x * x * x * x * (x * x * x - 3.0 * x + 2.0 * a));
+}
+
+float Hash31 (vec3 p)
+{
+	p = fract (p * vec3 (0.1031, 0.1030, 0.0973));
+	p += dot (p, p.yxz + 33.33);
+	return fract ((p.x + p.y) * p.z);
+}
+
+// value noise, periodic in y over n cells
+float Noise (vec3 p, float n)
+{
+	vec3 i = floor (p), f = fract (p);
+	f = f * f * (3.0 - 2.0 * f);
+	float v = 0.0;
+	for (int k = 0; k < 8; k++) {
+		vec3 o = vec3 (k & 1, (k >> 1) & 1, (k >> 2) & 1);
+		vec3 c = i + o;
+		c.y = mod (c.y, n);
+		float w = (o.x > 0.0 ? f.x : 1.0 - f.x) * (o.y > 0.0 ? f.y : 1.0 - f.y) * (o.z > 0.0 ? f.z : 1.0 - f.z);
+		v += w * Hash31 (c);
+	}
+	return v;
+}
+
+// the gas's brightness: turbulence in (ln r, the angle it has turned
+// through), a few octaves; sheared by the orbit, so reset every PERIODS
+// orbits (two phases, cross-faded)
+float DiscBrightness (vec3 x, float r, float Omega)
+{
+	const float PERIODS = 3.0;
+	float phi = atan (x.y, x.x);
+	float T = PERIODS * 6.2831853 / Omega, t = P.disc.w;
+	float s = 0.0;
+	for (int ph = 0; ph < 2; ph++) {
+		float tt = mod (t + float (ph) * 0.5 * T, T);
+		float w = 1.0 - abs (2.0 * tt / T - 1.0);
+		float ang = (phi - Omega * tt) / 6.2831853; // (turns)
+		float lr = log (r) * 24.0;
+		float n = 0.0, amp = 0.5, fr = 1.0;
+		for (int o = 0; o < 3; o++) {
+			float cells = 48.0 * fr;
+			n += amp * Noise (vec3 (lr * fr, ang * cells, float (ph * 7 + o * 13) + floor ((t + float (ph) * 0.5 * T) / T) * 3.1), cells);
+			amp *= 0.5, fr *= 2.0;
+		}
+		s += w * n;
+	}
+	return 0.35 + 1.3 * s; // (mean ~1)
+}
+
+// bend d towards the hole (from x) by angle al
+vec3 Bend (vec3 x, vec3 d, float al)
+{
+	vec3 xp = x - d * dot (x, d);
+	float l = length (xp);
+	if (l <= 0.0) return d;
+	return normalize (d * cos (al) - (xp / l) * sin (al));
+}
+
+void Store (ivec2 id, vec3 dK, float g)
+{
+	vec3 dG = vec3 (dot (P.k2g[0].xyz, dK), dot (P.k2g[1].xyz, dK), dot (P.k2g[2].xyz, dK));
+	imageStore (lensMap, id, vec4 (normalize (dG), g));
+}
+
+void main ()
+{
+	ivec2 id = ivec2 (gl_GlobalInvocationID.xy);
+	if (id.x >= int (P.size.y) || id.y >= int (P.size.z)) return;
+	float a = P.cam.w, rh = P.size.w;
+	vec2 px = vec2 (id) * P.proj.z;
+	vec2 ndc = px / vec2 (P.proj.w, P.size.x) * 2.0 - 1.0;
+	vec3 vd = normalize (vec3 (ndc.x * P.proj.x, -ndc.y * P.proj.y, 1.0));
+	vec3 n = normalize (vec3 (dot (P.v2k[0].xyz, vd), dot (P.v2k[1].xyz, vd), dot (P.v2k[2].xyz, vd)));
+
+	// the ray back towards its source: q^m = -e0 + n.e (past-directed),
+	// lowered: q_m = eta q + f (l.q) l
+	vec4 qu = -P.e[0] + n.x * P.e[1] + n.y * P.e[2] + n.z * P.e[3];
+	vec3 x = P.cam.xyz;
+	float r = KerrR (x, a), r2 = r * r, ra = r2 + a * a;
+	float f = 2.0 * r2 * r / (r2 * r2 + a * a * x.z * x.z);
+	vec3 l = vec3 ((r * x.x + a * x.y) / ra, (r * x.y - a * x.x) / ra, x.z / r);
+	float Lc = qu.w + dot (l, qu.xyz);
+	vec4 p = vec4 (qu.xyz + f * Lc * l, -qu.w + f * Lc);
+	// (the light's shift: seen at frequency 1, at -k_t = q_t far away)
+	float g = 1.0 / max (p.w, 1e-6);
+
+	float RIN = P.lim.x, ROUT = P.lim.y;
+	float rc = length (x);
+	if (rc > RIN) {
+		// far out: the weak field, or carried to R_IN
+		vec3 d = normalize (qu.xyz);
+		float b = length (cross (x, d)), cpsi = -dot (x, d) / rc;
+		if (b > 0.95 * RIN || cpsi < 0.0) {
+			Store (id, Bend (x, d, 2.0 * (1.0 + cpsi) / max (b, 1e-6)), g);
+			return;
+		}
+		float xd = dot (x, d);
+		float s = -xd - sqrt (max (xd * xd - (rc * rc - RIN * RIN), 0.0));
+		x += d * s;
+		p.xyz = KerrLightMomentum (x, d, p.w, a);
+	}
+
+	int nmax = int (P.lim.z);
+	float frac = P.lim.w;
+	bool inside = P.inner.y > 0.5;
+	for (int k = 0; k < nmax; k++) {
+		vec3 dx1, dp1, dx2, dp2, dx3, dp3, dx4, dp4;
+		float dt;
+		KerrDerivs (x, p, a, dx1, dt, dp1);
+		r = KerrR (x, a);
+		// (into the hole: its shadow; inside, the inner horizon's region.
+		// Light moving inwards within the innermost photon orbit can't turn:
+		// no turning points there, as within 3M of a hole not turning)
+		bool falling = r < 0.99 * P.inner.z && dot (x, dx1) < 0.0;
+		if ((!inside && (r < rh * 1.0005 || falling)) || (inside && r < P.inner.x)) { imageStore (lensMap, id, vec4 (0.0)); return; }
+		if (r > ROUT && dot (x, dx1) > 0.0) {
+			vec3 d = normalize (dx1);
+			float b = length (cross (x, d));
+			Store (id, Bend (x, d, 2.0 / max (b, 1e-6) * (1.0 - sqrt (max (r * r - b * b, 0.0)) / r)), g);
+			return;
+		}
+		float h = frac * max (1.0, sqrt (r / 6.0)) * max (r - (inside ? 0.0 : rh) * 0.5, 0.01) / max (length (dx1), 1e-6);
+		KerrDerivs (x + 0.5 * h * dx1, p + vec4 (0.5 * h * dp1, 0.0), a, dx2, dt, dp2);
+		KerrDerivs (x + 0.5 * h * dx2, p + vec4 (0.5 * h * dp2, 0.0), a, dx3, dt, dp3);
+		KerrDerivs (x + h * dx3, p + vec4 (h * dp3, 0.0), a, dx4, dt, dp4);
+		vec3 xp = x;
+		vec4 pp = p;
+		x += h / 6.0 * (dx1 + 2.0 * dx2 + 2.0 * dx3 + dx4);
+		p.xyz += h / 6.0 * (dp1 + 2.0 * dp2 + 2.0 * dp3 + dp4);
+		// (through the disc's plane: within it, its light)
+		if (P.disc.x > 0.0 && xp.z * x.z < 0.0) {
+			// (the crossing within the step: the step again in substeps)
+			const int NSUB = 8;
+			vec3 xs = xp;
+			vec4 ps = pp;
+			float hs = h / float (NSUB);
+			for (int k = 0; k < NSUB; k++) {
+				vec3 e1, q1, e2, q2, e3, q3, e4, q4;
+				float dtt;
+				KerrDerivs (xs, ps, a, e1, dtt, q1);
+				KerrDerivs (xs + 0.5 * hs * e1, ps + vec4 (0.5 * hs * q1, 0.0), a, e2, dtt, q2);
+				KerrDerivs (xs + 0.5 * hs * e2, ps + vec4 (0.5 * hs * q2, 0.0), a, e3, dtt, q3);
+				KerrDerivs (xs + hs * e3, ps + vec4 (hs * q3, 0.0), a, e4, dtt, q4);
+				vec3 xn = xs + hs / 6.0 * (e1 + 2.0 * e2 + 2.0 * e3 + e4);
+				vec4 pn = ps + vec4 (hs / 6.0 * (q1 + 2.0 * q2 + 2.0 * q3 + q4), 0.0);
+				if (xs.z * xn.z <= 0.0) { xp = xs, x = xn, pp = ps, p = pn; break; }
+				xs = xn, ps = pn;
+			}
+			float dz = xp.z - x.z;
+			vec3 xc = abs (dz) > 0.0 ? mix (xp, x, xp.z / dz) : xp;
+			float rc = KerrR (xc, a);
+			// (the outer tenth dithered: opaque in part, by pixel)
+			float edge = clamp ((P.disc.z - rc) / (0.1 * P.disc.z), 0.0, 1.0);
+			// (interleaved gradient noise, shifted each frame: the temporal
+			// filter smooths the edge)
+			vec2 fid = vec2 (id) + vec2 (5.588238, 3.1) * P.inner.w;
+			float dith = fract (52.9829189 * fract (dot (fid, vec2 (0.06711056, 0.00583715))));
+			if (rc >= P.disc.y && rc <= P.disc.z && dith < edge) {
+				float Om = 1.0 / (rc * sqrt (rc) + a);
+				vec3 V = vec3 (-Om * xc.y, Om * xc.x, 0.0);
+				float r2c = rc * rc, rac = r2c + a * a;
+				float fc = 2.0 * r2c * rc / (r2c * r2c + a * a * xc.z * xc.z);
+				vec3 lc = vec3 ((rc * xc.x + a * xc.y) / rac, (rc * xc.y - a * xc.x) / rac, xc.z / rc);
+				float nrm = 1.0 - dot (V, V) - fc * (1.0 + dot (lc, V)) * (1.0 + dot (lc, V));
+				if (nrm > 0.0) {
+					float ut = inversesqrt (nrm);
+					float pu = ut * (p.w + dot (p.xyz, V)); // (the light's frequency in the gas's frame, the camera's 1)
+					float T = P.disc.x * pow (max (DiscQ (rc, a), 0.0), 0.25);
+					imageStore (lensMap, id, vec4 (T / max (pu, 1e-6), DiscBrightness (xc, rc, Om), rc, -1.0));
+					return;
+				}
+			}
+		}
+	}
+	// (not out: circling the photon orbit, or held at the horizon from inside)
+	imageStore (lensMap, id, vec4 (0.0));
+}

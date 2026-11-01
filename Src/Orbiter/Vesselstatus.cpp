@@ -404,6 +404,7 @@ bool Vessel::ParseScenarioLineDirect (char *line)
 			if (mjdArr > 0.0) c->SetArriveT ((mjdArr - td.MJD_ref) * 86400.0);
 			// (an engaged trip continues, re-aligned first)
 			if (ph > reltravel::PH_IDLE && ph < reltravel::PH_ARRIVED) c->SetPhase (reltravel::PH_ALIGN);
+			else if (ph == reltravel::PH_HOLD) c->SetPhase (reltravel::PH_HOLD); // (held where it is)
 		}
 		return true;
 	} else if (!_strnicmp (line, "CLOCK", 5)) { // the clock carried along less the simulation time [s]

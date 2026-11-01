@@ -45,7 +45,8 @@ namespace reltravel {
 		PH_COAST,    ///< coasting (between the burns; a flyby after its burn)
 		PH_BURN2,    ///< decelerating
 		PH_ARRIVED,  ///< done (the drive off)
-		PH_FAILED    ///< no trip found (the drive off)
+		PH_FAILED,   ///< no trip found (the drive off)
+		PH_HOLD      ///< arrived at rest by a black hole: held there on the drive (until disengaged)
 	};
 	const char *PhaseName (int phase);
 
@@ -90,7 +91,7 @@ namespace reltravel {
 		/// Time to the arrival from now, Solar System and the vessel's clock
 		/// [s] (engaged: the autopilot's estimate; else the preview's)
 		bool Remaining (double &tSolar, double &tShip) const;
-		void SetPhase (int ph) { phase = ph; aligned = guided = stopped = false; }
+		void SetPhase (int ph) { phase = ph; aligned = guided = stopped = holdSet = trimming = false; }
 		void Abort (const char *msg); ///< stop the trip (e.g. on an impact)
 
 		/// The target (resolved): a body, else a named star
@@ -117,6 +118,13 @@ namespace reltravel {
 		void Drive (const Vector &alpha, double tEnd); // the drive at alpha (throttled by the attitude error), cut off at tEnd
 		void LimitWarp (double tEvent);
 		void Guide ();                                 // after the first burn: guided to the arrival
+		void Hold ();                                  // at rest by a black hole: hovering on the drive
+		void Trim ();                                  // in orbit by a black hole: trimmed to its circular orbit
+		bool trimming = false;
+		double trimStart = 0.0;
+		Vector Gravity (const Vector &x, const Vector &v) const; // what the drive takes out (a black hole's strong field: exact)
+		Vector holdPos;                // where it holds (relative to the hole)
+		bool holdSet = false;          // (else: where it is)
 		Vessel *vessel;
 		int phase = PH_IDLE;
 		bool aligned = false;

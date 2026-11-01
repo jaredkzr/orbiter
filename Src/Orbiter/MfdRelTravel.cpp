@@ -3,6 +3,7 @@
 
 #include "MfdRelTravel.h"
 #include "RelTravel.h"
+#include "BlackHole.h"
 #include "MFDUI.h"
 #include "Orbiter.h"
 #include "Pane.h"
@@ -372,17 +373,40 @@ void Instrument_RelTravel::DrawFlight (const RLayout &L)
 	double v = vrel.length(), gam = Gamma (v);
 	FmtSpeed (b2, sizeof (b2), v);
 	Row (ui, R(0), c->HasTarget () ? "Speed (target)" : "Speed", b2, acc);
+	const BlackHole *bhole = vessel->StrongFieldHole ();
 	snprintf (buf, sizeof (buf), "%.6g   rapidity %.4g", gam, Rapidity (std::min (v, 0.999999999999 * C)));
-	Row (ui, R(1), "Lorentz factor", buf, txt);
+	if (!bhole) Row (ui, R(1), "Lorentz factor", buf, txt);
 
 	// the drive and what it is felt as
 	const Vessel::RelDrive &d = vessel->GetRelDrive ();
 	double g = d.on ? d.accel / G0 : 0.0;
 	snprintf (buf, sizeof (buf), "%s %.4g g%s", d.on ? "on" : "off", fabs (g), d.on && g < 0.0 ? " (reversed)" : "");
 	Row (ui, R(2), "Drive", buf, d.on ? acc : txt);
-	if (fabs (g) > 10.0) Row (ui, R(3), "g-load", "no crew could survive this", ui.Colour (mfdui::ALERT));
+	if (bhole) ;
+	else if (fabs (g) > 10.0) Row (ui, R(3), "g-load", "no crew could survive this", ui.Colour (mfdui::ALERT));
 	else if (fabs (g) > 3.0) Row (ui, R(3), "g-load", "hard on a crew for long", ui.Colour (mfdui::ACCENT));
 	else Row (ui, R(3), "g-load", d.on ? "bearable" : "-", txt);
+
+	// in a black hole's strong field: where in it, its clock, tides, the
+	// drive it takes to stay put (in place of the Lorentz factor and g-load)
+	if (const BlackHole *bh = bhole) {
+		BlackHole::Local loc;
+		if (bh->LocalState (vessel->GPos () - bh->GPos (), vessel->GVel () - bh->GVel (), loc)) {
+			const kerr::Hole &K = bh->Kerr ();
+			Rect r1 (R(1)), r3 (R(3));
+			if (loc.inside) snprintf (buf, sizeof (buf), "INSIDE: r %.3f M (lost at %.3f M)", loc.r / K.M, K.InnerHorizon () / K.M);
+			else snprintf (buf, sizeof (buf), "r %.4g M   horizon %.3f M   ISCO %.3f M", loc.r / K.M, K.Horizon () / K.M, K.ISCO () / K.M);
+			Row (ui, r1, bh->Name (), buf, loc.inside ? ui.Colour (mfdui::ALERT) : acc);
+			ui.Tooltip ("Distance from the black hole in its masses (M = GM/c^2), its event horizon, its innermost stable circular orbit (prograde)");
+			double tg = loc.tidalMax * vessel->Size () / G0;
+			char bh2[32];
+			if (loc.canHover) snprintf (bh2, sizeof (bh2), "%.3g g", loc.hover.length () / G0);
+			else snprintf (bh2, sizeof (bh2), "impossible");
+			snprintf (buf, sizeof (buf), "clock x%.6f   tides %.3g g   hover %s", loc.clockRate, tg, bh2);
+			Row (ui, r3, "Spacetime", buf, tg > 10.0 ? ui.Colour (mfdui::ALERT) : tg > 1.0 ? acc : txt);
+			ui.Tooltip ("The ship's clock against Solar System time; the tidal stretch across the vessel; the drive's acceleration it takes to stay at rest here (impossible within the ergosphere)");
+		}
+	}
 
 	// the clock carried along
 	double ofs = vessel->ClockOffset ();

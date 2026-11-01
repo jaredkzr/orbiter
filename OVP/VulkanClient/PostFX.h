@@ -43,6 +43,12 @@ public:
 	/// sunlight, sunlit white stays just below full brightness (as a camera
 	/// exposed for daylight), so dark scenes (the ocean from orbit) stay dark
 	float maxExposure = 4.0f;
+	/// lowest exposure, and how far the exposure follows the metered
+	/// luminance (log2: 1 fully); by default 0.6 and 0.6, lit white kept
+	/// near full brightness and the Sun's disc saturating; near a black
+	/// hole's accretion disc, far brighter than the Sun's surface, the eye
+	/// adapts further down
+	float minExposure = 0.6f, adaptStrength = 0.6f;
 
 	/// adapted exposure and metered scene luminance (log2), as of the last
 	/// completed frame

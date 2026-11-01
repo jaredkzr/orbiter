@@ -390,6 +390,7 @@ void Debris::CollectGroundContacts (const StateVectors &s, const StateVectors &s
 	touching = false;
 	if (!proxybody || hulls.empty()) return;
 	if (proxybody->Type() == OBJTP_PLANET && !((const Planet*)proxybody)->HasSurface()) return; // (gas giants)
+	if (proxybody->Type() == OBJTP_BLACKHOLE) return; // (no surface)
 	const StateVectors &P0 = *proxybody->s0, &P1 = *proxybody->s1;
 	double alt = s.pos.dist (P0.pos) - proxybody->Size();
 	double margin = (sp.groundspd + s.omega.length()*hullBound)*h + 0.05;

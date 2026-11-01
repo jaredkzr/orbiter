@@ -73,6 +73,7 @@ set(common_src
 	GasGiant.cpp
 	Rigidbody.cpp
 	Star.cpp
+	BlackHole.cpp
 # Vessel classes
 	FlightRecorder.cpp
 	SuperVessel.cpp
@@ -91,6 +92,7 @@ set(common_src
 	RelFlight.cpp
 	StarTargets.cpp
 	Relativity.cpp
+	Kerr.cpp
 	Routes.cpp
 	MapView.cpp
 	UiAnchor.cpp

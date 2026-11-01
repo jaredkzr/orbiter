@@ -1794,6 +1794,7 @@ typedef enum {
 #define OBJTP_CBODY              2
 #define OBJTP_STAR               3
 #define OBJTP_PLANET             4
+#define OBJTP_BLACKHOLE          5 ///< a black hole (a root body: Kerr spacetime)
 #define OBJTP_VESSEL            10
 #define OBJTP_DEBRIS            11 ///< a piece broken off a vessel
 #define OBJTP_SURFBASE          20
@@ -2731,6 +2732,7 @@ OAPIFUNC DWORD oapiGetObjectCount ();
  *   <tr><td>OBJTP_STAR</td><td>star</td></tr>
  *   <tr><td>OBJTP_PLANET</td><td>planet (used for all celestial bodies that are not stars,
  *       including moons, comets, etc.)</td></tr>
+ *   <tr><td>OBJTP_BLACKHOLE</td><td>black hole</td></tr>
  *   <tr><td>OBJTP_VESSEL</td><td>vessel (spacecraft, space stations, etc.)</td></tr>
  *   <tr><td>OBJTP_DEBRIS</td><td>debris (a piece broken off a vessel)</td></tr>
  *   <tr><td>OBJTP_SURFBASE</td><td>surface base (spaceport)</td></tr>
@@ -3397,15 +3399,53 @@ OAPIFUNC bool oapiTransferInfo (OBJHANDLE hVessel, TRANSFERINFO *info);
  *   clock carried along (see oapiGetRelState).
  */
 typedef struct {
-	DWORD flags;     ///< RELSTATE_DRIVE: the drive is on; RELSTATE_RELATIVISTIC: the vessel flies relativistically
+	DWORD flags;     ///< RELSTATE_DRIVE: the drive is on; RELSTATE_RELATIVISTIC: the vessel flies relativistically; RELSTATE_STRONGFIELD: in a black hole's strong field (its Kerr spacetime); RELSTATE_SWALLOWED: lost in a black hole
 	double accel;    ///< the drive's proper acceleration along +z [m/s^2] (negative: along -z)
 	double speed;    ///< speed in the global frame [m/s]
 	double gamma;    ///< Lorentz factor of that speed
 	double clockOfs; ///< the vessel's clock less the simulation time [s] (proper time, incl. gravitational time dilation)
 	double shipMJD;  ///< the vessel's clock as a date
+	// in a black hole's strong field (RELSTATE_STRONGFIELD; else 0):
+	OBJHANDLE hole;  ///< the black hole
+	double holeR;    ///< the vessel's spheroidal radius r about it [m] (the horizon: r+ = its size)
+	double clockRate;///< rate of the vessel's clock against the simulation's (gravity and motion)
+	double tidal;    ///< tidal acceleration across the vessel (its size), about [m/s^2]
+	double hover;    ///< proper acceleration needed to stay at rest there [m/s^2] (0: none can, within the ergosphere)
+	double speedStatic; ///< speed relative to an observer at rest there [m/s] (0: within the ergosphere)
+	BOOL insideHorizon; ///< inside the event horizon
 } RELSTATE;
+/**
+ * \brief A black hole's spacetime (see oapiGetBlackHoleInfo): its Kerr
+ *   coordinates (Kerr-Schild: Cartesian far away, regular across the
+ *   horizon; right-handed, the spin along +z), lengths in metres.
+ */
+typedef struct {
+	double mass;        ///< [kg]
+	double M;           ///< its mass as a length: G m / c^2 [m]
+	double a;           ///< spin as a length: J / (m c) [m] (a/M: the dimensionless spin, 0 to 0.998)
+	VECTOR3 axis;       ///< spin axis (its north pole: turning counterclockwise seen from it), global frame
+	VECTOR3 ex, ey;     ///< the Kerr coordinates' x and y axes in the global frame (z: axis); a global vector v relative to the hole has Kerr coordinates (v.ex, v.ey, v.axis)
+	double horizon;     ///< event horizon r+ [m] (its size)
+	double isco;        ///< innermost stable circular orbit, prograde [m]
+	double photonOrbit; ///< circular photon orbit, prograde [m]
+	double strongRange; ///< vessels closer than this fly in its spacetime [m]
+	double discRate;    ///< its accretion disc's rate, in units of the Eddington rate (0: no disc)
+	double discOuter;   ///< the disc's outer radius [m] (its inner: the ISCO)
+	double discTempScale; ///< T_K [K]: the disc's temperature T (r) = T_K Q(sqrt (r/M))^(1/4), Q Page and Thorne's flux shape (M = 1)
+	double discTmax;    ///< the disc's hottest [K]
+	double discLuminosity; ///< [W]
+} BLACKHOLEINFO;
+
+/**
+ * \brief Describes a black hole (an object of type OBJTP_BLACKHOLE).
+ * \return false if hBody is not a black hole
+ */
+OAPIFUNC bool oapiGetBlackHoleInfo (OBJHANDLE hBody, BLACKHOLEINFO *info);
+
 #define RELSTATE_DRIVE        0x0001
 #define RELSTATE_RELATIVISTIC 0x0002
+#define RELSTATE_STRONGFIELD  0x0004
+#define RELSTATE_SWALLOWED    0x0008
 
 /**
  * \brief Sets a vessel's ideal drive (relativistic travel): a proper
@@ -3476,7 +3516,7 @@ OAPIFUNC bool oapiGetNamedStar (int i, NAMEDSTAR *star);
 typedef struct {
 	OBJHANDLE hTarget; ///< celestial body or vessel
 	int arrival;       ///< 0: at rest at the altitude, 1: in a circular orbit at the altitude, 2: passing at the altitude
-	double altitude;   ///< above the target's surface [m] (a star: the distance from it; 0: its default, where its light is the Sun's at 1 AU)
+	double altitude;   ///< above the target's surface [m] (a star: the distance from it; 0: its default, where its light is the Sun's at 1 AU; a black hole: above its horizon, 0: its default, where the drive holds the vessel with a quarter of its acceleration, at least 20 GM/c^2 out)
 	double accel;      ///< proper acceleration [m/s^2] (at most 10^6 g)
 	int fastest;       ///< nonzero: as soon as possible; else arriving after tripTime
 	double tripTime;   ///< [s] (Solar System time)
@@ -3488,7 +3528,7 @@ typedef struct {
  *   autopilot's, else a preview from the current state).
  */
 typedef struct {
-	int phase;         ///< 0 idle, 1 aligning, 2 accelerating, 3 coasting, 4 decelerating, 5 arrived, 6 no trip
+	int phase;         ///< 0 idle, 1 aligning, 2 accelerating, 3 coasting, 4 decelerating, 5 arrived, 6 no trip, 7 holding (at rest by a black hole, on the drive)
 	int planOk;        ///< nonzero: the plan is valid
 	double arriveMJD;  ///< arrival (Solar System time)
 	double tripTime;   ///< time to the arrival from now (Solar System) [s]

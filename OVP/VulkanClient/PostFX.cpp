@@ -458,10 +458,10 @@ void PostFX::Meter ()
 	AdaptParams ap;
 	ap.dt = dt;
 	ap.key = 0.45f;
-	ap.minLogExp = std::log2 (0.6f), ap.maxLogExp = std::log2 (std::max (maxExposure, 0.6f));
+	ap.minLogExp = std::log2 (minExposure), ap.maxLogExp = std::log2 (std::max (maxExposure, minExposure));
 	ap.lowPct = 0.5f, ap.highPct = 0.98f;
 	ap.speedUp = 3.0f, ap.speedDown = 1.2f;
-	ap.strength = 0.6f;
+	ap.strength = adaptStrength;
 	ap.darkLogLum = -8.0f, ap.minLitFrac = 0.02f;
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, adaptPipe);
 	vkCmdPushConstants (cmd, meterLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ap), &ap);

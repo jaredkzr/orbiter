@@ -6,6 +6,7 @@
 // =======================================================================
 
 #include "RelTravel.h"
+#include "BlackHole.h"
 #include "Orbiter.h"
 #include "Vessel.h"
 #include "Celbody.h"
@@ -49,6 +50,12 @@ namespace reltravel {
 		const double REPLAN_MISS = 1000.0;     // [m] stopped farther from the arrival: a new approach
 		const int MAX_REPLANS = 5;
 		const double REPLAN_BRAKE = 0.01;      // (braking at less than this part of the drive)
+		const double BH_ARRIVE_R = 20.0;       // [M] arrival by a black hole: at least this far out,
+		const double BH_HOVER_SHARE = 0.25;    // and where staying at rest takes at most this part of the drive
+		const double HOLD_TIME = 10.0;         // [s] holding at rest: the position's correction time
+		const double TRIM_TIME = 2.0;          // [s] an orbit by a black hole trimmed to circular: the velocity's correction time,
+		const double TRIM_TOL = 1e-5;          // until within this part of the orbital speed,
+		const double TRIM_MAX = 120.0;         // [s] or for at most this long
 
 		/// Arrival later than the soonest (T0 from now) by this, for a coast
 		/// of FLIP_COAST between the burns: the coast grows as sqrt (2 T0 dT)
@@ -59,11 +66,13 @@ namespace reltravel {
 
 		/// Whether a straight burn from x along dir keeps clear of the bodies:
 		/// it passes none closer than it is now, or than its radius and a
-		/// margin (from a low orbit: the path must lead outwards)
-		bool ClearPath (const Vector &x, const Vector &dir, const Body *&blocker)
+		/// margin (from a low orbit: the path must lead outwards). The trip's
+		/// target aside (the arrival keeps clear of it).
+		bool ClearPath (const Vector &x, const Vector &dir, const Body *target, const Body *&blocker)
 		{
 			for (size_t i = 0; i < g_psys->nGrav(); i++) {
 				const CelestialBody *b = g_psys->GetGravObj ((int)i);
+				if (b == target) continue;
 				Vector rel (x - b->GPos());
 				double s = -dotp (rel, dir);
 				if (s <= 0.0) continue; // (heading away)
@@ -77,8 +86,8 @@ namespace reltravel {
 
 	const char *PhaseName (int phase)
 	{
-		static const char *name[] = { "Idle", "Aligning", "Accelerating", "Coasting", "Decelerating", "Arrived", "No trip" };
-		return phase >= 0 && phase <= PH_FAILED ? name[phase] : "-";
+		static const char *name[] = { "Idle", "Aligning", "Accelerating", "Coasting", "Decelerating", "Arrived", "No trip", "Holding" };
+		return phase >= 0 && phase <= PH_HOLD ? name[phase] : "-";
 	}
 
 	Controller::Controller (Vessel *v): vessel (v) {}
@@ -129,6 +138,66 @@ namespace reltravel {
 	{
 		settings.target = b, settings.star = -1, settings.targetName.clear ();
 		if (settings.altitude > 1e12) settings.altitude = 1e6; // (from a star's distance)
+		if (b && b->Type () == OBJTP_BLACKHOLE) {
+			// (where the drive can hold the vessel: Newton's GM/r^2, a share of
+			// the drive's acceleration; out of the strongest field)
+			const kerr::Hole &K = ((const BlackHole*)b)->Kerr ();
+			double r = std::max (BH_ARRIVE_R * K.M, std::sqrt (Ggrav * b->Mass () / (BH_HOVER_SHARE * settings.accel)));
+			settings.altitude = r - b->Size ();
+		}
+	}
+
+	Vector Controller::Gravity (const Vector &x, const Vector &v) const
+	{
+		if (const BlackHole *bh = vessel->StrongFieldHole ())
+			return bh->FreeAccel (x - bh->GPos (), v - bh->GVel ());
+		return g_psys->Gacc (x, vessel);
+	}
+
+	void Controller::Trim ()
+	{
+		// the velocity of the circular orbit through where the vessel is (in
+		// the equatorial plane: Kerr's), the difference taken out over
+		// TRIM_TIME; done when close enough
+		const BlackHole *bh = vessel->StrongFieldHole ();
+		Vector rp, rv, vc;
+		char buf[128];
+		snprintf (buf, sizeof (buf), "Arrived at %s", TargetName ().c_str());
+		if (bh) rp = vessel->GPos () - bh->GPos (), rv = vessel->GVel () - bh->GVel ();
+		if (!bh || !bh->CircularVelocity (rp, vc)) { trimming = false; Stop (PH_ARRIVED, buf); return; }
+		Vector dv (vc - rv);
+		if (dv.length () < TRIM_TOL * vc.length () || td.SimT0 - trimStart > TRIM_MAX) {
+			trimming = false;
+			Stop (PH_ARRIVED, buf);
+			return;
+		}
+		Vector alpha (dv / std::max (TRIM_TIME, td.SimDT));
+		double amax = std::min (DRIVE_MARGIN * settings.accel, Vessel::RELDRIVE_MAX_ACCEL);
+		if (alpha.length () > amax) alpha *= amax / alpha.length ();
+		attErr = Point (alpha.unit ());
+		Drive (alpha, td.SimT1 + 1.0);
+		phase = PH_BURN2;
+		message = "Trimming the orbit";
+	}
+
+	void Controller::Hold ()
+	{
+		// at rest relative to the hole, at the arrival point: the drive's
+		// acceleration of an observer at rest there, and corrections back to
+		// the point (critically damped over HOLD_TIME)
+		const BlackHole *bh = vessel->StrongFieldHole ();
+		if (!bh || vessel->InsideHorizon ()) { Stop (PH_FAILED, "Can't hold position"); return; }
+		Vector rp (vessel->GPos () - bh->GPos ()), rv (vessel->GVel () - bh->GVel ());
+		if (!holdSet) holdPos = rp, holdSet = true;
+		Vector hover;
+		if (!bh->HoverAccel (rp, hover)) { Stop (PH_FAILED, "Can't hold position: within the ergosphere"); return; }
+		double w = 2.0 / HOLD_TIME;
+		Vector alpha (hover + (holdPos - rp) * (w * w) - rv * (2.0 * w));
+		attErr = Point (alpha.unit ());
+		Drive (alpha, td.SimT1 + 1.0);
+		char buf[128];
+		snprintf (buf, sizeof (buf), "Holding at rest by %s: %.3g g", bh->Name (), alpha.length () / G0);
+		message = buf;
 	}
 
 	void Controller::SetStar (int i)
@@ -172,7 +241,14 @@ namespace reltravel {
 		const CelestialBody *cb = dynamic_cast<const CelestialBody*> (tg);
 		bool orbit = settings.arrival == ARRIVE_ORBIT && cb && cb->Mass() > 0.0;
 		Vector vorb;
-		if (orbit) {
+		if (orbit && cb->Type() == OBJTP_BLACKHOLE) {
+			// a black hole: in its equatorial plane (circular orbits are
+			// there), prograde, at Kerr's orbital speed
+			const BlackHole *bh = (const BlackHole*)cb;
+			Vector ax (bh->SpinAxis()), q (a - ax * dotp (a, ax));
+			a = q.length() > 1e-3 ? q.unit() : crossp (ax, Vector (1, 0, 0)).length() > 1e-3 ? crossp (ax, Vector (1, 0, 0)).unit() : Vector (1, 0, 0);
+			if (!bh->CircularVelocity (a * r, vorb)) orbit = false;
+		} else if (orbit) {
 			// circular, about the rotation axis (equatorial when arriving over the equator)
 			Vector t (crossp (cb->RotAxis(), a));
 			if (t.length() < 1e-3) t = crossp (Vector (0, 1, 0), a);
@@ -231,7 +307,7 @@ namespace reltravel {
 			if (i != NAVMODE_HOLDALT) vessel->ClrNavMode (i);
 		tArrive = settings.fastest ? 0.0 : td.SimT0 + settings.tripTime;
 		phase = PH_ALIGN;
-		aligned = guided = stopped = false;
+		aligned = guided = stopped = trimming = holdSet = false;
 		fails = replans = 0;
 		message = "Engaged";
 		LOGOUT ("Relativistic travel: %s to %s, %.4g g, %s", vessel->Name(), TargetName ().c_str(),
@@ -277,8 +353,11 @@ namespace reltravel {
 		// (attitude thrusters can't hold an attitude over steps this long on
 		// the vessel's clock; under a ship-time warp the trip is the drive's
 		// throughout, the final corrections too)
+		// (holding by a black hole, the drive's thousands of g want the
+		// attitude exact: a hundredth of a degree off pushes sideways at tens
+		// of m/s^2)
 		double shipStep = td.SimDT / Gamma (vessel->GVel().length());
-		return !vessel->AttitudeThrustersUsable () || shipStep > MAX_RCS_STEP || g_pOrbiter->ShipWarp () > 0.0;
+		return !vessel->AttitudeThrustersUsable () || shipStep > MAX_RCS_STEP || g_pOrbiter->ShipWarp () > 0.0 || phase == PH_HOLD;
 	}
 
 	void Controller::Drive (const Vector &alpha, double tEnd)
@@ -328,9 +407,27 @@ namespace reltravel {
 		double now = td.SimT0;
 
 		// arrived (a flyby: at the time; a rendezvous: braked to rest, Guide)
+		if (phase == PH_HOLD) { Hold (); return; }
+		if (trimming) { Trim (); return; }
 		if (guided && now >= tArrive - 1e-6 && (settings.arrival == ARRIVE_FLYBY || stopped)) {
 			char buf[128];
 			snprintf (buf, sizeof (buf), "Arrived at %s", TargetName ().c_str());
+			// (at rest by a black hole: held there)
+			const BlackHole *bh = settings.target && settings.target->Type () == OBJTP_BLACKHOLE ? (const BlackHole*)settings.target : nullptr;
+			if (bh && settings.arrival == ARRIVE_REST && vessel->StrongFieldHole () == bh) {
+				LOGOUT ("Relativistic travel: %s %s: holding there", vessel->Name(), buf);
+				if (vessel == g_focusobj) g_pOrbiter->ShowInfoMessage (buf);
+				phase = PH_HOLD;
+				holdPos = vessel->GPos () - bh->GPos (), holdSet = true;
+				Hold ();
+				return;
+			}
+			// (in orbit about a black hole: trimmed to its circular orbit there)
+			if (bh && settings.arrival == ARRIVE_ORBIT && vessel->StrongFieldHole () == bh) {
+				trimming = true, trimStart = now;
+				Trim ();
+				return;
+			}
 			Stop (PH_ARRIVED, buf);
 			return;
 		}
@@ -361,14 +458,14 @@ namespace reltravel {
 		double tEnd = TripState (cur.spec, tr, tr.burns[0].dtau).t;
 
 		// the drive less gravity (the plan is free of it), the attitude towards it
-		Vector g (g_psys->Gacc (vessel->GPos(), vessel));
+		Vector g (Gravity (vessel->GPos(), vessel->GVel()));
 		Vector alpha (dir * settings.accel - g);
 		attErr = Point (alpha.unit());
 		if (!aligned) {
 			phase = PH_ALIGN;
 			// (a clear departure: not through the body it starts from)
 			const Body *blocker = nullptr;
-			if (!ClearPath (vessel->GPos(), dir, blocker)) {
+			if (!ClearPath (vessel->GPos(), dir, settings.target, blocker)) {
 				message = std::string ("Waiting for a clear departure (") + blocker->Name() + ")";
 				vessel->SetRelDrive (settings.accel, false);
 				return;
@@ -413,7 +510,7 @@ namespace reltravel {
 		Vector xt, vt;
 		arrival (now + tgo, xt, vt);
 		Vector x (vessel->GPos()), v (vessel->GVel());
-		Vector g (g_psys->Gacc (x, vessel));
+		Vector g (Gravity (x, v));
 		Vector alpha;
 		double tEnd = tArrive;
 		bool burn;
@@ -481,7 +578,17 @@ namespace reltravel {
 		if (alpha.length() > 0.0) attErr = Point (alpha.unit());
 		if (burn) {
 			phase = fly ? PH_COAST : PH_BURN2;
-			Drive (alpha, fly ? tArrive : tEnd);
+			// (at rest by a black hole: no cutoff within the step, the vessel
+			// would fall for the rest of it; the braking up to the stop and the
+			// hover after it averaged over the step (its velocity change
+			// right), held from the next)
+			bool holdNext = !fly && settings.arrival == ARRIVE_REST && settings.target && settings.target->Type () == OBJTP_BLACKHOLE;
+			if (holdNext && tEnd < td.SimT1) {
+				double f = std::clamp ((tEnd - now) / std::max (td.SimDT, 1e-9), 0.0, 1.0);
+				alpha = alpha * f - g * (1.0 - f);
+				attErr = Point (alpha.unit());
+			}
+			Drive (alpha, fly ? tArrive : holdNext ? std::max (tEnd, td.SimT1 + 1.0) : tEnd);
 			if (!fly && tEnd <= td.SimT1) tArrive = tEnd, stopped = true; // (stops within this step: arrived)
 		} else if (hold) {
 			phase = PH_COAST;

@@ -24,6 +24,8 @@
 #include "StarField.h"
 #include "StarCatalogue.h"
 #include "GalaxySky.h"
+#include "BlackHoleLens.h"
+#include "../../Src/Orbiter/Kerr.h"
 #include "Particles.h"
 #include "PlanetSurface.h"
 #include "Atmosphere.h"
@@ -74,6 +76,7 @@ namespace {
 		float relSelf[4];      // the camera's own vessel: centre (view), radius
 		float relSunDir[4];    // the sunlight on it in its frame: direction (view, aberrated)
 		float relSunColor[4];  //   colour (Doppler shifted)
+		float lens[4];         // a black hole's lens: centre (view), mass [m] (0: none)
 		struct {
 			float pos[4];   // view space position, range
 			float dir[4];   // view space direction, type (1 point, 2 spot)
@@ -406,6 +409,17 @@ bool Scene::Init ()
 	}
 	else galaxy.reset ();
 
+	// a black hole: its lens on the sky (ORBITER_VK_LENS=0: none)
+	if (galaxy && !(getenv ("ORBITER_VK_LENS") && !atoi (getenv ("ORBITER_VK_LENS")))) {
+		bool any = false;
+		for (DWORD i = 0; i < oapiGetGbodyCount (); i++)
+			any |= oapiGetObjectType (oapiGetGbodyByIndex (i)) == OBJTP_BLACKHOLE;
+		if (any) {
+			lens = std::make_unique<BlackHoleLens> ();
+			if (!lens->Init (ctx, galaxy.get (), starField.get ())) lens.reset ();
+		}
+	}
+
 	// the sun lights the scene
 	for (DWORD i = 0; i < oapiGetGbodyCount(); i++) {
 		OBJHANDLE h = oapiGetGbodyByIndex (i);
@@ -433,6 +447,8 @@ void Scene::Shutdown ()
 	stars.reset();
 	if (starField) starField->Shutdown ();
 	starField.reset();
+	if (lens) lens->Shutdown ();
+	lens.reset();
 	if (galaxy) galaxy->Shutdown ();
 	galaxy.reset();
 	if (ao) ao->Shutdown ();
@@ -1207,12 +1223,100 @@ void Scene::StarDiscRGB (double teff, float rgb[3])
 	for (int k = 0; k < 3; k++) rgb[k] = (float)c[k];
 }
 
+void Scene::UpdateLens ()
+{
+	// the nearest black hole whose lens shows: its Einstein ring (sqrt (4M/r)
+	// for the sky far behind it) wider than two pixels
+	lensOn = false;
+	if (!lens || !galaxy || !skySettings.milkyWay) return;
+	const double C = 299792458.0;
+	OBJHANDLE best = nullptr;
+	BLACKHOLEINFO bi{}, b{};
+	double bestR = 0.0;
+	double pix = 2.0 / (ProjX () * std::max (1.0, (double)ctx->RenderExtent ().width)); // [rad]
+	for (DWORD i = 0; i < oapiGetGbodyCount (); i++) {
+		OBJHANDLE h = oapiGetGbodyByIndex (i);
+		if (oapiGetObjectType (h) != OBJTP_BLACKHOLE || !oapiGetBlackHoleInfo (h, &b)) continue;
+		VECTOR3 hp;
+		oapiGetGlobalPos (h, &hp);
+		double r = length (camPos - hp) / b.M;
+		if (std::sqrt (4.0 / r) < 2.0 * pix) continue;
+		if (!best || r < bestR) best = h, bestR = r, bi = b;
+	}
+	if (!best) return;
+
+	BlackHoleLens::Frame f;
+	kerr::Hole K (1.0, bi.a / bi.M);
+	VECTOR3 hp, hv;
+	oapiGetGlobalPos (best, &hp);
+	oapiGetGlobalVel (best, &hv);
+	VECTOR3 rc = (camPos - hp) / bi.M;
+	f.cam[0] = dotp (rc, bi.ex), f.cam[1] = dotp (rc, bi.ey), f.cam[2] = dotp (rc, bi.axis);
+	f.a = K.a;
+	// the camera moves with its target (relative to the hole); else at
+	// rest in the coordinates; where neither can be, falling with the
+	// slicing's normal observer
+	double u[4];
+	bool ok = false;
+	OBJHANDLE tgt = oapiCameraTarget ();
+	VECTOR3 v = _V(0, 0, 0);
+	if (tgt) {
+		oapiGetGlobalVel (tgt, &v);
+		v = (v - hv) / C;
+	}
+	double V[3] = { dotp (v, bi.ex), dotp (v, bi.ey), dotp (v, bi.axis) };
+	ok = K.CoordinateVelocity (f.cam, V, u);
+	if (!ok) K.NormalObserver (f.cam, u);
+	K.BoostFrame (f.cam, u, f.e);
+	// view -> global (camRot) -> Kerr; Kerr -> global -> Galactic
+	VECTOR3 ax[3] = { bi.ex, bi.ey, bi.axis };
+	double G[3][3];
+	galactic::EclipticToGalactic (G);
+	for (int i = 0; i < 3; i++)
+		for (int j = 0; j < 3; j++) {
+			f.v2k[i][j] = ax[i].x * camRot.data[j] + ax[i].y * camRot.data[3 + j] + ax[i].z * camRot.data[6 + j];
+			f.k2g[i][j] = G[i][0] * ax[j].x + G[i][1] * ax[j].y + G[i][2] * ax[j].z;
+		}
+	f.rh = K.Horizon (), f.rm = K.InnerHorizon (), f.rph = K.PhotonOrbit (true);
+	f.inside = K.R (f.cam) < f.rh;
+	f.fx = ProjX (), f.fy = ProjY ();
+	// the hole's frame relative to the cosmic background: the barycentre's
+	// 369.82 km/s towards l 264.021, b 48.253 and the hole's velocity
+	{
+		const double DEG = 3.14159265358979323846 / 180.0;
+		double l = 264.021 * DEG, bb = 48.253 * DEG;
+		double Vg[3] = { std::cos (bb) * std::cos (l) * 369.82e3 / C, std::cos (bb) * std::sin (l) * 369.82e3 / C, std::sin (bb) * 369.82e3 / C };
+		double hg[3];
+		VECTOR3 hb = hv / C;
+		for (int i = 0; i < 3; i++) hg[i] = G[i][0] * hb.x + G[i][1] * hb.y + G[i][2] * hb.z;
+		double v2 = Vg[0] * Vg[0] + Vg[1] * Vg[1] + Vg[2] * Vg[2], gV = 1.0 / std::sqrt (1.0 - v2);
+		double Vv = Vg[0] * hg[0] + Vg[1] * hg[1] + Vg[2] * hg[2];
+		for (int i = 0; i < 3; i++) f.betaBg[i] = (Vg[i] + hg[i] / gV + Vg[i] * (gV / (1.0 + gV) * Vv)) / (1.0 + Vv);
+	}
+	const char *ce = getenv ("ORBITER_VK_SKY_COSMIC");
+	f.cosmic = !ce || atoi (ce) != 0;
+	f.stars = starField && skySettings.stars;
+	lensDisc = bi.discRate > 0.0;
+	lensPos = hp, lensM = bi.M;
+	if (bi.discRate > 0.0) {
+		f.discTK = bi.discTempScale, f.discIn = bi.isco / bi.M, f.discOut = bi.discOuter / bi.M;
+		// (the disc seen out to where it glows: beyond, cool and thin, the sky through it)
+		const double DISC_T_MIN = 3000.0; // [K] (cooler: dark in visible light; it would hide the sky behind)
+		for (double r = 1.5 * f.discIn; r < f.discOut; r *= 1.02)
+			if (bi.discTempScale * std::pow (K.DiscFluxShape (r), 0.25) < DISC_T_MIN) { f.discOut = r; break; }
+		f.time = oapiGetSimTime () * C / bi.M;
+	}
+	lens->Trace (f);
+	lensOn = true;
+}
+
 void Scene::UpdateNearStars ()
 {
 	nearStars.clear ();
 	constexpr double AU_M = 1.49597870700e11;
 	// the Sun
 	light = StarLight ();
+	if (!hSun) light.flux = 0.0; // (a system without the Sun: no light but what is found below)
 	if (hSun) {
 		oapiGetGlobalPos (hSun, &light.pos);
 		light.radius = oapiGetSize (hSun);
@@ -1234,13 +1338,33 @@ void Scene::UpdateNearStars ()
 			light.sun = false;
 		}
 	}
+	// black holes' accretion discs: light from the hole's direction, of the
+	// colour of their hot inner gas, the disc's luminosity foreshortened by
+	// the angle to its axis (a face's 2 |cos i| L / (4 pi d^2); edge on at
+	// least a fifth of that: the lensed far side); its bright inner part the
+	// light's size (soft shadows)
+	for (DWORD i = 0; i < oapiGetGbodyCount (); i++) {
+		OBJHANDLE h = oapiGetGbodyByIndex (i);
+		BLACKHOLEINFO bi;
+		if (oapiGetObjectType (h) != OBJTP_BLACKHOLE || !oapiGetBlackHoleInfo (h, &bi) || bi.discRate <= 0.0) continue;
+		VECTOR3 hp;
+		oapiGetGlobalPos (h, &hp);
+		VECTOR3 dv = camPos - hp;
+		double d = std::max (length (dv), 10.0 * bi.M);
+		double ci = std::max (std::fabs (dotp (dv, bi.axis)) / std::max (length (dv), 1.0), 0.2);
+		double flux = bi.discLuminosity / 3.828e26 * 2.0 * ci * (AU_M / d) * (AU_M / d);
+		if (flux > light.flux) {
+			light.pos = hp, light.radius = 10.0 * bi.M, light.teff = 0.8 * bi.discTmax, light.flux = flux;
+			light.sun = false, light.disc = true;
+		}
+	}
 }
 
 void Scene::RenderNearStars (bool transparent)
 {
 	// as the Sun (VPlanet): a disc far brighter than any lit surface, and
 	// glare about it with a least apparent size
-	constexpr float STAR_BRIGHTNESS = 20.0f, STAR_GLOW = 2.0f;
+	constexpr float STAR_GLOW = 2.0f;
 	constexpr double STAR_GLOW_SIZE = 6.0, STAR_GLOW_MIN_ANGLE = 0.02;
 	for (const NearStar &s : nearStars) {
 		float c[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
@@ -1601,6 +1725,8 @@ void Scene::BeginFrame ()
 	ctx->GpuMark ("begin");
 	if (galaxy) galaxy->Update (SkyObserver (), oapiGetSysStep ());
 	ctx->GpuMark ("skybake");
+	UpdateLens ();
+	ctx->GpuMark ("lens");
 	UpdateNearStars ();
 	if (starField && skySettings.stars) {
 		// (the Sun is drawn as a body; the catalogue's Sun only far from it,
@@ -1755,11 +1881,21 @@ void Scene::FillFrameUniforms (void *pfu)
 	StarDiscRGB (light.teff, lightRGB);
 	double lightLum = 0.2126 * lightRGB[0] + 0.7152 * lightRGB[1] + 0.0722 * lightRGB[2];
 	double lightScale = std::min (1.0, light.flux / NEAR_FLUX) / std::max (lightLum, 1e-6);
+	// (an accretion disc: a large part of the sky at about a star's surface
+	// brightness, the exposure adapted to it: its light brighter than the
+	// Sun's at 1 AU, compressed)
+	if (light.disc && light.flux > 1.0) lightScale *= std::min (10.0, 1.0 + 2.0 * std::log10 (light.flux));
 	for (int k = 0; k < 3; k++) fu.sunColor[k] = (float)(lightRGB[k] * lightScale);
 	// relativistic view: the sunlight on the camera's own vessel in its frame,
 	// from the aberrated direction, Doppler shifted (radiance), on a disc 1/D^2
 	// the solid angle (irradiance)
 	for (int k = 0; k < 4; k++) fu.relSunDir[k] = fu.sunDir[k], fu.relSunColor[k] = fu.sunColor[k];
+	// a black hole's lens on the objects behind it
+	for (int k = 0; k < 4; k++) fu.lens[k] = 0.0f;
+	if (lensOn) {
+		VECTOR3 hv = view.TransformPoint (lensPos - camPos);
+		fu.lens[0] = (float)hv.x, fu.lens[1] = (float)hv.y, fu.lens[2] = (float)hv.z, fu.lens[3] = (float)lensM;
+	}
 	if (relOn) {
 		double b2 = dotp (relBeta, relBeta), g = 1.0 / std::sqrt (1.0 - b2), nb = dotp (sunDir, relBeta);
 		VECTOR3 n = (sunDir + relBeta * (g * g / (g + 1.0) * nb + g)) / (g * (1.0 + nb));
@@ -2099,7 +2235,8 @@ void Scene::Render ()
 			}
 			VECTOR3 bv = RelBetaView ();
 			float bvf[3] = { (float)bv.x, (float)bv.y, (float)bv.z };
-			if (!getenv ("ORBITER_VK_SKY_COSMIC_ONLY")) galaxy->Render (cmd, R, (float)ProjX (), (float)ProjY (), d, bvf);
+			if (lensOn) lens->Render (cmd, d, (float)STAR_BRIGHTNESS); // (near a black hole: the sky through its spacetime, the background with it, its disc)
+			else if (!getenv ("ORBITER_VK_SKY_COSMIC_ONLY")) galaxy->Render (cmd, R, (float)ProjX (), (float)ProjY (), d, bvf);
 			// the extragalactic background, seen moving relative to the cosmic
 			// microwave background: the Solar System's barycentre at 369.82 km/s
 			// towards l 264.021, b 48.253 (Planck 2018), the camera's velocity
@@ -2116,14 +2253,14 @@ void Scene::Render ()
 				double ul = std::min (length (u), 1.0 - 1e-15);
 				// (ORBITER_VK_SKY_COSMIC=0: none; ORBITER_VK_SKY_COSMIC_ONLY: it alone, the Milky Way and the stars left out)
 				const char *ce = getenv ("ORBITER_VK_SKY_COSMIC");
-				if ((!ce || atoi (ce) != 0) && std::sqrt ((1.0 + ul) / (1.0 - ul)) > COSMIC_BG_DOPPLER) {
+				if (!lensOn && (!ce || atoi (ce) != 0) && std::sqrt ((1.0 + ul) / (1.0 - ul)) > COSMIC_BG_DOPPLER) {
 					VECTOR3 uv = view.TransformPoint (u);
 					float uvf[3] = { (float)uv.x, (float)uv.y, (float)uv.z };
 					galaxy->RenderBackground (cmd, (float)ProjX (), (float)ProjY (), d, uvf);
 				}
 			}
 		}
-		if (starField && skySettings.stars && !getenv ("ORBITER_VK_SKY_COSMIC_ONLY")) {
+		if (starField && skySettings.stars && !lensOn && !getenv ("ORBITER_VK_SKY_COSMIC_ONLY")) {
 			// Galactic direction -> ecliptic (G^T) -> clip
 			float gvp[16];
 			for (int r = 0; r < 4; r++) {

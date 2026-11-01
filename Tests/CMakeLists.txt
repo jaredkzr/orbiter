@@ -97,6 +97,16 @@ set_target_properties(Relativity.Kinematics PROPERTIES RUNTIME_OUTPUT_DIRECTORY 
 add_test(NAME Relativity.Kinematics COMMAND $<TARGET_FILE:Relativity.Kinematics>)
 set_tests_properties(Relativity.Kinematics PROPERTIES TIMEOUT 120)
 
+# Rotating black holes: Kerr spacetime, geodesics, observers
+add_executable(Kerr.Geodesics Kerr.Geodesics.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Kerr.cpp
+)
+target_include_directories(Kerr.Geodesics PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter)
+target_link_libraries(Kerr.Geodesics Catch2::Catch2WithMain)
+set_target_properties(Kerr.Geodesics PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER_BINARY_ROOT_DIR}")
+add_test(NAME Kerr.Geodesics COMMAND $<TARGET_FILE:Kerr.Geodesics>)
+set_tests_properties(Kerr.Geodesics PROPERTIES TIMEOUT 120)
+
 # Scenario tests need an Orbiter executable that runs without graphics client
 if (ORBITER_HEADLESS)
 	set(ORBITER_TEST_EXE $<TARGET_FILE:${OrbiterTgt}>)
@@ -143,6 +153,9 @@ if (ORBITER_TEST_EXE)
 	set_tests_properties(Scenario.RelTripTest PROPERTIES TIMEOUT 400)
 	# interstellar flight: deep space, ship-time warp, a trip to a star
 	set_tests_properties(Scenario.InterstellarTest PROPERTIES TIMEOUT 400)
+	# black holes: orbit, hover and fall in a Kerr spacetime
+	set_tests_properties(Scenario.BlackHoleTest PROPERTIES TIMEOUT 300)
+	set_tests_properties(Scenario.BlackHoleTidesTest PROPERTIES TIMEOUT 120 ENVIRONMENT "ORBITER_DAMAGE=1")
 	# saving and loading damage: the save test writes the scenario the load
 	# test runs (in the build tree)
 	set_tests_properties(Scenario.DamageSaveTest PROPERTIES FIXTURES_SETUP DamageRoundtrip ENVIRONMENT "ORBITER_DAMAGE=1")
@@ -203,6 +216,17 @@ if (ORBITER_TEST_EXE)
 				PASS_REGULAR_EXPRESSION "sky check: [0-9]+ of [0-9]+ passed"
 				FAIL_REGULAR_EXPRESSION "FAILED")
 		endif()
+		# the sky through a black hole: the client's ray tracer against the
+		# core's Kerr geodesics
+		add_test(
+			NAME "Lens.Check"
+			COMMAND ${ORBITER_TEST_EXE} -p VulkanClient "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Lens/Lens.scn" "--maxframes=40"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Lens.Check PROPERTIES TIMEOUT 120
+			ENVIRONMENT "ORBITER_VK_OFFSCREEN=1;ORBITER_VK_LENS_CHECK=30;ORBITER_VK_SKY_OBSERVER=10,0,0"
+			PASS_REGULAR_EXPRESSION "lens check at r = [0-9.]+ M: .* ok"
+			FAIL_REGULAR_EXPRESSION "FAILED")
 	endif()
 
 endif()

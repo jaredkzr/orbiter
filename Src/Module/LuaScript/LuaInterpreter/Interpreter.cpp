@@ -1444,12 +1444,13 @@ void Interpreter::LoadAPI ()
 	lua_pushnumber (L, oapi::ImageFileFormat::IMAGE_DDS); lua_setfield (L, -2, "DDS");
 	lua_setglobal (L, "IMAGEFORMAT");
 
-	lua_createtable (L, 0, 7);
+	lua_createtable (L, 0, 9);
 	lua_pushnumber (L, OBJTP_INVALID); lua_setfield (L, -2, "INVALID");
 	lua_pushnumber (L, OBJTP_GENERIC); lua_setfield (L, -2, "GENERIC");
 	lua_pushnumber (L, OBJTP_CBODY); lua_setfield (L, -2, "CBODY");
 	lua_pushnumber (L, OBJTP_STAR); lua_setfield (L, -2, "STAR");
 	lua_pushnumber (L, OBJTP_PLANET); lua_setfield (L, -2, "PLANET");
+	lua_pushnumber (L, OBJTP_BLACKHOLE); lua_setfield (L, -2, "BLACKHOLE");
 	lua_pushnumber (L, OBJTP_VESSEL); lua_setfield (L, -2, "VESSEL");
 	lua_pushnumber (L, OBJTP_DEBRIS); lua_setfield (L, -2, "DEBRIS");
 	lua_pushnumber (L, OBJTP_SURFBASE); lua_setfield (L, -2, "SURFBASE");
@@ -4321,7 +4322,10 @@ State of a vessel's relativistic travel.
 
 @function get_relstate
 @tparam handle hVessel
-@treturn table fields drive (bool: on), relativistic (bool), accel [m/s^2],
+@treturn table fields drive (bool: on), relativistic (bool), strongfield
+  (bool: in a black hole's strong field), swallowed (bool: lost in a black hole), accel [m/s^2],
+  in a strong field: hole (handle), holer [m], clockrate, tidal [m/s^2 across the vessel],
+  hover [m/s^2: to stay at rest there, 0: impossible], speedstatic [m/s], inside (bool: the horizon);
   speed [m/s, global frame], gamma, clockofs (the vessel's clock less the
   simulation time [s]), shipmjd; nil for an invalid vessel
 */
@@ -4334,8 +4338,16 @@ int Interpreter::oapi_get_relstate (lua_State *L)
 	auto num = [&](const char *k, double v) { lua_pushnumber (L, v); lua_setfield (L, -2, k); };
 	lua_pushboolean (L, (rs.flags & RELSTATE_DRIVE) != 0); lua_setfield (L, -2, "drive");
 	lua_pushboolean (L, (rs.flags & RELSTATE_RELATIVISTIC) != 0); lua_setfield (L, -2, "relativistic");
+	lua_pushboolean (L, (rs.flags & RELSTATE_STRONGFIELD) != 0); lua_setfield (L, -2, "strongfield");
+	lua_pushboolean (L, (rs.flags & RELSTATE_SWALLOWED) != 0); lua_setfield (L, -2, "swallowed");
 	num ("accel", rs.accel); num ("speed", rs.speed); num ("gamma", rs.gamma);
 	num ("clockofs", rs.clockOfs); num ("shipmjd", rs.shipMJD);
+	if (rs.hole) {
+		lua_pushlightuserdata (L, rs.hole); lua_setfield (L, -2, "hole");
+		num ("holer", rs.holeR); num ("clockrate", rs.clockRate); num ("tidal", rs.tidal);
+		num ("hover", rs.hover); num ("speedstatic", rs.speedStatic);
+		lua_pushboolean (L, rs.insideHorizon); lua_setfield (L, -2, "inside");
+	}
 	return 1;
 }
 
@@ -4422,7 +4434,9 @@ Set the trip of a vessel's ideal-drive autopilot (relativistic travel).
 @tparam table spec fields target (handle or name; a name no object has: a
   named star), star (a named star, or "Galactic Centre": interstellar
   travel), arrival ("rest", "orbit" or "flyby"), alt (above the target's
-  surface [m]; a star: the distance from it, nil its default), accel (proper
+  surface [m], default 1000 km; a star: the distance from it, nil its
+  default; a black hole: above its horizon, nil its default, where the drive
+  holds the vessel), accel (proper
   acceleration [m/s^2]), time (trip time [s]: arrive after it; nil: as soon
   as possible)
 @treturn bool
@@ -4445,6 +4459,7 @@ int Interpreter::oapi_reltrip_set (lua_State *L)
 	if (lua_isstring (L, -1)) star = lua_tostring (L, -1), rs.hTarget = 0;
 	lua_pop (L, 1);
 	if (!rs.hTarget && !star.empty ()) rs.star = star.c_str (), rs.altitude = 0.0;
+	if (rs.hTarget && oapiGetObjectType (rs.hTarget) == OBJTP_BLACKHOLE) rs.altitude = 0.0; // (its default)
 	lua_getfield (L, 2, "arrival");
 	if (lua_isstring (L, -1)) {
 		const char *a = lua_tostring (L, -1);
@@ -4498,10 +4513,10 @@ int Interpreter::oapi_reltrip_info (lua_State *L)
 	OBJHANDLE hv = lua_toObject (L, 1);
 	RELTRIPINFO ri;
 	if (!hv || !oapiRelTripInfo (hv, &ri)) { lua_pushnil (L); return 1; }
-	static const char *ph[] = { "Idle", "Aligning", "Accelerating", "Coasting", "Decelerating", "Arrived", "No trip" };
+	static const char *ph[] = { "Idle", "Aligning", "Accelerating", "Coasting", "Decelerating", "Arrived", "No trip", "Holding" };
 	lua_newtable (L);
 	auto num = [&](const char *k, double v) { lua_pushnumber (L, v); lua_setfield (L, -2, k); };
-	lua_pushstring (L, ri.phase >= 0 && ri.phase <= 6 ? ph[ri.phase] : "-"); lua_setfield (L, -2, "phase");
+	lua_pushstring (L, ri.phase >= 0 && ri.phase <= 7 ? ph[ri.phase] : "-"); lua_setfield (L, -2, "phase");
 	num ("phase_id", ri.phase);
 	lua_pushboolean (L, ri.planOk); lua_setfield (L, -2, "ok");
 	num ("arr_mjd", ri.arriveMJD); num ("time", ri.tripTime); num ("shiptime", ri.shipTime);

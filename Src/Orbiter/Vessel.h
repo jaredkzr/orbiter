@@ -1416,6 +1416,8 @@ public:
 	void SetRelDriveCutoff (double t) { reldrive.until = t; }
 	bool RelImpact (const CelestialBody *body, const Vector &rpos, const Vector &rvel) override;
 	void RelDiverged () override;
+	void RelSwallowed (const CelestialBody *hole) override;
+	void RelHorizon (const CelestialBody *hole) override;
 	void Impacted (const Vector &gpos, const Vector &gvel, double speed) override;
 	reltravel::Controller *RelTrip (bool create = true);  // the trip autopilot (created on demand)
 	const reltravel::Controller *RelTripIf () const { return reltrip.get(); }

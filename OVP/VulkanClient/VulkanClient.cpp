@@ -296,6 +296,10 @@ void VulkanClient::clbkRenderScene ()
 		// fully: the light fading to darkness with depth stays seen
 		double dt = scene->DeckTransmittance (scene->CameraPos ());
 		if (dt < 1.0) postfx->maxExposure = std::max (postfx->maxExposure, (float)(4.0 + 4.0 * (1.0 - dt)));
+		// (a black hole's accretion disc in the lens: the eye adapts to it)
+		bool disc = scene->LensDisc ();
+		postfx->minExposure = disc ? 1e-4f : 0.6f;
+		postfx->adaptStrength = disc ? 0.9f : 0.6f;
 	}
 	// relativistic view: the Doppler shift, before the exposure
 	postfx->rel.on = scene->RelView ();

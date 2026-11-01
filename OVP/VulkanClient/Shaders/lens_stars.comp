@@ -1,0 +1,85 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// The stars seen through a black hole's lens: the star field's selection
+// (starfield.vert's light, at rest: the lens shifts it) binned by direction
+// for lenssky.frag to gather (lensstars.glsl). Three passes (push mode):
+// 0: each star's record (scratch) and its cell's count; 1: the cells'
+// offsets (an exclusive scan, one workgroup), the counts cleared; 2: each
+// record into its cell's range.
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "starfield.glsl"
+#include "lensstars.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Stars { Star stars[]; };
+layout(std430, set = 0, binding = 1) readonly buffer List { StarListHeader head; uvec2 entries[]; } list;
+layout(std430, set = 0, binding = 3) readonly buffer Gen { StarGenHeader head; Star stars[]; } gen;
+layout(std430, set = 0, binding = 2) readonly buffer Colours {
+	vec4 rgb[3];
+	vec4 extinction;
+	vec4 band[STAR_NTEMP];
+} col;
+
+layout(std430, set = 1, binding = 0) buffer Counts { uint counts[]; };
+layout(std430, set = 1, binding = 1) buffer Offsets { uint offsets[]; }; // (LENS_NCELL + 1)
+layout(std430, set = 1, binding = 2) buffer Scratch { uvec4 scratch[]; };
+layout(std430, set = 1, binding = 3) buffer Records { uvec4 records[]; };
+
+layout(push_constant) uniform Push {
+	vec4 observer; // xyz: heliocentric Galactic [pc]; w: limiting magnitude
+	vec4 misc;     // x: years since the catalogue's epoch; y: mode; z: records at most
+} pc;
+
+shared uint part[256];
+
+void main ()
+{
+	int mode = int (pc.misc.y);
+	uint cap = uint (pc.misc.z);
+	uint k = gl_GlobalInvocationID.x;
+	if (mode == 0) {
+		uint n = min (min (list.head.instanceCount, list.head.capacity), cap);
+		if (k >= n) return;
+		uvec2 e = list.entries[k];
+		Star s = (e.x & STAR_GENERATED) != 0u ? gen.stars[e.x & ~STAR_GENERATED] : stars[e.x];
+		float A = uintBitsToFloat (e.y);
+		vec3 d = StarSeenPos (s, pc.observer.xyz, pc.misc.x) - pc.observer.xyz;
+		float r = length (d);
+		float m0 = StarAbsMag (s) + StarDistModulus (r);
+		scratch[k] = uvec4 (0u, 0u, 0u, 0xffffffffu);
+		if (m0 + A >= pc.observer.w) return;
+		vec3 dir = d / r;
+		vec4 F = exp2 (-1.328771 * (m0 - 10.0)) * col.band[StarTempIndex (s)] * exp2 (-1.328771 * A * col.extinction);
+		F = min (F * LENS_FSCALE, vec4 (65000.0));
+		int c = LensCell (dir);
+		atomicAdd (counts[c], 1u);
+		scratch[k] = uvec4 (LensOctEncode (dir), packHalf2x16 (F.xy), packHalf2x16 (F.zw), uint (c));
+	} else if (mode == 1) {
+		// (one workgroup: each thread a run of cells)
+		uint t = gl_LocalInvocationID.x;
+		uint per = (uint (LENS_NCELL) + 255u) / 256u, c0 = t * per, c1 = min (c0 + per, uint (LENS_NCELL));
+		uint s = 0u;
+		for (uint c = c0; c < c1; c++) s += counts[c];
+		part[t] = s;
+		barrier ();
+		if (t == 0u) {
+			uint acc = 0u;
+			for (uint i = 0u; i < 256u; i++) { uint v = part[i]; part[i] = acc; acc += v; }
+			offsets[LENS_NCELL] = acc;
+		}
+		barrier ();
+		uint acc = part[t];
+		for (uint c = c0; c < c1; c++) { offsets[c] = acc; acc += counts[c]; counts[c] = 0u; }
+	} else {
+		uint n = min (min (list.head.instanceCount, list.head.capacity), cap);
+		if (k >= n) return;
+		uvec4 rec = scratch[k];
+		if (rec.w == 0xffffffffu) return;
+		uint slot = atomicAdd (counts[rec.w], 1u);
+		records[offsets[rec.w] + slot] = rec;
+	}
+}

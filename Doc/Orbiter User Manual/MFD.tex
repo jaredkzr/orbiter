@@ -1096,6 +1096,17 @@ Some numbers: Earth to Mars at their closest takes about two days at 1 g, at a t
 
 Scripts: oapi.set\_shipwarp and get\_shipwarp; reltrip\_set with star = "Barnard's Star" (or the target's name); get\_namedstar.
 
+\subsubsection{Black holes}
+A black hole is a body of a planetary system (\texttt{BlackHole1 = name} in the system's file; its own file gives \texttt{Mass}, \texttt{Spin} as a fraction of the most a hole can turn, up to 0.998, and optionally an accretion disc: \texttt{AccretionRate} in units of the Eddington rate and \texttt{DiscOuter} in the hole's masses). Distances near it are counted in its \textit{masses}, $M = GM/c^2$: for the test hole of $10^5$ solar masses 148,000 km. Its event horizon lies at 1.44 $M$ for a spin of 0.9, its innermost stable circular orbit at 2.32 $M$ (with the spin).
+
+\textbf{Flying near it.} Within 10,000 masses of the hole a vessel flies in its spacetime exactly (the Kerr metric): orbits precess and have no stable circular orbit within the innermost one, clocks slow (the Flight page's \textit{Spacetime} row: the ship's clock against the Solar System's), and tides stretch the vessel. With the damage model on, the tides tear parts off and finally break the vessel up: a ship falls apart thousands of kilometres from a hole of 10 solar masses, while the horizon of the $10^5$ solar mass hole can be crossed in one piece. Nothing that crosses the horizon comes back; a vessel inside is lost at the inner horizon. To stay at rest near a hole takes the drive's thrust (the \textit{hover} acceleration shown); within the ergosphere nothing can stay at rest.
+
+\textbf{Trips to a hole.} Arriving \textit{at rest}, the autopilot holds the vessel there on the drive until disengaged; arriving \textit{in orbit}, it places the vessel on a circular orbit in the hole's equatorial plane at the hole's orbital speed and trims it. The default distance is where holding the vessel takes a quarter of the trip's acceleration, at least 20 masses out.
+
+\textbf{Seeing it} (Vulkan client). Near a hole the sky is traced through its spacetime: its black shadow, the Einstein ring, the stars and the Milky Way bent into rings, every image of a star; the light shifted by gravity and by the vessel's motion together. An accretion disc glows as a black body hotter towards its inner edge, the side coming towards the camera beamed brighter and bluer, its far side seen bent over the top of the hole; it lights the vessel. Objects behind the hole are drawn bent away from it.
+
+Scripts: get\_relstate's strongfield, holer, clockrate, tidal, hover and inside fields; reltrip\_set with the hole as target.
+
 
 \subsection{TransX}
 \label{ssec:mfd_transx}

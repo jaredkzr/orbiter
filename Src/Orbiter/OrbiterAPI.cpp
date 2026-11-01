@@ -7,6 +7,7 @@
 #include "Orbiter.h"
 #include "Launchpad.h"
 #include "Psys.h"
+#include "BlackHole.h"
 #include "Debris.h"
 #include "Camera.h"
 #include "Pane.h"
@@ -555,6 +556,22 @@ DLLEXPORT bool oapiSetRelDrive (OBJHANDLE hVessel, double accel, bool on)
 	return v->SetRelDrive (accel, on);
 }
 
+DLLEXPORT bool oapiGetBlackHoleInfo (OBJHANDLE hBody, BLACKHOLEINFO *info)
+{
+	const Body *b = (const Body*)hBody;
+	if (!b || !info || b->Type () != OBJTP_BLACKHOLE) return false;
+	const BlackHole *bh = (const BlackHole*)b;
+	const kerr::Hole &K = bh->Kerr ();
+	info->mass = bh->Mass ();
+	info->M = K.M, info->a = K.a;
+	info->axis = MakeVECTOR3 (bh->SpinAxis ()), info->ex = MakeVECTOR3 (bh->KerrX ()), info->ey = MakeVECTOR3 (bh->KerrY ());
+	info->horizon = K.Horizon (), info->isco = K.ISCO (true), info->photonOrbit = K.PhotonOrbit (true);
+	info->strongRange = bh->StrongRange ();
+	info->discRate = bh->DiscRate (), info->discOuter = bh->DiscOuter ();
+	info->discTempScale = bh->DiscTempScale (), info->discTmax = bh->DiscTmax (), info->discLuminosity = bh->DiscLuminosity ();
+	return true;
+}
+
 DLLEXPORT bool oapiGetRelState (OBJHANDLE hVessel, RELSTATE *state)
 {
 	Vessel *v = (Vessel*)hVessel;
@@ -563,6 +580,20 @@ DLLEXPORT bool oapiGetRelState (OBJHANDLE hVessel, RELSTATE *state)
 	const Vessel::RelDrive &d = v->GetRelDrive ();
 	if (d.on) state->flags |= RELSTATE_DRIVE;
 	if (v->Relativistic ()) state->flags |= RELSTATE_RELATIVISTIC;
+	if (const BlackHole *bh = v->StrongFieldHole ()) {
+		state->flags |= RELSTATE_STRONGFIELD;
+		BlackHole::Local loc;
+		if (bh->LocalState (v->GPos () - bh->GPos (), v->GVel () - bh->GVel (), loc)) {
+			state->hole = (OBJHANDLE)bh;
+			state->holeR = loc.r;
+			state->clockRate = loc.clockRate;
+			state->tidal = loc.tidalMax * v->Size ();
+			state->hover = loc.canHover ? loc.hover.length () : 0.0;
+			state->speedStatic = loc.speedStatic;
+			state->insideHorizon = loc.inside;
+		}
+	}
+	if (v->Swallowed ()) state->flags |= RELSTATE_SWALLOWED;
 	state->accel = d.accel;
 	state->speed = v->GVel ().length ();
 	state->gamma = relativity::Gamma (state->speed);
@@ -618,9 +649,11 @@ DLLEXPORT bool oapiRelTripSet (OBJHANDLE hVessel, const RELTRIPSPEC *spec)
 	reltravel::Controller *c = v->RelTrip ();
 	reltravel::Settings &rs = c->settings;
 	rs.arrival = std::clamp (spec->arrival, 0, 2);
+	rs.accel = std::clamp (spec->accel, 0.0, reltravel::MAX_ACCEL); // (before the target: a black hole's default altitude by it)
 	if (spec->hTarget || !spec->star) {
 		c->SetTarget ((const Body*)spec->hTarget);
-		rs.altitude = std::max (spec->altitude, 0.0);
+		const Body *b = (const Body*)spec->hTarget;
+		if (!(b && b->Type () == OBJTP_BLACKHOLE && spec->altitude <= 0.0)) rs.altitude = std::max (spec->altitude, 0.0);
 	} else {
 		int i = startargets::Get ().Find (spec->star);
 		if (i < 0) return false;
@@ -1331,6 +1364,7 @@ DLLEXPORT VECTOR3 oapiGetWindVector (OBJHANDLE hPlanet, double lng, double lat, 
 DLLEXPORT bool oapiPlanetHasSurface (OBJHANDLE hPlanet)
 {
 	Body *b = (Body*)hPlanet;
+	if (b->Type() == OBJTP_BLACKHOLE) return false;
 	return b->Type() != OBJTP_PLANET || ((Planet*)b)->HasSurface();
 }
 

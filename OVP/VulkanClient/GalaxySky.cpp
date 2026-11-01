@@ -1024,6 +1024,13 @@ void GalaxySky::Render (VkCommandBuffer cmd, const double R[3][3], float fx, flo
 	vkCmdDraw (cmd, 3, 1, 0, 0);
 }
 
+void GalaxySky::DisplayParams (const Display &dsp, float colour[3][NBAND], float tone[4]) const
+{
+	for (int k = 0; k < 3; k++)
+		for (int b = 0; b < NBAND; b++) colour[k][b] = (dsp.camera ? cameraColour : bandColour)[k][b] * dsp.gain;
+	tone[0] = PIVOT_S10 * dsp.gain, tone[1] = dsp.contrast, tone[2] = dsp.saturation, tone[3] = dsp.highlight;
+}
+
 void GalaxySky::RenderBackground (VkCommandBuffer cmd, float fx, float fy, const Display &dsp, const float betaView[3])
 {
 	if (!ready || !bgPipe) return;

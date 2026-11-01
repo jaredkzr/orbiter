@@ -48,6 +48,16 @@ public:
 	/// radiance of 1 S10; maxLimit: the faintest drawn at most (the sky's)
 	void Render (VkCommandBuffer cmd, const float galViewProj[16], float fx, float fy, float gain, float maxLimit, const float relBetaGal[3] = nullptr);
 
+	/// for the stars seen through a black hole's lens (BlackHoleLens): the
+	/// draw set (catalogue stars, list, colours, generated stars; usable in
+	/// compute too), its layout, the observer, the limit, the years since
+	/// the catalogue's epoch
+	VkDescriptorSetLayout DrawLayout () const { return drawLayout; }
+	VkDescriptorSet DrawSet () const { return drawSet[front]; }
+	const galactic::Observer &CurObserver () const { return curObs; }
+	float Limit () const { return limit; }
+	double YearsNow () const { return Years (curObs); }
+
 	/// limiting magnitude (V, from the observer) of the stars drawn: the
 	/// Milky Way's (GalaxySky::StarLimit); a change selects them again
 	void SetLimit (float m);

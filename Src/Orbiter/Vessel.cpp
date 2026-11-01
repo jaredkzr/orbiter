@@ -32,6 +32,7 @@
 #include "Panel2D.h"
 #include "Element.h"
 #include "Psys.h"
+#include "BlackHole.h"
 #include "Base.h"
 #include "Mfd.h"
 #include "Keymap.h"
@@ -871,6 +872,7 @@ void Vessel::RPlace_individual (const Vector &rpos, const Vector &rvel)
 	if (bFRplayback) return; // ignore explicit state vector setting during playback
 	fstatus = FLIGHTSTATUS_FREEFLIGHT;
 	bSurfaceContact = false;
+	swallowed = insideHorizon = false; // (placed anew: out of any black hole it was lost in)
 	RigidBody::RPlace (rpos, rvel);
 	// (the new state: s1, the step's end during the state update, else s0)
 	cpos = s1->pos - cbody->s1->pos;
@@ -3688,7 +3690,7 @@ void Vessel::InitOrbiting (const Vector &relr, const Vector &relv, const Vector 
 	} else {
 		rad = cpos.length();
 	}
-	bool surface = cbody->Type() != OBJTP_PLANET || ((Planet*)cbody)->HasSurface(); // (gas giants: none)
+	bool surface = cbody->Type() == OBJTP_PLANET ? ((Planet*)cbody)->HasSurface() : cbody->Type() != OBJTP_BLACKHOLE; // (gas giants, black holes: none)
 	if (surface && rad < cbody->Size() + elev) {
 		double scale = (cbody->Size() + elev) / rad;
 		cpos *= scale;
@@ -3706,9 +3708,13 @@ void Vessel::InitOrbiting (const Vector &relr, const Vector &relv, const Vector 
 		// current state), but the new state is that of the end of the step:
 		// moved over the step (in the reference body's central field)
 		double r = cpos.length(), h = td.SimDT;
-		Vector a (cpos * (-Ggrav * cbody->Mass() / (r*r*r)));
-		cpos += cvel*h + a*(0.5*h*h);
-		cvel += a*h;
+		if (cbody->Type() == OBJTP_BLACKHOLE && r < ((BlackHole*)cbody)->StrongRange()) {
+			((BlackHole*)cbody)->Drift (cpos, cvel, h, ProperAccel (*s0, td.SimT0)); // (in its spacetime, with the drive)
+		} else {
+			Vector a (cpos * (-Ggrav * cbody->Mass() / (r*r*r)));
+			cpos += cvel*h + a*(0.5*h*h);
+			cvel += a*h;
+		}
 		el->Calculate (cpos, cvel, td.SimT1);
 		s1->R.Set (s0->R);
 		s1->Q.Set (s0->Q);
@@ -4511,6 +4517,7 @@ void Vessel::CollectGroundContacts (const StateVectors &s, const StateVectors &s
 	nforcevec = 0;
 	if (!proxybody || !ntouchdown_vtx) return;
 	if (proxybody->Type() == OBJTP_PLANET && !((const Planet*)proxybody)->HasSurface()) return; // (gas giants)
+	if (proxybody->Type() == OBJTP_BLACKHOLE) return; // (no surface: its horizon is none)
 	if (contact_warm.size() != 3*ntouchdown_vtx) contact_warm.assign (3*ntouchdown_vtx, 0.0);
 
 	const StateVectors &P0 = *proxybody->s0, &P1 = *proxybody->s1; // the planet at the start and end of the step
@@ -5111,6 +5118,28 @@ void Vessel::UpdateStructuralLoads ()
 			sprintf (cbuf, "crushed at %0.1f bar", sp.atmp * 1e-5);
 			Destroy (cbuf);
 			return;
+		}
+	}
+	// a black hole's tides: each part pulled relative to the centre of
+	// gravity (the ideal drive and gravity themselves load nothing)
+	if (const BlackHole *bh = StrongFieldHole ()) {
+		BlackHole::Local loc;
+		if (!swallowed && bh->LocalState (s0->pos - bh->GPos(), s0->vel - bh->GVel(), loc)) {
+			auto tide = [&] (const Vector &r) { // (vessel frame)
+				Vector g (mul (s0->R, r)), t;
+				t.x = loc.tidal[0][0]*g.x + loc.tidal[0][1]*g.y + loc.tidal[0][2]*g.z;
+				t.y = loc.tidal[1][0]*g.x + loc.tidal[1][1]*g.y + loc.tidal[1][2]*g.z;
+				t.z = loc.tidal[2][0]*g.x + loc.tidal[2][1]*g.y + loc.tidal[2][2]*g.z;
+				return tmul (s0->R, t);
+			};
+			// (the core itself, or a vessel of one piece: torn apart when the
+			// tides pulling its halves apart, at their centres half its
+			// radius out, exceed what breaks the core's joints)
+			double lim = structure::LOADFACTOR * structure::SAFETY * structure::CORE_FACTOR * structure::G0;
+			double arm = 0.5 * (np < 2 ? size : parts[0].radius);
+			if (loc.tidalMax * arm > lim) { Destroy ("torn apart by tides"); return; }
+			for (size_t j = 0; j < np && np > 1; j++)
+				if (!PartLost ((int)j)) part_F[j] += tide (parts[j].cg - dmg.cg) * parts[j].mass;
 		}
 	}
 	if (np < 2) return;
@@ -5842,6 +5871,7 @@ bool Vessel::CheckSurfaceContact () const
 {
 	if (!proxybody) return false; // sanity check
 	if (proxybody->Type() == OBJTP_PLANET && !((const Planet*)proxybody)->HasSurface()) return false;
+	if (proxybody->Type() == OBJTP_BLACKHOLE) return false; // (no surface)
 	double alt = Altitude();
 	if (alt > 2.0*size) return false;
 	Matrix T (sp.L2H);

@@ -367,6 +367,13 @@ int CelestialBody::RelTrueAndBaryState()
 			}
 			el_valid = false;
 
+		} else if (!cbody) {
+
+			// a root body without an ephemeris (a black hole's system): at
+			// rest at the system's barycentre
+			cpos.Set (0, 0, 0), cvel.Set (0, 0, 0);
+			havetrue = true;
+
 		} else {
 
 			el->Update (bpos, bvel);
@@ -773,6 +780,8 @@ Vector CelestialBody::InterpolatePosition (double n) const
 	double n1 = 1.0;                   // upper bound of search bracket
 	double nm = 0.5, d = 0.5;          // current trial point
 	double rdm = (rd0+rd1)*0.5;        // trial radius
+	if ((rp0+rp1).length2() == 0.0)    // (at the origin, a root body at rest: no direction to bisect)
+		return s0->pos + (s1->pos - s0->pos)*n;
 	Vector rpm = (rp0+rp1).unit()*rdm; // trial position
 	while (fabs (nm-n) > eps && d > eps) { // interval too large - continue
 		d *= 0.5;                         // new interval width

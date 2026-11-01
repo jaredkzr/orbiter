@@ -16,6 +16,10 @@
 //   impact speed the ground contacts couldn't take.
 // - Clock: proper time, including gravitational time dilation.
 // - Attitude: turns on the body's own time.
+// - Black holes: within a hole's strong field (BlackHole::StrongRange)
+//   the body flies in its Kerr spacetime (Kerr.h), in the hole's frame,
+//   the other bodies' tidal fields across it as accelerations; through the
+//   horizon, lost at the inner horizon (or near the singularity).
 // =======================================================================
 
 #include "Orbiter.h"
@@ -24,6 +28,8 @@
 #include "Psys.h"
 #include "Astro.h"
 #include "Relativity.h"
+#include "Kerr.h"
+#include "BlackHole.h"
 #include "Vessel.h"
 #include "RelTravel.h"
 #include "Planet.h"
@@ -44,20 +50,27 @@ namespace {
 	const int    REL_SUBSTEP_MAX = 5000;
 	const double REL_IMPACT_SPEED = 500.0; // [m/s] slower: the ground contacts take the touchdown
 
-	/// A celestial body over the step: Hermite curve between its end states
-	struct Source {
-		const CelestialBody *body;
-		double gm, radius;
-		Vector p0, v0, p1, v1;
-		void At (double f, double dt, Vector &p, Vector &v) const
-		{
-			double f2 = f*f, f3 = f2*f;
-			double h00 = 2*f3 - 3*f2 + 1, h10 = f3 - 2*f2 + f, h01 = -2*f3 + 3*f2, h11 = f3 - f2;
-			double d00 = 6*f2 - 6*f, d10 = 3*f2 - 4*f + 1, d01 = -6*f2 + 6*f, d11 = 3*f2 - 2*f;
-			p = p0 * h00 + v0 * (h10 * dt) + p1 * h01 + v1 * (h11 * dt);
-			v = (p0 * d00 + p1 * d01) / dt + v0 * d10 + v1 * d11;
-		}
-	};
+	const double KERR_TOL = 1e-11;          // the Kerr flight's error per step (relative)
+	const double KERR_STOP = 0.02;          // [M] the flight ends at most this close to the singularity
+}
+
+/// A celestial body over the step: Hermite curve between its end states
+struct RigidBody::RelSource {
+	const CelestialBody *body;
+	double gm, radius;
+	Vector p0, v0, p1, v1;
+	void At (double f, double dt, Vector &p, Vector &v) const
+	{
+		double f2 = f*f, f3 = f2*f;
+		double h00 = 2*f3 - 3*f2 + 1, h10 = f3 - 2*f2 + f, h01 = -2*f3 + 3*f2, h11 = f3 - f2;
+		double d00 = 6*f2 - 6*f, d10 = 3*f2 - 4*f + 1, d01 = -6*f2 + 6*f, d11 = 3*f2 - 2*f;
+		p = p0 * h00 + v0 * (h10 * dt) + p1 * h01 + v1 * (h11 * dt);
+		v = (p0 * d00 + p1 * d01) / dt + v0 * d10 + v1 * d11;
+	}
+};
+
+namespace {
+	typedef RigidBody::RelSource Source;
 
 	/// Gravity at x (velocity v) at fraction f of the step: post-Newtonian
 	/// coordinate acceleration and potential
@@ -109,7 +122,7 @@ void RigidBody::RelativisticUpdate ()
 	using namespace relativity;
 	const double dt = td.SimDT;
 	s1->Set (*s0);
-	if (dt <= 0.0) return;
+	if (dt <= 0.0 || swallowed) return;
 
 	// the bodies over the step
 	std::vector<Source> src;
@@ -119,6 +132,15 @@ void RigidBody::RelativisticUpdate ()
 		if (b == this) continue;
 		src.push_back (Source{ b, Ggrav * b->Mass(), b->Size(), b->s0->pos, b->s0->vel, b->s1->pos, b->s1->vel });
 	}
+	// in a black hole's strong field: its spacetime
+	for (size_t i = 0; i < src.size(); i++)
+		if (src[i].body->Type() == OBJTP_BLACKHOLE) {
+			const BlackHole *bh = (const BlackHole*)src[i].body;
+			if (s0->pos.dist (src[i].p0) < bh->StrongRange()) {
+				KerrUpdate (bh, src, i);
+				return;
+			}
+		}
 
 	// substeps: by the distance to the nearest body, the rapidity change
 	const Vector x0 (s0->pos), v0 (s0->vel);
@@ -174,7 +196,7 @@ void RigidBody::RelativisticUpdate ()
 
 		// impacts along the substep's path (relative to each body)
 		for (const Source &s : src) {
-			if (s.radius <= 0.0) continue;
+			if (s.radius <= 0.0 || s.body->Type() == OBJTP_BLACKHOLE) continue;
 			Vector pa, va, pb, vb;
 			s.At (f0, dt, pa, va);
 			s.At (f1, dt, pb, vb);
@@ -222,6 +244,135 @@ void RigidBody::RelativisticUpdate ()
 	if (near && (v1 - near->v1).length() < REL_IMPACT_SPEED) ResolveContacts (dt);
 }
 
+const BlackHole *RigidBody::StrongFieldHole () const
+{
+	for (size_t i = 0; i < g_psys->nStar(); i++) {
+		const Star *b = g_psys->GetStar ((int)i);
+		if (b->Type() == OBJTP_BLACKHOLE && s0->pos.dist (b->GPos()) < ((const BlackHole*)b)->StrongRange())
+			return (const BlackHole*)b;
+	}
+	return nullptr;
+}
+
+void RigidBody::KerrUpdate (const BlackHole *bh, const std::vector<Source> &src, size_t ih)
+{
+	using namespace relativity;
+	const double dt = td.SimDT;
+	const Source &H = src[ih];
+	const kerr::Hole &K = bh->Kerr();
+	const Vector x0 (s0->pos), v0 (s0->vel);
+
+	// the state in the hole's frame (position, 4-velocity: lengths in m,
+	// time as c t)
+	kerr::State ks;
+	double X[3], V[3], u[4];
+	bh->ToKerr (x0 - H.p0, X);
+	bh->ToKerr ((v0 - H.v0) / C, V);
+	for (int i = 0; i < 3; i++) ks.x[1 + i] = X[i];
+	if (!K.CoordinateVelocity (X, V, u)) {
+		LOGOUT_WARN ("Relativistic flight: %s: no motion possible at this state in %s's spacetime; the step is dropped", Name(), bh->Name());
+		RelDiverged ();
+		return;
+	}
+	K.Lower (X, u, ks.p);
+
+	// substeps (each with the attitude, the thrust and the tidal field at
+	// its start): by the distance to the hole, the rapidity change
+	double r0 = std::max (K.R (X), K.M), vr = (v0 - H.v0).length();
+	double hmax = dt;
+	if (vr > 0.0) hmax = std::min (hmax, REL_SUBSTEP_DIST * r0 / vr);
+	double a0 = ProperAccel (*s0, td.SimT0).length();
+	if (a0 > 0.0) hmax = std::min (hmax, REL_SUBSTEP_ETA * C / a0);
+	double fcut = (DriveCutoff() - td.SimT0) / dt;
+	std::vector<double> fb (1, 0.0);
+	for (double fe : { fcut > 0.0 && fcut < 1.0 ? fcut : 1.0, 1.0 }) {
+		double f = fb.back();
+		if (fe <= f) continue;
+		int n = std::clamp ((int)std::ceil ((fe - f) * dt / hmax), 1, REL_SUBSTEP_MAX);
+		for (int k = 1; k <= n; k++) fb.push_back (f + (fe - f) * k / n);
+	}
+
+	const double rStop = std::max (K.InnerHorizon(), KERR_STOP * K.M);
+	kerr::Integrator opt;
+	opt.tol = KERR_TOL;
+	opt.stop = [&] (const kerr::State &q) { return K.R (q.x + 1) <= rStop; };
+	double kh = 0.0, tau = 0.0;
+	for (size_t k = 0; k + 1 < fb.size(); k++) {
+		double f0 = fb[k], f1 = fb[k+1], h = (f1 - f0) * dt;
+		Vector ph, vh;
+		H.At (f0, dt, ph, vh);
+		Vector xg (ph + bh->FromKerr (ks.x + 1));
+		// felt on board: the drive, the other bodies' tides across the
+		// hole's frame (the hole falls with them)
+		Vector al (ProperAccel (*s1, td.SimT0 + f0 * dt));
+		for (size_t j = 0; j < src.size(); j++) {
+			if (j == ih) continue;
+			Vector pj, vj;
+			src[j].At (f0, dt, pj, vj);
+			al += SingleGacc (pj - xg, src[j].body) - SingleGacc (pj - ph, src[j].body);
+		}
+		double A[3];
+		bh->ToKerr (al / (C * C), A);
+		kerr::Thrust thrust = [&] (double, const double *, const double *, double *o) { o[0] = A[0]; o[1] = A[1]; o[2] = A[2]; };
+		double dtau = 0.0;
+		kerr::Result res = kerr::Fly (K, ks, C * h, opt, kh, thrust, dtau);
+		dtau /= C;
+		tau += dtau;
+		// attitude, on the body's own time
+		s1->Q.Rotate (s1->omega * dtau);
+		s1->omega += arot * dtau;
+		s1->R.Set (s1->Q);
+		if (res == kerr::GEO_STOPPED) {
+			// lost: the inner horizon (unstable: mass inflation) or near the
+			// singularity
+			clockOfs1 += tau - ks.x[0] / C;
+			Vector pe, ve;
+			H.At (f0, dt, pe, ve);
+			s1->pos = pe + bh->FromKerr (ks.x + 1);
+			double ue[4];
+			K.Raise (ks.x + 1, ks.p, ue);
+			double ve3[3] = {ue[1] / ue[0] * C, ue[2] / ue[0] * C, ue[3] / ue[0] * C};
+			s1->vel = ve + bh->FromKerr (ve3);
+			rpos_base = s1->pos, rpos_add.Set (0, 0, 0);
+			rvel_base = s1->vel, rvel_add.Set (0, 0, 0);
+			acc.Set (0, 0, 0);
+			swallowed = true;
+			LOGOUT ("Relativistic flight: %s reached r = %.3f M in %s: lost", Name(), K.R (ks.x + 1) / K.M, bh->Name());
+			RelSwallowed (bh);
+			return;
+		}
+		if (res != kerr::GEO_DONE) {
+			LOGOUT_WARN ("Relativistic flight: %s: the flight in %s's spacetime could not be integrated; the step is dropped", Name(), bh->Name());
+			s1->Set (*s0);
+			RelDiverged ();
+			return;
+		}
+	}
+	clockOfs1 += tau - dt;
+	if (!insideHorizon && K.R (ks.x + 1) < K.Horizon()) {
+		insideHorizon = true;
+		LOGOUT ("Relativistic flight: %s crossed the event horizon of %s", Name(), bh->Name());
+		RelHorizon (bh);
+	}
+
+	// back to the global frame
+	Vector p1, vh1;
+	H.At (1.0, dt, p1, vh1);
+	double u1[4];
+	K.Raise (ks.x + 1, ks.p, u1);
+	double v3[3] = {u1[1] / u1[0] * C, u1[2] / u1[0] * C, u1[3] / u1[0] * C};
+	Vector x1 (p1 + bh->FromKerr (ks.x + 1)), v1 (vh1 + bh->FromKerr (v3));
+	Vector accDummy, torque;
+	s1->pos = x1, s1->vel = v1;
+	GetIntermediateMoments (accDummy, torque, *s1, 1.0, dt);
+	arot.Set (EulerInv_full (torque, s1->omega));
+	rpos_add += x1 - x0;
+	rvel_add += v1 - v0;
+	s1->pos = rpos_base + rpos_add;
+	s1->vel = rvel_base + rvel_add;
+	acc = (v1 - v0) / dt;
+}
+
 // =======================================================================
 // Vessels: the ideal drive, impacts
 
@@ -237,7 +388,7 @@ bool Vessel::SetRelDrive (double accel, bool on)
 bool Vessel::Relativistic () const
 {
 	if (supervessel || attach || destroyed || bFRplayback || fstatus != FLIGHTSTATUS_FREEFLIGHT) return false;
-	return (reldrive.on && reldrive.accel != 0.0) || s0->vel.length2() > REL_SPEED * REL_SPEED;
+	return (reldrive.on && reldrive.accel != 0.0) || s0->vel.length2() > REL_SPEED * REL_SPEED || swallowed || InStrongField();
 }
 
 Vector Vessel::ProperAccel (const StateVectors &s, double t) const
@@ -306,6 +457,22 @@ void Vessel::Impacted (const Vector &gpos, const Vector &gvel, double speed)
 		if (this == g_focusobj) g_pOrbiter->ShowInfoMessage (cbuf);
 	}
 	LOGOUT ("%s %s (a step of %.1f s)", Name(), cbuf, td.SimDT);
+}
+
+void Vessel::RelSwallowed (const CelestialBody *hole)
+{
+	char cbuf[256];
+	sprintf (cbuf, "%s is lost inside %s", Name(), hole->Name());
+	reldrive.on = false;
+	if (reltrip) reltrip->Abort (cbuf);
+	if (this == g_focusobj) g_pOrbiter->ShowInfoMessage (cbuf);
+}
+
+void Vessel::RelHorizon (const CelestialBody *hole)
+{
+	char cbuf[256];
+	sprintf (cbuf, "%s crossed the event horizon of %s: no way back", Name(), hole->Name());
+	if (this == g_focusobj) g_pOrbiter->ShowInfoMessage (cbuf);
 }
 
 void Vessel::RelDiverged ()

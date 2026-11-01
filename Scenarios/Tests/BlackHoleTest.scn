@@ -1,0 +1,45 @@
+BEGIN_HYPERDESC
+<h1>Black holes: flight in a Kerr spacetime</h1>
+A black hole of 10^5 solar masses, spin 0.9, alone. A delta-glider on a
+circular orbit at 10 masses goes round at 0.31 c: its radius held, its
+period and its clock's rate against the Kerr spacetime's. Another hovers
+on the spin axis on the ideal drive, at 677,000 g: held in place, its
+clock slowed by gravity. A third falls from rest through the horizon
+and is lost at the inner horizon.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System BlackHoleTest
+  Date MJD 51982.6685767396
+  Script Tests/BlackHoleTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship ORB
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET ORB
+  MODE Extern
+  POS 4 0 -20
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+ORB:DeltaGlider
+  STATUS Orbiting TestHole
+  ELEMENTS 1.0e12 0.00000 0.0 0.0 0.0 0.0 51982.6685767396
+  AROT 0 0 0
+END
+HOV:DeltaGlider
+  STATUS Orbiting TestHole
+  ELEMENTS 1.1e12 0.00000 0.0 0.0 0.0 120.0 51982.6685767396
+  AROT 0 0 0
+END
+FALL:DeltaGlider
+  STATUS Orbiting TestHole
+  ELEMENTS 1.2e12 0.00000 0.0 0.0 0.0 240.0 51982.6685767396
+  AROT 0 0 0
+END
+END_SHIPS

@@ -40,6 +40,7 @@ layout(set = FRAME_SET, binding = 0) uniform Frame {
 	vec4 relSelf;      // the camera's own vessel (moving with it: seen as it is): centre (view space), w: radius
 	vec4 relSunDir;    // the sunlight on that vessel, in its frame: from this direction (view space, aberrated)
 	vec4 relSunColor;  //   with this colour (Doppler shifted)
+	vec4 lens;         // a black hole's lens: its centre (view space), w: its mass GM/c^2 [m] (0: none)
 	LocalLight lights[MAX_LIGHTS];
 } frame;
 
@@ -49,8 +50,33 @@ layout(set = FRAME_SET, binding = 0) uniform Frame {
 // aberrates towards the direction of motion and places at the distance D r
 // (the emission event in the camera's frame; D: the Doppler factor). The
 // camera's own vessel moves with it: seen as it is.
+// A point behind a black hole (farther along its direction) is seen bent
+// away from it: the point lens's primary image (weak field), at angle
+// theta = (beta + sqrt (beta^2 + 4 thetaE^2)) / 2 from the hole, thetaE^2 =
+// 4 M D_ls / (D_l D_s), at its distance (the sky through the hole's
+// spacetime is traced, BlackHoleLens; objects are bent per vertex: their
+// second image, inside the ring, left out)
+vec3 LensImage (vec3 p)
+{
+	if (frame.lens.w <= 0.0) return p;
+	vec3 h = frame.lens.xyz;
+	float Dl = length (h), Ds = length (p);
+	vec3 nh = h / Dl, np = p / Ds;
+	float Dls = dot (p, nh) - Dl;
+	if (Dls <= 0.0) return p;
+	vec3 cr = cross (nh, np);
+	float sb = length (cr), cb = dot (nh, np);
+	if (sb < 1e-9) return p;
+	float beta = atan (sb, cb);
+	float tE2 = 4.0 * frame.lens.w * Dls / (Dl * Ds);
+	float theta = 0.5 * (beta + sqrt (beta * beta + 4.0 * tE2));
+	vec3 t = (np - nh * cb) / sb;
+	return Ds * (nh * cos (theta) + t * sin (theta));
+}
+
 vec3 RelApparent (vec3 p)
 {
+	p = LensImage (p);
 	if (frame.relBeta.w < 0.5 || distance (p, frame.relSelf.xyz) < frame.relSelf.w) return p;
 	return RelApparentPos (p, frame.relBeta.xyz);
 }

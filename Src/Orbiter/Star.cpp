@@ -51,8 +51,15 @@ void Star::Update (bool force)
 {
 	if (bDynamicPosVel || module && module->bEphemeris())
 		CelestialBody::Update (force);
-	// otherwise don't update: keep star in the origin
-	// of the global coordinate system
+	else {
+		// otherwise keep the star at rest at the origin of the global
+		// coordinate system: its state carried over to the step's end, its
+		// rotation turned (the new state's: else a zero matrix after the
+		// states swap)
+		s1->pos = s0->pos, s1->vel = s0->vel;
+		UpdatePrecession ();
+		UpdateRotation ();
+	}
 }
 
 Vector Star::Pos2Barycentre (Vector &pos)

@@ -17,6 +17,7 @@
 #define __RIGIDBODY_H
 
 #include "Body.h"
+#include <vector>
 
 class RigidBody;
 
@@ -132,6 +133,16 @@ public:
 	// the body has set its own state)
 	virtual void RelDiverged () {}
 	// a relativistic step could not be integrated (dropped): stop what drives the body
+	virtual void RelSwallowed (const CelestialBody *hole) {}
+	// the body reached a black hole's inner horizon (lost: its state held from then on)
+	bool InStrongField () const { return StrongFieldHole () != nullptr; }
+	const class BlackHole *StrongFieldHole () const;
+	// within a black hole's strong field (Kerr flight): the hole
+	virtual void RelHorizon (const CelestialBody *hole) {}
+	// the body crossed a black hole's event horizon
+	inline bool InsideHorizon () const { return insideHorizon; }
+	inline bool Swallowed () const { return swallowed; }
+	struct RelSource; // a celestial body over a relativistic step (RelFlight.cpp)
 	inline double ClockOffset () const { return clockOfs; }
 	inline void SetClockOffset (double ofs) { clockOfs = clockOfs1 = ofs; }
 	// the clock carried along: its time less the simulation time [s] (at
@@ -269,6 +280,10 @@ protected:
 
 	void RelativisticUpdate ();
 	// the step of a relativistic body (RelFlight.cpp)
+	void KerrUpdate (const class BlackHole *bh, const std::vector<RelSource> &src, size_t ih);
+	// the step in a black hole's strong field: its Kerr spacetime
+	bool swallowed = false; // lost in a black hole
+	bool insideHorizon = false; // inside a black hole's event horizon
 	bool relStep = false;   // this step was relativistic (its clock is updated)
 	double clockOfs = 0.0;  // the clock carried along less the simulation time [s] (state s0)
 	double clockOfs1 = 0.0; // the same at the end of the step (state s1)

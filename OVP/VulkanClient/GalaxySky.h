@@ -71,6 +71,14 @@ public:
 	bool Probe (const std::vector<std::array<double, 2>> &lb, std::vector<std::array<float, NBAND>> &out,
 		const char *png = nullptr);
 
+	/// for the sky seen near a black hole (BlackHoleLens): the draw set's
+	/// layout, the set (the cube in front, with the other fading in), the
+	/// fade, the display's bands -> RGB and tone (as Render's)
+	VkDescriptorSetLayout DrawLayout () const { return drawLayout; }
+	VkDescriptorSet DrawSet () const { return drawSet[front][fade > 0.0f ? 1 : 0]; }
+	float Fade () const { return fade; }
+	void DisplayParams (const Display &dsp, float colour[3][NBAND], float tone[4]) const;
+
 	/// limiting magnitude of the stars drawn as points (the rest is
 	/// diffuse); a change bakes the sky again
 	float StarLimit () const { return starLimit; }

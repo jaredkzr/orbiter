@@ -268,6 +268,13 @@ public:
 	double ProjX () const { return proj[0]; }   ///< horizontal focal factor fx
 	double ProjY () const { return -proj[5]; }  ///< vertical focal factor fy
 	OBJHANDLE Sun () const { return hSun; }
+	/// the sky seen through a black hole with an accretion disc (the exposure adapts to it)
+	bool LensDisc () const { return lensOn && lensDisc; }
+
+	/// scene radiance of a star's surface as bright as the Sun's (a disc far
+	/// brighter than any lit surface; the scale of the stars and accretion
+	/// discs drawn as bodies)
+	static constexpr float STAR_BRIGHTNESS = 20.0f;
 
 	/// Interstellar travel: the stars drawn as bodies (discs and glare) and
 	/// the light: a star is a body while its light at the camera is at least
@@ -282,6 +289,7 @@ public:
 		double teff = 5772.0;   ///< [K]
 		double flux = 1.0;      ///< V band, relative to the Sun's at 1 AU
 		bool sun = true;        ///< the Sun (Orbiter's star body)
+		bool disc = false;      ///< a black hole's accretion disc
 	};
 	const StarLight &Light () const { return light; }
 	bool SunAsBody () const { return sunAsBody; }
@@ -409,6 +417,12 @@ private:
 	std::unique_ptr<StarSphere> stars;
 	std::unique_ptr<GalaxySky> galaxy;
 	std::unique_ptr<StarField> starField; // (the catalogue's stars)
+	std::unique_ptr<class BlackHoleLens> lens; // (the sky seen near a black hole)
+	bool lensOn = false;   // this frame's sky through a black hole's spacetime
+	bool lensDisc = false; // (with its accretion disc)
+	VECTOR3 lensPos{};     // (its position, global)
+	double lensM = 0.0;    // (its mass [m])
+	void UpdateLens ();
 	SkySettings skySettings;
 	double skyDim = 0.0;      // the sky's dimming by light adaptation [stops]
 	double skyDarkGain = 0.0; // scene radiance of 1 S10 to the dark-adapted eye

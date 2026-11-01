@@ -46,6 +46,8 @@ public:
 	~Debris ();
 
 	int Type () const override { return OBJTP_DEBRIS; }
+	/// (in a black hole's strong field: its spacetime, RelFlight.cpp)
+	bool Relativistic () const override { return Swallowed () || InStrongField (); }
 	const std::string &Source () const { return source; } ///< name of the vessel it broke off
 	const std::vector<Group> &Groups () const { return groups; }
 	const std::vector<collision::Hull> &Hulls () const { return hulls; }

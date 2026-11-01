@@ -11,6 +11,7 @@
 
 #include "Config.h"
 #include "Psys.h"
+#include "BlackHole.h"
 #include "Debris.h"
 #include "Camera.h"
 #include "Replay.h"
@@ -245,6 +246,14 @@ bool PlanetarySystem::Read (char *fname, const Config* config, OutputLoadStatusC
 		if (!GetItemString (ifs, label, cbuf)) break;
 		OutputLoadStatus (cbuf, outputLoadStatus, callbackContext);
 		AddStar (new Star (cbuf)); TRACENEW
+	}
+	// black holes: root bodies like the stars (planets go about the first
+	// root body)
+	for (i = 0;; i++) {
+		sprintf (label, "BlackHole%d", i+1);
+		if (!GetItemString (ifs, label, cbuf)) break;
+		OutputLoadStatus (cbuf, outputLoadStatus, callbackContext);
+		AddStar (new BlackHole (cbuf)); TRACENEW
 	}
 
 	// read planets
