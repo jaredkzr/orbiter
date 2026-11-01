@@ -69,8 +69,8 @@ void main()
 	vec4 p = pp.modelView * (M * vec4(pos, 1.0));
 	vPosView = p.xyz;
 	vNormalView = mat3(pp.modelView) * (mat3(M) * nrm);
-	gl_Position = frame.proj * p;
+	gl_Position = frame.proj * RelApparent (p); // (relativistic view: as seen)
 	vClip = gl_Position - vec4(frame.jitter.xy * gl_Position.w, 0.0, 0.0);
-	vPrevClip = pp.prevClipFromView * p;
+	vPrevClip = pp.prevClipFromView * RelApparent (p);
 	vUV = uv;
 }

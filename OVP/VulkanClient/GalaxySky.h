@@ -60,7 +60,7 @@ public:
 	/// Draw the sky (in the scene pass, before the stars).
 	/// galFromView: rotation view -> Galactic, row-major; fx, fy: the
 	/// projection's scale
-	void Render (VkCommandBuffer cmd, const double galFromView[3][3], float fx, float fy, const Display &display);
+	void Render (VkCommandBuffer cmd, const double galFromView[3][3], float fx, float fy, const Display &display, const float relBetaView[3] = nullptr);
 
 	/// Surface brightness [S10 per band] of the current bake in a Galactic
 	/// direction (CPU readback, for tests); writes an equirectangular image

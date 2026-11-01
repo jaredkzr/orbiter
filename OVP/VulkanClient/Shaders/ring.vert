@@ -30,5 +30,5 @@ void main()
 	vec4 p = draw.modelView * vec4(inPos, 1.0);
 	vObj = inPos;
 	vPosView = p.xyz;
-	gl_Position = frame.proj * p;
+	gl_Position = frame.proj * RelApparent (p); // (relativistic view: as seen)
 }

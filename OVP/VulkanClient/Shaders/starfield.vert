@@ -9,6 +9,7 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 #include "starfield.glsl"
+#include "relativity.glsl"
 
 layout(std430, set = 0, binding = 0) readonly buffer Stars { Star stars[]; };
 layout(std430, set = 0, binding = 1) readonly buffer List { StarListHeader head; uvec2 entries[]; } list;
@@ -24,7 +25,7 @@ layout(push_constant) uniform Draw {
 	vec4 observer;  // xyz: heliocentric Galactic position [pc]; w: limiting magnitude
 	vec4 sprite;    // xy: 2 / viewport size [px]; z: core sigma [px]; w: radiance of 1 S10 deg^2 on a pixel at the centre
 	vec4 glare;     // xy: sigma of the two glare halos [px]; zw: their fractions of the light
-	vec4 misc;      // x: radiance of 1 S10
+	vec4 misc;      // x: radiance of 1 S10; yzw: the camera's velocity (Galactic, units of c)
 } pc;
 
 layout(location = 0) out vec3 vRadiance; // of all the light on one pixel
@@ -46,7 +47,7 @@ void main ()
 	float r = length (d);
 	float m0 = StarAbsMag (s) + StarDistModulus (r);
 	if (m0 + A >= pc.observer.w) return;
-	vec4 clip = pc.viewProj * vec4 (d / r, 0.0);
+	vec4 clip = pc.viewProj * vec4 (RelAberrate (d / r, pc.misc.yzw), 0.0); // (relativistic view: as seen)
 	if (clip.w <= 1e-4) return;
 
 	// light per band [S10 deg^2], reddened

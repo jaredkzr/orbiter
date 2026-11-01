@@ -61,7 +61,7 @@ void main()
 	}
 	vec3 N = mat.N;
 	vec3 V = normalize(-vPosView);
-	vec3 L = frame.sunDir.xyz;
+	vec3 L = SunDirAt(vPosView);
 	col += draw.emissive.rgb * texel.rgb;
 	if ((maps & MAP_TRANSL) != 0u) // sunlight scattered through from behind
 		col += texture(translMap, vUV).rgb * sun * max(dot(-N, L), 0.0);

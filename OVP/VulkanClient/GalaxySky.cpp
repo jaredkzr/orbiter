@@ -990,12 +990,13 @@ void GalaxySky::UpdateAsync ()
 	VK_CHECK(vkQueueSubmit2 (ctx->AsyncCompute (), 1, &si, VK_NULL_HANDLE));
 }
 
-void GalaxySky::Render (VkCommandBuffer cmd, const double R[3][3], float fx, float fy, const Display &dsp)
+void GalaxySky::Render (VkCommandBuffer cmd, const double R[3][3], float fx, float fy, const Display &dsp, const float relBetaView[3])
 {
 	if (!ready) return;
 	struct { float rows[3][4]; float proj[4]; float colour[3][4]; float tone[4]; } p{};
 	for (int i = 0; i < 3; i++)
 		for (int j = 0; j < 3; j++) p.rows[i][j] = (float)R[i][j];
+	for (int i = 0; i < 3; i++) p.rows[i][3] = relBetaView ? relBetaView[i] : 0.0f; // (relativistic view: the camera's velocity)
 	p.proj[0] = 1.0f / fx, p.proj[1] = 1.0f / fy, p.proj[2] = fade, p.proj[3] = dsp.zodiacal && settings.zodiacal ? 1.0f : 0.0f;
 	for (int k = 0; k < 3; k++)
 		for (int b = 0; b < NBAND; b++) p.colour[k][b] = (dsp.camera ? cameraColour : bandColour)[k][b] * dsp.gain;

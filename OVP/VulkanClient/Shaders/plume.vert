@@ -14,5 +14,5 @@ layout(location = 0) out vec3 vPos;
 void main ()
 {
 	vPos = inPos;
-	gl_Position = frame.proj * vec4 (inPos, 1.0);
+	gl_Position = frame.proj * vec4 (RelApparent (inPos), 1.0);
 }

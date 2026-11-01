@@ -70,6 +70,10 @@ namespace {
 		float planetLight[4];  // its irradiance at normal incidence, w: present
 		float lightCount[4];
 		float city[4][4];      // the cities' road map (CityField): centre (view), w: present; axes x, y (view); 1/size of its levels
+		float relBeta[4];      // relativistic view: the camera's velocity (view, units of c), w: on
+		float relSelf[4];      // the camera's own vessel: centre (view), radius
+		float relSunDir[4];    // the sunlight on it in its frame: direction (view, aberrated)
+		float relSunColor[4];  //   colour (Doppler shifted)
 		struct {
 			float pos[4];   // view space position, range
 			float dir[4];   // view space direction, type (1 point, 2 spot)
@@ -642,7 +646,7 @@ void Scene::CreatePipelines ()
 
 	// billboards: view-space vertices, one texture
 	VkDescriptorSetLayout texLayout = gc->TexMgr()->Layout();
-	VkPushConstantRange ppcr{ VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(proj) };
+	VkPushConstantRange ppcr{ VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(proj) + 4 * sizeof(float) }; // (+ the relativistic view's velocity)
 	VkPipelineLayoutCreateInfo plci2{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 	plci2.setLayoutCount = 1;
 	plci2.pSetLayouts = &texLayout;
@@ -652,7 +656,7 @@ void Scene::CreatePipelines ()
 	particleAdditive = CreateParticlePipeline (true);
 	particleBlend = CreateParticlePipeline (false);
 	// street lamps: instanced glows, positions in a planet frame
-	VkPushConstantRange lpcr{ VK_SHADER_STAGE_VERTEX_BIT, 0, 2 * 64 + 3 * 16 };
+	VkPushConstantRange lpcr{ VK_SHADER_STAGE_VERTEX_BIT, 0, 2 * 64 + 4 * 16 };
 	plci2.pPushConstantRanges = &lpcr;
 	VK_CHECK(vkCreatePipelineLayout (ctx->device, &plci2, nullptr, &lampLayout));
 	lampPipe = CreateParticlePipeline (true, true);
@@ -750,7 +754,11 @@ void Scene::DrawBillboards (VkTexture *tex, bool additive, const PVtx *v, size_t
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, additive ? particleAdditive : particleBlend);
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, particleLayout, 0, 1, &tex->set, 0, nullptr);
 	vkCmdBindVertexBuffers (cmd, 0, 1, &vb.buffer, &vb.offset);
-	vkCmdPushConstants (cmd, particleLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(proj), proj);
+	float ppc[20];
+	memcpy (ppc, proj, sizeof(proj));
+	VECTOR3 bv = RelBetaView ();
+	ppc[16] = (float)bv.x, ppc[17] = (float)bv.y, ppc[18] = (float)bv.z, ppc[19] = 0.0f;
+	vkCmdPushConstants (cmd, particleLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ppc), ppc);
 	vkCmdDraw (cmd, (uint32_t)n, 1, 0, 0);
 }
 
@@ -763,7 +771,7 @@ void Scene::DrawLamps (VkBuffer buf, uint32_t count, const Mat4 &frameToView, co
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, lampLayout, 0, 1, &glowTex->set, 0, nullptr);
 	VkDeviceSize ofs = 0;
 	vkCmdBindVertexBuffers (cmd, 0, 1, &buf, &ofs);
-	float pc[44];
+	float pc[48];
 	frameToView.ToFloat (pc);
 	memcpy (pc + 16, proj, sizeof(float) * 16);
 	// (glows at least about 1.5 pixels across)
@@ -772,6 +780,8 @@ void Scene::DrawLamps (VkBuffer buf, uint32_t count, const Mat4 &frameToView, co
 	pc[35] = 1.5f / (std::max (proj[5] < 0.0f ? -proj[5] : proj[5], 1e-3f) * (float)e.height);
 	pc[36] = (float)sun.x, pc[37] = (float)sun.y, pc[38] = (float)sun.z, pc[39] = bright;
 	pc[40] = fadeFrom, pc[41] = range, pc[42] = halfSize, pc[43] = 0.0f;
+	VECTOR3 bv = RelBetaView ();
+	pc[44] = (float)bv.x, pc[45] = (float)bv.y, pc[46] = (float)bv.z, pc[47] = 0.0f;
 	vkCmdPushConstants (cmd, lampLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), pc);
 	vkCmdDraw (cmd, 6, count, 0, 0);
 }
@@ -1082,6 +1092,108 @@ void Scene::UpdateCamera ()
 	proj[5] = (float)-fy;
 	proj[11] = 1.0f;               // w = z
 	proj[14] = (float)nearPlane;   // z = near  ->  depth = near / z
+	UpdateRelativity ();
+}
+
+void Scene::UpdateRelativity ()
+{
+	const double C = 299792458.0, REL_VIEW_MIN = 0.001;
+	static const bool off = getenv ("ORBITER_VK_RELVIEW") && !atoi (getenv ("ORBITER_VK_RELVIEW"));
+	static const char *forced = getenv ("ORBITER_VK_RELVIEW_BETA");
+	relOn = false, relBeta = _V(0, 0, 0), relSelf = nullptr, relSelfRad = 0.0;
+	if (off) return;
+	OBJHANDLE tgt = oapiCameraTarget ();
+	if (forced) {
+		double b[3];
+		int n = sscanf (forced, "%lf,%lf,%lf", b, b + 1, b + 2);
+		if (n == 3) relBeta = _V(b[0], b[1], b[2]);
+		else if (n >= 1) relBeta = _V(camRot.m13, camRot.m23, camRot.m33) * b[0];
+	} else if (tgt) {
+		VECTOR3 v;
+		oapiGetGlobalVel (tgt, &v);
+		relBeta = v / C;
+	}
+	double b = length (relBeta);
+	if (b >= 0.999999) relBeta *= 0.999999 / b, b = 0.999999;
+	if (b < REL_VIEW_MIN) { relBeta = _V(0, 0, 0); return; }
+	relOn = true;
+	if (tgt && oapiGetObjectType (tgt) == OBJTP_VESSEL) relSelf = tgt, relSelfRad = 1.2 * oapiGetSize (tgt);
+}
+
+VkImageView Scene::PrepassView () const
+{
+	return ao ? ao->PrepassView () : VK_NULL_HANDLE;
+}
+
+void Scene::RelSelfView (float out[4]) const
+{
+	out[0] = out[1] = out[2] = out[3] = 0.0f;
+	if (!relOn || !relSelf) return;
+	VECTOR3 sp;
+	oapiGetGlobalPos (relSelf, &sp);
+	VECTOR3 o = view.TransformPoint (sp - camPos);
+	for (int k = 0; k < 3; k++) out[k] = (float)o.data[k];
+	out[3] = (float)relSelfRad;
+}
+
+namespace {
+	// The Doppler shift of a linear RGB colour: as Shaders/doppler.glsl (the
+	// same model and constants: reflectance from the channels, interpolated,
+	// times a blackbody of the Sun's temperature; Gaussian camera channels)
+	void DopplerShiftRGB (const double rgb[3], double D, double out[3])
+	{
+		const int N = 16;
+		const double L0 = 380.0, L1 = 720.0, TSUN = 5772.0;
+		auto planck = [](double l, double T) {
+			double um = l * 1e-3, x = std::min (14387.77 / (um * T), 80.0);
+			return 1.0 / (um * um * um * um * um * (std::exp (x) - 1.0));
+		};
+		auto filter = [](double l, double f[3]) {
+			const double c[3] = { 600.0, 545.0, 455.0 }, w[3] = { 45.0, 40.0, 35.0 };
+			for (int i = 0; i < 3; i++) { double d = (l - c[i]) / w[i]; f[i] = std::exp (-0.5 * d * d); }
+		};
+		auto basis = [](double l, double h[3]) {
+			h[0] = h[1] = h[2] = 0.0;
+			if (l >= 600.0) h[0] = 1.0;
+			else if (l <= 455.0) h[2] = 1.0;
+			else if (l >= 545.0) { double t = (l - 545.0) / 55.0; h[0] = t, h[1] = 1.0 - t; }
+			else { double t = (l - 455.0) / 90.0; h[1] = t, h[2] = 1.0 - t; }
+		};
+		auto response = [&](double d, double M[3][3]) {
+			for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) M[i][j] = 0.0;
+			for (int k = 0; k < N; k++) {
+				double l = L0 + (L1 - L0) / N * (k + 0.5), f[3], h[3];
+				filter (l, f), basis (l * d, h);
+				double B = planck (l, TSUN * d);
+				for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) M[i][j] += f[i] * h[j] * B;
+			}
+		};
+		double M1[3][3], MD[3][3];
+		response (1.0, M1), response (D, MD);
+		// the reflectance whose colour at rest is rgb (Cramer's rule)
+		auto det = [](const double m[3][3]) {
+			return m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+			     - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+			     + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+		};
+		double d0 = det (M1), rho[3];
+		for (int j = 0; j < 3; j++) {
+			double m[3][3];
+			for (int i = 0; i < 3; i++) for (int k = 0; k < 3; k++) m[i][k] = k == j ? rgb[i] : M1[i][k];
+			rho[j] = std::max (det (m) / d0, 0.0);
+		}
+		for (int i = 0; i < 3; i++) out[i] = std::max (0.0, MD[i][0] * rho[0] + MD[i][1] * rho[1] + MD[i][2] * rho[2]);
+	}
+}
+
+void Scene::ObservedPos (OBJHANDLE h, VECTOR3 &p) const
+{
+	oapiGetGlobalPos (h, &p);
+	if (!relOn || h == relSelf) return;
+	// (light-time: back along its motion; first order, the bodies far slower than light)
+	VECTOR3 v;
+	oapiGetGlobalVel (h, &v);
+	p -= v * (length (p - camPos) / 299792458.0);
 }
 
 void Scene::RenderShadows ()
@@ -1455,9 +1567,12 @@ void Scene::BeginFrame ()
 	FillFrameUniforms (&fu);
 	fu.probe[0] = probeFacesDone >= 6 ? 1.0f : 0.0f;
 	fu.probe[1] = (float)(EnvProbe::LEVELS - 1);
-	fu.probe[2] = ssr->Valid () && !cameraCut ? 1.0f : 0.0f;
+	// (relativistic view: no screen-space reflections, occlusion or traced lighting: they
+	// rebuild positions from the depth, where geometry is seen aberrated)
+	fu.probe[2] = ssr->Valid () && !cameraCut && !relOn ? 1.0f : 0.0f;
 	fu.probe[3] = ssr->debug ? 1.0f : 0.0f;
-	fu.rt[0] = rtl->Enabled () ? 1.0f : 0.0f;
+	fu.rt[0] = rtl->Enabled () && !relOn ? 1.0f : 0.0f;
+	if (relOn) fu.aoParams[3] = 1.0f;
 	fu.rt[1] = (float)RTLighting::SHADOWED_LIGHTS;
 	memcpy (frameUbo[fi].mapped, &fu, sizeof(fu));
 	UpdateCamAtmSet ();
@@ -1505,6 +1620,19 @@ void Scene::FillFrameUniforms (void *pfu)
 		fu.city[0][3] = 1.0f;
 		fu.city[3][0] = (float)(1.0 / citySize[0]), fu.city[3][1] = (float)(1.0 / citySize[1]), fu.city[3][2] = (float)(1.0 / citySize[2]);
 	}
+	// relativistic view: the camera's velocity, its own vessel (seen as it is)
+	if (relOn) {
+		VECTOR3 bv = RelBetaView ();
+		for (int k = 0; k < 3; k++) fu.relBeta[k] = (float)bv.data[k];
+		fu.relBeta[3] = 1.0f;
+		if (relSelf) {
+			VECTOR3 sp;
+			oapiGetGlobalPos (relSelf, &sp);
+			VECTOR3 o = view.TransformPoint (sp - camPos);
+			for (int k = 0; k < 3; k++) fu.relSelf[k] = (float)o.data[k];
+			fu.relSelf[3] = (float)relSelfRad;
+		}
+	}
 	fu.jitter[0] = jitter[0], fu.jitter[1] = jitter[1];
 	fu.jitter[2] = (float)viewW, fu.jitter[3] = (float)viewH;
 	fu.aoParams[0] = 1.0f / ao->Extent().width;
@@ -1522,6 +1650,19 @@ void Scene::FillFrameUniforms (void *pfu)
 	VECTOR3 sv = view.TransformPoint (sunDir);
 	fu.sunDir[0] = (float)sv.x, fu.sunDir[1] = (float)sv.y, fu.sunDir[2] = (float)sv.z;
 	fu.sunColor[0] = fu.sunColor[1] = fu.sunColor[2] = 1.0f;
+	// relativistic view: the sunlight on the camera's own vessel in its frame,
+	// from the aberrated direction, Doppler shifted (radiance), on a disc 1/D^2
+	// the solid angle (irradiance)
+	for (int k = 0; k < 4; k++) fu.relSunDir[k] = fu.sunDir[k], fu.relSunColor[k] = fu.sunColor[k];
+	if (relOn) {
+		double b2 = dotp (relBeta, relBeta), g = 1.0 / std::sqrt (1.0 - b2), nb = dotp (sunDir, relBeta);
+		VECTOR3 n = (sunDir + relBeta * (g * g / (g + 1.0) * nb + g)) / (g * (1.0 + nb));
+		VECTOR3 nv = view.TransformPoint (unit (n));
+		for (int k = 0; k < 3; k++) fu.relSunDir[k] = (float)nv.data[k];
+		double D = g * (1.0 + nb), one[3] = { 1.0, 1.0, 1.0 }, c[3];
+		DopplerShiftRGB (one, D, c);
+		for (int k = 0; k < 3; k++) fu.relSunColor[k] = (float)(c[k] / (D * D));
+	}
 	// ambient light: the user's ambient level, plus skylight in daylight
 	// inside an atmosphere (tinted with the sky colour)
 	const DWORD *amb = (const DWORD*)gc->GetConfigParam (CFGPRM_AMBIENTLEVEL);
@@ -1641,12 +1782,12 @@ void Scene::RenderPrepass ()
 	objVel[0] = objVel[1] = objVel[2] = 0.0f;
 	ctx->EndTarget ();
 	ctx->GpuMark ("prepass");
-	if (ao->enabled && !rtl->Enabled ()) ao->Compute (proj[0], -proj[5]);
+	if (ao->enabled && !rtl->Enabled () && !relOn) ao->Compute (proj[0], -proj[5]);
 	ctx->GpuMark ("ao");
 	if (rt && rt->Enabled ()) {
 		rt->Build ();
 		ctx->GpuMark ("rt build");
-		if (rtl->Enabled ()) {
+		if (rtl->Enabled () && !relOn) {
 			double sunRadius = 0.0047;
 			if (hSun) {
 				VECTOR3 sp;
@@ -1658,7 +1799,7 @@ void Scene::RenderPrepass ()
 		}
 		ssr->SetRTSets (frameSet[ctx->FrameIndex()], rt->Set (), rt->TextureSet (), camAtmSet);
 	}
-	ssr->Compute (proj[0], -proj[5], jitter, cameraCut);
+	if (!relOn) ssr->Compute (proj[0], -proj[5], jitter, cameraCut);
 	ctx->GpuMark ("ssr");
 	{
 		VkDescriptorSet rtSets[2] = { rt && rt->Enabled () ? rt->Set () : VK_NULL_HANDLE, rt && rt->Enabled () ? rt->TextureSet () : VK_NULL_HANDLE };
@@ -1672,7 +1813,7 @@ void Scene::RenderPrepass ()
 		particles->RenderScreenSmoke (frameSet[ctx->FrameIndex()]);
 		ctx->GpuMark ("particles");
 	}
-	RenderVolumetricClouds ();
+	if (!relOn) RenderVolumetricClouds (); // (relativistic view: it marches through the depth seen)
 	ctx->GpuMark ("clouds");
 }
 
@@ -1855,7 +1996,9 @@ void Scene::Render ()
 				d.contrast = skySettings.contrast, d.highlight = skySettings.highlight, d.saturation = skySettings.saturation;
 				d.camera = true;
 			}
-			galaxy->Render (cmd, R, (float)ProjX (), (float)ProjY (), d);
+			VECTOR3 bv = RelBetaView ();
+			float bvf[3] = { (float)bv.x, (float)bv.y, (float)bv.z };
+			galaxy->Render (cmd, R, (float)ProjX (), (float)ProjY (), d, bvf);
 		}
 		if (starField && skySettings.stars) {
 			// Galactic direction -> ecliptic (G^T) -> clip
@@ -1866,7 +2009,10 @@ void Scene::Render ()
 				gvp[12 + r] = vp[12 + r];
 			}
 			ctx->GpuMark ("milky way");
-			starField->Render (cmd, gvp, (float)ProjX (), (float)ProjY (), gain, galaxy->ShownLimit ());
+			// (the camera's velocity in the Galactic frame: aberrated star directions)
+			float bg[3] = { 0.0f, 0.0f, 0.0f };
+			for (int i = 0; i < 3 && relOn; i++) bg[i] = (float)(G[i][0] * relBeta.x + G[i][1] * relBeta.y + G[i][2] * relBeta.z);
+			starField->Render (cmd, gvp, (float)ProjX (), (float)ProjY (), gain, galaxy->ShownLimit (), bg);
 			ctx->GpuMark ("stars");
 		}
 	}
@@ -1906,7 +2052,7 @@ void Scene::Render ()
 
 	// heat shimmer behind the exhaust (before the plumes and particles)
 	ctx->GpuMark ("transparent");
-	plumes->Shimmer (proj[0], -proj[5], jitter);
+	if (!relOn) plumes->Shimmer (proj[0], -proj[5], jitter);
 	ctx->GpuMark ("shimmer");
 
 	// effects that also write the reactive mask: engine plumes, particles

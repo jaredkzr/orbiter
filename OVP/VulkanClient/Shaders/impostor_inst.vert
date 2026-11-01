@@ -73,5 +73,5 @@ void main()
 	vPosView = p.xyz;
 	vNormalView = mat3(draw.modelView) * (mat3(M) * nrm);
 	vUV = uv;
-	gl_Position = frame.proj * p;
+	gl_Position = frame.proj * RelApparent (p); // (relativistic view: as seen)
 }

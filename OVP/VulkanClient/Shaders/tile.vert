@@ -44,5 +44,5 @@ void main()
 	vNormalView = mat3(tile.modelView) * inNormal;
 	vUV = inUV;
 	vDetailA = inDetailA;
-	gl_Position = frame.proj * p;
+	gl_Position = frame.proj * RelApparent (p); // (relativistic view: as seen)
 }

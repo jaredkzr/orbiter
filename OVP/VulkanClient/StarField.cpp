@@ -470,7 +470,7 @@ void StarField::Update (const galactic::Observer &obs, bool hideSun)
 	}
 }
 
-void StarField::Render (VkCommandBuffer cmd, const float galViewProj[16], float fx, float fy, float gain, float maxLimit)
+void StarField::Render (VkCommandBuffer cmd, const float galViewProj[16], float fx, float fy, float gain, float maxLimit, const float relBetaGal[3])
 {
 	if (!ready) return;
 	VkExtent2D ext = ctx->RenderExtent ();
@@ -487,7 +487,8 @@ void StarField::Render (VkCommandBuffer cmd, const float galViewProj[16], float 
 		p.glare[k] = GLARE_SIGMA[k] * ext.height;
 		p.glare[k + 2] = GLARE_FRAC[k];
 	}
-	p.misc[0] = gain, p.misc[1] = p.misc[2] = p.misc[3] = 0.0f;
+	p.misc[0] = gain;
+	for (int k = 0; k < 3; k++) p.misc[1 + k] = relBetaGal ? relBetaGal[k] : 0.0f; // (relativistic view: aberrated directions)
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawPipe);
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawPL, 0, 1, &drawSet[front], 0, nullptr);
 	vkCmdPushConstants (cmd, drawPL, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(p), &p);

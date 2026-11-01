@@ -297,6 +297,15 @@ void VulkanClient::clbkRenderScene ()
 		double dt = scene->DeckTransmittance (scene->CameraPos ());
 		if (dt < 1.0) postfx->maxExposure = std::max (postfx->maxExposure, (float)(4.0 + 4.0 * (1.0 - dt)));
 	}
+	// relativistic view: the Doppler shift, before the exposure
+	postfx->rel.on = scene->RelView ();
+	if (postfx->rel.on) {
+		VECTOR3 bv = scene->RelBetaView ();
+		for (int k = 0; k < 3; k++) postfx->rel.beta[k] = (float)bv.data[k];
+		postfx->rel.fx = (float)scene->ProjX (), postfx->rel.fy = (float)scene->ProjY ();
+		scene->RelSelfView (postfx->rel.self);
+		postfx->rel.prepass = scene->PrepassView ();
+	}
 	postfx->Apply (sceneImage, sceneSize);   // HDR scene -> backbuffer
 	ctx.GpuMark ("post");
 	Render2DOverlay (); // panels, MFDs and HUD

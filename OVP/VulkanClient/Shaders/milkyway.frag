@@ -10,6 +10,7 @@
 // nebula's core keeps its colour), the colours deepened.
 
 #version 450
+#extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec2 vNdc;
 layout(location = 0) out vec4 outColor;
@@ -18,8 +19,10 @@ layout(set = 0, binding = 0) uniform samplerCube skyA;
 layout(set = 0, binding = 1) uniform samplerCube skyB;
 layout(set = 0, binding = 2) uniform samplerCube zodiacal;
 
+#include "relativity.glsl"
+
 layout(push_constant) uniform Params {
-	vec4 galFromView[3]; // rows of the rotation view -> Galactic
+	vec4 galFromView[3]; // rows of the rotation view -> Galactic (xyz); w: the camera's velocity (view, units of c)
 	vec4 proj;           // 1/fx, 1/fy, fade to skyB, zodiacal light (0, 1)
 	vec4 colour[3];      // bands (S10) -> scene RGB (incl. the eye's adaptation)
 	vec4 tone;           // pivot luminance, contrast, saturation, highlight shoulder (0: none)
@@ -29,6 +32,8 @@ void main ()
 {
 	// inverse of the projection (x' = fx x / z, y' = -fy y / z)
 	vec3 v = normalize (vec3 (vNdc.x * pc.proj.x, -vNdc.y * pc.proj.y, 1.0));
+	// (relativistic view: the camera's velocity in the rows' w, view space: the direction at rest)
+	v = RelTrueDirOf (v, vec3 (pc.galFromView[0].w, pc.galFromView[1].w, pc.galFromView[2].w));
 	vec3 d = vec3 (dot (pc.galFromView[0].xyz, v), dot (pc.galFromView[1].xyz, v), dot (pc.galFromView[2].xyz, v));
 	vec4 b = texture (skyA, d);
 	if (pc.proj.z > 0.0) b = mix (b, texture (skyB, d), pc.proj.z);

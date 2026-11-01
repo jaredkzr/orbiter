@@ -41,7 +41,7 @@ public:
 	/// Draw the stars (in the scene pass). galViewProj: Galactic direction
 	/// -> clip (column-major); fx, fy: the projection's scale; gain: scene
 	/// radiance of 1 S10; maxLimit: the faintest drawn at most (the sky's)
-	void Render (VkCommandBuffer cmd, const float galViewProj[16], float fx, float fy, float gain, float maxLimit);
+	void Render (VkCommandBuffer cmd, const float galViewProj[16], float fx, float fy, float gain, float maxLimit, const float relBetaGal[3] = nullptr);
 
 	/// limiting magnitude (V, from the observer) of the stars drawn: the
 	/// Milky Way's (GalaxySky::StarLimit); a change selects them again

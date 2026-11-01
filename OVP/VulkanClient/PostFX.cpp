@@ -8,6 +8,7 @@
 #include "bloom_down.frag.h"
 #include "bloom_up.frag.h"
 #include "tonemap.frag.h"
+#include "doppler.frag.h"
 #include "histogram.comp.h"
 #include "adapt.comp.h"
 #include <chrono>
@@ -114,6 +115,16 @@ bool PostFX::Init (vkc::Context *c)
 	downPipe = CreatePipeline (spv_bloom_down_frag, spv_bloom_down_frag_size, BLOOM_FORMAT, false, layout);
 	upPipe = CreatePipeline (spv_bloom_up_frag, spv_bloom_up_frag_size, BLOOM_FORMAT, true, layout);
 	tonePipe = CreatePipeline (spv_tonemap_frag, spv_tonemap_frag_size, ctx->colorFormat, false, toneLayout);
+	{
+		// relativistic view: scene + prepass, the camera's velocity and its vessel
+		VkPushConstantRange dpcr{ VK_SHADER_STAGE_FRAGMENT_BIT, 0, 12 * sizeof(float) };
+		VkDescriptorSetLayout two[2] = { setLayout, setLayout };
+		VkPipelineLayoutCreateInfo dlci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+		dlci.setLayoutCount = 2, dlci.pSetLayouts = two;
+		dlci.pushConstantRangeCount = 1, dlci.pPushConstantRanges = &dpcr;
+		VK_CHECK(vkCreatePipelineLayout (ctx->device, &dlci, nullptr, &dopplerLayout));
+		dopplerPipe = CreatePipeline (spv_doppler_frag, spv_doppler_frag_size, VK_FORMAT_R16G16B16A16_SFLOAT, false, dopplerLayout);
+	}
 	histPipe = CreateComputePipeline (spv_histogram_comp, spv_histogram_comp_size);
 	adaptPipe = CreateComputePipeline (spv_adapt_comp, spv_adapt_comp_size);
 	return true;
@@ -123,11 +134,12 @@ void PostFX::Shutdown ()
 {
 	if (!ctx) return;
 	DestroyTargets ();
-	VkPipeline pipes[] = { downPipe, upPipe, tonePipe, histPipe, adaptPipe };
+	VkPipeline pipes[] = { downPipe, upPipe, tonePipe, histPipe, adaptPipe, dopplerPipe };
 	for (auto p : pipes) vkDestroyPipeline (ctx->device, p, nullptr);
 	vkDestroyShaderModule (ctx->device, vs, nullptr);
 	vkDestroyPipelineLayout (ctx->device, layout, nullptr);
 	vkDestroyPipelineLayout (ctx->device, toneLayout, nullptr);
+	vkDestroyPipelineLayout (ctx->device, dopplerLayout, nullptr);
 	vkDestroyPipelineLayout (ctx->device, meterLayout, nullptr);
 	vkDestroyDescriptorSetLayout (ctx->device, meterSetLayout, nullptr);
 	vkDestroyDescriptorSetLayout (ctx->device, stateSetLayout, nullptr);
@@ -292,6 +304,9 @@ void PostFX::DestroyTargets ()
 		l.set = VK_NULL_HANDLE;
 	}
 	sceneSet = meterSet = stateSet = VK_NULL_HANDLE;
+	if (relImg.image) ctx->DestroyImage (relImg);
+	relImg = vkc::Image ();
+	relSet = prepassSet = VK_NULL_HANDLE, prepassView = VK_NULL_HANDLE;
 	inputs.clear();
 	generation = ~0u;
 }
@@ -337,8 +352,9 @@ void PostFX::Apply (VkImageView input, VkExtent2D inputSize)
 		DestroyTargets ();
 		CreateTargets ();
 	}
-	SelectInput (input);
 	VkExtent2D e = ctx->Extent();
+	if (rel.on && rel.prepass) Doppler (input, inputSize); // (relativistic view: shifted before the exposure)
+	SelectInput (input);
 	if (autoExposure) Meter ();
 
 	// bloom: bright parts of the scene, downsampled into the level chain ...
@@ -370,6 +386,49 @@ void PostFX::Apply (VkImageView input, VkExtent2D inputSize)
 		autoExposure ? 1.0f : 0.0f, sunUV[0], sunUV[1], sunOnScreen ? 1.0f : 0.0f };
 	vkCmdPushConstants (cmd, toneLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), pc);
 	vkCmdDraw (cmd, 3, 1, 0, 0);
+}
+
+void PostFX::Doppler (VkImageView &input, VkExtent2D &inputSize)
+{
+	VkExtent2D e = ctx->Extent();
+	if (!relImg.image) {
+		VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+		ici.imageType = VK_IMAGE_TYPE_2D;
+		ici.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+		ici.extent = { e.width, e.height, 1 };
+		ici.mipLevels = 1, ici.arrayLayers = 1;
+		ici.samples = VK_SAMPLE_COUNT_1_BIT;
+		ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+		ici.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+		VmaAllocationCreateInfo aci{};
+		aci.usage = VMA_MEMORY_USAGE_AUTO;
+		VK_CHECK(vmaCreateImage (ctx->allocator, &ici, &aci, &relImg.image, &relImg.alloc, nullptr));
+		VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+		vci.image = relImg.image;
+		vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		vci.format = ici.format;
+		vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &relImg.view));
+		VkImage img = relImg.image;
+		ctx->ImmediateSubmit ([img](VkCommandBuffer cmd) {
+			vkc::ImageBarrier (cmd, img, VK_IMAGE_ASPECT_COLOR_BIT,
+				VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+				VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+		});
+		relSet = AllocSet (relImg.view);
+	}
+	if (rel.prepass != prepassView) prepassSet = AllocSet (rel.prepass), prepassView = rel.prepass;
+	SelectInput (input);
+	ctx->BindTarget ({ relImg.image, relImg.view, VK_FORMAT_R16G16B16A16_SFLOAT, e });
+	VkCommandBuffer cmd = ctx->Cmd();
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, dopplerPipe);
+	VkDescriptorSet sets[2] = { sceneSet, prepassSet };
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, dopplerLayout, 0, 2, sets, 0, nullptr);
+	float pc[12] = { rel.beta[0], rel.beta[1], rel.beta[2], 1.0f / rel.fx,
+		rel.self[0], rel.self[1], rel.self[2], rel.self[3], 1.0f / rel.fy, 0.0f, 0.0f, 0.0f };
+	vkCmdPushConstants (cmd, dopplerLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), pc);
+	vkCmdDraw (cmd, 3, 1, 0, 0);
+	input = relImg.view, inputSize = e;
 }
 
 void PostFX::Meter ()

@@ -96,7 +96,7 @@ void main ()
 			vMisc.xy = vec2 (1.0, 0.0);
 		}
 	}
-	gl_Position = frame.proj * vec4 (pos, 1.0);
+	gl_Position = frame.proj * vec4 (RelApparent (pos), 1.0);
 	vPosView = pos;
 
 	vec3 albedo = (flags & 8u) != 0u

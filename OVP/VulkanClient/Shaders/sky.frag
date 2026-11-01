@@ -6,13 +6,15 @@
 
 #define ATM_SET 0
 #include "atmosphere.glsl"
+#include "relativity.glsl"
 
 layout(location = 0) in vec3 vDirView;
 layout(location = 0) out vec4 outColor; // premultiplied: the sky adds to the stars, the ground covers them
 
 void main ()
 {
-	vec3 d = normalize (mat3 (atm.viewToPlanet) * normalize (vDirView));
+	// (relativistic view: the direction at rest of what is seen here)
+	vec3 d = normalize (mat3 (atm.viewToPlanet) * RelTrueDirOf (vDirView, atm.relBeta.xyz));
 	// Rays hitting the planet end at the ground. Terrain is drawn over it
 	// where its tiles reach; beyond (e.g. seen from high ground above the
 	// mean radius) the ground is shaded here from the planet's surface map.

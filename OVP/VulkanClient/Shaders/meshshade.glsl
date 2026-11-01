@@ -49,7 +49,7 @@ vec3 SurfaceLight (vec3 base, Material mat, out vec3 sun, out bool debug)
 	debug = false;
 	vec3 N = mat.N;
 	vec3 V = normalize(-vPosView);
-	vec3 L = frame.sunDir.xyz;
+	vec3 L = SunDirAt(vPosView); // (relativistic view: the own vessel's sunlight in its frame)
 	float NoL = max(dot(N, L), 0.0);
 	float NoV = max(dot(N, V), 1e-4);
 	float metal = mat.metal, rough = mat.rough, reflectivity = mat.reflectivity;
@@ -63,7 +63,7 @@ vec3 SurfaceLight (vec3 base, Material mat, out vec3 sun, out bool debug)
 	bool rtVis = RTLighting() && draw.maps.y < 0.5;
 	vec4 rv = rtVis ? RTVisibility() : vec4(1.0);
 	vec4 lv = rtVis ? RTLightVisibility() : vec4(1.0);
-	sun = frame.sunColor.rgb * draw.light.rgb * (rtVis ? rv.x : SunShadow(vPosView, N));
+	sun = SunColorAt(vPosView) * draw.light.rgb * (rtVis ? rv.x : SunShadow(vPosView, N));
 	if (hasAtm) {
 		vec3 pPlanet = mat3(atm.viewToPlanet) * vPosView + atm.camPos.xyz;
 		sun *= SunTransmittance(pPlanet) * CloudShadow(pPlanet);

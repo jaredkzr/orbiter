@@ -27,5 +27,5 @@ void main ()
 	vec3 o = vec3 ((c & 1) != 0 ? 1.0 : -1.0, (c & 2) != 0 ? 1.0 : -1.0, (c & 4) != 0 ? 1.0 : -1.0);
 	float r = pc.centre.w;
 	vPos = pc.centre.xyz + (ax * o.x + ay * o.y) * r + n * (o.z * max (0.1 * r, 1.0));
-	gl_Position = frame.proj * vec4 (vPos, 1.0);
+	gl_Position = frame.proj * vec4 (RelApparent (vPos), 1.0);
 }

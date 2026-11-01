@@ -42,7 +42,7 @@ VObject::VObject (OBJHANDLE h, Scene *s)
 
 void VObject::Update ()
 {
-	oapiGetGlobalPos (hObj, &gpos);
+	scene->ObservedPos (hObj, gpos); // (relativistic view: where its light left it)
 	oapiGetRotationMatrix (hObj, &grot);
 	camDist = length (gpos - scene->CameraPos());
 }
@@ -2112,7 +2112,7 @@ void VBase::CollectLights (std::vector<LightSource> &out)
 	if (floods.empty () || !Night ()) return;
 	VECTOR3 gpos, cam = scene->CameraPos ();
 	MATRIX3 grot;
-	oapiGetGlobalPos (hBase, &gpos);
+	scene->ObservedPos (hBase, gpos);
 	oapiGetRotationMatrix (hBase, &grot);
 	for (const Flood &fl : floods) {
 		LightSource l{};
@@ -2132,7 +2132,7 @@ void VBase::Render (RenderPass pass)
 {
 	VECTOR3 gpos;
 	MATRIX3 grot;
-	oapiGetGlobalPos (hBase, &gpos);
+	scene->ObservedPos (hBase, gpos);
 	oapiGetRotationMatrix (hBase, &grot);
 	Mat4 mv = scene->ModelView (gpos, grot);
 	scene->Sunlight (gpos);
@@ -2168,7 +2168,7 @@ bool VBase::RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &
 {
 	VECTOR3 gpos;
 	MATRIX3 grot;
-	oapiGetGlobalPos (hBase, &gpos);
+	scene->ObservedPos (hBase, gpos);
 	oapiGetRotationMatrix (hBase, &grot);
 	auto get = [](const std::unique_ptr<VkMesh> &p, const VkMesh *&m, VECTOR3 &ofs) { m = p.get(), ofs = _V(0, 0, 0); return true; };
 	double t1, t2;
@@ -2184,7 +2184,7 @@ void VBase::RenderShadow (ShadowMap &sm)
 {
 	VECTOR3 gpos;
 	MATRIX3 grot;
-	oapiGetGlobalPos (hBase, &gpos);
+	scene->ObservedPos (hBase, gpos);
 	oapiGetRotationMatrix (hBase, &grot);
 	Mat4 model = Mat4::FromRotTrans (grot, gpos - sm.Centre());
 	for (auto &m : structures) sm.DrawMesh (m.get(), model);

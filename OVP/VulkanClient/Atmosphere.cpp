@@ -40,6 +40,7 @@ namespace {
 		float cloudShell[4];  // shell base, top radius, extinction, coverage scale
 		float detailPrm[4];   // terrain detail: ridge, craters, crater depth, fresh craters
 		float surfPrm[4];     // x: colour saturation of the surface textures
+		float relBeta[4];     // relativistic view: the camera's velocity (view, units of c)
 	};
 
 	const VkFormat LUT_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -573,7 +574,7 @@ void Atmosphere::Update ()
 	AtmUniforms u{};
 	VECTOR3 ppos;
 	MATRIX3 prot;
-	oapiGetGlobalPos (hPlanet, &ppos);
+	scene->ObservedPos (hPlanet, ppos); // (relativistic view: where its light left it)
 	oapiGetRotationMatrix (hPlanet, &prot);
 
 	// view space (camera frame) -> planet frame
@@ -634,6 +635,10 @@ void Atmosphere::Update ()
 	}
 	u.surfPrm[0] = surfSaturation;
 	for (int i = 0; i < 3; i++) u.surfPrm[1 + i] = overcastSky[i] / sunIntensity; // (deep in it: the skylight's radiance)
+	{
+		VECTOR3 bv = scene->RelBetaView (); // (relativistic view: the camera's velocity)
+		u.relBeta[0] = (float)bv.x, u.relBeta[1] = (float)bv.y, u.relBeta[2] = (float)bv.z;
+	}
 	u.misc[1] = (float)(1.0 / scene->ProjX());
 	u.misc[2] = (float)(1.0 / scene->ProjY());
 	memcpy (ubo[SetIndex ()].mapped, &u, sizeof(u));

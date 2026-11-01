@@ -7,6 +7,8 @@
 // with the distance.
 
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#include "relativity.glsl"
 
 layout(location = 0) in vec4 inLamp; // position (frame of the transforms), white LED (1) or sodium (0)
 
@@ -16,6 +18,7 @@ layout(push_constant) uniform Lamps {
 	vec4 centre;  // xyz: origin of the frame of the transforms (planet frame), w: smallest half size per view depth
 	vec4 sun;     // xyz: direction to the sun (planet frame), w: brightness
 	vec4 range;   // x: fading out from, y: to [m], z: half size [m]
+	vec4 relBeta; // relativistic view: the camera's velocity (view space, units of c; 0: at rest)
 } pc;
 
 layout(location = 0) out vec2 vUV;
@@ -40,5 +43,6 @@ void main()
 	vec3 col = inLamp.w > 0.5 ? vec3(0.9, 0.95, 1.0) : vec3(1.0, 0.58, 0.2);
 	vColor = vec4(col * (pc.sun.w * fade * mix(e, 1.0, 0.4)), 1.0);
 	vUV = c * 0.5 + 0.5;
-	gl_Position = pc.proj * vec4(v.xy + c * h, v.z, 1.0);
+	vec3 a = RelApparentPos (v.xyz, pc.relBeta.xyz); // (relativistic view: where the lamp is seen)
+	gl_Position = pc.proj * vec4(a.xy + c * h * (a.z / v.z), a.z, 1.0);
 }

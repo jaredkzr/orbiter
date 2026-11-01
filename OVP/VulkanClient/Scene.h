@@ -90,15 +90,36 @@ public:
 	VkCommandBuffer Cmd () const;
 	const VECTOR3 &CameraPos () const { return camPos; }
 	/// whether a sphere (centre relative to the camera, global frame) may be in view
+	/// (relativistic view: where it is seen, aberrated, its size seen 1/D times)
 	bool SphereInView (const VECTOR3 &rel, double radius) const
 	{
 		double d = length (rel);
 		if (d <= radius) return true;
 		VECTOR3 fwd = { camRot.m13, camRot.m23, camRot.m33 };
-		double cosA = dotp (rel, fwd) / d;
+		VECTOR3 n = rel / d;
+		double grow = 1.0;
+		if (relOn) {
+			double b2 = dotp (relBeta, relBeta), g = 1.0 / sqrt (1.0 - b2), nb = dotp (n, relBeta);
+			n = (n + relBeta * (g * g / (g + 1.0) * nb + g)) / (g * (1.0 + nb));
+			grow = 1.0 / (g * (1.0 + nb)); // (1/D: angles near n magnified)
+		}
+		double cosA = dotp (n, fwd) / length (n);
 		double half = atan (tanAperture * sqrt (1.0 + (double)viewW * viewW / ((double)viewH * viewH)));
-		return acos (std::clamp (cosA, -1.0, 1.0)) < half + asin (std::min (1.0, radius / d));
+		return acos (std::clamp (cosA, -1.0, 1.0)) < half + std::min (3.2, 1.2 * grow * asin (std::min (1.0, radius / d)));
 	}
+	/// Relativistic view: the camera's target faster than REL_VIEW_MIN (0.001 c):
+	/// the scene seen aberrated and Doppler shifted, objects where their light left
+	/// them. ORBITER_VK_RELVIEW=0: off; ORBITER_VK_RELVIEW_BETA=b (along the view)
+	/// or bx,by,bz (global frame): a velocity [c] forced (tests, pictures)
+	bool RelView () const { return relOn; }
+	VkImageView PrepassView () const; ///< linear view depth in w (the relativistic view's vessel pixels)
+	/// the camera's own vessel in view space: centre, radius (0: none)
+	void RelSelfView (float out[4]) const;
+	const VECTOR3 &RelBeta () const { return relBeta; } ///< the camera's velocity [c], global frame (0: off)
+	VECTOR3 RelBetaView () const { return relOn ? view.TransformPoint (relBeta) : _V(0, 0, 0); } ///< in view space
+	/// where an object is seen: its global position when its light left it
+	/// (relativistic view; else where it is)
+	void ObservedPos (OBJHANDLE h, VECTOR3 &p) const;
 	/// object-to-view transform for an object at global position gpos with rotation grot
 	Mat4 ModelView (const VECTOR3 &gpos, const MATRIX3 &grot) const;
 	void DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass,
@@ -368,6 +389,11 @@ private:
 	// camera
 	VECTOR3 camPos{};
 	MATRIX3 camRot{};     // camera frame -> global
+	void UpdateRelativity ();
+	bool relOn = false;   // relativistic view
+	VECTOR3 relBeta{};    // the camera's velocity [c], global frame
+	OBJHANDLE relSelf = nullptr; // the camera's own vessel (moving with it)
+	double relSelfRad = 0.0;
 	VECTOR3 shakeLP{}, shakeV{}; // the cockpit view's jolts: the vessel's aerodynamic acceleration, low-passed; the jolt, smoothed
 	Mat4 view;            // global direction -> view (rotation only)
 	float proj[16] = {};

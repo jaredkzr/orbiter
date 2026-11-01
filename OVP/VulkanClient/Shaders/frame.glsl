@@ -4,6 +4,8 @@
 // Per-frame uniform block (set 0, binding 0; FRAME_SET selects another set);
 // must match FrameUniforms in Scene.cpp
 
+#include "relativity.glsl"
+
 #ifndef FRAME_SET
 #define FRAME_SET 0
 #endif
@@ -34,8 +36,35 @@ layout(set = FRAME_SET, binding = 0) uniform Frame {
 	vec4 planetLight;  // its irradiance at normal incidence (rgb), w: 1 = present
 	vec4 lightCount;   // x: number of local lights
 	vec4 city[4];      // the cities' road map (CityField): centre (view space), w: present; axes x, y (view space); x, y, z: 1/size of its fine and coarse level and the far map [1/m]
+	vec4 relBeta;      // relativistic view: the camera's velocity (view space, units of c), w: 1 = on
+	vec4 relSelf;      // the camera's own vessel (moving with it: seen as it is): centre (view space), w: radius
+	vec4 relSunDir;    // the sunlight on that vessel, in its frame: from this direction (view space, aberrated)
+	vec4 relSunColor;  //   with this colour (Doppler shifted)
 	LocalLight lights[MAX_LIGHTS];
 } frame;
+
+// Relativistic view (the camera faster than 0.001 c): what the camera sees
+// of a point at rest in the Solar System's frame at p (view space, relative
+// to the camera) is the light it emitted, which the camera's motion
+// aberrates towards the direction of motion and places at the distance D r
+// (the emission event in the camera's frame; D: the Doppler factor). The
+// camera's own vessel moves with it: seen as it is.
+vec3 RelApparent (vec3 p)
+{
+	if (frame.relBeta.w < 0.5 || distance (p, frame.relSelf.xyz) < frame.relSelf.w) return p;
+	return RelApparentPos (p, frame.relBeta.xyz);
+}
+vec4 RelApparent (vec4 p) { return vec4 (RelApparent (p.xyz), p.w); }
+// the sunlight on a surface at p (view space): on the camera's own vessel
+// (moving with it), as it arrives in its frame: aberrated, Doppler shifted
+bool RelOnSelf (vec3 p) { return frame.relBeta.w > 0.5 && distance (p, frame.relSelf.xyz) < frame.relSelf.w; }
+vec3 SunDirAt (vec3 p) { return RelOnSelf (p) ? frame.relSunDir.xyz : frame.sunDir.xyz; }
+vec3 SunColorAt (vec3 p) { return RelOnSelf (p) ? frame.relSunColor.rgb : frame.sunColor.rgb; }
+// the direction (Solar System's frame) of what the camera sees in view direction d
+vec3 RelTrueDir (vec3 d)
+{
+	return frame.relBeta.w < 0.5 ? d : RelTrueDirOf (d, frame.relBeta.xyz);
+}
 
 // ambient occlusion of opaque geometry (1: unoccluded); fragment shaders only
 #ifdef FRAME_AO
