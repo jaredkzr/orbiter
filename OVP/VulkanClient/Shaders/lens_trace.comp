@@ -325,7 +325,7 @@ vec3 StreamAt (vec3 q, out vec4 g, out vec3 tg)
 		s -= clamp (gr / max (h, 1e-6), -0.05, 0.05);
 	}
 	float lS = rL - rH, dL = s * lS; // (the stream's length; the distance down it [M])
-	if (dL < -0.5 || s > 1.5) return vec3 (0.0);
+	if (dL < -2.0 || s > 1.5) return vec3 (0.0);
 	vec2 c = StreamC (s), t2 = normalize (StreamC (s + E) - StreamC (s - E)), off = q.xy - c;
 	// (drawn off the star's tip gradually: broad and thin about it,
 	// gathering into the stream over its first few M)
@@ -346,13 +346,18 @@ vec3 StreamAt (vec3 q, out vec4 g, out vec3 tg)
 	float t = Now () / 25.0;
 	float n = Noise (vec3 (s * 36.0 - t, u * 1.3 + 7.0, v * 1.3), 1e4);
 	float fil = Noise (vec3 (s * 110.0 - 3.0 * t, u * 3.5, v * 3.5 + 11.0), 1e4);
-	float clump = 0.15 + 1.8 * n * n + 0.4 * fil;
-	float tauD = s <= 1.0 ? 1.2 * (1.0 - 0.6 * s) * mix (0.3, 1.0, smoothstep (0.0, 4.0, dL)) : 0.06 * (1.5 - s) / 0.5; // (across it; the overflow thinning out)
+	// (at the star's nose, by the inner Lagrange point: smooth, dense, as
+	// dim as the nose (its gravity least: ~0.4 as bright), the star's light
+	// going on into the stream's without a step (an artistic liberty: at
+	// Nyx's rate the gas leaving is optically thin), thinning over ~1 M)
+	float nose = exp (-max (dL, 0.0) / 0.8);
+	float clump = mix (0.15 + 1.8 * n * n + 0.4 * fil, 1.0, nose);
+	float tauD = s <= 1.0 ? 1.2 * (1.0 - 0.6 * s) * mix (0.3, 1.0, smoothstep (0.0, 4.0, dL)) + 2.5 * nose : 0.06 * (1.5 - s) / 0.5; // (across it; the overflow thinning out)
 	// (the clumps denser; its light a black body's of its temperature: as
 	// the star's photosphere where it leaves it, heating as it falls)
-	float k = tauD / (1.7725 * w) * exp (-d2) * (w * w) / (we * we) * clump * smoothstep (-0.5, 0.3, dL) * OutsideLobe (q);
+	float k = tauD / (1.7725 * w) * exp (-d2) * (w * w) / (we * we) * clump * smoothstep (-2.0, 0.5, dL) * OutsideLobe (q); // (behind the nose, the star itself: the lobe)
 	float T = s <= 1.0 ? mix (P.donorT.x, 7200.0, pow (max (s, 0.0), 1.5)) : 6500.0; // (pow of a negative: NaN)
-	float S = s <= 1.0 ? mix (0.9, 0.8, s) : 0.5;
+	float S = s <= 1.0 ? mix (mix (0.9, 0.8, s), 0.4, nose) : 0.5;
 	return vec3 (T, S, k);
 }
 

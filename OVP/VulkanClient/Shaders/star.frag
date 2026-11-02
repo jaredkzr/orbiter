@@ -240,11 +240,12 @@ void main ()
 	// (drawn out by a tide: gravity darkening, the surface's gravity least
 	// towards the inner Lagrange point, its flux as g^0.32 (convective))
 	if (roche) {
-		// (the lobe's surface gravity, least at the cusp, over the pole's;
-		// the side facing the companion's hot disc heated (an artistic
-		// liberty: really a few per cent))
+		// (the lobe's surface gravity, least at the nose by the inner
+		// Lagrange point, over the pole's: the nose ~0.4 as bright; the side
+		// facing the companion's hot disc heated (an artistic liberty:
+		// really a few per cent), not the nose)
 		col *= pow (clamp (length (gH) / 5.57, 0.05, 1.5), 0.32);
-		float irr = 0.25 * smoothstep (-0.2, 1.0, normalize (gH).x);
+		float irr = 0.25 * smoothstep (-0.2, 1.0, normalize (gH).x) * smoothstep (0.3, 1.5, length (gH));
 		col *= (1.0 + irr) * mix (vec3 (1.0), vec3 (0.97, 1.0, 1.1), irr * 3.0);
 	} else if (draw.heat.w > 0.5) col *= 1.0 - 0.45 * smoothstep (0.3, 1.0, dot (o, draw.heat.xyz));
 	// (umbrae cooler: redder)

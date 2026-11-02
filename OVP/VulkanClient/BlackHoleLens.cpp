@@ -19,7 +19,7 @@
 #include "lens_stars.comp.h"
 
 namespace {
-	// the stream's centre line: a polyline, s from just behind the inner
+	// the stream's centre line: a polyline, s from 2 M behind the inner
 	// Lagrange point to the rim (SPATH_MAIN segments), then on over the
 	// disc's faces (the overflow, to s = 1.5); bounding spheres of its
 	// segments eight at a time (the overflow's: above and below the disc)
@@ -361,7 +361,7 @@ void BlackHoleLens::Trace (const Frame &f)
 		for (int i = 0; i < SPATH_N + 61; i++) {
 			bool poly = i < SPATH_N;
 			double s = !poly ? 1.5 * (i - SPATH_N) / 60.0
-				: i <= SPATH_MAIN ? -0.5 / lS + (1.0 + 0.5 / lS) * i / SPATH_MAIN : 1.0 + 0.5 * (i - SPATH_MAIN) / (SPATH_N - 1 - SPATH_MAIN);
+				: i <= SPATH_MAIN ? -2.0 / lS + (1.0 + 2.0 / lS) * i / SPATH_MAIN : 1.0 + 0.5 * (i - SPATH_MAIN) / (SPATH_N - 1 - SPATH_MAIN);
 			double r = s <= 1.0 ? rL - s * (rL - rH) : rH * (1.0 - 0.9 * (s - 1.0));
 			double ph = f.streamPhi + 0.9 * std::pow (std::max (s, 0.0), 1.5);
 			double x = r * std::cos (ph), y = r * std::sin (ph);
