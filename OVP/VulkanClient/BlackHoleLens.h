@@ -58,7 +58,7 @@ public:
 		/// the projection's jitter [px] (temporal anti-aliasing)
 		float jitter[2] = { 0.0f, 0.0f };
 		/// the donor's centre [M] (Kerr), mean radius [M] (0: none), temperature [K]
-		double donorPos[3] = {}, donorR = 0.0, donorTeff = 3300.0;
+		double donorPos[3] = {}, donorR = 0.0, donorTeff = 3300.0, donorOmega = 0.0; // (its orbit's angular velocity about the axis [rad/M]: seen where it was)
 		/// jets along the axis (an artistic liberty): brightness (0: none), length [M]
 		double jets = 0.0, jetLength = 250.0;
 	};
@@ -77,6 +77,12 @@ public:
 	/// the stream, the jets) after the opaque scene, at its depth: near the
 	/// near plane [m], M the hole's mass [m]
 	void RenderGas (VkCommandBuffer cmd, float nearPlane, float M);
+	/// ORBITER_VK_LENS_DONOR_CHECK: the last frame's donor where the trace
+	/// sees it against where the scene draws it: the ray in view direction vd
+	/// (the drawn centre's: light-time, aberration) traced in double precision
+	/// (Kerr.h), the donor where it was when the light passed (lens_trace.comp's
+	/// rule: delay = path length); logs the miss
+	void CheckDonor (const double vd[3]);
 
 	static constexpr double R_IN = 300.0;   ///< [M] rays passing farther: the weak field's bending
 	static constexpr double R_OUT = 1000.0; ///< [M] rays leaving beyond (and the camera): the rest of the bending, the weak field's (its second order ~(M/r)^2: 100 M left 0.1 deg)

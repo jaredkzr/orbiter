@@ -81,6 +81,7 @@ const double C0    = 299792458.0;   ///< speed of light in vacuum [m/s]
 const double TAUA  = 499.004783806; ///< light time for 1 AU [s]
 const double AU    = C0*TAUA;       ///< astronomical unit (mean geocentric distance of the sun) [m]
 const double GGRAV = 6.67259e-11;   ///< gravitational constant [m^3 kg^-1 s^-2]
+const double REL_VIEW_BETA = 1e-3;  ///< the relativistic view (aberration, light-time in the global frame) for observers this fast [units of c] or faster
 const double G     = 9.81;          ///< gravitational acceleration [m/s^2] at Earth mean radius
 const double ATMP  = 101.4e3;       ///< atmospheric pressure [Pa] at Earth sea level
 const double ATMD  = 1.293;         ///< atmospheric density [kg/m^3] at Earth sea level
@@ -3126,6 +3127,27 @@ OAPIFUNC void oapiGetGlobalPos (OBJHANDLE hObj, VECTOR3 *pos);
  * \sa oapiGetBarycentre, oapiGetGlobalPos
  */
 OAPIFUNC void oapiGetGlobalVel (OBJHANDLE hObj, VECTOR3 *vel);
+
+/**
+ * \brief Where an observer sees an object: its place when it emitted the
+ *  light now reaching the observer (light-time).
+ * \param hObj object handle
+ * \param obsPos the observer's global position [m]
+ * \param obsVel the observer's global velocity [m/s]
+ * \param pos receives the position (global frame)
+ * \return the light's travel time [s]
+ * \note An observer at REL_VIEW_BETA of c or faster (the relativistic
+ *  view: directions then aberrated by obsVel): the object's global
+ *  position at the emission. Slower: in the observer's frame, to first
+ *  order (that position plus the observer's motion over the travel time),
+ *  only for objects at relativistic speeds relative to the observer
+ *  (fading in from 2e-4 to 8e-4 c; slower: their position now, so a
+ *  planet's surface and what is on it stay together).
+ * \note The object moves in a circle about its orbit's reference body,
+ *  which moves straight.
+ * \sa oapiGetGlobalPos, oapiGetGlobalVel
+ */
+OAPIFUNC double oapiGetObservedPos (OBJHANDLE hObj, const VECTOR3 &obsPos, const VECTOR3 &obsVel, VECTOR3 *pos);
 
 /**
  * \brief Returns the distance vector from hRef to hObj in the ecliptic reference frame.

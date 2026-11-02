@@ -90,6 +90,39 @@ namespace relativity {
 		return Gamma (v.length ()) * (1.0 + dotp (n, v) / C);
 	}
 
+	double EmissionPos (const Vector &p, const Vector &v, const Vector *pp, const Vector *vp, const Vector &obs, Vector &pe)
+	{
+		// (about the parent: its angular velocity w = r x v / r^2 and the
+		// radial rate; dt = |pe - obs| / c iterated, converging as fast as
+		// v / c)
+		Vector r, w;
+		double radial = 0.0;
+		if (pp && vp) {
+			r = p - *pp;
+			Vector vr = v - *vp;
+			double r2 = r.length2 ();
+			if (r2 > 0.0) w = crossp (r, vr) / r2, radial = dotp (r, vr) / r2;
+			else pp = nullptr;
+		}
+		double dt = (p - obs).length () / C;
+		for (int i = 0; i < 16; i++) {
+			if (pp && vp) {
+				double wl = w.length (), a = -wl * dt;
+				Vector rr = r;
+				if (wl > 0.0) {
+					Vector k = w / wl;
+					rr = r * std::cos (a) + crossp (k, r) * std::sin (a) + k * (dotp (k, r) * (1.0 - std::cos (a)));
+				}
+				pe = *pp - *vp * dt + rr * (1.0 - radial * dt);
+			} else pe = p - v * dt;
+			double dn = (pe - obs).length () / C;
+			bool done = std::fabs (dn - dt) <= 1e-12 * dn;
+			dt = dn;
+			if (done) break;
+		}
+		return dt;
+	}
+
 	// ===================================================================
 	// Gravity and clocks
 

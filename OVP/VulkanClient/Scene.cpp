@@ -1125,10 +1125,10 @@ void Scene::UpdateCamera ()
 
 void Scene::UpdateRelativity ()
 {
-	const double C = 299792458.0, REL_VIEW_MIN = 0.001;
+	const double C = 299792458.0;
 	static const bool off = getenv ("ORBITER_VK_RELVIEW") && !atoi (getenv ("ORBITER_VK_RELVIEW"));
 	static const char *forced = getenv ("ORBITER_VK_RELVIEW_BETA");
-	relOn = false, relBeta = _V(0, 0, 0), relSelf = nullptr, relSelfRad = 0.0;
+	relOn = false, relBeta = _V(0, 0, 0), camVel = _V(0, 0, 0), relSelf = nullptr, relSelfRad = 0.0;
 	if (off) return;
 	OBJHANDLE tgt = oapiCameraTarget ();
 	if (forced) {
@@ -1143,7 +1143,8 @@ void Scene::UpdateRelativity ()
 	}
 	double b = length (relBeta);
 	if (b >= 0.999999) relBeta *= 0.999999 / b, b = 0.999999;
-	if (b < REL_VIEW_MIN) { relBeta = _V(0, 0, 0); return; }
+	camVel = relBeta * C;
+	if (b < REL_VIEW_BETA) { relBeta = _V(0, 0, 0); return; }
 	relOn = true;
 	if (tgt && oapiGetObjectType (tgt) == OBJTP_VESSEL) relSelf = tgt, relSelfRad = 1.2 * oapiGetSize (tgt);
 }
@@ -1309,7 +1310,8 @@ void Scene::UpdateLens ()
 	f.cosmic = !ce || atoi (ce) != 0;
 	f.stars = starField && skySettings.stars;
 	lensDisc = bi.discRate > 0.0;
-	lensPos = hp, lensM = bi.M;
+	ObservedPos (best, lensPos); // (drawn objects bent about where it is seen)
+	lensM = bi.M;
 	if (bi.discRate > 0.0) {
 		f.discTK = bi.discTempScale, f.discIn = bi.isco / bi.M, f.discOut = bi.discOuter / bi.M;
 		f.glowRim = bi.discGlow > 0.0 ? f.discOut : 0.0, f.glow = 0.25 * bi.discGlow;
@@ -1335,6 +1337,15 @@ void Scene::UpdateLens ()
 			// (its body: drawn in the lensed sky too, for its images about the
 			// hole, behind its gas)
 			f.donorPos[0] = x, f.donorPos[1] = y, f.donorPos[2] = dotp (r, bi.axis);
+			{
+				// (its orbit's angular velocity [rad/M]: the trace sees it, and
+				// its stream, where they were when the light left)
+				VECTOR3 dv;
+				oapiGetGlobalVel (bi.donor, &dv);
+				dv = (dv - hv) / C;
+				double vx = dotp (dv, bi.ex), vy = dotp (dv, bi.ey);
+				f.donorOmega = x * x + y * y > 0.0 ? (x * vy - y * vx) / (x * x + y * y) : 0.0;
+			}
 			f.donorR = oapiGetSize (bi.donor) / bi.M;
 			for (const NearStar &s : nearStars) if (s.body == bi.donor) f.donorTeff = s.teff;
 			lensDonor = bi.donor;
@@ -1342,6 +1353,17 @@ void Scene::UpdateLens ()
 	}
 	lens->Trace (f);
 	lensOn = true;
+	// (ORBITER_VK_LENS_DONOR_CHECK: once, after the view settled, the donor
+	// where it is drawn against where the trace sees it)
+	static const int donorCheck = getenv ("ORBITER_VK_LENS_DONOR_CHECK") ? std::max (atoi (getenv ("ORBITER_VK_LENS_DONOR_CHECK")), 2) : 0;
+	static int donorFrame = 0;
+	if (donorCheck && lensDonor && ++donorFrame == donorCheck) {
+		VECTOR3 dp;
+		ObservedPos (lensDonor, dp);
+		VECTOR3 v = RelApparentView (view.TransformPoint (dp - camPos));
+		double vd[3] = { v.x, v.y, v.z };
+		lens->CheckDonor (vd);
+	}
 }
 
 void Scene::UpdateNearStars ()
@@ -1370,6 +1392,7 @@ void Scene::UpdateNearStars ()
 		// (a star of the world placed by its configuration, Hemera, the
 		// S-stars: no point of the star field's, index -1)
 		if (!oapiGetNamedStar (i, &s) || s.teff <= 0.0) continue;
+		if (s.body) ObservedPos (s.body, s.pos); // (Hemera, fast about Nyx: seen where it was)
 		double d = std::max (length (s.pos - camPos), 1.0);
 		double flux = s.lumV * (AU_M / d) * (AU_M / d);
 		if (flux < NEAR_FLUX) continue;
@@ -1526,12 +1549,10 @@ void Scene::RelShiftColour (const VECTOR3 &gpos, float rgb[3]) const
 
 void Scene::ObservedPos (OBJHANDLE h, VECTOR3 &p) const
 {
-	oapiGetGlobalPos (h, &p);
-	if (!relOn || h == relSelf) return;
-	// (light-time: back along its motion; first order, the bodies far slower than light)
-	VECTOR3 v;
-	oapiGetGlobalVel (h, &v);
-	p -= v * (length (p - camPos) / 299792458.0);
+	// (light-time: where it was when its light left it; the camera's own
+	// vessel moving with it)
+	if (h == relSelf) oapiGetGlobalPos (h, &p);
+	else oapiGetObservedPos (h, camPos, camVel, &p);
 }
 
 void Scene::RenderShadows ()

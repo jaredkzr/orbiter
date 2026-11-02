@@ -77,7 +77,7 @@ layout(std140, set = 0, binding = 1) uniform Params {
 	vec4 glow;    // xy: the projection's jitter [px]; z: the lit outer disc's rim [M] (0: not drawn); w: its brightness
 	vec4 shape;   // x, y: the lit outer disc's half thickness over r at its inner edge and at the rim; z: the jets' brightness (0: none); w: their length [M]
 	vec4 donor;   // xyz: the donor's centre [M]; w: its mean radius [M] (0: none)
-	vec4 donorT;  // x: the donor's temperature [K]
+	vec4 donorT;  // x: the donor's temperature [K]; y: its orbit's angular velocity about the axis [rad/M] (its stream turning with it)
 	vec4 sbound;  // the stream's bounding sphere: centre, radius [M] (0: no stream)
 	vec4 spath[SPATH_N]; // its centre line, a polyline: x, y, the overflow's height above the plane [M], the tube's width [M]
 	vec4 schunk[SPATH_CHUNKS]; // bounding spheres of its segments, eight at a time (the overflow's above and below the disc)
@@ -85,6 +85,24 @@ layout(std140, set = 0, binding = 1) uniform Params {
 layout(push_constant) uniform Pass {
 	vec4 pass;    // x: this pass's spacing of corners [px]; y: 1 refining (the corners of every pixel)
 } Q;
+
+// light-time: the delay [M] of the point the ray is at (its light left
+// then: TD), from the camera's now (P.disc.w), along the step being taken
+// (from tdOrig along tdDir, tdBase at its start, TDR per M); Hemera and
+// its stream, turning with its orbit (P.donorT.y [rad/M]), seen where they
+// were; the gas's patterns as they were
+float TD = 0.0, tdBase = 0.0, TDR = 1.0, tdStep = 0.0;
+vec3 tdOrig = vec3 (0.0), tdDir = vec3 (0.0, 0.0, 1.0);
+float DelayAt (vec3 q) { return tdBase + TDR * dot (q - tdOrig, tdDir); }
+float Now () { return P.disc.w - TD; }
+float DonorPhi () { return P.stream.x - P.donorT.y * TD; }
+vec3 TurnZ (vec3 q, float ang)
+{
+	float c = cos (ang), s = sin (ang);
+	return vec3 (c * q.x - s * q.y, s * q.x + c * q.y, q.z);
+}
+// (a point at delay TD in the frame of Hemera's pattern now)
+vec3 ToPattern (vec3 q) { return TurnZ (q, P.donorT.y * DelayAt (q)); }
 
 // Page & Thorne's flux shape at r (M = 1): F = 3 Mdot / (8 pi) Q
 float DiscQ (float r, float a)
@@ -128,7 +146,7 @@ float DiscBrightness (vec3 x, float r, float Omega)
 {
 	const float PERIODS = 3.0;
 	float phi = atan (x.y, x.x);
-	float T = PERIODS * 6.2831853 / Omega, t = P.disc.w;
+	float T = PERIODS * 6.2831853 / Omega, t = Now ();
 	float s = 0.0;
 	for (int ph = 0; ph < 2; ph++) {
 		float tt = mod (t + float (ph) * 0.5 * T, T);
@@ -157,7 +175,7 @@ vec3 OuterGas (vec3 x, float r, float Omega)
 	float phi = atan (x.y, x.x);
 	float lr = log (r / rO);
 	float ring = 0.6 * Noise (vec3 (lr * 30.0, 0.5, 17.0), 1e4) + 0.4 * Noise (vec3 (lr * 90.0, 0.5, 29.0), 1e4);
-	float psi = phi - P.stream.x - lr / 0.36; // (pitch 20 deg)
+	float psi = phi - DonorPhi () - lr / 0.36; // (pitch 20 deg)
 	float arm = pow (max (0.5 + 0.5 * cos (2.0 * psi), 0.0), 3.0), armW = smoothstep (0.25 * rO, 0.7 * rO, r);
 	float tex = mix (1.0, DiscBrightness (x, r, Omega), 0.5);
 	float dens = (0.5 + 0.5 * ring) * tex;
@@ -168,7 +186,7 @@ vec3 OuterGas (vec3 x, float r, float Omega)
 	float thin = 1.0 - smoothstep (0.6, 1.03, r / (rO * rim));
 	float fade = smoothstep (0.85 * rT, rT, r) * thin * (0.5 + 0.5 * thin);
 	float a = clamp (mix (0.55 * dens, 0.2 * dens + 0.7 * arm, armW), 0.0, 0.92) * fade;
-	float side = P.stream.y > 0.0 ? max (cos (phi - P.stream.x), 0.0) * smoothstep (0.5 * rO, rO, r) : 0.0;
+	float side = P.stream.y > 0.0 ? max (cos (phi - DonorPhi ()), 0.0) * smoothstep (0.5 * rO, rO, r) : 0.0;
 	float em = P.glow.w * pow (rT / r, 0.75) * (0.6 + 0.4 * dens) * (1.0 + 1.5 * arm * armW) * (1.0 + 0.6 * side);
 	return vec3 (mix (4300.0, 3300.0, smoothstep (rT, rO, r)), em, a);
 }
@@ -177,13 +195,13 @@ vec3 OuterGas (vec3 x, float r, float Omega)
 // seconds long in the hole's time (its masses: Nyx's M is 0.49 s)
 float Flicker (float seed, float amp)
 {
-	float t = P.disc.w;
+	float t = Now ();
 	float n = 0.65 * Noise (vec3 (t / 120.0, 0.5, seed), 1e4) + 0.35 * Noise (vec3 (t / 25.0, 0.5, seed + 3.0), 1e4);
 	return 1.0 + amp * (2.0 * n - 1.0);
 }
 
 // where the stream strikes the rim (its azimuth), the rim's radius
-float HotPhi () { return P.stream.x + 0.9; }
+float HotPhi () { return DonorPhi () + 0.9; }
 
 // the outer disc puffed up downstream of the hot spot (0 to 1)
 float Bulge (float r, float phi)
@@ -254,7 +272,7 @@ vec2 StreamC (float s)
 {
 	float rL = P.stream.w, rH = P.stream.z;
 	float r = s <= 1.0 ? rL - s * (rL - rH) : rH * (1.0 - 0.9 * (s - 1.0));
-	float ph = P.stream.x + 0.9 * pow (max (s, 0.0), 1.5);
+	float ph = DonorPhi () + 0.9 * pow (max (s, 0.0), 1.5);
 	return r * vec2 (cos (ph), sin (ph));
 }
 
@@ -270,6 +288,7 @@ vec2 StreamC (float s)
 const float ROCHE_K = 0.4918, ROCHE_PHI = -2.16337 - 0.003, ROCHE_BACK = 1.5;
 float OutsideLobe (vec3 q)
 {
+	q = TurnZ (q, P.donorT.y * TD);
 	vec3 c = P.donor.xyz;
 	if (P.donor.w <= 0.0 || dot (q - c, q - c) > 4.0 * P.donor.w * P.donor.w) return 1.0;
 	vec3 ex = -normalize (vec3 (c.xy, 0.0)), ey = vec3 (-ex.y, ex.x, 0.0), o = (q - c) * (ROCHE_K / P.donor.w);
@@ -285,6 +304,7 @@ float OutsideLobe (vec3 q)
 float GridW (vec3 q) { return 1.2 * P.proj.z * 2.0 * P.proj.x / P.proj.w * length (q - P.cam.xyz); }
 vec3 StreamAt (vec3 q, out vec4 g, out vec3 tg)
 {
+	TD = DelayAt (q);
 	g = vec4 (0.0, 0.0, 0.0, 1.0), tg = vec3 (1.0, 0.0, 0.0);
 	float rL = P.stream.w, rH = P.stream.z, rq = length (q.xy);
 	float s = rq >= rH ? (rL - rq) / (rL - rH) : 1.0 + (1.0 - rq / rH) / 0.9;
@@ -323,7 +343,7 @@ vec3 StreamAt (vec3 q, out vec4 g, out vec3 tg)
 	float u = dot (off, vec2 (-t2.y, t2.x)) / we, v = dz / we;
 	// clumps and filaments drifting down it (at ~0.06 c: as gas falling
 	// from the inner Lagrange point to the rim)
-	float t = P.disc.w / 25.0;
+	float t = Now () / 25.0;
 	float n = Noise (vec3 (s * 36.0 - t, u * 1.3 + 7.0, v * 1.3), 1e4);
 	float fil = Noise (vec3 (s * 110.0 - 3.0 * t, u * 3.5, v * 3.5 + 11.0), 1e4);
 	float clump = 0.15 + 1.8 * n * n + 0.4 * fil;
@@ -346,12 +366,18 @@ void StreamCross (vec3 a, vec3 u, vec2 r, vec4 pm, float spin)
 {
 	float tc[3];
 	int nc = 0;
+	// (the polyline is the pattern's now: the part of the ray within r
+	// turned into its frame, a chord, its parameter mapped back)
+	vec3 A = ToPattern (a + u * r.x), B = ToPattern (a + u * r.y);
+	float Lp = max (length (B - A), 1e-6), sc = (r.y - r.x) / Lp;
+	vec3 ap = A, up = (B - A) / Lp;
+	vec2 rp = vec2 (0.0, Lp);
 	// (the groups of segments the ray passes near: most, none)
 	uint near = 0u;
 	for (int c = 0; c < SPATH_CHUNKS; c++) {
-		vec3 o = a - P.schunk[c].xyz;
-		float tm = clamp (-dot (o, u), r.x, r.y), R = P.schunk[c].w + 3.5 * GridW (P.schunk[c].xyz);
-		vec3 dc = o + u * tm;
+		vec3 o = ap - P.schunk[c].xyz;
+		float tm = clamp (-dot (o, up), rp.x, rp.y), R = P.schunk[c].w + 3.5 * GridW (P.schunk[c].xyz);
+		vec3 dc = o + up * tm;
 		if (dot (dc, dc) < R * R) near |= 1u << c;
 	}
 	if (near == 0u) return;
@@ -362,14 +388,14 @@ void StreamCross (vec3 a, vec3 u, vec2 r, vec4 pm, float spin)
 		float best = 0.0;
 		for (int i = br == 0 ? 0 : SPATH_MAIN; i < SPATH_N - 1; i++) {
 			if ((near & (1u << (i / 8))) == 0u) { run = false; i = 8 * (i / 8) + 7; continue; }
-			vec3 p0 = vec3 (P.spath[i].xy, zs * P.spath[i].z), e = vec3 (P.spath[i + 1].xy, zs * P.spath[i + 1].z) - p0, w = a - p0;
-			float ee = dot (e, e), ue = dot (u, e), uw = dot (u, w), ew = dot (e, w), den = ee - ue * ue;
+			vec3 p0 = vec3 (P.spath[i].xy, zs * P.spath[i].z), e = vec3 (P.spath[i + 1].xy, zs * P.spath[i + 1].z) - p0, w = ap - p0;
+			float ee = dot (e, e), ue = dot (up, e), uw = dot (up, w), ew = dot (e, w), den = ee - ue * ue;
 			float sg = den > 1e-9 * ee ? clamp ((ew - ue * uw) / den, 0.0, 1.0) : 0.0;
-			float t = ue * sg - uw;
-			vec3 dd = w + u * t - e * sg;
+			float tp = ue * sg - uw, t = r.x + tp * sc;
+			vec3 dd = w + up * tp - e * sg;
 			float sth = max (sqrt (max (den / ee, 0.0)), 0.15);
 			float wt = 3.5 * max (max (P.spath[i].w, P.spath[i + 1].w), GridW (p0 + e * sg));
-			if (dot (dd, dd) < wt * wt && t > r.x - wt / sth && t < r.y + wt / sth) {
+			if (dot (dd, dd) < wt * wt && t > r.x - wt / sth * sc && t < r.y + wt / sth * sc) {
 				if (!run && nc < 3) run = true, best = dot (dd, dd), tc[nc++] = t;
 				else if (run && dot (dd, dd) < best) best = dot (dd, dd), tc[nc - 1] = t;
 			} else run = false;
@@ -377,18 +403,23 @@ void StreamCross (vec3 a, vec3 u, vec2 r, vec4 pm, float spin)
 	}
 	if (nc == 0) return;
 	// (refined: the nearest approach, where the offset from the centre is
-	// across the ray; its length scale along the ray)
+	// across the ray's motion relative to the stream (which turns on as the
+	// delay grows); its length scale along the ray)
 	float lc[3];
 	for (int c = 0; c < nc; c++) {
 		vec4 g;
 		vec3 tg;
-		float t = tc[c], st2 = 1.0;
+		float t = tc[c], st2 = 1.0, ul = 1.0;
 		for (int it = 0; it < 3; it++) {
-			StreamAt (a + u * t, g, tg);
-			st2 = max (1.0 - dot (u, tg) * dot (u, tg), 0.0225);
-			t -= clamp (dot (g.xyz, u) / st2, -4.0 * g.w / sqrt (st2), 4.0 * g.w / sqrt (st2));
+			vec3 q = a + u * t;
+			StreamAt (q, g, tg);
+			vec3 ue = u + (P.donorT.y * TDR) * vec3 (-q.y, q.x, 0.0);
+			ul = length (ue);
+			vec3 un = ue / ul;
+			st2 = max (1.0 - dot (un, tg) * dot (un, tg), 0.0225);
+			t -= clamp (dot (g.xyz, un) / (st2 * ul), -4.0 * g.w / sqrt (st2), 4.0 * g.w / sqrt (st2));
 		}
-		tc[c] = t, lc[c] = g.w / sqrt (st2);
+		tc[c] = t, lc[c] = g.w / (sqrt (st2) * ul);
 	}
 	// (front to back; one crossing found twice counted once)
 	for (int i = 0; i < nc - 1; i++)
@@ -427,13 +458,14 @@ void StreamCross (vec3 a, vec3 u, vec2 r, vec4 pm, float spin)
 // carried downstream (temperature, brightness, opacity per M)
 vec3 SplashAt (vec3 q, float fl)
 {
+	TD = DelayAt (q);
 	float ph = HotPhi (), rH = P.stream.z;
 	vec3 er = vec3 (cos (ph), sin (ph), 0.0), ep = vec3 (-er.y, er.x, 0.0);
 	vec3 c = er * rH + ep * (0.03 * rH);
 	vec3 l = vec3 (dot (q - c, er) / (0.018 * rH), dot (q - c, ep) / (0.05 * rH), q.z / (0.025 * rH));
 	float d2 = dot (l, l);
 	if (d2 > 9.0) return vec3 (0.0);
-	float n = Noise (vec3 (l.x * 2.5, l.y * 2.5 - P.disc.w / 40.0, l.z * 2.5 + 5.0), 1e4);
+	float n = Noise (vec3 (l.x * 2.5, l.y * 2.5 - Now () / 40.0, l.z * 2.5 + 5.0), 1e4);
 	float k = 1.5 / (1.7725 * 0.025 * rH) * exp (-d2) * (0.5 + n);
 	return vec3 (8000.0 * pow (fl, 0.25), 0.3 * fl, k);
 }
@@ -443,15 +475,16 @@ vec3 SplashAt (vec3 q, float fl)
 // ray's direction, back from the camera)
 vec2 JetAt (vec3 q, vec3 u)
 {
+	TD = DelayAt (q);
 	float z = abs (q.z), L = P.shape.w;
 	if (z < 4.0 || z > L) return vec2 (0.0);
 	float w = 1.2 + 0.05 * z, rc = length (q.xy);
 	if (rc > 3.0 * w) return vec2 (0.0);
 	float sg = q.z > 0.0 ? 1.0 : -1.0;
 	// (knots: irregular, moving out at 0.9 c)
-	float kn = Noise (vec3 ((z - 0.9 * P.disc.w) / 12.0, sg * 5.0, 1.0), 1e4);
+	float kn = Noise (vec3 ((z - 0.9 * Now ()) / 12.0, sg * 5.0, 1.0), 1e4);
 	float knots = 0.5 + 1.6 * kn * kn * kn;
-	float rho = exp (-rc * rc / (w * w)) * pow (max (z, 12.0) / 12.0, -1.3) * knots * smoothstep (L, 0.7 * L, z) * smoothstep (4.0, 8.0, z) * (1.0 + 0.3 * Noise (vec3 (z * 0.3 - P.disc.w * 0.3, rc / w * 2.0, sg * 9.0), 1e4));
+	float rho = exp (-rc * rc / (w * w)) * pow (max (z, 12.0) / 12.0, -1.3) * knots * smoothstep (L, 0.7 * L, z) * smoothstep (4.0, 8.0, z) * (1.0 + 0.3 * Noise (vec3 (z * 0.3 - Now () * 0.3, rc / w * 2.0, sg * 9.0), 1e4));
 	const float BETA = 0.9, GAM = 2.2942;
 	// (the boost capped: seen down a jet it would outshine all (a blazar))
 	float D = min (1.0 / (GAM * (1.0 - BETA * dot (-u, vec3 (0.0, 0.0, sg)))), 1.6);
@@ -502,8 +535,9 @@ void Volumes (vec3 a0, vec3 b0, vec4 pm, float spin)
 	// jets' width at its farthest from the axis and the plane: rays wound
 	// about the hole, many steps long, sample nothing)
 	float rmax = max (length (a0.xy), length (b0.xy)), zmax = max (abs (a0.z), abs (b0.z));
+	TD = DelayAt (a0); // (the stream's bounds where they were then: turned back)
 	if (rO > 0.0 && rmax > 0.85 * P.disc.z) rg[0] = CylSlab (a0, u, L, 1.15 * rO, 3.0 * Height (min (rmax, 1.15 * rO), 1.0));
-	if (P.sbound.w > 0.0) rg[1] = Sphere (a0, u, L, P.sbound.xyz, P.sbound.w);
+	if (P.sbound.w > 0.0) rg[1] = Sphere (a0, u, L, TurnZ (P.sbound.xyz, -P.donorT.y * TD), P.sbound.w);
 	if (P.sbound.w > 0.0) rg[2] = Sphere (a0, u, L, vec3 (cos (HotPhi ()), sin (HotPhi ()), 0.0) * rH, 0.3 * rH);
 	if (P.shape.z > 0.0 && zmax > 4.0) rg[3] = CylSlab (a0, u, L, 3.0 * (1.2 + 0.05 * min (zmax, P.shape.w)), P.shape.w);
 	if (rg[0].x >= rg[0].y && rg[1].x >= rg[1].y && rg[2].x >= rg[2].y && rg[3].x >= rg[3].y) return;
@@ -535,6 +569,7 @@ void Volumes (vec3 a0, vec3 b0, vec4 pm, float spin)
 		if (c == 0)
 			for (int m = 0; m < 3; m++) {
 				vec3 qg = a0 + u * (r.x + len * 0.5 * float (m));
+				TD = DelayAt (qg);
 				float rr = clamp (length (qg.xy), 0.85 * P.disc.z, 1.12 * rO);
 				ogs[m] = OuterGas (vec3 (normalize (qg.xy) * rr, 0.0), rr, 1.0 / (rr * sqrt (rr) + spin));
 			}
@@ -542,6 +577,7 @@ void Volumes (vec3 a0, vec3 b0, vec4 pm, float spin)
 			float tk = (float (k) + DITH) / float (n);
 			vec3 q = a0 + u * (r.x + tk * len);
 			curDepth = Depth (q);
+			TD = DelayAt (q);
 			if (c == 0) {
 				float rr = length (q.xy);
 				if (rr < 0.85 * P.disc.z || rr > 1.12 * rO) continue;
@@ -566,10 +602,9 @@ void Volumes (vec3 a0, vec3 b0, vec4 pm, float spin)
 
 // the donor's body (an ellipsoid within its drawn Roche lobe): the first
 // point of the segment a + u t (0..L) on it (-1: none), its normal
-float DonorHit (vec3 a0, vec3 u, float L, out vec3 nrm)
+float DonorHitNow (vec3 a0, vec3 u, float L, out vec3 nrm)
 {
 	nrm = vec3 (0.0, 0.0, 1.0);
-	if (P.donor.w <= 0.0) return -1.0;
 	vec3 c = P.donor.xyz, ex = -normalize (vec3 (c.xy, 0.0)), ez = vec3 (0.0, 0.0, 1.0), ey = cross (ez, ex);
 	// (within the teardrop star.frag draws: x from -0.95 to 1.05 radii, the cusp at 1.41)
 	vec3 S = vec3 (1.0, 0.85, 0.82) * P.donor.w;
@@ -582,6 +617,20 @@ float DonorHit (vec3 a0, vec3 u, float L, out vec3 nrm)
 	t = max (t, 0.0);
 	vec3 g = (lo + ld * t) / S;
 	nrm = normalize (ex * g.x + ey * g.y + ez * g.z);
+	return t;
+}
+float DonorHit (vec3 a0, vec3 u, float L, out vec3 nrm)
+{
+	nrm = vec3 (0.0, 0.0, 1.0);
+	if (P.donor.w <= 0.0) return -1.0;
+	// (the star where it was when the light left its centre, as drawn
+	// (oapiGetObservedPos): the segment turned into the frame of its orbit
+	// now by the delay where the ray passes the centre)
+	vec3 c = TurnZ (P.donor.xyz, -P.donorT.y * DelayAt (a0));
+	float ang = P.donorT.y * DelayAt (a0 + u * clamp (dot (c - a0, u), 0.0, L));
+	float t = DonorHitNow (TurnZ (a0, ang), TurnZ (u, ang), L, nrm);
+	if (t < 0.0) return -1.0;
+	nrm = TurnZ (nrm, -ang);
 	return t;
 }
 
@@ -651,6 +700,7 @@ void main ()
 		float s = -xd - sqrt (max (xd * xd - (rc * rc - RIN * RIN), 0.0));
 		x += d * s;
 		p.xyz = KerrLightMomentum (x, d, p.w, a);
+		tdBase = s; // (the light-time to there)
 	}
 
 	int nmax = int (P.lim.z);
@@ -684,6 +734,12 @@ void main ()
 		vec4 ps1 = p;
 		float Ls = length (xs1 - xs0);
 		vec3 us = (xs1 - xs0) / max (Ls, 1e-9);
+		// (the light-time along it: its length, as the drawn objects' light-
+		// time is (oapiGetObservedPos: flat space; the hole's own delay, a
+		// few M, left out of both))
+		float dT = Ls;
+		tdBase += k > 0 ? tdStep : 0.0;
+		tdOrig = xs0, tdDir = us, TDR = dT / max (Ls, 1e-9), tdStep = dT;
 		bool crossing = P.disc.x > 0.0 && xp.z * x.z < 0.0;
 		// (the donor's body, before the disc's plane)
 		vec3 dn;
@@ -723,6 +779,7 @@ void main ()
 			float rc = KerrR (xc, a);
 			Volumes (xs0, xc, pp, a);
 			curDepth = Depth (xc);
+			TD = DelayAt (xc);
 			// (the glowing disc: opaque, fading out over its outer tenth,
 			// flickering)
 			float rT = P.disc.z;

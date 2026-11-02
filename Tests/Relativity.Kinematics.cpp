@@ -113,6 +113,28 @@ TEST_CASE ("Aberration and Doppler shift", "[light]")
 	}
 }
 
+TEST_CASE ("Light-time", "[light]")
+{
+	// straight: the light left where the body was dt ago, dt = |pe - obs| / c
+	Vector p (3e8, 4e8, 0), v (0.3 * C, 0, 0), obs, pe;
+	double dt = EmissionPos (p, v, nullptr, nullptr, obs, pe);
+	CHECK ((pe - (p - v * dt)).length () < 1e-3);
+	CHECK_THAT ((pe - obs).length (), WithinRel (C * dt, 1e-10));
+	// in a circle about a parent (itself moving): the body's place dt ago on
+	// its circle, against the motion
+	const double R = 3e10, W = 0.07 * C / R;
+	Vector pp (1e9, -2e9, 5e8), vp (2e4, 1e4, 0);
+	for (double ang : { 0.0, 1.0, 2.5 }) {
+		Vector q = pp + Vector (std::cos (ang), std::sin (ang), 0) * R, vq = vp + Vector (-std::sin (ang), std::cos (ang), 0) * (W * R);
+		Vector o = pp + Vector (std::cos (ang + 0.3), std::sin (ang + 0.3), 0.2) * (25.0 * R);
+		dt = EmissionPos (q, vq, &pp, &vp, o, pe);
+		double a = ang - W * dt;
+		Vector ref = pp - vp * dt + Vector (std::cos (a), std::sin (a), 0) * R;
+		CHECK ((pe - ref).length () < 1e-6 * R);
+		CHECK_THAT ((pe - o).length (), WithinRel (C * dt, 1e-9));
+	}
+}
+
 TEST_CASE ("Hyperbolic motion", "[motion]")
 {
 	// a year at 1 g from rest: closed form, integrated thrust, and a

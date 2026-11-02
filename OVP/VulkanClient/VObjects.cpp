@@ -43,7 +43,7 @@ VObject::VObject (OBJHANDLE h, Scene *s)
 
 void VObject::Update ()
 {
-	scene->ObservedPos (hObj, gpos); // (relativistic view: where its light left it)
+	scene->ObservedPos (hObj, gpos); // (light-time: where its light left it)
 	oapiGetRotationMatrix (hObj, &grot);
 	camDist = length (gpos - scene->CameraPos());
 }

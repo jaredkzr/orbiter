@@ -346,7 +346,7 @@ void BlackHoleLens::Trace (const Frame &f)
 	p.shape[0] = 0.025f, p.shape[1] = 0.07f;
 	p.shape[2] = (float)f.jets, p.shape[3] = (float)f.jetLength;
 	for (int i = 0; i < 3; i++) p.donor[i] = (float)f.donorPos[i];
-	p.donor[3] = (float)f.donorR, p.donorT[0] = (float)f.donorTeff;
+	p.donor[3] = (float)f.donorR, p.donorT[0] = (float)f.donorTeff, p.donorT[1] = (float)f.donorOmega;
 	if (f.streamA > 0.0 && f.discTK > 0.0) {
 		// the stream's bounds: its centre line (lens_trace.comp's StreamC)
 		// from the inner Lagrange point to the rim and on over the disc's
@@ -530,6 +530,54 @@ void BlackHoleLens::Check ()
 	char buf[400];
 	snprintf (buf, sizeof (buf), "lens check at r = %.2f M: %d of %d rays captured or escaping as Kerr.h's, directions of %d of %d within 0.05 deg (worst %.4f deg) %s",
 		std::sqrt (f.cam[0] * f.cam[0] + f.cam[1] * f.cam[1] + f.cam[2] * f.cam[2]), agree, n, dirOk, dirN, worst, ok ? "ok" : "FAILED");
+	oapiWriteLogV ("VulkanClient: %s", buf);
+	printf ("%s\n", buf);
+	fflush (stdout);
+}
+
+void BlackHoleLens::CheckDonor (const double vd[3])
+{
+	const Frame &f = lastFrame;
+	if (f.donorR <= 0.0) return;
+	kerr::Hole K (1.0, f.a);
+	double l = std::sqrt (vd[0] * vd[0] + vd[1] * vd[1] + vd[2] * vd[2]), nk[3];
+	for (int i = 0; i < 3; i++) nk[i] = (f.v2k[i][0] * vd[0] + f.v2k[i][1] * vd[1] + f.v2k[i][2] * vd[2]) / l;
+	double nl = std::sqrt (nk[0] * nk[0] + nk[1] * nk[1] + nk[2] * nk[2]), qu[4];
+	for (int mu = 0; mu < 4; mu++) qu[mu] = -f.e[0][mu] + (nk[0] * f.e[1][mu] + nk[1] * f.e[2][mu] + nk[2] * f.e[3][mu]) / nl;
+	kerr::State st;
+	for (int i = 0; i < 3; i++) st.x[1 + i] = f.cam[i];
+	K.Lower (f.cam, qu, st.p);
+	// (along the ray: its length, the donor's centre turned back by its
+	// orbit over that delay, the nearest the ray's straight pieces pass it)
+	double prev[3] = { f.cam[0], f.cam[1], f.cam[2] }, len = 0.0, miss = 1e30;
+	double d0 = std::sqrt ((f.donorPos[0] - f.cam[0]) * (f.donorPos[0] - f.cam[0]) + (f.donorPos[1] - f.cam[1]) * (f.donorPos[1] - f.cam[1]) + (f.donorPos[2] - f.cam[2]) * (f.donorPos[2] - f.cam[2]));
+	kerr::Integrator opt;
+	opt.tol = 1e-11, opt.hmax = 0.02;
+	opt.stop = [&] (const kerr::State &q) {
+		const double *x = q.x + 1;
+		double d[3] = { x[0] - prev[0], x[1] - prev[1], x[2] - prev[2] }, sl = std::sqrt (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+		double ang = -f.donorOmega * (len + 0.5 * sl), ca = std::cos (ang), sa = std::sin (ang);
+		double c[3] = { ca * f.donorPos[0] - sa * f.donorPos[1], sa * f.donorPos[0] + ca * f.donorPos[1], f.donorPos[2] };
+		double w[3] = { c[0] - prev[0], c[1] - prev[1], c[2] - prev[2] };
+		double t = sl > 0.0 ? std::clamp ((w[0] * d[0] + w[1] * d[1] + w[2] * d[2]) / (sl * sl), 0.0, 1.0) : 0.0;
+		double e[3] = { w[0] - d[0] * t, w[1] - d[1] * t, w[2] - d[2] * t };
+		miss = std::min (miss, std::sqrt (e[0] * e[0] + e[1] * e[1] + e[2] * e[2]));
+		len += sl;
+		for (int i = 0; i < 3; i++) prev[i] = x[i];
+		return len > d0 + 3.0 * f.donorR || K.R (x) < f.rh * 1.0005;
+	};
+	double h = 0.0;
+	kerr::Integrate (K, st, 1e9, opt, h);
+	// (allowed: the drawn scene's directions are flat, the trace's the
+	// camera's frame in the hole's curved space: apart by ~M/r over the
+	// distance (0.5 M/r measured); light-time and aberration, which this
+	// guards, shift it by v/c of the distance: 0.07 for Hemera)
+	double rc = std::sqrt (f.cam[0] * f.cam[0] + f.cam[1] * f.cam[1] + f.cam[2] * f.cam[2]);
+	double tol = 0.01 * f.donorR + d0 / std::max (rc, 1.0);
+	bool ok = miss < tol;
+	char buf[300];
+	snprintf (buf, sizeof (buf), "donor check at %.2f M: the drawn centre's ray passes the traced centre at %.5f M (allowed %.5f; radius %.3f M) %s",
+		d0, miss, tol, f.donorR, ok ? "ok" : "FAILED");
 	oapiWriteLogV ("VulkanClient: %s", buf);
 	printf ("%s\n", buf);
 	fflush (stdout);

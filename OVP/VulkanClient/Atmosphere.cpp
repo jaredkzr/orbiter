@@ -578,7 +578,7 @@ void Atmosphere::Update ()
 	AtmUniforms u{};
 	VECTOR3 ppos;
 	MATRIX3 prot;
-	scene->ObservedPos (hPlanet, ppos); // (relativistic view: where its light left it)
+	scene->ObservedPos (hPlanet, ppos); // (light-time: where its light left it)
 	oapiGetRotationMatrix (hPlanet, &prot);
 
 	// view space (camera frame) -> planet frame

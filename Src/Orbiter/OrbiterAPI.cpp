@@ -923,6 +923,27 @@ DLLEXPORT void oapiGetGlobalVel (OBJHANDLE hObj, VECTOR3 *vel)
 	}
 }
 
+DLLEXPORT double oapiGetObservedPos (OBJHANDLE hObj, const VECTOR3 &obsPos, const VECTOR3 &obsVel, VECTOR3 *pos)
+{
+	const Body *b = (const Body*)hObj;
+	Vector p (b->GPos ()), v (b->GVel ()), o (obsPos.x, obsPos.y, obsPos.z), vo (obsVel.x, obsVel.y, obsVel.z), pe;
+	*pos = _V(p.x, p.y, p.z);
+	if (!b->s0) return 0.0;
+	const CelestialBody *par = b->ElRef ();
+	Vector pp, vp;
+	if (par && par != b) pp = par->GPos (), vp = par->GVel ();
+	else par = nullptr;
+	double dt = relativity::EmissionPos (p, v, par ? &pp : nullptr, par ? &vp : nullptr, o, pe);
+	if (vo.length () < REL_VIEW_BETA * relativity::C) {
+		// (slow: the observer's frame, first order; only what moves at
+		// relativistic speeds relative to it)
+		double br = (v - vo).length () / relativity::C, f = std::clamp ((br - 2e-4) / 6e-4, 0.0, 1.0);
+		pe = p + (pe + vo * dt - p) * (f * f * (3.0 - 2.0 * f));
+	}
+	*pos = _V(pe.x, pe.y, pe.z);
+	return dt;
+}
+
 DLLEXPORT void oapiGetFocusGlobalPos (VECTOR3 *pos)
 {
 	Vector gp(g_focusobj->GPos());

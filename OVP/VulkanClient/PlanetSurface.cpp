@@ -1054,7 +1054,7 @@ void PlanetSurface::Prepare ()
 	if (preparedFrame == scene->FrameNo ()) return;
 	preparedFrame = scene->FrameNo ();
 	frame++;
-	scene->ObservedPos (hPlanet, ppos); // (relativistic view: where its light left it)
+	scene->ObservedPos (hPlanet, ppos); // (light-time: where its light left it)
 	oapiGetRotationMatrix (hPlanet, &prot);
 	if (clouds) {
 		// the cloud layer rotates about the planet axis relative to the surface

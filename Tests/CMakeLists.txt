@@ -231,6 +231,24 @@ if (ORBITER_TEST_EXE)
 			ENVIRONMENT "ORBITER_VK_OFFSCREEN=1;ORBITER_VK_LENS_CHECK=30;ORBITER_VK_SKY_OBSERVER=10,0,0"
 			PASS_REGULAR_EXPRESSION "lens check at r = [0-9.]+ M: .* ok"
 			FAIL_REGULAR_EXPRESSION "FAILED")
+		# Nyx's donor star where the scene draws it (light-time, aberration)
+		# and where the lens trace sees it: at rest relative to the hole, and
+		# moving with the star (0.07 c: the relativistic view)
+		foreach(mode Rest Comoving)
+			add_test(
+				NAME "Lens.Donor${mode}"
+				COMMAND ${ORBITER_TEST_EXE} -p VulkanClient "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Lens/Donor.scn" "--maxframes=40"
+				WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+			)
+			set(donor_env "ORBITER_VK_OFFSCREEN=1;ORBITER_VK_LENS_DONOR_CHECK=30")
+			if (mode STREQUAL "Comoving")
+				list(APPEND donor_env "DONOR_COMOVE=1")
+			endif()
+			set_tests_properties(Lens.Donor${mode} PROPERTIES TIMEOUT 120
+				ENVIRONMENT "${donor_env}"
+				PASS_REGULAR_EXPRESSION "donor check at [0-9.]+ M: .* ok"
+				FAIL_REGULAR_EXPRESSION "FAILED")
+		endforeach()
 	endif()
 
 endif()

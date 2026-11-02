@@ -121,8 +121,9 @@ public:
 	void RelSelfView (float out[4]) const;
 	const VECTOR3 &RelBeta () const { return relBeta; } ///< the camera's velocity [c], global frame (0: off)
 	VECTOR3 RelBetaView () const { return relOn ? view.TransformPoint (relBeta) : _V(0, 0, 0); } ///< in view space
-	/// where an object is seen: its global position when its light left it
-	/// (relativistic view; else where it is)
+	/// where an object is seen: where it was when its light left it
+	/// (oapiGetObservedPos: in the relativistic view the global frame's,
+	/// aberrated when drawn; slower, only objects fast relative to the camera)
 	void ObservedPos (OBJHANDLE h, VECTOR3 &p) const;
 	/// object-to-view transform for an object at global position gpos with rotation grot
 	Mat4 ModelView (const VECTOR3 &gpos, const MATRIX3 &grot) const;
@@ -489,6 +490,7 @@ private:
 	void UpdateRelativity ();
 	bool relOn = false;   // relativistic view
 	VECTOR3 relBeta{};    // the camera's velocity [c], global frame
+	VECTOR3 camVel{};     // the camera's velocity [m/s] the light-time is taken for (ObservedPos)
 	OBJHANDLE relSelf = nullptr; // the camera's own vessel (moving with it)
 	double relSelfRad = 0.0;
 	VECTOR3 shakeLP{}, shakeV{}; // the cockpit view's jolts: the vessel's aerodynamic acceleration, low-passed; the jolt, smoothed

@@ -10,6 +10,7 @@
 #include "Psys.h"
 #include "Pane.h"
 #include "Log.h"
+#include "Relativity.h"
 #include <fstream>
 
 using namespace std;
@@ -371,13 +372,31 @@ void HUD::AddMesh_CenterMarker (int &ivtx, int &iidx)
 	ivtx += nvtx;
 }
 
-bool HUD::AddMesh_Marker (int &ivtx, int &iidx, const Vector &dir, int markerid, double *xcnt, double *ycnt)
+Vector HUD::SeenDir (const Body *obj, const Body *self)
+{
+	Vector o (self->GPos ()), v (self->GVel ());
+	VECTOR3 pe;
+	oapiGetObservedPos ((OBJHANDLE)obj, _V(o.x, o.y, o.z), _V(v.x, v.y, v.z), &pe);
+	Vector d = (Vector (pe.x, pe.y, pe.z) - o).unit ();
+	if (v.length () >= REL_VIEW_BETA * relativity::C) d = relativity::Aberrate (d, v);
+	return d;
+}
+
+bool HUD::GhostApart (const Vector &a, const Vector &b) const
+{
+	double xa, ya, xb, yb;
+	if (!GlobalToHUD (b, xb, yb)) return false;
+	if (!GlobalToHUD (a, xa, ya)) return true;
+	return std::hypot (xa - xb, ya - yb) > 2.0 * spec.Markersize;
+}
+
+bool HUD::AddMesh_Marker (int &ivtx, int &iidx, const Vector &dir, int markerid, double *xcnt, double *ycnt, double scale)
 {
 	double x, y;
 
 	if (GlobalToHUD (dir, x, y)) {
 		int i;
-		double dx = spec.Markersize*0.7, u0, v0;
+		double dx = spec.Markersize*0.7*scale, u0, v0;
 		double dt = 48.0;
 		const int nvtx = 4;
 		const int nidx = 6;
@@ -1886,9 +1905,16 @@ void HUD_Docking::Display (oapi::Sketchpad *skp)
 	slen = strlen (cbuf+1);
 	skp->Text (x-(slen*fW)/2, y+spec.Markersize, cbuf+1, slen);
 
-	// target marker
+	// target marker: where it is seen (light-time, aberration); a small
+	// ghost where it is, if that is apart
 	Vector prel = tgt->GPos() - self->GPos();
 	len = prel.length(); prel /= len;
+	Vector pseen = SeenDir (tgt, self);
+	if (GhostApart (pseen, prel) && GlobalToHUD (prel, x, y)) {
+		int g = spec.Markersize / 2;
+		skp->Rectangle (x-g, y-g, x+g+1, y+g+1);
+	}
+	prel = pseen;
 	if (GlobalToHUD (prel, x, y)) {
 		skp->Rectangle (x-spec.Markersize, y-spec.Markersize, x+spec.Markersize+1, y+spec.Markersize+1);
 	} else {
@@ -2023,9 +2049,13 @@ void HUD_Docking::UpdateMesh (int &ivtx, int &iidx)
 	}
 	AddMesh_Billboard (ivtx, iidx, xcnt-0.7*renderprm.scal*vstr1width, ycnt-renderprm.scal*60, 1.4*renderprm.scal*vstr1width, renderprm.scal*19.6, 0, 216, vstr1width, 13);
 
-	// target marker
+	// target marker: where it is seen (light-time, aberration); a small
+	// ghost where it is, if that is apart
 	Vector prel = tgt->GPos() - self->GPos();
 	len = prel.length(); prel /= len;
+	Vector pseen = SeenDir (tgt, self);
+	if (GhostApart (pseen, prel)) AddMesh_Marker (ivtx, iidx, prel, 2, 0, 0, 0.5);
+	prel = pseen;
 	if (!AddMesh_Marker (ivtx, iidx, prel, 2, &xcnt, &ycnt))
 		AddMesh_DirectionMarker (ivtx, iidx, prel, false, &xcnt, &ycnt);
 	sprintf (cbuf, "D[%s]%s", tgt->Name(), DistStr(len));

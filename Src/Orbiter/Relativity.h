@@ -68,6 +68,12 @@ namespace relativity {
 	/// (> 1: blueshift). Specific intensity scales by D^3 (I_nu / nu^3 is
 	/// invariant), a blackbody of temperature T is seen at D T.
 	double Doppler (const Vector &n, const Vector &v);
+	/// Light-time: where a body at p moving at v (S's positions and
+	/// velocities, now) was when it emitted the light now reaching obs: in
+	/// a circle about its parent (at pp, moving at vp; null: none, the body
+	/// moving straight), the parent straight; returns the light's travel
+	/// time [s], pe the emission's place
+	double EmissionPos (const Vector &p, const Vector &v, const Vector *pp, const Vector *vp, const Vector &obs, Vector &pe);
 
 	// ===================================================================
 	// Gravity and clocks (weak fields: first post-Newtonian order)

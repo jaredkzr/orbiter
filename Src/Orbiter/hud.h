@@ -54,7 +54,15 @@ protected:
 
 	void AddMesh_Billboard (int &ivtx, int &iidx, double x0, double y0, double dx, double dy, int texx, int texy, int texw, int texh);
 	void AddMesh_CenterMarker (int &ivtx, int &iidx);
-	bool AddMesh_Marker (int &ivtx, int &iidx, const Vector &dir, int markerid, double *xcnt=0, double *ycnt=0);
+	bool AddMesh_Marker (int &ivtx, int &iidx, const Vector &dir, int markerid, double *xcnt=0, double *ycnt=0, double scale=1.0);
+
+	// the direction an object is seen in from the focus vessel: light-time
+	// (oapiGetObservedPos), aberrated in the relativistic view (the vessel
+	// at REL_VIEW_BETA of c or faster); unit vector, global frame
+	static Vector SeenDir (const Body *obj, const Body *self);
+	// whether directions a (seen) and b (where it is) are far enough apart
+	// on the HUD for a ghost marker at b
+	bool GhostApart (const Vector &a, const Vector &b) const;
 	void AddMesh_DirectionMarker (int &ivtx, int &iidx, const Vector &dir, bool prograde=false, double *xcnt=0, double *ycnt=0);
 	void AddMesh_Readout (int &ivtx, int &iidx, int side, const char *str, int label=0);
 
