@@ -19,6 +19,12 @@
 #include "lens_stars.comp.h"
 
 namespace {
+	// the stream's centre line: a polyline, s from just behind the inner
+	// Lagrange point to the rim (SPATH_MAIN segments), then on over the
+	// disc's faces (the overflow, to s = 1.5); bounding spheres of its
+	// segments eight at a time (the overflow's: above and below the disc)
+	constexpr int SPATH_MAIN = 32, SPATH_N = SPATH_MAIN + 9, SPATH_CHUNKS = (SPATH_N - 1) / 8;
+
 	struct Params {
 		float cam[4];
 		float e[4][4];
@@ -32,6 +38,12 @@ namespace {
 		float roots[4];
 		float stream[4];
 		float glow[4];
+		float shape[4];
+		float donor[4];
+		float donorT[4];
+		float sbound[4];
+		float spath[SPATH_N][4];
+		float schunk[SPATH_CHUNKS][4];
 	};
 }
 
@@ -70,12 +82,12 @@ void BlackHoleLens::Shutdown ()
 	if (starPL) vkDestroyPipelineLayout (ctx->device, starPL, nullptr);
 	if (starLayout) vkDestroyDescriptorSetLayout (ctx->device, starLayout, nullptr);
 	starPipe = VK_NULL_HANDLE, starPL = VK_NULL_HANDLE, starLayout = VK_NULL_HANDLE;
-	for (VkPipeline p : { tracePipe, drawPipe }) if (p) vkDestroyPipeline (ctx->device, p, nullptr);
+	for (VkPipeline p : { tracePipe, drawPipe, gasPipe }) if (p) vkDestroyPipeline (ctx->device, p, nullptr);
 	for (VkPipelineLayout l : { tracePL, drawPL }) if (l) vkDestroyPipelineLayout (ctx->device, l, nullptr);
 	if (pool) vkDestroyDescriptorPool (ctx->device, pool, nullptr);
 	for (VkDescriptorSetLayout l : { traceLayout, drawLayout }) if (l) vkDestroyDescriptorSetLayout (ctx->device, l, nullptr);
 	if (sampler) vkDestroySampler (ctx->device, sampler, nullptr);
-	tracePipe = drawPipe = VK_NULL_HANDLE, tracePL = drawPL = VK_NULL_HANDLE;
+	tracePipe = drawPipe = gasPipe = VK_NULL_HANDLE, tracePL = drawPL = VK_NULL_HANDLE;
 	pool = VK_NULL_HANDLE, traceLayout = drawLayout = VK_NULL_HANDLE, sampler = VK_NULL_HANDLE;
 	ready = traced = false;
 	ctx = nullptr;
@@ -173,7 +185,7 @@ void BlackHoleLens::CreatePipelines ()
 	// draw: full-screen triangle at infinity, added to the scene (as the Milky Way's)
 	{
 		VkDescriptorSetLayout sets[2] = { sky->DrawLayout (), drawLayout };
-		VkPushConstantRange pcr{ VK_SHADER_STAGE_FRAGMENT_BIT, 0, 28 * sizeof(float) };
+		VkPushConstantRange pcr{ VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32 * sizeof(float) };
 		VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 		plci.setLayoutCount = 2, plci.pSetLayouts = sets;
 		plci.pushConstantRangeCount = 1, plci.pPushConstantRanges = &pcr;
@@ -217,6 +229,11 @@ void BlackHoleLens::CreatePipelines ()
 		gpi.pColorBlendState = &cb, gpi.pDynamicState = &dy;
 		gpi.layout = drawPL;
 		VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &drawPipe));
+		// the gas: over the opaque scene where nearer (reversed depth),
+		// premultiplied (its light, and the opacity hiding what is behind)
+		ds.depthTestEnable = VK_TRUE, ds.depthWriteEnable = VK_FALSE, ds.depthCompareOp = VK_COMPARE_OP_GREATER;
+		cba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE, cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+		VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &gasPipe));
 		vkDestroyShaderModule (ctx->device, vs, nullptr);
 		vkDestroyShaderModule (ctx->device, fs, nullptr);
 	}
@@ -312,7 +329,10 @@ void BlackHoleLens::Trace (const Frame &f)
 	static const int maxSteps = getenv ("ORBITER_VK_LENS_STEPS") ? atoi (getenv ("ORBITER_VK_LENS_STEPS")) : MAX_STEPS;
 	static const double step = getenv ("ORBITER_VK_LENS_STEP") ? atof (getenv ("ORBITER_VK_LENS_STEP")) : STEP;
 	// (a disc: rays traced through all of it)
-	double discR = f.discTK > 0.0 ? 1.05 * std::max (f.discOut, 1.12 * f.glowRim) : 0.0; // (the lit outer disc's rim wanders out to ~1.1)
+	// (all of the disc traced: the lit outer disc's rim wanders out to ~1.1;
+	// the donor and its stream, the jets)
+	double discR = f.discTK > 0.0 ? 1.05 * std::max (std::max (f.discOut, 1.12 * f.glowRim), f.streamA + 2.0 * f.donorR) : 0.0;
+	discR = std::max (discR, f.jets > 0.0 ? 1.05 * f.jetLength : 0.0);
 	double rin = std::max (R_IN, discR), rout = std::max (R_OUT, discR);
 	p.lim[0] = (float)rin, p.lim[1] = (float)std::max (rout, 1.05 * rc), p.lim[2] = (float)maxSteps, p.lim[3] = (float)step;
 	p.inner[0] = (float)std::max (f.rm, 0.02), p.inner[1] = f.inside ? 1.0f : 0.0f, p.inner[2] = (float)f.rph;
@@ -322,6 +342,71 @@ void BlackHoleLens::Trace (const Frame &f)
 	p.stream[0] = (float)f.streamPhi, p.stream[1] = (float)f.streamA, p.stream[2] = (float)f.streamHot, p.stream[3] = (float)f.streamL1;
 	p.glow[0] = f.jitter[0], p.glow[1] = f.jitter[1];
 	p.glow[2] = f.discTK > 0.0 && f.glow > 0.0 ? (float)f.glowRim : 0.0f, p.glow[3] = (float)f.glow;
+	// (the lit outer disc's thickness, flaring: H/r at its inner edge, at the rim)
+	p.shape[0] = 0.025f, p.shape[1] = 0.07f;
+	p.shape[2] = (float)f.jets, p.shape[3] = (float)f.jetLength;
+	for (int i = 0; i < 3; i++) p.donor[i] = (float)f.donorPos[i];
+	p.donor[3] = (float)f.donorR, p.donorT[0] = (float)f.donorTeff;
+	if (f.streamA > 0.0 && f.discTK > 0.0) {
+		// the stream's bounds: its centre line (lens_trace.comp's StreamC)
+		// from the inner Lagrange point to the rim and on over the disc's
+		// faces (s to 1.5), the tube's reach, the overflow above and below
+		// (and its polyline: the points (x, y, the overflow's height above
+		// the plane, the tube's width), as lens_trace.comp's StreamC,
+		// StreamAt, Height and Bulge)
+		double rH = f.streamHot, rL = f.streamL1, lS = rL - rH, w0 = 0.12 * std::max (f.donorR, 0.1), wmax = w0 * 3.6;
+		double rT = p.disc[2], rO = p.glow[2], hotPhi = f.streamPhi + 0.9;
+		auto sstep = [](double e0, double e1, double x) { double t = std::clamp ((x - e0) / (e1 - e0), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); };
+		double lo[2] = { 1e30, 1e30 }, hi[2] = { -1e30, -1e30 }, pt[61][2];
+		for (int i = 0; i < SPATH_N + 61; i++) {
+			bool poly = i < SPATH_N;
+			double s = !poly ? 1.5 * (i - SPATH_N) / 60.0
+				: i <= SPATH_MAIN ? -0.5 / lS + (1.0 + 0.5 / lS) * i / SPATH_MAIN : 1.0 + 0.5 * (i - SPATH_MAIN) / (SPATH_N - 1 - SPATH_MAIN);
+			double r = s <= 1.0 ? rL - s * (rL - rH) : rH * (1.0 - 0.9 * (s - 1.0));
+			double ph = f.streamPhi + 0.9 * std::pow (std::max (s, 0.0), 1.5);
+			double x = r * std::cos (ph), y = r * std::sin (ph);
+			if (poly) {
+				double zc = 0.0;
+				if (s > 1.0) {
+					double d = std::fmod (ph - hotPhi, 2.0 * PI);
+					if (d < 0.0) d += 2.0 * PI;
+					double bl = (std::exp (-d / 0.9) + std::exp (-(2.0 * PI - d) / 0.12)) * sstep (0.6 * rO, 0.95 * rO, r);
+					double H = r * (p.shape[0] + (p.shape[1] - p.shape[0]) * sstep (rT, rO, r)) * (1.0 + 1.2 * bl);
+					zc = 1.3 * H * sstep (1.0, 1.12, s);
+				}
+				double w = s <= 1.0 ? w0 * (0.6 + 1.2 * s + 3.0 * std::exp (-std::max (s * lS, 0.0) / 1.4)) : w0 * 1.1;
+				p.spath[i][0] = (float)x, p.spath[i][1] = (float)y, p.spath[i][2] = (float)zc, p.spath[i][3] = (float)w;
+				continue;
+			}
+			double *q = pt[i - SPATH_N];
+			q[0] = x, q[1] = y;
+			for (int k = 0; k < 2; k++) lo[k] = std::min (lo[k], q[k]), hi[k] = std::max (hi[k], q[k]);
+		}
+		for (int c = 0; c < SPATH_CHUNKS; c++) {
+			double lo3[3] = { 1e30, 1e30, 1e30 }, hi3[3] = { -1e30, -1e30, -1e30 }, wc = 0.0, R2 = 0.0;
+			for (int i = 8 * c; i <= 8 * c + 8; i++)
+				for (int k = 0; k < 3; k++) {
+					double v = k < 2 ? p.spath[i][k] : -p.spath[i][2];
+					lo3[k] = std::min (lo3[k], v), hi3[k] = std::max (hi3[k], k < 2 ? v : (double)p.spath[i][2]);
+				}
+			double cc[3] = { 0.5 * (lo3[0] + hi3[0]), 0.5 * (lo3[1] + hi3[1]), 0.5 * (lo3[2] + hi3[2]) };
+			for (int i = 8 * c; i <= 8 * c + 8; i++) {
+				wc = std::max (wc, (double)p.spath[i][3]);
+				for (double zs : { 1.0, -1.0 }) {
+					double dx = p.spath[i][0] - cc[0], dy = p.spath[i][1] - cc[1], dz = zs * p.spath[i][2] - cc[2];
+					R2 = std::max (R2, dx * dx + dy * dy + dz * dz);
+				}
+			}
+			for (int k = 0; k < 3; k++) p.schunk[c][k] = (float)cc[k];
+			p.schunk[c][3] = (float)(std::sqrt (R2) + 3.5 * wc); // (the chord's sag well within)
+		}
+		double zmax = 1.3 * f.glowRim * 0.07 * 2.2 + 3.0 * wmax;
+		double cx = 0.5 * (lo[0] + hi[0]), cy = 0.5 * (lo[1] + hi[1]);
+		double R = 0.0;
+		for (int i = 0; i <= 60; i++) R = std::max (R, std::hypot (pt[i][0] - cx, pt[i][1] - cy));
+		p.sbound[0] = (float)cx, p.sbound[1] = (float)cy, p.sbound[2] = 0.0f;
+		p.sbound[3] = (float)std::sqrt ((R + 3.0 * wmax) * (R + 3.0 * wmax) + zmax * zmax);
+	}
 	{
 		const double PI = 3.14159265358979323846;
 		double ac = std::acos (std::clamp (f.a, -1.0, 1.0));
@@ -359,6 +444,7 @@ void BlackHoleLens::Trace (const Frame &f)
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, tracePL, 0, 1, &traceSet, 0, nullptr);
 	vkCmdPushConstants (cmd, tracePL, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof (pass), pass);
 	vkCmdDispatch (cmd, (mapW + 7) / 8, (mapH + 7) / 8, 1);
+	ctx->GpuMark ("lensgrid");
 	if (refine && grid > 1) {
 		// every pixel's corners in the cells not smooth (the grid's read)
 		barrier (CS, SW, CS, SW | SR);
@@ -481,8 +567,10 @@ void BlackHoleLens::BinStars (VkCommandBuffer cmd)
 
 void BlackHoleLens::Render (VkCommandBuffer cmd, const GalaxySky::Display &d, float sunSurface)
 {
+	drawn = false;
 	if (!ready || !traced) return;
-	struct { float colour[3][4]; float tone[4]; float grid[4]; float bg[4]; float disc[4]; } p{};
+	DrawParams &p = drawParams;
+	p = DrawParams ();
 	p.disc[0] = d.gain > 0.0f ? sunSurface / d.gain : 0.0f;
 	sky->DisplayParams (d, p.colour, p.tone);
 	p.grid[0] = (float)grid, p.grid[1] = sky->Fade (), p.grid[2] = cosmic ? 1.0f : 0.0f, p.grid[3] = refine && grid > 1 ? 1.0f : 0.0f;
@@ -490,6 +578,19 @@ void BlackHoleLens::Render (VkCommandBuffer cmd, const GalaxySky::Display &d, fl
 	p.bg[3] = stars ? 1.0f : 0.0f;
 	VkDescriptorSet sets[2] = { sky->DrawSet (), drawSet };
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawPipe);
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawPL, 0, 2, sets, 0, nullptr);
+	vkCmdPushConstants (cmd, drawPL, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof (p), &p);
+	vkCmdDraw (cmd, 3, 1, 0, 0);
+	drawn = true;
+}
+
+void BlackHoleLens::RenderGas (VkCommandBuffer cmd, float nearPlane, float M)
+{
+	if (!ready || !traced || !drawn) return;
+	DrawParams p = drawParams;
+	p.gas[0] = 1.0f, p.gas[1] = nearPlane, p.gas[2] = M;
+	VkDescriptorSet sets[2] = { sky->DrawSet (), drawSet };
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gasPipe);
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawPL, 0, 2, sets, 0, nullptr);
 	vkCmdPushConstants (cmd, drawPL, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof (p), &p);
 	vkCmdDraw (cmd, 3, 1, 0, 0);

@@ -10,7 +10,10 @@
 // at the edges of images and of the shadow, the colours of the corners
 // are. Cells that are not smooth (lenscell.glsl) take their pixels' own
 // corners (the refining pass's map). The shadow is black. Translucent gas
-// (the overlay: the disc's fading edge, its lit outer parts) over it all.
+// (the overlay: the disc's fading edge, its lit outer parts, the stream,
+// the jets) in a pass of its own after the opaque scene (gas.x = 1): at
+// the depth of its first layer, over what is farther (a donor star),
+// hidden by what is nearer.
 // The stars (lens_stars.comp's bins) are gathered: those inside the
 // footprint on the sky of a grid cell near the pixel are where the cell
 // maps them back to (inverse bilinear), brightened by the cell's solid
@@ -47,6 +50,7 @@ layout(push_constant) uniform Params {
 	vec4 grid;      // the grid's spacing [px], fade to skyB, the extragalactic background (1: drawn), cells refined (1)
 	vec4 bg;        // xyz: the hole's velocity relative to the cosmic background (Galactic, units of c); w: the stars (1: drawn)
 	vec4 disc;      // x: the radiance of a surface of the Sun's (scene) per 1 S10 through colour (STAR_BRIGHTNESS / gain)
+	vec4 gas;       // x: 1 the gas pass; y: the near plane [m]; z: the hole's mass M [m]
 } pc;
 
 const float STAR_SPAN = 0.9994; // cos 2 deg
@@ -190,28 +194,34 @@ void main ()
 	vec2 fr = clamp (mc - vec2 (i0), 0.0, 1.0);
 	vec4 c00 = texelFetch (lensMap, i0, 0), c10 = texelFetch (lensMap, i0 + ivec2 (1, 0), 0);
 	vec4 c01 = texelFetch (lensMap, i0 + ivec2 (0, 1), 0), c11 = texelFetch (lensMap, i0 + ivec2 (1, 1), 0);
+	vec4 o00 = texelFetch (overlayMap, i0, 0), o10 = texelFetch (overlayMap, i0 + ivec2 (1, 0), 0);
+	vec4 o01 = texelFetch (overlayMap, i0 + ivec2 (0, 1), 0), o11 = texelFetch (overlayMap, i0 + ivec2 (1, 1), 0);
 	vec4 w = vec4 ((1.0 - fr.x) * (1.0 - fr.y), fr.x * (1.0 - fr.y), (1.0 - fr.x) * fr.y, fr.x * fr.y);
-	vec3 c;
-	vec4 o;
-	if (pc.grid.w < 0.5 || LensCellSmooth (c00, c10, c01, c11)) {
-		c = Cell (c00, c10, c01, c11, w);
-		o = texelFetch (overlayMap, i0, 0) * w.x + texelFetch (overlayMap, i0 + ivec2 (1, 0), 0) * w.y
-			+ texelFetch (overlayMap, i0 + ivec2 (0, 1), 0) * w.z + texelFetch (overlayMap, i0 + ivec2 (1, 1), 0) * w.w;
-	} else {
+	if (!(pc.grid.w < 0.5 || LensCellSmooth (c00, c10, c01, c11))) {
 		// (refined: the pixel's own corners)
 		ivec2 j0 = clamp (ivec2 (floor (gl_FragCoord.xy)), ivec2 (0), textureSize (fineMap, 0) - 2);
 		vec2 fj = clamp (gl_FragCoord.xy - vec2 (j0), 0.0, 1.0);
-		vec4 v = vec4 ((1.0 - fj.x) * (1.0 - fj.y), fj.x * (1.0 - fj.y), (1.0 - fj.x) * fj.y, fj.x * fj.y);
-		c = Cell (texelFetch (fineMap, j0, 0), texelFetch (fineMap, j0 + ivec2 (1, 0), 0),
-			texelFetch (fineMap, j0 + ivec2 (0, 1), 0), texelFetch (fineMap, j0 + ivec2 (1, 1), 0), v);
-		o = texelFetch (fineOverlay, j0, 0) * v.x + texelFetch (fineOverlay, j0 + ivec2 (1, 0), 0) * v.y
-			+ texelFetch (fineOverlay, j0 + ivec2 (0, 1), 0) * v.z + texelFetch (fineOverlay, j0 + ivec2 (1, 1), 0) * v.w;
+		w = vec4 ((1.0 - fj.x) * (1.0 - fj.y), fj.x * (1.0 - fj.y), (1.0 - fj.x) * fj.y, fj.x * fj.y);
+		c00 = texelFetch (fineMap, j0, 0), c10 = texelFetch (fineMap, j0 + ivec2 (1, 0), 0);
+		c01 = texelFetch (fineMap, j0 + ivec2 (0, 1), 0), c11 = texelFetch (fineMap, j0 + ivec2 (1, 1), 0);
+		o00 = texelFetch (fineOverlay, j0, 0), o10 = texelFetch (fineOverlay, j0 + ivec2 (1, 0), 0);
+		o01 = texelFetch (fineOverlay, j0 + ivec2 (0, 1), 0), o11 = texelFetch (fineOverlay, j0 + ivec2 (1, 1), 0);
 	}
+	if (pc.gas.x > 0.5) {
+		// the gas: its light over what it hides (premultiplied), at the
+		// depth of its nearest corner's first layer
+		vec4 o = o00 * w.x + o10 * w.y + o01 * w.z + o11 * w.w;
+		if (o.z <= 1e-4 && o.y <= 1e-6) discard;
+		float dep = min (min (o00.w, o10.w), min (o01.w, o11.w));
+		gl_FragDepth = clamp (pc.gas.y / max (dep * pc.gas.z, pc.gas.y), 0.0, 1.0);
+		vec3 e = o.y > 0.0 && o.x > 100.0 ? DiscShade (o.x, o.y) : vec3 (0.0);
+		outColor = vec4 (min (e, vec3 (65000.0)), clamp (o.z, 0.0, 1.0));
+		return;
+	}
+	vec3 c = Cell (c00, c10, c01, c11, w);
 	if (pc.bg.w > 0.0) {
 		vec4 b = Stars (gl_FragCoord.xy);
 		c += max (vec3 (dot (pc.colour[0], b), dot (pc.colour[1], b), dot (pc.colour[2], b)), vec3 (0.0));
 	}
-	// (the translucent gas in front: its light over what it hides)
-	if (o.z > 0.0) c = c * (1.0 - min (o.z, 1.0)) + DiscShade (o.x, o.y);
 	outColor = vec4 (min (c, vec3 (65000.0)), 1.0);
 }

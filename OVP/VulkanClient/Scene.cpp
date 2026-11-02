@@ -1238,7 +1238,7 @@ void Scene::UpdateLens ()
 {
 	// the nearest black hole whose lens shows: its Einstein ring (sqrt (4M/r)
 	// for the sky far behind it) wider than two pixels
-	lensOn = false;
+	lensOn = false, lensDonor = nullptr;
 	if (!lens || !galaxy || !skySettings.milkyWay) return;
 	const double C = 299792458.0;
 	OBJHANDLE best = nullptr;
@@ -1313,6 +1313,7 @@ void Scene::UpdateLens ()
 	if (bi.discRate > 0.0) {
 		f.discTK = bi.discTempScale, f.discIn = bi.isco / bi.M, f.discOut = bi.discOuter / bi.M;
 		f.glowRim = bi.discGlow > 0.0 ? f.discOut : 0.0, f.glow = 0.25 * bi.discGlow;
+		f.jets = bi.jets, f.jetLength = bi.jetLength / bi.M;
 		// (the disc seen out to where it glows: beyond, cool and thin, the sky through it)
 		const double DISC_T_MIN = 3000.0; // [K] (cooler: dark in visible light; it would hide the sky behind)
 		for (double r = 1.5 * f.discIn; r < f.discOut; r *= 1.02)
@@ -1331,6 +1332,12 @@ void Scene::UpdateLens ()
 			f.streamPhi = std::atan2 (y, x);
 			f.streamL1 = f.streamA * (1.0 - rl);
 			f.streamHot = bi.discOuter / bi.M;
+			// (its body: drawn in the lensed sky too, for its images about the
+			// hole, behind its gas)
+			f.donorPos[0] = x, f.donorPos[1] = y, f.donorPos[2] = dotp (r, bi.axis);
+			f.donorR = oapiGetSize (bi.donor) / bi.M;
+			for (const NearStar &s : nearStars) if (s.body == bi.donor) f.donorTeff = s.teff;
+			lensDonor = bi.donor;
 		}
 	}
 	lens->Trace (f);
@@ -1416,6 +1423,15 @@ void Scene::RenderNearStars (bool transparent)
 		RelShiftColour (s.pos, c);
 		if (!transparent) {
 			if (PixelSize (s.radius, s.dist) < 0.5) continue;
+			// (a black hole's donor seen close behind it: its images about the
+			// hole, the lensed sky's (lens_trace.comp), not its mesh drawn
+			// bent, the pixels' rays straight)
+			if (lensOn && s.body && s.body == lensDonor) {
+				double dl = length (lensPos - camPos), ds = length (s.pos - camPos), dls = length (s.pos - lensPos);
+				double cosA = dotp (lensPos - camPos, s.pos - camPos) / std::max (dl * ds, 1e-30);
+				double thE = ds > dl ? std::sqrt (4.0 * lensM * dls / (dl * ds)) : 0.0;
+				if (cosA > std::cos (3.0 * thE + std::asin (std::min (s.radius * 1.5 / ds, 1.0)))) continue;
+			}
 			float d[3] = { c[0] * STAR_BRIGHTNESS, c[1] * STAR_BRIGHTNESS, c[2] * STAR_BRIGHTNESS };
 			// (its photosphere, turning: a G star in ~25 days, cool dwarfs slower)
 			double P = (s.teff < 4000.0 ? 80.0 : s.teff < 5300.0 ? 40.0 : 25.0) * 86400.0;
@@ -1428,7 +1444,8 @@ void Scene::RenderNearStars (bool transparent)
 				VECTOR3 hz = crossp (hx, hy);
 				R = _M(hx.x, hy.x, hz.x, hx.y, hy.y, hz.y, hx.z, hy.z, hz.z);
 				const VECTOR3 tide = _V(1, 0, 0);
-				DrawStar (ModelView (s.pos, R) * Mat4::Scale (1.3 * s.radius, 0.92 * s.radius, s.radius), d, s.teff, s.radius, s.seed, &tide);
+				// (its Roche lobe within the mesh: star.frag's ROCHE_BOX)
+				DrawStar (ModelView (s.pos, R) * Mat4::Scale (1.45 * s.radius, 0.93 * s.radius, 0.97 * s.radius), d, s.teff, s.radius, s.seed, &tide, true);
 				continue;
 			}
 			DrawStar (ModelView (s.pos, R) * Mat4::Scale (s.radius, s.radius, s.radius), d, s.teff, s.radius, s.seed);
@@ -2448,6 +2465,8 @@ void Scene::Render ()
 	for (auto *vo : list)
 		if (!dynamic_cast<VPlanet*>(vo)) vo->Render (RenderPass::Opaque);
 	ctx->GpuMark ("opaque");
+	// (near a black hole: its gas over what lies behind it, a donor star)
+	if (lensOn) lens->RenderGas (cmd, (float)nearPlane, (float)lensM);
 
 	// scorch marks on the ground (darkening the lit surface)
 	plumes->DrawScorch (camPos, camRot, FrameSet ());
@@ -2781,7 +2800,7 @@ void Scene::AddMeshRT (const VkMesh *mesh, const Mat4 &modelView, bool shadowOnl
 	if (!rtParts.empty()) rt->AddInstance (rtParts.data(), (uint32_t)rtParts.size(), modelView);
 }
 
-void Scene::DrawStar (const Mat4 &modelView, const float rgb[3], double teff, double radius, uint32_t seed, const VECTOR3 *tide)
+void Scene::DrawStar (const Mat4 &modelView, const float rgb[3], double teff, double radius, uint32_t seed, const VECTOR3 *tide, bool roche)
 {
 	VkCommandBuffer cmd = ctx->Cmd();
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, starPipe);
@@ -2812,7 +2831,7 @@ void Scene::DrawStar (const Mat4 &modelView, const float rgb[3], double teff, do
 		slot[k][3] = (float)fl[k].bright;
 	}
 	pc.pbr[0] = 0.06f; // (a flare's angular radius on the star)
-	if (tide) pc.heat[0] = (float)tide->x, pc.heat[1] = (float)tide->y, pc.heat[2] = (float)tide->z, pc.heat[3] = 1.0f;
+	if (tide) pc.heat[0] = (float)tide->x, pc.heat[1] = (float)tide->y, pc.heat[2] = (float)tide->z, pc.heat[3] = roche ? 2.0f : 1.0f;
 	vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 	vkCmdDrawIndexed (cmd, sphereNIdx, 1, 0, 0, 0);
 }

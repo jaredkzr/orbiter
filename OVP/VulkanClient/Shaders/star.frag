@@ -30,7 +30,7 @@ layout(push_constant) uniform Draw {
 	vec4 specular;   // flare 1: direction (star's frame), w: brightness (of the disc's centre; 0: none)
 	vec4 light;      // flare 2
 	vec4 pbr;        // x: a flare's angular radius [rad]
-	vec4 heat;       // xyz: towards the companion whose tide draws it out (star's frame), w: 1 (0: none)
+	vec4 heat;       // xyz: towards the companion whose tide draws it out (star's frame), w: 1 (0: none; 2: filling its Roche lobe, the mesh scaled by ROCHE_BOX)
 	vec4 maps;
 } draw;
 
@@ -38,6 +38,26 @@ layout(location = 0) in vec3 vPosView;
 layout(location = 1) in vec3 vNormalView;
 layout(location = 2) in vec2 vUV;
 layout(location = 0) out vec4 outColor;
+
+// a star filling its Roche lobe about a far heavier companion (Hill's
+// approximation): the equipotential through the inner Lagrange point, a
+// cusp there (x: towards the companion; z: the orbit's axis), in Hill's
+// units; its back rounded a little (an artistic liberty: a teardrop)
+const vec3 ROCHE_BOX = vec3 (1.45, 0.93, 0.97); // (the mesh: x, the orbit's axis, the third, in mean radii)
+const float ROCHE_K = 0.4918;                   // (Hill's units per mean radius: L1 at 1.41 of it)
+const float ROCHE_PHI = -2.16337 - 0.003;       // (the surface: just within L1's)
+const float ROCHE_BACK = 1.5;
+vec3 RocheH (vec3 m) { return vec3 (m.x * ROCHE_BOX.x, m.z * ROCHE_BOX.z, m.y * ROCHE_BOX.y) * ROCHE_K; } // (mesh -> Hill: x, y in the plane, z axis)
+float RochePhi (vec3 h)
+{
+	float bk = max (-h.x, 0.0);
+	return -1.0 / length (h) - 1.5 * h.x * h.x + 0.5 * h.z * h.z + ROCHE_BACK * bk * bk * bk;
+}
+vec3 RocheGrad (vec3 h)
+{
+	float r = length (h), r3 = r * r * r, bk = max (-h.x, 0.0);
+	return vec3 (h.x / r3 - 3.0 * h.x - 3.0 * ROCHE_BACK * bk * bk, h.y / r3, h.z / r3 + h.z);
+}
 
 float Hash13 (vec3 p)
 {
@@ -166,6 +186,30 @@ void main ()
 	if (q < 0.0) discard;
 	vec3 o = normalize (ro + rd * ((-b - sqrt (q)) / A)); // (the surface's direction in the star's frame: the pattern turns with it)
 	vec3 n = normalize (transpose (Mi) * o), v = -d;
+	bool roche = draw.heat.w > 1.5;
+	vec3 hH = vec3 (0.0), gH = vec3 (0.0, 0.0, 1.0);
+	if (roche) {
+		// (the ray marched through the mesh's ellipsoid to the lobe's surface, then bisected)
+		float t0 = max ((-b - sqrt (q)) / A, 0.0), t1 = (-b + sqrt (q)) / A;
+		const int NM = 48;
+		float dt = (t1 - t0) / float (NM), ta = t0, tb = -1.0;
+		for (int k = 1; k <= NM; k++) {
+			float tt = t0 + dt * float (k);
+			if (RochePhi (RocheH (ro + rd * tt)) < ROCHE_PHI) { tb = tt; break; }
+			ta = tt;
+		}
+		if (tb < 0.0) discard;
+		for (int k = 0; k < 10; k++) {
+			float tm = 0.5 * (ta + tb);
+			if (RochePhi (RocheH (ro + rd * tm)) < ROCHE_PHI) tb = tm; else ta = tm;
+		}
+		vec3 m = ro + rd * tb;
+		hH = RocheH (m);
+		gH = RocheGrad (hH);
+		vec3 gm = vec3 (gH.x * ROCHE_BOX.x, gH.z * ROCHE_BOX.y, gH.y * ROCHE_BOX.z) * ROCHE_K;
+		o = normalize (m);
+		n = normalize (transpose (Mi) * gm);
+	}
 	float mu = clamp (dot (n, v), 0.0, 1.0);
 	float act = draw.emissive.x, t = draw.emissive.y, seed = draw.emissive.w;
 
@@ -195,7 +239,14 @@ void main ()
 	vec3 col = draw.diffuse.rgb * ld * g * spot * (1.0 + fac);
 	// (drawn out by a tide: gravity darkening, the surface's gravity least
 	// towards the inner Lagrange point, its flux as g^0.32 (convective))
-	if (draw.heat.w > 0.5) col *= 1.0 - 0.45 * smoothstep (0.3, 1.0, dot (o, draw.heat.xyz));
+	if (roche) {
+		// (the lobe's surface gravity, least at the cusp, over the pole's;
+		// the side facing the companion's hot disc heated (an artistic
+		// liberty: really a few per cent))
+		col *= pow (clamp (length (gH) / 5.57, 0.05, 1.5), 0.32);
+		float irr = 0.25 * smoothstep (-0.2, 1.0, normalize (gH).x);
+		col *= (1.0 + irr) * mix (vec3 (1.0), vec3 (0.97, 1.0, 1.1), irr * 3.0);
+	} else if (draw.heat.w > 0.5) col *= 1.0 - 0.45 * smoothstep (0.3, 1.0, dot (o, draw.heat.xyz));
 	// (umbrae cooler: redder)
 	col *= mix (vec3 (1.0), vec3 (1.0, 0.75, 0.55), umbra);
 

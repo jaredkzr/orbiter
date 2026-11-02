@@ -3436,6 +3436,8 @@ typedef struct {
 	double discLuminosity; ///< [W]
 	OBJHANDLE donor;    ///< a star feeding the disc (orbiting the hole, filling its Roche lobe: a stream from it to the disc's rim); NULL: none
 	double discGlow;    ///< the disc's cool outer parts drawn lit by its inner parts (an artistic liberty; 0: not drawn, 1: clearly seen)
+	double jets;        ///< relativistic jets along the spin axis drawn (an artistic liberty; 0: none, 1: clearly seen)
+	double jetLength;   ///< their length [m]
 } BLACKHOLEINFO;
 
 /**

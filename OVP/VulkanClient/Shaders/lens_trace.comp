@@ -35,7 +35,19 @@
 //   ray going on through it: its light and opacity in a second map, the
 //   overlay: (g T, brightness, opacity, 0), the crossings composed front to
 //   back; an opaque crossing ends it (opacity 1: the overlay interpolated
-//   between the disc and gas in front of the sky without a seam).
+//   between the disc and gas in front of the sky without a seam). Its w:
+//   the view depth [M] of the first gas (the gas pass hides it behind
+//   bodies nearer, draws it over those farther: a donor star).
+// - Volumes along each step (straight): the lit outer disc as a slab,
+//   flaring outwards, puffed up downstream of the hot spot; the donor's
+//   stream as a tube from the inner Lagrange point to the rim (narrow
+//   there, widening, clumps and filaments drifting down it, heating as it
+//   falls) and on over the disc's faces (the overflow); the splash where
+//   it strikes the rim; jets along the spin axis (optically thin,
+//   Doppler-boosted). Sampled at points dithered per pixel and frame.
+// - The donor's body (an ellipsoid within its drawn Roche lobe): opaque,
+//   its light a black body of its temperature, limb darkened: its images
+//   about the hole (its direct image drawn over by the star's own).
 
 #version 450
 #extension GL_GOOGLE_include_directive : require
@@ -47,6 +59,9 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(rgba32f, set = 0, binding = 0) writeonly uniform image2D lensMap;     // (this pass's)
 layout(rgba16f, set = 0, binding = 2) writeonly uniform image2D overlayMap; // (this pass's)
 layout(rgba32f, set = 0, binding = 3) readonly uniform image2D gridMap;     // (the grid's: refining)
+// (the stream's polyline: SPATH_MAIN segments to the rim, then the overflow's)
+const int SPATH_MAIN = 32, SPATH_N = SPATH_MAIN + 9, SPATH_CHUNKS = (SPATH_N - 1) / 8;
+
 layout(std140, set = 0, binding = 1) uniform Params {
 	vec4 cam;     // xyz: the camera's position [M]; w: the spin a [M]
 	vec4 e[4];    // the camera's frame: e[0] its 4-velocity, e[1..3] its axes (xyz: space, w: t; contravariant)
@@ -60,41 +75,16 @@ layout(std140, set = 0, binding = 1) uniform Params {
 	vec4 roots;   // x0 = sqrt (r_ISCO), x1, x2, x3: the roots of x^3 - 3x + 2a = 0
 	vec4 stream;  // a donor's stream: its azimuth, distance [M] (0: none), the hot spot's radius [M] (the disc's rim), the inner Lagrange point's [M]
 	vec4 glow;    // xy: the projection's jitter [px]; z: the lit outer disc's rim [M] (0: not drawn); w: its brightness
+	vec4 shape;   // x, y: the lit outer disc's half thickness over r at its inner edge and at the rim; z: the jets' brightness (0: none); w: their length [M]
+	vec4 donor;   // xyz: the donor's centre [M]; w: its mean radius [M] (0: none)
+	vec4 donorT;  // x: the donor's temperature [K]
+	vec4 sbound;  // the stream's bounding sphere: centre, radius [M] (0: no stream)
+	vec4 spath[SPATH_N]; // its centre line, a polyline: x, y, the overflow's height above the plane [M], the tube's width [M]
+	vec4 schunk[SPATH_CHUNKS]; // bounding spheres of its segments, eight at a time (the overflow's above and below the disc)
 } P;
 layout(push_constant) uniform Pass {
 	vec4 pass;    // x: this pass's spacing of corners [px]; y: 1 refining (the corners of every pixel)
 } Q;
-
-// The stream from the donor's inner Lagrange point to the disc's rim, in
-// the disc's plane: curving ahead of the donor as it falls (the Coriolis
-// force of the turning binary), narrowing; shock-heated where it strikes the
-// rim: the hot spot. Its temperature [K] and brightness (0: none) at r, phi
-const float T_L1 = 3500.0, T_RIM = 6500.0, T_HOT = 8000.0; // (the hot spot about as bright as the disc's inner parts)
-vec2 Stream (float r, float phi, float dist)
-{
-	if (P.stream.y <= 0.0) return vec2 (0.0);
-	float rL1 = P.stream.w, rH = P.stream.z;
-	float s = (rL1 - r) / max (rL1 - rH, 1e-3); // (0 at L1, 1 at the rim)
-	if (s < -0.02 || s > 1.15) return vec2 (0.0);
-	float sc = clamp (s, 0.0, 1.0);
-	float phs = P.stream.x + 0.9 * pow (sc, 1.5); // (the centre line)
-	// (its half width [M]: a tenth of the donor's size at L1, narrowing; at
-	// least a pixel and a half across, then fainter: its light kept)
-	float w0 = 0.15 * (1.0 - 0.5 * sc);
-	float wpx = 1.5 * 2.0 * P.proj.x / P.proj.w * dist;
-	float wm = max (w0, wpx);
-	float dph = mod (phi - phs + 3.14159265, 6.2831853) - 3.14159265;
-	vec2 res = vec2 (0.0);
-	float u = dph * r / wm;
-	if (abs (u) < 1.0 && s <= 1.0) res = vec2 (mix (T_L1, T_RIM, sc * sc), 0.5 * (1.0 - u * u) * (w0 / wm));
-	// (the hot spot: on the rim where the stream meets it, drawn out along it)
-	float phh = P.stream.x + 0.9;
-	float dh = mod (phi - phh + 3.14159265, 6.2831853) - 3.14159265;
-	float hr = max (0.015 * rH, wpx), e = (r - rH) / hr, f = dh * rH / max (0.05 * rH, wpx);
-	float h2 = e * e + f * f;
-	if (h2 < 1.0) res = vec2 (T_HOT * (1.0 - 0.3 * h2), 0.8 * (1.0 - h2) * min (1.0, 0.015 * rH / hr));
-	return res;
-}
 
 // Page & Thorne's flux shape at r (M = 1): F = 3 Mdot / (8 pi) Q
 float DiscQ (float r, float a)
@@ -168,7 +158,7 @@ vec3 OuterGas (vec3 x, float r, float Omega)
 	float lr = log (r / rO);
 	float ring = 0.6 * Noise (vec3 (lr * 30.0, 0.5, 17.0), 1e4) + 0.4 * Noise (vec3 (lr * 90.0, 0.5, 29.0), 1e4);
 	float psi = phi - P.stream.x - lr / 0.36; // (pitch 20 deg)
-	float arm = pow (0.5 + 0.5 * cos (2.0 * psi), 3.0), armW = smoothstep (0.25 * rO, 0.7 * rO, r);
+	float arm = pow (max (0.5 + 0.5 * cos (2.0 * psi), 0.0), 3.0), armW = smoothstep (0.25 * rO, 0.7 * rO, r);
 	float tex = mix (1.0, DiscBrightness (x, r, Omega), 0.5);
 	float dens = (0.5 + 0.5 * ring) * tex;
 	// (inside, the rings; outside, the arms denser, between them thinner;
@@ -183,20 +173,416 @@ vec3 OuterGas (vec3 x, float r, float Omega)
 	return vec3 (mix (4300.0, 3300.0, smoothstep (rT, rO, r)), em, a);
 }
 
+// slow random variations of brightness (flicker), about a minute and some
+// seconds long in the hole's time (its masses: Nyx's M is 0.49 s)
+float Flicker (float seed, float amp)
+{
+	float t = P.disc.w;
+	float n = 0.65 * Noise (vec3 (t / 120.0, 0.5, seed), 1e4) + 0.35 * Noise (vec3 (t / 25.0, 0.5, seed + 3.0), 1e4);
+	return 1.0 + amp * (2.0 * n - 1.0);
+}
+
+// where the stream strikes the rim (its azimuth), the rim's radius
+float HotPhi () { return P.stream.x + 0.9; }
+
+// the outer disc puffed up downstream of the hot spot (0 to 1)
+float Bulge (float r, float phi)
+{
+	float d = mod (phi - HotPhi (), 6.2831853); // (downstream: the gas's motion, +phi)
+	return (exp (-d / 0.9) + exp (-(6.2831853 - d) / 0.12)) * smoothstep (0.6 * P.glow.z, 0.95 * P.glow.z, r);
+}
+
+// the lit outer disc's half thickness [M]: flaring outwards
+float Height (float r, float bulge)
+{
+	return r * mix (P.shape.x, P.shape.y, smoothstep (P.disc.z, P.glow.z, r)) * (1.0 + 1.2 * bulge);
+}
+
+// the light's frequency in the frame of gas at q moving at coordinate
+// velocity V (the camera's 1; 0: no such frame), pm the light's momentum
+float GasPu (vec3 q, vec3 V, vec4 pm, float a)
+{
+	float r = KerrR (q, a), r2 = r * r, ra = r2 + a * a;
+	float f = 2.0 * r2 * r / (r2 * r2 + a * a * q.z * q.z);
+	vec3 l = vec3 ((r * q.x + a * q.y) / ra, (r * q.y - a * q.x) / ra, q.z / r);
+	float nrm = 1.0 - dot (V, V) - f * (1.0 + dot (l, V)) * (1.0 + dot (l, V));
+	if (nrm <= 0.0) return 0.0;
+	return max (inversesqrt (nrm) * (pm.w + dot (pm.xyz, V)), 1e-6);
+}
+
+// circular orbit (Kerr's prograde Omega) about the axis at q
+vec3 Circular (vec3 q, float a)
+{
+	float r = max (length (q.xy), 1.0), Om = 1.0 / (r * sqrt (r) + a);
+	return vec3 (-Om * q.y, Om * q.x, 0.0);
+}
+
 // the overlay: translucent layers crossed (front to back): sum of g T e,
-// sum of e (light), opacity
+// sum of e (light), opacity; the view depth of the first [M]
 vec3 ov = vec3 (0.0);
+float ovDepth = 1e4, curDepth = 1e4, VDZ = 1.0, DITH = 0.5;
+float Depth (vec3 q) { return length (q - P.cam.xyz) * VDZ; }
 void Layer (float T, float em, float a)
 {
 	if (a <= 0.0) return;
+	if (ovDepth > 9e3 && a > 0.003) ovDepth = curDepth;
 	float e = em * a * (1.0 - ov.z);
 	ov.x += T * e, ov.y += e, ov.z += a * (1.0 - ov.z);
+}
+// (light alone: optically thin)
+void Emit (float T, float e)
+{
+	if (e <= 0.0) return;
+	if (ovDepth > 9e3 && e > 1e-4) ovDepth = curDepth;
+	e *= 1.0 - ov.z;
+	ov.x += T * e, ov.y += e;
 }
 
 void Finish (ivec2 id, vec4 m)
 {
 	imageStore (lensMap, id, m);
-	imageStore (overlayMap, id, vec4 (ov.y > 0.0 ? ov.x / ov.y : 0.0, ov.y, ov.z, 0.0));
+	imageStore (overlayMap, id, vec4 (ov.y > 0.0 ? ov.x / ov.y : 0.0, ov.y, ov.z, ovDepth));
+}
+
+// --- volumes ---
+
+// the stream's centre line in the disc's plane at s (0 at the inner
+// Lagrange point, 1 at the rim; beyond, on over the disc's faces: the
+// overflow, to 1.5): curving ahead of the donor as it falls (the Coriolis
+// force of the turning binary)
+vec2 StreamC (float s)
+{
+	float rL = P.stream.w, rH = P.stream.z;
+	float r = s <= 1.0 ? rL - s * (rL - rH) : rH * (1.0 - 0.9 * (s - 1.0));
+	float ph = P.stream.x + 0.9 * pow (max (s, 0.0), 1.5);
+	return r * vec2 (cos (ph), sin (ph));
+}
+
+// the stream at q: its temperature [K], brightness, opacity per M; g:
+// q's offset from the tube's centre (xyz) and its width there (w) [M], tg
+// its direction (the nearest point of its centre line: from q's radius,
+// refined; the overflow above and below the disc; a tube no thinner than
+// the grid's spacing, its light kept: smooth from the grid's corners alone
+// (the refining pass, latency-bound, would trace a few long rays along it))
+// (the donor's Roche lobe as star.frag draws it: Hill's units, x towards
+// the hole, z the orbit's axis; the gas within it, the star, left out:
+// fading over a few hundredths of its radius at the surface)
+const float ROCHE_K = 0.4918, ROCHE_PHI = -2.16337 - 0.003, ROCHE_BACK = 1.5;
+float OutsideLobe (vec3 q)
+{
+	vec3 c = P.donor.xyz;
+	if (P.donor.w <= 0.0 || dot (q - c, q - c) > 4.0 * P.donor.w * P.donor.w) return 1.0;
+	vec3 ex = -normalize (vec3 (c.xy, 0.0)), ey = vec3 (-ex.y, ex.x, 0.0), o = (q - c) * (ROCHE_K / P.donor.w);
+	vec3 h = vec3 (dot (o, ex), dot (o, ey), o.z);
+	if (h.x > 0.694) return 1.0; // (beyond the inner Lagrange point: the potential falling again)
+	float r = length (h), r3 = r * r * r, bk = max (-h.x, 0.0);
+	float phi = -1.0 / r - 1.5 * h.x * h.x + 0.5 * h.z * h.z + ROCHE_BACK * bk * bk * bk;
+	vec3 gr = vec3 (h.x / r3 - 3.0 * h.x - 3.0 * ROCHE_BACK * bk * bk, h.y / r3, h.z / r3 + h.z);
+	float d = (phi - ROCHE_PHI) / max (length (gr), 0.3) / ROCHE_K; // (outside, in radii)
+	return smoothstep (-0.02, 0.04, d);
+}
+
+float GridW (vec3 q) { return 1.2 * P.proj.z * 2.0 * P.proj.x / P.proj.w * length (q - P.cam.xyz); }
+vec3 StreamAt (vec3 q, out vec4 g, out vec3 tg)
+{
+	g = vec4 (0.0, 0.0, 0.0, 1.0), tg = vec3 (1.0, 0.0, 0.0);
+	float rL = P.stream.w, rH = P.stream.z, rq = length (q.xy);
+	float s = rq >= rH ? (rL - rq) / (rL - rH) : 1.0 + (1.0 - rq / rH) / 0.9;
+	if (s < -0.05 || s > 1.55) return vec3 (0.0);
+	// (far from the tube: no more; the first guess within a few M of the
+	// nearest point, the overflow up to ~30 M above or below)
+	{
+		vec2 c0 = q.xy - StreamC (clamp (s, 0.0, 1.5));
+		float zr = s > 1.0 ? 1.3 * Height (rq, 1.0) + 2.0 : 0.0;
+		float reach = 0.15 * (P.stream.w - P.stream.z) + 2.0; // (the first guess's error along the curve)
+		if (dot (c0, c0) > reach * reach || abs (q.z) > zr + reach) return vec3 (0.0);
+	}
+	const float E = 1e-3;
+	for (int it = 0; it < 3; it++) {
+		vec2 d0 = q.xy - StreamC (s), dm = q.xy - StreamC (s - E), dp = q.xy - StreamC (s + E);
+		float f0 = dot (d0, d0), fm = dot (dm, dm), fp = dot (dp, dp);
+		float gr = (fp - fm) / (2.0 * E), h = (fp - 2.0 * f0 + fm) / (E * E);
+		s -= clamp (gr / max (h, 1e-6), -0.05, 0.05);
+	}
+	float lS = rL - rH, dL = s * lS; // (the stream's length; the distance down it [M])
+	if (dL < -0.5 || s > 1.5) return vec3 (0.0);
+	vec2 c = StreamC (s), t2 = normalize (StreamC (s + E) - StreamC (s - E)), off = q.xy - c;
+	// (drawn off the star's tip gradually: broad and thin about it,
+	// gathering into the stream over its first few M)
+	float w0 = 0.12 * max (P.donor.w, 0.1), fn = exp (-max (dL, 0.0) / 1.4);
+	float w = s <= 1.0 ? w0 * (0.6 + 1.2 * s + 3.0 * fn) : w0 * 1.1;
+	float dz = q.z;
+	if (s > 1.0) {
+		float zc = 1.3 * Height (rq, Bulge (rq, atan (q.y, q.x))) * smoothstep (1.0, 1.12, s);
+		dz = q.z > 0.0 ? q.z - zc : q.z + zc;
+	}
+	float we = max (w, GridW (q));
+	g = vec4 (off, dz, we), tg = vec3 (t2, 0.0);
+	float d2 = (dot (off, off) + dz * dz) / (we * we);
+	if (d2 > 9.0) return vec3 (0.0);
+	float u = dot (off, vec2 (-t2.y, t2.x)) / we, v = dz / we;
+	// clumps and filaments drifting down it (at ~0.06 c: as gas falling
+	// from the inner Lagrange point to the rim)
+	float t = P.disc.w / 25.0;
+	float n = Noise (vec3 (s * 36.0 - t, u * 1.3 + 7.0, v * 1.3), 1e4);
+	float fil = Noise (vec3 (s * 110.0 - 3.0 * t, u * 3.5, v * 3.5 + 11.0), 1e4);
+	float clump = 0.15 + 1.8 * n * n + 0.4 * fil;
+	float tauD = s <= 1.0 ? 1.2 * (1.0 - 0.6 * s) * mix (0.3, 1.0, smoothstep (0.0, 4.0, dL)) : 0.06 * (1.5 - s) / 0.5; // (across it; the overflow thinning out)
+	// (the clumps denser; its light a black body's of its temperature: as
+	// the star's photosphere where it leaves it, heating as it falls)
+	float k = tauD / (1.7725 * w) * exp (-d2) * (w * w) / (we * we) * clump * smoothstep (-0.5, 0.3, dL) * OutsideLobe (q);
+	float T = s <= 1.0 ? mix (P.donorT.x, 7200.0, pow (max (s, 0.0), 1.5)) : 6500.0; // (pow of a negative: NaN)
+	float S = s <= 1.0 ? mix (0.9, 0.8, s) : 0.5;
+	return vec3 (T, S, k);
+}
+
+// the stream crossed by the segment a + u t (r: its part within the
+// stream's bounds), pm the light's momentum: the ray's nearest approaches
+// to the tube's centre (found on its polyline, refined), the tube's column
+// about each (fixed points across it, a few per width: a smooth sum, no
+// noise; the tube's ends, its curve, kept), the part of it within r (the
+// next segment of the ray has the rest)
+void StreamCross (vec3 a, vec3 u, vec2 r, vec4 pm, float spin)
+{
+	float tc[3];
+	int nc = 0;
+	// (the groups of segments the ray passes near: most, none)
+	uint near = 0u;
+	for (int c = 0; c < SPATH_CHUNKS; c++) {
+		vec3 o = a - P.schunk[c].xyz;
+		float tm = clamp (-dot (o, u), r.x, r.y), R = P.schunk[c].w + 3.5 * GridW (P.schunk[c].xyz);
+		vec3 dc = o + u * tm;
+		if (dot (dc, dc) < R * R) near |= 1u << c;
+	}
+	if (near == 0u) return;
+	for (int br = 0; br < 2; br++) {
+		// (the stream and the overflow above the disc; the overflow below)
+		float zs = br == 0 ? 1.0 : -1.0;
+		bool run = false;
+		float best = 0.0;
+		for (int i = br == 0 ? 0 : SPATH_MAIN; i < SPATH_N - 1; i++) {
+			if ((near & (1u << (i / 8))) == 0u) { run = false; i = 8 * (i / 8) + 7; continue; }
+			vec3 p0 = vec3 (P.spath[i].xy, zs * P.spath[i].z), e = vec3 (P.spath[i + 1].xy, zs * P.spath[i + 1].z) - p0, w = a - p0;
+			float ee = dot (e, e), ue = dot (u, e), uw = dot (u, w), ew = dot (e, w), den = ee - ue * ue;
+			float sg = den > 1e-9 * ee ? clamp ((ew - ue * uw) / den, 0.0, 1.0) : 0.0;
+			float t = ue * sg - uw;
+			vec3 dd = w + u * t - e * sg;
+			float sth = max (sqrt (max (den / ee, 0.0)), 0.15);
+			float wt = 3.5 * max (max (P.spath[i].w, P.spath[i + 1].w), GridW (p0 + e * sg));
+			if (dot (dd, dd) < wt * wt && t > r.x - wt / sth && t < r.y + wt / sth) {
+				if (!run && nc < 3) run = true, best = dot (dd, dd), tc[nc++] = t;
+				else if (run && dot (dd, dd) < best) best = dot (dd, dd), tc[nc - 1] = t;
+			} else run = false;
+		}
+	}
+	if (nc == 0) return;
+	// (refined: the nearest approach, where the offset from the centre is
+	// across the ray; its length scale along the ray)
+	float lc[3];
+	for (int c = 0; c < nc; c++) {
+		vec4 g;
+		vec3 tg;
+		float t = tc[c], st2 = 1.0;
+		for (int it = 0; it < 3; it++) {
+			StreamAt (a + u * t, g, tg);
+			st2 = max (1.0 - dot (u, tg) * dot (u, tg), 0.0225);
+			t -= clamp (dot (g.xyz, u) / st2, -4.0 * g.w / sqrt (st2), 4.0 * g.w / sqrt (st2));
+		}
+		tc[c] = t, lc[c] = g.w / sqrt (st2);
+	}
+	// (front to back; one crossing found twice counted once)
+	for (int i = 0; i < nc - 1; i++)
+		for (int j = i + 1; j < nc; j++)
+			if (tc[j] < tc[i]) {
+				float x = tc[i]; tc[i] = tc[j]; tc[j] = x;
+				x = lc[i]; lc[i] = lc[j]; lc[j] = x;
+			}
+	float done = -1e30;
+	for (int c = 0; c < nc; c++) {
+		float lo = max (max (r.x, tc[c] - 3.0 * lc[c]), done), hi = min (r.y, tc[c] + 3.0 * lc[c]);
+		if (hi <= lo) continue;
+		done = hi;
+		const int N = 12;
+		float dt = (hi - lo) / float (N), col = 0.0, gT = 0.0, gS = 0.0, t0 = -1.0;
+		for (int k = 0; k < N; k++) {
+			vec4 g;
+			vec3 tg;
+			float t = lo + (float (k) + 0.5) * dt;
+			vec3 sm = StreamAt (a + u * t, g, tg);
+			float dk = sm.z * dt;
+			if (dk <= 0.0) continue;
+			if (t0 < 0.0 && dk > 1e-3) t0 = t;
+			col += dk, gT += sm.x * dk, gS += sm.y * dk;
+		}
+		if (col <= 0.0) continue;
+		float t = tc[c] < lo || tc[c] > hi ? 0.5 * (lo + hi) : tc[c];
+		vec3 q = a + u * t;
+		curDepth = Depth (a + u * (t0 < 0.0 ? t : t0)); // (its near side)
+		float pu = GasPu (q, Circular (q, spin), pm, spin);
+		if (pu > 0.0) Layer (gT / col / pu, gS / col, 1.0 - exp (-col));
+	}
+}
+
+// the splash where the stream strikes the rim: hot gas thrown up and
+// carried downstream (temperature, brightness, opacity per M)
+vec3 SplashAt (vec3 q, float fl)
+{
+	float ph = HotPhi (), rH = P.stream.z;
+	vec3 er = vec3 (cos (ph), sin (ph), 0.0), ep = vec3 (-er.y, er.x, 0.0);
+	vec3 c = er * rH + ep * (0.03 * rH);
+	vec3 l = vec3 (dot (q - c, er) / (0.018 * rH), dot (q - c, ep) / (0.05 * rH), q.z / (0.025 * rH));
+	float d2 = dot (l, l);
+	if (d2 > 9.0) return vec3 (0.0);
+	float n = Noise (vec3 (l.x * 2.5, l.y * 2.5 - P.disc.w / 40.0, l.z * 2.5 + 5.0), 1e4);
+	float k = 1.5 / (1.7725 * 0.025 * rH) * exp (-d2) * (0.5 + n);
+	return vec3 (8000.0 * pow (fl, 0.25), 0.3 * fl, k);
+}
+
+// jets along the axis: emission per M (optically thin) and temperature,
+// boosted by their motion (0.9 c) towards or away from the camera (u: the
+// ray's direction, back from the camera)
+vec2 JetAt (vec3 q, vec3 u)
+{
+	float z = abs (q.z), L = P.shape.w;
+	if (z < 4.0 || z > L) return vec2 (0.0);
+	float w = 1.2 + 0.05 * z, rc = length (q.xy);
+	if (rc > 3.0 * w) return vec2 (0.0);
+	float sg = q.z > 0.0 ? 1.0 : -1.0;
+	// (knots: irregular, moving out at 0.9 c)
+	float kn = Noise (vec3 ((z - 0.9 * P.disc.w) / 12.0, sg * 5.0, 1.0), 1e4);
+	float knots = 0.5 + 1.6 * kn * kn * kn;
+	float rho = exp (-rc * rc / (w * w)) * pow (max (z, 12.0) / 12.0, -1.3) * knots * smoothstep (L, 0.7 * L, z) * smoothstep (4.0, 8.0, z) * (1.0 + 0.3 * Noise (vec3 (z * 0.3 - P.disc.w * 0.3, rc / w * 2.0, sg * 9.0), 1e4));
+	const float BETA = 0.9, GAM = 2.2942;
+	// (the boost capped: seen down a jet it would outshine all (a blazar))
+	float D = min (1.0 / (GAM * (1.0 - BETA * dot (-u, vec3 (0.0, 0.0, sg)))), 1.6);
+	return vec2 (P.shape.z * 0.012 * rho * D * D, clamp (12000.0 * sqrt (D), 4000.0, 30000.0));
+}
+
+// [t0, t1] of the segment a + u t (0..L) within the cylinder of radius R
+// about the axis and |z| <= Z (empty: t0 > t1)
+vec2 CylSlab (vec3 a, vec3 u, float L, float R, float Z)
+{
+	vec2 r = vec2 (0.0, L);
+	float A = dot (u.xy, u.xy), B = dot (a.xy, u.xy), C = dot (a.xy, a.xy) - R * R;
+	if (A > 1e-12) {
+		float D = B * B - A * C;
+		if (D < 0.0) return vec2 (1.0, 0.0);
+		D = sqrt (D);
+		r = vec2 (max (r.x, (-B - D) / A), min (r.y, (-B + D) / A));
+	} else if (C > 0.0) return vec2 (1.0, 0.0);
+	if (abs (u.z) > 1e-9) {
+		float z0 = (-Z - a.z) / u.z, z1 = (Z - a.z) / u.z;
+		r = vec2 (max (r.x, min (z0, z1)), min (r.y, max (z0, z1)));
+	} else if (abs (a.z) > Z) return vec2 (1.0, 0.0);
+	return r;
+}
+
+vec2 Sphere (vec3 a, vec3 u, float L, vec3 c, float R)
+{
+	vec3 o = a - c;
+	float B = dot (o, u), C = dot (o, o) - R * R, D = B * B - C;
+	if (D < 0.0) return vec2 (1.0, 0.0);
+	D = sqrt (D);
+	return vec2 (max (0.0, -B - D), min (L, -B + D));
+}
+
+// the volumes along the straight segment a -> b (front to back), pm: the
+// light's momentum there
+void Volumes (vec3 a0, vec3 b0, vec4 pm, float spin)
+{
+	if (P.glow.z <= 0.0 && P.sbound.w <= 0.0 && P.shape.z <= 0.0) return;
+	vec3 d = b0 - a0;
+	float L = length (d);
+	if (L <= 0.0) return;
+	vec3 u = d / L;
+	vec2 rg[4];
+	for (int i = 0; i < 4; i++) rg[i] = vec2 (1.0, 0.0);
+	float rO = P.glow.z, rH = P.stream.z;
+	// (bounds as tight as the segment allows: the slab's thickness and the
+	// jets' width at its farthest from the axis and the plane: rays wound
+	// about the hole, many steps long, sample nothing)
+	float rmax = max (length (a0.xy), length (b0.xy)), zmax = max (abs (a0.z), abs (b0.z));
+	if (rO > 0.0 && rmax > 0.85 * P.disc.z) rg[0] = CylSlab (a0, u, L, 1.15 * rO, 3.0 * Height (min (rmax, 1.15 * rO), 1.0));
+	if (P.sbound.w > 0.0) rg[1] = Sphere (a0, u, L, P.sbound.xyz, P.sbound.w);
+	if (P.sbound.w > 0.0) rg[2] = Sphere (a0, u, L, vec3 (cos (HotPhi ()), sin (HotPhi ()), 0.0) * rH, 0.3 * rH);
+	if (P.shape.z > 0.0 && zmax > 4.0) rg[3] = CylSlab (a0, u, L, 3.0 * (1.2 + 0.05 * min (zmax, P.shape.w)), P.shape.w);
+	if (rg[0].x >= rg[0].y && rg[1].x >= rg[1].y && rg[2].x >= rg[2].y && rg[3].x >= rg[3].y) return;
+	float fl = Flicker (17.0, 0.35);
+	// (in order of their nearest points)
+	int ord[4] = int[4] (0, 1, 2, 3);
+	for (int i = 0; i < 3; i++)
+		for (int j = i + 1; j < 4; j++)
+			if (rg[ord[j]].x < rg[ord[i]].x) { int tmp = ord[i]; ord[i] = ord[j]; ord[j] = tmp; }
+	for (int oi = 0; oi < 4; oi++) {
+		int c = ord[oi];
+		vec2 r = rg[c];
+		if (r.x >= r.y) continue;
+		if (c == 1) {
+			StreamCross (a0, u, r, pm, spin);
+			continue;
+		}
+		float len = r.y - r.x;
+		vec3 qm = a0 + u * (0.5 * (r.x + r.y));
+		int n;
+		if (c == 0) n = clamp (int (len / (0.8 * Height (max (length (qm.xy), P.disc.z), 0.0))) + 2, 2, 12);
+		else if (c == 2) n = 12;
+		else n = clamp (int (len / (0.5 * (1.2 + 0.05 * abs (qm.z)))) + 2, 4, 24);
+		float dt = len / float (n);
+		// (the slab: its gas's colour, light and opacity at the start, middle
+		// and end of the crossing, interpolated: the texture varies slowly
+		// along a ray, its height profile fast)
+		vec3 ogs[3];
+		if (c == 0)
+			for (int m = 0; m < 3; m++) {
+				vec3 qg = a0 + u * (r.x + len * 0.5 * float (m));
+				float rr = clamp (length (qg.xy), 0.85 * P.disc.z, 1.12 * rO);
+				ogs[m] = OuterGas (vec3 (normalize (qg.xy) * rr, 0.0), rr, 1.0 / (rr * sqrt (rr) + spin));
+			}
+		for (int k = 0; k < n; k++) {
+			float tk = (float (k) + DITH) / float (n);
+			vec3 q = a0 + u * (r.x + tk * len);
+			curDepth = Depth (q);
+			if (c == 0) {
+				float rr = length (q.xy);
+				if (rr < 0.85 * P.disc.z || rr > 1.12 * rO) continue;
+				float bl = Bulge (rr, atan (q.y, q.x)), H = Height (rr, bl);
+				if (abs (q.z) > 3.0 * H) continue;
+				vec3 og = tk < 0.5 ? mix (ogs[0], ogs[1], 2.0 * tk) : mix (ogs[1], ogs[2], 2.0 * tk - 1.0);
+				float kz = -log (1.0 - min (og.z, 0.95)) / (2.5066 * H) * exp (-0.5 * q.z * q.z / (H * H));
+				float pu = GasPu (q, Circular (q, spin), pm, spin);
+				if (pu > 0.0) Layer (og.x / pu, og.y * (1.0 + 0.8 * bl * fl), 1.0 - exp (-kz * dt));
+			} else if (c == 2) {
+				vec3 g = SplashAt (q, fl);
+				if (g.z <= 0.0) continue;
+				float pu = GasPu (q, Circular (q, spin), pm, spin);
+				if (pu > 0.0) Layer (g.x / pu, g.y, 1.0 - exp (-g.z * dt));
+			} else {
+				vec2 j = JetAt (q, u);
+				if (j.x > 0.0) Emit (j.y, j.x * dt);
+			}
+		}
+	}
+}
+
+// the donor's body (an ellipsoid within its drawn Roche lobe): the first
+// point of the segment a + u t (0..L) on it (-1: none), its normal
+float DonorHit (vec3 a0, vec3 u, float L, out vec3 nrm)
+{
+	nrm = vec3 (0.0, 0.0, 1.0);
+	if (P.donor.w <= 0.0) return -1.0;
+	vec3 c = P.donor.xyz, ex = -normalize (vec3 (c.xy, 0.0)), ez = vec3 (0.0, 0.0, 1.0), ey = cross (ez, ex);
+	// (within the teardrop star.frag draws: x from -0.95 to 1.05 radii, the cusp at 1.41)
+	vec3 S = vec3 (1.0, 0.85, 0.82) * P.donor.w;
+	vec3 o = a0 - (c + ex * (0.05 * P.donor.w));
+	vec3 lo = vec3 (dot (o, ex), dot (o, ey), dot (o, ez)) / S, ld = vec3 (dot (u, ex), dot (u, ey), dot (u, ez)) / S;
+	float A = dot (ld, ld), B = dot (lo, ld), C = dot (lo, lo) - 1.0, D = B * B - A * C;
+	if (D < 0.0) return -1.0;
+	float t = (-B - sqrt (D)) / A;
+	if (t > L || (t < 0.0 && C > 0.0)) return -1.0;
+	t = max (t, 0.0);
+	vec3 g = (lo + ld * t) / S;
+	nrm = normalize (ex * g.x + ey * g.y + ez * g.z);
+	return t;
 }
 
 // bend d towards the hole (from x) by angle al
@@ -233,6 +619,10 @@ void main ()
 	vec2 px = vec2 (id) * Q.pass.x - P.glow.xy; // (the jittered projection's: unjittered at px - jitter)
 	vec2 ndc = px / vec2 (P.proj.w, P.size.x) * 2.0 - 1.0;
 	vec3 vd = normalize (vec3 (ndc.x * P.proj.x, -ndc.y * P.proj.y, 1.0));
+	VDZ = vd.z;
+	// (the volumes' samples dithered by pixel and frame: interleaved gradient noise)
+	vec2 fid = vec2 (id) + vec2 (5.588238, 3.1) * P.inner.w;
+	DITH = fract (52.9829189 * fract (dot (fid, vec2 (0.06711056, 0.00583715))));
 	vec3 n = normalize (vec3 (dot (P.v2k[0].xyz, vd), dot (P.v2k[1].xyz, vd), dot (P.v2k[2].xyz, vd)));
 
 	// the ray back towards its source: q^m = -e0 + n.e (past-directed),
@@ -290,8 +680,27 @@ void main ()
 		vec4 pp = p;
 		x += h / 6.0 * (dx1 + 2.0 * dx2 + 2.0 * dx3 + dx4);
 		p.xyz += h / 6.0 * (dp1 + 2.0 * dp2 + 2.0 * dp3 + dp4);
+		vec3 xs0 = xp, xs1 = x; // (the step, straight: the volumes along it)
+		vec4 ps1 = p;
+		float Ls = length (xs1 - xs0);
+		vec3 us = (xs1 - xs0) / max (Ls, 1e-9);
+		bool crossing = P.disc.x > 0.0 && xp.z * x.z < 0.0;
+		// (the donor's body, before the disc's plane)
+		vec3 dn;
+		float th = DonorHit (xs0, us, Ls, dn);
+		if (th >= 0.0 && (!crossing || th < xs0.z / (xs0.z - xs1.z) * Ls)) {
+			vec3 xh = xs0 + us * th;
+			Volumes (xs0, xh, pp, a);
+			float mu = max (dot (dn, -us), 0.0);
+			float pu = GasPu (xh, Circular (xh, a), pp, a);
+			float Td = P.donorT.x / max (pu, 1e-6), em = 1.0 - 0.6 * (1.0 - mu);
+			// (the gas in front left translucent: the star's direct image is
+			// drawn over this, the gas then over the star)
+			Finish (id, vec4 (Td, em, length (xh), -1.0));
+			return;
+		}
 		// (through the disc's plane: within it, its light)
-		if (P.disc.x > 0.0 && xp.z * x.z < 0.0) {
+		if (crossing) {
 			// (the crossing within the step: the step again in substeps)
 			const int NSUB = 8;
 			vec3 xs = xp;
@@ -312,54 +721,30 @@ void main ()
 			float dz = xp.z - x.z;
 			vec3 xc = abs (dz) > 0.0 ? mix (xp, x, xp.z / dz) : xp;
 			float rc = KerrR (xc, a);
-			// (the glowing disc: opaque, fading out over its outer tenth; the
-			// lit outer disc beyond (if drawn): translucent)
-			float rT = P.disc.z, rO = P.glow.z;
+			Volumes (xs0, xc, pp, a);
+			curDepth = Depth (xc);
+			// (the glowing disc: opaque, fading out over its outer tenth,
+			// flickering)
+			float rT = P.disc.z;
 			float edge = clamp ((rT - rc) / (0.1 * rT), 0.0, 1.0);
 			bool hot = rc >= P.disc.y && rc <= rT, opaque = hot && edge >= 1.0;
-			// (beyond the glowing disc: the donor's stream, the hot spot)
-			if (!opaque && P.stream.y > 0.0) {
-				vec2 st = Stream (rc, atan (xc.y, xc.x), length (xc - P.cam.xyz));
-				if (st.y > 0.0) {
-					float Om = 1.0 / (rc * sqrt (rc) + a); // (moving about as the disc's gas)
-					vec3 V = vec3 (-Om * xc.y, Om * xc.x, 0.0);
-					float r2c = rc * rc, rac = r2c + a * a;
-					float fc = 2.0 * r2c * rc / (r2c * r2c + a * a * xc.z * xc.z);
-					vec3 lc = vec3 ((rc * xc.x + a * xc.y) / rac, (rc * xc.y - a * xc.x) / rac, xc.z / rc);
-					float nrm = 1.0 - dot (V, V) - fc * (1.0 + dot (lc, V)) * (1.0 + dot (lc, V));
-					if (nrm > 0.0) {
-						float pu = inversesqrt (nrm) * (p.w + dot (p.xyz, V));
-						Layer (st.x / max (pu, 1e-6), st.y, 1.0);
-						Finish (id, vec4 (st.x / max (pu, 1e-6), st.y, rc, -1.0));
-						return;
-					}
-				}
-			}
-			if (hot || (rO > 0.0 && rc >= P.disc.y && rc <= 1.12 * rO)) { // (the rim wanders out to ~1.1 rO)
+			if (hot) {
 				float Om = 1.0 / (rc * sqrt (rc) + a);
-				vec3 V = vec3 (-Om * xc.y, Om * xc.x, 0.0);
-				float r2c = rc * rc, rac = r2c + a * a;
-				float fc = 2.0 * r2c * rc / (r2c * r2c + a * a * xc.z * xc.z);
-				vec3 lc = vec3 ((rc * xc.x + a * xc.y) / rac, (rc * xc.y - a * xc.x) / rac, xc.z / rc);
-				float nrm = 1.0 - dot (V, V) - fc * (1.0 + dot (lc, V)) * (1.0 + dot (lc, V));
-				if (nrm > 0.0) {
-					float ut = inversesqrt (nrm);
-					float pu = max (ut * (p.w + dot (p.xyz, V)), 1e-6); // (the light's frequency in the gas's frame, the camera's 1)
-					float T = hot ? P.disc.x * pow (max (DiscQ (rc, a), 0.0), 0.25) : 0.0;
+				float pu = GasPu (xc, vec3 (-Om * xc.y, Om * xc.x, 0.0), p, a);
+				if (pu > 0.0) {
+					float T = P.disc.x * pow (max (DiscQ (rc, a), 0.0), 0.25);
+					float em = DiscBrightness (xc, rc, Om) * Flicker (3.0 + floor (log (rc) * 4.0) * 1.7, 0.12);
 					if (opaque) {
-						float em = DiscBrightness (xc, rc, Om);
 						Layer (T / pu, em, 1.0);
 						Finish (id, vec4 (T / pu, em, rc, -1.0));
 						return;
 					}
-					if (hot) Layer (T / pu, DiscBrightness (xc, rc, Om), smoothstep (0.0, 1.0, edge));
-					if (rO > 0.0) {
-						vec3 og = OuterGas (xc, rc, Om);
-						Layer (og.x / pu, og.y, og.z);
-					}
+					Layer (T / pu, em, smoothstep (0.0, 1.0, edge));
 				}
 			}
-		}
+			Volumes (xc, xs1, p, a);
+			x = xs1, p = ps1; // (on from the step's end: its volumes done)
+		} else Volumes (xs0, xs1, pp, a);
 	}
 	// (not out: circling the photon orbit, or held at the horizon from inside)
 	Finish (id, vec4 (0.0));

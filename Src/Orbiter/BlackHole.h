@@ -12,7 +12,9 @@
 // outer radius in masses, default 1000): a thin Novikov-Thorne disc from
 // the ISCO out, in the spin's plane. DiscGlow (default 0; an artistic
 // liberty): the disc's cool outer parts, too cool to glow, drawn lit by
-// its hot inner parts and a donor star (1: clearly seen).
+// its hot inner parts and a donor star (1: clearly seen). Jets (default 0;
+// an artistic liberty): relativistic jets along the spin axis, of that
+// brightness, JetLength masses long (default 250).
 // Its size is its horizon's radius. Vessels within its strong field
 // (StrongRange) fly in its Kerr spacetime (RelFlight.cpp).
 //
@@ -85,6 +87,9 @@ public:
 	double DiscLuminosity () const { return discL; }
 	/// the cool outer disc drawn lit (0: not drawn; 1: clearly seen)
 	double DiscGlow () const { return discGlow; }
+	/// jets along the spin axis drawn (0: none; 1: clearly seen), their length [masses]
+	double Jets () const { return jets; }
+	double JetLength () const { return jetLength; }
 
 	/// the spin axis (north pole) in the global frame; the Kerr x, y axes
 	Vector SpinAxis () const { return axis; }
@@ -97,6 +102,7 @@ private:
 	void SetFrame ();
 	kerr::Hole hole;
 	double discRate = 0.0, discOuter = 1000.0, discTK = 0.0, discTmax = 0.0, discL = 0.0, discGlow = 0.0;
+	double jets = 0.0, jetLength = 250.0;
 	Vector axis;     // spin axis (global)
 	Vector e1, e2;   // the Kerr x and y axes (global): e1 x e2 = axis right-handed
 };

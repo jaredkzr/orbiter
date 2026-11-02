@@ -278,7 +278,8 @@ public:
 	/// a star's photosphere (Shaders/star.frag); modelView: its frame (an
 	/// ellipsoid: drawn out by a tide); tide: towards the companion in that
 	/// frame (null: none)
-	void DrawStar (const Mat4 &modelView, const float rgb[3], double teff, double radius, uint32_t seed, const VECTOR3 *tide = nullptr);
+	/// (roche: filling its Roche lobe about the hole, the tide's direction; the mesh scaled by star.frag's ROCHE_BOX)
+	void DrawStar (const Mat4 &modelView, const float rgb[3], double teff, double radius, uint32_t seed, const VECTOR3 *tide = nullptr, bool roche = false);
 	/// a star's flares now (cool dwarfs: Proxima Centauri's ~ a few an hour,
 	/// rare large ones), deterministic in time: the two brightest (direction
 	/// in its frame, brightness relative to its disc's centre), the light's
@@ -464,6 +465,7 @@ private:
 	bool lensDisc = false; // (with its accretion disc)
 	VECTOR3 lensPos{};     // (its position, global)
 	double lensM = 0.0;    // (its mass [m])
+	OBJHANDLE lensDonor = nullptr; // (its disc's donor star: drawn in the lensed sky too)
 	void UpdateLens ();
 	SkySettings skySettings;
 	double skyDim = 0.0;      // the sky's dimming by light adaptation [stops]

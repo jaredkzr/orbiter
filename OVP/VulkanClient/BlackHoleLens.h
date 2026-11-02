@@ -57,6 +57,10 @@ public:
 		double glowRim = 0.0, glow = 0.0;
 		/// the projection's jitter [px] (temporal anti-aliasing)
 		float jitter[2] = { 0.0f, 0.0f };
+		/// the donor's centre [M] (Kerr), mean radius [M] (0: none), temperature [K]
+		double donorPos[3] = {}, donorR = 0.0, donorTeff = 3300.0;
+		/// jets along the axis (an artistic liberty): brightness (0: none), length [M]
+		double jets = 0.0, jetLength = 250.0;
 	};
 
 	bool Init (vkc::Context *ctx, GalaxySky *sky, StarField *stars);
@@ -69,6 +73,10 @@ public:
 	/// sunSurface: the scene radiance of a surface as bright as the Sun's (the
 	/// disc's scale)
 	void Render (VkCommandBuffer cmd, const GalaxySky::Display &d, float sunSurface);
+	/// Draw the translucent gas (the disc's fading edge and lit outer parts,
+	/// the stream, the jets) after the opaque scene, at its depth: near the
+	/// near plane [m], M the hole's mass [m]
+	void RenderGas (VkCommandBuffer cmd, float nearPlane, float M);
 
 	static constexpr double R_IN = 300.0;   ///< [M] rays passing farther: the weak field's bending
 	static constexpr double R_OUT = 1000.0; ///< [M] rays leaving beyond (and the camera): the rest of the bending, the weak field's (its second order ~(M/r)^2: 100 M left 0.1 deg)
@@ -119,7 +127,9 @@ private:
 	VkDescriptorPool pool = VK_NULL_HANDLE;
 	VkDescriptorSet traceSet = VK_NULL_HANDLE, refineSet = VK_NULL_HANDLE, drawSet = VK_NULL_HANDLE;
 	VkPipelineLayout tracePL = VK_NULL_HANDLE, drawPL = VK_NULL_HANDLE;
-	VkPipeline tracePipe = VK_NULL_HANDLE, drawPipe = VK_NULL_HANDLE;
+	VkPipeline tracePipe = VK_NULL_HANDLE, drawPipe = VK_NULL_HANDLE, gasPipe = VK_NULL_HANDLE;
+	struct DrawParams { float colour[3][4]; float tone[4]; float grid[4]; float bg[4]; float disc[4]; float gas[4]; } drawParams{};
+	bool drawn = false; // (the sky drawn this frame: its parameters for the gas)
 };
 
 #endif // !__BLACKHOLELENS_H
