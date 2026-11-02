@@ -3,7 +3,10 @@
 
 // HDR scene + bloom -> display. The curve is the identity up to SHOULDER and
 // approaches 1 smoothly above, so that normally lit scenes are unchanged
-// and only highlights are compressed.
+// and only highlights are compressed: slowly (highlights many times white
+// keep their gradients rather than a flat white), the brightest channel
+// with the others in proportion (the colour kept), whitening as it
+// saturates.
 
 #version 450
 
@@ -28,8 +31,11 @@ const float SHOULDER = 0.6;
 
 vec3 Curve (vec3 c)
 {
-	vec3 hi = SHOULDER + (1.0 - SHOULDER) * (1.0 - exp (-(c - SHOULDER) / (1.0 - SHOULDER)));
-	return mix (c, hi, step (vec3 (SHOULDER), c));
+	float m = max (c.r, max (c.g, c.b));
+	if (m <= SHOULDER) return c;
+	float x = (m - SHOULDER) / (1.0 - SHOULDER), s = x / (1.0 + x);
+	float mo = SHOULDER + (1.0 - SHOULDER) * s;
+	return mix (c * (mo / m), vec3 (mo), 0.6 * s * s);
 }
 
 // Lens flare of the sun: ghost images reflected through the image centre

@@ -309,19 +309,27 @@ bool Scene::Init ()
 		return found;
 	};
 	{
-		// glow sprite: bright core with a soft halo, zero at the edge
-		const int N = 128;
-		std::vector<uint8_t> px (N * N * 4);
+		// glow sprite: bright core with a soft halo, zero at the edge (half
+		// floats: a bright star's glow is this scaled far up, where 8 bits'
+		// steps showed as rings)
+		const int N = 256;
+		auto half = [](float f) -> uint16_t { // (0 to 1: normal or zero)
+			if (f < 6.2e-5f) return 0;
+			uint32_t u;
+			memcpy (&u, &f, 4);
+			return (uint16_t)((((u >> 23) & 0xff) - 112) << 10 | ((u >> 13) & 0x3ff));
+		};
+		std::vector<uint16_t> px (N * N * 4);
 		for (int y = 0; y < N; y++)
 			for (int x = 0; x < N; x++) {
 				double dx = (x + 0.5) / N * 2.0 - 1.0, dy = (y + 0.5) / N * 2.0 - 1.0;
 				double r = std::sqrt (dx*dx + dy*dy);
 				double a = r < 1.0 ? (0.75 * std::exp (-r*r*40.0) + 0.25 * std::pow (1.0 - r, 3.0)) : 0.0;
-				uint8_t *p = &px[(y*N + x) * 4];
-				p[0] = p[1] = p[2] = 255;
-				p[3] = (uint8_t)std::lround (std::clamp (a, 0.0, 1.0) * 255.0);
+				uint16_t *p = &px[(y*N + x) * 4];
+				p[0] = p[1] = p[2] = half (1.0f);
+				p[3] = half ((float)std::clamp (a, 0.0, 1.0));
 			}
-		glowTex = gc->TexMgr()->CreateRGBA (N, N, px.data());
+		glowTex = gc->TexMgr()->CreateRGBAHalf (N, N, px.data());
 	}
 
 	stars = std::make_unique<StarSphere> (gc);
@@ -1283,6 +1291,7 @@ void Scene::UpdateLens ()
 	f.rh = K.Horizon (), f.rm = K.InnerHorizon (), f.rph = K.PhotonOrbit (true);
 	f.inside = K.R (f.cam) < f.rh;
 	f.fx = ProjX (), f.fy = ProjY ();
+	f.jitter[0] = jitterPixels[0], f.jitter[1] = jitterPixels[1];
 	// the hole's frame relative to the cosmic background: the barycentre's
 	// 369.82 km/s towards l 264.021, b 48.253 and the hole's velocity
 	{
@@ -1303,6 +1312,7 @@ void Scene::UpdateLens ()
 	lensPos = hp, lensM = bi.M;
 	if (bi.discRate > 0.0) {
 		f.discTK = bi.discTempScale, f.discIn = bi.isco / bi.M, f.discOut = bi.discOuter / bi.M;
+		f.glowRim = bi.discGlow > 0.0 ? f.discOut : 0.0, f.glow = 0.25 * bi.discGlow;
 		// (the disc seen out to where it glows: beyond, cool and thin, the sky through it)
 		const double DISC_T_MIN = 3000.0; // [K] (cooler: dark in visible light; it would hide the sky behind)
 		for (double r = 1.5 * f.discIn; r < f.discOut; r *= 1.02)
@@ -1430,6 +1440,10 @@ void Scene::RenderNearStars (bool transparent)
 		// Sun's while it is a body: not its disc's radiance, a red dwarf's a
 		// few hundredths of the Sun's; at least of the minimum size)
 		double h = StarGlowSize (s.radius, vp.z, STAR_GLOW_SIZE, STAR_GLOW_MIN_ANGLE);
+		// (at its near surface: hidden by what is in front, not by its own
+		// disc, which drawn dimmer than the glare was a dark hole in it)
+		double vl = length (vp), fs = vl > s.radius ? std::max (vl - 1.01 * s.radius, 0.5 * vl) / vl : 1.0;
+		vp *= fs, h *= fs;
 		double f = STAR_GLOW / std::max (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2], 1e-6);
 		f *= StarGlowFade (PixelSize (s.radius, s.dist));
 		if (f <= 0.0) continue;
@@ -1835,8 +1849,6 @@ void Scene::BeginFrame ()
 		galaxy->Update (SkyObserver (), oapiGetSysStep ());
 	}
 	ctx->GpuMark ("skybake");
-	UpdateLens ();
-	ctx->GpuMark ("lens");
 	UpdateNearStars ();
 	if (starField && skySettings.stars) {
 		// (the Sun is drawn as a body; the catalogue's Sun only far from it,
@@ -1877,6 +1889,9 @@ void Scene::BeginFrame ()
 	}
 	proj[8] = jitter[0]; // clip.xy += jitter * z (= w)
 	proj[9] = jitter[1];
+	// (the lensed sky: its rays at the jittered pixels)
+	UpdateLens ();
+	ctx->GpuMark ("lens");
 	if (!havePrev) {
 		memcpy (prevProj, proj, sizeof(prevProj));
 		prevProj[8] = prevProj[9] = 0.0f;
@@ -1993,8 +2008,9 @@ void Scene::FillFrameUniforms (void *pfu)
 	double lightScale = std::min (1.0, light.flux / NEAR_FLUX) / std::max (lightLum, 1e-6);
 	// (an accretion disc: a large part of the sky at about a star's surface
 	// brightness, the exposure adapted to it: its light brighter than the
-	// Sun's at 1 AU, compressed)
-	if (light.disc && light.flux > 1.0) lightScale *= std::min (10.0, 1.0 + 2.0 * std::log10 (light.flux));
+	// Sun's at 1 AU, compressed; gently, as the exposure is the sky's when
+	// facing away from it, where more blew lit surfaces out to white)
+	if (light.disc && light.flux > 1.0) lightScale *= std::min (3.0, 1.0 + 0.5 * std::log10 (light.flux));
 	// (as near a star: within a few of its radii its disc fills much of the
 	// sky, the exposure adapted to it; inside Mercury's orbit as before)
 	else if (light.flux > 10.0) lightScale *= std::min (10.0, 1.0 + 2.0 * std::log10 (light.flux / 10.0));
@@ -2268,7 +2284,9 @@ void Scene::RenderProbe ()
 
 bool Scene::SunOnScreen (float uv[2]) const
 {
-	if (light.flux <= 0.0) return false;
+	// (the lens flare's ghosts are a compact source's: none of an accretion
+	// disc, spread over the sky)
+	if (light.flux <= 0.0 || light.disc) return false;
 	VECTOR3 sp = light.pos;
 	VECTOR3 v = ViewDir (unit (sp - camPos));
 	if (v.z <= 1e-3) return false;

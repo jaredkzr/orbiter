@@ -8,7 +8,9 @@
 // falling in or hovering low, red climbing out) in their bands. Where
 // the corners of a pixel's cell agree, their direction is interpolated;
 // at the edges of images and of the shadow, the colours of the corners
-// are (the edges smoothed over a cell). The shadow is black.
+// are. Cells that are not smooth (lenscell.glsl) take their pixels' own
+// corners (the refining pass's map). The shadow is black. Translucent gas
+// (the overlay: the disc's fading edge, its lit outer parts) over it all.
 // The stars (lens_stars.comp's bins) are gathered: those inside the
 // footprint on the sky of a grid cell near the pixel are where the cell
 // maps them back to (inverse bilinear), brightened by the cell's solid
@@ -27,6 +29,9 @@ layout(set = 0, binding = 0) uniform samplerCube skyA;
 layout(set = 0, binding = 1) uniform samplerCube skyB;
 layout(set = 0, binding = 2) uniform samplerCube zodiacal;
 layout(set = 1, binding = 0) uniform sampler2D lensMap;
+layout(set = 1, binding = 3) uniform sampler2D overlayMap;
+layout(set = 1, binding = 4) uniform sampler2D fineMap;     // (every pixel's corners, where refined)
+layout(set = 1, binding = 5) uniform sampler2D fineOverlay;
 layout(std430, set = 1, binding = 1) readonly buffer Offsets { uint offsets[]; };
 layout(std430, set = 1, binding = 2) readonly buffer Records { uvec4 records[]; };
 
@@ -34,18 +39,17 @@ layout(std430, set = 1, binding = 2) readonly buffer Records { uvec4 records[]; 
 #include "relsky.glsl"
 #include "cosmicbg.glsl"
 #include "lensstars.glsl"
+#include "lenscell.glsl"
 
 layout(push_constant) uniform Params {
 	vec4 colour[3]; // bands (S10) -> scene RGB (incl. the eye's adaptation)
 	vec4 tone;      // pivot luminance, contrast, saturation, highlight shoulder (0: none)
-	vec4 grid;      // the grid's spacing [px], fade to skyB, the extragalactic background (1: drawn)
+	vec4 grid;      // the grid's spacing [px], fade to skyB, the extragalactic background (1: drawn), cells refined (1)
 	vec4 bg;        // xyz: the hole's velocity relative to the cosmic background (Galactic, units of c); w: the stars (1: drawn)
 	vec4 disc;      // x: the radiance of a surface of the Sun's (scene) per 1 S10 through colour (STAR_BRIGHTNESS / gain)
 } pc;
 
 const float STAR_SPAN = 0.9994; // cos 2 deg
-
-const float COHERENT = 0.99966; // cos 1.5 deg: a cell's corners this close: one image, interpolated
 
 vec3 Shade (vec3 d, float g)
 {
@@ -167,6 +171,17 @@ vec4 Stars (vec2 px)
 	return sum;
 }
 
+// a cell's light at w (its corners' weights): one image interpolated, else
+// the corners' colours
+vec3 Cell (vec4 c00, vec4 c10, vec4 c01, vec4 c11, vec4 w)
+{
+	if (LensCellSmooth (c00, c10, c01, c11)) {
+		vec4 m = c00 * w.x + c10 * w.y + c01 * w.z + c11 * w.w;
+		return m.w > 0.0 ? Shade (normalize (m.xyz), m.w) : (m.w < 0.0 ? DiscShade (m.x, m.y) : vec3 (0.0));
+	}
+	return w.x * Corner (c00) + w.y * Corner (c10) + w.z * Corner (c01) + w.w * Corner (c11);
+}
+
 void main ()
 {
 	vec2 mc = gl_FragCoord.xy / pc.grid.x;
@@ -176,21 +191,27 @@ void main ()
 	vec4 c00 = texelFetch (lensMap, i0, 0), c10 = texelFetch (lensMap, i0 + ivec2 (1, 0), 0);
 	vec4 c01 = texelFetch (lensMap, i0 + ivec2 (0, 1), 0), c11 = texelFetch (lensMap, i0 + ivec2 (1, 1), 0);
 	vec4 w = vec4 ((1.0 - fr.x) * (1.0 - fr.y), fr.x * (1.0 - fr.y), (1.0 - fr.x) * fr.y, fr.x * fr.y);
-	bool esc = c00.w > 0.0 && c10.w > 0.0 && c01.w > 0.0 && c11.w > 0.0;
 	vec3 c;
-	bool disc = c00.w < 0.0 && c10.w < 0.0 && c01.w < 0.0 && c11.w < 0.0;
-	if (esc && min (min (dot (c00.xyz, c10.xyz), dot (c00.xyz, c01.xyz)), dot (c00.xyz, c11.xyz)) > COHERENT) {
-		vec4 m = c00 * w.x + c10 * w.y + c01 * w.z + c11 * w.w;
-		c = Shade (normalize (m.xyz), m.w);
-	} else if (disc && max (max (abs (c00.z - c10.z), abs (c00.z - c01.z)), abs (c00.z - c11.z)) < 0.05 * c00.z) {
-		// (one image of the disc: its temperature and brightness interpolated)
-		vec4 m = c00 * w.x + c10 * w.y + c01 * w.z + c11 * w.w;
-		c = DiscShade (m.x, m.y);
-	} else
-		c = w.x * Corner (c00) + w.y * Corner (c10) + w.z * Corner (c01) + w.w * Corner (c11);
+	vec4 o;
+	if (pc.grid.w < 0.5 || LensCellSmooth (c00, c10, c01, c11)) {
+		c = Cell (c00, c10, c01, c11, w);
+		o = texelFetch (overlayMap, i0, 0) * w.x + texelFetch (overlayMap, i0 + ivec2 (1, 0), 0) * w.y
+			+ texelFetch (overlayMap, i0 + ivec2 (0, 1), 0) * w.z + texelFetch (overlayMap, i0 + ivec2 (1, 1), 0) * w.w;
+	} else {
+		// (refined: the pixel's own corners)
+		ivec2 j0 = clamp (ivec2 (floor (gl_FragCoord.xy)), ivec2 (0), textureSize (fineMap, 0) - 2);
+		vec2 fj = clamp (gl_FragCoord.xy - vec2 (j0), 0.0, 1.0);
+		vec4 v = vec4 ((1.0 - fj.x) * (1.0 - fj.y), fj.x * (1.0 - fj.y), (1.0 - fj.x) * fj.y, fj.x * fj.y);
+		c = Cell (texelFetch (fineMap, j0, 0), texelFetch (fineMap, j0 + ivec2 (1, 0), 0),
+			texelFetch (fineMap, j0 + ivec2 (0, 1), 0), texelFetch (fineMap, j0 + ivec2 (1, 1), 0), v);
+		o = texelFetch (fineOverlay, j0, 0) * v.x + texelFetch (fineOverlay, j0 + ivec2 (1, 0), 0) * v.y
+			+ texelFetch (fineOverlay, j0 + ivec2 (0, 1), 0) * v.z + texelFetch (fineOverlay, j0 + ivec2 (1, 1), 0) * v.w;
+	}
 	if (pc.bg.w > 0.0) {
 		vec4 b = Stars (gl_FragCoord.xy);
 		c += max (vec3 (dot (pc.colour[0], b), dot (pc.colour[1], b), dot (pc.colour[2], b)), vec3 (0.0));
 	}
+	// (the translucent gas in front: its light over what it hides)
+	if (o.z > 0.0) c = c * (1.0 - min (o.z, 1.0)) + DiscShade (o.x, o.y);
 	outColor = vec4 (min (c, vec3 (65000.0)), 1.0);
 }

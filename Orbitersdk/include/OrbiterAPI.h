@@ -3435,6 +3435,7 @@ typedef struct {
 	double discTmax;    ///< the disc's hottest [K]
 	double discLuminosity; ///< [W]
 	OBJHANDLE donor;    ///< a star feeding the disc (orbiting the hole, filling its Roche lobe: a stream from it to the disc's rim); NULL: none
+	double discGlow;    ///< the disc's cool outer parts drawn lit by its inner parts (an artistic liberty; 0: not drawn, 1: clearly seen)
 } BLACKHOLEINFO;
 
 /**

@@ -31,6 +31,7 @@ namespace {
 		float disc[4];
 		float roots[4];
 		float stream[4];
+		float glow[4];
 	};
 }
 
@@ -39,6 +40,7 @@ bool BlackHoleLens::Init (vkc::Context *c, GalaxySky *s, StarField *sf)
 	ctx = c, sky = s, starField = sf && sf->Ready () ? sf : nullptr;
 	if (!sky || !sky->Ready ()) return false;
 	if (const char *e = getenv ("ORBITER_VK_LENS_GRID")) grid = std::clamp (atoi (e), 1, 16);
+	if (const char *e = getenv ("ORBITER_VK_LENS_REFINE")) refine = atoi (e) != 0;
 	params = ctx->CreateBuffer (sizeof (Params), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
 	VkBufferUsageFlags su = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 	counts = ctx->CreateBuffer (STAR_NCELL * 4, su, false);
@@ -61,9 +63,7 @@ void BlackHoleLens::Shutdown ()
 {
 	if (!ctx) return;
 	vkDeviceWaitIdle (ctx->device);
-	if (mapView) vkDestroyImageView (ctx->device, mapView, nullptr);
-	if (map) vmaDestroyImage (ctx->allocator, map, mapAlloc);
-	mapView = VK_NULL_HANDLE, map = VK_NULL_HANDLE;
+	for (Image *im : { &map, &overlay, &fine, &fineOverlay }) DestroyImage (*im);
 	ctx->DestroyBuffer (params);
 	for (vkc::Buffer *b : { &counts, &offsets, &scratch, &records }) ctx->DestroyBuffer (*b);
 	if (starPipe) vkDestroyPipeline (ctx->device, starPipe, nullptr);
@@ -84,20 +84,25 @@ void BlackHoleLens::Shutdown ()
 void BlackHoleLens::CreatePipelines ()
 {
 	{
-		VkDescriptorSetLayoutBinding b[2] = {
+		VkDescriptorSetLayoutBinding b[4] = {
 			{ 0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr },
-			{ 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr } };
+			{ 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr },
+			{ 2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr },
+			{ 3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr } };
 		VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-		lci.bindingCount = 2, lci.pBindings = b;
+		lci.bindingCount = 4, lci.pBindings = b;
 		VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &traceLayout));
 	}
 	{
-		VkDescriptorSetLayoutBinding b[3] = {
+		VkDescriptorSetLayoutBinding b[6] = {
 			{ 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
 			{ 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
-			{ 2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr } };
+			{ 2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
+			{ 3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
+			{ 4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
+			{ 5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr } };
 		VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-		lci.bindingCount = 3, lci.pBindings = b;
+		lci.bindingCount = 6, lci.pBindings = b;
 		VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &drawLayout));
 	}
 	{
@@ -107,15 +112,16 @@ void BlackHoleLens::CreatePipelines ()
 		lci.bindingCount = 4, lci.pBindings = b;
 		VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &starLayout));
 	}
-	VkDescriptorPoolSize ps[4] = { { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 }, { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 },
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 }, { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6 } };
+	VkDescriptorPoolSize ps[4] = { { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 6 }, { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 },
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 }, { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6 } };
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-	pci.maxSets = 3, pci.poolSizeCount = 4, pci.pPoolSizes = ps;
+	pci.maxSets = 4, pci.poolSizeCount = 4, pci.pPoolSizes = ps;
 	VK_CHECK(vkCreateDescriptorPool (ctx->device, &pci, nullptr, &pool));
 	VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
 	dai.descriptorPool = pool, dai.descriptorSetCount = 1;
 	dai.pSetLayouts = &traceLayout;
 	VK_CHECK(vkAllocateDescriptorSets (ctx->device, &dai, &traceSet));
+	VK_CHECK(vkAllocateDescriptorSets (ctx->device, &dai, &refineSet));
 	dai.pSetLayouts = &drawLayout;
 	VK_CHECK(vkAllocateDescriptorSets (ctx->device, &dai, &drawSet));
 	dai.pSetLayouts = &starLayout;
@@ -152,8 +158,10 @@ void BlackHoleLens::CreatePipelines ()
 
 	// trace
 	{
+		VkPushConstantRange pcr{ VK_SHADER_STAGE_COMPUTE_BIT, 0, 4 * sizeof(float) };
 		VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 		plci.setLayoutCount = 1, plci.pSetLayouts = &traceLayout;
+		plci.pushConstantRangeCount = 1, plci.pPushConstantRanges = &pcr;
 		VK_CHECK(vkCreatePipelineLayout (ctx->device, &plci, nullptr, &tracePL));
 		VkShaderModule cs = ctx->CreateShaderModule (spv_lens_trace_comp, spv_lens_trace_comp_size);
 		VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
@@ -214,38 +222,66 @@ void BlackHoleLens::CreatePipelines ()
 	}
 }
 
+void BlackHoleLens::CreateImage (Image &im, uint32_t w, uint32_t h, VkFormat fmt)
+{
+	VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+	ici.imageType = VK_IMAGE_TYPE_2D, ici.format = fmt, ici.extent = { w, h, 1 };
+	ici.mipLevels = 1, ici.arrayLayers = 1, ici.samples = VK_SAMPLE_COUNT_1_BIT, ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+	ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+	VmaAllocationCreateInfo aci{};
+	aci.usage = VMA_MEMORY_USAGE_AUTO;
+	VK_CHECK(vmaCreateImage (ctx->allocator, &ici, &aci, &im.image, &im.alloc, nullptr));
+	VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+	vci.image = im.image, vci.viewType = VK_IMAGE_VIEW_TYPE_2D, vci.format = fmt;
+	vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+	VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &im.view));
+}
+
+void BlackHoleLens::DestroyImage (Image &im)
+{
+	if (im.view) vkDestroyImageView (ctx->device, im.view, nullptr);
+	if (im.image) vmaDestroyImage (ctx->allocator, im.image, im.alloc);
+	im = Image ();
+}
+
 void BlackHoleLens::EnsureMap (uint32_t w, uint32_t h)
 {
 	uint32_t mw = w / grid + 2, mh = h / grid + 2;
-	if (map && mw == mapW && mh == mapH) return;
-	if (map) {
+	if (map.image && mw == mapW && mh == mapH && w == imgW && h == imgH) return;
+	if (map.image) {
 		vkDeviceWaitIdle (ctx->device); // (the sets are rewritten: rare, the image resized)
-		vkDestroyImageView (ctx->device, mapView, nullptr);
-		vmaDestroyImage (ctx->allocator, map, mapAlloc);
+		for (Image *im : { &map, &overlay, &fine, &fineOverlay }) DestroyImage (*im);
 	}
 	mapW = mw, mapH = mh, imgW = w, imgH = h;
-	VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-	ici.imageType = VK_IMAGE_TYPE_2D, ici.format = VK_FORMAT_R32G32B32A32_SFLOAT, ici.extent = { mapW, mapH, 1 };
-	ici.mipLevels = 1, ici.arrayLayers = 1, ici.samples = VK_SAMPLE_COUNT_1_BIT, ici.tiling = VK_IMAGE_TILING_OPTIMAL;
-	ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
-	VmaAllocationCreateInfo aci{};
-	aci.usage = VMA_MEMORY_USAGE_AUTO;
-	VK_CHECK(vmaCreateImage (ctx->allocator, &ici, &aci, &map, &mapAlloc, nullptr));
-	VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-	vci.image = map, vci.viewType = VK_IMAGE_VIEW_TYPE_2D, vci.format = ici.format;
-	vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-	VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &mapView));
-	mapLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	CreateImage (map, mapW, mapH, VK_FORMAT_R32G32B32A32_SFLOAT);
+	CreateImage (overlay, mapW, mapH, VK_FORMAT_R16G16B16A16_SFLOAT);
+	// (every pixel's corners: w + 1 by h + 1)
+	CreateImage (fine, w + 2, h + 2, VK_FORMAT_R32G32B32A32_SFLOAT);
+	CreateImage (fineOverlay, w + 2, h + 2, VK_FORMAT_R16G16B16A16_SFLOAT);
+	mapsNew = true;
 
-	VkDescriptorImageInfo si{ VK_NULL_HANDLE, mapView, VK_IMAGE_LAYOUT_GENERAL };
 	VkDescriptorBufferInfo bi{ params.buffer, 0, VK_WHOLE_SIZE };
-	VkDescriptorImageInfo di{ sampler, mapView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-	VkWriteDescriptorSet wr[3]{};
-	for (auto &x : wr) x.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, x.descriptorCount = 1;
-	wr[0].dstSet = traceSet, wr[0].dstBinding = 0, wr[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, wr[0].pImageInfo = &si;
-	wr[1].dstSet = traceSet, wr[1].dstBinding = 1, wr[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, wr[1].pBufferInfo = &bi;
-	wr[2].dstSet = drawSet, wr[2].dstBinding = 0, wr[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, wr[2].pImageInfo = &di;
-	vkUpdateDescriptorSets (ctx->device, 3, wr, 0, nullptr);
+	auto st = [](const Image &im) { return VkDescriptorImageInfo{ VK_NULL_HANDLE, im.view, VK_IMAGE_LAYOUT_GENERAL }; };
+	auto sm = [&](const Image &im) { return VkDescriptorImageInfo{ sampler, im.view, VK_IMAGE_LAYOUT_GENERAL }; };
+	VkDescriptorImageInfo ii[10] = { st (map), st (overlay), st (map), st (fine), st (fineOverlay), st (map),
+		sm (map), sm (overlay), sm (fine), sm (fineOverlay) };
+	VkWriteDescriptorSet wr[12]{};
+	int n = 0;
+	auto img = [&](VkDescriptorSet set, uint32_t binding, VkDescriptorType type, VkDescriptorImageInfo *info) {
+		VkWriteDescriptorSet &x = wr[n++];
+		x.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, x.descriptorCount = 1;
+		x.dstSet = set, x.dstBinding = binding, x.descriptorType = type, x.pImageInfo = info;
+	};
+	const VkDescriptorType SI = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, CS = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	img (traceSet, 0, SI, &ii[0]), img (traceSet, 2, SI, &ii[1]), img (traceSet, 3, SI, &ii[2]);
+	img (refineSet, 0, SI, &ii[3]), img (refineSet, 2, SI, &ii[4]), img (refineSet, 3, SI, &ii[5]);
+	img (drawSet, 0, CS, &ii[6]), img (drawSet, 3, CS, &ii[7]), img (drawSet, 4, CS, &ii[8]), img (drawSet, 5, CS, &ii[9]);
+	for (VkDescriptorSet set : { traceSet, refineSet }) {
+		VkWriteDescriptorSet &x = wr[n++];
+		x.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, x.descriptorCount = 1;
+		x.dstSet = set, x.dstBinding = 1, x.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, x.pBufferInfo = &bi;
+	}
+	vkUpdateDescriptorSets (ctx->device, n, wr, 0, nullptr);
 }
 
 void BlackHoleLens::Trace (const Frame &f)
@@ -254,7 +290,7 @@ void BlackHoleLens::Trace (const Frame &f)
 	if (!ready) return;
 	// (a check of the last frame's trace, once, after the view settled)
 	static const int checkAt = getenv ("ORBITER_VK_LENS_CHECK") ? std::max (atoi (getenv ("ORBITER_VK_LENS_CHECK")), 2) : 0;
-	if (checkAt && ++checkFrame == checkAt && map) Check ();
+	if (checkAt && ++checkFrame == checkAt && map.image) Check ();
 	lastFrame = f;
 	VkExtent2D ext = ctx->RenderExtent ();
 	EnsureMap (ext.width, ext.height);
@@ -276,13 +312,16 @@ void BlackHoleLens::Trace (const Frame &f)
 	static const int maxSteps = getenv ("ORBITER_VK_LENS_STEPS") ? atoi (getenv ("ORBITER_VK_LENS_STEPS")) : MAX_STEPS;
 	static const double step = getenv ("ORBITER_VK_LENS_STEP") ? atof (getenv ("ORBITER_VK_LENS_STEP")) : STEP;
 	// (a disc: rays traced through all of it)
-	double rin = std::max (R_IN, f.discTK > 0.0 ? 1.05 * f.discOut : 0.0), rout = std::max (R_OUT, f.discTK > 0.0 ? 1.05 * f.discOut : 0.0);
+	double discR = f.discTK > 0.0 ? 1.05 * std::max (f.discOut, 1.12 * f.glowRim) : 0.0; // (the lit outer disc's rim wanders out to ~1.1)
+	double rin = std::max (R_IN, discR), rout = std::max (R_OUT, discR);
 	p.lim[0] = (float)rin, p.lim[1] = (float)std::max (rout, 1.05 * rc), p.lim[2] = (float)maxSteps, p.lim[3] = (float)step;
 	p.inner[0] = (float)std::max (f.rm, 0.02), p.inner[1] = f.inside ? 1.0f : 0.0f, p.inner[2] = (float)f.rph;
 	p.inner[3] = (float)(frame++ % 64);
 	p.disc[0] = (float)f.discTK, p.disc[1] = (float)f.discIn, p.disc[2] = (float)f.discOut;
 	p.disc[3] = (float)std::fmod (f.time, 1e6); // (the turbulence's phases repeat long before)
 	p.stream[0] = (float)f.streamPhi, p.stream[1] = (float)f.streamA, p.stream[2] = (float)f.streamHot, p.stream[3] = (float)f.streamL1;
+	p.glow[0] = f.jitter[0], p.glow[1] = f.jitter[1];
+	p.glow[2] = f.discTK > 0.0 && f.glow > 0.0 ? (float)f.glowRim : 0.0f, p.glow[3] = (float)f.glow;
 	{
 		const double PI = 3.14159265358979323846;
 		double ac = std::acos (std::clamp (f.a, -1.0, 1.0));
@@ -304,17 +343,31 @@ void BlackHoleLens::Trace (const Frame &f)
 	bb.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT, bb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
 	bb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, bb.dstAccessMask = VK_ACCESS_2_UNIFORM_READ_BIT;
 	vkCmdPipelineBarrier2 (cmd, &dep);
-	// (the map: after the last frame's sky read it)
-	vkc::ImageBarrier (cmd, map, VK_IMAGE_ASPECT_COLOR_BIT, mapLayout, VK_IMAGE_LAYOUT_GENERAL,
-		VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-		VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+	// (the maps: after the last frame's sky read them; the general layout throughout)
+	auto barrier = [&](VkPipelineStageFlags2 src, VkAccessFlags2 sa, VkPipelineStageFlags2 dst, VkAccessFlags2 da) {
+		for (Image *im : { &map, &overlay, &fine, &fineOverlay })
+			vkc::ImageBarrier (cmd, im->image, VK_IMAGE_ASPECT_COLOR_BIT, mapsNew ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL,
+				VK_IMAGE_LAYOUT_GENERAL, src, sa, dst, da);
+		mapsNew = false;
+	};
+	const VkPipelineStageFlags2 CS = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, FS = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+	const VkAccessFlags2 SW = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, SR = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+	barrier (FS, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, CS, SW | SR);
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, tracePipe);
+	// the grid's corners
+	float pass[4] = { (float)grid, 0.0f, 0.0f, 0.0f };
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, tracePL, 0, 1, &traceSet, 0, nullptr);
+	vkCmdPushConstants (cmd, tracePL, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof (pass), pass);
 	vkCmdDispatch (cmd, (mapW + 7) / 8, (mapH + 7) / 8, 1);
-	vkc::ImageBarrier (cmd, map, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-		VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-		VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
-	mapLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+	if (refine && grid > 1) {
+		// every pixel's corners in the cells not smooth (the grid's read)
+		barrier (CS, SW, CS, SW | SR);
+		pass[0] = 1.0f, pass[1] = 1.0f;
+		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, tracePL, 0, 1, &refineSet, 0, nullptr);
+		vkCmdPushConstants (cmd, tracePL, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof (pass), pass);
+		vkCmdDispatch (cmd, (imgW + 1 + 7) / 8, (imgH + 1 + 7) / 8, 1);
+	}
+	barrier (CS, SW, FS, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
 	stars = f.stars && starField && starPipe;
 	if (stars) BinStars (cmd);
 	traced = true;
@@ -326,13 +379,13 @@ void BlackHoleLens::Check ()
 	VkDeviceSize bytes = (VkDeviceSize)mapW * mapH * 16;
 	vkc::Buffer rb = ctx->CreateReadbackBuffer (bytes);
 	ctx->ImmediateSubmit ([&](VkCommandBuffer cmd) {
-		vkc::ImageBarrier (cmd, map, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+		vkc::ImageBarrier (cmd, map.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 			VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
 		VkBufferImageCopy r{};
 		r.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
 		r.imageExtent = { mapW, mapH, 1 };
-		vkCmdCopyImageToBuffer (cmd, map, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, rb.buffer, 1, &r);
-		vkc::ImageBarrier (cmd, map, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+		vkCmdCopyImageToBuffer (cmd, map.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, rb.buffer, 1, &r);
+		vkc::ImageBarrier (cmd, map.image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
 			VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 	});
 	vmaInvalidateAllocation (ctx->allocator, rb.alloc, 0, VK_WHOLE_SIZE);
@@ -347,7 +400,7 @@ void BlackHoleLens::Check ()
 		int ix = s < 32 ? (int)((s + 0.5) / 32.0 * (mapW - 1)) : (int)(mapW / 2);
 		int iy = s < 32 ? (int)(mapH / 2) : (int)((s - 31.5) / 32.0 * (mapH - 1));
 		const float *g = m + ((size_t)iy * mapW + ix) * 4;
-		double px = ix * (double)grid, py = iy * (double)grid;
+		double px = ix * (double)grid - f.jitter[0], py = iy * (double)grid - f.jitter[1]; // (traced at the jittered pixel)
 		double nx = px / imgW * 2.0 - 1.0, ny = py / imgH * 2.0 - 1.0;
 		double vd[3] = { nx / f.fx, -ny / f.fy, 1.0 }, l = std::sqrt (vd[0] * vd[0] + vd[1] * vd[1] + 1.0);
 		double nk[3];
@@ -432,7 +485,7 @@ void BlackHoleLens::Render (VkCommandBuffer cmd, const GalaxySky::Display &d, fl
 	struct { float colour[3][4]; float tone[4]; float grid[4]; float bg[4]; float disc[4]; } p{};
 	p.disc[0] = d.gain > 0.0f ? sunSurface / d.gain : 0.0f;
 	sky->DisplayParams (d, p.colour, p.tone);
-	p.grid[0] = (float)grid, p.grid[1] = sky->Fade (), p.grid[2] = cosmic ? 1.0f : 0.0f;
+	p.grid[0] = (float)grid, p.grid[1] = sky->Fade (), p.grid[2] = cosmic ? 1.0f : 0.0f, p.grid[3] = refine && grid > 1 ? 1.0f : 0.0f;
 	for (int i = 0; i < 3; i++) p.bg[i] = (float)betaBg[i];
 	p.bg[3] = stars ? 1.0f : 0.0f;
 	VkDescriptorSet sets[2] = { sky->DrawSet (), drawSet };

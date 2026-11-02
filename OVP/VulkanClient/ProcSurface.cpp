@@ -38,14 +38,23 @@ namespace {
 			L (L (Rand (ix, iy, iz+1, seed), Rand (ix+1, iy, iz+1, seed), u), L (Rand (ix, iy+1, iz+1, seed), Rand (ix+1, iy+1, iz+1, seed), u), v), w);
 	}
 
-	// fractal value noise from frequency f0 [1/radius] up to fmax
+	// fractal value noise from frequency f0 [1/radius] up to fmax, each
+	// octave's lattice turned (the lattices' axes, aligned, showed as steps
+	// along edges drawn from it)
 	double Fbm (const double p[3], double f0, double fmax, uint32_t seed, double gain = 0.5)
 	{
 		double sum = 0.0, amp = 1.0, norm = 0.0;
+		double q[3] = { p[0], p[1], p[2] };
 		for (int k = 0; k < 20 && f0 <= fmax; k++, f0 *= 2.03, amp *= gain) {
 			double w = std::min (1.0, 2.0 * (fmax / f0 - 1.0)); // (the last octave faded in)
-			sum += w * amp * VNoise (p[0] * f0 + 17.0 * k, p[1] * f0 - 5.0 * k, p[2] * f0 + 3.0 * k, seed + 101u * k);
+			sum += w * amp * VNoise (q[0] * f0 + 17.0 * k, q[1] * f0 - 5.0 * k, q[2] * f0 + 3.0 * k, seed + 101u * k);
 			norm += amp;
+			// (turned by ~63 deg about (1, 1, 1)/sqrt 3 for the next)
+			const double c = 0.45, sn = 0.89, t = (1.0 - c) / 3.0, r = sn / std::sqrt (3.0);
+			double x = q[0], y = q[1], z = q[2];
+			q[0] = (c + t) * x + (t - r) * y + (t + r) * z;
+			q[1] = (t + r) * x + (c + t) * y + (t - r) * z;
+			q[2] = (t - r) * x + (t + r) * y + (c + t) * z;
 		}
 		return norm > 0.0 ? sum / norm * 1.6 : 0.0;
 	}
@@ -147,6 +156,14 @@ void ProcPlanet::Texels (int lvl, int ilat, int ilng, std::vector<uint8_t> &out,
 	const double R = radius;
 	// (the colour noise: octaves down to two texels; frequencies per radius)
 	const double fmax = N / (2.0 * dlat);
+	// (a texel [rad]: the edges of seas and ice blended over one, thin lines
+	// no thinner than about one, softer and fainter instead: no stairs, no
+	// aliased hairlines)
+	const double tx = dlat / N;
+	auto Line = [&](double q, double w0, double grad) {
+		double w = std::max (w0, 1.2 * grad * tx);
+		return (1.0 - Smoothstep (0.0, w, std::fabs (q))) * std::sqrt (w0 / w); // (wider: fainter, still seen)
+	};
 	const uint32_t seed = prm.seed * 2246822519u + 7u;
 	const double relief = std::max (300.0, prm.relief + prm.mountains);
 	const Rgb low { prm.colLow[0], prm.colLow[1], prm.colLow[2] }, high { prm.colHigh[0], prm.colHigh[1], prm.colHigh[2] };
@@ -176,7 +193,7 @@ void ProcPlanet::Texels (int lvl, int ilat, int ilng, std::vector<uint8_t> &out,
 			// else latitude
 			double theta = prm.tidalLock ? std::acos (std::clamp (cb * std::cos (lng), -1.0, 1.0)) : std::fabs (lat);
 			double edge = theta - (openW + 0.06 * n1 + 0.015 * nf);
-			bool water = false;
+			double water = 0.0; // (its share of the texel)
 			Rgb col { 0, 0, 0 }, glow { 0, 0, 0 };
 			double u = e / relief;
 			auto Ground = [&](double contrast) {
@@ -187,49 +204,58 @@ void ProcPlanet::Texels (int lvl, int ilat, int ilng, std::vector<uint8_t> &out,
 			};
 			switch (cls) {
 			case OCEAN: {
-				bool frozen = edge > 0.0;
-				if (e < 0.0) {
-					if (!frozen) {
-						water = true;
-						double d = Smoothstep (0.0, 2500.0, -e);
-						col = Mix ({ 0.035, 0.10, 0.11 }, { 0.008, 0.022, 0.045 }, d);
-						// (the ice's edge: floes and slush)
-						double fl = Smoothstep (-0.05, 0.0, edge) * Smoothstep (-0.2, 0.4, nf);
-						if (fl > 0.5) water = false, col = Mix ({ 0.45, 0.50, 0.55 }, { 0.78, 0.82, 0.86 }, Smoothstep (0.5, 1.0, fl));
-					} else {
-						// (sea ice: thinner and darker near its edge, snow-covered
-						// further in; leads and pressure ridges)
-						col = Mix ({ 0.55, 0.62, 0.68 }, { 0.86, 0.88, 0.91 }, Smoothstep (0.0, 0.25, edge + 0.08 * nf));
-						double lead = 1.0 - Smoothstep (0.0, 0.04, std::fabs (VNoise (p[0] * 23.0 + 2.0 * n1, p[1] * 23.0, p[2] * 23.0, seed + 13)));
-						col = Mix (col, { 0.30, 0.36, 0.42 }, 0.6 * lead * (1.0 - Smoothstep (0.1, 0.6, edge)));
-						col = Scale (col, 1.0 + 0.08 * nf + 0.06 * n1);
-					}
-				} else {
-					col = Ground (1.0);
+				// (the sea: open water, its ice; the land; blended over a texel
+				// at the coasts and the ice's edge)
+				double cw = std::max (1.0, slope * tx * R);
+				double land = Smoothstep (-cw, cw, e), ice = Smoothstep (-tx, tx, edge);
+				double wet = 0.0;
+				Rgb sea { 0, 0, 0 }, ground { 0, 0, 0 };
+				if (land < 1.0) {
+					double d = Smoothstep (0.0, 2500.0, -e);
+					Rgb open = Mix ({ 0.035, 0.10, 0.11 }, { 0.008, 0.022, 0.045 }, d);
+					// (the ice's edge: floes and slush)
+					double fl = Smoothstep (-0.05, 0.0, edge) * Smoothstep (-0.2, 0.4, nf);
+					double floe = Smoothstep (0.45, 0.55, fl);
+					open = Mix (open, Mix ({ 0.45, 0.50, 0.55 }, { 0.78, 0.82, 0.86 }, Smoothstep (0.5, 1.0, fl)), floe);
+					// (sea ice: thinner and darker near its edge, snow-covered
+					// further in; leads and pressure ridges)
+					Rgb pack = Mix ({ 0.55, 0.62, 0.68 }, { 0.86, 0.88, 0.91 }, Smoothstep (0.0, 0.25, edge + 0.08 * nf));
+					double lead = Line (VNoise (p[0] * 23.0 + 2.0 * n1, p[1] * 23.0, p[2] * 23.0, seed + 13), 0.04, 60.0);
+					pack = Mix (pack, { 0.30, 0.36, 0.42 }, 0.6 * lead * (1.0 - Smoothstep (0.1, 0.6, edge)));
+					pack = Scale (pack, 1.0 + 0.08 * nf + 0.06 * n1);
+					sea = Mix (open, pack, ice);
+					wet = (1.0 - ice) * (1.0 - floe);
+				}
+				if (land > 0.0) {
+					ground = Ground (1.0);
 					// (coasts: sediment; snow beyond the ice edge and on the
 					// heights)
-					col = Mix (col, Scale (low, 1.3), 0.4 * (1.0 - Smoothstep (0.0, 150.0, e)));
+					ground = Mix (ground, Scale (low, 1.3), 0.4 * (1.0 - Smoothstep (0.0, 150.0, e)));
 					double snow = std::max (Smoothstep (0.05, 0.2, edge + 0.04 * nf), Smoothstep (3500.0, 5500.0, e + 600.0 * nf - 1500.0 * std::cos (theta)));
 					snow *= 1.0 - 0.6 * Smoothstep (0.5, 1.0, slope);
-					col = Mix (col, { 0.84, 0.86, 0.90 }, snow);
+					ground = Mix (ground, { 0.84, 0.86, 0.90 }, snow);
 				}
+				col = Mix (sea, ground, land);
+				water = wet * (1.0 - land);
 				break; }
 			case ICE: {
 				col = Mix (high, low, 0.35 * (1.0 - Smoothstep (-1.0, 0.8, u)));
-				// lineae: dark bands along the noise's zero lines
+				// lineae: reddish-brown bands along the noise's zero lines,
+				// stronger and fainter along their length
 				double q = VNoise (p[0] * 9.0 + n1, p[1] * 9.0, p[2] * 9.0 - n1, seed + 3) + 0.3 * VNoise (p[0] * 37.0, p[1] * 37.0, p[2] * 37.0, seed + 4);
-				double line = 1.0 - Smoothstep (0.0, 0.035, std::fabs (q));
-				col = Mix (col, Scale (low, 0.75), 0.75 * line);
+				double line = Line (q, 0.035, 45.0) * Smoothstep (-0.4, 0.4, nf + n1);
+				col = Mix (col, { low.r * 0.8, low.g * 0.66, low.b * 0.55 }, 0.75 * line);
 				col = Scale (col, 1.0 + 0.06 * nf + 0.05 * n1);
-				if (openW > 0.0 && edge < 0.0) {
-					water = edge < -0.02;
-					col = water ? Rgb { 0.01, 0.025, 0.045 } : Rgb { 0.35, 0.40, 0.46 };
+				if (openW > 0.0 && edge < tx) {
+					// (open water, its slushy shore)
+					double slush = Smoothstep (-0.02 - tx, -0.02 + tx, edge), ice = Smoothstep (-tx, tx, edge);
+					col = Mix (Mix ({ 0.01, 0.025, 0.045 }, { 0.35, 0.40, 0.46 }, slush), col, ice);
+					water = 1.0 - slush;
 				}
 				break; }
 			case LAVA: {
 				col = Scale (Ground (1.2), 0.6);
-				double q = std::fabs (VNoise (p[0] * 14.0 + n1, p[1] * 14.0, p[2] * 14.0, seed + 5));
-				double flow = (1.0 - Smoothstep (0.0, 0.05, q)) * Smoothstep (0.0, 0.5, n1 + 0.3);
+				double flow = Line (VNoise (p[0] * 14.0 + n1, p[1] * 14.0, p[2] * 14.0, seed + 5), 0.05, 30.0) * Smoothstep (0.0, 0.5, n1 + 0.3);
 				glow = Scale ({ 1.0, 0.32, 0.05 }, flow);
 				break; }
 			case DESERT:
@@ -241,7 +267,7 @@ void ProcPlanet::Texels (int lvl, int ilat, int ilng, std::vector<uint8_t> &out,
 			}
 			if (mask) {
 				o[0] = Srgb (glow.r), o[1] = Srgb (glow.g), o[2] = Srgb (glow.b);
-				o[3] = water ? 0 : 255;
+				o[3] = (uint8_t)std::lround (255.0 * (1.0 - std::clamp (water, 0.0, 1.0)));
 			} else {
 				o[0] = Srgb (col.r), o[1] = Srgb (col.g), o[2] = Srgb (col.b), o[3] = 255;
 			}
@@ -307,17 +333,20 @@ void ProcPlanet::GasMap (int w, int h, std::vector<uint8_t> &rgba) const
 	const uint32_t seed = prm.seed * 2246822519u + 11u;
 	const Rgb belt { prm.colLow[0], prm.colLow[1], prm.colLow[2] }, zone { prm.colHigh[0], prm.colHigh[1], prm.colHigh[2] };
 	double phase = 6.28 * (Pcg (seed) >> 8) / 16777216.0;
+	// (no finer than two texels: finer noise aliased into a crosshatch, the
+	// turbulence (stretched in latitude) into steps along the bands)
+	double fNyq = w / (2.0 * PI_) / 2.0;
 	for (int y = 0; y < h; y++) {
 		double lat = PI_ * (0.5 - (y + 0.5) / h), cb = std::cos (lat), sb = std::sin (lat);
 		for (int x = 0; x < w; x++) {
 			double lng = -PI_ + 2.0 * PI_ * (x + 0.5) / w;
 			double p[3] = { cb * std::cos (lng), sb, cb * std::sin (lng) };
 			double q[3] = { p[0] * 0.6, p[1] * 3.0, p[2] * 0.6 };
-			double turb = Fbm (q, 4.0, 160.0, seed, 0.55);
+			double turb = Fbm (q, 4.0, std::min (160.0, fNyq / 3.0), seed, 0.55);
 			double band = 0.5 + 0.5 * std::sin (lat * 13.0 + phase + 1.2 * turb + 0.6 * std::sin (lat * 5.0));
 			band = Smoothstep (0.25, 0.75, band);
 			Rgb c = Mix (belt, zone, band);
-			double fine = Fbm (p, 40.0, 600.0, seed + 9);
+			double fine = Fbm (p, 40.0, std::min (600.0, fNyq), seed + 9);
 			c = Scale (c, 1.0 + 0.05 * fine + 0.08 * turb);
 			double pole = Smoothstep (0.85, 1.35, std::fabs (lat));
 			c = Mix (c, { belt.r * 0.75, belt.g * 0.8, belt.b * 0.92 }, pole);

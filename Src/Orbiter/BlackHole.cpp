@@ -21,6 +21,7 @@ BlackHole::BlackHole (char *fname)
 		GetItemReal (ifs, "Spin", chi);
 		GetItemReal (ifs, "AccretionRate", discRate);
 		GetItemReal (ifs, "DiscOuter", discOuter);
+		GetItemReal (ifs, "DiscGlow", discGlow);
 	}
 	chi = std::clamp (chi, -MAX_SPIN, MAX_SPIN);
 	hole = kerr::Hole::FromSI (mass, chi);

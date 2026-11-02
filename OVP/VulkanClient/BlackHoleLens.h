@@ -13,7 +13,11 @@
 // aberration, Doppler shift and the gravitational shift together). The
 // star field's stars are binned by direction (Shaders/lens_stars.comp) and
 // gathered by the pixels whose footprints on the sky hold them: points,
-// every image, magnified.
+// every image, magnified. A second pass traces every pixel's corners in
+// the grid's cells that are not smooth (edges, thin images); the corners
+// follow the projection's jitter (temporal anti-aliasing). Translucent gas
+// (the disc's fading edge, its lit outer parts) is drawn over the sky from
+// an overlay map.
 // =======================================================================
 
 #ifndef __BLACKHOLELENS_H
@@ -48,6 +52,11 @@ public:
 		/// the donor's azimuth and distance (0: no stream), the hot spot's
 		/// radius, the inner Lagrange point's
 		double streamPhi = 0.0, streamA = 0.0, streamHot = 0.0, streamL1 = 0.0;
+		/// the disc's cool outer parts drawn lit (an artistic liberty): its
+		/// rim [M] (0: not drawn) and brightness
+		double glowRim = 0.0, glow = 0.0;
+		/// the projection's jitter [px] (temporal anti-aliasing)
+		float jitter[2] = { 0.0f, 0.0f };
 	};
 
 	bool Init (vkc::Context *ctx, GalaxySky *sky, StarField *stars);
@@ -69,6 +78,13 @@ public:
 	static constexpr uint32_t STAR_NCELL = 6 * 128 * 128; ///< (lensstars.glsl's LENS_NCELL)
 
 private:
+	struct Image {
+		VkImage image = VK_NULL_HANDLE;
+		VmaAllocation alloc = VK_NULL_HANDLE;
+		VkImageView view = VK_NULL_HANDLE;
+	};
+	void CreateImage (Image &im, uint32_t w, uint32_t h, VkFormat fmt);
+	void DestroyImage (Image &im);
 	void EnsureMap (uint32_t w, uint32_t h);
 	void CreatePipelines ();
 
@@ -88,11 +104,11 @@ private:
 	VkPipeline starPipe = VK_NULL_HANDLE;
 	bool ready = false, traced = false;
 	int grid = 2;                     // [px] between the grid's corners (ORBITER_VK_LENS_GRID)
+	bool refine = true;               // the cells not smooth traced at every pixel (ORBITER_VK_LENS_REFINE)
 	uint32_t mapW = 0, mapH = 0, imgW = 0, imgH = 0;
-	VkImage map = VK_NULL_HANDLE;
-	VmaAllocation mapAlloc = VK_NULL_HANDLE;
-	VkImageView mapView = VK_NULL_HANDLE;
-	VkImageLayout mapLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	// the grid's map and overlay, every pixel's (refined), all kept in the general layout
+	Image map, overlay, fine, fineOverlay;
+	bool mapsNew = true;
 	vkc::Buffer params;
 	bool cosmic = true;
 	double betaBg[3] = {};
@@ -101,7 +117,7 @@ private:
 	VkSampler sampler = VK_NULL_HANDLE;
 	VkDescriptorSetLayout traceLayout = VK_NULL_HANDLE, drawLayout = VK_NULL_HANDLE;
 	VkDescriptorPool pool = VK_NULL_HANDLE;
-	VkDescriptorSet traceSet = VK_NULL_HANDLE, drawSet = VK_NULL_HANDLE;
+	VkDescriptorSet traceSet = VK_NULL_HANDLE, refineSet = VK_NULL_HANDLE, drawSet = VK_NULL_HANDLE;
 	VkPipelineLayout tracePL = VK_NULL_HANDLE, drawPL = VK_NULL_HANDLE;
 	VkPipeline tracePipe = VK_NULL_HANDLE, drawPipe = VK_NULL_HANDLE;
 };

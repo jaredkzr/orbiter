@@ -10,7 +10,9 @@
 // Optionally an accretion disc: AccretionRate (in units of the Eddington
 // rate: Mdot = rate L_Edd / (eta c^2), eta = 1 - E_ISCO) and DiscOuter (its
 // outer radius in masses, default 1000): a thin Novikov-Thorne disc from
-// the ISCO out, in the spin's plane.
+// the ISCO out, in the spin's plane. DiscGlow (default 0; an artistic
+// liberty): the disc's cool outer parts, too cool to glow, drawn lit by
+// its hot inner parts and a donor star (1: clearly seen).
 // Its size is its horizon's radius. Vessels within its strong field
 // (StrongRange) fly in its Kerr spacetime (RelFlight.cpp).
 //
@@ -81,6 +83,8 @@ public:
 	double DiscTempScale () const { return discTK; }
 	double DiscTmax () const { return discTmax; }
 	double DiscLuminosity () const { return discL; }
+	/// the cool outer disc drawn lit (0: not drawn; 1: clearly seen)
+	double DiscGlow () const { return discGlow; }
 
 	/// the spin axis (north pole) in the global frame; the Kerr x, y axes
 	Vector SpinAxis () const { return axis; }
@@ -92,7 +96,7 @@ public:
 private:
 	void SetFrame ();
 	kerr::Hole hole;
-	double discRate = 0.0, discOuter = 1000.0, discTK = 0.0, discTmax = 0.0, discL = 0.0;
+	double discRate = 0.0, discOuter = 1000.0, discTK = 0.0, discTmax = 0.0, discL = 0.0, discGlow = 0.0;
 	Vector axis;     // spin axis (global)
 	Vector e1, e2;   // the Kerr x and y axes (global): e1 x e2 = axis right-handed
 };

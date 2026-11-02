@@ -571,6 +571,7 @@ DLLEXPORT bool oapiGetBlackHoleInfo (OBJHANDLE hBody, BLACKHOLEINFO *info)
 	info->strongRange = bh->StrongRange ();
 	info->discRate = bh->DiscRate (), info->discOuter = bh->DiscOuter ();
 	info->discTempScale = bh->DiscTempScale (), info->discTmax = bh->DiscTmax (), info->discLuminosity = bh->DiscLuminosity ();
+	info->discGlow = bh->DiscGlow ();
 	// (the star orbiting it whose Roche lobe it fills: its disc's donor)
 	info->donor = NULL;
 	for (size_t k = 0; g_psys && k < g_psys->nStar (); k++) {

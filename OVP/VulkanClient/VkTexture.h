@@ -59,6 +59,8 @@ public:
 	VkTexture *CreateRGBA (uint32_t w, uint32_t h, const uint8_t *rgba);
 	/// the same, linear (data such as normals)
 	VkTexture *CreateRGBALinear (uint32_t w, uint32_t h, const uint8_t *rgba);
+	/// RGBA half floats (linear; smooth gradients scaled far up: glows)
+	VkTexture *CreateRGBAHalf (uint32_t w, uint32_t h, const uint16_t *rgba);
 	/// RGBA8 linear, with mip levels; the upload recorded into the current
 	/// frame (no wait)
 	VkTexture *CreateRGBADeferred (uint32_t w, uint32_t h, const uint8_t *rgba);

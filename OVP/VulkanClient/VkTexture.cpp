@@ -243,6 +243,12 @@ VkTexture *TextureManager::CreateRGBA (uint32_t w, uint32_t h, const uint8_t *rg
 	return CreateImage (VK_FORMAT_R8G8B8A8_SRGB, w, h, 1, rgba, ofs, (size_t)w * h * 4, true);
 }
 
+VkTexture *TextureManager::CreateRGBAHalf (uint32_t w, uint32_t h, const uint16_t *rgba)
+{
+	std::vector<size_t> ofs = { 0 };
+	return CreateImage (VK_FORMAT_R16G16B16A16_SFLOAT, w, h, 1, (const uint8_t*)rgba, ofs, (size_t)w * h * 8, true);
+}
+
 VkTexture *TextureManager::CreateRGBAMips (uint32_t w, uint32_t h, uint32_t nMip, const uint8_t *data,
 	const std::vector<size_t> &mipOffsets, size_t dataSize)
 {
