@@ -27,6 +27,12 @@ public:
 	/// [pc]) has moved enough (outside rendering scopes; at once: Init)
 	void Update (const double pos[3], bool now = false);
 	VkImageView View () const { return view; }
+	/// a star's ring of dust (a debris disc) near the observer: the
+	/// observer relative to the star and the ring's axis (ecliptic,
+	/// right-handed) [AU], its radius and width (FWHM) [AU], its fractional
+	/// luminosity and the star's luminosity [Sun's] (fraction 0: none)
+	struct Ring { double obs[3] = {}, axis[3] = { 0, 0, 1 }, radius = 0.0, width = 0.0, fraction = 0.0, lum = 1.0; };
+	void SetRing (const Ring &r) { ring = r; }
 	/// the model's largest deviation from the measured light at 1 AU (a fraction)
 	double Deviation () const { return deviation; }
 
@@ -46,6 +52,8 @@ private:
 	float colour[4] = {};
 	double eclFromGal[3][3] = {};
 	double last[3] = { 1e30, 0.0, 0.0 }; // observer of the light [AU]
+	Ring ring, lastRing;       // (the ring now, and of the light)
+	double kZod = 1.0;         // the zodiacal cloud's light absorbed per its density unit (fractional luminosity per model unit)
 	bool enabled = true;
 	double deviation = 0.0;
 };

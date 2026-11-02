@@ -102,6 +102,7 @@ private:
 	ZTreeMgr *treeMgr[5];
 	bool bDirExists, bModExists;
 	bool hasData = true; // elevation tiles (archive or directory); else flat, with the detail on it
+	const class ProcTerrain *proc = nullptr; // procedural relief (no data)
 	mutable std::vector<ElevationTile> *local_cache = nullptr;
 	mutable std::unique_ptr<class TerrainDetail> detail;
 	mutable bool detailInit = false;

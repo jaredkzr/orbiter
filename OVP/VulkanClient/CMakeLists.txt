@@ -204,6 +204,7 @@ add_library(VulkanClient SHARED
 	Particles.cpp
 	Plumes.cpp
 	TileArchive.cpp
+	ProcSurface.cpp
 	PlanetSurface.cpp
 	Atmosphere.cpp
 	Shadows.cpp

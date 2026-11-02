@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "elevmgr.h"
+#include "ProcTerrain.h"
 #include "PolarElevation.h"
 #include <algorithm>
 #include <cmath>
@@ -109,6 +110,12 @@ ElevationManager::ElevationManager (const CelestialBody *_cbody)
 	bDirExists = std::filesystem::is_directory(x);
 
 	hasData = treeMgr[0] || bDirExists;
+	// (no data: the procedural relief, if any)
+	if (!hasData && cbody->Type() == OBJTP_PLANET) {
+		proc = ((const Planet*)cbody)->ProcSurface ();
+		if (proc && proc->Prm ().cls == ProcTerrain::GAS) proc = nullptr;
+		hasData = proc != nullptr;
+	}
 
 	sprintf(fname, "%s\\Elev_mod", cbody->Name());
 	g_pOrbiter->Cfg()->PTexPath(path, fname);
@@ -150,6 +157,7 @@ bool ElevationManager::TileIdx (double lat, double lng, int lvl, int *ilat, int 
 
 bool ElevationManager::HasElevationTile(int lvl, int ilat, int ilng) const
 {
+	if (mode && proc) return lvl >= 4 && lvl <= proc->Prm ().maxLevel;
 	if (mode) {
 		if (tilesource & 0x0001 && bDirExists) {
 			char fname[256], path[256];
@@ -169,6 +177,13 @@ INT16 *ElevationManager::LoadElevationTile (int lvl, int ilat, int ilng, double 
 	INT16 *elev = 0;
 	INT16 ofs;
 
+	if (mode && proc) {
+		if (lvl < 4 || lvl > proc->Prm ().maxLevel) return nullptr;
+		elev = new INT16[elev_stride*elev_stride];
+		proc->Tile (lvl, ilat, ilng, 0, tgt_res, elev);
+		oapi::PolarElevationRows (elev, elev_stride, lvl, ilat);
+		return elev;
+	}
 	if (mode) {
 		int i;
 		const int ndat = elev_stride*elev_stride;

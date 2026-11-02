@@ -1,0 +1,36 @@
+BEGIN_HYPERDESC
+<h1>TRAPPIST-1 e: on the shore</h1>
+A delta-glider on the lowlands of TRAPPIST-1 e, 40 light years away, near the
+edge of the open sea that lies under its red dwarf. The planet is tidally
+locked: the star stands still in its amber sky, and the other planets of the
+system pass by, some larger than the Moon in Earth's sky.<br>
+Its size, mass and orbit are measured; its surface, ocean and atmosphere are
+assumed (procedural).
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 61000.30
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship GL-E
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET GL-E
+  MODE Extern
+  POS 4.0 -150.0 -10
+  TRACKMODE TargetRelative
+  FOV 60.00
+END_CAMERA
+
+BEGIN_SHIPS
+GL-E:DeltaGlider
+  STATUS Landed TRAPPIST-1 e
+  POS -28.6479000 -22.9183000
+  HEADING 250.00
+  GEAR 1 1.0000
+  PRPLEVEL 0:1.000 1:1.000
+END
+END_SHIPS

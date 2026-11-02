@@ -21,6 +21,11 @@ namespace {
 	constexpr double REDDENING = 0.4;
 	constexpr double MOVE = 0.002;  // relative change of the observer's place that computes the light again
 	constexpr double MOVE_MIN = 1e-4; // [AU]
+	// the zodiacal cloud's fractional luminosity (its dust's share of the
+	// Sun's light; Nesvorny et al. 2010: about 1e-7): debris rings' density
+	// in the model's units by theirs
+	constexpr double ZOD_FRACTION = 1e-7;
+	constexpr double RING_HR = 0.05; // a ring's thickness (Gaussian sigma) per its radius
 
 	// the model, as zodiacal.glsl
 	const double ALPHA = 1.34, BETA = 4.14, GAMMA = 0.942, MU = 0.189;
@@ -122,6 +127,24 @@ void Zodiacal::Init (vkc::Context *c, const GalaxySky &sky)
 		}
 		oapiWriteLog (buf);
 	}
+	// (the cloud's absorbed share per density unit: the density integrated
+	// over all directions and out to 5 AU, / 4 pi, as the rings' pi sigma h)
+	{
+		double K = 0.0;
+		const int NR = 400, NT = 90, NP = 36;
+		for (int i = 0; i < NR; i++) {
+			double R = 0.01 + (i + 0.5) * (5.0 - 0.01) / NR, dR = (5.0 - 0.01) / NR;
+			for (int j = 0; j < NT; j++) {
+				double th = (j + 0.5) * 3.14159265358979323846 / NT;
+				for (int k = 0; k < NP; k++) {
+					double ph = (k + 0.5) * 2.0 * 3.14159265358979323846 / NP;
+					double x[3] = { R * std::sin (th) * std::cos (ph), R * std::sin (th) * std::sin (ph), R * std::cos (th) };
+					K += Density (x) * std::sin (th) * dR * (3.14159265358979323846 / NT) * (2.0 * 3.14159265358979323846 / NP);
+				}
+			}
+		}
+		kZod = K / (4.0 * 3.14159265358979323846);
+	}
 	const double (*bands)[2] = sky.Bands ();
 	for (int b = 0; b < GalaxySky::NBAND; b++)
 		colour[b] = (float)std::pow (0.5 * (bands[b][0] + bands[b][1]) / 550.0, REDDENING);
@@ -158,7 +181,7 @@ void Zodiacal::Init (vkc::Context *c, const GalaxySky &sky)
 	VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
 	w.dstSet = set, w.dstBinding = 0, w.descriptorCount = 1, w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, w.pImageInfo = &ii;
 	vkUpdateDescriptorSets (ctx->device, 1, &w, 0, nullptr);
-	VkPushConstantRange pcr{ VK_SHADER_STAGE_COMPUTE_BIT, 0, 80 };
+	VkPushConstantRange pcr{ VK_SHADER_STAGE_COMPUTE_BIT, 0, 128 };
 	VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 	plci.setLayoutCount = 1, plci.pSetLayouts = &layout, plci.pushConstantRangeCount = 1, plci.pPushConstantRanges = &pcr;
 	VK_CHECK(vkCreatePipelineLayout (ctx->device, &plci, nullptr, &pl));
@@ -204,8 +227,17 @@ void Zodiacal::Update (const double pos[3], bool now)
 		au[i] = (eclFromGal[i][0] * pos[0] + eclFromGal[i][1] * pos[1] + eclFromGal[i][2] * pos[2]) * AU_PER_PC;
 	double dx = au[0] - last[0], dy = au[1] - last[1], dz = au[2] - last[2];
 	double r = std::sqrt (au[0] * au[0] + au[1] * au[1] + au[2] * au[2]);
-	if (std::sqrt (dx * dx + dy * dy + dz * dz) < std::max (MOVE * r, MOVE_MIN)) return;
+	bool moved = std::sqrt (dx * dx + dy * dy + dz * dz) >= std::max (MOVE * r, MOVE_MIN);
+	// (a ring: moved relative to its star, or another ring)
+	if ((ring.fraction > 0.0) != (lastRing.fraction > 0.0) || ring.radius != lastRing.radius) moved = true;
+	else if (ring.fraction > 0.0) {
+		double rx = ring.obs[0] - lastRing.obs[0], ry = ring.obs[1] - lastRing.obs[1], rz = ring.obs[2] - lastRing.obs[2];
+		double rr = std::sqrt (ring.obs[0] * ring.obs[0] + ring.obs[1] * ring.obs[1] + ring.obs[2] * ring.obs[2]);
+		if (std::sqrt (rx * rx + ry * ry + rz * rz) >= std::max (MOVE * rr, 0.01)) moved = true;
+	}
+	if (!moved) return;
 	for (int i = 0; i < 3; i++) last[i] = au[i];
+	lastRing = ring;
 	if (now) ctx->ImmediateSubmit ([&](VkCommandBuffer cmd) { Compute (cmd); });
 	else {
 		ctx->EndTarget ();
@@ -216,10 +248,22 @@ void Zodiacal::Update (const double pos[3], bool now)
 void Zodiacal::Compute (VkCommandBuffer cmd)
 {
 	const double *au = last;
-	struct { float obs[4], rows[3][4], colour[4]; } p{};
+	struct { float obs[4], rows[3][4], colour[4], ringObs[4], ringAxis[4], ringPrm[4]; } p{};
 	for (int i = 0; i < 3; i++) {
 		p.obs[i] = (float)au[i];
 		for (int j = 0; j < 3; j++) p.rows[i][j] = (float)eclFromGal[i][j];
+	}
+	// a ring: its density in the model's units by its fractional luminosity
+	// against the cloud's (its share of the light absorbed: pi sigma h per
+	// density unit), lit by its star
+	const Ring &rg = lastRing;
+	if (rg.fraction > 0.0 && rg.radius > 0.0) {
+		double sigma = rg.width / 2.3548, h = RING_HR * rg.radius;
+		double n0 = rg.fraction / ZOD_FRACTION * kZod / (3.14159265358979323846 * sigma * RING_HR);
+		for (int i = 0; i < 3; i++) p.ringObs[i] = (float)rg.obs[i], p.ringAxis[i] = (float)rg.axis[i];
+		p.ringObs[3] = (float)(n0 * rg.lum);
+		p.ringAxis[3] = (float)rg.radius;
+		p.ringPrm[0] = (float)sigma, p.ringPrm[1] = (float)h;
 	}
 	p.obs[3] = (float)scale;
 	p.rows[0][3] = (float)SIZE;

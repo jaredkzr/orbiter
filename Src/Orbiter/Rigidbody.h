@@ -152,6 +152,7 @@ public:
 	// adopted with the state at its end)
 	void BeginStateUpdate () override;
 	void EndStateUpdate () override;
+	void SyncStateBuffers () override;
 	static double Potential (const Vector &gpos);
 	// gravitational potential of the celestial bodies at gpos (end of the step)
 

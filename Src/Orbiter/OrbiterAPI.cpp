@@ -32,6 +32,7 @@
 #include "RelTravel.h"
 #include "StarTargets.h"
 #include "Star.h"
+#include "ProcTerrain.h"
 #include "Transfer.h"
 #include "Replay.h"
 #include "TerrainDetail.h"
@@ -1987,6 +1988,48 @@ DLLEXPORT bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, SURFDETAILPARAM *prm)
 	prm->craterFresh = p.craterFresh;
 	prm->pebbles = p.pebbles;
 	prm->flatSpacing = det->FlatSpacing ();
+	return true;
+}
+
+DLLEXPORT bool oapiGetDustRing (OBJHANDLE hStar, DUSTRINGINFO *ring)
+{
+	Body *body = (Body*)hStar;
+	if (!body || body->Type() != OBJTP_STAR) return false;
+	const Star *st = (const Star*)body;
+	const Star::DustRing *d = st->Dust ();
+	if (!d) return false;
+	const double AU = 1.495978707e11;
+	ring->radius = d->radius * AU, ring->width = d->width * AU, ring->fraction = d->fraction;
+	ring->luminosity = st->Luminosity () > 0.0 ? st->Luminosity () : 1.0;
+	Vector a (st->DustAxis ());
+	ring->axis = _V(a.x, a.y, a.z);
+	return true;
+}
+
+DLLEXPORT bool oapiProcSurfaceParams (OBJHANDLE hPlanet, PROCSURFACEPARAM *prm)
+{
+	Body *body = (Body*)hPlanet;
+	if (!body || body->Type() != OBJTP_PLANET) return false;
+	const ProcTerrain *pt = ((Planet*)body)->ProcSurface ();
+	if (!pt) return false;
+	const ProcTerrain::Params &p = pt->Prm ();
+	prm->surfClass = p.cls;
+	prm->seed = p.seed;
+	prm->maxLevel = p.maxLevel;
+	prm->relief = p.relief, prm->mountains = p.mountains, prm->sea = p.sea, prm->craters = p.craters;
+	prm->openWater = p.openWater * RAD;
+	for (int i = 0; i < 3; i++) prm->colLow[i] = p.colLow[i], prm->colHigh[i] = p.colHigh[i];
+	prm->tidalLock = ((Planet*)body)->TidallyLocked ();
+	return true;
+}
+
+DLLEXPORT bool oapiProcElevationTile (OBJHANDLE hPlanet, int lvl, int ilat, int ilng, int trunc, double res, short *elev, bool seabed)
+{
+	Body *body = (Body*)hPlanet;
+	if (!body || body->Type() != OBJTP_PLANET || lvl < 4 || lvl > 24) return false;
+	const ProcTerrain *pt = ((Planet*)body)->ProcSurface ();
+	if (!pt || pt->Prm ().cls == ProcTerrain::GAS) return false;
+	pt->Tile (lvl, ilat, ilng, trunc, res, (int16_t*)elev, seabed);
 	return true;
 }
 

@@ -82,6 +82,7 @@ set(headless_src
 	MapView.cpp
 	UiAnchor.cpp
 	TerrainDetail.cpp
+	ProcTerrain.cpp
 	GroundScatter.cpp
 	Cities.cpp
 	Replay.cpp

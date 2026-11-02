@@ -134,7 +134,7 @@ void main ()
 			ds *= 2.2;
 		}
 		od *= sigma;
-		vec3 sunAtm = AtmSunTransmittance (p, r, dot (p, sun) / r) * pc.shell.w;
+		vec3 sunAtm = AtmSunTransmittance (p, r, dot (p, sun) / r) * pc.shell.w * atm.sunTint.rgb;
 		// multiple scattering: octaves of weaker extinction and flatter phase
 		vec3 Ssun = vec3 (0.0);
 		float aa = 1.0, bb = 1.0, cc = 1.0;

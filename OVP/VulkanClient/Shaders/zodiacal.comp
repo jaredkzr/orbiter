@@ -18,6 +18,9 @@ layout(push_constant) uniform Params {
 	vec4 observer;      // xyz: heliocentric ecliptic [AU]; w: S10 per model unit
 	vec4 eclFromGal[3]; // rows of the rotation Galactic -> ecliptic; w of the first: face size
 	vec4 colour;        // per band, relative to sunlight's
+	vec4 ringObs;       // a debris ring: the observer relative to its star (ecliptic) [AU]; w: density scale (0: none)
+	vec4 ringAxis;      //   its axis; w: radius [AU]
+	vec4 ringPrm;       //   radial sigma, height sigma [AU]
 } pc;
 
 vec3 FaceDir (int face, vec2 uv) // (as sky_bake.comp)
@@ -39,5 +42,7 @@ void main ()
 	vec3 g = normalize (FaceDir (px.z, uv));
 	vec3 d = vec3 (dot (pc.eclFromGal[0].xyz, g), dot (pc.eclFromGal[1].xyz, g), dot (pc.eclFromGal[2].xyz, g));
 	float I = ZodLight (pc.observer.xyz, d, 64) * pc.observer.w;
+	if (pc.ringObs.w > 0.0)
+		I += RingLight (pc.ringObs.xyz, d, pc.ringAxis.xyz, pc.ringAxis.w, pc.ringPrm.x, pc.ringPrm.y, 160) * pc.ringObs.w * pc.observer.w;
 	imageStore (cube, px, min (I * pc.colour, vec4 (60000.0)));
 }

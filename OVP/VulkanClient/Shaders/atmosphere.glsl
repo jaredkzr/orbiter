@@ -29,6 +29,7 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 detailPrm;     // terrain detail: ridged share, crater cells, crater depth, fresh craters
 	vec4 surfPrm;       // x: colour saturation of the surface textures; yzw: diffuse radiance of overcast atmospheres (per unit sun intensity)
 	vec4 relBeta;       // relativistic view: the camera's velocity (view space, units of c; 0: at rest)
+	vec4 sunTint;       // the light's colour (luminance 1)
 } atm;
 
 // planet surface (western and eastern hemisphere), for reflections
@@ -207,7 +208,7 @@ vec3 Inscatter (vec3 d, float tMax, out vec3 T)
 	float mu = dot (d, atm.sunDir.xyz);
 	float pR = 3.0 / (16.0 * ATM_PI) * (1.0 + mu * mu);
 	vec3 pM = AtmMiePhase (mu);
-	return atm.radii.w * (sumR * atm.betaR.rgb * pR + sumM * atm.betaM.rgb * pM + sumMS) + glow;
+	return atm.radii.w * atm.sunTint.rgb * (sumR * atm.betaR.rgb * pR + sumM * atm.betaM.rgb * pM + sumMS) + glow;
 }
 
 // Sunlit planet surface seen from afar, at the unit normal n (planet

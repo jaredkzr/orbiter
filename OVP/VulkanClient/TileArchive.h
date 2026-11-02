@@ -41,16 +41,20 @@ private:
 	std::vector<uint32_t> px; // RGBA8 (r in the low byte), rows from north to south, longitude -180 at the left
 };
 
+class ProcPlanet;
+
 class TileLayer {
 public:
 	enum Layer { SURF, MASK, ELEV, ELEVMOD, CLOUD };
 
 	/// planetDir: Textures/<planet> directory
 	TileLayer (const std::string &planetDir, Layer layer);
+	/// a procedural planet's tiles (ProcSurface.h), made on demand
+	TileLayer (std::shared_ptr<ProcPlanet> proc, Layer layer);
 	~TileLayer ();
 
 	/// true if the layer has any data (archive, cache or legacy map)
-	bool Valid () const { return archive != nullptr || cacheExists || legacy; }
+	bool Valid () const { return archive != nullptr || cacheExists || legacy || proc; }
 	/// the layer comes from the legacy patch textures
 	bool Legacy () const { return legacy != nullptr; }
 
@@ -81,6 +85,8 @@ private:
 	uint64_t dataOfs = 0, dataLength = 0;
 	bool cacheExists = false;
 	std::unique_ptr<LegacyMap> legacy;
+	std::shared_ptr<ProcPlanet> proc;
+	Layer kind = SURF;
 	std::mutex mtx;
 };
 

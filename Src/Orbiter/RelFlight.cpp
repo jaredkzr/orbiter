@@ -106,6 +106,12 @@ void RigidBody::EndStateUpdate ()
 	clockOfs = clockOfs1;
 }
 
+void RigidBody::SyncStateBuffers ()
+{
+	Body::SyncStateBuffers ();
+	clockOfs1 = clockOfs;
+}
+
 double RigidBody::Potential (const Vector &gpos)
 {
 	double phi = 0.0;

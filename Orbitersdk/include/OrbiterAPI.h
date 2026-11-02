@@ -4839,6 +4839,59 @@ OAPIFUNC bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, SURFDETAILPARAM *prm);
  */
 OAPIFUNC void oapiSurfaceDetailSupported ();
 
+/// Parameters of the procedural surface of a planet without elevation data
+/// or textures (the exoplanets: SurfaceClass and the other Surface entries
+/// of the planet configuration files)
+struct PROCSURFACEPARAM {
+	int surfClass;       ///< 0 rock, 1 ocean, 2 ice, 3 desert, 4 lava, 5 gas giant
+	unsigned int seed;   ///< the world's seed
+	int maxLevel;        ///< finest elevation tile level
+	double relief;       ///< continents and basins [m]
+	double mountains;    ///< ranges and ridges [m]
+	double sea;          ///< share of the surface below the datum
+	double craters;      ///< large craters (0 to 1)
+	double openWater;    ///< angular radius of open water about the substellar point (tidally locked), else latitude of the ice edge [rad]
+	double colLow[3];    ///< albedo of the lowlands (or a gas giant's belts)
+	double colHigh[3];   ///< albedo of the highlands (or a gas giant's zones)
+	bool tidalLock;      ///< meridian 0 always faces the primary
+};
+
+/**
+ * \brief Parameters of the procedural surface of a planet.
+ * \return false if the planet has none
+ */
+OAPIFUNC bool oapiProcSurfaceParams (OBJHANDLE hPlanet, PROCSURFACEPARAM *prm);
+
+/**
+ * \brief An elevation tile of a planet's procedural surface, as the core
+ *   uses it (before oapi::PolarElevationRows): 259 x 259 nodes, rows south
+ *   to north, a border of one node before and two after the 256 intervals.
+ * \param lvl tile level (4: the hemispheres)
+ * \param trunc wavelengths down to two node spacings of this level (0: lvl)
+ * \param res elevation unit [m]
+ * \param seabed an ocean world's sea floor (default: the seas' surface, the
+ *   ground of the core)
+ * \return false if the planet has no procedural surface
+ * \note Thread safe.
+ */
+OAPIFUNC bool oapiProcElevationTile (OBJHANDLE hPlanet, int lvl, int ilat, int ilng, int trunc, double res, short *elev, bool seabed = false);
+
+/// A ring of dust about a star (a debris disc: DustRing in the star's
+/// configuration file)
+struct DUSTRINGINFO {
+	double radius;       ///< [m]
+	double width;        ///< full width at half maximum [m]
+	double fraction;     ///< fractional luminosity (the dust's share of the star's light)
+	double luminosity;   ///< the star's, relative to the Sun's
+	VECTOR3 axis;        ///< the ring's axis (global frame, unit)
+};
+
+/**
+ * \brief The ring of dust about a star.
+ * \return false if it has none
+ */
+OAPIFUNC bool oapiGetDustRing (OBJHANDLE hStar, DUSTRINGINFO *ring);
+
 /// Kinds of ground scatter objects
 enum SCATTERKIND { SCATTER_ROCK = 0, SCATTER_GRASS = 1, SCATTER_SHRUB = 2, SCATTER_TREE = 3 };
 

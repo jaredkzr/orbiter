@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "VObjects.h"
+#include "ProcSurface.h"
 #include "GroundTracks.h"
 #include "ScatterAssets.h"
 #include "ScatterField.h"
@@ -1839,6 +1840,26 @@ void VPlanet::LoadLegacyTextures ()
 				groundTex[k] = tm->CreateRGBA (hw, h, half.data());
 			}
 			atmosphere->SetGround (groundTex[0], groundTex[1], colour);
+		}
+	}
+	// a procedural gas giant (the exoplanets): its map of belts and zones
+	if (!surface && !globalTex) {
+		auto proc = ProcPlanet::Create (hObj);
+		if (proc && proc->Gas ()) {
+			w = 2048, h = 1024;
+			proc->GasMap ((int)w, (int)h, rgba);
+			globalTex = tm->CreateRGBA (w, h, rgba.data());
+			if (atmosphere) {
+				uint32_t hw = w / 2;
+				std::vector<uint8_t> half ((size_t)hw * h * 4);
+				for (int k = 0; k < 2; k++) {
+					for (uint32_t y = 0; y < h; y++)
+						memcpy (half.data() + (size_t)y * hw * 4, rgba.data() + ((size_t)y * w + k * hw) * 4, (size_t)hw * 4);
+					groundTex[k] = tm->CreateRGBA (hw, h, half.data());
+				}
+				atmosphere->SetGround (groundTex[0], groundTex[1], colour);
+			}
+			oapiWriteLogV ("VulkanClient: procedural gas giant map for %s", name);
 		}
 	}
 	if (!oapiPlanetHasSurface (hObj)) hasDecks = VolumetricClouds::LoadDecks (name, decks);

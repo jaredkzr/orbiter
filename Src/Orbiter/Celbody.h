@@ -62,6 +62,8 @@ public:
 	inline const CelestialBody *Secondary (DWORD i) const { return secondary[i]; }
 
 	inline double RotT() const { return rot_T; }
+	/// turning once per orbit, its meridian 0 to the primary (TidalLock)
+	bool TidallyLocked () const { return tidalLock; }
 	// rotation period
 
 	inline double Rotation() const { return rotation; }
@@ -181,6 +183,17 @@ protected:
 
 	bool bInitFromElements;
 	// flag for reading osculating elements from configuration file
+
+	// an orbit as seen from the Sun (SkyOrbit: the exoplanets of other
+	// systems): period [d], epoch [JD], e, i, node, w [deg]; the epoch a
+	// conjunction in front of the primary (a transit) or a periapsis passage
+	bool skyOrbit = false, skyConjunction = false;
+	double skyP = 0.0, skyT = 0.0, skyE = 0.0, skyI = 0.0, skyNode = 0.0, skyW = 0.0;
+	void InitSkyOrbit ();
+	// turning once per orbit about the orbit's normal, its meridian 0 to the
+	// primary (TidalLock)
+	bool tidalLock = false;
+	void InitTidalLock ();
 
 	int ExternEphemeris (double mjd, int req, double *res) const;
 	// Try to obtain ephemeris data at mjd from external module

@@ -111,6 +111,11 @@ public:
 	// update calculations.
 
 	virtual void EndStateUpdate ();
+
+	/// Both state buffers the current state (after a time jump: a jump made
+	/// during a step, from a module's or script's post-step callback, is
+	/// not undone by the step's own EndStateUpdate)
+	virtual void SyncStateBuffers () { sv[s0 == sv ? 1 : 0] = *s0; }
 	// Make the updated state active. Should be called by the system to advance
 	// the simulation state to the next time step, after the updated state has
 	// been calculated via Update by all objects in the system, and at the same

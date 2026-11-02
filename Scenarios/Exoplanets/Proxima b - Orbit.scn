@@ -1,0 +1,33 @@
+BEGIN_HYPERDESC
+<h1>Proxima b: in orbit</h1>
+A delta-glider in a 500 km orbit about Proxima b, the nearest exoplanet,
+4.2 light years from the Sun. Below, an eyeball world (assumed): open sea
+about the point beneath the star, a deck of cloud over it, ice beyond. Alpha
+Centauri A and B shine as a bright double star.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 61000.0
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship PRX-1
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET Proxima b
+  MODE Extern
+  POS 2.6 90.0 -15
+  TRACKMODE TargetRelative
+  FOV 60.00
+END_CAMERA
+
+BEGIN_SHIPS
+PRX-1:DeltaGlider
+  STATUS Orbiting Proxima b
+  ELEMENTS 7.22e6 0.00000 30.0 0.0 0.0 0.0 61000.0
+  AROT 0 0 0
+  PRPLEVEL 0:1.000 1:1.000
+END
+END_SHIPS

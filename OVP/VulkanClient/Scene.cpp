@@ -1340,6 +1340,7 @@ void Scene::UpdateNearStars ()
 		StarLight l;
 		oapiGetGlobalPos (hSun, &l.pos);
 		l.radius = oapiGetSize (hSun);
+		l.body = hSun;
 		double d = std::max (length (l.pos - camPos), 1.0);
 		l.flux = (AU_M / d) * (AU_M / d);
 		sunAsBody = l.flux >= NEAR_FLUX;
@@ -1359,7 +1360,7 @@ void Scene::UpdateNearStars ()
 		nearStars.push_back (NearStar{ s.index, seed, s.pos, s.radius, s.teff, flux, d, s.body });
 		StarLight l;
 		l.pos = s.pos, l.radius = s.radius, l.teff = s.teff, l.flux = flux;
-		l.sun = false;
+		l.sun = false, l.body = s.body;
 		StarFlare fl[2];
 		StarFlares (seed, s.teff, oapiGetSimTime (), fl, l.flare);
 		cand.push_back (l);
@@ -1539,16 +1540,16 @@ void Scene::RenderShadows ()
 
 double Scene::SunVisibility (const VECTOR3 &gpos, OBJHANDLE exclude) const
 {
-	if (!hSun || !light.sun) return 1.0; // (another star's light: no bodies about it)
-	VECTOR3 sp;
-	oapiGetGlobalPos (hSun, &sp);
-	VECTOR3 s = sp - gpos;
+	// (the light's star, the Sun or another: the bodies in front of it; a
+	// black hole's disc, or a star of no body: none)
+	if (light.flux <= 0.0 || light.disc || !light.body) return 1.0;
+	VECTOR3 s = light.pos - gpos;
 	double ds = length (s);
-	double as = asin (std::min (1.0, oapiGetSize (hSun) / ds)); // angular radius of the sun
+	double as = asin (std::min (1.0, light.radius / ds)); // angular radius of the sun
 	double f = 1.0;
 	for (DWORD i = 0; i < oapiGetGbodyCount(); i++) {
 		OBJHANDLE h = oapiGetGbodyByIndex (i);
-		if (h == hSun || h == exclude) continue;
+		if (h == light.body || h == exclude) continue;
 		VECTOR3 pp;
 		oapiGetGlobalPos (h, &pp);
 		VECTOR3 p = pp - gpos;
@@ -1566,15 +1567,14 @@ double Scene::SunVisibility (const VECTOR3 &gpos, OBJHANDLE exclude) const
 double Scene::DeckTransmittance (const VECTOR3 &gpos, bool direct) const
 {
 	OBJHANDLE hp = oapiCameraProxyGbody ();
-	if (!hp || !hSun) return 1.0;
+	if (!hp || light.flux <= 0.0) return 1.0;
 	auto it = visuals.find (hp);
 	if (it == visuals.end()) return 1.0;
 	const VPlanet *vp = dynamic_cast<const VPlanet*>(it->second.get());
 	const VolumetricClouds::Decks *dk = vp ? vp->Decks () : nullptr;
 	if (!dk) return 1.0;
-	VECTOR3 pp, sp;
+	VECTOR3 pp, sp = light.pos;
 	oapiGetGlobalPos (hp, &pp);
-	oapiGetGlobalPos (hSun, &sp);
 	VECTOR3 r = gpos - pp;
 	double rl = length (r), alt = rl - oapiGetSize (hp);
 	if (alt > dk->Top () + 50e3) return 1.0;
@@ -1811,7 +1811,29 @@ void Scene::BeginFrame ()
 	tracks->BeginFrame (fi, camPos, camRot);
 	if (rt) rt->BeginFrame ();
 	ctx->GpuMark ("begin");
-	if (galaxy) galaxy->Update (SkyObserver (), oapiGetSysStep ());
+	if (galaxy) {
+		// (a star's ring of dust within 2000 AU: the nearest; ecliptic,
+		// right-handed: Orbiter's x, z, y)
+		const double AU = 1.495978707e11;
+		Zodiacal::Ring ring;
+		double best = 2000.0 * AU;
+		for (DWORD i = 0; i < oapiGetGbodyCount (); i++) {
+			OBJHANDLE h = oapiGetGbodyByIndex (i);
+			DUSTRINGINFO di;
+			if (oapiGetObjectType (h) != OBJTP_STAR || !oapiGetDustRing (h, &di)) continue;
+			VECTOR3 sp;
+			oapiGetGlobalPos (h, &sp);
+			VECTOR3 o = camPos - sp;
+			double d = length (o);
+			if (d >= best) continue;
+			best = d;
+			ring.obs[0] = o.x / AU, ring.obs[1] = o.z / AU, ring.obs[2] = o.y / AU;
+			ring.axis[0] = di.axis.x, ring.axis[1] = di.axis.z, ring.axis[2] = di.axis.y;
+			ring.radius = di.radius / AU, ring.width = di.width / AU, ring.fraction = di.fraction, ring.lum = di.luminosity;
+		}
+		galaxy->SetDustRing (ring);
+		galaxy->Update (SkyObserver (), oapiGetSysStep ());
+	}
 	ctx->GpuMark ("skybake");
 	UpdateLens ();
 	ctx->GpuMark ("lens");
@@ -2017,24 +2039,26 @@ void Scene::FillFrameUniforms (void *pfu)
 			double f = 0.35 * std::sqrt (std::clamp (prm.rho / ac->rho0, 0.0, 1.0)) * Sunlight (camPos);
 			char pname[64];
 			oapiGetObjectName (hp, pname, 64);
-			float sky[3];
+			float sky[3], tint[3];
+			// (the skylight in the star's colour)
+			StarDiscRGB (light.teff, tint);
+			double tl = std::max (1e-6, 0.2126 * tint[0] + 0.7152 * tint[1] + 0.0722 * tint[2]);
 			if (OvercastSkylight (pname, sky)) { // (under a cloud deck or haze: lit mostly by the sky)
 				double d = std::sqrt (std::clamp (prm.rho / ac->rho0, 0.0, 1.0)) * Sunlight (camPos);
-				for (int k = 0; k < 3; k++) fu.ambient[k] += (float)(d * sky[k]);
+				for (int k = 0; k < 3; k++) fu.ambient[k] += (float)(d * sky[k] * tint[k] / tl);
 			} else {
-				fu.ambient[0] += (float)(f * ac->color0.x);
-				fu.ambient[1] += (float)(f * ac->color0.y);
-				fu.ambient[2] += (float)(f * ac->color0.z);
+				fu.ambient[0] += (float)(f * ac->color0.x * tint[0] / tl);
+				fu.ambient[1] += (float)(f * ac->color0.y * tint[1] / tl);
+				fu.ambient[2] += (float)(f * ac->color0.z * tint[2] / tl);
 			}
 		}
 	}
 	for (int k = 0; k < 3; k++) ambientRGB[k] = fu.ambient[k];
 	// sunlight reflected by the planet nearby (a Lambertian sphere, by its phase)
 	if (OBJHANDLE hp = oapiCameraProxyGbody ())
-		if (hp != hSun && hSun) {
-			VECTOR3 pp, sp;
+		if (hp != light.body && light.flux > 0.0) {
+			VECTOR3 pp, sp = light.pos;
 			oapiGetGlobalPos (hp, &pp);
-			oapiGetGlobalPos (hSun, &sp);
 			double R = oapiGetSize (hp);
 			VECTOR3 toP = pp - camPos;
 			double d = std::max (length (toP), R);
@@ -2244,9 +2268,8 @@ void Scene::RenderProbe ()
 
 bool Scene::SunOnScreen (float uv[2]) const
 {
-	if (!hSun) return false;
-	VECTOR3 sp;
-	oapiGetGlobalPos (hSun, &sp);
+	if (light.flux <= 0.0) return false;
+	VECTOR3 sp = light.pos;
 	VECTOR3 v = ViewDir (unit (sp - camPos));
 	if (v.z <= 1e-3) return false;
 	uv[0] = (float)(0.5 + 0.5 * proj[0] * v.x / v.z);

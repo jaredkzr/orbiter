@@ -320,6 +320,7 @@ public:
 		bool sun = true;        ///< the Sun (Orbiter's star body)
 		bool disc = false;      ///< a black hole's accretion disc
 		double flare = 1.0;     ///< the light's rise in a flare (Scene::StarFlares)
+		OBJHANDLE body = nullptr; ///< its star body, if any
 	};
 	const StarLight &Light () const { return light; }
 	/// further lights (another star of a binary, a disc), brightest first:

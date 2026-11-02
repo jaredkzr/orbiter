@@ -51,3 +51,28 @@ float ZodLight (vec3 o, vec3 d, int n)
 	}
 	return I;
 }
+
+// a star's ring of dust (a debris disc), lit by its star (luminosity in
+// the density scale): Gaussian across (radial sigma) and in height (sigma
+// h); o: the observer relative to the star [AU], axis: the ring's;
+// samples along the stretch of the ray inside the ring's outer sphere
+float RingLight (vec3 o, vec3 d, vec3 axis, float r0, float sigma, float h, int n)
+{
+	float rmax = r0 + 3.0 * sigma + 3.0 * h;
+	float b = dot (o, d), c = dot (o, o) - rmax * rmax, disc = b * b - c;
+	if (disc <= 0.0) return 0.0;
+	float q = sqrt (disc);
+	float s0 = max (-b - q, 0.0), s1 = -b + q;
+	if (s1 <= s0) return 0.0;
+	float ds = (s1 - s0) / float (n), I = 0.0;
+	for (int i = 0; i < n; i++) {
+		vec3 x = o + d * (s0 + (float (i) + 0.5) * ds);
+		float r2 = max (dot (x, x), 1e-6), z = dot (x, axis);
+		float rho = sqrt (max (r2 - z * z, 0.0));
+		float u = (rho - r0) / sigma, w = z / h;
+		float dens = exp (-0.5 * (u * u + w * w));
+		if (dens < 1e-6) continue;
+		I += dens * ZodPhase (dot (x, -d) * inversesqrt (r2)) / r2;
+	}
+	return I * ds;
+}

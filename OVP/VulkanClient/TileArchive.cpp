@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "TileArchive.h"
+#include "ProcSurface.h"
 #include "zlib.h"
 #include <algorithm>
 #include <cmath>
@@ -84,8 +85,22 @@ uint32_t TileLayer::Index (int lvl, int ilat, int ilng) const
 	return toc[p].child[((ilat & 1) << 1) | (ilng & 1)];
 }
 
+TileLayer::TileLayer (std::shared_ptr<ProcPlanet> pp, Layer layer)
+	: name(layerName[layer]), ext(layerExt[layer]), proc(std::move (pp)), kind(layer)
+{
+}
+
 bool TileLayer::HasTile (int lvl, int ilat, int ilng) const
 {
+	if (proc) {
+		if (lvl < 4) return false;
+		switch (kind) {
+		case SURF: case MASK: return lvl <= proc->MaxTexLevel ();
+		case ELEV: return lvl <= proc->MaxElevLevel ();
+		case CLOUD: return lvl <= proc->MaxCloudLevel ();
+		default: return false;
+		}
+	}
 	if (legacy) return lvl >= 4 && lvl <= legacy->MaxLevel();
 	uint32_t idx = Index (lvl, ilat, ilng);
 	if (idx != NONE && idx < toc.size() && toc[idx].size) return true;
@@ -114,6 +129,16 @@ bool TileLayer::ReadCache (int lvl, int ilat, int ilng, std::vector<uint8_t> &da
 
 bool TileLayer::Read (int lvl, int ilat, int ilng, std::vector<uint8_t> &data)
 {
+	if (proc) {
+		if (!HasTile (lvl, ilat, ilng)) return false;
+		switch (kind) {
+		case SURF: proc->SurfTile (lvl, ilat, ilng, data); return true;
+		case MASK: proc->MaskTile (lvl, ilat, ilng, data); return true;
+		case ELEV: proc->ElevTile (lvl, ilat, ilng, data); return true;
+		case CLOUD: proc->CloudTile (lvl, ilat, ilng, data); return true;
+		default: return false;
+		}
+	}
 	if (legacy) {
 		if (lvl < 4 || lvl > legacy->MaxLevel()) return false;
 		legacy->Tile (lvl, ilat, ilng, data);

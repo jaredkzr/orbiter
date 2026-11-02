@@ -1,6 +1,6 @@
 -- The Solar System's neighbours (Scenarios/Tests/SystemsTest.scn): the
 -- stars of Config/Systems at their catalogue places, Alpha Centauri A and B
--- on their orbit, a vessel's orbit about Proxima with the origin moved there;
+-- on their orbit, a vessel's orbit about Epsilon Eridani with the origin moved there;
 -- Sgr A* and the S-stars, Nyx and Hemera; interstellar travel to a star of
 -- the world.
 
@@ -48,10 +48,11 @@ local function main()
 	log(string.format("Alpha Centauri A-B: %.3f AU, %.3f arcsec on the sky", len(ab) / 1.495978707e11, sky))
 	check("binary", math.abs(sky - 4.02) < 0.05 and math.abs(len(ab) / 1.495978707e11 - 28.83) < 0.05, "on their orbit")
 
-	-- 3. an orbit about Proxima: the origin at its system, the orbit flown
-	-- to the metre over a quarter of it at time warp
+	-- 3. an orbit about Epsilon Eridani: the origin at its system, the orbit
+	-- flown to the metre over half of it at time warp (not about Proxima:
+	-- its planets pull it kilometres off its conic)
 	local prx = vessel.get_interface("PRX")
-	local hp = oapi.get_objhandle("Proxima")
+	local hp = oapi.get_objhandle("EpsilonEridani")
 	local function r() return len(sub(prx:get_globalpos(), oapi.get_globalpos(hp))) end
 	local leo = vessel.get_interface("LEO")
 	local earth = oapi.get_objhandle("Earth")
@@ -66,7 +67,7 @@ local function main()
 		rmin, rmax = math.min(rmin, x), math.max(rmax, x)
 	end
 	oapi.set_tacc(1)
-	log(string.format("orbit about Proxima at %.0f km: %.3f-%.3f m about it over %.0f s; low Earth orbit %.3f km (from %.3f)",
+	log(string.format("orbit about Epsilon Eridani at %.0f km: %.3f-%.3f m about it over %.0f s; low Earth orbit %.3f km (from %.3f)",
 		r0 / 1e3, rmin - r0, rmax - r0, oapi.get_simtime() - t0, rl() / 1e3, rl0 / 1e3))
 	check("orbit", rmax - rmin < 2.0, "held to the metre: positions near the origin")
 	check("parked", math.abs(rl() - rl0) < 10.0, "the Earth orbit waits on its conic")

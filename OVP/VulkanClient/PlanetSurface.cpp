@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "PlanetSurface.h"
+#include "ProcSurface.h"
 #include "PolarElevation.h"
 #include <functional>
 #include "GroundTracks.h"
@@ -465,6 +466,28 @@ std::unique_ptr<PlanetSurface> PlanetSurface::Create (OBJHANDLE hPlanet, Scene *
 	}
 	char name[256], path[512];
 	oapiGetObjectName (hPlanet, name, 256);
+	// a procedural surface (the exoplanets): its tiles made on demand
+	if (clouds) {
+		auto proc = ProcPlanet::Create (hPlanet);
+		if (proc && !proc->Gas ()) {
+			auto layers = std::make_shared<PlanetLayers>();
+			layers->surf = std::make_unique<TileLayer> (proc, TileLayer::CLOUD);
+			oapiWriteLogV ("VulkanClient: procedural cloud layer for %s", name);
+			return std::unique_ptr<PlanetSurface> (new PlanetSurface (hPlanet, scene, layers, clouds));
+		}
+	} else {
+		if (auto proc = ProcPlanet::Create (hPlanet)) {
+			if (proc->Gas ()) return nullptr;
+			auto layers = std::make_shared<PlanetLayers>();
+			layers->surf = std::make_unique<TileLayer> (proc, TileLayer::SURF);
+			if (proc->HasMask ()) layers->mask = std::make_unique<TileLayer> (proc, TileLayer::MASK);
+			layers->elev = std::make_unique<TileLayer> (proc, TileLayer::ELEV);
+			static const char *cls[] = { "rock", "ocean", "ice", "desert", "lava", "gas" };
+			oapiWriteLogV ("VulkanClient: procedural surface for %s (%s world, tiles to level %d, elevation to %d)", name,
+				cls[std::clamp (proc->Prm ().surfClass, 0, 5)], proc->MaxTexLevel (), proc->MaxElevLevel ());
+			return std::unique_ptr<PlanetSurface> (new PlanetSurface (hPlanet, scene, layers, clouds));
+		}
+	}
 	if (!scene->Client()->PlanetTexturePath (name, path)) return nullptr;
 	std::string dir (path);
 	std::replace (dir.begin(), dir.end(), '\\', '/');

@@ -41,6 +41,7 @@ class TileManager;
 class SurfTile;
 class CloudTile;
 class ElevationManager;
+class ProcTerrain;
 template<class T> class TileManager2;
 
 struct _finddata_t;
@@ -127,6 +128,7 @@ public:
 
 	void BeginStateUpdate ();
 	void EndStateUpdate ();
+	void SyncStateBuffers () override;
 
 	void Update (bool force = false);
 	// Perform time step
@@ -195,6 +197,8 @@ public:
 	TileManager *TileMgr() const { return tmgr; }
 	TileManager2<SurfTile> *SurfMgr2() const { return smgr2; }
 	ElevationManager *ElevMgr() const { return emgr; }
+	/// procedural relief (no elevation data: the exoplanets), or null
+	const ProcTerrain *ProcSurface () const { return proc_.get(); }
 	/// rocks and vegetation on the ground (GroundScatter.h; null if the planet has none)
 	scatter::GroundScatter *Scatter() const;
 	/// clear the ground scatter around a point (planet frame) where a vessel
@@ -324,6 +328,7 @@ private:
 	double elev_res;                  // target elevation resolution [m]
 	bool detail_on;                   // procedural terrain detail
 	TerrainDetail::Overrides detail_cfg; // its parameters from the configuration file
+	std::unique_ptr<ProcTerrain> proc_;  // procedural relief (SurfaceClass)
 	mutable std::unique_ptr<scatter::GroundScatter> scatter_;
 	mutable bool scatterInit = false;
 	mutable std::unique_ptr<cities::CityMap> cities_;

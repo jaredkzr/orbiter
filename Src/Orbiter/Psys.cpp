@@ -299,6 +299,24 @@ bool PlanetarySystem::Read (char *fname, const Config* config, OutputLoadStatusC
 					else primary = st;
 					n++;
 				}
+			// its planets (PlanetN), each about the star its file names
+			// (Primary), else the system's first
+			for (i = 0; primary; i++) {
+				sprintf (label, "Planet%d", i+1);
+				if (!GetItemString (sfs, label, cbuf)) break;
+				OutputLoadStatus (cbuf, outputLoadStatus, callbackContext);
+				CelestialBody *host = const_cast<CelestialBody*> (primary);
+				char hname[256];
+				std::ifstream pfs (config->ConfigPath (cbuf));
+				if (GetItemString (pfs, "Primary", hname)) {
+					if (CelestialBody *h = GetGravObj (trim_string (hname), true)) host = h;
+					else LOGOUT_WARN ("Planet %s: its primary %s was not found; it goes about %s", cbuf, hname, primary->Name());
+				}
+				Planet *planet = new Planet (cbuf); TRACENEW
+				AddPlanet (planet, host);
+				ScanMoons (sfs, planet, planet->Name());
+				n++;
+			}
 			LOGOUT ("Neighbouring system %s: %d bodies", sysname.c_str(), n);
 		}
 	}
@@ -1010,6 +1028,11 @@ void PlanetarySystem::Timejump (const TimeJumpData& jump)
 
 	for (i = 0; i < vessels.size(); i++)
 		vessels[i]->Timejump(jump.dt, jump.mode);
+	// (the jumped state in both buffers: a jump from a post-step callback
+	// comes before the step's EndStateUpdate, which would make the state
+	// before the step current again)
+	for (i = 0; i < bodies.size(); i++) bodies[i]->SyncStateBuffers ();
+	for (Debris *d : debris) d->SyncStateBuffers ();
 }
 
 void PlanetarySystem::UpdateCelestials ()

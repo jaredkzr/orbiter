@@ -13,6 +13,7 @@
 #include "Orbiter.h"
 #include "Element.h"
 #include "Celbody.h"
+#include "Star.h"
 #include "Log.h"
 #include "Orbitersdk.h"
 #include "PinesGrav.h"
@@ -136,6 +137,14 @@ CelestialBody::CelestialBody (char *fname)
 		}
 	}
 
+	if (GetItemString (ifs, "SkyOrbit", cbuf) &&
+		sscanf (cbuf, "%lf%lf%lf%lf%lf%lf", &skyP, &skyT, &skyE, &skyI, &skyNode, &skyW) == 6 && skyP > 0.0) {
+		skyOrbit = true;
+		skyE = std::clamp (skyE, 0.0, 0.99);
+		if (GetItemString (ifs, "SkyOrbitEpoch", cbuf)) skyConjunction = !_strnicmp (trim_string (cbuf), "Conj", 4);
+	}
+	GetItemBool (ifs, "TidalLock", tidalLock);
+
 	if (GetItemBool (ifs, "HasElements", bInitFromElements) && bInitFromElements) {
 		if (GetItemString (ifs, "ElReference", cbuf) &&
 			!_stricmp (cbuf, "ParentEquator"))
@@ -239,6 +248,7 @@ void CelestialBody::Attach (CelestialBody *_parent)
 		_parent->AddSecondary (this);
 		// we add ourselves to the parent's list of secondaries
 		el->Setup (mass, cbody->Mass(), td.MJD_ref);
+		if (skyOrbit) InitSkyOrbit ();
 
 		int flg = ExternPosition ();
 		if (flg) {
@@ -263,12 +273,84 @@ void CelestialBody::Attach (CelestialBody *_parent)
 	} 
 
 	RPlace (s0->pos, s0->vel);
+	if (cbody && tidalLock) InitTidalLock ();
 
 #ifdef UNDEF
 	// temporary, for debugging
 	if (!strcmp (name, "Jupiter"))
 		bDynamicPosVel = true;
 #endif
+}
+
+void CelestialBody::InitSkyOrbit ()
+{
+	// the orbit's axes on the sky at the primary (seen from the Sun), its
+	// size from the period and the masses (Kepler's third law: the period as
+	// observed)
+	const double PI = 3.14159265358979323846;
+	Vector x, v, helio;
+	if (cbody->AnchoredState (td.SimT0, x, v)) helio = x + (g_psys ? g_psys->Origin () : Vector ());
+	else helio = cbody->GPos () + (g_psys ? g_psys->Origin () : Vector ());
+	Vector dir (helio.length () > 0.0 ? helio.unit () : Vector (1, 0, 0));
+	Vector P, Q;
+	SkyOrbitAxes (dir, skyI, skyNode, skyW, P, Q);
+	double mu = Ggrav * (mass + cbody->Mass ());
+	double n = 2.0 * PI / (skyP * 86400.0), a = std::cbrt (mu / (n * n)), e = skyE, q = std::sqrt (1.0 - e * e);
+	// (the periapsis passage: at a conjunction in front of the primary the
+	// body is nearest the Sun, w + f = 270 deg)
+	double tp = skyT;
+	if (skyConjunction) {
+		double f = (270.0 - skyW) * PI / 180.0;
+		double E = 2.0 * std::atan (std::sqrt ((1.0 - e) / (1.0 + e)) * std::tan (0.5 * f));
+		tp -= (E - e * std::sin (E)) / n / 86400.0;
+	}
+	double jd = td.MJD_ref + td.SimT0 / 86400.0 + 2400000.5;
+	double M = std::remainder (n * (jd - tp) * 86400.0, 2.0 * PI), E = M;
+	for (int k = 0; k < 50; k++) {
+		double dE = (E - e * std::sin (E) - M) / (1.0 - e * std::cos (E));
+		E -= dE;
+		if (std::fabs (dE) < 1e-15) break;
+	}
+	Vector r ((P * (std::cos (E) - e) + Q * (q * std::sin (E))) * a);
+	Vector w ((P * -std::sin (E) + Q * (q * std::cos (E))) * (std::sqrt (mu * a) / (a * (1.0 - e * std::cos (E)))));
+	el->Calculate (r, w, td.SimT0);
+	bInitFromElements = true;
+	elframe = ELFRAME_ECLIPTIC;
+}
+
+void CelestialBody::InitTidalLock ()
+{
+	// the axis along the orbit's normal (its sense the orbit's), no
+	// precession; a sidereal day of one orbit; the meridian 0 to the primary
+	Vector r0, v0;
+	el->PosVel (r0, v0, td.SimT0);
+	double T = el->OrbitT ();
+	if (!(T > 0.0) || !(r0.length () > 0.0)) return;
+	Vector h (crossp (r0, v0).unit ());
+	eps_ref = 0.0, lan_ref = 0.0, prec_T = 0.0;
+	rot_T = T;
+	double best = -2.0, bestDphi = 0.0, bestEps = 0.0, bestL = 0.0;
+	for (double sgn : { 1.0, -1.0 }) {
+		Vector ax (h * sgn);
+		eps_rel = std::acos (std::clamp (ax.y, -1.0, 1.0));
+		Lrel0 = std::atan2 (-ax.x, ax.z);
+		mjd_rel = td.MJD_ref;
+		Dphi = 0.0;
+		CelestialBody::Setup ();
+		Vector u (tmul (R_ecl, -r0.unit ()));
+		double rot = std::atan2 (u.z, u.x);
+		Dphi = rot - td.SimT0 * rot_omega + Lrel * cos_eps - rotation_off;
+		// (the sense of the turning: the meridian still to the primary an
+		// eighth of an orbit on)
+		Vector r1, v1;
+		el->PosVel (r1, v1, td.SimT0 + 0.125 * T);
+		Matrix R;
+		GetRotation (td.SimT0 + 0.125 * T, R);
+		double d = dotp (mul (R, Vector (1, 0, 0)), -r1.unit ());
+		if (d > best) best = d, bestDphi = Dphi, bestEps = eps_rel, bestL = Lrel0;
+	}
+	eps_rel = bestEps, Lrel0 = bestL, Dphi = bestDphi;
+	CelestialBody::Setup ();
 }
 
 void CelestialBody::AddSecondary (CelestialBody *sec)

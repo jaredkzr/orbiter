@@ -133,6 +133,8 @@ public:
 	const SkyObjects &Objects () const { return objects; }
 	const SkySettings &Settings () const { return settings; }
 	const Zodiacal &ZodiacalLight () const { return zodiacal; }
+	/// a debris ring near the observer (Zodiacal::Ring; fraction 0: none)
+	void SetDustRing (const Zodiacal::Ring &r) { zodiacal.SetRing (r); }
 
 private:
 	struct Model;

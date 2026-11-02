@@ -57,6 +57,9 @@ Star::Star (char *fname)
 		sscanf (cbuf, "%lf%lf%lf%lf%lf%lf%lf", &orbP, &orbT, &orbE, &orbA, &orbI, &orbNode, &orbW) == 7)
 		hasOrbit = orbP > 0.0, orbitAU = true;
 	if (GetItemString (ifs, "Primary", cbuf)) primaryName = trim_string (cbuf);
+	if (GetItemString (ifs, "DustRing", cbuf) &&
+		sscanf (cbuf, "%lf%lf%lf%lf%lf", &dust.radius, &dust.width, &dust.fraction, &dust.incl, &dust.node) != 5)
+		dust = DustRing ();
 	// a place of its own (a star or black hole of no catalogue), or orbiting
 	// another: an entry of the catalogue (a target of interstellar travel)
 	double place[3], uvw[3] = { 0, 0, 0 };
@@ -149,7 +152,7 @@ Vector Star::RelativeOrbit (double t, const Vector &dir, double dpc) const
 {
 	// Thiele-Innes: offsets north (x) and east (y) on the sky ["], and
 	// along the line of sight (z, away from the Sun), of the secondary
-	const double PI = 3.14159265358979323846, RAD = PI / 180.0, AU = 1.495978707e11;
+	const double PI = 3.14159265358979323846, AU = 1.495978707e11;
 	double yr = (td.MJD_ref + t / 86400.0 - 51544.5) / 365.25 + 2000.0;
 	double M = 2.0 * PI * (yr - orbT) / orbP, E = M;
 	// (Kepler's equation by Newton's method: the S-stars' eccentricities near 1)
@@ -161,20 +164,38 @@ Vector Star::RelativeOrbit (double t, const Vector &dir, double dpc) const
 		if (std::fabs (dE) < 1e-15) break;
 	}
 	double X = std::cos (E) - orbE, Y = std::sqrt (1.0 - orbE * orbE) * std::sin (E);
-	double ci = std::cos (orbI * RAD), si = std::sin (orbI * RAD), cO = std::cos (orbNode * RAD), sO = std::sin (orbNode * RAD);
-	double cw = std::cos (orbW * RAD), sw = std::sin (orbW * RAD);
+	Vector P, Q;
+	SkyOrbitAxes (dir, orbI, orbNode, orbW, P, Q);
+	return (P * X + Q * Y) * (orbitAU ? orbA * AU : orbA * dpc * AU);
+}
+
+void SkyOrbitAxes (const Vector &dir, double i, double node, double w, Vector &P, Vector &Q)
+{
+	const double RAD = 3.14159265358979323846 / 180.0;
+	double ci = std::cos (i * RAD), si = std::sin (i * RAD), cO = std::cos (node * RAD), sO = std::sin (node * RAD);
+	double cw = std::cos (w * RAD), sw = std::sin (w * RAD);
 	double A = cw * cO - sw * sO * ci, B = cw * sO + sw * cO * ci, F = -sw * cO - cw * sO * ci, G = -sw * sO + cw * cO * ci;
 	double C = sw * si, H = cw * si;
-	double north = A * X + F * Y, east = B * X + G * Y, radial = C * X + H * Y; // [a]
-	// (the sky's axes at the star, right-handed ecliptic: the celestial pole
-	// at obliquity 23.4393; Orbiter's frame is (x, z, y) of it)
+	// (the sky's axes at the star, right-handed ecliptic: north (n), east (e),
+	// away from the Sun (r); the celestial pole at obliquity 23.4393;
+	// Orbiter's frame is (x, z, y) of it)
 	const double eps = 23.4392911 * RAD;
 	Vector r (dir.x, dir.z, dir.y), pole (0.0, std::sin (eps), std::cos (eps));
 	Vector e (crossp (pole, r));
 	e.unify ();
 	Vector n (crossp (r, e));
-	Vector d ((n * north + e * east + r * radial) * (orbitAU ? orbA * AU : orbA * dpc * AU));
-	return Vector (d.x, d.z, d.y);
+	Vector p (n * A + e * B + r * C), q (n * F + e * G + r * H);
+	P = Vector (p.x, p.z, p.y), Q = Vector (q.x, q.z, q.y);
+}
+
+Vector Star::DustAxis () const
+{
+	// (the normal of an orbit in the ring's plane, seen from the Sun)
+	Vector helio (GPos () + (g_psys ? g_psys->Origin () : Vector ()));
+	Vector dir (helio.length () > 0.0 ? helio.unit () : Vector (1, 0, 0));
+	Vector P, Q;
+	SkyOrbitAxes (dir, dust.incl, dust.node, 0.0, P, Q);
+	return crossp (P, Q).unit ();
 }
 
 bool Star::AnchoredState (double t, Vector &x, Vector &v) const

@@ -2,8 +2,8 @@ BEGIN_HYPERDESC
 <h1>The Solar System's neighbours</h1>
 Alpha Centauri (A and B on their 80-year orbit, Proxima), Barnard's Star,
 Epsilon Eridani and TRAPPIST-1 as bodies, moving with the sky's
-catalogue. A delta-glider orbits Proxima: the global frame's origin moves
-to its system, its orbit held to the metre; one in low Earth orbit waits
+catalogue. A delta-glider orbits Epsilon Eridani: the global frame's origin
+moves to its system, its orbit held to the metre; one in low Earth orbit waits
 on its conic.
 END_HYPERDESC
 
@@ -27,7 +27,7 @@ END_CAMERA
 
 BEGIN_SHIPS
 PRX:DeltaGlider
-  STATUS Orbiting Proxima
+  STATUS Orbiting EpsilonEridani
   ELEMENTS 2.0e9 0.00000 0.0 0.0 0.0 0.0 57388.0
   AROT 0 0 0
 END

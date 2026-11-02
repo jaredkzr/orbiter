@@ -9,6 +9,14 @@
 #include "Celbody.h"
 #include <string>
 
+/// The axes of an orbit seen on the sky (Thiele-Innes) at a star in
+/// direction dir from the Sun (unit vector, Orbiter's frame): P towards the
+/// periapsis, Q a quarter turn on in the direction of motion, in Orbiter's
+/// frame. i, node (position angle of the ascending node, from north through
+/// east), w: [deg]; the line of sight (away from the Sun) is the orbits' +z,
+/// the ascending node the one where the body moves away from the Sun.
+void SkyOrbitAxes (const Vector &dir, double i, double node, double w, Vector &P, Vector &Q);
+
 class Star: public CelestialBody {
 	friend class VStar;
 
@@ -54,6 +62,12 @@ public:
 	/// effective temperature [K] and luminosity [L_sun] (0: unknown)
 	double Teff () const { return teff; }
 	double Luminosity () const { return lum; }
+	/// a ring of dust about it (a debris disc: DustRing = radius [AU], width
+	/// (FWHM) [AU], fractional luminosity, i, node [deg] as seen from the Sun)
+	struct DustRing { double radius = 0.0, width = 0.0, fraction = 0.0, incl = 0.0, node = 0.0; };
+	const DustRing *Dust () const { return dust.radius > 0.0 ? &dust : nullptr; }
+	/// its axis (global frame, unit)
+	Vector DustAxis () const;
 
 private:
 	int catIndex = -1;
@@ -66,6 +80,7 @@ private:
 	const Star *orbPrimary = nullptr;
 	double orbP = 0.0, orbT = 0.0, orbE = 0.0, orbA = 0.0, orbI = 0.0, orbNode = 0.0, orbW = 0.0;
 	double teff = 0.0, lum = 0.0;
+	DustRing dust;
 	/// the pair's relative position (the secondary from the primary, global
 	/// frame [m]) at t, seen from the Sun in direction dir at distance d [pc]
 	Vector RelativeOrbit (double t, const Vector &dir, double dpc) const;

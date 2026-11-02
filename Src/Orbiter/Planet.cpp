@@ -14,6 +14,7 @@
 #include "Astro.h"
 #include "Element.h"
 #include "Planet.h"
+#include "ProcTerrain.h"
 #include "elevmgr.h"
 #include "Base.h"
 #include "Camera.h"
@@ -308,6 +309,10 @@ Planet::Planet (char *fname)
 	GetItemReal (ifs, "MinElevation", minelev);
 	GetItemReal (ifs, "MaxElevation", maxelev);
 	GetItemReal (ifs, "ElevationResolution", elev_res);
+	{
+		ProcTerrain::Params pp;
+		if (ProcTerrain::Read (ifs, pp)) proc_ = std::make_unique<ProcTerrain> (pp, size);
+	}
 	// procedural terrain detail (TerrainDetail.h): its parameters, and
 	// whether it is on (not with a graphics client that doesn't draw it)
 	{
@@ -810,6 +815,13 @@ void Planet::EndStateUpdate ()
 	CelestialBody::EndStateUpdate();
 	for (DWORD i = 0; i < nbase; i++)
 		baselist[i]->EndStateUpdate();
+}
+
+void Planet::SyncStateBuffers ()
+{
+	CelestialBody::SyncStateBuffers ();
+	for (DWORD i = 0; i < nbase; i++)
+		baselist[i]->SyncStateBuffers ();
 }
 
 void Planet::Update (bool force)

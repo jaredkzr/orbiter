@@ -41,6 +41,7 @@ namespace {
 		float detailPrm[4];   // terrain detail: ridge, craters, crater depth, fresh craters
 		float surfPrm[4];     // x: colour saturation of the surface textures
 		float relBeta[4];     // relativistic view: the camera's velocity (view, units of c)
+		float sunTint[4];     // the light's colour (luminance 1): the Sun white, a red dwarf orange
 	};
 
 	const VkFormat LUT_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -436,6 +437,9 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		oapiGetObjectName (hPlanet, name, 64);
 		// (Venus and Titan: rocks and grain as on Mars, under their atmospheres)
 		int type = !strcmp (name, "Earth") ? 3 : !strcmp (name, "Mars") || !strcmp (name, "Venus") || !strcmp (name, "Titan") ? 2 : !present ? 1 : 0;
+		// (a procedural world with an atmosphere: rocks and grain as on Mars)
+		PROCSURFACEPARAM pp;
+		if (type == 0 && oapiProcSurfaceParams (hPlanet, &pp) && pp.surfClass != 5) type = 2;
 		if (const char *e = getenv ("ORBITER_VK_SURFACE_DETAIL")) if (!atoi (e)) type = 0;
 		detail[0] = (float)type, detail[1] = 1.0f, detail[2] = 3000.0f;
 
@@ -587,12 +591,9 @@ void Atmosphere::Update ()
 	u.camC[0] = (float)((camR - radius) * (camR + radius));
 	u.camC[1] = (float)((camR - atmRadius) * (camR + atmRadius));
 
+	// (the scene's light: the Sun, or the star of another system)
 	VECTOR3 sun = _V(1, 0, 0);
-	if (OBJHANDLE hSun = scene->Sun()) {
-		VECTOR3 sp;
-		oapiGetGlobalPos (hSun, &sp);
-		sun = unit (tmul (prot, sp - ppos));
-	}
+	if (scene->Light ().flux > 0.0) sun = unit (tmul (prot, scene->Light ().pos - ppos));
 	u.sunDir[0] = (float)sun.x, u.sunDir[1] = (float)sun.y, u.sunDir[2] = (float)sun.z;
 	memcpy (u.betaR, betaR, sizeof(betaR));
 	memcpy (u.betaM, betaM, sizeof(betaM));
@@ -638,6 +639,15 @@ void Atmosphere::Update ()
 	{
 		VECTOR3 bv = scene->RelBetaView (); // (relativistic view: the camera's velocity)
 		u.relBeta[0] = (float)bv.x, u.relBeta[1] = (float)bv.y, u.relBeta[2] = (float)bv.z;
+	}
+	{
+		// (the sky's light in the star's colour, as the surfaces': Scene's
+		// sunColor without its brightness)
+		float c[3];
+		Scene::StarDiscRGB (scene->Light ().teff, c);
+		double lum = std::max (1e-6, 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]);
+		for (int k = 0; k < 3; k++) u.sunTint[k] = (float)(c[k] / lum);
+		u.sunTint[3] = 1.0f;
 	}
 	u.misc[1] = (float)(1.0 / scene->ProjX());
 	u.misc[2] = (float)(1.0 / scene->ProjY());

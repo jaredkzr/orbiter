@@ -158,6 +158,8 @@ if (ORBITER_TEST_EXE)
 	set_tests_properties(Scenario.BlackHoleTidesTest PROPERTIES TIMEOUT 120 ENVIRONMENT "ORBITER_DAMAGE=1")
 	# the Solar System's neighbours: stars of the catalogue, a binary's orbit, the origin in another system
 	set_tests_properties(Scenario.SystemsTest PROPERTIES TIMEOUT 200)
+	# exoplanets: their orbits, a transit, tidal locking, the procedural ground
+	set_tests_properties(Scenario.ExoplanetTest PROPERTIES TIMEOUT 200)
 	# saving and loading damage: the save test writes the scenario the load
 	# test runs (in the build tree)
 	set_tests_properties(Scenario.DamageSaveTest PROPERTIES FIXTURES_SETUP DamageRoundtrip ENVIRONMENT "ORBITER_DAMAGE=1")
