@@ -64,9 +64,19 @@ private:
 	uint32_t frame = 0, used = 0;
 	VECTOR3 camPos{};
 	MATRIX3 camRot{};
-	// segments of the body near the camera this frame (indices into segs)
+	// segments of the body near the camera this frame: index into segs,
+	// the ends' directions from the centre, the angle their width adds (and
+	// its cosine and sine); in runs of GROUP (recorded in order: a run
+	// lies along a track), with caps over each run and over all, so that a
+	// tile tests only the runs that reach it (a takeoff roll records 4096
+	// segments, the thousands of tiles each tested all: 40% of the frame)
+	struct Cand { uint32_t i; VECTOR3 ua, ub; double e, ce, se; };
+	struct Cap { VECTOR3 c; double r, ce, se; uint32_t begin, end; }; // (centre, angular radius, its cosine and sine)
+	static constexpr uint32_t GROUP = 32;
 	OBJHANDLE candBody = nullptr;
-	std::vector<uint32_t> cand;
+	std::vector<Cand> cand;
+	std::vector<Cap> groups;
+	Cap all{};
 	// the entries of the tiles this frame (first, count), by centre and radius
 	std::map<std::tuple<double, double, double, double>, std::pair<uint32_t, uint32_t>> tiles;
 	void Add (const Seg &s);

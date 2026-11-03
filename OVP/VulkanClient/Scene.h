@@ -440,6 +440,11 @@ private:
 	Mat4 prevView;
 	float prevProj[16] = {};             // unjittered
 	uint64_t frameNo = 0;
+	// SunVisibility of points on a body: the bodies that can eclipse the
+	// light somewhere near it, this frame (each tile asked about all the
+	// bodies, in every pass)
+	struct EclipseCands { uint64_t frame = ~0ull; VECTOR3 lightPos{}; std::vector<OBJHANDLE> bodies; };
+	mutable std::map<OBJHANDLE, EclipseCands> eclipseCands;
 	void WriteAODescriptors ();
 	VkPipelineLayout particleLayout = VK_NULL_HANDLE;
 	VkPipeline particleAdditive = VK_NULL_HANDLE;

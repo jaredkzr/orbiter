@@ -1599,19 +1599,57 @@ double Scene::SunVisibility (const VECTOR3 &gpos, OBJHANDLE exclude) const
 	double ds = length (s);
 	double as = asin (std::min (1.0, light.radius / ds)); // angular radius of the sun
 	double f = 1.0;
-	for (DWORD i = 0; i < oapiGetGbodyCount(); i++) {
-		OBJHANDLE h = oapiGetGbodyByIndex (i);
-		if (h == light.body || h == exclude) continue;
+	auto occult = [&](OBJHANDLE h) {
 		VECTOR3 pp;
 		oapiGetGlobalPos (h, &pp);
 		VECTOR3 p = pp - gpos;
 		double dp = length (p);
-		if (dp >= ds) continue; // behind the sun
+		if (dp >= ds) return; // behind the sun
 		double ap = asin (std::min (1.0, oapiGetSize (h) / dp)); // angular radius of the body
 		double theta = acos (std::clamp (dotp (s, p) / (ds * dp), -1.0, 1.0));
 		// linear transition across the penumbra
 		double vis = std::clamp ((theta - (ap - as)) / (2.0 * as), 0.0, 1.0);
 		f = std::min (f, vis);
+	};
+	// a point near the body excluded (within 1.1 of its radius: its tiles):
+	// only the bodies that can eclipse the light somewhere there. Seen from
+	// the body's centre c, a body h at angle thetaC from the light moves by
+	// at most asin (Rr / dpc), the light by asin (Rr / dsc), and both look
+	// at most as large as from Rr nearer: no eclipse anywhere if thetaC
+	// less those shifts is at least their angular radii
+	if (exclude) {
+		VECTOR3 c;
+		oapiGetGlobalPos (exclude, &c);
+		double Rr = 1.1 * oapiGetSize (exclude);
+		if (length (gpos - c) <= Rr) {
+			EclipseCands &ec = eclipseCands[exclude];
+			if (ec.frame != frameNo || ec.lightPos.x != light.pos.x || ec.lightPos.y != light.pos.y || ec.lightPos.z != light.pos.z) {
+				ec.frame = frameNo, ec.lightPos = light.pos;
+				ec.bodies.clear ();
+				VECTOR3 sc = light.pos - c;
+				double dsc = length (sc);
+				for (DWORD i = 0; i < oapiGetGbodyCount(); i++) {
+					OBJHANDLE h = oapiGetGbodyByIndex (i);
+					if (h == light.body || h == exclude) continue;
+					VECTOR3 pp;
+					oapiGetGlobalPos (h, &pp);
+					VECTOR3 p = pp - c;
+					double dpc = length (p);
+					if (dpc <= 1.001 * Rr || dsc <= 1.001 * Rr) { ec.bodies.push_back (h); continue; }
+					if (dpc - Rr >= dsc + Rr) continue; // behind the sun from everywhere there
+					double thetaC = atan2 (length (crossp (sc, p)), dotp (sc, p));
+					double shift = asin (Rr / dpc) + asin (Rr / dsc);
+					double reach = asin (std::min (1.0, oapiGetSize (h) / (dpc - Rr))) + asin (std::min (1.0, light.radius / (dsc - Rr)));
+					if (thetaC - shift < reach * 1.001) ec.bodies.push_back (h);
+				}
+			}
+			for (OBJHANDLE h : ec.bodies) occult (h);
+			return f;
+		}
+	}
+	for (DWORD i = 0; i < oapiGetGbodyCount(); i++) {
+		OBJHANDLE h = oapiGetGbodyByIndex (i);
+		if (h != light.body && h != exclude) occult (h);
 	}
 	return f;
 }
