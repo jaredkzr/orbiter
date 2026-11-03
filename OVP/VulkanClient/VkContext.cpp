@@ -10,10 +10,78 @@
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
+#include <map>
+#include <unordered_map>
+#ifndef _WIN32
+#include <execinfo.h>
+#include <dlfcn.h>
+#endif
 
 namespace vkc {
 
 static VmaAllocator g_allocator = VK_NULL_HANDLE; // (for the report of Check)
+
+// ORBITER_VK_MEMLOG=1: the live buffers by where they were made (three
+// callers up; module + offset, for addr2line), logged with the heaps
+namespace memlog {
+	struct Site { void *pc[3] = {}; };
+	struct Tally { size_t count = 0; VkDeviceSize bytes = 0; Site site; };
+	static int enabled = -1;
+	static std::unordered_map<VkBuffer, std::pair<uint64_t, VkDeviceSize>> live; // buffer -> (site key, size)
+	static std::unordered_map<uint64_t, Tally> sites;
+	static bool On ()
+	{
+		if (enabled < 0) { const char *e = getenv ("ORBITER_VK_MEMLOG"); enabled = e && *e && *e != '0'; }
+		return enabled > 0;
+	}
+	static void Add (VkBuffer b, VkDeviceSize size)
+	{
+		if (!On () || !b) return;
+		Site s;
+#ifndef _WIN32
+		void *bt[5] = {};
+		int n = backtrace (bt, 5);
+		for (int i = 2; i < n && i < 5; i++) s.pc[i - 2] = bt[i];
+#endif
+		uint64_t key = (uint64_t)(uintptr_t)s.pc[0] * 31 + (uint64_t)(uintptr_t)s.pc[1] * 7 + (uint64_t)(uintptr_t)s.pc[2];
+		Tally &t = sites[key];
+		t.site = s, t.count++, t.bytes += size;
+		live[b] = { key, size };
+	}
+	static void Remove (VkBuffer b)
+	{
+		if (!On () || !b) return;
+		auto it = live.find (b);
+		if (it == live.end ()) return;
+		Tally &t = sites[it->second.first];
+		t.count--, t.bytes -= it->second.second;
+		live.erase (it);
+	}
+	static void Log ()
+	{
+		if (!On ()) return;
+		std::multimap<VkDeviceSize, const Tally*, std::greater<VkDeviceSize>> top;
+		for (auto &kv : sites) if (kv.second.count) top.emplace (kv.second.bytes, &kv.second);
+		int k = 0;
+		for (auto &kv : top) {
+			if (k++ == 12) break;
+			char where[3][160] = {};
+			for (int i = 0; i < 3; i++) {
+				void *pc = kv.second->site.pc[i];
+#ifndef _WIN32
+				Dl_info di;
+				if (pc && dladdr (pc, &di) && di.dli_fname) {
+					const char *f = strrchr (di.dli_fname, '/');
+					snprintf (where[i], sizeof (where[i]), "%s+0x%lx", f ? f + 1 : di.dli_fname, (unsigned long)((char*)pc - (char*)di.dli_fbase - 1));
+				} else
+#endif
+				snprintf (where[i], sizeof (where[i]), "%p", pc);
+			}
+			oapiWriteLogV ("VulkanClient: buffers %6zu, %6llu MB from %s < %s < %s", kv.second->count,
+				(unsigned long long)(kv.second->bytes >> 20), where[0], where[1], where[2]);
+		}
+	}
+}
 
 void LogHeaps ()
 {
@@ -26,6 +94,7 @@ void LogHeaps ()
 		oapiWriteLogV ("VulkanClient: heap %u: %u allocations, %llu MB in blocks, %llu MB used (driver: %llu of %llu MB)", i, b[i].statistics.allocationCount,
 			(unsigned long long)(b[i].statistics.blockBytes >> 20), (unsigned long long)(b[i].usage >> 20),
 			(unsigned long long)(b[i].usage >> 20), (unsigned long long)(b[i].budget >> 20));
+	memlog::Log ();
 }
 
 void Check (VkResult res, const char *what)
@@ -1272,6 +1341,7 @@ Buffer Context::CreateBuffer (VkDeviceSize size, VkBufferUsageFlags usage, bool 
 	VmaAllocationInfo info{};
 	VK_CHECK(vmaCreateBuffer (allocator, &bci, &aci, &buf.buffer, &buf.alloc, &info));
 	buf.mapped = info.pMappedData;
+	memlog::Add (buf.buffer, size);
 	return buf;
 }
 
@@ -1302,6 +1372,7 @@ VkDeviceAddress Context::BufferAddress (VkBuffer buf) const
 
 void Context::DestroyBuffer (Buffer &buf)
 {
+	memlog::Remove (buf.buffer);
 	if (buf.buffer) vmaDestroyBuffer (allocator, buf.buffer, buf.alloc);
 	buf = Buffer();
 }

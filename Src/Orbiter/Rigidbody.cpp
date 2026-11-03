@@ -195,6 +195,19 @@ void RigidBody::Update (bool force)
 {
 	if (bDynamicPosVel) {
 
+		if (resyncPending) {
+			// (the state vectors were set from elsewhere: the integration
+			// goes on from them, not from its stale bases. A docked group
+			// leaving a playback had jumped 800 km and blown up)
+			resyncPending = false;
+			rpos_base = s0->pos, rpos_add.Set (0,0,0);
+			rvel_base = s0->vel, rvel_add.Set (0,0,0);
+			if (cbody) cpos = s0->pos - cbody->s0->pos, cvel = s0->vel - cbody->s0->vel;
+			acc = g_psys->Gacc (s0->pos, 0, &gfielddata);
+			arot.Set (0,0,0);
+			bOrbitStabilised = el_valid = false;
+		}
+
 		// Update velocity and position according to
 		// graviational field.
 		// Notes:

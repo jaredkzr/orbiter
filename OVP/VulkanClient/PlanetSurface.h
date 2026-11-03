@@ -163,6 +163,7 @@ private:
 		int meshElevLvl = -1; // level of the elevation tile the mesh was built from (0: sphere)
 		bool meshDetailed = false; // the mesh has the terrain detail's geometry
 		int vessel = -1;      // nearest vessel on the ground (groundVessels)
+		double pixPerRad = 1.0; // the screen scale its split went by (smaller out of view: Select)
 		float detailSpacing = 0.0f; // terrain detail: node spacing of the elevation data [m]
 		float detailLmesh = 0.0f;   // shortest detail wavelength in the mesh [m]
 		uint64_t lastUsed = 0;
@@ -175,7 +176,7 @@ private:
 	PlanetSurface (OBJHANDLE hPlanet, Scene *scene, std::shared_ptr<PlanetLayers> layers, bool clouds);
 	Node *NewNode (int lvl, int ilat, int ilng, Node *parent);
 	void FreeNode (Node *n);
-	void PruneChildren (Node *n);
+	void PruneChildren (Node *n, uint64_t age);
 	/// a tile's size for the level of detail [m]: split where it would cover more than splitPixels
 	double SplitSize (const Node *n) const;
 	/// returns rtTris (the tiles drawn of n and its descendants: their ray tracing triangles)
@@ -188,8 +189,6 @@ private:
 	/// (oapiSurfaceDetail); amp, fade: receive the noise amplitude factor
 	/// and the crater fade factor
 	double SurfaceElev (const Node *src, double lat, double lng, double lmin, double *amp = nullptr, double *fade = nullptr) const;
-	/// detailed: with the terrain detail's geometry (else only its shading)
-	void BuildMesh (Node *n, const Node *elevSrc, bool detailed = true);
 	/// a mesh's data, made on worker threads (ComputeMesh: no GPU calls) and
 	/// uploaded after (ApplyMesh)
 	struct MeshData {
@@ -199,6 +198,7 @@ private:
 		int elevLvl = 0;
 		bool detailed = false;
 	};
+	/// detailed: with the terrain detail's geometry (else only its shading)
 	void ComputeMesh (const Node *n, const Node *src, bool detailed, MeshData &md) const;
 	void ApplyMesh (Node *n, MeshData &md);
 	/// a mesh made on the GPU (tile_mesh.comp): its record (as the shader's
@@ -241,11 +241,13 @@ private:
 	double maxElev = 0.0;
 	int maxLevel = 18;
 	double meshTime = 0.0; int meshCount = 0; // (ORBITER_VK_TILE_DEBUG)
+	int dbgNew = 0, dbgFreed = 0, dbgRbNew = 0, dbgRbElev = 0, dbgDetail = 0; // (ORBITER_VK_TILE_DEBUG: the tree's churn)
 	double splitPixels = 300.0; // split tiles that cover more than this on screen
 	int elevMode = 1;     // interpolation of the elevation data as in the core: 1 linear, 2 cubic spline
 	bool detail = false;  // procedural terrain detail (oapiSurfaceDetail)
 	SURFDETAILPARAM detailPrm{}; // its parameters
 	uint64_t frame = 0;
+	size_t nMeshes = 0;     // nodes holding a mesh (the tree's video memory, ~0.25 MB each)
 	int requestsThisFrame = 0;
 
 	// per-frame camera state in the planet frame
@@ -254,6 +256,7 @@ private:
 	VECTOR3 camLocal{};  // camera position, planet frame
 	double camDist = 0.0;
 	double pixPerRad = 1.0;
+	double pixPerRadOut = 1.0; // (out of view: at most a FOV_OUT view's)
 	std::vector<Node*> drawList;
 	std::vector<VECTOR3> groundVessels; // positions of vessels near the ground, planet frame (finest tiles under them)
 };

@@ -1257,12 +1257,21 @@ BOOL Config::Write (const char *fname) const
 			ofs << "HUDColIdx = " << CfgCameraPrm.HUDCol << endl;
 	}
 
-	if (CfgDevPrm.Device_idx >= 0) { // otherwise undefined
+	// (the device's indices only when one was chosen; the window's settings
+	// regardless: without a device chosen (no launchpad, e.g. Linux) they
+	// were lost whenever Orbiter wrote its configuration)
+	bool devWin = CfgDevPrm.bForceEnum != CfgDevPrm_default.bForceEnum || CfgDevPrm.bFullscreen != CfgDevPrm_default.bFullscreen ||
+		CfgDevPrm.bStereo != CfgDevPrm_default.bStereo || CfgDevPrm.bNoVsync != CfgDevPrm_default.bNoVsync ||
+		CfgDevPrm.bTryStencil != CfgDevPrm_default.bTryStencil || CfgDevPrm.bPageflip != CfgDevPrm_default.bPageflip ||
+		CfgDevPrm.WinW != CfgDevPrm_default.WinW || CfgDevPrm.WinH != CfgDevPrm_default.WinH;
+	if (CfgDevPrm.Device_idx >= 0 || devWin || bEchoAll) {
 		ofs << "\n; === Device settings ===\n";
-		ofs << "DeviceIndex = " << CfgDevPrm.Device_idx << '\n';
-		ofs << "ModeIndex = " << CfgDevPrm.Device_mode << '\n';
-		ofs << "OutputIndex = " << CfgDevPrm.Device_out << '\n';
-		ofs << "Style = " << CfgDevPrm.Device_style << '\n';
+		if (CfgDevPrm.Device_idx >= 0) { // otherwise undefined
+			ofs << "DeviceIndex = " << CfgDevPrm.Device_idx << '\n';
+			ofs << "ModeIndex = " << CfgDevPrm.Device_mode << '\n';
+			ofs << "OutputIndex = " << CfgDevPrm.Device_out << '\n';
+			ofs << "Style = " << CfgDevPrm.Device_style << '\n';
+		}
 
 		if (CfgDevPrm.bForceEnum != CfgDevPrm_default.bForceEnum || bEchoAll)
 			ofs << "DeviceForceEnum = " << BoolStr (CfgDevPrm.bForceEnum) << '\n';

@@ -357,6 +357,7 @@ public:
 	void RenderProbe ();
 	/// screen pixels per radian at the view centre
 	double PixPerRad () const { return 0.5 * viewH / tanAperture; }
+	uint32_t ViewHeight () const { return viewH; } ///< [pixels]
 
 private:
 	void CreatePipelines ();

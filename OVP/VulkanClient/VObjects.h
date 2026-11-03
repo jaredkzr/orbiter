@@ -292,6 +292,7 @@ private:
 	void RenderRing ();
 	void UpdateBases ();
 	void RenderGlow ();
+	double terrainTop = -1.0;               // [m] above size no terrain reaches (RayHit's quick reject; -1: not yet known)
 };
 
 #endif // !__VOBJECTS_H

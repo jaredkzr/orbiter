@@ -2264,7 +2264,19 @@ bool VPlanet::RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double
 		VECTOR3 nb;
 		if (b->RayHit (o, d, t, tb, nb)) t = tb, n = nb, found = true, lastHitKind = 1;
 	}
-	// the terrain: the ray's altitude over the surface elevation
+	// the terrain: none where the segment passes clear of the highest the
+	// ground could be (the elevations are costly: procedural detail at the
+	// finest level; plumes cast their rays every frame)
+	if (terrainTop < 0.0) {
+		const double *me = (const double*)oapiGetObjectParam (hObj, OBJPRM_PLANET_MAXELEVATION);
+		terrainTop = std::max ((me ? std::max (0.0, *me) : 0.0) * 1.1 + 1000.0, 0.01 * size);
+	}
+	{
+		VECTOR3 c = gpos - o;
+		double tc = std::clamp (dotp (c, d), 0.0, t);
+		if (length (c - d * tc) > size + terrainTop) return found;
+	}
+	// the ray's altitude over the surface elevation
 	auto alt = [this](const VECTOR3 &p) {
 		VECTOR3 loc;
 		oapiGlobalToLocal (hObj, &p, &loc);

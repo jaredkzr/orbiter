@@ -261,6 +261,11 @@ protected:
 	// Indicates if the current step was updated by "orbit stabilisation",
 	// i.e. Encke's method.
 
+	bool resyncPending = false;
+	// The integration's own state (position and velocity bases, the state
+	// relative to the reference body) taken from the state vectors at the
+	// next update: they were set from elsewhere (e.g. a playback ended)
+
 	bool bIgnoreGravTorque;
 	// flag for suppressing gravity-gradient torque (to avoid numerical instability)
 

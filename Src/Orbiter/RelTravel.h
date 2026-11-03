@@ -121,6 +121,7 @@ namespace reltravel {
 		void Drive (const Vector &alpha, double tEnd); // the drive at alpha (throttled by the attitude error), cut off at tEnd
 		void LimitWarp (double tEvent);
 		void Guide ();                                 // after the first burn: guided to the arrival
+		void NewApproach (double miss);                // a rendezvous stopped off the arrival point: a fresh trip from here
 		void Hold ();                                  // at rest by a black hole: hovering on the drive
 		void Trim ();                                  // in orbit by a black hole: trimmed to its circular orbit
 		bool trimming = false;
@@ -135,6 +136,7 @@ namespace reltravel {
 		bool stopped = false;          // braked to rest (a rendezvous)
 		double tStop = 0.0;            // [s] time to rest, as of the last step
 		double uRel = 0.0, aBrake = 0.0; // braking: proper speed relative to the arrival, the deceleration
+		double tFinal = 0.0;           // the final braking's arrival time (fixed; 0: not in it)
 		relativity::TargetFunc arrival; // the arrival state (fixed when guided)
 		Vector lastAlpha;
 		int fails = 0;
@@ -145,6 +147,18 @@ namespace reltravel {
 		double warpRestore = 0.0;      // the ship-time warp to return to after an event (0: none)
 		double warpLastSet = 0.0;      // the ship-time warp as last left here
 		Plan preview, cur;
+		// (the current plan's first burn end [simulation time], and what it
+		// was solved for: held between solutions while these stay)
+		double curBurnEnd = 0.0;
+		struct PlanKey {
+			const void *target = nullptr; int star = -1, arrival = 0;
+			double accel = 0.0, altitude = 0.0, tArrive = 0.0;
+			bool operator== (const PlanKey &o) const {
+				return target == o.target && star == o.star && arrival == o.arrival
+					&& accel == o.accel && altitude == o.altitude && tArrive == o.tArrive;
+			}
+		} curKey;
+		PlanKey Key (double tArr) const;
 		std::string message;
 	};
 

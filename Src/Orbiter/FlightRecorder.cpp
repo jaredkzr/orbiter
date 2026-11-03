@@ -754,6 +754,7 @@ void Vessel::FRecorder_EndPlayback ()
 		rpos_base.Set (s0->pos);
 		rpos_add.Set(0,0,0);
 		s0->Q.Set (s0->R);
+		resyncPending = true; // (this step's state is still the playback's: from it at the next)
 		if (supervessel && supervessel->GetVessel(0) == this)
 			supervessel->FRecorder_EndPlayback();
 	}

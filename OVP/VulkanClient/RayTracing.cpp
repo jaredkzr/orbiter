@@ -292,11 +292,14 @@ void RTScene::Add (uint64_t key, const Part *parts, const float (*offsets)[3], u
 	// rebuilds it in place (a structure per set of parts would linger).
 	if (key) mix (vhash, hash);
 	Blas &b = key ? blas[{ key, 0ull }] : blas[{ src[0].p->geo.id, hash }];
-	if (key) b.linger = 16;
 	if (b.as && b.geomVersion != vhash) { // vertices edited: rebuild
 		for (auto &x : builds) if (x.b == &b) x.b = nullptr;
 		DestroyBlas (b);
 	}
+	// (after the rebuild's reset: a cluster's at the default of 256 frames,
+	// low over the ground, its parts changing every frame, had filled the
+	// video memory with stale ones within a minute)
+	if (key) b.linger = 16;
 	if (!b.as) {
 		BlasBuild bb;
 		bb.b = &b;

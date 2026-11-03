@@ -49,6 +49,8 @@ namespace {
 	constexpr size_t MAX_OUTSTANDING = 24;  // tile requests in flight
 	constexpr int MAX_UPLOADS = 12;         // tiles accepted per frame
 	constexpr uint64_t PRUNE_FRAMES = 120;  // unused subtrees are released after this
+	constexpr size_t MESH_SPARE = 1024;     // meshes kept beyond the selection (at least; else half its count)
+	constexpr double FOV_OUT = 40.0 * 3.14159265358979 / 180.0; // out of view, tiles split at most as in a view of this (vertical) aperture
 
 	VECTOR3 SurfaceDir (double lat, double lng)
 	{
@@ -568,6 +570,7 @@ PlanetSurface::~PlanetSurface ()
 PlanetSurface::Node *PlanetSurface::NewNode (int lvl, int ilat, int ilng, Node *parent)
 {
 	Node *n = new Node;
+	dbgNew++;
 	n->lvl = lvl, n->ilat = ilat, n->ilng = ilng;
 	n->parent = parent;
 	int nlat = 1 << (lvl - 4), nlng = 2 << (lvl - 4);
@@ -604,6 +607,8 @@ void PlanetSurface::FreeNode (Node *n)
 		vkc::Buffer b = n->vbuf;
 		ctx->DeferDestroy ([c, b]() mutable { c->DestroyBuffer (b); });
 		n->vbuf = vkc::Buffer();
+		nMeshes--;
+		dbgFreed++;
 		RTForgetGeometry (n->rtId);
 		n->rtId = 0;
 	}
@@ -611,13 +616,13 @@ void PlanetSurface::FreeNode (Node *n)
 	n->rtCluster = 0;
 }
 
-void PlanetSurface::PruneChildren (Node *n)
+void PlanetSurface::PruneChildren (Node *n, uint64_t age)
 {
 	bool any = false, used = false;
 	for (auto &c : n->child)
 		if (c) {
 			any = true;
-			if (c->lastUsed + PRUNE_FRAMES > frame) used = true;
+			if (c->lastUsed + age > frame) used = true;
 		}
 	if (!any) return;
 	if (!used) {
@@ -626,7 +631,7 @@ void PlanetSurface::PruneChildren (Node *n)
 		return;
 	}
 	for (auto &c : n->child)
-		if (c) PruneChildren (c.get());
+		if (c) PruneChildren (c.get(), age);
 }
 
 PlanetSurface::Node *PlanetSurface::Find (int lvl, int ilat, int ilng) const
@@ -705,13 +710,6 @@ double PlanetSurface::SurfaceElev (const Node *src, double lat, double lng, doub
 	double relief = r0 * (1.0 - wy) + r1 * wy;
 	double spacing = radius * (src->latmax - src->latmin) / (N - 3);
 	return h + oapiSurfaceDetail (hPlanet, lng, lat, h, spacing, relief, lmin, amp, fade);
-}
-
-void PlanetSurface::BuildMesh (Node *n, const Node *src, bool detailed)
-{
-	MeshData md;
-	ComputeMesh (n, src, detailed, md);
-	ApplyMesh (n, md);
 }
 
 void PlanetSurface::ComputeMesh (const Node *n, const Node *src, bool detailed, MeshData &md) const
@@ -852,6 +850,7 @@ void PlanetSurface::EnsureVertexBuffer (Node *n)
 	const int V = TileRenderer::GRID + 1;
 	const size_t nv = (size_t)V * V + 4 * V;
 	VkDeviceSize size = nv * (sizeof(NTVERTEX) + 5 * sizeof(float));
+	nMeshes++;
 	n->vbuf = ctx->CreateBuffer (size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
 		(ctx->rayTracing ? VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR : 0) |
 		(ctx->rayTracing || ctx->deviceAddress ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT : 0), false);
@@ -1018,7 +1017,18 @@ uint32_t PlanetSurface::Select (Node *n)
 	};
 	double dist = lowerDist (camLocal);
 	double size = SplitSize (n);
-	bool split = size / dist * pixPerRad > splitPixels;
+	// (out of view, at most a FOV_OUT view's scale: the tiles around a
+	// zoomed view (no frustum culling: the ray tracing's) would be split
+	// as finely as those seen, all round: a 10 deg view took 26000 tiles,
+	// the video memory. A tile in view has its parent in view: graded)
+	double ppr = n->parent ? n->parent->pixPerRad : pixPerRad;
+	if (ppr > pixPerRadOut) {
+		VECTOR3 c = n->centre * ((radius + 0.5 * (emin + emax)) / radius);
+		double b = (radius + emax) * n->angRadius + 0.5 * (emax - emin);
+		ppr = scene->SphereInView (ppos + mul (prot, c) - scene->CameraPos (), b) ? pixPerRad : pixPerRadOut;
+	}
+	n->pixPerRad = ppr;
+	bool split = size / dist * ppr > splitPixels;
 	// Vessels on or near the ground stand on the finest mesh, which has the
 	// terrain detail of the ground contact, wherever the camera is: tiles
 	// are also split as if seen from the nearest one (graded, so the morph
@@ -1034,7 +1044,7 @@ uint32_t PlanetSurface::Select (Node *n)
 	// finer ones only for the camera: thousands of them, each in the ray
 	// tracing scene)
 	constexpr double VESSEL_TILE = 10.0;
-	if (n->vessel >= 0 && size > VESSEL_TILE && size / dv * pixPerRad > splitPixels) split = true;
+	if (n->vessel >= 0 && size > VESSEL_TILE && size / dv * ppr > splitPixels) split = true;
 	if (n->lvl < maxLevel && split) {
 		for (int c = 0; c < 4; c++) {
 			if (!n->child[c])
@@ -1067,6 +1077,7 @@ void PlanetSurface::Prepare ()
 	camDist = length (camLocal);
 	if (!std::isfinite (camDist)) return; // (no camera: keep the last selection)
 	pixPerRad = scene->PixPerRad ();
+	pixPerRadOut = std::min (pixPerRad, 0.5 * scene->ViewHeight () / tan (0.5 * FOV_OUT));
 
 
 	// vessels near the ground (directions from the planet centre), close
@@ -1087,7 +1098,12 @@ void PlanetSurface::Prepare ()
 
 	drawList.clear ();
 	for (auto &r : root) Select (r.get());
-	for (auto &r : root) PruneChildren (r.get());
+	// (unused subtrees kept a while, for a camera coming back; but low and
+	// fast over the ground the finest tiles change every frame, ~100 new
+	// meshes a frame at a low frame rate: over a budget, only this frame's
+	// selection is kept; it had filled the video memory within a minute)
+	size_t budget = drawList.size () + std::max<size_t> (MESH_SPARE, drawList.size () / 2);
+	for (auto &r : root) PruneChildren (r.get(), nMeshes > budget ? 1 : PRUNE_FRAMES);
 
 	static const bool profileTree = getenv ("ORBITER_VK_PROFILE") && atoi (getenv ("ORBITER_VK_PROFILE"));
 	if (profileTree && frame % 100 == 0) { // (what the tile tree holds)
@@ -1124,7 +1140,8 @@ void PlanetSurface::Prepare ()
 	// staged in memory of the frame, which a jump to a new place would
 	// otherwise fill with thousands of them)
 	constexpr int MAX_PLAIN_MESHES = 256;
-	int plainBuilt = 0;
+	struct PlainJob { Node *n; const Node *src; bool detailed; };
+	std::vector<PlainJob> plain;
 	for (Node *n : drawList) {
 		requestUp (n, TileLoader::SURF);
 		if (layers->mask) requestUp (n, TileLoader::MASK);
@@ -1146,17 +1163,34 @@ void PlanetSurface::Prepare ()
 		// at once and the detail later
 		bool rebuild = !n->vbuf.buffer || n->meshElevLvl != srcLvl;
 		bool withDetail = detail && !clouds && (src || !layers->elev);
+		if (!n->vbuf.buffer) dbgRbNew++; else if (n->meshElevLvl != srcLvl) dbgRbElev++; else if (withDetail && !n->meshDetailed) dbgDetail++;
 		if (withDetail && gpu && (rebuild || !n->meshDetailed) && jobs.size() < maxGpuJobs) {
 			jobs.push_back ({ n, src });
 		} else if (withDetail && !gpu && (rebuild || !n->meshDetailed) && jobs.size() < maxJobs) {
 			jobs.push_back ({ n, src });
-		} else if (rebuild && plainBuilt < MAX_PLAIN_MESHES) {
-			plainBuilt++;
-			auto t0 = std::chrono::steady_clock::now ();
-			BuildMesh (n, src, !withDetail);
-			meshTime += std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ();
-			meshCount++;
+		} else if (rebuild && plain.size() < MAX_PLAIN_MESHES) {
+			plain.push_back ({ n, src, !withDetail });
 		}
+	}
+	if (!plain.empty()) {
+		// (on the worker threads too: low and fast over the ground, a hundred
+		// or more a frame, ~1 ms each with the core's elevation and detail;
+		// one after another, most of the frame)
+		auto t0 = std::chrono::steady_clock::now ();
+		if (detail && !clouds) oapiSurfaceDetail (hPlanet, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0); // (initialised before the threads)
+		std::vector<MeshData> out (plain.size());
+		std::atomic<size_t> next{ 0 };
+		auto work = [&]() {
+			for (size_t i; (i = next++) < plain.size(); )
+				ComputeMesh (plain[i].n, plain[i].src, plain[i].detailed, out[i]);
+		};
+		std::vector<std::thread> pool;
+		for (unsigned t = 1; t < nThreads && t < plain.size(); t++) pool.emplace_back (work);
+		work ();
+		for (auto &t : pool) t.join ();
+		for (size_t i = 0; i < plain.size(); i++) ApplyMesh (plain[i].n, out[i]);
+		meshTime += std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ();
+		meshCount += (int)plain.size();
 	}
 	if (!jobs.empty() && gpu) {
 		// the inputs per grid point (worker threads), then one dispatch
@@ -1299,6 +1333,8 @@ void PlanetSurface::Prepare ()
 			name, clouds ? " (clouds)" : "", drawList.size(), maxLvl, maxSurf, maxElev);
 		oapiWriteLogV ("VulkanClient: meshes %s: %d built in the last 120 frames, %.2f ms each", name, meshCount, meshCount ? meshTime / meshCount : 0.0);
 		meshTime = 0.0, meshCount = 0;
+		oapiWriteLogV ("VulkanClient: tiles %s: %d nodes new, %d meshes freed; needing a mesh: %d new, %d elevation changed, %d detail (frame sums)", name, dbgNew, dbgFreed, dbgRbNew, dbgRbElev, dbgDetail);
+		dbgNew = dbgFreed = dbgRbNew = dbgRbElev = dbgDetail = 0;
 		for (const VECTOR3 &v : groundVessels) {
 			// the mesh under a vessel near the ground against the core's elevation
 			double lat = asin (v.y / length (v)), lng = atan2 (v.z, v.x);
@@ -1525,7 +1561,7 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 		// vessel on the ground (whichever is closer)
 		// (by the size the split goes by: near a pole, a sliver's length would
 		// put the morph far beyond its coarser neighbours, leaving cracks)
-		double D = SplitSize (n->parent) * pixPerRad / splitPixels;
+		double D = SplitSize (n->parent) * n->parent->pixPerRad / splitPixels;
 		pc.morph[0] = (float)(0.7 * D);
 		pc.morph[1] = (float)(1.0 / (0.2 * D));
 	}

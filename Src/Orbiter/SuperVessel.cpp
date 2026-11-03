@@ -1215,4 +1215,7 @@ void SuperVessel::AddGravityGradientTorque (Vector &Torque)
 void SuperVessel::FRecorder_EndPlayback ()
 {
 	SetRotationMatrix (vlist[0].vessel->GRot(), vlist[0].vessel);
+	// (its state followed the lead vessel's playback; the integration's
+	// bases are still those of when it was formed)
+	resyncPending = true;
 }

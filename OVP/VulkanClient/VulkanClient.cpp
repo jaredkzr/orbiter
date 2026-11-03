@@ -351,6 +351,13 @@ bool VulkanClient::clbkDisplayFrame ()
 {
 	if (!ready) return false;
 	r2d->Flush ();
+	// (ORBITER_VK_MEMLOG: the heaps and the live buffers by origin, every 20 s)
+	static const bool memLog = [] { const char *e = getenv ("ORBITER_VK_MEMLOG"); return e && *e && *e != '0'; } ();
+	if (memLog) {
+		static auto last = std::chrono::steady_clock::now ();
+		auto t = std::chrono::steady_clock::now ();
+		if (t - last > std::chrono::seconds (20)) { last = t; vkc::LogHeaps (); }
+	}
 	if (frameTimes && frameActive) {
 		double now = std::chrono::duration<double> (std::chrono::steady_clock::now().time_since_epoch()).count();
 		const auto &gpu = ctx.LastGpuTimes ();

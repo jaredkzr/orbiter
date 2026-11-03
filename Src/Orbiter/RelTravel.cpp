@@ -34,6 +34,7 @@ namespace reltravel {
 		const double EPS_TAU = 1e-4;           // [s] a burn shorter than this is done
 		const int MAX_FAILS = 100;             // steps without a trip before giving up
 		const double EVENT_FRAMES = 30.0;      // time warp lowered when a burn's end is fewer steps ahead
+		const double REPLAN_FRAC = 0.01;       // first burn: solved again once this part of its remaining time passed
 		const double RESTORE_FRAMES = 100.0;   // a ship-time warp lowered for an event raised back when the next is more steps ahead (x10)
 		const double IDEAL_TURN_RATE = 5.0 * RAD; // [rad/s] turns without attitude thrusters
 		const double HOLD_TURN_RATE = 30.0 * RAD; // [rad/s] holding (falling while it turns)
@@ -51,6 +52,8 @@ namespace reltravel {
 		const double STOP_SPEED = 1.0;         // [m/s] and this slow relative to it
 		const double REPLAN_MISS = 1000.0;     // [m] stopped farther from the arrival: a new approach
 		const int MAX_REPLANS = 5;
+		const double FINAL_U = 0.01;           // [c] braking slower than this: to the arrival state at a fixed time
+		const double GRAD_SHARE = 0.01;        // the target's gravity changes over a step by at most this part of the drive
 		const double HOLD_CATCH = 1e-3;        // (at rest by a star: stopped this part of the distance short, held and drawn there)
 		const double REPLAN_BRAKE = 0.01;      // (braking at less than this part of the drive)
 		const double BH_ARRIVE_R = 20.0;       // [M] arrival by a black hole: at least this far out,
@@ -347,6 +350,7 @@ namespace reltravel {
 		phase = PH_ALIGN;
 		aligned = guided = stopped = trimming = holdSet = false;
 		fails = replans = 0;
+		tFinal = 0.0;
 		message = "Engaged";
 		LOGOUT ("Relativistic travel: %s to %s, %.4g g, %s", vessel->Name(), TargetName ().c_str(),
 			settings.accel / G0, settings.fastest ? "as soon as possible" : "at a set time");
@@ -422,6 +426,25 @@ namespace reltravel {
 		// of steps); one the user changed is left as set.
 		double w = td.Warp();
 		double frames = (tEvent - td.SimT0) / std::max (td.SimDT, 1e-9);
+		// (and near the target: no closer to its centre than EVENT_FRAMES
+		// steps at the speed relative to it. The guidance cancels its gravity
+		// as at the step's start; steps crossing much of the distance, where
+		// that changes steeply (a massive black hole's, a planet's on a short
+		// hop), left the vessel short, or falling in)
+		{
+			Vector tx, tv;
+			TargetState (td.SimT0, tx, tv);
+			double r = (vessel->GPos () - tx).length (), vr = (vessel->GVel () - tv).length ();
+			if (vr > 0.0) frames = std::min (frames, r / vr / std::max (td.SimDT, 1e-9));
+			// (and its gravity's change over a step, ~2 g v dt / r, at most
+			// GRAD_SHARE of the drive: approaching a massive hole at 1 g,
+			// steps of minutes changed it by more than the drive)
+			if (settings.target && vr > 0.0 && r > 0.0) {
+				double g = Ggrav * settings.target->Mass () / (r * r);
+				double dtMax = GRAD_SHARE * settings.accel * r / (2.0 * g * vr);
+				if (g > 0.0) frames = std::min (frames, EVENT_FRAMES * dtMax / std::max (td.SimDT, 1e-9));
+			}
+		}
 		double sw = g_pOrbiter->ShipWarp ();
 		if (sw != warpLastSet) warpRestore = 0.0; // (the user's)
 		if (w > 1.0 && frames < EVENT_FRAMES) {
@@ -448,6 +471,14 @@ namespace reltravel {
 		if (phase == PH_HOLD) { Hold (); return; }
 		if (trimming) { Trim (); return; }
 		if (guided && now >= tArrive - 1e-6 && (settings.arrival == ARRIVE_FLYBY || stopped)) {
+			// (a rendezvous stopped off the point: a new approach)
+			// (not in a hole's strong field: there, held or trimmed where it stopped)
+			if (settings.arrival != ARRIVE_FLYBY && replans < MAX_REPLANS && !vessel->StrongFieldHole ()) {
+				Vector xt, vt;
+				arrival (now, xt, vt);
+				double miss = (xt - vessel->GPos ()).length ();
+				if (miss > REPLAN_MISS) { NewApproach (miss); return; }
+			}
 			char buf[128];
 			snprintf (buf, sizeof (buf), "Arrived at %s", TargetName ().c_str());
 			// (at rest by a black hole, or a star (its gravity: falling in
@@ -477,25 +508,37 @@ namespace reltravel {
 		// fixed time: the user's, or once under way the soonest with a coast
 		// between the burns for the turn; if that can't be made any more, as
 		// soon as possible)
-		Plan p;
 		double tArr = tArrive > now ? tArrive : 0.0;
-		if (!Solve (p, tArr, &cur) && !(tArr > 0.0 && Solve (p, 0.0, &cur))) {
-			// (close to the arrival: guided the rest of the way)
-			double ta = tArrive > now ? tArrive : cur.ok ? cur.trip.tArrive : 0.0;
-			if (aligned && cur.ok && ta > now && ta - now < std::max (EVENT_FRAMES * td.SimDT, 60.0)) {
-				guided = true, arrival = cur.spec.target, tArrive = ta, tStop = ta - now;
-				Guide ();
+		// (under way, the plan holds between solutions: the drive follows it,
+		// gravity cancelled; solved again once a small part of the burn's
+		// remaining time has passed, every step over its last steps. A
+		// solution costs some 10^4 integration steps: every step, it was
+		// most of an interstellar cruise's frame time)
+		bool hold = aligned && cur.ok && curKey == Key (tArr)
+			&& curBurnEnd - now > EVENT_FRAMES * td.SimDT
+			&& now - cur.planned < REPLAN_FRAC * (curBurnEnd - now);
+		if (!hold) {
+			Plan p;
+			if (!Solve (p, tArr, &cur) && !(tArr > 0.0 && Solve (p, 0.0, &cur))) {
+				// (close to the arrival: guided the rest of the way)
+				double ta = tArrive > now ? tArrive : cur.ok ? cur.trip.tArrive : 0.0;
+				if (aligned && cur.ok && ta > now && ta - now < std::max (EVENT_FRAMES * td.SimDT, 60.0)) {
+					guided = true, arrival = cur.spec.target, tArrive = ta, tStop = ta - now, tFinal = 0.0;
+					Guide ();
+					return;
+				}
+				vessel->SetRelDrive (settings.accel, false);
+				if (++fails > MAX_FAILS) Stop (PH_FAILED, "No trip found");
 				return;
 			}
-			vessel->SetRelDrive (settings.accel, false);
-			if (++fails > MAX_FAILS) Stop (PH_FAILED, "No trip found");
-			return;
+			fails = 0;
+			cur = p;
+			curBurnEnd = TripState (cur.spec, cur.trip, cur.trip.burns[0].dtau).t;
+			curKey = Key (tArr);
 		}
-		fails = 0;
-		cur = p;
 		const Trip &tr = cur.trip;
 		Vector dir (tr.burns[0].dir);
-		double tEnd = TripState (cur.spec, tr, tr.burns[0].dtau).t;
+		double tEnd = curBurnEnd;
 
 		// the drive less gravity (the plan is free of it), the attitude towards it
 		Vector g (Gravity (vessel->GPos(), vessel->GVel()));
@@ -524,11 +567,33 @@ namespace reltravel {
 		LimitWarp (std::max (tEnd, tArrive > now ? tArrive : tr.tArrive));
 		// the first burn ends in this step: guided from here to the arrival
 		if (tEnd <= td.SimT1 || tr.burns[0].dtau <= EPS_TAU) {
-			guided = true;
+			guided = true, tFinal = 0.0;
 			arrival = cur.spec.target;
 			if (tArrive <= now) tArrive = tr.tArrive;
 			tStop = tArrive - now;
 		}
+	}
+
+	void Controller::NewApproach (double miss)
+	{
+		replans++;
+		LOGOUT ("Relativistic travel: %s stopped %.3g km off the arrival: a new approach", vessel->Name(), miss * 1e-3);
+		guided = stopped = false;
+		tArrive = tFinal = 0.0;
+		phase = PH_BURN1;
+		cur = Plan (), fails = 0; // (no warm start from the long trip's plan)
+		vessel->SetRelDrive (settings.accel, false);
+		// (the time warp down to the hop: ~2 sqrt (miss / a) long)
+		double hop = 2.0 * std::sqrt (miss / settings.accel);
+		g_pOrbiter->CapWarp (std::max (1.0, hop / (3.0 * EVENT_FRAMES * std::max (td.SimDT / std::max (td.Warp (), 1e-9), 1e-3))));
+	}
+
+	Controller::PlanKey Controller::Key (double tArr) const
+	{
+		PlanKey k;
+		k.target = settings.target, k.star = settings.star, k.arrival = settings.arrival;
+		k.accel = settings.accel, k.altitude = settings.altitude, k.tArrive = tArr;
+		return k;
 	}
 
 	void Controller::Guide ()
@@ -584,7 +649,7 @@ namespace reltravel {
 			// (at rest by a star, stopped a little short: held, drawn to the
 			// arrival point; its gravity would spoil a short new approach)
 			bool starRest = settings.arrival == ARRIVE_REST && settings.target && settings.target->Type () == OBJTP_STAR;
-			if (starRest && phase == PH_BURN2 && miss > STOP_DIST && miss < HOLD_CATCH * settings.altitude && areq < REPLAN_BRAKE * settings.accel) {
+			if (starRest && tFinal <= 0.0 && phase == PH_BURN2 && miss > STOP_DIST && miss < HOLD_CATCH * settings.altitude && areq < REPLAN_BRAKE * settings.accel) {
 				char buf[128];
 				snprintf (buf, sizeof (buf), "Arrived at %s", TargetName ().c_str());
 				LOGOUT ("Relativistic travel: %s %s (%.3g km short): holding there", vessel->Name(), buf, miss * 1e-3);
@@ -594,32 +659,48 @@ namespace reltravel {
 				Hold ();
 				return;
 			}
-			if (phase == PH_BURN2 && miss > REPLAN_MISS && areq < REPLAN_BRAKE * settings.accel && replans < MAX_REPLANS) {
-				replans++;
-				LOGOUT ("Relativistic travel: %s stopped %.3g km short of the arrival: a new approach", vessel->Name(), miss * 1e-3);
-				guided = stopped = false;
-				tArrive = 0.0;
-				phase = PH_BURN1;
-				cur = Plan (), fails = 0; // (no warm start from the long trip's plan)
-				vessel->SetRelDrive (settings.accel, false);
-				// (the time warp down to the hop: ~2 sqrt (miss / a) long)
-				double hop = 2.0 * std::sqrt (miss / settings.accel);
-				g_pOrbiter->CapWarp (std::max (1.0, hop / (3.0 * EVENT_FRAMES * std::max (td.SimDT / std::max (td.Warp (), 1e-9), 1e-3))));
+			if (tFinal <= 0.0 && phase == PH_BURN2 && miss > REPLAN_MISS && areq < REPLAN_BRAKE * settings.accel && replans < MAX_REPLANS) {
+				NewApproach (miss);
 				return;
 			}
-			burn = phase == PH_BURN2 || areq >= BRAKE_START * settings.accel;
-			double a = burn ? std::min (areq, amax) : settings.accel;
-			double tstop = us / std::max (a, 1e-9);
-			tStop = tstop, uRel = us, aBrake = a;
-			double fade = std::clamp ((tstop - LAT_FADE) / LAT_FADE, 0.0, 1.0);
-			Vector lat (fade > 0.0 ? side * (2.0 / (tstop * tstop) * gam * gam * fade) : Vector ());
-			if (lat.length() > LAT_MAX * a) lat *= LAT_MAX * a / lat.length();
-			alpha = -n * a + lat;
-			if (alpha.length() > amax) alpha *= amax / alpha.length();
-			alpha -= g;
-			tEnd = now + tstop;
-			// (there, at rest: done, rather than creeping the last metres)
-			if (burn && r.length() < STOP_DIST && us < STOP_SPEED) tEnd = now;
+			if (phase == PH_BURN2 && (tFinal > 0.0 || (us < FINAL_U * C && !vessel->StrongFieldHole ()))) {
+				// The final braking, slow: to the arrival state at a fixed
+				// time, the last step's stop (zero-effort miss and velocity,
+				// against where the arrival will be). The arrival frame's
+				// point, extrapolated along its velocity over the time to
+				// rest, ran off when that time grew (an orbit's velocity: by
+				// 8 km/s times it): the braking eased, the point ran further,
+				// the vessel fell on into the planet. (Newtonian: not in a
+				// black hole's strong field.) Over the last steps, the
+				// velocity matched (the gains grow as 1/t^2; the drive is cut
+				// off at the arrival within the step)
+				if (tFinal <= 0.0) tFinal = now + tStop;
+				double t = tFinal - now;
+				Vector xT, vT;
+				arrival (tFinal, xT, vT);
+				Vector zem (xT - (x + v * t)), zev (vT - v);
+				alpha = ProperOfCoordAccel (t > FREEZE_FRAMES * td.SimDT ? zem * (6.0 / (t * t)) - zev * (2.0 / t)
+					: zev / std::max (t, 1e-9), v);
+				if (alpha.length() > amax) alpha *= amax / alpha.length();
+				tStop = std::max (t, 0.0), uRel = us, aBrake = us / std::max (t, 1e-9);
+				alpha -= g;
+				tEnd = tFinal;
+				burn = true;
+			} else {
+				burn = phase == PH_BURN2 || areq >= BRAKE_START * settings.accel;
+				double a = burn ? std::min (areq, amax) : settings.accel;
+				double tstop = us / std::max (a, 1e-9);
+				tStop = tstop, uRel = us, aBrake = a;
+				double fade = std::clamp ((tstop - LAT_FADE) / LAT_FADE, 0.0, 1.0);
+				Vector lat (fade > 0.0 ? side * (2.0 / (tstop * tstop) * gam * gam * fade) : Vector ());
+				if (lat.length() > LAT_MAX * a) lat *= LAT_MAX * a / lat.length();
+				alpha = -n * a + lat;
+				if (alpha.length() > amax) alpha *= amax / alpha.length();
+				alpha -= g;
+				tEnd = now + tstop;
+				// (there, at rest: done, rather than creeping the last metres)
+				if (burn && r.length() < STOP_DIST && us < STOP_SPEED) tEnd = now;
+			}
 		}
 		// coasting (a rendezvous before its braking): gravity cancelled, the
 		// planned coast is free of it; turned for the braking in its last minutes
