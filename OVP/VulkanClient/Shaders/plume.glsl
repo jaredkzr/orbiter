@@ -174,6 +174,41 @@ bool PlumeBox (PlumeParams P, vec3 o, vec3 d, out vec3 lo, out vec3 ld, out floa
 	return tOut > max (tIn, 0.0);
 }
 
+// The ray lo + t ld (plume space) clipped to the cone outside which
+// PlumeMedium is nothing (its early-out: r > 3 max (Rmax, rj), z < -0.15):
+// r <= A + B (z + 0.15), A and B its bound at the exit and its widening
+// with the turbulence's and shock cells' most. Not for bent jets or one
+// meeting a surface. False: the ray misses it. (Rays through a box's
+// corners stepped through nothing: attitude thrusters' boxes in front of
+// a cockpit's windows, 9 ms)
+bool PlumeClip (PlumeParams P, vec3 lo, vec3 ld, inout float t0, inout float t1)
+{
+	if (P.bend.z > 0.0 || P.hit.w > 0.0) return true;
+	float F = 3.0 * (1.0 + 0.12 * P.shape2.y) * (1.0 + 0.45 * P.misc.w);
+	float A = F * max (P.shape.z, 1.0), B = F * (P.shape.w + P.diamond.w);
+	// the cone r = B w, w from its apex
+	float w0 = lo.z + 0.15 + A / B;
+	float B2 = B * B;
+	float a = dot (ld.xy, ld.xy) - B2 * ld.z * ld.z;
+	float b = 2.0 * (dot (lo.xy, ld.xy) - B2 * w0 * ld.z);
+	float c = dot (lo.xy, lo.xy) - B2 * w0 * w0;
+	float disc = b * b - 4.0 * a * c;
+	if (abs (a) < 1e-6 * (dot (ld, ld) + B2)) return true; // (along its side: unclipped)
+	if (disc < 0.0) return a < 0.0; // (all inside, or all outside)
+	float s = sqrt (disc);
+	float r1 = (-b - sign (a) * s) / (2.0 * a), r2 = c / (a * r1); // (r1 r2 = c / a; stable)
+	if (abs (a * r1) < 1e-20) return true;
+	float lo_ = min (r1, r2), hi = max (r1, r2);
+	if (a > 0.0) { // inside between the roots
+		t0 = max (t0, lo_), t1 = min (t1, hi);
+	} else { // inside before and after them (one of the two nappes, the other one behind the nozzle, outside the box)
+		if (t1 <= lo_ || t0 >= hi) return true;
+		if (t0 >= lo_) t0 = max (t0, hi);
+		else if (t1 <= hi) t1 = min (t1, lo_);
+	}
+	return t1 > t0;
+}
+
 // marched in steps that follow the jet's width (MarchPlume): attitude
 // thrusters, and the smooth jets without shock cells or a surface in the way
 bool PlumeAdaptive (PlumeParams P)

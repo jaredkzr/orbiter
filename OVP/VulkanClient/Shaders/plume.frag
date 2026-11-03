@@ -49,6 +49,7 @@ void main ()
 	float zs = texelFetch (prepass, ivec2 (gl_FragCoord.xy), 0).w;
 	if (zs > 0.0) t1 = min (t1, zs / (d.z * re));
 	if (t1 <= t0) discard;
+	if (!PlumeClip (P, lo, ld, t0, t1)) discard;
 
 	int n = PlumeAdaptive (P) ? 96 : int (clamp (ceil ((t1 - t0) / 0.3), 12.0, 96.0)); // (adaptive (MarchPlume): at most 96)
 	float jit = Hash (uvec3 (uvec2 (gl_FragCoord.xy), floatBitsToUint (P.misc.x)));
