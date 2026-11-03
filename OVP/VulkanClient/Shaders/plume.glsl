@@ -174,6 +174,13 @@ bool PlumeBox (PlumeParams P, vec3 o, vec3 d, out vec3 lo, out vec3 ld, out floa
 	return tOut > max (tIn, 0.0);
 }
 
+// marched in steps that follow the jet's width (MarchPlume): attitude
+// thrusters, and the smooth jets without shock cells or a surface in the way
+bool PlumeAdaptive (PlumeParams P)
+{
+	return P.shape2.z > 0.5 || (P.shape2.y < 0.01 && P.hit.w <= 0.0);
+}
+
 struct PlumeLight {
 	vec3 emit;  // emitted light reaching the ray origin
 	vec3 scat;  // light scattered by smoke towards the ray origin
@@ -198,14 +205,22 @@ PlumeLight MarchPlume (PlumeParams P, vec3 lo, vec3 ld, float t0, float t1, int 
 	// fine at the nozzle, coarser as the smooth cone widens. A uniform 0.3
 	// took the 96 steps across every box; thirty of them near the camera, a
 	// Shuttle holding attitude, cost 14 ms a frame; adaptive 5, the image
-	// the same (rcs_day: mean difference 0.3 of 255, the runs' own 0.05))
-	bool adapt = adaptive && P.shape2.z > 0.5; // (then n: the most steps)
+	// the same (rcs_day: mean difference 0.3 of 255, the runs' own 0.05).
+	// Smooth main jets likewise, by their envelope radius: the wide bells
+	// in vacuum filled the screen behind the engines (Shuttle at 390 s
+	// 5.7 -> 1.8 ms, plume_vac 4.3 -> 1.2; ORBITER_VK_FRAMETIME=0.016
+	// renders differ by about what another jitter seed gives). Never
+	// fewer than n steps' worth of the ray: long rays were cut short)
+	bool adapt = adaptive && PlumeAdaptive (P); // (then n: the most steps)
+	bool att = P.shape2.z > 0.5;
+	float dtMin = max (0.3, (t1 - t0) / float (n)); // (n steps reach t1)
 	float tc = t0;
 	for (int i = 0; i < n; i++) {
 		if (adapt) {
 			if (tc >= t1) break;
 			float x = max ((lo + ld * tc).z, 0.0);
-			dt = min (clamp (0.25 * (1.0 + x * P.shape.w), 0.3, 1.5), t1 - tc);
+			float R = att ? 1.0 + x * P.shape.w : 1.0 + (P.shape.z - 1.0) * (1.0 - exp (-0.8 * x)) + x * P.shape.w;
+			dt = min (clamp (0.25 * R, dtMin, max (1.5, dtMin)), t1 - tc);
 		}
 		float t = adapt ? tc + jit * dt : t0 + (float (i) + jit) * dt;
 		tc += dt;

@@ -439,7 +439,7 @@ void PostFX::Meter ()
 	VkCommandBuffer cmd = ctx->Cmd();
 	VkExtent2D e = ctx->Extent();
 	double t = Now ();
-	float dt = lastMeterTime < 0.0 ? 0.0f : (float)std::min (t - lastMeterTime, 0.5);
+	float dt = lastMeterTime < 0.0 ? 0.0f : (float)vkc::FrameDt (std::min (t - lastMeterTime, 0.5));
 	lastMeterTime = t;
 
 	// previous frame's use of the histogram and state is complete

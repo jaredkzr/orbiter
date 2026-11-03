@@ -48,8 +48,12 @@ def row(label, s):
 def marks(rows):
     m = {}
     for r in rows:
+        # (a pass marked more than once a frame, e.g. terrain per planet: summed)
+        f = {}
         for k, v in re.findall(r"([A-Za-z][A-Za-z ]*?)=([\d.]+)", " ".join(r[3].split()[4:])):
-            m.setdefault(k.strip(), []).append(float(v))
+            f[k.strip()] = f.get(k.strip(), 0.0) + float(v)
+        for k, v in f.items():
+            m.setdefault(k, []).append(v)
     out = sorted(((pct(v, .5), pct(v, .99), k) for k, v in m.items()), reverse=True)
     return "  " + "\n  ".join(f"{k:16s} {a:7.2f} {b:7.2f}" for a, b, k in out[:15])
 

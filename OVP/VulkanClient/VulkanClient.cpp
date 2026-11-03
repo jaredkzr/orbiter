@@ -282,7 +282,7 @@ void VulkanClient::clbkRenderScene ()
 	if (postfx->autoExposure) {
 		float le, ll;
 		postfx->ExposureState (le, ll);
-		scene->SkyAdapt (ll, oapiGetSysStep ());
+		scene->SkyAdapt (ll, vkc::FrameDt (oapiGetSysStep ()));
 	}
 	scene->Render ();
 	ctx.GpuMark ("effects");

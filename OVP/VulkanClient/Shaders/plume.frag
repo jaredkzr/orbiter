@@ -50,7 +50,7 @@ void main ()
 	if (zs > 0.0) t1 = min (t1, zs / (d.z * re));
 	if (t1 <= t0) discard;
 
-	int n = P.shape2.z > 0.5 ? 96 : int (clamp (ceil ((t1 - t0) / 0.3), 12.0, 96.0)); // (attitude thrusters: adaptive, at most 96)
+	int n = PlumeAdaptive (P) ? 96 : int (clamp (ceil ((t1 - t0) / 0.3), 12.0, 96.0)); // (adaptive (MarchPlume): at most 96)
 	float jit = Hash (uvec3 (uvec2 (gl_FragCoord.xy), floatBitsToUint (P.misc.x)));
 	PlumeLight l = MarchPlume (P, lo, ld, t0, t1, n, jit, frame.sunColor.rgb, frame.ambient.rgb, frame.sunDir.xyz, true);
 

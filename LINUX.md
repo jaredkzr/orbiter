@@ -131,6 +131,7 @@ These are for testing and tuning (`1` turns a feature on, `0` off).
 | `ORBITER_VK_SCREENSHOT=<file.png>` | save a screenshot … |
 | `ORBITER_VK_SCREENSHOT_FRAME=<n>` | … at frame `n` |
 | `ORBITER_VK_SCREENSHOT_EXIT=1` | … and exit afterwards |
+| `ORBITER_VK_FRAMETIME=<s>` | a fixed frame time for exposure, sky adaptation and the upscaler: with `--fixedstep`, images that do not depend on how fast the frames were (A/B comparisons) |
 | `ORBITER_VK_VIDEO=<dir>`, `ORBITER_VK_VIDEO_FRAMES=<n>` | write `n` frames as PNG files |
 | `ORBITER_VK_VALIDATION=1` | Vulkan validation layer (messages in `Orbiter.log`) |
 | `ORBITER_VK_PROFILE=1` | GPU time per render pass, and other statistics, in `Orbiter.log` |

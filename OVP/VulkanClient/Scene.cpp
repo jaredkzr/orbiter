@@ -1884,7 +1884,7 @@ void Scene::BeginFrame ()
 			ring.radius = di.radius / AU, ring.width = di.width / AU, ring.fraction = di.fraction, ring.lum = di.luminosity;
 		}
 		galaxy->SetDustRing (ring);
-		galaxy->Update (SkyObserver (), oapiGetSysStep ());
+		galaxy->Update (SkyObserver (), vkc::FrameDt (oapiGetSysStep ()));
 	}
 	ctx->GpuMark ("skybake");
 	UpdateNearStars ();
@@ -2542,7 +2542,7 @@ VkImageView Scene::ResolveTemporal (VkExtent2D &size)
 			in.velocity = ao->VelocityImage (), in.velocityFormat = AmbientOcclusion::VELOCITY_FORMAT;
 			in.reactive = reactive.image;
 			in.jitter[0] = jitterPixels[0], in.jitter[1] = jitterPixels[1];
-			in.frameTime = lastFrameTime < 0.0 ? 1.0f / 60.0f : (float)std::min (t - lastFrameTime, 0.5);
+			in.frameTime = lastFrameTime < 0.0 ? 1.0f / 60.0f : (float)vkc::FrameDt (std::min (t - lastFrameTime, 0.5));
 			lastFrameTime = t;
 			in.nearPlane = (float)nearPlane;
 			in.fovY = (float)(2.0 * oapiCameraAperture ());

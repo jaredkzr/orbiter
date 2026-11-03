@@ -21,6 +21,10 @@ namespace vkc {
 	/// the memory heaps' use, to the log
 	void LogHeaps ();
 #define VK_CHECK(expr) vkc::Check((expr), #expr)
+	/// the real time between frames [s], or for image comparisons
+	/// (ORBITER_VK_FRAMETIME=<s>) a fixed one: exposure, sky adaptation and
+	/// the upscaler's history then do not depend on how fast a variant runs
+	double FrameDt (double measured);
 
 	constexpr uint32_t FRAMES_IN_FLIGHT = 2;
 

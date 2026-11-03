@@ -97,6 +97,12 @@ void LogHeaps ()
 	memlog::Log ();
 }
 
+double FrameDt (double measured)
+{
+	static const double fixed = getenv ("ORBITER_VK_FRAMETIME") ? atof (getenv ("ORBITER_VK_FRAMETIME")) : 0.0;
+	return fixed > 0.0 ? fixed : measured;
+}
+
 void Check (VkResult res, const char *what)
 {
 	if (res != VK_SUCCESS)
