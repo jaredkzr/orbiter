@@ -80,6 +80,14 @@ vec4 PlumeMedium (PlumeParams P, vec3 p)
 	float xi = max (x, 0.0) / len;
 	// turbulence: laminar at the exit, growing downstream
 	float turb = P.misc.w * smoothstep (0.02, 0.5, xi);
+	// (beyond the envelope's widest reach, three times the radius it could
+	// have there, nothing of it is left (all terms fall off as exp (-u^2)
+	// or faster): no noise fetched there, most of a cone's box)
+	if (P.hit.w <= 0.0) {
+		float Rmax = (1.0 + (rj - 1.0) * (1.0 - exp (-max (x, 0.0) * 0.8)) + max (x, 0.0) * spread
+			+ max (0.0, x - 0.5 * len) * P.diamond.w + 0.3 * bend) * (1.0 + 0.12 * D) * (1.0 + 0.45 * turb);
+		if (r > 3.0 * max (Rmax, rj) || xi > 1.6) return vec4 (0.0);
+	}
 	vec3 q = vec3 (p.xy, x - P.misc.x * P.misc.y) + P.misc2.y * 7.31;
 	float n1 = texture (plumeShapeNoise, q * 0.045).r;
 	float n2 = texture (plumeDetailNoise, q * 0.23 + 0.4 * n1).r;
@@ -175,7 +183,7 @@ struct PlumeLight {
 
 // March from t0 to t1 (exit radii, plume space ray lo + t ld) in n steps;
 // lit: light on the smoke (sun and ambient, without the phase function)
-PlumeLight MarchPlume (PlumeParams P, vec3 lo, vec3 ld, float t0, float t1, int n, float jit, vec3 sunLit, vec3 ambLit, vec3 sunDir)
+PlumeLight MarchPlume (PlumeParams P, vec3 lo, vec3 ld, float t0, float t1, int n, float jit, vec3 sunLit, vec3 ambLit, vec3 sunDir, bool adaptive)
 {
 	PlumeLight r = PlumeLight (vec3 (0.0), vec3 (0.0), 1.0, 0.0);
 	float dt = (t1 - t0) / float (n);
@@ -185,8 +193,22 @@ PlumeLight MarchPlume (PlumeParams P, vec3 lo, vec3 ld, float t0, float t1, int 
 	float phase = (1.0 - g * g) / pow (1.0 + g * g - 2.0 * g * cosT, 1.5); // (times 4 pi)
 	vec3 lit = 0.9 * (sunLit * P.misc2.z * phase * 0.5 + ambLit);
 	float wSum = 0.0;
+	// (adaptive, attitude thrusters: steps of a quarter of the cone's radius where the
+	// ray is, 0.3 to 1.5 exit radii (the detail noise's wavelength is 4):
+	// fine at the nozzle, coarser as the smooth cone widens. A uniform 0.3
+	// took the 96 steps across every box; thirty of them near the camera, a
+	// Shuttle holding attitude, cost 14 ms a frame; adaptive 5, the image
+	// the same (rcs_day: mean difference 0.3 of 255, the runs' own 0.05))
+	bool adapt = adaptive && P.shape2.z > 0.5; // (then n: the most steps)
+	float tc = t0;
 	for (int i = 0; i < n; i++) {
-		float t = t0 + (float (i) + jit) * dt;
+		if (adapt) {
+			if (tc >= t1) break;
+			float x = max ((lo + ld * tc).z, 0.0);
+			dt = min (clamp (0.25 * (1.0 + x * P.shape.w), 0.3, 1.5), t1 - tc);
+		}
+		float t = adapt ? tc + jit * dt : t0 + (float (i) + jit) * dt;
+		tc += dt;
 		vec4 m = PlumeMedium (P, lo + ld * t);
 		float Ts = exp (-m.a * dt);
 		float w = m.a > 1e-5 ? (1.0 - Ts) / m.a : dt; // emission absorbed within the step

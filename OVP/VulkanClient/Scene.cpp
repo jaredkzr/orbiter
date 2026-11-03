@@ -2515,6 +2515,7 @@ void Scene::Render ()
 	vkc::Target rtMS{ reactiveMS.image, reactiveMS.view, REACTIVE_FORMAT, ctx->RenderExtent () };
 	ctx->BindSceneWithMask (rt, reactiveMS.image ? &rtMS : nullptr);
 	plumes->Draw (FrameSet (), camAtmSet, gc->TexMgr()->White());
+	ctx->GpuMark ("plumes");
 	particles->DrawVolume (FrameSet ());
 	particles->DrawScreenSmoke (FrameSet ());
 	for (auto *ps : gc->ParticleStreams()) ps->Render (this);
