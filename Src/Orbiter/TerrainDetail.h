@@ -124,7 +124,7 @@ private:
 	/// the noise's fade factor: 0 at the surface bases, 1 away from them and
 	/// built-up ground (only if built is given: its share, times wb);
 	/// bases: the bases' part
-	double Fade (const Vector &dir, double *bases = nullptr, double *built = nullptr, double wb = 1.0) const;
+	double Fade (const Vector &dir, double *bases = nullptr, double *built = nullptr, double wb = 1.0, const double *latlng = nullptr) const;
 	void InitBases () const;
 
 	const Planet *planet;
@@ -143,6 +143,10 @@ private:
 	double PadLevel (const Vector &dir, double &g) const;
 	mutable cities::CityMap *cities = nullptr; // (flattened where built up)
 	mutable std::once_flag basesOnce;          // (any thread)
+	/// the flats that may reach a point (of those that may reach points about
+	/// it: the thread's last few), in their order
+	const std::vector<int> &FlatsNear (const Vector &dir) const;
+	const uint64_t serial;                     // (this one, for the threads' caches: not its address, reused)
 };
 
 #endif // !__TERRAINDETAIL_H

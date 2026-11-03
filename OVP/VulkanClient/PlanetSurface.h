@@ -170,6 +170,7 @@ private:
 		bool drawn = false;   // in this frame's draw list (lastUsed: this frame)
 		uint32_t rtTris = 0;  // ray tracing triangles of the tiles drawn of this one and its descendants
 		uint64_t rtCluster = 0; // ray tracing key of the cluster of drawn tiles under this one
+		uint64_t rtSig = 0, rtChanged = 0; // (the tiles under it: their signature, the frame it last changed)
 	};
 	uint64_t preparedFrame = ~0ull;
 
@@ -257,8 +258,12 @@ private:
 	double camDist = 0.0;
 	double pixPerRad = 1.0;
 	double pixPerRadOut = 1.0; // (out of view: at most a FOV_OUT view's)
+	VECTOR3 camLast{};   // camLocal of the last frame
+	double camSpeed = 0.0; // the camera's speed over the ground [m/s of simulation time] (Select: tiles no finer than it crosses in MOTION_TIME)
+	double minSplit = 0.0; // [m] tiles this small not split (the camera's motion)
 	std::vector<Node*> drawList;
 	std::vector<VECTOR3> groundVessels; // positions of vessels near the ground, planet frame (finest tiles under them)
+	std::vector<double> groundTile;     // [m] the finest tile under each (by the camera's distance)
 };
 
 #endif // !__PLANETSURFACE_H

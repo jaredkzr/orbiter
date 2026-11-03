@@ -9,6 +9,8 @@
 #include "tile_mesh.comp.h"
 #include <atomic>
 #include <thread>
+#include <mutex>
+#include <condition_variable>
 #include <chrono>
 #include "RayTracing.h"
 #include "Scene.h"
@@ -51,6 +53,70 @@ namespace {
 	constexpr uint64_t PRUNE_FRAMES = 120;  // unused subtrees are released after this
 	constexpr size_t MESH_SPARE = 1024;     // meshes kept beyond the selection (at least; else half its count)
 	constexpr double FOV_OUT = 40.0 * 3.14159265358979 / 180.0; // out of view, tiles split at most as in a view of this (vertical) aperture
+	constexpr double MOTION_TIME = 0.05;    // [s] tiles the camera crosses faster than this (at the time warp) not split
+	constexpr double VESSEL_TILE = 10.0;    // [m] the finest tiles under a vessel on the ground,
+	constexpr double VESSEL_CAM = 0.1;      // at least this part of the camera's distance
+
+	// Worker threads kept for the meshes (they were made and joined twice
+	// a frame)
+	class Workers {
+	public:
+		static Workers &Get () { static Workers w; return w; }
+		/// fn (i) for each i < n, on the workers and the calling thread;
+		/// returns when all are done
+		void Run (size_t n, const std::function<void (size_t)> &fn)
+		{
+			if (n < 2 || threads.empty ()) { for (size_t i = 0; i < n; i++) fn (i); return; }
+			std::lock_guard<std::mutex> one (runMtx);
+			{
+				std::lock_guard<std::mutex> lk (m);
+				job = &fn, count = n, next = 0, busy = threads.size (), gen++;
+			}
+			cv.notify_all ();
+			for (size_t i; (i = next++) < n; ) fn (i);
+			std::unique_lock<std::mutex> lk (m);
+			done.wait (lk, [this] { return busy == 0; });
+			job = nullptr;
+		}
+		~Workers ()
+		{
+			{ std::lock_guard<std::mutex> lk (m); quit = true, gen++; }
+			cv.notify_all ();
+			for (auto &t : threads) t.join ();
+		}
+	private:
+		Workers ()
+		{
+			unsigned n = std::max (2u, std::thread::hardware_concurrency ()) - 2; // (and the caller's)
+			for (unsigned i = 0; i < n; i++) threads.emplace_back ([this] { Loop (); });
+		}
+		void Loop ()
+		{
+			uint64_t seen = 0;
+			for (;;) {
+				const std::function<void (size_t)> *fn;
+				size_t n;
+				{
+					std::unique_lock<std::mutex> lk (m);
+					cv.wait (lk, [&] { return gen != seen; });
+					seen = gen;
+					if (quit) return;
+					fn = job, n = count;
+				}
+				for (size_t i; (i = next++) < n; ) (*fn) (i);
+				std::lock_guard<std::mutex> lk (m);
+				if (--busy == 0) done.notify_one ();
+			}
+		}
+		std::vector<std::thread> threads;
+		std::mutex m, runMtx;
+		std::condition_variable cv, done;
+		const std::function<void (size_t)> *job = nullptr;
+		size_t count = 0, busy = 0;
+		std::atomic<size_t> next{ 0 };
+		uint64_t gen = 0;
+		bool quit = false;
+	};
 
 	VECTOR3 SurfaceDir (double lat, double lng)
 	{
@@ -1028,7 +1094,7 @@ uint32_t PlanetSurface::Select (Node *n)
 		ppr = scene->SphereInView (ppos + mul (prot, c) - scene->CameraPos (), b) ? pixPerRad : pixPerRadOut;
 	}
 	n->pixPerRad = ppr;
-	bool split = size / dist * ppr > splitPixels;
+	bool split = size / dist * ppr > splitPixels && size > minSplit;
 	// Vessels on or near the ground stand on the finest mesh, which has the
 	// terrain detail of the ground contact, wherever the camera is: tiles
 	// are also split as if seen from the nearest one (graded, so the morph
@@ -1039,12 +1105,12 @@ uint32_t PlanetSurface::Select (Node *n)
 		double d = lowerDist (groundVessels[i]);
 		if (d < dv) dv = d, n->vessel = (int)i;
 	}
-	// (down to tiles of 10 m: mesh nodes 0.15 m apart, half the shortest
+	// (down to tiles of 10 m (groundTile; coarser for a camera farther
+	// away, or moving fast): mesh nodes 0.15 m apart, half the shortest
 	// wavelength of the ground contact's detail, elevmgr PHYSICS_LMIN;
 	// finer ones only for the camera: thousands of them, each in the ray
 	// tracing scene)
-	constexpr double VESSEL_TILE = 10.0;
-	if (n->vessel >= 0 && size > VESSEL_TILE && size / dv * ppr > splitPixels) split = true;
+	if (n->vessel >= 0 && size > groundTile[n->vessel] && size / dv * ppr > splitPixels) split = true;
 	if (n->lvl < maxLevel && split) {
 		for (int c = 0; c < 4; c++) {
 			if (!n->child[c])
@@ -1078,12 +1144,24 @@ void PlanetSurface::Prepare ()
 	if (!std::isfinite (camDist)) return; // (no camera: keep the last selection)
 	pixPerRad = scene->PixPerRad ();
 	pixPerRadOut = std::min (pixPerRad, 0.5 * scene->ViewHeight () / tan (0.5 * FOV_OUT));
-
+	// (low and fast over the ground, the finest tiles about the camera
+	// were all replaced every frame: a thousand new meshes a frame on a
+	// takeoff run with the chase camera a metre up. No finer than the
+	// camera crosses in MOTION_TIME at the time warp: 4 m tiles at 80 m/s
+	// (nodes 12 cm apart; the shader adds the detail). Rises at most
+	// twofold a frame: a camera's jump is no speed)
+	double dt = oapiGetSimStep ();
+	if (dt > 0.0) {
+		double v = length (camLocal - camLast) / dt;
+		camSpeed = std::min (v, 2.0 * camSpeed + 10.0);
+	}
+	camLast = camLocal;
+	minSplit = clouds ? 0.0 : MOTION_TIME * camSpeed * oapiGetTimeAcceleration ();
 
 	// vessels near the ground (directions from the planet centre), close
 	// enough to the camera that a mismatch of a few metres would show
 	// (farther away, the finest meshes would only alias)
-	groundVessels.clear ();
+	groundVessels.clear (), groundTile.clear ();
 	if (!clouds) {
 		for (DWORD i = 0; i < oapiGetVesselCount (); i++) {
 			OBJHANDLE hv = oapiGetVesselByIndex (i);
@@ -1091,8 +1169,13 @@ void PlanetSurface::Prepare ()
 			oapiGetGlobalPos (hv, &gv);
 			VECTOR3 lv = tmul (prot, gv - ppos);
 			double r = length (lv);
-			if (r < radius + maxElev + 1000.0 && length (lv - camLocal) < 3000.0)
+			if (r < radius + maxElev + 1000.0 && length (lv - camLocal) < 3000.0) {
+				// (as fine as the ground contact's detail only for a camera
+				// close by: seen from hundreds of metres, a vessel rolling
+				// down the runway replaced its 10 m tiles every frame)
 				groundVessels.push_back (lv);
+				groundTile.push_back (std::max ({ VESSEL_TILE, VESSEL_CAM * length (lv - camLocal), minSplit }));
+			}
 		}
 	}
 
@@ -1179,15 +1262,7 @@ void PlanetSurface::Prepare ()
 		auto t0 = std::chrono::steady_clock::now ();
 		if (detail && !clouds) oapiSurfaceDetail (hPlanet, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0); // (initialised before the threads)
 		std::vector<MeshData> out (plain.size());
-		std::atomic<size_t> next{ 0 };
-		auto work = [&]() {
-			for (size_t i; (i = next++) < plain.size(); )
-				ComputeMesh (plain[i].n, plain[i].src, plain[i].detailed, out[i]);
-		};
-		std::vector<std::thread> pool;
-		for (unsigned t = 1; t < nThreads && t < plain.size(); t++) pool.emplace_back (work);
-		work ();
-		for (auto &t : pool) t.join ();
+		Workers::Get ().Run (plain.size(), [&](size_t i) { ComputeMesh (plain[i].n, plain[i].src, plain[i].detailed, out[i]); });
 		for (size_t i = 0; i < plain.size(); i++) ApplyMesh (plain[i].n, out[i]);
 		meshTime += std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ();
 		meshCount += (int)plain.size();
@@ -1199,15 +1274,7 @@ void PlanetSurface::Prepare ()
 		std::vector<GpuJob> gj (jobs.size());
 		std::vector<std::vector<float>> pts (jobs.size());
 		std::vector<MeshData> md (jobs.size());
-		std::atomic<size_t> next{ 0 };
-		auto work = [&]() {
-			for (size_t i; (i = next++) < jobs.size(); )
-				PrepareGpuMesh (jobs[i].first, jobs[i].second, gj[i], pts[i], md[i]);
-		};
-		std::vector<std::thread> pool;
-		for (unsigned t = 1; t < nThreads && t < jobs.size(); t++) pool.emplace_back (work);
-		work ();
-		for (auto &t : pool) t.join ();
+		Workers::Get ().Run (jobs.size(), [&](size_t i) { PrepareGpuMesh (jobs[i].first, jobs[i].second, gj[i], pts[i], md[i]); });
 		size_t nf = 0;
 		for (auto &p : pts) nf += p.size();
 		vkc::Context::Transient tp = ctx->AllocTransient (nf * sizeof(float));
@@ -1303,16 +1370,8 @@ void PlanetSurface::Prepare ()
 		// (the core's terrain detail initialises itself on first use: here)
 		oapiSurfaceDetail (hPlanet, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0);
 		std::vector<MeshData> out (jobs.size());
-		std::atomic<size_t> next{ 0 };
-		auto work = [&]() {
-			for (size_t i; (i = next++) < jobs.size(); )
-				ComputeMesh (jobs[i].first, jobs[i].second, true, out[i]);
-		};
 		auto t0 = std::chrono::steady_clock::now ();
-		std::vector<std::thread> pool;
-		for (unsigned t = 1; t < nThreads && t < jobs.size(); t++) pool.emplace_back (work);
-		work ();
-		for (auto &t : pool) t.join ();
+		Workers::Get ().Run (jobs.size(), [&](size_t i) { ComputeMesh (jobs[i].first, jobs[i].second, true, out[i]); });
 		for (size_t i = 0; i < jobs.size(); i++) ApplyMesh (jobs[i].first, out[i]);
 		meshTime += std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ();
 		meshCount += (int)jobs.size();
@@ -1403,11 +1462,27 @@ void PlanetSurface::AddRTClusters (Node *n, RTScene *rt)
 	// columns; more of those narrowed by a pole) are one structure, moved
 	// from the node's centre (their meshes are about their own). A tile that
 	// changes rebuilds its cluster's (ORBITER_VK_RT_CLUSTER: the triangles).
+	// Where tiles changed within RT_CHURN frames, smaller clusters (down to
+	// a sixteenth): low and fast over the ground, a few new tiles a frame
+	// rebuilt clusters of a million triangles in all, 20-30 ms a frame.
 	static const uint32_t RT_CLUSTER = getenv ("ORBITER_VK_RT_CLUSTER") ? std::max (1, atoi (getenv ("ORBITER_VK_RT_CLUSTER"))) : 131072;
+	constexpr uint64_t RT_CHURN = 60;
 	if (n->lastUsed != frame || !n->rtTris) return;
 	if (n->rtTris > RT_CLUSTER && !n->drawn) {
 		for (auto &c : n->child) if (c) AddRTClusters (c.get(), rt);
 		return;
+	}
+	if (!n->drawn && n->rtTris > RT_CLUSTER / 16) {
+		std::vector<Node*> under;
+		GatherDrawn (n, under);
+		uint64_t sig = 1469598103934665603ull;
+		for (const Node *t : under)
+			sig = (sig ^ (t->vbuf.buffer ? t->rtId * 0x9E3779B97F4A7C15ull + t->rtVersion : 0x5bd1e995ull)) * 1099511628211ull;
+		if (sig != n->rtSig) n->rtSig = sig, n->rtChanged = frame;
+		if (frame - n->rtChanged < RT_CHURN) {
+			for (auto &c : n->child) if (c) AddRTClusters (c.get(), rt);
+			return;
+		}
 	}
 	std::vector<Node*> tiles;
 	GatherDrawn (n, tiles);

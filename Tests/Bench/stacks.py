@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Tally of the stack samples of sample.sh: the functions on the most
-samples (inclusive), and those at the top of the stacks."""
+samples (inclusive), and those at the top of the stacks.
+  stacks.py out.txt [function]   only the stacks through function"""
 import collections, re, sys
 
 txt = open(sys.argv[1], errors='replace').read()
-stacks = re.split(r'\nThread 1 ', txt)[1:]
+stacks = re.split(r'\nThread \d+ ', txt)[1:]
 incl, top = collections.Counter(), collections.Counter()
 for s in stacks:
     fns = []
@@ -12,7 +13,7 @@ for s in stacks:
         m = re.match(r'#\d+\s+(?:0x[0-9a-f]+ in )?(\S+)', ln)
         if m:
             fns.append(re.sub(r'\(.*', '', m.group(1)))
-    if fns:
+    if fns and (len(sys.argv) < 3 or any(sys.argv[2] in f for f in fns)):
         top[fns[0]] += 1
         incl.update(set(fns))
 print(f"{len(stacks)} samples\ntop of stack:")

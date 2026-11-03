@@ -157,7 +157,11 @@ struct Zone {
 // =======================================================================
 // Lights
 
-Lights::Lights (const Planet *p): planet (p)
+namespace {
+	std::atomic<uint64_t> lightsSerial{ 1 };
+}
+
+Lights::Lights (const Planet *p): planet (p), serial (lightsSerial++)
 {
 	DWORD src = g_pOrbiter->Cfg()->CfgPRenderPrm.TileLoadFlags;
 	char cbuf[512];
@@ -177,7 +181,7 @@ Lights::~Lights ()
 	delete tree;
 }
 
-const Lights::Tile *Lights::Get (double lat, double lng, bool load, bool &miss)
+std::shared_ptr<const Lights::Tile> Lights::Get (double lat, double lng, bool load, bool &miss)
 {
 	// the finest tile up to LIGHT_LEVEL that has data
 	miss = false;
@@ -190,12 +194,12 @@ const Lights::Tile *Lights::Get (double lat, double lng, bool load, bool &miss)
 		if (it != cache.end()) {
 			uint64_t c = clock.load (std::memory_order_relaxed); // (no stores to shared lines when unchanged)
 			if (it->second->used.load (std::memory_order_relaxed) != c) it->second->used.store (c, std::memory_order_relaxed);
-			if (it->second->n) return it->second.get();
+			if (it->second->n) return it->second;
 			if (it->second->lvl < 0) continue; // (none at this level: a coarser one)
 			return nullptr;
 		}
 		if (!load) { miss = true; return nullptr; }
-		auto t = std::make_unique<Tile> ();
+		auto t = std::make_shared<Tile> ();
 		t->lvl = lvl, t->ilat = ilat, t->ilng = ilng;
 		t->used = ++clock;
 		std::vector<uint32_t> px;
@@ -266,7 +270,7 @@ const Lights::Tile *Lights::Get (double lat, double lng, bool load, bool &miss)
 				if (c->second->used < lru->second->used) lru = c;
 			cache.erase (lru);
 		}
-		Tile *r = (cache[key] = std::move (t)).get();
+		std::shared_ptr<Tile> r = (cache[key] = std::move (t));
 		if (r->n) return r;
 		if (r->lvl < 0) continue;
 		return nullptr;
@@ -287,19 +291,39 @@ double Lights::Sample (double lat, double lng)
 		auto at = [&](int x, int y) { return (double)t->lit[(size_t)std::clamp (y, 0, t->n - 1) * t->n + std::clamp (x, 0, t->n - 1)]; };
 		return (at (x0, y0) * (1 - fu) + at (x0 + 1, y0) * fu) * (1 - fv) + (at (x0, y0 + 1) * (1 - fu) + at (x0 + 1, y0 + 1) * fu) * fv;
 	};
+	// (the thread's last results first, by the LIGHT_LEVEL cell: its points
+	// find the same tile. The shared lock, taken for every point of every
+	// mesh by every thread making them, was most of their time about a city)
+	int nlat = 1 << (LIGHT_LEVEL - 4), nlng = 2 << (LIGHT_LEVEL - 4);
+	uint64_t cell = ((uint64_t)std::clamp ((int)((Pi05 - lat) / Pi * nlat), 0, nlat - 1) << 24)
+		| (uint64_t)std::clamp ((int)((lng + Pi) / Pi2 * nlng), 0, nlng - 1);
+	struct Cached { uint64_t owner = 0, cell = 0; std::shared_ptr<const Tile> t; };
+	thread_local Cached cached[4];
+	thread_local unsigned next = 0;
+	for (const Cached &c : cached)
+		if (c.owner == serial && c.cell == cell) return sample (c.t.get());
+	std::shared_ptr<const Tile> t;
 	{
 		std::shared_lock<std::shared_mutex> lock (mtx);
-		const Tile *t = Get (lat, lng, false, miss);
-		if (!miss) return sample (t);
+		t = Get (lat, lng, false, miss);
 	}
-	std::unique_lock<std::shared_mutex> lock (mtx);
-	return sample (Get (lat, lng, true, miss));
+	if (miss) {
+		std::unique_lock<std::shared_mutex> lock (mtx);
+		t = Get (lat, lng, true, miss);
+	}
+	Cached &c = cached[next++ & 3];
+	c.owner = serial, c.cell = cell, c.t = t;
+	return sample (t.get());
 }
 
 // =======================================================================
 // CityMap
 
-CityMap::CityMap (const Planet *p): planet (p), R (p->Size())
+namespace {
+	std::atomic<uint64_t> citySerial{ 1 };
+}
+
+CityMap::CityMap (const Planet *p): planet (p), R (p->Size()), serial (citySerial++)
 {
 	etile = std::make_unique<std::vector<ElevationTile>> (16);
 	seed = 0xc17u;
@@ -455,6 +479,33 @@ int CityMap::StyleAt (double lat, double lng) const
 }
 
 void CityMap::Near (const Vector &dir, double radius, std::vector<int> &out) const
+{
+	// From the candidates of points within NEAR_CELL of a point (the
+	// thread's last ones: a mesh's points are close together), those within
+	// radius; in the bins' order, as the search finds them. (Every point of
+	// every mesh searched the bins: most of the meshes' time over a city's
+	// surroundings)
+	const double NEAR_CELL = 0.05 * RAD; // [rad]
+	struct Cell { uint64_t map = 0; double radius = -1.0; Vector dir; std::vector<int> cand; };
+	thread_local Cell cache[4];
+	thread_local unsigned next = 0;
+	const Cell *cell = nullptr;
+	for (const Cell &c : cache)
+		if (c.map == serial && c.radius == radius && (c.dir - dir).length2() < NEAR_CELL * NEAR_CELL) { cell = &c; break; }
+	if (!cell) {
+		Cell &c = cache[next++ & 3];
+		NearScan (dir, radius + NEAR_CELL * R, c.cand);
+		c.map = serial, c.radius = radius, c.dir = dir;
+		cell = &c;
+	}
+	out.clear();
+	double c2 = radius / R;
+	c2 *= c2;
+	for (int i : cell->cand)
+		if ((centres[i].dir - dir).length2() < c2) out.push_back (i);
+}
+
+void CityMap::NearScan (const Vector &dir, double radius, std::vector<int> &out) const
 {
 	out.clear();
 	double lat, lng;
@@ -670,19 +721,33 @@ double CityMap::Ground (double lat, double lng)
 		int64_t ni = i + (k >> 1), nj = j + (k & 1);
 		int64_t bi = ni >= 0 ? ni / GBLOCK : (ni - GBLOCK + 1) / GBLOCK, bj = nj >= 0 ? nj / GBLOCK : (nj - GBLOCK + 1) / GBLOCK;
 		int64_t key = NodeKey (bi, bj);
-		std::shared_ptr<const GroundBlock> blk;
-		{
-			std::shared_lock<std::shared_mutex> lock (groundMtx);
-			auto it = groundBlocks.find (key);
-			if (it != groundBlocks.end()) blk = it->second;
+		// (the thread's last blocks first: the shared lock and the block's
+		// count, taken by every thread making meshes for every point, were
+		// most of their time; blocks don't change once made)
+		struct Cached { uint64_t map = 0; int64_t key = 0; std::shared_ptr<const GroundBlock> blk; };
+		thread_local Cached cache[4];
+		thread_local unsigned next = 0;
+		const GroundBlock *b = nullptr;
+		for (const Cached &c : cache)
+			if (c.map == serial && c.key == key) { b = c.blk.get(); break; }
+		if (!b) {
+			std::shared_ptr<const GroundBlock> blk;
+			{
+				std::shared_lock<std::shared_mutex> lock (groundMtx);
+				auto it = groundBlocks.find (key);
+				if (it != groundBlocks.end()) blk = it->second;
+			}
+			if (!blk) { // (made outside the lock; by two threads at once at worst)
+				blk = MakeGroundBlock (bi, bj);
+				std::unique_lock<std::shared_mutex> lock (groundMtx);
+				if (groundBlocks.size() > 50000) groundBlocks.clear();
+				groundBlocks[key] = blk;
+			}
+			Cached &c = cache[next++ & 3];
+			c.map = serial, c.key = key, c.blk = std::move (blk);
+			b = c.blk.get();
 		}
-		if (!blk) { // (made outside the lock; by two threads at once at worst)
-			blk = MakeGroundBlock (bi, bj);
-			std::unique_lock<std::shared_mutex> lock (groundMtx);
-			if (groundBlocks.size() > 50000) groundBlocks.clear();
-			groundBlocks[key] = blk;
-		}
-		g[k] = (*blk)[(ni - bi * GBLOCK) * GBLOCK + (nj - bj * GBLOCK)];
+		g[k] = (*b)[(ni - bi * GBLOCK) * GBLOCK + (nj - bj * GBLOCK)];
 	}
 	double w[4] = { (1 - fu) * (1 - fv), (1 - fu) * fv, fu * (1 - fv), fu * fv }, s = 0.0, sw = 0.0;
 	for (int k = 0; k < 4; k++)
@@ -693,8 +758,15 @@ double CityMap::Ground (double lat, double lng)
 double CityMap::Built (const Vector &dir)
 {
 	if (!active) return 0.0;
-	double lat, lng, core, hMax, dtBuilt;
+	double lat, lng;
 	LatLng (dir, lat, lng);
+	return Built (dir, lat, lng);
+}
+
+double CityMap::Built (const Vector &dir, double lat, double lng)
+{
+	if (!active) return 0.0;
+	double core, hMax, dtBuilt;
 	Core (dir, core, hMax, dtBuilt);
 	return std::max (SmoothStep (0.05, 0.3, lights->Sample (lat, lng)), dtBuilt); // (as Zoned)
 }

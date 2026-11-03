@@ -5,6 +5,7 @@
 #
 #   Tests/Bench/sample.sh out.txt delay samples gap scenario.scn [VAR=value ...]
 #
+# SAMPLE_THREADS=all: every thread's stack (the workers too).
 # Tally the functions with: python3 Tests/Bench/stacks.py out.txt
 set -u
 SRC=$(cd "$(dirname "$0")/../.." && pwd)
@@ -14,7 +15,7 @@ cd "$BUILD" || exit 1
 ulimit -v 12000000
 cmds=$(mktemp)
 { echo "set pagination off"; echo "set print thread-events off"; echo "handle SIGINT stop nopass"; echo "run"
-  for i in $(seq "$ns"); do echo "thread apply 1 bt 40"; echo "continue"; done; echo "kill"; echo "quit"; } > "$cmds"
+  for i in $(seq "$ns"); do echo "thread apply ${SAMPLE_THREADS:-1} bt 40"; echo "continue"; done; echo "kill"; echo "quit"; } > "$cmds"
 ( sleep "$delay"; for i in $(seq "$ns"); do p=$(pgrep -x Orbiter | head -1); [ -n "$p" ] && kill -INT "$p"; sleep "$gap"; done ) &
 env "$@" ORBITER_VK_OFFSCREEN=1 timeout $((delay + ns * gap + 120)) gdb -q -batch -x "$cmds" --args ./Orbiter -p VulkanClient "--scenariox=$scn" > "$out" 2>&1
 rm -f "$cmds"

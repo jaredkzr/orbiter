@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <atomic>
 
 namespace {
 
@@ -311,7 +312,11 @@ TerrainDetail::Params TerrainDetail::Defaults (const Planet *planet)
 	return p;
 }
 
-TerrainDetail::TerrainDetail (const Planet *pl, const Params &p): planet (pl), prm (p)
+namespace {
+	std::atomic<uint64_t> detailSerial{ 1 };
+}
+
+TerrainDetail::TerrainDetail (const Planet *pl, const Params &p): planet (pl), prm (p), serial (detailSerial++)
 {
 	radius = pl->Size();
 	// finest mesh: tiles of level L span pi/2^(L-4) in latitude, with 32
@@ -409,11 +414,32 @@ void TerrainDetail::InitBases () const
 	}
 }
 
+const std::vector<int> &TerrainDetail::FlatsNear (const Vector &dir) const
+{
+	// (every point of every mesh tested every base's flat, pads and grades:
+	// most of the meshes' time about a base.) The flats that may reach
+	// points within FLAT_CELL of a point, kept for the next points within it
+	// (the thread's last four)
+	const double FLAT_CELL = 0.05 * RAD; // [rad]
+	std::call_once (basesOnce, [this]() { InitBases (); });
+	struct Cell { uint64_t owner = 0; Vector dir; std::vector<int> flats; };
+	thread_local Cell cache[4];
+	thread_local unsigned next = 0;
+	for (const Cell &c : cache)
+		if (c.owner == serial && (c.dir - dir).length2() < FLAT_CELL * FLAT_CELL) return c.flats;
+	Cell &c = cache[next++ & 3];
+	c.owner = serial, c.dir = dir, c.flats.clear ();
+	for (size_t i = 0; i < flats.size(); i++)
+		if ((dir - flats[i].dir).length() < std::max (flats[i].reach, flats[i].r1) / radius + FLAT_CELL)
+			c.flats.push_back ((int)i);
+	return c.flats;
+}
+
 double TerrainDetail::PadLevel (const Vector &dir, double &g) const
 {
-	std::call_once (basesOnce, [this]() { InitBases (); });
 	double w = 0.0;
-	for (const Flat &fl : flats) {
+	for (int i : FlatsNear (dir)) {
+		const Flat &fl = flats[i];
 		if ((dir - fl.dir).length() * radius > fl.reach) continue;
 		for (const Pad &p : fl.pads) {
 			double d = (dir - p.dir).length() * radius;
@@ -434,17 +460,17 @@ double TerrainDetail::PadLevel (const Vector &dir, double &g) const
 	return w;
 }
 
-double TerrainDetail::Fade (const Vector &dir, double *bases, double *built, double wb) const
+double TerrainDetail::Fade (const Vector &dir, double *bases, double *built, double wb, const double *latlng) const
 {
-	std::call_once (basesOnce, [this]() { InitBases (); });
 	double f = 1.0;
-	for (const Flat &fl : flats) {
+	for (int i : FlatsNear (dir)) {
+		const Flat &fl = flats[i];
 		double d = (dir - fl.dir).length() * radius;
 		if (d < fl.r1) f = std::min (f, SmoothStep (fl.r0, fl.r1, d));
 	}
 	if (bases) *bases = f;
 	// built-up ground is graded: most of the relief gone (not asked: none)
-	double b = built && cities && f > 0.0 ? wb * cities->Built (dir) : 0.0;
+	double b = built && cities && f > 0.0 ? wb * (latlng ? cities->Built (dir, latlng[0], latlng[1]) : cities->Built (dir)) : 0.0;
 	if (built) *built = b;
 	return f * (1.0 - 0.85 * b);
 }
@@ -457,7 +483,8 @@ double TerrainDetail::Levelled (double lat, double lng, double spacing) const
 	double wl = SmoothStep (LEVEL_SPACING, 0.5 * LEVEL_SPACING, spacing);
 	if (wl <= 0.0) return lp;
 	double fb, b;
-	Fade (dir, &fb, &b, SmoothStep (BUILT_SPACING, 0.5 * BUILT_SPACING, spacing));
+	const double ll[2] = { lat, std::remainder (lng, Pi2) };
+	Fade (dir, &fb, &b, SmoothStep (BUILT_SPACING, 0.5 * BUILT_SPACING, spacing), ll);
 	return std::max (lp, fb * b * wl);
 }
 
@@ -472,7 +499,8 @@ double TerrainDetail::Height (double lat, double lng, double elev, double spacin
 	// data, the difference does not show)
 	double wb = SmoothStep (BUILT_SPACING, 0.5 * BUILT_SPACING, spacing);
 	double fb, built = 0.0;
-	double f = Fade (dir, &fb, wb > 0.0 ? &built : nullptr, wb);
+	const double ll[2] = { lat, std::remainder (lng, Pi2) }; // (as from dir: the longitude within +-pi)
+	double f = Fade (dir, &fb, wb > 0.0 ? &built : nullptr, wb, ll);
 	// built-up ground levelled to the ground the data's buildings and trees
 	// stand on (surface models)
 	double lev = 0.0;

@@ -144,13 +144,14 @@ namespace cities {
 		struct Tile { int lvl, ilat, ilng; std::vector<float> lit; int n = 0; std::atomic<uint64_t> used{0}; };
 		/// the finest tile with data at a point (null: none); load: read
 		/// tiles not cached yet (else: false if one would be needed)
-		const Tile *Get (double lat, double lng, bool load, bool &miss);
+		std::shared_ptr<const Tile> Get (double lat, double lng, bool load, bool &miss);
 		const Planet *planet;
 		::ZTreeMgr *tree = nullptr;
 		std::string dir;
-		std::unordered_map<uint64_t, std::unique_ptr<Tile>> cache; // (also tiles without data: n 0)
+		std::unordered_map<uint64_t, std::shared_ptr<Tile>> cache; // (also tiles without data: n 0; shared: the threads' last ones kept)
 		std::atomic<uint64_t> clock{0};
 		std::shared_mutex mtx; // (reads shared, loads exclusive)
+		const uint64_t serial; // (this one, for the threads' caches: not its address, reused)
 	};
 
 	class CityMap {
@@ -178,6 +179,7 @@ namespace cities {
 		/// Built-up share of the ground at a point (0-1, as the blocks are
 		/// zoned, bases not cleared; any thread: TerrainDetail)
 		double Built (const Vector &dir);
+		double Built (const Vector &dir, double lat, double lng); ///< (its latitude and longitude known)
 		/// The ground under the buildings and trees at a point [m] (any
 		/// thread): the elevation data are surface models (in cities their
 		/// buildings, towers up to some 80 m in downtown Houston); the lowest
@@ -217,6 +219,7 @@ namespace cities {
 		int StyleAt (double lat, double lng) const;
 		bool Water (double lat, double lng);
 		void Near (const Vector &dir, double radius, std::vector<int> &out) const; // centres within radius [m]
+		void NearScan (const Vector &dir, double radius, std::vector<int> &out) const; // (Near: the bins' search)
 		double Clearance (const Vector &dir) const; // 0 at bases and cleared ground, 1 away from them
 		void Trim ();
 		int Rows () const;
@@ -250,6 +253,7 @@ namespace cities {
 		typedef std::array<float, GBLOCK * GBLOCK> GroundBlock;
 		std::shared_mutex groundMtx;
 		std::unordered_map<int64_t, std::shared_ptr<const GroundBlock>> groundBlocks;
+		const uint64_t serial;     // (this map, for the threads' caches of its blocks: not its address, reused)
 		struct RawElev { std::mutex m; std::unique_ptr<::ElevationManager> em; std::unique_ptr<std::vector<ElevationTile>> tiles; };
 		std::vector<std::unique_ptr<RawElev>> rawElev;
 		std::mutex rawMtx;
