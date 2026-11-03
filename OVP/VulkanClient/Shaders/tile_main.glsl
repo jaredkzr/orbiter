@@ -76,6 +76,29 @@ float ValueNoise (vec3 p, float cell, int period)
 	           mix(mix(n[4], n[5], f.x), mix(n[6], n[7], f.x), f.y), f.z);
 }
 
+// ValueNoise (x) and its gradient (yzw, per metre)
+vec4 ValueNoiseD(vec3 p, float cell, int period)
+{
+	vec3 q = p / cell;
+	ivec3 i = ivec3(floor(q));
+	vec3 f = fract(q);
+	vec3 u = f * f * (3.0 - 2.0 * f), du = 6.0 * f * (1.0 - f);
+	float n[8];
+	for (int k = 0; k < 8; k++) {
+		ivec3 c = i + ivec3(k & 1, (k >> 1) & 1, k >> 2);
+		c = c - period * ivec3(floor(vec3(c) / float(period)));
+		n[k] = Hash(c);
+	}
+	float k1 = n[1] - n[0], k2 = n[2] - n[0], k3 = n[4] - n[0];
+	float k4 = n[0] - n[1] - n[2] + n[3], k5 = n[0] - n[2] - n[4] + n[6], k6 = n[0] - n[1] - n[4] + n[5];
+	float k7 = -n[0] + n[1] + n[2] - n[3] + n[4] - n[5] - n[6] + n[7];
+	float v = n[0] + k1 * u.x + k2 * u.y + k3 * u.z + k4 * u.x * u.y + k5 * u.y * u.z + k6 * u.z * u.x + k7 * u.x * u.y * u.z;
+	vec3 g = du * vec3(k1 + k4 * u.y + k6 * u.z + k7 * u.y * u.z,
+	                   k2 + k5 * u.z + k4 * u.x + k7 * u.z * u.x,
+	                   k3 + k6 * u.x + k5 * u.y + k7 * u.x * u.y);
+	return vec4(v, g / cell);
+}
+
 #include "surfdetail.glsl"
 
 // Wave normal of water surfaces (view space). The waves run along integer

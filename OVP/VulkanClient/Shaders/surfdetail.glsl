@@ -60,14 +60,37 @@ float RockLayer (vec3 p, float s, float density, int seed, inout float albedo)
 	return R * 0.7 * sqrt (1.0 - x * x);
 }
 
+// (a scale shows when it covers several pixels)
+#define VIS(s) (1.0 - smoothstep (0.15, 0.5, footprint / (s)))
+
+// grain and undulation (all types): height [m] (x) and its gradient (yzw)
+vec4 DetailGrain (vec3 p, int type, float footprint)
+{
+	vec4 g = vec4 (0.0);
+	float amp = type == DETAIL_EARTH ? 0.25 : 0.8;
+	for (int i = 0; i < 5; i++) {
+		const float GS[5] = float[] (40.0, 10.0, 4.0, 1.0, 0.5); // (sizes dividing 1 km)
+		float s = GS[i];
+		float v = VIS (s);
+		if (v <= 0.0) break;
+		g += v * amp * s * 0.04 * (ValueNoiseD (p, s, int (1000.0 / s + 0.5)) - vec4 (0.5, 0.0, 0.0, 0.0));
+	}
+	return g;
+}
+
+// albedo mottling (factor)
+float DetailMottling (vec3 p, float footprint)
+{
+	float m = ValueNoise (p, 8.0, 125) * 0.4 + ValueNoise (p, 2.0, 500) * 0.6;
+	return mix (1.0, 0.75 + 0.5 * m, VIS (2.0));
+}
+
 // height of the detail at p [m] (planet frame, relative to the pattern
 // origin); footprint: pixel size [m] (finer detail fades out)
 float DetailHeight (vec3 p, int type, float footprint, out float albedo)
 {
 	albedo = 1.0;
 	float h = 0.0;
-	// (a scale shows when it covers several pixels)
-	#define VIS(s) (1.0 - smoothstep (0.15, 0.5, footprint / (s)))
 	// (craters: here unless the terrain detail is on: it has them, as many
 	// as the body has (none on Io), terraindetail.glsl)
 	bool craters = true;
@@ -98,22 +121,11 @@ float DetailHeight (vec3 p, int type, float footprint, out float albedo)
 			albedo *= mix (1.0, a, v);
 		}
 	}
-	// grain and undulation (all types)
-	float g = 0.0, amp = type == DETAIL_EARTH ? 0.25 : 0.8;
-	for (int i = 0; i < 5; i++) {
-		const float GS[5] = float[] (40.0, 10.0, 4.0, 1.0, 0.5); // (sizes dividing 1 km)
-		float s = GS[i];
-		float v = VIS (s);
-		if (v <= 0.0) break;
-		g += v * amp * s * 0.04 * (ValueNoise (p, s, int (1000.0 / s + 0.5)) - 0.5);
-	}
-	h += g;
-	// albedo mottling
-	float m = ValueNoise (p, 8.0, 125) * 0.4 + ValueNoise (p, 2.0, 500) * 0.6;
-	albedo *= mix (1.0, 0.75 + 0.5 * m, VIS (2.0));
-	#undef VIS
+	h += DetailGrain (p, type, footprint).x;
+	albedo *= DetailMottling (p, footprint);
 	return h;
 }
+#undef VIS
 
 // Perturb the shading normal Nv (view space) and the albedo of the surface
 // at posView (distance dist from the camera)
@@ -128,28 +140,25 @@ void SurfaceDetail (vec3 posView, float dist, inout vec3 Nv, inout vec3 base)
 	vec3 Np = v2p * Nv;
 	// pixel size [m] (stretched at grazing angles)
 	float footprint = dist * 2.0 * atm.misc.z / max (frame.jitter.w, 1.0);
+#ifdef TERRAIN_DETAIL
+	// (with the terrain detail: the grain only (it has the craters, and
+	// the ground scatter the rocks); its slope along the ground from the
+	// noise's own gradient, not the screen-space derivatives, which turn
+	// faceted at grazing angles (it was differences of three evaluations
+	// at a quarter pixel: 2.3 ms of the terrain's 8 in a narrow view))
+	if (tile.detail.w > 0.5) {
+		vec3 up = normalize (Np);
+		vec3 g = DetailGrain (p, type, footprint).yzw * (atm.detail.y * fade);
+		vec3 gp = g - up * dot (g, up);
+		Nv = normalize (Nv - transpose (v2p) * gp);
+		base *= mix (1.0, DetailMottling (p, footprint), fade);
+		return;
+	}
+#endif
 	// (one evaluation: the gradient from the screen-space derivatives of
 	// the displaced surface)
 	float a0;
 	float h0 = DetailHeight (p, type, footprint, a0) * atm.detail.y * fade;
-#ifdef TERRAIN_DETAIL
-	// (with the terrain detail: rocks and grain only (it has the craters);
-	// their slope by differences along the ground at a fixed step, not the
-	// screen-space derivatives, which turn faceted at grazing angles)
-	if (tile.detail.w > 0.5) {
-		vec3 up = normalize (Np);
-		vec3 t1 = normalize (cross (up, abs (up.y) < 0.9 ? vec3 (0.0, 1.0, 0.0) : vec3 (1.0, 0.0, 0.0)));
-		vec3 t2 = cross (up, t1);
-		float e = max (0.25 * footprint, 0.01);
-		float a1, a2;
-		float hx = DetailHeight (p + t1 * e, type, footprint, a1) * atm.detail.y * fade;
-		float hy = DetailHeight (p + t2 * e, type, footprint, a2) * atm.detail.y * fade;
-		vec3 gp = t1 * ((hx - h0) / e) + t2 * ((hy - h0) / e);
-		Nv = normalize (Nv - transpose (v2p) * gp);
-		base *= mix (1.0, a0, fade);
-		return;
-	}
-#endif
 	vec3 q = posView + Nv * h0;
 	vec3 n = cross (dFdx (q), dFdy (q));
 	float ln = length (n);
