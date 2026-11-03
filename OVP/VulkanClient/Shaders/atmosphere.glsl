@@ -119,11 +119,22 @@ vec3 Inscatter (vec3 d, float tMax, out vec3 T)
 	float t0 = max (ta.x, 0.0), t1 = min (ta.y, tMax);
 	if (t1 <= t0) return vec3 (0.0);
 
-	const int N = 16;
+	// steps: as many as the path needs, at most 16: each spans at most
+	// half the smaller scale height of altitude, and an optical depth of
+	// at most 1 at the path's lowest point (the midpoint rule then within
+	// about 1-4 %); paths across the air's height (from orbit, the sky)
+	// take all 16, paths through the air near the ground (aerial
+	// perspective seen from low down, half the terrain's time) a few
+	float Rg = atm.radii.x, Rt = atm.radii.y;
+	float h0 = length (o + d * t0) - Rg, h1 = length (o + d * t1) - Rg;
+	float hLow = min (min (h0, h1), length (o + d * clamp (-dot (o, d), t0, t1)) - Rg);
+	vec3 dLow = AtmDensities (hLow, atm.betaR.w, atm.betaM.w);
+	vec3 eLow = atm.betaR.rgb * dLow.x + atm.betaM.rgb * (1.1 * dLow.y) + atm.ozone.rgb * (atm.ozone.w > 0.5 ? dLow.y : dLow.z);
+	float steps = max ((max (h0, h1) - hLow) / (0.5 * min (atm.betaR.w, atm.betaM.w)), max (eLow.r, max (eLow.g, eLow.b)) * (t1 - t0));
+	int N = int (clamp (ceil (steps), 2.0, 16.0));
 	float ds = (t1 - t0) / float (N);
 	vec3 tau = vec3 (0.0);
 	vec3 sumR = vec3 (0.0), sumM = vec3 (0.0), sumMS = vec3 (0.0);
-	float Rg = atm.radii.x, Rt = atm.radii.y;
 	for (int i = 0; i < N; i++) {
 		vec3 p = o + d * (t0 + ds * (float (i) + 0.5));
 		float r = length (p);
