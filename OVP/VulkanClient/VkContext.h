@@ -171,6 +171,7 @@ namespace vkc {
 		/// The GPU times [ms] of the last frame whose timestamps were read
 		/// (profiling; a frame or two behind the one recorded), per mark
 		const std::vector<std::pair<const char*, double>> &LastGpuTimes () const { return lastMarks; }
+		double TakeFenceWait () { double w = fenceWait; fenceWait = 0.0; return w; } // [ms] waited on frames in flight since the last call
 
 		/// Read back the next presented frame. The callback receives the pixels
 		/// (4 bytes per pixel in colorFormat, rows top to bottom).
@@ -235,6 +236,7 @@ namespace vkc {
 		} frames[FRAMES_IN_FLIGHT];
 		static constexpr uint32_t MAX_MARKS = 64;
 		bool profiling = false;
+		double fenceWait = 0.0; // [ms]
 		double timestampPeriod = 1.0; // [ns]
 		uint32_t profFrames = 0;
 		std::vector<std::pair<const char*, double>> profSum; // [ms], in order of first appearance

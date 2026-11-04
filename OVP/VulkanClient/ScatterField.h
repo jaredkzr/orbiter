@@ -96,7 +96,16 @@ namespace vkscatter {
 		std::vector<Kind> kinds;
 		std::vector<SCATTERLAYER> layers;
 		double maxRange = 0.0;
-		std::unordered_map<uint64_t, Cell> cells;
+		std::unordered_map<uint64_t, Cell> cells; // (read; empty ones too)
+		struct Listing {       // the cells of a layer near the camera
+			bool valid = false;
+			VECTOR3 P{};         // camera position listed from (planet frame)
+			std::vector<uint64_t> keys;
+			std::vector<std::pair<uint64_t, Cell*>> live; // those read, not empty
+		};
+		std::vector<Listing> listing; // per layer
+		struct Pending { uint64_t key; int layer, row, col; double d; };
+		std::vector<Pending> pending; // cells to read, farthest first
 		unsigned generation = 0;
 		uint64_t frame = 0;
 

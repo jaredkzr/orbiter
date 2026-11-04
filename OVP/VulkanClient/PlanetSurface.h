@@ -161,6 +161,9 @@ private:
 		double latmin, latmax, lngmin, lngmax;
 		VECTOR3 centre;       // tile centre on the mean sphere, planet frame
 		double angRadius;     // angular radius of the tile [rad]
+		double size = 0.0;    // SplitSize
+		double cosLat = 1.0;  // cos of the latitude farthest from the equator
+		Node *elevNode = nullptr; // the tile its mesh's elevation data is requested from (an ancestor or itself)
 		int cols = 0;         // grid columns taken: every 2^cols-th (TileRenderer::Columns)
 		// thinned for the view this frame (TileRenderer::Thinned): every 2^decR-th
 		// row, 2^decQ-th of the columns; by the mesh's largest deviation [m]
@@ -182,6 +185,7 @@ private:
 		float detailLmesh = 0.0f;   // shortest detail wavelength in the mesh [m]
 		uint64_t lastUsed = 0;
 		bool drawn = false;   // in this frame's draw list (lastUsed: this frame)
+		bool hidden = false;  // beyond the horizon (lastUsed: this frame)
 		uint32_t rtTris = 0;  // ray tracing triangles of the tiles drawn of this one and its descendants
 		uint64_t rtCluster = 0; // ray tracing key of the cluster of drawn tiles under this one
 		uint64_t rtSig = 0, rtChanged = 0; // (the tiles under it: their signature, the frame it last changed)
@@ -255,6 +259,13 @@ private:
 	/// out of view: they cast shadows into it)
 	void AddRTClusters (Node *n, class RTScene *rt);
 	void GatherDrawn (Node *n, std::vector<Node*> &out) const;
+	/// the tiles the environment probe draws (seen from pc, planet frame):
+	/// the first as coarse as its resolution needs that has a mesh, else
+	/// down to those drawn; those without one noted (probeNeed)
+	void ProbeCut (Node *n, const VECTOR3 &pc, std::vector<Node*> &out);
+	struct NodeKey { int lvl, ilat, ilng; };
+	std::vector<NodeKey> probeNeed; // tiles the probe would draw, without a mesh (made a few a frame)
+	std::vector<Node*> probeList;
 	void BindVertices (const Node *n);
 
 	OBJHANDLE hPlanet;
@@ -289,6 +300,16 @@ private:
 	double camSpeed = 0.0; // the camera's speed over the ground [m/s of simulation time] (Select: tiles no finer than it crosses in MOTION_TIME)
 	double minSplit = 0.0; // [m] tiles this small not split (the camera's motion)
 	std::vector<Node*> drawList;
+	// a point the tiles' distances are taken from (Select), per frame: the
+	// camera, vessels near the ground
+	struct From { VECTOR3 p, u; double r, lat, lng, cosLat; };
+	From MakeFrom (const VECTOR3 &p) const;
+	/// a lower bound of the distance of the tile's points from f (cang: the
+	/// cosine of the angle between the tile's centre and f's direction)
+	double LowerDist (const Node *n, const From &f, double cang, double emin, double emax) const;
+	From fromCam;
+	std::vector<From> fromVessels;
+	double horizon = 0.0; // [rad] beyond which tiles are hidden (with the highest mountains); <0: none
 	std::vector<VECTOR3> groundVessels; // positions of vessels near the ground, planet frame (finest tiles under them)
 	std::vector<double> groundTile;     // [m] the finest tile under each (by the camera's distance)
 };

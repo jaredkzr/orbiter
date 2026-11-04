@@ -135,6 +135,7 @@ These are for testing and tuning (`1` turns a feature on, `0` off).
 | `ORBITER_VK_VIDEO=<dir>`, `ORBITER_VK_VIDEO_FRAMES=<n>` | write `n` frames as PNG files |
 | `ORBITER_VK_VALIDATION=1` | Vulkan validation layer (messages in `Orbiter.log`) |
 | `ORBITER_VK_PROFILE=1` | GPU time per render pass, and other statistics, in `Orbiter.log` |
+| `ORBITER_VK_FRAMETIMES=<file>` | a line per frame: frame, sim time, wall time, GPU time (with `ORBITER_VK_PROFILE`, per pass), the client's CPU time and its wait on the GPU (`Tests/Bench/analyze.py`) |
 | `ORBITER_VK_TILE_DEBUG=1` | terrain tile statistics; mesh against core elevation |
 | `ORBITER_VK_MESH_CHECK=1` | compare GPU-built tile meshes with the CPU path |
 | `ORBITER_VK_RT=0` | no ray tracing (shadow maps, SSAO, screen-space reflections) |

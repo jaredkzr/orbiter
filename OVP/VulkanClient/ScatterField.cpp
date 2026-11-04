@@ -159,38 +159,75 @@ void Field::Prepare ()
 	VECTOR3 cam = scene->CameraPos (), P;
 	oapiGlobalToLocal (hPlanet, &cam, &P);
 	double alt = length (P) - R;
+	auto clear = [this] () {
+		cells.clear(), pending.clear();
+		for (Listing &ls : listing) ls = Listing();
+	};
 	if (alt > maxRange + 10e3) { // (far above: nothing to draw; cells kept a while)
-		if (!cells.empty() && alt > maxRange + 100e3) cells.clear();
+		if (!cells.empty() && alt > maxRange + 100e3) clear ();
 		return;
 	}
 	unsigned gen = oapiScatterGeneration (hPlanet);
-	if (gen != generation) cells.clear(), generation = gen;
+	if (gen != generation) clear (), generation = gen;
 
-	// cells needed: kept ones marked, missing ones read nearest first
-	struct Missing { int layer, row, col; double d; };
-	std::vector<Missing> missing;
+	// The cells of a layer within its range, listed again when the camera
+	// has moved a cell from where they were listed (within the range and a
+	// cell: none missed in between). Tens of thousands of them, most of
+	// them empty (trees to 4 km in a desert): listed, looked up and walked
+	// every frame, they took 3 ms. Cells that left the list are dropped;
+	// missing ones are read nearest first, some each frame.
+	listing.resize (layers.size());
+	bool relisted = false;
 	std::vector<int> cl;
 	for (int l = 0; l < (int)layers.size(); l++) {
-		int n = oapiScatterCells (hPlanet, l, P, layers[l].range, nullptr, 0);
+		Listing &ls = listing[l];
+		double margin = layers[l].cell;
+		if (ls.valid && length (P - ls.P) <= margin) continue;
+		int n = oapiScatterCells (hPlanet, l, P, layers[l].range + margin, nullptr, 0);
 		cl.resize (2 * n);
-		oapiScatterCells (hPlanet, l, P, layers[l].range, cl.data(), n);
+		oapiScatterCells (hPlanet, l, P, layers[l].range + margin, cl.data(), n);
+		std::vector<uint64_t> keys (n);
 		for (int i = 0; i < n; i++) {
-			auto it = cells.find (Key (l, cl[2*i], cl[2*i+1]));
+			keys[i] = Key (l, cl[2*i], cl[2*i+1]);
+			auto it = cells.find (keys[i]);
 			if (it != cells.end()) it->second.used = frame;
-			else missing.push_back ({ l, cl[2*i], cl[2*i+1], length (CellCentre (l, cl[2*i], cl[2*i+1]) - P) }); // (nearest first, any layer)
 		}
+		for (uint64_t k : ls.keys) { // (those no longer listed)
+			auto it = cells.find (k);
+			if (it != cells.end() && it->second.used != frame) cells.erase (it);
+		}
+		ls.keys = std::move (keys);
+		ls.P = P;
+		ls.valid = true;
+		ls.live.clear ();
+		for (uint64_t k : ls.keys) {
+			auto it = cells.find (k);
+			if (it != cells.end() && !it->second.inst.empty()) ls.live.push_back ({ k, &it->second });
+		}
+		relisted = true;
 	}
-	std::sort (missing.begin(), missing.end(), [](const Missing &a, const Missing &b) { return a.d < b.d; });
+	if (relisted) {
+		// (the cells to read: nearest first, any layer; taken from the back)
+		pending.clear();
+		for (int l = 0; l < (int)layers.size(); l++)
+			for (uint64_t k : listing[l].keys)
+				if (!cells.count (k)) {
+					int row = (int)((k >> 28) & 0xfffffff), col = (int)(k & 0xfffffff);
+					pending.push_back ({ k, l, row, col, length (CellCentre (l, row, col) - P) });
+				}
+		std::sort (pending.begin(), pending.end(), [](const Pending &a, const Pending &b) { return a.d > b.d; });
+	}
 	auto t0 = std::chrono::steady_clock::now();
 	double budget = cells.empty() ? 0.05 : FETCH_BUDGET;
-	for (const Missing &m : missing) {
-		Cell &c = cells[Key (m.layer, m.row, m.col)];
+	while (!pending.empty()) {
+		Pending m = pending.back();
+		pending.pop_back();
+		Cell &c = cells[m.key];
 		Fetch (m.layer, m.row, m.col, c);
 		c.used = frame;
+		if (!c.inst.empty()) listing[m.layer].live.push_back ({ m.key, &c });
 		if (std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count() > budget) break;
 	}
-	for (auto it = cells.begin(); it != cells.end(); )
-		if (frame - it->second.used > 120) it = cells.erase (it); else ++it;
 
 	// the far set: started, continued
 	BuildFar (P);
@@ -204,9 +241,8 @@ void Field::Prepare ()
 	VECTOR3 d0 = gp - cam;
 	size_t nk = kinds.size();
 	std::vector<std::vector<float>> bucket (nk * SLOTS), sbucket (nk * SLOTS);
-	for (auto &kv : cells) {
-		Cell &c = kv.second;
-		if (c.used != frame || c.inst.empty()) continue;
+	for (const Listing &ls : listing) for (const auto &kv : ls.live) {
+		Cell &c = *kv.second;
 		const SCATTERLAYER &L = layers[c.layer];
 		bool inFar = far.id && c.farBuild == far.id; // (its far instances: drawn by the far set)
 		if (inFar && c.allImp && length (c.centre - far.anchor) - c.radius > FAR_DIST) continue;
@@ -335,8 +371,9 @@ void Field::BuildFar (const VECTOR3 &P)
 	// come that the far set does not have
 	if (!fb.active) {
 		size_t fresh = 0;
-		for (auto &kv : cells)
-			if (kv.second.allImp && !kv.second.inst.empty() && (!far.id || kv.second.farBuild != far.id)) fresh++;
+		for (const Listing &ls : listing)
+			for (const auto &kv : ls.live)
+				if (kv.second->allImp && (!far.id || kv.second->farBuild != far.id)) fresh++;
 		bool moved = !far.id || length (P - far.anchor) > FAR_MOVE;
 		if (!fresh || (!moved && (fresh < FAR_NEWCELLS || frame - farFrame < FAR_MIN_FRAMES))) return;
 		farFrame = frame;
@@ -344,8 +381,9 @@ void Field::BuildFar (const VECTOR3 &P)
 		fb.id = std::max (far.id, fb.id) + 1;
 		fb.anchor = P;
 		fb.keys.clear();
-		for (auto &kv : cells)
-			if (kv.second.allImp && !kv.second.inst.empty()) fb.keys.push_back (kv.first);
+		for (const Listing &ls : listing)
+			for (const auto &kv : ls.live)
+				if (kv.second->allImp) fb.keys.push_back (kv.first);
 		fb.next = 0;
 		fb.bucket.assign (kinds.size(), {});
 		fb.range.assign (kinds.size(), 0.0f);

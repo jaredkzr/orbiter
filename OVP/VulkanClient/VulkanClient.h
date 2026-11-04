@@ -160,6 +160,7 @@ private:
 	FILE *frameTimes = nullptr;   // ORBITER_VK_FRAMETIMES: per frame, the wall-clock interval and GPU times
 	double lastFrameWall = -1.0;  // [s]
 	unsigned frameTimesCount = 0;
+	double renderStart = 0.0;     // [s] clbkRenderScene's start
 };
 
 #endif // !__VULKANCLIENT_H

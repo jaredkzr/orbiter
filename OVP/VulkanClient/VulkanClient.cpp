@@ -268,6 +268,7 @@ void VulkanClient::clbkRenderScene ()
 		ctx.BindBackbuffer (false);
 		return;
 	}
+	if (frameTimes) renderStart = std::chrono::duration<double> (std::chrono::steady_clock::now().time_since_epoch()).count();
 	if (!ctx.BeginFrame ()) return;
 	frameActive = true;
 	r2d->Flush ();
@@ -365,6 +366,9 @@ bool VulkanClient::clbkDisplayFrame ()
 		for (const auto &m : gpu) total += m.second;
 		fprintf (frameTimes, "%u %.6f %.3f %.3f", ++frameTimesCount, oapiGetSimTime (), lastFrameWall < 0.0 ? 0.0 : (now - lastFrameWall) * 1e3, total);
 		for (const auto &m : gpu) fprintf (frameTimes, " %s=%.3f", m.first, m.second);
+		// (the CPU: the client's frame, from clbkRenderScene to here, and
+		// the time waited on frames in flight; the rest is the core's)
+		fprintf (frameTimes, " CPU render=%.3f CPU wait=%.3f", (now - renderStart) * 1e3, ctx.TakeFenceWait ());
 		fputc ('\n', frameTimes);
 		lastFrameWall = now;
 	}

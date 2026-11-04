@@ -1,6 +1,7 @@
 // Copyright (c) Martin Schweiger
 // Licensed under the MIT License
 
+#include <chrono>
 #include "VkContext.h"
 #include <vector>
 #include "OrbiterAPI.h"
@@ -676,7 +677,9 @@ VkCommandBuffer Context::Rec ()
 {
 	Frame &f = frames[frameIndex];
 	if (!recording) {
+		auto t0 = std::chrono::steady_clock::now ();
 		vkWaitForFences (device, 1, &f.inFlight, VK_TRUE, UINT64_MAX);
+		fenceWait += std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ();
 		FlushDeferred (frameIndex);
 		f.transientUsed = 0;
 		f.transientChunk = 0;

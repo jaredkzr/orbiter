@@ -1,7 +1,7 @@
 #!/bin/bash
 # Poor man's profiler (perf may be unavailable: perf_event_paranoid; gdb
 # can't attach to a running Orbiter: ptrace_scope 1): Orbiter run under gdb,
-# interrupted every <gap> s after <delay> s, the main thread's stack printed.
+# interrupted every <gap> s (fractions too) after <delay> s, the main thread's stack printed.
 #
 #   Tests/Bench/sample.sh out.txt delay samples gap scenario.scn [VAR=value ...]
 #
@@ -17,5 +17,5 @@ cmds=$(mktemp)
 { echo "set pagination off"; echo "set print thread-events off"; echo "handle SIGINT stop nopass"; echo "run"
   for i in $(seq "$ns"); do echo "thread apply ${SAMPLE_THREADS:-1} bt 40"; echo "continue"; done; echo "kill"; echo "quit"; } > "$cmds"
 ( sleep "$delay"; for i in $(seq "$ns"); do p=$(pgrep -x Orbiter | head -1); [ -n "$p" ] && kill -INT "$p"; sleep "$gap"; done ) &
-env "$@" ORBITER_VK_OFFSCREEN=1 timeout $((delay + ns * gap + 120)) gdb -q -batch -x "$cmds" --args ./Orbiter -p VulkanClient "--scenariox=$scn" > "$out" 2>&1
+env "$@" ORBITER_VK_OFFSCREEN=1 timeout $(awk -v d="$delay" -v n="$ns" -v g="$gap" 'BEGIN { printf "%d", d + n * g + 120 }') gdb -q -batch -x "$cmds" --args ./Orbiter -p VulkanClient "--scenariox=$scn" > "$out" 2>&1
 rm -f "$cmds"

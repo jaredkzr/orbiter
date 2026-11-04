@@ -55,7 +55,8 @@ namespace {
 	constexpr double FOV_OUT = 40.0 * 3.14159265358979 / 180.0; // out of view, tiles split at most as in a view of this (vertical) aperture
 	constexpr double MOTION_TIME = 0.05;    // [s] tiles the camera crosses faster than this (at the time warp) not split
 	constexpr double VESSEL_TILE = 10.0;    // [m] the finest tiles under a vessel on the ground,
-	constexpr double VESSEL_CAM = 0.1;      // at least this part of the camera's distance
+	constexpr double VESSEL_CAM = 0.1;      // at least this part of the camera's distance,
+	constexpr double VESSEL_ALT = 1.0;      // and of its height above the ground
 
 	// Worker threads kept for the meshes (they were made and joined twice
 	// a frame)
@@ -707,6 +708,13 @@ PlanetSurface::Node *PlanetSurface::NewNode (int lvl, int ilat, int ilng, Node *
 		for (double lng : { n->lngmin, n->lngmax })
 			a = std::max (a, acos (std::clamp (dotp (c, SurfaceDir (lat, lng)), -1.0, 1.0)));
 	n->angRadius = a;
+	n->cosLat = cos (std::min (PI05, std::max (fabs (n->latmin), fabs (n->latmax))));
+	{ // (SplitSize)
+		double hgt = radius * (n->latmax - n->latmin);
+		double wid = radius * cos (std::min (fabs (n->latmin), fabs (n->latmax))) * (n->lngmax - n->lngmin);
+		if (n->latmin < 0.0 && n->latmax > 0.0) wid = radius * (n->lngmax - n->lngmin);
+		n->size = sqrt (hgt * std::min (wid, hgt));
+	}
 	// columns taken (TileRenderer::Grid): no closer together than the rows
 	// (at the wider edge; latitude and longitude steps are the same angle)
 	double ratio = n->latmin < 0.0 && n->latmax > 0.0 ? 1.0 : cos (std::min (fabs (n->latmin), fabs (n->latmax)));
@@ -881,10 +889,14 @@ void PlanetSurface::ComputeMesh (const Node *n, const Node *src, bool detailed, 
 	const Node *psrc = n->parent ? ElevSource (n->parent) : nullptr;
 	if (n->parent && !clouds) {
 		double lminP = detailed ? 2.0 * lmin : 1e30;
+		// (from the same data, and no detail in the mesh at either's spacing:
+		// the tile's own nodes, the same values)
+		double sp = src ? radius * (src->latmax - src->latmin) / (ElevGrid::N - 3) : detailPrm.flatSpacing;
+		bool same = psrc == src && std::max (lmin, detailPrm.lambdaMin) >= sp;
 		for (int i = 0; i <= G; i += 2)
 			for (int j = 0; j <= G; j += 2) {
 				double lat = std::clamp (n->latmax - i * dlat, -PI05, PI05), lng = n->lngmin + j * dlng;
-				T[i*V + j] = D[(i + 1) * W + (j + 1)] * (radius + SurfaceElev (psrc, lat, lng, lminP));
+				T[i*V + j] = same ? at (i, j) : D[(i + 1) * W + (j + 1)] * (radius + SurfaceElev (psrc, lat, lng, lminP));
 			}
 		for (int i = 0; i <= G; i++)
 			for (int j = 0; j <= G; j++) {
@@ -1085,7 +1097,13 @@ void PlanetSurface::PrepareGpuMesh (const Node *n, const Node *src, GpuJob &job,
 		}
 	}
 	const Node *psrc = n->parent ? ElevSource (n->parent) : nullptr;
-	if (n->parent)
+	// (from the same data, the parent's nodes are every other one of the
+	// tile's, the same values: copied, a fifth of the core's evaluations)
+	if (n->parent && psrc == src)
+		for (int i = 0; i < M; i++)
+			for (int j = 0; j < M; j++)
+				memcpy (&pts[3 * (W * W + i * M + j)], &pts[3 * ((2 * i + 1) * W + 2 * j + 1)], 3 * sizeof(float));
+	else if (n->parent)
 		for (int i = 0; i < M; i++) {
 			double lat = std::clamp (n->latmax - 2 * i * dlat, -PI05, PI05);
 			for (int j = 0; j < M; j++) {
@@ -1164,53 +1182,63 @@ double PlanetSurface::SplitSize (const Node *n) const
 	// narrow to slivers: split by their north-south side alone, ever more of
 	// them would be needed for the same ground (at 89.5 deg, 50 times as
 	// many: gigabytes of meshes)
-	double hgt = radius * (n->latmax - n->latmin);
-	double wid = radius * cos (std::min (fabs (n->latmin), fabs (n->latmax))) * (n->lngmax - n->lngmin);
-	if (n->latmin < 0.0 && n->latmax > 0.0) wid = radius * (n->lngmax - n->lngmin);
-	return sqrt (hgt * std::min (wid, hgt));
+	// (made with the node: NewNode)
+	return n->size;
+}
+
+PlanetSurface::From PlanetSurface::MakeFrom (const VECTOR3 &p) const
+{
+	From f;
+	f.p = p;
+	f.r = length (p);
+	f.u = p / f.r;
+	f.lat = asin (std::clamp (p.y / f.r, -1.0, 1.0)), f.lng = atan2 (p.z, p.x);
+	f.cosLat = cos (std::min (PI05, fabs (f.lat)));
+	return f;
+}
+
+double PlanetSurface::LowerDist (const Node *n, const From &f, double cang, double emin, double emax) const
+{
+	// A lower bound for the points of the tile, between the lowest and
+	// highest elevation of its data (the closest point of a spherical shell
+	// segment, the tile approximated by a cap)
+	double gap = std::max (0.0, acos (std::clamp (cang, -1.0, 1.0)) - n->angRadius);
+	// (and from the tile's latitude-longitude box: the cap about a tile
+	// narrowed to a sliver by a pole takes in its neighbours on either
+	// side, so that all of them would be split)
+	double glat = std::max (0.0, std::max (n->latmin - f.lat, f.lat - n->latmax));
+	double dl = f.lng - 0.5 * (n->lngmin + n->lngmax);
+	dl = fabs (dl - PI2 * std::floor ((dl + PI) / PI2));
+	double glng = std::max (0.0, dl - 0.5 * (n->lngmax - n->lngmin));
+	double cm = std::min (n->cosLat, f.cosLat); // (cos of the larger latitude of the two)
+	gap = std::max (gap, sqrt (glat * glat + glng * cm * glng * cm));
+	double cg = cos (gap);
+	double r = std::clamp (f.r * cg, radius + emin, radius + emax);
+	return std::max (sqrt (std::max (0.0, f.r * f.r + r * r - 2.0 * f.r * r * cg)), 1.0);
 }
 
 uint32_t PlanetSurface::Select (Node *n)
 {
 	n->lastUsed = frame;
 	n->drawn = false;
+	n->hidden = true;
 	n->rtTris = 0;
 
 	// horizon culling: compare the angle between the tile and the camera
 	// direction with the horizon angle (extended by the highest mountains)
-	if (camDist > radius) {
-		double horizon = acos (radius / camDist) + acos (radius / (radius + maxElev + 1.0));
-		double ang = acos (std::clamp (dotp (n->centre / radius, camLocal / camDist), -1.0, 1.0));
-		if (ang - n->angRadius > horizon) return 0;
-	}
+	double cang = dotp (n->centre, fromCam.u) / radius;
+	if (horizon >= 0.0 && acos (std::clamp (cang, -1.0, 1.0)) - n->angRadius > horizon) return 0;
+	n->hidden = false;
 
 	// Distance: a lower bound for the points of the tile, between the
-	// lowest and highest elevation of its data (the closest point of a
-	// spherical shell segment, the tile approximated by a cap). The morph of
+	// lowest and highest elevation of its data (LowerDist). The morph of
 	// the continuous level of detail relies on it being a lower bound.
 	double emin = 0.0, emax = 0.0;
 	if (!clouds) {
 		if (const Node *src = ElevSource (n)) emin = src->elev->emin, emax = src->elev->emax;
 		else emin = -maxElev, emax = maxElev;
 	}
-	auto lowerDist = [&](const VECTOR3 &p) {
-		double pr = length (p);
-		double cang = dotp (n->centre / radius, p / pr);
-		double gap = std::max (0.0, acos (std::clamp (cang, -1.0, 1.0)) - n->angRadius);
-		// (and from the tile's latitude-longitude box: the cap about a tile
-		// narrowed to a sliver by a pole takes in its neighbours on either
-		// side, so that all of them would be split)
-		double plat = asin (std::clamp (p.y / pr, -1.0, 1.0)), plng = atan2 (p.z, p.x);
-		double glat = std::max (0.0, std::max (n->latmin - plat, plat - n->latmax));
-		double dl = plng - 0.5 * (n->lngmin + n->lngmax);
-		dl = fabs (dl - PI2 * std::floor ((dl + PI) / PI2));
-		double glng = std::max (0.0, dl - 0.5 * (n->lngmax - n->lngmin));
-		double cm = cos (std::min (PI05, std::max ({ fabs (n->latmin), fabs (n->latmax), fabs (plat) })));
-		gap = std::max (gap, sqrt (glat * glat + glng * cm * glng * cm));
-		double r = std::clamp (pr * cos (gap), radius + emin, radius + emax);
-		return std::max (sqrt (std::max (0.0, pr * pr + r * r - 2.0 * pr * r * cos (gap))), 1.0);
-	};
-	double dist = lowerDist (camLocal);
+	double dist = LowerDist (n, fromCam, cang, emin, emax);
 	double size = SplitSize (n);
 	// (out of view, at most a FOV_OUT view's scale: the tiles around a
 	// zoomed view (no frustum culling: the ray tracing's) would be split
@@ -1230,8 +1258,8 @@ uint32_t PlanetSurface::Select (Node *n)
 	// joins the levels)
 	n->vessel = -1;
 	double dv = 1e30;
-	for (size_t i = 0; i < groundVessels.size(); i++) {
-		double d = lowerDist (groundVessels[i]);
+	for (size_t i = 0; i < fromVessels.size(); i++) {
+		double d = LowerDist (n, fromVessels[i], dotp (n->centre, fromVessels[i].u) / radius, emin, emax);
 		if (d < dv) dv = d, n->vessel = (int)i;
 	}
 	// (down to tiles of 10 m (groundTile; coarser for a camera farther
@@ -1302,13 +1330,22 @@ void PlanetSurface::Prepare ()
 			if (r < radius + maxElev + 1000.0 && length (lv - camLocal) < 3000.0) {
 				// (as fine as the ground contact's detail only for a camera
 				// close by: seen from hundreds of metres, a vessel rolling
-				// down the runway replaced its 10 m tiles every frame)
+				// down the runway replaced its 10 m tiles every frame; and
+				// no finer than its height above the ground: an aircraft a
+				// kilometre up at 300 m/s, under the planet's highest
+				// mountains, had them made beneath it, ten tiles a frame)
+				double alt = 0.0;
+				if (!oapiGetAltitude (hv, ALTMODE_GROUND, &alt)) alt = 0.0;
 				groundVessels.push_back (lv);
-				groundTile.push_back (std::max ({ VESSEL_TILE, VESSEL_CAM * length (lv - camLocal), minSplit }));
+				groundTile.push_back (std::max ({ VESSEL_TILE, VESSEL_CAM * length (lv - camLocal), minSplit, VESSEL_ALT * alt }));
 			}
 		}
 	}
 
+	fromCam = MakeFrom (camLocal);
+	horizon = camDist > radius ? acos (radius / camDist) + acos (radius / (radius + maxElev + 1.0)) : -1.0;
+	fromVessels.clear ();
+	for (const VECTOR3 &v : groundVessels) fromVessels.push_back (MakeFrom (v));
 	drawList.clear ();
 	for (auto &r : root) Select (r.get());
 	// (unused subtrees kept a while, for a camera coming back; but low and
@@ -1330,9 +1367,12 @@ void PlanetSurface::Prepare ()
 			clouds ? "cloud" : "surface", drawList.size(), nn, nb, ns, nm, ne);
 	}
 	// nearest tiles first, so that they get their data first
-	std::sort (drawList.begin(), drawList.end(), [this](Node *a, Node *b) {
-		return length (camLocal - a->centre) < length (camLocal - b->centre);
-	});
+	{
+		std::vector<std::pair<double, Node*>> by (drawList.size ());
+		for (size_t i = 0; i < drawList.size (); i++) by[i] = { length (camLocal - drawList[i]->centre), drawList[i] };
+		std::sort (by.begin(), by.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+		for (size_t i = 0; i < by.size (); i++) drawList[i] = by[i].second;
+	}
 
 	// data requests and mesh updates (transfers, outside the rendering scope)
 	// Tiles without data of their own use their nearest ancestor's, so the
@@ -1371,13 +1411,16 @@ void PlanetSurface::Prepare ()
 		if (layers->elev) {
 			// the mesh grid is sampled from a tile some levels up, which has
 			// the same node spacing as the mesh (256 vs GRID intervals)
-			const int up = (int)std::lround (std::log2 (256.0 / TileRenderer::GRID));
-			Node *e = n;
-			while (e->lvl > 4 && e->lvl > n->lvl - up) e = e->parent;
-			// (where the data ends higher up, the deepest tile that has it, as
-			// the core uses: otherwise the mesh falls back to the root)
-			while (e->lvl > 4 && !layers->elev->HasTile (e->lvl, e->ilat, e->ilng)) e = e->parent;
-			Request (e, TileLoader::ELEV);
+			if (!n->elevNode) {
+				const int up = (int)std::lround (std::log2 (256.0 / TileRenderer::GRID));
+				Node *e = n;
+				while (e->lvl > 4 && e->lvl > n->lvl - up) e = e->parent;
+				// (where the data ends higher up, the deepest tile that has it, as
+				// the core uses: otherwise the mesh falls back to the root)
+				while (e->lvl > 4 && !layers->elev->HasTile (e->lvl, e->ilat, e->ilng)) e = e->parent;
+				n->elevNode = e; // (an ancestor: freed after n, if at all)
+			}
+			Request (n->elevNode, TileLoader::ELEV);
 		}
 		const Node *src = ElevSource (n);
 		int srcLvl = src ? src->lvl : 0;
@@ -1395,6 +1438,14 @@ void PlanetSurface::Prepare ()
 			plain.push_back ({ n, src, !withDetail });
 		}
 	}
+	// (the tiles the probe draws, without a mesh: plain ones, a few a frame)
+	for (const NodeKey &k : probeNeed) {
+		if (plain.size () >= MAX_PLAIN_MESHES || plain.size () >= 4) break;
+		Node *n = Find (k.lvl, k.ilat, k.ilng);
+		if (!n || n->vbuf.buffer || n->drawn) continue;
+		plain.push_back ({ n, ElevSource (n), false });
+	}
+	probeNeed.clear ();
 	if (!plain.empty()) {
 		// (on the worker threads too: low and fast over the ground, a hundred
 		// or more a frame, ~1 ms each with the core's elevation and detail;
@@ -1720,7 +1771,39 @@ void PlanetSurface::Render (Atmosphere *atm)
 	VkDescriptorSet as = atm->Set ();
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr->Layout(), 3, 1, &as, 0, nullptr);
 	vkCmdBindIndexBuffer (cmd, tr->IndexBuffer(), 0, VK_INDEX_TYPE_UINT16);
+	if (scene->InProbe ()) {
+		// (the probe's faces, 128 pixels across 90 degrees: tiles thirty
+		// times as large serve; the drawn ones, thousands in a low view,
+		// took the probe's draws a tenth of the frame's time)
+		probeList.clear ();
+		VECTOR3 pc = tmul (prot, scene->CameraPos () - ppos);
+		for (auto &r : root) ProbeCut (r.get(), pc, probeList);
+		for (Node *n : probeList) if (InView (n)) DrawNode (n);
+		return;
+	}
 	for (Node *n : drawList) if (InView (n)) DrawNode (n);
+}
+
+void PlanetSurface::ProbeCut (Node *n, const VECTOR3 &pc, std::vector<Node*> &out)
+{
+	if (!n || n->lastUsed != frame || n->hidden) return; // (not in this frame's tree; beyond the horizon)
+	if (!n->drawn) {
+		constexpr double PROBE_PPR = 64.0; // [pixels/rad] (EnvProbe::SIZE / 2: a face's 90 degrees)
+		double emin = 0.0, emax = 0.0; // (a sphere about the tile, as InView)
+		if (!clouds) {
+			if (const Node *src = ElevSource (n)) emin = src->elev->emin, emax = src->elev->emax;
+			else emin = -maxElev, emax = maxElev;
+		}
+		VECTOR3 c = n->centre * ((radius + 0.5 * (emin + emax)) / radius);
+		double d = std::max (length (c - pc) - (radius + emax) * n->angRadius - 0.5 * (emax - emin), 1.0);
+		if (SplitSize (n) / d * PROBE_PPR <= splitPixels) {
+			if (n->vbuf.buffer) { out.push_back (n); return; }
+			if (probeNeed.size () < 64) probeNeed.push_back ({ n->lvl, n->ilat, n->ilng });
+		}
+		for (auto &c : n->child) ProbeCut (c.get(), pc, out);
+		return;
+	}
+	out.push_back (n);
 }
 
 bool PlanetSurface::InView (const Node *n) const
