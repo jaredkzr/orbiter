@@ -628,11 +628,21 @@ void Vessel::SetState2 (const void *status)
 			// (the orientation is in the planet's frame, valid at the site it
 			// was read at: a vessel moved elsewhere with it, as from a status
 			// read and written back with a new position, would be set down
-			// tilted by the angle between the sites; then it is set down anew)
+			// tilted by the angle between the sites; then, if its y axis is
+			// tilted, it is set down anew. Moved: the status's position, which
+			// a status read from a vessel has (scenario files have none), is
+			// not at the new site. A vessel not moved keeps its orientation,
+			// such as the Shuttle standing on its tail on the launch pad.)
+			Vector rp (vs->rpos.x, vs->rpos.y, vs->rpos.z);
 			double slng = sin(vs->surf_lng), clng = cos(vs->surf_lng), slat = sin(vs->surf_lat), clat = cos(vs->surf_lat);
 			Vector up (clat*clng, slat, clat*slng);   // the site's vertical (planet frame)
+			bool moved = false;
+			if (rp.length2() > 0.0) {
+				Vector rl (tmul (cbody->GRot(), rp)); // (planet frame)
+				moved = dotp (rl.unit(), up) < cos (1e-3);
+			}
 			Vector vup (lrot.m12, lrot.m22, lrot.m32); // the vessel's y axis (planet frame)
-			if (dotp (up, vup) < cos (20.0*RAD)) ext = false;
+			if (moved && dotp (up, vup) < cos (20.0*RAD)) ext = false;
 		}
 		if (ext) {
 			double alt = vs->vrot.x;

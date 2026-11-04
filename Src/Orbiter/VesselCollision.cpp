@@ -122,7 +122,7 @@ void VesselCollider::Resolve (double h)
 
 	// bodies: the moving vessels of the pairs; positions relative to the
 	// first of them (precision)
-	const Vector O (dynamic[0]->s0->pos);
+	const Vector O (dynamic[0]->StartState().pos);
 	std::map<VesselBase*, int> index;
 	std::vector<contact::Body> bodies;
 	for (VesselBase *v : dynamic) {
@@ -134,7 +134,7 @@ void VesselCollider::Resolve (double h)
 	std::vector<VesselBase*> owner; // (points against a vessel at rest: that vessel)
 	// their ground contacts
 	for (VesselBase *v : dynamic)
-		if (v->proxybody) v->CollectGroundContacts (*v->s0, *v->s0, index[v], h, pts);
+		if (v->proxybody) v->CollectGroundContacts (v->StartState(), v->StartState(), index[v], h, pts);
 
 	// velocity of a point of a vessel at rest on the ground (global position g)
 	auto LandedVel = [](VesselBase *v, const Vector &g) {
@@ -153,30 +153,30 @@ void VesselCollider::Resolve (double h)
 	for (const Pair &pr : pairs) {
 		VesselBase *A = pr.a, *B = pr.b;
 		ha.clear(); hb.clear();
-		A->CollectHulls (*A->s0, ha);
-		B->CollectHulls (*B->s0, hb);
+		A->CollectHulls (A->StartState(), ha);
+		B->CollectHulls (B->StartState(), hb);
 
 		// (no contacts close to free docking ports approaching each other)
 		pa.clear(); pb.clear(); excl.clear();
-		A->CollectFreePorts (*A->s0, pa);
-		B->CollectFreePorts (*B->s0, pb);
+		A->CollectFreePorts (A->StartState(), pa);
+		B->CollectFreePorts (B->StartState(), pb);
 		for (const collision::Port &p : pa)
 			for (const collision::Port &q : pb) {
 				if (p.pos.dist (q.pos) > PORT_RANGE || collision::DockCapture (p, q, PORT_OFFSET)) continue;
 				excl.push_back (p.pos - O), excl.push_back (q.pos - O);
 			}
 
-		double ra = HullRadius (ha, A->s0->pos), rb = HullRadius (hb, B->s0->pos);
+		double ra = HullRadius (ha, A->StartState().pos), rb = HullRadius (hb, B->StartState().pos);
 		double margin = SpeedBound (A, B, ra, rb)*h + 0.05;
 		// (only the hulls that reach the other vessel's bounding sphere)
 		auto Near = [&](std::vector<collision::HullRef> &hl, const Vector &c, double r) {
 			hl.erase (std::remove_if (hl.begin(), hl.end(), [&](const collision::HullRef &x) {
 				return (x.pos + mul (x.R, x.hull->centre)).dist (c) > x.hull->radius + collision::SKIN + r + margin; }), hl.end());
 		};
-		Near (ha, B->s0->pos, rb);
-		Near (hb, A->s0->pos, ra);
+		Near (ha, B->StartState().pos, rb);
+		Near (hb, A->StartState().pos, ra);
 		bool dynA = index.count (A) > 0, dynB = index.count (B) > 0;
-		Vector cgA (A->s0->pos - O), cgB (B->s0->pos - O);
+		Vector cgA (A->StartState().pos - O), cgB (B->StartState().pos - O);
 
 		// (a payload released from the other: hull pairs overlapping since)
 		Release *rel = nullptr;
@@ -234,16 +234,16 @@ void VesselCollider::Resolve (double h)
 		VesselBase *A = bp.v;
 		const Base *B = bp.base;
 		ha.clear();
-		A->CollectHulls (*A->s0, ha);
-		double ra = HullRadius (ha, A->s0->pos);
-		const Vector cgA (A->s0->pos - O);
+		A->CollectHulls (A->StartState(), ha);
+		double ra = HullRadius (ha, A->StartState().pos);
+		const Vector cgA (A->StartState().pos - O);
 		const CelestialBody *cb = A->proxybody;
 		double wrot = Pi2 / cb->RotT();
 		double margin = ((A->GVel() - B->GVel()).length() + A->AngularVelocity().length()*ra)*h + 0.05;
 		convex::Manifold mf;
 		for (const collision::Hull &y : B->CollisionHulls()) {
 			Vector cy (B->GPos() + mul (B->GRot(), y.centre));
-			if (cy.dist (A->s0->pos) > y.radius + ra + collision::SKIN + margin) continue;
+			if (cy.dist (A->StartState().pos) > y.radius + ra + collision::SKIN + margin) continue;
 			auto key = std::make_pair ((const VesselBase*)A, (const void*)&y);
 			bool wasInside = inside.count (key) > 0;
 			bool touching = false;
@@ -288,8 +288,8 @@ void VesselCollider::Resolve (double h)
 		int i = index[v];
 		const contact::Body &b = bodies[i];
 		bool touched = P[i].length() || L[i].length() || b.vp.length() || b.wp.length();
-		v->contact_force = tmul (v->s0->R, P[i]/h);
-		v->contact_moment = tmul (v->s0->R, L[i]/h);
+		v->contact_force = tmul (v->StartState().R, P[i]/h);
+		v->contact_moment = tmul (v->StartState().R, L[i]/h);
 		if (!touched) continue;
 		// (close to a planet's surface: positions relative to the turning ground)
 		bool ground = v->proxybody && v->sp.alt < 2.0*v->Size() + 1e3;

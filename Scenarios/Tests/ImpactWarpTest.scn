@@ -3,9 +3,9 @@ BEGIN_HYPERDESC
 Delta-gliders hit the Moon under time acceleration, where a step moves a
 vessel kilometres over the ground: one falling from 1,000 km at 1,000x,
 one on an orbit whose periapsis is below the ground at 10,000x (the
-stabilised propagator). Each must be set down on the terrain and landed,
-in normal time, without its state going bad; a third, in a high orbit,
-must keep flying.
+stabilised propagator), and two docked nose to nose on such an orbit at
+1,000x. Each must be set down on the terrain and landed, in normal time,
+without its state going bad; another, in a high orbit, must keep flying.
 END_HYPERDESC
 
 BEGIN_ENVIRONMENT
@@ -36,6 +36,18 @@ DIVE:DeltaGlider
   STATUS Orbiting Moon
   ELEMENTS 2.5e6 0.40000 30.0 0.0 0.0 180.0 51982.6685767396
   AROT 0 0 0
+END
+PAIRA:DeltaGlider
+  STATUS Orbiting Moon
+  ELEMENTS 2.5e6 0.40000 30.0 90.0 0.0 180.0 51982.6685767396
+  AROT 0 0 0
+  DOCKINFO 0:0,PAIRB
+END
+PAIRB:DeltaGlider
+  STATUS Orbiting Moon
+  ELEMENTS 2.5e6 0.40000 30.0 90.0 0.0 180.0 51982.6685767396
+  AROT 0 0 0
+  DOCKINFO 0:0,PAIRA
 END
 HIGH:DeltaGlider
   STATUS Orbiting Moon

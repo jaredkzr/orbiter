@@ -800,6 +800,7 @@ void SuperVessel::CollectGroundContacts (const StateVectors &s, const StateVecto
 
 void SuperVessel::Update (bool force)
 {
+	stepStart.Set (*s0); // (StartState: s0 is s1, at the step's end once updated)
 	DWORD i;
 	bool grot_changed = false;
 	bool el_updated = false;;
@@ -922,9 +923,18 @@ bool SuperVessel::CheckSurfaceContact () const
 void SuperVessel::InitLanded (Planet *planet, double lng, double lat, double dir, const Matrix *hrot, double cgelev, bool asComponent)
 {
 	dCHECK(!g_bStateUpdate, "SuperVessel::InitLanded must not be called during state update") // not valid during update phase
-	dCHECK(hrot, "hrot parameter for SuperVessel::InitLanded must be supplied")               // only support dynamic impact model for now
 
 	DWORD comp;
+	Matrix hcur;
+	if (!hrot) {
+		// (set down by a long step's impact, VesselBase::TakePendingLanding:
+		// as the group is, at its height above the terrain; a group has no
+		// touchdown points of its own to stand it on)
+		hcur.Set (s0->R);
+		hcur.tpremul (planet->s0->R); // (planet frame)
+		hrot = &hcur;
+		cgelev = s0->pos.dist (planet->s0->pos) - planet->Size() - planet->Elevation (lng, lat);
+	}
 	proxybody = proxyplanet = planet;
 	double slng = sin(lng), clng = cos(lng);
 	double slat = sin(lat), clat = cos(lat);

@@ -28,7 +28,7 @@ local function run(name, warp, simt, wallmax)
 		local _, alt = state(name)
 		if alt ~= alt then bad = true; break end
 		local _, _, st = state(name)
-		if st == 1 then break end
+		if st % 2 == 1 then break end -- (landed; docked: 3)
 	end
 	oapi.set_tacc(1)
 	proc.wait_frames(3)
@@ -59,7 +59,14 @@ local function main()
 	check("dive", ok and s == 1 and math.abs(alt) < 11e3 and vr < 10 and wall < 20,
 		string.format("landed at %.3f km, %.1f m/s, %.1f s", alt / 1000, vr, wall))
 
-	-- 3. the high orbit is undisturbed
+	-- 3. a docked pair (a supervessel) on an orbit through the ground, at
+	-- 1,000x: the group is set down where it hits, as it is
+	ok, s, alt, vr, wall = run("PAIRA", 1000, 20000, 60)
+	local _, altb, sb = state("PAIRB")
+	check("pair", ok and s == 3 and sb == 3 and math.abs(alt) < 11e3 and math.abs(altb) < 11e3 and vr < 10 and wall < 20,
+		string.format("landed at %.3f and %.3f km, %.1f m/s, %.1f s", alt / 1000, altb / 1000, vr, wall))
+
+	-- 4. the high orbit is undisturbed
 	local _, ahigh, shigh = state("HIGH")
 	check("high", shigh == 0 and ahigh > 1200e3, string.format("in orbit at %.0f km", ahigh / 1000))
 

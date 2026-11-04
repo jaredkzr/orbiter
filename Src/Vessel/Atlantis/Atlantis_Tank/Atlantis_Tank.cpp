@@ -134,7 +134,10 @@ void Atlantis_Tank::clbkPreStep (double simt, double simdt, double mjd)
 
 void Atlantis_Tank::clbkPostStep (double simt, double simdt, double mjd)
 {
-	if (GetAltitude() < 0.0) oapiDeleteVessel (GetHandle());
+	// (not while still on the orbiter: Atlantis holds the tank until
+	// separation, and would use it deleted)
+	if (GetAltitude() < 0.0 && !GetDockStatus (GetDockHandle (0)))
+		oapiDeleteVessel (GetHandle());
 }
 
 Atlantis_SRB *Atlantis_Tank::GetSRB (int which) const

@@ -223,7 +223,14 @@ public:
 
 	inline const GFieldData &GetGFieldData() const { return gfielddata; }
 
+	const StateVectors &StartState () const { return s0 == s1 ? stepStart : *s0; }
+	// The state at the start of the step being made (in the update phase).
+	// A supervessel's state is not double-buffered: its s0 is s1, at the
+	// step's end once it is updated; the start is kept in stepStart.
+
 protected:
+	StateVectors stepStart; // (see StartState; set by Update)
+
 	virtual void SetDefaultState ();
 	// Reset all state parameters to default values
 
