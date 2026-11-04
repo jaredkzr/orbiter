@@ -224,8 +224,9 @@ struct PlumeLight {
 };
 
 // March from t0 to t1 (exit radii, plume space ray lo + t ld) in n steps;
-// lit: light on the smoke (sun and ambient, without the phase function)
-PlumeLight MarchPlume (PlumeParams P, vec3 lo, vec3 ld, float t0, float t1, int n, float jit, vec3 sunLit, vec3 ambLit, vec3 sunDir, bool adaptive)
+// lit: light on the smoke (sun and ambient, without the phase function);
+// stepScale: of the adaptive steps (finer: < 1)
+PlumeLight MarchPlume (PlumeParams P, vec3 lo, vec3 ld, float t0, float t1, int n, float jit, vec3 sunLit, vec3 ambLit, vec3 sunDir, bool adaptive, float stepScale)
 {
 	PlumeLight r = PlumeLight (vec3 (0.0), vec3 (0.0), 1.0, 0.0);
 	float dt = (t1 - t0) / float (n);
@@ -248,14 +249,14 @@ PlumeLight MarchPlume (PlumeParams P, vec3 lo, vec3 ld, float t0, float t1, int 
 	// fewer than n steps' worth of the ray: long rays were cut short)
 	bool adapt = adaptive && PlumeAdaptive (P); // (then n: the most steps)
 	bool att = P.shape2.z > 0.5;
-	float dtMin = max (0.3, (t1 - t0) / float (n)); // (n steps reach t1)
+	float dtMin = max (0.3 * stepScale, (t1 - t0) / float (n)); // (n steps reach t1)
 	float tc = t0;
 	for (int i = 0; i < n; i++) {
 		if (adapt) {
 			if (tc >= t1) break;
 			float x = max ((lo + ld * tc).z, 0.0);
 			float R = att ? 1.0 + x * P.shape.w : 1.0 + (P.shape.z - 1.0) * (1.0 - exp (-0.8 * x)) + x * P.shape.w;
-			dt = min (clamp (0.25 * R, dtMin, max (1.5, dtMin)), t1 - tc);
+			dt = min (clamp (0.25 * stepScale * R, dtMin, max (1.5 * stepScale, dtMin)), t1 - tc);
 		}
 		float t = adapt ? tc + jit * dt : t0 + (float (i) + jit) * dt;
 		tc += dt;

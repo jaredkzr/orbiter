@@ -2551,6 +2551,7 @@ void Scene::Render ()
 	// effects that also write the reactive mask: engine plumes, particles
 	vkc::Target rt{ reactive.image, reactive.view, REACTIVE_FORMAT, ctx->RenderExtent () };
 	vkc::Target rtMS{ reactiveMS.image, reactiveMS.view, REACTIVE_FORMAT, ctx->RenderExtent () };
+	plumes->Render (FrameSet (), camAtmSet, gc->TexMgr()->White()); // (at half resolution)
 	ctx->BindSceneWithMask (rt, reactiveMS.image ? &rtMS : nullptr);
 	plumes->Draw (FrameSet (), camAtmSet, gc->TexMgr()->White());
 	ctx->GpuMark ("plumes");

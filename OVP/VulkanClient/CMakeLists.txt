@@ -112,6 +112,7 @@ set(SHADER_SRC
 	Shaders/ssr_temporal.comp
 	Shaders/plume.vert
 	Shaders/plume.frag
+	Shaders/plume_comp.frag
 	Shaders/shimmer.frag
 	Shaders/scorch.vert
 	Shaders/scorch.frag

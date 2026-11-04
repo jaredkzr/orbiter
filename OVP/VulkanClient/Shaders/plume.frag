@@ -22,6 +22,7 @@ layout(set = 2, binding = 0) uniform sampler2D exhaustTex; // add-on exhaust tex
 
 layout(push_constant) uniform Draw {
 	uint index; // into the plume buffer
+	uint scale; // 2: drawn at half resolution (plume_comp.frag)
 } pc;
 
 layout(location = 0) in vec3 vPos;
@@ -46,14 +47,28 @@ void main ()
 	// each pixel once: from the far side of the box
 	if (length (vPos) / re < 0.5 * (tIn + t1)) discard;
 	float t0 = max (tIn, 0.0);
-	float zs = texelFetch (prepass, ivec2 (gl_FragCoord.xy), 0).w;
+	float zs;
+	if (pc.scale == 2u) {
+		// (at half resolution: up to the nearest surface of the four
+		// pixels; plume_comp.frag takes the texels by that depth)
+		ivec2 f = ivec2 (gl_FragCoord.xy) * 2, fmax = textureSize (prepass, 0) - 1;
+		zs = 0.0;
+		for (int k = 0; k < 4; k++) {
+			float z = texelFetch (prepass, min (f + ivec2 (k & 1, k >> 1), fmax), 0).w;
+			if (z > 0.0 && (zs <= 0.0 || z < zs)) zs = z;
+		}
+	} else zs = texelFetch (prepass, ivec2 (gl_FragCoord.xy), 0).w;
 	if (zs > 0.0) t1 = min (t1, zs / (d.z * re));
 	if (t1 <= t0) discard;
 	if (!PlumeClip (P, lo, ld, t0, t1)) discard;
 
-	int n = PlumeAdaptive (P) ? 96 : int (clamp (ceil ((t1 - t0) / 0.3), 12.0, 96.0)); // (adaptive (MarchPlume): at most 96)
+	// (at half resolution twice the steps: the march's noise, twice as
+	// coarse, showed as blotches where the camera is in the exhaust)
+	float ss = pc.scale == 2u ? 0.5 : 1.0;
+	int nMax = pc.scale == 2u ? 192 : 96;
+	int n = PlumeAdaptive (P) ? nMax : int (clamp (ceil ((t1 - t0) / (0.3 * ss)), 12.0, float (nMax))); // (adaptive (MarchPlume): at most nMax)
 	float jit = Hash (uvec3 (uvec2 (gl_FragCoord.xy), floatBitsToUint (P.misc.x)));
-	PlumeLight l = MarchPlume (P, lo, ld, t0, t1, n, jit, frame.sunColor.rgb, frame.ambient.rgb, frame.sunDir.xyz, true);
+	PlumeLight l = MarchPlume (P, lo, ld, t0, t1, n, jit, frame.sunColor.rgb, frame.ambient.rgb, frame.sunDir.xyz, true, ss);
 
 	// add-on exhaust textures tint the emission
 	if (P.misc2.x > 0.0) {

@@ -112,6 +112,7 @@ struct PlumeDraw {
 class PlumeRenderer {
 public:
 	static constexpr uint32_t MAX_PLUMES = 64; ///< per frame (plume.glsl)
+	static constexpr VkFormat HALF_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT; ///< the half-size image of the plumes' light
 
 	bool Init (vkc::Context *ctx, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout texLayout,
 		VkDescriptorSetLayout atmLayout, VkImageView shapeNoise, VkImageView detailNoise);
@@ -123,7 +124,11 @@ public:
 	int Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info = nullptr);
 	/// The prepass image (view depth) the plumes are clipped against
 	void SetPrepass (VkImageView prepass);
-	/// Draw the plumes, far to near (scene with reactive mask, Context::BindSceneWithMask)
+	/// At half resolution (halfRes): march the plumes into half-size images
+	/// (outside the scene's rendering scope, before Draw)
+	void Render (VkDescriptorSet frameSet, VkDescriptorSet atmSet, VkTexture *white);
+	/// Draw the plumes, far to near, or composite those of Render (scene
+	/// with reactive mask, Context::BindSceneWithMask)
 	void Draw (VkDescriptorSet frameSet, VkDescriptorSet atmSet, VkTexture *white);
 
 	/// Heat shimmer: distort the scene drawn so far behind the hot exhaust
@@ -147,6 +152,8 @@ public:
 	uint32_t Count () const { return (uint32_t)list.size(); }
 
 	bool enabled = true;
+	/// marched at half resolution, composited by depth (ORBITER_VK_PLUME_FULLRES=1: full)
+	bool halfRes = true;
 	bool shimmer = true;          ///< heat shimmer (ORBITER_VK_SHIMMER)
 	float shimmerStrength = 3.0f; ///< displacement [pixels] at unit heat
 	PlumeConfig config;
@@ -169,6 +176,20 @@ private:
 	VkDescriptorSet set = VK_NULL_HANDLE;
 	VkPipelineLayout layout = VK_NULL_HANDLE;
 	VkPipeline pipe = VK_NULL_HANDLE;
+	// half resolution: the plumes' light and transmittance, their reactive
+	// mask (and a depth buffer the pass needs); the composite's set and pipeline
+	VkPipeline halfPipe = VK_NULL_HANDLE;
+	vkc::Image halfColor, halfMask, halfDepth;
+	uint32_t halfGen = ~0u;
+	VkExtent2D halfExtent{};
+	bool halfDrawn = false;
+	VkDescriptorSetLayout compSetLayout = VK_NULL_HANDLE;
+	VkDescriptorPool compPool = VK_NULL_HANDLE;
+	VkDescriptorSet compSet = VK_NULL_HANDLE;
+	VkPipelineLayout compLayout = VK_NULL_HANDLE;
+	VkPipeline compPipe = VK_NULL_HANDLE;
+	void CreateHalf ();
+	void DrawList (VkDescriptorSet frameSet, VkDescriptorSet atmSet, VkTexture *white, VkPipeline p, uint32_t scale);
 	VkImageView prepassView = VK_NULL_HANDLE, shapeView = VK_NULL_HANDLE, detailView = VK_NULL_HANDLE;
 	// heat shimmer: a copy of the scene, its set and pipeline
 	vkc::Image shimmerSrc;

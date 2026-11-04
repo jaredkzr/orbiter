@@ -12,6 +12,7 @@
 #include <sstream>
 
 #include "plume.vert.h"
+#include "plume_comp.frag.h"
 #include "plume.frag.h"
 #include "post.vert.h"
 #include "shimmer.frag.h"
@@ -236,6 +237,7 @@ bool PlumeRenderer::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout, Vk
 	memset (buf.mapped, 0, BufferSize ());
 	shapeView = shapeNoise, detailView = detailNoise;
 	if (const char *e = getenv ("ORBITER_VK_PLUMES")) enabled = atoi (e) != 0;
+	if (const char *e = getenv ("ORBITER_VK_PLUME_FULLRES")) halfRes = atoi (e) == 0;
 
 	VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
 	sci.magFilter = sci.minFilter = VK_FILTER_LINEAR;
@@ -262,7 +264,7 @@ bool PlumeRenderer::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout, Vk
 	VK_CHECK(vkAllocateDescriptorSets (ctx->device, &dai, &set));
 
 	VkDescriptorSetLayout sets[4] = { frameLayout, setLayout, texLayout, atmLayout };
-	VkPushConstantRange pcr{ VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(uint32_t) };
+	VkPushConstantRange pcr{ VK_SHADER_STAGE_FRAGMENT_BIT, 0, 2 * sizeof(uint32_t) };
 	VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 	plci.setLayoutCount = 4, plci.pSetLayouts = sets;
 	plci.pushConstantRangeCount = 1, plci.pPushConstantRanges = &pcr;
@@ -332,8 +334,64 @@ bool PlumeRenderer::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout, Vk
 	gpi.pDynamicState = &dy;
 	gpi.layout = layout;
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &pipe));
+	{
+		// half resolution: into the plumes' own images (light; the
+		// transmittance multiplied in alpha, from 1), single-sampled
+		VkPipelineMultisampleStateCreateInfo hms = ms;
+		hms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+		VkPipelineColorBlendAttachmentState hcbs[2] = { cba, cbm };
+		hcbs[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+		hcbs[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+		VkPipelineColorBlendStateCreateInfo hcb = cb;
+		hcb.pAttachments = hcbs;
+		VkFormat hformats[2] = { HALF_FORMAT, VK_FORMAT_R8_UNORM };
+		VkPipelineRenderingCreateInfo hrci = rci;
+		hrci.pColorAttachmentFormats = hformats;
+		VkGraphicsPipelineCreateInfo hgpi = gpi;
+		hgpi.pNext = &hrci;
+		hgpi.pMultisampleState = &hms;
+		hgpi.pColorBlendState = &hcb;
+		VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &hgpi, nullptr, &halfPipe));
+	}
 	vkDestroyShaderModule (ctx->device, vs, nullptr);
 	vkDestroyShaderModule (ctx->device, fs, nullptr);
+	{
+		// composite (plume_comp.frag): the half-size images and the prepass
+		VkDescriptorSetLayoutBinding cbd[3]{};
+		for (uint32_t i = 0; i < 3; i++) cbd[i] = { i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
+		VkDescriptorSetLayoutCreateInfo clci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+		clci.bindingCount = 3, clci.pBindings = cbd;
+		VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &clci, nullptr, &compSetLayout));
+		VkDescriptorPoolSize cps{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 };
+		VkDescriptorPoolCreateInfo cpci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+		cpci.maxSets = 1, cpci.poolSizeCount = 1, cpci.pPoolSizes = &cps;
+		VK_CHECK(vkCreateDescriptorPool (ctx->device, &cpci, nullptr, &compPool));
+		VkDescriptorSetAllocateInfo cdai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+		cdai.descriptorPool = compPool, cdai.descriptorSetCount = 1, cdai.pSetLayouts = &compSetLayout;
+		VK_CHECK(vkAllocateDescriptorSets (ctx->device, &cdai, &compSet));
+		VkPipelineLayoutCreateInfo cplci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+		cplci.setLayoutCount = 1, cplci.pSetLayouts = &compSetLayout;
+		VK_CHECK(vkCreatePipelineLayout (ctx->device, &cplci, nullptr, &compLayout));
+		VkShaderModule cvs = ctx->CreateShaderModule (spv_post_vert, spv_post_vert_size);
+		VkShaderModule cfs = ctx->CreateShaderModule (spv_plume_comp_frag, spv_plume_comp_frag_size);
+		VkPipelineShaderStageCreateInfo cst[2] = {
+			{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, cvs, "main" },
+			{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, cfs, "main" } };
+		VkPipelineVertexInputStateCreateInfo cvi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+		// the scene times the plumes' transmittance, plus their light
+		VkPipelineColorBlendAttachmentState ccbs[2] = { cba, cbm };
+		ccbs[0].dstColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+		VkPipelineColorBlendStateCreateInfo ccb = cb;
+		ccb.pAttachments = ccbs;
+		VkGraphicsPipelineCreateInfo cgpi = gpi;
+		cgpi.pStages = cst;
+		cgpi.pVertexInputState = &cvi;
+		cgpi.pColorBlendState = &ccb;
+		cgpi.layout = compLayout;
+		VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &cgpi, nullptr, &compPipe));
+		vkDestroyShaderModule (ctx->device, cvs, nullptr);
+		vkDestroyShaderModule (ctx->device, cfs, nullptr);
+	}
 
 	// heat shimmer: source, plume buffer, noise volumes, prepass; a
 	// full-screen pass into the scene (single-sampled scenes only)
@@ -495,6 +553,14 @@ void PlumeRenderer::Shutdown ()
 {
 	if (!ctx) return;
 	vkDestroyPipeline (ctx->device, pipe, nullptr);
+	vkDestroyPipeline (ctx->device, halfPipe, nullptr);
+	vkDestroyPipeline (ctx->device, compPipe, nullptr);
+	vkDestroyPipelineLayout (ctx->device, compLayout, nullptr);
+	vkDestroyDescriptorPool (ctx->device, compPool, nullptr);
+	vkDestroyDescriptorSetLayout (ctx->device, compSetLayout, nullptr);
+	ctx->DestroyImage (halfColor);
+	ctx->DestroyImage (halfMask);
+	ctx->DestroyImage (halfDepth);
 	vkDestroyPipelineLayout (ctx->device, layout, nullptr);
 	vkDestroyDescriptorPool (ctx->device, pool, nullptr);
 	vkDestroyDescriptorSetLayout (ctx->device, setLayout, nullptr);
@@ -512,9 +578,44 @@ void PlumeRenderer::Shutdown ()
 	ctx = nullptr;
 }
 
+void PlumeRenderer::CreateHalf ()
+{
+	vkDeviceWaitIdle (ctx->device);
+	ctx->DestroyImage (halfColor);
+	ctx->DestroyImage (halfMask);
+	ctx->DestroyImage (halfDepth);
+	VkExtent2D e = ctx->RenderExtent ();
+	halfExtent = { (e.width + 1) / 2, (e.height + 1) / 2 };
+	auto create = [this](VkFormat fmt, VkImageUsageFlags usage, VkImageAspectFlags aspect) {
+		vkc::Image im;
+		VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+		ici.imageType = VK_IMAGE_TYPE_2D;
+		ici.format = fmt;
+		ici.extent = { halfExtent.width, halfExtent.height, 1 };
+		ici.mipLevels = 1, ici.arrayLayers = 1;
+		ici.samples = VK_SAMPLE_COUNT_1_BIT;
+		ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+		ici.usage = usage;
+		VmaAllocationCreateInfo aci{};
+		aci.usage = VMA_MEMORY_USAGE_AUTO;
+		VK_CHECK(vmaCreateImage (ctx->allocator, &ici, &aci, &im.image, &im.alloc, nullptr));
+		VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+		vci.image = im.image, vci.viewType = VK_IMAGE_VIEW_TYPE_2D, vci.format = fmt;
+		vci.subresourceRange = { aspect, 0, 1, 0, 1 };
+		VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &im.view));
+		return im;
+	};
+	halfColor = create (HALF_FORMAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+	halfMask = create (VK_FORMAT_R8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+	halfDepth = create (ctx->depthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+	halfGen = ctx->SwapchainGeneration ();
+	prepassView = VK_NULL_HANDLE; // (the sets are written again with the prepass)
+}
+
 void PlumeRenderer::SetPrepass (VkImageView prepass)
 {
 	if (shimmerPipe && shimmerGen != ctx->SwapchainGeneration ()) CreateShimmerSource ();
+	if (halfRes && halfGen != ctx->SwapchainGeneration ()) CreateHalf ();
 	if (prepass == prepassView) return;
 	if (prepassView) vkDeviceWaitIdle (ctx->device); // (the set may be in use)
 	prepassView = prepass;
@@ -539,6 +640,20 @@ void PlumeRenderer::SetPrepass (VkImageView prepass)
 		}
 	}
 	vkUpdateDescriptorSets (ctx->device, 4, wr, 0, nullptr);
+	if (halfColor.view) {
+		VkDescriptorImageInfo ci[3] = {
+			{ clampSampler, halfColor.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+			{ clampSampler, halfMask.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+			{ clampSampler, prepass, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL } };
+		VkWriteDescriptorSet cw[3]{};
+		for (uint32_t i = 0; i < 3; i++) {
+			cw[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			cw[i].dstSet = compSet, cw[i].dstBinding = i, cw[i].descriptorCount = 1;
+			cw[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			cw[i].pImageInfo = &ci[i];
+		}
+		vkUpdateDescriptorSets (ctx->device, 3, cw, 0, nullptr);
+	}
 	if (shimmerSet) {
 		VkDescriptorImageInfo si[4] = {
 			{ linearClamp, shimmerSrc.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
@@ -794,14 +909,42 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 	return (int)index;
 }
 
+void PlumeRenderer::Render (VkDescriptorSet frameSet, VkDescriptorSet atmSet, VkTexture *white)
+{
+	halfDrawn = false;
+	if (!halfRes || !halfColor.image || !prepassView || list.empty()) return;
+	// (cleared to no light, full transmittance; no reactive mask)
+	vkc::Target t[2] = { { halfColor.image, halfColor.view, HALF_FORMAT, halfExtent },
+		{ halfMask.image, halfMask.view, VK_FORMAT_R8_UNORM, halfExtent } };
+	vkc::Target d{ halfDepth.image, halfDepth.view, ctx->depthFormat, halfExtent };
+	const float clear[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+	ctx->BindTargetsWithDepth (t, 2, d, clear);
+	DrawList (frameSet, atmSet, white, halfPipe, 2);
+	ctx->EndTarget ();
+	halfDrawn = true;
+}
+
 void PlumeRenderer::Draw (VkDescriptorSet frameSet, VkDescriptorSet atmSet, VkTexture *white)
+{
+	if (halfDrawn) {
+		VkCommandBuffer cmd = ctx->Cmd();
+		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compPipe);
+		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compLayout, 0, 1, &compSet, 0, nullptr);
+		vkCmdDraw (cmd, 3, 1, 0, 0);
+		halfDrawn = false;
+		return;
+	}
+	DrawList (frameSet, atmSet, white, pipe, 1);
+}
+
+void PlumeRenderer::DrawList (VkDescriptorSet frameSet, VkDescriptorSet atmSet, VkTexture *white, VkPipeline p, uint32_t scale)
 {
 	if (!prepassView || list.empty()) return;
 	VkCommandBuffer cmd = ctx->Cmd();
 	std::vector<const Entry*> order;
 	for (const Entry &en : list) order.push_back (&en);
 	std::sort (order.begin(), order.end(), [](const Entry *a, const Entry *b) { return a->dist > b->dist; });
-	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
 	VkDescriptorSet s[2] = { frameSet, set };
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 2, s, 0, nullptr);
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 3, 1, &atmSet, 0, nullptr);
@@ -811,7 +954,8 @@ void PlumeRenderer::Draw (VkDescriptorSet frameSet, VkDescriptorSet atmSet, VkTe
 		vkc::Context::Transient vb = ctx->AllocTransient (sizeof(en->box));
 		memcpy (vb.ptr, en->box, sizeof(en->box));
 		vkCmdBindVertexBuffers (cmd, 0, 1, &vb.buffer, &vb.offset);
-		vkCmdPushConstants (cmd, layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(uint32_t), &en->index);
+		uint32_t pc[2] = { en->index, scale };
+		vkCmdPushConstants (cmd, layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), pc);
 		vkCmdDraw (cmd, 36, 1, 0, 0);
 	}
 }

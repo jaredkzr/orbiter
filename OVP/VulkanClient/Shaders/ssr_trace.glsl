@@ -191,7 +191,7 @@ void main ()
 		t1 = min (t1, tHit / P.shape.x);
 		if (t1 <= t0) continue;
 		int n = int (clamp (ceil ((t1 - t0) / 0.6), 6.0, 24.0));
-		PlumeLight l = MarchPlume (P, lo, ld, t0, t1, n, float (h.y & 0xffffu) / 65536.0, vec3 (0.0), vec3 (0.0), vec3 (0.0, 0.0, 1.0), false);
+		PlumeLight l = MarchPlume (P, lo, ld, t0, t1, n, float (h.y & 0xffffu) / 65536.0, vec3 (0.0), vec3 (0.0), vec3 (0.0, 0.0, 1.0), false, 1.0);
 		plume += l.emit;
 	}
 	imageStore (hitOut, p, hit ? vec4 (q, pdf) : vec4 (L, -pdf));
