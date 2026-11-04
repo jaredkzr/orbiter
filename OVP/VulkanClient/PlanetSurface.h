@@ -13,6 +13,7 @@
 #include "VkMath.h"
 #include "TileArchive.h"
 #include <atomic>
+#include <cstdlib>
 #include <condition_variable>
 #include <deque>
 #include <memory>
@@ -100,6 +101,13 @@ public:
 	static constexpr int NCOLS = 7;
 	struct Grid { uint32_t first, gridCount, count, rtFirst, rtCount; };
 	const Grid &Columns (int c) const { return grids[c]; }
+	/// Thinned for the view (PlanetSurface::Select): of the grid taking
+	/// every 2^c-th column, every 2^r-th row and 2^q-th of its columns
+	/// (r < NDEC, c + q < NDEC + 2); the tile's edges keep all their nodes
+	/// (fans), so that it meets its neighbours whatever these take. No ray
+	/// tracing grids (the Columns' are used)
+	static constexpr int NDEC = 4;
+	const Grid &Thinned (int c, int r, int q) const { return r || q ? thinned[c][r][q] : grids[c]; }
 	/// a coarse grid with skirts (every 4th node: for small views)
 	uint32_t CoarseFirstIndex () const { return coarseFirst; }
 	uint32_t CoarseIndexCount () const { return coarseCount; }
@@ -114,6 +122,7 @@ private:
 	VkPipelineLayout meshLayout = VK_NULL_HANDLE;
 	vkc::Buffer ibuf;
 	Grid grids[NCOLS]{};
+	Grid thinned[NCOLS][NDEC][NDEC]{};
 	uint32_t coarseFirst = 0, coarseCount = 0;
 	std::unique_ptr<TileLoader> loader;
 };
@@ -153,6 +162,11 @@ private:
 		VECTOR3 centre;       // tile centre on the mean sphere, planet frame
 		double angRadius;     // angular radius of the tile [rad]
 		int cols = 0;         // grid columns taken: every 2^cols-th (TileRenderer::Columns)
+		// thinned for the view this frame (TileRenderer::Thinned): every 2^decR-th
+		// row, 2^decQ-th of the columns; by the mesh's largest deviation [m]
+		// from it taking every 2nd, 4th, 8th row (0-2) or column (3-5)
+		int decR = 0, decQ = 0;
+		float decErr[6] = { 1e30f, 1e30f, 1e30f, 1e30f, 1e30f, 1e30f };
 		VkTexture *surf = nullptr, *mask = nullptr;
 		std::unique_ptr<ElevGrid> elev;
 		uint8_t surfState = 0, maskState = 0, elevState = 0; // 0: unknown, 1: requested, 2: loaded, 3: missing
@@ -173,6 +187,8 @@ private:
 		uint64_t rtSig = 0, rtChanged = 0; // (the tiles under it: their signature, the frame it last changed)
 	};
 	uint64_t preparedFrame = ~0ull;
+	/// tiles thinned for the view (ORBITER_VK_TILE_THIN=0: not)
+	bool thinning = !getenv ("ORBITER_VK_TILE_THIN") || atoi (getenv ("ORBITER_VK_TILE_THIN")) != 0;
 
 	PlanetSurface (OBJHANDLE hPlanet, Scene *scene, std::shared_ptr<PlanetLayers> layers, bool clouds);
 	Node *NewNode (int lvl, int ilat, int ilng, Node *parent);
@@ -198,10 +214,15 @@ private:
 		float detailSpacing = 0.0f, detailLmesh = 0.0f;
 		int elevLvl = 0;
 		bool detailed = false;
+		float decErr[6];     // (as Node::decErr)
 	};
 	/// detailed: with the terrain detail's geometry (else only its shading)
 	void ComputeMesh (const Node *n, const Node *src, bool detailed, MeshData &md) const;
 	void ApplyMesh (Node *n, MeshData &md);
+	/// MeshData::decErr from the grid's vertices (every 2^cols-th column drawn)
+	static void DecimationErrors (const NTVERTEX *vtx, int cols, float err[6]);
+	/// the thinning of a tile drawn (Select)
+	void ChooseThinning (Node *n, double dist, double ppr) const;
 	/// a mesh made on the GPU (tile_mesh.comp): its record (as the shader's
 	/// Job) and the inputs per grid point, made on the CPU
 	struct GpuJob {
@@ -212,7 +233,13 @@ private:
 		float d0[4];
 		uint64_t outAddr, ptsAddr;
 		float sp[4], misc[4];
+		uint64_t errAddr, pad;  // the mesh's decimation errors (Node::decErr), host memory
 	};
+	// GPU meshes' decimation errors, read in the frame slot's next use:
+	// per slot a buffer, and the tiles (by place and mesh version)
+	struct ErrPending { int lvl, ilat, ilng; uint32_t ver; };
+	vkc::Buffer errBuf[vkc::FRAMES_IN_FLIGHT];
+	std::vector<ErrPending> errPending[vkc::FRAMES_IN_FLIGHT];
 	/// a point d R split into integer metres and the fraction (single
 	/// precision lattices in the shaders: detailcore.glsl's DetPoint)
 	void SplitPoint (const VECTOR3 &D, int32_t I[3], float F[3]) const;

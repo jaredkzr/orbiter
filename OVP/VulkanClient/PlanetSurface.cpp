@@ -470,6 +470,54 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 		skirt (sk + 3*V, east, 1);
 		g.count = (uint32_t)idx.size() - g.first;
 	}
+	// thinned for the view: cells of Kr rows and Kc columns; a cell on the
+	// tile's edge takes all the edge's nodes, a fan from a corner of its
+	// that is on none of those edges (cells are at most a quarter of the
+	// tile: there is one), the polygon counter-clockwise in (j, i) as the
+	// quads' triangles
+	for (int v = 0; v < NCOLS; v++)
+		for (int r = 0; r < NDEC; r++)
+			for (int q = 0; q < NDEC; q++) {
+				if (!r && !q) continue;
+				const int Kr = 1 << r, Kc = 1 << (v + q);
+				if (Kc > G / 4) continue;
+				Grid &g = thinned[v][r][q];
+				g.first = (uint32_t)idx.size();
+				for (int i0 = 0; i0 < G; i0 += Kr)
+					for (int j0 = 0; j0 < G; j0 += Kc) {
+						const int i1 = i0 + Kr, j1 = j0 + Kc;
+						bool top = i0 == 0 && Kc > 1, bottom = i1 == G && Kc > 1, left = j0 == 0 && Kr > 1, right = j1 == G && Kr > 1;
+						auto at = [&](int i, int j) { return (uint16_t)(i*V + j); };
+						if (!top && !bottom && !left && !right) {
+							uint16_t a = at (i0, j0), b = at (i0, j1), c = at (i1, j0), d = at (i1, j1);
+							idx.insert (idx.end(), { a, b, c, b, d, c });
+							continue;
+						}
+						std::vector<uint16_t> poly; // (corners: TL 0, TR, BR, BL; their positions in poly)
+						int corner[4];
+						corner[0] = (int)poly.size(); poly.push_back (at (i0, j0));
+						if (top) for (int j = j0 + 1; j < j1; j++) poly.push_back (at (i0, j));
+						corner[1] = (int)poly.size(); poly.push_back (at (i0, j1));
+						if (right) for (int i = i0 + 1; i < i1; i++) poly.push_back (at (i, j1));
+						corner[2] = (int)poly.size(); poly.push_back (at (i1, j1));
+						if (bottom) for (int j = j1 - 1; j > j0; j--) poly.push_back (at (i1, j));
+						corner[3] = (int)poly.size(); poly.push_back (at (i1, j0));
+						if (left) for (int i = i1 - 1; i > i0; i--) poly.push_back (at (i, j0));
+						// (corner k is on the edges before and after it)
+						const bool onEdge[4] = { top || left, top || right, right || bottom, bottom || left };
+						int s = 0;
+						while (s < 4 && onEdge[s]) s++;
+						const int n = (int)poly.size(), p0 = corner[s];
+						for (int k = 1; k < n - 1; k++)
+							idx.insert (idx.end(), { poly[p0], poly[(p0 + k) % n], poly[(p0 + k + 1) % n] });
+					}
+				g.gridCount = (uint32_t)idx.size() - g.first;
+				skirt (sk + 0*V, north, 1);
+				skirt (sk + 1*V, south, 1);
+				skirt (sk + 2*V, west, 1);
+				skirt (sk + 3*V, east, 1);
+				g.count = (uint32_t)idx.size() - g.first;
+			}
 	// a coarse version (every 4th node and skirt vertex) for the environment
 	// probe's small faces
 	const int C = 4;
@@ -631,6 +679,12 @@ PlanetSurface::~PlanetSurface ()
 	layers->alive = false;
 	tr->Loader().Drop (layers.get());
 	for (auto &r : root) if (r) FreeNode (r.get());
+	for (auto &b : errBuf)
+		if (b.buffer) {
+			vkc::Context *c = ctx;
+			vkc::Buffer x = b;
+			ctx->DeferDestroy ([c, x]() mutable { c->DestroyBuffer (x); });
+		}
 }
 
 PlanetSurface::Node *PlanetSurface::NewNode (int lvl, int ilat, int ilng, Node *parent)
@@ -890,8 +944,82 @@ void PlanetSurface::ComputeMesh (const Node *n, const Node *src, bool detailed, 
 	md.detailLmesh = (lmesh >= md.detailSpacing) ? 1e30f : (float)lmesh; // (none in the mesh)
 	md.elevLvl = src ? src->lvl : 0;
 	md.detailed = detailed;
+	DecimationErrors (vtx.data(), n->cols, md.decErr);
 	md.vtx = std::move (vtx);
 	md.amp = std::move (amp);
+}
+
+void PlanetSurface::DecimationErrors (const NTVERTEX *vtx, int cols, float err[6])
+{
+	const int G = TileRenderer::GRID, V = G + 1, Kb = 1 << cols;
+	auto p = [&](int i, int j) { const NTVERTEX &v = vtx[i*V + j]; return VECTOR3{ v.x, v.y, v.z }; };
+	for (int r = 1; r <= 3; r++) {
+		const int K = 1 << r;
+		double e = 0.0;
+		for (int i = 0; i <= G; i++) {
+			if (i % K == 0) continue;
+			int i0 = i - i % K;
+			double u = (double)(i - i0) / K;
+			for (int j = 0; j <= G; j += Kb)
+				e = std::max (e, length (p (i, j) - (p (i0, j) * (1.0 - u) + p (i0 + K, j) * u)));
+		}
+		err[r - 1] = (float)e;
+	}
+	for (int q = 1; q <= 3; q++) {
+		const int K = Kb << q;
+		if (K > G / 4) { err[2 + q] = 1e30f; continue; }
+		double e = 0.0;
+		for (int j = 0; j <= G; j += Kb) {
+			if (j % K == 0) continue;
+			int j0 = j - j % K;
+			double u = (double)(j - j0) / K;
+			for (int i = 0; i <= G; i++)
+				e = std::max (e, length (p (i, j) - (p (i, j0) * (1.0 - u) + p (i, j0 + K) * u)));
+		}
+		err[2 + q] = (float)e;
+	}
+}
+
+void PlanetSurface::ChooseThinning (Node *n, double dist, double ppr) const
+{
+	// rows and columns foreshortened on the screen (seen at a grazing angle,
+	// a tile's 64 rows fall within a few pixels: thousands of tiles towards
+	// the horizon from a low camera) are thinned while their spacing stays
+	// within that of a tile seen face on just before it splits (S_MAX) and
+	// the mesh's deviation from the thinned one within a pixel (E_MAX;
+	// relief, silhouettes). (Most of the rows are the relief's: the
+	// deviations of real terrain are metres at the mesh's spacing; the
+	// Atmos takeoff's ground camera: terrain 4.7 -> 3.8 ms, prepass 3.3 -> 2.7)
+	constexpr double S_MAX = 8.0, E_MAX = 1.0;
+	n->decR = n->decQ = 0;
+	if (clouds || dist <= 0.0) return;
+	const int G = TileRenderer::GRID;
+	VECTOR3 c = n->centre / radius;
+	VECTOR3 north = _V(0, 1, 0) - c * c.y;
+	double ln = length (north);
+	if (ln < 1e-6) return; // (at a pole)
+	north = north / ln;
+	VECTOR3 east = crossp (north, c);
+	VECTOR3 v = n->centre - camLocal;
+	double lv = length (v);
+	if (lv <= 0.0) return;
+	v = v / lv;
+	double latc = 0.5 * (n->latmin + n->latmax);
+	double rowLen = radius * (n->latmax - n->latmin) / G;
+	double colLen = radius * cos (latc) * (n->lngmax - n->lngmin) / G * (1 << n->cols);
+	double rowPx = rowLen * sqrt (std::max (0.0, 1.0 - dotp (north, v) * dotp (north, v))) / dist * ppr;
+	double colPx = colLen * sqrt (std::max (0.0, 1.0 - dotp (east, v) * dotp (east, v))) / dist * ppr;
+	double errPx = ppr / dist;
+	int best = 0;
+	for (int r = 0; r < TileRenderer::NDEC; r++)
+		for (int q = 0; q < TileRenderer::NDEC; q++) {
+			if (r + q <= best || (1 << (n->cols + q)) > G / 4) continue;
+			if (r && rowPx * (1 << r) > S_MAX) continue;
+			if (q && colPx * (1 << q) > S_MAX) continue;
+			double e = (r ? n->decErr[r - 1] : 0.0) + (q ? n->decErr[2 + q] : 0.0);
+			if (e * errPx > E_MAX) continue;
+			best = r + q, n->decR = r, n->decQ = q;
+		}
 }
 
 void PlanetSurface::ApplyMesh (Node *n, MeshData &md)
@@ -908,6 +1036,7 @@ void PlanetSurface::ApplyMesh (Node *n, MeshData &md)
 	n->rtVersion++;
 	n->meshElevLvl = md.elevLvl;
 	n->meshDetailed = md.detailed;
+	memcpy (n->decErr, md.decErr, sizeof(n->decErr));
 }
 
 void PlanetSurface::EnsureVertexBuffer (Node *n)
@@ -1121,6 +1250,7 @@ uint32_t PlanetSurface::Select (Node *n)
 		drawList.push_back (n);
 		n->drawn = true;
 		n->rtTris = tr->Columns (n->cols).rtCount / 3;
+		if (thinning) ChooseThinning (n, dist, ppr);
 	}
 	return n->rtTris;
 }
@@ -1218,6 +1348,16 @@ void PlanetSurface::Prepare ()
 	const size_t maxJobs = 2 * nThreads;
 	const bool gpu = tr->MeshPipeline () != VK_NULL_HANDLE;
 	const size_t maxGpuJobs = 96;
+	// (the decimation errors of the meshes made in this slot's last use)
+	const uint32_t slot = ctx->FrameIndex ();
+	if (gpu && !errBuf[slot].buffer)
+		errBuf[slot] = ctx->CreateBuffer (maxGpuJobs * 8 * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
+	for (size_t k = 0; k < errPending[slot].size(); k++) {
+		const ErrPending &e = errPending[slot][k];
+		Node *n = Find (e.lvl, e.ilat, e.ilng);
+		if (n && n->rtVersion == e.ver) memcpy (n->decErr, (const float*)errBuf[slot].mapped + 8 * k, sizeof(n->decErr));
+	}
+	errPending[slot].clear ();
 	std::vector<std::pair<Node*, const Node*>> jobs;
 	// (meshes made at once: a number per frame, the nearest first; each is
 	// staged in memory of the frame, which a jump to a new place would
@@ -1290,12 +1430,15 @@ void PlanetSurface::Prepare ()
 			memcpy ((float*)tp.ptr + at, pts[i].data(), pts[i].size() * sizeof(float));
 			gj[i].ptsAddr = pa + at * sizeof(float);
 			gj[i].outAddr = ctx->BufferAddress (n->vbuf.buffer);
+			gj[i].errAddr = ctx->BufferAddress (errBuf[slot].buffer) + i * 8 * sizeof(float);
 			at += pts[i].size();
 			n->detailSpacing = md[i].detailSpacing, n->detailLmesh = md[i].detailLmesh;
 			n->nVtx = (uint32_t)((TileRenderer::GRID + 1) * (TileRenderer::GRID + 1) + 4 * (TileRenderer::GRID + 1));
 			n->rtVersion++;
 			n->meshElevLvl = md[i].elevLvl;
 			n->meshDetailed = true;
+			for (float &e : n->decErr) e = 1e30f; // (until read back)
+			errPending[slot].push_back ({ n->lvl, n->ilat, n->ilng, n->rtVersion });
 		}
 		memcpy ((uint8_t*)tj.ptr + jalign, gj.data(), gj.size() * sizeof(GpuJob));
 		// (ORBITER_VK_MESH_CHECK: the first meshes also made at once into
@@ -1521,7 +1664,7 @@ void PlanetSurface::RenderShadow (ShadowMap &sm)
 		// tile extent, with a margin for its relief
 		double rad = n->angRadius * R * 1.5 + 10e3;
 		if (!sm.MayCast (gc, rad)) continue;
-		const TileRenderer::Grid &g = tr->Columns (n->cols);
+		const TileRenderer::Grid &g = tr->Thinned (n->cols, n->decR, n->decQ);
 		sm.DrawGeometry (n->vbuf.buffer, tr->IndexBuffer(), g.count, Mat4::FromRotTrans (prot, gc - sm.Centre()), g.first);
 	}
 }
@@ -1679,7 +1822,8 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr->Layout(), 2, 1, &mask->set, 0, nullptr);
 		vkCmdPushConstants (cmd, tr->Layout(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pp), pp);
 		BindVertices (n);
-		vkCmdDrawIndexed (cmd, tr->Columns (n->cols).count, 1, tr->Columns (n->cols).first, 0, 0);
+		const TileRenderer::Grid &g = tr->Thinned (n->cols, n->decR, n->decQ);
+		vkCmdDrawIndexed (cmd, g.count, 1, g.first, 0, 0);
 		return;
 	}
 	VkDescriptorSet sets[2] = { surf->set, mask->set };
@@ -1695,7 +1839,7 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 	// skirts would show as bright seams in the blended cloud layer
 	if (scene->InProbe () && !clouds) vkCmdDrawIndexed (cmd, tr->CoarseIndexCount(), 1, tr->CoarseFirstIndex(), 0, 0);
 	else {
-		const TileRenderer::Grid &g = tr->Columns (n->cols);
+		const TileRenderer::Grid &g = tr->Thinned (n->cols, n->decR, n->decQ);
 		vkCmdDrawIndexed (cmd, clouds ? g.gridCount : g.count, 1, g.first, 0, 0);
 	}
 }

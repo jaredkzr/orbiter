@@ -32,10 +32,13 @@ struct Job {
 	vec4 sp;        // lmin, the parent's lmin, data spacing, the parent's data spacing [m]
 	vec4 misc;      // skirt depth [m], parent (1/0), lsplit: the coarser detail is in the points' elevations [m],
 	                // href: the points' elevations are relative to it [m]
+	uvec2 errAddr;  // the mesh's decimation errors (PlanetSurface::DecimationErrors): 6 floats
+	uvec2 pad;
 };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Jobs { Job job[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Floats { float f[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) coherent buffer OutFloats { float f[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) writeonly buffer OutErr { float e[]; };
 
 layout(push_constant) uniform Params {
 	uvec2 jobs;
@@ -45,6 +48,7 @@ layout(push_constant) uniform Params {
 } pc;
 
 shared vec3 P[W * W]; // positions relative to the tile centre raised to href
+shared uint sErr[6];  // decimation errors (float bits: positive floats order as uints)
 // (the morph targets go through the output: the detail stream's records)
 
 // The direction at latitude and longitude offsets (da, db) from the centre
@@ -84,6 +88,7 @@ void main ()
 	#define DA(i) clamp (jb.off.x - float (i) * dlat, jb.off.w, jb.off.z)
 	#define DB(j) (jb.off.y + float (j) * dlng)
 
+	if (tid < 6u) sErr[tid] = 0u;
 	// the grid with a border of one node
 	for (uint k = tid; k < uint (W * W); k += 256u) {
 		int i = int (k) / W, j = int (k) % W;
@@ -112,6 +117,29 @@ void main ()
 	}
 	memoryBarrierBuffer ();
 	barrier ();
+	// the largest deviation of the grid from it taking every 2nd, 4th, 8th
+	// row, or column (of those drawn, every Kb-th), as on the CPU
+	{
+		int Kb = jb.refI.w;
+		#define PG(i, j) P[((i) + 1) * W + (j) + 1]
+		for (uint k = tid; k < uint (V * V); k += 256u) {
+			int i = int (k) / V, j = int (k) % V;
+			if (j % Kb != 0) continue;
+			for (int r = 1; r <= 3; r++) {
+				int K = 1 << r, i0 = i - i % K;
+				if (i % K == 0) continue;
+				float u = float (i - i0) / float (K);
+				atomicMax (sErr[r - 1], floatBitsToUint (length (PG (i, j) - mix (PG (i0, j), PG (i0 + K, j), u))));
+			}
+			for (int q = 1; q <= 3; q++) {
+				int K = Kb << q, j0 = j - j % K;
+				if (K > G / 4 || j % K == 0) continue;
+				float u = float (j - j0) / float (K);
+				atomicMax (sErr[2 + q], floatBitsToUint (length (PG (i, j) - mix (PG (i, j0), PG (i, j0 + K), u))));
+			}
+		}
+		#undef PG
+	}
 	// the vertices between the parent's: on its triangles' edges (its quads
 	// split from top right to bottom left); without a parent: the tile's own
 	for (uint k = tid; k < uint (V * V); k += 256u) {
@@ -169,5 +197,11 @@ void main ()
 			o.f[e] = A, o.f[e + 1] = f;
 			o.f[e + 2] = tt.x, o.f[e + 3] = tt.y, o.f[e + 4] = tt.z;
 		}
+	}
+	barrier ();
+	if (tid < 6u) {
+		int Kb = jb.refI.w;
+		bool none = tid >= 3u && (Kb << (int (tid) - 2)) > G / 4;
+		OutErr (jb.errAddr).e[tid] = none ? 1e30 : uintBitsToFloat (sErr[tid]);
 	}
 }
