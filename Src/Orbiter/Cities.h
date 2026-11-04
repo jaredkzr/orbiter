@@ -56,6 +56,7 @@
 #include "ConvexGeometry.h"
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <array>
 #include <map>
 #include <memory>
@@ -253,6 +254,10 @@ namespace cities {
 		typedef std::array<float, GBLOCK * GBLOCK> GroundBlock;
 		std::shared_mutex groundMtx;
 		std::unordered_map<int64_t, std::shared_ptr<const GroundBlock>> groundBlocks;
+		// (blocks being made: other threads needing one wait for it; made
+		// by each, they took a cold elevation manager each, 30 ms a block)
+		std::unordered_map<int64_t, std::shared_future<std::shared_ptr<const GroundBlock>>> groundPending;
+		std::atomic<int> groundMaking{ 0 }; // blocks being made
 		const uint64_t serial;     // (this map, for the threads' caches of its blocks: not its address, reused)
 		struct RawElev { std::mutex m; std::unique_ptr<::ElevationManager> em; std::unique_ptr<std::vector<ElevationTile>> tiles; };
 		std::vector<std::unique_ptr<RawElev>> rawElev;

@@ -88,6 +88,9 @@ protected:
 	int  Quadrant(double lat, double lng, int lvl) const;
 	bool TileIdx (double lat, double lng, int lvl, int *ilat, int *ilng) const;
 	INT16 *LoadElevationTile (int lvl, int ilat, int ilng, double tgt_res) const;
+	/// LoadElevationTile and LoadElevationTile_mod at the body's resolution,
+	/// through the tiles shared by its managers (a copy; nullptr: none)
+	INT16 *LoadSharedTile (int lvl, int ilat, int ilng) const;
 	bool LoadElevationTile_mod (int lvl, int ilat, int ilng, double tgt_res, INT16 *elev) const;
 	bool HasElevationTile(int lvl, int ilat, int ilng) const;
 	/// the terrain alone (Elevation without the decks)

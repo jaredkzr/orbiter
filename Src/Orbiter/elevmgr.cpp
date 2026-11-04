@@ -11,6 +11,11 @@
 #include "Orbiter.h"
 #include "TerrainDetail.h"
 #include <filesystem>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <tuple>
+#include <vector>
 
 using std::min;
 using std::max;
@@ -22,6 +27,24 @@ static int MAXLVL_LIMIT = SURF_MAX_PATCHLEVEL2 - 7;
 extern Orbiter *g_pOrbiter;
 extern TimeData td;
 extern char DBG_MSG[256];
+
+namespace {
+	// Tiles as loaded (with their modifications; before the graphics
+	// client's filter), shared by the managers of a body. Each manager has a
+	// tile cache of its own: those made per thread (cities' ground, a
+	// client's mesh workers) each read and inflated the same tiles, a cold
+	// one 30 ms a block of ground. (Those not there too: the levels tried
+	// below the data.)
+	struct SharedTile { std::shared_ptr<const std::vector<INT16>> data; uint64_t used = 0; };
+	typedef std::tuple<const CelestialBody*, int, int, int> SharedKey;
+	struct SharedTiles {
+		std::mutex m;
+		std::map<SharedKey, SharedTile> tiles;
+		uint64_t clock = 0;
+	};
+	SharedTiles &Shared () { static SharedTiles *s = new SharedTiles; return *s; } // (not destroyed: managers may outlive statics)
+	const size_t SHARED_MAX = 256; // (34 MB)
+}
 
 #pragma pack(push,1)
 
@@ -125,6 +148,12 @@ ElevationManager::ElevationManager (const CelestialBody *_cbody)
 
 ElevationManager::~ElevationManager ()
 {
+	{ // (the body's shared tiles: its pointer may be another body's next)
+		SharedTiles &sh = Shared ();
+		std::lock_guard<std::mutex> lock (sh.m);
+		for (auto it = sh.tiles.begin(); it != sh.tiles.end(); )
+			if (std::get<0> (it->first) == cbody) it = sh.tiles.erase (it); else ++it;
+	}
 	if (local_cache) delete local_cache;
 	for (int i = 0; i < 2; i++)
 		if (treeMgr[i])
@@ -170,6 +199,40 @@ bool ElevationManager::HasElevationTile(int lvl, int ilat, int ilng) const
 		}
 	}
 	return false;
+}
+
+INT16 *ElevationManager::LoadSharedTile (int lvl, int ilat, int ilng) const
+{
+	const size_t ndat = (size_t)elev_stride * elev_stride;
+	SharedKey key (cbody, lvl, ilat, ilng);
+	SharedTiles &sh = Shared ();
+	{
+		std::lock_guard<std::mutex> lock (sh.m);
+		auto it = sh.tiles.find (key);
+		if (it != sh.tiles.end()) {
+			it->second.used = ++sh.clock;
+			if (!it->second.data) return nullptr;
+			INT16 *elev = new INT16[ndat];
+			memcpy (elev, it->second.data->data(), ndat * sizeof(INT16));
+			return elev;
+		}
+	}
+	// (read outside the lock: two threads at once at worst)
+	INT16 *elev = LoadElevationTile (lvl, ilat, ilng, elev_res);
+	if (elev) LoadElevationTile_mod (lvl, ilat, ilng, elev_res, elev); // load modifications
+	std::shared_ptr<const std::vector<INT16>> data;
+	if (elev) data = std::make_shared<const std::vector<INT16>> (elev, elev + ndat);
+	std::lock_guard<std::mutex> lock (sh.m);
+	if (sh.tiles.size() >= SHARED_MAX) { // (the least recently used)
+		auto old = sh.tiles.begin();
+		for (auto it = sh.tiles.begin(); it != sh.tiles.end(); ++it)
+			if (it->second.used < old->second.used) old = it;
+		sh.tiles.erase (old);
+	}
+	SharedTile &st = sh.tiles[key];
+	st.data = std::move (data);
+	st.used = ++sh.clock;
+	return elev;
 }
 
 INT16 *ElevationManager::LoadElevationTile (int lvl, int ilat, int ilng, double tgt_res) const
@@ -481,9 +544,8 @@ double ElevationManager::Terrain (double lat, double lng, int reqlvl, std::vecto
 
 			for (lvl = reqlvl; lvl >= 0; lvl--) {
 				TileIdx (lat, lng, lvl, &ilat, &ilng);
-				t->data = LoadElevationTile (lvl+4, ilat, ilng, elev_res);
+				t->data = LoadSharedTile (lvl+4, ilat, ilng); // (with the modifications)
 				if (t->data) {
-					LoadElevationTile_mod (lvl+4, ilat, ilng, elev_res, t->data); // load modifications
 					int nlat = 1 << lvl;
 					int nlng = 2 << lvl;
 					t->mgr = this;

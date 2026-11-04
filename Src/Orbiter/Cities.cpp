@@ -701,7 +701,11 @@ std::shared_ptr<const CityMap::GroundBlock> CityMap::MakeGroundBlock (int64_t bi
 			for (int c = 0; c < GBLOCK; c++) (*blk)[r * GBLOCK + c] = GroundNode (bi * GBLOCK + r, bj * GBLOCK + c);
 	};
 	static const bool sync = getenv ("ORBITER_CITY_GROUND_SYNC") && atoi (getenv ("ORBITER_CITY_GROUND_SYNC"));
-	const int nt = sync ? 1 : (int)std::clamp (std::thread::hardware_concurrency () / 2, 1u, 4u);
+	// (one thread a block while others make blocks too, e.g. a client's
+	// mesh workers: each thread of each takes an elevation manager, whose
+	// tiles it loads anew)
+	const bool alone = groundMaking.load () <= 1;
+	const int nt = sync || !alone ? 1 : (int)std::clamp (std::thread::hardware_concurrency () / 2, 1u, 4u);
 	std::vector<std::future<void>> fs;
 	for (int k = 1; k < nt; k++)
 		fs.push_back (std::async (std::launch::async, rows, GBLOCK * k / nt, GBLOCK * (k + 1) / nt));
@@ -737,11 +741,35 @@ double CityMap::Ground (double lat, double lng)
 				auto it = groundBlocks.find (key);
 				if (it != groundBlocks.end()) blk = it->second;
 			}
-			if (!blk) { // (made outside the lock; by two threads at once at worst)
-				blk = MakeGroundBlock (bi, bj);
-				std::unique_lock<std::shared_mutex> lock (groundMtx);
-				if (groundBlocks.size() > 50000) groundBlocks.clear();
-				groundBlocks[key] = blk;
+			if (!blk) { // (made outside the lock, by one thread: others needing it wait)
+				std::promise<std::shared_ptr<const GroundBlock>> made;
+				std::shared_future<std::shared_ptr<const GroundBlock>> pending;
+				bool mine = false;
+				{
+					std::unique_lock<std::shared_mutex> lock (groundMtx);
+					auto it = groundBlocks.find (key);
+					if (it != groundBlocks.end()) blk = it->second;
+					else {
+						auto p = groundPending.find (key);
+						if (p != groundPending.end()) pending = p->second;
+						else {
+							pending = groundPending[key] = made.get_future ().share ();
+							mine = true;
+						}
+					}
+				}
+				if (mine) {
+					groundMaking++;
+					blk = MakeGroundBlock (bi, bj);
+					groundMaking--;
+					{
+						std::unique_lock<std::shared_mutex> lock (groundMtx);
+						if (groundBlocks.size() > 50000) groundBlocks.clear();
+						groundBlocks[key] = blk;
+						groundPending.erase (key);
+					}
+					made.set_value (blk);
+				} else if (!blk) blk = pending.get ();
 			}
 			Cached &c = cache[next++ & 3];
 			c.map = serial, c.key = key, c.blk = std::move (blk);
