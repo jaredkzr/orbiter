@@ -199,6 +199,13 @@ VkTexture *TextureManager::Load (const char *fname, bool shared, bool fullPath)
 			tex = CreateRGBA (w, h, rgba.data());
 		else
 			oapiWriteLogV ("VulkanClient: could not read %s", path.c_str());
+	} else if (len > 4 && (!strcasecmp_portable (path.c_str() + len - 4, ".jpg") || (len > 5 && !strcasecmp_portable (path.c_str() + len - 5, ".jpeg")))) {
+		uint32_t w, h;
+		std::vector<uint8_t> rgba;
+		if (image::ReadJPG (path, w, h, rgba))
+			tex = CreateRGBA (w, h, rgba.data());
+		else
+			oapiWriteLogV ("VulkanClient: could not read %s", path.c_str());
 	} else {
 		tex = LoadDDS (path);
 		if (tex && shared) LoadMaps (tex, path);

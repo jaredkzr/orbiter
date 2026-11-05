@@ -16,7 +16,7 @@
 extern Orbiter *g_pOrbiter;
 extern Pane *g_pane;
 
-DlgMenuCfg::DlgMenuCfg(): ImGuiDialog(ICON_FA_SLIDERS " Orbiter: Configure menu bars")
+DlgMenuCfg::DlgMenuCfg(): ImGuiDialog(ICON_FA_SLIDERS "  Configure menu bars")
 {
 	SetHelp("html/orbiter.chm", "/menucfg.htm");
 }

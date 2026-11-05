@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "Plumes.h"
+#include "GfxSettings.h"
 #include "VkTexture.h"
 #include "VesselAPI.h"
 #include <algorithm>
@@ -236,7 +237,7 @@ bool PlumeRenderer::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout, Vk
 	buf = ctx->CreateBuffer (BufferSize (), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
 	memset (buf.mapped, 0, BufferSize ());
 	shapeView = shapeNoise, detailView = detailNoise;
-	if (const char *e = getenv ("ORBITER_VK_PLUMES")) enabled = atoi (e) != 0;
+	enabled = vkc::Gfx ().plumes;
 	if (const char *e = getenv ("ORBITER_VK_PLUME_FULLRES")) halfRes = atoi (e) == 0;
 
 	VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
@@ -395,7 +396,7 @@ bool PlumeRenderer::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout, Vk
 
 	// heat shimmer: source, plume buffer, noise volumes, prepass; a
 	// full-screen pass into the scene (single-sampled scenes only)
-	if (const char *e = getenv ("ORBITER_VK_SHIMMER")) shimmer = atoi (e) != 0;
+	shimmer = vkc::Gfx ().shimmer;
 	if (ctx->sceneSamples != VK_SAMPLE_COUNT_1_BIT) shimmer = false;
 	{
 		VkSamplerCreateInfo lsc{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};

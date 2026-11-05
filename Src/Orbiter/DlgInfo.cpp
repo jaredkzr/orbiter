@@ -15,7 +15,7 @@
 
 extern PlanetarySystem *g_psys;
 
-DlgInfo::DlgInfo() : ImGuiDialog(ICON_FA_CIRCLE_INFO " Orbiter: Object info", {753,423}) {
+DlgInfo::DlgInfo() : ImGuiDialog(ICON_FA_CIRCLE_INFO "  Object info", {753,423}) {
 	SetHelp("html/orbiter.chm", "/objinfo.htm");
 	m_SelectedTarget = g_psys->GetStar(0)->Name();
 }
@@ -552,9 +552,10 @@ void DlgInfo::DrawInfoCelestialBody(CelestialBody *cbody) {
 
             ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
-                ImGui::TextUnformatted("Siderial day");
+                ImGui::TextUnformatted("Sidereal day");
                 ImGui::TableSetColumnIndex(1);
-                ImGui::Text("%s s", SciStr (cbody->RotT(), 4));
+                if (cbody->RotT() < 1e90) ImGui::Text("%s s", SciStr (cbody->RotT(), 4));
+                else ImGui::TextUnformatted("N/A"); // (does not rotate)
 
             if (el) sprintf (cbuf, "%s s", SciStr (el->OrbitT(), 4));
             else    strcpy (cbuf, "N/A");

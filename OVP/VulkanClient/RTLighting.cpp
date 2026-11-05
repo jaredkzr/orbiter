@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "RTLighting.h"
+#include "GfxSettings.h"
 #include "OrbiterAPI.h"
 #include <cstdlib>
 #include <vector>
@@ -34,7 +35,7 @@ namespace {
 
 bool RTLighting::Init (vkc::Context *c, VkDescriptorSetLayout frame, VkDescriptorSetLayout rtScene, VkDescriptorSetLayout rtTex)
 {
-	if (const char *e = getenv ("ORBITER_VK_RT_LIGHTING")) if (!atoi (e)) return false;
+	if (!vkc::Gfx ().rtLighting) return false; // (ORBITER_VK_RT_LIGHTING=0: off)
 	ctx = c;
 	if (const char *e = getenv ("ORBITER_VK_AO_RADIUS")) aoRadius = (float)atof (e);
 

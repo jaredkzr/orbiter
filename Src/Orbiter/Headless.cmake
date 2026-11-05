@@ -45,6 +45,8 @@ set(headless_src
 	DlgMap.cpp
 	DlgMenuCfg.cpp
 	DlgMgr.cpp
+	DlgFlightMenu.cpp
+	DlgKeyHelp.cpp
 	DlgOptions.cpp
 	DlgRecorder.cpp
 	DlgTacc.cpp
@@ -81,6 +83,8 @@ set(headless_src
 	Routes.cpp
 	MapView.cpp
 	UiAnchor.cpp
+	UiTheme.cpp
+	SettingsUI.cpp
 	TerrainDetail.cpp
 	ProcTerrain.cpp
 	GroundScatter.cpp

@@ -348,6 +348,8 @@ public:
 	void SkyAdapt (float avgLogLum, double dt);
 	/// Orbiter's celestial sphere options have changed
 	void SkyOptionsChanged ();
+	/// The graphics settings that apply at once (GfxSettings) changed
+	void ApplySettings ();
 	VkDescriptorSet FrameSet () const { return inProbe ? probeFrameSet[ctx->FrameIndex()] : frameSet[ctx->FrameIndex()]; }
 	/// rendering the environment probe (not the main view)
 	bool InProbe () const { return inProbe; }

@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "AO.h"
+#include "GfxSettings.h"
 #include <cstdlib>
 
 #include "ao.comp.h"
@@ -17,7 +18,7 @@ namespace {
 bool AmbientOcclusion::Init (vkc::Context *c)
 {
 	ctx = c;
-	if (const char *e = getenv ("ORBITER_VK_AO")) enabled = atoi (e) != 0;
+	enabled = vkc::Gfx ().ao;
 	if (const char *e = getenv ("ORBITER_VK_AO_STRENGTH")) strength = (float)atof (e);
 	if (const char *e = getenv ("ORBITER_VK_AO_DIRECT")) directFrac = (float)atof (e);
 

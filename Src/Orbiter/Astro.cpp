@@ -1,6 +1,7 @@
 // Copyright (c) Martin Schweiger
 // Licensed under the MIT License
 
+#include <string>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -208,7 +209,15 @@ char *SciStr (double f, int precision, char prefix)
 	for (i = 0; i < len; i++) {
 		if (strbuf[i] == 'e') {
 			sscanf(strbuf+i+1, "%d", &e);
-			sprintf (strbuf+i, "·10^%d", e);
+			// " × 10" and the exponent in superscript digits (UTF-8)
+			static const char *sup[10] = { "\u2070", "\u00b9", "\u00b2", "\u00b3", "\u2074", "\u2075", "\u2076", "\u2077", "\u2078", "\u2079" };
+			std::string s = " \u00d7 10";
+			if (e < 0) s += "\u207b", e = -e;
+			char d[16];
+			snprintf (d, sizeof(d), "%d", e);
+			for (char *c = d; *c; c++) s += sup[*c - '0'];
+			strcpy (strbuf+i, s.c_str());
+			break;
 		}
 	}
 	return strbuf;

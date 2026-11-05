@@ -21,6 +21,16 @@ endif()
 
 # Vulkan Memory Allocator (header-only)
 include(FetchContent)
+# stb_image (public domain / MIT): JPEG images (scenario previews)
+FetchContent_Declare(stb
+	GIT_REPOSITORY https://github.com/nothings/stb.git
+	GIT_TAG 31c1ad37456438565541f4919958214b6e762fb4
+)
+FetchContent_GetProperties(stb)
+if(NOT stb_POPULATED)
+	FetchContent_Populate(stb)
+endif()
+
 FetchContent_Declare(VulkanMemoryAllocator
 	GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
 	GIT_TAG v3.2.1
@@ -190,6 +200,7 @@ add_library(VulkanClient SHARED
 	Fracture.cpp
 	EnvProbe.cpp
 	Fsr.cpp
+	GfxSettings.cpp
 	StarSphere.cpp
 	GalaxySky.cpp
 	BlackHoleLens.cpp
@@ -229,6 +240,7 @@ target_include_directories(VulkanClient PRIVATE
 	${ORBITER_SOURCE_SDK_INCLUDE_DIR}
 	${SHADER_OUT_DIR}
 	${vulkanmemoryallocator_SOURCE_DIR}/include
+	${stb_SOURCE_DIR}
 	${imgui_SOURCE_DIR}
 	${imgui_SOURCE_DIR}/backends
 	${implot_SOURCE_DIR}
@@ -270,6 +282,13 @@ add_custom_command(TARGET VulkanClient POST_BUILD
 		${CMAKE_SOURCE_DIR}/Extern/imgui/fa-solid-900.ttf
 		${CMAKE_SOURCE_DIR}/Extern/imgui/Lekton-Bold.ttf
 		${CMAKE_SOURCE_DIR}/Extern/imgui/architext.regular.ttf
+		${CMAKE_SOURCE_DIR}/Extern/Fonts/Inter-Regular.ttf
+		${CMAKE_SOURCE_DIR}/Extern/Fonts/Inter-Medium.ttf
+		${CMAKE_SOURCE_DIR}/Extern/Fonts/Inter-SemiBold.ttf
+		${CMAKE_SOURCE_DIR}/Extern/Fonts/JetBrainsMono-Regular.ttf
+		${CMAKE_SOURCE_DIR}/Extern/Fonts/JetBrainsMono-Medium.ttf
+		${CMAKE_SOURCE_DIR}/Extern/Fonts/JetBrainsMono-Bold.ttf
+		${CMAKE_SOURCE_DIR}/Extern/Fonts/Lucide.ttf
 		${ORBITER_BINARY_ROOT_DIR}/Fonts
 )
 

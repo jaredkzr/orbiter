@@ -223,7 +223,9 @@ CFG_UIPRM CfgUIPrm_default = {
 	10,         // MenuScrollspeed (1-20)
 	0,          // SelVesselTab: tab to open in vessel selection dialog
 	4,          // SelVesselRange "nearby" range for vessel selection dialog (100km)
-	false       // bSelVesselFlat (no flat assemblies) in vessel selection dialog)
+	false,      // bSelVesselFlat (no flat assemblies) in vessel selection dialog)
+	1.0f,       // UIScale (interface size 100 %)
+	true        // bLaunchpadBackdrop (a live scene behind the launchpad)
 };
 
 CFG_DEMOPRM CfgDemoPrm_default = {
@@ -238,9 +240,9 @@ CFG_FONTPRM CfgFontPrm_default = {
 	1.0f,		// dlgFont_Scale (scaling factor for inline dialog fonts)
 	"Arial",	// dlgFont1_Face (default dialog font face name)
 	14.0f,		// ImGui_FontSize
-	"Fonts/Roboto-Medium.ttf",    // ImGui_DefaultFontFile
-	"Fonts/Cousine-Regular.ttf",  // ImGui_ConsoleFontFile
-	"Fonts/Lekton-Bold.ttf",      // ImGui_MonospacedFontFile
+	"Fonts/Inter-Regular.ttf",          // ImGui_DefaultFontFile (Medium and SemiBold beside it)
+	"Fonts/JetBrainsMono-Regular.ttf",  // ImGui_ConsoleFontFile
+	"Fonts/JetBrainsMono-Regular.ttf",  // ImGui_MonospacedFontFile
 	"Fonts/architext.regular.ttf" // ImGui_ManuscriptFontFile
 };
 
@@ -754,6 +756,9 @@ bool Config::Load(const char *fname)
 	GetInt (ifs, "SelVesselTab", CfgUIPrm.SelVesselTab);
 	GetInt (ifs, "SelVesselRange", CfgUIPrm.SelVesselRange);
 	GetBool (ifs, "SelVesselFlat", CfgUIPrm.bSelVesselFlat);
+	if (GetReal (ifs, "UIScale", d) && d >= 0.5 && d <= 2.5)
+		CfgUIPrm.UIScale = (float)d;
+	GetBool (ifs, "LaunchpadBackdrop", CfgUIPrm.bLaunchpadBackdrop);
 
 	// demo parameters
 	GetBool (ifs, "DemoMode", CfgDemoPrm.bDemo);
@@ -1337,6 +1342,10 @@ BOOL Config::Write (const char *fname) const
 			ofs << "SelVesselRange = " << CfgUIPrm.SelVesselRange << '\n';
 		if (CfgUIPrm.bSelVesselFlat != CfgUIPrm_default.bSelVesselFlat || bEchoAll)
 			ofs << "SelVesselFlat = " << BoolStr (CfgUIPrm.bSelVesselFlat) << '\n';
+		if (CfgUIPrm.UIScale != CfgUIPrm_default.UIScale || bEchoAll)
+			ofs << "UIScale = " << CfgUIPrm.UIScale << '\n';
+		if (CfgUIPrm.bLaunchpadBackdrop != CfgUIPrm_default.bLaunchpadBackdrop || bEchoAll)
+			ofs << "LaunchpadBackdrop = " << BoolStr (CfgUIPrm.bLaunchpadBackdrop) << '\n';
 	}
 
 	if (memcmp (&CfgDemoPrm, &CfgDemoPrm_default, sizeof(CFG_DEMOPRM)) || bEchoAll) {

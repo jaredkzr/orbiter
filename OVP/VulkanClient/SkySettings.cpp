@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "SkySettings.h"
+#include "GfxSettings.h"
 #include "OrbiterAPI.h"
 #include "GraphicsAPI.h"
 #include <algorithm>
@@ -71,15 +72,18 @@ void SkySettings::Load (oapi::GraphicsClient *gc)
 		else if (key == "BakeBudget") bakeBudget = (float)std::clamp (atof (val.c_str ()), 0.25, 50.0);
 		else oapiWriteLogV ("VulkanClient: %s: unknown setting %s", SETTINGS, key.c_str ());
 	}
+	// the display mode and the parts of the diffuse light: the graphics
+	// settings (also from Sky.cfg; with the environment's ORBITER_VK_SKY_MODE,
+	// _SKY_NEBULAE, _SKY_OBJECTS, _ZODIACAL)
+	enhanced = vkc::Gfx ().skyEnhanced;
+	nebulae = vkc::Gfx ().nebulae;
+	galaxies = vkc::Gfx ().galaxies;
+	zodiacal = vkc::Gfx ().zodiacal;
 	// (tests)
-	if (const char *e = getenv ("ORBITER_VK_SKY_MODE")) enhanced = Same (e, "enhanced");
 	if (const char *e = getenv ("ORBITER_VK_SKY_CONTRAST")) contrast = (float)atof (e);
 	if (const char *e = getenv ("ORBITER_VK_SKY_HIGHLIGHTS")) highlight = (float)atof (e);
 	if (const char *e = getenv ("ORBITER_VK_SKY_SATURATION")) saturation = (float)atof (e);
 	if (const char *e = getenv ("ORBITER_VK_SKY_ENHANCE")) gain = (float)atof (e);
-	if (const char *e = getenv ("ORBITER_VK_SKY_NEBULAE")) nebulae = atoi (e) != 0;
-	if (const char *e = getenv ("ORBITER_VK_SKY_OBJECTS")) galaxies = atoi (e) != 0;
-	if (const char *e = getenv ("ORBITER_VK_ZODIACAL")) zodiacal = atoi (e) != 0;
 	if (const char *e = getenv ("ORBITER_VK_SKY_BUDGET")) bakeBudget = (float)atof (e);
 	if (const char *e = getenv ("ORBITER_VK_STARS")) stars = atoi (e) != 0;
 	oapiWriteLogV ("VulkanClient: sky: %s display, stars %s (to V = %.1f), diffuse light %s (x %.2f), nebulae %s, galaxies %s, zodiacal light %s, bake budget %.1f ms",

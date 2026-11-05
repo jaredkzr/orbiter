@@ -128,6 +128,14 @@ namespace vkc {
 		/// scale, ORBITER_VK_RENDER_SCALE; upscaled in post-processing)
 		VkExtent2D RenderExtent () const { return renderExtent; }
 		float RenderScale () const { return renderScale; }
+		/// Change the render scale (from the next frame: the scene images
+		/// are made again, SwapchainGeneration)
+		void SetRenderScale (float scale);
+		/// Change the render scale and the scene's multisampling at once
+		/// (when a session starts, before the scene's pipelines are made)
+		void Reconfigure (float scale, int samples);
+		/// The largest sample count up to req that the device supports
+		VkSampleCountFlagBits SupportedSamples (int req) const;
 
 		// Resource helpers
 		/// (shared: also used on the async compute queue, AsyncCompute)

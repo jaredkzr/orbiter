@@ -40,6 +40,9 @@ public:
 	HWND clbkCreateRenderWindow () override;
 	void clbkPostCreation () override;
 	void clbkOptionChanged (DWORD cat, DWORD item) override;
+	int clbkGetSettings (const oapi::GraphicsSetting **list) override;
+	void clbkSetSetting (int index, float value) override;
+	void clbkSaveSettings () override;
 	void clbkCloseSession (bool fastclose) override;
 	void clbkDestroyRenderWindow (bool fastclose) override;
 	bool clbkUseLaunchpadVideoTab () const override { return false; }
@@ -153,6 +156,9 @@ private:
 	std::unique_ptr<TestInput> testInput; // ORBITER_VK_TEST_INPUT: scripted input (tests)
 	std::string autoScreenshot;   // ORBITER_VK_SCREENSHOT: file written at frame autoScreenshotFrame
 	unsigned autoScreenshotFrame = 60;
+	bool shotNoUi = false;        // ORBITER_VK_SCREENSHOT_NOUI=1: the screenshot without the user interface
+	/// This frame is the screenshot's, taken without the user interface
+	bool CleanShotFrame () const { return shotNoUi && !autoScreenshot.empty() && frameCount + 1 == autoScreenshotFrame; }
 	unsigned frameCount = 0;
 	std::string videoDir;         // ORBITER_VK_VIDEO: frames written as PNGs before the screenshot frame
 	unsigned videoFrames = 0;     // ORBITER_VK_VIDEO_FRAMES

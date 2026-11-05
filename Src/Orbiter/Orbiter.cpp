@@ -29,6 +29,8 @@
 #include "Camera.h"
 #include "Pane.h"
 #include "Select.h"
+#include "DlgFlightMenu.h"
+#include "DlgKeyHelp.h"
 #include "DlgMgr.h"
 #include "Psys.h"
 #include "Base.h"
@@ -379,16 +381,23 @@ Orbiter::Orbiter ()
 	RegisterMenuCmd("Map",      "MenuInfoBar/map.png",      [](void *) {g_pOrbiter->DlgMgr()->EnsureEntry<DlgMap>();});
 	RegisterMenuCmd("MFD",      "MenuInfoBar/Default/ExtMFD.png", [](void *) {if (g_pOrbiter->GetMfdWindows()) g_pOrbiter->GetMfdWindows()->Open();});
 	RegisterMenuCmd("Record",   "MenuInfoBar/record.png",   [](void *) {g_pOrbiter->DlgMgr()->EnsureEntry<DlgRecorder>();});
+#ifdef _WIN32
 	RegisterMenuCmd("Help",     "MenuInfoBar/help.png",     [](void *) {
 			extern HELPCONTEXT DefHelpContext;
 			DefHelpContext.topic = (char*)"/mainmenu.htm";
 			g_pOrbiter->OpenHelp (&DefHelpContext);			
 		});
+#else
+	RegisterMenuCmd("Help",     "MenuInfoBar/help.png",     [](void *) {g_pOrbiter->OpenKeyHelp();}); // (no help viewer: the keys)
+#endif
 	RegisterMenuCmd("Save",     "MenuInfoBar/save.png",     [](void *) {g_pOrbiter->Quicksave();});
 #ifdef _WIN32
 	RegisterMenuCmd("Exit",     "MenuInfoBar/exit.png",     [](void *) {PostMessage(g_pOrbiter->GetRenderWnd(), WM_CLOSE, 0, 0);});
 #else
-	RegisterMenuCmd("Exit",     "MenuInfoBar/exit.png",     [](void *) {g_pOrbiter->CloseSession();});
+	// (closed after the frame, as the flight menu does: closing the session
+	// at once, from within the menu bar being drawn, ended its user
+	// interface under it - a crash)
+	RegisterMenuCmd("Exit",     "MenuInfoBar/exit.png",     [](void *) {g_pOrbiter->PlatformCloseRequest();});
 #endif
 
 }
@@ -805,7 +814,7 @@ HWND Orbiter::CreateRenderWindow (Config *pCfg, const char *scenario)
 	else {
 		pDlgMgr = new DialogManager(this, m_pConsole->WindowHandle());
 	}
-	if (pConfig->CfgRecPlayPrm.ReplayFrames > 1) {
+	if (pConfig->CfgRecPlayPrm.ReplayFrames > 1 && !bBackdrop) {
 		replay = new Replay ((size_t)pConfig->CfgRecPlayPrm.ReplayFrames); TRACENEW
 		pDlgMgr->AddEntry(replay);
 	}
@@ -911,7 +920,7 @@ HWND Orbiter::CreateRenderWindow (Config *pCfg, const char *scenario)
 		LOGOUT ("Finished initialising panels");
 	}
 
-	if (pCfg->CfgLogicPrm.bStartPaused) {
+	if (pCfg->CfgLogicPrm.bStartPaused && !bBackdrop) {
 		BeginTimeStep (true);
 		UpdateWorld(); // otherwise it doesn't get initialised during pause
 		EndTimeStep (true);
@@ -922,7 +931,7 @@ HWND Orbiter::CreateRenderWindow (Config *pCfg, const char *scenario)
 		m_pConsole->EchoIntro();
 
 	// the MFD windows of the last session
-	if (mfdWindows)
+	if (mfdWindows && !bBackdrop)
 		if (const char *path = MfdWindowsFile ()) mfdWindows->Restore (path);
 
 	// suppress throttle update on launch
@@ -940,7 +949,7 @@ void Orbiter::PreCloseSession()
 	// DEBUG
 	if (pDlgMgr)  { pDlgMgr->Clear(); }
 
-	if (gclient && pConfig->CfgDebugPrm.bSaveExitScreen) {
+	if (gclient && pConfig->CfgDebugPrm.bSaveExitScreen && !bBackdrop) {
 		// Render the scene once without the ImGui dialogs shown
 		// so they don't appear on the preview
 		Render3DEnvironment(true);
@@ -964,10 +973,14 @@ void Orbiter::CloseSession ()
 
 	if      (bRecord)   ToggleRecorder();
 	else if (bPlayback) EndPlayback();
-	const char* desc = pConfig->CfgDebugPrm.bSaveExitScreen ? "CurrentState_img" : "CurrentState";
-	SaveScenario (CurrentScenario, desc, 2);
+	// (the launchpad's backdrop session leaves the user's state and windows as they were)
+	if (!bBackdrop) {
+		const char* desc = pConfig->CfgDebugPrm.bSaveExitScreen ? "CurrentState_img" : "CurrentState";
+		SaveScenario (CurrentScenario, desc, 2);
+	}
 	if (mfdWindows) {
-		if (const char *path = MfdWindowsFile ()) mfdWindows->Save (path);
+		if (!bBackdrop)
+			if (const char *path = MfdWindowsFile ()) mfdWindows->Save (path);
 		mfdWindows->CloseAll ();
 	}
 	if (hScnInterp) {
@@ -1715,7 +1728,7 @@ VOID Orbiter::Quicksave ()
 	char desc[256], fname[256];
 	sprintf (desc, "Orbiter saved state at T = %0.0f", td.SimT0);
 	for (i = strlen(ScenarioName)-1; i > 0; i--)
-		if (ScenarioName[i-1] == '\\') break;
+		if (ScenarioName[i-1] == '\\' || ScenarioName[i-1] == '/') break; // (a path from the posix launchpad has '/')
 	sprintf (fname, "Quicksave\\%s %04d", ScenarioName+i, ++g_qsaveid);
 	if(SaveScenario (fname, desc, 0))
 		oapiAddNotification(OAPINOTIF_SUCCESS, "Scenario saved successfully", fname);
@@ -2559,6 +2572,19 @@ void Orbiter::KbdInputBuffered_System (char *kstate, DIDEVICEOBJECTDATA *dod, DW
 		if (!(dod[i].dwData & 0x80)) continue; // only process key down events
 		DWORD key = dod[i].dwOfs;
 
+		// Esc (no modifier): the flight menu
+		if (key == OAPI_KEY_ESCAPE && !KEYMOD_SHIFT(kstate) && !KEYMOD_CONTROL(kstate) && !KEYMOD_ALT(kstate) && pDlgMgr && gclient) {
+			DlgKeyHelp *keys = pDlgMgr->EntryExists<DlgKeyHelp>();
+			if (keys && keys->IsActive()) { // (the shortcut sheet closes first)
+				keys->Close();
+				continue;
+			}
+			DlgFlightMenu *menu = pDlgMgr->EntryExists<DlgFlightMenu>();
+			if (!menu) menu = pDlgMgr->MakeEntry<DlgFlightMenu>();
+			menu->Toggle();
+			continue;
+		}
+
 		if (keymap.IsLogicalKey(key, kstate, OAPI_LKEY_Pause))                TogglePause();
 		else if (keymap.IsLogicalKey(key, kstate, OAPI_LKEY_Quicksave))            Quicksave();
 		else if (keymap.IsLogicalKey(key, kstate, OAPI_LKEY_StepIncFOV))           SetFOV(ceil((g_camera->Aperture() * DEG + 1e-6) / 5.0) * 5.0 * RAD);
@@ -2567,7 +2593,7 @@ void Orbiter::KbdInputBuffered_System (char *kstate, DIDEVICEOBJECTDATA *dod, DW
 			CFG_UIPRM &prm = g_pOrbiter->Cfg()->CfgUIPrm;
 			prm.MenuMode = prm.MenuMode == 0 ? 2:0;
 		}
-		else if (keymap.IsLogicalKey(key, kstate, OAPI_LKEY_DlgHelp))              pDlgMgr->EnsureEntry<DlgHelp>();
+		else if (keymap.IsLogicalKey(key, kstate, OAPI_LKEY_DlgHelp))              OpenKeyHelp();
 		else if (keymap.IsLogicalKey(key, kstate, OAPI_LKEY_DlgCamera))            pDlgMgr->EnsureEntry<DlgCamera>();
 		else if (keymap.IsLogicalKey(key, kstate, OAPI_LKEY_DlgSimspeed))          pDlgMgr->EnsureEntry<DlgTacc>();
 		else if (keymap.IsLogicalKey(key, kstate, OAPI_LKEY_DlgCustomCmd))         pDlgMgr->EnsureEntry<DlgFunction>();
@@ -3038,6 +3064,14 @@ HWND Orbiter::OpenDialog (HINSTANCE hInstance, int id, DLGPROC pDlg, void *conte
 HWND Orbiter::OpenDialogEx (HINSTANCE hInstance, int id, DLGPROC pDlg, DWORD flag, void *context)
 {
 	return (pDlgMgr ? pDlgMgr->OpenDialogEx (hInstance, id, hRenderWnd, pDlg, flag, context) : NULL);
+}
+
+void Orbiter::OpenKeyHelp ()
+{
+	if (!pDlgMgr) return;
+	DlgKeyHelp *dlg = pDlgMgr->EntryExists<DlgKeyHelp>();
+	if (!dlg) dlg = pDlgMgr->MakeEntry<DlgKeyHelp>();
+	dlg->Toggle();
 }
 
 void Orbiter::OpenHelp (const HELPCONTEXT *hcontext)

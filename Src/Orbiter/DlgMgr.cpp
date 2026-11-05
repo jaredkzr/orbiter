@@ -6,6 +6,8 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include <stdio.h>
 #include "OrbiterAPI.h"
+#include "UiTheme.h"
+#include "IconsLucide.h"
 #include "DlgMgr.h"
 #include "UiAnchor.h"
 #include "resource.h"
@@ -486,103 +488,6 @@ DWORD WINAPI DlgThreadProc (void *data)
 
 DLLEXPORT ImGuiContext* GImGui = NULL;
 DLLEXPORT ImPlotContext* GImPlot = NULL;
-static void ApplyGlowTheme(const ImVec4& accent)
-{
-    ImGuiStyle& style = ImGui::GetStyle();
-    ImVec4* colors = style.Colors;
-
-    // Base backgrounds
-    const ImVec4 bgDark   = ImVec4(0.02f, 0.03f, 0.05f, 1.0f);
-    const ImVec4 bgMed    = ImVec4(0.07f, 0.08f, 0.12f, 1.0f);
-
-    // Glow layers
-    ImVec4 glowSoft   = ImVec4(accent.x, accent.y, accent.z, 0.20f);
-    ImVec4 glowMedium = ImVec4(accent.x, accent.y, accent.z, 0.35f);
-    ImVec4 glowStrong = ImVec4(accent.x * 1.2f, accent.y * 1.2f, accent.z * 1.2f, 1.0f);
-    ImVec4 title = ImVec4(accent.x * 0.2f, accent.y * 0.2f, accent.z * 0.2f, 1.0f);
-    ImVec4 titleActive = ImVec4(accent.x * 0.35f, accent.y * 0.35f, accent.z * 0.35f, 1.0f);
-
-    // Neon text: bright foreground + soft glow shadow
-    colors[ImGuiCol_Text]         = ImVec4(1, 1, 1, 1);
-    colors[ImGuiCol_TextDisabled] = ImVec4(0.4f, 0.4f, 0.44f, 1);
-
-    // Window backgrounds
-    colors[ImGuiCol_WindowBg] = bgDark;
-    colors[ImGuiCol_ChildBg]  = bgDark;
-    colors[ImGuiCol_PopupBg]  = bgMed;
-
-    // Glow-ish borders
-    colors[ImGuiCol_Border]       = glowMedium;
-    colors[ImGuiCol_BorderShadow] = ImVec4(0,0,0,0);
-
-    // Frames (inputs, checkboxes, sliders)
-    colors[ImGuiCol_FrameBg]        = bgMed;
-    colors[ImGuiCol_FrameBgHovered] = glowSoft;
-    colors[ImGuiCol_FrameBgActive]  = glowMedium;
-
-    // Buttons
-    colors[ImGuiCol_Button]        = glowSoft;
-    colors[ImGuiCol_ButtonHovered] = glowMedium;
-    colors[ImGuiCol_ButtonActive]  = glowStrong;
-
-    // Headers (collapsing header, tree node)
-    colors[ImGuiCol_Header]        = glowSoft;
-    colors[ImGuiCol_HeaderHovered] = glowMedium;
-    colors[ImGuiCol_HeaderActive]  = glowStrong;
-
-    // Checkmark & sliders use bright neon
-    colors[ImGuiCol_CheckMark]       = glowStrong;
-    colors[ImGuiCol_SliderGrab]      = glowMedium;
-    colors[ImGuiCol_SliderGrabActive]= glowStrong;
-
-    // Scrollbar
-    colors[ImGuiCol_ScrollbarBg]          = bgDark;
-    colors[ImGuiCol_ScrollbarGrab]        = glowSoft;
-    colors[ImGuiCol_ScrollbarGrabHovered] = glowMedium;
-    colors[ImGuiCol_ScrollbarGrabActive]  = glowStrong;
-
-    // Separators: bright neon lines
-    colors[ImGuiCol_Separator]        = glowMedium;
-    colors[ImGuiCol_SeparatorHovered] = glowStrong;
-    colors[ImGuiCol_SeparatorActive]  = glowStrong;
-
-    // Title bar
-    colors[ImGuiCol_TitleBg]          = title;
-    colors[ImGuiCol_TitleBgActive]    = titleActive;
-    colors[ImGuiCol_TitleBgCollapsed] = bgDark;
-
-    // Resize grip
-    colors[ImGuiCol_ResizeGrip]        = glowSoft;
-    colors[ImGuiCol_ResizeGripHovered] = glowMedium;
-    colors[ImGuiCol_ResizeGripActive]  = glowStrong;
-
-    // Tabs
-    colors[ImGuiCol_Tab]                = glowSoft;
-    colors[ImGuiCol_TabHovered]         = glowMedium;
-    colors[ImGuiCol_TabActive]          = glowMedium;
-    colors[ImGuiCol_TabUnfocused]       = ImVec4(glowSoft.x, glowSoft.y, glowSoft.z, 0.5f);
-    colors[ImGuiCol_TabUnfocusedActive] = glowMedium;
-
-    style.FrameRounding = 6;
-    style.GrabRounding  = 4;
-    style.WindowRounding = 4;
-
-    style.FrameBorderSize = 1.0f;
-    style.ChildBorderSize = 1.0f;
-    style.WindowBorderSize = 1.0f;
-}
-
-static void ImGuiSetStyle()
-{
-    ImVec4 green = ImVec4(0.0f, 1.0f, 0.0f, 1.0f);
-    ApplyGlowTheme(green);
-
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowMenuButtonPosition = ImGuiDir_Right;
-
-    style.Colors[ImGuiCol_Separator] = style.Colors[ImGuiCol_Button];
-}
-
 void DialogManager::InitImGui()
 {
 	if(!gc) return;
@@ -598,20 +503,19 @@ void DialogManager::InitImGui()
 	//io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
 	//io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
-	ImGuiSetStyle();
+	// the look (UiTheme.h): palette, sizes, fonts
+	ui::SetUserScale (pOrbiter->Cfg()->CfgUIPrm.UIScale);
+	ui::Apply ();
 
-	ImFontConfig icons_config;
-	icons_config.MergeMode = true;
-	icons_config.PixelSnapH = true;
-	icons_config.FontDataOwnedByAtlas = false;
-	
 	const CFG_FONTPRM &prm = g_pOrbiter->Cfg()->CfgFontPrm;
 
-	defaultFont = io.Fonts->AddFontFromFileTTF(prm.ImGui_DefaultFontFile, prm.ImGui_FontSize);
-	io.Fonts->AddFontFromFileTTF("Fonts/fa-solid-900.ttf", prm.ImGui_FontSize, &icons_config);
-	consoleFont = io.Fonts->AddFontFromFileTTF(prm.ImGui_ConsoleFontFile, prm.ImGui_FontSize);
-	monoFont = io.Fonts->AddFontFromFileTTF(prm.ImGui_MonospacedFontFile, prm.ImGui_FontSize);
-	manuscriptFont = io.Fonts->AddFontFromFileTTF(prm.ImGui_ManuscriptFontFile, prm.ImGui_FontSize);
+	const ui::Fonts &uf = ui::LoadFonts (prm.ImGui_DefaultFontFile, prm.ImGui_MonospacedFontFile, ui::SIZE_BODY);
+	defaultFont = uf.body;
+	monoFont = uf.mono;
+	consoleFont = io.Fonts->AddFontFromFileTTF(prm.ImGui_ConsoleFontFile, ui::SIZE_BODY);
+	if (!consoleFont) consoleFont = monoFont;
+	manuscriptFont = io.Fonts->AddFontFromFileTTF(prm.ImGui_ManuscriptFontFile, ui::SIZE_BODY);
+	if (!manuscriptFont) manuscriptFont = defaultFont;
 
 #ifdef _WIN32
 	ImGui_ImplWin32_Init(hWnd);
@@ -639,6 +543,8 @@ void DialogManager::ImGuiNewFrame()
 #ifdef _WIN32
 	ImGui_ImplWin32_NewFrame();
 #endif
+	ui::SetUserScale (pOrbiter->Cfg()->CfgUIPrm.UIScale);
+	ui::UpdateScale (ImGui::GetIO().DisplaySize.y);
 	ImGui::NewFrame();
 	uianchor::NewFrame();
 
@@ -654,12 +560,13 @@ void DialogManager::ImGuiNewFrame()
 		}
 	}
 
-	RenderNotifications();
+	if (!exclusive) RenderNotifications();
 
 	// We can't use a range-based loop here because Display() may unregister the current dialog
 	for (auto it = DlgImGuiList.begin(); it != DlgImGuiList.end();)
 	{
 		auto current = it++;
+		if (exclusive && *current != exclusive) continue;
 		if ((*current)->IsActive()) {
 			(*current)->Display();
 		}
@@ -681,8 +588,7 @@ ImFont *DialogManager::GetFont(ImGuiFont f)
 
 void DialogManager::SetMainColor(COLORREF col)
 {
-    ImVec4 color = ImVec4((col & 0xff) / 255.0f, ((col >> 8) & 0xff) / 255.0f, (col >> 16)/255.0f, 1.0f);
-    ApplyGlowTheme(color);
+	// (the dialogs no longer take the HUD's colour: UiTheme.h)
 }
 
 ImGuiDialog::~ImGuiDialog(){
@@ -706,12 +612,94 @@ bool ImGuiDialog::HandleHelpButton() {
 	return false;
 }
 
-void ImGuiDialog::Display() {
-	ImGui::SetNextWindowSize(ImVec2(defaultSize.width, defaultSize.height), ImGuiCond_FirstUseEver);
+namespace {
+	// Where a dialog opens: its remembered place, unless that is off the
+	// screen, ImGui's default or on another window; then the first free
+	// place down the right edge, then the left, below the info bars, clear
+	// of the other windows and the middle of the view (the vessel, the HUD)
+	ImVec2 DialogPlace (const char *name, ImVec2 size, bool &place)
+	{
+		ImGuiContext &g = *GImGui;
+		const ImGuiViewport *vp = ImGui::GetMainViewport ();
+		ImVec2 V0 = vp->Pos, V1 (vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y);
+		float m = ui::Px (16);
+		auto overlaps = [&](ImVec2 p, ImVec2 s) {
+			ImRect r (p, ImVec2(p.x + s.x, p.y + s.y));
+			r.Expand (ui::Px (6));
+			for (ImGuiWindow *w : g.Windows) {
+				if (!w->WasActive || w->Hidden || (w->Flags & (ImGuiWindowFlags_ChildWindow | ImGuiWindowFlags_Tooltip | ImGuiWindowFlags_Popup))) continue;
+				if (strcmp (w->Name, name) == 0) continue;
+				if (r.Overlaps (w->Rect ())) return true;
+			}
+			return false;
+		};
+		auto inside = [&](ImVec2 p, ImVec2 s) {
+			return p.x >= V0.x && p.y >= V0.y && p.x + s.x <= V1.x && p.y + s.y <= V1.y;
+		};
+		ImRect middle (ImVec2(V0.x + vp->Size.x * 0.32f, V0.y + vp->Size.y * 0.22f), ImVec2(V0.x + vp->Size.x * 0.68f, V0.y + vp->Size.y * 0.78f));
 
-	if(ImGui::Begin(name.c_str(), &active)) {
+		// the remembered place
+		ImVec2 pos;
+		bool have = false;
+		if (ImGuiWindow *w = ImGui::FindWindowByName (name)) pos = w->Pos, size = w->SizeFull, have = true;
+		else if (ImGuiWindowSettings *s = ImGui::FindWindowSettingsByID (ImHashStr (name))) {
+			pos = ImVec2((float)s->Pos.x, (float)s->Pos.y);
+			if (s->Size.x > 0 && s->Size.y > 0) size = ImVec2((float)s->Size.x, (float)s->Size.y);
+			have = true;
+		}
+		place = !have || !inside (pos, size) || (pos.x == 60.0f && pos.y == 60.0f) || overlaps (pos, size);
+		if (!place) return pos;
+
+		float top = V0.y + ui::Px (84), step = ui::Px (12);
+		for (int side = 0; side < 2; side++) {
+			float x = side == 0 ? V1.x - m - size.x : V0.x + m;
+			for (float y = top; y + size.y <= V1.y - m; y += step) {
+				ImVec2 p (x, y);
+				if (overlaps (p, size)) continue;
+				if (ImRect(p, ImVec2(p.x + size.x, p.y + size.y)).Overlaps (middle)) continue;
+				return p;
+			}
+		}
+		// (the edges taken: anywhere free, the middle too, from the top)
+		for (float y = top; y + size.y <= V1.y - m; y += step * 2)
+			for (float x = V1.x - m - size.x; x >= V0.x + m; x -= step * 2) {
+				ImVec2 p (x, y);
+				if (!overlaps (p, size)) return p;
+			}
+		// (no free place: cascade from the top right)
+		static int n = 0;
+		n = (n + 1) % 8;
+		return ImVec2(std::max (V0.x + m, V1.x - m - size.x - n * ui::Px (28)), top + n * ui::Px (28));
+	}
+}
+
+void PlaceDialog (const char *name, float width, float height)
+{
+	ImVec2 size (width * ui::Scale (), height * ui::Scale ());
+	ImGuiWindow *prev = ImGui::FindWindowByName (name);
+	if (!prev || !prev->WasActive) { // (opening)
+		bool place;
+		ImVec2 pos = DialogPlace (name, size, place);
+		if (place) ImGui::SetNextWindowPos (pos, ImGuiCond_Always);
+	}
+	ImGui::SetNextWindowSize(size, ImGuiCond_FirstUseEver);
+}
+
+void ImGuiDialog::Display() {
+	PlaceDialog (name.c_str(), defaultSize.width, defaultSize.height);
+
+	// (a taller title bar, the title clear of the window's edge)
+	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ui::Px(14), ui::Px(9)));
+	bool open = ImGui::Begin(name.c_str(), &active);
+	ImGui::PopStyleVar();
+	if(open) {
 		HandleHelpButton();
 		OnDraw();
+		// Esc closes the dialog that has the focus (not while typing)
+		if (ImGui::IsWindowFocused (ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().WantTextInput &&
+			ImGui::IsKeyPressed (ImGuiKey_Escape, false))
+			active = false;
+		ui::ScrollFade();
 	}
 	ImGui::End();
 	if (!active) OnClose();
@@ -771,11 +759,14 @@ static const ImVec4 notifcolors[4] = {
 };
 
 static const char *notificons[4] = {
-	ICON_FA_CIRCLE_CHECK,         // Success
-	ICON_FA_TRIANGLE_EXCLAMATION, // Warning
-	ICON_FA_CIRCLE_EXCLAMATION,	  // Error
-	ICON_FA_CIRCLE_INFO			  // Info
+	ICON_LC_CIRCLE_CHECK,    // Success
+	ICON_LC_TRIANGLE_ALERT,  // Warning
+	ICON_LC_CIRCLE_X,        // Error
+	ICON_LC_INFO             // Info
 };
+
+// the severity's colour (UiTheme.h)
+static const ui::Colour notifcolour[4] = { ui::SUCCESS, ui::CAUTION, ui::WARNING, ui::ACCENT };
 
 static duration_t notifduration[4] = {
 	3.0s,  // Success
@@ -863,9 +854,16 @@ static void RenderNotifications()
 	{
 		notif.UpdateState(now, height, dt);
 
+		// a card at the bottom right: a strip and an icon in the severity's
+		// colour, the title, the message dimmed below it
+		float m = ui::Px(16);
 		ImGui::PushStyleVar(ImGuiStyleVar_Alpha, notif.color.w);
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 5.f);
-		ImGui::SetNextWindowPos(ImVec2(vp_size.x - NOTIFY_PADDING_X, vp_size.y - NOTIFY_PADDING_Y - notif.height), ImGuiCond_Always, ImVec2(1.0f, 1.0f));
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, ui::Px(10));
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(ui::Px(16), ui::Px(12)));
+		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ui::Px(8), ui::Px(3)));
+		ImGui::PushStyleColor(ImGuiCol_WindowBg, ui::Col(ui::PANEL, 0.98f));
+		ImGui::SetNextWindowPos(ImVec2(vp_size.x - m, vp_size.y - m - notif.height), ImGuiCond_Always, ImVec2(1.0f, 1.0f));
+		ImGui::SetNextWindowSizeConstraints(ImVec2(ui::Px(300), 0), ImVec2(ui::Px(420), FLT_MAX));
 
 		// Generate new unique name for this notification
 		char window_name[32];
@@ -879,36 +877,43 @@ static void RenderNotifications()
 		// Prevent the notification from spawning outside the main window
 		ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
 		ImGui::Begin(window_name, NULL, wf);
+		ui::Colour sev = notifcolour[notif.type < 4 ? notif.type : OAPINOTIF_INFO];
+		{
+			ImGuiWindow *w = ImGui::GetCurrentWindow();
+			float r = ui::Px(10);
+			w->DrawList->AddRectFilled(w->Pos, ImVec2(w->Pos.x + ui::Px(4), w->Pos.y + w->Size.y), ui::Col32(sev), r, ImDrawFlags_RoundCornersLeft);
+		}
 
-		ImGui::PushTextWrapPos(vp_size.x / 2.0f);
+		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ui::Px(360));
 
-		ImGui::PushStyleColor(ImGuiCol_Text, notif.color);
+		ImGui::PushStyleColor(ImGuiCol_Text, ui::Col(sev));
 		ImGui::TextUnformatted(notif.icon);
 		ImGui::PopStyleColor();
 
-		ImGui::SameLine();
+		ImGui::SameLine(0, ui::Px(10));
+		ui::PushFont(ui::GetFonts().medium);
 		if(notif.occurrences > 1) {
-			ImGui::Text("%s (x%d)", notif.title.c_str(), notif.occurrences);
+			ImGui::Text("%s (\xC3\x97%d)", notif.title.c_str(), notif.occurrences);
 		} else {
 			ImGui::TextUnformatted(notif.title.c_str());
 		}
+		ui::PopFont();
 
 		if(notif.permanent)
 		{
-			ImGui::SameLine();
-			if (ImGui::SmallButton(ICON_FA_XMARK))
+			ImGui::SameLine(0, ui::Px(12));
+			if (ui::IconButton(ICON_LC_X, "Dismiss"))
 			{
 				// Change duration so that the notification will expire right now;
 				notif.duration = now - notif.creation - FADE_TIME;
 			}
 		}
 
-		// In case ANYTHING was rendered in the top, we want to add a small padding so the text (or icon) looks centered vertically
 		if (!notif.content.empty())
 		{
-			ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 5.0f); // Must be a better way to do this!!!!
-			ImGui::Separator();
+			ImGui::PushStyleColor(ImGuiCol_Text, ui::Col(ui::TEXT_DIM));
 			ImGui::TextUnformatted(notif.content.c_str()); // Render content text
+			ImGui::PopStyleColor();
 
 			// Allow copying error messages to the clipboard
 			if(notif.permanent) {
@@ -926,9 +931,10 @@ static void RenderNotifications()
 		}
 
 		ImGui::PopTextWrapPos();
-		ImGui::PopStyleVar(2);
+		ImGui::PopStyleColor();
+		ImGui::PopStyleVar(4);
 		// Save height for next notification
-		height += ImGui::GetWindowHeight() + NOTIFY_PADDING_MESSAGE_Y;
+		height += ImGui::GetWindowHeight() + ui::Px(NOTIFY_PADDING_MESSAGE_Y);
 
 		// End
 		ImGui::End();
@@ -1038,7 +1044,9 @@ namespace ImGui {
 		float width = (strlen(label)+1) * g.FontSize;
 		float offset = titleBarRect.Max.x - width - titleBarRect.Min.x - g.Style.FramePadding.x;
 		offset -= xoffset;
-		ImGui::SetCursorPos( ImVec2( offset, 0.0f ) );
+		// (centred in the title bar, whatever its height)
+		float y = std::max(0.0f, (titleBarRect.GetHeight() - (g.FontSize + 2.0f * style.FramePadding.y)) * 0.5f);
+		ImGui::SetCursorPos( ImVec2( offset, y ) );
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);   // no border
 		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0,0,0,0));
 		ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0,0,0,0));    // invisible border color		bool ret = ImGui::Button( label );
@@ -1203,7 +1211,14 @@ namespace ImGui {
 				state.state = AnimatedHeaderState::Open;
 		}
 
+		// (a neutral bar, the label in the medium weight: the accent marks selections)
+		ImGui::PushStyleColor(ImGuiCol_Header, ui::Col(ui::RAISED, 0.55f));
+		ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ui::Col(ui::RAISED_HOVER, 0.8f));
+		ImGui::PushStyleColor(ImGuiCol_HeaderActive, ui::Col(ui::RAISED_ACTIVE));
+		ui::PushFont(ui::GetFonts().medium, ImGui::GetStyle().FontSizeBase);
 		bool visible = ImGui::CollapsingHeader(label, flags);
+		ui::PopFont();
+		ImGui::PopStyleColor(3);
 
 		if(visible) {
 			switch(state.state) {

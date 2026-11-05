@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "SSR.h"
+#include "GfxSettings.h"
 #include <algorithm>
 #include <cstdlib>
 
@@ -64,7 +65,7 @@ namespace {
 bool ScreenReflections::Init (vkc::Context *c)
 {
 	ctx = c;
-	if (const char *e = getenv ("ORBITER_VK_SSR")) enabled = atoi (e) != 0;
+	enabled = vkc::Gfx ().ssr;
 	if (const char *e = getenv ("ORBITER_VK_SSR_DEBUG")) debug = atoi (e) != 0;
 	if (ctx->sceneSamples != VK_SAMPLE_COUNT_1_BIT) enabled = false; // (the scene image is resolved)
 

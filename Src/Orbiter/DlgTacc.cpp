@@ -11,6 +11,8 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "IconsFontAwesome6.h"
+#include "IconsLucide.h"
+#include "UiTheme.h"
 #include <algorithm>
 
 extern TimeData td;
@@ -38,36 +40,50 @@ static float SnapToDecimal(float v, float min_v, float max_v)
     return std::clamp(result, min_v, max_v);
 }
 
-DlgTacc::DlgTacc() : ImGuiDialog(ICON_FA_CLOCK " Orbiter: Time acceleration",{357,135}) {
+DlgTacc::DlgTacc() : ImGuiDialog(ICON_FA_CLOCK "  Time acceleration",{380,232}) {
 	SetHelp("html/orbiter.chm", "/timeacc.htm");
 }
 
 void DlgTacc::OnDraw() {
-    const ImVec2 button_sz(ImVec2(50, 20));
+    const ui::Fonts &f = ui::GetFonts();
+    bool running = g_pOrbiter->IsRunning();
 
-    if(ImGui::Button("0.1x", button_sz)) {
-        g_pOrbiter->SetWarpFactor (0.1);
+    // the time acceleration, large, and the state
+    ui::PushFont(f.mono, ui::SIZE_DISPLAY - 4.0f);
+    char big[32];
+    double w0 = td.Warp();
+    if (w0 >= 1e4) snprintf(big, sizeof(big), "%.0f\xC3\x97", w0);
+    else snprintf(big, sizeof(big), "%.*f\xC3\x97", w0 < 9.99 ? 1 : 0, w0);
+    ImGui::TextUnformatted(big);
+    ui::PopFont();
+    ImGui::SameLine(0, ui::Px(12));
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + ui::Px(10));
+    if (!running) ui::Badge(ICON_LC_PAUSE " PAUSED", ui::CAUTION);
+    else if (w0 == 1.0) ui::Badge("REAL TIME", ui::TEXT_DIM);
+    else ui::Badge(ICON_LC_FAST_FORWARD " ACCELERATED", ui::CAUTION);
+    ImGui::Dummy(ImVec2(0, ui::Px(4)));
+
+    // presets: a segmented control, the current one filled
+    static const struct { double w; const char *label; } presets[] = {
+        {0.1, "0.1\xC3\x97"}, {1.0, "1\xC3\x97"}, {10.0, "10\xC3\x97"}, {100.0, "100\xC3\x97"}, {1000.0, "1k\xC3\x97"}, {10000.0, "10k\xC3\x97"}
+    };
+    int n = IM_ARRAYSIZE(presets);
+    float gap = ui::Px(4);
+    float bw = (ImGui::GetContentRegionAvail().x - gap * (n - 1)) / n;
+    for (int i = 0; i < n; i++) {
+        bool cur = fabs(w0 - presets[i].w) < presets[i].w * 1e-3;
+        if (i) ImGui::SameLine(0, gap);
+        if (cur) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ui::Col(ui::ACCENT, 0.22f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ui::Col(ui::ACCENT, 0.30f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ui::Col(ui::ACCENT));
+        }
+        ui::PushFont(f.mono, ui::SIZE_SMALL + 0.5f);
+        if (ImGui::Button(presets[i].label, ImVec2(bw, 0))) g_pOrbiter->SetWarpFactor(presets[i].w);
+        ui::PopFont();
+        if (cur) ImGui::PopStyleColor(3);
     }
-    ImGui::SameLine();
-    if(ImGui::Button("1x", button_sz)) {
-        g_pOrbiter->SetWarpFactor (1.0);
-    }
-    ImGui::SameLine();
-    if(ImGui::Button("10x", button_sz)) {
-        g_pOrbiter->SetWarpFactor (10.0);
-    }
-    ImGui::SameLine();
-    if(ImGui::Button("100x", button_sz)) {
-        g_pOrbiter->SetWarpFactor (100.0);
-    }
-    ImGui::SameLine();
-    if(ImGui::Button("1000x", button_sz)) {
-        g_pOrbiter->SetWarpFactor (1000.0);
-    }
-    ImGui::SameLine();
-    if(ImGui::Button("10000x", button_sz)) {
-        g_pOrbiter->SetWarpFactor (10000.0);
-    }
+    ImGui::Dummy(ImVec2(0, ui::Px(2)));
 
     float warp = td.Warp();
     ImGui::SetNextItemWidth(-FLT_MIN);
@@ -133,10 +149,8 @@ void DlgTacc::OnDraw() {
 
     }
 
-    ImGui::NewLine(); 
-
-    ImGui::SetCursorPosX((ImGui::GetWindowSize().x - button_sz.x) * 0.5f);
-    if(ImGui::Button(g_pOrbiter->IsRunning()?"Pause":"Resume", button_sz))
+    ImGui::Dummy(ImVec2(0, ui::Px(6)));
+    if (running ? ui::SecondaryButton(ICON_LC_PAUSE "  Pause", ImVec2(-FLT_MIN, ImGui::GetFrameHeight() * 1.2f))
+                : ui::PrimaryButton(ICON_LC_PLAY "  Resume", ImVec2(-FLT_MIN, ImGui::GetFrameHeight() * 1.2f)))
         g_pOrbiter->TogglePause();
-
 }

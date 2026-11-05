@@ -16,7 +16,7 @@ extern Orbiter *g_pOrbiter;
 #include "imgui.h"
 #include "imgui_extras.h"
 
-DlgCapture::DlgCapture() : ImGuiDialog(ICON_FA_VOICEMAIL " Orbiter: Capture frames",{323,343}) {
+DlgCapture::DlgCapture() : ImGuiDialog(ICON_FA_VOICEMAIL "  Capture frames",{323,343}) {
 	SetHelp("html/orbiter.chm", "/capture.htm");
 }
 

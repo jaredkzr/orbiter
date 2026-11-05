@@ -379,3 +379,30 @@ char *Keymap::PrintStr (char *cbuf, WORD &key) const
 	return cbuf;
 }
 
+
+std::string Keymap::Label (int lfunc) const
+{
+	WORD key = func[lfunc], kbase = key & 0x00ff;
+	int i;
+	for (i = 0; i < NKEY; i++)
+		if (keyname[i].id == kbase) break;
+	if (!kbase || i == NKEY) return std::string ();
+	static const struct { const char *name, *label; } nice[] = {
+		{"ESC", "Esc"}, {"MINUS", "-"}, {"EQUALS", "="}, {"BACK", "Backspace"}, {"TAB", "Tab"},
+		{"LBRACKET", "["}, {"RBRACKET", "]"}, {"RETURN", "Enter"}, {"SEMICOLON", ";"}, {"APOSTROPHE", "'"},
+		{"GRAVE", "`"}, {"BACKSLASH", "\\"}, {"COMMA", ","}, {"PERIOD", "."}, {"SLASH", "/"},
+		{"MULTIPLY", "Num *"}, {"SPACE", "Space"}, {"CAPITAL", "Caps Lock"}, {"NUMLOCK", "Num Lock"},
+		{"SCROLL", "Scroll Lock"}, {"SUBTRACT", "Num \xE2\x88\x92"}, {"ADD", "Num +"}, {"DECIMAL", "Num ."},
+		{"NUMPADENTER", "Num Enter"}, {"DIVIDE", "Num /"}, {"SYSRQ", "Print"}, {"HOME", "Home"}, {"END", "End"},
+		{"UP", "\xE2\x86\x91"}, {"DOWN", "\xE2\x86\x93"}, {"LEFT", "\xE2\x86\x90"}, {"RIGHT", "\xE2\x86\x92"},
+		{"PGUP", "PgUp"}, {"PGDOWN", "PgDn"}, {"INSERT", "Ins"}, {"DELETE", "Del"}
+	};
+	std::string k = keyname[i].name;
+	if (k.compare (0, 6, "NUMPAD") == 0) k = "Num " + k.substr (6);
+	else for (auto &n : nice) if (k == n.name) { k = n.label; break; }
+	std::string mod;
+	if (key & KMOD_CTRL)  mod += "Ctrl+";
+	if (key & KMOD_ALT)   mod += "Alt+";
+	if (key & KMOD_SHIFT) mod += "Shift+";
+	return mod + k;
+}

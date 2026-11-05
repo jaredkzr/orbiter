@@ -3,6 +3,13 @@
 
 #include "ImageIO.h"
 #include <zlib.h>
+// (stb_image for JPEG only, its functions private to this file)
+#define STB_IMAGE_STATIC
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_JPEG
+#define STBI_NO_HDR
+#define STBI_NO_LINEAR
+#include "stb_image.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -195,5 +202,18 @@ bool image::ReadPNG (const std::string &path, uint32_t &w, uint32_t &h, std::vec
 		case 6: memcpy (d, s, 4); break;
 		}
 	}
+	return true;
+}
+
+bool image::ReadJPG (const std::string &path, uint32_t &w, uint32_t &h, std::vector<uint8_t> &rgba)
+{
+	std::string p (path);
+	for (auto &c : p) if (c == '\\') c = '/';
+	int iw, ih, n;
+	unsigned char *px = stbi_load (p.c_str(), &iw, &ih, &n, 4);
+	if (!px) return false;
+	w = (uint32_t)iw, h = (uint32_t)ih;
+	rgba.assign (px, px + (size_t)iw * ih * 4);
+	stbi_image_free (px);
 	return true;
 }

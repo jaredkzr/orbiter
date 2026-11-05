@@ -14,5 +14,7 @@ class DlgFunction : public ImGuiDialog {
 public:
     DlgFunction();
     void OnDraw() override;
+private:
+    char m_Filter[64] = "";
 };
 #endif // !__DLGFUNCTION_H

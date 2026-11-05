@@ -10,6 +10,7 @@
 
 #include "windows.h"
 #include "Orbitersdk.h"
+#include <string>
 
 // key modifier list
 #define KMOD_LSHIFT 0x0100
@@ -45,6 +46,10 @@ public:
 
 	WORD Key (int lfunc) const { return func[lfunc]; }
 	// key assigned to logical function lfunc (LOBYTE: key id; HIBYTE: modifier)
+
+	std::string Label (int lfunc) const;
+	// the key assigned to logical function lfunc, for display (e.g. "Ctrl+F1",
+	// "Num 5"); empty if none
 
 private:
 	bool IsMatchingModifier (char *kstate, WORD key) const;

@@ -3,6 +3,8 @@
 
 #define ORBITER_MODULE
 #include "VulkanClient.h"
+#include "Fsr.h"
+#include "GfxSettings.h"
 #include "SkySettings.h"
 #include "Scene.h"
 #include "VObjects.h"
@@ -90,6 +92,7 @@ void VulkanClient::Teardown ()
 bool VulkanClient::clbkInitialise ()
 {
 	if (!GraphicsClient::clbkInitialise ()) return false;
+	vkc::Gfx ().Load (); // (the graphics settings)
 	// the sky's data are required (ORBITER_VK_SKY=0: no sky, for tests)
 	const char *noSky = getenv ("ORBITER_VK_SKY");
 	if (!noSky || atoi (noSky)) {
@@ -146,6 +149,7 @@ bool VulkanClient::clbkInitialise ()
 	if (const char *shot = getenv ("ORBITER_VK_SCREENSHOT")) {
 		autoScreenshot = shot;
 		if (const char *n = getenv ("ORBITER_VK_SCREENSHOT_FRAME")) autoScreenshotFrame = (unsigned)atoi (n);
+		if (const char *n = getenv ("ORBITER_VK_SCREENSHOT_NOUI")) shotNoUi = *n && *n != '0';
 		// ORBITER_VK_VIDEO=<dir>: also write the ORBITER_VK_VIDEO_FRAMES frames
 		// before the screenshot (frame_NNNNN.png; sim times in times.txt)
 		if (const char *v = getenv ("ORBITER_VK_VIDEO")) {
@@ -210,6 +214,28 @@ void VulkanClient::clbkOptionChanged (DWORD cat, DWORD item)
 {
 	GraphicsClient::clbkOptionChanged (cat, item);
 	if (cat == OPTCAT_CELSPHERE && scene) scene->SkyOptionsChanged ();
+}
+
+int VulkanClient::clbkGetSettings (const oapi::GraphicsSetting **list)
+{
+	const auto &l = vkc::Gfx ().List (ctx.rayTracing, FsrUpscaler::Available ());
+	*list = l.data ();
+	return (int)l.size ();
+}
+
+void VulkanClient::clbkSetSetting (int index, float value)
+{
+	vkc::GfxSettings &g = vkc::Gfx ();
+	g.Set (index, value);
+	// (the settings that apply at once)
+	if (ready && scene) ctx.SetRenderScale (g.renderScale); // (else when the session starts)
+	if (postfx) postfx->bloomStrength = g.bloom, postfx->autoExposure = g.autoExposure;
+	if (scene) scene->ApplySettings ();
+}
+
+void VulkanClient::clbkSaveSettings ()
+{
+	vkc::Gfx ().Save ();
 }
 
 void VulkanClient::clbkCloseSession (bool fastclose)
@@ -334,14 +360,14 @@ void VulkanClient::clbkRenderScene ()
 	}
 	postfx->Apply (sceneImage, sceneSize);   // HDR scene -> backbuffer
 	ctx.GpuMark ("post");
-	Render2DOverlay (); // panels, MFDs and HUD
+	if (!CleanShotFrame ()) Render2DOverlay (); // panels, MFDs and HUD
 }
 
 void VulkanClient::clbkImGuiRenderDrawData ()
 {
 	if (!imguiReady) return;
 	ImGui::Render ();
-	if (frameActive) {
+	if (frameActive && !CleanShotFrame ()) {
 		r2d->Flush ();
 		ctx.BindBackbuffer (false);
 		ImGui_ImplVulkan_RenderDrawData (ImGui::GetDrawData(), ctx.Cmd());

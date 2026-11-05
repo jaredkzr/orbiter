@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "PostFX.h"
+#include "GfxSettings.h"
 #include <algorithm>
 
 #include "post.vert.h"
@@ -108,8 +109,8 @@ bool PostFX::Init (vkc::Context *c)
 	histBuf = ctx->CreateBuffer (HIST_BINS * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
 	stateBuf = ctx->CreateBuffer (4 * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
 	memset (stateBuf.mapped, 0, 4 * sizeof(float));
-	if (const char *e = getenv ("ORBITER_VK_AUTOEXPOSURE")) autoExposure = atoi (e) != 0;
-	if (const char *e = getenv ("ORBITER_VK_BLOOM")) bloomStrength = (float)atof (e);
+	autoExposure = vkc::Gfx ().autoExposure;
+	bloomStrength = vkc::Gfx ().bloom;
 
 	vs = ctx->CreateShaderModule (spv_post_vert, spv_post_vert_size);
 	downPipe = CreatePipeline (spv_bloom_down_frag, spv_bloom_down_frag_size, BLOOM_FORMAT, false, layout);

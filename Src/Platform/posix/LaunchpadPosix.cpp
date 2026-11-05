@@ -2,11 +2,16 @@
 // Licensed under the MIT License
 
 #include "LaunchpadPosix.h"
+#include "SettingsUI.h"
 #include "Orbiter.h"
 #include "Config.h"
 #include "Input.h"
 #include "imgui.h"
+#include "UiTheme.h"
+#include "IconsLucide.h"
+#include "UiAnchor.h"
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -138,6 +143,61 @@ namespace {
 		return blocks;
 	}
 
+	// ---- scenario information ------------------------------------------
+
+	/// "14 Mar 2001, 12:42 UTC" from a modified Julian date
+	std::string DateString (double mjd)
+	{
+		// (days since 1970-01-01 to the civil date: H. Hinnant's algorithm)
+		double days = std::floor (mjd);
+		long z = (long)days - 40587 + 719468;
+		long era = (z >= 0 ? z : z - 146096) / 146097;
+		long doe = z - era * 146097;
+		long yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+		long y = yoe + era * 400;
+		long doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+		long mp = (5 * doy + 2) / 153;
+		long d = doy - (153 * mp + 2) / 5 + 1;
+		long m = mp < 10 ? mp + 3 : mp - 9;
+		if (m <= 2) y++;
+		int minutes = (int)std::floor ((mjd - days) * 1440.0 + 0.5);
+		if (minutes >= 1440) minutes = 1439;
+		static const char *mon[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+		char buf[64];
+		snprintf (buf, sizeof(buf), "%ld %s %ld, %02d:%02d UTC", d, mon[m - 1], y, minutes / 60, minutes % 60);
+		return buf;
+	}
+
+	/// Draw text with extra space between the letters (a wordmark)
+	float SpacedText (ImDrawList *dl, ImVec2 p, const char *text, float spacing, ImU32 col, bool measure = false)
+	{
+		float x = p.x;
+		for (const char *c = text; *c; c++) {
+			char ch[2] = { *c, 0 };
+			if (!measure) dl->AddText (ImVec2(x, p.y), col, ch);
+			x += ImGui::CalcTextSize (ch).x + spacing;
+		}
+		return x - spacing - p.x;
+	}
+
+	/// The image file of a scenario ("" if none): <scenario>.jpg|png beside
+	/// it (Utils/ScenarioShots renders them), the current state's saved image
+	std::string ImageFile (const std::string &scnDir, const std::string &path)
+	{
+		std::vector<std::string> candidates;
+		if (path == "(Current state)") {
+			candidates = { "Images/CurrentState.jpg", "Images/CurrentState.png" };
+		} else {
+			candidates = { scnDir + path + ".jpg", scnDir + path + ".png" };
+		}
+		std::error_code ec;
+		for (auto &c : candidates) if (fs::exists (c, ec)) return c;
+		return "";
+	}
+
+	const char *RECENT_KEY = "Recent=";
+	constexpr size_t RECENT_MAX = 5;
+
 } // namespace
 
 // =======================================================================
@@ -145,15 +205,16 @@ namespace {
 PosixLaunchpad::PosixLaunchpad (Orbiter *orbiter): orbiter(orbiter)
 {
 	LoadState ();
-	if (const char *t = getenv ("ORBITER_LAUNCHPAD_TAB")) initTab = atoi (t);
+	if (const char *t = getenv ("ORBITER_LAUNCHPAD_TAB")) {
+		int p = atoi (t);
+		if (p >= 0 && p < NPAGE) page = (Page)p;
+	}
+	if (const char *t = getenv ("ORBITER_LAUNCHPAD_SETTINGS")) settingsPage = atoi (t);
 	if (const char *a = getenv ("ORBITER_LAUNCHPAD_AUTO")) {
 		autoScenario = a;
 		const char *r = getenv ("ORBITER_LAUNCHPAD_RUNS");
 		autoRuns = r ? atoi (r) : 1;
-		Node n;
-		n.path = autoScenario;
-		Select (n);
-		selScenario = autoScenario;
+		SelectPath (autoScenario);
 		scrollToSel = true;
 	}
 }
@@ -169,6 +230,7 @@ void PosixLaunchpad::ReleaseResources ()
 		image = NULL;
 	}
 	imagePath.clear();
+	imageFor.clear();
 }
 
 void PosixLaunchpad::Refresh ()
@@ -176,10 +238,12 @@ void PosixLaunchpad::Refresh ()
 	frame = 0;
 	scanned = false;
 	modulesScanned = false;
+	loading = false;
 	if (!selPath.empty()) {
 		// the description may have changed (e.g. the current state was saved)
-		std::string base = NativePath (orbiter->Cfg()->CfgDirPrm.ScnDir) + selPath;
-		desc = ReadDescription (selDirectory ? base : base + ".scn", selDirectory);
+		std::string p = selPath;
+		selPath.clear();
+		SelectPath (p);
 	}
 	ReleaseResources ();
 }
@@ -187,25 +251,111 @@ void PosixLaunchpad::Refresh ()
 void PosixLaunchpad::LoadState ()
 {
 	std::ifstream ifs (NativePath (orbiter->Cfg()->CfgDirPrm.ConfigDir) + STATE_FILE);
-	std::string line;
+	std::string line, sel;
 	while (std::getline (ifs, line)) {
-		if (line.compare (0, 9, "Scenario=") == 0) selScenario = selPath = Trim (line.substr (9));
-		else if (line.compare (0, 8, "Options=") == 0) optionsPage = atoi (line.c_str() + 8);
+		if (line.compare (0, 9, "Scenario=") == 0) sel = Trim (line.substr (9));
+		else if (line.compare (0, 9, "Settings=") == 0) settingsPage = atoi (line.c_str() + 9);
+		else if (line.compare (0, strlen (RECENT_KEY), RECENT_KEY) == 0 && recent.size() < RECENT_MAX) {
+			std::string r = Trim (line.substr (strlen (RECENT_KEY)));
+			if (!r.empty()) recent.push_back (r);
+		}
 	}
-	if (selScenario.empty()) selScenario = selPath = "(Current state)";
-	std::string base = NativePath (orbiter->Cfg()->CfgDirPrm.ScnDir) + selPath;
-	desc = ReadDescription (base + ".scn", false);
+	if (sel.empty()) sel = "(Current state)";
+	SelectPath (sel);
 }
 
 void PosixLaunchpad::SaveState () const
 {
 	std::ofstream ofs (NativePath (orbiter->Cfg()->CfgDirPrm.ConfigDir) + STATE_FILE);
 	ofs << "Scenario=" << selScenario << '\n';
-	ofs << "Options=" << optionsPage << '\n';
+	ofs << "Settings=" << (settings ? (int)settings->CurrentPage () : settingsPage) << '\n';
+	for (auto &r : recent) ofs << RECENT_KEY << r << '\n';
+}
+
+void PosixLaunchpad::AddRecent (const std::string &path)
+{
+	recent.erase (std::remove (recent.begin(), recent.end(), path), recent.end());
+	recent.insert (recent.begin(), path);
+	if (recent.size() > RECENT_MAX) recent.resize (RECENT_MAX);
 }
 
 // =======================================================================
 // Scenario descriptions
+
+PosixLaunchpad::ScenarioInfo PosixLaunchpad::ReadInfo (const std::string &path)
+{
+	ScenarioInfo inf;
+	std::ifstream ifs (path);
+	if (!ifs) return inf;
+	enum { NONE, ENV, FOCUS, SHIPS } sec = NONE;
+	std::string line, focus, vessel, cls, status, base;
+	struct Ship { std::string name, cls, status, base; };
+	std::vector<Ship> ships;
+	auto flush = [&]() {
+		if (!vessel.empty()) ships.push_back ({vessel, cls, status, base});
+		vessel.clear(); cls.clear(); status.clear(); base.clear();
+	};
+	while (std::getline (ifs, line)) {
+		if (!line.empty() && line.back() == '\r') line.pop_back();
+		std::string t = Trim (line);
+		if (t.compare (0, 17, "BEGIN_ENVIRONMENT") == 0) { sec = ENV; continue; }
+		if (t.compare (0, 11, "BEGIN_FOCUS") == 0) { sec = FOCUS; continue; }
+		if (t.compare (0, 11, "BEGIN_SHIPS") == 0) { sec = SHIPS; continue; }
+		if (t.compare (0, 4, "END_") == 0) { if (sec == SHIPS) flush (); sec = NONE; continue; }
+		std::istringstream ls (t);
+		std::string key;
+		ls >> key;
+		switch (sec) {
+		case ENV:
+			if (key == "System") ls >> inf.system;
+			else if (key == "Date") {
+				std::string kind;
+				double v;
+				if (ls >> kind >> v) {
+					if (kind == "MJD") inf.date = DateString (v);
+					else if (kind == "JD") inf.date = DateString (v - 2400000.5);
+				}
+			}
+			break;
+		case FOCUS:
+			if (key == "Ship") ls >> focus;
+			break;
+		case SHIPS:
+			if (t == "END") flush ();
+			else if (!line.empty() && !isspace ((unsigned char)line[0]) && vessel.empty()) {
+				size_t c = t.find (':');
+				vessel = Trim (t.substr (0, c));
+				cls = c == std::string::npos ? vessel : Trim (t.substr (c + 1));
+			} else if (key == "STATUS") {
+				std::string rest;
+				std::getline (ls, rest);
+				status = Trim (rest);
+			} else if (key == "BASE") {
+				std::string rest;
+				std::getline (ls, rest);
+				base = Trim (rest);
+				base = base.substr (0, base.find (':'));
+			}
+			break;
+		default:
+			break;
+		}
+	}
+	flush ();
+	for (auto &s : ships) {
+		if (!focus.empty() && s.name != focus) continue;
+		inf.vessel = s.name;
+		inf.cls = s.cls;
+		std::istringstream ss (s.status);
+		std::string state, body;
+		ss >> state >> body;
+		inf.body = body;
+		if (state == "Landed") inf.situation = s.base.empty() ? "Landed" : "Landed at " + s.base;
+		else if (state == "Orbiting") inf.situation = "In flight";
+		break;
+	}
+	return inf;
+}
 
 std::vector<PosixLaunchpad::TextBlock> PosixLaunchpad::ParseHtml (const std::string &html)
 {
@@ -326,6 +476,8 @@ void PosixLaunchpad::ScanDir (Node &node, const std::string &dir, const std::str
 	auto byName = [](const Node &a, const Node &b) { return Lower (a.name) < Lower (b.name); };
 	std::sort (dirs.begin(), dirs.end(), byName);
 	std::sort (files.begin(), files.end(), byName);
+	node.count = (int)files.size();
+	for (auto &d : dirs) node.count += d.count;
 	node.children = std::move (dirs);
 	for (auto &f : files) node.children.push_back (std::move (f));
 }
@@ -343,9 +495,21 @@ void PosixLaunchpad::Select (const Node &node)
 	if (selPath == node.path) return;
 	selPath = node.path;
 	selDirectory = node.directory;
+	selCount = node.count;
 	if (!node.directory) selScenario = node.path;
 	std::string base = NativePath (orbiter->Cfg()->CfgDirPrm.ScnDir) + node.path;
 	desc = ReadDescription (node.directory ? base : base + ".scn", node.directory);
+	info = node.directory ? ScenarioInfo() : ReadInfo (base + ".scn");
+}
+
+void PosixLaunchpad::SelectPath (const std::string &path)
+{
+	Node n;
+	n.path = path;
+	n.name = path.substr (path.find_last_of ('/') + 1);
+	std::error_code ec;
+	n.directory = fs::is_directory (NativePath (orbiter->Cfg()->CfgDirPrm.ScnDir) + path, ec);
+	Select (n);
 }
 
 // Returns true if a scenario was double-clicked
@@ -355,22 +519,36 @@ bool PosixLaunchpad::DrawTree (const Node &node, const std::string &f)
 	for (const auto &c : node.children) {
 		if (!Matches (c, f)) continue;
 		bool sel = (c.path == selPath);
+		ImGui::PushID (c.path.c_str());
 		if (c.directory) {
 			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick |
-				ImGuiTreeNodeFlags_SpanAvailWidth | (sel ? ImGuiTreeNodeFlags_Selected : 0);
+				ImGuiTreeNodeFlags_SpanFullWidth | ImGuiTreeNodeFlags_FramePadding | (sel ? ImGuiTreeNodeFlags_Selected : 0);
 			if (!f.empty()) ImGui::SetNextItemOpen (true);
 			else if (scrollToSel && selPath.compare (0, c.path.size() + 1, c.path + "/") == 0)
 				ImGui::SetNextItemOpen (true); // contains the selection
-			bool open = ImGui::TreeNodeEx (c.path.c_str(), flags, "%s", c.name.c_str());
+			bool open = ImGui::TreeNodeEx ("##dir", flags, "%s", c.name.c_str());
 			if (ImGui::IsItemClicked () && !ImGui::IsItemToggledOpen ()) Select (c);
+			// (the number of scenarios, right-aligned)
+			char cnt[16];
+			snprintf (cnt, sizeof(cnt), "%d", c.count);
+			ImVec2 rmax = ImGui::GetItemRectMax (), rmin = ImGui::GetItemRectMin ();
+			ImVec2 cs = ImGui::CalcTextSize (cnt);
+			ImGui::GetWindowDrawList()->AddText (ImVec2(rmax.x - cs.x - ui::Px (8), (rmin.y + rmax.y - cs.y) * 0.5f),
+				ui::Col32 (ui::TEXT_FAINT), cnt);
 			if (open) {
 				launch |= DrawTree (c, f);
 				ImGui::TreePop ();
 			}
 		} else {
 			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen |
-				ImGuiTreeNodeFlags_SpanAvailWidth | (sel ? ImGuiTreeNodeFlags_Selected : 0);
-			ImGui::TreeNodeEx (c.path.c_str(), flags, "%s", c.name.c_str());
+				ImGuiTreeNodeFlags_SpanFullWidth | ImGuiTreeNodeFlags_FramePadding | (sel ? ImGuiTreeNodeFlags_Selected : 0);
+			ImGui::PushStyleColor (ImGuiCol_Text, sel ? ui::Col (ui::TEXT) : ui::Col (ui::TEXT, 0.86f));
+			ImGui::TreeNodeEx ("##scn", flags, "%s", c.name.c_str());
+			ImGui::PopStyleColor ();
+			if (sel) { // (an accent bar at the selected scenario)
+				ImVec2 rmin = ImGui::GetItemRectMin (), rmax = ImGui::GetItemRectMax ();
+				ImGui::GetWindowDrawList()->AddRectFilled (rmin, ImVec2(rmin.x + ui::Px (3), rmax.y), ui::Col32 (ui::ACCENT), ui::Px (2));
+			}
 			if (ImGui::IsItemClicked ()) Select (c);
 			if (ImGui::IsItemHovered () && ImGui::IsMouseDoubleClicked (ImGuiMouseButton_Left)) launch = true;
 			if (sel && scrollToSel) {
@@ -378,6 +556,7 @@ bool PosixLaunchpad::DrawTree (const Node &node, const std::string &f)
 				scrollToSel = false;
 			}
 		}
+		ImGui::PopID ();
 	}
 	return launch;
 }
@@ -385,60 +564,45 @@ bool PosixLaunchpad::DrawTree (const Node &node, const std::string &f)
 // =======================================================================
 // User interface
 
-PosixLaunchpad::Action PosixLaunchpad::Draw ()
+PosixLaunchpad::Action PosixLaunchpad::Draw (bool backdrop)
 {
 	Action action = NONE;
 	const ImGuiViewport *vp = ImGui::GetMainViewport();
 
-	// background: a dark gradient (colours are linear: the render target is sRGB)
-	ImDrawList *bg = ImGui::GetBackgroundDrawList();
-	bg->AddRectFilledMultiColor (vp->Pos, ImVec2(vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y),
-		IM_COL32(0, 0, 2, 255), IM_COL32(0, 0, 2, 255), IM_COL32(1, 3, 8, 255), IM_COL32(1, 3, 8, 255));
-
-	float margin = std::max (16.0f, vp->Size.x * 0.04f);
-	ImGui::SetNextWindowPos (ImVec2(vp->Pos.x + margin, vp->Pos.y + margin));
-	ImGui::SetNextWindowSize (ImVec2(vp->Size.x - 2 * margin, vp->Size.y - 2 * margin));
-	ImGui::PushStyleVar (ImGuiStyleVar_WindowPadding, ImVec2(20, 16));
-	ImGui::Begin ("##launchpad", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-		ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
-	ImGui::PopStyleVar ();
-
-	// title
-	ImGui::PushFont (nullptr, ImGui::GetStyle().FontSizeBase * 2.0f);
-	ImGui::TextUnformatted ("ORBITER");
-	ImGui::PopFont ();
-	ImGui::SameLine ();
-	ImGui::SetCursorPosY (ImGui::GetCursorPosY() + ImGui::GetStyle().FontSizeBase * 0.7f);
-	ImGui::TextDisabled ("Space Flight Simulator  \xC2\xB7  build %06d", orbiter->GetVersion());
-	ImGui::Spacing ();
-
-	float footer = ImGui::GetFrameHeightWithSpacing() * 1.6f;
-	if (ImGui::BeginTabBar ("##tabs")) {
-		auto flag = [&](int tab) { return (frame == 0 && initTab == tab) ? ImGuiTabItemFlags_SetSelected : 0; };
-		if (ImGui::BeginTabItem ("Scenarios", nullptr, flag (0))) { DrawScenarioTab (action); ImGui::EndTabItem (); }
-		if (ImGui::BeginTabItem ("Options", nullptr, flag (1)))   { DrawOptionsTab ();        ImGui::EndTabItem (); }
-		if (ImGui::BeginTabItem ("Video", nullptr, flag (2)))     { DrawVideoTab ();          ImGui::EndTabItem (); }
-		if (ImGui::BeginTabItem ("Modules", nullptr, flag (3)))   { DrawModulesTab ();        ImGui::EndTabItem (); }
-		if (ImGui::BeginTabItem ("About", nullptr, flag (4)))     { DrawAboutTab ();          ImGui::EndTabItem (); }
-		ImGui::EndTabBar ();
+	if (loading) {
+		DrawLoading ();
+		return NONE;
 	}
+	DrawBackground (backdrop);
 
-	// footer: launch and exit buttons
-	ImGui::SetCursorPosY (ImGui::GetWindowHeight() - footer);
-	ImGui::Separator ();
-	ImGui::Checkbox ("Start paused", &orbiter->Cfg()->CfgLogicPrm.bStartPaused);
-	ImGui::SameLine ();
-	ImGui::TextDisabled ("  %s", selScenario.c_str());
-	float bw = ImGui::GetStyle().FontSizeBase * 7.0f;
-	ImGui::SameLine (ImGui::GetWindowWidth() - 2 * bw - 40);
-	if (ImGui::Button ("Exit", ImVec2(bw, 0))) action = EXIT;
-	ImGui::SameLine ();
-	ImGui::PushStyleColor (ImGuiCol_Button, ImVec4(0.10f, 0.45f, 0.20f, 1.0f));
-	ImGui::PushStyleColor (ImGuiCol_ButtonHovered, ImVec4(0.15f, 0.60f, 0.28f, 1.0f));
-	ImGui::BeginDisabled (selScenario.empty());
-	if (ImGui::Button ("Launch", ImVec2(bw, 0)) || ImGui::IsKeyPressed (ImGuiKey_Enter, false)) action = LAUNCH;
-	ImGui::EndDisabled ();
-	ImGui::PopStyleColor (2);
+	ImGui::SetNextWindowPos (vp->Pos);
+	ImGui::SetNextWindowSize (vp->Size);
+	ImGui::PushStyleVar (ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+	ImGui::PushStyleVar (ImGuiStyleVar_WindowBorderSize, 0.0f);
+	ImGui::Begin ("##launchpad", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+		ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoBackground |
+		ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+	ImGui::PopStyleVar (2);
+
+	float margin = std::max (ui::Px (28), vp->Size.x * 0.022f);
+	float headerH = ui::Px (52);
+	DrawHeader (vp->Pos.x + margin, vp->Pos.y + margin * 0.8f, vp->Size.x - 2 * margin);
+	float top = vp->Pos.y + margin * 0.8f + headerH + ui::Px (14);
+	float h = vp->Pos.y + vp->Size.y - margin - top;
+	float x = vp->Pos.x + margin, w = vp->Size.x - 2 * margin;
+
+	switch (page) {
+	case SCENARIOS: DrawScenarios (action, x, top, w, h); break;
+	case SETTINGS:  DrawSettings (x, top, w, h); break;
+	case ADDONS:    DrawAddons (x, top, w, h); break;
+	case ABOUT:     DrawAbout (x, top, w, h); break;
+	default: break;
+	}
+	if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed (ImGuiKey_Q, false)) exitRequest = true;
+	if (exitRequest) {
+		exitRequest = false;
+		action = EXIT;
+	}
 
 	ImGui::End ();
 
@@ -452,12 +616,66 @@ PosixLaunchpad::Action PosixLaunchpad::Draw ()
 	} else if (!autoScenario.empty() && frame == 40)
 		action = EXIT;
 
-	if (action != NONE) SaveState ();
 	if (action == LAUNCH && selScenario.empty()) action = NONE;
+	if (action == LAUNCH) AddRecent (selScenario);
+	if (action != NONE) SaveState ();
 	return action;
 }
 
-void PosixLaunchpad::DrawScenarioTab (Action &action)
+void PosixLaunchpad::DrawBackground (bool backdrop)
+{
+	const ImGuiViewport *vp = ImGui::GetMainViewport();
+	ImDrawList *bg = ImGui::GetBackgroundDrawList();
+	ImVec2 p0 = vp->Pos, p1 (vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y);
+	if (!backdrop) {
+		// no scene: deep space blue, lighter towards the bottom
+		ImU32 top = ui::Col32 (ui::BACKDROP), bot = ImGui::ColorConvertFloat4ToU32 (ui::Srgb (0x0B1630));
+		bg->AddRectFilledMultiColor (p0, p1, top, top, bot, bot);
+	}
+	// shade under the header and along the bottom, so that the text reads
+	// over a bright scene
+	float hh = ui::Px (150);
+	ImU32 dark = ui::Col32 (ui::BACKDROP, backdrop ? 0.7f : 0.0f), clear = ui::Col32 (ui::BACKDROP, 0.0f);
+	if (backdrop) // (over the scene, under the windows)
+		bg->AddRectFilledMultiColor (p0, ImVec2(p1.x, p0.y + hh), dark, dark, clear, clear);
+}
+
+void PosixLaunchpad::DrawHeader (float x, float y, float w)
+{
+	ImDrawList *dl = ImGui::GetWindowDrawList();
+	const ui::Fonts &f = ui::GetFonts();
+
+	// wordmark
+	ui::PushFont (f.strong, 26.0f);
+	float ww = SpacedText (dl, ImVec2(x, y), "ORBITER", ui::Px (5), ui::Col32 (ui::TEXT));
+	float lh = ImGui::GetFontSize ();
+	ui::PopFont ();
+	ui::PushFont (f.medium, ui::SIZE_SMALL);
+	float sh = ImGui::GetFontSize ();
+	SpacedText (dl, ImVec2(x + ww + ui::Px (16), y + lh - sh - ui::Px (3)), "SPACE FLIGHT SIMULATOR", ui::Px (2.5f), ui::Col32 (ui::TEXT_DIM));
+	ui::PopFont ();
+
+	// pages, right-aligned, and the power button
+	static const char *names[NPAGE] = { "Scenarios", "Settings", "Add-ons", "About" };
+	float gap = ui::Px (30);
+	ui::PushFont (f.medium, ui::SIZE_LARGE);
+	float tw = 0;
+	for (int i = 0; i < NPAGE; i++) tw += ImGui::CalcTextSize (names[i]).x + gap;
+	ui::PopFont ();
+	float bx = x + w - ImGui::GetFrameHeight () - ui::Px (4);
+	float tx = bx - ui::Px (12) - tw;
+	for (int i = 0; i < NPAGE; i++) {
+		ImGui::SetCursorScreenPos (ImVec2(tx, y + ui::Px (2)));
+		if (ui::NavTab (names[i], page == i)) page = (Page)i;
+		tx = ImGui::GetItemRectMax().x + gap;
+	}
+	ImGui::SetCursorScreenPos (ImVec2(bx, y));
+	if (ui::IconButton (ICON_LC_POWER, "Quit Orbiter (Ctrl+Q)")) exitRequest = true;
+}
+
+// ---- scenarios ------------------------------------------------------------
+
+void PosixLaunchpad::DrawScenarios (Action &action, float x, float y, float w, float h)
 {
 	if (!scanned) {
 		root = Node();
@@ -472,256 +690,297 @@ void PosixLaunchpad::DrawScenarioTab (Action &action)
 		scrollToSel = true;
 	}
 
-	float footer = ImGui::GetFrameHeightWithSpacing() * 1.6f + ImGui::GetStyle().ItemSpacing.y;
-	float h = ImGui::GetContentRegionAvail().y - footer;
-	if (ImGui::BeginTable ("##scn", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_NoHostExtendY, ImVec2(0, h))) {
-		ImGui::TableSetupColumn ("list", ImGuiTableColumnFlags_WidthStretch, 0.4f);
-		ImGui::TableSetupColumn ("desc", ImGuiTableColumnFlags_WidthStretch, 0.6f);
-		ImGui::TableNextRow ();
+	float gap = ui::Px (20);
+	float lw = std::clamp (w * 0.27f, ui::Px (340), ui::Px (520));
+	float rw = std::clamp (w * 0.36f, ui::Px (440), ui::Px (760));
+	if (lw + rw + gap > w) rw = w - lw - gap;
 
-		ImGui::TableNextColumn ();
-		ImGui::SetNextItemWidth (-FLT_MIN);
-		ImGui::InputTextWithHint ("##filter", "Search scenarios", filter, sizeof(filter));
-		ImGui::BeginChild ("##tree", ImVec2(0, 0), ImGuiChildFlags_None);
-		if (DrawTree (root, Lower (Trim (filter))) && !selDirectory) action = LAUNCH;
-		ImGui::EndChild ();
+	ImGui::SetCursorScreenPos (ImVec2(x, y));
+	if (ui::BeginPanel ("##browser", ImVec2(lw, h))) DrawBrowser (action);
+	ui::EndPanel ();
 
-		ImGui::TableNextColumn ();
-		ImGui::BeginChild ("##desc", ImVec2(0, 0), ImGuiChildFlags_None);
-		DrawDescription ();
-		ImGui::EndChild ();
-		ImGui::EndTable ();
+	ImGui::SetCursorScreenPos (ImVec2(x + w - rw, y));
+	if (ui::BeginPanel ("##preview", ImVec2(rw, h))) DrawPreview (action);
+	ui::EndPanel ();
+}
+
+void PosixLaunchpad::DrawBrowser (Action &action)
+{
+	const ui::Fonts &f = ui::GetFonts();
+	// search: the icon drawn inside the field
+	ImGui::PushStyleVar (ImGuiStyleVar_FramePadding, ImVec2(ui::Px (34), ui::Px (8)));
+	ImGui::SetNextItemWidth (-FLT_MIN);
+	ImGui::InputTextWithHint ("##filter", "Search scenarios", filter, sizeof(filter));
+	uianchor::SetItem ("launchpad.search");
+	ImGui::PopStyleVar ();
+	{
+		ImVec2 r0 = ImGui::GetItemRectMin (), r1 = ImGui::GetItemRectMax ();
+		float ih = ImGui::GetFontSize ();
+		ImGui::GetWindowDrawList()->AddText (ImVec2(r0.x + ui::Px (11), (r0.y + r1.y - ih) * 0.5f),
+			ui::Col32 (ui::TEXT_DIM), ICON_LC_SEARCH);
 	}
+	std::string flt = Lower (Trim (filter));
+
+	ImGui::PushStyleVar (ImGuiStyleVar_FramePadding, ImVec2(ui::Px (8), ui::Px (5)));
+	ImGui::PushStyleVar (ImGuiStyleVar_ItemSpacing, ImVec2(ui::Px (8), ui::Px (1)));
+	ImGui::PushStyleVar (ImGuiStyleVar_IndentSpacing, ui::Px (16));
+	ImGui::BeginChild ("##tree", ImVec2(0, 0), ImGuiChildFlags_None);
+
+	// recently launched
+	if (flt.empty() && !recent.empty()) {
+		ui::SectionHeader ("Recent");
+		for (auto &r : recent) {
+			std::string name = r.substr (r.find_last_of ('/') + 1);
+			std::string dir = r.find ('/') == std::string::npos ? "" : r.substr (0, r.find_last_of ('/'));
+			ImGui::PushID (r.c_str());
+			bool sel = (r == selPath);
+			std::string lbl = std::string (ICON_LC_HISTORY) + "  " + name;
+			if (ImGui::Selectable (lbl.c_str(), sel, ImGuiSelectableFlags_AllowDoubleClick, ImVec2(0, ImGui::GetFrameHeight ()))) {
+				SelectPath (r);
+				scrollToSel = true;
+				if (ImGui::IsMouseDoubleClicked (ImGuiMouseButton_Left)) action = LAUNCH;
+			}
+			if (!dir.empty()) {
+				ImVec2 rmax = ImGui::GetItemRectMax (), rmin = ImGui::GetItemRectMin ();
+				ui::PushFont (f.body, ui::SIZE_SMALL);
+				ImVec2 ds = ImGui::CalcTextSize (dir.c_str());
+				ImGui::GetWindowDrawList()->AddText (ImVec2(rmax.x - ds.x - ui::Px (8), (rmin.y + rmax.y - ds.y) * 0.5f),
+					ui::Col32 (ui::TEXT_FAINT), dir.c_str());
+				ui::PopFont ();
+			}
+			ImGui::PopID ();
+		}
+		ImGui::Dummy (ImVec2(0, ui::Px (8)));
+	}
+
+	ui::SectionHeader (flt.empty() ? "All scenarios" : "Matching scenarios");
+	if (DrawTree (root, flt) && !selDirectory) action = LAUNCH;
+	ImGui::Dummy (ImVec2(0, ui::Px (6))); // (the last row clear of the fade)
+	ui::ScrollFade ();
+	ImGui::EndChild ();
+	ImGui::PopStyleVar (3);
+}
+
+void PosixLaunchpad::DrawPreview (Action &action)
+{
+	const ui::Fonts &f = ui::GetFonts();
+	float w = ImGui::GetContentRegionAvail().x;
+	float footer = ImGui::GetFrameHeight () * 1.5f + ui::Px (20) + 3 * ImGui::GetStyle().ItemSpacing.y;
+
+	ImGui::BeginChild ("##previewbody", ImVec2(0, previewFill.Height (footer)), ImGuiChildFlags_None);
+	DrawImage (w);
+
+	// title
+	std::string title = selPath.substr (selPath.find_last_of ('/') + 1);
+	if (!desc.empty() && desc[0].type == TextBlock::HEADING) title = desc[0].text;
+	ImGui::Dummy (ImVec2(0, ui::Px (6)));
+	ui::PushFont (f.strong, ui::SIZE_TITLE);
+	ImGui::PushTextWrapPos (0.0f);
+	ImGui::TextUnformatted (title.c_str());
+	ImGui::PopTextWrapPos ();
+	ui::PopFont ();
+
+	// what and where
+	auto meta = [&](const char *icon, const std::string &text) {
+		if (text.empty()) return;
+		std::string s = std::string (icon) + "  " + text;
+		ImVec2 ts = ImGui::CalcTextSize (s.c_str());
+		if (ImGui::GetCursorPosX () > ImGui::GetStyle().WindowPadding.x &&
+			ImGui::GetCursorPosX () + ts.x > ImGui::GetContentRegionMax().x) ImGui::NewLine ();
+		ImGui::PushStyleColor (ImGuiCol_Text, ui::Col (ui::TEXT_DIM));
+		ImGui::TextUnformatted (s.c_str());
+		ImGui::PopStyleColor ();
+		ImGui::SameLine (0, ui::Px (18));
+	};
+	ImGui::Dummy (ImVec2(0, ui::Px (2)));
+	if (selDirectory) {
+		char n[32];
+		snprintf (n, sizeof(n), "%d scenario%s", selCount, selCount == 1 ? "" : "s");
+		meta (ICON_LC_FOLDER, n);
+	} else {
+		std::string who = info.vessel.empty() ? "" : info.cls == info.vessel ? info.vessel : info.vessel + " (" + info.cls + ")";
+		meta (ICON_LC_ROCKET, who);
+		meta (ICON_LC_EARTH, info.body);
+		meta (info.situation.compare (0, 6, "Landed") == 0 ? ICON_LC_MAP_PIN : ICON_LC_ORBIT, info.situation);
+		meta (ICON_LC_CALENDAR, info.date);
+	}
+	ImGui::NewLine ();
+	ImGui::Dummy (ImVec2(0, ui::Px (4)));
+	ImVec2 p = ImGui::GetCursorScreenPos ();
+	ImGui::GetWindowDrawList()->AddLine (p, ImVec2(p.x + w, p.y), ui::Col32 (ui::DIVIDER), std::max (1.0f, ui::Scale ()));
+	ImGui::Dummy (ImVec2(0, ui::Px (10)));
+
+	DrawDescription ();
+	ui::ScrollFade ();
+	ImGui::EndChild ();
+	previewFill.PanelEnd ();
+
+	// actions
+	ImGui::Dummy (ImVec2(0, ui::Px (6)));
+	p = ImGui::GetCursorScreenPos ();
+	ImGui::GetWindowDrawList()->AddLine (p, ImVec2(p.x + w, p.y), ui::Col32 (ui::DIVIDER), std::max (1.0f, ui::Scale ()));
+	ImGui::Dummy (ImVec2(0, ui::Px (14)));
+	float bh = ImGui::GetFrameHeight () * 1.5f;
+	float y0 = ImGui::GetCursorPosY ();
+	ImGui::SetCursorPosY (y0 + (bh - ImGui::GetFrameHeight ()) * 0.5f);
+	ui::Toggle ("Start paused", &orbiter->Cfg()->CfgLogicPrm.bStartPaused);
+	float lw = ui::Px (170);
+	ImGui::SameLine (ImGui::GetContentRegionMax().x - lw);
+	ImGui::SetCursorPosY (y0);
+	ImGui::BeginDisabled (selScenario.empty() || selDirectory);
+	ImGui::PushStyleVar (ImGuiStyleVar_FrameRounding, ui::Px (8));
+	std::string lbl = std::string (ICON_LC_PLAY) + "  Launch";
+	if (ui::PrimaryButton (lbl.c_str(), ImVec2(lw, bh))) action = LAUNCH;
+	uianchor::SetItem ("launchpad.launch");
+	ImGui::PopStyleVar ();
+	ImGui::EndDisabled ();
+	previewFill.FooterEnd ();
+	if (!selDirectory && !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed (ImGuiKey_Enter, false)) action = LAUNCH;
+	if (!selDirectory && ImGui::IsKeyPressed (ImGuiKey_Enter, false) && ImGui::IsItemDeactivated ()) action = LAUNCH;
+}
+
+void PosixLaunchpad::LoadImage ()
+{
+	std::string key = selDirectory ? "" : selPath;
+	if (key == imageFor) return;
+	ReleaseResources ();
+	imageFor = key;
+	if (key.empty()) return;
+	std::string path = ImageFile (NativePath (orbiter->Cfg()->CfgDirPrm.ScnDir), key);
+	auto *gc = orbiter->GetGraphicsClient();
+	if (path.empty() || !gc) return;
+	image = gc->clbkLoadSurface (path.c_str(), OAPISURFACE_TEXTURE, true);
+	imagePath = path;
+	imageW = imageH = 0;
+	if (image) gc->clbkGetSurfaceSize (image, &imageW, &imageH);
+}
+
+void PosixLaunchpad::DrawImage (float w)
+{
+	LoadImage ();
+	float h = w * 9.0f / 16.0f;
+	ImVec2 p0 = ImGui::GetCursorScreenPos (), p1 (p0.x + w, p0.y + h);
+	ImDrawList *dl = ImGui::GetWindowDrawList ();
+	float r = ui::Px (8);
+	auto *gc = orbiter->GetGraphicsClient();
+	ImTextureID id = (image && imageW && imageH && gc) ? (ImTextureID)gc->clbkImGuiSurfaceTexture (image) : ImTextureID();
+	if (id) {
+		// (cropped to fill the frame)
+		float ia = (float)imageW / imageH, fa = w / h;
+		ImVec2 uv0 (0, 0), uv1 (1, 1);
+		if (ia > fa) { float c = (1.0f - fa / ia) * 0.5f; uv0.x = c, uv1.x = 1.0f - c; }
+		else         { float c = (1.0f - ia / fa) * 0.5f; uv0.y = c, uv1.y = 1.0f - c; }
+		dl->AddImageRounded (ImTextureRef(id), p0, p1, uv0, uv1, IM_COL32_WHITE, r);
+	} else {
+		// no image yet: a quiet placeholder
+		ImU32 a = ImGui::ColorConvertFloat4ToU32 (ui::Srgb (0x14203A)), b = ImGui::ColorConvertFloat4ToU32 (ui::Srgb (0x0A1020));
+		dl->AddRectFilled (p0, p1, b, r);
+		dl->AddRectFilledMultiColor (ImVec2(p0.x + r, p0.y), ImVec2(p1.x - r, p1.y), a, a, b, b);
+		const ui::Fonts &f = ui::GetFonts();
+		ui::PushFont (f.body, 54.0f);
+		const char *icon = selDirectory ? ICON_LC_FOLDER_OPEN : ICON_LC_ORBIT;
+		ImVec2 is = ImGui::CalcTextSize (icon);
+		dl->AddText (ImVec2((p0.x + p1.x - is.x) * 0.5f, (p0.y + p1.y - is.y) * 0.5f - ui::Px (8)), ui::Col32 (ui::TEXT_FAINT, 0.7f), icon);
+		ui::PopFont ();
+		ui::PushFont (f.medium, ui::SIZE_SMALL);
+		const char *t = selDirectory ? "Scenario folder" : "No preview yet";
+		ImVec2 ts = ImGui::CalcTextSize (t);
+		dl->AddText (ImVec2((p0.x + p1.x - ts.x) * 0.5f, (p0.y + p1.y + is.y) * 0.5f), ui::Col32 (ui::TEXT_FAINT), t);
+		ui::PopFont ();
+	}
+	dl->AddRect (p0, p1, ui::Col32 (ui::LINE, 0.8f), r, 0, std::max (1.0f, ui::Scale ()));
+	ImGui::Dummy (ImVec2(w, h));
 }
 
 void PosixLaunchpad::DrawDescription ()
 {
-	ImGui::Indent (8.0f);
-	// (heading from the entry's name, unless the description starts with one)
-	if (desc.empty() || desc[0].type != TextBlock::HEADING) {
-		std::string name = selPath.substr (selPath.find_last_of ('/') + 1);
-		ImGui::PushFont (nullptr, ImGui::GetStyle().FontSizeBase * 1.4f);
-		ImGui::TextWrapped ("%s", name.c_str());
-		ImGui::PopFont ();
-		ImGui::Spacing ();
-	}
+	const ui::Fonts &f = ui::GetFonts();
+	bool first = true;
+	ImGui::PushTextWrapPos (0.0f);
 	for (const auto &b : desc) {
+		if (first && b.type == TextBlock::HEADING) { first = false; continue; } // (the title)
+		first = false;
 		switch (b.type) {
 		case TextBlock::HEADING:
-			ImGui::Spacing ();
-			ImGui::PushFont (nullptr, ImGui::GetStyle().FontSizeBase * 1.4f);
-			ImGui::PushStyleColor (ImGuiCol_Text, ImVec4(0.55f, 0.85f, 1.0f, 1.0f));
-			ImGui::TextWrapped ("%s", b.text.c_str());
+			ImGui::Dummy (ImVec2(0, ui::Px (6)));
+			ui::PushFont (f.strong, ui::SIZE_LARGE);
+			ImGui::TextUnformatted (b.text.c_str());
+			ui::PopFont ();
+			ImGui::Dummy (ImVec2(0, ui::Px (2)));
+			break;
+		case TextBlock::ITEM: {
+			ImGui::PushStyleColor (ImGuiCol_Text, ui::Col (ui::ACCENT));
+			ImGui::TextUnformatted ("\xE2\x80\xA2");
 			ImGui::PopStyleColor ();
-			ImGui::PopFont ();
-			ImGui::Spacing ();
+			ImGui::SameLine (0, ui::Px (8));
+			ImGui::PushStyleColor (ImGuiCol_Text, ui::Col (ui::TEXT, 0.9f));
+			ImGui::TextUnformatted (b.text.c_str());
+			ImGui::PopStyleColor ();
 			break;
-		case TextBlock::ITEM:
-			ImGui::Bullet ();
-			ImGui::TextWrapped ("%s", b.text.c_str());
-			break;
+		}
 		default:
-			ImGui::TextWrapped ("%s", b.text.c_str());
-			ImGui::Spacing ();
+			ImGui::PushStyleColor (ImGuiCol_Text, ui::Col (ui::TEXT, 0.9f));
+			ImGui::TextUnformatted (b.text.c_str());
+			ImGui::PopStyleColor ();
+			ImGui::Dummy (ImVec2(0, ui::Px (4)));
 			break;
 		}
 	}
-
-	// the image saved with the current state
-	if (!selDirectory && selPath == "(Current state)") {
-		const char *candidates[] = { "Images/CurrentState.png", "Images/CurrentState.jpg" };
-		std::string path;
-		for (auto c : candidates) if (fs::exists (c)) { path = c; break; }
-		auto *gc = orbiter->GetGraphicsClient();
-		if (!path.empty() && gc && path != imagePath) {
-			ReleaseResources ();
-			image = gc->clbkLoadSurface (path.c_str(), OAPISURFACE_TEXTURE, true);
-			imagePath = path;
-			imageW = imageH = 0;
-			if (image) gc->clbkGetSurfaceSize (image, &imageW, &imageH);
-		}
-		if (image && imageW && imageH) {
-			ImGui::Spacing ();
-			float w = ImGui::GetContentRegionAvail().x - 8.0f;
-			ImTextureID id = (ImTextureID)gc->clbkImGuiSurfaceTexture (image);
-			if (id) ImGui::Image (ImTextureRef(id), ImVec2(w, w * imageH / imageW));
-		}
-	}
-	ImGui::Unindent (8.0f);
+	if (desc.empty() || (desc.size() == 1 && desc[0].type == TextBlock::HEADING))
+		ui::TextDim ("%s", selDirectory ? "Choose a scenario in this folder." : "This scenario has no description.");
+	ImGui::PopTextWrapPos ();
 }
 
-void PosixLaunchpad::DrawOptionsTab ()
+void PosixLaunchpad::DrawLoading ()
 {
-	static const char *pages[] = { "Visual", "Physics", "Controllers" };
-	Config *cfg = orbiter->Cfg();
-	float footer = ImGui::GetFrameHeightWithSpacing() * 1.6f + ImGui::GetStyle().ItemSpacing.y;
-	float h = ImGui::GetContentRegionAvail().y - footer;
-
-	ImGui::BeginChild ("##pages", ImVec2(ImGui::GetStyle().FontSizeBase * 10.0f, h), ImGuiChildFlags_Borders);
-	for (int i = 0; i < IM_ARRAYSIZE(pages); i++)
-		if (ImGui::Selectable (pages[i], optionsPage == i)) optionsPage = i;
-	ImGui::EndChild ();
-	ImGui::SameLine ();
-	ImGui::BeginChild ("##page", ImVec2(0, h));
-	ImGui::PushItemWidth (ImGui::GetStyle().FontSizeBase * 18.0f);
-
-	if (optionsPage == 0) {
-		CFG_VISUALPRM &v = cfg->CfgVisualPrm;
-		ImGui::SeparatorText ("Planets");
-		ImGui::Checkbox ("Cloud layers", &v.bClouds);
-		ImGui::BeginDisabled (!v.bClouds);
-		ImGui::Checkbox ("Cloud shadows", &v.bCloudShadows);
-		ImGui::EndDisabled ();
-		ImGui::Checkbox ("Horizon haze", &v.bHaze);
-		ImGui::Checkbox ("Distance fog", &v.bFog);
-		ImGui::Checkbox ("Specular water reflections", &v.bWaterreflect);
-		ImGui::BeginDisabled (!v.bWaterreflect);
-		ImGui::Checkbox ("Specular ripples", &v.bSpecularRipple);
-		ImGui::EndDisabled ();
-		ImGui::Checkbox ("Night lights", &v.bNightlights);
-		ImGui::BeginDisabled (!v.bNightlights);
-		float lb = (float)v.LightBrightness;
-		if (ImGui::SliderFloat ("Night light level", &lb, 0.0f, 1.0f, "%.2f")) v.LightBrightness = lb;
-		ImGui::EndDisabled ();
-		bool elev = v.ElevMode != 0;
-		if (ImGui::Checkbox ("Surface elevation", &elev)) v.ElevMode = elev ? 2 : 0;
-		ImGui::BeginDisabled (!elev);
-		int mode = std::max (0, v.ElevMode - 1);
-		const char *modes[] = { "Linear interpolation", "Cubic interpolation" };
-		ImGui::SetNextItemWidth (ImGui::GetStyle().FontSizeBase * 14.0f);
-		if (ImGui::Combo ("##elevmode", &mode, modes, 2) && elev) v.ElevMode = mode + 1;
-		ImGui::EndDisabled ();
-		int lvl = (int)v.PlanetMaxLevel;
-		if (ImGui::SliderInt ("Max. resolution level", &lvl, 1, SURF_MAX_PATCHLEVEL2)) v.PlanetMaxLevel = (DWORD)lvl;
-		// level of detail: +1 halves the screen size of the surface tiles
-		float bias = (float)orbiter->Cfg()->CfgPRenderPrm.ResolutionBias;
-		if (ImGui::SliderFloat ("Resolution bias", &bias, -2.0f, 2.0f, "%+.1f"))
-			orbiter->Cfg()->CfgPRenderPrm.ResolutionBias = bias;
-		if (ImGui::IsItemHovered ()) ImGui::SetTooltip ("Higher: finer surface meshes farther from the camera (slower)");
-		ImGui::BeginDisabled (!elev);
-		ImGui::Checkbox ("Procedural terrain detail", &v.bTerrainDetail);
-		if (ImGui::IsItemHovered ()) ImGui::SetTooltip ("Relief and craters finer than the elevation data (also for ground contact)");
-		ImGui::EndDisabled ();
-
-		ImGui::SeparatorText ("Vessels and objects");
-		ImGui::Checkbox ("Vessel shadows", &v.bVesselShadows);
-		ImGui::Checkbox ("Object shadows", &v.bShadows);
-		ImGui::Checkbox ("Specular reflections from objects", &v.bSpecular);
-		ImGui::Checkbox ("Re-entry flames", &v.bReentryFlames);
-		ImGui::Checkbox ("Particle streams", &v.bParticleStreams);
-		ImGui::Checkbox ("Local light sources", &v.bLocalLight);
-		int amb = (int)v.AmbientLevel;
-		if (ImGui::SliderInt ("Ambient level", &amb, 0, 255)) cfg->SetAmbientLevel ((DWORD)amb);
+	const ImGuiViewport *vp = ImGui::GetMainViewport();
+	ImDrawList *dl = ImGui::GetForegroundDrawList (const_cast<ImGuiViewport*>(vp));
+	ImVec2 p0 = vp->Pos, p1 (vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y);
+	dl->AddRectFilled (p0, p1, ui::Col32 (ui::BACKDROP));
+	LoadImage ();
+	auto *gc = orbiter->GetGraphicsClient();
+	ImTextureID id = (image && imageW && imageH && gc) ? (ImTextureID)gc->clbkImGuiSurfaceTexture (image) : ImTextureID();
+	if (id) { // (the scenario's image, filling the screen, dimmed)
+		float ia = (float)imageW / imageH, fa = vp->Size.x / vp->Size.y;
+		ImVec2 uv0 (0, 0), uv1 (1, 1);
+		if (ia > fa) { float c = (1.0f - fa / ia) * 0.5f; uv0.x = c, uv1.x = 1.0f - c; }
+		else         { float c = (1.0f - ia / fa) * 0.5f; uv0.y = c, uv1.y = 1.0f - c; }
+		dl->AddImage (ImTextureRef(id), p0, p1, uv0, uv1, ImGui::ColorConvertFloat4ToU32 (ImVec4(0.35f, 0.35f, 0.35f, 1)));
 	}
-	else if (optionsPage == 1) {
-		CFG_PHYSICSPRM &p = cfg->CfgPhysicsPrm;
-		ImGui::SeparatorText ("Physics engine");
-		ImGui::Checkbox ("Nonspherical gravity sources", &p.bNonsphericalGrav);
-		ImGui::Checkbox ("Gravity-gradient torque", &p.bDistributedMass);
-		ImGui::Checkbox ("Radiation pressure", &p.bRadiationPressure);
-		ImGui::Checkbox ("Atmospheric wind effects", &p.bAtmWind);
-		ImGui::SeparatorText ("Docking");
-		float v = (float)p.DockSpeedLimit;
-		if (ImGui::SliderFloat ("Max. closing speed [m/s]", &v, 0.05f, 5.0f, "%.2f")) p.DockSpeedLimit = v;
-		float a = (float)(p.DockAngleLimit * DEG);
-		if (ImGui::SliderFloat ("Max. misalignment [\xC2\xB0]", &a, 1.0f, 45.0f, "%.1f")) p.DockAngleLimit = a * RAD;
-	}
-	else {
-		CFG_JOYSTICKPRM &j = cfg->CfgJoystickPrm;
-		DIDEVICEINSTANCE *list;
-		DWORD ndev;
-		orbiter->GetInput()->GetJoysticks (&list, &ndev);
-		ImGui::SeparatorText ("Game controller");
-		const char *preview = (j.Joy_idx > 0 && j.Joy_idx <= ndev) ? list[j.Joy_idx-1].tszProductName : "<Disabled>";
-		ImGui::SetNextItemWidth (ImGui::GetStyle().FontSizeBase * 20.0f);
-		if (ImGui::BeginCombo ("Device", preview)) {
-			DWORD idx = j.Joy_idx;
-			if (ImGui::Selectable ("<Disabled>", idx == 0)) idx = 0;
-			for (DWORD i = 0; i < ndev; i++) {
-				ImGui::PushID ((int)i);
-				if (ImGui::Selectable (list[i].tszProductName, idx == i + 1)) idx = i + 1;
-				ImGui::PopID ();
-			}
-			ImGui::EndCombo ();
-			if (idx != j.Joy_idx) {
-				j.Joy_idx = idx;
-				orbiter->GetInput()->OptionChanged (OPTCAT_JOYSTICK, OPTITEM_JOYSTICK_DEVICE);
-			}
-		}
-		if (!ndev) ImGui::TextDisabled ("No controllers connected.");
+	ImU32 clear = ui::Col32 (ui::BACKDROP, 0.0f), dark = ui::Col32 (ui::BACKDROP, 0.85f);
+	dl->AddRectFilledMultiColor (ImVec2(p0.x, p1.y - ui::Px (320)), p1, clear, clear, dark, dark);
 
-		const OAPI_CONTROLLERSTATE *pad = orbiter->GetInput()->Gamepad ();
-		if (pad) {
-			ImGui::SeparatorText ("Gamepad controls");
-			if (ImGui::BeginTable ("##pad", 2, ImGuiTableFlags_SizingFixedFit)) {
-				static const char *rows[][2] = {
-					{"Left stick", "Pitch and bank"}, {"Shoulder buttons", "Yaw"},
-					{"Triggers", "Main engine (right: increase, left: decrease)"},
-					{"Right stick", "Rotate camera"}, {"A", "Kill rotation"}, {"B", "RCS mode"},
-					{"X", "HUD mode"}, {"Y", "Cockpit / external view"}, {"D-pad up/down", "Time acceleration"},
-					{"D-pad left/right", "Prograde / retrograde"}, {"Left stick button", "Level with horizon"},
-					{"Right stick button", "Reset cockpit camera"}, {"Start", "Pause"}, {"Back", "Main menu"},
-				};
-				for (auto &r : rows) {
-					ImGui::TableNextRow ();
-					ImGui::TableNextColumn (); ImGui::TextUnformatted (r[0]);
-					ImGui::TableNextColumn (); ImGui::TextDisabled ("%s", r[1]);
-				}
-				ImGui::EndTable ();
-			}
-		} else {
-			ImGui::BeginDisabled (j.Joy_idx == 0);
-			ImGui::SeparatorText ("Main engine control");
-			const char *axes[] = { "<Keyboard only>", "Z-axis", "Slider 0", "Slider 1" };
-			int ax = (int)j.ThrottleAxis;
-			ImGui::SetNextItemWidth (ImGui::GetStyle().FontSizeBase * 14.0f);
-			if (ImGui::Combo ("Throttle axis", &ax, axes, 4)) {
-				j.ThrottleAxis = (DWORD)ax;
-				orbiter->GetInput()->OptionChanged (OPTCAT_JOYSTICK, OPTITEM_JOYSTICK_PARAM);
-			}
-			ImGui::Checkbox ("Ignore throttle setting on launch", &j.bThrottleIgnore);
-			ImGui::SeparatorText ("Calibration");
-			ImGui::SliderInt ("Saturation", &j.ThrottleSaturation, 0, 10000);
-			ImGui::EndDisabled ();
-		}
-		ImGui::BeginDisabled (j.Joy_idx == 0);
-		ImGui::SliderInt ("Dead zone", &j.Deadzone, 0, 10000);
-		ImGui::EndDisabled ();
-	}
-	ImGui::PopItemWidth ();
-	ImGui::EndChild ();
+	const ui::Fonts &f = ui::GetFonts();
+	float m = ui::Px (56);
+	std::string title = selScenario.substr (selScenario.find_last_of ('/') + 1);
+	if (!desc.empty() && desc[0].type == TextBlock::HEADING) title = desc[0].text;
+	ui::PushFont (f.medium, ui::SIZE_SMALL);
+	float sh = ImGui::GetFontSize ();
+	ui::PopFont ();
+	ui::PushFont (f.strong, ui::SIZE_DISPLAY);
+	float th = ImGui::GetFontSize ();
+	dl->AddText (ImVec2(p0.x + m, p1.y - m - th), ui::Col32 (ui::TEXT), title.c_str());
+	ui::PopFont ();
+	ui::PushFont (f.medium, ui::SIZE_SMALL);
+	SpacedText (dl, ImVec2(p0.x + m, p1.y - m - th - sh - ui::Px (14)), "LOADING", ui::Px (3), ui::Col32 (ui::ACCENT));
+	ui::PopFont ();
+	// (a thin accent line under the title)
+	dl->AddRectFilled (ImVec2(p0.x + m, p1.y - m + ui::Px (12)), ImVec2(p0.x + m + ui::Px (72), p1.y - m + ui::Px (15)), ui::Col32 (ui::ACCENT), ui::Px (2));
 }
 
-void PosixLaunchpad::DrawVideoTab ()
+// ---- settings -------------------------------------------------------------
+
+void PosixLaunchpad::DrawSettings (float x, float y, float w, float h)
 {
-	CFG_DEVPRM &d = orbiter->Cfg()->CfgDevPrm;
-	ImGui::SeparatorText ("Render window");
-	ImGui::Checkbox ("Fullscreen (desktop resolution)", &d.bFullscreen);
-	ImGui::BeginDisabled (d.bFullscreen);
-	static const struct { int w, h; } sizes[] = {
-		{1280, 720}, {1280, 800}, {1600, 900}, {1920, 1080}, {1920, 1200}, {2560, 1440}, {3840, 2160}
-	};
-	char cur[32];
-	snprintf (cur, sizeof(cur), "%u x %u", d.WinW, d.WinH);
-	ImGui::SetNextItemWidth (ImGui::GetStyle().FontSizeBase * 10.0f);
-	if (ImGui::BeginCombo ("Window size", cur)) {
-		for (auto &s : sizes) {
-			char lbl[32];
-			snprintf (lbl, sizeof(lbl), "%d x %d", s.w, s.h);
-			if (ImGui::Selectable (lbl, (int)d.WinW == s.w && (int)d.WinH == s.h)) d.WinW = s.w, d.WinH = s.h;
-		}
-		ImGui::EndCombo ();
+	if (!settings) {
+		settings = std::make_unique<SettingsUI> (orbiter, SettingsUI::LAUNCHPAD);
+		settings->SelectPage ((SettingsUI::Page)std::clamp (settingsPage, 0, (int)SettingsUI::NPAGE - 1));
 	}
-	int wh[2] = { (int)d.WinW, (int)d.WinH };
-	ImGui::SetNextItemWidth (ImGui::GetStyle().FontSizeBase * 10.0f);
-	if (ImGui::InputInt2 ("Custom size", wh)) {
-		d.WinW = (DWORD)std::clamp (wh[0], 320, 16384);
-		d.WinH = (DWORD)std::clamp (wh[1], 200, 16384);
-	}
-	ImGui::EndDisabled ();
-	ImGui::Spacing ();
-	ImGui::TextDisabled ("Graphics options of the Vulkan client are set with ORBITER_VK_* environment variables (see OVP/VulkanClient).");
+	ImGui::SetCursorScreenPos (ImVec2(x, y));
+	settings->Draw (w, h, true);
 }
+
+// ---- add-ons ---------------------------------------------------------------
 
 void PosixLaunchpad::ScanModules ()
 {
@@ -743,40 +1002,98 @@ void PosixLaunchpad::ScanModules ()
 	modulesScanned = true;
 }
 
-void PosixLaunchpad::DrawModulesTab ()
+void PosixLaunchpad::DrawAddons (float x, float y, float w, float h)
 {
 	if (!modulesScanned) ScanModules ();
-	ImGui::TextDisabled ("Optional plugin modules (Modules/Plugin). Activated modules are loaded at once and stay active in later sessions.");
-	ImGui::Spacing ();
-	if (modules.empty()) ImGui::TextDisabled ("No plugin modules found.");
-	for (auto &m : modules) {
-		ImGui::BeginDisabled (m.locked);
-		bool act = m.active;
-		if (ImGui::Checkbox (m.name.c_str(), &act)) {
-			m.active = act;
-			if (act) {
-				orbiter->Cfg()->AddActiveModule (m.name);
-				orbiter->LoadModule ("Modules\\Plugin", m.name.c_str());
-			} else {
-				orbiter->Cfg()->DelActiveModule (m.name);
-				orbiter->UnloadModule (m.name);
-			}
+	const ui::Fonts &f = ui::GetFonts();
+	float cw = std::min (w, ui::Px (900));
+	ImGui::SetCursorScreenPos (ImVec2(x, y));
+	if (ui::BeginAutoPanel ("##addons", cw, h)) {
+		ui::SectionHeader ("Add-on modules");
+		ui::TextDim ("Optional plugin modules in Modules/Plugin. A module switched on is loaded at once and stays on in later sessions.");
+		ImGui::Dummy (ImVec2(0, ui::Px (8)));
+		if (modules.empty()) {
+			ImGui::Dummy (ImVec2(0, ui::Px (40)));
+			ui::PushFont (f.body, 48.0f);
+			float iw = ImGui::CalcTextSize (ICON_LC_PUZZLE).x;
+			ImGui::SetCursorPosX ((ImGui::GetContentRegionAvail().x - iw) * 0.5f + ImGui::GetStyle().WindowPadding.x);
+			ImGui::PushStyleColor (ImGuiCol_Text, ui::Col (ui::TEXT_FAINT));
+			ImGui::TextUnformatted (ICON_LC_PUZZLE);
+			ImGui::PopStyleColor ();
+			ui::PopFont ();
+			const char *t = "No add-on modules installed";
+			ui::PushFont (f.strong, ui::SIZE_LARGE);
+			ImGui::SetCursorPosX ((ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize (t).x) * 0.5f + ImGui::GetStyle().WindowPadding.x);
+			ImGui::TextUnformatted (t);
+			ui::PopFont ();
+			const char *s = "Add-ons for this build are compiled from source for Linux and placed in Modules/Plugin.";
+			ImGui::SetCursorPosX ((ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize (s).x) * 0.5f + ImGui::GetStyle().WindowPadding.x);
+			ui::TextDim ("%s", s);
 		}
-		ImGui::EndDisabled ();
-		if (m.locked && ImGui::IsItemHovered (ImGuiHoveredFlags_AllowWhenDisabled))
-			ImGui::SetTooltip ("Requested on the command line");
+		for (auto &m : modules) {
+			ImGui::BeginDisabled (m.locked);
+			bool act = m.active;
+			if (ui::Toggle (m.name.c_str(), &act)) {
+				m.active = act;
+				if (act) {
+					orbiter->Cfg()->AddActiveModule (m.name);
+					orbiter->LoadModule ("Modules\\Plugin", m.name.c_str());
+				} else {
+					orbiter->Cfg()->DelActiveModule (m.name);
+					orbiter->UnloadModule (m.name);
+				}
+			}
+			ImGui::EndDisabled ();
+			if (m.locked && ImGui::IsItemHovered (ImGuiHoveredFlags_AllowWhenDisabled))
+				ImGui::SetTooltip ("Requested on the command line");
+		}
 	}
+	ui::EndPanel ();
 }
 
-void PosixLaunchpad::DrawAboutTab ()
+// ---- about -----------------------------------------------------------------
+
+void PosixLaunchpad::DrawAbout (float x, float y, float w, float h)
 {
-	ImGui::Spacing ();
-	ImGui::TextUnformatted ("Orbiter Space Flight Simulator");
-	ImGui::TextDisabled ("Build %06d (%s)", orbiter->GetVersion(), __DATE__);
-	ImGui::Spacing ();
-	ImGui::TextWrapped ("Orbiter was created by Martin Schweiger and is developed as open source "
-		"software under the MIT license by the Orbiter community.");
-	ImGui::Spacing ();
-	ImGui::TextUnformatted ("https://github.com/orbitersim/orbiter");
-	ImGui::TextUnformatted ("https://www.orbiter-forum.com");
+	const ui::Fonts &f = ui::GetFonts();
+	float cw = std::min (w, ui::Px (760));
+	ImGui::SetCursorScreenPos (ImVec2(x, y));
+	if (ui::BeginAutoPanel ("##about", cw, h)) {
+		ImGui::Dummy (ImVec2(0, ui::Px (6)));
+		ui::PushFont (f.strong, ui::SIZE_TITLE);
+		ImGui::TextUnformatted ("Orbiter Space Flight Simulator");
+		ui::PopFont ();
+		ui::TextDim ("Build %06d  \xC2\xB7  %s", orbiter->GetVersion(), __DATE__);
+		ImGui::Dummy (ImVec2(0, ui::Px (10)));
+		ImGui::PushTextWrapPos (0.0f);
+		ImGui::TextUnformatted ("Orbiter was created by Martin Schweiger and is developed as open source "
+			"software under the MIT license by the Orbiter community.");
+		ImGui::PopTextWrapPos ();
+		ImGui::Dummy (ImVec2(0, ui::Px (6)));
+		ImGui::TextLinkOpenURL ("github.com/orbitersim/orbiter", "https://github.com/orbitersim/orbiter");
+		ImGui::TextLinkOpenURL ("orbiter-forum.com", "https://www.orbiter-forum.com");
+
+		ImGui::Dummy (ImVec2(0, ui::Px (14)));
+		ui::SectionHeader ("Third-party software and fonts");
+		if (ImGui::BeginTable ("##credits", 2, ImGuiTableFlags_SizingStretchProp)) {
+			static const char *rows[][2] = {
+				{"Dear ImGui, ImPlot", "MIT"},
+				{"SDL 3", "zlib"},
+				{"Vulkan Memory Allocator", "MIT"},
+				{"AMD FidelityFX SDK (FSR 3)", "MIT"},
+				{"Lua", "MIT"},
+				{"Inter (Rasmus Andersson)", "SIL Open Font License 1.1"},
+				{"JetBrains Mono", "SIL Open Font License 1.1"},
+				{"Lucide icons", "ISC"},
+				{"Font Awesome Free (icons)", "SIL OFL 1.1 / CC BY 4.0"},
+			};
+			for (auto &r : rows) {
+				ImGui::TableNextRow ();
+				ImGui::TableNextColumn (); ImGui::TextUnformatted (r[0]);
+				ImGui::TableNextColumn (); ui::TextDim ("%s", r[1]);
+			}
+			ImGui::EndTable ();
+		}
+	}
+	ui::EndPanel ();
 }

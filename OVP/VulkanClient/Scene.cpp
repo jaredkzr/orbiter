@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "Scene.h"
+#include "GfxSettings.h"
 #include "AO.h"
 #include "SSR.h"
 #include "RayTracing.h"
@@ -129,6 +130,9 @@ VkCommandBuffer Scene::Cmd () const
 bool Scene::Init ()
 {
 	ctx = gc->Ctx();
+	// the graphics settings that apply when a session starts
+	ctx->Reconfigure (vkc::Gfx ().renderScale, vkc::Gfx ().SceneSamples ());
+	vkc::Gfx ().MarkSessionStart ();
 	if (ctx->deviceProps.limits.maxPushConstantsSize < sizeof(MeshPushConstants))
 		oapiWriteLogError ("VulkanClient: device supports only %u bytes of push constants (%zu required)",
 			ctx->deviceProps.limits.maxPushConstantsSize, sizeof(MeshPushConstants));
@@ -252,16 +256,13 @@ bool Scene::Init ()
 	ssr->EnsureSize (ao->PrepassView (), ao->MaterialView (), ao->VelocityView ());
 	ssr->BeginFrame ();
 	WriteSSRDescriptors ();
-	if (const char *e = getenv ("ORBITER_VK_TAA")) taaEnabled = atoi (e) != 0;
+	taaEnabled = vkc::Gfx ().TemporalAA ();
 	taa = std::make_unique<TemporalAA>();
 	taa->Init (ctx);
-	// temporal upscaler: FSR 3 if built in (ORBITER_VK_UPSCALER = fsr or taa);
-	// it needs a single-sampled scene
+	// temporal upscaler: FSR 3 if built in and set (GfxSettings); it needs a
+	// single-sampled scene
 	fsr = std::make_unique<FsrUpscaler>();
-	if (taaEnabled && FsrUpscaler::Available () && ctx->sceneSamples == VK_SAMPLE_COUNT_1_BIT) {
-		const char *u = getenv ("ORBITER_VK_UPSCALER");
-		useFsr = !(u && !strcmp (u, "taa"));
-	}
+	useFsr = taaEnabled && FsrUpscaler::Available () && ctx->sceneSamples == VK_SAMPLE_COUNT_1_BIT && vkc::Gfx ().UseFsr ();
 	if (useFsr) fsr->Init (ctx);
 	oapiWriteLogV ("VulkanClient: temporal anti-aliasing: %s", !taaEnabled ? "off" : useFsr ? "FSR 3" : "TAA");
 	WriteAODescriptors ();
@@ -273,7 +274,7 @@ bool Scene::Init ()
 	atm->SetCloudVolume (vclouds->CoverageView (), vclouds->ClampSampler (), vclouds->ShapeNoiseView (), vclouds->RepeatSampler ());
 	// ray traced reflections (hardware ray queries)
 	rt = std::make_unique<RTScene>();
-	if (rt->Init (ctx, gc->TexMgr()) && ssr->enabled) {
+	if (rt->Init (ctx, gc->TexMgr()) && ssr->enabled && vkc::Gfx ().rtReflections) {
 		ssr->InitRT (frameLayout, rt->SetLayout(), rt->TextureLayout(), atm->SetLayout());
 		gc->TexMgr()->onDestroy = [this](VkTexture *t) { if (rt) rt->ForgetTexture (t); };
 	}
@@ -1076,7 +1077,7 @@ void Scene::UpdateCamera ()
 	// about half a second; the head lagging, a few tenths of a degree per
 	// m/s^2); ORBITER_VK_SHAKE scales it (0: off)
 	{
-		static const double scale = getenv ("ORBITER_VK_SHAKE") ? atof (getenv ("ORBITER_VK_SHAKE")) : 1.0;
+		const double scale = vkc::Gfx ().cameraShake;
 		VESSEL *v = oapiCameraInternal () && scale > 0.0 ? oapiGetFocusInterface () : nullptr;
 		double dt = oapiGetSimStep ();
 		if (v && dt > 0.0 && oapiGetTimeAcceleration () <= 2.0) {
@@ -1838,6 +1839,18 @@ void Scene::WriteCityDescriptors ()
 		wr.pImageInfo = dii;
 		vkUpdateDescriptorSets (ctx->device, 1, &wr, 0, nullptr);
 	}
+}
+
+void Scene::ApplySettings ()
+{
+	const vkc::GfxSettings &g = vkc::Gfx ();
+	bool single = ctx->sceneSamples == VK_SAMPLE_COUNT_1_BIT;
+	if (ao) ao->enabled = g.ao;
+	if (ssr) ssr->enabled = g.ssr && single;
+	if (vclouds) vclouds->enabled = g.clouds;
+	if (plumes) plumes->enabled = g.plumes, plumes->shimmer = g.shimmer && single;
+	if (particles) particles->enabled = g.particles, particles->density = std::clamp (g.particleDensity, 1.0f, 16.0f);
+	if (fsr) fsr->sharpness = g.sharpness;
 }
 
 void Scene::SkyOptionsChanged ()

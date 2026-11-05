@@ -14,6 +14,11 @@
 #include "imgui_extras.h"
 class ImGuiDialog;
 
+/// Before a dialog's ImGui::Begin: where it opens (its remembered place, or
+/// a free one: clear of the other windows and the middle of the view) and
+/// its first size [pixels at 1080 lines]
+void PlaceDialog (const char *name, float width, float height);
+
 class oapi::GraphicsClient;
 extern Orbiter *g_pOrbiter;
 
@@ -116,6 +121,7 @@ private:
 	// ImGui management
 	// ====================================================================
 	std::list<ImGuiDialog*> DlgImGuiList;
+	ImGuiDialog *exclusive = nullptr;
 public:
 	// Make sure that a dialog of type DlgType is open and return a pointer to it.
 	// This opens the dialog if not yet present.
@@ -153,6 +159,9 @@ public:
 		}
 		return nullptr;
 	}
+
+	/// Only this dialog is drawn (none: all); the launchpad over its backdrop session
+	void SetExclusive (ImGuiDialog *dlg) { exclusive = dlg; }
 
 	void AddEntry(ImGuiDialog* dlg)
 	{

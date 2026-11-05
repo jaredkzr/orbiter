@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "Fsr.h"
+#include "GfxSettings.h"
 #include "OrbiterAPI.h"
 #include <cfloat>
 #include <string>
@@ -164,7 +165,7 @@ bool FsrUpscaler::Available () { return true; }
 bool FsrUpscaler::Init (vkc::Context *ctx)
 {
 	impl->ctx = ctx;
-	if (const char *e = getenv ("ORBITER_VK_FSR_SHARPNESS")) sharpness = (float)atof (e);
+	sharpness = vkc::Gfx ().sharpness;
 	if (const char *e = getenv ("ORBITER_VK_FSR_DEBUG")) debugView = atoi (e) != 0;
 	return true;
 }

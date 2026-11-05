@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "Clouds.h"
+#include "GfxSettings.h"
 #include "PlanetSurface.h"
 #include "VkTexture.h"
 #include <algorithm>
@@ -108,7 +109,7 @@ vkc::Image VolumetricClouds::CreateImage (VkImageType type, VkFormat fmt, VkExte
 bool VolumetricClouds::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetLayout atmLayout)
 {
 	ctx = c, texmgr = tm;
-	if (const char *e = getenv ("ORBITER_VK_CLOUDS")) enabled = atoi (e) != 0;
+	enabled = vkc::Gfx ().clouds;
 
 	VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
 	sci.magFilter = sci.minFilter = VK_FILTER_LINEAR;

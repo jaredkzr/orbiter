@@ -30,6 +30,7 @@
 #include "Pane.h"
 #include "imgui.h"
 #include <cmath>
+#include <filesystem>
 #include <cstdio>
 #include <string>
 
@@ -110,12 +111,19 @@ INT Orbiter::Run ()
 	memset (platformKstate, 0, sizeof(platformKstate));
 	bPlatformClose = false;
 
+	// (the launchpad over a live scene, unless switched off; ORBITER_LAUNCHPAD_BACKDROP=0 for tests)
+	auto backdrop = [this]() {
+		const char *e = getenv ("ORBITER_LAUNCHPAD_BACKDROP");
+		if (e && *e) return *e != '0';
+		return pConfig->CfgUIPrm.bLaunchpadBackdrop;
+	};
+
 	int nsession = 0;
 	do {
-		if (launchpad && !RunLaunchpad (scenario)) break;
+		if (launchpad && !(backdrop () ? RunBackdrop (scenario) : RunLaunchpad (scenario))) break;
 		RunSession (scenario);
 		if (launchpad) printf ("Launchpad: session %d closed\n", ++nsession);
-	} while (launchpad && !bFastExit);
+	} while (launchpad && !bFastExit && !bExitRequested);
 
 	if (m_pPosixLaunchpad) {
 		delete m_pPosixLaunchpad;
@@ -168,12 +176,20 @@ namespace {
 	// the launchpad as a dialog of the dialog manager, which runs the ImGui frame
 	class LaunchpadDlg : public ImGuiDialog {
 	public:
-		LaunchpadDlg (PosixLaunchpad *lp): ImGuiDialog ("Launchpad"), lp(lp) { active = true; }
-		void Display () override { action = lp->Draw (); }
+		LaunchpadDlg (PosixLaunchpad *lp, bool backdrop = false): ImGuiDialog ("Launchpad"), lp(lp), backdrop(backdrop) { active = true; }
+		void Display () override { action = lp->Draw (backdrop); }
 		void OnDraw () override {}
 		PosixLaunchpad *lp;
+		bool backdrop;
 		PosixLaunchpad::Action action = PosixLaunchpad::NONE;
 	};
+
+	// the scene behind the launchpad
+	const char *BACKDROP_SCENARIO = "Config/Launchpad/Backdrop.scn";
+	// the camera sways around the vessel: amplitude [rad] and period [s]
+	// (a steady turn would take the planet out of view: the track camera
+	// turns in the vessel's frame)
+	constexpr double BACKDROP_SWAY = 0.35, BACKDROP_PERIOD = 180.0;
 }
 
 bool Orbiter::RunLaunchpad (std::string &scenario)
@@ -211,12 +227,83 @@ bool Orbiter::RunLaunchpad (std::string &scenario)
 
 	if (action != PosixLaunchpad::LAUNCH) return false;
 	scenario = m_pPosixLaunchpad->Scenario ();
+	ApplyVideoSettings ();
+	return true;
+}
 
+void Orbiter::ApplyVideoSettings ()
+{
 	// video settings for the render window
 	const CFG_DEVPRM &d = pConfig->CfgDevPrm;
 	gclient->VideoData.fullscreen = d.bFullscreen;
 	gclient->VideoData.winw = (int)d.WinW;
 	gclient->VideoData.winh = (int)d.WinH;
+}
+
+//-----------------------------------------------------------------------------
+// Name: RunBackdrop()
+// Desc: The launchpad over a live scene: a session of its own (not saved, no
+//       input, no overlays), closed when a scenario is launched (returned in
+//       `scenario`) or the application exits (returns false)
+//-----------------------------------------------------------------------------
+bool Orbiter::RunBackdrop (std::string &scenario)
+{
+	std::error_code ec;
+	std::string scn = std::filesystem::absolute (BACKDROP_SCENARIO, ec).string();
+	if (ec || !std::filesystem::exists (scn)) return RunLaunchpad (scenario);
+
+	if (!m_pPosixLaunchpad) m_pPosixLaunchpad = new PosixLaunchpad (this);
+	else m_pPosixLaunchpad->Refresh ();
+
+	ApplyVideoSettings ();
+	bBackdrop = true;
+	Launch (scn.c_str());
+	LaunchpadDlg lpdlg (m_pPosixLaunchpad, true);
+	pDlgMgr->AddEntry (&lpdlg);
+	pDlgMgr->SetExclusive (&lpdlg);
+
+	PosixLaunchpad::Action action = PosixLaunchpad::NONE;
+	while (bSession && action == PosixLaunchpad::NONE) {
+		if (BeginTimeStep (bRunning)) {
+			UpdateWorld ();
+			EndTimeStep (bRunning); // (window events)
+			if (!bSession) break;
+			platformKbuf.clear (); // (keys go to the launchpad only)
+			{
+				double w = 2.0 * PI / BACKDROP_PERIOD;
+				oapiCameraRotAzimuth (BACKDROP_SWAY * w * std::cos (w * td.SysT1) * td.SysDT);
+			}
+			Render3DEnvironment ();
+			action = lpdlg.action;
+		}
+		if (bPlatformClose) {
+			bPlatformClose = false;
+			action = PosixLaunchpad::EXIT;
+		}
+	}
+	if (action == PosixLaunchpad::LAUNCH) {
+		// the loading screen, shown while the scenario loads (frames in flight: twice)
+		m_pPosixLaunchpad->SetLoading (true);
+		for (int i = 0; i < 2; i++) Render3DEnvironment ();
+		m_pPosixLaunchpad->SetLoading (false);
+	}
+	// (the session may have ended by itself, e.g. at --maxframes: then it
+	// is gone with its dialog manager, and the application exits)
+	if (!bSession && action == PosixLaunchpad::NONE) action = PosixLaunchpad::EXIT;
+	if (pDlgMgr) {
+		pDlgMgr->SetExclusive (nullptr);
+		pDlgMgr->DelEntry (&lpdlg);
+	}
+	m_pPosixLaunchpad->ReleaseResources ();
+	if (bSession) {
+		PreCloseSession ();
+		CloseSession ();
+	}
+	bBackdrop = false;
+
+	if (action != PosixLaunchpad::LAUNCH) return false;
+	scenario = m_pPosixLaunchpad->Scenario ();
+	ApplyVideoSettings ();
 	return true;
 }
 
@@ -396,6 +483,7 @@ void Orbiter::PlatformMouse (UINT event, DWORD state, int x, int y)
 		orbiter::platform::SetMousePos (x, y);
 	ImGuiIO& io = ImGui::GetIO();
 	if (io.WantCaptureMouse && !bKeepFocus) return;
+	if (bBackdrop) return; // (the scene behind the launchpad takes no input)
 	MouseEvent (event, state, x, y);
 }
 

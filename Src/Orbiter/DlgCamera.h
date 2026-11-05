@@ -10,39 +10,47 @@
 
 #include "DlgMgr.h"
 #include "Camera.h"
+#include "UiTheme.h"
+#include <string>
 
+class Body;
 class CelestialBody;
 class DlgCamera : public ImGuiDialog {
 public:
-    DlgCamera();
-    void OnDraw() override;
+	DlgCamera();
+	void OnDraw() override;
 private:
-    void DrawControl();
-    void DrawTarget();
-    void DrawTrack();
-    void DrawGround();
-    void DrawPreset();
+	void DrawStatus();
+	void DrawView();
+	void DrawTarget();
+	void DrawGround();
+	void DrawPreset();
 
 	ExtCamMode extmode;
 	IntCamMode intmode;
 	bool extcam;
 	bool ground_lock;
-	bool rot_is_tilt, rot_is_pan;
-    std::string m_SelectedTarget;
-    std::string m_SelectedSite;
-    std::string m_SitePlanet;
-    int m_SelectedPreset;
+	bool rot_is_tilt;
 
-    char longitude[64]="";
-    char latitude[64]="";
-    char altitude[64]="";
-    char followterrain[64]="";
-    bool m_TargetLock;
+	std::string m_SelectedTarget;
+	std::string m_SelectedSite;
+	std::string m_SitePlanet;
+	int m_SelectedPreset = -1;
+	char m_Filter[64] = "";
+	ui::Fill m_FillTarget, m_FillGround, m_FillPreset;
 
-    void AddCbodyNode(const CelestialBody *body);
-    void ApplyObserver();
-    void SetCurrentGroundpos();
-	
+	char longitude[64] = "";
+	char latitude[64] = "";
+	char altitude[64] = "";
+	char followterrain[64] = "";
+	bool m_TargetLock = false;
+
+	Body *SelectedBody() const;
+	bool TargetRow(const char *name, const char *icon, int depth);
+	void AddCbodyNode(const CelestialBody *body, int depth);
+	void ApplyObserver();
+	void SetCurrentGroundpos();
+
 	struct CameraTab {
 		const char *name;
 		const char *helptopic;
@@ -50,11 +58,10 @@ private:
 	};
 
 	static inline CameraTab tabs[] = {
-		{"Control", "/cam_control.htm", &DlgCamera::DrawControl},
+		{"View",    "/cam_control.htm", &DlgCamera::DrawView},
 		{"Target",  "/cam_target.htm",  &DlgCamera::DrawTarget},
-		{"Track",   "/cam_track.htm",   &DlgCamera::DrawTrack},
 		{"Ground",  "/cam_ground.htm",  &DlgCamera::DrawGround},
-		{"Preset",  "/cam_preset.htm",  &DlgCamera::DrawPreset},
+		{"Presets", "/cam_preset.htm",  &DlgCamera::DrawPreset},
 	};
 
 };

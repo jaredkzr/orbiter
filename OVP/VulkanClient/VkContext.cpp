@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include "VkContext.h"
+#include "GfxSettings.h"
 #include <vector>
 #include "OrbiterAPI.h"
 #include <SDL3/SDL.h>
@@ -222,22 +223,12 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 	vkGetPhysicalDeviceFeatures (physicalDevice, &deviceFeatures);
 	oapiWriteLogV ("VulkanClient: using device %s", deviceProps.deviceName);
 
-	if (const char *e = getenv ("ORBITER_VK_RENDER_SCALE"))
-		renderScale = std::clamp ((float)atof (e), 0.25f, 2.0f);
+	// the render scale and the multisampling of the 3D scene (the graphics
+	// settings, GfxSettings; changed when a session starts: Reconfigure)
+	renderScale = std::clamp (Gfx ().renderScale, 0.25f, 2.0f);
 	oapiWriteLogV ("VulkanClient: render scale %.2f", renderScale);
-
-	// multisampling of the 3D scene (ORBITER_VK_MSAA = 1, 2, 4 or 8; default
-	// none with temporal anti-aliasing (ORBITER_VK_TAA, on by default), else 4)
-	{
-		const char *taa = getenv ("ORBITER_VK_TAA");
-		int req = (taa && atoi (taa) == 0) ? 4 : 1;
-		if (const char *e = getenv ("ORBITER_VK_MSAA")) req = atoi (e);
-		VkSampleCountFlags ok = deviceProps.limits.framebufferColorSampleCounts & deviceProps.limits.framebufferDepthSampleCounts;
-		sceneSamples = VK_SAMPLE_COUNT_1_BIT;
-		for (int n = 8; n > 1; n >>= 1)
-			if (n <= req && (ok & n)) { sceneSamples = (VkSampleCountFlagBits)n; break; }
-		oapiWriteLogV ("VulkanClient: %dx multisampling", (int)sceneSamples);
-	}
+	sceneSamples = SupportedSamples (Gfx ().SceneSamples ());
+	oapiWriteLogV ("VulkanClient: %dx multisampling", (int)sceneSamples);
 
 	// Logical device: the graphics queue, and a queue for async compute (of
 	// a compute family, else a second of the graphics family), low priority
@@ -639,6 +630,33 @@ void Context::DestroySwapchain ()
 	renderFinished.clear();
 	if (swapchain) vkDestroySwapchainKHR (device, swapchain, nullptr);
 	swapchain = VK_NULL_HANDLE;
+}
+
+VkSampleCountFlagBits Context::SupportedSamples (int req) const
+{
+	VkSampleCountFlags ok = deviceProps.limits.framebufferColorSampleCounts & deviceProps.limits.framebufferDepthSampleCounts;
+	for (int n = 8; n > 1; n >>= 1)
+		if (n <= req && (ok & n)) return (VkSampleCountFlagBits)n;
+	return VK_SAMPLE_COUNT_1_BIT;
+}
+
+void Context::Reconfigure (float scale, int samples)
+{
+	scale = std::clamp (scale, 0.25f, 2.0f);
+	VkSampleCountFlagBits s = SupportedSamples (samples);
+	if (scale == renderScale && s == sceneSamples) return;
+	oapiWriteLogV ("VulkanClient: render scale %.2f, %dx multisampling", scale, (int)s);
+	renderScale = scale, sceneSamples = s;
+	if (!device) return;
+	if (offscreen || swapchain) RecreateSwapchain ();
+}
+
+void Context::SetRenderScale (float scale)
+{
+	scale = std::clamp (scale, 0.25f, 2.0f);
+	if (scale == renderScale) return;
+	renderScale = scale;
+	swapchainDirty = true; // (the scene images at the next frame)
 }
 
 bool Context::RecreateSwapchain ()

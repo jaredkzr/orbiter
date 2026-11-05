@@ -2,11 +2,16 @@
 // Licensed under the MIT License
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include <algorithm>
+#include <functional>
+#include <vector>
+#include <cstdarg>
 #include "OrbiterAPI.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 
 #include "MenuInfoBar.h"
+#include "UiTheme.h"
+#include "IconsLucide.h"
 #include "Camera.h"
 #include "Dialogs.h"
 #include "DlgMenuCfg.h"
@@ -49,6 +54,32 @@ struct MovingAverage {
     }
 };
 
+// the icons of Orbiter's own menu commands (Orbiter.cpp, RegisterMenuCmd)
+static const char *BuiltinGlyph(const char *label)
+{
+	static const struct { const char *label, *glyph; } g[] = {
+		{"Ship", ICON_LC_ROCKET}, {"Camera", ICON_LC_CAMERA}, {"Speed", ICON_LC_FAST_FORWARD},
+		{"Pause", ICON_LC_PAUSE}, {"Function", ICON_LC_SQUARE_FUNCTION}, {"Info", ICON_LC_INFO},
+		{"Options", ICON_LC_SETTINGS}, {"Map", ICON_LC_MAP}, {"MFD", ICON_LC_MONITOR},
+		{"Record", ICON_LC_CIRCLE_DOT}, {"Help", ICON_LC_CIRCLE_HELP}, {"Save", ICON_LC_SAVE},
+		{"Exit", ICON_LC_LOG_OUT},
+	};
+	for (auto &e : g) if (!strcmp(label, e.label)) return e.glyph;
+	return nullptr;
+}
+
+// a menu button's icon: a glyph centred in bb, a light shade when hovered
+static void DrawGlyph(ImDrawList *dl, const ImRect &bb, const char *glyph, bool hovered, bool held, ImVec2 offset = ImVec2(0,0))
+{
+	ImVec2 a = bb.Min - offset, b = bb.Max - offset;
+	if (hovered || held) dl->AddRectFilled(a, b, ui::Col32(ui::TEXT, held ? 0.14f : 0.08f), ui::Px(8));
+	float sz = (b.y - a.y) * 0.56f;
+	ImGui::PushFont(ui::GetFonts().body, sz / ui::Scale()); // (sizes are given at 1080 lines)
+	ImVec2 ts = ImGui::CalcTextSize(glyph);
+	dl->AddText(ImVec2((a.x + b.x - ts.x) * 0.5f, (a.y + b.y - ts.y) * 0.5f), ui::Col32(ui::TEXT, hovered ? 1.0f : 0.85f), glyph);
+	ImGui::PopFont();
+}
+
 class DynamicMenuBar: public ImGuiDialog
 {
 	static inline const float strength = 0.3f;
@@ -65,6 +96,7 @@ public:
 		CustomFunc func;
 		void *context;
 		ImTextureID texId;
+		const char *glyph;   // the icon of a built-in command (else the texture's)
 		int id;
 		float lastItemSize;
 		bool dragging;
@@ -72,9 +104,10 @@ public:
 		float animStateScale;
 		bool enabled;
 		MenuItem(const char *label_, const char *path, int id_, CustomFunc func_, void *context_):label(label_),func(func_),context(context_),id(id_) {
-			texture = oapiLoadTexture(path);
-			if(!texture) oapiAddNotification(OAPINOTIF_ERROR, "Cannot find menu item texture", path);
-			texId = ImGui::GetImTextureID(texture);
+			glyph = BuiltinGlyph(label_);
+			texture = glyph ? NULL : oapiLoadTexture(path);
+			if(!texture && !glyph) oapiAddNotification(OAPINOTIF_ERROR, "Cannot find menu item texture", path);
+			texId = texture ? ImGui::GetImTextureID(texture) : ImTextureID();
 			lastItemSize = g_pOrbiter->Cfg()->CfgUIPrm.MenuButtonSize;
 			dragging = false;
 			enabled = true;
@@ -99,6 +132,7 @@ public:
 			func = other.func;
 			context = other.context;
 			texId = other.texId;
+			glyph = other.glyph;
 			lastItemSize = other.lastItemSize;
 			id = other.id;
 			dragging = other.dragging;
@@ -134,6 +168,7 @@ public:
 	bool isDraggingOutside;
 	int swapId = -1;
 	ImTextureID dragTexId = 0;
+	const char *dragGlyph = nullptr;
 	int dragId = -1;
 	float holePos;
 
@@ -143,7 +178,7 @@ public:
 		isDragging = false;
 		oneDrag = false;
 		isDraggingOutside = false;
-		animStateSpacing = prm.MenuButtonSpacing;
+		animStateSpacing = (prm.MenuButtonSpacing * ui::Scale());
 
 		FILEHANDLE f = oapiOpenFile("MenuInfoBar.cfg", FILE_IN, CONFIG);
 		if(f) {
@@ -269,9 +304,9 @@ public:
 		BeginMenuInfoBar();
 		ImGuiWindow* window = ImGui::GetCurrentWindow();
 		if (!window->SkipItems) {
-			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.f, 0.f, 0.f, prm.MenuOpacity/10.0f));
-			ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.f, 0.f, 0.f, prm.MenuOpacity/10.0f));
-			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.6f, 0.6f, 0.6f, 0.6f));
+			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.f, 0.f, 0.f, 0.f));
+			ImGui::PushStyleColor(ImGuiCol_ButtonActive, ui::Col(ui::TEXT, 0.14f));
+			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ui::Col(ui::TEXT, 0.08f));
 			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0,0));
 			SwapItems();
 			// MenuInfoBarItem uses isDragging so we cannot clear it here
@@ -294,6 +329,15 @@ public:
 		EndMenuInfoBar();
 	}
 
+	/// The menu bar's mode: as configured, but a menu bar always shown
+	/// hides itself (until the pointer reaches it) over the head-up display
+	/// of the 2D cockpit, whose heading tape it would cover
+	int MenuMode() const {
+		if (prm.MenuMode == 0 && !g_camera->IsExternal() && oapiCockpitMode() != COCKPIT_VIRTUAL && oapiGetHUDMode() != HUD_NONE)
+			return 2;
+		return prm.MenuMode;
+	}
+
 	void BeginMenuInfoBar() {
 		ImGuiViewport *viewport = ImGui::GetMainViewport();
 		// Force viewport, we don't want the menu bar to pop out
@@ -305,19 +349,17 @@ public:
 		ImGuiContext &g = *GImGui;
 		float yoffset = 0;
 			
-		switch(prm.MenuMode) {
+		switch(MenuMode()) {
 		case 0: // show
 			break;
 		case 1: // hide
 			yoffset -= style.WindowPadding.y;
-			yoffset -= prm.MenuButtonHoverSize;
+			yoffset -= (prm.MenuButtonHoverSize * ui::Scale());
 			yoffset -= g.FontSize;
 			break;
-		case 2: // auto-hide
-			yoffset -= style.WindowPadding.y;
-			yoffset -= prm.MenuButtonSize;
-			if(!prm.bMenuLabelAlways)
-				yoffset -= g.FontSize;
+		case 2: // auto-hide: the bar retracted out of view (the window's
+		        // padding below it, still on screen, brings it back on hover)
+			yoffset -= style.WindowPadding.y * 2.0f + (prm.MenuButtonHoverSize * ui::Scale()) + ui::Px(18);
 			yoffset *= (1.0f - animState);
 			break;
 		}
@@ -327,6 +369,14 @@ public:
 		
 		if(ImGui::Begin("##MenuInfoBar", nullptr, MENUFLAGS)) {
 			ImGuiStyle &style = ImGui::GetStyle();
+			// the bar: a translucent panel behind the buttons and their labels
+			{
+				ImGuiWindow *w = ImGui::GetCurrentWindow();
+				float h = style.WindowPadding.y * 2.0f + (prm.MenuButtonHoverSize * ui::Scale()) + ui::Px(18);
+				ImVec2 b0 = w->Pos, b1 (w->Pos.x + w->Size.x, w->Pos.y + std::min (w->Size.y, h));
+				w->DrawList->AddRectFilled(b0, b1, ui::Col32(ui::WINDOW), ui::Px(12)); // (opaque: the blend is linear, the HUD would show)
+				w->DrawList->AddRect(b0, b1, ui::Col32(ui::LINE, 0.7f), ui::Px(12), 0, std::max (1.0f, ui::Scale()));
+			}
 			ImVec2 bbmin = ImGui::GetCursorScreenPos() - style.WindowPadding;
 			ImVec2 bbmax = bbmin + ImGui::GetContentRegionAvail() + style.WindowPadding * 2.0f;
 			// Expand the bounding box a bit above the window so that the menubar
@@ -374,8 +424,8 @@ public:
 	bool MenuInfoBarItem(MenuItem &item) {
 		// Filter button spacing in time to prevent excessive jittering
 		// when modifying MenuButtonSpacing
-		if(animStateSpacing < prm.MenuButtonSpacing) animStateSpacing+=0.1f;
-		else if(animStateSpacing > prm.MenuButtonSpacing) animStateSpacing-=0.1f;
+		if(animStateSpacing < (prm.MenuButtonSpacing * ui::Scale())) animStateSpacing+=0.1f;
+		else if(animStateSpacing > (prm.MenuButtonSpacing * ui::Scale())) animStateSpacing-=0.1f;
 		ImGui::SameLine(0.0f, animStateSpacing);
 		ImGuiWindow* window = ImGui::GetCurrentWindow();
 		ImGuiContext& g = *GImGui;
@@ -392,7 +442,7 @@ public:
 		// Use a gaussian bell contour to compute the button size
 		// given its distance from the cursor
 		float scale = exp(-deltaPos * deltaPos * strength) * animState;
-		float buttonSize = lrint(lerp(prm.MenuButtonSize, prm.MenuButtonHoverSize, scale));
+		float buttonSize = lrint(lerp((prm.MenuButtonSize * ui::Scale()), (prm.MenuButtonHoverSize * ui::Scale()), scale));
 		item.lastItemSize = buttonSize;
 		
 		// Do a scale animation got the button
@@ -434,17 +484,21 @@ public:
 			if(isDragging) {
 				// Different check if the button is to the right or to the left of the "hole"
 				if(dragPos.x < holePos) {
-					if(dragPos.x < bb.Min.x && (dragPos.x + prm.MenuButtonHoverSize > bb.Min.x)) {
+					if(dragPos.x < bb.Min.x && (dragPos.x + (prm.MenuButtonHoverSize * ui::Scale()) > bb.Min.x)) {
 						swapId = item.id;
 					}
 				} else {
-					if((dragPos.x + prm.MenuButtonHoverSize)> bb.Max.x && (dragPos.x < bb.Max.x)) {
+					if((dragPos.x + (prm.MenuButtonHoverSize * ui::Scale()))> bb.Max.x && (dragPos.x < bb.Max.x)) {
 						swapId = item.id;
 					}
 				}
 			}
 			ImVec2 textsize = ImGui::CalcTextSize(label, NULL, true);
 			ImVec2 textpos = ImVec2(bb.Min.x + (bb.Max.x - bb.Min.x) / 2.0f - textsize.x / 2.0f, bb.Max.y);
+			ui::PushFont(ui::GetFonts().medium, ui::SIZE_SMALL);
+			textsize = ImGui::CalcTextSize(label, NULL, true);
+			textpos = ImVec2(bb.Min.x + (bb.Max.x - bb.Min.x) / 2.0f - textsize.x / 2.0f, bb.Max.y + ui::Px(1));
+			ImU32 textcol = ui::Col32(ui::TEXT_DIM);
 			if (item.animStateScroll != 0.0f) {
 				// If animState != 0, it means the current button has been swapped recently
 				// We do the swapping animation by using an invisible button at its final position
@@ -459,13 +513,19 @@ public:
 				ImGuiContext& g = *GImGui;
 				ImGui::InvisibleButton(label, ImVec2(buttonSize, buttonSize));
 				ImVec2 offset = ImVec2(item.animStateScroll * buttonSize, 0);
-				window->DrawList->AddImage(item.texId, bb.Min - offset, bb.Max - offset);
-				window->DrawList->AddText(textpos - offset, 0xffffffff, label);
+				if (item.glyph) DrawGlyph(window->DrawList, bb, item.glyph, false, false, offset);
+				else window->DrawList->AddImage(item.texId, bb.Min - offset, bb.Max - offset);
+				window->DrawList->AddText(textpos - offset, textcol, label);
 			} else {
-				ret = ImGui::ImageButton(label, item.texId, ImVec2(buttonSize, buttonSize));
+				if (item.glyph) {
+					ret = ImGui::InvisibleButton(label, ImVec2(buttonSize, buttonSize));
+					DrawGlyph(window->DrawList, bb, item.glyph, ImGui::IsItemHovered(), ImGui::IsItemActive());
+				} else
+					ret = ImGui::ImageButton(label, item.texId, ImVec2(buttonSize, buttonSize));
 				if(!disableText)
-					window->DrawList->AddText(textpos, 0xffffffff, label);
+					window->DrawList->AddText(textpos, ImGui::IsItemHovered() ? ui::Col32(ui::TEXT) : textcol, label);
 			}
+			ui::PopFont();
 		}
 
 		bool active = ImGui::IsItemActive();
@@ -483,6 +543,7 @@ public:
 				dragPos = ImGui::GetItemRectMin();
 				item.dragging = true;
 				dragTexId = item.texId;
+				dragGlyph = item.glyph;
 			} else {
 				dragPos += io.MouseDelta;
 			}
@@ -497,22 +558,23 @@ public:
 		if(isDragging) {
 			ImGuiWindow* window = ImGui::GetCurrentWindow();
 			int itemsEnabled = std::count_if(items.begin(), items.end(), [](const auto &item){return item.enabled;});
-			ImVec2 imageSize = ImVec2(prm.MenuButtonHoverSize, prm.MenuButtonHoverSize);
+			ImVec2 imageSize = ImVec2((prm.MenuButtonHoverSize * ui::Scale()), (prm.MenuButtonHoverSize * ui::Scale()));
 			if(isDraggingOutside && itemsEnabled > 1) {
 				// If it's outside the menu and it's not the only button remaining,
 				// add a red background and show a removal message
-				window->DrawList->AddRectFilled(dragPos, dragPos + imageSize, 0xbfbfbfff);
+				window->DrawList->AddRectFilled(dragPos, dragPos + imageSize, ui::Col32(ui::WARNING, 0.5f), ui::Px(8));
 				const char *label = "Remove from menu";
 				ImVec2 textSize = ImGui::CalcTextSize(label, NULL, true);
-				window->DrawList->AddText(dragPos + ImVec2(prm.MenuButtonHoverSize / 2.0f - textSize.x / 2.0f, prm.MenuButtonHoverSize), 0xffffffff, label);
+				window->DrawList->AddText(dragPos + ImVec2((prm.MenuButtonHoverSize * ui::Scale()) / 2.0f - textSize.x / 2.0f, (prm.MenuButtonHoverSize * ui::Scale())), ui::Col32(ui::TEXT), label);
 			} else {
-				window->DrawList->AddRectFilled(dragPos, dragPos + imageSize, 0xbfbfbfbf);
+				window->DrawList->AddRectFilled(dragPos, dragPos + imageSize, ui::Col32(ui::RAISED_ACTIVE, 0.8f), ui::Px(8));
 			}
-			window->DrawList->AddImage(dragTexId, dragPos, dragPos + imageSize);
+			if (dragGlyph) DrawGlyph(window->DrawList, ImRect(dragPos, dragPos + imageSize), dragGlyph, true, false);
+			else window->DrawList->AddImage(dragTexId, dragPos, dragPos + imageSize);
 		}
 
 		// Add some padding at the bottom so we can hover over the menu bar even when it's fully hidden
-		if(prm.MenuMode != 0) {
+		if(MenuMode() != 0) {
 			ImGui::NewLine();
 			ImGui::NewLine();
 		}
@@ -521,90 +583,76 @@ public:
 };
 
 
+// The frame rate (Settings > Display: in the top-left or top-right info
+// box): frames per second and the frame time, the 1% low (the frame rate of
+// the slowest frames: stutter), and a graph of the recent frame times
+void InfoRow(const char *label, const char *fmt, ...);
+
 class InfoFrameRate {
-	static const int HISTORY_SIZE = 64;
-	float history[HISTORY_SIZE];
-	float fpsMax;
-	int historyOffset;
-	MovingAverage<16> dtavg;
+	static const int N = 240;          // frame times kept
+	float dt[N] = {};                  // [s]
+	int head = 0, count = 0;
+	double shownT = -1.0;              // (the numbers are updated a few times a second, to be readable)
+	float fps = 0.0f, ms = 0.0f, low = 0.0f;
+	uint64_t lastFrame = ~0ull;
 public:
-	InfoFrameRate() {
-		for(int i = 0; i < HISTORY_SIZE; i++) {
-			history[i] = 0.1;
-		}
-		historyOffset = 0;
-		fpsMax = 0.0f;
-	}
 	void Update() {
-		int offset = ((int)td.SysT0) % HISTORY_SIZE;
-		if(offset != historyOffset) {
-			historyOffset = offset;
-			history[historyOffset] = 0.0f;
-			UpdateMinMax();
-		}
+		if (td.SysT0 < 0.0) return;
 		ImGuiContext &g = *GImGui;
-		float fps = g.IO.Framerate;
-		history[historyOffset] = fps;
-		fpsMax = std::max(fpsMax, fps);
-	}
-	void UpdateMinMax() {
-		fpsMax = 0.0;
-		for(int i = 0; i < HISTORY_SIZE; i++) {
-			if(history[i] > fpsMax) {
-				fpsMax = history[i];
-			}
+		if ((uint64_t)g.FrameCount == lastFrame) return; // (once per frame, wherever it is shown)
+		lastFrame = (uint64_t)g.FrameCount;
+		float d = (float)td.SysDT;
+		if (d <= 0.0f || d > 5.0f) return;
+		dt[head] = d;
+		head = (head + 1) % N;
+		count = std::min(count + 1, N);
+		if (td.SysT1 - shownT >= 0.25 || shownT < 0.0) {
+			shownT = td.SysT1;
+			// the mean of the last half second
+			float sum = 0.0f; int n = 0;
+			for (int k = 1; k <= count && sum < 0.5f; k++) sum += dt[(head - k + N) % N], n++;
+			ms = n ? 1e3f * sum / n : 0.0f;
+			fps = sum > 0.0f ? n / sum : 0.0f;
+			// the 1% low: the frame rate of the slowest 1% of the frames kept
+			std::vector<float> v(dt, dt + N);
+			v.resize(count);
+			size_t k = std::max<size_t>(1, count / 100);
+			std::nth_element(v.begin(), v.begin() + (k - 1), v.end(), std::greater<float>());
+			float slow = 0.0f;
+			for (size_t i = 0; i < k; i++) slow += v[i];
+			low = slow > 0.0f ? k / slow : 0.0f;
 		}
 	}
 	void Display() {
 		Update();
-		ImVec4 white{1,1,1,1};
-		ImGuiContext &g = *GImGui;
-
-		ImGui::BeginChild("ChildL", ImVec2(ImGui::GetContentRegionAvail().x - HISTORY_SIZE - 8.0, 0), ImGuiChildFlags_AutoResizeY);
-
-		ImGui::TextColored(white, "%s", "F/s");
-		char buf[64];
-		snprintf(buf, 64, "%.0f", td.FPS());
-		buf[63] = '\n';
-		// Right align
-		ImGui::SameLine();
-		ImGui::SetCursorPosX(
-			ImGui::GetCursorPosX() +
-			ImGui::GetContentRegionAvail().x -
-			ImGui::CalcTextSize(buf).x
-		);
-		ImGui::TextColored(white, "%s", buf);
-
-		ImGui::TextColored(white, "%s", "ΔT/F");
-		float simdt = dtavg.add(td.SimDT);
-		snprintf(buf, 64, "%0.*fs", simdt < 1e-1 ? 3 : simdt < 1 ? 2 : simdt < 10 ? 1 : 0, simdt);
-		buf[63] = '\n';
-		// Right align
-		ImGui::SameLine();
-		ImGui::SetCursorPosX(
-			ImGui::GetCursorPosX() +
-			ImGui::GetContentRegionAvail().x -
-			ImGui::CalcTextSize(buf).x
-		);
-		ImGui::TextColored(white, "%s", buf);
-		ImGui::EndChild();
-		ImGui::SameLine();
-		ImGui::BeginChild("ChildR");//, ImVec2(ImGui::GetContentRegionAvail().x / 3.0f * 2.0f, 0), ImGuiChildFlags_AutoResizeY);
-		if(fpsMax != 0.0) {
-			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1,1,1,1));
-			ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0,0,0,0));
-			ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.3,0.3,0.3,0.3));
-			ImGui::PushStyleColor(ImGuiCol_PlotLines, ImVec4(0,1,0,1));
-			ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.7,0.7,0.7,1));
-			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0);
-			ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0);
-			char fps[16];
-			sprintf(fps, "%d", (int)fpsMax);
-			ImGui::PlotLines("###FPS", history, HISTORY_SIZE, historyOffset + 1, fps, 0.0, fpsMax, ImVec2(HISTORY_SIZE, ImGui::GetContentRegionAvail().y));
-			ImGui::PopStyleVar(2);
-			ImGui::PopStyleColor(5);
+		const ui::Fonts &f = ui::GetFonts();
+		ui::PushFont(f.mono, ui::SIZE_SMALL + 0.5f);
+		InfoRow("FPS", "%.0f  \xC2\xB7  %.1f ms", fps, ms);
+		InfoRow("1% ", "%.0f low", low);
+		ui::PopFont();
+		ImGui::Dummy(ImVec2(0, ui::Px(3)));
+		// the frame times: a line over the last frames (the scale: 33 ms or
+		// the slowest frame; a reference at 60 per second)
+		ImVec2 p = ImGui::GetCursorScreenPos();
+		float w = std::max(ui::Px(150), ImGui::GetContentRegionAvail().x), h = ui::Px(26);
+		ImGui::Dummy(ImVec2(w, h));
+		if (count < 2) return;
+		ImDrawList *dl = ImGui::GetWindowDrawList();
+		float a = ImGui::GetStyle().Alpha;
+		dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), ui::Col32(ui::RAISED, 0.5f * a), ui::Px(3));
+		float top = 1.0f / 30.0f;
+		for (int k = 0; k < count; k++) top = std::max(top, dt[k]);
+		float y60 = p.y + h - h * (1.0f / 60.0f) / top;
+		dl->AddLine(ImVec2(p.x, y60), ImVec2(p.x + w, y60), ui::Col32(ui::TEXT_DIM, 0.35f * a), 1.0f);
+		ImVec2 pts[N];
+		int n = 0;
+		for (int k = count; k >= 1; k--) {
+			float d = dt[(head - k + N) % N];
+			pts[n++] = ImVec2(p.x + w * (float)(count - k) / (N - 1), p.y + h - h * std::min(d / top, 1.0f));
 		}
-		ImGui::EndChild();
+		dl->PushClipRect(p, ImVec2(p.x + w, p.y + h), true);
+		dl->AddPolyline(pts, n, ui::Col32(ui::ACCENT, a), ImDrawFlags_None, std::max(1.0f, ui::Scale()));
+		dl->PopClipRect();
 	}
 };
 
@@ -632,6 +680,38 @@ void AnimateOpacity(float &animStateOpacity)
 	}
 }
 
+// the info bars' look: a small panel, labels dimmed beside the values
+void InfoBegin(float opacity, const CFG_UIPRM &prm)
+{
+	ImGui::PushStyleVar(ImGuiStyleVar_Alpha, opacity);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(ui::Px(14), ui::Px(10)));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, ui::Px(8));
+	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ui::Px(6), ui::Px(2)));
+	ImGui::PushStyleColor(ImGuiCol_Border, ui::Col(ui::LINE, 0.6f));
+	ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.f, 0.f, 0.f, 0.f));
+	// (InfobarOpacity 0-10; the blending is linear: scaled down so that 2,
+	// the default, is a light shade)
+	ImGui::SetNextWindowBgAlpha(std::min(1.0f, 0.25f + prm.InfoOpacity/10.0f * 0.7f) * opacity);
+}
+
+void InfoEnd()
+{
+	ImGui::PopStyleColor(2);
+	ImGui::PopStyleVar(4);
+}
+
+void InfoRow(const char *label, const char *fmt, ...)
+{
+	ImGui::PushStyleColor(ImGuiCol_Text, ui::Col(ui::TEXT_DIM));
+	ImGui::TextUnformatted(label);
+	ImGui::PopStyleColor();
+	ImGui::SameLine(0, ui::Px(8));
+	va_list args;
+	va_start(args, fmt);
+	ImGui::TextV(fmt, args);
+	va_end(args);
+}
+
 class InfoTime: public ImGuiDialog {
 	InfoFrameRate *fps;
 	float animStateOpacity;
@@ -639,118 +719,62 @@ public:
 	InfoTime(InfoFrameRate *fps_):ImGuiDialog("InfoTime"),fps(fps_),animStateOpacity(OPACITY_NONE) {}
 	void OnDraw() {}
 
-	void DrawSymbol(int type) {
-		float alpha = ImGui::GetStyle().Alpha;
-		ImVec2 pos = ImGui::GetCursorScreenPos();
-		ImDrawList* drawList = ImGui::GetWindowDrawList();
-		ImVec2 size = ImGui::CalcTextSize("__");
-		ImVec2 endpos = pos + size;
-		drawList->AddRect(pos, endpos, ImGui::ColorConvertFloat4ToU32(ImVec4(0.75,0.75,0.75,alpha)));
-		switch(type) {
-		case 0: // REC
-			if(fmod (td.SysT1, 1.0) < 0.5) {
-				ImVec2 center = (pos + endpos)/2.0;
-				drawList->AddCircleFilled(center, size.y/4.0, ImGui::ColorConvertFloat4ToU32(ImVec4(1.0,0.0,0.0,alpha)));
-			}
-			break;
-		case 1: // Pause
-			{
-				ImVec2 tl = pos + ImVec2(size.x / 4.5f, size.y / 4.0f);
-				ImVec2 br = pos + ImVec2(size.x / 4.5f * 2.0f, size.y / 4.0f * 3.0f);
-				drawList->AddRectFilled(tl, br, ImGui::ColorConvertFloat4ToU32(ImVec4(1.0,1.0,0.0,alpha)));
-				tl.x += size.x/4.5f*1.5f;
-				br.x += size.x/4.5f*1.5f;
-				drawList->AddRectFilled(tl, br, ImGui::ColorConvertFloat4ToU32(ImVec4(1.0,1.0,0.0,alpha)));
-				drawList->AddText(pos + ImVec2(size.x + 2,0), ImGui::ColorConvertFloat4ToU32(ImVec4(1.0,1.0,1.0,alpha)), "Pause");
-			}
-			break;
-		case 2: // Fast forward
-			{
-				ImVec2 p1 = pos + ImVec2(size.x / 4.5f, size.y / 5.0f);
-				ImVec2 p2 = pos + ImVec2(size.x / 4.5f * 2.0f, size.y / 2.0f);
-				ImVec2 p3 = pos + ImVec2(size.x / 4.5f, size.y / 5.0f * 4.0f);
-				drawList->AddTriangleFilled(p1, p2, p3, ImGui::ColorConvertFloat4ToU32(ImVec4(1.0,1.0,1.0,alpha)));
-				p1.x += size.x/4.5f*1.5f;
-				p2.x += size.x/4.5f*1.5f;
-				p3.x += size.x/4.5f*1.5f;
-				drawList->AddTriangleFilled(p1, p2, p3, ImGui::ColorConvertFloat4ToU32(ImVec4(1.0,1.0,1.0,alpha)));
-				char buf[64];
-				auto fmt = [](char *b, double w) {
-					if (w >= 1e6) sprintf (b, "%0.3gx", w);
-					else sprintf (b, "%0.*fx", w < 9.99 ? 1:0, w);
-				};
-				if (g_pOrbiter->ShipWarp() > 0.0) { // (ship-time warp: on the focus vessel's clock)
-					fmt (buf, g_pOrbiter->ShipWarp());
-					strcat (buf, " ship");
-				} else fmt (buf, td.Warp());
-				drawList->AddText(pos + ImVec2(size.x + 2,0), ImGui::ColorConvertFloat4ToU32(ImVec4(1.0,1.0,1.0,alpha)), buf);
-			}
-			break;
-		case 3: // Playback
-			{
-				ImVec2 p1 = pos + ImVec2(size.x / 4.5f * 2.0f, size.y / 5.0f);
-				ImVec2 p2 = pos + ImVec2(size.x / 4.5f * 3.0f, size.y / 2.0f);
-				ImVec2 p3 = pos + ImVec2(size.x / 4.5f * 2.0f, size.y / 5.0f * 4.0f);
-				drawList->AddTriangleFilled(p1, p2, p3, ImGui::ColorConvertFloat4ToU32(ImVec4(1.0,1.0,0.0,alpha)));
-			}
-		}
-		ImGui::NewLine();
-	}
-
 	void Display() {
 		CFG_UIPRM &prm = g_pOrbiter->Cfg()->CfgUIPrm;
 		if(prm.InfoMode == 1)
 			return;
 		ImGuiViewport *viewport = ImGui::GetMainViewport();
 		ImGui::SetNextWindowViewport(viewport->ID);
-		ImGui::SetNextWindowPos(viewport->Pos+ImVec2(viewport->Size.x,0),ImGuiCond_Always, ImVec2(1,0));
-		
-		ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.f, 0.f, 0.f, 0.f));
-		ImGui::PushStyleVar(ImGuiStyleVar_Alpha, animStateOpacity);
-		ImGui::SetNextWindowBgAlpha(prm.InfoOpacity/10.0f * animStateOpacity);
-		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.f, 0.f, 0.f, 0.f));
+		float m = ui::Px(10);
+		ImGui::SetNextWindowPos(viewport->Pos+ImVec2(viewport->Size.x - m, m),ImGuiCond_Always, ImVec2(1,0));
+
+		InfoBegin(animStateOpacity, prm);
 		if(ImGui::Begin("##InfoTime", nullptr, INFOFLAGS)) {
 			AnimateOpacity(animStateOpacity);
+			const ui::Fonts &f = ui::GetFonts();
+			ui::PushFont(f.mono, ui::SIZE_SMALL + 0.5f);
+			ImGui::TextUnformatted(DateStr (td.MJD1));
+			InfoRow("MJD", "%0.4f", td.MJD1);
+			if(td.SimT1 < 1e7) InfoRow("SIM", "%.0f s", td.SimT1);
+			else InfoRow("SIM", "..%07.0f s", fmod (td.SimT1, 1e7));
+			ui::PopFont();
 
-			ImVec4 white{1,1,1,1};
-			ImVec4 red{1,0,0,1};
-			ImVec4 yellow{1,1,0,1};
-			ImGui::PushFont(ImGuiFont::MONO);
-			ImGui::TextColored(white, DateStr (td.MJD1));
-			ImGui::TextColored(white, "MJD %0.4f", td.MJD1);
-
-			if(g_pOrbiter->RecorderStatus() == 1) {
-				ImGui::SameLine();
-				DrawSymbol(0);
-			} else if(g_pOrbiter->IsPlayback()) {
-				ImGui::SameLine();
-				DrawSymbol(3);
-			}
-			if(td.SimT1 < 1e7) {
-				ImGui::TextColored(white, "Sim % 9.0fs", td.SimT1);
-			} else {
-				ImGui::TextColored(white, "Sim ..%07.0fs", fmod (td.SimT1, 1e7));
-			}
-
-			if(!g_pOrbiter->IsRunning()) {
-				ImGui::SameLine();
-				DrawSymbol(1);
-			} else if(td.Warp() != 1.0 || prm.bWarpAlways) {
-				ImGui::SameLine();
-				DrawSymbol(2);
+			// state: paused, time acceleration, recording, playback
+			bool rec = g_pOrbiter->RecorderStatus() == 1, play = g_pOrbiter->IsPlayback();
+			bool paused = !g_pOrbiter->IsRunning();
+			bool warp = td.Warp() != 1.0 || prm.bWarpAlways || g_pOrbiter->ShipWarp() > 0.0;
+			if (paused || warp || rec || play) {
+				ImGui::Dummy(ImVec2(0, ui::Px(2)));
+				bool first = true;
+				auto badge = [&](const char *t, ui::Colour c) {
+					if (!first) ImGui::SameLine(0, ui::Px(6));
+					first = false;
+					ui::Badge(t, c);
+				};
+				if (paused) badge(ICON_LC_PAUSE " PAUSED", ui::CAUTION);
+				else if (warp) {
+					char buf[64];
+					auto fmt = [](char *b, double w) {
+						if (w >= 1e6) sprintf (b, ICON_LC_FAST_FORWARD " %0.3g\xC3\x97", w);
+						else sprintf (b, ICON_LC_FAST_FORWARD " %0.*f\xC3\x97", w < 9.99 ? 1:0, w);
+					};
+					if (g_pOrbiter->ShipWarp() > 0.0) { // (ship-time warp: on the focus vessel's clock)
+						fmt (buf, g_pOrbiter->ShipWarp());
+						strcat (buf, " SHIP");
+					} else fmt (buf, td.Warp());
+					badge(buf, td.Warp() == 1.0 && g_pOrbiter->ShipWarp() <= 0.0 ? ui::TEXT_DIM : ui::CAUTION);
+				}
+				if (rec) badge(fmod (td.SysT1, 1.0) < 0.5 ? ICON_LC_CIRCLE_DOT " REC" : ICON_LC_CIRCLE " REC", ui::WARNING);
+				if (play) badge(ICON_LC_PLAY " PLAYBACK", ui::ACCENT);
 			}
 
 			if(prm.FPS == 2)
 				fps->Display();
-
-			ImGui::PopFont();
 		}
 		if(ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows))
 			ImGui::SetWindowFocus(NULL);
 		ImGui::End();
-
-		ImGui::PopStyleVar();
-		ImGui::PopStyleColor(2);
+		InfoEnd();
 	}
 };
 
@@ -768,51 +792,42 @@ public:
 		}
 		ImGuiViewport *viewport = ImGui::GetMainViewport();
 		ImGui::SetNextWindowViewport(viewport->ID);
-		ImGui::SetNextWindowPos(viewport->Pos);
-		ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.f, 0.f, 0.f, 0.f));
-		ImGui::PushStyleVar(ImGuiStyleVar_Alpha, animStateOpacity);
-		ImGui::SetNextWindowBgAlpha(prm.InfoOpacity/10.0f * animStateOpacity);
-		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.f, 0.f, 0.f, 0.f));
+		float m = ui::Px(10);
+		ImGui::SetNextWindowPos(viewport->Pos + ImVec2(m, m));
+		InfoBegin(animStateOpacity, prm);
 		if(ImGui::Begin("##InfoTarget", nullptr, INFOFLAGS)) {
 			AnimateOpacity(animStateOpacity);
-
-			ImVec4 white{1,1,1,1};
-			ImGui::PushFont(ImGuiFont::MONO);
+			const ui::Fonts &f = ui::GetFonts();
+			ui::PushFont(f.mono, ui::SIZE_SMALL + 0.5f);
 
 			Body *tgt = g_camera->Target();
-			ImGui::TextColored(white, "Tgt %s", tgt->Name());
-
+			InfoRow("TGT", "%s", tgt->Name());
 			if (g_camera->IsExternal()) {
 				switch (g_camera->GetExtMode()) {
-					case CAMERA_TARGETRELATIVE:   ImGui::TextColored(white, "Cam track (rel-pos)"); break;
-					case CAMERA_ABSDIRECTION:     ImGui::TextColored(white, "Cam track (abs-dir)"); break;
-					case CAMERA_GLOBALFRAME:      ImGui::TextColored(white, "Cam track (global frame)"); break;
-					case CAMERA_TARGETTOOBJECT:   ImGui::TextColored(white, "Cam target to %s", g_camera->GetDirRef()->Name()); break;
-					case CAMERA_TARGETFROMOBJECT: ImGui::TextColored(white, "Cam target from %s", g_camera->GetDirRef()->Name()); break;
-					case CAMERA_GROUNDOBSERVER:   ImGui::TextColored(white, "Cam ground %s", g_camera->GroundObserver_TargetLock() ? "(tgt-lock)" : "(free)"); break;
+					case CAMERA_TARGETRELATIVE:   InfoRow("CAM", "Track, relative"); break;
+					case CAMERA_ABSDIRECTION:     InfoRow("CAM", "Track, absolute direction"); break;
+					case CAMERA_GLOBALFRAME:      InfoRow("CAM", "Track, global frame"); break;
+					case CAMERA_TARGETTOOBJECT:   InfoRow("CAM", "Target to %s", g_camera->GetDirRef()->Name()); break;
+					case CAMERA_TARGETFROMOBJECT: InfoRow("CAM", "Target from %s", g_camera->GetDirRef()->Name()); break;
+					case CAMERA_GROUNDOBSERVER:   InfoRow("CAM", "Ground %s", g_camera->GroundObserver_TargetLock() ? "(target lock)" : "(free)"); break;
 				}
 			} else {
-				ImGui::TextColored(white, "Cam Cockpit");
+				InfoRow("CAM", "Cockpit");
 			}
-			ImGui::TextColored(white, "FoV % 0.0f°", 2.0*Deg(g_camera->Aperture()));
-			if (g_camera->IsExternal()) {
-				ImGui::SameLine();
-				ImGui::TextColored(white, "   Dst %s", DistStr (g_camera->Distance())+1);
-			} else {
-				ImGui::SameLine();
-				ImGui::TextColored(ImVec4(0,0,0,0), "   Dst %s", DistStr (g_camera->Distance())+1);
-			}
+			if (g_camera->IsExternal())
+				InfoRow("FOV", "%0.0f\xC2\xB0  \xC2\xB7  %s", 2.0*Deg(g_camera->Aperture()), DistStr (g_camera->Distance())+1);
+			else
+				InfoRow("FOV", "%0.0f\xC2\xB0", 2.0*Deg(g_camera->Aperture()));
 
 			if(prm.FPS == 1)
 				fps->Display();
 
-			ImGui::PopFont();
+			ui::PopFont();
 		}
 		if(ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows))
 			ImGui::SetWindowFocus(NULL);
 		ImGui::End();
-		ImGui::PopStyleVar();
-		ImGui::PopStyleColor(2);
+		InfoEnd();
 	}
 };
 

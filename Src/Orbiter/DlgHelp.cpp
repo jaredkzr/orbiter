@@ -13,7 +13,7 @@
 
 // This is just a placeholder to call the HtmlHelp API
 // We draw nothing ourselves
-DlgHelp::DlgHelp():ImGuiDialog("Orbiter: Help") {}
+DlgHelp::DlgHelp():ImGuiDialog("Help") {}
 void DlgHelp::Display() {}
 void DlgHelp::OnDraw() {}
 

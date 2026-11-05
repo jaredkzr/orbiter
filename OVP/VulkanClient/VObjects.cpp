@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "VObjects.h"
+#include "GfxSettings.h"
 #include "ProcSurface.h"
 #include "GroundTracks.h"
 #include "ScatterAssets.h"
@@ -1294,7 +1295,7 @@ void VVessel::CollectLights (std::vector<LightSource> &lights)
 	// engine plumes light their surroundings: an extended source of radiance
 	// L and side area A gives an irradiance of L A / d^2 farther away, up to
 	// about pi L right beside it (the light's attenuation is capped at 1)
-	static const bool engineLight = !getenv ("ORBITER_VK_ENGINE_LIGHT") || atoi (getenv ("ORBITER_VK_ENGINE_LIGHT")) != 0;
+	const bool engineLight = vkc::Gfx ().engineLight;
 	for (const PlumeLight &pl : plumeLights) {
 		if (!engineLight) break;
 		float peak = std::max (pl.col[0], std::max (pl.col[1], pl.col[2]));

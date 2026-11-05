@@ -5,6 +5,7 @@
 // "Map" dialog
 // ======================================================================
 #include "DlgMap.h"
+#include "DlgMgr.h"
 #include "Orbiter.h"
 #include "Psys.h"
 #include "Celbody.h"
@@ -12,12 +13,15 @@
 #include "imgui.h"
 #include "IconsFontAwesome6.h"
 #include "DlgInfo.h"
+#include "UiTheme.h"
+#include "IconsLucide.h"
+#include <algorithm>
 
 extern TimeData td;
 
 extern PlanetarySystem *g_psys;
 
-DlgMap::DlgMap() : ImGuiDialog(ICON_FA_GLOBE " Orbiter: Map", {640, 400}) {
+DlgMap::DlgMap() : ImGuiDialog(ICON_LC_MAP "  Map", {640, 420}) {
     planet = "Select...";
 	enableInfo = false;
 	searchbuf[0] = '\0';
@@ -28,11 +32,13 @@ DlgMap::DlgMap() : ImGuiDialog(ICON_FA_GLOBE " Orbiter: Map", {640, 400}) {
 	SetHelp("html/orbiter.chm", "/map.htm");
 }
 void DlgMap::Display() {
-    ImGui::SetNextWindowSize(ImVec2(defaultSize.width, defaultSize.height), ImGuiCond_FirstUseEver);
+    PlaceDialog (name.c_str(), defaultSize.width, defaultSize.height);
 	
+	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ui::Px(14), ui::Px(9))); // (the title bar, as the other dialogs')
 	bool visible = ImGui::Begin(name.c_str(), &active);
+	ImGui::PopStyleVar();
 	HandleHelpButton();
-	if(ImGui::MenuButton(ICON_FA_ARROW_ROTATE_LEFT, "Reset map", ImGui::GetFontSize()*1.5f)) {
+	if(ImGui::MenuButton(ICON_LC_ROTATE_CCW, "Reset the map", ImGui::GetFontSize()*1.5f)) {
 		Reset();
 	}
 	
@@ -263,6 +269,7 @@ void DlgMap::DrawMap() {
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0,0));
         ImGui::ImageButton("##VectorMap", vectormap->GetMap(), ImVec2(sz.x, sz.y), uv_min, uv_max, border_col, tint_col);
         ImGui::PopStyleVar();
+        ImGui::GetWindowDrawList()->AddRect (ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), ui::Col32 (ui::LINE), 0.0f, 0, std::max (1.0f, ui::Scale ()));
 
         ImGuiIO& io = ImGui::GetIO();
         bool updateMap = false;
@@ -303,53 +310,62 @@ void DlgMap::DrawMap() {
 }
 
 void DlgMap::DrawMenu() {
-	ImGui::SetNextItemWidth(160.0f);
+	// a toolbar that fits the window: the body, the layers, the search
+	// field (filling the rest), its filter, the selection's info
+	float gap = ImGui::GetStyle().ItemSpacing.x * 0.6f;
+	float bw = ImGui::GetFrameHeight ();
+	float avail = ImGui::GetContentRegionAvail().x;
+	float cw = std::min (ui::Px (150), (avail - 2 * bw - 4 * gap) * 0.28f);
+
+	ImGui::SetNextItemWidth(cw);
 	if(ImGui::BeginAnimatedCombo("##dlgmap_planet", planet.c_str(), ImGuiComboFlags_HeightLargest)) {
         DrawTree();
 		ImGui::EndAnimatedCombo();
 	}
-	
-    ImGui::SameLine();
+	if (ImGui::IsItemHovered (ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip ("The body mapped");
 
-	ImGui::SetNextItemWidth(160.0f);
-	if(ImGui::BeginAnimatedCombo("##dlgmap_options", "Options", ImGuiComboFlags_HeightLargest)) {
+    ImGui::SameLine(0, gap);
+
+	ImGui::SetNextItemWidth(cw);
+	if(ImGui::BeginAnimatedCombo("##dlgmap_options", ICON_LC_LAYERS "  Layers", ImGuiComboFlags_HeightLargest)) {
         int df = vectormap->GetDisplayFlags();
 		int olddf = df;
+		ImGui::PushStyleVar (ImGuiStyleVar_WindowPadding, ImVec2(ui::Px (14), ui::Px (12)));
 
-        ImGui::Text("Vessels");
+        ui::SectionHeader ("Vessels");
         int vesselmode = (df & DISP_VESSEL ? df & DISP_FOCUSONLY ? 1:0:2);
         ImGui::RadioButton("All", &vesselmode, 0); ImGui::SameLine();
-        ImGui::RadioButton("Focus Only", &vesselmode, 1); ImGui::SameLine();
+        ImGui::RadioButton("Focus only", &vesselmode, 1); ImGui::SameLine();
         ImGui::RadioButton("None", &vesselmode, 2);
-        ImGui::Separator();
         int vmode = (vesselmode==1 ? DISP_VESSEL | DISP_FOCUSONLY : vesselmode==2 ? 0 : DISP_VESSEL);
         df &= ~(DISP_VESSEL | DISP_FOCUSONLY);
         df |= vmode;
 
-        ImGui::Text("Orbit Display");
+        ImGui::Dummy (ImVec2(0, ui::Px (4)));
+        ui::SectionHeader ("Orbits");
         if (ImGui::BeginTable("table orbit display", 2, ImGuiTableFlags_SizingStretchSame)) {
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
-            ImGui::CheckboxFlags("Focus Vessel", &df, DISP_ORBITFOCUS);
+            ImGui::CheckboxFlags("Focus vessel", &df, DISP_ORBITFOCUS);
             ImGui::TableSetColumnIndex(1);
             ImGui::CheckboxFlags("Target", &df, DISP_ORBITSEL);
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
             int orbitmode=(df & DISP_ORBITPLANE) ? 0 : 1;
-            ImGui::RadioButton("Orbit Plane", &orbitmode, 0);
+            ImGui::RadioButton("Orbit plane", &orbitmode, 0);
             ImGui::TableSetColumnIndex(1);
-            ImGui::RadioButton("Ground Track", &orbitmode, 1);
+            ImGui::RadioButton("Ground track", &orbitmode, 1);
             df &= ~(DISP_GROUNDTRACK | DISP_ORBITPLANE);
             df |= (orbitmode == 0)? DISP_ORBITPLANE:DISP_GROUNDTRACK;
 
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
-            ImGui::CheckboxFlags("Horizon Line", &df, DISP_HORIZONLINE); 
+            ImGui::CheckboxFlags("Horizon line", &df, DISP_HORIZONLINE);
             ImGui::EndTable();
         }
-        ImGui::Separator();
 
-        ImGui::Text("Terminator");
+        ImGui::Dummy (ImVec2(0, ui::Px (4)));
+        ui::SectionHeader ("Terminator");
         if (ImGui::BeginTable("table1", 2, ImGuiTableFlags_SizingStretchSame)) {
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
@@ -358,36 +374,37 @@ void DlgMap::DrawMenu() {
             ImGui::CheckboxFlags("Shaded", &df, DISP_TERMINATOR_SHADE);
             ImGui::EndTable();
         }
-        ImGui::Separator();
 
-        ImGui::Text("Surface Markers");
+        ImGui::Dummy (ImVec2(0, ui::Px (4)));
+        ui::SectionHeader ("Surface");
         if (ImGui::BeginTable("table2", 2, ImGuiTableFlags_SizingStretchSame)) {
 
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
-            ImGui::CheckboxFlags("Grid Line", &df, DISP_GRIDLINE);
+            ImGui::CheckboxFlags("Grid lines", &df, DISP_GRIDLINE);
             ImGui::TableSetColumnIndex(1);
-            ImGui::CheckboxFlags("Surface Bases", &df, DISP_BASE);
+            ImGui::CheckboxFlags("Surface bases", &df, DISP_BASE);
 
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
             ImGui::CheckboxFlags("Coastlines", &df, DISP_COASTLINE);
             ImGui::TableSetColumnIndex(1);
-            ImGui::CheckboxFlags("VOR Transmitters", &df, DISP_NAVAID);
+            ImGui::CheckboxFlags("VOR transmitters", &df, DISP_NAVAID);
 
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
-            ImGui::CheckboxFlags("Contour Lines", &df,DISP_CONTOURS); 
+            ImGui::CheckboxFlags("Contour lines", &df,DISP_CONTOURS);
             ImGui::TableSetColumnIndex(1);
             ImGui::CheckboxFlags("Landmarks", &df, DISP_CUSTOMMARKER);
 
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::CheckboxFlags("Moons", &df, DISP_MOON);
+
             ImGui::EndTable();
         }
-        ImGui::Separator();
 
-        ImGui::Text("Other");
-        ImGui::CheckboxFlags("Natural Satellites", &df, DISP_MOON);
-
+		ImGui::PopStyleVar ();
         ImGui::EndAnimatedCombo();
 
         vectormap->SetDisplayFlags(df);
@@ -398,54 +415,46 @@ void DlgMap::DrawMenu() {
 			prm->DispFlag = df;
 		}
     }
+	if (ImGui::IsItemHovered (ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip ("What the map shows");
 
-	ImGui::SameLine();
+	// search: the selection follows the text (an exact name)
+	ImGui::SameLine(0, gap);
+	float sw = ImGui::GetContentRegionAvail().x - 2 * (bw + gap);
+	if (ui::SearchField ("##search", "Find on the map", searchbuf, sizeof(searchbuf), sw, true))
+		SetSelection(searchbuf);
 
-	if(ImGui::Button(ICON_FA_FILTER)) {
+	ImGui::SameLine(0, gap);
+	if(ImGui::Button(ICON_LC_FUNNEL "##filter", ImVec2(bw, bw))) {
         ImGui::OpenPopup("dlgmap_search_filter");
 	}
-    ImVec2 btn_pos = ImGui::GetItemRectMin();
-	btn_pos.x-=4;
-	btn_pos.y-=5;
-    ImGui::SetNextWindowPos(btn_pos);
+	ImGui::SetItemTooltip("What the search finds");
+    ImVec2 btn_pos = ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + ui::Px (4));
+    ImGui::SetNextWindowPos(btn_pos, ImGuiCond_Always, ImVec2(0.5f, 0.0f));
 
     if (ImGui::BeginAnimatedPopup("dlgmap_search_filter"))
     {
-        ImGui::Text(ICON_FA_FILTER " Search filter");
-        ImGui::Separator();
-		
+        ui::SectionHeader ("Search for");
 		ImGui::CheckboxFlags("Moons", &selectionfilter, DISP_MOON);
 		ImGui::CheckboxFlags("Vessels", &selectionfilter, DISP_VESSEL);
-		ImGui::CheckboxFlags("VOR", &selectionfilter, DISP_NAVAID);
+		ImGui::CheckboxFlags("VOR transmitters", &selectionfilter, DISP_NAVAID);
 		ImGui::CheckboxFlags("Landmarks", &selectionfilter, DISP_CUSTOMMARKER);
 		ImGui::CheckboxFlags("Bases", &selectionfilter, DISP_BASE);
 
 	    ImGui::EndAnimatedPopup();
 	}
 
-	ImGui::SameLine();
-	ImGui::SetNextItemWidth(160);
-	if(ImGui::InputText("##search", searchbuf, sizeof(searchbuf), ImGuiInputTextFlags_EnterReturnsTrue)) {
-		SetSelection(searchbuf);
-	}
-	ImGui::SameLine();
-	if(ImGui::Button(ICON_FA_MAGNIFYING_GLASS)) {
-		SetSelection(searchbuf);
-	}
-	ImGui::SetItemTooltip("Search object");
-
 	ImGui::BeginDisabled(!enableInfo);
-	ImGui::SameLine();
-	if(ImGui::Button(ICON_FA_CIRCLE_INFO)) {
+	ImGui::SameLine(0, gap);
+	if(ImGui::Button(ICON_LC_INFO "##info", ImVec2(bw, bw))) {
 		VectorMap::OBJTYPE obj = vectormap->GetSelection ();
 		if (obj.type == DISP_BASE || obj.type == DISP_VESSEL || obj.type == DISP_MOON) {
 			DlgInfo *pInfo = g_pOrbiter->DlgMgr()->EnsureEntry<DlgInfo> ();
 			pInfo->SetBody ((Body*)obj.obj);
 		}
 	}
-	if(enableInfo)
-		ImGui::SetItemTooltip("Open info dialog for object");
-	ImGui::EndDisabled();	
+	ImGui::SetItemTooltip(enableInfo ? "Object information" : "Object information (select a base, vessel or moon)");
+	ImGui::EndDisabled();
+	ImGui::Dummy (ImVec2(0, ui::Px (2)));
 }
 
 void DlgMap::OnDraw() {

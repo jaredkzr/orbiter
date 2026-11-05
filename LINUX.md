@@ -93,6 +93,13 @@ cd out/build/linux-x64-headless-release
 | `--maxframes=<n>` | end the session after `n` frames |
 | `--maxsystime=<t>` | end the session after `t` seconds |
 
+**The launchpad:** without a scenario on the command line, Orbiter opens
+the launchpad over a live scene (a session of its own, never saved). It
+lists the scenarios with their preview images (`<scenario>.jpg` beside the
+scenario file, rendered with `Utils/ScenarioShots/render.py`), the
+recently launched ones first. Enter launches the selected scenario, Ctrl+Q
+quits.
+
 **In the simulation:** `M` toggles the 3D map view with manoeuvre nodes;
 `F5` opens replay. A gamepad works once `JoystickIndex` is set in
 `Orbiter.cfg`.
@@ -106,7 +113,24 @@ PlanetTexDir = /path/to/Orbiter-2024/Textures\    ; planet tiles and .tex files 
 TerrainDetail = TRUE           ; procedural terrain detail finer than the elevation data
 GroundScatter = TRUE           ; rocks, boulders, trees, cacti (large ones are obstacles)
 PlanetResolutionBias = 0       ; +1: terrain tiles half the size on screen (finer, slower)
+UIScale = 1                    ; interface size, on top of the scaling with the window's height (1 at 1080 lines)
+LaunchpadBackdrop = TRUE       ; a live scene behind the launchpad (FALSE: a plain background)
 ```
+
+The scene behind the launchpad is `Config/Launchpad/Backdrop.scn`;
+`ORBITER_LAUNCHPAD_BACKDROP=0` turns it off for one run.
+
+**Graphics** (the Settings screen's Graphics page, on the launchpad and in
+flight with F6): the Vulkan client keeps its settings in
+`Config/VK/Graphics.cfg` (anti-aliasing, render resolution, ray tracing,
+effects) and the sky's display mode and parts in `Config/VK/Sky.cfg`. A
+quality preset (Low, Medium, High, Ultra) sets the lighting, effects and sky
+at once. Some settings take effect when a scenario is launched; they are
+marked as such in flight. An `ORBITER_VK_*` variable below still overrides a
+setting, which the page then shows locked. Offscreen runs (tests,
+benchmarks, scenario images) leave both files alone and use the defaults,
+unless `ORBITER_VK_GRAPHICS_CFG=<file>` names a file for all the graphics
+settings.
 
 **Per planet** (`Config/<Planet>.cfg`): `TerrainDetail`,
 `TerrainDetailHurst`, `TerrainDetailCraters`, `TerrainDetailCraterDepth`,
@@ -131,6 +155,7 @@ These are for testing and tuning (`1` turns a feature on, `0` off).
 | `ORBITER_VK_SCREENSHOT=<file.png>` | save a screenshot … |
 | `ORBITER_VK_SCREENSHOT_FRAME=<n>` | … at frame `n` |
 | `ORBITER_VK_SCREENSHOT_EXIT=1` | … and exit afterwards |
+| `ORBITER_VK_SCREENSHOT_NOUI=1` | … without the user interface, HUD and panels (scenario previews: `Utils/ScenarioShots/render.py`) |
 | `ORBITER_VK_FRAMETIME=<s>` | a fixed frame time for exposure, sky adaptation and the upscaler: with `--fixedstep`, images that do not depend on how fast the frames were (A/B comparisons) |
 | `ORBITER_VK_VIDEO=<dir>`, `ORBITER_VK_VIDEO_FRAMES=<n>` | write `n` frames as PNG files |
 | `ORBITER_VK_VALIDATION=1` | Vulkan validation layer (messages in `Orbiter.log`) |
@@ -139,7 +164,8 @@ These are for testing and tuning (`1` turns a feature on, `0` off).
 | `ORBITER_VK_TILE_DEBUG=1` | terrain tile statistics; mesh against core elevation |
 | `ORBITER_VK_MESH_CHECK=1` | compare GPU-built tile meshes with the CPU path |
 | `ORBITER_VK_RT=0` | no ray tracing (shadow maps, SSAO, screen-space reflections) |
-| `ORBITER_VK_RT_LIGHTING=0`, `ORBITER_VK_RT_REFLECT=0` | ray-traced lighting / reflections off |
+| `ORBITER_VK_RT_LIGHTING=0`, `ORBITER_VK_RT_REFLECT=0` | ray-traced lighting off / no ray tracing in the scene (the hardware's ray queries stay enabled) |
+| `ORBITER_VK_GRAPHICS_CFG=<file>` | read and write the graphics settings in this file (offscreen runs use none by default) |
 | `ORBITER_VK_GPU_MESH=0` | build terrain meshes on the CPU |
 | `ORBITER_VK_RENDER_SCALE=<f>` | 3D render resolution factor (upscaled by FSR 3) |
 | `ORBITER_VK_UPSCALER=…`, `ORBITER_VK_TAA=0`, `ORBITER_VK_MSAA=<n>` | anti-aliasing and upscaling |

@@ -106,6 +106,7 @@ public:
 	HWND OpenDialog (HINSTANCE hInst, int id, DLGPROC pDlg, void *context = 0); // use this version for for calls from external dlls
 	HWND OpenDialogEx (int id, DLGPROC pDlg, DWORD flag = 0, void *context = 0); // extended version
 	HWND OpenDialogEx (HINSTANCE hInst, int id, DLGPROC pDlg, DWORD flag = 0, void *context = 0); // extended version
+	void OpenKeyHelp ();  // the keyboard shortcuts sheet (open or close)
 	void OpenHelp (const HELPCONTEXT *hcontext);
 	void OpenLaunchpadHelp (HELPCONTEXT *hcontext);
 	HELPCONTEXT DefaultHelpPage(const char* topic);
@@ -371,16 +372,22 @@ public:
 	void PlatformMouse (UINT event, DWORD state, int x, int y);
 	void PlatformFocus (bool active) { bActive = active; }
 	void PlatformCloseRequest () { bPlatformClose = true; }
+	/// End the session and the application (not back to the launchpad)
+	void RequestExit () { bExitRequested = bPlatformClose = true; }
 	bool PlatformMouseCaptured () const { return bKeepFocus; }
+	bool IsBackdrop () const { return bBackdrop; }
 
 private:
 	void GamepadInput ();
 	void SendLogicalKey (int lfunc);            // as if the key mapped to lfunc was pressed
 	bool RunLaunchpad (std::string &scenario);  // false: exit the application
+	bool RunBackdrop (std::string &scenario);   // the launchpad over a live scene; false: exit
 	void RunSession (const std::string &scenario);
+	void ApplyVideoSettings ();                 // the window's size and mode from the configuration
 	char platformKstate[256];                   // current key state
 	std::vector<DIDEVICEOBJECTDATA> platformKbuf; // key events since the last frame
 	bool bPlatformClose;                        // session end requested by the client
+	bool bExitRequested = false;                // the application's end requested (flight menu)
 	unsigned int padButtons = 0;                // gamepad buttons held in the last frame
 	class PosixLaunchpad *m_pPosixLaunchpad = nullptr;
 #endif
@@ -481,6 +488,7 @@ private:
 	std::chrono::time_point<std::chrono::steady_clock> time_suspend;    // used for time-skipping within a step
 	bool            bActive;       // render window has focus
 	bool            bAllowInput;   // allow input processing for the next frame even if render window doesn't have focus
+	bool            bBackdrop = false; // a session shown behind the launchpad: not saved, no input, no overlays
 	bool            bVisible;      // render window exists and is visible
 	bool            bRunning;      // simulation is running
 	bool            bRequestRunning; // pause/resume request

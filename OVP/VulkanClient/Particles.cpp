@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "Particles.h"
+#include "GfxSettings.h"
 #include "Scene.h"
 #include "VulkanClient.h"
 #include "VkTexture.h"
@@ -117,8 +118,8 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		smokeTex = texmgr->CreateRGBALinear (N, N, px.data());
 	}
 	shapeView = shapeNoise, detailView = detailNoise;
-	if (const char *e = getenv ("ORBITER_VK_PARTICLES")) enabled = atoi (e) != 0;
-	if (const char *e = getenv ("ORBITER_VK_PARTICLE_DENSITY")) density = std::clamp ((float)atof (e), 1.0f, 16.0f);
+	enabled = vkc::Gfx ().particles;
+	density = std::clamp (vkc::Gfx ().particleDensity, 1.0f, 16.0f);
 
 	pool = ctx->CreateBuffer (CAPACITY * PARTICLE_SIZE, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
 	for (auto &b : emitBuf) b = ctx->CreateBuffer (MAX_EMISSIONS * sizeof(GpuEmission), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);

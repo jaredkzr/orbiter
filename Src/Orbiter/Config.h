@@ -247,6 +247,8 @@ struct CFG_UIPRM {              // user interface options
 	int    SelVesselTab;        // tab to open in vessel selection dialog
  	int    SelVesselRange;      // "nearby" range for vessel selection dialog
 	bool   bSelVesselFlat;      // flat assemblies for vessel selection dialog
+	float  UIScale;             // interface size (1: 100 %), on top of the window's resolution
+	bool   bLaunchpadBackdrop;  // launchpad (posix): a live scene behind it
 };
 
 struct CFG_DEMOPRM {

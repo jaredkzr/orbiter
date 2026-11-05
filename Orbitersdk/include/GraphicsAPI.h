@@ -383,6 +383,40 @@ class Sketchpad;
 class ParticleStream;
 class ScreenAnnotation;
 
+/**
+ * \brief A setting of a graphics client, shown on the Graphics page of the
+ *   user interface's settings (GraphicsClient::clbkGetSettings).
+ *
+ * Values are floats: a TOGGLE's is 0 or 1, a CHOICE's the index of the
+ * choice, a SLIDER's the value itself.
+ */
+struct GraphicsSetting {
+	enum Type { TOGGLE, CHOICE, SLIDER };
+	/// when a change takes effect
+	enum Apply {
+		LIVE,          ///< at once
+		NEXT_SESSION,  ///< when a simulation session starts
+		RESTART        ///< when Orbiter starts
+	};
+	const char *key;      ///< identifier (e.g. the key in the client's configuration file)
+	const char *group;    ///< heading of the group it is listed under
+	const char *label;
+	const char *help;     ///< a sentence about it, or NULL
+	Type type;
+	Apply apply;
+	int nchoice;                ///< CHOICE: number of choices
+	const char *const *choice;  ///< CHOICE: their labels
+	float vmin, vmax, step;     ///< SLIDER: range and step (0: continuous)
+	const char *format;         ///< SLIDER: printf format of the displayed value (e.g. "%.0f %%")
+	float display;              ///< SLIDER: factor from value to displayed value (e.g. 100 for percent)
+	float value;                ///< the setting
+	float effective;            ///< the value in effect (differs from value until a change applies)
+	float preset[4];            ///< its value in the Low, Medium, High and Ultra presets (NAN: not part of them)
+	const char *lockedBy;       ///< set by this environment variable (not changeable), or NULL
+	const char *unavailable;    ///< why it cannot be used here (e.g. no hardware support), or NULL
+	const char *requires;       ///< only used if this setting is on: "key" (a TOGGLE) or "key=n" (a CHOICE), or NULL
+};
+
 // ======================================================================
 // class GraphicsClient
 // ======================================================================
@@ -1488,6 +1522,31 @@ public:
 	// before the frame is ended by e.g. incrementing its reference
 	// counter and releasing it once the frame has been rendered.
 	virtual uint64_t clbkImGuiSurfaceTexture(SURFHANDLE surf) = 0;
+
+	/**
+	 * \name Settings of the client (the settings screen's Graphics page)
+	 */
+	// @{
+	/**
+	 * \brief The client's settings, in the order they are listed
+	 * \param list receives a pointer to the client's array (valid until the
+	 *   next call of a settings method)
+	 * \return number of settings
+	 * \default None (0).
+	 */
+	virtual int clbkGetSettings (const GraphicsSetting **list) { *list = 0; return 0; }
+	/**
+	 * \brief Change a setting
+	 * \param index the setting's index in the list of clbkGetSettings
+	 * \param value its new value
+	 * \note A LIVE setting takes effect at once.
+	 */
+	virtual void clbkSetSetting (int index, float value) {}
+	/**
+	 * \brief Write the settings to the client's configuration
+	 */
+	virtual void clbkSaveSettings () {}
+	// @}
 
 protected:
 	/** \brief Launchpad video tab indicator

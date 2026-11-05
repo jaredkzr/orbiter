@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "RayTracing.h"
+#include "GfxSettings.h"
 #include "VkTexture.h"
 #include <algorithm>
 #include <cstdlib>
@@ -37,7 +38,7 @@ void RTForgetGeometry (uint64_t id)
 bool RTScene::Init (vkc::Context *c, TextureManager *tm)
 {
 	if (!c->rayTracing) return false;
-	if (const char *e = getenv ("ORBITER_VK_RT_REFLECT")) enabled = atoi (e) != 0;
+	enabled = vkc::Gfx ().rayTracing; // (ORBITER_VK_RT_REFLECT=0: off)
 	if (!enabled) return false;
 	ctx = c;
 	texmgr = tm;

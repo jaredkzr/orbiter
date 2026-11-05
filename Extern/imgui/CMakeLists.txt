@@ -15,6 +15,12 @@ install(FILES ${imgui_SOURCE_DIR}/misc/fonts/Roboto-Medium.ttf fa-solid-900.ttf 
 	DESTINATION ${ORBITER_INSTALL_ROOT_DIR}/Fonts
 )
 
+# the user interface's fonts (UiTheme.h): Inter, JetBrains Mono, Lucide icons
+file(GLOB UI_FONTS ${CMAKE_SOURCE_DIR}/Extern/Fonts/*.ttf)
+install(FILES ${UI_FONTS}
+	DESTINATION ${ORBITER_INSTALL_ROOT_DIR}/Fonts
+)
+
 install(FILES ${imgui_SOURCE_DIR}/imgui.h ${imgui_SOURCE_DIR}/imconfig.h
 	DESTINATION ${ORBITER_INSTALL_SDK_DIR}/include
 )
