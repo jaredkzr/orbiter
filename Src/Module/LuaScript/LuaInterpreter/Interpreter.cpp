@@ -1057,6 +1057,11 @@ void Interpreter::LoadAPI ()
 		{"set_cameraaperture", oapi_set_cameraaperture},
 		{"get_cameraglobalpos", oapi_get_cameraglobalpos},
 		{"get_cameraglobaldir", oapi_get_cameraglobaldir},
+		{"get_cameramode", oapi_get_cameramode},
+		{"save_scenario", oapi_save_scenario},
+		{"get_camerarotation", oapi_get_camerarotation},
+		{"get_cameraview", oapi_get_cameraview},
+		{"rot_camera", oapi_rot_camera},
 		{"move_groundcamera", oapi_move_groundcamera},
 		{"set_cameracockpitdir", oapi_set_cameracockpitdir},
 			
@@ -7171,6 +7176,101 @@ int Interpreter::oapi_get_cameraglobaldir (lua_State *L)
 	oapiCameraGlobalDir (&dir);
 	lua_pushvector (L, dir);
 	return 1;
+}
+
+/***
+Returns the camera mode.
+
+@function get_cameramode
+@treturn int mode (oapiCameraMode: 0 cockpit, 6 ground observer, 7 auto,
+  8 free, 9 orbital, 10 chase, 11 locked, 12 flyby, 3 inertial)
+@treturn string its name ("cockpit", "ground", "auto", "free", "orbital",
+  "chase", "locked", "flyby", "inertial")
+*/
+int Interpreter::oapi_get_cameramode (lua_State *L)
+{
+	int m = oapiCameraMode ();
+	const char *name = "";
+	switch (m) {
+	case CAM_COCKPIT:        name = "cockpit";  break;
+	case CAM_GROUNDOBSERVER: name = "ground";   break;
+	case CAM_AUTO:           name = "auto";     break;
+	case CAM_FREE:           name = "free";     break;
+	case CAM_ORBITAL:        name = "orbital";  break;
+	case CAM_CHASE:          name = "chase";    break;
+	case CAM_LOCKED:         name = "locked";   break;
+	case CAM_FLYBY:          name = "flyby";    break;
+	case CAM_GLOBALFRAME:    name = "inertial"; break;
+	}
+	lua_pushnumber (L, m);
+	lua_pushstring (L, name);
+	return 2;
+}
+
+/***
+Saves the current state as a scenario.
+
+@function save_scenario
+@tparam string fname file name, relative to the scenario folder, without ".scn"
+@tparam[opt] string desc description
+@treturn bool true if it was written
+*/
+int Interpreter::oapi_save_scenario (lua_State *L)
+{
+	const char *fname = luaL_checkstring (L, 1);
+	const char *desc = (lua_gettop (L) >= 2 ? luaL_checkstring (L, 2) : "");
+	lua_pushboolean (L, oapiSaveScenario (fname, desc));
+	return 1;
+}
+
+/***
+Returns the camera's rotation matrix (columns: its right, up and viewing
+direction in global coordinates).
+
+@function get_camerarotation
+@treturn MATRIX3 rotation
+*/
+int Interpreter::oapi_get_camerarotation (lua_State *L)
+{
+	MATRIX3 R;
+	oapiCameraRotationMatrix (&R);
+	lua_pushmatrix (L, R);
+	return 1;
+}
+
+/***
+Returns the external camera's distance from its target and its angles in
+the camera mode's frame.
+
+@function get_cameraview
+@treturn number distance [m]
+@treturn number azimuth (yaw) [rad]
+@treturn number polar angle (pitch) [rad]
+*/
+int Interpreter::oapi_get_cameraview (lua_State *L)
+{
+	lua_pushnumber (L, oapiCameraTargetDist ());
+	lua_pushnumber (L, oapiCameraAzimuth ());
+	lua_pushnumber (L, oapiCameraPolar ());
+	return 3;
+}
+
+/***
+Turns the external camera about its target (eased) and scales its distance.
+
+@function rot_camera
+@tparam number dazimuth azimuth change [rad]
+@tparam number dpolar polar angle change [rad]
+@tparam[opt=1] number dscale distance factor
+*/
+int Interpreter::oapi_rot_camera (lua_State *L)
+{
+	double da = luaL_checknumber (L, 1), dp = luaL_checknumber (L, 2);
+	double ds = (lua_gettop (L) >= 3 ? luaL_checknumber (L, 3) : 1.0);
+	if (da) oapiCameraRotAzimuth (2.0 * da); // (the API turns by half the angle)
+	if (dp) oapiCameraRotPolar (2.0 * dp);
+	if (ds != 1.0) oapiCameraScaleDist (ds);
+	return 0;
 }
 
 /***

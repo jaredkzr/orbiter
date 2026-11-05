@@ -104,6 +104,27 @@ quits.
 `F5` opens replay. A gamepad works once `JoystickIndex` is set in
 `Orbiter.cfg`.
 
+**External camera:** `F1` switches between the cockpit and the outside
+view; `F2` cycles the camera modes (`Shift+F2` back), and the Camera dialog
+(`Ctrl+F1`) lists them:
+
+| Mode | The camera |
+| --- | --- |
+| Auto | Free near a planet (in its atmosphere, or low over it), Orbital higher up |
+| Free | orbits about the local vertical; the horizon stays level and the view stays put as the vessel turns |
+| Orbital | turns with the orbit (up: the orbit's normal), so the planet stays put on screen |
+| Chase | behind the direction of travel, horizon level, with a little lag |
+| Locked | fixed to the vessel's axes; turns all the way round it |
+| Flyby | watches the vessel pass from a point ahead on its path, then moves ahead again |
+
+Right-drag or `Ctrl`+arrows turn the camera about its target (Free, Orbital
+and Chase stop just short of straight overhead), the wheel or
+`PgUp`/`PgDn` change the distance, `Ctrl`+wheel the field of view; `Home`
+puts the camera behind the target (Flyby: ahead again). Scenarios with the
+classic track modes open in the closest new mode: Target relative in
+Locked, the others in Free with the camera where they put it; saving writes
+the new mode.
+
 ## Configuration
 
 `Orbiter.cfg` in the build directory (Orbiter writes it on exit):
@@ -206,8 +227,10 @@ ctest
 - **Physics and scripting tests:** ground contact, collisions, docking,
   payloads, manoeuvres, replay, terrain detail and ground scatter. These run
   headless.
-- **Vulkan tests:** `Launchpad.Cycle`, `Input.MapView` and `Input.Replay`
-  render offscreen and need a Vulkan device.
+- **Vulkan tests:** `Launchpad.Cycle` and the `Input.*` tests (map view,
+  replay, MFDs, camera modes) render offscreen and need a Vulkan device.
+- **Unit tests:** transfer conics and routes, relativity, Kerr geodesics,
+  collision geometry and the camera's geometry (`Camera.Rig`).
 - **Test files:** add new test scenarios to `Scenarios/Tests/` and their
   scripts to `Script/Tests/`. The build copies them into the build tree.
 

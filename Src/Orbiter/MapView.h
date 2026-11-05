@@ -74,7 +74,7 @@ private:
 	struct SavedCamera {
 		Body *target = nullptr;
 		bool external = true;
-		ExtCamMode extmode = CAMERA_TARGETRELATIVE;
+		ExtCamMode extmode = CAMERA_AUTO;
 		double dist = 4.0, phi = 0.0, theta = 0.0;
 	} saved;
 	const CelestialBody *mapRef = nullptr; // body the map camera is attached to

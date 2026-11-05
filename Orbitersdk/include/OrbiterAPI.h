@@ -1897,6 +1897,14 @@ typedef enum {
 #define CAM_TARGETTOOBJECT       4
 #define CAM_TARGETFROMOBJECT     5
 #define CAM_GROUNDOBSERVER       6
+// the external camera's modes (CAM_TARGETRELATIVE to CAM_TARGETFROMOBJECT
+// are no longer used: a classic mode becomes the closest of these)
+#define CAM_AUTO                 7 ///< Free near a body, Orbital higher up
+#define CAM_FREE                 8 ///< horizon level about the local vertical
+#define CAM_ORBITAL              9 ///< up: the orbit's normal, turning with the orbit
+#define CAM_CHASE               10 ///< behind the direction of travel
+#define CAM_LOCKED              11 ///< fixed to the target's axes
+#define CAM_FLYBY               12 ///< a point ahead on the target's path
 
 // time propagation modes
 #define PROP_ORBITAL             0x0F
@@ -2534,7 +2542,8 @@ public:
 	void Store (char *str);
 	Mode GetMode() const { return CM_TRACK; }
 	void GetDescr (char *str, int len);
-	enum TrackMode { TM_CURRENT, TM_RELATIVE, TM_ABSDIR, TM_GLOBAL, TM_TARGETTOREF, TM_TARGETFROMREF };
+	enum TrackMode { TM_CURRENT, TM_RELATIVE, TM_ABSDIR, TM_GLOBAL, TM_TARGETTOREF, TM_TARGETFROMREF,
+		TM_AUTO, TM_FREE, TM_ORBITAL, TM_CHASE, TM_LOCKED, TM_FLYBY }; // (the classic modes become the closest new one)
 	TrackMode GetTrackMode () const { return tmode; }
 	void SetTrackMode (TrackMode trackmode, OBJHANDLE refobj = 0);
 	OBJHANDLE GetRef() const { return ref; }

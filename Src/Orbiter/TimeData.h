@@ -40,6 +40,11 @@ public:
 
 	inline double FPS() const { return fps; }
 
+	/// The step for the user interface's motion (e.g. the camera's
+	/// easing): the fixed step in fixed-step runs (repeatable tests and
+	/// videos), else the frame's system time step
+	inline double UiDT () const { return bFixedStep ? fixed_step : SysDT; }
+
 	double  SysT0;        // current system time since simulation start [s]
 	double  SysT1;        // next frame system time (=SysT0+SysDT)
 	double  SysDT;        // current system step interval [s]

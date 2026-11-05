@@ -26,12 +26,16 @@ class Planet;
 class VObject;
 class CameraMode;
 
+// External camera modes (see CamRig.h for the geometry). The tracking
+// modes orbit the target in a frame of their own; F2 cycles them.
 typedef enum {
-	CAMERA_TARGETRELATIVE,
-	CAMERA_ABSDIRECTION,
-	CAMERA_GLOBALFRAME,
-	CAMERA_TARGETTOOBJECT,
-	CAMERA_TARGETFROMOBJECT,
+	CAMERA_AUTO,        // Free near a body (in its atmosphere, or low), Orbital higher up
+	CAMERA_FREE,        // up: the local vertical; turns with neither the target nor its orbit
+	CAMERA_ORBITAL,     // up: the orbit's normal, turning with the orbit (the planet stays put on screen)
+	CAMERA_CHASE,       // behind the direction of travel, horizon level, with a little lag
+	CAMERA_LOCKED,      // fixed to the target's axes (all the way round, trackball)
+	CAMERA_FLYBY,       // a point ahead on the target's path; put ahead again once passed
+	CAMERA_INERTIAL,    // fixed in the ecliptic frame (the map view; not in the cycle)
 	CAMERA_GROUNDOBSERVER
 } ExtCamMode;
 
@@ -160,6 +164,31 @@ public:
 
 	void SetDistance(double rd);
 	// Set camera distance in 'unit' radius
+
+	/// External tracking modes: distance [target sizes] (unchanged if
+	/// rd <= 0), yaw and pitch [rad] in the mode's frame, set at once (no
+	/// easing). Locked: the camera's rotation relative to the target.
+	void SetExtView (double rd, double ph, double th);
+
+	/// External view back to its start: behind the target (Flyby: put
+	/// ahead again)
+	void ResetExtView ();
+
+	/// Turn the camera once so that obj is behind the target (behindTarget)
+	/// or behind the camera (in Free if the mode has no angles to turn)
+	void FaceObject (const Body *obj, bool behindTarget);
+
+	/// Show the view at once (no blend from the last one)
+	void CancelBlend () { blend.on = false; }
+
+	/// The next (dir > 0) or previous tracking mode for the target
+	void CycleTrackMode (int dir);
+	/// Whether a tracking mode applies to the current target
+	bool TrackModeAvailable (ExtCamMode mode) const;
+	/// The name of an external mode (e.g. "Chase")
+	static const char *ExtModeName (ExtCamMode mode);
+	/// How long ago the mode was cycled with F2 [s] (for its label)
+	double SinceModeChange () const { return camT - modeChangeT; }
 
 	void ResetCockpitView();
 	// Call ResetCockpitDir and ResetCockpitPos, and stop any transitional movement
@@ -300,8 +329,33 @@ private:
 	void SetViewInternal ();
 	void SetViewExternal ();
 
-	void SetRelPos (double r, double ph, double th);
-	// Set camera position rel. to ref. object, where r, ph, th are polar coords
+	/// The tracking modes: ease towards the requested view, then place the camera
+	void UpdateTrack (double dt);
+	/// The current mode's frame (columns: x, up, forward; global); changed:
+	/// the kind of frame differs from the last one (e.g. Auto switched)
+	Matrix TrackFrame (double dt, bool &changed);
+	/// Yaw, pitch and distance (Locked: rotation) taken from where the
+	/// camera is now, in frame F: a change of mode doesn't move the camera
+	void Adopt (const Matrix &F);
+	/// Flyby: put the camera ahead on the target's path, and follow
+	void PlaceFlyby ();
+	void UpdateFlyby (double dt);
+	/// The target's reference body (for up and velocity; 0: none)
+	const Body *RefBody () const;
+	/// Local vertical at the target (ecliptic north for celestial bodies)
+	Vector UpAtTarget () const;
+	/// The target's velocity relative to the surface below it if it is
+	/// low over a body, else relative to its reference body
+	Vector TravelVelocity (bool &surface) const;
+	/// Start a blend from the camera's current place and orientation,
+	/// relative to the target; from: the target the camera had (if it
+	/// just changed)
+	void StartBlend (const Body *from = 0);
+	/// The target is a planet, moon or star (no chase or flyby)
+	bool CelestialTarget () const;
+	/// A scenario's classic track mode, read in Read and applied in InitState
+	struct Legacy { int mode = 0; double rd = 4, ph = 0, th = 0; };
+	void ApplyLegacy (const Legacy &l, const Body *ref);
 
 	double GroundElevation (const Planet *ref, double lng, double lat, double alt) const;
 	/// External views (not the ground observer, which keeps its own height):
@@ -344,10 +398,39 @@ private:
 
 	Vector  gdir;          // camera direction in global coords (for 'absolute direction' modes)
 	Body   *target;        // Reference body. Relative coordinates (RPos) refer to this.
-	const Body *dirref;    // body used as direction reference for CAMERA_TARGETTOOBJECT and
-						   // CAMERA_TARGETFROMOBJECT external modes
+	const Body *dirref;    // the ground observer's planet (and a classic scenario's
+						   // reference object, while it is read)
 	double  rdist;         // distance of camera from target in units of body size
 	                       // (only for external views)
+	double  rdistT;        // ... requested (the camera eases towards it)
+	double  yawT, pitchT;  // yaw and pitch requested (ephi and etheta ease towards them)
+	Matrix  lockQ, lockQT; // Locked: camera rotation relative to the target (current, requested)
+	Matrix  frame;         // the tracking frame (columns x, up, forward; global)
+	int     frameKind = -1;// the mode whose frame it is (-1: none yet)
+	bool    autoOrbital = false; // Auto: in the orbital frame
+	Vector  chaseFwd;      // Chase: the direction of travel, smoothed (global)
+	bool    chaseValid = false;
+	double  camT = 0.0;          // the camera's clock [s] (TimeData::UiDT steps)
+	double  modeChangeT = -1e10; // camT when the mode was last cycled (F2: its label)
+	double  settleT = -1e10;     // until then the camera eases more slowly (after a change of mode)
+	struct Blend {         // a change of target or view, blended
+		bool on = false;
+		double t0 = 0;
+		Vector off;        // camera relative to the target at the start (global)
+		Matrix rot;        // camera orientation at the start
+	} blend;
+	struct Flyby {
+		bool placed = false;
+		bool ground = false;   // fixed on the ground (else drifting past the target in space)
+		Vector local;          // ground: position in the reference body's frame
+		Vector off;            // space: position relative to the target (global)
+		Vector drift;          // space: the target's velocity past the camera [m/s]
+		Vector vdir;           // the target's direction of travel at placement
+		double ahead = 0;      // how far ahead it was put [m]
+		int side = 1;          // the side it goes to (alternates)
+		const Body *ref = 0;
+	} fly;
+	Legacy legacy;
 	const Planet *planet_proxy; // closest planet
 	double alt_proxy;      // camera altitude and relative altitude over planet
 	double ephi, etheta;   // azimuth and polar angles of camera rel to target (external view)

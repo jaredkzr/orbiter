@@ -75,6 +75,16 @@ set_target_properties(Transfer.Conics PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORB
 add_test(NAME Transfer.Conics COMMAND $<TARGET_FILE:Transfer.Conics>)
 set_tests_properties(Transfer.Conics PROPERTIES TIMEOUT 60)
 
+# The external camera's geometry (frames, pitch limit, trackball, flyby)
+add_executable(Camera.Rig Camera.Rig.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/CamRig.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Vecmat.cpp)
+target_include_directories(Camera.Rig PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter)
+target_link_libraries(Camera.Rig Catch2::Catch2WithMain)
+set_target_properties(Camera.Rig PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER_BINARY_ROOT_DIR}")
+add_test(NAME Camera.Rig COMMAND $<TARGET_FILE:Camera.Rig>)
+set_tests_properties(Camera.Rig PROPERTIES TIMEOUT 60)
+
 # Gravity-assist routes (patched conics, optimiser; the Cassini1 benchmark)
 add_executable(Transfer.Routes Transfer.Routes.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Routes.cpp

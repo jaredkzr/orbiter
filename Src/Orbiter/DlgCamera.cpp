@@ -58,12 +58,14 @@ namespace {
 	{
 		if (!extcam) return "COCKPIT";
 		switch (m) {
-		case CAMERA_TARGETRELATIVE:   return "TARGET RELATIVE";
-		case CAMERA_ABSDIRECTION:     return "ABSOLUTE DIRECTION";
-		case CAMERA_GLOBALFRAME:      return "GLOBAL FRAME";
-		case CAMERA_TARGETTOOBJECT:   return "TARGET TO OBJECT";
-		case CAMERA_TARGETFROMOBJECT: return "TARGET FROM OBJECT";
-		case CAMERA_GROUNDOBSERVER:   return lock ? "GROUND \xC2\xB7 LOCKED" : "GROUND OBSERVER";
+		case CAMERA_AUTO:           return "AUTO";
+		case CAMERA_FREE:           return "FREE";
+		case CAMERA_ORBITAL:        return "ORBITAL";
+		case CAMERA_CHASE:          return "CHASE";
+		case CAMERA_LOCKED:         return "LOCKED";
+		case CAMERA_FLYBY:          return "FLYBY";
+		case CAMERA_INERTIAL:       return "INERTIAL";
+		case CAMERA_GROUNDOBSERVER: return lock ? "GROUND \xC2\xB7 LOCKED" : "GROUND OBSERVER";
 		}
 		return "";
 	}
@@ -131,16 +133,36 @@ void DlgCamera::DrawView() {
 
 	if (extcam) {
 		ImGui::Dummy (ImVec2(0, ui::Px (2)));
-		ui::SectionHeader ("Tracking");
-		static const char *track[] = { "Target relative", "Absolute dir.", "Global frame" };
-		int t = extmode <= CAMERA_GLOBALFRAME ? (int)extmode : -1;
-		if (ui::Segmented ("##track", track, 3, &t))
-			g_camera->SetTrackMode ((ExtCamMode)t);
-		if (ImGui::IsItemHovered (ImGuiHoveredFlags_DelayNormal)) ImGui::SetTooltip ("F2 cycles the tracking modes");
-		if (extmode == CAMERA_TARGETTOOBJECT || extmode == CAMERA_TARGETFROMOBJECT)
-			ui::TextDim ("Aligned with a reference object (chosen in Target).");
-		else if (extmode == CAMERA_GROUNDOBSERVER)
-			ui::TextDim ("Fixed to the ground (set in Ground).");
+		ui::SectionHeader ("Mode");
+		// two rows of three (the modes F2 cycles)
+		static const ExtCamMode row[2][3] = { { CAMERA_AUTO, CAMERA_FREE, CAMERA_ORBITAL }, { CAMERA_CHASE, CAMERA_LOCKED, CAMERA_FLYBY } };
+		for (int r = 0; r < 2; r++) {
+			const char *names[3];
+			int t = -1;
+			for (int i = 0; i < 3; i++) {
+				names[i] = Camera::ExtModeName (row[r][i]);
+				if (row[r][i] == extmode) t = i;
+			}
+			char id[16];
+			snprintf (id, sizeof (id), "##track%d", r);
+			ImGui::BeginDisabled (r == 1 && !g_camera->TrackModeAvailable (CAMERA_CHASE)); // (Chase and Flyby: vessels)
+			if (ui::Segmented (id, names, 3, &t) && t >= 0)
+				g_camera->SetTrackMode (row[r][t]);
+			ImGui::EndDisabled ();
+			if (ImGui::IsItemHovered (ImGuiHoveredFlags_DelayNormal)) ImGui::SetTooltip ("F2 cycles the modes, Shift+F2 back; Home: behind the target");
+		}
+		static const char *about[] = {
+			"Free near a planet, Orbital higher up.",
+			"Level with the horizon; the view stays put as the vessel turns.",
+			"Turns with the orbit: the planet stays where it is on screen.",
+			"Behind the direction of travel, horizon level.",
+			"Fixed to the vessel: turns with it, all the way round.",
+			"Watches the vessel pass from a point ahead on its path.",
+			"Fixed in space (the map).",
+			"Fixed to the ground (set in Ground)."
+		};
+		if ((int)extmode >= 0 && (int)extmode < (int)(sizeof (about) / sizeof (about[0])))
+			ui::TextDim ("%s", about[extmode]);
 	}
 
 	// field of view [deg]: the slider, and common values
@@ -303,15 +325,15 @@ void DlgCamera::DrawTarget() {
 	float w = ImGui::GetContentRegionAvail().x, gap = ImGui::GetStyle().ItemSpacing.x;
 	bool other = obj && obj != tgt;
 	ImGui::BeginDisabled (!other);
-	if (ui::SecondaryButton ("Keep behind camera", ImVec2((w - gap) * 0.5f, bh)) && other)
-		g_camera->SetTrackMode (CAMERA_TARGETFROMOBJECT, obj);
+	if (ui::SecondaryButton ("Behind camera", ImVec2((w - gap) * 0.5f, bh)) && other)
+		g_camera->FaceObject (obj, false);
 	if (other && ImGui::IsItemHovered (ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled))
-		ImGui::SetTooltip ("Look at %s from the direction of %s\n(e.g. the Sun behind the camera: the lit side)", tgt ? tgt->Name () : "", obj->Name ());
+		ImGui::SetTooltip ("Turn the camera to look at %s from the direction of %s\n(e.g. the Sun behind the camera: the lit side)", tgt ? tgt->Name () : "", obj->Name ());
 	ImGui::SameLine (0, gap);
-	if (ui::SecondaryButton ("Keep behind target", ImVec2(-FLT_MIN, bh)) && other)
-		g_camera->SetTrackMode (CAMERA_TARGETTOOBJECT, obj);
+	if (ui::SecondaryButton ("Behind target", ImVec2(-FLT_MIN, bh)) && other)
+		g_camera->FaceObject (obj, true);
 	if (other && ImGui::IsItemHovered (ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled))
-		ImGui::SetTooltip ("Look at %s towards %s\n(e.g. the Sun behind the target: the unlit side)", tgt ? tgt->Name () : "", obj->Name ());
+		ImGui::SetTooltip ("Turn the camera to look at %s towards %s\n(e.g. the Sun behind the target: the unlit side)", tgt ? tgt->Name () : "", obj->Name ());
 	ImGui::EndDisabled ();
 	ImGui::BeginDisabled (!obj || (obj == tgt && extcam));
 	std::string lbl = std::string (ICON_LC_EYE "  View ") + (obj ? obj->Name () : "");

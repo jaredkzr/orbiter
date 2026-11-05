@@ -19,12 +19,14 @@ class DynamicMenuBar;
 class InfoFrameRate;
 class InfoTime;
 class InfoTarget;
+class CameraModeLabel;
 
 class MenuInfoBar {
 	std::unique_ptr<DynamicMenuBar> dynMenu;
 	std::unique_ptr<InfoFrameRate>  infoFps;
 	std::unique_ptr<InfoTime>       infoTime;
 	std::unique_ptr<InfoTarget>     infoTgt;
+	std::unique_ptr<CameraModeLabel> camLabel;
 public:
 	struct MenuPreference {
 		std::string label;

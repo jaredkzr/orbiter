@@ -1,0 +1,18 @@
+# A scenario with a classic camera mode (Tests/Input/CameraLegacy.scn:
+# TRACKMODE TargetTo Earth) opens in the closest new one, Free, with the
+# camera where the classic mode put it (Earth behind the vessel); saved,
+# it is written as Free.
+
+lua v = vessel.get_focusinterface (); E = oapi.get_objhandle ("Earth")
+lua function dot (a, b) return a.x*b.x + a.y*b.y + a.z*b.z end
+lua function unit (a) local l = math.sqrt (dot (a, a)); return {x=a.x/l, y=a.y/l, z=a.z/l} end
+wait 10
+lua local m, n = oapi.get_cameramode (); check ("free", n == "free", n)
+lua off = unit ({x = oapi.get_cameraglobalpos ().x - v:get_globalpos ().x, y = oapi.get_cameraglobalpos ().y - v:get_globalpos ().y, z = oapi.get_cameraglobalpos ().z - v:get_globalpos ().z})
+lua toE = unit ({x = oapi.get_globalpos (E).x - v:get_globalpos ().x, y = oapi.get_globalpos (E).y - v:get_globalpos ().y, z = oapi.get_globalpos (E).z - v:get_globalpos ().z})
+lua check ("earth_behind", dot (off, toE) < -0.999, string.format ("camera.earth %.5f", dot (off, toE)))
+lua local d = oapi.get_cameraview (); check ("distance", math.abs (d / v:get_size () - 5) < 0.01, string.format ("%.3f sizes", d / v:get_size ()))
+lua check ("save", oapi.save_scenario ("Quicksave/CameraLegacyTest", "camera test"), "saved")
+lua local f = io.open ("Scenarios/Quicksave/CameraLegacyTest.scn"); local t = f and f:read ("*a") or ""; if f then f:close () end; check ("written_free", t:find ("TRACKMODE Free") ~= nil, t:match ("TRACKMODE[^\n]*") or "no TRACKMODE")
+lua os.remove ("Scenarios/Quicksave/CameraLegacyTest.scn")
+exit

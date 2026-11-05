@@ -21,6 +21,10 @@
 
 extern Orbiter *g_pOrbiter;
 extern Camera *g_camera;
+
+namespace {
+	float g_menuBottom = 0.0f; // the menu bar's lower edge this frame (screen; 0: none)
+}
 extern TimeData td;
 
 const ImGuiWindowFlags INFOFLAGS = ImGuiWindowFlags_NoTitleBar |
@@ -339,6 +343,7 @@ public:
 	}
 
 	void BeginMenuInfoBar() {
+		g_menuBottom = 0.0f;
 		ImGuiViewport *viewport = ImGui::GetMainViewport();
 		// Force viewport, we don't want the menu bar to pop out
 		// of the main window when we scroll it outside of view
@@ -375,6 +380,7 @@ public:
 				float h = style.WindowPadding.y * 2.0f + (prm.MenuButtonHoverSize * ui::Scale()) + ui::Px(18);
 				ImVec2 b0 = w->Pos, b1 (w->Pos.x + w->Size.x, w->Pos.y + std::min (w->Size.y, h));
 				w->DrawList->AddRectFilled(b0, b1, ui::Col32(ui::WINDOW), ui::Px(12)); // (opaque: the blend is linear, the HUD would show)
+				g_menuBottom = b1.y;
 				w->DrawList->AddRect(b0, b1, ui::Col32(ui::LINE, 0.7f), ui::Px(12), 0, std::max (1.0f, ui::Scale()));
 			}
 			ImVec2 bbmin = ImGui::GetCursorScreenPos() - style.WindowPadding;
@@ -804,11 +810,7 @@ public:
 			InfoRow("TGT", "%s", tgt->Name());
 			if (g_camera->IsExternal()) {
 				switch (g_camera->GetExtMode()) {
-					case CAMERA_TARGETRELATIVE:   InfoRow("CAM", "Track, relative"); break;
-					case CAMERA_ABSDIRECTION:     InfoRow("CAM", "Track, absolute direction"); break;
-					case CAMERA_GLOBALFRAME:      InfoRow("CAM", "Track, global frame"); break;
-					case CAMERA_TARGETTOOBJECT:   InfoRow("CAM", "Target to %s", g_camera->GetDirRef()->Name()); break;
-					case CAMERA_TARGETFROMOBJECT: InfoRow("CAM", "Target from %s", g_camera->GetDirRef()->Name()); break;
+					default: InfoRow("CAM", "%s", Camera::ExtModeName (g_camera->GetExtMode())); break;
 					case CAMERA_GROUNDOBSERVER:   InfoRow("CAM", "Ground %s", g_camera->GroundObserver_TargetLock() ? "(target lock)" : "(free)"); break;
 				}
 			} else {
@@ -831,6 +833,41 @@ public:
 	}
 };
 
+// The camera's mode, for a moment after F2 changed it: under the menu bar
+class CameraModeLabel: public ImGuiDialog {
+public:
+	CameraModeLabel(): ImGuiDialog("CameraModeLabel") {}
+	void OnDraw() {}
+	void Display() {
+		const double SHOW = 1.6, FADEIN = 0.12, FADEOUT = 0.45;
+		double t = g_camera->SinceModeChange();
+		if (!g_camera->IsExternal() || t < 0.0 || t > SHOW) return;
+		float a = (float)(t < FADEIN ? t / FADEIN : t > SHOW - FADEOUT ? (SHOW - t) / FADEOUT : 1.0);
+		ImGuiViewport *viewport = ImGui::GetMainViewport();
+		ImGui::SetNextWindowViewport(viewport->ID);
+		float y = std::max(viewport->Pos.y + ui::Px(10), g_menuBottom + ui::Px(8));
+		ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + viewport->Size.x * 0.5f, y), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+		CFG_UIPRM &prm = g_pOrbiter->Cfg()->CfgUIPrm;
+		InfoBegin(a, prm);
+		if (ImGui::Begin("##CameraMode", nullptr, INFOFLAGS | ImGuiWindowFlags_NoInputs)) {
+			ImGui::PushStyleColor(ImGuiCol_Text, ui::Col(ui::ACCENT));
+			ImGui::TextUnformatted(ICON_LC_VIDEO);
+			ImGui::PopStyleColor();
+			ImGui::SameLine(0, ui::Px(8));
+			ui::TextDim("Camera");
+			ImGui::SameLine(0, ui::Px(6));
+			ui::TextDim("\xC2\xB7");
+			ImGui::SameLine(0, ui::Px(6));
+			const ui::Fonts &f = ui::GetFonts();
+			ui::PushFont(f.strong, ui::SIZE_BODY);
+			ImGui::TextUnformatted(Camera::ExtModeName(g_camera->GetExtMode()));
+			ui::PopFont();
+		}
+		ImGui::End();
+		InfoEnd();
+	}
+};
+
 // =======================================================================
 // class MenuInfoBar
 // =======================================================================
@@ -844,6 +881,8 @@ MenuInfoBar::MenuInfoBar ()
 	oapiOpenDialog(dynMenu.get());
 	oapiOpenDialog(infoTime.get());
 	oapiOpenDialog(infoTgt.get());
+	camLabel = std::make_unique<CameraModeLabel>();
+	oapiOpenDialog(camLabel.get());
 }
 
 MenuInfoBar::~MenuInfoBar ()

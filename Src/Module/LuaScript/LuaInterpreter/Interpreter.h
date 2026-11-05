@@ -589,6 +589,11 @@ protected:
 	static int oapi_set_cameraaperture (lua_State *L);
 	static int oapi_get_cameraglobalpos (lua_State *L);
 	static int oapi_get_cameraglobaldir (lua_State *L);
+	static int oapi_get_cameramode (lua_State *L);
+	static int oapi_save_scenario (lua_State *L);
+	static int oapi_get_camerarotation (lua_State *L);
+	static int oapi_get_cameraview (lua_State *L);
+	static int oapi_rot_camera (lua_State *L);
 	static int oapi_move_groundcamera (lua_State *L);
 	static int oapi_set_cameracockpitdir (lua_State *L);
 

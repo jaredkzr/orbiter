@@ -313,9 +313,7 @@ void Replay::CameraKeys ()
 		g_pOrbiter->SetView (c.target, c.external ? 1 : 0);
 	if (c.external && c.mode != CAMERA_GROUNDOBSERVER) { // (ground observer: its own position; only the field of view follows)
 		if (g_camera->GetExtMode() != c.mode) g_camera->SetTrackMode (c.mode);
-		g_camera->SetDistance (c.dist);
-		g_camera->AddPhi (2.0 * (c.phi - g_camera->Phi()));   // (adds half the angle)
-		g_camera->AddTheta (2.0 * (c.theta - g_camera->Theta()));
+		g_camera->SetExtView (c.dist, c.phi, c.theta);
 	}
 	g_camera->SetAperture (c.ap);
 }

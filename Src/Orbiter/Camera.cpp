@@ -10,6 +10,7 @@
 #include "resource.h"
 #include "D3dmath.h"
 #include "Camera.h"
+#include "CamRig.h"
 #ifndef _WIN32
 #include "Platform.h"
 #endif
@@ -17,6 +18,7 @@
 #include "Body.h"
 #include "Planet.h"
 #include "Vessel.h"
+#include "Vesselbase.h"
 #include "Psys.h"
 #include "Pane.h"
 #include "Dialogs.h"
@@ -32,6 +34,7 @@
 #endif
 
 using namespace std;
+using camrig::Col;
 
 extern Orbiter *g_pOrbiter;
 extern TimeData td;
@@ -46,15 +49,27 @@ const double dragT = 3.0;
 static const double vmax = 2.0;  // max rotation velocity (rad/s)
 static const double amax = 8.0;  // max rotation acceleration (rad/s^2)
 
+// external tracking modes: easing [s] of turns and of the distance, the
+// slower easing after a change of mode, a blend between views [s], the
+// Chase camera's view (pitch [rad], above) and lag [s]
+static const double TAU_TURN = 0.07, TAU_ZOOM = 0.12, TAU_SETTLE = 0.25, SETTLE_T = 1.5;
+static const double BLEND_T = 0.5;
+static const double CHASE_PITCH = -0.2, CHASE_LAG = 0.35;
+// Flyby: the highest speed [m/s] at which the target passes the camera
+// (faster in space: the camera drifts along with the target)
+static const double FLYBY_VMAX = 300.0;
+
 Camera::Camera (double _nearplane, double _farplane)
 {
-	extmode = CAMERA_TARGETRELATIVE;
+	extmode = CAMERA_AUTO;
 	intmode = CAMERA_GENERICCOCKPIT;
 	action  = CAMERA_NORMAL;
 	gdir.Set (1,0,0);
 	rofs = &nullvec;
 	target = 0;
-	rdist  = 4.0;
+	rdist = rdistT = 4.0;
+	yawT = pitchT = 0.0;
+	lockQ = lockQT = frame = IMatrix ();
 	dirref = 0;
 	ephi = etheta = 0.0;
 	dphi = dtht = 0.0;
@@ -126,7 +141,8 @@ bool Camera::ProcessMouse (UINT event, DWORD state, DWORD x, DWORD y, const char
 		}
 		break;
 	case WM_MOUSEWHEEL:
-		if (KEYMOD_CONTROL(kstate)) {
+		if (KEYMOD_CONTROL(kstate)) { // (external: the field of view; in the cockpit, the wheel does that already)
+			if (external_view) g_pOrbiter->IncFOV ((short)HIWORD(state)*(-2.0 / 120.0*RAD));
 		}
 		else {
 			short zDelta = (short)HIWORD(state);
@@ -297,21 +313,29 @@ void Camera::SetCMode (const CameraMode *cm)
 		} break;
 	case CameraMode::CM_TRACK: {
 		const CameraMode_Track *cmt = (const CameraMode_Track*)cm;
-		if (cmt->GetTrackMode() != CameraMode_Track::TM_CURRENT) {
-			ExtCamMode mode;
-			switch (cmt->GetTrackMode()) {
-			case CameraMode_Track::TM_RELATIVE:      mode = CAMERA_TARGETRELATIVE;   break;
-			case CameraMode_Track::TM_ABSDIR:        mode = CAMERA_ABSDIRECTION;     break;
-			case CameraMode_Track::TM_GLOBAL:        mode = CAMERA_GLOBALFRAME;      break;
-			case CameraMode_Track::TM_TARGETTOREF:   mode = CAMERA_TARGETTOOBJECT;   break;
-			case CameraMode_Track::TM_TARGETFROMREF: mode = CAMERA_TARGETFROMOBJECT; break;
-			default: mode = CAMERA_GLOBALFRAME;
-			}
-			SetTrackMode (mode, (const Body*)cmt->GetRef());
-		}
 		double rd, ph, th;
 		cmt->GetPosition (&rd, &ph, &th);
-		if (rd) SetRelPos (rd, ph, th);
+		Legacy l;
+		switch (cmt->GetTrackMode()) {
+		case CameraMode_Track::TM_CURRENT:       break;
+		// (the classic modes: the closest new one)
+		case CameraMode_Track::TM_RELATIVE:      SetTrackMode (CAMERA_LOCKED); break;
+		case CameraMode_Track::TM_ABSDIR:        l.mode = CAM_ABSDIRECTION;     break;
+		case CameraMode_Track::TM_GLOBAL:        l.mode = CAM_GLOBALFRAME;      break;
+		case CameraMode_Track::TM_TARGETTOREF:   l.mode = CAM_TARGETTOOBJECT;   break;
+		case CameraMode_Track::TM_TARGETFROMREF: l.mode = CAM_TARGETFROMOBJECT; break;
+		case CameraMode_Track::TM_AUTO:          SetTrackMode (CAMERA_AUTO);    break;
+		case CameraMode_Track::TM_FREE:          SetTrackMode (CAMERA_FREE);    break;
+		case CameraMode_Track::TM_ORBITAL:       SetTrackMode (CAMERA_ORBITAL); break;
+		case CameraMode_Track::TM_CHASE:         SetTrackMode (CAMERA_CHASE);   break;
+		case CameraMode_Track::TM_LOCKED:        SetTrackMode (CAMERA_LOCKED);  break;
+		case CameraMode_Track::TM_FLYBY:         SetTrackMode (CAMERA_FLYBY);   break;
+		}
+		if (l.mode) {
+			if (!external_view || extmode == CAMERA_GROUNDOBSERVER) SetTrackMode (CAMERA_FREE);
+			l.rd = (rd ? rd : rdist), l.ph = ph, l.th = th;
+			ApplyLegacy (l, (const Body*)cmt->GetRef());
+		} else if (rd) SetExtView (rd, ph, th);
 		} break;
 	case CameraMode::CM_GROUND: {
 		const CameraMode_Ground *cmg = (const CameraMode_Ground*)cm;
@@ -339,35 +363,20 @@ CameraMode *Camera::GetCMode () const
 
 	if (external_view) {
 		switch (extmode) {
-		case CAMERA_TARGETRELATIVE: {
+		case CAMERA_AUTO:
+		case CAMERA_FREE:
+		case CAMERA_ORBITAL:
+		case CAMERA_CHASE:
+		case CAMERA_LOCKED:
+		case CAMERA_FLYBY:
+		case CAMERA_INERTIAL: {
 			cm = new CameraMode_Track; TRACENEW
 			CameraMode_Track *cmt = (CameraMode_Track*)cm;
-			cmt->SetTrackMode (CameraMode_Track::TM_RELATIVE);
-			cmt->SetPosition (rdist, ephi, etheta);
-			} break;
-		case CAMERA_ABSDIRECTION: {
-			cm = new CameraMode_Track; TRACENEW
-			CameraMode_Track *cmt = (CameraMode_Track*)cm;
-			cmt->SetTrackMode (CameraMode_Track::TM_ABSDIR);
-			cmt->SetPosition (rdist, ephi, etheta);
-			} break;
-		case CAMERA_GLOBALFRAME: {
-			cm = new CameraMode_Track; TRACENEW
-			CameraMode_Track *cmt = (CameraMode_Track*)cm;
-			cmt->SetTrackMode (CameraMode_Track::TM_GLOBAL);
-			cmt->SetPosition (rdist, ephi, etheta);
-			} break;
-		case CAMERA_TARGETTOOBJECT: {
-			cm = new CameraMode_Track; TRACENEW
-			CameraMode_Track *cmt = (CameraMode_Track*)cm;
-			cmt->SetTrackMode (CameraMode_Track::TM_TARGETTOREF, (OBJHANDLE)dirref);
-			cmt->SetPosition (rdist, ephi, etheta);
-			} break;
-		case CAMERA_TARGETFROMOBJECT: {
-			cm = new CameraMode_Track; TRACENEW
-			CameraMode_Track *cmt = (CameraMode_Track*)cm;
-			cmt->SetTrackMode (CameraMode_Track::TM_TARGETFROMREF, (OBJHANDLE)dirref);
-			cmt->SetPosition (rdist, ephi, etheta);
+			static const CameraMode_Track::TrackMode tm[] = {
+				CameraMode_Track::TM_AUTO, CameraMode_Track::TM_FREE, CameraMode_Track::TM_ORBITAL, CameraMode_Track::TM_CHASE,
+				CameraMode_Track::TM_LOCKED, CameraMode_Track::TM_FLYBY, CameraMode_Track::TM_GLOBAL };
+			cmt->SetTrackMode (tm[extmode]);
+			cmt->SetPosition (rdist, Phi(), Theta());
 			} break;
 		case CAMERA_GROUNDOBSERVER: {
 			cm = new CameraMode_Ground; TRACENEW
@@ -389,12 +398,14 @@ int Camera::GetMode () const
 {
 	if (external_view) {
 		switch (extmode) {
-		case CAMERA_TARGETRELATIVE:   return CAM_TARGETRELATIVE;
-		case CAMERA_ABSDIRECTION:     return CAM_ABSDIRECTION;
-		case CAMERA_GLOBALFRAME:      return CAM_GLOBALFRAME;
-		case CAMERA_TARGETTOOBJECT:   return CAM_TARGETTOOBJECT;
-		case CAMERA_TARGETFROMOBJECT: return CAM_TARGETFROMOBJECT;
-		case CAMERA_GROUNDOBSERVER:   return CAM_GROUNDOBSERVER;
+		case CAMERA_AUTO:           return CAM_AUTO;
+		case CAMERA_FREE:           return CAM_FREE;
+		case CAMERA_ORBITAL:        return CAM_ORBITAL;
+		case CAMERA_CHASE:          return CAM_CHASE;
+		case CAMERA_LOCKED:         return CAM_LOCKED;
+		case CAMERA_FLYBY:          return CAM_FLYBY;
+		case CAMERA_INERTIAL:       return CAM_GLOBALFRAME;
+		case CAMERA_GROUNDOBSERVER: return CAM_GROUNDOBSERVER;
 		}
 	}
 	return CAM_COCKPIT;
@@ -409,20 +420,20 @@ void Camera::Attach (Body *_target, int mode)
 	if (!external_view && intmode == CAMERA_VIRTUALCOCKPIT)
 		StoreVCParams();
 
+	Body *from = target; // (a view to blend from)
 	target = _target;
 	if (mode != 2) external_view = (mode != 0); // otherwise don't change
 
 	if (external_view) {
 		SetViewExternal();
-		SetRelPos (rdist, ephi, etheta);
-		gspos.Set (mul (target->GRot(), rpos));
-		gpos.Set (gspos + target->GPos());
-		GPOS = MakeVECTOR3 (gpos);
-		grot.Set (target->GRot());
-		if (extmode == CAMERA_ABSDIRECTION)
-			gdir = mul (target->GRot(), mul (rrot, Vector (0,0,1)));
-		if ((extmode == CAMERA_TARGETTOOBJECT || extmode == CAMERA_TARGETFROMOBJECT)
-			&& dirref == target) extmode = CAMERA_TARGETRELATIVE; // sanity check
+		if (extmode != CAMERA_GROUNDOBSERVER) {
+			if (!TrackModeAvailable (extmode)) extmode = CAMERA_FREE; // (e.g. Chase, and the target is a planet)
+			frameKind = -1;
+			chaseValid = false;
+			if (from) StartBlend (from);
+			if (extmode == CAMERA_FLYBY) PlaceFlyby (), UpdateFlyby (0.0);
+			else UpdateTrack (0.0);
+		}
 	} else {
 		SetViewInternal();
 		Vessel* vessel = (Vessel*)target;
@@ -437,6 +448,7 @@ void Camera::Attach (Body *_target, int mode)
 		gspos.Set (mul (target->GRot(), *rofs));
 		gpos.Set (gspos + target->GPos());
 		GPOS = MakeVECTOR3 (gpos);
+		blend.on = false;
 	}
 	tref.Set(0,0,0);
 	vphi = vtht = dphi = dtht = 0.0;
@@ -472,24 +484,37 @@ double Camera::Distance () const
 double Camera::Phi () const
 {
 	if (!target) return 0.0;
-	return (external_view ? ephi : cphi);
+	if (!external_view) return cphi;
+	if (extmode == CAMERA_LOCKED) {
+		double yaw, pitch;
+		camrig::YawPitchOf (Col (lockQ, 2), yaw, pitch);
+		return yaw;
+	}
+	return ephi;
 }
 
 double Camera::Theta () const
 {
 	if (!target) return 0.0;
-	return (external_view ? etheta : ctheta);
+	if (!external_view) return ctheta;
+	if (extmode == CAMERA_LOCKED) {
+		double yaw, pitch;
+		camrig::YawPitchOf (Col (lockQ, 2), yaw, pitch);
+		return pitch;
+	}
+	return etheta;
 }
 
 void Camera::AddPhi (double dphi)
 {
+	// (half the angle, as it always was: callers pass twice the turn)
 	if (external_view) {
 		if (extmode == CAMERA_GROUNDOBSERVER) {
 			GroundObserverShift (dphi*go.panspeed, 0, 0);
-		} else {
-			SetRelPos (rdist, ephi+dphi*0.5, etheta);
-			if (extmode == CAMERA_ABSDIRECTION)
-				gdir = mul (target->GRot(), mul (rrot, Vector (0,0,1)));
+		} else if (extmode == CAMERA_LOCKED) {
+			lockQT = camrig::Orthonormalise (lockQT * camrig::RotY (dphi*0.5)); // (about the camera's own up)
+		} else if (extmode != CAMERA_FLYBY) {
+			yawT = camrig::Wrap (yawT + dphi*0.5);
 		}
 	}
 }
@@ -499,10 +524,10 @@ void Camera::AddTheta (double dtheta)
 	if (external_view) {
 		if (extmode == CAMERA_GROUNDOBSERVER) {
 			GroundObserverShift (0, -dtheta*go.panspeed, 0);
-		} else {
-			SetRelPos (rdist, ephi, etheta+dtheta*0.5);
-			if (extmode == CAMERA_ABSDIRECTION)
-				gdir = mul (target->GRot(), mul (rrot, Vector (0,0,1)));
+		} else if (extmode == CAMERA_LOCKED) {
+			lockQT = camrig::Orthonormalise (lockQT * camrig::RotX (dtheta*0.5)); // (about the camera's own x axis)
+		} else if (extmode != CAMERA_FLYBY) {
+			pitchT = camrig::ClampPitch (pitchT + dtheta*0.5);
 		}
 	}
 }
@@ -557,12 +582,12 @@ void Camera::ShiftDist (double shift)
 {
 	double fact;
 	if (external_view && extmode != CAMERA_GROUNDOBSERVER) {
-		double scale = max (1e-4, (rdist-1.0)/rdist); // slow down when approaching target radius
+		double scale = max (1e-4, (rdistT-1.0)/rdistT); // slow down when approaching target radius
 		scale = max(scale, 1.0/target->Size());       // move at least 1m/s
 		shift *= scale;
 	}
 	if (shift > 0) fact = 1.0 + shift;
-	else fact = max(1.0/rdist, 1.0/(1.0 - shift));
+	else fact = max(1.0/rdistT, 1.0/(1.0 - shift));
 	ChangeDist (fact);
 }
 
@@ -571,8 +596,8 @@ void Camera::ChangeDist (double fact)
 	if (external_view) {
 		if (extmode == CAMERA_GROUNDOBSERVER) {
 			GroundObserverShift (0, 0, (fact > 1 ? fact-1 : -1/fact+1)*go.panspeed);
-		} else {
-			SetRelPos (rdist*fact, ephi, etheta);
+		} else if (extmode != CAMERA_FLYBY) {
+			rdistT = max (1.0, rdistT*fact);
 			rshift = false;
 		}
 	}
@@ -584,9 +609,9 @@ void Camera::Drag (const Vector &gshift)
 		tref.Set (has_tref ? tref+gshift: gshift);
 		tref_t0  = td.SysT1;
 		tref_d0  = tref.length();
-		tref_r0  = rpos.length();
+		tref_r0  = gspos.length();
 		tref_r1  = (has_tref && rshift ? tref_r1/tref_r0*rdist : rdist)*target->Size();
-		rdist    = tref_r0/target->Size();
+		rdist = rdistT = tref_r0/target->Size();
 		has_tref = true;
 		rshift   = (fabs ((tref_r0-tref_r1)/tref_r1) > 0.01);
 	}
@@ -681,7 +706,32 @@ void Camera::SetCockpitDir (double ph, double th)
 
 void Camera::SetDistance(double rd)
 {
-	rdist = rd;
+	rdist = rdistT = max (1.0, rd);
+}
+
+void Camera::SetExtView (double rd, double ph, double th)
+{
+	if (rd > 0.0) rdist = rdistT = max (1.0, rd);
+	if (extmode == CAMERA_LOCKED) {
+		lockQ = lockQT = camrig::YawPitch (ph, th);
+	} else {
+		ephi = yawT = camrig::Wrap (ph);
+		etheta = pitchT = camrig::ClampPitch (th);
+	}
+}
+
+void Camera::ResetExtView ()
+{
+	if (!external_view || extmode == CAMERA_GROUNDOBSERVER) return;
+	if (extmode == CAMERA_FLYBY) {
+		StartBlend ();
+		PlaceFlyby ();
+		return;
+	}
+	// behind the target, a little above
+	settleT = camT + SETTLE_T;
+	if (extmode == CAMERA_LOCKED) lockQT = camrig::YawPitch (0.0, CHASE_PITCH);
+	else yawT = 0.0, pitchT = CHASE_PITCH;
 }
 
 void Camera::ResetCockpitDir (bool smooth)
@@ -729,58 +779,198 @@ void Camera::ResetCockpitPos ()
 	}
 }
 
-void Camera::SetRelPos (double r, double ph, double th)
-{
-	// set relative position rpos and relative orientation rrot
-	// w.r.t. reference object from distance, azimuth and polar angles.
-	// rrot=identity means camera looks in pos. z-axis of object
-	// ph is polar angle from pos z-axis
-
-	rdist  = r;
-	ephi   = normangle (ph);
-	etheta = normangle (th);
-
-	double sinph = sin(ephi), cosph = cos(ephi);
-	double sinth = sin(etheta), costh = cos(etheta);
-	// rrot rotates camera from (0,0,-r) to current position in ref. object coords
-	//        | cosph 0 -sinph |   | 1   0     0    |
-	// rrot = |  0    1    0   | * | 0  costh sinth |
-	//        | sinph 0  cosph |   | 0 -sinth costh |
-	rrot.Set (cosph,  sinph*sinth, -sinph*costh,
-		      0.0,    costh,        sinth,
-			  sinph, -cosph*sinth,  cosph*costh);
-	double dist = -rdist*target->Size();
-	rpos.Set (rrot.m13*dist, rrot.m23*dist, rrot.m33*dist);
-}
 
 void Camera::SetTrackMode (ExtCamMode mode, const Body *ref)
 {
-	if (!external_view || extmode > CAMERA_TARGETFROMOBJECT)
-		Attach (target, 1);
-
-	if (extmode == CAMERA_GLOBALFRAME) {
-		Vector rdir (-tmul (target->GRot(), rpos).unit());
-		SetRelPos (rdist, atan2 (-rdir.x, rdir.z), asin (rdir.y));
-	}
-
-	switch (mode) {
-	case CAMERA_ABSDIRECTION:
-		gdir.Set (-mul (target->GRot(), rpos).unit());
-		break;
-	case CAMERA_TARGETRELATIVE:
-		// nothing to do
-		break;
-	case CAMERA_GLOBALFRAME:
-		gdir.Set (-mul (target->GRot(), rpos).unit());
-		SetRelPos (rdist, atan2 (-gdir.x, gdir.z), asin (gdir.y));
-		break;
-	case CAMERA_TARGETTOOBJECT:
-	case CAMERA_TARGETFROMOBJECT:
-		if (!ref) return; // bail out
-		dirref = ref;
-		break;
-	}
+	if (mode == CAMERA_GROUNDOBSERVER) return; // (SetGroundMode)
+	// (from the cockpit or the ground the camera returns to its distance
+	// and angles, blended; between tracking modes it stays where it is)
+	bool adopt = (external_view && extmode != CAMERA_GROUNDOBSERVER);
+	if (!adopt) Attach (target, 1);
+	if (!TrackModeAvailable (mode)) mode = CAMERA_FREE;
 	extmode = mode;
+	settleT = -1e10; // (Chase sets it again)
+	frameKind = -1;
+	chaseValid = false;
+	if (mode == CAMERA_FLYBY) {
+		StartBlend ();
+		PlaceFlyby ();
+		UpdateFlyby (0.0);
+		return;
+	}
+	bool changed;
+	Matrix F (TrackFrame (0.0, changed));
+	if (adopt) {
+		StartBlend (); // (the place stays, the orientation turns to the new frame's up)
+		Adopt (F);
+	}
+	if (mode == CAMERA_CHASE) {
+		yawT = 0.0, pitchT = CHASE_PITCH;
+		settleT = camT + SETTLE_T;
+	}
+	if (!adopt) UpdateTrack (0.0);
+}
+
+void Camera::CycleTrackMode (int dir)
+{
+	static const ExtCamMode cycle[] = { CAMERA_AUTO, CAMERA_FREE, CAMERA_ORBITAL, CAMERA_CHASE, CAMERA_LOCKED, CAMERA_FLYBY };
+	const int n = sizeof (cycle) / sizeof (cycle[0]);
+	int i = 0;
+	for (int k = 0; k < n; k++) if (cycle[k] == extmode) i = k;
+	if (!external_view || extmode == CAMERA_GROUNDOBSERVER || extmode == CAMERA_INERTIAL)
+		i = (dir > 0 ? n - 1 : 1); // (into the cycle at Auto)
+	for (int k = 0; k < n; k++) {
+		i = (i + (dir > 0 ? 1 : n - 1)) % n;
+		if (TrackModeAvailable (cycle[i])) break;
+	}
+	SetTrackMode (cycle[i]);
+	modeChangeT = camT; // (its label)
+}
+
+void Camera::FaceObject (const Body *obj, bool behindTarget)
+{
+	if (!obj || !target || obj == target) return;
+	if (!external_view || extmode == CAMERA_GROUNDOBSERVER || extmode == CAMERA_FLYBY || extmode == CAMERA_CHASE)
+		SetTrackMode (CAMERA_FREE);
+	StartBlend ();
+	Vector g ((obj->GPos() - target->GPos()).unit());
+	double d = rdistT * target->Size();
+	gspos = g * (behindTarget ? -d : d);
+	gpos = target->GPos() + gspos;
+	grot = camrig::LookLevel (-gspos, UpAtTarget (), grot);
+	bool changed;
+	Matrix F (TrackFrame (0.0, changed));
+	Adopt (F);
+	UpdateTrack (0.0);
+}
+
+bool Camera::TrackModeAvailable (ExtCamMode mode) const
+{
+	switch (mode) {
+	case CAMERA_CHASE:
+	case CAMERA_FLYBY:
+		return target && (target->Type() == OBJTP_VESSEL || target->Type() == OBJTP_DEBRIS);
+	case CAMERA_GROUNDOBSERVER:
+		return false; // (not a tracking mode)
+	default:
+		return target != 0;
+	}
+}
+
+const char *Camera::ExtModeName (ExtCamMode mode)
+{
+	switch (mode) {
+	case CAMERA_AUTO:           return "Auto";
+	case CAMERA_FREE:           return "Free";
+	case CAMERA_ORBITAL:        return "Orbital";
+	case CAMERA_CHASE:          return "Chase";
+	case CAMERA_LOCKED:         return "Locked";
+	case CAMERA_FLYBY:          return "Flyby";
+	case CAMERA_INERTIAL:       return "Inertial";
+	case CAMERA_GROUNDOBSERVER: return "Ground";
+	}
+	return "";
+}
+
+bool Camera::CelestialTarget () const
+{
+	int t = target ? target->Type() : OBJTP_INVALID;
+	return t == OBJTP_PLANET || t == OBJTP_STAR || t == OBJTP_CBODY || t == OBJTP_BLACKHOLE;
+}
+
+const Body *Camera::RefBody () const
+{
+	if (!target) return 0;
+	if (target->Type() == OBJTP_SURFBASE) return target->ElRef(); // (its planet)
+	return target->ElRef();
+}
+
+Vector Camera::UpAtTarget () const
+{
+	const Body *ref = RefBody ();
+	if (!ref || CelestialTarget ()) return Vector (0, 1, 0);
+	Vector r (target->GPos() - ref->GPos());
+	double l = r.length();
+	return l > 0.0 ? r / l : Vector (0, 1, 0);
+}
+
+Vector Camera::TravelVelocity (bool &surface) const
+{
+	surface = false;
+	const Body *ref = RefBody ();
+	if (target->Type() == OBJTP_VESSEL || target->Type() == OBJTP_DEBRIS) {
+		const VesselBase *vb = (const VesselBase*)target;
+		const SurfParam *sp = (target->Type() == OBJTP_VESSEL ? ((const Vessel*)target)->GetSurfParam() : vb->SurfaceParams());
+		if (sp && sp->ref && (sp->is_in_atm || sp->alt < 0.05 * sp->ref->Size())) {
+			surface = true;
+			return sp->groundvel_glob;
+		}
+	}
+	return ref ? target->GVel() - ref->GVel() : target->GVel();
+}
+
+void Camera::StartBlend (const Body *from)
+{
+	if (!target) return;
+	blend.on = true;
+	blend.t0 = camT;
+	// (relative positions: the bodies may have moved since the camera was
+	// placed, by up to a frame - hundreds of metres in orbit)
+	blend.off = gspos;
+	if (from && from != target) blend.off += from->GPos() - target->GPos();
+	blend.rot = grot;
+}
+
+void Camera::Adopt (const Matrix &F)
+{
+	double d = gspos.length();
+	Vector dir (d > 0.0 ? -gspos / d : Col (grot, 2)); // (towards the target)
+	Vector fdir (tmul (F, dir));
+	rdist = rdistT = max (1.0, d / target->Size());
+	if (extmode == CAMERA_LOCKED) {
+		lockQ = lockQT = camrig::LookLevel (fdir, tmul (F, Col (grot, 1)), IMatrix ());
+	} else {
+		double yaw, pitch;
+		camrig::YawPitchOf (fdir, yaw, pitch);
+		ephi = yawT = yaw;
+		etheta = pitchT = camrig::ClampPitch (pitch);
+	}
+}
+
+void Camera::ApplyLegacy (const Legacy &l, const Body *ref)
+{
+	// where the classic mode put the camera: the new mode (Free; Locked
+	// for target-relative) takes it from there
+	if (l.mode == CAM_TARGETRELATIVE) {
+		extmode = CAMERA_LOCKED;
+		frameKind = -1;
+		SetExtView (l.rd, l.ph, l.th);
+		UpdateTrack (0.0);
+		return;
+	}
+	double d = max (1.0, l.rd) * target->Size();
+	Vector off (Col (camrig::YawPitch (l.ph, l.th), 2) * -d);
+	switch (l.mode) {
+	case CAM_ABSDIRECTION:
+		off = mul (target->GRot(), off); // (relative to the target when it was stored)
+		break;
+	case CAM_TARGETTOOBJECT:
+	case CAM_TARGETFROMOBJECT:
+		if (ref && ref != target) {
+			Vector g ((ref->GPos() - target->GPos()).unit());
+			off = g * (l.mode == CAM_TARGETTOOBJECT ? -d : d);
+		}
+		break;
+	}
+	extmode = CAMERA_FREE;
+	frameKind = -1;
+	gspos = off;
+	gpos = target->GPos() + off;
+	grot = camrig::LookLevel (-off, UpAtTarget (), grot);
+	bool changed;
+	Matrix F (TrackFrame (0.0, changed));
+	Adopt (F);
+	UpdateTrack (0.0);
 }
 
 double Camera::GroundElevation (const Planet *ref, double lng, double lat, double alt) const
@@ -1021,8 +1211,9 @@ DWORD Camera::UpdateExternalControl (ExternalCameraControl *ecc)
 
 void Camera::Update ()
 {
-	double dt = td.SysDT;
+	double dt = td.UiDT ();
 	double t1 = td.SysT1;
+	camT += dt;
 
 	// NOTE: Camera is updated after world state has been updated, but before state S1
 	// is copied back to state S0
@@ -1070,40 +1261,7 @@ void Camera::Update ()
 	}
 
 	if (external_view) {
-		bool allow_invert = true;
-		switch (extmode) {
-		case CAMERA_TARGETRELATIVE:
-			gspos.Set (mul (target->GRot(), rpos));
-			gpos.Set (gspos + target->GPos());
-			GPOS = MakeVECTOR3 (gpos);
-			grot.Set (target->GRot() * rrot);
-			break;
-		case CAMERA_TARGETTOOBJECT:
-		case CAMERA_TARGETFROMOBJECT:
-			gdir.Set ((dirref->GPos()-target->GPos()).unit());
-			if (extmode == CAMERA_TARGETFROMOBJECT) gdir = -gdir;
-			allow_invert = false;
-			// fall through
-		case CAMERA_ABSDIRECTION: {
-			Vector rdir (tmul (target->GRot(), gdir));
-			double th = asin (rdir.y);
-			double ph = atan2 (-rdir.x, rdir.z);
-			double dph = fabs(ph-ephi);
-			if (allow_invert && dph >= Pi05 && dph < 3.0*Pi05)
-				ph += Pi, th = Pi-th; // camera is upside-down - a bit hacky!
-			SetRelPos (rdist, ph, th);
-			gspos.Set (gdir * (-rdist*target->Size()));
-			gpos.Set (gspos + target->GPos());
-			GPOS = MakeVECTOR3 (gpos);
-			grot.Set (target->GRot() * rrot);
-			} break;
-		case CAMERA_GLOBALFRAME:
-			gspos.Set (rpos);
-			gpos.Set (gspos + target->GPos());
-			GPOS = MakeVECTOR3 (gpos);
-			grot.Set (rrot);
-			break;
-		case CAMERA_GROUNDOBSERVER: {
+		if (extmode == CAMERA_GROUNDOBSERVER) {
 			double rad, elev = 0.0;
 			if (dirref->Type() == OBJTP_PLANET)
 				elev = GroundElevation((Planet*)dirref, go.lng, go.lat, go.alt);
@@ -1126,7 +1284,6 @@ void Camera::Update ()
 					go.tht = (hdir.y > 0 ? Pi05 : -Pi05);
 					go.phi = 0.0;
 				}
-				//OutputGroundObserverParams();
 			}
 			double sinph = sin(go.phi), cosph = cos(go.phi);
 			double sinth = sin(go.tht), costh = cos(go.tht);
@@ -1134,7 +1291,10 @@ void Camera::Update ()
 				      0.0,    costh,        sinth,
 					  sinph, -cosph*sinth,  cosph*costh);
 			grot.Set (dirref->GRot() * go.R * rrot);
-			} break;
+		} else if (extmode == CAMERA_FLYBY) {
+			UpdateFlyby (td.SimDT); // (the target moves in simulation time)
+		} else {
+			UpdateTrack (dt);
 		}
 		if (has_tref) {
 			double t = t1 - tref_t0;
@@ -1150,22 +1310,31 @@ void Camera::Update ()
 					gpos += tref; gspos += tref;
 					GPOS = MakeVECTOR3 (gpos);
 				}
-				if (rshift) {
-					rpos *= ((tref_r0-tref_r1)*scale+tref_r1)/rpos.length();
-					rdist = rpos.length()/target->Size();
-				}
+				if (rshift)
+					rdist = rdistT = ((tref_r0-tref_r1)*scale+tref_r1)/target->Size();
 			}
 		}
-		// chasing a wreck's piece: the horizon level (not rolled with the tumbling piece)
-		if (extmode == CAMERA_ABSDIRECTION && target->Type() == OBJTP_DEBRIS && planet_proxy && alt_proxy < 0.05 * planet_proxy->Size()) {
-			Vector z (grot.m13, grot.m23, grot.m33);
-			Vector up ((gpos - planet_proxy->GPos()).unit());
-			Vector x (crossp (up, z));
-			double lx = x.length();
-			if (lx > 1e-3) { // (not looking straight up or down)
-				x /= lx;
-				Vector y (crossp (z, x));
-				grot.Set (x.x, y.x, z.x,  x.y, y.y, z.y,  x.z, y.z, z.z);
+		// a change of target or view: blended from where the camera was
+		// (relative to the target: its direction and log distance, and its orientation)
+		if (blend.on && extmode != CAMERA_GROUNDOBSERVER) {
+			double u = (camT - blend.t0) / BLEND_T;
+			if (u >= 1.0 || u < 0.0) blend.on = false;
+			else {
+				double k = camrig::SmoothStep (u);
+				double la = blend.off.length(), lb = gspos.length();
+				if (la > 1e-6 && lb > 1e-6) {
+					Vector a (blend.off / la), b (gspos / lb);
+					Vector ax (crossp (a, b));
+					double sn = ax.length(), cs = dotp (a, b);
+					Vector d (b);
+					if (sn > 1e-9) d = mul (camrig::AxisAngle (ax / sn, atan2 (sn, cs) * k), a);
+					else if (cs > 0.0) d = a;
+					double l = exp (log (la) * (1.0 - k) + log (lb) * k);
+					gspos = d * l;
+					gpos = target->GPos() + gspos;
+					GPOS = MakeVECTOR3 (gpos);
+				}
+				grot = camrig::Slerp (blend.rot, grot, k);
 			}
 		}
 		if (extmode != CAMERA_GROUNDOBSERVER) KeepAboveTerrain ();
@@ -1344,6 +1513,165 @@ D3DMATRIX *Camera::D3D_ProjViewMatrix ()
 	return &pv_mat;
 }
 
+Matrix Camera::TrackFrame (double dt, bool &changed)
+{
+	changed = false;
+	const Body *ref = RefBody ();
+	Vector up (UpAtTarget ());
+	ExtCamMode m = extmode;
+	if (m == CAMERA_AUTO) {
+		bool orb = false;
+		if (ref && !CelestialTarget ()) {
+			double R = ref->Size(), alt = (target->GPos() - ref->GPos()).length() - R;
+			double atm = 0.0;
+			if (ref->Type() == OBJTP_PLANET && ((const Planet*)ref)->HasAtmosphere())
+				atm = ((const Planet*)ref)->AtmAltLimit();
+			orb = camrig::AutoOrbital (autoOrbital, alt, R, atm);
+		}
+		autoOrbital = orb;
+		m = orb ? CAMERA_ORBITAL : CAMERA_FREE;
+	}
+	// Free's frame, carried along from the last one (level, not turned about up)
+	auto freeFrame = [&]() {
+		Matrix F;
+		if (frameKind == CAMERA_FREE || frameKind == CAMERA_CHASE) return camrig::Transport (frame, up);
+		if (camrig::FrameUpFwd (up, Col (target->GRot(), 2), F, 0.05)) return F; // (forward: the target's heading)
+		if (camrig::FrameUpFwd (up, Col (target->GRot(), 1), F, 0.05)) return F;
+		return camrig::Transport (IMatrix (), up);
+	};
+	int kind = m;
+	Matrix F;
+	switch (m) {
+	case CAMERA_LOCKED:
+		F = target->GRot();
+		break;
+	case CAMERA_INERTIAL:
+		F = IMatrix ();
+		break;
+	case CAMERA_ORBITAL: {
+		// up: the orbit's normal; forward: along the orbit (prograde)
+		bool ok = false;
+		if (ref) {
+			Vector r (target->GPos() - ref->GPos()), v (target->GVel() - ref->GVel());
+			Vector n (crossp (v, r));
+			if (n.length() > 1e-6 * r.length() * v.length() && n.length() > 0.0)
+				ok = camrig::FrameUpFwd (n.unit(), v, F);
+		}
+		if (ok) break;
+		kind = CAMERA_FREE; // (no orbit to speak of: Free)
+		F = freeFrame ();
+		} break;
+	case CAMERA_CHASE: {
+		// forward: the direction of travel (the target's heading when slow), smoothed
+		bool surface;
+		Vector v (TravelVelocity (surface));
+		double spd = v.length();
+		Vector head (Col (target->GRot(), 2));
+		if (fabs (dotp (head, up)) > 0.95) head = Col (target->GRot(), 1) * -1.0; // (a rocket on its pad: its belly)
+		double w = camrig::SmoothStep ((spd - 1.0) / 9.0);
+		Vector fwd (head * (1.0 - w));
+		if (spd > 0.0) fwd += v * (w / spd);
+		if (fwd.length() < 1e-6) fwd = head;
+		fwd = fwd.unit();
+		if (!chaseValid || dt <= 0.0) chaseFwd = fwd, chaseValid = true;
+		else chaseFwd = (chaseFwd + (fwd - chaseFwd) * camrig::Follow (dt, CHASE_LAG)).unit();
+		if (!camrig::FrameUpFwd (up, chaseFwd, F, 0.05))
+			F = (frameKind == CAMERA_CHASE || frameKind == CAMERA_FREE) ? camrig::Transport (frame, up) : freeFrame ();
+		} break;
+	default:
+		kind = CAMERA_FREE;
+		F = freeFrame ();
+		break;
+	}
+	if (frameKind >= 0 && kind != frameKind) changed = true;
+	frame = F;
+	frameKind = kind;
+	return F;
+}
+
+void Camera::UpdateTrack (double dt)
+{
+	// ease towards the requested view
+	double kr = camrig::Follow (dt, camT < settleT ? TAU_SETTLE : TAU_TURN);
+	double kd = camrig::Follow (dt, TAU_ZOOM);
+	if (extmode == CAMERA_LOCKED) {
+		lockQ = camrig::Slerp (lockQ, lockQT, kr);
+	} else {
+		ephi = camrig::Wrap (ephi + camrig::Wrap (yawT - ephi) * kr);
+		etheta = etheta + (pitchT - etheta) * kr;
+	}
+	rdist = exp (log (rdist) + (log (rdistT) - log (rdist)) * kd);
+
+	bool changed;
+	Matrix F (TrackFrame (dt, changed));
+	if (changed) { // (Auto switched frames: the camera stays where it is, turning to the new up)
+		StartBlend ();
+		Adopt (F);
+	}
+	Matrix rel (extmode == CAMERA_LOCKED ? lockQ : camrig::YawPitch (ephi, etheta));
+	grot.Set (F * rel);
+	gspos.Set (Col (grot, 2) * (-rdist * target->Size()));
+	gpos.Set (gspos + target->GPos());
+	GPOS = MakeVECTOR3 (gpos);
+}
+
+void Camera::PlaceFlyby ()
+{
+	bool surface;
+	Vector v (TravelVelocity (surface));
+	double spd = v.length();
+	Vector vdir (spd > 0.5 ? v / spd : Col (target->GRot(), 2));
+	if (spd <= 0.5) spd = 0.0;
+	Vector up (UpAtTarget ());
+	double ahead;
+	double pass = min (spd, FLYBY_VMAX);
+	Vector off (camrig::FlybyOffset (vdir, up, pass, target->Size(), fly.side, ahead));
+	fly.side = -fly.side;
+	fly.ref = RefBody ();
+	fly.vdir = vdir;
+	fly.ahead = ahead;
+	// fixed on the ground if the target is slow enough to pass it, else
+	// drifting with the target (in space: an orbit next to its own)
+	fly.ground = (surface && fly.ref && spd <= FLYBY_VMAX);
+	if (fly.ground) {
+		fly.local = tmul (fly.ref->GRot(), target->GPos() + off - fly.ref->GPos());
+	} else {
+		fly.off = off;
+		fly.drift = vdir * pass;
+	}
+	fly.placed = true;
+}
+
+void Camera::UpdateFlyby (double dt)
+{
+	if (!fly.placed) PlaceFlyby ();
+	Vector off;
+	if (fly.ground && fly.ref) {
+		off = fly.ref->GPos() + mul (fly.ref->GRot(), fly.local) - target->GPos();
+	} else {
+		fly.off -= fly.drift * dt;
+		off = fly.off;
+	}
+	// passed (or left behind): ahead again, a cut
+	bool surface;
+	Vector v (TravelVelocity (surface));
+	Vector vdir (fly.ground ? (v.length() > 0.5 ? v.unit() : fly.vdir) : fly.vdir);
+	if (dt > 0.0 && camrig::FlybyPassed (off, vdir, fly.ahead)) {
+		PlaceFlyby ();
+		blend.on = false;
+		off = fly.ground && fly.ref ? fly.ref->GPos() + mul (fly.ref->GRot(), fly.local) - target->GPos() : fly.off;
+	}
+	gspos = off;
+	gpos = target->GPos() + off;
+	GPOS = MakeVECTOR3 (gpos);
+	// looking at the target, horizon level
+	Vector up (UpAtTarget ());
+	const Body *ref = RefBody ();
+	if (ref && !CelestialTarget ()) up = (gpos - ref->GPos()).unit();
+	if (off.length() > 1e-6) grot = camrig::LookLevel (-off, up, grot);
+	rdist = rdistT = max (1.0, off.length() / target->Size());
+}
+
 void Camera::KeepAboveTerrain ()
 {
 	// (the camera's distance to its target is unchanged in the scene's state:
@@ -1425,6 +1753,9 @@ void Camera::InitState (const char *scn, Body *default_target)
 	Attach (newtgt, mode);
 	if (extmode == CAMERA_GROUNDOBSERVER)
 		SetGroundMode (CAMERA_GROUNDOBSERVER, dirref, go.lng, go.lat, go.alt);
+	else if (legacy.mode && external_view)
+		ApplyLegacy (legacy, dirref); // (a classic track mode: the closest new one, the camera where it was)
+	legacy.mode = 0;
 	SetAperture (*ap, true, true);
 }
 
@@ -1530,20 +1861,36 @@ bool Camera::Read (ifstream &ifs)
 		}
 	}
 	if (tg && external_view) target = tg;
+	legacy.mode = 0;
 	if (external_view) {
-		rdist = rd, ephi = ph, etheta = th;
-		if (!_stricmp (ctrackmode, "AbsoluteDirection"))
-			extmode = CAMERA_ABSDIRECTION;
-		else if (!_stricmp (ctrackmode, "GlobalFrame"))
-			extmode = CAMERA_GLOBALFRAME;
-		else if (!_stricmp (ctrackmode, "TargetTo") && (dirref = g_psys->GetObj (cdirref, true)))
-			extmode = CAMERA_TARGETTOOBJECT;
-		else if (!_stricmp (ctrackmode, "TargetFrom") && (dirref = g_psys->GetObj (cdirref, true)))
-			extmode = CAMERA_TARGETFROMOBJECT;
-		else if (!_stricmp (ctrackmode, "Ground") && (dirref = g_psys->GetObj (cdirref, true)))
+		rdist = rdistT = max (1.0, rd);
+		static const struct { const char *name; ExtCamMode mode; } modes[] = {
+			{"Auto", CAMERA_AUTO}, {"Free", CAMERA_FREE}, {"Orbital", CAMERA_ORBITAL}, {"Chase", CAMERA_CHASE},
+			{"Locked", CAMERA_LOCKED}, {"Flyby", CAMERA_FLYBY}, {"Inertial", CAMERA_INERTIAL}
+		};
+		int found = -1;
+		for (auto &m : modes) if (!_stricmp (ctrackmode, m.name)) found = m.mode;
+		if (found >= 0) {
+			extmode = (ExtCamMode)found;
+		} else if (!_stricmp (ctrackmode, "Ground") && (dirref = g_psys->GetObj (cdirref, true))) {
 			extmode = CAMERA_GROUNDOBSERVER;
-		else 
-			extmode = CAMERA_TARGETRELATIVE;
+		} else {
+			// the classic modes (applied in InitState, where the target is known)
+			extmode = CAMERA_FREE;
+			legacy.rd = rd, legacy.ph = ph, legacy.th = th;
+			if (!_stricmp (ctrackmode, "AbsoluteDirection"))
+				legacy.mode = CAM_ABSDIRECTION;
+			else if (!_stricmp (ctrackmode, "GlobalFrame") || !_stricmp (ctrackmode, "Global"))
+				legacy.mode = CAM_GLOBALFRAME;
+			else if (!_stricmp (ctrackmode, "TargetTo") && (dirref = g_psys->GetObj (cdirref, true)))
+				legacy.mode = CAM_TARGETTOOBJECT;
+			else if (!_stricmp (ctrackmode, "TargetFrom") && (dirref = g_psys->GetObj (cdirref, true)))
+				legacy.mode = CAM_TARGETFROMOBJECT;
+			else // TargetRelative (and none given)
+				extmode = CAMERA_LOCKED;
+		}
+		if (extmode == CAMERA_LOCKED) lockQ = lockQT = camrig::YawPitch (ph, th);
+		else ephi = yawT = camrig::Wrap (ph), etheta = pitchT = camrig::ClampPitch (th);
 	}
 	return true;
 }
@@ -1555,21 +1902,9 @@ void Camera::Write (ostream &ofs) const
 	ofs << "  TARGET " << target->Name() << endl;
 	ofs << "  MODE " << (external_view ? "Extern":"Cockpit") << endl;
 	if (external_view) {
-		ofs << "  POS " << setprecision(6) << rdist << ' ' << DEG*ephi << ' ' << DEG*etheta << setprecision(2) << endl;
+		ofs << "  POS " << setprecision(6) << rdist << ' ' << DEG*Phi() << ' ' << DEG*Theta() << setprecision(2) << endl;
 		ofs << "  TRACKMODE ";
 		switch (extmode) {
-		case CAMERA_ABSDIRECTION:
-			ofs << "AbsoluteDirection\n";
-			break;
-		case CAMERA_GLOBALFRAME:
-			ofs << "GlobalFrame\n";
-			break;
-		case CAMERA_TARGETTOOBJECT:
-			ofs << "TargetTo " << dirref->Name() << endl;
-			break;
-		case CAMERA_TARGETFROMOBJECT:
-			ofs << "TargetFrom " << dirref->Name() << endl;
-			break;
 		case CAMERA_GROUNDOBSERVER:
 			ofs << "Ground " << dirref->Name() << endl;
 			ofs << setprecision(5) << "  GROUNDLOCATION "
@@ -1579,7 +1914,7 @@ void Camera::Write (ostream &ofs) const
 				ofs << "  GROUNDDIRECTION " << go.phi*DEG << ' ' << go.tht*DEG << endl;
 			break;
 		default:
-			ofs << "TargetRelative\n";
+			ofs << ExtModeName (extmode) << endl;
 			break;
 		}
 	}
@@ -1750,6 +2085,18 @@ void CameraMode_Track::Init (char *str)
 		tmode = TM_ABSDIR;
 	else if (!_stricmp (tm, "GLOBAL"))
 		tmode = TM_GLOBAL;
+	else if (!_stricmp (tm, "AUTO"))
+		tmode = TM_AUTO;
+	else if (!_stricmp (tm, "FREE"))
+		tmode = TM_FREE;
+	else if (!_stricmp (tm, "ORBITAL"))
+		tmode = TM_ORBITAL;
+	else if (!_stricmp (tm, "CHASE"))
+		tmode = TM_CHASE;
+	else if (!_stricmp (tm, "LOCKED"))
+		tmode = TM_LOCKED;
+	else if (!_stricmp (tm, "FLYBY"))
+		tmode = TM_FLYBY;
 	else if (!_stricmp (tm, "TARGETTOREF")) {
 		tmode = TM_TARGETTOREF;
 		Body *r = g_psys->GetObj (rf, true);
@@ -1765,7 +2112,8 @@ void CameraMode_Track::Init (char *str)
 
 void CameraMode_Track::Store (char *str)
 {
-	static const char *tmstr[6] = {"CURRENT","RELATIVE", "ABSDIR", "GLOBAL", "TARGETTOREF", "TARGETFROMREF"};
+	static const char *tmstr[12] = {"CURRENT","RELATIVE", "ABSDIR", "GLOBAL", "TARGETTOREF", "TARGETFROMREF",
+		"AUTO", "FREE", "ORBITAL", "CHASE", "LOCKED", "FLYBY"};
 	sprintf (str, "Track:%s%:%0.2f:%s %0.3f %0.3f %0.3f", 
 		target ? ((Body*)target)->Name() : "-", fov,
 		tmstr[tmode], reldist, phi, theta);
@@ -1784,6 +2132,13 @@ void CameraMode_Track::GetDescr (char *str, int len)
 	case TM_RELATIVE: strcat (cbuf, "relative "); break;
 	case TM_ABSDIR:   strcat (cbuf, "fixed "); break;
 	case TM_GLOBAL:   strcat (cbuf, "global "); break;
+	case TM_AUTO:     strcat (cbuf, "auto "); break;
+	case TM_FREE:     strcat (cbuf, "free "); break;
+	case TM_ORBITAL:  strcat (cbuf, "orbital "); break;
+	case TM_CHASE:    strcat (cbuf, "chase "); break;
+	case TM_LOCKED:   strcat (cbuf, "locked "); break;
+	case TM_FLYBY:    strcat (cbuf, "flyby "); break;
+	default: break;
 	}
 	strncpy (str, cbuf, len-1);
 }

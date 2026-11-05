@@ -132,6 +132,10 @@ public:
 	inline bool GroundContact() const
 	{ return bSurfaceContact; }
 
+	/// Surface-relative state (0 if no body is near)
+	inline const SurfParam *SurfaceParams () const
+	{ return proxybody ? &sp : 0; }
+
 protected:
 	virtual void SetDefaultState ();
 	// Reset all state parameters to default values

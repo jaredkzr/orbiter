@@ -1,0 +1,284 @@
+# The external camera's modes (Camera.cpp, CamRig.cpp): F2 cycles them
+# (Shift+F2 back); Free and Chase keep the horizon level and stop short of
+# straight over the top; Orbital turns with the orbit (up: its normal);
+# Locked goes all the way round without a jump; Flyby watches the vessel
+# pass from a point ahead and is put ahead again. (Tests/Input/Orbit.scn:
+# a delta-glider in a 300 km Earth orbit, TRACKMODE TargetRelative.)
+
+lua v = vessel.get_focusinterface (); E = oapi.get_objhandle ("Earth")
+lua function col (i) local R = oapi.get_camerarotation (); if i == 1 then return {x=R.m12, y=R.m22, z=R.m32} elseif i == 2 then return {x=R.m13, y=R.m23, z=R.m33} end return {x=R.m11, y=R.m21, z=R.m31} end
+lua function dot (a, b) return a.x*b.x + a.y*b.y + a.z*b.z end
+lua function unit (a) local l = math.sqrt (dot (a, a)); return {x=a.x/l, y=a.y/l, z=a.z/l} end
+lua function cross (a, b) return {x=a.y*b.z-a.z*b.y, y=a.z*b.x-a.x*b.z, z=a.x*b.y-a.y*b.x} end
+lua function rpos () return oapi.get_relativepos (v:get_handle (), E) end
+lua function rvel () return oapi.get_relativevel (v:get_handle (), E) end
+lua function mode () local m, n = oapi.get_cameramode (); return n end
+lua function camoff () local c, p = oapi.get_cameraglobalpos (), v:get_globalpos (); return {x=c.x-p.x, y=c.y-p.y, z=c.z-p.z} end
+wait 10
+
+# a classic scenario's TargetRelative: Locked
+lua check ("start_locked", mode () == "locked", mode ())
+
+# F2 cycles: Locked -> Flyby -> Auto -> Free -> Orbital -> Chase -> Locked
+key F2
+wait 3
+lua check ("f2_flyby", mode () == "flyby", mode ())
+key F2
+wait 3
+lua check ("f2_auto", mode () == "auto", mode ())
+key F2
+wait 3
+lua check ("f2_free", mode () == "free", mode ())
+key F2
+wait 3
+lua check ("f2_orbital", mode () == "orbital", mode ())
+key F2
+wait 3
+lua check ("f2_chase", mode () == "chase", mode ())
+key F2
+wait 3
+lua check ("f2_locked", mode () == "locked", mode ())
+# Shift+F2: back
+keydown Left Shift
+key F2
+keyup Left Shift
+wait 3
+lua check ("shift_f2", mode () == "chase", mode ())
+
+# Free: dragging far up stops short of overhead, the horizon stays level
+# and the right way up, and sideways still turns the same way
+lua oapi.set_cameramode ({mode = "track", trackmode = "free", reldist = 4, phi = 0, tht = 0})
+wait 5
+lua check ("free", mode () == "free", mode ())
+lua oapi.rot_camera (0, -3.0)
+wait 60
+lua local d, a, p = oapi.get_cameraview (); check ("free_clamp_top", math.abs (p + 89 * math.pi / 180) < 1e-3, string.format ("pitch %.3f deg", math.deg (p)))
+lua check ("free_up_top", dot (col (1), unit (rpos ())) > 0.0 and math.abs (dot (col (0), unit (rpos ()))) < 1e-6, string.format ("up.vertical %.4f  x.vertical %.2e", dot (col (1), unit (rpos ())), dot (col (0), unit (rpos ()))))
+lua d0, a0 = oapi.get_cameraview ()
+lua oapi.rot_camera (0.3, 0)
+wait 60
+lua local d, a = oapi.get_cameraview (); local da = (a - a0 + math.pi) % (2 * math.pi) - math.pi; check ("free_sideways", math.abs (da - 0.3) < 1e-3, string.format ("azimuth change %.4f", da))
+lua oapi.rot_camera (0, 6.0)
+wait 60
+lua local d, a, p = oapi.get_cameraview (); check ("free_clamp_bottom", math.abs (p - 89 * math.pi / 180) < 1e-3 and dot (col (1), unit (rpos ())) > 0.0, string.format ("pitch %.3f deg", math.deg (p)))
+
+# Orbital: up is the orbit's normal (north for this prograde orbit)
+lua oapi.set_cameramode ({mode = "track", trackmode = "orbital", reldist = 4, phi = 0, tht = 0})
+wait 30
+lua n = unit (cross (rvel (), rpos ()))
+lua check ("orbital_up", mode () == "orbital" and dot (col (1), n) > 0.9999, string.format ("up.normal %.6f  normal.y %.3f", dot (col (1), n), n.y))
+lua check ("orbital_fwd", dot (col (2), unit (rvel ())) > 0.9999, string.format ("fwd.prograde %.6f", dot (col (2), unit (rvel ()))))
+
+# Chase: behind the direction of travel, looking a little down
+lua oapi.set_cameramode ({mode = "track", trackmode = "chase", reldist = 4, phi = 0, tht = 0})
+wait 120
+lua local c = dot (col (2), unit (rvel ())); check ("chase", mode () == "chase" and c > 0.97 and dot (col (1), unit (rpos ())) > 0.9, string.format ("fwd.velocity %.4f", c))
+
+# Locked: a full turn up, in steps: no jump, and the camera's left-right never flips
+lua oapi.set_cameramode ({mode = "track", trackmode = "locked", reldist = 4, phi = 0, tht = 0})
+wait 30
+lua f0 = col (2); x0 = col (0); prev = f0; maxstep = 0; minx = 1
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+lua oapi.rot_camera (0, 0.0981747704)
+wait 2
+lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot (f, prev)))); prev = f; minx = math.min (minx, dot (col (0), x0))
+wait 30
+lua check ("locked_loop", maxstep < 0.2 and minx > 0.99 and dot (col (2), f0) > 0.99, string.format ("largest step %.3f rad, x %.4f, back %.4f", maxstep, minx, dot (col (2), f0)))
+
+# Flyby: ahead on the path, passed, then put ahead again
+lua oapi.set_cameramode ({mode = "track", trackmode = "flyby", reldist = 4, phi = 0, tht = 0})
+wait 30
+lua check ("flyby_ahead", mode () == "flyby" and dot (camoff (), unit (rvel ())) > 100, string.format ("ahead %.0f m", dot (camoff (), unit (rvel ()))))
+wait 270
+lua check ("flyby_passed", dot (camoff (), unit (rvel ())) < 0, string.format ("ahead %.0f m", dot (camoff (), unit (rvel ()))))
+wait 60
+lua check ("flyby_again", dot (camoff (), unit (rvel ())) > 100, string.format ("ahead %.0f m", dot (camoff (), unit (rvel ()))))
+exit

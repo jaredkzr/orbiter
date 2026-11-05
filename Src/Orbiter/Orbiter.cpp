@@ -2635,7 +2635,11 @@ void Orbiter::KbdInputBuffered_System (char *kstate, DIDEVICEOBJECTDATA *dod, DW
 
 			else if (keymap.IsLogicalKey (key, kstate, OAPI_LKEY_HUDColour))        g_pane->ToggleHUDColour();
 		} else {
-			if (keymap.IsLogicalKey (key, kstate, OAPI_LKEY_ToggleTrackMode))  g_camera->SetTrackMode ((ExtCamMode)(((int)g_camera->GetExtMode()+1)%3));
+			// F2: the next camera mode, Shift+F2 the previous one
+			if (keymap.IsLogicalKey (key, kstate, OAPI_LKEY_ToggleTrackMode))  g_camera->CycleTrackMode (1);
+			else if (key == (keymap.Key (OAPI_LKEY_ToggleTrackMode) & 0xFF) && KEYMOD_SHIFT (kstate) && !KEYMOD_CONTROL (kstate) && !KEYMOD_ALT (kstate))
+				g_camera->CycleTrackMode (-1);
+			else if (keymap.IsLogicalKey (key, kstate, OAPI_LKEY_CockpitResetCam)) g_camera->ResetExtView (); // (Home: behind the target)
 		}
 	}
 }

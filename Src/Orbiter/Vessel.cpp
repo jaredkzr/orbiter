@@ -5422,7 +5422,7 @@ void Vessel::Destroy (const char *reason)
 	// (a ghost now; the camera follows the wreck)
 	if (this == g_focusobj && wreck) {
 		g_pOrbiter->SetView (wreck, 1);
-		g_camera->SetTrackMode (CAMERA_ABSDIRECTION);
+		g_camera->SetTrackMode (CAMERA_FREE); // (horizon level, not tumbling with the piece)
 		char msg[300];
 		snprintf (msg, sizeof(msg), "%s Switch to another vessel with F3.", cbuf);
 		g_pOrbiter->ShowInfoMessage (msg);

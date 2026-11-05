@@ -63,7 +63,7 @@ namespace {
 			}},
 			{"View", ICON_LC_EYE, {
 				{"Cockpit / external", K1(OAPI_LKEY_ToggleCamInternal)},
-				{"Tracking mode", K1(OAPI_LKEY_ToggleTrackMode)},
+				{"Camera mode (Shift: back)", K1(OAPI_LKEY_ToggleTrackMode)},
 				{"Cockpit mode (glass, panel, 3D)", K1(OAPI_LKEY_TogglePanelMode)},
 				{"Camera", K1(OAPI_LKEY_DlgCamera)},
 				{"Map", K1(OAPI_LKEY_MapView)},
@@ -73,7 +73,7 @@ namespace {
 				{"Orbit the target", K4(OAPI_LKEY_TrackRotateLeft, OAPI_LKEY_TrackRotateRight, OAPI_LKEY_TrackRotateUp, OAPI_LKEY_TrackRotateDown)},
 				{"Closer / farther", K2(OAPI_LKEY_TrackAdvance, OAPI_LKEY_TrackRetreat)},
 				{"Look around (cockpit)", K4(OAPI_LKEY_CockpitRotateLeft, OAPI_LKEY_CockpitRotateRight, OAPI_LKEY_CockpitRotateUp, OAPI_LKEY_CockpitRotateDown)},
-				{"Look forward", K1(OAPI_LKEY_CockpitResetCam)},
+				{"Look forward / camera behind", K1(OAPI_LKEY_CockpitResetCam)},
 				{"Celestial markers", K1(OAPI_LKEY_TogglePlanetarium)},
 				{"Surface labels", K1(OAPI_LKEY_ToggleLabels)},
 				{"Visual helpers", K1(OAPI_LKEY_DlgVisHelper)},

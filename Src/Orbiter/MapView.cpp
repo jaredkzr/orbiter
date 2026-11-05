@@ -110,14 +110,14 @@ void MapView::SetOn (bool o)
 			}
 		}
 		g_pOrbiter->SetView ((Body*)mapRef, 1);
-		g_camera->SetTrackMode (CAMERA_GLOBALFRAME);
+		g_camera->SetTrackMode (CAMERA_INERTIAL);
 		double fov = g_camera->TanAperture();
-		g_camera->SetDistance (std::clamp (1.15 * rmax / (fov * mapRef->Size()), 2.5, 1e6));
+		double dist = std::clamp (1.15 * rmax / (fov * mapRef->Size()), 2.5, 1e6);
 		// looking down on the orbit plane, inclined by 35 degrees
 		Vector n (crossp (v, r).unit()), u (n * cos (35.0*RAD) + r.unit() * sin (35.0*RAD));
 		double phi = atan2 (u.x, -u.z), theta = asin (std::clamp (-u.y, -1.0, 1.0));
-		g_camera->AddPhi (2.0 * (phi - g_camera->Phi()));
-		g_camera->AddTheta (2.0 * (theta - g_camera->Theta()));
+		g_camera->SetExtView (dist, phi, theta);
+		g_camera->CancelBlend (); // (a tool: at once)
 		on = true;
 	} else {
 		on = false;
@@ -125,9 +125,8 @@ void MapView::SetOn (bool o)
 			g_pOrbiter->SetView (saved.target, saved.external ? 1 : 0);
 			if (saved.external) {
 				g_camera->SetTrackMode (saved.extmode);
-				g_camera->SetDistance (saved.dist);
-				g_camera->AddPhi (2.0 * (saved.phi - g_camera->Phi()));     // (applies half)
-				g_camera->AddTheta (2.0 * (saved.theta - g_camera->Theta()));
+				g_camera->SetExtView (saved.dist, saved.phi, saved.theta);
+				g_camera->CancelBlend ();
 			}
 		}
 		drag = Drag::NONE;
@@ -498,9 +497,9 @@ void MapView::Centre (const CelestialBody *cb)
 		rmax = std::max (rmax, (cb->Secondary (i)->GPos() - cb->GPos()).length());
 	mapRef = cb;
 	g_pOrbiter->SetView ((Body*)cb, 1);
-	g_camera->SetTrackMode (CAMERA_GLOBALFRAME);
+	g_camera->SetTrackMode (CAMERA_INERTIAL);
 	g_camera->SetDistance (std::clamp (1.25 * rmax / (g_camera->TanAperture() * cb->Size()), 2.5, 1e7));
-	g_camera->ChangeDist (1.0); // (SetDistance only stores it: this moves the camera there)
+	g_camera->CancelBlend ();
 }
 
 void MapView::DrawTransferPlan (ImDrawList *dl)

@@ -15,6 +15,7 @@ set(headless_src
 # General source files
 	Astro.cpp
 	Camera.cpp
+	CamRig.cpp
 	cmdline.cpp
 	Config.cpp
 	console_ng.cpp
