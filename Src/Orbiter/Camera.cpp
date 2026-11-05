@@ -1156,6 +1156,19 @@ void Camera::Update ()
 				}
 			}
 		}
+		// chasing a wreck's piece: the horizon level (not rolled with the tumbling piece)
+		if (extmode == CAMERA_ABSDIRECTION && target->Type() == OBJTP_DEBRIS && planet_proxy && alt_proxy < 0.05 * planet_proxy->Size()) {
+			Vector z (grot.m13, grot.m23, grot.m33);
+			Vector up ((gpos - planet_proxy->GPos()).unit());
+			Vector x (crossp (up, z));
+			double lx = x.length();
+			if (lx > 1e-3) { // (not looking straight up or down)
+				x /= lx;
+				Vector y (crossp (z, x));
+				grot.Set (x.x, y.x, z.x,  x.y, y.y, z.y,  x.z, y.z, z.z);
+			}
+		}
+		if (extmode != CAMERA_GROUNDOBSERVER) KeepAboveTerrain ();
 	} else { // cockpit mode
 
 		double vp, vt;
@@ -1329,6 +1342,52 @@ D3DMATRIX *Camera::D3D_ProjViewMatrix ()
 		pv_mat_valid = true;
 	}
 	return &pv_mat;
+}
+
+void Camera::KeepAboveTerrain ()
+{
+	// (the camera's distance to its target is unchanged in the scene's state:
+	// lifted each frame, it slides over the terrain and returns to its line
+	// where that is clear)
+	const double CLEARANCE = 2.0; // [m] above the elevation (the terrain's mesh lies between its samples)
+	const Planet *p = planet_proxy;
+	if (!p || alt_proxy > 0.05 * p->Size()) return;
+	ElevationManager *emgr = p->ElevMgr();
+	if (!emgr) return;
+	if (p != clampPlanet) {
+		clampTile.clear ();
+		clampTile.resize (8);
+		clampPlanet = p;
+	}
+	double lng, lat, rad;
+	p->GlobalToEquatorial (gpos, lng, lat, rad);
+	double h = rad - p->Size();
+	int lvl = (int)(32.0 - log (max (h, 100.0)) * LOG2);
+	double elev = emgr->Elevation (lat, lng, lvl, &clampTile);
+	double rmin = p->Size() + elev + CLEARANCE;
+	if (rad >= rmin || rad <= 0.0) return;
+	Vector up ((gpos - p->GPos()) / rad);
+	Vector np (p->GPos() + up * rmin);
+	// turned by the angle between the old and the new direction to the target
+	Vector d0 (target->GPos() - gpos), d1 (target->GPos() - np);
+	double l0 = d0.length(), l1 = d1.length();
+	if (l0 > 1e-6 && l1 > 1e-6) {
+		d0 /= l0, d1 /= l1;
+		Vector ax (crossp (d0, d1));
+		double s = ax.length(), c = dotp (d0, d1);
+		if (s > 1e-9) {
+			ax /= s;
+			double t = 1.0 - c;
+			Matrix R (
+				c + ax.x*ax.x*t,      ax.x*ax.y*t - ax.z*s, ax.x*ax.z*t + ax.y*s,
+				ax.y*ax.x*t + ax.z*s, c + ax.y*ax.y*t,      ax.y*ax.z*t - ax.x*s,
+				ax.z*ax.x*t - ax.y*s, ax.z*ax.y*t + ax.x*s, c + ax.z*ax.z*t);
+			grot.premul (R);
+		}
+	}
+	gpos.Set (np);
+	gspos.Set (gpos - target->GPos());
+	GPOS = MakeVECTOR3 (gpos);
 }
 
 void Camera::UpdateProjectionMatrix ()

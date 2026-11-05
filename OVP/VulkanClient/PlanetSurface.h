@@ -300,6 +300,7 @@ private:
 	double camSpeed = 0.0; // the camera's speed over the ground [m/s of simulation time] (Select: tiles no finer than it crosses in MOTION_TIME)
 	double minSplit = 0.0; // [m] tiles this small not split (the camera's motion)
 	std::vector<Node*> drawList;
+	std::vector<Node*> buildList; // (tiles due to replace their parent once all four have meshes: made, not drawn)
 	// a point the tiles' distances are taken from (Select), per frame: the
 	// camera, vessels near the ground
 	struct From { VECTOR3 p, u; double r, lat, lng, cosLat; };

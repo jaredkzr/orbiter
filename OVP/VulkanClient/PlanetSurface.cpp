@@ -1268,12 +1268,29 @@ uint32_t PlanetSurface::Select (Node *n)
 	// finer ones only for the camera: thousands of them, each in the ray
 	// tracing scene)
 	if (n->vessel >= 0 && size > groundTile[n->vessel] && size / dv * ppr > splitPixels) split = true;
+	bool ready = true; // (the children have their meshes)
 	if (n->lvl < maxLevel && split) {
 		for (int c = 0; c < 4; c++) {
 			if (!n->child[c])
 				n->child[c].reset (NewNode (n->lvl + 1, 2 * n->ilat + (c >> 1), 2 * n->ilng + (c & 1), n));
-			n->rtTris += Select (n->child[c].get());
+			if (!n->child[c]->vbuf.buffer) ready = false;
 		}
+	}
+	// A tile is replaced by its children once all four have their meshes
+	// (a number is made per frame): until then it is drawn itself, else its
+	// ground would be missing for some frames (zooming fast: holes in the
+	// terrain showing the upscaler's history of the view before)
+	if (n->lvl < maxLevel && split && !ready && n->vbuf.buffer) {
+		for (auto &c : n->child) {
+			c->lastUsed = frame;
+			c->drawn = false, c->hidden = true, c->rtTris = 0;
+			buildList.push_back (c.get());
+		}
+		split = false;
+	}
+	if (n->lvl < maxLevel && split) {
+		for (int c = 0; c < 4; c++)
+			n->rtTris += Select (n->child[c].get());
 	} else {
 		drawList.push_back (n);
 		n->drawn = true;
@@ -1347,6 +1364,7 @@ void PlanetSurface::Prepare ()
 	fromVessels.clear ();
 	for (const VECTOR3 &v : groundVessels) fromVessels.push_back (MakeFrom (v));
 	drawList.clear ();
+	buildList.clear ();
 	for (auto &r : root) Select (r.get());
 	// (unused subtrees kept a while, for a camera coming back; but low and
 	// fast over the ground the finest tiles change every frame, ~100 new
@@ -1405,7 +1423,10 @@ void PlanetSurface::Prepare ()
 	constexpr int MAX_PLAIN_MESHES = 256;
 	struct PlainJob { Node *n; const Node *src; bool detailed; };
 	std::vector<PlainJob> plain;
-	for (Node *n : drawList) {
+	// (the tiles drawn, then those due to replace their parents)
+	std::vector<Node*> prepList (drawList);
+	prepList.insert (prepList.end (), buildList.begin (), buildList.end ());
+	for (Node *n : prepList) {
 		requestUp (n, TileLoader::SURF);
 		if (layers->mask) requestUp (n, TileLoader::MASK);
 		if (layers->elev) {
@@ -1780,6 +1801,12 @@ void PlanetSurface::Render (Atmosphere *atm)
 		for (auto &r : root) ProbeCut (r.get(), pc, probeList);
 		for (Node *n : probeList) if (InView (n)) DrawNode (n);
 		return;
+	}
+	{ // (ORBITER_VK_TILE_DEBUG: tiles drawn without their mesh, missing from the view)
+		int holes = 0;
+		for (Node *n : drawList) if (InView (n) && !n->vbuf.buffer) holes++;
+		static const bool holeLog = getenv ("ORBITER_VK_TILE_DEBUG") && atoi (getenv ("ORBITER_VK_TILE_DEBUG"));
+		if (holes && holeLog) oapiWriteLogV ("VulkanClient: %d tiles in view without a mesh (frame %llu)", holes, (unsigned long long)frame);
 	}
 	for (Node *n : drawList) if (InView (n)) DrawNode (n);
 }

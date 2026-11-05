@@ -304,6 +304,10 @@ private:
 	// Set camera position rel. to ref. object, where r, ph, th are polar coords
 
 	double GroundElevation (const Planet *ref, double lng, double lat, double alt) const;
+	/// External views (not the ground observer, which keeps its own height):
+	/// lift the camera above the terrain of the nearest planet if it is
+	/// below it (plus a clearance), turned to keep its target in view
+	void KeepAboveTerrain ();
 	// ground elevation at specified point
 
 	void UpdateProjectionMatrix ();
@@ -398,6 +402,8 @@ private:
 	bool pv_mat_valid;      // flag for validity of pv_mat
 
 	mutable std::vector<ElevationTile> etile;
+	std::vector<ElevationTile> clampTile;  // (KeepAboveTerrain's elevation tiles)
+	const Planet *clampPlanet = nullptr;   // (... of this planet)
 
 	ExternalCameraControl *ECC;
 
