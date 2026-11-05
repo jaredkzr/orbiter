@@ -5,6 +5,9 @@
 #include "Pane.h"
 #include "Util.h"
 #include "Vessel.h"
+#ifndef _WIN32
+#include "Platform.h"
+#endif
 
 using std::min;
 using std::max;
@@ -607,6 +610,20 @@ bool DefaultPanel::MFDToScreen (int mfd, float u, float v, float &x, float &y) c
 	return true;
 }
 
+bool DefaultPanel::MFDButtonCentre (int mfd, int btn, float &x, float &y) const
+{
+	if (mfd < 0 || mfd > 1 || btn < 0 || btn > 14) return false;
+	if (!pane->mfd[mfd].instr && btn != 12) return false; // (off: the power button only)
+	if (btn < 12) {
+		x = btnx[mfd][btn/6] + btnw*0.5f;
+		y = btny[btn%6] + btnh*0.5f;
+	} else {
+		x = bbtnx[mfd][btn-12] + btnw*0.5f;
+		y = bbtny + btnh*0.5f;
+	}
+	return true;
+}
+
 bool DefaultPanel::GetMFDButton (int mx, int my, int &mfd, int &btn) const
 {
 	int i, j, k;
@@ -721,8 +738,13 @@ void DefaultPanel::GetButtonState (int &state, int &mfd, int &btn)
 		POINT pt = {0, 0};
 #ifdef _WIN32
 		GetCursorPos (&pt);
-#endif
 		g_pOrbiter->ScreenToClient (&pt);
+#else
+		// (the cursor in the render window, as the graphics client reported it;
+		// without it a held button was never under the cursor, so the side
+		// buttons never reached the MFD)
+		{ int x, y; orbiter::platform::GetMousePos (x, y); pt.x = x, pt.y = y; }
+#endif
 		if (GetMFDButton (pt.x, pt.y, mfd, btn) && mfd == activemfd && btn == activebtn) {
 			if (btn < 12) {
 				state = mstate;

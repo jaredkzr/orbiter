@@ -1,0 +1,26 @@
+# The MFD buttons beside the displays (glass cockpit, mfd<n>.btn<k>):
+# SEL opens the mode list, a side button picks a mode. A side button is
+# handled while it is held, at the cursor (a button that was never under
+# the cursor did nothing on Linux).
+
+lua oapi.set_cameramode ({mode = "cockpit", cockpitmode = "generic"})
+wait 20
+lua check ("glass", oapi.cockpit_mode () == COCKPIT.GENERIC, string.format ("cockpit mode %d", oapi.cockpit_mode ()))
+# (Orbit.scn starts with the displays off: the power button only)
+waitfor @mfd0.btn12
+click @mfd0.btn12
+wait 5
+lua check ("power", oapi.get_mfdmode (0) > 0, string.format ("mode %d", oapi.get_mfdmode (0)))
+waitfor @mfd0.btn13
+click @mfd0.btn13
+wait 5
+# the mode list's first page: Orbit, Surface, ...
+click @mfd0.btn1
+wait 5
+lua check ("surface", oapi.get_mfdmode (0) == MFDMODE.SURFACE, string.format ("mode %d", oapi.get_mfdmode (0)))
+click @mfd0.btn13
+wait 5
+click @mfd0.btn0
+wait 5
+lua check ("orbit", oapi.get_mfdmode (0) == MFDMODE.ORBIT, string.format ("mode %d", oapi.get_mfdmode (0)))
+exit

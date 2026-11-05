@@ -227,9 +227,16 @@ void Pane::PublishMFDAnchors ()
 	std::vector<std::pair<std::string, oapi::FVECTOR2>> list;
 	char name[256];
 	for (int i = 0; i < MAXMFD; i++) {
+		float x, y;
+		// the glass cockpit's buttons: mfd<n>.btn<k> (0-11 left and right, 12-14 bottom)
+		if (panelmode == 1 && defpanel)
+			for (int b = 0; b < 15; b++)
+				if (defpanel->MFDButtonCentre (i, b, x, y)) {
+					snprintf (name, sizeof (name), "mfd%d.btn%d", i, b);
+					uianchor::Set (name, x, y);
+				}
 		Instrument *in = mfd[i].instr;
 		if (!in || in->Width () <= 0 || in->Height () <= 0) continue;
-		float x, y;
 		if (MFDToScreen (i, 0.0f, 0.0f, x, y)) { snprintf (name, sizeof (name), "mfd%d.tl", i); uianchor::Set (name, x, y); }
 		if (MFDToScreen (i, 1.0f, 1.0f, x, y)) { snprintf (name, sizeof (name), "mfd%d.br", i); uianchor::Set (name, x, y); }
 		in->Anchors (list);

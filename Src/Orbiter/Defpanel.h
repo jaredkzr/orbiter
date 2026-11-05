@@ -34,6 +34,9 @@ public:
 	/// MFD display under a screen point (u, v: position in it, 0..1)
 	bool MFDAt (int x, int y, int &mfd, float &u, float &v, bool unbounded) const;
 	bool MFDToScreen (int mfd, float u, float v, float &x, float &y) const;
+	/// The centre of an MFD's button on the screen (0-11: left and right
+	/// columns, 12-14: the bottom row); false if it isn't shown
+	bool MFDButtonCentre (int mfd, int btn, float &x, float &y) const;
 	void GetButtonState (int &state, int &mfd, int &btn);
 	inline void SetMouseState (int state) { mstate = state; }
 	inline void SetNavDisplayMode (int mode) { navdispmode = mode; }

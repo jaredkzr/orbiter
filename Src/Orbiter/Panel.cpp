@@ -6,6 +6,9 @@
 #include "Pane.h"
 #include "Vessel.h"
 #include "Log.h"
+#ifndef _WIN32
+#include "Platform.h"
+#endif
 
 using namespace std;
 
@@ -449,6 +452,8 @@ void Panel::GetMouseState (int &idx, int &state, int &mx, int &my) const
 		GetCursorPos (&pt);
 		if (cwnd) // need to subtract client window offset
 			ScreenToClient (cwnd, &pt);
+#else
+		{ int x, y; orbiter::platform::GetMousePos (x, y); pt.x = x, pt.y = y; } // (the cursor in the render window)
 #endif
 		pt.x -= X0, pt.y -= Y0;
 		if (scaled) pt.x = (int)(pt.x*iscale), pt.y = (int)(pt.y*iscale);

@@ -9,6 +9,9 @@
 #include "Log.h"
 #include "Util.h"
 #include "Mesh.h"
+#ifndef _WIN32
+#include "Platform.h"
+#endif
 
 using namespace std;
 
@@ -515,6 +518,8 @@ void VirtualCockpit::GetMouseState (int &idx, int &state, Vector &xs) const
 		GetCursorPos (&pt);
 		if (cwnd) // need to subtract client window offset
 			ScreenToClient (cwnd, &pt);
+#else
+		{ int x, y; orbiter::platform::GetMousePos (x, y); pt.x = x, pt.y = y; } // (the cursor in the render window)
 #endif
 
 		// calculate ray intersection with current focus area

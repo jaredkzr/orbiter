@@ -7,6 +7,8 @@
 #include "Vessel.h"
 #ifdef _WIN32
 #include <zmouse.h>
+#else
+#include "Platform.h"
 #endif
 
 using namespace std;
@@ -421,6 +423,8 @@ void Panel2D::GetMouseState (int &idx, int &state, int &mx, int &my) const
 		GetCursorPos (&pt);
 		if (cwnd) // need to subtract client window offset
 			ScreenToClient (cwnd, &pt);
+#else
+		{ int x, y; orbiter::platform::GetMousePos (x, y); pt.x = x, pt.y = y; } // (the cursor in the render window)
 #endif
 	    double tx, ty;  // transformed coordinates
 	    tx = ((double)pt.x-x0)/panelscale;
