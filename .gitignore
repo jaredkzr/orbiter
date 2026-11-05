@@ -36,3 +36,7 @@ Doc/**/*.gz
 # Python bytecode (Utils scripts)
 __pycache__/
 *.pyc
+
+# the simulated sky's built catalogues (190 MB): Utils/SkyKit/download.py
+Config/CSphere/Sky/stars.bin
+Config/CSphere/Sky/dust.bin

@@ -6,6 +6,10 @@ only the files these tools write. The client requires them: without them it
 does not start (`ORBITER_VK_SKY=0` leaves the sky out, for tests). Requires Python 3 with numpy, scipy and
 pandas.
 
+The built `stars.bin` and `dust.bin` are not in git (190 MB): download
+them with `python3 Utils/SkyKit/download.py` (from the repository's root;
+a GitHub release's assets, checked by SHA-256), or build them as below.
+
 ```
 python3 fetch.py [--cache DIR] [dust] [gaia] [hip] [teff] [harris] [iau]   # download the sources (default cache: ~/orbiter-data/skykit)
 python3 build_dust.py --out Config/CSphere/Sky/dust.bin

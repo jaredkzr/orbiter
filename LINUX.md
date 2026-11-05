@@ -45,6 +45,15 @@ the Orbiter 2024 release (or the Orbiter 2016 high-resolution packs): the
 `Textures/<Planet>.tex` files for bodies without tiles. Point Orbiter at
 them in `Orbiter.cfg` (see [Configuration](#configuration)).
 
+**Sky data:** the simulated sky's star catalogue and dust map
+(`Config/CSphere/Sky/stars.bin` and `dust.bin`, 190 MB) are too large for
+git. Download them once, from the repository's root, before building (or
+build them from their sources with `Utils/SkyKit`):
+
+```bash
+python3 Utils/SkyKit/download.py
+```
+
 ## Building
 
 ```bash
