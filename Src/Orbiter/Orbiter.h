@@ -232,7 +232,11 @@ public:
 
 	// Onscreen annotation
 	inline oapi::ScreenAnnotation *SNotePB() const { return snote_playback; }
+	inline DWORD nAnnotation () const { return nsnote; }
+	inline const oapi::ScreenAnnotation *Annotation (DWORD i) const { return snote[i]; }
 	oapi::ScreenAnnotation *CreateAnnotation (bool exclusive, double size, COLORREF col);
+	/// A message as a flight event banner (flightevent::Post for a level, a
+	/// detail and a key hint)
 	void ShowInfoMessage (const char *msg, double duration = 5.0);
 	// a short message on screen for duration seconds (system time), and in the log
 	bool DeleteAnnotation (oapi::ScreenAnnotation *sn);
@@ -470,8 +474,6 @@ private:
 	oapi::ScreenAnnotation **snote;// onscreen annotations
 	DWORD           nsnote;        // number of annotations
 	oapi::ScreenAnnotation *snote_playback;// onscreen annotation during playback
-	oapi::ScreenAnnotation *snote_info;    // onscreen information message (ShowInfoMessage)
-	double snote_info_until;               // system time until which it is shown
 	ScriptInterface *script;
 	INTERPRETERHANDLE hScnInterp;
 

@@ -99,6 +99,8 @@ namespace ui {
 	void Property (const char *label, const char *fmt, ...) IM_FMTARGS(2);
 	/// A small rounded tag
 	void Badge (const char *text, Colour c);
+	/// A key cap (e.g. "F3"), in the mono font, as an item
+	void KeyCap (const char *key);
 	/// A switch (an on/off control with a label to its right)
 	bool Toggle (const char *label, bool *v);
 	/// A text tab: returns true when clicked; drawn with an accent underline when active

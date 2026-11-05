@@ -5,6 +5,8 @@
 #include <functional>
 #include <vector>
 #include <cstdarg>
+#include <chrono>
+#include <string>
 #include "OrbiterAPI.h"
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -15,6 +17,7 @@
 #include "Camera.h"
 #include "Dialogs.h"
 #include "DlgMenuCfg.h"
+#include "Log.h"
 
 // =======================================================================
 // Externs
@@ -23,7 +26,8 @@ extern Orbiter *g_pOrbiter;
 extern Camera *g_camera;
 
 namespace {
-	float g_menuBottom = 0.0f; // the menu bar's lower edge this frame (screen; 0: none)
+	float g_menuBottom = 0.0f;  // the menu bar's lower edge this frame (screen; 0: none)
+	float g_labelBottom = 0.0f; // the camera mode label's lower edge this frame (0: none)
 }
 extern TimeData td;
 
@@ -840,6 +844,7 @@ public:
 	void OnDraw() {}
 	void Display() {
 		const double SHOW = 1.6, FADEIN = 0.12, FADEOUT = 0.45;
+		g_labelBottom = 0.0f;
 		double t = g_camera->SinceModeChange();
 		if (!g_camera->IsExternal() || t < 0.0 || t > SHOW) return;
 		float a = (float)(t < FADEIN ? t / FADEIN : t > SHOW - FADEOUT ? (SHOW - t) / FADEOUT : 1.0);
@@ -862,9 +867,193 @@ public:
 			ui::PushFont(f.strong, ui::SIZE_BODY);
 			ImGui::TextUnformatted(Camera::ExtModeName(g_camera->GetExtMode()));
 			ui::PopFont();
+			g_labelBottom = ImGui::GetWindowPos().y + ImGui::GetWindowHeight();
 		}
 		ImGui::End();
 		InfoEnd();
+	}
+};
+
+// =======================================================================
+// Flight events: banners under the menu bar
+
+namespace {
+	struct FlightEvent {
+		flightevent::Level level;
+		std::string title, detail, key, hint;
+		double t0, duration; // [s] (steady clock)
+		int count = 1;
+	};
+	std::vector<FlightEvent> g_events; // newest first
+
+	double Now()
+	{
+		using namespace std::chrono;
+		return duration<double>(steady_clock::now().time_since_epoch()).count();
+	}
+}
+
+void flightevent::Post (Level level, const char *title, const char *detail, const char *key, const char *hint, double duration)
+{
+	static const double DURATION[4] = { 6.0, 5.0, 9.0, 20.0 };
+	std::string t (title ? title : ""), d (detail ? detail : "");
+	LOGOUT ("%s%s%s", t.c_str(), d.empty() ? "" : ": ", d.c_str());
+	for (auto it = g_events.begin(); it != g_events.end(); ++it)
+		if (it->title == t && it->detail == d) { // (again: counted, shown afresh)
+			FlightEvent e = *it;
+			e.count++;
+			e.t0 = Now();
+			g_events.erase(it);
+			g_events.insert(g_events.begin(), e);
+			return;
+		}
+	FlightEvent e;
+	e.level = level;
+	e.title = t, e.detail = d;
+	e.key = key ? key : "", e.hint = hint ? hint : "";
+	e.t0 = Now();
+	e.duration = duration > 0.0 ? duration : DURATION[level];
+	g_events.insert(g_events.begin(), e);
+	const size_t MAXSHOWN = 3;
+	if (g_events.size() > MAXSHOWN) g_events.resize(MAXSHOWN);
+}
+
+void flightevent::Clear ()
+{
+	g_events.clear();
+}
+
+class EventBanners: public ImGuiDialog {
+public:
+	EventBanners(): ImGuiDialog("EventBanners") {}
+	void OnDraw() {}
+	void Display() {
+		const double FADEIN = 0.2, FADEOUT = 0.6;
+		double now = Now();
+		g_events.erase(std::remove_if(g_events.begin(), g_events.end(),
+			[now](const FlightEvent &e) { return now - e.t0 > e.duration; }), g_events.end());
+		if (g_events.empty()) return;
+
+		static const ui::Colour colour[4] = { ui::ACCENT, ui::SUCCESS, ui::CAUTION, ui::WARNING };
+		static const char *icon[4] = { ICON_LC_INFO, ICON_LC_CIRCLE_CHECK, ICON_LC_TRIANGLE_ALERT, ICON_LC_OCTAGON_ALERT };
+		ImGuiViewport *viewport = ImGui::GetMainViewport();
+		float y = std::max({viewport->Pos.y + ui::Px(12), g_menuBottom + ui::Px(10), g_labelBottom + ui::Px(8)});
+		const ui::Fonts &f = ui::GetFonts();
+		int i = 0;
+		for (const FlightEvent &e : g_events) {
+			double t = now - e.t0;
+			float a = (float)std::clamp(std::min(t / FADEIN, (e.duration - t) / FADEOUT), 0.0, 1.0);
+			ui::Colour c = colour[e.level];
+			ImGui::SetNextWindowViewport(viewport->ID);
+			ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + viewport->Size.x * 0.5f, y), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+			ImGui::SetNextWindowSizeConstraints(ImVec2(ui::Px(420), 0), ImVec2(ui::Px(640), FLT_MAX));
+			ImGui::PushStyleVar(ImGuiStyleVar_Alpha, a);
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, ui::Px(10));
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(ui::Px(18), ui::Px(12)));
+			ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ui::Px(8), ui::Px(4)));
+			ImGui::PushStyleColor(ImGuiCol_WindowBg, ui::Col(ui::WINDOW, 0.94f));
+			ImGui::PushStyleColor(ImGuiCol_Border, ui::Col(c, 0.45f));
+			char id[32];
+			snprintf(id, sizeof(id), "##flightevent%d", i++);
+			if (ImGui::Begin(id, nullptr, INFOFLAGS | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize)) {
+				ImGuiWindow *w = ImGui::GetCurrentWindow();
+				// a strip in the level's colour down the left edge
+				w->DrawList->AddRectFilled(w->Pos, ImVec2(w->Pos.x + ui::Px(4), w->Pos.y + w->Size.y), ui::Col32(c, a), ui::Px(10), ImDrawFlags_RoundCornersLeft);
+				ui::PushFont(f.body, ui::SIZE_BODY + 6.0f);
+				ImGui::PushStyleColor(ImGuiCol_Text, ui::Col(c));
+				ImGui::TextUnformatted(icon[e.level]);
+				ImGui::PopStyleColor();
+				ui::PopFont();
+				ImGui::SameLine(0, ui::Px(14));
+				ImGui::BeginGroup();
+				ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ui::Px(540));
+				ui::PushFont(f.strong, ui::SIZE_BODY + 2.0f);
+				ImGui::TextUnformatted(e.title.c_str());
+				ui::PopFont();
+				if (e.count > 1) {
+					ImGui::SameLine(0, ui::Px(8));
+					ui::TextDim("\xC3\x97%d", e.count);
+				}
+				if (!e.detail.empty()) {
+					ImGui::PushStyleColor(ImGuiCol_Text, ui::Col(ui::TEXT_DIM));
+					ImGui::TextUnformatted(e.detail.c_str());
+					ImGui::PopStyleColor();
+				}
+				if (!e.key.empty() || !e.hint.empty()) {
+					ImGui::Dummy(ImVec2(0, ui::Px(2)));
+					if (!e.key.empty()) {
+						ui::KeyCap(e.key.c_str());
+						ImGui::SameLine(0, ui::Px(8));
+					}
+					ui::TextDim("%s", e.hint.c_str());
+				}
+				ImGui::PopTextWrapPos();
+				ImGui::EndGroup();
+				y += ImGui::GetWindowHeight() + ui::Px(8);
+			}
+			ImGui::End();
+			ImGui::PopStyleColor(2);
+			ImGui::PopStyleVar(4);
+		}
+	}
+};
+
+// =======================================================================
+// Screen annotations (oapiCreateAnnotation: scripts, tutorials, recorded
+// flights' notes): panels at the annotation's place, its text wrapped to
+// its box, a strip and the text in its colour
+
+class AnnotationPanels: public ImGuiDialog {
+public:
+	AnnotationPanels(): ImGuiDialog("AnnotationPanels") {}
+	void OnDraw() {}
+	void Display() {
+		int n = 0;
+		for (DWORD i = 0; i < g_pOrbiter->nAnnotation(); i++)
+			Panel(g_pOrbiter->Annotation(i), n++);
+		if (g_pOrbiter->Cfg()->CfgRecPlayPrm.bShowNotes)
+			Panel(g_pOrbiter->SNotePB(), n++);
+	}
+private:
+	void Panel(const oapi::ScreenAnnotation *sn, int idx) {
+		if (!sn || !*sn->Text()) return;
+		int x1, y1, x2, y2;
+		sn->Box(x1, y1, x2, y2);
+		ImGuiViewport *viewport = ImGui::GetMainViewport();
+		// (the box was laid out for the old text, a size a 35th of the
+		// screen's height: the panel's text is smaller, its box narrower)
+		float scale = (float)std::clamp(sn->Size(), 0.5, 2.0);
+		float size = ui::SIZE_BODY * 1.15f * scale;
+		float boxw = std::max(ui::Px(240), (float)(x2 - x1));
+		COLORREF col = sn->Colour();
+		ImVec4 c((col & 0xFF) / 255.0f, ((col >> 8) & 0xFF) / 255.0f, ((col >> 16) & 0xFF) / 255.0f, 1.0f);
+		// (sRGB colours of the scripts, to the linear blend; lightened for reading on the panel)
+		ImVec4 lc = ui::Srgb(((unsigned)(c.x*255) << 16) | ((unsigned)(c.y*255) << 8) | (unsigned)(c.z*255));
+		ImVec4 tc(lc.x + (1.0f - lc.x) * 0.35f, lc.y + (1.0f - lc.y) * 0.35f, lc.z + (1.0f - lc.z) * 0.35f, 1.0f);
+		float pad = ui::Px(16);
+		ImGui::SetNextWindowViewport(viewport->ID);
+		ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + x1, viewport->Pos.y + y1), ImGuiCond_Always);
+		ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(boxw, FLT_MAX));
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, ui::Px(10));
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(pad + ui::Px(4), ui::Px(12)));
+		ImGui::PushStyleColor(ImGuiCol_WindowBg, ui::Col(ui::WINDOW, 0.86f));
+		ImGui::PushStyleColor(ImGuiCol_Border, ui::Col(ui::LINE, 0.6f));
+		char id[32];
+		snprintf(id, sizeof(id), "##annotation%d", idx);
+		if (ImGui::Begin(id, nullptr, INFOFLAGS | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing)) {
+			ImGuiWindow *w = ImGui::GetCurrentWindow();
+			w->DrawList->AddRectFilled(w->Pos, ImVec2(w->Pos.x + ui::Px(4), w->Pos.y + w->Size.y), ImGui::GetColorU32(lc), ui::Px(10), ImDrawFlags_RoundCornersLeft);
+			ui::PushFont(ui::GetFonts().body, size);
+			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + boxw - 2 * pad - ui::Px(4));
+			ImGui::PushStyleColor(ImGuiCol_Text, tc);
+			ImGui::TextUnformatted(sn->Text());
+			ImGui::PopStyleColor();
+			ImGui::PopTextWrapPos();
+			ui::PopFont();
+		}
+		ImGui::End();
+		ImGui::PopStyleColor(2);
+		ImGui::PopStyleVar(2);
 	}
 };
 
@@ -883,6 +1072,10 @@ MenuInfoBar::MenuInfoBar ()
 	oapiOpenDialog(infoTgt.get());
 	camLabel = std::make_unique<CameraModeLabel>();
 	oapiOpenDialog(camLabel.get());
+	notes = std::make_unique<AnnotationPanels>();
+	oapiOpenDialog(notes.get());
+	banners = std::make_unique<EventBanners>();
+	oapiOpenDialog(banners.get());
 }
 
 MenuInfoBar::~MenuInfoBar ()

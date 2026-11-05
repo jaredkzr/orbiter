@@ -2093,6 +2093,14 @@ public:
 	 */
 	virtual void Render ();
 
+	/// The annotation's state, for a user interface that draws it itself
+	/// (the Orbiter core draws annotations as panels)
+	const char *Text () const { return txtlen ? txt : ""; }
+	void Box (int &x1, int &y1, int &x2, int &y2) const { x1 = nx1, y1 = ny1, x2 = nx2, y2 = ny2; }
+	COLORREF Colour () const { return txtcol; }
+	double Size () const { return txtscale; }
+	DWORD ViewHeight () const { return viewH; }
+
 private:
 	GraphicsClient *gc;
 	DWORD viewW, viewH;

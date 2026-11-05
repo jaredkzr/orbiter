@@ -16,6 +16,7 @@
 #include "Log.h"
 #include "StarTargets.h"
 #include "Star.h"
+#include "MenuInfoBar.h"
 #include <algorithm>
 #include <cmath>
 
@@ -368,7 +369,9 @@ namespace reltravel {
 		phase = ph;
 		message = msg;
 		LOGOUT ("Relativistic travel: %s %s", vessel->Name(), msg);
-		if (vessel == g_focusobj) g_pOrbiter->ShowInfoMessage (msg);
+		if (vessel == g_focusobj)
+			flightevent::Post (ph == PH_ARRIVED ? flightevent::SUCCESS : ph == PH_FAILED ? flightevent::WARNING : flightevent::INFO,
+				ph == PH_ARRIVED ? msg : "Relativistic travel", ph == PH_ARRIVED ? nullptr : msg);
 	}
 
 	double Controller::Point (const Vector &dir)
@@ -487,7 +490,7 @@ namespace reltravel {
 			bool star = settings.target && settings.target->Type () == OBJTP_STAR;
 			if (settings.arrival == ARRIVE_REST && ((bh && vessel->StrongFieldHole () == bh) || star)) {
 				LOGOUT ("Relativistic travel: %s %s: holding there", vessel->Name(), buf);
-				if (vessel == g_focusobj) g_pOrbiter->ShowInfoMessage (buf);
+				if (vessel == g_focusobj) flightevent::Post (flightevent::SUCCESS, buf, "Holding position there");
 				phase = PH_HOLD;
 				holdPos = vessel->GPos () - settings.target->GPos (), holdSet = true;
 				Hold ();
@@ -653,7 +656,7 @@ namespace reltravel {
 				char buf[128];
 				snprintf (buf, sizeof (buf), "Arrived at %s", TargetName ().c_str());
 				LOGOUT ("Relativistic travel: %s %s (%.3g km short): holding there", vessel->Name(), buf, miss * 1e-3);
-				if (vessel == g_focusobj) g_pOrbiter->ShowInfoMessage (buf);
+				if (vessel == g_focusobj) flightevent::Post (flightevent::SUCCESS, buf, "Holding position there");
 				phase = PH_HOLD, guided = false;
 				holdPos = xt - vt * tgo - settings.target->GPos (), holdSet = true;
 				Hold ();

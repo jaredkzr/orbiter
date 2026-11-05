@@ -338,8 +338,6 @@ Orbiter::Orbiter ()
 	hBk             = NULL;
 	hScnInterp      = NULL;
 	snote_playback  = NULL;
-	snote_info      = NULL;
-	snote_info_until = 0.0;
 	nsnote          = 0;
 	bVisible        = false;
 	bAllowInput     = false;
@@ -804,12 +802,6 @@ HWND Orbiter::CreateRenderWindow (Config *pCfg, const char *scenario)
 
 		// playback screen annotation manager
 		snote_playback = gclient->clbkCreateAnnotation ();
-		snote_info = gclient->clbkCreateAnnotation ();
-		if (snote_info) {
-			snote_info->SetPosition (0.25, 0.12, 0.9, 0.3);
-			VECTOR3 col = {1.0, 0.85, 0.4};
-			snote_info->SetColour (col);
-		}
 	}
 	else {
 		pDlgMgr = new DialogManager(this, m_pConsole->WindowHandle());
@@ -1005,7 +997,6 @@ void Orbiter::CloseSession ()
 			gclient->clbkCloseSession (false);
 			Base::DestroyStaticDeviceObjects ();
 		}
-		if (snote_info) delete snote_info, snote_info = NULL;
 		if (snote_playback) delete snote_playback;
 		if (nsnote) {
 			for (DWORD i = 0; i < nsnote; i++) delete snote[i];
@@ -1988,20 +1979,13 @@ const Mesh *Orbiter::LoadMeshGlobal (const char *fname, LoadMeshClbkFunc fClbk)
 VOID Orbiter::Output2DData ()
 {
 	g_pane->Draw ();
-	if (g_pane) {
-		for (DWORD i = 0; i < nsnote; i++)
-			snote[i]->Render();
-		if (snote_playback && pConfig->CfgRecPlayPrm.bShowNotes) snote_playback->Render();
-		if (snote_info && td.SysT1 < snote_info_until) snote_info->Render();
-	}
+	// (screen annotations and flight events are drawn as panels by the
+	// user interface: MenuInfoBar's AnnotationPanels and EventBanners)
 }
 
 void Orbiter::ShowInfoMessage (const char *msg, double duration)
 {
-	LOGOUT ("%s", msg);
-	if (!snote_info) return;
-	snote_info->SetText ((char*)msg);
-	snote_info_until = td.SysT1 + duration;
+	flightevent::Post (flightevent::INFO, msg, nullptr, nullptr, nullptr, duration);
 }
 
 //-----------------------------------------------------------------------------

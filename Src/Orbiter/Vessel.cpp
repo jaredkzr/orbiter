@@ -49,6 +49,7 @@
 #include <functional>
 #include <random>
 #include <iomanip>
+#include "MenuInfoBar.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string>
@@ -5241,7 +5242,7 @@ void Vessel::UpdateStructuralLoads ()
 		for (size_t j = 0; j < np; j++)
 			if (!PartLost ((int)j)) break_J[j] = tmul (s.R, dv[j]) * (parts[j].mass + (j == 0 ? mextra : 0.0));
 		char cbuf[128];
-		sprintf (cbuf, "broke up at %0.0f g (%s overloaded %0.1fx)", g, parts[worst].name.c_str(), coreMax);
+		sprintf (cbuf, "broke up at %0.0f g (%s overloaded %0.1f\xC3\x97)", g, parts[worst].name.c_str(), coreMax);
 		Destroy (cbuf);
 		break_J.clear ();
 		return;
@@ -5253,10 +5254,14 @@ void Vessel::UpdateStructuralLoads ()
 		part_load[j] = (float)(L[j].length() / parts[j].strength);
 		if (part_load[j] <= 1.0f) continue;
 		for (int k = parts[j].parent; k >= 0; k = parts[k].parent) L[k] -= L[j];
-		char cbuf[256];
+		char cbuf[256], title[128];
 		sprintf (cbuf, "%s: %s broke off at %0.1f g", name.c_str(), parts[j].name.c_str(), g);
-		if (this == g_focusobj) g_pOrbiter->ShowInfoMessage (cbuf);
-		else LOGOUT ("%s", cbuf);
+		if (this == g_focusobj) {
+			snprintf (title, sizeof (title), "%s broke off", parts[j].name.c_str());
+			title[0] = (char)toupper ((unsigned char)title[0]);
+			snprintf (cbuf, sizeof (cbuf), "%s, under %0.1f g", name.c_str(), g);
+			flightevent::Post (flightevent::WARNING, title, cbuf);
+		} else LOGOUT ("%s", cbuf);
 		Vector Jx (-L[j] * ((1.0 - parts[j].strength / L[j].length()) * hJ)); // (the impulse the joint did not pass on)
 		{   // (bounded by what the parts beyond it touched)
 			std::vector<int> sub (1, (int)j);
@@ -5350,8 +5355,13 @@ void Vessel::UpdateHeating ()
 		Destroy (cbuf);
 	} else {
 		sprintf (cbuf, "%s: %s burned off (%0.0f K)", name.c_str(), parts[hottest].name.c_str(), part_temp[hottest]);
-		if (this == g_focusobj) g_pOrbiter->ShowInfoMessage (cbuf);
-		else LOGOUT ("%s", cbuf);
+		if (this == g_focusobj) {
+			char title[128];
+			snprintf (title, sizeof (title), "%s burned off", parts[hottest].name.c_str());
+			title[0] = (char)toupper ((unsigned char)title[0]);
+			snprintf (cbuf, sizeof (cbuf), "%s, at %0.0f K", name.c_str(), part_temp[hottest]);
+			flightevent::Post (flightevent::WARNING, title, cbuf);
+		} else LOGOUT ("%s", cbuf);
 		last_debris = nullptr;
 		BreakPart (hottest, 0.5);
 		if (last_debris) {
@@ -5423,9 +5433,12 @@ void Vessel::Destroy (const char *reason)
 	if (this == g_focusobj && wreck) {
 		g_pOrbiter->SetView (wreck, 1);
 		g_camera->SetTrackMode (CAMERA_FREE); // (horizon level, not tumbling with the piece)
-		char msg[300];
-		snprintf (msg, sizeof(msg), "%s Switch to another vessel with F3.", cbuf);
-		g_pOrbiter->ShowInfoMessage (msg);
+		char title[160], detail[256];
+		snprintf (title, sizeof (title), "%s destroyed", name.c_str());
+		snprintf (detail, sizeof (detail), "%s", reason);
+		detail[0] = (char)toupper ((unsigned char)detail[0]);
+		std::string key = g_pOrbiter->keymap.Label (OAPI_LKEY_DlgSelectVessel);
+		flightevent::Post (flightevent::DANGER, title, detail, key.c_str(), "Switch to another vessel");
 	}
 }
 
@@ -5552,20 +5565,24 @@ void Vessel::DockRefused (DWORD port, Vessel *mate, DWORD mateport, int reason, 
 	char cbuf[256];
 	switch (reason) {
 	case DOCKREFUSED_SPEED:
-		sprintf (cbuf, "%s: docking with %s refused: closing at %0.2f m/s (limit %0.2f)", name.c_str(), mate->Name(), value, limit);
+		sprintf (cbuf, "closing at %0.2f m/s (limit %0.2f)", value, limit);
 		break;
 	case DOCKREFUSED_APPROACH:
-		sprintf (cbuf, "%s: docking with %s refused: misaligned by %0.1f deg (limit %0.1f deg)", name.c_str(), mate->Name(), value*DEG, limit*DEG);
+		sprintf (cbuf, "misaligned by %0.1f\xC2\xB0 (limit %0.1f\xC2\xB0)", value*DEG, limit*DEG);
 		break;
 	case DOCKREFUSED_ROLL:
-		sprintf (cbuf, "%s: docking with %s refused: rolled by %0.1f deg (limit %0.1f deg)", name.c_str(), mate->Name(), value*DEG, limit*DEG);
+		sprintf (cbuf, "rolled by %0.1f\xC2\xB0 (limit %0.1f\xC2\xB0)", value*DEG, limit*DEG);
 		break;
 	default:
-		sprintf (cbuf, "%s: docking with %s refused: %0.2f m off axis", name.c_str(), mate->Name(), value);
+		sprintf (cbuf, "%0.2f m off axis", value);
 		break;
 	}
-	if (this == g_focusobj) g_pOrbiter->ShowInfoMessage (cbuf);
-	else LOGOUT ("%s", cbuf);
+	LOGOUT ("%s: docking with %s refused: %s", name.c_str(), mate->Name(), cbuf); // (Tests/DockingTest counts these)
+	if (this == g_focusobj) {
+		char detail[384];
+		snprintf (detail, sizeof (detail), "%s to %s: %s", name.c_str(), mate->Name(), cbuf);
+		flightevent::Post (flightevent::WARNING, "Docking refused", detail);
+	}
 }
 
 collision::Port Vessel::PortState (const StateVectors &s, DWORD i) const

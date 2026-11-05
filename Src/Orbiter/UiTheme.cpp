@@ -364,6 +364,21 @@ void Badge (const char *text, Colour c)
 	PopFont ();
 }
 
+void KeyCap (const char *key)
+{
+	PushFont (fonts.mono, SIZE_SMALL);
+	ImVec2 ts = ImGui::CalcTextSize (key);
+	ImVec2 pad (Px (6), Px (2));
+	ImVec2 p = ImGui::GetCursorScreenPos ();
+	ImDrawList *dl = ImGui::GetWindowDrawList ();
+	ImVec2 q (p.x + ts.x + 2 * pad.x, p.y + ts.y + 2 * pad.y);
+	dl->AddRectFilled (p, q, Col32 (RAISED, ImGui::GetStyle().Alpha), Px (4));
+	dl->AddRect (p, q, Col32 (LINE, ImGui::GetStyle().Alpha), Px (4));
+	dl->AddText (ImVec2(p.x + pad.x, p.y + pad.y), Col32 (TEXT, ImGui::GetStyle().Alpha), key);
+	ImGui::Dummy (ImVec2(q.x - p.x, q.y - p.y));
+	PopFont ();
+}
+
 bool Toggle (const char *label, bool *v)
 {
 	ImGuiWindow *win = ImGui::GetCurrentWindow ();

@@ -32,6 +32,7 @@
 #include "BlackHole.h"
 #include "Vessel.h"
 #include "RelTravel.h"
+#include "MenuInfoBar.h"
 #include "Planet.h"
 #include "Structure.h"
 #include "Log.h"
@@ -445,7 +446,11 @@ bool Vessel::RelImpact (const CelestialBody *body, const Vector &rpos, const Vec
 	}
 	if (reltrip) reltrip->Abort (cbuf);
 	LOGOUT ("Relativistic flight: %s %s", Name(), cbuf);
-	if (this == g_focusobj) g_pOrbiter->ShowInfoMessage (cbuf);
+	if (this == g_focusobj) {
+		char title[160];
+		snprintf (title, sizeof (title), "%s %s", Name(), cbuf);
+		flightevent::Post (flightevent::WARNING, "Relativistic flight", title);
+	}
 	return true;
 }
 
@@ -462,7 +467,11 @@ void Vessel::Impacted (const Vector &gpos, const Vector &gvel, double speed)
 		Destroy (cbuf);
 	} else if (speed > CRASH_SPEED) {
 		strcat (cbuf, ": set down");
-		if (this == g_focusobj) g_pOrbiter->ShowInfoMessage (cbuf);
+		if (this == g_focusobj) {
+			char detail[300];
+			snprintf (detail, sizeof (detail), "%s hit %s at %.0f m/s and was set down there (damage is off)", Name(), proxybody ? proxybody->Name() : "the ground", speed);
+			flightevent::Post (flightevent::WARNING, "Impact", detail);
+		}
 	}
 	LOGOUT ("%s %s (a step of %.1f s)", Name(), cbuf, td.SimDT);
 }
@@ -473,14 +482,23 @@ void Vessel::RelSwallowed (const CelestialBody *hole)
 	sprintf (cbuf, "%s is lost inside %s", Name(), hole->Name());
 	reldrive.on = false;
 	if (reltrip) reltrip->Abort (cbuf);
-	if (this == g_focusobj) g_pOrbiter->ShowInfoMessage (cbuf);
+	if (this == g_focusobj) {
+		char title[160];
+		snprintf (title, sizeof (title), "%s lost", Name());
+		std::string key = g_pOrbiter->keymap.Label (OAPI_LKEY_DlgSelectVessel);
+		flightevent::Post (flightevent::DANGER, title, cbuf, key.c_str(), "Switch to another vessel");
+	}
 }
 
 void Vessel::RelHorizon (const CelestialBody *hole)
 {
 	char cbuf[256];
 	sprintf (cbuf, "%s crossed the event horizon of %s: no way back", Name(), hole->Name());
-	if (this == g_focusobj) g_pOrbiter->ShowInfoMessage (cbuf);
+	if (this == g_focusobj) {
+		char detail[200];
+		snprintf (detail, sizeof (detail), "%s is inside %s: there is no way back", Name(), hole->Name());
+		flightevent::Post (flightevent::DANGER, "Event horizon crossed", detail);
+	} else LOGOUT ("%s", cbuf);
 }
 
 void Vessel::RelDiverged ()
