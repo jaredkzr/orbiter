@@ -2834,7 +2834,9 @@ int Vessel::Dock (Vessel *target, DWORD mydid, DWORD tgtdid, DWORD mode)
 	target->RegisterDocking (tgtdid, this, mydid);
 	if (this == g_focusobj || target == g_focusobj) { // (the player hears of it)
 		char detail[256];
-		snprintf (detail, sizeof (detail), "%s to %s, port %d", name.c_str(), target->Name(), (int)tgtdid + 1);
+		// (the player's vessel first)
+		if (target == g_focusobj) snprintf (detail, sizeof (detail), "%s to %s, port %d", target->Name(), name.c_str(), (int)mydid + 1);
+		else snprintf (detail, sizeof (detail), "%s to %s, port %d", name.c_str(), target->Name(), (int)tgtdid + 1);
 		flightevent::Post (flightevent::SUCCESS, "Docked", detail);
 	}
 	return 0;

@@ -179,6 +179,8 @@ public:
 	/// Radius [m] about the target that the camera frames: the vessel and
 	/// everything attached to it (a launch stack), else its size
 	double FrameRadius () const;
+	/// Distance [m] that frames it at the field of view
+	double FrameDistance () const;
 
 	/// Turn the camera once so that obj is behind the target (behindTarget)
 	/// or behind the camera (in Free if the mode has no angles to turn)

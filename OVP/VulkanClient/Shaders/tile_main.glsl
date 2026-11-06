@@ -265,7 +265,7 @@ vec3 CityGround (vec3 posView, inout vec3 base, out float cover)
 		roof *= 0.85 + 0.3 * Hash(ivec3(c, 8));
 		roof = mix(roof, vec3(0.37, 0.35, 0.33), 0.65 * smoothstep(1800.0, 6000.0, length(posView))); // (far: a town's mean, not a checkerboard)
 		float gap = 1.0 - smoothstep(0.0, 0.12, min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y))); // (the buildings' sides, in shade)
-		roof *= 1.0 - 0.45 * gap * (1.0 - smoothstep(2500.0, 8000.0, length(posView))); // (far: they average out)
+		roof *= 1.0 - 0.45 * gap * (1.0 - smoothstep(1000.0, 4000.0, length(posView))); // (far: they average out)
 		base = mix(base, roof, 0.85 * w);
 		float lit = Hash(ivec3(c, 9)) < 0.35 ? 1.0 : 0.0;
 		cityEmis = vec3(1.0, 0.78, 0.5) * (0.04 * lit * w);
@@ -274,9 +274,9 @@ vec3 CityGround (vec3 posView, inout vec3 base, out float cover)
 	// (from afar the streets of the coarse road map, metres wider than they
 	// are, drew a black grid over the town: their contrast fades with
 	// distance, as the narrow streets and their trees average out)
-	float far = smoothstep(1200.0, 7000.0, length(posView));
+	float far = smoothstep(600.0, 3000.0, length(posView));
 	base = mix(base, vec3(0.20, 0.19, 0.18), m.g * fade * (1.0 - 0.5 * far)); // pavement
-	base = mix(base, mix(vec3(0.075, 0.075, 0.08), vec3(0.16, 0.155, 0.15), far), m.r * fade * (1.0 - 0.55 * far)); // asphalt
+	base = mix(base, mix(vec3(0.075, 0.075, 0.08), vec3(0.17, 0.165, 0.16), far), m.r * fade * (1.0 - 0.7 * far)); // asphalt
 	// (sodium lamps orange, LEDs white)
 	vec3 lamp = mix(vec3(1.0, 0.55, 0.18), vec3(0.85, 0.9, 1.0), m.a);
 	return lamp * (CITY_LAMP_IRR * m.b * fade);

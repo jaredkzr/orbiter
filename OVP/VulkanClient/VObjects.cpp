@@ -872,6 +872,53 @@ void VDebris::Effects ()
 	if (smoke.tex == nullptr) smoke.tex = sys->SmokeTexture ();
 	if (dust.tex == nullptr) dust.tex = sys->SmokeTexture ();
 
+	// (down on a sea: water, not ground - a splash and steam, no scorch)
+	bool onWater = false;
+	if (alt < 3.0 * size + 20.0) {
+		SURFDETAILPARAM sdp{};
+		if (oapiSurfaceDetailParams (hp, &sdp) && sdp.sea) {
+			double lng, lat, rad;
+			oapiGlobalToEqu (hp, gpos, &lng, &lat, &rad);
+			onWater = oapiSurfaceElevation (hp, lng, lat) <= 0.5;
+		}
+	}
+
+	// (born at the sea's surface - a vessel broken up by its impact on the
+	// water: the splash of the impact itself, its pieces fly off from it)
+	if (!splashed && onWater && simt - info.created < 0.5 && alt < 2.0 * size + 10.0) {
+		splashed = true;
+		VECTOR3 gv;
+		{
+			VECTOR3 bv; oapiGetGlobalVel (hp, &bv);
+			MATRIX3 Rp; oapiGetRotationMatrix (hp, &Rp);
+			double prot = oapiGetPlanetPeriod (hp);
+			VECTOR3 rot = prot != 0.0 ? mul (Rp, _V(0, 1, 0)) * (2.0 * PI / prot) : _V(0, 0, 0);
+			gv = bv + crossp (rot, gpos - pp);
+		}
+		double v = std::min (length (vel - gv), 250.0);
+		if (smoke.tex == nullptr) smoke.tex = sys->SmokeTexture ();
+		if (dust.tex == nullptr) dust.tex = sys->SmokeTexture ();
+		VECTOR3 at = gpos - up * alt;
+		ParticleSystem::Emission c{};
+		c.p0 = c.p1 = at, c.vel = gv, c.dir = up;
+		c.v0 = std::min (0.4 * v, 60.0), c.spread = std::min (0.06 * v, 8.0);
+		c.lifetime = std::clamp (0.03 * v + 2.0, 2.5, 7.0), c.dt = dt;
+		c.size = std::max (0.6 * size, 1.0) * sz, c.growth = 0.8 * size * sz;
+		c.alpha = 0.6, c.slowdown = 0.3;
+		c.tinted = true, c.cold = true, c.ballistic = true;
+		c.albedo[0] = 0.92f, c.albedo[1] = 0.94f, c.albedo[2] = 0.96f;
+		Emit (dust, c, (uint32_t)std::min (v * 3.0 * D, 400.0), 8.0);
+		ParticleSystem::Emission r{};
+		r.p0 = r.p1 = at, r.vel = gv, r.dir = -up;
+		r.v0 = std::min (0.2 * v, 30.0), r.spread = std::min (0.4 * v, 40.0);
+		r.lifetime = 4.0, r.dt = dt;
+		r.size = std::max (0.8 * size, 1.0) * sz, r.growth = 1.0 * size * sz;
+		r.alpha = 0.4, r.slowdown = 0.8;
+		r.tinted = true, r.cold = true, r.planar = true;
+		r.albedo[0] = 0.9f, r.albedo[1] = 0.92f, r.albedo[2] = 0.95f;
+		Emit (dust, r, (uint32_t)std::min (v * 2.5 * D, 300.0), 8.0);
+	}
+
 	// the fireball: propellant released as it broke off (if seen then)
 	if (!burst && info.fuel > 1.0 && simt - info.created < 0.5) {
 		burst = true;
@@ -905,7 +952,7 @@ void VDebris::Effects ()
 			m.size = 0.6 * R * sz, m.growth = 0.35 * R * sz;
 			m.alpha = 0.6, m.slowdown = slow; // (staying with its fire)
 			m.tinted = true, m.volumetric = true;
-			m.albedo[0] = m.albedo[1] = m.albedo[2] = 0.07f;
+			m.albedo[0] = m.albedo[1] = m.albedo[2] = onWater ? 0.5f : 0.07f; // (on the sea: steam with the smoke)
 		} else {
 			// in vacuum no smoke billows: the propellant left unburned
 			// condenses to droplets and ice, with some soot, a pale sunlit
@@ -932,17 +979,6 @@ void VDebris::Effects ()
 			VECTOR3 hp;
 			oapiLocalToGlobal (hObj, &info.hitpos, &hp); // (where it is now)
 			Spray (hp, vel, info.hit, rho);
-		}
-	}
-
-	// (down on a sea: water, not ground - a splash and steam, no scorch)
-	bool onWater = false;
-	if (alt < 3.0 * size + 5.0) {
-		SURFDETAILPARAM sdp{};
-		if (oapiSurfaceDetailParams (hp, &sdp) && sdp.sea) {
-			double lng, lat, rad;
-			oapiGlobalToEqu (hp, gpos, &lng, &lat, &rad);
-			onWater = oapiSurfaceElevation (hp, lng, lat) <= 0.5;
 		}
 	}
 

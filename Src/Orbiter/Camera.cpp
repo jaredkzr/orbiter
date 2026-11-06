@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <iomanip>
+#include <algorithm>
 
 #include "resource.h"
 #include "D3dmath.h"
@@ -19,6 +20,7 @@
 #include "Planet.h"
 #include "GroundScatter.h"
 #include "Vessel.h"
+#include "SuperVessel.h"
 #include "Vesselbase.h"
 #include "Psys.h"
 #include "Pane.h"
@@ -436,7 +438,7 @@ void Camera::Attach (Body *_target, int mode)
 			chaseValid = false;
 			if (from) StartBlend (from);
 			if (from != target) { // (a new target: at least far enough to frame it, a launch stack whole)
-				double rf = MIN_FRAME * FrameRadius () / target->Size();
+				double rf = MIN_FRAME / HOME_FRAME * FrameDistance () / target->Size();
 				if (rdistT < rf) rdist = rdistT = rf;
 			}
 			if (extmode == CAMERA_FLYBY) PlaceFlyby (), UpdateFlyby (0.0);
@@ -740,7 +742,14 @@ void Camera::ResetExtView ()
 	settleT = camT + SETTLE_T;
 	if (extmode == CAMERA_LOCKED) lockQT = camrig::YawPitch (0.0, CHASE_PITCH);
 	else yawT = 0.0, pitchT = CHASE_PITCH;
-	rdistT = max (1.0, HOME_FRAME * FrameRadius () / target->Size());
+	rdistT = max (1.0, FrameDistance () / target->Size());
+}
+
+double Camera::FrameDistance () const
+{
+	// (HOME_FRAME radii at a 50 deg field of view; farther in a narrower one)
+	double ap = std::clamp (Aperture (), 2.0 * RAD, 60.0 * RAD);
+	return HOME_FRAME * FrameRadius () * tan (25.0 * RAD) / tan (ap);
 }
 
 double Camera::FrameRadius () const
@@ -748,10 +757,18 @@ double Camera::FrameRadius () const
 	if (!target) return 1.0;
 	double r = target->Size();
 	if (target->Type() != OBJTP_VESSEL) return r;
-	// (the whole stack: from its root, every attached child)
-	const Vessel *root = (const Vessel*)target;
+	// (the whole stack: from its root, every attached child, and the vessels
+	// docked with it - a shuttle's tank and boosters - that are not much
+	// larger than it: docked at a station, the vessel, not the station)
+	const Vessel *tv = (const Vessel*)target;
+	const Vessel *root = tv;
 	while (root->AttachParent ()) root = root->AttachParent ();
 	std::vector<const Vessel*> todo (1, root);
+	if (SuperVessel *sv = root->SuperStruct ())
+		for (int k = 0; k < sv->nVessel (); k++) {
+			const Vessel *v = sv->GetVessel (k);
+			if (v != root && v->Size () <= 4.0 * tv->Size ()) todo.push_back (v);
+		}
 	for (size_t i = 0; i < todo.size() && i < 64; i++) {
 		const Vessel *v = todo[i];
 		r = max (r, (v->GPos() - target->GPos()).length() + v->Size());
@@ -766,8 +783,9 @@ void Camera::FrameWreck (double radius)
 	if (!external_view || !target) return;
 	// (back from the debris field, looking down on it)
 	double d = max (WRECK_FRAME * radius, min (WRECK_MIN_DIST, 30.0 * radius + 10.0)); // (a small craft's wreck: closer)
-	rdistT = max (1.0, d / target->Size());
-	pitchT = WRECK_PITCH;
+	rdist = rdistT = max (1.0, d / target->Size()); // (a cut: easing out, it passed through the fireball)
+	CancelBlend ();
+	ephi = yawT, etheta = pitchT = WRECK_PITCH;
 	settleT = camT + SETTLE_T;
 }
 

@@ -942,6 +942,8 @@ public:
 		static const char *icon[4] = { ICON_LC_INFO, ICON_LC_CIRCLE_CHECK, ICON_LC_TRIANGLE_ALERT, ICON_LC_OCTAGON_ALERT };
 		ImGuiViewport *viewport = ImGui::GetMainViewport();
 		float y = std::max({viewport->Pos.y + ui::Px(12), g_menuBottom + ui::Px(10), g_labelBottom + ui::Px(8)});
+		// (in the cockpit the HUD's own lines are at the top: below them)
+		if (oapiCameraInternal() && oapiGetHUDMode() != HUD_NONE) y = std::max(y, viewport->Pos.y + viewport->Size.y * 0.11f);
 		const ui::Fonts &f = ui::GetFonts();
 		int i = 0;
 		for (const FlightEvent &e : g_events) {

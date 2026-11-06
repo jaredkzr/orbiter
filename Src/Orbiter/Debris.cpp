@@ -340,6 +340,13 @@ void Debris::PostUpdate ()
 		proxyCheckT = td.SimT1 + 100.0;
 	}
 
+	// (fallen through the ground - a long step at high time acceleration: lost
+	// there; it kept the time acceleration capped, "flying" deep underground)
+	if (fstatus == FLIGHTSTATUS_FREEFLIGHT && proxyplanet && !proxyplanet->GetGasGiant () && sp.alt < -std::max (100.0, 2.0 * size) && !diverged) { // (a gas giant has no ground)
+		LOGOUT ("Debris of %s: below the ground; removed", source.c_str());
+		diverged = true;
+	}
+
 	// at rest: still on the ground for a while
 	if (fstatus == FLIGHTSTATUS_FREEFLIGHT) {
 		bool still = false;

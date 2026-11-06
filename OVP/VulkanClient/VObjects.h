@@ -195,6 +195,7 @@ private:
 	double flashR = 0.0;     // [m] fireball radius
 	double flashK = 3.0;     // [1/s] its light fading (quicker in vacuum)
 	bool scorched = false;   // (a scorch mark made)
+	bool splashed = false;   // (the splash of an impact on the sea made)
 	bool burning = false;    // flames (burning, in air)
 	double dustT = -1e30, dustImpact = 0.0; // the last puff of dust: when, its impact [m/s]
 	void Effects ();
