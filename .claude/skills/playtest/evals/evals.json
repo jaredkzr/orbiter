@@ -1,0 +1,57 @@
+{
+ "skill_name": "playtest",
+ "evals": [
+  {
+   "id": 1,
+   "prompt": "I just reworked the external camera in Orbiter: F2 now cycles Auto, Free, Orbital, Chase, Locked and Flyby, and a little label shows the mode name when you switch. Can you playtest it in the 'Delta-glider/DG-S ready for takeoff' scenario while the glider takes off and climbs out, and tell me if anything feels off?",
+   "expected_output": "A playtest report (findings list with severity, steps and screenshots) covering each camera mode during a real takeoff, with the mode label seen, and the session stopped.",
+   "files": [],
+   "assertions": [
+    "report.md exists with a numbered findings list (each finding has a severity, steps and a screenshot)",
+    "At least 3 screenshots saved in outputs/ and cited in report.md",
+    "Report gives the commands or steps to reproduce what it found",
+    "Played with player input (keys, clicks or mouse through the game's input), not only Lua control",
+    "The run's Orbiter session was stopped at the end (no process left running)",
+    "The user's out/build/.../Orbiter.cfg was not changed",
+    "All six modes (Auto, Free, Orbital, Chase, Locked, Flyby) were tried, by F2",
+    "The glider actually took off and climbed during the test (altitude or airborne state reported)",
+    "The mode label was looked at and its behaviour reported"
+   ]
+  },
+  {
+   "id": 2,
+   "prompt": "Someone reported that in the Brighton Beach scenario on the Moon (Delta-glider/Brighton Beach), if you swing the external camera down under the delta-glider and zoom in, the camera ends up below the lunar surface and you see through the ground. Can you check whether that still happens?",
+   "expected_output": "An attempt to reproduce with the external camera (orbiting down, zooming in, several camera modes), evidence of the camera's height above the terrain, a clear reproduced / not reproduced verdict with screenshots and steps.",
+   "files": [],
+   "assertions": [
+    "report.md exists with a numbered findings list (each finding has a severity, steps and a screenshot)",
+    "At least 3 screenshots saved in outputs/ and cited in report.md",
+    "Report gives the commands or steps to reproduce what it found",
+    "Played with player input (keys, clicks or mouse through the game's input), not only Lua control",
+    "The run's Orbiter session was stopped at the end (no process left running)",
+    "The user's out/build/.../Orbiter.cfg was not changed",
+    "A clear verdict: reproduced or not reproduced",
+    "The camera's height above the terrain was measured (numbers), not just eyeballed",
+    "More than one camera mode or method was tried (e.g. track modes, zoom, ground observer)"
+   ]
+  },
+  {
+   "id": 3,
+   "prompt": "Take the DG-S from the runway (scenario 'Delta-glider/DG-S ready for takeoff'), get it airborne and climb to about 3 km, then level off. How hard is it to fly with just the keyboard? I want to know what a new player would struggle with.",
+   "expected_output": "The glider actually airborne and near 3 km altitude, levelled off (state numbers as evidence), flown with keyboard input, and a report of what was hard for a keyboard player with screenshots.",
+   "files": [],
+   "assertions": [
+    "report.md exists with a numbered findings list (each finding has a severity, steps and a screenshot)",
+    "At least 3 screenshots saved in outputs/ and cited in report.md",
+    "Report gives the commands or steps to reproduce what it found",
+    "Played with player input (keys, clicks or mouse through the game's input), not only Lua control",
+    "The run's Orbiter session was stopped at the end (no process left running)",
+    "The user's out/build/.../Orbiter.cfg was not changed",
+    "Reached at least 2500 m altitude (state numbers in the report)",
+    "Levelled off near the target (vertical speed or pitch near zero reported)",
+    "Flown with keyboard input (keys held/pressed), not by setting thrust or attitude through Lua",
+    "Report names concrete things a new keyboard player would struggle with"
+   ]
+  }
+ ]
+}
