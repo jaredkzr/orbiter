@@ -17,6 +17,7 @@
 #include "Config.h"
 #include "Body.h"
 #include "Planet.h"
+#include "GroundScatter.h"
 #include "Vessel.h"
 #include "Vesselbase.h"
 #include "Psys.h"
@@ -58,6 +59,9 @@ static const double CHASE_PITCH = -0.2, CHASE_LAG = 0.35;
 // Flyby: the highest speed [m/s] at which the target passes the camera
 // (faster in space: the camera drifts along with the target)
 static const double FLYBY_VMAX = 300.0;
+static const double HOME_FRAME = 3.0;       // Home: the camera this many framing radii out
+static const double MIN_FRAME = 2.2;        // a new target: at least this many framing radii out
+static const double WRECK_FRAME = 4.0, WRECK_MIN_DIST = 60.0, WRECK_PITCH = 0.35; // after a break-up: radii out, at least [m], looking down [rad]
 
 Camera::Camera (double _nearplane, double _farplane)
 {
@@ -431,6 +435,10 @@ void Camera::Attach (Body *_target, int mode)
 			frameKind = -1;
 			chaseValid = false;
 			if (from) StartBlend (from);
+			if (from != target) { // (a new target: at least far enough to frame it, a launch stack whole)
+				double rf = MIN_FRAME * FrameRadius () / target->Size();
+				if (rdistT < rf) rdist = rdistT = rf;
+			}
 			if (extmode == CAMERA_FLYBY) PlaceFlyby (), UpdateFlyby (0.0);
 			else UpdateTrack (0.0);
 		}
@@ -728,10 +736,39 @@ void Camera::ResetExtView ()
 		PlaceFlyby ();
 		return;
 	}
-	// behind the target, a little above
+	// behind the target, a little above, at the distance that frames it
 	settleT = camT + SETTLE_T;
 	if (extmode == CAMERA_LOCKED) lockQT = camrig::YawPitch (0.0, CHASE_PITCH);
 	else yawT = 0.0, pitchT = CHASE_PITCH;
+	rdistT = max (1.0, HOME_FRAME * FrameRadius () / target->Size());
+}
+
+double Camera::FrameRadius () const
+{
+	if (!target) return 1.0;
+	double r = target->Size();
+	if (target->Type() != OBJTP_VESSEL) return r;
+	// (the whole stack: from its root, every attached child)
+	const Vessel *root = (const Vessel*)target;
+	while (root->AttachParent ()) root = root->AttachParent ();
+	std::vector<const Vessel*> todo (1, root);
+	for (size_t i = 0; i < todo.size() && i < 64; i++) {
+		const Vessel *v = todo[i];
+		r = max (r, (v->GPos() - target->GPos()).length() + v->Size());
+		for (DWORD k = 0; k < v->nAttachChild (); k++)
+			if (const Vessel *c = v->AttachChild (k)) todo.push_back (c);
+	}
+	return r;
+}
+
+void Camera::FrameWreck (double radius)
+{
+	if (!external_view || !target) return;
+	// (back from the debris field, looking down on it)
+	double d = max (WRECK_FRAME * radius, WRECK_MIN_DIST);
+	rdistT = max (1.0, d / target->Size());
+	pitchT = WRECK_PITCH;
+	settleT = camT + SETTLE_T;
 }
 
 void Camera::ResetCockpitDir (bool smooth)
@@ -788,6 +825,8 @@ void Camera::SetTrackMode (ExtCamMode mode, const Body *ref)
 	bool adopt = (external_view && extmode != CAMERA_GROUNDOBSERVER);
 	if (!adopt) Attach (target, 1);
 	if (!TrackModeAvailable (mode)) mode = CAMERA_FREE;
+	bool fromFlyby = (extmode == CAMERA_FLYBY && mode != CAMERA_FLYBY);
+	if (mode == CAMERA_FLYBY && extmode != CAMERA_FLYBY) flybyReturn = rdistT; // (Flyby's distance is its own)
 	extmode = mode;
 	settleT = -1e10; // (Chase sets it again)
 	frameKind = -1;
@@ -803,6 +842,7 @@ void Camera::SetTrackMode (ExtCamMode mode, const Body *ref)
 	if (adopt) {
 		StartBlend (); // (the place stays, the orientation turns to the new frame's up)
 		Adopt (F);
+		if (fromFlyby && flybyReturn > 0.0) rdistT = flybyReturn; // (eased back to the distance before Flyby)
 	}
 	if (mode == CAMERA_CHASE) {
 		yawT = 0.0, pitchT = CHASE_PITCH;
@@ -852,6 +892,16 @@ bool Camera::TrackModeAvailable (ExtCamMode mode) const
 		return target && (target->Type() == OBJTP_VESSEL || target->Type() == OBJTP_DEBRIS);
 	case CAMERA_GROUNDOBSERVER:
 		return false; // (not a tracking mode)
+	case CAMERA_ORBITAL: {
+		// (its up is the orbit's normal: in the air, near the ground, the
+		// horizon would stand on end - not offered there)
+		if (!target) return false;
+		if (target->Type() == OBJTP_VESSEL || target->Type() == OBJTP_DEBRIS) {
+			const SurfParam *sp = target->Type() == OBJTP_VESSEL ? ((const Vessel*)target)->GetSurfParam() : ((const VesselBase*)target)->SurfaceParams();
+			if (sp && sp->ref && ((sp->is_in_atm && sp->atmrho > 1e-6) || sp->alt < 0.01 * sp->ref->Size())) return false; // (air that matters: below about 100 km on Earth)
+		}
+		return true;
+	}
 	default:
 		return target != 0;
 	}
@@ -1294,6 +1344,10 @@ void Camera::Update ()
 		} else if (extmode == CAMERA_FLYBY) {
 			UpdateFlyby (td.SimDT); // (the target moves in simulation time)
 		} else {
+			if (extmode == CAMERA_ORBITAL && !TrackModeAvailable (CAMERA_ORBITAL)) { // (into the air: Auto)
+				SetTrackMode (CAMERA_AUTO);
+				modeChangeT = camT;
+			}
 			UpdateTrack (dt);
 		}
 		if (has_tref) {
@@ -1693,6 +1747,20 @@ void Camera::KeepAboveTerrain ()
 	int lvl = (int)(32.0 - log (max (h, 100.0)) * LOG2);
 	double elev = emgr->Elevation (lat, lng, lvl, &clampTile);
 	double rmin = p->Size() + elev + CLEARANCE;
+	// (and above trees, rocks: not inside a crown after a crash)
+	if (h < 100.0) if (scatter::GroundScatter *sc = p->Scatter ()) if (sc->Active ()) {
+		static std::vector<const scatter::Obstacle*> obs;
+		obs.clear ();
+		Vector pl (tmul (p->GRot(), gpos - p->GPos()));
+		sc->Obstacles (pl, 3.0, obs);
+		Vector upl (pl.unit());
+		for (const scatter::Obstacle *o : obs) {
+			const Vector &c = o->hull.centre;
+			Vector dc (pl - c);
+			double across = (dc - upl * dotp (dc, upl)).length();
+			if (across < o->hull.radius) rmin = max (rmin, c.length() + o->hull.radius + 1.0);
+		}
+	}
 	if (rad >= rmin || rad <= 0.0) return;
 	Vector up ((gpos - p->GPos()) / rad);
 	Vector np (p->GPos() + up * rmin);

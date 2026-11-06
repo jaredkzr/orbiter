@@ -2497,8 +2497,8 @@ void Orbiter::KbdInputImmediate_System (char *kstate)
 		//if (keymap.IsLogicalKey (kstate, OAPI_LKEY_TrackRotateUp))      g_camera->ShiftTheta (-td.SysDT);
 		//if (keymap.IsLogicalKey (kstate, OAPI_LKEY_TrackRotateDown))    g_camera->ShiftTheta ( td.SysDT);
 		// move external camera in/out
-		if (keymap.IsLogicalKey (kstate, OAPI_LKEY_TrackAdvance))       g_camera->ShiftDist (-td.SysDT);
-		if (keymap.IsLogicalKey (kstate, OAPI_LKEY_TrackRetreat))       g_camera->ShiftDist ( td.SysDT);
+		if (keymap.IsLogicalKey (kstate, OAPI_LKEY_TrackAdvance))       g_camera->ShiftDist (-td.UiDT());
+		if (keymap.IsLogicalKey (kstate, OAPI_LKEY_TrackRetreat))       g_camera->ShiftDist ( td.UiDT());
 		// tilt ground observer camera
 		//if (keymap.IsLogicalKey (kstate, OAPI_LKEY_GroundTiltLeft))     g_camera->Rotate ( td.SysDT,  0);
 		//if (keymap.IsLogicalKey (kstate, OAPI_LKEY_GroundTiltRight))    g_camera->Rotate (-td.SysDT,  0);
@@ -2516,8 +2516,8 @@ void Orbiter::KbdInputImmediate_System (char *kstate)
 		if (keymap.IsLogicalKey (kstate, OAPI_LKEY_PanelShiftUp))       g_pane->ShiftPanel (0.0,  td.SysDT*pConfig->CfgLogicPrm.PanelScrollSpeed);
 		if (keymap.IsLogicalKey (kstate, OAPI_LKEY_PanelShiftDown))     g_pane->ShiftPanel (0.0, -td.SysDT*pConfig->CfgLogicPrm.PanelScrollSpeed);
 	}
-	if (keymap.IsLogicalKey (kstate, OAPI_LKEY_IncFOV)) IncFOV ( 0.4*g_camera->Aperture()*td.SysDT);
-	if (keymap.IsLogicalKey (kstate, OAPI_LKEY_DecFOV)) IncFOV (-0.4*g_camera->Aperture()*td.SysDT);
+	if (keymap.IsLogicalKey (kstate, OAPI_LKEY_IncFOV)) IncFOV ( 0.4*g_camera->Aperture()*td.UiDT());
+	if (keymap.IsLogicalKey (kstate, OAPI_LKEY_DecFOV)) IncFOV (-0.4*g_camera->Aperture()*td.UiDT());
 }
 
 //-----------------------------------------------------------------------------
@@ -2724,13 +2724,13 @@ void Orbiter::UserJoyInput_System (DIJOYSTATE2 *js)
 		DWORD dir = js->rgdwPOV[0];
 		if (g_camera->IsExternal()) {  // use the joystick's coolie hat to rotate external camera
 			if (js->rgbButtons[2]) { // shift instrument panel
-				if      (dir <  5000 || dir > 31000) g_camera->Rotate (0,  td.SysDT);
-				else if (dir > 13000 && dir < 23000) g_camera->Rotate (0, -td.SysDT);
-				if      (dir >  4000 && dir < 14000) g_camera->Rotate (-td.SysDT, 0);
-				else if (dir > 22000 && dir < 32000) g_camera->Rotate ( td.SysDT, 0);
+				if      (dir <  5000 || dir > 31000) g_camera->Rotate (0,  td.UiDT());
+				else if (dir > 13000 && dir < 23000) g_camera->Rotate (0, -td.UiDT());
+				if      (dir >  4000 && dir < 14000) g_camera->Rotate (-td.UiDT(), 0);
+				else if (dir > 22000 && dir < 32000) g_camera->Rotate ( td.UiDT(), 0);
 			} else {
-				if      (dir <  5000 || dir > 31000) g_camera->AddTheta (-td.SysDT);
-				else if (dir > 13000 && dir < 23000) g_camera->AddTheta ( td.SysDT);
+				if      (dir <  5000 || dir > 31000) g_camera->AddTheta (-td.UiDT());
+				else if (dir > 13000 && dir < 23000) g_camera->AddTheta ( td.UiDT());
 				if      (dir >  4000 && dir < 14000) g_camera->AddPhi   ( td.SysDT);
 				else if (dir > 22000 && dir < 32000) g_camera->AddPhi   (-td.SysDT);
 			}

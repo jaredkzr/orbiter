@@ -173,6 +173,12 @@ public:
 	/// External view back to its start: behind the target (Flyby: put
 	/// ahead again)
 	void ResetExtView ();
+	/// After the focus vessel broke up: back from its wreck (pieces of a
+	/// vessel radius [m] across), a little above, out of the fireball
+	void FrameWreck (double radius);
+	/// Radius [m] about the target that the camera frames: the vessel and
+	/// everything attached to it (a launch stack), else its size
+	double FrameRadius () const;
 
 	/// Turn the camera once so that obj is behind the target (behindTarget)
 	/// or behind the camera (in Free if the mode has no angles to turn)
@@ -403,6 +409,7 @@ private:
 	double  rdist;         // distance of camera from target in units of body size
 	                       // (only for external views)
 	double  rdistT;        // ... requested (the camera eases towards it)
+	double  flybyReturn = -1.0; // (the distance before Flyby, eased back to when leaving it)
 	double  yawT, pitchT;  // yaw and pitch requested (ephi and etheta ease towards them)
 	Matrix  lockQ, lockQT; // Locked: camera rotation relative to the target (current, requested)
 	Matrix  frame;         // the tracking frame (columns x, up, forward; global)

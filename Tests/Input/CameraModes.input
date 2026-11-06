@@ -273,12 +273,133 @@ lua local f = col (2); maxstep = math.max (maxstep, math.acos (math.min (1, dot 
 wait 30
 lua check ("locked_loop", maxstep < 0.2 and minx > 0.99 and dot (col (2), f0) > 0.99, string.format ("largest step %.3f rad, x %.4f, back %.4f", maxstep, minx, dot (col (2), f0)))
 
-# Flyby: ahead on the path, passed, then put ahead again
+# Flyby: ahead on the path, passed, then put ahead again (and again: the
+# lead is at most 30 vessel sizes: a pass in a few seconds)
 lua oapi.set_cameramode ({mode = "track", trackmode = "flyby", reldist = 4, phi = 0, tht = 0})
-wait 30
-lua check ("flyby_ahead", mode () == "flyby" and dot (camoff (), unit (rvel ())) > 100, string.format ("ahead %.0f m", dot (camoff (), unit (rvel ()))))
-wait 270
-lua check ("flyby_passed", dot (camoff (), unit (rvel ())) < 0, string.format ("ahead %.0f m", dot (camoff (), unit (rvel ()))))
-wait 60
-lua check ("flyby_again", dot (camoff (), unit (rvel ())) > 100, string.format ("ahead %.0f m", dot (camoff (), unit (rvel ()))))
+wait 3
+lua fmin, fmax, jumps, prev = 1e9, -1e9, 0, nil
+lua function sample () local a = dot (camoff (), unit (rvel ())); fmin = math.min (fmin, a); fmax = math.max (fmax, a); if prev and a > prev + 100 then jumps = jumps + 1 end; prev = a end
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+wait 3
+lua sample ()
+lua check ("flyby_ahead", mode () == "flyby" and fmax > 100, string.format ("ahead at most %.0f m", fmax))
+lua check ("flyby_passed", fmin < 0, string.format ("ahead at least %.0f m", fmin))
+lua check ("flyby_again", jumps >= 1, string.format ("put ahead again %d times", jumps))
 exit

@@ -201,11 +201,12 @@ TEST_CASE ("Flyby places the camera ahead, to the side and above", "[rig]")
 	REQUIRE (fabs (o.x) >= 20.0);
 	Vector o2 (FlybyOffset (vdir, up, 100.0, 10.0, -1, ahead));
 	REQUIRE (o.x * o2.x < 0.0); // the other side
-	// slow or parked: still a few sizes away; fast: no further than 3 km
+	// slow or parked: still a few sizes away; fast: no further than 30 sizes
+	// (farther, the vessel is a speck as it comes)
 	FlybyOffset (vdir, up, 0.0, 10.0, 1, ahead);
 	REQUIRE_THAT (ahead, WithinAbs (80.0, 1e-9));
 	FlybyOffset (vdir, up, 7700.0, 10.0, 1, ahead);
-	REQUIRE_THAT (ahead, WithinAbs (3000.0, 1e-9));
+	REQUIRE_THAT (ahead, WithinAbs (300.0, 1e-9));
 	// travelling straight up: a side is still found
 	Vector v (FlybyOffset (up, up, 100.0, 10.0, 1, ahead));
 	REQUIRE (std::hypot (v.x, v.z) > 1.0);

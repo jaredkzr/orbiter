@@ -1071,6 +1071,11 @@ public:
 	// return value indicates validity of request (i.e. "false" means child will not detach)
 
 	inline bool isAttached() const { return attach != NULL; }
+	/// The vessel this one is attached to (as a child), or null
+	inline const Vessel *AttachParent () const { return attach ? attach->mate : nullptr; }
+	/// The vessels attached to this one (as children)
+	inline DWORD nAttachChild () const { return ncattach; }
+	inline const Vessel *AttachChild (DWORD i) const { return i < ncattach && cattach[i] ? cattach[i]->mate : nullptr; }
 	// true if we are attached to a parent vessel
 
 	void InitAttachmentToParent (AttachmentSpec *asc, bool allow_loose = true);

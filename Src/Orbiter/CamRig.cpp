@@ -124,7 +124,7 @@ Vector FlybyOffset (const Vector &vdir, const Vector &up, double speed, double s
 {
 	// a few seconds ahead, near enough to fill much of the view as it passes
 	const double LEAD = 3.0; // [s]
-	ahead = std::clamp (speed * LEAD, 8.0 * size, 3000.0);
+	ahead = std::clamp (speed * LEAD, 8.0 * size, std::max (30.0 * size, 8.0 * size)); // (not so far it is a speck)
 	double aside = std::max (2.0 * size, 0.06 * ahead);
 	Vector s (crossp (up, vdir));
 	if (s.length() < 1e-3) s = crossp (Vector (0, 1, 0), vdir);

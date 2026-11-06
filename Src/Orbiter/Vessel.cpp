@@ -5512,6 +5512,7 @@ void Vessel::Destroy (const char *reason)
 	if (this == g_focusobj && wreck) {
 		g_pOrbiter->SetView (wreck, 1);
 		g_camera->SetTrackMode (CAMERA_FREE); // (horizon level, not tumbling with the piece)
+		g_camera->FrameWreck (Size ()); // (back from the fireball, looking down on the debris)
 		char title[160], detail[256];
 		snprintf (title, sizeof (title), "%s destroyed", name.c_str());
 		snprintf (detail, sizeof (detail), "%s", reason);
