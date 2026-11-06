@@ -1,0 +1,9 @@
+; Shuttle-A: its own keys in the key sheet (alt+F1) - label | keys
+Pod thrust up / down | Ctrl+Num 0  Ctrl+Num .
+Pods: not stopped by Num * | (a group of their own)
+Pod angle (hover, main, retro) | 2D panel (F8): pod selector
+Hover thrust up / down | Num 0  Num .
+Landing gear | G
+Docking port | K
+Outer airlock | O
+Inner airlock | Ctrl+O

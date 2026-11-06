@@ -1,0 +1,12 @@
+; Delta-glider S (scramjets): its own keys in the key sheet (alt+F1) - label | keys
+Scramjet thrust up / down | Alt+Num +  Alt+Num -
+Scramjets: from about Mach 2 | (thrust grows with speed)
+Landing gear up/down | G
+Nose cone (docking port) | K
+Outer airlock | O
+Inner airlock | Ctrl+O
+Top hatch | U
+Radiator | D
+Airbrake out / in | B  Ctrl+B
+Hover thrust up / down | Num 0  Num .
+Control dialog | Ctrl+Space

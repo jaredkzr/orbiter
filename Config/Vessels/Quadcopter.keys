@@ -1,0 +1,7 @@
+; Quadcopter: its own keys in the key sheet (alt+F1) - label | keys
+Climb / descend (throttle: vertical speed) | Ctrl+Num +  Ctrl+Num -
+Throttle at half: hover | (0: descend 5 m/s, full: climb 5 m/s)
+Tilt forward / back | Num 8  Num 2
+Tilt left / right | Num 4  Num 6
+Turn left / right | Num 1  Num 3
+Time acceleration | off while it flies

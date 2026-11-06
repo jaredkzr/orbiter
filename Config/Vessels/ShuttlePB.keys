@@ -1,0 +1,5 @@
+; ShuttlePB: its own keys in the key sheet (alt+F1) - label | keys
+Hover thrust up / down | Num 0  Num .
+Main thrust up / down | Ctrl+Num +  Ctrl+Num -
+Turns: yaw, not banking | Num 1  Num 3
+RCS rotation / translation | Num /

@@ -7,6 +7,10 @@
 #include "UiTheme.h"
 #include "IconsLucide.h"
 #include "imgui.h"
+#include "Vessel.h"
+#include "Config.h"
+#include "Platform.h"
+#include <fstream>
 #include <algorithm>
 #include <cctype>
 #include <string>
@@ -14,6 +18,7 @@
 
 extern Orbiter *g_pOrbiter;
 extern HELPCONTEXT DefHelpContext;
+extern Vessel *g_focusobj;
 
 namespace {
 
@@ -166,6 +171,39 @@ namespace {
 		return w - gap;
 	}
 
+	/// The focus vessel's own keys: Config/Vessels/<class>.keys, lines
+	/// "<label> | <keys>" (keys apart by two spaces; ';' a comment)
+	const std::vector<std::pair<std::string,std::string>> &VesselKeys (const char *classname)
+	{
+		static std::string cls;
+		static std::vector<std::pair<std::string,std::string>> rows;
+		if (!classname) classname = "";
+		if (cls == classname) return rows;
+		cls = classname;
+		rows.clear ();
+		if (!*classname) return rows;
+		std::string name = std::string ("Vessels/") + classname;
+		char path[512];
+		snprintf (path, sizeof (path), "%s", g_pOrbiter->Cfg()->ConfigPath (name.c_str()));
+		std::string sp (path);
+		if (sp.size() > 4 && sp.compare (sp.size() - 4, 4, ".cfg") == 0) sp.resize (sp.size() - 4);
+		std::ifstream ifs (orbiter::platform::ResolvePath ((sp + ".keys").c_str())); // (the file's case as it is)
+		std::string line;
+		auto trim = [](std::string t) {
+			size_t a = t.find_first_not_of (" \t\r"), b = t.find_last_not_of (" \t\r");
+			return a == std::string::npos ? std::string () : t.substr (a, b - a + 1);
+		};
+		while (std::getline (ifs, line)) {
+			size_t c = line.find (';');
+			if (c != std::string::npos) line.erase (c);
+			size_t bar = line.find ('|');
+			if (bar == std::string::npos) continue;
+			std::string label = trim (line.substr (0, bar)), keys = trim (line.substr (bar + 1));
+			if (!label.empty () && !keys.empty ()) rows.push_back ({label, keys});
+		}
+		return rows;
+	}
+
 	/// A row: the action, and its keys as caps at the right
 	void DrawRow (const char *label, const std::string &keys, float width)
 	{
@@ -266,15 +304,27 @@ void DlgKeyHelp::Display ()
 	ImVec2 origin = ImGui::GetCursorScreenPos ();
 	std::vector<float> colY (ncol, origin.y);
 	int shown = 0;
+	// (the focus vessel's own keys first, then Orbiter's)
+	struct Shown { std::string title; const char *icon; std::vector<std::pair<std::string,std::string>> rows; };
+	std::vector<Shown> all;
+	if (g_focusobj && !g_focusobj->Destroyed ()) {
+		const auto &vk = VesselKeys (g_focusobj->ClassName ());
+		if (!vk.empty ()) all.push_back ({std::string (g_focusobj->ClassName ()) + " (this vessel)", ICON_LC_ROCKET, vk});
+	}
 	for (auto &g : groups) {
-		std::vector<std::pair<const Row*, std::string>> rows;
-		bool titleMatch = !flt.empty() && Lower (g.title).find (flt) != std::string::npos;
+		Shown sh{g.title, g.icon, {}};
 		for (auto &r : g.rows) {
 			std::string k = Keys (r);
-			if (k.empty()) continue;
-			if (flt.empty() || titleMatch || Lower (r.label).find (flt) != std::string::npos || Lower (k.c_str()).find (flt) != std::string::npos)
-				rows.push_back ({&r, k});
+			if (!k.empty()) sh.rows.push_back ({r.label, k});
 		}
+		all.push_back (std::move (sh));
+	}
+	for (auto &g : all) {
+		std::vector<std::pair<std::string, std::string>> rows;
+		bool titleMatch = !flt.empty() && Lower (g.title.c_str()).find (flt) != std::string::npos;
+		for (auto &r : g.rows)
+			if (flt.empty() || titleMatch || Lower (r.first.c_str()).find (flt) != std::string::npos || Lower (r.second.c_str()).find (flt) != std::string::npos)
+				rows.push_back (r);
 		if (rows.empty()) continue;
 		int c = (int)(std::min_element (colY.begin(), colY.end()) - colY.begin());
 		ImGui::SetCursorScreenPos (ImVec2(origin.x + c * (cw + gap), colY[c]));
@@ -287,14 +337,14 @@ void DlgKeyHelp::Display ()
 			float lh = ImGui::GetTextLineHeight ();
 			dl->AddText (hp, ui::Col32 (ui::ACCENT), g.icon);
 			std::string t;
-			for (const char *p = g.title; *p; p++) { t += (char)toupper ((unsigned char)*p); if (p[1]) t += ' '; }
+			for (const char *p = g.title.c_str(); *p; p++) { t += (char)toupper ((unsigned char)*p); if (p[1]) t += ' '; }
 			dl->AddText (ImVec2(hp.x + ui::Px (22), hp.y), ui::Col32 (ui::TEXT_DIM), t.c_str());
 			ui::PopFont ();
 			float ly = hp.y + lh + ui::Px (5);
 			dl->AddLine (ImVec2(hp.x, ly), ImVec2(hp.x + cw, ly), ui::Col32 (ui::DIVIDER), std::max (1.0f, ui::Scale ()));
 			ImGui::Dummy (ImVec2(cw, lh + ui::Px (8)));
 		}
-		for (auto &r : rows) DrawRow (r.first->label, r.second, cw);
+		for (auto &r : rows) DrawRow (r.first.c_str(), r.second, cw);
 		ImGui::EndGroup ();
 		colY[c] = ImGui::GetItemRectMax ().y + ui::Px (14);
 		shown++;
@@ -311,7 +361,7 @@ void DlgKeyHelp::Display ()
 	// footer: where the keys are set
 	ImGui::Dummy (ImVec2(0, ui::Px (4)));
 	ui::PushFont (f.body, ui::SIZE_SMALL);
-	ui::TextDim ("The keys are set in keymap.cfg in the Orbiter folder. Vessels may add their own keys (see their documentation).");
+	ui::TextDim ("The keys are set in keymap.cfg in the Orbiter folder; a vessel's own keys in Config/Vessels/<class>.keys.");
 	ui::PopFont ();
 
 	if (ImGui::GetFrameCount () > openFrame + 1 && ImGui::IsKeyPressed (ImGuiKey_Escape, false)) {

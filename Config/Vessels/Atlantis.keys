@@ -1,0 +1,8 @@
+; Space Shuttle Atlantis: its own keys in the key sheet (alt+F1) - label | keys
+Jettison (boosters, tank, payload) | J
+Landing gear | G
+Cargo bay doors | K
+Speedbrake | Ctrl+B
+Ku-band antenna | Ctrl+U
+Robot arm (RMS) dialog | Ctrl+Space
+Ascent autopilot | MFD: Ascent (engage)
