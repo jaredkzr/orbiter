@@ -4859,6 +4859,7 @@ struct SURFDETAILPARAM {
 	double craterFresh;  ///< share of fresh craters
 	double pebbles;      ///< pebble and clod cells per lattice cell (0: none)
 	double flatSpacing;  ///< node spacing to use where there is no elevation data [m] (elevation 0, relief 0)
+	bool sea = false;    ///< the planet has seas: the ground at or below elevation 0 is water
 };
 
 /**

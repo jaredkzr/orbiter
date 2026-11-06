@@ -2011,6 +2011,7 @@ DLLEXPORT bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, SURFDETAILPARAM *prm)
 	prm->craterFresh = p.craterFresh;
 	prm->pebbles = p.pebbles;
 	prm->flatSpacing = det->FlatSpacing ();
+	prm->sea = p.sea;
 	return true;
 }
 

@@ -600,7 +600,7 @@ void VVessel::SetHeating ()
 	v->GetAirspeedVector (FRAME_LOCAL, as);
 	double spd = length (as), rho = v->GetAtmDensity ();
 	double q = 1.74e-4 * sqrt (rho) * spd * spd * spd;
-	const double qMin = 1e5, qMax = 8e5; // glow onset, full glow
+	const double qMin = 5e4, qMax = 8e5; // glow onset (a faint one on a 2 km/s suborbital reentry), full glow
 	float t = (float)std::clamp ((q - qMin) / (qMax - qMin), 0.0, 1.0);
 	if (t <= 0.0f || spd <= 0.0) {
 		scene->SetObjectHeat (_V(0, 0, 0), 0.0f);
@@ -935,7 +935,19 @@ void VDebris::Effects ()
 		}
 	}
 
+	// (down on a sea: water, not ground - a splash and steam, no scorch)
+	bool onWater = false;
+	if (alt < 3.0 * size + 5.0) {
+		SURFDETAILPARAM sdp{};
+		if (oapiSurfaceDetailParams (hp, &sdp) && sdp.sea) {
+			double lng, lat, rad;
+			oapiGlobalToEqu (hp, gpos, &lng, &lat, &rad);
+			onWater = oapiSurfaceElevation (hp, lng, lat) <= 0.5;
+		}
+	}
+
 	// on the ground: a scorch mark where it burned or crashed
+	if (!scorched && onWater) scorched = true; // (none on water)
 	if (!scorched && alt < 3.0 * size + 2.0 && (info.fuel > 1.0 || info.impact > 8.0) && scene->Tracks ()) {
 		scorched = true;
 		double R = info.fuel > 1.0 ? std::max (0.8 * FireballRadius (), 2.0 * size) : 1.2 * size;
@@ -992,7 +1004,8 @@ void VDebris::Effects ()
 				e.size = 1.2 * s * sz, e.growth = 0.6 * s * sz;
 				e.alpha = 0.5 * f, e.slowdown = std::max (drag, 0.3);
 				e.tinted = true; // (sprites: thin trails, the volume would draw them in beads)
-				e.albedo[0] = e.albedo[1] = e.albedo[2] = 0.08f;
+				e.albedo[0] = e.albedo[1] = e.albedo[2] = onWater ? 0.85f : 0.08f; // (on the sea: steam)
+				if (onWater) e.lifetime = 6.0, e.alpha = 0.3 * f;
 				Emit (smoke, e, m, 12.0);
 			}
 			smoke.prev = gpos, smoke.havePrev = true;
@@ -1024,7 +1037,30 @@ void VDebris::Effects ()
 	// (a puff for each blow: one bouncing along at speed hits the ground
 	// step after step, a puff each step would be a solid wall of dust)
 	bool blow = info.impact > 1.5 && (simt - dustT > 0.3 || info.impact > 1.5 * dustImpact);
-	if (blow && rho > 1e-4) {
+	if (blow && onWater) {
+		// into the sea: a white column thrown up and a ring of spray, by the
+		// blow; falling back
+		dustT = simt, dustImpact = info.impact;
+		double v = info.impact;
+		ParticleSystem::Emission c{};
+		c.p0 = c.p1 = contact, c.vel = groundVel, c.dir = up;
+		c.v0 = std::min (0.5 * v, 40.0), c.spread = std::min (0.08 * v, 4.0);
+		c.lifetime = std::clamp (0.12 * v, 1.5, 5.0), c.dt = dt;
+		c.size = std::max (0.5 * size, 0.6) * sz, c.growth = 0.6 * size * sz;
+		c.alpha = 0.55, c.slowdown = 0.4;
+		c.tinted = true, c.cold = true, c.ballistic = true;
+		c.albedo[0] = 0.92f, c.albedo[1] = 0.94f, c.albedo[2] = 0.96f;
+		Emit (dust, c, (uint32_t)std::min (v * 5.0 * D, 300.0), 6.0);
+		ParticleSystem::Emission r{};
+		r.p0 = r.p1 = contact, r.vel = groundVel, r.dir = -up;
+		r.v0 = std::min (0.25 * v, 15.0), r.spread = std::min (0.5 * v, 20.0);
+		r.lifetime = 3.0, r.dt = dt;
+		r.size = 0.6 * size * sz, r.growth = 0.8 * size * sz;
+		r.alpha = 0.35, r.slowdown = 1.0;
+		r.tinted = true, r.cold = true, r.planar = true;
+		r.albedo[0] = 0.9f, r.albedo[1] = 0.92f, r.albedo[2] = 0.95f;
+		Emit (dust, r, (uint32_t)std::min (v * 4.0 * D, 250.0), 6.0);
+	} else if (blow && rho > 1e-4) {
 		dustT = simt, dustImpact = info.impact;
 		uint32_t n = (uint32_t)std::min (info.impact * 6.0 * D, 400.0);
 		ParticleSystem::Emission e{};
@@ -1596,7 +1632,7 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 	bool water = !strcmp (name, "Earth") && elev <= 0.0;
 	bool air = pd.ambientPressure > 100.0;
 
-	double life = air ? (water ? 3.0 : 10.0) : 5.0;
+	double life = air ? (water ? 3.0 : 6.0) : 5.0; // (a sheet from hovering lingered half a minute at 10 s)
 	if (!EnsureRing (r, 250.0, life)) return;
 	double D = sys->density, sizeScale = std::pow (D, -1.0 / 3.0);
 	double radial = air ? 6.0 + 18.0 * strength : 30.0 + 70.0 * strength; // [m/s]
