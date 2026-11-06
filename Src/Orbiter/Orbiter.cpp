@@ -815,6 +815,8 @@ HWND Orbiter::CreateRenderWindow (Config *pCfg, const char *scenario)
 
 	// read simulation environment state
 	strcpy (ScenarioName, scenario);
+	rootScenario = relaunchRoot.empty () ? std::string (scenario) : relaunchRoot;
+	relaunchRoot.clear ();
 	g_qsaveid = 0;
 	launch_tick = 3;
 
@@ -1569,7 +1571,7 @@ void Orbiter::SetShipWarp (double warp)
 std::string Orbiter::LatestQuicksave () const
 {
 	// (Quicksave\<scenario> NNNN.scn: the newest of this scenario's)
-	std::string base (ScenarioName);
+	std::string base (rootScenario.empty () ? std::string (ScenarioName) : rootScenario);
 	size_t sl = base.find_last_of ("/\\");
 	if (sl != std::string::npos) base = base.substr (sl + 1);
 	if (base.size() > 4 && base.compare (base.size() - 4, 4, ".scn") == 0) base.resize (base.size() - 4);
@@ -1768,12 +1770,20 @@ bool Orbiter::SaveScenario (const char *fname, const char *desc, int desc_type)
 //-----------------------------------------------------------------------------
 VOID Orbiter::Quicksave ()
 {
-	int i;
-	char desc[256], fname[256];
+	char desc[256], fname[512];
 	sprintf (desc, "Orbiter saved state at T = %0.0f", td.SimT0);
-	for (i = strlen(ScenarioName)-1; i > 0; i--)
-		if (ScenarioName[i-1] == '\\' || ScenarioName[i-1] == '/') break; // (a path from the posix launchpad has '/')
-	sprintf (fname, "Quicksave\\%s %04d", ScenarioName+i, ++g_qsaveid);
+	// (named after the scenario the player chose - also after loading one of
+	// its quicksaves - and numbered on from the newest there: a session
+	// started again begins at 1 and overwrote it)
+	std::string base (rootScenario.empty () ? std::string (ScenarioName) : rootScenario);
+	size_t sl = base.find_last_of ("/\\");
+	if (sl != std::string::npos) base = base.substr (sl + 1);
+	if (base.size() > 4 && base.compare (base.size() - 4, 4, ".scn") == 0) base.resize (base.size() - 4);
+	std::string latest = LatestQuicksave ();
+	int n = 0;
+	if (!latest.empty () && sscanf (latest.c_str() + latest.size() - 4, "%d", &n) != 1) n = 0;
+	g_qsaveid = std::max<DWORD> (g_qsaveid, (DWORD)std::max (n, 0)) + 1;
+	snprintf (fname, sizeof (fname), "Quicksave\\%s %04d", base.c_str(), (int)g_qsaveid);
 	if(SaveScenario (fname, desc, 0))
 		oapiAddNotification(OAPINOTIF_SUCCESS, "Scenario saved successfully", fname);
 	else
@@ -2298,8 +2308,8 @@ VOID Orbiter::UpdateWorld ()
 	// offers what next (restart, quicksave, another vessel)
 	if (bSession && g_focusobj && gclient && pDlgMgr && !(replay && replay->Active())) {
 		const double FLIGHT_OVER_DELAY = 4.0; // [s] of the wreck first
-		if (!g_focusobj->Destroyed ()) flightOverShown = false;
-		else if (!flightOverShown && td.SimT0 - g_focusobj->DestroyedT () > FLIGHT_OVER_DELAY) {
+		if (!g_focusobj->Destroyed ()) flightOverShown = false, flightOverWait = 0.0;
+		else if (!flightOverShown && (flightOverWait += td.UiDT ()) > FLIGHT_OVER_DELAY) { // (real time: seen first, at any time acceleration)
 			flightOverShown = true;
 			DlgFlightMenu *menu = pDlgMgr->EntryExists<DlgFlightMenu>();
 			if (!menu) menu = pDlgMgr->MakeEntry<DlgFlightMenu>();
@@ -2639,9 +2649,14 @@ void Orbiter::KbdInputBuffered_System (char *kstate, DIDEVICEOBJECTDATA *dod, DW
 				keys->Close();
 				continue;
 			}
-			// (a dialog with the focus closes itself on this Esc: not the menu too)
+			// (a dialog with the focus closes itself on this Esc; else the dialog
+			// opened last closes - focus follows the mouse, often in the view -
+			// and only with none open does the menu open)
 			DlgFlightMenu *open = pDlgMgr->EntryExists<DlgFlightMenu>();
-			if (!(open && open->IsActive()) && pDlgMgr->DialogFocused ()) continue;
+			if (!(open && open->IsActive())) {
+				if (pDlgMgr->DialogFocused ()) continue;
+				if (pDlgMgr->CloseLastOpened ()) continue;
+			}
 			DlgFlightMenu *menu = pDlgMgr->EntryExists<DlgFlightMenu>();
 			if (!menu) menu = pDlgMgr->MakeEntry<DlgFlightMenu>();
 			menu->Toggle();

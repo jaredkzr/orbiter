@@ -164,6 +164,8 @@ public:
 	void SetExclusive (ImGuiDialog *dlg) { exclusive = dlg; }
 	/// An open dialog has the keyboard focus (Esc closes it, not opening the flight menu)
 	bool DialogFocused () const;
+	/// Close the dialog opened last that is still open (Esc); false if none
+	bool CloseLastOpened ();
 
 	void AddEntry(ImGuiDialog* dlg)
 	{

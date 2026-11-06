@@ -154,13 +154,13 @@ void DlgFlightMenu::Display ()
 		if (v != g_focusobj && v->GetEnableFocus () && !v->Destroyed ()) other = true;
 	}
 	if (over) {
-		if (*ScenarioName && Entry (ICON_LC_ROTATE_CCW, "Restart scenario")) {
+		if (!g_pOrbiter->RootScenario ().empty () && Entry (ICON_LC_ROTATE_CCW, "Restart scenario")) {
 			close = true;
-			g_pOrbiter->RequestRelaunch (ScenarioName);
+			g_pOrbiter->RequestRelaunch (g_pOrbiter->RootScenario ()); // (the one chosen, not a quicksave loaded since)
 		}
 		if (!quick.empty () && Entry (ICON_LC_HISTORY, "Load latest quicksave", quick.c_str() + 10)) {
 			close = true;
-			g_pOrbiter->RequestRelaunch (quick);
+			g_pOrbiter->RequestRelaunch (quick, true);
 		}
 		if (other && Entry (ICON_LC_ARROW_LEFT_RIGHT, "Switch vessel", "F3")) {
 			close = true;
@@ -212,13 +212,13 @@ void DlgFlightMenu::Display ()
 	}
 #endif
 	if (!over) {
-		if (*ScenarioName && Entry (ICON_LC_ROTATE_CCW, "Restart scenario")) {
+		if (!g_pOrbiter->RootScenario ().empty () && Entry (ICON_LC_ROTATE_CCW, "Restart scenario")) {
 			close = true;
-			g_pOrbiter->RequestRelaunch (ScenarioName);
+			g_pOrbiter->RequestRelaunch (g_pOrbiter->RootScenario ()); // (the one chosen, not a quicksave loaded since)
 		}
 		if (!quick.empty () && Entry (ICON_LC_HISTORY, "Load latest quicksave", quick.c_str() + 10)) {
 			close = true;
-			g_pOrbiter->RequestRelaunch (quick);
+			g_pOrbiter->RequestRelaunch (quick, true);
 		}
 	}
 	ImGui::Dummy (ImVec2(0, ui::Px (6)));

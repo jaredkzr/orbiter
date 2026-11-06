@@ -14,6 +14,20 @@
 #include "Orbiter.h"
 #include "Log.h"
 #include "imgui.h"
+#include <set>
+#include <string>
+
+namespace {
+	// (dialogs opened: given the focus as their window is drawn - a window
+	// not drawn yet cannot be focused, and Esc went to the flight menu)
+	std::set<std::string> g_focusPending;
+	// (the dialogs in the order they were opened: Esc closes the last one open;
+	// only windows of the standard dialog frame - overlays such as the event
+	// banners are dialogs too, drawn by their own Display)
+	std::vector<ImGuiDialog*> g_opened;
+	std::set<const ImGuiDialog*> g_framed;
+}
+
 #include "imgui_internal.h"
 #include "imgui_internal.h"
 #include "imgui_extras.h"
@@ -595,6 +609,8 @@ void DialogManager::SetMainColor(COLORREF col)
 ImGuiDialog::~ImGuiDialog(){
 	// Make sure this dialog is no longer referenced in the DialogManager
 	oapiCloseDialog(this);
+	g_opened.erase (std::remove (g_opened.begin(), g_opened.end(), this), g_opened.end());
+	g_framed.erase (this);
 }
 
 bool ImGuiDialog::HandleHelpButton() {
@@ -691,6 +707,8 @@ void ImGuiDialog::Display() {
 
 	// (a taller title bar, the title clear of the window's edge)
 	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ui::Px(14), ui::Px(9)));
+	if (g_focusPending.erase (name)) ImGui::SetNextWindowFocus ();
+	g_framed.insert (this);
 	bool open = ImGui::Begin(name.c_str(), &active);
 	ImGui::PopStyleVar();
 	if(open) {
@@ -719,6 +737,29 @@ bool DialogManager::DialogFocused () const
 void ImGuiDialog::Activate() {
 	active = true;
 	ImGui::SetWindowFocus(name.c_str());
+	g_focusPending.insert (name);
+	g_opened.erase (std::remove (g_opened.begin(), g_opened.end(), this), g_opened.end());
+	g_opened.push_back (this);
+}
+
+void ImGuiDialog::Deactivate() {
+	if (!active) return;
+	active = false;
+	OnClose();
+}
+
+bool DialogManager::CloseLastOpened ()
+{
+	// (the last one opened that is still open and still a dialog of the manager)
+	while (!g_opened.empty ()) {
+		ImGuiDialog *d = g_opened.back ();
+		g_opened.pop_back ();
+		if (std::find (DlgImGuiList.begin(), DlgImGuiList.end(), d) != DlgImGuiList.end() && d->IsActive () && g_framed.count (d)) {
+			d->Deactivate ();
+			return true;
+		}
+	}
+	return false;
 }
 
 /* 

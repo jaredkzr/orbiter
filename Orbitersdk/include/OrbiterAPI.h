@@ -700,6 +700,8 @@ public:
 	void Activate();
 	/// Name of the dialog window
 	const std::string &Name() const { return name; }
+	/// Close the dialog (as its close button does)
+	void Deactivate();
 	virtual void Display();
 	void SetHelp(const char *file, const char *topic = NULL) {
 		helpfile = file;

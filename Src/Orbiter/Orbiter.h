@@ -179,6 +179,8 @@ public:
 	static constexpr double ATM_WARP_LIMIT = 10.0;   ///< time acceleration in the air
 	std::string relaunch;                            // (a scenario to launch as the session closes)
 	bool flightOverShown = false;                    // (the focus vessel's loss: the flight menu offered once)
+	double flightOverWait = 0.0;                     // [s] real time the wreck has been shown
+	std::string rootScenario, relaunchRoot;          // (the scenario the player chose; a quicksave of it keeps it)
 	static constexpr double ATM_WARP_DYNP = 1e3;     ///< [Pa] dynamic pressure from which it applies
 	// Lower the time acceleration (Orbiter's clock) to at most warp (a ship-
 	// time warp in proportion)
@@ -387,7 +389,10 @@ public:
 	void PlatformCloseRequest () { bPlatformClose = true; }
 	/// Close the session and launch a scenario at once (Restart, Load
 	/// quicksave): the session loop starts it next
-	void RequestRelaunch (const std::string &scenario) { relaunch = scenario; bPlatformClose = true; }
+	void RequestRelaunch (const std::string &scenario, bool keepRoot = false) { relaunch = scenario; relaunchRoot = keepRoot ? rootScenario : std::string (); bPlatformClose = true; }
+	/// The scenario the player launched (a quicksave loaded from the flight
+	/// menu keeps it: Restart goes back to it, its quicksaves are offered)
+	const std::string &RootScenario () const { return rootScenario; }
 	std::string TakeRelaunch () { std::string s; s.swap (relaunch); return s; }
 	/// This scenario's newest quicksave ("Quicksave/<name> NNNN"; "" if none)
 	std::string LatestQuicksave () const;

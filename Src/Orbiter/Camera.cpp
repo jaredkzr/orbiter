@@ -61,7 +61,7 @@ static const double CHASE_PITCH = -0.2, CHASE_LAG = 0.35;
 static const double FLYBY_VMAX = 300.0;
 static const double HOME_FRAME = 3.0;       // Home: the camera this many framing radii out
 static const double MIN_FRAME = 2.2;        // a new target: at least this many framing radii out
-static const double WRECK_FRAME = 4.0, WRECK_MIN_DIST = 60.0, WRECK_PITCH = 0.35; // after a break-up: radii out, at least [m], looking down [rad]
+static const double WRECK_FRAME = 4.0, WRECK_MIN_DIST = 60.0, WRECK_PITCH = 0.6; // after a break-up: radii out, at least [m] (less for small craft), looking down [rad] (over ridges)
 
 Camera::Camera (double _nearplane, double _farplane)
 {
@@ -765,7 +765,7 @@ void Camera::FrameWreck (double radius)
 {
 	if (!external_view || !target) return;
 	// (back from the debris field, looking down on it)
-	double d = max (WRECK_FRAME * radius, WRECK_MIN_DIST);
+	double d = max (WRECK_FRAME * radius, min (WRECK_MIN_DIST, 30.0 * radius + 10.0)); // (a small craft's wreck: closer)
 	rdistT = max (1.0, d / target->Size());
 	pitchT = WRECK_PITCH;
 	settleT = camT + SETTLE_T;
