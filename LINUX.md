@@ -113,6 +113,10 @@ quits.
 `F5` opens replay. A gamepad works once `JoystickIndex` is set in
 `Orbiter.cfg`.
 
+**Playtesting:** `Utils/Playtest/orbctl.py` plays Orbiter from the
+command line (keys, clicks on buttons by their labels, screenshots, the
+flight's state), for a person or an agent; see `Utils/Playtest/README.md`.
+
 **External camera:** `F1` switches between the cockpit and the outside
 view; `F2` cycles the camera modes (`Shift+F2` back), and the Camera dialog
 (`Ctrl+F1`) lists them:

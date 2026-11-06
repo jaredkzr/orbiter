@@ -4,6 +4,7 @@
 #include "TestInput.h"
 #include "OrbiterAPI.h"
 #include "posix/OrbiterInput.h"
+#include <cstdlib>
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cstdio>
@@ -21,10 +22,18 @@ namespace {
 		return a == std::string::npos ? std::string() : s.substr (a, b - a + 1);
 	}
 
-	// split off the first word
+	// split off the first word ("a quoted one" may have spaces)
 	std::string Word (std::string &s)
 	{
 		s = Trim (s);
+		if (!s.empty() && s[0] == '"') {
+			size_t q = s.find ('"', 1);
+			if (q != std::string::npos) {
+				std::string w = s.substr (1, q - 1);
+				s = Trim (s.substr (q + 1));
+				return w;
+			}
+		}
 		size_t e = s.find_first_of (" \t");
 		std::string w = s.substr (0, e);
 		s = (e == std::string::npos ? std::string() : Trim (s.substr (e)));
@@ -39,13 +48,91 @@ namespace {
 		return sscanf (t.c_str(), "%f,%f", &x, &y) == 2;
 	}
 
-	// Lua helpers of the test interpreter
-	const char *luaPrelude =
-		"__tfail = 0 "
-		"function check (name, cond, msg) "
-		"  oapi.write_log (string.format ('TestInput: %s %s %s', cond and 'PASS' or 'FAIL', name, msg or '')) "
-		"  if not cond then __tfail = __tfail + 1 end "
-		"end";
+	// Lua helpers of the test interpreter: check (tests), __tojson and
+	// __state (interactive: results as JSON, the flight's state)
+	const char *luaPrelude = R"LUA(
+__tfail = 0
+function check (name, cond, msg)
+	oapi.write_log (string.format ('TestInput: %s %s %s', cond and 'PASS' or 'FAIL', name, msg or ''))
+	if not cond then __tfail = __tfail + 1 end
+end
+function __tojson (v)
+	local t = type (v)
+	if v == nil then return 'null'
+	elseif t == 'boolean' then return tostring (v)
+	elseif t == 'number' then
+		if v ~= v or v == math.huge or v == -math.huge then return 'null' end
+		return string.format ('%.10g', v)
+	elseif t == 'string' then
+		local esc = {['"'] = '\\"', ['\\'] = '\\\\', ['\n'] = '\\n', ['\r'] = '\\r', ['\t'] = '\\t'}
+		return '"' .. (v:gsub ('[%c"\\]', function (c) return esc[c] or string.format ('\\u%04x', c:byte ()) end)) .. '"'
+	elseif t == 'table' then
+		local n = #v
+		local a = {}
+		if n > 0 then
+			for i = 1, n do a[i] = __tojson (v[i]) end
+			return '[' .. table.concat (a, ',') .. ']'
+		end
+		for k, x in pairs (v) do a[#a + 1] = __tojson (tostring (k)) .. ':' .. __tojson (x) end
+		table.sort (a)
+		return '{' .. table.concat (a, ',') .. '}'
+	end
+	return __tojson (tostring (v))
+end
+function __state ()
+	local function try (f, ...) local ok, r = pcall (f, ...) if ok then return r end end
+	local s = {}
+	s.simt = try (oapi.get_simtime); s.mjd = try (oapi.get_simmjd)
+	s.tacc = try (oapi.get_tacc); s.paused = try (oapi.get_pause)
+	local ok, m, cam = pcall (oapi.get_cameramode); if ok then s.camera = cam end
+	s.cockpit = try (oapi.cockpit_mode); s.mapview = try (oapi.get_mapview)
+	s.hud = try (oapi.get_hudmode)
+	s.mfd = {left = try (oapi.get_mfdmode, 0), right = try (oapi.get_mfdmode, 1)}
+	local v = vessel.get_focusinterface ()
+	if v then
+		local d = {}
+		d.name = try (v.get_name, v); d.class = try (v.get_classname, v)
+		d.altitude = try (v.get_altitude, v); d.airspeed = try (v.get_airspeed, v)
+		d.groundspeed = try (v.get_groundspeed, v)
+		local h = try (v.get_horizonairspeedvector, v); if h then d.vspeed = h.y end
+		local p, b, y = try (v.get_pitch, v), try (v.get_bank, v), try (v.get_yaw, v)
+		if p then d.pitch = math.deg (p) end; if b then d.bank = math.deg (b) end; if y then d.yaw = math.deg (y) end
+		local fs = try (v.get_flightstatus, v); if fs then d.landed = (fs % 2 == 1) end
+		if THGROUP then
+			d.main = try (v.get_thrustergrouplevel, v, THGROUP.MAIN)
+			d.retro = try (v.get_thrustergrouplevel, v, THGROUP.RETRO)
+			d.hover = try (v.get_thrustergrouplevel, v, THGROUP.HOVER)
+		end
+		local n, pm, px = try (v.get_propellantcount, v) or 0, 0, 0
+		for i = 0, n - 1 do
+			local ph = v:get_propellanthandle (i)
+			pm = pm + (try (v.get_propellantmass, v, ph) or 0); px = px + (try (v.get_propellantmaxmass, v, ph) or 0)
+		end
+		d.propellant = pm; d.propellant_max = px; d.mass = try (v.get_mass, v)
+		local g = try (v.get_gravityref, v); if g then d.gravity_ref = oapi.get_objname (g) end
+		local sr = try (v.get_surfaceref, v); if sr then d.surface_ref = oapi.get_objname (sr) end
+		d.rcs = try (v.get_rcsmode, v); d.adc = try (v.get_adcmode, v)
+		local nav = {}
+		for name, id in pairs (NAVMODE or {}) do if try (v.get_navmode, v, id) then nav[#nav + 1] = name end end
+		table.sort (nav); d.navmodes = nav
+		s.vessel = d
+	end
+	return s
+end
+)LUA";
+
+	// a JSON string
+	std::string Json (const std::string &s)
+	{
+		std::string r = "\"";
+		for (unsigned char c : s) {
+			if (c == '"' || c == '\\') r += '\\', r += (char)c;
+			else if (c == '\n') r += "\\n";
+			else if (c < 0x20) { char b[8]; snprintf (b, sizeof (b), "\\u%04x", c); r += b; }
+			else r += (char)c;
+		}
+		return r + "\"";
+	}
 
 } // namespace
 
@@ -76,8 +163,9 @@ std::string TestInput::TakeScreenshotRequest ()
 
 bool TestInput::Resolve (const std::string &spec, float &x, float &y) const
 {
-	// offset "+dx,dy" (after the last term)
-	std::string s = spec;
+	// offset "+dx,dy" (after the last term); quotes around it dropped
+	std::string s = Trim (spec);
+	if (s.size() >= 2 && s.front() == '"' && s.back() == '"') s = s.substr (1, s.size() - 2);
 	float dx = 0, dy = 0;
 	size_t arrow = s.find ("->");
 	size_t from = (arrow == std::string::npos ? 1 : arrow + 3);
@@ -121,8 +209,50 @@ bool TestInput::Lua (const std::string &code)
 
 void TestInput::Fail (const std::string &msg)
 {
+	if (reply) { // (interactive: answered with the error, the rest of the command skipped)
+		if (error.empty()) error = msg;
+		skip = true;
+		return;
+	}
 	oapiWriteLogError ("TestInput: FAIL %s", msg.c_str());
 	oapiExitOrbiter (1);
+}
+
+void TestInput::SetInteractive (Reply r, const std::string &dir)
+{
+	reply = r;
+	evalPath = dir + "/lua_result.txt";
+	timeout = 5.0;
+}
+
+void TestInput::Append (const std::string &line, int id)
+{
+	std::string l = Trim (line);
+	if (!l.empty()) lines.push_back (l);
+	lines.push_back ("__reply " + std::to_string (id));
+}
+
+bool TestInput::Exec (const std::string &code, std::string &out)
+{
+	if (!interp) {
+		interp = oapiCreateInterpreter ();
+		if (!interp) { Fail ("no script interpreter"); return false; }
+		oapiExecScriptCmd (interp, luaPrelude);
+	}
+	remove (evalPath.c_str());
+	std::string chunk = "local __f = io.open (" + Json (evalPath) + ", 'w') "
+		"local ok, r = pcall (function () " + code + "\nend) "
+		"if ok then __f:write ('1', __tojson (r)) else __f:write ('0', tostring (r)) end "
+		"__f:close ()";
+	oapiExecScriptCmd (interp, chunk.c_str());
+	std::ifstream f (evalPath);
+	std::stringstream ss;
+	if (f) ss << f.rdbuf();
+	std::string s = ss.str();
+	if (s.empty()) { Fail ("Lua: the code did not compile (see Orbiter.log)"); return false; }
+	if (s[0] != '1') { Fail ("Lua: " + s.substr (1)); return false; }
+	out = s.substr (1);
+	return true;
 }
 
 void TestInput::MouseMove (SDL_Window *window, float x, float y)
@@ -183,16 +313,25 @@ void TestInput::Key (SDL_Window *window, const std::string &name, bool down)
 	SDL_PushEvent (&e);
 }
 
-void TestInput::Step (SDL_Window *window)
+void TestInput::Step (SDL_Window *window, bool instantOnly)
 {
 	if (done) return;
 	if (waitFrames > 0) {
-		waitFrames--;
+		if (!instantOnly) waitFrames--;
 		return;
 	}
 	while (pc < lines.size()) {
+		if (skip) { // (interactive: the rest of a failed command, up to its reply)
+			skip = false;
+			blockedSince = 0;
+			while (pc < lines.size() && lines[pc].compare (0, 8, "__reply ")) pc++;
+			continue;
+		}
 		std::string args = lines[pc];
 		std::string cmd = Word (args);
+		if (instantOnly && cmd != "__reply" && cmd != "lua" && cmd != "eval" && cmd != "state"
+			&& cmd != "anchors" && cmd != "widgets" && cmd != "timeout")
+			return; // (the rest in the frame)
 
 		// commands that need positions wait until they can be resolved
 		auto Pos = [&](const std::string &spec, float &x, float &y) {
@@ -272,10 +411,57 @@ void TestInput::Step (SDL_Window *window)
 			return;
 		} else if (cmd == "screenshot") {
 			screenshot = args;
+			result = Json (args);
 			pc++;
 			return;
 		} else if (cmd == "lua") {
-			Lua (args);
+			if (reply) { if (!Exec (args, result)) continue; }
+			else Lua (args);
+		} else if (cmd == "eval") {
+			if (!Exec ("return " + args, result)) continue;
+		} else if (cmd == "state") {
+			if (!Exec ("return __state ()", result)) continue;
+		} else if (cmd == "anchors") {
+			int n = oapiInputUiAnchorList (args.c_str(), nullptr, 0);
+			std::string list (n + 1, '\0');
+			oapiInputUiAnchorList (args.c_str(), &list[0], n + 1);
+			list.resize (n);
+			// {"name": [x, y], ...}
+			std::string j = "{";
+			std::istringstream in (list);
+			std::string name;
+			float x, y;
+			while (in >> name >> x >> y) {
+				char b[64];
+				snprintf (b, sizeof (b), ":[%.0f,%.0f]", x, y);
+				j += (j.size() > 1 ? "," : "") + Json (name) + b;
+			}
+			result = j + "}";
+		} else if (cmd == "widgets") {
+			int n = oapiInputUiWidgetList (args.c_str(), nullptr, 0);
+			std::string list (n + 1, '\0');
+			oapiInputUiWidgetList (args.c_str(), &list[0], n + 1);
+			list.resize (n);
+			// [{"label":..., "window":..., "x":..., "y":..., "w":..., "h":..., "state":...}, ...]
+			std::string j = "[";
+			std::istringstream in (list);
+			std::string line;
+			while (std::getline (in, line)) {
+				size_t t1 = line.find ('\t'), t2 = line.find ('\t', t1 + 1), t3 = line.find ('\t', t2 + 1);
+				if (t3 == std::string::npos) continue;
+				float x, y, w, h;
+				if (sscanf (line.c_str(), "%f %f %f %f", &x, &y, &w, &h) != 4) continue;
+				char b[96];
+				snprintf (b, sizeof (b), ",\"x\":%.0f,\"y\":%.0f,\"w\":%.0f,\"h\":%.0f", x, y, w, h);
+				std::string state = line.substr (t3 + 1);
+				j += (j.size() > 1 ? "," : "") + std::string ("{\"label\":") + Json (line.substr (t2 + 1, t3 - t2 - 1))
+					+ ",\"window\":" + Json (line.substr (t1 + 1, t2 - t1 - 1)) + b
+					+ (state.empty() ? std::string() : ",\"state\":" + Json (state)) + "}";
+			}
+			result = j + "]";
+		} else if (cmd == "__reply") {
+			if (reply) reply (atoi (args.c_str()), error.empty(), error.empty() ? result : error);
+			result.clear(), error.clear();
 		} else if (cmd == "exit") {
 			Lua ("oapi.exit (__tfail > 0 and 1 or 0)");
 		} else {
@@ -284,6 +470,7 @@ void TestInput::Step (SDL_Window *window)
 		}
 		pc++, blockedSince = 0;
 	}
+	if (reply) return; // (interactive: more to come)
 	oapiWriteLogV ("TestInput: script finished");
 	done = true;
 }

@@ -99,6 +99,10 @@ namespace ui {
 	void Property (const char *label, const char *fmt, ...) IM_FMTARGS(2);
 	/// A small rounded tag
 	void Badge (const char *text, Colour c);
+	/// The last item's label for those who list the widgets (remote control,
+	/// tests: UiAnchor.h), for widgets that draw their own text over an
+	/// invisible button; flags: ImGuiItemStatusFlags_ (e.g. checked)
+	void ReportItem (const char *label, int flags = 0);
 	/// A key cap (e.g. "F3"), in the mono font, as an item
 	void KeyCap (const char *key);
 	/// A switch (an on/off control with a label to its right)

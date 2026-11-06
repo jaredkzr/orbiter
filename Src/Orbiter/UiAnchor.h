@@ -11,6 +11,8 @@
 #ifndef __UIANCHOR_H
 #define __UIANCHOR_H
 
+#include <string>
+
 namespace uianchor {
 
 	/// Publish a position [pixels] for this frame
@@ -23,6 +25,19 @@ namespace uianchor {
 	bool Get (const char *name, float &x, float &y);
 	/// Are positions stored (has anyone asked for them)?
 	bool Enabled ();
+	/// The positions of this and the last frame, "name x y" per line, sorted
+	/// (names starting with prefix); enables storing them
+	std::string List (const std::string &prefix);
+
+	/// The ImGui widgets drawn in the last frame and visible (through Dear
+	/// ImGui's test engine hooks, ImGuiItemHooks.h): one per line,
+	/// "x y w h<TAB>window<TAB>label<TAB>state" (centre and size [pixels];
+	/// state: "checked", "unchecked", "input", "open", "closed" or ""),
+	/// those whose label or window contains filter (case-insensitive).
+	/// Labels lose ImGui's "##id" and icon glyphs. Get resolves "ui:<label>",
+	/// "ui:<window>/<label>" and "ui:<label>[n]" (the n-th, from the top) to
+	/// a widget's centre.
+	std::string Widgets (const std::string &filter);
 
 }
 

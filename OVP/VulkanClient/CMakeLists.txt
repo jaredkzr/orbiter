@@ -228,6 +228,7 @@ add_library(VulkanClient SHARED
 	CityField.cpp
 	CityKit.cpp
 	TestInput.cpp
+	RemoteControl.cpp
 	ImageIO.cpp
 	Vma.cpp
 	${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp

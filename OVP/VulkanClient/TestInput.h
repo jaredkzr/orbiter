@@ -24,18 +24,29 @@
 //   screenshot <file>          capture the next frame
 //   lua <code>                 run Lua code; check(name, cond, msg) logs
 //                              PASS/FAIL and counts failures
+//   eval <expression>          (interactive) a Lua expression's value, as JSON
+//   state                      (interactive) the flight's state, as JSON
+//   anchors [prefix]           (interactive) the named elements drawn
+//   widgets [filter]           (interactive) the widgets visible, with their
+//                              labels (click @ui:<label>, @ui:<window>/<label>)
 //   exit                       end Orbiter: exit code 1 if a check failed
 //
 // Each mouse or key event takes a frame. A position is "x,y" [pixels],
-// "@anchor", "@a->@b*f" (from a towards b, f times the distance), each
+// "@anchor", "@a->@b*f" (from a towards b, f times the distance), quoted
+// if it has spaces ("@ui:Brighton Beach"), each
 // with an optional offset "+dx,dy". A position that cannot be resolved
 // (the element is not drawn) holds the script until it can, or fails the
 // test after the timeout.
+//
+// Interactive (remote control, RemoteControl.h): commands are appended as
+// they arrive and each is answered (Reply) once it has taken effect; a
+// failing command is answered with its error instead of ending Orbiter.
 // =======================================================================
 
 #ifndef __TESTINPUT_H_VKCLIENT
 #define __TESTINPUT_H_VKCLIENT
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -45,16 +56,31 @@ class TestInput {
 public:
 	/// Load the script; false if it can't be read
 	bool Load (const char *path);
-	/// Run the script up to the next frame (before the window events are processed)
-	void Step (SDL_Window *window);
+	/// Run the script up to the next frame (before the window events are
+	/// processed); instantOnly: only what takes no frame (Lua, queries,
+	/// replies), stopping at the first command that needs one
+	void Step (SDL_Window *window, bool instantOnly = false);
 	/// A screenshot was requested for this frame (path, else empty); clears the request
 	std::string TakeScreenshotRequest ();
 	/// End of the session: the interpreter is gone
 	void SessionEnd () { interp = nullptr; }
 
+	// ---- interactive (remote control) ------------------------------------
+	/// Reply (id, ok, result or error) once a command's lines have run
+	using Reply = std::function<void (int id, bool ok, const std::string &text)>;
+	/// Interactive: commands come with Append; dir: a folder for the Lua results
+	void SetInteractive (Reply reply, const std::string &dir);
+	/// Queue a command, answered with id
+	void Append (const std::string &line, int id);
+	/// Nothing queued or running
+	bool Idle () const { return pc >= lines.size() && waitFrames <= 0; }
+
 private:
 	bool Resolve (const std::string &spec, float &x, float &y) const;
 	bool Lua (const std::string &code);
+	/// Interactive Lua: run code (a chunk; "return x" gives a value), the
+	/// value as JSON in result, else the error
+	bool Exec (const std::string &code, std::string &result);
 	void Fail (const std::string &msg);
 	void MouseMove (SDL_Window *window, float x, float y);
 	void MouseButton (SDL_Window *window, int button, bool down);
@@ -69,6 +95,11 @@ private:
 	void *interp = nullptr;
 	std::string screenshot;
 	bool done = false;
+	// interactive
+	Reply reply;
+	std::string evalPath;     // where Lua writes its results
+	std::string result, error; // of the command being run (for its reply)
+	bool skip = false;         // the command failed: skip to its reply
 };
 
 #endif // !__TESTINPUT_H_VKCLIENT

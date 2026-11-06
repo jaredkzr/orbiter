@@ -121,7 +121,19 @@ bool VulkanClient::clbkInitialise ()
 		return false;
 	}
 	if (testPad) input::AttachTestGamepad (testPad);
-	if (const char *ti = getenv ("ORBITER_VK_TEST_INPUT")) {
+	if (const char *rc = getenv ("ORBITER_VK_REMOTE")) {
+		// remote control (playtesting): the test input's commands from a socket
+		std::string p (rc);
+		size_t sl = p.find_last_of ('/');
+		std::string dir = (sl == std::string::npos ? std::string (".") : p.substr (0, sl));
+		const char *pace = getenv ("ORBITER_VK_REMOTE_PACE");
+		bool lockstep = !(pace && !strcmp (pace, "realtime"));
+		testInput = std::make_unique<TestInput> ();
+		remote = std::make_unique<RemoteControl> ();
+		RemoteControl *r = remote.get();
+		testInput->SetInteractive ([r](int id, bool ok, const std::string &t) { r->Answer (id, ok, t); }, dir);
+		if (!remote->Start (p, lockstep, testInput.get())) remote.reset(), testInput.reset();
+	} else if (const char *ti = getenv ("ORBITER_VK_TEST_INPUT")) {
 		testInput = std::make_unique<TestInput> ();
 		if (!testInput->Load (ti)) testInput.reset();
 	}
@@ -264,7 +276,12 @@ void VulkanClient::clbkDestroyRenderWindow (bool fastclose)
 void VulkanClient::clbkUpdate (bool running)
 {
 	if (window) {
-		if (testInput && scene) testInput->Step (window);
+		updateCount++;
+		if (remote) {
+			remote->SetFrame (updateCount, scene != nullptr);
+			remote->Poll (window);
+		}
+		if (testInput && (scene || remote)) testInput->Step (window); // (remote: the launchpad too)
 		input::ProcessEvents (window);
 	}
 	if (running) {

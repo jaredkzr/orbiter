@@ -215,6 +215,19 @@ if (ORBITER_TEST_EXE)
 				ENVIRONMENT "ORBITER_VK_OFFSCREEN=1;ORBITER_VK_SKY=0;ORBITER_MFD_WINDOWS=0;ORBITER_VK_TEST_INPUT=${InputTest}")
 		endforeach()
 
+		# Remote control for playtesting (OVP/VulkanClient/RemoteControl.h,
+		# Utils/Playtest/orbctl.py): a session driven over its socket
+		find_package(Python3 COMPONENTS Interpreter)
+		if (Python3_FOUND)
+			add_test(
+				NAME "Playtest.Remote"
+				COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/Tests/Playtest/remote_test.py
+				WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+			)
+			set_tests_properties(Playtest.Remote PROPERTIES TIMEOUT 300
+				ENVIRONMENT "ORBITER_VK_SKY=0;ORBITER_BUILD=${ORBITER_BINARY_ROOT_DIR}")
+		endif()
+
 		# The simulated sky (needs its data, Config/CSphere/Sky, else left
 		# out): the bake's brightness in some directions against reference
 		# values (Tests/Sky/reference.txt), the zodiacal light against the

@@ -295,6 +295,13 @@ bool SecondaryButton (const char *label, const ImVec2 &size)
 	return r;
 }
 
+void ReportItem (const char *label, int flags)
+{
+	ImGuiContext &g = *GImGui;
+	if (g.TestEngineHookItems && label)
+		ImGuiTestEngineHook_ItemInfo (&g, g.LastItemData.ID, label, g.LastItemData.StatusFlags | flags);
+}
+
 bool IconButton (const char *icon, const char *tooltip, bool active)
 {
 	ImGui::PushStyleColor (ImGuiCol_Button, active ? Col (ACCENT, 0.18f) : Col (RAISED, 0.0f));
@@ -302,6 +309,7 @@ bool IconButton (const char *icon, const char *tooltip, bool active)
 	ImGui::PushStyleColor (ImGuiCol_ButtonActive, Col (TEXT, 0.16f));
 	ImGui::PushStyleColor (ImGuiCol_Text, active ? Col (ACCENT) : Col (TEXT_DIM));
 	bool r = ImGui::Button (icon);
+	if (tooltip) ReportItem (tooltip); // (an icon: named by its tooltip)
 	ImGui::PopStyleColor (4);
 	if (tooltip && ImGui::IsItemHovered (ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip ("%s", tooltip);
 	return r;
@@ -389,6 +397,7 @@ bool Toggle (const char *label, bool *v)
 	ImGui::PushID (label);
 	ImVec2 ts = ImGui::CalcTextSize (label, nullptr, true);
 	bool pressed = ImGui::InvisibleButton ("##toggle", ImVec2(w + (ts.x > 0 ? ImGui::GetStyle().ItemInnerSpacing.x + ts.x : 0), ImGui::GetFrameHeight ()));
+	ReportItem (label, ImGuiItemStatusFlags_Checkable | (*v ? ImGuiItemStatusFlags_Checked : 0));
 	if (pressed) *v = !*v;
 	bool hov = ImGui::IsItemHovered ();
 	ImGui::PopID ();
@@ -485,6 +494,7 @@ bool SearchField (const char *id, const char *hint, char *buf, size_t size, floa
 		ImGui::SetCursorScreenPos (cp);
 		ImGui::PushID (id);
 		if (ImGui::InvisibleButton ("##clear", ImVec2(r1.x - cp.x, r1.y - r0.y))) { buf[0] = '\0'; r = true; }
+		ReportItem ("Clear");
 		bool hov = ImGui::IsItemHovered ();
 		ImGui::PopID ();
 		ImVec2 xs = ImGui::CalcTextSize ("\xC3\x97");
@@ -511,6 +521,7 @@ bool Segmented (const char *id, const char *const *labels, int n, int *sel)
 		ImGui::SetCursorScreenPos (a);
 		ImGui::PushID (i);
 		if (ImGui::InvisibleButton ("##seg", ImVec2(w, b.y - a.y)) && *sel != i) { *sel = i; changed = true; }
+		ReportItem (labels[i], ImGuiItemStatusFlags_Checkable | (*sel == i ? ImGuiItemStatusFlags_Checked : 0));
 		bool hov = ImGui::IsItemHovered ();
 		ImGui::PopID ();
 		if (*sel == i) dl->AddRectFilled (a, b, Col32 (ACCENT, 0.22f * al), std::max (0.0f, ImGui::GetStyle().FrameRounding - pad * 0.5f));
@@ -645,6 +656,7 @@ bool ListRow (const char *id, const char *icon, const char *label, const char *d
 	ImVec2 p = ImGui::GetCursorScreenPos ();
 	float w = ImGui::GetContentRegionAvail().x;
 	bool clicked = ImGui::InvisibleButton ("##row", ImVec2(w, h));
+	ReportItem (label, selected ? ImGuiItemStatusFlags_Checkable | ImGuiItemStatusFlags_Checked : 0);
 	bool hov = ImGui::IsItemHovered ();
 	if (activated) *activated = hov && ImGui::IsMouseDoubleClicked (ImGuiMouseButton_Left);
 	if (ImGui::IsItemFocused () && ImGui::IsKeyPressed (ImGuiKey_Enter, false) && activated) *activated = true;

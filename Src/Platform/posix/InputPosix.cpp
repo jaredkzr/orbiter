@@ -15,6 +15,8 @@
 #include "UiAnchor.h"
 #include <cmath>
 #include <cstring>
+#include <algorithm>
+#include <string>
 
 extern Orbiter *g_pOrbiter;
 
@@ -191,4 +193,26 @@ DLLEXPORT void oapiInputControllerState (int idx, const OAPI_CONTROLLERSTATE *st
 DLLEXPORT bool oapiInputUiAnchor (const char *name, float *x, float *y)
 {
 	return uianchor::Get (name, *x, *y);
+}
+
+DLLEXPORT int oapiInputUiWidgetList (const char *filter, char *buf, int len)
+{
+	std::string s = uianchor::Widgets (filter ? filter : "");
+	if (buf && len > 0) {
+		int n = (int)std::min (s.size(), (size_t)len - 1);
+		memcpy (buf, s.data(), n);
+		buf[n] = '\0';
+	}
+	return (int)s.size();
+}
+
+DLLEXPORT int oapiInputUiAnchorList (const char *prefix, char *buf, int len)
+{
+	std::string s = uianchor::List (prefix ? prefix : "");
+	if (buf && len > 0) {
+		int n = (int)std::min (s.size(), (size_t)len - 1);
+		memcpy (buf, s.data(), n);
+		buf[n] = '\0';
+	}
+	return (int)s.size();
 }

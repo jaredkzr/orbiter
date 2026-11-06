@@ -14,6 +14,7 @@
 #include "VkTexture.h"
 #include "MaterialConfig.h"
 #include "TestInput.h"
+#include "RemoteControl.h"
 #include <map>
 #include <memory>
 #include <string>
@@ -154,6 +155,8 @@ private:
 	std::vector<std::future<void>> writers; // image files being written
 	void Teardown ();
 	std::unique_ptr<TestInput> testInput; // ORBITER_VK_TEST_INPUT: scripted input (tests)
+	std::unique_ptr<RemoteControl> remote; // ORBITER_VK_REMOTE: input from a socket (playtesting)
+	unsigned long long updateCount = 0;    // frames (clbkUpdate calls)
 	std::string autoScreenshot;   // ORBITER_VK_SCREENSHOT: file written at frame autoScreenshotFrame
 	unsigned autoScreenshotFrame = 60;
 	bool shotNoUi = false;        // ORBITER_VK_SCREENSHOT_NOUI=1: the screenshot without the user interface

@@ -8,6 +8,7 @@ FetchContent_MakeAvailable(implot)
 
 add_library(Orbitersdk STATIC
 	Orbitersdk.cpp
+	ImGuiItemHooks.cpp
 	${imgui_SOURCE_DIR}/imgui.cpp
 	${imgui_SOURCE_DIR}/imgui_demo.cpp
 	${imgui_SOURCE_DIR}/imgui_draw.cpp
@@ -25,7 +26,12 @@ set_target_properties(Orbitersdk
 
 target_include_directories(Orbitersdk
 	PUBLIC ${imgui_SOURCE_DIR}
+	PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
 )
+
+# ImGui's widgets reported through the test engine hooks (ImGuiItemHooks.h:
+# the core lists them for remote control and tests; off until it asks)
+target_compile_definitions(Orbitersdk PUBLIC IMGUI_ENABLE_TEST_ENGINE)
 
 if(ORBITER_HEADLESS)
 	target_include_directories(Orbitersdk PRIVATE ${ORBITER_SOURCE_SDK_INCLUDE_DIR})

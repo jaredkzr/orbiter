@@ -119,6 +119,26 @@ OAPIFUNC void oapiInputControllerState (int idx, const OAPI_CONTROLLERSTATE *sta
  */
 OAPIFUNC bool oapiInputUiAnchor (const char *name, float *x, float *y);
 
+/**
+ * \brief The user interface's elements drawn in the last frame (as
+ *   oapiInputUiAnchor), for remote control: one per line, "name x y".
+ * \param prefix only names starting with this (empty: all)
+ * \param buf, len the text (truncated to len)
+ * \return the length of the full text
+ */
+OAPIFUNC int oapiInputUiAnchorList (const char *prefix, char *buf, int len);
+
+/**
+ * \brief The user interface's widgets visible in the last frame (labels and
+ *   places; see UiAnchor.h's Widgets), one per line:
+ *   "x y w h<TAB>window<TAB>label<TAB>state". oapiInputUiAnchor finds one
+ *   as "ui:<label>".
+ * \param filter only those whose label or window contains it (empty: all)
+ * \param buf, len the text (truncated to len)
+ * \return the length of the full text
+ */
+OAPIFUNC int oapiInputUiWidgetList (const char *filter, char *buf, int len);
+
 #endif // !_WIN32
 
 #endif // !__ORBITERINPUT_H
