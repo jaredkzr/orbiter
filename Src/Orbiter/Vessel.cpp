@@ -2832,6 +2832,11 @@ int Vessel::Dock (Vessel *target, DWORD mydid, DWORD tgtdid, DWORD mode)
 	g_psys->DockVessels (this, target, mydid, tgtdid);
 	RegisterDocking (mydid, target, tgtdid);
 	target->RegisterDocking (tgtdid, this, mydid);
+	if (this == g_focusobj || target == g_focusobj) { // (the player hears of it)
+		char detail[256];
+		snprintf (detail, sizeof (detail), "%s to %s, port %d", name.c_str(), target->Name(), (int)tgtdid + 1);
+		flightevent::Post (flightevent::SUCCESS, "Docked", detail);
+	}
 	return 0;
 }
 
@@ -2847,6 +2852,11 @@ bool Vessel::Undock (UINT did, const Vessel *exclude, double vsep)
 
 	for (n = n0; n < n1; n++) {
 		if (n < ndock && dock[n]->mate && dock[n]->mate != exclude) {
+			if (this == g_focusobj || dock[n]->mate == g_focusobj) {
+				char detail[256];
+				snprintf (detail, sizeof (detail), "%s from %s", name.c_str(), dock[n]->mate->Name());
+				flightevent::Post (flightevent::INFO, "Undocked", detail);
+			}
 			g_psys->UndockVessel (supervessel, this, n, vsep);
 			dock[n]->mate->UnregisterDocking (dock[n]->matedock);
 			UnregisterDocking (n);
@@ -5481,6 +5491,7 @@ void Vessel::Destroy (const char *reason)
 	const std::vector<structure::Part> &parts = Structure().Parts();
 	if (part_lost.size() != parts.size()) part_lost.assign (parts.size(), 0);
 	destroyed = true;
+	destroy_reason = reason ? reason : "";
 	char cbuf[256];
 	sprintf (cbuf, "%s was destroyed: %s.", name.c_str(), reason);
 	LOGOUT ("%s", cbuf);
@@ -5517,8 +5528,14 @@ void Vessel::Destroy (const char *reason)
 		snprintf (title, sizeof (title), "%s destroyed", name.c_str());
 		snprintf (detail, sizeof (detail), "%s", reason);
 		detail[0] = (char)toupper ((unsigned char)detail[0]);
+		bool other = false; // (a vessel to switch to: the banner offers it)
+		for (DWORD i = 0; i < g_psys->nVessel() && !other; i++) {
+			const Vessel *v = g_psys->GetVessel (i);
+			if (v != this && !v->Destroyed () && v->GetEnableFocus ()) other = true;
+		}
 		std::string key = g_pOrbiter->keymap.Label (OAPI_LKEY_DlgSelectVessel);
-		flightevent::Post (flightevent::DANGER, title, detail, key.c_str(), "Switch to another vessel");
+		if (other) flightevent::Post (flightevent::DANGER, title, detail, key.c_str(), "Switch to another vessel");
+		else flightevent::Post (flightevent::DANGER, title, detail);
 	}
 }
 
@@ -5947,10 +5964,12 @@ void Vessel::PostUpdate ()
 							int refusal = collision::DockCapture (pj, pk, DOCK_REFUSE_OFFSET, &value, &limit);
 							if (refusal && refusal != DOCKREFUSED_OFFSET) {
 								dock[j]->refused = v;
+								dock[j]->refusedPort = (int)k;
 								DockRefused (j, v, k, refusal, value, limit);
 							}
-						} else if (dock[j]->refused == v && d > 2.0*DOCK_REFUSE_DIST) {
-							dock[j]->refused = 0; // (a new approach)
+						} else if (dock[j]->refused == v && dock[j]->refusedPort == (int)k && d > 2.0*DOCK_REFUSE_DIST) {
+							dock[j]->refused = 0; // (a new approach: away from the port that refused - not
+							dock[j]->refusedPort = -1; // another of a station's ports, far: reported every frame)
 						}
 						if (d >= MIN_DOCK_DIST) continue;
 						// capture only within the speed and alignment limits

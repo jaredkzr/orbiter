@@ -15,6 +15,7 @@
 #include "Log.h"
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "imgui_internal.h"
 #include "imgui_extras.h"
 #ifdef _WIN32
 #include "imgui_impl_win32.h"
@@ -703,6 +704,16 @@ void ImGuiDialog::Display() {
 	}
 	ImGui::End();
 	if (!active) OnClose();
+}
+
+bool DialogManager::DialogFocused () const
+{
+	ImGuiContext *ctx = ImGui::GetCurrentContext ();
+	if (!ctx || !ctx->NavWindow) return false;
+	const ImGuiWindow *root = ctx->NavWindow->RootWindow;
+	for (ImGuiDialog *d : DlgImGuiList)
+		if (d->IsActive () && root && d->Name () == root->Name) return true;
+	return false;
 }
 
 void ImGuiDialog::Activate() {

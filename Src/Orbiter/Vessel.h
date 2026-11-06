@@ -138,6 +138,7 @@ typedef struct {      // docking port definition
 	Vessel *mate;           // vessel attached to port (NULL for none)
 	Vessel *pending;        // vessel being currently docked/undocked
 	Vessel *refused;        // vessel whose port refused to capture this one in the current approach (reported once)
+	int refusedPort = -1;   // ... that port (the approach ends when it is far again)
 	Vessel *owner;			// vessel that's owns this docking port
 	int status;             // 0=normal (docked/free), 1=docking in progress, 2=undocking in progress
 	DWORD matedock;         // mate dock index
@@ -1253,6 +1254,8 @@ public:
 	// for each triangle of a group of a mesh: 0 shown, 1 not shown (its part
 	// broke off), 2 shown at the fracture. Returns the number not shown.
 	bool Destroyed () const { return destroyed; }
+	double DestroyedT () const { return destroyed_t; }           ///< [s] simulation time it was destroyed
+	const std::string &DestroyReason () const { return destroy_reason; }
 	// destroyed: a hidden ghost that follows the largest piece of its wreck
 	// (the focus vessel, until the user switches to another vessel; others
 	// while the instant replay still shows them), then deleted
@@ -1822,6 +1825,7 @@ private:
 	std::vector<double> part_temp;               // [K] temperature of each part
 	bool destroyed = false;
 	double destroyed_t = 0.0;                    // [s] simulation time when it was destroyed
+	std::string destroy_reason;                  // (why: "broke up at 14 g ...")
 	Debris *wreck = nullptr;                     // the largest piece of its wreck
 	Debris *last_debris = nullptr;               // (BreakPart: the piece made)
 	bool breaking_up = false;                    // (Destroy: the core part breaks off too)

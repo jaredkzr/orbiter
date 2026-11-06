@@ -803,7 +803,11 @@ public:
 		ImGuiViewport *viewport = ImGui::GetMainViewport();
 		ImGui::SetNextWindowViewport(viewport->ID);
 		float m = ui::Px(10);
-		ImGui::SetNextWindowPos(viewport->Pos + ImVec2(m, m));
+		// (the glass cockpit's engine and propellant panel has the corner: beside it)
+		float x0 = 0.0f;
+		if (oapiCameraInternal() && oapiCockpitMode() == COCKPIT_GENERIC)
+			x0 = 195.0f * std::max(0.625f, viewport->Size.y / 800.0f) + ui::Px(4);
+		ImGui::SetNextWindowPos(viewport->Pos + ImVec2(m + x0, m));
 		InfoBegin(animStateOpacity, prm);
 		if(ImGui::Begin("##InfoTarget", nullptr, INFOFLAGS)) {
 			AnimateOpacity(animStateOpacity);
@@ -895,7 +899,7 @@ namespace {
 
 void flightevent::Post (Level level, const char *title, const char *detail, const char *key, const char *hint, double duration)
 {
-	static const double DURATION[4] = { 6.0, 5.0, 9.0, 20.0 };
+	static const double DURATION[4] = { 6.0, 5.0, 9.0, 10.0 }; // (a vessel lost: the flight menu follows)
 	std::string t (title ? title : ""), d (detail ? detail : "");
 	LOGOUT ("%s%s%s", t.c_str(), d.empty() ? "" : ": ", d.c_str());
 	for (auto it = g_events.begin(); it != g_events.end(); ++it)

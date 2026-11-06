@@ -846,6 +846,8 @@ void Atlantis::SeparateBoosters (double met)
 	// reconfigure
 	status = 2;
 	RecordEvent ("JET", "SRB");
+	if (GetHandle () == oapiGetFocusObject ())
+		oapiAddNotification (OAPINOTIF_SUCCESS, "Booster separation", "The SRBs fall away (Camera dialog, Ctrl+F1: watch them)");
 }
 
 // --------------------------------------------------------------
@@ -866,6 +868,8 @@ void Atlantis::SeparateTank ()
 	// reconfigure
 	status = 3;
 	RecordEvent ("JET", "ET");
+	if (GetHandle () == oapiGetFocusObject ())
+		oapiAddNotification (OAPINOTIF_SUCCESS, "Tank separation", "The external tank falls away");
 }
 
 // (the payloads' mass is part of the orbiter's dynamics: IncludeAttachedMass)

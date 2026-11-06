@@ -514,3 +514,8 @@ void VesselBase::ApplyContactVelocity (const contact::Body &b, double h, bool gr
 	s1->pos = rpos_base + rpos_add;
 }
 
+
+bool VesselBase::Touching (const void *other) const
+{
+	return other && contact_vessel == other && td.SimT1 - contact_vessel_t < 0.5;
+}

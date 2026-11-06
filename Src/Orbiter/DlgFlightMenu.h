@@ -11,12 +11,16 @@
 #define __DLGFLIGHTMENU_H
 
 #include "OrbiterAPI.h"
+#include <string>
 
 class DlgFlightMenu : public ImGuiDialog {
 public:
 	DlgFlightMenu ();
 	/// Open the menu (pausing), or close it (resuming as before)
 	void Toggle ();
+	/// The focus vessel was lost: the menu opens as "flight over" - restart,
+	/// load the latest quicksave, switch to another vessel, or keep watching
+	void FlightOver (const std::string &vessel, const std::string &reason);
 	void Display () override;
 	void OnDraw () override {}
 	void OnClose () override;
@@ -27,6 +31,8 @@ private:
 	int openFrame = 0;       // (the Esc that opened it is not the one that closes it)
 	bool saving = false;     // the "save as" field shown
 	char saveName[128] = "";
+	bool over = false;       // opened as "flight over"
+	std::string overTitle, overReason;
 };
 
 #endif // !__DLGFLIGHTMENU_H

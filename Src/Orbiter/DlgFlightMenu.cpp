@@ -6,6 +6,9 @@
 #include "TimeData.h"
 #include "DlgMgr.h"
 #include "DlgOptions.h"
+#include "DlgFocus.h"
+#include "Psys.h"
+#include "Vessel.h"
 #include "UiTheme.h"
 #include "IconsLucide.h"
 #include "imgui.h"
@@ -15,6 +18,8 @@
 extern Orbiter *g_pOrbiter;
 extern char ScenarioName[256];
 extern TimeData td;
+extern PlanetarySystem *g_psys;
+extern Vessel *g_focusobj;
 extern HELPCONTEXT DefHelpContext;
 
 namespace {
@@ -25,6 +30,7 @@ namespace {
 		float w = ImGui::GetContentRegionAvail().x, h = ui::Px (40);
 		ImGui::PushID (label);
 		bool r = ImGui::InvisibleButton ("##entry", ImVec2(w, h));
+		ui::ReportItem (label); // (its label for the playtest tool's widget list)
 		bool hov = ImGui::IsItemHovered (), focus = ImGui::IsItemFocused ();
 		ImGui::PopID ();
 		ImVec2 p0 = ImGui::GetItemRectMin (), p1 = ImGui::GetItemRectMax ();
@@ -53,12 +59,23 @@ DlgFlightMenu::DlgFlightMenu (): ImGuiDialog ("Flight menu")
 {
 }
 
+void DlgFlightMenu::FlightOver (const std::string &vessel, const std::string &reason)
+{
+	if (active) return; // (open already: as it is)
+	Toggle ();
+	over = true;
+	overTitle = vessel + " destroyed";
+	overReason = reason;
+	if (!overReason.empty ()) overReason[0] = (char)toupper ((unsigned char)overReason[0]);
+}
+
 void DlgFlightMenu::Toggle ()
 {
 	if (active) {
 		Close ();
 		return;
 	}
+	over = false;
 	active = true;
 	saving = false;
 	openFrame = ImGui::GetFrameCount ();
@@ -105,23 +122,52 @@ void DlgFlightMenu::Display ()
 		return;
 	}
 
-	// heading: paused, the scenario
+	// heading: paused (or the flight over), the scenario
 	ImGui::SetCursorPosX (ImGui::GetCursorPosX () + ui::Px (12));
 	ui::PushFont (f.medium, ui::SIZE_SMALL);
-	ImGui::PushStyleColor (ImGuiCol_Text, ui::Col (ui::CAUTION));
-	ImGui::TextUnformatted (ICON_LC_PAUSE "  P A U S E D");
+	ImGui::PushStyleColor (ImGuiCol_Text, ui::Col (over ? ui::WARNING : ui::CAUTION));
+	ImGui::TextUnformatted (over ? ICON_LC_TRIANGLE_ALERT "  F L I G H T   O V E R" : ICON_LC_PAUSE "  P A U S E D");
 	ImGui::PopStyleColor ();
 	ui::PopFont ();
 	const char *scn = ScenarioName;
 	for (const char *c = ScenarioName; *c; c++) if (*c == '\\' || *c == '/') scn = c + 1;
 	ImGui::SetCursorPosX (ImGui::GetCursorPosX () + ui::Px (12));
 	ui::PushFont (f.strong, ui::SIZE_LARGE + 2.0f);
-	ImGui::TextUnformatted (*scn ? scn : "Orbiter");
+	ImGui::TextUnformatted (over ? overTitle.c_str() : *scn ? scn : "Orbiter");
 	ui::PopFont ();
+	if (over && !overReason.empty ()) {
+		ImGui::SetCursorPosX (ImGui::GetCursorPosX () + ui::Px (12));
+		ImGui::PushStyleColor (ImGuiCol_Text, ui::Col (ui::TEXT_DIM));
+		ImGui::PushTextWrapPos (ImGui::GetCursorPosX () + ImGui::GetContentRegionAvail().x - ui::Px (12));
+		ImGui::TextUnformatted (overReason.c_str());
+		ImGui::PopTextWrapPos ();
+		ImGui::PopStyleColor ();
+	}
 	ImGui::Dummy (ImVec2(0, ui::Px (10)));
 
 	bool close = false;
-	if (Entry (ICON_LC_PLAY, "Resume", "Esc")) close = true;
+	// (what next: the scenario again, the latest quicksave, another vessel)
+	std::string quick = g_pOrbiter->LatestQuicksave ();
+	bool other = false;
+	for (DWORD i = 0; i < g_psys->nVessel () && !other; i++) {
+		const Vessel *v = g_psys->GetVessel (i);
+		if (v != g_focusobj && v->GetEnableFocus () && !v->Destroyed ()) other = true;
+	}
+	if (over) {
+		if (*ScenarioName && Entry (ICON_LC_ROTATE_CCW, "Restart scenario")) {
+			close = true;
+			g_pOrbiter->RequestRelaunch (ScenarioName);
+		}
+		if (!quick.empty () && Entry (ICON_LC_HISTORY, "Load latest quicksave", quick.c_str() + 10)) {
+			close = true;
+			g_pOrbiter->RequestRelaunch (quick);
+		}
+		if (other && Entry (ICON_LC_ARROW_LEFT_RIGHT, "Switch vessel", "F3")) {
+			close = true;
+			g_pOrbiter->DlgMgr ()->EnsureEntry<DlgFocus> ();
+		}
+		if (Entry (ICON_LC_EYE, "Keep watching", "Esc")) close = true;
+	} else if (Entry (ICON_LC_PLAY, "Resume", "Esc")) close = true;
 	if (!saving) {
 		if (Entry (ICON_LC_SAVE, "Save scenario\xE2\x80\xA6")) {
 			saving = true;
@@ -165,6 +211,16 @@ void DlgFlightMenu::Display ()
 		close = true;
 	}
 #endif
+	if (!over) {
+		if (*ScenarioName && Entry (ICON_LC_ROTATE_CCW, "Restart scenario")) {
+			close = true;
+			g_pOrbiter->RequestRelaunch (ScenarioName);
+		}
+		if (!quick.empty () && Entry (ICON_LC_HISTORY, "Load latest quicksave", quick.c_str() + 10)) {
+			close = true;
+			g_pOrbiter->RequestRelaunch (quick);
+		}
+	}
 	ImGui::Dummy (ImVec2(0, ui::Px (6)));
 	ImVec2 p = ImGui::GetCursorScreenPos ();
 	ImGui::GetWindowDrawList ()->AddLine (ImVec2(p.x + ui::Px (12), p.y), ImVec2(p.x + ImGui::GetContentRegionAvail().x - ui::Px (12), p.y),

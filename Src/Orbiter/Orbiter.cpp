@@ -1566,6 +1566,30 @@ void Orbiter::SetShipWarp (double warp)
 	}
 }
 
+std::string Orbiter::LatestQuicksave () const
+{
+	// (Quicksave\<scenario> NNNN.scn: the newest of this scenario's)
+	std::string base (ScenarioName);
+	size_t sl = base.find_last_of ("/\\");
+	if (sl != std::string::npos) base = base.substr (sl + 1);
+	if (base.size() > 4 && base.compare (base.size() - 4, 4, ".scn") == 0) base.resize (base.size() - 4);
+	if (base.empty ()) return "";
+	std::string dir (pConfig->CfgDirPrm.ScnDir);
+	for (char &c : dir) if (c == '\\') c = '/';
+	std::error_code ec;
+	std::filesystem::path qdir (orbiter::platform::ResolvePath ((dir + "Quicksave").c_str()));
+	std::string best;
+	std::filesystem::file_time_type bt;
+	for (const auto &e : std::filesystem::directory_iterator (qdir, ec)) {
+		if (!e.is_regular_file (ec) || e.path().extension() != ".scn") continue;
+		std::string stem = e.path().stem().string();
+		if (stem.size() <= base.size() || stem.compare (0, base.size() + 1, base + " ") != 0) continue;
+		auto t = e.last_write_time (ec);
+		if (best.empty () || t > bt) best = stem, bt = t;
+	}
+	return best.empty () ? std::string () : "Quicksave/" + best;
+}
+
 double Orbiter::AtmWarpLimit () const
 {
 	const double NONE = std::numeric_limits<double>::infinity (); // (nothing in the air: no limit of its own)
@@ -2270,6 +2294,19 @@ VOID Orbiter::UpdateWorld ()
 #endif
 	}
 
+	// the focus vessel lost: after a few seconds of its wreck, the flight menu
+	// offers what next (restart, quicksave, another vessel)
+	if (bSession && g_focusobj && gclient && pDlgMgr && !(replay && replay->Active())) {
+		const double FLIGHT_OVER_DELAY = 4.0; // [s] of the wreck first
+		if (!g_focusobj->Destroyed ()) flightOverShown = false;
+		else if (!flightOverShown && td.SimT0 - g_focusobj->DestroyedT () > FLIGHT_OVER_DELAY) {
+			flightOverShown = true;
+			DlgFlightMenu *menu = pDlgMgr->EntryExists<DlgFlightMenu>();
+			if (!menu) menu = pDlgMgr->MakeEntry<DlgFlightMenu>();
+			menu->FlightOver (g_focusobj->Name (), g_focusobj->DestroyReason ());
+		}
+	}
+
 	// trajectory prediction of the focus vessel
 	if (predictor && g_focusobj && bSession && !(replay && replay->Active()))
 		predictor->Update (g_focusobj, predictTarget);
@@ -2602,6 +2639,9 @@ void Orbiter::KbdInputBuffered_System (char *kstate, DIDEVICEOBJECTDATA *dod, DW
 				keys->Close();
 				continue;
 			}
+			// (a dialog with the focus closes itself on this Esc: not the menu too)
+			DlgFlightMenu *open = pDlgMgr->EntryExists<DlgFlightMenu>();
+			if (!(open && open->IsActive()) && pDlgMgr->DialogFocused ()) continue;
 			DlgFlightMenu *menu = pDlgMgr->EntryExists<DlgFlightMenu>();
 			if (!menu) menu = pDlgMgr->MakeEntry<DlgFlightMenu>();
 			menu->Toggle();

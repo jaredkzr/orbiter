@@ -119,11 +119,14 @@ INT Orbiter::Run ()
 	};
 
 	int nsession = 0;
+	std::string next; // (Restart, Load quicksave: launched at once, launchpad or not)
 	do {
-		if (launchpad && !(backdrop () ? RunBackdrop (scenario) : RunLaunchpad (scenario))) break;
+		if (!next.empty ()) scenario = next, next.clear ();
+		else if (launchpad && !(backdrop () ? RunBackdrop (scenario) : RunLaunchpad (scenario))) break;
 		RunSession (scenario);
+		next = TakeRelaunch ();
 		if (launchpad) printf ("Launchpad: session %d closed\n", ++nsession);
-	} while (launchpad && !bFastExit && !bExitRequested);
+	} while ((launchpad || !next.empty ()) && !bFastExit && !bExitRequested);
 
 	if (m_pPosixLaunchpad) {
 		delete m_pPosixLaunchpad;

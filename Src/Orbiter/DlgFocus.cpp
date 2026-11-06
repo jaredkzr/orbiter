@@ -62,6 +62,7 @@ DlgFocus::DlgFocus() : ImGuiDialog(ICON_LC_ROCKET "  Select spacecraft", {380, 4
 void DlgFocus::SetFocus(const std::string &name) {
 	Vessel *vessel = g_psys->GetVessel (name.c_str(), true);
 	if (vessel && vessel != g_focusobj) g_pOrbiter->SetFocusObject (vessel);
+	active = false; // (switched: out of the way of the view)
 }
 
 void DlgFocus::OnDraw() {
@@ -94,6 +95,7 @@ void DlgFocus::OnDraw() {
 	if (ui::SecondaryButton (ICON_LC_HISTORY "  Previous", ImVec2((w - gap) * 0.4f, bh)) && hasPrev) {
 		m_SelectedShip = g_pfocusobj->Name();
 		g_pOrbiter->SetFocusObject (g_pfocusobj);
+		active = false;
 	}
 	ImGui::EndDisabled ();
 	if (hasPrev && ImGui::IsItemHovered (ImGuiHoveredFlags_DelayShort | ImGuiHoveredFlags_AllowWhenDisabled))
@@ -116,7 +118,7 @@ void DlgFocus::DrawList() {
 	std::vector<Entry> list;
 	for (int i = 0; i < g_psys->nVessel(); i++) {
 		Vessel *v = g_psys->GetVessel(i);
-		if (!v->GetEnableFocus()) continue;
+		if (!v->GetEnableFocus() || v->Destroyed()) continue; // (not a wreck: nothing to fly)
 		if (!Contains (v->Name(), flt.c_str()) && !Contains (v->ClassName() ? v->ClassName() : "", flt.c_str())) continue;
 		double d = campos.dist (v->GPos());
 		if (m_Mode == NEARBY && d > m_Range * 1000.0) continue;

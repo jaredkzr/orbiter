@@ -293,12 +293,20 @@ void Instrument_Docking::UpdateDraw (oapi::Sketchpad *skp)
 		break;
 	}
 
-	// "docked" marker
+	// "docked" marker; "contact": pressed against the target, not docked (the
+	// distance and closing speed stop changing - blocked, beside the port)
 	if (vessel->DockMate (refdock)) {
 		skp->SetBackgroundMode (oapi::Sketchpad::BK_OPAQUE);
 		skp->SetBackgroundColor (col_yellow1);
 		skp->SetTextColor (0);
 		skp->Text (IW - cw * 9, ch, " DOCKED ", 8);
+		skp->SetTextColor (draw[0][0].col);
+		skp->SetBackgroundMode (oapi::Sketchpad::BK_TRANSPARENT);
+	} else if (tgt && vessel->Touching (tgt)) {
+		skp->SetBackgroundMode (oapi::Sketchpad::BK_OPAQUE);
+		skp->SetBackgroundColor (col_red1);
+		skp->SetTextColor (0);
+		skp->Text (IW - cw * 10, ch, " CONTACT ", 9);
 		skp->SetTextColor (draw[0][0].col);
 		skp->SetBackgroundMode (oapi::Sketchpad::BK_TRANSPARENT);
 	}

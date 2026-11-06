@@ -241,6 +241,10 @@ protected:
 	// Hit by another vessel while landed: become dynamic in the next step
 
 	bool contact_deferred = false; // ground contacts are resolved with the contacts with other vessels in this step
+	const VesselBase *contact_vessel = nullptr; // the vessel it last touched (pressed against)
+	double contact_vessel_t = -1e10;            // ... when [s simulation time]
+	/// Whether it touches another vessel (in the last moment)
+	bool Touching (const void *other) const;
 
 	virtual void CollectGroundContacts (const StateVectors &s, const StateVectors &sb, int body, double h,
 		std::vector<contact::Point> &pts) const {}

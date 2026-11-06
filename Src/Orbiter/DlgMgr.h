@@ -162,6 +162,8 @@ public:
 
 	/// Only this dialog is drawn (none: all); the launchpad over its backdrop session
 	void SetExclusive (ImGuiDialog *dlg) { exclusive = dlg; }
+	/// An open dialog has the keyboard focus (Esc closes it, not opening the flight menu)
+	bool DialogFocused () const;
 
 	void AddEntry(ImGuiDialog* dlg)
 	{

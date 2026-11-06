@@ -385,6 +385,12 @@ public:
 	void PlatformMouse (UINT event, DWORD state, int x, int y);
 	void PlatformFocus (bool active) { bActive = active; }
 	void PlatformCloseRequest () { bPlatformClose = true; }
+	/// Close the session and launch a scenario at once (Restart, Load
+	/// quicksave): the session loop starts it next
+	void RequestRelaunch (const std::string &scenario) { relaunch = scenario; bPlatformClose = true; }
+	std::string TakeRelaunch () { std::string s; s.swap (relaunch); return s; }
+	/// This scenario's newest quicksave ("Quicksave/<name> NNNN"; "" if none)
+	std::string LatestQuicksave () const;
 	/// End the session and the application (not back to the launchpad)
 	void RequestExit () { bExitRequested = bPlatformClose = true; }
 	bool PlatformMouseCaptured () const { return bKeepFocus; }

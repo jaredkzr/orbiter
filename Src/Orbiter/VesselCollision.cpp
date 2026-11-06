@@ -323,6 +323,16 @@ void VesselCollider::Resolve (double h)
 	std::vector<contact::Body> pre (bodies); // (the velocities before)
 	contact::Solve (pts, bodies, h, &P, &L);
 	for (VesselBase *v : dynamic) v->ContactsResolved (pts, index[v], h, &pre);
+	// (who touches whom: the Docking MFD shows a vessel pressed against its target)
+	for (size_t k = 0; k < pts.size(); k++) {
+		const contact::Point &p = pts[k];
+		if (p.ln <= 0.0 || p.a < 0) continue;
+		VesselBase *a = dynamic[p.a];
+		VesselBase *b = p.b >= 0 ? dynamic[p.b] : (k < owner.size() ? owner[k] : nullptr);
+		if (!b) continue;
+		a->contact_vessel = b, a->contact_vessel_t = td.SimT1;
+		b->contact_vessel = a, b->contact_vessel_t = td.SimT1;
+	}
 
 	for (VesselBase *v : dynamic) {
 		int i = index[v];
