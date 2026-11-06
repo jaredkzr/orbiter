@@ -540,11 +540,18 @@ bool AscentAP::ParseScenarioLine (const char *line)
 		t_launch = oapiGetSimTime()-met;
 		return true;
 	} else if (!_strnicmp(line, "ASCENTAP", 8)) {
-		int i1, i2, i3;
-		sscanf(line+9, "%d%d%d%lf%lf%lf%lf", &i1, &i2, &i3, &tgt_alt, &launch_azimuth, &launch_lng, &launch_lat);
-		active = (bool)i1;
-		met_active = (bool)i2;
-		do_oms2 = (bool)i3;
+		// active met_active do_oms2 alt azimuth lng lat; an older format
+		// without do_oms2 (six values: the altitude read as the flag, the
+		// azimuth as the altitude) is read as such
+		double v[7];
+		int n = sscanf(line+9, "%lf%lf%lf%lf%lf%lf%lf", v, v+1, v+2, v+3, v+4, v+5, v+6);
+		if (n == 6) {
+			active = v[0] != 0.0, met_active = v[1] != 0.0;
+			tgt_alt = v[2], launch_azimuth = v[3], launch_lng = v[4], launch_lat = v[5];
+		} else if (n >= 7) {
+			active = v[0] != 0.0, met_active = v[1] != 0.0, do_oms2 = v[2] != 0.0;
+			tgt_alt = v[3], launch_azimuth = v[4], launch_lng = v[5], launch_lat = v[6];
+		}
 		return true;
 	}
 	return false;

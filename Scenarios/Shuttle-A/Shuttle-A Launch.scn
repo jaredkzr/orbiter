@@ -5,7 +5,11 @@ Spaceport.</p>
 <p>This vessel class is primarily used for orbital operations and low-gravity
 low-atmosphere planet descents. Launching it from Earth can be a challenge.</p>
 <p>To take off, you need the auxiliary pods in hover configuration
-in addition to the standard hover thrusters.</p>
+in addition to the standard hover thrusters. On the 2D panel (F8), turn
+the pod angle selector to HVR (pointing down); then raise the hover
+engines (Keypad 0) and the pod thrust (Ctrl+Keypad 0, Ctrl+Keypad . to
+reduce). The pods are a group of their own: Keypad * (main and retro
+off) leaves them burning.</p>
 <p>Once free of the pad, set a climb angle of 60 deg. and adjust hovers to maintain
 zero angle of attack.</p>
 <p>As you leave the lower atmosphere and gather speed, reduce your climb angle and
