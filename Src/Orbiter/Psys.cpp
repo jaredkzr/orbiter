@@ -1003,6 +1003,8 @@ void PlanetarySystem::FinaliseUpdate ()
 	for (i = 0; i < supervessels.size(); i++) supervessels[i]->PostUpdate ();
 	for (i = 0; i < vessels.size(); i++) vessels[i]->PostUpdate ();
 	for (Debris *d : debris) d->PostUpdate ();
+	for (size_t j = debris.size(); j-- > 0; )
+		if (debris[j]->Diverged ()) DelDebris (debris[j]);
 }
 
 void PlanetarySystem::ShiftOrigin (const Vector &delta)

@@ -52,6 +52,7 @@ public:
 	const std::vector<Group> &Groups () const { return groups; }
 	const std::vector<collision::Hull> &Hulls () const { return hulls; }
 	bool AtRest () const { return fstatus == FLIGHTSTATUS_LANDED; }
+	bool Diverged () const { return diverged; } ///< its state went non-finite: to be removed
 	double CreatedT () const { return created_t; } ///< [s] simulation time it broke off
 	DWORD Serial () const { return serial; }        ///< (unique: handles may be reused)
 
@@ -128,6 +129,7 @@ private:
 	mutable bool touching = false;
 	bool wake = false;
 	double restTime = 0.0;     // [s] how long it has been still on the ground
+	bool diverged = false;     // (its state went non-finite)
 	double proxyCheckT = 0.0;  // next check for the proxy bodies
 	double created_t = 0.0;    // [s] simulation time it broke off
 	DWORD serial;

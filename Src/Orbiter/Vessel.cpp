@@ -4771,6 +4771,45 @@ void Vessel::ExternalGroups (std::vector<ExtGroup> &eg) const
 	}
 }
 
+void Vessel::DesignEngineLoads (bool always) const
+{
+	const std::vector<structure::Part> &parts = structure_.Parts();
+	size_t np = parts.size();
+	if (np <= 1) return;
+	bool risen = always || structure_thrust.size() != m_thruster.size() || module_force_risen;
+	const_cast<Vessel*>(this)->module_force_risen = false;
+	if (!risen)
+		for (size_t i = 0; i < m_thruster.size(); i++)
+			if (m_thruster[i]->maxth0 > structure_thrust[i] * 1.001 + 1.0) { risen = true; break; }
+	if (!risen) return;
+	structure_thrust.resize (m_thruster.size());
+	for (size_t i = 0; i < m_thruster.size(); i++)
+		structure_thrust[i] = std::max (structure_thrust[i], m_thruster[i]->maxth0);
+	// (each way along the vessel's axes: every thruster pushing within 45 deg
+	// of it, at the most thrust it has had)
+	double M = std::max (mass, emass), extra = M - emass;
+	for (int k = 0; k < 6; k++) {
+		Vector ax;
+		ax.data[k/2] = k % 2 ? -1.0 : 1.0;
+		std::vector<Vector> F (np);
+		Vector Ft;
+		int n = 0;
+		for (size_t i = 0; i < m_thruster.size(); i++) {
+			const ThrustSpec *ts = m_thruster[i];
+			Vector d (MakeVector (ts->dir));
+			if (dotp (d, ax) < 0.7071 || structure_thrust[i] <= 0.0) continue;
+			int part = structure_.PartAt (MakeVector (ts->ref));
+			if (part < 0) continue;
+			Vector f (d * structure_thrust[i]);
+			F[part] += f, Ft += f, n++;
+		}
+		if (module_force.size() == np) // (forces modules apply: rotors)
+			for (size_t j = 1; j < np; j++)
+				if (module_force[j][k] > 0.0) F[j] += ax * module_force[j][k], Ft += ax * module_force[j][k], n++;
+		if (n > 0 && Ft.length2() > 0.0) structure_.DesignCase (F, Ft / M, extra);
+	}
+}
+
 const structure::Model &Vessel::Structure () const
 {
 	const std::vector<collision::Hull> &h = Hulls();
@@ -4817,6 +4856,8 @@ const structure::Model &Vessel::Structure () const
 			for (size_t j = 0; j < np; j++) F[j].data[k] = M * n * parts[j].proj.data[k] / A.data[k];
 			structure_.DesignCase (F, a, extra);
 		}
+		structure_thrust.clear ();
+		DesignEngineLoads (true);
 		for (THGROUP_TYPE g : { THGROUP_MAIN, THGROUP_RETRO, THGROUP_HOVER }) {
 			std::vector<Vector> F (np);
 			Vector Ft;
@@ -5136,6 +5177,8 @@ void Vessel::ContactsResolved (const std::vector<contact::Point> &pts, int index
 	if (pre && index >= 0 && index < (int)pre->size()) vel_pre = (*pre)[index].v;
 }
 
+namespace { const double HIT_REPORT_SPEED = 0.5; } // [m/s] a blow named as such in break-up messages
+
 void Vessel::UpdateStructuralLoads ()
 {
 	if (!loads_on || destroyed) return;
@@ -5144,6 +5187,7 @@ void Vessel::UpdateStructuralLoads ()
 	const std::vector<structure::Part> &parts = sm.Parts();
 	size_t np = parts.size();
 	if (part_F.size() != np || part_Fc.size() != np || sm.Indestructible()) return;
+	if (part_lost.empty ()) DesignEngineLoads (false); // (engines whose thrust is set in flight)
 
 	// crushed by the pressure of a gas giant's deep atmosphere
 	if (proxyplanet && sp.is_in_atm) {
@@ -5265,8 +5309,15 @@ void Vessel::UpdateStructuralLoads ()
 		}
 		for (size_t j = 0; j < np; j++)
 			if (!PartLost ((int)j)) break_J[j] = tmul (s.R, dv[j]) * (parts[j].mass + (j == 0 ? mextra : 0.0));
-		char cbuf[128];
-		sprintf (cbuf, "broke up at %0.0f g (%s overloaded %0.1f\xC3\x97)", g, parts[worst].name.c_str(), coreMax);
+		// (a blow - another vessel, a building - named by its closing speed: the
+		// vessel as a whole hardly accelerates when a small part of it is hit)
+		double hit = 0.0;
+		for (double v : part_hit) hit = std::max (hit, v);
+		char cbuf[160];
+		if (hit > HIT_REPORT_SPEED && g < 10.0)
+			sprintf (cbuf, "broke up in an impact at %0.1f m/s (%s overloaded %0.1f\xC3\x97)", hit, parts[worst].name.c_str(), coreMax);
+		else
+			sprintf (cbuf, "broke up at %0.0f g (%s overloaded %0.1f\xC3\x97)", g, parts[worst].name.c_str(), coreMax);
 		Destroy (cbuf);
 		break_J.clear ();
 		return;
@@ -5279,11 +5330,15 @@ void Vessel::UpdateStructuralLoads ()
 		if (part_load[j] <= 1.0f) continue;
 		for (int k = parts[j].parent; k >= 0; k = parts[k].parent) L[k] -= L[j];
 		char cbuf[256], title[128];
-		sprintf (cbuf, "%s: %s broke off at %0.1f g", name.c_str(), parts[j].name.c_str(), g);
+		double hit = j < part_hit.size() ? part_hit[j] : 0.0;
+		bool blow = hit > HIT_REPORT_SPEED && g < 10.0;
+		if (blow) sprintf (cbuf, "%s: %s broke off in an impact at %0.1f m/s", name.c_str(), parts[j].name.c_str(), hit);
+		else sprintf (cbuf, "%s: %s broke off at %0.1f g", name.c_str(), parts[j].name.c_str(), g);
 		if (this == g_focusobj) {
 			snprintf (title, sizeof (title), "%s broke off", parts[j].name.c_str());
 			title[0] = (char)toupper ((unsigned char)title[0]);
-			snprintf (cbuf, sizeof (cbuf), "%s, under %0.1f g", name.c_str(), g);
+			if (blow) snprintf (cbuf, sizeof (cbuf), "%s, in an impact at %0.1f m/s", name.c_str(), hit);
+			else snprintf (cbuf, sizeof (cbuf), "%s, under %0.1f g", name.c_str(), g);
 			flightevent::Post (flightevent::WARNING, title, cbuf);
 		} else LOGOUT ("%s", cbuf);
 		Vector Jx (-L[j] * ((1.0 - parts[j].strength / L[j].length()) * hJ)); // (the impulse the joint did not pass on)
@@ -5470,11 +5525,11 @@ void Vessel::FollowWreck ()
 {
 	// (the ghost of a destroyed vessel moves with the largest piece of its
 	// wreck: what the focus vessel's instruments show)
-	if (wreck && !g_psys->isDebris (wreck)) wreck = nullptr;
+	if (wreck && (!g_psys->isDebris (wreck) || wreck->Diverged ())) wreck = nullptr;
 	if (!wreck) { // (e.g. read from a scenario: the largest piece of it)
 		for (size_t i = 0; i < g_psys->nDebris(); i++) {
 			Debris *d = g_psys->GetDebris (i);
-			if (d->Source() == name && (!wreck || d->Mass() > wreck->Mass())) wreck = d;
+			if (d->Source() == name && !d->Diverged () && (!wreck || d->Mass() > wreck->Mass())) wreck = d;
 		}
 	}
 	s1->Set (*s0);
@@ -5514,6 +5569,26 @@ void Vessel::UpdateDamageEffects ()
 	}
 	dmg.liftV = dmg.cs.y, dmg.refV = shift[1]; // (lift along y: the planform in the xz plane)
 	dmg.liftH = dmg.cs.x, dmg.refH = shift[0]; // (side force along x: the yz plane)
+}
+
+void Vessel::RecordModuleForce (const Vector &F, const Vector &r)
+{
+	if (part_F.empty () || !part_lost.empty ()) return; // (damage model off, or the structure frozen)
+	const structure::Model &sm = Structure ();
+	int part = sm.PartAt (r);
+	if (part <= 0) return; // (at the core: no joint carries it)
+	if (module_force.size () != sm.Parts ().size ()) module_force.assign (sm.Parts ().size (), {0,0,0,0,0,0});
+	for (int k = 0; k < 6; k++) {
+		double f = (k % 2 ? -1.0 : 1.0) * F.data[k/2];
+		if (f > module_force[part][k] * 1.01 + 0.1) module_force[part][k] = f, module_force_risen = true;
+	}
+}
+
+bool Vessel::ForceOnLostPart (const Vector &r) const
+{
+	if (part_lost.empty ()) return false;
+	int part = structure_.PartAt (r);
+	return part > 0 && PartLost (part);
 }
 
 bool Vessel::PartLost (int part) const
@@ -9062,6 +9137,11 @@ void VESSEL::SaveDefaultState (FILEHANDLE scn) const
 
 void VESSEL::AddForce (const VECTOR3 &F, const VECTOR3 &r) const
 {
+	// (a force the module applies at a point of a part broken off - a rotor
+	// on a lost arm - acts on the piece, not on what is left: dropped. The
+	// quadcopter's controller drove its armless body to divergence)
+	if (vessel->ForceOnLostPart (MakeVector (r))) return;
+	vessel->RecordModuleForce (MakeVector (F), MakeVector (r));
 	vessel->AddForce (MakeVector(F), MakeVector(r));
 }
 

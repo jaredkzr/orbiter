@@ -159,6 +159,20 @@ Base::Base (char *fname, Planet *_planet, double _lng, double _lat)
 				Orthodome (rwy[nrwy].lng1, rwy[nrwy].lat1, rwy[nrwy].lng2, rwy[nrwy].lat2, rwy[nrwy].length, rwy[nrwy].appr1);
 				rwy[nrwy].appr1 = posangle (rwy[nrwy].appr1);
 				rwy[nrwy].length *= cbody->Size();
+				{	// (the ground along it graded, overruns and shoulders too: no
+					// procedural relief on a runway, the data levelled to a plane
+					// along it - a runway kilometres from the base's centre lay
+					// on the detail's bumps, and broke up gliders taking off)
+					const double OVERRUN = 150.0, SHOULDER = 30.0, MINWIDTH = 45.0;
+					Vector mid ((p1 + p2) * 0.5);
+					Grade g;
+					g.x = mid.x, g.z = mid.z;
+					g.len = rwy[nrwy].length + 2.0 * OVERRUN;
+					g.wid = std::max (2.0 * prwy->width, MINWIDTH) + 2.0 * SHOULDER;
+					g.bearing = rwy[nrwy].appr1 * DEG;
+					g.plane = true, g.group = 0, g.level = true; // (sloping along it as the ground does, level across)
+					grades.push_back (g);
+				}
 				if (float freq = prwy->GetILSfreq(0)) {
 					navlist.AddNav (rwy[nrwy].ils1 = new Nav_ILS (this, rwy[nrwy].appr1, rwy[nrwy].lng1, rwy[nrwy].lat1, freq)); TRACENEW
 				}

@@ -107,6 +107,15 @@ void PropulsionSubsystem::clbkPreStep(double simt, double simdt, double mjd)
 {
 	QuadcopterSubsystem::clbkPreStep(simt, simdt, mjd);
 
+	// The flight controller acts once per time step: under time acceleration
+	// its corrections overshoot (3x already tips the drone over). Real time
+	// while it flies.
+	if (m_throttle > 0.0 && !QC()->GroundContact() && oapiGetTimeAcceleration() > 1.0 + 1e-6) {
+		oapiSetTimeAcceleration(1.0);
+		if (QC() == oapiGetFocusInterface())
+			oapiAddNotification(OAPINOTIF_WARNING, "Time acceleration off", "The quadcopter's flight controller needs real time while it flies");
+	}
+
 	// throttle/vspd command
 	if (m_vspdActive) {
 		HoldVspd(m_vspdCmd);

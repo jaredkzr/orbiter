@@ -33,6 +33,7 @@
 #include "DlgKeyHelp.h"
 #include "DlgMgr.h"
 #include "Psys.h"
+#include "Debris.h"
 #include "Base.h"
 #include "Vessel.h"
 #include "resource.h"
@@ -62,6 +63,7 @@
 #include "imgui_impl_win32.h"
 #endif
 #include <filesystem>
+#include <limits>
 
 // file of the MFD windows kept between sessions (ORBITER_MFD_WINDOWS: another
 // file, or 0: none)
@@ -1483,6 +1485,16 @@ void Orbiter::SetWarpFactor (double warp, bool force, double delay)
 	const double EPS = 1e-6;
 	if      (warp < MinWarpLimit) warp = MinWarpLimit;
 	else if (warp > MaxWarpLimit) warp = MaxWarpLimit;
+	if (warp > td.Warp() && warp > ATM_WARP_LIMIT) {
+		double lim = AtmWarpLimit ();
+		if (warp > lim) {
+			warp = std::max (lim, std::min (td.Warp(), warp));
+			char cbuf[64];
+			snprintf (cbuf, sizeof (cbuf), "%gx while flying in the atmosphere", lim);
+			flightevent::Post (flightevent::INFO, "Time acceleration limited", cbuf);
+			if (warp == td.Warp()) return;
+		}
+	}
 	if (fabs (warp-td.Warp()) > EPS) {
 		td.SetWarp (warp, delay);
 		if (td.WarpChanged()) ApplyWarpFactor();
@@ -1552,6 +1564,23 @@ void Orbiter::SetShipWarp (double warp)
 		sprintf (cbuf, "Ship-time warp set to %0.4g", shipWarp);
 		m_pConsole->Echo (cbuf);
 	}
+}
+
+double Orbiter::AtmWarpLimit () const
+{
+	const double NONE = std::numeric_limits<double>::infinity (); // (nothing in the air: no limit of its own)
+	if (!g_psys) return NONE;
+	auto flying = [](const VesselBase *v) {
+		const SurfParam *sp = v->SurfaceParams ();
+		return v->InFreeFlight () && sp && sp->is_in_atm && sp->dynp > ATM_WARP_DYNP;
+	};
+	for (DWORD i = 0; i < g_psys->nVessel(); i++) {
+		const Vessel *v = g_psys->GetVessel (i);
+		if (!v->Destroyed () && flying (v)) return ATM_WARP_LIMIT;
+	}
+	for (size_t i = 0; i < g_psys->nDebris(); i++)
+		if (flying (g_psys->GetDebris (i))) return ATM_WARP_LIMIT;
+	return NONE;
 }
 
 void Orbiter::CapWarp (double warp)
@@ -2216,6 +2245,16 @@ VOID Orbiter::UpdateWorld ()
 		if (bPlayback) FRecorder_Play();
 		g_psys->Update (g_bForceUpdate);           // logical objects
 		if (replay) replay->Record ();
+		// (something flying into the air at a time acceleration too high there)
+		if (td.Warp() > ATM_WARP_LIMIT && !(replay && replay->Active())) {
+			double lim = AtmWarpLimit ();
+			if (td.Warp() > lim) {
+				CapWarp (lim);
+				char cbuf[64];
+				snprintf (cbuf, sizeof (cbuf), "%gx while flying in the atmosphere", lim);
+				flightevent::Post (flightevent::INFO, "Time acceleration limited", cbuf);
+			}
+		}
 	}
 	if (replay && replay->Active()) replay->Update ();
 	if (pDlgMgr) pDlgMgr->UpdateDialogs(); // SHOULD BE DONE BY GRAPHICS CLIENT!

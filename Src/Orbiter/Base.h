@@ -75,7 +75,7 @@ public:
 	/// on a slope), blended back to the data's ground about it. Areas of one
 	/// group (> 0) share a level: the mean over all of them. Landing pads in
 	/// a level area take its level
-	struct Grade { double x, z, len, wid, bearing; bool plane; int group; };
+	struct Grade { double x, z, len, wid, bearing; bool plane; int group; bool level = false; }; // (level: across it, a runway)
 	const std::vector<Grade> &Grades () const { return grades; }
 
 	inline bool Floating() const { return floating; }

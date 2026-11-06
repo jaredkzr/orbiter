@@ -171,6 +171,15 @@ public:
 	double ShipWarp () const { return shipWarp; }
 
 	void CapWarp (double warp);
+	// Time acceleration while anything flies in an atmosphere: aerodynamic
+	// forces are evaluated once per step, so long steps in dense air are
+	// numerically unstable (a vessel tumbles up to the spin limit and, with
+	// damage on, breaks up). The limit (infinite if nothing flies there).
+	double AtmWarpLimit () const;
+	static constexpr double ATM_WARP_LIMIT = 10.0;   ///< time acceleration in the air
+	std::string relaunch;                            // (a scenario to launch as the session closes)
+	bool flightOverShown = false;                    // (the focus vessel's loss: the flight menu offered once)
+	static constexpr double ATM_WARP_DYNP = 1e3;     ///< [Pa] dynamic pressure from which it applies
 	// Lower the time acceleration (Orbiter's clock) to at most warp (a ship-
 	// time warp in proportion)
 

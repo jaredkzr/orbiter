@@ -78,6 +78,7 @@ namespace contact {
 		const double MAX_PUSHOUT = 2.0;     // [m/s] largest speed at which a penetrating point is pushed out
 		const double RIGID_BAUMGARTE = 0.2; // fraction of a rigid contact's penetration removed per step
 		const double RIGID_SLOP = 0.005;    // [m] penetration of a rigid contact left alone (no jitter)
+		const double REST_SPEED = 0.05;     // [m/s] closing speed below which a blow does not rebound (resting contact)
 	}
 
 	void Tangents (const Vector &n, const Vector &d, Vector &t1, Vector &t2)
@@ -98,7 +99,12 @@ namespace contact {
 		if (pts.empty() || h <= 0.0) return;
 		Solver S{bodies, P, L};
 
+		// (closing speeds before the step: blows with restitution)
+		std::vector<double> u0 (pts.size(), 0.0);
+		for (size_t i = 0; i < pts.size(); i++) if (pts[i].e > 0.0) u0[i] = dotp (S.RelVel (pts[i]), pts[i].n);
+		size_t ip = 0;
 		for (Point &p : pts) {
+			double ue = u0[ip++];
 			p.Kn = S.K (p, p.n);
 			p.K1 = S.K (p, p.t1);
 			p.K2 = S.K (p, p.t2);
@@ -120,6 +126,10 @@ namespace contact {
 				p.gamma = 0.0;
 				p.bias = 0.0;
 			}
+			// a blow (closing, reaching the surface within the step): rebounds
+			// at e times the closing speed - two spacecraft bumping part again
+			if (p.k <= 0.0 && p.e > 0.0 && ue < -REST_SPEED && ue * h + std::max (p.C, 0.0) < 0.0)
+				p.bias = p.e * ue;
 			p.pbias = (p.k > 0.0 || p.C > 0.0) ? 0.0 :
 				std::max (RIGID_BAUMGARTE * std::min (p.C + RIGID_SLOP, 0.0) / h, -MAX_PUSHOUT);
 			p.lp = 0.0;

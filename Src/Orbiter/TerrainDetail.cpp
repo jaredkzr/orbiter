@@ -395,7 +395,7 @@ void TerrainDetail::InitBases () const
 					}
 				g.g0 = se / (NS * NT);
 				g.gl = gr.plane && ss > 0.0 ? sse / ss : 0.0;
-				g.gw = gr.plane && tt > 0.0 ? tse / tt : 0.0;
+				g.gw = gr.plane && !gr.level && tt > 0.0 ? tse / tt : 0.0;
 				if (gr.group > 0) groupSum[gr.group].first += se, groupSum[gr.group].second += NS * NT, g.gl = g.gw = 0.0;
 				groupOf.push_back (gr.group);
 				fl.grades.push_back (g);

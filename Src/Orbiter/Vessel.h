@@ -1457,6 +1457,11 @@ protected:
 	bool IsComponent () const { return supervessel != 0 || attach; }
 	const VesselBase *GetSuperStructure () const;
 
+	/// Whether a point (vessel frame) lies on a part that broke off
+	bool ForceOnLostPart (const Vector &r) const;
+	/// A force a module applies (VESSEL::AddForce): the joints are made to carry it
+	void RecordModuleForce (const Vector &F, const Vector &r);
+
 	inline void AddForce (const Vector &F, const Vector &r)
 	{
 		Flin_add += F;
@@ -1779,6 +1784,13 @@ private:
 	mutable structure::Model structure_;
 	mutable unsigned structure_gen = (unsigned)-1; // (hull_gen it was made for)
 	mutable double structure_emass = -1.0;
+	mutable std::vector<double> structure_thrust; // (each thruster's thrust the joints were designed for)
+	std::vector<std::array<double,6>> module_force; // (the most force a module applied to each part along +-x,y,z: designed for too)
+	bool module_force_risen = false;
+	/// Design load cases of the engines firing together (all thrusters
+	/// pushing one way at full thrust), again when a thruster's thrust has
+	/// risen beyond what they were designed for (scramjets: set in flight)
+	void DesignEngineLoads (bool always) const;
 	std::vector<char> part_lost;                 // parts broken off (empty: none)
 	std::vector<std::pair<double,int>> lost_log; // when each part broke off [s simulation time] (instant replay)
 	double lost_mass = 0.0;                      // [kg] their mass

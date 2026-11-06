@@ -13,6 +13,7 @@
 // Hierarchy:  Body --> RigidBody
 // =======================================================================
 
+#include <cmath>
 #include "Orbiter.h"
 #include "Rigidbody.h"
 #include "Celbody.h"
@@ -327,6 +328,21 @@ void RigidBody::Update (bool force)
 				vmag = vmag_max;
 			}
 			arot.Set(0,0,0);
+		}
+
+		// (a state gone non-finite - a numerical runaway: the step undone, at
+		// rest relative to the start of it, rather than NaN spreading to
+		// everything near it)
+		auto bad = [](const Vector &v) { return !std::isfinite (v.x) || !std::isfinite (v.y) || !std::isfinite (v.z); };
+		if (bad (s1->pos) || bad (s1->vel) || bad (s1->omega)) {
+			static int nlog = 0;
+			if (nlog++ < 10) LOGOUT_WARN ("%s: the state diverged; the step is undone", Name());
+			s1->Set (*s0);
+			s1->omega.Set (0,0,0);
+			rpos_base = s1->pos, rpos_add.Set (0,0,0);
+			rvel_base = s1->vel, rvel_add.Set (0,0,0);
+			arot.Set (0,0,0);
+			el_valid = false;
 		}
 	}
 	Body::Update (force);

@@ -129,6 +129,10 @@ public:
 	inline double Altitude() const
 	{ return sp.alt; }
 
+	/// Flying freely (not landed, not docked into another)
+	inline bool InFreeFlight () const
+	{ return fstatus == FLIGHTSTATUS_FREEFLIGHT; }
+
 	inline bool GroundContact() const
 	{ return bSurfaceContact; }
 

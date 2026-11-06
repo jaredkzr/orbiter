@@ -42,6 +42,7 @@ namespace contact {
 		double C;           ///< separation at the start of the step (< 0: penetration) [m]
 		double k, c;        ///< stiffness [N/m], damping [N s/m] (k = 0: rigid)
 		double mu1, mu2;    ///< friction coefficients along t1, t2
+		double e = 0.0;     ///< restitution of a blow (rigid contacts closing faster than REST_SPEED)
 		double *warm;       ///< impulses of the previous step (normal, t1, t2), for warm starting (or null)
 
 		// (solver)

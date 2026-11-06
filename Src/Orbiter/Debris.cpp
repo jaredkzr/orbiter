@@ -34,6 +34,8 @@ namespace {
 	// its turning by at most MAX_DOMEGA [rad/s] (stiff for light pieces)
 	const double MAX_DV = 0.5;
 	const double MAX_DOMEGA = 1.0;
+	// [rad/s] the fastest a piece tumbles
+	const double MAX_SPIN = 50.0;
 	const double FRICTION = 0.6;    // with the ground
 	const double REST_SPEED = 0.05; // [m/s] slower than this (and turning slower than REST_OMEGA) ...
 	const double REST_OMEGA = 0.02; // [rad/s]
@@ -299,6 +301,21 @@ void Debris::Update (bool force)
 {
 	if (fstatus == FLIGHTSTATUS_FREEFLIGHT) {
 		RigidBody::Update (force);
+		// (a piece tumbles at most at MAX_SPIN: faster is the inheritance of
+		// a numerical runaway, and its long steps diverge)
+		double w = s1->omega.length ();
+		if (w > MAX_SPIN) s1->omega *= MAX_SPIN / w;
+		// (a state gone non-finite: the step undone, the piece taken away at
+		// the end of the step; a NaN position passes every proximity test
+		// and buries the contact solver in the hulls of every base)
+		auto bad = [](const Vector &v) { return !std::isfinite (v.x) || !std::isfinite (v.y) || !std::isfinite (v.z); };
+		if (bad (s1->pos) || bad (s1->vel) || bad (s1->omega)) {
+			s1->Set (*s0);
+			if (bad (s1->pos) || bad (s1->vel)) s1->pos = s0->pos, s1->vel.Set (0,0,0); // (s0 too: at least finite numbers)
+			s1->omega.Set (0,0,0);
+			if (!diverged) LOGOUT ("Debris of %s: its state diverged; removed", source.c_str());
+			diverged = true;
+		}
 	} else if (fstatus == FLIGHTSTATUS_LANDED && proxyplanet) {
 		SetRestState ();
 		if (wake) { // (hit: moving again)

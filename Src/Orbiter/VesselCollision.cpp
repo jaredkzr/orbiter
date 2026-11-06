@@ -21,6 +21,8 @@ namespace {
 	const double PORT_RANGE = 5.0;      // [m]
 	const double PORT_OFFSET = 1.0;     // [m]
 	const double PORT_CLEARANCE = 1.5;  // [m]
+	const double PORT_FACE_R = 1.0;     // [m] radius of a docking port's face (refused: the faces meet)
+	const double RESTITUTION = 0.3;     // vessels bumping into each other part again (not at rest on each other)
 	// a piece broken off a vessel, not apart from it after SETTLE_T [s],
 	// moving slower than SETTLE_V [m/s] against it: pushed out of it at
 	// PUSH_OUT [m/s] at most
@@ -73,6 +75,8 @@ void VesselCollider::Begin (const std::vector<VesselBase*> &bodies, double h)
 		if (!dyn && v->fstatus != FLIGHTSTATUS_LANDED) continue;
 		double r = v->CollisionRadius();
 		if (r < 0.0) continue;
+		const Vector &p = v->s0->pos;
+		if (!std::isfinite (p.x) || !std::isfinite (p.y) || !std::isfinite (p.z)) continue; // (a state gone bad: near nothing)
 		cand.push_back ({v, r, dyn});
 	}
 
@@ -103,8 +107,9 @@ void VesselCollider::Begin (const std::vector<VesselBase*> &bodies, double h)
 			double reach = c.r + c.v->GVel().dist (b->GVel())*h + 0.1;
 			if (reach - c.r > VesselBase::OBSTACLE_REACH) continue; // (a step this long can't resolve structures: as Vessel's obstacles)
 			// (cheap test with the base's size first: its hulls are made when first needed)
-			if (c.v->s0->pos.dist (b->GPos()) > b->Size() + 2e3 + reach) continue;
-			if (b->CollisionHulls().empty() || c.v->s0->pos.dist (b->GPos()) > b->CollisionRadius() + reach) continue;
+			// (written so that a NaN distance fails: it would pair the vessel with every base)
+			if (!(c.v->s0->pos.dist (b->GPos()) <= b->Size() + 2e3 + reach)) continue;
+			if (b->CollisionHulls().empty() || !(c.v->s0->pos.dist (b->GPos()) <= b->CollisionRadius() + reach)) continue;
 			basePairs.push_back ({c.v, b});
 			if (std::find (dynamic.begin(), dynamic.end(), c.v) == dynamic.end()) {
 				dynamic.push_back (c.v);
@@ -208,6 +213,7 @@ void VesselCollider::Resolve (double h)
 				p.C = rel ? std::max (mf.sep[k], -PUSH_OUT * h) : mf.sep[k]; // (a piece settled in its vessel: slowly out)
 				p.k = p.c = 0.0;
 				p.mu1 = p.mu2 = FRICTION;
+				p.e = rel ? 0.0 : RESTITUTION;
 				p.warm = nullptr;
 				if (dynX) {
 					p.a = index[X], p.ra = g - cgX, p.n = mf.n;   // (out of y, towards x)
@@ -227,6 +233,40 @@ void VesselCollider::Resolve (double h)
 			for (const auto &y : hb)
 				Test (A, x, dynA, cgA, B, y, dynB, cgB);
 		if (rel && !touching) rel->clear = true; // (apart: they collide from now on)
+
+		// (two ports facing each other, docking refused - too fast, askew: their
+		// faces meet. The hulls of a docking ring and an adapter leave room for
+		// one in the other - for docking - and a refused glider slid on into
+		// the station through the port)
+		for (const collision::Port &pp : pa)
+			for (const collision::Port &qq : pb) {
+				Vector d (qq.pos - pp.pos);
+				if (d.length() > PORT_RANGE || dotp (pp.dir, qq.dir) > -0.5) continue;
+				if (!collision::DockCapture (pp, qq, PORT_OFFSET)) continue; // (docking: no contact)
+				double sep = dotp (d, pp.dir);                       // (along A's port axis: < 0 into each other)
+				double off = (d - pp.dir * sep).length();
+				if (off > PORT_FACE_R || sep > margin + collision::SKIN) continue;
+				if (!dynA && !dynB) continue;
+				Vector g ((pp.pos + qq.pos) * 0.5 - O);
+				contact::Point p;
+				p.C = sep;
+				p.k = p.c = 0.0;
+				p.mu1 = p.mu2 = FRICTION;
+				p.e = RESTITUTION;
+				p.warm = nullptr;
+				if (dynA) {
+					p.a = index[A], p.ra = g - cgA, p.n = -pp.dir; // (out of B, towards A)
+					if (dynB) p.b = index[B], p.rb = g - cgB;
+					else      p.b = -1, p.vs = LandedVel (B, g + O);
+				} else {
+					p.a = index[B], p.ra = g - cgB, p.n = pp.dir;
+					p.b = -1, p.vs = LandedVel (A, g + O);
+				}
+				contact::Tangents (p.n, Vector(1,0,0), p.t1, p.t2);
+				owner.resize (pts.size(), nullptr);
+				pts.push_back (p);
+				owner.push_back (!dynA ? A : !dynB ? B : nullptr);
+			}
 	}
 
 	// contacts with base structures (fixed to the turning ground)
