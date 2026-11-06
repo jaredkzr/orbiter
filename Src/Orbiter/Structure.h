@@ -41,6 +41,7 @@ namespace structure {
 	const double G0 = 9.81;              ///< [m/s^2] standard gravity (load factors)
 	const double LOADFACTOR = 6.0;       ///< design load factor [g], by default
 	const double SAFETY = 1.5;           ///< safety factor, by default
+	const double LANDING_LF = 3.0;       ///< [g] design landing on the gear, by default
 	const double STRENGTH_SPREAD = 0.1;  ///< joints' strengths vary by up to this fraction
 	const double CRUSH_STROKE = 0.3;     ///< [m] rigid impacts decelerate the structure over this distance
 	const double CORE_FACTOR = 3.0;      ///< a joint at the core part loaded beyond this times its strength: the vessel breaks up
@@ -75,6 +76,8 @@ namespace structure {
 	struct ClassConfig {
 		double loadFactor = LOADFACTOR;
 		double safety = SAFETY;
+		double landingLoad = LANDING_LF; ///< [g] design landing on the gear (0: never lands, a station)
+		double strength = 0.0;       ///< [N] least strength of a joint not given its own (0: from the design load cases alone)
 		int nparts = 0;              ///< number of automatic parts (0: from the vessel's size)
 		bool indestructible = false;
 		double crushPressure = 0.0;  ///< [Pa] external pressure the vessel withstands (0: the planet's GGCrushPressure)
@@ -86,6 +89,8 @@ namespace structure {
 			std::vector<std::pair<int,int>> groups; ///< GROUPS mesh:group: hulls mostly made of these
 			double loadFactor = 0.0;     ///< (0: the class's)
 			double strength = 0.0;       ///< [N] (0: from the load factor)
+			double mass = 0.0;           ///< [kg] (0: its share of the empty mass by area)
+			bool leaf = false;           ///< nothing hangs from it (an array wing between modules)
 		};
 		std::vector<Named> parts;
 		bool found = false;
@@ -122,6 +127,7 @@ namespace structure {
 
 		double LoadFactor () const { return loadFactor; } ///< [g] the class's design load factor
 		double Safety () const { return safety; }
+		double LandingLoad () const { return landingLoad; } ///< [g] design landing on the gear (0: none)
 
 		/// The part nearest to p (vessel frame; -1 if none)
 		int PartAt (const Vector &p) const;
@@ -148,7 +154,7 @@ namespace structure {
 		double cellSize = 0.0;
 		bool indestructible = false;
 		double crushPressure = 0.0;
-		double loadFactor = LOADFACTOR, safety = SAFETY;
+		double loadFactor = LOADFACTOR, safety = SAFETY, landingLoad = LANDING_LF;
 		double maxTemp = MAXTEMP;
 	};
 

@@ -21,7 +21,8 @@ symmetric parts do not fail together):
   - aerodynamic forces at the design load factor along each axis (shared
     by the parts' projected areas: wings carry their lift),
   - each group of engines (main, retro, hover) at full thrust,
-  - landing at 3 g on the gear (the first three touchdown points).
+  - landing at 3 g on the gear (the first three touchdown points; a
+    station, which never lands, leaves this out: LANDINGLOAD 0).
 
 In flight (damage model on), each step the forces on each part (thrust on
 the engines' parts, aerodynamic forces by projected area, control
@@ -45,6 +46,8 @@ A file named after the vessel class overrides the defaults:
 
     LOADFACTOR 12        ; design load factor [g] (default 6)
     SAFETY 1.5           ; safety factor (default 1.5)
+    LANDINGLOAD 3        ; [g] design landing on the gear (default 3; 0: none)
+    STRENGTH 3.5e5       ; [N] least strength of a joint (default: from the load cases alone)
     PARTS 16             ; number of automatic parts (default: from the size)
     INDESTRUCTIBLE       ; the class never breaks up
     MAXTEMP 1800         ; [K] skin temperature at which a part fails (default 1800)
@@ -53,10 +56,21 @@ A file named after the vessel class overrides the defaults:
 Parts can be given explicitly (before the automatic ones are made from the
 rest), by a box in the vessel frame [m] or by mesh groups (mesh:group,
 indices from 0), optionally with their own load factor or a joint strength
-[N]:
+[N]. A part's name is one word; an underscore in it stands for a space:
 
-    PART LeftWing BOX -9 -1 -8  -3 1 0  LOADFACTOR 9
+    PART left_wing BOX -9 -1 -8  -3 1 0  LOADFACTOR 9
     PART Gear GROUPS 0:12 0:13 STRENGTH 2e5
+
+and a mass of its own [kg] (the rest of the empty mass is shared out by
+area among the other parts as before), for parts much lighter or heavier
+than their area suggests, such as large solar arrays:
+
+    PART left_array BOX -60 -4 4  -26 1 40  MASS 1100 STRENGTH 5e4 LEAF
+
+LEAF: nothing hangs from the part (the parts form a tree outward from the
+core, each hanging from the one it touches nearest the core; a module
+beyond an array wing should hang from the module next to it, not from the
+wing).
 
 The parts of a vessel can be listed with VESSEL::GetPartCount and
 GetPartInfo (in Lua vessel:get_partcount, get_partinfo: also the load of

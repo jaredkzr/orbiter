@@ -4800,11 +4800,11 @@ const structure::Model &Vessel::Structure () const
 	// design load cases of the vessel's own forces: the joints carry them
 	// at the design load factor (aerodynamic forces along each axis, shared
 	// by the parts' projected areas), each group of engines at full thrust,
-	// and landing at LANDING_LF on the gear
+	// and landing on the gear at the class's landing load (none for a station)
 	const std::vector<structure::Part> &parts = structure_.Parts();
 	size_t np = parts.size();
 	if (np > 1) {
-		const double LANDING_LF = 3.0;
+		const double LANDING_LF = structure_.LandingLoad();
 		double M = std::max (mass, emass), extra = M - emass;
 		double n = structure_.LoadFactor() * structure::G0;
 		Vector A;
@@ -4828,7 +4828,7 @@ const structure::Model &Vessel::Structure () const
 			}
 			if (Ft.length2() > 0.0) structure_.DesignCase (F, Ft / M, extra);
 		}
-		if (ntouchdown_vtx >= 3) {
+		if (ntouchdown_vtx >= 3 && LANDING_LF > 0.0) {
 			// static reactions of the gear (three points, centre of gravity at the origin)
 			const Vector *t[3] = { &touchdown_vtx[0].pos, &touchdown_vtx[1].pos, &touchdown_vtx[2].pos };
 			double det = t[0]->x*(t[1]->z - t[2]->z) - t[1]->x*(t[0]->z - t[2]->z) + t[2]->x*(t[0]->z - t[1]->z);
@@ -5066,18 +5066,42 @@ void Vessel::ContactsResolved (const std::vector<contact::Point> &pts, int index
 	// Impacts are taken to decelerate the structure over a crush stroke
 	// (or the gear's stroke) rather than within the step (the contacts stop
 	// it within a step or two, whatever its length); the part of their
-	// impulse that supports the vessel's weight is kept.
+	// impulse that supports the vessel's weight on the ground is kept. (Only
+	// there: in free fall - another vessel touched in orbit - no weight is
+	// supported, and a bump is all crush stroke.) The stroke is shared by
+	// the two bodies: what decelerates over it is their relative motion, of
+	// their reduced mass (a glider striking a station's array feels the
+	// same force as the array, not one scaled down by the whole station's
+	// mass); against the ground, the vessel's own mass. Against another
+	// vessel the blow is the closing speed at the point of contact brought
+	// to rest over the stroke, F = m v^2 / 2s, even where the solver takes
+	// the step's share of it over several steps (a thin array plate): not
+	// only the change of velocity within the step.
 	Vector Jr;
+	bool grounded = false;
+	double wsum = 0.0, wim = 0.0, Fblow = 0.0;
 	for (const contact::Point &p : pts) {
 		if (p.a != index && p.b != index) continue;
 		Vector J (p.n*p.ln + p.t1*p.l1 + p.t2*p.l2);
 		Jr += (p.a == index ? J : -J);
+		int o = p.a == index ? p.b : p.a;
+		if (o < 0 && (p.ln || p.l1 || p.l2)) grounded = true;
+		double w = J.length(), im = 1.0 / mass;
+		if (o >= 0 && pre && o < (int)pre->size() && (*pre)[o].mass > 0.0) {
+			im += 1.0 / (*pre)[o].mass;
+			if (p.a >= 0 && p.b >= 0 && p.a < (int)pre->size() && p.b < (int)pre->size() && w > 0.0) {
+				const contact::Body &A = (*pre)[p.a], &B = (*pre)[p.b];
+				double vn = -dotp (A.v + crossp (p.ra, A.w) - B.v - crossp (p.rb, B.w), p.n); // (closing: > 0)
+				if (vn > 0.0) Fblow = std::max (Fblow, vn * vn / (2.0 * structure::CRUSH_STROKE * im));
+			}
+		}
+		wsum += w, wim += w * im;
 	}
 	double J = Jr.length(), sr = 1.0;
 	if (J > 0.0) {
-		double g = proxybody ? Ggrav * proxybody->Mass() / std::max (s0->pos.dist2 (proxybody->GPos()), 1.0) : 0.0;
-		double dv = J / mass;
-		sr = std::min (1.0, std::max (h * dv / (2.0 * structure::CRUSH_STROKE), mass * g * h / J));
+		double g = grounded && proxybody ? Ggrav * proxybody->Mass() / std::max (s0->pos.dist2 (proxybody->GPos()), 1.0) : 0.0;
+		double dv = J * (wsum > 0.0 ? wim / wsum : 1.0 / mass);
+		sr = std::min (1.0, std::max ({h * dv / (2.0 * structure::CRUSH_STROKE), mass * g * h / J, Fblow * h / J}));
 	}
 	contact_sr = std::min (contact_sr, sr);
 	const structure::Model &sm = structure_;

@@ -53,15 +53,18 @@ namespace structure {
 			if (!(ss >> tok)) continue;
 			if (tok == "LOADFACTOR") ss >> cfg.loadFactor;
 			else if (tok == "SAFETY") ss >> cfg.safety;
+			else if (tok == "LANDINGLOAD") ss >> cfg.landingLoad;
+			else if (tok == "STRENGTH") ss >> cfg.strength;
 			else if (tok == "PARTS") ss >> cfg.nparts;
 			else if (tok == "INDESTRUCTIBLE") cfg.indestructible = true;
 			else if (tok == "CRUSHPRESSURE") ss >> cfg.crushPressure;
 			else if (tok == "MAXTEMP") ss >> cfg.maxTemp;
 			else if (tok == "PART") {
-				// PART <name> BOX x0 y0 z0 x1 y1 z1 [LOADFACTOR g] [STRENGTH N]
-				// PART <name> GROUPS m:g m:g ... [LOADFACTOR g] [STRENGTH N]
+				// PART <name> BOX x0 y0 z0 x1 y1 z1 [LOADFACTOR g] [STRENGTH N] [MASS kg] [LEAF]
+				// PART <name> GROUPS m:g m:g ... [LOADFACTOR g] [STRENGTH N] [MASS kg] [LEAF]
 				ClassConfig::Named np;
 				ss >> np.name;
+				std::replace (np.name.begin(), np.name.end(), '_', ' '); // (names are one word: _ for spaces)
 				std::string kw;
 				while (ss >> kw) {
 					if (kw == "BOX") {
@@ -79,8 +82,12 @@ namespace structure {
 						}
 						if (kw == "LOADFACTOR") ss >> np.loadFactor;
 						else if (kw == "STRENGTH") ss >> np.strength;
-					} else if (kw == "LOADFACTOR") ss >> np.loadFactor;
+						else if (kw == "MASS") ss >> np.mass;
+						else if (kw == "LEAF") np.leaf = true;
+					} else if (kw == "LEAF") np.leaf = true;
+					else if (kw == "LOADFACTOR") ss >> np.loadFactor;
 					else if (kw == "STRENGTH") ss >> np.strength;
+					else if (kw == "MASS") ss >> np.mass;
 				}
 				if (!np.name.empty() && (np.box || !np.groups.empty())) cfg.parts.push_back (np);
 			}
@@ -138,7 +145,7 @@ namespace structure {
 		triCell.clear();
 		cellNbr.clear();
 		crushPressure = cfg.crushPressure;
-		loadFactor = cfg.loadFactor, safety = cfg.safety;
+		loadFactor = cfg.loadFactor, safety = cfg.safety, landingLoad = cfg.landingLoad;
 		maxTemp = cfg.maxTemp;
 		hullPart.assign (hulls.size(), 0);
 		triPart.assign (tris.size(), 0);
@@ -414,7 +421,10 @@ namespace structure {
 
 		// tree: each part hangs from a part it touches that is one step
 		// nearer the core (the one it touches most); parts touching none of
-		// those hang from the nearest part (by centre) already in the tree
+		// those hang from the nearest part (by centre) already in the tree.
+		// Nothing hangs from a leaf (a solar array between two modules: the
+		// outer module hangs from the inner one, not from the array).
+		auto leaf = [&](int l) { return labOf[l] < (int)cfg.parts.size() && cfg.parts[labOf[l]].leaf; };
 		std::vector<int> par (np, -1);
 		std::vector<bool> in (np, false);
 		in[core] = true;
@@ -425,6 +435,7 @@ namespace structure {
 			std::map<int,std::pair<int,int>> best; // part -> (links, parent)
 			for (int a : front)
 				for (const auto &l : link[a]) {
+					if (leaf (a)) break;
 					if (in[l.first]) continue;
 					auto it = best.find (l.first);
 					if (it == best.end() || l.second > it->second.first) best[l.first] = {l.second, a};
@@ -437,7 +448,7 @@ namespace structure {
 				int ba = -1, bb = -1;
 				double bd = 1e30;
 				for (int a = 0; a < np; a++) {
-					if (!in[a]) continue;
+					if (!in[a] || (leaf (a) && a != core)) continue;
 					for (int b = 0; b < np; b++)
 						if (!in[b] && (lp[a] - lp[b]).length() < bd) bd = (lp[a] - lp[b]).length(), ba = a, bb = b;
 				}
@@ -549,6 +560,23 @@ namespace structure {
 			if (n > 1) pt.name += " " + std::to_string (n);
 		}
 
+		// named parts with a mass of their own (light solar arrays on a
+		// heavy station): the rest of the empty mass shared by area as before
+		{
+			double fixedMass = 0.0, freeMass = 0.0;
+			for (int i = 0; i < np; i++) {
+				if (namedOf[i] >= 0 && cfg.parts[namedOf[i]].mass > 0.0) fixedMass += cfg.parts[namedOf[i]].mass;
+				else freeMass += parts[i].mass;
+			}
+			if (fixedMass > 0.0 && fixedMass < emass && freeMass > 0.0) {
+				double scale = (emass - fixedMass) / freeMass;
+				for (int i = 0; i < np; i++) {
+					if (namedOf[i] >= 0 && cfg.parts[namedOf[i]].mass > 0.0) parts[i].mass = cfg.parts[namedOf[i]].mass;
+					else parts[i].mass *= scale;
+				}
+			}
+		}
+
 		// joints
 		for (int i = np - 1; i >= 0; i--) {
 			parts[i].subtreeMass += parts[i].mass;
@@ -564,6 +592,8 @@ namespace structure {
 			pt.strength = pt.loadFactor * cfg.safety * G0 * pt.subtreeMass * pt.spread;
 			if (namedOf[i] >= 0 && cfg.parts[namedOf[i]].strength > 0.0)
 				pt.strength = cfg.parts[namedOf[i]].strength, pt.fixed = true;
+			else if (cfg.strength > 0.0) // (the class's: at least this, still varied a little - inner joints carry more)
+				pt.strength = std::max (pt.strength, cfg.strength * pt.spread);
 		}
 	}
 
