@@ -256,7 +256,8 @@ private:
 	// grids for larger particles (each D, C, R, G, B, sun share, core: smokevol.glsl VA_*), the resolved volume, its core, the columns
 	// with smoke, the smoke in front of each froxel (sprites fogged), the
 	// column tiles with smoke (two frames), the half-resolution march
-	vkc::Image volAccum[7], volMid[7], volCoarse[7], lvlL[2], lvlD[2], volOut, volCore, volColumns, volInteg;
+	vkc::Image volAccum[8], volMid[8], volCoarse[8], lvlL[2], lvlD[2], volOut, volCore, volColumns, volInteg;
+	vkc::Image volOccl, occl; // the fine grid's extinction at the half resolution (accumulator, floats): the local lights' occlusion
 	vkc::Image volDummy;                 // (the sprites' fog while there is no volume: none)
 	vkc::Buffer volOcc;
 	vkc::Image march[3];                 // near, far, depths (half resolution)

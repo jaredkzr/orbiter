@@ -13,6 +13,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "frame.glsl"
+#include "lights.glsl"
 #define PARTICLE_NO_POOL
 #define PARTICLE_WIND_SET 1 // (streaks relative to the air)
 #define PARTICLE_WIND_QUAL readonly
@@ -43,6 +44,8 @@ layout(location = 5) out vec3 vAmb;     // ambient and local light
 layout(location = 6) out vec4 vMisc;    // sprite rotation (cos, sin), seed, age fraction
 layout(location = 7) flat out uint vInfo; // the ring's (ringInfo)
 layout(location = 8) flat out uint vFlags; // the particle's (PF_*, class)
+layout(location = 9) out vec3 vLoc;     // the local lights' light from one direction (lit puffs: shaded by it)
+layout(location = 10) out vec3 vLocDir; //   that direction (view space)
 
 uint Hash (uint x)
 {
@@ -147,7 +150,8 @@ void main ()
 		// emissive: its tint (albedo when tinted), a flame's colour cooling
 		// over its life (PF_RAMP)
 		vColor = vec4 ((flags & PF_RAMP) != 0u ? ParticleRamp (tl, ParticleClass (flags), albedo) : albedo, a);
-		vSun = vAmb = vec3 (0.0);
+		vSun = vAmb = vLoc = vec3 (0.0);
+		vLocDir = vec3 (0.0, 0.0, -1.0);
 		return;
 	}
 	// forward scattering of sunlight (stronger through thin smoke)
@@ -166,20 +170,27 @@ void main ()
 		vSun = light * (0.05 + 1.1 * face * face + 6.0 * pow (s, 40.0));
 		ambScale = 0.3 + face;
 	}
-	vec3 amb = frame.ambient.rgb;
-	// local lights (engine plumes): scattered in all directions, unshadowed
+	vec3 amb = frame.ambient.rgb * frame.ambient.w; // (the night side: a fraction)
+	// local lights (engine plumes, floodlights): unshadowed; from their
+	// direction as far as they share one (the puffs' billows facing the
+	// flames lit, at night the cloud's side towards them), the rest from all
+	// about
+	vec3 loc = vec3 (0.0), ldir = vec3 (0.0);
+	float lsum = 0.0;
 	int nl = int (frame.lightCount.x);
 	for (int k = 0; k < nl; k++) {
 		LocalLight l = frame.lights[k];
 		if (l.dir.w > 2.5) { amb += l.col.rgb * 0.8; continue; } // (a star: from afar)
-		float d = length (l.pos.xyz - vp);
-		if (d > l.pos.w) continue;
-		float la = min (1.0 / max (l.att.x + l.att.y * d + l.att.z * d * d, 1e-4), 1.0);
-		float x = clamp (1.0 - pow (d / l.pos.w, 4.0), 0.0, 1.0);
-		la *= x * x;
-		if (l.dir.w > 1.5) la *= smoothstep (l.spot.x, l.att.w, dot (normalize (vp - l.pos.xyz), l.dir.xyz));
-		amb += l.col.rgb * (0.8 * la);
+		float la = LightReach (l, vp);
+		if (la <= 0.0) continue;
+		vec3 e = l.col.rgb * (0.8 * la);
+		float el = dot (e, vec3 (0.2126, 0.7152, 0.0722));
+		loc += e, lsum += el;
+		ldir += normalize (l.pos.xyz - vp) * el;
 	}
-	vAmb = amb * ambScale;
+	float dl = length (ldir), frac = lsum > 0.0 ? dl / lsum : 0.0;
+	vAmb = (amb + loc * (1.0 - frac)) * ambScale;
+	vLoc = loc * frac * ambScale;
+	vLocDir = dl > 0.0 ? ldir / dl : vec3 (0.0, 0.0, -1.0);
 	vColor = vec4 (albedo, a);
 }

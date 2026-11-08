@@ -28,7 +28,15 @@ A file <vessel class>.cfg in this folder overrides this per exhaust:
                      solid, rcs, coldgas, or texture (keep the add-on's flame texture)
          SCALE       size factor (nozzle radius and length)
          LENGTH      length factor
-         BRIGHTNESS  brightness factor
+         BRIGHTNESS  brightness factor (of the flame drawn and of the light
+                     it casts)
+
+The light a flame casts on the vessel, the ground and the smoke has the
+class's radiance, far above the drawn one (at full thrust in sea-level air,
+in units of a sunlit white surface: solid 300, kerolox 150, hypergolic 60,
+methalox 40, rcs 30, hydrolox 20; ion and plasma as drawn; coldgas none):
+at night a launch lights the ground for kilometres. It is set per class,
+not per vessel (BRIGHTNESS scales it with the flame).
 
 For the whole class:
 

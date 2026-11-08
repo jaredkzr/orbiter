@@ -26,6 +26,7 @@ layout(location = 5) in vec3 vAmb;
 layout(location = 6) in vec4 vMisc;
 layout(location = 7) flat in uint vInfo; // (unused)
 layout(location = 8) flat in uint vFlags; // (unused)
+layout(location = 9) in vec3 vLoc;         // (the local lights' directional part: here from all about)
 
 layout(location = 0) out vec4 outAccum;
 
@@ -40,6 +41,6 @@ void main ()
 	float zs = texelFetch (prepass, ivec2 (full), 0).w;
 	if (zs > 0.0) th *= clamp ((zs - vPosView.z) / max (0.6 * vSize, 0.05), 0.0, 1.0);
 	if (th <= 1e-4) discard;
-	vec3 c = vColor.rgb * (vSun + vAmb);
+	vec3 c = vColor.rgb * (vSun + vAmb + vLoc);
 	outAccum = vec4 (c * th, th);
 }

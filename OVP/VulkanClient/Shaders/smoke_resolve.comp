@@ -10,7 +10,9 @@
 // particles) into floats, added in by pass 0 at each froxel. Pass 0: one workgroup per tile of
 // 8 x 8 columns, only the tiles with smoke this frame or the last one (or
 // all: pc.vol.z bit 0): the others hold no smoke and were left empty. The
-// accumulators are cleared as they are read (no clear pass)
+// accumulators are cleared as they are read (no clear pass). The local
+// lights (engine plumes, floodlights) light each froxel with smoke there,
+// through the smoke between (LocalLightAt)
 
 #version 450
 #extension GL_GOOGLE_include_directive : require
@@ -19,6 +21,7 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 #include "particle_common.glsl"
 #include "smokevol.glsl"
+#include "lights.glsl"
 layout(set = 0, binding = 11, r32ui) uniform uimage3D volFine[VA_COUNT];
 layout(set = 0, binding = 26, r32ui) uniform uimage3D volMid[VA_COUNT];
 layout(set = 0, binding = 29, r32ui) uniform uimage3D volCoarse[VA_COUNT];
@@ -26,26 +29,93 @@ layout(set = 0, binding = 15, rgba16f) uniform writeonly image3D volOut;
 layout(set = 0, binding = 16, rg16f) uniform writeonly image2D volColumns; // smoke from, to (slice fractions; from > to: none)
 layout(set = 0, binding = 24, rgba16f) uniform writeonly image3D volInteg;  // light in front (rgb), transmittance (a), at each slice's middle
 layout(set = 0, binding = 31, rgba16f) uniform writeonly image3D lvlL[2];   // mid, coarse: light x coverage (rgb), coverage
-layout(set = 0, binding = 32, rgba16f) uniform writeonly image3D lvlD[2];   //   extinction, sun share x coverage, core
+layout(set = 0, binding = 32, rgba16f) uniform writeonly image3D lvlD[2];   //   extinction, sun share x coverage, core, albedo x coverage
 layout(set = 0, binding = 33) uniform sampler3D lvlLTex[2];
 layout(set = 0, binding = 34) uniform sampler3D lvlDTex[2];
 layout(set = 0, binding = 35, r8) uniform writeonly image3D volCore;      // the core (VolCore)
 layout(set = 0, binding = 37, std430) buffer VolOcc { uint volOcc[]; };
+// the fine grid's particles' extinction at the half resolution (smoke_splat.comp),
+// into floats (pass 1, cleared), for the local lights' occlusion
+layout(set = 0, binding = 45, r32ui) uniform uimage3D volOccl;
+layout(set = 0, binding = 46, r16f) uniform writeonly image3D occlOut;
+layout(set = 0, binding = 47) uniform sampler3D occlTex;
 
 // (the accumulators' images by constant indices: no dynamic indexing)
-#define LOAD7(img, q, u) u[0] = imageLoad (img[0], q).r, u[1] = imageLoad (img[1], q).r, u[2] = imageLoad (img[2], q).r, \
-	u[3] = imageLoad (img[3], q).r, u[4] = imageLoad (img[4], q).r, u[5] = imageLoad (img[5], q).r, u[6] = imageLoad (img[6], q).r
-#define CLEAR7(img, q) imageStore (img[0], q, uvec4 (0u)), imageStore (img[1], q, uvec4 (0u)), imageStore (img[2], q, uvec4 (0u)), \
-	imageStore (img[3], q, uvec4 (0u)), imageStore (img[4], q, uvec4 (0u)), imageStore (img[5], q, uvec4 (0u)), imageStore (img[6], q, uvec4 (0u))
+#define LOAD8(img, q, u) u[0] = imageLoad (img[0], q).r, u[1] = imageLoad (img[1], q).r, u[2] = imageLoad (img[2], q).r, \
+	u[3] = imageLoad (img[3], q).r, u[4] = imageLoad (img[4], q).r, u[5] = imageLoad (img[5], q).r, u[6] = imageLoad (img[6], q).r, \
+	u[7] = imageLoad (img[7], q).r
+#define CLEAR8(img, q) imageStore (img[0], q, uvec4 (0u)), imageStore (img[1], q, uvec4 (0u)), imageStore (img[2], q, uvec4 (0u)), \
+	imageStore (img[3], q, uvec4 (0u)), imageStore (img[4], q, uvec4 (0u)), imageStore (img[5], q, uvec4 (0u)), imageStore (img[6], q, uvec4 (0u)), \
+	imageStore (img[7], q, uvec4 (0u))
 // a coarser level into floats (its accumulators cleared)
 #define LEVEL(img, l) { \
 	ivec3 q = ivec3 (gl_GlobalInvocationID); \
 	if (any (greaterThanEqual (q, VolLevelSize (l + 1)))) return; \
 	uint u[VA_COUNT]; \
-	LOAD7 (img, q, u); \
-	if ((u[VA_D] | u[VA_C]) != 0u) CLEAR7 (img, q); \
+	LOAD8 (img, q, u); \
+	if ((u[VA_D] | u[VA_C]) != 0u) CLEAR8 (img, q); \
 	imageStore (lvlL[l], q, vec4 (float (u[VA_R]), float (u[VA_G]), float (u[VA_B]), float (u[VA_C])) / VOL_FIXED_C); \
-	imageStore (lvlD[l], q, vec4 (float (u[VA_D]) / VOL_FIXED_D, float (u[VA_S]) / VOL_FIXED_C, float (u[VA_M]) / VOL_FIXED_C, 0.0)); }
+	imageStore (lvlD[l], q, vec4 (float (u[VA_D]) / VOL_FIXED_D, float (u[VA_S]) / VOL_FIXED_C, float (u[VA_M]) / VOL_FIXED_C, float (u[VA_L]) / VOL_FIXED_C)); \
+	if (l == 0) { uint o = imageLoad (volOccl, q).r; if (o != 0u) imageStore (volOccl, q, uvec4 (0u)); imageStore (occlOut, q, vec4 (float (o) / VOL_FIXED_D)); } }
+
+// the extinction [1/m] at a view-space point (all grids; the fine one's at the
+// half resolution), 0 outside the volume
+float OcclExtinction (vec3 v)
+{
+	vec3 c = VolCoord (v);
+	if (any (lessThan (c, vec3 (0.0))) || any (greaterThan (c, vec3 (1.0))) || v.z < VOL_NEAR) return 0.0;
+	return textureLod (occlTex, c, 0.0).r + textureLod (lvlDTex[0], c, 0.0).r + textureLod (lvlDTex[1], c, 0.0).r;
+}
+
+// the smoke's transmittance from p towards a light at lp (4 taps through the
+// extinction of all grids, denser near p, where its own puff is). Light
+// scattered many times inside the smoke gets through: a weak attenuation
+// and a low floor
+float LightTransmittance (vec3 p, vec3 lp)
+{
+	const float T[5] = float[5] (0.0, 0.08, 0.22, 0.48, 1.0);
+	float dist = length (lp - p), tau = 0.0;
+	for (int t = 0; t < 4; t++)
+		tau += OcclExtinction (mix (p, lp, 0.5 * (T[t] + T[t + 1]))) * (T[t + 1] - T[t]) * dist;
+	tau *= 0.9; // (as the march's erosion: 1.6 x the density, about half kept)
+	return 0.08 + 0.92 * (0.75 * exp (-tau) + 0.25 * exp (-0.15 * tau));
+}
+
+// the local lights' light reaching a froxel at p (view space) through the
+// smoke (none if its luminance there is below minLum): the flames of the
+// brightest vessel and of the next (frame.lightCount: chosen per frame, the
+// same for all froxels) through the smoke towards them (the brightest's
+// towards two of its points, the ends of its flames: soft shadows); the
+// others (floodlights) through the smoke towards where their light comes
+// from (their positions weighted by their light here: continuous across the
+// froxels)
+vec3 LocalLightAt (vec3 p, float minLum)
+{
+	const vec3 LUM = vec3 (0.2126, 0.7152, 0.0722);
+	int nl = int (frame.lightCount.x);
+	vec3 all = vec3 (0.0), f0 = vec3 (0.0), f1 = vec3 (0.0), oc = vec3 (0.0);
+	int a = int (frame.lightCount.y), b = int (frame.lightCount.z), c = int (frame.lightCount.w);
+	float o0 = a >= 0 ? frame.lights[a].spot.y : -1.0, o1 = c >= 0 ? frame.lights[c].spot.y : -1.0;
+	for (int k = 0; k < nl; k++) {
+		LocalLight l = frame.lights[k];
+		if (l.dir.w > 2.5) continue;
+		vec3 e = l.col.rgb * LightReach (l, p);
+		bool flame = l.dir.w < 1.5 && l.att.w > 0.0;
+		if (flame && l.spot.y == o0) f0 += e;
+		else if (flame && l.spot.y == o1) f1 += e;
+		else all += e, oc += l.pos.xyz * dot (e, LUM);
+	}
+	float lo = dot (all, LUM);
+	if (lo + dot (f0 + f1, LUM) <= minLum) return vec3 (0.0);
+	if (lo > 0.0) all *= LightTransmittance (p, oc / lo);
+	if (dot (f0, LUM) > 0.0) {
+		float t = LightTransmittance (p, frame.lights[a].pos.xyz);
+		if (b >= 0) t = 0.5 * (t + LightTransmittance (p, frame.lights[b].pos.xyz));
+		all += f0 * t;
+	}
+	if (dot (f1, LUM) > 0.0) all += f1 * LightTransmittance (p, frame.lights[c].pos.xyz);
+	return all;
+}
 
 void main ()
 {
@@ -69,9 +139,9 @@ void main ()
 		uint u[VA_COUNT];
 		u[VA_D] = imageLoad (volFine[VA_D], q).r, u[VA_C] = imageLoad (volFine[VA_C], q).r;
 		if ((u[VA_D] | u[VA_C]) != 0u) {
-			LOAD7 (volFine, q, u);
-			CLEAR7 (volFine, q);
-		} else u[2] = u[3] = u[4] = u[5] = u[6] = 0u;
+			LOAD8 (volFine, q, u);
+			CLEAR8 (volFine, q);
+		} else u[2] = u[3] = u[4] = u[5] = u[6] = u[7] = 0u;
 		vec3 tc = vec3 (uv, (float (z) + 0.5) / float (VOL_SIZE.z));
 		vec4 l1 = textureLod (lvlLTex[0], tc, 0.0), l2 = textureLod (lvlLTex[1], tc, 0.0);
 		vec4 d1 = textureLod (lvlDTex[0], tc, 0.0), d2 = textureLod (lvlDTex[1], tc, 0.0);
@@ -81,8 +151,10 @@ void main ()
 		vec3 lc = vec3 (0.0);
 		if (cov > 1e-5) {
 			float share = clamp ((float (u[VA_S]) / VOL_FIXED_C + d1.g + d2.g) / cov, 0.0, 1.0);
+			float alb = (float (u[VA_L]) / VOL_FIXED_C + d1.a + d2.a) / cov;
 			float zc = VolDepth ((float (z) + 0.5) / float (VOL_SIZE.z));
-			vec3 pos = mat3 (frame.viewToGlobal) * (vec3 (ndc.x / frame.proj[0][0], ndc.y / frame.proj[1][1], 1.0) * zc);
+			vec3 pv = vec3 (ndc.x / frame.proj[0][0], ndc.y / frame.proj[1][1], 1.0) * zc;
+			vec3 pos = mat3 (frame.viewToGlobal) * pv;
 			// (the sun through the smoke towards it, per froxel: a strong
 			// attenuation and a floor of light scattered many times)
 			float tau = SmokeTau (pos);
@@ -90,7 +162,14 @@ void main ()
 			// (no occlusion of the rest by the coverage: the coverage is high up
 			// to a dense puff's visible surface, which it darkened — dark-cored
 			// rings in a trail, a hollow-looking night cloud)
-			lc = (vec3 (u[VA_R], u[VA_G], u[VA_B]) / VOL_FIXED_C + l1.rgb + l2.rgb) / cov * ((1.0 - share) + share * sun);
+			lc = (vec3 (u[VA_R], u[VA_G], u[VA_B]) / VOL_FIXED_C + l1.rgb + l2.rgb) / cov;
+			// (the local lights at this froxel, through the smoke towards them
+			// (scattered in all directions, as the sprites: 0.8), where they
+			// add more than a percent; the albedo's tint from the rest of its light)
+			float lum = dot (lc, vec3 (0.2126, 0.7152, 0.0722));
+			vec3 tint = lum > 1e-8 ? lc / lum : vec3 (1.0);
+			lc *= (1.0 - share) + share * sun;
+			if (alb > 0.0) lc += LocalLightAt (pv, 0.01 * lum / (0.8 * alb)) * (0.8 * alb) * clamp (tint, vec3 (0.0), vec3 (2.0));
 		}
 		if (d < 1e-6) d = 0.0;
 		float core = VolCore (m);

@@ -48,6 +48,7 @@ bool CandidateSolid (rayQueryEXT q)
 }
 
 const uint MASK_ALL = 0xFFu, MASK_OBJECTS = 0x01u; // (terrain: 0x02)
+const float LIGHT_SHADOW_REACH = 1500.0; // local lights' shadows within this distance of the light [m]
 const float PI = 3.14159265;
 
 uvec4 Hash4 (uvec3 v)
@@ -100,7 +101,9 @@ vec3 CandidateNormal (rayQueryEXT q)
 // Light from a local light at lp reaching o: traced from the light. Emitters
 // often sit inside their vessel's hull: surfaces the ray leaves from inside
 // (normal along the ray) do not block it, those it meets from outside do.
-bool LightOccluded (vec3 lp, vec3 o)
+// An extended source (a flame) is not blocked by its own vessel within
+// skip of where the ray leaves it (the nozzle it streams from)
+bool LightOccluded (vec3 lp, vec3 o, uint owner, float skip)
 {
 	vec3 d = o - lp;
 	float t = length (d);
@@ -111,6 +114,8 @@ bool LightOccluded (vec3 lp, vec3 o)
 	while (rayQueryProceedEXT (q)) {
 		if (rayQueryGetIntersectionTypeEXT (q, false) != gl_RayQueryCandidateIntersectionTriangleEXT) continue;
 		if (dot (CandidateNormal (q), d) > 0.0) continue; // leaving a surface
+		if (skip > 0.0 && rayQueryGetIntersectionTEXT (q, false) < skip
+			&& inst[rayQueryGetIntersectionInstanceCustomIndexEXT (q, false) + rayQueryGetIntersectionGeometryIndexEXT (q, false)].owner == owner) continue;
 		if (!CandidateSolid (q)) continue;
 		rayQueryConfirmIntersectionEXT (q);
 		rayQueryTerminateEXT (q);
@@ -181,11 +186,25 @@ void main ()
 	if (frame.planetLight.w > 0.0 && dot (N, frame.planetDir.xyz) > -frame.planetDir.w)
 		planet = Occluded (o, InCone (frame.planetDir.xyz, frame.planetDir.w, u2.zw), 1e6, MASK_OBJECTS) ? 0.0 : 1.0;
 
-	// local lights
+	// local lights. The points of one vessel's flames (an extended source)
+	// share a ray: towards one of them, chosen at random per pixel and frame
+	// (the filter accumulates over frames), its visibility for all
 	vec4 lv = vec4 (1.0);
 	int nl = min (int (pc.nLights), int (frame.lightCount.x));
+	bool shared_[4] = bool[4] (false, false, false, false);
 	for (int i = 0; i < nl; i++) {
+		if (shared_[i]) continue;
 		LocalLight l = frame.lights[i];
+		if (l.dir.w < 1.5 && l.att.w > 0.0) {
+			int group[4], ng = 0;
+			for (int k = i; k < nl; k++)
+				if (frame.lights[k].dir.w < 1.5 && frame.lights[k].att.w > 0.0 && frame.lights[k].spot.y == l.spot.y) group[ng++] = k;
+			if (ng > 1) {
+				vec4 rg = vec4 (Hash4 (uvec3 (p, uint (pc.frame) * 4u + 977u))) / 4294967296.0;
+				l = frame.lights[group[min (int (rg.x * float (ng)), ng - 1)]];
+				for (int k = 1; k < ng; k++) shared_[group[k]] = true;
+			}
+		}
 		if (l.dir.w > 2.5) { // a star: towards it over its disc (soft), objects only, far
 			if (dot (N, l.dir.xyz) <= 0.0) continue;
 			vec4 rs = vec4 (Hash4 (uvec3 (p, uint (pc.frame) * 4u + uint (i) + 101u))) / 4294967296.0;
@@ -194,15 +213,33 @@ void main ()
 		}
 		vec3 Lv = l.pos.xyz - o;
 		float dist = length (Lv);
-		if (dist > l.pos.w || dist < 1e-3 || dot (N, Lv) <= 0.0) continue;
+		// (a point light's source radius: an extended source (a flame), lit
+		// beyond the horizon of its centre: lights.glsl)
+		float rad = l.dir.w < 1.5 ? l.att.w : 0.0;
+		// (beyond LIGHT_SHADOW_REACH unshadowed: a launch's flames light the
+		// ground for kilometres, where long rays over the terrain cost much
+		// and the vessels' shadows are lost in the distance)
+		if (dist > min (l.pos.w, LIGHT_SHADOW_REACH) || dist < 1e-3 || dot (N, Lv) <= -rad) continue;
 		if (l.dir.w > 1.5 && dot (-Lv / dist, l.dir.xyz) < l.spot.x) continue; // outside the spot's cone
-		// a point within 0.15 m of the light: slightly soft shadows
+		// a point within 0.15 m of the light: slightly soft shadows; within an
+		// extended source, a point of its half towards the surface (its
+		// visible side; soft shadows of the size of a flame), not blocked by
+		// its own vessel near it
 		vec4 r = vec4 (Hash4 (uvec3 (p, uint (pc.frame) * 4u + uint (i) + 101u))) / 4294967296.0;
 		vec3 j = (r.xyz * 2.0 - 1.0) * 0.15;
+		if (rad > 0.0 && dist < 30.0 * rad) { // (farther: about a point; coherent rays)
+			float ph = 2.0 * PI * r.y, cz = r.x * 2.0 - 1.0, sz = sqrt (max (1.0 - cz * cz, 0.0));
+			j = vec3 (sz * cos (ph), sz * sin (ph), cz) * (rad * pow (r.z, 1.0 / 3.0));
+			if (dot (j, Lv) > 0.0) j = -j;
+		}
 		// (spot light emitters inside the hull: from where the beam leaves it)
 		vec3 lp = l.pos.xyz + (l.dir.w > 1.5 ? l.dir.xyz * l.spot.z : vec3 (0.0));
-		lv[i] = LightOccluded (lp + j, o) ? 0.0 : 1.0;
+		lv[i] = LightOccluded (lp + j, o, uint (l.spot.y + 0.5), 1.5 * rad) ? 0.0 : 1.0;
 	}
+	for (int i = 1; i < nl; i++) // (the shared rays' visibility)
+		if (shared_[i])
+			for (int k = 0; k < i; k++)
+				if (!shared_[k] && frame.lights[k].dir.w < 1.5 && frame.lights[k].att.w > 0.0 && frame.lights[k].spot.y == frame.lights[i].spot.y) { lv[i] = lv[k]; break; }
 	imageStore (rawA, p, vec4 (sun, ao, planet, 1.0));
 	imageStore (rawL, p, lv);
 }

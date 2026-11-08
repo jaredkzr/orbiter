@@ -2219,6 +2219,18 @@ void Scene::FillFrameUniforms (void *pfu)
 		}
 	}
 	for (int k = 0; k < 3; k++) ambientRGB[k] = fu.ambient[k];
+	// (w: the ambient's share left on the night side, at the camera: the
+	// terrain's rule (tile_main.glsl: no skylight, a fraction of the ambient
+	// level for the moon and the stars), for what is lit at the camera's
+	// place without a surface normal of its own (the particles); 1 in
+	// sunlight)
+	fu.ambient[3] = 1.0f;
+	if (OBJHANDLE hp = oapiCameraProxyGbody ()) {
+		VECTOR3 pp;
+		oapiGetGlobalPos (hp, &pp);
+		double s = std::clamp ((dotp (unit (camPos - pp), sunDir) + 0.25) / 0.25, 0.0, 1.0);
+		fu.ambient[3] = (float)std::max (0.15 + 0.85 * s * s * (3.0 - 2.0 * s), SunVisibility (camPos));
+	}
 	// sunlight reflected by the planet nearby (a Lambertian sphere, by its phase)
 	if (OBJHANDLE hp = oapiCameraProxyGbody ())
 		if (hp != light.body && light.flux > 0.0) {
@@ -2275,7 +2287,7 @@ void Scene::FillFrameUniforms (void *pfu)
 		ls.push_back (l);
 	}
 	std::sort (ls.begin(), ls.end(), [this](const LightSource &a, const LightSource &b) {
-		return length (a.pos - camPos) - a.range < length (b.pos - camPos) - b.range;
+		return length (a.pos - camPos) - std::max (a.range, a.sortRange) < length (b.pos - camPos) - std::max (b.range, b.sortRange);
 	});
 	// the extra lights first (directional, ray traced shadows: the first four)
 	int ne = 0;
@@ -2303,10 +2315,45 @@ void Scene::FillFrameUniforms (void *pfu)
 		u.pos[0] = (float)p.x, u.pos[1] = (float)p.y, u.pos[2] = (float)p.z, u.pos[3] = (float)l.range;
 		u.dir[0] = (float)d.x, u.dir[1] = (float)d.y, u.dir[2] = (float)d.z, u.dir[3] = l.spot ? 2.0f : 1.0f;
 		for (int k = 0; k < 3; k++) u.col[k] = l.col[k], u.att[k] = (float)l.att[k];
-		u.att[3] = (float)cos (0.5 * l.umbra);
+		u.att[3] = l.spot ? (float)cos (0.5 * l.umbra) : (float)l.radius; // (a point light: its source's radius)
 		u.spot[0] = (float)cos (0.5 * l.penumbra);
 		u.spot[1] = (float)l.owner;
 		u.spot[2] = (float)l.shadowOfs;
+	}
+	// the flames the smoke volume's light is occluded towards
+	// (smoke_resolve.comp): the brightest vessel's (its flames' points by
+	// their power, inverse square: col / att.z, summed), a point of them and
+	// the farthest from it (soft shadows), and the next vessel's
+	fu.lightCount[1] = fu.lightCount[2] = fu.lightCount[3] = -1.0f;
+	{
+		auto flame = [&](int i) { return fu.lights[i].dir[3] < 1.5f && fu.lights[i].att[3] > 0.0f && fu.lights[i].att[2] > 0.0f; };
+		auto power = [&](int i) { const float *c = fu.lights[i].col; return (0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2]) / fu.lights[i].att[2]; };
+		float best[2] = { 0.0f, 0.0f };
+		int pick[2] = { -1, -1 };
+		for (int i = ne; i < ne + nl; i++) {
+			if (!flame (i)) continue;
+			float sum = 0.0f;
+			bool first = true;
+			for (int j = ne; j < ne + nl; j++)
+				if (flame (j) && fu.lights[j].spot[1] == fu.lights[i].spot[1]) {
+					if (j < i && power (j) >= power (i)) first = false;
+					sum += power (j);
+				}
+			if (!first) continue; // (each vessel once: by its brightest point)
+			if (sum > best[0]) best[1] = best[0], pick[1] = pick[0], best[0] = sum, pick[0] = i;
+			else if (sum > best[1]) best[1] = sum, pick[1] = i;
+		}
+		if (pick[0] >= 0) {
+			fu.lightCount[1] = (float)pick[0];
+			float far = 1.0f;
+			for (int j = ne; j < ne + nl; j++) {
+				if (!flame (j) || fu.lights[j].spot[1] != fu.lights[pick[0]].spot[1]) continue;
+				float d = 0.0f;
+				for (int k = 0; k < 3; k++) d += (fu.lights[j].pos[k] - fu.lights[pick[0]].pos[k]) * (fu.lights[j].pos[k] - fu.lights[pick[0]].pos[k]);
+				if (d > far * far) far = std::sqrt (d), fu.lightCount[2] = (float)j;
+			}
+		}
+		if (pick[1] >= 0) fu.lightCount[3] = (float)pick[1];
 	}
 	Mat4::FromRotTrans (camRot, _V(0, 0, 0)).ToFloat (fu.viewToGlobal);
 }

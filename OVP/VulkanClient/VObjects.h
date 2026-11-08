@@ -164,7 +164,7 @@ private:
 	void EmitTrail (DWORD idx, const struct PlumeClass &c, double fade, const VECTOR3 &src, const VECTOR3 &srcPrev, double startSize, double dt);
 	void EmitDust (DWORD idx, int type, const struct PlumeDraw &pd, double dt);
 	/// plumes as light sources this frame (global position, emission, side area)
-	struct PlumeLight { VECTOR3 pos; float col[3]; double area; };
+	struct PlumeLight { VECTOR3 pos[3]; double radius[3]; float col[3]; double area; }; // (PlumeInfo: three points along the flame)
 	std::vector<PlumeLight> plumeLights;
 	void EmitSmoke (DWORD idx, int type, const struct PlumeDraw &pd, const struct PlumeInfo &info, double dt);
 };

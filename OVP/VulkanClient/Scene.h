@@ -58,6 +58,8 @@ struct LightSource {
 	double umbra, penumbra; // full cone angles [rad]
 	uint32_t owner;         // VObject::Id of the vessel carrying it
 	double shadowOfs;       // shadow rays start this far along dir (spot light emitters inside the hull)
+	double radius = 0.0;    // a point light's source radius [m] (an extended source: a flame; lights.glsl)
+	double sortRange = 0.0; // its reach for the order of the lights (if above range: the range capped)
 };
 constexpr int MAX_LIGHTS = 32; // must match frame.glsl
 

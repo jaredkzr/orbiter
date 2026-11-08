@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Particle budget of the launch flights (Tests/Bench/run.sh Launch Launch8 LaunchFar).
+"""Particle budget of the launch flights (Tests/Bench/run.sh Launch Launch8 LaunchFar LaunchNight).
 
   budget.py [--scale k] out_dir
 
 For each flight found in out_dir (<name>.ft, <name>.log):
 - GPU time of all particle passes per frame (the "pt *" marks and the
   screen-space smoke's "particles"), median and p95 over the flight's range,
-  against the budget (DECISIONS B7, reference: RX 9070 XT, 2560x1440, FSR 3
-  at 1.0, ray tracing on; --scale multiplies the budgets for other GPUs):
-    Launch     T 0-60 s, camera 850 m from the pad:  <= 0.70 ms median, <= 0.90 ms p95
-    Launch8    the same at density 8:                 time reported only
-    LaunchFar  T 0-240 s, from 42 km (nothing within 22 km): <= 0.25 ms median
+  against the budget (DECISIONS B7, raised by N3 for the smoke volume's
+  local-light occlusion; reference: RX 9070 XT, 2560x1440, FSR 3 at 1.0,
+  ray tracing on; --scale multiplies the budgets for other GPUs):
+    Launch       T 0-60 s, camera 850 m from the pad:  <= 0.85 ms median, <= 1.05 ms p95
+    LaunchNight  the same at night (the flames light the smoke): the same budget
+    Launch8      the same at density 8:                 time reported only
+    LaunchFar    T 0-240 s, from 42 km (nothing within 22 km): <= 0.25 ms median
 - the pool's health from the ORBITER_VK_PARTICLE_STATS lines: allocation
-  failures and dropped emissions summed: must be 0 (all three flights).
+  failures and dropped emissions summed: must be 0 (all flights).
 Exit status 1 if any check fails.
 """
 import argparse, os, re, sys
@@ -20,7 +22,8 @@ import argparse, os, re, sys
 SKIP = 60
 PT = ["pt update", "pt emit", "pt shadow", "pt light", "pt volume", "pt sort", "pt march half", "particles", "pt march", "pt sprites"]
 FLIGHTS = {  # name: (t0, t1, median budget, p95 budget)
-	"Launch": (0.0, 60.0, 0.70, 0.90),
+	"Launch": (0.0, 60.0, 0.85, 1.05),
+	"LaunchNight": (0.0, 60.0, 0.85, 1.05),
 	"Launch8": (0.0, 60.0, None, None),
 	"LaunchFar": (0.0, 240.0, 0.25, None),
 }

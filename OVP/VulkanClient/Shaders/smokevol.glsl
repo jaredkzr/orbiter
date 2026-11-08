@@ -14,8 +14,10 @@ const ivec3 VOL_MID = ivec3 (120, 68, 64), VOL_COARSE = ivec3 (60, 34, 32);
 ivec3 VolLevelSize (int l) { return l == 0 ? VOL_SIZE : l == 1 ? VOL_MID : VOL_COARSE; }
 // the accumulators of each level: extinction, coverage, light x coverage
 // (rgb), the sun's share x coverage, the largest coverage of one particle
-// (the erosion's core: overlapping old puffs still erode, as sprites do)
-const int VA_D = 0, VA_C = 1, VA_R = 2, VA_G = 3, VA_B = 4, VA_S = 5, VA_M = 6, VA_COUNT = 7;
+// (the erosion's core: overlapping old puffs still erode, as sprites do),
+// the albedo's luminance x coverage (the local lights: per froxel at the
+// resolve, smoke_resolve.comp)
+const int VA_D = 0, VA_C = 1, VA_R = 2, VA_G = 3, VA_B = 4, VA_S = 5, VA_M = 6, VA_L = 7, VA_COUNT = 8;
 // the columns holding smoke, in tiles of 8 x 8 (smoke_resolve.comp goes
 // over these only)
 const ivec2 VOL_TILES = ivec2 (30, 17);

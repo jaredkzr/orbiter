@@ -5,6 +5,35 @@
 // extra stars (a binary's other star, a black hole's disc: directional, type
 // 3, first in the list). Requires frame.glsl.
 
+// the share of a local light (not a star) reaching a point p (view space),
+// without its direction: the attenuation (at most 1: Orbiter's coefficients
+// make it far larger near the light), faded to nothing at the range, a
+// spot's cone (the particles: lit from all sides)
+float LightReach (LocalLight l, vec3 p)
+{
+	float d = length (l.pos.xyz - p);
+	if (d > l.pos.w) return 0.0;
+	float a = min (1.0 / max (l.att.x + l.att.y * d + l.att.z * d * d, 1e-4), 1.0);
+	float x = clamp (1.0 - pow (d / l.pos.w, 4.0), 0.0, 1.0);
+	a *= x * x;
+	if (l.dir.w > 1.5) a *= smoothstep (l.spot.x, l.att.w, dot (normalize (p - l.pos.xyz), l.dir.xyz));
+	return a;
+}
+
+// the cosine factor of a spherical source of angular radius asin(s) on a
+// surface whose normal is at cosine c to its centre: the cosine while the
+// whole sphere is above the surface's horizon, falling smoothly to none
+// once it has set (a quadratic across the horizon, matching the cosine's
+// value and slope): faces turned from an extended flame still lit by its
+// near side
+float SphereLightCos (float c, float s)
+{
+	s = clamp (s, 0.0, 1.0);
+	if (c >= s) return c;
+	if (c <= -s) return 0.0;
+	return (c + s) * (c + s) / (4.0 * s);
+}
+
 // vis: visibility of the first four lights (ray traced shadows)
 vec3 LocalLighting (vec3 posView, vec3 N, vec4 vis)
 {
@@ -31,7 +60,7 @@ vec3 LocalLighting (vec3 posView, vec3 N, vec4 vis)
 		if (l.dir.w > 1.5) // spot: full intensity inside the umbra cone, none outside the penumbra
 			a *= smoothstep(l.spot.x, l.att.w, dot(-L, l.dir.xyz));
 		if (i < 4) a *= vis[i];
-		sum += l.col.rgb * a * max(dot(N, L), 0.0);
+		sum += l.col.rgb * a * SphereLightCos (dot (N, L), l.dir.w < 1.5 ? l.att.w / d : 0.0);
 	}
 	return sum;
 }

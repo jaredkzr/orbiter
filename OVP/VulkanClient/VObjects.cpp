@@ -1716,21 +1716,45 @@ void VVessel::CollectLights (std::vector<LightSource> &lights)
 	}
 
 	// engine plumes light their surroundings: an extended source of radiance
-	// L and side area A gives an irradiance of L A / d^2 farther away, up to
-	// about pi L right beside it (the light's attenuation is capped at 1)
+	// L and side area A gives an irradiance of L A / (pi d^2) farther away
+	// (L in units of a sunlit white surface's radiance, E_sun / pi; the
+	// irradiance in units of E_sun), up to about pi L right beside it (the
+	// light's attenuation is capped at 1).
+	// Three points along the flame share its area, each a sphere of the jet's
+	// radius there (lights.glsl: surfaces beside the flame, at grazing
+	// angles, lit); with many plumes, the brightest plumes' only (one point
+	// at the flame's middle for the others: MAX_LIGHTS)
 	const bool engineLight = vkc::Gfx ().engineLight;
-	for (const PlumeLight &pl : plumeLights) {
-		if (!engineLight) break;
-		float peak = std::max (pl.col[0], std::max (pl.col[1], pl.col[2]));
-		if (peak <= 0.0f || pl.area <= 0.0) continue;
-		LightSource l{};
-		l.owner = id;
-		l.pos = pl.pos;
-		l.range = std::min (sqrt (pl.area * peak / 0.002), 5000.0); // (down to 0.2% of sunlight)
-		if (length (l.pos - cam) > l.range + 10e3) continue;
-		l.att[0] = 0.0, l.att[1] = 0.0, l.att[2] = PI / pl.area;
-		for (int k = 0; k < 3; k++) l.col[k] = (float)(PI * pl.col[k]);
-		lights.push_back (l);
+	if (engineLight && !plumeLights.empty ()) {
+		std::vector<size_t> order (plumeLights.size ());
+		for (size_t i = 0; i < order.size (); i++) order[i] = i;
+		auto power = [](const PlumeLight &pl) { return pl.area * std::max (pl.col[0], std::max (pl.col[1], pl.col[2])); };
+		std::sort (order.begin (), order.end (), [&](size_t a, size_t b) { return power (plumeLights[a]) > power (plumeLights[b]); });
+		const size_t POINTS = 15; // (the Shuttle's five engines)
+		size_t extended = order.size () * 3 <= POINTS ? order.size () : order.size () < POINTS ? (POINTS - order.size ()) / 2 : 0;
+		for (size_t r = 0; r < order.size (); r++) {
+			const PlumeLight &pl = plumeLights[order[r]];
+			float peak = std::max (pl.col[0], std::max (pl.col[1], pl.col[2]));
+			if (peak <= 0.0f || pl.area <= 0.0) continue;
+			int np = r < extended ? 3 : 1;
+			double area = pl.area / np;
+			// (down to 2e-5 of sunlight, about 8 full moons: at night a launch's
+			// flames light the ground for kilometres)
+			double reach = sqrt (pl.area * peak / (PI * 2e-5));
+			for (int k = 0; k < np; k++) {
+				int pt = np == 3 ? k : 1;
+				LightSource l{};
+				l.owner = id;
+				l.pos = pl.pos[pt];
+				l.range = std::min (reach, 25e3);
+				l.sortRange = reach; // (the brightest first: they get the shadowed slots)
+				l.radius = pl.radius[pt];
+				if (length (l.pos - cam) > l.range + 10e3) continue;
+				l.att[0] = 0.0, l.att[1] = 0.0, l.att[2] = PI * PI / area;
+				for (int c = 0; c < 3; c++) l.col[c] = (float)(PI * pl.col[c]);
+				lights.push_back (l);
+			}
+		}
 	}
 
 	// the reentry plasma sheath, ahead of the windward hull, lights the
@@ -1855,7 +1879,8 @@ void VVessel::CollectPlumes (PlumeRenderer &pr)
 			EmitDust (i, (int)type, pd, dt);
 			// (a flame lights its surroundings; cold gas does not glow)
 			if (type != PlumeType::ColdGas) {
-				PlumeLight pl{ scene->GlobalPos (info.lightPos), { info.lightCol[0], info.lightCol[1], info.lightCol[2] }, info.lightArea };
+				PlumeLight pl{ { scene->GlobalPos (info.lightPos[0]), scene->GlobalPos (info.lightPos[1]), scene->GlobalPos (info.lightPos[2]) },
+					{ info.lightRadius[0], info.lightRadius[1], info.lightRadius[2] }, { info.lightCol[0], info.lightCol[1], info.lightCol[2] }, info.lightArea };
 				plumeLights.push_back (pl);
 			}
 		}
@@ -2516,6 +2541,9 @@ namespace {
 	// camera by this fraction of their distance (a uniform scale in view space
 	// keeps their screen position), which avoids depth fighting.
 	constexpr double GROUND_DEPTH_PULL = 1e-3;
+	// a base light's glow (a glare): its half size at most this angle [rad]
+	// (about 9 pixels in a 40 degree view 1600 wide), its own size beyond
+	constexpr double LIGHT_GLOW_MAX_ANGLE = 0.004;
 }
 
 VBase::VBase (OBJHANDLE h, Scene *s) : hBase(h), scene(s)
@@ -2680,7 +2708,9 @@ void VBase::Render (RenderPass pass)
 		auto glow = [&](const VECTOR3 &bp, const float *c, double size, float bright) {
 			VECTOR3 vp = scene->ViewPos (gpos + mul (grot, bp));
 			if (vp.z <= 0.0) return;
-			float h = (float)std::max (size, vp.z * 0.0015); // (a few pixels at least)
+			// (a few pixels at least; near, at most a small angle: a glare, not a
+			// ball of fog metres across in front of the lamp)
+			float h = (float)std::clamp (size, vp.z * 0.0015, vp.z * LIGHT_GLOW_MAX_ANGLE);
 			float x = (float)vp.x, y = (float)vp.y, z = (float)vp.z;
 			float r = c[0] * bright, g = c[1] * bright, b = c[2] * bright;
 			PVtx q[4] = {

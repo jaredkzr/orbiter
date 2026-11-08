@@ -10,7 +10,8 @@
 # a quarter of the drive). Default: all (not the launches).
 # Launch (Shuttle launch from 39A, camera 850 m away, T+0-60 at 1x, particle
 # density 4), Launch8 (the same at density 8), LaunchFar (seen from 42 km,
-# T+0-240): the particle budget, checked by
+# T+0-240), LaunchNight (Launch at night: the flames light the smoke, its
+# local-light occlusion): the particle budget, checked by
 #   python3 Tests/Bench/budget.py out_dir
 # (GPU time of the particle passes, allocation failures, dropped emissions;
 # ORBITER_VK_PARTICLE_STATS telemetry in the logs).
@@ -60,6 +61,7 @@ for n in ${@:-Atmos Ascent Moon Mars Jupiter Proxima Barnard Nyx}; do case $n in
 	Nyx)     run Nyx 2700 TRIP_TARGET=Nyx TRIP_ARR=rest TRIP_ALT=default TRIP_G=1 TRIP_SHIPWARP=1e6 TRIP_WALLMAX=2400 ;;
 	Launch)    ARGS=--fixedstep=0.02 run Launch 900 BENCH_END=60 ORBITER_VK_PARTICLE_DENSITY=4 ORBITER_VK_PARTICLE_STATS=5 ORBITER_VK_FRAMETIME=0.016 ;;
 	Launch8)   ARGS=--fixedstep=0.02 run Launch8@Launch 900 BENCH_END=60 ORBITER_VK_PARTICLE_DENSITY=8 ORBITER_VK_PARTICLE_STATS=5 ORBITER_VK_FRAMETIME=0.016 ;;
+	LaunchNight) ARGS=--fixedstep=0.02 run LaunchNight 900 BENCH_END=60 ORBITER_VK_PARTICLE_DENSITY=4 ORBITER_VK_PARTICLE_STATS=5 ORBITER_VK_FRAMETIME=0.016 ;;
 	LaunchFar) ARGS=--fixedstep=0.02 run LaunchFar 1200 BENCH_END=240 ORBITER_VK_PARTICLE_DENSITY=4 ORBITER_VK_PARTICLE_STATS=5 ORBITER_VK_FRAMETIME=0.016 ;;
 	*) echo "unknown flight $n" ;;
 esac; done

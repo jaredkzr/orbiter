@@ -373,18 +373,19 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		// (8-10: the sprites' sort: values, keys; the allocated blocks)
 		{ 8, SB, 1, CS | VS, nullptr }, { 9, SB, 1, CS, nullptr }, { 10, SB, 1, CS, nullptr },
 		// (11-18, 24-43: smoke volume: AllocVolume; 19: screen-space smoke)
-		{ 11, SI, 7, CS, nullptr }, // (the fine accumulators: smokevol.glsl VA_*)
+		{ 11, SI, 8, CS, nullptr }, // (the fine accumulators: smokevol.glsl VA_*)
 		{ 15, SI, 1, CS, nullptr }, { 16, SI, 1, CS, nullptr }, { 17, CI, 1, FS | CS, nullptr }, { 18, CI, 1, FS | CS, nullptr },
 		{ 19, CI, 1, FS, nullptr },
 		{ 20, SB, 1, CS | VS, nullptr }, // (the wind's layers; streaks relative to the air)
 		// (21-23: the sprites' draw: its arguments, how each ring is drawn, the smoke in front)
 		{ 21, SB, 1, CS, nullptr }, { 22, SB, 1, VS, nullptr }, { 23, CI, 1, FS, nullptr },
-		{ 24, SI, 1, CS, nullptr }, { 28, SB, 1, CS, nullptr }, { 26, SI, 7, CS, nullptr }, { 29, SI, 7, CS, nullptr }, // (mid, coarse accumulators)
+		{ 24, SI, 1, CS, nullptr }, { 28, SB, 1, CS, nullptr }, { 26, SI, 8, CS, nullptr }, { 29, SI, 8, CS, nullptr }, // (mid, coarse accumulators)
 		{ 31, SI, 2, CS, nullptr }, { 32, SI, 2, CS, nullptr }, { 33, CI, 2, CS, nullptr }, { 34, CI, 2, CS, nullptr },
 		{ 35, SI, 1, CS, nullptr }, { 36, CI, 1, CS, nullptr }, { 37, SB, 1, CS, nullptr },
 		{ 38, SI, 1, CS, nullptr }, { 39, SI, 1, CS, nullptr }, { 40, SI, 1, CS, nullptr },
 		{ 41, CI, 1, FS, nullptr }, { 42, CI, 1, FS, nullptr }, { 43, CI, 1, FS, nullptr },
-		{ 44, CI, 1, CS, nullptr } }; // (the smoke volume's erosion noise)
+		{ 44, CI, 1, CS, nullptr }, // (the smoke volume's erosion noise)
+		{ 45, SI, 1, CS, nullptr }, { 46, SI, 1, CS, nullptr }, { 47, CI, 1, CS, nullptr } }; // (the local lights' occlusion: the fine grid's extinction)
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
 	lci.bindingCount = (uint32_t)b.size (), lci.pBindings = b.data ();
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &setLayout));
@@ -397,7 +398,7 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 	}
 	VkDescriptorPoolSize ps[3] = { { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 12 * vkc::FRAMES_IN_FLIGHT },
 		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, (20 + TEX_SLOTS) * vkc::FRAMES_IN_FLIGHT + 2 },
-		{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 40 * vkc::FRAMES_IN_FLIGHT + 2 } };
+		{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 48 * vkc::FRAMES_IN_FLIGHT + 2 } };
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.maxSets = 2 * vkc::FRAMES_IN_FLIGHT + 2, pci.poolSizeCount = 3, pci.pPoolSizes = ps;
 	VK_CHECK(vkCreateDescriptorPool (ctx->device, &pci, nullptr, &dpool));
@@ -1139,6 +1140,8 @@ void ParticleSystem::AllocVolume (VkCommandBuffer cmd)
 		lvlL[l] = MakeImage (ctx, T3, VK_FORMAT_R16G16B16A16_SFLOAT, e, OUT);
 		lvlD[l] = MakeImage (ctx, T3, VK_FORMAT_R16G16B16A16_SFLOAT, e, OUT);
 	}
+	volOccl = MakeImage (ctx, T3, VK_FORMAT_R32_UINT, { VOLM_X, VOLM_Y, VOLM_Z }, ACC);
+	occl = MakeImage (ctx, T3, VK_FORMAT_R16_SFLOAT, { VOLM_X, VOLM_Y, VOLM_Z }, OUT);
 	volOut = MakeImage (ctx, T3, VK_FORMAT_R16G16B16A16_SFLOAT, { VOL_X, VOL_Y, VOL_Z }, OUT);
 	volCore = MakeImage (ctx, T3, VK_FORMAT_R8_UNORM, { VOL_X, VOL_Y, VOL_Z }, OUT);
 	volInteg = MakeImage (ctx, T3, VK_FORMAT_R16G16B16A16_SFLOAT, { VOL_X, VOL_Y, VOL_Z }, OUT);
@@ -1150,7 +1153,7 @@ void ParticleSystem::AllocVolume (VkCommandBuffer cmd)
 	for (auto &v : volMid) cl.push_back ({ v.image, zero });
 	for (auto &v : volCoarse) cl.push_back ({ v.image, zero });
 	for (int l = 0; l < 2; l++) cl.push_back ({ lvlL[l].image, zero }), cl.push_back ({ lvlD[l].image, zero });
-	for (VkImage im : { volOut.image, volCore.image, volColumns.image }) cl.push_back ({ im, zero });
+	for (VkImage im : { volOut.image, volCore.image, volColumns.image, volOccl.image, occl.image }) cl.push_back ({ im, zero });
 	cl.push_back ({ volInteg.image, none });
 	RecordClears (cmd, cl);
 	vkCmdFillBuffer (cmd, volOcc.buffer, 0, VK_WHOLE_SIZE, 0);
@@ -1194,7 +1197,7 @@ void ParticleSystem::WriteVolumeSets (uint32_t slot)
 		};
 		const VkDescriptorType SI = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, CI = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		if (volAlloc) {
-			for (uint32_t k = 0; k < 7; k++) {
+			for (uint32_t k = 0; k < 8; k++) {
 				add (11, k, SI, VK_NULL_HANDLE, volAccum[k].view);
 				add (26, k, SI, VK_NULL_HANDLE, volMid[k].view);
 				add (29, k, SI, VK_NULL_HANDLE, volCoarse[k].view);
@@ -1212,6 +1215,9 @@ void ParticleSystem::WriteVolumeSets (uint32_t slot)
 				add (34, l, CI, volSampler, lvlD[l].view);
 			}
 			add (35, 0, SI, VK_NULL_HANDLE, volCore.view);
+			add (45, 0, SI, VK_NULL_HANDLE, volOccl.view);
+			add (46, 0, SI, VK_NULL_HANDLE, occl.view);
+			add (47, 0, CI, volSampler, occl.view);
 			add (36, 0, CI, volSampler, volCore.view);
 			for (uint32_t k = 0; k < 3; k++) add (38 + k, 0, SI, VK_NULL_HANDLE, march[k].view);
 			for (uint32_t k = 0; k < 3; k++) add (41 + k, 0, CI, volSampler, march[k].view); // (linear: the composite's early out; taps by texelFetch)
@@ -1239,7 +1245,7 @@ void ParticleSystem::FreeVolume (bool now)
 	for (auto &v : volMid) ims.push_back (v), v = vkc::Image{};
 	for (auto &v : volCoarse) ims.push_back (v), v = vkc::Image{};
 	for (int l = 0; l < 2; l++) ims.push_back (lvlL[l]), ims.push_back (lvlD[l]), lvlL[l] = lvlD[l] = vkc::Image{};
-	for (vkc::Image *im : { &volOut, &volCore, &volInteg, &volColumns, &march[0], &march[1], &march[2] }) ims.push_back (*im), *im = vkc::Image{};
+	for (vkc::Image *im : { &volOut, &volCore, &volInteg, &volColumns, &volOccl, &occl, &march[0], &march[1], &march[2] }) ims.push_back (*im), *im = vkc::Image{};
 	volGrave.push_back ({ frameNo, ims, volOcc });
 	volOcc = vkc::Buffer{};
 	marchGen = ~0u;

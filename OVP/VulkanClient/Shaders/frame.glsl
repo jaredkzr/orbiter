@@ -16,7 +16,7 @@ struct LocalLight {
 	vec4 pos;    // view space position (xyz), range (w)
 	vec4 dir;    // view space direction (xyz), type (w: 1 point, 2 spot, 3 a star: directional, towards it)
 	vec4 col;    // colour times intensity
-	vec4 att;    // attenuation coefficients (xyz), cos(umbra/2) (w; a star: its angular radius)
+	vec4 att;    // attenuation coefficients (xyz), cos(umbra/2) (w; a star: its angular radius; a point light: its source's radius [m])
 	vec4 spot;   // cos(penumbra/2) (x), id of the vessel carrying it (y), shadow rays start this far along dir (z)
 };
 
@@ -24,7 +24,7 @@ layout(set = FRAME_SET, binding = 0) uniform Frame {
 	mat4 proj;         // view -> clip (reversed z, infinite far plane)
 	vec4 sunDir;       // direction towards the sun, view space
 	vec4 sunColor;
-	vec4 ambient;
+	vec4 ambient;      // w: the share of it left on the night side at the camera (particles)
 	mat4 shadowMat[3];    // view space -> shadow map (texture coordinates, depth), per cascade
 	vec4 shadowParams[3]; // x: enabled, y: normal offset [m], z: depth bias, w: texel size
 	vec4 jitter;       // xy: projection jitter (NDC), zw: render size [pixels]
@@ -34,7 +34,8 @@ layout(set = FRAME_SET, binding = 0) uniform Frame {
 	vec4 rt;           // x: ray traced lighting valid (sun shadows, ambient occlusion, planet light, light shadows), y: shadowed local lights
 	vec4 planetDir;    // light of the planet nearby: direction to its centre (view space), w: sine of its angular radius
 	vec4 planetLight;  // its irradiance at normal incidence (rgb), w: 1 = present
-	vec4 lightCount;   // x: number of local lights
+	vec4 lightCount;   // x: number of local lights; the flames the smoke's light is occluded towards (-1: none): y, z the
+	                   // brightest vessel's (a point, the farthest of its points from it), w the next vessel's
 	vec4 city[4];      // the cities' road map (CityField): centre (view space), w: present; axes x, y (view space); x, y, z: 1/size of its fine and coarse level and the far map [1/m]
 	vec4 relBeta;      // relativistic view: the camera's velocity (view space, units of c), w: 1 = on
 	vec4 relSelf;      // the camera's own vessel (moving with it: seen as it is): centre (view space), w: radius

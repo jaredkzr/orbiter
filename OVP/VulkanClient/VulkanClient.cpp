@@ -296,6 +296,7 @@ void VulkanClient::clbkUpdate (bool running)
 
 namespace {
 	constexpr double DAYLIGHT_MAX_EXPOSURE = 1.3; // with the camera in sunlight
+	constexpr double NIGHT_MIN_EXPOSURE = 0.15;   // lowest exposure with the camera in darkness (flames lighting the view)
 	constexpr double STAR_DISC_DISPLAY = 0.9; // a large star disc's centre, displayed
 }
 
@@ -353,7 +354,11 @@ void VulkanClient::clbkRenderScene ()
 		double sa = scene->StarDiscAngle (&teff);
 		double fill = std::clamp ((sa - 0.02) / 0.08, 0.0, 1.0);
 		fill = fill * fill * (3.0 - 2.0 * fill);
-		postfx->minExposure = disc ? 1e-4f : 0.6f;
+		// (at night the eye, a camera, adapts further down when a lit scene
+		// fills the view: a launch's flames lighting the smoke and the ground
+		// at many times daylight. The floor binds only then: a dark night
+		// scene meters far below it)
+		postfx->minExposure = disc ? 1e-4f : (float)std::exp2 (std::log2 (NIGHT_MIN_EXPOSURE) + (std::log2 (0.6) - std::log2 (NIGHT_MIN_EXPOSURE)) * std::clamp (sl, 0.0, 1.0));
 		postfx->adaptStrength = disc ? 0.9f : 0.6f;
 		if (fill > 0.0 && !disc) {
 			float c[3];

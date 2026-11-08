@@ -41,6 +41,8 @@ layout(location = 5) in vec3 vAmb;
 layout(location = 6) in vec4 vMisc;
 layout(location = 7) flat in uint vInfo;
 layout(location = 8) flat in uint vFlags;
+layout(location = 9) in vec3 vLoc;
+layout(location = 10) in vec3 vLocDir;
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out float outReactive;
@@ -74,10 +76,12 @@ void main ()
 		float wrap = clamp ((dot (N, L) + 0.35) / 1.35, 0.0, 1.0);
 		float through = (1.0 - thick) * 0.6; // (light passing through thin edges)
 		float occl = mix (0.55, 1.0, thick); // (crevices between billows are darker)
-		c = vColor.rgb * (vAmb * occl + vSun * (0.15 + 0.85 * wrap + through));
+		// (the local lights likewise from their direction: the flames)
+		float wrapL = clamp ((dot (N, normalize (vLocDir)) + 0.35) / 1.35, 0.0, 1.0);
+		c = vColor.rgb * (vAmb * occl + vSun * (0.15 + 0.85 * wrap + through) + vLoc * (0.15 + 0.85 * wrapL + through));
 	} else {
 		a = t.a * vColor.a;
-		c = t.rgb * vColor.rgb * (vSun + vAmb + (emissive ? vec3 (1.0) : vec3 (0.0)));
+		c = t.rgb * vColor.rgb * (vSun + vAmb + vLoc + (emissive ? vec3 (1.0) : vec3 (0.0)));
 		if ((vFlags & PF_ERODE) != 0u) {
 			// a flame breaking up as it cools: its thinner parts (the
 			// texture's coverage) burn away first, the threshold rising with

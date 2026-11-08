@@ -54,6 +54,14 @@ struct PlumeClass {
 	float smokeAir0, smokeAir1; // fades in between these pressures [atm]
 	float trail;            // strength of the long trail left in the air (0: none; solid motors 1)
 	float contrail;         // water in the exhaust condensing in cold air (Contrail.h; 0: none)
+	// the flame as a light source: its radiance (1 ~ a sunlit white surface;
+	// 0: as drawn). Brightness 1 ~ sunlit white is right for drawing the
+	// flame; a real flame's visible radiance is far higher (a few hundred
+	// times for the 2500-3000 K alumina of a solid motor), which lights the
+	// ground and smoke at night for kilometres (VVessel::CollectLights). The
+	// drawn emission scaled to it at full thrust in sea-level air (throttle,
+	// flicker, vacuum and BRIGHTNESS kept)
+	float lightRadiance;
 };
 
 /// where a plume's flame ends and what it meets (PlumeRenderer::Add)
@@ -65,9 +73,11 @@ struct PlumeInfo {
 	VECTOR3 hitPos, hitN;   // where (view space), its normal (towards the jet)
 	double coverage;        // fraction of the jet blocked
 	double heat;            // heat of the jet at the surface (0..1)
-	// the flame as a light source: where (view space), its mean emission
-	// (radiance), and the area of its side [m^2]
-	VECTOR3 lightPos;
+	// the flame as a light source: an extended one, three points along it
+	// (0.2, 0.5, 0.9 of its length; view space) sharing the area of its side
+	// [m^2], the jet's radius at each [m]; its mean emission (radiance)
+	VECTOR3 lightPos[3];
+	double lightRadius[3];
 	float lightCol[3];
 	double lightArea;
 };
