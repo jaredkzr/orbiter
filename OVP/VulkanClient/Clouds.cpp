@@ -27,8 +27,11 @@ namespace {
 	const VkFormat OUT_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
 
 	struct MarchParams {
-		float shell[4], mapCentre[4], mapEast[4], mapNorth[4], ambient[4], proj[4], noise[4];
+		float shell[4], mapCentre[4], mapEast[4], mapNorth[4], ambient[4], proj[4], noise[4], hist[4];
 	};
+	// clouds.comp's last camera, in the gas giants' parameter slot of the
+	// frame (the two are never drawn in the same frame)
+	struct EarthHistCam { float rot[3][4], cam[4]; };
 
 	// ggclouds.comp's parameters (std430: arrays of vec4)
 	constexpr int GG_LAYERS = 4, GG_STORMS = 16, GG_TOWERS = 64, GG_FLASHES = 8, GG_BOLTV = 128;
@@ -391,7 +394,7 @@ void VolumetricClouds::CreateOutput (VkImageView prepass)
 					VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
 		});
 	}
-	ggHistValid = false;
+	ggHistValid = earthHistValid = false;
 	VkDescriptorSetLayout l[2] = { marchSetLayout, compSetLayout };
 	VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
 	dai.descriptorPool = pool, dai.descriptorSetCount = 2, dai.pSetLayouts = l;
@@ -444,6 +447,8 @@ void VolumetricClouds::CreateOutput (VkImageView prepass)
 
 void VolumetricClouds::Render (const Frame &f)
 {
+	if (!active) earthHistValid = false; // (not drawn last frame: no history)
+	ggHistValid = false; // (the history images are shared)
 	active = false;
 	if (!enabled || !f.clouds) return;
 	if (generation != ctx->SwapchainGeneration () || outPrepass != f.prepass) CreateOutput (f.prepass);
@@ -487,6 +492,41 @@ void VolumetricClouds::Render (const Frame &f)
 	p.ambient[0] = f.ambient[0], p.ambient[1] = f.ambient[1], p.ambient[2] = f.ambient[2], p.ambient[3] = (float)(frameNo++ % 64);
 	p.proj[0] = f.fx, p.proj[1] = f.fy, p.proj[2] = (float)outExtent.width, p.proj[3] = (float)outExtent.height;
 	p.noise[0] = f.windOffset[0], p.noise[1] = f.windOffset[1], p.noise[2] = f.windOffset[2], p.noise[3] = 1.0f / 6000.0f;
+	// temporal accumulation (clouds.comp): the last frame's camera; none
+	// after a jump
+	if (earthHistValid && length (f.camPlanet - ggPrevCam) > 5e3) earthHistValid = false;
+	uint32_t fi = ctx->FrameIndex ();
+	{
+		EarthHistCam &hc = *(EarthHistCam*)((char*)ggBuf.mapped + fi * sizeof(GGParams));
+		const MATRIX3 &pr = earthHistValid ? ggPrevRot : f.viewToPlanet;
+		const double pm[9] = { pr.m11, pr.m21, pr.m31, pr.m12, pr.m22, pr.m32, pr.m13, pr.m23, pr.m33 }; // (columns)
+		for (int c = 0; c < 3; c++) {
+			for (int k = 0; k < 3; k++) hc.rot[c][k] = (float)pm[c * 3 + k];
+			hc.rot[c][3] = 0.0f;
+		}
+		VECTOR3 pc0 = earthHistValid ? ggPrevCam : f.camPlanet;
+		hc.cam[0] = (float)pc0.x, hc.cam[1] = (float)pc0.y, hc.cam[2] = (float)pc0.z, hc.cam[3] = 0.0f;
+		// (still for a few frames: the samples kept sharp, only averaged
+		// over frames)
+		bool still = false;
+		if (earthHistValid) {
+			VECTOR3 fz = _V(f.viewToPlanet.m13, f.viewToPlanet.m23, f.viewToPlanet.m33), pz = _V(pr.m13, pr.m23, pr.m33);
+			still = length (f.camPlanet - pc0) < 1.0 && dotp (fz, pz) > cos (0.02 * RAD) && oapiGetTimeAcceleration () < 2.0;
+		}
+		earthStill = still ? earthStill + 1 : 0;
+		p.hist[0] = (float)(fi * sizeof(GGParams) / 16), p.hist[1] = (float)ggParity;
+		p.hist[2] = !earthHistValid ? 0.0f : earthStill >= 4 ? 2.0f : 1.0f;
+		static const bool temporal = !getenv ("ORBITER_VK_CLOUD_TEMPORAL") || atoi (getenv ("ORBITER_VK_CLOUD_TEMPORAL")) != 0; // (0: each frame's march as it is, for comparisons)
+		if (!temporal) p.hist[2] = -1.0f;
+		static_assert (sizeof(GGParams) % 16 == 0, "GGParams: whole vec4s");
+		// (the history written last frame, read now)
+		VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+		mb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, mb.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+		mb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, mb.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+		VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+		dep.memoryBarrierCount = 1, dep.pMemoryBarriers = &mb;
+		vkCmdPipelineBarrier2 (cmd, &dep);
+	}
 	VkDescriptorSet sets[2] = { marchSet, f.atmSet };
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, marchPipe);
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, marchLayout, 0, 2, sets, 0, nullptr);
@@ -497,6 +537,9 @@ void VolumetricClouds::Render (const Frame &f)
 	memcpy (shadowMap, p.mapCentre, sizeof(shadowMap));
 	memcpy (shadowNoise, p.noise, sizeof(shadowNoise));
 	shadowShell[0] = p.shell[0], shadowShell[1] = p.shell[1], shadowShell[2] = extinction, shadowShell[3] = p.mapEast[3];
+	ggPrevCam = f.camPlanet, ggPrevRot = f.viewToPlanet;
+	earthHistValid = true;
+	ggParity ^= 1;
 	active = true;
 }
 
@@ -595,6 +638,7 @@ bool VolumetricClouds::LoadDecks (const char *planet, Decks &dk)
 void VolumetricClouds::RenderGasGiant (const GasGiantFrame &f)
 {
 	if (!active) ggHistValid = false; // (not drawn last frame: no history)
+	earthHistValid = false; // (the history images are shared)
 	active = false;
 	if (!enabled || !f.decks || f.decks->decks.empty()) return;
 	if (generation != ctx->SwapchainGeneration () || outPrepass != f.prepass) CreateOutput (f.prepass);

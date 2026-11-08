@@ -2446,6 +2446,7 @@ void Scene::RenderVolumetricClouds ()
 	// slow drift of the cloud shapes
 	double t = fmod (oapiGetSimTime (), 1e5);
 	f.windOffset[0] = (float)(8.0 * t), f.windOffset[1] = 0.0f, f.windOffset[2] = (float)(5.0 * t);
+	f.viewToPlanet = mul (transp (prot), camRot);
 	vclouds->Render (f);
 	cloudsActive = true;
 }

@@ -37,6 +37,7 @@ public:
 		float fx, fy;               // projection factors
 		float ambient[3];
 		float windOffset[3];        // noise drift (planet frame) [m]
+		MATRIX3 viewToPlanet;       // camera frame -> planet frame (as the atmosphere's)
 	};
 	/// Coverage map and ray-march (outside rendering scopes, after the prepass)
 	void Render (const Frame &f);
@@ -149,6 +150,9 @@ private:
 	int ggStill = 0; // frames the camera has been still (the half-tile march)
 	VECTOR3 ggPrevCam{};
 	MATRIX3 ggPrevRot{};
+	// (the planet's clouds' history: the same images, camera and parity)
+	bool earthHistValid = false;
+	int earthStill = 0;
 	std::vector<Flash> flashes;
 	float ggOpacity = 1.0f;
 	vkc::Buffer ggBuf;                  // their parameters, one slot per frame in flight

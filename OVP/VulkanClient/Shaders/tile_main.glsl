@@ -312,6 +312,57 @@ void PolarGradients(vec2 uvT, vec2 hs)
 vec2 PolarGradX(vec2 uvT, vec2 hs) { if (!polarDone) PolarGradients(uvT, hs); return polarGx; }
 vec2 PolarGradY(vec2 uvT, vec2 hs) { if (!polarDone) PolarGradients(uvT, hs); return polarGy; }
 
+// A cloud layer's texture magnified (Earth's finest clouds: 1.2 km a
+// texel, compressed in blocks of 4x4; from 70 km a block filled 60 pixels,
+// a mosaic of blurred squares): a cubic B-spline over the texels (no
+// bilinear diamonds, the blocks' edges smoothed), and detail below a
+// texel's size from the volumetric clouds' noise, eroding the thin clouds
+// and the edges into puffs (thick cloud stays). w: how magnified (0: not,
+// the texture as it is)
+vec4 TexBSpline(sampler2D t, vec2 uv)
+{
+	vec2 size = vec2(textureSize(t, 0));
+	vec2 p = uv * size - 0.5, i = floor(p), f = p - i;
+	vec2 f2 = f * f, f3 = f2 * f;
+	vec2 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0, w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+	vec2 w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0, w3 = f3 / 6.0;
+	vec2 g0 = w0 + w1, g1 = w2 + w3;
+	vec2 h0 = (i - 0.5 + w1 / g0) / size, h1 = (i + 1.5 + w3 / g1) / size;
+	return g0.y * (g0.x * textureLod(t, vec2(h0.x, h0.y), 0.0) + g1.x * textureLod(t, vec2(h1.x, h0.y), 0.0))
+	     + g1.y * (g0.x * textureLod(t, vec2(h0.x, h1.y), 0.0) + g1.x * textureLod(t, vec2(h1.x, h1.y), 0.0));
+}
+
+float CloudLayerMagnification(vec2 uvT)
+{
+	vec2 tx = uvT * vec2(textureSize(surfTex, 0));
+	float texPerPx = max(length(dFdx(tx)), length(dFdy(tx)));
+	return smoothstep(1.0, 0.25, texPerPx); // (fully from a texel of four pixels)
+}
+
+// the layer's opacity a (0..1) with detail; p: the point (planet frame)
+float CloudLayerDetail(float a, vec3 p, float w)
+{
+	float pxSize = max(length(dFdx(p)), length(dFdy(p))); // (before the branch: derivatives in uniform flow)
+	if (w <= 0.0) return a;
+	// two octaves, each a difference of two samples (zero mean); the finer
+	// one only where it is larger than a few pixels
+	vec3 q = p / 9000.0;
+	float n = textureLod(atmCloudShape, q, 0.0).r - textureLod(atmCloudShape, q * 1.07 + vec3(0.37, 0.61, 0.13), 0.0).r;
+	vec3 q2 = p / 2600.0;
+	float n2 = textureLod(atmCloudShape, q2, 0.0).r - textureLod(atmCloudShape, q2 * 0.93 + vec3(0.71, 0.29, 0.53), 0.0).r;
+	n += 0.6 * n2 * smoothstep(150.0, 40.0, pxSize);
+	// strongest in thin cloud and at the edges, none in clear sky or overcast
+	float edge = 4.0 * a * (1.0 - a);
+	float d = clamp(a + 1.1 * n * edge, 0.0, 1.0);
+	d = mix(d, smoothstep(0.1, 0.9, d), 0.6); // (crisper puffs)
+	// (a veil of the layer's own stays under them: thin cloud thinned, not
+	// cleared, the cover kept)
+	float v = 0.55 * a, k = 0.15; // (a smooth maximum: a crease showed as a dark rim in the relief)
+	float hm = clamp(0.5 + 0.5 * (d - v) / k, 0.0, 1.0);
+	d = mix(v, d, hm) + k * hm * (1.0 - hm);
+	return mix(a, d, w);
+}
+
 void main()
 {
 	vec3 N = normalize(vNormalView);
@@ -324,6 +375,19 @@ void main()
 	vec2 hs = 0.5 / vec2(textureSize(surfTex, 0));
 	vec2 uvT = clamp(vUV * tile.surfUV.zw + tile.surfUV.xy, hs, 1.0 - hs);
 	vec3 base = textureGrad(surfTex, uvT, PolarGradX(uvT, hs), PolarGradY(uvT, hs)).rgb;
+	float cloudA = 0.0, cloudA0 = 0.0; // (a cloud layer: its opacity, with detail where magnified; without)
+	if (tile.params.z > 0.5) {
+		float w = CloudLayerMagnification(uvT);
+		vec4 c = texture(surfTex, uvT);
+		if (w > 0.0) {
+			vec4 cs = TexBSpline(surfTex, uvT);
+			c = mix(c, cs, w);
+			base = mix(base, cs.rgb, w);
+		}
+		vec3 pc = mat3(atm.viewToPlanet) * vPosView + atm.camPos.xyz;
+		cloudA0 = c.a;
+		cloudA = CloudLayerDetail(c.a, pc, atm.misc.x > 0.5 ? w : 0.0);
+	}
 	if (tile.params.z < 0.5 && atm.surfPrm.x != 1.0) // (the textures' colour tints, per planet)
 		base = max(mix(vec3(dot(base, vec3(0.2126, 0.7152, 0.0722))), base, atm.surfPrm.x), 0.0);
 	// procedural detail below the textures' resolution (terrain only)
@@ -341,7 +405,9 @@ void main()
 		// cloud tops seen from above: relief from the cloud density (thicker
 		// clouds are taller; exaggerated for the texture's smoothness), shading their sides (surface
 		// gradient bump mapping from the screen-space derivatives)
-		float h = 5000.0 * texture(surfTex, clamp(vUV * tile.surfUV.zw + tile.surfUV.xy, hs, 1.0 - hs)).a;
+		// (the detail's relief less: at full strength its puffs' crevices
+		// read as cracks)
+		float h = 5000.0 * mix(cloudA0, cloudA, 0.2);
 		vec3 sx = dFdx(vPosView), sy = dFdy(vPosView);
 		vec3 r1 = cross(sy, N), r2 = cross(N, sx);
 		float det = dot(sx, r1);
@@ -386,7 +452,7 @@ void main()
 	}
 
 	if (tile.params.z > 0.5) { // cloud layer: lit from above, also seen from below
-		float a = texture(surfTex, clamp(vUV * tile.surfUV.zw + tile.surfUV.xy, hs, 1.0 - hs)).a * tile.params.y;
+		float a = cloudA * tile.params.y;
 		// near the camera the volumetric clouds replace the layer
 		if (tile.params.w > 0.0) a *= smoothstep(0.75 * tile.params.w, tile.params.w, length(vPosView));
 		// seen from below: the underside, shaded by the cloud's own thickness

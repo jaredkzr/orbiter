@@ -23,6 +23,14 @@ layout(set = 0, binding = 1) uniform sampler3D shapeNoise;
 layout(set = 0, binding = 2) uniform sampler3D detailNoise;
 layout(set = 0, binding = 3) uniform sampler2D prepass;   // view normal, view depth (w; 0: none)
 layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D outClouds;
+// the last frame's camera (vec4s from index hist.x: its frame -> planet
+// frame (three columns), its position), and the history (shared with the
+// gas giant decks): light and transmittance, the clouds' distance
+layout(std430, set = 0, binding = 5) readonly buffer HistBuf { vec4 histCam[]; };
+layout(set = 0, binding = 6) uniform sampler2D histIn[2];
+layout(set = 0, binding = 7) uniform sampler2D depthIn[2];
+layout(set = 0, binding = 8, rgba16f) uniform writeonly image2D histOut[2];
+layout(set = 0, binding = 9, r32f) uniform writeonly image2D depthOut[2];
 
 layout(push_constant) uniform Params {
 	vec4 shell;      // base radius, top radius, maximum distance [m], sun irradiance scale
@@ -32,6 +40,7 @@ layout(push_constant) uniform Params {
 	vec4 ambient;    // ambient light (rgb), w: frame index
 	vec4 proj;       // fx, fy, output width, height
 	vec4 noise;      // noise offset (wind, planet frame), w: shape noise frequency [1/m]
+	vec4 hist;       // x: index of the last frame's camera in histCam, y: parity (history to write), z: history valid (1), and the camera still (2)
 } pc;
 
 const float PI = 3.14159265;
@@ -70,24 +79,27 @@ float HG (float c, float g)
 	return (1.0 - g2) / (4.0 * PI * pow (max (1.0 + g2 - 2.0 * g * c, 1e-4), 1.5));
 }
 
-void main ()
+// the march for pixel px: light (rgb, premultiplied) and transmittance
+// (a), the clouds' distance (0: none) and where they were seen (planet
+// frame: the history's point)
+void March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 {
-	ivec2 px = ivec2 (gl_GlobalInvocationID.xy);
 	vec2 size = pc.proj.zw;
-	if (px.x >= int (size.x) || px.y >= int (size.y)) return;
+	res = vec4 (0.0, 0.0, 0.0, 1.0), dist = 0.0;
 
 	// view ray (planet frame)
 	vec2 ndc = (vec2 (px) + 0.5) / size * 2.0 - 1.0;
 	vec3 dv = normalize (vec3 (ndc.x / pc.proj.x, -ndc.y / pc.proj.y, 1.0));
 	vec3 d = normalize (mat3 (atm.viewToPlanet) * dv);
 	vec3 o = atm.camPos.xyz;
+	hx = o + d * 1e7;
 
 	// segment inside the cloud shell
 	vec2 tt = RaySphere (o, d, pc.shell.y);
 	vec2 tb = RaySphere (o, d, pc.shell.x);
 	float r0 = length (o);
 	float t0, t1;
-	if (tt.x > tt.y || tt.y <= 0.0) { imageStore (outClouds, px, vec4 (0.0, 0.0, 0.0, 1.0)); return; }
+	if (tt.x > tt.y || tt.y <= 0.0) return;
 	t0 = max (tt.x, 0.0), t1 = tt.y;
 	if (r0 < pc.shell.x) {
 		t0 = max (t0, tb.y);         // from the base upwards
@@ -104,7 +116,7 @@ void main ()
 	vec2 tg = RaySphereC (o, d, atm.camC.x);
 	if (tg.x > 0.0 && tg.x <= tg.y) t1 = min (t1, tg.x);
 	t1 = min (t1, pc.shell.z);
-	if (t1 <= t0) { imageStore (outClouds, px, vec4 (0.0, 0.0, 0.0, 1.0)); return; }
+	if (t1 <= t0) return;
 
 	// march, with steps growing with distance and a per-pixel, per-frame offset
 	float jitter = fract (52.9829189 * fract (dot (vec2 (px) + pc.ambient.w * vec2 (5.588238, 5.588238), vec2 (0.06711056, 0.00583715))));
@@ -156,11 +168,92 @@ void main ()
 		wSum += w;
 		T *= Tstep;
 	}
-	if (wSum <= 0.0) { imageStore (outClouds, px, vec4 (0.0, 0.0, 0.0, 1.0)); return; }
+	if (wSum <= 0.0) return;
 
 	// haze between the camera and the clouds (the scene behind already has it)
 	float tc = tWeighted / wSum;
 	vec3 Tair;
 	vec3 Lair = AtmTonemap (Inscatter (d, tc, Tair));
-	imageStore (outClouds, px, vec4 (L * Tair + (1.0 - T) * Lair, T));
+	res = vec4 (L * Tair + (1.0 - T) * Lair, T);
+	dist = tc, hx = o + d * tc;
+}
+
+void Store (ivec2 px, vec4 c, float depth)
+{
+	int cur = int (pc.hist.y);
+	imageStore (outClouds, px, c);
+	imageStore (histOut[cur], px, c);
+	imageStore (depthOut[cur], px, vec4 (depth));
+}
+
+// the last frame's light and transmittance where the point x (planet
+// frame) was seen, and whether it is the same cloud (its distance then)
+bool History (vec3 x, float dist, out vec4 h)
+{
+	h = vec4 (0.0);
+	if (pc.hist.z < 0.5) return false;
+	int b = int (pc.hist.x), prv = 1 - int (pc.hist.y);
+	mat3 R = mat3 (histCam[b].xyz, histCam[b + 1].xyz, histCam[b + 2].xyz);
+	vec3 pcam = histCam[b + 3].xyz;
+	vec3 v = transpose (R) * (x - pcam);
+	if (v.z <= 0.0) return false;
+	vec2 uv = vec2 (v.x / v.z * pc.proj.x, -v.y / v.z * pc.proj.y) * 0.5 + 0.5;
+	if (any (lessThan (uv, vec2 (0.0))) || any (greaterThan (uv, vec2 (1.0)))) return false;
+	h = textureLod (histIn[prv], uv, 0.0);
+	float dp = textureLod (depthIn[prv], uv, 0.0).r;
+	float dn = dist > 0.0 ? length (x - pcam) : 0.0;
+	if (dn == 0.0 || dp == 0.0) return (dn == 0.0) == (dp == 0.0);
+	return abs (dp - dn) < 0.1 * dn + 300.0;
+}
+
+// the workgroup's marched pixels: the neighbourhood of each
+shared vec4 nbC[8][8];
+shared float nbD[8][8];
+
+// The march's jitter (a per-pixel, per-frame offset of its steps) hides
+// the steps' banding but leaves a grain at the clouds' thin edges: a
+// halftone of the offsets' pattern, at half resolution. It is averaged
+// over frames here, the history reprojected by the clouds' distance and
+// clipped to the spread of the pixel's neighbourhood (the same cloud), so
+// that it follows the camera and does not smear (as ggclouds.comp). The
+// temporal anti-aliasing could not: the clouds have no depth of their own.
+void main ()
+{
+	ivec2 px = ivec2 (gl_GlobalInvocationID.xy), lp = ivec2 (gl_LocalInvocationID.xy);
+	bool inside = px.x < int (pc.proj.z) && px.y < int (pc.proj.w);
+	vec4 res = vec4 (0.0, 0.0, 0.0, 1.0);
+	float dist = 0.0;
+	vec3 hx = vec3 (0.0);
+	if (inside) March (px, res, dist, hx);
+	if (pc.hist.z < -0.5) { if (inside) Store (px, res, dist); return; } // (ORBITER_VK_CLOUD_TEMPORAL=0)
+	nbC[lp.y][lp.x] = res, nbD[lp.y][lp.x] = dist;
+	barrier ();
+	if (!inside) return;
+	vec4 f = vec4 (0.0), m2 = vec4 (0.0), fa = vec4 (0.0);
+	float ws = 0.0, wa = 0.0;
+	for (int dy = -1; dy <= 1; dy++)
+		for (int dx = -1; dx <= 1; dx++) {
+			ivec2 q = lp + ivec2 (dx, dy);
+			if (any (lessThan (q, ivec2 (0))) || any (greaterThan (q, ivec2 (7)))) continue;
+			float dq = nbD[q.y][q.x];
+			float w = (dx == 0 ? 2.0 : 1.0) * (dy == 0 ? 2.0 : 1.0);
+			vec4 c = nbC[q.y][q.x];
+			fa += w * c, wa += w;
+			if ((dq == 0.0) != (dist == 0.0) || abs (dq - dist) > 0.1 * dist + 200.0) continue;
+			f += w * c, m2 += w * c * c, ws += w;
+		}
+	f /= ws;
+	vec4 sd = sqrt (max (m2 / ws - f * f, vec4 (0.0)));
+	// (the camera moving, the history short: the sample the neighbourhood's
+	// average, its grain less; still, its own, sharp)
+	if (pc.hist.z < 1.5) res = f;
+	vec4 h;
+	if (History (hx, dist, h)) {
+		h = clamp (h, f - 1.25 * sd, f + 1.25 * sd);
+		res = mix (h, res, 0.1);
+	}
+	// (none: newly uncovered, or a cloud's edge there one frame and not the
+	// next: the neighbourhood's average, not a single sample's speckle)
+	else if (pc.hist.z > 0.5) res = fa / wa;
+	Store (px, res, dist);
 }
