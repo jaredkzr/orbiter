@@ -81,7 +81,18 @@ void main ()
 		c = vColor.rgb * (vAmb * occl + vSun * (0.15 + 0.85 * wrap + through) + vLoc * (0.15 + 0.85 * wrapL + through));
 	} else {
 		a = t.a * vColor.a;
-		c = t.rgb * vColor.rgb * (vSun + vAmb + vLoc + (emissive ? vec3 (1.0) : vec3 (0.0)));
+		// (a plain texture lit by the local lights' direction: shaded as a
+		// ball of smoke, its side away from the flames in its own shadow;
+		// lit evenly to its rim it read as a disc by a flame at night)
+		vec3 loc = vLoc;
+		if (!emissive) {
+			vec2 nn = lq * 2.0 - 1.0;
+			vec2 nr = vec2 (vMisc.x * nn.x - vMisc.y * nn.y, vMisc.y * nn.x + vMisc.x * nn.y);
+			vec3 N = normalize (vec3 (nr, -sqrt (max (1.0 - dot (nn, nn), 0.0))));
+			float wrapL = clamp ((dot (N, normalize (vLocDir)) + 0.35) / 1.35, 0.0, 1.0);
+			loc *= 0.15 + 0.85 * wrapL + 0.6 * (1.0 - t.a) * wrapL;
+		}
+		c = t.rgb * vColor.rgb * (vSun + vAmb + loc + (emissive ? vec3 (1.0) : vec3 (0.0)));
 		if ((vFlags & PF_ERODE) != 0u) {
 			// a flame breaking up as it cools: its thinner parts (the
 			// texture's coverage) burn away first, the threshold rising with

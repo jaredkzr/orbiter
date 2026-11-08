@@ -870,8 +870,15 @@ def vk_name (title):
 	return os.fsdecode ((title.replace (" ", "_") + ".cfg").encode ("latin-1"))
 
 def update_vk (path, L, title):
+	"""the base's floodlights (Config/VK/Bases). Their colour r g b is the
+	lamp's brightness: its glow's, and as a light r g b x 0.01 of sunlight
+	(the Vulkan client's FLOOD_IRRADIANCE, VObjects.cpp) out to a fifth of the
+	range (80 m), the inverse square beyond: 6 lights the pad 100 m away with
+	~2 % of sunlight, a floodlit stadium"""
 	lines = ["; Lights of %s for the Vulkan client (base frame [m]: x south, y up, z east)" % title,
 		"; FLOODLIGHT x y z  dx dy dz  range[m]  r g b  umbra penumbra [deg]",
+		"; r g b: the lamp's brightness (its glow; about 6 for a xenon flood). As a light it gives r g b x 0.01",
+		"; of sunlight (VObjects.cpp FLOOD_IRRADIANCE) out to a fifth of the range, the inverse square beyond",
 		"; (made by Utils/BaseKit/basekit.py: floodlights about the pad)"]
 	for (e, y, n, de, dy, dn) in L.floods:
 		(x, z), (dx, dz) = BF (e, n), BF (de, dn)

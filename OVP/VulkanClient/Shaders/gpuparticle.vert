@@ -174,19 +174,23 @@ void main ()
 	// local lights (engine plumes, floodlights): unshadowed; from their
 	// direction as far as they share one (the puffs' billows facing the
 	// flames lit, at night the cloud's side towards them), the rest from all
-	// about
+	// about. At the sprite's corner (the light falling off across a puff by
+	// a flame, which was lit evenly to its rim: a bright disc), the inverse
+	// square's mean over a ball of its radius (d^2 + h^2/3): a puff beside a
+	// flame lit as a whole, not as at the flame's surface
 	vec3 loc = vec3 (0.0), ldir = vec3 (0.0);
 	float lsum = 0.0;
 	int nl = int (frame.lightCount.x);
+	float ext2 = h * h / 3.0;
 	for (int k = 0; k < nl; k++) {
 		LocalLight l = frame.lights[k];
 		if (l.dir.w > 2.5) { amb += l.col.rgb * 0.8; continue; } // (a star: from afar)
-		float la = LightReach (l, vp);
+		float la = LightReach (l, pos, ext2);
 		if (la <= 0.0) continue;
 		vec3 e = l.col.rgb * (0.8 * la);
 		float el = dot (e, vec3 (0.2126, 0.7152, 0.0722));
 		loc += e, lsum += el;
-		ldir += normalize (l.pos.xyz - vp) * el;
+		ldir += normalize (l.pos.xyz - pos) * el;
 	}
 	float dl = length (ldir), frac = lsum > 0.0 ? dl / lsum : 0.0;
 	vAmb = (amb + loc * (1.0 - frac)) * ambScale;

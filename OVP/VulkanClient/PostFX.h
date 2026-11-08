@@ -49,6 +49,13 @@ public:
 	/// hole's accretion disc, far brighter than the Sun's surface, the eye
 	/// adapts further down
 	float minExposure = 0.6f, adaptStrength = 0.6f;
+	/// metering window: the lit samples' log luminance averaged between these
+	/// fractions of them (by default the brighter half, the sun's disc and
+	/// glints left out)
+	float meterLow = 0.5f, meterHigh = 0.98f;
+	/// fraction of the image's samples (the brightest) left out of the
+	/// metering: engine flames at night (0: none)
+	float meterFlames = 0.0f;
 
 	/// adapted exposure and metered scene luminance (log2), as of the last
 	/// completed frame

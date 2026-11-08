@@ -695,6 +695,7 @@ void PlumeRenderer::BeginFrame (double t)
 	simt = t;
 	list.clear ();
 	((uint32_t*)buf.mapped)[slot] = 0;
+	solidAngle = 0.0;
 }
 
 int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
@@ -915,6 +916,18 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 		if (hit) {
 			info->hitPos = p.pos + (ex * hitP.x + ey * hitP.y + ez * hitP.z) * re;
 			info->hitN = ex * hitN.x + ey * hitN.y + ez * hitN.z;
+		}
+	}
+	// the flame's solid angle (the exposure's metering leaves the flames out
+	// at night): its bright part, a cylinder of the jet's mean radius as long
+	// as the core, seen from the camera (not occluded)
+	{
+		double zL = std::min (len, boxZ), R = radiusAt (0.5 * zL) * re, Lm = zL * re;
+		VECTOR3 mid = p.pos + ez * (0.5 * Lm);
+		double d = length (mid);
+		if (d > 1e-3) {
+			double c = fabs (dotp (ez, mid / d)), s = sqrt (std::max (0.0, 1.0 - c * c));
+			solidAngle += std::min ((2.0 * R * Lm * s + PI * R * R * c) / (d * d), 2.0 * PI);
 		}
 	}
 	uint32_t index = slot * MAX_PLUMES + (uint32_t)list.size();

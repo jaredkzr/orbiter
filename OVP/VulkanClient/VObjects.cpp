@@ -1718,8 +1718,9 @@ void VVessel::CollectLights (std::vector<LightSource> &lights)
 	// engine plumes light their surroundings: an extended source of radiance
 	// L and side area A gives an irradiance of L A / (pi d^2) farther away
 	// (L in units of a sunlit white surface's radiance, E_sun / pi; the
-	// irradiance in units of E_sun), up to about pi L right beside it (the
-	// light's attenuation is capped at 1).
+	// irradiance in units of E_sun), up to L right beside it (the light's
+	// attenuation is capped at 1: a surface facing a half space of radiance
+	// L receives pi times its radiance in physical units, L E_sun here).
 	// Three points along the flame share its area, each a sphere of the jet's
 	// radius there (lights.glsl: surfaces beside the flame, at grazing
 	// angles, lit); with many plumes, the brightest plumes' only (one point
@@ -1750,8 +1751,8 @@ void VVessel::CollectLights (std::vector<LightSource> &lights)
 				l.sortRange = reach; // (the brightest first: they get the shadowed slots)
 				l.radius = pl.radius[pt];
 				if (length (l.pos - cam) > l.range + 10e3) continue;
-				l.att[0] = 0.0, l.att[1] = 0.0, l.att[2] = PI * PI / area;
-				for (int c = 0; c < 3; c++) l.col[c] = (float)(PI * pl.col[c]);
+				l.att[0] = 0.0, l.att[1] = 0.0, l.att[2] = PI / area;
+				for (int c = 0; c < 3; c++) l.col[c] = pl.col[c];
 				lights.push_back (l);
 			}
 		}
@@ -2544,6 +2545,12 @@ namespace {
 	// a base light's glow (a glare): its half size at most this angle [rad]
 	// (about 9 pixels in a 40 degree view 1600 wide), its own size beyond
 	constexpr double LIGHT_GLOW_MAX_ANGLE = 0.004;
+	// a floodlight's light: its configured colour (Config/VK/Bases, which
+	// also sets its glow's brightness: about 6 for a xenon flood) times this
+	// is its irradiance [units of sunlight] up to a fifth of its range, the
+	// inverse square beyond: 6 lights the pad 100 m away with ~2 % of
+	// sunlight (~2000 lux, a floodlit stadium), not twice the sun
+	constexpr double FLOOD_IRRADIANCE = 0.01;
 }
 
 VBase::VBase (OBJHANDLE h, Scene *s) : hBase(h), scene(s)
@@ -2686,7 +2693,7 @@ void VBase::CollectLights (std::vector<LightSource> &out)
 		l.range = fl.range;
 		l.att[0] = 1.0, l.att[1] = 0.0, l.att[2] = 1.0 / (0.04 * fl.range * fl.range);
 		l.umbra = fl.umbra, l.penumbra = fl.penumbra;
-		for (int k = 0; k < 3; k++) l.col[k] = fl.col[k];
+		for (int k = 0; k < 3; k++) l.col[k] = (float)(FLOOD_IRRADIANCE * fl.col[k]);
 		out.push_back (l);
 	}
 }

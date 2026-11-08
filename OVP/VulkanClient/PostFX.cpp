@@ -26,6 +26,7 @@ namespace {
 	struct AdaptParams {
 		float dt, key, minLogExp, maxLogExp, lowPct, highPct, speedUp, speedDown;
 		float strength, darkLogLum, minLitFrac;
+		float flameFrac;   // fraction of the image left out as flames (the brightest)
 	};
 
 	void MemoryBarrier (VkCommandBuffer cmd, VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
@@ -460,10 +461,11 @@ void PostFX::Meter ()
 	ap.dt = dt;
 	ap.key = 0.45f;
 	ap.minLogExp = std::log2 (minExposure), ap.maxLogExp = std::log2 (std::max (maxExposure, minExposure));
-	ap.lowPct = 0.5f, ap.highPct = 0.98f;
+	ap.lowPct = meterLow, ap.highPct = meterHigh;
 	ap.speedUp = 3.0f, ap.speedDown = 1.2f;
 	ap.strength = adaptStrength;
 	ap.darkLogLum = -8.0f, ap.minLitFrac = 0.02f;
+	ap.flameFrac = meterFlames;
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, adaptPipe);
 	vkCmdPushConstants (cmd, meterLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ap), &ap);
 	vkCmdDispatch (cmd, 1, 1, 1);

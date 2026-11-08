@@ -9,16 +9,20 @@
 // without its direction: the attenuation (at most 1: Orbiter's coefficients
 // make it far larger near the light), faded to nothing at the range, a
 // spot's cone (the particles: lit from all sides)
-float LightReach (LocalLight l, vec3 p)
+// ext2: the square of an extent added to the distance's in the inverse
+// square (a sprite: the mean over its puff, not the light at its centre)
+float LightReach (LocalLight l, vec3 p, float ext2)
 {
 	float d = length (l.pos.xyz - p);
 	if (d > l.pos.w) return 0.0;
-	float a = min (1.0 / max (l.att.x + l.att.y * d + l.att.z * d * d, 1e-4), 1.0);
+	float a = min (1.0 / max (l.att.x + l.att.y * d + l.att.z * (d * d + ext2), 1e-4), 1.0);
 	float x = clamp (1.0 - pow (d / l.pos.w, 4.0), 0.0, 1.0);
 	a *= x * x;
 	if (l.dir.w > 1.5) a *= smoothstep (l.spot.x, l.att.w, dot (normalize (p - l.pos.xyz), l.dir.xyz));
 	return a;
 }
+
+float LightReach (LocalLight l, vec3 p) { return LightReach (l, p, 0.0); }
 
 // the cosine factor of a spherical source of angular radius asin(s) on a
 // surface whose normal is at cosine c to its centre: the cosine while the

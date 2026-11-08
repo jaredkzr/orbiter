@@ -29,6 +29,7 @@ layout(push_constant) uniform Params {
 	float strength;    // fraction of the luminance difference compensated
 	float darkLogLum;  // samples below this (log2) count as black
 	float minLitFrac;  // lit fraction of the image needed to ignore the black
+	float flameFrac;   // fraction of the image's samples left out as flames: the brightest (0: none)
 } pc;
 
 void main ()
@@ -47,6 +48,12 @@ void main ()
 		total -= dark;
 	}
 
+	// (flames at night: drawn far brighter than anything they light, and
+	// metered on, the scene they light stayed dark: as many of the
+	// brightest samples as they cover left out, at least a fifth of the lit
+	// ones kept)
+	float all = first > 0 ? total + dark : total;
+	if (pc.flameFrac > 0.0) total = max (total - pc.flameFrac * all, 0.2 * total);
 	float lo = total * pc.lowPct, hi = total * pc.highPct;
 	float acc = 0.0, sum = 0.0, wsum = 0.0;
 	for (int i = first; i < HIST_BINS; i++) {

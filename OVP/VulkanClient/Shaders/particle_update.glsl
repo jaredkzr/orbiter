@@ -61,6 +61,21 @@ vec3 GroundVel (vec3 pos)
 	return pc.bodyVel.xyz + cross (pos - pc.bodyPos.xyz, pc.omega.xyz);
 }
 
+// smoke or dust meeting the ground (normal Ng, global axes) at pos: its
+// motion into it stopped and its motion along it slowed by friction, both
+// in the ground's frame (the global frame moves at tens of km/s: there a
+// fraction of the velocity, or its part along the normal, is a kick of
+// kilometres per second, which threw smoke touching the ground a kilometre
+// into the sky)
+vec3 SlideOnGround (vec3 pos, vec3 vel, vec3 Ng, bool ballistic)
+{
+	vec3 vg = GroundVel (pos);
+	vec3 rel = vel - vg;
+	float into = dot (rel, Ng);
+	if (into < 0.0) rel -= Ng * into;
+	return vg + rel * (ballistic ? 0.5 : 0.85); // (friction)
+}
+
 // a speck (fragment, spark) that strikes a surface in this step bounces off
 // it, in the surface's frame (vessels, debris and the ground move at
 // kilometres per second in the global frame): its velocity across the
@@ -179,9 +194,7 @@ void main ()
 			if (ballistic && !inAir) { particles[i].velLife.w = 0.0; return; } // (dust in vacuum: lands)
 			vec3 Ng = mat3 (frame.viewToGlobal) * N;
 			pos += d * max (t - gap, 0.0);
-			float into = dot (vel, Ng);
-			if (into < 0.0) vel -= Ng * into;
-			vel *= ballistic ? 0.5 : 0.85; // (friction)
+			vel = SlideOnGround (pos, vel, Ng, ballistic);
 			move = vec3 (0.0);
 		}
 #else
@@ -192,9 +205,7 @@ void main ()
 			if (ballistic && !inAir) { particles[i].velLife.w = 0.0; return; }
 			up /= r;
 			move += up * (pc.ground.x + gap - r);
-			float into = dot (vel, up);
-			if (into < 0.0) vel -= up * into;
-			vel *= 0.85;
+			vel = SlideOnGround (pos, vel, up, ballistic);
 		}
 #endif
 	}

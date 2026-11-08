@@ -18,6 +18,7 @@
 #include "Particles.h"
 #include "ParticleStream.h"
 #include "PostFX.h"
+#include "Plumes.h"
 #include <cmath>
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
@@ -297,6 +298,7 @@ void VulkanClient::clbkUpdate (bool running)
 namespace {
 	constexpr double DAYLIGHT_MAX_EXPOSURE = 1.3; // with the camera in sunlight
 	constexpr double NIGHT_MIN_EXPOSURE = 0.15;   // lowest exposure with the camera in darkness (flames lighting the view)
+	constexpr double NIGHT_METER_LOW = 0.4, NIGHT_METER_HIGH = 0.9; // metering window with the camera in darkness (PostFX meterLow/High)
 	constexpr double STAR_DISC_DISPLAY = 0.9; // a large star disc's centre, displayed
 }
 
@@ -360,6 +362,26 @@ void VulkanClient::clbkRenderScene ()
 		// scene meters far below it)
 		postfx->minExposure = disc ? 1e-4f : (float)std::exp2 (std::log2 (NIGHT_MIN_EXPOSURE) + (std::log2 (0.6) - std::log2 (NIGHT_MIN_EXPOSURE)) * std::clamp (sl, 0.0, 1.0));
 		postfx->adaptStrength = disc ? 0.9f : 0.6f;
+		// (at night the brightest lit samples are the flames themselves, drawn
+		// far brighter than anything they light: metered on them, a launch's
+		// vessel lit from behind by its flames stayed dark. In darkness the
+		// meter leaves out as many of the brightest samples as the flames
+		// cover (their solid angle, PlumeRenderer) and its window moves down
+		// somewhat: exposed for the scene the flames light, as a photograph of
+		// a night launch, the flames blown out. Tuned by the night launch
+		// shots (N2-night.md): the hull from below ~80/255, the pad cloud at
+		// 250 m within ~10 % of the plain meter. In sunlight: the plain meter)
+		{
+			double night = 1.0 - std::clamp (sl, 0.0, 1.0);
+			double lo = NIGHT_METER_LOW, hi = NIGHT_METER_HIGH;
+			postfx->meterLow = (float)(0.5 + (lo - 0.5) * night);
+			postfx->meterHigh = (float)(0.98 + (hi - 0.98) * night);
+			// the flames' share of the image (their solid angle over the view's)
+			double fl = 0.0;
+			if (PlumeRenderer *pr = scene->Plumes ())
+				fl = std::min (pr->SolidAngle () * scene->ProjX () * scene->ProjY () / 4.0, 0.9);
+			postfx->meterFlames = (float)(fl * night);
+		}
 		if (fill > 0.0 && !disc) {
 			float c[3];
 			Scene::StarDiscRGB (teff, c);

@@ -138,6 +138,9 @@ public:
 	/// Add a plume of the object owner; returns its index (-1: none), and
 	/// where its flame ends (info, if given)
 	int Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info = nullptr);
+	/// the solid angle of the flames added this frame [sr] (their bright
+	/// parts, unoccluded)
+	double SolidAngle () const { return solidAngle; }
 	/// The prepass image (view depth) the plumes are clipped against
 	void SetPrepass (VkImageView prepass);
 	/// At half resolution (halfRes): march the plumes into half-size images
@@ -184,6 +187,7 @@ private:
 	vkc::Context *ctx = nullptr;
 	vkc::Buffer buf;
 	uint32_t slot = 0;
+	double solidAngle = 0.0;
 	double simt = 0.0;
 	std::vector<Entry> list;
 	VkSampler clampSampler = VK_NULL_HANDLE, repeatSampler = VK_NULL_HANDLE;
