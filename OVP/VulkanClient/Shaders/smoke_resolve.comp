@@ -1,35 +1,98 @@
 // Copyright (c) Martin Schweiger
 // Licensed under the MIT License
 
-// Smoke volume: the accumulated extinction and light into a filterable
-// volume (light per extinction, extinction), and which columns hold smoke
+// Smoke volume: the accumulated extinction, coverage and light into a
+// filterable volume (light per coverage, extinction; the core), which
+// columns hold smoke, and the smoke integrated from the camera up to each
+// slice (light, transmittance: as smoke_march.comp, with its erosion's
+// mean), which fogs the sprites within it (gpuparticle.frag).
+// Pass 1 (pc.vol.x = 1): the coarse grid (large particles) into floats,
+// added in by pass 0 at each froxel. Pass 0: one workgroup per tile of
+// 8 x 8 columns, only the tiles with smoke this frame or the last one (or
+// all: pc.vol.z): the others hold no smoke and were left empty. The
+// accumulators are cleared as they are read (no clear pass)
 
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-#define FRAME_SET 1
-#include "frame.glsl"
+#include "particle_common.glsl"
 #include "smokevol.glsl"
 layout(set = 0, binding = 11, r32ui) uniform uimage3D volD;
 layout(set = 0, binding = 12, r32ui) uniform uimage3D volR;
 layout(set = 0, binding = 13, r32ui) uniform uimage3D volG;
 layout(set = 0, binding = 14, r32ui) uniform uimage3D volB;
+layout(set = 0, binding = 25, r32ui) uniform uimage3D volC;
+layout(set = 0, binding = 26, r32ui) uniform uimage3D volCoarse[5]; // D, C, R, G, B
 layout(set = 0, binding = 15, rgba16f) uniform writeonly image3D volOut;
 layout(set = 0, binding = 16, rg16f) uniform writeonly image2D volColumns; // smoke from, to (slice fractions; from > to: none)
+layout(set = 0, binding = 24, rgba16f) uniform writeonly image3D volInteg;  // light in front (rgb), transmittance (a), at each slice's middle
+layout(set = 0, binding = 31, rgba16f) uniform writeonly image3D coarseL;   // coarse: light x coverage (rgb), coverage
+layout(set = 0, binding = 32, r16f) uniform writeonly image3D coarseD;      // coarse: extinction
+layout(set = 0, binding = 33) uniform sampler3D coarseLTex;
+layout(set = 0, binding = 34) uniform sampler3D coarseDTex;
+layout(set = 0, binding = 35, r8) uniform writeonly image3D volCore;      // the core (VolCore)
+layout(set = 0, binding = 37, std430) buffer VolOcc { uint volOcc[]; };
+
+void Coarse ()
+{
+	ivec3 q = ivec3 (gl_GlobalInvocationID);
+	if (any (greaterThanEqual (q, VOL_COARSE))) return;
+	uint u[5];
+	for (int k = 0; k < 5; k++) u[k] = imageLoad (volCoarse[k], q).r;
+	if ((u[0] | u[1]) != 0u)
+		for (int k = 0; k < 5; k++) imageStore (volCoarse[k], q, uvec4 (0u));
+	imageStore (coarseL, q, vec4 (float (u[2]), float (u[3]), float (u[4]), float (u[1])) / VOL_FIXED_C);
+	imageStore (coarseD, q, vec4 (float (u[0]) / VOL_FIXED_D));
+}
 
 void main ()
 {
+	if (pc.vol.x > 0.5) { Coarse (); return; }
+	uint tile = gl_WorkGroupID.y * uint (VOL_TILES.x) + gl_WorkGroupID.x;
+	uint p = uint (pc.vol.y);
+	if (pc.vol.z < 0.5 && volOcc[p * VOL_TILE_COUNT + tile] == 0u && volOcc[(1u - p) * VOL_TILE_COUNT + tile] == 0u) return;
 	ivec2 xy = ivec2 (gl_GlobalInvocationID.xy);
 	if (any (greaterThanEqual (xy, VOL_SIZE.xy))) return;
 	int zmin = VOL_SIZE.z, zmax = -1;
+	// (the column's direction: depths along it)
+	vec2 uv = (vec2 (xy) + 0.5) / vec2 (VOL_SIZE.xy);
+	vec2 ndc = uv * 2.0 - 1.0;
+	float dz = normalize (vec3 (ndc.x / frame.proj[0][0], ndc.y / frame.proj[1][1], 1.0)).z;
+	float T = 1.0;
+	vec3 L = vec3 (0.0);
 	for (int z = 0; z < VOL_SIZE.z; z++) {
 		ivec3 q = ivec3 (xy, z);
-		float d = float (imageLoad (volD, q).r) / VOL_FIXED;
-		vec3 c = vec3 (imageLoad (volR, q).r, imageLoad (volG, q).r, imageLoad (volB, q).r) / VOL_FIXED;
-		imageStore (volOut, q, vec4 (d > 0.0 ? c / d : vec3 (0.0), d));
+		uint ud = imageLoad (volD, q).r, uc = imageLoad (volC, q).r;
+		uvec3 ul = uvec3 (0u);
+		if ((ud | uc) != 0u) {
+			ul = uvec3 (imageLoad (volR, q).r, imageLoad (volG, q).r, imageLoad (volB, q).r);
+			imageStore (volD, q, uvec4 (0u)), imageStore (volC, q, uvec4 (0u));
+			imageStore (volR, q, uvec4 (0u)), imageStore (volG, q, uvec4 (0u)), imageStore (volB, q, uvec4 (0u));
+		}
+		vec3 tc = vec3 (uv, (float (z) + 0.5) / float (VOL_SIZE.z));
+		vec4 cl = textureLod (coarseLTex, tc, 0.0);
+		float d = float (ud) / VOL_FIXED_D + textureLod (coarseDTex, tc, 0.0).r;
+		float cov = float (uc) / VOL_FIXED_C + cl.a;
+		vec3 lc = cov > 1e-5 ? (vec3 (ul) / VOL_FIXED_C + cl.rgb) / cov : vec3 (0.0);
+		if (d < 1e-6) d = 0.0;
+		float core = VolCore (cov);
+		imageStore (volOut, q, vec4 (lc, d));
+		imageStore (volCore, q, vec4 (core));
 		if (d > 0.0) zmin = min (zmin, z), zmax = max (zmax, z);
+		// (the march: extinction 1.6 x density, eroded by noise of mean 0.5;
+		// half the slice to its middle, stored, then the other half)
+		float keep = VolKeep (0.5, core);
+		float sigma = d * keep * 1.6;
+		vec3 lk = lc * mix (0.55, 1.05, keep);
+		float z0 = VolDepth (float (z) / float (VOL_SIZE.z)), z1 = VolDepth (float (z + 1) / float (VOL_SIZE.z));
+		float zm = VolDepth ((float (z) + 0.5) / float (VOL_SIZE.z));
+		float Ts = exp (-sigma * (zm - z0) / dz);
+		L += T * (1.0 - Ts) * lk, T *= Ts;
+		imageStore (volInteg, q, vec4 (L, T));
+		Ts = exp (-sigma * (z1 - zm) / dz);
+		L += T * (1.0 - Ts) * lk, T *= Ts;
 	}
 	imageStore (volColumns, xy, vec4 (float (zmin) / float (VOL_SIZE.z), float (zmax + 1) / float (VOL_SIZE.z), 0.0, 0.0));
 }

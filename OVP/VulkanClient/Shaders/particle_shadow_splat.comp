@@ -14,10 +14,10 @@ layout(local_size_x = 64) in;
 
 void main ()
 {
-	uint i = uint (pc.ground.w) + gl_GlobalInvocationID.x; // (the pool's used part: ground.w to omega.w)
-	if (i >= uint (pc.omega.w)) return;
+	uint i = ParticleSlot (gl_GlobalInvocationID.x);
+	if (i == ~0u) return;
 	Particle p = particles[i];
-	if (p.velLife.w <= 0.0 || (p.flags & 4u) != 0u) return;
+	if (p.velLife.w <= 0.0 || (p.flags & PF_EMISSIVE) != 0u) return;
 	vec3 sc = ShadowCoord (p.posAge.xyz);
 	if (any (lessThan (sc, vec3 (0.0))) || any (greaterThanEqual (sc, vec3 (1.0)))) return;
 	float a = ParticleAlpha (p), h = ParticleRadius (p);

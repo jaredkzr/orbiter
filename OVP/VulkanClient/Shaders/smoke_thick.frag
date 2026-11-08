@@ -10,7 +10,7 @@
 layout(set = 1, binding = 4) uniform sampler2D prepass; // view depth (w; 0: none)
 
 layout(push_constant) uniform Draw {
-	uint first;
+	uint count;
 	uint flags;
 	float alpha;
 	float pad;
@@ -24,6 +24,8 @@ layout(location = 3) in float vSize;
 layout(location = 4) in vec3 vSun;
 layout(location = 5) in vec3 vAmb;
 layout(location = 6) in vec4 vMisc;
+layout(location = 7) flat in uint vInfo; // (unused)
+layout(location = 8) flat in uint vFlags; // (unused)
 
 layout(location = 0) out vec4 outAccum;
 

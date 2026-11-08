@@ -39,6 +39,8 @@ public:
 	virtual void CollectPlumes (class PlumeRenderer &pr) {}
 	/// particles of the object's own (engine smoke), in the scene with the reactive mask
 	virtual void DrawParticles () {}
+	/// reentry plasma sheath (heated vessels), in the scene with the reactive mask
+	virtual void DrawPlasma (class PlasmaRenderer &pr) {}
 	/// nearest intersection of a ray (global frame, |d| = 1) with the
 	/// object's meshes (and those of its surface bases) within maxDist
 	virtual bool RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n) { return false; }
@@ -84,6 +86,7 @@ public:
 	void CollectLights (std::vector<LightSource> &lights) override;
 	void CollectPlumes (PlumeRenderer &pr) override;
 	void DrawParticles () override;
+	void DrawPlasma (PlasmaRenderer &pr) override;
 	bool RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n) override;
 	int VisEvent (DWORD msg, DWORD_PTR context) override;
 	MESHHANDLE GetMesh (UINT idx) override;
@@ -122,6 +125,10 @@ private:
 	void UpdateTracks ();
 	void RenderExhaust ();
 	void SetHeating ();
+	/// aerodynamic heating now (Sutton-Graves): false while too weak to glow
+	bool Sheath (struct SheathState &s) const;
+	/// the class keeps its add-on reentry streams (no sheath): -1 not known yet
+	int reentryLegacy = -1;
 
 	VESSEL *vessel;
 	std::vector<MeshRec> meshes;
@@ -134,10 +141,8 @@ private:
 	float glassGlow[3] = { 0, 0, 0 }; // emission of transparent groups from interior lights
 	std::vector<uint8_t> plumeExhaust; // exhausts drawn as plume volumes this frame
 	/// engine smoke: a ring of particles per exhaust
-	struct SmokeRing {
-		class ParticleSystem *sys = nullptr;
-		uint32_t first = 0, capacity = 0, head = 0;
-		double accum = 0.0, lastEmit = -1e30, life = 0.0;
+	struct SmokeRing : ParticleRing { // (sys, first, capacity, head, lastEmit, life: ParticleRing)
+		double accum = 0.0;
 		double onTime = 0.0; // since the engine lit [s]
 		bool havePrev = false;
 		VECTOR3 prev{};
@@ -178,10 +183,8 @@ private:
 	/// effects: the fireball when it broke off (propellant burning), the
 	/// fire and smoke while it burns, sparks where it slides on the ground,
 	/// dust where it hits it
-	struct Ring {
-		class ParticleSystem *sys = nullptr;
-		uint32_t first = 0, capacity = 0, head = 0;
-		double accum = 0.0, lastEmit = -1e30, life = 0.0;
+	struct Ring : ParticleRing { // (sys, first, capacity, head, lastEmit, life: ParticleRing)
+		double accum = 0.0;
 		bool havePrev = false;
 		VECTOR3 prev{};
 		VkTexture *tex = nullptr;
@@ -189,6 +192,18 @@ private:
 	};
 	Ring fire, smoke, sparks, dust;
 	Ring frags, hitSparks;   // struck by another body: small bits of it, sparks
+	// the fireball (Fireball): its flames by temperature (fire: the orange
+	// ones), its smoke rising from within; in vacuum an expanding shell
+	Ring fireHot, fireMid, fireCool, fbSmoke, vapour;
+	double fbT0 = -1e30, fbDur = 0.0, fbR = 0.0; // [s] when it formed, how long it burns; [m] its size
+	VECTOR3 fbPos{}, fbVel{};  // its centre (global), velocity
+	void Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 &airVel, bool onWater);
+	void VacuumFlash (double dt, double R, const VECTOR3 &vel);
+	// a burning wreck at rest on the ground: a rising column of smoke, and
+	// its long-lived drift with the wind (WreckSmoke)
+	Ring column, drift;
+	double burnEndT = -1e30;   // when its flames went out (it smoulders on)
+	void WreckSmoke (double dt, double strength, const VECTOR3 &up, const VECTOR3 &groundVel, bool onWater);
 	double hitSeen = -1e30;  // [s] the latest blow sprayed
 	double sprayT = -1e30, sprayV = 0.0; // the latest spray: when, how hard [m/s]
 	double hitFlashT = -1e30, hitFlashI = 0.0; // the flash of a fast blow

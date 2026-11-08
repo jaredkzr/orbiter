@@ -30,6 +30,13 @@ A file <vessel class>.cfg in this folder overrides this per exhaust:
          LENGTH      length factor
          BRIGHTNESS  brightness factor
 
+For the whole class:
+
+  ReentryLegacy = TRUE   keep the add-on's reentry particle streams (its
+                         own texture) instead of the client's plasma sheath
+                         on the windward hull (default FALSE: the streams
+                         only scale the sheath)
+
 Later lines override earlier ones. Example (Config/VK/Plumes/DeltaGlider.cfg):
 
   THRUSTER main TYPE hydrolox SCALE 1.2

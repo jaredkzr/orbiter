@@ -77,6 +77,9 @@ public:
 	PlumeOverride Get (VESSEL *v, unsigned idx);
 	static const PlumeClass &Class (PlumeType t);
 	static PlumeType Infer (VESSEL *v, void *th);
+	/// the class keeps its add-on reentry particle streams (and no VK
+	/// plasma sheath): ReentryLegacy = TRUE in its configuration
+	bool ReentryLegacy (VESSEL *v);
 
 private:
 	struct Rule {
@@ -87,6 +90,7 @@ private:
 	};
 	const std::vector<Rule> &Rules (const std::string &cls);
 	std::map<std::string, std::vector<Rule>> rules;
+	std::map<std::string, bool> reentryLegacy; // (filled with the rules)
 };
 
 /// One plume to draw (filled by the vessel visual)

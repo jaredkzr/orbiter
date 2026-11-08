@@ -28,6 +28,8 @@
 #include "BlackHoleLens.h"
 #include "../../Src/Orbiter/Kerr.h"
 #include "Particles.h"
+#include "ParticleStream.h"
+#include "Plasma.h"
 #include "PlanetSurface.h"
 #include "Atmosphere.h"
 #include "Shadows.h"
@@ -291,6 +293,8 @@ bool Scene::Init ()
 	plumes = std::make_unique<PlumeRenderer>();
 	plumes->Init (ctx, frameLayout, gc->TexMgr()->Layout(), atm->SetLayout(), vclouds->ShapeNoiseView (), vclouds->DetailNoiseView ());
 	ssr->SetPlumes (plumes->Buffer (), plumes->BufferSize (), plumes->ShapeNoise (), plumes->DetailNoise ());
+	plasma = std::make_unique<PlasmaRenderer>();
+	plasma->Init (ctx, frameLayout);
 	particles = std::make_unique<ParticleSystem>();
 	particles->Init (ctx, gc->TexMgr(), frameLayout, atm->SetLayout(), gc->TexMgr()->Layout(), vclouds->ShapeNoiseView (), vclouds->DetailNoiseView ());
 	if (rt->Enabled ()) particles->InitRT (frameLayout, rt->SetLayout(), rt->TextureLayout(), atm->SetLayout());
@@ -475,6 +479,8 @@ void Scene::Shutdown ()
 	if (particles) particles->Shutdown ();
 	particles.reset();
 	if (plumes) plumes->Shutdown ();
+	if (plasma) plasma->Shutdown ();
+	plasma.reset();
 	plumes.reset();
 	ctx->DestroyImage (reactive);
 	ctx->DestroyImage (reactiveMS);
@@ -913,6 +919,56 @@ VkTexture *Scene::FireTexture ()
 		}
 	fireTex = gc->TexMgr()->CreateRGBA (N, N, px.data());
 	return fireTex;
+}
+
+VkTexture *Scene::FireballTexture (int stage)
+{
+	// flames of a fireball by their temperature: ragged tongues (fractal
+	// noise eats into the puff's edge and makes holes in its thin parts),
+	// a radial ramp within each; four shapes in the quadrants, as the
+	// particles pick one. 0: white-yellow (the hot core, first moments),
+	// 1: orange, 2: dark red (cooling, at the rim and late); 3: a soft
+	// white puff without billows (vapour, lit)
+	stage = std::clamp (stage, 0, 3);
+	if (fireballTex[stage]) return fireballTex[stage];
+	static const float inner[4][3] = { { 1.0f, 0.88f, 0.50f }, { 1.0f, 0.52f, 0.12f }, { 0.75f, 0.20f, 0.04f }, { 1.0f, 1.0f, 1.0f } };
+	static const float outer[4][3] = { { 1.0f, 0.62f, 0.20f }, { 0.90f, 0.28f, 0.04f }, { 0.40f, 0.06f, 0.02f }, { 1.0f, 1.0f, 1.0f } };
+	static const double erode[4] = { 0.25, 0.45, 0.6, 0.0 }; // (the cooler, the more ragged)
+	const int Q = 128, N = 2 * Q;
+	auto hash = [](int x, int y, int k) {
+		uint32_t h = (uint32_t)x * 374761393u + (uint32_t)y * 668265263u + (uint32_t)k * 2246822519u;
+		h = (h ^ (h >> 13)) * 1274126177u;
+		return ((h ^ (h >> 16)) & 0xffffff) / 16777215.0;
+	};
+	auto noise = [&](double x, double y, int k) {
+		int ix = (int)std::floor (x), iy = (int)std::floor (y);
+		double fx = x - ix, fy = y - iy;
+		fx = fx * fx * (3.0 - 2.0 * fx), fy = fy * fy * (3.0 - 2.0 * fy);
+		double a = hash (ix, iy, k), b = hash (ix + 1, iy, k), c = hash (ix, iy + 1, k), d = hash (ix + 1, iy + 1, k);
+		return (a + (b - a) * fx) + ((c + (d - c) * fx) - (a + (b - a) * fx)) * fy;
+	};
+	std::vector<uint8_t> px (N * N * 4);
+	for (int y = 0; y < N; y++)
+		for (int x = 0; x < N; x++) {
+			int k = (y / Q) * 2 + (x / Q) + 4 * stage;
+			double u = ((x % Q) + 0.5) / Q * 2.0 - 1.0, v = ((y % Q) + 0.5) / Q * 2.0 - 1.0;
+			double r = sqrt (u*u + v*v);
+			double f = 0.0, amp = 0.5, fr = 3.0;
+			for (int o = 0; o < 4; o++, amp *= 0.5, fr *= 2.0) f += amp * noise ((u + 1.3 * k) * fr, (v - 0.7 * k) * fr, k * 7 + o);
+			f /= 0.9375; // (0..1)
+			double body = 1.0 - r * r;                       // (dense in the middle)
+			double c = body - erode[stage] * (1.0 - f) - 0.08 * r;
+			double alpha = std::clamp (c / 0.35, 0.0, 1.0);
+			alpha = alpha * alpha * (3.0 - 2.0 * alpha);
+			if (stage == 3) alpha = body * body * (0.8 + 0.2 * f);
+			if (r >= 1.0) alpha = 0.0;
+			double h = std::clamp (1.0 - r * 1.2 + 0.3 * (f - 0.5), 0.0, 1.0); // (hotter inside)
+			uint8_t *p = &px[(y * N + x) * 4];
+			for (int j = 0; j < 3; j++) p[j] = (uint8_t)(255.0 * (outer[stage][j] + (inner[stage][j] - outer[stage][j]) * h));
+			p[3] = (uint8_t)(255.0 * alpha);
+		}
+	fireballTex[stage] = gc->TexMgr()->CreateRGBA (N, N, px.data());
+	return fireballTex[stage];
 }
 
 VkTexture *Scene::SparkTexture ()
@@ -2569,6 +2625,12 @@ void Scene::Render ()
 	ctx->BindSceneWithMask (rt, reactiveMS.image ? &rtMS : nullptr);
 	plumes->Draw (FrameSet (), camAtmSet, gc->TexMgr()->White());
 	ctx->GpuMark ("plumes");
+	// reentry plasma: the glowing shock layers ahead of heated hulls
+	if (PlasmaRenderer *pl = Plasma ()) {
+		pl->Begin (FrameSet (), oapiGetSimTime ());
+		for (auto *vo : list) vo->DrawPlasma (*pl);
+		if (pl->Count ()) ctx->GpuMark ("plasma");
+	}
 	particles->DrawVolume (FrameSet ());
 	particles->DrawScreenSmoke (FrameSet ());
 	for (auto *ps : gc->ParticleStreams()) ps->Render (this);

@@ -24,6 +24,7 @@
 #include "smoke_splat.comp.h"
 #include "smoke_resolve.comp.h"
 #include "smoke_march.frag.h"
+#include "smoke_march.comp.h"
 #include "smoke_thick.frag.h"
 #include "smoke_blur.comp.h"
 #include "smoke_screen.frag.h"
@@ -34,6 +35,8 @@
 namespace {
 	constexpr size_t PARTICLE_SIZE = 64; // (Particle in particles.glsl)
 	constexpr double NOISE_SCALE = 0.08; // turbulence noise coordinates per metre (eddies of about 12 m)
+	constexpr double MARCH_NOISE_SCALE = 0.04; // smoke volume erosion noise per metre (smoke_march.comp)
+	constexpr double MARCH_NOISE_RISE = 0.02;  // its drift upwards [noise units/s]
 	// smoke shadows: the grid (particle_common.glsl) around the camera
 	constexpr uint32_t SHADOW_NX = 192, SHADOW_NZ = 64;
 	constexpr double SHADOW_HALF_WIDTH = 1200.0, SHADOW_HALF_DEPTH = 1500.0; // [m]
@@ -41,6 +44,8 @@ namespace {
 	constexpr uint32_t SORT_TILE = 512; // keys sorted in shared memory (particle_sort_local.comp)
 	// smoke volume (smokevol.glsl)
 	constexpr uint32_t VOL_X = 240, VOL_Y = 135, VOL_Z = 128;
+	constexpr uint32_t VOLC_X = 60, VOLC_Y = 34, VOLC_Z = 32;   // coarse grid
+	constexpr uint32_t VOL_TILES_X = 30, VOL_TILES_Y = 17, VOL_TILE_COUNT = 512; // column tiles (8 x 8)
 	constexpr double VOL_REACH = 20000.0; // [m] (smokevol.glsl VOL_FAR)
 }
 
@@ -55,12 +60,15 @@ struct ParticleSystem::GpuEmission { // particles.glsl
 struct ParticleSystem::UpdateParams { // particle_common.glsl
 	float camShift[4], bodyPos[4], bodyVel[4], omega[4], noiseOrg[4];
 	float lightX[4], lightY[4], lightZ[4], ground[4], trailNoise[4];
+	float noiseRot[3][4], vol[4];
 };
+
 
 bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout,
 	VkDescriptorSetLayout texLayout, VkImageView shapeNoise, VkImageView detailNoise)
 {
 	ctx = c, texmgr = tm;
+	static_assert (sizeof(UpdateParams) <= 256 && sizeof(UpdateParams) <= sizeof(lastUp), "push constants");
 	{
 		// smoke puffs: clusters of soft blobs (cauliflower-like billows) as a
 		// height field: normal (rg, sprite axes), thickness (b) and coverage
@@ -130,19 +138,28 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 	ctx->ImmediateSubmit ([pb](VkCommandBuffer cmd) {
 		vkCmdFillBuffer (cmd, pb, 0, VK_WHOLE_SIZE, 0); // (lifetime 0: no particles)
 	});
-	freeList.push_back ({ 0, CAPACITY });
 	// draw order: sorted slots, keys, the ring of each block (per frame)
 	sortVals = ctx->CreateBuffer (CAPACITY * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false);
-	sortKeys = ctx->CreateBuffer (CAPACITY * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false);
-	for (auto &b : blockRingBuf) b = ctx->CreateBuffer ((CAPACITY / BLOCK) * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+	sortKeys = ctx->CreateBuffer (CAPACITY * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
+	for (auto &b : blockListBuf) b = ctx->CreateBuffer ((CAPACITY / BLOCK) * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+	for (auto &b : drawArgs)
+		b = ctx->CreateBuffer (4 * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+			VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, false);
+	for (auto &b : drawRead) {
+		b = ctx->CreateReadbackBuffer (4 * sizeof(uint32_t));
+		memset (b.mapped, 0, 4 * sizeof(uint32_t));
+	}
+	for (auto &b : ringInfoBuf) {
+		b = ctx->CreateBuffer ((CAPACITY / BLOCK) * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+		memset (b.mapped, 0, (CAPACITY / BLOCK) * sizeof(uint32_t));
+	}
 	if (const char *e = getenv ("ORBITER_VK_SMOKE_TRAILS")) trails = atoi (e) != 0;
 	if (const char *e = getenv ("ORBITER_VK_PARTICLE_STATS")) stats.every = std::max (atof (e), 0.0);
+	if (const char *e = getenv ("ORBITER_VK_PARTICLE_RINGLOG")) stats.ringLog = atoi (e) != 0; // (each ring allocated, with the stats)
 	for (auto &b : windBuf) {
 		b = ctx->CreateBuffer ((WIND_LAYERS + 1) * 4 * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true); // (+ nearVol)
 		memset (b.mapped, 0, (WIND_LAYERS + 1) * 4 * sizeof(float));
 	}
-	blockRing.resize (CAPACITY / BLOCK);
-	for (uint32_t i = 0; i < blockRing.size(); i++) blockRing[i] = i;
 
 	VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
 	sci.magFilter = sci.minFilter = VK_FILTER_LINEAR;
@@ -193,19 +210,19 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &im.view));
 		return im;
 	};
-	for (auto &v : volAccum) v = image (VK_IMAGE_TYPE_3D, VK_FORMAT_R32_UINT, { VOL_X, VOL_Y, VOL_Z }, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-	volOut = image (VK_IMAGE_TYPE_3D, VK_FORMAT_R16G16B16A16_SFLOAT, { VOL_X, VOL_Y, VOL_Z }, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-	volColumns = image (VK_IMAGE_TYPE_2D, VK_FORMAT_R16G16_SFLOAT, { VOL_X, VOL_Y, 1 }, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+	// (the volume itself: AllocVolume, when smoke is near; until then the
+	// sprites' fog is none)
+	volDummy = image (VK_IMAGE_TYPE_3D, VK_FORMAT_R16G16B16A16_SFLOAT, { 1, 1, 1 }, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
 	{
-		VkImage vi[6] = { volAccum[0].image, volAccum[1].image, volAccum[2].image, volAccum[3].image, volOut.image, volColumns.image };
-		ctx->ImmediateSubmit ([vi](VkCommandBuffer cmd) {
-			VkClearColorValue zero{};
+		VkImage im = volDummy.image;
+		ctx->ImmediateSubmit ([im](VkCommandBuffer cmd) {
+			VkClearColorValue none{ { 0.0f, 0.0f, 0.0f, 1.0f } };
 			VkImageSubresourceRange r{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-			for (VkImage im : vi) {
-				vkc::ImageBarrier (cmd, im, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-					VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-				vkCmdClearColorImage (cmd, im, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &r);
-			}
+			vkc::ImageBarrier (cmd, im, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+				VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+			vkCmdClearColorImage (cmd, im, VK_IMAGE_LAYOUT_GENERAL, &none, 1, &r);
+			vkc::ImageBarrier (cmd, im, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+				VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 		});
 	}
 	shadowDepth = image3D (VK_FORMAT_R16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
@@ -223,37 +240,41 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 	// pool, emissions, noise volumes, prepass, shadow grid
 	const VkShaderStageFlags CS = VK_SHADER_STAGE_COMPUTE_BIT;
 	// (8-10: sorting for drawing far to near: values, keys, ring of each block)
-	VkDescriptorSetLayoutBinding b[21] = {
-		{ 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS | VK_SHADER_STAGE_VERTEX_BIT, nullptr },
-		{ 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS, nullptr },
-		{ 2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, CS, nullptr },
-		{ 3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, CS | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
-		{ 4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
-		{ 5, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, CS, nullptr },
-		{ 6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, CS, nullptr },
-		{ 7, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, CS, nullptr },
-		{ 8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS | VK_SHADER_STAGE_VERTEX_BIT, nullptr },
-		{ 9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS, nullptr },
-		{ 10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS, nullptr },
-		// (11-18: smoke volume)
-		{ 11, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, CS, nullptr },
-		{ 12, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, CS, nullptr },
-		{ 13, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, CS, nullptr },
-		{ 14, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, CS, nullptr },
-		{ 15, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, CS, nullptr },
-		{ 16, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, CS, nullptr },
-		{ 17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
-		{ 18, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
-		{ 19, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr }, // (screen-space smoke)
-		{ 20, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS, nullptr } }; // (the wind's layers)
+	const VkShaderStageFlags VS = VK_SHADER_STAGE_VERTEX_BIT, FS = VK_SHADER_STAGE_FRAGMENT_BIT;
+	const VkDescriptorType SB = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, SI = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, CI = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	std::vector<VkDescriptorSetLayoutBinding> b = {
+		{ 0, SB, 1, CS | VS, nullptr }, { 1, SB, 1, CS, nullptr },
+		{ 2, CI, 1, CS, nullptr }, { 3, CI, 1, CS | FS, nullptr }, { 4, CI, 1, FS | CS, nullptr }, // (noise, prepass)
+		{ 5, SI, 1, CS, nullptr }, { 6, SI, 1, CS, nullptr }, { 7, CI, 1, CS, nullptr }, // (smoke shadow grid)
+		// (8-10: the sprites' sort: values, keys; the allocated blocks)
+		{ 8, SB, 1, CS | VS, nullptr }, { 9, SB, 1, CS, nullptr }, { 10, SB, 1, CS, nullptr },
+		// (11-18, 24-43: smoke volume: AllocVolume; 19: screen-space smoke)
+		{ 11, SI, 1, CS, nullptr }, { 12, SI, 1, CS, nullptr }, { 13, SI, 1, CS, nullptr }, { 14, SI, 1, CS, nullptr },
+		{ 15, SI, 1, CS, nullptr }, { 16, SI, 1, CS, nullptr }, { 17, CI, 1, FS | CS, nullptr }, { 18, CI, 1, FS | CS, nullptr },
+		{ 19, CI, 1, FS, nullptr },
+		{ 20, SB, 1, CS | VS, nullptr }, // (the wind's layers; streaks relative to the air)
+		// (21-23: the sprites' draw: its arguments, how each ring is drawn, the smoke in front)
+		{ 21, SB, 1, CS, nullptr }, { 22, SB, 1, VS, nullptr }, { 23, CI, 1, FS, nullptr },
+		{ 24, SI, 1, CS, nullptr }, { 25, SI, 1, CS, nullptr }, { 26, SI, 5, CS, nullptr },
+		{ 31, SI, 1, CS, nullptr }, { 32, SI, 1, CS, nullptr }, { 33, CI, 1, CS, nullptr }, { 34, CI, 1, CS, nullptr },
+		{ 35, SI, 1, CS, nullptr }, { 36, CI, 1, CS, nullptr }, { 37, SB, 1, CS, nullptr },
+		{ 38, SI, 1, CS, nullptr }, { 39, SI, 1, CS, nullptr }, { 40, SI, 1, CS, nullptr },
+		{ 41, CI, 1, FS, nullptr }, { 42, CI, 1, FS, nullptr }, { 43, CI, 1, FS, nullptr } };
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 21, lci.pBindings = b;
+	lci.bindingCount = (uint32_t)b.size (), lci.pBindings = b.data ();
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &setLayout));
-	VkDescriptorPoolSize ps[3] = { { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6 * vkc::FRAMES_IN_FLIGHT },
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 7 * vkc::FRAMES_IN_FLIGHT + 2 },
-		{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 8 * vkc::FRAMES_IN_FLIGHT + 2 } };
+	{
+		// the rings' textures
+		VkDescriptorSetLayoutBinding tb{ 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, TEX_SLOTS, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
+		VkDescriptorSetLayoutCreateInfo tci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+		tci.bindingCount = 1, tci.pBindings = &tb;
+		VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &tci, nullptr, &texSetLayout));
+	}
+	VkDescriptorPoolSize ps[3] = { { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 12 * vkc::FRAMES_IN_FLIGHT },
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, (16 + TEX_SLOTS) * vkc::FRAMES_IN_FLIGHT + 2 },
+		{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 24 * vkc::FRAMES_IN_FLIGHT + 2 } };
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-	pci.maxSets = vkc::FRAMES_IN_FLIGHT + 2, pci.poolSizeCount = 3, pci.pPoolSizes = ps;
+	pci.maxSets = 2 * vkc::FRAMES_IN_FLIGHT + 2, pci.poolSizeCount = 3, pci.pPoolSizes = ps;
 	VK_CHECK(vkCreateDescriptorPool (ctx->device, &pci, nullptr, &dpool));
 	VkDescriptorSetLayout ls[vkc::FRAMES_IN_FLIGHT];
 	for (auto &l : ls) l = setLayout;
@@ -265,7 +286,7 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		VkDescriptorImageInfo ii[2] = { { noiseSampler, shapeView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
 			{ noiseSampler, detailView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL } };
 		VkDescriptorImageInfo gii[3] = { { VK_NULL_HANDLE, shadowAccum.view, VK_IMAGE_LAYOUT_GENERAL },
-			{ VK_NULL_HANDLE, shadowDepth.view, VK_IMAGE_LAYOUT_GENERAL }, { noiseSampler, shadowDepth.view, VK_IMAGE_LAYOUT_GENERAL } };
+			{ VK_NULL_HANDLE, shadowDepth.view, VK_IMAGE_LAYOUT_GENERAL }, { volSampler, shadowDepth.view, VK_IMAGE_LAYOUT_GENERAL } }; // (clamped at the grid's faces)
 		VkWriteDescriptorSet wr[7]{};
 		for (uint32_t k = 0; k < 7; k++) {
 			wr[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -280,7 +301,7 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		}
 		vkUpdateDescriptorSets (ctx->device, 7, wr, 0, nullptr);
 		VkDescriptorBufferInfo sbi[3] = { { sortVals.buffer, 0, VK_WHOLE_SIZE }, { sortKeys.buffer, 0, VK_WHOLE_SIZE },
-			{ blockRingBuf[i].buffer, 0, VK_WHOLE_SIZE } };
+			{ blockListBuf[i].buffer, 0, VK_WHOLE_SIZE } };
 		VkWriteDescriptorSet sw[3]{};
 		for (uint32_t k = 0; k < 3; k++) {
 			sw[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -293,19 +314,39 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		ww.dstSet = sets[i], ww.dstBinding = 20, ww.descriptorCount = 1;
 		ww.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, ww.pBufferInfo = &wbi;
 		vkUpdateDescriptorSets (ctx->device, 1, &ww, 0, nullptr);
-		VkDescriptorImageInfo vi[8] = {
-			{ VK_NULL_HANDLE, volAccum[0].view, VK_IMAGE_LAYOUT_GENERAL }, { VK_NULL_HANDLE, volAccum[1].view, VK_IMAGE_LAYOUT_GENERAL },
-			{ VK_NULL_HANDLE, volAccum[2].view, VK_IMAGE_LAYOUT_GENERAL }, { VK_NULL_HANDLE, volAccum[3].view, VK_IMAGE_LAYOUT_GENERAL },
-			{ VK_NULL_HANDLE, volOut.view, VK_IMAGE_LAYOUT_GENERAL }, { VK_NULL_HANDLE, volColumns.view, VK_IMAGE_LAYOUT_GENERAL },
-			{ volSampler, volOut.view, VK_IMAGE_LAYOUT_GENERAL }, { volSampler, volColumns.view, VK_IMAGE_LAYOUT_GENERAL } };
-		VkWriteDescriptorSet vw[8]{};
-		for (uint32_t k = 0; k < 8; k++) {
-			vw[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-			vw[k].dstSet = sets[i], vw[k].dstBinding = 11 + k, vw[k].descriptorCount = 1;
-			vw[k].descriptorType = k < 6 ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-			vw[k].pImageInfo = &vi[k];
+		VkDescriptorBufferInfo dbi[2] = { { drawArgs[i].buffer, 0, VK_WHOLE_SIZE }, { ringInfoBuf[i].buffer, 0, VK_WHOLE_SIZE } };
+		VkDescriptorImageInfo dii{ volSampler, volDummy.view, VK_IMAGE_LAYOUT_GENERAL };
+		VkWriteDescriptorSet dw[3]{};
+		for (uint32_t k = 0; k < 3; k++) {
+			dw[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			dw[k].dstSet = sets[i], dw[k].dstBinding = 21 + k, dw[k].descriptorCount = 1;
+			if (k < 2) dw[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, dw[k].pBufferInfo = &dbi[k];
+			else dw[k].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, dw[k].pImageInfo = &dii;
 		}
-		vkUpdateDescriptorSets (ctx->device, 8, vw, 0, nullptr);
+		vkUpdateDescriptorSets (ctx->device, 3, dw, 0, nullptr);
+	}
+	{
+		// the texture table: the smoke texture in every slot to start with
+		VkSamplerCreateInfo tsi{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+		tsi.magFilter = tsi.minFilter = VK_FILTER_LINEAR;
+		tsi.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+		tsi.addressModeU = tsi.addressModeV = tsi.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		tsi.maxLod = VK_LOD_CLAMP_NONE;
+		VK_CHECK(vkCreateSampler (ctx->device, &tsi, nullptr, &texSampler));
+		VkDescriptorSetLayout tl[vkc::FRAMES_IN_FLIGHT];
+		for (auto &l : tl) l = texSetLayout;
+		VkDescriptorSetAllocateInfo tai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+		tai.descriptorPool = dpool, tai.descriptorSetCount = vkc::FRAMES_IN_FLIGHT, tai.pSetLayouts = tl;
+		VK_CHECK(vkAllocateDescriptorSets (ctx->device, &tai, texSets));
+		std::vector<VkDescriptorImageInfo> ti (TEX_SLOTS, { texSampler, smokeTex->img.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL });
+		for (uint32_t i = 0; i < vkc::FRAMES_IN_FLIGHT; i++) {
+			VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+			w.dstSet = texSets[i], w.dstBinding = 0, w.descriptorCount = TEX_SLOTS;
+			w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, w.pImageInfo = ti.data ();
+			vkUpdateDescriptorSets (ctx->device, 1, &w, 0, nullptr);
+			for (auto &t : setTex[i]) t = smokeTex;
+		}
+		slotTex[0] = smokeTex; // (always)
 	}
 
 	auto layoutOf = [this](std::initializer_list<VkDescriptorSetLayout> l, VkShaderStageFlags stages, uint32_t pcSize) {
@@ -341,10 +382,12 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 	sortLocalPipe = compute (spv_particle_sort_local_comp, spv_particle_sort_local_comp_size, sortLayout);
 	volSplatPipe = compute (spv_smoke_splat_comp, spv_smoke_splat_comp_size, updateLayout);
 	volResolvePipe = compute (spv_smoke_resolve_comp, spv_smoke_resolve_comp_size, updateLayout);
+	marchPipe = compute (spv_smoke_march_comp, spv_smoke_march_comp_size, updateLayout);
 
 	// drawing: quads (triangle strips) from the pool, premultiplied or additive,
 	// with the reactive mask
-	drawLayout = layoutOf ({ frameLayout, setLayout, texLayout }, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 64);
+	drawLayout = layoutOf ({ frameLayout, setLayout, texSetLayout }, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 64);
+	thickLayout = layoutOf ({ frameLayout, setLayout }, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 64);
 	VkShaderModule vs = ctx->CreateShaderModule (spv_gpuparticle_vert, spv_gpuparticle_vert_size);
 	VkShaderModule fs = ctx->CreateShaderModule (spv_gpuparticle_frag, spv_gpuparticle_frag_size);
 	VkPipelineShaderStageCreateInfo stages[2] = {
@@ -371,12 +414,13 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 	VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
 	rci.colorAttachmentCount = 2, rci.pColorAttachmentFormats = formats;
 	rci.depthAttachmentFormat = ctx->depthFormat;
-	for (int additive = 0; additive < 2; additive++) {
+	{
+		// (premultiplied; emissive particles write alpha 0: added)
 		VkPipelineColorBlendAttachmentState cb[2]{};
 		cb[0].colorWriteMask = 0xF;
 		cb[0].blendEnable = VK_TRUE;
 		cb[0].srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
-		cb[0].dstColorBlendFactor = additive ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+		cb[0].dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
 		cb[0].colorBlendOp = VK_BLEND_OP_ADD;
 		cb[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
 		cb[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
@@ -401,7 +445,7 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		gpi.pColorBlendState = &cbs;
 		gpi.pDynamicState = &dy;
 		gpi.layout = drawLayout;
-		VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, additive ? &drawAdd : &drawBlend));
+		VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &drawBlend));
 	}
 	vkDestroyShaderModule (ctx->device, vs, nullptr);
 	vkDestroyShaderModule (ctx->device, fs, nullptr);
@@ -494,7 +538,7 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		gpi.pDepthStencilState = &nods;
 		gpi.pColorBlendState = &abs;
 		gpi.pDynamicState = &dy;
-		gpi.layout = drawLayout;
+		gpi.layout = thickLayout;
 		VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &thickPipe));
 		vkDestroyShaderModule (ctx->device, tvs, nullptr);
 		vkDestroyShaderModule (ctx->device, tfs, nullptr);
@@ -537,26 +581,31 @@ void ParticleSystem::InitRT (VkDescriptorSetLayout frameLayout, VkDescriptorSetL
 void ParticleSystem::Shutdown ()
 {
 	if (!ctx) return;
-	for (VkPipeline p : { emitPipe, updatePipe, updateRTPipe, lightPipe, lightRTPipe, splatPipe, sumPipe, sortKeysPipe, sortPipe, sortLocalPipe, drawBlend, drawAdd,
-		volSplatPipe, volResolvePipe, volMarchPipe, thickPipe, blurPipe, screenCompPipe })
+	FreeVolume (); // (its sets rewritten: before the pool goes)
+	for (VkPipeline p : { emitPipe, updatePipe, updateRTPipe, lightPipe, lightRTPipe, splatPipe, sumPipe, sortKeysPipe, sortPipe, sortLocalPipe, drawBlend,
+		volSplatPipe, volResolvePipe, volMarchPipe, marchPipe, thickPipe, blurPipe, screenCompPipe })
 		if (p) vkDestroyPipeline (ctx->device, p, nullptr);
-	for (VkPipelineLayout l : { emitLayout, updateLayout, updateRTLayout, drawLayout, sortLayout, volMarchLayout, blurLayout })
+	for (VkPipelineLayout l : { emitLayout, updateLayout, updateRTLayout, drawLayout, thickLayout, sortLayout, volMarchLayout, blurLayout })
 		if (l) vkDestroyPipelineLayout (ctx->device, l, nullptr);
 	vkDestroyDescriptorPool (ctx->device, dpool, nullptr);
 	vkDestroyDescriptorSetLayout (ctx->device, setLayout, nullptr);
+	vkDestroyDescriptorSetLayout (ctx->device, texSetLayout, nullptr);
+	vkDestroySampler (ctx->device, texSampler, nullptr);
+	for (uint32_t k = 1; k < TEX_SLOTS; k++) if (slotTex[k]) texmgr->Release (slotTex[k]);
+	for (auto &b : drawArgs) ctx->DestroyBuffer (b);
+	for (auto &b : drawRead) ctx->DestroyBuffer (b);
+	for (auto &b : ringInfoBuf) ctx->DestroyBuffer (b);
+	ctx->DestroyImage (volDummy);
 	vkDestroySampler (ctx->device, noiseSampler, nullptr);
 	vkDestroySampler (ctx->device, clampSampler, nullptr);
 	ctx->DestroyBuffer (pool);
 	for (auto &b : emitBuf) ctx->DestroyBuffer (b);
-	for (auto &v : volAccum) ctx->DestroyImage (v);
 	for (auto &t : thick) ctx->DestroyImage (t);
 	if (blurSetLayout) vkDestroyDescriptorSetLayout (ctx->device, blurSetLayout, nullptr);
-	ctx->DestroyImage (volOut);
-	ctx->DestroyImage (volColumns);
 	if (volSampler) vkDestroySampler (ctx->device, volSampler, nullptr);
 	ctx->DestroyBuffer (sortVals);
 	ctx->DestroyBuffer (sortKeys);
-	for (auto &b : blockRingBuf) ctx->DestroyBuffer (b);
+	for (auto &b : blockListBuf) ctx->DestroyBuffer (b);
 	for (auto &b : windBuf) ctx->DestroyBuffer (b);
 	ctx->DestroyImage (shadowAccum);
 	ctx->DestroyImage (shadowDepth);
@@ -564,57 +613,251 @@ void ParticleSystem::Shutdown ()
 	ctx = nullptr;
 }
 
+int ParticleSystem::Priority (Class c)
+{
+	switch (c) {
+	case Class::Trail: return 0;
+	case Class::EngineSmoke: case Class::Steam: case Class::Fire: case Class::FireballSmoke:
+	case Class::WreckSmoke: case Class::PlasmaWake: case Class::Contrail: return 1;
+	case Class::Dust: case Class::Spray: case Class::Legacy: return 2;
+	default: return 3; // (sparks, fragments, puffs)
+	}
+}
+
+ParticleSystem::Class ParticleSystem::Resolve (const Emission &e)
+{
+	if (e.cls != Class::Auto) return e.cls;
+	if (e.trail || e.slowdown < 0.0) return Class::Trail;
+	if (e.speck) return e.emissive ? Class::Spark : Class::Fragment;
+	if (e.ballistic || (e.cold && e.tinted)) return Class::Dust;
+	if (e.emissive && e.tinted) return Class::Fire;
+	if (e.tinted && e.volumetric) return Class::EngineSmoke;
+	return Class::Legacy;
+}
+
+uint32_t ParticleSystem::AllocRing (uint32_t want, uint32_t minWant, uint32_t &first, bool idleRelease)
+{
+	uint32_t got = slots.Allocate (want, minWant, first, idleRelease);
+	if (!got) {
+		stats.allocFails++, stats.failWant = std::max (stats.failWant, want);
+		return 0;
+	}
+	if (got < want) stats.short_++;
+	ringLook[first / BLOCK] = RingLook{};
+	toClear.push_back ({ first, got });
+	stats.allocs++;
+	return got;
+}
+
 bool ParticleSystem::Allocate (uint32_t want, uint32_t &first, uint32_t &capacity)
 {
-	uint32_t n = std::max (BLOCK, (want + BLOCK - 1) / BLOCK * BLOCK);
-	for (size_t i = 0; i < freeList.size(); i++) {
-		auto &f = freeList[i];
-		if (f.second < n) continue;
-		first = f.first, capacity = n;
-		f.first += n, f.second -= n;
-		for (uint32_t k = first / BLOCK; k < (first + n) / BLOCK; k++) blockRing[k] = first / BLOCK;
-		if (!f.second) freeList.erase (freeList.begin() + i);
-		toClear.push_back ({ first, capacity });
-		stats.allocs++, stats.rings++;
-		return true;
+	uint32_t got = AllocRing (want, std::max (BLOCK, want / 4), first, false);
+	if (!got) {
+		double now = oapiGetSysTime ();
+		if (now > lastFailLog + 10.0) { // (at most a line in 10 s)
+			oapiWriteLogV ("VulkanClient: particle pool full (%u particles wanted; %u of %u allocated)", want, slots.Allocated (), CAPACITY);
+			lastFailLog = now;
+		}
+		return false;
 	}
-	stats.allocFails++, stats.failWant = std::max (stats.failWant, n);
-	return false;
+	capacity = got;
+	return true;
 }
 
 void ParticleSystem::Free (uint32_t first, uint32_t capacity)
 {
 	// (particles left in the ring are cleared when it is allocated again)
-	for (uint32_t k = first / BLOCK; k < (first + capacity) / BLOCK; k++) blockRing[k] = k;
-	stats.frees++, stats.rings--;
-	freeList.push_back ({ first, capacity });
-	std::sort (freeList.begin(), freeList.end());
-	std::vector<std::pair<uint32_t, uint32_t>> merged;
-	for (auto &f : freeList) {
-		if (!merged.empty() && merged.back().first + merged.back().second == f.first) merged.back().second += f.second;
-		else merged.push_back (f);
+	const ParticlePool::Ring *r = slots.RingAt (first);
+	if (!r || r->capacity != capacity) return;
+	slots.Free (first);
+	stats.frees++;
+}
+
+bool ParticleSystem::Replace (ParticleRing &r, uint32_t cap, uint32_t minCap, double simt)
+{
+	uint32_t first;
+	uint32_t got = AllocRing (cap, minCap, first, r.idleRelease);
+	if (!got) return false;
+	ParticlePool::Ring *old = slots.RingAt (r.first);
+	double until = std::max (old ? old->lastEmit : r.lastEmit, r.lastEmit) + 1.5 * std::max (r.life, old ? old->life : 0.0) + 1.0;
+	RingLook &l = ringLook[r.first / BLOCK];
+	if (!l.tex) l.tex = smokeTex, l.emissive = false;
+	slots.Retire (r.first, until, (uint64_t)(uintptr_t)l.tex | (l.emissive ? 1u : 0u));
+	aliveUntil = std::max (aliveUntil, until);
+	ringLook[first / BLOCK] = l;
+	r.first = first, r.capacity = got, r.head = 0, r.id = slots.RingAt (first)->id;
+	r.shortfall = std::min (1.0, got / std::max ((double)cap, 1.0));
+	r.segStart = -1e30;
+	ParticlePool::Ring *pr = slots.RingAt (first);
+	pr->prio = r.prio, pr->lastEmit = simt, pr->life = r.life;
+	return true;
+}
+
+bool ParticleSystem::Reserve (ParticleRing &r, double rate, double life, Class cls, double extra, VkTexture *tex, bool emissive, bool idleRelease)
+{
+	if (!enabled) return false;
+	double simt = oapiGetSimTime ();
+	if (r.sys != this) {
+		r = ParticleRing{};
+		r.sys = this;
 	}
-	freeList.swap (merged);
+	if (r.id && !slots.Valid (r.first, r.id)) r.id = 0, r.capacity = 0, r.head = 0; // (released while idle)
+	life = std::max (life, 0.01);
+	r.prio = Priority (cls), r.idleRelease = idleRelease;
+	r.life = std::max (r.life, life);
+	double fill = slots.Fill ();
+	double fp = ParticlePool::PressureFactor (fill, r.prio) * ParticlePool::LifeFactor (fill, r.prio);
+	// The ring holds the emissions of a segment of time: short-lived
+	// particles (1.5 lifetimes within it), a ring that wraps over the dead
+	// ones; else, when it is full of live ones, the next segment (Emit), so
+	// that the rings hold about the particles alive, whatever the history of
+	// the rate
+	double seg = ParticlePool::SegmentTime (life);
+	r.chain = seg < 1.5 * life;
+	double needNow = (std::max (rate, 0.0) * seg * 1.1 + std::max (extra, 0.0)) * fp;
+	// (the need follows a rising rate at once, a falling one over the
+	// segment's time)
+	double dt = simt - r.needT;
+	if (dt < 0.0 || dt > 1e5) r.need = 0.0;
+	else r.need *= std::exp (-dt / seg);
+	r.need = std::max (r.need, needNow);
+	r.needT = simt;
+	if (r.id) {
+		// a wrapping ring follows the need (grown or shrunk: a new one);
+		// segments do at the next segment
+		uint32_t nc = r.chain ? 0u : ParticlePool::Resize (r.capacity, r.need, BLOCK);
+		if (nc) {
+			bool grow = nc > r.capacity; // (growing: at least larger than this one)
+			uint32_t was = r.capacity;
+			if (Replace (r, nc, grow ? r.capacity + BLOCK : nc, simt)) {
+				stats.grows += grow ? 1 : 0, stats.shrinks += grow ? 0 : 1;
+				if (stats.every > 0.0 && stats.ringLog)
+					oapiWriteLogV ("VK particles: ring %u class %d rate %.0f/s life %.1f s: %s %u -> %u", r.first / BLOCK, (int)cls, rate, life,
+						grow ? "grown" : "shrunk", was, r.capacity);
+			}
+		}
+	} else {
+		uint32_t want = (uint32_t)std::min (std::ceil (std::max (r.need, 1.0) * (r.chain ? 1.0 : 1.5) / BLOCK) * BLOCK, (double)CAPACITY);
+		uint32_t first;
+		uint32_t got = AllocRing (want, BLOCK, first, idleRelease);
+		if (!got) {
+			if (!r.failLogged) {
+				oapiWriteLogV ("VulkanClient: particle pool full (an emitter of class %d wanted %u particles; %u of %u allocated)",
+					(int)cls, want, slots.Allocated (), CAPACITY);
+				r.failLogged = true;
+			}
+			return false;
+		}
+		r.first = first, r.capacity = got, r.head = 0, r.id = slots.RingAt (first)->id;
+		r.shortfall = (double)got / want, r.segStart = -1e30;
+		ParticlePool::Ring *pr = slots.RingAt (first);
+		pr->prio = r.prio, pr->lastEmit = simt, pr->life = life;
+		if (stats.every > 0.0 && stats.ringLog)
+			oapiWriteLogV ("VK particles: ring %u class %d rate %.0f/s life %.1f s extra %.0f: %u of %u (%.0f %% full)",
+				first / BLOCK, (int)cls, rate, life, extra, got, want, 100.0 * fill);
+	}
+	RingLook &l = ringLook[r.first / BLOCK];
+	if (tex) l.tex = tex, l.emissive = emissive;
+	else if (!l.tex) l.tex = smokeTex, l.emissive = false;
+	// the fraction of the particles emitted: the pool's pressure, and the
+	// ring's shortfall when it was allocated
+	ParticlePool::Ring *pr = slots.RingAt (r.first);
+	pr->thin = (float)(ParticlePool::PressureFactor (fill, r.prio) * r.shortfall);
+	return true;
+}
+
+void ParticleSystem::Emit (ParticleRing &r, Emission &e, uint32_t n)
+{
+	if (!Valid (r) || !n) return;
+	double simt = oapiGetSimTime ();
+	bool used = r.segStart > -1e29; // (written into since allocated)
+	if (used && (r.head + n > r.capacity || r.head == 0)) {
+		// the ring wraps: over dead particles (the segment's first ones are
+		// 1.5 lifetimes old), or the next segment, this one retired; (no
+		// segment: over the oldest)
+		bool alive = simt - r.segStart < 1.5 * std::max (r.life, e.lifetime);
+		uint32_t cap = (uint32_t)std::ceil (std::max (r.need, 2.0 * n) / BLOCK) * BLOCK;
+		if (r.chain && alive && Replace (r, cap, BLOCK, simt)) stats.segments++;
+		else {
+			if (alive) stats.overwrites++;
+			r.segStart = simt;
+		}
+	}
+	if (r.segStart <= -1e29) r.segStart = simt;
+	e.first = r.first, e.capacity = r.capacity, e.head = r.head, e.count = std::min (n, r.capacity);
+	Queue (e);
+	if (!e.count) return;
+	r.head = (r.head + e.count) % r.capacity;
+	r.lastEmit = simt;
+	r.life = std::max (r.life, e.lifetime);
+}
+
+void ParticleSystem::Release (ParticleRing &r)
+{
+	if (Valid (r)) {
+		double simt = oapiGetSimTime ();
+		const ParticlePool::Ring *pr = slots.RingAt (r.first);
+		double until = std::max (pr->lastEmit, r.lastEmit) + 1.5 * std::max (pr->life, r.life) + 1.0;
+		if (until > simt) Retire (r.first, r.capacity, until, nullptr, false);
+		else Free (r.first, r.capacity);
+	}
+	r.id = 0, r.capacity = 0, r.sys = nullptr;
 }
 
 void ParticleSystem::Retire (uint32_t first, uint32_t capacity, double until, VkTexture *tex, bool emissive)
 {
-	retired.push_back ({ first, capacity, until, tex, emissive });
+	const ParticlePool::Ring *r = slots.RingAt (first);
+	if (!r || r->capacity != capacity) return;
+	RingLook &l = ringLook[first / BLOCK];
+	if (tex) l.tex = tex, l.emissive = emissive;
+	else if (!l.tex) l.tex = smokeTex, l.emissive = false;
+	slots.Retire (first, until, (uint64_t)(uintptr_t)l.tex | (l.emissive ? 1u : 0u));
 	aliveUntil = std::max (aliveUntil, until);
 }
 
 void ParticleSystem::DrawRetired (VkDescriptorSet frameSet)
 {
-	for (const Retired &r : retired) Draw (r.first, r.capacity, r.tex, r.emissive, frameSet);
-	if (ctx) ctx->GpuMark ("pt sprites"); // (the sprites of all rings: Scene::Render draws them after the volume)
+	slots.ForEachRing ([&](const ParticlePool::Ring &r) {
+		if (r.retired) Draw (r.first, r.capacity, (VkTexture*)(uintptr_t)(r.tag & ~(uint64_t)1), (r.tag & 1) != 0, frameSet);
+	});
+	// the sprites of all rings registered (Scene::Render: after the volume)
+	if (ctx) {
+		DrawSprites (frameSet);
+		ctx->GpuMark ("pt sprites");
+	}
 }
 
-void ParticleSystem::Queue (const Emission &e)
+void ParticleSystem::Queue (Emission &e)
 {
-	if (e.count && queued.size() < MAX_EMISSIONS) {
-		queued.push_back (e);
-		if (stats.every > 0.0) stats.particles += std::min (e.count, e.capacity), stats.reentry += e.reentry ? std::min (e.count, e.capacity) : 0;
-	} else if (e.count) stats.dropped++;
+	if (!enabled) { e.count = 0; return; } // (legacy streams too)
+	if (!e.count) return;
+	e.cls = Resolve (e);
+	int prio = Priority (e.cls);
+	double fill = slots.Fill ();
+	ParticlePool::Ring *rr = slots.RingAt (e.first);
+	if (!rr || rr->retired) { e.count = 0; return; }
+	if (ParticlePool::Shed (fill, prio)) { stats.shed += e.count, e.count = 0; return; }
+	if (queued.size () >= MAX_EMISSIONS) { stats.dropped++, e.count = 0; return; }
+	// fewer, larger particles while the pool is short (rings of Reserve: as
+	// it found; others: the pool's pressure)
+	double thin = rr->idleRelease ? rr->thin : ParticlePool::PressureFactor (fill, prio);
+	if (thin < 0.999) {
+		float x = (float)(e.count * thin) + rr->thinAcc;
+		uint32_t n = (uint32_t)x;
+		rr->thinAcc = x - (float)n;
+		stats.thinned += e.count - n;
+		e.count = n;
+		if (!n) return;
+		if (!e.speck) {
+			double k = std::pow (thin, -1.0 / 3.0);
+			e.size *= k, e.growth *= k;
+			e.alpha = std::min (e.alpha * k, std::max (e.alpha, 1.0));
+		}
+	}
+	e.lifetime *= ParticlePool::LifeFactor (fill, prio);
+	queued.push_back (e);
+	slots.Touch (e.first, oapiGetSimTime (), e.lifetime);
+	if (stats.every > 0.0) stats.particles += std::min (e.count, e.capacity), stats.reentry += e.reentry ? std::min (e.count, e.capacity) : 0;
 }
 
 void ParticleSystem::LogStats (double simt)
@@ -623,18 +866,179 @@ void ParticleSystem::LogStats (double simt)
 	double now = oapiGetSysTime ();
 	if (now < stats.next) return;
 	stats.next = now + stats.every;
-	uint32_t freeTotal = 0, largest = 0;
-	for (auto &f : freeList) freeTotal += f.second, largest = std::max (largest, f.second);
 	oapiWriteLogV ("VK particles: simt=%.1f frames=%u (sim %u idle %u vol %u, toggles %u) live=%u (max %u, vol %u) rings=%u alloc=%u/%u "
-		"used=[%u,%u) free=%u in %zu (largest %u) retired=%zu emissions=%u (max/frame %u, dropped %u) particles=%u (reentry %u) "
-		"allocs=%u frees=%u allocFails=%u (want %u)",
+		"blocks=%zu free=%u in %zu (largest %u) retired=%u emissions=%u (max/frame %u, dropped %u) particles=%u (reentry %u) "
+		"allocs=%u frees=%u allocFails=%u (want %u) short=%u grows=%u shrinks=%u segments=%u overwrites=%u idleFrees=%u thinned=%u shed=%u "
+		"sprites=%u (max %u, sort max %u)",
 		simt, stats.frames, stats.simFrames, stats.idleFrames, stats.volFrames, stats.volToggles, stats.live, stats.liveMax, stats.liveVol,
-		stats.rings, CAPACITY - freeTotal, CAPACITY, usedFirst, usedFirst + usedCount, freeTotal, freeList.size (), largest, retired.size (),
-		stats.emissions, stats.maxEmissions, stats.dropped, stats.particles, stats.reentry, stats.allocs, stats.frees, stats.allocFails, stats.failWant);
+		slots.Rings (), slots.Allocated (), CAPACITY, slots.Blocks ().size (), slots.FreeTotal (), slots.Fragments (), slots.Largest (), slots.RetiredCount (),
+		stats.emissions, stats.maxEmissions, stats.dropped, stats.particles, stats.reentry, stats.allocs, stats.frees, stats.allocFails, stats.failWant,
+		stats.short_, stats.grows, stats.shrinks, stats.segments, stats.overwrites, stats.idleFrees, stats.thinned, stats.shed,
+		stats.drawn, stats.drawnMax, stats.sortMax);
+	if (stats.ringLog) {
+		// (the pool by kind of ring: retired, priority, released when idle)
+		uint32_t sum[2][4][2] = {}, cnt[2][4][2] = {}, big = 0;
+		slots.ForEachRing ([&](const ParticlePool::Ring &r) {
+			int p = std::clamp (r.prio, 0, 3);
+			sum[r.retired][p][r.idleRelease] += r.capacity, cnt[r.retired][p][r.idleRelease]++;
+			big = std::max (big, r.capacity);
+		});
+		for (int a = 0; a < 2; a++) for (int p = 0; p < 4; p++) for (int i = 0; i < 2; i++)
+			if (cnt[a][p][i]) oapiWriteLogV ("VK particles:   %s prio %d %s: %u rings, %u particles", a ? "retired" : "live", p, i ? "idle-release" : "owned", cnt[a][p][i], sum[a][p][i]);
+		oapiWriteLogV ("VK particles:   largest ring %u", big);
+	}
 	stats.frames = stats.simFrames = stats.idleFrames = stats.volFrames = stats.volToggles = 0;
 	stats.emissions = stats.maxEmissions = stats.dropped = stats.particles = stats.reentry = 0;
 	stats.allocs = stats.frees = stats.allocFails = stats.failWant = 0;
-	stats.liveMax = 0;
+	stats.short_ = stats.grows = stats.shrinks = stats.segments = stats.overwrites = stats.idleFrees = stats.thinned = stats.shed = 0;
+	stats.liveMax = stats.drawnMax = stats.sortMax = 0;
+}
+
+namespace {
+	vkc::Image MakeImage (vkc::Context *ctx, VkImageType type, VkFormat fmt, VkExtent3D e, VkImageUsageFlags usage)
+	{
+		vkc::Image im;
+		VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+		ici.imageType = type, ici.format = fmt, ici.extent = e;
+		ici.mipLevels = 1, ici.arrayLayers = 1;
+		ici.samples = VK_SAMPLE_COUNT_1_BIT;
+		ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+		ici.usage = usage;
+		VmaAllocationCreateInfo aci{};
+		aci.usage = VMA_MEMORY_USAGE_AUTO;
+		VK_CHECK(vmaCreateImage (ctx->allocator, &ici, &aci, &im.image, &im.alloc, nullptr));
+		VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+		vci.image = im.image, vci.viewType = type == VK_IMAGE_TYPE_3D ? VK_IMAGE_VIEW_TYPE_3D : VK_IMAGE_VIEW_TYPE_2D, vci.format = fmt;
+		vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &im.view));
+		return im;
+	}
+	// images into general layout, cleared to a value each
+	void ClearImages (vkc::Context *ctx, const std::vector<std::pair<VkImage, VkClearColorValue>> &ims)
+	{
+		ctx->ImmediateSubmit ([&ims](VkCommandBuffer cmd) {
+			VkImageSubresourceRange r{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+			for (auto &im : ims) {
+				vkc::ImageBarrier (cmd, im.first, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+					VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+				vkCmdClearColorImage (cmd, im.first, VK_IMAGE_LAYOUT_GENERAL, &im.second, 1, &r);
+			}
+			VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+			mb.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT, mb.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+			mb.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, mb.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+			VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+			dep.memoryBarrierCount = 1, dep.pMemoryBarriers = &mb;
+			vkCmdPipelineBarrier2 (cmd, &dep);
+		});
+	}
+}
+
+void ParticleSystem::AllocVolume ()
+{
+	// (between frames' use of the sets: none in flight)
+	vkDeviceWaitIdle (ctx->device);
+	const VkImageUsageFlags ACC = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+	const VkImageUsageFlags OUT = ACC | VK_IMAGE_USAGE_SAMPLED_BIT;
+	const VkImageType T3 = VK_IMAGE_TYPE_3D;
+	for (auto &v : volAccum) v = MakeImage (ctx, T3, VK_FORMAT_R32_UINT, { VOL_X, VOL_Y, VOL_Z }, ACC);
+	for (auto &v : volCoarse) v = MakeImage (ctx, T3, VK_FORMAT_R32_UINT, { VOLC_X, VOLC_Y, VOLC_Z }, ACC);
+	coarseL = MakeImage (ctx, T3, VK_FORMAT_R16G16B16A16_SFLOAT, { VOLC_X, VOLC_Y, VOLC_Z }, OUT);
+	coarseD = MakeImage (ctx, T3, VK_FORMAT_R16_SFLOAT, { VOLC_X, VOLC_Y, VOLC_Z }, OUT);
+	volOut = MakeImage (ctx, T3, VK_FORMAT_R16G16B16A16_SFLOAT, { VOL_X, VOL_Y, VOL_Z }, OUT);
+	volCore = MakeImage (ctx, T3, VK_FORMAT_R8_UNORM, { VOL_X, VOL_Y, VOL_Z }, OUT);
+	volInteg = MakeImage (ctx, T3, VK_FORMAT_R16G16B16A16_SFLOAT, { VOL_X, VOL_Y, VOL_Z }, OUT);
+	volColumns = MakeImage (ctx, VK_IMAGE_TYPE_2D, VK_FORMAT_R16G16_SFLOAT, { VOL_X, VOL_Y, 1 }, OUT);
+	volOcc = ctx->CreateBuffer (2 * VOL_TILE_COUNT * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
+	VkClearColorValue zero{}, none{ { 0.0f, 0.0f, 0.0f, 1.0f } };
+	std::vector<std::pair<VkImage, VkClearColorValue>> cl;
+	for (auto &v : volAccum) cl.push_back ({ v.image, zero });
+	for (auto &v : volCoarse) cl.push_back ({ v.image, zero });
+	for (VkImage im : { coarseL.image, coarseD.image, volOut.image, volCore.image, volColumns.image }) cl.push_back ({ im, zero });
+	cl.push_back ({ volInteg.image, none });
+	ClearImages (ctx, cl);
+	VkBuffer ob = volOcc.buffer;
+	ctx->ImmediateSubmit ([ob](VkCommandBuffer cmd) { vkCmdFillBuffer (cmd, ob, 0, VK_WHOLE_SIZE, 0); });
+	volAlloc = true, volFull = true;
+	AllocMarch ();
+	WriteVolumeSets ();
+	if (stats.every > 0.0) oapiWriteLogV ("VK particles: smoke volume allocated");
+}
+
+void ParticleSystem::AllocMarch ()
+{
+	VkExtent2D re = ctx->RenderExtent ();
+	marchExtent = { std::max (1u, (re.width + 1) / 2), std::max (1u, (re.height + 1) / 2) };
+	for (auto &m : march) ctx->DestroyImage (m);
+	const VkImageUsageFlags U = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+	march[0] = MakeImage (ctx, VK_IMAGE_TYPE_2D, VK_FORMAT_R16G16B16A16_SFLOAT, { marchExtent.width, marchExtent.height, 1 }, U);
+	march[1] = MakeImage (ctx, VK_IMAGE_TYPE_2D, VK_FORMAT_R16G16B16A16_SFLOAT, { marchExtent.width, marchExtent.height, 1 }, U);
+	march[2] = MakeImage (ctx, VK_IMAGE_TYPE_2D, VK_FORMAT_R16G16_SFLOAT, { marchExtent.width, marchExtent.height, 1 }, U);
+	VkClearColorValue none{ { 0.0f, 0.0f, 0.0f, 1.0f } };
+	ClearImages (ctx, { { march[0].image, none }, { march[1].image, none }, { march[2].image, VkClearColorValue{} } });
+	marchGen = ctx->SwapchainGeneration ();
+	if (volAlloc) WriteVolumeSets ();
+}
+
+void ParticleSystem::WriteVolumeSets ()
+{
+	const VkImageLayout G = VK_IMAGE_LAYOUT_GENERAL;
+	for (VkDescriptorSet st : sets) {
+		std::vector<VkWriteDescriptorSet> w;
+		std::vector<VkDescriptorImageInfo> ii;
+		ii.reserve (64);
+		auto add = [&](uint32_t binding, uint32_t elem, VkDescriptorType t, VkSampler smp, VkImageView v) {
+			ii.push_back ({ smp, v, G });
+			VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+			wr.dstSet = st, wr.dstBinding = binding, wr.dstArrayElement = elem, wr.descriptorCount = 1;
+			wr.descriptorType = t, wr.pImageInfo = &ii.back ();
+			w.push_back (wr);
+		};
+		const VkDescriptorType SI = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, CI = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		if (volAlloc) {
+			add (11, 0, SI, VK_NULL_HANDLE, volAccum[0].view); // D
+			add (12, 0, SI, VK_NULL_HANDLE, volAccum[2].view); // R
+			add (13, 0, SI, VK_NULL_HANDLE, volAccum[3].view); // G
+			add (14, 0, SI, VK_NULL_HANDLE, volAccum[4].view); // B
+			add (25, 0, SI, VK_NULL_HANDLE, volAccum[1].view); // C
+			for (uint32_t k = 0; k < 5; k++) add (26, k, SI, VK_NULL_HANDLE, volCoarse[k].view);
+			add (15, 0, SI, VK_NULL_HANDLE, volOut.view);
+			add (16, 0, SI, VK_NULL_HANDLE, volColumns.view);
+			add (17, 0, CI, volSampler, volOut.view);
+			add (18, 0, CI, volSampler, volColumns.view);
+			add (23, 0, CI, volSampler, volInteg.view);
+			add (24, 0, SI, VK_NULL_HANDLE, volInteg.view);
+			add (31, 0, SI, VK_NULL_HANDLE, coarseL.view);
+			add (32, 0, SI, VK_NULL_HANDLE, coarseD.view);
+			add (33, 0, CI, volSampler, coarseL.view);
+			add (34, 0, CI, volSampler, coarseD.view);
+			add (35, 0, SI, VK_NULL_HANDLE, volCore.view);
+			add (36, 0, CI, volSampler, volCore.view);
+			for (uint32_t k = 0; k < 3; k++) add (38 + k, 0, SI, VK_NULL_HANDLE, march[k].view);
+			for (uint32_t k = 0; k < 3; k++) add (41 + k, 0, CI, clampSampler, march[k].view);
+		} else add (23, 0, CI, volSampler, volDummy.view);
+		vkUpdateDescriptorSets (ctx->device, (uint32_t)w.size (), w.data (), 0, nullptr);
+		if (volAlloc) {
+			VkDescriptorBufferInfo bi{ volOcc.buffer, 0, VK_WHOLE_SIZE };
+			VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+			wr.dstSet = st, wr.dstBinding = 37, wr.descriptorCount = 1;
+			wr.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, wr.pBufferInfo = &bi;
+			vkUpdateDescriptorSets (ctx->device, 1, &wr, 0, nullptr);
+		}
+	}
+}
+
+void ParticleSystem::FreeVolume ()
+{
+	if (!volAlloc) return;
+	vkDeviceWaitIdle (ctx->device);
+	volAlloc = false;
+	WriteVolumeSets (); // (the sprites' fog: none)
+	for (auto &v : volAccum) ctx->DestroyImage (v);
+	for (auto &v : volCoarse) ctx->DestroyImage (v);
+	for (vkc::Image *im : { &coarseL, &coarseD, &volOut, &volCore, &volInteg, &volColumns, &march[0], &march[1], &march[2] }) ctx->DestroyImage (*im);
+	ctx->DestroyBuffer (volOcc);
+	marchGen = ~0u;
+	if (stats.every > 0.0) oapiWriteLogV ("VK particles: smoke volume released");
 }
 
 void ParticleSystem::SetPrepass (VkImageView prepass)
@@ -668,6 +1072,17 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	};
 	const VkPipelineStageFlags2 CS = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 	const VkAccessFlags2 RW = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+	frameNo++;
+	// the rings registered for drawing (Draw): none yet; the sprites drawn
+	// by this frame slot's last frame (the next sort's size)
+	memset (ringInfoBuf[fi].mapped, 0, (CAPACITY / BLOCK) * sizeof(uint32_t));
+	drawPending = false;
+	uint32_t prevDrawn = 0;
+	if (drawValid[fi]) {
+		vmaInvalidateAllocation (ctx->allocator, drawRead[fi].alloc, 0, VK_WHOLE_SIZE);
+		prevDrawn = ((const uint32_t*)drawRead[fi].mapped)[1];
+		stats.drawn = prevDrawn, stats.drawnMax = std::max (stats.drawnMax, prevDrawn);
+	}
 	// the previous frame's drawing is done with the pool
 	barrier (VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | CS, VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
 		VK_PIPELINE_STAGE_2_TRANSFER_BIT | CS, VK_ACCESS_2_TRANSFER_WRITE_BIT | RW);
@@ -686,18 +1101,21 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 		stats.frames++;
 		stats.emissions += (uint32_t)queued.size (), stats.maxEmissions = std::max (stats.maxEmissions, (uint32_t)queued.size ());
 	}
-	// rings of streams that are gone, their particles expired: free
-	for (size_t i = 0; i < retired.size(); )
-		if (simt > retired[i].until || simt < retired[i].until - 1e5) { // (or time went back: a new session)
-			Free (retired[i].first, retired[i].capacity);
-			retired[i] = retired.back (), retired.pop_back ();
-		} else i++;
+	// rings of streams that are gone, their particles expired, and idle
+	// rings: free
+	{
+		uint32_t retiredBefore = slots.RetiredCount (), ringsBefore = slots.Rings ();
+		size_t n = slots.Expire (simt);
+		uint32_t retiredFreed = retiredBefore - slots.RetiredCount ();
+		stats.frees += (uint32_t)n, stats.idleFrees += (ringsBefore - slots.Rings ()) - retiredFreed;
+	}
 	if (queued.empty() && simt > aliveUntil) {
 		if (idleUpdates >= 2) { // (the particles have been updated as dead)
 			idle = true;
 			stats.idleFrames++, stats.live = stats.liveVol = 0;
 			LogStats (simt);
 			for (bool &v : nearValid) v = false;
+			for (bool &v : drawValid) v = false;
 			lastCam = camPos, haveCam = true;
 			pendingDt = 0.0;
 			return;
@@ -725,6 +1143,18 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 		*nearBits = far;
 		nearValid[fi] = true;
 	}
+	// the volume's images: allocated when smoke is first near, released
+	// when another mode is chosen or none was near for two minutes (before
+	// any of this frame's sets are bound: AllocVolume waits for the device)
+	{
+		bool volOn = smokeMode == SMOKE_VOLUME && volActive;
+		double now = oapiGetSysTime ();
+		if (volOn) {
+			if (!volAlloc) AllocVolume ();
+			volIdleSince = now;
+		} else if (volAlloc && (smokeMode != SMOKE_VOLUME || now - volIdleSince > 120.0)) FreeVolume ();
+		if (!volOn) volFull = true; // (stale when it is next used)
+	}
 	lastCam = camPos, haveCam = true;
 	up.camShift[0] = (float)shift.x, up.camShift[1] = (float)shift.y, up.camShift[2] = (float)shift.z;
 	up.camShift[3] = (float)pendingDt;
@@ -749,7 +1179,7 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 			double lng = 0.0, lat = 0.0, rad;
 			oapiGlobalToEqu (hp, camPos, &lng, &lat, &rad);
 			for (int k = 0; k < WIND_LAYERS; k++) {
-				VECTOR3 v = trails ? oapiGetModelWind (hp, lng, lat, k * 1e3) : _V(0, 0, 0);
+				VECTOR3 v = oapiGetModelWind (hp, lng, lat, k * 1e3); // (whether or not there are trails)
 				w[4 * k] = (float)v.x, w[4 * k + 1] = (float)v.z, w[4 * k + 2] = w[4 * k + 3] = 0.0f;
 			}
 		}
@@ -765,29 +1195,62 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	for (int k = 0; k < 3; k++)
 		drawBody[k] = up.bodyPos[k], drawBody[4 + k] = up.bodyVel[k], drawBody[8 + k] = up.omega[k];
 	drawBody[3] = up.bodyPos[3] > 0.0f ? 1.0f : 0.0f;
-	// the pool's used part (from the first ring to the end of the last; rings
-	// are cleared when allocated, so the particles left in the free space
-	// around it are never seen again): the passes over the particles go over
-	// that part only
-	uint32_t usedLo = 0, usedHi = CAPACITY;
-	for (auto &f : freeList) {
-		if (f.first == 0) usedLo = f.second;
-		if (f.first + f.second == CAPACITY) usedHi = f.first;
+	// the allocated blocks (rings are cleared when allocated, so the
+	// particles left in free blocks are never seen again): the passes over
+	// the particles go over these only
+	const std::vector<uint32_t> &blocks = slots.Blocks ();
+	memcpy (blockListBuf[fi].mapped, blocks.data (), blocks.size () * sizeof(uint32_t));
+	const uint32_t nslots = (uint32_t)blocks.size () * BLOCK;
+	const uint32_t groups = nslots / 64; // (BLOCK is a multiple of 64)
+	up.omega[3] = (float)nslots;
+	up.ground[3] = smokeMode == SMOKE_VOLUME ? 1.0f : 0.0f;
+	// the sprites' list, sorted: its size from the sprites of this frame
+	// slot's last frame and the particles emitted since, with a margin; all
+	// allocated after a camera cut or a change of mode
+	uint32_t emitted = 0;
+	for (const Emission &e : queued) emitted += std::min (e.count, e.capacity);
+	emitHist[fi] = emitted;
+	uint32_t sortSize = nslots;
+	if (drawValid[fi] && prevDrawn < sortN[fi] && length (shift) < 1000.0 && smokeMode == lastMode) {
+		uint64_t b = (uint64_t)prevDrawn + std::max (prevDrawn / 4, 2048u);
+		for (uint32_t k : emitHist) b += k;
+		sortSize = (uint32_t)std::min<uint64_t> (b, nslots);
 	}
-	if (usedLo >= usedHi) usedLo = 0, usedHi = BLOCK; // (no rings)
-	const uint32_t groups = (usedHi - usedLo) / 64; // (BLOCK is a multiple of 64)
-	up.omega[3] = (float)usedHi;
-	up.ground[3] = (float)usedLo;
-	for (int k = 0; k < 3; k++) {
-		double q = (&camPos.x)[k] * NOISE_SCALE;
-		up.noiseOrg[k] = (float)(q - floor (q));
+	lastMode = smokeMode;
+	uint32_t n = SORT_TILE; // (whole tiles of the shared-memory steps)
+	while (n < sortSize) n <<= 1;
+	sortN[fi] = n;
+	stats.sortMax = std::max (stats.sortMax, n);
+	// (keys beyond the list: last; the list's length counted from 0)
+	vkCmdFillBuffer (cmd, sortKeys.buffer, 0, (VkDeviceSize)n * sizeof(uint32_t), 0xFFFFFFFFu);
+	const uint32_t args[4] = { 4, 0, 0, 0 };
+	vkCmdUpdateBuffer (cmd, drawArgs[fi].buffer, 0, sizeof(args), args);
+	barrier (VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, CS, RW);
+	// noise anchored to the planet nearby (turning with it): the camera's
+	// position in its frame, the noise coordinates wrapped (the noise tiles;
+	// octaves at integer ratios); positions turned into its axes in the
+	// shaders (noiseRot)
+	{
+		VECTOR3 camLoc = camPos, upLoc = _V(0, 1, 0);
+		MATRIX3 R = _M(1, 0, 0, 0, 1, 0, 0, 0, 1);
+		if (OBJHANDLE hp = oapiCameraProxyGbody ()) {
+			oapiGetRotationMatrix (hp, &R);
+			oapiGlobalToLocal (hp, &camPos, &camLoc);
+			if (length (camLoc) > 0.0) upLoc = unit (camLoc);
+		}
+		auto wrap = [](double q) { return (float)(q - floor (q)); };
+		for (int k = 0; k < 3; k++) {
+			double c = (&camLoc.x)[k];
+			up.noiseOrg[k] = wrap (c * NOISE_SCALE);
+			up.trailNoise[k] = wrap (c * TRAIL_NOISE_SCALE);
+			// (the erosion's billows rising slowly)
+			up.noiseRot[k][3] = wrap (c * MARCH_NOISE_SCALE - (&upLoc.x)[k] * fmod (simt * MARCH_NOISE_RISE, 1e4));
+			for (int j = 0; j < 3; j++) up.noiseRot[k][j] = (float)R.data[3 * j + k]; // (row k of R^T)
+		}
+		up.noiseOrg[3] = (float)NOISE_SCALE;
+		up.trailNoise[3] = (float)TRAIL_NOISE_SCALE;
+		up.vol[3] = (float)MARCH_NOISE_SCALE;
 	}
-	up.noiseOrg[3] = (float)NOISE_SCALE;
-	for (int k = 0; k < 3; k++) {
-		double q = (&camPos.x)[k] * TRAIL_NOISE_SCALE;
-		up.trailNoise[k] = (float)(q - floor (q));
-	}
-	up.trailNoise[3] = (float)TRAIL_NOISE_SCALE;
 	// smoke shadow grid: axes across the sunlight and towards the sun
 	VECTOR3 lz = unit (sunDir);
 	VECTOR3 lx = unit (crossp (lz, fabs (lz.y) < 0.9 ? _V(0, 1, 0) : _V(1, 0, 0))), ly = crossp (lz, lx);
@@ -832,15 +1295,19 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 			float f1[4] = { (float)p1.x, (float)p1.y, (float)p1.z, (float)e.spread };
 			float fv[4] = { (float)e.vel.x, (float)e.vel.y, (float)e.vel.z, (float)e.lifetime };
 			float fd[4] = { (float)e.dir.x, (float)e.dir.y, (float)e.dir.z, (float)e.dt };
-			float fs[4] = { (float)e.size, (float)e.growth, (float)e.alpha, (float)e.slowdown };
+			// (drag >= 0; a trail's smoke: a flag)
+			float fs[4] = { (float)e.size, (float)e.growth, (float)e.alpha, (float)std::fabs (e.slowdown) };
 			memcpy (g.p0, f0, 16), memcpy (g.p1, f1, 16), memcpy (g.vel, fv, 16), memcpy (g.dir, fd, 16), memcpy (g.shape, fs, 16);
 			uint32_t count = std::min (e.count, e.capacity);
 			g.slab[0] = e.first, g.slab[1] = e.capacity, g.slab[2] = e.head, g.slab[3] = count;
 			g.misc[0] = seed++, g.misc[1] = (e.emissive ? 1u : 0u) | (e.reentry ? 2u : 0u) | (e.tinted ? 4u : 0u) | (e.planar ? 8u : 0u)
-				| (e.ballistic ? 16u : 0u) | (e.cold ? 32u : 0u) | (e.volumetric ? 64u : 0u) | (e.speck ? 128u : 0u) | (e.spherical ? 256u : 0u);
+				| (e.ballistic ? 16u : 0u) | (e.cold ? 32u : 0u) | (e.volumetric ? 64u : 0u) | (e.speck ? 128u : 0u) | (e.spherical ? 256u : 0u)
+				| (e.trail || e.slowdown < 0.0 ? 512u : 0u) | (e.ramp ? 1024u : 0u) | (e.erode ? 2048u : 0u);
 			uint32_t rgb = 0;
 			for (int k = 0; k < 3; k++) rgb |= (uint32_t)std::lround (std::clamp (e.albedo[k], 0.0f, 1.0f) * 255.0f) << (8 * k);
-			g.misc[2] = rgb, g.misc[3] = 0;
+			// (streak: 0 the class's, 255 none, else 2 ms units: particles.glsl ParticleStreak)
+			uint32_t streak = e.streak < 0.0f ? 255u : e.streak > 0.0f ? (uint32_t)std::clamp (std::lround (e.streak / 0.002f), 1l, 254l) : 0u;
+			g.misc[2] = rgb, g.misc[3] = (uint32_t)Resolve (e) | (streak << 8);
 			maxCount = std::max (maxCount, count);
 		}
 		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, emitPipe);
@@ -873,20 +1340,30 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	barrier (CS, RW, CS, RW);
 	ctx->GpuMark ("pt light");
 
-	// smoke volume: volumetric particles into the froxels, resolved
-	if (smokeMode == SMOKE_VOLUME && volActive) {
-		VkClearColorValue z0{};
-		VkImageSubresourceRange rr{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-		barrier (CS | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, RW, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-		for (auto &v : volAccum) vkCmdClearColorImage (cmd, v.image, VK_IMAGE_LAYOUT_GENERAL, &z0, 1, &rr);
-		barrier (VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, CS, RW);
+	// smoke volume: volumetric particles into the froxels (and the coarse
+	// grid), resolved (the coarse grid, then the tiles of columns with smoke
+	// this frame or the last, clearing the accumulators as they are read);
+	// the tiles' marks of the last frame cleared for the next
+	if (smokeMode == SMOKE_VOLUME && volActive && volAlloc) {
+		barrier (CS | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT, RW | VK_ACCESS_2_TRANSFER_WRITE_BIT, CS, RW);
+		up.vol[0] = 0.0f, up.vol[1] = (float)volParity, up.vol[2] = volFull ? 1.0f : 0.0f;
 		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, volSplatPipe);
 		bindSets (updateLayout, false);
 		vkCmdDispatch (cmd, groups, 1, 1);
 		barrier (CS, RW, CS, RW);
 		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, volResolvePipe);
-		vkCmdDispatch (cmd, (VOL_X + 7) / 8, (VOL_Y + 7) / 8, 1);
-		barrier (CS, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | CS, VK_ACCESS_2_SHADER_READ_BIT);
+		up.vol[0] = 1.0f;
+		vkCmdPushConstants (cmd, updateLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(up), &up);
+		vkCmdDispatch (cmd, (VOLC_X + 7) / 8, (VOLC_Y + 7) / 8, VOLC_Z);
+		barrier (CS, RW, CS, RW);
+		up.vol[0] = 0.0f;
+		vkCmdPushConstants (cmd, updateLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(up), &up);
+		vkCmdDispatch (cmd, VOL_TILES_X, VOL_TILES_Y, 1);
+		barrier (CS, RW, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | CS | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+			VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT);
+		vkCmdFillBuffer (cmd, volOcc.buffer, (VkDeviceSize)(1 - volParity) * VOL_TILE_COUNT * sizeof(uint32_t), VOL_TILE_COUNT * sizeof(uint32_t), 0);
+		barrier (VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, CS, RW);
+		volParity ^= 1u, volFull = false;
 	}
 	ctx->GpuMark ("pt volume");
 	if (stats.every > 0.0) {
@@ -896,21 +1373,15 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 		stats.lastVol = v;
 	}
 	volNoise[0] = up.noiseOrg[0], volNoise[1] = up.noiseOrg[1], volNoise[2] = up.noiseOrg[2], volNoise[3] = up.bodyVel[3];
+	memcpy (lastUp, &up, sizeof(up)), lastAtm = atmSet; // (the march: RenderScreenSmoke)
 
-	// draw order: far to near within each ring (bitonic sort over the used
-	// part of the pool)
-	// (over a power of two from the used part's start, or less: the sort keys
-	// keep each ring's particles in its range)
-	uint32_t n = SORT_TILE; // (whole tiles of the shared-memory steps)
-	while (n < usedHi - usedLo) n <<= 1;
-	const uint32_t sortBase = std::min (usedLo, CAPACITY - n);
-	memcpy (blockRingBuf[fi].mapped, blockRing.data(), blockRing.size() * sizeof(uint32_t));
-	usedFirst = usedLo, usedCount = usedHi - usedLo;
+	// draw order: the sprites of all rings far to near (their list compacted
+	// over the allocated blocks, a bitonic sort over a power of two)
+	const uint32_t sortBase = 0;
 	up.ground[2] = (float)n;
-	up.ground[3] = (float)sortBase;
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, sortKeysPipe);
 	bindSets (updateLayout, false);
-	vkCmdDispatch (cmd, (n + 63) / 64, 1, 1);
+	vkCmdDispatch (cmd, groups, 1, 1);
 	// (bitonic: the steps within a tile of SORT_TILE keys in shared memory,
 	// the larger ones over the keys)
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, sortLayout, 0, 1, &set, 0, nullptr);
@@ -926,8 +1397,14 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 		for (uint32_t j = k >> 1; j >= SORT_TILE; j >>= 1) sortStep (sortPipe, j, k, n / 256);
 		sortStep (sortLocalPipe, 1, k, n / SORT_TILE);
 	}
-	barrier (CS, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_HOST_BIT,
-		VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_HOST_READ_BIT); // (nearVol read back)
+	barrier (CS, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_HOST_BIT |
+		VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+		VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_HOST_READ_BIT | VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_TRANSFER_READ_BIT); // (nearVol read back)
+	// (the list's length read back: the next sort's size)
+	VkBufferCopy bc{ 0, 0, 4 * sizeof(uint32_t) };
+	vkCmdCopyBuffer (cmd, drawArgs[fi].buffer, drawRead[fi].buffer, 1, &bc);
+	barrier (VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_HOST_BIT, VK_ACCESS_2_HOST_READ_BIT);
+	drawValid[fi] = true;
 	ctx->GpuMark ("pt sort");
 	LogStats (simt);
 }
@@ -935,206 +1412,105 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 void ParticleSystem::Draw (uint32_t first, uint32_t capacity, VkTexture *tex, bool emissive, VkDescriptorSet frameSet)
 {
 	if (!enabled || !prepassView || !tex || idle) return;
+	const ParticlePool::Ring *r = slots.RingAt (first);
+	if (!r || r->capacity != capacity) return;
+	if (!r->retired) ringLook[first / BLOCK] = RingLook{ tex, emissive }; // (as drawn: when retired)
+	// (registered: DrawSprites draws all rings' particles together)
+	uint32_t *ri = (uint32_t*)ringInfoBuf[ctx->FrameIndex ()].mapped;
+	ri[first / BLOCK] = TexSlot (tex) | (emissive ? 0x100u : 0u) | (tex == smokeTex ? 0x200u : 0u) | 0x80000000u;
+	drawPending = true;
+}
+
+uint32_t ParticleSystem::TexSlot (VkTexture *tex)
+{
+	if (tex == smokeTex) return 0;
+	for (uint32_t k = 1; k < TEX_SLOTS; k++)
+		if (slotTex[k] == tex) { slotFrame[k] = frameNo; return k; }
+	// a free slot, or the one unused for longest (not by a frame in flight)
+	uint32_t best = 0;
+	for (uint32_t k = 1; k < TEX_SLOTS; k++) {
+		if (!slotTex[k]) { best = k; break; }
+		if (frameNo - slotFrame[k] > vkc::FRAMES_IN_FLIGHT + 1 && (!best || slotFrame[k] < slotFrame[best])) best = k;
+	}
+	if (!best) return 0; // (all in use: drawn with the smoke texture)
+	if (slotTex[best]) texmgr->Release (slotTex[best]);
+	texmgr->AddRef (tex);
+	slotTex[best] = tex, slotFrame[best] = frameNo;
+	return best;
+}
+
+void ParticleSystem::DrawSprites (VkDescriptorSet frameSet)
+{
+	if (!enabled || !prepassView || idle || !drawPending) return;
+	uint32_t fi = ctx->FrameIndex ();
+	// the texture table of this frame slot (not bound before in this frame)
+	VkDescriptorImageInfo ii[TEX_SLOTS];
+	VkWriteDescriptorSet w[TEX_SLOTS];
+	uint32_t nw = 0;
+	for (uint32_t k = 0; k < TEX_SLOTS; k++)
+		if (slotTex[k] && setTex[fi][k] != slotTex[k]) {
+			ii[nw] = { texSampler, slotTex[k]->img.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+			w[nw] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+			w[nw].dstSet = texSets[fi], w[nw].dstBinding = 0, w[nw].dstArrayElement = k, w[nw].descriptorCount = 1;
+			w[nw].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, w[nw].pImageInfo = &ii[nw];
+			setTex[fi][k] = slotTex[k];
+			nw++;
+		}
+	if (nw) vkUpdateDescriptorSets (ctx->device, nw, w, 0, nullptr);
 	VkCommandBuffer cmd = ctx->Cmd ();
-	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, emissive ? drawAdd : drawBlend);
-	VkDescriptorSet s[3] = { frameSet, sets[ctx->FrameIndex ()], tex->set };
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawBlend);
+	VkDescriptorSet s[3] = { frameSet, sets[fi], texSets[fi] };
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawLayout, 0, 3, s, 0, nullptr);
-	uint32_t flags = (emissive ? 1u : 0u) | (tex == smokeTex ? 2u : 0u) | 4u | (smokeMode != SMOKE_SPRITES ? 8u : 0u);
-	struct { uint32_t first, flags; float alpha, pad; float body[12]; } pc{ first, flags, 1.0f, 0.0f, {} };
+	uint32_t flags = (smokeMode != SMOKE_SPRITES ? 8u : 0u) | (smokeMode == SMOKE_VOLUME && volActive && volAlloc ? 32u : 0u);
+	struct { uint32_t count, flags; float alpha, pad; float body[12]; } pc{ sortN[fi], flags, 1.0f, 0.0f, {} };
 	memcpy (pc.body, drawBody, sizeof(drawBody));
 	vkCmdPushConstants (cmd, drawLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
-	vkCmdDraw (cmd, 4, capacity, 0, 0);
-}
-
-// ======================================================================
-// VkParticleStream
-
-VkParticleStream::VkParticleStream (oapi::GraphicsClient *gc, TextureManager *tm, PARTICLESTREAMSPEC *pss, Kind k)
-	: oapi::ParticleStream (gc, pss), kind(k), texmgr(tm), client((VulkanClient*)gc), rng((unsigned)(uintptr_t)this)
-{
-	if (pss) spec = *pss;
-	else {
-		spec = PARTICLESTREAMSPEC{};
-		spec.srcsize = 1.0, spec.srcrate = 10.0, spec.lifetime = 2.0;
-		spec.ltype = PARTICLESTREAMSPEC::DIFFUSE;
-		spec.levelmap = PARTICLESTREAMSPEC::LVL_LIN;
-		spec.atmsmap = PARTICLESTREAMSPEC::ATM_FLAT;
-	}
-	if (spec.tex) {
-		tex = (VkTexture*)spec.tex;
-		texmgr->AddRef (tex);
-	} else {
-		tex = texmgr->Load (kind == Kind::Reentry ? "Reentry.dds" : "Contrail1.dds");
-	}
-}
-
-VkParticleStream::~VkParticleStream ()
-{
-	if (allocated && sys == client->Particles ()) sys->Free (first, capacity);
-	texmgr->Release (tex);
-}
-
-bool VkParticleStream::EnsureRing ()
-{
-	ParticleSystem *ps = client->Particles ();
-	if (!ps) return false;
-	if (allocated && ps == sys) return true;
-	sys = ps;
-	head = 0;
-	// ring size: the most particles alive at once (the emission rate rises
-	// at speed in an atmosphere, up to 60 per second)
-	double rate = std::max (spec.srcrate, kind == Kind::Reentry ? 0.0 : 60.0) * sys->density;
-	double want = rate * std::max (spec.lifetime, 0.01) * 1.5 + 64.0;
-	allocated = sys->Allocate ((uint32_t)std::min (want, 65536.0), first, capacity);
-	if (!allocated) oapiWriteLogV ("VulkanClient: particle pool full");
-	return allocated;
-}
-
-bool VkParticleStream::Expired () const
-{
-	// (particles live up to 1.5 lifetimes)
-	return !hRef && simTime - lastEmit > 1.5 * spec.lifetime + 0.1;
-}
-
-double VkParticleStream::LevelAlpha (double lvl) const
-{
-	switch (spec.levelmap) {
-	case PARTICLESTREAMSPEC::LVL_FLAT: return 1.0;
-	case PARTICLESTREAMSPEC::LVL_LIN:  return std::clamp (lvl, 0.0, 1.0);
-	case PARTICLESTREAMSPEC::LVL_SQRT: return std::sqrt (std::clamp (lvl, 0.0, 1.0));
-	case PARTICLESTREAMSPEC::LVL_PLIN:
-	case PARTICLESTREAMSPEC::LVL_PSQRT: {
-		if (lvl < spec.lmin) return 0.0;
-		double a = (spec.lmax > spec.lmin) ? std::min (1.0, (lvl - spec.lmin) / (spec.lmax - spec.lmin)) : 1.0;
-		return spec.levelmap == PARTICLESTREAMSPEC::LVL_PSQRT ? std::sqrt (a) : a;
-	}
-	}
-	return 1.0;
-}
-
-double VkParticleStream::AtmAlpha (double rho) const
-{
-	switch (spec.atmsmap) {
-	case PARTICLESTREAMSPEC::ATM_FLAT: return 1.0;
-	case PARTICLESTREAMSPEC::ATM_PLIN:
-		if (spec.amax <= spec.amin) return rho >= spec.amin ? 1.0 : 0.0;
-		return std::clamp ((rho - spec.amin) / (spec.amax - spec.amin), 0.0, 1.0);
-	case PARTICLESTREAMSPEC::ATM_PLOG:
-		if (rho <= spec.amin || spec.amin <= 0.0) return 0.0;
-		if (spec.amax <= spec.amin) return 1.0;
-		return std::clamp (std::log (rho / spec.amin) / std::log (spec.amax / spec.amin), 0.0, 1.0);
-	}
-	return 1.0;
-}
-
-bool VkParticleStream::SourceState (VECTOR3 &gpos, VECTOR3 &gdir, VECTOR3 &gvel, double &lvl)
-{
-	if (!hRef) return false;
-	VESSEL *v = oapiGetVesselInterface (hRef);
-	if (!v) return false;
-	v->GetGlobalVel (gvel);
-	hAtmRef = v->GetAtmRef ();
-	double rho = hAtmRef ? v->GetAtmDensity () : 0.0;
-
-	if (kind == Kind::Reentry) {
-		// plasma at the leading side of the vessel, flowing with the air
-		VECTOR3 air;
-		if (!hAtmRef || !v->GetAirspeedVector (FRAME_GLOBAL, air)) return false;
-		double va = length (air);
-		if (va < 1.0) return false;
-		double q = 0.5 * rho * va * va * va; // heat flux indicator [W/m^2]
-		reentryLevel = q > 0.0 ? std::clamp ((std::log10 (q) - 6.0) / 1.5, 0.0, 1.0) : 0.0;
-		lvl = reentryLevel;
-		gdir = air / -va;
-		v->Local2Global (_V(0, 0, 0), gpos);
-		gpos += air * (v->GetSize() * 0.5 / va);
-		gvel -= air; // emitted at rest relative to the atmosphere
-	} else {
-		lvl = level ? *level : 1.0;
-		v->Local2Global (*pos, gpos);
-		v->GlobalRot (*dir, gdir);
-	}
-	lvl = LevelAlpha (lvl) * AtmAlpha (rho);
-	return true;
-}
-
-void VkParticleStream::Update (double dt)
-{
-	if (dt <= 0.0) return;
-	simTime += dt;
-	VECTOR3 src, dir, vel;
-	double alpha;
-	if (!EnsureRing () || !SourceState (src, dir, vel, alpha) || alpha < 0.01) {
-		havePrev = false;
-		emitAccum = 0.0;
-		return;
-	}
-	if (!havePrev) prevSrc = src - vel * dt;
-	havePrev = true;
-	// When the source moves through the air quickly, more particles are
-	// emitted, so that the trail stays continuous (spacing of about twice
-	// the particle size) instead of breaking into isolated puffs; their
-	// opacity is reduced to keep the trail's density.
-	double rate = spec.srcrate, alphaScale = 1.0;
-	if (kind != Kind::Reentry && hAtmRef && spec.srcsize > 0.0) {
-		VECTOR3 air;
-		if (oapiGetVesselInterface (hRef)->GetAirspeedVector (FRAME_GLOBAL, air)) {
-			double needed = length (air) / (2.0 * spec.srcsize);
-			if (needed > rate) {
-				alphaScale = std::max (0.35, std::sqrt (rate / needed));
-				rate = std::min (needed, 60.0);
-			}
-		}
-	}
-	// more, smaller particles: about the same covered area and density
-	double D = sys->density, sizeScale = std::pow (D, -1.0 / 3.0);
-	emitAccum += rate * D * dt;
-	uint32_t n = (uint32_t)emitAccum;
-	emitAccum -= n;
-	if (!n) { prevSrc = src; return; }
-	ParticleSystem::Emission e{};
-	e.p0 = prevSrc, e.p1 = src;
-	e.vel = vel, e.dir = dir;
-	// (the stream direction is the thrust direction: the exhaust leaves the
-	// other way; srcspread randomises the velocity by up to +-v0*srcspread/2
-	// per axis)
-	e.v0 = spec.v0, e.spread = spec.srcspread * spec.v0;
-	e.lifetime = spec.lifetime, e.dt = dt;
-	e.size = spec.srcsize * sizeScale, e.growth = spec.growthrate * sizeScale;
-	e.alpha = alpha * alphaScale * std::min (1.0, 1.3 / (D * sizeScale * sizeScale));
-	// exhaust gas takes on the air's velocity quickly (as the plume bends)
-	e.slowdown = !hAtmRef ? 0.0 : kind == Kind::Exhaust
-		? std::max (spec.atmslowdown, ParticleSystem::ExhaustDrag (oapiGetVesselInterface (hRef)->GetAtmDensity ()))
-		: spec.atmslowdown;
-	e.first = first, e.capacity = capacity, e.head = head, e.count = std::min (n, capacity);
-	e.emissive = spec.ltype == PARTICLESTREAMSPEC::EMISSIVE;
-	e.reentry = kind == Kind::Reentry;
-	sys->Queue (e);
-	head = (head + e.count) % capacity;
-	lastEmit = simTime;
-	prevSrc = src;
-}
-
-void VkParticleStream::Render (Scene *scene)
-{
-	if (!allocated || sys != client->Particles () || simTime - lastEmit > 1.5 * spec.lifetime + 0.1) return;
-	sys->Draw (first, capacity, tex, spec.ltype == PARTICLESTREAMSPEC::EMISSIVE, scene->FrameSet ());
+	vkCmdDrawIndirect (cmd, drawArgs[fi].buffer, 0, 1, 4 * sizeof(uint32_t));
+	drawPending = false;
 }
 
 void ParticleSystem::DrawVolume (VkDescriptorSet frameSet)
 {
-	if (!enabled || smokeMode != SMOKE_VOLUME || !prepassView || idle || !volActive) return;
+	// (the half-resolution march of RenderScreenSmoke, upsampled over the scene)
+	if (!enabled || smokeMode != SMOKE_VOLUME || !prepassView || idle || !marchReady) return;
 	VkCommandBuffer cmd = ctx->Cmd ();
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, volMarchPipe);
 	VkDescriptorSet s[2] = { frameSet, sets[ctx->FrameIndex ()] };
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, volMarchLayout, 0, 2, s, 0, nullptr);
-	vkCmdPushConstants (cmd, volMarchLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(volNoise), volNoise);
 	vkCmdDraw (cmd, 3, 1, 0, 0);
 	ctx->GpuMark ("pt march");
 }
 
+void ParticleSystem::RenderMarch (VkDescriptorSet frameSet)
+{
+	marchReady = false;
+	if (!enabled || smokeMode != SMOKE_VOLUME || !prepassView || idle || !volActive || !volAlloc || marchGen != ctx->SwapchainGeneration ()) return;
+	VkCommandBuffer cmd = ctx->Cmd ();
+	VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+	mb.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+	mb.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+	mb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, mb.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+	VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+	dep.memoryBarrierCount = 1, dep.pMemoryBarriers = &mb;
+	vkCmdPipelineBarrier2 (cmd, &dep);
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, marchPipe);
+	VkDescriptorSet s[3] = { sets[ctx->FrameIndex ()], frameSet, lastAtm };
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, updateLayout, 0, 3, s, 0, nullptr);
+	vkCmdPushConstants (cmd, updateLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(UpdateParams), lastUp);
+	vkCmdDispatch (cmd, (marchExtent.width + 7) / 8, (marchExtent.height + 7) / 8, 1);
+	mb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, mb.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+	mb.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, mb.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+	vkCmdPipelineBarrier2 (cmd, &dep);
+	ctx->GpuMark ("pt march half");
+	marchReady = true;
+}
+
 void ParticleSystem::EnsureScreenSmoke ()
 {
+	if (volAlloc && marchGen != ctx->SwapchainGeneration ()) {
+		vkDeviceWaitIdle (ctx->device);
+		AllocMarch ();
+	}
 	if (smokeMode != SMOKE_SCREEN) return;
 	VkExtent2D re = ctx->RenderExtent ();
 	VkExtent2D e = { std::max (1u, re.width / 2), std::max (1u, re.height / 2) };
@@ -1187,6 +1563,7 @@ void ParticleSystem::EnsureScreenSmoke ()
 
 void ParticleSystem::RenderScreenSmoke (VkDescriptorSet frameSet)
 {
+	RenderMarch (frameSet);
 	if (!enabled || smokeMode != SMOKE_SCREEN || !prepassView || idle || thickGen != ctx->SwapchainGeneration ()) return;
 	VkExtent2D re = ctx->RenderExtent ();
 	VkExtent2D e = { std::max (1u, re.width / 2), std::max (1u, re.height / 2) };
@@ -1197,12 +1574,14 @@ void ParticleSystem::RenderScreenSmoke (VkDescriptorSet frameSet)
 	VkClearRect cr{ { { 0, 0 }, e }, 0, 1 };
 	vkCmdClearAttachments (cmd, 1, &ca, 1, &cr);
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, thickPipe);
-	VkDescriptorSet s[3] = { frameSet, sets[ctx->FrameIndex ()], smokeTex->set };
-	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawLayout, 0, 3, s, 0, nullptr);
-	struct { uint32_t first, flags; float alpha, pad; float body[12]; } pc{ usedFirst, 16u, 1.0f, 0.0f, {} };
+	uint32_t fi = ctx->FrameIndex ();
+	VkDescriptorSet s[2] = { frameSet, sets[fi] };
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, thickLayout, 0, 2, s, 0, nullptr);
+	// (the sprites' list: its volumetric particles)
+	struct { uint32_t count, flags; float alpha, pad; float body[12]; } pc{ sortN[fi], 16u, 1.0f, 0.0f, {} };
 	memcpy (pc.body, drawBody, sizeof(drawBody));
-	vkCmdPushConstants (cmd, drawLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
-	vkCmdDraw (cmd, 4, usedCount, 0, 0);
+	vkCmdPushConstants (cmd, thickLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+	vkCmdDrawIndirect (cmd, drawArgs[fi].buffer, 0, 1, 4 * sizeof(uint32_t));
 	ctx->EndTarget ();
 	// blur: horizontal (a -> b), vertical (b -> a)
 	auto barrier = [cmd](VkPipelineStageFlags2 src, VkAccessFlags2 srcA, VkPipelineStageFlags2 dst, VkAccessFlags2 dstA) {

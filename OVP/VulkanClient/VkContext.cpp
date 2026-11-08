@@ -298,6 +298,8 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 	VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
 	f12.shaderFloat16 = s12.shaderFloat16;
 	f12.timelineSemaphore = VK_TRUE;
+	// (the particles' texture table: a texture per particle within a draw)
+	f12.shaderSampledImageArrayNonUniformIndexing = s12.shaderSampledImageArrayNonUniformIndexing;
 	VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
 	f13.dynamicRendering = VK_TRUE;
 	f13.synchronization2 = VK_TRUE;

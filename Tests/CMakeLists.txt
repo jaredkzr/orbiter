@@ -64,6 +64,15 @@ set_target_properties(Collision.Geometry PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${
 add_test(NAME Collision.Geometry COMMAND $<TARGET_FILE:Collision.Geometry>)
 set_tests_properties(Collision.Geometry PROPERTIES TIMEOUT 60)
 
+# The GPU particle pool's bookkeeping (CPU only, no Vulkan)
+add_executable(Particles.Pool Particles.Pool.cpp
+	${CMAKE_SOURCE_DIR}/OVP/VulkanClient/ParticlePool.cpp)
+target_include_directories(Particles.Pool PRIVATE ${CMAKE_SOURCE_DIR}/OVP/VulkanClient)
+target_link_libraries(Particles.Pool Catch2::Catch2WithMain)
+set_target_properties(Particles.Pool PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER_BINARY_ROOT_DIR}")
+add_test(NAME Particles.Pool COMMAND $<TARGET_FILE:Particles.Pool>)
+set_tests_properties(Particles.Pool PROPERTIES TIMEOUT 60)
+
 # Conics of transfer planning (Lambert, departure hyperbola, B-plane)
 add_executable(Transfer.Conics Transfer.Conics.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Conics.cpp

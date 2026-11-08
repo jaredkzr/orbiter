@@ -16,6 +16,7 @@
 #include "Sketchpad.h"
 #include "Fonts.h"
 #include "Particles.h"
+#include "ParticleStream.h"
 #include "PostFX.h"
 #include <cmath>
 #include "imgui.h"

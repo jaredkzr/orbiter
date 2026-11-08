@@ -17,6 +17,7 @@
 #include "LegacyTex.h"
 #include "TileArchive.h"
 #include "Fracture.h"
+#include "Contrail.h"
 #include <map>
 #include <random>
 #include "VesselAPI.h"
@@ -70,14 +71,9 @@ VVessel::~VVessel ()
 	// (the smoke lives on after the vessel's visual is gone: out of range,
 	// or the vessel deleted; its rings are freed when it has faded)
 	ParticleSystem *sys = scene->Particles ();
-	double simt = oapiGetSimTime ();
 	for (auto *rings : { &smoke, &dust, &trail })
 		for (auto &r : *rings)
-			if (r.sys && r.sys == sys) {
-				double until = r.lastEmit + 1.5 * r.life + 1.0;
-				if (until > simt) sys->Retire (r.first, r.capacity, until, sys->SmokeTexture (), false);
-				else sys->Free (r.first, r.capacity);
-			}
+			if (sys && r.sys == sys) sys->Release (r);
 	// restore animated vertex lists to their default state
 	for (auto &it : vtxListDefaults)
 		std::copy (it.second.begin(), it.second.end(), it.first);
@@ -599,22 +595,50 @@ void VVessel::Render (RenderPass pass)
 	if (pass == RenderPass::Transparent) RenderExhaust ();
 }
 
-void VVessel::SetHeating ()
+bool VVessel::Sheath (SheathState &s) const
 {
 	// stagnation-point heat flux (Sutton-Graves, 1 m nose radius) [W/m^2]
 	VESSEL *v = oapiGetVesselInterface (hObj);
 	VECTOR3 as;
 	v->GetAirspeedVector (FRAME_LOCAL, as);
 	double spd = length (as), rho = v->GetAtmDensity ();
-	double q = 1.74e-4 * sqrt (rho) * spd * spd * spd;
+	s.flux = 1.74e-4 * sqrt (rho) * spd * spd * spd;
 	const double qMin = 5e4, qMax = 8e5; // glow onset (a faint one on a 2 km/s suborbital reentry), full glow
-	float t = (float)std::clamp ((q - qMin) / (qMax - qMin), 0.0, 1.0);
-	if (t <= 0.0f || spd <= 0.0) {
+	s.level = (float)std::clamp ((s.flux - qMin) / (qMax - qMin), 0.0, 1.0);
+	if (s.level <= 0.0f || spd <= 0.0) return false;
+	s.dirGlobal = mul (grot, as / spd);
+	s.dirView = scene->ViewDir (s.dirGlobal);
+	return true;
+}
+
+void VVessel::SetHeating ()
+{
+	SheathState s;
+	if (!Sheath (s)) {
 		scene->SetObjectHeat (_V(0, 0, 0), 0.0f);
 		return;
 	}
-	VECTOR3 dir = scene->ViewDir (mul (grot, as / spd));
-	scene->SetObjectHeat (dir, t);
+	scene->SetObjectHeat (s.dirView, s.level);
+}
+
+void VVessel::DrawPlasma (PlasmaRenderer &pr)
+{
+	// (the shell around the hull seen from outside; from the cockpit the
+	// hull is not drawn to hide it)
+	if (oapiCameraInternal () && oapiCameraTarget () == hObj) return;
+	if (reentryLegacy < 0) {
+		PlumeRenderer *plumes = scene->Plumes ();
+		reentryLegacy = plumes && plumes->config.ReentryLegacy (vessel) ? 1 : 0;
+	}
+	if (reentryLegacy) return;
+	SheathState s;
+	if (!Sheath (s)) return;
+	Mat4 mv = scene->ModelView (gpos, grot);
+	for (size_t m = 0; m < meshes.size(); m++) {
+		MeshRec &rec = meshes[m];
+		if (!rec.mesh || !(rec.visMode & MESHVIS_EXTERNAL)) continue;
+		pr.DrawMesh (rec.mesh.get(), mv * Mat4::Translation (rec.ofs), &rec.grpTransform, &rec.grpVisible, s, size);
+	}
 }
 
 // ======================================================================
@@ -794,13 +818,8 @@ VDebris::VDebris (OBJHANDLE h, Scene *s, DWORD sn)
 VDebris::~VDebris ()
 {
 	ParticleSystem *sys = scene->Particles ();
-	double simt = oapiGetSimTime ();
-	for (Ring *r : { &fire, &smoke, &sparks, &dust, &frags, &hitSparks })
-		if (r->sys && r->sys == sys) {
-			double until = r->lastEmit + 1.5 * r->life + 1.0;
-			if (until > simt && r->tex) sys->Retire (r->first, r->capacity, until, r->tex, r->emissive);
-			else sys->Free (r->first, r->capacity);
-		}
+	for (Ring *r : { &fire, &smoke, &sparks, &dust, &frags, &hitSparks, &fireHot, &fireMid, &fireCool, &fbSmoke, &vapour, &column, &drift })
+		if (r->sys && r->sys == sys) sys->Release (*r); // (retired with r->tex while its particles live; rings idle for long were released already)
 }
 
 void VDebris::Update ()
@@ -820,30 +839,36 @@ bool VDebris::Emit (Ring &r, ParticleSystem::Emission e, uint32_t n, double ring
 {
 	ParticleSystem *sys = scene->Particles ();
 	if (!sys || !sys->enabled || !n) return false;
-	if (r.sys != sys) {
-		Ring keep = r;
-		r = Ring{};
-		r.tex = keep.tex, r.emissive = keep.emissive;
-		r.prev = keep.prev, r.havePrev = keep.havePrev, r.accum = keep.accum;
-		uint32_t want = burst ? (uint32_t)std::clamp (2.0 * n, 256.0, 4096.0)
-			: (uint32_t)std::clamp ((double)n * 4.0 + ringLife * 400.0 * sys->density, 512.0, 16384.0);
-		if (!sys->Allocate (want, r.first, r.capacity)) return false;
-		r.sys = sys;
-	}
+	// the ring for this emission (twice it) and the rate of emissions that
+	// recur (n since the last one); grown, shrunk or chained with them,
+	// released when idle (ParticleSystem::Reserve)
+	double simt = oapiGetSimTime ();
+	double gap = r.sys == sys && r.lastEmit > -1e29 ? simt - r.lastEmit : 1e30;
+	double rate = burst || e.dt <= 0.0 ? 0.0 : n / std::max (std::max (e.dt, gap), 1e-3);
+	// (a burst, or the first of a stream: room for it twice)
+	if (!sys->Reserve (r, rate, std::max (e.lifetime, ringLife), ParticleSystem::Resolve (e), rate > 0.0 ? 0.0 : 2.0 * n, r.tex, r.emissive))
+		return false;
 	// (particle_emit.comp: a particle emitted at fraction f of the step at
 	// mix (p0, p1, f) moves on with its velocity for the rest of the step:
 	// a source at rest in the global frame moves with the velocity given,
 	// e.g. the planet's orbital velocity, from p1 - vel dt to p1)
 	if (e.p0.x == e.p1.x && e.p0.y == e.p1.y && e.p0.z == e.p1.z) e.p0 = e.p1 - e.vel * e.dt;
-	e.first = r.first, e.capacity = r.capacity, e.head = r.head, e.count = std::min (n, r.capacity);
-	sys->Queue (e);
-	r.head = (r.head + e.count) % r.capacity;
-	r.lastEmit = oapiGetSimTime ();
-	r.life = std::max (r.life, e.lifetime);
+	sys->Emit (r, e, n);
 	return true;
 }
 
 namespace {
+	// velocity of the ground (and the still air) of body hp under global
+	// position p (global frame). (Not crossp (omega, r): in Orbiter's
+	// left-handed frame that turns the wrong way - the debris' "air" moved
+	// at twice the ground's speed, 816 m/s off at the Cape)
+	VECTOR3 GroundVelocity (OBJHANDLE hp, const VECTOR3 &p)
+	{
+		double lng, lat, rad;
+		oapiGlobalToEqu (hp, p, &lng, &lat, &rad);
+		return oapiGetGroundVector (hp, lng, lat, 3);
+	}
+
 	// the fireball's fire and smoke slow down alike in the air [1/s]
 	constexpr double FIREBALL_SLOWDOWN = 3.0;
 	// a burning piece's flames trail this many times its size behind it
@@ -853,7 +878,9 @@ namespace {
 void VDebris::Effects ()
 {
 	ParticleSystem *sys = scene->Particles ();
-	double dt = oapiGetSimStep ();
+	// (frozen while paused, as the rest of the simulation: the step keeps its
+	// last value then, and the particles would pile up without ageing)
+	double dt = oapiGetPause () ? 0.0 : oapiGetSimStep ();
 	if (!sys || !sys->enabled || dt <= 0.0) return;
 	double simt = oapiGetSimTime ();
 	double D = sys->density, sz = std::pow (D, -1.0 / 3.0);
@@ -879,7 +906,7 @@ void VDebris::Effects ()
 	if (ac) oapiGetPlanetAtmParams (hp, length (gpos - pp), &atm); // (by radius)
 	double rho = ac ? atm.rho : 0.0;
 	double drag = ParticleSystem::ExhaustDrag (rho);
-	if (fire.tex == nullptr) fire.tex = scene->FireTexture (), fire.emissive = true;
+	if (fire.tex == nullptr) fire.tex = scene->FireballTexture (1), fire.emissive = true; // (ragged orange flames)
 	if (sparks.tex == nullptr) sparks.tex = scene->SparkTexture (), sparks.emissive = true;
 	if (smoke.tex == nullptr) smoke.tex = sys->SmokeTexture ();
 	if (dust.tex == nullptr) dust.tex = sys->SmokeTexture ();
@@ -899,14 +926,7 @@ void VDebris::Effects ()
 	// water: the splash of the impact itself, its pieces fly off from it)
 	if (!splashed && onWater && simt - info.created < 0.5 && alt < 2.0 * size + 10.0) {
 		splashed = true;
-		VECTOR3 gv;
-		{
-			VECTOR3 bv; oapiGetGlobalVel (hp, &bv);
-			MATRIX3 Rp; oapiGetRotationMatrix (hp, &Rp);
-			double prot = oapiGetPlanetPeriod (hp);
-			VECTOR3 rot = prot != 0.0 ? mul (Rp, _V(0, 1, 0)) * (2.0 * PI / prot) : _V(0, 0, 0);
-			gv = bv + crossp (rot, gpos - pp);
-		}
+		VECTOR3 gv = GroundVelocity (hp, gpos);
 		double v = std::min (length (vel - gv), 250.0);
 		if (smoke.tex == nullptr) smoke.tex = sys->SmokeTexture ();
 		if (dust.tex == nullptr) dust.tex = sys->SmokeTexture ();
@@ -915,20 +935,20 @@ void VDebris::Effects ()
 		c.p0 = c.p1 = at, c.vel = gv, c.dir = up;
 		c.v0 = std::min (0.4 * v, 60.0), c.spread = std::min (0.06 * v, 8.0);
 		c.lifetime = std::clamp (0.03 * v + 2.0, 2.5, 7.0), c.dt = dt;
-		c.size = std::max (0.6 * size, 1.0) * sz, c.growth = 0.8 * size * sz;
-		c.alpha = 0.6, c.slowdown = 0.3;
+		c.size = std::max (1.0 * size, 2.0) * sz, c.growth = 1.2 * size * sz;
+		c.alpha = 0.8, c.slowdown = 0.3;
 		c.tinted = true, c.cold = true, c.ballistic = true;
 		c.albedo[0] = 0.92f, c.albedo[1] = 0.94f, c.albedo[2] = 0.96f;
-		Emit (dust, c, (uint32_t)std::min (v * 3.0 * D, 400.0), 8.0);
+		Emit (dust, c, (uint32_t)std::min (v * 3.0 * D, 400.0), 8.0, true);
 		ParticleSystem::Emission r{};
 		r.p0 = r.p1 = at, r.vel = gv, r.dir = -up;
 		r.v0 = std::min (0.2 * v, 30.0), r.spread = std::min (0.4 * v, 40.0);
 		r.lifetime = 4.0, r.dt = dt;
-		r.size = std::max (0.8 * size, 1.0) * sz, r.growth = 1.0 * size * sz;
-		r.alpha = 0.4, r.slowdown = 0.8;
+		r.size = std::max (1.0 * size, 2.0) * sz, r.growth = 1.5 * size * sz;
+		r.alpha = 0.6, r.slowdown = 0.8;
 		r.tinted = true, r.cold = true, r.planar = true;
 		r.albedo[0] = 0.9f, r.albedo[1] = 0.92f, r.albedo[2] = 0.95f;
-		Emit (dust, r, (uint32_t)std::min (v * 2.5 * D, 300.0), 8.0);
+		Emit (dust, r, (uint32_t)std::min (v * 2.5 * D, 300.0), 8.0, true);
 	}
 
 	// the fireball: propellant released as it broke off (if seen then)
@@ -936,48 +956,17 @@ void VDebris::Effects ()
 		burst = true;
 		double R = FireballRadius ();
 		flashT = info.created, flashR = R, flashK = rho < 1e-4 ? 10.0 : 3.0;
-		// (the particles' slowdown pulls them to the air's velocity, however
-		// thin: in orbit that would stop them dead, 7.7 km/s, in a moment;
-		// the fireball keeps the piece's velocity where there is no air)
-		double slow = FIREBALL_SLOWDOWN * std::min (rho / 0.01, 1.0);
-		ParticleSystem::Emission e{};
-		e.p0 = e.p1 = gpos, e.vel = vel, e.dir = -up;
-		e.v0 = 0.2 * R, e.spread = R / 0.6;
-		e.lifetime = 1.2 + 0.02 * R, e.dt = dt;
-		e.size = 0.4 * R * sz, e.growth = 0.5 * R * sz;
-		e.alpha = 0.22, e.slowdown = slow;
-		e.emissive = true;
-		if (rho < 1e-4) {
-			// in vacuum: nothing holds it together or lifts it: a flash
-			// expanding as a sphere, gone in moments
-			e.v0 = 0.0, e.spread = 2.0 * R, e.spherical = true;
-			e.lifetime = 0.3 + 0.005 * R, e.alpha = 0.12;
-		}
-		// (particles by the fireball's size: a piece's share of the propellant)
-		Emit (fire, e, (uint32_t)std::clamp (6.0 * R * D, 8.0 * D, 160.0 * D), e.lifetime);
-		ParticleSystem::Emission m{};
-		m.p0 = m.p1 = gpos, m.vel = vel, m.dir = -up, m.dt = dt;
-		if (rho >= 1e-4) {
-			// the black smoke rising from it
-			m.v0 = 0.25 * R, m.spread = R / 1.2;
-			m.lifetime = 14.0;
-			m.size = 0.6 * R * sz, m.growth = 0.35 * R * sz;
-			m.alpha = 0.6, m.slowdown = slow; // (staying with its fire)
-			m.tinted = true, m.volumetric = true;
-			m.albedo[0] = m.albedo[1] = m.albedo[2] = onWater ? 0.5f : 0.07f; // (on the sea: steam with the smoke)
-		} else {
-			// in vacuum no smoke billows: the propellant left unburned
-			// condenses to droplets and ice, with some soot, a pale sunlit
-			// haze expanding at the speed it was thrown out and thinning
-			// as it goes
-			m.v0 = 0.0, m.spread = 2.0 * R / 0.8;
-			m.lifetime = 3.0;
-			m.size = 0.6 * R * sz, m.growth = 0.9 * R * sz;
-			m.alpha = 0.18, m.slowdown = 0.0;
-			m.tinted = true, m.cold = true, m.spherical = true;
-			m.albedo[0] = 0.62f, m.albedo[1] = 0.58f, m.albedo[2] = 0.52f;
-		}
-		Emit (smoke, m, (uint32_t)std::clamp (3.0 * R * D, 6.0 * D, 80.0 * D), m.lifetime);
+		// (fbPos: where it was a step ago - Fireball moves it on to now; the
+		// global velocities carry Earth's orbit, a kilometre a step)
+		fbT0 = simt, fbR = R, fbPos = gpos - vel * dt, fbVel = vel;
+		// (burning for about 0.9 m^0.26 s, m the propellant [kg]: a second
+		// for a few kilograms, 5 s for a tonne)
+		fbDur = rho >= 1e-4 ? std::clamp (0.9 * pow (info.fuel, 0.26), 0.8, 6.0) : 0.0;
+		if (rho < 1e-4) VacuumFlash (dt, R, vel);
+	}
+	if (simt - fbT0 < fbDur + 0.6 * fbDur) {
+		VECTOR3 air = GroundVelocity (hp, fbPos); // (the air there: turning with the planet)
+		Fireball (dt, rho, up, air, onWater);
 	}
 	// struck by another body (when it broke off, or since): small bits of
 	// it and sparks thrown off (a spray for each blow; a grinding contact
@@ -1004,17 +993,7 @@ void VDebris::Effects ()
 
 	// burning: fire and black smoke trailing from it (by the second, and
 	// by the distance it moves through the air: an unbroken trail when fast)
-	VECTOR3 groundVel; // (the surface below; the air turns with it)
-	{
-		VECTOR3 bv;
-		oapiGetGlobalVel (hp, &bv);
-		MATRIX3 Rp;
-		oapiGetRotationMatrix (hp, &Rp);
-		VECTOR3 ax = mul (Rp, _V(0, 1, 0));
-		double prot = oapiGetPlanetPeriod (hp);
-		VECTOR3 rot = prot != 0.0 ? ax * (2.0 * PI / prot) : _V(0, 0, 0);
-		groundVel = bv + crossp (rot, gpos - pp);
-	}
+	VECTOR3 groundVel = GroundVelocity (hp, gpos); // (the surface below; the air turns with it)
 	VECTOR3 airVel = vel - groundVel;
 	double airSpd = rho > 1e-6 ? length (airVel) : 0.0;
 	// (flames need air: in vacuum the propellant flashes in the fireball
@@ -1024,7 +1003,7 @@ void VDebris::Effects ()
 		double f = std::min (1.0, info.burn / 4.0); // (dying down)
 		double s = std::max (0.6 * size, 0.5);
 		if (!fire.havePrev) fire.prev = gpos - vel * dt;
-		fire.accum += (45.0 + airSpd / (0.35 * s)) * D * f * dt;
+		fire.accum += std::min (45.0 + airSpd / (0.35 * s), 300.0) * D * f * dt;
 		uint32_t n = (uint32_t)fire.accum;
 		fire.accum -= n;
 		if (n) {
@@ -1034,7 +1013,7 @@ void VDebris::Effects ()
 			// (the flames trail a few times its size behind it, however fast)
 			e.lifetime = std::clamp (FLAME_LENGTH * s / std::max (airSpd, 1.0), 0.15, 0.7), e.dt = dt;
 			e.size = s * sz, e.growth = 0.8 * s * sz;
-			e.alpha = 0.35 * f, e.slowdown = std::max (drag, 0.5);
+			e.alpha = 0.25 * f, e.slowdown = std::max (drag, 0.5);
 			e.emissive = true;
 			Emit (fire, e, n, 0.7);
 		}
@@ -1059,6 +1038,13 @@ void VDebris::Effects ()
 			smoke.prev = gpos, smoke.havePrev = true;
 		}
 	} else fire.havePrev = smoke.havePrev = false;
+	// a burning wreck at rest on the ground (or afloat): its smoke rises in
+	// a column and drifts off with the wind, for as long as it burns and
+	// as it smoulders on for a minute or so
+	if (burning) burnEndT = simt;
+	double colStr = burning ? std::clamp (info.burn / 4.0, 0.5, 1.0) : (burnEndT > -1e29 ? exp (-(simt - burnEndT) / 25.0) : 0.0);
+	bool atRest = alt < 2.0 * size + 3.0 && length (vel - groundVel) < 8.0;
+	if (atRest && colStr > 0.08 && rho > 1e-4) WreckSmoke (dt, colStr, up, groundVel, onWater);
 
 	// sliding on the ground: sparks (and a gouge); hitting it: dust
 	VECTOR3 contact = gpos - up * std::min (alt, 0.7 * size);
@@ -1094,20 +1080,20 @@ void VDebris::Effects ()
 		c.p0 = c.p1 = contact, c.vel = groundVel, c.dir = up;
 		c.v0 = std::min (0.5 * v, 40.0), c.spread = std::min (0.08 * v, 4.0);
 		c.lifetime = std::clamp (0.12 * v, 1.5, 5.0), c.dt = dt;
-		c.size = std::max (0.5 * size, 0.6) * sz, c.growth = 0.6 * size * sz;
-		c.alpha = 0.55, c.slowdown = 0.4;
+		c.size = std::max (0.8 * size, 1.0) * sz, c.growth = 1.0 * size * sz;
+		c.alpha = 0.75, c.slowdown = 0.4;
 		c.tinted = true, c.cold = true, c.ballistic = true;
 		c.albedo[0] = 0.92f, c.albedo[1] = 0.94f, c.albedo[2] = 0.96f;
-		Emit (dust, c, (uint32_t)std::min (v * 5.0 * D, 300.0), 6.0);
+		Emit (dust, c, (uint32_t)std::min (v * 5.0 * D, 300.0), 6.0, true);
 		ParticleSystem::Emission r{};
 		r.p0 = r.p1 = contact, r.vel = groundVel, r.dir = -up;
 		r.v0 = std::min (0.25 * v, 15.0), r.spread = std::min (0.5 * v, 20.0);
 		r.lifetime = 3.0, r.dt = dt;
-		r.size = 0.6 * size * sz, r.growth = 0.8 * size * sz;
-		r.alpha = 0.35, r.slowdown = 1.0;
+		r.size = 0.9 * size * sz, r.growth = 1.2 * size * sz;
+		r.alpha = 0.5, r.slowdown = 1.0;
 		r.tinted = true, r.cold = true, r.planar = true;
 		r.albedo[0] = 0.9f, r.albedo[1] = 0.92f, r.albedo[2] = 0.95f;
-		Emit (dust, r, (uint32_t)std::min (v * 4.0 * D, 250.0), 6.0);
+		Emit (dust, r, (uint32_t)std::min (v * 4.0 * D, 250.0), 6.0, true);
 	} else if (blow && rho > 1e-4) {
 		dustT = simt, dustImpact = info.impact;
 		uint32_t n = (uint32_t)std::min (info.impact * 6.0 * D, 400.0);
@@ -1121,7 +1107,7 @@ void VDebris::Effects ()
 		e.alpha = 0.4, e.slowdown = 1.5;
 		e.tinted = true, e.cold = true, e.ballistic = false, e.planar = true, e.volumetric = true;
 		e.albedo[0] = 0.6f, e.albedo[1] = 0.53f, e.albedo[2] = 0.43f;
-		Emit (dust, e, n, 6.0);
+		Emit (dust, e, n, 6.0, true); // (one-shot bursts: the ring holds a couple, not a rate)
 	} else if (info.scrape > 5.0 && rho > 1e-4) {
 		// sliding fast: a thin trail of dust kicked up behind it
 		if (!dust.havePrev) dust.prev = contact - vel * dt;
@@ -1144,13 +1130,193 @@ void VDebris::Effects ()
 	if (info.scrape <= 5.0 || blow) dust.havePrev = false;
 }
 
+namespace {
+	// a puff of the long-lived tier (carried by the wind, fading in over 25 s:
+	// particle_common.glsl): the trail encoding in one place (the record's
+	// trail flag; before it, slowdown < 0 marked it)
+	void LongLived (ParticleSystem::Emission &e, double slowdown)
+	{
+		e.slowdown = std::abs (slowdown);
+		e.trail = true;
+	}
+}
+
+void VDebris::Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 &air, bool onWater)
+{
+	// the fire of the propellant released as it broke off, in air: hot
+	// white-yellow flames at its core first, orange as it grows to its
+	// size within a third of its time, dark red ones at its rim and late
+	// (the flames' textures by temperature: Scene::FireballTexture), rising
+	// as it burns; its black smoke born within the fire's edge from a
+	// quarter of its time on, rising out of it
+	ParticleSystem *sys = scene->Particles ();
+	double D = sys->density, sz = std::pow (D, -1.0 / 3.0);
+	double t = oapiGetSimTime () - fbT0, u = t / std::max (fbDur, 1e-3);
+	double R = fbR;
+	// its centre: carried on by its momentum, slowed by the air, rising (a
+	// buoyant ball of hot gas, some 0.3 sqrt(g R) once it has grown)
+	double slow = FIREBALL_SLOWDOWN * std::min (rho / 0.01, 1.0);
+	fbVel = air + (fbVel - air) * exp (-slow * dt);
+	double rise = 0.3 * sqrt (9.81 * R) * std::min (1.0, 2.0 * u);
+	VECTOR3 rel = fbVel - air;
+	fbVel += up * ((rise - dotp (rel, up)) * (1.0 - exp (-2.0 * dt)));
+	VECTOR3 prevPos = fbPos;
+	fbPos += fbVel * dt;
+	double r = R * (0.45 + 0.55 * sqrt (std::min (4.0 * u, 1.0)));
+	if (u < 1.0) {
+		if (!fireHot.tex) fireHot.tex = scene->FireballTexture (0), fireHot.emissive = true;
+		if (!fireMid.tex) fireMid.tex = scene->FireballTexture (1), fireMid.emissive = true;
+		if (!fireCool.tex) fireCool.tex = scene->FireballTexture (2), fireCool.emissive = true;
+		// (particles by its size: a piece's share of the propellant)
+		double total = std::clamp (6.0 * R * D, 12.0 * D, 160.0 * D);
+		double w[3] = { 1.5 * pow (1.0 - u, 3.0), 4.0 * u * (1.0 - u) + 0.3 * (1.0 - u), pow (u, 1.5) };
+		double ws = w[0] + w[1] + w[2];
+		Ring *ring[3] = { &fireHot, &fireMid, &fireCool };
+		static const double lifeK[3] = { 0.25, 0.4, 0.5 }; // (of its time)
+		static const double sizeK[3][3] = { { 0.8, 0.25, 1.2 }, { 0.95, 0.2, 2.0 }, { 1.1, 0.15, 2.6 } }; // (size of r, growth of R [1/s], spread: out to that of r, slowed by the air)
+		// (dim: they overlap by the dozen; brighter, the ball saturates to a
+		// cream white and loses its colours - diag/a4/fx/fbcmp7.jpg)
+		static const double alphaK[3] = { 0.03, 0.02, 0.02 };
+		for (int k = 0; k < 3; k++) {
+			Ring &rg = *ring[k];
+			rg.accum += total / fbDur * (w[k] / ws) * dt;
+			if (k == 0 && t < 0.5 * dt) rg.accum += 0.25 * total; // (the flash as it forms: the first step)
+			uint32_t n = (uint32_t)rg.accum;
+			rg.accum -= n;
+			if (!n) continue;
+			ParticleSystem::Emission e{};
+			e.p0 = prevPos, e.p1 = fbPos, e.vel = fbVel, e.dir = -up, e.dt = dt;
+			e.v0 = 0.1 * R, e.spread = sizeK[k][2] * r * std::max (slow, 1.0);
+			e.lifetime = std::max (lifeK[k] * fbDur, 0.3);
+			e.size = sizeK[k][0] * r * sz, e.growth = sizeK[k][1] * R * sz;
+			e.alpha = alphaK[k], e.slowdown = slow;
+			e.emissive = true;
+			e.cls = ParticleSystem::Class::Fire;
+			Emit (rg, e, n, e.lifetime);
+		}
+	}
+	// its smoke: from within the fire's edge, from a quarter of its time on
+	if (u > 0.25 && u < 1.6) {
+		if (!fbSmoke.tex) fbSmoke.tex = sys->SmokeTexture ();
+		double total = std::clamp (3.0 * R * D, 6.0 * D, 80.0 * D);
+		fbSmoke.accum += total / fbDur * std::min (1.0, (1.6 - u) * 2.0) * dt;
+		uint32_t n = (uint32_t)fbSmoke.accum;
+		fbSmoke.accum -= n;
+		if (n) {
+			ParticleSystem::Emission m{};
+			m.p0 = prevPos, m.p1 = fbPos, m.vel = fbVel, m.dir = -up, m.dt = dt;
+			m.v0 = 0.15 * R, m.spread = 1.2 * r;
+			m.lifetime = 14.0;
+			m.size = 0.55 * r * sz, m.growth = 0.35 * R * sz;
+			m.alpha = 0.6, m.slowdown = std::max (slow, 0.3);
+			m.tinted = true, m.volumetric = true;
+			m.albedo[0] = m.albedo[1] = m.albedo[2] = onWater ? 0.5f : 0.07f; // (on the sea: steam with the smoke)
+			m.cls = ParticleSystem::Class::FireballSmoke;
+			Emit (fbSmoke, m, n, m.lifetime);
+		}
+	}
+}
+
+void VDebris::VacuumFlash (double dt, double R, const VECTOR3 &vel)
+{
+	// in vacuum nothing holds the burning propellant together or lifts it:
+	// a flash, a shell expanding fast and fading within a second, and the
+	// unburned remainder condensing to a pale vapour shell thinning out as
+	// it goes (no billows, nothing lingers). A shell: emissions along
+	// directions spread evenly over the sphere, each with little spread
+	if (!fireHot.tex) fireHot.tex = scene->FireballTexture (0), fireHot.emissive = true;
+	if (!vapour.tex) vapour.tex = scene->FireballTexture (3);
+	double D = scene->Particles ()->density, sz = std::pow (D, -1.0 / 3.0);
+	double vs = std::clamp (3.0 * R, 20.0, 300.0); // [m/s]
+	const int NDIR = 32;
+	uint32_t per = 1;
+	for (int i = 0; i < NDIR; i++) {
+		double z = 1.0 - (i + 0.5) * 2.0 / NDIR, rr = sqrt (std::max (1.0 - z * z, 0.0)), ph = i * 2.39996323;
+		VECTOR3 d = _V(rr * cos (ph), z, rr * sin (ph));
+		ParticleSystem::Emission e{};
+		e.p0 = e.p1 = gpos, e.vel = vel, e.dir = -d, e.dt = dt;
+		e.v0 = vs, e.spread = 0.12 * vs;
+		e.lifetime = 0.25 + 0.002 * R;
+		e.size = 0.1 * R * sz, e.growth = 0.25 * vs * sz;
+		e.alpha = 0.04, e.slowdown = 0.0;
+		e.emissive = true;
+		e.cls = ParticleSystem::Class::Fire;
+		Emit (fireHot, e, per, e.lifetime, true);
+		ParticleSystem::Emission v (e);
+		v.emissive = false;
+		v.v0 = vs, v.spread = 0.15 * vs;
+		v.lifetime = 1.0;
+		v.size = 0.3 * R * sz, v.growth = 0.4 * vs * sz;
+		v.alpha = 0.05;
+		v.tinted = true, v.cold = true;
+		v.albedo[0] = 0.80f, v.albedo[1] = 0.78f, v.albedo[2] = 0.75f;
+		v.cls = ParticleSystem::Class::FireballSmoke;
+		Emit (vapour, v, per, v.lifetime, true);
+	}
+}
+
+void VDebris::WreckSmoke (double dt, double strength, const VECTOR3 &up, const VECTOR3 &groundVel, bool onWater)
+{
+	// the smoke of a burning wreck: puffs rising from it (hot smoke rises,
+	// particle_update.glsl, some tens of metres over their half minute),
+	// and above that, where they have spread, large long-lived puffs
+	// carried off by the wind (the trail tier: fading in as the column's
+	// fade out)
+	ParticleSystem *sys = scene->Particles ();
+	double D = sys->density, sz = std::pow (D, -1.0 / 3.0);
+	double Rc = std::max (1.2 * size, 3.0);
+	// (one column for the pieces lying together: the first of them this
+	// frame takes it, the others' smoke is in it)
+	static std::vector<VECTOR3> claimed;
+	static double claimedT = -1e30;
+	double simt = oapiGetSimTime ();
+	if (simt != claimedT) claimed.clear (), claimedT = simt;
+	for (const VECTOR3 &c : claimed)
+		if (length (c - gpos) < 30.0 + 2.0 * Rc) return;
+	claimed.push_back (gpos);
+	float alb = onWater ? 0.45f : 0.09f; // (afloat: steam with it)
+	if (!column.tex) column.tex = sys->SmokeTexture ();
+	if (!drift.tex) drift.tex = sys->SmokeTexture ();
+	column.accum += 6.0 * D * dt;
+	uint32_t n = (uint32_t)column.accum;
+	column.accum -= n;
+	if (n) {
+		ParticleSystem::Emission e{};
+		e.p0 = e.p1 = gpos + up * (0.5 * size), e.vel = groundVel, e.dir = -up, e.dt = dt;
+		e.v0 = 3.0, e.spread = 1.5;
+		e.lifetime = 35.0;
+		e.size = Rc * sz, e.growth = (0.12 * Rc + 0.6) * sz;
+		e.alpha = 0.55 * strength, e.slowdown = 0.4;
+		e.tinted = true, e.volumetric = true;
+		e.albedo[0] = e.albedo[1] = e.albedo[2] = alb;
+		e.cls = ParticleSystem::Class::WreckSmoke;
+		Emit (column, e, n, e.lifetime);
+	}
+	drift.accum += 0.6 * D * dt;
+	n = (uint32_t)drift.accum;
+	drift.accum -= n;
+	if (n) {
+		ParticleSystem::Emission e{};
+		e.p0 = e.p1 = gpos + up * (40.0 + 3.0 * Rc), e.vel = groundVel, e.dir = -up, e.dt = dt;
+		e.v0 = 0.5, e.spread = 0.1 * Rc;
+		e.lifetime = 240.0;
+		e.size = 2.5 * Rc * sz, e.growth = 0.6 * sz;
+		e.alpha = 0.45 * strength;
+		LongLived (e, 0.3);
+		e.tinted = true, e.cold = true, e.volumetric = true;
+		e.albedo[0] = e.albedo[1] = e.albedo[2] = alb;
+		e.cls = ParticleSystem::Class::WreckSmoke;
+		Emit (drift, e, n, e.lifetime);
+	}
+}
+
 void VDebris::Spray (const VECTOR3 &pos, const VECTOR3 &vel, double v, double rho)
 {
 	// struck at closing speed v [m/s] at pos (global): fragments of it (lit,
 	// tumbling, glinting; drifting on in vacuum) and sparks, thrown out from
 	// the struck side, more and faster the harder the blow
 	ParticleSystem *sys = scene->Particles ();
-	double dt = oapiGetSimStep ();
+	double dt = oapiGetPause () ? 0.0 : oapiGetSimStep ();
 	if (!sys || dt <= 0.0) return;
 	double D = sys->density;
 	double s = std::min (v / 100.0, 10.0);                 // (0.12 .. 10)
@@ -1236,7 +1402,7 @@ void VDebris::DrawParticles ()
 	ParticleSystem *sys = scene->Particles ();
 	if (!sys) return;
 	double simt = oapiGetSimTime ();
-	for (const Ring *r : { &smoke, &dust, &frags, &fire, &sparks, &hitSparks })
+	for (const Ring *r : { &drift, &column, &fbSmoke, &smoke, &dust, &vapour, &frags, &fireCool, &fireMid, &fire, &fireHot, &sparks, &hitSparks })
 		if (r->sys == sys && simt - r->lastEmit < 1.5 * r->life + 0.1)
 			sys->Draw (r->first, r->capacity, r->tex, r->emissive, scene->FrameSet ());
 }
@@ -1394,6 +1560,28 @@ void VVessel::CollectLights (std::vector<LightSource> &lights)
 		lights.push_back (l);
 	}
 
+	// the reentry plasma sheath, ahead of the windward hull, lights the
+	// vessel and what is near it (seen at night): an extended source as the
+	// plumes, the windward side's area, its mean radiance
+	SheathState sh;
+	if (engineLight && reentryLegacy != 1 && Sheath (sh)) {
+		float rgb[3];
+		SheathState::Colour (sh.level, rgb);
+		float L = sh.Radiance ();
+		float peak = L * std::max (rgb[0], std::max (rgb[1], rgb[2]));
+		double area = PI * size * size;
+		LightSource l{};
+		l.owner = id;
+		l.pos = gpos + sh.dirGlobal * (0.8 * size);
+		l.range = std::min (sqrt (area * peak / 0.002), 5000.0);
+		if (peak > 0.0f && length (l.pos - cam) < l.range + 10e3) {
+			l.att[0] = 0.0, l.att[1] = 0.0, l.att[2] = PI / area;
+			// (not all of it reaches the hull: the layer glows mostly outwards)
+			for (int k = 0; k < 3; k++) l.col[k] = (float)(0.4 * PI * L * rgb[k]);
+			lights.push_back (l);
+		}
+	}
+
 	// lit beacons also illuminate their surroundings (mainly the vessel itself)
 	double simt = oapiGetSimTime ();
 	for (DWORD i = 0; ; i++) {
@@ -1511,7 +1699,6 @@ void VVessel::EmitSmoke (DWORD idx, int type, const PlumeDraw &pd, const PlumeIn
 	double t = c.smokeAir1 > c.smokeAir0 ? std::clamp ((air - c.smokeAir0) / (c.smokeAir1 - c.smokeAir0), 0.0, 1.0) : (air > c.smokeAir0 ? 1.0 : 0.0);
 	double fade = c.smokeOpacity * t * t * (3.0 - 2.0 * t) * pd.level;
 	if (fade < 0.01 || dt <= 0.0) { r.havePrev = false; return; }
-	if (!EnsureRing (r, 250.0, c.smokeLife)) return;
 	// the smoke leaves the end of the flame, or spreads from the surface the
 	// jet meets
 	bool atSurface = info.hit && info.coverage > 0.5;
@@ -1534,11 +1721,14 @@ void VVessel::EmitSmoke (DWORD idx, int type, const PlumeDraw &pd, const PlumeIn
 		// then nothing lingers in vacuum; cold gas: a faint frosty stream
 		rate = (rcs ? (r.onTime < 0.08 ? 250.0 : 0.0) : 40.0) * D * pd.level;
 	}
+	// (the ring for this rate: without one, no smoke, but the trail below
+	// still)
+	bool ring = sys->Reserve (r, rate, c.smokeLife, rcs || cold ? ParticleSystem::Class::Puff : ParticleSystem::Class::EngineSmoke);
 	r.accum += rate * dt;
 	uint32_t n = (uint32_t)std::max (r.accum, 0.0);
 	r.accum -= n;
 	if (!r.havePrev) r.prev = src - vel * dt;
-	if (n) {
+	if (n && ring) {
 		ParticleSystem::Emission e{};
 		e.p0 = r.prev, e.p1 = src;
 		e.vel = vel, e.dir = -flow; // (emitted along -dir)
@@ -1557,14 +1747,11 @@ void VVessel::EmitSmoke (DWORD idx, int type, const PlumeDraw &pd, const PlumeIn
 			e.alpha = (rcs ? 0.2 : 0.05) * pd.level;
 		}
 		e.slowdown = atSurface ? 0.8 : ParticleSystem::ExhaustDrag (pd.airDensity);
-		e.first = r.first, e.capacity = r.capacity, e.head = r.head, e.count = std::min (n, r.capacity);
 		e.tinted = true;
 		e.volumetric = !rcs && !cold;
+		e.cls = rcs || cold ? ParticleSystem::Class::Puff : ParticleSystem::Class::EngineSmoke;
 		for (int k = 0; k < 3; k++) e.albedo[k] = c.smokeAlbedo[k];
-		sys->Queue (e);
-		r.head = (r.head + e.count) % r.capacity;
-		r.lastEmit = oapiGetSimTime ();
-		r.life = c.smokeLife;
+		sys->Emit (r, e, n);
 	}
 	// the long trail: where this smoke has spread (its size at about 0.4 of
 	// its life), carried on by the wind
@@ -1593,21 +1780,19 @@ void VVessel::EmitSmoke (DWORD idx, int type, const PlumeDraw &pd, const PlumeIn
 void VVessel::EmitTrail (DWORD idx, const PlumeClass &c, double strength, const VECTOR3 &src, const VECTOR3 &srcPrev, double S0, double dt)
 {
 	const double LIFE = 900.0;        // [s]
-	const uint32_t CAPACITY = c.trail >= 0.75f ? 8192 : 4096; // puffs per engine (solid motors: more, closer)
 	ParticleSystem *sys = scene->Particles ();
 	if (strength < 0.01 || dt <= 0.0) return;
 	if (idx >= trail.size()) trail.resize (idx + 1);
 	SmokeRing &r = trail[idx];
-	if (r.sys != sys) {
-		r = SmokeRing{};
-		if (!sys->Allocate (CAPACITY, r.first, r.capacity)) return;
-		r.sys = sys;
-	}
 	VECTOR3 vel, as;
 	vessel->GetGlobalVel (vel);
 	vessel->GetAirspeedVector (FRAME_GLOBAL, as);
 	double spacing = std::max (0.25 * S0, 20.0);
-	r.accum += std::min (length (as) * dt / spacing + 2.0 * dt, 80.0 * dt);
+	double rate = std::min (length (as) / spacing + 2.0, 80.0); // [1/s]
+	// (puffs per engine: the ring follows the rate; a solid motor's lays
+	// some thousands over the ascent)
+	if (!sys->Reserve (r, rate, LIFE, ParticleSystem::Class::Trail)) return;
+	r.accum += rate * dt;
 	uint32_t n = (uint32_t)std::max (r.accum, 0.0);
 	r.accum -= n;
 	if (!n) return;
@@ -1620,26 +1805,20 @@ void VVessel::EmitTrail (DWORD idx, const PlumeClass &c, double strength, const 
 	e.lifetime = LIFE, e.dt = dt;
 	e.size = S0, e.growth = 4.0;  // (some 4 km across after 15 minutes: turbulent spreading)
 	e.alpha = 0.5 * std::min (strength, 1.0);
-	e.slowdown = -0.3;            // (< 0: a trail's smoke; it takes on the wind within seconds)
-	e.first = r.first, e.capacity = r.capacity, e.head = r.head, e.count = std::min (n, r.capacity);
+	e.slowdown = 0.3;             // (it takes on the wind within seconds)
+	e.trail = true, e.cls = ParticleSystem::Class::Trail;
 	e.tinted = true, e.cold = true; // (cooled: it does not rise)
 	e.volumetric = true;
 	for (int k = 0; k < 3; k++) e.albedo[k] = c.smokeAlbedo[k];
-	sys->Queue (e);
-	r.head = (r.head + e.count) % r.capacity;
-	r.lastEmit = oapiGetSimTime ();
-	r.life = LIFE;
+	sys->Emit (r, e, n);
 }
 
 bool VVessel::EnsureRing (SmokeRing &r, double rate, double life)
 {
+	// (rate: particles a second at density 1; the ring follows it:
+	// ParticleSystem::Reserve)
 	ParticleSystem *sys = scene->Particles ();
-	if (r.sys == sys) return true;
-	r = SmokeRing{}; // (the pool belongs to the scene)
-	double want = rate * sys->density * life * 1.2;
-	if (!sys->Allocate ((uint32_t)std::min (want, 65536.0), r.first, r.capacity)) return false;
-	r.sys = sys;
-	return true;
+	return sys && sys->Reserve (r, rate * sys->density, life, ParticleSystem::Class::Dust);
 }
 
 namespace {
@@ -1669,12 +1848,16 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 	double thrust = pd.thrust * pd.level;
 	if (!sys || !sys->enabled || !pr || !pr->rayCast || dt <= 0.0 || thrust < 1e3 ||
 		type == (int)PlumeType::RCS || type == (int)PlumeType::ColdGas || type == (int)PlumeType::Ion) { r.havePrev = false; return; }
-	double reach = 2.5 * sqrt (thrust / 1e3);
+	// (in vacuum the jet expands freely and reaches several times as far:
+	// Apollo LMs raised a sheet of dust from some 30 m)
+	bool vacuum = pd.ambientPressure <= 100.0;
+	double reach = (vacuum ? 11.0 : 2.5) * sqrt (thrust / 1e3);
 	double t;
 	VECTOR3 vn;
 	int kind = 2;
 	if (!pr->rayCast (id, pd.pos, unit (pd.dir), reach, t, vn, &kind) || kind == 2) { r.havePrev = false; return; }
-	double strength = (1.0 - t / reach) * (1.0 - t / reach);
+	// (in vacuum: falling off more slowly, the sheet thins towards the reach)
+	double strength = vacuum ? (1.0 - t / reach) * (1.0 - 0.5 * t / reach) : (1.0 - t / reach) * (1.0 - t / reach);
 	OBJHANDLE hp = vessel->GetSurfaceRef ();
 	if (!hp || strength < 0.02) { r.havePrev = false; return; }
 	VECTOR3 hit = scene->GlobalPos (pd.pos + unit (pd.dir) * t);
@@ -1741,37 +1924,43 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 	bool water = !strcmp (name, "Earth") && elev <= 0.0;
 	bool air = pd.ambientPressure > 100.0;
 
-	double life = air ? (water ? 3.0 : 6.0) : 5.0; // (a sheet from hovering lingered half a minute at 10 s)
-	if (!EnsureRing (r, 250.0, life)) return;
+	double life = air ? (water ? 3.0 : 6.0) : 2.5; // (a sheet from hovering lingered half a minute at 10 s)
+	double rate = air ? 120.0 : 900.0;
+	if (!EnsureRing (r, rate, life)) return;
 	double D = sys->density, sizeScale = std::pow (D, -1.0 / 3.0);
-	double radial = air ? 6.0 + 18.0 * strength : 30.0 + 70.0 * strength; // [m/s]
+	double radial = air ? 6.0 + 18.0 * strength : 15.0 + 40.0 * strength; // [m/s]
 	VECTOR3 vel;
 	vessel->GetGlobalVel (vel);
-	VECTOR3 src = hit + n * 0.3;
+	VECTOR3 src = hit + n * (air ? 0.3 : 0.8); // (in vacuum: clear of the ground, the sheet's particles start a metre across)
 	if (!r.havePrev) r.prev = src;
-	r.accum += (air ? 120.0 : 250.0) * D * std::min (1.0, 0.3 + strength) * dt;
+	r.accum += rate * D * std::min (1.0, 0.3 + strength) * dt;
 	uint32_t cnt = (uint32_t)r.accum;
 	r.accum -= cnt;
 	if (cnt) {
 		ParticleSystem::Emission e{};
 		e.p0 = r.prev, e.p1 = src;
-		// (thrown up from the ground, at rest with it: the vessel's velocity,
-		// close enough near the ground)
-		e.vel = vel;
+		// (thrown up from the ground, at rest with it - not with the vessel:
+		// climbing away or settling, its velocity would lift the dust or
+		// slam it down)
+		e.vel = GroundVelocity (hp, src);
 		e.dir = -n;
-		e.v0 = (air ? 0.12 : 0.025) * radial; // (low angles; in vacuum they would arc far)
-		e.spread = 2.0 * radial;
+		e.v0 = air ? 0.12 * radial : 2.0; // (low angles; in vacuum they would arc far)
+		e.spread = air ? 2.0 * radial : radial;
 		e.planar = true;
 		e.lifetime = life, e.dt = dt;
-		double size = air ? 4.0 : 0.6;
-		e.size = size * sizeScale, e.growth = (air ? 2.5 : 0.2) * sizeScale;
-		e.alpha = (air ? 0.22 : 0.45) * strength * std::min (1.0, 1.3 / (D * sizeScale * sizeScale));
+		double size = air ? 4.0 : 3.0;
+		e.size = size * sizeScale, e.growth = (air ? 2.5 : 1.0) * sizeScale;
+		e.alpha = (air ? 0.22 : 0.9) * strength * std::min (1.0, 1.3 / (D * sizeScale * sizeScale));
 		e.slowdown = air ? 2.0 : 0.0;
-		e.first = r.first, e.capacity = r.capacity, e.head = r.head, e.count = std::min (cnt, r.capacity);
 		e.tinted = true, e.cold = true, e.ballistic = true;
 		e.volumetric = air;
 		if (water) e.albedo[0] = e.albedo[1] = e.albedo[2] = 0.95f;
 		else DustColour (hp, e.albedo);
+		// (in vacuum: a dense, low sheet racing out along the ground, the
+		// particles streaking along their paths (gpuparticle.vert) and landing
+		// within a second or two. Larger grains lofted higher looked like
+		// floating rocks against the black sky: left out)
+		e.first = r.first, e.capacity = r.capacity, e.head = r.head, e.count = std::min (cnt, r.capacity);
 		sys->Queue (e);
 		r.head = (r.head + e.count) % r.capacity;
 		r.lastEmit = oapiGetSimTime ();
@@ -1789,7 +1978,7 @@ void VVessel::DrawParticles ()
 	for (auto *rings : { &smoke, &dust, &trail })
 		for (const SmokeRing &r : *rings)
 			if (r.sys == sys && simt - r.lastEmit < 1.5 * r.life + 0.1)
-				sys->Draw (r.first, r.capacity, sys->SmokeTexture (), false, scene->FrameSet ());
+				sys->Draw (r, sys->SmokeTexture (), false, scene->FrameSet ()); // (if not released while idle)
 }
 
 void VVessel::RenderExhaust ()

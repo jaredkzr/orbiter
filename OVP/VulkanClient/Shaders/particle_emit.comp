@@ -45,12 +45,17 @@ void main ()
 	p.velLife = vec4 (v, max (0.01, em.vel.w * (0.5 + ParticleRand (s))));
 	p.shape = em.shape;
 	uint flags = (em.misc.y & 2u) != 0u ? 1u : (ParticleHash (s) & 3u);
-	if ((em.misc.y & 1u) != 0u) flags |= 4u;
-	if ((em.misc.y & 4u) != 0u) flags |= 8u | ((em.misc.y & 32u) != 0u ? 0u : 16u) | (em.misc.z << 8);
-	if ((em.misc.y & 16u) != 0u) flags |= 32u;
-	if ((em.misc.y & 64u) != 0u) flags |= 64u;
-	if ((em.misc.y & 128u) != 0u) flags |= 128u;
-	p.light = vec3 (1.0);
-	p.flags = flags;
+	if ((em.misc.y & 1u) != 0u) flags |= PF_EMISSIVE;
+	if ((em.misc.y & 4u) != 0u) flags |= PF_TINTED | ((em.misc.y & 32u) != 0u ? 0u : PF_HOT);
+	if ((em.misc.y & 16u) != 0u) flags |= PF_BALLISTIC;
+	if ((em.misc.y & 64u) != 0u) flags |= PF_VOLUMETRIC;
+	if ((em.misc.y & 128u) != 0u) flags |= PF_SPECK;
+	if ((em.misc.y & 512u) != 0u) flags |= PF_TRAIL;
+	if ((em.misc.y & 1024u) != 0u) flags |= PF_RAMP;
+	if ((em.misc.y & 2048u) != 0u) flags |= PF_ERODE;
+	p.flags = flags | ((em.misc.w & 0xffu) << 16) | (((em.misc.w >> 8) & 0xffu) << 24); // (class, streak)
+	p.light = PackRGB9E5 (vec3 (1.0));
+	p.albedo = em.misc.z | 0xff000000u;
+	p.ring = em.slab.x >> 8; // (BLOCK)
 	particles[em.slab.x + (em.slab.z + i) % em.slab.y] = p;
 }

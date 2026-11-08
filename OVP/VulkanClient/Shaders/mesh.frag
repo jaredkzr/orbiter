@@ -73,11 +73,12 @@ void main()
 	if ((maps & MAP_EMIS) != 0u) col += texture(emisMap, vUV).rgb;
 
 	// aerodynamic heating: surfaces facing the airflow glow, from dull red
-	// to orange-white
+	// to orange (the hull's own heat; the brighter glow of the shock layer
+	// ahead of it: Plasma.cpp)
 	if (draw.heat.w > 0.0) {
 		float f = max(dot(normalize(vNormalView), draw.heat.xyz), 0.0);
 		float t = draw.heat.w;
-		col += vec3(1.0, 0.25 + 0.45 * t, 0.06 + 0.3 * t) * (4.0 * t * t * f);
+		col += vec3(1.0, 0.22 + 0.33 * t, 0.05 + 0.15 * t) * (1.6 * t * t * f);
 	}
 
 	outColor = vec4(AerialPerspective(col), alpha);

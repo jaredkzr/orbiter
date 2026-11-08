@@ -13,6 +13,7 @@
 #include "VkMath.h"
 #include "RayTracing.h"
 #include "Plumes.h"
+#include "Plasma.h"
 #include "SkySettings.h"
 #include <algorithm>
 #include <cmath>
@@ -249,10 +250,15 @@ public:
 	/// engine plume volumes (null: billboards)
 	class PlumeRenderer *Plumes () { return plumes && plumes->enabled ? plumes.get() : nullptr; }
 	class GroundTracks *Tracks () { return tracks.get(); }
+	/// reentry plasma sheaths (null: off)
+	class PlasmaRenderer *Plasma () { return plasma && plasma->enabled ? plasma.get() : nullptr; }
 	/// particle textures of fires and sparks (made when first needed)
 	class VkTexture *FireTexture ();
 	class VkTexture *SparkTexture ();
 	class VkTexture *FragmentTexture (); ///< small bits of debris: a shard in each quadrant (white, hard edged)
+	/// a fireball's flames by their temperature (0: white-yellow core, 1: orange, 2: dark red), ragged;
+	/// 3: a soft white puff without billows (vapour)
+	class VkTexture *FireballTexture (int stage);
 	/// reactive mask of this frame (shader-read layout after Render): where
 	/// plumes and particles were drawn, which temporal filters should trust
 	/// their history less
@@ -422,6 +428,7 @@ private:
 	std::unique_ptr<class VolumetricClouds> vclouds;
 	std::unique_ptr<class GroundTracks> tracks;
 	std::unique_ptr<PlumeRenderer> plumes;
+	std::unique_ptr<class PlasmaRenderer> plasma;
 	std::unique_ptr<class ParticleSystem> particles;
 	vkc::Image reactive, reactiveMS; // (multisampled: drawn to, resolved into reactive)
 	uint32_t reactiveGen = ~0u;
@@ -510,7 +517,7 @@ private:
 
 	// visuals
 	std::map<OBJHANDLE, std::unique_ptr<VObject>> visuals;
-	class VkTexture *fireTex = nullptr, *sparkTex = nullptr, *fragTex = nullptr;
+	class VkTexture *fireTex = nullptr, *sparkTex = nullptr, *fragTex = nullptr, *fireballTex[4] = {};
 	OBJHANDLE hSun = nullptr;
 	float objLight = 1.0f;
 	float objGlassGlow[3] = { 0, 0, 0 };

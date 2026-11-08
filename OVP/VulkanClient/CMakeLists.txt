@@ -122,6 +122,8 @@ set(SHADER_SRC
 	Shaders/ssr_temporal.comp
 	Shaders/plume.vert
 	Shaders/plume.frag
+	Shaders/plasma.vert
+	Shaders/plasma.frag
 	Shaders/plume_comp.frag
 	Shaders/shimmer.frag
 	Shaders/scorch.vert
@@ -139,6 +141,7 @@ set(SHADER_SRC
 	Shaders/smoke_splat.comp
 	Shaders/smoke_resolve.comp
 	Shaders/smoke_march.frag
+	Shaders/smoke_march.comp
 	Shaders/smoke_thick.frag
 	Shaders/smoke_blur.comp
 	Shaders/smoke_screen.frag
@@ -215,7 +218,10 @@ add_library(VulkanClient SHARED
 	Sketchpad.cpp
 	Fonts.cpp
 	Particles.cpp
+	ParticleStream.cpp
+	ParticlePool.cpp
 	Plumes.cpp
+	Plasma.cpp
 	TileArchive.cpp
 	ProcSurface.cpp
 	PlanetSurface.cpp

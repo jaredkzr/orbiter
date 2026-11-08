@@ -12,10 +12,10 @@ layout(local_size_x = 64) in;
 
 void main ()
 {
-	uint i = uint (pc.ground.w) + gl_GlobalInvocationID.x; // (the pool's used part: ground.w to omega.w)
-	if (i >= uint (pc.omega.w)) return;
+	uint i = ParticleSlot (gl_GlobalInvocationID.x);
+	if (i == ~0u) return;
 	Particle p = particles[i];
-	if (p.velLife.w <= 0.0 || (p.flags & 4u) != 0u) return; // (none, or emissive)
+	if (p.velLife.w <= 0.0 || (p.flags & PF_EMISSIVE) != 0u) return; // (none, or emissive)
 	vec3 pos = p.posAge.xyz;
 	mat3 toView = transpose (mat3 (frame.viewToGlobal));
 	vec3 vp = toView * pos;
@@ -41,5 +41,5 @@ void main ()
 #ifdef RT
 	sun *= RTSunVisible (vp + frame.sunDir.xyz * 0.5, frame.sunDir.xyz);
 #endif
-	particles[i].light = sun;
+	particles[i].light = PackRGB9E5 (sun);
 }

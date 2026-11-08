@@ -137,6 +137,13 @@ const std::vector<PlumeConfig::Rule> &PlumeConfig::Rules (const std::string &cls
 		tag = Lower (tag);
 		Rule r;
 		std::string tok;
+		if (tag == "reentrylegacy") { // (ReentryLegacy [=] TRUE|FALSE: for the whole class)
+			std::string val;
+			if ((ss >> val) && val == "=") ss >> val;
+			val = Lower (val);
+			reentryLegacy[cls] = val == "true" || val == "1" || val == "yes";
+			continue;
+		}
 		if (tag == "exhaust") r.group = -2;
 		else if (tag == "thruster") {
 			if (!(ss >> tok)) continue;
@@ -168,6 +175,15 @@ const std::vector<PlumeConfig::Rule> &PlumeConfig::Rules (const std::string &cls
 	}
 	if (!list.empty()) oapiWriteLogV ("VulkanClient: plume configuration %s: %zu rules", path.c_str(), list.size());
 	return list;
+}
+
+bool PlumeConfig::ReentryLegacy (VESSEL *v)
+{
+	const char *cn = v->GetClassName ();
+	std::string cls = cn ? cn : "";
+	Rules (cls); // (reads the class's file once)
+	auto it = reentryLegacy.find (cls);
+	return it != reentryLegacy.end() && it->second;
 }
 
 PlumeOverride PlumeConfig::Get (VESSEL *v, unsigned idx)
