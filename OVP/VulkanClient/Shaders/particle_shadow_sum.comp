@@ -2,7 +2,9 @@
 // Licensed under the MIT License
 
 // GPU particles, smoke shadows: the optical depth from each cell of the
-// sun-aligned grid towards the sun (summed along the columns)
+// sun-aligned grid towards the sun (summed along the columns), per cascade
+// (z of the dispatch); only the tiles of columns with smoke this frame or
+// the last (the others hold none), the accumulation cleared as it is read
 
 #version 450
 #extension GL_GOOGLE_include_directive : require
@@ -13,12 +15,23 @@ layout(local_size_x = 8, local_size_y = 8) in;
 
 void main ()
 {
-	ivec2 c = ivec2 (gl_GlobalInvocationID.xy);
-	if (any (greaterThanEqual (c, SHADOW_GRID.xy))) return;
+	int c = int (gl_WorkGroupID.z);
+	uint tile = uint (c * SHADOW_TILES * SHADOW_TILES) + gl_WorkGroupID.y * uint (SHADOW_TILES) + gl_WorkGroupID.x;
+	uint p = ShadowParity ();
+	if (shadowOcc[p * SHADOW_TILE_COUNT + tile] == 0u && shadowOcc[(1u - p) * SHADOW_TILE_COUNT + tile] == 0u) return;
+	ivec2 xy = ivec2 (gl_GlobalInvocationID.xy);
+	if (any (greaterThanEqual (xy, SHADOW_GRID.xy))) return;
 	float sum = 0.0;
+	int z0 = c * SHADOW_GRID.z;
 	for (int z = SHADOW_GRID.z - 1; z >= 0; z--) { // (z grows towards the sun)
-		float own = float (imageLoad (shadowAccum, ivec3 (c, z)).r) / SHADOW_FIXED * pc.lightZ.w;
-		imageStore (shadowDepth, ivec3 (c, z), vec4 (sum + 0.5 * own));
+		ivec3 q = ivec3 (xy, z0 + z);
+		uint u = imageLoad (shadowAccum, q).r;
+		if (u != 0u) imageStore (shadowAccum, q, uvec4 (0u));
+		float own = float (u) / SHADOW_FIXED * pc.lightZ.w;
+		// (a quarter of the cell's own: the cascades' cells are deep along
+		// the sun (47 m, 375 m, 3 km): with half, smoke on the sunlit face of
+		// a cloud in a deep cell was shadowed by the rest of its own cell)
+		imageStore (shadowDepth, q, vec4 (sum + 0.25 * own));
 		sum += own;
 	}
 }

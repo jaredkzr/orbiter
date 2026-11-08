@@ -7,7 +7,13 @@
 # playback), Moon (DG to the Moon playback), Mars, Jupiter (1000 g
 # relativistic autopilot to orbit), Proxima, Barnard (1 g, ship-time warp
 # 10^6, to orbit), Nyx (1 g, to rest by the black hole, where holding takes
-# a quarter of the drive). Default: all.
+# a quarter of the drive). Default: all (not the launches).
+# Launch (Shuttle launch from 39A, camera 850 m away, T+0-60 at 1x, particle
+# density 4), Launch8 (the same at density 8), LaunchFar (seen from 42 km,
+# T+0-240): the particle budget, checked by
+#   python3 Tests/Bench/budget.py out_dir
+# (GPU time of the particle passes, allocation failures, dropped emissions;
+# ORBITER_VK_PARTICLE_STATS telemetry in the logs).
 # Playbacks run on a compressed time-warp schedule (Script/Bench/play.lua),
 # trips on Script/Bench/trip.lua.
 #
@@ -34,11 +40,11 @@ grep -v "^WindowWidth\|^WindowHeight\|^ReplayTimewarp" "$OUT/Orbiter.cfg.orig" >
 printf 'ReplayTimewarp = FALSE\nWindowWidth = %s\nWindowHeight = %s\n' "$W" "$H" >> "$OUT/Orbiter.cfg.bench"
 ulimit -v 12000000
 
-run() { local name=$1 tmo=$2; shift 2
+run() { local name=${1%@*} scn=${1#*@} tmo=$2; shift 2
 	cp "$OUT/Orbiter.cfg.bench" Orbiter.cfg
 	local t0=$(date +%s)
 	env "$@" ORBITER_VK_OFFSCREEN=1 ORBITER_VK_PROFILE=1 ORBITER_VK_FRAMETIMES="$OUT/$name.ft" \
-		timeout "$tmo" ./Orbiter -p VulkanClient "--scenariox=$SRC/Tests/Bench/$name.scn" >/dev/null 2>&1
+		timeout "$tmo" ./Orbiter -p VulkanClient "--scenariox=$SRC/Tests/Bench/$scn.scn" ${ARGS:-} >/dev/null 2>&1
 	local rc=$?
 	cp Orbiter.log "$OUT/$name.log"
 	echo "$name rc=$rc wall=$(( $(date +%s) - t0 ))s frames=$(wc -l < "$OUT/$name.ft") $(grep -a 'bench' Orbiter.log | tail -1 | cut -c13-)"
@@ -52,5 +58,8 @@ for n in ${@:-Atmos Ascent Moon Mars Jupiter Proxima Barnard Nyx}; do case $n in
 	Proxima) run Proxima 1800 "TRIP_TARGET=Proxima b" TRIP_ARR=orbit TRIP_ALT=1000e3 TRIP_G=1 TRIP_SHIPWARP=1e6 ;;
 	Barnard) run Barnard 1800 "TRIP_TARGET=Barnard b" TRIP_ARR=orbit TRIP_ALT=1000e3 TRIP_G=1 TRIP_SHIPWARP=1e6 ;;
 	Nyx)     run Nyx 2700 TRIP_TARGET=Nyx TRIP_ARR=rest TRIP_ALT=default TRIP_G=1 TRIP_SHIPWARP=1e6 TRIP_WALLMAX=2400 ;;
+	Launch)    ARGS=--fixedstep=0.02 run Launch 900 BENCH_END=60 ORBITER_VK_PARTICLE_DENSITY=4 ORBITER_VK_PARTICLE_STATS=5 ORBITER_VK_FRAMETIME=0.016 ;;
+	Launch8)   ARGS=--fixedstep=0.02 run Launch8@Launch 900 BENCH_END=60 ORBITER_VK_PARTICLE_DENSITY=8 ORBITER_VK_PARTICLE_STATS=5 ORBITER_VK_FRAMETIME=0.016 ;;
+	LaunchFar) ARGS=--fixedstep=0.02 run LaunchFar 1200 BENCH_END=240 ORBITER_VK_PARTICLE_DENSITY=4 ORBITER_VK_PARTICLE_STATS=5 ORBITER_VK_FRAMETIME=0.016 ;;
 	*) echo "unknown flight $n" ;;
 esac; done

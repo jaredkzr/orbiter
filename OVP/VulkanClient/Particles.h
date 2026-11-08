@@ -162,7 +162,9 @@ public:
 	void RenderScreenSmoke (VkDescriptorSet frameSet);
 	void DrawScreenSmoke (VkDescriptorSet frameSet);
 	void EnsureScreenSmoke ();
-	/// rendering of volumetric particles (ORBITER_VK_SMOKE = sprites, volume, screen)
+	/// the graphics settings' smoke rendering and trails (live: each frame)
+	void ApplySettings ();
+	/// rendering of volumetric particles (GfxSettings::smokeRendering; ORBITER_VK_SMOKE = sprites, volume, screen)
 	enum SmokeMode { SMOKE_SPRITES, SMOKE_VOLUME, SMOKE_SCREEN };
 	SmokeMode smokeMode = SMOKE_VOLUME;
 	/// Draw a stream's particles (scene with reactive mask): registers how
@@ -178,7 +180,7 @@ public:
 
 	bool enabled = true;
 	float density = 4.0f; ///< particles per specified particle (smaller ones)
-	/// long trails of engine smoke, carried by the wind (ORBITER_VK_SMOKE_TRAILS=0: neither, for comparisons)
+	/// long trails of engine smoke, carried by the wind (GfxSettings::smokeTrails; ORBITER_VK_SMOKE_TRAILS=0: none)
 	bool trails = true;
 
 private:
@@ -216,6 +218,9 @@ private:
 	VECTOR3 lastCam{};
 	bool haveCam = false;
 	VkSampler noiseSampler = VK_NULL_HANDLE, clampSampler = VK_NULL_HANDLE;
+	static constexpr int SMOKE_NOISE_SIZE = 64;   // the smoke volume's erosion noise (texels a side; mips)
+	vkc::Image smokeNoise;
+	VkSampler smokeNoiseSampler = VK_NULL_HANDLE;
 	VkImageView shapeView = VK_NULL_HANDLE, detailView = VK_NULL_HANDLE, prepassView = VK_NULL_HANDLE;
 	VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
 	VkDescriptorPool dpool = VK_NULL_HANDLE;
@@ -223,7 +228,9 @@ private:
 	VkPipelineLayout emitLayout = VK_NULL_HANDLE, updateLayout = VK_NULL_HANDLE, updateRTLayout = VK_NULL_HANDLE, drawLayout = VK_NULL_HANDLE;
 	VkPipeline emitPipe = VK_NULL_HANDLE, updatePipe = VK_NULL_HANDLE, updateRTPipe = VK_NULL_HANDLE;
 	VkPipeline lightPipe = VK_NULL_HANDLE, lightRTPipe = VK_NULL_HANDLE, splatPipe = VK_NULL_HANDLE, sumPipe = VK_NULL_HANDLE;
-	vkc::Image shadowAccum, shadowDepth; // smoke shadow grid
+	vkc::Image shadowAccum, shadowDepth; // smoke shadow grid (three cascades)
+	vkc::Buffer shadowOcc;               // its column tiles with smoke (two frames)
+	uint32_t shadowParity = 0;
 	VkPipeline sortKeysPipe = VK_NULL_HANDLE, sortPipe = VK_NULL_HANDLE, sortLocalPipe = VK_NULL_HANDLE;
 	VkPipelineLayout sortLayout = VK_NULL_HANDLE;
 	vkc::Buffer sortVals, sortKeys, blockListBuf[vkc::FRAMES_IN_FLIGHT];
@@ -246,10 +253,10 @@ private:
 	VkPipelineLayout thickLayout = VK_NULL_HANDLE;
 	// smoke volume (allocated while smoke is near in the volume's mode:
 	// AllocVolume): accumulation (extinction, coverage, light), the coarse
-	// grid for large particles, the resolved volume, its core, the columns
+	// grids for larger particles (each D, C, R, G, B, sun share, core: smokevol.glsl VA_*), the resolved volume, its core, the columns
 	// with smoke, the smoke in front of each froxel (sprites fogged), the
 	// column tiles with smoke (two frames), the half-resolution march
-	vkc::Image volAccum[5], volCoarse[5], coarseL, coarseD, volOut, volCore, volColumns, volInteg;
+	vkc::Image volAccum[7], volMid[7], volCoarse[7], lvlL[2], lvlD[2], volOut, volCore, volColumns, volInteg;
 	vkc::Image volDummy;                 // (the sprites' fog while there is no volume: none)
 	vkc::Buffer volOcc;
 	vkc::Image march[3];                 // near, far, depths (half resolution)
@@ -257,10 +264,15 @@ private:
 	bool volAlloc = false, volFull = true;
 	uint32_t volParity = 0, marchGen = ~0u;
 	double volIdleSince = -1e30;         // [s] wall: volume unused since (released after a while)
-	void AllocVolume ();
-	void FreeVolume ();
-	void AllocMarch ();
-	void WriteVolumeSets ();
+	void AllocVolume (VkCommandBuffer cmd);
+	void FreeVolume (bool now);
+	void ReapVolume (bool all);
+	void AllocMarch (VkCommandBuffer cmd); // (null: submitted and waited for)
+	void WriteVolumeSets (uint32_t slot);
+	bool volSetDirty[vkc::FRAMES_IN_FLIGHT] = {};
+	bool nearKnown = false, nearEmit = false; // (volumetric smoke within reach: read back, emitted)
+	struct VolGrave { uint64_t frame; std::vector<vkc::Image> images; vkc::Buffer occ; };
+	std::vector<VolGrave> volGrave;      // (released images, destroyed when no frame in flight uses them)
 	void RenderMarch (VkDescriptorSet frameSet);
 	VkSampler volSampler = VK_NULL_HANDLE;
 	VkPipeline volSplatPipe = VK_NULL_HANDLE, volResolvePipe = VK_NULL_HANDLE, volMarchPipe = VK_NULL_HANDLE, marchPipe = VK_NULL_HANDLE;
@@ -284,11 +296,20 @@ private:
 		uint32_t emissions = 0, maxEmissions = 0, dropped = 0, particles = 0, reentry = 0;
 		uint32_t allocs = 0, allocFails = 0, failWant = 0, frees = 0;
 		uint32_t grows = 0, shrinks = 0, segments = 0, overwrites = 0, idleFrees = 0, thinned = 0, shed = 0, short_ = 0;
+		uint32_t lodThinned = 0;
 		bool ringLog = false;
 		uint32_t live = 0, liveMax = 0, liveVol = 0, drawn = 0, drawnMax = 0, sortMax = 0;
 		bool lastVol = false;
 	} stats;
 	void LogStats (double simt);
+	// emitter LOD and the live budget (B8): particles a few pixels across at
+	// most over their life are thinned (fewer, larger: Queue); the live
+	// count (read back) against a budget thins new emissions
+	static constexpr double LOD_PX = 4.0, LOD_MIN = 0.125;
+	static constexpr uint32_t LIVE_BUDGET = 160000;
+	uint32_t liveNow = 0;
+	double pxPerRad = 1000.0;  // (the render height over the vertical field of view)
+	double LiveFactor (int prio) const;
 };
 
 #endif // !__PARTICLES_H

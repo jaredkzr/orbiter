@@ -61,7 +61,7 @@ void main ()
 			+ texture (detailNoise, vec3 (lq * 4.0 - vMisc.z * 3.1, vMisc.w * 0.8 + 0.37)).r * 0.4;
 		float thick = t.b;
 		uint cls = ParticleClass (vFlags);
-		bool band = cls == PC_TRAIL || cls == PC_WRECK_SMOKE;
+		bool band = cls == PC_TRAIL || cls == PC_WRECK_SMOKE || cls == PC_CONTRAIL;
 		float e = 0.22 + 0.5 * (band ? min (vMisc.w, 0.2) : vMisc.w);
 		float cov = smoothstep (e, e + 0.18, thick + 0.7 * (n - 0.5));
 		a = t.a * cov * vColor.a;
@@ -98,7 +98,7 @@ void main ()
 	if ((pc.flags & 32u) != 0u)
 		fog = textureLod (volInteg, vec3 (gl_FragCoord.xy / frame.jitter.zw, VolSlice (vPosView.z)), 0.0);
 	if (emissive) {
-		outColor = vec4 (c * a * fog.a, 0.0); // additive
+		outColor = ParticleClass (vFlags) == PC_FIRE ? vec4 (3.0 * c * a * fog.a, min (a * (1.6 - 0.6 * smoothstep (0.0, 0.3, vMisc.w)) * (1.0 - smoothstep (0.75, 1.0, vMisc.w)), 0.9)) : vec4 (c * a * fog.a, 0.0); // additive (fire: brighter and partly opaque, hides the sky; its emission dims faster than its cover: dark red rims)
 		float lum = dot (c * a, vec3 (0.2126, 0.7152, 0.0722));
 		outReactive = clamp (lum / (1.0 + lum), 0.0, 0.9);
 	} else {

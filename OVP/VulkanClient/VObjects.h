@@ -16,6 +16,7 @@
 #include <vector>
 
 class VkMesh;
+#include "Contrail.h"
 namespace vkscatter { class Gallery; class Field; }
 namespace vkcity { class Field; }
 class VESSEL;
@@ -150,9 +151,18 @@ private:
 	std::vector<SmokeRing> smoke;
 	std::vector<SmokeRing> dust;   // dust (or spray) thrown up where a jet meets the ground
 	std::vector<SmokeRing> trail;  // the long trail in the air (PlumeClass::trail): large puffs left along the path, carried by the wind
+	std::vector<contrail::Emitter> contrails; // where the exhaust's water condenses (PlumeClass::contrail)
+	int contrailBand = -1;                    // (the exhaust laying the persistent band this frame)
+	/// the reentry plasma's wake: glowing gas streaming off the sheath's
+	/// edge behind the vessel (near), and its afterglow along the path (far)
+	struct WakeRing : ParticleRing { double accum = 0.0; bool havePrev = false; VECTOR3 prev{}; };
+	WakeRing wake, afterglow;
+	void EmitWake (double dt);
+	/// the strongest of the vessel's legacy reentry streams (their amin/amax
+	/// over the friction power; scales the wake), -1: none
+	double LegacyReentry () const;
 	void EmitTrail (DWORD idx, const struct PlumeClass &c, double fade, const VECTOR3 &src, const VECTOR3 &srcPrev, double startSize, double dt);
 	void EmitDust (DWORD idx, int type, const struct PlumeDraw &pd, double dt);
-	bool EnsureRing (SmokeRing &r, double rate, double life);
 	/// plumes as light sources this frame (global position, emission, side area)
 	struct PlumeLight { VECTOR3 pos; float col[3]; double area; };
 	std::vector<PlumeLight> plumeLights;
@@ -190,11 +200,12 @@ private:
 		VkTexture *tex = nullptr;
 		bool emissive = false;
 	};
-	Ring fire, smoke, sparks, dust;
-	Ring frags, hitSparks;   // struck by another body: small bits of it, sparks
-	// the fireball (Fireball): its flames by temperature (fire: the orange
-	// ones), its smoke rising from within; in vacuum an expanding shell
-	Ring fireHot, fireMid, fireCool, fbSmoke, vapour;
+	Ring fire, smoke, sparks, dust;  // (sparks: also those of a blow)
+	Ring frags;              // struck by another body: small bits of it
+	// the fireball (Fireball): its flames, each cooling over its life (the
+	// particles' temperature ramp), its smoke rising from within; in vacuum
+	// an expanding shell, its vapour (fbSmoke)
+	Ring fbFire, fbSmoke;
 	double fbT0 = -1e30, fbDur = 0.0, fbR = 0.0; // [s] when it formed, how long it burns; [m] its size
 	VECTOR3 fbPos{}, fbVel{};  // its centre (global), velocity
 	void Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 &airVel, bool onWater);

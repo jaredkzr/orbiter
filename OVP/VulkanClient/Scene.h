@@ -517,7 +517,7 @@ private:
 
 	// visuals
 	std::map<OBJHANDLE, std::unique_ptr<VObject>> visuals;
-	class VkTexture *fireTex = nullptr, *sparkTex = nullptr, *fragTex = nullptr, *fireballTex[4] = {};
+	class VkTexture *fireTex = nullptr, *sparkTex = nullptr, *fragTex = nullptr, *fireballTex[6] = {};
 	OBJHANDLE hSun = nullptr;
 	float objLight = 1.0f;
 	float objGlassGlow[3] = { 0, 0, 0 };

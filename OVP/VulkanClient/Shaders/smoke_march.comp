@@ -24,6 +24,16 @@ layout(set = 0, binding = 38, rgba16f) uniform writeonly image2D marchNear; // l
 layout(set = 0, binding = 39, rgba16f) uniform writeonly image2D marchFar;  //   to the farthest
 layout(set = 0, binding = 40, rg16f) uniform writeonly image2D marchDepth;  // those depths (none: 2 VOL_FAR)
 
+// the erosion noise: smooth tiling gradient noise (64^3, 4 and 8 cells a
+// tile, with mips: Particles.cpp SmokeNoise), sampled at the level of the
+// pixels' footprint (fp: a pixel in noise units; k: the octave's
+// frequency) — no creases, no aliasing of octaves finer than the pixels
+layout(set = 0, binding = 44) uniform sampler3D smokeNoise;
+const float SMOKE_NOISE_TEXELS = 64.0, SMOKE_NOISE_CELLS = 8.0;
+float EroNoise (vec3 w, float fp, float k) { return textureLod (smokeNoise, w * k, max (log2 (fp * k * SMOKE_NOISE_TEXELS), 0.0)).r; }
+// (an octave fades to its mean once a pixel covers a good part of its finest cells)
+float OctaveWeight (float fp, float k) { return 1.0 - smoothstep (0.3, 1.0, fp * k * SMOKE_NOISE_CELLS); }
+
 void main ()
 {
 	ivec2 hp = ivec2 (gl_GlobalInvocationID.xy);
@@ -60,7 +70,7 @@ void main ()
 	}
 	vec2 ndc = uv * 2.0 - 1.0;
 	vec3 d = normalize (vec3 (ndc.x / frame.proj[0][0], ndc.y / frame.proj[1][1], 1.0));
-	const int N = 48;
+	const int N = 40;
 	// (interleaved gradient noise: an even spread of the steps' offsets)
 	vec2 fc = vec2 (hp) + 5.588238 * float (uint (pc.bodyVel.w * 60.0) & 63u);
 	float jit = fract (52.9829189 * fract (dot (fc, vec2 (0.06711056, 0.00583715))));
@@ -73,25 +83,51 @@ void main ()
 	// finer than about two of them fade to their mean)
 	float pix = 4.0 / (abs (frame.proj[1][1]) * float (full.y));
 	float ds = (s1 - s0) / float (N);
+	// (towards the sun in noise units: the billows' lit tops and shaded
+	// undersides, from the noise's gradient that way)
+	vec3 sunN = NoiseFrame (v2g * frame.sunDir.xyz) * 0.06;
 	for (int i = 0; i < N; i++) {
 		float sa = s0 + (float (i) + jit) * ds;
 		float z0 = VolDepth (s0 + float (i) * ds), z1 = min (VolDepth (s0 + float (i + 1) * ds), zEnd);
 		if (z1 <= z0) break;
 		vec4 v = textureLod (volTex, vec3 (uv, sa), 0.0);
 		float zs = VolDepth (sa);
-		float sigma = 0.0, keep = 1.0;
+		float sigma = 0.0, keep = 1.0, shade = 1.0;
 		if (v.a > 1e-6) {
 			// erosion: billows of tens of metres, drifting slowly (in the noise origin)
-			vec3 w = NoiseFrame (v2g * (d * (zs / d.z))) * pc.vol.w + org;
-			float fp = pix * zs * pc.vol.w; // (a pixel in noise units)
-			float f1 = 1.0 - smoothstep (0.15, 0.5, fp), f3 = 1.0 - smoothstep (0.05, 0.17, fp), f7 = 1.0 - smoothstep (0.02, 0.07, fp);
-			float n = mix (0.5, texture (detailNoise, w).r, f1) * 0.55 + mix (0.5, texture (detailNoise, w * 3.0).r, f3) * 0.3
-				+ mix (0.5, texture (detailNoise, w * 7.0).r, f7) * 0.15;
-			keep = VolKeep (n, textureLod (volCoreTex, vec3 (uv, sa), 0.0).r);
-			sigma = v.a * keep * 1.6;
+			uint dbg0 = uint (pc.vol.z) >> 4;
+			vec3 w = (dbg0 & 16u) != 0u ? (v2g * (d * (zs / d.z))) * pc.vol.w : (dbg0 & 32u) != 0u ? (d * (zs / d.z)) * pc.vol.w : NoiseFrame (v2g * (d * (zs / d.z))) * pc.vol.w + org;
+			// (the sample's footprint in noise units: the pixel's, or a quarter
+			// of the step along the ray if longer: finer noise would alias between the
+			// jittered steps as stipple)
+			float fp = (uint (pc.vol.z) & 8u) != 0u ? 1e3 : max (pix * zs, 0.25 * (z1 - z0) / d.z) * pc.vol.w; // (bit 3: no noise, debugging)
+			// (the lattice of any lattice noise, integrated along the view
+			// rays, shows as straight lines converging on its axes' vanishing
+			// points: the coordinates bent by a noise of half the frequency,
+			// about two cells, first)
+			{
+				float fw = OctaveWeight (fp, 0.5);
+				// (two mips coarser: smooth enough for a warp, and cheap)
+				float fw4 = max (fp, 1.0 / 32.0) * 4.0;
+				vec3 wv = vec3 (EroNoise (w, fw4, 0.5), EroNoise (w + vec3 (0.31, 0.17, 0.77), fw4, 0.5), EroNoise (w + vec3 (0.63, 0.89, 0.41), fw4, 0.5)) - 0.476;
+				w += wv * (2.0 * fw);
+			}
+			// (two octaves: a third, finer one was mostly below the pixels
+			// and only added stipple)
+			float f1 = OctaveWeight (fp, 1.0), f3 = OctaveWeight (fp, 3.0);
+			float n1 = mix (0.476, EroNoise (w, fp, 1.0), f1);
+			float n = n1 * 0.6 + mix (0.476, EroNoise (w, fp, 3.0), f3) * 0.4;
+			uint dbg = uint (pc.vol.z) >> 4; // (debugging: 1 no billow shading, 2 octave 1 only, 4 no density modulation, 8 no erosion)
+			if ((dbg & 2u) != 0u) n = n1;
+			keep = (dbg & 8u) != 0u ? 1.0 : VolKeep (n, textureLod (volCoreTex, vec3 (uv, sa), 0.0).r);
+			// (denser where the noise is: billows inside dense smoke too)
+			sigma = v.a * keep * 1.6 * ((dbg & 4u) != 0u ? 1.0 : 0.4 + 1.2 * n);
+			// (lit tops and shaded undersides of the billows: the noise's
+			// gradient towards the sun)
+			shade = (dbg & 1u) != 0u ? 1.0 : clamp (1.0 + 4.0 * (n1 - mix (0.476, EroNoise (w + sunN, fp, 1.0), f1)) * f1, 0.35, 1.4);
 		}
 		// (crevices between billows, where the noise eats in, are darker)
-		vec3 lk = v.rgb * mix (0.55, 1.05, keep);
+		vec3 lk = v.rgb * mix (0.55, 1.05, keep) * shade;
 		float dt = (z1 - z0) / d.z;
 		if (!nearDone && zn <= z1) {
 			// (the nearest surface within this step: the part before it)

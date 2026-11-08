@@ -40,6 +40,9 @@ struct GfxSettings {
 	bool shimmer = true;        ///< heat shimmer behind exhausts
 	bool particles = true;      ///< particle streams (exhaust, smoke, dust)
 	float particleDensity = 4.0f;
+	enum SmokeRendering { SMOKE_SPRITES, SMOKE_SCREEN, SMOKE_VOLUMETRIC };
+	int smokeRendering = SMOKE_VOLUMETRIC; ///< large smoke (launch clouds): sprites, screen-space or volumetric
+	bool smokeTrails = true;    ///< launch smoke trails that stay in the sky, carried by the wind
 	bool engineLight = true;    ///< engines light their surroundings
 	float cameraShake = 1.0f;
 	bool skyEnhanced = false;   ///< sky display: enhanced (long exposure) or realistic

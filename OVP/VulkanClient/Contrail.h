@@ -17,6 +17,7 @@
 #define __CONTRAIL_H
 
 #include "OrbiterAPI.h"
+#include "Particles.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -66,7 +67,7 @@ inline Gate Evaluate (double T, double alt, bool rocket, double humidity)
 	// (the air above the tropopause is dry: jets' trails short and thin
 	// there; a rocket's carries its own water up to the stratosphere)
 	if (rocket) g.form *= 1.0 - Smooth (22e3, 30e3, alt);
-	else g.form *= 1.0 - 0.6 * Smooth (13e3, 16e3, alt);
+	else g.form *= (1.0 - 0.6 * Smooth (13e3, 16e3, alt)) * (1.0 - Smooth (20e3, 26e3, alt)); // (a jet's little water: none in the dry upper stratosphere)
 	if (g.form <= 0.0) return g;
 	// persistent in ice-supersaturated air: the upper troposphere on a
 	// humid day; a rocket's in the stratosphere (its water and the cold:
@@ -108,6 +109,117 @@ inline double SessionHumidity (OBJHANDLE hp)
 	cache[hp] = h;
 	return h;
 }
+
+/// The visible trail of one exhaust: a thin line of lit puffs at rest in
+/// the air behind the source (class Contrail, sprites: the volume would
+/// draw a thin line in beads), living the gate's life up to 30 s and
+/// spreading slowly; where the air is ice-supersaturated (Gate::persist) it
+/// is carried on by larger puffs of the long-lived tier (the trail flag:
+/// wind drift, fading in as the line fades out), spreading into a band for
+/// up to 15 minutes
+struct Emitter {
+	ParticleRing head, line, band;
+	double accH = 0.0, accL = 0.0, accB = 0.0;
+	/// the line's texture: a smooth puff (lit, without billows or erosion:
+	/// the smoke texture's billows broke a thin line into beads); null:
+	/// the smoke texture
+	VkTexture *tex = nullptr;
+	bool havePrev = false;
+	VECTOR3 prev{};
+
+	void Reset () { havePrev = false; }
+	/// src: where it shows (global), vel: the source's velocity (global),
+	/// air: the source's velocity relative to the air (global), width: the
+	/// line's width where it shows [m], strength: 0..1 (engine level);
+	/// band: this one lays the persistent band (one exhaust of a vessel:
+	/// the engines' bands merge anyway)
+	void Emit (ParticleSystem *sys, const VECTOR3 &src, const VECTOR3 &vel, const VECTOR3 &air, const Gate &g,
+		double width, double strength, double dt, bool withBand = true)
+	{
+		double a = std::clamp (g.form * strength, 0.0, 1.0);
+		if (!sys || !sys->enabled || dt <= 0.0 || a < 0.01) { havePrev = false; return; }
+		VECTOR3 p0 = havePrev ? prev : src - vel * dt;
+		prev = src, havePrev = true;
+		double v = length (air);
+		double D = sys->density, sz = std::pow (D, -1.0 / 3.0);
+		ParticleSystem::Emission e{};
+		e.p0 = p0, e.p1 = src;
+		e.vel = vel - air; // (at rest in the air)
+		e.dir = v > 1.0 ? air / v : _V(0, 0, 0);
+		e.v0 = 0.0, e.dt = dt;
+		e.slowdown = 0.5;
+		e.tinted = true, e.cold = true;
+		e.albedo[0] = e.albedo[1] = e.albedo[2] = 0.95f;
+		e.cls = ParticleSystem::Class::Contrail;
+		// the line: a puff for every half of its width along the path
+		// (capped); its first seconds by short-lived puffs (particles fade in
+		// over 8 % of their life: a 30 s line alone showed only from some
+		// 600 m behind a jet)
+		double life = std::min (g.life, 30.0);
+		// (the head dense: seen close, behind the engines; the line has
+		// spread by the time it takes over, sparser)
+		double hrate = std::clamp (v / (0.25 * width), 4.0, 200.0) * D;
+		double rate = std::clamp (v / (0.5 * width), 2.0, 40.0) * D;
+		e.spread = 0.3;
+		e.alpha = 0.9 * a * std::min (1.0, 1.3 / (D * sz * sz));
+		double hlife = std::min (4.0, life);
+		VkTexture *lt = tex ? tex : sys->SmokeTexture ();
+		if (sys->Reserve (head, hrate, hlife, ParticleSystem::Class::Contrail, 0.0, lt, false)) {
+			accH += hrate * dt;
+			uint32_t n = (uint32_t)accH;
+			accH -= n;
+			if (n) {
+				e.lifetime = hlife;
+				e.size = width * sz, e.growth = width / 3.0 * sz;
+				sys->Emit (head, e, n);
+			}
+		}
+		if (life > hlife && sys->Reserve (line, rate, life, ParticleSystem::Class::Contrail, 0.0, lt, false)) {
+			accL += rate * dt;
+			uint32_t n = (uint32_t)accL;
+			accL -= n;
+			if (n) {
+				e.lifetime = life;
+				e.size = width * sz, e.growth = (1.0 + 1.5 * g.persist) * width / 3.0 * sz;
+				sys->Emit (line, e, n);
+			}
+		}
+		// the persistent band (the trail tier): a few large puffs a second
+		// (each lives up to 15 minutes: a launch's three engines at 20 a
+		// second filled the pool by T+120, f9)
+		if (withBand && g.persist > 0.3 && g.life > 60.0) {
+			double S0 = std::max (8.0 * width, 30.0);
+			double rb = std::clamp (v / S0, 0.25, 4.0);
+			if (sys->Reserve (band, rb, g.life, ParticleSystem::Class::Contrail, 0.0, sys->SmokeTexture (), false)) {
+				accB += rb * dt;
+				uint32_t n = (uint32_t)accB;
+				accB -= n;
+				if (n) {
+					e.spread = 0.5;
+					e.lifetime = g.life;
+					e.size = S0, e.growth = 1.0;
+					e.alpha = 0.35 * a * std::clamp ((g.persist - 0.3) / 0.4, 0.0, 1.0);
+					e.trail = true;
+					sys->Emit (band, e, n);
+				}
+			}
+		}
+	}
+	void Draw (ParticleSystem *sys, VkDescriptorSet frameSet) const
+	{
+		if (!sys) return;
+		VkTexture *lt = tex ? tex : sys->SmokeTexture ();
+		sys->Draw (head, lt, false, frameSet);
+		sys->Draw (line, lt, false, frameSet);
+		sys->Draw (band, sys->SmokeTexture (), false, frameSet);
+	}
+	/// the emitter is gone (its particles live on)
+	void Release (ParticleSystem *sys)
+	{
+		for (ParticleRing *r : { &head, &line, &band })
+			if (sys && r->sys == sys) sys->Release (*r);
+	}
+};
 
 } // namespace contrail
 

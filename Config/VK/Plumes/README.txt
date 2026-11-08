@@ -35,7 +35,9 @@ For the whole class:
   ReentryLegacy = TRUE   keep the add-on's reentry particle streams (its
                          own texture) instead of the client's plasma sheath
                          on the windward hull (default FALSE: the streams
-                         only scale the sheath)
+                         only scale the sheath and its wake: their
+                         amin/amax over the friction power decide when
+                         it starts)
 
 Later lines override earlier ones. Example (Config/VK/Plumes/DeltaGlider.cfg):
 

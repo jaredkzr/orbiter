@@ -60,7 +60,7 @@ vec3 ParticleRamp (float t, uint cls, vec3 tint)
 	const vec3 K0 = vec3 (1.0, 0.93, 0.72), K1 = vec3 (1.0, 0.55, 0.15), K2 = vec3 (0.5, 0.08, 0.02);
 	t = clamp (t, 0.0, 1.0);
 	vec3 c = t < 0.35 ? mix (K0, K1, t / 0.35) : mix (K1, K2, (t - 0.35) / 0.65);
-	c = cls == PC_PLASMA_WAKE ? mix (tint, c, smoothstep (0.0, 0.8, t)) : c * tint;
+	c = cls == PC_PLASMA_WAKE ? mix (tint, vec3 (0.55, 0.28, 0.95), smoothstep (0.1, 0.9, t)) : c * tint; // (a plasma cools from its colour to violet, not to a dull red: brown read as smoke)
 	return c * pow (1.0 - t, 1.5);
 }
 

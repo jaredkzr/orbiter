@@ -3,9 +3,12 @@
 
 // Smoke volume: each volumetric particle adds its extinction, its coverage
 // (opacity) and the light it scatters to the froxels it covers, with a
-// smooth falloff. Particles larger than a few froxels go into the coarse
-// grid (a quarter of the resolution), so that a large puff keeps its whole
-// extent at a bounded cost. The light: the sun (forward scattering), the
+// smooth falloff (flat inside, soft at its edge). The sunlight without the
+// smoke's own shadow, and its share of the light: the shadow is applied
+// per froxel (smoke_resolve.comp), not per particle (a large particle's
+// one value smeared over it). Particles larger than a few froxels go into
+// coarser grids (half, a quarter of the resolution), so that a large puff
+// keeps its whole extent at a bounded cost. The light: the sun (forward scattering), the
 // ambient light and the local lights (engine plumes, fires) as the sprites
 // are lit (gpuparticle.vert). The column tiles touched are marked: only
 // those are resolved (smoke_resolve.comp)
@@ -17,33 +20,22 @@ layout(local_size_x = 64) in;
 
 #include "particle_common.glsl"
 #include "smokevol.glsl"
-layout(set = 0, binding = 11, r32ui) uniform uimage3D volD;
-layout(set = 0, binding = 12, r32ui) uniform uimage3D volR;
-layout(set = 0, binding = 13, r32ui) uniform uimage3D volG;
-layout(set = 0, binding = 14, r32ui) uniform uimage3D volB;
-layout(set = 0, binding = 25, r32ui) uniform uimage3D volC;
-layout(set = 0, binding = 26, r32ui) uniform uimage3D volCoarse[5]; // D, C, R, G, B
+layout(set = 0, binding = 11, r32ui) uniform uimage3D volFine[VA_COUNT];
+layout(set = 0, binding = 26, r32ui) uniform uimage3D volMid[VA_COUNT];
+layout(set = 0, binding = 29, r32ui) uniform uimage3D volCoarse[VA_COUNT];
 layout(set = 0, binding = 37, std430) buffer VolOcc { uint volOcc[]; }; // tiles with smoke: 2 frames (pc.vol.y)
 
-void Add (bool coarse, ivec3 q, float s, float c, vec3 col)
+#define ADD(img) { imageAtomicAdd (img[VA_D], q, ud); imageAtomicAdd (img[VA_C], q, uc); imageAtomicAdd (img[VA_R], q, u.r); \
+	imageAtomicAdd (img[VA_G], q, u.g); imageAtomicAdd (img[VA_B], q, u.b); imageAtomicAdd (img[VA_S], q, us); imageAtomicMax (img[VA_M], q, um); }
+
+void Add (int level, ivec3 q, float s, float c, float m, vec3 col, float share)
 {
 	c = min (c, 4.0);
 	uint ud = uint (min (s, 16.0) * VOL_FIXED_D + 0.5), uc = uint (c * VOL_FIXED_C + 0.5);
 	if (ud == 0u && uc == 0u) return;
 	uvec3 u = uvec3 (min (col, vec3 (32.0)) * (c * VOL_FIXED_C) + 0.5);
-	if (coarse) {
-		imageAtomicAdd (volCoarse[0], q, ud);
-		imageAtomicAdd (volCoarse[1], q, uc);
-		imageAtomicAdd (volCoarse[2], q, u.r);
-		imageAtomicAdd (volCoarse[3], q, u.g);
-		imageAtomicAdd (volCoarse[4], q, u.b);
-	} else {
-		imageAtomicAdd (volD, q, ud);
-		imageAtomicAdd (volC, q, uc);
-		imageAtomicAdd (volR, q, u.r);
-		imageAtomicAdd (volG, q, u.g);
-		imageAtomicAdd (volB, q, u.b);
-	}
+	uint us = uint (share * c * VOL_FIXED_C + 0.5), um = uint (min (m, 4.0) * VOL_FIXED_C + 0.5);
+	if (level == 0) ADD(volFine) else if (level == 1) ADD(volMid) else ADD(volCoarse)
 }
 
 void main ()
@@ -52,8 +44,15 @@ void main ()
 	if (i == ~0u) return;
 	Particle p = particles[i];
 	if (p.velLife.w <= 0.0 || (p.flags & PF_VOLUMETRIC) == 0u) return;
-	float a = ParticleAlpha (p), h = ParticleRadius (p);
+	// (its visible extent: the sprites' puffs reach 0.85 of their half size)
+	float a = ParticleAlpha (p), h = 0.85 * ParticleRadius (p);
 	if (a <= 0.002) return;
+	// its coverage falls with age as the sprites' erosion eats into them
+	// (the volume's erosion carves where the coverage is low); a trail's
+	// smoke and a wreck's column keep theirs (M5: a widening band)
+	float tl = p.posAge.w / p.velLife.w;
+	uint cls = ParticleClass (p.flags);
+	float ageK = 1.0 - ((cls == PC_TRAIL || cls == PC_WRECK_SMOKE) ? 0.3 : 0.8) * smoothstep (0.05, 0.9, tl);
 	mat3 toView = transpose (mat3 (frame.viewToGlobal));
 	vec3 vp = toView * p.posAge.xyz;
 	if (vp.z + h < VOL_NEAR || vp.z - h > VOL_FAR) return;
@@ -66,38 +65,59 @@ void main ()
 	float py = h * abs (frame.proj[1][1]) / max (vp.z, 0.1) * 0.5 * float (VOL_SIZE.y);
 	float pz = (VolSlice (vp.z + h) - VolSlice (max (vp.z - h, VOL_NEAR))) * 0.5 * float (VOL_SIZE.z);
 	vec3 rad = vec3 (px, py, pz);
-	// (more than 6 froxels across: the coarse grid; even larger there (the
-	// camera inside a big puff): concentrated, its column's opacity kept)
-	bool coarse = max (max (rad.x, rad.y), rad.z) > 6.0;
-	vec3 size = vec3 (coarse ? VOL_COARSE : VOL_SIZE);
+	// (more than 6 froxels in radius: the half-resolution grid, more than
+	// 12 the quarter; even larger there (the camera inside a big puff):
+	// concentrated, its column's opacity kept)
+	float big0 = max (max (rad.x, rad.y), rad.z);
+	int level = big0 <= 6.0 || (uint (pc.vol.z) & 4u) != 0u ? 0 : big0 <= 12.0 ? 1 : 2; // (bit 2: fine only, debugging)
+	bool coarse = level > 0;
+	vec3 size = vec3 (VolLevelSize (level));
 	rad *= size / vec3 (VOL_SIZE);
 	float big = max (max (rad.x, rad.y), rad.z);
 	if (big > 6.0) { a *= big / 6.0; rad *= 6.0 / big; }
 	ivec3 r = ivec3 (ceil (rad));
-	// (extinction: about the particle's opacity across its diameter)
-	float sigma = a * 1.4 / max (h, 0.1);
+	// (its profile: flat inside, its edge at least 1.5 froxels wide (a flat
+	// top sampled at the froxels would show the grid's blocks); the column
+	// through its centre kept: denser as the edge widens)
+	float edge = clamp (1.5 / max (min (min (rad.x, rad.y), rad.z), 0.5), 0.35, 1.0);
+	float dens = 1.6 / (2.0 - edge);
+	// (extinction: about the particle's opacity across its diameter (the
+	// profile's column through its centre: 1.6 h))
+	float sigma = a * 0.45 / max (h, 0.1);
 	// light it scatters (as the sprites: sun with forward scattering,
-	// ambient, local lights: those within reach of its near side)
+	// ambient, local lights); the sun without the smoke's shadow here
 	float g = 0.35, cosT = dot (normalize (vp), frame.sunDir.xyz);
 	float phase = (1.0 - g * g) / pow (1.0 + g * g - 2.0 * g * cosT, 1.5);
-	vec3 light = UnpackRGB9E5 (p.light) * (0.75 + 0.5 * phase) * 0.9 + frame.ambient.rgb;
+	vec3 albedo = ParticleAlbedo (p);
+	// (0.9: about the sprites' lit puffs' mean shading on their lit side;
+	// the volume's own shading, per froxel, darkens the rest)
+	vec3 sun = UnpackRGB9E5 (p.light) / max (SmokeShadow (p.posAge.xyz), 0.05) * (0.75 + 0.5 * phase) * 0.9 * 0.9 * albedo;
+	vec3 light = frame.ambient.rgb;
 	int nl = int (frame.lightCount.x);
 	for (int k = 0; k < nl; k++) {
 		LocalLight l = frame.lights[k];
 		if (l.dir.w > 2.5) { light += l.col.rgb * 0.8; continue; } // (a star: from afar)
-		float d = max (length (l.pos.xyz - vp) - 0.5 * h, 0.0);
+		float d = length (l.pos.xyz - vp);
 		if (d > l.pos.w) continue;
 		float la = min (1.0 / max (l.att.x + l.att.y * d + l.att.z * d * d, 1e-4), 1.0);
 		float x = clamp (1.0 - pow (d / l.pos.w, 4.0), 0.0, 1.0);
 		la *= x * x;
 		if (l.dir.w > 1.5) la *= smoothstep (l.spot.x, l.att.w, dot (normalize (vp - l.pos.xyz), l.dir.xyz));
-		light += l.col.rgb * (0.8 * la);
+		// (in the volume a cloud's depth is seen, not a sprite's face: the
+		// light falls off as the inverse square beyond a radius of 0.15 of
+		// its reach, so that the cloud is lit near the flame and its far
+		// side stays dark)
+		float r0 = 0.15 * l.pos.w;
+		la *= r0 * r0 / (r0 * r0 + d * d);
+		light += l.col.rgb * (0.5 * la);
 	}
-	vec3 col = light * ParticleAlbedo (p);
+	vec3 col = sun + light * albedo;
+	const vec3 LUM = vec3 (0.2126, 0.7152, 0.0722);
+	float share = clamp (dot (sun, LUM) / max (dot (col, LUM), 1e-6), 0.0, 1.0);
 	vec3 ce = c * size;
 	ivec3 c0 = ivec3 (floor (ce));
-	// the column tiles it touches (the coarse grid's: as far as it is
-	// filtered, half a coarse froxel more)
+	// the column tiles it touches (a coarser grid's: as far as it is
+	// filtered, half of its froxel more)
 	{
 		vec2 scale = vec2 (VOL_SIZE.xy) / size.xy;
 		vec2 lo = (vec2 (c0.xy - r.xy) - (coarse ? 1.0 : 0.0)) * scale, hi = (vec2 (c0.xy + r.xy) + (coarse ? 2.0 : 1.0)) * scale;
@@ -115,9 +135,10 @@ void main ()
 				vec3 d = (vec3 (q) + 0.5 - ce) / max (rad, vec3 (0.5));
 				float d2 = dot (d, d);
 				if (d2 >= 1.0) continue;
-				float w = (1.0 - d2) * (1.0 - d2);
+				float w = 1.0 - smoothstep (1.0 - edge, 1.0, sqrt (d2));
 				// (particles smaller than a froxel are spread over it)
 				float fill = clamp (rad.x * 2.0, 0.05, 1.0) * clamp (rad.y * 2.0, 0.05, 1.0) * clamp (rad.z * 2.0, 0.05, 1.0);
-				Add (coarse, q, sigma * w * fill, a * w * fill, col);
+				float cw = a * w * fill * ageK;
+				Add (level, q, sigma * dens * w * fill, cw, cw, col, share);
 			}
 }

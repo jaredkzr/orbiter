@@ -3,7 +3,11 @@
 
 // GPU particles, smoke shadows: each smoke particle adds its optical depth
 // (opacity times area over the cell's cross section) to the cells of the
-// sun-aligned grid it covers
+// sun-aligned grid it covers: in the finest cascade that holds it in which
+// it is at most eight cells in radius (a cloud's, a trail's self-shadowing
+// at the finest resolution that holds it),
+// spread over its whole disc (the same total however large it is). The
+// column tiles it touches are marked (particle_shadow_sum.comp)
 
 #version 450
 #extension GL_GOOGLE_include_directive : require
@@ -18,20 +22,44 @@ void main ()
 	if (i == ~0u) return;
 	Particle p = particles[i];
 	if (p.velLife.w <= 0.0 || (p.flags & PF_EMISSIVE) != 0u) return;
-	vec3 sc = ShadowCoord (p.posAge.xyz);
-	if (any (lessThan (sc, vec3 (0.0))) || any (greaterThanEqual (sc, vec3 (1.0)))) return;
 	float a = ParticleAlpha (p), h = ParticleRadius (p);
-	float cell = 2.0 * pc.lightX.w / float (SHADOW_GRID.x);
+	if (a <= 0.002) return;
+	int c = -1;
+	vec3 sc;
+	float cell;
+	for (int k = 0; k < SHADOW_CASCADES && c < 0; k++) {
+		sc = ShadowCoord (p.posAge.xyz, k);
+		cell = 2.0 * pc.lightX.w * pow (SHADOW_RATIO, float (k)) / float (SHADOW_GRID.x);
+		if (ShadowInside (sc) && (h <= 8.0 * cell || k == SHADOW_CASCADES - 1)) c = k;
+	}
+	if (c < 0) return;
+	float r = max (h / cell, 0.5); // (radius in cells)
+	float rr = clamp (r, 1.5, 8.0); // (the footprint: its disc, at most 8 cells; at least 1.5: soft, no shafts of single cells)
+	int R = int (ceil (rr));
 	float tau = a * 3.14159 * h * h / (cell * cell); // (spread over the cells it covers)
-	ivec3 c = ivec3 (sc * vec3 (SHADOW_GRID));
-	int r = int (min (ceil (h / cell - 0.5), 2.0));
-	float w = 1.0 / float ((2 * r + 1) * (2 * r + 1));
-	uint add = uint (tau * w * SHADOW_FIXED + 0.5);
-	if (add == 0u) return;
-	for (int y = -r; y <= r; y++)
-		for (int x = -r; x <= r; x++) {
-			ivec3 q = c + ivec3 (x, y, 0);
-			if (all (greaterThanEqual (q.xy, ivec2 (0))) && all (lessThan (q.xy, SHADOW_GRID.xy)))
-				imageAtomicAdd (shadowAccum, q, add);
+	vec2 ce = sc.xy * vec2 (SHADOW_GRID.xy);
+	ivec2 c0 = ivec2 (floor (ce));
+	float wsum = 0.0;
+	for (int y = -R; y <= R; y++)
+		for (int x = -R; x <= R; x++) {
+			vec2 d = (vec2 (c0 + ivec2 (x, y)) + 0.5 - ce) / rr;
+			wsum += max (1.0 - dot (d, d), 0.0);
 		}
+	if (wsum <= 0.0) return;
+	int zc = clamp (int (sc.z * float (SHADOW_GRID.z)), 0, SHADOW_GRID.z - 1) + c * SHADOW_GRID.z;
+	for (int y = -R; y <= R; y++)
+		for (int x = -R; x <= R; x++) {
+			ivec2 q = c0 + ivec2 (x, y);
+			if (any (lessThan (q, ivec2 (0))) || any (greaterThanEqual (q, SHADOW_GRID.xy))) continue;
+			vec2 d = (vec2 (q) + 0.5 - ce) / rr;
+			float w = max (1.0 - dot (d, d), 0.0);
+			uint add = uint (tau * w / wsum * SHADOW_FIXED + 0.5);
+			if (add == 0u) continue;
+			imageAtomicAdd (shadowAccum, ivec3 (q, zc), add);
+		}
+	// (its tiles)
+	ivec2 t0 = clamp ((c0 - R) / 8, ivec2 (0), ivec2 (SHADOW_TILES - 1)), t1 = clamp ((c0 + R) / 8, ivec2 (0), ivec2 (SHADOW_TILES - 1));
+	uint base = ShadowParity () * SHADOW_TILE_COUNT + uint (c * SHADOW_TILES * SHADOW_TILES);
+	for (int y = t0.y; y <= t1.y; y++)
+		for (int x = t0.x; x <= t1.x; x++) shadowOcc[base + uint (y * SHADOW_TILES + x)] = 1u;
 }

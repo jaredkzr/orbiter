@@ -24,6 +24,9 @@ layout(location = 1) out float outReactive;
 void main ()
 {
 	ivec2 hs = textureSize (marchNear, 0);
+	// (no smoke around: two filtered looks at the transmittance)
+	vec2 huv = gl_FragCoord.xy * 0.5 / vec2 (hs);
+	if (textureLod (marchFar, huv, 0.0).a > 0.999 && textureLod (marchNear, huv, 0.0).a > 0.999) discard;
 	float z = texelFetch (prepass, ivec2 (gl_FragCoord.xy), 0).w;
 	if (z <= 0.0) z = 2.0 * VOL_FAR;
 	vec2 h = gl_FragCoord.xy * 0.5 - 0.5; // (half-resolution texel centres)

@@ -31,13 +31,7 @@ void main ()
 	}
 	// smoke towards the sun (the grid holds the optical depth from each
 	// cell towards the sun, half of the cell's own included)
-	vec3 sc = ShadowCoord (pos);
-	// (light scattered many times inside dense smoke still gets through:
-	// a strong attenuation and a weak one, after cloud renderers)
-	if (all (greaterThan (sc, vec3 (0.0))) && all (lessThan (sc, vec3 (1.0)))) {
-		float tau = textureLod (shadowDepthTex, sc, 0.0).r;
-		sun *= 0.55 * exp (-tau) + 0.45 * exp (-0.08 * tau);
-	}
+	sun *= SmokeShadow (pos);
 #ifdef RT
 	sun *= RTSunVisible (vp + frame.sunDir.xyz * 0.5, frame.sunDir.xyz);
 #endif

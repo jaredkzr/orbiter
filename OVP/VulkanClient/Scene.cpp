@@ -928,12 +928,15 @@ VkTexture *Scene::FireballTexture (int stage)
 	// a radial ramp within each; four shapes in the quadrants, as the
 	// particles pick one. 0: white-yellow (the hot core, first moments),
 	// 1: orange, 2: dark red (cooling, at the rim and late); 3: a soft
-	// white puff without billows (vapour, lit)
-	stage = std::clamp (stage, 0, 3);
+	// white puff without billows (vapour, lit; the plasma wake); 4: neutral
+	// ragged flames, brighter inside (coloured by the particles' temperature
+	// ramp: ParticleSystem::Emission::ramp); 5: a smooth glow, no
+	// structure at all (the plasma wake: luminous gas, not puffs)
+	stage = std::clamp (stage, 0, 5);
 	if (fireballTex[stage]) return fireballTex[stage];
-	static const float inner[4][3] = { { 1.0f, 0.88f, 0.50f }, { 1.0f, 0.52f, 0.12f }, { 0.75f, 0.20f, 0.04f }, { 1.0f, 1.0f, 1.0f } };
-	static const float outer[4][3] = { { 1.0f, 0.62f, 0.20f }, { 0.90f, 0.28f, 0.04f }, { 0.40f, 0.06f, 0.02f }, { 1.0f, 1.0f, 1.0f } };
-	static const double erode[4] = { 0.25, 0.45, 0.6, 0.0 }; // (the cooler, the more ragged)
+	static const float inner[6][3] = { { 1.0f, 0.88f, 0.50f }, { 1.0f, 0.52f, 0.12f }, { 0.75f, 0.20f, 0.04f }, { 1.0f, 1.0f, 1.0f }, { 1.0f, 1.0f, 1.0f }, { 1.0f, 1.0f, 1.0f } };
+	static const float outer[6][3] = { { 1.0f, 0.62f, 0.20f }, { 0.90f, 0.28f, 0.04f }, { 0.40f, 0.06f, 0.02f }, { 1.0f, 1.0f, 1.0f }, { 0.45f, 0.45f, 0.45f }, { 1.0f, 1.0f, 1.0f } };
+	static const double erode[6] = { 0.25, 0.45, 0.6, 0.0, 0.7, 0.0 }; // (the cooler, the more ragged)
 	const int Q = 128, N = 2 * Q;
 	auto hash = [](int x, int y, int k) {
 		uint32_t h = (uint32_t)x * 374761393u + (uint32_t)y * 668265263u + (uint32_t)k * 2246822519u;
@@ -961,8 +964,9 @@ VkTexture *Scene::FireballTexture (int stage)
 			double alpha = std::clamp (c / 0.35, 0.0, 1.0);
 			alpha = alpha * alpha * (3.0 - 2.0 * alpha);
 			if (stage == 3) alpha = body * body * (0.8 + 0.2 * f);
+			if (stage == 5) alpha = std::max (body, 0.0) * exp (-2.5 * r * r); // (Gaussian-like, zero at the rim)
 			if (r >= 1.0) alpha = 0.0;
-			double h = std::clamp (1.0 - r * 1.2 + 0.3 * (f - 0.5), 0.0, 1.0); // (hotter inside)
+			double h = std::clamp (1.0 - r * 1.2 + (stage == 4 ? 0.6 : 0.3) * (f - 0.5), 0.0, 1.0); // (hotter inside; neutral flames: blotchy, darker billows)
 			uint8_t *p = &px[(y * N + x) * 4];
 			for (int j = 0; j < 3; j++) p[j] = (uint8_t)(255.0 * (outer[stage][j] + (inner[stage][j] - outer[stage][j]) * h));
 			p[3] = (uint8_t)(255.0 * alpha);

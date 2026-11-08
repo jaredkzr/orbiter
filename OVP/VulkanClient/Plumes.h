@@ -53,6 +53,7 @@ struct PlumeClass {
 	float smokeLife;        // [s]
 	float smokeAir0, smokeAir1; // fades in between these pressures [atm]
 	float trail;            // strength of the long trail left in the air (0: none; solid motors 1)
+	float contrail;         // water in the exhaust condensing in cold air (Contrail.h; 0: none)
 };
 
 /// where a plume's flame ends and what it meets (PlumeRenderer::Add)
