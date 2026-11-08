@@ -176,6 +176,8 @@ public:
 
 	Vector GroundVelocity (double lng, double lat, double alt=0.0, int frame=2);
 	Vector WindVelocity (double lng, double lat, double alt, int frame=0, WindPrm *prm=NULL, double *windspeed=NULL);
+	/// the wind of the layers at altitude alt (surface frame), enabled or not
+	Vector LayeredWind (double alt) const;
 	// returns a velocity vector in local planet coordinates for ground/air at a point given
 	// in equatorial coordinates
 

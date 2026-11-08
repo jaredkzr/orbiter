@@ -1409,6 +1409,15 @@ DLLEXPORT VECTOR3 oapiGetWindVector (OBJHANDLE hPlanet, double lng, double lat, 
 	return MakeVECTOR3 (((Planet*)hPlanet)->WindVelocity (lng, lat, alt, frame, 0, windspeed));
 }
 
+DLLEXPORT VECTOR3 oapiGetModelWind (OBJHANDLE hPlanet, double lng, double lat, double alt)
+{
+	Body *b = (Body*)hPlanet;
+	if (!b || b->Type() != OBJTP_PLANET) return _V(0, 0, 0);
+	Planet *p = (Planet*)b;
+	if (const GasGiant *gg = p->GetGasGiant ()) return MakeVECTOR3 (gg->Wind (lng, lat, alt, (td.MJD1 - 51544.5) * 86400.0));
+	return MakeVECTOR3 (p->LayeredWind (alt));
+}
+
 DLLEXPORT bool oapiPlanetHasSurface (OBJHANDLE hPlanet)
 {
 	Body *b = (Body*)hPlanet;

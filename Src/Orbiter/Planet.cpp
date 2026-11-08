@@ -5,6 +5,7 @@
 
 #define OAPI_IMPLEMENTATION
 
+#include <algorithm>
 #include <fstream>
 #include <stdio.h>
 #include <string.h>
@@ -14,6 +15,7 @@
 #include "Astro.h"
 #include "Element.h"
 #include "Planet.h"
+#include <algorithm>
 #include "ProcTerrain.h"
 #include "elevmgr.h"
 #include "Base.h"
@@ -953,6 +955,65 @@ Vector Planet::GroundVelocity (double lng, double lat, double alt, int frame)
 	else            return mul (s0->R, v) + s0->vel;
 }
 
+// the wind of the planet's layers at altitude alt (surface frame: x east,
+// z north), the same everywhere (WindVelocity's, without the gusts; whether
+// or not the wind is enabled): a prevailing wind, light at the ground,
+// strongest in a jet stream near the tropopause (some 35 m/s at 11 km),
+// weaker above it and rising again in the stratosphere, veering with height
+// (some 30 degrees within the lowest 1.5 km, then slowly), its direction
+// random for the session; and a random wind for each kilometre (+-6 m/s
+// each way), interpolated cubically between them. (It was the random
+// layers alone, +-25 m/s: no prevailing wind, smoke trails snaked to and
+// fro.)
+Vector Planet::LayeredWind (double alt) const
+{
+	Vector wv(0,0,0);
+	if (!HasAtmosphere()) return wv;
+	int k, dim;
+	DWORD r, rnd;
+	Vector wv0[4];
+
+	// cubic interpolation
+	double alt_km = std::max (alt, 0.0)*1e-3;
+	double alt0 = floor(alt_km);
+	double mk0, mk1, t, t2, t3, h00, h10, h01, h11;
+	t = alt_km-alt0;
+	t3 = (t2 = t*t)*t;
+	h00 = 2.0*t3 - 3.0*t2 + 1.0;
+	h10 = t3 - 2.0*t2 + t;
+	h01 = -2.0*t3 + 3.0*t2;
+	h11 = t3-t2;
+	r = (DWORD)alt0;
+	for (k = 0; k < 4; k++) {
+		oapi_srand(g_rseed[(r+k)%100]);
+		for (dim = 0; dim < 3; dim+=2) {
+			rnd = oapi_rand();
+			wv0[k].data[dim] = ((double)rnd/OAPI_RAND_MAX-0.5)*12;
+		}
+	}
+	for (dim = 0; dim < 3; dim+=2) {
+		mk0 = 0.5 * (wv0[2].data[dim] - wv0[0].data[dim]);
+		mk1 = 0.5 * (wv0[3].data[dim] - wv0[1].data[dim]);
+		wv.data[dim] = h00*wv0[1].data[dim] + h10*mk0 + h01*wv0[2].data[dim] + h11*mk1;
+	}
+
+	// the prevailing wind: speed by altitude [km] (piecewise linear), and
+	// its direction (towards which it blows, from east, counterclockwise)
+	static const double hk[] = { 0.0, 1.0, 5.0, 11.0, 16.0, 22.0, 35.0, 50.0, 70.0 };
+	static const double uk[] = { 5.0, 9.0, 18.0, 35.0, 18.0, 8.0, 15.0, 25.0, 15.0 };
+	const int nk = sizeof(hk) / sizeof(hk[0]);
+	double u = uk[nk-1];
+	for (int i = 0; i < nk-1; i++)
+		if (alt_km < hk[i+1]) { u = uk[i] + (uk[i+1] - uk[i]) * (alt_km - hk[i]) / (hk[i+1] - hk[i]); break; }
+	oapi_srand (g_rseed[17]);
+	double dir0 = (double)oapi_rand() / OAPI_RAND_MAX * Pi2;
+	double veer = 30.0*RAD * std::min (alt_km / 1.5, 1.0) + 1.5*RAD * std::max (alt_km - 1.5, 0.0);
+	double dir = dir0 - veer; // (veering: turning clockwise with height)
+	wv.data[0] += u * cos (dir);
+	wv.data[2] += u * sin (dir);
+	return wv;
+}
+
 Vector Planet::WindVelocity (double lng, double lat, double alt, int frame, WindPrm *prm, double *windspeed)
 {
 	Vector wv(0,0,0);
@@ -985,36 +1046,7 @@ Vector Planet::WindVelocity (double lng, double lat, double alt, int frame, Wind
 			prm->pert_t = tp;
 		}
 	} else if (bEnableWind && HasAtmosphere()) {
-		
-		int k, dim;
-		DWORD r, rnd;
-		Vector wv0[4];
-
-		// cubic interpolation
-		double alt_km = alt*1e-3;
-		double alt0 = floor(alt_km);
-		double mk0, mk1, t, t2, t3, h00, h10, h01, h11;
-		t = alt_km-alt0;
-		t3 = (t2 = t*t)*t;
-		h00 = 2.0*t3 - 3.0*t2 + 1.0;
-		h10 = t3 - 2.0*t2 + t;
-		h01 = -2.0*t3 + 3.0*t2;
-		h11 = t3-t2;
-		r = (DWORD)alt0;
-		for (k = 0; k < 4; k++) {
-			oapi_srand(g_rseed[(r+k)%100]);
-			for (dim = 0; dim < 3; dim+=2) {
-				rnd = oapi_rand();
-				wv0[k].data[dim] = ((double)rnd/OAPI_RAND_MAX-0.5)*50;
-				//pert = ((double)(g_rseed[((DWORD)(t*100)+dim+k+r)%100]>>16)/OAPI_RAND_MAX-0.5)*20;
-				//wv0[k].data[dim] += pert;
-			}
-		}
-		for (dim = 0; dim < 3; dim+=2) {
-			mk0 = 0.5 * (wv0[2].data[dim] - wv0[0].data[dim]);
-			mk1 = 0.5 * (wv0[3].data[dim] - wv0[1].data[dim]);
-			wv.data[dim] = h00*wv0[1].data[dim] + h10*mk0 + h01*wv0[2].data[dim] + h11*mk1;
-		}
+		wv = LayeredWind (alt);
 
 		// short-term temporal perturbations
 		if (prm) {
@@ -1023,7 +1055,7 @@ Vector Planet::WindVelocity (double lng, double lat, double alt, int frame, Wind
 			double tp = td.SimT1;
 			double t_dist = fabs(tp-prm->pert_t);
 			double corr = 1.0 - min (1.0, t_dist/corr_length);
-			for (dim = 0; dim < 3; dim += 2) {
+			for (int dim = 0; dim < 3; dim += 2) {
 				double p = ((double)rand()/(double)RAND_MAX - 0.5)*pert_amplitude; // make this a normal distribution
 				if (corr)
 					p = corr * prm->pert_v.data[dim] + (1.0-corr) * p;

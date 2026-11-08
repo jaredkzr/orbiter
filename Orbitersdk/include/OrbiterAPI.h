@@ -4703,6 +4703,21 @@ OAPIFUNC VECTOR3 oapiGetGroundVector (OBJHANDLE hPlanet, double lng, double lat,
 	 */
 OAPIFUNC VECTOR3 oapiGetWindVector (OBJHANDLE hPlanet, double lng, double lat, double alt, int frame = 0, double *windspeed = NULL);
 
+/**
+ * \brief The steady wind of a planet's atmosphere at a point, as the wind
+ *   model gives it whether or not wind effects are enabled (for visuals:
+ *   smoke drifting in the wind)
+ * \param hPlanet planet handle
+ * \param lng longitude [rad]
+ * \param lat latitude [rad]
+ * \param alt altitude above mean radius [m]
+ * \return wind velocity relative to the surface, local horizon frame
+ *   (x east, y up, z north) [m/s]; zero without an atmosphere
+ * \note Without the gusts of oapiGetWindVector. On terrestrial planets the
+ *   wind changes with altitude only (a layer each kilometre).
+ */
+OAPIFUNC VECTOR3 oapiGetModelWind (OBJHANDLE hPlanet, double lng, double lat, double alt);
+
 	/**
 	* \brief Whether a planet has a solid surface (false for gas giants, which
 	*   have a deep atmosphere instead: vessels descend through it).
