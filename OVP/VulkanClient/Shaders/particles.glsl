@@ -53,8 +53,8 @@ float ParticleStreak (uint flags)
 // the colour of a cooling flame at the fraction t of its life (emission,
 // times its brightness: falling as (1 - t)^1.5): white-yellow, orange, dark
 // red. tint: the emission's colour (albedo; white when not tinted): fire
-// is tinted by it throughout, a plasma wake starts at it and cools to the
-// ramp's colours
+// is tinted by it throughout, a plasma wake starts at it and cools to violet
+// (0.55, 0.28, 0.95), dimming as the ramp does
 vec3 ParticleRamp (float t, uint cls, vec3 tint)
 {
 	const vec3 K0 = vec3 (1.0, 0.93, 0.72), K1 = vec3 (1.0, 0.55, 0.15), K2 = vec3 (0.5, 0.08, 0.02);
@@ -63,6 +63,14 @@ vec3 ParticleRamp (float t, uint cls, vec3 tint)
 	c = cls == PC_PLASMA_WAKE ? mix (tint, vec3 (0.55, 0.28, 0.95), smoothstep (0.1, 0.9, t)) : c * tint; // (a plasma cools from its colour to violet, not to a dull red: brown read as smoke)
 	return c * pow (1.0 - t, 1.5);
 }
+
+// the distances [m] over which a volumetric particle is handed from the smoke
+// volume (nearer) to sprites (farther), cross-faded: 16-20 km (the volume's
+// reach); a trail's smoke (900 s, large sparse puffs) at 2.5-3.5 km — the
+// volume draws it well near (no "cotton balls" at a launch), but from afar
+// its sparse puffs became beads, rings and gaps (f9), which sprites draw as
+// a continuous band
+vec2 VolHandoff (uint flags) { return (flags & PF_TRAIL) != 0u ? vec2 (2500.0, 3500.0) : vec2 (16000.0, 20000.0); }
 
 // current opacity of a particle (as drawn)
 float ParticleAlpha (Particle p)

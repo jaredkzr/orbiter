@@ -84,13 +84,13 @@ void main ()
 			float zc = VolDepth ((float (z) + 0.5) / float (VOL_SIZE.z));
 			vec3 pos = mat3 (frame.viewToGlobal) * (vec3 (ndc.x / frame.proj[0][0], ndc.y / frame.proj[1][1], 1.0) * zc);
 			// (the sun through the smoke towards it, per froxel: a strong
-			// attenuation and a weak floor of light scattered many times;
-			// the rest (sky, local lights) dimmed inside dense smoke: the
-			// smoke around occludes it)
+			// attenuation and a floor of light scattered many times)
 			float tau = SmokeTau (pos);
 			float sun = 0.25 + 0.75 * (0.7 * exp (-0.7 * tau) + 0.3 * exp (-0.1 * tau));
-			float ao = mix (1.0, 0.55, smoothstep (0.3, 3.0, cov));
-			lc = (vec3 (u[VA_R], u[VA_G], u[VA_B]) / VOL_FIXED_C + l1.rgb + l2.rgb) / cov * ((1.0 - share) * ao + share * sun);
+			// (no occlusion of the rest by the coverage: the coverage is high up
+			// to a dense puff's visible surface, which it darkened — dark-cored
+			// rings in a trail, a hollow-looking night cloud)
+			lc = (vec3 (u[VA_R], u[VA_G], u[VA_B]) / VOL_FIXED_C + l1.rgb + l2.rgb) / cov * ((1.0 - share) + share * sun);
 		}
 		if (d < 1e-6) d = 0.0;
 		float core = VolCore (m);

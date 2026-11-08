@@ -26,15 +26,18 @@
 
 namespace contrail {
 
-/// air temperature [K] at global position p over the planet hp (0: no air there)
-inline double AirTemperature (OBJHANDLE hp, const VECTOR3 &p)
+/// air temperature [K] at global position p over the planet hp (0: no air
+/// there); its pressure [Pa] in *pres if given
+inline double AirTemperature (OBJHANDLE hp, const VECTOR3 &p, double *pres = nullptr)
 {
+	if (pres) *pres = 0.0;
 	if (!hp || !oapiGetPlanetAtmConstants (hp)) return 0.0;
 	double lng, lat, rad;
 	oapiGlobalToEqu (hp, p, &lng, &lat, &rad);
 	ATMPARAM prm{};
 	// (by altitude and position: the radius-only overload gave rho 0 once)
 	oapiGetPlanetAtmParams (hp, rad - oapiGetSize (hp), lng, lat, &prm);
+	if (pres && prm.rho > 0.0) *pres = prm.p;
 	return prm.rho > 0.0 ? prm.T : 0.0;
 }
 
@@ -53,17 +56,22 @@ inline double Smooth (double e0, double e1, double x)
 	return t * t * (3.0 - 2.0 * t);
 }
 
-/// T: the air's temperature [K]; alt: altitude [m]; rocket: a rocket
-/// engine's exhaust (more water, hotter: forms higher); humidity: 0..1
-/// (SessionHumidity)
-inline Gate Evaluate (double T, double alt, bool rocket, double humidity)
+/// T: the air's temperature [K]; p: its pressure [Pa]; alt: altitude [m];
+/// rocket: a rocket engine's exhaust (more water, hotter: forms higher);
+/// humidity: 0..1 (SessionHumidity)
+inline Gate Evaluate (double T, double p, double alt, bool rocket, double humidity)
 {
 	Gate g;
 	if (T <= 0.0) return g;
+	// (thin air: the exhaust's water expands and freezes out unseen - no
+	// trail below some 2 kPa, whatever the cold: Mars' 0.6 kPa at 210 K
+	// drew white bands behind a hovering DG, f5. Earth's trails at 8-25 km
+	// are in 2.5-35 kPa)
+	double thin = Smooth (2e3, 4e3, p);
 	// (Schmidt-Appleman threshold, about -40 C for jets; rockets' exhaust
 	// condenses a little warmer)
 	double tc = rocket ? 238.0 : 233.0;
-	g.form = Smooth (tc + 5.0, tc - 5.0, T);
+	g.form = Smooth (tc + 5.0, tc - 5.0, T) * thin;
 	// (the air above the tropopause is dry: jets' trails short and thin
 	// there; a rocket's carries its own water up to the stratosphere)
 	if (rocket) g.form *= 1.0 - Smooth (22e3, 30e3, alt);

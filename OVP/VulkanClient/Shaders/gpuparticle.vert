@@ -76,12 +76,17 @@ void main ()
 	// the view turns, and the client leaves the volume out while all are
 	// beyond)
 	if (vol && (pc.flags & 8u) != 0u) {
-		float far = smoothstep (16000.0, 20000.0, length (vp));
+		vec2 ho = VolHandoff (flags);
+		float far = smoothstep (ho.x, ho.y, length (vp));
 		if (far <= 0.0) { gl_Position = vec4 (0.0, 0.0, -2.0, 1.0); return; }
 		a *= far;
 	}
 	if (!vol && (pc.flags & 16u) != 0u) { gl_Position = vec4 (0.0, 0.0, -2.0, 1.0); return; }
 	float h = 0.5 * (shape.x + shape.y * age);
+	// (the camera inside or at the edge of a puff: faded, not a screen-filling
+	// blob — a sprite has no inside)
+	a *= smoothstep (0.4 * h, 1.5 * h, length (posAge.xyz));
+	if (a <= 0.002) { gl_Position = vec4 (0.0, 0.0, -2.0, 1.0); return; }
 	if ((flags & PF_SPECK) != 0u) {
 		// specks: at least about a pixel across (fainter for it: a bright
 		// spark stays bright, a tiny fragment shows mostly as it glints)
@@ -115,11 +120,24 @@ void main ()
 		float len = length (sv);
 		if (len > 1e-3) {
 			vec3 ax = sv / len, ay = normalize (cross (n, ax));
-			float l = h + (ballistic ? 0.05 : streak) * len;
-			a *= h / l; // (the same material (or light) spread along the streak)
+			// (dust thrown in vacuum, no drag: grains racing out, longer streaks.
+			// l: half the streak's length. Its opacity from the whole path's
+			// (the same material (or light) spread along it); drawn at most
+			// 2 m longer than the particle and an eighth of the view's height:
+			// near the camera a streak became a slab)
+			float dist = length (vp);
+			float lPath = h + (ballistic ? (shape.w > 0.0 ? 0.05 : 0.07) : streak) * len;
+			float l = min (min (lPath, h + 1.0), max (h, 0.125 * dist / abs (frame.proj[1][1])));
+			a *= smoothstep (1.0, 3.0, dist); // (and gone within a few metres of the camera)
+			a *= h / lPath;
 			pos = vp + ax * (c.x * l) + ay * (c.y * h);
 			vMisc.xy = vec2 (1.0, 0.0);
 		}
+		// (grains thrown in vacuum: a grain metres from a low camera filled
+		// an eighth of the view, a grey slab (f5 moonlow): faded by the size
+		// on screen, gone above a twentieth of the view's height)
+		if (ballistic && shape.w <= 0.0)
+			a *= 1.0 - smoothstep (0.02, 0.05, h * abs (frame.proj[1][1]) / max (length (vp), 1e-3));
 	}
 	gl_Position = frame.proj * vec4 (RelApparent (pos), 1.0);
 	vPosView = pos;

@@ -296,7 +296,7 @@ private:
 		uint32_t emissions = 0, maxEmissions = 0, dropped = 0, particles = 0, reentry = 0;
 		uint32_t allocs = 0, allocFails = 0, failWant = 0, frees = 0;
 		uint32_t grows = 0, shrinks = 0, segments = 0, overwrites = 0, idleFrees = 0, thinned = 0, shed = 0, short_ = 0;
-		uint32_t lodThinned = 0;
+		uint32_t lodThinned = 0, staleSrc = 0;
 		bool ringLog = false;
 		uint32_t live = 0, liveMax = 0, liveVol = 0, drawn = 0, drawnMax = 0, sortMax = 0;
 		bool lastVol = false;
@@ -306,6 +306,7 @@ private:
 	// most over their life are thinned (fewer, larger: Queue); the live
 	// count (read back) against a budget thins new emissions
 	static constexpr double LOD_PX = 4.0, LOD_MIN = 0.125;
+	static constexpr double VACUUM_DUST_SIZE = 0.8; // [m] dust thrown in vacuum at most (Queue)
 	static constexpr uint32_t LIVE_BUDGET = 160000;
 	uint32_t liveNow = 0;
 	double pxPerRad = 1000.0;  // (the render height over the vertical field of view)

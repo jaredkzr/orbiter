@@ -52,12 +52,13 @@ void main ()
 	// smoke and a wreck's column keep theirs (M5: a widening band)
 	float tl = p.posAge.w / p.velLife.w;
 	uint cls = ParticleClass (p.flags);
-	float ageK = 1.0 - ((cls == PC_TRAIL || cls == PC_WRECK_SMOKE) ? 0.3 : 0.8) * smoothstep (0.05, 0.9, tl);
+	float ageK = 1.0 - ((cls == PC_TRAIL || cls == PC_WRECK_SMOKE) ? 0.3 : 0.6) * smoothstep (0.05, 0.9, tl);
 	mat3 toView = transpose (mat3 (frame.viewToGlobal));
 	vec3 vp = toView * p.posAge.xyz;
 	if (vp.z + h < VOL_NEAR || vp.z - h > VOL_FAR) return;
 	// (towards the volume's end, handed over to sprites: gpuparticle.vert)
-	a *= 1.0 - smoothstep (0.8 * VOL_FAR, VOL_FAR, length (vp)); // (by distance, as gpuparticle.vert's sprites)
+	vec2 ho = VolHandoff (p.flags);
+	a *= 1.0 - smoothstep (ho.x, ho.y, length (vp)); // (by distance, as gpuparticle.vert's sprites)
 	if (a <= 0.002) return;
 	vec3 c = VolCoord (vp);
 	// the particle's extent in froxels
@@ -102,14 +103,15 @@ void main ()
 		float la = min (1.0 / max (l.att.x + l.att.y * d + l.att.z * d * d, 1e-4), 1.0);
 		float x = clamp (1.0 - pow (d / l.pos.w, 4.0), 0.0, 1.0);
 		la *= x * x;
-		if (l.dir.w > 1.5) la *= smoothstep (l.spot.x, l.att.w, dot (normalize (vp - l.pos.xyz), l.dir.xyz));
+		// (no spot cone: a plume's glow lights the smoke all around it — down
+		// the exhaust only, the cloud beside and above the nozzles stayed dark)
 		// (in the volume a cloud's depth is seen, not a sprite's face: the
-		// light falls off as the inverse square beyond a radius of 0.15 of
-		// its reach, so that the cloud is lit near the flame and its far
+		// light falls off as the inverse square beyond a radius of 0.03 of
+		// its reach (the cloud's base around the flames lit), so that the cloud is lit near the flame and its far
 		// side stays dark)
-		float r0 = 0.15 * l.pos.w;
+		float r0 = 0.03 * l.pos.w;
 		la *= r0 * r0 / (r0 * r0 + d * d);
-		light += l.col.rgb * (0.5 * la);
+		light += l.col.rgb * (0.1 * la);
 	}
 	vec3 col = sun + light * albedo;
 	const vec3 LUM = vec3 (0.2126, 0.7152, 0.0722);
@@ -138,7 +140,9 @@ void main ()
 				float w = 1.0 - smoothstep (1.0 - edge, 1.0, sqrt (d2));
 				// (particles smaller than a froxel are spread over it)
 				float fill = clamp (rad.x * 2.0, 0.05, 1.0) * clamp (rad.y * 2.0, 0.05, 1.0) * clamp (rad.z * 2.0, 0.05, 1.0);
-				float cw = a * w * fill * ageK;
-				Add (level, q, sigma * dens * w * fill, cw, cw, col, share);
+				// (the core, as a sprite's thickness: its profile and age, not its
+				// fading opacity — with that, old smoke was faded twice and then
+				// eroded away: gaps in an old trail)
+				Add (level, q, sigma * dens * w * fill, a * w * fill * ageK, 0.67 * min (p.shape.z * 2.0, 1.0) * w * fill * ageK, col, share);
 			}
 }

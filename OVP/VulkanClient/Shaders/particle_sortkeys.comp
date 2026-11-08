@@ -38,7 +38,7 @@ void main ()
 			}
 			drawn = ParticleAlpha (p) > 0.002;
 			if (drawn && (p.flags & PF_VOLUMETRIC) != 0u && pc.ground.w > 0.5)
-				drawn = dot (p.posAge.xyz, p.posAge.xyz) > 16000.0 * 16000.0 * 0.98; // (gpuparticle.vert: beyond 16 km)
+				drawn = length (p.posAge.xyz) > VolHandoff (p.flags).x * 0.99; // (gpuparticle.vert: from the hand-off on)
 			if (drawn) {
 				float z = max (dot (p.posAge.xyz, frame.viewToGlobal[2].xyz), 0.0);
 				float q = clamp (log2 (z + 1.0) / 17.0, 0.0, 1.0); // (up to about 130 km)

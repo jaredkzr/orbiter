@@ -181,10 +181,11 @@ void VkParticleStream::Update (double dt)
 		// the gate instead of the add-on's density mapping: its level only
 		double lvl = LevelAlpha (level ? *level : 1.0);
 		if (!haveAir || !hAtmRef) { trail.Reset (); return; }
-		double T = contrail::AirTemperature (hAtmRef, src);
+		double P;
+		double T = contrail::AirTemperature (hAtmRef, src, &P);
 		double lng, lat, rad;
 		oapiGlobalToEqu (hAtmRef, src, &lng, &lat, &rad);
-		contrail::Gate g = contrail::Evaluate (T, rad - oapiGetSize (hAtmRef), rocket, contrail::SessionHumidity (hAtmRef));
+		contrail::Gate g = contrail::Evaluate (T, P, rad - oapiGetSize (hAtmRef), rocket, contrail::SessionHumidity (hAtmRef));
 		// (the line about half the add-on's puff: it is drawn thin)
 		trail.Emit (sys, src, vel, airVec, g, std::clamp (0.6 * spec.srcsize, 1.5, 10.0), lvl, dt);
 		return;

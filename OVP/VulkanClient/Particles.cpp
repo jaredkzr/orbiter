@@ -968,6 +968,22 @@ void ParticleSystem::Queue (Emission &e)
 	if (!e.count) return;
 	e.cls = Resolve (e);
 	int prio = Priority (e.cls);
+	// a source's path over the step far longer than its velocity allows: its
+	// start is stale (an emitter that skipped frames without moving it on);
+	// in the global frame everything moves at tens of km/s, so the particles
+	// would be spread along kilometres of that frame's motion — relative to
+	// the ground, hanging in the sky (f5 moon). Started one step back
+	// (the path less the step's motion at the emission's velocity: the source
+	// moving relative to that, e.g. a vessel through the air, is far less
+	// than half the frame's motion: tens of km/s)
+	if (length ((e.p1 - e.p0) - e.vel * e.dt) > std::max (0.5 * length (e.vel) * e.dt, 200.0)) {
+		e.p0 = e.p1 - e.vel * e.dt;
+		stats.staleSrc++;
+	}
+	// dust and spray are sprites: lit puffs with their own colour, not the
+	// smoke volume
+	if (e.cls == Class::Dust || e.cls == Class::Spray) e.volumetric = false;
+
 	double fill = slots.Fill ();
 	ParticlePool::Ring *rr = slots.RingAt (e.first);
 	if (!rr || rr->retired) { e.count = 0; return; }
@@ -980,6 +996,8 @@ void ParticleSystem::Queue (Emission &e)
 	// from fewer)
 	double thin = rr->idleRelease ? rr->thin : ParticlePool::PressureFactor (fill, prio);
 	thin *= LiveFactor (prio);
+	static const int dropCls = getenv ("ORBITER_VK_PARTICLE_DROP") ? atoi (getenv ("ORBITER_VK_PARTICLE_DROP")) : -1; // (debugging: a class not emitted)
+	if ((int)e.cls == dropCls) { e.count = 0; return; }
 	static const bool lodOn = !getenv ("ORBITER_VK_PARTICLE_LOD") || atoi (getenv ("ORBITER_VK_PARTICLE_LOD")) != 0; // (=0: off, comparisons)
 	if (!e.speck && lodOn) {
 		// (the camera now: positions are global, everything near moves at tens
@@ -1007,6 +1025,16 @@ void ParticleSystem::Queue (Emission &e)
 		}
 	}
 	e.lifetime *= ParticlePool::LifeFactor (fill, prio);
+	// dust thrown in vacuum: grains in a fast, thin sheet, no billows — nothing
+	// to spread them, so they do not grow, and a few metres' puffs of it (lit,
+	// against the black sky, far out along the sheet) read as floating rocks
+	// (f5 moon). Smaller, the opacity kept about the same per particle's
+	// path; drawn as streaks (gpuparticle.vert: longer without drag). After
+	// the thinning above, whose larger particles must not undo it
+	if (e.cls == Class::Dust && e.ballistic && e.slowdown <= 0.0 && !e.speck) {
+		if (e.size > VACUUM_DUST_SIZE) e.alpha = std::min (1.0, e.alpha * std::sqrt (e.size / VACUUM_DUST_SIZE)), e.size = VACUUM_DUST_SIZE;
+		e.growth = 0.0;
+	}
 	queued.push_back (e);
 	slots.Touch (e.first, oapiGetSimTime (), e.lifetime);
 	if (stats.every > 0.0) stats.particles += std::min (e.count, e.capacity), stats.reentry += e.reentry ? std::min (e.count, e.capacity) : 0;
@@ -1030,12 +1058,12 @@ void ParticleSystem::LogStats (double simt)
 	oapiWriteLogV ("VK particles: simt=%.1f frames=%u (sim %u idle %u vol %u, toggles %u) live=%u (max %u, vol %u) rings=%u alloc=%u/%u "
 		"blocks=%zu free=%u in %zu (largest %u) retired=%u emissions=%u (max/frame %u, dropped %u) particles=%u (reentry %u) "
 		"allocs=%u frees=%u allocFails=%u (want %u) short=%u grows=%u shrinks=%u segments=%u overwrites=%u idleFrees=%u thinned=%u shed=%u "
-		"sprites=%u (max %u, sort max %u) lod=%u",
+		"sprites=%u (max %u, sort max %u) lod=%u staleSrc=%u",
 		simt, stats.frames, stats.simFrames, stats.idleFrames, stats.volFrames, stats.volToggles, stats.live, stats.liveMax, stats.liveVol,
 		slots.Rings (), slots.Allocated (), CAPACITY, slots.Blocks ().size (), slots.FreeTotal (), slots.Fragments (), slots.Largest (), slots.RetiredCount (),
 		stats.emissions, stats.maxEmissions, stats.dropped, stats.particles, stats.reentry, stats.allocs, stats.frees, stats.allocFails, stats.failWant,
 		stats.short_, stats.grows, stats.shrinks, stats.segments, stats.overwrites, stats.idleFrees, stats.thinned, stats.shed,
-		stats.drawn, stats.drawnMax, stats.sortMax, stats.lodThinned);
+		stats.drawn, stats.drawnMax, stats.sortMax, stats.lodThinned, stats.staleSrc);
 	if (stats.ringLog) {
 		// (the pool by kind of ring: retired, priority, released when idle)
 		uint32_t sum[2][4][2] = {}, cnt[2][4][2] = {}, big = 0;
@@ -1052,7 +1080,7 @@ void ParticleSystem::LogStats (double simt)
 	stats.emissions = stats.maxEmissions = stats.dropped = stats.particles = stats.reentry = 0;
 	stats.allocs = stats.frees = stats.allocFails = stats.failWant = 0;
 	stats.short_ = stats.grows = stats.shrinks = stats.segments = stats.overwrites = stats.idleFrees = stats.thinned = stats.shed = 0;
-	stats.liveMax = stats.drawnMax = stats.sortMax = stats.lodThinned = 0;
+	stats.liveMax = stats.drawnMax = stats.sortMax = stats.lodThinned = stats.staleSrc = 0;
 }
 
 namespace {
@@ -1293,11 +1321,13 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	toClear.clear ();
 
 	for (const Emission &e : queued) aliveUntil = std::max (aliveUntil, simt + 1.5 * e.lifetime + 1.0); // (particle_emit.comp: up to 1.5 lifetimes)
+
 	{
 		// the particles counted by this frame slot's last update (the live
 		// budget; telemetry)
 		uint32_t *w = (uint32_t*)windBuf[fi].mapped + WIND_LAYERS * 4;
 		if (nearValid[fi]) liveNow = w[2], stats.live = w[2], stats.liveVol = w[3], stats.liveMax = std::max (stats.liveMax, stats.live);
+
 		w[1] = 1u, w[2] = w[3] = 0u;
 	}
 	if (stats.every > 0.0) {
@@ -1367,6 +1397,7 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	pxPerRad = ctx->RenderExtent ().height / (2.0 * std::tan (std::max (oapiCameraAperture (), 1e-3)));
 	up.camShift[0] = (float)shift.x, up.camShift[1] = (float)shift.y, up.camShift[2] = (float)shift.z;
 	up.camShift[3] = (float)pendingDt;
+
 	if (OBJHANDLE hp = oapiCameraProxyGbody ()) { // the air of the planet nearby
 		VECTOR3 bp, bv;
 		oapiGetGlobalPos (hp, &bp);

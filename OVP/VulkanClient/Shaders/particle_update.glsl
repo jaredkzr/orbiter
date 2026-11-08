@@ -7,6 +7,7 @@
 // (included by particle_update.comp and particle_update_rt.comp)
 
 layout(local_size_x = 64) in;
+const float VOL_REACH_M = 20000.0; // (smokevol.glsl VOL_FAR)
 
 #include "particle_common.glsl"
 
@@ -200,10 +201,14 @@ void main ()
 	p.posAge.xyz = pos + move;
 	p.velLife.xyz = vel;
 	particles[i] = p;
+
 	// the nearest volumetric particle (the client leaves out the smoke volume
 	// while none is within its reach)
 	if ((p.flags & PF_VOLUMETRIC) != 0u) {
-		uint d = floatBitsToUint (max (length (p.posAge.xyz) - ParticleRadius (p), 0.0));
+		// (as if at the volume's reach where it is handed over to sprites
+		// sooner: a trail's smoke)
+		float dh = VOL_REACH_M - VolHandoff (p.flags).y;
+		uint d = floatBitsToUint (max (length (p.posAge.xyz) - ParticleRadius (p), 0.0) + dh);
 		if (d < nearVol) atomicMin (nearVol, d);
 	}
 }
