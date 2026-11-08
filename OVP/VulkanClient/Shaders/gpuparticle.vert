@@ -53,13 +53,25 @@ void main ()
 	float age = posAge.w, life = velLife.w;
 	float tl = life > 0.0 ? age / life : 1.0;
 	float a = life > 0.0 ? pc.alpha * shape.z * (1.0 - tl) * smoothstep (0.0, 0.08, tl) : 0.0;
+	bool trail = shape.w < 0.0; // (a trail's smoke: as particle_common.glsl's ParticleAlpha)
+	if (trail) a *= min (4.0 * shape.x / max (shape.x + shape.y * age, 1e-3), 1.0) * smoothstep (0.0, 25.0, age) / max (smoothstep (0.0, 0.08, tl), 1e-3);
 	if (a <= 0.002) { gl_Position = vec4 (0.0, 0.0, -2.0, 1.0); return; } // (outside the clip volume)
 	uint flags = pt.flags;
 	// (volumetric particles in the smoke volume or the screen-space smoke:
 	// not drawn as sprites; the screen-space pass draws only them)
 	bool vol = (flags & 64u) != 0u;
-	if ((vol && (pc.flags & 8u) != 0u) || (!vol && (pc.flags & 16u) != 0u)) { gl_Position = vec4 (0.0, 0.0, -2.0, 1.0); return; }
 	vec3 vp = transpose (mat3 (frame.viewToGlobal)) * posAge.xyz;
+	// (the smoke volume reaches 20 km (smokevol.glsl): beyond, its
+	// particles are sprites, blended over the last 4 km (smoke_splat.comp);
+	// a launch's smoke seen from afar. By distance, not depth: the same as
+	// the view turns, and the client leaves the volume out while all are
+	// beyond)
+	if (vol && (pc.flags & 8u) != 0u) {
+		float far = smoothstep (16000.0, 20000.0, length (vp));
+		if (far <= 0.0) { gl_Position = vec4 (0.0, 0.0, -2.0, 1.0); return; }
+		a *= far;
+	}
+	if (!vol && (pc.flags & 16u) != 0u) { gl_Position = vec4 (0.0, 0.0, -2.0, 1.0); return; }
 	float h = 0.5 * (shape.x + shape.y * age);
 	if ((flags & 128u) != 0u) {
 		// specks: at least about a pixel across (fainter for it: a bright
@@ -71,7 +83,7 @@ void main ()
 
 	// corner, turned by an angle of this particle (slowly turning)
 	uint hs = Hash (slot * 2654435761u);
-	float ang = float (hs & 0xffffu) / 65536.0 * 6.2831853 + age * (float ((hs >> 16) & 0xffu) / 255.0 - 0.5) * 0.6;
+	float ang = float (hs & 0xffffu) / 65536.0 * 6.2831853 + age * (float ((hs >> 16) & 0xffu) / 255.0 - 0.5) * (trail ? 0.02 : 0.6);
 	vec2 c = vec2 (float (gl_VertexIndex & 1), float (gl_VertexIndex >> 1)) * 2.0 - 1.0;
 	vec2 cs = vec2 (cos (ang), sin (ang));
 	vec2 r = vec2 (cs.x * c.x - cs.y * c.y, cs.y * c.x + cs.x * c.y) * h;

@@ -2573,6 +2573,7 @@ void Scene::Render ()
 	particles->DrawScreenSmoke (FrameSet ());
 	for (auto *ps : gc->ParticleStreams()) ps->Render (this);
 	for (auto *vo : list) vo->DrawParticles ();
+	particles->DrawRetired (FrameSet ()); // (smoke of vessels whose visuals are gone)
 }
 
 VkImageView Scene::ResolveTemporal (VkExtent2D &size)

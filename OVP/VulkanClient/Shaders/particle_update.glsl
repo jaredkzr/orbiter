@@ -49,6 +49,37 @@ bool RTSurface (vec3 o, vec3 d, float tMax, vec3 up, out float t, out vec3 N)
 }
 #endif
 
+// the wind at altitude altKm (local east, north) [m/s]: the layers' values
+// interpolated as the core does (cubic Hermite, Catmull-Rom tangents),
+// fading out above 58 km (the table's end)
+vec2 LayerWind (float altKm)
+{
+	float a = clamp (altKm, 0.0, 61.0);
+	int n = int (a);
+	float t = a - float (n), t2 = t * t, t3 = t2 * t;
+	vec2 p0 = windLayer[max (n - 1, 0)].xy, p1 = windLayer[n].xy, p2 = windLayer[n + 1].xy, p3 = windLayer[n + 2].xy;
+	vec2 m0 = 0.5 * (p2 - p0), m1 = 0.5 * (p3 - p1);
+	vec2 w = (2.0 * t3 - 3.0 * t2 + 1.0) * p1 + (t3 - 2.0 * t2 + t) * m0 + (3.0 * t2 - 2.0 * t3) * p2 + (t3 - t2) * m1;
+	return w * (1.0 - smoothstep (58.0, 61.0, altKm));
+}
+
+// the velocity of the air at pos (camera-relative, global frame): the
+// planet's, turning with it, and its wind
+vec3 AirVel (vec3 pos)
+{
+	vec3 r = pos - pc.bodyPos.xyz;
+	vec3 air = pc.bodyVel.xyz + cross (r, pc.omega.xyz);
+	float rl = length (r);
+	if (rl <= 0.0 || dot (pc.omega.xyz, pc.omega.xyz) <= 0.0) return air;
+	vec3 up = r / rl;
+	vec3 e = cross (normalize (pc.omega.xyz), up);
+	float el = length (e);
+	if (el < 1e-3) return air; // (at a pole)
+	vec3 east = e / el, north = cross (up, east);
+	vec2 w = LayerWind ((rl - pc.bodyPos.w) * 1e-3);
+	return air + east * w.x + north * w.y;
+}
+
 // the velocity of the ground (and the air) at pos (camera-relative): the
 // planet's, turning with it
 vec3 GroundVel (vec3 pos)
@@ -112,7 +143,7 @@ bool Bounce (inout vec3 pos, inout vec3 vel, float dt, float gap)
 
 void main ()
 {
-	uint i = gl_GlobalInvocationID.x;
+	uint i = uint (pc.ground.w) + gl_GlobalInvocationID.x; // (the pool's used part: ground.w to omega.w)
 	if (i >= uint (pc.omega.w)) return;
 	Particle p = particles[i];
 	if (p.velLife.w <= 0.0) return;
@@ -122,16 +153,23 @@ void main ()
 
 	vec3 pos = p.posAge.xyz + pc.camShift.xyz; // (relative to the camera now)
 	vec3 vel = p.velLife.xyz;
-	bool inAir = p.shape.w > 0.0 && pc.bodyPos.w > 0.0;
+	// (slowdown < 0: a trail's smoke, long-lived and large: carried by the
+	// wind, with gentle eddies)
+	bool trail = p.shape.w < 0.0;
+	float slow = abs (p.shape.w);
+	bool inAir = slow > 0.0 && pc.bodyPos.w > 0.0;
 	if (inAir && dt > 0.0) {
-		// slowed down towards the velocity of the co-rotating air
-		vec3 air = pc.bodyVel.xyz + cross (pos - pc.bodyPos.xyz, pc.omega.xyz);
-		vel = air + (vel - air) * exp (-p.shape.w * dt);
-		// turbulence of the air: eddies a few particle sizes across
-		vec3 q = pos * pc.noiseOrg.w + pc.noiseOrg.xyz + pc.bodyVel.w * 0.03;
+		// slowed down towards the velocity of the air (co-rotating, and its wind)
+		vec3 air = AirVel (pos);
+		vel = air + (vel - air) * exp (-slow * dt);
+		// turbulence of the air: eddies a few particle sizes across (a
+		// trail's: a few metres a second, slowly varying, so that it
+		// meanders and spreads unevenly)
+		vec3 q = trail ? pos * pc.trailNoise.w + pc.trailNoise.xyz + pc.bodyVel.w * 0.002
+			: pos * pc.noiseOrg.w + pc.noiseOrg.xyz + pc.bodyVel.w * 0.03;
 		vec3 n = vec3 (texture (detailNoise, q).r, texture (detailNoise, q + vec3 (0.37, 0.71, 0.13)).r,
 			texture (detailNoise, q + vec3 (0.59, 0.23, 0.87)).r) - 0.5;
-		vel += n * (6.0 * p.shape.w * max (p.shape.x, 0.5) * dt);
+		vel += n * (trail ? 8.0 * slow * dt : 6.0 * slow * max (p.shape.x, 0.5) * dt);
 		// hot smoke rises, less as it cools and mixes
 		if ((p.flags & 16u) != 0u)
 			vel += normalize (pos - pc.bodyPos.xyz) * (4.0 * exp (-p.posAge.w / 6.0) * dt);
@@ -186,4 +224,10 @@ void main ()
 	p.posAge.xyz = pos + move;
 	p.velLife.xyz = vel;
 	particles[i] = p;
+	// the nearest volumetric particle (the client leaves out the smoke volume
+	// while none is within its reach)
+	if ((p.flags & 64u) != 0u) {
+		uint d = floatBitsToUint (max (length (p.posAge.xyz) - ParticleRadius (p), 0.0));
+		if (d < nearVol) atomicMin (nearVol, d);
+	}
 }

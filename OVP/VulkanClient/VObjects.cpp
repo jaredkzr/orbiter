@@ -67,10 +67,17 @@ VVessel::VVessel (OBJHANDLE h, Scene *s)
 
 VVessel::~VVessel ()
 {
+	// (the smoke lives on after the vessel's visual is gone: out of range,
+	// or the vessel deleted; its rings are freed when it has faded)
 	ParticleSystem *sys = scene->Particles ();
-	for (auto *rings : { &smoke, &dust })
+	double simt = oapiGetSimTime ();
+	for (auto *rings : { &smoke, &dust, &trail })
 		for (auto &r : *rings)
-			if (r.sys && r.sys == sys) sys->Free (r.first, r.capacity);
+			if (r.sys && r.sys == sys) {
+				double until = r.lastEmit + 1.5 * r.life + 1.0;
+				if (until > simt) sys->Retire (r.first, r.capacity, until, sys->SmokeTexture (), false);
+				else sys->Free (r.first, r.capacity);
+			}
 	// restore animated vertex lists to their default state
 	for (auto &it : vtxListDefaults)
 		std::copy (it.second.begin(), it.second.end(), it.first);
@@ -787,8 +794,13 @@ VDebris::VDebris (OBJHANDLE h, Scene *s, DWORD sn)
 VDebris::~VDebris ()
 {
 	ParticleSystem *sys = scene->Particles ();
+	double simt = oapiGetSimTime ();
 	for (Ring *r : { &fire, &smoke, &sparks, &dust, &frags, &hitSparks })
-		if (r->sys && r->sys == sys) sys->Free (r->first, r->capacity);
+		if (r->sys && r->sys == sys) {
+			double until = r->lastEmit + 1.5 * r->life + 1.0;
+			if (until > simt && r->tex) sys->Retire (r->first, r->capacity, until, r->tex, r->emissive);
+			else sys->Free (r->first, r->capacity);
+		}
 }
 
 void VDebris::Update ()
@@ -1554,8 +1566,69 @@ void VVessel::EmitSmoke (DWORD idx, int type, const PlumeDraw &pd, const PlumeIn
 		r.lastEmit = oapiGetSimTime ();
 		r.life = c.smokeLife;
 	}
+	// the long trail: where this smoke has spread (its size at about 0.4 of
+	// its life), carried on by the wind
+	if (!rcs && !cold && c.trail > 0.0f && sys->trails) {
+		double R = info.endRadius * (atSurface ? 5.0 : 3.0);
+		// (at least some 300 m for solid motors: from afar their smoke is
+		// a column hundreds of metres wide)
+		double S0 = std::max (R + (0.4 * R + 2.0) * 0.4 * c.smokeLife, 300.0 * c.trail);
+		EmitTrail (idx, c, c.trail * fade / std::max (c.smokeOpacity, 1e-3f), src, r.havePrev ? r.prev : src - vel * dt, S0, dt);
+	}
 	r.prev = src;
 	r.havePrev = true;
+}
+
+// A launch leaves a trail that stands in the sky for many minutes, from the
+// pad up to where the air thins: the smoke spreads, and the wind, of other
+// strength and direction in each layer, shears it into a zigzag. The engine
+// smoke above is fine and short-lived; this lays large puffs along the path
+// through the air (one for every quarter of their size, and a few a second
+// when it hardly moves: the cloud at the pad), at rest in the air, which
+// take over as that fades. They live about 15 minutes (particle_emit.comp:
+// 0.5 to 1.5 of it), grow slowly and thin as they do (ParticleAlpha), and
+// drift with the air at their altitude (particle_update.glsl: the wind's
+// layers, gentle eddies). strength: 0..1 (PlumeClass::trail, the smoke's
+// fading in the thin air and the engine's level)
+void VVessel::EmitTrail (DWORD idx, const PlumeClass &c, double strength, const VECTOR3 &src, const VECTOR3 &srcPrev, double S0, double dt)
+{
+	const double LIFE = 900.0;        // [s]
+	const uint32_t CAPACITY = c.trail >= 0.75f ? 8192 : 4096; // puffs per engine (solid motors: more, closer)
+	ParticleSystem *sys = scene->Particles ();
+	if (strength < 0.01 || dt <= 0.0) return;
+	if (idx >= trail.size()) trail.resize (idx + 1);
+	SmokeRing &r = trail[idx];
+	if (r.sys != sys) {
+		r = SmokeRing{};
+		if (!sys->Allocate (CAPACITY, r.first, r.capacity)) return;
+		r.sys = sys;
+	}
+	VECTOR3 vel, as;
+	vessel->GetGlobalVel (vel);
+	vessel->GetAirspeedVector (FRAME_GLOBAL, as);
+	double spacing = std::max (0.25 * S0, 20.0);
+	r.accum += std::min (length (as) * dt / spacing + 2.0 * dt, 80.0 * dt);
+	uint32_t n = (uint32_t)std::max (r.accum, 0.0);
+	r.accum -= n;
+	if (!n) return;
+	ParticleSystem::Emission e{};
+	e.p0 = srcPrev, e.p1 = src;
+	e.vel = vel - as; // (the air's velocity there)
+	double sp = length (as);
+	e.dir = sp > 1.0 ? as / sp : _V(0, 0, 0);
+	e.v0 = 0.0, e.spread = 2.0 + 0.02 * S0;
+	e.lifetime = LIFE, e.dt = dt;
+	e.size = S0, e.growth = 4.0;  // (some 4 km across after 15 minutes: turbulent spreading)
+	e.alpha = 0.5 * std::min (strength, 1.0);
+	e.slowdown = -0.3;            // (< 0: a trail's smoke; it takes on the wind within seconds)
+	e.first = r.first, e.capacity = r.capacity, e.head = r.head, e.count = std::min (n, r.capacity);
+	e.tinted = true, e.cold = true; // (cooled: it does not rise)
+	e.volumetric = true;
+	for (int k = 0; k < 3; k++) e.albedo[k] = c.smokeAlbedo[k];
+	sys->Queue (e);
+	r.head = (r.head + e.count) % r.capacity;
+	r.lastEmit = oapiGetSimTime ();
+	r.life = LIFE;
 }
 
 bool VVessel::EnsureRing (SmokeRing &r, double rate, double life)
@@ -1713,7 +1786,7 @@ void VVessel::DrawParticles ()
 	ParticleSystem *sys = scene->Particles ();
 	if (!sys) return;
 	double simt = oapiGetSimTime ();
-	for (auto *rings : { &smoke, &dust })
+	for (auto *rings : { &smoke, &dust, &trail })
 		for (const SmokeRing &r : *rings)
 			if (r.sys == sys && simt - r.lastEmit < 1.5 * r.life + 0.1)
 				sys->Draw (r.first, r.capacity, sys->SmokeTexture (), false, scene->FrameSet ());

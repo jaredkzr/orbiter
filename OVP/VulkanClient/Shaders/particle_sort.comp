@@ -11,7 +11,7 @@ layout(set = 0, binding = 8, std430) buffer SortVals { uint vals[]; };
 layout(set = 0, binding = 9, std430) buffer SortKeys { uint keys[]; };
 
 layout(push_constant) uniform Params {
-	uint j, k, n;
+	uint j, k, n, base; // (the keys from base)
 } pc;
 
 void main ()
@@ -21,6 +21,7 @@ void main ()
 	uint l = i ^ pc.j;
 	if (l <= i) return;
 	bool up = (i & pc.k) == 0u;
+	i += pc.base, l += pc.base;
 	uint ki = keys[i], kl = keys[l];
 	if ((ki > kl) == up) {
 		keys[i] = kl, keys[l] = ki;

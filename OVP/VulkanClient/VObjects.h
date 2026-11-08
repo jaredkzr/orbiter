@@ -144,6 +144,8 @@ private:
 	};
 	std::vector<SmokeRing> smoke;
 	std::vector<SmokeRing> dust;   // dust (or spray) thrown up where a jet meets the ground
+	std::vector<SmokeRing> trail;  // the long trail in the air (PlumeClass::trail): large puffs left along the path, carried by the wind
+	void EmitTrail (DWORD idx, const struct PlumeClass &c, double fade, const VECTOR3 &src, const VECTOR3 &srcPrev, double startSize, double dt);
 	void EmitDust (DWORD idx, int type, const struct PlumeDraw &pd, double dt);
 	bool EnsureRing (SmokeRing &r, double rate, double life);
 	/// plumes as light sources this frame (global position, emission, side area)

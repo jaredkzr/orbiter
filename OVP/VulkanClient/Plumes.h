@@ -52,6 +52,7 @@ struct PlumeClass {
 	float smokeOpacity;     // opacity of a particle (at the specified density)
 	float smokeLife;        // [s]
 	float smokeAir0, smokeAir1; // fades in between these pressures [atm]
+	float trail;            // strength of the long trail left in the air (0: none; solid motors 1)
 };
 
 /// where a plume's flame ends and what it meets (PlumeRenderer::Add)

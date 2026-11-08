@@ -12,7 +12,7 @@ layout(local_size_x = 64) in;
 
 void main ()
 {
-	uint i = gl_GlobalInvocationID.x;
+	uint i = uint (pc.ground.w) + gl_GlobalInvocationID.x; // (the pool's used part: ground.w to omega.w)
 	if (i >= uint (pc.omega.w)) return;
 	Particle p = particles[i];
 	if (p.velLife.w <= 0.0 || (p.flags & 4u) != 0u) return; // (none, or emissive)

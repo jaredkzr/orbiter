@@ -135,6 +135,7 @@ set(SHADER_SRC
 	Shaders/particle_shadow_sum.comp
 	Shaders/particle_sortkeys.comp
 	Shaders/particle_sort.comp
+	Shaders/particle_sort_local.comp
 	Shaders/smoke_splat.comp
 	Shaders/smoke_resolve.comp
 	Shaders/smoke_march.frag

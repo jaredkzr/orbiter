@@ -20,6 +20,7 @@
 #include "particle_shadow_sum.comp.h"
 #include "particle_sortkeys.comp.h"
 #include "particle_sort.comp.h"
+#include "particle_sort_local.comp.h"
 #include "smoke_splat.comp.h"
 #include "smoke_resolve.comp.h"
 #include "smoke_march.frag.h"
@@ -37,8 +38,10 @@ namespace {
 	constexpr uint32_t SHADOW_NX = 192, SHADOW_NZ = 64;
 	constexpr double SHADOW_HALF_WIDTH = 1200.0, SHADOW_HALF_DEPTH = 1500.0; // [m]
 	constexpr double SMOKE_EXTINCTION = 0.2; // optical depth (towards the sun) per unit of particle opacity
+	constexpr uint32_t SORT_TILE = 512; // keys sorted in shared memory (particle_sort_local.comp)
 	// smoke volume (smokevol.glsl)
 	constexpr uint32_t VOL_X = 240, VOL_Y = 135, VOL_Z = 128;
+	constexpr double VOL_REACH = 20000.0; // [m] (smokevol.glsl VOL_FAR)
 }
 
 // ======================================================================
@@ -51,7 +54,7 @@ struct ParticleSystem::GpuEmission { // particles.glsl
 
 struct ParticleSystem::UpdateParams { // particle_common.glsl
 	float camShift[4], bodyPos[4], bodyVel[4], omega[4], noiseOrg[4];
-	float lightX[4], lightY[4], lightZ[4], ground[4];
+	float lightX[4], lightY[4], lightZ[4], ground[4], trailNoise[4];
 };
 
 bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout,
@@ -132,6 +135,11 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 	sortVals = ctx->CreateBuffer (CAPACITY * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false);
 	sortKeys = ctx->CreateBuffer (CAPACITY * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false);
 	for (auto &b : blockRingBuf) b = ctx->CreateBuffer ((CAPACITY / BLOCK) * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+	if (const char *e = getenv ("ORBITER_VK_SMOKE_TRAILS")) trails = atoi (e) != 0;
+	for (auto &b : windBuf) {
+		b = ctx->CreateBuffer ((WIND_LAYERS + 1) * 4 * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true); // (+ nearVol)
+		memset (b.mapped, 0, (WIND_LAYERS + 1) * 4 * sizeof(float));
+	}
 	blockRing.resize (CAPACITY / BLOCK);
 	for (uint32_t i = 0; i < blockRing.size(); i++) blockRing[i] = i;
 
@@ -214,7 +222,7 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 	// pool, emissions, noise volumes, prepass, shadow grid
 	const VkShaderStageFlags CS = VK_SHADER_STAGE_COMPUTE_BIT;
 	// (8-10: sorting for drawing far to near: values, keys, ring of each block)
-	VkDescriptorSetLayoutBinding b[20] = {
+	VkDescriptorSetLayoutBinding b[21] = {
 		{ 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS | VK_SHADER_STAGE_VERTEX_BIT, nullptr },
 		{ 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS, nullptr },
 		{ 2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, CS, nullptr },
@@ -235,11 +243,12 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		{ 16, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, CS, nullptr },
 		{ 17, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
 		{ 18, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
-		{ 19, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr } }; // (screen-space smoke)
+		{ 19, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr }, // (screen-space smoke)
+		{ 20, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, CS, nullptr } }; // (the wind's layers)
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 20, lci.pBindings = b;
+	lci.bindingCount = 21, lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &setLayout));
-	VkDescriptorPoolSize ps[3] = { { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5 * vkc::FRAMES_IN_FLIGHT },
+	VkDescriptorPoolSize ps[3] = { { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 6 * vkc::FRAMES_IN_FLIGHT },
 		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 7 * vkc::FRAMES_IN_FLIGHT + 2 },
 		{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 8 * vkc::FRAMES_IN_FLIGHT + 2 } };
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -278,6 +287,11 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 			sw[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, sw[k].pBufferInfo = &sbi[k];
 		}
 		vkUpdateDescriptorSets (ctx->device, 3, sw, 0, nullptr);
+		VkDescriptorBufferInfo wbi{ windBuf[i].buffer, 0, VK_WHOLE_SIZE };
+		VkWriteDescriptorSet ww{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+		ww.dstSet = sets[i], ww.dstBinding = 20, ww.descriptorCount = 1;
+		ww.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, ww.pBufferInfo = &wbi;
+		vkUpdateDescriptorSets (ctx->device, 1, &ww, 0, nullptr);
 		VkDescriptorImageInfo vi[8] = {
 			{ VK_NULL_HANDLE, volAccum[0].view, VK_IMAGE_LAYOUT_GENERAL }, { VK_NULL_HANDLE, volAccum[1].view, VK_IMAGE_LAYOUT_GENERAL },
 			{ VK_NULL_HANDLE, volAccum[2].view, VK_IMAGE_LAYOUT_GENERAL }, { VK_NULL_HANDLE, volAccum[3].view, VK_IMAGE_LAYOUT_GENERAL },
@@ -321,8 +335,9 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 	splatPipe = compute (spv_particle_shadow_splat_comp, spv_particle_shadow_splat_comp_size, updateLayout);
 	sumPipe = compute (spv_particle_shadow_sum_comp, spv_particle_shadow_sum_comp_size, updateLayout);
 	sortKeysPipe = compute (spv_particle_sortkeys_comp, spv_particle_sortkeys_comp_size, updateLayout);
-	sortLayout = layoutOf ({ setLayout }, CS, 3 * sizeof(uint32_t));
+	sortLayout = layoutOf ({ setLayout }, CS, 4 * sizeof(uint32_t));
 	sortPipe = compute (spv_particle_sort_comp, spv_particle_sort_comp_size, sortLayout);
+	sortLocalPipe = compute (spv_particle_sort_local_comp, spv_particle_sort_local_comp_size, sortLayout);
 	volSplatPipe = compute (spv_smoke_splat_comp, spv_smoke_splat_comp_size, updateLayout);
 	volResolvePipe = compute (spv_smoke_resolve_comp, spv_smoke_resolve_comp_size, updateLayout);
 
@@ -521,7 +536,7 @@ void ParticleSystem::InitRT (VkDescriptorSetLayout frameLayout, VkDescriptorSetL
 void ParticleSystem::Shutdown ()
 {
 	if (!ctx) return;
-	for (VkPipeline p : { emitPipe, updatePipe, updateRTPipe, lightPipe, lightRTPipe, splatPipe, sumPipe, sortKeysPipe, sortPipe, drawBlend, drawAdd,
+	for (VkPipeline p : { emitPipe, updatePipe, updateRTPipe, lightPipe, lightRTPipe, splatPipe, sumPipe, sortKeysPipe, sortPipe, sortLocalPipe, drawBlend, drawAdd,
 		volSplatPipe, volResolvePipe, volMarchPipe, thickPipe, blurPipe, screenCompPipe })
 		if (p) vkDestroyPipeline (ctx->device, p, nullptr);
 	for (VkPipelineLayout l : { emitLayout, updateLayout, updateRTLayout, drawLayout, sortLayout, volMarchLayout, blurLayout })
@@ -541,6 +556,7 @@ void ParticleSystem::Shutdown ()
 	ctx->DestroyBuffer (sortVals);
 	ctx->DestroyBuffer (sortKeys);
 	for (auto &b : blockRingBuf) ctx->DestroyBuffer (b);
+	for (auto &b : windBuf) ctx->DestroyBuffer (b);
 	ctx->DestroyImage (shadowAccum);
 	ctx->DestroyImage (shadowDepth);
 	if (smokeTex) texmgr->Release (smokeTex);
@@ -575,6 +591,17 @@ void ParticleSystem::Free (uint32_t first, uint32_t capacity)
 		else merged.push_back (f);
 	}
 	freeList.swap (merged);
+}
+
+void ParticleSystem::Retire (uint32_t first, uint32_t capacity, double until, VkTexture *tex, bool emissive)
+{
+	retired.push_back ({ first, capacity, until, tex, emissive });
+	aliveUntil = std::max (aliveUntil, until);
+}
+
+void ParticleSystem::DrawRetired (VkDescriptorSet frameSet)
+{
+	for (const Retired &r : retired) Draw (r.first, r.capacity, r.tex, r.emissive, frameSet);
 }
 
 void ParticleSystem::Queue (const Emission &e)
@@ -623,9 +650,16 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	toClear.clear ();
 
 	for (const Emission &e : queued) aliveUntil = std::max (aliveUntil, simt + 1.5 * e.lifetime + 1.0); // (particle_emit.comp: up to 1.5 lifetimes)
+	// rings of streams that are gone, their particles expired: free
+	for (size_t i = 0; i < retired.size(); )
+		if (simt > retired[i].until || simt < retired[i].until - 1e5) { // (or time went back: a new session)
+			Free (retired[i].first, retired[i].capacity);
+			retired[i] = retired.back (), retired.pop_back ();
+		} else i++;
 	if (queued.empty() && simt > aliveUntil) {
 		if (idleUpdates >= 2) { // (the particles have been updated as dead)
 			idle = true;
+			for (bool &v : nearValid) v = false;
 			lastCam = camPos, haveCam = true;
 			pendingDt = 0.0;
 			return;
@@ -637,6 +671,22 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	// move and light the existing particles
 	UpdateParams up{};
 	VECTOR3 shift = haveCam ? lastCam - camPos : _V(0, 0, 0);
+	// the smoke volume: only while a volumetric particle may be within its
+	// reach (the nearest one's distance as found by this frame slot's last
+	// update, FRAMES_IN_FLIGHT frames ago; the camera's moves since; new
+	// particles near)
+	{
+		uint32_t *nearBits = (uint32_t*)windBuf[fi].mapped + WIND_LAYERS * 4;
+		float nearPrev;
+		memcpy (&nearPrev, nearBits, sizeof(float));
+		double reach = VOL_REACH + 2000.0 + 2.0 * vkc::FRAMES_IN_FLIGHT * length (shift);
+		volActive = !nearValid[fi] || nearPrev < reach;
+		for (const Emission &e : queued)
+			if (e.volumetric && std::min (length (e.p0 - camPos), length (e.p1 - camPos)) - e.size < reach) volActive = true;
+		const uint32_t far = 0x7F800000u; // (+inf)
+		*nearBits = far;
+		nearValid[fi] = true;
+	}
 	lastCam = camPos, haveCam = true;
 	up.camShift[0] = (float)shift.x, up.camShift[1] = (float)shift.y, up.camShift[2] = (float)shift.z;
 	up.camShift[3] = (float)pendingDt;
@@ -654,6 +704,17 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 		if (rad > 0.0)
 			up.ground[0] = (float)(oapiGetSize (hp) + oapiSurfaceElevation (hp, atan2 (loc.z, loc.x), asin (std::clamp (loc.y / rad, -1.0, 1.0))));
 		up.ground[1] = (float)(GGRAV * oapiGetMass (hp) / (oapiGetSize (hp) * oapiGetSize (hp)));
+		// the wind's layers (above the camera's point; on terrestrial planets
+		// the same everywhere)
+		{
+			float *w = (float*)windBuf[fi].mapped;
+			double lng = 0.0, lat = 0.0, rad;
+			oapiGlobalToEqu (hp, camPos, &lng, &lat, &rad);
+			for (int k = 0; k < WIND_LAYERS; k++) {
+				VECTOR3 v = trails ? oapiGetModelWind (hp, lng, lat, k * 1e3) : _V(0, 0, 0);
+				w[4 * k] = (float)v.x, w[4 * k + 1] = (float)v.z, w[4 * k + 2] = w[4 * k + 3] = 0.0f;
+			}
+		}
 		double T = oapiGetPlanetPeriod (hp);
 		if (T != 0.0) {
 			MATRIX3 R;
@@ -666,12 +727,29 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	for (int k = 0; k < 3; k++)
 		drawBody[k] = up.bodyPos[k], drawBody[4 + k] = up.bodyVel[k], drawBody[8 + k] = up.omega[k];
 	drawBody[3] = up.bodyPos[3] > 0.0f ? 1.0f : 0.0f;
-	up.omega[3] = (float)CAPACITY;
+	// the pool's used part (from the first ring to the end of the last; rings
+	// are cleared when allocated, so the particles left in the free space
+	// around it are never seen again): the passes over the particles go over
+	// that part only
+	uint32_t usedLo = 0, usedHi = CAPACITY;
+	for (auto &f : freeList) {
+		if (f.first == 0) usedLo = f.second;
+		if (f.first + f.second == CAPACITY) usedHi = f.first;
+	}
+	if (usedLo >= usedHi) usedLo = 0, usedHi = BLOCK; // (no rings)
+	const uint32_t groups = (usedHi - usedLo) / 64; // (BLOCK is a multiple of 64)
+	up.omega[3] = (float)usedHi;
+	up.ground[3] = (float)usedLo;
 	for (int k = 0; k < 3; k++) {
 		double q = (&camPos.x)[k] * NOISE_SCALE;
 		up.noiseOrg[k] = (float)(q - floor (q));
 	}
 	up.noiseOrg[3] = (float)NOISE_SCALE;
+	for (int k = 0; k < 3; k++) {
+		double q = (&camPos.x)[k] * TRAIL_NOISE_SCALE;
+		up.trailNoise[k] = (float)(q - floor (q));
+	}
+	up.trailNoise[3] = (float)TRAIL_NOISE_SCALE;
 	// smoke shadow grid: axes across the sunlight and towards the sun
 	VECTOR3 lz = unit (sunDir);
 	VECTOR3 lx = unit (crossp (lz, fabs (lz.y) < 0.9 ? _V(0, 1, 0) : _V(1, 0, 0))), ly = crossp (lz, lx);
@@ -700,7 +778,7 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 		vkCmdPushConstants (cmd, l, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(up), &up);
 	};
 	vkCmdPushConstants (cmd, ul, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(up), &up);
-	vkCmdDispatch (cmd, CAPACITY / 64, 1, 1);
+	vkCmdDispatch (cmd, groups, 1, 1);
 
 	// new particles (at the end of the step: not moved again)
 	if (!queued.empty()) {
@@ -741,7 +819,7 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	barrier (VK_PIPELINE_STAGE_2_TRANSFER_BIT | CS, VK_ACCESS_2_TRANSFER_WRITE_BIT | RW, CS, RW);
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, splatPipe);
 	bindSets (updateLayout, false);
-	vkCmdDispatch (cmd, CAPACITY / 64, 1, 1);
+	vkCmdDispatch (cmd, groups, 1, 1);
 	barrier (CS, RW, CS, RW);
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, sumPipe);
 	vkCmdDispatch (cmd, (SHADOW_NX + 7) / 8, (SHADOW_NX + 7) / 8, 1);
@@ -750,11 +828,11 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	// sunlight on the particles
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, useRT ? lightRTPipe : lightPipe);
 	bindSets (ul, useRT);
-	vkCmdDispatch (cmd, CAPACITY / 64, 1, 1);
+	vkCmdDispatch (cmd, groups, 1, 1);
 	barrier (CS, RW, CS, RW);
 
 	// smoke volume: volumetric particles into the froxels, resolved
-	if (smokeMode == SMOKE_VOLUME) {
+	if (smokeMode == SMOKE_VOLUME && volActive) {
 		VkClearColorValue z0{};
 		VkImageSubresourceRange rr{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
 		barrier (CS | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, RW, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
@@ -762,7 +840,7 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 		barrier (VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, CS, RW);
 		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, volSplatPipe);
 		bindSets (updateLayout, false);
-		vkCmdDispatch (cmd, CAPACITY / 64, 1, 1);
+		vkCmdDispatch (cmd, groups, 1, 1);
 		barrier (CS, RW, CS, RW);
 		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, volResolvePipe);
 		vkCmdDispatch (cmd, (VOL_X + 7) / 8, (VOL_Y + 7) / 8, 1);
@@ -772,26 +850,35 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 
 	// draw order: far to near within each ring (bitonic sort over the used
 	// part of the pool)
-	uint32_t used = CAPACITY; // (up to the free space at the end of the pool)
-	for (auto &f : freeList) if (f.first + f.second == CAPACITY) used = std::max (f.first, BLOCK);
-	uint32_t n = 1;
-	while (n < used) n <<= 1;
+	// (over a power of two from the used part's start, or less: the sort keys
+	// keep each ring's particles in its range)
+	uint32_t n = SORT_TILE; // (whole tiles of the shared-memory steps)
+	while (n < usedHi - usedLo) n <<= 1;
+	const uint32_t sortBase = std::min (usedLo, CAPACITY - n);
 	memcpy (blockRingBuf[fi].mapped, blockRing.data(), blockRing.size() * sizeof(uint32_t));
-	usedCount = used;
+	usedFirst = usedLo, usedCount = usedHi - usedLo;
 	up.ground[2] = (float)n;
+	up.ground[3] = (float)sortBase;
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, sortKeysPipe);
 	bindSets (updateLayout, false);
 	vkCmdDispatch (cmd, (n + 63) / 64, 1, 1);
-	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, sortPipe);
+	// (bitonic: the steps within a tile of SORT_TILE keys in shared memory,
+	// the larger ones over the keys)
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, sortLayout, 0, 1, &set, 0, nullptr);
-	for (uint32_t k = 2; k <= n; k <<= 1)
-		for (uint32_t j = k >> 1; j > 0; j >>= 1) {
-			barrier (CS, RW, CS, RW);
-			uint32_t pcs[3] = { j, k, n };
-			vkCmdPushConstants (cmd, sortLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pcs), pcs);
-			vkCmdDispatch (cmd, (n + 255) / 256, 1, 1);
-		}
-	barrier (CS, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+	auto sortStep = [&](VkPipeline pipe, uint32_t j, uint32_t k, uint32_t groups) {
+		barrier (CS, RW, CS, RW);
+		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
+		uint32_t pcs[4] = { j, k, n, sortBase };
+		vkCmdPushConstants (cmd, sortLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pcs), pcs);
+		vkCmdDispatch (cmd, groups, 1, 1);
+	};
+	sortStep (sortLocalPipe, 0, 0, n / SORT_TILE);
+	for (uint32_t k = 2 * SORT_TILE; k <= n; k <<= 1) {
+		for (uint32_t j = k >> 1; j >= SORT_TILE; j >>= 1) sortStep (sortPipe, j, k, n / 256);
+		sortStep (sortLocalPipe, 1, k, n / SORT_TILE);
+	}
+	barrier (CS, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_HOST_BIT,
+		VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_HOST_READ_BIT); // (nearVol read back)
 }
 
 void ParticleSystem::Draw (uint32_t first, uint32_t capacity, VkTexture *tex, bool emissive, VkDescriptorSet frameSet)
@@ -985,7 +1072,7 @@ void VkParticleStream::Render (Scene *scene)
 
 void ParticleSystem::DrawVolume (VkDescriptorSet frameSet)
 {
-	if (!enabled || smokeMode != SMOKE_VOLUME || !prepassView || idle) return;
+	if (!enabled || smokeMode != SMOKE_VOLUME || !prepassView || idle || !volActive) return;
 	VkCommandBuffer cmd = ctx->Cmd ();
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, volMarchPipe);
 	VkDescriptorSet s[2] = { frameSet, sets[ctx->FrameIndex ()] };
@@ -1060,7 +1147,7 @@ void ParticleSystem::RenderScreenSmoke (VkDescriptorSet frameSet)
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, thickPipe);
 	VkDescriptorSet s[3] = { frameSet, sets[ctx->FrameIndex ()], smokeTex->set };
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawLayout, 0, 3, s, 0, nullptr);
-	struct { uint32_t first, flags; float alpha, pad; float body[12]; } pc{ 0, 16u, 1.0f, 0.0f, {} };
+	struct { uint32_t first, flags; float alpha, pad; float body[12]; } pc{ usedFirst, 16u, 1.0f, 0.0f, {} };
 	memcpy (pc.body, drawBody, sizeof(drawBody));
 	vkCmdPushConstants (cmd, drawLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 	vkCmdDraw (cmd, 4, usedCount, 0, 0);

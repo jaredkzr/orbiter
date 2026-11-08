@@ -66,6 +66,11 @@ public:
 		float albedo[3];
 	};
 	void Queue (const Emission &e);
+	/// a ring whose stream is gone: its particles live on, the ring is
+	/// freed after sim time until
+	void Retire (uint32_t first, uint32_t capacity, double until, VkTexture *tex, bool emissive);
+	/// Draw the retired rings' particles (scene with reactive mask)
+	void DrawRetired (VkDescriptorSet frameSet);
 	/// simulation time passed (clbkUpdate)
 	void AddTime (double dt) { pendingDt += dt; }
 
@@ -98,6 +103,8 @@ public:
 
 	bool enabled = true;
 	float density = 4.0f; ///< particles per specified particle (smaller ones)
+	/// long trails of engine smoke, carried by the wind (ORBITER_VK_SMOKE_TRAILS=0: neither, for comparisons)
+	bool trails = true;
 
 private:
 	struct GpuEmission;
@@ -107,6 +114,11 @@ private:
 	VkTexture *smokeTex = nullptr;
 	vkc::Buffer pool;
 	vkc::Buffer emitBuf[vkc::FRAMES_IN_FLIGHT];
+	static constexpr int WIND_LAYERS = 64;     // the wind table: a layer each kilometre
+	static constexpr double TRAIL_NOISE_SCALE = 2e-4; // trails' eddies [1/m]
+	vkc::Buffer windBuf[vkc::FRAMES_IN_FLIGHT];
+	struct Retired { uint32_t first, capacity; double until; VkTexture *tex; bool emissive; };
+	std::vector<Retired> retired;
 	std::vector<Emission> queued;
 	std::vector<std::pair<uint32_t, uint32_t>> freeList; // (first, capacity), in blocks of BLOCK
 	std::vector<std::pair<uint32_t, uint32_t>> toClear;  // newly allocated rings
@@ -128,7 +140,7 @@ private:
 	VkPipeline emitPipe = VK_NULL_HANDLE, updatePipe = VK_NULL_HANDLE, updateRTPipe = VK_NULL_HANDLE;
 	VkPipeline lightPipe = VK_NULL_HANDLE, lightRTPipe = VK_NULL_HANDLE, splatPipe = VK_NULL_HANDLE, sumPipe = VK_NULL_HANDLE;
 	vkc::Image shadowAccum, shadowDepth; // smoke shadow grid
-	VkPipeline sortKeysPipe = VK_NULL_HANDLE, sortPipe = VK_NULL_HANDLE;
+	VkPipeline sortKeysPipe = VK_NULL_HANDLE, sortPipe = VK_NULL_HANDLE, sortLocalPipe = VK_NULL_HANDLE;
 	VkPipelineLayout sortLayout = VK_NULL_HANDLE;
 	vkc::Buffer sortVals, sortKeys, blockRingBuf[vkc::FRAMES_IN_FLIGHT];
 	std::vector<uint32_t> blockRing; // first block of the ring of each block (free: the block itself)
@@ -138,7 +150,9 @@ private:
 	VkPipelineLayout volMarchLayout = VK_NULL_HANDLE;
 	float volNoise[4] = {};
 	vkc::Image thick[2]; // screen-space smoke (half resolution)
-	uint32_t thickGen = ~0u, usedCount = 0;
+	bool volActive = true;                                // the smoke volume this frame
+	bool nearValid[vkc::FRAMES_IN_FLIGHT] = {};           // nearVol read back in the frame slot
+	uint32_t thickGen = ~0u, usedFirst = 0, usedCount = 0; // (the pool's used part)
 	VkDescriptorSetLayout blurSetLayout = VK_NULL_HANDLE;
 	VkDescriptorSet blurSets[2] = {};
 	VkPipelineLayout blurLayout = VK_NULL_HANDLE;

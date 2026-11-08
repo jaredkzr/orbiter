@@ -18,7 +18,7 @@ layout(set = 0, binding = 14, r32ui) uniform uimage3D volB;
 
 void main ()
 {
-	uint i = gl_GlobalInvocationID.x;
+	uint i = uint (pc.ground.w) + gl_GlobalInvocationID.x; // (the pool's used part: ground.w to omega.w)
 	if (i >= uint (pc.omega.w)) return;
 	Particle p = particles[i];
 	if (p.velLife.w <= 0.0 || (p.flags & 64u) == 0u) return;
@@ -27,6 +27,9 @@ void main ()
 	mat3 toView = transpose (mat3 (frame.viewToGlobal));
 	vec3 vp = toView * p.posAge.xyz;
 	if (vp.z + h < VOL_NEAR || vp.z - h > VOL_FAR) return;
+	// (towards the volume's end, handed over to sprites: gpuparticle.vert)
+	a *= 1.0 - smoothstep (0.8 * VOL_FAR, VOL_FAR, length (vp)); // (by distance, as gpuparticle.vert's sprites)
+	if (a <= 0.002) return;
 	vec3 c = VolCoord (vp);
 	// the particle's extent in froxels
 	vec3 ce = c * vec3 (VOL_SIZE);

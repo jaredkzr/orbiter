@@ -1,0 +1,51 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// GPU particles: the steps of the bitonic sort that stay within a tile of
+// 512 keys, in shared memory: either all steps up to sequences of 512
+// (mode 0: the start of the sort) or the steps j = 256 ... 1 of the merge
+// of sequences of k (mode 1; the larger j are particle_sort.comp's)
+
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 8, std430) buffer SortVals { uint vals[]; };
+layout(set = 0, binding = 9, std430) buffer SortKeys { uint keys[]; };
+
+layout(push_constant) uniform Params {
+	uint mode, k, n, base; // (the keys from base; n: a multiple of 512)
+} pc;
+
+const uint TILE = 512u;
+shared uint sk[TILE], sv[TILE];
+
+void main ()
+{
+	uint t = gl_LocalInvocationID.x;
+	uint g0 = gl_WorkGroupID.x * TILE;
+	if (g0 >= pc.n) return;
+	for (uint e = t; e < TILE; e += 256u) {
+		sk[e] = keys[pc.base + g0 + e];
+		sv[e] = vals[pc.base + g0 + e];
+	}
+	barrier ();
+	uint k0 = pc.mode == 0u ? 2u : pc.k, k1 = pc.mode == 0u ? TILE : pc.k;
+	for (uint k = k0; k <= k1; k <<= 1) {
+		for (uint j = min (k >> 1, TILE >> 1); j > 0u; j >>= 1) {
+			uint e = 2u * t - (t & (j - 1u)), l = e + j; // (the pair of this thread)
+			bool up = ((g0 + e) & k) == 0u;
+			uint a = sk[e], b = sk[l];
+			if ((a > b) == up) {
+				sk[e] = b, sk[l] = a;
+				uint v = sv[e];
+				sv[e] = sv[l], sv[l] = v;
+			}
+			barrier ();
+		}
+	}
+	for (uint e = t; e < TILE; e += 256u) {
+		keys[pc.base + g0 + e] = sk[e];
+		vals[pc.base + g0 + e] = sv[e];
+	}
+}
