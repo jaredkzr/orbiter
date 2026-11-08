@@ -19,6 +19,8 @@ layout(set = 0, binding = 7) uniform sampler3D shadowDepthTex;
 layout(set = 0, binding = 20, std430) buffer WindTable {
 	vec4 windLayer[64];
 	uint nearVol; // the nearest volumetric particle's distance (float bits; particle_update.glsl, read back)
+	uint statsOn; // telemetry (ORBITER_VK_PARTICLE_STATS): particles counted by particle_sortkeys.comp
+	uint liveCount, liveVol;
 };
 
 const ivec3 SHADOW_GRID = ivec3 (192, 192, 64);

@@ -159,6 +159,16 @@ private:
 	VkPipeline thickPipe = VK_NULL_HANDLE, blurPipe = VK_NULL_HANDLE, screenCompPipe = VK_NULL_HANDLE;
 	VkPipeline drawBlend = VK_NULL_HANDLE, drawAdd = VK_NULL_HANDLE;
 	static constexpr uint32_t MAX_EMISSIONS = 4096;
+	// telemetry (ORBITER_VK_PARTICLE_STATS = seconds between log lines; off: 0)
+	struct Stats {
+		double every = 0.0, next = 0.0;  // [s] wall
+		uint32_t frames = 0, simFrames = 0, idleFrames = 0, volFrames = 0, volToggles = 0;
+		uint32_t emissions = 0, maxEmissions = 0, dropped = 0, particles = 0, reentry = 0;
+		uint32_t allocs = 0, allocFails = 0, failWant = 0, frees = 0, rings = 0;
+		uint32_t live = 0, liveMax = 0, liveVol = 0;
+		bool lastVol = false;
+	} stats;
+	void LogStats (double simt);
 };
 
 class VkParticleStream : public oapi::ParticleStream {

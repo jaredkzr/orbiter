@@ -136,6 +136,7 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 	sortKeys = ctx->CreateBuffer (CAPACITY * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false);
 	for (auto &b : blockRingBuf) b = ctx->CreateBuffer ((CAPACITY / BLOCK) * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
 	if (const char *e = getenv ("ORBITER_VK_SMOKE_TRAILS")) trails = atoi (e) != 0;
+	if (const char *e = getenv ("ORBITER_VK_PARTICLE_STATS")) stats.every = std::max (atof (e), 0.0);
 	for (auto &b : windBuf) {
 		b = ctx->CreateBuffer ((WIND_LAYERS + 1) * 4 * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true); // (+ nearVol)
 		memset (b.mapped, 0, (WIND_LAYERS + 1) * 4 * sizeof(float));
@@ -574,8 +575,10 @@ bool ParticleSystem::Allocate (uint32_t want, uint32_t &first, uint32_t &capacit
 		for (uint32_t k = first / BLOCK; k < (first + n) / BLOCK; k++) blockRing[k] = first / BLOCK;
 		if (!f.second) freeList.erase (freeList.begin() + i);
 		toClear.push_back ({ first, capacity });
+		stats.allocs++, stats.rings++;
 		return true;
 	}
+	stats.allocFails++, stats.failWant = std::max (stats.failWant, n);
 	return false;
 }
 
@@ -583,6 +586,7 @@ void ParticleSystem::Free (uint32_t first, uint32_t capacity)
 {
 	// (particles left in the ring are cleared when it is allocated again)
 	for (uint32_t k = first / BLOCK; k < (first + capacity) / BLOCK; k++) blockRing[k] = k;
+	stats.frees++, stats.rings--;
 	freeList.push_back ({ first, capacity });
 	std::sort (freeList.begin(), freeList.end());
 	std::vector<std::pair<uint32_t, uint32_t>> merged;
@@ -602,11 +606,35 @@ void ParticleSystem::Retire (uint32_t first, uint32_t capacity, double until, Vk
 void ParticleSystem::DrawRetired (VkDescriptorSet frameSet)
 {
 	for (const Retired &r : retired) Draw (r.first, r.capacity, r.tex, r.emissive, frameSet);
+	if (ctx) ctx->GpuMark ("pt sprites"); // (the sprites of all rings: Scene::Render draws them after the volume)
 }
 
 void ParticleSystem::Queue (const Emission &e)
 {
-	if (e.count && queued.size() < MAX_EMISSIONS) queued.push_back (e);
+	if (e.count && queued.size() < MAX_EMISSIONS) {
+		queued.push_back (e);
+		if (stats.every > 0.0) stats.particles += std::min (e.count, e.capacity), stats.reentry += e.reentry ? std::min (e.count, e.capacity) : 0;
+	} else if (e.count) stats.dropped++;
+}
+
+void ParticleSystem::LogStats (double simt)
+{
+	if (stats.every <= 0.0) return;
+	double now = oapiGetSysTime ();
+	if (now < stats.next) return;
+	stats.next = now + stats.every;
+	uint32_t freeTotal = 0, largest = 0;
+	for (auto &f : freeList) freeTotal += f.second, largest = std::max (largest, f.second);
+	oapiWriteLogV ("VK particles: simt=%.1f frames=%u (sim %u idle %u vol %u, toggles %u) live=%u (max %u, vol %u) rings=%u alloc=%u/%u "
+		"used=[%u,%u) free=%u in %zu (largest %u) retired=%zu emissions=%u (max/frame %u, dropped %u) particles=%u (reentry %u) "
+		"allocs=%u frees=%u allocFails=%u (want %u)",
+		simt, stats.frames, stats.simFrames, stats.idleFrames, stats.volFrames, stats.volToggles, stats.live, stats.liveMax, stats.liveVol,
+		stats.rings, CAPACITY - freeTotal, CAPACITY, usedFirst, usedFirst + usedCount, freeTotal, freeList.size (), largest, retired.size (),
+		stats.emissions, stats.maxEmissions, stats.dropped, stats.particles, stats.reentry, stats.allocs, stats.frees, stats.allocFails, stats.failWant);
+	stats.frames = stats.simFrames = stats.idleFrames = stats.volFrames = stats.volToggles = 0;
+	stats.emissions = stats.maxEmissions = stats.dropped = stats.particles = stats.reentry = 0;
+	stats.allocs = stats.frees = stats.allocFails = stats.failWant = 0;
+	stats.liveMax = 0;
 }
 
 void ParticleSystem::SetPrepass (VkImageView prepass)
@@ -650,6 +678,14 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	toClear.clear ();
 
 	for (const Emission &e : queued) aliveUntil = std::max (aliveUntil, simt + 1.5 * e.lifetime + 1.0); // (particle_emit.comp: up to 1.5 lifetimes)
+	if (stats.every > 0.0) {
+		// (telemetry: the particles counted by this frame slot's last update)
+		uint32_t *w = (uint32_t*)windBuf[fi].mapped + WIND_LAYERS * 4;
+		if (nearValid[fi]) stats.live = w[2], stats.liveVol = w[3], stats.liveMax = std::max (stats.liveMax, stats.live);
+		w[1] = 1u, w[2] = w[3] = 0u;
+		stats.frames++;
+		stats.emissions += (uint32_t)queued.size (), stats.maxEmissions = std::max (stats.maxEmissions, (uint32_t)queued.size ());
+	}
 	// rings of streams that are gone, their particles expired: free
 	for (size_t i = 0; i < retired.size(); )
 		if (simt > retired[i].until || simt < retired[i].until - 1e5) { // (or time went back: a new session)
@@ -659,6 +695,8 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	if (queued.empty() && simt > aliveUntil) {
 		if (idleUpdates >= 2) { // (the particles have been updated as dead)
 			idle = true;
+			stats.idleFrames++, stats.live = stats.liveVol = 0;
+			LogStats (simt);
 			for (bool &v : nearValid) v = false;
 			lastCam = camPos, haveCam = true;
 			pendingDt = 0.0;
@@ -779,6 +817,7 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	};
 	vkCmdPushConstants (cmd, ul, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(up), &up);
 	vkCmdDispatch (cmd, groups, 1, 1);
+	ctx->GpuMark ("pt update");
 
 	// new particles (at the end of the step: not moved again)
 	if (!queued.empty()) {
@@ -810,6 +849,7 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 		vkCmdDispatch (cmd, (maxCount + 63) / 64, n, 1);
 		queued.clear ();
 	}
+	ctx->GpuMark ("pt emit");
 
 	// smoke shadows: smoke per cell of the grid, summed towards the sun
 	VkClearColorValue zero{};
@@ -824,12 +864,14 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, sumPipe);
 	vkCmdDispatch (cmd, (SHADOW_NX + 7) / 8, (SHADOW_NX + 7) / 8, 1);
 	barrier (CS, RW, CS, RW);
+	ctx->GpuMark ("pt shadow");
 
 	// sunlight on the particles
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, useRT ? lightRTPipe : lightPipe);
 	bindSets (ul, useRT);
 	vkCmdDispatch (cmd, groups, 1, 1);
 	barrier (CS, RW, CS, RW);
+	ctx->GpuMark ("pt light");
 
 	// smoke volume: volumetric particles into the froxels, resolved
 	if (smokeMode == SMOKE_VOLUME && volActive) {
@@ -845,6 +887,13 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, volResolvePipe);
 		vkCmdDispatch (cmd, (VOL_X + 7) / 8, (VOL_Y + 7) / 8, 1);
 		barrier (CS, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | CS, VK_ACCESS_2_SHADER_READ_BIT);
+	}
+	ctx->GpuMark ("pt volume");
+	if (stats.every > 0.0) {
+		stats.simFrames++;
+		bool v = smokeMode == SMOKE_VOLUME && volActive;
+		stats.volFrames += v ? 1 : 0, stats.volToggles += v != stats.lastVol ? 1 : 0;
+		stats.lastVol = v;
 	}
 	volNoise[0] = up.noiseOrg[0], volNoise[1] = up.noiseOrg[1], volNoise[2] = up.noiseOrg[2], volNoise[3] = up.bodyVel[3];
 
@@ -879,6 +928,8 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	}
 	barrier (CS, VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_HOST_BIT,
 		VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_HOST_READ_BIT); // (nearVol read back)
+	ctx->GpuMark ("pt sort");
+	LogStats (simt);
 }
 
 void ParticleSystem::Draw (uint32_t first, uint32_t capacity, VkTexture *tex, bool emissive, VkDescriptorSet frameSet)
@@ -1079,6 +1130,7 @@ void ParticleSystem::DrawVolume (VkDescriptorSet frameSet)
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, volMarchLayout, 0, 2, s, 0, nullptr);
 	vkCmdPushConstants (cmd, volMarchLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(volNoise), volNoise);
 	vkCmdDraw (cmd, 3, 1, 0, 0);
+	ctx->GpuMark ("pt march");
 }
 
 void ParticleSystem::EnsureScreenSmoke ()

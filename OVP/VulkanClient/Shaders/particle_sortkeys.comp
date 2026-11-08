@@ -16,17 +16,37 @@ layout(set = 0, binding = 8, std430) buffer SortVals { uint vals[]; };
 layout(set = 0, binding = 9, std430) buffer SortKeys { uint keys[]; };
 layout(set = 0, binding = 10, std430) readonly buffer BlockRings { uint blockRing[]; }; // first block of the ring of each block
 
+shared uint wgLive, wgVol; // (telemetry)
+
 void main ()
 {
-	if (gl_GlobalInvocationID.x >= uint (pc.ground.z)) return; // (ground.z: the number of keys)
-	uint i = uint (pc.ground.w) + gl_GlobalInvocationID.x; // (from ground.w)
-	Particle p = particles[i];
-	uint low = 0x3FFFFFu;
-	if (p.velLife.w > 0.0) {
-		float z = max (dot (p.posAge.xyz, frame.viewToGlobal[2].xyz), 0.0);
-		float q = clamp (log2 (z + 1.0) / 17.0, 0.0, 1.0); // (up to about 130 km)
-		low = 0x3FFFFEu - uint (q * float (0x3FFFFE));
+	// (telemetry: the live particles of the used part counted, per workgroup)
+	bool stats = statsOn != 0u;
+	if (stats) {
+		if (gl_LocalInvocationIndex == 0u) wgLive = 0u, wgVol = 0u;
+		barrier ();
 	}
-	keys[i] = (blockRing[i >> 8] << 22) | low;
-	vals[i] = i;
+	if (gl_GlobalInvocationID.x < uint (pc.ground.z)) { // (ground.z: the number of keys)
+		uint i = uint (pc.ground.w) + gl_GlobalInvocationID.x; // (from ground.w)
+		Particle p = particles[i];
+		uint low = 0x3FFFFFu;
+		if (p.velLife.w > 0.0) {
+			float z = max (dot (p.posAge.xyz, frame.viewToGlobal[2].xyz), 0.0);
+			float q = clamp (log2 (z + 1.0) / 17.0, 0.0, 1.0); // (up to about 130 km)
+			low = 0x3FFFFEu - uint (q * float (0x3FFFFE));
+			if (stats && i < uint (pc.omega.w)) {
+				atomicAdd (wgLive, 1u);
+				if ((p.flags & 64u) != 0u) atomicAdd (wgVol, 1u);
+			}
+		}
+		keys[i] = (blockRing[i >> 8] << 22) | low;
+		vals[i] = i;
+	}
+	if (stats) {
+		barrier ();
+		if (gl_LocalInvocationIndex == 0u && wgLive > 0u) {
+			atomicAdd (liveCount, wgLive);
+			atomicAdd (liveVol, wgVol);
+		}
+	}
 }
