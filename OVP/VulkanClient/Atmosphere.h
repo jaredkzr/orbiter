@@ -11,6 +11,7 @@
 
 #include "VkContext.h"
 #include "OrbiterAPI.h"
+#include <vector>
 
 class Scene;
 
@@ -30,6 +31,16 @@ struct WaveSea {
 	float varUnres = 0.0f;    // mean-square slope (both axes) of the waves shorter than the shortest drawn
 	float varTotal = 0.0f;    // mean-square slope (both axes) of the sea (Cox-Munk)
 	const char *src = "none"; // the wind's source: model, cfg, env, none
+};
+
+/// whitecaps and shore foam (Atmosphere::FoamState): from the sea state
+struct WaveFoam {
+	float cover = 0.0f;    // whitecap coverage W(U) (Stramska & Petelski 2003); 0: none
+	float measured = 0.0f; // coverage the calibration reached
+	float thresh = 1e9f;   // crest index threshold (slope units)
+	float sigma = 0.0f;    // std of the crest index
+	float mean = 0.0f;     // far-field mean foam
+	float shoreW = 0.0f, shoreL = 0.0f, shoreT = 2.0f, shoreOn = 0.0f, Hs = 0.0f; // surf band [m], bore spacing [m], period [s], strength, Hs [m]
 };
 
 class AtmosphereRenderer {
@@ -128,6 +139,13 @@ private:
 	double seaEnvWind = -1.0;             // ORBITER_VK_SEA_WIND (< 0: none)
 	VECTOR3 seaWindDir{};                 // planet frame, unit, at the anchor
 	WaveSea SeaState (double lng, double lat, double elev) const;
+	bool foam = true;                     // whitecaps and shore foam (ORBITER_VK_FOAM)
+	WaveFoam wfoam;
+	float laceMean = 0.0f;                // mean of the foam lace at full resolution
+	float foamKey[4] = { -1, -1, -1, -1 }; // (wind, slope, lambdaScale, g) of the last calibration
+	std::vector<float> capE, capLace, capLA, capA; // cached noise samples of the calibration
+	WaveFoam FoamState (const WaveSea &s, bool *ran = nullptr);
+	void LogFoam (const char *prefix) const;
 	bool waveAnchored = false;
 	VECTOR3 waveAnchor{}, waveT1{}, waveT2{};
 	double waveLogT = -1e9;

@@ -251,10 +251,10 @@ vec3 WaterNormalWaves (vec3 Nv, vec3 posView, float dist, out float waveVar)
 
 // With disturbances (WaterFx): the wind's waves pressed flat under them, plus
 // their cavity, rings and chop; fxVar (slope variance, into roughness) and
-// fxFoam (coverage) out
-vec3 WaterNormal (vec3 Nv, vec3 posView, float dist, out float fxVar, out float fxFoam, out float waveVar)
+// fxFoam (coverage) out; fl: how much of the wind's sea is left (1: all)
+vec3 WaterNormal (vec3 Nv, vec3 posView, float dist, out float fxVar, out float fxFoam, out float waveVar, out float fl)
 {
-	fxVar = 0.0; fxFoam = 0.0;
+	fxVar = 0.0; fxFoam = 0.0; fl = 1.0;
 	if (atm.waterFx.x < 0.5 || dist > 6000.0) return WaterNormalWaves (Nv, posView, dist, waveVar);
 	waveVar = atm.seaPrm.y;
 	float slope = atm.wavePrm.x;
@@ -267,7 +267,7 @@ vec3 WaterNormal (vec3 Nv, vec3 posView, float dist, out float fxVar, out float 
 	WaterFxOut fx = WaterFxEval (p, Np, footprint);
 	vec3 g = vec3 (0.0);
 	float res = 0.0;
-	float fl = (1.0 - 0.85 * fx.flatw) * (1.0 - 0.5 * fx.chop); // the jet presses the wind's sea flat
+	fl = (1.0 - 0.85 * fx.flatw) * (1.0 - 0.5 * fx.chop); // the jet presses the wind's sea flat
 	if (slope > 0.0 && fade > 0.0) {
 		for (int i = 0; i < WAVE_COUNT; i++) {
 			vec4 w = atm.waves[i];
@@ -285,6 +285,166 @@ vec3 WaterNormal (vec3 Nv, vec3 posView, float dist, out float fxVar, out float 
 	g -= Np * dot (g, Np);
 	fxVar = fx.var; fxFoam = fx.foam;
 	return transpose (v2p) * normalize (Np - g);
+}
+
+// Whitecaps and the shoreline foam band (G3).
+// Whitecaps: where the crests of the longest CAP_WAVES waves pile up, the crest
+// index S = slope sum sin(phi_i) (their downward acceleration over g, linear
+// wave theory) exceeds a threshold that the CPU solves for the coverage the
+// wind gives (Atmosphere::FoamState, Stramska & Petelski 2003). The active
+// crest breaks on the forward face of wave 0. What it leaves behind (the
+// residual foam) stays where it was made and fades: the deposit at x is the
+// crest index at x when the last two crests of wave 0 passed it
+// (phi_i(t - tau) = phi_i + omega_i tau), so at a fixed point it is constant
+// between passages and decays exponentially, as foam does on the water.
+// Noise is world-anchored (no swimming). Beyond the waves' fade the sea takes
+// the CPU's mean foam. The constants are as in Atmosphere.cpp (keep in sync).
+#define CAP_WAVES 6
+#define CAP_EDGE 3.0
+#define CAP_WIDTH 0.35
+#define CAP_SPREAD 0.3
+#define CAP_TF 0.4
+#define CAP_LIFE 2.0
+#define SIGMA_RHO 7.28e-5
+
+// ragged edges of the foam patches: octaves 8 / 2 / 0.5 m, each fading to its
+// mean by its own footprint/cell. wsum out: the analytic per-pixel change of
+// the noise [noise units] (it widens the threshold's edge: anti-aliasing)
+float CapEdgeNoise (vec3 pw, float fp, out float wsum)
+{
+	float a8 = 1.0 - smoothstep (0.25, 0.5, fp / 8.0), a2 = 1.0 - smoothstep (0.25, 0.5, fp / 2.0), a05 = 1.0 - smoothstep (0.25, 0.5, fp / 0.5);
+	float n = -0.5;
+	wsum = 0.45 * a8 * min (fp / 8.0, 1.0) + 0.35 * a2 * min (fp / 2.0, 1.0) + 0.2 * a05 * min (fp / 0.5, 1.0);
+	n += 0.45 * (a8 > 0.0 ? mix (0.5, ValueNoise (pw + vec3 (9.7, 1.9, 4.1), 8.0, 125), a8) : 0.5);
+	n += 0.35 * (a2 > 0.0 ? mix (0.5, ValueNoise (pw, 2.0, 500), a2) : 0.5);
+	n += 0.2 * (a05 > 0.0 ? mix (0.5, ValueNoise (pw + vec3 (17.1, 3.7, 9.3), 0.5, 2000), a05) : 0.5);
+	return n;
+}
+
+// filaments of the foam; mean: its average at full resolution. Beyond the
+// filaments' resolution a 4 m mottle (mean 1) keeps the patch from being flat
+float FoamLace (vec3 pw, float fp, float mean)
+{
+	float aL = 1.0 - smoothstep (0.25, 0.5, fp / 1.0);
+	float aT = 1.0 - smoothstep (0.25, 0.5, fp / 4.0);
+	float mot = mean;
+	if (aT > 0.0) mot = min (mean * mix (1.0, 0.55 + 0.9 * ValueNoise (pw + vec3 (21.3, 8.1, 3.7), 4.0, 250), aT), 1.0);
+	if (aL <= 0.0) return mot;
+	vec3 q = pw + (vec3 (ValueNoise (pw, 2.0, 500), ValueNoise (pw + vec3 (11.7, 5.3, 2.9), 2.0, 500),
+	                     ValueNoise (pw + vec3 (3.1, 7.9, 13.3), 2.0, 500)) - 0.5);
+	float l1 = smoothstep (0.55, 0.9, 1.0 - abs (2.0 * ValueNoise (q, 1.0, 1000) - 1.0));
+	float aM = 1.0 - smoothstep (0.25, 0.5, fp / 0.4);
+	float l2 = 0.3;
+	if (aM > 0.0)
+		l2 = mix (0.3, smoothstep (0.55, 0.9, 1.0 - abs (2.0 * ValueNoise (q + vec3 (5.3, 9.1, 2.2), 0.4, 2500) - 1.0)), aM);
+	float fil = 1.0 - (1.0 - l1) * (1.0 - 0.7 * l2);
+	return mix (mot, 0.25 + 0.75 * fil, aL);
+}
+
+// foam coverage of the sea (0..1); capVar out: the breaking crests' extra
+// roughness (slope variance). p: planet frame, relative to the camera; pw: world-anchored
+float Whitecaps (vec3 p, vec3 pw, float footprint, float fade, out float capVar)
+{
+	capVar = 0.0;
+	if (atm.seaPrm.w <= 0.0) return 0.0;
+	float slope = atm.wavePrm.x, th = atm.foamPrm.x, sig = atm.foamPrm.y, fMean = atm.foamPrm.z;
+	if (slope <= 0.0 || fade <= 0.0) return fMean;
+	float g = atm.wavePrm.y;
+	float phi[CAP_WAVES], om[CAP_WAVES], aa[CAP_WAVES];
+	float S = 0.0, sa2 = 0.0;
+	for (int i = 0; i < CAP_WAVES; i++) {
+		vec4 w = atm.waves[i];
+		float k = length (w.xyz);
+		aa[i] = 1.0 - smoothstep (0.5, 1.0, footprint * k * (2.0 / PI));
+		phi[i] = dot (p, w.xyz) + w.w;
+		om[i] = sqrt (g * k + SIGMA_RHO * k * k * k);
+		S += aa[i] * sin (phi[i]);
+		sa2 += aa[i] * aa[i];
+	}
+	float vis = fade * aa[2];
+	if (vis <= 0.0) return fMean;
+	// (the variance holds as the short waves drop out)
+	float rn = slope * sqrt (float (CAP_WAVES) / max (sa2, 1.0));
+	S *= rn;
+	float T0 = 2.0 * PI / om[0];
+	float dphi = mod (phi[0] - 0.5 * PI + PI, 2.0 * PI) - PI;
+	float win = smoothstep (-0.15, 0.0, dphi) * (1.0 - smoothstep (0.45, 0.9, dphi));
+	// the residual foam of the last two crests
+	float tc = mod (0.5 * PI - phi[0], 2.0 * PI) / om[0];
+	float E = exp (-CAP_LIFE / CAP_TF);
+	float tauN[2], oN[2], SdN[2];
+	float bound = win > 0.0 ? S : -1e9;
+	for (int n = 0; n < 2; n++) {
+		float tau = tc + float (n) * T0;
+		tauN[n] = tau;
+		oN[n] = max ((exp (-tau / (CAP_TF * T0)) - E) / (1.0 - E), 0.0);
+		SdN[n] = 0.0;
+		if (oN[n] <= 0.0) continue;
+		float Sd = 0.0;
+		for (int i = 0; i < CAP_WAVES; i++) Sd += aa[i] * sin (phi[i] + om[i] * tau);
+		SdN[n] = Sd * rn;
+		bound = max (bound, SdN[n] + CAP_SPREAD * sig * tau / T0);
+	}
+	// nothing reaches the threshold even with the edge noise at its largest
+	if (bound + 0.5 * CAP_EDGE * sig < th) return mix (fMean, 0.0, vis);
+	float wsum;
+	float e = CapEdgeNoise (pw, footprint, wsum) * CAP_EDGE * sig;
+	float wE = CAP_WIDTH * sig + CAP_EDGE * sig * wsum;
+	// the active crest: on the forward face of wave 0
+	float act = 0.0;
+	if (win > 0.0) {
+		float LA = mix (0.875, mix (0.75, 1.0, ValueNoise (pw + vec3 (5.9, 1.3, 7.7), 1.0, 1000)), 1.0 - smoothstep (0.25, 0.5, footprint));
+		float A = mix (0.85, mix (0.7, 1.0, ValueNoise (pw + vec3 (13.3, 6.1, 2.7), 2.5, 400)), 1.0 - smoothstep (0.25, 0.5, footprint / 2.5));
+		act = smoothstep (th, th + wE, S + e) * win * LA * A;
+	}
+	float keep = 1.0 - act;
+	float lace = -1.0;
+	for (int n = 0; n < 2; n++) {
+		if (oN[n] <= 0.0) continue;
+		float thn = th - CAP_SPREAD * sig * tauN[n] / T0;
+		float r = smoothstep (thn, thn + wE, SdN[n] + e) * oN[n];
+		if (r <= 0.0) continue;
+		if (lace < 0.0) lace = FoamLace (pw, footprint, atm.foamPrm.w);
+		keep *= 1.0 - r * lace;
+	}
+	capVar = 0.02 * act * vis;
+	return mix (fMean, 1.0 - keep, vis);
+}
+
+// distance [m] from the water's drawn edge (the mask's 0.5 contour), from the
+// 2 x 2 texels under the pixel (-1: unknown, no land among them). texM: the
+// mask's texel [m]
+float ShoreDistance (vec2 muv, float texM)
+{
+	if (texM <= 0.0) return -1.0;
+	vec2 sz = vec2 (textureSize (maskTex, 0));
+	vec4 a4 = textureGather (maskTex, muv, 3); // x: (i0,j1), y: (i1,j1), z: (i1,j0), w: (i0,j0)
+	if (max (max (a4.x, a4.y), max (a4.z, a4.w)) < 0.02) return -1.0;
+	vec2 f = fract (muv * sz - 0.5);
+	float a = mix (mix (a4.w, a4.z, f.x), mix (a4.x, a4.y, f.x), f.y);
+	vec2 gr = vec2 (mix (a4.z - a4.w, a4.y - a4.x, f.y), mix (a4.x - a4.w, a4.y - a4.z, f.x));
+	return max (0.5 - a, 0.0) / max (length (gr), 0.3) * texM;
+}
+
+// surf: a swash line at the water's edge and bores running in, in a band
+// that widens with the sea (shorePrm, from the developed sea's Hs and period)
+float ShoreFoam (vec3 pw, float d, float texM, float footprint)
+{
+	float W = min (atm.shorePrm.x, 1.5 * texM);
+	if (texM <= 0.0 || d < 0.0 || W <= 0.0 || d >= W) return 0.0;
+	float vis = 1.0 - smoothstep (1.0, 2.5, footprint / W);
+	if (vis <= 0.0) return 0.0;
+	float x = d / W;
+	float ph = atm.shorePrm.z, ls = atm.shorePrm.y;
+	float n1 = ValueNoise (pw, 20.0, 50), n2 = ValueNoise (pw + vec3 (7.1, 2.3, 4.9), 4.0, 250);
+	float env = 1.0 - smoothstep (0.55, 1.0, x + 0.25 * (n2 - 0.5));
+	float u = fract (d / ls + ph + 0.35 * (n1 - 0.5));
+	float eps = clamp (footprint / ls, 0.02, 0.5);
+	float bore = max (exp (-2.5 * u), smoothstep (1.0 - eps, 1.0, u));
+	float reach = 0.18 * W * (0.6 + 0.4 * sin (2.0 * PI * (ph + n1)));
+	float swash = 1.0 - smoothstep (0.5 * reach, reach, d);
+	float f = max (0.9 * swash, 1.0 * bore * env) * mix (FoamLace (pw, footprint, atm.foamPrm.w), 1.0, 0.5);
+	return clamp (f * atm.shorePrm.w * vis, 0.0, 1.0);
 }
 
 // Tracks of wheels and imprints of gear: a groove with raised edges (the
@@ -652,6 +812,13 @@ void main()
 		for (int i = -1; i <= 1; i++)
 			for (int j = -1; j <= 1; j++)
 				ml += texture(maskTex, clamp(muv + vec2(i, j) * 1.5 * mt, hm, 1.0 - hm)).rgb * ((i == 0 ? 2.0 : 1.0) * (j == 0 ? 2.0 : 1.0) / 16.0);
+		// the mask's texel [m] (shore foam), from derivatives: here, in uniform control flow
+		float texM = 0.0;
+		if (atm.shorePrm.x > 0.0 && atm.shorePrm.w > 0.0) {
+			vec2 msz = vec2(textureSize(maskTex, 0));
+			vec2 ma = dFdx(muv) * msz, mb = dFdy(muv) * msz;
+			texM = sqrt(length(cross(dFdx(vPosView), dFdy(vPosView))) / max(abs(ma.x * mb.y - ma.y * mb.x), 1e-12));
+		}
 		float lm = max (ml.r, max (ml.g, ml.b));
 		col += ml * (3.0 * lm * smoothstep (0.04, 0.25, lm)) * night * tile.params.y;
 		// water (mask alpha 0): reflection of the sky and the sun's glitter,
@@ -660,7 +827,22 @@ void main()
 			float dist = length(vPosView);
 			vec3 V = normalize(-vPosView);
 			float fxVar, fxFoam, waveVar;
-			vec3 Nw = WaterNormal(Ng, vPosView, dist, fxVar, fxFoam, waveVar);
+			float fl;
+			vec3 Nw = WaterNormal(Ng, vPosView, dist, fxVar, fxFoam, waveVar, fl);
+			// whitecaps and shore foam join the jets' foam
+			float capVar = 0.0, g3 = 0.0, fxJet = fxFoam;
+			if (atm.seaPrm.w > 0.0 || atm.shorePrm.x > 0.0) {
+				float fadeW = 1.0 - smoothstep(300.0, 3000.0, dist);
+				vec3 pP = mat3(atm.viewToPlanet) * vPosView, pw = pP + atm.water.xyz;
+				float footprint = dist * 2.0 * atm.misc.z / max(frame.jitter.w, 1.0) / max(abs(dot(normalize(vPosView), Ng)), 0.05);
+				float cap = Whitecaps(pP, pw, footprint, fadeW, capVar) * fl;
+				capVar *= fl;
+				float shore = ShoreFoam(pw, ShoreDistance(clamp(muv, hm, 1.0 - hm), texM), texM, footprint);
+				if (cap > 0.0 || shore > 0.0) {
+					g3 = 1.0 - (1.0 - cap) * (1.0 - shore);
+					fxFoam = 1.0 - (1.0 - fxJet) * (1.0 - g3);
+				}
+			}
 			float NoV = max(dot(Nw, V), 1e-3);
 			float fres = 0.02 + 0.98 * pow(1.0 - NoV, 5.0);
 			float rgh = clamp(fxVar / 0.008, 0.0, 1.0); // roughened by a jet: matte, less reflective
@@ -691,9 +873,14 @@ void main()
 			// (Cox-Munk); bodies without a sea state keep the old ramp
 			float rough = atm.seaPrm.y > 0.0 ? min(sqrt(sqrt(6.25e-6 + waveVar)), 0.6)
 				: mix(0.05, 0.3, smoothstep(2e3, 3e5, dist));
-			if (fxVar > 0.0) rough = min(sqrt(sqrt(rough * rough * rough * rough + 2.0 * fxVar)), 0.6);
+			if (fxVar + capVar > 0.0) rough = min(sqrt(sqrt(rough * rough * rough * rough + 2.0 * (fxVar + capVar))), 0.6);
 			col += frame.sunColor.rgb * sunT * SpecularBRDF(Nw, V, L, vec3(0.02), rough) * PI * (1.0 - fxFoam);
-			if (fxFoam > 0.0) col = mix(col, FOAM_ALBEDO * irr, fxFoam);
+			if (fxJet > 0.0) col = mix(col, FOAM_ALBEDO * irr, fxJet);
+			if (g3 > 0.0) {
+				// whitecaps and shore foam are lit by the waves' normal
+				vec3 irrW = frame.ambient.rgb * ao * ambNight + (frame.sunColor.rgb * sunT * max(dot(Nw, L), 0.0) + LocalLighting(vPosView, Nw, lv)) * aoDirect;
+				col = mix(col, FOAM_ALBEDO * irrW, g3);
+			}
 		}
 	}
 	if (hasAtm) { // aerial perspective

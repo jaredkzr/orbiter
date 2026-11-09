@@ -13,6 +13,8 @@
 #include <string>
 #include <cmath>
 #include <cstring>
+#include <cstdint>
+#include <random>
 
 #include "sky.vert.h"
 #include "sky.frag.h"
@@ -49,7 +51,9 @@ namespace {
 		float waves[WAVE_COUNT][4]; // planet-frame wave vector k*dir (xyz), phase (w); longest first
 		float waterFx[4];     // x: water disturbances packed (0: none)
 		float waterFxSrc[WaterFx::MAX_GPU * WaterFx::VEC4][4]; // per source (WaterFx.h)
-		float seaPrm[4];      // x: mean-square slope below the shortest wave, y: total mean-square slope (0: no sea state), z: U10 [m/s], w: reserved (G3)
+		float seaPrm[4];      // x: mean-square slope below the shortest wave, y: total mean-square slope (0: no sea state), z: U10 [m/s], w: whitecap coverage (G3; 0: none)
+		float foamPrm[4];     // whitecaps: x: crest threshold (slope units), y: sigma of the crest index, z: far-field mean foam, w: mean of the foam lace
+		float shorePrm[4];    // shore foam: x: band width [m] (0: none), y: bore spacing [m], z: bore phase [cycles], w: strength
 	};
 	static_assert (sizeof (AtmUniforms) % 16 == 0, "std140");
 
@@ -62,6 +66,79 @@ namespace {
 	// share of the unresolved slope variance that goes into the glitter's
 	// roughness (tunable 0.5-1: lower keeps the near glitter sparkling)
 	constexpr double SEA_UNRES_GAIN = 1.0;
+
+	// ---- whitecaps: the calibration's mirror of tile_main.glsl (keep in sync) ----
+	// constants as CAP_* in tile_main.glsl (keep in sync)
+	constexpr int CAP_WAVES = 6;          // waves in the crest index
+	constexpr double CAP_EDGE = 3.0;      // edge noise amplitude [sigma] (the noise has a std of about 0.1)
+	constexpr double CAP_WIDTH = 0.35;    // soft edge of a patch [sigma]
+	constexpr double CAP_SPREAD = 0.3;    // threshold lowered per period of age [sigma]
+	constexpr double CAP_TF = 0.4;        // foam e-folding time / T0
+	constexpr double CAP_LIFE = 2.0;      // foam lives two periods
+	constexpr double CAP_COVER_F = 0.3;   // a sample counts as whitecap where foam > this
+
+	// bit-exact ports of tile_main.glsl's Hash and ValueNoise (keep in sync):
+	// the same uint32 constants, xor-shifts and floor-based periodic wrap
+	float NHash (int cx, int cy, int cz)
+	{
+		uint32_t h = (uint32_t)cx * 73856093u ^ (uint32_t)cy * 19349663u ^ (uint32_t)cz * 83492791u;
+		h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+		return (float)(h & 0xffffu) / 65535.0f;
+	}
+	float NMix (float a, float b, float t) { return a * (1.0f - t) + b * t; }
+	float NValue (float px, float py, float pz, float cell, int period)
+	{
+		float qx = px / cell, qy = py / cell, qz = pz / cell;
+		float fx = floorf (qx), fy = floorf (qy), fz = floorf (qz);
+		int ix = (int)fx, iy = (int)fy, iz = (int)fz;
+		float x = qx - fx, y = qy - fy, z = qz - fz;
+		x = x * x * (3.0f - 2.0f * x); y = y * y * (3.0f - 2.0f * y); z = z * z * (3.0f - 2.0f * z);
+		float n[8];
+		for (int k = 0; k < 8; k++) {
+			int cx = ix + (k & 1), cy = iy + ((k >> 1) & 1), cz = iz + (k >> 2);
+			cx -= period * (int)floorf ((float)cx / (float)period);
+			cy -= period * (int)floorf ((float)cy / (float)period);
+			cz -= period * (int)floorf ((float)cz / (float)period);
+			n[k] = NHash (cx, cy, cz);
+		}
+		return NMix (NMix (NMix (n[0], n[1], x), NMix (n[2], n[3], x), y),
+		             NMix (NMix (n[4], n[5], x), NMix (n[6], n[7], x), y), z);
+	}
+	float NSmooth (float a, float b, float x)
+	{
+		float t = std::min (std::max ((x - a) / (b - a), 0.0f), 1.0f);
+		return t * t * (3.0f - 2.0f * t);
+	}
+	// ragged edges of the foam patches (full resolution: footprint 0)
+	float CapEdgeNoise (float x, float y, float z)
+	{
+		return 0.45f * NValue (x + 9.7f, y + 1.9f, z + 4.1f, 8.0f, 125) + 0.35f * NValue (x, y, z, 2.0f, 500)
+			+ 0.2f * NValue (x + 17.1f, y + 3.7f, z + 9.3f, 0.5f, 2000) - 0.5f;
+	}
+	// filaments of the foam (full resolution)
+	float FoamLace (float x, float y, float z)
+	{
+		float qx = x + (NValue (x, y, z, 2.0f, 500) - 0.5f);
+		float qy = y + (NValue (x + 11.7f, y + 5.3f, z + 2.9f, 2.0f, 500) - 0.5f);
+		float qz = z + (NValue (x + 3.1f, y + 7.9f, z + 13.3f, 2.0f, 500) - 0.5f);
+		float l1 = NSmooth (0.55f, 0.9f, 1.0f - fabsf (2.0f * NValue (qx, qy, qz, 1.0f, 1000) - 1.0f));
+		float l2 = NSmooth (0.55f, 0.9f, 1.0f - fabsf (2.0f * NValue (qx + 5.3f, qy + 9.1f, qz + 2.2f, 0.4f, 2500) - 1.0f));
+		float fil = 1.0f - (1.0f - l1) * (1.0f - 0.7f * l2);
+		return 0.25f + 0.75f * fil;
+	}
+	float FoamA (float x, float y, float z)
+	{
+		return NMix (0.7f, 1.0f, NValue (x + 13.3f, y + 6.1f, z + 2.7f, 2.5f, 400));
+	}
+	float FoamLA (float x, float y, float z)
+	{
+		return NMix (0.75f, 1.0f, NValue (x + 5.9f, y + 1.3f, z + 7.7f, 1.0f, 1000));
+	}
+	double SmoothStep (double a, double b, double x)
+	{
+		double t = std::min (std::max ((x - a) / (b - a), 0.0), 1.0);
+		return t * t * (3.0 - 2.0 * t);
+	}
 
 	// Config/VK/Sea.cfg: the wind speed [m/s] a body's sea takes instead of the
 	// model's ([name] sections, "Wind = v"); -1: no entry. Read once.
@@ -496,6 +573,7 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		waves = cfgRipple || (proc && (wp.surfClass == 1 || (wp.surfClass == 2 && wp.openWater > 0)));
 		wavesWhy = cfgRipple ? "cfg" : proc && wp.surfClass == 1 ? "ocean" : "ice open water";
 		if (const char *e = getenv ("ORBITER_VK_WAVES")) if (*e && !atoi (e)) waves = false; // (empty: unset)
+		if (const char *e = getenv ("ORBITER_VK_FOAM")) if (*e && !atoi (e)) foam = false; // (empty: unset)
 		waveG = GGRAV * oapiGetMass (hPlanet) / (radius * radius);
 		oapiGetObjectName (hPlanet, wavesName, 64);
 		if (const char *e = getenv ("ORBITER_VK_SEA_WIND")) if (*e && atof (e) >= 0.0) seaEnvWind = atof (e);
@@ -508,6 +586,11 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 			oapiWriteLogV ("VulkanClient: waves on %s (%s): g %.2f m/s^2, wind %.1f m/s (%s) toward %03.0f deg, wavelengths %.1f-%.2f m, longest period %.1f s, slope %.4f per wave, mean-square slope %.4f (%.4f below the shortest wave)",
 				wavesName, wavesWhy, waveG, sea.wind, sea.src, bd, l0, l0 * pow (0.7, WAVE_COUNT - 1),
 				2.0 * PI / sqrt (waveG * k0 + SIGMA_RHO * k0 * k0 * k0), sea.slope, sea.varTotal, sea.varUnres);
+			if (foam) {
+				wfoam = FoamState (sea);
+				LogFoam ("");
+			} else
+				oapiWriteLogV ("VulkanClient: whitecaps on %s: off (ORBITER_VK_FOAM=0)", wavesName);
 		}
 	}
 	{
@@ -692,6 +775,144 @@ WaveSea Atmosphere::SeaState (double lng, double lat, double elev) const
 	return s;
 }
 
+// Whitecaps and the surf band from the sea state. The shader (tile_main.glsl,
+// Whitecaps) breaks the crests of the longest CAP_WAVES waves, where the crest
+// index S = slope sum sin(phi_i) (the waves' downward acceleration over g,
+// linear wave theory: k_i a_i = slope for every wave) exceeds a threshold.
+// The coverage is set by the wind: Stramska & Petelski 2003 (developed seas),
+// W = 5e-5 (U - 4.47)^3 (at most 0.3). Here the threshold is solved for it on
+// samples of the same formula (same noise ports, same constants), so the
+// look follows the waves and the coverage follows the wind. Cached on
+// (wind, slope, lambdaScale, g). Surf: Pierson-Moskowitz Hs and Tp, breaking
+// at a depth of about 1.3 Hs.
+WaveFoam Atmosphere::FoamState (const WaveSea &s, bool *ran)
+{
+	if (ran) *ran = false;
+	if (foamKey[0] == s.wind && foamKey[1] == s.slope && foamKey[2] == s.lambdaScale && foamKey[3] == (float)waveG)
+		return wfoam;
+	foamKey[0] = s.wind, foamKey[1] = s.slope, foamKey[2] = s.lambdaScale, foamKey[3] = (float)waveG;
+	if (ran) *ran = true;
+	constexpr int NS = 8192;
+	WaveFoam f;
+	const double g = waveG, U = s.wind, twoPi = 2.0 * PI;
+	// the noise samples (once per body)
+	if (capE.empty()) {
+		std::mt19937 rng (12345);
+		std::uniform_real_distribution<float> uni (0.0f, 1.0f);
+		capE.resize (NS), capLace.resize (NS), capLA.resize (NS), capA.resize (NS);
+		double sum = 0.0;
+		for (int j = 0; j < NS; j++) {
+			float x = uni (rng) * 512.0f, z = uni (rng) * 512.0f;
+			capE[j] = CapEdgeNoise (x, 0.0f, z);
+			capLace[j] = FoamLace (x, 0.0f, z);
+			capLA[j] = FoamLA (x, 0.0f, z);
+			capA[j] = FoamA (x, 0.0f, z);
+			sum += capLace[j];
+		}
+		laceMean = (float)(sum / NS);
+	}
+	// shore: Pierson-Moskowitz developed sea
+	{
+		double Hs = 0.22 * U * U / g;
+		double Tp = std::max (7.60 * U / g, 2.0);
+		f.Hs = (float)Hs;
+		f.shoreT = (float)Tp;
+		f.shoreW = (float)std::min (std::max (6.0 + 25.0 * Hs, 6.0), 120.0);
+		f.shoreL = (float)std::max (Tp * sqrt (1.3 * g * Hs), 3.0);
+		f.shoreOn = (float)SmoothStep (0.5, 3.0, U);
+	}
+	double W = U > 4.47 ? std::min (5.0e-5 * pow (U - 4.47, 3.0), 0.3) : 0.0;
+	if (W < 1e-6) W = 0.0; // (a hair above 4.47 m/s: none)
+	f.cover = (float)W;
+	const double slope = s.slope, sig = slope * sqrt (CAP_WAVES / 2.0);
+	f.sigma = (float)sig;
+	if (W <= 0.0 || slope <= 0.0) return f;
+
+	// the sea's waves for the statistics (the GPU's geometry, relative to the main direction)
+	std::mt19937 rng (12345);
+	std::uniform_real_distribution<double> uni (0.0, 1.0);
+	double k[CAP_WAVES], om[CAP_WAVES], dx[CAP_WAVES], dy[CAP_WAVES], c[CAP_WAVES];
+	const double l0 = 60.0 * s.lambdaScale;
+	for (int i = 0; i < CAP_WAVES; i++) {
+		double lambda = l0 * pow (0.7, i);
+		k[i] = twoPi / lambda;
+		om[i] = sqrt (g * k[i] + SIGMA_RHO * k[i] * k[i] * k[i]);
+		double ang = (0.35 + 0.45 * i / (WAVE_COUNT - 1.0)) * sin (i * 2.39996 + 0.3 * sin (i * 7.1));
+		dx[i] = cos (ang), dy[i] = sin (ang);
+		c[i] = uni (rng) * twoPi;
+	}
+	const double T0 = twoPi / om[0];
+	struct Smp { double S, win, tc, Sd[2], o[2], tau[2]; };
+	std::vector<Smp> sm (NS);
+	const double E = exp (-CAP_LIFE / CAP_TF);
+	for (int j = 0; j < NS; j++) {
+		// position and time from the RNG (the noise is paired arbitrarily: only statistics matter)
+		double X = uni (rng) * 8.0 * l0, Y = uni (rng) * 8.0 * l0, t = uni (rng) * 20.0 * T0;
+		double phi[CAP_WAVES];
+		Smp &p = sm[j];
+		p.S = 0.0;
+		for (int i = 0; i < CAP_WAVES; i++) {
+			phi[i] = k[i] * (X * dx[i] + Y * dy[i]) - om[i] * t + c[i];
+			p.S += slope * sin (phi[i]);
+		}
+		double dphi = fmod (phi[0] - PI / 2.0 + PI, twoPi);
+		if (dphi < 0.0) dphi += twoPi;
+		dphi -= PI;
+		p.win = SmoothStep (-0.15, 0.0, dphi) * (1.0 - SmoothStep (0.45, 0.9, dphi));
+		double a = fmod (PI / 2.0 - phi[0], twoPi);
+		if (a < 0.0) a += twoPi;
+		p.tc = a / om[0];
+		for (int n = 0; n < 2; n++) {
+			double tau = p.tc + n * T0;
+			double Sd = 0.0;
+			for (int i = 0; i < CAP_WAVES; i++) Sd += slope * sin (phi[i] + om[i] * tau);
+			p.Sd[n] = Sd;
+			p.o[n] = std::max ((exp (-tau / (CAP_TF * T0)) - E) / (1.0 - E), 0.0);
+			p.tau[n] = tau / T0;
+		}
+	}
+	auto foamAt = [&](int j, double th) {
+		const Smp &p = sm[j];
+		double e = (double)capE[j] * CAP_EDGE * sig;
+		double act = SmoothStep (th, th + CAP_WIDTH * sig, p.S + e) * p.win * capLA[j] * capA[j];
+		double keep = 1.0 - act;
+		for (int n = 0; n < 2; n++) {
+			double thn = th - CAP_SPREAD * sig * p.tau[n];
+			keep *= 1.0 - SmoothStep (thn, thn + CAP_WIDTH * sig, p.Sd[n] + e) * p.o[n] * capLace[j];
+		}
+		return 1.0 - keep;
+	};
+	auto cov = [&](double th) {
+		int cnt = 0;
+		for (int j = 0; j < NS; j++) if (foamAt (j, th) > CAP_COVER_F) cnt++;
+		return (double)cnt / NS;
+	};
+	double lo = -CAP_WAVES * slope - sig, hi = CAP_WAVES * slope + sig;
+	for (int it = 0; it < 30; it++) {
+		double mid = 0.5 * (lo + hi);
+		if (cov (mid) > W) lo = mid; else hi = mid;
+	}
+	double th = 0.5 * (lo + hi), sum = 0.0;
+	for (int j = 0; j < NS; j++) sum += foamAt (j, th);
+	f.thresh = (float)th;
+	f.measured = (float)cov (th);
+	f.mean = (float)(sum / NS);
+	return f;
+}
+
+void Atmosphere::LogFoam (const char *prefix) const
+{
+	const WaveFoam &f = wfoam;
+	char cov[160];
+	if (f.cover > 0.0f)
+		snprintf (cov, sizeof (cov), "coverage %.5f (measured %.5f), threshold %.4f (%.2f sigma), mean foam %.5f, lace mean %.3f",
+			f.cover, f.measured, f.thresh, f.sigma > 0.0f ? f.thresh / f.sigma : 0.0f, f.mean, laceMean);
+	else
+		snprintf (cov, sizeof (cov), "coverage 0 (wind below 4.47 m/s), lace mean %.3f", laceMean);
+	oapiWriteLogV ("VulkanClient: %swhitecaps on %s: wind %.1f m/s, %s; shore band %.1f m (Hs %.2f m), bores every %.1f m / %.1f s",
+		prefix, wavesName, sea.wind, cov, f.shoreW, f.Hs, f.shoreL, f.shoreT);
+}
+
 void Atmosphere::UpdateWaves (const VECTOR3 &cam, double camR, float prm[4], float data[][4])
 {
 	static const bool wlog = getenv ("ORBITER_VK_WAVE_LOG") && atoi (getenv ("ORBITER_VK_WAVE_LOG"));
@@ -710,6 +931,8 @@ void Atmosphere::UpdateWaves (const VECTOR3 &cam, double camR, float prm[4], flo
 		double lng = atan2 (cam.z, cam.x), lat = asin (std::min (std::max (cam.y / length (cam), -1.0), 1.0));
 		double elev = oapiSurfaceElevation (hPlanet, lng, lat);
 		sea = SeaState (lng, lat, elev);
+		bool foamRan = false;
+		if (foam) wfoam = FoamState (sea, &foamRan);
 		VECTOR3 east = _V(-sin (lng), 0.0, cos (lng));
 		VECTOR3 north = _V(-sin (lat) * cos (lng), cos (lat), -sin (lat) * sin (lng));
 		seaWindDir = unit (east * sin ((double)sea.bearing) + north * cos ((double)sea.bearing));
@@ -719,6 +942,7 @@ void Atmosphere::UpdateWaves (const VECTOR3 &cam, double camR, float prm[4], flo
 			oapiWriteLogV ("VulkanClient: waves on %s: re-anchored (moved %.1f km), sea: elevation %.0f m, wind %.1f m/s (%s) toward %03.0f deg, azimuth %.1f deg from t1, wavelengths %.1f-%.2f m, slope %.4f",
 				wavesName, moved * 1e-3, elev, sea.wind, sea.src, fmod (sea.bearing * 180.0 / PI + 360.0, 360.0),
 				sea.azimuth * 180.0 / PI, l0, l0 * pow (0.7, WAVE_COUNT - 1), sea.slope);
+			if (foam && foamRan) LogFoam ("re-anchored: ");
 		}
 	}
 	VECTOR3 d = cam - waveAnchor;
@@ -800,6 +1024,13 @@ void Atmosphere::Update ()
 	if (waves && camR - radius < 50e3) UpdateWaves (cam, camR, u.wavePrm, u.waves);
 	else waveAnchored = false;
 	if (waves) u.seaPrm[0] = sea.varUnres, u.seaPrm[1] = sea.varTotal, u.seaPrm[2] = sea.wind;
+	if (waves && foam) {
+		u.seaPrm[3] = wfoam.cover;
+		u.foamPrm[0] = wfoam.thresh, u.foamPrm[1] = wfoam.sigma, u.foamPrm[2] = wfoam.mean, u.foamPrm[3] = laceMean;
+		double ph = fmod (oapiGetSimTime () / (double)wfoam.shoreT, 1.0);
+		if (ph < 0.0) ph += 1.0;
+		u.shorePrm[0] = wfoam.shoreW, u.shorePrm[1] = wfoam.shoreL, u.shorePrm[2] = (float)ph, u.shorePrm[3] = wfoam.shoreOn;
+	}
 	if (WaterFx *wf = scene->Water ()) if (camR - radius < 50e3) wf->Pack (hPlanet, cam, u.waterFx, u.waterFxSrc);
 	memcpy (u.mieLobe, mieLobe, sizeof(mieLobe));
 	if (scene->CloudsActive () && hPlanet == oapiCameraProxyGbody ()) {

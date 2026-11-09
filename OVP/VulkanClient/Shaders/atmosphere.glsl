@@ -38,7 +38,9 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 waves[WAVE_COUNT]; // planet-frame wave vector k*dir [rad/m] (xyz), phase [rad] (w); longest first
 	vec4 waterFx;       // x: water disturbances packed (0..WATERFX_MAX; 0: none, the plain waves); yzw: reserved
 	vec4 waterFxSrc[WATERFX_MAX * WATERFX_VEC4]; // per source (WaterFx.h, DESIGN 2.4): b+0 centre-cam (xyz) R0 (w); b+1 anchor-cam, Rw; b+2 tangent at the anchor, foam churn; b+3 J, cavity depth, foam, ring slope; b+4 k0, ring front, ring inner edge, chop churn; b+5 ring phases (xyz), ring damping length Lr [m] (w)
-	vec4 seaPrm;        // x: mean-square slope below the shortest wave, y: total mean-square slope (0: no sea state), z: U10 [m/s], w: reserved (G3)
+	vec4 seaPrm;        // x: mean-square slope below the shortest wave, y: total mean-square slope (0: no sea state), z: U10 [m/s], w: whitecap coverage (G3; 0: none)
+	vec4 foamPrm;       // whitecaps (G3): x: crest threshold (slope units), y: sigma of the crest index, z: far-field mean foam, w: mean of the foam lace
+	vec4 shorePrm;      // shore foam (G3): x: band width [m] (0: none), y: bore spacing [m], z: bore phase [cycles], w: strength
 } atm;
 
 // planet surface (western and eastern hemisphere), for reflections
