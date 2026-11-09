@@ -256,6 +256,8 @@ public:
 	/// engine plume volumes (null: billboards)
 	class PlumeRenderer *Plumes () { return plumes && plumes->enabled ? plumes.get() : nullptr; }
 	class GroundTracks *Tracks () { return tracks.get(); }
+	/// disturbances of the water (jets, gear, splashes) for the tile shader
+	class WaterFx *Water () { return waterFx.get(); }
 	/// reentry plasma sheaths (null: off)
 	class PlasmaRenderer *Plasma () { return plasma && plasma->enabled ? plasma.get() : nullptr; }
 	/// particle textures of fires and sparks (made when first needed)
@@ -434,6 +436,7 @@ private:
 	std::unique_ptr<class FsrUpscaler> fsr;
 	std::unique_ptr<class VolumetricClouds> vclouds;
 	std::unique_ptr<class GroundTracks> tracks;
+	std::unique_ptr<class WaterFx> waterFx;
 	std::unique_ptr<PlumeRenderer> plumes;
 	std::unique_ptr<class PlasmaRenderer> plasma;
 	std::unique_ptr<class ParticleSystem> particles;

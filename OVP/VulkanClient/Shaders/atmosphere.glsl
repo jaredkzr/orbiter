@@ -8,6 +8,8 @@
 // set of the atmosphere uniform block.
 
 #define WAVE_COUNT 14 // as WAVE_COUNT in Atmosphere.h (keep in sync)
+#define WATERFX_MAX 8  // as WaterFx::MAX_GPU in WaterFx.h (keep in sync)
+#define WATERFX_VEC4 6 // as WaterFx::VEC4 in WaterFx.h (keep in sync)
 
 layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	mat4 viewToPlanet;  // view space -> planet frame (rotation)
@@ -34,6 +36,8 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 sunTint;       // the light's colour (luminance 1)
 	vec4 wavePrm;       // x: slope amplitude per wave (0: no waves), y: g [m/s^2], z: wavelength scale, w: reserved
 	vec4 waves[WAVE_COUNT]; // planet-frame wave vector k*dir [rad/m] (xyz), phase [rad] (w); longest first
+	vec4 waterFx;       // x: water disturbances packed (0..WATERFX_MAX; 0: none, the plain waves); yzw: reserved
+	vec4 waterFxSrc[WATERFX_MAX * WATERFX_VEC4]; // per source (WaterFx.h, DESIGN 2.4): b+0 centre-cam (xyz) R0 (w); b+1 anchor-cam, Rw; b+2 tangent at the anchor, foam churn; b+3 J, cavity depth, foam, ring slope; b+4 k0, ring front, ring inner edge, chop churn; b+5 ring phases (xyz), ring damping length Lr [m] (w)
 } atm;
 
 // planet surface (western and eastern hemisphere), for reflections

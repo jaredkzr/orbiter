@@ -101,10 +101,120 @@ vec4 ValueNoiseD(vec3 p, float cell, int period)
 
 #include "surfdetail.glsl"
 
+// Disturbances of the water (WaterFx.h; atm.waterFx, atm.waterFxSrc): where
+// jets blow on it, gear stands in it, something splashed. Each source:
+//  - its footprint (R0): the wind's waves pressed flat, a shallow cavity
+//  - the wall jet running out from it (to Rw): chop (finer than the pixels:
+//    roughness)
+//  - rings of waves running out (three wavelengths, deep-water dispersion:
+//    the longer ones ahead), spreading and dying out
+//  - foam: a ragged patch, lacy within
+const float WFX_LRATIO = 0.6;                 // each ring wave's wavelength / the previous one's (WaterFx.cpp)
+const vec3 WFX_RING_W = vec3(1.0, 0.7, 0.45); // slope weights of the ring waves
+const vec3 FOAM_ALBEDO = vec3(0.60, 0.62, 0.63);
+
+struct WaterFxOut { vec3 g; float flatw; float var; float foam; float chop; };
+
+// p: pixel relative to the camera, Np: up (planet frame); footprint: pixel size on the water [m]
+WaterFxOut WaterFxEval (vec3 p, vec3 Np, float footprint)
+{
+	WaterFxOut o;
+	o.g = vec3(0.0); o.flatw = 0.0; o.var = 0.0; o.foam = 0.0; o.chop = 0.0;
+	int n = min(int(atm.waterFx.x + 0.5), WATERFX_MAX);
+	for (int s = 0; s < n; s++) {
+		int b = s * WATERFX_VEC4;
+		vec4 v0 = atm.waterFxSrc[b], v1 = atm.waterFxSrc[b + 1], v4 = atm.waterFxSrc[b + 4];
+		float R0 = v0.w, Rw = v1.w, k0 = v4.x;
+		vec3 rel = p - v0.xyz;
+		rel -= Np * dot(rel, Np);
+		float r = length(rel);
+		float lambda0 = 2.0 * PI / k0;
+		if (r > max(1.15 * Rw, v4.y + lambda0)) continue; // (beyond its reach)
+		vec4 v2 = atm.waterFxSrc[b + 2], v3 = atm.waterFxSrc[b + 3], v5 = atm.waterFxSrc[b + 5];
+		float J = v3.x, depth = v3.y, foamLvl = v3.z, ringA = v3.w;
+		vec3 rh = r > 1e-3 ? rel / r : vec3(0.0);
+		// the footprint: the wind's waves pressed flat; a cavity h = -depth exp(-(r/R0)^2)
+		o.flatw = max(o.flatw, J * (1.0 - smoothstep(0.8 * R0, 1.6 * R0, r)));
+		float q = r / R0;
+		o.g += rh * (depth * 2.0 * q / R0 * exp(-q * q));
+		// rings running out: phase k (r - R0) - omega t (v5: omega t, wrapped)
+		if (ringA > 0.0) {
+			float Rr = lambda0 / 1.6;        // ring source radius (RING_L0 in WaterFx.cpp)
+			float Lr = max(v5.w, 1e-3);      // damping length (CPU)
+			float amp = ringA * sqrt(Rr / max(r, Rr)) * exp(-max(r - Rr, 0.0) / Lr);
+			float k = k0, cgr = 1.0, ring = 0.0;
+			for (int j = 0; j < 3; j++) {
+				float lam = 2.0 * PI / k;
+				float front = R0 + (v4.y - R0) * cgr; // (group speed ~ sqrt(lambda))
+				float env = 1.0 - smoothstep(front - 0.5 * lam, front, r);
+				float inner = R0 + v4.z * cgr;
+				env *= v4.z > 0.0 ? smoothstep(inner - 0.5 * lam, inner, r) : smoothstep(0.6 * R0, R0, r);
+				float aa = 1.0 - smoothstep(2.0, 6.0, footprint * k * (2.0 / PI));
+				ring += WFX_RING_W[j] * env * aa * cos(k * (r - R0) - v5[j]);
+				k /= WFX_LRATIO;
+				cgr *= sqrt(WFX_LRATIO);
+			}
+			o.g += rh * (amp * ring);
+		}
+		// chop and foam: noise in the source's own frame (anchored where it was born)
+		float Rf = R0 + 0.35 * (Rw - R0);
+		float cMax = J * (1.0 - smoothstep(0.35 * Rw, 1.05 * Rw, r - 0.075 * Rw));
+		bool doFoam = foamLvl > 0.003 && r < 1.2 * Rf;
+		if (cMax > 0.01 || doFoam) {
+			vec3 t1 = normalize(v2.xyz - Np * dot(v2.xyz, Np)), t2 = cross(Np, t1);
+			vec3 a = p - v1.xyz;
+			vec2 uv = vec2(dot(a, t1), dot(a, t2));
+			float fch = v2.w; // foam churn, wrapped at 2048
+			if (cMax > 0.01) {
+				// ragged edge and patchy strength (cat's paws)
+				float nR = ValueNoise(vec3(uv + 7.3, fch), 4.0, 512);
+				float rr = r + 0.15 * Rw * (nR - 0.5);
+				float c = J * (1.0 - smoothstep(0.35 * Rw, 1.05 * Rw, rr));
+				c *= mix(0.6, 1.0, smoothstep(0.25, 0.75, ValueNoise(vec3(uv + 3.1, fch), 4.0, 512)));
+				o.chop = max(o.chop, c);
+				// (octaves finer than the pixels: their slopes go into the roughness)
+				float aa1 = 1.0 - smoothstep(0.25, 0.5, footprint / 0.5);
+				float aa2 = 1.0 - smoothstep(0.25, 0.5, footprint / 0.2);
+				vec2 gr = vec2(0.0);
+				if (aa1 > 0.0) gr += 0.06 * aa1 * ValueNoiseD(vec3(uv, v4.w), 0.5, 1024).yz;
+				if (aa2 > 0.0) gr += 0.02 * aa2 * ValueNoiseD(vec3(uv, v4.w), 0.2, 1024).yz;
+				o.g += c * (t1 * gr.x + t2 * gr.y);
+				o.var += c * c * (0.0144 * (1.0 - aa1) + 0.01 * (1.0 - aa2)) + 0.004 * c;
+			}
+			if (doFoam) {
+				float nC = ValueNoise(vec3(uv, fch), 2.0, 1024);
+				float edge = 1.0 - smoothstep(0.3 * Rf, Rf, r + 0.35 * Rf * (nC - 0.5));
+				float core = 1.0 - smoothstep(0.15 * Rf, 0.55 * Rf, r);
+				float aaL = 1.0 - smoothstep(0.25, 0.5, footprint / 0.5);
+				float aaM = 1.0 - smoothstep(0.25, 0.5, footprint / 0.25);
+				float l1 = 0.22, l2 = 0.22; // (mean filament coverage when finer than the pixels)
+				if (aaL > 0.0) {
+					// domain warp (+-0.5 m), then filaments (ridges of value noise, isotropic)
+					vec2 w = vec2(ValueNoise(vec3(uv, fch), 2.0, 1024), ValueNoise(vec3(uv + 11.7, fch), 2.0, 1024)) - 0.5;
+					vec2 wuv = uv + w;
+					vec2 q1 = wuv;
+					float n1 = ValueNoise(vec3(q1, fch), 0.5, 1024);
+					l1 = mix(0.22, smoothstep(0.62, 0.92, 1.0 - abs(2.0 * n1 - 1.0)), aaL);
+					if (aaM > 0.0) {
+						vec2 q2 = mat2(0.8, -0.6, 0.6, 0.8) * wuv + vec2(5.3, 9.1);
+						float n2 = ValueNoise(vec3(q2, fch), 0.25, 1024);
+						l2 = mix(0.22, smoothstep(0.62, 0.92, 1.0 - abs(2.0 * n2 - 1.0)), aaM);
+					}
+				}
+				float lace = 1.0 - (1.0 - l1) * (1.0 - 0.7 * l2);
+				lace *= 1.0 - 0.4 * smoothstep(0.5 * Rf, Rf, r);
+				float f = clamp(foamLvl * edge * max(core, 1.2 * lace), 0.0, 1.0);
+				o.foam = 1.0 - (1.0 - o.foam) * (1.0 - f);
+			}
+		}
+	}
+	return o;
+}
+
 // Wave normal of water surfaces (view space): a sum of WAVE_COUNT waves
 // whose wave vectors and phases the CPU sets (Atmosphere.cpp: anchored to
 // the planet, the body's own gravity in their dispersion), longest first
-vec3 WaterNormal (vec3 Nv, vec3 posView, float dist)
+vec3 WaterNormalWaves (vec3 Nv, vec3 posView, float dist)
 {
 	float slope = atm.wavePrm.x;
 	if (slope <= 0.0) return Nv;
@@ -127,6 +237,38 @@ vec3 WaterNormal (vec3 Nv, vec3 posView, float dist)
 	}
 	g -= Np * dot (g, Np); // slope in the tangent plane
 	return transpose (v2p) * normalize (Np - g * fade);
+}
+
+// With disturbances (WaterFx): the wind's waves pressed flat under them, plus
+// their cavity, rings and chop; fxVar (slope variance, into roughness) and
+// fxFoam (coverage) out
+vec3 WaterNormal (vec3 Nv, vec3 posView, float dist, out float fxVar, out float fxFoam)
+{
+	fxVar = 0.0; fxFoam = 0.0;
+	if (atm.waterFx.x < 0.5 || dist > 6000.0) return WaterNormalWaves (Nv, posView, dist);
+	float slope = atm.wavePrm.x;
+	float fade = 1.0 - smoothstep (300.0, 3000.0, dist);
+	mat3 v2p = mat3 (atm.viewToPlanet);
+	vec3 p = v2p * posView;
+	vec3 Np = v2p * Nv;
+	float footprint = dist * 2.0 * atm.misc.z / max (frame.jitter.w, 1.0)
+		/ max (abs (dot (normalize (posView), Nv)), 0.05);
+	WaterFxOut fx = WaterFxEval (p, Np, footprint);
+	vec3 g = vec3 (0.0);
+	if (slope > 0.0 && fade > 0.0) {
+		for (int i = 0; i < WAVE_COUNT; i++) {
+			vec4 w = atm.waves[i];
+			float k = length (w.xyz);
+			float aa = 1.0 - smoothstep (2.0, 6.0, footprint * k * (2.0 / PI));
+			if (aa <= 0.0) break;
+			g += w.xyz * (slope * cos (dot (p, w.xyz) + w.w) * aa / k);
+		}
+		g *= fade * (1.0 - 0.85 * fx.flatw) * (1.0 - 0.5 * fx.chop);
+	}
+	g += fx.g;
+	g -= Np * dot (g, Np);
+	fxVar = fx.var; fxFoam = fx.foam;
+	return transpose (v2p) * normalize (Np - g);
 }
 
 // Tracks of wheels and imprints of gear: a groove with raised edges (the
@@ -438,7 +580,8 @@ void main()
 	// regolith of airless bodies: no limb darkening, opposition surge
 	float sunRefl = int(atm.detail.x + 0.5) == DETAIL_AIRLESS && tile.params.z < 0.5
 		? RegolithReflectance(N, L, normalize(-vPosView), Ng) : max(ndl, 0.0);
-	vec3 col = base * (frame.ambient.rgb * ao * ambNight + (frame.sunColor.rgb * sunT * sunRefl + LocalLighting(vPosView, N, lv)) * aoDirect);
+	vec3 irr = frame.ambient.rgb * ao * ambNight + (frame.sunColor.rgb * sunT * sunRefl + LocalLighting(vPosView, N, lv)) * aoDirect;
+	vec3 col = base * irr;
 	// street lamps, lit when the sun is down
 	col += base * cityLight * smoothstep(0.05, -0.03, dot(Ng, L));
 	col += cityEmis * smoothstep(0.05, -0.03, dot(Ng, L));
@@ -500,9 +643,12 @@ void main()
 		if (m.a < 0.5) {
 			float dist = length(vPosView);
 			vec3 V = normalize(-vPosView);
-			vec3 Nw = WaterNormal(Ng, vPosView, dist);
+			float fxVar, fxFoam;
+			vec3 Nw = WaterNormal(Ng, vPosView, dist, fxVar, fxFoam);
 			float NoV = max(dot(Nw, V), 1e-3);
 			float fres = 0.02 + 0.98 * pow(1.0 - NoV, 5.0);
+			float rgh = clamp(fxVar / 0.008, 0.0, 1.0); // roughened by a jet: matte, less reflective
+			fres *= mix(1.0, 0.55, rgh);
 			if (hasAtm) {
 				vec3 R = reflect(-V, Nw);
 				// (reflections towards the water itself would see it again: kept
@@ -515,15 +661,18 @@ void main()
 				// displaced by the waves
 				vec3 dN = Nw - N;
 				vec4 s = ScreenReflection(vec2(dN.x, -dN.y) * 0.03);
+				s *= 1.0 - 0.8 * rgh; // (rgb is premultiplied: rough water breaks up the vessel's image)
 				sky = sky * (1.0 - s.a) + s.rgb;
 				if (frame.probe.w > 0.5) { // debug view
 					outColor = vec4(s.rgb + vec3(0.0, 0.0, 0.3) * (1.0 - s.a), 1.0);
 					return;
 				}
-				col = mix(col, sky, fres);
+				col = mix(col, sky, fres * (1.0 - fxFoam));
 			}
 			float rough = mix(0.05, 0.3, smoothstep(2e3, 3e5, dist));
-			col += frame.sunColor.rgb * sunT * SpecularBRDF(Nw, V, L, vec3(0.02), rough) * PI;
+			if (fxVar > 0.0) rough = min(sqrt(sqrt(rough * rough * rough * rough + 2.0 * fxVar)), 0.6);
+			col += frame.sunColor.rgb * sunT * SpecularBRDF(Nw, V, L, vec3(0.02), rough) * PI * (1.0 - fxFoam);
+			if (fxFoam > 0.0) col = mix(col, FOAM_ALBEDO * irr, fxFoam);
 		}
 	}
 	if (hasAtm) { // aerial perspective

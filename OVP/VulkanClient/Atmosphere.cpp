@@ -5,6 +5,7 @@
 #include "Clouds.h"
 #include "Scene.h"
 #include "VulkanClient.h"
+#include "WaterFx.h"
 #include "VkTexture.h"
 #include <algorithm>
 #include <string>
@@ -44,6 +45,8 @@ namespace {
 		float sunTint[4];     // the light's colour (luminance 1): the Sun white, a red dwarf orange
 		float wavePrm[4];     // x: slope amplitude per wave (0: no waves), y: g, z: wavelength scale
 		float waves[WAVE_COUNT][4]; // planet-frame wave vector k*dir (xyz), phase (w); longest first
+		float waterFx[4];     // x: water disturbances packed (0: none)
+		float waterFxSrc[WaterFx::MAX_GPU * WaterFx::VEC4][4]; // per source (WaterFx.h)
 	};
 	static_assert (sizeof (AtmUniforms) % 16 == 0, "std140");
 
@@ -686,6 +689,7 @@ void Atmosphere::Update ()
 	// off, which also frees the anchor for the next approach)
 	if (waves && camR - radius < 50e3) UpdateWaves (cam, camR, u.wavePrm, u.waves);
 	else waveAnchored = false;
+	if (WaterFx *wf = scene->Water ()) if (camR - radius < 50e3) wf->Pack (hPlanet, cam, u.waterFx, u.waterFxSrc);
 	memcpy (u.mieLobe, mieLobe, sizeof(mieLobe));
 	if (scene->CloudsActive () && hPlanet == oapiCameraProxyGbody ()) {
 		const VolumetricClouds *vc = scene->VClouds ();

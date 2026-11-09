@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "VObjects.h"
+#include "WaterFx.h"
 #include "GfxSettings.h"
 #include "ProcSurface.h"
 #include "SurfaceQuery.h"
@@ -425,7 +426,7 @@ void VVessel::UpdateTracks ()
 	bool near = camDist < 3000.0 && hp && vessel->GroundContact ();
 	for (DWORD i = 0; i < n; i++) {
 		TOUCHDOWNVTX tv;
-		if (!near || !vessel->GetTouchdownPoint (tv, i)) { gt->NoContact (hObj, (int)i); continue; }
+		if (!near || !vessel->GetTouchdownPoint (tv, i)) { gt->NoContact (hObj, (int)i); waterContact[i] = 0; continue; }
 		VECTOR3 g, pp;
 		vessel->Local2Global (tv.pos, g);
 		oapiGetGlobalPos (hp, &pp);
@@ -437,10 +438,23 @@ void VVessel::UpdateTracks ()
 		if (pr && pr->rayCast) {
 			if (!pr->rayCast (id, scene->ViewPos (g + up), scene->ViewDir (-up), 1.5, t, vn, &kind) || kind != 0) {
 				gt->NoContact (hObj, (int)i);
+				waterContact[i] = 0;
 				continue;
 			}
 		} else t = 1.0;
-		if (vksurf::QueryGlobal (scene, hp, g).IsWater ()) { gt->NoContact (hObj, (int)i); continue; } // (no tracks on water)
+		if (vksurf::QueryGlobal (scene, hp, g).IsWater ()) { // (no tracks on water: foam and ripples round the leg)
+			gt->NoContact (hObj, (int)i);
+			if (WaterFx *wf = scene->Water ()) {
+				VECTOR3 hv;
+				vessel->GetGroundspeedVector (FRAME_HORIZON, hv);
+				double R0 = std::clamp (0.03 * size, 0.4, 1.5);
+				if (!waterContact[i] && -hv.y > 0.3) wf->Impulse (hp, g, 2.0 * R0, std::clamp (-hv.y / 3.0, 0.2, 1.0)); // (touching down)
+				wf->Feed (hp, ((uint64_t)id << 16) | 0x100 | i, g, R0, std::clamp (0.3 + vessel->GetGroundspeed () / 10.0, 0.3, 1.0), 0.0, WaterFx::Kind::Contact);
+			}
+			waterContact[i] = 1;
+			continue;
+		}
+		waterContact[i] = 0;
 		// (track size from the vessel's size and mass: about 0.15 m wide and
 		// 2 cm deep for the delta-glider)
 		double hw = std::clamp (0.012 * size, 0.05, 0.4);
@@ -1084,6 +1098,7 @@ void VDebris::Effects ()
 		r.tinted = true, r.cold = true, r.planar = true;
 		r.albedo[0] = 0.9f, r.albedo[1] = 0.92f, r.albedo[2] = 0.95f;
 		Emit (dust, r, (uint32_t)std::min (v * 2.5 * D, 300.0), 8.0, true);
+		if (WaterFx *wf = scene->Water ()) wf->Impulse (hp, at, std::max (1.0, size), std::clamp (v / 30.0, 0.2, 1.0));
 	}
 
 	// the fireball: propellant released as it broke off (if seen then)
@@ -2112,7 +2127,7 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 	SmokeRing &r = dust[idx];
 	// a jet stirs up the ground within a distance growing with the thrust it delivers
 	double thrust = pd.DeliveredThrust (); // (in this air: none at Venus' surface, E3)
-	if (!sys || !sys->enabled || !pr || !pr->rayCast || dt <= 0.0 || thrust < 1e3 ||
+	if (!pr || !pr->rayCast || dt <= 0.0 || thrust < 1e3 ||
 		type == (int)PlumeType::RCS || type == (int)PlumeType::ColdGas || type == (int)PlumeType::Ion) { r.havePrev = false; mist[idx].havePrev = false; return; }
 	// (in vacuum the jet expands freely and reaches several times as far:
 	// Apollo LMs raised a sheet of dust from some 30 m)
@@ -2134,6 +2149,10 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 	bool water = false;
 	vksurf::Point sp;
 	if (kind == 0) { sp = vksurf::QueryGlobal (scene, hp, hit); water = sp.IsWater (); } // (the drawn water mask)
+	// the jet on the water: its footprint pressed flat, chop, rings and foam (WaterFx: the tile shader)
+	if (water) if (WaterFx *wf = scene->Water ())
+		wf->Feed (hp, ((uint64_t)id << 16) | idx, hit, std::max (1.0, pd.exitRadius + 0.25 * t), sqrt (strength), thrust * strength, WaterFx::Kind::Jet);
+	if (!sys || !sys->enabled) { r.havePrev = false; mist[idx].havePrev = false; return; }
 	if (hot > 0.0 && !water)
 		pr->Scorch (hp, hit, n, std::max (1.0, 0.12 * reach) * (0.7 + 0.3 * hot), 0.08 * hot * hot * dt);
 	if (kind == 1) {

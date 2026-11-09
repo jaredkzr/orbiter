@@ -150,6 +150,7 @@ private:
 	};
 	std::vector<SmokeRing> smoke;
 	std::vector<SmokeRing> dust;   // dust (or spray) thrown up where a jet meets the ground
+	uint8_t waterContact[3] = {}; // gear leg i stood in water last frame (UpdateTracks: a splash on touching down)
 	std::vector<SmokeRing> mist;   // fine spray hanging over water where a jet meets it (with dust[]: the spray sheet)
 	std::vector<SmokeRing> trail;  // the long trail in the air (PlumeClass::trail): large puffs left along the path, carried by the wind
 	std::vector<contrail::Emitter> contrails; // where the exhaust's water condenses (PlumeClass::contrail)

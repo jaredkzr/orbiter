@@ -11,6 +11,7 @@
 #include "Fsr.h"
 #include "Clouds.h"
 #include "GroundTracks.h"
+#include "WaterFx.h"
 #include "EnvProbe.h"
 #include "VObjects.h"
 #include "PlanetSurface.h"
@@ -151,6 +152,7 @@ bool Scene::Init ()
 	// environment probe and screen-space reflections (set 0)
 	tracks = std::make_unique<GroundTracks>();
 	tracks->Init (ctx);
+	waterFx = std::make_unique<WaterFx>();
 	VkDescriptorSetLayoutBinding b[9]{};
 	b[0].binding = 0;
 	b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -1977,6 +1979,7 @@ void Scene::SkyAdapt (float avgLogLum, double dt)
 
 void Scene::BeginFrame ()
 {
+	if (waterFx) waterFx->Update (); // (before the producers: EmitDust, UpdateTracks)
 	uint32_t fi = ctx->FrameIndex();
 	WriteCityDescriptors ();
 	if (ao->EnsureSize ()) WriteAODescriptors (), WriteRTLightDescriptors (); // the GPU is idle then
