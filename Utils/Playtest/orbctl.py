@@ -221,6 +221,9 @@ def cmd_start(name, args):
             cmd.append(f"--scenario={scn}")
     if step:
         cmd.append(f"--fixedstep={step}")
+    memmax = os.environ.get("ORBCTL_MEMMAX")  # e.g. 6G: run in a systemd scope that kills only Orbiter past this RAM
+    if memmax:
+        cmd = ["systemd-run", "--user", "--scope", "-q", "-p", f"MemoryMax={memmax}", "-p", "MemorySwapMax=0"] + cmd
     with open(os.path.join(d, "orbiter.out"), "w") as out:
         p = subprocess.Popen(cmd, cwd=d, env=env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
     sess = {"pid": p.pid, "socket": sock, "dir": d, "scenario": scenario, "shots": 0}

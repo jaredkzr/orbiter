@@ -62,6 +62,9 @@ struct PlumeClass {
 	// drawn emission scaled to it at full thrust in sea-level air (throttle,
 	// flicker, vacuum and BRIGHTNESS kept)
 	float lightRadiance;
+	// the smoke leaves the end of the flame with this much of the jet's
+	// speed left at full thrust [m/s], relative to the air (0: at rest)
+	float smokeJet;
 };
 
 /// where a plume's flame ends and what it meets (PlumeRenderer::Add)
@@ -69,6 +72,7 @@ struct PlumeInfo {
 	VECTOR3 end;            // end of the flame, view space [m]
 	VECTOR3 endDir;         // flow direction there (view space)
 	double endRadius;       // jet radius there [m]
+	double length;          // from the nozzle exit to the end [m]
 	bool hit;               // a surface in the way
 	VECTOR3 hitPos, hitN;   // where (view space), its normal (towards the jet)
 	double coverage;        // fraction of the jet blocked
@@ -80,6 +84,11 @@ struct PlumeInfo {
 	double lightRadius[3];
 	float lightCol[3];
 	double lightArea;
+	// the flame as drawn, for a distant point (VVessel::AddPlumePoint): its
+	// mean radiance (lightCol without the lighting scale) and its solid
+	// angle seen from the camera [sr], unoccluded
+	float radiance[3];
+	double solid;
 };
 
 class PlumeConfig {

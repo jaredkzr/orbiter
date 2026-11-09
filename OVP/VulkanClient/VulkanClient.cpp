@@ -160,6 +160,7 @@ bool VulkanClient::clbkInitialise ()
 		frameTimes = fopen (ft, "w");
 		if (!frameTimes) oapiWriteLogError ("VulkanClient: could not write %s", ft);
 	}
+	if (const char *h = getenv ("ORBITER_VK_HIDE_UI")) hideUi = *h && *h != '0';
 	if (const char *shot = getenv ("ORBITER_VK_SCREENSHOT")) {
 		autoScreenshot = shot;
 		if (const char *n = getenv ("ORBITER_VK_SCREENSHOT_FRAME")) autoScreenshotFrame = (unsigned)atoi (n);

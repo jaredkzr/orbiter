@@ -169,7 +169,10 @@ struct Emitter {
 		double hrate = std::clamp (v / (0.25 * width), 4.0, 200.0) * D;
 		double rate = std::clamp (v / (0.5 * width), 2.0, 40.0) * D;
 		e.spread = 0.3;
-		e.alpha = 0.9 * a * std::min (1.0, 1.3 / (D * sz * sz));
+		// (at night fainter, ParticleSystem::contrailNight: against the sky
+		// a trail would show as a band)
+		const double an = a * sys->contrailNight;
+		e.alpha = 0.9 * an * std::min (1.0, 1.3 / (D * sz * sz));
 		double hlife = std::min (4.0, life);
 		VkTexture *lt = tex ? tex : sys->SmokeTexture ();
 		if (sys->Reserve (head, hrate, hlife, ParticleSystem::Class::Contrail, 0.0, lt, false)) {
@@ -206,7 +209,7 @@ struct Emitter {
 					e.spread = 0.5;
 					e.lifetime = g.life;
 					e.size = S0, e.growth = 1.0;
-					e.alpha = 0.35 * a * std::clamp ((g.persist - 0.3) / 0.4, 0.0, 1.0);
+					e.alpha = 0.35 * an * std::clamp ((g.persist - 0.3) / 0.4, 0.0, 1.0);
 					e.trail = true;
 					sys->Emit (band, e, n);
 				}

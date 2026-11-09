@@ -15,7 +15,9 @@ float KerrR (vec3 x, float a)
 {
 	float a2 = a * a, z2 = x.z * x.z;
 	float w = dot (x, x) - a2;
-	float D = sqrt (w * w + 4.0 * a2 * z2);
+	// (w^2 overflows the float beyond ~4e9 M, a camera light years from the
+	// hole: there D as w sqrt (1 + (2 a z / w)^2); nearer, as it was)
+	float D = w > 1e15 ? w * sqrt (1.0 + (2.0 * a * x.z / w) * (2.0 * a * x.z / w)) : sqrt (w * w + 4.0 * a2 * z2);
 	float r2 = w >= 0.0 ? 0.5 * (w + D) : (D - w > 0.0 ? 2.0 * a2 * z2 / (D - w) : 0.0);
 	return sqrt (max (r2, 0.0));
 }
@@ -55,7 +57,7 @@ void KerrDerivs (vec3 x, vec4 p, float a, out vec3 dx, out float dt, out vec3 dp
 vec3 KerrLightMomentum (vec3 x, vec3 d, float pt, float a)
 {
 	float r = KerrR (x, a), r2 = r * r, a2 = a * a, ra = r2 + a2;
-	float f = 2.0 * r2 * r / (r2 * r2 + a2 * x.z * x.z);
+	float f = r > 1e6 ? 2.0 * r / (r2 + a2 * x.z * x.z / r2) : 2.0 * r2 * r / (r2 * r2 + a2 * x.z * x.z); // (r^4 overflows far out)
 	vec3 l = vec3 ((r * x.x + a * x.y) / ra, (r * x.y - a * x.x) / ra, x.z / r);
 	float ld = dot (l, d);
 	float A = 1.0 - f * ld * ld, B = 2.0 * f * pt * ld, C = -pt * pt * (1.0 + f);

@@ -74,6 +74,7 @@ namespace vkcity {
 			std::vector<float> rtRows;                        // near buildings (Set::rt)
 		} build;
 		void Continue ();
+		void Release (); // (far above the cities: all of it freed; rebuilt on the way down)
 
 		// the road map
 		struct Seg { VECTOR3 a, b; float width; int kind; };
@@ -98,6 +99,9 @@ namespace vkcity {
 		OBJHANDLE hPlanet;
 		double R, cellSize = 0.0;
 		bool active = false;
+		bool first = true;       // no set built yet (the first one in more haste)
+		bool roadStale = false;  // the running road job's map is not wanted (Release)
+		double camAlt = 0.0;     // the camera's altitude above the ground [m] (Prepare)
 		std::unique_ptr<VkMesh> box;   // (ray tracing)
 		std::unique_ptr<Kit> kit;
 		std::unordered_map<uint64_t, Cell> cells;

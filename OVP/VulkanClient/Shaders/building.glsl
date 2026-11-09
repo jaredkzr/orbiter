@@ -26,3 +26,24 @@ mat4 BuildingFrame ()
 {
 	return transpose(mat4(inst0, inst1, inst2, vec4(0.0, 0.0, 0.0, 1.0)));
 }
+
+/// the hand-off to the night light texture by the camera's altitude above
+/// the ground alt [m] (CityField FADE_LO, FADE_HI, TALL_HI; tile_main.glsl
+/// CityHandOff): this building's share, 1 drawn, 0 gone (the buildings
+/// under 35 m out over 3 to 6 km, the taller by 8 km, from 5)
+float BuildingAltFade (float alt)
+{
+	float h = instDim.z + instDim.w;
+	return 1.0 - (h < 35.0 ? smoothstep(3000.0, 6000.0, alt) : smoothstep(5000.0, 8000.0, alt));
+}
+
+/// passes without the colour pass's dithered fade (the prepass, shadow
+/// maps): a building is drawn while its fade exceeds its own threshold
+/// (stable, from its position), so that across the band they go one by one
+bool BuildingFadedOut (float fade)
+{
+	if (fade >= 1.0) return false;
+	vec3 o = vec3(inst0.w, inst1.w, inst2.w);
+	float cut = fract(sin(dot(floor(o), vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+	return fade <= cut;
+}

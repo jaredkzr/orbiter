@@ -156,8 +156,16 @@ void VkParticleStream::DecideMode ()
 	// a contrail stream (the texture's name, or the default texture)
 	std::string name = tex ? tex->name : std::string ();
 	for (auto &c : name) c = (char)tolower ((unsigned char)c);
-	if (name.find ("contrail") == std::string::npos) return;
-	if (type == (int)PlumeType::Solid) return; // (a solid motor's smoke: particulate, at any altitude)
+	bool contrailTex = name.find ("contrail") != std::string::npos;
+	// the engine's own smoke (EmitSmoke) is the one smoke source: a diffuse
+	// exhaust stream on a thruster whose class makes smoke is not drawn too
+	// (two columns of different look, stopped at the flame's flank). The
+	// condensation trails of liquid engines stay contrails
+	if (plume && PlumeConfig::Class ((PlumeType)type).smokeOpacity > 0.0f && !(contrailTex && type != (int)PlumeType::Solid)) {
+		mode = Mode::Suppressed;
+		return;
+	}
+	if (!contrailTex) return;
 	mode = Mode::Contrail;
 	rocket = type == (int)PlumeType::Hydrolox || type == (int)PlumeType::Methalox || type == (int)PlumeType::Kerolox;
 }

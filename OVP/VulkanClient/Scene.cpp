@@ -75,7 +75,7 @@ namespace {
 		float planetDir[4];    // direction to the planet nearby (view), w: sine of its angular radius
 		float planetLight[4];  // its irradiance at normal incidence, w: present
 		float lightCount[4];
-		float city[4][4];      // the cities' road map (CityField): centre (view), w: present; axes x, y (view); 1/size of its levels
+		float city[4][4];      // the cities' road map (CityField): centre (view), w: present; axes x, y (view); 1/size of its levels, w: the camera's altitude above the ground [m]
 		float relBeta[4];      // relativistic view: the camera's velocity (view, units of c), w: on
 		float relSelf[4];      // the camera's own vessel: centre (view), radius
 		float relSunDir[4];    // the sunlight on it in its frame: direction (view, aberrated)
@@ -92,6 +92,9 @@ namespace {
 
 	// shadows are cast within this range of the camera target, in units of
 	// the camera distance (plus the target's size)
+	// a black hole's lens is traced while the hole lies within this many
+	// Einstein rings of the view (always, once its ring is this wide [rad])
+	constexpr double LENS_VIEW_MARGIN = 10.0, LENS_VIEW_ALWAYS = 0.1;
 	constexpr double COSMIC_BG_DOPPLER = 1.5; // the extragalactic background drawn where seen at a larger Doppler factor (at rest: ~1/30 of the darkest sky)
 	constexpr double SHADOW_RANGE = 1.5;
 	constexpr double SHADOW_RADIUS_MIN = 20.0, SHADOW_RADIUS_MAX = 5000.0; // [m]
@@ -1313,7 +1316,21 @@ void Scene::UpdateLens ()
 		VECTOR3 hp;
 		oapiGetGlobalPos (h, &hp);
 		double r = length (camPos - hp) / b.M;
-		if (std::sqrt (4.0 / r) < 2.0 * pix) continue;
+		double thE = std::sqrt (4.0 / r);
+		if (thE < 2.0 * pix) continue;
+		// (and only where it shows: in the view, or so near it that the sky
+		// is bent visibly, within LENS_VIEW_MARGIN rings, where the deflection
+		// thE^2 / beta is still a tenth of a ring. In a narrow view the ring
+		// of a hole far away passed the size test from anywhere in the sky
+		// (Nyx, 24.5 pc: below 0.45 deg aperture at 1080 lines) and the lens
+		// took over the view: a white sky (its trace from 5e9 M out
+		// overflowed the float, kerr.glsl KerrR, since made safe))
+		if (thE < LENS_VIEW_ALWAYS) {
+			VECTOR3 dv = unit (view.TransformPoint (hp - camPos));
+			double off = std::acos (std::clamp (dv.z, -1.0, 1.0)); // (from the view's axis)
+			double half = std::atan (std::sqrt (1.0 / (ProjX () * ProjX ()) + 1.0 / (ProjY () * ProjY ()))); // (to its corners)
+			if (off > half + LENS_VIEW_MARGIN * thE) continue;
+		}
 		if (!best || r < bestR) best = h, bestR = r, bi = b;
 	}
 	if (!best) return;
@@ -2122,6 +2139,7 @@ void Scene::FillFrameUniforms (void *pfu)
 		fu.city[0][3] = 1.0f;
 		fu.city[3][0] = (float)(1.0 / citySize[0]), fu.city[3][1] = (float)(1.0 / citySize[1]), fu.city[3][2] = (float)(1.0 / citySize[2]);
 	}
+	fu.city[3][3] = cityAlt; // (the hand-off to the night light texture: with or without the maps)
 	// relativistic view: the camera's velocity, its own vessel (seen as it is)
 	if (relOn) {
 		VECTOR3 bv = RelBetaView ();
@@ -2230,6 +2248,16 @@ void Scene::FillFrameUniforms (void *pfu)
 		oapiGetGlobalPos (hp, &pp);
 		double s = std::clamp ((dotp (unit (camPos - pp), sunDir) + 0.25) / 0.25, 0.0, 1.0);
 		fu.ambient[3] = (float)std::max (0.15 + 0.85 * s * s * (3.0 - 2.0 * s), SunVisibility (camPos));
+		// (contrails: at night about a fifth, so that they darken or lighten
+		// the sky by no more than that)
+		if (particles) particles->contrailNight = 0.22f + 0.78f * std::clamp ((fu.ambient[3] - 0.15f) / 0.85f, 0.0f, 1.0f);
+		// (and no less than the night sky's own level: smoke and contrails
+		// that are unlit at night showed as black bands against it (the
+		// terrain keeps its 0.15); an absolute floor, 0.45 of the default
+		// ambient level 0.01 (Orbiter's AmbientLevel 2: about the sky as drawn there), so that a user's
+		// higher ambient level does not lift the smoke further)
+		const float NIGHT_SMOKE_LIGHT = 0.45f * 0.01f;
+		fu.ambient[3] = std::max (fu.ambient[3], std::min (NIGHT_SMOKE_LIGHT / a0, 1.0f));
 	}
 	// sunlight reflected by the planet nearby (a Lambertian sphere, by its phase)
 	if (OBJHANDLE hp = oapiCameraProxyGbody ())

@@ -20,7 +20,16 @@ namespace {
 	const double SHADOW_RANGE = 1500.0; // [m] buildings casting into the shadow maps
 	const double RT_RANGE = 800.0;      // [m] buildings in the ray tracing scene
 	const size_t RT_MAX = 3000;
-	const double BUDGET = 0.002;        // [s] building the set per frame (more while there is none)
+	const double BUDGET = 0.002;        // [s] building the set per frame (more for the field's first set)
+	// the hand-off to the night light texture by the camera's altitude above
+	// the ground [m] (CityGround in tile_main.glsl and building.vert have the
+	// same numbers: keep them in sync): the procedural city (roof carpet,
+	// streets, lamps and their light, the buildings under 35 m) fades out
+	// over FADE_LO to FADE_HI, the tall ones (the 25 km tier) by TALL_HI; no
+	// new set is started above BUILD_MAX_ALT and everything is released
+	// above RELEASE_ALT (rebuilt on the way down)
+	const double FADE_LO = 3000.0, FADE_HI = 6000.0, TALL_HI = 8000.0;
+	const double BUILD_MAX_ALT = 8500.0, RELEASE_ALT = 10000.0;
 	// the road map: two levels of ROAD_N x ROAD_N texels, ROAD_FINE and ROAD_COARSE m wide
 	const int ROAD_N = 2048;
 	const double ROAD_FINE = 2048.0, ROAD_COARSE = 12288.0;
@@ -97,6 +106,7 @@ Field::Field (Scene *s, OBJHANDLE hp): scene (s), hPlanet (hp)
 
 Field::~Field ()
 {
+	scene->SetCityAltitude (0.0f);
 	vkc::Context *ctx = scene->Client()->Ctx();
 	if (roadJob.valid()) roadJob.wait ();
 	scene->SetCityMap (nullptr, nullptr, nullptr, nullptr, _V(0, 0, 0), _V(1, 0, 0), _V(0, 1, 0), 1.0, 1.0, 1.0);
@@ -149,13 +159,33 @@ void Field::Prepare ()
 	VECTOR3 cam = scene->CameraPos (), P;
 	oapiGlobalToLocal (hPlanet, &cam, &P);
 	origin = cam;
-	double alt = length (P) - R;
-	if (alt > TIERS[NTIER - 1].range) return; // (far above: the set kept a while)
+	// (ORBITER_VK_CITY_HANDOFF=0: A/B against the pre-hand-off cities)
+	static const bool handoff = !getenv ("ORBITER_VK_CITY_HANDOFF") || atoi (getenv ("ORBITER_VK_CITY_HANDOFF"));
+	double rP = length (P);
+	double alt = rP - R - oapiSurfaceElevation (hPlanet, atan2 (P.z, P.x), asin (std::clamp (P.y / std::max (rP, 1.0), -1.0, 1.0)));
+	if (!handoff) {
+		scene->SetCityAltitude (0.0f);
+		camAlt = 0.0;
+		alt = rP - R;
+		if (alt > TIERS[NTIER - 1].range) return; // (far above: the set kept a while)
+	} else {
+		scene->SetCityAltitude ((float)alt); // (the shaders' hand-off to the night light texture)
+		camAlt = alt;
+		if (alt > RELEASE_ALT) {
+			Release ();
+			return;
+		}
+		if (alt > BUILD_MAX_ALT) { // (what exists is kept, a running road job finishes; no new set)
+			FinishRoads ();
+			return;
+		}
+	}
 	unsigned gen = oapiCityGeneration (hPlanet);
 	if (gen != generation) {
 		cells.clear(), generation = gen;
 		build.active = false;
 		set.id = 0; // (rebuilt at once)
+		first = true;
 	}
 
 	// a new set: the camera has moved from the anchor
@@ -186,7 +216,7 @@ void Field::Prepare ()
 	FinishRoads ();
 
 	// ray tracing: the near buildings of the set
-	if (set.id && scene->Client()->Ctx()->rayTracing && !set.rt.empty()) {
+	if (set.id && camAlt < TALL_HI && scene->Client()->Ctx()->rayTracing && !set.rt.empty()) {
 		MATRIX3 Rp;
 		oapiGetRotationMatrix (hPlanet, &Rp);
 		VECTOR3 gp;
@@ -205,10 +235,40 @@ void Field::Prepare ()
 	}
 }
 
+void Field::Release ()
+{
+	if (!set.id && !build.active && !roadTex[0] && !lampBuf.buffer && cells.empty() && !roadJob.valid()) return; // (done)
+	vkc::Context *ctx = scene->Client()->Ctx();
+	TextureManager *tm = scene->Client()->TexMgr();
+	if (set.buf.buffer) {
+		vkc::Buffer bb = set.buf;
+		ctx->DeferDestroy ([ctx, bb]() mutable { ctx->DestroyBuffer (bb); });
+	}
+	set = Set{};
+	build.active = false;
+	build.keys.clear(), build.bucket.clear(), build.sbucket.clear(), build.rtRows.clear();
+	build.next = 0;
+	roadSegs.clear(), cells.clear(), streets.clear();
+	if (roadJob.valid()) roadStale = true; // (finishes on its own; FinishRoads discards it)
+	scene->SetCityMap (nullptr, nullptr, nullptr, nullptr, _V(0, 0, 0), _V(1, 0, 0), _V(0, 1, 0), 1.0, 1.0, 1.0);
+	for (VkTexture *&t : roadTex) {
+		VkTexture *tt = t;
+		if (tt) ctx->DeferDestroy ([tm, tt]() { tm->Release (tt); });
+		t = nullptr;
+	}
+	if (lampBuf.buffer) {
+		vkc::Buffer lb = lampBuf;
+		ctx->DeferDestroy ([ctx, lb]() mutable { ctx->DestroyBuffer (lb); });
+		lampBuf = {};
+	}
+	lampCount = 0;
+	rtThis.clear();
+}
+
 void Field::Continue ()
 {
 	auto t0 = std::chrono::steady_clock::now();
-	double budget = set.id ? BUDGET : 0.1;
+	double budget = (set.id || !first) ? BUDGET : 0.1; // (the field's first set, or after a generation change: more while there is none)
 	while (build.next < build.keys.size()) {
 		uint64_t key = build.keys[build.next++];
 		auto it = cells.find (key);
@@ -275,6 +335,7 @@ void Field::Continue ()
 		ctx->DeferDestroy ([ctx, old]() mutable { ctx->DestroyBuffer (old); });
 	}
 	set = std::move (ns);
+	first = false;
 	build.active = false;
 	build.bucket.clear(), build.sbucket.clear();
 	for (auto it = cells.begin(); it != cells.end(); )
@@ -421,6 +482,11 @@ void Field::FinishRoads ()
 {
 	if (!roadJob.valid() || roadJob.wait_for (std::chrono::seconds (0)) != std::future_status::ready) return;
 	RoadMap rm = roadJob.get ();
+	if (roadStale) { // (the field was released while it ran: not uploaded; the set, if there is one by now, gets its own)
+		roadStale = false;
+		if (set.id && !build.active) StartRoads (set.anchor);
+		return;
+	}
 	TextureManager *tm = scene->Client()->TexMgr();
 	vkc::Context *ctx = scene->Client()->Ctx();
 	for (VkTexture *t : roadTex)
@@ -453,13 +519,16 @@ void Field::Render (RenderPass pass)
 	if (scene->Sun ()) oapiGetGlobalPos (scene->Sun (), &sp);
 	VECTOR3 sun = unit (tmul (Rp, sp - gp)); // (planet frame)
 	if (pass == RenderPass::Transparent) {
-		if (lampCount) {
+		// (the street lamps fade out with the procedural city: the night light texture takes over)
+		double x = std::clamp ((camAlt - FADE_LO) / (FADE_HI - FADE_LO), 0.0, 1.0);
+		float p = (float)(1.0 - x * x * (3.0 - 2.0 * x));
+		if (lampCount && p > 0.0f) {
 			Mat4 fv = scene->View () * Mat4::FromRotTrans (Rp, gp + mul (Rp, lampCentre) - cam);
-			scene->DrawLamps (lampBuf.buffer, lampCount, fv, lampCentre, sun, LAMP_FADE, LAMP_RANGE, LAMP_SIZE, LAMP_GLOW);
+			scene->DrawLamps (lampBuf.buffer, lampCount, fv, lampCentre, sun, LAMP_FADE, LAMP_RANGE, LAMP_SIZE, LAMP_GLOW * p);
 		}
 		return;
 	}
-	if (!set.id || set.batches.empty()) return;
+	if (!set.id || set.batches.empty() || camAlt >= TALL_HI) return; // (the buildings' own fade, building.vert, has them gone by then)
 	// the local (solar) time at the anchor [h]: east of the subsolar point, later
 	double dl = atan2 (set.anchor.z, set.anchor.x) - atan2 (sun.z, sun.x);
 	double hour = fmod (12.0 + dl * 12.0 / PI + 48.0, 24.0);
@@ -475,7 +544,7 @@ void Field::Render (RenderPass pass)
 
 void Field::RenderShadow (ShadowMap &sm)
 {
-	if (!active || !set.id || set.shadow.empty()) return;
+	if (!active || !set.id || set.shadow.empty() || camAlt >= TALL_HI) return;
 	MATRIX3 Rp;
 	oapiGetRotationMatrix (hPlanet, &Rp);
 	VECTOR3 gp;
@@ -483,7 +552,7 @@ void Field::RenderShadow (ShadowMap &sm)
 	for (const Batch &b : set.shadow) {
 		const Kit::Range &r = kit->Indices (b.shape);
 		sm.DrawBuildings (kit->VertexBuffer(), kit->IndexBuffer(), r.first, r.count, set.buf.buffer,
-			(VkDeviceSize)b.first * Scene::BUILDING_INSTANCE, b.count, Rp, gp + mul (Rp, set.anchor));
+			(VkDeviceSize)b.first * Scene::BUILDING_INSTANCE, b.count, Rp, gp + mul (Rp, set.anchor), (float)camAlt);
 	}
 }
 

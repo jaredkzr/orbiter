@@ -180,6 +180,8 @@ public:
 
 	bool enabled = true;
 	float density = 4.0f; ///< particles per specified particle (smaller ones)
+	/// opacity factor of contrails now (Contrail.h): 1 by day, about 0.22 at night (Scene::FillFrameUniforms)
+	float contrailNight = 1.0f;
 	/// long trails of engine smoke, carried by the wind (GfxSettings::smokeTrails; ORBITER_VK_SMOKE_TRAILS=0: none)
 	bool trails = true;
 
@@ -312,6 +314,9 @@ private:
 	uint32_t liveNow = 0;
 	double pxPerRad = 1000.0;  // (the render height over the vertical field of view)
 	double LiveFactor (int prio) const;
+public:
+	/// pixels per unit of the tangent of the angle off the view axis (the render height over twice the tangent of the half aperture)
+	double PxPerRad () const { return pxPerRad; }
 };
 
 #endif // !__PARTICLES_H

@@ -44,9 +44,11 @@ public:
 	void DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize instOfs, uint32_t count,
 		const MATRIX3 &R, const VECTOR3 &origin, bool impostor);
 	/// Buildings of the cities (Scene::DrawBuildings), in the frame with
-	/// rotation R and origin (global, relative to the camera)
+	/// rotation R and origin (global, relative to the camera); camAlt: the
+	/// camera's altitude above the ground [m] (the hand-off to the night
+	/// light texture: building.glsl BuildingAltFade)
 	void DrawBuildings (VkBuffer vb, VkBuffer ib, uint32_t firstIndex, uint32_t nIndex, VkBuffer inst, VkDeviceSize instOfs,
-		uint32_t count, const MATRIX3 &R, const VECTOR3 &origin);
+		uint32_t count, const MATRIX3 &R, const VECTOR3 &origin, float camAlt);
 	/// Draw indexed geometry (NTVERTEX, 16-bit indices), e.g. a terrain tile
 	void DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &model, uint32_t firstIdx = 0);
 	/// whether a sphere (global position, radius) may cast into the map

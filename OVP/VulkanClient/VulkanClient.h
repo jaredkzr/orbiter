@@ -161,7 +161,8 @@ private:
 	unsigned autoScreenshotFrame = 60;
 	bool shotNoUi = false;        // ORBITER_VK_SCREENSHOT_NOUI=1: the screenshot without the user interface
 	/// This frame is the screenshot's, taken without the user interface
-	bool CleanShotFrame () const { return shotNoUi && !autoScreenshot.empty() && frameCount + 1 == autoScreenshotFrame; }
+	bool hideUi = false;          // ORBITER_VK_HIDE_UI=1: no user interface drawn at all (video capture)
+	bool CleanShotFrame () const { return hideUi || (shotNoUi && !autoScreenshot.empty() && frameCount + 1 == autoScreenshotFrame); }
 	unsigned frameCount = 0;
 	std::string videoDir;         // ORBITER_VK_VIDEO: frames written as PNGs before the screenshot frame
 	unsigned videoFrames = 0;     // ORBITER_VK_VIDEO_FRAMES

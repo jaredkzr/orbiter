@@ -57,7 +57,7 @@ bool ShadowMap::Init (vkc::Context *c, VkDescriptorSetLayout texLayout)
 	sci.maxLod = 0.0f;
 	VK_CHECK(vkCreateSampler (ctx->device, &sci, nullptr, &sampler));
 
-	VkPushConstantRange pcr{ VK_SHADER_STAGE_VERTEX_BIT, 0, 16 * sizeof(float) };
+	VkPushConstantRange pcr{ VK_SHADER_STAGE_VERTEX_BIT, 0, 20 * sizeof(float) }; // (a matrix; the buildings' casters also the camera's altitude)
 	VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 	plci.pushConstantRangeCount = 1;
 	plci.pPushConstantRanges = &pcr;
@@ -321,7 +321,7 @@ void ShadowMap::DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSi
 }
 
 void ShadowMap::DrawBuildings (VkBuffer vb, VkBuffer ib, uint32_t firstIndex, uint32_t nIndex, VkBuffer inst, VkDeviceSize instOfs,
-	uint32_t count, const MATRIX3 &R, const VECTOR3 &origin)
+	uint32_t count, const MATRIX3 &R, const VECTOR3 &origin, float camAlt)
 {
 	if (!active || !count || !nIndex) return;
 	VkCommandBuffer cmd = ctx->Cmd();
@@ -330,8 +330,9 @@ void ShadowMap::DrawBuildings (VkBuffer vb, VkBuffer ib, uint32_t firstIndex, ui
 	vkCmdBindVertexBuffers (cmd, 0, 2, vbs, ofs);
 	vkCmdBindIndexBuffer (cmd, ib, 0, VK_INDEX_TYPE_UINT16);
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bldPipeline);
-	float f[16];
+	float f[20] = {};
 	(lightVP * Mat4::FromRotTrans (R, origin - centre)).ToFloat (f);
+	f[16] = camAlt;
 	vkCmdPushConstants (cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(f), f);
 	vkCmdDrawIndexed (cmd, nIndex, count, firstIndex, 0, 0);
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);

@@ -226,10 +226,21 @@ const float CITY_LAMP_IRR = 0.3;
 // replace the night light texture
 vec3 cityEmis = vec3(0.0); // (CityGround: the roof carpet's lit windows)
 float cityCarpet = 0.0;     // (CityGround: the roof carpet's share)
+// The hand-off to the night light texture by the camera's altitude above
+// the ground (frame.city[3].w, CityField): the procedural city (roof carpet,
+// its lit windows, the streets, their lamps' light) fades out over 3 to 6
+// km (CityField FADE_LO, FADE_HI; building.vert has the same numbers), the
+// texture takes over (CityHandOff, 0 below 3 km, 1 from 6 km up)
+float CityHandOff()
+{
+	return smoothstep(3000.0, 6000.0, frame.city[3].w);
+}
 vec3 CityGround (vec3 posView, inout vec3 base, out float cover)
 {
 	cover = 0.0;
 	if (frame.city[0].w < 0.5) return vec3(0.0);
+	float cityP = 1.0 - CityHandOff(); // (the procedural city's share)
+	if (cityP <= 0.0) return vec3(0.0);
 	vec3 d = posView - frame.city[0].xyz;
 	vec2 p = vec2(dot(d, frame.city[1].xyz), dot(d, frame.city[2].xyz));
 	// Beyond the small buildings (building.vert's fade, 1.3 to 2.3 km): a
@@ -239,7 +250,7 @@ vec3 CityGround (vec3 posView, inout vec3 base, out float cover)
 	// flat; lit windows at night (cityEmis)
 	vec2 ud = p * frame.city[3].z + 0.5;
 	float ed = max(abs(ud.x - 0.5), abs(ud.y - 0.5));
-	float wc = ed < 0.5 ? smoothstep(1800.0, 2600.0, length(posView)) * smoothstep(0.5, 0.45, ed) : 0.0;
+	float wc = ed < 0.5 ? smoothstep(1800.0, 2600.0, length(posView)) * smoothstep(0.5, 0.45, ed) * cityP : 0.0;
 	float built = wc > 0.0 ? smoothstep(0.10, 0.30, texture(cityMap[2], ud).r) : 0.0;
 	cityCarpet = wc * built;
 	vec2 uc = p * frame.city[3].y + 0.5;
@@ -251,7 +262,7 @@ vec3 CityGround (vec3 posView, inout vec3 base, out float cover)
 		vec2 uf = p * frame.city[3].x + 0.5;
 		float ef = max(abs(uf.x - 0.5), abs(uf.y - 0.5));
 		if (ef < 0.5) m = mix(texture(cityMap[0], uf), m, smoothstep(0.4, 0.5, ef));
-		fade = smoothstep(0.5, 0.4, ec);
+		fade = smoothstep(0.5, 0.4, ec) * cityP;
 		cover = fade;
 	}
 	float w = wc * built * (1.0 - max(m.r, m.g) * fade);
@@ -473,13 +484,15 @@ void main()
 		float night = clamp(0.2 - dot(Ng, L) * 4.0, 0.0, 1.0);
 		// the night light texture represents lights seen from altitude; close up
 		// it would flood the ground, so it fades out near the camera
-		night *= smoothstep(1000.0, 10000.0, length(vPosView));
+		// (from 6 km of altitude up, with the city's own lights gone, at full strength: CityHandOff)
+		float cityT = CityHandOff();
+		night *= mix(smoothstep(1000.0, 10000.0, length(vPosView)), 1.0, cityT);
 		// (where the cities draw their own lights: theirs; near them, the
 		// texture's brightness for views from orbit toned down to theirs)
 		// (the cities' lights: of the buildings drawn, of all of them only so
 		// near as the small ones, building.vert's fade at 3 km, and of the
 		// roof carpet beyond; elsewhere the texture's)
-		night *= (1.0 - max(cityCover * (1.0 - smoothstep(1300.0, 2300.0, length(vPosView))), cityCarpet)) * mix(0.15, 1.0, smoothstep(8000.0, 80000.0, length(vPosView)));
+		night *= (1.0 - max(cityCover * (1.0 - smoothstep(1300.0, 2300.0, length(vPosView))), cityCarpet)) * mix(mix(0.15, 1.0, smoothstep(8000.0, 80000.0, length(vPosView))), 1.0, cityT);
 		// (the texture's lights are blurred averages of point sources: cores
 		// brightened, dim spill suppressed, so that cities stand out as in
 		// photographs; the finest levels' halftone of lit texels blurred

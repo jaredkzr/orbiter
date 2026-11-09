@@ -166,7 +166,10 @@ private:
 	/// plumes as light sources this frame (global position, emission, side area)
 	struct PlumeLight { VECTOR3 pos[3]; double radius[3]; float col[3]; double area; }; // (PlumeInfo: three points along the flame)
 	std::vector<PlumeLight> plumeLights;
+	/// distant flames drawn as points of light this frame (CollectPlumes, RenderExhaust)
+	std::vector<PVtx> plumePoints;
 	void EmitSmoke (DWORD idx, int type, const struct PlumeDraw &pd, const struct PlumeInfo &info, double dt);
+	void AddPlumePoint (const struct PlumeInfo &info, int type);
 };
 
 // -----------------------------------------------------------------------

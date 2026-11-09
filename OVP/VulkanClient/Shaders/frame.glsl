@@ -36,7 +36,7 @@ layout(set = FRAME_SET, binding = 0) uniform Frame {
 	vec4 planetLight;  // its irradiance at normal incidence (rgb), w: 1 = present
 	vec4 lightCount;   // x: number of local lights; the flames the smoke's light is occluded towards (-1: none): y, z the
 	                   // brightest vessel's (a point, the farthest of its points from it), w the next vessel's
-	vec4 city[4];      // the cities' road map (CityField): centre (view space), w: present; axes x, y (view space); x, y, z: 1/size of its fine and coarse level and the far map [1/m]
+	vec4 city[4];      // the cities' road map (CityField): centre (view space), w: present; axes x, y (view space); x, y, z: 1/size of its fine and coarse level and the far map [1/m]; w of [3]: the camera's altitude above the ground [m] (CityField; 0: none)
 	vec4 relBeta;      // relativistic view: the camera's velocity (view space, units of c), w: 1 = on
 	vec4 relSelf;      // the camera's own vessel (moving with it: seen as it is): centre (view space), w: radius
 	vec4 relSunDir;    // the sunlight on that vessel, in its frame: from this direction (view space, aberrated)

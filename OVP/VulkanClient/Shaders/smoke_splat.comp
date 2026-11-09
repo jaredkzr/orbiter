@@ -70,16 +70,18 @@ void main ()
 	float py = h * abs (frame.proj[1][1]) / max (vp.z, 0.1) * 0.5 * float (VOL_SIZE.y);
 	float pz = (VolSlice (vp.z + h) - VolSlice (max (vp.z - h, VOL_NEAR))) * 0.5 * float (VOL_SIZE.z);
 	vec3 rad = vec3 (px, py, pz);
-	// (more than 6 froxels in radius: the half-resolution grid, more than
-	// 12 the quarter; even larger there (the camera inside a big puff):
-	// concentrated, its column's opacity kept)
+	// (more than 9 froxels in radius: the half-resolution grid, more than
+	// 18 the quarter; even larger there (the camera inside a big puff):
+	// concentrated, its column's opacity kept. 9 and 18, not 6 and 12: close
+	// puffs of engine smoke on the coarser grids showed as blocks with hard
+	// straight edges)
 	float big0 = max (max (rad.x, rad.y), rad.z);
-	int level = big0 <= 6.0 || (uint (pc.vol.z) & 4u) != 0u ? 0 : big0 <= 12.0 ? 1 : 2; // (bit 2: fine only, debugging)
+	int level = big0 <= 9.0 || (uint (pc.vol.z) & 4u) != 0u ? 0 : big0 <= 18.0 ? 1 : 2; // (bit 2: fine only, debugging)
 	bool coarse = level > 0;
 	vec3 size = vec3 (VolLevelSize (level));
 	rad *= size / vec3 (VOL_SIZE);
 	float big = max (max (rad.x, rad.y), rad.z);
-	if (big > 6.0) { a *= big / 6.0; rad *= 6.0 / big; }
+	if (big > 9.0) { a *= big / 9.0; rad *= 9.0 / big; }
 	ivec3 r = ivec3 (ceil (rad));
 	// (its profile: flat inside, its edge at least 1.5 froxels wide (a flat
 	// top sampled at the froxels would show the grid's blocks); the column

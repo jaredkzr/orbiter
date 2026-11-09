@@ -31,31 +31,31 @@ namespace {
 	// of hypergolic propellants.
 	const PlumeClass classes[(int)PlumeType::Count] = {
 		//  name          pe [Pa]  core                 bright  diamonds             bright  afterburning        bright smoke  vac   turb  flow
-		//                smoke colour              opacity life  air0   air1   trail contrail light radiance
+		//                smoke colour              opacity life  air0   air1   trail contrail light radiance jet
 		{ "ion",          1.0,   { 0.35f, 0.55f, 1.0f }, 0.7f, { 0, 0, 0 },          0.0f, { 0, 0, 0 },          0.0f, 0.0f,  1.0f, 0.2f,  4.0f,
-		                  { 0, 0, 0 },              0.0f,  0.0f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f },
+		                  { 0, 0, 0 },              0.0f,  0.0f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f, 0.0f },
 		{ "plasma",       5e3,   { 0.55f, 0.62f, 1.0f }, 1.4f, { 0.85f, 0.8f, 1.0f }, 4.0f, { 0.8f, 0.55f, 1.0f }, 0.6f, 0.0f,  0.6f, 0.5f, 60.0f,
-		                  { 0, 0, 0 },              0.0f,  0.0f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f },
+		                  { 0, 0, 0 },              0.0f,  0.0f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f, 0.0f },
 		{ "hydrolox",     2e4,   { 0.45f, 0.55f, 1.0f }, 0.35f, { 1.0f, 0.82f, 0.7f }, 5.0f, { 1.0f, 0.55f, 0.3f }, 0.3f, 0.0f,  0.4f, 0.6f, 50.0f,
-		                  { 0.96f, 0.96f, 0.96f },  0.30f, 12.0f, 0.4f, 0.9f, 0.25f, 1.0f, 20.0f },
+		                  { 0.96f, 0.96f, 0.96f },  0.30f, 12.0f, 0.4f, 0.9f, 0.25f, 1.0f, 20.0f, 120.0f },
 		{ "methalox",     4e4,   { 0.40f, 0.50f, 1.0f }, 0.6f, { 0.9f, 0.75f, 1.0f }, 5.0f, { 1.0f, 0.5f, 0.2f },  0.8f, 0.0f,  0.5f, 0.7f, 45.0f,
-		                  { 0.95f, 0.95f, 0.95f },  0.22f, 10.0f, 0.5f, 0.95f, 0.2f, 0.9f, 40.0f },
+		                  { 0.95f, 0.95f, 0.95f },  0.22f, 10.0f, 0.5f, 0.95f, 0.2f, 0.9f, 40.0f, 150.0f },
 		{ "kerolox",      7e4,   { 1.0f, 0.62f, 0.25f }, 2.5f, { 1.0f, 0.85f, 0.6f }, 5.0f, { 1.0f, 0.45f, 0.12f }, 4.0f, 0.02f, 0.35f, 1.0f, 40.0f,
-		                  { 0.58f, 0.49f, 0.40f },  0.45f, 10.0f, 0.6f, 0.95f, 0.5f, 0.7f, 150.0f },
+		                  { 0.58f, 0.49f, 0.40f },  0.45f, 10.0f, 0.6f, 0.95f, 0.5f, 0.7f, 150.0f, 150.0f },
 		{ "hypergolic",   3e4,   { 1.0f, 0.58f, 0.45f }, 0.9f, { 1.0f, 0.75f, 0.6f }, 3.0f, { 1.0f, 0.5f, 0.3f },  1.2f, 0.01f, 0.5f, 0.7f, 45.0f,
-		                  { 0.74f, 0.50f, 0.32f },  0.40f, 12.0f, 0.3f, 0.9f, 0.4f, 0.0f, 60.0f },
+		                  { 0.74f, 0.50f, 0.32f },  0.40f, 12.0f, 0.3f, 0.9f, 0.4f, 0.0f, 60.0f, 150.0f },
 		{ "solid",        7e4,   { 1.0f, 0.88f, 0.65f }, 6.0f, { 1.0f, 0.9f, 0.7f }, 4.0f, { 1.0f, 0.65f, 0.3f }, 6.0f, 0.25f, 0.6f, 1.2f, 35.0f,
-		                  { 0.95f, 0.95f, 0.93f },  0.85f, 40.0f, 0.0f, 0.05f, 1.0f, 0.0f, 300.0f },
+		                  { 0.95f, 0.95f, 0.93f },  0.85f, 40.0f, 0.0001f, 0.03f, 1.0f, 0.0f, 300.0f, 200.0f },
 		// (hypergolic attitude thrusters: a narrow yellow-orange cone, after
 		// photographs of the Shuttle's and Dragon's RCS; a brief puff of
 		// unburnt propellant as they light)
 		{ "rcs",          3e3,   { 1.0f, 0.72f, 0.38f }, 1.6f, { 0, 0, 0 },          0.0f, { 1.0f, 0.6f, 0.4f },  0.3f, 0.0f,  1.0f, 0.4f, 30.0f,
-		                  { 0.93f, 0.90f, 0.84f },  0.30f, 0.2f, -2.0f, -1.0f, 0.0f, 0.0f, 30.0f },
+		                  { 0.93f, 0.90f, 0.84f },  0.30f, 0.2f, -2.0f, -1.0f, 0.0f, 0.0f, 30.0f, 0.0f },
 		// (cold gas, e.g. nitrogen: no flame; a faint frosty cone in sunlight)
 		{ "coldgas",      2e3,   { 0.02f, 0.02f, 0.025f }, 1.0f, { 0, 0, 0 },        0.0f, { 0, 0, 0 },          0.0f, 0.0f,  1.0f, 0.3f, 20.0f,
-		                  { 0.95f, 0.96f, 1.0f },   0.12f, 0.5f, -2.0f, -1.0f, 0.0f, 0.0f, 0.0f },
+		                  { 0.95f, 0.96f, 1.0f },   0.12f, 0.5f, -2.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f },
 		{ "texture",      0.0,   { 1, 1, 1 },            1.0f, { 0, 0, 0 },          0.0f, { 0, 0, 0 },          0.0f, 0.0f,  1.0f, 0.0f,  0.0f,
-		                  { 0, 0, 0 },              0.0f,  0.0f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f },
+		                  { 0, 0, 0 },              0.0f,  0.0f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f, 0.0f },
 	};
 
 
@@ -908,8 +908,11 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 		for (int k = 0; k < 3; k++)
 			info->lightCol[k] = 1.1f * ls * (0.5f * pc.core[k] + 0.35f * pc.outer[k] + (float)(0.05 * diamonds) * pc.diamond[k]);
 		info->lightArea = 2.0 * radiusAt (zl) * re * zEnd * re;
+		for (int k = 0; k < 3; k++)
+			info->radiance[k] = 1.1f * (0.5f * pc.core[k] + 0.35f * pc.outer[k] + (float)(0.05 * diamonds) * pc.diamond[k]);
 		info->endDir = unit (viewOf (zEnd + 0.5) - viewOf (zEnd - 0.5));
 		info->endRadius = radiusAt (zEnd) * re;
+		info->length = zEnd * re;
 		info->hit = hit;
 		info->coverage = coverage;
 		info->heat = hitHeat;
@@ -927,7 +930,9 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 		double d = length (mid);
 		if (d > 1e-3) {
 			double c = fabs (dotp (ez, mid / d)), s = sqrt (std::max (0.0, 1.0 - c * c));
-			solidAngle += std::min ((2.0 * R * Lm * s + PI * R * R * c) / (d * d), 2.0 * PI);
+			double om = std::min ((2.0 * R * Lm * s + PI * R * R * c) / (d * d), 2.0 * PI);
+			solidAngle += om;
+			if (info) info->solid = om;
 		}
 	}
 	uint32_t index = slot * MAX_PLUMES + (uint32_t)list.size();

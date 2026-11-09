@@ -167,6 +167,10 @@ public:
 	/// with axes X, Y (planet frame, unit), their sizes [m]
 	void SetCityMap (VkTexture *fine, VkTexture *coarse, VkTexture *far, OBJHANDLE hPlanet, const VECTOR3 &centre,
 		const VECTOR3 &X, const VECTOR3 &Y, double fineSize, double coarseSize, double farSize);
+	/// The camera's altitude above the ground of the planet with cities [m]
+	/// (CityField, every frame; 0: none): the shaders' hand-off from the
+	/// procedural city to the night light texture (frame.city[3].w)
+	void SetCityAltitude (float alt) { cityAlt = alt; }
 	/// A mesh into the ray tracing scene of this frame (without drawing it)
 	/// (shadowOnly: a stand-in that only blocks light)
 	void AddMeshRT (const VkMesh *mesh, const Mat4 &modelView, bool shadowOnly = false);
@@ -425,6 +429,7 @@ private:
 	OBJHANDLE cityPlanet = nullptr;
 	VECTOR3 cityCentre{}, cityX{}, cityY{};
 	double citySize[3] = { 1.0, 1.0, 1.0 };
+	float cityAlt = 0.0f; // (SetCityAltitude)
 	std::unique_ptr<class TemporalAA> taa;
 	std::unique_ptr<class FsrUpscaler> fsr;
 	std::unique_ptr<class VolumetricClouds> vclouds;

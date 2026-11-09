@@ -24,6 +24,13 @@ layout(location = 4) out vec2 vUV;
 
 void main()
 {
+	// (gone by the hand-off to the night light texture: not drawn, as in
+	// the colour pass, building.vert)
+	if (BuildingFadedOut(BuildingAltFade(frame.city[3].w))) {
+		gl_Position = vec4(2.0, 2.0, 2.0, 1.0); // (outside: none)
+		vPosView = vNormalView = vec3(0.0), vClip = vPrevClip = vec4(0.0), vUV = vec2(0.0);
+		return;
+	}
 	mat4 M = BuildingFrame();
 	vec4 p = pp.modelView * (M * vec4(BuildingPos(), 1.0));
 	vPosView = p.xyz;

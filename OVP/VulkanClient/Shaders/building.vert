@@ -55,5 +55,8 @@ void main()
 	float range = h < 10.0 ? 3000.0 : h < 35.0 ? 9000.0 : 25000.0;
 	float d = length((draw.modelView * vec4(M[3].xyz, 1.0)).xyz);
 	vFade = 1.0 - smoothstep(range - 1700.0, range - 700.0, d);
+	// the hand-off to the night light texture by the camera's altitude above
+	// the ground (building.glsl BuildingAltFade)
+	vFade *= BuildingAltFade(frame.city[3].w);
 	gl_Position = frame.proj * RelApparent (p); // (relativistic view: as seen)
 }

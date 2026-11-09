@@ -78,7 +78,11 @@ float ParticleAlpha (Particle p)
 	float t = p.posAge.w / p.velLife.w;
 	// (a cooling flame: dims by its colour, ParticleRamp; it fades in only)
 	if ((p.flags & PF_RAMP) != 0u) return p.shape.z * smoothstep (0.0, 0.08, t);
-	float a = p.shape.z * (1.0 - t) * smoothstep (0.0, 0.08, t);
+	// (engine smoke: in within 0.08 s, the long-lived solid motor's smoke
+	// too: it leaves the flame's end at the jet's speed, a longer fade-in
+	// left a gap between the flame and the column)
+	float fin = ParticleClass (p.flags) == PC_ENGINE_SMOKE ? min (0.08, 0.08 / p.velLife.w) : 0.08;
+	float a = p.shape.z * (1.0 - t) * smoothstep (0.0, fin, t);
 	// (a trail's smoke: spread over more as it grows (the puffs at a fixed
 	// spacing overlap the more, the trail as thick); dense at first, it
 	// stays opaque until four times its size (and fading in as the engine's

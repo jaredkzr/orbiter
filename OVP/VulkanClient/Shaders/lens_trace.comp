@@ -221,7 +221,7 @@ float Height (float r, float bulge)
 float GasPu (vec3 q, vec3 V, vec4 pm, float a)
 {
 	float r = KerrR (q, a), r2 = r * r, ra = r2 + a * a;
-	float f = 2.0 * r2 * r / (r2 * r2 + a * a * q.z * q.z);
+	float f = r > 1e6 ? 2.0 * r / (r2 + a * a * q.z * q.z / r2) : 2.0 * r2 * r / (r2 * r2 + a * a * q.z * q.z); // (r^4 overflows far out)
 	vec3 l = vec3 ((r * q.x + a * q.y) / ra, (r * q.y - a * q.x) / ra, q.z / r);
 	float nrm = 1.0 - dot (V, V) - f * (1.0 + dot (l, V)) * (1.0 + dot (l, V));
 	if (nrm <= 0.0) return 0.0;
@@ -684,7 +684,7 @@ void main ()
 	vec4 qu = -P.e[0] + n.x * P.e[1] + n.y * P.e[2] + n.z * P.e[3];
 	vec3 x = P.cam.xyz;
 	float r = KerrR (x, a), r2 = r * r, ra = r2 + a * a;
-	float f = 2.0 * r2 * r / (r2 * r2 + a * a * x.z * x.z);
+	float f = r > 1e6 ? 2.0 * r / (r2 + a * a * x.z * x.z / r2) : 2.0 * r2 * r / (r2 * r2 + a * a * x.z * x.z); // (r^4 overflows far out)
 	vec3 l = vec3 ((r * x.x + a * x.y) / ra, (r * x.y - a * x.x) / ra, x.z / r);
 	float Lc = qu.w + dot (l, qu.xyz);
 	vec4 p = vec4 (qu.xyz + f * Lc * l, -qu.w + f * Lc);
