@@ -711,12 +711,18 @@ void main()
 	if (tile.params.z < 0.5 && atm.surfPrm.x != 1.0) // (the textures' colour tints, per planet)
 		base = max(mix(vec3(dot(base, vec3(0.2126, 0.7152, 0.0722))), base, atm.surfPrm.x), 0.0);
 	// procedural detail below the textures' resolution (terrain only)
+	float detailSky = 1.0; // (sky visibility of the stones)
 	float detailShadow = 1.0; // (shadows of the procedural craters)
 	vec3 cityLight = vec3(0.0); // (street lamps)
 	float cityCover = 0.0;
 	if (tile.params.z < 0.5) {
 #ifdef TERRAIN_DETAIL
-		TerrainDetailShading(vPosView, N, base, vDetailA, detailShadow);
+		float land = 1.0; // (no stones on water: the mask's alpha)
+		if (tile.params.x > 0.5) {
+			vec2 hmL = 0.5 / vec2(textureSize(maskTex, 0));
+			land = smoothstep(0.3, 0.7, texture(maskTex, clamp(vUV * tile.maskUV.zw + tile.maskUV.xy, hmL, 1.0 - hmL)).a);
+		}
+		TerrainDetailShading(vPosView, N, base, vDetailA, detailShadow, land, detailSky);
 #endif
 		cityLight = CityGround(vPosView, base, cityCover);
 		TrackShading(vPosView, N, base);
@@ -756,7 +762,7 @@ void main()
 	// regolith of airless bodies: no limb darkening, opposition surge
 	float sunRefl = int(atm.detail.x + 0.5) == DETAIL_AIRLESS && tile.params.z < 0.5
 		? RegolithReflectance(N, L, normalize(-vPosView), Ng) : max(ndl, 0.0);
-	vec3 irr = frame.ambient.rgb * ao * ambNight + (frame.sunColor.rgb * sunT * sunRefl + LocalLighting(vPosView, N, lv)) * aoDirect;
+	vec3 irr = frame.ambient.rgb * ao * ambNight * detailSky + (frame.sunColor.rgb * sunT * sunRefl + LocalLighting(vPosView, N, lv)) * aoDirect;
 	vec3 col = base * irr;
 	// street lamps, lit when the sun is down
 	col += base * cityLight * smoothstep(0.05, -0.03, dot(Ng, L));

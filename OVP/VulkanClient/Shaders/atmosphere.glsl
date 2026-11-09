@@ -41,6 +41,9 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 seaPrm;        // x: mean-square slope below the shortest wave, y: total mean-square slope (0: no sea state), z: U10 [m/s], w: whitecap coverage (G3; 0: none)
 	vec4 foamPrm;       // whitecaps (G3): x: crest threshold (slope units), y: sigma of the crest index, z: far-field mean foam, w: mean of the foam lace
 	vec4 shorePrm;      // shore foam (G3): x: band width [m] (0: none), y: bore spacing [m], z: bore phase [cycles], w: strength
+	vec4 pebShape;      // terrain detail pebbles (B1): size, round, elong, height
+	vec4 pebShape2;     //   bevel, tilt, crag, tone
+	vec4 pebPrm;        //   albedo factor, grit density, micro floor (a/lambda), Earth gate (0/1)
 } atm;
 
 // planet surface (western and eastern hemisphere), for reflections

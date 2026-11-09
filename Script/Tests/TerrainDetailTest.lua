@@ -4,7 +4,9 @@
 -- the profile is smooth at 25 m), without steps; the open sea and the
 -- ground at Cape Canaveral (a surface base) and in Paris (a city) stay
 -- about as flat as the data. On the Moon's mare near Hadley Rille craters
--- roughen the flat ground.
+-- roughen the flat ground. On Titan the micro relief (the physics sees no stones,
+-- only the micro floor) roughens the ground and stays continuous; Proxima b's
+-- land has micro relief (open sea gate) while its sea ice stays flat.
 -- Skipped (passes) without elevation data.
 
 local failed = false
@@ -14,6 +16,9 @@ local function check(name, cond, msg)
 	else log("FAIL " .. name .. " " .. msg); failed = true end
 end
 
+-- m: Titan micro relief on (0.0086 m) vs off (0.0049 m); the physics sees no stones (lmin 0.3 m), so this is the micro floor
+local TITAN_MICRO_MIN = 0.0065
+local PROXIMA_MICRO_MIN = 0.0028 -- m: micro on 0.0037, off 0.0019
 local E = oapi.get_objhandle("Earth")
 local r = math.rad
 
@@ -102,6 +107,43 @@ local function main()
 		check("craters", mrough > 0.1, string.format("roughness at 5 m on the mare: %.3f m", mrough))
 		local mstep = stats(profile(r(3.70), r(26.05), r(90), 600, 0.1, M))
 		check("craters_continuous", mstep < 0.6, string.format("largest step at 0.1 m: %.3f m", mstep))
+	end
+
+	-- Titan: micro relief (the physics sees no stones; largest deviation from the
+	-- mean within +-0.25 m), and the profile stays continuous at 5 mm
+	local T = oapi.get_objhandle("Titan")
+	if T then
+		local h = profile(r(150), r(-10), r(90), 20, 0.005, T)
+		local w, peak = 50, 0
+		for i = 1, #h do
+			local a, b = math.max(1, i - w), math.min(#h, i + w)
+			local m = 0
+			for k = a, b do m = m + h[k] end
+			peak = math.max(peak, math.abs(h[i] - m / (b - a + 1)))
+		end
+		check("titan_micro", peak > TITAN_MICRO_MIN, string.format("largest deviation from the local mean: %.4f m", peak))
+		local tstep = stats(h)
+		check("titan_continuous", tstep < 0.02, string.format("largest step at 5 mm: %.4f m", tstep))
+	end
+
+	-- Proxima b land (data below the datum, but with relief): the sea gate is open
+	local P = oapi.get_objhandle("Proxima b")
+	if P then
+		local h = profile(r(-26), r(-8), r(90), 20, 0.005, P)
+		local w, peak = 50, 0
+		for i = 1, #h do
+			local a, b = math.max(1, i - w), math.min(#h, i + w)
+			local m = 0
+			for k = a, b do m = m + h[k] end
+			peak = math.max(peak, math.abs(h[i] - m / (b - a + 1)))
+		end
+		check("proxima_land", peak > PROXIMA_MICRO_MIN, string.format("largest deviation from the local mean: %.4f m", peak))
+	end
+
+	-- the sea ice of Proxima b: no pebbles or micro relief (the sea gate)
+	if P then
+		local _, _, pmin, pmax = stats(profile(r(-30), r(-20), r(90), 200, 0.5, P))
+		check("sea_ice", pmax - pmin < 1e-6, string.format("range %.9f m", pmax - pmin))
 	end
 
 	oapi.exit(failed and 1 or 0)

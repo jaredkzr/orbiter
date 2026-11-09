@@ -10,6 +10,8 @@
 #include <atomic>
 #include <thread>
 #include <mutex>
+#include <set>
+#include <string>
 #include <condition_variable>
 #include <chrono>
 #include "RayTracing.h"
@@ -305,7 +307,7 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	bool gpuMesh = ctx->deviceAddress; // (single precision: no double precision needed)
 	if (const char *e = getenv ("ORBITER_VK_GPU_MESH")) gpuMesh = gpuMesh && atoi (e) != 0;
 	if (gpuMesh) {
-		VkPushConstantRange mpr{ VK_SHADER_STAGE_COMPUTE_BIT, 0, 48 };
+		VkPushConstantRange mpr{ VK_SHADER_STAGE_COMPUTE_BIT, 0, 64 };
 		VkPipelineLayoutCreateInfo mli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 		mli.pushConstantRangeCount = 1;
 		mli.pPushConstantRanges = &mpr;
@@ -646,6 +648,18 @@ PlanetSurface::PlanetSurface (OBJHANDLE h, Scene *s, std::shared_ptr<PlanetLayer
 		if (const double *me = (const double*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_MAXELEVATION))
 			maxElev = std::max (0.0, *me);
 		detail = oapiSurfaceDetailParams (hPlanet, &detailPrm);
+		static std::mutex logMutex;
+		static std::set<std::string> logged;
+		bool first = false;
+		if (detail) {
+			char pname[256];
+			oapiGetObjectName (hPlanet, pname, 256);
+			{ std::lock_guard<std::mutex> lk (logMutex); first = logged.insert (pname).second; }
+			if (first) oapiWriteLogV ("VulkanClient: terrain detail of %s: level %d, lambdaMin %.3f m, pebbles %.2f (size %.2f round %.2f elong %.2f height %.2f bevel %.2f tilt %.2f crag %.2f tone %.2f albedo %.2f), grit %.2f, micro %.3f, gate %d, sea %d",
+				pname, detailPrm.level, detailPrm.lambdaMin, detailPrm.pebbles, detailPrm.pebbleSize, detailPrm.pebbleRound, detailPrm.pebbleElong,
+				detailPrm.pebbleHeight, detailPrm.pebbleBevel, detailPrm.pebbleTilt, detailPrm.pebbleCrag, detailPrm.pebbleTone,
+				detailPrm.pebbleAlbedo, detailPrm.grit, detailPrm.micro, detailPrm.pebbleGate ? 1 : 0, detailPrm.sea ? 1 : 0);
+		}
 		// (finer meshes where the detail goes)
 		if (detail) maxLevel = std::clamp (std::max (maxLevel, detailPrm.level), 4, 28);
 		if (const int *em = (const int*)scene->Client()->GetConfigParam (CFGPRM_ELEVATIONMODE)) elevMode = *em;
@@ -1515,9 +1529,11 @@ void PlanetSurface::Prepare ()
 		memcpy ((uint8_t*)tj.ptr + jalign, gj.data(), gj.size() * sizeof(GpuJob));
 		// (ORBITER_VK_MESH_CHECK: the first meshes also made at once into
 		// host memory and compared with the CPU's)
-		static const bool check = getenv ("ORBITER_VK_MESH_CHECK") && atoi (getenv ("ORBITER_VK_MESH_CHECK"));
+		static const int checkArg = getenv ("ORBITER_VK_MESH_CHECK") ? atoi (getenv ("ORBITER_VK_MESH_CHECK")) : 0;
+		static const bool check = checkArg != 0;
 		static int nChecked = 0;
 		for (size_t i = 0; check && i < jobs.size() && nChecked < 24; i++) {
+			if (checkArg > 1 && jobs[i].first->lvl < checkArg) continue; // (n > 1: only the levels from n)
 			if (jobs[i].first->lvl < 14 && nChecked % 3) continue;
 			nChecked++;
 			const int V = TileRenderer::GRID + 1, NV = V * V + 4 * V;
@@ -1530,12 +1546,15 @@ void PlanetSurface::Prepare ()
 			memcpy ((uint8_t*)t1.ptr + al, &one, sizeof(one));
 			ctx->ImmediateSubmit ([&](VkCommandBuffer c) {
 				vkCmdBindPipeline (c, VK_PIPELINE_BIND_POINT_COMPUTE, tr->MeshPipeline ());
-				struct { uint64_t jobs, pad; float prm[4]; float prm2[4]; } q{};
+				struct { uint64_t jobs, pad; float prm[4]; float prm2[4]; float prm3[4]; } q{};
 				q.jobs = a1 + al;
 				q.prm[0] = (float)detailPrm.hurst, q.prm[1] = (float)detailPrm.ridge;
 				q.prm[2] = (float)detailPrm.craters, q.prm[3] = (float)detailPrm.craterDepth;
-				q.prm2[0] = (float)detailPrm.pebbles;
-				vkCmdPushConstants (c, tr->MeshLayout (), VK_SHADER_STAGE_COMPUTE_BIT, 0, 48, &q);
+				q.prm2[0] = (float)detailPrm.pebbles, q.prm2[1] = (float)detailPrm.micro;
+				q.prm2[2] = (float)detailPrm.pebbleSize, q.prm2[3] = (float)detailPrm.pebbleRound;
+				q.prm3[0] = (float)detailPrm.pebbleElong, q.prm3[1] = (float)detailPrm.pebbleHeight;
+				q.prm3[2] = (float)detailPrm.pebbleBevel, q.prm3[3] = (float)detailPrm.pebbleTilt;
+				vkCmdPushConstants (c, tr->MeshLayout (), VK_SHADER_STAGE_COMPUTE_BIT, 0, 64, &q);
 				vkCmdDispatch (c, 1, 1, 1);
 			});
 			MeshData cpu;
@@ -1566,12 +1585,15 @@ void PlanetSurface::Prepare ()
 		dep.pMemoryBarriers = &mb;
 		vkCmdPipelineBarrier2 (cmd, &dep);
 		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, tr->MeshPipeline ());
-		struct { uint64_t jobs, pad; float prm[4]; float prm2[4]; } pc{};
+		struct { uint64_t jobs, pad; float prm[4]; float prm2[4]; float prm3[4]; } pc{};
 		pc.jobs = ja;
 		pc.prm[0] = (float)detailPrm.hurst, pc.prm[1] = (float)detailPrm.ridge;
 		pc.prm[2] = (float)detailPrm.craters, pc.prm[3] = (float)detailPrm.craterDepth;
-		pc.prm2[0] = (float)detailPrm.pebbles;
-		vkCmdPushConstants (cmd, tr->MeshLayout (), VK_SHADER_STAGE_COMPUTE_BIT, 0, 48, &pc);
+		pc.prm2[0] = (float)detailPrm.pebbles, pc.prm2[1] = (float)detailPrm.micro;
+		pc.prm2[2] = (float)detailPrm.pebbleSize, pc.prm2[3] = (float)detailPrm.pebbleRound;
+		pc.prm3[0] = (float)detailPrm.pebbleElong, pc.prm3[1] = (float)detailPrm.pebbleHeight;
+		pc.prm3[2] = (float)detailPrm.pebbleBevel, pc.prm3[3] = (float)detailPrm.pebbleTilt;
+		vkCmdPushConstants (cmd, tr->MeshLayout (), VK_SHADER_STAGE_COMPUTE_BIT, 0, 64, &pc);
 		vkCmdDispatch (cmd, (uint32_t)jobs.size(), 1, 1);
 		mb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 		mb.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;

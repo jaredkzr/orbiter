@@ -2021,6 +2021,18 @@ DLLEXPORT bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, SURFDETAILPARAM *prm)
 	prm->pebbles = p.pebbles;
 	prm->flatSpacing = det->FlatSpacing ();
 	prm->sea = p.sea;
+	prm->pebbleSize = p.shape.size;
+	prm->pebbleRound = p.shape.round;
+	prm->pebbleElong = p.shape.elong;
+	prm->pebbleHeight = p.shape.height;
+	prm->pebbleBevel = p.shape.bevel;
+	prm->pebbleTilt = p.shape.tilt;
+	prm->pebbleCrag = p.shape.crag;
+	prm->pebbleTone = p.shape.tone;
+	prm->pebbleAlbedo = p.pebbleAlbedo;
+	prm->micro = p.micro;
+	prm->grit = p.grit;
+	prm->pebbleGate = p.pebbleGate;
 	return true;
 }
 

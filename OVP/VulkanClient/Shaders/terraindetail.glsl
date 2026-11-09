@@ -20,20 +20,26 @@ struct DetailSample {
 };
 
 // A pebble cell's height [m] (w) and its gradient in the cell [m per cell]
-// (xyz); the height as DetPebbleCell's (keep them identical)
-vec4 DetPebbleCellGrad (ivec3 cell, int m, int k, float density, vec3 f, float crag)
+// (xyz); the height as DetPebbleCell's (keep them identical, with the
+// core's PebbleLayer); top: the profile's value (0 without a stone),
+// tone: the stone's albedo offset (-1 to 1)
+vec4 DetPebbleCellGrad (ivec3 cell, int m, int k, float density, vec3 f, float crag, DetPebbleShape S, out float top, out float tone)
 {
+	top = 0.0, tone = 0.0;
 	float s = exp2 (float (k));
 	uint h0 = DetHash (cell, 3000u + uint (m));
 	if (DetUnit16 (h0) >= density * (k == -1 ? 0.4 : k == -2 ? 0.7 : 1.0)) return vec4 (0.0);
 	uint h1 = DetPcg (h0), h2 = DetPcg (h1), h3 = DetPcg (h2), h4 = DetPcg (h3);
-	float r = 0.12 + 0.12 * DetUnit16 (h4), hgt = 0.25 + 0.3 * DetUnit16 (h4 >> 16);
-	float ext = 1.05 * r;
+	float r = S.size * (0.12 + 0.12 * DetUnit16 (h4)), hgt = S.height * (0.25 + 0.3 * DetUnit16 (h4 >> 16));
+	float ext = 1.05 * r / (1.0 - S.elong);
 	vec3 c = ext + (1.0 - 2.0 * ext) * vec3 (DetUnit16 (h1), DetUnit16 (h2), DetUnit16 (h3));
 	vec3 v = f - c;
 	if (length (v) >= ext) return vec4 (0.0);
 	// the soft maximum of the facet planes, x, and its gradient (the
 	// planes' normals weighted by their shares of the sum)
+	// (elongated: the polygon of vp = M v, M = I - elong a aT)
+	vec3 vp = v, ea = vec3 (0.0);
+	if (S.elong > 0.0) { ea = DetUnitFromHash (DetPcg (h2 ^ 0x7f4a7c15u)); vp = v - ea * (S.elong * dot (v, ea)); }
 	float x = 0.0;
 	vec3 dx = vec3 (0.0);
 	uint he = h4;
@@ -41,19 +47,28 @@ vec4 DetPebbleCellGrad (ivec3 cell, int m, int k, float density, vec3 f, float c
 		he = DetPcg (he ^ 0x51ed27u);
 		vec3 n = DetUnitFromHash (he);
 		float re = r * (0.75 + 0.25 * DetUnit16 (he >> 16));
-		float t = exp (dot (v, n) / re / DET_PEBBLE_SOFT);
+		float t = exp (dot (vp, n) / re / DET_PEBBLE_SOFT);
 		x += t;
 		dx += t * n / re;
 	}
 	dx /= x;
+	if (S.elong > 0.0) dx -= ea * (S.elong * dot (dx, ea)); // (M dx)
 	x = DET_PEBBLE_SOFT * log (x);
+	if (S.round > 0.0) {
+		// (mixed towards the ellipse)
+		vec3 dxr = vp / (r * max (length (vp), 1e-6));
+		if (S.elong > 0.0) dxr -= ea * (S.elong * dot (dxr, ea));
+		x += (length (vp) / r - x) * S.round;
+		dx += (dxr - dx) * S.round;
+	}
 	if (x >= 1.0) return vec4 (0.0);
-	float tt = clamp ((1.0 - x) / 0.6, 0.0, 1.0);
-	float top = tt * tt * (3.0 - 2.0 * tt);
-	vec3 dtop = -dx * (6.0 * tt * (1.0 - tt) / 0.6);
+	float tt = clamp ((1.0 - x) / S.bevel, 0.0, 1.0);
+	top = tt * tt * (3.0 - 2.0 * tt);
+	tone = DetUnit16 (DetPcg (h4 ^ 0x68e31da4u)) * 2.0 - 1.0;
+	vec3 dtop = -dx * (6.0 * tt * (1.0 - tt) / S.bevel);
 	vec3 nt = DetUnitFromHash (DetPcg (h3 ^ 0x2545f491u));
-	float tilt = 1.0 + 0.5 * dot (v, nt) / r;
-	vec3 dtilt = tilt > 0.3 ? 0.5 * nt / r : vec3 (0.0);
+	float tilt = 1.0 + S.tilt * dot (v, nt) / r;
+	vec3 dtilt = tilt > 0.3 ? S.tilt * nt / r : vec3 (0.0);
 	tilt = max (tilt, 0.3);
 	float a = hgt * r * s;
 	float h = a * top * tilt;
@@ -103,6 +118,7 @@ DetailSample TerrainDetailEval (DetPoint pt, vec3 d, float A, float fade, float 
 		float shape = (1.0 - 0.4 * r) * n.w + 0.8 * r * (0.35 - abs (n.w));
 		n.xyz *= (1.0 - 0.4 * r) - 0.8 * r * sign (n.w);
 		float a = A * pow (lambda / spacing, hurst);
+		if (atm.pebPrm.z > 0.0 && j <= 1) a = max (a, atm.pebPrm.z * lambda * fade);   // (the slope floor, as DetHeight's micro)
 		ds.grad += DetToPlanet (n.xyz, p, sg) * (a * w / lambda);
 		ds.height += a * w * shape;
 	}
@@ -193,12 +209,30 @@ DetailSample TerrainDetailEval (DetPoint pt, vec3 d, float A, float fade, float 
 	return ds;
 }
 
+// Whether stones may lie on a texel of colour c (Earth, shading only): not
+// on vegetation, snow and bright flats (dry lakes, salt)
+float DetPebbleGate (vec3 c)
+{
+	float mx = max (c.r, max (c.g, c.b)), mn = min (c.r, min (c.g, c.b));
+	float lum = dot (c, vec3 (0.2126, 0.7152, 0.0722)), sat = (mx - mn) / max (mx, 1e-4);
+	float veg = smoothstep (0.02, 0.08, (c.g - max (c.r, c.b)) / max (c.g + max (c.r, c.b), 1e-4));
+	float bright = smoothstep (0.30, 0.45, lum) * (1.0 - smoothstep (0.10, 0.22, sat));
+	return (1.0 - veg) * (1.0 - bright);
+}
+
+const float DET_SKY_EXP = 2.0;
+
 // Perturb the shading normal Nv (view space) of the surface at posView,
 // and its albedo (weathered: darker in the hollows, lighter on the crests;
 // fresh crater ejecta)
-void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec2 Af, inout float sunShadow)
+void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec2 Af, inout float sunShadow, float land, inout float skyVis)
 {
-	if (tile.detail.w < 0.5 || (Af.x <= 0.0 && (Af.y <= 0.0 || atm.detailPrm.y <= 0.0))) return;
+	// stones: not on water (land), and on Earth by the texel's colour
+	float pg = land * (atm.pebPrm.w > 0.5 ? DetPebbleGate (base) : 1.0);
+	bool stones = (tile.morph.w > 0.0 || atm.pebPrm.y > 0.0) && pg > 0.0;
+	if (tile.detail.w < 0.5 || (Af.x <= 0.0 && (Af.y <= 0.0 || (atm.detailPrm.y <= 0.0 && !stones)))) return;
+	vec3 gs = vec3 (0.0); // (the stones' own slopes)
+	DetPebbleShape S = DetPebbleShape (atm.pebShape.x, atm.pebShape.y, atm.pebShape.z, atm.pebShape.w, atm.pebShape2.x, atm.pebShape2.y);
 	mat3 v2p = mat3 (atm.viewToPlanet);
 	// the point on the sphere: from the tile's reference point D0 = d0 R
 	// (tile.refI + refF), the position relative to d0 (R + h0) (refRel):
@@ -224,28 +258,59 @@ void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec2 Af
 	// to stones of a few pixels
 	// (all stones of two pixels and more: the meshes have the larger ones'
 	// shape, but not their slopes)
-	if (tile.morph.w > 0.0 && footprint < 0.03 && Af.y > 0.0) {
+	if (tile.morph.w > 0.0 && footprint < 0.03 && Af.y > 0.0 && pg > 0.0) {
 		int nl = int (ceil (tile.morph.w));
-		vec3 g = vec3 (0.0);
-		float hs = 0.0;
+		float hs = 0.0, ts = 0.0;
 		for (int k = -1; k >= -4; k--) {
 			float s = exp2 (float (k));
-			float w = DetSmoothStep (1.5, 3.5, 0.18 * s / footprint) * DetSmoothStep (0.5, 1.5, log2 (tile.detail.x / s)) * Af.y;
+			float w = DetSmoothStep (1.5, 3.5, 0.18 * s / footprint) * DetSmoothStep (0.5, 1.5, log2 (tile.detail.x / s)) * Af.y * pg;
 			if (w <= 0.0) continue;
+			// (the sky-visibility term fades where the stone's bevel band is under a few pixels)
+			float wv = DetSmoothStep (1.5, 4.0, atm.pebShape2.x * 0.18 * atm.pebShape.x * s / footprint);
 			// (the crags fade out when the stone is a few pixels)
-			float crag = 1.0 - smoothstep (0.015 * s, 0.04 * s, footprint);
+			float crag = (1.0 - smoothstep (0.015 * s, 0.04 * s, footprint)) * atm.pebShape2.z;
 			for (int l = 0; l < nl; l++) {
 				int m = k - DET_JMIN + 64 + 29 * l;
 				ivec3 cell, p; vec3 sg;
 				vec3 f = DetLattice (m, pt, k, cell, p, sg);
-				vec4 hg = DetPebbleCellGrad (cell, m, k, tile.morph.w / float (nl), f, crag);
-				g += DetToPlanet (hg.xyz, p, sg) * (w / s);
+				float top, tone;
+				vec4 hg = DetPebbleCellGrad (cell, m, k, tile.morph.w / float (nl), f, crag, S, top, tone);
+				vec3 gk = DetToPlanet (hg.xyz, p, sg) * (w / s);
+				ds.grad += gk;
+				gs += gk * wv;
 				hs += w * hg.w;
+				ts += w * hg.w * tone;
 			}
 		}
-		ds.grad += g;
-		ds.albedo *= mix (1.0, 0.9, smoothstep (0.001, 0.004, hs)); // (stones a little darker than the dust)
+		// (stones: the body's albedo factor, and the spread between them)
+		ds.albedo *= mix (1.0, atm.pebPrm.x * (1.0 + atm.pebShape2.w * ts / max (hs, 1e-6)), smoothstep (0.001, 0.004, hs));
 	}
+	// grit: grains of a few mm (shading only, never in meshes or physics)
+	if (atm.pebPrm.y > 0.0 && footprint < 0.004 && Af.y > 0.0 && pg > 0.0) {
+		float gc = 0.0, gt = 0.0;
+		for (int k = -5; k >= -6; k--) {
+			float s = exp2 (float (k));
+			float w = DetSmoothStep (1.5, 3.5, 0.18 * s / footprint) * Af.y * pg;
+			if (w <= 0.0) continue;
+			float wv = DetSmoothStep (1.5, 4.0, atm.pebShape2.x * 0.18 * atm.pebShape.x * s / footprint);
+			int m = k - DET_JMIN + 180;
+			ivec3 cell, p; vec3 sg;
+			vec3 f = DetLattice (m, pt, k, cell, p, sg);
+			float top, tone;
+			vec4 hg = DetPebbleCellGrad (cell, m, k, atm.pebPrm.y, f, 0.0, S, top, tone);
+			vec3 gk = DetToPlanet (hg.xyz, p, sg) * (w / s);
+			ds.grad += gk;
+			gs += gk * wv;
+			gc += w * top;
+			gt += w * top * tone;
+		}
+		ds.albedo *= mix (1.0, atm.pebPrm.x * (1.0 + atm.pebShape2.w * gt / max (gc, 1e-4)), 0.7 * smoothstep (0.15, 0.5, gc));
+	}
+	// sky visibility of the stones: the uniform sky seen by a facet tilted
+	// by the stones' slope, (1 + cos)/2, squared for the neighbours' occlusion
+	// (the ambient light ignores the normal, so the stones would be flat)
+	gs -= d * dot (gs, d);
+	skyVis *= pow (0.5 + 0.5 * inversesqrt (1.0 + dot (gs, gs)), DET_SKY_EXP);
 	sunShadow *= ds.shadow;
 	base *= clamp (1.0 + ds.height / max (Af.x, 1.0), 0.8, 1.2) * ds.albedo;
 	vec3 g = ds.grad;

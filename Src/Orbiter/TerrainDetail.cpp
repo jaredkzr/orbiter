@@ -5,6 +5,7 @@
 #include "Planet.h"
 #include "Base.h"
 #include "Cities.h"
+#include "ProcTerrain.h"
 #include "elevmgr.h"
 #include <memory>
 #include <map>
@@ -13,6 +14,9 @@
 #include <cstdint>
 #include <cstring>
 #include <atomic>
+#include <cassert>
+#include <cctype>
+#include <cstdio>
 
 namespace {
 
@@ -174,7 +178,7 @@ namespace {
 	// per cell, an angular stone: its outline a polygon (five edges at
 	// random), a bevelled flat top, tilted (radius 0.12 to 0.24 cell sizes,
 	// height 0.25 to 0.55 times it). Fewer of the larger ones. Height [m].
-	double PebbleLayer (const Vector &d, int k, int layer, double R, double density)
+	double PebbleLayer (const Vector &d, int k, int layer, double R, double density, const TerrainDetail::PebbleShape &S)
 	{
 		int m = k - JMIN + 64 + 29 * layer;
 		double s = std::ldexp (1.0, k);
@@ -183,24 +187,27 @@ namespace {
 		uint32_t h0 = Hash ((int32_t)fx, (int32_t)fy, (int32_t)fz, 3000u + (uint32_t)m);
 		if (Unit16 (h0) >= density * (k == -1 ? 0.4 : k == -2 ? 0.7 : 1.0)) return 0.0;
 		uint32_t h1 = Pcg (h0), h2 = Pcg (h1), h3 = Pcg (h2), h4 = Pcg (h3);
-		double r = 0.12 + 0.12 * Unit16 (h4), hgt = 0.25 + 0.3 * Unit16 (h4 >> 16);
-		double ext = 1.05 * r;
+		double r = S.size * (0.12 + 0.12 * Unit16 (h4)), hgt = S.height * (0.25 + 0.3 * Unit16 (h4 >> 16));
+		double ext = 1.05 * r / (1.0 - S.elong);
 		Vector c (ext + (1.0 - 2.0 * ext) * Unit16 (h1), ext + (1.0 - 2.0 * ext) * Unit16 (h2), ext + (1.0 - 2.0 * ext) * Unit16 (h3));
 		Vector v (q.x - fx - c.x, q.y - fy - c.y, q.z - fz - c.z);
 		if (v.length() >= ext) return 0.0;
 		// the outline: a smooth maximum of five edge distances (a polygon
 		// with rounded corners: sharp ones alias on the meshes' grid)
+		Vector vp = v;
+		if (S.elong > 0.0) { Vector a = UnitFromHash (Pcg (h2 ^ 0x7f4a7c15u)); vp = v - a * (S.elong * dotp (v, a)); }
 		double x = 0.0;
 		uint32_t he = h4;
 		for (int e = 0; e < 5; e++) {
 			he = Pcg (he ^ 0x51ed27u);
-			x += std::exp (dotp (v, UnitFromHash (he)) / (r * (0.75 + 0.25 * Unit16 (he >> 16))) / PEBBLE_SOFT);
+			x += std::exp (dotp (vp, UnitFromHash (he)) / (r * (0.75 + 0.25 * Unit16 (he >> 16))) / PEBBLE_SOFT);
 		}
 		x = PEBBLE_SOFT * std::log (x);
+		if (S.round > 0.0) x += (vp.length() / r - x) * S.round;
 		if (x >= 1.0) return 0.0;
 		// a bevelled top (sides over the outer 60%, rounded at both ends), tilted
-		double top = SmoothStep (0.0, 0.6, 1.0 - x);
-		double tilt = 1.0 + 0.5 * dotp (v, UnitFromHash (Pcg (h3 ^ 0x2545f491u))) / r;
+		double top = SmoothStep (0.0, S.bevel, 1.0 - x);
+		double tilt = 1.0 + S.tilt * dotp (v, UnitFromHash (Pcg (h3 ^ 0x2545f491u))) / r;
 		return hgt * r * s * top * std::max (tilt, 0.3);
 	}
 
@@ -234,9 +241,42 @@ static const double BUILT_SPACING = 400.0;
 
 bool TerrainDetail::clientSupport = false;
 
+const TerrainDetail::PebbleShape &TerrainDetail::PebblePreset (int id)
+{
+	static const PebbleShape presets[PEBBLE_SHAPES] = {
+		//            size  round elong height bevel tilt  crag  tone
+		/* Angular */ { 1.0, 0.0, 0.0,  1.0,   0.6,  0.5,  1.0,  0.0 },
+		/* Rounded */ { 1.0, 1.0, 0.3,  1.4,   1.0,  0.15, 0.15, 0.25 },
+		/* Platy   */ { 1.45, 0.0, 0.2, 0.3,   0.15, 0.3,  0.6,  0.15 },
+	};
+	// the stones must fit their cells (PebbleLayer: ext < 0.49 at the largest radius)
+	static const bool checked = [] {
+		for (int i = 0; i < PEBBLE_SHAPES; i++) {
+			double ext = 1.05 * presets[i].size * 0.24 / (1.0 - presets[i].elong);
+			if (!(ext < 0.49)) fprintf (stderr, "TerrainDetail: pebble preset %d does not fit its cell (ext %g)\n", i, ext);
+			assert (ext < 0.49);
+		}
+		return true;
+	}();
+	(void)checked;
+	return presets[id >= 0 && id < PEBBLE_SHAPES ? id : PEBBLE_ANGULAR];
+}
+
+int TerrainDetail::ShapeByName (const char *name)
+{
+	static const char *names[PEBBLE_SHAPES] = { "Angular", "Rounded", "Platy" };
+	if (!name) return -1;
+	for (int i = 0; i < PEBBLE_SHAPES; i++) {
+		const char *a = name, *b = names[i];
+		while (*a && *b && std::tolower ((unsigned char)*a) == std::tolower ((unsigned char)*b)) a++, b++;
+		if (!*a && !*b) return i;
+	}
+	return -1;
+}
+
 TerrainDetail::Overrides::Overrides ()
 {
-	gain = hurst = ridge = floor = sea = craters = craterDepth = craterFresh = pebbles = level = std::nan ("");
+	gain = hurst = ridge = floor = sea = craters = craterDepth = craterFresh = pebbles = level = pebbleShape = pebbleAlbedo = micro = grit = std::nan ("");
 }
 
 void TerrainDetail::Overrides::Apply (Params &p) const
@@ -250,6 +290,10 @@ void TerrainDetail::Overrides::Apply (Params &p) const
 	if (!std::isnan (craterDepth)) p.craterDepth = std::max (0.0, craterDepth);
 	if (!std::isnan (craterFresh)) p.craterFresh = std::clamp (craterFresh, 0.0, 1.0);
 	if (!std::isnan (pebbles)) p.pebbles = std::clamp (pebbles, 0.0, 4.0);
+	if (!std::isnan (pebbleShape) && pebbleShape >= 0.0 && pebbleShape < PEBBLE_SHAPES) p.shape = PebblePreset ((int)pebbleShape);
+	if (!std::isnan (pebbleAlbedo)) p.pebbleAlbedo = std::clamp (pebbleAlbedo, 0.3, 2.0);
+	if (!std::isnan (micro)) p.micro = std::clamp (micro, 0.0, 0.05);
+	if (!std::isnan (grit)) p.grit = std::clamp (grit, 0.0, 1.0);
 	if (!std::isnan (level)) p.level = (int)level;
 }
 
@@ -260,6 +304,8 @@ TerrainDetail::Params TerrainDetail::Defaults (const Planet *planet)
 	if (!strcmp (name, "Earth")) {
 		// eroded relief; plains gently rolling, the sea flat
 		p.gain = 0.5, p.ridge = 1.0, p.floor = 0.03, p.sea = true;
+		// gravel and grit in arid ground (shading mostly; not on vegetation, snow, bright flats)
+		p.pebbles = 0.6, p.shape = PebblePreset (PEBBLE_ANGULAR), p.pebbleAlbedo = 0.85, p.grit = 0.6, p.micro = 0.02, p.pebbleGate = true;
 	} else if (!strcmp (name, "Mars")) {
 		// wind-worn relief, old and shallow craters
 		p.gain = 0.4, p.ridge = 0.7, p.floor = 0.04;
@@ -268,10 +314,14 @@ TerrainDetail::Params TerrainDetail::Defaults (const Planet *planet)
 	} else if (!strcmp (name, "Venus")) {
 		// volcanic plains; its atmosphere stops small impactors: no small craters
 		p.gain = 0.4, p.ridge = 0.6, p.floor = 0.03;
+		// Venera 13/14: plates over most of the ground, fine dark soil between
+		p.pebbles = 1.0, p.shape = PebblePreset (PEBBLE_PLATY), p.pebbleAlbedo = 1.05, p.grit = 0.4, p.micro = 0.015;
 	} else if (!strcmp (name, "Titan")) {
 		// plains of sediment and dunes, hardly any craters
 		p.gain = 0.3, p.ridge = 0.3, p.floor = 0.02;
 		p.craters = 0.02, p.craterDepth = 0.4, p.craterFresh = 0.0;
+		// Huygens: rounded water-ice cobbles, brighter than the organic sand
+		p.pebbles = 1.0, p.shape = PebblePreset (PEBBLE_ROUNDED), p.pebbleAlbedo = 1.3, p.grit = 0.6, p.micro = 0.015;
 	} else if (!strcmp (name, "Io")) {
 		// lava plains resurfaced faster than impacts crater them: no craters
 		p.gain = 0.35, p.ridge = 0.3, p.floor = 0.04;
@@ -306,6 +356,22 @@ TerrainDetail::Params TerrainDetail::Defaults (const Planet *planet)
 		p.gain = 0.3, p.ridge = 0.3, p.floor = 0.05, p.hurst = 1.2;
 		p.craters = 4.0, p.craterDepth = 1.0, p.craterFresh = 0.25;
 		p.pebbles = 1.2; // (clods and fragments in the regolith)
+	} else if (const ProcTerrain *pt = planet->ProcSurface ()) {
+		// atmosphere with a procedural surface (exoplanets): by surface class
+		p.gain = 0.35, p.ridge = 1.0, p.floor = 0.02;
+		switch (pt->Prm().cls) {
+		case ProcTerrain::ROCK:
+			p.pebbles = 1.2, p.shape = PebblePreset (PEBBLE_ANGULAR), p.pebbleAlbedo = 0.9, p.grit = 0.5, p.micro = 0.02; break;
+		case ProcTerrain::DESERT:
+			p.pebbles = 1.0, p.shape = PebblePreset (PEBBLE_ANGULAR), p.pebbleAlbedo = 0.7, p.grit = 0.9, p.micro = 0.02; break;
+		case ProcTerrain::OCEAN:
+			p.pebbles = 0.6, p.shape = PebblePreset (PEBBLE_ROUNDED), p.pebbleAlbedo = 0.95, p.grit = 0.7, p.micro = 0.015; break;
+		case ProcTerrain::ICE:
+			p.pebbles = 0.0, p.pebbleAlbedo = 0.9, p.grit = 0.4, p.micro = 0.0; break;
+		case ProcTerrain::LAVA:
+			p.pebbles = 1.2, p.shape = PebblePreset (PEBBLE_PLATY), p.pebbleAlbedo = 0.85, p.grit = 0.3, p.micro = 0.02; break;
+		default: break;
+		}
 	} else {
 		p.gain = 0.35, p.ridge = 1.0, p.floor = 0.02;
 	}
@@ -513,11 +579,15 @@ double TerrainDetail::Height (double lat, double lng, double elev, double spacin
 	double gp, wp = PadLevel (dir, gp);
 	if (wp > 0.0) lev = lev * (1.0 - wp) + wp * (gp - elev);
 	if (f <= 0.0) return lev;
-	if (fade) *fade = f;
 	// plains get the floor's relief (not the sea)
 	if (prm.floor > 0.0 && (!prm.sea || elev > 1.0)) relief = std::max (relief, prm.floor * spacing);
 	double A = prm.gain * std::max (relief, 0.0) * f; // amplitude at the data's node spacing
 	if (amplitude) *amplitude = A;
+	// sea gate: no craters, pebbles or micro relief on the flat sea (at and below the
+	// data's sea level where the data have no relief). fd = 0 implies A = 0.
+	double sg = prm.sea ? std::max (SmoothStep (0.25, 1.0, elev), SmoothStep (0.0, 0.5, A)) : 1.0;
+	double fd = f * sg;
+	if (fade) *fade = fd;
 	lmin = std::max (lmin, lambdaMin);
 	if (lmin >= spacing) return lev;
 
@@ -534,6 +604,7 @@ double TerrainDetail::Height (double lat, double lng, double elev, double spacin
 			double w = SmoothStep (0.5, 1.5, u) * SmoothStep (0.5 * lmin, lmin, lambda);
 			if (w <= 0.0) continue;
 			double a = A * std::pow (lambda / spacing, prm.hurst);
+			if (prm.micro > 0.0 && j <= 1) a = std::max (a, prm.micro * lambda * fd);
 			Vector p = LatticePoint (j - JMIN, dir, radius / lambda);
 			h += a * w * Shape (Noise (p.x, p.y, p.z, (uint32_t)(j - JMIN)), j, prm.ridge);
 		}
@@ -551,7 +622,7 @@ double TerrainDetail::Height (double lat, double lng, double elev, double spacin
 			// (densities above 1: several lattices)
 			int nl = (int)std::ceil (prm.craters);
 			for (int l = 0; l < nl; l++)
-				h += w * f * CraterLayer (dir, k, l, radius, prm.craters / nl, prm.craterDepth);
+				h += w * fd * CraterLayer (dir, k, l, radius, prm.craters / nl, prm.craterDepth);
 		}
 	}
 	// pebbles and clods (only where the mesh resolves them: PEBBLE_G)
@@ -563,7 +634,7 @@ double TerrainDetail::Height (double lat, double lng, double elev, double spacin
 			double w = SmoothStep (0.5 * lmin, lmin, lg) * SmoothStep (0.5, 1.5, std::log2 (spacing / s));
 			if (w <= 0.0) continue;
 			for (int l = 0; l < nl; l++)
-				h += w * f * PebbleLayer (dir, k, l, radius, prm.pebbles / nl);
+				h += w * fd * PebbleLayer (dir, k, l, radius, prm.pebbles / nl, prm.shape);
 		}
 	}
 	return h + lev;

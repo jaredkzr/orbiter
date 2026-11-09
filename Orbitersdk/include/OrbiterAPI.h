@@ -4855,8 +4855,10 @@ OAPIFUNC double oapiSurfaceElevation (OBJHANDLE hPlanet, double lng, double lat)
  * \param [out] amplitude if set, receives the noise amplitude factor A [m]:
  *   the noise is a sum of octaves of wavelengths 2^j m with amplitudes
  *   A*(lambda/spacing)^hurst (for shading finer octaves)
- * \param [out] fade if set, receives the fade factor of the craters (0 at
- *   surface bases, 1 away from them)
+ * \param [out] fade if set, receives the fade factor of the craters, pebbles
+ *   and micro relief (0 at surface bases and, on bodies with seas, on the
+ *   flat sea: at and below the sea level of the data where the data have no
+ *   relief; 1 elsewhere)
  * \return Elevation [m] to add to the interpolated elevation data
  * \note Returns 0 if the planet has no terrain detail (configuration:
  *   TerrainDetail in Orbiter.cfg and the planet's file).
@@ -4877,6 +4879,19 @@ struct SURFDETAILPARAM {
 	double pebbles;      ///< pebble and clod cells per lattice cell (0: none)
 	double flatSpacing;  ///< node spacing to use where there is no elevation data [m] (elevation 0, relief 0)
 	bool sea = false;    ///< the planet has seas: the ground at or below elevation 0 is water
+	// pebble shape (TerrainDetail.h: the presets Angular, Rounded, Platy)
+	double pebbleSize = 1.0;    ///< radius scale
+	double pebbleRound = 0.0;   ///< outline: 0 a rounded polygon, 1 an ellipse
+	double pebbleElong = 0.0;   ///< elongation along a random axis (outline longer by 1/(1-elong))
+	double pebbleHeight = 1.0;  ///< height/radius scale
+	double pebbleBevel = 0.6;   ///< top profile: the share of the radius over which the sides rise
+	double pebbleTilt = 0.5;    ///< tilt of the tops
+	double pebbleCrag = 1.0;    ///< roughness of the faces (shading only)
+	double pebbleTone = 0.0;    ///< spread of the stones' albedo (shading only)
+	double pebbleAlbedo = 0.9;  ///< albedo factor of the stones (shading only)
+	double micro = 0.0;         ///< slope floor (amplitude/wavelength) of the noise octaves of 2 m and less
+	double grit = 0.0;          ///< density of the grains of a few mm (shading only; 0: none)
+	bool pebbleGate = false;    ///< no stones on vegetation, snow and bright flats, judged by the client from the texture (shading only)
 };
 
 /**

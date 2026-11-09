@@ -54,6 +54,9 @@ namespace {
 		float seaPrm[4];      // x: mean-square slope below the shortest wave, y: total mean-square slope (0: no sea state), z: U10 [m/s], w: whitecap coverage (G3; 0: none)
 		float foamPrm[4];     // whitecaps: x: crest threshold (slope units), y: sigma of the crest index, z: far-field mean foam, w: mean of the foam lace
 		float shorePrm[4];    // shore foam: x: band width [m] (0: none), y: bore spacing [m], z: bore phase [cycles], w: strength
+		float pebShape[4];    // terrain detail pebbles (B1): size, round, elong, height
+		float pebShape2[4];   //   bevel, tilt, crag, tone
+		float pebPrm[4];      //   albedo factor, grit density, micro floor, Earth gate (0/1)
 	};
 	static_assert (sizeof (AtmUniforms) % 16 == 0, "std140");
 
@@ -1044,8 +1047,16 @@ void Atmosphere::Update ()
 		if (oapiSurfaceDetailParams (hPlanet, &dp)) {
 			u.detailPrm[0] = (float)dp.ridge, u.detailPrm[1] = (float)dp.craters;
 			u.detailPrm[2] = (float)dp.craterDepth, u.detailPrm[3] = (float)dp.craterFresh;
-		} else
+			u.pebShape[0] = (float)dp.pebbleSize, u.pebShape[1] = (float)dp.pebbleRound;
+			u.pebShape[2] = (float)dp.pebbleElong, u.pebShape[3] = (float)dp.pebbleHeight;
+			u.pebShape2[0] = (float)dp.pebbleBevel, u.pebShape2[1] = (float)dp.pebbleTilt;
+			u.pebShape2[2] = (float)dp.pebbleCrag, u.pebShape2[3] = (float)dp.pebbleTone;
+			u.pebPrm[0] = (float)dp.pebbleAlbedo, u.pebPrm[1] = (float)dp.grit;
+			u.pebPrm[2] = (float)dp.micro, u.pebPrm[3] = dp.pebbleGate ? 1.0f : 0.0f;
+		} else {
 			u.detailPrm[0] = u.detailPrm[1] = u.detailPrm[2] = u.detailPrm[3] = 0.0f;
+			memset (u.pebShape, 0, sizeof (u.pebShape)), memset (u.pebShape2, 0, sizeof (u.pebShape2)), memset (u.pebPrm, 0, sizeof (u.pebPrm));
+		}
 	}
 	u.surfPrm[0] = surfSaturation;
 	for (int i = 0; i < 3; i++) u.surfPrm[1 + i] = overcastSky[i] / sunIntensity; // (deep in it: the skylight's radiance)

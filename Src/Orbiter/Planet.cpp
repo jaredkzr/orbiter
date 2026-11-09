@@ -329,6 +329,15 @@ Planet::Planet (char *fname)
 		GetItemReal (ifs, "TerrainDetailCraterDepth", o.craterDepth);
 		GetItemReal (ifs, "TerrainDetailCraterFresh", o.craterFresh);
 		GetItemReal (ifs, "TerrainDetailPebbles", o.pebbles);
+		char sbuf[64];
+		if (GetItemString (ifs, "TerrainDetailPebbleShape", sbuf)) {
+			int sh = TerrainDetail::ShapeByName (sbuf);
+			if (sh >= 0) o.pebbleShape = sh;
+			else LOGOUT_WARN("Planet %s: unknown TerrainDetailPebbleShape %s", name, sbuf);
+		}
+		GetItemReal (ifs, "TerrainDetailPebbleAlbedo", o.pebbleAlbedo);
+		GetItemReal (ifs, "TerrainDetailMicro", o.micro);
+		GetItemReal (ifs, "TerrainDetailGrit", o.grit);
 		int lvl;
 		if (GetItemInt (ifs, "TerrainDetailLevel", lvl)) o.level = lvl;
 		detail_on = g_pOrbiter->Cfg()->CfgVisualPrm.bTerrainDetail && !(o.gain == 0.0);

@@ -3,7 +3,8 @@ BEGIN_HYPERDESC
 Elevation profiles on Earth: in the Alps the detail must add relief
 below the resolution of the elevation data and stay continuous; the
 open sea and the ground around Cape Canaveral must stay as flat as the
-data. Needs Earth's elevation data (skipped without it).
+data. On Titan the micro relief must roughen the ground, continuously;
+Proxima b's land has micro relief while its sea ice stays flat. Needs Earth's elevation data (skipped without it).
 END_HYPERDESC
 
 BEGIN_ENVIRONMENT

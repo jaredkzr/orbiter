@@ -44,7 +44,8 @@ layout(push_constant) uniform Params {
 	uvec2 jobs;
 	uvec2 pad;
 	vec4 prm;      // hurst, ridge, crater cells, crater depth
-	vec4 prm2;     // pebble cells
+	vec4 prm2;     // pebble cells, micro, pebble size, round
+	vec4 prm3;     // pebble elong, height, bevel, tilt
 } pc;
 
 shared vec3 P[W * W]; // positions relative to the tile centre raised to href
@@ -77,6 +78,7 @@ vec3 GetT (OutFloats o, int idx)
 
 void main ()
 {
+	DetPebbleShape S = DetPebbleShape (pc.prm2.z, pc.prm2.w, pc.prm3.x, pc.prm3.y, pc.prm3.z, pc.prm3.w);
 	Job jb = Jobs (pc.jobs).job[gl_WorkGroupID.x];
 	Floats pts = Floats (jb.ptsAddr);
 	OutFloats o = OutFloats (jb.outAddr);
@@ -98,7 +100,7 @@ void main ()
 		// (without the pebbles: the normals are of the ground under them; the
 		// shader shades the pebbles per pixel, their sharp edges would
 		// alias on the grid)
-		float h = h0 + DetHeight (pt, A, f, jb.sp.z, jb.sp.x, jb.misc.z, pc.prm, 0.0);
+		float h = h0 + DetHeight (pt, A, f, jb.sp.z, jb.sp.x, jb.misc.z, pc.prm, 0.0, pc.prm2.y, S);
 		// (d (R + href + h) - d0 (R + href): small, its rounding far below the
 		// node spacing; d0 href is added when the vertices are written)
 		P[k] = d0 * h + dd * (R + jb.misc.w + h);
@@ -111,7 +113,7 @@ void main ()
 			DetPoint pt = DetPointAt (jb.refI.xyz, jb.refF.xyz, dd * R);
 			uint q = uint (W * W) + k;
 			float h0 = pts.f[3 * q], A = pts.f[3 * q + 1], f = pts.f[3 * q + 2];
-			float h = h0 + DetHeight (pt, A, f, jb.sp.w, jb.sp.y, jb.misc.z, pc.prm, pc.prm2.x);
+			float h = h0 + DetHeight (pt, A, f, jb.sp.w, jb.sp.y, jb.misc.z, pc.prm, pc.prm2.x, pc.prm2.y, S);
 			SetT (o, i * V + j, d0 * h + dd * (R + jb.misc.w + h));
 		}
 	}
@@ -164,7 +166,7 @@ void main ()
 		vec3 dd = DirOffset (jb.ll.x, jb.ll.y, da, DB (j));
 		vec3 d = normalize (d0 + dd);
 		DetPoint pt = DetPointAt (jb.refI.xyz, jb.refF.xyz, dd * R);
-		float peb = DetPebbles (pt, pts.f[3 * pk + 2], jb.sp.z, jb.sp.x, pc.prm2.x, 0.0);
+		float peb = DetPebbles (pt, pts.f[3 * pk + 2], jb.sp.z, jb.sp.x, pc.prm2.x, 0.0, S);
 		vec3 href0 = d0 * jb.misc.w;
 		vec3 p = P[pk] + d * peb + href0;
 		// (across the columns drawn, K: one-sided at the edges of a tile

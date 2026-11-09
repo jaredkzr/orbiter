@@ -33,9 +33,19 @@
 //   TerrainDetailCraterFresh  share of fresh craters (bright ejecta)
 //   TerrainDetailPebbles      pebble and clod cells per lattice cell (0: none;
 //                             up to 4): mounds of 2.5 to 12 cm radius
+//   TerrainDetailPebbleShape  Angular (default), Rounded or Platy: the stones' shape
+//   TerrainDetailPebbleAlbedo albedo factor of the stones (0.3 to 2; shading only)
+//   TerrainDetailMicro        slope floor (amplitude/wavelength, 0 to 0.05) of the
+//                             noise octaves of 2 m and less (0: none)
+//   TerrainDetailGrit         density of grains of a few mm (0 to 1; shading only)
 //   TerrainDetailLevel        finest mesh level of the detail (default: about
 //                             2 cm node spacing: craters and pebbles are
 //                             relief close up)
+// Sea gate: on bodies with seas (TerrainDetailSea) the craters, pebbles and
+// micro relief are off on the flat sea, so that the sea (and its ice) stays
+// flat: at and below the data's sea level (fading in between 0.25 m and 1 m
+// above it) where the data have no relief. Where the detail has relief (its
+// amplitude A > 0, e.g. land below the datum on coarse data) the gate is open.
 // =======================================================================
 
 #ifndef __TERRAINDETAIL_H
@@ -50,16 +60,27 @@ namespace cities { class CityMap; }
 
 class TerrainDetail {
 public:
+	/// shape of the pebbles (see PebblePreset)
+	struct PebbleShape { double size = 1.0, round = 0.0, elong = 0.0, height = 1.0, bevel = 0.6, tilt = 0.5, crag = 1.0, tone = 0.0; };
+	enum { PEBBLE_ANGULAR, PEBBLE_ROUNDED, PEBBLE_PLATY, PEBBLE_SHAPES };
+	static const PebbleShape &PebblePreset (int id);
+	/// preset by name (case-insensitive); -1 if unknown
+	static int ShapeByName (const char *name);
+
 	struct Params {
 		double gain = 0.35, hurst = 1.0, ridge = 1.0, floor = 0.0;
 		bool sea = false;
 		double craters = 0.0, craterDepth = 1.0, craterFresh = 0.3;
 		double pebbles = 0.0; // pebble and clod cells per lattice cell (0: none; up to 4)
+		PebbleShape shape;
+		double pebbleAlbedo = 0.9, micro = 0.0, grit = 0.0;
+		bool pebbleGate = false;
 		int level = 0;   // 0: default
 	};
 	/// Values set in a planet's configuration (NaN: not set)
 	struct Overrides {
 		double gain, hurst, ridge, floor, sea, craters, craterDepth, craterFresh, pebbles, level;
+		double pebbleShape, pebbleAlbedo, micro, grit;
 		Overrides ();
 		void Apply (Params &p) const;
 	};
@@ -85,7 +106,7 @@ public:
 	/// \param lmin shortest wavelength [m] (at least LambdaMin; coarser meshes need less detail)
 	/// \param amplitude if set, receives the noise amplitude factor A [m]:
 	///   octave wavelength lambda has amplitude A*(lambda/spacing)^Hurst
-	/// \param fade if set, receives the fade factor of the craters (bases)
+	/// \param fade if set, receives the fade factor of the craters, pebbles and micro relief (bases, sea)
 	double Height (double lat, double lng, double elev, double spacing, double relief, double lmin = 0.0,
 		double *amplitude = nullptr, double *fade = nullptr) const;
 
