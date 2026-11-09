@@ -1011,22 +1011,6 @@ namespace {
 		return oapiGetGroundVector (hp, lng, lat, 3);
 	}
 
-	// the colour of the dust a jet or a crash throws up, by planet (a cheap
-	// stand-in for the surface's own colour: m5): the Moon's light grey
-	// regolith, Mars' reddish tan, Earth's brown-tan soil; neutral elsewhere
-	void DustColour (OBJHANDLE hp, float c[3])
-	{
-		char name[64];
-		oapiGetObjectName (hp, name, 64);
-		struct { const char *name; float c[3]; } tab[] = {
-			{ "Earth", { 0.58f, 0.49f, 0.38f } }, { "Moon", { 0.60f, 0.59f, 0.57f } },
-			{ "Mars", { 0.65f, 0.45f, 0.32f } }, { "Mercury", { 0.50f, 0.49f, 0.47f } },
-			{ "Venus", { 0.60f, 0.50f, 0.38f } }, { "Titan", { 0.50f, 0.40f, 0.28f } } };
-		for (auto &t : tab)
-			if (!strcmp (name, t.name)) { for (int k = 0; k < 3; k++) c[k] = t.c[k]; return; }
-		c[0] = c[1] = c[2] = 0.5f;
-	}
-
 	// the fireball's fire and smoke slow down alike in the air [1/s]
 	constexpr double FIREBALL_SLOWDOWN = 3.0;
 	// a burning piece's flames trail this many times its size behind it
@@ -1277,7 +1261,7 @@ void VDebris::Effects ()
 		e.size = 0.8 * size * sz, e.growth = 0.5 * size * sz;
 		e.alpha = 0.4, e.slowdown = 1.5;
 		e.tinted = true, e.cold = true, e.ballistic = false, e.planar = true, e.volumetric = true;
-		DustColour (hp, e.albedo);
+		vksurf::DustColourGlobal (scene, hp, contact, e.albedo);
 		Emit (dust, e, n, 6.0, true); // (one-shot bursts: the ring holds a couple, not a rate)
 	} else if (info.scrape > 5.0 && rho > 1e-4) {
 		// sliding fast: a thin trail of dust kicked up behind it
@@ -1293,7 +1277,7 @@ void VDebris::Effects ()
 			e.size = 0.25 * size * sz, e.growth = 0.3 * size * sz;
 			e.alpha = 0.12, e.slowdown = 2.0;
 			e.tinted = true, e.cold = true, e.planar = true;
-			DustColour (hp, e.albedo);
+			vksurf::DustColourGlobal (scene, hp, contact, e.albedo);
 			Emit (dust, e, n, 6.0);
 		}
 		dust.prev = contact, dust.havePrev = true;
@@ -2127,7 +2111,8 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 	// the nozzle, darkening over seconds of firing
 	double hot = std::clamp (1.0 - t / (0.25 * reach), 0.0, 1.0);
 	bool water = false;
-	if (kind == 0) water = vksurf::QueryGlobal (scene, hp, hit).IsWater (); // (the drawn water mask)
+	vksurf::Point sp;
+	if (kind == 0) { sp = vksurf::QueryGlobal (scene, hp, hit); water = sp.IsWater (); } // (the drawn water mask)
 	if (hot > 0.0 && !water)
 		pr->Scorch (hp, hit, n, std::max (1.0, 0.12 * reach) * (0.7 + 0.3 * hot), 0.08 * hot * hot * dt);
 	if (kind == 1) {
@@ -2219,7 +2204,7 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 		e.tinted = true, e.cold = true, e.ballistic = true;
 		e.volumetric = false; // (ParticleSystem::Queue: dust is sprites)
 		if (water) e.albedo[0] = 0.88f, e.albedo[1] = 0.91f, e.albedo[2] = 0.95f;
-		else DustColour (hp, e.albedo);
+		else vksurf::DustColourGlobal (scene, hp, hit, e.albedo, &sp);
 		// (in vacuum: a dense, low sheet racing out along the ground, the
 		// particles streaking along their paths (gpuparticle.vert) and landing
 		// within a second or two. Larger grains lofted higher looked like
@@ -2447,6 +2432,19 @@ vksurf::TileProbe *VPlanet::MaskProbe ()
 		}
 	}
 	return maskProbe.get ();
+}
+
+vksurf::TileProbe *VPlanet::SurfProbe ()
+{
+	if (!surfProbeInit) {
+		surfProbeInit = true; // (once: the ground's layers, never the clouds')
+		if (surface && surface->Layers () && surface->Layers ()->surf) {
+			char nm[64];
+			oapiGetObjectName (hObj, nm, 64);
+			surfProbe = std::make_unique<vksurf::TileProbe> (surface->Layers (), vksurf::TileProbe::Layer::Surf, 16, nm);
+		}
+	}
+	return surfProbe.get ();
 }
 
 void VPlanet::LoadLegacyTextures ()

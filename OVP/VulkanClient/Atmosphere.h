@@ -64,6 +64,8 @@ public:
 	~Atmosphere ();
 
 	bool Present () const { return present; }
+	/// colour saturation of the surface textures (tile_main.glsl surfPrm.x)
+	float SurfSaturation () const { return surfSaturation; }
 	/// Write this frame's uniform data (camera and sun relative to the planet)
 	void Update ();
 	/// Draw the sky (if the camera can see the atmosphere)

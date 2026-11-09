@@ -55,13 +55,18 @@ public:
 	~TileProbe ();   // waits for a read in flight
 	/// bilinear RGBA [0,1] at lat/lng [rad]. false: its tile is being read (try again next frame)
 	/// or the layer has no tile there. lvl: the level of the tile sampled
-	bool Sample (double lat, double lng, float rgba[4], int *lvl = nullptr);
+	/// mean: the tile's mean RGBA [0,1] (may be null)
+	bool Sample (double lat, double lng, float rgba[4], int *lvl = nullptr, float *mean = nullptr);
+	/// Sample, or while the point's tile is being read (or has no data) the last value sampled
+	/// within maxAng [rad] of it (no jump in colour for the frames a new tile takes to read)
+	bool SampleOrLast (double lat, double lng, double maxAng, float rgba[4], float mean[4], int *lvl = nullptr);
 private:
 	struct Entry {
 		int keyLvl = 0, keyLat = 0, keyLng = 0; // the maxLevel tile asked for (the cache key)
 		int lvl = 0, ilat = 0, ilng = 0;         // the tile found (maxLevel or coarser)
 		int w = 0, h = 0;                        // 0: no tile with data (remembered)
 		std::vector<uint8_t> rgba;
+		float mean[4] = { 0, 0, 0, 0 };          // mean of the texels [0,1] (computed by Load, on the worker)
 		double ms = 0.0;                         // read + decode time (for the log)
 		uint64_t used = 0;
 	};
@@ -71,9 +76,26 @@ private:
 	int maxLevel;
 	std::string name;
 	std::vector<Entry> cache;            // up to 6
+	struct Last {
+		bool valid = false;
+		double lat = 0, lng = 0;
+		float rgba[4] = {}, mean[4] = {};
+		int lvl = 0;
+	} last;                              // the last good sample (SampleOrLast)
 	std::future<Entry> pending;          // the read in flight (if valid())
 	uint64_t clock = 0;
 };
+
+/// the colour of the dust a jet or a crash throws up at a point (linear albedo, for
+/// ParticleSystem::Emission::albedo): the drawn ground (the surface tile, linearised, the body's
+/// SurfaceSaturation applied, its luminance lifted for the finer grains that fly, hue kept), 70%
+/// with 30% the body's dust default; plants (texels greener than red and blue) and water in the
+/// texel give way to the default. The default alone where the body has no surface tiles or none read within 20 km yet.
+/// pt: the point's Query if the caller has it (else made here). veg: the plant share 0..1 (may be null).
+/// true: the ground was sampled. Main thread.
+bool DustColour (Scene *scene, OBJHANDLE hp, double lng, double lat, float rgb[3], const Point *pt = nullptr, float *veg = nullptr);
+/// ... at the surface below a global position
+bool DustColourGlobal (Scene *scene, OBJHANDLE hp, const VECTOR3 &gpos, float rgb[3], const Point *pt = nullptr, float *veg = nullptr);
 
 } // namespace vksurf
 

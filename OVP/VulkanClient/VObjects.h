@@ -298,10 +298,14 @@ public:
 	double CloudAlt () const;
 	/// reader of the ground's water mask (made on first use), or null: the body has none
 	vksurf::TileProbe *MaskProbe ();
+	/// reader of the ground's surface colour tiles (made on first use), or null: the body has none
+	vksurf::TileProbe *SurfProbe ();
 
 private:
 	std::unique_ptr<vksurf::TileProbe> maskProbe;
 	bool maskProbeInit = false;
+	std::unique_ptr<vksurf::TileProbe> surfProbe;
+	bool surfProbeInit = false;
 	float colour[4];
 	bool isStar;
 	std::unique_ptr<Atmosphere> atmosphere;
