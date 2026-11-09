@@ -1831,6 +1831,18 @@ void VVessel::CollectPlumes (PlumeRenderer &pr)
 	vessel->GetAirspeedVector (FRAME_LOCAL, as);
 	VECTOR3 wind = scene->ViewDir (mul (grot, -as)); // the air past the vessel
 	double pa = vessel->GetAtmPressure (), rho = vessel->GetAtmDensity ();
+	// (testing: ORBITER_VK_THRUST_VACUUM=1 keeps the vacuum thrust, the state
+	// before E3; ORBITER_VK_THRUST_LOG=1 logs the thrust of the lit exhausts,
+	// every 2 s per vessel)
+	static const bool thrustVacuum = getenv ("ORBITER_VK_THRUST_VACUUM") && atoi (getenv ("ORBITER_VK_THRUST_VACUUM"));
+	static const bool thrustLog = getenv ("ORBITER_VK_THRUST_LOG") && atoi (getenv ("ORBITER_VK_THRUST_LOG"));
+	static std::map<uint32_t, double> thrustLogT;
+	bool logNow = false;
+	if (thrustLog) {
+		double simt = oapiGetSimTime ();
+		auto it = thrustLogT.find (id);
+		if (it == thrustLogT.end () || simt - it->second >= 2.0 || simt < it->second) thrustLogT[id] = simt, logNow = true;
+	}
 	float sun = (float)scene->Sunlight (gpos);
 	double dt = oapiGetPause () ? 0.0 : oapiGetSimStep ();
 	static std::mt19937 rng (54321);
@@ -1852,7 +1864,13 @@ void VVessel::CollectPlumes (PlumeRenderer &pr)
 		pd.exitRadius = 0.5 * es.wsize * o.scale;
 		pd.length = es.lsize * o.scale * o.length;
 		pd.level = std::min (1.0, lvl);
-		pd.thrust = es.th ? vessel->GetThrusterMax0 (es.th) : 0.0;
+		// the thrust: the vacuum rating (the class, 'unknown' when 0) and the
+		// fraction the ambient pressure leaves of it, as the core applies it
+		// (VESSEL::GetThrusterMax (th, p): Isp and thrust fall linearly with p)
+		double th0 = es.th ? vessel->GetThrusterMax0 (es.th) : 0.0;
+		double phys = th0 > 0.0 ? std::clamp (vessel->GetThrusterMax (es.th, pa) / th0, 0.0, 2.0) : 1.0;
+		pd.thrust = th0;
+		pd.delivered = thrustVacuum ? 1.0 : phys;
 		pd.ambientPressure = pa;
 		pd.airDensity = rho;
 		pd.type = type;
@@ -1861,6 +1879,9 @@ void VVessel::CollectPlumes (PlumeRenderer &pr)
 		pd.sunlight = sun;
 		pd.tint = es.tex ? (VkTexture*)es.tex : nullptr;
 		pd.seed = id * 131u + i * 977u;
+		if (logNow)
+			oapiWriteLogV ("VulkanClient: thrust %s exh %u lvl %.3f F0 %.0f N delivered %.3f (physical %.3f) p %.0f Pa",
+				vessel->GetName (), (unsigned)i, pd.level, th0, pd.delivered, phys, pa);
 		PlumeInfo info{};
 		if (pr.Add (pd, id, &info) >= 0) {
 			EmitSmoke (i, (int)type, pd, info, dt);
@@ -2089,8 +2110,8 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 	if (idx >= dust.size()) dust.resize (idx + 1);
 	if (idx >= mist.size()) mist.resize (idx + 1);
 	SmokeRing &r = dust[idx];
-	// a jet stirs up the ground within a distance growing with its thrust
-	double thrust = pd.thrust * pd.level;
+	// a jet stirs up the ground within a distance growing with the thrust it delivers
+	double thrust = pd.DeliveredThrust (); // (in this air: none at Venus' surface, E3)
 	if (!sys || !sys->enabled || !pr || !pr->rayCast || dt <= 0.0 || thrust < 1e3 ||
 		type == (int)PlumeType::RCS || type == (int)PlumeType::ColdGas || type == (int)PlumeType::Ion) { r.havePrev = false; mist[idx].havePrev = false; return; }
 	// (in vacuum the jet expands freely and reaches several times as far:

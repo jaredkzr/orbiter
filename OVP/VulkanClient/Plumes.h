@@ -121,7 +121,8 @@ struct PlumeDraw {
 	double exitRadius;      // [m]
 	double length;          // [m]
 	double level;           // 0..1
-	double thrust;          // at full level [N] (0: unknown)
+	double thrust;          // vacuum rating at full level [N] (0: unknown)
+	double delivered = 1.0;   // fraction of it delivered in the ambient air (GetThrusterMax (th, p) / GetThrusterMax0; 0..2; 1: unknown or nothing lost)
 	double ambientPressure; // [Pa]
 	double airDensity;      // [kg/m^3]
 	PlumeType type;
@@ -130,6 +131,8 @@ struct PlumeDraw {
 	float sunlight;         // fraction of the sun's light reaching the plume (smoke)
 	VkTexture *tint;        // add-on exhaust texture: tints the colours (or null)
 	uint32_t seed;
+	/// the thrust delivered now [N]: the vacuum rating, less what the ambient pressure takes, at the level (0: unknown)
+	double DeliveredThrust () const { return thrust * delivered * level; }
 };
 
 /// The plumes of a frame: collected before the prepass (screen-space

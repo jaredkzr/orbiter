@@ -716,6 +716,14 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 	double mixSpread = 0.08 * (1.0 - vac);
 	double len = p.length / re * (0.45 + 0.55 * p.level) * (1.0 - 0.3 * vac);
 	if (attitude) len *= 1.4; // (the cone stays visible for many nozzle lengths)
+	// a jet that has lost most of its thrust to the ambient pressure (deep
+	// over-expansion: the DG's engines deliver none at Venus' 92 bar)
+	// collapses into a short flame at the nozzle. Down to half its vacuum
+	// thrust it keeps its length: the shape's pressure dependence is the
+	// expansion ratio's, above (E3)
+	const double COLLAPSE_KNEE = 0.5, COLLAPSE_MIN = 0.25;
+	double delivered = std::clamp (p.delivered, 0.0, 2.0);
+	len *= COLLAPSE_MIN + (1.0 - COLLAPSE_MIN) * sqrt (std::min (1.0, delivered / COLLAPSE_KNEE));
 	double cell = 2.6 * rj;
 	double lk = (log (k) - log (0.6)) / 1.3;
 	double diamonds = exp (-lk * lk) * (1.0 - vac);
@@ -730,7 +738,10 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 	// the airflow: the jet's momentum flux (thrust over the exit area)
 	// against the dynamic pressure of the air across it (bending) and
 	// against it (a shorter, wider plume)
-	double qJet = p.thrust > 0.0 ? p.thrust * p.level / (PI * re * re) : 10.8 * c.exitPressure;
+	// (the delivered thrust; a jet delivering (almost) none still carries
+	// its mass flow's momentum: at least 5% of the vacuum thrust's, so that
+	// a crosswind bends the stub, not the unknown-thrust fallback)
+	double qJet = p.thrust > 0.0 ? p.thrust * std::max (delivered, 0.05) * p.level / (PI * re * re) : 10.8 * c.exitPressure;
 	double windAlong = dotp (p.wind, ez);
 	VECTOR3 cross = p.wind - ez * windAlong;
 	double qCross = 0.5 * p.airDensity * dotp (cross, cross);
