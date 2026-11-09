@@ -224,6 +224,7 @@ add_library(VulkanClient SHARED
 	Plasma.cpp
 	TileArchive.cpp
 	ProcSurface.cpp
+	SurfaceQuery.cpp
 	PlanetSurface.cpp
 	Atmosphere.cpp
 	Shadows.cpp

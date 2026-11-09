@@ -150,6 +150,7 @@ private:
 	};
 	std::vector<SmokeRing> smoke;
 	std::vector<SmokeRing> dust;   // dust (or spray) thrown up where a jet meets the ground
+	std::vector<SmokeRing> mist;   // fine spray hanging over water where a jet meets it (with dust[]: the spray sheet)
 	std::vector<SmokeRing> trail;  // the long trail in the air (PlumeClass::trail): large puffs left along the path, carried by the wind
 	std::vector<contrail::Emitter> contrails; // where the exhaust's water condenses (PlumeClass::contrail)
 	int contrailBand = -1;                    // (the exhaust laying the persistent band this frame)
@@ -273,6 +274,8 @@ private:
 	std::vector<std::unique_ptr<VkMesh>> structures; // rendered after shadows (buildings)
 };
 
+namespace vksurf { class TileProbe; }
+
 class VPlanet : public VObject {
 public:
 	VPlanet (OBJHANDLE hObj, Scene *scene, bool isStar);
@@ -293,8 +296,12 @@ public:
 	/// composite: beyond them)
 	void RenderRingBehindDecks ();
 	double CloudAlt () const;
+	/// reader of the ground's water mask (made on first use), or null: the body has none
+	vksurf::TileProbe *MaskProbe ();
 
 private:
+	std::unique_ptr<vksurf::TileProbe> maskProbe;
+	bool maskProbeInit = false;
 	float colour[4];
 	bool isStar;
 	std::unique_ptr<Atmosphere> atmosphere;

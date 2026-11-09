@@ -4,6 +4,7 @@
 #include "VObjects.h"
 #include "GfxSettings.h"
 #include "ProcSurface.h"
+#include "SurfaceQuery.h"
 #include "GroundTracks.h"
 #include "ScatterAssets.h"
 #include "ScatterField.h"
@@ -73,7 +74,7 @@ VVessel::~VVessel ()
 	// (the smoke lives on after the vessel's visual is gone: out of range,
 	// or the vessel deleted; its rings are freed when it has faded)
 	ParticleSystem *sys = scene->Particles ();
-	for (auto *rings : { &smoke, &dust, &trail })
+	for (auto *rings : { &smoke, &dust, &mist, &trail })
 		for (auto &r : *rings)
 			if (sys && r.sys == sys) sys->Release (r);
 	for (auto &c : contrails) c.Release (sys);
@@ -439,6 +440,7 @@ void VVessel::UpdateTracks ()
 				continue;
 			}
 		} else t = 1.0;
+		if (vksurf::QueryGlobal (scene, hp, g).IsWater ()) { gt->NoContact (hObj, (int)i); continue; } // (no tracks on water)
 		// (track size from the vessel's size and mass: about 0.15 m wide and
 		// 2 cm deep for the delta-glider)
 		double hw = std::clamp (0.012 * size, 0.05, 0.4);
@@ -1069,14 +1071,7 @@ void VDebris::Effects ()
 
 	// (down on a sea: water, not ground - a splash and steam, no scorch)
 	bool onWater = false;
-	if (alt < 3.0 * size + 20.0) {
-		SURFDETAILPARAM sdp{};
-		if (oapiSurfaceDetailParams (hp, &sdp) && sdp.sea) {
-			double lng, lat, rad;
-			oapiGlobalToEqu (hp, gpos, &lng, &lat, &rad);
-			onWater = oapiSurfaceElevation (hp, lng, lat) <= 0.5;
-		}
-	}
+	if (alt < 3.0 * size + 20.0) onWater = vksurf::QueryGlobal (scene, hp, gpos).IsWater ();
 
 	// (born at the sea's surface - a vessel broken up by its impact on the
 	// water: the splash of the impact itself, its pieces fly off from it)
@@ -1236,7 +1231,10 @@ void VDebris::Effects ()
 			e.cls = ParticleSystem::Class::Spark;
 			Emit (sparks, e, n, 0.5);
 		}
-		if (GroundTracks *gt = scene->Tracks ()) gt->Contact (hObj, 0, hp, contact, up, 0.25 * size, 0.08);
+		if (GroundTracks *gt = scene->Tracks ()) {
+			if (onWater) gt->NoContact (hObj, 0); // (no gouge on water)
+			else gt->Contact (hObj, 0, hp, contact, up, 0.25 * size, 0.08);
+		}
 	} else if (GroundTracks *gt = scene->Tracks ()) gt->NoContact (hObj, 0);
 	// (the dust thrown up keeps a little of its speed over the ground: with
 	// all of it, it would streak along its path)
@@ -2105,11 +2103,12 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 	ParticleSystem *sys = scene->Particles ();
 	PlumeRenderer *pr = scene->Plumes ();
 	if (idx >= dust.size()) dust.resize (idx + 1);
+	if (idx >= mist.size()) mist.resize (idx + 1);
 	SmokeRing &r = dust[idx];
 	// a jet stirs up the ground within a distance growing with its thrust
 	double thrust = pd.thrust * pd.level;
 	if (!sys || !sys->enabled || !pr || !pr->rayCast || dt <= 0.0 || thrust < 1e3 ||
-		type == (int)PlumeType::RCS || type == (int)PlumeType::ColdGas || type == (int)PlumeType::Ion) { r.havePrev = false; return; }
+		type == (int)PlumeType::RCS || type == (int)PlumeType::ColdGas || type == (int)PlumeType::Ion) { r.havePrev = false; mist[idx].havePrev = false; return; }
 	// (in vacuum the jet expands freely and reaches several times as far:
 	// Apollo LMs raised a sheet of dust from some 30 m)
 	bool vacuum = pd.ambientPressure <= 100.0;
@@ -2117,36 +2116,29 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 	double t;
 	VECTOR3 vn;
 	int kind = 2;
-	if (!pr->rayCast (id, pd.pos, unit (pd.dir), reach, t, vn, &kind) || kind == 2) { r.havePrev = false; return; }
+	if (!pr->rayCast (id, pd.pos, unit (pd.dir), reach, t, vn, &kind) || kind == 2) { r.havePrev = false; mist[idx].havePrev = false; return; }
 	// (in vacuum: falling off more slowly, the sheet thins towards the reach)
 	double strength = vacuum ? (1.0 - t / reach) * (1.0 - 0.5 * t / reach) : (1.0 - t / reach) * (1.0 - t / reach);
 	OBJHANDLE hp = vessel->GetSurfaceRef ();
-	if (!hp || strength < 0.02) { r.havePrev = false; return; }
+	if (!hp || strength < 0.02) { r.havePrev = false; mist[idx].havePrev = false; return; }
 	VECTOR3 hit = scene->GlobalPos (pd.pos + unit (pd.dir) * t);
 	VECTOR3 n = scene->GlobalDir (vn);
 	// the jet scorches the ground (or a pad) where it is still hot: close to
 	// the nozzle, darkening over seconds of firing
 	double hot = std::clamp (1.0 - t / (0.25 * reach), 0.0, 1.0);
-	bool onWater = false;
-	{
-		VECTOR3 l;
-		oapiGlobalToLocal (hp, &hit, &l);
-		double rl = length (l);
-		char nm[64];
-		oapiGetObjectName (hp, nm, 64);
-		onWater = kind == 0 && !strcmp (nm, "Earth") &&
-			oapiSurfaceElevation (hp, atan2 (l.z, l.x), asin (std::clamp (l.y / rl, -1.0, 1.0))) <= 0.0;
-	}
-	if (hot > 0.0 && !onWater)
+	bool water = false;
+	if (kind == 0) water = vksurf::QueryGlobal (scene, hp, hit).IsWater (); // (the drawn water mask)
+	if (hot > 0.0 && !water)
 		pr->Scorch (hp, hit, n, std::max (1.0, 0.12 * reach) * (0.7 + 0.3 * hot), 0.08 * hot * hot * dt);
 	if (kind == 1) {
+		mist[idx].havePrev = false;
 		// launch pads: the sound suppression water flashes into steam under
 		// large engines, billowing out and rising in great white clouds
-		if (thrust < 5e5 || pd.ambientPressure < 5e4) { r.havePrev = false; return; }
+		if (thrust < 5e5 || pd.ambientPressure < 5e4) { r.havePrev = false; mist[idx].havePrev = false; return; }
 		double life = 25.0;
 		double D = sys->density, sizeScale = std::pow (D, -1.0 / 3.0);
 		double rate = 60.0 * D * std::min (1.0, strength * 2.0); // [1/s] (the ring: for the rate emitted)
-		if (!sys->Reserve (r, rate, life, ParticleSystem::Class::Steam)) { r.havePrev = false; return; } // (no stale source next time)
+		if (!sys->Reserve (r, rate, life, ParticleSystem::Class::Steam)) { r.havePrev = false; mist[idx].havePrev = false; return; } // (no stale source next time)
 		VECTOR3 vel;
 		vessel->GetGlobalVel (vel);
 		VECTOR3 src = hit + n * 2.0;
@@ -2174,22 +2166,16 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 		r.havePrev = true;
 		return;
 	}
-	// water: spray instead of dust (the sea's surface is at elevation 0)
-	VECTOR3 loc;
-	oapiGlobalToLocal (hp, &hit, &loc);
-	double rad = length (loc);
-	double elev = oapiSurfaceElevation (hp, atan2 (loc.z, loc.x), asin (std::clamp (loc.y / rad, -1.0, 1.0)));
-	char name[64];
-	oapiGetObjectName (hp, name, 64);
-	bool water = !strcmp (name, "Earth") && elev <= 0.0;
+	// water: spray instead of dust
 	bool air = pd.ambientPressure > 100.0;
 
-	double life = air ? (water ? 3.0 : 6.0) : 2.5; // (a sheet from hovering lingered half a minute at 10 s)
+	double life = air ? (water ? 2.2 : 6.0) : 2.5; // (a sheet from hovering lingered half a minute at 10 s)
 	double D = sys->density, sizeScale = std::pow (D, -1.0 / 3.0);
-	double rate = (air ? 120.0 : 900.0) * D * std::min (1.0, 0.3 + strength); // [1/s]
+	double rate = water ? 150.0 * D * std::min (1.0, 0.3 + strength) : (air ? 120.0 : 900.0) * D * std::min (1.0, 0.3 + strength); // [1/s]
 	ParticleSystem::Class cls = water ? ParticleSystem::Class::Spray : ParticleSystem::Class::Dust;
-	if (!sys->Reserve (r, rate, life, cls)) { r.havePrev = false; return; } // (no stale source next time)
+	if (!sys->Reserve (r, rate, life, cls)) { r.havePrev = false; mist[idx].havePrev = false; return; } // (no stale source next time)
 	double radial = air ? 6.0 + 18.0 * strength : 15.0 + 40.0 * strength; // [m/s]
+	if (water && air) radial = 8.0 + 22.0 * strength; // (droplets torn off by the jet: thrown out a little faster than dust)
 	VECTOR3 vel;
 	vessel->GetGlobalVel (vel);
 	VECTOR3 src = hit + n * (air ? 0.3 : 0.8); // (in vacuum: clear of the ground, the sheet's particles start a metre across)
@@ -2214,8 +2200,8 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 			VECTOR3 vert = unit (src - pc);
 			e.dir = -(air ? unit (n + vert * 2.0) : vert);
 		}
-		e.v0 = air ? 0.12 * radial : 2.0; // (low angles; in vacuum they would arc far)
-		e.spread = air ? 2.0 * radial : radial;
+		if (water) e.v0 = 0.2 * radial, e.spread = 1.8 * radial; // (droplets torn off the surface, thrown out low)
+		else e.v0 = air ? 0.12 * radial : 2.0, e.spread = air ? 2.0 * radial : radial; // (low angles; in vacuum they would arc far)
 		e.planar = true;
 		e.lifetime = life, e.dt = dt;
 		// (in air: lit puffs drawn as sprites (dust is never in the smoke
@@ -2225,9 +2211,14 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 		e.size = size * sizeScale, e.growth = (air ? 4.0 : 1.0) * sizeScale;
 		e.alpha = (air ? 1.0 : 0.9) * strength * std::min (1.0, 1.3 / (D * sizeScale * sizeScale));
 		e.slowdown = air ? 2.0 : 0.0;
+		if (water) { // (the sheet of spray: small, quick droplets falling back)
+			e.size = 2.5 * sizeScale, e.growth = 3.0 * sizeScale;
+			e.alpha = 0.9 * strength * std::min (1.0, 1.3 / (D * sizeScale * sizeScale));
+			e.slowdown = 1.0;
+		}
 		e.tinted = true, e.cold = true, e.ballistic = true;
 		e.volumetric = false; // (ParticleSystem::Queue: dust is sprites)
-		if (water) e.albedo[0] = e.albedo[1] = e.albedo[2] = 0.95f;
+		if (water) e.albedo[0] = 0.88f, e.albedo[1] = 0.91f, e.albedo[2] = 0.95f;
 		else DustColour (hp, e.albedo);
 		// (in vacuum: a dense, low sheet racing out along the ground, the
 		// particles streaking along their paths (gpuparticle.vert) and landing
@@ -2238,6 +2229,36 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 	}
 	r.prev = src;
 	r.havePrev = true;
+	if (!water || !air) { mist[idx].havePrev = false; return; } // (the mist: over water in air only)
+	// the mist: fine spray that hangs and drifts over the sheet
+	SmokeRing &m = mist[idx];
+	double mrate = 40.0 * D * std::min (1.0, 0.3 + strength); // [1/s]
+	if (!sys->Reserve (m, mrate, 3.0, ParticleSystem::Class::Spray)) { m.havePrev = false; return; }
+	if (!m.havePrev) m.prev = src;
+	m.accum += mrate * dt;
+	uint32_t mc = (uint32_t)m.accum;
+	m.accum -= mc;
+	if (mc) {
+		ParticleSystem::Emission e{};
+		e.p0 = m.prev, e.p1 = src;
+		e.vel = GroundVelocity (hp, src);
+		VECTOR3 pc;
+		oapiGetGlobalPos (hp, &pc);
+		e.dir = -unit (n + unit (src - pc) * 2.0);
+		e.v0 = 0.15 * radial, e.spread = 1.4 * radial;
+		e.planar = true;
+		e.lifetime = 3.0, e.dt = dt;
+		e.size = 3.0 * sizeScale, e.growth = 2.5 * sizeScale;
+		e.alpha = 0.5 * strength * std::min (1.0, 1.3 / (D * sizeScale * sizeScale));
+		e.slowdown = 2.5;
+		e.tinted = true, e.cold = true, e.ballistic = false;
+		e.volumetric = false;
+		e.albedo[0] = 0.92f, e.albedo[1] = 0.94f, e.albedo[2] = 0.97f;
+		e.cls = ParticleSystem::Class::Spray;
+		sys->Emit (m, e, mc);
+	}
+	m.prev = src;
+	m.havePrev = true;
 }
 
 void VVessel::DrawParticles ()
@@ -2245,7 +2266,7 @@ void VVessel::DrawParticles ()
 	ParticleSystem *sys = scene->Particles ();
 	if (!sys) return;
 	double simt = oapiGetSimTime ();
-	for (auto *rings : { &smoke, &dust, &trail })
+	for (auto *rings : { &smoke, &dust, &mist, &trail })
 		for (const SmokeRing &r : *rings)
 			if (r.sys == sys && simt - r.lastEmit < 1.5 * r.life + 0.1)
 				sys->Draw (r, sys->SmokeTexture (), false, scene->FrameSet ()); // (if not released while idle)
@@ -2413,6 +2434,19 @@ VPlanet::~VPlanet ()
 		vkc::Buffer vb = ringVtx, ib = ringIdx;
 		c->DeferDestroy ([c, vb, ib]() mutable { c->DestroyBuffer (vb); c->DestroyBuffer (ib); });
 	}
+}
+
+vksurf::TileProbe *VPlanet::MaskProbe ()
+{
+	if (!maskProbeInit) {
+		maskProbeInit = true; // (once: the ground's layers, never the clouds')
+		if (surface && surface->Layers () && surface->Layers ()->mask) {
+			char nm[64];
+			oapiGetObjectName (hObj, nm, 64);
+			maskProbe = std::make_unique<vksurf::TileProbe> (surface->Layers (), vksurf::TileProbe::Layer::Mask, 16, nm);
+		}
+	}
+	return maskProbe.get ();
 }
 
 void VPlanet::LoadLegacyTextures ()
