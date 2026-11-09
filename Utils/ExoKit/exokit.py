@@ -47,15 +47,20 @@ HOSTS = {
 }
 
 # Assumed: the planets' surfaces and looks. class, colours (low, high),
-# relief, mountains, sea, craters, open water [deg], atmosphere (bar or 0).
+# relief, mountains, sea, craters, open water [deg], atmosphere (bar or 0;
+# N2, or (bar, CO2 mole fraction) for an N2/CO2 mix).
 # JWST: TRAPPIST-1 b and c are dark bare rock (Greene et al. 2023, Zieba
 # et al. 2023), d has no Earth-like atmosphere (Piaulet-Ghorayeb et al. 2025).
+# Open water needs an atmosphere: below water's triple point (611 Pa) it
+# boils off and freezes. TRAPPIST-1 f (equilibrium 218 K) keeps a sea about
+# the substellar point only under a thick greenhouse atmosphere, so its
+# eyeball sea comes with an assumed 2 bar of N2 and CO2.
 LOOKS = {
 	'TRAPPIST-1 b': ('Rock',  (0.09, 0.085, 0.08), (0.17, 0.155, 0.14), 1500, 900, 0.0, 0.7, 0, 0),
 	'TRAPPIST-1 c': ('Rock',  (0.15, 0.13, 0.12), (0.27, 0.24, 0.21), 2000, 1200, 0.0, 0.6, 0, 0),
 	'TRAPPIST-1 d': ('Rock',  (0.24, 0.16, 0.11), (0.40, 0.30, 0.21), 2500, 1500, 0.0, 0.4, 0, 0),
 	'TRAPPIST-1 e': ('Ocean', (0.22, 0.19, 0.15), (0.38, 0.35, 0.31), 3000, 2500, 0.65, 0.1, 38, 1.0),
-	'TRAPPIST-1 f': ('Ice',   (0.70, 0.74, 0.80), (0.88, 0.90, 0.93), 1200, 600, 0.0, 0.3, 14, 0),
+	'TRAPPIST-1 f': ('Ice',   (0.70, 0.74, 0.80), (0.88, 0.90, 0.93), 1200, 600, 0.0, 0.3, 14, (2.0, 0.5)),
 	'TRAPPIST-1 g': ('Ice',   (0.74, 0.78, 0.84), (0.90, 0.92, 0.95), 1000, 500, 0.0, 0.3, 0, 0),
 	'TRAPPIST-1 h': ('Ice',   (0.62, 0.58, 0.54), (0.82, 0.79, 0.75), 900, 400, 0.0, 0.5, 0, 0),
 	'Proxima Cen b': ('Ocean', (0.24, 0.20, 0.16), (0.40, 0.36, 0.30), 3500, 3000, 0.55, 0.1, 32, 1.0),
@@ -103,6 +108,8 @@ def write_planet (pl, outdir):
 	name = planet_name (pl)
 	look = LOOKS[pl['pl_name']]
 	cls, clow, chigh, relief, mountains, sea, craters, openw, atm = look
+	atm, co2 = atm if isinstance (atm, tuple) else (atm, 0.0)
+	assert not (openw and not atm and cls != 'Ocean'), name + ': open water needs an atmosphere'
 	P = num (pl['pl_orbper'])
 	e = num (pl['pl_orbeccen'], 0.0)
 	w = num (pl['pl_orblper'], 90.0)
@@ -155,11 +162,18 @@ def write_planet (pl, outdir):
 	if atm > 0.0:
 		p0 = atm * 101325.0
 		T0 = max (num (pl['pl_eqt'], 250.0), 200.0) + 20.0
-		add ('; atmosphere: assumed (N2, %.3g bar)' % atm)
+		# the mix's gas constant, and its gamma from the heat capacities
+		# (cv/R: N2 2.5, CO2 3.45 near 250 K)
+		Rgas = 8314.46 / (28.01 * (1.0 - co2) + 44.01 * co2)
+		gamma = 1.0 + 1.0 / (2.5 * (1.0 - co2) + 3.45 * co2)
+		if co2 > 0.0:
+			add ('; atmosphere: assumed (N2 and %.0f%% CO2, %.3g bar: a greenhouse that keeps the open sea liquid)' % (100.0 * co2, atm))
+		else:
+			add ('; atmosphere: assumed (N2, %.3g bar)' % atm)
 		add ('AtmPressure0 = %.6g' % p0)
-		add ('AtmDensity0 = %.4g' % (p0 / (296.8 * T0)))
-		add ('AtmGasConstant = 296.8')
-		add ('AtmGamma = 1.4')
+		add ('AtmDensity0 = %.4g' % (p0 / (Rgas * T0)))
+		add ('AtmGasConstant = %.4g' % Rgas)
+		add ('AtmGamma = %.3g' % gamma)
 		add ('AtmAltLimit = 200e3')
 		add ('AtmColor0 = 0.42 0.63 0.92')
 		add ('AtmHazeColor = 0.57 0.74 1.0')
