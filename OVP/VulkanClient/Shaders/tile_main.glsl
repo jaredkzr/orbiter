@@ -213,9 +213,15 @@ WaterFxOut WaterFxEval (vec3 p, vec3 Np, float footprint)
 
 // Wave normal of water surfaces (view space): a sum of WAVE_COUNT waves
 // whose wave vectors and phases the CPU sets (Atmosphere.cpp: anchored to
-// the planet, the body's own gravity in their dispersion), longest first
-vec3 WaterNormalWaves (vec3 Nv, vec3 posView, float dist)
+// the planet, the body's own gravity in their dispersion), longest first.
+// Their spectrum follows the wind (SeaState: the longest wavelength, the
+// slope per wave, the direction downwind). waveVar out: the mean-square
+// slope of the sea (seaPrm.y) that the waves drawn here do not resolve
+// (finer than the pixels, beyond the fade, below the shortest wave): the
+// glitter's roughness takes it
+vec3 WaterNormalWaves (vec3 Nv, vec3 posView, float dist, out float waveVar)
 {
+	waveVar = atm.seaPrm.y;
 	float slope = atm.wavePrm.x;
 	if (slope <= 0.0) return Nv;
 	float fade = 1.0 - smoothstep (300.0, 3000.0, dist);
@@ -227,14 +233,18 @@ vec3 WaterNormalWaves (vec3 Nv, vec3 posView, float dist)
 	float footprint = dist * 2.0 * atm.misc.z / max (frame.jitter.w, 1.0)
 		/ max (abs (dot (normalize (posView), Nv)), 0.05);
 	vec3 g = vec3 (0.0);
+	float res = 0.0;
 	for (int i = 0; i < WAVE_COUNT; i++) {
 		vec4 w = atm.waves[i];
 		float k = length (w.xyz);
-		// (waves shorter than a few pixels fade out; the rest are shorter still)
-		float aa = 1.0 - smoothstep (2.0, 6.0, footprint * k * (2.0 / PI)); // = footprint / lambda * 4
+		// (waves shorter than 8 px fade out and are gone at 4 px (x = 4 footprint / lambda): finer pure-sinusoid
+		// waves read as a regular lattice, not ripples. Their slope variance goes into the glitter roughness via waveVar.)
+		float aa = 1.0 - smoothstep (0.5, 1.0, footprint * k * (2.0 / PI)); // x = 4 footprint / lambda
 		if (aa <= 0.0) break;
 		g += w.xyz * (slope * cos (dot (p, w.xyz) + w.w) * aa / k);
+		res += aa * aa;
 	}
+	waveVar = max (atm.seaPrm.y - 0.5 * slope * slope * res * fade * fade, 0.0);
 	g -= Np * dot (g, Np); // slope in the tangent plane
 	return transpose (v2p) * normalize (Np - g * fade);
 }
@@ -242,10 +252,11 @@ vec3 WaterNormalWaves (vec3 Nv, vec3 posView, float dist)
 // With disturbances (WaterFx): the wind's waves pressed flat under them, plus
 // their cavity, rings and chop; fxVar (slope variance, into roughness) and
 // fxFoam (coverage) out
-vec3 WaterNormal (vec3 Nv, vec3 posView, float dist, out float fxVar, out float fxFoam)
+vec3 WaterNormal (vec3 Nv, vec3 posView, float dist, out float fxVar, out float fxFoam, out float waveVar)
 {
 	fxVar = 0.0; fxFoam = 0.0;
-	if (atm.waterFx.x < 0.5 || dist > 6000.0) return WaterNormalWaves (Nv, posView, dist);
+	if (atm.waterFx.x < 0.5 || dist > 6000.0) return WaterNormalWaves (Nv, posView, dist, waveVar);
+	waveVar = atm.seaPrm.y;
 	float slope = atm.wavePrm.x;
 	float fade = 1.0 - smoothstep (300.0, 3000.0, dist);
 	mat3 v2p = mat3 (atm.viewToPlanet);
@@ -255,16 +266,21 @@ vec3 WaterNormal (vec3 Nv, vec3 posView, float dist, out float fxVar, out float 
 		/ max (abs (dot (normalize (posView), Nv)), 0.05);
 	WaterFxOut fx = WaterFxEval (p, Np, footprint);
 	vec3 g = vec3 (0.0);
+	float res = 0.0;
+	float fl = (1.0 - 0.85 * fx.flatw) * (1.0 - 0.5 * fx.chop); // the jet presses the wind's sea flat
 	if (slope > 0.0 && fade > 0.0) {
 		for (int i = 0; i < WAVE_COUNT; i++) {
 			vec4 w = atm.waves[i];
 			float k = length (w.xyz);
-			float aa = 1.0 - smoothstep (2.0, 6.0, footprint * k * (2.0 / PI));
+			// (as in WaterNormalWaves)
+			float aa = 1.0 - smoothstep (0.5, 1.0, footprint * k * (2.0 / PI));
 			if (aa <= 0.0) break;
 			g += w.xyz * (slope * cos (dot (p, w.xyz) + w.w) * aa / k);
+			res += aa * aa;
 		}
-		g *= fade * (1.0 - 0.85 * fx.flatw) * (1.0 - 0.5 * fx.chop);
+		g *= fade * fl;
 	}
+	waveVar = max (fl * fl * (atm.seaPrm.y - 0.5 * slope * slope * res * fade * fade), 0.0);
 	g += fx.g;
 	g -= Np * dot (g, Np);
 	fxVar = fx.var; fxFoam = fx.foam;
@@ -643,8 +659,8 @@ void main()
 		if (m.a < 0.5) {
 			float dist = length(vPosView);
 			vec3 V = normalize(-vPosView);
-			float fxVar, fxFoam;
-			vec3 Nw = WaterNormal(Ng, vPosView, dist, fxVar, fxFoam);
+			float fxVar, fxFoam, waveVar;
+			vec3 Nw = WaterNormal(Ng, vPosView, dist, fxVar, fxFoam, waveVar);
 			float NoV = max(dot(Nw, V), 1e-3);
 			float fres = 0.02 + 0.98 * pow(1.0 - NoV, 5.0);
 			float rgh = clamp(fxVar / 0.008, 0.0, 1.0); // roughened by a jet: matte, less reflective
@@ -669,7 +685,12 @@ void main()
 				}
 				col = mix(col, sky, fres * (1.0 - fxFoam));
 			}
-			float rough = mix(0.05, 0.3, smoothstep(2e3, 3e5, dist));
+			// the glitter is widened by the sea's slopes that the drawn waves don't
+			// resolve (finer than the pixels, beyond the 3 km fade, below the
+			// shortest wave), so that it has the same total at every distance
+			// (Cox-Munk); bodies without a sea state keep the old ramp
+			float rough = atm.seaPrm.y > 0.0 ? min(sqrt(sqrt(6.25e-6 + waveVar)), 0.6)
+				: mix(0.05, 0.3, smoothstep(2e3, 3e5, dist));
 			if (fxVar > 0.0) rough = min(sqrt(sqrt(rough * rough * rough * rough + 2.0 * fxVar)), 0.6);
 			col += frame.sunColor.rgb * sunT * SpecularBRDF(Nw, V, L, vec3(0.02), rough) * PI * (1.0 - fxFoam);
 			if (fxFoam > 0.0) col = mix(col, FOAM_ALBEDO * irr, fxFoam);

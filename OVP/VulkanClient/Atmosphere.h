@@ -20,11 +20,16 @@ constexpr double GG_FLOOR_DEPTH = 200e3;
 
 static constexpr int WAVE_COUNT = 14; // as WAVE_COUNT in atmosphere.glsl (keep in sync)
 
-/// sea state: drives the wave spectrum
+/// sea state: drives the wave spectrum (Atmosphere::SeaState: from the wind 10 m above the water)
 struct WaveSea {
-	float slope = 0.035f;     // slope amplitude of each wave (0: flat water)
-	float azimuth = 0.0f;     // main direction of travel [rad] from the anchor's t1
+	float slope = 0.0f;       // slope amplitude of each wave
+	float azimuth = 0.0f;     // main direction of travel [rad] from the anchor's t1 (downwind)
 	float lambdaScale = 1.0f; // longest wavelength / 60 m
+	float wind = 0.0f;        // wind speed 10 m above the water [m/s]
+	float bearing = 0.0f;     // direction the wind blows toward [rad], from north clockwise
+	float varUnres = 0.0f;    // mean-square slope (both axes) of the waves shorter than the shortest drawn
+	float varTotal = 0.0f;    // mean-square slope (both axes) of the sea (Cox-Munk)
+	const char *src = "none"; // the wind's source: model, cfg, env, none
 };
 
 class AtmosphereRenderer {
@@ -119,6 +124,10 @@ private:
 	char wavesName[64] = "";
 	double waveG = 9.81;                  // surface gravity [m/s^2]
 	WaveSea sea;
+	double seaCfgWind = -1.0;             // Sea.cfg Wind of this body (< 0: none)
+	double seaEnvWind = -1.0;             // ORBITER_VK_SEA_WIND (< 0: none)
+	VECTOR3 seaWindDir{};                 // planet frame, unit, at the anchor
+	WaveSea SeaState (double lng, double lat, double elev) const;
 	bool waveAnchored = false;
 	VECTOR3 waveAnchor{}, waveT1{}, waveT2{};
 	double waveLogT = -1e9;

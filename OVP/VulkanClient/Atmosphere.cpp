@@ -8,6 +8,8 @@
 #include "WaterFx.h"
 #include "VkTexture.h"
 #include <algorithm>
+#include <fstream>
+#include <map>
 #include <string>
 #include <cmath>
 #include <cstring>
@@ -47,11 +49,62 @@ namespace {
 		float waves[WAVE_COUNT][4]; // planet-frame wave vector k*dir (xyz), phase (w); longest first
 		float waterFx[4];     // x: water disturbances packed (0: none)
 		float waterFxSrc[WaterFx::MAX_GPU * WaterFx::VEC4][4]; // per source (WaterFx.h)
+		float seaPrm[4];      // x: mean-square slope below the shortest wave, y: total mean-square slope (0: no sea state), z: U10 [m/s], w: reserved (G3)
 	};
 	static_assert (sizeof (AtmUniforms) % 16 == 0, "std140");
 
 	const VkFormat LUT_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
 	const VkExtent2D TRANSMITTANCE_SIZE = { 256, 64 }, MULTISCAT_SIZE = { 32, 32 }; // as in atmlut.glsl
+
+	// water's surface tension over its density [m^3/s^2]: the capillary term of
+	// the waves' dispersion, omega^2 = g k + SIGMA_RHO k^3
+	constexpr double SIGMA_RHO = 7.28e-5;
+	// share of the unresolved slope variance that goes into the glitter's
+	// roughness (tunable 0.5-1: lower keeps the near glitter sparkling)
+	constexpr double SEA_UNRES_GAIN = 1.0;
+
+	// Config/VK/Sea.cfg: the wind speed [m/s] a body's sea takes instead of the
+	// model's ([name] sections, "Wind = v"); -1: no entry. Read once.
+	double SeaCfgWind (const char *body)
+	{
+		static std::map<std::string, double> entries;
+		static bool loaded = false;
+		if (!loaded) {
+			loaded = true;
+			std::ifstream ifs ("Config/VK/Sea.cfg");
+			std::string line, section;
+			std::map<std::string, bool> warned;
+			auto trim = [] (std::string &t) {
+				size_t a = t.find_first_not_of (" \t\r\n"), b = t.find_last_not_of (" \t\r\n");
+				t = a == std::string::npos ? "" : t.substr (a, b - a + 1);
+			};
+			while (std::getline (ifs, line)) {
+				size_t c = line.find (';');
+				if (c != std::string::npos) line.erase (c);
+				trim (line);
+				if (line.empty ()) continue;
+				if (line[0] == '[') {
+					size_t e = line.find (']');
+					section = line.substr (1, e == std::string::npos ? std::string::npos : e - 1);
+					trim (section);
+					continue;
+				}
+				size_t eq = line.find ('=');
+				if (eq == std::string::npos) continue;
+				std::string key = line.substr (0, eq), val = line.substr (eq + 1);
+				trim (key); trim (val);
+				for (char &ch : key) ch = (char)tolower ((unsigned char)ch);
+				if (key == "wind") {
+					if (!section.empty ()) entries[section] = std::min (std::max (atof (val.c_str ()), 0.0), 25.0);
+				} else if (!warned[key]) {
+					warned[key] = true;
+					oapiWriteLogV ("VulkanClient: Config/VK/Sea.cfg: unknown key %s", key.c_str ());
+				}
+			}
+		}
+		auto it = entries.find (body);
+		return it == entries.end () ? -1.0 : it->second;
+	}
 
 	constexpr uint32_t MAX_ATMOSPHERES = 64; // plus one "no atmosphere" set
 
@@ -444,13 +497,17 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		wavesWhy = cfgRipple ? "cfg" : proc && wp.surfClass == 1 ? "ocean" : "ice open water";
 		if (const char *e = getenv ("ORBITER_VK_WAVES")) if (*e && !atoi (e)) waves = false; // (empty: unset)
 		waveG = GGRAV * oapiGetMass (hPlanet) / (radius * radius);
-		sea.lambdaScale = (float)std::min (std::max (9.81 / waveG, 0.5), 4.0);
-		sea.slope = present ? 0.035f : 0.0175f;
 		oapiGetObjectName (hPlanet, wavesName, 64);
+		if (const char *e = getenv ("ORBITER_VK_SEA_WIND")) if (*e && atof (e) >= 0.0) seaEnvWind = atof (e);
+		seaCfgWind = SeaCfgWind (wavesName);
+		sea = SeaState (0.0, 0.0, 0.0); // (the far-field state until the first anchoring)
 		if (waves) {
 			double l0 = 60.0 * sea.lambdaScale;
-			oapiWriteLogV ("VulkanClient: waves on %s (%s): g %.2f m/s^2, wavelengths %.1f-%.2f m, longest period %.1f s, slope %.4f",
-				wavesName, wavesWhy, waveG, l0, l0 * pow (0.7, WAVE_COUNT - 1), 2.0 * PI / sqrt (waveG * 2.0 * PI / l0), sea.slope);
+			double k0 = 2.0 * PI / l0;
+			double bd = fmod (sea.bearing * 180.0 / PI + 360.0, 360.0);
+			oapiWriteLogV ("VulkanClient: waves on %s (%s): g %.2f m/s^2, wind %.1f m/s (%s) toward %03.0f deg, wavelengths %.1f-%.2f m, longest period %.1f s, slope %.4f per wave, mean-square slope %.4f (%.4f below the shortest wave)",
+				wavesName, wavesWhy, waveG, sea.wind, sea.src, bd, l0, l0 * pow (0.7, WAVE_COUNT - 1),
+				2.0 * PI / sqrt (waveG * k0 + SIGMA_RHO * k0 * k0 * k0), sea.slope, sea.varTotal, sea.varUnres);
 		}
 	}
 	{
@@ -597,6 +654,44 @@ VkDescriptorSet Atmosphere::Set () const
 	return sets[SetIndex ()];
 }
 
+// Sea state from the wind 10 m above the water (a fully developed sea):
+// speed and direction from the core's wind model (x east, y up, z north), or
+// the overrides (env > Sea.cfg > model; they keep the model's direction).
+WaveSea Atmosphere::SeaState (double lng, double lat, double elev) const
+{
+	WaveSea s;
+	VECTOR3 w = oapiGetModelWind (hPlanet, lng, lat, std::max (elev, 0.0) + 10.0);
+	double U = hypot (w.x, w.z), bearing = PI / 2.0;
+	s.src = "none";
+	if (U > 1e-3) bearing = atan2 (w.x, w.z), s.src = "model";
+	if (seaCfgWind >= 0.0) U = seaCfgWind, s.src = "cfg";
+	if (seaEnvWind >= 0.0) U = seaEnvWind, s.src = "env";
+	U = std::min (std::max (U, 0.0), 25.0);
+	// Pierson-Moskowitz: the peak wavenumber k_p = 0.877^2 g / U19.5^2 with
+	// U19.5 = 1.06 U10, so the peak wavelength is 9.2 U^2 / g; the longest
+	// wave drawn is a little longer (3 m: calm water's wavelets; 400 m: within
+	// the 3 km fade and the pixels' window)
+	double lp = 9.2 * U * U / waveG;
+	double l0 = std::min (std::max (1.25 * lp, 3.0), 400.0);
+	// wind waves form near 1 m/s (glassy below); Cox & Munk 1954, clean sea:
+	// the mean-square slope (both axes) 0.003 + 5.12e-3 U, plus a floor
+	double t = std::min (std::max ((U - 0.7) / (2.5 - 0.7), 0.0), 1.0);
+	double on = t * t * (3.0 - 2.0 * t);
+	double var = 1e-4 + (0.003 + 5.12e-3 * U) * on;
+	// log bands of 0.7 from l0 down to 1 cm: in the saturation range each
+	// holds the same slope variance, so the drawn waves share it equally
+	double N = log (l0 / 0.01) / log (1.0 / 0.7);
+	double slope = sqrt (2.0 * var / N);
+	double varUnres = var * (N - WAVE_COUNT) / N * SEA_UNRES_GAIN;
+	s.slope = (float)slope;
+	s.lambdaScale = (float)(l0 / 60.0);
+	s.wind = (float)U;
+	s.bearing = (float)bearing;
+	s.varUnres = (float)varUnres;
+	s.varTotal = (float)(varUnres + WAVE_COUNT * slope * slope / 2.0);
+	return s;
+}
+
 void Atmosphere::UpdateWaves (const VECTOR3 &cam, double camR, float prm[4], float data[][4])
 {
 	static const bool wlog = getenv ("ORBITER_VK_WAVE_LOG") && atoi (getenv ("ORBITER_VK_WAVE_LOG"));
@@ -609,16 +704,31 @@ void Atmosphere::UpdateWaves (const VECTOR3 &cam, double camR, float prm[4], flo
 		VECTOR3 up = unit (cam);
 		waveT1 = unit (crossp (up, fabs (up.y) > 0.9 ? _V(1, 0, 0) : _V(0, 1, 0)));
 		waveT2 = crossp (up, waveT1);
-		if (wlog) oapiWriteLogV ("VulkanClient: waves on %s: re-anchored (moved %.1f km)", wavesName, moved * 1e-3);
+		// the sea state follows the wind here. It changes only at (re)anchoring,
+		// so the pattern does not swim; a time-varying wind would have to
+		// re-anchor or blend two spectra.
+		double lng = atan2 (cam.z, cam.x), lat = asin (std::min (std::max (cam.y / length (cam), -1.0), 1.0));
+		double elev = oapiSurfaceElevation (hPlanet, lng, lat);
+		sea = SeaState (lng, lat, elev);
+		VECTOR3 east = _V(-sin (lng), 0.0, cos (lng));
+		VECTOR3 north = _V(-sin (lat) * cos (lng), cos (lat), -sin (lat) * sin (lng));
+		seaWindDir = unit (east * sin ((double)sea.bearing) + north * cos ((double)sea.bearing));
+		sea.azimuth = (float)atan2 (dotp (seaWindDir, waveT2), dotp (seaWindDir, waveT1));
+		if (wlog) {
+			double l0 = 60.0 * sea.lambdaScale;
+			oapiWriteLogV ("VulkanClient: waves on %s: re-anchored (moved %.1f km), sea: elevation %.0f m, wind %.1f m/s (%s) toward %03.0f deg, azimuth %.1f deg from t1, wavelengths %.1f-%.2f m, slope %.4f",
+				wavesName, moved * 1e-3, elev, sea.wind, sea.src, fmod (sea.bearing * 180.0 / PI + 360.0, 360.0),
+				sea.azimuth * 180.0 / PI, l0, l0 * pow (0.7, WAVE_COUNT - 1), sea.slope);
+		}
 	}
 	VECTOR3 d = cam - waveAnchor;
 	VECTOR3 dir0 = _V(0, 0, 0);
 	double k0 = 0.0, om0 = 0.0;
 	for (int i = 0; i < WAVE_COUNT; i++) {
 		double lambda = 60.0 * sea.lambdaScale * pow (0.7, i);
-		double ang = 0.6 * sin (i * 2.39996 + 0.3 * sin (i * 7.1)) + 0.2 + sea.azimuth;
+		double ang = sea.azimuth + (0.35 + 0.45 * i / (WAVE_COUNT - 1.0)) * sin (i * 2.39996 + 0.3 * sin (i * 7.1));
 		VECTOR3 dir = waveT1 * cos (ang) + waveT2 * sin (ang);
-		double k = twoPi / lambda, omega = sqrt (waveG * k);
+		double k = twoPi / lambda, omega = sqrt (waveG * k + SIGMA_RHO * k * k * k);
 		double phi = fmod (k * dotp (d, dir) - omega * t + 1.7 * i, twoPi);
 		if (phi < 0.0) phi += twoPi;
 		data[i][0] = (float)(k * dir.x), data[i][1] = (float)(k * dir.y), data[i][2] = (float)(k * dir.z);
@@ -634,8 +744,8 @@ void Atmosphere::UpdateWaves (const VECTOR3 &cam, double camR, float prm[4], flo
 		float got = rx * data[0][0] + ry * data[0][1] + rz * data[0][2] + data[0][3];
 		double want = k0 * dotp (Pref - waveAnchor, dir0) - om0 * t;
 		double err = remainder ((double)got - want, twoPi);
-		oapiWriteLogV ("VulkanClient: waves on %s: alt %.0f m, anchor %.2f km away, wave0 phase error %.1e rad",
-			wavesName, camR - radius, length (d) * 1e-3, err);
+		oapiWriteLogV ("VulkanClient: waves on %s: alt %.0f m, anchor %.2f km away, wave0 phase error %.1e rad, wave0.wind %.3f",
+			wavesName, camR - radius, length (d) * 1e-3, err, dotp (dir0, seaWindDir));
 	}
 }
 
@@ -689,6 +799,7 @@ void Atmosphere::Update ()
 	// off, which also frees the anchor for the next approach)
 	if (waves && camR - radius < 50e3) UpdateWaves (cam, camR, u.wavePrm, u.waves);
 	else waveAnchored = false;
+	if (waves) u.seaPrm[0] = sea.varUnres, u.seaPrm[1] = sea.varTotal, u.seaPrm[2] = sea.wind;
 	if (WaterFx *wf = scene->Water ()) if (camR - radius < 50e3) wf->Pack (hPlanet, cam, u.waterFx, u.waterFxSrc);
 	memcpy (u.mieLobe, mieLobe, sizeof(mieLobe));
 	if (scene->CloudsActive () && hPlanet == oapiCameraProxyGbody ()) {
