@@ -18,6 +18,15 @@ class Scene;
 /// gas giants: depth of the scattering atmosphere's floor below the 1-bar level [m]
 constexpr double GG_FLOOR_DEPTH = 200e3;
 
+static constexpr int WAVE_COUNT = 14; // as WAVE_COUNT in atmosphere.glsl (keep in sync)
+
+/// sea state: drives the wave spectrum
+struct WaveSea {
+	float slope = 0.035f;     // slope amplitude of each wave (0: flat water)
+	float azimuth = 0.0f;     // main direction of travel [rad] from the anchor's t1
+	float lambdaScale = 1.0f; // longest wavelength / 60 m
+};
+
 class AtmosphereRenderer {
 public:
 	bool Init (vkc::Context *ctx, class TextureManager *texmgr);
@@ -104,7 +113,16 @@ private:
 	uint32_t SetIndex () const;
 	float groundColour[4] = { 0.5f, 0.5f, 0.5f, 0.0f };
 	float cloudParams[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-	bool ripple = false; // wave normals on water
+	// waves on water (a sum of WAVE_COUNT waves, set on the CPU)
+	bool waves = false;
+	const char *wavesWhy = "";
+	char wavesName[64] = "";
+	double waveG = 9.81;                  // surface gravity [m/s^2]
+	WaveSea sea;
+	bool waveAnchored = false;
+	VECTOR3 waveAnchor{}, waveT1{}, waveT2{};
+	double waveLogT = -1e9;
+	void UpdateWaves (const VECTOR3 &cam, double camR, float prm[4], float data[][4]);
 };
 
 /// skylight of an overcast atmosphere (Venus, Titan): the ground's

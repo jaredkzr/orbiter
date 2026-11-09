@@ -42,7 +42,10 @@ namespace {
 		float surfPrm[4];     // x: colour saturation of the surface textures
 		float relBeta[4];     // relativistic view: the camera's velocity (view, units of c)
 		float sunTint[4];     // the light's colour (luminance 1): the Sun white, a red dwarf orange
+		float wavePrm[4];     // x: slope amplitude per wave (0: no waves), y: g, z: wavelength scale
+		float waves[WAVE_COUNT][4]; // planet-frame wave vector k*dir (xyz), phase (w); longest first
 	};
+	static_assert (sizeof (AtmUniforms) % 16 == 0, "std140");
 
 	const VkFormat LUT_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
 	const VkExtent2D TRANSMITTANCE_SIZE = { 256, 64 }, MULTISCAT_SIZE = { 32, 32 }; // as in atmlut.glsl
@@ -428,7 +431,25 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		}
 	}
 
-	if (const bool *r = (const bool*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_SURFACERIPPLE)) ripple = *r;
+	{
+		// waves: planets whose cfg asks for them, and procedural seas
+		bool cfgRipple = false;
+		if (const bool *r = (const bool*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_SURFACERIPPLE)) cfgRipple = *r;
+		PROCSURFACEPARAM wp;
+		bool proc = oapiProcSurfaceParams (hPlanet, &wp);
+		waves = cfgRipple || (proc && (wp.surfClass == 1 || (wp.surfClass == 2 && wp.openWater > 0)));
+		wavesWhy = cfgRipple ? "cfg" : proc && wp.surfClass == 1 ? "ocean" : "ice open water";
+		if (const char *e = getenv ("ORBITER_VK_WAVES")) if (*e && !atoi (e)) waves = false; // (empty: unset)
+		waveG = GGRAV * oapiGetMass (hPlanet) / (radius * radius);
+		sea.lambdaScale = (float)std::min (std::max (9.81 / waveG, 0.5), 4.0);
+		sea.slope = present ? 0.035f : 0.0175f;
+		oapiGetObjectName (hPlanet, wavesName, 64);
+		if (waves) {
+			double l0 = 60.0 * sea.lambdaScale;
+			oapiWriteLogV ("VulkanClient: waves on %s (%s): g %.2f m/s^2, wavelengths %.1f-%.2f m, longest period %.1f s, slope %.4f",
+				wavesName, wavesWhy, waveG, l0, l0 * pow (0.7, WAVE_COUNT - 1), 2.0 * PI / sqrt (waveG * 2.0 * PI / l0), sea.slope);
+		}
+	}
 	{
 		// procedural surface detail close to the camera: craters and rocks
 		// on airless bodies, eroded craters and rocks on Mars, undulation and
@@ -573,6 +594,48 @@ VkDescriptorSet Atmosphere::Set () const
 	return sets[SetIndex ()];
 }
 
+void Atmosphere::UpdateWaves (const VECTOR3 &cam, double camR, float prm[4], float data[][4])
+{
+	static const bool wlog = getenv ("ORBITER_VK_WAVE_LOG") && atoi (getenv ("ORBITER_VK_WAVE_LOG"));
+	const double twoPi = 2.0 * PI;
+	const double t = oapiGetSimTime ();
+	if (!waveAnchored || length (cam - waveAnchor) > 100e3) {
+		double moved = waveAnchored ? length (cam - waveAnchor) : 0.0;
+		waveAnchored = true;
+		waveAnchor = cam;
+		VECTOR3 up = unit (cam);
+		waveT1 = unit (crossp (up, fabs (up.y) > 0.9 ? _V(1, 0, 0) : _V(0, 1, 0)));
+		waveT2 = crossp (up, waveT1);
+		if (wlog) oapiWriteLogV ("VulkanClient: waves on %s: re-anchored (moved %.1f km)", wavesName, moved * 1e-3);
+	}
+	VECTOR3 d = cam - waveAnchor;
+	VECTOR3 dir0 = _V(0, 0, 0);
+	double k0 = 0.0, om0 = 0.0;
+	for (int i = 0; i < WAVE_COUNT; i++) {
+		double lambda = 60.0 * sea.lambdaScale * pow (0.7, i);
+		double ang = 0.6 * sin (i * 2.39996 + 0.3 * sin (i * 7.1)) + 0.2 + sea.azimuth;
+		VECTOR3 dir = waveT1 * cos (ang) + waveT2 * sin (ang);
+		double k = twoPi / lambda, omega = sqrt (waveG * k);
+		double phi = fmod (k * dotp (d, dir) - omega * t + 1.7 * i, twoPi);
+		if (phi < 0.0) phi += twoPi;
+		data[i][0] = (float)(k * dir.x), data[i][1] = (float)(k * dir.y), data[i][2] = (float)(k * dir.z);
+		data[i][3] = (float)phi;
+		if (i == 0) dir0 = dir, k0 = k, om0 = omega;
+	}
+	prm[0] = sea.slope, prm[1] = (float)waveG, prm[2] = sea.lambdaScale, prm[3] = 0.0f;
+
+	if (wlog && camR - radius < 10e3 && t - waveLogT >= 2.0) {
+		waveLogT = t;
+		VECTOR3 Pref = waveAnchor + waveT1 * 37.0 + waveT2 * 11.0;
+		float rx = (float)(Pref.x - cam.x), ry = (float)(Pref.y - cam.y), rz = (float)(Pref.z - cam.z);
+		float got = rx * data[0][0] + ry * data[0][1] + rz * data[0][2] + data[0][3];
+		double want = k0 * dotp (Pref - waveAnchor, dir0) - om0 * t;
+		double err = remainder ((double)got - want, twoPi);
+		oapiWriteLogV ("VulkanClient: waves on %s: alt %.0f m, anchor %.2f km away, wave0 phase error %.1e rad",
+			wavesName, camR - radius, length (d) * 1e-3, err);
+	}
+}
+
 void Atmosphere::Update ()
 {
 	AtmUniforms u{};
@@ -618,7 +681,11 @@ void Atmosphere::Update ()
 	VECTOR3 origin = _V(std::floor (cam.x / 1000.0), std::floor (cam.y / 1000.0), std::floor (cam.z / 1000.0)) * 1000.0;
 	VECTOR3 rel = cam - origin;
 	u.water[0] = (float)rel.x, u.water[1] = (float)rel.y, u.water[2] = (float)rel.z;
-	u.water[3] = ripple ? (float)fmod (oapiGetSimTime (), 3600.0) : -1.0f;
+	u.water[3] = waves ? (float)fmod (oapiGetSimTime (), 3600.0) : -1.0f; // (the aurora's clock)
+	// (the waves show within 3 km of the surface: not computed for planets far
+	// off, which also frees the anchor for the next approach)
+	if (waves && camR - radius < 50e3) UpdateWaves (cam, camR, u.wavePrm, u.waves);
+	else waveAnchored = false;
 	memcpy (u.mieLobe, mieLobe, sizeof(mieLobe));
 	if (scene->CloudsActive () && hPlanet == oapiCameraProxyGbody ()) {
 		const VolumetricClouds *vc = scene->VClouds ();

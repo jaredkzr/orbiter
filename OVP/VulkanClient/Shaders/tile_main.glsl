@@ -101,38 +101,29 @@ vec4 ValueNoiseD(vec3 p, float cell, int period)
 
 #include "surfdetail.glsl"
 
-// Wave normal of water surfaces (view space). The waves run along integer
-// directions of the planet frame with wavelengths that divide 1 km, so the
-// pattern is continuous when its origin (snapped to 1 km) moves.
+// Wave normal of water surfaces (view space): a sum of WAVE_COUNT waves
+// whose wave vectors and phases the CPU sets (Atmosphere.cpp: anchored to
+// the planet, the body's own gravity in their dispersion), longest first
 vec3 WaterNormal (vec3 Nv, vec3 posView, float dist)
 {
-	if (atm.water.w < 0.0) return Nv;
+	float slope = atm.wavePrm.x;
+	if (slope <= 0.0) return Nv;
 	float fade = 1.0 - smoothstep (300.0, 3000.0, dist);
 	if (fade <= 0.0) return Nv;
 	mat3 v2p = mat3 (atm.viewToPlanet);
-	vec3 p = v2p * posView + atm.water.xyz; // relative to the pattern origin
+	vec3 p = v2p * posView; // relative to the camera (planet frame)
 	vec3 Np = v2p * Nv;
-	// a spectrum of waves in irregular directions (golden angle steps about
-	// the local vertical), wavelengths from 60 m down to 0.6 m, slopes of a
-	// light breeze; waves shorter than a few pixels fade out (no aliasing)
-	vec3 t1 = normalize (cross (Np, abs (Np.y) < 0.9 ? vec3 (0.0, 1.0, 0.0) : vec3 (1.0, 0.0, 0.0)));
-	vec3 t2 = cross (Np, t1);
 	// pixel size on the water [m] (stretched along the view at grazing angles)
 	float footprint = dist * 2.0 * atm.misc.z / max (frame.jitter.w, 1.0)
 		/ max (abs (dot (normalize (posView), Nv)), 0.05);
 	vec3 g = vec3 (0.0);
-	const int NW = 14;
-	for (int i = 0; i < NW; i++) {
-		float lambda = 60.0 * pow (0.7, float (i));
-		float ang = float (i) * 2.39996 + 0.3 * sin (float (i) * 7.1);
-		// (mostly with the wind, from about one direction)
-		ang = 0.6 * sin (ang) + 0.2;
-		vec3 dir = t1 * cos (ang) + t2 * sin (ang);
-		float k = 2.0 * PI / lambda;
-		float w = sqrt (9.81 * k);
-		float ph = k * dot (p, dir) + w * atm.water.w + float (i) * 1.7;
-		float aa = 1.0 - smoothstep (2.0, 6.0, footprint / lambda * 4.0);
-		g += dir * (0.035 * cos (ph) * aa);
+	for (int i = 0; i < WAVE_COUNT; i++) {
+		vec4 w = atm.waves[i];
+		float k = length (w.xyz);
+		// (waves shorter than a few pixels fade out; the rest are shorter still)
+		float aa = 1.0 - smoothstep (2.0, 6.0, footprint * k * (2.0 / PI)); // = footprint / lambda * 4
+		if (aa <= 0.0) break;
+		g += w.xyz * (slope * cos (dot (p, w.xyz) + w.w) * aa / k);
 	}
 	g -= Np * dot (g, Np); // slope in the tangent plane
 	return transpose (v2p) * normalize (Np - g * fade);
