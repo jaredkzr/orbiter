@@ -5491,6 +5491,7 @@ void Vessel::ApplySavedDamage ()
 			BreakPart (0, 0.0);
 			breaking_up = false;
 			destroyed = true;
+			water = WaterState (); // (its pieces are in the water now, not it)
 			enablefocus = false;
 			destroyed_t = -1e10; // (not in the replay)
 		}
@@ -5506,6 +5507,9 @@ void Vessel::Destroy (const char *reason)
 	const std::vector<structure::Part> &parts = Structure().Parts();
 	if (part_lost.size() != parts.size()) part_lost.assign (parts.size(), 0);
 	destroyed = true;
+	// (its pieces are in the water now, not it: the state it had when it
+	// broke up would stay - wet, at a place it no longer is)
+	water = WaterState ();
 	destroy_reason = reason ? reason : "";
 	char cbuf[256];
 	sprintf (cbuf, "%s was destroyed: %s.", name.c_str(), reason);
@@ -8610,19 +8614,24 @@ DWORD VESSEL::GetPartCount () const
 	return (DWORD)vessel->Structure().Parts().size();
 }
 
-bool VESSEL::GetWaterState (WATERSTATE *out, size_t size) const
+void VesselBase::GetWaterState (WATERSTATE *out, size_t size) const
 {
-	if (!out) return false;
 	WATERSTATE w;
-	const VesselBase::WaterState &s = vessel->Water();
+	const WaterState &s = water;
 	w.nearWater = s.near, w.wet = s.wet;
 	w.submerged = s.submerged, w.volume = s.volume, w.wetted = s.wetted, w.waterline = s.waterline;
 	w.entrySpeed = s.entrySpeed, w.slamMax = s.slamMax, w.accMax = s.accMax, w.tWet = s.tWet;
 	w.force = MakeVECTOR3 (s.F);
 	w.substeps = s.substeps;
-	w.afloat = s.afloat && vessel->GetStatus() == FLIGHTSTATUS_LANDED, w.flooded = s.flooded;
+	w.afloat = s.afloat && fstatus == FLIGHTSTATUS_LANDED, w.flooded = s.flooded;
 	w.contact = MakeVECTOR3 (s.contact), w.speed = s.speed;
 	memcpy ((void*)out, &w, std::min (size, sizeof (w)));
+}
+
+bool VESSEL::GetWaterState (WATERSTATE *out, size_t size) const
+{
+	if (!out) return false;
+	vessel->GetWaterState (out, size);
 	return true;
 }
 

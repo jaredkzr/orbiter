@@ -196,6 +196,13 @@ DLLEXPORT bool oapiGetDebrisInfo (OBJHANDLE hDebris, DEBRISINFO *info)
 	return true;
 }
 
+DLLEXPORT bool oapiGetDebrisWaterState (OBJHANDLE hDebris, WATERSTATE *ws, size_t size)
+{
+	if (!ws || !g_psys->isDebris ((Body*)hDebris)) return false;
+	((const Debris*)hDebris)->GetWaterState (ws, size);
+	return true;
+}
+
 DLLEXPORT bool oapiGetDebrisGroup (OBJHANDLE hDebris, DWORD i, DEBRISGROUP *grp)
 {
 	if (!grp || !g_psys->isDebris ((Body*)hDebris)) return false;

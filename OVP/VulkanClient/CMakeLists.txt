@@ -228,6 +228,7 @@ add_library(VulkanClient SHARED
 	ShoreField.cpp
 	OceanFft.cpp
 	WaterFx.cpp
+	WaterSpray.cpp
 	PlanetSurface.cpp
 	Atmosphere.cpp
 	Shadows.cpp

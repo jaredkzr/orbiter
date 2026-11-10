@@ -265,6 +265,10 @@ protected:
 		bool flooded = false;     ///< a wreck: displaces only its structure (W6)
 	};
 	const WaterState &Water () const { return water; }
+public:
+	/// the water state for the API (VESSEL::GetWaterState, oapiGetDebrisWaterState): size bytes of it
+	void GetWaterState (struct WATERSTATE *out, size_t size) const;
+protected:
 	/// the water's model of the body (built on demand; null: none)
 	virtual const hydro::Model *WaterModel () const { return nullptr; }
 	/// centre of gravity (body frame)

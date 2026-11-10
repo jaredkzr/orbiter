@@ -12,6 +12,7 @@
 #include "Scene.h"
 #include "Clouds.h"
 #include "Particles.h"
+#include "WaterSpray.h"
 #include <memory>
 #include <vector>
 
@@ -151,11 +152,8 @@ private:
 	std::vector<SmokeRing> smoke;
 	std::vector<SmokeRing> dust;   // dust (or spray) thrown up where a jet meets the ground
 	uint8_t waterContact[3] = {}; // gear leg i stood in water last frame (UpdateTracks: a splash on touching down)
-	/// the water (Water W9): spray from the core's water state - a burst at
-	/// each blow of an entry, a sheet thrown up while it moves through the
-	/// water, a wake and foam where it is wetted
-	SmokeRing spray, splash;
-	double splashEntry = 0.0, splashTWet = -1e10;
+	/// the water (Water W9): splash, spray and wake from the core's water state
+	WaterSpray water;
 	void UpdateWaterSpray ();
 	std::vector<SmokeRing> mist;   // fine spray hanging over water where a jet meets it (with dust[]: the spray sheet)
 	std::vector<SmokeRing> trail;  // the long trail in the air (PlumeClass::trail): large puffs left along the path, carried by the wind
@@ -213,6 +211,7 @@ private:
 	};
 	Ring fire, smoke, sparks, dust;  // (sparks: also those of a blow)
 	Ring frags;              // struck by another body: small bits of it
+	WaterSpray water;        // in the water: splash, spray, wake (from its water state)
 	// the fireball (Fireball): its flames, each cooling over its life (the
 	// particles' temperature ramp), its smoke rising from within; in vacuum
 	// an expanding shell, its vapour (fbSmoke)
@@ -234,7 +233,6 @@ private:
 	double flashR = 0.0;     // [m] fireball radius
 	double flashK = 3.0;     // [1/s] its light fading (quicker in vacuum)
 	bool scorched = false;   // (a scorch mark made)
-	bool splashed = false;   // (the splash of an impact on the sea made)
 	bool burning = false;    // flames (burning, in air)
 	double dustT = -1e30, dustImpact = 0.0; // the last puff of dust: when, its impact [m/s]
 	void Effects ();

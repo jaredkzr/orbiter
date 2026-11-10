@@ -79,6 +79,7 @@ VVessel::~VVessel ()
 		for (auto &r : *rings)
 			if (sys && r.sys == sys) sys->Release (r);
 	for (auto &c : contrails) c.Release (sys);
+	water.Release (sys);
 	for (ParticleRing *r : { (ParticleRing*)&wake, (ParticleRing*)&afterglow })
 		if (sys && r->sys == sys) sys->Release (*r);
 	// restore animated vertex lists to their default state
@@ -977,6 +978,7 @@ VDebris::~VDebris ()
 	ParticleSystem *sys = scene->Particles ();
 	for (Ring *r : { &fire, &smoke, &sparks, &dust, &frags, &fbFire, &fbSmoke, &column, &drift })
 		if (r->sys && r->sys == sys) sys->Release (*r); // (retired with r->tex while its particles live; rings idle for long were released already)
+	water.Release (sys);
 }
 
 void VDebris::Update ()
@@ -1073,34 +1075,7 @@ void VDebris::Effects ()
 	if (alt < 3.0 * size + 20.0) onWater = vksurf::QueryGlobal (scene, hp, gpos).IsWater ();
 
 	// (born at the sea's surface - a vessel broken up by its impact on the
-	// water: the splash of the impact itself, its pieces fly off from it)
-	if (!splashed && onWater && simt - info.created < 0.5 && alt < 2.0 * size + 10.0) {
-		splashed = true;
-		VECTOR3 gv = GroundVelocity (hp, gpos);
-		double v = std::min (length (vel - gv), 250.0);
-		if (smoke.tex == nullptr) smoke.tex = sys->SmokeTexture ();
-		if (dust.tex == nullptr) dust.tex = sys->SmokeTexture ();
-		VECTOR3 at = gpos - up * alt;
-		ParticleSystem::Emission c{};
-		c.p0 = c.p1 = at, c.vel = gv, c.dir = up;
-		c.v0 = std::min (0.4 * v, 60.0), c.spread = std::min (0.06 * v, 8.0);
-		c.lifetime = std::clamp (0.03 * v + 2.0, 2.5, 7.0), c.dt = dt;
-		c.size = std::max (1.0 * size, 2.0) * sz, c.growth = 1.2 * size * sz;
-		c.alpha = 0.8, c.slowdown = 0.3;
-		c.tinted = true, c.cold = true, c.ballistic = true;
-		c.albedo[0] = 0.92f, c.albedo[1] = 0.94f, c.albedo[2] = 0.96f;
-		Emit (dust, c, (uint32_t)std::min (v * 3.0 * D, 400.0), 8.0, true);
-		ParticleSystem::Emission r{};
-		r.p0 = r.p1 = at, r.vel = gv, r.dir = -up;
-		r.v0 = std::min (0.2 * v, 30.0), r.spread = std::min (0.4 * v, 40.0);
-		r.lifetime = 4.0, r.dt = dt;
-		r.size = std::max (1.0 * size, 2.0) * sz, r.growth = 1.5 * size * sz;
-		r.alpha = 0.6, r.slowdown = 0.8;
-		r.tinted = true, r.cold = true, r.planar = true;
-		r.albedo[0] = 0.9f, r.albedo[1] = 0.92f, r.albedo[2] = 0.95f;
-		Emit (dust, r, (uint32_t)std::min (v * 2.5 * D, 300.0), 8.0, true);
-		if (WaterFx *wf = scene->Water ()) wf->Impulse (hp, at, std::max (1.0, size), std::clamp (v / 30.0, 0.2, 1.0));
-	}
+	// water: the splash is its water state's, below, as each piece hits)
 
 	// the fireball: propellant released as it broke off (if seen then)
 	if (!burst && info.fuel > 1.0 && simt - info.created < 0.5) {
@@ -1242,30 +1217,14 @@ void VDebris::Effects ()
 	// (a puff for each blow: one bouncing along at speed hits the ground
 	// step after step, a puff each step would be a solid wall of dust)
 	bool blow = info.impact > 1.5 && (simt - dustT > 0.3 || info.impact > 1.5 * dustImpact);
-	if (blow && onWater) {
-		// into the sea: a white column thrown up and a ring of spray, by the
-		// blow; falling back
-		dustT = simt, dustImpact = info.impact;
-		double v = info.impact;
-		ParticleSystem::Emission c{};
-		c.p0 = c.p1 = contact, c.vel = groundVel, c.dir = up;
-		c.v0 = std::min (0.5 * v, 40.0), c.spread = std::min (0.08 * v, 4.0);
-		c.lifetime = std::clamp (0.12 * v, 1.5, 5.0), c.dt = dt;
-		c.size = std::max (0.8 * size, 1.0) * sz, c.growth = 1.0 * size * sz;
-		c.alpha = 0.75, c.slowdown = 0.4;
-		c.tinted = true, c.cold = true, c.ballistic = true;
-		c.albedo[0] = 0.92f, c.albedo[1] = 0.94f, c.albedo[2] = 0.96f;
-		Emit (dust, c, (uint32_t)std::min (v * 5.0 * D, 300.0), 6.0, true);
-		ParticleSystem::Emission r{};
-		r.p0 = r.p1 = contact, r.vel = groundVel, r.dir = -up;
-		r.v0 = std::min (0.25 * v, 15.0), r.spread = std::min (0.5 * v, 20.0);
-		r.lifetime = 3.0, r.dt = dt;
-		r.size = 0.9 * size * sz, r.growth = 1.2 * size * sz;
-		r.alpha = 0.5, r.slowdown = 1.0;
-		r.tinted = true, r.cold = true, r.planar = true;
-		r.albedo[0] = 0.9f, r.albedo[1] = 0.92f, r.albedo[2] = 0.95f;
-		Emit (dust, r, (uint32_t)std::min (v * 4.0 * D, 250.0), 6.0, true);
-	} else if (blow && rho > 1e-4) {
+	// in the water: its splash, spray and wake, as the water's physics says
+	// (a blow on the ground under the water, the seabed: none)
+	if (!(info.flags & DEBRIS_ATREST)) {
+		WATERSTATE ws;
+		if (oapiGetDebrisWaterState (hObj, &ws)) water.Update (scene, hp, ws, gpos, vel, size, camDist, 0x8000000000ull | info.serial);
+	}
+	if (blow && onWater) dustT = simt, dustImpact = info.impact;
+	else if (blow && rho > 1e-4) {
 		dustT = simt, dustImpact = info.impact;
 		uint32_t n = (uint32_t)std::min (info.impact * 6.0 * D, 400.0);
 		ParticleSystem::Emission e{};
@@ -1576,6 +1535,7 @@ void VDebris::DrawParticles ()
 	for (const Ring *r : { &drift, &column, &fbSmoke, &smoke, &dust, &frags, &fire, &fbFire, &sparks })
 		if (r->sys == sys && simt - r->lastEmit < 1.5 * r->life + 0.1)
 			sys->Draw (*r, r->tex, r->emissive, scene->FrameSet ()); // (if not released while idle)
+	water.Draw (scene);
 }
 
 void VDebris::Render (RenderPass pass)
@@ -2299,6 +2259,7 @@ void VVessel::DrawParticles ()
 			if (r.sys == sys && simt - r.lastEmit < 1.5 * r.life + 0.1)
 				sys->Draw (r, sys->SmokeTexture (), false, scene->FrameSet ()); // (if not released while idle)
 	for (const auto &c : contrails) c.Draw (sys, scene->FrameSet ());
+	water.Draw (scene);
 	if (wake.sys == sys) sys->Draw (wake, scene->FireballTexture (5), true, scene->FrameSet ()); // (EmitWake)
 	if (afterglow.sys == sys) sys->Draw (afterglow, scene->FireballTexture (3), true, scene->FrameSet ());
 }
@@ -3188,109 +3149,14 @@ void VPlanet::RenderGlow ()
 }
 
 // =======================================================================
-// The water's spray (Water W9): what the core's water state says the vessel
-// does in the water - the entry's blows (a burst of spray and the rings and
-// foam of WaterFx), its motion through the water (a sheet of spray thrown up
-// and back, a wake) - where it is wetted.
+// The water's splash, spray and wake (Water W9): WaterSpray, from the core's
+// water state
 
 void VVessel::UpdateWaterSpray ()
 {
 	WATERSTATE ws;
-	if (!vessel->GetWaterState (&ws) || !ws.wet || ws.afloat || camDist > 6000.0) {
-		if (!ws.wet) splashEntry = 0.0;
-		spray.havePrev = false;
-		return;
-	}
-	OBJHANDLE hp = vessel->GetSurfaceRef ();
-	double dt = oapiGetSimStep ();
-	if (!hp || dt <= 0.0) return;
-	ParticleSystem *sys = scene->Particles ();
-	WaterFx *wf = scene->Water ();
-	VECTOR3 at = ws.contact, pc;
-	oapiGetGlobalPos (hp, &pc);
-	VECTOR3 up = unit (at - pc);
-	{
-		// (on the water: the wetted surface's centre is under it, and particles
-		// born below the ground (the sea's mean surface) are dropped at once)
-		double lng, lat, rad, datum = 0.0, seabed;
-		oapiGlobalToEqu (hp, at, &lng, &lat, &rad);
-		oapiIsWater (hp, lng, lat, &datum, &seabed);
-		double h = 0.0;
-		oapiSeaSurface (hp, lng, lat, oapiGetSimMJD (), 0.0, &h);
-		at = pc + up * (oapiGetSize (hp) + datum + std::max (h, 0.0) + 0.4);
-	}
-	VECTOR3 gv = GroundVelocity (hp, at);
-	double R0 = std::clamp (0.5 * sqrt (std::max (ws.wetted, 0.25)), 0.15 * size, 0.4 * size + 1.0);
-	double D = sys ? sys->density : 1.0, sizeScale = std::pow (D, -1.0 / 3.0);
-
-	// a blow: a new entry, or a harder blow of it
-	if (ws.tWet != splashTWet) splashTWet = ws.tWet, splashEntry = 0.0;
-	if (ws.entrySpeed > splashEntry + 1.5 && ws.entrySpeed > 2.0) {
-		double v = std::min (ws.entrySpeed, 60.0);
-		double k = std::clamp (v / 15.0, 0.15, 1.0);
-		if (wf) wf->Impulse (hp, at, std::max (R0, 0.25 * size), k);
-		uint32_t n = (uint32_t)std::min (v * (25.0 + 12.0 * R0) * D, 2500.0);
-		if (getenv ("ORBITER_VK_SPRAY_LOG")) oapiWriteLogV ("VulkanClient: spray burst %s: entry %.1f m/s, %u droplets, R0 %.1f m, D %.2f", vessel->GetName (), v, n, R0, D);
-		bool okR = sys && sys->enabled && n && sys->Reserve (splash, 0.0, 4.0, ParticleSystem::Class::Spray, 2.0 * n);
-		if (getenv ("ORBITER_VK_SPRAY_LOG")) oapiWriteLogV ("VulkanClient: spray burst reserve %d (sys %d enabled %d)", (int)okR, sys != nullptr, sys ? (int)sys->enabled : -1);
-		if (okR) {
-			ParticleSystem::Emission e{};
-			e.p0 = at - gv * dt, e.p1 = at;
-			e.vel = gv, e.dir = -up; // (dir: opposite to the emission)
-			// (thrown up and out from the blow: a column for a hard one, a ring of droplets)
-			e.v0 = 0.6 * v, e.spread = 0.7 * v;
-			e.planar = false;
-			e.lifetime = std::clamp (0.15 * v, 1.5, 5.0), e.dt = dt;
-			e.size = (2.5 + 0.2 * R0) * sizeScale, e.growth = (2.0 + 0.4 * v / 10.0) * sizeScale;
-			e.alpha = 0.85 * std::min (1.0, 1.3 / (D * sizeScale * sizeScale));
-			e.slowdown = 0.8;
-			e.tinted = true, e.cold = true, e.ballistic = true;
-			e.volumetric = false;
-			e.albedo[0] = 0.90f, e.albedo[1] = 0.93f, e.albedo[2] = 0.96f;
-			e.cls = ParticleSystem::Class::Spray;
-			sys->Emit (splash, e, n);
-		}
-		splashEntry = ws.entrySpeed;
-	}
-
-	// moving through it: a sheet of spray off the wetted surface, thrown up
-	// and back, and the wake
-	double s = ws.speed;
-	if (s < 3.0) { spray.havePrev = false; return; }
-	double k = std::clamp ((s - 3.0) / 25.0, 0.0, 1.0);
-	if (wf) wf->Feed (hp, ((uint64_t)id << 16) | 0x200, at, R0, std::clamp (0.3 + s / 20.0, 0.3, 1.0), 0.0, WaterFx::Kind::Contact);
-	if (!sys || !sys->enabled) return;
-	double rate = (150.0 + 1500.0 * k) * std::sqrt (std::max (R0, 0.5)) * D; // [1/s]
-	if (!sys->Reserve (spray, rate, 2.5, ParticleSystem::Class::Spray)) { if (getenv ("ORBITER_VK_SPRAY_LOG")) oapiWriteLogV ("VulkanClient: spray sheet reserve failed"); spray.havePrev = false; return; }
-	if (getenv ("ORBITER_VK_SPRAY_LOG")) oapiWriteLogV ("VulkanClient: spray sheet %s: speed %.1f, rate %.0f, at alt %.2f", vessel->GetName (), s, rate, length (at - pc) - oapiGetSize (hp));
-	if (!spray.havePrev) spray.prev = at;
-	spray.accum += rate * dt;
-	uint32_t cnt = (uint32_t)spray.accum;
-	spray.accum -= cnt;
-	if (cnt) {
-		VECTOR3 vel;
-		vessel->GetGlobalVel (vel);
-		VECTOR3 rel = vel - gv;
-		VECTOR3 hrel = rel - up * dotp (rel, up);
-		ParticleSystem::Emission e{};
-		e.p0 = spray.prev, e.p1 = at;
-		// (the droplets leave with a share of the hull's speed, thrown up and
-		// out to the sides: a sheet off the wetted surface)
-		e.vel = gv + hrel * 0.3;
-		e.dir = -up; // (dir: opposite to the emission)
-		e.v0 = 0.22 * s, e.spread = 0.4 * s;
-		e.planar = false;
-		e.lifetime = 2.5, e.dt = dt;
-		e.size = 3.0 * sizeScale, e.growth = 4.0 * sizeScale;
-		e.alpha = 0.8 * (0.4 + 0.6 * k) * std::min (1.0, 1.3 / (D * sizeScale * sizeScale));
-		e.slowdown = 1.0;
-		e.tinted = true, e.cold = true, e.ballistic = true;
-		e.volumetric = false;
-		e.albedo[0] = 0.90f, e.albedo[1] = 0.93f, e.albedo[2] = 0.96f;
-		e.cls = ParticleSystem::Class::Spray;
-		sys->Emit (spray, e, cnt);
-		if (getenv ("ORBITER_VK_SPRAY_LOG")) oapiWriteLogV ("VulkanClient: spray sheet emitted %u (alpha %.2f size %.2f v0 %.1f)", cnt, e.alpha, e.size, e.v0);
-	}
-	spray.prev = at;
-	spray.havePrev = true;
+	if (!vessel->GetWaterState (&ws)) return;
+	VECTOR3 vel;
+	vessel->GetGlobalVel (vel);
+	water.Update (scene, vessel->GetSurfaceRef (), ws, gpos, vel, size, camDist, id);
 }

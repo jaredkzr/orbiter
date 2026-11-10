@@ -2806,6 +2806,15 @@ OAPIFUNC OBJHANDLE oapiGetDebrisByIndex (DWORD index);
 OAPIFUNC bool oapiGetDebrisInfo (OBJHANDLE hDebris, DEBRISINFO *info);
 
 /**
+ * \brief The water state of a piece of debris (as VESSEL::GetWaterState).
+ * \param hDebris debris handle
+ * \param ws receives the state (see \ref WATERSTATE)
+ * \param size sizeof (WATERSTATE) of the caller (no more is written)
+ * \return false if hDebris is not a piece of debris
+ */
+OAPIFUNC bool oapiGetDebrisWaterState (OBJHANDLE hDebris, WATERSTATE *ws, size_t size = sizeof (WATERSTATE));
+
+/**
  * \brief Returns a group of triangles of a piece of debris (for graphics
  *   clients: the piece's geometry, with the mesh it came from).
  * \param hDebris debris handle
