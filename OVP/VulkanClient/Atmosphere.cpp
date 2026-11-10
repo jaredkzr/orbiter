@@ -6,6 +6,7 @@
 #include "Scene.h"
 #include "VulkanClient.h"
 #include "WaterFx.h"
+#include "SurfaceQuery.h"
 #include "VkTexture.h"
 #include <algorithm>
 #include <fstream>
@@ -65,6 +66,7 @@ namespace {
 		float siteMat[9][4];  //   per material (coarse, fine, flat): [3i] tint rgb, amount; [3i+1] abs rgb, grit factor; [3i+2] pebbles, cracks, smoothing, rocks
 		float overcastSun[4]; // C3: s0 * OVERCAST.sky (rgb; 0: none), w 0
 		float overcastPrm[4]; //   falloff k, deck altitude [m], tan(theta0), 0
+		float waveEnv[WAVE_COUNT][4]; // the waves' crest envelopes (W2): planet-frame wave vector kp (xyz), phase (w)
 		float saltFlat[SALT_MAX][4]; // playa salt flats (pass 2, P1): planet-frame centre direction (xyz), angular radius [rad]; playaPrm.y of them
 	};
 	static_assert (sizeof (AtmUniforms) % 16 == 0, "std140");
@@ -916,10 +918,11 @@ WaveFoam Atmosphere::FoamState (const WaveSea &s, bool *ran)
 		double lambda = l0 * pow (0.7, i);
 		k[i] = twoPi / lambda;
 		om[i] = sqrt (g * k[i] + SIGMA_RHO * k[i] * k[i] * k[i]);
-		double ang = (0.35 + 0.45 * i / (WAVE_COUNT - 1.0)) * sin (i * 2.39996 + 0.3 * sin (i * 7.1));
+		double ang = (WAVE_SPREAD0 + WAVE_SPREAD1 * i / (WAVE_COUNT - 1.0)) * sin (i * 2.39996 + 0.3 * sin (i * 7.1));
 		dx[i] = cos (ang), dy[i] = sin (ang);
 		c[i] = uni (rng) * twoPi;
 	}
+	const double envN = 1.0 / sqrt (1.0 + 0.5 * WAVE_ENV_D * WAVE_ENV_D);
 	const double T0 = twoPi / om[0];
 	struct Smp { double S, win, tc, Sd[2], o[2], tau[2]; };
 	std::vector<Smp> sm (NS);
@@ -927,12 +930,13 @@ WaveFoam Atmosphere::FoamState (const WaveSea &s, bool *ran)
 	for (int j = 0; j < NS; j++) {
 		// position and time from the RNG (the noise is paired arbitrarily: only statistics matter)
 		double X = uni (rng) * 8.0 * l0, Y = uni (rng) * 8.0 * l0, t = uni (rng) * 20.0 * T0;
-		double phi[CAP_WAVES];
+		double phi[CAP_WAVES], m[CAP_WAVES];
 		Smp &p = sm[j];
 		p.S = 0.0;
 		for (int i = 0; i < CAP_WAVES; i++) {
 			phi[i] = k[i] * (X * dx[i] + Y * dy[i]) - om[i] * t + c[i];
-			p.S += slope * sin (phi[i]);
+			m[i] = (1.0 + WAVE_ENV_D * cos (WAVE_ENV_K * k[i] * (Y * dx[i] - X * dy[i]) + 2.3 * i + 0.5)) * envN; // (the crest envelope)
+			p.S += slope * m[i] * sin (phi[i]);
 		}
 		double dphi = fmod (phi[0] - PI / 2.0 + PI, twoPi);
 		if (dphi < 0.0) dphi += twoPi;
@@ -944,7 +948,7 @@ WaveFoam Atmosphere::FoamState (const WaveSea &s, bool *ran)
 		for (int n = 0; n < 2; n++) {
 			double tau = p.tc + n * T0;
 			double Sd = 0.0;
-			for (int i = 0; i < CAP_WAVES; i++) Sd += slope * sin (phi[i] + om[i] * tau);
+			for (int i = 0; i < CAP_WAVES; i++) Sd += slope * m[i] * sin (phi[i] + om[i] * tau);
 			p.Sd[n] = Sd;
 			p.o[n] = std::max ((exp (-tau / (CAP_TF * T0)) - E) / (1.0 - E), 0.0);
 			p.tau[n] = tau / T0;
@@ -992,7 +996,7 @@ void Atmosphere::LogFoam (const char *prefix) const
 		prefix, wavesName, sea.wind, cov, f.shoreW, f.Hs, f.shoreL, f.shoreT);
 }
 
-void Atmosphere::UpdateWaves (const VECTOR3 &cam, double camR, float prm[4], float data[][4])
+void Atmosphere::UpdateWaves (const VECTOR3 &cam, double camR, float prm[4], float data[][4], float env[][4])
 {
 	static const bool wlog = getenv ("ORBITER_VK_WAVE_LOG") && atoi (getenv ("ORBITER_VK_WAVE_LOG"));
 	const double twoPi = 2.0 * PI;
@@ -1008,8 +1012,18 @@ void Atmosphere::UpdateWaves (const VECTOR3 &cam, double camR, float prm[4], flo
 		// so the pattern does not swim; a time-varying wind would have to
 		// re-anchor or blend two spectra.
 		double lng = atan2 (cam.z, cam.x), lat = asin (std::min (std::max (cam.y / length (cam), -1.0), 1.0));
-		double elev = oapiSurfaceElevation (hPlanet, lng, lat);
-		sea = SeaState (lng, lat, elev);
+		// the wind 10 m above the water (code review M1: not above the ground under the camera, which
+		// gave every sea the wind of the hills flown over): seas at their level; an ice world's open
+		// water follows the terrain, so its level is where the camera is over it (elsewhere the sea
+		// state stays as it was)
+		double elev = 0.0;
+		bool overWater = true;
+		if (!strcmp (wavesWhy, "ice open water")) {
+			vksurf::Point pt = vksurf::Query (scene, hPlanet, lng, lat);
+			overWater = pt.water > 0.5;
+			elev = pt.elev;
+		}
+		if (overWater || !seaSet) sea = SeaState (lng, lat, elev), seaSet = true;
 		bool foamRan = false;
 		if (foam) wfoam = FoamState (sea, &foamRan);
 		VECTOR3 east = _V(-sin (lng), 0.0, cos (lng));
@@ -1029,13 +1043,18 @@ void Atmosphere::UpdateWaves (const VECTOR3 &cam, double camR, float prm[4], flo
 	double k0 = 0.0, om0 = 0.0;
 	for (int i = 0; i < WAVE_COUNT; i++) {
 		double lambda = 60.0 * sea.lambdaScale * pow (0.7, i);
-		double ang = sea.azimuth + (0.35 + 0.45 * i / (WAVE_COUNT - 1.0)) * sin (i * 2.39996 + 0.3 * sin (i * 7.1));
+		double ang = sea.azimuth + (WAVE_SPREAD0 + WAVE_SPREAD1 * i / (WAVE_COUNT - 1.0)) * sin (i * 2.39996 + 0.3 * sin (i * 7.1));
 		VECTOR3 dir = waveT1 * cos (ang) + waveT2 * sin (ang);
 		double k = twoPi / lambda, omega = sqrt (waveG * k + SIGMA_RHO * k * k * k);
 		double phi = fmod (k * dotp (d, dir) - omega * t + 1.7 * i, twoPi);
 		if (phi < 0.0) phi += twoPi;
 		data[i][0] = (float)(k * dir.x), data[i][1] = (float)(k * dir.y), data[i][2] = (float)(k * dir.z);
 		data[i][3] = (float)phi;
+		// the crest envelope: across the wave, anchored as the wave is
+		VECTOR3 kp = (waveT2 * cos (ang) - waveT1 * sin (ang)) * (WAVE_ENV_K * k);
+		double psi = fmod (dotp (d, kp) + 2.3 * i + 0.5, twoPi);
+		if (psi < 0.0) psi += twoPi;
+		env[i][0] = (float)kp.x, env[i][1] = (float)kp.y, env[i][2] = (float)kp.z, env[i][3] = (float)psi;
 		if (i == 0) dir0 = dir, k0 = k, om0 = omega;
 	}
 	prm[0] = sea.slope, prm[1] = (float)waveG, prm[2] = sea.lambdaScale, prm[3] = 0.0f;
@@ -1113,7 +1132,7 @@ void Atmosphere::Update ()
 	u.water[3] = waves ? (float)fmod (oapiGetSimTime (), 3600.0) : -1.0f; // (the aurora's clock)
 	// (the waves show within 3 km of the surface: not computed for planets far
 	// off, which also frees the anchor for the next approach)
-	if (waves && camR - radius < 50e3) UpdateWaves (cam, camR, u.wavePrm, u.waves);
+	if (waves && camR - radius < 50e3) UpdateWaves (cam, camR, u.wavePrm, u.waves, u.waveEnv);
 	else waveAnchored = false;
 	if (waves) u.seaPrm[0] = sea.varUnres, u.seaPrm[1] = sea.varTotal, u.seaPrm[2] = sea.wind;
 	if (waves && foam) {

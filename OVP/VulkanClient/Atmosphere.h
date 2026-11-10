@@ -21,6 +21,12 @@ class Scene;
 constexpr double GG_FLOOR_DEPTH = 200e3;
 
 static constexpr int WAVE_COUNT = 14; // as WAVE_COUNT in atmosphere.glsl (keep in sync)
+// short crests (pass 2, W2): each wave's amplitude varies along its crest, (1 + D cos (kp . x + psi)) / sqrt (1 + D^2/2)
+// with |kp| = WAVE_ENV_K k across the wave (crests about 4.5 wavelengths long): two side-band waves for one, so the
+// sum of WAVE_COUNT sinusoids is not long-crested stripes or a lattice in the glitter (as in tile_main.glsl)
+static constexpr double WAVE_ENV_K = 0.22, WAVE_ENV_D = 0.8;
+// the waves' directions about the wind: amplitude WAVE_SPREAD0 + WAVE_SPREAD1 i / (WAVE_COUNT - 1) [rad]
+static constexpr double WAVE_SPREAD0 = 0.5, WAVE_SPREAD1 = 0.4;
 
 /// sea state: drives the wave spectrum (Atmosphere::SeaState: from the wind 10 m above the water)
 struct WaveSea {
@@ -136,6 +142,7 @@ private:
 	// waves on water (a sum of WAVE_COUNT waves, set on the CPU)
 	bool waves = false;
 	const char *wavesWhy = "";
+	bool seaSet = false;                  // (the sea state was taken over water: ice worlds keep it between their open water)
 	char wavesName[64] = "";
 	std::vector<std::array<double, 4>> saltFlats; // planet-frame centre direction, angular radius [rad] (Config/VK/Playa.cfg)
 	double waveG = 9.81;                  // surface gravity [m/s^2]
@@ -154,7 +161,7 @@ private:
 	bool waveAnchored = false;
 	VECTOR3 waveAnchor{}, waveT1{}, waveT2{};
 	double waveLogT = -1e9;
-	void UpdateWaves (const VECTOR3 &cam, double camR, float prm[4], float data[][4]);
+	void UpdateWaves (const VECTOR3 &cam, double camR, float prm[4], float data[][4], float env[][4]);
 };
 
 /// skylight of an overcast atmosphere (Venus, Titan): the ground's

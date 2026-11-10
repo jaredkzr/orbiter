@@ -219,6 +219,31 @@ WaterFxOut WaterFxEval (vec3 p, vec3 Np, float footprint)
 	return o;
 }
 
+// The wind's waves' slope (planet frame, relative to the camera's position p): WAVE_COUNT waves, each
+// with its crest envelope m = (1 + D cos (kp . p + psi)) / sqrt (1 + D^2/2) (W2: short crests; E[m^2] = 1,
+// so the sea's slope variance holds). res out: the sum of the anti-aliasing weights squared
+const float WAVE_ENV_D = 0.8; // (Atmosphere.h)
+vec3 WaveSlope (vec3 p, float footprint, float slope, out float res)
+{
+	const float envN = 1.0 / sqrt (1.0 + 0.5 * WAVE_ENV_D * WAVE_ENV_D);
+	vec3 g = vec3 (0.0);
+	res = 0.0;
+	for (int i = 0; i < WAVE_COUNT; i++) {
+		vec4 w = atm.waves[i], e = atm.waveEnv[i];
+		float k = length (w.xyz);
+		// (waves shorter than 8 px fade out and are gone at 4 px (x = 4 footprint / lambda): finer pure-sinusoid
+		// waves read as a regular lattice, not ripples. Their slope variance goes into the glitter roughness via waveVar.)
+		float aa = 1.0 - smoothstep (0.5, 1.0, footprint * k * (2.0 / PI)); // x = 4 footprint / lambda
+		if (aa <= 0.0) break;
+		float ph = dot (p, w.xyz) + w.w, pe = dot (p, e.xyz) + e.w;
+		float m = (1.0 + WAVE_ENV_D * cos (pe)) * envN;
+		// h = (slope / k) m sin (ph): grad = slope m cos (ph) k^ + (slope / k) sin (ph) grad m
+		g += (slope * aa / k) * (m * cos (ph) * w.xyz - WAVE_ENV_D * envN * sin (ph) * sin (pe) * e.xyz);
+		res += aa * aa;
+	}
+	return g;
+}
+
 // Wave normal of water surfaces (view space): a sum of WAVE_COUNT waves
 // whose wave vectors and phases the CPU sets (Atmosphere.cpp: anchored to
 // the planet, the body's own gravity in their dispersion), longest first.
@@ -240,18 +265,8 @@ vec3 WaterNormalWaves (vec3 Nv, vec3 posView, float dist, out float waveVar)
 	// pixel size on the water [m] (stretched along the view at grazing angles)
 	float footprint = dist * 2.0 * atm.misc.z / max (frame.jitter.w, 1.0)
 		/ max (abs (dot (normalize (posView), Nv)), 0.05);
-	vec3 g = vec3 (0.0);
-	float res = 0.0;
-	for (int i = 0; i < WAVE_COUNT; i++) {
-		vec4 w = atm.waves[i];
-		float k = length (w.xyz);
-		// (waves shorter than 8 px fade out and are gone at 4 px (x = 4 footprint / lambda): finer pure-sinusoid
-		// waves read as a regular lattice, not ripples. Their slope variance goes into the glitter roughness via waveVar.)
-		float aa = 1.0 - smoothstep (0.5, 1.0, footprint * k * (2.0 / PI)); // x = 4 footprint / lambda
-		if (aa <= 0.0) break;
-		g += w.xyz * (slope * cos (dot (p, w.xyz) + w.w) * aa / k);
-		res += aa * aa;
-	}
+	float res;
+	vec3 g = WaveSlope (p, footprint, slope, res);
 	waveVar = max (atm.seaPrm.y - 0.5 * slope * slope * res * fade * fade, 0.0);
 	g -= Np * dot (g, Np); // slope in the tangent plane
 	return transpose (v2p) * normalize (Np - g * fade);
@@ -277,15 +292,7 @@ vec3 WaterNormal (vec3 Nv, vec3 posView, float dist, out float fxVar, out float 
 	float res = 0.0;
 	fl = (1.0 - 0.85 * fx.flatw) * (1.0 - 0.5 * fx.chop); // the jet presses the wind's sea flat
 	if (slope > 0.0 && fade > 0.0) {
-		for (int i = 0; i < WAVE_COUNT; i++) {
-			vec4 w = atm.waves[i];
-			float k = length (w.xyz);
-			// (as in WaterNormalWaves)
-			float aa = 1.0 - smoothstep (0.5, 1.0, footprint * k * (2.0 / PI));
-			if (aa <= 0.0) break;
-			g += w.xyz * (slope * cos (dot (p, w.xyz) + w.w) * aa / k);
-			res += aa * aa;
-		}
+		g = WaveSlope (p, footprint, slope, res);
 		g *= fade * fl;
 	}
 	waveVar = max (fl * fl * (atm.seaPrm.y - 0.5 * slope * slope * res * fade * fade), 0.0);
@@ -358,15 +365,17 @@ float Whitecaps (vec3 p, vec3 pw, float footprint, float fade, out float capVar)
 	float slope = atm.wavePrm.x, th = atm.foamPrm.x, sig = atm.foamPrm.y, fMean = atm.foamPrm.z;
 	if (slope <= 0.0 || fade <= 0.0) return fMean;
 	float g = atm.wavePrm.y;
-	float phi[CAP_WAVES], om[CAP_WAVES], aa[CAP_WAVES];
+	float phi[CAP_WAVES], om[CAP_WAVES], aa[CAP_WAVES], am[CAP_WAVES];
 	float S = 0.0, sa2 = 0.0;
+	const float envN = 1.0 / sqrt (1.0 + 0.5 * WAVE_ENV_D * WAVE_ENV_D);
 	for (int i = 0; i < CAP_WAVES; i++) {
-		vec4 w = atm.waves[i];
+		vec4 w = atm.waves[i], e = atm.waveEnv[i];
 		float k = length (w.xyz);
 		aa[i] = 1.0 - smoothstep (0.5, 1.0, footprint * k * (2.0 / PI));
+		am[i] = aa[i] * (1.0 + WAVE_ENV_D * cos (dot (p, e.xyz) + e.w)) * envN; // (with the crest envelope: as the waves', Atmosphere.cpp FoamState)
 		phi[i] = dot (p, w.xyz) + w.w;
 		om[i] = sqrt (g * k + SIGMA_RHO * k * k * k);
-		S += aa[i] * sin (phi[i]);
+		S += am[i] * sin (phi[i]);
 		sa2 += aa[i] * aa[i];
 	}
 	float vis = fade * aa[2];
@@ -389,7 +398,7 @@ float Whitecaps (vec3 p, vec3 pw, float footprint, float fade, out float capVar)
 		SdN[n] = 0.0;
 		if (oN[n] <= 0.0) continue;
 		float Sd = 0.0;
-		for (int i = 0; i < CAP_WAVES; i++) Sd += aa[i] * sin (phi[i] + om[i] * tau);
+		for (int i = 0; i < CAP_WAVES; i++) Sd += am[i] * sin (phi[i] + om[i] * tau);
 		SdN[n] = Sd * rn;
 		bound = max (bound, SdN[n] + CAP_SPREAD * sig * tau / T0);
 	}
