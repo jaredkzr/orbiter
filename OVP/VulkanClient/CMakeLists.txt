@@ -226,6 +226,7 @@ add_library(VulkanClient SHARED
 	ProcSurface.cpp
 	SurfaceQuery.cpp
 	ShoreField.cpp
+	OceanFft.cpp
 	WaterFx.cpp
 	PlanetSurface.cpp
 	Atmosphere.cpp

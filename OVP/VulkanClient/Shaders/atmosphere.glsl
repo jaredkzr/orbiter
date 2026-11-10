@@ -53,6 +53,11 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 overcastPrm;   //   x: falloff k towards the horizon, y: the cloud deck's altitude [m] (the blend to the beam), z: tan of the apparent source's angular radius at the ground, w: 0
 	vec4 coastPrm;      // shore (F1): x wet sand width [m] (0: none), y shallows tint (1: procedural seas), z mask field range [texels] (0: plain masks: alpha the land share), w sea ice (1: procedural ocean worlds, I1)
 	vec4 waveEnv[WAVE_COUNT]; // the waves' crest envelopes (W2, Atmosphere.h WAVE_ENV_*): planet-frame wave vector kp (xyz), phase (w)
+	vec4 oceanT1;       // the sea field (W3, OceanFft): t1 (xyz), long patch [m] (w)
+	vec4 oceanT2;       //   t2 (xyz), ripple patch [m] (w)
+	vec4 oceanD;        //   the camera from the anchor (xyz, planet frame), on (w: 1)
+	vec4 oceanVar;      //   mean-square slope of the layers (x, y)
+	vec4 oceanMipVar[2]; //   the long layer's levels 0..5 (as drawn)
 	vec4 nearHaze;      // C4 (T4): haze near the ground: scattering at the surface [1/m] (rgb; extinction: about the largest, grey), scale height [m] (w; 0: none)
 	vec4 saltFlat[24];  // playa salt flats (pass 2, P1): planet-frame centre direction (xyz), angular radius [rad]; playaPrm.y of them (Config/VK/Playa.cfg)
 } atm;

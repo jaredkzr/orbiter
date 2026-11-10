@@ -12,6 +12,9 @@
 #include "VkContext.h"
 #include "OrbiterAPI.h"
 #include <vector>
+#include "OceanFft.h"
+#include <cmath>
+#include <cstdint>
 #include <array>
 
 class Scene;
@@ -21,10 +24,31 @@ class Scene;
 constexpr double GG_FLOOR_DEPTH = 200e3;
 
 static constexpr int WAVE_COUNT = 14; // as WAVE_COUNT in atmosphere.glsl (keep in sync)
-// short crests (pass 2, W2): each wave's amplitude varies along its crest, (1 + D cos (kp . x + psi)) / sqrt (1 + D^2/2)
-// with |kp| = WAVE_ENV_K k across the wave (crests about 4.5 wavelengths long): two side-band waves for one, so the
-// sum of WAVE_COUNT sinusoids is not long-crested stripes or a lattice in the glitter (as in tile_main.glsl)
-static constexpr double WAVE_ENV_K = 0.22, WAVE_ENV_D = 0.8;
+// short crests (pass 2, W2/W3): each wave's amplitude varies along its crest by m = 1 + D n(u), n a smooth
+// random function (1-D value noise, WAVE_ENV_CELLS cells per period of its phase u = kp . x + psi, |kp| =
+// WAVE_ENV_K k across the wave: cells of about 2.25 wavelengths, repeating after 18), normalised so that the
+// sea's slope variance holds. (A single cosine, W2, made a regular lattice of patches with the wave: a
+// crosshatch.) WaveEnvelope here and in tile_main.glsl must agree (the whitecaps' calibration uses it)
+static constexpr double WAVE_ENV_K = 1.0 / 18.0, WAVE_ENV_D = 1.0;
+static constexpr int WAVE_ENV_CELLS = 8;
+/// the envelope m and dm/du of wave i at phase u [rad]
+inline void WaveEnvelope (int i, double u, double &m, double &dmdu)
+{
+	auto hash = [] (uint32_t a, uint32_t c) {
+		uint32_t h = a * 0x9E3779B1u ^ c * 0x85EBCA77u;
+		h ^= h >> 15; h *= 0x2C1B3C6Du; h ^= h >> 12; h *= 0x297A2D39u; h ^= h >> 15;
+		return (double)(h & 0xffffu) / 65535.0 * 2.0 - 1.0;
+	};
+	const double twoPi = 6.283185307179586;
+	double t = u * (WAVE_ENV_CELLS / twoPi);
+	double fc = std::floor (t), f = t - fc;
+	int c0 = ((int)fc % WAVE_ENV_CELLS + WAVE_ENV_CELLS) % WAVE_ENV_CELLS, c1 = (c0 + 1) % WAVE_ENV_CELLS;
+	double v0 = hash ((uint32_t)i, (uint32_t)c0), v1 = hash ((uint32_t)i, (uint32_t)c1);
+	double sm = f * f * (3.0 - 2.0 * f), n = v0 + (v1 - v0) * sm;
+	const double norm = 1.0 / std::sqrt (1.0 + WAVE_ENV_D * WAVE_ENV_D * 0.2287); // (E[n^2] of the noise)
+	m = (1.0 + WAVE_ENV_D * n) * norm;
+	dmdu = WAVE_ENV_D * (v1 - v0) * 6.0 * f * (1.0 - f) * (WAVE_ENV_CELLS / twoPi) * norm;
+}
 // the waves' directions about the wind: amplitude WAVE_SPREAD0 + WAVE_SPREAD1 i / (WAVE_COUNT - 1) [rad]
 static constexpr double WAVE_SPREAD0 = 0.5, WAVE_SPREAD1 = 0.4;
 
@@ -58,6 +82,8 @@ public:
 	void Shutdown ();
 	VkDescriptorSetLayout SetLayout () const { return setLayout; }
 	VkDescriptorPool Pool () const { return pool; }
+	/// bind the sea field's images (bindings 9, 10; null: white)
+	void WriteOcean (VkDescriptorSet set, VkImageView longV, VkImageView rippleV) const;
 	VkPipeline SkyPipeline () const { return skyPipeline; }
 	VkPipelineLayout SkyLayout () const { return skyLayout; }
 	/// set with uniform data for "no atmosphere"
@@ -82,6 +108,7 @@ private:
 	VkPipelineLayout skyLayout = VK_NULL_HANDLE;
 	VkPipeline skyPipeline = VK_NULL_HANDLE;
 	vkc::Buffer noneUbo;
+	VkSampler oceanSampler = VK_NULL_HANDLE; // (the sea field: repeat, mip mapped)
 	VkDescriptorSet noneSet = VK_NULL_HANDLE;
 	VkSampler lutSampler = VK_NULL_HANDLE;
 	VkDescriptorImageInfo cloudVol[2] = {};
@@ -98,6 +125,9 @@ public:
 	bool Present () const { return present; }
 	/// colour saturation of the surface textures (tile_main.glsl surfPrm.x)
 	float SurfSaturation () const { return surfSaturation; }
+	/// the sea field's slopes for this frame into its images (the camera's planet; before the frame's
+	/// passes, outside rendering: cmd records transfers)
+	void UploadOcean (VkCommandBuffer cmd, const VECTOR3 &camGlobal);
 	/// share of a salt flat at a point [rad] (Config/VK/Playa.cfg: the playa ground there is a salt crust, not clay)
 	float SaltShare (double lat, double lng) const;
 	/// Write this frame's uniform data (camera and sun relative to the planet)
@@ -136,6 +166,14 @@ private:
 	// per frame slot, for the main view and the environment probe
 	static constexpr uint32_t NSETS = 2 * vkc::FRAMES_IN_FLIGHT;
 	vkc::Buffer ubo[NSETS];
+	vkc::Image oceanImg[vkc::FRAMES_IN_FLIGHT][2]; // the sea field (W3, OceanFft): the long layer with its levels, the ripples
+	vkc::Buffer oceanStage[vkc::FRAMES_IN_FLIGHT];
+	std::vector<float> oceanScratch;
+	uint64_t oceanFrame = 0;              // (the frame UploadOcean last wrote)
+	static size_t OceanStageBytes ();
+	OceanFft ocean;
+	bool oceanOn = false;                 // (ORBITER_VK_WAVE_FFT=0: the plane waves)
+	VECTOR3 oceanT1{}, oceanT2{};
 	VkDescriptorSet sets[NSETS] = {};
 	uint32_t SetIndex () const;
 	float groundColour[4] = { 0.5f, 0.5f, 0.5f, 0.0f };

@@ -8,6 +8,7 @@
 #include "WaterFx.h"
 #include "SurfaceQuery.h"
 #include "ShoreField.h"
+#include "OceanFft.h"
 #include "VkTexture.h"
 #include <algorithm>
 #include <fstream>
@@ -69,6 +70,11 @@ namespace {
 		float overcastPrm[4]; //   falloff k, deck altitude [m], tan(theta0), 0
 		float coastPrm[4];    // shore (F1): x wet sand width [m] (0: none), y shallows tint (1: procedural seas), z mask field range [texels] (0: plain masks), w 0
 		float waveEnv[WAVE_COUNT][4]; // the waves' crest envelopes (W2): planet-frame wave vector kp (xyz), phase (w)
+		float oceanT1[4];     // the sea field (W3): t1 (xyz), long patch [m] (w)
+		float oceanT2[4];     //   t2 (xyz), ripple patch [m] (w)
+		float oceanD[4];      //   the camera from the anchor (xyz, planet frame), on (w: 1)
+		float oceanVar[4];    //   mean-square slope of the layers (x, y)
+		float oceanMipVar[2][4]; //   the long layer's levels 0..5
 		float nearHaze[4];    // C4 (T4): haze near the ground: extinction at the surface [1/m] (rgb), scale height [m] (w; 0: none)
 		float saltFlat[SALT_MAX][4]; // playa salt flats (pass 2, P1): planet-frame centre direction (xyz), angular radius [rad]; playaPrm.y of them
 	};
@@ -316,26 +322,26 @@ bool AtmosphereRenderer::Init (vkc::Context *c, TextureManager *tm)
 {
 	ctx = c;
 	texmgr = tm;
-	VkDescriptorSetLayoutBinding b[9]{};
+	VkDescriptorSetLayoutBinding b[11]{};
 	b[0].binding = 0;
 	b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	b[0].descriptorCount = 1;
 	b[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
-	for (int i = 1; i < 9; i++) { // ground, clouds, transmittance and multiple-scattering tables, volumetric clouds' coverage and shape
+	for (int i = 1; i < 11; i++) { // ground, clouds, transmittance and multiple-scattering tables, volumetric clouds' coverage and shape, the sea field (W3)
 		b[i].binding = i;
 		b[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		b[i].descriptorCount = 1;
 		b[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT; // (volumetric clouds)
 	}
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 9;
+	lci.bindingCount = 11;
 	lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &setLayout));
 
 	const uint32_t nSets = MAX_ATMOSPHERES * 2 * vkc::FRAMES_IN_FLIGHT + 1;
 	VkDescriptorPoolSize ps[2] = {
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nSets },
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8 * nSets }
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 10 * nSets }
 	};
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
@@ -361,6 +367,15 @@ bool AtmosphereRenderer::Init (vkc::Context *c, TextureManager *tm)
 	WriteGround (noneSet, texmgr->White(), texmgr->White());
 	WriteGround (noneSet, texmgr->White(), texmgr->White(), 3);
 	WriteGround (noneSet, texmgr->White(), texmgr->White(), 5); // (tables unused without an atmosphere)
+	{
+		VkSamplerCreateInfo oci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO}; // (the sea field: periodic, mip mapped)
+		oci.magFilter = oci.minFilter = VK_FILTER_LINEAR;
+		oci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+		oci.addressModeU = oci.addressModeV = oci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		oci.maxLod = 16.0f;
+		VK_CHECK(vkCreateSampler (ctx->device, &oci, nullptr, &oceanSampler));
+	}
+	WriteOcean (noneSet, VK_NULL_HANDLE, VK_NULL_HANDLE);
 
 	// precomputed tables: sampler and compute pipelines
 	VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
@@ -478,6 +493,24 @@ void AtmosphereRenderer::WriteCloudVolume (VkDescriptorSet set) const
 	vkUpdateDescriptorSets (ctx->device, 2, wr, 0, nullptr);
 }
 
+void AtmosphereRenderer::WriteOcean (VkDescriptorSet set, VkImageView longV, VkImageView rippleV) const
+{
+	VkImageView w = texmgr->White ()->img.view;
+	VkDescriptorImageInfo ii[2] = {
+		{ oceanSampler, longV ? longV : w, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+		{ oceanSampler, rippleV ? rippleV : w, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL } };
+	VkWriteDescriptorSet wr[2]{};
+	for (int k = 0; k < 2; k++) {
+		wr[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		wr[k].dstSet = set;
+		wr[k].dstBinding = 9 + k;
+		wr[k].descriptorCount = 1;
+		wr[k].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		wr[k].pImageInfo = &ii[k];
+	}
+	vkUpdateDescriptorSets (ctx->device, 2, wr, 0, nullptr);
+}
+
 void AtmosphereRenderer::WriteGround (VkDescriptorSet set, VkTexture *west, VkTexture *east, int binding) const
 {
 	// the textures' own descriptor sets carry the sampler and view
@@ -560,6 +593,7 @@ void AtmosphereRenderer::Shutdown ()
 	vkDestroyDescriptorPool (ctx->device, pool, nullptr);
 	vkDestroyDescriptorSetLayout (ctx->device, setLayout, nullptr);
 	ctx->DestroyBuffer (noneUbo);
+	vkDestroySampler (ctx->device, oceanSampler, nullptr);
 	ctx = nullptr;
 }
 
@@ -671,6 +705,8 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		procOcean = proc && wp.surfClass == 1;
 		wavesWhy = cfgRipple ? "cfg" : proc && wp.surfClass == 1 ? "ocean" : "ice open water";
 		if (const char *e = getenv ("ORBITER_VK_WAVES")) if (*e && !atoi (e)) waves = false; // (empty: unset)
+		oceanOn = waves;
+		if (const char *e = getenv ("ORBITER_VK_WAVE_FFT")) if (*e && !atoi (e)) oceanOn = false;
 		if (const char *e = getenv ("ORBITER_VK_FOAM")) if (*e && !atoi (e)) foam = false; // (empty: unset)
 		waveG = GGRAV * oapiGetMass (hPlanet) / (radius * radius);
 		oapiGetObjectName (hPlanet, wavesName, 64);
@@ -771,6 +807,46 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		ar->WriteGround (sets[i], nullptr, nullptr, 3);
 		ar->WriteGround (sets[i], nullptr, nullptr, 5);
 		ar->WriteCloudVolume (sets[i]);
+		if (oceanOn && i < vkc::FRAMES_IN_FLIGHT) {
+			// the sea field's images (per frame in flight: written by UploadOcean as the frame begins)
+			auto image = [this](uint32_t n, uint32_t mips) {
+				vkc::Image im;
+				VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+				ici.imageType = VK_IMAGE_TYPE_2D;
+				ici.format = VK_FORMAT_R16G16_SFLOAT;
+				ici.extent = { n, n, 1 };
+				ici.mipLevels = mips;
+				ici.arrayLayers = 1;
+				ici.samples = VK_SAMPLE_COUNT_1_BIT;
+				ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+				ici.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+				VmaAllocationCreateInfo aci{};
+				aci.usage = VMA_MEMORY_USAGE_AUTO;
+				VK_CHECK(vmaCreateImage (ctx->allocator, &ici, &aci, &im.image, &im.alloc, nullptr));
+				VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+				vci.image = im.image;
+				vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+				vci.format = ici.format;
+				vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, mips, 0, 1 };
+				VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &im.view));
+				return im;
+			};
+			oceanImg[i][0] = image (OceanFft::N, OceanFft::MIPS + 1);
+			oceanImg[i][1] = image (OceanFft::N, 1);
+			oceanStage[i] = ctx->CreateBuffer (OceanStageBytes (), VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
+			// (readable from the start: bound before the first upload, and on planets the camera is not at)
+			VkImage a = oceanImg[i][0].image, b = oceanImg[i][1].image;
+			ctx->ImmediateSubmit ([a, b](VkCommandBuffer c) {
+				for (VkImage im : { a, b })
+					vkc::ImageBarrier (c, im, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+						VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+			});
+		}
+		if (oceanOn) {
+			uint32_t f = i % vkc::FRAMES_IN_FLIGHT;
+			ar->WriteOcean (sets[i], oceanImg[f][0].view ? oceanImg[f][0].view : VK_NULL_HANDLE, oceanImg[f][1].view);
+		} else
+			ar->WriteOcean (sets[i], VK_NULL_HANDLE, VK_NULL_HANDLE);
 		if (present) {
 			VkDescriptorImageInfo ii[2] = {
 				{ ar->LutSampler(), transmittanceLut.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
@@ -822,6 +898,12 @@ Atmosphere::~Atmosphere ()
 			c->DestroyBuffer (b);
 			vkFreeDescriptorSets (c->device, pool, 1, &s);
 		});
+	}
+	for (uint32_t f = 0; f < vkc::FRAMES_IN_FLIGHT; f++) {
+		vkc::Image i0 = oceanImg[f][0], i1 = oceanImg[f][1];
+		vkc::Buffer sb = oceanStage[f];
+		if (!i0.image) continue;
+		ctx->DeferDestroy ([c, i0, i1, sb]() mutable { c->DestroyImage (i0); c->DestroyImage (i1); c->DestroyBuffer (sb); });
 	}
 }
 
@@ -939,7 +1021,6 @@ WaveFoam Atmosphere::FoamState (const WaveSea &s, bool *ran)
 		dx[i] = cos (ang), dy[i] = sin (ang);
 		c[i] = uni (rng) * twoPi;
 	}
-	const double envN = 1.0 / sqrt (1.0 + 0.5 * WAVE_ENV_D * WAVE_ENV_D);
 	const double T0 = twoPi / om[0];
 	struct Smp { double S, win, tc, Sd[2], o[2], tau[2]; };
 	std::vector<Smp> sm (NS);
@@ -952,7 +1033,8 @@ WaveFoam Atmosphere::FoamState (const WaveSea &s, bool *ran)
 		p.S = 0.0;
 		for (int i = 0; i < CAP_WAVES; i++) {
 			phi[i] = k[i] * (X * dx[i] + Y * dy[i]) - om[i] * t + c[i];
-			m[i] = (1.0 + WAVE_ENV_D * cos (WAVE_ENV_K * k[i] * (Y * dx[i] - X * dy[i]) + 2.3 * i + 0.5)) * envN; // (the crest envelope)
+			double dmdu;
+			WaveEnvelope (i, WAVE_ENV_K * k[i] * (Y * dx[i] - X * dy[i]) + 2.3 * i + 0.5, m[i], dmdu); // (the crest envelope)
 			p.S += slope * m[i] * sin (phi[i]);
 		}
 		double dphi = fmod (phi[0] - PI / 2.0 + PI, twoPi);
@@ -1047,6 +1129,15 @@ void Atmosphere::UpdateWaves (const VECTOR3 &cam, double camR, float prm[4], flo
 		VECTOR3 north = _V(-sin (lat) * cos (lng), cos (lat), -sin (lat) * sin (lng));
 		seaWindDir = unit (east * sin ((double)sea.bearing) + north * cos ((double)sea.bearing));
 		sea.azimuth = (float)atan2 (dotp (seaWindDir, waveT2), dotp (seaWindDir, waveT1));
+		// the sea near the camera (W3): its spectrum for this sea state, the drawn share of its slopes
+		if (oceanOn) {
+			uint32_t seed = 2166136261u;
+			for (const char *c = wavesName; *c; c++) seed = (seed ^ (uint8_t)*c) * 16777619u;
+			bool ok = ocean.Setup (sea.wind, sea.azimuth, waveG, 60.0 * sea.lambdaScale, std::max (sea.varTotal - sea.varUnres, 0.0f), seed);
+			oceanT1 = waveT1, oceanT2 = waveT2;
+			if (wlog) oapiWriteLogV ("VulkanClient: waves on %s: sea field %s, patches %.1f / %.2f m, mean-square slope %.4f / %.4f",
+				wavesName, ok ? "on" : "off (calm)", ocean.L[0], ocean.L[1], ocean.var[0], ocean.var[1]);
+		}
 		if (wlog) {
 			double l0 = 60.0 * sea.lambdaScale;
 			oapiWriteLogV ("VulkanClient: waves on %s: re-anchored (moved %.1f km), sea: elevation %.0f m, wind %.1f m/s (%s) toward %03.0f deg, azimuth %.1f deg from t1, wavelengths %.1f-%.2f m, slope %.4f",
@@ -1086,6 +1177,83 @@ void Atmosphere::UpdateWaves (const VECTOR3 &cam, double camR, float prm[4], flo
 		oapiWriteLogV ("VulkanClient: waves on %s: alt %.0f m, anchor %.2f km away, wave0 phase error %.1e rad, wave0.wind %.3f",
 			wavesName, camR - radius, length (d) * 1e-3, err, dotp (dir0, seaWindDir));
 	}
+}
+
+size_t Atmosphere::OceanStageBytes ()
+{
+	size_t texels = 0;
+	for (int m = 0; m <= OceanFft::MIPS; m++) texels += (size_t)(OceanFft::N >> m) * (OceanFft::N >> m);
+	texels += (size_t)OceanFft::N * OceanFft::N;
+	return texels * 4; // (RG16F)
+}
+
+void Atmosphere::UploadOcean (VkCommandBuffer cmd, const VECTOR3 &camGlobal)
+{
+	// (the camera's planet: waves on, their spectrum set at an anchor near the camera)
+	const bool *rip = (const bool*)scene->Client()->GetConfigParam (CFGPRM_SURFACERIPPLE);
+	static int dbg = 0;
+	auto why = [&] (const char *w) { if (getenv ("ORBITER_VK_WAVE_LOG") && dbg++ < 5) oapiWriteLogV ("VulkanClient: sea field upload skipped: %s", w); };
+	if (!oceanOn || !waves || (rip && !*rip)) { why ("off"); return; }
+	if (!ocean.Valid () || !waveAnchored) { why ("no spectrum or anchor"); return; }
+	VECTOR3 ppos;
+	scene->ObservedPos (hPlanet, ppos);
+	if (length (camGlobal - ppos) - radius > 50e3) { why ("camera far"); return; }
+	uint32_t f = ctx->FrameIndex ();
+	if (!oceanImg[f][0].image) { why ("no images"); return; }
+	if (oceanScratch.size () != OceanFft::Floats ()) oceanScratch.resize (OceanFft::Floats ());
+	ocean.Evaluate (oapiGetSimTime (), oceanScratch.data ());
+	// float -> half (the slopes are small: no infinities, denormals flushed)
+	auto half = [] (float v) -> uint16_t {
+		uint32_t x; memcpy (&x, &v, 4);
+		uint32_t sgn = (x >> 16) & 0x8000u;
+		int e = (int)((x >> 23) & 0xff) - 127 + 15;
+		uint32_t m = x & 0x7fffffu;
+		if (e <= 0) return (uint16_t)sgn;
+		if (e >= 31) return (uint16_t)(sgn | 0x7bffu);
+		uint32_t h = sgn | ((uint32_t)e << 10) | (m >> 13);
+		if (m & 0x1000u) h++; // (round)
+		return (uint16_t)h;
+	};
+	uint16_t *dst = (uint16_t*)oceanStage[f].mapped;
+	const float *src = oceanScratch.data ();
+	const size_t NN = (size_t)OceanFft::N * OceanFft::N;
+	// staging: the long layer's levels 0..MIPS, then the ripples
+	size_t o = 0;
+	auto put = [&] (const float *p, size_t n) { for (size_t i = 0; i < 2 * n; i++) dst[o + i] = half (p[i]); o += 2 * n; };
+	put (src, NN);
+	const float *mp = src + 2 * OceanFft::LAYERS * NN;
+	for (int m = 1; m <= OceanFft::MIPS; m++) {
+		size_t n = (size_t)(OceanFft::N >> m) * (OceanFft::N >> m);
+		put (mp, n);
+		mp += 2 * n;
+	}
+	size_t rippleOfs = o;
+	put (src + 2 * NN, NN);
+	// the copies (the images are this frame's: the GPU is done with them)
+	for (int k = 0; k < 2; k++)
+		vkc::ImageBarrier (cmd, oceanImg[f][k].image, VK_IMAGE_ASPECT_COLOR_BIT,
+			VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, 0, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+	VkBufferImageCopy rg[OceanFft::MIPS + 1]{};
+	VkDeviceSize ofs = 0;
+	for (int m = 0; m <= OceanFft::MIPS; m++) {
+		uint32_t n = OceanFft::N >> m;
+		rg[m].bufferOffset = ofs;
+		rg[m].imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, (uint32_t)m, 0, 1 };
+		rg[m].imageExtent = { n, n, 1 };
+		ofs += (VkDeviceSize)n * n * 4;
+	}
+	vkCmdCopyBufferToImage (cmd, oceanStage[f].buffer, oceanImg[f][0].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, OceanFft::MIPS + 1, rg);
+	VkBufferImageCopy r1{};
+	r1.bufferOffset = rippleOfs * 2;
+	r1.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+	r1.imageExtent = { (uint32_t)OceanFft::N, (uint32_t)OceanFft::N, 1 };
+	vkCmdCopyBufferToImage (cmd, oceanStage[f].buffer, oceanImg[f][1].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r1);
+	for (int k = 0; k < 2; k++)
+		vkc::ImageBarrier (cmd, oceanImg[f][k].image, VK_IMAGE_ASPECT_COLOR_BIT,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+	oceanFrame = ctx->FrameValue ();
 }
 
 float Atmosphere::SaltShare (double lat, double lng) const
@@ -1164,6 +1332,15 @@ void Atmosphere::Update ()
 	// off, which also frees the anchor for the next approach)
 	if (wv && camR - radius < 50e3) UpdateWaves (cam, camR, u.wavePrm, u.waves, u.waveEnv);
 	else waveAnchored = false;
+	// the sea field (W3): its uniforms when UploadOcean wrote this frame's images
+	if (wv && oceanFrame == ctx->FrameValue ()) { // (UploadOcean wrote this frame's images)
+		VECTOR3 d = cam - waveAnchor;
+		u.oceanT1[0] = (float)oceanT1.x, u.oceanT1[1] = (float)oceanT1.y, u.oceanT1[2] = (float)oceanT1.z, u.oceanT1[3] = (float)ocean.L[0];
+		u.oceanT2[0] = (float)oceanT2.x, u.oceanT2[1] = (float)oceanT2.y, u.oceanT2[2] = (float)oceanT2.z, u.oceanT2[3] = (float)ocean.L[1];
+		u.oceanD[0] = (float)d.x, u.oceanD[1] = (float)d.y, u.oceanD[2] = (float)d.z, u.oceanD[3] = 1.0f;
+		u.oceanVar[0] = (float)ocean.mipVar[0], u.oceanVar[1] = (float)ocean.var[1];
+		for (int m = 0; m < 6; m++) u.oceanMipVar[m / 4][m % 4] = (float)ocean.mipVar[std::min (m, OceanFft::MIPS)];
+	}
 	if (wv) u.seaPrm[0] = sea.varUnres, u.seaPrm[1] = sea.varTotal, u.seaPrm[2] = sea.wind;
 	if (wv && foam) {
 		u.seaPrm[3] = wfoam.cover;

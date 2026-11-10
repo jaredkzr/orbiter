@@ -2466,6 +2466,10 @@ void Scene::RenderPrepass ()
 		VkDescriptorSet rtSets[2] = { rt && rt->Enabled () ? rt->Set () : VK_NULL_HANDLE, rt && rt->Enabled () ? rt->TextureSet () : VK_NULL_HANDLE };
 		VECTOR3 sunDir = _V(1, 0, 0);
 		if (hSun || !light.sun) sunDir = unit (light.pos - camPos);
+		// the sea field of the camera's planet (W3): this frame's slopes into its images
+		if (OBJHANDLE hp = oapiCameraProxyGbody ())
+			if (VObject *pv = GetVisual (hp))
+				if (Atmosphere *a = pv->GetAtmosphere ()) a->UploadOcean (ctx->Cmd (), camPos);
 		particles->Simulate (camPos, sunDir, frameSet[ctx->FrameIndex()], camAtmSet, rtSets[0] ? rtSets : nullptr, oapiGetSimTime ());
 		particles->RenderScreenSmoke (frameSet[ctx->FrameIndex()]);
 		ctx->GpuMark ("particles");
