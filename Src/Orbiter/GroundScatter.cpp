@@ -12,6 +12,7 @@
 #include "Psys.h"
 #include "Mesh.h"
 #include "elevmgr.h"
+#include "TerrainDetail.h"
 #include "ZTreeMgr.h"
 #include "Log.h"
 #include <algorithm>
@@ -525,7 +526,17 @@ void GroundScatter::Make (int layer, int row, int col, CellData &cd)
 	int nx = std::max (1, (int)lround (wm / L.spacing)), ny = std::max (1, (int)lround (hm / L.spacing));
 	double area = wm * hm / ((double)nx * ny);
 	double coverMax = L.cover == Layer::SLOPE ? 3.0 : L.cover == Layer::BARE ? 2.0 : 1.0;
-	double pmax = L.density * area * coverMax;
+	// site materials (F3): rocks follow the mask on procedural worlds, up to krMax times the climate's
+	// density; the bound of the early tests grows with it (the cap of the slope factor, coverMax, does not)
+	if (proc && !siteChecked) {
+		siteChecked = true;
+		ElevationManager *em = planet->ElevMgr();
+		const TerrainDetail *d = em ? em->Detail () : nullptr;
+		if (d && d->Prm().site.on) site = d, krMax = d->SiteKrMax ();
+	}
+	const bool siteRocks = site && L.kind == ROCK;
+	const double rkMax = siteRocks ? krMax : 1.0;
+	double pmax = L.density * area * coverMax * rkMax;
 	uint64_t cs = Hash (Hash (seed, (uint64_t)layer), CellKey (layer, row, col));
 	double wsum = 0.0;
 	for (double w : L.weight) wsum += w;
@@ -569,11 +580,18 @@ void GroundScatter::Make (int layer, int row, int col, CellData &cd)
 			double lng = lng0 + (i + 0.1 + 0.8 * rnd ()) / nx * dph;
 			Vector dir (Dir (lat, lng));
 			double p = L.density * area * Clearance (dir);
-			if (u >= p * coverMax) continue;
+			if (u >= p * coverMax * rkMax) continue;
 
 			// the climate of a procedural world: none on water, ice floes and slush, fewer on snow
 			if (proc) {
 				p *= procFactor (dir);
+				if (siteRocks) { // (rocks: and by the site materials)
+					auto t2 = Clock::now();
+					double sw[3];
+					site->SiteWeights (dir, sw);
+					p *= site->SiteRocks (sw);
+					statSite += std::chrono::duration<double> (Clock::now() - t2).count();
+				}
 				if (u >= p * coverMax) continue;
 			}
 
@@ -661,8 +679,8 @@ void GroundScatter::Make (int layer, int row, int col, CellData &cd)
 		statTotal += std::chrono::duration<double> (Clock::now() - t0).count();
 		if (++statCells == PROC_STAT_CELLS && !statLogged) {
 			statLogged = true;
-			LOGOUT ("Ground scatter of %s: %d cells, %.1f us per cell (climate %.1f us, %d evaluations)",
-				planet->Name(), statCells, statTotal / statCells * 1e6, statClimate / statCells * 1e6, statEvals);
+			LOGOUT ("Ground scatter of %s: %d cells, %.1f us per cell (climate %.1f us, %d evaluations, site %.1f us)",
+				planet->Name(), statCells, statTotal / statCells * 1e6, statClimate / statCells * 1e6, statEvals, statSite / statCells * 1e6);
 		}
 	}
 }

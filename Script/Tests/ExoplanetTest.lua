@@ -3,7 +3,8 @@
 -- TRAPPIST-1 e in front of its star seen from the Sun at the measured
 -- epoch, tidal locking (meridian 0 to the star), the procedural ground of
 -- TRAPPIST-1 e (seas over their share of it), a vessel standing on it,
--- and the default ground scatter of the procedural worlds by surface class.
+-- the default ground scatter of the procedural worlds by surface class, and
+-- their site materials (coarse, fine, flat: shares, off elsewhere, rocks on the mask).
 
 local failed = false
 local function log(s) oapi.write_log("ExoplanetTest: " .. s) end
@@ -184,6 +185,78 @@ local function main()
 	log("Barnard b (10, 10): " .. msg)
 	check("scatter-barnard", #objs > 20 and ok, "Moon rocks" .. (bad and (" (" .. bad .. ")") or ""))
 	log(string.format("ground scatter: %.2f s", os.clock() - t))
+
+	-- 7. site materials (F3): the core's mask of coarse/fine/flat sub-materials on the
+	-- procedural worlds; its shares, off on other worlds, the rocks following it
+	t = os.clock()
+	local hearth, hmars = oapi.get_objhandle("Earth"), oapi.get_objhandle("Mars")
+	local function shares(h, name, want)
+		math.randomseed(7)
+		local n, sum, bad = 3000, {0, 0, 0}, 0
+		for _ = 1, n do
+			local lng, lat = (math.random() * 2 - 1) * math.pi, math.asin(math.random() * 2 - 1)
+			local w = oapi.site_material(h, lng, lat)
+			if not w then return false, name .. ": no site materials" end
+			local tot = 0
+			for i = 1, 3 do
+				if w[i] < 0 or w[i] > 1 then bad = bad + 1 end
+				sum[i] = sum[i] + w[i]; tot = tot + w[i]
+			end
+			if tot > 1 + 1e-9 then bad = bad + 1 end
+		end
+		local ok = bad == 0
+		for i = 1, 3 do if math.abs(sum[i] / n - want[i]) > 0.04 then ok = false end end
+		return ok, string.format("%s: mean weights %.3f %.3f %.3f (want %.2f %.2f %.2f), %d out of range", name, sum[1] / n, sum[2] / n, sum[3] / n, want[1], want[2], want[3], bad)
+	end
+	local ok7, msg7 = shares(he, "TRAPPIST-1 e", {0.22, 0.30, 0.04})
+	log(msg7)
+	check("site-shares-e", ok7, "the Ocean class' shares")
+	ok7, msg7 = shares(hb, "Barnard b", {0.18, 0.30, 0.0})
+	log(msg7)
+	check("site-shares-barnard", ok7, "the Rock class' shares")
+	-- b. off elsewhere
+	check("site-off", oapi.site_material(hearth, 0.3, 0.5) == nil and oapi.site_material(hmars, 0.3, 0.5) == nil, "none on Earth and Mars")
+	-- c. the rocks follow the mask: around GL-E, rocks on the coarse material over its share
+	-- of the area, few on sand
+	local function rockShares(h, lng0, lat0, tag)
+		local R, rad = oapi.get_size(h), 1000
+		local objs = oapi.scatter_objects(h, lng0, lat0, rad, false)
+		local nr, nc, nf = 0, 0, 0
+		for _, o in ipairs(objs) do
+			if o.kind == 0 then
+				local w = oapi.site_material(h, o.lng, o.lat)
+				nr = nr + 1
+				if w[1] > 0.5 then nc = nc + 1 end
+				if w[2] > 0.5 then nf = nf + 1 end
+			end
+		end
+		local na, ac, af = 0, 0, 0
+		for i = -20, 20 do
+			for j = -20, 20 do
+				local de, dn = i * rad / 20, j * rad / 20
+				if de * de + dn * dn <= rad * rad then
+					local lat = lat0 + dn / R
+					local w = oapi.site_material(h, lng0 + de / (R * math.cos(lat)), lat)
+					na = na + 1
+					if w[1] > 0.5 then ac = ac + 1 end
+					if w[2] > 0.5 then af = af + 1 end
+				end
+			end
+		end
+		local r = {nr = nr, nobj = #objs, oc = nr > 0 and nc / nr or 0, of = nr > 0 and nf / nr or 0, ac = ac / na, af = af / na}
+		log(string.format("%s rocks within %d m: %d of %d objects; coarse share %.3f of the rocks, %.3f of the area; fine share %.3f of the rocks, %.3f of the area",
+			tag, rad, nr, r.nobj, r.oc, r.ac, r.of, r.af))
+		return r
+	end
+	local wg = oapi.site_material(he, ge.lng, ge.lat)
+	log(string.format("site materials at GL-E: coarse %.2f fine %.2f flat %.2f", wg[1], wg[2], wg[3]))
+	local rs, where = rockShares(he, ge.lng, ge.lat, "TRAPPIST-1 e at GL-E"), "GL-E"
+	if rs.ac <= 0.02 then
+		rs, where = rockShares(hb, 10 * D, 10 * D, "Barnard b (10, 10)"), "Barnard b"
+	end
+	check("site-rocks-coarse", rs.nr >= 20 and rs.ac > 0.02 and rs.oc >= 1.5 * rs.ac, string.format("rocks cluster on the coarse material at %s (%.3f vs %.3f of the area)", where, rs.oc, rs.ac))
+	check("site-rocks-fine", rs.af > 0.02 and rs.of <= 0.6 * rs.af, string.format("rocks thin on the fine material at %s (%.3f vs %.3f of the area)", where, rs.of, rs.af))
+	log(string.format("site materials: %.2f s", os.clock() - t))
 
 	oapi.exit(failed and 1 or 0)
 end

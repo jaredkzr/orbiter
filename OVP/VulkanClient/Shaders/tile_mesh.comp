@@ -46,6 +46,9 @@ layout(push_constant) uniform Params {
 	vec4 prm;      // hurst, ridge, crater cells, crater depth
 	vec4 prm2;     // pebble cells, micro, pebble size, round
 	vec4 prm3;     // pebble elong, height, bevel, tilt
+	vec4 prm4;     // site materials (F3): on, seed, edge, kpMax
+	vec4 prm5;     // thresholds (coarse, fine, flat)
+	vec4 prm6;     // pebble factors (coarse, fine, flat)
 } pc;
 
 shared vec3 P[W * W]; // positions relative to the tile centre raised to href
@@ -79,6 +82,7 @@ vec3 GetT (OutFloats o, int idx)
 void main ()
 {
 	DetPebbleShape S = DetPebbleShape (pc.prm2.z, pc.prm2.w, pc.prm3.x, pc.prm3.y, pc.prm3.z, pc.prm3.w);
+	DetSite site = DetSite (pc.prm4.x, uint (pc.prm4.y), pc.prm4.z, pc.prm4.w, pc.prm5.xyz, pc.prm6.xyz);
 	Job jb = Jobs (pc.jobs).job[gl_WorkGroupID.x];
 	Floats pts = Floats (jb.ptsAddr);
 	OutFloats o = OutFloats (jb.outAddr);
@@ -100,7 +104,7 @@ void main ()
 		// (without the pebbles: the normals are of the ground under them; the
 		// shader shades the pebbles per pixel, their sharp edges would
 		// alias on the grid)
-		float h = h0 + DetHeight (pt, A, f, jb.sp.z, jb.sp.x, jb.misc.z, pc.prm, 0.0, pc.prm2.y, S);
+		float h = h0 + DetHeight (pt, A, f, jb.sp.z, jb.sp.x, jb.misc.z, pc.prm, 0.0, pc.prm2.y, S, site);
 		// (d (R + href + h) - d0 (R + href): small, its rounding far below the
 		// node spacing; d0 href is added when the vertices are written)
 		P[k] = d0 * h + dd * (R + jb.misc.w + h);
@@ -113,7 +117,7 @@ void main ()
 			DetPoint pt = DetPointAt (jb.refI.xyz, jb.refF.xyz, dd * R);
 			uint q = uint (W * W) + k;
 			float h0 = pts.f[4 * q], A = pts.f[4 * q + 1], f = pts.f[4 * q + 2];
-			float h = h0 + DetHeight (pt, A, f, jb.sp.w, jb.sp.y, jb.misc.z, pc.prm, pc.prm2.x, pc.prm2.y, S);
+			float h = h0 + DetHeight (pt, A, f, jb.sp.w, jb.sp.y, jb.misc.z, pc.prm, pc.prm2.x, pc.prm2.y, S, site);
 			SetT (o, i * V + j, d0 * h + dd * (R + jb.misc.w + h));
 		}
 	}
@@ -166,7 +170,7 @@ void main ()
 		vec3 dd = DirOffset (jb.ll.x, jb.ll.y, da, DB (j));
 		vec3 d = normalize (d0 + dd);
 		DetPoint pt = DetPointAt (jb.refI.xyz, jb.refF.xyz, dd * R);
-		float peb = DetPebbles (pt, pts.f[4 * pk + 2], jb.sp.z, jb.sp.x, pc.prm2.x, 0.0, S);
+		float peb = DetPebbles (pt, pts.f[4 * pk + 2], jb.sp.z, jb.sp.x, pc.prm2.x, 0.0, S, site);
 		vec3 href0 = d0 * jb.misc.w;
 		vec3 p = P[pk] + d * peb + href0;
 		// (across the columns drawn, K: one-sided at the edges of a tile
@@ -179,6 +183,15 @@ void main ()
 		nm = len > 1e-9 && !pole ? nm / len : d;
 		if (dot (nm, d) < 0.0) nm = -nm;
 		float A = pts.f[4 * pk + 1], f = pts.f[4 * pk + 2], pl = pts.f[4 * pk + 3];
+		// (site materials, F3: the stream's third value, the playa weight, which is 0 on those worlds, is
+		// field A of the mask at the vertex; the shading takes the weights from it and the thresholds)
+		if (site.on > 0.5) {
+			float vs = R * max (dlat, dlng * cos (jb.ll.x)); // (the vertex spacing [m])
+			float fA = DetSiteFieldA (pt, site, vs);
+			float eps = site.edge + DET_SITE_EDGE_FP * vs;
+			float wc = DetSmoothStep (site.thr.x - eps, site.thr.x + eps, fA);
+			pl = DetSiteEncode (fA, DetSitePan (pt, site, vs) * (1.0 - wc)); // (pans are never inside the coarse)
+		}
 		vec3 t = GetT (o, int (k)) + href0;
 		// (the vertex, and its skirt copies on the edges)
 		for (int s = 0; s < 5; s++) {

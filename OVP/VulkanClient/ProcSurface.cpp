@@ -197,6 +197,7 @@ void ProcPlanet::Texels (int lvl, int ilat, int ilng, std::vector<uint8_t> &out,
 			double theta = prm.tidalLock ? std::acos (std::clamp (cb * std::cos (lng), -1.0, 1.0)) : std::fabs (lat);
 			double edge = theta - (openW + 0.06 * n1 + 0.015 * nf);
 			double water = 0.0; // (its share of the texel)
+			double ground = 1.0; // (the surf tile's alpha: the share of ground, for the site materials, F3)
 			Rgb col { 0, 0, 0 }, glow { 0, 0, 0 };
 			double u = e / relief;
 			auto Ground = [&](double contrast) {
@@ -212,7 +213,8 @@ void ProcPlanet::Texels (int lvl, int ilat, int ilng, std::vector<uint8_t> &out,
 				double cw = std::max (1.0, slope * tx * R);
 				double land = Smoothstep (-cw, cw, e), ice = Smoothstep (-tx, tx, edge);
 				double wet = 0.0;
-				Rgb sea { 0, 0, 0 }, ground { 0, 0, 0 };
+				Rgb sea { 0, 0, 0 }, gcol { 0, 0, 0 };
+				double snow = 0.0;
 				if (land < 1.0) {
 					double d = Smoothstep (0.0, 2500.0, -e);
 					Rgb open = Mix ({ 0.035, 0.10, 0.11 }, { 0.008, 0.022, 0.045 }, d);
@@ -230,15 +232,16 @@ void ProcPlanet::Texels (int lvl, int ilat, int ilng, std::vector<uint8_t> &out,
 					wet = (1.0 - ice) * (1.0 - floe);
 				}
 				if (land > 0.0) {
-					ground = Ground (1.0);
+					gcol = Ground (1.0);
 					// (coasts: sediment; snow beyond the ice edge and on the
 					// heights)
-					ground = Mix (ground, Scale (low, 1.3), 0.4 * (1.0 - Smoothstep (0.0, 150.0, e)));
-					double snow = std::max (Smoothstep (0.05, 0.2, edge + 0.04 * nf), Smoothstep (3500.0, 5500.0, e + 600.0 * nf - 1500.0 * std::cos (theta)));
+					gcol = Mix (gcol, Scale (low, 1.3), 0.4 * (1.0 - Smoothstep (0.0, 150.0, e)));
+					snow = std::max (Smoothstep (0.05, 0.2, edge + 0.04 * nf), Smoothstep (3500.0, 5500.0, e + 600.0 * nf - 1500.0 * std::cos (theta)));
 					snow *= 1.0 - 0.6 * Smoothstep (0.5, 1.0, slope);
-					ground = Mix (ground, { 0.84, 0.86, 0.90 }, snow);
+					gcol = Mix (gcol, { 0.84, 0.86, 0.90 }, snow);
 				}
-				col = Mix (sea, ground, land);
+				col = Mix (sea, gcol, land);
+				ground = land * (1.0 - snow); // (no site materials on the sea, the ice and the snow)
 				water = wet * (1.0 - land);
 				break; }
 			case ICE: {
@@ -254,6 +257,7 @@ void ProcPlanet::Texels (int lvl, int ilat, int ilng, std::vector<uint8_t> &out,
 					double slush = Smoothstep (-0.02 - tx, -0.02 + tx, edge), ice = Smoothstep (-tx, tx, edge);
 					col = Mix (Mix ({ 0.01, 0.025, 0.045 }, { 0.35, 0.40, 0.46 }, slush), col, ice);
 					water = 1.0 - slush;
+					ground = ice; // (the ice, not the slush or the water)
 				}
 				break; }
 			case LAVA: {
@@ -272,7 +276,7 @@ void ProcPlanet::Texels (int lvl, int ilat, int ilng, std::vector<uint8_t> &out,
 				o[0] = Srgb (glow.r), o[1] = Srgb (glow.g), o[2] = Srgb (glow.b);
 				o[3] = (uint8_t)std::lround (255.0 * (1.0 - std::clamp (water, 0.0, 1.0)));
 			} else {
-				o[0] = Srgb (col.r), o[1] = Srgb (col.g), o[2] = Srgb (col.b), o[3] = 255;
+				o[0] = Srgb (col.r), o[1] = Srgb (col.g), o[2] = Srgb (col.b), o[3] = (uint8_t)std::lround (255.0 * std::clamp (ground, 0.0, 1.0));
 			}
 		}
 	}
@@ -280,7 +284,11 @@ void ProcPlanet::Texels (int lvl, int ilat, int ilng, std::vector<uint8_t> &out,
 
 void ProcPlanet::SurfTile (int lvl, int ilat, int ilng, std::vector<uint8_t> &dds)
 {
-	DdsHeader (dds, false);
+	// (the alpha: the ground share G of the site materials (F3): 1 on the rock,
+	// desert and lava worlds' ground; not the sea, the sea ice and snow of an
+	// ocean world, nor the open water of an ice world. The shader reads it as
+	// surfTex.a; the mask tile's alpha is the water's, unchanged)
+	DdsHeader (dds, true);
 	Texels (lvl, ilat, ilng, dds, false);
 }
 

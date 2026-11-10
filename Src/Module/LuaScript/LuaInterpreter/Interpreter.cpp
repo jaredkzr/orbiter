@@ -1009,6 +1009,7 @@ void Interpreter::LoadAPI ()
 		{"surface_elevation", oapi_surface_elevation},
 		{"surface_playa", oapi_surface_playa},
 		{"scatter_objects", oapi_scatter_objects},
+		{"site_material", oapi_site_material},
 		{"city_buildings", oapi_city_buildings},
 		{"init_tilecache", oapi_init_tilecache},
 		{"release_tilecache", oapi_release_tilecache},
@@ -6034,6 +6035,37 @@ int Interpreter::oapi_surface_playa (lua_State *L)
 	double w = 0.0;
 	oapiSurfaceDetail (hPlanet, lng, lat, elev, 40.0, 0.0, 0.0, nullptr, nullptr, &w);
 	lua_pushnumber (L, w);
+	return 1;
+}
+
+/***
+Site materials of a planet's procedural terrain at a point: the weights of
+the coarse (gravel, ejecta), fine (sand, fines, snow) and flat (pan, glaze ice)
+material (their sum is at most 1; the rest is the base ground). They set the
+pebble density and the rocks of the ground scatter.
+@function site_material
+@tparam handle hPlanet planet object handle
+@tparam number lng longitude [rad]
+@tparam number lat latitude [rad]
+@treturn table weights {coarse, fine, flat}, or nil if the planet has no site materials
+*/
+int Interpreter::oapi_site_material (lua_State *L)
+{
+	OBJHANDLE hPlanet;
+	ASSERT_SYNTAX (lua_islightuserdata (L,1), "Argument 1: invalid type (expected planet handle)");
+	ASSERT_SYNTAX (hPlanet = (OBJHANDLE)lua_toObject (L,1), "Argument 1: invalid object");
+	double lng = luaL_checknumber (L,2);
+	double lat = luaL_checknumber (L,3);
+	double w[3];
+	if (!oapiSiteMaterial (hPlanet, lng, lat, w)) {
+		lua_pushnil (L);
+		return 1;
+	}
+	lua_createtable (L, 3, 0);
+	for (int i = 0; i < 3; i++) {
+		lua_pushnumber (L, w[i]);
+		lua_rawseti (L, -2, i+1);
+	}
 	return 1;
 }
 

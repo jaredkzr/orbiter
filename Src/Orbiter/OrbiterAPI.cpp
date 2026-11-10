@@ -2035,6 +2035,40 @@ DLLEXPORT bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, SURFDETAILPARAM *prm)
 	prm->grit = p.grit;
 	prm->pebbleGate = p.pebbleGate;
 	prm->playa = p.playa;
+	// site materials (F3)
+	const TerrainDetail::Params::Site &st = p.site;
+	prm->site = st.on;
+	if (st.on) {
+		const double *thr = det->SiteThresholds ();
+		prm->siteSeed = st.seed;
+		prm->siteEdge = st.edge;
+		for (int i = 0; i < 3; i++) {
+			const TerrainDetail::Params::Site::Mat &m = st.mat[i];
+			prm->siteThresh[i] = thr[i];
+			prm->siteCover[i] = st.cover[i];
+			for (int c = 0; c < 3; c++) prm->siteTint[i][c] = m.tint[c], prm->siteAbs[i][c] = m.abs[c];
+			prm->siteAbs[i][3] = m.amt;
+			prm->sitePebbles[i] = m.kp, prm->siteGrit[i] = m.kg, prm->siteCrack[i] = m.kc;
+			prm->siteSmooth[i] = m.km, prm->siteRocks[i] = m.kr;
+		}
+	} else {
+		prm->siteSeed = 0;
+		prm->siteEdge = 0.03;
+		for (int i = 0; i < 3; i++) {
+			prm->siteThresh[i] = i == 1 ? -1e9 : 1e9;
+			prm->siteCover[i] = 0.0, prm->sitePebbles[i] = prm->siteGrit[i] = prm->siteCrack[i] = prm->siteSmooth[i] = prm->siteRocks[i] = 0.0;
+			for (int c = 0; c < 3; c++) prm->siteTint[i][c] = 0.0;
+			for (int c = 0; c < 4; c++) prm->siteAbs[i][c] = 0.0;
+		}
+	}
+	return true;
+}
+
+DLLEXPORT bool oapiSiteMaterial (OBJHANDLE hPlanet, double lng, double lat, double w[3])
+{
+	const TerrainDetail *det = PlanetDetail (hPlanet);
+	if (!det || !det->Prm().site.on) return false;
+	det->SiteWeights (Vector (cos (lat) * cos (lng), sin (lat), cos (lat) * sin (lng)), w);
 	return true;
 }
 

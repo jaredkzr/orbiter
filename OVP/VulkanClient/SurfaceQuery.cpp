@@ -310,6 +310,25 @@ namespace {
 		return false;
 	}
 
+	/// Site materials (F3): the colour s (linear rgb, in place) by the weights w (coarse, fine,
+	/// flat; already times the ground share) of the materials' tints and absolute colours.
+	/// Keep in sync with terraindetail.glsl's SiteColour.
+	void SiteColour (const SURFDETAILPARAM &sp, const double w[3], float s[3])
+	{
+		float acc[3];
+		float wsum = (float)(w[0] + w[1] + w[2]);
+		for (int c = 0; c < 3; c++) acc[c] = s[c] * (1.0f - wsum);
+		for (int i = 0; i < 3; i++) {
+			if (w[i] <= 0.0) continue;
+			for (int c = 0; c < 3; c++) {
+				float col = std::min (s[c] * (float)sp.siteTint[i][c], 0.92f);
+				col += ((float)sp.siteAbs[i][c] - col) * (float)sp.siteAbs[i][3];
+				acc[c] += (float)w[i] * col;
+			}
+		}
+		for (int c = 0; c < 3; c++) s[c] = acc[c];
+	}
+
 	/// at most once per 2 s (the dust log's own timer)
 	bool DustLogNow ()
 	{
@@ -349,6 +368,15 @@ bool DustColour (Scene *scene, OBJHANDLE hp, double lng, double lat, float rgb[3
 	float s[3], m[3];
 	for (int c = 0; c < 3; c++) s[c] = SrgbToLinear (px[c]), m[c] = SrgbToLinear (mean[c]);
 	Saturate (s, sat);
+	// site materials (the core's mask at the point, in the ground's share G, the surf tile's alpha)
+	double sw[3] = { 0, 0, 0 };
+	{
+		SURFDETAILPARAM sp{};
+		if (oapiSurfaceDetailParams (hp, &sp) && sp.site && oapiSiteMaterial (hp, lng, lat, sw)) {
+			for (int i = 0; i < 3; i++) sw[i] *= std::clamp (px[3], 0.0f, 1.0f);
+			SiteColour (sp, sw, s);
+		} else sw[0] = sw[1] = sw[2] = 0.0;
+	}
 	// plants are greener than both red and blue; snow and ice (blue >= green) never count
 	float gm = std::max (s[0], s[2]);
 	float q = (s[1] - gm) / (s[1] + gm + 1e-4f);
@@ -364,9 +392,9 @@ bool DustColour (Scene *scene, OBJHANDLE hp, double lng, double lat, float rgb[3
 	for (int c = 0; c < 3; c++) rgb[c] = std::clamp (def[c] + (lifted[c] - def[c]) * wS, 0.02f, 0.95f);
 	if (veg) *veg = v;
 	if (DustLogNow ())
-		oapiWriteLogV ("VulkanClient: dust %s lng %.4f lat %.4f (deg): tile L%d lin (%.3f %.3f %.3f) veg %.2f water %.2f lifted (%.3f %.3f %.3f) default (%.3f %.3f %.3f) %s share %.2f -> (%.3f %.3f %.3f)",
+		oapiWriteLogV ("VulkanClient: dust %s lng %.4f lat %.4f (deg): tile L%d lin (%.3f %.3f %.3f) veg %.2f water %.2f lifted (%.3f %.3f %.3f) default (%.3f %.3f %.3f) %s share %.2f -> (%.3f %.3f %.3f) site %.2f %.2f %.2f",
 			nm, lng * 180.0 / PI_, lat * 180.0 / PI_, lvl, s[0], s[1], s[2], v, p.water, lifted[0], lifted[1], lifted[2],
-			def[0], def[1], def[2], fromTable ? "table" : "tile mean", wS, rgb[0], rgb[1], rgb[2]);
+			def[0], def[1], def[2], fromTable ? "table" : "tile mean", wS, rgb[0], rgb[1], rgb[2], sw[0], sw[1], sw[2]);
 	return true;
 }
 

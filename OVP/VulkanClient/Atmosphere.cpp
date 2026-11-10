@@ -58,6 +58,10 @@ namespace {
 		float pebShape2[4];   //   bevel, tilt, crag, tone
 		float pebPrm[4];      //   albedo factor, grit density, micro floor, Earth gate (0/1)
 		float playaPrm[4];    // playa (B2): x on/off (1: cracks, the weight is per vertex); yzw reserved
+		float sitePrm[4];     // site materials (F3): on (0/1), seed, edge, kpMax
+		float siteThr[4];     //   thresholds: coarse, fine, flat
+		float siteCover[4];   //   shares: coarse, fine, flat
+		float siteMat[9][4];  //   per material (coarse, fine, flat): [3i] tint rgb, amount; [3i+1] abs rgb, grit factor; [3i+2] pebbles, cracks, smoothing, rocks
 	};
 	static_assert (sizeof (AtmUniforms) % 16 == 0, "std140");
 
@@ -1057,9 +1061,26 @@ void Atmosphere::Update ()
 			static const bool playaOff = [] { const char *e = getenv ("ORBITER_VK_PLAYA"); return e && e[0] == '0'; }();
 			u.playaPrm[0] = (playaOff || dp.playa <= 0.0) ? 0.0f : 1.0f; // (the weight itself comes per vertex)
 			u.playaPrm[1] = u.playaPrm[2] = u.playaPrm[3] = 0.0f;
+			// site materials (F3); ORBITER_VK_SITE=0: not in the shading (the meshes keep the core's mask)
+			static const bool siteOff = [] { const char *e = getenv ("ORBITER_VK_SITE"); return e && e[0] == '0'; }();
+			memset (u.sitePrm, 0, sizeof (u.sitePrm)), memset (u.siteThr, 0, sizeof (u.siteThr)), memset (u.siteCover, 0, sizeof (u.siteCover)), memset (u.siteMat, 0, sizeof (u.siteMat));
+			if (dp.site && !siteOff) {
+				float kmax = 1.0f;
+				for (int i = 0; i < 3; i++) kmax = std::max (kmax, (float)dp.sitePebbles[i]);
+				u.sitePrm[0] = 1.0f, u.sitePrm[1] = (float)dp.siteSeed, u.sitePrm[2] = (float)dp.siteEdge, u.sitePrm[3] = kmax;
+				for (int i = 0; i < 3; i++) {
+					u.siteThr[i] = (float)dp.siteThresh[i], u.siteCover[i] = (float)dp.siteCover[i];
+					for (int c = 0; c < 3; c++) u.siteMat[3 * i][c] = (float)dp.siteTint[i][c], u.siteMat[3 * i + 1][c] = (float)dp.siteAbs[i][c];
+					u.siteMat[3 * i][3] = (float)dp.siteAbs[i][3];
+					u.siteMat[3 * i + 1][3] = (float)dp.siteGrit[i];
+					u.siteMat[3 * i + 2][0] = (float)dp.sitePebbles[i], u.siteMat[3 * i + 2][1] = (float)dp.siteCrack[i];
+					u.siteMat[3 * i + 2][2] = (float)dp.siteSmooth[i], u.siteMat[3 * i + 2][3] = (float)dp.siteRocks[i];
+				}
+			}
 		} else {
 			u.detailPrm[0] = u.detailPrm[1] = u.detailPrm[2] = u.detailPrm[3] = 0.0f;
 			memset (u.pebShape, 0, sizeof (u.pebShape)), memset (u.pebShape2, 0, sizeof (u.pebShape2)), memset (u.pebPrm, 0, sizeof (u.pebPrm)), memset (u.playaPrm, 0, sizeof (u.playaPrm));
+			memset (u.sitePrm, 0, sizeof (u.sitePrm)), memset (u.siteThr, 0, sizeof (u.siteThr)), memset (u.siteCover, 0, sizeof (u.siteCover)), memset (u.siteMat, 0, sizeof (u.siteMat));
 		}
 	}
 	u.surfPrm[0] = surfSaturation;

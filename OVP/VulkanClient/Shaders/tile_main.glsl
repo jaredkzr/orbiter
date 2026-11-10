@@ -694,7 +694,10 @@ void main()
 	// band along every tile edge)
 	vec2 hs = 0.5 / vec2(textureSize(surfTex, 0));
 	vec2 uvT = clamp(vUV * tile.surfUV.zw + tile.surfUV.xy, hs, 1.0 - hs);
-	vec3 base = textureGrad(surfTex, uvT, PolarGradX(uvT, hs), PolarGradY(uvT, hs)).rgb;
+	vec4 bt = textureGrad(surfTex, uvT, PolarGradX(uvT, hs), PolarGradY(uvT, hs));
+	vec3 base = bt.rgb;
+	// procedural worlds: the surface tile's alpha is the ground share of the site materials (ProcSurface.cpp)
+	float siteG = (SITE_MATERIALS && atm.sitePrm.x > 0.5 && tile.params.z < 0.5) ? bt.a : 0.0;
 	float cloudA = 0.0, cloudA0 = 0.0; // (a cloud layer: its opacity, with detail where magnified; without)
 	if (tile.params.z > 0.5) {
 		float w = CloudLayerMagnification(uvT);
@@ -716,6 +719,7 @@ void main()
 	vec3 cityLight = vec3(0.0); // (street lamps)
 	float cityCover = 0.0;
 	float playa = 0.0; // (dry lake factor of the terrain detail)
+	float siteSmooth = 0.0; // (smooth site materials: damps the grain like a playa)
 	if (tile.params.z < 0.5) {
 #ifdef TERRAIN_DETAIL
 		float land = 1.0; // (no stones on water: the mask's alpha)
@@ -723,11 +727,11 @@ void main()
 			vec2 hmL = 0.5 / vec2(textureSize(maskTex, 0));
 			land = smoothstep(0.3, 0.7, texture(maskTex, clamp(vUV * tile.maskUV.zw + tile.maskUV.xy, hmL, 1.0 - hmL)).a);
 		}
-		TerrainDetailShading(vPosView, N, base, vDetailA, detailShadow, land, detailSky, playa);
+		TerrainDetailShading(vPosView, N, base, vDetailA, detailShadow, land, detailSky, playa, siteG, siteSmooth);
 #endif
 		cityLight = CityGround(vPosView, base, cityCover);
 		TrackShading(vPosView, N, base);
-		SurfaceDetail(vPosView, length(vPosView), N, base, playa);
+		SurfaceDetail(vPosView, length(vPosView), N, base, max(playa, siteSmooth));
 	} else if (dot(vPosView, N) < 0.0) {
 		// cloud tops seen from above: relief from the cloud density (thicker
 		// clouds are taller; exaggerated for the texture's smoothness), shading their sides (surface

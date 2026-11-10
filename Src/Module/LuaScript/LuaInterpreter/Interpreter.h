@@ -544,6 +544,7 @@ protected:
 	static int oapi_surface_elevation(lua_State* L);
 	static int oapi_surface_playa(lua_State* L);
 	static int oapi_scatter_objects(lua_State* L);
+	static int oapi_site_material(lua_State* L);
 	static int oapi_city_buildings(lua_State* L);
 
 	// Vessel functions

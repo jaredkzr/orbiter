@@ -45,6 +45,10 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 pebShape2;     //   bevel, tilt, crag, tone
 	vec4 pebPrm;        //   albedo factor, grit density, micro floor (a/lambda), Earth gate (0/1)
 	vec4 playaPrm;      // playa (B2): x on/off (1: cracks; the weight comes per vertex); yzw reserved
+	vec4 sitePrm;       // site materials (F3): on (0/1), seed, edge, kpMax
+	vec4 siteThr;       //   thresholds: coarse, fine, flat
+	vec4 siteCover;     //   shares: coarse, fine, flat
+	vec4 siteMat[9];    //   per material (coarse, fine, flat): [3i] tint rgb, amount; [3i+1] abs rgb, grit factor; [3i+2] pebbles, cracks, smoothing, rocks
 } atm;
 
 // planet surface (western and eastern hemisphere), for reflections

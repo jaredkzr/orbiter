@@ -12,6 +12,10 @@
 
 #include "detailcore.glsl"
 
+// Site-scale materials (F3) compiled in: the tile pipeline variant for worlds with them
+// (specialization constant; the default variant has the whole site path folded away)
+layout(constant_id = 0) const bool SITE_MATERIALS = false;
+
 struct DetailSample {
 	vec3 grad;     // gradient, planet frame [m/m]
 	float height;  // height of the noise [m]
@@ -23,12 +27,19 @@ struct DetailSample {
 // (xyz); the height as DetPebbleCell's (keep them identical, with the
 // core's PebbleLayer); top: the profile's value (0 without a stone),
 // tone: the stone's albedo offset (-1 to 1)
-vec4 DetPebbleCellGrad (ivec3 cell, int m, int k, float density, vec3 f, float crag, DetPebbleShape S, out float top, out float tone)
+vec4 DetPebbleCellGrad (ivec3 cell, int m, int k, float density, vec3 f, float crag, DetPebbleShape S, bool soft, out float top, out float tone)
 {
 	top = 0.0, tone = 0.0;
 	float s = exp2 (float (k));
 	uint h0 = DetHash (cell, 3000u + uint (m));
-	if (DetUnit16 (h0) >= density * (k == -1 ? 0.4 : k == -2 ? 0.7 : 1.0)) return vec4 (0.0);
+	float sc = 1.0; // (site materials: the soft threshold, as DetPebbleCell's)
+	if (soft) {
+		float tt0 = density * (k == -1 ? 0.4 : k == -2 ? 0.7 : 1.0);
+		float u0 = DetUnit16 (h0);
+		if (u0 >= tt0 + DET_SITE_SOFT) return vec4 (0.0);
+		sc = 1.0 - DetSmoothStep (tt0 - DET_SITE_SOFT, tt0 + DET_SITE_SOFT, u0);
+	}
+	else if (DetUnit16 (h0) >= density * (k == -1 ? 0.4 : k == -2 ? 0.7 : 1.0)) return vec4 (0.0);
 	uint h1 = DetPcg (h0), h2 = DetPcg (h1), h3 = DetPcg (h2), h4 = DetPcg (h3);
 	float r = S.size * (0.12 + 0.12 * DetUnit16 (h4)), hgt = S.height * (0.25 + 0.3 * DetUnit16 (h4 >> 16));
 	float ext = 1.05 * r / (1.0 - S.elong);
@@ -63,7 +74,7 @@ vec4 DetPebbleCellGrad (ivec3 cell, int m, int k, float density, vec3 f, float c
 	}
 	if (x >= 1.0) return vec4 (0.0);
 	float tt = clamp ((1.0 - x) / S.bevel, 0.0, 1.0);
-	top = tt * tt * (3.0 - 2.0 * tt);
+	top = tt * tt * (3.0 - 2.0 * tt) * sc;
 	tone = DetUnit16 (DetPcg (h4 ^ 0x68e31da4u)) * 2.0 - 1.0;
 	vec3 dtop = -dx * (6.0 * tt * (1.0 - tt) / S.bevel);
 	vec3 nt = DetUnitFromHash (DetPcg (h3 ^ 0x2545f491u));
@@ -86,7 +97,7 @@ vec4 DetPebbleCellGrad (ivec3 cell, int m, int k, float density, vec3 f, float c
 		h += b * n * mf;
 		dh += b * (dn * mf + n * dmf);
 	}
-	return vec4 (dh, h);
+	return vec4 (dh * sc, h * sc);
 }
 
 // The detail finer than the mesh (as TerrainDetail::Height)
@@ -265,12 +276,27 @@ float PlayaCrackLayer (DetPoint pt, vec3 d, int k, int m, float hw, float curl, 
 	return cov;
 }
 
+// Site materials (F3): the ground colour by the weights w (coarse, fine, flat) of the
+// materials' tints and absolute colours. Keep in sync with SurfaceQuery.cpp's SiteColour.
+vec3 SiteColour (vec3 base, vec3 w)
+{
+	vec3 acc = base * (1.0 - (w.x + w.y + w.z));
+	for (int i = 0; i < 3; i++) {
+		if (w[i] <= 0.0) continue;
+		vec3 c = min (base * atm.siteMat[3 * i].rgb, vec3 (0.92));
+		c = mix (c, atm.siteMat[3 * i + 1].rgb, atm.siteMat[3 * i].a);
+		acc += w[i] * c;
+	}
+	return acc;
+}
+
 // Perturb the shading normal Nv (view space) of the surface at posView,
 // and its albedo (weathered: darker in the hollows, lighter on the crests;
 // fresh crater ejecta)
-void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec3 Af, inout float sunShadow, float land, inout float skyVis, out float playa)
+void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec3 Af, inout float sunShadow, float land, inout float skyVis, out float playa, float siteG, out float siteSmooth)
 {
 	playa = 0.0;
+	siteSmooth = 0.0;
 	// stones: not on water (land), and on Earth by the texel's colour
 	float pg = land * (atm.pebPrm.w > 0.5 ? DetPebbleGate (base) : 1.0);
 	bool stones = (tile.morph.w > 0.0 || atm.pebPrm.y > 0.0) && pg > 0.0;
@@ -291,12 +317,31 @@ void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec3 Af
 	vec3 dl = d0 * (R * fu) + e * ((R / Rh) * (1.0 + fu));
 	DetPoint pt = DetPointAt (tile.refI.xyz, tile.refF.xyz, dl);
 	vec3 d = normalize (d0 + dl / R);
-	playa = atm.playaPrm.x * Af.z * land; // (the core's weight: where it levels the ground; not on drawn water)
+	playa = (SITE_MATERIALS && atm.sitePrm.x > 0.5) ? 0.0 : atm.playaPrm.x * Af.z * land; // (the core's weight: where it levels the ground; not on drawn water)
 	float dist = length (posView);
 	// pixel size [m] (stretched along the view at grazing angles)
 	float footprint = dist * 2.0 * atm.misc.z / max (frame.jitter.w, 1.0)
 		/ max (abs (dot (posView / dist, Nv)), 0.1);
 	// (the mesh's band reaches twice as far when morphed to the parent's)
+	// site materials: the weights of the coarse, fine and flat material (the ground share
+	// siteG and the land mask keep them off the sea, ice floes and snow)
+	float siteDens = 0.0; // (the density factor of the materials: the only site state live past the block)
+	float gritDens = atm.pebPrm.y;
+	bool site = SITE_MATERIALS && atm.sitePrm.x > 0.5;
+	if (site) {
+		DetSite st = DetSite (1.0, uint (atm.sitePrm.y), atm.sitePrm.z, atm.sitePrm.w, atm.siteThr.xyz,
+			vec3 (atm.siteMat[2].x, atm.siteMat[5].x, atm.siteMat[8].x));
+		// (the mask's fields come from the vertices, Af.z; per pixel only the noise's raggedness would add: not worth its cost)
+		float fA, ws;
+		DetSiteDecode (Af.z, fA, ws);
+		vec3 sw = DetSiteShadeShare (fA, ws, st, footprint, atm.siteCover.xyz) * (siteG * land);
+		base = SiteColour (base, sw);
+		vec3 kg = vec3 (atm.siteMat[1].a, atm.siteMat[4].a, atm.siteMat[7].a);
+		gritDens = clamp (atm.pebPrm.y * (1.0 + dot (sw, kg - 1.0)), 0.0, 1.0);
+		playa = max (playa, dot (sw, vec3 (atm.siteMat[2].y, atm.siteMat[5].y, atm.siteMat[8].y)));
+		siteSmooth = dot (sw, vec3 (atm.siteMat[2].z, atm.siteMat[5].z, atm.siteMat[8].z));
+		siteDens = DetSiteDensity (sw, st);
+	}
 	DetailSample ds = TerrainDetailEval (pt, d, Af.x, Af.y, tile.detail.x, tile.detail.y * (1.0 + vMorph), tile.detail.z, footprint, atm.sunDir.xyz);
 	// pebbles: their slopes per pixel (the meshes have their shape, but
 	// normals of the ground under them), with crags on their faces; down
@@ -304,7 +349,9 @@ void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec3 Af
 	// (all stones of two pixels and more: the meshes have the larger ones'
 	// shape, but not their slopes)
 	if (tile.morph.w > 0.0 && footprint < 0.03 && Af.y > 0.0 && pg > 0.0) {
-		int nl = int (ceil (tile.morph.w));
+		// (site materials: the lattices fill in sequence, as DetPebbles)
+		int nl = site ? int (ceil (tile.morph.w * atm.sitePrm.w)) : int (ceil (tile.morph.w));
+		float P = tile.morph.w * siteDens;
 		float hs = 0.0, ts = 0.0;
 		for (int k = -1; k >= -4; k--) {
 			float s = exp2 (float (k));
@@ -316,10 +363,12 @@ void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec3 Af
 			float crag = (1.0 - smoothstep (0.015 * s, 0.04 * s, footprint)) * atm.pebShape2.z;
 			for (int l = 0; l < nl; l++) {
 				int m = k - DET_JMIN + 64 + 29 * l;
+				float dl = site ? clamp (P - float (l), 0.0, 1.0) : tile.morph.w / float (nl);
+				if (dl <= 0.0) break;
 				ivec3 cell, p; vec3 sg;
 				vec3 f = DetLattice (m, pt, k, cell, p, sg);
 				float top, tone;
-				vec4 hg = DetPebbleCellGrad (cell, m, k, tile.morph.w / float (nl), f, crag, S, top, tone);
+				vec4 hg = DetPebbleCellGrad (cell, m, k, dl, f, crag, S, site, top, tone);
 				vec3 gk = DetToPlanet (hg.xyz, p, sg) * (w / s);
 				ds.grad += gk;
 				gs += gk * wv;
@@ -342,7 +391,7 @@ void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec3 Af
 			ivec3 cell, p; vec3 sg;
 			vec3 f = DetLattice (m, pt, k, cell, p, sg);
 			float top, tone;
-			vec4 hg = DetPebbleCellGrad (cell, m, k, atm.pebPrm.y, f, 0.0, S, top, tone);
+			vec4 hg = DetPebbleCellGrad (cell, m, k, gritDens, f, 0.0, S, false, top, tone);
 			vec3 gk = DetToPlanet (hg.xyz, p, sg) * (w / s);
 			ds.grad += gk;
 			gs += gk * wv;

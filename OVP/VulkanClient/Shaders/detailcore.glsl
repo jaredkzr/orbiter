@@ -160,13 +160,24 @@ float DetSmoothStep (float a, float b, float x)
 // S: the shape (size, round, elong, height, bevel, tilt; the core's
 // PebbleShape): keep identical to PebbleLayer, with its guards
 const float DET_PEBBLE_SOFT = 0.08;
+// soft: site materials (F3): the stone's presence is a soft threshold of
+// the density (sc, DET_SITE_SOFT wide), so that no stone is cut where the
+// material mask crosses it (as the core's PebbleLayer)
+const float DET_SITE_SOFT = 0.01;
 struct DetPebbleShape { float size, round, elong, height, bevel, tilt; };
-float DetPebbleCell (ivec3 cell, int m, int k, float density, vec3 f, float crag, DetPebbleShape S, out bool stone)
+float DetPebbleCell (ivec3 cell, int m, int k, float density, vec3 f, float crag, DetPebbleShape S, bool soft, out bool stone)
 {
 	stone = false;
 	float s = exp2 (float (k));
 	uint h0 = DetHash (cell, 3000u + uint (m));
-	if (DetUnit16 (h0) >= density * (k == -1 ? 0.4 : k == -2 ? 0.7 : 1.0)) return 0.0;
+	float sc = 1.0;
+	if (soft) {
+		float t = density * (k == -1 ? 0.4 : k == -2 ? 0.7 : 1.0);
+		float u0 = DetUnit16 (h0);
+		if (u0 >= t + DET_SITE_SOFT) return 0.0;
+		sc = 1.0 - DetSmoothStep (t - DET_SITE_SOFT, t + DET_SITE_SOFT, u0);
+	}
+	else if (DetUnit16 (h0) >= density * (k == -1 ? 0.4 : k == -2 ? 0.7 : 1.0)) return 0.0;
 	stone = true;
 	uint h1 = DetPcg (h0), h2 = DetPcg (h1), h3 = DetPcg (h2), h4 = DetPcg (h3);
 	float r = S.size * (0.12 + 0.12 * DetUnit16 (h4)), hgt = S.height * (0.25 + 0.3 * DetUnit16 (h4 >> 16));
@@ -197,17 +208,109 @@ float DetPebbleCell (ivec3 cell, int m, int k, float density, vec3 f, float crag
 		n += 0.5 * DetNoise (ivec3 (floor (q)), fract (q), h4 + 1u).w;
 		h += crag * 0.05 * r * s * n * min (1.0, 5.0 * (1.0 - x));
 	}
-	return h;
+	return h * sc;
 }
 
+
+// ---- Site materials (F3): coarse, fine and flat sub-materials at 30 m to 1 km,
+// from two fBm fields on the detail's lattices (as the core's
+// TerrainDetail::SiteWeights: keep identical, with the same literals).
+// A: coarse where high, fine where low; B: flat where high (not in coarse).
+const int DET_SITE_MA = 220, DET_SITE_MB = 230;
+const float DET_SITE_AMP[5] = float[5] (0.43373, 0.26024, 0.15614, 0.09369, 0.05621);
+const float DET_SITE_EDGE_FP = 0.005;   // [per m of footprint] the edges' widening (shading only)
+// on: 0/1, seed: lattice seed, edge: the edge softness, kpMax: the
+// pebble lattices' maximum factor, thr: thresholds (tc, tf, ts; ts >= 1e8:
+// no flat material), kp: the pebble factor of the materials
+struct DetSite { float on; uint seed; float edge; float kpMax; vec3 thr; vec3 kp; };
+
+// The fields. footprint: 0 in the meshes (the core's full-resolution mask), else the
+// size [m] of the pixel (or the vertex spacing): the fine octaves fade out
+float DetSiteFieldA (DetPoint pt, DetSite st, float footprint)
+{
+	float fA = 0.0;
+	for (int i = 0; i < 5; i++) {
+		int e = 9 - i;
+		float wo = footprint > 0.0 ? 1.0 - smoothstep (0.25, 0.5, footprint / exp2 (float (e))) : 1.0;
+		if (wo <= 0.0) continue;
+		int m = DET_SITE_MA + i;
+		ivec3 cell, p; vec3 sg;
+		vec3 f = DetLattice (m, pt, e, cell, p, sg);
+		fA += DET_SITE_AMP[i] * wo * DetNoise (cell, f, 7000u + uint (m) + 977u * st.seed).w;
+	}
+	return fA;
+}
+
+// The pans' weight before the coarse material's (the flat material's, from field B at
+// footprint; 0: no field B)
+float DetSitePan (DetPoint pt, DetSite st, float footprint)
+{
+	if (st.thr.z >= 1e8) return 0.0;
+	float fB = 0.0;
+	for (int i = 0; i < 5; i++) {
+		int e = 10 - i;
+		float wo = footprint > 0.0 ? 1.0 - smoothstep (0.25, 0.5, footprint / exp2 (float (e))) : 1.0;
+		if (wo <= 0.0) continue;
+		int m = DET_SITE_MB + i;
+		ivec3 cell, p; vec3 sg;
+		vec3 f = DetLattice (m, pt, e, cell, p, sg);
+		fB += DET_SITE_AMP[i] * wo * DetNoise (cell, f, 7000u + uint (m) + 977u * st.seed).w;
+	}
+	float eps = st.edge + DET_SITE_EDGE_FP * footprint;
+	return DetSmoothStep (st.thr.z - eps, st.thr.z + eps, fB);
+}
+
+// The weights (coarse, fine, flat) from field A and the pans' weight sp; footprint > 0
+// (shading): the edges widen with it, and far away the mask gives way to its mean shares, cover
+vec3 DetSiteShare (float fA, float sp, DetSite st, float footprint, vec3 cover)
+{
+	float eps = st.edge + DET_SITE_EDGE_FP * footprint;
+	float wc = DetSmoothStep (st.thr.x - eps, st.thr.x + eps, fA);
+	float wf0 = 1.0 - DetSmoothStep (st.thr.y - eps, st.thr.y + eps, fA);
+	float ws = sp * (1.0 - wc);
+	vec3 w = vec3 (wc, wf0 * (1.0 - ws), ws);
+	if (footprint > 0.0) w = mix (w, cover, smoothstep (128.0, 512.0, footprint));
+	return w;
+}
+
+// The meshes' (the core's) weights at full resolution (footprint 0)
+vec3 DetSiteWeights (DetPoint pt, DetSite st, float footprint, vec3 cover)
+{
+	return DetSiteShare (DetSiteFieldA (pt, st, footprint), DetSitePan (pt, st, footprint), st, footprint, cover);
+}
+
+// Shading: the per-vertex stream value (tile_mesh.comp) of the two fields: field A, and the pans'
+// weight ws (already excluded from the coarse material at the vertex), as a continuous, subtractive
+// code: z = fA - K ws. Interpolation then runs base -> fine -> pan and never through coarse.
+const float DET_SITE_PAN_K = 50.0;
+float DetSiteEncode (float fA, float ws) { return clamp (fA, -1.2, 1.2) - DET_SITE_PAN_K * ws; }
+void DetSiteDecode (float z, out float fA, out float ws)
+{
+	fA = max (z, -1.2);
+	ws = clamp ((-1.2 - z) / DET_SITE_PAN_K, 0.0, 1.0);
+}
+
+// Shading weights from the decoded fA and the already coarse-excluded pan weight ws
+vec3 DetSiteShadeShare (float fA, float ws, DetSite st, float footprint, vec3 cover)
+{
+	float eps = st.edge + DET_SITE_EDGE_FP * footprint;
+	float wc = DetSmoothStep (st.thr.x - eps, st.thr.x + eps, fA);
+	float wf0 = 1.0 - DetSmoothStep (st.thr.y - eps, st.thr.y + eps, fA);
+	vec3 w = vec3 (wc, wf0 * (1.0 - ws), ws);
+	return mix (w, cover, smoothstep (128.0, 512.0, footprint));
+}
+
+// the pebble density factor of the materials (>= 0)
+float DetSiteDensity (vec3 w, DetSite st) { return max (0.0, 1.0 + dot (w, st.kp - 1.0)); }
+
 // One layer of pebbles and clods [m] (as TerrainDetail.cpp's PebbleLayer)
-float DetPebbleLayer (DetPoint pt, int k, int layer, float density, float crag, DetPebbleShape S)
+float DetPebbleLayer (DetPoint pt, int k, int layer, float density, float crag, DetPebbleShape S, bool soft)
 {
 	int m = k - DET_JMIN + 64 + 29 * layer;
 	ivec3 cell, p; vec3 sg;
 	vec3 f = DetLattice (m, pt, k, cell, p, sg);
 	bool stone;
-	return DetPebbleCell (cell, m, k, density, f, crag, S, stone);
+	return DetPebbleCell (cell, m, k, density, f, crag, S, soft, stone);
 }
 
 
@@ -258,10 +361,28 @@ float DetCraterLayer (DetPoint pt, int k, int layer, float density, float depthS
 // (at least the planet's lambdaMin); prm: hurst, ridge, crater cells,
 // crater depth
 // The pebbles' part of the detail [m] (crag: see DetPebbleLayer)
-float DetPebbles (DetPoint pt, float f, float spacing, float lmin, float pebbles, float crag, DetPebbleShape S)
+float DetPebbles (DetPoint pt, float f, float spacing, float lmin, float pebbles, float crag, DetPebbleShape S, DetSite st)
 {
 	float h = 0.0;
 	if (pebbles <= 0.0 || f <= 0.0 || spacing <= 0.0) return 0.0;
+	if (st.on > 0.5) {
+		// site materials: the lattices fill in sequence, P stones per cell in all
+		int nl = int (ceil (pebbles * st.kpMax));
+		float P = -1.0;
+		for (int k = -1; k >= -4; k--) {
+			float s = exp2 (float (k)), lg = DET_PEBBLE_G * s;
+			if (lg < 0.5 * lmin) break;
+			float w = DetSmoothStep (0.5 * lmin, lmin, lg) * DetSmoothStep (0.5, 1.5, log2 (spacing / s));
+			if (w <= 0.0) continue;
+			if (P < 0.0) P = pebbles * DetSiteDensity (DetSiteWeights (pt, st, 0.0, vec3 (0.0)), st);
+			for (int l = 0; l < nl; l++) {
+				float dl = clamp (P - float (l), 0.0, 1.0);
+				if (dl <= 0.0) break;
+				h += w * f * DetPebbleLayer (pt, k, l, dl, crag, S, true);
+			}
+		}
+		return h;
+	}
 	int nl = int (ceil (pebbles));
 	for (int k = -1; k >= -4; k--) {
 		float s = exp2 (float (k)), lg = DET_PEBBLE_G * s;
@@ -269,7 +390,7 @@ float DetPebbles (DetPoint pt, float f, float spacing, float lmin, float pebbles
 		float w = DetSmoothStep (0.5 * lmin, lmin, lg) * DetSmoothStep (0.5, 1.5, log2 (spacing / s));
 		if (w <= 0.0) continue;
 		for (int l = 0; l < nl; l++)
-			h += w * f * DetPebbleLayer (pt, k, l, pebbles / float (nl), crag, S);
+			h += w * f * DetPebbleLayer (pt, k, l, pebbles / float (nl), crag, S, false);
 	}
 	return h;
 }
@@ -281,7 +402,7 @@ float DetPebbles (DetPoint pt, float f, float spacing, float lmin, float pebbles
 // (early exit as the core's: on the base fade f and the amplitude A; with
 // the core's sea gate fd = 0 implies A = 0, so no noise is dropped that the
 // core keeps)
-float DetHeight (DetPoint pt, float A, float f, float spacing, float lmin, float lmax, vec4 prm, float pebbles, float micro, DetPebbleShape S)
+float DetHeight (DetPoint pt, float A, float f, float spacing, float lmin, float lmax, vec4 prm, float pebbles, float micro, DetPebbleShape S, DetSite st)
 {
 	if (spacing <= 0.0 || (f <= 0.0 && A <= 0.0) || lmin >= spacing || lmin >= lmax) return 0.0;
 	float h = 0.0;
@@ -315,7 +436,7 @@ float DetHeight (DetPoint pt, float A, float f, float spacing, float lmin, float
 				h += w * f * DetCraterLayer (pt, k, l, prm.z / float (nl), prm.w);
 		}
 	}
-	return h + DetPebbles (pt, f, spacing, lmin, pebbles, 0.0, S);
+	return h + DetPebbles (pt, f, spacing, lmin, pebbles, 0.0, S, st);
 }
 
 #endif

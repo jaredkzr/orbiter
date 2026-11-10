@@ -86,6 +86,7 @@
 class Planet;
 class ZTreeMgr;
 class ProcTerrain;
+class TerrainDetail;
 struct ElevationTile;
 
 namespace scatter {
@@ -218,6 +219,10 @@ namespace scatter {
 		unsigned generation = 0;
 		const ProcTerrain *proc = nullptr; // (procedural world: the climate gate)
 		std::string defaultTemplate;       // (Default_<Class>.cfg, if used)
+		const TerrainDetail *site = nullptr; // (procedural world with site materials: the rocks follow the mask; fetched in Make)
+		bool siteChecked = false;
+		double krMax = 1.0;                  // (largest rock factor of the site materials)
+		double statSite = 0.0;               // [s]
 		// cost statistics of a procedural world (logged after PROC_STAT_CELLS cells)
 		double statTotal = 0.0, statClimate = 0.0; // [s]
 		int statCells = 0, statEvals = 0;

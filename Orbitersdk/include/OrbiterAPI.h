@@ -4897,6 +4897,20 @@ struct SURFDETAILPARAM {
 	double grit = 0.0;          ///< density of the grains of a few mm (shading only; 0: none)
 	bool pebbleGate = false;    ///< no stones on vegetation, snow and bright flats, judged by the client from the texture (shading only)
 	double playa = 0.0;        ///< strength of the playa rule (dry lakes, salt flats): flattened by the core, cracked by the client (0: none)
+	// site materials (F3): coarse, fine and flat sub-materials at 30 m - 1 km scale on procedural worlds
+	// (TerrainDetail::SitePreset); the core's mask, evaluated identically by the client
+	bool site = false;                          ///< site materials are on
+	unsigned int siteSeed = 0;                  ///< lattice seed (< 65536)
+	double siteEdge = 0.03;                     ///< edge softness (field units)
+	double siteThresh[3] = { 1e9, -1e9, 1e9 };  ///< coarse where field A > [0], fine where field A < [1], flat where field B > [2]
+	double siteCover[3] = { 0, 0, 0 };          ///< the materials' shares of the surface (coarse, fine, flat)
+	double siteTint[3][3] = {};                 ///< colour factor (linear rgb) per material
+	double siteAbs[3][4] = {};                  ///< colour mixed in (rgb) and its amount (a) per material
+	double sitePebbles[3] = {};                 ///< pebble density factor per material
+	double siteGrit[3] = {};                    ///< grit density factor per material (shading only)
+	double siteCrack[3] = {};                   ///< crack weight per material (shading only)
+	double siteSmooth[3] = {};                  ///< smoothing of mottling and grain per material (shading only)
+	double siteRocks[3] = {};                   ///< rock and boulder density factor per material (ground scatter)
 };
 
 /**
@@ -4904,6 +4918,19 @@ struct SURFDETAILPARAM {
  * \return false if the planet has no terrain detail
  */
 OAPIFUNC bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, SURFDETAILPARAM *prm);
+
+/**
+ * \brief The site materials' weights at a point of a planet with procedural terrain detail:
+ *   the core's full-resolution mask (no ground gate), shared by the pebbles, the ground scatter
+ *   and the client's colour.
+ * \param hPlanet planet handle
+ * \param lng, lat position [rad]
+ * \param [out] w weights (0-1) of the coarse, fine and flat material; their sum is at most 1
+ *   (the rest is the base material)
+ * \return false if the planet has no site materials (w is not set)
+ * \note Thread safe.
+ */
+OAPIFUNC bool oapiSiteMaterial (OBJHANDLE hPlanet, double lng, double lat, double w[3]);
 
 /**
  * \brief The playa factor (0-1) at a point: dry lakes and salt flats, from the

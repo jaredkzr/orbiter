@@ -8,6 +8,8 @@
 #include "ProcTerrain.h"
 #include "elevmgr.h"
 #include "PlayaMap.h"
+#include "Log.h"
+#include <chrono>
 #include <memory>
 #include <map>
 #include <algorithm>
@@ -182,14 +184,22 @@ namespace {
 	// per cell, an angular stone: its outline a polygon (five edges at
 	// random), a bevelled flat top, tilted (radius 0.12 to 0.24 cell sizes,
 	// height 0.25 to 0.55 times it). Fewer of the larger ones. Height [m].
-	double PebbleLayer (const Vector &d, int k, int layer, double R, double density, const TerrainDetail::PebbleShape &S)
+	// soft (site materials): the density threshold is smoothed (SITE_SOFT) and the stone's height scaled
+	// by it, so that no stone is cut where the mask crosses it
+	constexpr double SITE_SOFT = 0.01;
+	double PebbleLayer (const Vector &d, int k, int layer, double R, double density, const TerrainDetail::PebbleShape &S, bool soft = false)
 	{
 		int m = k - JMIN + 64 + 29 * layer;
 		double s = std::ldexp (1.0, k);
 		Vector q = LatticePoint (m, d, R / s);
 		double fx = std::floor (q.x), fy = std::floor (q.y), fz = std::floor (q.z);
 		uint32_t h0 = Hash ((int32_t)fx, (int32_t)fy, (int32_t)fz, 3000u + (uint32_t)m);
-		if (Unit16 (h0) >= density * (k == -1 ? 0.4 : k == -2 ? 0.7 : 1.0)) return 0.0;
+		double sc = 1.0;
+		if (soft) {
+			double t = density * (k == -1 ? 0.4 : k == -2 ? 0.7 : 1.0), u = Unit16 (h0);
+			if (u >= t + SITE_SOFT) return 0.0;
+			sc = 1.0 - SmoothStep (t - SITE_SOFT, t + SITE_SOFT, u);
+		} else if (Unit16 (h0) >= density * (k == -1 ? 0.4 : k == -2 ? 0.7 : 1.0)) return 0.0;
 		uint32_t h1 = Pcg (h0), h2 = Pcg (h1), h3 = Pcg (h2), h4 = Pcg (h3);
 		double r = S.size * (0.12 + 0.12 * Unit16 (h4)), hgt = S.height * (0.25 + 0.3 * Unit16 (h4 >> 16));
 		double ext = 1.05 * r / (1.0 - S.elong);
@@ -212,7 +222,8 @@ namespace {
 		// a bevelled top (sides over the outer 60%, rounded at both ends), tilted
 		double top = SmoothStep (0.0, S.bevel, 1.0 - x);
 		double tilt = 1.0 + S.tilt * dotp (v, UnitFromHash (Pcg (h3 ^ 0x2545f491u))) / r;
-		return hgt * r * s * top * std::max (tilt, 0.3);
+		double hs = hgt * r * s * top * std::max (tilt, 0.3);
+		return soft ? hs * sc : hs;
 	}
 
 	double CraterLayer (const Vector &d, int k, int layer, double R, double density, double depth)
@@ -233,6 +244,10 @@ namespace {
 		if (v.length() >= ext) return 0.0;
 		return CraterHeight (cs, v) * cs.rL * s;
 	}
+
+	// site materials: two fBm fields on unused lattices (the GLSL copy in detailcore.glsl: keep them identical)
+	constexpr int SITE_MA = 220, SITE_MB = 230;
+	const double SITE_AMP[5] = { 0.43373, 0.26024, 0.15614, 0.09369, 0.05621 };
 
 } // namespace
 
@@ -280,7 +295,7 @@ int TerrainDetail::ShapeByName (const char *name)
 
 TerrainDetail::Overrides::Overrides ()
 {
-	gain = hurst = ridge = floor = sea = craters = craterDepth = craterFresh = pebbles = level = pebbleShape = pebbleAlbedo = micro = grit = playa = std::nan ("");
+	gain = hurst = ridge = floor = sea = craters = craterDepth = craterFresh = pebbles = level = pebbleShape = pebbleAlbedo = micro = grit = playa = site = std::nan ("");
 }
 
 void TerrainDetail::Overrides::Apply (Params &p) const
@@ -300,6 +315,61 @@ void TerrainDetail::Overrides::Apply (Params &p) const
 	if (!std::isnan (grit)) p.grit = std::clamp (grit, 0.0, 1.0);
 	if (!std::isnan (playa)) p.playa = std::clamp (playa, 0.0, 1.0);
 	if (!std::isnan (level)) p.level = (int)level;
+	if (!std::isnan (site) && site == 0.0) p.site.on = false; // (1 keeps the preset: never turned on elsewhere)
+}
+
+TerrainDetail::Params::Site TerrainDetail::SitePreset (int cls)
+{
+	typedef Params::Site::Mat M;
+	// tint rgb, abs rgb, amt, kp, kg, kc, km, kr
+	auto mat = [](double tr, double tg, double tb, double ar, double ag, double ab, double amt,
+		double kp, double kg, double kc, double km, double kr) {
+		M m;
+		m.tint[0] = tr, m.tint[1] = tg, m.tint[2] = tb;
+		m.abs[0] = ar, m.abs[1] = ag, m.abs[2] = ab, m.amt = amt;
+		m.kp = kp, m.kg = kg, m.kc = kc, m.km = km, m.kr = kr;
+		return m;
+	};
+	Params::Site st;
+	auto set = [&](double cc, double cf, double cs, const M &c, const M &f, const M &s) {
+		st.on = true;
+		st.cover[0] = cc, st.cover[1] = cf, st.cover[2] = cs;
+		st.mat[0] = c, st.mat[1] = f, st.mat[2] = s;
+	};
+	switch (cls) {
+	case ProcTerrain::ROCK:
+		set (0.18, 0.30, 0.0,
+			mat (1.16, 1.14, 1.12, 0, 0, 0, 0.0, 1.8, 0.7, 0.0, 0.0, 3.0),
+			mat (0.86, 0.85, 0.84, 0, 0, 0, 0.0, 0.35, 1.3, 0.0, 0.35, 0.3),
+			mat (1, 1, 1, 0, 0, 0, 0.0, 1, 1, 0, 0, 1));
+		break;
+	case ProcTerrain::OCEAN:
+		set (0.22, 0.30, 0.04,
+			mat (0.74, 0.72, 0.70, 0, 0, 0, 0.0, 2.2, 0.8, 0.0, 0.0, 2.5),
+			mat (1.20, 1.14, 1.00, 0, 0, 0, 0.0, 0.15, 1.4, 0.0, 0.5, 0.15),
+			mat (1, 1, 1, 0.60, 0.58, 0.54, 0.8, 0.0, 0.2, 0.8, 0.85, 0.0));
+		break;
+	case ProcTerrain::DESERT:
+		set (0.30, 0.30, 0.06,
+			mat (0.62, 0.57, 0.53, 0, 0, 0, 0.0, 2.5, 0.5, 0.0, 0.0, 2.0),
+			mat (1.25, 1.17, 1.02, 0, 0, 0, 0.0, 0.1, 1.5, 0.0, 0.6, 0.1),
+			mat (1, 1, 1, 0.70, 0.67, 0.60, 0.85, 0.0, 0.1, 1.0, 0.85, 0.0));
+		break;
+	case ProcTerrain::ICE:
+		set (0.12, 0.30, 0.10,
+			mat (0.80, 0.76, 0.72, 0, 0, 0, 0.0, 1.0, 1.3, 0.0, 0.0, 2.0),
+			mat (1.06, 1.06, 1.07, 0, 0, 0, 0.0, 1.0, 0.5, 0.0, 0.6, 0.3),
+			mat (1, 1, 1, 0.50, 0.62, 0.74, 0.55, 1.0, 0.1, 0.0, 0.8, 0.2));
+		break;
+	case ProcTerrain::LAVA:
+		set (0.30, 0.25, 0.08,
+			mat (0.68, 0.66, 0.66, 0, 0, 0, 0.0, 2.0, 0.6, 0.0, 0.0, 2.5),
+			mat (1.25, 1.10, 0.98, 0, 0, 0, 0.0, 0.2, 1.5, 0.0, 0.5, 0.2),
+			mat (0.85, 0.85, 0.90, 0, 0, 0, 0.0, 0.3, 0.2, 0.5, 0.7, 0.3));
+		break;
+	default: break; // (gas giants: off)
+	}
+	return st;
 }
 
 TerrainDetail::Params TerrainDetail::Defaults (const Planet *planet)
@@ -382,6 +452,12 @@ TerrainDetail::Params TerrainDetail::Defaults (const Planet *planet)
 	} else {
 		p.gain = 0.35, p.ridge = 1.0, p.floor = 0.02;
 	}
+	// site materials on procedural worlds (the airless rock worlds took the airless branch above)
+	if (const ProcTerrain *pt = planet->ProcSurface ())
+		if (pt->Prm().cls != ProcTerrain::GAS) {
+			p.site = SitePreset (pt->Prm().cls);
+			p.site.seed = pt->Prm().seed & 0xffffu;
+		}
 	return p;
 }
 
@@ -405,6 +481,97 @@ TerrainDetail::TerrainDetail (const Planet *pl, const Params &p): planet (pl), p
 	playaSpacing = radius * Pi / 64.0 / 256.0; // level-10 data spacing
 	while (flatSpacing > 2000.0) flatSpacing *= 0.5;
 	lambdaMin = 4.0 * s;
+	if (prm.site.on) InitSite ();
+}
+
+double TerrainDetail::SiteField (const Vector &dir, bool b) const
+{
+	const int m0 = b ? SITE_MB : SITE_MA, e0 = b ? 10 : 9;
+	double f = 0.0;
+	for (int i = 0; i < 5; i++) {
+		int m = m0 + i, e = e0 - i;
+		Vector p = LatticePoint (m, dir, radius / std::ldexp (1.0, e));
+		f += SITE_AMP[i] * Noise (p.x, p.y, p.z, 7000u + (uint32_t)m + 977u * prm.site.seed);
+	}
+	return f;
+}
+
+void TerrainDetail::SiteWeights (const Vector &dir, double w[3]) const
+{
+	const Params::Site &st = prm.site;
+	double eps = st.edge;
+	double fA = SiteField (dir, false);
+	double wc = SmoothStep (siteThr[0] - eps, siteThr[0] + eps, fA);
+	double wf0 = 1.0 - SmoothStep (siteThr[1] - eps, siteThr[1] + eps, fA);
+	double ws = 0.0;
+	if (st.cover[2] > 0.0) ws = SmoothStep (siteThr[2] - eps, siteThr[2] + eps, SiteField (dir, true)) * (1.0 - wc);
+	w[0] = wc, w[1] = wf0 * (1.0 - ws), w[2] = ws;
+}
+
+double TerrainDetail::SiteDensity (const double w[3]) const
+{
+	double d = 1.0;
+	for (int i = 0; i < 3; i++) d += w[i] * (prm.site.mat[i].kp - 1.0);
+	return std::max (0.0, d);
+}
+
+double TerrainDetail::SiteRocks (const double w[3]) const
+{
+	double d = 1.0;
+	for (int i = 0; i < 3; i++) d += w[i] * (prm.site.mat[i].kr - 1.0);
+	return std::max (0.0, d);
+}
+
+void TerrainDetail::InitSite ()
+{
+	auto t0 = std::chrono::steady_clock::now();
+	const Params::Site &st = prm.site;
+	siteKpMax = siteKrMax = 1.0;
+	for (int i = 0; i < 3; i++)
+		siteKpMax = std::max (siteKpMax, st.mat[i].kp), siteKrMax = std::max (siteKrMax, st.mat[i].kr);
+	const int N = 16384;
+	const bool hasB = st.cover[2] > 0.0;
+	std::vector<Vector> dirs (N);
+	std::vector<double> fa (N), fb;
+	if (hasB) fb.resize (N);
+	for (int i = 0; i < N; i++) {
+		double y = 1.0 - 2.0 * (i + 0.5) / N, r = std::sqrt (std::max (0.0, 1.0 - y * y)), phi = i * 2.399963229728653;
+		dirs[i] = Vector (r * std::cos (phi), y, r * std::sin (phi));
+		fa[i] = SiteField (dirs[i], false);
+		if (hasB) fb[i] = SiteField (dirs[i], true);
+	}
+	auto quantile = [N](std::vector<double> v, double q) {
+		std::sort (v.begin(), v.end());
+		int idx = std::clamp ((int)std::floor (q * N), 0, N - 1);
+		return v[idx];
+	};
+	double cc = st.cover[0], cf = st.cover[1], cs = st.cover[2];
+	siteThr[0] = cc > 0.0 ? quantile (fa, 1.0 - cc) : 1e9;
+	siteThr[1] = cf > 0.0 ? quantile (fa, cf) : -1e9;
+	siteThr[2] = hasB ? quantile (fb, 1.0 - cs / (1.0 - cc)) : 1e9;
+	for (double &t : siteThr) t = (double)(float)t;
+	// measured shares, and the mean colour factor over a grey base
+	double meas[3] = { 0, 0, 0 }, lum = 0.0;
+	for (int i = 0; i < N; i++) {
+		double w[3];
+		SiteWeights (dirs[i], w);
+		double base = 0.3, acc[3] = { base, base, base };
+		double rest = 1.0 - (w[0] + w[1] + w[2]);
+		for (int c = 0; c < 3; c++) acc[c] *= rest;
+		for (int k = 0; k < 3; k++) {
+			meas[k] += w[k];
+			for (int c = 0; c < 3; c++) {
+				double col = std::min (base * st.mat[k].tint[c], 0.92);
+				col += (st.mat[k].abs[c] - col) * st.mat[k].amt;
+				acc[c] += w[k] * col;
+			}
+		}
+		lum += (0.2126 * acc[0] + 0.7152 * acc[1] + 0.0722 * acc[2]) / base;
+	}
+	double ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - t0).count();
+	LOGOUT ("TerrainDetail %s: site materials (%s): shares %.2f %.2f %.2f, thresholds %.5f %.5f %.5f, measured %.3f %.3f %.3f, mean colour factor %.3f, %d samples in %.1f ms",
+		planet->Name(), ProcTerrain::ClassName (planet->ProcSurface() ? planet->ProcSurface()->Prm().cls : 0),
+		cc, cf, cs, siteThr[0], siteThr[1], siteThr[2], meas[0] / N, meas[1] / N, meas[2] / N, lum / N, N, ms);
 }
 
 namespace {
@@ -688,7 +855,28 @@ double TerrainDetail::Height (double lat, double lng, double elev, double spacin
 		}
 	}
 	// pebbles and clods (only where the mesh resolves them: PEBBLE_G)
-	if (prm.pebbles > 0.0) {
+	if (prm.pebbles > 0.0 && prm.site.on) {
+		// site materials: the density follows the mask; the lattices are filled in sequence
+		// (lattice l gets the part of the total above l), with soft thresholds
+		int nl = (int)std::ceil (prm.pebbles * siteKpMax);
+		double P = -1.0;
+		for (int k = -1; k >= -4; k--) {
+			double s = std::ldexp (1.0, k), lg = PEBBLE_G * s;
+			if (lg < 0.5 * lmin) break;
+			double w = SmoothStep (0.5 * lmin, lmin, lg) * SmoothStep (0.5, 1.5, std::log2 (spacing / s));
+			if (w <= 0.0) continue;
+			if (P < 0.0) {
+				double sw[3];
+				SiteWeights (dir, sw);
+				P = prm.pebbles * SiteDensity (sw);
+			}
+			for (int l = 0; l < nl; l++) {
+				double dl = std::clamp (P - l, 0.0, 1.0);
+				if (dl <= 0.0) break;
+				h += w * fd * PebbleLayer (dir, k, l, radius, dl, prm.shape, true);
+			}
+		}
+	} else if (prm.pebbles > 0.0) {
 		int nl = (int)std::ceil (prm.pebbles);
 		for (int k = -1; k >= -4; k--) {
 			double s = std::ldexp (1.0, k), lg = PEBBLE_G * s;

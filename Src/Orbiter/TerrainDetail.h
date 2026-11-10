@@ -41,9 +41,22 @@
 //   TerrainDetailPlaya        strength of the playa rule (0 to 1; Earth 1): dry lakes
 //                             and salt flats are flat (the Vulkan client also
 //                             cracks them)
+//   TerrainDetailSite         site materials on procedural worlds (0: off; 1, the
+//                             default there: on; no effect elsewhere)
 //   TerrainDetailLevel        finest mesh level of the detail (default: about
 //                             2 cm node spacing: craters and pebbles are
 //                             relief close up)
+// Site materials (procedural worlds, SurfaceClass other than Gas): three
+// sub-materials at scales of 30 m to 1 km, chosen by class (SitePreset): coarse
+// (gravel lag, blocky ejecta), fine (sand, mature fines, snow) and flat (pans,
+// glaze ice); between them the ground stays the base material. Two fractal
+// fields on the detail's lattices (SiteWeights) give the weights; their thresholds
+// follow from the materials' shares of the surface (measured once on the
+// sphere). The mask sets the pebble density (Height: the stones' lattices are
+// filled in sequence, so that gravel has more of them), the ground scatter's
+// rocks (SiteRocks) and, in the Vulkan client, which evaluates the same mask in
+// float, the ground colour, grit, cracks and smoothing. Only the pebbles change the
+// height. Bodies without it keep their code paths bit for bit.
 // Playa rule (Playa): ground whose surface texture is bright and unsaturated
 // (neither blue like ice nor green; PlayaMap), below the snow line (by
 // latitude and elevation) and on gentle data (relief below 15-40 m) is a dry
@@ -91,16 +104,35 @@ public:
 		bool pebbleGate = false;
 		double playa = 0.0; // strength of the playa rule (0: none)
 		int level = 0;   // 0: default
+		/// site materials (SitePreset): three materials, coarse, fine, flat
+		struct Site {
+			struct Mat {
+				double tint[3] = { 1, 1, 1 };  // colour factor (linear rgb)
+				double abs[3] = { 0, 0, 0 };   // colour mixed in ...
+				double amt = 0.0;              // ... by this much
+				double kp = 1.0, kg = 1.0;     // pebble and grit density factors
+				double kc = 0.0, km = 0.0;     // crack weight, smoothing of mottling and grain (shading)
+				double kr = 1.0;               // rock density factor (ground scatter)
+			};
+			bool on = false;
+			uint32_t seed = 0;                 // lattice seed (< 65536)
+			double edge = 0.03;                // edge softness (field units)
+			double cover[3] = { 0, 0, 0 };     // shares of the surface
+			Mat mat[3];
+		};
+		Site site;
 	};
 	/// Values set in a planet's configuration (NaN: not set)
 	struct Overrides {
 		double gain, hurst, ridge, floor, sea, craters, craterDepth, craterFresh, pebbles, level;
-		double pebbleShape, pebbleAlbedo, micro, grit, playa;
+		double pebbleShape, pebbleAlbedo, micro, grit, playa, site;
 		Overrides ();
 		void Apply (Params &p) const;
 	};
 	/// Defaults by body: Earth, Mars, airless bodies, others
 	static Params Defaults (const Planet *planet);
+	/// Site materials of a surface class (ProcTerrain::Class; off for gas giants)
+	static Params::Site SitePreset (int cls);
 
 	TerrainDetail (const Planet *planet, const Params &prm);
 	~TerrainDetail ();
@@ -113,6 +145,20 @@ public:
 	/// node spacing [m] to use for planets without elevation data (flat
 	/// data, relief 0: the detail's floor, wavelengths of a few km down)
 	double FlatSpacing () const { return flatSpacing; }
+
+	/// Site materials: weights w (coarse, fine, flat; sum at most 1) at a point
+	/// (unit vector in the planet frame), at full resolution. Pure, thread safe.
+	/// Only meaningful if Prm().site.on.
+	void SiteWeights (const Vector &dir, double w[3]) const;
+	/// the pebble density factor of weights w (1 + sum w_i (kp_i - 1), at least 0)
+	double SiteDensity (const double w[3]) const;
+	/// the rock density factor of weights w (1 + sum w_i (kr_i - 1), at least 0)
+	double SiteRocks (const double w[3]) const;
+	/// the largest factors (at least 1) over the materials
+	double SiteKpMax () const { return siteKpMax; }
+	double SiteKrMax () const { return siteKrMax; }
+	/// thresholds (coarse where field A > [0], fine where A < [1], flat where field B > [2]; rounded to float)
+	const double *SiteThresholds () const { return siteThr; }
 
 	/// Detail elevation [m] at a point
 	/// \param lat, lng position [rad]
@@ -183,6 +229,10 @@ private:
 	double lambdaMin;
 	double flatSpacing;
 	double playaSpacing;                       // level-10 data spacing [m]
+	double siteThr[3] = { 1e9, -1e9, 1e9 };    // site materials: thresholds of the two fields
+	double siteKpMax = 1.0, siteKrMax = 1.0;   // largest pebble and rock factors (at least 1)
+	double SiteField (const Vector &dir, bool b) const; // (field A or B)
+	void InitSite ();
 	struct Pad { Vector dir; double g; };     // a landing pad: its centre, its level (the data's there) [m]
 	struct Grade { Vector dir, along, across; double hl, hw, g0, gl, gw; }; // graded ground: centre, axes, half extents [m], level g0 + gl s + gw t
 	struct Flat { Vector dir; double r0, r1; std::vector<Pad> pads; std::vector<Grade> grades; double reach; }; // fully flat within r0, detail beyond r1; pads and grades within reach [m]

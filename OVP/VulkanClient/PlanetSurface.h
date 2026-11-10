@@ -85,6 +85,7 @@ public:
 	void Shutdown ();
 	TileLoader &Loader () { return *loader; }
 	VkPipeline Pipeline () const { return pipeline; }
+	VkPipeline SitePipeline () const { return sitePipeline; }
 	VkPipeline CloudPipeline () const { return cloudPipeline; }
 	VkPipeline DepthPipeline () const { return depthPipeline; }
 	VkPipelineLayout Layout () const { return layout; }
@@ -116,6 +117,7 @@ private:
 	vkc::Context *ctx = nullptr;
 	VkPipelineLayout layout = VK_NULL_HANDLE;
 	VkPipeline pipeline = VK_NULL_HANDLE;
+	VkPipeline sitePipeline = VK_NULL_HANDLE; // tile pipeline with the site-scale materials compiled in (F3)
 	VkPipeline cloudPipeline = VK_NULL_HANDLE;
 	VkPipeline depthPipeline = VK_NULL_HANDLE; // ambient occlusion prepass
 	VkPipeline meshPipe = VK_NULL_HANDLE;

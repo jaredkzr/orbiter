@@ -339,6 +339,7 @@ Planet::Planet (char *fname)
 		GetItemReal (ifs, "TerrainDetailMicro", o.micro);
 		GetItemReal (ifs, "TerrainDetailGrit", o.grit);
 		GetItemReal (ifs, "TerrainDetailPlaya", o.playa);
+		GetItemReal (ifs, "TerrainDetailSite", o.site);
 		int lvl;
 		if (GetItemInt (ifs, "TerrainDetailLevel", lvl)) o.level = lvl;
 		detail_on = g_pOrbiter->Cfg()->CfgVisualPrm.bTerrainDetail && !(o.gain == 0.0);

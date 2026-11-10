@@ -33,6 +33,16 @@
 #include "Shadows.h"
 
 namespace {
+// The site materials' push constants of the mesh compute (F3; the core's mask,
+// whatever the shading's ORBITER_VK_SITE): on, seed, edge, kpMax; thresholds; pebble factors
+void SitePush (const SURFDETAILPARAM &d, float p4[4], float p5[4], float p6[4])
+{
+	if (!d.site) return;
+	float kmax = 1.0f;
+	for (int i = 0; i < 3; i++) kmax = std::max (kmax, (float)d.sitePebbles[i]);
+	p4[0] = 1.0f, p4[1] = (float)d.siteSeed, p4[2] = (float)d.siteEdge, p4[3] = kmax;
+	for (int i = 0; i < 3; i++) p5[i] = (float)d.siteThresh[i], p6[i] = (float)d.sitePebbles[i];
+}
 
 	// Must match the push constant block of tile.vert/frag
 	struct TilePushConstants {
@@ -307,7 +317,7 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	bool gpuMesh = ctx->deviceAddress; // (single precision: no double precision needed)
 	if (const char *e = getenv ("ORBITER_VK_GPU_MESH")) gpuMesh = gpuMesh && atoi (e) != 0;
 	if (gpuMesh) {
-		VkPushConstantRange mpr{ VK_SHADER_STAGE_COMPUTE_BIT, 0, 64 };
+		VkPushConstantRange mpr{ VK_SHADER_STAGE_COMPUTE_BIT, 0, 112 };
 		VkPipelineLayoutCreateInfo mli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 		mli.pushConstantRangeCount = 1;
 		mli.pPushConstantRanges = &mpr;
@@ -396,6 +406,18 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	gpi.pDynamicState = &dy;
 	gpi.layout = layout;
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &pipeline));
+
+	// the variant with the site-scale materials (F3): the same pipeline, SITE_MATERIALS = true
+	{
+		VkBool32 siteOn = VK_TRUE;
+		VkSpecializationMapEntry sme{ 0, 0, sizeof (VkBool32) };
+		VkSpecializationInfo sinfo{ 1, &sme, sizeof (siteOn), &siteOn };
+		VkPipelineShaderStageCreateInfo sst[2] = { stages[0], stages[1] };
+		sst[1].pSpecializationInfo = &sinfo;
+		VkGraphicsPipelineCreateInfo sgpi = gpi;
+		sgpi.pStages = sst;
+		VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &sgpi, nullptr, &sitePipeline));
+	}
 
 	// cloud layers: alpha blended, no depth writes
 	ds.depthWriteEnable = VK_FALSE;
@@ -564,6 +586,7 @@ void TileRenderer::Shutdown ()
 	if (meshLayout) vkDestroyPipelineLayout (ctx->device, meshLayout, nullptr);
 	ctx->DestroyBuffer (ibuf);
 	vkDestroyPipeline (ctx->device, pipeline, nullptr);
+	vkDestroyPipeline (ctx->device, sitePipeline, nullptr);
 	vkDestroyPipeline (ctx->device, cloudPipeline, nullptr);
 	vkDestroyPipeline (ctx->device, depthPipeline, nullptr);
 	vkDestroyPipelineLayout (ctx->device, layout, nullptr);
@@ -655,10 +678,12 @@ PlanetSurface::PlanetSurface (OBJHANDLE h, Scene *s, std::shared_ptr<PlanetLayer
 			char pname[256];
 			oapiGetObjectName (hPlanet, pname, 256);
 			{ std::lock_guard<std::mutex> lk (logMutex); first = logged.insert (pname).second; }
-			if (first) oapiWriteLogV ("VulkanClient: terrain detail of %s: level %d, lambdaMin %.3f m, pebbles %.2f (size %.2f round %.2f elong %.2f height %.2f bevel %.2f tilt %.2f crag %.2f tone %.2f albedo %.2f), grit %.2f, micro %.3f, gate %d, sea %d, playa %.2f",
+			if (first) oapiWriteLogV ("VulkanClient: terrain detail of %s: level %d, lambdaMin %.3f m, pebbles %.2f (size %.2f round %.2f elong %.2f height %.2f bevel %.2f tilt %.2f crag %.2f tone %.2f albedo %.2f), grit %.2f, micro %.3f, gate %d, sea %d, playa %.2f, site %d (seed %u edge %.3f thr %.5f %.5f %.5f cover %.2f %.2f %.2f kp %.2f %.2f %.2f)",
 				pname, detailPrm.level, detailPrm.lambdaMin, detailPrm.pebbles, detailPrm.pebbleSize, detailPrm.pebbleRound, detailPrm.pebbleElong,
 				detailPrm.pebbleHeight, detailPrm.pebbleBevel, detailPrm.pebbleTilt, detailPrm.pebbleCrag, detailPrm.pebbleTone,
-				detailPrm.pebbleAlbedo, detailPrm.grit, detailPrm.micro, detailPrm.pebbleGate ? 1 : 0, detailPrm.sea ? 1 : 0, detailPrm.playa);
+				detailPrm.pebbleAlbedo, detailPrm.grit, detailPrm.micro, detailPrm.pebbleGate ? 1 : 0, detailPrm.sea ? 1 : 0, detailPrm.playa,
+				detailPrm.site ? 1 : 0, detailPrm.siteSeed, detailPrm.siteEdge, detailPrm.siteThresh[0], detailPrm.siteThresh[1], detailPrm.siteThresh[2],
+				detailPrm.siteCover[0], detailPrm.siteCover[1], detailPrm.siteCover[2], detailPrm.sitePebbles[0], detailPrm.sitePebbles[1], detailPrm.sitePebbles[2]);
 		}
 		// (finer meshes where the detail goes)
 		if (detail) maxLevel = std::clamp (std::max (maxLevel, detailPrm.level), 4, 28);
@@ -1547,7 +1572,7 @@ void PlanetSurface::Prepare ()
 			memcpy ((uint8_t*)t1.ptr + al, &one, sizeof(one));
 			ctx->ImmediateSubmit ([&](VkCommandBuffer c) {
 				vkCmdBindPipeline (c, VK_PIPELINE_BIND_POINT_COMPUTE, tr->MeshPipeline ());
-				struct { uint64_t jobs, pad; float prm[4]; float prm2[4]; float prm3[4]; } q{};
+				struct { uint64_t jobs, pad; float prm[4]; float prm2[4]; float prm3[4]; float prm4[4]; float prm5[4]; float prm6[4]; } q{};
 				q.jobs = a1 + al;
 				q.prm[0] = (float)detailPrm.hurst, q.prm[1] = (float)detailPrm.ridge;
 				q.prm[2] = (float)detailPrm.craters, q.prm[3] = (float)detailPrm.craterDepth;
@@ -1555,7 +1580,8 @@ void PlanetSurface::Prepare ()
 				q.prm2[2] = (float)detailPrm.pebbleSize, q.prm2[3] = (float)detailPrm.pebbleRound;
 				q.prm3[0] = (float)detailPrm.pebbleElong, q.prm3[1] = (float)detailPrm.pebbleHeight;
 				q.prm3[2] = (float)detailPrm.pebbleBevel, q.prm3[3] = (float)detailPrm.pebbleTilt;
-				vkCmdPushConstants (c, tr->MeshLayout (), VK_SHADER_STAGE_COMPUTE_BIT, 0, 64, &q);
+				SitePush (detailPrm, q.prm4, q.prm5, q.prm6);
+				vkCmdPushConstants (c, tr->MeshLayout (), VK_SHADER_STAGE_COMPUTE_BIT, 0, 112, &q);
 				vkCmdDispatch (c, 1, 1, 1);
 			});
 			MeshData cpu;
@@ -1568,7 +1594,8 @@ void PlanetSurface::Prepare ()
 				dp = std::max (dp, (double)std::max ({ std::fabs (v.x - w[0]), std::fabs (v.y - w[1]), std::fabs (v.z - w[2]) }));
 				dn = std::max (dn, (double)std::max ({ std::fabs (v.nx - w[3]), std::fabs (v.ny - w[4]), std::fabs (v.nz - w[5]) }));
 				const float *e = g + 8 * NV + 6 * k, *c = &cpu.amp[6 * k];
-				da = std::max (da, (double)std::max ({ std::fabs (e[0] - c[0]), std::fabs (e[1] - c[1]), std::fabs (e[2] - c[2]) }));
+				// (site materials: the third value is the mask's field A on the GPU, not the playa weight)
+				da = std::max (da, (double)std::max ({ std::fabs (e[0] - c[0]), std::fabs (e[1] - c[1]), detailPrm.site ? 0.0f : std::fabs (e[2] - c[2]) }));
 				dt = std::max (dt, (double)std::max ({ std::fabs (e[3] - c[3]), std::fabs (e[4] - c[4]), std::fabs (e[5] - c[5]) }));
 			}
 			oapiWriteLogV ("VulkanClient: mesh check level %d: position %.4f m, normal %.5f, morph target %.4f m, detail stream %.5f",
@@ -1586,7 +1613,7 @@ void PlanetSurface::Prepare ()
 		dep.pMemoryBarriers = &mb;
 		vkCmdPipelineBarrier2 (cmd, &dep);
 		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, tr->MeshPipeline ());
-		struct { uint64_t jobs, pad; float prm[4]; float prm2[4]; float prm3[4]; } pc{};
+		struct { uint64_t jobs, pad; float prm[4]; float prm2[4]; float prm3[4]; float prm4[4]; float prm5[4]; float prm6[4]; } pc{};
 		pc.jobs = ja;
 		pc.prm[0] = (float)detailPrm.hurst, pc.prm[1] = (float)detailPrm.ridge;
 		pc.prm[2] = (float)detailPrm.craters, pc.prm[3] = (float)detailPrm.craterDepth;
@@ -1594,7 +1621,8 @@ void PlanetSurface::Prepare ()
 		pc.prm2[2] = (float)detailPrm.pebbleSize, pc.prm2[3] = (float)detailPrm.pebbleRound;
 		pc.prm3[0] = (float)detailPrm.pebbleElong, pc.prm3[1] = (float)detailPrm.pebbleHeight;
 		pc.prm3[2] = (float)detailPrm.pebbleBevel, pc.prm3[3] = (float)detailPrm.pebbleTilt;
-		vkCmdPushConstants (cmd, tr->MeshLayout (), VK_SHADER_STAGE_COMPUTE_BIT, 0, 64, &pc);
+		SitePush (detailPrm, pc.prm4, pc.prm5, pc.prm6);
+		vkCmdPushConstants (cmd, tr->MeshLayout (), VK_SHADER_STAGE_COMPUTE_BIT, 0, 112, &pc);
 		vkCmdDispatch (cmd, (uint32_t)jobs.size(), 1, 1);
 		mb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 		mb.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
@@ -1809,7 +1837,10 @@ void PlanetSurface::Render (Atmosphere *atm)
 
 	ctx->BindScene (true);
 	VkCommandBuffer cmd = ctx->Cmd();
-	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, clouds ? tr->CloudPipeline() : tr->Pipeline());
+	// (the same condition as Atmosphere's sitePrm: the body has site materials and ORBITER_VK_SITE isn't 0)
+	static const bool siteOffEnv = [] { const char *e = getenv ("ORBITER_VK_SITE"); return e && e[0] == '0'; }();
+	const bool siteShading = detail && detailPrm.site && !siteOffEnv;
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, clouds ? tr->CloudPipeline() : (siteShading ? tr->SitePipeline() : tr->Pipeline()));
 	VkDescriptorSet fs = scene->FrameSet ();
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr->Layout(), 0, 1, &fs, 0, nullptr);
 	VkDescriptorSet as = atm->Set ();
