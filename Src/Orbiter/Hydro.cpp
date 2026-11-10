@@ -156,6 +156,7 @@ void Forces (const Model &m, const Surface &s, const Body &b, Result &r, double 
 	static thread_local std::vector<PS> ps;
 	ps.clear();
 	double wetted = 0.0;
+	Vector wetC;
 	for (const Panel &q : m.panels) {
 		Vector p (b.x + mul (b.R, q.c));
 		Vector n (mul (b.R, q.n));
@@ -172,6 +173,7 @@ void Forces (const Model &m, const Surface &s, const Body &b, Result &r, double 
 		if (wf <= 0.0 && (dt <= 0.0 || d - w * dt <= -0.5 * ext)) continue;
 		double A = q.area * wf;
 		wetted += A;
+		wetC += p * A;
 		double U = u.length();
 		double un = dotp (u, n);
 		double pn = 0.0;
@@ -265,6 +267,7 @@ void Forces (const Model &m, const Surface &s, const Body &b, Result &r, double 
 	r.T = tmul (b.R, T);
 	r.submerged = sub;
 	r.wetted = wetted;
+	r.wetC = wetted > 0.0 ? wetC / wetted : xcg;
 	r.waterline = awp;
 }
 
@@ -312,6 +315,7 @@ void Step (const Model &m, const Surface &s, Body &b, const Vector &aExt, const 
 	b.x = xcg - mul (b.R, b.cg);
 	r.submerged = ri.submerged;
 	r.wetted = ri.wetted;
+	r.wetC = ri.wetC;
 	r.waterline = ri.waterline;
 }
 

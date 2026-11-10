@@ -2200,6 +2200,8 @@ struct WATERSTATE {
 	int substeps = 0;         ///< sub-steps of the last step in the water
 	bool afloat = false;      ///< resting afloat (held on the swell)
 	bool flooded = false;     ///< flooded (a wreck: sinks by its structure's density)
+	VECTOR3 contact = { 0, 0, 0 }; ///< centre of the wetted surface (global frame)
+	double speed = 0.0;       ///< speed through the water there [m/s]
 };
 
 #define PART_LOST   0x0001 ///< the part has broken off the vessel

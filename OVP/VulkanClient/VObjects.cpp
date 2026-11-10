@@ -157,6 +157,7 @@ void VVessel::Update ()
 	UpdateAnimations ();
 	UpdateDamage ();
 	UpdateTracks ();
+	UpdateWaterSpray ();
 }
 
 void VVessel::UpdateDamage ()
@@ -3184,4 +3185,112 @@ void VPlanet::RenderGlow ()
 		{ x + hh, y + hh, z, 1.0f, 1.0f, r, g, b, 1 }, { x - hh, y + hh, z, 0.0f, 1.0f, r, g, b, 1 } };
 	PVtx v[6] = { q[0], q[1], q[2], q[0], q[2], q[3] };
 	scene->DrawBillboards (scene->GlowTex (), true, v, 6, true);
+}
+
+// =======================================================================
+// The water's spray (Water W9): what the core's water state says the vessel
+// does in the water - the entry's blows (a burst of spray and the rings and
+// foam of WaterFx), its motion through the water (a sheet of spray thrown up
+// and back, a wake) - where it is wetted.
+
+void VVessel::UpdateWaterSpray ()
+{
+	WATERSTATE ws;
+	if (!vessel->GetWaterState (&ws) || !ws.wet || ws.afloat || camDist > 6000.0) {
+		if (!ws.wet) splashEntry = 0.0;
+		spray.havePrev = false;
+		return;
+	}
+	OBJHANDLE hp = vessel->GetSurfaceRef ();
+	double dt = oapiGetSimStep ();
+	if (!hp || dt <= 0.0) return;
+	ParticleSystem *sys = scene->Particles ();
+	WaterFx *wf = scene->Water ();
+	VECTOR3 at = ws.contact, pc;
+	oapiGetGlobalPos (hp, &pc);
+	VECTOR3 up = unit (at - pc);
+	{
+		// (on the water: the wetted surface's centre is under it, and particles
+		// born below the ground (the sea's mean surface) are dropped at once)
+		double lng, lat, rad, datum = 0.0, seabed;
+		oapiGlobalToEqu (hp, at, &lng, &lat, &rad);
+		oapiIsWater (hp, lng, lat, &datum, &seabed);
+		double h = 0.0;
+		oapiSeaSurface (hp, lng, lat, oapiGetSimMJD (), 0.0, &h);
+		at = pc + up * (oapiGetSize (hp) + datum + std::max (h, 0.0) + 0.4);
+	}
+	VECTOR3 gv = GroundVelocity (hp, at);
+	double R0 = std::clamp (0.5 * sqrt (std::max (ws.wetted, 0.25)), 0.15 * size, 0.4 * size + 1.0);
+	double D = sys ? sys->density : 1.0, sizeScale = std::pow (D, -1.0 / 3.0);
+
+	// a blow: a new entry, or a harder blow of it
+	if (ws.tWet != splashTWet) splashTWet = ws.tWet, splashEntry = 0.0;
+	if (ws.entrySpeed > splashEntry + 1.5 && ws.entrySpeed > 2.0) {
+		double v = std::min (ws.entrySpeed, 60.0);
+		double k = std::clamp (v / 15.0, 0.15, 1.0);
+		if (wf) wf->Impulse (hp, at, std::max (R0, 0.25 * size), k);
+		uint32_t n = (uint32_t)std::min (v * (25.0 + 12.0 * R0) * D, 2500.0);
+		if (getenv ("ORBITER_VK_SPRAY_LOG")) oapiWriteLogV ("VulkanClient: spray burst %s: entry %.1f m/s, %u droplets, R0 %.1f m, D %.2f", vessel->GetName (), v, n, R0, D);
+		bool okR = sys && sys->enabled && n && sys->Reserve (splash, 0.0, 4.0, ParticleSystem::Class::Spray, 2.0 * n);
+		if (getenv ("ORBITER_VK_SPRAY_LOG")) oapiWriteLogV ("VulkanClient: spray burst reserve %d (sys %d enabled %d)", (int)okR, sys != nullptr, sys ? (int)sys->enabled : -1);
+		if (okR) {
+			ParticleSystem::Emission e{};
+			e.p0 = at - gv * dt, e.p1 = at;
+			e.vel = gv, e.dir = -up; // (dir: opposite to the emission)
+			// (thrown up and out from the blow: a column for a hard one, a ring of droplets)
+			e.v0 = 0.6 * v, e.spread = 0.7 * v;
+			e.planar = false;
+			e.lifetime = std::clamp (0.15 * v, 1.5, 5.0), e.dt = dt;
+			e.size = (2.5 + 0.2 * R0) * sizeScale, e.growth = (2.0 + 0.4 * v / 10.0) * sizeScale;
+			e.alpha = 0.85 * std::min (1.0, 1.3 / (D * sizeScale * sizeScale));
+			e.slowdown = 0.8;
+			e.tinted = true, e.cold = true, e.ballistic = true;
+			e.volumetric = false;
+			e.albedo[0] = 0.90f, e.albedo[1] = 0.93f, e.albedo[2] = 0.96f;
+			e.cls = ParticleSystem::Class::Spray;
+			sys->Emit (splash, e, n);
+		}
+		splashEntry = ws.entrySpeed;
+	}
+
+	// moving through it: a sheet of spray off the wetted surface, thrown up
+	// and back, and the wake
+	double s = ws.speed;
+	if (s < 3.0) { spray.havePrev = false; return; }
+	double k = std::clamp ((s - 3.0) / 25.0, 0.0, 1.0);
+	if (wf) wf->Feed (hp, ((uint64_t)id << 16) | 0x200, at, R0, std::clamp (0.3 + s / 20.0, 0.3, 1.0), 0.0, WaterFx::Kind::Contact);
+	if (!sys || !sys->enabled) return;
+	double rate = (150.0 + 1500.0 * k) * std::sqrt (std::max (R0, 0.5)) * D; // [1/s]
+	if (!sys->Reserve (spray, rate, 2.5, ParticleSystem::Class::Spray)) { if (getenv ("ORBITER_VK_SPRAY_LOG")) oapiWriteLogV ("VulkanClient: spray sheet reserve failed"); spray.havePrev = false; return; }
+	if (getenv ("ORBITER_VK_SPRAY_LOG")) oapiWriteLogV ("VulkanClient: spray sheet %s: speed %.1f, rate %.0f, at alt %.2f", vessel->GetName (), s, rate, length (at - pc) - oapiGetSize (hp));
+	if (!spray.havePrev) spray.prev = at;
+	spray.accum += rate * dt;
+	uint32_t cnt = (uint32_t)spray.accum;
+	spray.accum -= cnt;
+	if (cnt) {
+		VECTOR3 vel;
+		vessel->GetGlobalVel (vel);
+		VECTOR3 rel = vel - gv;
+		VECTOR3 hrel = rel - up * dotp (rel, up);
+		ParticleSystem::Emission e{};
+		e.p0 = spray.prev, e.p1 = at;
+		// (the droplets leave with a share of the hull's speed, thrown up and
+		// out to the sides: a sheet off the wetted surface)
+		e.vel = gv + hrel * 0.3;
+		e.dir = -up; // (dir: opposite to the emission)
+		e.v0 = 0.22 * s, e.spread = 0.4 * s;
+		e.planar = false;
+		e.lifetime = 2.5, e.dt = dt;
+		e.size = 3.0 * sizeScale, e.growth = 4.0 * sizeScale;
+		e.alpha = 0.8 * (0.4 + 0.6 * k) * std::min (1.0, 1.3 / (D * sizeScale * sizeScale));
+		e.slowdown = 1.0;
+		e.tinted = true, e.cold = true, e.ballistic = true;
+		e.volumetric = false;
+		e.albedo[0] = 0.90f, e.albedo[1] = 0.93f, e.albedo[2] = 0.96f;
+		e.cls = ParticleSystem::Class::Spray;
+		sys->Emit (spray, e, cnt);
+		if (getenv ("ORBITER_VK_SPRAY_LOG")) oapiWriteLogV ("VulkanClient: spray sheet emitted %u (alpha %.2f size %.2f v0 %.1f)", cnt, e.alpha, e.size, e.v0);
+	}
+	spray.prev = at;
+	spray.havePrev = true;
 }

@@ -80,6 +80,7 @@ namespace hydro {
 		Vector F, T;               ///< mean force (local frame) and torque about the CG (body frame)
 		double submerged = 0.0;    ///< [m^3] at the end
 		double wetted = 0.0;       ///< [m^2] at the end
+		Vector wetC;               ///< centre of the wetted panels (local frame), at the end
 		double waterline = 0.0;    ///< [m^2] the waterplane's area at the end
 		double slamMax = 0.0;      ///< [Pa] the highest slam pressure (on a panel)
 		double pressureMax = 0.0;  ///< [Pa] the highest pressure (on a panel)

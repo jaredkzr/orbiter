@@ -210,6 +210,13 @@ void VesselBase::HydroStep (double h)
 	s1->R.Set (s1->Q);
 	s1->omega = -b.w;
 	water.F = mul (P1.R, tmul (L, r.F));
+	{
+		Vector wc (O + tmul (L, r.wetC));
+		water.contact = P1.pos + mul (P1.R, wc);
+		Vector rc (r.wetC - (b.x + mul (b.R, cg)));
+		Vector vp (b.v + crossp (mul (b.R, b.w), rc));
+		water.speed = (vp - srf.Vel (r.wetC.x, r.wetC.z, 0.0)).length();
+	}
 	water_vel = P1.vel + mul (P1.R, ground (pp));
 	WaterLoads (r, h);
 }

@@ -8620,6 +8620,7 @@ bool VESSEL::GetWaterState (WATERSTATE *out, size_t size) const
 	w.force = MakeVECTOR3 (s.F);
 	w.substeps = s.substeps;
 	w.afloat = s.afloat && vessel->GetStatus() == FLIGHTSTATUS_LANDED, w.flooded = s.flooded;
+	w.contact = MakeVECTOR3 (s.contact), w.speed = s.speed;
 	memcpy ((void*)out, &w, std::min (size, sizeof (w)));
 	return true;
 }

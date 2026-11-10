@@ -259,6 +259,8 @@ protected:
 		double tWet = -1e10;      ///< when it last became wet [s simulation time]
 		int substeps = 0;
 		Vector F;                 ///< the water's mean force in the last step (global frame)
+		Vector contact;           ///< centre of the wetted surface (global frame)
+		double speed = 0.0;       ///< [m/s] the body's speed through the water there
 		bool afloat = false;      ///< resting afloat, held on the swell (W7)
 		bool flooded = false;     ///< a wreck: displaces only its structure (W6)
 	};
