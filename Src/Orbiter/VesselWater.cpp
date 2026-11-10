@@ -156,7 +156,11 @@ void VesselBase::HydroStep (double h)
 	auto tp0 = std::chrono::steady_clock::now();
 	static double dbgT = getenv ("ORBITER_WATER_DEBUG_T") ? atof (getenv ("ORBITER_WATER_DEBUG_T")) : -1.0;
 	hydro::debugPanels = (dbgT >= 0.0 && water.wet && td.SimT1 - water.tWet < dbgT) ? 6 : 0;
+	Vector w0dbg (b.w);
 	hydro::Step (*m, srf, b, aExt, alphaExt, h, WaterParts(), r);
+	if (dbgT >= 0.0 && (aExt.length() > 200.0 || alphaExt.length() > 20.0 || b.w.length() > 10.0))
+		fprintf (stderr, "hydro step %s t %.2f mass %.0f pmi (%.2f %.2f %.2f) cg (%.2f %.2f %.2f) aExt %.1f alphaExt %.1f (%.1f %.1f %.1f) F/m %.1f w %.2f -> %.2f n %d\n",
+			Name(), td.SimT1, mass, pmi.x, pmi.y, pmi.z, cg.x, cg.y, cg.z, aExt.length(), alphaExt.length(), alphaExt.x, alphaExt.y, alphaExt.z, r.F.length() / mass, w0dbg.length(), b.w.length(), r.substeps);
 	if (prof) {
 		static double tsum = 0.0; static int nsum = 0;
 		tsum += std::chrono::duration<double> (std::chrono::steady_clock::now() - tp0).count(); nsum++;

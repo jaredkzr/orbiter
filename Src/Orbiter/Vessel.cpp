@@ -5017,7 +5017,11 @@ int Vessel::BreakPart (int part, double vsep)
 	Ic -= Shift (cg1, M - m);                            // (about the new centre of gravity)
 	Vector pmi1 (Ic / (M - m));
 	Vector pmi0 (OwnPMI());
-	for (int j = 0; j < 3; j++) pmi1.data[j] = std::max (pmi1.data[j], 0.1 * pmi0.data[j]);
+	// (and not below a share of the intact vessel's: break after break, a
+	// tenth of the last's each time came down to nothing about an axis, and
+	// the angular acceleration of any torque grew without bound)
+	if (!pmi_intact_set) pmi_intact = pmi0, pmi_intact_set = true;
+	for (int j = 0; j < 3; j++) pmi1.data[j] = std::max ({ pmi1.data[j], 0.1 * pmi0.data[j], 0.05 * pmi_intact.data[j] });
 	dmg.cg = cg1;
 
 	// pushed apart (momentum conserved)

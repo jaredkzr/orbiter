@@ -1804,6 +1804,8 @@ private:
 	std::vector<char> part_lost;                 // parts broken off (empty: none)
 	std::vector<std::pair<double,int>> lost_log; // when each part broke off [s simulation time] (instant replay)
 	double lost_mass = 0.0;                      // [kg] their mass
+	Vector pmi_intact;                           // (its PMI before the first part broke off: a floor for what is left)
+	bool pmi_intact_set = false;
 	struct DamageEffects {                       // of the parts broken off
 		Vector cg;                               // centre of gravity of what is left (vessel frame; the origin stays)
 		Vector cs = Vector (1,1,1);              // fraction of the cross sections (x, y, z) left
