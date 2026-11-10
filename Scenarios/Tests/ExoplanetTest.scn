@@ -2,7 +2,8 @@ BEGIN_HYPERDESC
 <h1>Exoplanets</h1>
 The planets of the Solar System's neighbours (Utils/ExoKit): their periods,
 a transit of TRAPPIST-1 e seen from the Sun, tidal locking, the procedural
-ground of TRAPPIST-1 e (its seas), and a delta-glider standing on it.
+ground of TRAPPIST-1 e (its seas), a delta-glider standing on it, and the
+default ground scatter by surface class.
 END_HYPERDESC
 
 BEGIN_ENVIRONMENT

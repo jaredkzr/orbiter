@@ -5,6 +5,7 @@
 #include "Orbiter.h"
 #include "Config.h"
 #include "Planet.h"
+#include "ProcTerrain.h"
 #include "Base.h"
 #include "Cities.h"
 #include "Vessel.h"
@@ -14,6 +15,7 @@
 #include "ZTreeMgr.h"
 #include "Log.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -31,6 +33,17 @@ namespace {
 	const size_t MAX_CELLS = 40000; // cached cells (all layers; forests a few km around)
 	const int COVER_LEVEL = 14;     // finest surface tile level read for the ground cover (about 40 m per texel on Earth)
 	const size_t COVER_TILES = 12;  // cached tiles per layer
+
+	// the climate gate of procedural worlds (ProcTerrain::GroundAt)
+	const double PROC_COAST_RECHECK = 60.0;  // Ocean: cells with the seabed within this [m] of the datum evaluate the climate per candidate
+	const double PROC_EDGE_RECHECK = 20.0;   // Ice: likewise within this many texels of the open water's edge
+	const double PROC_SOLID_LO = 2.0;        // Ocean: no objects below this elevation [m] ...
+	const double PROC_SOLID_HI = 10.0;       // ... full density from this (the sea, the floes, the one-texel coast blend)
+	const double PROC_ICE_LO = 2.0;          // Ice: no objects within this many texels of the edge (the slush, the water) ...
+	const double PROC_ICE_HI = 6.0;          // ... full density from this
+	const double PROC_SNOW_CUT = 0.9;        // fraction of the objects snow takes away
+	const double PROC_COAST_MIN = 0.35;      // share of the objects left on sediment coasts
+	const int PROC_STAT_CELLS = 2000;        // cells after which the cost of a procedural body is logged
 
 	inline uint64_t Mix (uint64_t x)
 	{
@@ -247,12 +260,12 @@ GroundScatter::GroundScatter (const Planet *p): planet (p), R (p->Size())
 
 GroundScatter::~GroundScatter () {}
 
-void GroundScatter::LoadAssets (const std::string &file, bool included)
+bool GroundScatter::LoadAssets (const std::string &file, bool included, double sizeMin, double sizeMax)
 {
 	std::ifstream ifs (g_pOrbiter->Cfg()->ConfigPathNoext (("Scatter/" + file).c_str()));
 	if (!ifs.good()) {
 		if (included) LOGOUT_WARN ("Ground scatter: cannot read Config/Scatter/%s", file.c_str());
-		return; // (a planet without ground scatter)
+		return false; // (a planet without ground scatter)
 	}
 	std::string line;
 	while (std::getline (ifs, line)) {
@@ -265,6 +278,7 @@ void GroundScatter::LoadAssets (const std::string &file, bool included)
 		if (tok == "ROCK") {
 			a.kind = ROCK;
 			if (!(ss >> a.name >> a.radius >> a.height)) continue;
+			if (a.Size() < sizeMin || a.Size() >= sizeMax) continue; // (ASSETS size=)
 			// collision hull: the convex hull of the coarsest level of detail
 			std::string m = a.name + "_lod2";
 			if (const Mesh *mesh = g_pOrbiter->LoadMeshGlobal (m.c_str())) {
@@ -299,11 +313,44 @@ void GroundScatter::LoadAssets (const std::string &file, bool included)
 			}
 		} else if (tok == "TINT") {
 			double r, g, b;
+			std::string first;
+			std::streampos pos = ss.tellg();
+			if ((ss >> first) && first == "auto") {
+				double mix, alb, br, bg, bb;
+				const ProcTerrain *pt = planet->ProcSurface ();
+				if (!(ss >> mix >> alb >> br >> bg >> bb)) continue;
+				if (!pt || pt->Prm().cls == ProcTerrain::GAS) {
+					LOGOUT_WARN ("Ground scatter of %s: TINT auto needs a procedural surface; tint 1", planet->Name());
+					tint = Vector (1, 1, 1);
+					continue;
+				}
+				const ProcTerrain::Params &pr = pt->Prm();
+				double T[3], B[3] = { br, bg, bb }, t[3];
+				for (int c = 0; c < 3; c++) T[c] = alb * (pr.colLow[c] + mix * (pr.colHigh[c] - pr.colLow[c]));
+				auto lum = [](const double *v) { return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]; };
+				double L = lum (T) / std::max (lum (B), 1e-3);
+				for (int c = 0; c < 3; c++)
+					t[c] = std::clamp (L * std::clamp ((T[c] / std::max (B[c], 1e-3)) / L, 0.6, 1.6), 0.1, 6.0);
+				tint = Vector (t[0], t[1], t[2]);
+				LOGOUT ("Ground scatter of %s: tint %.2f %.2f %.2f (target %.3f %.3f %.3f, set albedo %.3f %.3f %.3f)",
+					planet->Name(), t[0], t[1], t[2], T[0], T[1], T[2], br, bg, bb);
+				continue;
+			}
+			ss.clear();
+			ss.seekg (pos);
 			if (ss >> r >> g >> b) tint = Vector (r, g, b);
 			continue;
 		} else if (tok == "ASSETS") {
 			std::string f;
-			if (ss >> f) LoadAssets (f, true);
+			if (!(ss >> f)) continue;
+			double lo = sizeMin, hi = sizeMax; // (the parent's filter, or the line's own)
+			std::string opt;
+			while (ss >> opt)
+				if (!opt.compare (0, 5, "size=")) {
+					size_t co = opt.find (':');
+					if (co != std::string::npos) lo = atof (opt.c_str() + 5), hi = atof (opt.c_str() + co + 1);
+				}
+			LoadAssets (f, true, lo, hi);
 			continue;
 		} else if (tok == "LAYER") {
 			Layer L;
@@ -320,9 +367,11 @@ void GroundScatter::LoadAssets (const std::string &file, bool included)
 			layers.push_back (L);
 			continue;
 		} else continue;
+		if (a.Size() < sizeMin || a.Size() >= sizeMax) continue;
 		a.tint = tint;
 		assets.push_back (std::move (a));
 	}
+	return true;
 }
 
 void GroundScatter::Load ()
@@ -331,7 +380,17 @@ void GroundScatter::Load ()
 	if (g_pOrbiter->GetGraphicsClient() && !clientSupport) return;
 	if (const char *ns = getenv ("ORBITER_NO_SCATTER"))
 		if (*ns && *ns != '0') return;
-	LoadAssets (std::string (planet->Name()) + ".cfg");
+	bool found = LoadAssets (std::string (planet->Name()) + ".cfg");
+	const ProcTerrain *pt = planet->ProcSurface ();
+	if (pt && pt->Prm().cls != ProcTerrain::GAS) {
+		proc = pt; // (the climate gate, with or without a body file)
+		if (!found) {
+			// (a procedural world without a file: the template of its class)
+			defaultTemplate = std::string ("Default_") + ProcTerrain::ClassName (pt->Prm().cls) + ".cfg";
+			tint = Vector (1, 1, 1);
+			if (!LoadAssets (defaultTemplate, true)) defaultTemplate.clear();
+		}
+	}
 	if (layers.empty() || assets.empty()) return;
 
 	for (Layer &L : layers) {
@@ -344,13 +403,14 @@ void GroundScatter::Load ()
 			L.weight.push_back (a.kind == ROCK ? pow (a.Size(), -1.5) : 1.0);
 		}
 	}
-	cover = std::make_unique<Cover> (planet);
+	if (!proc) cover = std::make_unique<Cover> (planet); // (procedural worlds have no surface tiles)
 	active = true;
 	int nObst = 0;
 	for (const Layer &L : layers)
 		for (int i : L.assets)
 			if (L.collide && assets[i].hasHull) nObst++;
-	LOGOUT ("Ground scatter of %s: %d assets, %d layers, %d obstacle types", planet->Name(), (int)assets.size(), (int)layers.size(), nObst);
+	LOGOUT ("Ground scatter of %s: %d assets, %d layers, %d obstacle types%s%s%s", planet->Name(), (int)assets.size(), (int)layers.size(), nObst,
+		defaultTemplate.empty() ? "" : " (default: ", defaultTemplate.c_str(), defaultTemplate.empty() ? "" : ")");
 }
 
 int GroundScatter::Rows (const Layer &L) const
@@ -470,6 +530,36 @@ void GroundScatter::Make (int layer, int row, int col, CellData &cd)
 	double wsum = 0.0;
 	for (double w : L.weight) wsum += w;
 
+	// the climate of a procedural world (ProcTerrain::GroundAt), at the cell's
+	// centre, made when a candidate first needs it
+	using Clock = std::chrono::steady_clock;
+	Clock::time_point t0;
+	if (proc) t0 = Clock::now();
+	const bool tidal = planet->TidallyLocked ();
+	const bool ocean = proc && proc->Prm().cls == ProcTerrain::OCEAN;
+	const bool iceSea = proc && proc->Prm().cls == ProcTerrain::ICE && proc->Prm().openWater > 0.0;
+	const double tx = proc ? proc->TexelAngle () : 0.0;
+	ProcTerrain::Ground gc;
+	bool haveGc = false, nearEdge = false;
+	auto climate = [&](const Vector &d) {
+		auto t1 = Clock::now();
+		ProcTerrain::Ground g = proc->GroundAt (d.x, d.y, d.z, tidal);
+		statClimate += std::chrono::duration<double> (Clock::now() - t1).count();
+		statEvals++;
+		return g;
+	};
+	auto procFactor = [&](const Vector &d) {
+		if (!haveGc) {
+			gc = climate (Dir (lat0 + 0.5 * dth, lng0 + 0.5 * dph));
+			haveGc = true;
+			nearEdge = (ocean && fabs (gc.seabed) < PROC_COAST_RECHECK) || (iceSea && fabs (gc.edge) < PROC_EDGE_RECHECK * tx);
+		}
+		const ProcTerrain::Ground g = nearEdge ? climate (d) : gc;
+		double solid = ocean ? SmoothStep (PROC_SOLID_LO, PROC_SOLID_HI, g.seabed)
+			: iceSea ? SmoothStep (PROC_ICE_LO * tx, PROC_ICE_HI * tx, g.edge) : 1.0;
+		return solid * (1.0 - PROC_SNOW_CUT * g.snow) * (ocean ? PROC_COAST_MIN + (1.0 - PROC_COAST_MIN) * (1.0 - g.coast) : 1.0);
+	};
+
 	for (int j = 0; j < ny; j++)
 		for (int i = 0; i < nx; i++) {
 			Rnd rnd (Hash (cs, (uint64_t)(j * nx + i)));
@@ -481,11 +571,17 @@ void GroundScatter::Make (int layer, int row, int col, CellData &cd)
 			double p = L.density * area * Clearance (dir);
 			if (u >= p * coverMax) continue;
 
+			// the climate of a procedural world: none on water, ice floes and slush, fewer on snow
+			if (proc) {
+				p *= procFactor (dir);
+				if (u >= p * coverMax) continue;
+			}
+
 			// ground cover
 			Vector rgb;
 			double water = 0.0;
 			bool have = false;
-			if (L.cover != Layer::NONE && L.cover != Layer::SLOPE)
+			if (cover && L.cover != Layer::NONE && L.cover != Layer::SLOPE)
 				have = cover->Sample (lat, lng, rgb, water);
 			p *= CoverFactor (L, rgb, water, have);
 			if (u >= p * coverMax) continue;
@@ -561,6 +657,14 @@ void GroundScatter::Make (int layer, int row, int col, CellData &cd)
 			if (urban > 0.0 && cm->Occupied (in.pos, assets[asset].radius * in.scale + 1.0)) continue;
 			cd.inst.push_back (in);
 		}
+	if (proc) {
+		statTotal += std::chrono::duration<double> (Clock::now() - t0).count();
+		if (++statCells == PROC_STAT_CELLS && !statLogged) {
+			statLogged = true;
+			LOGOUT ("Ground scatter of %s: %d cells, %.1f us per cell (climate %.1f us, %d evaluations)",
+				planet->Name(), statCells, statTotal / statCells * 1e6, statClimate / statCells * 1e6, statEvals);
+		}
+	}
 }
 
 void GroundScatter::Trim ()

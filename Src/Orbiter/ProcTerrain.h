@@ -66,6 +66,25 @@ public:
 	/// the shortest wavelength [m] of tiles of level lvl
 	double LambdaOf (int lvl) const;
 
+	/// The ground's cover as the graphics client draws it (its climate: open
+	/// water, sea ice, the slush shore, snow) at a point of the unit sphere:
+	/// the same noise and rules as OVP/VulkanClient/ProcSurface.cpp (Texels)
+	/// at its finest texture level. Used by the ground scatter (A2); the
+	/// place for site-scale materials (F3).
+	struct Ground {
+		double seabed = 0.0; ///< [m] the ground under the seas (Ocean only; else 0)
+		double theta = 0.0;  ///< [rad] from the substellar point (tidally locked), else |latitude|
+		double edge = 0.0;   ///< [rad] theta - (open water + 0.06 n1 + 0.015 nf): > 0 beyond the open water
+		double n1 = 0.0, nf = 0.0; ///< the client's climate noise
+		double sea = 0.0;    ///< 0-1: not ground: open water, sea ice, floes (Ocean), open water or slush (Ice)
+		double snow = 0.0;   ///< 0-1: snow over the ground (Ocean land)
+		double coast = 0.0;  ///< 0-1: coastal sediment (1 at the datum, 0 from 150 m up; Ocean)
+	};
+	Ground GroundAt (double x, double y, double z, bool tidalLock) const;
+
+	/// a texel [rad] of the client's finest colour tiles (the edge blends)
+	double TexelAngle () const;
+
 private:
 	double Continent (const double p[3], double lmin) const;
 	double Ridges (const double p[3], double lmin) const;

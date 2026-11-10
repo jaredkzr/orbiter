@@ -189,6 +189,9 @@ void ProcPlanet::Texels (int lvl, int ilat, int ilng, std::vector<uint8_t> &out,
 			double p[3] = { cb * std::cos (lng), sb, cb * std::sin (lng) };
 			double n1 = VNoise (p[0] * 3.1, p[1] * 3.1, p[2] * 3.1, seed) * 0.7 + VNoise (p[0] * 7.3, p[1] * 7.3, p[2] * 7.3, seed + 1) * 0.3;
 			double nf = Fbm (p, 24.0, fmax, seed + 7);
+			// NOTE: the core's ProcTerrain::GroundAt mirrors this climate (the
+			// noise n1, nf; water, ice, slush, snow) for the ground scatter
+			// (A2): change both together.
 			// the climate: angle from the substellar point (tidally locked),
 			// else latitude
 			double theta = prm.tidalLock ? std::acos (std::clamp (cb * std::cos (lng), -1.0, 1.0)) : std::fabs (lat);

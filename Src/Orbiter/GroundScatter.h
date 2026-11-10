@@ -12,9 +12,17 @@
 //   ASSETS <file>                         asset list made by the tools
 //                                         (Utils/ScatterAssets: ROCK lines;
 //                                         sets shared between bodies)
+//   ASSETS <file> size=<min>:<max>        only the assets of that size range
+//                                         [m] (largest of width and height)
 //   TINT <r> <g> <b>                      colour factor of the assets
 //                                         listed after it (a shared set on
 //                                         another body)
+//   TINT auto <mix> <albedo> <r> <g> <b>  procedural worlds (SurfaceClass):
+//                                         the tint that brings a set (base
+//                                         albedo r g b, linear) to the
+//                                         albedo times the world's lowland
+//                                         to highland colour at <mix> (0-1),
+//                                         hue shifts limited to +-60%
 //   ROCK <mesh stem> <radius> <height> .. a rock (meshes <stem>_lod0..2;
 //                                         its collision hull: the convex
 //                                         hull of the coarsest level)
@@ -45,6 +53,14 @@
 //                                         dunes); plants with a habitat
 //                                         (cover=) only in layers of it
 //
+// Procedural worlds (SurfaceClass, not Gas) without a <body>.cfg use the
+// default template Config/Scatter/Default_<Class>.cfg (Rock, Ocean, Ice,
+// Desert, Lava). Their scatter is gated by the ground's climate as the
+// graphics client draws it (ProcTerrain::GroundAt): none on water, sea ice or
+// slush, fewer on snow and on sediment coasts. This gate also applies to a
+// procedural world's own cfg. It does not change the random sequence: bodies
+// with their own cfg are placed exactly as before.
+//
 // Cells: rows of latitude <cell> m high, each split in longitude into
 // cells about <cell> m wide. Each cell's objects come from a hash of the
 // body, the layer and the cell. No objects near surface bases or around
@@ -69,6 +85,7 @@
 
 class Planet;
 class ZTreeMgr;
+class ProcTerrain;
 struct ElevationTile;
 
 namespace scatter {
@@ -175,7 +192,8 @@ namespace scatter {
 			uint64_t used = 0;
 		};
 		void Load ();
-		void LoadAssets (const std::string &file, bool included = false); // (included: listed by ASSETS)
+		/// (included: listed by ASSETS; only assets of sizes sizeMin to sizeMax); false: cannot read
+		bool LoadAssets (const std::string &file, bool included = false, double sizeMin = 0.0, double sizeMax = 1e30);
 		Vector tint = Vector (1, 1, 1); // (TINT: of the assets that follow)
 		void Make (int layer, int row, int col, CellData &cd);
 		double CoverFactor (const Layer &L, const Vector &rgb, double water, bool haveCover) const;
@@ -198,6 +216,12 @@ namespace scatter {
 		std::vector<Clearing> clear;
 		bool basesDone = false;
 		unsigned generation = 0;
+		const ProcTerrain *proc = nullptr; // (procedural world: the climate gate)
+		std::string defaultTemplate;       // (Default_<Class>.cfg, if used)
+		// cost statistics of a procedural world (logged after PROC_STAT_CELLS cells)
+		double statTotal = 0.0, statClimate = 0.0; // [s]
+		int statCells = 0, statEvals = 0;
+		bool statLogged = false;
 	};
 
 } // namespace scatter

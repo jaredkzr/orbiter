@@ -20,6 +20,41 @@ namespace {
 		return (word >> 22u) ^ word;
 	}
 
+	// the graphics client's value noise (OVP/VulkanClient/ProcSurface.cpp:
+	// Rand, Smooth, VNoise, Fbm), ported 1:1 for GroundAt; both must change together
+	inline double CRand (int32_t x, int32_t y, int32_t z, uint32_t seed)
+	{
+		return (Pcg ((uint32_t)x + Pcg ((uint32_t)y + Pcg ((uint32_t)z + Pcg (seed)))) >> 8) * (2.0 / 16777216.0) - 1.0;
+	}
+	inline double CSmooth (double t) { return t * t * (3.0 - 2.0 * t); }
+
+	double CVNoise (double x, double y, double z, uint32_t seed)
+	{
+		double fx = std::floor (x), fy = std::floor (y), fz = std::floor (z);
+		int32_t ix = (int32_t)fx, iy = (int32_t)fy, iz = (int32_t)fz;
+		double u = CSmooth (x - fx), v = CSmooth (y - fy), w = CSmooth (z - fz);
+		auto L = [](double a, double b, double t) { return a + (b - a) * t; };
+		return L (L (L (CRand (ix, iy, iz, seed), CRand (ix+1, iy, iz, seed), u), L (CRand (ix, iy+1, iz, seed), CRand (ix+1, iy+1, iz, seed), u), v),
+			L (L (CRand (ix, iy, iz+1, seed), CRand (ix+1, iy, iz+1, seed), u), L (CRand (ix, iy+1, iz+1, seed), CRand (ix+1, iy+1, iz+1, seed), u), v), w);
+	}
+
+	double CFbm (const double p[3], double f0, double fmax, uint32_t seed, double gain = 0.5)
+	{
+		double sum = 0.0, amp = 1.0, norm = 0.0;
+		double q[3] = { p[0], p[1], p[2] };
+		for (int k = 0; k < 20 && f0 <= fmax; k++, f0 *= 2.03, amp *= gain) {
+			double w = std::min (1.0, 2.0 * (fmax / f0 - 1.0));
+			sum += w * amp * CVNoise (q[0] * f0 + 17.0 * k, q[1] * f0 - 5.0 * k, q[2] * f0 + 3.0 * k, seed + 101u * k);
+			norm += amp;
+			const double c = 0.45, sn = 0.89, t = (1.0 - c) / 3.0, r = sn / std::sqrt (3.0);
+			double x = q[0], y = q[1], z = q[2];
+			q[0] = (c + t) * x + (t - r) * y + (t + r) * z;
+			q[1] = (t + r) * x + (c + t) * y + (t - r) * z;
+			q[2] = (t - r) * x + (t + r) * y + (c + t) * z;
+		}
+		return norm > 0.0 ? sum / norm * 1.6 : 0.0;
+	}
+
 	inline uint32_t Hash (int32_t x, int32_t y, int32_t z, uint32_t seed)
 	{
 		return Pcg ((uint32_t)x + Pcg ((uint32_t)y + Pcg ((uint32_t)z + Pcg (seed))));
@@ -287,4 +322,36 @@ void ProcTerrain::Tile (int lvl, int ilat, int ilng, int trunc, double res, int1
 			elev[r * S + c] = (int16_t)std::clamp (std::lround (h), -32767l, 32767l);
 		}
 	}
+}
+
+double ProcTerrain::TexelAngle () const
+{
+	int lvlTex = std::min (prm.maxLevel + 2, 16);
+	return PI_ / std::ldexp (1.0, lvlTex - 4) / 256.0;
+}
+
+ProcTerrain::Ground ProcTerrain::GroundAt (double x, double y, double z, bool tidalLock) const
+{
+	Ground g;
+	// (the client's finest colour tile level)
+	const int lvlTex = std::min (prm.maxLevel + 2, 16);
+	const double dlat = PI_ / std::ldexp (1.0, lvlTex - 4);
+	const double tx = dlat / 256.0, fmax = 256.0 / (2.0 * dlat);
+	const uint32_t seed = prm.seed * 2246822519u + 7u;
+	const double p[3] = { x, y, z };
+	g.n1 = CVNoise (p[0] * 3.1, p[1] * 3.1, p[2] * 3.1, seed) * 0.7 + CVNoise (p[0] * 7.3, p[1] * 7.3, p[2] * 7.3, seed + 1) * 0.3;
+	g.nf = CFbm (p, 24.0, fmax, seed + 7);
+	g.theta = tidalLock ? std::acos (std::clamp (x, -1.0, 1.0)) : std::fabs (std::asin (std::clamp (y, -1.0, 1.0)));
+	const double openW = prm.openWater * (PI_ / 180.0);
+	g.edge = g.theta - (openW + 0.06 * g.n1 + 0.015 * g.nf);
+	if (prm.cls == OCEAN) {
+		g.seabed = Height (x, y, z, LambdaOf (prm.maxLevel), true);
+		g.sea = 1.0 - Smoothstep (-1.0, 1.0, g.seabed);
+		g.coast = 1.0 - Smoothstep (0.0, 150.0, g.seabed);
+		g.snow = std::max (Smoothstep (0.05, 0.2, g.edge + 0.04 * g.nf),
+			Smoothstep (3500.0, 5500.0, g.seabed + 600.0 * g.nf - 1500.0 * std::cos (g.theta)));
+	} else if (prm.cls == ICE && openW > 0.0) {
+		g.sea = 1.0 - Smoothstep (-tx, tx, g.edge);
+	}
+	return g;
 }
