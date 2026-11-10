@@ -321,6 +321,44 @@ vec3 SiteColour (vec3 base, vec3 w)
 // Perturb the shading normal Nv (view space) of the surface at posView,
 // and its albedo (weathered: darker in the hollows, lighter on the crests;
 // fresh crater ejecta)
+// the pixel's point on the sphere (DetPoint) and its unit direction d, from its view-space position
+DetPoint DetPixelPoint (vec3 posView, out vec3 d)
+{
+	mat3 v2p = mat3 (atm.viewToPlanet);
+	vec3 e = v2p * posView - tile.refRel.xyz;
+	float R = tile.refF.w, Rh = tile.refRel.w;
+	vec3 d0 = normalize (vec3 (tile.refI.xyz) + tile.refF.xyz);
+	float u = 2.0 * dot (d0, e) / Rh + dot (e, e) / (Rh * Rh);
+	float su = sqrt (max (1.0 + u, 1e-6));
+	float fu = -u / (su * (1.0 + su));
+	vec3 dl = d0 * (R * fu) + e * ((R / Rh) * (1.0 + fu));
+	d = normalize (d0 + dl / R);
+	return DetPointAt (tile.refI.xyz, tile.refF.xyz, dl);
+}
+
+// Far mottling (pass 2, T1): the ground's brightness varies at 256, 64 and 16 m (the textures of many
+// bodies have texels of a kilometre and more: beyond the pebbles' and cracks' reach the ground was one
+// flat tone, a cliff at 15 m). On the precise lattice (no repeat); each octave fades to its mean as it
+// shrinks below a few pixels. amp: about the octaves' sum's spread. footprint: the pixel's size along
+// the ground [m] (stretched at grazing angles)
+float DetFarMottle (vec3 posView, float footprint, float amp)
+{
+	if (amp <= 0.0) return 1.0;
+	vec3 d;
+	DetPoint pt = DetPixelPoint (posView, d);
+	float m = 0.0;
+	const float W[3] = float[3] (0.5, 0.35, 0.25);
+	for (int i = 0; i < 3; i++) {
+		int e = 8 - 2 * i;
+		float v = 1.0 - smoothstep (0.12, 0.3, footprint / exp2 (float (e)));
+		if (v <= 0.0) break;
+		ivec3 cell, p; vec3 sg;
+		vec3 f = DetLattice (231 + i, pt, e, cell, p, sg);
+		m += W[i] * v * DetNoise (cell, f, 9300u + uint (i)).w;
+	}
+	return max (1.0 + amp * m, 0.5);
+}
+
 // Sea ice of the procedural ocean worlds (pass 2, I1; shading only, the ground stays flat). The pack is
 // drawn by the textures as a bluish white, which reads as pale sand under a red dwarf's light; what makes
 // it ice is its structure: floes (Voronoi cells of about 128 m on the detail's lattice, each with its own
@@ -331,16 +369,8 @@ void SeaIceShading (vec3 posView, inout vec3 Nv, inout vec3 base, float w)
 {
 	if (w <= 0.0) return;
 	mat3 v2p = mat3 (atm.viewToPlanet);
-	// the point on the sphere (as TerrainDetailShading)
-	vec3 e = v2p * posView - tile.refRel.xyz;
-	float R = tile.refF.w, Rh = tile.refRel.w;
-	vec3 d0 = normalize (vec3 (tile.refI.xyz) + tile.refF.xyz);
-	float u = 2.0 * dot (d0, e) / Rh + dot (e, e) / (Rh * Rh);
-	float su = sqrt (max (1.0 + u, 1e-6));
-	float fu = -u / (su * (1.0 + su));
-	vec3 dl = d0 * (R * fu) + e * ((R / Rh) * (1.0 + fu));
-	DetPoint pt = DetPointAt (tile.refI.xyz, tile.refF.xyz, dl);
-	vec3 d = normalize (d0 + dl / R);
+	vec3 d;
+	DetPoint pt = DetPixelPoint (posView, d);
 	float dist = length (posView);
 	float footprint = dist * 2.0 * atm.misc.z / max (frame.jitter.w, 1.0) / max (abs (dot (posView / dist, Nv)), 0.1);
 	if (footprint > 30.0) return;

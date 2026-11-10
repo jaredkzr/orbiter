@@ -791,6 +791,16 @@ void main()
 		cityLight = CityGround(vPosView, base, cityCover);
 		TrackShading(vPosView, N, base);
 		SurfaceDetail(vPosView, length(vPosView), N, base, max(playa, siteSmooth));
+#ifdef TERRAIN_DETAIL
+		// mottling at 16-256 m (T1): weaker on Earth (its textures vary at those scales) and with the
+		// site materials (their patches); not on the water
+		if (tile.detail.w > 0.5 && atm.detail.x > 0.5) {
+			float distT = length(vPosView);
+			float fpT = distT * 2.0 * atm.misc.z / max(frame.jitter.w, 1.0) / max(abs(dot(vPosView / distT, Ng)), 0.1);
+			float ampT = (atm.detail.x > 2.5 ? 0.25 : 0.9) * (atm.sitePrm.x > 0.5 ? 0.5 : 1.0) * (1.0 - 0.6 * playa);
+			base *= mix(1.0, DetFarMottle(vPosView, fpT, ampT), land);
+		}
+#endif
 	} else if (dot(vPosView, N) < 0.0) {
 		// cloud tops seen from above: relief from the cloud density (thicker
 		// clouds are taller; exaggerated for the texture's smoothness), shading their sides (surface

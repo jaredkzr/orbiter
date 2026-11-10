@@ -81,8 +81,9 @@ vec4 DetailGrain (vec3 p, int type, float footprint)
 // albedo mottling (factor)
 float DetailMottling (vec3 p, float footprint)
 {
-	float m = ValueNoise (p, 8.0, 125) * 0.4 + ValueNoise (p, 2.0, 500) * 0.6;
-	return mix (1.0, 0.75 + 0.5 * m, VIS (2.0));
+	// (each octave fades out by its own size: the 8 m one went with the 2 m one's, at about 1 m pixels)
+	float m8 = mix (0.5, ValueNoise (p, 8.0, 125), VIS (8.0)), m2 = mix (0.5, ValueNoise (p, 2.0, 500), VIS (2.0));
+	return 0.75 + 0.5 * (0.4 * m8 + 0.6 * m2);
 }
 
 // height of the detail at p [m] (planet frame, relative to the pattern
