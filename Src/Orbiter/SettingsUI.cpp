@@ -501,7 +501,7 @@ void SettingsUI::PageScenery ()
 	ToggleRow ("Distance fog", nullptr, &v.bFog);
 	ToggleRow ("Water reflections", "The Sun's glint on water.", &v.bWaterreflect);
 	ImGui::BeginDisabled (!v.bWaterreflect);
-	ToggleRow ("Ripples", "Waves on the water's surface.", &v.bSpecularRipple);
+	ToggleRow ("Ripples", "Waves on the water's surface, with whitecaps and surf.", &v.bSpecularRipple);
 	ImGui::EndDisabled ();
 	ToggleRow ("Night lights", "City lights on a planet's night side.", &v.bNightlights);
 	ImGui::BeginDisabled (!v.bNightlights);

@@ -90,7 +90,7 @@ CFG_VISUALPRM CfgVisualPrm_default = {
 	false,		// bCloudShadows (no cloud shadows)
 	true,		// bNightlights (enable city lights)
 	true,		// bWaterreflect (specular reflection from water surfaces)
-	false,		// bSpecularRipple (no ripple effects on water surfaces)
+	true,		// bSpecularRipple (waves on water surfaces: on, the Vulkan client's default look)
 	true,		// bHaze (enable horizon haze effects)
 	true,		// bFog (enable distance fog effects)
 	true,		// bSpecular (enable specular reflections from objects)

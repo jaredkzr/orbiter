@@ -1132,19 +1132,24 @@ void Atmosphere::Update ()
 	VECTOR3 origin = _V(std::floor (cam.x / 1000.0), std::floor (cam.y / 1000.0), std::floor (cam.z / 1000.0)) * 1000.0;
 	VECTOR3 rel = cam - origin;
 	u.water[0] = (float)rel.x, u.water[1] = (float)rel.y, u.water[2] = (float)rel.z;
-	u.water[3] = waves ? (float)fmod (oapiGetSimTime (), 3600.0) : -1.0f; // (the aurora's clock)
+	u.water[3] = (float)fmod (oapiGetSimTime (), 3600.0); // (the aurora's clock: also without waves, code review n2)
+	// Settings > Scenery > Ripples (the core's EnableSpecularRipples, on by default): the wind's waves,
+	// the sea state, the whitecaps and the surf; read every frame, so the toggle takes effect at once
+	// (the jets' disturbances, WaterFx, stay)
+	const bool *rip = (const bool*)scene->Client()->GetConfigParam (CFGPRM_SURFACERIPPLE);
+	const bool wv = waves && (!rip || *rip);
 	// the shore (F1): the wet sand the swash reaches, about half the surf band (wider with the sea);
 	// the shallows' tint where the sea's colour is made (procedural worlds); the masks' distance field
-	u.coastPrm[0] = waves && present ? (float)std::max (0.5 * wfoam.shoreW, 4.0) : 0.0f;
-	u.coastPrm[1] = waves && procSea ? 1.0f : 0.0f;
+	u.coastPrm[0] = wv && present ? (float)std::max (0.5 * wfoam.shoreW, 4.0) : 0.0f;
+	u.coastPrm[1] = wv && procSea ? 1.0f : 0.0f;
 	u.coastPrm[2] = vkshore::Enabled () ? vkshore::SD_MAX : 0.0f;
 	u.coastPrm[3] = 0.0f;
 	// (the waves show within 3 km of the surface: not computed for planets far
 	// off, which also frees the anchor for the next approach)
-	if (waves && camR - radius < 50e3) UpdateWaves (cam, camR, u.wavePrm, u.waves, u.waveEnv);
+	if (wv && camR - radius < 50e3) UpdateWaves (cam, camR, u.wavePrm, u.waves, u.waveEnv);
 	else waveAnchored = false;
-	if (waves) u.seaPrm[0] = sea.varUnres, u.seaPrm[1] = sea.varTotal, u.seaPrm[2] = sea.wind;
-	if (waves && foam) {
+	if (wv) u.seaPrm[0] = sea.varUnres, u.seaPrm[1] = sea.varTotal, u.seaPrm[2] = sea.wind;
+	if (wv && foam) {
 		u.seaPrm[3] = wfoam.cover;
 		u.foamPrm[0] = wfoam.thresh, u.foamPrm[1] = wfoam.sigma, u.foamPrm[2] = wfoam.mean, u.foamPrm[3] = laceMean;
 		double ph = fmod (oapiGetSimTime () / (double)wfoam.shoreT, 1.0);
