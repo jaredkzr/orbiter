@@ -112,6 +112,10 @@ public:
 	virtual bool ValidateStateUpdate (StateVectors *s) { return true; }
 
 	virtual void ResolveContacts (double h) {}
+	virtual void HydroStep (double h) {}
+	// Called after a step's propagation, before SurfaceImpact and the
+	// contacts: the water's forces (VesselWater.cpp), the step re-integrated
+	// in the water
 	virtual bool SurfaceImpact () { return false; }
 	// Called after a step's propagation, before the contacts: true if the step
 	// hit the ground and the body has handled it (the contacts are skipped)

@@ -297,6 +297,7 @@ void RigidBody::Update (bool force)
 					arot.Set (EulerInv_full (tau, s1->omega));
 				}
 			} while (!ValidateStateUpdate (s1));
+			HydroStep (td.SimDT);
 			if (!SurfaceImpact ()) ResolveContacts (td.SimDT);
 
 			if (updcount++ == 1000) { // flush increments

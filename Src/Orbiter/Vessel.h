@@ -30,6 +30,7 @@
 #include "Log.h"
 #include "Maneuver.h"
 #include "Structure.h"
+#include "HullWater.h"
 
 class Elements;
 class Debris;
@@ -1810,6 +1811,14 @@ private:
 	} dmg;
 	void UpdateDamageEffects ();
 	mutable std::map<const void*, std::pair<Vector,int>> element_part; // (ElementPart cache)
+	// the water (VesselWater.cpp)
+	const hydro::Model *WaterModel () const override;
+	Vector WaterCG () const override { return dmg.cg; }
+	int WaterParts () const override;
+	void WaterLoads (const hydro::Result &r, double h) override;
+	mutable std::unique_ptr<hydro::Model> water_model;
+	mutable unsigned water_model_gen = (unsigned)-1;  // (hull_gen it was made for)
+	mutable DWORD water_model_dmg = (DWORD)-1;        // (DamageVersion it was made for)
 	bool loads_on = false;                       // forces on the parts recorded in this step
 	std::vector<Vector> part_F, part_Fc;         // forces on the parts in the step (vessel frame): the vessel's own, contacts
 	Vector part_Frec;                            // (the vessel's own recorded on their parts)

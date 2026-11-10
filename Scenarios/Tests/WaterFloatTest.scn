@@ -1,0 +1,48 @@
+BEGIN_HYPERDESC
+<h1>Floating</h1>
+A delta-glider (gear down, some fuel, and full tanks) and a ShuttlePB are
+let go just above the open Atlantic on a calm sea (no wind: no swell).
+They must come to float upright at rest, at the draft their weight sets,
+neither sinking to the seabed nor bobbing on.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Tests/WaterFloatTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship DG
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET DG
+  MODE Extern
+  POS 4 0 -20
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+DG:DeltaGlider
+  STATUS Landed Earth
+  POS -70.0000 28.0000
+  HEADING 90.00
+  GEAR 1 1.0000
+  PRPLEVEL 0:0.200 1:1.000
+END
+DGFULL:DeltaGlider
+  STATUS Landed Earth
+  POS -70.0030 28.0000
+  HEADING 90.00
+  GEAR 0 0.0000
+  PRPLEVEL 0:1.000 1:1.000
+END
+PB:ShuttlePB
+  STATUS Landed Earth
+  POS -70.0015 28.0020
+  HEADING 0.00
+  PRPLEVEL 0:0.500
+END
+END_SHIPS

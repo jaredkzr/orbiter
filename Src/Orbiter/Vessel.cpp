@@ -4573,7 +4573,7 @@ void Vessel::CollectGroundContacts (const StateVectors &s, const StateVectors &s
 		double lng, lat, rad, elev = 0.0;
 		proxybody->LocalToEquatorial (pl, lng, lat, rad);
 		Vector nh (0,1,0);                         // terrain normal (local horizon frame)
-		if (emgr) elev = emgr->Elevation (lat, lng, reslvl, &etile, &nh);
+		if (emgr) elev = ((const Planet*)proxybody)->SolidElevation (lat, lng, reslvl, &etile, &nh); // (under water: the seabed)
 		double slng = sin(lng), clng = cos(lng), slat = sin(lat), clat = cos(lat);
 		Matrix L2H (-slng,0,clng, clat*clng,slat,clat*slng, -slat*clng,clat,-slat*slng);
 		Vector nl (tmul (L2H, nh));                // terrain normal (planet frame)
@@ -4627,7 +4627,7 @@ void Vessel::CollectGroundContacts (const StateVectors &s, const StateVectors &s
 				double lng, lat, rad, elev = 0.0;
 				proxybody->LocalToEquatorial (pl, lng, lat, rad);
 				Vector nh (0,1,0);
-				if (emgr) elev = emgr->Elevation (lat, lng, reslvl, &etile, &nh);
+				if (emgr) elev = ((const Planet*)proxybody)->SolidElevation (lat, lng, reslvl, &etile, &nh); // (under water: the seabed)
 				double slng = sin(lng), clng = cos(lng), slat = sin(lat), clat = cos(lat);
 				Matrix L2H (-slng,0,clng, clat*clng,slat,clat*slng, -slat*clng,clat,-slat*slng);
 				Vector nl (tmul (L2H, nh));

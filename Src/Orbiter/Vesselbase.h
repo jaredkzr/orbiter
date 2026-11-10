@@ -9,6 +9,8 @@
 #include "ContactSolver.h"
 #include "CollisionHull.h"
 
+namespace hydro { struct Model; struct Result; }
+
 typedef enum {
 	FLIGHTSTATUS_FREEFLIGHT,
 	FLIGHTSTATUS_LANDED,
@@ -239,6 +241,33 @@ protected:
 	// (< 0: no hulls)
 	// state from a flight recording (not changed by contacts)
 	// Hit by another vessel while landed: become dynamic in the next step
+
+	// The water (Sea.h, Hydro.h; VesselWater.cpp)
+	void HydroStep (double h) override;
+	struct WaterState {
+		bool near = false;        ///< within reach of the water in the last step
+		bool wet = false;         ///< touching it
+		double submerged = 0.0;   ///< [m^3] at the end of the step
+		double volume = 0.0;      ///< [m^3] the model's (its displacement fully under)
+		double wetted = 0.0;      ///< [m^2]
+		double waterline = 0.0;   ///< [m^2]
+		double entrySpeed = 0.0;  ///< [m/s] of the last water entry (the fastest panel speed)
+		double slamMax = 0.0;     ///< [Pa] of the last entry
+		double accMax = 0.0;      ///< [m/s^2] the water's highest acceleration in the last entry
+		double tWet = -1e10;      ///< when it last became wet [s simulation time]
+		int substeps = 0;
+		Vector F;                 ///< the water's mean force in the last step (global frame)
+	};
+	const WaterState &Water () const { return water; }
+	/// the water's model of the body (built on demand; null: none)
+	virtual const hydro::Model *WaterModel () const { return nullptr; }
+	/// centre of gravity (body frame)
+	virtual Vector WaterCG () const { return Vector (0, 0, 0); }
+	/// structural parts the water's forces are given to (0: none)
+	virtual int WaterParts () const { return 0; }
+	/// the water's forces of a step (r.partF per part), e.g. for structural loads
+	virtual void WaterLoads (const hydro::Result &r, double h) {}
+	WaterState water;
 
 	bool contact_deferred = false; // ground contacts are resolved with the contacts with other vessels in this step
 	const VesselBase *contact_vessel = nullptr; // the vessel it last touched (pressed against)

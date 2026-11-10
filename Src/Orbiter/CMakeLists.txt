@@ -113,6 +113,7 @@ set(common_src
 	Replay.cpp
 	VesselManeuver.cpp
 	Vessel.cpp
+	VesselWater.cpp
 	Vesselbase.cpp
 	Vesselstatus.cpp
 # Surface base classes
