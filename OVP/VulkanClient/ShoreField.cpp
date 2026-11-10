@@ -5,6 +5,7 @@
 #include "LegacyTex.h"
 #include "OrbiterAPI.h"
 #include <atomic>
+#include <chrono>
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -134,6 +135,7 @@ bool Enabled ()
 bool EncodeShoreField (std::vector<uint8_t> &dds)
 {
 	if (!Enabled ()) return false;
+	auto t0 = std::chrono::steady_clock::now ();
 	if (dds.size() < 128 || memcmp (dds.data(), "DDS ", 4)) return false;
 	const uint8_t *hd = dds.data();
 	uint32_t h = U32 (hd + 12), w = U32 (hd + 16), pf = U32 (hd + 80), fourCC = U32 (hd + 84), bits = U32 (hd + 88);
@@ -148,7 +150,6 @@ bool EncodeShoreField (std::vector<uint8_t> &dds)
 		if (bits != 32 || !(pf & 1) || U32 (hd + 104) != 0xFF000000u || dds.size() < 128 + (size_t)w * h * 4) return false;
 		rgba.assign (dds.begin() + 128, dds.begin() + 128 + (size_t)w * h * 4);
 	}
-	(void)fourCC;
 	const size_t N = (size_t)w * h;
 	std::vector<uint8_t> land (N), water (N);
 	bool anyLand = false, anyWater = false;
@@ -157,9 +158,16 @@ bool EncodeShoreField (std::vector<uint8_t> &dds)
 		water[i] = !land[i];
 		anyLand |= land[i] != 0, anyWater |= water[i] != 0;
 	}
+	// (no coast in the tile: its alpha, all 1 or all 0, already reads as far from the edge; left as it is,
+	// in its own format: most tiles, and the loader thread's time)
+	if (!anyLand || !anyWater) {
+		if (!compressed) for (size_t i = 0; i < N; i++) dds[128 + 4 * i + 3] = land[i] ? 255 : 0; // (a share of water short of the edge would read as near it)
+		if (!compressed || fourCC == 0x31545844) return true; // (DXT1: its alpha is 0 or 1 already)
+		for (size_t i = 0; i < N; i++) rgba[4 * i + 3] = land[i] ? 255 : 0;
+	}
 	std::vector<uint8_t> a8 (N);
 	if (!anyLand || !anyWater) {
-		std::fill (a8.begin(), a8.end(), anyLand ? 255 : 0);
+		for (size_t i = 0; i < N; i++) a8[i] = rgba[4 * i + 3];
 	} else {
 		std::vector<float> dLand, dWater;
 		Edt (land, (int)w, (int)h, dLand);   // (water texels: to the nearest land)
@@ -177,7 +185,8 @@ bool EncodeShoreField (std::vector<uint8_t> &dds)
 	{
 		static std::atomic<int> logged { 0 };
 		if (getenv ("ORBITER_VK_SHORE_LOG") && logged++ < 20)
-			oapiWriteLogV ("VulkanClient: shore field: %ux%u %s, land %d water %d", w, h, compressed ? "DXT -> BC3" : "RGBA8", anyLand ? 1 : 0, anyWater ? 1 : 0);
+			oapiWriteLogV ("VulkanClient: shore field: %ux%u %s, %.1f ms (the field; before the encoding)", w, h, compressed ? "DXT -> BC3" : "RGBA8",
+				std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ());
 	}
 	if (!compressed) {
 		for (size_t i = 0; i < N; i++) dds[128 + 4 * i + 3] = a8[i];
