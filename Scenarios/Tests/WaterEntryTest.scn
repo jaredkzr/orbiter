@@ -1,0 +1,41 @@
+BEGIN_HYPERDESC
+<h1>Water entry</h1>
+On the open Atlantic in the default sea (7 m/s wind, a metre of swell): a
+delta-glider ditches (70 m/s, sinking 2.4 m/s, nose up 8 deg, gear up) and
+a ShuttlePB drops flat into the water at 9 m/s. The water must stop them
+within plausible distances and loads, and leave them afloat, upright.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Tests/WaterEntryTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship DITCH
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET DITCH
+  MODE Extern
+  POS 4 0 -20
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+DITCH:DeltaGlider
+  STATUS Landed Earth
+  POS -70.0000 28.0000
+  HEADING 90.00
+  GEAR 0 0.0000
+  PRPLEVEL 0:0.200 1:1.000
+END
+DROP:ShuttlePB
+  STATUS Landed Earth
+  POS -70.0000 28.0100
+  HEADING 0.00
+  PRPLEVEL 0:0.200
+END
+END_SHIPS

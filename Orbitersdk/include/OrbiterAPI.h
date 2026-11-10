@@ -2182,6 +2182,26 @@ typedef struct {
 	DWORD flags;       ///< state flags (PART_LOST, PART_HIDDEN)
 } PARTINFO;
 
+/**
+ * \brief A vessel in the water (VESSEL::GetWaterState; core: Src/Orbiter/Hydro.h)
+ */
+struct WATERSTATE {
+	bool nearWater = false;   ///< within reach of open water in the last step
+	bool wet = false;         ///< touching it
+	double submerged = 0.0;   ///< volume under water [m^3]
+	double volume = 0.0;      ///< displacement fully under [m^3]
+	double wetted = 0.0;      ///< wetted area [m^2]
+	double waterline = 0.0;   ///< waterplane area [m^2]
+	double entrySpeed = 0.0;  ///< fastest panel speed into the water in the last entry [m/s]
+	double slamMax = 0.0;     ///< highest slam pressure of the last entry [Pa]
+	double accMax = 0.0;      ///< highest acceleration by the water in the last entry [m/s^2]
+	double tWet = -1e10;      ///< simulation time it last became wet [s]
+	VECTOR3 force = { 0, 0, 0 }; ///< the water's mean force in the last step (global frame) [N]
+	int substeps = 0;         ///< sub-steps of the last step in the water
+	bool afloat = false;      ///< resting afloat (held on the swell)
+	bool flooded = false;     ///< flooded (a wreck: sinks by its structure's density)
+};
+
 #define PART_LOST   0x0001 ///< the part has broken off the vessel
 #define PART_HIDDEN 0x0002 ///< the part is not shown (broken off; in the instant replay: by the time shown)
 

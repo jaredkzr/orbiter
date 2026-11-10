@@ -257,6 +257,7 @@ void Interpreter::LoadVesselAPI ()
 		{"get_collisionhullcount", v_get_collisionhullcount},
 		{"get_partcount", v_get_partcount},
 		{"get_partinfo", v_get_partinfo},
+		{"get_waterstate", v_get_waterstate},
 		{"get_partat", v_get_partat},
 		{"break_part", v_break_part},
 		{"add_maneuvernode", v_add_maneuvernode},
@@ -1451,6 +1452,40 @@ damage model on).
 @treturn table description (nil if idx is out of range)
 @see vessel:get_partcount
 */
+/***
+The vessel in the water.
+
+Fields: near, wet, afloat, flooded (booleans); submerged, volume [m^3],
+wetted, waterline [m^2], entryspeed [m/s], slammax [Pa], accmax [m/s^2],
+twet [s] (of the last entry), force (global frame [N]), substeps.
+
+@function get_waterstate
+@treturn table the water state
+*/
+int Interpreter::v_get_waterstate (lua_State *L)
+{
+	static const char *funcname = "get_waterstate";
+	VESSEL *v = lua_tovessel_safe(L, 1, funcname);
+	WATERSTATE w;
+	v->GetWaterState (&w);
+	lua_newtable(L);
+	lua_pushboolean(L, w.nearWater);  lua_setfield(L, -2, "near");
+	lua_pushboolean(L, w.wet);        lua_setfield(L, -2, "wet");
+	lua_pushboolean(L, w.afloat);     lua_setfield(L, -2, "afloat");
+	lua_pushboolean(L, w.flooded);    lua_setfield(L, -2, "flooded");
+	lua_pushnumber(L, w.submerged);   lua_setfield(L, -2, "submerged");
+	lua_pushnumber(L, w.volume);      lua_setfield(L, -2, "volume");
+	lua_pushnumber(L, w.wetted);      lua_setfield(L, -2, "wetted");
+	lua_pushnumber(L, w.waterline);   lua_setfield(L, -2, "waterline");
+	lua_pushnumber(L, w.entrySpeed);  lua_setfield(L, -2, "entryspeed");
+	lua_pushnumber(L, w.slamMax);     lua_setfield(L, -2, "slammax");
+	lua_pushnumber(L, w.accMax);      lua_setfield(L, -2, "accmax");
+	lua_pushnumber(L, w.tWet);        lua_setfield(L, -2, "twet");
+	lua_pushvector(L, w.force);       lua_setfield(L, -2, "force");
+	lua_pushinteger(L, w.substeps);   lua_setfield(L, -2, "substeps");
+	return 1;
+}
+
 int Interpreter::v_get_partinfo (lua_State *L)
 {
 	static const char *funcname = "get_partinfo";

@@ -4253,6 +4253,8 @@ void Vessel::UpdateThrustForces ()
 		}
 		if (thruster->level = max (0.0, min (1.0, thruster->level_permanent + thruster->level_override))) {
 			if ((ts = thruster->tank) && ts->mass) {     // fuel available?
+				// (an engine more than a metre under water: drowned, no thrust)
+				if (water.near && WaterDepth (MakeVector (thruster->ref)) > 1.0) { thruster->level_override = 0.0; continue; }
 				th = thruster->maxth0 * thruster->level; // vacuum thrust
 				if (burnfuel) {                          // consume fuel
 					ts->mass -= th/(ts->efficiency * thruster->isp0) * td.SimDT;
@@ -4392,6 +4394,7 @@ void Vessel::UpdateAerodynamicForces ()
 	// airfoil lift+drag components
 	for (i = 0; i < nairfoil; i++) {
 		AirfoilSpec *af = airfoil[i];
+		double qa = sp.dynp * AirShare (af->ref); // (none under water)
 		if (af->align == LIFT_VERTICAL) {
 			if (af->version == 0)
 				af->cf (aoa, sp.atmM, Re0*af->c, &CL, &Cm, &CD);
@@ -4399,8 +4402,8 @@ void Vessel::UpdateAerodynamicForces ()
 				((AirfoilCoeffFuncEx)af->cf)((VESSEL*)modIntf.v, aoa, sp.atmM, Re0*af->c, af->context, &CL, &Cm, &CD);
 			if (af->S) S = af->S * dmg.liftV;
 			else       S = fabs(ddir.z)*cs.z + fabs(ddir.y)*cs.y; // use projected vessel CS as reference area
-			AddForce (ldir*(lift=(CL*sp.dynp*S)) + ddir*(drag=(CD*sp.dynp*S)), af->ref + dmg.refV);
-			if (Cm) Amom_add.x += Cm*sp.dynp*af->S*dmg.liftV*af->c;
+			AddForce (ldir*(lift=(CL*qa*S)) + ddir*(drag=(CD*qa*S)), af->ref + dmg.refV);
+			if (Cm) Amom_add.x += Cm*qa*af->S*dmg.liftV*af->c;
 			Lift += lift, Drag += drag;
 		} else if (af->align == LIFT_HORIZONTAL) { // horizontal lift component
 			if (af->version == 0)
@@ -4409,8 +4412,8 @@ void Vessel::UpdateAerodynamicForces ()
 				((AirfoilCoeffFuncEx)af->cf)((VESSEL*)modIntf.v, beta, sp.atmM, Re0*af->c, af->context, &CL, &Cm, &CD);
 			if (af->S) S = af->S * dmg.liftH;
 			else       S = fabs(ddir.z)*cs.z + fabs(ddir.x)*cs.z; // use projected vessel CS as reference area
-			AddForce (sdir*(side = (CL*sp.dynp*S)) + ddir*(drag=(CD*sp.dynp*S)), af->ref + dmg.refH);
-			if (Cm) Amom_add.y += Cm*sp.dynp*af->S*dmg.liftH*af->c;
+			AddForce (sdir*(side = (CL*qa*S)) + ddir*(drag=(CD*qa*S)), af->ref + dmg.refH);
+			if (Cm) Amom_add.y += Cm*qa*af->S*dmg.liftH*af->c;
 			Drag += drag;
 			SideForce += side;
 		} else if (af->align == FORCE_AND_MOMENT) {
@@ -4418,16 +4421,16 @@ void Vessel::UpdateAerodynamicForces ()
 			if (af->S) S = af->S * dmg.liftV;
 			else       S = fabs(ddir.z) * cs.z + fabs(ddir.x) * cs.z; // use projected vessel CS as reference area
 
-			Vector AeroForce((CY * S) * sp.dynp, (CN * S) * sp.dynp, -(CA * S) * sp.dynp);
+			Vector AeroForce((CY * S) * qa, (CN * S) * qa, -(CA * S) * qa);
 
 			AddForce(AeroForce, af->ref + dmg.refV);
 			Lift = dotp(AeroForce, ldir);
 			Drag = dotp(AeroForce, ddir);
 			SideForce = dotp(AeroForce, sdir);
 			
-			Amom_add.x += Cm * sp.dynp * af->S * dmg.liftV * af->c;
-			Amom_add.y -= Cn * sp.dynp * af->S * dmg.liftV * af->c;
-			Amom_add.z -= Cl * sp.dynp * af->S * dmg.liftV * af->c;
+			Amom_add.x += Cm * qa * af->S * dmg.liftV * af->c;
+			Amom_add.y -= Cn * qa * af->S * dmg.liftV * af->c;
+			Amom_add.z -= Cl * qa * af->S * dmg.liftV * af->c;
 
 		}
 	}
@@ -4437,7 +4440,7 @@ void Vessel::UpdateAerodynamicForces ()
 		double lvl = ctrlsurf_level[ctrlsurf[i]->ctrl].curr;
 		if (lvl && !part_lost.empty() && ElementLost (ctrlsurf[i], ctrlsurf[i]->ref)) lvl = 0.0; // (broken off)
 		if (lvl) {
-			double fac = ctrlsurf[i]->area * sp.dynp;
+			double fac = ctrlsurf[i]->area * sp.dynp * AirShare (ctrlsurf[i]->ref);
 			double cdrag = fabs (lvl) * fac;
 			double clift = -lvl * fac * ctrlsurf[i]->dCl;
 			// for now, we assume a fixed set of control axes. Should be freely definable
@@ -4467,7 +4470,7 @@ void Vessel::UpdateAerodynamicForces ()
 		if (lvl && !part_lost.empty() && ElementLost (dragel[i], dragel[i]->ref)) lvl = 0.0; // (broken off)
 		if (lvl) {
 			CD = lvl*dragel[i]->factor;
-			drag = CD*sp.dynp;
+			drag = CD*sp.dynp*AirShare (dragel[i]->ref);
 			AddForce (ddir*drag, dragel[i]->ref);
 			if (loads_on) RecordForce (ddir*drag, dragel[i], dragel[i]->ref);
 			Drag += drag;
@@ -8592,6 +8595,21 @@ DWORD VESSEL::GetCollisionHullCount () const
 DWORD VESSEL::GetPartCount () const
 {
 	return (DWORD)vessel->Structure().Parts().size();
+}
+
+bool VESSEL::GetWaterState (WATERSTATE *out, size_t size) const
+{
+	if (!out) return false;
+	WATERSTATE w;
+	const VesselBase::WaterState &s = vessel->Water();
+	w.nearWater = s.near, w.wet = s.wet;
+	w.submerged = s.submerged, w.volume = s.volume, w.wetted = s.wetted, w.waterline = s.waterline;
+	w.entrySpeed = s.entrySpeed, w.slamMax = s.slamMax, w.accMax = s.accMax, w.tWet = s.tWet;
+	w.force = MakeVECTOR3 (s.F);
+	w.substeps = s.substeps;
+	w.afloat = s.afloat, w.flooded = s.flooded;
+	memcpy ((void*)out, &w, std::min (size, sizeof (w)));
+	return true;
 }
 
 bool VESSEL::GetPartInfo (DWORD idx, PARTINFO *info) const

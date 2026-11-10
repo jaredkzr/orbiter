@@ -19,6 +19,7 @@
 #include "Astro.h"
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 
 extern TimeData td;
 
@@ -138,9 +139,17 @@ void VesselBase::HydroStep (double h)
 	}
 	Vector alphaExt ((s1->omega - S0.omega) / h);
 	hydro::Result r;
+	static const bool prof = getenv ("ORBITER_WATER_PROFILE") != nullptr;
+	auto tp0 = std::chrono::steady_clock::now();
 	hydro::Step (*m, srf, b, aExt, alphaExt, h, WaterParts(), r);
+	if (prof) {
+		static double tsum = 0.0; static int nsum = 0;
+		tsum += std::chrono::duration<double> (std::chrono::steady_clock::now() - tp0).count(); nsum++;
+		if (nsum == 500) { LOGOUT ("Water profile: %.3f ms per step (%s, last %d sub-steps)", tsum / nsum * 1e3, Name(), r.substeps); tsum = 0.0; nsum = 0; }
+	}
 
 	bool wet = r.wetted > 0.0 || r.submerged > 0.0 || r.F.length2() > 0.0;
+	if (!wet) water.accFilt = 0.0;
 	if (wet && !water.wet) water.tWet = td.SimT1, water.entrySpeed = 0.0, water.slamMax = 0.0, water.accMax = 0.0;
 	water.wet = wet;
 	water.submerged = r.submerged;
@@ -149,7 +158,14 @@ void VesselBase::HydroStep (double h)
 	water.substeps = r.substeps;
 	water.entrySpeed = std::max (water.entrySpeed, r.entrySpeed);
 	water.slamMax = std::max (water.slamMax, r.slamMax);
-	water.accMax = std::max (water.accMax, r.accMax);
+	// (the acceleration felt: the water's mean over the step, filtered over
+	// ACC_TAU; the sub-steps' peaks are the solver's, not what is felt)
+	{
+		const double ACC_TAU = 0.02;
+		double a = r.F.length() / std::max (mass, 1e-3);
+		water.accFilt += (a - water.accFilt) * std::min (1.0, h / ACC_TAU);
+		water.accMax = std::max (water.accMax, water.accFilt);
+	}
 	if (!wet && r.F.length2() == 0.0) { water.F.Set (0, 0, 0); return; } // (the step as it was)
 
 	// the new state, back to the global frame
@@ -168,6 +184,20 @@ void VesselBase::HydroStep (double h)
 	s1->omega = b.w;
 	water.F = mul (P1.R, tmul (L, r.F));
 	WaterLoads (r, h);
+}
+
+double VesselBase::WaterDepth (const Vector &p) const
+{
+	if (!water.near || !proxyplanet) return -1e10;
+	sea::Sea *sea = proxyplanet->GetSea();
+	if (!sea) return -1e10;
+	const StateVectors &P = *proxyplanet->s0;
+	Vector pp (tmul (P.R, s0->pos + mul (s0->R, p) - P.pos));
+	double r = pp.length();
+	double lng = atan2 (pp.z, pp.x), lat = asin (std::clamp (pp.y / r, -1.0, 1.0));
+	sea::Point sp = sea->At (lat, lng, false);
+	if (!sp.water) return -1e10;
+	return sp.datum + sea->GetSwell().Height (pp / r, sea::Sea::SwellTime (td.MJD0)) - (r - proxyplanet->Size());
 }
 
 // =======================================================================

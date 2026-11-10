@@ -8,6 +8,7 @@
 #include "elevmgr.h"
 #include "ContactSolver.h"
 #include "CollisionHull.h"
+#include <algorithm>
 
 namespace hydro { struct Model; struct Result; }
 
@@ -253,10 +254,13 @@ protected:
 		double waterline = 0.0;   ///< [m^2]
 		double entrySpeed = 0.0;  ///< [m/s] of the last water entry (the fastest panel speed)
 		double slamMax = 0.0;     ///< [Pa] of the last entry
-		double accMax = 0.0;      ///< [m/s^2] the water's highest acceleration in the last entry
+		double accMax = 0.0;      ///< [m/s^2] the water's highest acceleration in the last entry (filtered over 0.02 s)
+		double accFilt = 0.0;
 		double tWet = -1e10;      ///< when it last became wet [s simulation time]
 		int substeps = 0;
 		Vector F;                 ///< the water's mean force in the last step (global frame)
+		bool afloat = false;      ///< resting afloat, held on the swell (W7)
+		bool flooded = false;     ///< a wreck: displaces only its structure (W6)
 	};
 	const WaterState &Water () const { return water; }
 	/// the water's model of the body (built on demand; null: none)
@@ -268,6 +272,11 @@ protected:
 	/// the water's forces of a step (r.partF per part), e.g. for structural loads
 	virtual void WaterLoads (const hydro::Result &r, double h) {}
 	WaterState water;
+	/// depth [m] of a point (body frame) under the sea's surface at the step's
+	/// start (< 0: above it; -1e10 away from the water)
+	double WaterDepth (const Vector &p) const;
+	/// share of an aerodynamic element at p (body frame) in the air: 0 under water
+	double AirShare (const Vector &p) const { return water.near ? std::clamp (0.5 - WaterDepth (p), 0.0, 1.0) : 1.0; }
 
 	bool contact_deferred = false; // ground contacts are resolved with the contacts with other vessels in this step
 	const VesselBase *contact_vessel = nullptr; // the vessel it last touched (pressed against)

@@ -499,6 +499,14 @@ public:
 	bool GetPartInfo (DWORD idx, PARTINFO *info) const;
 
 	/**
+	 * \brief The vessel in the water: buoyancy, wetting, the last water entry.
+	 * \param ws receives the state (see \ref WATERSTATE)
+	 * \param size sizeof (WATERSTATE) of the caller (no more is written)
+	 * \return false if ws is NULL
+	 */
+	bool GetWaterState (WATERSTATE *ws, size_t size = sizeof (WATERSTATE)) const;
+
+	/**
 	 * \brief Returns the structural part at (or nearest to) a point.
 	 * \param pos point in the vessel frame [<b>m</b>]
 	 * \return part index (-1 if the vessel has no parts)
