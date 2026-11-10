@@ -22,26 +22,55 @@ void main ()
 		return;
 	}
 	// shadows (sun, local lights): close neighbours only, to keep their
-	// edges; ambient occlusion and planet light: wider
-	vec4 sa = vec4 (0.0), sl = vec4 (0.0);
-	float ws1 = 0.0, ws2 = 0.0;
-	for (int pass = 0; pass < 2; pass++)
-		for (int y = -2; y <= 2; y++)
-			for (int x = -2; x <= 2; x++) {
-				ivec2 q = clamp (p + ivec2 (x, y) * (pass + 1), ivec2 (0), sz - 1);
-				vec4 dq = texelFetch (prepass, q, 0);
-				float w = exp (-0.3 * float (x * x + y * y));
-				w *= step (abs (dq.w - d.w), 0.03 * d.w + 0.02) * pow (max (dot (dq.xyz, d.xyz), 0.0), 16.0);
-				vec4 va = imageLoad (accA, q);
-				if (pass == 0) {
-					sa.x += va.x * w;
-					sl += imageLoad (accL, q) * w;
-					ws1 += w;
-				} else {
-					sa.yz += va.yz * w;
-					ws2 += w;
+	// edges; ambient occlusion and planet light: wider. A soft sun (C3, an
+	// overcast: its source is wider than 0.05 rad; the Sun and the nearby
+	// stars are under 0.02) takes the wide pass too, for smoother penumbrae.
+	// The hard-sun branch is the original loop (uniform branch, no extra
+	// accumulation on the common path)
+	if (pc.sunRadius > 0.05) {
+		vec4 sa = vec4 (0.0), sl = vec4 (0.0);
+		float ws1 = 0.0, ws2 = 0.0;
+		float sw = 0.0;
+		for (int pass = 0; pass < 2; pass++)
+			for (int y = -2; y <= 2; y++)
+				for (int x = -2; x <= 2; x++) {
+					ivec2 q = clamp (p + ivec2 (x, y) * (pass + 1), ivec2 (0), sz - 1);
+					vec4 dq = texelFetch (prepass, q, 0);
+					float w = exp (-0.3 * float (x * x + y * y));
+					w *= step (abs (dq.w - d.w), 0.03 * d.w + 0.02) * pow (max (dot (dq.xyz, d.xyz), 0.0), 16.0);
+					vec4 va = imageLoad (accA, q);
+					if (pass == 0) {
+						sl += imageLoad (accL, q) * w;
+						ws1 += w;
+					} else {
+						sa.yz += va.yz * w;
+						ws2 += w;
+						sw += va.x * w;
+					}
 				}
-			}
-	imageStore (outA, p, vec4 (sa.x / ws1, sa.yz / ws2, 1.0));
-	imageStore (outL, p, sl / ws1);
+		imageStore (outA, p, vec4 (sw / ws2, sa.yz / ws2, 1.0));
+		imageStore (outL, p, sl / ws1);
+	} else {
+		vec4 sa = vec4 (0.0), sl = vec4 (0.0);
+		float ws1 = 0.0, ws2 = 0.0;
+		for (int pass = 0; pass < 2; pass++)
+			for (int y = -2; y <= 2; y++)
+				for (int x = -2; x <= 2; x++) {
+					ivec2 q = clamp (p + ivec2 (x, y) * (pass + 1), ivec2 (0), sz - 1);
+					vec4 dq = texelFetch (prepass, q, 0);
+					float w = exp (-0.3 * float (x * x + y * y));
+					w *= step (abs (dq.w - d.w), 0.03 * d.w + 0.02) * pow (max (dot (dq.xyz, d.xyz), 0.0), 16.0);
+					vec4 va = imageLoad (accA, q);
+					if (pass == 0) {
+						sa.x += va.x * w;
+						sl += imageLoad (accL, q) * w;
+						ws1 += w;
+					} else {
+						sa.yz += va.yz * w;
+						ws2 += w;
+					}
+				}
+		imageStore (outA, p, vec4 (sa.x / ws1, sa.yz / ws2, 1.0));
+		imageStore (outL, p, sl / ws1);
+	}
 }

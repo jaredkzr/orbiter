@@ -42,6 +42,7 @@ layout(set = FRAME_SET, binding = 0) uniform Frame {
 	vec4 relSunDir;    // the sunlight on that vessel, in its frame: from this direction (view space, aberrated)
 	vec4 relSunColor;  //   with this colour (Doppler shifted)
 	vec4 lens;         // a black hole's lens: its centre (view space), w: its mass GM/c^2 [m] (0: none)
+	vec4 overcast;     // C3, under an overcast at the camera: rgb: the overcast skylight included in ambient (its horizontal irradiance, Esky); w: tan of the light's apparent angular radius at the camera (> 0: on; 0: none)
 	LocalLight lights[MAX_LIGHTS];
 } frame;
 

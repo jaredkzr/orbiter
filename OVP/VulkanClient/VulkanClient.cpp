@@ -456,7 +456,14 @@ bool VulkanClient::clbkDisplayFrame ()
 		}
 		if (testInput) {
 			std::string shot = testInput->TakeScreenshotRequest ();
-			if (!shot.empty()) CaptureBackbuffer (shot);
+			if (!shot.empty()) {
+				CaptureBackbuffer (shot);
+				if (postfx) {
+					float le, ll;
+					postfx->ExposureState (le, ll);
+					oapiWriteLogV ("VulkanClient: exposure %.3f (metered luminance %.4f)", std::exp2 (le), std::exp2 (ll));
+				}
+			}
 		}
 		if (!autoScreenshot.empty() && ++frameCount == autoScreenshotFrame) {
 			vkc::LogHeaps ();

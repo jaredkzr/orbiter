@@ -25,6 +25,8 @@ public:
 	void Shutdown ();
 	VkImageView View () const { return depth.view; }
 	VkSampler Sampler () const { return sampler; }
+	/// the depths themselves, for the soft shadows' blocker search in shadow.glsl
+	VkSampler DepthSampler () const { return depthSampler; }
 
 	/// Start the shadow pass for the region of the given radius around a
 	/// global position, lit from the direction sunDir (unit vector to the sun)
@@ -64,7 +66,7 @@ public:
 private:
 	vkc::Context *ctx = nullptr;
 	vkc::Image depth;
-	VkSampler sampler = VK_NULL_HANDLE;
+	VkSampler sampler = VK_NULL_HANDLE, depthSampler = VK_NULL_HANDLE;
 	VkPipelineLayout layout = VK_NULL_HANDLE;
 	VkPipeline pipeline = VK_NULL_HANDLE;
 	VkPipelineLayout alphaLayout = VK_NULL_HANDLE; // casters with alpha-tested textures (foliage)

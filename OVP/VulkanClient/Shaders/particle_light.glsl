@@ -22,7 +22,7 @@ void main ()
 	vec3 sun = frame.sunColor.rgb;
 	if (atm.misc.x > 0.5) {
 		vec3 pp = mat3 (atm.viewToPlanet) * vp + atm.camPos.xyz;
-		sun *= SunTransmittance (pp) * CloudShadow (pp);
+		sun *= SurfaceSunlight (pp);
 	} else if (pc.bodyPos.w > 0.0) {
 		// airless: the planet's shadow (a cylinder behind it)
 		vec3 d = pos - pc.bodyPos.xyz, s = mat3 (frame.viewToGlobal) * frame.sunDir.xyz;

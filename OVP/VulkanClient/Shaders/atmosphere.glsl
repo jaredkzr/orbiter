@@ -49,6 +49,8 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 siteThr;       //   thresholds: coarse, fine, flat
 	vec4 siteCover;     //   shares: coarse, fine, flat
 	vec4 siteMat[9];    //   per material (coarse, fine, flat): [3i] tint rgb, amount; [3i+1] abs rgb, grit factor; [3i+2] pebbles, cracks, smoothing, rocks
+	vec4 overcastSun;   // C3, under an overcast near the ground: the light from about the sun at normal incidence with the sun at the zenith, per unit sunlight (rgb: s0 * OVERCAST.sky; all 0: none, the beam and the cloud shadow as elsewhere)
+	vec4 overcastPrm;   //   x: falloff k towards the horizon, y: the cloud deck's altitude [m] (the blend to the beam), z: tan of the apparent source's angular radius at the ground, w: 0
 } atm;
 
 // planet surface (western and eastern hemisphere), for reflections
@@ -338,4 +340,52 @@ float CloudShadow (vec3 p)
 	float vol = 1.0 - exp (-atm.cloudShell.z * od);
 	// (the 2D layer towards the map's edge)
 	return 1.0 - atm.cloud.z * mix (vol, a, smoothstep (0.8, 1.0, edge));
+}
+
+// True on a planet with an overcast sun (C3: a hazy atmosphere whose ground
+// light comes from about the sun's direction instead of a clean beam)
+bool AtmOvercast ()
+{
+	return atm.overcastSun.r + atm.overcastSun.g + atm.overcastSun.b > 0.0;
+}
+
+// Sunlight reaching a surface or particle at p (planet frame), per unit sun
+// colour. Normally the beam through the atmosphere and the cloud layer's
+// shadow. Under an overcast (C3), near the ground: the light the haze passes
+// on from about the sun's direction, s0 S exp (-k (1/mu - 1)) exp (-h/2H)
+// (mu: the sun's elevation sine, h: the altitude, 2H following the ambient's
+// density falloff), fading into the beam above the cloud deck
+vec3 SurfaceSunlight (vec3 p)
+{
+	if (!AtmOvercast ()) return SunTransmittance (p) * CloudShadow (p);
+	float r = length (p), mu = dot (p, atm.sunDir.xyz) / r;
+	float h = max (r - atm.radii.x, 0.0);
+	float m = max (mu, 1e-3);
+	vec3 ov = atm.overcastSun.rgb * (exp (-atm.overcastPrm.x * (1.0 / m - 1.0) - h / (2.0 * atm.betaM.w)) * smoothstep (0.0, 0.02, mu));
+	float c = smoothstep (0.0, atm.overcastPrm.y, h);
+	if (c < 1e-3) return ov;
+	return mix (ov, SunTransmittance (p) * CloudShadow (p), c);
+}
+
+// Mean albedo of the ground about the unit normal n (planet frame): the
+// surface map's coarse mip, as AtmGround's lookup
+vec3 AtmGroundAlbedo (vec3 n)
+{
+	vec3 alb = atm.ground.rgb;
+	if (atm.ground.w > 0.5) {
+		float lat = asin (clamp (n.y, -1.0, 1.0)), lng = atan (n.z, n.x);
+		float v = (0.5 * ATM_PI - lat) / ATM_PI;
+		alb = lng < 0.0 ? textureLod (atmGround0, vec2 ((lng + ATM_PI) / ATM_PI, v), 2.0).rgb
+		                : textureLod (atmGround1, vec2 (lng / ATM_PI, v), 2.0).rgb;
+	}
+	return alb;
+}
+
+// Change to the isotropic ambient for a surface tilted nUp (cosine to the
+// local vertical): the sky dome is uniform, Esky (1 + nUp)/2; the ground's
+// light from below is rho Eg (1 - nUp)/2; so the result, replacing the
+// isotropic Esky, is 0.5 (1 - nUp) (rho Eg - Esky), and 0 for nUp = 1
+vec3 OvercastAmbientDelta (vec3 Esky, vec3 Eg, vec3 rho, float nUp)
+{
+	return 0.5 * (1.0 - nUp) * (rho * Eg - Esky);
 }

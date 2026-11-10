@@ -82,6 +82,7 @@ namespace {
 		float relSunDir[4];    // the sunlight on it in its frame: direction (view, aberrated)
 		float relSunColor[4];  //   colour (Doppler shifted)
 		float lens[4];         // a black hole's lens: centre (view), mass [m] (0: none)
+		float overcast[4];     // C3: the overcast skylight in ambient (rgb), tan of the light's apparent radius (w; 0: none)
 		struct {
 			float pos[4];   // view space position, range
 			float dir[4];   // view space direction, type (1 point, 2 spot)
@@ -153,7 +154,7 @@ bool Scene::Init ()
 	tracks = std::make_unique<GroundTracks>();
 	tracks->Init (ctx);
 	waterFx = std::make_unique<WaterFx>();
-	VkDescriptorSetLayoutBinding b[9]{};
+	VkDescriptorSetLayoutBinding b[10]{};
 	b[0].binding = 0;
 	b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	b[0].descriptorCount = 1;
@@ -181,14 +182,16 @@ bool Scene::Init ()
 	b[8] = b[2];
 	b[8].binding = 9; // the cities' road map: fine and coarse level, and the far built-up map (tile shading)
 	b[8].descriptorCount = 3;
+	b[9] = b[1];
+	b[9].binding = 10; // the shadow maps' depths (soft shadows: blocker search)
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 9;
+	lci.bindingCount = 10;
 	lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &frameLayout));
 
 	VkDescriptorPoolSize ps[3] = {
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 * vkc::FRAMES_IN_FLIGHT },
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * (SHADOW_CASCADES + 8) * vkc::FRAMES_IN_FLIGHT }, // (+1: the cities' far map)
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * (2 * SHADOW_CASCADES + 8) * vkc::FRAMES_IN_FLIGHT }, // (+1: the cities' far map)
 		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * vkc::FRAMES_IN_FLIGHT }
 	};
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -218,9 +221,12 @@ bool Scene::Init ()
 		VkDescriptorImageInfo dii[SHADOW_CASCADES];
 		for (int k = 0; k < SHADOW_CASCADES; k++)
 			dii[k] = { shadows[k]->Sampler(), shadows[k]->View(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		VkDescriptorImageInfo dii2[SHADOW_CASCADES];
+		for (int k = 0; k < SHADOW_CASCADES; k++)
+			dii2[k] = { shadows[k]->DepthSampler(), shadows[k]->View(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 		VkDescriptorImageInfo pii{ probe->Sampler(), probe->CubeView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 		VkDescriptorBufferInfo tbi{ tracks->Buffer (i), 0, GroundTracks::BUFFER_SIZE };
-		VkWriteDescriptorSet wr[4]{};
+		VkWriteDescriptorSet wr[5]{};
 		for (auto &w : wr) w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, w.dstSet = set;
 		wr[3].dstBinding = 8;
 		wr[3].descriptorCount = 1;
@@ -238,7 +244,11 @@ bool Scene::Init ()
 		wr[2].descriptorCount = 1;
 		wr[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		wr[2].pImageInfo = &pii;
-		vkUpdateDescriptorSets (ctx->device, 4, wr, 0, nullptr);
+		wr[4].dstBinding = 10;
+		wr[4].descriptorCount = SHADOW_CASCADES;
+		wr[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		wr[4].pImageInfo = dii2;
+		vkUpdateDescriptorSets (ctx->device, 5, wr, 0, nullptr);
 	}
 
 	// the cities' road map: none yet (a black texel), sampled with mip levels
@@ -2215,6 +2225,7 @@ void Scene::FillFrameUniforms (void *pfu)
 	const DWORD *amb = (const DWORD*)gc->GetConfigParam (CFGPRM_AMBIENTLEVEL);
 	float a0 = std::max (0.01f, amb ? (float)*amb / 255.0f * 0.5f : 0.03f);
 	fu.ambient[0] = fu.ambient[1] = fu.ambient[2] = a0;
+	if (!inProbe) softSunRadius = 0.0; // (C3: only the main view sets it)
 	if (OBJHANDLE hp = oapiCameraProxyGbody ()) {
 		const ATMCONST *ac = oapiPlanetHasAtmosphere (hp) ? oapiGetPlanetAtmConstants (hp) : nullptr;
 		if (ac && ac->rho0 > 0.0) {
@@ -2231,7 +2242,34 @@ void Scene::FillFrameUniforms (void *pfu)
 			double tl = std::max (1e-6, 0.2126 * tint[0] + 0.7152 * tint[1] + 0.0722 * tint[2]);
 			if (OvercastSkylight (pname, sky)) { // (under a cloud deck or haze: lit mostly by the sky)
 				double d = std::sqrt (std::clamp (prm.rho / ac->rho0, 0.0, 1.0)) * Sunlight (camPos);
-				for (int k = 0; k < 3; k++) fu.ambient[k] += (float)(d * sky[k] * tint[k] / tl);
+				// The haze passes on part of the light from about the sun
+				// (Atmosphere.cpp OVERCAST), drawn as a soft directional light
+				// (atmosphere.glsl SurfaceSunlight). Its share on level ground
+				// at the camera is taken out of the skylight here, so the
+				// ground's light (and the exposure) stays the same. overcast
+				// gives the shaders the skylight part (shaped by the surface's
+				// orientation) and the source's size (soft shadows).
+				OvercastSun os;
+				if (OvercastSunlight (pname, os)) {
+					double h = length (camPos - pp) - oapiGetSize (hp);
+					double mu = dotp (unit (camPos - pp), sunDir);
+					auto smooth = [] (double x, double deck) { double t = std::clamp (x / deck, 0.0, 1.0); return t * t * (3.0 - 2.0 * t); };
+					double c = smooth (std::max (h, 0.0), os.deck);
+					double m = std::max (mu, 1e-3);
+					double share = mu > 0.0 ? (1.0 - c) * os.share * m * std::exp (-os.falloff * (1.0 / m - 1.0)) : 0.0;
+					double disc = 0.0047; // (as RenderPrepass's sunRadius)
+					if (hSun || !light.sun)
+						disc = asin (std::min (1.0, light.radius / std::max (length (light.pos - camPos), 1.0)));
+					double theta = (1.0 - c) * os.radius + c * disc;
+					for (int k = 0; k < 3; k++) {
+						float E = (float)(d * sky[k] * tint[k] / tl * (1.0 - share));
+						fu.ambient[k] += E;
+						fu.overcast[k] = E;
+					}
+					fu.overcast[3] = (float)tan (theta);
+					if (!inProbe) softSunRadius = theta;
+				} else
+					for (int k = 0; k < 3; k++) fu.ambient[k] += (float)(d * sky[k] * tint[k] / tl);
 			} else {
 				fu.ambient[0] += (float)(f * ac->color0.x * tint[0] / tl);
 				fu.ambient[1] += (float)(f * ac->color0.y * tint[1] / tl);
@@ -2414,6 +2452,7 @@ void Scene::RenderPrepass ()
 			double sunRadius = 0.0047;
 			if (hSun || !light.sun) // (the light's disc)
 				sunRadius = asin (std::min (1.0, light.radius / std::max (length (light.pos - camPos), 1.0)));
+			if (softSunRadius > sunRadius) sunRadius = softSunRadius; // (under an overcast: the light's apparent source, soft shadows)
 			rtl->Compute (frameSet[ctx->FrameIndex()], rt->Set (), rt->TextureSet (), proj[0], -proj[5], jitter, (float)sunRadius, cameraCut);
 			ctx->GpuMark ("rt lighting");
 		}

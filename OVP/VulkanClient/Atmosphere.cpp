@@ -62,6 +62,8 @@ namespace {
 		float siteThr[4];     //   thresholds: coarse, fine, flat
 		float siteCover[4];   //   shares: coarse, fine, flat
 		float siteMat[9][4];  //   per material (coarse, fine, flat): [3i] tint rgb, amount; [3i+1] abs rgb, grit factor; [3i+2] pebbles, cracks, smoothing, rocks
+		float overcastSun[4]; // C3: s0 * OVERCAST.sky (rgb; 0: none), w 0
+		float overcastPrm[4]; //   falloff k, deck altitude [m], tan(theta0), 0
 	};
 	static_assert (sizeof (AtmUniforms) % 16 == 0, "std140");
 
@@ -210,10 +212,17 @@ namespace {
 	// layers: the optical depths are kept moderate (also the gas's: density
 	// factor rayleigh), so that the sky stays lit, and the skylight term
 	// stands for the light diffused down.
-	struct Overcast { const char *name; double tau, scat[3], g, rayleigh; float sky[3]; };
+	// The haze also passes on light from about the sun's direction (the
+	// beam plus the forward-scattered aureole). share is that light's
+	// share of the ground's light with the sun at the zenith; on level
+	// ground it falls as mu exp(-falloff (1/mu - 1)). It comes from an
+	// apparent source of angular radius radius [rad], and blends into the
+	// beam up to the cloud deck at deck [m]. The share is taken out of the
+	// skylight (Scene.cpp), so the ground's light is unchanged.
+	struct Overcast { const char *name; double tau, scat[3], g, rayleigh; float sky[3]; double share, falloff, radius, deck; };
 	const Overcast OVERCAST[] = {
-		{ "Venus", 2.0, { 0.98, 0.85, 0.55 }, 0.75f, 1.0, { 1.80f, 1.25f, 0.55f } },
-		{ "Titan", 1.2, { 0.96, 0.80, 0.52 }, 0.70f, 2.0, { 1.80f, 1.25f, 0.65f } },
+		{ "Venus", 2.0, { 0.98, 0.85, 0.55 }, 0.75f, 1.0, { 1.80f, 1.25f, 0.55f }, 0.12, 0.6, 0.30, 60e3 },
+		{ "Titan", 1.2, { 0.96, 0.80, 0.52 }, 0.70f, 2.0, { 1.80f, 1.25f, 0.65f }, 0.30, 0.4, 0.12, 30e3 },
 	};
 	const Overcast *FindOvercast (const char *name)
 	{
@@ -228,6 +237,19 @@ bool OvercastSkylight (const char *planet, float rgb[3])
 	const Overcast *o = FindOvercast (planet);
 	if (!o) return false;
 	for (int i = 0; i < 3; i++) rgb[i] = o->sky[i];
+	return true;
+}
+
+bool OvercastSunlight (const char *planet, OvercastSun &s)
+{
+	// ORBITER_VK_OVERCAST_SUN: scales the shares (0: off, the old lighting)
+	static const double scale = [] {
+		const char *e = getenv ("ORBITER_VK_OVERCAST_SUN");
+		return (e && *e) ? std::clamp (atof (e), 0.0, 3.0) : 1.0;
+	}();
+	const Overcast *o = FindOvercast (planet);
+	if (!o || scale <= 0.0) return false;
+	s = { o->share * scale, o->falloff, o->radius, o->deck };
 	return true;
 }
 
@@ -548,6 +570,11 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		}
 		if (const Overcast *o = FindOvercast (name)) {
 			for (int i = 0; i < 3; i++) overcastSky[i] = o->sky[i];
+			OvercastSun os;
+			if (OvercastSunlight (name, os)) {
+				for (int i = 0; i < 3; i++) overcastSun[i] = (float)(os.share * o->sky[i]);
+				overcastPrm[0] = (float)os.falloff, overcastPrm[1] = (float)os.deck, overcastPrm[2] = (float)tan (os.radius);
+			}
 			for (int i = 0; i < 3; i++) {
 				betaR[i] = (float)(RAYLEIGH_K * col[i] * col[i] * o->rayleigh);
 				betaM[i] = (float)(o->tau / H * o->scat[i]);
@@ -1015,6 +1042,8 @@ void Atmosphere::Update ()
 	memcpy (u.detail, detail, sizeof(detail));
 	memcpy (u.aurora, aurora, sizeof(aurora));
 	memcpy (u.ozone, ozone, sizeof(ozone));
+	memcpy (u.overcastSun, overcastSun, sizeof(overcastSun));
+	memcpy (u.overcastPrm, overcastPrm, sizeof(overcastPrm));
 	memcpy (u.ground, groundColour, sizeof(groundColour));
 	if (cloudParams[3] > 0.0f)
 		if (const double *rot = (const double*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_CLOUDROTATION))

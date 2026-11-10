@@ -64,9 +64,11 @@ vec3 SurfaceLight (vec3 base, Material mat, out vec3 sun, out bool debug)
 	vec4 rv = rtVis ? RTVisibility() : vec4(1.0);
 	vec4 lv = rtVis ? RTLightVisibility() : vec4(1.0);
 	sun = SunColorAt(vPosView) * draw.light.rgb * (rtVis ? rv.x : SunShadow(vPosView, N));
+	vec3 pPlanet = vec3(0.0), sunAtm = vec3(1.0);
 	if (hasAtm) {
-		vec3 pPlanet = mat3(atm.viewToPlanet) * vPosView + atm.camPos.xyz;
-		sun *= SunTransmittance(pPlanet) * CloudShadow(pPlanet);
+		pPlanet = mat3(atm.viewToPlanet) * vPosView + atm.camPos.xyz;
+		sunAtm = SurfaceSunlight(pPlanet);
+		sun *= sunAtm;
 	}
 
 	// diffuse (Orbiter's convention: albedo times N.L) and specular reflection
@@ -74,9 +76,24 @@ vec3 SurfaceLight (vec3 base, Material mat, out vec3 sun, out bool debug)
 	vec3 diffuse = base * (1.0 - metal);
 	float ao = draw.maps.y > 0.5 ? 1.0 : AmbientOcclusion();
 	float aoDirect = mix(1.0, ao, frame.aoParams.z); // contact darkening in direct light too
-	vec3 col = diffuse * (frame.ambient.rgb * ao * ambientShare + (sun * NoL + LocalLighting(vPosView, N, lv)) * aoDirect);
+	// under an overcast: the sky-shaped ambient (C3), dimmer towards the ground below
+	vec3 amb = frame.ambient.rgb;
+	if (hasAtm && frame.overcast.w > 0.0 && AtmOvercast()) {
+		vec3 nP = normalize(pPlanet);
+		vec3 upV = normalize(transpose(mat3(atm.viewToPlanet)) * nP);
+		float nUp = clamp(dot(N, upV), -1.0, 1.0);
+		vec3 rho = clamp(AtmGroundAlbedo(nP), 0.02, 0.6);
+		vec3 Eg = frame.overcast.rgb + SunColorAt(vPosView) * draw.light.rgb * sunAtm * max(dot(nP, atm.sunDir.xyz), 0.0);
+		// the same deck blend as SurfaceSunlight: above the cloud deck the vessel
+		// gets exactly the unshaped ambient (PlanetLight covers the planet's bounce)
+		float deckBlend = 1.0 - smoothstep(0.0, atm.overcastPrm.y, max(length(pPlanet) - atm.radii.x, 0.0));
+		amb += OvercastAmbientDelta(frame.overcast.rgb, Eg, rho, nUp) * deckBlend;
+	}
+	// the sun's specular: a large source, GGX alpha widened by about half its tangent
+	float roughS = frame.overcast.w > 0.0 ? sqrt(min(rough * rough + 0.5 * frame.overcast.w, 1.0)) : rough;
+	vec3 col = diffuse * (amb * ao * ambientShare + (sun * NoL + LocalLighting(vPosView, N, lv)) * aoDirect);
 	col += diffuse * PlanetLight(N) * rv.z; // sunlight reflected by the planet nearby
-	col += sun * SpecularBRDF(N, V, L, F0, rough) * PI;
+	col += sun * SpecularBRDF(N, V, L, F0, roughS) * PI;
 	if (reflectivity > 0.0) {
 		vec3 R = reflect(-V, N);
 		R = normalize(mix(R, N, rough * rough)); // rough surfaces: towards the normal

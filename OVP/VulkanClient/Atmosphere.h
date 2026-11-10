@@ -111,6 +111,7 @@ private:
 	double radius = 0.0, atmRadius = 0.0;
 	float betaR[4] = {}, betaM[4] = {};
 	float overcastSky[3] = { 0, 0, 0 }; // diffuse radiance under an overcast (Venus, Titan)
+	float overcastSun[4] = {}, overcastPrm[4] = {}; // the light from about the sun under an overcast (C3: the UBO's fields; zero: none)
 	float mieLobe[4] = {}; // aerosols' forward lobe per colour, its share (atmosphere.glsl's AtmMiePhase)
 	float mieG = 0.76f, sunIntensity = 6.0f; // (sky radiance scale: physically about pi for a sunlit white surface of 1)
 	float airglow = 0.0f; // strength of the airglow layer (Earth)
@@ -155,5 +156,11 @@ private:
 /// skylight of an overcast atmosphere (Venus, Titan): the ground's
 /// irradiance from the sky relative to the sun's above it; false for others
 bool OvercastSkylight (const char *planet, float rgb[3]);
+
+/// the sunlight under an overcast (C3): share s0 of the ground's light from about the sun with the sun at the
+/// zenith, its falloff k towards the horizon, the angular radius [rad] of its apparent source and the cloud deck's
+/// altitude [m]; false for other planets, and when ORBITER_VK_OVERCAST_SUN=0 (shares scaled by its value otherwise)
+struct OvercastSun { double share, falloff, radius, deck; };
+bool OvercastSunlight (const char *planet, OvercastSun &s);
 
 #endif // !__ATMOSPHERE_H

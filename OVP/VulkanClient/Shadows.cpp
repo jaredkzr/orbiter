@@ -56,6 +56,9 @@ bool ShadowMap::Init (vkc::Context *c, VkDescriptorSetLayout texLayout)
 	sci.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL; // lit if not behind the stored depth
 	sci.maxLod = 0.0f;
 	VK_CHECK(vkCreateSampler (ctx->device, &sci, nullptr, &sampler));
+	sci.magFilter = sci.minFilter = VK_FILTER_NEAREST; // the depths themselves, not comparisons
+	sci.compareEnable = VK_FALSE;
+	VK_CHECK(vkCreateSampler (ctx->device, &sci, nullptr, &depthSampler));
 
 	VkPushConstantRange pcr{ VK_SHADER_STAGE_VERTEX_BIT, 0, 20 * sizeof(float) }; // (a matrix; the buildings' casters also the camera's altitude)
 	VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
@@ -215,6 +218,7 @@ void ShadowMap::Shutdown ()
 	vkDestroyPipeline (ctx->device, bldPipeline, nullptr);
 	vkDestroyPipelineLayout (ctx->device, alphaLayout, nullptr);
 	vkDestroySampler (ctx->device, sampler, nullptr);
+	vkDestroySampler (ctx->device, depthSampler, nullptr);
 	ctx->DestroyImage (depth);
 	ctx = nullptr;
 }

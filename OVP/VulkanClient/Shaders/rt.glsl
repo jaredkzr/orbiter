@@ -125,7 +125,7 @@ bool TraceRT (vec3 o, vec3 d, float tMin, out RTHit h)
 	vec3 sun = frame.sunColor.rgb * r.emissive.w;
 	if (atm.misc.x > 0.5) {
 		vec3 pp = mat3 (atm.viewToPlanet) * p + atm.camPos.xyz;
-		sun *= SunTransmittance (pp) * CloudShadow (pp);
+		sun *= SurfaceSunlight (pp);
 	}
 	if (NoL > 0.0) sun *= RTSunVisible (p + N * (0.002 * length (p) + 0.01), L);
 	vec3 col = base * (1.0 - metal) * (frame.ambient.rgb + sun * NoL);

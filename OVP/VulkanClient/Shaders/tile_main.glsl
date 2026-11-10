@@ -752,9 +752,10 @@ void main()
 	if (hasAtm) {
 		pPlanet = mat3(atm.viewToPlanet) * vPosView + atm.camPos.xyz;
 		dPlanet = normalize(mat3(atm.viewToPlanet) * vPosView);
-		sunT = SunTransmittance(pPlanet);
-		if (tile.params.z < 0.5) sunT *= CloudShadow(pPlanet); // terrain under the clouds
+		// terrain under the clouds (and, under an overcast, the haze's light from about the sun)
+		sunT = tile.params.z < 0.5 ? SurfaceSunlight(pPlanet) : SunTransmittance(pPlanet);
 	}
+	vec3 sunAtm = sunT; // (before the shadows)
 	// terrain receives shadows: ray traced, or from the shadow maps
 	bool rtVis = RTLighting() && tile.params.z < 0.5;
 	vec4 lv = rtVis ? RTLightVisibility() : vec4(1.0);
@@ -767,7 +768,15 @@ void main()
 	// regolith of airless bodies: no limb darkening, opposition surge
 	float sunRefl = int(atm.detail.x + 0.5) == DETAIL_AIRLESS && tile.params.z < 0.5
 		? RegolithReflectance(N, L, normalize(-vPosView), Ng) : max(ndl, 0.0);
-	vec3 irr = frame.ambient.rgb * ao * ambNight * detailSky + (frame.sunColor.rgb * sunT * sunRefl + LocalLighting(vPosView, N, lv)) * aoDirect;
+	// under an overcast: the sky-shaped ambient (C3), dimmer towards the ground below
+	vec3 ambT = frame.ambient.rgb;
+	vec3 upV = vec3(0.0, 1.0, 0.0);
+	if (tile.params.z < 0.5) {
+		upV = normalize(transpose(mat3(atm.viewToPlanet)) * normalize(mat3(atm.viewToPlanet) * vPosView + atm.camPos.xyz));
+		if (hasAtm && frame.overcast.w > 0.0 && AtmOvercast())
+			ambT += OvercastAmbientDelta(frame.overcast.rgb, frame.overcast.rgb, base, clamp(dot(N, upV), -1.0, 1.0));
+	}
+	vec3 irr = ambT * ao * ambNight * detailSky + (frame.sunColor.rgb * sunT * sunRefl + LocalLighting(vPosView, N, lv)) * aoDirect;
 	vec3 col = base * irr;
 	// street lamps, lit when the sun is down
 	col += base * cityLight * smoothstep(0.05, -0.03, dot(Ng, L));
@@ -777,10 +786,9 @@ void main()
 	// Lambertian half-space of the local albedo gives the irradiance
 	// albedo * E_sun * (1 - cos tilt) / 2
 	if (tile.params.z < 0.5) {
-		vec3 upV = normalize(transpose(mat3(atm.viewToPlanet)) * normalize(mat3(atm.viewToPlanet) * vPosView + atm.camPos.xyz));
 		float sunUp = max(dot(L, upV), 0.0);
 		float tiltF = 0.5 * (1.0 - clamp(dot(N, upV), -1.0, 1.0));
-		col += base * base * frame.sunColor.rgb * (sunUp * tiltF * ao) * (hasAtm ? SunTransmittance(pPlanet) : vec3(1.0)) * tile.morph.z;
+		col += base * base * frame.sunColor.rgb * (sunUp * tiltF * ao) * (hasAtm ? (AtmOvercast() ? sunAtm : SunTransmittance(pPlanet)) : vec3(1.0)) * tile.morph.z;
 	}
 
 	if (tile.params.z > 0.5) { // cloud layer: lit from above, also seen from below
@@ -885,7 +893,8 @@ void main()
 			float rough = atm.seaPrm.y > 0.0 ? min(sqrt(sqrt(6.25e-6 + waveVar)), 0.6)
 				: mix(0.05, 0.3, smoothstep(2e3, 3e5, dist));
 			if (fxVar + capVar > 0.0) rough = min(sqrt(sqrt(rough * rough * rough * rough + 2.0 * (fxVar + capVar))), 0.6);
-			col += frame.sunColor.rgb * sunT * SpecularBRDF(Nw, V, L, vec3(0.02), rough) * PI * (1.0 - fxFoam);
+			float roughS = frame.overcast.w > 0.0 ? sqrt(min(rough * rough + 0.5 * frame.overcast.w, 1.0)) : rough; // (a large source, C3)
+			col += frame.sunColor.rgb * sunT * SpecularBRDF(Nw, V, L, vec3(0.02), roughS) * PI * (1.0 - fxFoam);
 			if (fxJet > 0.0) col = mix(col, FOAM_ALBEDO * irr, fxJet);
 			if (g3 > 0.0) {
 				// whitecaps and shore foam are lit by the waves' normal

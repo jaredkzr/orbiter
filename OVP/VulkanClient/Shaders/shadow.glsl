@@ -8,6 +8,8 @@
 
 const int SHADOW_CASCADES = 3;
 layout(set = 0, binding = 1) uniform sampler2DShadow shadowMaps[SHADOW_CASCADES];
+// the same maps' depth (plain NEAREST sampler), for the blocker search of soft shadows
+layout(set = 0, binding = 10) uniform sampler2D shadowDepth[SHADOW_CASCADES];
 
 // shadow map coordinates of a point, or a w < 0 if outside the map
 vec4 ShadowCoord (mat4 m, vec4 prm, vec3 posView, vec3 nView)
@@ -36,6 +38,38 @@ float ShadowLookup (int i, vec4 sc, float t)
 	return s / float(N);
 }
 
+// Soft shadow (C3, a large light source under an overcast): percentage-closer
+// soft shadows. tanT: tan of the source's angular radius. A blocker search
+// finds the mean depth of the occluders, the penumbra radius follows from
+// their distance (capped at DMAX metres), then the comparison taps are
+// spread over it.
+float ShadowLookupSoft (int i, vec4 sc, vec4 prm, float tanT)
+{
+	const int NB = 12, NF = 16;
+	const float GOLDEN = 2.39996323, DMAX = 40.0;
+	// metres per texture unit and per depth unit, derived from Scene.cpp
+	// shadowUniforms (normal offset 1.5 texels, depth bias one texel); keep in sync
+	float mUV = (prm.y / 1.5) / prm.w, mZ = (prm.y / 1.5) / prm.z;
+	float rot = 6.2831853 * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+	float rs = clamp(tanT * DMAX / mUV, 2.0 * prm.w, 64.0 * prm.w);
+	float sum = 0.0, cnt = 0.0;
+	for (int k = 0; k < NB; k++) {
+		float r = sqrt((float(k) + 0.5) / float(NB)) * rs;
+		float a = float(k) * GOLDEN + rot;
+		float d = texture(shadowDepth[i], sc.xy + r * vec2(cos(a), sin(a))).r;
+		if (d < sc.z) { sum += d; cnt += 1.0; }
+	}
+	if (cnt < 0.5) return 1.0;
+	float rp = clamp(tanT * min((sc.z - sum / cnt) * mZ, DMAX) / mUV, 1.8 * prm.w, 64.0 * prm.w);
+	float s = 0.0;
+	for (int k = 0; k < NF; k++) {
+		float r = sqrt((float(k) + 0.5) / float(NF)) * rp;
+		float a = float(k) * GOLDEN + rot;
+		s += texture(shadowMaps[i], vec3(sc.xy + r * vec2(cos(a), sin(a)), sc.z));
+	}
+	return s / float(NF);
+}
+
 // Fraction of sunlight reaching a point (view space position and normal)
 float SunShadow (vec3 posView, vec3 nView)
 {
@@ -47,7 +81,8 @@ float SunShadow (vec3 posView, vec3 nView)
 		// weight: 1 inside, falling to 0 over the outer 4% towards the edge
 		float edge = min(min(sc.x, 1.0 - sc.x), min(sc.y, 1.0 - sc.y));
 		float w = smoothstep(0.0, 0.04, edge);
-		result += remaining * w * ShadowLookup(i, sc, frame.shadowParams[i].w);
+		result += remaining * w * (frame.overcast.w > 0.0 ? ShadowLookupSoft(i, sc, frame.shadowParams[i], frame.overcast.w)
+		                                              : ShadowLookup(i, sc, frame.shadowParams[i].w));
 		remaining *= 1.0 - w;
 	}
 	return result + remaining; // beyond the maps: lit
