@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "PlanetSurface.h"
+#include "ShoreField.h"
 #include "ProcSurface.h"
 #include "PolarElevation.h"
 #include <functional>
@@ -294,6 +295,7 @@ void TileLoader::Process (const Request &req, Result &res)
 		break;
 	case MASK:
 		res.ok = pl.mask && pl.mask->Read (req.lvl, req.ilat, req.ilng, res.data);
+		if (res.ok) vkshore::EncodeShoreField (res.data); // (F1: the alpha as the distance from the water's edge)
 		break;
 	case ELEV: {
 		std::vector<uint8_t> d;
@@ -703,7 +705,7 @@ PlanetSurface::PlanetSurface (OBJHANDLE h, Scene *s, std::shared_ptr<PlanetLayer
 			n->surfState = 2;
 		else
 			n->surfState = 3;
-		if (layers->mask && layers->mask->Read (4, 0, i, d) && (n->mask = texmgr->CreateFromDDS (d.data(), d.size(), true, true)))
+		if (layers->mask && layers->mask->Read (4, 0, i, d) && (vkshore::EncodeShoreField (d), true) && (n->mask = texmgr->CreateFromDDS (d.data(), d.size(), true, true)))
 			n->maskState = 2;
 		ElevGrid g;
 		if (layers->elev && layers->elev->Read (4, 0, i, d) && DecodeElv (d, g, false)) {

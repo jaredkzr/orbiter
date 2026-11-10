@@ -51,6 +51,7 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 siteMat[9];    //   per material (coarse, fine, flat): [3i] tint rgb, amount; [3i+1] abs rgb, grit factor; [3i+2] pebbles, cracks, smoothing, rocks
 	vec4 overcastSun;   // C3, under an overcast near the ground: the light from about the sun at normal incidence with the sun at the zenith, per unit sunlight (rgb: s0 * OVERCAST.sky; all 0: none, the beam and the cloud shadow as elsewhere)
 	vec4 overcastPrm;   //   x: falloff k towards the horizon, y: the cloud deck's altitude [m] (the blend to the beam), z: tan of the apparent source's angular radius at the ground, w: 0
+	vec4 coastPrm;      // shore (F1): x wet sand width [m] (0: none), y shallows tint (1: procedural seas), z mask field range [texels] (0: plain masks: alpha the land share), w 0
 	vec4 waveEnv[WAVE_COUNT]; // the waves' crest envelopes (W2, Atmosphere.h WAVE_ENV_*): planet-frame wave vector kp (xyz), phase (w)
 	vec4 saltFlat[24];  // playa salt flats (pass 2, P1): planet-frame centre direction (xyz), angular radius [rad]; playaPrm.y of them (Config/VK/Playa.cfg)
 } atm;

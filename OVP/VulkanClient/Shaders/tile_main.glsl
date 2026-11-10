@@ -428,12 +428,24 @@ float Whitecaps (vec3 p, vec3 pw, float footprint, float fade, out float capVar)
 	return mix (fMean, 1.0 - keep, vis);
 }
 
-// distance [m] from the water's drawn edge (the mask's 0.5 contour), from the
-// 2 x 2 texels under the pixel (-1: unknown, no land among them). texM: the
-// mask's texel [m]
+// signed distance from the water's edge [mask texels], positive on land, from the mask's alpha:
+// the loader's distance field (ShoreField.h, coastPrm.z texels each side), or without it the alpha's
+// own ramp (the land's share: 0.5 at the edge, a texel wide when filtered)
+float MaskSd (float a)
+{
+	return atm.coastPrm.z > 0.0 ? (a - 0.5) * 2.0 * atm.coastPrm.z : a - 0.5;
+}
+
+// distance [m] from the water's drawn edge (the mask's 0.5 contour) of a water pixel (-1: unknown,
+// too far). texM: the mask's texel [m]. With the distance field (F1) from the filtered alpha;
+// without it from the 2 x 2 texels under the pixel (the bilinear ramp solved for the distance)
 float ShoreDistance (vec2 muv, float texM)
 {
 	if (texM <= 0.0) return -1.0;
+	if (atm.coastPrm.z > 0.0) {
+		float sd = MaskSd (texture (maskTex, muv).a);
+		return sd < 0.5 - atm.coastPrm.z ? -1.0 : max (-sd, 0.0) * texM;
+	}
 	vec2 sz = vec2 (textureSize (maskTex, 0));
 	vec4 a4 = textureGather (maskTex, muv, 3); // x: (i0,j1), y: (i1,j1), z: (i1,j0), w: (i0,j0)
 	if (max (max (a4.x, a4.y), max (a4.z, a4.w)) < 0.02) return -1.0;
@@ -447,7 +459,7 @@ float ShoreDistance (vec2 muv, float texM)
 // that widens with the sea (shorePrm, from the developed sea's Hs and period)
 float ShoreFoam (vec3 pw, float d, float texM, float footprint)
 {
-	float W = min (atm.shorePrm.x, 1.5 * texM);
+	float W = min (atm.shorePrm.x, (atm.coastPrm.z > 0.0 ? 0.9 * atm.coastPrm.z : 1.5) * texM); // (the field reaches coastPrm.z texels)
 	if (texM <= 0.0 || d < 0.0 || W <= 0.0 || d >= W) return 0.0;
 	float vis = 1.0 - smoothstep (1.0, 2.5, footprint / W);
 	if (vis <= 0.0) return 0.0;
@@ -742,7 +754,29 @@ void main()
 		float land = 1.0; // (no stones on water: the mask's alpha)
 		if (tile.params.x > 0.5) {
 			vec2 hmL = 0.5 / vec2(textureSize(maskTex, 0));
-			land = smoothstep(0.3, 0.7, texture(maskTex, clamp(vUV * tile.maskUV.zw + tile.maskUV.xy, hmL, 1.0 - hmL)).a);
+			vec2 muvL = vUV * tile.maskUV.zw + tile.maskUV.xy;
+			float sdL = MaskSd(texture(maskTex, clamp(muvL, hmL, 1.0 - hmL)).a);
+			land = smoothstep(-0.2, 0.2, sdL);
+			// the shore (F1): wet sand where the swash runs up, the sea's shallows (procedural seas)
+			// (the mask's texel [m] from derivatives: tile.params is uniform, so is this branch)
+			vec2 msz = vec2(textureSize(maskTex, 0));
+			vec2 ma = dFdx(muvL) * msz, mb = dFdy(muvL) * msz;
+			float texML = sqrt(length(cross(dFdx(vPosView), dFdy(vPosView))) / max(abs(ma.x * mb.y - ma.y * mb.x), 1e-12));
+			if (atm.coastPrm.x > 0.0 && atm.coastPrm.z > 0.0 && abs(sdL) < atm.coastPrm.z) {
+				float dM = sdL * texML; // [m], + land
+				float fpL = length(vPosView) * 2.0 * atm.misc.z / max(frame.jitter.w, 1.0);
+				float Ww = atm.coastPrm.x;
+				float icy = smoothstep(0.0, 0.06, (base.b - base.r) / max(max(base.r, max(base.g, base.b)), 1e-3)); // (snow, ice: not wetted)
+				float wet = smoothstep(-0.05 * Ww, 0.05 * Ww, dM) * (1.0 - smoothstep(0.55 * Ww, Ww, dM)) * (1.0 - smoothstep(1.0, 3.0, fpL / Ww)) * (1.0 - icy);
+				base *= mix(vec3(1.0), vec3(0.6, 0.6, 0.64), wet);
+				if (atm.coastPrm.y > 0.5 && dM < 0.0) {
+					// (the sediment of the surf zone seen through the water, fading within about 60 m: no
+					// farther, as the field knows only the coast within its own tile: a far reach showed
+					// the tiles' borders)
+					float sh = 0.5 * exp(dM / 60.0);
+					base = mix(base, atm.ground.rgb * vec3(0.55, 0.75, 0.72), sh);
+				}
+			}
 		}
 		// the playas' colour (the core's weight per vertex: also on the tiles without detail shading)
 		if (atm.playaPrm.x > 0.5 && !(SITE_MATERIALS && atm.sitePrm.x > 0.5) && vDetailA.z > 0.0) {

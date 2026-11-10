@@ -7,6 +7,7 @@
 #include "VulkanClient.h"
 #include "WaterFx.h"
 #include "SurfaceQuery.h"
+#include "ShoreField.h"
 #include "VkTexture.h"
 #include <algorithm>
 #include <fstream>
@@ -66,6 +67,7 @@ namespace {
 		float siteMat[9][4];  //   per material (coarse, fine, flat): [3i] tint rgb, amount; [3i+1] abs rgb, grit factor; [3i+2] pebbles, cracks, smoothing, rocks
 		float overcastSun[4]; // C3: s0 * OVERCAST.sky (rgb; 0: none), w 0
 		float overcastPrm[4]; //   falloff k, deck altitude [m], tan(theta0), 0
+		float coastPrm[4];    // shore (F1): x wet sand width [m] (0: none), y shallows tint (1: procedural seas), z mask field range [texels] (0: plain masks), w 0
 		float waveEnv[WAVE_COUNT][4]; // the waves' crest envelopes (W2): planet-frame wave vector kp (xyz), phase (w)
 		float saltFlat[SALT_MAX][4]; // playa salt flats (pass 2, P1): planet-frame centre direction (xyz), angular radius [rad]; playaPrm.y of them
 	};
@@ -652,6 +654,7 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		PROCSURFACEPARAM wp;
 		bool proc = oapiProcSurfaceParams (hPlanet, &wp);
 		waves = cfgRipple || (proc && (wp.surfClass == 1 || (wp.surfClass == 2 && wp.openWater > 0)));
+		procSea = proc && (wp.surfClass == 1 || (wp.surfClass == 2 && wp.openWater > 0));
 		wavesWhy = cfgRipple ? "cfg" : proc && wp.surfClass == 1 ? "ocean" : "ice open water";
 		if (const char *e = getenv ("ORBITER_VK_WAVES")) if (*e && !atoi (e)) waves = false; // (empty: unset)
 		if (const char *e = getenv ("ORBITER_VK_FOAM")) if (*e && !atoi (e)) foam = false; // (empty: unset)
@@ -1130,6 +1133,12 @@ void Atmosphere::Update ()
 	VECTOR3 rel = cam - origin;
 	u.water[0] = (float)rel.x, u.water[1] = (float)rel.y, u.water[2] = (float)rel.z;
 	u.water[3] = waves ? (float)fmod (oapiGetSimTime (), 3600.0) : -1.0f; // (the aurora's clock)
+	// the shore (F1): the wet sand the swash reaches, about half the surf band (wider with the sea);
+	// the shallows' tint where the sea's colour is made (procedural worlds); the masks' distance field
+	u.coastPrm[0] = waves && present ? (float)std::max (0.5 * wfoam.shoreW, 4.0) : 0.0f;
+	u.coastPrm[1] = waves && procSea ? 1.0f : 0.0f;
+	u.coastPrm[2] = vkshore::Enabled () ? vkshore::SD_MAX : 0.0f;
+	u.coastPrm[3] = 0.0f;
 	// (the waves show within 3 km of the surface: not computed for planets far
 	// off, which also frees the anchor for the next approach)
 	if (waves && camR - radius < 50e3) UpdateWaves (cam, camR, u.wavePrm, u.waves, u.waveEnv);
