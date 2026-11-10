@@ -201,7 +201,7 @@ bool TileProbe::SampleOrLast (double lat, double lng, double maxAng, float rgba[
 bool HasSea (OBJHANDLE hp)
 {
 	SURFDETAILPARAM sdp{};
-	if (oapiSurfaceDetailParams (hp, &sdp)) return sdp.sea;
+	if (oapiSurfaceDetailParamsEx (hp, &sdp, sizeof (sdp))) return sdp.sea;
 	PROCSURFACEPARAM p{};
 	return oapiProcSurfaceParams (hp, &p) && p.surfClass == 1;
 }
@@ -372,7 +372,7 @@ bool DustColour (Scene *scene, OBJHANDLE hp, double lng, double lat, float rgb[3
 	double sw[3] = { 0, 0, 0 };
 	{
 		SURFDETAILPARAM sp{};
-		if (oapiSurfaceDetailParams (hp, &sp) && sp.site && oapiSiteMaterial (hp, lng, lat, sw)) {
+		if (oapiSurfaceDetailParamsEx (hp, &sp, sizeof (sp)) && sp.site && oapiSiteMaterial (hp, lng, lat, sw)) {
 			for (int i = 0; i < 3; i++) sw[i] *= std::clamp (px[3], 0.0f, 1.0f);
 			SiteColour (sp, sw, s);
 		} else sw[0] = sw[1] = sw[2] = 0.0;
@@ -381,7 +381,7 @@ bool DustColour (Scene *scene, OBJHANDLE hp, double lng, double lat, float rgb[3
 	float playa = 0.0;
 	{
 		SURFDETAILPARAM sp{};
-		if (oapiSurfaceDetailParams (hp, &sp) && sp.playa > 0.0)
+		if (oapiSurfaceDetailParamsEx (hp, &sp, sizeof (sp)) && sp.playa > 0.0)
 			playa = (float)std::clamp (oapiSurfacePlaya (hp, lng, lat, oapiSurfaceElevation (hp, lng, lat), 0.0), 0.0, 1.0);
 		if (playa > 0.0) {
 			const float HUE[3] = { 1.16f, 0.98f, 0.76f }, SALT[3] = { 1.03f, 1.0f, 0.94f }, KNEE = 0.7f;

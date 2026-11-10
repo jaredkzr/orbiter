@@ -2266,8 +2266,10 @@ void Scene::FillFrameUniforms (void *pfu)
 						fu.ambient[k] += E;
 						fu.overcast[k] = E;
 					}
-					fu.overcast[3] = (float)tan (theta);
-					if (!inProbe) softSunRadius = theta;
+					// (above the deck the sun's own disc: no soft shadows, no widened highlights - every
+					// pixel took the soft path in orbit about Venus or Titan, code review m5)
+					fu.overcast[3] = c < 1.0 ? (float)tan (theta) : 0.0f;
+					if (!inProbe && c < 1.0) softSunRadius = theta;
 				} else
 					for (int k = 0; k < 3; k++) fu.ambient[k] += (float)(d * sky[k] * tint[k] / tl);
 			} else {

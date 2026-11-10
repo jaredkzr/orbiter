@@ -109,7 +109,8 @@ def write_planet (pl, outdir):
 	look = LOOKS[pl['pl_name']]
 	cls, clow, chigh, relief, mountains, sea, craters, openw, atm = look
 	atm, co2 = atm if isinstance (atm, tuple) else (atm, 0.0)
-	assert not (openw and not atm and cls != 'Ocean'), name + ': open water needs an atmosphere'
+	assert not (openw and not atm), name + ': open water needs an atmosphere'
+	assert not (sea > 0 and not atm), name + ': a sea needs an atmosphere'
 	P = num (pl['pl_orbper'])
 	e = num (pl['pl_orbeccen'], 0.0)
 	w = num (pl['pl_orblper'], 90.0)

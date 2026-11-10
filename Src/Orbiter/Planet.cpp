@@ -329,7 +329,7 @@ Planet::Planet (char *fname)
 		GetItemReal (ifs, "TerrainDetailCraterDepth", o.craterDepth);
 		GetItemReal (ifs, "TerrainDetailCraterFresh", o.craterFresh);
 		GetItemReal (ifs, "TerrainDetailPebbles", o.pebbles);
-		char sbuf[64];
+		char sbuf[512]; // (GetItemString's own limit: a long value overran a short buffer, code review m3)
 		if (GetItemString (ifs, "TerrainDetailPebbleShape", sbuf)) {
 			int sh = TerrainDetail::ShapeByName (sbuf);
 			if (sh >= 0) o.pebbleShape = sh;

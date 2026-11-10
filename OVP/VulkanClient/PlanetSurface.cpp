@@ -672,7 +672,7 @@ PlanetSurface::PlanetSurface (OBJHANDLE h, Scene *s, std::shared_ptr<PlanetLayer
 			maxLevel = std::clamp ((int)*ml, 4, 21);
 		if (const double *me = (const double*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_MAXELEVATION))
 			maxElev = std::max (0.0, *me);
-		detail = oapiSurfaceDetailParams (hPlanet, &detailPrm);
+		detail = oapiSurfaceDetailParamsEx (hPlanet, &detailPrm, sizeof (detailPrm));
 		static std::mutex logMutex;
 		static std::set<std::string> logged;
 		bool first = false;

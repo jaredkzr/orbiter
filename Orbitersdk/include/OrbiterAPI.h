@@ -4868,7 +4868,10 @@ OAPIFUNC double oapiSurfaceElevation (OBJHANDLE hPlanet, double lng, double lat)
  *   TerrainDetail in Orbiter.cfg and the planet's file).
  */
 OAPIFUNC double oapiSurfaceDetail (OBJHANDLE hPlanet, double lng, double lat, double elev, double spacing, double relief,
-	double lambdaMin, double *amplitude = 0, double *fade = 0, double *playa = 0);
+	double lambdaMin, double *amplitude, double *fade, double *playa);
+/// The same without the playa weight (the first signature: kept for modules built against it)
+OAPIFUNC double oapiSurfaceDetail (OBJHANDLE hPlanet, double lng, double lat, double elev, double spacing, double relief,
+	double lambdaMin, double *amplitude = 0, double *fade = 0);
 
 /// Parameters of the procedural terrain detail of a planet (see the
 /// TerrainDetail entries of the planet configuration files)
@@ -4916,6 +4919,14 @@ struct SURFDETAILPARAM {
 /**
  * \brief Parameters of the procedural terrain detail of a planet.
  * \return false if the planet has no terrain detail
+ */
+OAPIFUNC bool oapiSurfaceDetailParamsEx (OBJHANDLE hPlanet, SURFDETAILPARAM *prm, size_t size);
+
+/**
+ * \brief The parameters of the procedural terrain detail, as the first SDK with this call had
+ *   them: only the fields up to sea are written (modules built against that structure).
+ *   New code: oapiSurfaceDetailParamsEx (hPlanet, &prm, sizeof (prm)), which writes no more
+ *   than the caller's structure holds as the structure grows.
  */
 OAPIFUNC bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, SURFDETAILPARAM *prm);
 

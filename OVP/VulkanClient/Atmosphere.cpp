@@ -1182,7 +1182,7 @@ void Atmosphere::Update ()
 	}
 	{
 		SURFDETAILPARAM dp;
-		if (oapiSurfaceDetailParams (hPlanet, &dp)) {
+		if (oapiSurfaceDetailParamsEx (hPlanet, &dp, sizeof (dp))) {
 			u.detailPrm[0] = (float)dp.ridge, u.detailPrm[1] = (float)dp.craters;
 			u.detailPrm[2] = (float)dp.craterDepth, u.detailPrm[3] = (float)dp.craterFresh;
 			u.pebShape[0] = (float)dp.pebbleSize, u.pebShape[1] = (float)dp.pebbleRound;

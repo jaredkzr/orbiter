@@ -4,6 +4,7 @@
 #define STRICT 1
 #define OAPI_IMPLEMENTATION
 
+#include <cstddef>
 #include "Orbiter.h"
 #include "Launchpad.h"
 #include "Psys.h"
@@ -1827,6 +1828,13 @@ static const TerrainDetail *PlanetDetail (OBJHANDLE hPlanet)
 }
 
 DLLEXPORT double oapiSurfaceDetail (OBJHANDLE hPlanet, double lng, double lat, double elev, double spacing, double relief,
+	double lambdaMin, double *amplitude, double *fade)
+{
+	// (the first SDK's signature: modules built against it)
+	return oapiSurfaceDetail (hPlanet, lng, lat, elev, spacing, relief, lambdaMin, amplitude, fade, (double*)nullptr);
+}
+
+DLLEXPORT double oapiSurfaceDetail (OBJHANDLE hPlanet, double lng, double lat, double elev, double spacing, double relief,
 	double lambdaMin, double *amplitude, double *fade, double *playa)
 {
 	const TerrainDetail *det = PlanetDetail (hPlanet);
@@ -2009,8 +2017,20 @@ DLLEXPORT void oapiCitySupported ()
 
 DLLEXPORT bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, SURFDETAILPARAM *prm)
 {
+	// (modules built against the first SDK with this call pass the structure as it was then: up to sea;
+	// only that is written. Newer code calls oapiSurfaceDetailParamsEx with its structure's size)
+	SURFDETAILPARAM full;
+	if (!oapiSurfaceDetailParamsEx (hPlanet, &full, sizeof (full))) return false;
+	memcpy ((void*)prm, &full, offsetof (SURFDETAILPARAM, sea) + sizeof (full.sea));
+	return true;
+}
+
+DLLEXPORT bool oapiSurfaceDetailParamsEx (OBJHANDLE hPlanet, SURFDETAILPARAM *out, size_t size)
+{
 	const TerrainDetail *det = PlanetDetail (hPlanet);
-	if (!det) return false;
+	if (!det || !out) return false;
+	SURFDETAILPARAM full;   // (filled whole, then as much copied as the caller's structure holds)
+	SURFDETAILPARAM *prm = &full;
 	const TerrainDetail::Params &p = det->Prm();
 	prm->lambdaMin = det->LambdaMin ();
 	prm->level = p.level;
@@ -2061,6 +2081,7 @@ DLLEXPORT bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, SURFDETAILPARAM *prm)
 			for (int c = 0; c < 4; c++) prm->siteAbs[i][c] = 0.0;
 		}
 	}
+	memcpy ((void*)out, &full, std::min (size, sizeof (full)));
 	return true;
 }
 
