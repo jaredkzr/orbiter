@@ -44,6 +44,7 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 pebShape;      // terrain detail pebbles (B1): size, round, elong, height
 	vec4 pebShape2;     //   bevel, tilt, crag, tone
 	vec4 pebPrm;        //   albedo factor, grit density, micro floor (a/lambda), Earth gate (0/1)
+	vec4 playaPrm;      // playa (B2): x on/off (1: cracks; the weight comes per vertex); yzw reserved
 } atm;
 
 // planet surface (western and eastern hemisphere), for reflections

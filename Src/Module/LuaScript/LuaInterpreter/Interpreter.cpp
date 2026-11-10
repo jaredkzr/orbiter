@@ -1007,6 +1007,7 @@ void Interpreter::LoadAPI ()
 		{"get_planetjcoeffcount", oapi_get_planetjcoeffcount},
 		{"get_planetjcoeff", oapi_get_planetjcoeff},
 		{"surface_elevation", oapi_surface_elevation},
+		{"surface_playa", oapi_surface_playa},
 		{"scatter_objects", oapi_scatter_objects},
 		{"city_buildings", oapi_city_buildings},
 		{"init_tilecache", oapi_init_tilecache},
@@ -5998,6 +5999,42 @@ int Interpreter::oapi_surface_elevation (lua_State *L)
 		nret++;
 	}
 	return nret;
+}
+
+/***
+Playa weight at a point: dry lakes and salt flats (levelled to a smoothed ground, flattened and
+cracked), from the surface texture's colour, the snow line (latitude and elevation) and the
+landing pads (oapiSurfaceDetail's playa, for data of 40 m nodes).
+
+@function surface_playa
+@tparam handle hPlanet planet object handle
+@tparam number lng longitude [rad]
+@tparam number lat latitude [rad]
+@tparam[opt] number elev elevation [m] (default: the surface elevation there)
+@treturn number playa weight (0-1); 0 if the planet has no terrain detail or no playa rule
+*/
+int Interpreter::oapi_surface_playa (lua_State *L)
+{
+	int top = lua_gettop(L);
+
+	OBJHANDLE hPlanet;
+	ASSERT_SYNTAX (top >= 3, "Too few arguments");
+	ASSERT_SYNTAX (lua_islightuserdata (L,1), "Argument 1: invalid type (expected planet handle)");
+	ASSERT_SYNTAX (lua_isnumber (L,2), "Argument 2: invalid type (expected number)");
+	ASSERT_SYNTAX (lua_isnumber (L,3), "Argument 3: invalid type (expected number)");
+	ASSERT_SYNTAX (hPlanet = (OBJHANDLE)lua_toObject (L,1), "Argument 1: invalid object");
+	double lng = luaL_checknumber(L,2);
+	double lat = luaL_checknumber(L,3);
+	double elev;
+	if (top >= 4 && !lua_isnil (L,4)) {
+		ASSERT_SYNTAX (lua_isnumber (L,4), "Argument 4: invalid type (expected number)");
+		elev = luaL_checknumber(L,4);
+	} else
+		elev = oapiSurfaceElevation (hPlanet, lng, lat);
+	double w = 0.0;
+	oapiSurfaceDetail (hPlanet, lng, lat, elev, 40.0, 0.0, 0.0, nullptr, nullptr, &w);
+	lua_pushnumber (L, w);
+	return 1;
 }
 
 /***

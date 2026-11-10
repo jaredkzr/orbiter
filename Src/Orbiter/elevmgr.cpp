@@ -684,7 +684,7 @@ double ElevationManager::Terrain (double lat, double lng, int reqlvl, std::vecto
 				if (normal && dh != 0.0) {
 					// (levelled ground: the data's slopes replaced by the ground's,
 					// which the differences below give)
-					double lv = det->Levelled (lat, lng, spacing);
+					double lv = det->Levelled (lat, lng, spacing, e0, relief);
 					if (lv > 0.0) *normal = Vector (normal->x * (1.0 - lv), normal->y, normal->z * (1.0 - lv)).unit();
 					// slopes of the detail by central differences
 					double d = 0.25 * det->LambdaMin(), R = cbody->Size();
@@ -702,6 +702,34 @@ double ElevationManager::Terrain (double lat, double lng, int reqlvl, std::vecto
 		}
 	}
 	return e*elev_res + dh;
+}
+
+int ElevationManager::RefStride ()
+{
+	return elev_stride;
+}
+
+bool ElevationManager::RefTile (int lvl, int ilat, int ilng, std::vector<float> &out) const
+{
+	if (!mode || !hasData || lvl < 5) return false;
+	const size_t ndat = (size_t)elev_stride * elev_stride;
+	if (INT16 *d = LoadSharedTile (lvl, ilat, ilng)) {
+		out.resize (ndat);
+		for (size_t i = 0; i < ndat; i++) out[i] = (float)(d[i] * elev_res);
+		delete []d;
+		return true;
+	}
+	for (int plvl = lvl - 1; plvl >= 4; plvl--) {
+		int sh = lvl - plvl;
+		INT16 *p = LoadSharedTile (plvl, ilat >> sh, ilng >> sh);
+		if (!p) continue;
+		out.resize (ndat);
+		ElevationGrid (ilat, ilng, lvl - 4, ilat >> sh, ilng >> sh, plvl - 4, p, out.data());
+		delete []p;
+		for (size_t i = 0; i < ndat; i++) out[i] = (float)(out[i] * elev_res);
+		return true;
+	}
+	return false;
 }
 
 void ElevationManager::SetNoDetail ()

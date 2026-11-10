@@ -57,6 +57,7 @@ namespace {
 		float pebShape[4];    // terrain detail pebbles (B1): size, round, elong, height
 		float pebShape2[4];   //   bevel, tilt, crag, tone
 		float pebPrm[4];      //   albedo factor, grit density, micro floor, Earth gate (0/1)
+		float playaPrm[4];    // playa (B2): x on/off (1: cracks, the weight is per vertex); yzw reserved
 	};
 	static_assert (sizeof (AtmUniforms) % 16 == 0, "std140");
 
@@ -1053,9 +1054,12 @@ void Atmosphere::Update ()
 			u.pebShape2[2] = (float)dp.pebbleCrag, u.pebShape2[3] = (float)dp.pebbleTone;
 			u.pebPrm[0] = (float)dp.pebbleAlbedo, u.pebPrm[1] = (float)dp.grit;
 			u.pebPrm[2] = (float)dp.micro, u.pebPrm[3] = dp.pebbleGate ? 1.0f : 0.0f;
+			static const bool playaOff = [] { const char *e = getenv ("ORBITER_VK_PLAYA"); return e && e[0] == '0'; }();
+			u.playaPrm[0] = (playaOff || dp.playa <= 0.0) ? 0.0f : 1.0f; // (the weight itself comes per vertex)
+			u.playaPrm[1] = u.playaPrm[2] = u.playaPrm[3] = 0.0f;
 		} else {
 			u.detailPrm[0] = u.detailPrm[1] = u.detailPrm[2] = u.detailPrm[3] = 0.0f;
-			memset (u.pebShape, 0, sizeof (u.pebShape)), memset (u.pebShape2, 0, sizeof (u.pebShape2)), memset (u.pebPrm, 0, sizeof (u.pebPrm));
+			memset (u.pebShape, 0, sizeof (u.pebShape)), memset (u.pebShape2, 0, sizeof (u.pebShape2)), memset (u.pebPrm, 0, sizeof (u.pebPrm)), memset (u.playaPrm, 0, sizeof (u.playaPrm));
 		}
 	}
 	u.surfPrm[0] = surfSaturation;

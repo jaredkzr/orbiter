@@ -84,6 +84,22 @@ public:
 	*/
 	void AddDeck (double lat, double lng, double radius, double elev);
 
+	/// nodes per tile side of RefTile's data (a border of one node before and two after)
+	static int RefStride ();
+	/**
+	* \brief An elevation tile of the data alone (with its modifications; no
+	*   detail, no client filter) at file level lvl, in metres: row length
+	*   RefStride(), row 0 and column 0 the border node before the tile's
+	*   south-west node (rows south to north). Where the tile does not exist it
+	*   is made from the finest existing ancestor, as the meshes' elevation
+	*   is. Thread safe.
+	* \param lvl file level (at least 5)
+	* \param ilat, ilng tile indices (from the north pole, from -180 degrees)
+	* \param out receives RefStride()^2 values
+	* \return false if there is no data (no elevation, or no tile at any level)
+	*/
+	bool RefTile (int lvl, int ilat, int ilng, std::vector<float> &out) const;
+
 protected:
 	int  Quadrant(double lat, double lng, int lvl) const;
 	bool TileIdx (double lat, double lng, int lvl, int *ilat, int *ilng) const;

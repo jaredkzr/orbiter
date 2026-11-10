@@ -222,11 +222,55 @@ float DetPebbleGate (vec3 c)
 
 const float DET_SKY_EXP = 2.0;
 
+// Playa (B2): the weight comes per vertex from the core (oapiSurfaceDetail: colour, climate, relief), Af.z
+const float PLAYA_JITTER = 0.75, PLAYA_WARP = 0.05, PLAYA_CURL_W = 0.15, PLAYA_EDGE = 2.2, PLAYA_TONE = 0.03;
+// layers: macro, primary, secondary
+const int PLAYA_K[3] = int[3] (2, -2, -4);
+const int PLAYA_M[3] = int[3] (210, 206, 204);
+const float PLAYA_HW[3] = float[3] (0.0025, 0.012, 0.016);
+const float PLAYA_CURL[3] = float[3] (0.0, 0.02, 0.015);
+const float PLAYA_DARK[3] = float[3] (0.55, 0.30, 0.55);
+
+// One layer of desiccation cracks (cells 2^k m, lattice m). Returns the crack's coverage of the
+// pixel (box filter: fpc = the pixel's half size in cells); adds the curled rims' slope (planet
+// frame, m/m, times wg) to grad; tone: the polygon's albedo offset (-1..1)
+float PlayaCrackLayer (DetPoint pt, vec3 d, int k, int m, float hw, float curl, float fpc, float wg, inout vec3 grad, out float tone)
+{
+	ivec3 cell, p; vec3 sg;
+	vec3 f = DetLattice (m, pt, k, cell, p, sg);
+	f += PLAYA_WARP * sin (12.5663706 * f.yzx + vec3 (1.3, 4.1, 2.7)); // (wavy edges; period 1/2 cell: continuous across cells)
+	vec3 up = DetToLattice (d, p, sg);
+	float d1 = 1e9, d2 = 1e9; vec3 q1 = vec3 (0.0), q2 = vec3 (0.0); uint hn = 0u;
+	for (int z = -1; z <= 1; z++)
+	for (int y = -1; y <= 1; y++)
+	for (int x = -1; x <= 1; x++) {
+		ivec3 o = ivec3 (x, y, z);
+		uint h = DetHash (cell + o, 5000u + uint (m));
+		vec3 q = vec3 (o) + 0.5 + PLAYA_JITTER * (vec3 (h & 1023u, (h >> 10) & 1023u, (h >> 20) & 1023u) / 1023.0 - 0.5);
+		vec3 v = q - f;
+		float dd = dot (v, v);
+		if (dd < d1) { d2 = d1; q2 = q1; d1 = dd; q1 = q; hn = h; }
+		else if (dd < d2) { d2 = dd; q2 = q; }
+	}
+	vec3 n = normalize (q2 - q1);
+	vec3 nt = n - up * dot (n, up);
+	float ln = length (nt), lt = max (ln, 0.25);
+	float wf = DetSmoothStep (0.2, 0.45, ln); // (a face lying flat in the slice: no crack, instead of a smear)
+	float e = dot (0.5 * (q1 + q2) - f, n) / lt;   // distance to the edge along the ground [cells]
+	float cov = clamp ((min (e + fpc, hw) - max (e - fpc, -hw)) / (2.0 * fpc), 0.0, 1.0) * wf;
+	float t = (e - hw) / PLAYA_CURL_W;              // curled rims: h = curl (1 - t)^2 [cells] for 0 < t < 1
+	if (curl > 0.0 && wg > 0.0 && t > 0.0 && t < 1.0)
+		grad += DetToPlanet ((-2.0 * curl * (1.0 - t) / PLAYA_CURL_W) * (-nt / lt), p, sg) * (wg * wf);
+	tone = DetUnit16 (DetPcg (hn ^ 0x3c6ef372u)) * 2.0 - 1.0;
+	return cov;
+}
+
 // Perturb the shading normal Nv (view space) of the surface at posView,
 // and its albedo (weathered: darker in the hollows, lighter on the crests;
 // fresh crater ejecta)
-void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec2 Af, inout float sunShadow, float land, inout float skyVis)
+void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec3 Af, inout float sunShadow, float land, inout float skyVis, out float playa)
 {
+	playa = 0.0;
 	// stones: not on water (land), and on Earth by the texel's colour
 	float pg = land * (atm.pebPrm.w > 0.5 ? DetPebbleGate (base) : 1.0);
 	bool stones = (tile.morph.w > 0.0 || atm.pebPrm.y > 0.0) && pg > 0.0;
@@ -247,6 +291,7 @@ void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec2 Af
 	vec3 dl = d0 * (R * fu) + e * ((R / Rh) * (1.0 + fu));
 	DetPoint pt = DetPointAt (tile.refI.xyz, tile.refF.xyz, dl);
 	vec3 d = normalize (d0 + dl / R);
+	playa = atm.playaPrm.x * Af.z * land; // (the core's weight: where it levels the ground; not on drawn water)
 	float dist = length (posView);
 	// pixel size [m] (stretched along the view at grazing angles)
 	float footprint = dist * 2.0 * atm.misc.z / max (frame.jitter.w, 1.0)
@@ -305,6 +350,25 @@ void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec2 Af
 			gt += w * top * tone;
 		}
 		ds.albedo *= mix (1.0, atm.pebPrm.x * (1.0 + atm.pebShape2.w * gt / max (gc, 1e-4)), 0.7 * smoothstep (0.15, 0.5, gc));
+	}
+	// desiccation cracks of the playas (shading only; the slopes of the rims)
+	if (playa > 0.0) {
+		float alb = 1.0, ptone = 0.0;
+		for (int L = 0; L < 3; L++) {
+			float s = exp2 (float (PLAYA_K[L]));
+			float meanCov = 2.0 * PLAYA_HW[L] * PLAYA_EDGE;          // the network's mean coverage
+			float w = L == 0 ? 0.0 : DetSmoothStep (6.0, 16.0, s / footprint); // cells of 6-16 pixels and more: drawn (perf: the thinner cracks are sub-pixel before; DESIGN 3.10) (the macro layer only as its mean: perf, DESIGN 3.10)
+			float cov = meanCov;
+			if (w > 0.0) {
+				float wc = w * DetSmoothStep (1.0, 3.0, PLAYA_CURL_W * s / footprint) * playa; // (rims of 1-3 pixels and more)
+				float tone;
+				float c = PlayaCrackLayer (pt, d, PLAYA_K[L], PLAYA_M[L], PLAYA_HW[L], PLAYA_CURL[L], max (0.5 * footprint / s, 1e-4), wc, ds.grad, tone);
+				cov = mix (meanCov, c, w);
+				if (L == 1) ptone = tone * w;
+			}
+			alb *= 1.0 - (1.0 - PLAYA_DARK[L]) * cov;
+		}
+		ds.albedo *= mix (1.0, alb * (1.0 + PLAYA_TONE * ptone), playa);
 	}
 	// sky visibility of the stones: the uniform sky seen by a facet tilted
 	// by the stones' slope, (1 + cos)/2, squared for the neighbours' occlusion

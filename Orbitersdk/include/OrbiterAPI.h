@@ -4854,17 +4854,21 @@ OAPIFUNC double oapiSurfaceElevation (OBJHANDLE hPlanet, double lng, double lat)
  *   oapiSurfaceDetailParams)
  * \param [out] amplitude if set, receives the noise amplitude factor A [m]:
  *   the noise is a sum of octaves of wavelengths 2^j m with amplitudes
- *   A*(lambda/spacing)^hurst (for shading finer octaves)
+ *   A*(lambda/spacing)^hurst (for shading finer octaves); reduced on playas: TerrainDetailPlaya
  * \param [out] fade if set, receives the fade factor of the craters, pebbles
  *   and micro relief (0 at surface bases and, on bodies with seas, on the
  *   flat sea: at and below the sea level of the data where the data have no
- *   relief; 1 elsewhere)
+ *   relief; 1 elsewhere; reduced on playas: TerrainDetailPlaya)
+ * \param [out] playa if set, receives the playa weight (0-1) at the point: the
+ *   ground is levelled to a smoothed reference by this share and the client
+ *   cracks it (TerrainDetailPlaya); 0 where there is no playa, the rule is off,
+ *   or the point is on a landing pad
  * \return Elevation [m] to add to the interpolated elevation data
  * \note Returns 0 if the planet has no terrain detail (configuration:
  *   TerrainDetail in Orbiter.cfg and the planet's file).
  */
 OAPIFUNC double oapiSurfaceDetail (OBJHANDLE hPlanet, double lng, double lat, double elev, double spacing, double relief,
-	double lambdaMin, double *amplitude = 0, double *fade = 0);
+	double lambdaMin, double *amplitude = 0, double *fade = 0, double *playa = 0);
 
 /// Parameters of the procedural terrain detail of a planet (see the
 /// TerrainDetail entries of the planet configuration files)
@@ -4892,6 +4896,7 @@ struct SURFDETAILPARAM {
 	double micro = 0.0;         ///< slope floor (amplitude/wavelength) of the noise octaves of 2 m and less
 	double grit = 0.0;          ///< density of the grains of a few mm (shading only; 0: none)
 	bool pebbleGate = false;    ///< no stones on vegetation, snow and bright flats, judged by the client from the texture (shading only)
+	double playa = 0.0;        ///< strength of the playa rule (dry lakes, salt flats): flattened by the core, cracked by the client (0: none)
 };
 
 /**
@@ -4899,6 +4904,16 @@ struct SURFDETAILPARAM {
  * \return false if the planet has no terrain detail
  */
 OAPIFUNC bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, SURFDETAILPARAM *prm);
+
+/**
+ * \brief The playa factor (0-1) at a point: dry lakes and salt flats, from the
+ *   surface texture's colour (bright, unsaturated), the snow line (latitude,
+ *   elevation) and the data's relief. The terrain detail flattens them.
+ * \param elev elevation [m]
+ * \param relief local relief of the elevation data [m] (see oapiSurfaceDetail; 0: left out)
+ * \return 0 if the planet has no terrain detail or no playa rule (TerrainDetailPlaya)
+ */
+OAPIFUNC double oapiSurfacePlaya (OBJHANDLE hPlanet, double lng, double lat, double elev, double relief = 0.0);
 
 /**
  * \brief A graphics client that renders the procedural terrain detail

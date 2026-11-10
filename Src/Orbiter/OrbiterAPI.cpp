@@ -1827,15 +1827,16 @@ static const TerrainDetail *PlanetDetail (OBJHANDLE hPlanet)
 }
 
 DLLEXPORT double oapiSurfaceDetail (OBJHANDLE hPlanet, double lng, double lat, double elev, double spacing, double relief,
-	double lambdaMin, double *amplitude, double *fade)
+	double lambdaMin, double *amplitude, double *fade, double *playa)
 {
 	const TerrainDetail *det = PlanetDetail (hPlanet);
 	if (!det) {
 		if (amplitude) *amplitude = 0.0;
 		if (fade) *fade = 0.0;
+		if (playa) *playa = 0.0;
 		return 0.0;
 	}
-	return det->Height (lat, lng, elev, spacing, relief, lambdaMin, amplitude, fade);
+	return det->Height (lat, lng, elev, spacing, relief, lambdaMin, amplitude, fade, playa);
 }
 
 DLLEXPORT void oapiSurfaceDetailSupported ()
@@ -2033,7 +2034,14 @@ DLLEXPORT bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, SURFDETAILPARAM *prm)
 	prm->micro = p.micro;
 	prm->grit = p.grit;
 	prm->pebbleGate = p.pebbleGate;
+	prm->playa = p.playa;
 	return true;
+}
+
+DLLEXPORT double oapiSurfacePlaya (OBJHANDLE hPlanet, double lng, double lat, double elev, double relief)
+{
+	const TerrainDetail *det = PlanetDetail (hPlanet);
+	return det ? det->Playa (lat, lng, elev, relief) : 0.0;
 }
 
 DLLEXPORT bool oapiGetDustRing (OBJHANDLE hStar, DUSTRINGINFO *ring)

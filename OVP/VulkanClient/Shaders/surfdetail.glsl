@@ -129,7 +129,7 @@ float DetailHeight (vec3 p, int type, float footprint, out float albedo)
 
 // Perturb the shading normal Nv (view space) and the albedo of the surface
 // at posView (distance dist from the camera)
-void SurfaceDetail (vec3 posView, float dist, inout vec3 Nv, inout vec3 base)
+void SurfaceDetail (vec3 posView, float dist, inout vec3 Nv, inout vec3 base, float playa)
 {
 	int type = int (atm.detail.x + 0.5);
 	if (type == DETAIL_NONE || atm.radii.x <= 0.0) return;
@@ -148,10 +148,10 @@ void SurfaceDetail (vec3 posView, float dist, inout vec3 Nv, inout vec3 base)
 	// at a quarter pixel: 2.3 ms of the terrain's 8 in a narrow view))
 	if (tile.detail.w > 0.5) {
 		vec3 up = normalize (Np);
-		vec3 g = DetailGrain (p, type, footprint).yzw * (atm.detail.y * fade);
+		vec3 g = DetailGrain (p, type, footprint).yzw * (atm.detail.y * fade * (1.0 - 0.85 * playa));
 		vec3 gp = g - up * dot (g, up);
 		Nv = normalize (Nv - transpose (v2p) * gp);
-		base *= mix (1.0, DetailMottling (p, footprint), fade);
+		base *= mix (1.0, mix (DetailMottling (p, footprint), 1.0, 0.6 * playa), fade);
 		return;
 	}
 #endif

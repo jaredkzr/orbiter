@@ -9,7 +9,7 @@
 layout(location = 0) in vec3 inPos;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec2 inUV;
-layout(location = 3) in vec2 inDetailA; // terrain detail: noise amplitude [m], crater fade
+layout(location = 3) in vec3 inDetailA; // terrain detail: noise amplitude [m], crater fade, playa weight (the core's)
 layout(location = 4) in vec3 inMorph;   // position on the parent tile's mesh (continuous level of detail)
 
 #include "frame.glsl"
@@ -27,7 +27,7 @@ layout(push_constant) uniform Tile {
 layout(location = 0) out vec3 vPosView;
 layout(location = 1) out vec3 vNormalView;
 layout(location = 2) out vec2 vUV;
-layout(location = 3) out vec2 vDetailA;
+layout(location = 3) out vec3 vDetailA;
 layout(location = 4) out float vMorph;
 
 void main()

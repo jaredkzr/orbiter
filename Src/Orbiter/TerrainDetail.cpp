@@ -7,6 +7,7 @@
 #include "Cities.h"
 #include "ProcTerrain.h"
 #include "elevmgr.h"
+#include "PlayaMap.h"
 #include <memory>
 #include <map>
 #include <algorithm>
@@ -19,6 +20,9 @@
 #include <cstdio>
 
 namespace {
+
+	const double PLAYA_FLAT = 0.95; // amplitude reduction on full playa
+	const double PLAYA_FADE = 0.8;  // fade (pebbles, craters, micro relief) reduction on full playa
 
 	// The noise is defined so that a GPU can evaluate the same function
 	// (32-bit integer hash, exact octave rotations): the Vulkan client's
@@ -276,7 +280,7 @@ int TerrainDetail::ShapeByName (const char *name)
 
 TerrainDetail::Overrides::Overrides ()
 {
-	gain = hurst = ridge = floor = sea = craters = craterDepth = craterFresh = pebbles = level = pebbleShape = pebbleAlbedo = micro = grit = std::nan ("");
+	gain = hurst = ridge = floor = sea = craters = craterDepth = craterFresh = pebbles = level = pebbleShape = pebbleAlbedo = micro = grit = playa = std::nan ("");
 }
 
 void TerrainDetail::Overrides::Apply (Params &p) const
@@ -294,6 +298,7 @@ void TerrainDetail::Overrides::Apply (Params &p) const
 	if (!std::isnan (pebbleAlbedo)) p.pebbleAlbedo = std::clamp (pebbleAlbedo, 0.3, 2.0);
 	if (!std::isnan (micro)) p.micro = std::clamp (micro, 0.0, 0.05);
 	if (!std::isnan (grit)) p.grit = std::clamp (grit, 0.0, 1.0);
+	if (!std::isnan (playa)) p.playa = std::clamp (playa, 0.0, 1.0);
 	if (!std::isnan (level)) p.level = (int)level;
 }
 
@@ -306,6 +311,8 @@ TerrainDetail::Params TerrainDetail::Defaults (const Planet *planet)
 		p.gain = 0.5, p.ridge = 1.0, p.floor = 0.03, p.sea = true;
 		// gravel and grit in arid ground (shading mostly; not on vegetation, snow, bright flats)
 		p.pebbles = 0.6, p.shape = PebblePreset (PEBBLE_ANGULAR), p.pebbleAlbedo = 0.85, p.grit = 0.6, p.micro = 0.02, p.pebbleGate = true;
+		// dry lakes and salt flats: flat (and cracked by the client)
+		p.playa = 1.0;
 	} else if (!strcmp (name, "Mars")) {
 		// wind-worn relief, old and shallow craters
 		p.gain = 0.4, p.ridge = 0.7, p.floor = 0.04;
@@ -395,6 +402,7 @@ TerrainDetail::TerrainDetail (const Planet *pl, const Params &p): planet (pl), p
 	// (planets without elevation data: the spacing of the coarsest tile
 	// level with nodes 2 km apart at most)
 	flatSpacing = radius * Pi / 256.0;
+	playaSpacing = radius * Pi / 64.0 / 256.0; // level-10 data spacing
 	while (flatSpacing > 2000.0) flatSpacing *= 0.5;
 	lambdaMin = 4.0 * s;
 }
@@ -541,24 +549,62 @@ double TerrainDetail::Fade (const Vector &dir, double *bases, double *built, dou
 	return f * (1.0 - 0.85 * b);
 }
 
-double TerrainDetail::Levelled (double lat, double lng, double spacing) const
+double TerrainDetail::Levelled (double lat, double lng, double spacing, double elev, double relief) const
 {
 	Vector dir (cos (lat) * cos (lng), sin (lat), cos (lat) * sin (lng));
 	double g, lp = PadLevel (dir, g); // (landing pads)
-	if (!cities) return lp;
-	double wl = SmoothStep (LEVEL_SPACING, 0.5 * LEVEL_SPACING, spacing);
-	if (wl <= 0.0) return lp;
-	double fb, b;
-	const double ll[2] = { lat, std::remainder (lng, Pi2) };
-	Fade (dir, &fb, &b, SmoothStep (BUILT_SPACING, 0.5 * BUILT_SPACING, spacing), ll);
-	return std::max (lp, fb * b * wl);
+	double r = lp;
+	if (cities) {
+		double wl = SmoothStep (LEVEL_SPACING, 0.5 * LEVEL_SPACING, spacing);
+		if (wl > 0.0) {
+			double fb, b;
+			const double ll[2] = { lat, std::remainder (lng, Pi2) };
+			Fade (dir, &fb, &b, SmoothStep (BUILT_SPACING, 0.5 * BUILT_SPACING, spacing), ll);
+			r = std::max (lp, fb * b * wl);
+		}
+	}
+	// dry lakes: levelled to the smoothed ground (Height)
+	if (prm.playa > 0.0) {
+		double pl = Playa (lat, lng, elev, relief, spacing), gr;
+		double gl = SmoothStep (2.0 * playaSpacing, playaSpacing, spacing); // (coarser data do not resolve hummocks)
+		double wl = pl > 0.0 && gl > 0.0 ? PlayaLevel (lat, lng, elev, pl * (1.0 - lp) * gl, gr) : 0.0;
+		if (wl > 0.0) r = 1.0 - (1.0 - r) * (1.0 - wl);
+	}
+	return r;
+}
+
+double TerrainDetail::PlayaLevel (double lat, double lng, double elev, double w, double &g) const
+{
+	std::call_once (playaOnce, [this]() { playaMap = std::make_unique<PlayaMap> (planet); });
+	g = playaMap->Ground (lat, lng);
+	if (std::isnan (g)) return 0.0;
+	return prm.sea ? w * SmoothStep (1.0, 3.0, std::min (elev, g)) : w; // (never level salt flats into the sea)
+}
+
+TerrainDetail::~TerrainDetail () {}
+
+double TerrainDetail::Playa (double lat, double lng, double elev, double relief, double spacing) const
+{
+	if (prm.playa <= 0.0) return 0.0;
+	// climate: below the snow line
+	double latDeg = fabs (lat) * DEG;
+	double snow = std::max (5000.0 - 170.0 * std::max (latDeg - 30.0, 0.0), 0.0);
+	double K = 1.0 - SmoothStep (snow - 1000.0, snow - 200.0, elev);
+	if (K <= 0.0) return 0.0;
+	// gentle data
+	double F = 1.0 - SmoothStep (15.0, 40.0, relief);
+	if (F <= 0.0) return 0.0;
+	std::call_once (playaOnce, [this]() { playaMap = std::make_unique<PlayaMap> (planet); });
+	double C = playaMap->Colour (lat, std::remainder (lng, Pi2), spacing);
+	return prm.playa * C * K * F;
 }
 
 double TerrainDetail::Height (double lat, double lng, double elev, double spacing, double relief, double lmin,
-	double *amplitude, double *fade) const
+	double *amplitude, double *fade, double *playa) const
 {
 	if (amplitude) *amplitude = 0.0;
 	if (fade) *fade = 0.0;
+	if (playa) *playa = 0.0;
 	if (spacing <= 0.0) return 0.0;
 	Vector dir (cos (lat) * cos (lng), sin (lat), cos (lat) * sin (lng));
 	// (built-up ground: where the data resolve it; further out, coarser
@@ -578,15 +624,31 @@ double TerrainDetail::Height (double lat, double lng, double elev, double spacin
 	// landing pads: level
 	double gp, wp = PadLevel (dir, gp);
 	if (wp > 0.0) lev = lev * (1.0 - wp) + wp * (gp - elev);
+	// dry lakes and salt flats (the data's relief, before the floor). Their ground is levelled to
+	// the smoothed ground everywhere the colour and climate say playa, also near bases (f: the
+	// noise's fade; the pads' own levels stay). The client's weight (cracks) is the factor off the
+	// pads, without f; the noise amplitude and fade below carry f.
+	double pl = prm.playa > 0.0 ? Playa (lat, lng, elev, relief, spacing) : 0.0;
+	if (pl > 0.0) {
+		// (levelling only where the data resolve the hummocks: coarser meshes skip the ground)
+		double gl = SmoothStep (2.0 * playaSpacing, playaSpacing, spacing);
+		if (gl > 0.0) {
+			double g, wl = PlayaLevel (lat, lng, elev, pl * (1.0 - wp) * gl, g);
+			if (wl > 0.0) lev = lev * (1.0 - wl) + wl * (g - elev);
+		}
+		if (playa) *playa = pl * (1.0 - wp);
+	}
 	if (f <= 0.0) return lev;
 	// plains get the floor's relief (not the sea)
 	if (prm.floor > 0.0 && (!prm.sea || elev > 1.0)) relief = std::max (relief, prm.floor * spacing);
 	double A = prm.gain * std::max (relief, 0.0) * f; // amplitude at the data's node spacing
+	if (pl > 0.0) A *= 1.0 - PLAYA_FLAT * pl;
 	if (amplitude) *amplitude = A;
 	// sea gate: no craters, pebbles or micro relief on the flat sea (at and below the
 	// data's sea level where the data have no relief). fd = 0 implies A = 0.
 	double sg = prm.sea ? std::max (SmoothStep (0.25, 1.0, elev), SmoothStep (0.0, 0.5, A)) : 1.0;
 	double fd = f * sg;
+	if (pl > 0.0) fd *= 1.0 - PLAYA_FADE * pl;
 	if (fade) *fade = fd;
 	lmin = std::max (lmin, lambdaMin);
 	if (lmin >= spacing) return lev;

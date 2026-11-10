@@ -38,7 +38,7 @@ layout(std430, set = 0, binding = 8) readonly buffer Tracks { TrackSeg seg[]; } 
 layout(location = 0) in vec3 vPosView;
 layout(location = 1) in vec3 vNormalView;
 layout(location = 2) in vec2 vUV;
-layout(location = 3) in vec2 vDetailA;
+layout(location = 3) in vec3 vDetailA;
 layout(location = 4) in float vMorph;
 
 layout(location = 0) out vec4 outColor;
@@ -715,6 +715,7 @@ void main()
 	float detailShadow = 1.0; // (shadows of the procedural craters)
 	vec3 cityLight = vec3(0.0); // (street lamps)
 	float cityCover = 0.0;
+	float playa = 0.0; // (dry lake factor of the terrain detail)
 	if (tile.params.z < 0.5) {
 #ifdef TERRAIN_DETAIL
 		float land = 1.0; // (no stones on water: the mask's alpha)
@@ -722,11 +723,11 @@ void main()
 			vec2 hmL = 0.5 / vec2(textureSize(maskTex, 0));
 			land = smoothstep(0.3, 0.7, texture(maskTex, clamp(vUV * tile.maskUV.zw + tile.maskUV.xy, hmL, 1.0 - hmL)).a);
 		}
-		TerrainDetailShading(vPosView, N, base, vDetailA, detailShadow, land, detailSky);
+		TerrainDetailShading(vPosView, N, base, vDetailA, detailShadow, land, detailSky, playa);
 #endif
 		cityLight = CityGround(vPosView, base, cityCover);
 		TrackShading(vPosView, N, base);
-		SurfaceDetail(vPosView, length(vPosView), N, base);
+		SurfaceDetail(vPosView, length(vPosView), N, base, playa);
 	} else if (dot(vPosView, N) < 0.0) {
 		// cloud tops seen from above: relief from the cloud density (thicker
 		// clouds are taller; exaggerated for the texture's smoothness), shading their sides (surface

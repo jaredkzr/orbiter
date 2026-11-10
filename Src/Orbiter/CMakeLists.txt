@@ -102,6 +102,7 @@ set(common_src
 	UiTheme.cpp
 	SettingsUI.cpp
 	TerrainDetail.cpp
+	PlayaMap.cpp
 	ProcTerrain.cpp
 	GroundScatter.cpp
 	Cities.cpp

@@ -19,7 +19,7 @@ layout(local_size_x = 256) in;
 
 const int G = 64, V = G + 1, W = G + 3, M = G / 2 + 1; // (G: TileRenderer::GRID)
 const int NV = V * V + 4 * V; // vertices: grid, then the skirts
-const int NE = 5;             // per-vertex detail stream: amplitude, fade, morph target
+const int NE = 6;             // per-vertex detail stream: amplitude, fade, playa weight, morph target
 
 struct Job {
 	ivec4 refI;     // the tile's reference point d0 R [m] (d0: the centre's direction), integer part
@@ -28,7 +28,7 @@ struct Job {
 	vec4 off;       // offsets of the top row and left column from the centre [rad]; latitude limits (poles) relative to it
 	vec4 d0;        // d0 (xyz)
 	uvec2 outAddr;  // vertex buffer: NV vertices (8 floats), then NV detail records (NE floats)
-	uvec2 ptsAddr;  // per point: data elevation, amplitude, fade (W*W, then the parent's M*M)
+	uvec2 ptsAddr;  // per point: data elevation, amplitude, fade, playa weight (W*W, then the parent's M*M)
 	vec4 sp;        // lmin, the parent's lmin, data spacing, the parent's data spacing [m]
 	vec4 misc;      // skirt depth [m], parent (1/0), lsplit: the coarser detail is in the points' elevations [m],
 	                // href: the points' elevations are relative to it [m]
@@ -68,12 +68,12 @@ vec3 DirOffset (float lat0, float lng0, float da, float db)
 void SetT (OutFloats o, int idx, vec3 t)
 {
 	uint e = uint (NV * 8 + idx * NE);
-	o.f[e + 2] = t.x, o.f[e + 3] = t.y, o.f[e + 4] = t.z;
+	o.f[e + 3] = t.x, o.f[e + 4] = t.y, o.f[e + 5] = t.z;
 }
 vec3 GetT (OutFloats o, int idx)
 {
 	uint e = uint (NV * 8 + idx * NE);
-	return vec3 (o.f[e + 2], o.f[e + 3], o.f[e + 4]);
+	return vec3 (o.f[e + 3], o.f[e + 4], o.f[e + 5]);
 }
 
 void main ()
@@ -96,7 +96,7 @@ void main ()
 		int i = int (k) / W, j = int (k) % W;
 		vec3 dd = DirOffset (jb.ll.x, jb.ll.y, DA (i - 1), DB (j - 1));
 		DetPoint pt = DetPointAt (jb.refI.xyz, jb.refF.xyz, dd * R);
-		float h0 = pts.f[3 * k], A = pts.f[3 * k + 1], f = pts.f[3 * k + 2];
+		float h0 = pts.f[4 * k], A = pts.f[4 * k + 1], f = pts.f[4 * k + 2];
 		// (without the pebbles: the normals are of the ground under them; the
 		// shader shades the pebbles per pixel, their sharp edges would
 		// alias on the grid)
@@ -112,7 +112,7 @@ void main ()
 			vec3 dd = DirOffset (jb.ll.x, jb.ll.y, DA (i), DB (j));
 			DetPoint pt = DetPointAt (jb.refI.xyz, jb.refF.xyz, dd * R);
 			uint q = uint (W * W) + k;
-			float h0 = pts.f[3 * q], A = pts.f[3 * q + 1], f = pts.f[3 * q + 2];
+			float h0 = pts.f[4 * q], A = pts.f[4 * q + 1], f = pts.f[4 * q + 2];
 			float h = h0 + DetHeight (pt, A, f, jb.sp.w, jb.sp.y, jb.misc.z, pc.prm, pc.prm2.x, pc.prm2.y, S);
 			SetT (o, i * V + j, d0 * h + dd * (R + jb.misc.w + h));
 		}
@@ -166,7 +166,7 @@ void main ()
 		vec3 dd = DirOffset (jb.ll.x, jb.ll.y, da, DB (j));
 		vec3 d = normalize (d0 + dd);
 		DetPoint pt = DetPointAt (jb.refI.xyz, jb.refF.xyz, dd * R);
-		float peb = DetPebbles (pt, pts.f[3 * pk + 2], jb.sp.z, jb.sp.x, pc.prm2.x, 0.0, S);
+		float peb = DetPebbles (pt, pts.f[4 * pk + 2], jb.sp.z, jb.sp.x, pc.prm2.x, 0.0, S);
 		vec3 href0 = d0 * jb.misc.w;
 		vec3 p = P[pk] + d * peb + href0;
 		// (across the columns drawn, K: one-sided at the edges of a tile
@@ -178,7 +178,7 @@ void main ()
 		bool pole = da >= jb.off.z || da <= jb.off.w; // (at a pole the neighbours collapse: the vertical)
 		nm = len > 1e-9 && !pole ? nm / len : d;
 		if (dot (nm, d) < 0.0) nm = -nm;
-		float A = pts.f[3 * pk + 1], f = pts.f[3 * pk + 2];
+		float A = pts.f[4 * pk + 1], f = pts.f[4 * pk + 2], pl = pts.f[4 * pk + 3];
 		vec3 t = GetT (o, int (k)) + href0;
 		// (the vertex, and its skirt copies on the edges)
 		for (int s = 0; s < 5; s++) {
@@ -196,8 +196,8 @@ void main ()
 			o.f[b + 3] = nm.x, o.f[b + 4] = nm.y, o.f[b + 5] = nm.z;
 			o.f[b + 6] = float (j) / float (G), o.f[b + 7] = float (i) / float (G);
 			uint e = ampBase + uint (idx) * uint (NE);
-			o.f[e] = A, o.f[e + 1] = f;
-			o.f[e + 2] = tt.x, o.f[e + 3] = tt.y, o.f[e + 4] = tt.z;
+			o.f[e] = A, o.f[e + 1] = f, o.f[e + 2] = pl;
+			o.f[e + 3] = tt.x, o.f[e + 4] = tt.y, o.f[e + 5] = tt.z;
 		}
 	}
 	barrier ();

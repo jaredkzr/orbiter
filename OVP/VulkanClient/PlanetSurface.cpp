@@ -337,17 +337,17 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 		{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vs, "main" },
 		{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main" }
 	};
-	// (binding 1: the amplitude of the terrain detail, after the vertices)
+	// (binding 1: the amplitude of the terrain detail and playa weight, after the vertices)
 	VkVertexInputBindingDescription bind[2] = {
 		{ 0, sizeof(NTVERTEX), VK_VERTEX_INPUT_RATE_VERTEX },
-		{ 1, 5 * sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX }
+		{ 1, 6 * sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX }
 	};
 	VkVertexInputAttributeDescription attr[5] = {
 		{ 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(NTVERTEX, x) },
 		{ 1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(NTVERTEX, nx) },
 		{ 2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(NTVERTEX, tu) },
-		{ 3, 1, VK_FORMAT_R32G32_SFLOAT, 0 },
-		{ 4, 1, VK_FORMAT_R32G32B32_SFLOAT, 2 * sizeof(float) }
+		{ 3, 1, VK_FORMAT_R32G32B32_SFLOAT, 0 },
+		{ 4, 1, VK_FORMAT_R32G32B32_SFLOAT, 3 * sizeof(float) }
 	};
 	VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
 	vi.vertexBindingDescriptionCount = 2;
@@ -655,10 +655,10 @@ PlanetSurface::PlanetSurface (OBJHANDLE h, Scene *s, std::shared_ptr<PlanetLayer
 			char pname[256];
 			oapiGetObjectName (hPlanet, pname, 256);
 			{ std::lock_guard<std::mutex> lk (logMutex); first = logged.insert (pname).second; }
-			if (first) oapiWriteLogV ("VulkanClient: terrain detail of %s: level %d, lambdaMin %.3f m, pebbles %.2f (size %.2f round %.2f elong %.2f height %.2f bevel %.2f tilt %.2f crag %.2f tone %.2f albedo %.2f), grit %.2f, micro %.3f, gate %d, sea %d",
+			if (first) oapiWriteLogV ("VulkanClient: terrain detail of %s: level %d, lambdaMin %.3f m, pebbles %.2f (size %.2f round %.2f elong %.2f height %.2f bevel %.2f tilt %.2f crag %.2f tone %.2f albedo %.2f), grit %.2f, micro %.3f, gate %d, sea %d, playa %.2f",
 				pname, detailPrm.level, detailPrm.lambdaMin, detailPrm.pebbles, detailPrm.pebbleSize, detailPrm.pebbleRound, detailPrm.pebbleElong,
 				detailPrm.pebbleHeight, detailPrm.pebbleBevel, detailPrm.pebbleTilt, detailPrm.pebbleCrag, detailPrm.pebbleTone,
-				detailPrm.pebbleAlbedo, detailPrm.grit, detailPrm.micro, detailPrm.pebbleGate ? 1 : 0, detailPrm.sea ? 1 : 0);
+				detailPrm.pebbleAlbedo, detailPrm.grit, detailPrm.micro, detailPrm.pebbleGate ? 1 : 0, detailPrm.sea ? 1 : 0, detailPrm.playa);
 		}
 		// (finer meshes where the detail goes)
 		if (detail) maxLevel = std::clamp (std::max (maxLevel, detailPrm.level), 4, 28);
@@ -825,13 +825,14 @@ double PlanetSurface::SampleElev (const Node *src, double lat, double lng) const
 	return e0 * (1.0 - wy) + e1 * wy;
 }
 
-double PlanetSurface::SurfaceElev (const Node *src, double lat, double lng, double lmin, double *amp, double *fade) const
+double PlanetSurface::SurfaceElev (const Node *src, double lat, double lng, double lmin, double *amp, double *fade, double *playa) const
 {
 	if (amp) *amp = 0.0;
 	if (fade) *fade = 0.0;
+	if (playa) *playa = 0.0;
 	if (!src) { // (no elevation data: flat, with the detail as the core has it)
 		if (clouds || !detail || layers->elev) return 0.0;
-		return oapiSurfaceDetail (hPlanet, lng, lat, 0.0, detailPrm.flatSpacing, 0.0, lmin, amp, fade);
+		return oapiSurfaceDetail (hPlanet, lng, lat, 0.0, detailPrm.flatSpacing, 0.0, lmin, amp, fade, playa);
 	}
 	double h = SampleElev (src, lat, lng);
 	if (clouds || !detail) return h;
@@ -851,7 +852,7 @@ double PlanetSurface::SurfaceElev (const Node *src, double lat, double lng, doub
 	double r1 = node (e + N) * (1.0 - wx) + node (e + N + 1) * wx;
 	double relief = r0 * (1.0 - wy) + r1 * wy;
 	double spacing = radius * (src->latmax - src->latmin) / (N - 3);
-	return h + oapiSurfaceDetail (hPlanet, lng, lat, h, spacing, relief, lmin, amp, fade);
+	return h + oapiSurfaceDetail (hPlanet, lng, lat, h, spacing, relief, lmin, amp, fade, playa);
 }
 
 void PlanetSurface::ComputeMesh (const Node *n, const Node *src, bool detailed, MeshData &md) const
@@ -859,7 +860,7 @@ void PlanetSurface::ComputeMesh (const Node *n, const Node *src, bool detailed, 
 	const int G = TileRenderer::GRID, V = G + 1, W = G + 3; // W: grid with a one-node border
 	double dlat = (n->latmax - n->latmin) / G, dlng = (n->lngmax - n->lngmin) / G;
 	std::vector<VECTOR3> P ((size_t)W * W), D ((size_t)W * W);
-	std::vector<float> A ((size_t)W * W * 2, 0.0f); // noise amplitude and crater fade of the detail (the shader adds the finer octaves)
+	std::vector<float> A ((size_t)W * W * 3, 0.0f); // noise amplitude and crater fade of the detail (the shader adds the finer octaves)
 	// detail down to a few node spacings of this mesh (or none: the shader
 	// shades all of it)
 	double lmin = detailed ? 4.0 * radius * (n->latmax - n->latmin) / G : 1e30;
@@ -868,9 +869,9 @@ void PlanetSurface::ComputeMesh (const Node *n, const Node *src, bool detailed, 
 		for (int j = 0; j < W; j++) {
 			double lng = n->lngmin + (j - 1) * dlng;
 			VECTOR3 d = SurfaceDir (lat, lng);
-			double a = 0.0, f = 0.0;
-			double h = SurfaceElev (src, lat, lng, lmin, &a, &f);
-			A[2 * (i*W + j)] = (float)a, A[2 * (i*W + j) + 1] = (float)f;
+			double a = 0.0, f = 0.0, pl = 0.0;
+			double h = SurfaceElev (src, lat, lng, lmin, &a, &f, &pl);
+			A[3 * (i*W + j)] = (float)a, A[3 * (i*W + j) + 1] = (float)f, A[3 * (i*W + j) + 2] = (float)pl;
 			D[i*W + j] = d;
 			P[i*W + j] = d * (radius + h);
 		}
@@ -940,23 +941,23 @@ void PlanetSurface::ComputeMesh (const Node *n, const Node *src, bool detailed, 
 	}
 
 	// per-vertex data after the vertices (vertex binding 1): noise
-	// amplitude and crater fade of the terrain detail, morph target
+	// amplitude and crater fade of the terrain detail, playa weight, morph target
 	// (relative to the tile centre)
-	const int NE = 5;
+	const int NE = 6;
 	std::vector<float> amp (vtx.size() * NE);
 	for (int i = 0; i < V; i++)
 		for (int j = 0; j < V; j++) {
 			size_t a = (size_t)(i + 1) * W + (j + 1);
 			float *e = &amp[NE * (i*V + j)];
 			VECTOR3 t = T[i*V + j] - n->centre;
-			e[0] = A[2*a], e[1] = A[2*a + 1];
-			e[2] = (float)t.x, e[3] = (float)t.y, e[4] = (float)t.z;
+			e[0] = A[3*a], e[1] = A[3*a + 1], e[2] = A[3*a + 2];
+			e[3] = (float)t.x, e[4] = (float)t.y, e[5] = (float)t.z;
 		}
 	auto copy = [&](int base, int k, int i, int j) {
 		float *e = &amp[NE * (V*V + base + k)];
 		memcpy (e, &amp[NE * (i*V + j)], NE * sizeof(float));
 		VECTOR3 d = D[(i + 1) * W + (j + 1)];
-		e[2] -= (float)(d.x * depth), e[3] -= (float)(d.y * depth), e[4] -= (float)(d.z * depth);
+		e[3] -= (float)(d.x * depth), e[4] -= (float)(d.y * depth), e[5] -= (float)(d.z * depth);
 	};
 	for (int k = 0; k < V; k++) {
 		copy (0*V, k, 0, k);
@@ -1070,7 +1071,7 @@ void PlanetSurface::EnsureVertexBuffer (Node *n)
 	if (n->vbuf.buffer) return;
 	const int V = TileRenderer::GRID + 1;
 	const size_t nv = (size_t)V * V + 4 * V;
-	VkDeviceSize size = nv * (sizeof(NTVERTEX) + 5 * sizeof(float));
+	VkDeviceSize size = nv * (sizeof(NTVERTEX) + 6 * sizeof(float));
 	nMeshes++;
 	n->vbuf = ctx->CreateBuffer (size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
 		(ctx->rayTracing ? VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR : 0) |
@@ -1096,7 +1097,7 @@ void PlanetSurface::PrepareGpuMesh (const Node *n, const Node *src, GpuJob &job,
 	// lsplit, 40000 node spacings; the GPU adds the finer ones)
 	double lmin = 4.0 * radius * (n->latmax - n->latmin) / G;
 	double lsplit = std::max ({ 2.0 * lmin, detailPrm.lambdaMin, 1e4 * lmin });
-	pts.resize ((size_t)(W * W + M * M) * 3);
+	pts.resize ((size_t)(W * W + M * M) * 4);
 	// (elevations relative to the tile's reference elevation href, so that
 	// their single precision rounding is far below the node spacing)
 	const float href = (float)SurfaceElev (src, 0.5 * (n->latmin + n->latmax), 0.5 * (n->lngmin + n->lngmax), lsplit);
@@ -1104,10 +1105,10 @@ void PlanetSurface::PrepareGpuMesh (const Node *n, const Node *src, GpuJob &job,
 		double lat = std::clamp (n->latmax - (i - 1) * dlat, -PI05, PI05);
 		for (int j = 0; j < W; j++) {
 			double lng = n->lngmin + (j - 1) * dlng;
-			double a = 0.0, f = 0.0;
-			float *p = &pts[3 * (i * W + j)];
-			p[0] = (float)(SurfaceElev (src, lat, lng, lsplit, &a, &f) - (double)href);
-			p[1] = (float)a, p[2] = (float)f;
+			double a = 0.0, f = 0.0, pl = 0.0;
+			float *p = &pts[4 * (i * W + j)];
+			p[0] = (float)(SurfaceElev (src, lat, lng, lsplit, &a, &f, &pl) - (double)href);
+			p[1] = (float)a, p[2] = (float)f, p[3] = (float)pl;
 		}
 	}
 	const Node *psrc = n->parent ? ElevSource (n->parent) : nullptr;
@@ -1116,15 +1117,15 @@ void PlanetSurface::PrepareGpuMesh (const Node *n, const Node *src, GpuJob &job,
 	if (n->parent && psrc == src)
 		for (int i = 0; i < M; i++)
 			for (int j = 0; j < M; j++)
-				memcpy (&pts[3 * (W * W + i * M + j)], &pts[3 * ((2 * i + 1) * W + 2 * j + 1)], 3 * sizeof(float));
+				memcpy (&pts[4 * (W * W + i * M + j)], &pts[4 * ((2 * i + 1) * W + 2 * j + 1)], 4 * sizeof(float));
 	else if (n->parent)
 		for (int i = 0; i < M; i++) {
 			double lat = std::clamp (n->latmax - 2 * i * dlat, -PI05, PI05);
 			for (int j = 0; j < M; j++) {
-				double a = 0.0, f = 0.0;
-				float *p = &pts[3 * (W * W + i * M + j)];
-				p[0] = (float)(SurfaceElev (psrc, lat, n->lngmin + 2 * j * dlng, lsplit, &a, &f) - (double)href);
-				p[1] = (float)a, p[2] = (float)f;
+				double a = 0.0, f = 0.0, pl = 0.0;
+				float *p = &pts[4 * (W * W + i * M + j)];
+				p[0] = (float)(SurfaceElev (psrc, lat, n->lngmin + 2 * j * dlng, lsplit, &a, &f, &pl) - (double)href);
+				p[1] = (float)a, p[2] = (float)f, p[3] = (float)pl;
 			}
 		}
 	auto spacingOf = [&](const Node *s) {
@@ -1537,7 +1538,7 @@ void PlanetSurface::Prepare ()
 			if (jobs[i].first->lvl < 14 && nChecked % 3) continue;
 			nChecked++;
 			const int V = TileRenderer::GRID + 1, NV = V * V + 4 * V;
-			vkc::Buffer hb = ctx->CreateBuffer ((VkDeviceSize)NV * 13 * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
+			vkc::Buffer hb = ctx->CreateBuffer ((VkDeviceSize)NV * 14 * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
 			vkc::Context::Transient t1 = ctx->AllocTransient (sizeof(GpuJob) + 32);
 			VkDeviceAddress a1 = ctx->BufferAddress (t1.buffer) + t1.offset;
 			size_t al = (size_t)((16 - (a1 & 15)) & 15);
@@ -1566,9 +1567,9 @@ void PlanetSurface::Prepare ()
 				const float *w = g + 8 * k;
 				dp = std::max (dp, (double)std::max ({ std::fabs (v.x - w[0]), std::fabs (v.y - w[1]), std::fabs (v.z - w[2]) }));
 				dn = std::max (dn, (double)std::max ({ std::fabs (v.nx - w[3]), std::fabs (v.ny - w[4]), std::fabs (v.nz - w[5]) }));
-				const float *e = g + 8 * NV + 5 * k, *c = &cpu.amp[5 * k];
-				da = std::max (da, (double)std::max (std::fabs (e[0] - c[0]), std::fabs (e[1] - c[1])));
-				dt = std::max (dt, (double)std::max ({ std::fabs (e[2] - c[2]), std::fabs (e[3] - c[3]), std::fabs (e[4] - c[4]) }));
+				const float *e = g + 8 * NV + 6 * k, *c = &cpu.amp[6 * k];
+				da = std::max (da, (double)std::max ({ std::fabs (e[0] - c[0]), std::fabs (e[1] - c[1]), std::fabs (e[2] - c[2]) }));
+				dt = std::max (dt, (double)std::max ({ std::fabs (e[3] - c[3]), std::fabs (e[4] - c[4]), std::fabs (e[5] - c[5]) }));
 			}
 			oapiWriteLogV ("VulkanClient: mesh check level %d: position %.4f m, normal %.5f, morph target %.4f m, detail stream %.5f",
 				jobs[i].first->lvl, dp, dn, dt, da);

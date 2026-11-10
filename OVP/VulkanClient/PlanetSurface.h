@@ -211,7 +211,7 @@ private:
 	/// elevation with procedural detail down to wavelength lmin [m]
 	/// (oapiSurfaceDetail); amp, fade: receive the noise amplitude factor
 	/// and the crater fade factor
-	double SurfaceElev (const Node *src, double lat, double lng, double lmin, double *amp = nullptr, double *fade = nullptr) const;
+	double SurfaceElev (const Node *src, double lat, double lng, double lmin, double *amp = nullptr, double *fade = nullptr, double *playa = nullptr) const;
 	/// a mesh's data, made on worker threads (ComputeMesh: no GPU calls) and
 	/// uploaded after (ApplyMesh)
 	struct MeshData {
