@@ -219,6 +219,50 @@ void Swell::Sample (const Vector &u, double t, double z, SwellSample &s) const
 	Eval<true> (u, t, z, s);
 }
 
+void Swell::Components (const Vector &u, double t, std::vector<Comp2> &out) const
+{
+	out.clear();
+	if (calm) return;
+	double lat = asin (std::clamp (u.y, -1.0, 1.0)), lng = atan2 (u.z, u.x);
+	int r[2];
+	double wr;
+	Rows (lat, r[0], r[1], wr);
+	double wrow[2] = { 1.0 - wr, wr };
+	struct W { int row, col; double w; } cells[4];
+	int n = 0;
+	for (int i = 0; i < 2; i++) {
+		if (wrow[i] <= 0.0 || (i == 1 && r[1] == r[0])) continue;
+		int c0, c1;
+		double wc;
+		Cols (r[i], lng, c0, c1, wc);
+		if (1.0 - wc > 0.0) cells[n++] = { r[i], c0, wrow[i] * (1.0 - wc) };
+		if (wc > 0.0 && c1 != c0) cells[n++] = { r[i], c1, wrow[i] * wc };
+	}
+	double w2 = 0.0;
+	for (int i = 0; i < n; i++) w2 += cells[i].w * cells[i].w;
+	double norm = w2 > 0.0 ? 1.0 / sqrt (w2) : 0.0;
+	double slat = sin (lat), clat = cos (lat), slng = sin (lng), clng = cos (lng);
+	Vector ep (-slng, 0.0, clng), np (-slat * clng, clat, -slat * slng);
+	const double R = prm.radius;
+	std::lock_guard<std::mutex> lk (cacheLock);
+	for (int i = 0; i < n; i++) {
+		const Cell &c = GetCell (cells[i].row, cells[i].col);
+		double ee = dotp (ep, c.e), en = dotp (ep, c.n), ne = dotp (np, c.e), nn = dotp (np, c.n);
+		double x = R * dotp (u, c.e), y = R * dotp (u, c.n);
+		for (const Comp &k : c.comp) {
+			Comp2 o;
+			o.a = k.a * cells[i].w * norm;
+			o.k = k.k;
+			// (its direction in the reference's east and north)
+			double dx = k.dx * ee + k.dz * en, dz = k.dx * ne + k.dz * nn;
+			double dl = std::hypot (dx, dz);
+			o.dx = dx / dl, o.dz = dz / dl;
+			o.phase = fmod (k.k * (k.dx * x + k.dz * y) - fmod (k.w * t, 2.0 * PI_) + k.phase, 2.0 * PI_);
+			out.push_back (o);
+		}
+	}
+}
+
 double Swell::Height (const Vector &u, double t) const
 {
 	SwellSample s;

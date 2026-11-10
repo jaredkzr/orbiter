@@ -2079,6 +2079,21 @@ DLLEXPORT bool oapiSeaSurface (OBJHANDLE hPlanet, double lng, double lat, double
 	return true;
 }
 
+DLLEXPORT int oapiSeaSwellComponents (OBJHANDLE hPlanet, double lng, double lat, double mjd, SEASWELLCOMP *comp, int maxComp)
+{
+	sea::Sea *s = PlanetSea (hPlanet);
+	if (!s || !comp || maxComp <= 0) return 0;
+	static std::vector<sea::Swell::Comp2> c;
+	double clat = cos (lat);
+	s->GetSwell().Components (Vector (clat * cos (lng), sin (lat), clat * sin (lng)), sea::Sea::SwellTime (mjd), c);
+	// (the strongest, if there are more than asked)
+	if ((int)c.size() > maxComp)
+		std::partial_sort (c.begin(), c.begin() + maxComp, c.end(), [](const sea::Swell::Comp2 &a, const sea::Swell::Comp2 &b) { return a.a > b.a; });
+	int n = std::min ((int)c.size(), maxComp);
+	for (int i = 0; i < n; i++) comp[i] = { c[i].a, c[i].k, c[i].dx, c[i].dz, c[i].phase };
+	return n;
+}
+
 DLLEXPORT bool oapiSurfaceDetailParamsEx (OBJHANDLE hPlanet, SURFDETAILPARAM *out, size_t size)
 {
 	const TerrainDetail *det = PlanetDetail (hPlanet);

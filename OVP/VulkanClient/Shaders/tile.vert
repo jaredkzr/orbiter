@@ -13,6 +13,7 @@ layout(location = 3) in vec3 inDetailA; // terrain detail: noise amplitude [m], 
 layout(location = 4) in vec3 inMorph;   // position on the parent tile's mesh (continuous level of detail)
 
 #include "frame.glsl"
+#include "swell.glsl"
 
 layout(push_constant) uniform Tile {
 	mat4 modelView;
@@ -39,9 +40,11 @@ void main()
 	if (tile.vessel.w > 0.5) d = min(d, length(p0 - tile.vessel.xyz));
 	float m = clamp((d - tile.morph.x) * tile.morph.y, 0.0, 1.0);
 	vec4 p = tile.modelView * vec4(mix(inPos, inMorph, m), 1.0);
+	vec3 nsw = mat3(tile.modelView) * inNormal;
+	p.xyz = SwellDisplace (p.xyz, nsw); // (the sea's swell, Water W8)
 	vMorph = m;
 	vPosView = p.xyz;
-	vNormalView = mat3(tile.modelView) * inNormal;
+	vNormalView = nsw;
 	vUV = inUV;
 	vDetailA = inDetailA;
 	gl_Position = frame.proj * RelApparent (p); // (relativistic view: as seen)

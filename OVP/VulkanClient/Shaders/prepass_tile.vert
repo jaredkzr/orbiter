@@ -8,6 +8,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "frame.glsl"
+#include "swell.glsl"
 
 layout(push_constant) uniform Prepass {
 	mat4 modelView;
@@ -36,8 +37,10 @@ void main()
 	if (pp.vessel.w > 0.5) d = min (d, length (p0 - pp.vessel.xyz));
 	float m = clamp ((d - pp.morph.x) * pp.morph.y, 0.0, 1.0);
 	vec4 p = pp.modelView * vec4(mix (inPos, inMorph, m), 1.0);
+	vec3 nsw = mat3(pp.modelView) * inNormal;
+	p.xyz = SwellDisplace (p.xyz, nsw); // (the sea's swell, Water W8)
 	vPosView = p.xyz;
-	vNormalView = mat3(pp.modelView) * inNormal;
+	vNormalView = nsw;
 	gl_Position = frame.proj * RelApparent (p); // (relativistic view: as seen)
 	vClip = gl_Position - vec4(frame.jitter.xy * gl_Position.w, 0.0, 0.0);
 	vPrevClip = pp.prevClipFromView * RelApparent (p);

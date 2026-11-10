@@ -28,6 +28,7 @@ layout(set = 0, binding = 10, rgba16f) uniform writeonly image2D plumeOut; // li
 #include "plume.glsl"
 #ifdef RT
 #include "rt.glsl"
+#include "swell.glsl"
 #endif
 
 const int MAX_ITER = 160;
@@ -166,7 +167,15 @@ void main ()
 	// front of it (terrain, which is not in the ray tracing scene);
 	// elsewhere the traced surface is shaded
 	RTHit rh;
-	if (TraceRT (o, L, 0.002 * z, rh)) {
+	// (a point of the sea the swell moved: the scene's sea is its mean
+	// surface; the ray starts above that, or it meets the flat sea at once)
+	vec3 oRT;
+	bool swell = SwellBand (o, oRT);
+	if (!swell) oRT = o;
+	// (and a ray down from the back of a wave meets the next wave, not the
+	// scene's flat sea: left to the screen and the environment)
+	bool down = swell && dot (L, normalize (frame.swellRef.xyz - frame.swellCentre.xyz)) < 0.01;
+	if (!down && TraceRT (oRT, L, 0.002 * z, rh)) {
 		float ds = hit ? length (q - o) : 1e30;
 		float off = hit ? length (cross (q - o, L)) : 1e30; // the visible surface's distance from the ray
 		bool keep = hit && col.a > 0.5 && ds < rh.t * 1.03 + 0.01 * z && off < 0.01 * q.z + 0.05;

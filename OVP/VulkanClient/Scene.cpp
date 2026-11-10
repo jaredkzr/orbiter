@@ -61,6 +61,7 @@
 namespace {
 
 	// Must match the Frame uniform block in frame.glsl
+	constexpr int SWELL_MAX = 192; // (frame.glsl)
 	struct FrameUniforms {
 		float proj[16];
 		float sunDir[4];
@@ -83,6 +84,12 @@ namespace {
 		float relSunColor[4];  //   colour (Doppler shifted)
 		float lens[4];         // a black hole's lens: centre (view), mass [m] (0: none)
 		float overcast[4];     // C3: the overcast skylight in ambient (rgb), tan of the light's apparent radius (w; 0: none)
+		float swellCentre[4];  // the sea's swell (Water W8): the planet's centre (view), w: radius of the water's mean surface [m] (0: off)
+		float swellRef[4];     // the reference on it under the camera (view), w: range [m]
+		float swellEast[4];    // its east (view), w: number of components
+		float swellNorth[4];   // its north (view)
+		float swellComp[SWELL_MAX][4];   // a [m], k [1/m], direction east, north
+		float swellPhase[SWELL_MAX / 4][4];
 		struct {
 			float pos[4];   // view space position, range
 			float dir[4];   // view space direction, type (1 point, 2 spot)
@@ -2168,6 +2175,7 @@ void Scene::FillFrameUniforms (void *pfu)
 	}
 	fu.jitter[0] = jitter[0], fu.jitter[1] = jitter[1];
 	fu.jitter[2] = (float)viewW, fu.jitter[3] = (float)viewH;
+	FillSwell (pfu);
 	fu.aoParams[0] = 1.0f / ao->Extent().width;
 	fu.aoParams[1] = 1.0f / ao->Extent().height;
 	fu.aoParams[2] = ao->directFrac;
@@ -3183,4 +3191,54 @@ void Scene::DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &m
 	pc.maps[1] = 1.0f; // not in the prepass: no ambient occlusion
 	vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 	vkCmdDrawIndexed (cmd, nIdx, 1, 0, 0, 0);
+}
+
+// The sea's swell near the camera (Water W8): the core's components about
+// the point under the camera on the water's mean surface, their phases at
+// this frame's time; the tile shaders raise the sea's surface by it
+// (swell.glsl), so a vessel afloat rides the waves drawn.
+void Scene::FillSwell (void *pfu)
+{
+	FrameUniforms &fu = *(FrameUniforms*)pfu;
+	fu.swellCentre[3] = 0.0f;
+	if (const char *e = getenv ("ORBITER_VK_SWELL")) if (*e && !atoi (e)) return;
+	OBJHANDLE hp = oapiCameraProxyGbody ();
+	if (!hp || oapiGetObjectType (hp) != OBJTP_PLANET) return;
+	SEAPARAM sp;
+	if (!oapiGetSeaParams (hp, &sp, sizeof (sp)) || sp.hs <= 0.0) return;
+	VECTOR3 pp, cg = camPos;
+	oapiGetGlobalPos (hp, &pp);
+	double lng, lat, rad;
+	oapiGlobalToEqu (hp, cg, &lng, &lat, &rad);
+	double R = oapiGetSize (hp);
+	const double RANGE = 2500.0; // [m] about the point under the camera
+	if (rad - R > 4.0 * RANGE) return;
+	double datum = 0.0, seabed;
+	oapiIsWater (hp, lng, lat, &datum, &seabed);
+	static SEASWELLCOMP comp[SWELL_MAX];
+	int n = oapiSeaSwellComponents (hp, lng, lat, oapiGetSimMJD (), comp, SWELL_MAX);
+	if (n <= 0) return;
+	MATRIX3 Rp;
+	oapiGetRotationMatrix (hp, &Rp);
+	double slng = sin (lng), clng = cos (lng), slat = sin (lat), clat = cos (lat);
+	VECTOR3 up = mul (Rp, _V(clat * clng, slat, clat * slng));
+	VECTOR3 east = mul (Rp, _V(-slng, 0, clng)), north = mul (Rp, _V(-slat * clng, clat, -slat * slng));
+	double Rs = R + datum;
+	VECTOR3 c = view.TransformPoint (pp - camPos);
+	VECTOR3 ref = view.TransformPoint (pp + up * Rs - camPos);
+	VECTOR3 ev = view.TransformPoint (east), nv = view.TransformPoint (north);
+	for (int k = 0; k < 3; k++) {
+		fu.swellCentre[k] = (float)c.data[k];
+		fu.swellRef[k] = (float)ref.data[k];
+		fu.swellEast[k] = (float)ev.data[k];
+		fu.swellNorth[k] = (float)nv.data[k];
+	}
+	fu.swellCentre[3] = (float)Rs;
+	fu.swellRef[3] = (float)RANGE;
+	fu.swellEast[3] = (float)n;
+	for (int i = 0; i < n; i++) {
+		fu.swellComp[i][0] = (float)comp[i].a, fu.swellComp[i][1] = (float)comp[i].k;
+		fu.swellComp[i][2] = (float)comp[i].dx, fu.swellComp[i][3] = (float)comp[i].dz;
+		fu.swellPhase[i / 4][i % 4] = (float)comp[i].phase;
+	}
 }

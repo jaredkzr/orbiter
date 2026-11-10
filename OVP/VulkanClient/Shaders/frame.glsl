@@ -11,6 +11,7 @@
 #endif
 
 const int MAX_LIGHTS = 32;
+const int SWELL_MAX = 192; // (Scene.cpp)
 
 struct LocalLight {
 	vec4 pos;    // view space position (xyz), range (w)
@@ -43,6 +44,12 @@ layout(set = FRAME_SET, binding = 0) uniform Frame {
 	vec4 relSunColor;  //   with this colour (Doppler shifted)
 	vec4 lens;         // a black hole's lens: its centre (view space), w: its mass GM/c^2 [m] (0: none)
 	vec4 overcast;     // C3, under an overcast at the camera: rgb: the overcast skylight included in ambient (its horizontal irradiance, Esky); w: tan of the light's apparent angular radius at the camera (> 0: on; 0: none)
+	vec4 swellCentre;  // the sea's swell (Water W8): the planet's centre (view space), w: radius of the water's mean surface [m] (0: off)
+	vec4 swellRef;     // the reference point on it under the camera (view space), w: range [m]
+	vec4 swellEast;    // its east (view space), w: number of components
+	vec4 swellNorth;   // its north (view space)
+	vec4 swellComp[SWELL_MAX];          // a [m], k [1/m], direction of travel east, north
+	vec4 swellPhase[SWELL_MAX / 4];     // phases at the reference [rad]
 	LocalLight lights[MAX_LIGHTS];
 } frame;
 

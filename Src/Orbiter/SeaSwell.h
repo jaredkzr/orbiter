@@ -77,6 +77,14 @@ namespace sea {
 		/// height only (cheaper)
 		double Height (const Vector &u, double t) const;
 
+		/// The components about a reference point (unit vector u, planet frame)
+		/// at time t, for evaluating the surface near it (a few km: the graphics
+		/// client): the height at a point x east, z north [m] of it (its tangent
+		/// plane) is sum a cos (k (dx x + dz z) + phase). The cells' weights at
+		/// the reference are in the amplitudes; the phases include the time.
+		struct Comp2 { double a, k, dx, dz, phase; };
+		void Components (const Vector &u, double t, std::vector<Comp2> &out) const;
+
 	private:
 		struct Comp {
 			double a, k, w;    // amplitude [m], wavenumber [1/m], angular frequency [1/s]

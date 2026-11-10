@@ -130,3 +130,22 @@ TEST_CASE ("Slopes and velocities agree with the height", "[Water.Swell]")
 		CHECK (deep.vel.length () < c.vel.length () + 1e-9);
 	}
 }
+
+TEST_CASE ("The components about a point give the surface near it", "[Water.Swell]")
+{
+	Swell s = Make (9.0);
+	const double t = 7.3e8;
+	for (double lat : { 12.3, 41.7 }) {
+		Vector u = Unit (lat, -63.2);
+		std::vector<Swell::Comp2> c;
+		s.Components (u, t, c);
+		REQUIRE (!c.empty ());
+		for (double e : { 0.0, 37.0, -820.0 })
+			for (double n : { 0.0, 410.0, -1530.0 }) {
+				double h = 0.0;
+				for (const Swell::Comp2 &k : c) h += k.a * cos (k.k * (k.dx * e + k.dz * n) + k.phase);
+				// (the tangent plane over a km or two: within a centimetre or so)
+				CHECK_THAT (h, WithinAbs (s.Height (Offset (lat, -63.2, e, n), t), 0.03));
+			}
+	}
+}

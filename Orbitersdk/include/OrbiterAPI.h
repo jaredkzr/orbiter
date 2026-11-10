@@ -4994,6 +4994,23 @@ OAPIFUNC bool oapiIsWater (OBJHANDLE hPlanet, double lng, double lat, double *da
  */
 OAPIFUNC bool oapiSeaSurface (OBJHANDLE hPlanet, double lng, double lat, double mjd, double depth, double *h, VECTOR3 *slope = 0, VECTOR3 *vel = 0);
 
+/// \brief A component of the swell about a reference point (oapiSeaSwellComponents)
+struct SEASWELLCOMP {
+	double a;      ///< amplitude [m] (the anchor cells' weights at the reference included)
+	double k;      ///< wavenumber [1/m]
+	double dx, dz; ///< unit direction of travel (east, north at the reference)
+	double phase;  ///< phase at the reference, at the time asked [rad]
+};
+
+/**
+ * \brief The swell's components about a reference point at a time, for
+ *   evaluating its surface near it (a few km): the height at a point x east,
+ *   z north of the reference (its tangent plane) [m] is
+ *   sum a cos (k (dx x + dz z) + phase).
+ * \return the number of components written (at most maxComp; 0: no sea, or calm)
+ */
+OAPIFUNC int oapiSeaSwellComponents (OBJHANDLE hPlanet, double lng, double lat, double mjd, SEASWELLCOMP *comp, int maxComp);
+
 /**
  * \brief The site materials' weights at a point of a planet with procedural terrain detail:
  *   the core's full-resolution mask (no ground gate), shared by the pebbles, the ground scatter

@@ -400,6 +400,7 @@ private:
 	int probeFace = 0, probeFacesDone = 0;
 	OBJHANDLE probeTarget = nullptr;
 	void FillFrameUniforms (void *fu);
+	void FillSwell (void *fu);
 	void UpdateCamAtmSet ();
 	VkPipelineLayout meshLayout = VK_NULL_HANDLE;
 	VkPipeline starPipe = VK_NULL_HANDLE; // (star discs: star.frag)

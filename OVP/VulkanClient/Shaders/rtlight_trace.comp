@@ -19,6 +19,7 @@
 
 #define FRAME_SET 1
 #include "frame.glsl"
+#include "swell.glsl"
 
 layout(set = 2, binding = 0) uniform accelerationStructureEXT tlas;
 struct RTInstance { uvec2 vtx, idx; uint firstIndex, tex, flags, owner; vec4 diffuse, emissive, pbr, uv, vel; }; // (rt.glsl)
@@ -158,13 +159,26 @@ void main ()
 	vec3 N = d.xyz;
 	vec3 P = ViewPos (vec2 (p) + 0.5, z);
 	vec3 o = P + N * (0.001 * z + 0.01); // off the surface
+	// (a point of the sea the swell moved, near the camera: the scene's sea
+	// is its mean surface; rays start above that, or troughs are in its shade)
+	vec3 oSw;
+	bool swell = SwellBand (o, oSw);
 	vec4 u = vec4 (Hash4 (uvec3 (p, uint (pc.frame)))) / 4294967296.0;
 	vec4 u2 = vec4 (Hash4 (uvec3 (p, uint (pc.frame) + 7919u))) / 4294967296.0;
 
 	// sun
 	vec3 Ls = frame.sunDir.xyz;
 	float sun = 1.0;
-	if (dot (N, Ls) > -0.05) sun = Occluded (o, InCone (Ls, sin (pc.sunRadius), u.xy), 1e6, MASK_ALL) ? 0.0 : 1.0;
+	if (dot (N, Ls) > -0.05) {
+		vec3 dir = InCone (Ls, sin (pc.sunRadius), u.xy);
+		// (the sea raised and lowered by the swell near the camera (swell.glsl)
+		// while the terrain the rays meet is its mean surface: a trough is not
+		// in the flat sea's shadow; vessels' shadows from where it is)
+		if (swell)
+			sun = (Occluded (o, dir, 1e6, MASK_OBJECTS) || Occluded (oSw, dir, 1e6, MASK_ALL & ~MASK_OBJECTS)) ? 0.0 : 1.0;
+		else
+			sun = Occluded (o, dir, 1e6, MASK_ALL) ? 0.0 : 1.0;
+	}
 
 	// ambient occlusion by vessels and bases (terrain relief is far coarser
 	// than the radius, and rays starting on it are slow)
