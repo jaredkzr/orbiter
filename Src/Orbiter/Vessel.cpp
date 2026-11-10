@@ -5941,6 +5941,7 @@ void Vessel::PostUpdate ()
 	}
 
 	VesselBase::PostUpdate ();
+	ReportSplashdown ();
 
 	if (loads_on) {
 		UpdateStructuralLoads ();

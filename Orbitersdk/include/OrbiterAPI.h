@@ -2128,6 +2128,7 @@ typedef union {
 #define VMSG_LUAINSTANCE       0x0002 ///< create Lua vessel instance
 #define VMSG_DOCKREFUSED       0x0003 ///< docking refused: prm is the vessel's docking port index, context a pointer to a DOCKREFUSEDINFO
 #define VMSG_PARTLOST          0x0004 ///< a structural part broke off: prm is the part's index, context a pointer to a PARTLOSTINFO
+#define VMSG_SPLASHDOWN        0x0005 ///< the vessel came down on the water: context a pointer to its WATERSTATE (entry speed, peak acceleration)
 #define VMSG_USER              0x1000 ///< base index for user-defined messages
 //@}
 

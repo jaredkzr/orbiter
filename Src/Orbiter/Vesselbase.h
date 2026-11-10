@@ -276,6 +276,8 @@ protected:
 	WaterState water;
 	Vector water_vel;             // the water's velocity at the body in the last step (global)
 	double floatCalm = 0.0;       // [s] afloat and calm (relative to the water) so far
+	double dryT = -1e10;          // [s] when it was last out of the water
+	bool splashReported = true;   // (the last entry was reported: Vessel::ReportSplashdown)
 	bool floatPending = false;    // calm long enough: rest afloat after the step (TakeFloat)
 	bool floatRedo = false;       // resting afloat in a new pose: rest anew after the step
 	/// rest afloat where it is (W7): held on the swell, as landed

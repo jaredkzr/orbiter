@@ -1833,6 +1833,7 @@ private:
 	bool FloatEquilibrium (double &cgelev, double &pitch, double &roll) const;
 	bool InitAfloat (Planet *planet, double lng, double lat, double dir);
 	void FollowSwell ();
+	void ReportSplashdown ();
 	double float_cgelev = 0.0;
 	static constexpr double WATER_STROKE = 0.5;       // [m] a structure meeting the water is decelerated over this (WaterLoads)
 	std::vector<Vector> water_Ff;                     // the water's forces on the parts, low-passed (body frame)

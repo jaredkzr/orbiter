@@ -16,6 +16,7 @@
 #include "Structure.h"
 #include "Orbiter.h"
 #include "Log.h"
+#include "MenuInfoBar.h"
 #include "Util.h"
 #include "Mesh.h"
 #include "Astro.h"
@@ -27,6 +28,7 @@
 #include <cstdlib>
 
 extern TimeData td;
+extern Vessel *g_focusobj;
 
 namespace {
 
@@ -169,7 +171,12 @@ void VesselBase::HydroStep (double h)
 
 	bool wet = r.wetted > 0.0 || r.submerged > 0.0 || r.F.length2() > 0.0;
 	if (!wet) water.accFilt = 0.0;
-	if (wet && !water.wet) water.tWet = td.SimT1, water.entrySpeed = 0.0, water.slamMax = 0.0, water.accMax = 0.0;
+	if (wet && !water.wet) {
+		water.tWet = td.SimT1, water.entrySpeed = 0.0, water.slamMax = 0.0, water.accMax = 0.0;
+		// (a splashdown: after a while out of the water)
+		if (td.SimT1 - dryT > 2.0) splashReported = false;
+	}
+	if (!wet) dryT = td.SimT1;
 	water.wet = wet;
 	water.submerged = r.submerged;
 	water.wetted = r.wetted;
@@ -509,6 +516,11 @@ bool Vessel::InitAfloat (Planet *planet, double lng, double lat, double dir)
 	float_cgelev = y;
 	s0->omega.Set (0, 0, 0);
 	if (s1) s1->omega.Set (0, 0, 0);
+	if (this == g_focusobj) {
+		char detail[256];
+		snprintf (detail, sizeof (detail), "%s rests on the water", Name());
+		flightevent::Post (flightevent::INFO, "Afloat", detail);
+	}
 	LOGOUT ("%s rests afloat at %.1f s: origin %.2f m above the water, pitch %.1f, roll %.1f deg", Name(), td.SimT1, y, th * DEG, ph * DEG);
 	return true;
 }
@@ -551,4 +563,20 @@ void Vessel::FollowSwell ()
 	}
 	s1->R = proxyplanet->s1->R * (tilt * land_rot);
 	s1->Q.Set (s1->R);
+}
+
+void Vessel::ReportSplashdown ()
+{
+	// (once the entry's blows are over: a third of a second in the water)
+	if (splashReported || !water.wet || td.SimT1 - water.tWet < 0.3) return;
+	splashReported = true;
+	char detail[256];
+	snprintf (detail, sizeof (detail), "%s at %.1f m/s, %.1f g", Name(), water.entrySpeed, water.accMax / structure::G0);
+	LOGOUT ("Splashdown: %s", detail);
+	if (this == g_focusobj) flightevent::Post (destroyed ? flightevent::WARNING : flightevent::INFO, "Splashdown", detail);
+	if (modIntf.v->Version() >= 2) {
+		WATERSTATE ws;
+		((VESSEL*)modIntf.v)->GetWaterState (&ws);
+		((VESSEL3*)modIntf.v)->clbkGeneric (VMSG_SPLASHDOWN, 0, &ws);
+	}
 }
