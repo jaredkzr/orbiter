@@ -75,10 +75,16 @@ void main ()
 		vec3 L = frame.sunDir.xyz;
 		float wrap = clamp ((dot (N, L) + 0.35) / 1.35, 0.0, 1.0);
 		float through = (1.0 - thick) * 0.6; // (light passing through thin edges)
-		float occl = mix (0.55, 1.0, thick); // (crevices between billows are darker)
+		// (T3: light scattered many times inside a bright puff - dust, spray, steam - reaches its side
+		// away from the light and its crevices; a dark one's stays dark: their floors rise with the
+		// single-scattering albedo, about as w^2)
+		float w2 = clamp (dot (vColor.rgb, vec3 (0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+		w2 *= w2;
+		float floorL = 0.15 + 0.6 * w2;
+		float occl = mix (0.55 + 0.35 * w2, 1.0, thick); // (crevices between billows are darker)
 		// (the local lights likewise from their direction: the flames)
 		float wrapL = clamp ((dot (N, normalize (vLocDir)) + 0.35) / 1.35, 0.0, 1.0);
-		c = vColor.rgb * (vAmb * occl + vSun * (0.15 + 0.85 * wrap + through) + vLoc * (0.15 + 0.85 * wrapL + through));
+		c = vColor.rgb * (vAmb * occl + vSun * (floorL + (1.0 - floorL) * wrap + through) + vLoc * (floorL + (1.0 - floorL) * wrapL + through));
 	} else {
 		a = t.a * vColor.a;
 		// (a plain texture lit by the local lights' direction: shaded as a
