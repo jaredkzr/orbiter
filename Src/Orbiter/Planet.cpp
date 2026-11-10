@@ -25,6 +25,7 @@
 #include "TerrainDetail.h"
 #include "GroundScatter.h"
 #include "Cities.h"
+#include "Sea.h"
 
 #define UPDMODE_ANALYTIC 0
 #define UPDMODE_DYNAMIC  1
@@ -1182,6 +1183,27 @@ void Planet::ClearScatter (const Vector &p, double radius)
 	scatterClear.push_back ({ p, radius });
 	if (scatter_) scatter_->Clear (p, radius);
 	if (cities_) cities_->Clear (p, radius);
+}
+
+sea::Sea *Planet::GetSea () const
+{
+	std::call_once (seaOnce, [this]() {
+		auto s = std::make_unique<sea::Sea> (this);
+		if (s->Active ()) sea_ = std::move (s);
+	});
+	return sea_.get();
+}
+
+double Planet::SolidElevation (double lat, double lng, int reqlvl, std::vector<ElevationTile> *tilecache, Vector *normal) const
+{
+	if (sea::Sea *s = GetSea()) {
+		sea::Point p = s->At (lat, lng);
+		if (p.water) {
+			if (normal) *normal = Vector (0, 1, 0);
+			return p.seabed;
+		}
+	}
+	return emgr ? emgr->Elevation (lat, lng, reqlvl, tilecache, normal) : 0.0;
 }
 
 cities::CityMap *Planet::Cities () const

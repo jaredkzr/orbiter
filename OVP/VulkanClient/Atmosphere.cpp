@@ -163,49 +163,6 @@ namespace {
 		return t * t * (3.0 - 2.0 * t);
 	}
 
-	// Config/VK/Sea.cfg: the wind speed [m/s] a body's sea takes instead of the
-	// model's ([name] sections, "Wind = v"); -1: no entry. Read once.
-	double SeaCfgWind (const char *body)
-	{
-		static std::map<std::string, double> entries;
-		static bool loaded = false;
-		if (!loaded) {
-			loaded = true;
-			std::ifstream ifs ("Config/VK/Sea.cfg");
-			std::string line, section;
-			std::map<std::string, bool> warned;
-			auto trim = [] (std::string &t) {
-				size_t a = t.find_first_not_of (" \t\r\n"), b = t.find_last_not_of (" \t\r\n");
-				t = a == std::string::npos ? "" : t.substr (a, b - a + 1);
-			};
-			while (std::getline (ifs, line)) {
-				size_t c = line.find (';');
-				if (c != std::string::npos) line.erase (c);
-				trim (line);
-				if (line.empty ()) continue;
-				if (line[0] == '[') {
-					size_t e = line.find (']');
-					section = line.substr (1, e == std::string::npos ? std::string::npos : e - 1);
-					trim (section);
-					continue;
-				}
-				size_t eq = line.find ('=');
-				if (eq == std::string::npos) continue;
-				std::string key = line.substr (0, eq), val = line.substr (eq + 1);
-				trim (key); trim (val);
-				for (char &ch : key) ch = (char)tolower ((unsigned char)ch);
-				if (key == "wind") {
-					if (!section.empty ()) entries[section] = std::min (std::max (atof (val.c_str ()), 0.0), 25.0);
-				} else if (!warned[key]) {
-					warned[key] = true;
-					oapiWriteLogV ("VulkanClient: Config/VK/Sea.cfg: unknown key %s", key.c_str ());
-				}
-			}
-		}
-		auto it = entries.find (body);
-		return it == entries.end () ? -1.0 : it->second;
-	}
-
 	// Config/VK/Playa.cfg: the salt flats among a body's playas ([name] sections,
 	// "Salt = lat lng radius", deg, deg, km). Read once.
 	struct SaltFlat { double lat, lng, radius; };
@@ -711,7 +668,11 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		waveG = GGRAV * oapiGetMass (hPlanet) / (radius * radius);
 		oapiGetObjectName (hPlanet, wavesName, 64);
 		if (const char *e = getenv ("ORBITER_VK_SEA_WIND")) if (*e && atof (e) >= 0.0) seaEnvWind = atof (e);
-		seaCfgWind = SeaCfgWind (wavesName);
+		{
+			// (the core's sea, Config/Sea.cfg: its wind speed; the model's direction as the core's)
+			SEAPARAM sp;
+			seaCfgWind = oapiGetSeaParams (hPlanet, &sp, sizeof (sp)) ? sp.wind : -1.0;
+		}
 		sea = SeaState (0.0, 0.0, 0.0); // (the far-field state until the first anchoring)
 		if (waves) {
 			double l0 = 60.0 * sea.lambdaScale;

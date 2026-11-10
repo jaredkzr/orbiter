@@ -91,6 +91,10 @@ set(headless_src
 	ProcTerrain.cpp
 	GroundScatter.cpp
 	Cities.cpp
+	Sea.cpp
+	SeaSwell.cpp
+	HullWater.cpp
+	Hydro.cpp
 	Replay.cpp
 	VesselManeuver.cpp
 	Vessel.cpp

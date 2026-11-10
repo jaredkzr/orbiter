@@ -116,6 +116,39 @@ set_target_properties(Relativity.Kinematics PROPERTIES RUNTIME_OUTPUT_DIRECTORY 
 add_test(NAME Relativity.Kinematics COMMAND $<TARGET_FILE:Relativity.Kinematics>)
 set_tests_properties(Relativity.Kinematics PROPERTIES TIMEOUT 120)
 
+# The sea's swell (shared by the physics and the client)
+add_executable(Water.Swell Water.Swell.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/SeaSwell.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Vecmat.cpp)
+target_include_directories(Water.Swell PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter)
+target_link_libraries(Water.Swell Catch2::Catch2WithMain)
+set_target_properties(Water.Swell PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER_BINARY_ROOT_DIR}")
+add_test(NAME Water.Swell COMMAND $<TARGET_FILE:Water.Swell>)
+set_tests_properties(Water.Swell PROPERTIES TIMEOUT 60)
+
+# What a body shows the water: the union of its hulls, its panels
+add_executable(Water.Volume Water.Volume.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/HullWater.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/ConvexGeometry.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Vecmat.cpp)
+target_include_directories(Water.Volume PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter)
+target_link_libraries(Water.Volume Catch2::Catch2WithMain)
+set_target_properties(Water.Volume PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER_BINARY_ROOT_DIR}")
+add_test(NAME Water.Volume COMMAND $<TARGET_FILE:Water.Volume>)
+set_tests_properties(Water.Volume PROPERTIES TIMEOUT 60)
+
+# The water's forces and a body's motion in it
+add_executable(Water.Hydro Water.Hydro.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Hydro.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/HullWater.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/ConvexGeometry.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Vecmat.cpp)
+target_include_directories(Water.Hydro PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter)
+target_link_libraries(Water.Hydro Catch2::Catch2WithMain)
+set_target_properties(Water.Hydro PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER_BINARY_ROOT_DIR}")
+add_test(NAME Water.Hydro COMMAND $<TARGET_FILE:Water.Hydro>)
+set_tests_properties(Water.Hydro PROPERTIES TIMEOUT 120)
+
 # Rotating black holes: Kerr spacetime, geodesics, observers
 add_executable(Kerr.Geodesics Kerr.Geodesics.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Kerr.cpp

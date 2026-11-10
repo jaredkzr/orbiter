@@ -83,6 +83,8 @@ public:
 	* \param elev above the mean radius [m]
 	*/
 	void AddDeck (double lat, double lng, double radius, double elev);
+	/// the highest deck covering (lat, lng) [m above the mean radius], or -1e10 if none
+	double DeckElevation (double lat, double lng) const;
 
 	/// nodes per tile side of RefTile's data (a border of one node before and two after)
 	static int RefStride ();

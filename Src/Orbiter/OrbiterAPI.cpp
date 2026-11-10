@@ -39,6 +39,7 @@
 #include "TerrainDetail.h"
 #include "GroundScatter.h"
 #include "Cities.h"
+#include "Sea.h"
 #include "elevmgr.h"
 #include <algorithm>
 #include <zlib.h>
@@ -2022,6 +2023,59 @@ DLLEXPORT bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, SURFDETAILPARAM *prm)
 	SURFDETAILPARAM full;
 	if (!oapiSurfaceDetailParamsEx (hPlanet, &full, sizeof (full))) return false;
 	memcpy ((void*)prm, &full, offsetof (SURFDETAILPARAM, sea) + sizeof (full.sea));
+	return true;
+}
+
+static sea::Sea *PlanetSea (OBJHANDLE hPlanet)
+{
+	Body *b = (Body*)hPlanet;
+	if (!b || b->Type() != OBJTP_PLANET) return nullptr;
+	return ((Planet*)b)->GetSea();
+}
+
+DLLEXPORT bool oapiGetSeaParams (OBJHANDLE hPlanet, SEAPARAM *out, size_t size)
+{
+	sea::Sea *s = PlanetSea (hPlanet);
+	if (!s || !out) return false;
+	SEAPARAM p;
+	const sea::Swell &sw = s->GetSwell();
+	p.density = s->Density();
+	p.viscosity = s->Viscosity();
+	p.wind = sw.Prm().wind;
+	p.bearing = sw.Prm().bearing;
+	p.hs = sw.Hs();
+	p.hsFull = sw.HsFull();
+	p.tp = sw.Tp();
+	p.lambdaMin = sw.Prm().lambdaMin;
+	p.lambdaMax = sw.LambdaMax();
+	p.crestMax = sw.CrestMax();
+	p.floorDepth = s->Cfg().floorDepth;
+	memcpy ((void*)out, &p, std::min (size, sizeof (p)));
+	return true;
+}
+
+DLLEXPORT bool oapiIsWater (OBJHANDLE hPlanet, double lng, double lat, double *datum, double *seabed)
+{
+	sea::Sea *s = PlanetSea (hPlanet);
+	if (!s) return false;
+	sea::Point pt = s->At (lat, lng, seabed != nullptr);
+	if (pt.water) {
+		if (datum) *datum = pt.datum;
+		if (seabed) *seabed = pt.seabed;
+	}
+	return pt.water;
+}
+
+DLLEXPORT bool oapiSeaSurface (OBJHANDLE hPlanet, double lng, double lat, double mjd, double depth, double *h, VECTOR3 *slope, VECTOR3 *vel)
+{
+	sea::Sea *s = PlanetSea (hPlanet);
+	if (!s) return false;
+	double clat = cos (lat);
+	sea::SwellSample ss;
+	s->GetSwell().Sample (Vector (clat * cos (lng), sin (lat), clat * sin (lng)), sea::Sea::SwellTime (mjd), -std::max (depth, 0.0), ss);
+	if (h) *h = ss.h;
+	if (slope) *slope = _V(ss.sx, 1.0, ss.sz);
+	if (vel) *vel = MakeVECTOR3 (ss.vel);
 	return true;
 }
 

@@ -521,6 +521,9 @@ protected:
 	static int oapi_get_planetperiod(lua_State* L);
 	static int oapi_get_objecttype(lua_State* L);
 	static int oapi_get_debriscount (lua_State *L);
+	static int oapi_get_seaparams (lua_State *L);
+	static int oapi_is_water (lua_State *L);
+	static int oapi_sea_surface (lua_State *L);
 	static int oapi_get_debris (lua_State *L);
 	static int oapi_get_debrisinfo (lua_State *L);
 	static int oapi_get_gbodyparent(lua_State* L);

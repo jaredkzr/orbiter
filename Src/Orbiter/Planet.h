@@ -28,6 +28,7 @@
 #include <mutex>
 namespace scatter { class GroundScatter; }
 namespace cities { class CityMap; }
+namespace sea { class Sea; }
 #include <filesystem>
 namespace fs = std::filesystem;
 
@@ -209,6 +210,11 @@ public:
 	const std::vector<std::pair<Vector,double>> &ScatterClearings () const { return scatterClear; }
 	/// procedural cities (Cities.h; null if the planet has none)
 	cities::CityMap *Cities() const;
+	/// the sea (Sea.h; null if the planet has none)
+	sea::Sea *GetSea() const;
+	/// The ground under a point for contacts: as ElevationManager::Elevation
+	/// (terrain, decks), but under open water the seabed (normal: up)
+	double SolidElevation (double lat, double lng, int reqlvl = 0, std::vector<ElevationTile> *tilecache = 0, Vector *normal = 0) const;
 	TileManager2<CloudTile> *CloudMgr2() const { return cmgr2; }
 	void ForEach(int type, std::function<void(const fs::directory_entry&)> callback) {
 		extern Orbiter* g_pOrbiter;
@@ -335,6 +341,8 @@ private:
 	mutable bool scatterInit = false;
 	mutable std::unique_ptr<cities::CityMap> cities_;
 	mutable std::once_flag citiesOnce; // (TerrainDetail asks from the client's threads)
+	mutable std::unique_ptr<sea::Sea> sea_;
+	mutable std::once_flag seaOnce;
 	std::vector<std::pair<Vector,double>> scatterClear;
 };
 

@@ -471,6 +471,18 @@ void ElevationManager::AddDeck (double lat, double lng, double radius, double el
 	decks.push_back (d);
 }
 
+double ElevationManager::DeckElevation (double lat, double lng) const
+{
+	double e = -1e10;
+	if (decks.empty() || dataOnly) return e;
+	double slat = sin (lat), clat = cos (lat);
+	for (const Deck &d : decks) {
+		double c = slat * d.slat + clat * d.clat * cos (lng - d.lng);
+		if (c >= d.cosr) e = std::max (e, d.elev);
+	}
+	return e;
+}
+
 double ElevationManager::Terrain (double lat, double lng, int reqlvl, std::vector<ElevationTile> *tilecache, Vector *normal, int *reslvl) const
 {
 	double e = 0.0, dh = 0.0;

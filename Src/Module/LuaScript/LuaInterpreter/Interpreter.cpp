@@ -987,6 +987,9 @@ void Interpreter::LoadAPI ()
 		{"get_planetatmconstants", oapi_get_planetatmconstants},
 		{"get_objecttype", oapi_get_objecttype},
 		{"get_debriscount", oapi_get_debriscount},
+		{"get_seaparams", oapi_get_seaparams},
+		{"is_water", oapi_is_water},
+		{"sea_surface", oapi_sea_surface},
 		{"get_debris", oapi_get_debris},
 		{"get_debrisinfo", oapi_get_debrisinfo},
 		{"get_gbody", oapi_get_gbody},
@@ -5398,6 +5401,74 @@ Return the number of pieces of debris (parts broken off vessels).
 @treturn int number of pieces
 @see vessel:break_part, get_debris, get_debrisinfo
 */
+/***
+Parameters of a planet's sea (Config/Sea.cfg): its liquid and its swell.
+
+@function get_seaparams
+@tparam handle hPlanet planet handle
+@treturn table|nil density, viscosity, wind, bearing, hs, hsfull, tp, lambdamin, lambdamax, crestmax, floordepth (nil: no sea)
+*/
+int Interpreter::oapi_get_seaparams (lua_State *L)
+{
+	OBJHANDLE h = lua_islightuserdata (L, 1) ? lua_toObject (L, 1) : nullptr;
+	SEAPARAM p;
+	if (!h || !oapiGetSeaParams (h, &p, sizeof (p))) { lua_pushnil (L); return 1; }
+	lua_createtable (L, 0, 11);
+	auto set = [&](const char *k, double v) { lua_pushnumber (L, v); lua_setfield (L, -2, k); };
+	set ("density", p.density); set ("viscosity", p.viscosity); set ("wind", p.wind); set ("bearing", p.bearing);
+	set ("hs", p.hs); set ("hsfull", p.hsFull); set ("tp", p.tp); set ("lambdamin", p.lambdaMin);
+	set ("lambdamax", p.lambdaMax); set ("crestmax", p.crestMax); set ("floordepth", p.floorDepth);
+	return 1;
+}
+
+/***
+Whether a point of a planet's surface is open water.
+
+@function is_water
+@tparam handle hPlanet planet handle
+@tparam number lng longitude [rad]
+@tparam number lat latitude [rad]
+@treturn bool open water
+@treturn number the water's mean surface (elevation [m]; water only)
+@treturn number the seabed (elevation [m]; water only)
+*/
+int Interpreter::oapi_is_water (lua_State *L)
+{
+	OBJHANDLE h = lua_islightuserdata (L, 1) ? lua_toObject (L, 1) : nullptr;
+	double datum = 0.0, seabed = 0.0;
+	bool w = h && oapiIsWater (h, luaL_checknumber (L, 2), luaL_checknumber (L, 3), &datum, &seabed);
+	lua_pushboolean (L, w);
+	if (!w) return 1;
+	lua_pushnumber (L, datum);
+	lua_pushnumber (L, seabed);
+	return 3;
+}
+
+/***
+The swell's surface at a point and time.
+
+@function sea_surface
+@tparam handle hPlanet planet handle
+@tparam number lng longitude [rad]
+@tparam number lat latitude [rad]
+@tparam[opt] number mjd time (default: now)
+@tparam[opt] number depth depth below the mean level for the velocity [m] (default 0)
+@treturn table|nil h (height [m]), slope (vector: x east, z north), vel (vector: x east, y up, z north) [m/s]
+*/
+int Interpreter::oapi_sea_surface (lua_State *L)
+{
+	OBJHANDLE h = lua_islightuserdata (L, 1) ? lua_toObject (L, 1) : nullptr;
+	double mjd = luaL_optnumber (L, 4, oapiGetSimMJD ()), depth = luaL_optnumber (L, 5, 0.0);
+	double ht;
+	VECTOR3 slope, vel;
+	if (!h || !oapiSeaSurface (h, luaL_checknumber (L, 2), luaL_checknumber (L, 3), mjd, depth, &ht, &slope, &vel)) { lua_pushnil (L); return 1; }
+	lua_createtable (L, 0, 3);
+	lua_pushnumber (L, ht); lua_setfield (L, -2, "h");
+	lua_pushvector (L, slope); lua_setfield (L, -2, "slope");
+	lua_pushvector (L, vel); lua_setfield (L, -2, "vel");
+	return 1;
+}
+
 int Interpreter::oapi_get_debriscount (lua_State *L)
 {
 	lua_pushinteger (L, oapiGetDebrisCount());

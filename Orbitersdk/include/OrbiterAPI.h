@@ -4931,6 +4931,50 @@ OAPIFUNC bool oapiSurfaceDetailParamsEx (OBJHANDLE hPlanet, SURFDETAILPARAM *prm
 OAPIFUNC bool oapiSurfaceDetailParams (OBJHANDLE hPlanet, SURFDETAILPARAM *prm);
 
 /**
+ * \brief A planet's sea (Config/Sea.cfg; core: Src/Orbiter/Sea.h): its liquid and its swell,
+ *   the long waves the physics feels (the client draws the shorter waves itself).
+ */
+struct SEAPARAM {
+	double density = 0.0;    ///< liquid density [kg/m^3]
+	double viscosity = 0.0;  ///< kinematic viscosity [m^2/s]
+	double wind = 0.0;       ///< wind 10 m above the water [m/s] (the sea state)
+	double bearing = 0.0;    ///< direction the wind and the waves go towards [rad], clockwise from north
+	double hs = 0.0;         ///< significant wave height of the swell [m] (0: calm)
+	double hsFull = 0.0;     ///< significant wave height of the wind's whole sea [m]
+	double tp = 0.0;         ///< peak period [s]
+	double lambdaMin = 0.0;  ///< the swell's shortest wave [m]
+	double lambdaMax = 0.0;  ///< the swell's longest wave [m]
+	double crestMax = 0.0;   ///< bound of the swell's height [m]
+	double floorDepth = 0.0; ///< nominal seabed depth [m]
+};
+
+/**
+ * \brief The sea of a planet.
+ * \param size sizeof (SEAPARAM) of the caller (no more is written)
+ * \return false if the planet has no sea
+ */
+OAPIFUNC bool oapiGetSeaParams (OBJHANDLE hPlanet, SEAPARAM *prm, size_t size);
+
+/**
+ * \brief What lies at a point of a planet's surface: open water or ground.
+ * \param datum receives the elevation of the water's mean surface [m] (water only; may be NULL)
+ * \param seabed receives the elevation of the ground under the water [m] (water only; may be NULL)
+ * \return true if the point is open water (false: ground, a deck, or no sea)
+ */
+OAPIFUNC bool oapiIsWater (OBJHANDLE hPlanet, double lng, double lat, double *datum = 0, double *seabed = 0);
+
+/**
+ * \brief The swell's surface at a point at a time.
+ * \param mjd the time (MJD; e.g. oapiGetSimMJD())
+ * \param depth depth below the mean level for vel [m] (>= 0)
+ * \param h receives the height above the mean level [m]
+ * \param slope (may be NULL) receives the slopes (x: dh/d east, z: dh/d north; y 1)
+ * \param vel (may be NULL) receives the water's orbital velocity at depth (x east, y up, z north) [m/s]
+ * \return false if the planet has no sea
+ */
+OAPIFUNC bool oapiSeaSurface (OBJHANDLE hPlanet, double lng, double lat, double mjd, double depth, double *h, VECTOR3 *slope = 0, VECTOR3 *vel = 0);
+
+/**
  * \brief The site materials' weights at a point of a planet with procedural terrain detail:
  *   the core's full-resolution mask (no ground gate), shared by the pebbles, the ground scatter
  *   and the client's colour.
