@@ -127,6 +127,16 @@ vec3 SunTransmittance (vec3 p)
 
 float AtmSq (float x) { return x * x; }
 
+// The mean transmittance across a step of optical depth x (per colour),
+// (1 - e^-x) / x, given e = e^-x: a step's light reaching the start of
+// the step, exact for coefficients constant over the step (it tends to 1
+// on thin steps and to 1/x on thick ones); the series below 1e-3, free
+// of cancellation
+vec3 AtmStepShare (vec3 x, vec3 e)
+{
+	return mix ((1.0 - e) / max (x, vec3 (1e-6)), 1.0 - x * (0.5 - x / 6.0), lessThan (x, vec3 (1e-3)));
+}
+
 // Light scattered towards the camera along the view ray d up to distance
 // tMax, and the transmittance T of that path
 vec3 Inscatter (vec3 d, float tMax, out vec3 T)
@@ -140,9 +150,12 @@ vec3 Inscatter (vec3 d, float tMax, out vec3 T)
 
 	// steps: as many as the path needs, at most 16: each spans at most
 	// half the smaller scale height of altitude, and an optical depth of
-	// at most 1 at the path's lowest point (the midpoint rule then within
-	// about 1-4 %); paths across the air's height (from orbit, the sky)
-	// take all 16, paths through the air near the ground (aerial
+	// at most 1 at the path's lowest point (each step's contribution is
+	// integrated exactly across the step, AtmStepShare, so thick steps
+	// saturate instead of going dark; for paths climbing out of the air
+	// from the camera the steps are laid out quadratically, below); paths
+	// across the air's height (from orbit, the sky) take all 16, paths
+	// through the air near the ground (aerial
 	// perspective seen from low down, half the terrain's time) a few
 	float Rg = atm.radii.x, Rt = atm.radii.y;
 	float h0 = length (o + d * t0) - Rg, h1 = length (o + d * t1) - Rg;
@@ -151,17 +164,36 @@ vec3 Inscatter (vec3 d, float tMax, out vec3 T)
 	vec3 eLow = atm.betaR.rgb * dLow.x + atm.betaM.rgb * (1.1 * dLow.y) + atm.ozone.rgb * (atm.ozone.w > 0.5 ? dLow.y : dLow.z);
 	float steps = max ((max (h0, h1) - hLow) / (0.5 * min (atm.betaR.w, atm.betaM.w)), max (eLow.r, max (eLow.g, eLow.b)) * (t1 - t0));
 	int N = int (clamp (ceil (steps), 2.0, 16.0));
-	float ds = (t1 - t0) / float (N);
-	vec3 tau = vec3 (0.0);
+	// step layout: from inside the air, on paths whose lowest (densest)
+	// point is at the camera (the sky above the horizontal), the steps grow
+	// as the square of their index, so that the first optical depths along
+	// the path, where the light seen comes from, are resolved (the first of
+	// 16 steps spans 1/256 of the path); uniform where the lowest point lies
+	// ahead (the ground, paths past a tangent point, all paths from outside
+	// the air), blended over the first fifth so the sky has no seam
+	float len = t1 - t0;
+	float fLow = (clamp (-dot (o, d), t0, t1) - t0) / len;
+	float pexp = ta.x <= 0.0 ? mix (2.0, 1.0, smoothstep (0.0, 0.2, fLow)) : 1.0;
+	float invN = 1.0 / float (N);
+	vec3 Tc = vec3 (1.0); // transmittance from the camera to the start of the step
 	vec3 sumR = vec3 (0.0), sumM = vec3 (0.0), sumMS = vec3 (0.0);
+	float sa = t0;
 	for (int i = 0; i < N; i++) {
-		vec3 p = o + d * (t0 + ds * (float (i) + 0.5));
+		float sb = t0 + len * pow (float (i + 1) * invN, pexp); // (exactly t1 at the last step)
+		float ds = sb - sa;
+		vec3 p = o + d * (0.5 * (sa + sb));
+		sa = sb;
 		float r = length (p);
 		vec3 dens = AtmDensities (r - Rg, atm.betaR.w, atm.betaM.w) * ds;
 		vec3 scat = atm.betaR.rgb * dens.x + atm.betaM.rgb * dens.y;
 		vec3 ext = scat + atm.betaM.rgb * 0.1 * dens.y + atm.ozone.rgb * (atm.ozone.w > 0.5 ? dens.y : dens.z);
-		vec3 Tv = exp (-(tau + 0.5 * ext)); // to the middle of the step
-		tau += ext;
+		// the step's light reaching the camera: its source (at the midpoint)
+		// times the transmittance integrated across the step, which saturates
+		// at the source on optically thick steps (the midpoint rule's
+		// e^(-ext/2) ext went to zero there: the dark band above Venus' horizon)
+		vec3 Te = exp (-ext);
+		vec3 Tv = Tc * AtmStepShare (ext, Te);
+		Tc *= Te;
 		float muS = dot (p, atm.sunDir.xyz) / r;
 		vec3 Ts = AtmSunTransmittance (p, r, muS);
 		sumR += Tv * Ts * dens.x;
@@ -173,7 +205,7 @@ vec3 Inscatter (vec3 d, float tMax, out vec3 T)
 		psi += atm.surfPrm.yzw * smoothstep (-0.1, 0.15, muS);
 		sumMS += Tv * scat * psi;
 	}
-	T = exp (-tau);
+	T = Tc;
 
 	// airglow: a thin emitting shell (oxygen, 557.7 nm) about 95 km up, seen
 	// as a green line along the limb on the night side; the path length
