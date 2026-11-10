@@ -4,8 +4,11 @@
 #include "Hydro.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 namespace hydro {
+
+int debugPanels = 0;
 
 namespace {
 
@@ -219,7 +222,9 @@ void Forces (const Model &m, const Surface &s, const Body &b, Result &r, double 
 	if (dt > 0.0) {
 		for (int it = 0; it < 8; it++) {
 			double moved = 0.0;
-			for (PS &x : ps) {
+			// (sweeps forward and back in turn: no bias to the panels met first)
+			for (size_t q = 0; q < ps.size(); q++) {
+				PS &x = ps[it % 2 ? ps.size() - 1 - q : q];
 				Vector u (vv + crossp (wl, x.rc) - x.vw);
 				double dn = std::clamp (dotp (u, x.n) / x.kn, -x.ln, x.jn - x.ln);
 				if (dn != 0.0) {
@@ -238,6 +243,16 @@ void Forces (const Model &m, const Surface &s, const Body &b, Result &r, double 
 			}
 			if (moved * dt <= 1e-12) break;
 		}
+	}
+	if (debugPanels > 0 && !ps.empty()) {
+		std::vector<const PS*> top;
+		for (const PS &x : ps) top.push_back (&x);
+		std::sort (top.begin(), top.end(), [](const PS *a, const PS *b) { return a->ln > b->ln; });
+		for (int q = 0; q < std::min ((int)top.size(), debugPanels); q++) {
+			Vector cb (tmul (b.R, top[q]->rc + xcg - b.x)), nb (tmul (b.R, top[q]->n));
+			fprintf (stderr, "hydro panel c (%.2f %.2f %.2f) n (%.2f %.2f %.2f) Jn %.0f Jt %.0f\n", cb.x, cb.y, cb.z, nb.x, nb.y, nb.z, top[q]->ln, top[q]->lt);
+		}
+		fprintf (stderr, "--\n");
 	}
 	for (const PS &x : ps) {
 		double sc = dt > 0.0 ? 1.0 / dt : 1.0;

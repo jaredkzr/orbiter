@@ -463,9 +463,11 @@ void Vessel::Impacted (const Vector &gpos, const Vector &gvel, double speed)
 	VesselBase::Impacted (gpos, gvel, speed);
 	reldrive.on = false;
 	if (reltrip) reltrip->Abort (cbuf);
-	if (structure::DamageEnabled() && speed > CRASH_SPEED) {
+	// (water gives more: a flat sea at 40 m/s is still a crash)
+	double crash = impactWater ? WATER_CRASH_SPEED : CRASH_SPEED;
+	if (structure::DamageEnabled() && speed > crash) {
 		Destroy (cbuf);
-	} else if (speed > CRASH_SPEED) {
+	} else if (speed > crash) {
 		strcat (cbuf, ": set down");
 		if (this == g_focusobj) {
 			char detail[300];

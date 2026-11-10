@@ -16,9 +16,14 @@
 #include "Structure.h"
 #include "Orbiter.h"
 #include "Log.h"
+#include "Util.h"
+#include "Mesh.h"
 #include "Astro.h"
 #include <algorithm>
 #include <chrono>
+#include <functional>
+#include <map>
+#include <unordered_map>
 #include <cstdlib>
 
 extern TimeData td;
@@ -55,6 +60,9 @@ void VesselBase::HydroStep (double h)
 	// (reach: the body's size, the swell's crests, its motion over the step)
 	const sea::Swell &sw = sea->GetSwell();
 	double travel = (s1->pos - S0.pos).length() + 1.0;
+	// (a long step, at high time acceleration or a fall at kilometres a
+	// second: its impact on the water is found along its path, SurfaceImpact)
+	if ((p1 - p0).length() > OBSTACLE_REACH) { water.wet = false; return; }
 	double size0 = CollisionRadius() > 0.0 ? CollisionRadius() : Size();
 	if (std::min (r0, r1) - R > size0 + sw.CrestMax() + travel + 500.0) { water.wet = false; return; } // (well above the sea's surface; no lookups)
 	sea::Point sp = sea->At (lat, lng, false);
@@ -65,6 +73,7 @@ void VesselBase::HydroStep (double h)
 	if (std::min (r0, r1) - R - sp.datum > reach) { water.wet = false; return; }
 	water.near = true;
 	water.volume = m->volume;
+	water.flooded = Type() == OBJTP_DEBRIS;
 
 	// the local frame: on the datum under the step's end
 	Matrix L (L2H (lng, lat));
@@ -124,10 +133,13 @@ void VesselBase::HydroStep (double h)
 	b.cg = cg;
 	b.x = x0;
 	b.R = R0;
-	b.w = S0.omega;
+	// (Orbiter's angular velocity turns a point at r with crossp (r, omega) and
+	// a force F at r has the moment crossp (F, r); Hydro's the opposite: its w
+	// is -omega, its torques crossp (r, F))
+	b.w = -S0.omega;
 	// (velocities of the CG; the origin's plus w x cg)
-	b.v = v0 + mul (R0, crossp (S0.omega, cg));
-	Vector v1cg (v1 + mul (R1, crossp (s1->omega, cg)));
+	b.v = v0 + mul (R0, crossp (b.w, cg));
+	Vector v1cg (v1 + mul (R1, crossp (-s1->omega, cg)));
 	Vector aExt ((v1cg - b.v) / h);
 	// (the sea's surface is level to gravity and the planet's turning
 	// together, the geoid: a sphere's centrifugal pull along the surface,
@@ -137,10 +149,12 @@ void VesselBase::HydroStep (double h)
 		Vector acf (mul (L, Vector (pc.x, 0.0, pc.z) * (wrot * wrot))); // (outward from the axis; local frame)
 		aExt -= Vector (acf.x, 0.0, acf.z);
 	}
-	Vector alphaExt ((s1->omega - S0.omega) / h);
+	Vector alphaExt ((S0.omega - s1->omega) / h);
 	hydro::Result r;
 	static const bool prof = getenv ("ORBITER_WATER_PROFILE") != nullptr;
 	auto tp0 = std::chrono::steady_clock::now();
+	static double dbgT = getenv ("ORBITER_WATER_DEBUG_T") ? atof (getenv ("ORBITER_WATER_DEBUG_T")) : -1.0;
+	hydro::debugPanels = (dbgT >= 0.0 && water.wet && td.SimT1 - water.tWet < dbgT) ? 6 : 0;
 	hydro::Step (*m, srf, b, aExt, alphaExt, h, WaterParts(), r);
 	if (prof) {
 		static double tsum = 0.0; static int nsum = 0;
@@ -181,8 +195,9 @@ void VesselBase::HydroStep (double h)
 	s1->vel = rvel_base + rvel_add;
 	s1->Q.Set (Rg);
 	s1->R.Set (s1->Q);
-	s1->omega = b.w;
+	s1->omega = -b.w;
 	water.F = mul (P1.R, tmul (L, r.F));
+	water_vel = P1.vel + mul (P1.R, ground (pp));
 	WaterLoads (r, h);
 }
 
@@ -203,26 +218,189 @@ double VesselBase::WaterDepth (const Vector &p) const
 // =======================================================================
 // Vessel
 
+// The hulls are made from the meshes as stored, in their animations'
+// default states (a delta-glider's gear down): the water model is made from
+// them posed as the animations are now. Each hull belongs to the mesh group
+// most of its vertices came from; each group is moved as the graphics
+// client moves it (a component maps its animation's state onto a progress
+// over [state0, state1], and is applied for the difference from the
+// default's progress; children inherit their parents' transforms).
+
+namespace {
+
+	struct Xf { Matrix R; Vector t; }; // p' = R p + t
+	Xf Mul (const Xf &a, const Xf &b) { return { a.R * b.R, mul (a.R, b.t) + a.t }; }
+	bool Identity (const Xf &x)
+	{
+		const double *r = x.R.data;
+		return fabs (r[0] - 1) + fabs (r[4] - 1) + fabs (r[8] - 1) + fabs (r[1]) + fabs (r[2]) + fabs (r[3]) + fabs (r[5]) + fabs (r[6]) + fabs (r[7]) < 1e-9 && x.t.length2() < 1e-12;
+	}
+	double Progress (const ANIMATIONCOMP *c, double state)
+	{
+		if (c->state1 == c->state0) return state >= c->state0 ? 1.0 : 0.0;
+		return std::clamp ((state - c->state0) / (c->state1 - c->state0), 0.0, 1.0);
+	}
+	Xf LocalXf (const ANIMATIONCOMP *c, double state, double defstate)
+	{
+		Xf I { Matrix (1,0,0, 0,1,0, 0,0,1), Vector (0,0,0) };
+		double dp = Progress (c, state) - Progress (c, defstate);
+		MGROUP_TRANSFORM *tr = c->trans;
+		if (!tr || dp == 0.0) return I;
+		switch (tr->Type()) {
+		case MGROUP_TRANSFORM::ROTATE: {
+			auto *rot = static_cast<MGROUP_ROTATE*>(tr);
+			Vector ax (MakeVector (rot->axis));
+			double len = ax.length();
+			if (len == 0.0) return I;
+			Vector k (ax / len);
+			double th = rot->angle * dp, cs = cos (th), sn = sin (th), c1 = 1.0 - cs;
+			Matrix R (cs + c1*k.x*k.x, c1*k.x*k.y - sn*k.z, c1*k.x*k.z + sn*k.y,
+				c1*k.x*k.y + sn*k.z, cs + c1*k.y*k.y, c1*k.y*k.z - sn*k.x,
+				c1*k.x*k.z - sn*k.y, c1*k.y*k.z + sn*k.x, cs + c1*k.z*k.z);
+			Vector ref (MakeVector (rot->ref));
+			return { R, ref - mul (R, ref) };
+		}
+		case MGROUP_TRANSFORM::TRANSLATE:
+			return { I.R, MakeVector (static_cast<MGROUP_TRANSLATE*>(tr)->shift) * dp };
+		case MGROUP_TRANSFORM::SCALE: {
+			auto *scl = static_cast<MGROUP_SCALE*>(tr);
+			double p = Progress (c, state), p0 = Progress (c, defstate);
+			auto ratio = [&](double sv) { double d = 1.0 + (sv - 1.0) * p0; return d != 0.0 ? (1.0 + (sv - 1.0) * p) / d : 1.0; };
+			Matrix S (ratio (scl->scale.x), 0, 0, 0, ratio (scl->scale.y), 0, 0, 0, ratio (scl->scale.z));
+			Vector ref (MakeVector (scl->ref));
+			return { S, ref - mul (S, ref) };
+		}
+		default:
+			return I;
+		}
+	}
+
+}
+
+uint64_t Vessel::WaterPose (std::vector<std::pair<Matrix,Vector>> *hullXf) const
+{
+	const std::vector<collision::Hull> &hl = Hulls();
+	// (each hull's mesh group: once per set of hulls)
+	if (hull_group_gen != hull_gen) {
+		hull_group_gen = hull_gen;
+		hull_group.assign (hl.size(), { -1, -1 });
+		std::vector<ExtGroup> eg;
+		ExternalGroups (eg);
+		std::unordered_map<uint64_t, int> vtx; // (quantised vertex -> index into eg)
+		auto key = [](const Vector &p) {
+			auto q = [](double v) { return (uint64_t)(int64_t)llround (v * 1000.0) & 0x1fffff; };
+			return (q (p.x) << 42) | (q (p.y) << 21) | q (p.z);
+		};
+		for (size_t e = 0; e < eg.size(); e++) {
+			const GroupSpec *g = (const GroupSpec*)eg[e].grp;
+			for (DWORD k = 0; k < g->nVtx; k++) vtx[key (Vector (g->Vtx[k].x, g->Vtx[k].y, g->Vtx[k].z) + eg[e].ofs)] = (int)e;
+		}
+		for (size_t h = 0; h < hl.size(); h++) {
+			std::unordered_map<int,int> votes;
+			for (const Vector &v : hl[h].v) {
+				auto it = vtx.find (key (v));
+				if (it != vtx.end()) votes[it->second]++;
+			}
+			int best = -1, bn = 0;
+			for (auto &vt : votes) if (vt.second > bn) best = vt.first, bn = vt.second;
+			if (best >= 0) hull_group[h] = { (int)eg[best].mesh, (int)eg[best].group };
+		}
+	}
+	// the groups' transforms now (vessel frame)
+	std::map<std::pair<int,int>, Xf> gx;
+	uint64_t pose = 1469598103934665603ull;
+	if (nanim && anim) {
+		std::unordered_map<const ANIMATIONCOMP*, const ANIMATION*> owner;
+		for (UINT a = 0; a < nanim; a++)
+			for (UINT c = 0; c < anim[a].ncomp; c++) owner[anim[a].comp[c]] = &anim[a];
+		std::unordered_map<const ANIMATIONCOMP*, Xf> cm;
+		std::function<Xf(const ANIMATIONCOMP*)> comp = [&](const ANIMATIONCOMP *c) -> Xf {
+			auto it = cm.find (c);
+			if (it != cm.end()) return it->second;
+			auto ow = owner.find (c);
+			Xf M = ow != owner.end() ? LocalXf (c, ow->second->state, ow->second->defstate) : Xf { Matrix (1,0,0, 0,1,0, 0,0,1), Vector (0,0,0) };
+			if (c->parent) M = Mul (comp (c->parent), M);
+			cm[c] = M;
+			return M;
+		};
+		for (UINT a = 0; a < nanim; a++) {
+			// (the pose: the states, coarsely; a change of a hundredth makes no new model)
+			int64_t q = llround (anim[a].state * 100.0);
+			pose = (pose ^ (uint64_t)q) * 1099511628211ull;
+			for (UINT ci = 0; ci < anim[a].ncomp; ci++) {
+				const ANIMATIONCOMP *c = anim[a].comp[ci];
+				MGROUP_TRANSFORM *tr = c->trans;
+				if (!tr || !tr->grp || !tr->ngrp || tr->mesh == LOCALVERTEXLIST || tr->mesh >= nmesh || !meshlist[tr->mesh]) continue;
+				Xf M = comp (c);
+				// (in the vessel frame: the mesh's offset)
+				Vector ofs (MakeVector (meshlist[tr->mesh]->meshofs));
+				Xf V { M.R, M.t + ofs - mul (M.R, ofs) };
+				for (UINT k = 0; k < tr->ngrp; k++) {
+					auto keyg = std::make_pair ((int)tr->mesh, (int)tr->grp[k]);
+					auto it = gx.find (keyg);
+					gx[keyg] = it == gx.end() ? V : Mul (V, it->second);
+				}
+			}
+		}
+	}
+	if (hullXf) {
+		hullXf->assign (hl.size(), { Matrix (1,0,0, 0,1,0, 0,0,1), Vector (0,0,0) });
+		for (size_t h = 0; h < hl.size(); h++) {
+			auto it = gx.find (hull_group[h]);
+			if (it != gx.end() && !Identity (it->second)) (*hullXf)[h] = { it->second.R, it->second.t };
+		}
+	}
+	return pose;
+}
+
 const hydro::Model *Vessel::WaterModel () const
 {
 	const std::vector<collision::Hull> &hl = Hulls();
 	DWORD dv = DamageVersion();
-	if (water_model && water_model_gen == hull_gen && water_model_dmg == dv) return water_model.get();
+	uint64_t pose = WaterPose (nullptr);
+	// (made again for new hulls, damage, or another pose: at most every
+	// WATER_POSE_DT [s] while the pose changes, e.g. the gear going up)
+	if (water_model && water_model_gen == hull_gen && water_model_dmg == dv &&
+		(water_model_pose == pose || td.SimT1 - water_model_t < WATER_POSE_DT)) return water_model.get();
 	auto t0 = std::chrono::steady_clock::now();
+	std::vector<std::pair<Matrix,Vector>> xf;
+	WaterPose (&xf);
 	const structure::Model &sm = Structure();
 	std::vector<convex::Polytope> hs;
+	int moved = 0;
 	for (size_t i = 0; i < hl.size(); i++) {
 		if (!part_lost.empty() && PartLost (sm.PartOfHull ((int)i))) continue;
-		hs.push_back (hl[i]);
+		const Matrix &R = xf[i].first;
+		const Vector &t = xf[i].second;
+		if (t.length2() == 0.0 && R.m11 == 1.0 && R.m22 == 1.0 && R.m33 == 1.0) { hs.push_back (hl[i]); continue; }
+		// (posed: its points moved, the hull made again)
+		std::vector<Vector> pts;
+		for (const Vector &v : hl[i].v) pts.push_back (mul (R, v) + t);
+		convex::Polytope P;
+		if (convex::Build (pts, P)) hs.push_back (std::move (P)), moved++;
 	}
 	water_model = std::make_unique<hydro::Model> (hs.empty() ? hydro::Sphere (Vector (0, 0, 0), 0.5 * size) :
 		hydro::Build (hs, [&sm](const Vector &p) { return sm.PartAt (p); }));
 	water_model_gen = hull_gen;
 	water_model_dmg = dv;
+	water_model_pose = pose;
+	water_model_t = td.SimT1;
 	double ms = std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count() * 1e3;
-	LOGOUT ("Water model of %s: %d hulls, %.2f m3 in %d cells of %.3f m, %d panels %.1f m2, %.0f ms",
-		Name(), (int)hs.size(), water_model->volume, (int)water_model->cells.size(), water_model->h,
-		(int)water_model->panels.size(), water_model->area, ms);
+	if (const char *dump = getenv ("ORBITER_WATER_DUMP")) {
+		FILE *f = fopen (dump, "w");
+		if (f) {
+			for (const hydro::Panel &q : water_model->panels) fprintf (f, "P %f %f %f %f %f %f %f %d\n", q.c.x, q.c.y, q.c.z, q.n.x, q.n.y, q.n.z, q.area, q.part);
+			for (size_t i = 0; i < hs.size(); i++) for (const convex::Face &fc : hs[i].f) {
+				fprintf (f, "F %zu %f %f %f", i, fc.n.x, fc.n.y, fc.n.z);
+				for (int k : fc.idx) fprintf (f, " %f %f %f", hs[i].v[k].x, hs[i].v[k].y, hs[i].v[k].z);
+				fprintf (f, "\n");
+			}
+			fclose (f);
+		}
+	}
+	LOGOUT ("Water model of %s: %d hulls (%d posed), %.2f m3 in %d cells of %.3f m, %d panels %.1f m2%s, %.0f ms",
+		Name(), (int)hs.size(), moved, water_model->volume, (int)water_model->cells.size(), water_model->h,
+		(int)water_model->panels.size(), water_model->area, water_model->symmetric ? ", symmetric" : "", ms);
 	return water_model.get();
 }
 
@@ -233,5 +411,32 @@ int Vessel::WaterParts () const
 
 void Vessel::WaterLoads (const hydro::Result &r, double h)
 {
-	// (the water's forces load the parts as contacts do: W6)
+	// The water's forces load the parts they act on, as contacts do. The
+	// solver stops a panel within a sub-step (the water as rigid as the
+	// laws make it); a structure meeting water is decelerated over a stroke
+	// (the hull's penetration and give): the loads are the forces low-passed
+	// over the time that stroke takes at the closing speed, so a blow is
+	// spread and steady forces (buoyancy, planing) are kept whole. Its
+	// torque about the centre of gravity in Orbiter's sense (crossp (F, r)).
+	if (h <= 0.0) return;
+	size_t n = std::min (r.partF.size(), part_Fc.size());
+	if (water_Ff.size() != n) water_Ff.assign (n, Vector (0, 0, 0));
+	double vc = std::max (r.entrySpeed, 0.5);
+	double k = std::min (1.0, h * vc / WATER_STROKE);
+	for (size_t j = 0; j < n; j++) water_Ff[j] += (r.partF[j] - water_Ff[j]) * k;
+	water_Tf += (r.T - water_Tf) * k;
+	if (!loads_on || part_Fc.empty()) return;
+	for (size_t j = 0; j < n; j++) {
+		const Vector &F = water_Ff[j];
+		double w = F.length();
+		if (w <= 0.0) continue;
+		part_Fc[j] += F;
+		// (what the part touched: the water, at rest on the turning planet)
+		if (j < part_vx.size()) part_vx[j] += water_vel * (w * h), part_jx[j] += w * h;
+		if (j < part_hit.size() && r.entrySpeed > part_hit[j]) {
+			part_hit[j] = r.entrySpeed;
+			part_hitpos[j] = Structure().Parts()[j].cg;
+		}
+	}
+	contact_tau -= water_Tf;
 }

@@ -19,6 +19,7 @@
 #include "Vesselbase.h"
 #include "TimeData.h"
 #include <string>
+#include <memory>
 #include <vector>
 
 class Mesh;
@@ -110,6 +111,7 @@ protected:
 	void WakeFromContact () override { wake = true; }
 	void ContactsResolved (const std::vector<contact::Point> &pts, int index, double h, const std::vector<contact::Body> *pre = nullptr) override;
 	void ContactStateChanged () override;
+	const hydro::Model *WaterModel () const override;
 	TOUCHDOWN_VTX *HullvtxFirst () override { return nullptr; }
 	TOUCHDOWN_VTX *HullvtxNext () override { return nullptr; }
 
@@ -138,6 +140,7 @@ private:
 	double scrape = 0.0, impact = 0.0;
 	bool hidden = false;
 	uint64_t parts = 0;
+	mutable std::shared_ptr<hydro::Model> water_model; // (flooded: its structure's volume)
 	double hit = 0.0, hitT = -1e10;
 	Vector hitPos;
 };

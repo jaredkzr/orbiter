@@ -42,9 +42,10 @@
 namespace hydro {
 
 	const double CN_MAX = 1.0;
-	const double CS_MAX = 8.0;
+	const double CS_MAX = 3.0;
 	const double ZETA = 0.15;
 	const int MAX_SUBSTEPS = 64;
+	extern int debugPanels; ///< (diagnostics: print this many strongest panels of the next Forces calls)
 
 	/// The water about the body: a grid of the swell's surface (height above
 	/// the mean level; the water's velocity at the surface), local frame

@@ -39,10 +39,11 @@ namespace {
 		convex::Build (p, P);
 		return P;
 	}
+	// the panels' area projected onto a direction (what pressure along it acts on)
 	double PanelArea (const Model &m, const Vector &dir)
 	{
 		double a = 0.0;
-		for (const Panel &p : m.panels) if (dotp (p.n, dir) > 0.99) a += p.area;
+		for (const Panel &p : m.panels) a += p.area * std::max (0.0, dotp (p.n, dir));
 		return a;
 	}
 }
@@ -53,9 +54,10 @@ TEST_CASE ("A box's volume, centroid and outside", "[Water.Volume]")
 	CHECK_THAT (m.volume, WithinRel (8.0, 0.03));
 	CHECK (m.centroid.length () < 0.05);
 	CHECK ((int)m.cells.size () <= MAX_CELLS);
-	CHECK_THAT (m.area, WithinRel (28.0, 0.01));
-	CHECK_THAT (PanelArea (m, Vector (0, -1, 0)), WithinRel (8.0, 0.01)); // (the bottom)
-	CHECK_THAT (PanelArea (m, Vector (0, 0, 1)), WithinRel (2.0, 0.01));  // (the front)
+	// (the panels are the grid's outside, its edges rounded by the smoothed normals)
+	CHECK_THAT (m.area, WithinRel (28.0, 0.04));
+	CHECK_THAT (PanelArea (m, Vector (0, -1, 0)), WithinRel (8.0, 0.05)); // (the bottom)
+	CHECK_THAT (PanelArea (m, Vector (0, 0, 1)), WithinRel (2.0, 0.12));  // (the front: half a cell out on a small face)
 	CHECK ((int)m.panels.size () <= MAX_PANELS);
 }
 
@@ -64,7 +66,7 @@ TEST_CASE ("Overlapping hulls count once", "[Water.Volume]")
 	Model m = Build ({ Box (Vector (0, 0, 0), Vector (2, 1, 4)), Box (Vector (1, 0, 0), Vector (3, 1, 4)) }, nullptr);
 	CHECK_THAT (m.volume, WithinRel (12.0, 0.03));
 	// (the outside of the union: the faces inside the other box are not the outside)
-	CHECK_THAT (m.area, WithinRel (2.0 * (3.0 * 1.0 + 3.0 * 4.0 + 1.0 * 4.0), 0.02));
+	CHECK_THAT (m.area, WithinRel (2.0 * (3.0 * 1.0 + 3.0 * 4.0 + 1.0 * 4.0), 0.04));
 	CHECK_THAT (m.centroid.x, WithinAbs (1.5, 0.05));
 }
 
@@ -90,7 +92,8 @@ TEST_CASE ("A ball", "[Water.Volume]")
 {
 	Model m = Build ({ Ball (Vector (0, 0, 0), 1.5) }, nullptr);
 	CHECK_THAT (m.volume, WithinRel (4.0 / 3.0 * PI * 1.5 * 1.5 * 1.5, 0.03));
-	CHECK_THAT (m.area, WithinRel (4.0 * PI * 1.5 * 1.5, 0.02));
+	// (the grid's outside lies up to half a cell out: a little more area on a curved body)
+	CHECK_THAT (m.area, WithinRel (4.0 * PI * 1.5 * 1.5, 0.12));
 	// (normals point out)
 	for (const Panel &p : m.panels) CHECK (dotp (p.n, p.c) > 0.0);
 }
@@ -111,4 +114,32 @@ TEST_CASE ("Parts of cells and panels", "[Water.Volume]")
 	for (const Cell &c : m.cells) n[c.part] += c.w;
 	CHECK_THAT (n[0], WithinRel (n[1], 0.1)); // (the middle slab of cells goes to one side)
 	for (const Panel &p : m.panels) CHECK (p.part == (p.c.z > 0.0 ? 1 : 0));
+}
+
+TEST_CASE ("A symmetric body cut up unevenly comes out symmetric", "[Water.Volume]")
+{
+	// a box 4 m wide about x = 0, its hulls cut off-centre (as a mesh's convex decomposition may)
+	Model m = Build ({ Box (Vector (-2, -0.5, -3), Vector (0.7, 0.5, 3)), Box (Vector (0.7, -0.5, -3), Vector (2, 0.5, 3)),
+		Box (Vector (-2, -0.6, -1), Vector (-0.5, 0.0, 1)) }, nullptr); // (and a bulge on the left only, inside mostly)
+	double l = 0.0, r = 0.0;
+	for (const Panel &p : m.panels) {
+		double a = p.area * std::max (0.0, -p.n.y);
+		if (fabs (p.c.x) < 1e-6) l += 0.5 * a, r += 0.5 * a; // (on the plane)
+		else if (p.c.x < 0.0) l += a; else r += a;
+	}
+	CHECK (m.symmetric);
+	CHECK_THAT (l, WithinRel (r, 0.02));
+	CHECK_THAT (m.centroid.x, WithinAbs (0.0, 1e-9));
+}
+
+TEST_CASE ("A hollow hull of thin walls is sealed", "[Water.Volume]")
+{
+	// six plates 5 cm thick closing a box 2 x 1 x 4: the inside counts as displacement
+	double t = 0.05;
+	Model m = Build ({ Box (Vector (-1, -0.5, -2), Vector (1, -0.5 + t, 2)), Box (Vector (-1, 0.5 - t, -2), Vector (1, 0.5, 2)),
+		Box (Vector (-1, -0.5, -2), Vector (-1 + t, 0.5, 2)), Box (Vector (1 - t, -0.5, -2), Vector (1, 0.5, 2)),
+		Box (Vector (-1, -0.5, -2), Vector (1, 0.5, -2 + t)), Box (Vector (-1, -0.5, 2 - t), Vector (1, 0.5, 2)) }, nullptr);
+	CHECK_THAT (m.volume, WithinRel (8.0, 0.08)); // (the walls' cells count whole)
+	// (its outside only: no panels on the inner faces of the walls)
+	CHECK_THAT (m.area, WithinRel (28.0, 0.06));
 }

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include "Vesselbase.h"
+#include "Sea.h"
 #include "Psys.h"
 #include "Planet.h"
 
@@ -442,7 +443,12 @@ bool VesselBase::SurfaceImpact ()
 	double f = std::clamp ((-B - std::sqrt (disc)) / (2.0 * A), 0.0, 1.0);
 	Vector pi (p0 + dp * f);
 	Vector up (pi.unit());
-	Vector ps (up * (R + elev (pi) + size)); // (on the terrain, the vessel's size above it)
+	// (on the water: its centre at the surface, to float; on the terrain: its size above it)
+	double lngi, lati, radi;
+	pl->LocalToEquatorial (pi, lngi, lati, radi);
+	sea::Sea *sea = pl->GetSea();
+	impactWater = sea && sea->Water (lati, lngi);
+	Vector ps (up * (R + elev (pi) + (impactWater ? 0.0 : size)));
 	Vector g1 (mul (P1.R, ps) + P1.pos);
 	Vector g0 (mul (P0.R, ps) + P0.pos);
 	Vector gvel ((g1 - g0) / td.SimDT); // (the ground point's velocity)

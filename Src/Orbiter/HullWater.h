@@ -52,6 +52,7 @@ namespace hydro {
 		double radius = 0.0;       ///< bounding sphere about the body frame's origin [m]
 		double length = 0.0;       ///< longest extent [m]
 		double area = 0.0;         ///< panels' total area [m^2]
+		bool symmetric = false;    ///< made mirror-symmetric about x = 0 (the hulls nearly were)
 		bool Empty () const { return cells.empty(); }
 	};
 

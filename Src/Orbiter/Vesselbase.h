@@ -272,6 +272,8 @@ protected:
 	/// the water's forces of a step (r.partF per part), e.g. for structural loads
 	virtual void WaterLoads (const hydro::Result &r, double h) {}
 	WaterState water;
+	Vector water_vel;             // the water's velocity at the body in the last step (global)
+	bool impactWater = false;     // the last long step's impact was on the water (SurfaceImpact)
 	/// depth [m] of a point (body frame) under the sea's surface at the step's
 	/// start (< 0: above it; -1e10 away from the water)
 	double WaterDepth (const Vector &p) const;

@@ -9,6 +9,7 @@
 #include "Mesh.h"
 #include "Orbiter.h"
 #include "Log.h"
+#include "HullWater.h"
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
@@ -572,4 +573,24 @@ Debris *Debris::Read (std::istream &is, const std::string &name)
 	d->SetParts (parts);
 	if (rest && cb->Type() == OBJTP_PLANET) d->InitLanded ((Planet*)cb, 0.0, 0.0, 0.0, &R);
 	return d;
+}
+
+// =======================================================================
+// In the water: a broken piece is flooded; it displaces only its
+// structure (FLOOD_DENSITY), and sinks unless it is very light
+
+namespace { const double FLOOD_DENSITY = 2700.0; } // [kg/m^3] (aluminium)
+
+const hydro::Model *Debris::WaterModel () const
+{
+	if (water_model) return water_model.get();
+	auto m = std::make_shared<hydro::Model> (hulls.empty() ? hydro::Sphere (Vector (0, 0, 0), 0.5 * Size()) : hydro::Build (hulls, nullptr));
+	double vs = mass / FLOOD_DENSITY;
+	if (m->volume > vs && m->volume > 0.0) {
+		double k = vs / m->volume;
+		for (hydro::Cell &c : m->cells) c.w *= k;
+		m->volume = vs;
+	}
+	water_model = m;
+	return water_model.get();
 }

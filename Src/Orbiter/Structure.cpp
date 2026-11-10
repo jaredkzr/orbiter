@@ -29,12 +29,14 @@ namespace structure {
 
 	bool DamageEnabled ()
 	{
-		static int env = -1;
-		if (env < 0) {
+		// (ORBITER_DAMAGE=1 or 0: on or off whatever the configuration says)
+		static int env = -2;
+		if (env == -2) {
 			const char *e = getenv ("ORBITER_DAMAGE");
-			env = (e && atoi (e) != 0) ? 1 : 0;
+			env = (e && *e) ? (atoi (e) != 0 ? 1 : 0) : -1;
 		}
-		return env || g_pOrbiter->Cfg()->CfgLogicPrm.DamageSetting != 0;
+		if (env >= 0) return env == 1;
+		return g_pOrbiter->Cfg()->CfgLogicPrm.DamageSetting != 0;
 	}
 
 	ClassConfig ReadClassConfig (const char *classname)

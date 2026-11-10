@@ -1416,6 +1416,7 @@ public:
 	};
 	static constexpr double RELDRIVE_MAX_ACCEL = 1.25e6 * 9.80665; // [m/s^2] (trips plan up to 10^6 g: a reserve for the autopilot)
 	static constexpr double REL_SPEED = 0.003 * 299792458.0;    // above this: relativistic without the drive [m/s]
+	static constexpr double WATER_CRASH_SPEED = 40.0; // [m/s] ... on the water
 	static constexpr double CRASH_SPEED = 20.0; // [m/s] a long step's impact faster than this destroys the vessel (damage simulation on)
 	const RelDrive &GetRelDrive () const { return reldrive; }
 	bool SetRelDrive (double accel, bool on); // false if refused (docked, attached)
@@ -1819,6 +1820,15 @@ private:
 	mutable std::unique_ptr<hydro::Model> water_model;
 	mutable unsigned water_model_gen = (unsigned)-1;  // (hull_gen it was made for)
 	mutable DWORD water_model_dmg = (DWORD)-1;        // (DamageVersion it was made for)
+	uint64_t WaterPose (std::vector<std::pair<Matrix,Vector>> *hullXf) const; // (the animations' pose: a key; each hull's transform)
+	mutable std::vector<std::pair<int,int>> hull_group; // (each hull's mesh and group)
+	mutable unsigned hull_group_gen = (unsigned)-1;
+	mutable uint64_t water_model_pose = 0;
+	mutable double water_model_t = -1e10;
+	static constexpr double WATER_POSE_DT = 0.5;
+	static constexpr double WATER_STROKE = 0.5;       // [m] a structure meeting the water is decelerated over this (WaterLoads)
+	std::vector<Vector> water_Ff;                     // the water's forces on the parts, low-passed (body frame)
+	Vector water_Tf;                                  // ... its torque (Hydro's sense)
 	bool loads_on = false;                       // forces on the parts recorded in this step
 	std::vector<Vector> part_F, part_Fc;         // forces on the parts in the step (vessel frame): the vessel's own, contacts
 	Vector part_Frec;                            // (the vessel's own recorded on their parts)
