@@ -69,6 +69,7 @@ namespace {
 		float overcastPrm[4]; //   falloff k, deck altitude [m], tan(theta0), 0
 		float coastPrm[4];    // shore (F1): x wet sand width [m] (0: none), y shallows tint (1: procedural seas), z mask field range [texels] (0: plain masks), w 0
 		float waveEnv[WAVE_COUNT][4]; // the waves' crest envelopes (W2): planet-frame wave vector kp (xyz), phase (w)
+		float nearHaze[4];    // C4 (T4): haze near the ground: extinction at the surface [1/m] (rgb), scale height [m] (w; 0: none)
 		float saltFlat[SALT_MAX][4]; // playa salt flats (pass 2, P1): planet-frame centre direction (xyz), angular radius [rad]; playaPrm.y of them
 	};
 	static_assert (sizeof (AtmUniforms) % 16 == 0, "std140");
@@ -267,10 +268,17 @@ namespace {
 	// apparent source of angular radius radius [rad], and blends into the
 	// beam up to the cloud deck at deck [m]. The share is taken out of the
 	// skylight (Scene.cpp), so the ground's light is unchanged.
-	struct Overcast { const char *name; double tau, scat[3], g, rayleigh; float sky[3]; double share, falloff, radius, deck; };
+	// (pass 2, T4) Venus' share raised from 0.12 to 0.25: at 0.12 the ship showed no direction of the light.
+	// nearHaze: a haze layer near the ground (C4): extinction at the surface [1/m] (grey) and scale height
+	// [m]. The sky model keeps the optical depths moderate (above), so that far ground showed through the
+	// thick lower air brighter than the sky above it (Venus' horizon read inverted); the layer adds the
+	// near-horizontal paths' extinction and light (a horizontal optical depth of about 3 over 10 km on
+	// Venus: the far ground fades into the haze's light, which near the horizon is the sky's) and little
+	// changes the zenith (vertical depth beta H, 0.45)
+	struct Overcast { const char *name; double tau, scat[3], g, rayleigh; float sky[3]; double share, falloff, radius, deck, hazeBeta, hazeH; };
 	const Overcast OVERCAST[] = {
-		{ "Venus", 2.0, { 0.98, 0.85, 0.55 }, 0.75f, 1.0, { 1.80f, 1.25f, 0.55f }, 0.12, 0.6, 0.30, 60e3 },
-		{ "Titan", 1.2, { 0.96, 0.80, 0.52 }, 0.70f, 2.0, { 1.80f, 1.25f, 0.65f }, 0.30, 0.4, 0.12, 30e3 },
+		{ "Venus", 2.0, { 0.98, 0.85, 0.55 }, 0.75f, 1.0, { 1.80f, 1.25f, 0.55f }, 0.25, 0.6, 0.30, 60e3, 3.0e-4, 1500.0 },
+		{ "Titan", 1.2, { 0.96, 0.80, 0.52 }, 0.70f, 2.0, { 1.80f, 1.25f, 0.65f }, 0.30, 0.4, 0.12, 30e3, 1.0e-4, 1500.0 },
 	};
 	const Overcast *FindOvercast (const char *name)
 	{
@@ -618,6 +626,11 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		}
 		if (const Overcast *o = FindOvercast (name)) {
 			for (int i = 0; i < 3; i++) overcastSky[i] = o->sky[i];
+			static const bool hazeOff = [] { const char *e = getenv ("ORBITER_VK_NEAR_HAZE"); return e && *e && !atoi (e); }();
+			if (!hazeOff) { // (scattering per colour with the haze's albedo, absorbing blue as the deck's; the shader takes the extinction as grey)
+				for (int i = 0; i < 3; i++) nearHaze[i] = (float)(o->hazeBeta * o->scat[i]);
+				nearHaze[3] = (float)o->hazeH;
+			}
 			OvercastSun os;
 			if (OvercastSunlight (name, os)) {
 				for (int i = 0; i < 3; i++) overcastSun[i] = (float)(os.share * o->sky[i]);
@@ -1122,6 +1135,7 @@ void Atmosphere::Update ()
 	memcpy (u.ozone, ozone, sizeof(ozone));
 	memcpy (u.overcastSun, overcastSun, sizeof(overcastSun));
 	memcpy (u.overcastPrm, overcastPrm, sizeof(overcastPrm));
+	memcpy (u.nearHaze, nearHaze, sizeof(nearHaze));
 	memcpy (u.ground, groundColour, sizeof(groundColour));
 	if (cloudParams[3] > 0.0f)
 		if (const double *rot = (const double*)oapiGetObjectParam (hPlanet, OBJPRM_PLANET_CLOUDROTATION))

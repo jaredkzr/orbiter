@@ -53,6 +53,7 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 overcastPrm;   //   x: falloff k towards the horizon, y: the cloud deck's altitude [m] (the blend to the beam), z: tan of the apparent source's angular radius at the ground, w: 0
 	vec4 coastPrm;      // shore (F1): x wet sand width [m] (0: none), y shallows tint (1: procedural seas), z mask field range [texels] (0: plain masks: alpha the land share), w sea ice (1: procedural ocean worlds, I1)
 	vec4 waveEnv[WAVE_COUNT]; // the waves' crest envelopes (W2, Atmosphere.h WAVE_ENV_*): planet-frame wave vector kp (xyz), phase (w)
+	vec4 nearHaze;      // C4 (T4): haze near the ground: scattering at the surface [1/m] (rgb; extinction: about the largest, grey), scale height [m] (w; 0: none)
 	vec4 saltFlat[24];  // playa salt flats (pass 2, P1): planet-frame centre direction (xyz), angular radius [rad]; playaPrm.y of them (Config/VK/Playa.cfg)
 } atm;
 
@@ -167,6 +168,8 @@ vec3 Inscatter (vec3 d, float tMax, out vec3 T)
 	float hLow = min (min (h0, h1), length (o + d * clamp (-dot (o, d), t0, t1)) - Rg);
 	vec3 dLow = AtmDensities (hLow, atm.betaR.w, atm.betaM.w);
 	vec3 eLow = atm.betaR.rgb * dLow.x + atm.betaM.rgb * (1.1 * dLow.y) + atm.ozone.rgb * (atm.ozone.w > 0.5 ? dLow.y : dLow.z);
+	bool haze = atm.nearHaze.w > 0.0;
+	if (haze) eLow += vec3 (max (atm.nearHaze.r, max (atm.nearHaze.g, atm.nearHaze.b))) * exp (-max (hLow, 0.0) / atm.nearHaze.w);
 	float steps = max ((max (h0, h1) - hLow) / (0.5 * min (atm.betaR.w, atm.betaM.w)), max (eLow.r, max (eLow.g, eLow.b)) * (t1 - t0));
 	int N = int (clamp (ceil (steps), 2.0, 16.0));
 	// step layout: from inside the air, on paths whose lowest (densest)
@@ -181,7 +184,7 @@ vec3 Inscatter (vec3 d, float tMax, out vec3 T)
 	float pexp = ta.x <= 0.0 ? mix (2.0, 1.0, smoothstep (0.0, 0.2, fLow)) : 1.0;
 	float invN = 1.0 / float (N);
 	vec3 Tc = vec3 (1.0); // transmittance from the camera to the start of the step
-	vec3 sumR = vec3 (0.0), sumM = vec3 (0.0), sumMS = vec3 (0.0);
+	vec3 sumR = vec3 (0.0), sumM = vec3 (0.0), sumMS = vec3 (0.0), sumH = vec3 (0.0);
 	float sa = t0;
 	for (int i = 0; i < N; i++) {
 		float sb = t0 + len * pow (float (i + 1) * invN, pexp); // (exactly t1 at the last step)
@@ -192,6 +195,10 @@ vec3 Inscatter (vec3 d, float tMax, out vec3 T)
 		vec3 dens = AtmDensities (r - Rg, atm.betaR.w, atm.betaM.w) * ds;
 		vec3 scat = atm.betaR.rgb * dens.x + atm.betaM.rgb * dens.y;
 		vec3 ext = scat + atm.betaM.rgb * 0.1 * dens.y + atm.ozone.rgb * (atm.ozone.w > 0.5 ? dens.y : dens.z);
+		// the haze near the ground (C4): scattering, a little absorption
+		float dH = haze ? exp (-max (r - Rg, 0.0) / atm.nearHaze.w) * ds : 0.0;
+		scat += atm.nearHaze.rgb * dH;
+		ext += vec3 (max (atm.nearHaze.r, max (atm.nearHaze.g, atm.nearHaze.b)) * 1.02 * dH); // (grey extinction: scattering + the blue's absorption)
 		// the step's light reaching the camera: its source (at the midpoint)
 		// times the transmittance integrated across the step, which saturates
 		// at the source on optically thick steps (the midpoint rule's
@@ -203,6 +210,7 @@ vec3 Inscatter (vec3 d, float tMax, out vec3 T)
 		vec3 Ts = AtmSunTransmittance (p, r, muS);
 		sumR += Tv * Ts * dens.x;
 		sumM += Tv * Ts * dens.y;
+		sumH += Tv * Ts * dH;
 		// all higher orders, isotropic; under an overcast (Venus, Titan) the
 		// diffuse field the table cannot carry through the thick haze
 		// (where the sun is up)
@@ -275,7 +283,8 @@ vec3 Inscatter (vec3 d, float tMax, out vec3 T)
 	float mu = dot (d, atm.sunDir.xyz);
 	float pR = 3.0 / (16.0 * ATM_PI) * (1.0 + mu * mu);
 	vec3 pM = AtmMiePhase (mu);
-	return atm.radii.w * atm.sunTint.rgb * (sumR * atm.betaR.rgb * pR + sumM * atm.betaM.rgb * pM + sumMS) + glow;
+	vec3 hz = haze ? sumH * atm.nearHaze.rgb * AtmCS (0.6, mu) : vec3 (0.0);
+	return atm.radii.w * atm.sunTint.rgb * (sumR * atm.betaR.rgb * pR + sumM * atm.betaM.rgb * pM + hz + sumMS) + glow;
 }
 
 // Sunlit planet surface seen from afar, at the unit normal n (planet
