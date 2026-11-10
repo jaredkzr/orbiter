@@ -2196,7 +2196,7 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 
 	double life = air ? (water ? 2.2 : 6.0) : 2.5; // (a sheet from hovering lingered half a minute at 10 s)
 	double D = sys->density, sizeScale = std::pow (D, -1.0 / 3.0);
-	double rate = water ? 150.0 * D * std::min (1.0, 0.3 + strength) : (air ? 120.0 : 900.0) * D * std::min (1.0, 0.3 + strength); // [1/s]
+	double rate = water ? 420.0 * D * std::min (1.0, 0.3 + strength) : (air ? 120.0 : 900.0) * D * std::min (1.0, 0.3 + strength); // [1/s] (spray: many fine droplets, W1)
 	ParticleSystem::Class cls = water ? ParticleSystem::Class::Spray : ParticleSystem::Class::Dust;
 	if (!sys->Reserve (r, rate, life, cls)) { r.havePrev = false; mist[idx].havePrev = false; return; } // (no stale source next time)
 	double radial = air ? 6.0 + 18.0 * strength : 15.0 + 40.0 * strength; // [m/s]
@@ -2237,8 +2237,10 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 		e.alpha = (air ? 1.0 : 0.9) * strength * std::min (1.0, 1.3 / (D * sizeScale * sizeScale));
 		e.slowdown = air ? 2.0 : 0.0;
 		if (water) { // (the sheet of spray: small, quick droplets falling back)
-			e.size = 2.5 * sizeScale, e.growth = 3.0 * sizeScale;
-			e.alpha = 0.9 * strength * std::min (1.0, 1.3 / (D * sizeScale * sizeScale));
+			// (pass 2, W1: a fine, translucent sheet of droplet clusters that stay small - 2.5 m sprites
+			// growing to 9 m read as cotton balls of dust - many more of them, so the sheet is as dense)
+			e.size = 0.9 * sizeScale, e.growth = 0.7 * sizeScale;
+			e.alpha = 0.5 * strength * std::min (1.0, 1.3 / (D * sizeScale * sizeScale));
 			e.slowdown = 1.0;
 		}
 		e.tinted = true, e.cold = true, e.ballistic = true;

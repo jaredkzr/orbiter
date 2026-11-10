@@ -182,28 +182,36 @@ WaterFxOut WaterFxEval (vec3 p, vec3 Np, float footprint)
 				o.var += c * c * (0.0144 * (1.0 - aa1) + 0.01 * (1.0 - aa2)) + 0.004 * c;
 			}
 			if (doFoam) {
-				float nC = ValueNoise(vec3(uv, fch), 2.0, 1024);
-				float edge = 1.0 - smoothstep(0.3 * Rf, Rf, r + 0.35 * Rf * (nC - 0.5));
-				float core = 1.0 - smoothstep(0.15 * Rf, 0.55 * Rf, r);
-				float aaL = 1.0 - smoothstep(0.25, 0.5, footprint / 0.5);
-				float aaM = 1.0 - smoothstep(0.25, 0.5, footprint / 0.25);
-				float l1 = 0.22, l2 = 0.22; // (mean filament coverage when finer than the pixels)
-				if (aaL > 0.0) {
-					// domain warp (+-0.5 m), then filaments (ridges of value noise, isotropic)
-					vec2 w = vec2(ValueNoise(vec3(uv, fch), 2.0, 1024), ValueNoise(vec3(uv + 11.7, fch), 2.0, 1024)) - 0.5;
-					vec2 wuv = uv + w;
-					vec2 q1 = wuv;
-					float n1 = ValueNoise(vec3(q1, fch), 0.5, 1024);
-					l1 = mix(0.22, smoothstep(0.62, 0.92, 1.0 - abs(2.0 * n1 - 1.0)), aaL);
-					if (aaM > 0.0) {
-						vec2 q2 = mat2(0.8, -0.6, 0.6, 0.8) * wuv + vec2(5.3, 9.1);
-						float n2 = ValueNoise(vec3(q2, fch), 0.25, 1024);
-						l2 = mix(0.22, smoothstep(0.62, 0.92, 1.0 - abs(2.0 * n2 - 1.0)), aaM);
-					}
+				// (pass 2, W1) the patch: a churned white core, then foam combed out along the wall jet in
+				// radial streaks, its rim a few broad lobes with a fine ragged edge (an isotropic 2 m edge
+				// noise drew curly arms: a paint splat seen from above). Thin over the water, not opaque.
+				float th = r > 1e-3 ? atan(dot(rel, t2), dot(rel, t1)) * (0.5 / PI) + 0.5 : 0.0; // (0-1 round the source, in its own frame; atan (0, 0) is undefined)
+				const int LOBES = 7;
+				float lobe = ValueNoise(vec3(th * float(LOBES), 0.5, fch * 0.02), 1.0, LOBES) - 0.5;
+				float rag = ValueNoise(vec3(uv, fch), 1.0, 1024) - 0.5;
+				float rEdge = r - Rf * (0.24 * lobe + 0.08 * rag);
+				float edge = 1.0 - smoothstep(0.55 * Rf, Rf, rEdge);
+				float core = 1.0 - smoothstep(0.1 * Rf, 0.38 * Rf, r);
+				// streaks: about 1.6 m apart at the rim (an integer count round the source: no seam), 3 m long
+				int NS = max(int(2.0 * PI * Rf / 1.6), 8);
+				float wS = 2.0 * PI * max(r, 0.2 * Rf) / float(NS);  // streak spacing here [m]
+				float aaS = 1.0 - smoothstep(0.3, 0.6, footprint / wS);
+				float streak = 0.3;                                  // (their mean when finer than the pixels)
+				if (aaS > 0.0) {
+					float nS = ValueNoise(vec3(th * float(NS), r / 3.0, fch * 0.02), 1.0, NS);
+					streak = mix(0.3, smoothstep(0.55, 0.85, nS), aaS);
 				}
-				float lace = 1.0 - (1.0 - l1) * (1.0 - 0.7 * l2);
-				lace *= 1.0 - 0.4 * smoothstep(0.5 * Rf, Rf, r);
-				float f = clamp(foamLvl * edge * max(core, 1.2 * lace), 0.0, 1.0);
+				// the fine lace of bubbles on the streaks (as before: warped ridges, isotropic)
+				float aaL = 1.0 - smoothstep(0.25, 0.5, footprint / 0.5);
+				float l1 = 0.22;
+				if (aaL > 0.0) {
+					vec2 w = vec2(ValueNoise(vec3(uv, fch), 2.0, 1024), ValueNoise(vec3(uv + 11.7, fch), 2.0, 1024)) - 0.5;
+					float n1 = ValueNoise(vec3(uv + w, fch), 0.5, 1024);
+					l1 = mix(0.22, smoothstep(0.62, 0.92, 1.0 - abs(2.0 * n1 - 1.0)), aaL);
+				}
+				float lace = streak * (0.55 + 0.45 * l1) + 0.25 * l1;
+				lace *= 1.0 - 0.45 * smoothstep(0.45 * Rf, Rf, r);
+				float f = clamp(foamLvl * edge * max(0.9 * core, lace), 0.0, 0.8);
 				o.foam = 1.0 - (1.0 - o.foam) * (1.0 - f);
 			}
 		}
