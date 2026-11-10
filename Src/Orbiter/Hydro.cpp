@@ -315,4 +315,71 @@ void Step (const Model &m, const Surface &s, Body &b, const Vector &aExt, const 
 	r.waterline = ri.waterline;
 }
 
+Matrix TrimMatrix (double pitch, double roll)
+{
+	double cp = cos (pitch), sp = sin (pitch), cr = cos (roll), sr = sin (roll);
+	Matrix Rx (1, 0, 0, 0, cp, -sp, 0, sp, cp), Rz (cr, -sr, 0, sr, cr, 0, 0, 0, 1);
+	return Rx * Rz;
+}
+
+bool Equilibrium (const Model &m, double mass, const Vector &cg, double rho, double &y, double &pitch, double &roll)
+{
+	if (m.Empty() || mass <= 0.0 || rho <= 0.0 || mass / rho >= m.volume) return false;
+	const double L = std::max (m.length, 0.1);
+	// residuals: displacement over the needed, and the centre of buoyancy's
+	// horizontal offset from the centre of gravity (over the length)
+	auto F = [&](double yo, double th, double ph, double r[3]) {
+		Matrix R (TrimMatrix (th, ph));
+		Vector up (tmul (R, Vector (0, 1, 0)));
+		Vector cb;
+		double v = Submerged (m, up * -yo, up, &cb);
+		Vector d (mul (R, cb - cg));
+		r[0] = v * rho / mass - 1.0, r[1] = d.x / L, r[2] = d.z / L;
+	};
+	// the draft upright first (bisection on the height)
+	double lo = -m.radius - m.h, hi = m.radius + m.h;
+	for (int i = 0; i < 60; i++) {
+		double mid = 0.5 * (lo + hi), r[3];
+		F (mid, 0.0, 0.0, r);
+		(r[0] > 0.0 ? lo : hi) = mid; // (too deep: displaces too much -> higher)
+	}
+	double u[3] = { 0.5 * (lo + hi), 0.0, 0.0 };
+	// then Newton on height, pitch and roll (Jacobian by differences, steps limited)
+	for (int it = 0; it < 40; it++) {
+		double r[3], J[3][3];
+		F (u[0], u[1], u[2], r);
+		if (fabs (r[0]) < 1e-4 && fabs (r[1]) < 1e-5 && fabs (r[2]) < 1e-5) break;
+		const double d[3] = { 1e-3 * L, 1e-3, 1e-3 };
+		for (int k = 0; k < 3; k++) {
+			double v[3] = { u[0], u[1], u[2] }, rk[3];
+			v[k] += d[k];
+			F (v[0], v[1], v[2], rk);
+			for (int q = 0; q < 3; q++) J[q][k] = (rk[q] - r[q]) / d[k];
+		}
+		// solve J du = -r (Cramer)
+		auto det3 = [](double a[3][3]) {
+			return a[0][0]*(a[1][1]*a[2][2]-a[1][2]*a[2][1]) - a[0][1]*(a[1][0]*a[2][2]-a[1][2]*a[2][0]) + a[0][2]*(a[1][0]*a[2][1]-a[1][1]*a[2][0]);
+		};
+		double D = det3 (J);
+		if (fabs (D) < 1e-18) break;
+		double du[3];
+		for (int k = 0; k < 3; k++) {
+			double A[3][3];
+			for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++) A[a][b] = b == k ? -r[a] : J[a][b];
+			du[k] = det3 (A) / D;
+		}
+		// (no more than a tenth of the length, 10 deg a step; pitch and roll within 60 deg)
+		du[0] = std::clamp (du[0], -0.1 * L, 0.1 * L);
+		du[1] = std::clamp (du[1], -0.17, 0.17);
+		du[2] = std::clamp (du[2], -0.17, 0.17);
+		u[0] += du[0];
+		u[1] = std::clamp (u[1] + du[1], -1.05, 1.05);
+		u[2] = std::clamp (u[2] + du[2], -1.05, 1.05);
+	}
+	y = u[0], pitch = u[1], roll = u[2];
+	double r[3];
+	F (y, pitch, roll, r);
+	return fabs (r[0]) < 0.02;
+}
+
 } // namespace hydro

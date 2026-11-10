@@ -230,6 +230,15 @@ bool VesselBase::Activate (bool force)
 void VesselBase::PostUpdate ()
 {
 	TakePendingLanding ();
+	// (free and calm: comes to rest afloat; resting afloat in a new pose: rests anew)
+	if (floatPending) {
+		floatPending = false;
+		if (fstatus == FLIGHTSTATUS_FREEFLIGHT && !IsComponent()) TakeFloat ();
+	}
+	if (floatRedo) {
+		floatRedo = false;
+		if (fstatus == FLIGHTSTATUS_LANDED && water.afloat && !IsComponent()) TakeFloat ();
+	}
 	// Check periodically for proxy-bodies
 	// (each step while relativistic: a fast vessel crosses spheres of influence within seconds)
 	if (fstatus == FLIGHTSTATUS_FREEFLIGHT && (td.SimT1 > proxyT || Relativistic())) {
@@ -256,6 +265,8 @@ void VesselBase::UpdateSurfParams ()
 
 void VesselBase::CheckLanded ()
 {
+	// (in the water: resting afloat is found by the water's step)
+	if (water.near && water.wet) { LandingTest.testing = false; return; }
 	if (LandingTest.testing) {
 		if (!bSurfaceContact || ThrustEngaged())
 			LandingTest.testing = false;

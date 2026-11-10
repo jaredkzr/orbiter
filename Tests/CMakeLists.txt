@@ -225,6 +225,7 @@ if (ORBITER_TEST_EXE)
 	set_tests_properties(Scenario.WaterFloatTest PROPERTIES ENVIRONMENT "ORBITER_SEA_WIND=0;ORBITER_DAMAGE=0")
 	set_tests_properties(Scenario.WaterEntryTest PROPERTIES ENVIRONMENT "ORBITER_DAMAGE=0")
 	set_tests_properties(Scenario.WaterSinkTest PROPERTIES TIMEOUT 120 ENVIRONMENT "ORBITER_DAMAGE=1")
+	set_tests_properties(Scenario.WaterWarpTest PROPERTIES TIMEOUT 120 ENVIRONMENT "ORBITER_DAMAGE=0")
 	# (the destruction test needs the damage model on)
 	set_tests_properties(Scenario.DestructionTest Scenario.FocusLossTest PROPERTIES ENVIRONMENT "ORBITER_DAMAGE=1")
 

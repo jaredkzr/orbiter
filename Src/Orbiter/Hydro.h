@@ -99,6 +99,14 @@ namespace hydro {
 	/// state at the end. r: the water's mean forces over the step
 	void Step (const Model &m, const Surface &s, Body &b, const Vector &aExt, const Vector &alphaExt, double h, int parts, Result &r);
 
+	/// Floating at rest on a flat, still sea: the body's origin y [m] above the
+	/// surface, its pitch (about its x axis) and roll (about its z axis) [rad],
+	/// body -> local R = Rx (pitch) Rz (roll) (heading 0), such that it
+	/// displaces its mass and its centre of buoyancy lies under its centre of
+	/// gravity. False if it does not float (heavier than its displacement).
+	bool Equilibrium (const Model &m, double mass, const Vector &cg, double rho, double &y, double &pitch, double &roll);
+	Matrix TrimMatrix (double pitch, double roll);
+
 	/// Sub-steps the step needs (the buoyancy's stiffness, the speed over the cells)
 	int Substeps (const Model &m, const Surface &s, const Body &b, double h, const Vector &aExt = Vector (0, 0, 0));
 

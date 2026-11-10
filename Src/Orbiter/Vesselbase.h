@@ -273,6 +273,14 @@ protected:
 	virtual void WaterLoads (const hydro::Result &r, double h) {}
 	WaterState water;
 	Vector water_vel;             // the water's velocity at the body in the last step (global)
+	double floatCalm = 0.0;       // [s] afloat and calm (relative to the water) so far
+	bool floatPending = false;    // calm long enough: rest afloat after the step (TakeFloat)
+	bool floatRedo = false;       // resting afloat in a new pose: rest anew after the step
+	/// rest afloat where it is (W7): held on the swell, as landed
+	virtual void TakeFloat () {}
+	static constexpr double FLOAT_CALM_T = 5.0;     // [s] calm this long to rest afloat
+	static constexpr double FLOAT_CALM_V = 0.6;     // [m/s] calm: slower than this relative to the water
+	static constexpr double FLOAT_CALM_W = 0.15;    // [rad/s] ... and turning slower than this (riding the swell)
 	bool impactWater = false;     // the last long step's impact was on the water (SurfaceImpact)
 	/// depth [m] of a point (body frame) under the sea's surface at the step's
 	/// start (< 0: above it; -1e10 away from the water)

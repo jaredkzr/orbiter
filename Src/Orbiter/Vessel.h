@@ -1825,7 +1825,13 @@ private:
 	mutable unsigned hull_group_gen = (unsigned)-1;
 	mutable uint64_t water_model_pose = 0;
 	mutable double water_model_t = -1e10;
+	mutable uint64_t water_pose_seen = 0;
 	static constexpr double WATER_POSE_DT = 0.5;
+	void TakeFloat () override;
+	bool FloatEquilibrium (double &cgelev, double &pitch, double &roll) const;
+	bool InitAfloat (Planet *planet, double lng, double lat, double dir);
+	void FollowSwell ();
+	double float_cgelev = 0.0;
 	static constexpr double WATER_STROKE = 0.5;       // [m] a structure meeting the water is decelerated over this (WaterLoads)
 	std::vector<Vector> water_Ff;                     // the water's forces on the parts, low-passed (body frame)
 	Vector water_Tf;                                  // ... its torque (Hydro's sense)

@@ -45,6 +45,7 @@ namespace {
 void VesselBase::HydroStep (double h)
 {
 	water.near = false;
+	water.afloat = false; // (in free flight: not resting afloat)
 	if (h <= 0.0 || !proxyplanet || proxybody != proxyplanet || IsComponent() || fstatus != FLIGHTSTATUS_FREEFLIGHT) return;
 	sea::Sea *sea = proxyplanet->GetSea();
 	if (!sea) return;
@@ -179,6 +180,14 @@ void VesselBase::HydroStep (double h)
 		double a = r.F.length() / std::max (mass, 1e-3);
 		water.accFilt += (a - water.accFilt) * std::min (1.0, h / ACC_TAU);
 		water.accMax = std::max (water.accMax, water.accFilt);
+	}
+	// calm in the water (relative to it, at the centre of gravity): to rest afloat
+	{
+		Vector c (b.x + mul (b.R, cg));
+		Vector vr (b.v - srf.Vel (c.x, c.z, std::max (srf.Height (c.x, c.z) - c.y, 0.0)));
+		bool calm = wet && r.submerged > 0.0 && vr.length() < FLOAT_CALM_V && b.w.length() < FLOAT_CALM_W && !ThrustEngaged();
+		floatCalm = calm ? floatCalm + h : 0.0;
+		if (floatCalm > FLOAT_CALM_T) floatPending = true, floatCalm = 0.0;
 	}
 	if (!wet && r.F.length2() == 0.0) { water.F.Set (0, 0, 0); return; } // (the step as it was)
 
@@ -360,8 +369,14 @@ const hydro::Model *Vessel::WaterModel () const
 	uint64_t pose = WaterPose (nullptr);
 	// (made again for new hulls, damage, or another pose: at most every
 	// WATER_POSE_DT [s] while the pose changes, e.g. the gear going up)
+	// (another pose: made again at once when it holds, at most every
+	// WATER_POSE_DT while it is changing, as the gear goes up)
+	bool steady = pose == water_pose_seen;
+	water_pose_seen = pose;
 	if (water_model && water_model_gen == hull_gen && water_model_dmg == dv &&
-		(water_model_pose == pose || td.SimT1 - water_model_t < WATER_POSE_DT)) return water_model.get();
+		(water_model_pose == pose || (!steady && td.SimT1 - water_model_t < WATER_POSE_DT))) return water_model.get();
+	// (resting afloat: its equilibrium again, after the step)
+	if (water_model && water.afloat) const_cast<Vessel*>(this)->floatRedo = true;
 	auto t0 = std::chrono::steady_clock::now();
 	std::vector<std::pair<Matrix,Vector>> xf;
 	WaterPose (&xf);
@@ -439,4 +454,90 @@ void Vessel::WaterLoads (const hydro::Result &r, double h)
 		}
 	}
 	contact_tau -= water_Tf;
+}
+
+// =======================================================================
+// Resting afloat (W7): as landed, at the draft and trim of its equilibrium
+// on a still sea, held on the swell (its mean height and slopes over the
+// hull) while it lasts; engines or other forces make it free again.
+
+bool Vessel::FloatEquilibrium (double &cgelev, double &pitch, double &roll) const
+{
+	if (!proxyplanet) return false;
+	sea::Sea *sea = proxyplanet->GetSea();
+	const hydro::Model *m = WaterModel();
+	if (!sea || !m || m->Empty()) return false;
+	return hydro::Equilibrium (*m, mass, dmg.cg, sea->Density(), cgelev, pitch, roll);
+}
+
+void Vessel::TakeFloat ()
+{
+	if (supervessel || attach || !proxyplanet) return;
+	Vector pl (tmul (proxyplanet->s0->R, s0->pos - proxyplanet->s0->pos));
+	double lng, lat, rad;
+	proxyplanet->LocalToEquatorial (pl, lng, lat, rad);
+	InitAfloat (proxyplanet, lng, lat, LandedHeading (lng, lat));
+}
+
+bool Vessel::InitAfloat (Planet *planet, double lng, double lat, double dir)
+{
+	proxybody = proxyplanet = planet;
+	double y, th, ph;
+	if (!FloatEquilibrium (y, th, ph)) return false;
+	// (upright at the heading, as InitLanded makes it; then trimmed in its own frame)
+	double slng = sin (lng), clng = cos (lng), slat = sin (lat), clat = cos (lat), sdir = sin (dir), cdir = cos (dir);
+	Matrix R ( clng*slat*sdir-slng*cdir, clng*clat, -clng*slat*cdir-slng*sdir,
+		      -clat*sdir,                slat,      clat*cdir,
+		       slng*slat*sdir+clng*cdir, clat*slng, -slng*slat*cdir+clng*sdir);
+	R.postmul (hydro::TrimMatrix (th, ph));
+	sea::Point sp0 = planet->GetSea()->At (lat, lng, false);
+	double elev = planet->Elevation (lng, lat);
+	InitLanded (planet, lng, lat, dir, &R, y + (sp0.water ? sp0.datum - elev : 0.0));
+	water.afloat = true;
+	water.near = true;
+	float_cgelev = y;
+	s0->omega.Set (0, 0, 0);
+	if (s1) s1->omega.Set (0, 0, 0);
+	LOGOUT ("%s rests afloat at %.1f s: origin %.2f m above the water, pitch %.1f, roll %.1f deg", Name(), td.SimT1, y, th * DEG, ph * DEG);
+	return true;
+}
+
+void Vessel::FollowSwell ()
+{
+	// (held on the swell: its mean height and slopes over the hull, at the
+	// position resting landed puts it; none at high time acceleration)
+	if (!water.afloat || !proxyplanet) return;
+	s1->omega.Set (0, 0, 0); // (held: not turning with the motion it had when it came to rest)
+	WaterModel (); // (a new pose: its equilibrium is found again after the step)
+	if (td.Warp() > 10.0) return;
+	sea::Sea *sea = proxyplanet->GetSea();
+	if (!sea || sea->GetSwell().Calm()) return;
+	const hydro::Model *m = WaterModel();
+	double a = 0.35 * (m ? m->length : size);
+	const sea::Swell &sw = sea->GetSwell();
+	double t = sea::Sea::SwellTime (td.MJD1);
+	Vector up (sp.ploc.unit());
+	Vector e (-sp.slng, 0, sp.clng), n (-sp.slat * sp.clng, sp.clat, -sp.slat * sp.slng); // (east, north: planet frame)
+	double R = proxyplanet->Size();
+	auto H = [&](double de, double dn) { return sw.Height ((up * R + e * de + n * dn).unit(), t); };
+	double hc = H (0, 0), he = H (a, 0), hw = H (-a, 0), hn = H (0, a), hs = H (0, -a);
+	double heave = (2.0 * hc + he + hw + hn + hs) / 6.0;
+	double sx = (he - hw) / (2.0 * a), sz = (hn - hs) / (2.0 * a);
+	// position: raised by the heave; orientation: tilted onto the surface's mean slope
+	Vector pl (sp.ploc + up * heave);
+	s1->pos = proxyplanet->s1->pos + mul (proxyplanet->s1->R, pl);
+	Vector ns (e * -sx + up + n * -sz);
+	ns.unify();
+	Vector k (crossp (up, ns));
+	double sn = k.length(), cs = dotp (up, ns);
+	Matrix tilt (1,0,0, 0,1,0, 0,0,1);
+	if (sn > 1e-9) {
+		k /= sn;
+		double c1 = 1.0 - cs;
+		tilt = Matrix (cs + c1*k.x*k.x, -sn*k.z + c1*k.x*k.y, sn*k.y + c1*k.x*k.z,
+			sn*k.z + c1*k.x*k.y, cs + c1*k.y*k.y, -sn*k.x + c1*k.y*k.z,
+			-sn*k.y + c1*k.x*k.z, sn*k.x + c1*k.y*k.z, cs + c1*k.z*k.z);
+	}
+	s1->R = proxyplanet->s1->R * (tilt * land_rot);
+	s1->Q.Set (s1->R);
 }

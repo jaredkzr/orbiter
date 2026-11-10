@@ -10,6 +10,7 @@
 #include "Orbiter.h"
 #include "Log.h"
 #include "HullWater.h"
+#include "Sea.h"
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
@@ -343,7 +344,14 @@ void Debris::PostUpdate ()
 
 	// (fallen through the ground - a long step at high time acceleration: lost
 	// there; it kept the time acceleration capped, "flying" deep underground)
-	if (fstatus == FLIGHTSTATUS_FREEFLIGHT && proxyplanet && !proxyplanet->GetGasGiant () && sp.alt < -std::max (100.0, 2.0 * size) && !diverged) { // (a gas giant has no ground)
+	// (under water, the ground is the seabed)
+	double floorDepth = 0.0;
+	if (fstatus == FLIGHTSTATUS_FREEFLIGHT && proxyplanet && sp.alt < 0.0)
+		if (sea::Sea *sea = proxyplanet->GetSea()) {
+			sea::Point p = sea->At (sp.lat, sp.lng);
+			if (p.water) floorDepth = std::max (0.0, p.datum - p.seabed);
+		}
+	if (fstatus == FLIGHTSTATUS_FREEFLIGHT && proxyplanet && !proxyplanet->GetGasGiant () && sp.alt < -std::max (100.0, 2.0 * size) - floorDepth && !diverged) { // (a gas giant has no ground)
 		LOGOUT ("Debris of %s: below the ground; removed", source.c_str());
 		diverged = true;
 	}
@@ -351,7 +359,9 @@ void Debris::PostUpdate ()
 	// at rest: still on the ground for a while
 	if (fstatus == FLIGHTSTATUS_FREEFLIGHT) {
 		bool still = false;
-		if (touching && proxyplanet) {
+		// (afloat: calm on the water a while, it rests there, off the swell)
+		if (floatPending) { floatPending = false; still = true; restTime = REST_TIME + 1.0; }
+		else if (touching && proxyplanet) {
 			const Planet *P = proxyplanet;
 			Vector pl (tmul (P->s0->R, s0->pos - P->s0->pos));
 			double wrot = Pi2 / P->RotT();

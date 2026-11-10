@@ -1,0 +1,42 @@
+BEGIN_HYPERDESC
+<h1>Resting afloat</h1>
+In the default sea (a metre of swell): a delta-glider set down on the water
+by the scenario starts afloat; another let go above the water comes to rest
+afloat. Both ride out an hour at 100x and 1000x time acceleration, and the
+engines take one away again.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Tests/WaterWarpTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship SET
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET SET
+  MODE Extern
+  POS 4 0 -20
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+SET:DeltaGlider
+  STATUS Landed Earth
+  POS -70.0000 28.0000
+  HEADING 90.00
+  GEAR 0 0.0000
+  PRPLEVEL 0:0.300 1:1.000
+END
+DROP:DeltaGlider
+  STATUS Landed Earth
+  POS -70.0000 28.0100
+  HEADING 0.00
+  GEAR 0 0.0000
+  PRPLEVEL 0:0.300 1:1.000
+END
+END_SHIPS

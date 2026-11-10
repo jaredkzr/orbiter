@@ -167,3 +167,26 @@ TEST_CASE ("A flat bottom slams harder than a vee", "[Water.Hydro]")
 	}
 	CHECK (peak[0] > 1.5 * peak[1]);
 }
+
+TEST_CASE ("Floating at rest: draft and trim", "[Water.Hydro]")
+{
+	Model m = Build ({ Box (Vector (-1, -0.5, -2), Vector (1, 0.5, 2)) }, nullptr);
+	double y, th, ph;
+	// (centred: level, 0.3 m draft -> origin 0.2 m above the water)
+	REQUIRE (Equilibrium (m, RHO * 8.0 * 0.3, Vector (0, 0, 0), RHO, y, th, ph));
+	CHECK_THAT (y, WithinAbs (0.2, 0.01));
+	CHECK_THAT (th, WithinAbs (0.0, 1e-3));
+	CHECK_THAT (ph, WithinAbs (0.0, 1e-3));
+	// (centre of gravity forward: trims bow down; the centre of buoyancy comes under it)
+	REQUIRE (Equilibrium (m, RHO * 8.0 * 0.3, Vector (0, -0.2, 0.3), RHO, y, th, ph));
+	Matrix R (TrimMatrix (th, ph));
+	Vector up (tmul (R, Vector (0, 1, 0)));
+	Vector cb;
+	Submerged (m, up * -y, up, &cb);
+	Vector d (mul (R, cb - Vector (0, -0.2, 0.3)));
+	CHECK (fabs (d.x) < 0.01);
+	CHECK (fabs (d.z) < 0.01);
+	CHECK (mul (R, Vector (0, 0, 1)).y < 0.0); // (bow down)
+	// (too heavy: no)
+	CHECK_FALSE (Equilibrium (m, RHO * 8.5, Vector (0, 0, 0), RHO, y, th, ph));
+}

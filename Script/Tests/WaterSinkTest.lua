@@ -23,8 +23,11 @@ local function launch(v, alt, speed, dive, pitch)
 	st.status = 0; st.vrot = {x=0, y=0, z=0}
 	st.rpos = vec.add(st.rpos, vec.mul(up, alt - height(v:get_handle())))
 	st.rvel = vec.add(st.rvel, vec.mul(path, speed))
+	-- (the orientation too: a landed vessel's status has it in the planet's frame)
+	local Rg = {m11=x.x, m12=yA.x, m13=zA.x, m21=x.y, m22=yA.y, m23=zA.y, m31=x.z, m32=yA.z, m33=zA.z}
+	st.arot = {x=math.atan2(Rg.m23, Rg.m33), y=-math.asin(Rg.m13), z=math.atan2(Rg.m12, Rg.m11)}
 	v:defset_status(st)
-	return {m11=x.x, m12=yA.x, m13=zA.x, m21=x.y, m22=yA.y, m23=zA.y, m31=x.z, m32=yA.z, m33=zA.z}
+	return Rg
 end
 
 local function main()

@@ -27,8 +27,11 @@ local function launch(v, alt, speed, dive, pitch)
 	st.status = 0; st.vrot = {x=0, y=0, z=0}
 	st.rpos = vec.add(st.rpos, vec.mul(up, alt - height(v)))
 	st.rvel = vec.add(st.rvel, vec.mul(path, speed))
+	-- (the orientation too: a landed vessel's status has it in the planet's frame)
+	local Rg = {m11=x.x, m12=yA.x, m13=zA.x, m21=x.y, m22=yA.y, m23=zA.y, m31=x.z, m32=yA.z, m33=zA.z}
+	st.arot = {x=math.atan2(Rg.m23, Rg.m33), y=-math.asin(Rg.m13), z=math.atan2(Rg.m12, Rg.m11)}
 	v:defset_status(st)
-	return {m11=x.x, m12=yA.x, m13=zA.x, m21=x.y, m22=yA.y, m23=zA.y, m31=x.z, m32=yA.z, m33=zA.z}
+	return Rg
 end
 
 local function main()
@@ -47,6 +50,10 @@ local function main()
 	local T = 40
 	while oapi.get_simtime() - t0 < T do
 		proc.wait_frames(1)
+		if os.getenv("TRACE") and oapi.get_simtime() - t0 < tonumber(os.getenv("TRACE")) then
+			local w = dg:get_waterstate()
+			log(string.format("TR %.2f h %.2f pitch %.1f bank %.1f wet %s acc %.1f", oapi.get_simtime() - t0, height(dg), math.deg(dg:get_pitch()), math.deg(dg:get_bank()), tostring(w.wet), w.accmax / 9.81))
+		end
 		for n, v in pairs({ DITCH = dg, DROP = pb }) do
 			local r = m[n]
 			r.low = math.min(r.low, height(v))

@@ -23,6 +23,7 @@
 #include <algorithm>
 #include "Orbiter.h"
 #include "Vessel.h"
+#include "Sea.h"
 #include "Relativity.h"
 #include "RelTravel.h"
 #include "SuperVessel.h"
@@ -1231,7 +1232,7 @@ bool Vessel::SetTouchdownPoints (const TOUCHDOWNVTX *tdvtx, DWORD ntp)
 	for (i = 0; i < 3; i++)
 		touchdown_vtx[i].compression = dycg + sinth*tr[i].x + sinph*tr[i].z;
 
-	bForceActive = true; // notification flag
+	if (!water.afloat) bForceActive = true; // notification flag (afloat: its touchdown points touch nothing)
 	return true;
 }
 
@@ -3539,6 +3540,11 @@ void Vessel::InitLanded (Planet *planet, double lng, double lat, double dir, con
 {
 	dCHECK(!g_bStateUpdate, "Vessel::InitLanded must not be called during state update") // not valid during update phase
 
+	// (set down on open water: afloat, at the draft its weight sets)
+	water.afloat = false;
+	if (!hrot && !asComponent && !supervessel && !attach && planet && planet->GetSea() && planet->GetSea()->Water (lat, lng))
+		if (InitAfloat (planet, lng, lat, dir)) return;
+
 	Vector nml;
 	int i;
 
@@ -5766,8 +5772,10 @@ void Vessel::Update (bool force)
 		s1->Q.Set (s1->R);
 		acc = proxyplanet->Acceleration() + (proxyplanet->s1->pos-s1->pos) * (vground * Pi2/(proxyplanet->Size()*proxyplanet->RotT()));
 		el_valid = false;
+		FollowSwell ();
 
 		if (bForceActive) {
+			water.afloat = false;
 			// switch to freeflight whenever the user engages engines
 			fstatus = FLIGHTSTATUS_FREEFLIGHT;
 			LandingTest.testing = false;
@@ -8607,7 +8615,7 @@ bool VESSEL::GetWaterState (WATERSTATE *out, size_t size) const
 	w.entrySpeed = s.entrySpeed, w.slamMax = s.slamMax, w.accMax = s.accMax, w.tWet = s.tWet;
 	w.force = MakeVECTOR3 (s.F);
 	w.substeps = s.substeps;
-	w.afloat = s.afloat, w.flooded = s.flooded;
+	w.afloat = s.afloat && vessel->GetStatus() == FLIGHTSTATUS_LANDED, w.flooded = s.flooded;
 	memcpy ((void*)out, &w, std::min (size, sizeof (w)));
 	return true;
 }
