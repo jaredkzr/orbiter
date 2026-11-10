@@ -377,6 +377,20 @@ bool DustColour (Scene *scene, OBJHANDLE hp, double lng, double lat, float rgb[3
 			SiteColour (sp, sw, s);
 		} else sw[0] = sw[1] = sw[2] = 0.0;
 	}
+	// playas: the colour the tile shader gives them (terraindetail.glsl PlayaColour)
+	float playa = 0.0;
+	{
+		SURFDETAILPARAM sp{};
+		if (oapiSurfaceDetailParams (hp, &sp) && sp.playa > 0.0)
+			playa = (float)std::clamp (oapiSurfacePlaya (hp, lng, lat, oapiSurfaceElevation (hp, lng, lat), 0.0), 0.0, 1.0);
+		if (playa > 0.0) {
+			const float HUE[3] = { 1.16f, 0.98f, 0.76f }, SALT[3] = { 1.03f, 1.0f, 0.94f }, KNEE = 0.7f;
+			float salt = atm ? atm->SaltShare (lat, lng) : 0.0f;
+			float L = 0.2126f * s[0] + 0.7152f * s[1] + 0.0722f * s[2];
+			if (L > KNEE) L = KNEE + 0.5f * (L - KNEE);
+			for (int c = 0; c < 3; c++) s[c] += (L * (HUE[c] + (SALT[c] - HUE[c]) * salt) - s[c]) * playa;
+		}
+	}
 	// plants are greener than both red and blue; snow and ice (blue >= green) never count
 	float gm = std::max (s[0], s[2]);
 	float q = (s[1] - gm) / (s[1] + gm + 1e-4f);
@@ -392,8 +406,8 @@ bool DustColour (Scene *scene, OBJHANDLE hp, double lng, double lat, float rgb[3
 	for (int c = 0; c < 3; c++) rgb[c] = std::clamp (def[c] + (lifted[c] - def[c]) * wS, 0.02f, 0.95f);
 	if (veg) *veg = v;
 	if (DustLogNow ())
-		oapiWriteLogV ("VulkanClient: dust %s lng %.4f lat %.4f (deg): tile L%d lin (%.3f %.3f %.3f) veg %.2f water %.2f lifted (%.3f %.3f %.3f) default (%.3f %.3f %.3f) %s share %.2f -> (%.3f %.3f %.3f) site %.2f %.2f %.2f",
-			nm, lng * 180.0 / PI_, lat * 180.0 / PI_, lvl, s[0], s[1], s[2], v, p.water, lifted[0], lifted[1], lifted[2],
+		oapiWriteLogV ("VulkanClient: dust %s lng %.4f lat %.4f (deg): playa %.2f, tile L%d lin (%.3f %.3f %.3f) veg %.2f water %.2f lifted (%.3f %.3f %.3f) default (%.3f %.3f %.3f) %s share %.2f -> (%.3f %.3f %.3f) site %.2f %.2f %.2f",
+			nm, lng * 180.0 / PI_, lat * 180.0 / PI_, playa, lvl, s[0], s[1], s[2], v, p.water, lifted[0], lifted[1], lifted[2],
 			def[0], def[1], def[2], fromTable ? "table" : "tile mean", wS, rgb[0], rgb[1], rgb[2], sw[0], sw[1], sw[2]);
 	return true;
 }

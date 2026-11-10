@@ -727,6 +727,11 @@ void main()
 			vec2 hmL = 0.5 / vec2(textureSize(maskTex, 0));
 			land = smoothstep(0.3, 0.7, texture(maskTex, clamp(vUV * tile.maskUV.zw + tile.maskUV.xy, hmL, 1.0 - hmL)).a);
 		}
+		// the playas' colour (the core's weight per vertex: also on the tiles without detail shading)
+		if (atm.playaPrm.x > 0.5 && !(SITE_MATERIALS && atm.sitePrm.x > 0.5) && vDetailA.z > 0.0) {
+			float salt = PlayaSalt(normalize(mat3(atm.viewToPlanet) * vPosView + atm.camPos.xyz));
+			base = mix(base, PlayaColour(base, salt), clamp(vDetailA.z, 0.0, 1.0) * land);
+		}
 		TerrainDetailShading(vPosView, N, base, vDetailA, detailShadow, land, detailSky, playa, siteG, siteSmooth);
 #endif
 		cityLight = CityGround(vPosView, base, cityCover);

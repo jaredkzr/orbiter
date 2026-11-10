@@ -6,7 +6,10 @@
 // terrain detail (TerrainDetail::Playa, Height). Two parts:
 //
 // Colour: a planet's surface texture is playa-like where it is bright and
-// unsaturated, and neither blue (ice) nor green (vegetation). It is judged on
+// unsaturated, neither blue (ice) nor green (vegetation), and brighter than
+// its region (a dry lake in its basin: CONTRAST_0-1 times the mean of the
+// land around it over about 200 km; uniformly bright sand seas are not
+// playas). It is judged on
 // the texels of the finest Surf tile level up to PLAYA_LEVEL (about 600 m
 // texels on Earth) whose tile exists, and interpolated bilinearly over them
 // (continuous across tile seams). The level is capped so that the mask is the
@@ -22,6 +25,10 @@
 // flat lakebed. Tiles that do not exist at that level are made from the finest
 // existing ancestor, as the meshes' are; the filter's margins come from the
 // neighbouring tiles. A pure function of position.
+//
+// The playa rule needs the planet's surface textures (PlanetTexDir and the
+// TileLoadFlags): without them there are no playas, so the ground there (and
+// the physics) differs from an install with them (a warning is logged).
 //
 // The client does not evaluate either: the terrain detail gives it the
 // resulting playa weight (oapiSurfaceDetail's playa).
@@ -64,7 +71,15 @@ public:
 	/// the rule on a linear RGB colour
 	static double ColourRule (double r, double g, double b);
 
+	/// the regional part: smoothstep (CONTRAST_0, CONTRAST_1) of a texel's luminance over its region's
+	static double ContrastRule (double lum, double regional);
+
 	static const int PLAYA_LEVEL = 10;
+	static const int REGION_LEVEL = 6;       ///< Surf level of the regional means (about 10 km texels on Earth)
+	static const int REGION_DOWN = 4;        ///< its texels averaged to one cell (about 40 km)
+	static const int REGION_BOX = 2;         ///< box filter radius [cells]: a 5-cell (about 200 km) region
+	static constexpr double CONTRAST_0 = 1.08, CONTRAST_1 = 1.18;
+	static constexpr double LAND_LUM = 0.08; ///< texels darker than this (water, forest) are not in the regional mean
 	static const int PLAYA_REF_LEVEL = 13;   ///< file level of the elevation nodes Ground filters
 
 private:
@@ -81,6 +96,14 @@ private:
 	/// whether a tile exists (remembered); lock held
 	bool Exists (int lvl, int ilat, int ilng);   // lock (mtx) held
 	std::shared_ptr<const Tile> Load (int lvl, int ilat, int ilng);
+	/// decode a Surf tile (from the tree or a loose file): false if it is missing or not DXT1
+	bool Decode (int lvl, int ilat, int ilng, std::vector<uint32_t> &px, int &w, int &h);
+	/// the regional mean land luminance at a point [rad] (NaN: unknown)
+	double Region (double lat, double lng);
+	void BuildRegion ();
+	std::once_flag regionOnce;
+	std::vector<float> region;           ///< mean land luminance per cell, rows from the north (NaN: no land)
+	int regW = 0, regH = 0;
 
 	/// a tile of filtered reference ground: nodes -1 to 257 of the level's tile
 	struct GTile {

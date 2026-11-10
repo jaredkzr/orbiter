@@ -654,6 +654,15 @@ void GroundScatter::Make (int layer, int row, int col, CellData &cd)
 			else
 				p *= SmoothStep (0.3, 0.12, slope);  // (vegetation: none on steep slopes)
 			if (u >= p) continue;
+			// no boulders on dry lakes and salt flats (the terrain detail's playa rule: the
+			// fine sediment of a basin floor; rocks only roll onto its rim)
+			if (L.kind == ROCK && emgr) {
+				const TerrainDetail *det = emgr->Detail ();
+				if (det && det->Prm().playa > 0.0) {
+					p *= 1.0 - SmoothStep (0.1, 0.4, det->Playa (lat, lng, elev, 0.0));
+					if (u >= p) continue;
+				}
+			}
 
 			// the object's frame: up along the vertical, rocks tilted
 			// towards the terrain normal; turned about it at random

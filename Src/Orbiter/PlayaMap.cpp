@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "PlayaMap.h"
+#include "Log.h"
 #include "GroundScatter.h"
 #include "Orbiter.h"
 #include "Config.h"
@@ -73,6 +74,12 @@ double PlayaMap::ColourRule (double r, double g, double b)
 	return SS (0.45, 0.65, lum) * (1.0 - SS (0.14, 0.20, sat)) * (1.0 - SS (0.02, 0.06, blue)) * (1.0 - SS (0.02, 0.08, veg));
 }
 
+double PlayaMap::ContrastRule (double lum, double regional)
+{
+	if (!(regional > 0.0)) return 1.0;   // (no regional mean: no gate)
+	return SS (CONTRAST_0, CONTRAST_1, lum / regional);
+}
+
 PlayaMap::PlayaMap (const Planet *pl): planet (pl), radius (pl->Size()), serial (playaSerial++)
 {
 	DWORD src = g_pOrbiter->Cfg()->CfgPRenderPrm.TileLoadFlags;
@@ -87,6 +94,8 @@ PlayaMap::PlayaMap (const Planet *pl): planet (pl), radius (pl->Size()), serial 
 		dir = cbuf;
 	}
 	hasSource = tree || !dir.empty();
+	if (!hasSource)
+		LOGOUT_WARN ("%s: no surface textures for the playa rule (PlanetTexDir, TileLoadFlags): no playas, the ground there is not levelled", planet->Name());
 }
 
 PlayaMap::~PlayaMap ()
@@ -96,11 +105,11 @@ PlayaMap::~PlayaMap ()
 
 bool PlayaMap::Exists (int lvl, int ilat, int ilng)
 {
+	uint64_t key = Key (lvl, ilat, ilng);
+	auto it = exists.find (key);   // (also the tiles that exist but can't be decoded: remembered as missing)
+	if (it != exists.end()) return it->second;
 	if (tree && tree->Idx (lvl, ilat, ilng) != (DWORD)-1) return true;
 	if (dir.empty()) return false;
-	uint64_t key = Key (lvl, ilat, ilng);
-	auto it = exists.find (key);
-	if (it != exists.end()) return it->second;
 	char fname[64];
 	snprintf (fname, sizeof(fname), "\\%02d\\%06d\\%06d.dds", lvl, ilat, ilng);
 	std::string path = dir + fname;
@@ -110,10 +119,8 @@ bool PlayaMap::Exists (int lvl, int ilat, int ilng)
 	return ok;
 }
 
-std::shared_ptr<const PlayaMap::Tile> PlayaMap::Load (int lvl, int ilat, int ilng)
+bool PlayaMap::Decode (int lvl, int ilat, int ilng, std::vector<uint32_t> &px, int &w, int &h)
 {
-	std::vector<uint32_t> px;
-	int w = 0, h = 0;
 	bool ok = false;
 	if (tree) {
 		BYTE *buf = nullptr;
@@ -139,14 +146,89 @@ std::shared_ptr<const PlayaMap::Tile> PlayaMap::Load (int lvl, int ilat, int iln
 			ok = scatter::DecodeDXT1 (d.data(), d.size(), px, w, h);
 		}
 	}
-	if (!ok) return nullptr;
+	return ok;
+}
+
+void PlayaMap::BuildRegion ()
+{
+	// mean land luminance of the REGION_LEVEL texels, per cell of REGION_DOWN^2 texels, then box
+	// filtered over (2 REGION_BOX + 1)^2 cells (wrapping in longitude)
+	const int nlat = 1 << (REGION_LEVEL - 4), nlng = 2 << (REGION_LEVEL - 4);
+	std::vector<double> sl, sn;
+	int tw = 0, th = 0;
+	for (int ilat = 0; ilat < nlat; ilat++)
+		for (int ilng = 0; ilng < nlng; ilng++) {
+			std::vector<uint32_t> px;
+			int w = 0, h = 0;
+			if (!Decode (REGION_LEVEL, ilat, ilng, px, w, h)) continue;
+			if (!tw) {
+				tw = w, th = h;
+				regW = nlng * (w / REGION_DOWN), regH = nlat * (h / REGION_DOWN);
+				sl.assign ((size_t)regW * regH, 0.0), sn.assign ((size_t)regW * regH, 0.0);
+			}
+			if (w != tw || h != th) continue;
+			for (int y = 0; y < h; y++)
+				for (int x = 0; x < w; x++) {
+					uint32_t c = px[(size_t)y * w + x];
+					if ((c >> 24) == 0) continue;
+					double l = 0.2126 * lin.v[c & 255] + 0.7152 * lin.v[(c >> 8) & 255] + 0.0722 * lin.v[(c >> 16) & 255];
+					if (l < LAND_LUM) continue;
+					size_t k = (size_t)(ilat * (h / REGION_DOWN) + y / REGION_DOWN) * regW + ilng * (w / REGION_DOWN) + x / REGION_DOWN;
+					sl[k] += l, sn[k] += 1.0;
+				}
+		}
+	if (!regW) return;
+	region.assign ((size_t)regW * regH, std::nanf (""));
+	for (int y = 0; y < regH; y++)
+		for (int x = 0; x < regW; x++) {
+			double a = 0.0, n = 0.0;
+			for (int j = -REGION_BOX; j <= REGION_BOX; j++) {
+				int yy = std::clamp (y + j, 0, regH - 1);
+				for (int i = -REGION_BOX; i <= REGION_BOX; i++) {
+					int xx = (x + i + regW) % regW;
+					a += sl[(size_t)yy * regW + xx], n += sn[(size_t)yy * regW + xx];
+				}
+			}
+			if (n > 0.0) region[(size_t)y * regW + x] = (float)(a / n);
+		}
+}
+
+double PlayaMap::Region (double lat, double lng)
+{
+	std::call_once (regionOnce, [this]() { BuildRegion (); });
+	if (region.empty()) return std::nan ("");
+	double X = (lng + Pi) / Pi2 * regW - 0.5, Y = std::clamp ((Pi05 - lat) / Pi * regH - 0.5, 0.0, regH - 1.0);
+	X = std::remainder (X, (double)regW);
+	if (X < 0.0) X += regW;
+	int x0 = (int)X % regW, y0 = std::min ((int)Y, regH - 1);
+	int x1 = (x0 + 1) % regW, y1 = std::min (y0 + 1, regH - 1);
+	double fx = X - std::floor (X), fy = Y - y0;
+	double v[4] = { region[(size_t)y0 * regW + x0], region[(size_t)y0 * regW + x1], region[(size_t)y1 * regW + x0], region[(size_t)y1 * regW + x1] };
+	double a = 0.0, wsum = 0.0, wt[4] = { (1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy };
+	for (int i = 0; i < 4; i++) if (std::isfinite (v[i])) a += wt[i] * v[i], wsum += wt[i];   // (cells without land: left out)
+	return wsum > 0.0 ? a / wsum : std::nan ("");
+}
+
+std::shared_ptr<const PlayaMap::Tile> PlayaMap::Load (int lvl, int ilat, int ilng)
+{
+	std::vector<uint32_t> px;
+	int w = 0, h = 0;
+	if (!Decode (lvl, ilat, ilng, px, w, h)) return nullptr;
 	auto t = std::make_shared<Tile>();
 	t->lvl = lvl, t->ilat = ilat, t->ilng = ilng, t->w = w, t->h = h;
 	t->c.resize ((size_t)w * h);
+	const int nlat = 1 << (lvl - 4), nlng = 2 << (lvl - 4);
 	for (size_t i = 0; i < t->c.size(); i++) {
 		uint32_t c = px[i];
 		if ((c >> 24) == 0) { t->c[i] = 0; continue; } // (transparent)
-		double v = ColourRule (lin.v[c & 255], lin.v[(c >> 8) & 255], lin.v[(c >> 16) & 255]);
+		double r = lin.v[c & 255], g = lin.v[(c >> 8) & 255], b = lin.v[(c >> 16) & 255];
+		double v = ColourRule (r, g, b);
+		if (v > 0.0) {   // (the region only where the colour says playa: most tiles have none)
+			int x = (int)(i % w), y = (int)(i / w);
+			double lat = Pi05 - ((double)ilat * h + y + 0.5) / ((double)nlat * h) * Pi;
+			double lng = -Pi + ((double)ilng * w + x + 0.5) / ((double)nlng * w) * Pi2;
+			v *= ContrastRule (0.2126 * r + 0.7152 * g + 0.0722 * b, Region (lat, lng));
+		}
 		t->c[i] = (uint8_t)std::lround (std::clamp (v, 0.0, 1.0) * 255.0);
 	}
 	return t;
@@ -170,8 +252,8 @@ std::shared_ptr<const PlayaMap::Tile> PlayaMap::Get (int lvl, int ilat, int ilng
 	}
 	std::shared_ptr<const Tile> t = Load (lvl, ilat, ilng);   // (not under the lock)
 	std::lock_guard<std::mutex> lock (mtx);
-	if (!t) {
-		if (!tree || tree->Idx (lvl, ilat, ilng) == (DWORD)-1) exists[Key (lvl, ilat, ilng)] = false;
+	if (!t) {   // (missing, or not decodable: remembered, not read again for every query)
+		exists[Key (lvl, ilat, ilng)] = false;
 		return nullptr;
 	}
 	for (const auto &o : lru)   // (another thread was first: use its tile)

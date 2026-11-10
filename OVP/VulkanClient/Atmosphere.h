@@ -12,6 +12,7 @@
 #include "VkContext.h"
 #include "OrbiterAPI.h"
 #include <vector>
+#include <array>
 
 class Scene;
 
@@ -91,6 +92,8 @@ public:
 	bool Present () const { return present; }
 	/// colour saturation of the surface textures (tile_main.glsl surfPrm.x)
 	float SurfSaturation () const { return surfSaturation; }
+	/// share of a salt flat at a point [rad] (Config/VK/Playa.cfg: the playa ground there is a salt crust, not clay)
+	float SaltShare (double lat, double lng) const;
 	/// Write this frame's uniform data (camera and sun relative to the planet)
 	void Update ();
 	/// Draw the sky (if the camera can see the atmosphere)
@@ -134,6 +137,7 @@ private:
 	bool waves = false;
 	const char *wavesWhy = "";
 	char wavesName[64] = "";
+	std::vector<std::array<double, 4>> saltFlats; // planet-frame centre direction, angular radius [rad] (Config/VK/Playa.cfg)
 	double waveG = 9.81;                  // surface gravity [m/s^2]
 	WaveSea sea;
 	double seaCfgWind = -1.0;             // Sea.cfg Wind of this body (< 0: none)

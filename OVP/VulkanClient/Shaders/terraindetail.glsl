@@ -234,6 +234,34 @@ float DetPebbleGate (vec3 c)
 const float DET_SKY_EXP = 2.0;
 
 // Playa (B2): the weight comes per vertex from the core (oapiSurfaceDetail: colour, climate, relief), Af.z
+// Playa colour (pass 2, P1): the textures draw dry lakes and salt flats as a neutral, often clipped white
+// (snow, to the eye). Their brightness relative to the desert around them matches the measured albedos
+// (Rogers' lakebed 0.80 against the Mojave alluvium's 0.58 in the texture's units; about 0.40 against
+// 0.27 measured), so the texel's luminance stays, under a soft cap of the clipped whites, and the hue
+// becomes a pale buff (clay playas; salt flats read a little paler through their brighter texels).
+// SurfaceQuery.cpp's PlayaColour (the dust's colour) is the same.
+// The salt flats (Config/VK/Playa.cfg: the textures can't tell them from clay) are an off-white crust.
+const vec3 PLAYA_HUE = vec3 (1.16, 0.98, 0.76); // (luminance 1)
+const vec3 PLAYA_SALT_HUE = vec3 (1.03, 1.0, 0.94);
+const float PLAYA_KNEE = 0.7;
+// the salt share at a planet-frame direction (1 inside a listed flat, fading over its outer fifth)
+float PlayaSalt (vec3 dPl)
+{
+	float s = 0.0;
+	int n = int (atm.playaPrm.y);
+	for (int i = 0; i < n; i++) {
+		float r = atm.saltFlat[i].w;
+		s = max (s, 1.0 - smoothstep (0.8 * r, r, length (dPl - atm.saltFlat[i].xyz)));
+	}
+	return s;
+}
+vec3 PlayaColour (vec3 c, float salt)
+{
+	float L = dot (c, vec3 (0.2126, 0.7152, 0.0722));
+	if (L > PLAYA_KNEE) L = PLAYA_KNEE + 0.5 * (L - PLAYA_KNEE);
+	return L * mix (PLAYA_HUE, PLAYA_SALT_HUE, salt);
+}
+
 const float PLAYA_JITTER = 0.75, PLAYA_WARP = 0.05, PLAYA_CURL_W = 0.15, PLAYA_EDGE = 2.2, PLAYA_TONE = 0.03;
 // layers: macro, primary, secondary
 const int PLAYA_K[3] = int[3] (2, -2, -4);

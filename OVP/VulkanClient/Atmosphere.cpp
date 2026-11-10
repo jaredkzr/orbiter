@@ -24,6 +24,7 @@
 namespace {
 
 	// Must match the uniform block in atmosphere.glsl
+	constexpr int SALT_MAX = 24; // (atmosphere.glsl)
 	struct AtmUniforms {
 		float viewToPlanet[16];
 		float camPos[4];
@@ -64,6 +65,7 @@ namespace {
 		float siteMat[9][4];  //   per material (coarse, fine, flat): [3i] tint rgb, amount; [3i+1] abs rgb, grit factor; [3i+2] pebbles, cracks, smoothing, rocks
 		float overcastSun[4]; // C3: s0 * OVERCAST.sky (rgb; 0: none), w 0
 		float overcastPrm[4]; //   falloff k, deck altitude [m], tan(theta0), 0
+		float saltFlat[SALT_MAX][4]; // playa salt flats (pass 2, P1): planet-frame centre direction (xyz), angular radius [rad]; playaPrm.y of them
 	};
 	static_assert (sizeof (AtmUniforms) % 16 == 0, "std140");
 
@@ -191,6 +193,48 @@ namespace {
 		}
 		auto it = entries.find (body);
 		return it == entries.end () ? -1.0 : it->second;
+	}
+
+	// Config/VK/Playa.cfg: the salt flats among a body's playas ([name] sections,
+	// "Salt = lat lng radius", deg, deg, km). Read once.
+	struct SaltFlat { double lat, lng, radius; };
+	const std::vector<SaltFlat> &PlayaCfgSalt (const char *body)
+	{
+		static std::map<std::string, std::vector<SaltFlat>> entries;
+		static bool loaded = false;
+		if (!loaded) {
+			loaded = true;
+			std::ifstream ifs ("Config/VK/Playa.cfg");
+			std::string line, section;
+			auto trim = [] (std::string &t) {
+				size_t a = t.find_first_not_of (" \t\r\n"), b = t.find_last_not_of (" \t\r\n");
+				t = a == std::string::npos ? "" : t.substr (a, b - a + 1);
+			};
+			while (std::getline (ifs, line)) {
+				size_t c = line.find (';');
+				if (c != std::string::npos) line.erase (c);
+				trim (line);
+				if (line.empty ()) continue;
+				if (line[0] == '[') {
+					size_t e = line.find (']');
+					section = line.substr (1, e == std::string::npos ? std::string::npos : e - 1);
+					trim (section);
+					continue;
+				}
+				size_t eq = line.find ('=');
+				if (eq == std::string::npos) continue;
+				std::string key = line.substr (0, eq), val = line.substr (eq + 1);
+				trim (key);
+				for (char &ch : key) ch = (char)tolower ((unsigned char)ch);
+				SaltFlat f;
+				if (key == "salt" && !section.empty () && sscanf (val.c_str (), "%lf %lf %lf", &f.lat, &f.lng, &f.radius) == 3)
+					entries[section].push_back (f);
+				else oapiWriteLogV ("VulkanClient: Config/VK/Playa.cfg: line not understood: %s", line.c_str ());
+			}
+		}
+		static const std::vector<SaltFlat> none;
+		auto it = entries.find (body);
+		return it == entries.end () ? none : it->second;
 	}
 
 	constexpr uint32_t MAX_ATMOSPHERES = 64; // plus one "no atmosphere" set
@@ -1008,6 +1052,17 @@ void Atmosphere::UpdateWaves (const VECTOR3 &cam, double camR, float prm[4], flo
 	}
 }
 
+float Atmosphere::SaltShare (double lat, double lng) const
+{
+	// (as terraindetail.glsl PlayaSalt)
+	double d[3] = { cos (lat) * cos (lng), sin (lat), cos (lat) * sin (lng) }, s = 0.0;
+	for (const auto &f : saltFlats) {
+		double dx = d[0] - f[0], dy = d[1] - f[1], dz = d[2] - f[2];
+		s = std::max (s, 1.0 - SmoothStep (0.8 * f[3], f[3], sqrt (dx * dx + dy * dy + dz * dz)));
+	}
+	return (float)s;
+}
+
 void Atmosphere::Update ()
 {
 	AtmUniforms u{};
@@ -1090,6 +1145,23 @@ void Atmosphere::Update ()
 			static const bool playaOff = [] { const char *e = getenv ("ORBITER_VK_PLAYA"); return e && e[0] == '0'; }();
 			u.playaPrm[0] = (playaOff || dp.playa <= 0.0) ? 0.0f : 1.0f; // (the weight itself comes per vertex)
 			u.playaPrm[1] = u.playaPrm[2] = u.playaPrm[3] = 0.0f;
+			memset (u.saltFlat, 0, sizeof (u.saltFlat));
+			if (u.playaPrm[0] > 0.0f) {
+				char nm[64];
+				oapiGetObjectName (hPlanet, nm, 64);
+				const std::vector<SaltFlat> &sf = PlayaCfgSalt (nm);
+				int n = std::min ((int)sf.size (), SALT_MAX);
+				if (saltFlats.size () != (size_t)n) {
+					saltFlats.resize (n);
+					for (int i = 0; i < n; i++) {
+						double la = sf[i].lat * RAD, lo = sf[i].lng * RAD;
+						saltFlats[i] = { cos (la) * cos (lo), sin (la), cos (la) * sin (lo), sf[i].radius * 1e3 / oapiGetSize (hPlanet) };
+					}
+				}
+				for (int i = 0; i < n; i++)
+					for (int k = 0; k < 4; k++) u.saltFlat[i][k] = (float)saltFlats[i][k];
+				u.playaPrm[1] = (float)n;
+			}
 			// site materials (F3); ORBITER_VK_SITE=0: not in the shading (the meshes keep the core's mask)
 			static const bool siteOff = [] { const char *e = getenv ("ORBITER_VK_SITE"); return e && e[0] == '0'; }();
 			memset (u.sitePrm, 0, sizeof (u.sitePrm)), memset (u.siteThr, 0, sizeof (u.siteThr)), memset (u.siteCover, 0, sizeof (u.siteCover)), memset (u.siteMat, 0, sizeof (u.siteMat));

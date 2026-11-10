@@ -44,13 +44,14 @@ layout(set = ATM_SET, binding = 0) uniform Atmosphere {
 	vec4 pebShape;      // terrain detail pebbles (B1): size, round, elong, height
 	vec4 pebShape2;     //   bevel, tilt, crag, tone
 	vec4 pebPrm;        //   albedo factor, grit density, micro floor (a/lambda), Earth gate (0/1)
-	vec4 playaPrm;      // playa (B2): x on/off (1: cracks; the weight comes per vertex); yzw reserved
+	vec4 playaPrm;      // playa (B2): x on/off (1: cracks; the weight comes per vertex); y: salt flats listed (saltFlat); zw reserved
 	vec4 sitePrm;       // site materials (F3): on (0/1), seed, edge, kpMax
 	vec4 siteThr;       //   thresholds: coarse, fine, flat
 	vec4 siteCover;     //   shares: coarse, fine, flat
 	vec4 siteMat[9];    //   per material (coarse, fine, flat): [3i] tint rgb, amount; [3i+1] abs rgb, grit factor; [3i+2] pebbles, cracks, smoothing, rocks
 	vec4 overcastSun;   // C3, under an overcast near the ground: the light from about the sun at normal incidence with the sun at the zenith, per unit sunlight (rgb: s0 * OVERCAST.sky; all 0: none, the beam and the cloud shadow as elsewhere)
 	vec4 overcastPrm;   //   x: falloff k towards the horizon, y: the cloud deck's altitude [m] (the blend to the beam), z: tan of the apparent source's angular radius at the ground, w: 0
+	vec4 saltFlat[24];  // playa salt flats (pass 2, P1): planet-frame centre direction (xyz), angular radius [rad]; playaPrm.y of them (Config/VK/Playa.cfg)
 } atm;
 
 // planet surface (western and eastern hemisphere), for reflections
