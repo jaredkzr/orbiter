@@ -784,6 +784,9 @@ void main()
 			base = mix(base, PlayaColour(base, salt), clamp(vDetailA.z, 0.0, 1.0) * land);
 		}
 		TerrainDetailShading(vPosView, N, base, vDetailA, detailShadow, land, detailSky, playa, siteG, siteSmooth);
+		// the pack ice of a procedural ocean world: land in the mask, flat at the sea level (the core's
+		// sea gate holds the detail's fade at 0 there)
+		if (atm.coastPrm.w > 0.5) SeaIceShading(vPosView, N, base, land * (1.0 - smoothstep(0.1, 0.5, vDetailA.y)));
 #endif
 		cityLight = CityGround(vPosView, base, cityCover);
 		TrackShading(vPosView, N, base);

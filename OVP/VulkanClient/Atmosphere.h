@@ -142,6 +142,7 @@ private:
 	// waves on water (a sum of WAVE_COUNT waves, set on the CPU)
 	bool waves = false;
 	const char *wavesWhy = "";
+	bool procOcean = false;               // (a procedural ocean world: its sea ice, I1)
 	bool procSea = false;                 // (a procedural world's sea: its colour is made, the shallows tinted)
 	bool seaSet = false;                  // (the sea state was taken over water: ice worlds keep it between their open water)
 	char wavesName[64] = "";

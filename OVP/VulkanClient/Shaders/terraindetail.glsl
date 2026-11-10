@@ -321,6 +321,105 @@ vec3 SiteColour (vec3 base, vec3 w)
 // Perturb the shading normal Nv (view space) of the surface at posView,
 // and its albedo (weathered: darker in the hollows, lighter on the crests;
 // fresh crater ejecta)
+// Sea ice of the procedural ocean worlds (pass 2, I1; shading only, the ground stays flat). The pack is
+// drawn by the textures as a bluish white, which reads as pale sand under a red dwarf's light; what makes
+// it ice is its structure: floes (Voronoi cells of about 128 m on the detail's lattice, each with its own
+// tone: snow-covered or bare) and between them pressure ridges (piles of broken blocks about 1.5 m high),
+// refrozen leads (darker new ice) or plain cracks; hummocks on the floes. w: the pack's share here.
+const float ICE_RIDGE_H = 1.5, ICE_RIDGE_W = 4.0, ICE_LEAD_W = 1.5; // [m]: ridge height, ridge half width, lead half width
+void SeaIceShading (vec3 posView, inout vec3 Nv, inout vec3 base, float w)
+{
+	if (w <= 0.0) return;
+	mat3 v2p = mat3 (atm.viewToPlanet);
+	// the point on the sphere (as TerrainDetailShading)
+	vec3 e = v2p * posView - tile.refRel.xyz;
+	float R = tile.refF.w, Rh = tile.refRel.w;
+	vec3 d0 = normalize (vec3 (tile.refI.xyz) + tile.refF.xyz);
+	float u = 2.0 * dot (d0, e) / Rh + dot (e, e) / (Rh * Rh);
+	float su = sqrt (max (1.0 + u, 1e-6));
+	float fu = -u / (su * (1.0 + su));
+	vec3 dl = d0 * (R * fu) + e * ((R / Rh) * (1.0 + fu));
+	DetPoint pt = DetPointAt (tile.refI.xyz, tile.refF.xyz, dl);
+	vec3 d = normalize (d0 + dl / R);
+	float dist = length (posView);
+	float footprint = dist * 2.0 * atm.misc.z / max (frame.jitter.w, 1.0) / max (abs (dot (posView / dist, Nv)), 0.1);
+	if (footprint > 30.0) return;
+	// the floes: a 2-D Voronoi pattern in the lattice plane facing up most directly (9 cells, not the 27 of
+	// a 3-D one: perf; where that plane changes, a line on the planet, the pattern breaks like a lead)
+	const int K = 7, M = 221;
+	const float CELL = 128.0;
+	ivec3 cell, p; vec3 sg;
+	vec3 f = DetLattice (M, pt, K, cell, p, sg);
+	vec3 up = DetToLattice (d, p, sg);
+	vec3 au = abs (up);
+	int ax = au.x > au.y ? (au.x > au.z ? 0 : 2) : (au.y > au.z ? 1 : 2);
+	int ia = ax == 0 ? 1 : 0, ib = ax == 2 ? 1 : 2;
+	vec2 f2 = vec2 (f[ia], f[ib]);
+	ivec2 c2 = ivec2 (cell[ia], cell[ib]);
+	float d1 = 1e9, d2 = 1e9; vec2 q1 = vec2 (0.0), q2 = vec2 (0.0); uint h1 = 0u, h2 = 0u;
+	for (int y = -1; y <= 1; y++)
+	for (int x = -1; x <= 1; x++) {
+		ivec2 o = ivec2 (x, y);
+		uint h = DetHash (ivec3 (c2 + o, ax), 9000u);
+		vec2 q = vec2 (o) + 0.5 + 0.8 * (vec2 (h & 1023u, (h >> 10) & 1023u) / 1023.0 - 0.5);
+		vec2 v = q - f2;
+		float dd = dot (v, v);
+		if (dd < d1) { d2 = d1; q2 = q1; h2 = h1; d1 = dd; q1 = q; h1 = h; }
+		else if (dd < d2) { d2 = dd; q2 = q; h2 = h; }
+	}
+	vec2 n2 = normalize (q2 - q1);
+	vec3 n = vec3 (0.0);
+	n[ia] = n2.x, n[ib] = n2.y;
+	vec3 nt = n - up * dot (n, up);
+	float ln = length (nt), lt = max (ln, 0.25);
+	float wf = 1.0;
+	float eM = dot (0.5 * (q1 + q2) - f2, n2) / lt * CELL;      // distance to the edge along the ground [m]
+	vec3 de = DetToPlanet (-nt / lt, p, sg) / CELL;            // its gradient per metre (planet frame)
+	uint pair = DetPcg (min (h1, h2) * 747796405u ^ max (h1, h2));
+	uint kind = pair % 8u;                                     // 0-4: ridge, 5-6: lead, 7: crack
+	float tone = DetUnit16 (DetPcg (h1 ^ 0x3c6ef372u));       // the floe's own tone (0: bare, 1: snow)
+	vec3 g = vec3 (0.0);
+	float ridge = 0.0, lead = 0.0;
+	if (kind <= 4u) {
+		float hw = ICE_RIDGE_W * (0.6 + 0.8 * DetUnit16 (pair >> 8)), H = ICE_RIDGE_H * (0.5 + DetUnit16 (pair >> 16));
+		float t = clamp (abs (eM) / hw, 0.0, 1.0);
+		float aa = 1.0 - smoothstep (0.5, 1.5, footprint / hw);
+		ridge = (1.0 - t * t * (3.0 - 2.0 * t)) * wf;
+		g += de * (-H * 6.0 * t * (1.0 - t) / hw * sign (eM) * aa * wf);
+		// the blocks of the ridge (1-2 m)
+		float aaB = 1.0 - smoothstep (0.25, 0.5, footprint / 2.0);
+		if (ridge > 0.01 && aaB > 0.0) {
+			ivec3 c2, p2; vec3 s2;
+			vec3 f2 = DetLattice (M + 1, pt, 1, c2, p2, s2);
+			vec4 nb = DetNoise (c2, f2, 9010u);
+			g += DetToPlanet (nb.xyz, p2, s2) * (0.6 * H * ridge * aaB * 0.5);
+		}
+	} else if (kind <= 6u) {
+		float t = clamp (abs (eM) / ICE_LEAD_W, 0.0, 1.0);
+		lead = (1.0 - t * t * (3.0 - 2.0 * t)) * (1.0 - smoothstep (0.5, 2.0, footprint / ICE_LEAD_W)) * wf;
+	} else {
+		float t = clamp (abs (eM) / 0.3, 0.0, 1.0);
+		lead = 0.5 * (1.0 - t * t * (3.0 - 2.0 * t)) * (1.0 - smoothstep (0.15, 0.6, footprint)) * wf;
+	}
+	// hummocks on the floes (8 m)
+	float aaH = 1.0 - smoothstep (0.25, 0.5, footprint / 8.0);
+	if (aaH > 0.0) {
+		ivec3 c3, p3; vec3 s3;
+		vec3 f3 = DetLattice (M + 2, pt, 3, c3, p3, s3);
+		vec4 nh = DetNoise (c3, f3, 9020u);
+		g += DetToPlanet (nh.xyz, p3, s3) * (0.3 * mix (0.4, 1.0, 1.0 - tone) / 8.0 * aaH);
+	}
+	g -= d * dot (g, d);
+	vec3 gv = transpose (v2p) * (g * w);
+	gv -= Nv * dot (gv, Nv);
+	Nv = normalize (Nv - gv);
+	// colours: snow-covered floes a little brighter, bare ones bluer and darker; ridges fresh and bright;
+	// leads the grey of new ice
+	vec3 floe = mix (vec3 (0.86, 0.92, 1.0), vec3 (1.04, 1.04, 1.04), tone);
+	vec3 alb = mix (floe, vec3 (1.1), ridge) * (1.0 - 0.45 * lead);
+	base *= mix (vec3 (1.0), alb, w);
+}
+
 void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec3 Af, inout float sunShadow, float land, inout float skyVis, out float playa, float siteG, out float siteSmooth)
 {
 	playa = 0.0;

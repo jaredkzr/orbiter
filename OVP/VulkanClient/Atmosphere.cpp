@@ -655,6 +655,7 @@ Atmosphere::Atmosphere (OBJHANDLE h, Scene *s)
 		bool proc = oapiProcSurfaceParams (hPlanet, &wp);
 		waves = cfgRipple || (proc && (wp.surfClass == 1 || (wp.surfClass == 2 && wp.openWater > 0)));
 		procSea = proc && (wp.surfClass == 1 || (wp.surfClass == 2 && wp.openWater > 0));
+		procOcean = proc && wp.surfClass == 1;
 		wavesWhy = cfgRipple ? "cfg" : proc && wp.surfClass == 1 ? "ocean" : "ice open water";
 		if (const char *e = getenv ("ORBITER_VK_WAVES")) if (*e && !atoi (e)) waves = false; // (empty: unset)
 		if (const char *e = getenv ("ORBITER_VK_FOAM")) if (*e && !atoi (e)) foam = false; // (empty: unset)
@@ -1143,7 +1144,8 @@ void Atmosphere::Update ()
 	u.coastPrm[0] = wv && present ? (float)std::max (0.5 * wfoam.shoreW, 4.0) : 0.0f;
 	u.coastPrm[1] = wv && procSea ? 1.0f : 0.0f;
 	u.coastPrm[2] = vkshore::Enabled () ? vkshore::SD_MAX : 0.0f;
-	u.coastPrm[3] = 0.0f;
+	static const bool seaIceOff = [] { const char *e = getenv ("ORBITER_VK_SEA_ICE"); return e && *e && !atoi (e); }();
+	u.coastPrm[3] = procOcean && !seaIceOff ? 1.0f : 0.0f; // (sea ice, I1; ORBITER_VK_SEA_ICE=0: off)
 	// (the waves show within 3 km of the surface: not computed for planets far
 	// off, which also frees the anchor for the next approach)
 	if (wv && camR - radius < 50e3) UpdateWaves (cam, camR, u.wavePrm, u.waves, u.waveEnv);
