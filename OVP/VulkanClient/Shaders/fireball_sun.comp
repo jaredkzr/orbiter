@@ -100,6 +100,7 @@ void main ()
 	uint k = uint (id.z / FB_BZ);
 	if (k >= pc.count || id.x >= FB_BX || id.y >= FB_BY) return;
 	FireballParams P = fireballs[pc.base + k];
+	if (P.mode.x > 0.5) { imageStore (outB, id, vec4 (0.0)); return; } // (the free cloud: its sun shadow analytic, fireball.frag)
 	vec3 uvw = (vec3 (id.x, id.y, id.z % FB_BZ) + 0.5) / vec3 (FB_BX, FB_BY, FB_BZ);
 	vec3 p = mix (P.boxMin.xyz, P.boxMax.xyz, uvw);
 	vec3 sun = normalize (mat3 (P.toBall) * frame.sunDir.xyz);

@@ -1051,7 +1051,7 @@ namespace {
 		/// or expanding freely (0): where its gas would stop at this pressure
 		/// (the sea-level ball's radius times (p0 / p)^(1/3)) against where a
 		/// free cloud of it thins out, its optical depth 0.05 (droplets and
-		/// ice, about 2 m^2/kg). 7 t: 1 at sea level, at 30 km and on Mars,
+		/// ice, about 1 m^2/kg). 7 t: 1 at sea level, at 30 km and on Mars,
 		/// 0.67 at 50 km, 0.26 at 60 km, 0 at 70 km
 		double Confine (double M) const
 		{
@@ -1060,8 +1060,23 @@ namespace {
 			double Rvis = std::sqrt (KAPPA * M / (PI * 0.05));
 			return 1.0 - Smooth01 ((Req / Rvis - 0.5) / 2.5);
 		}
-		static constexpr double KAPPA = 2.0; // [m^2/kg] the free cloud's extinction per mass
+		static constexpr double KAPPA = 1.0; // [m^2/kg] the free cloud's extinction per mass (droplets of a millimetre or so; at 2 a DG's cloud hung as a grey veil for over a second)
 	};
+
+	// the free cloud of M [kg] of propellant out of the air (VACUUM_PLAN.md
+	// 3.3; FireballRenderer, fireball_grid.comp): self-similar - a Gaussian
+	// of scale s = s0 + v t, every parcel on at the speed it got; its density
+	// falls as 1 / s^3, its column through the centre as 1 / s^2: it thins
+	// out by itself, gone at a column depth of 0.06
+	struct FreeCloud {
+		double s0, v, M;
+		double S (double t) const { return s0 + v * std::max (t, 0.0); }
+		double Sigma (double t) const { double s = S (t); return Air::KAPPA * M / (5.5683280 * s * s * s); } // (pi^1.5)
+		double SEnd () const { return std::sqrt (Air::KAPPA * M / (PI * 0.06)); }
+		double TEnd () const { return std::max (SEnd () - s0, 0.0) / std::max (v, 1.0); }
+	};
+	/// a burst's free cloud: R the radius its propellant's ball would have (2.9 M^1/3), v its speed
+	FreeCloud CloudOf (double M, double R, double v) { return FreeCloud{ 0.12 * R, v, M }; }
 	/// the air of body hp at global position gpos (none: an airless body, or above its atmosphere)
 	Air AirAt (OBJHANDLE hp, const VECTOR3 &gpos)
 	{
@@ -1253,7 +1268,7 @@ void VDebris::Effects ()
 				// screen - CollectFireballs; else sprites)
 				fbVacVs = std::clamp (3.0 * R, 20.0, 300.0);
 				fbPos = gpos; // (now, not a step ago: the shell moves on from here with fbVel - CollectFireballs)
-				double Rs = 0.15 * R + 0.4 * fbVacVs + 3.0 * (0.1 * R + 0.04 * fbVacVs);
+				double Rs = 1.3 * CloudOf (fbFuel, R, fbVacVs).SEnd (); // (about its size seen, half-way)
 				FireballRenderer *fr = scene->Fireballs ();
 				fbVac = fr && fr->WantsVolume (id, Rs, length (gpos - scene->CameraPos ())); // (now, not p0: a step ago, a kilometre off)
 				if (!fbVac) VacuumFlash (dt, R, vel);
@@ -1945,41 +1960,49 @@ void VDebris::Fireball (double dt, double airDrag, const VECTOR3 &up, const VECT
 
 void VDebris::VacuumFlash (double dt, double R, const VECTOR3 &vel)
 {
-	// in vacuum nothing holds the burning propellant together or lifts it:
-	// a flash, a shell expanding fast and fading within a second, and the
-	// unburned remainder condensing to a pale vapour shell thinning out as
-	// it goes (no billows, nothing lingers). A shell: emissions along
-	// directions spread evenly over the sphere, each with little spread
+	// out of the air, small on screen (or the Sprites setting): the free
+	// cloud as sprites (VACUUM_PLAN.md 3.3) - nothing holds the propellant
+	// together, lifts it or slows it: a white-hot core gone within a tenth
+	// of a second, and white streaks of droplets and ice radiating out at
+	// the cloud's speeds (three layers: slow and dense inside, fast and thin
+	// outside - self-similar, each one's size growing with its distance),
+	// coasting, faded out as the cloud thins. (The grey vapour shell before
+	// it read as smoke - a cloud lit by the flash, cumulus - f6 iss_t3.1)
 	if (!fbFire.tex) fbFire.tex = scene->FireballTexture (4), fbFire.emissive = true;
-	if (!fbSmoke.tex) fbSmoke.tex = scene->FireballTexture (3); // (no smoke in vacuum: the ring holds the vapour)
+	if (!fbSmoke.tex) fbSmoke.tex = scene->Particles ()->SmokeTexture ();
 	double D = scene->Particles ()->density, sz = std::pow (D, -1.0 / 3.0);
-	double vs = std::clamp (3.0 * R, 20.0, 300.0); // [m/s]
-	const int NDIR = 32;
-	uint32_t per = 1;
+	FreeCloud c = CloudOf (fbFuel, R, fbVacVs);
+	double v = fbVacVs, tEnd = std::max (c.TEnd (), 0.2);
+	const int NDIR = 48;
 	for (int i = 0; i < NDIR; i++) {
 		double z = 1.0 - (i + 0.5) * 2.0 / NDIR, rr = sqrt (std::max (1.0 - z * z, 0.0)), ph = i * 2.39996323;
 		VECTOR3 d = _V(rr * cos (ph), z, rr * sin (ph));
 		ParticleSystem::Emission e{};
 		e.p0 = e.p1 = gpos, e.vel = vel, e.dir = -d, e.dt = dt;
-		e.v0 = vs, e.spread = 0.12 * vs;
-		e.lifetime = 0.25 + 0.002 * R;
-		e.size = 0.1 * R * sz, e.growth = 0.25 * vs * sz;
-		e.alpha = 0.05, e.slowdown = 0.0;
+		e.v0 = 0.5 * v, e.spread = 0.2 * v;
+		e.lifetime = 0.1;
+		e.size = 0.25 * R * sz, e.growth = 0.6 * v * sz;
+		e.alpha = 0.6, e.slowdown = 0.0;
 		e.emissive = true, e.ramp = true;
 		e.cls = ParticleSystem::Class::Fire;
-		Emit (fbFire, e, per, e.lifetime, true);
-		// (a thin, faint vapour shell, gone within half a second: a cloud
-		// lingering and lit by the flash read as cumulus - f6 iss_t3.1)
-		ParticleSystem::Emission v (e);
-		v.emissive = false, v.ramp = false;
-		v.v0 = vs, v.spread = 0.1 * vs;
-		v.lifetime = 0.6;
-		v.size = 0.12 * R * sz, v.growth = 0.12 * vs * sz;
-		v.alpha = 0.025;
-		v.tinted = true, v.cold = true;
-		v.albedo[0] = 0.80f, v.albedo[1] = 0.78f, v.albedo[2] = 0.75f;
-		v.cls = ParticleSystem::Class::FireballSmoke;
-		Emit (fbSmoke, v, per, v.lifetime, true);
+		Emit (fbFire, e, 1, e.lifetime, true);
+		for (int k = 0; k < 3; k++) {
+			double f = 0.6 + 0.5 * k; // (0.6, 1.1, 1.6 of its speed: as far as the volume's cloud is seen)
+			ParticleSystem::Emission w (e);
+			w.emissive = false, w.ramp = false;
+			w.v0 = f * v, w.spread = 0.12 * v;
+			w.lifetime = tEnd * (1.0 - 0.2 * k);
+			// (each about as wide as its distance from the centre: the 48
+			// directions' streaks overlapping twice - smaller and fainter, the
+			// cloud did not show at all)
+			w.size = 0.35 * R * sz, w.growth = 1.6 * f * v * sz;
+			w.alpha = 0.55 - 0.12 * k;
+			w.streak = 0.12f; // (drawn out along its motion: radial streaks)
+			w.tinted = true, w.cold = true;
+			w.albedo[0] = 0.92f, w.albedo[1] = 0.93f, w.albedo[2] = 0.95f; // (droplets and ice: white)
+			w.cls = ParticleSystem::Class::Spray;
+			Emit (fbSmoke, w, 1, w.lifetime, true);
+		}
 	}
 }
 
@@ -2141,10 +2164,12 @@ void VDebris::CollectLights (std::vector<LightSource> &lights)
 			add (foot, (float)(If + Ig), cf, range, 0.35 * fbRNow, 0.0);
 		}
 	} else if (fbTf <= 0.0 && flashR > 0.0 && simt - flashT >= 0.0 && simt - flashT < 1.5) {
-		// (in vacuum: a dozen times the sun's light up close as it flashes,
-		// gone within a fraction of a second)
-		// (phase 4: half of it - the shell carries the look; at 12 the station was lit out white)
-		float I = (float)(std::min (1.0, flashR / 10.0) * 6.0 * exp (-flashK * (simt - flashT)));
+		// (out of the air: a dozen times the sun's light up close as it
+		// flashes, falling as its core cools - fireball.frag: (1 + t / 0.08)
+		// ^-1.2 in temperature - a third by the second frame, gone within a
+		// fifth of a second)
+		// (phase 4: half of it - the cloud carries the look; at 12 the station was lit out white)
+		float I = (float)(std::min (1.0, flashR / 10.0) * 6.0 * pow (1.0 + (simt - flashT) / 0.08, -3.0));
 		if (I > 0.01f) add (gpos, I, fireCol, 10.0 * std::max (flashR, 2.0), 0.0, 0.0);
 	}
 	float I = 0.0f;
@@ -2168,21 +2193,22 @@ void VDebris::CollectFireballs (FireballRenderer &fr)
 	// large enough on screen), until its soot ball has passed to the smoke
 	// volume (1.8 t_f). Its age by the simulation time: frozen while paused
 	if (fbTf <= 0.0) {
-		// in vacuum: its shell (PLAN.md 2.7), expanding from where it
-		// ignited (moving on with the pieces), gone by 0.4 s
+		// out of the air: its free cloud (VACUUM_PLAN.md 3.3), expanding from
+		// where it burst (moving on with the pieces), until it has thinned out
 		if (!fbVac || flashR <= 0.0) return;
 		double t = oapiGetSimTime () - fbT0;
-		if (t < 0.0 || t > 0.4) return;
+		FreeCloud c = CloudOf (fbFuel, flashR, fbVacVs);
+		if (t < 0.0 || t > c.TEnd ()) return;
 		FireballRenderer::Ball b;
 		b.owner = id;
 		b.vacuum = true;
-		b.shell = 0.15 * flashR + fbVacVs * t, b.width = 0.1 * flashR + 0.1 * fbVacVs * t;
-		b.r = b.shell + 3.0 * b.width;
-		b.R = 0.15 * flashR + 0.4 * fbVacVs + 3.0 * (0.1 * flashR + 0.04 * fbVacVs);
+		b.scale = c.S (t), b.sigma = c.Sigma (t);
+		b.r = 2.6 * b.scale;
+		b.R = 2.6 * c.SEnd ();
 		b.centre = scene->ViewPos (fbPos + fbVel * t);
 		b.up = scene->ViewDir (_V(0, 1, 0));
 		b.axis = scene->ViewDir (_V(1, 0, 0));
-		b.t = t, b.tf = 0.4;
+		b.t = t, b.tf = c.TEnd ();
 		b.seed = serial * 2654435761u;
 		fr.Add (b);
 		return;

@@ -64,18 +64,36 @@ void main ()
 	// behind: what is drawn here leans the other way)
 	x.xy -= P.asym.xy * max (x.z + 0.6, 0.0);
 	if (P.mode.x > 0.5) {
-		// in vacuum (PLAN.md 2.7): nothing holds the burning propellant
-		// together - a thin shell of it expanding, ragged by the noise,
-		// its gas cooling (the march: white as it flashes, then a pale
-		// vapour shell by its opacity, fading)
-		float rs = P.mode.y, w = max (P.mode.z, 0.01);
-		float dist = length (p);
-		float e = (dist - rs) / w;
-		vec3 qs = p / max (rs, 1.0) * 1.7 + seed;
-		float n1 = Sh (qs), n2 = Dt (qs * 2.3 + seed.zxy);
-		float rho = exp (-e * e) * clamp (0.4 + 0.5 * n1 + 0.35 * n2, 0.0, 1.0);
-		imageStore (outA, id, vec4 (rho, P.heat.x * 1e-3 * (1.0 + 0.05 * n2), 0.0, 0.0));
-		imageStore (outC, id, vec4 (qs, 0.0));
+		// out of the air (VACUUM_PLAN.md 3.3): the free cloud - its gas,
+		// droplets and ice expanding freely, every parcel on at the speed it
+		// got: self-similar, its shape the same at all times in units of its
+		// scale s (= s0 + v t: mode.y), its density falling as 1 / s^3 (the
+		// march: mode.z). No billows: its clumps drawn out radially into
+		// streamers (noise over the directions, slowly varying along the
+		// radius - log of it: the same pattern as it grows), a Gaussian core
+		// with a halo of the faster gas, and a few jets of droplets thrown
+		// further. Its hot core (heat.x [K], cooling as it expands) only
+		float s = max (P.mode.y, 0.1);
+		vec3 xi = p / s;
+		float rr = length (xi);
+		vec3 nd = rr > 1e-4 ? xi / rr : vec3 (0.0, 0.0, 1.0);
+		float lr = log (max (rr, 0.05));
+		float n1 = Sh (nd * (1.1 + 0.12 * lr) + seed);
+		float n2 = Sh (nd * (3.1 + 0.35 * lr) + seed.zxy + 0.37);
+		float streak = clamp (0.5 + 0.5 * n1 + 0.35 * n2, 0.05, 1.6);
+		float prof = exp (-rr * rr) + 0.04 * exp (-1.7 * rr); // (at 0.1 the halo hung across the view as a haze)
+		float jets = 0.0;
+		for (int i = 0; i < 7; i++) {
+			vec3 h = fract (sin (vec3 (12.9898, 78.233, 45.164) * (P.time.w * 0.173 + float (i) * 1.618 + 0.5)) * 43758.5453);
+			float z = 2.0 * h.x - 1.0, ph = 6.2832 * h.y, sr = sqrt (max (1.0 - z * z, 0.0));
+			vec3 dj = vec3 (sr * cos (ph), sr * sin (ph), z);
+			jets += (0.35 + 0.4 * h.z) * smoothstep (0.982, 0.997, dot (nd, dj)) * exp (-pow (rr / (1.7 + 0.6 * h.z), 2.0));
+		}
+		float rho = prof * streak + jets * (0.6 + 0.4 * n2);
+		float T = max (P.heat.x * exp (-1.6 * rr * rr), 300.0);
+		imageStore (outA, id, vec4 (rho, T * 1e-3, 0.0, 0.0));
+		// (the march's detail: finer streamers, the same coordinates' kind)
+		imageStore (outC, id, vec4 (nd * (7.0 + 0.8 * lr) + seed.yzx, 0.0));
 		return;
 	}
 	// its shape: drawn out along its path, flattened as it lifts off

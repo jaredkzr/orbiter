@@ -47,11 +47,13 @@ public:
 		double ground = -1e9; // [m] the ground (or sea) below its centre, along up (< 0: below; -1e9: far)
 		uint32_t seed = 0;
 		VECTOR3 lean{};       // view space: its top displaced per unit height (the momentum it keeps)
-		// in vacuum (PLAN.md 2.7): no ball - a thin hot shell of radius
-		// shell [m] and thickness width [m] expanding, white for a frame,
-		// then a pale vapour shell fading (r: the box's; t over tf = 0.4 s)
+		// out of the air (VACUUM_PLAN.md 3.3): no ball - the free cloud, its
+		// shape the same at all times in units of its scale [m] (s0 + v t),
+		// its peak extinction sigma [1/m] (falling as 1 / scale^3); white-hot
+		// as it flashes, its core cooling as it expands (r: the box's; tf:
+		// when it has thinned out)
 		bool vacuum = false;
-		double shell = 0.0, width = 1.0;
+		double scale = 1.0, sigma = 0.0;
 		double g = 9.81;      // [m/s^2] the gravity it rises in (its rise, its ring's turn: sqrt (g R))
 		double fade = 1.0;    // its volume's weight (0..1): cross-faded with its sprites as it switches (phase 6)
 	};

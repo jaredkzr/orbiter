@@ -26,7 +26,7 @@ struct FireballRenderer::Params { // fireball.glsl
 	float heat[4];    // hottest [K], burn-out base, flash, density
 	float flow[4];    // ring's turn [rad], ring radius / r, churn, extinction scale
 	float tune[4];    // (ORBITER_VK_FIREBALL_TUNE)
-	float mode[4];    // vacuum shell (1), its radius [m], its width [m], its flash (0..1)
+	float mode[4];    // the free cloud (1), its scale [m], its peak extinction [1/m], its flash (0..1)
 	float asym[4];    // its lean (ball space xy, per unit height), -, -
 	float adv[4];     // the noise carried outward, two phases cross-faded (phase 4c): A's scale and weight, B's scale and weight
 	float adv2[4];    // the ring's turn since each phase began [rad] (A, B); each phase's number (its seed) (A, B)
@@ -584,9 +584,9 @@ void FireballRenderer::Compute (VkDescriptorSet frameSet)
 				if (s > 0.0) bmax[k] += s; else bmin[k] += s;
 			}
 		}
-		// (the vacuum shell: a cube just holding it)
+		// (the free cloud: a cube holding its jets, 2.6 of its scale)
 		if (b.vacuum)
-			for (int k = 0; k < 3; k++) bmax[k] = b.shell + 3.0 * b.width, bmin[k] = -bmax[k];
+			for (int k = 0; k < 3; k++) bmax[k] = 2.6 * b.scale, bmin[k] = -bmax[k];
 		// (nothing below the ground)
 		if (b.ground > -1e8 && !b.vacuum) bmin[2] = std::min (std::max (bmin[2], b.ground - 0.05 * r), bmax[2] - 0.2 * r);
 		Params &p = pm[i];
@@ -613,6 +613,10 @@ void FireballRenderer::Compute (VkDescriptorSet frameSet)
 		// the close view's widest frames were its costliest)
 		double uu = b.t / std::max (b.tf, 1e-3);
 		step *= 1.0 + 0.5 * std::clamp ((uu - 1.3) / 0.5, 0.0, 1.0);
+		// (the free cloud: smooth streamers, no billows to resolve - two cells
+		// a step; at the fireball's half a cell, a cloud filling the view at
+		// 1440p took 3.7 ms to march)
+		if (b.vacuum) step = 2.0;
 		p.boxMax[3] = (float)(cell * step);
 		p.asym[2] = (float)std::clamp ((px - 50.0) / 100.0, 0.0, 1.0);
 		double tf = std::max (b.tf, 1e-3), u = b.t / tf;
@@ -663,16 +667,21 @@ void FireballRenderer::Compute (VkDescriptorSet frameSet)
 		p.flow[3] = tuneSigma;
 		for (int k = 0; k < 4; k++) p.tune[k] = tune[k];
 		if (b.vacuum) {
-			// the vacuum shell (PLAN.md 2.7): white-hot as it flashes (its
-			// first frame or two), then a pale vapour shell, its gas cooling
-			// from 2500 K, thinning out, gone by 0.4 s
-			p.heat[0] = (float)(2500.0 - 1200.0 * std::clamp (b.t / 0.4, 0.0, 1.0));
+			// the free cloud (VACUUM_PLAN.md 3.3): white-hot as it flashes
+			// (its first two frames), its core cooling as it expands
+			// (adiabatically: 2800 K to a dull red by 0.1 s, gone by 0.2), its
+			// droplets and ice lit by the sun; thinning by itself (mode.z, 1 /
+			// s^3), faded out over its last column depths 0.15 to 0.06 - not
+			// cut when its marching ends
+			double Tc = 2800.0 * pow (1.0 + b.t / 0.08, -1.2);
+			p.heat[0] = (float)Tc;
 			p.centre[3] = p.heat[0];
 			p.heat[1] = 0.0f, p.heat[2] = 0.0f;
-			p.heat[3] = (float)(std::clamp (1.0 - b.t / 0.4, 0.0, 1.0) * std::clamp (b.fade, 0.0, 1.0));
+			double tauC = b.sigma * b.scale * 1.7724539; // (through its centre: sigma s sqrt(pi))
+			p.heat[3] = (float)(Smooth01 ((tauC - 0.06) / 0.09) * std::clamp (b.fade, 0.0, 1.0));
 			p.flow[0] = 0.0f;
-			p.mode[0] = 1.0f, p.mode[1] = (float)b.shell, p.mode[2] = (float)b.width;
-			p.mode[3] = (float)std::clamp (1.0 - b.t / 0.08, 0.0, 1.0);
+			p.mode[0] = 1.0f, p.mode[1] = (float)b.scale, p.mode[2] = (float)b.sigma;
+			p.mode[3] = (float)std::clamp (1.0 - b.t / 0.07, 0.0, 1.0);
 		}
 		// its box (view space), the proxy drawn
 		static const int faces[6][4] = { { 0, 1, 3, 2 }, { 4, 6, 7, 5 }, { 0, 4, 5, 1 }, { 2, 3, 7, 6 }, { 0, 2, 6, 4 }, { 1, 5, 7, 3 } };

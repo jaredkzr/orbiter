@@ -107,6 +107,7 @@ void main ()
 	float g = 0.35, cosT = dot (d, frame.sunDir.xyz);
 	float phase = 0.6 * (1.0 - g * g) / pow (1.0 + g * g - 2.0 * g * cosT, 1.5) + 0.4; // (mean 1)
 	vec3 sunL = sun * phase;
+	float gV = 0.5, phaseV = 0.5 * (1.0 - gV * gV) / pow (1.0 + gV * gV - 2.0 * gV * cosT, 1.5) + 0.5; // (the free cloud's droplets and ice: brightest against the sun)
 	vec3 amb = frame.ambient.rgb * frame.ambient.w;
 	float soft = 1.0 / (0.12 * r);  // (fading out over this before the ground or the sea)
 	float sig0 = P.flow.w * P.heat.w / r; // (fading out as a whole as its soot passes to the smoke volume)
@@ -151,75 +152,97 @@ void main ()
 		vec3 gc = FbGridCoord ((pb - P.boxMin.xyz) * isz, slab);
 		vec4 A = textureLod (gridA, gc, 0.0);
 		if (A.x < 0.002) continue;
-		// the noise's coordinates as the grid's (fireball_grid.comp): the
-		// point in units of 0.9 r, leaning, traced back by the ring's turn,
-		// warped (the warp from the grid), carried outward by the two
-		// phases of the flow, cross-faded
-		vec3 x = pb / (0.9 * r);
-		x.xy -= P.asym.xy * max (x.z + 0.6, 0.0);
-		vec3 wv = textureLod (gridC, gc, 0.0).xyz;
-		vec3 qA = (FbRolled (x, P.adv2.x, P.flow.y, seedG.x) + wv) * P.adv.x;
-		vec3 qB = (FbRolled (x, P.adv2.y, P.flow.y, seedG.x) + wv) * P.adv.z;
-		if (vac) qA = qB = wv; // (the shell: its own coordinates in C)
-		// detail: small billows eating into its thin parts (the edge ragged,
-		// tongues and holes), the dense inside kept
-		// (normalized: about +-1; the shape noise's sd 0.073 about 0.67, the detail's 0.12 about 0.475)
-		float dn = 0.0;
-		if (wA > 0.0) dn += wA * (0.6 * (textureLod (shapeNoise, qA * 2.3 + sdA, 0.0).r - 0.67) * 6.8 + 0.4 * (textureLod (detailNoise, qA * 3.1 + sdA.zxy, 0.0).r - 0.475) * 4.2);
-		if (wB > 0.0) dn += wB * (0.6 * (textureLod (shapeNoise, qB * 2.3 + sdB, 0.0).r - 0.67) * 6.8 + 0.4 * (textureLod (detailNoise, qB * 3.1 + sdB.zxy, 0.0).r - 0.475) * 4.2);
-		dn *= wN;
-		// (and finer: about 1/25 of its radius, the flame's texture close
-		// up; not carried: too fine to be seen moving; left out when it is
-		// under a pixel or so - fineW)
-		float df = 0.0;
-		if (fineW > 0.0) df = fineW * (textureLod (shapeNoise, (x + wv) * 6.1 + seed.yzx, 0.0).r - 0.67) * 6.8;
-		dn += 0.35 * df;
-		// (soot a little more: its small billows crisp - the cap's
-		// cauliflower; at 1.5x the sooty outer layer was eaten away as it
-		// spread and the silhouette shrank with the burn-out - phase 4b)
-		float ero = clamp ((0.3 + 0.3 * dn) * (1.0 + 0.2 * A.z) * P.tune.z * (vac ? 0.5 : 1.0), 0.0, 0.95);
-		float rho = clamp ((A.x - ero) / (1.0 - ero), 0.0, 1.0);
-		rho = smoothstep (0.0, 0.5, rho); // (a crisp edge to the billows: the density rising over a short way)
-		rho *= clamp ((tSurf - t) * soft, 0.0, 1.0);
-		if (rho <= 0.0) continue;
-		float soot = A.z;
-		float sig = rho * (FB_SIGMA_FLAME + FB_SIGMA_SOOT * soot) * sig0;
-		float alb = mix (0.05, albSoot, soot); // (the hot gas scatters little: its soot does)
-		if (vac) sig = rho * P.heat.w * 0.25 / P.mode.z, alb = 0.85; // (the shell: thin - a third opaque face on, more at its limb - a pale white vapour in the sun)
-		// (its temperature varying a little with the detail: brighter and
-		// darker flecks over the billows, not a smooth glow; more read as
-		// streaks of marble)
-		float Tk = A.y * 1000.0 * (1.0 + 0.03 * dn + 0.015 * df);
-		// the sunlight through it: the first cells towards the sun at full
-		// resolution, the rest from the grid of optical depths beyond them
-		float tauS = 0.0;
-		if (soot > 0.02 || alb > 0.06) {
-			for (int k = 0; k < 3; k++) {
-				vec4 As = textureLod (gridA, FbGridCoord ((pb + sunB * (SUN_TAPS[k] * cell) - P.boxMin.xyz) * isz, slab), 0.0);
-				float ds = (k == 0 ? SUN_TAPS[0] + 0.5 * (SUN_TAPS[1] - SUN_TAPS[0]) : k == 2 ? SUN_FAR - 0.5 * (SUN_TAPS[2] + SUN_TAPS[1]) : 0.5 * (SUN_TAPS[2] - SUN_TAPS[0])) * cell;
-				tauS += As.x * (FB_SIGMA_FLAME + FB_SIGMA_SOOT * As.z) * ds;
+		float sig;
+		vec3 S, E;
+		if (vac) {
+			// the free cloud (VACUUM_PLAN.md 3.3): its density the grid's, its
+			// finer streamers one tap (their coordinates in C); its extinction
+			// mode.z, falling as 1 / s^3 as it grows
+			vec3 wv = textureLod (gridC, gc, 0.0).xyz;
+			float dn = (textureLod (detailNoise, wv * 0.5, 0.0).r - 0.475) * 4.2;
+			float rho = A.x * clamp (1.0 + 0.5 * dn, 0.2, 1.7) * clamp ((tSurf - t) * soft, 0.0, 1.0);
+			if (rho <= 0.0) continue;
+			sig = P.mode.z * P.heat.w * rho;
+			// the sunlight through it: the Gaussian core's optical depth towards
+			// the sun from here, in closed form (sqrt(pi)/2 s exp(-b^2) erfc(a));
+			// a floor of light scattered many times (its droplets and ice: white)
+			float sc = max (P.mode.y, 0.1);
+			float aS = dot (pb, sunB) / sc, b2 = max (dot (pb, pb) / (sc * sc) - aS * aS, 0.0);
+			float erfA = tanh (aS * (1.128379 + 0.100886 * aS * aS));
+			float tauS = P.mode.z * P.heat.w * sc * 0.886227 * exp (-b2) * (1.0 - erfA);
+			float sunF = 0.4 + 0.6 * exp (-0.5 * tauS); // (white: light scattered many times fills its shade - at 0.12 its dense core seen from the shade side was a dark, smoke-like blob)
+			S = 0.9 * (sun * phaseV * sunF + amb);
+			// its hot core: a blackbody cooling as it expands (heat.x, the
+			// grid's profile), white as it flashes
+			E = FbPlanck (A.y * 1000.0) * 0.7 * P.tune.w;
+			if (flash > 0.0) E = mix (E, vec3 (4.0, 3.7, 3.0), flash);
+		} else {
+			// the noise's coordinates as the grid's (fireball_grid.comp): the
+			// point in units of 0.9 r, leaning, traced back by the ring's turn,
+			// warped (the warp from the grid), carried outward by the two
+			// phases of the flow, cross-faded
+			vec3 x = pb / (0.9 * r);
+			x.xy -= P.asym.xy * max (x.z + 0.6, 0.0);
+			vec3 wv = textureLod (gridC, gc, 0.0).xyz;
+			vec3 qA = (FbRolled (x, P.adv2.x, P.flow.y, seedG.x) + wv) * P.adv.x;
+			vec3 qB = (FbRolled (x, P.adv2.y, P.flow.y, seedG.x) + wv) * P.adv.z;
+			// detail: small billows eating into its thin parts (the edge ragged,
+			// tongues and holes), the dense inside kept
+			// (normalized: about +-1; the shape noise's sd 0.073 about 0.67, the detail's 0.12 about 0.475)
+			float dn = 0.0;
+			if (wA > 0.0) dn += wA * (0.6 * (textureLod (shapeNoise, qA * 2.3 + sdA, 0.0).r - 0.67) * 6.8 + 0.4 * (textureLod (detailNoise, qA * 3.1 + sdA.zxy, 0.0).r - 0.475) * 4.2);
+			if (wB > 0.0) dn += wB * (0.6 * (textureLod (shapeNoise, qB * 2.3 + sdB, 0.0).r - 0.67) * 6.8 + 0.4 * (textureLod (detailNoise, qB * 3.1 + sdB.zxy, 0.0).r - 0.475) * 4.2);
+			dn *= wN;
+			// (and finer: about 1/25 of its radius, the flame's texture close
+			// up; not carried: too fine to be seen moving; left out when it is
+			// under a pixel or so - fineW)
+			float df = 0.0;
+			if (fineW > 0.0) df = fineW * (textureLod (shapeNoise, (x + wv) * 6.1 + seed.yzx, 0.0).r - 0.67) * 6.8;
+			dn += 0.35 * df;
+			// (soot a little more: its small billows crisp - the cap's
+			// cauliflower; at 1.5x the sooty outer layer was eaten away as it
+			// spread and the silhouette shrank with the burn-out - phase 4b)
+			float ero = clamp ((0.3 + 0.3 * dn) * (1.0 + 0.2 * A.z) * P.tune.z, 0.0, 0.95);
+			float rho = clamp ((A.x - ero) / (1.0 - ero), 0.0, 1.0);
+			rho = smoothstep (0.0, 0.5, rho); // (a crisp edge to the billows: the density rising over a short way)
+			rho *= clamp ((tSurf - t) * soft, 0.0, 1.0);
+			if (rho <= 0.0) continue;
+			float soot = A.z;
+			float sig_ = rho * (FB_SIGMA_FLAME + FB_SIGMA_SOOT * soot) * sig0;
+			float alb = mix (0.05, albSoot, soot); // (the hot gas scatters little: its soot does)
+			// (its temperature varying a little with the detail: brighter and
+			// darker flecks over the billows, not a smooth glow; more read as
+			// streaks of marble)
+			float Tk = A.y * 1000.0 * (1.0 + 0.03 * dn + 0.015 * df);
+			// the sunlight through it: the first cells towards the sun at full
+			// resolution, the rest from the grid of optical depths beyond them
+			float tauS = 0.0;
+			if (soot > 0.02 || alb > 0.06) {
+				for (int k = 0; k < 3; k++) {
+					vec4 As = textureLod (gridA, FbGridCoord ((pb + sunB * (SUN_TAPS[k] * cell) - P.boxMin.xyz) * isz, slab), 0.0);
+					float ds = (k == 0 ? SUN_TAPS[0] + 0.5 * (SUN_TAPS[1] - SUN_TAPS[0]) : k == 2 ? SUN_FAR - 0.5 * (SUN_TAPS[2] + SUN_TAPS[1]) : 0.5 * (SUN_TAPS[2] - SUN_TAPS[0])) * cell;
+					tauS += As.x * (FB_SIGMA_FLAME + FB_SIGMA_SOOT * As.z) * ds;
+				}
+				tauS *= sigB;
 			}
-			tauS *= sigB;
+			vec3 tau = textureLod (gridB, FbGridCoordB ((pb + sunB * (SUN_FAR * cell) - P.boxMin.xyz) * isz, slab), 0.0).xyz;
+			tauS += tau.x;
+			// (soot scatters little more than once: a low floor of light
+			// scattered many times; the shade side dark)
+			float sunF = 0.05 + 0.95 * (0.85 * exp (-tauS) + 0.15 * exp (-0.2 * tauS));
+			vec3 tauU = textureLod (gridB, FbGridCoordB ((pb - P.boxMin.xyz) * isz, slab), 0.0).xyz;
+			// (the dense soot scatters the sun about evenly - its lit side seen
+			// from the sun a lighter grey, from the shade side dark with a bright
+			// rim; the thin hot gas forward: with the forward lobe alone the
+			// cap's sunlit side was the darker)
+			vec3 S_ = alb * (sunL * mix (1.0, 0.3 + 0.7 / phase, soot) * sunF + amb * (0.15 + 0.85 * exp (-0.5 * tauU.y)) + inCol * (kIn * tauU.z));
+			vec3 E_ = (1.0 - alb) * FbPlanck (Tk) * P.tune.w;
+			// the ignition flash: white-hot (all three channels over the knee
+			// below), handed over to the orange ball within a tenth of a second
+			if (flash > 0.0) E_ = mix (E_, vec3 (4.0, 3.7, 3.0), flash);
+			sig = sig_;
+			S = S_, E = E_;
 		}
-		vec3 tau = textureLod (gridB, FbGridCoordB ((pb + sunB * (SUN_FAR * cell) - P.boxMin.xyz) * isz, slab), 0.0).xyz;
-		tauS += tau.x;
-		// (soot scatters little more than once: a low floor of light
-		// scattered many times; the shade side dark)
-		float sunF = 0.05 + 0.95 * (0.85 * exp (-tauS) + 0.15 * exp (-0.2 * tauS));
-		vec3 tauU = textureLod (gridB, FbGridCoordB ((pb - P.boxMin.xyz) * isz, slab), 0.0).xyz;
-		// (the dense soot scatters the sun about evenly - its lit side seen
-		// from the sun a lighter grey, from the shade side dark with a bright
-		// rim; the thin hot gas forward: with the forward lobe alone the
-		// cap's sunlit side was the darker)
-		vec3 S = alb * (sunL * mix (1.0, 0.3 + 0.7 / phase, soot) * sunF + amb * (0.15 + 0.85 * exp (-0.5 * tauU.y)) + inCol * (vac ? 0.0 : kIn * tauU.z));
-		if (vac) S = alb * (sun * max (sunF, 0.7) + amb); // (the vapour: white in the sun, scattering many times; no lobe)
-		vec3 E = (1.0 - alb) * FbPlanck (Tk) * P.tune.w;
-		// the ignition flash: white-hot (all three channels over the knee
-		// below), handed over to the orange ball within a tenth of a second
-		if (flash > 0.0) E = mix (E, vec3 (4.0, 3.7, 3.0), flash);
-		// (the vacuum shell: its light is its flash only; after it the pale
-		// vapour lit by the sun - its opacity carries the look, not a glow)
-		if (vac) E *= flash;
 		float a = 1.0 - exp (-sig * dt);
 		float w = T * a;
 		L += w * (S + E);
