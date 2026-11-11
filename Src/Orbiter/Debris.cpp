@@ -128,9 +128,10 @@ double Debris::BurnLeft () const
 double Debris::Temp () const
 {
 	// (cooling with a time constant of 30 s towards the air's temperature;
-	// burning: at least 1000 K)
-	double Ta = sp.is_in_atm && sp.atmT > 0.0 ? sp.atmT : 250.0;
-	double T = temp0 > Ta ? Ta + (temp0 - Ta) * exp (-(td.SimT0 - tempT) / 30.0) : Ta;
+	// out of the air by radiation only: 90 s; burning: at least 1000 K)
+	bool air = sp.is_in_atm && sp.atmT > 0.0;
+	double Ta = air ? sp.atmT : 250.0;
+	double T = temp0 > Ta ? Ta + (temp0 - Ta) * exp (-(td.SimT0 - tempT) / (air ? 30.0 : 90.0)) : Ta;
 	return BurnLeft() > 0.0 ? std::max (T, 1000.0) : T;
 }
 

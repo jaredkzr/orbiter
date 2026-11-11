@@ -217,6 +217,7 @@ private:
 	};
 	Ring fire, smoke, sparks, dust;  // (sparks: also those of a blow)
 	Ring embers;                     // glowing bits as its flames die down (phase 5)
+	Ring vent;                       // out of the air (or air without oxygen): its propellant left venting, a white freezing jet (VACUUM_PLAN V3)
 	VECTOR3 flameDir{};              // the side its flames stream off (global; aft when flying, down (-up) at rest): the hull glows there
 	Ring frags;              // struck by another body: small bits of it
 	WaterSpray water;        // in the water: splash, spray, wake (from its water state)

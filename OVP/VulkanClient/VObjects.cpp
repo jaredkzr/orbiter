@@ -987,7 +987,7 @@ VDebris::~VDebris ()
 	auto &live = LiveFireballs ();
 	live.erase (std::remove (live.begin (), live.end (), this), live.end ());
 	ParticleSystem *sys = scene->Particles ();
-	for (Ring *r : { &fire, &smoke, &sparks, &dust, &frags, &fbFire, &fbSmoke, &fbCore, &fbFlashR, &fbSkirt, &fbSteam, &column, &drift, &quench, &embers })
+	for (Ring *r : { &fire, &smoke, &sparks, &dust, &frags, &fbFire, &fbSmoke, &fbCore, &fbFlashR, &fbSkirt, &fbSteam, &column, &drift, &quench, &embers, &vent })
 		if (r->sys && r->sys == sys) sys->Release (*r); // (retired with r->tex while its particles live; rings idle for long were released already)
 	water.Release (sys);
 }
@@ -1441,6 +1441,45 @@ void VDebris::Effects ()
 				e.streak = 0.04f;
 				e.cls = ParticleSystem::Class::Spark;
 				Emit (embers, e, n, 2.0);
+			}
+		}
+	}
+	// out of the air, or in air without oxygen: what is left of its
+	// propellant vents from where its tanks or lines broke, a white jet
+	// freezing at once to droplets and ice - not burning (VACUUM_PLAN V3,
+	// the user's choice): for 2 to 5 s by its propellant, from a side of it
+	// fixed to the piece (turning with its tumble), each puff coasting on at
+	// the jet's speed plus the piece's, thinning out as it expands; dragged
+	// in thin air. Where it can burn, it burns instead (its flames above)
+	if (info.fuel > 5.0 && burnOn <= 0.02 && !sunk) {
+		double tv = std::clamp (1.5 + 0.35 * cbrt (info.fuel), 2.0, 5.0), age = simt - info.created;
+		if (age >= 0.0 && age < tv) {
+			double k = 1.0 - age / tv; // (its pressure falling)
+			double s = std::max (0.5 * size, 0.5);
+			vent.accum += 120.0 * D * k * dt;
+			uint32_t n = (uint32_t)vent.accum;
+			vent.accum -= n;
+			if (n) {
+				if (!vent.tex) vent.tex = sys->SmokeTexture ();
+				// (its side: a direction of its own frame, by its serial)
+				uint32_t h = info.serial * 2654435761u;
+				double z = ((h & 0xffff) / 65535.0) * 2.0 - 1.0, ph = ((h >> 16) / 65535.0) * 2.0 * PI, sr = sqrt (std::max (1.0 - z * z, 0.0));
+				VECTOR3 dl = _V(sr * cos (ph), sr * sin (ph), z);
+				VECTOR3 dg = mul (grot, dl); // (its frame to the global axes)
+				double vj = 25.0 + 35.0 * k; // [m/s] the jet
+				ParticleSystem::Emission e{};
+				VECTOR3 at = gpos + dg * (0.4 * size);
+				e.p0 = at - vel * dt, e.p1 = at, e.vel = vel, e.dir = -dg, e.dt = dt;
+				e.v0 = vj, e.spread = 0.18 * vj;
+				e.lifetime = 1.0;
+				// (expanding as it goes: a cone - the puffs large and faint, many
+				// overlapping; small and denser, the jet read as a spray of specks)
+				e.size = std::max (1.6 * s, 1.5) * sz, e.growth = 0.7 * vj * sz;
+				e.alpha = 0.2 * (0.4 + 0.6 * k), e.slowdown = 2.0 * std::min (airDrag, 1.0);
+				e.tinted = true, e.cold = true;
+				e.albedo[0] = 0.92f, e.albedo[1] = 0.93f, e.albedo[2] = 0.95f;
+				e.cls = ParticleSystem::Class::Spray;
+				Emit (vent, e, n, 1.0);
 			}
 		}
 	}
@@ -2079,9 +2118,11 @@ void VDebris::Spray (const VECTOR3 &pos, const VECTOR3 &vel, double v, double ai
 	ParticleSystem::Emission e{};
 	e.p0 = e.p1 = pos, e.vel = vel, e.dir = -out, e.dt = dt;
 	e.v0 = std::min (0.15 * v, 150.0), e.spread = std::min (0.5 * v, 400.0);
-	// (in vacuum they would drift on for ever: faded within a few seconds,
-	// before they read as a cloud of pebbles)
-	e.lifetime = 4.0;
+	// (in air: faded within a few seconds, before they read as a cloud of
+	// pebbles; in vacuum they coast on for half a minute, fading as they
+	// shrink below a pixel on the screen - gpuparticle.vert - not at a set
+	// time: VACUUM_PLAN V3)
+	e.lifetime = air ? 4.0 : 30.0;
 	e.size = std::clamp (0.02 * size, 0.06, 0.3), e.growth = 0.0;
 	e.alpha = 1.0, e.slowdown = 0.4 * std::min (airDrag, 1.0); // (none in vacuum: they coast)
 	e.tinted = true, e.cold = true, e.speck = true, e.spherical = true;
@@ -2097,10 +2138,11 @@ void VDebris::Spray (const VECTOR3 &pos, const VECTOR3 &vel, double v, double ai
 	ParticleSystem::Emission k{};
 	k.p0 = k.p1 = pos, k.vel = vel, k.dir = -out, k.dt = dt;
 	k.v0 = std::min (0.2 * v, 200.0), k.spread = std::min (0.8 * v, 600.0);
-	k.lifetime = air ? 0.5 : 1.2; // (long enough to see them glance off what they meet)
+	k.lifetime = air ? 0.5 : 1.5; // (long enough to see them glance off what they meet)
 	k.size = 0.1, k.growth = 0.0;
 	k.alpha = 20.0, k.slowdown = air ? 3.0 : 0.0; // (white hot: far brighter than sunlit surfaces)
 	k.emissive = true, k.speck = true, k.spherical = true;
+	k.ramp = !air; // (in vacuum: molten drops cooling as they coast, white to red - not slowed)
 	k.cls = ParticleSystem::Class::Spark;
 	Emit (sparks, k, (uint32_t)std::clamp ((10.0 + 40.0 * s) * D, 8.0 * D, 150.0 * D), k.lifetime, true);
 
@@ -2271,7 +2313,7 @@ void VDebris::DrawParticles ()
 	ParticleSystem *sys = scene->Particles ();
 	if (!sys) return;
 	double simt = oapiGetSimTime ();
-	for (const Ring *r : { &drift, &column, &fbSmoke, &smoke, &quench, &fbSteam, &dust, &fbSkirt, &frags, &fire, &fbFire, &fbCore, &fbFlashR, &sparks, &embers })
+	for (const Ring *r : { &drift, &column, &fbSmoke, &smoke, &quench, &fbSteam, &dust, &fbSkirt, &frags, &vent, &fire, &fbFire, &fbCore, &fbFlashR, &sparks, &embers })
 		if (r->sys == sys && simt - r->lastEmit < 1.5 * r->life + 0.1)
 			sys->Draw (*r, r->tex, r->emissive, scene->FrameSet ()); // (if not released while idle)
 	water.Draw (scene);

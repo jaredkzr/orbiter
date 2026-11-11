@@ -95,7 +95,10 @@ void main ()
 		// spark stays bright, a tiny fragment shows mostly as it glints)
 		float px = 2.0 * length (posAge.xyz) / (frame.proj[1][1] * max (frame.jitter.w, 1.0));
 		float hmin = 1.0 * px;
-		if (h < hmin) a *= clamp (4.0 * (h / hmin) * (h / hmin), (flags & PF_EMISSIVE) != 0u ? 0.3 : 0.6, 1.0), h = hmin;
+		// (a fragment far off fades out as it shrinks below a quarter of a
+		// pixel: in vacuum they coast on for half a minute - VACUUM_PLAN V3;
+		// held at 0.6 they hung as a cloud of pebbles)
+		if (h < hmin) a *= clamp (4.0 * (h / hmin) * (h / hmin), (flags & PF_EMISSIVE) != 0u ? 0.3 : 0.0, 1.0) * ((flags & PF_EMISSIVE) != 0u ? 1.0 : smoothstep (0.05, 0.25, h / hmin)), h = hmin;
 	}
 
 	// corner, turned by an angle of this particle (slowly turning)
