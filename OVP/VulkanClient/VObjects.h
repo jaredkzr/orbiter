@@ -245,6 +245,8 @@ private:
 	// below its centre [m] (along up: < 0 below), the local vertical
 	double fbEl = 1.0, fbLift = 0.0, fbRoll = 0.0, fbGround = -1e9;
 	double fbRaise = -1.0;     // its centre raised above where it formed (/ r: on the ground, a ball resting on it; -1: not known yet)
+	double fbAlong = 0.0;      // [m] its half length along its path so far (never shrinking: it grows across to it)
+	VECTOR3 fbLean{};          // its lean: the top carried on ahead of its foot by its momentum (per unit height; global)
 	VECTOR3 fbUp{ 0, 1, 0 };
 	bool fbVolume = false;     // marched as a volume this step (its flame sprites left out)
 	VECTOR3 fbFoot{};          // its foot: the surface below where it ignited (moving with the air; fbFootKnown: on the ground or the sea)

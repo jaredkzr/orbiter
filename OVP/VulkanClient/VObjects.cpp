@@ -1501,14 +1501,27 @@ void VDebris::Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 
 		FireballModel m = FireModel (fbFuel, fbWater);
 		if (fbPlanet) scene->Jolt (fbPlanet, fbFoot, cbrt (m.Mp), R);
 	} else fbFoot += air * dt;
-	// its size: a third at once, grown by 0.25 t_f
-	double r = R * (0.3 + 0.7 * sqrt (std::min (u / 0.25, 1.0)));
+	// its size: a third at once, grown by 0.25 t_f, and on slowly after
+	// (the hot gas drawing air in: an eighth more by its burn-out - the
+	// envelope never shrinks; it burned out inside a ball that deflated)
+	double r = R * (0.3 + 0.7 * sqrt (std::min (u / 0.25, 1.0))) * (1.0 + 0.12 * std::max (0.0, u - 0.25));
 	fbRNow = r;
 	// drawn out along its path while the fuel is thrown on with the wreck:
-	// up to (1 + 0.5 v / 20 m/s) times as long, a ball again by 0.5 t_f
+	// up to (1 + 0.3 v / 20 m/s) times as long; its length along the path
+	// never contracts (fbAlong): it grows across to it as it burns
 	// (emitted along a line through its centre: ext, half the extra length)
-	double el = std::min (0.5 * fbV0 / 20.0, 1.5) * std::max (0.0, 1.0 - u / 0.5);
+	double el = std::min (0.3 * fbV0 / 20.0, 1.0) * std::max (0.0, 1.0 - u / 0.5);
+	fbAlong = std::max (fbAlong, r * (1.0 + el));
+	el = std::max (fbAlong / r - 1.0, 0.0);
 	VECTOR3 ext = fbDir * (r * el);
+	// its lean: the top of it carried on ahead of its foot by what is left
+	// of its momentum (the foot held back by the surface), a quarter of its
+	// height ahead at 20 m/s
+	{
+		VECTOR3 hv = (fbVel - air) - up * dotp (fbVel - air, up);
+		double lh = length (hv);
+		fbLean = lh > 1e-3 ? hv * (std::min (0.012 * lh, 0.35) / lh * std::min (1.0, 2.0 * lift + 0.3)) : _V(0, 0, 0); // (a third at most: at 60 m/s the ball tipped over)
+	}
 	// (the volume: its shape now; the vortex ring's turn so far, at about
 	// 1.4 sqrt (g / R) once lifted (its surface rolling at about its rise
 	// speed): the integral of its lift-off smoothstep over u)

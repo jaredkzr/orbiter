@@ -31,6 +31,8 @@ SCENES = {
     "sea":    ("fx_sea", dict(CRASH)),
     "land":   ("fx_land", dict(CRASH, GROUND_REL="1")),
     "night":  ("fx_night", dict(CRASH)),
+    # (the sea crash at 60 m/s: a longer loaf of fuel along the path - phase 4b)
+    "seafast": ("fx_sea", dict(CRASH, SPEED="60")),
     # (the sea crash from the other side: the observer south of it looking north, the sun (SSE, high) behind him:
     # the ball's sunlit side; "sea" sees its shade side)
     "sunside": ("fx_sea", dict(CRASH, CAM_X="170", CAM_PHI="97")),

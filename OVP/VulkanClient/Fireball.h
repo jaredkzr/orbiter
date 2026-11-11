@@ -42,6 +42,7 @@ public:
 		double roll = 0.0;    // [rad] the vortex ring's turn so far
 		double ground = -1e9; // [m] the ground (or sea) below its centre, along up (< 0: below; -1e9: far)
 		uint32_t seed = 0;
+		VECTOR3 lean{};       // view space: its top displaced per unit height (the momentum it keeps)
 		// in vacuum (PLAN.md 2.7): no ball - a thin hot shell of radius
 		// shell [m] and thickness width [m] expanding, white for a frame,
 		// then a pale vapour shell fading (r: the box's; t over tf = 0.4 s)

@@ -139,8 +139,10 @@ void main ()
 		// (and finer: about 1/25 of its radius, the flame's texture close up)
 		float df = (textureLod (shapeNoise, q * 6.1 + seed.yzx, 0.0).r - 0.67) * 6.8;
 		dn += 0.35 * df;
-		// (soot more: its small billows crisp - the cap's cauliflower)
-		float ero = clamp ((0.3 + 0.3 * dn) * (1.0 + 0.5 * A.z) * P.tune.z * (vac ? 0.5 : 1.0), 0.0, 0.95);
+		// (soot a little more: its small billows crisp - the cap's
+		// cauliflower; at 1.5x the sooty outer layer was eaten away as it
+		// spread and the silhouette shrank with the burn-out - phase 4b)
+		float ero = clamp ((0.3 + 0.3 * dn) * (1.0 + 0.2 * A.z) * P.tune.z * (vac ? 0.5 : 1.0), 0.0, 0.95);
 		float rho = clamp ((A.x - ero) / (1.0 - ero), 0.0, 1.0);
 		rho = smoothstep (0.0, 0.5, rho); // (a crisp edge to the billows: the density rising over a short way)
 		rho *= clamp ((tSurf - t) * soft, 0.0, 1.0);

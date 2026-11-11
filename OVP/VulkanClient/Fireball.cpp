@@ -26,6 +26,7 @@ struct FireballRenderer::Params { // fireball.glsl
 	float flow[4];    // ring's turn [rad], ring radius / r, churn, extinction scale
 	float tune[4];    // (ORBITER_VK_FIREBALL_TUNE)
 	float mode[4];    // vacuum shell (1), its radius [m], its width [m], its flash (0..1)
+	float asym[4];    // its lean (ball space xy, per unit height), the billows' outward drift [/ 0.9 r], -
 };
 
 namespace {
@@ -509,7 +510,7 @@ void FireballRenderer::Compute (VkDescriptorSet frameSet)
 		double half[3];
 		for (int k = 0; k < 3; k++) {
 			double c = (&ab.x)[k];
-			half[k] = 1.7 * r * sqrt (e * e * c * c + (1.0 - c * c));
+			half[k] = 1.85 * r * sqrt (e * e * c * c + (1.0 - c * c)); // (1.7 before phase 4b's lobes and the cap's widening)
 		}
 		// (the vacuum shell: a cube just holding it)
 		if (b.vacuum) half[0] = half[1] = half[2] = b.shell + 3.0 * b.width;
@@ -554,7 +555,12 @@ void FireballRenderer::Compute (VkDescriptorSet frameSet)
 		p.heat[3] = (float)std::clamp ((1.8 - u) / 0.5, 0.0, 1.0); // (the soot ball, rising, fading into the smoke volume's cap)
 		p.flow[0] = (float)b.roll;
 		p.flow[1] = 0.55f;
-		p.flow[2] = (float)(0.08 * b.t);
+		p.flow[2] = (float)(0.2 * b.t); // (boiling: the warp field drifting - 0.08 left the billows frozen in place)
+		// (phase 4b: its lean, and its billows carried outward with the hot
+		// gas - a third of its radius over t_f - so that they emerge from
+		// inside and push out, not a texture pinned to the surface)
+		p.asym[0] = (float)dotp (b.lean, ex), p.asym[1] = (float)dotp (b.lean, ey);
+		p.asym[2] = (float)(0.5 * u);
 		p.flow[3] = tuneSigma;
 		for (int k = 0; k < 4; k++) p.tune[k] = tune[k];
 		if (b.vacuum) {

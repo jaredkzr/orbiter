@@ -58,6 +58,9 @@ void main ()
 	// (in units of 0.9 r: its billows reach out to about 1.3 of the shape's
 	// radius - seen, it was a fifth larger than the model's ball)
 	vec3 x = p / (0.9 * r);
+	// its lean: the top carried on ahead of its foot (the shape evaluated
+	// behind: what is drawn here leans the other way)
+	x.xy -= P.asym.xy * max (x.z + 0.6, 0.0);
 	if (P.mode.x > 0.5) {
 		// in vacuum (PLAN.md 2.7): nothing holds the burning propellant
 		// together - a thin shell of it expanding, ragged by the noise,
@@ -76,7 +79,7 @@ void main ()
 	{   // (beyond the reach of its billows: nothing - the noise not sampled)
 		vec3 ax = P.axis.xyz;
 		vec3 xe = x - ax * (dot (x, ax) * (1.0 - 1.0 / P.shape.z));
-		xe.z /= 1.0 - 0.2 * P.shape.w;
+		xe.xy *= 1.0 - 0.12 * P.shape.w;
 		if (length (xe) > 1.9) {
 			imageStore (outA, id, vec4 (0.0));
 			imageStore (outC, id, vec4 (0.0));
@@ -96,10 +99,16 @@ void main ()
 	vec2 v = vec2 (rh - a, x.z + 0.1);
 	// (the turn saturating at about a radian: wound on, the noise was drawn
 	// out into rings round the core as it faded)
-	float ang = 1.1 * tanh (P.flow.x / 1.1) * exp (-dot (v, v) / 1.5);
+	// (lopsided: the roll stronger on one side of it, its ring off centre)
+	float az = atan (x.y, x.x) + 6.2832 * seed.x;
+	float ang = 1.1 * tanh (P.flow.x / 1.1) * exp (-dot (v, v) / 1.5) * (1.0 + 0.4 * sin (az));
 	float ca = cos (ang), sa = sin (ang);
 	vec2 v0 = vec2 (ca * v.x - sa * v.y, sa * v.x + ca * v.y);
 	vec3 q = vec3 (hd * (v0.x + a), v0.y - 0.1);
+	// its billows carried outward with the gas (the noise sampled nearer
+	// the centre as it ages: features emerge from inside and push out, not
+	// a texture scaled about the centre with its radius)
+	q -= q / max (length (q), 0.3) * P.asym.z;
 	// (boiling: the warp field drifts through the noise slowly)
 	float churn = P.flow.z;
 	vec3 qs = q * 0.3 + seed;
@@ -110,11 +119,30 @@ void main ()
 	vec3 ax = P.axis.xyz;
 	float xa = dot (x, ax);
 	vec3 xe = x - ax * (xa * (1.0 - 1.0 / e));
-	xe.z /= 1.0 - 0.2 * L;
+	// (flattened as it lifts off into a cap: by widening, an eighth across at
+	// full lift - squashing its height shrank the silhouette: phase 4b)
+	xe.xy *= 1.0 - 0.12 * L;
 	float d = length (xe);
 	// (its base drawn in from below: the inflow under the rising ring)
 	float rhe = length (xe.xy);
 	d += L * 0.5 * exp (-rhe * rhe / 0.2) * smoothstep (0.3, -0.9, xe.z);
+	// sub-lobes (phase 4b): three to five bursts of the fuel off its
+	// centre, most of them ahead along its path, of differing sizes, each
+	// igniting up to 0.2 t_f after the first and lifting unevenly - joined
+	// smoothly to the ball: no two fireballs alike, none a ball
+	for (int i = 0; i < 5; i++) {
+		vec4 h = fract (sin (vec4 (12.9898, 78.233, 45.164, 94.673) * (P.time.w * 0.173 + float (i) * 1.618 + 0.5)) * 43758.5453);
+		vec4 h2 = fract (sin (vec4 (63.726, 29.512, 81.337, 17.994) * (P.time.w * 0.091 + float (i) * 2.718 + 0.25)) * 24634.6345);
+		if (i >= 3 && h.w > 0.55) continue;
+		float g = sqrt (clamp ((u - 0.2 * h.x) / 0.25, 0.0, 1.0));
+		if (g <= 0.0) continue;
+		float ri = (0.35 + 0.3 * h.y) * g;
+		vec3 perp = normalize (cross (ax, vec3 (0.0, 0.0, 1.0)));
+		vec3 ci = ax * ((0.1 + 0.5 * h.z) * (h2.w < 0.7 ? 1.0 : -0.6)) + perp * (0.6 * h2.x - 0.3) + vec3 (0.0, 0.0, 0.4 * h2.y - 0.15 + L * (0.4 * h2.z - 0.1));
+		float di = length (xe - ci * g) / ri;
+		float k = 0.3, hh = clamp (0.5 + 0.5 * (di - d) / k, 0.0, 1.0);
+		d = mix (di, d, hh) - k * hh * (1.0 - hh);
+	}
 	// its billows: lobes, billows, cauliflower (the amplitude varying over
 	// it: some parts smoother, others ragged); ragged ahead while it is
 	// drawn out (the fuel's spray burning)

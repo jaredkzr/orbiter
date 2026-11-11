@@ -556,3 +556,64 @@ spacing floor (no beads), hot-piece trails, the quench, embers/smoulder, the hul
 to the flames, land pieces burning for t_w; the stem's WreckSmoke puffs draw as round dark
 discs below the cap (the sprites until they grow: a volumetric stem or larger, fewer puffs
 with a soft edge). The skirt's particles could use the same (a low mist sheet, not puffs).
+
+## Phase 4b (fireball animation: no contraction, asymmetric)
+
+The user's review of the phase 3 video (`phase3/anim/sea_anim.png`): from 0.4 to 1.2 s
+the silhouette shrank towards its centre with its features pinned to it (a balloon
+deflating), and the ball was a near-symmetric ellipsoid. Measured (`phase4b/silhouette.py`:
+the ball's share of the frame's upper part against time, `phase4b/silhouette.png`,
+`silhouette.txt`): phase 4 sea 16.5 % at 0.55 s down to 9.8 % at 1.2 s (-40 %); land 17 %
+to 11.6 %.
+
+Causes found and what changed (`VObjects.cpp`, `Fireball.cpp`, `fireball_grid.comp`,
+`fireball.frag`):
+- **Elongation contracting**: `el` fell to 0 by 0.5 t_f with r capped at R - the long axis
+  halved. Now the half length along the path never shrinks (`fbAlong`, the most so far);
+  the ball grows across to it. The elongation itself is 0.3 v / 20 m/s at most 1.0 (was 0.5
+  v / 20, at most 1.5).
+- **No growth after 0.25 t_f**: r grows on by 12 % per t_f after 0.25 t_f (entrainment):
+  1.13 R at burn-out, 1.19 R at 1.8 t_f. The grid box is 1.85 r (was 1.7).
+- **Burn-out eating the silhouette**: the march eroded sooty parts 1.5 x as much as the
+  flames (the cap's crisp cauliflower); as the outer layer turned to soot the envelope was
+  eaten from outside. Now 1.2 x.
+- **Lift-off squashing the height**: the cap's flattening divided z by (1 - 0.2 L): the
+  height fell 20 % at full lift. It is a widening of the horizontal axes now (1 / 0.88 at
+  full lift): the same oblateness by growth.
+- **Features pinned**: the noise coordinates were in units of r (scaled about the centre
+  with it) with a slow churn (0.08 t). Now the billows are carried outward (the noise
+  sampled nearer the centre as it ages: 0.5 u in units of 0.9 r, so they emerge from inside
+  and push out) and the warp field drifts at 0.2 t (boiling).
+- **Symmetry**: three to five sub-lobes (smooth union, k 0.3) off the centre, most of them
+  ahead along the path (0.1-0.6 r), of differing sizes (0.35-0.65 r), each igniting up to
+  0.2 t_f after the first and lifting unevenly, seeded from the fireball's seed; a lean of
+  the top ahead of the foot by the momentum it keeps (0.012 per m/s, a third at most: at
+  60 m/s the ball tipped over), growing in with the lift; the vortex ring's turn 40 %
+  stronger on one side (by azimuth, seeded).
+- Timings kept (full size 0.25 t_f, lift-off 0.35 t_f, t_f, R).
+
+### Verification (phase 4b)
+
+Strips at 0.1 s intervals from -0.1 s (`phase4b/strip.py`, 1080p video frames, the shake
+off for the measure): `phase4b/strip_before_{sea,land}.png` (phase 4's videos) and
+`phase4b/strip_after_{sea,land,seafast}.png` (`seafast`: the sea crash at 60 m/s, a longer
+loaf; no "before" of it: the phase 4 build is gone). The silhouette area never decreases
+before the soot fade: sea 10.3 % (0.3 s) rising to 20 % (1.9 s), a wobble of -2 % of the
+frame at 2.0-2.2 s (the lit grey top of the soot against the sky at the measure's
+threshold; the strips show no shrink), 20 % at 2.7 s; land 10.4 to 23 % monotonic (largest
+frame-to-frame drop -0.07 %); 60 m/s 11.6 to 24 % (-0.27 % at most). A/B at the standard
+times: `phase4b/ab_{sea,land}.png`. Perf (sea 1440p, `phase4b/perf1440`): march 0.61-0.68
+ms median (phase 4: 0.47-0.64; the ball is larger on screen and the box 9 % wider), grid
+unchanged (0.17), fb sum max 1.13 ms; crash median frame 20.34 vs 20.16 ms. Budget met.
+
+### Deviations and open items (phase 4b)
+
+- The soot ball at 2-3 s is larger than phase 4's (1.2-1.3 x across: `ab_sea.png` 3 s):
+  the growth and the cap's widening are on the envelope that the smoke volume's cap takes
+  over; the fire's own radius is the decision's R. If it reads too big, the 12 % growth and
+  the widening (0.12 L) are the two constants.
+- The silhouette measure is on video frames with the camera shake off (the jolt of phase 4
+  shifts the frame at 0.5-0.6 s and the difference mask reads it as area); the "before"
+  curves (phase 4's videos) have the jolt's blip at 0.63 s.
+- Wind: no lean from wind (no wind model in the particle system).
+- The lobes are in the shape only; the noise coordinates and the roll are the one ball's.
