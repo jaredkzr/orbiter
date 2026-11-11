@@ -27,6 +27,27 @@ namespace {
 	// not a hundred)
 	double Thrown (double v) { return 0.5 * v / (1.0 + v / 40.0); }
 
+	// the spray of all the bodies in the water at once, shared: a break-up's
+	// dozen pieces each splashing as a whole vessel took some 75 000
+	// particles, and everything else in view (the fireball) was thinned for
+	// it. Take: the fraction of want [particles] granted (lo at least) of
+	// cap, what was granted decaying over tau [s]; fewer, larger droplets
+	// (as the pool thins: sizes by k^-1/3)
+	struct Share {
+		double t = -1e30, used = 0.0;
+		double Take (double want, double cap, double tau, double lo)
+		{
+			double simt = oapiGetSimTime ();
+			used *= exp (-std::max (simt - t, 0.0) / tau), t = simt;
+			double k = want > 0.0 ? std::clamp ((cap - used) / want, lo, 1.0) : 1.0;
+			used += want * k;
+			return k;
+		}
+	};
+	Share burstShare, sheetShare;
+	constexpr double BURST_CAP = 6000.0;  // [particles] per density unit, decaying over 1.5 s
+	constexpr double SHEET_CAP = 3000.0;  // [particles/s] per density unit
+
 	// the ring of a burst is kept this long after its last emission at least [s]
 	constexpr double BURST_RING_LIFE = 8.0;
 }
@@ -148,8 +169,12 @@ void WaterSpray::Burst (const Frame &f, double v)
 	bool steep = f.vn > 4.0 && f.vn > 0.6 * f.vh;
 	if (steep) nCol = (uint32_t)(std::min (f.vn * (3.0 + 2.5 * L), 400.0 + 150.0 * L) * D);
 	if (f.vh > 6.0) nSide = (uint32_t)(std::min ((f.vh + 2.0 * v) * (2.0 + 1.5 * L), 500.0 + 150.0 * L) * D);
-	if (Log ()) oapiWriteLogV ("VulkanClient: splash: blow %.1f m/s (over the water %.1f, sinking %.1f), L %.1f m, footprint %.1f x %.1f m: crown %u, column %u, sides 2 x %u; %.1f m from the body",
-		v, f.vh, f.vn, L, 2.0 * f.a, 2.0 * f.b, nCrown, nCol, nSide, f.dist);
+	double share = burstShare.Take (nCrown + nCol + 2.0 * nSide, BURST_CAP * D, 1.5, 0.15);
+	double grow = std::pow (share, -1.0 / 3.0);
+	nCrown = (uint32_t)(nCrown * share), nCol = (uint32_t)(nCol * share), nSide = (uint32_t)(nSide * share);
+	sz *= grow;
+	if (Log ()) oapiWriteLogV ("VulkanClient: splash: blow %.1f m/s (over the water %.1f, sinking %.1f), L %.1f m, footprint %.1f x %.1f m: crown %u, column %u, sides 2 x %u (share %.2f); %.1f m from the body",
+		v, f.vh, f.vn, L, 2.0 * f.a, 2.0 * f.b, nCrown, nCol, nSide, share, f.dist);
 
 	bool crownOk = Reserve (sys, crown, 0.0, 5.0, nCrown + 2 * nSide);
 	// the crown: thrown up and out all round the footprint (from its edge),
@@ -236,10 +261,16 @@ void WaterSpray::Sheet (const Frame &f, double s)
 	double D = f.D, sz = f.sz;
 	const VECTOR3 &up = f.up, &fwd = f.fwd, &side = f.side;
 	double k = std::clamp ((s - 3.0) / 20.0, 0.0, 1.0);
+	double kt = std::clamp ((s - 12.0) / 25.0, 0.0, 1.0);
+	// (shared with the other bodies in the water: Share)
+	double sideRate = std::min ((8.0 + 5.0 * s) * (1.0 + 0.6 * b), 1500.0) * D; // [1/s] a side
+	double tailRate = std::min ((5.0 + 4.0 * s) * (1.0 + 0.5 * b), 1200.0) * kt * D;
+	double share = sheetShare.Take ((2.0 * sideRate + tailRate) * f.dt, SHEET_CAP * D * 0.5, 0.5, 0.15);
+	sideRate *= share, tailRate *= share, sz *= std::pow (share, -1.0 / 3.0);
 
 	// sheets off both sides of the footprint: up and out, falling back
 	{
-		double rate = std::min ((8.0 + 5.0 * s) * (1.0 + 0.6 * b), 1500.0) * D; // [1/s] a side
+		double rate = sideRate;
 		sheet.accum += 2.0 * rate * f.dt;
 		uint32_t n = (uint32_t)(0.5 * sheet.accum);
 		if (n && Reserve (sys, sheet, 2.0 * rate, 2.5, 0)) {
@@ -258,9 +289,8 @@ void WaterSpray::Sheet (const Frame &f, double s)
 		}
 	}
 	// fast: a rooster tail thrown up behind it
-	double kt = std::clamp ((s - 12.0) / 25.0, 0.0, 1.0);
 	if (kt > 0.0) {
-		double rate = std::min ((5.0 + 4.0 * s) * (1.0 + 0.5 * b), 1200.0) * kt * D;
+		double rate = tailRate;
 		tail.accum += rate * f.dt;
 		uint32_t n = (uint32_t)tail.accum;
 		if (n && Reserve (sys, tail, rate, 3.0, 0)) {

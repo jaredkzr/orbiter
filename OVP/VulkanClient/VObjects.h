@@ -214,9 +214,11 @@ private:
 	WaterSpray water;        // in the water: splash, spray, wake (from its water state)
 	// the fireball (Fireball): its flames, each cooling over its life (the
 	// particles' temperature ramp), its smoke rising from within; in vacuum
-	// an expanding shell, its vapour (fbSmoke)
-	Ring fbFire, fbSmoke;
+	// an expanding shell, its vapour (fbSmoke); its hot core (fbCore)
+	Ring fbFire, fbSmoke, fbCore;
 	double fbT0 = -1e30, fbDur = 0.0, fbR = 0.0; // [s] when it formed, how long it burns; [m] its size
+	double fbFuel = 0.0;       // [kg] its propellant (the pieces' of one break-up joined)
+	bool fbFlash = false;      // its flash still to come (the step after it formed)
 	VECTOR3 fbPos{}, fbVel{};  // its centre (global), velocity
 	void Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 &airVel, bool onWater);
 	void VacuumFlash (double dt, double R, const VECTOR3 &vel);

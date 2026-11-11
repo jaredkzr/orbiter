@@ -105,8 +105,9 @@ void main ()
 			// its age
 			float n = texture (detailNoise, vec3 (lq * 1.4 + vMisc.z * 5.1, vMisc.w * 0.7 + vMisc.z)).r * 0.6
 				+ texture (detailNoise, vec3 (lq * 3.6 - vMisc.z * 2.3, vMisc.w * 1.1 + 0.61)).r * 0.4;
+			// (a soft edge: a hard one cut each flame out as a disc)
 			float e = 0.06 + 0.6 * vMisc.w;
-			a *= smoothstep (e, e + 0.2, t.a + 0.8 * (n - 0.5));
+			a *= smoothstep (e, e + 0.35, t.a + 0.8 * (n - 0.5));
 		}
 	}
 	float zs = texelFetch (prepass, ivec2 (gl_FragCoord.xy), 0).w;
@@ -119,7 +120,15 @@ void main ()
 	if ((pc.flags & 32u) != 0u)
 		fog = textureLod (volInteg, vec3 (gl_FragCoord.xy / frame.jitter.zw, VolSlice (vPosView.z)), 0.0);
 	if (emissive) {
-		outColor = ParticleClass (vFlags) == PC_FIRE ? vec4 (3.0 * c * a * fog.a, min (a * (1.6 - 0.6 * smoothstep (0.0, 0.3, vMisc.w)) * (1.0 - smoothstep (0.75, 1.0, vMisc.w)), 0.9)) : vec4 (c * a * fog.a, 0.0); // additive (fire: brighter and partly opaque, hides the sky; its emission dims faster than its cover: dark red rims)
+		// additive; fire: brighter, and partly opaque (it hides the sky). A
+		// flame young is brightest; as it cools its light dims faster than
+		// its cover, which thickens: it turns to soot - dark rims round the
+		// ball, not see-through ones (the sky through them read as a pale
+		// lavender halo of puffs)
+		float age = vMisc.w;
+		float glow = mix (4.5, 3.0, smoothstep (0.0, 0.5, age));
+		float cover = a * (1.6 - 0.6 * smoothstep (0.0, 0.3, age)) * (1.0 + 0.6 * smoothstep (0.3, 0.75, age)) * (1.0 - smoothstep (0.88, 1.0, age));
+		outColor = ParticleClass (vFlags) == PC_FIRE ? vec4 (glow * c * a * fog.a, min (cover, 0.92)) : vec4 (c * a * fog.a, 0.0);
 		float lum = dot (c * a, vec3 (0.2126, 0.7152, 0.0722));
 		outReactive = clamp (lum / (1.0 + lum), 0.0, 0.9);
 	} else {
