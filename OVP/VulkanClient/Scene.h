@@ -425,6 +425,13 @@ private:
 	void WriteRTLightDescriptors ();
 	static void PlanetAlbedo (OBJHANDLE hp, float alb[3]);
 	bool cameraCut = true; // this frame does not continue the previous one
+	struct {
+		bool valid = false, have2 = false, inside = false;
+		OBJHANDLE target = nullptr;
+		int mode = -1;
+		VECTOR3 rel{}, rel2{}, fwd{}; // the camera from its target (this frame, the one before); its view direction
+	} cut_;
+	bool DetectCameraCut ();
 	void WriteSSRDescriptors ();
 	void WriteCityDescriptors ();
 	VkTexture *cityMap[3] = {}, *cityNone = nullptr;

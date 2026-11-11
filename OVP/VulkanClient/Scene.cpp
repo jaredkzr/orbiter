@@ -1132,6 +1132,35 @@ void Scene::Update ()
 // ======================================================================
 // Camera
 
+bool Scene::DetectCameraCut ()
+{
+	// (the global frame moves with the Sun's planets - a km a frame for one
+	// near Earth - so the camera is followed relative to its target: a cut
+	// is a change of target or mode, a jump off its course relative to the
+	// target, or a sudden turn: e.g. to a wreck as its vessel breaks up and
+	// back. History kept through one reprojects the old view as ghosts.)
+	OBJHANDLE tgt = oapiCameraTarget ();
+	int mode = oapiCameraMode ();
+	bool inside = oapiCameraInternal ();
+	VECTOR3 tp{};
+	if (tgt) oapiGetGlobalPos (tgt, &tp);
+	VECTOR3 rel = camPos - tp;
+	VECTOR3 fwd = { camRot.m13, camRot.m23, camRot.m33 };
+	bool cut = !havePrev || !cut_.valid || tgt != cut_.target || mode != cut_.mode || inside != cut_.inside;
+	if (!cut) {
+		// (on its course: as it moved last frame, relative to the target)
+		VECTOR3 pred = cut_.rel + (cut_.have2 ? cut_.rel - cut_.rel2 : VECTOR3{0, 0, 0});
+		double tol = std::max (20.0, 0.25 * std::max (length (rel), length (cut_.rel)));
+		if (length (rel - pred) > tol) cut = true;
+		else if (dotp (fwd, cut_.fwd) < cos (35.0 * RAD)) cut = true; // (a turn of more than 35 deg in a frame)
+	}
+	cut_.rel2 = cut_.rel, cut_.have2 = cut_.valid && !cut;
+	cut_.rel = rel, cut_.fwd = fwd, cut_.target = tgt, cut_.mode = mode, cut_.inside = inside, cut_.valid = true;
+	static const bool logCuts = getenv ("ORBITER_VK_CUT_LOG") != nullptr;
+	if (cut && logCuts) oapiWriteLogV ("VulkanClient: camera cut at frame %llu", (unsigned long long)frameNo);
+	return cut;
+}
+
 void Scene::UpdateCamera ()
 {
 	oapiCameraGlobalPos (&camPos);
@@ -2052,7 +2081,7 @@ void Scene::BeginFrame ()
 		ctx->GpuMark ("starselect");
 	}
 	// the previous frame does not continue into this one (camera cut)
-	cameraCut = !havePrev || length (camPos - prevCamPos) > 5e3;
+	cameraCut = DetectCameraCut ();
 
 	// sub-pixel projection jitter for temporal anti-aliasing (Halton 2, 3)
 	jitter[0] = jitter[1] = 0.0f;
