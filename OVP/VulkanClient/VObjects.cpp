@@ -4,6 +4,7 @@
 #include "VObjects.h"
 #include "WaterFx.h"
 #include "CrashFire.h"
+#include "Fireball.h"
 #include "GfxSettings.h"
 #include "ProcSurface.h"
 #include "SurfaceQuery.h"
@@ -1124,7 +1125,9 @@ void VDebris::Effects ()
 		if (simt != formedT) formed.clear (), formedT = simt;
 		VECTOR3 p0 = gpos - vel * dt;
 		VDebris *own = nullptr;
-		if (rho >= 1e-4)
+		// (ORBITER_VK_FIREBALL_NOJOIN=1, testing: a fireball per piece - several at once)
+		static const bool noJoin = getenv ("ORBITER_VK_FIREBALL_NOJOIN") && atoi (getenv ("ORBITER_VK_FIREBALL_NOJOIN"));
+		if (rho >= 1e-4 && !noJoin)
 			for (auto &o : formed) {
 				const DEBRISINFO &oi = o.first->info;
 				bool same = !strcmp (oi.source, info.source) && std::fabs (oi.created - info.created) < 0.05; // (one break-up)
@@ -1157,10 +1160,23 @@ void VDebris::Effects ()
 		static const bool fbLog = getenv ("ORBITER_VK_FIREBALL_LOG") != nullptr;
 		if (fbLog) oapiWriteLogV ("VulkanClient: fireball %s fuel %.0f kg (rho %.2f, water %d, v %.1f m/s)%s", info.name, info.fuel, rho, (int)onWater, length (vel - GroundVelocity (hp, gpos)), own ? " joins the first" : "");
 	}
-	if (fbTf > 0.0 && simt - fbT0 < 1.35 * fbTf) {
+	// (the volume's soot ball rises on to 1.8 t_f: FireballRenderer)
+	if (fbTf > 0.0 && simt - fbT0 < (fbVolume ? 1.85 : 1.35) * fbTf) {
 		VECTOR3 air = GroundVelocity (hp, fbPos); // (the air there: turning with the planet)
 		bool ignite = fbFlash;
 		Fireball (dt, rho, up, air, onWater);
+		{   // (the ground or the sea below its centre: the volume spreads on it)
+			double lng, lat, rad;
+			oapiGlobalToEqu (hp, fbPos, &lng, &lat, &rad);
+			vksurf::Point pt = vksurf::Query (scene, hp, lng, lat);
+			double h = rad - oapiGetSize (hp) - (pt.IsWater () ? 0.0 : pt.elev);
+			fbGround = h < 4.0 * fbR ? -h : -1e9;
+			if (fbRaise < 0.0) fbRaise = std::clamp (0.7 - h / std::max (fbR, 1.0), 0.0, 0.7);
+			static const bool fbLog = getenv ("ORBITER_VK_FIREBALL_LOG") != nullptr;
+			double ta = simt - fbT0;
+			if (fbLog && floor (ta / 0.5) != floor ((ta - dt) / 0.5))
+				oapiWriteLogV ("VulkanClient: fireball at +%.2f s: r %.1f m, centre %.1f m above the surface, rising %.1f m/s", ta, fbRNow, h, dotp (fbVel - air, up));
+		}
 		// as it ignites (its pieces joined): the fuel spilled where it fell
 		// burns on as it lifts off (a fireball formed near the ground or the
 		// sea; not one in mid-air)
@@ -1406,11 +1422,19 @@ void VDebris::Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 
 	// and dark red as they age and break up into tongues (the flames'
 	// textures by temperature: Scene::FireballTexture); its core: small,
 	// bright, short-lived flames near the centre while it burns hard
+	// (marched as a volume, FireballRenderer, when large enough on screen:
+	// its flames and flash are the volume's, not sprites; the soot cap
+	// grows inside it as it burns out and takes over from it)
 	ParticleSystem *sys = scene->Particles ();
 	double D = sys->density, sz = std::pow (D, -1.0 / 3.0);
 	double t = oapiGetSimTime () - fbT0, tf = std::max (fbTf, 1e-3), u = t / tf;
 	double R = fbR;
 	static const bool fbLog = getenv ("ORBITER_VK_FIREBALL_LOG") != nullptr;
+	FireballRenderer *fr = scene->Fireballs ();
+	bool vol = fr && fr->WantsVolume (id, R, length (fbPos - scene->CameraPos ()));
+	if (vol != fbVolume && fbLog) oapiWriteLogV ("VulkanClient: stage fireball at +%.2f s: %s", t, vol ? "volume" : "sprites");
+	fbVolume = vol;
+	fbUp = up;
 	// (the flash on its second step - the pieces' shares joined it by then)
 	bool flash = fbFlash && t > 0.0;
 	if (flash) {
@@ -1431,14 +1455,16 @@ void VDebris::Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 
 		while (fbStage < 5 && u >= at[fbStage]) { oapiWriteLogV ("VulkanClient: stage fireball at +%.2f s (u %.2f): %s", t, u, what[fbStage]); fbStage++; }
 	}
 	// its centre: carried on by its momentum, braked gently by the air,
-	// rising once it lifts off (a buoyant ball of hot gas, some 0.5 sqrt(g R))
+	// rising once it lifts off (a buoyant ball of hot gas, some 0.75 sqrt(g R):
+	// 14 m/s for R 35 m - at 0.5 the volume's ball had hardly left the sea
+	// by the time it burned out)
 	double brake = FIREBALL_BRAKE * std::min (rho / 0.01, 1.0);
 	double slow = FIREBALL_SLOWDOWN * std::min (rho / 0.01, 1.0); // (its flames')
 	fbVel = air + (fbVel - air) * exp (-brake * dt);
 	double lift = std::clamp ((u - 0.35) / 0.25, 0.0, 1.0);
 	lift = lift * lift * (3.0 - 2.0 * lift);
 	if (lift > 0.0) {
-		double rise = 0.5 * sqrt (9.81 * R) * lift;
+		double rise = 0.75 * sqrt (9.81 * R) * lift;
 		VECTOR3 rel = fbVel - air;
 		fbVel += up * ((rise - dotp (rel, up)) * (1.0 - exp (-3.0 * dt)));
 	}
@@ -1452,12 +1478,22 @@ void VDebris::Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 
 	// (emitted along a line through its centre: ext, half the extra length)
 	double el = std::min (0.5 * fbV0 / 20.0, 1.5) * std::max (0.0, 1.0 - u / 0.5);
 	VECTOR3 ext = fbDir * (r * el);
+	// (the volume: its shape now; the vortex ring's turn so far, at about
+	// 1.4 sqrt (g / R) once lifted (its surface rolling at about its rise
+	// speed): the integral of its lift-off smoothstep over u)
+	fbEl = 1.0 + el, fbLift = lift;
+	{
+		const double a = 0.35, b = 0.6;
+		double x = std::clamp ((u - a) / (b - a), 0.0, 1.0);
+		double I = (b - a) * (x * x * x - 0.5 * x * x * x * x) + std::max (0.0, u - b);
+		fbRoll = 1.4 * sqrt (9.81 / std::max (R, 1.0)) * tf * I;
+	}
 	// (a line source: p0 a step back along its velocity - Emit's convention,
 	// the particles at the end of the step spread evenly from -ext to +ext)
 	VECTOR3 e0 = fbPos - ext - fbVel * dt, e1 = fbPos + ext;
 	if (!fbFire.tex) fbFire.tex = scene->FireballTexture (4), fbFire.emissive = true;
 	// the flash: a few large white-hot sprites, gone within a fifth of a second
-	if (flash) {
+	if (flash && !vol) {
 		if (!fbFlashR.tex) fbFlashR.tex = scene->FireballTexture (0), fbFlashR.emissive = true;
 		ParticleSystem::Emission e{};
 		e.p0 = fbPos - fbVel * dt, e.p1 = fbPos, e.vel = fbVel, e.dir = -up, e.dt = dt;
@@ -1471,7 +1507,7 @@ void VDebris::Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 
 		e.cls = ParticleSystem::Class::Fire;
 		Emit (fbFlashR, e, 5, e.lifetime, true);
 	}
-	if (u < 1.0) {
+	if (u < 1.0 && !vol) {
 		// (dim each and tinted towards orange: they overlap by the dozen.
 		// Brighter while it burns hard (the first half), dimmer as it dies)
 		// (particles by its size; many smaller ones: a few hundred large
@@ -1530,29 +1566,36 @@ void VDebris::Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 
 	// its soot cap: from its upper half from 0.4 t_f, as it lifts off and
 	// burns out, rising on with it for most of a minute and spreading (the
 	// stem below it: the spill's, CrashFires)
-	if (u > 0.4 && u < 1.3) {
+	// (the volume: from inside its upper half from 0.55 t_f, hidden in it
+	// while it is opaque; as it burns out and fades the cap is there, the
+	// volume's soot passing into the smoke volume's)
+	double uEnd = vol ? 1.8 : 1.3;
+	if (u > (vol ? 0.55 : 0.4) && u < uEnd) {
 		if (!fbSmoke.tex) fbSmoke.tex = sys->SmokeTexture ();
 		FireballModel fm = FireModel (fbFuel, fbWater);
-		double total = std::clamp (4.0 * R * D, 8.0 * D, 100.0 * D);
-		double w = std::clamp ((u - 0.4) / 0.25, 0.0, 1.0);
-		double k = w * w * (3.0 - 2.0 * w) * std::min (1.0, (1.3 - u) * 3.0);
-		fbSmoke.accum += total / (0.75 * tf) * k * dt;
+		double total = std::clamp ((vol ? 6.0 : 4.0) * R * D, 8.0 * D, (vol ? 150.0 : 100.0) * D); // (the volume's: filling its soot ball)
+		double w = vol ? std::clamp ((u - 0.55) / 0.3, 0.0, 1.0) : std::clamp ((u - 0.4) / 0.25, 0.0, 1.0);
+		double k = w * w * (3.0 - 2.0 * w) * std::min (1.0, (uEnd - u) * 3.0);
+		fbSmoke.accum += total / ((uEnd - 0.55) * tf) * k * dt;
 		uint32_t n = (uint32_t)fbSmoke.accum;
 		fbSmoke.accum -= n;
 		if (n) {
 			ParticleSystem::Emission m{};
-			VECTOR3 top = up * (0.6 * r); // (its top: wrapping the fire, not hidden in it)
+			// (its top: wrapping the fire, not hidden in it; the volume's: inside
+			// it, about its centre as drawn - raised above where it formed)
+			VECTOR3 top = up * (vol ? (std::max (fbRaise, 0.0) + 0.1) * r : 0.6 * r);
 			m.p0 = fbPos + top - fbVel * dt, m.p1 = fbPos + top, m.vel = fbVel + up * 2.5, m.dir = -up, m.dt = dt;
 			// (braked gently: it keeps the ball's rise and goes on rising,
 			// hot, in a plume - braked as hard as the flames it hung there
 			// as a black ball)
 			// (large, little spread: one cap, not a scatter of puffs)
-			m.v0 = 0.05 * R, m.spread = 0.3 * r;
+			m.v0 = 0.05 * R, m.spread = (vol ? 0.7 : 0.3) * r;
 			m.lifetime = std::clamp (0.8 * fm.soot, 12.0, 90.0);
-			m.size = 0.8 * r * sz, m.growth = 2.0 * R / m.lifetime * sz;
+			// (the volume's: as large as its soot ball, to take it over)
+			m.size = (vol ? 1.15 : 0.8) * r * sz, m.growth = (vol ? 2.5 : 2.0) * R / m.lifetime * sz;
 			m.alpha = 0.7, m.slowdown = 0.5;
 			m.tinted = true, m.volumetric = true;
-			m.albedo[0] = m.albedo[1] = m.albedo[2] = 0.1f; // (soot: a dark grey, lit on top; on the sea too)
+			m.albedo[0] = m.albedo[1] = m.albedo[2] = vol ? 0.07f : 0.1f; // (soot: a dark grey, lit on top; on the sea too. The volume's: as dark as its soot ball)
 			m.cls = ParticleSystem::Class::FireballSmoke;
 			Emit (fbSmoke, m, n, m.lifetime);
 		}
@@ -1763,6 +1806,31 @@ void VDebris::CollectLights (std::vector<LightSource> &lights)
 		if (b > I) I = b, range = 8.0 * std::max (size, 1.0);
 	}
 	if (I > 0.01f) add (gpos, I, fireCol, range, 0.0, 0.0);
+}
+
+void VDebris::CollectFireballs (FireballRenderer &fr)
+{
+	// its fireball in air, marched as a volume (VDebris::Fireball decided:
+	// large enough on screen), until its soot ball has passed to the smoke
+	// volume (1.8 t_f). Its age by the simulation time: frozen while paused
+	if (fbTf <= 0.0 || !fbVolume) return;
+	double t = oapiGetSimTime () - fbT0;
+	if (t < 0.0 || t > 1.8 * fbTf || fbRNow <= 0.0) return;
+	FireballRenderer::Ball b;
+	b.owner = id;
+	// (formed on the ground or the sea: a ball resting on it, not a dome cut
+	// by it - its centre raised to 0.7 r above where it formed, rising on
+	// from there)
+	double raise = std::max (fbRaise, 0.0) * fbRNow;
+	b.centre = scene->ViewPos (fbPos + fbUp * raise);
+	b.up = scene->ViewDir (fbUp);
+	b.axis = scene->ViewDir (length (fbDir) > 0.5 ? fbDir : fbUp);
+	b.r = fbRNow, b.R = fbR;
+	b.t = t, b.tf = fbTf;
+	b.elong = fbEl, b.lift = fbLift, b.roll = fbRoll;
+	b.ground = fbGround > -1e8 ? fbGround - raise : -1e9;
+	b.seed = serial * 2654435761u;
+	fr.Add (b);
 }
 
 void VDebris::DrawParticles ()

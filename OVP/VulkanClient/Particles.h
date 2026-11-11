@@ -172,6 +172,14 @@ public:
 	/// by DrawRetired (the last call)
 	void Draw (uint32_t first, uint32_t capacity, VkTexture *tex, bool emissive, VkDescriptorSet frameSet);
 
+	/// the smoke volume's integral (smoke in front of each froxel: light,
+	/// transmittance) this frame, its sampler (general layout); false: no volume
+	bool VolumeFog (VkImageView &view, VkSampler &sampler) const;
+	/// the crash fireballs' occlusion (FireballRenderer::OcclusionView): the
+	/// sprites behind them hidden by their opacity (set when made; the GPU idle)
+	void SetFireballOcclusion (VkImageView view);
+	/// the fireballs were marched this frame (their occlusion valid)
+	bool fireballOcc = false;
 	/// billowing smoke puffs (four in the quadrants)
 	VkTexture *SmokeTexture () const { return smokeTex; }
 	/// drag of exhaust gas in air [1/s] at density rho [kg/m^3]: it takes
@@ -223,7 +231,7 @@ private:
 	static constexpr int SMOKE_NOISE_SIZE = 64;   // the smoke volume's erosion noise (texels a side; mips)
 	vkc::Image smokeNoise;
 	VkSampler smokeNoiseSampler = VK_NULL_HANDLE;
-	VkImageView shapeView = VK_NULL_HANDLE, detailView = VK_NULL_HANDLE, prepassView = VK_NULL_HANDLE;
+	VkImageView shapeView = VK_NULL_HANDLE, detailView = VK_NULL_HANDLE, prepassView = VK_NULL_HANDLE, fbOccView = VK_NULL_HANDLE;
 	VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
 	VkDescriptorPool dpool = VK_NULL_HANDLE;
 	VkDescriptorSet sets[vkc::FRAMES_IN_FLIGHT] = {};

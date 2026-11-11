@@ -1,0 +1,62 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Crash fireballs (Fireball.cpp): the optical depth of each fireball's grid
+// cell towards the sun (its self-shadowing: the sunlit side bright, the far
+// side dark) and towards the sky above (its underside darker in the
+// ambient light), marched through its grid (A: fireball_grid.comp).
+// Out: B (sun, sky optical depth; half the grid's resolution)
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+#include "frame.glsl"
+#define FB_SET 1
+#define FB_BINDING 6
+#include "fireball.glsl"
+
+layout(set = 1, binding = 1, rg16f) uniform writeonly image3D outB;
+layout(set = 1, binding = 3) uniform sampler3D gridA;
+
+layout(push_constant) uniform Pass {
+	uint base;
+	uint count;
+} pc;
+
+// optical depth from p (ball space) along unit direction dir, up to the box
+float Depth (FireballParams P, vec3 p, vec3 dir, int nMax)
+{
+	vec3 size = P.boxMax.xyz - P.boxMin.xyz;
+	// (to the box's exit)
+	vec3 inv = 1.0 / mix (dir, vec3 (1e-6), lessThan (abs (dir), vec3 (1e-6)));
+	vec3 tb = max ((P.boxMin.xyz - p) * inv, (P.boxMax.xyz - p) * inv);
+	float tExit = min (min (tb.x, tb.y), tb.z);
+	// (steps of about a cell and a half)
+	float cell = min (min (size.x / float (FB_GX), size.y / float (FB_GY)), size.z / float (FB_GZ));
+	int n = clamp (int (ceil (tExit / (1.5 * cell))), 1, nMax);
+	float dt = tExit / float (n), tau = 0.0;
+	float r = P.shape.x;
+	for (int i = 0; i < n; i++) {
+		vec3 x = p + dir * ((float (i) + 0.5) * dt);
+		vec4 A = textureLod (gridA, FbGridCoord ((x - P.boxMin.xyz) / size, P.boxMin.w), 0.0);
+		tau += A.x * (FB_SIGMA_FLAME + FB_SIGMA_SOOT * A.z) * P.flow.w * P.heat.w;
+		if (tau * dt / r > 12.0) break;
+	}
+	return tau * dt / r;
+}
+
+void main ()
+{
+	ivec3 id = ivec3 (gl_GlobalInvocationID);
+	uint k = uint (id.z / FB_BZ);
+	if (k >= pc.count || id.x >= FB_BX || id.y >= FB_BY) return;
+	FireballParams P = fireballs[pc.base + k];
+	vec3 uvw = (vec3 (id.x, id.y, id.z % FB_BZ) + 0.5) / vec3 (FB_BX, FB_BY, FB_BZ);
+	vec3 p = mix (P.boxMin.xyz, P.boxMax.xyz, uvw);
+	vec3 sun = normalize (mat3 (P.toBall) * frame.sunDir.xyz);
+	float ts = Depth (P, p, sun, 64);
+	float tu = Depth (P, p, vec3 (0.0, 0.0, 1.0), 32);
+	imageStore (outB, id, vec4 (ts, tu, 0.0, 0.0));
+}

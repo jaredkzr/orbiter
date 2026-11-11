@@ -260,6 +260,8 @@ public:
 	class WaterFx *Water () { return waterFx.get(); }
 	/// crash-site fires: the fuel spilled by a crash burning where it fell (CrashFire.h)
 	class CrashFires *Fires () { return crashFires.get(); }
+	/// crash fireballs as volumes (Fireball.h; null: sprites, ORBITER_VK_FIREBALL=sprites)
+	class FireballRenderer *Fireballs ();
 	/// reentry plasma sheaths (null: off)
 	class PlasmaRenderer *Plasma () { return plasma && plasma->enabled ? plasma.get() : nullptr; }
 	/// particle textures of fires and sparks (made when first needed)
@@ -449,6 +451,7 @@ private:
 	std::unique_ptr<class GroundTracks> tracks;
 	std::unique_ptr<class WaterFx> waterFx;
 	std::unique_ptr<class CrashFires> crashFires;
+	std::unique_ptr<class FireballRenderer> fireballs;
 	std::unique_ptr<PlumeRenderer> plumes;
 	std::unique_ptr<class PlasmaRenderer> plasma;
 	std::unique_ptr<class ParticleSystem> particles;

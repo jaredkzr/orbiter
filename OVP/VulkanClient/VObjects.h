@@ -39,6 +39,8 @@ public:
 	virtual void CollectLights (std::vector<LightSource> &lights) {}
 	/// engine plumes of this frame (before the prepass)
 	virtual void CollectPlumes (class PlumeRenderer &pr) {}
+	/// crash fireballs of this frame, marched as volumes (before the prepass)
+	virtual void CollectFireballs (class FireballRenderer &fr) {}
 	/// particles of the object's own (engine smoke), in the scene with the reactive mask
 	virtual void DrawParticles () {}
 	/// reentry plasma sheath (heated vessels), in the scene with the reactive mask
@@ -193,6 +195,7 @@ public:
 	void RenderShadow (ShadowMap &sm) override;
 	void CollectLights (std::vector<LightSource> &lights) override;
 	void DrawParticles () override;
+	void CollectFireballs (class FireballRenderer &fr) override;
 
 private:
 	DWORD serial;
@@ -232,6 +235,13 @@ private:
 	double fbV0 = 0.0;         // [m/s] how fast (relative to the air), as it ignited
 	VECTOR3 fbFlashPos{};      // where it ignited (the flash's light; moving with the air)
 	double fbFuelW = 0.0;      // (the pieces' velocities weighted by their propellant: fbVel)
+	// its shape now (the volume: FireballRenderer): drawn out along its path
+	// (>= 1), lifting off (0..1), the vortex ring's turn [rad], the ground
+	// below its centre [m] (along up: < 0 below), the local vertical
+	double fbEl = 1.0, fbLift = 0.0, fbRoll = 0.0, fbGround = -1e9;
+	double fbRaise = -1.0;     // its centre raised above where it formed (/ r: on the ground, a ball resting on it; -1: not known yet)
+	VECTOR3 fbUp{ 0, 1, 0 };
+	bool fbVolume = false;     // marched as a volume this step (its flame sprites left out)
 	void Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 &airVel, bool onWater);
 	void VacuumFlash (double dt, double R, const VECTOR3 &vel);
 	// a burning wreck at rest on the ground: a rising column of smoke, and

@@ -385,7 +385,8 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		{ 38, SI, 1, CS, nullptr }, { 39, SI, 1, CS, nullptr }, { 40, SI, 1, CS, nullptr },
 		{ 41, CI, 1, FS, nullptr }, { 42, CI, 1, FS, nullptr }, { 43, CI, 1, FS, nullptr },
 		{ 44, CI, 1, CS, nullptr }, // (the smoke volume's erosion noise)
-		{ 45, SI, 1, CS, nullptr }, { 46, SI, 1, CS, nullptr }, { 47, CI, 1, CS, nullptr } }; // (the local lights' occlusion: the fine grid's extinction)
+		{ 45, SI, 1, CS, nullptr }, { 46, SI, 1, CS, nullptr }, { 47, CI, 1, CS, nullptr }, // (the local lights' occlusion: the fine grid's extinction)
+		{ 48, CI, 1, FS, nullptr } }; // (the crash fireballs' occlusion: FireballRenderer)
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
 	lci.bindingCount = (uint32_t)b.size (), lci.pBindings = b.data ();
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &setLayout));
@@ -1717,12 +1718,34 @@ void ParticleSystem::DrawSprites (VkDescriptorSet frameSet)
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawBlend);
 	VkDescriptorSet s[3] = { frameSet, sets[fi], texSets[fi] };
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawLayout, 0, 3, s, 0, nullptr);
-	uint32_t flags = (smokeMode == SMOKE_SCREEN || (smokeMode == SMOKE_VOLUME && volAlloc) ? 8u : 0u) | (smokeMode == SMOKE_VOLUME && volActive && volAlloc ? 32u : 0u);
+	uint32_t flags = (smokeMode == SMOKE_SCREEN || (smokeMode == SMOKE_VOLUME && volAlloc) ? 8u : 0u) | (smokeMode == SMOKE_VOLUME && volActive && volAlloc ? 32u : 0u)
+		| (fireballOcc && fbOccView ? 64u : 0u);
 	struct { uint32_t count, flags; float alpha, pad; float body[12]; } pc{ sortN[fi], flags, 1.0f, 0.0f, {} };
 	memcpy (pc.body, drawBody, sizeof(drawBody));
 	vkCmdPushConstants (cmd, drawLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 	vkCmdDrawIndirect (cmd, drawArgs[fi].buffer, 0, 1, 4 * sizeof(uint32_t));
 	drawPending = false;
+}
+
+bool ParticleSystem::VolumeFog (VkImageView &view, VkSampler &sampler) const
+{
+	if (!enabled || smokeMode != SMOKE_VOLUME || !volActive || !volAlloc || idle || !volInteg.view) return false;
+	view = volInteg.view, sampler = volSampler;
+	return true;
+}
+
+void ParticleSystem::SetFireballOcclusion (VkImageView view)
+{
+	if (view == fbOccView) return;
+	vkDeviceWaitIdle (ctx->device); // (the sets may be in use)
+	fbOccView = view;
+	VkDescriptorImageInfo ii{ volSampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+	for (uint32_t i = 0; i < vkc::FRAMES_IN_FLIGHT; i++) {
+		VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+		w.dstSet = sets[i], w.dstBinding = 48, w.descriptorCount = 1;
+		w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, w.pImageInfo = &ii;
+		vkUpdateDescriptorSets (ctx->device, 1, &w, 0, nullptr);
+	}
 }
 
 void ParticleSystem::DrawVolume (VkDescriptorSet frameSet)

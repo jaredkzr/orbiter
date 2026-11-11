@@ -19,6 +19,7 @@
 #include "ParticleStream.h"
 #include "PostFX.h"
 #include "Plumes.h"
+#include "Fireball.h"
 #include <cmath>
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
@@ -381,6 +382,11 @@ void VulkanClient::clbkRenderScene ()
 			double fl = 0.0;
 			if (PlumeRenderer *pr = scene->Plumes ())
 				fl = std::min (pr->SolidAngle () * scene->ProjX () * scene->ProjY () / 4.0, 0.9);
+			// (a crash fireball counts partly: the brightest 60 % of it left
+			// out, the rest metered - a mild darkening around it at night, not
+			// blinding; its hot core blown out)
+			if (FireballRenderer *fb = scene->Fireballs ())
+				fl = std::min (fl + 0.6 * fb->ScreenShare (), 0.9);
 			postfx->meterFlames = (float)(fl * night);
 		}
 		if (fill > 0.0 && !disc) {

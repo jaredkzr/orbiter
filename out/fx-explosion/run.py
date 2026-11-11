@@ -2,7 +2,7 @@
 """Explosion harness: a crash scene run offscreen (orbctl, lockstep 30 fps), stills
 re-based on the break-up, a labelled contact sheet; optionally a video and frame times.
 
-  run.py SCENE OUTDIR [--video PRE POST] [--ft] [--size WxH] [--times t,t,...] [--tag NAME]
+  run.py SCENE OUTDIR [--video PRE POST] [--ft] [--size WxH] [--times t,t,...] [--tag NAME] [--pausecheck T]
 
 SCENE: sea land night small large midair vacuum (SCENES below). The break-up is the
 first frame with 3 pieces of debris or more (oapi.get_debriscount(): a piece or two
@@ -31,6 +31,8 @@ SCENES = {
     "sea":    ("fx_sea", dict(CRASH)),
     "land":   ("fx_land", dict(CRASH, GROUND_REL="1")),
     "night":  ("fx_night", dict(CRASH)),
+    # (the sea crash from 60 m aside, 72 m from the crash, a wider view: the fireball's surface close up)
+    "close":  ("fx_sea", dict(CRASH, CAM_X="-60", CAM_Z="39", CAM_FOV="70", CAM_THT="16", CAM_PHI="-72")),
     "small":  ("fx_small", dict(CRASH, SPEED="70", DIVE="15", CAM_X="-120", CAM_Z="150", CAM_Y="5")),
     "large":  ("fx_large", dict(CRASH, SPEED="60", ALT="60", CAM_X="-600", CAM_Z="250", CAM_Y="20", CAM_THT="8", CAM_PHI="-100")),
     # (two DGs collide at 300 m, 150 m/s: a ground observer 250 m aside, 60 m below)
@@ -75,6 +77,7 @@ def main():
     a = sys.argv[1:]
     scene, outdir = a[0], os.path.abspath(a[1])
     video, ft, size, times, tag = None, False, "1280x720", TIMES, None
+    pausecheck = None  # (s after the break-up: paused there, three frames apart, OUTDIR/pause_N.png)
     i = 2
     while i < len(a):
         if a[i] == "--video": video = (float(a[i + 1]), float(a[i + 2])); i += 2
@@ -82,6 +85,7 @@ def main():
         elif a[i] == "--size": size = a[i + 1]; i += 1
         elif a[i] == "--times": times = [float(x) for x in a[i + 1].split(",")]; i += 1
         elif a[i] == "--tag": tag = a[i + 1]; i += 1
+        elif a[i] == "--pausecheck": pausecheck = float(a[i + 1]); i += 1
         i += 1
     scn, env = SCENES[scene]
     shutil.rmtree(outdir, ignore_errors=True)
@@ -128,6 +132,10 @@ def main():
                     ring = []
                 elif frame > 60 * FPS:
                     print("no break-up in 60 s"); break
+            if tb is not None and pausecheck is not None and frame == tb + round(pausecheck * FPS):
+                req("lua oapi.set_pause(true)")
+                for k in range(3):
+                    req("wait 4"); req("screenshot " + os.path.join(outdir, f"pause_{k}.png"))
             if tb is not None:
                 req("lua oapi.set_pause(false)")
                 if frame - tb > end * FPS: break

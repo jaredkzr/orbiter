@@ -22,11 +22,12 @@
 layout(set = 1, binding = 3) uniform sampler3D detailNoise;
 layout(set = 1, binding = 4) uniform sampler2D prepass; // view depth (w; 0: none)
 layout(set = 1, binding = 23) uniform sampler3D volInteg; // smoke in front: light (rgb), transmittance (a)
+layout(set = 1, binding = 48) uniform sampler2D fbOcc;    // crash fireballs (fireball.frag): 1/depth where they begin (r), turn opaque (g), transmittance (a)
 layout(set = 2, binding = 0) uniform sampler2D ptex[32];  // the rings' textures (ringInfo bits 0-7)
 
 layout(push_constant) uniform Draw {
 	uint count;
-	uint flags;   // 32: fogged by the smoke volume (gpuparticle.vert)
+	uint flags;   // 32: fogged by the smoke volume (gpuparticle.vert), 64: hidden behind crash fireballs
 	float alpha;
 	float pad;
 	vec4 bodyPos, bodyVel, omega; // (vertex shader)
@@ -119,6 +120,17 @@ void main ()
 	vec4 fog = vec4 (0.0, 0.0, 0.0, 1.0);
 	if ((pc.flags & 32u) != 0u)
 		fog = textureLod (volInteg, vec3 (gl_FragCoord.xy / frame.jitter.zw, VolSlice (vPosView.z)), 0.0);
+	// behind a crash fireball (drawn before the sprites, over the scene):
+	// hidden by its opacity at this depth, from where it begins to where
+	// it turns opaque
+	float hide = 1.0;
+	if ((pc.flags & 64u) != 0u) {
+		vec4 o = textureLod (fbOcc, gl_FragCoord.xy / frame.jitter.zw, 0.0);
+		if (o.r > 0.0) {
+			float zi = 1.0 / o.r, zo = max (1.0 / max (o.g, 1e-6), zi + 0.01);
+			hide = mix (1.0, o.a, smoothstep (zi, zo, vPosView.z));
+		}
+	}
 	if (emissive) {
 		// additive; fire: brighter, and partly opaque (it hides the sky). A
 		// flame young is brightest; as it cools its light dims faster than
@@ -128,11 +140,11 @@ void main ()
 		float age = vMisc.w;
 		float glow = mix (4.5, 3.0, smoothstep (0.0, 0.5, age));
 		float cover = a * (1.6 - 0.6 * smoothstep (0.0, 0.3, age)) * (1.0 + 0.6 * smoothstep (0.3, 0.75, age)) * (1.0 - smoothstep (0.88, 1.0, age));
-		outColor = ParticleClass (vFlags) == PC_FIRE ? vec4 (glow * c * a * fog.a, min (cover, 0.92)) : vec4 (c * a * fog.a, 0.0);
+		outColor = (ParticleClass (vFlags) == PC_FIRE ? vec4 (glow * c * a * fog.a, min (cover, 0.92)) : vec4 (c * a * fog.a, 0.0)) * hide;
 		float lum = dot (c * a, vec3 (0.2126, 0.7152, 0.0722));
 		outReactive = clamp (lum / (1.0 + lum), 0.0, 0.9);
 	} else {
-		outColor = vec4 (a * (c * fog.a + fog.rgb), a);
+		outColor = vec4 (a * (c * fog.a + fog.rgb), a) * hide;
 		outReactive = clamp (a, 0.0, 0.9);
 	}
 }

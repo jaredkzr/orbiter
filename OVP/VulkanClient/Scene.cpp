@@ -13,6 +13,7 @@
 #include "GroundTracks.h"
 #include "WaterFx.h"
 #include "CrashFire.h"
+#include "Fireball.h"
 #include "EnvProbe.h"
 #include "VObjects.h"
 #include "PlanetSurface.h"
@@ -322,6 +323,9 @@ bool Scene::Init ()
 	particles = std::make_unique<ParticleSystem>();
 	particles->Init (ctx, gc->TexMgr(), frameLayout, atm->SetLayout(), gc->TexMgr()->Layout(), vclouds->ShapeNoiseView (), vclouds->DetailNoiseView ());
 	if (rt->Enabled ()) particles->InitRT (frameLayout, rt->SetLayout(), rt->TextureLayout(), atm->SetLayout());
+	fireballs = std::make_unique<FireballRenderer>();
+	fireballs->Init (ctx, frameLayout, atm->SetLayout(), vclouds->ShapeNoiseView (), vclouds->DetailNoiseView ());
+	particles->SetFireballOcclusion (fireballs->OcclusionView ());
 	plumes->rayCast = [this](uint32_t owner, const VECTOR3 &vo, const VECTOR3 &vd, double maxDist, double &t, VECTOR3 &vn, int *kind) {
 		VECTOR3 o = camPos + mul (camRot, vo), d = mul (camRot, vd);
 		bool found = false;
@@ -501,6 +505,8 @@ void Scene::Shutdown ()
 	if (taa) taa->Shutdown ();
 	taa.reset();
 	if (crashFires) crashFires->Release (particles.get ());
+	if (fireballs) fireballs->Shutdown ();
+	fireballs.reset();
 	if (particles) particles->Shutdown ();
 	particles.reset();
 	if (plumes) plumes->Shutdown ();
@@ -1677,6 +1683,11 @@ void Scene::RelShiftColour (const VECTOR3 &gpos, float rgb[3]) const
 	for (int k = 0; k < 3; k++) rgb[k] = (float)out[k];
 }
 
+FireballRenderer *Scene::Fireballs ()
+{
+	return fireballs && fireballs->enabled && particles && particles->enabled ? fireballs.get () : nullptr;
+}
+
 void Scene::ObservedPos (OBJHANDLE h, VECTOR3 &p) const
 {
 	// (light-time: where it was when its light left it; the camera's own
@@ -2041,6 +2052,7 @@ void Scene::BeginFrame ()
 	// (before any of their sets are bound in this frame's commands)
 	plumes->SetPrepass (ao->PrepassView ());
 	particles->SetPrepass (ao->PrepassView ());
+	if (fireballs->SetPrepass (ao->PrepassView ())) particles->SetFireballOcclusion (fireballs->OcclusionView ());
 	tracks->BeginFrame (fi, camPos, camRot);
 	if (rt) rt->BeginFrame ();
 	ctx->GpuMark ("begin");
@@ -2133,6 +2145,10 @@ void Scene::BeginFrame ()
 		}
 	}
 	ssr->SetPlumeSlot (plumes->Slot ());
+	// crash fireballs (marched as volumes)
+	fireballs->BeginFrame (particles->PxPerRad ());
+	if (fireballs->enabled)
+		for (auto &it : visuals) it.second->CollectFireballs (*fireballs);
 
 	// frame uniforms
 	FrameUniforms fu{};
@@ -2791,6 +2807,11 @@ void Scene::Render ()
 	vkc::Target rt{ reactive.image, reactive.view, REACTIVE_FORMAT, ctx->RenderExtent () };
 	vkc::Target rtMS{ reactiveMS.image, reactiveMS.view, REACTIVE_FORMAT, ctx->RenderExtent () };
 	plumes->Render (FrameSet (), camAtmSet, gc->TexMgr()->White()); // (at half resolution)
+	// crash fireballs: their grids, marched at half resolution
+	if (fireballs->Count ()) ctx->EndTarget ();
+	fireballs->Compute (FrameSet ());
+	fireballs->Render (FrameSet (), camAtmSet);
+	particles->fireballOcc = fireballs->Drawn ();
 	ctx->BindSceneWithMask (rt, reactiveMS.image ? &rtMS : nullptr);
 	plumes->Draw (FrameSet (), camAtmSet, gc->TexMgr()->White());
 	ctx->GpuMark ("plumes");
@@ -2802,6 +2823,14 @@ void Scene::Render ()
 	}
 	particles->DrawVolume (FrameSet ());
 	particles->DrawScreenSmoke (FrameSet ());
+	// (over the smoke volume behind them, dimmed by its smoke in front; the
+	// sprites drawn after are hidden behind them)
+	if (fireballs->Drawn ()) {
+		VkImageView fog = VK_NULL_HANDLE;
+		VkSampler fogSmp = VK_NULL_HANDLE;
+		if (!particles->VolumeFog (fog, fogSmp)) fog = VK_NULL_HANDLE;
+		fireballs->Draw (FrameSet (), fog, fogSmp);
+	}
 	for (auto *ps : gc->ParticleStreams()) ps->Render (this);
 	for (auto *vo : list) vo->DrawParticles ();
 	if (crashFires) crashFires->DrawParticles (this);

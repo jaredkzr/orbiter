@@ -155,3 +155,161 @@ Open for phase 2+ (what still does not look right):
 - The flash lasts ~0.15 s (plan < 0.1 s).
 - The crash fire's light adds +0.5 ms `rtl trace` (1080p) for its t_w; the 1440p frame is
   +1 ms over 5-12 s.
+
+## Phase 2 (FireballRenderer: the volumetric fireball)
+
+What changed (OVP/VulkanClient):
+- `Fireball.h/.cpp` (new) `FireballRenderer`, owned by the Scene; shaders `fireball.glsl`,
+  `fireball_grid.comp`, `fireball_sun.comp`, `fireball.vert/.frag`, `fireball_comp.frag`.
+  Per fireball (at most 4 marched, the largest on screen) a slab of three 3D grids:
+  A 96x96x112 RGBA16F (density, temperature, soot), C 96x96x112 RGBA16F (the noise's
+  coordinates carried by the flow), B 48x48x56 RG16F (optical depth towards the sun and
+  the sky). Box in ball space (x along the path, z up), 1.7 r (x elongation) a side,
+  clipped at the ground; ~17 MB per slab, allocated on the first fireball, freed 2 min
+  after the last.
+- Model (`fireball_grid.comp`, analytic in the age: frame-rate independent, frozen when
+  paused, right at any warp): ellipsoid of 0.9 r drawn out along the path (VDebris's
+  elongation), flattened as it lifts (z / (1 - 0.2 lift)), base drawn in (inflow under the
+  ring); billows = displacement by normalized noise at three scales (shape noise 0.42, 1.05,
+  detail 0.9 per r) with a varying raggedness, the coordinates domain-warped by a slowly
+  drifting (churn) field and turned about the vortex ring's core by the roll (back-traced,
+  differential, saturating at ~1.1 rad); temperature = mix (surface T_s, core T_c) over a
+  thin layer under the local surface (0.04-0.3 of the radius by noise) - each billow
+  limb-darkened, hot cores glimpsed where the layer is thin; burn progress c (outer layer and
+  top first, noise lanes) cools to 700 K soot; flash 0.08 s at 2450 K.
+  T_c(u) 2350/2250/2150/2000/1750/1500/1200 K and T_s(u) 1690/1660/1630/1580/1500/1380/1150 K
+  at u = 0/0.1/0.25/0.6/0.9/1.2/1.8.
+- March (`fireball.frag`, half resolution, proxy box, depth-aware composite as the plumes):
+  detail erosion (two octaves + a fine one at ~r/25, more on soot), a crisp density rise,
+  extinction 14/r (flame) + 16/r x soot, albedo 0.05 (hot gas) to 0.17 (soot), emission
+  (1 - albedo) x FbPlanck (T), sun through B (multiple-scatter floor 0.08 + ...), HG 0.35 +
+  isotropic, ambient darkened by the sky depth; soft fade 0.12 r before the prepass depth;
+  aerial perspective; reactive mask as the plumes; a third target: 1/z where it begins and
+  turns opaque + its transmittance (`OcclusionView`).
+- Composite (`fireball_comp.frag`): after `DrawVolume`, before the sprites; dimmed by the
+  smoke volume's integral (`volInteg`) at its front depth, the volume's light added where it
+  hides the scene (as the sprites do); reactive mask.
+- Sprites behind a fireball are hidden by its opacity at their depth (`gpuparticle.frag`
+  binding 48, flag 64): replaces the plan's "virtual extinction particles".
+- `VDebris`: `CollectFireballs` (each frame, before the prepass); `WantsVolume` decides
+  volume vs sprites per step (screen radius >= 12 px and among the 4, the last frame's
+  first; grants within a frame counted); in volume mode the flame/core/flash sprites are
+  not emitted; the soot cap (froxel, FireballSmoke) is emitted inside the ball from
+  0.55 t_f to 1.8 t_f at its drawn centre (spread 0.7 r, size 1.15 r, albedo 0.07, 1.5x
+  the particles) so that it fills the soot ball as the march fades it (extinction x
+  (1.8 - u)/0.5 from 1.3 t_f): the hand-off is in place and size.
+- `ORBITER_VK_FIREBALL=sprites|volume` (default volume); `ORBITER_VK_FIREBALL_FULLRES=1`
+  (march at full resolution); `ORBITER_VK_FIREBALL_TUNE=rag,warp,erosion,emission,extinction`
+  (debug factors); `ORBITER_VK_FIREBALL_NOJOIN=1` (a fireball per piece: several at once);
+  `ORBITER_VK_FIREBALL_LOG` gains "volume/sprites" stage lines and the ball's height/rise
+  every 0.5 s. GPU marks "fb grid", "fb march", "fb comp".
+- Exposure: at night the brightest 0.6 x the fireballs' screen share is left out of the
+  meter (`meterFlames`): it counts partly (decision 5).
+- Harness: `run.py` scene `close` (sea crash, observer ~72 m, FOV 70) and `--pausecheck T`;
+  `phase2/ab.py` (A/B sheets), `phase2/fbperf.py` (fireball pass costs).
+
+### Deviations (phase 2)
+
+- **Brightness scale**: the plan's 2000 K = 25, 1500 K = 3 whitened the whole ball to a
+  pale salmon (the tone curve mixes towards white above ~0.6 and a saturated orange can only
+  be displayed up to luminance ~0.4). FbPlanck is now about as steep as a real blackbody
+  (exp(-20000 (1/T - 1/2100))): 1 at 2100 K, 0.3 at 1850 K (a billow's middle: orange),
+  0.1 at 1700 K (rims), 2-4 at 2300-2500 K (cores, blown out). The colour is Planck at a
+  colour temperature of 0.82 T rising to 1.3 T for the hottest (photographs' fire orange is
+  ~(1, 0.3, 0.02) linear; at its own temperature it displayed tan; the hot cores whiten to
+  cream, not salmon). A brightness surface + core temperature pair replaces one T(u).
+- **Sigma**: 14/r for the burning gas (plan: translucent): at 3-8/r the ball was a soft,
+  foggy glow; the billows' shapes come from their limb darkening, which needs a thin
+  visible layer.
+- **Soot ball marched to 1.8 t_f** (plan: the march ends with the flames at 1.3 t_f): the
+  rolling black cap with fire glimpsed is the volume's best part and the froxel volume
+  blurs it; the froxel cap is built inside it and takes over by 1.8 t_f.
+- **Rise 0.75 sqrt(g R)** (was 0.5, phase 1/plan): the volume's ball had hardly left the
+  sea when it burned out (centre +9 m by 2 s); now ~10.5 m/s with the brake (+19 m by 3 s).
+  Shared with the sprites.
+- **Ball raised 0.7 r** above where it formed when that is on the ground or the sea (a ball
+  resting on it, rising from there), not a hemisphere cut by the surface.
+- **Grid 96x96x112** (plan 48x48x64): 64x64x80 was blurry close up; B at half resolution
+  (the sun/sky sweep at full resolution cost 0.6 ms per fireball).
+- **No advection-offset ping-pong**: the noise coordinates are analytic (roll back-traced,
+  churn, growth in units of r) and written each frame into C; no accumulation, so pause,
+  warp and cuts need nothing.
+- **Light unchanged** (phase 3): one light at fbPos, source radius 0.1 r. The water
+  specular, the soot cap shaped as cap/stem, the fireball lighting the smoke: phase 3.
+- **LOD**: below 12 px screen radius sprites (the plan's 40 px: the march is cheap there);
+  steps by size (0.5 / 0.7 / 1 cell). The "light only < 6 px" level is not separate (the
+  sprites are cheap at that size).
+- **Overlap merging** of fireballs (plan 2.6): not done; overlapping balls are marched
+  one after another into the same half images (far to near) and read as one.
+
+### Verification
+
+- A/B sheets `phase2/ab_{sea,land,night}.png` (sprites left, volume right, 12 times);
+  sheets `phase2/{sea,land,night,midair,small,close}_sheet.png`; close-ups `phase2/close/`
+  (1080p, observer ~72 m); videos `phase2/sea_crash.mp4`, `phase2/land_crash.mp4` (1080p,
+  1 s before to 10 s after the break-up).
+- Several at once (`ORBITER_VK_FIREBALL_NOJOIN=1`, 9 balls): 4 marched, 5 sprites, no
+  artefacts; grid 1.0-1.3 ms, march 0.4-0.6 ms (`phase2/dev/multi2`).
+- Pause (`--pausecheck 0.8`): three frames 4 apart while paused differ in the ball only by
+  sub-pixel TAA jitter at its edges (`phase2/dev/pause1`).
+- Validation layer (sea): no messages (`phase2/validation`).
+
+### Perf (GPU ms, RX 9070 XT, RT on; `phase2/fbperf.py`, `perf.py`)
+
+Fireball passes (median / max per window after the break-up; one fireball, 7 t):
+
+| window | sea 1080p (170 m) | sea 1440p | close 1080p (~90 m) | close 1440p |
+|---|---|---|---|---|
+| 0-0.5 s | 0.49 / 0.86 | 0.63 / 0.82 | 0.84 / 1.39 | 0.76 / 0.91 |
+| 0.5-1 s | 0.49 / 0.54 | 0.77 / 0.87 | 0.88 / 1.22 | 1.04 / 1.20 |
+| 1-2 s | 0.49 / 0.83 | 0.57 / 0.74 | 0.88 / 1.25 | 0.69 / 0.90 |
+| 2-3 s | 0.51 / 0.74 | 0.52 / 0.55 | 0.82 / 0.88 | 0.65 / 1.11 |
+| 3-3.6 s (soot ball) | 0.58 / 0.94 | 0.54 / 0.93 | 0.86 / 1.12 | 0.71 / 1.18 |
+
+(grid 0.13-0.30, march 0.30-1.04, composite 0.03-0.09.) Four at once (NOJOIN, 1080p):
+grid 1.0-1.3, march 0.4-0.6. Budget (decision 8): <= 2 ms close, <= 5 ms the whole
+explosion at 1440p: met (peak particle + fireball frame 2.9 ms at 1440p).
+
+Frame totals, sea, same build (`ORBITER_VK_FIREBALL=sprites` for B):
+
+| | 1080p volume | 1080p sprites | phase 1 (1080p) | 1440p volume | 1440p sprites | phase 1 (1440p) |
+|---|---|---|---|---|---|---|
+| crash 0-3 s median | 17.39 | 17.19 | 17.29 | 23.42 | 21.64 | 21.02 |
+| slowest 0-3 s | 28.75 | 28.10 | 28.71 | 44.49 | 37.87 | 36.59 |
+| 3-5 s median | 15.59 | 15.27 | | 16.32 | 16.16 | |
+| peak particle(+fb) frame | 2.62 | 2.25 | 2.21 | 2.91 | 2.75 | 2.71 |
+
+The 1440p 0-1 s difference is `rtl trace` (17.4 vs 7.9 ms median at 0.5-1 s): the debris'
+light shadows, untouched by the fireball passes; the crash differs from run to run (pieces,
+where they lie) and the 1080p pair shows the opposite (7.1 volume vs 9.2 sprites). The
+fireball itself adds 0.5-0.9 ms; the sprites it replaces saved 0.2-0.5.
+
+### Status (phase 2)
+
+Done; commits "VK explosion phase 2: ...". ctest -R "Particles|Water|Damage|Debris": 12/13
+(the known DamageEffectsTest AIR failure). Validation clean.
+
+What convinces: the ball is a ball of fire with a surface - limb-darkened billows of several
+sizes, yellow-white cores where the cool layer is thin, orange rims, dark lanes; soot
+appears on the top and the outer layer from ~0.5 t_f, the fire glimpsed through gaps late;
+it lifts off into a dark rolling cap with a stem from the spill fire, and the froxel cap
+takes over in place; temporally smooth (no crawl), frozen when paused; at night a glowing
+ball with dark soot; on land the most convincing (saturated orange over the desert).
+
+What does not (open for phase 3+):
+- 0.05-0.5 s at sea reads pale peach-cream (the peak phase is blown out by the tone curve's
+  whitening); a warmer, more saturated peak would need the tone curve's whitening to go
+  towards yellow (global change) or a lower peak.
+- Close up (~70-90 m) the surface is still soft (half resolution, 96^3 grid): fine
+  cauliflower detail, curled flame tongues and sharp soot edges are missing; a fluid sim or
+  a finer procedural octave on the march (phase 7) would help.
+- The sunlit soot is a fairly uniform grey: the sun/shade contrast on the cap is weak
+  (phase 3: lighting integration, also the fireball's own light on its soot).
+- The ball is not lit by and does not light anything new: the existing point light only
+  (phase 3: the two lights, water specular, the soot volume lit by the ball).
+- A streaky seam at the waterline (the half-resolution composite's depth weights where the
+  ball meets the sea).
+- The early ball is drawn out into a wide loaf at 40 m/s (VDebris's elongation, up to 2.5x);
+  footage shows a ragged wedge.
+- The sprite fallback below 12 px and beyond 4 fireballs pops (sprites build up over their
+  lifetimes when the switch happens mid-burn).

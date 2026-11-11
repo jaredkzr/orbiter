@@ -1,0 +1,657 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+#include "Fireball.h"
+#include "OrbiterAPI.h"
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+
+#include "fireball_grid.comp.h"
+#include "fireball_sun.comp.h"
+#include "fireball.vert.h"
+#include "fireball.frag.h"
+#include "fireball_comp.frag.h"
+#include "post.vert.h"
+
+struct FireballRenderer::Params { // fireball.glsl
+	float toBall[16]; // view -> ball space [m]
+	float centre[4];  // view space, r
+	float boxMin[4];  // ball space [m], slab
+	float boxMax[4];  // step [m]
+	float shape[4];   // r, R, elongation, lift
+	float axis[4];    // ball space, ground (ball z)
+	float time[4];    // age, u, t_f, seed
+	float heat[4];    // hottest [K], burn-out base, flash, density
+	float flow[4];    // ring's turn [rad], ring radius / r, churn, extinction scale
+	float tune[4];    // (ORBITER_VK_FIREBALL_TUNE)
+};
+
+namespace {
+	constexpr VkFormat HALF_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
+	constexpr VkFormat OCC_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
+
+	// debugging factors of the model and the march (ORBITER_VK_FIREBALL_TUNE=
+	// raggedness,warp,erosion,emission[,extinction]: 1 = as tuned)
+	void Tune (float t[4], float &sigma)
+	{
+		static float v[5] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+		static bool read = false;
+		if (!read) {
+			read = true;
+			if (const char *e = getenv ("ORBITER_VK_FIREBALL_TUNE"))
+				sscanf (e, "%f,%f,%f,%f,%f", &v[0], &v[1], &v[2], &v[3], &v[4]);
+		}
+		for (int i = 0; i < 4; i++) t[i] = v[i];
+		sigma = v[4];
+	}
+}
+
+bool FireballRenderer::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout,
+	VkImageView shapeNoise, VkImageView detailNoise)
+{
+	ctx = c;
+	shapeView = shapeNoise, detailView = detailNoise;
+	if (const char *e = getenv ("ORBITER_VK_FIREBALL")) enabled = strcmp (e, "sprites") != 0;
+	buf = ctx->CreateBuffer (sizeof(Params) * MAX_MARCHED * vkc::FRAMES_IN_FLIGHT, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+	memset (buf.mapped, 0, sizeof(Params) * MAX_MARCHED * vkc::FRAMES_IN_FLIGHT);
+
+	VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+	sci.magFilter = sci.minFilter = VK_FILTER_LINEAR;
+	sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+	VK_CHECK(vkCreateSampler (ctx->device, &sci, nullptr, &linearClamp));
+	sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	VK_CHECK(vkCreateSampler (ctx->device, &sci, nullptr, &repeatSampler));
+	sci.magFilter = sci.minFilter = VK_FILTER_NEAREST;
+	sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+	VK_CHECK(vkCreateSampler (ctx->device, &sci, nullptr, &nearestClamp));
+
+	const VkDescriptorType SI = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, CI = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, SB = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	const VkShaderStageFlags CS = VK_SHADER_STAGE_COMPUTE_BIT, FS = VK_SHADER_STAGE_FRAGMENT_BIT;
+	auto makeLayout = [this](const std::vector<VkDescriptorSetLayoutBinding> &b) {
+		VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+		lci.bindingCount = (uint32_t)b.size (), lci.pBindings = b.data ();
+		VkDescriptorSetLayout l;
+		VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &l));
+		return l;
+	};
+	// compute: the grids (written A, B, C; A read), the noise, the buffer
+	compSetLayout = makeLayout ({ { 0, SI, 1, CS, nullptr }, { 1, SI, 1, CS, nullptr }, { 2, SI, 1, CS, nullptr },
+		{ 3, CI, 1, CS, nullptr }, { 4, CI, 1, CS, nullptr }, { 5, CI, 1, CS, nullptr }, { 6, SB, 1, CS, nullptr } });
+	// march: the buffer, the grids, the noise, the prepass
+	marchSetLayout = makeLayout ({ { 0, SB, 1, FS, nullptr }, { 1, CI, 1, FS, nullptr }, { 2, CI, 1, FS, nullptr },
+		{ 3, CI, 1, FS, nullptr }, { 4, CI, 1, FS, nullptr }, { 5, CI, 1, FS, nullptr }, { 6, CI, 1, FS, nullptr } });
+	// composite: the half-size images, the prepass, the smoke in front
+	compoSetLayout = makeLayout ({ { 0, CI, 1, FS, nullptr }, { 1, CI, 1, FS, nullptr }, { 2, CI, 1, FS, nullptr },
+		{ 3, CI, 1, FS, nullptr }, { 4, CI, 1, FS, nullptr } });
+	VkDescriptorPoolSize ps[3] = { { SI, 3 }, { CI, 4 + 6 + 5 * vkc::FRAMES_IN_FLIGHT }, { SB, 2 } };
+	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+	pci.maxSets = 2 + vkc::FRAMES_IN_FLIGHT, pci.poolSizeCount = 3, pci.pPoolSizes = ps;
+	VK_CHECK(vkCreateDescriptorPool (ctx->device, &pci, nullptr, &pool));
+	VkDescriptorSetLayout ls[2 + vkc::FRAMES_IN_FLIGHT] = { compSetLayout, marchSetLayout };
+	for (uint32_t i = 0; i < vkc::FRAMES_IN_FLIGHT; i++) ls[2 + i] = compoSetLayout;
+	VkDescriptorSet sets[2 + vkc::FRAMES_IN_FLIGHT];
+	VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+	dai.descriptorPool = pool, dai.descriptorSetCount = 2 + vkc::FRAMES_IN_FLIGHT, dai.pSetLayouts = ls;
+	VK_CHECK(vkAllocateDescriptorSets (ctx->device, &dai, sets));
+	compSet = sets[0], marchSet = sets[1];
+	for (uint32_t i = 0; i < vkc::FRAMES_IN_FLIGHT; i++) compoSet[i] = sets[2 + i];
+
+	// compute pipelines
+	{
+		VkDescriptorSetLayout cl[2] = { frameLayout, compSetLayout };
+		VkPushConstantRange pcr{ CS, 0, 2 * sizeof(uint32_t) };
+		VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+		plci.setLayoutCount = 2, plci.pSetLayouts = cl;
+		plci.pushConstantRangeCount = 1, plci.pPushConstantRanges = &pcr;
+		VK_CHECK(vkCreatePipelineLayout (ctx->device, &plci, nullptr, &compLayout));
+		auto make = [this](const unsigned char *code, size_t size) {
+			VkShaderModule m = ctx->CreateShaderModule (code, size);
+			VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+			cpi.stage = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, m, "main" };
+			cpi.layout = compLayout;
+			VkPipeline p;
+			VK_CHECK(vkCreateComputePipelines (ctx->device, VK_NULL_HANDLE, 1, &cpi, nullptr, &p));
+			vkDestroyShaderModule (ctx->device, m, nullptr);
+			return p;
+		};
+		gridPipe = make (spv_fireball_grid_comp, spv_fireball_grid_comp_size);
+		sunPipe = make (spv_fireball_sun_comp, spv_fireball_sun_comp_size);
+	}
+
+	// the march: the box (view space), into the half-size images
+	VkPipelineColorBlendAttachmentState cba{};
+	cba.colorWriteMask = 0xF;
+	cba.blendEnable = VK_TRUE; // premultiplied: light plus what is behind times the transmittance (alpha: their product)
+	cba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+	cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+	cba.colorBlendOp = VK_BLEND_OP_ADD;
+	cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+	cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+	cba.alphaBlendOp = VK_BLEND_OP_ADD;
+	VkPipelineColorBlendAttachmentState cbm{}; // (reactive mask: the strongest)
+	cbm.colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
+	cbm.blendEnable = VK_TRUE;
+	cbm.srcColorBlendFactor = cbm.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+	cbm.colorBlendOp = VK_BLEND_OP_MAX;
+	cbm.srcAlphaBlendFactor = cbm.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+	cbm.alphaBlendOp = VK_BLEND_OP_MAX;
+	VkPipelineColorBlendAttachmentState cbo{}; // (occlusion: the nearest's inverse depths, the transmittances' product)
+	cbo.colorWriteMask = 0xF;
+	cbo.blendEnable = VK_TRUE;
+	cbo.srcColorBlendFactor = cbo.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+	cbo.colorBlendOp = VK_BLEND_OP_MAX;
+	cbo.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+	cbo.dstAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+	cbo.alphaBlendOp = VK_BLEND_OP_ADD;
+	{
+		VkDescriptorSetLayout ml[3] = { frameLayout, marchSetLayout, atmLayout };
+		VkPushConstantRange pcr{ FS, 0, 3 * sizeof(uint32_t) };
+		VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+		plci.setLayoutCount = 3, plci.pSetLayouts = ml;
+		plci.pushConstantRangeCount = 1, plci.pPushConstantRanges = &pcr;
+		VK_CHECK(vkCreatePipelineLayout (ctx->device, &plci, nullptr, &marchLayout));
+		VkShaderModule vs = ctx->CreateShaderModule (spv_fireball_vert, spv_fireball_vert_size);
+		VkShaderModule fs = ctx->CreateShaderModule (spv_fireball_frag, spv_fireball_frag_size);
+		VkPipelineShaderStageCreateInfo stages[2] = {
+			{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vs, "main" },
+			{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fs, "main" } };
+		VkVertexInputBindingDescription bind{ 0, 3 * sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX };
+		VkVertexInputAttributeDescription attr{ 0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0 };
+		VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+		vi.vertexBindingDescriptionCount = 1, vi.pVertexBindingDescriptions = &bind;
+		vi.vertexAttributeDescriptionCount = 1, vi.pVertexAttributeDescriptions = &attr;
+		VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+		ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+		VkPipelineViewportStateCreateInfo vps{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+		vps.viewportCount = 1, vps.scissorCount = 1;
+		VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+		rs.polygonMode = VK_POLYGON_MODE_FILL;
+		rs.cullMode = VK_CULL_MODE_NONE; // (the shader keeps the far side of the box)
+		rs.lineWidth = 1.0f;
+		VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+		ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+		VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO}; // (none: the march stops at the prepass depth)
+		VkPipelineColorBlendAttachmentState cbs[3] = { cba, cbm, cbo };
+		VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+		cb.attachmentCount = 3, cb.pAttachments = cbs;
+		VkDynamicState dyn[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+		VkPipelineDynamicStateCreateInfo dy{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+		dy.dynamicStateCount = 2, dy.pDynamicStates = dyn;
+		VkFormat formats[3] = { HALF_FORMAT, VK_FORMAT_R8_UNORM, OCC_FORMAT };
+		VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+		rci.colorAttachmentCount = 3, rci.pColorAttachmentFormats = formats;
+		rci.depthAttachmentFormat = ctx->depthFormat;
+		VkGraphicsPipelineCreateInfo gpi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+		gpi.pNext = &rci;
+		gpi.stageCount = 2, gpi.pStages = stages;
+		gpi.pVertexInputState = &vi;
+		gpi.pInputAssemblyState = &ia;
+		gpi.pViewportState = &vps;
+		gpi.pRasterizationState = &rs;
+		gpi.pMultisampleState = &ms;
+		gpi.pDepthStencilState = &ds;
+		gpi.pColorBlendState = &cb;
+		gpi.pDynamicState = &dy;
+		gpi.layout = marchLayout;
+		VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &marchPipe));
+		vkDestroyShaderModule (ctx->device, vs, nullptr);
+		vkDestroyShaderModule (ctx->device, fs, nullptr);
+
+		// the composite: over the scene (with the reactive mask): the scene
+		// times the transmittance, plus the light
+		VkDescriptorSetLayout cl[2] = { frameLayout, compoSetLayout };
+		VkPushConstantRange cpcr{ FS, 0, sizeof(uint32_t) };
+		VkPipelineLayoutCreateInfo cplci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+		cplci.setLayoutCount = 2, cplci.pSetLayouts = cl;
+		cplci.pushConstantRangeCount = 1, cplci.pPushConstantRanges = &cpcr;
+		VK_CHECK(vkCreatePipelineLayout (ctx->device, &cplci, nullptr, &compoLayout));
+		VkShaderModule cvs = ctx->CreateShaderModule (spv_post_vert, spv_post_vert_size);
+		VkShaderModule cfs = ctx->CreateShaderModule (spv_fireball_comp_frag, spv_fireball_comp_frag_size);
+		VkPipelineShaderStageCreateInfo cst[2] = {
+			{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, cvs, "main" },
+			{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, cfs, "main" } };
+		VkPipelineVertexInputStateCreateInfo cvi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+		VkPipelineColorBlendAttachmentState ccba = cba;
+		ccba.dstColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+		ccba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+		ccba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+		VkPipelineColorBlendAttachmentState ccbs[2] = { ccba, cbm };
+		VkPipelineColorBlendStateCreateInfo ccb = cb;
+		ccb.attachmentCount = 2, ccb.pAttachments = ccbs;
+		VkPipelineMultisampleStateCreateInfo cms = ms;
+		cms.rasterizationSamples = ctx->sceneSamples;
+		VkFormat cformats[2] = { ctx->sceneFormat, VK_FORMAT_R8_UNORM }; // (Scene::REACTIVE_FORMAT)
+		VkPipelineRenderingCreateInfo crci = rci;
+		crci.colorAttachmentCount = 2, crci.pColorAttachmentFormats = cformats;
+		VkGraphicsPipelineCreateInfo cgpi = gpi;
+		cgpi.pNext = &crci;
+		cgpi.pStages = cst;
+		cgpi.pVertexInputState = &cvi;
+		cgpi.pColorBlendState = &ccb;
+		cgpi.pMultisampleState = &cms;
+		cgpi.layout = compoLayout;
+		VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &cgpi, nullptr, &compoPipe));
+		vkDestroyShaderModule (ctx->device, cvs, nullptr);
+		vkDestroyShaderModule (ctx->device, cfs, nullptr);
+	}
+
+	// (no smoke volume: nothing in front)
+	{
+		VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+		ici.imageType = VK_IMAGE_TYPE_3D, ici.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+		ici.extent = { 1, 1, 1 }, ici.mipLevels = 1, ici.arrayLayers = 1, ici.samples = VK_SAMPLE_COUNT_1_BIT;
+		ici.tiling = VK_IMAGE_TILING_OPTIMAL, ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+		VmaAllocationCreateInfo aci{};
+		aci.usage = VMA_MEMORY_USAGE_AUTO;
+		VK_CHECK(vmaCreateImage (ctx->allocator, &ici, &aci, &dummyFog.image, &dummyFog.alloc, nullptr));
+		VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+		vci.image = dummyFog.image, vci.viewType = VK_IMAGE_VIEW_TYPE_3D, vci.format = ici.format;
+		vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &dummyFog.view));
+		VkImage im = dummyFog.image;
+		ctx->ImmediateSubmit ([im](VkCommandBuffer cmd) {
+			vkc::ImageBarrier (cmd, im, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+				VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+			VkClearColorValue cv{};
+			cv.float32[3] = 1.0f;
+			VkImageSubresourceRange rr{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+			vkCmdClearColorImage (cmd, im, VK_IMAGE_LAYOUT_GENERAL, &cv, 1, &rr);
+			vkc::ImageBarrier (cmd, im, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+				VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+		});
+	}
+	CreateHalf ();
+	return true;
+}
+
+void FireballRenderer::Shutdown ()
+{
+	if (!ctx) return;
+	vkDeviceWaitIdle (ctx->device);
+	FreeGrids ();
+	for (VkPipeline p : { gridPipe, sunPipe, marchPipe, compoPipe }) if (p) vkDestroyPipeline (ctx->device, p, nullptr);
+	for (VkPipelineLayout l : { compLayout, marchLayout, compoLayout }) if (l) vkDestroyPipelineLayout (ctx->device, l, nullptr);
+	vkDestroyDescriptorPool (ctx->device, pool, nullptr);
+	for (VkDescriptorSetLayout l : { compSetLayout, marchSetLayout, compoSetLayout }) if (l) vkDestroyDescriptorSetLayout (ctx->device, l, nullptr);
+	for (VkSampler s : { linearClamp, repeatSampler, nearestClamp }) if (s) vkDestroySampler (ctx->device, s, nullptr);
+	for (vkc::Image *im : { &halfColor, &halfMask, &halfOcc, &halfDepth, &dummyFog }) ctx->DestroyImage (*im);
+	ctx->DestroyBuffer (buf);
+	ctx = nullptr;
+}
+
+void FireballRenderer::CreateHalf ()
+{
+	vkDeviceWaitIdle (ctx->device);
+	for (vkc::Image *im : { &halfColor, &halfMask, &halfOcc, &halfDepth }) ctx->DestroyImage (*im);
+	// (ORBITER_VK_FIREBALL_FULLRES=1: marched at the full resolution)
+	static const bool full = getenv ("ORBITER_VK_FIREBALL_FULLRES") && atoi (getenv ("ORBITER_VK_FIREBALL_FULLRES"));
+	VkExtent2D e = ctx->RenderExtent ();
+	halfExtent = full ? e : VkExtent2D{ (e.width + 1) / 2, (e.height + 1) / 2 };
+	auto create = [this](VkFormat fmt, VkImageUsageFlags usage, VkImageAspectFlags aspect) {
+		vkc::Image im;
+		VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+		ici.imageType = VK_IMAGE_TYPE_2D;
+		ici.format = fmt;
+		ici.extent = { halfExtent.width, halfExtent.height, 1 };
+		ici.mipLevels = 1, ici.arrayLayers = 1;
+		ici.samples = VK_SAMPLE_COUNT_1_BIT;
+		ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+		ici.usage = usage;
+		VmaAllocationCreateInfo aci{};
+		aci.usage = VMA_MEMORY_USAGE_AUTO;
+		VK_CHECK(vmaCreateImage (ctx->allocator, &ici, &aci, &im.image, &im.alloc, nullptr));
+		VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+		vci.image = im.image, vci.viewType = VK_IMAGE_VIEW_TYPE_2D, vci.format = fmt;
+		vci.subresourceRange = { aspect, 0, 1, 0, 1 };
+		VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &im.view));
+		return im;
+	};
+	const VkImageUsageFlags CU = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+	halfColor = create (HALF_FORMAT, CU, VK_IMAGE_ASPECT_COLOR_BIT);
+	halfMask = create (VK_FORMAT_R8_UNORM, CU, VK_IMAGE_ASPECT_COLOR_BIT);
+	halfOcc = create (OCC_FORMAT, CU, VK_IMAGE_ASPECT_COLOR_BIT);
+	halfDepth = create (ctx->depthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+	// (shader-read between uses: the sprites may sample the occlusion before the first march)
+	VkImage ims[3] = { halfColor.image, halfMask.image, halfOcc.image };
+	ctx->ImmediateSubmit ([ims](VkCommandBuffer cmd) {
+		for (VkImage im : ims)
+			vkc::ImageBarrier (cmd, im, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+				VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+	});
+	halfGen = ctx->SwapchainGeneration ();
+	prepassView = VK_NULL_HANDLE; // (the sets written again with the prepass)
+	for (auto &g : compoGen) g = ~0u;
+}
+
+void FireballRenderer::AllocGrids ()
+{
+	auto create = [this](VkFormat fmt, uint32_t div) {
+		vkc::Image im;
+		VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+		ici.imageType = VK_IMAGE_TYPE_3D;
+		ici.format = fmt;
+		ici.extent = { GX / div, GY / div, GZ / div * MAX_MARCHED };
+		ici.mipLevels = 1, ici.arrayLayers = 1;
+		ici.samples = VK_SAMPLE_COUNT_1_BIT;
+		ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+		ici.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+		VmaAllocationCreateInfo aci{};
+		aci.usage = VMA_MEMORY_USAGE_AUTO;
+		VK_CHECK(vmaCreateImage (ctx->allocator, &ici, &aci, &im.image, &im.alloc, nullptr));
+		VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+		vci.image = im.image, vci.viewType = VK_IMAGE_VIEW_TYPE_3D, vci.format = fmt;
+		vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &im.view));
+		return im;
+	};
+	gridA = create (VK_FORMAT_R16G16B16A16_SFLOAT, 1);
+	gridB = create (VK_FORMAT_R16G16_SFLOAT, 2); // (the shadows: soft, half the resolution)
+	gridC = create (VK_FORMAT_R16G16B16A16_SFLOAT, 1);
+	// (general layout throughout: written by compute, read by the march)
+	VkImage ims[3] = { gridA.image, gridB.image, gridC.image };
+	VkCommandBuffer cmd = ctx->Cmd ();
+	for (VkImage im : ims)
+		vkc::ImageBarrier (cmd, im, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+			VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+	gridAlloc = true;
+	// the sets of the compute passes and the march
+	const VkImageLayout G = VK_IMAGE_LAYOUT_GENERAL, R = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+	VkDescriptorImageInfo ci[6] = { { VK_NULL_HANDLE, gridA.view, G }, { VK_NULL_HANDLE, gridB.view, G }, { VK_NULL_HANDLE, gridC.view, G },
+		{ linearClamp, gridA.view, G }, { repeatSampler, shapeView, R }, { repeatSampler, detailView, R } };
+	VkDescriptorBufferInfo bi{ buf.buffer, 0, VK_WHOLE_SIZE };
+	VkWriteDescriptorSet w[7]{};
+	for (uint32_t i = 0; i < 7; i++) {
+		w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		w[i].dstSet = compSet, w[i].dstBinding = i, w[i].descriptorCount = 1;
+		if (i < 3) w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, w[i].pImageInfo = &ci[i];
+		else if (i < 6) w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, w[i].pImageInfo = &ci[i];
+		else w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, w[i].pBufferInfo = &bi;
+	}
+	vkUpdateDescriptorSets (ctx->device, 7, w, 0, nullptr);
+	WriteMarchSet ();
+}
+
+void FireballRenderer::WriteMarchSet ()
+{
+	if (!gridAlloc || !prepassView) return;
+	const VkImageLayout G = VK_IMAGE_LAYOUT_GENERAL, R = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+	VkDescriptorImageInfo mi[6] = { { linearClamp, gridA.view, G }, { linearClamp, gridB.view, G }, { linearClamp, gridC.view, G },
+		{ repeatSampler, shapeView, R }, { repeatSampler, detailView, R }, { nearestClamp, prepassView, R } };
+	VkDescriptorBufferInfo bi{ buf.buffer, 0, VK_WHOLE_SIZE };
+	VkWriteDescriptorSet w[7]{};
+	for (uint32_t i = 0; i < 7; i++) {
+		w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		w[i].dstSet = marchSet, w[i].dstBinding = i, w[i].descriptorCount = 1;
+		if (i == 0) w[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, w[i].pBufferInfo = &bi;
+		else w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, w[i].pImageInfo = &mi[i - 1];
+	}
+	vkUpdateDescriptorSets (ctx->device, 7, w, 0, nullptr);
+}
+
+void FireballRenderer::FreeGrids ()
+{
+	if (!gridAlloc) return;
+	vkc::Image a = gridA, b = gridB, c = gridC;
+	vkc::Context *cx = ctx;
+	ctx->DeferDestroy ([cx, a, b, c]() mutable { cx->DestroyImage (a); cx->DestroyImage (b); cx->DestroyImage (c); });
+	gridA = gridB = gridC = vkc::Image{};
+	gridAlloc = false;
+}
+
+bool FireballRenderer::SetPrepass (VkImageView prepass)
+{
+	bool remade = false;
+	if (halfGen != ctx->SwapchainGeneration ()) CreateHalf (), remade = true;
+	if (prepass != prepassView) {
+		// (the march set is bound by no frame in flight while it is written:
+		// a new prepass comes with a new swapchain, after an idle wait)
+		if (prepassView) vkDeviceWaitIdle (ctx->device);
+		prepassView = prepass;
+		WriteMarchSet ();
+		for (auto &g : compoGen) g = ~0u;
+	}
+	return remade;
+}
+
+void FireballRenderer::BeginFrame (double pxr)
+{
+	list.clear ();
+	pxPerRad = pxr;
+	drawn = computed = false;
+	share = 0.0;
+}
+
+bool FireballRenderer::WantsVolume (uint32_t owner, double R, double dist) const
+{
+	if (!enabled) return false;
+	double px = R / std::max (dist, 1.0) * pxPerRad;
+	if (px < MIN_PIXELS) return false;
+	// (marched in the last frame; or room among those and the ones told so since)
+	auto has = [owner](const std::vector<uint32_t> &v) { return std::find (v.begin (), v.end (), owner) != v.end (); };
+	if (has (marchedLast) || has (granted)) return true;
+	size_t n = granted.size ();
+	for (uint32_t o : marchedLast) n += std::find (granted.begin (), granted.end (), o) == granted.end () ? 1 : 0;
+	if (n >= MAX_MARCHED) return false;
+	granted.push_back (owner);
+	return true;
+}
+
+void FireballRenderer::Add (const Ball &b)
+{
+	if (!enabled || b.r <= 0.0) return;
+	double dist = length (b.centre);
+	Entry en{};
+	en.b = b, en.dist = dist;
+	en.px = b.R / std::max (dist, 1.0) * pxPerRad;
+	if (en.px < MIN_PIXELS) return;
+	list.push_back (en);
+}
+
+void FireballRenderer::Compute (VkDescriptorSet frameSet)
+{
+	// the largest on screen (at most MAX_MARCHED: the others' sprites)
+	std::sort (list.begin (), list.end (), [](const Entry &a, const Entry &b) { return a.px > b.px; });
+	if (list.size () > MAX_MARCHED) list.resize (MAX_MARCHED);
+	marchedLast.clear ();
+	for (const Entry &en : list) marchedLast.push_back (en.b.owner);
+	granted.clear ();
+	double now = oapiGetSysTime ();
+	if (list.empty ()) {
+		// (the grids released two minutes after the last fireball)
+		if (gridAlloc && now - gridIdleSince > 120.0) FreeGrids ();
+		return;
+	}
+	gridIdleSince = now;
+	if (!gridAlloc) AllocGrids ();
+	if (!prepassView) return;
+
+	uint32_t slot = ctx->FrameIndex ();
+	float tune[4], tuneSigma;
+	Tune (tune, tuneSigma);
+	Params *pm = (Params*)buf.mapped + slot * MAX_MARCHED;
+	for (size_t i = 0; i < list.size (); i++) {
+		Entry &en = list[i];
+		const Ball &b = en.b;
+		// ball space: x along its path (horizontal), y across, z up
+		VECTOR3 ez = unit (b.up);
+		VECTOR3 ex = b.axis - ez * dotp (b.axis, ez);
+		if (length (ex) < 1e-3) ex = crossp (ez, fabs (ez.x) < 0.9 ? _V(1, 0, 0) : _V(0, 1, 0));
+		ex = unit (ex);
+		VECTOR3 ey = crossp (ez, ex);
+		VECTOR3 ab = _V(dotp (b.axis, ex), dotp (b.axis, ey), dotp (b.axis, ez));
+		if (length (ab) > 1e-6) ab = unit (ab); else ab = _V(1, 0, 0);
+		// its box: the ellipsoid drawn out along ab (semi-axes r e along it,
+		// r across), its billows and erosion around it
+		double r = b.r, e = std::max (b.elong, 1.0);
+		double half[3];
+		for (int k = 0; k < 3; k++) {
+			double c = (&ab.x)[k];
+			half[k] = 1.7 * r * sqrt (e * e * c * c + (1.0 - c * c));
+		}
+		double bmin[3] = { -half[0], -half[1], -half[2] }, bmax[3] = { half[0], half[1], half[2] };
+		// (nothing below the ground)
+		if (b.ground > -1e8) bmin[2] = std::min (std::max (bmin[2], b.ground - 0.05 * r), bmax[2] - 0.2 * r);
+		Params &p = pm[i];
+		memset (&p, 0, sizeof(p));
+		const VECTOR3 *ax[3] = { &ex, &ey, &ez };
+		for (int k = 0; k < 3; k++) {
+			p.toBall[0 + k] = (float)ax[k]->x;
+			p.toBall[4 + k] = (float)ax[k]->y;
+			p.toBall[8 + k] = (float)ax[k]->z;
+			p.toBall[12 + k] = (float)-dotp (*ax[k], b.centre);
+			p.boxMin[k] = (float)bmin[k], p.boxMax[k] = (float)bmax[k];
+		}
+		p.toBall[15] = 1.0f;
+		p.centre[0] = (float)b.centre.x, p.centre[1] = (float)b.centre.y, p.centre[2] = (float)b.centre.z;
+		p.boxMin[3] = (float)i;
+		// the march's step: by its size on screen (finer when large)
+		double cell = std::min ({ (bmax[0] - bmin[0]) / GX, (bmax[1] - bmin[1]) / GY, (bmax[2] - bmin[2]) / GZ });
+		double px = r / std::max (en.dist, 1.0) * pxPerRad;
+		p.boxMax[3] = (float)(cell * (px > 400.0 ? 0.5 : px > 150.0 ? 0.7 : 1.0));
+		double tf = std::max (b.tf, 1e-3), u = b.t / tf;
+		p.shape[0] = (float)r, p.shape[1] = (float)b.R, p.shape[2] = (float)e, p.shape[3] = (float)b.lift;
+		p.axis[0] = (float)ab.x, p.axis[1] = (float)ab.y, p.axis[2] = (float)ab.z, p.axis[3] = (float)b.ground;
+		p.time[0] = (float)b.t, p.time[1] = (float)u, p.time[2] = (float)tf, p.time[3] = (float)(b.seed % 997);
+		// its temperature: the hottest gas (its core) cooling as it burns
+		// (2350 K as it ignites, 2150 at full size, 1750 by 0.9 t_f, 1500
+		// burned out), its surface's (the mixing layer, what is mostly seen:
+		// 1690 K to 1500 K, orange to a dark orange, FbPlanck), the
+		// share burned out growing (the outer layer from 0.3 t_f; most of
+		// it by t_f, all by 1.3 t_f), the flash in its first tenth of a
+		// second, its density fading from 1.3 t_f as its soot passes to the
+		// smoke volume (gone by 1.8 t_f)
+		static const double ku[] = { 0.0, 0.1, 0.25, 0.6, 0.9, 1.2, 1.8 };
+		static const double kT[] = { 2350.0, 2250.0, 2150.0, 2000.0, 1750.0, 1500.0, 1200.0 }; // (its core)
+		static const double kS[] = { 1690.0, 1660.0, 1630.0, 1580.0, 1500.0, 1380.0, 1150.0 }; // (its surface: the mixing layer)
+		double Th = kT[6], Ts = kS[6];
+		for (int k = 0; k < 6; k++)
+			if (u < ku[k + 1]) {
+				double f = (u - ku[k]) / (ku[k + 1] - ku[k]);
+				Th = kT[k] + (kT[k + 1] - kT[k]) * f, Ts = kS[k] + (kS[k + 1] - kS[k]) * f;
+				break;
+			}
+		p.heat[0] = (float)Th;
+		p.centre[3] = (float)Ts;
+		p.heat[1] = (float)(-0.55 + 1.15 * u);
+		p.heat[2] = (float)std::clamp (1.0 - b.t / 0.08, 0.0, 1.0);
+		p.heat[3] = (float)std::clamp ((1.8 - u) / 0.5, 0.0, 1.0); // (the soot ball, rising, fading into the smoke volume's cap)
+		p.flow[0] = (float)b.roll;
+		p.flow[1] = 0.55f;
+		p.flow[2] = (float)(0.08 * b.t);
+		p.flow[3] = tuneSigma;
+		for (int k = 0; k < 4; k++) p.tune[k] = tune[k];
+		// its box (view space), the proxy drawn
+		static const int faces[6][4] = { { 0, 1, 3, 2 }, { 4, 6, 7, 5 }, { 0, 4, 5, 1 }, { 2, 3, 7, 6 }, { 0, 2, 6, 4 }, { 1, 5, 7, 3 } };
+		VECTOR3 corner[8];
+		for (int c = 0; c < 8; c++) {
+			double x = (c & 1) ? bmax[0] : bmin[0], y = (c & 2) ? bmax[1] : bmin[1], z = (c & 4) ? bmax[2] : bmin[2];
+			corner[c] = b.centre + ex * x + ey * y + ez * z;
+		}
+		int nv = 0;
+		for (auto &f : faces) {
+			int idx[6] = { f[0], f[1], f[2], f[0], f[2], f[3] };
+			for (int c : idx)
+				en.box[nv++] = (float)corner[c].x, en.box[nv++] = (float)corner[c].y, en.box[nv++] = (float)corner[c].z;
+		}
+		// (its share of the view: exposure metering)
+		VkExtent2D re = ctx->RenderExtent ();
+		share += PI * px * px / std::max (1.0, (double)re.width * re.height);
+	}
+	share = std::min (share, 1.0);
+
+	VkCommandBuffer cmd = ctx->Cmd ();
+	auto barrier = [cmd](VkPipelineStageFlags2 s0, VkAccessFlags2 a0, VkPipelineStageFlags2 s1, VkAccessFlags2 a1) {
+		VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+		mb.srcStageMask = s0, mb.srcAccessMask = a0, mb.dstStageMask = s1, mb.dstAccessMask = a1;
+		VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+		dep.memoryBarrierCount = 1, dep.pMemoryBarriers = &mb;
+		vkCmdPipelineBarrier2 (cmd, &dep);
+	};
+	const VkPipelineStageFlags2 CS = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, FS = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+	const VkAccessFlags2 RD = VK_ACCESS_2_SHADER_READ_BIT, WR = VK_ACCESS_2_SHADER_WRITE_BIT;
+	// (the last frame's march read them)
+	barrier (FS | CS, RD | WR, CS, RD | WR);
+	uint32_t pc[2] = { slot * MAX_MARCHED, (uint32_t)list.size () };
+	VkDescriptorSet s[2] = { frameSet, compSet };
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compLayout, 0, 2, s, 0, nullptr);
+	vkCmdPushConstants (cmd, compLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, gridPipe);
+	vkCmdDispatch (cmd, GX / 4, GY / 4, GZ / 4 * (uint32_t)list.size ());
+	barrier (CS, WR, CS, RD);
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, sunPipe);
+	vkCmdDispatch (cmd, GX / 8, GY / 8, GZ / 8 * (uint32_t)list.size ());
+	barrier (CS, WR, FS, RD);
+	ctx->GpuMark ("fb grid");
+	computed = true;
+}
+
+void FireballRenderer::Render (VkDescriptorSet frameSet, VkDescriptorSet atmSet)
+{
+	drawn = false;
+	if (!computed || list.empty () || !halfColor.image) return;
+	vkc::Target t[3] = { { halfColor.image, halfColor.view, HALF_FORMAT, halfExtent },
+		{ halfMask.image, halfMask.view, VK_FORMAT_R8_UNORM, halfExtent },
+		{ halfOcc.image, halfOcc.view, OCC_FORMAT, halfExtent } };
+	vkc::Target d{ halfDepth.image, halfDepth.view, ctx->depthFormat, halfExtent };
+	// (light 0, transmittance 1; no occlusion: inverse depths 0, transmittance 1)
+	const float clear[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+	ctx->BindTargetsWithDepth (t, 3, d, clear);
+	VkCommandBuffer cmd = ctx->Cmd ();
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, marchPipe);
+	VkDescriptorSet s[3] = { frameSet, marchSet, atmSet };
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, marchLayout, 0, 3, s, 0, nullptr);
+	// (far to near)
+	std::vector<size_t> order (list.size ());
+	for (size_t i = 0; i < order.size (); i++) order[i] = i;
+	std::sort (order.begin (), order.end (), [this](size_t a, size_t b) { return list[a].dist > list[b].dist; });
+	// (the march's jitter: a new sequence each simulation step, the same
+	// while paused - a frozen fireball, not one crawling with noise)
+	static uint32_t frameNo = 0;
+	static double lastT = -1e30;
+	double simt = oapiGetSimTime ();
+	if (simt != lastT) frameNo++, lastT = simt;
+	for (size_t i : order) {
+		vkc::Context::Transient vb = ctx->AllocTransient (sizeof(list[i].box));
+		memcpy (vb.ptr, list[i].box, sizeof(list[i].box));
+		vkCmdBindVertexBuffers (cmd, 0, 1, &vb.buffer, &vb.offset);
+		uint32_t pc[3] = { ctx->FrameIndex () * MAX_MARCHED + (uint32_t)i, frameNo, halfExtent.width < ctx->RenderExtent ().width ? 2u : 1u };
+		vkCmdPushConstants (cmd, marchLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), pc);
+		vkCmdDraw (cmd, 36, 1, 0, 0);
+	}
+	ctx->EndTarget ();
+	ctx->GpuMark ("fb march");
+	drawn = true;
+}
+
+void FireballRenderer::Draw (VkDescriptorSet frameSet, VkImageView fog, VkSampler fogSampler)
+{
+	if (!drawn) return;
+	uint32_t fi = ctx->FrameIndex ();
+	VkImageView fv = fog ? fog : dummyFog.view;
+	VkSampler fs = fog ? fogSampler : linearClamp;
+	if (compoFog[fi] != fv || compoPrepass[fi] != prepassView || compoGen[fi] != halfGen) {
+		// (this slot's set: not in use by a frame in flight)
+		VkDescriptorImageInfo ii[5] = { { nearestClamp, halfColor.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+			{ nearestClamp, halfMask.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+			{ nearestClamp, halfOcc.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+			{ nearestClamp, prepassView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+			{ fs, fv, VK_IMAGE_LAYOUT_GENERAL } };
+		VkWriteDescriptorSet w[5]{};
+		for (uint32_t i = 0; i < 5; i++) {
+			w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			w[i].dstSet = compoSet[fi], w[i].dstBinding = i, w[i].descriptorCount = 1;
+			w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, w[i].pImageInfo = &ii[i];
+		}
+		vkUpdateDescriptorSets (ctx->device, 5, w, 0, nullptr);
+		compoFog[fi] = fv, compoPrepass[fi] = prepassView, compoGen[fi] = halfGen;
+	}
+	VkCommandBuffer cmd = ctx->Cmd ();
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compoPipe);
+	VkDescriptorSet s[2] = { frameSet, compoSet[fi] };
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compoLayout, 0, 2, s, 0, nullptr);
+	uint32_t on = fog ? 1u : 0u;
+	vkCmdPushConstants (cmd, compoLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(on), &on);
+	vkCmdDraw (cmd, 3, 1, 0, 0);
+	ctx->GpuMark ("fb comp");
+}

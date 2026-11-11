@@ -1,0 +1,139 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Crash fireballs (Fireball.cpp): the grid of each fireball filled from its
+// procedural model, at its age (the same at any frame rate; frozen while
+// paused):
+// - its shape: a ball of radius r drawn out along its path (the fuel thrown
+//   on with the wreck), flattened as it lifts off into a cap, its base drawn
+//   in from below (the inflow of a rising vortex ring)
+// - its billows: the surface pushed out and in by noise of three sizes
+//   (large lobes, billows, small cauliflower), the noise's coordinates
+//   warped by a slowly boiling field (no two lobes alike) and carried by
+//   the flow: growing with it (in units of its radius) and, as it lifts,
+//   turned about the ring's core (the outside rolling down and under, the
+//   inside rising)
+// - how far each part of it burned (the progress c: 0 burning, 1 burned
+//   out): the outer layer and the top first, in lanes and patches by noise;
+//   its temperature falling from the hottest gas's to soot's (900 K) with
+//   it, its soot rising with it
+// Out: A (density 0..1, temperature [kK], soot 0..1, -), C (the noise's
+// coordinates for the march's detail, -)
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+#include "frame.glsl"
+#define FB_SET 1
+#define FB_BINDING 6
+#include "fireball.glsl"
+
+layout(set = 1, binding = 0, rgba16f) uniform writeonly image3D outA;
+layout(set = 1, binding = 2, rgba16f) uniform writeonly image3D outC;
+layout(set = 1, binding = 4) uniform sampler3D shapeNoise;  // 128^3 Perlin-Worley (billowy), repeating
+layout(set = 1, binding = 5) uniform sampler3D detailNoise; // 32^3 Worley fBm, repeating
+
+layout(push_constant) uniform Pass {
+	uint base;   // the frame slot's first fireball
+	uint count;
+} pc;
+
+// the noise volumes normalized: mean 0, about +-1 (two standard deviations)
+// (the shape noise's values: mean 0.67, sd 0.073; the detail's 0.475, 0.12)
+float Sh (vec3 x) { return clamp ((textureLod (shapeNoise, x, 0.0).r - 0.67) * 6.8, -1.3, 1.3); }
+float Dt (vec3 x) { return clamp ((textureLod (detailNoise, x, 0.0).r - 0.475) * 4.2, -1.3, 1.3); }
+
+void main ()
+{
+	ivec3 id = ivec3 (gl_GlobalInvocationID);
+	uint k = uint (id.z / FB_GZ);
+	if (k >= pc.count || id.x >= FB_GX || id.y >= FB_GY) return;
+	FireballParams P = fireballs[pc.base + k];
+	vec3 uvw = (vec3 (id.x, id.y, id.z % FB_GZ) + 0.5) / vec3 (FB_GX, FB_GY, FB_GZ);
+	vec3 p = mix (P.boxMin.xyz, P.boxMax.xyz, uvw); // ball space [m]
+	float r = P.shape.x, e = P.shape.z, L = P.shape.w, u = P.time.y;
+	vec3 seed = fract (vec3 (0.137, 0.291, 0.443) * P.time.w);
+	// (in units of 0.9 r: its billows reach out to about 1.3 of the shape's
+	// radius - seen, it was a fifth larger than the model's ball)
+	vec3 x = p / (0.9 * r);
+	{   // (beyond the reach of its billows: nothing - the noise not sampled)
+		vec3 ax = P.axis.xyz;
+		vec3 xe = x - ax * (dot (x, ax) * (1.0 - 1.0 / P.shape.z));
+		xe.z /= 1.0 - 0.2 * P.shape.w;
+		if (length (xe) > 1.9) {
+			imageStore (outA, id, vec4 (0.0));
+			imageStore (outC, id, vec4 (0.0));
+			return;
+		}
+	}
+
+	// the noise's coordinates: carried by the flow. Growing with it (in
+	// units of its radius); as it lifts, turned about the vortex ring's
+	// core (a circle of radius a at about its centre's height): each point
+	// traced back by the ring's turn so far, faster near the core. (Seen
+	// from aside the outside rolls down, clockwise in (rh, z): back by the
+	// opposite turn)
+	float a = P.flow.y;
+	float rh = length (x.xy);
+	vec2 hd = rh > 1e-4 ? x.xy / rh : vec2 (1.0, 0.0);
+	vec2 v = vec2 (rh - a, x.z + 0.1);
+	// (the turn saturating at about a radian: wound on, the noise was drawn
+	// out into rings round the core as it faded)
+	float ang = 1.1 * tanh (P.flow.x / 1.1) * exp (-dot (v, v) / 1.5);
+	float ca = cos (ang), sa = sin (ang);
+	vec2 v0 = vec2 (ca * v.x - sa * v.y, sa * v.x + ca * v.y);
+	vec3 q = vec3 (hd * (v0.x + a), v0.y - 0.1);
+	// (boiling: the warp field drifts through the noise slowly)
+	float churn = P.flow.z;
+	vec3 qs = q * 0.3 + seed;
+	vec3 w = vec3 (Sh (qs + vec3 (0.0, 0.0, churn)), Sh (qs + vec3 (0.43, 0.17, 0.61 - churn)), Sh (qs + vec3 (0.71, 0.53, 0.29 + 0.7 * churn)));
+	vec3 qw = q + w * (0.22 * P.tune.y);
+
+	// its shape: drawn out along its path, flattened as it lifts off
+	vec3 ax = P.axis.xyz;
+	float xa = dot (x, ax);
+	vec3 xe = x - ax * (xa * (1.0 - 1.0 / e));
+	xe.z /= 1.0 - 0.2 * L;
+	float d = length (xe);
+	// (its base drawn in from below: the inflow under the rising ring)
+	float rhe = length (xe.xy);
+	d += L * 0.5 * exp (-rhe * rhe / 0.2) * smoothstep (0.3, -0.9, xe.z);
+	// its billows: lobes, billows, cauliflower (the amplitude varying over
+	// it: some parts smoother, others ragged); ragged ahead while it is
+	// drawn out (the fuel's spray burning)
+	float n1 = Sh (qw * 0.42 + seed);
+	float n2 = Sh (qw * 1.05 + seed.zxy + 0.37);
+	float n3 = Dt (qw * 0.9 + seed.yzx);
+	float n4 = Sh (qw * 0.2 + seed.yxz + 0.5);
+	float rag = clamp (1.0 + 0.4 * n4, 0.5, 1.4) * P.tune.x;
+	float early = (1.0 - smoothstep (0.0, 0.35, u)) * smoothstep (0.0, 1.0, xa);
+	float disp = rag * (0.2 * n1 + 0.11 * n2 + (0.06 + 0.06 * early) * n3);
+	float edge = d - disp;
+	// (its fading out as it passes to the smoke volume: the march's
+	// extinction, not this - fading the density, the erosion cut it into flakes)
+	float rho = smoothstep (1.0, 0.92, edge);
+	// (none under the ground or the sea: it spreads on it)
+	rho *= smoothstep (P.axis.w - 0.02 * r, P.axis.w + 0.1 * r, p.z);
+
+	// its temperature: the hot inside, the mixing layer at its surface
+	// cooler, steeply under it (seen through about a fourteenth of its
+	// radius: each billow's middle hotter than its rim, where the ray grazes
+	// the cool layer - limb-darkened, the billows' shapes seen by their
+	// light); the layer thinner in places (the hot cores glimpsed,
+	// yellow-white), patches hotter and cooler
+	float nc = Sh (qw * 0.7 + seed.zyx + 0.21);
+	float inner = smoothstep (0.0, clamp (0.16 + 0.12 * n4, 0.04, 0.3), 1.0 - edge);
+	float T = mix (P.centre.w, P.heat.x, inner) * (1.0 + 0.04 * n2 - 0.05 * max (nc, 0.0));
+	// how far it burned (0 burning, 1 burned out to soot): its mixing layer
+	// and its top first, in lanes and patches; the cooled soot at 700 K
+	float c = P.heat.y + 0.4 * (edge - 0.75) + 0.3 * L * xe.z + 0.6 * nc;
+	c = clamp (c, 0.0, 1.0);
+	T = mix (T, 700.0, smoothstep (0.15, 0.9, c));
+	// (the flash: all of it white-hot)
+	T = mix (T, 2450.0, P.heat.z);
+	float soot = smoothstep (0.25, 0.8, c) * (1.0 - P.heat.z);
+	imageStore (outA, id, vec4 (rho, T * 1e-3, soot, 0.0));
+	imageStore (outC, id, vec4 (qw, 0.0));
+}
