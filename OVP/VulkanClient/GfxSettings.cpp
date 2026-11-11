@@ -152,7 +152,7 @@ const std::vector<GfxSettings::Item> &GfxSettings::Items ()
 		"Rocket smoke that stays in the sky for minutes, carried by the wind.", T::LIVE, &GfxSettings::smokeTrails, {0, 1, 1, 1}));
 	items.back ().requires = "Particles";
 	items.push_back (slider ("CameraShake", "ORBITER_VK_SHAKE", G3, "Camera shake",
-		"The cockpit view jolts in turbulence and buffeting.", &GfxSettings::cameraShake, 0.0f, 2.0f, 0.05f, 100.0f, "%.0f %%"));
+		"The cockpit view jolts in turbulence and buffeting; any view jolts with the thud of an explosion near it.", &GfxSettings::cameraShake, 0.0f, 2.0f, 0.05f, 100.0f, "%.0f %%"));
 
 	Item sky{ "DisplayMode", SKY_CFG, "ORBITER_VK_SKY_MODE", G4, "Sky display",
 		"Realistic: as the dark-adapted eye sees it. Enhanced: as a long-exposure photograph (deeper colours, more contrast).",

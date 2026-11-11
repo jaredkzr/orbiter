@@ -25,6 +25,7 @@ struct FireballRenderer::Params { // fireball.glsl
 	float heat[4];    // hottest [K], burn-out base, flash, density
 	float flow[4];    // ring's turn [rad], ring radius / r, churn, extinction scale
 	float tune[4];    // (ORBITER_VK_FIREBALL_TUNE)
+	float mode[4];    // vacuum shell (1), its radius [m], its width [m], its flash (0..1)
 };
 
 namespace {
@@ -45,6 +46,27 @@ namespace {
 		for (int i = 0; i < 4; i++) t[i] = v[i];
 		sigma = v[4];
 	}
+}
+
+void FireballRenderer::ModelTemps (double u, double &Th, double &Ts)
+{
+	// its temperature: the hottest gas (its core) cooling as it burns
+	// (2350 K as it ignites, 2150 at full size, 1750 by 0.9 t_f, 1500
+	// burned out), its surface's (the mixing layer, what is mostly seen:
+	// 1890 K to 1700 K, a bright saturated orange under the march's
+	// knee - at 1690 K it was a dark orange and the ball's area was all
+	// its yellow-white cores - FbPlanck)
+	static const double ku[] = { 0.0, 0.1, 0.25, 0.6, 0.9, 1.2, 1.8 };
+	static const double kT[] = { 2350.0, 2250.0, 2150.0, 2000.0, 1750.0, 1500.0, 1200.0 }; // (its core)
+	static const double kS[] = { 1890.0, 1860.0, 1830.0, 1780.0, 1700.0, 1560.0, 1230.0 }; // (its surface: the mixing layer)
+	Th = kT[6], Ts = kS[6];
+	if (u < 0.0) u = 0.0;
+	for (int k = 0; k < 6; k++)
+		if (u < ku[k + 1]) {
+			double f = (u - ku[k]) / (ku[k + 1] - ku[k]);
+			Th = kT[k] + (kT[k + 1] - kT[k]) * f, Ts = kS[k] + (kS[k + 1] - kS[k]) * f;
+			break;
+		}
 }
 
 bool FireballRenderer::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout,
@@ -489,9 +511,11 @@ void FireballRenderer::Compute (VkDescriptorSet frameSet)
 			double c = (&ab.x)[k];
 			half[k] = 1.7 * r * sqrt (e * e * c * c + (1.0 - c * c));
 		}
+		// (the vacuum shell: a cube just holding it)
+		if (b.vacuum) half[0] = half[1] = half[2] = b.shell + 3.0 * b.width;
 		double bmin[3] = { -half[0], -half[1], -half[2] }, bmax[3] = { half[0], half[1], half[2] };
 		// (nothing below the ground)
-		if (b.ground > -1e8) bmin[2] = std::min (std::max (bmin[2], b.ground - 0.05 * r), bmax[2] - 0.2 * r);
+		if (b.ground > -1e8 && !b.vacuum) bmin[2] = std::min (std::max (bmin[2], b.ground - 0.05 * r), bmax[2] - 0.2 * r);
 		Params &p = pm[i];
 		memset (&p, 0, sizeof(p));
 		const VECTOR3 *ax[3] = { &ex, &ey, &ez };
@@ -513,36 +537,38 @@ void FireballRenderer::Compute (VkDescriptorSet frameSet)
 		p.shape[0] = (float)r, p.shape[1] = (float)b.R, p.shape[2] = (float)e, p.shape[3] = (float)b.lift;
 		p.axis[0] = (float)ab.x, p.axis[1] = (float)ab.y, p.axis[2] = (float)ab.z, p.axis[3] = (float)b.ground;
 		p.time[0] = (float)b.t, p.time[1] = (float)u, p.time[2] = (float)tf, p.time[3] = (float)(b.seed % 997);
-		// its temperature: the hottest gas (its core) cooling as it burns
-		// (2350 K as it ignites, 2150 at full size, 1750 by 0.9 t_f, 1500
-		// burned out), its surface's (the mixing layer, what is mostly seen:
-		// 1890 K to 1700 K, a bright saturated orange under the march's
-		// knee - at 1690 K it was a dark orange and the ball's area was all
-		// its yellow-white cores - FbPlanck), the
-		// share burned out growing (the outer layer from 0.3 t_f; most of
-		// it by t_f, all by 1.3 t_f), the flash in its first tenth of a
-		// second, its density fading from 1.3 t_f as its soot passes to the
-		// smoke volume (gone by 1.8 t_f)
-		static const double ku[] = { 0.0, 0.1, 0.25, 0.6, 0.9, 1.2, 1.8 };
-		static const double kT[] = { 2350.0, 2250.0, 2150.0, 2000.0, 1750.0, 1500.0, 1200.0 }; // (its core)
-		static const double kS[] = { 1890.0, 1860.0, 1830.0, 1780.0, 1700.0, 1560.0, 1230.0 }; // (its surface: the mixing layer)
-		double Th = kT[6], Ts = kS[6];
-		for (int k = 0; k < 6; k++)
-			if (u < ku[k + 1]) {
-				double f = (u - ku[k]) / (ku[k + 1] - ku[k]);
-				Th = kT[k] + (kT[k + 1] - kT[k]) * f, Ts = kS[k] + (kS[k + 1] - kS[k]) * f;
-				break;
-			}
+		// its temperature (ModelTemps): the hottest gas (its core) and its
+		// surface (the mixing layer); the share burned out growing (the
+		// outer layer from 0.3 t_f; most of it by t_f, all by 1.3 t_f); the
+		// ignition flash: white-hot for its first two frames, handed over
+		// to the orange ball by 0.1 s (not the lemon yellow of a hot
+		// blackbody under the march's knee: fireball.frag mixes its light
+		// to white by this); its density fading from 1.3 t_f as its soot
+		// passes to the smoke volume (gone by 1.8 t_f)
+		double Th, Ts;
+		ModelTemps (u, Th, Ts);
 		p.heat[0] = (float)Th;
 		p.centre[3] = (float)Ts;
 		p.heat[1] = (float)(-0.55 + 1.15 * u);
-		p.heat[2] = (float)std::clamp (1.0 - b.t / 0.08, 0.0, 1.0);
+		p.heat[2] = (float)std::clamp ((0.1 - b.t) / 0.05, 0.0, 1.0);
 		p.heat[3] = (float)std::clamp ((1.8 - u) / 0.5, 0.0, 1.0); // (the soot ball, rising, fading into the smoke volume's cap)
 		p.flow[0] = (float)b.roll;
 		p.flow[1] = 0.55f;
 		p.flow[2] = (float)(0.08 * b.t);
 		p.flow[3] = tuneSigma;
 		for (int k = 0; k < 4; k++) p.tune[k] = tune[k];
+		if (b.vacuum) {
+			// the vacuum shell (PLAN.md 2.7): white-hot as it flashes (its
+			// first frame or two), then a pale vapour shell, its gas cooling
+			// from 2500 K, thinning out, gone by 0.4 s
+			p.heat[0] = (float)(2500.0 - 1200.0 * std::clamp (b.t / 0.4, 0.0, 1.0));
+			p.centre[3] = p.heat[0];
+			p.heat[1] = 0.0f, p.heat[2] = 0.0f;
+			p.heat[3] = (float)std::clamp (1.0 - b.t / 0.4, 0.0, 1.0);
+			p.flow[0] = 0.0f;
+			p.mode[0] = 1.0f, p.mode[1] = (float)b.shell, p.mode[2] = (float)b.width;
+			p.mode[3] = (float)std::clamp (1.0 - b.t / 0.08, 0.0, 1.0);
+		}
 		// its box (view space), the proxy drawn
 		static const int faces[6][4] = { { 0, 1, 3, 2 }, { 4, 6, 7, 5 }, { 0, 4, 5, 1 }, { 2, 3, 7, 6 }, { 0, 2, 6, 4 }, { 1, 5, 7, 3 } };
 		VECTOR3 corner[8];

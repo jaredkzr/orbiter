@@ -39,6 +39,8 @@ public:
 	/// a frame: their flames and smoke (frozen while paused)
 	void Update (Scene *scene);
 	void CollectLights (Scene *scene, std::vector<LightSource> &lights);
+	/// the hot air over them (the heat shimmer: PlumeRenderer::AddHeat)
+	void CollectHeat (Scene *scene, class PlumeRenderer &pr);
 	void DrawParticles (Scene *scene);
 	/// the rings retired (their particles live on)
 	void Release (ParticleSystem *sys);

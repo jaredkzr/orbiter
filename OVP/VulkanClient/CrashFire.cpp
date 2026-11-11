@@ -184,6 +184,29 @@ void CrashFires::CollectLights (Scene *scene, std::vector<LightSource> &lights)
 	}
 }
 
+void CrashFires::CollectHeat (Scene *scene, PlumeRenderer &pr)
+{
+	// the air over the burning spill shimmers: a dome of hot air over it
+	// and a column rising 1.5 R from it while its flames burn (fading with
+	// them; the fireball's own heat: VDebris::CollectHeat)
+	double simt = oapiGetSimTime ();
+	for (const Fire &f : fires) {
+		if (f.strength <= 0.02) continue;
+		VECTOR3 c, up, east, north;
+		Frame (f, c, up, east, north);
+		if (length (c - scene->CameraPos ()) > 5e3) continue;
+		PlumeRenderer::HeatSource h;
+		h.pos = scene->ViewPos (c + up * (0.1 * f.R));
+		h.up = scene->ViewDir (up);
+		h.r = std::max (0.5 * f.R, 3.0);
+		h.heat = 0.5 * f.strength;
+		h.column = 1.5 * f.R;
+		h.columnHeat = 0.7 * f.strength;
+		h.drift = 6.0 * (simt - f.t0) / h.r;
+		pr.AddHeat (h);
+	}
+}
+
 void CrashFires::DrawParticles (Scene *scene)
 {
 	ParticleSystem *sys = scene->Particles ();

@@ -166,6 +166,16 @@ public:
 	/// (before the plumes are drawn; outside rendering scopes or in the
 	/// scene's). fx, fy: projection factors; jitter: projection jitter (NDC)
 	void Shimmer (float fx, float fy, const float jitter[2]);
+	/// other hot air of this frame (crash fireballs and their site fires,
+	/// shimmer.frag): a ball of hot gas of radius r [m] at pos (view space)
+	/// - the air at its surface shimmers, heat 0..1 by its temperature -
+	/// with a column of hot air rising up (view space) from it, column [m]
+	/// tall (0: none), and the air its front pushed out as a thin shell of
+	/// radius ring [m] and width ringW [m] (ring 0: none), ringA its
+	/// strength. drift: the eddies' rise so far [r] (the noise carried up)
+	struct HeatSource { VECTOR3 pos{}, up{}; double r = 1.0, heat = 0.0, column = 0.0, columnHeat = 0.0, ring = 0.0, ringW = 1.0, ringA = 0.0, drift = 0.0; };
+	static constexpr uint32_t MAX_HEAT = 8; ///< per frame (shimmer.frag)
+	void AddHeat (const HeatSource &h);
 
 	/// Scorch marks where hot jets meet the ground: add heat to the mark at a
 	/// global position (merged with a mark nearby), and draw them (scene's
@@ -233,6 +243,8 @@ private:
 	VkPipeline shimmerPipe = VK_NULL_HANDLE;
 	VkSampler linearClamp = VK_NULL_HANDLE;
 	void CreateShimmerSource ();
+	std::vector<HeatSource> heat; // (this frame's, besides the plumes)
+	vkc::Buffer heatBuf;          // a slot per frame in flight: count, MAX_HEAT sources
 	struct Mark { OBJHANDLE body; VECTOR3 pos, normal; double radius, dark; uint32_t seed; }; // (body frame)
 	std::vector<Mark> marks;
 	VkPipelineLayout scorchLayout = VK_NULL_HANDLE;

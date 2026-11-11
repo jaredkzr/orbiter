@@ -112,6 +112,10 @@ void main ()
 	// a smoke cloud
 	float u = P.time.y;
 	float albSoot = mix (0.13, 0.3, clamp ((u - 0.9) / 0.9, 0.0, 1.0));
+	// (in vacuum: a thin vapour shell - pale, lit by the sun, its light the
+	// flash's for a frame; its opacity carries the look, not its emission)
+	bool vac = P.mode.x > 0.5;
+	float flash = vac ? P.mode.w : P.heat.z;
 	// the fire's own light on its soot: looking in from the soot towards
 	// the fire (the grid: luminance), the colour of its hot gas
 	vec3 inCol = FbPlanck (0.9 * P.heat.x);
@@ -136,7 +140,7 @@ void main ()
 		float df = (textureLod (shapeNoise, q * 6.1 + seed.yzx, 0.0).r - 0.67) * 6.8;
 		dn += 0.35 * df;
 		// (soot more: its small billows crisp - the cap's cauliflower)
-		float ero = clamp ((0.3 + 0.3 * dn) * (1.0 + 0.5 * A.z) * P.tune.z, 0.0, 0.95);
+		float ero = clamp ((0.3 + 0.3 * dn) * (1.0 + 0.5 * A.z) * P.tune.z * (vac ? 0.5 : 1.0), 0.0, 0.95);
 		float rho = clamp ((A.x - ero) / (1.0 - ero), 0.0, 1.0);
 		rho = smoothstep (0.0, 0.5, rho); // (a crisp edge to the billows: the density rising over a short way)
 		rho *= clamp ((tSurf - t) * soft, 0.0, 1.0);
@@ -144,6 +148,7 @@ void main ()
 		float soot = A.z;
 		float sig = rho * (FB_SIGMA_FLAME + FB_SIGMA_SOOT * soot) * sig0;
 		float alb = mix (0.05, albSoot, soot); // (the hot gas scatters little: its soot does)
+		if (vac) sig = rho * P.heat.w * 0.25 / P.mode.z, alb = 0.85; // (the shell: thin - a third opaque face on, more at its limb - a pale white vapour in the sun)
 		// (its temperature varying a little with the detail: brighter and
 		// darker flecks over the billows, not a smooth glow; more read as
 		// streaks of marble)
@@ -169,8 +174,15 @@ void main ()
 		// from the sun a lighter grey, from the shade side dark with a bright
 		// rim; the thin hot gas forward: with the forward lobe alone the
 		// cap's sunlit side was the darker)
-		vec3 S = alb * (sunL * mix (1.0, 0.3 + 0.7 / phase, soot) * sunF + amb * (0.15 + 0.85 * exp (-0.5 * tauU.y)) + inCol * (kIn * tauU.z));
+		vec3 S = alb * (sunL * mix (1.0, 0.3 + 0.7 / phase, soot) * sunF + amb * (0.15 + 0.85 * exp (-0.5 * tauU.y)) + inCol * (vac ? 0.0 : kIn * tauU.z));
+		if (vac) S = alb * (sun * max (sunF, 0.7) + amb); // (the vapour: white in the sun, scattering many times; no lobe)
 		vec3 E = (1.0 - alb) * FbPlanck (Tk) * P.tune.w;
+		// the ignition flash: white-hot (all three channels over the knee
+		// below), handed over to the orange ball within a tenth of a second
+		if (flash > 0.0) E = mix (E, vec3 (4.0, 3.7, 3.0), flash);
+		// (the vacuum shell: its light is its flash only; after it the pale
+		// vapour lit by the sun - its opacity carries the look, not a glow)
+		if (vac) E *= flash;
 		float a = 1.0 - exp (-sig * dt);
 		float w = T * a;
 		L += w * (S + E);

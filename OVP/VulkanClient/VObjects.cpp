@@ -978,7 +978,7 @@ VDebris::VDebris (OBJHANDLE h, Scene *s, DWORD sn)
 VDebris::~VDebris ()
 {
 	ParticleSystem *sys = scene->Particles ();
-	for (Ring *r : { &fire, &smoke, &sparks, &dust, &frags, &fbFire, &fbSmoke, &fbCore, &fbFlashR, &column, &drift, &quench })
+	for (Ring *r : { &fire, &smoke, &sparks, &dust, &frags, &fbFire, &fbSmoke, &fbCore, &fbFlashR, &fbSkirt, &fbSteam, &column, &drift, &quench })
 		if (r->sys && r->sys == sys) sys->Release (*r); // (retired with r->tex while its particles live; rings idle for long were released already)
 	water.Release (sys);
 }
@@ -1002,6 +1002,7 @@ namespace {
 		double tf;      // [s] its flames' time: bright at 0.25, lifting off at 0.35, burned out by 1.0, gone by 1.3 of it
 		double tw;      // [s] the flames of the wreck and of the spill (then smouldering)
 		double soot;    // [s] its soot cap visible, rising
+		double blast;   // 0: a deflagration (no pressure ring, no condensation cloud - PLAN.md section 3); > 0 reserved for a detonation
 	};
 	FireballModel FireModel (double M, bool onWater)
 	{
@@ -1015,6 +1016,7 @@ namespace {
 		m.tf = std::clamp (0.45 * pow (std::max (m.Mp, 1e-3), 0.2), 0.4, 6.0);
 		m.tw = std::clamp (2.0 + 0.4 * cbrt (M), 2.0, 15.0);
 		m.soot = 8.0 + 3.0 * cbrt (m.Mp);
+		m.blast = 0.0;
 		return m;
 	}
 }
@@ -1127,18 +1129,21 @@ void VDebris::Effects ()
 		VDebris *own = nullptr;
 		// (ORBITER_VK_FIREBALL_NOJOIN=1, testing: a fireball per piece - several at once)
 		static const bool noJoin = getenv ("ORBITER_VK_FIREBALL_NOJOIN") && atoi (getenv ("ORBITER_VK_FIREBALL_NOJOIN"));
-		if (rho >= 1e-4 && !noJoin)
+		// (in vacuum the pieces of one break-up join too: one shell, one
+		// flash - five flashes lit the station out white)
+		if (!noJoin)
 			for (auto &o : formed) {
 				const DEBRISINFO &oi = o.first->info;
 				bool same = !strcmp (oi.source, info.source) && std::fabs (oi.created - info.created) < 0.05; // (one break-up)
-				if (same || length (o.second - p0) < std::max (o.first->fbR, FireModel (info.fuel, onWater).R)) { own = o.first; break; }
+				if (same || (rho >= 1e-4 && length (o.second - p0) < std::max (o.first->fbR, FireModel (info.fuel, onWater).R))) { own = o.first; break; }
 			}
 		if (own) {
 			own->fbFuel += info.fuel;
 			own->fbBreak->fuel += info.fuel;
 			fbBreak = own->fbBreak;
 			FireballModel m = FireModel (own->fbFuel, own->fbWater);
-			own->fbR = own->flashR = m.R, own->fbTf = m.tf;
+			if (rho >= 1e-4) own->fbR = own->flashR = m.R, own->fbTf = m.tf;
+			else own->fbR = own->flashR = 2.9 * cbrt (own->fbFuel), own->fbVacVs = std::clamp (3.0 * own->flashR, 20.0, 300.0);
 			own->fbVel = (own->fbVel * own->fbFuelW + vel * info.fuel) / (own->fbFuelW + info.fuel);
 			own->fbFuelW += info.fuel;
 		} else {
@@ -1154,8 +1159,19 @@ void VDebris::Effects ()
 			fbT0 = simt, fbR = R, fbPos = p0, fbVel = vel, fbFuelW = info.fuel, fbFlash = true, fbStage = 0;
 			fbFlashPos = p0;
 			fbTf = rho >= 1e-4 ? m.tf : 0.0;
-			if (rho < 1e-4) VacuumFlash (dt, R, vel);
-			if (rho >= 1e-4) formed.push_back ({ this, p0 });
+			if (rho < 1e-4) {
+				// (its shell marched as a volume when large enough on
+				// screen - CollectFireballs; else sprites)
+				fbVacVs = std::clamp (3.0 * R, 20.0, 300.0);
+				fbPos = gpos; // (now, not a step ago: the shell moves on from here with fbVel - CollectFireballs)
+				double Rs = 0.15 * R + 0.4 * fbVacVs + 3.0 * (0.1 * R + 0.04 * fbVacVs);
+				FireballRenderer *fr = scene->Fireballs ();
+				fbVac = fr && fr->WantsVolume (id, Rs, length (p0 - scene->CameraPos ()));
+				if (!fbVac) VacuumFlash (dt, R, vel);
+				static const bool fbLog = getenv ("ORBITER_VK_FIREBALL_LOG") != nullptr;
+				if (fbLog) oapiWriteLogV ("VulkanClient: stage vacuum shell: R %.1f m, %.0f m/s, %s", R, fbVacVs, fbVac ? "volume" : "sprites");
+			}
+			formed.push_back ({ this, p0 });
 		}
 		static const bool fbLog = getenv ("ORBITER_VK_FIREBALL_LOG") != nullptr;
 		if (fbLog) oapiWriteLogV ("VulkanClient: fireball %s fuel %.0f kg (rho %.2f, water %d, v %.1f m/s)%s", info.name, info.fuel, rho, (int)onWater, length (vel - GroundVelocity (hp, gpos)), own ? " joins the first" : "");
@@ -1164,6 +1180,7 @@ void VDebris::Effects ()
 	if (fbTf > 0.0 && simt - fbT0 < (fbVolume ? 1.85 : 1.35) * fbTf) {
 		VECTOR3 air = GroundVelocity (hp, fbPos); // (the air there: turning with the planet)
 		bool ignite = fbFlash;
+		fbPlanet = hp;
 		Fireball (dt, rho, up, air, onWater);
 		{   // (the ground or the sea below its centre: the volume spreads on it)
 			double lng, lat, rad;
@@ -1188,6 +1205,9 @@ void VDebris::Effects ()
 			if (h < std::max (0.5 * fbR, 15.0)) {
 				FireballModel m = FireModel (fbFuel, fbWater);
 				scene->Fires ()->Add (hp, fbPos - up * h, fbDir, fbV0, fbFuel, m.Mp, fbR, fbT0, 0.5 * fbTf, m.tw, pt.IsWater ());
+				// (on the sea: a ring and foam at its foot, by its size - PLAN.md section 3)
+				if (pt.IsWater () && scene->Water ())
+					scene->Water ()->Impulse (hp, fbPos - up * h, 0.6 * fbR, std::clamp (cbrt (m.Mp) / 12.0, 0.3, 1.0));
 			}
 		}
 	}
@@ -1470,6 +1490,17 @@ void VDebris::Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 
 	}
 	fbPos += fbVel * dt;
 	fbFlashPos += air * dt;
+	if (flash) {
+		// its foot: the surface below it (known from its first step), where
+		// its flash is, its skirt pushed out, the sea boils; and the thud of
+		// it: the camera near it jolted when the sound arrives (Scene::Jolt).
+		// (After the move: fbPos was a step old, a kilometre off in the
+		// global frame, which moves with the planet)
+		fbFootKnown = fbGround > -1e8;
+		fbFoot = fbFootKnown ? fbPos + up * fbGround : fbFlashPos;
+		FireballModel m = FireModel (fbFuel, fbWater);
+		if (fbPlanet) scene->Jolt (fbPlanet, fbFoot, cbrt (m.Mp), R);
+	} else fbFoot += air * dt;
 	// its size: a third at once, grown by 0.25 t_f
 	double r = R * (0.3 + 0.7 * sqrt (std::min (u / 0.25, 1.0)));
 	fbRNow = r;
@@ -1492,20 +1523,103 @@ void VDebris::Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 
 	// the particles at the end of the step spread evenly from -ext to +ext)
 	VECTOR3 e0 = fbPos - ext - fbVel * dt, e1 = fbPos + ext;
 	if (!fbFire.tex) fbFire.tex = scene->FireballTexture (4), fbFire.emissive = true;
-	// the flash: a few large white-hot sprites, gone within a fifth of a second
+	// the ignition flash (PLAN.md section 3): white, two frames, at its
+	// foot - the impact point - under the ball (the volume's own first
+	// frames are white-hot too: fireball.frag)
+	if (flash) {
+		if (!fbFlashR.tex) fbFlashR.tex = scene->FireballTexture (5), fbFlashR.emissive = true; // (a smooth white glow)
+		ParticleSystem::Emission e{};
+		VECTOR3 at = fbFoot + up * (0.12 * R);
+		e.p0 = e.p1 = at, e.vel = air, e.dir = -up, e.dt = dt;
+		e.v0 = 0.0, e.spread = 0.1 * R;
+		e.lifetime = 0.07;
+		e.size = 0.6 * R, e.growth = 0.0;
+		e.alpha = 3.0, e.slowdown = 0.0;
+		e.emissive = true, e.tinted = true, e.albedo[0] = 1.0f, e.albedo[1] = 0.98f, e.albedo[2] = 0.93f;
+		e.cls = ParticleSystem::Class::Fire;
+		Emit (fbFlashR, e, 3, 0.3, true);
+	}
+	// (the sprites' ball: a few large white-hot sprites over it, gone within a tenth of a second)
 	if (flash && !vol) {
-		if (!fbFlashR.tex) fbFlashR.tex = scene->FireballTexture (0), fbFlashR.emissive = true;
 		ParticleSystem::Emission e{};
 		e.p0 = fbPos - fbVel * dt, e.p1 = fbPos, e.vel = fbVel, e.dir = -up, e.dt = dt;
 		e.v0 = 0.0, e.spread = 0.8 * R;
-		e.lifetime = 0.2;
+		e.lifetime = 0.1;
 		e.size = 0.45 * R, e.growth = 0.4 * R / e.lifetime;
 		e.alpha = 4.0, e.slowdown = slow;
-		// (white-yellow throughout, fading: not the ramp's - it cooled to
-		// orange within a few hundredths of a second, a pink dome)
-		e.emissive = true, e.tinted = true, e.albedo[0] = 1.0f, e.albedo[1] = 0.93f, e.albedo[2] = 0.78f;
+		e.emissive = true, e.tinted = true, e.albedo[0] = 1.0f, e.albedo[1] = 0.97f, e.albedo[2] = 0.9f;
 		e.cls = ParticleSystem::Class::Fire;
-		Emit (fbFlashR, e, 5, e.lifetime, true);
+		Emit (fbFlashR, e, 5, 0.3, true);
+	}
+	// its skirt (PLAN.md section 3): the air its front pushes out sweeps the
+	// surface it formed on - over the sea a low white skirt of spray and
+	// mist thrown outward, over the ground a ring of dust in the ground's
+	// colour - a ring at its foot moving out with it for half a second
+	if (fbFootKnown && t < 0.5 && fbPlanet) {
+		double rate = fbWater ? 900.0 : 500.0;
+		fbSkirt.accum += rate * D * (1.0 - t / 0.5) * dt;
+		uint32_t n = (uint32_t)fbSkirt.accum;
+		fbSkirt.accum -= n;
+		if (n) {
+			if (!fbSkirt.tex) fbSkirt.tex = sys->SmokeTexture ();
+			ParticleSystem::Emission e{};
+			e.vel = air, e.dt = dt;
+			e.v0 = fbWater ? 18.0 : 12.0, e.spread = 4.0;
+			e.lifetime = fbWater ? 1.4 : 2.5;
+			e.size = (fbWater ? 0.06 : 0.1) * R * sz, e.growth = 1.5 * e.size / e.lifetime;
+			e.alpha = fbWater ? 0.4 : 0.35, e.slowdown = fbWater ? 0.8 : 1.2;
+			e.tinted = true, e.cold = true, e.ballistic = fbWater;
+			if (fbWater) e.albedo[0] = 0.9f, e.albedo[1] = 0.93f, e.albedo[2] = 0.96f, e.cls = ParticleSystem::Class::Spray;
+			else vksurf::DustColourGlobal (scene, fbPlanet, fbFoot, e.albedo), e.cls = ParticleSystem::Class::Dust;
+			VECTOR3 ex = length (fbDir) > 0.5 ? fbDir - up * dotp (fbDir, up) : crossp (up, _V(1, 0, 0));
+			if (length (ex) < 0.3) ex = crossp (up, _V(0, 1, 0));
+			ex = unit (ex);
+			VECTOR3 ey = crossp (up, ex);
+			double rs = 1.25 * r + 15.0 * t; // (outside its foot: its billows reach 1.2 r, and it sits 0.7 r up)
+			const int K = 8;
+			double a0 = (fbSkirt.accum > 0.5 ? 0.5 : 0.0) * 2.0 * PI / K;
+			for (int k = 0; k < K && n; k++) {
+				uint32_t nk = (n + (K - 1 - k)) / (K - k);
+				n -= nk;
+				double a = a0 + k * 2.0 * PI / K, b = a + 2.0 * PI / K;
+				VECTOR3 ra = ex * cos (a) + ey * sin (a), rb = ex * cos (b) + ey * sin (b), rm = unit (ra + rb);
+				e.p0 = fbFoot + ra * rs, e.p1 = fbFoot + rb * rs;
+				e.dir = -unit (rm * 0.9 + up * 0.35);
+				Emit (fbSkirt, e, nk, e.lifetime + 0.5);
+			}
+		}
+	}
+	// the sea boiling white under it while it burns (steam from its foot)
+	if (fbFootKnown && fbWater && u < 1.0) {
+		double k = 1.0 - 0.7 * std::clamp ((u - 0.6) / 0.4, 0.0, 1.0);
+		fbSteam.accum += 40.0 * D * k * dt;
+		uint32_t n = (uint32_t)fbSteam.accum;
+		fbSteam.accum -= n;
+		if (n) {
+			if (!fbSteam.tex) fbSteam.tex = sys->SmokeTexture ();
+			VECTOR3 ex = length (fbDir) > 0.5 ? fbDir - up * dotp (fbDir, up) : crossp (up, _V(1, 0, 0));
+			if (length (ex) < 0.3) ex = crossp (up, _V(0, 1, 0));
+			ex = unit (ex);
+			VECTOR3 ey = crossp (up, ex);
+			ParticleSystem::Emission e{};
+			e.vel = air, e.dir = -up, e.dt = dt;
+			e.v0 = 4.0, e.spread = 3.0;
+			e.lifetime = 1.6;
+			e.size = 0.12 * R * sz, e.growth = 0.1 * R * sz;
+			e.alpha = 0.35, e.slowdown = 1.2;
+			e.tinted = true;
+			e.albedo[0] = e.albedo[1] = e.albedo[2] = 0.85f; // (steam)
+			e.cls = ParticleSystem::Class::Steam;
+			// (chords across its foot, along its path and across it)
+			double w = 1.0 * r;
+			uint32_t n1 = (n + 1) / 2;
+			e.p0 = fbFoot - ex * w, e.p1 = fbFoot + ex * w;
+			Emit (fbSteam, e, n1, 2.0);
+			if (n > n1) {
+				e.p0 = fbFoot - ey * w, e.p1 = fbFoot + ey * w;
+				Emit (fbSteam, e, n - n1, 2.0);
+			}
+		}
 	}
 	if (u < 1.0 && !vol) {
 		// (dim each and tinted towards orange: they overlap by the dozen.
@@ -1827,8 +1941,9 @@ void VDebris::CollectLights (std::vector<LightSource> &lights)
 	} else if (fbTf <= 0.0 && flashR > 0.0 && simt - flashT >= 0.0 && simt - flashT < 1.5) {
 		// (in vacuum: a dozen times the sun's light up close as it flashes,
 		// gone within a fraction of a second)
-		float I = (float)(std::min (1.0, flashR / 10.0) * 12.0 * exp (-flashK * (simt - flashT)));
-		if (I > 0.01f) add (gpos, I, fireCol, 15.0 * std::max (flashR, 2.0), 0.0, 0.0);
+		// (phase 4: half of it - the shell carries the look; at 12 the station was lit out white)
+		float I = (float)(std::min (1.0, flashR / 10.0) * 6.0 * exp (-flashK * (simt - flashT)));
+		if (I > 0.01f) add (gpos, I, fireCol, 10.0 * std::max (flashR, 2.0), 0.0, 0.0);
 	}
 	float I = 0.0f;
 	double range = 0.0;
@@ -1850,7 +1965,27 @@ void VDebris::CollectFireballs (FireballRenderer &fr)
 	// its fireball in air, marched as a volume (VDebris::Fireball decided:
 	// large enough on screen), until its soot ball has passed to the smoke
 	// volume (1.8 t_f). Its age by the simulation time: frozen while paused
-	if (fbTf <= 0.0 || !fbVolume) return;
+	if (fbTf <= 0.0) {
+		// in vacuum: its shell (PLAN.md 2.7), expanding from where it
+		// ignited (moving on with the pieces), gone by 0.4 s
+		if (!fbVac || flashR <= 0.0) return;
+		double t = oapiGetSimTime () - fbT0;
+		if (t < 0.0 || t > 0.4) return;
+		FireballRenderer::Ball b;
+		b.owner = id;
+		b.vacuum = true;
+		b.shell = 0.15 * flashR + fbVacVs * t, b.width = 0.1 * flashR + 0.1 * fbVacVs * t;
+		b.r = b.shell + 3.0 * b.width;
+		b.R = 0.15 * flashR + 0.4 * fbVacVs + 3.0 * (0.1 * flashR + 0.04 * fbVacVs);
+		b.centre = scene->ViewPos (fbPos + fbVel * t);
+		b.up = scene->ViewDir (_V(0, 1, 0));
+		b.axis = scene->ViewDir (_V(1, 0, 0));
+		b.t = t, b.tf = 0.4;
+		b.seed = serial * 2654435761u;
+		fr.Add (b);
+		return;
+	}
+	if (!fbVolume) return;
 	double t = oapiGetSimTime () - fbT0;
 	if (t < 0.0 || t > 1.8 * fbTf || fbRNow <= 0.0) return;
 	FireballRenderer::Ball b;
@@ -1870,12 +2005,43 @@ void VDebris::CollectFireballs (FireballRenderer &fr)
 	fr.Add (b);
 }
 
+void VDebris::CollectHeat (PlumeRenderer &pr)
+{
+	// the heat shimmer of its fireball (PLAN.md section 3): the hot air at
+	// the ball's surface, by its temperature (the model's, not its drawn
+	// brightness: the march's knee holds that), a column of hot air rising
+	// 1.5 R above it, and for its first 0.3 s the thin shell of air its
+	// front pushed out (a refraction ring); on past its flames while its
+	// soot ball is hot (to 2.5 t_f; the site fire's own heat: CrashFires)
+	if (fbTf <= 0.0) return;
+	double t = oapiGetSimTime () - fbT0;
+	if (t < 0.0 || t > 2.5 * fbTf || fbRNow <= 0.0) return;
+	double u = t / fbTf, Th, Ts;
+	FireballRenderer::ModelTemps (u, Th, Ts);
+	PlumeRenderer::HeatSource h;
+	VECTOR3 up = length (fbUp) > 0.5 ? fbUp : _V(0, 1, 0);
+	double raise = fbVolume ? std::max (fbRaise, 0.0) * fbRNow : 0.0;
+	h.pos = scene->ViewPos (fbPos + up * raise);
+	h.up = scene->ViewDir (up);
+	h.r = 1.1 * fbRNow;
+	h.heat = std::clamp ((Th - 1100.0) / 1100.0, 0.0, 1.0) * std::min (1.0, fbR / 5.0);
+	h.column = 1.5 * fbR;
+	h.columnHeat = h.heat * (1.0 - exp (-t / 0.3));
+	if (t < 0.3) {
+		h.ring = 1.15 * fbRNow + 60.0 * t;
+		h.ringW = 0.08 * fbR;
+		h.ringA = 1.5 * (1.0 - t / 0.3);
+	}
+	h.drift = 10.0 * t / fbRNow;
+	pr.AddHeat (h);
+}
+
 void VDebris::DrawParticles ()
 {
 	ParticleSystem *sys = scene->Particles ();
 	if (!sys) return;
 	double simt = oapiGetSimTime ();
-	for (const Ring *r : { &drift, &column, &fbSmoke, &smoke, &quench, &dust, &frags, &fire, &fbFire, &fbCore, &fbFlashR, &sparks })
+	for (const Ring *r : { &drift, &column, &fbSmoke, &smoke, &quench, &fbSteam, &dust, &fbSkirt, &frags, &fire, &fbFire, &fbCore, &fbFlashR, &sparks })
 		if (r->sys == sys && simt - r->lastEmit < 1.5 * r->life + 0.1)
 			sys->Draw (*r, r->tex, r->emissive, scene->FrameSet ()); // (if not released while idle)
 	water.Draw (scene);

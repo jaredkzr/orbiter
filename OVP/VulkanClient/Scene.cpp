@@ -1171,6 +1171,22 @@ bool Scene::DetectCameraCut ()
 	return cut;
 }
 
+void Scene::Jolt (OBJHANDLE body, const VECTOR3 &gpos, double strength, double R)
+{
+	// (PLAN.md section 3: amplitude by M_p^(1/3) / d^2 - about 0.7 deg at
+	// 200 m for 7 t, 2 deg at most - none beyond 10 R; it arrives with the
+	// sound, d / 340 s after the flash, and lasts 0.4 s. Kept in the body's
+	// frame: the global frame moves a kilometre a step with the planet)
+	JoltEvent j{};
+	j.body = body;
+	oapiGlobalToLocal (body, &gpos, &j.lpos);
+	j.t0 = oapiGetSimTime (), j.strength = strength, j.R = R, j.tStart = -1.0, j.amp = 0.0;
+	j.phase = fmod (length (gpos), 6.28);
+	jolts.push_back (j);
+	static const bool joltLog = getenv ("ORBITER_VK_JOLT_LOG") != nullptr;
+	if (joltLog) oapiWriteLogV ("VulkanClient: jolt registered at %.3f (R %.0f m, strength %.1f)", j.t0, R, strength);
+}
+
 void Scene::UpdateCamera ()
 {
 	oapiCameraGlobalPos (&camPos);
@@ -1196,11 +1212,15 @@ void Scene::UpdateCamera ()
 	// in the cockpit, the view jolted by the vessel's aerodynamic jolts
 	// (turbulence, buffeting: its aerodynamic acceleration's change within
 	// about half a second; the head lagging, a few tenths of a degree per
-	// m/s^2); ORBITER_VK_SHAKE scales it (0: off)
+	// m/s^2); and any view by the thud of an explosion near it (Jolt: a
+	// damped shake of some tenths of a second when its sound arrives);
+	// ORBITER_VK_SHAKE scales both (0: off)
 	{
 		const double scale = vkc::Gfx ().cameraShake;
 		VESSEL *v = oapiCameraInternal () && scale > 0.0 ? oapiGetFocusInterface () : nullptr;
 		double dt = oapiGetSimStep ();
+		double p = 0.0, r = 0.0, y = 0.0;
+		auto clampA = [](double x) { return std::clamp (x, -2.0 * RAD, 2.0 * RAD); };
 		if (v && dt > 0.0 && oapiGetTimeAcceleration () <= 2.0) {
 			VECTOR3 L, D;
 			v->GetLiftVector (L);
@@ -1210,15 +1230,48 @@ void Scene::UpdateCamera ()
 			shakeLP += (a - shakeLP) * (1.0 - exp (-dt / 0.4));
 			shakeV += ((a - shakeLP) - shakeV) * (1.0 - exp (-dt / 0.04));
 			const double k = 0.25 * RAD * scale;
-			auto clampA = [](double x) { return std::clamp (x, -2.0 * RAD, 2.0 * RAD); };
-			double p = clampA (-k * shakeV.y), r = clampA (0.5 * k * shakeV.x), y = clampA (0.3 * k * shakeV.x - 0.2 * k * shakeV.z);
+			p = clampA (-k * shakeV.y), r = clampA (0.5 * k * shakeV.x), y = clampA (0.3 * k * shakeV.x - 0.2 * k * shakeV.z);
+		} else if (!v) {
+			shakeLP = shakeV = _V(0, 0, 0);
+		}
+		if (!jolts.empty ()) {
+			double simt = oapiGetSimTime ();
+			static const bool joltLog = getenv ("ORBITER_VK_JOLT_LOG") != nullptr;
+			double jp = 0.0, jr = 0.0;
+			const double dur = 0.4;
+			for (auto it = jolts.begin (); it != jolts.end (); ) {
+				if (simt < it->t0 || simt - it->t0 > 60.0) { it = jolts.erase (it); continue; } // (the time went back; or long gone)
+				if (it->tStart < 0.0) {
+					// on its way: arrived when the sound has come as far as the camera is now
+					VECTOR3 g;
+					oapiLocalToGlobal (it->body, &it->lpos, &g);
+					double d = std::max (length (g - camPos), 1.0);
+					if (simt - it->t0 < d / 340.0) { ++it; continue; }
+					it->tStart = it->t0 + d / 340.0;
+					it->amp = std::min (2.0, 2333.0 * it->strength / (d * d)) * std::clamp ((10.0 * it->R - d) / (3.0 * it->R), 0.0, 1.0) * RAD;
+					if (joltLog) oapiWriteLogV ("VulkanClient: jolt arrived at %.3f from %.0f m: %.2f deg", it->tStart, d, it->amp * DEG);
+				}
+				double tau = simt - it->tStart;
+				if (tau > dur || it->amp < 0.02 * RAD) { it = jolts.erase (it); continue; }
+				if (tau >= 0.0) {
+					// (a few quick shakes dying away: the first the hardest)
+					double env = exp (-tau / 0.15) * (1.0 - tau / dur);
+					jp += it->amp * env * sin (2.0 * PI * 7.0 * tau + it->phase);
+					jr += 0.45 * it->amp * env * sin (2.0 * PI * 5.0 * tau + 0.7 + it->phase);
+				}
+				++it;
+			}
+			if (scale > 0.0 && oapiGetTimeAcceleration () <= 2.0) {
+				p = clampA (p + scale * jp), r = clampA (r + scale * jr), y = clampA (y + 0.3 * scale * jr);
+				if (joltLog && (jp != 0.0 || jr != 0.0)) oapiWriteLogV ("VulkanClient: jolt at %.3f: pitch %.3f deg roll %.3f deg", simt, jp * DEG, jr * DEG);
+			}
+		}
+		if (p != 0.0 || r != 0.0 || y != 0.0) {
 			double cp = cos (p), sp = sin (p), cr = cos (r), sr = sin (r), cy = cos (y), sy = sin (y);
 			MATRIX3 Rx = { 1, 0, 0,  0, cp, -sp,  0, sp, cp };
 			MATRIX3 Ry = { cy, 0, sy,  0, 1, 0,  -sy, 0, cy };
 			MATRIX3 Rz = { cr, -sr, 0,  sr, cr, 0,  0, 0, 1 };
 			camRot = mul (camRot, mul (Ry, mul (Rx, Rz)));
-		} else if (!v) {
-			shakeLP = shakeV = _V(0, 0, 0);
 		}
 	}
 	// view = transpose(camRot): global direction -> camera frame
@@ -2149,6 +2202,11 @@ void Scene::BeginFrame ()
 	fireballs->BeginFrame (particles->PxPerRad ());
 	if (fireballs->enabled)
 		for (auto &it : visuals) it.second->CollectFireballs (*fireballs);
+	// the hot air of fireballs and site fires (the heat shimmer)
+	if (plumes->shimmer) {
+		for (auto &it : visuals) it.second->CollectHeat (*plumes);
+		if (crashFires) crashFires->CollectHeat (this, *plumes);
+	}
 
 	// frame uniforms
 	FrameUniforms fu{};

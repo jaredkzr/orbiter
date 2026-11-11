@@ -40,8 +40,14 @@ SCENES = {
     "large":  ("fx_large", dict(CRASH, SPEED="60", ALT="60", CAM_X="-600", CAM_Z="250", CAM_Y="20", CAM_THT="8", CAM_PHI="-100")),
     # (two DGs collide at 300 m, 150 m/s: a ground observer 250 m aside, 60 m below)
     "midair": ("midair", dict(CAM="ground", CAM_FOV="50")),
-    # (a DG into the ISS at 30 m/s: the vacuum flash)
+    # (a DG into the ISS at 30 m/s: the vacuum flash; vacspace: the camera below the station, space behind the shell)
     "vacuum": ("iss_hit", dict()),
+    "vacspace": ("iss_hit", dict(CAM_OFS="0 -4 0")),
+    # (the sea crash seen by an observer 200 m aside and 1 km aside: the camera jolt - phase 4)
+    "jolt200": ("fx_sea", dict(CRASH, CAM_X="-200", CAM_Z="110", CAM_PHI="-99", CAM_THT="3")),
+    "jolt1k":  ("fx_sea", dict(CRASH, CAM_X="-1000", CAM_Z="110", CAM_PHI="-96", CAM_THT="1", CAM_FOV="10")),
+    # (the sea crash from 50 m up, 100 m aside, looking down: the sea behind the ball and its hot air - the heat shimmer)
+    "shimmer": ("fx_sea", dict(CRASH, CAM_X="-85", CAM_Z="60", CAM_Y="50", CAM_FOV="60", CAM_THT="-16", CAM_PHI="-80")),
 }
 
 
@@ -96,7 +102,7 @@ def main():
     install()
     os.environ.update(env)
     os.environ.update(ORBCTL_MEMMAX=os.environ.get("ORBCTL_MEMMAX", "6G"), ORBITER_VK_HIDE_UI="1",
-                      ORBITER_VK_CUT_LOG="1", ORBITER_VK_FIREBALL_LOG="1", ORBITER_VK_PARTICLE_STATS="1")
+                      ORBITER_VK_CUT_LOG="1", ORBITER_VK_FIREBALL_LOG="1", ORBITER_VK_PARTICLE_STATS="1", ORBITER_VK_JOLT_LOG="1")
     if ft:
         os.environ.update(ORBITER_VK_PROFILE="1", ORBITER_VK_FRAMETIMES=os.path.join(outdir, "frames.ft"))
     sess_name = "fxexpl"

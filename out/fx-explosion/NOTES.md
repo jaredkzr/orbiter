@@ -428,3 +428,131 @@ What does not (open): the sun/shade difference of the cap is still modest with a
 sun (a low-sun scene would show it better); the daytime glitter path under the ball is a
 little strong at 0.3-1.2 s; the 0.05 s flash is a flat pale yellow (phase 4: the flash
 sprite/light); the cap's cauliflower is soft close up (phase 7); the stem discs (phase 5).
+
+## Phase 4 (flash, shimmer, water and ground skirts, jolt, vacuum shell)
+
+What changed (OVP/VulkanClient):
+- **Ignition flash** (`fireball.frag`, `Fireball.cpp`, `VDebris::Fireball`): the march mixes
+  its light to white (4, 3.7, 3: all three channels over its knee) by the flash factor, now
+  1 for the first 0.05 s and 0 by 0.1 s (was a linear 0.08 s fade of the grid temperature
+  alone: a 2450 K blackbody under the per-channel knee displayed lemon yellow - red clipped,
+  green nearly, blue 0.6). The 0.033/0.067 s frames are white, 0.1 s is the orange ball
+  with yellow-white cores (sea, land, night: `phase4/{sea,land,night}flash_sheet.png`). A
+  white foot flash sprite (`FireballTexture (5)`, 0.6 R, two frames, alpha 3) at the impact
+  point in both modes; the sprite mode's own white sprites 0.1 s (were 0.2 s, cream).
+- **Heat shimmer** (`PlumeRenderer::AddHeat`, `HeatSource`; `shimmer.frag`; `VDebris::
+  CollectHeat`, `CrashFires::CollectHeat`; `FireballRenderer::ModelTemps`): up to 8 heat
+  sources a frame besides the plumes, in a second buffer of the shimmer set (binding 5):
+  a ball of hot air of radius 1.1 r at the drawn centre - a layer a quarter of r thick at its
+  surface, cut at 1.5 r (with Gaussian tails it reached over the whole sea) - with heat
+  from the *model's* core temperature ((T_h - 1100) / 1100: the drawn brightness is held
+  by the knee), a column of hot air 1.5 R tall rising from it (fading in over 0.3 s), and
+  for 0.3 s the thin shell of air its front pushed out (radius 1.15 r + 60 t, width 0.08
+  R: the background drawn in across its inside and out across its outside - a brief
+  refraction ring, no shock). Eddies 0.15 r, carried up at 10 m/s. On to 2.5 t_f (the soot
+  ball's heat); the site fire adds a dome of 0.5 R and a column of 1.5 R for its t_w. The
+  displacement is 4x the plumes' per unit heat (up to 9 px). Cost 0.1-0.25 ms (the
+  full-screen pass, 1080p/1440p).
+  **MSAA**: the shimmer pass is off with a multisampled scene (`Plumes.cpp:416`, as the
+  plumes'): the fireball's shimmer too. Documented, not changed.
+- **Water** (`VDebris::Effects`, `Fireball`): `WaterFx::Impulse` at the foot (0.6 R,
+  strength M_p^(1/3) / 12) as it ignites; a spray skirt - a ring at 1.25 r + 15 t at the
+  surface (outside its billows: at 0.8 r it was hidden in the ball), 8 segments thrown
+  outward at 18 m/s, 900 D/s falling to 0 over 0.5 s, white droplets of 0.06 R; the sea
+  boiling: steam (albedo 0.85) from chords across its foot (+-r) at 40 D/s for t_f.
+- **Ground**: the same ring as a dust skirt in the ground's colour (`DustColourGlobal`),
+  12 m/s, 500 D/s, 2.5 s; the scorch unchanged.
+- **Camera jolt** (`Scene::Jolt (body, gpos, strength, R)`, `UpdateCamera`): kept in the
+  body's frame (the global frame moves a km a step); it *arrives* when the sound has come as
+  far as the camera is **then** (at the flash the view has cut away to the wreck for a
+  frame: 879 m), amplitude min (2 deg, 2333 M_p^(1/3) / d^2) x clamp ((10 R - d) / 3 R):
+  0.68 deg at 204 m, 0 at 1 km; a 7 Hz pitch + 5 Hz roll shake, decay 0.15 s, 0.4 s;
+  applied to `camRot` for any view (external cameras too), scaled by CameraShake (0: off;
+  its description updated). `ORBITER_VK_JOLT_LOG` logs it. Default on (decision 6).
+  **No camera cut**: `ORBITER_VK_CUT_LOG` shows cuts only at the vessel's destruction
+  (frames 56/57, the wreck view, pre-existing); the jolt is far under the 35 deg rule and
+  does not move the camera. The histories (TAA, SSR, RTL) carry through it.
+- **Vacuum shell** (`FireballRenderer::Ball::vacuum`, `fireball_grid.comp`, `fireball.
+  frag`, `VDebris::CollectFireballs`): the pieces of one break-up join in vacuum too (one
+  shell, one light; seven flashes of 12 sun-units lit the station out white: the light is
+  6 units, range 10 R); the shell is marched when 12 px or larger on screen (else
+  `VacuumFlash`'s sprites): a Gaussian shell of radius 0.15 R + v_s t and width 0.1 R +
+  0.1 v_s t (v_s = clamp (3 R, 20, 300) m/s), ragged by noise, in a cube box; white for
+  its first frame or two (the flash's light, 0.08 s), then a pale vapour lit by the sun
+  (albedo 0.85, a scattering floor of 0.7, no inward glow, no residual emission - its
+  opacity carries the look: a third face on, more at its limb), thinning out, gone by 0.4 s.
+  `phase4/vacspace_sheet.png` (the camera below the station, space behind it),
+  `phase4/vacuum_sheet.png` (the plan's view: against the clouds the shell hardly shows).
+- `FireballModel::blast = 0` (the deflagration): the hook for a future detonation's ring
+  (plan section 3); nothing uses it.
+- Harness: `run.py` scenes `jolt200`, `jolt1k`, `shimmer` (the sea crash from 50 m up,
+  the sea behind the ball), `vacspace`; `ORBITER_VK_JOLT_LOG` on; `phase4/jolt.py` (the
+  logged angles and the frame-to-frame shift of the horizon strip from the video frames),
+  `phase4/shimmer_pair.py`, `phase4/batch.sh`.
+
+### Deviations (phase 4)
+
+- **Shimmer evidence** from a raised camera (`shimmer` scene): from the standard observer the
+  halo and column stand against a uniform sky, where a displacement shows nothing (right,
+  physically); the sea behind the rim and the column shows it (`phase4/shimmer_pair.png`).
+- **The jolt plot's runs have the shimmer off** (`jolt200ns`, `jolt1kns`): at 200 m the
+  halo (1.5 r = 50 m) reaches the frame's edge strip and wobbles the horizon there; the
+  video clip (`jolt_200m.mp4`) has it on. The frame measure is the shift of each frame
+  against the one before (the waves move under a pixel a frame): steps of up to 13 px over
+  0.63-0.85 s at 200 m, none at 1 km (`phase4/jolt.png`, `jolt.txt`). The harness's
+  screenshot index and the log's simulation time differ by about two frames (the same in
+  all phases' stills).
+- **Vacuum "one bright white frame"**: a light-grey disc at frame 1 (the shell's alpha
+  0.4-0.6 over black space), not a blown-out white; the pale shell after it reads as a
+  grey cloud, fairly smooth. Low priority (plan 2.7).
+- **The spray and dust skirts** are sprites: a ring of white puffs at close range
+  (`phase4/close_sheet.png` 0.3-0.8 s); at 170 m a white band at the waterline. The dust
+  skirt on sand is subtle (the ground's own colour).
+- **Lean from wind**: none (no wind model in the particle system); the lean of phase 4b is
+  from the ball's momentum only.
+- The foot and the vacuum shell were first registered a step old in the global frame
+  (`fbPos` = where the piece was a step ago): 870 m off (the planet moves that far in a
+  step). Both are taken after the step now.
+
+### Perf (GPU ms, RX 9070 XT, RT on; sea case; `perf.py phase3/perfNNNN phase4/perfNNNN`)
+
+| window | 1080p ph3 frame / rtl | 1080p ph4 frame / rtl | 1440p ph3 | 1440p ph4 |
+|---|---|---|---|---|
+| 0-0.5 s | 21.99 / 6.64 | 21.61 / 6.51 | 32.12 / 11.90 | 31.84 / 11.60 |
+| 0.5-1 s | 19.19 / 3.20 | 19.34 / 3.14 | 20.45 / 5.14 | 21.77 / 5.67 |
+| 1-2 s | 17.60 / 2.64 | 17.39 / 2.43 | 19.80 / 4.18 | 20.23 / 3.98 |
+| 2-3 s | 16.86 / 2.17 | 16.84 / 2.24 | 18.59 / 2.89 | 18.46 / 2.78 |
+| crash 0-3 s median | 17.62 | 17.60 | 20.49 | 20.16 |
+| peak particle+fb frame | 3.04 | 2.98 | 2.74 | 2.92 |
+| shimmer pass (median / max, 0-3 s) | - | 0.08-0.11 / 0.17 | - | 0.12-0.16 / 0.33 |
+
+(The phase-3 columns are `phase3/perf*` re-measured by phase 3's batch2; both runs of each
+pair on the same day.) Close (`fbperf.py`): 1080p march 0.56-0.90 / 1.16, sum max 1.60;
+1440p march 0.50-0.93 / 1.40, sum max 1.80; shimmer 0.15-0.23 / 0.46. Budget (<= 2 ms
+close, <= 5 ms the explosion's peak at 1440p): met.
+
+### Status (phase 4)
+
+Evidence: `phase4/{sea,land,night}_sheet.png`, `phase4/{sea,land,night}flash_sheet.png`
+(0.033-0.3 s), `phase4/close_sheet.png`, `phase4/shimmer_pair.png`, `phase4/vacspace_sheet.png`,
+`phase4/vacuum_sheet.png`, A/B `phase4/ab_{sea,land,night}.png` (phase 3 vs 4), videos
+`phase4/{sea,land,night}_crash.mp4` (1080p, 1 s before to 10 s after, the wreck-view frame
+dropped), `phase4/jolt_200m.mp4`, `phase4/jolt.png` + `jolt.txt`, perf `phase4/perf{1080,
+1440}.txt`, `perfclose{1080,1440}.txt`, `fbperf.txt`. Validation layer (sea): clean
+(`phase4/validation`). ctest -R "Particles|Water|Damage|Debris": 12/13 (the known
+DamageEffectsTest AIR failure).
+
+What convinces: the flash is white for two frames and orange after, by day and at night;
+the sea behind the ball's rim bends and the waves wobble under the hot air; the thud
+arrives 0.6 s after the flash at 200 m as a short shake, none at 1 km; the white spray
+skirt and the steam at the waterline, the foam ring; one shell in vacuum.
+
+What does not (open): the skirts' sprite look close up; the vacuum shell's first frame is
+grey, not white; the dust skirt on sand barely reads; the half-resolution composite's seam
+at the waterline (phase 2); the stem discs (phase 5).
+
+Hand-off for phase 5 (debris trail and wreck-fire polish): flame tongues aft, a trail
+spacing floor (no beads), hot-piece trails, the quench, embers/smoulder, the hull glow tied
+to the flames, land pieces burning for t_w; the stem's WreckSmoke puffs draw as round dark
+discs below the cap (the sprites until they grow: a volumetric stem or larger, fewer puffs
+with a soft edge). The skirt's particles could use the same (a low mist sheet, not puffs).

@@ -41,6 +41,8 @@ public:
 	virtual void CollectPlumes (class PlumeRenderer &pr) {}
 	/// crash fireballs of this frame, marched as volumes (before the prepass)
 	virtual void CollectFireballs (class FireballRenderer &fr) {}
+	/// hot air of this frame for the heat shimmer (PlumeRenderer::AddHeat)
+	virtual void CollectHeat (class PlumeRenderer &pr) {}
 	/// particles of the object's own (engine smoke), in the scene with the reactive mask
 	virtual void DrawParticles () {}
 	/// reentry plasma sheath (heated vessels), in the scene with the reactive mask
@@ -196,6 +198,7 @@ public:
 	void CollectLights (std::vector<LightSource> &lights) override;
 	void DrawParticles () override;
 	void CollectFireballs (class FireballRenderer &fr) override;
+	void CollectHeat (class PlumeRenderer &pr) override;
 
 private:
 	DWORD serial;
@@ -218,8 +221,10 @@ private:
 	// the fireball (Fireball): its flames, each cooling over its life (the
 	// particles' temperature ramp), its soot cap rising from it; in vacuum
 	// an expanding shell, its vapour (fbSmoke); its hot core (fbCore); the
-	// flash as it ignites (fbFlashR)
-	Ring fbFire, fbSmoke, fbCore, fbFlashR;
+	// flash as it ignites (fbFlashR); the skirt its front pushes out over
+	// the water or the ground (spray, dust: fbSkirt); the sea boiling under
+	// it (fbSteam)
+	Ring fbFire, fbSmoke, fbCore, fbFlashR, fbSkirt, fbSteam;
 	/// the propellant of a break-up: its pieces' shares (one fireball of all
 	/// of it; the visible time of their flames, t_w, by all of it)
 	struct BreakUp { double fuel = 0.0; };
@@ -242,6 +247,13 @@ private:
 	double fbRaise = -1.0;     // its centre raised above where it formed (/ r: on the ground, a ball resting on it; -1: not known yet)
 	VECTOR3 fbUp{ 0, 1, 0 };
 	bool fbVolume = false;     // marched as a volume this step (its flame sprites left out)
+	VECTOR3 fbFoot{};          // its foot: the surface below where it ignited (moving with the air; fbFootKnown: on the ground or the sea)
+	bool fbFootKnown = false;
+	OBJHANDLE fbPlanet = nullptr; // the body it formed over (the ground's colour: the dust skirt)
+	// in vacuum: its shell marched as a volume (fbVac; else VacuumFlash's
+	// sprites), expanding at fbVacVs [m/s]
+	bool fbVac = false;
+	double fbVacVs = 0.0;
 	void Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 &airVel, bool onWater);
 	void VacuumFlash (double dt, double R, const VECTOR3 &vel);
 	// a burning wreck at rest on the ground: a rising column of smoke, and

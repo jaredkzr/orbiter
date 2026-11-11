@@ -241,6 +241,12 @@ struct PlumeRenderer::Params { // plume.glsl
 	float hit2[4];     // reach of the gas spreading along the surface, fraction of the jet blocked
 };                     // (lengths in exit radii)
 
+namespace {
+	// (shimmer.frag HeatBuffer: the slots' counts, then the sources, slot * MAX_HEAT + i, four vec4 each)
+	constexpr VkDeviceSize HEAT_SRC = 4 * 16;
+	constexpr VkDeviceSize HEAT_BUF = 16 + HEAT_SRC * PlumeRenderer::MAX_HEAT * vkc::FRAMES_IN_FLIGHT;
+}
+
 VkDeviceSize PlumeRenderer::BufferSize () const
 {
 	return 16 + sizeof(Params) * MAX_PLUMES * vkc::FRAMES_IN_FLIGHT;
@@ -252,6 +258,10 @@ bool PlumeRenderer::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout, Vk
 	ctx = c;
 	buf = ctx->CreateBuffer (BufferSize (), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
 	memset (buf.mapped, 0, BufferSize ());
+	// (the hot air of fireballs and site fires for the shimmer: a slot per
+	// frame in flight of a count and MAX_HEAT sources of four vec4)
+	heatBuf = ctx->CreateBuffer (HEAT_BUF, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+	memset (heatBuf.mapped, 0, HEAT_BUF);
 	shapeView = shapeNoise, detailView = detailNoise;
 	enabled = vkc::Gfx ().plumes;
 	if (const char *e = getenv ("ORBITER_VK_PLUME_FULLRES")) halfRes = atoi (e) == 0;
@@ -419,19 +429,26 @@ bool PlumeRenderer::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout, Vk
 		lsc.magFilter = lsc.minFilter = VK_FILTER_LINEAR;
 		lsc.addressModeU = lsc.addressModeV = lsc.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 		VK_CHECK(vkCreateSampler (ctx->device, &lsc, nullptr, &linearClamp));
-		VkDescriptorSetLayoutBinding sb[5]{};
-		for (uint32_t i = 0; i < 5; i++)
-			sb[i] = { i, i == 1 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
+		VkDescriptorSetLayoutBinding sb[6]{};
+		for (uint32_t i = 0; i < 6; i++)
+			sb[i] = { i, i == 1 || i == 5 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
 		VkDescriptorSetLayoutCreateInfo slci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-		slci.bindingCount = 5, slci.pBindings = sb;
+		slci.bindingCount = 6, slci.pBindings = sb;
 		VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &slci, nullptr, &shimmerSetLayout));
-		VkDescriptorPoolSize sps[2] = { { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 }, { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1 } };
+		VkDescriptorPoolSize sps[2] = { { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 }, { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 } };
 		VkDescriptorPoolCreateInfo spci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 		spci.maxSets = 1, spci.poolSizeCount = 2, spci.pPoolSizes = sps;
 		VK_CHECK(vkCreateDescriptorPool (ctx->device, &spci, nullptr, &shimmerPool));
 		VkDescriptorSetAllocateInfo sdai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
 		sdai.descriptorPool = shimmerPool, sdai.descriptorSetCount = 1, sdai.pSetLayouts = &shimmerSetLayout;
 		VK_CHECK(vkAllocateDescriptorSets (ctx->device, &sdai, &shimmerSet));
+		{   // (the heat sources' buffer: fixed)
+			VkDescriptorBufferInfo hbi{ heatBuf.buffer, 0, VK_WHOLE_SIZE };
+			VkWriteDescriptorSet hw{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+			hw.dstSet = shimmerSet, hw.dstBinding = 5, hw.descriptorCount = 1;
+			hw.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, hw.pBufferInfo = &hbi;
+			vkUpdateDescriptorSets (ctx->device, 1, &hw, 0, nullptr);
+		}
 		VkPushConstantRange spcr{ VK_SHADER_STAGE_FRAGMENT_BIT, 0, 8 * sizeof(float) };
 		VkPipelineLayoutCreateInfo splci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 		splci.setLayoutCount = 1, splci.pSetLayouts = &shimmerSetLayout;
@@ -532,10 +549,26 @@ void PlumeRenderer::CreateShimmerSource ()
 	prepassView = VK_NULL_HANDLE; // (the sets are written again with the prepass)
 }
 
+void PlumeRenderer::AddHeat (const HeatSource &h)
+{
+	if (heat.size () < MAX_HEAT && h.r > 0.0 && (h.heat > 0.005 || h.columnHeat > 0.005 || h.ringA > 0.005)) heat.push_back (h);
+}
+
 void PlumeRenderer::Shimmer (float fx, float fy, const float jitter[2])
 {
-	if (!shimmer || !shimmerPipe || list.empty() || !prepassView) return;
+	if (!shimmer || !shimmerPipe || (list.empty() && heat.empty ()) || !prepassView) return;
 	if (shimmerGen != ctx->SwapchainGeneration ()) return; // (the prepass sets the source up)
+	{   // this frame's heat sources (shimmer.frag HeatSrc)
+		((uint32_t*)heatBuf.mapped)[slot] = (uint32_t)heat.size ();
+		for (size_t i = 0; i < heat.size (); i++) {
+			const HeatSource &h = heat[i];
+			float *v = (float*)((char*)heatBuf.mapped + 16 + HEAT_SRC * (slot * MAX_HEAT + i));
+			v[0] = (float)h.pos.x, v[1] = (float)h.pos.y, v[2] = (float)h.pos.z, v[3] = (float)h.r;
+			v[4] = (float)h.up.x, v[5] = (float)h.up.y, v[6] = (float)h.up.z, v[7] = (float)h.heat;
+			v[8] = (float)h.column, v[9] = (float)h.columnHeat, v[10] = (float)h.ring, v[11] = (float)h.ringW;
+			v[12] = (float)h.ringA, v[13] = (float)h.drift, v[14] = 0.0f, v[15] = 0.0f;
+		}
+	}
 	// the scene so far into the source
 	ctx->EndTarget ();
 	VkCommandBuffer cmd = ctx->Cmd ();
@@ -584,6 +617,7 @@ void PlumeRenderer::Shutdown ()
 	vkDestroySampler (ctx->device, clampSampler, nullptr);
 	vkDestroySampler (ctx->device, repeatSampler, nullptr);
 	ctx->DestroyBuffer (buf);
+	ctx->DestroyBuffer (heatBuf);
 	if (scorchPipe) vkDestroyPipeline (ctx->device, scorchPipe, nullptr);
 	if (scorchLayout) vkDestroyPipelineLayout (ctx->device, scorchLayout, nullptr);
 	if (shimmerPipe) vkDestroyPipeline (ctx->device, shimmerPipe, nullptr);
@@ -694,6 +728,7 @@ void PlumeRenderer::BeginFrame (double t)
 	slot = ctx->FrameIndex ();
 	simt = t;
 	list.clear ();
+	heat.clear ();
 	((uint32_t*)buf.mapped)[slot] = 0;
 	solidAngle = 0.0;
 }

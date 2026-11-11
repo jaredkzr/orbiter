@@ -42,7 +42,15 @@ public:
 		double roll = 0.0;    // [rad] the vortex ring's turn so far
 		double ground = -1e9; // [m] the ground (or sea) below its centre, along up (< 0: below; -1e9: far)
 		uint32_t seed = 0;
+		// in vacuum (PLAN.md 2.7): no ball - a thin hot shell of radius
+		// shell [m] and thickness width [m] expanding, white for a frame,
+		// then a pale vapour shell fading (r: the box's; t over tf = 0.4 s)
+		bool vacuum = false;
+		double shell = 0.0, width = 1.0;
 	};
+	/// the model's temperatures at u = t / t_f: the hottest gas (its core)
+	/// and its surface (the mixing layer) [K] (fireball_grid.comp)
+	static void ModelTemps (double u, double &Th, double &Ts);
 
 	bool Init (vkc::Context *ctx, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout,
 		VkImageView shapeNoise, VkImageView detailNoise);

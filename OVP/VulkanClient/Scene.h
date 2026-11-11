@@ -260,6 +260,11 @@ public:
 	class WaterFx *Water () { return waterFx.get(); }
 	/// crash-site fires: the fuel spilled by a crash burning where it fell (CrashFire.h)
 	class CrashFires *Fires () { return crashFires.get(); }
+	/// the thud of an explosion at gpos (global) of strength (the cube root
+	/// of the propellant burned [kg]) and radius R [m]: the camera within
+	/// about 10 R jolted (any view) when the sound arrives (d / 340 s),
+	/// amplitude by strength / d^2, scaled by the CameraShake setting
+	void Jolt (OBJHANDLE body, const VECTOR3 &gpos, double strength, double R);
 	/// crash fireballs as volumes (Fireball.h; null: sprites, ORBITER_VK_FIREBALL=sprites)
 	class FireballRenderer *Fireballs ();
 	/// reentry plasma sheaths (null: off)
@@ -534,6 +539,12 @@ private:
 	OBJHANDLE relSelf = nullptr; // the camera's own vessel (moving with it)
 	double relSelfRad = 0.0;
 	VECTOR3 shakeLP{}, shakeV{}; // the cockpit view's jolts: the vessel's aerodynamic acceleration, low-passed; the jolt, smoothed
+	// an explosion's thud on its way (Jolt): where (the body's frame), when
+	// it flashed [s], its strength and radius; once it arrived at the camera
+	// (by the camera's distance then: the view may have cut away at the
+	// flash): when [s], its amplitude [rad]
+	struct JoltEvent { OBJHANDLE body; VECTOR3 lpos; double t0, strength, R, tStart, amp, phase; };
+	std::vector<JoltEvent> jolts;
 	Mat4 view;            // global direction -> view (rotation only)
 	float proj[16] = {};
 	double tanAperture = 1.0;

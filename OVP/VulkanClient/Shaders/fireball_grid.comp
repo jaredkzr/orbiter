@@ -58,6 +58,21 @@ void main ()
 	// (in units of 0.9 r: its billows reach out to about 1.3 of the shape's
 	// radius - seen, it was a fifth larger than the model's ball)
 	vec3 x = p / (0.9 * r);
+	if (P.mode.x > 0.5) {
+		// in vacuum (PLAN.md 2.7): nothing holds the burning propellant
+		// together - a thin shell of it expanding, ragged by the noise,
+		// its gas cooling (the march: white as it flashes, then a pale
+		// vapour shell by its opacity, fading)
+		float rs = P.mode.y, w = max (P.mode.z, 0.01);
+		float dist = length (p);
+		float e = (dist - rs) / w;
+		vec3 qs = p / max (rs, 1.0) * 1.7 + seed;
+		float n1 = Sh (qs), n2 = Dt (qs * 2.3 + seed.zxy);
+		float rho = exp (-e * e) * clamp (0.4 + 0.5 * n1 + 0.35 * n2, 0.0, 1.0);
+		imageStore (outA, id, vec4 (rho, P.heat.x * 1e-3 * (1.0 + 0.05 * n2), 0.0, 0.0));
+		imageStore (outC, id, vec4 (qs, 0.0));
+		return;
+	}
 	{   // (beyond the reach of its billows: nothing - the noise not sampled)
 		vec3 ax = P.axis.xyz;
 		vec3 xe = x - ax * (dot (x, ax) * (1.0 - 1.0 / P.shape.z));
