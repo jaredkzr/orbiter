@@ -258,6 +258,8 @@ public:
 	class GroundTracks *Tracks () { return tracks.get(); }
 	/// disturbances of the water (jets, gear, splashes) for the tile shader
 	class WaterFx *Water () { return waterFx.get(); }
+	/// crash-site fires: the fuel spilled by a crash burning where it fell (CrashFire.h)
+	class CrashFires *Fires () { return crashFires.get(); }
 	/// reentry plasma sheaths (null: off)
 	class PlasmaRenderer *Plasma () { return plasma && plasma->enabled ? plasma.get() : nullptr; }
 	/// particle textures of fires and sparks (made when first needed)
@@ -446,6 +448,7 @@ private:
 	std::unique_ptr<class VolumetricClouds> vclouds;
 	std::unique_ptr<class GroundTracks> tracks;
 	std::unique_ptr<class WaterFx> waterFx;
+	std::unique_ptr<class CrashFires> crashFires;
 	std::unique_ptr<PlumeRenderer> plumes;
 	std::unique_ptr<class PlasmaRenderer> plasma;
 	std::unique_ptr<class ParticleSystem> particles;

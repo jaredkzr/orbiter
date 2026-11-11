@@ -213,13 +213,25 @@ private:
 	Ring frags;              // struck by another body: small bits of it
 	WaterSpray water;        // in the water: splash, spray, wake (from its water state)
 	// the fireball (Fireball): its flames, each cooling over its life (the
-	// particles' temperature ramp), its smoke rising from within; in vacuum
-	// an expanding shell, its vapour (fbSmoke); its hot core (fbCore)
-	Ring fbFire, fbSmoke, fbCore;
-	double fbT0 = -1e30, fbDur = 0.0, fbR = 0.0; // [s] when it formed, how long it burns; [m] its size
+	// particles' temperature ramp), its soot cap rising from it; in vacuum
+	// an expanding shell, its vapour (fbSmoke); its hot core (fbCore); the
+	// flash as it ignites (fbFlashR)
+	Ring fbFire, fbSmoke, fbCore, fbFlashR;
+	/// the propellant of a break-up: its pieces' shares (one fireball of all
+	/// of it; the visible time of their flames, t_w, by all of it)
+	struct BreakUp { double fuel = 0.0; };
+	std::shared_ptr<BreakUp> fbBreak;
+	double fbT0 = -1e30, fbTf = 0.0;     // [s] when it formed; its flames' time t_f (0: none, vacuum)
+	double fbR = 0.0, fbRNow = 0.0;      // [m] its radius grown, now
 	double fbFuel = 0.0;       // [kg] its propellant (the pieces' of one break-up joined)
+	bool fbWater = false;      // formed on the water (less of the fuel burns in it)
 	bool fbFlash = false;      // its flash still to come (the step after it formed)
+	int fbStage = 0;           // (ORBITER_VK_FIREBALL_LOG: its stages logged)
 	VECTOR3 fbPos{}, fbVel{};  // its centre (global), velocity
+	VECTOR3 fbDir{};           // the direction it was thrown along (relative to the air)
+	double fbV0 = 0.0;         // [m/s] how fast (relative to the air), as it ignited
+	VECTOR3 fbFlashPos{};      // where it ignited (the flash's light; moving with the air)
+	double fbFuelW = 0.0;      // (the pieces' velocities weighted by their propellant: fbVel)
 	void Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 &airVel, bool onWater);
 	void VacuumFlash (double dt, double R, const VECTOR3 &vel);
 	// a burning wreck at rest on the ground: a rising column of smoke, and
@@ -235,7 +247,11 @@ private:
 	double flashR = 0.0;     // [m] fireball radius
 	double flashK = 3.0;     // [1/s] its light fading (quicker in vacuum)
 	bool scorched = false;   // (a scorch mark made)
-	bool burning = false;    // flames (burning, in air)
+	bool burning = false;    // flames (burning, in air): visible for the break-up's t_w, not the core's whole burn
+	bool sunk = false;       // under the water (no flames or smoke from it)
+	bool quenched = false;   // its quench burst (a burning or hot piece going under)
+	Ring quench;
+	double flameF = 0.0;     // its flames now (0..1)
 	double dustT = -1e30, dustImpact = 0.0; // the last puff of dust: when, its impact [m/s]
 	void Effects ();
 	void Spray (const VECTOR3 &pos, const VECTOR3 &vel, double v, double rho);

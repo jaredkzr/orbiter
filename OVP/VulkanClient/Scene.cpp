@@ -12,6 +12,7 @@
 #include "Clouds.h"
 #include "GroundTracks.h"
 #include "WaterFx.h"
+#include "CrashFire.h"
 #include "EnvProbe.h"
 #include "VObjects.h"
 #include "PlanetSurface.h"
@@ -161,6 +162,7 @@ bool Scene::Init ()
 	tracks = std::make_unique<GroundTracks>();
 	tracks->Init (ctx);
 	waterFx = std::make_unique<WaterFx>();
+	crashFires = std::make_unique<CrashFires>();
 	VkDescriptorSetLayoutBinding b[10]{};
 	b[0].binding = 0;
 	b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -498,6 +500,7 @@ void Scene::Shutdown ()
 	ssr.reset();
 	if (taa) taa->Shutdown ();
 	taa.reset();
+	if (crashFires) crashFires->Release (particles.get ());
 	if (particles) particles->Shutdown ();
 	particles.reset();
 	if (plumes) plumes->Shutdown ();
@@ -1127,6 +1130,7 @@ void Scene::Update ()
 	}
 
 	for (auto &it : visuals) it.second->Update();
+	if (crashFires) crashFires->Update (this); // (after the debris: a fireball registers its fire)
 }
 
 // ======================================================================
@@ -2371,6 +2375,7 @@ void Scene::FillFrameUniforms (void *pfu)
 	// local light sources, nearest to the camera first
 	std::vector<LightSource> ls;
 	for (auto &it : visuals) it.second->CollectLights (ls);
+	if (crashFires) crashFires->CollectLights (this, ls);
 	// lightning in a gas giant's storms (the flashes of the last frame)
 	for (const VolumetricClouds::Flash &fl : vclouds->Flashes ()) {
 		if (fl.brightness <= 0.01) continue;
@@ -2799,6 +2804,7 @@ void Scene::Render ()
 	particles->DrawScreenSmoke (FrameSet ());
 	for (auto *ps : gc->ParticleStreams()) ps->Render (this);
 	for (auto *vo : list) vo->DrawParticles ();
+	if (crashFires) crashFires->DrawParticles (this);
 	particles->DrawRetired (FrameSet ()); // (smoke of vessels whose visuals are gone)
 }
 
