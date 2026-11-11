@@ -1589,15 +1589,42 @@ void VDebris::Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 
 			// hot, in a plume - braked as hard as the flames it hung there
 			// as a black ball)
 			// (large, little spread: one cap, not a scatter of puffs)
-			m.v0 = 0.05 * R, m.spread = (vol ? 0.7 : 0.3) * r;
+			m.v0 = 0.05 * R, m.spread = (vol ? 0.5 : 0.3) * r;
 			m.lifetime = std::clamp (0.8 * fm.soot, 12.0, 90.0);
 			// (the volume's: as large as its soot ball, to take it over)
 			m.size = (vol ? 1.15 : 0.8) * r * sz, m.growth = (vol ? 2.5 : 2.0) * R / m.lifetime * sz;
 			m.alpha = 0.7, m.slowdown = 0.5;
 			m.tinted = true, m.volumetric = true;
-			m.albedo[0] = m.albedo[1] = m.albedo[2] = vol ? 0.07f : 0.1f; // (soot: a dark grey, lit on top; on the sea too. The volume's: as dark as its soot ball)
+			m.albedo[0] = m.albedo[1] = m.albedo[2] = vol ? 0.08f : 0.1f; // (soot: a dark grey, lit on top; on the sea too. The volume's: as dark as its soot ball)
 			m.cls = ParticleSystem::Class::FireballSmoke;
-			Emit (fbSmoke, m, n, m.lifetime);
+			if (!vol) Emit (fbSmoke, m, n, m.lifetime);
+			else {
+				// the volume's cap shaped as the vortex ring rolls it: a third
+				// of it from its top, rising; the rest from its rim, going out
+				// and over (the cap wider than the ball, flat beneath: a
+				// mushroom cap over the stem of the spill's smoke)
+				uint32_t nt = (n + 2) / 3;
+				Emit (fbSmoke, m, nt, m.lifetime);
+				n -= nt;
+				VECTOR3 ex = length (fbDir) > 0.5 ? unit (fbDir - up * dotp (fbDir, up)) : crossp (up, _V(1, 0, 0));
+				if (length (ex) < 0.5) ex = crossp (up, _V(0, 1, 0));
+				VECTOR3 ey = crossp (up, ex);
+				double ring = 0.65 * r, vo = 0.25 * sqrt (9.81 * R) * lift;
+				const int K = 6;
+				for (int k = 0; k < K && n; k++) {
+					uint32_t nk = (n + (K - 1 - k)) / (K - k);
+					n -= nk;
+					double a = (k + 0.5 * (fbSmoke.accum > 0.5 ? 1.0 : 0.0)) * 2.0 * PI / K;
+					VECTOR3 rad = ex * cos (a) + ey * sin (a);
+					ParticleSystem::Emission e (m);
+					VECTOR3 at = fbPos + up * (std::max (fbRaise, 0.0) * r) + rad * ring;
+					e.p0 = at - fbVel * dt, e.p1 = at;
+					e.dir = -unit (rad * 0.8 + up * 0.35);
+					e.v0 = vo, e.spread = 0.3 * r;
+					e.size = 0.8 * r * sz;
+					Emit (fbSmoke, e, nk, e.lifetime);
+				}
+			}
 		}
 	}
 }
@@ -1768,25 +1795,35 @@ void VDebris::CollectLights (std::vector<LightSource> &lights)
 	};
 	static const float fireCol[3] = { 1.0f, 0.55f, 0.2f };
 	if (fbTf > 0.0 && simt >= fbT0 && simt - fbT0 < 1.3 * fbTf) {
-		// the fireball in air: the ball, an extended source at its centre as
-		// it rises, brightest at 0.25 t_f - some ten times the sun's light at
-		// its surface - then dimming and reddening as it cools, out by 1.3
-		// t_f; with the flash as it ignites, white-yellow, gone within 0.4 s
-		// (the sea and the ground lit before it has grown). (One light, not
-		// two: a second RT-shadowed light for the flash cost 3 ms of shadow
-		// rays over the sea in its range)
+		// the fireball in air: two lights of one source (the RT shadow rays
+		// are shared between the lights of one owner: one ray per pixel):
+		// - the ball, an extended source (half its radius) at its centre as
+		//   drawn (raised above where it formed, rising), brightest at 0.25
+		//   t_f - some ten times the sun's light at its surface - then dimming
+		//   and reddening as it cools, out by 1.3 t_f
+		// - its foot: the flash as it ignites, white-yellow, gone within 0.4
+		//   s, and the fire at the surface it formed on while it burns hard
+		//   there (the sea and the ground under it, the wreck beside it, lit
+		//   from low down before it lifts off)
 		double t = simt - fbT0, u = t / fbTf;
 		double b = u < 0.25 ? 0.5 + 0.5 * u / 0.25 : pow (std::max (0.0, (1.3 - u) / 1.05), 1.5);
 		double heat = std::clamp (1.0 - (u - 0.25) / 1.05, 0.0, 1.0);
 		double k = std::min (1.0, fbR / 10.0);
-		double Ib = k * 14.0 * b, If = t < 0.4 ? k * 20.0 * exp (-10.0 * t) : 0.0;
-		double w = If / std::max (Ib + If, 1e-6);
-		float col[3] = { 1.0f, (float)(0.42 + 0.2 * heat + (0.85 - 0.42 - 0.2 * heat) * w), (float)(0.1 + 0.2 * heat + (0.6 - 0.1 - 0.2 * heat) * w) };
+		double Ib = k * 14.0 * b;
+		float col[3] = { 1.0f, (float)(0.42 + 0.2 * heat), (float)(0.1 + 0.2 * heat) };
 		double range = 15.0 * std::max (fbR, 2.0);
-		// (its source radius a tenth of its size: soft shadows near it; at its
-		// whole size the RT shadow rays, jittered over it within 30 radii, were
-		// incoherent over all of the sea in its range - rtl trace +4 ms)
-		if (Ib + If > 0.01) add (t < 0.4 ? fbPos * (1.0 - w) + fbFlashPos * w : fbPos, (float)(Ib + If), col, range, 0.1 * fbRNow, range);
+		VECTOR3 up = length (fbUp) > 0.5 ? fbUp : _V(0, 1, 0);
+		double raise = fbVolume ? std::max (fbRaise, 0.0) * fbRNow : 0.0;
+		if (Ib > 0.01) add (fbPos + up * raise, (float)Ib, col, range, 0.5 * fbRNow, range);
+		double If = t < 0.4 ? k * 20.0 * exp (-10.0 * t) : 0.0;
+		double Ig = fbGround > -1e8 && fbGround > -2.0 * fbR ? k * 8.0 * b * std::max (0.0, 1.0 - u / 0.6) : 0.0;
+		if (If + Ig > 0.01) {
+			double w = If / (If + Ig);
+			float cf[3] = { 1.0f, (float)(0.5 + 0.35 * w), (float)(0.15 + 0.45 * w) };
+			// (at the surface below its centre; before the ground is known: where it ignited)
+			VECTOR3 foot = fbGround > -1e8 ? fbPos + up * (fbGround + 0.1 * fbRNow) : fbFlashPos;
+			add (foot, (float)(If + Ig), cf, range, 0.35 * fbRNow, 0.0);
+		}
 	} else if (fbTf <= 0.0 && flashR > 0.0 && simt - flashT >= 0.0 && simt - flashT < 1.5) {
 		// (in vacuum: a dozen times the sun's light up close as it flashes,
 		// gone within a fraction of a second)

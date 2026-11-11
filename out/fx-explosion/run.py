@@ -31,6 +31,9 @@ SCENES = {
     "sea":    ("fx_sea", dict(CRASH)),
     "land":   ("fx_land", dict(CRASH, GROUND_REL="1")),
     "night":  ("fx_night", dict(CRASH)),
+    # (the sea crash from the other side: the observer south of it looking north, the sun (SSE, high) behind him:
+    # the ball's sunlit side; "sea" sees its shade side)
+    "sunside": ("fx_sea", dict(CRASH, CAM_X="170", CAM_PHI="97")),
     # (the sea crash from 60 m aside, 72 m from the crash, a wider view: the fireball's surface close up)
     "close":  ("fx_sea", dict(CRASH, CAM_X="-60", CAM_Z="39", CAM_FOV="70", CAM_THT="16", CAM_PHI="-72")),
     "small":  ("fx_small", dict(CRASH, SPEED="70", DIVE="15", CAM_X="-120", CAM_Z="150", CAM_Y="5")),

@@ -50,6 +50,7 @@ bool CandidateSolid (rayQueryEXT q)
 
 const uint MASK_ALL = 0xFFu, MASK_OBJECTS = 0x01u; // (terrain: 0x02)
 const float LIGHT_SHADOW_REACH = 1500.0; // local lights' shadows within this distance of the light [m]
+const float LIGHT_JITTER_PIXEL = 3.0;    // an extended source's shadow rays jittered per pixel within this of its point [m] (the rest per frame)
 const float PI = 3.14159265;
 
 uvec4 Hash4 (uvec3 v)
@@ -242,8 +243,20 @@ void main ()
 		vec4 r = vec4 (Hash4 (uvec3 (p, uint (pc.frame) * 4u + uint (i) + 101u))) / 4294967296.0;
 		vec3 j = (r.xyz * 2.0 - 1.0) * 0.15;
 		if (rad > 0.0 && dist < 30.0 * rad) { // (farther: about a point; coherent rays)
+			// (a large source - a crash fireball of tens of metres: per pixel
+			// within a few metres of its point only, the rays stay coherent
+			// (jittered per pixel over all of it they were not: the trace
+			// 3-4 ms slower over the sea in its range); the rest of it by one
+			// point of it per frame, the same for all pixels, the filter's
+			// history averaging the frames into its soft shadow)
+			float rp = min (rad, LIGHT_JITTER_PIXEL);
 			float ph = 2.0 * PI * r.y, cz = r.x * 2.0 - 1.0, sz = sqrt (max (1.0 - cz * cz, 0.0));
-			j = vec3 (sz * cos (ph), sz * sin (ph), cz) * (rad * pow (r.z, 1.0 / 3.0));
+			j = vec3 (sz * cos (ph), sz * sin (ph), cz) * (rp * pow (r.z, 1.0 / 3.0));
+			if (rad > rp) {
+				vec4 rf = vec4 (Hash4 (uvec3 (uint (pc.frame) * 4u + uint (i) * 977u + 311u, uint (i) + 7u, 13u))) / 4294967296.0;
+				float phf = 2.0 * PI * rf.y, czf = rf.x * 2.0 - 1.0, szf = sqrt (max (1.0 - czf * czf, 0.0));
+				j += vec3 (szf * cos (phf), szf * sin (phf), czf) * ((rad - rp) * pow (rf.z, 1.0 / 3.0));
+			}
 			if (dot (j, Lv) > 0.0) j = -j;
 		}
 		// (spot light emitters inside the hull: from where the beam leaves it)

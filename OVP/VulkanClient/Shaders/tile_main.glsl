@@ -961,6 +961,44 @@ void main()
 			if (fxVar + capVar > 0.0) rough = min(sqrt(sqrt(rough * rough * rough * rough + 2.0 * (fxVar + capVar))), 0.6);
 			float roughS = frame.overcast.w > 0.0 ? sqrt(min(rough * rough + 0.5 * frame.overcast.w, 1.0)) : rough; // (a large source, C3)
 			col += frame.sunColor.rgb * sunT * SpecularBRDF(Nw, V, L, vec3(0.02), roughS) * PI * (1.0 - fxFoam);
+			// the local lights' glitter (a crash fireball, a burning slick, a
+			// launch's flames on the water at night: a path of light on the
+			// waves towards it), each widened by its source's size as seen
+			// from the water (an extended flame), shadowed as its diffuse
+			// light is (the first four: ray traced)
+			{
+				int nl = int(frame.lightCount.x);
+				for (int i = 0; i < nl; i++) {
+					LocalLight l = frame.lights[i];
+					if (l.dir.w > 2.5) continue;
+					vec3 Ll = l.pos.xyz - vPosView;
+					float d = length(Ll);
+					if (d > l.pos.w || d < 1e-3) continue;
+					Ll /= d;
+					if (dot(Nw, Ll) <= 0.0) continue;
+					float a = min(1.0 / max(l.att.x + l.att.y * d + l.att.z * d * d, 1e-4), 1.0);
+					float x = d / l.pos.w;
+					x = clamp(1.0 - x * x * x * x, 0.0, 1.0);
+					a *= x * x;
+					if (l.dir.w > 1.5) a *= smoothstep(l.spot.x, l.att.w, dot(-Ll, l.dir.xyz));
+					if (i < 4) a *= lv[i];
+					if (a < 1e-4) continue;
+					float srcTan = l.dir.w < 1.5 ? l.att.w / d : 0.0;
+					// (widened in the lobe's width - the roughness squared - by the source's size)
+					float alphaL = sqrt(min(roughS * roughS * roughS * roughS + 0.5 * srcTan * srcTan, 1.0));
+					float roughL = sqrt(alphaL);
+					// (the lights' strengths are those of the light they throw on
+					// surfaces, many times the sun's near a flame, far more than a
+					// flame's own brightness as drawn: in the glitter the source
+					// is seen - its radiance (the strength over the source's solid
+					// angle, a source at least half a metre across) is held to a
+					// few times a sunlit white, as the flames are drawn)
+					float ths2 = max(srcTan * srcTan, 0.25 / (d * d));
+					float lum = a * dot(l.col.rgb, vec3(0.2126, 0.7152, 0.0722));
+					a *= min(1.0, 1.0 * PI * ths2 / max(lum, 1e-6));
+					col += l.col.rgb * a * SpecularBRDF(Nw, V, Ll, vec3(0.02), roughL) * PI * (1.0 - fxFoam);
+				}
+			}
 			if (fxJet > 0.0) col = mix(col, FOAM_ALBEDO * irr, fxJet);
 			if (g3 > 0.0) {
 				// whitecaps and shore foam are lit by the waves' normal

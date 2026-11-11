@@ -49,25 +49,23 @@ vec3 FbGridCoordB (vec3 uvw, float s)
 
 // radiance of a blackbody at temperature T [K], scene-linear (1 ~ a sunlit
 // white surface), as a camera balanced for daylight sees it: its
-// brightness about as steep as a real one's: 1 at 2100 K (yellow-orange;
-// a saturated orange displays only up to about 0.4 - brighter, the tone
-// curve whitens it to a pale peach, as nothing in photographs of
-// fireballs is but their cores), 0.3 at 1850 K (what is seen of a
-// billow's middle: orange), 0.1 at 1700 K (the cooler mixing layer at its
-// rim: a deep orange), 2 at 2300 K and 4 at 2500 K (the cores, where the
-// mixing layer is thin, blown out to white-yellow, blooming); cooled
-// soot black. Its colour from Planck's law at three wavelengths (red,
-// green, blue) at a lower colour temperature (0.82 T: photographs' fire
-// orange is about (1, 0.3, 0.02) linear - at its own temperature it
-// displayed a pale tan), rising to 1.3 T for the hottest (2500 K: blown
-// out, the tone curve's whitening of an orange gave salmon; of this
-// yellow, a cream white)
+// brightness about as steep as a real one's up to 2100 K: 1 there
+// (yellow-orange), 0.3 at 1850 K (a dark orange), 0.1 at 1700 K; above it
+// held to about 1.6 (the cores, where the mixing layer is thin, and the
+// flash: a yellow-white under the march's knee, not a pale cream over the
+// whole ball - fireball.frag); cooled soot black. Its colour from
+// Planck's law at three wavelengths (red, green, blue) at a lower colour
+// temperature (0.82 T: photographs' fire orange is about (1, 0.35, 0.01)
+// linear - at its own temperature it displayed a pale tan), rising to
+// 1.1 T for the hottest (the flash's white-yellow)
 vec3 FbPlanck (float T)
 {
 	const vec3 lam = vec3 (0.61, 0.55, 0.465); // [um]
 	T = max (T, 500.0);
-	float Tc = T * mix (0.82, 1.3, smoothstep (1900.0, 2500.0, T));
+	float Tc = T * mix (0.82, 1.1, smoothstep (2200.0, 2500.0, T));
 	vec3 b = 1.0 / (lam * lam * lam * lam * lam * (exp (14388.0 / (lam * Tc)) - 1.0));
 	float y = dot (b, vec3 (0.2126, 0.7152, 0.0722));
-	return b / max (y, 1e-30) * exp (-20000.0 * (1.0 / T - 1.0 / 2100.0));
+	float L = exp (-20000.0 * (1.0 / T - 1.0 / 2100.0));
+	if (L > 1.0) L = 1.0 + 0.6 * (1.0 - exp (-(L - 1.0) / 0.6));
+	return b / max (y, 1e-30) * L;
 }

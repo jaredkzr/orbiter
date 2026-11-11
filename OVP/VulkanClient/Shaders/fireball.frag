@@ -98,6 +98,25 @@ void main ()
 	vec3 amb = frame.ambient.rgb * frame.ambient.w;
 	float soft = 1.0 / (0.12 * r);  // (fading out over this before the ground or the sea)
 	float sig0 = P.flow.w * P.heat.w / r; // (fading out as a whole as its soot passes to the smoke volume)
+	// the sun's direction in ball space, and a few cells of its way out
+	// through the grid at full resolution (the sunlit side of each billow
+	// bright, its far side dark: the grid of optical depths is coarse and
+	// soft, and the ray starts into it deep enough to shade the lit surface)
+	vec3 sunB = normalize (mat3 (P.toBall) * frame.sunDir.xyz);
+	float cell = min (min (size.x / float (FB_GX), size.y / float (FB_GY)), size.z / float (FB_GZ));
+	const float SUN_TAPS[3] = float[3] (0.8, 1.8, 3.2); // [cells] along the sun
+	const float SUN_FAR = 4.2;
+	float sigB = (1.0 / r) * P.flow.w * P.heat.w; // (the grid's optical depth per metre per unit density, times the extinction)
+	// its soot's albedo: fresh soot near black; as it burns out and the cap
+	// ages (diluted by the air it draws in) a lighter grey, the lit top of
+	// a smoke cloud
+	float u = P.time.y;
+	float albSoot = mix (0.13, 0.3, clamp ((u - 0.9) / 0.9, 0.0, 1.0));
+	// the fire's own light on its soot: looking in from the soot towards
+	// the fire (the grid: luminance), the colour of its hot gas
+	vec3 inCol = FbPlanck (0.9 * P.heat.x);
+	inCol /= max (dot (inCol, vec3 (0.2126, 0.7152, 0.0722)), 1e-4);
+	float kIn = 0.7 * P.tune.w;
 
 	vec3 L = vec3 (0.0);
 	float T = 1.0, tW = 0.0, wSum = 0.0, zIn = 0.0, zOp = 0.0, tLast = t0;
@@ -124,14 +143,33 @@ void main ()
 		if (rho <= 0.0) continue;
 		float soot = A.z;
 		float sig = rho * (FB_SIGMA_FLAME + FB_SIGMA_SOOT * soot) * sig0;
-		float alb = mix (0.05, 0.17, soot); // (the hot gas scatters little: its soot does)
+		float alb = mix (0.05, albSoot, soot); // (the hot gas scatters little: its soot does)
 		// (its temperature varying a little with the detail: brighter and
 		// darker flecks over the billows, not a smooth glow; more read as
 		// streaks of marble)
 		float Tk = A.y * 1000.0 * (1.0 + 0.03 * dn + 0.015 * df);
-		vec2 tau = textureLod (gridB, FbGridCoordB ((pb - P.boxMin.xyz) * isz, slab), 0.0).xy;
-		float sunF = 0.08 + 0.92 * (0.7 * exp (-0.7 * tau.x) + 0.3 * exp (-0.12 * tau.x));
-		vec3 S = alb * (sunL * sunF + amb * (0.15 + 0.85 * exp (-0.5 * tau.y)));
+		// the sunlight through it: the first cells towards the sun at full
+		// resolution, the rest from the grid of optical depths beyond them
+		float tauS = 0.0;
+		if (soot > 0.02 || alb > 0.06) {
+			for (int k = 0; k < 3; k++) {
+				vec4 As = textureLod (gridA, FbGridCoord ((pb + sunB * (SUN_TAPS[k] * cell) - P.boxMin.xyz) * isz, slab), 0.0);
+				float ds = (k == 0 ? SUN_TAPS[0] + 0.5 * (SUN_TAPS[1] - SUN_TAPS[0]) : k == 2 ? SUN_FAR - 0.5 * (SUN_TAPS[2] + SUN_TAPS[1]) : 0.5 * (SUN_TAPS[2] - SUN_TAPS[0])) * cell;
+				tauS += As.x * (FB_SIGMA_FLAME + FB_SIGMA_SOOT * As.z) * ds;
+			}
+			tauS *= sigB;
+		}
+		vec3 tau = textureLod (gridB, FbGridCoordB ((pb + sunB * (SUN_FAR * cell) - P.boxMin.xyz) * isz, slab), 0.0).xyz;
+		tauS += tau.x;
+		// (soot scatters little more than once: a low floor of light
+		// scattered many times; the shade side dark)
+		float sunF = 0.05 + 0.95 * (0.85 * exp (-tauS) + 0.15 * exp (-0.2 * tauS));
+		vec3 tauU = textureLod (gridB, FbGridCoordB ((pb - P.boxMin.xyz) * isz, slab), 0.0).xyz;
+		// (the dense soot scatters the sun about evenly - its lit side seen
+		// from the sun a lighter grey, from the shade side dark with a bright
+		// rim; the thin hot gas forward: with the forward lobe alone the
+		// cap's sunlit side was the darker)
+		vec3 S = alb * (sunL * mix (1.0, 0.3 + 0.7 / phase, soot) * sunF + amb * (0.15 + 0.85 * exp (-0.5 * tauU.y)) + inCol * (kIn * tauU.z));
 		vec3 E = (1.0 - alb) * FbPlanck (Tk) * P.tune.w;
 		float a = 1.0 - exp (-sig * dt);
 		float w = T * a;
@@ -145,6 +183,20 @@ void main ()
 	}
 	float alpha = 1.0 - T;
 	if (alpha < 1e-4) discard;
+	// its light compressed channel by channel as a camera's sensor clips
+	// (red first, then green: an orange brighter than its knee goes
+	// yellow, then white - the fire of photographs), with a knee at a
+	// sunlit white: the display's curve above that mixes towards white
+	// and turned the ball's saturated orange a pale peach. Its body (its
+	// red channel at the knee, its green well under it) stays a saturated
+	// orange, its hottest cores a yellow-white
+	{
+		float knee = 1.0 * P.tune.w;
+		vec3 c = L / alpha;
+		vec3 lin = min (c, 0.6 * knee);
+		c = lin + 0.4 * knee * (1.0 - exp (-max (c - 0.6 * knee, 0.0) / (0.4 * knee)));
+		L = c * alpha;
+	}
 	// aerial perspective: the air in front dims it; where it hides the
 	// background, the air's own light (already in the background) is kept
 	if (atm.misc.x > 0.5 && wSum > 0.0) {

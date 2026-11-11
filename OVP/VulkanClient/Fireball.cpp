@@ -346,7 +346,7 @@ void FireballRenderer::AllocGrids ()
 		return im;
 	};
 	gridA = create (VK_FORMAT_R16G16B16A16_SFLOAT, 1);
-	gridB = create (VK_FORMAT_R16G16_SFLOAT, 2); // (the shadows: soft, half the resolution)
+	gridB = create (VK_FORMAT_R16G16B16A16_SFLOAT, 2); // (the shadows and the fire's light looking in: soft, half the resolution)
 	gridC = create (VK_FORMAT_R16G16B16A16_SFLOAT, 1);
 	// (general layout throughout: written by compute, read by the march)
 	VkImage ims[3] = { gridA.image, gridB.image, gridC.image };
@@ -516,14 +516,16 @@ void FireballRenderer::Compute (VkDescriptorSet frameSet)
 		// its temperature: the hottest gas (its core) cooling as it burns
 		// (2350 K as it ignites, 2150 at full size, 1750 by 0.9 t_f, 1500
 		// burned out), its surface's (the mixing layer, what is mostly seen:
-		// 1690 K to 1500 K, orange to a dark orange, FbPlanck), the
+		// 1890 K to 1700 K, a bright saturated orange under the march's
+		// knee - at 1690 K it was a dark orange and the ball's area was all
+		// its yellow-white cores - FbPlanck), the
 		// share burned out growing (the outer layer from 0.3 t_f; most of
 		// it by t_f, all by 1.3 t_f), the flash in its first tenth of a
 		// second, its density fading from 1.3 t_f as its soot passes to the
 		// smoke volume (gone by 1.8 t_f)
 		static const double ku[] = { 0.0, 0.1, 0.25, 0.6, 0.9, 1.2, 1.8 };
 		static const double kT[] = { 2350.0, 2250.0, 2150.0, 2000.0, 1750.0, 1500.0, 1200.0 }; // (its core)
-		static const double kS[] = { 1690.0, 1660.0, 1630.0, 1580.0, 1500.0, 1380.0, 1150.0 }; // (its surface: the mixing layer)
+		static const double kS[] = { 1890.0, 1860.0, 1830.0, 1780.0, 1700.0, 1560.0, 1230.0 }; // (its surface: the mixing layer)
 		double Th = kT[6], Ts = kS[6];
 		for (int k = 0; k < 6; k++)
 			if (u < ku[k + 1]) {

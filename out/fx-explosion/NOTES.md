@@ -313,3 +313,118 @@ What does not (open for phase 3+):
   footage shows a ragged wedge.
 - The sprite fallback below 12 px and beyond 4 fireballs pops (sprites build up over their
   lifetimes when the switch happens mid-burn).
+
+## Phase 3 (lighting integration)
+
+What changed (OVP/VulkanClient):
+- **Two lights of one source** (`VDebris::CollectLights`): the ball (an extended source of
+  half its radius) at its centre *as drawn* (raised 0.7 r above where it formed, rising;
+  the sprite fallback: unraised), 14 sun-units at 0.25 t_f, out by 1.3 t_f; and its foot at
+  the surface below it (the flash, 20 units decaying at 10/s for 0.4 s, and the fire at the
+  surface it formed on, 8 units fading by 0.6 t_f; radius 0.35 r). Both of the fireball's
+  owner: `rtlight_trace.comp` shares one shadow ray per pixel between the lights of one
+  owner (towards one of them at random per pixel and frame), so the second light traces
+  nothing more. Both take RT-shadowed slots (sortRange = range).
+- **Cheap soft shadows of a large source** (`rtlight_trace.comp`): the shadow ray's point
+  on the source is jittered per pixel only within `LIGHT_JITTER_PIXEL` = 3 m of its
+  centre (the rays stay coherent); the rest of the source by one point per frame, the same
+  for all pixels, which the RT filter's history (w 0.1, ~10 frames) averages into the soft
+  shadow. Phase 1's finding (a 20 m source: +3-4 ms `rtl trace`) is gone: with two
+  extended lights the 0.5-1 s `rtl trace` is *lower* than phase 2's (table below).
+- **Sun self-shadowing at full resolution** (`fireball.frag`): at each contributing
+  sample three taps along the sun through grid A (0.8, 1.8, 3.2 cells) and the half-res
+  optical-depth grid B beyond (4.2 cells on); attenuation `0.05 + 0.95 (0.85 e^-tau + 0.15
+  e^-0.2 tau)` (was a floor of 0.08 with `0.7 e^-0.7 tau + 0.3 e^-0.12 tau`, so soft that
+  the whole cap sat at 25-50 %: flat grey).
+- **Soot scatters evenly** (`fireball.frag`): the forward HG lobe (g 0.35) is blended to
+  isotropic by the soot fraction; with the lobe alone the cap's *sunlit* side was the darker
+  (the shade-side camera looks towards the sun: 1.26 x, the sun side 0.68 x).
+- **Soot albedo ramp**: 0.13 (fresh, near black) to 0.30 as the ball burns out and the
+  cap ages (u 0.9 to 1.8); the hot gas 0.05.
+- **The ball's own light on its soot** (`fireball_sun.comp`, B now RGBA16F): a third
+  sweep per B cell, looking in towards the ball's centre through grid A and integrating the
+  burning gas's blackbody emission (`Inward`): the luminance of the fire as seen from
+  there. The march adds `albedo x 0.7 x Inward x Planck colour (0.9 T_core)`: the soot
+  wrapping the fire glows orange from inside, the cap's underside at night.
+- **Froxel soot lit by the ball**: the existing `LocalLightAt` path, now with the light at
+  the drawn centre (it was 0.7 r = 25 m below the ball, at the unraised fbPos).
+- **Water glitter from local lights** (`tile_main.glsl`): a GGX lobe per local light on the
+  wave normal, widened in alpha (roughness squared) by the source's angular size, shadowed
+  by the RT visibility of the first four; the source's radiance (its strength over its
+  solid angle, at least half a metre across) held to one sunlit white, since the lights'
+  strengths (tuned as light thrown on surfaces, 14-20 sun-units) are far above a flame's
+  drawn brightness and the unclamped lobe was a white blob on the sea.
+- **Peak colour** (`fireball.glsl`, `fireball.frag`): the pale peach of 0.05-0.5 s is
+  gone. Cause: the global tone curve mixes towards white above 0.6, and the ball's area was
+  mostly its hot cores (2250 K: luminance 1.9, colour temperature 1.15 T: yellow-white) ->
+  salmon/cream. Fix, local to the fireball: (1) FbPlanck's luminance is held to <= 1.6 above
+  2100 K (`1 + 0.6 (1 - e^-(L-1)/0.6)`), its colour temperature 0.82 T rising only to 1.1 T
+  at 2500 K (was 1.3 T from 1900 K); (2) the surface (mixing layer) temperature keys raised
+  by 200 K (1890/1860/1830/1780/1700/1560/1230 K at u 0/0.1/0.25/0.6/0.9/1.2/1.8: the body
+  at luminance ~0.35, a saturated orange) so that the body, not the cores, is what is seen;
+  (3) a per-channel knee on the marched radiance (linear to 0.6, exp to 1.0): red clips
+  first, green stays - an orange body, yellow-white cores, as a camera's sensor clips.
+  No change to the global tone curve.
+- **Soot cap shaped** (`VDebris::Fireball`): in volume mode a third of the cap's puffs from
+  the top (rising), two thirds from a ring of 0.65 r at the ball's centre going out and over
+  (0.25 sqrt(g R) x lift, direction 0.8 radial + 0.35 up): a wider, flatter cap over the
+  spill's stem. Albedo 0.08.
+- Harness: `run.py` scene `sunside` (the sea crash from the south, looking north, the sun
+  behind the observer; `sea` is the shade side); `phase3/ab.py` (A/B of any two runs),
+  `phase3/sunshade.py` (sun/shade crops), `phase3/batch2.sh` (the deliverables; the video
+  encode drops the wreck-view frame the camera cuts to as the vessel is destroyed).
+
+### Deviations (phase 3)
+
+- **Foot light instead of a plan-2.4 "flash light at the impact point"**: the second light
+  is at the surface below the ball's centre (where the fire sits before lift-off), carrying
+  the flash and the ground fire; before the ground is known, at the ignition point.
+- **Soft shadows by per-frame source points**, not a wider per-pixel jitter: the shadow of
+  a wreck piece in the ball's light swims a little over the ~10-frame history while the
+  ball itself flickers far more; judged acceptable in the videos.
+- **Glitter radiance clamp** (one sunlit white per source) is a visual cap, not physics: the
+  light strengths are not radiometric (a 2000 K ball would be ~900 sun at its surface).
+- **Night metering unchanged** (phase 2's 60 % exclusion): the night sheets show the sea
+  lit by the flash at 0.05 s, the ball blown out at 0.05-0.1 s and orange with structure
+  from 0.3 s, the glitter path and the lit wreck pieces; "partly" as decided.
+- The stem's small WreckSmoke puffs still draw as round discs under the cap (sprites until
+  they grow): phase 5.
+
+### Perf (GPU ms, RX 9070 XT, RT on; sea case; `perf.py phase2/perfNNNN phase3/perfNNNN`)
+
+Measured on the phase-3 build before the last two cosmetic constants (soot phase blend,
+surface keys -50 K); `batch2.sh` re-measures into the same directories.
+
+| window | 1080p ph2 frame / rtl trace | 1080p ph3 frame / rtl trace | 1440p ph2 | 1440p ph3 |
+|---|---|---|---|---|
+| 0-0.5 s | 21.61 / 6.63 | 21.93 / 6.46 | 32.43 / 10.67 | 31.66 / 12.10 |
+| 0.5-1 s | 21.34 / 7.12 | 19.23 / 3.18 | 33.63 / 17.42 | 21.85 / 5.89 |
+| 1-2 s | 17.52 / 3.03 | 17.60 / 2.42 | 20.86 / 5.26 | 20.34 / 3.87 |
+| 2-3 s | 16.15 / 2.25 | 16.98 / 2.44 | 17.78 / 2.47 | 17.98 / 2.56 |
+| crash 0-3 s median | 17.39 | 17.50 | 23.42 | 20.97 |
+| peak particle+fb frame | 2.62 | 3.01 | 2.91 | 2.98 |
+
+Fireball passes (`fbperf.py`, median / max): sea 1080p march 0.32-0.39 / 0.73, grid
+0.16-0.20 / 0.34; sea 1440p march 0.36-0.52 / 0.70; close 1080p march 0.60-0.92 / 1.23,
+sum max 1.69; close 1440p march 0.64-0.95 / 1.45, sum max 1.86. Budget (<= 2 ms close,
+<= 5 ms the explosion's peak at 1440p): met. The full-resolution sun taps and the inward
+sweep cost ~+0.1 ms march, +0.05-0.1 ms grid.
+
+### Status (phase 3)
+
+Evidence: `phase3/{sea,sunside,land,night,close,peak}_sheet.png`, `phase3/sunshade.png`
+(sun side vs shade side crops), `phase3/ab_{sea,land,night}.png` (phase 2 vs phase 3),
+`phase3/peak_sheet.png` (0.05-0.65 s close up), videos `phase3/{sea,land,night}_crash.mp4`
+(1080p, 1 s before to 10 s after), perf `phase3/perf{1080,1440}`, `perfclose{1080,1440}`.
+Validation layer (sea): clean (`phase3/validation`). ctest -R "Particles|Water|Damage|
+Debris": 12/13 (the known DamageEffectsTest AIR failure).
+
+What convinces: the ball is a saturated orange-yellow with yellow-white cores and orange
+lanes from 0.1 s on, at 170 m and close up; the soot ball is lit orange from inside while
+the fire burns; the cap has a sunlit top and a dark underside; at night a glitter path on
+the waves towards the fire and the burning slick, the wreck pieces lit.
+
+What does not (open): the sun/shade difference of the cap is still modest with a 55-degree
+sun (a low-sun scene would show it better); the daytime glitter path under the ball is a
+little strong at 0.3-1.2 s; the 0.05 s flash is a flat pale yellow (phase 4: the flash
+sprite/light); the cap's cauliflower is soft close up (phase 7); the stem discs (phase 5).

@@ -1,11 +1,16 @@
 // Copyright (c) Martin Schweiger
 // Licensed under the MIT License
 
-// Crash fireballs (Fireball.cpp): the optical depth of each fireball's grid
-// cell towards the sun (its self-shadowing: the sunlit side bright, the far
-// side dark) and towards the sky above (its underside darker in the
-// ambient light), marched through its grid (A: fireball_grid.comp).
-// Out: B (sun, sky optical depth; half the grid's resolution)
+// Crash fireballs (Fireball.cpp): for each cell of a fireball's grid (at
+// half its resolution: soft) the optical depth towards the sun (its
+// self-shadowing: the sunlit side bright, the far side dark; the march adds
+// the first few cells at full resolution), towards the sky above (its
+// underside darker in the ambient light), and the fire's own light there:
+// the radiance of the burning gas seen from the cell looking in towards
+// the ball's centre (the soot wrapping the fire lit by it from inside, the
+// cap's underside glowing at night), marched through its grid (A:
+// fireball_grid.comp).
+// Out: B (sun, sky optical depth; the fire's luminance looking in)
 
 #version 450
 #extension GL_GOOGLE_include_directive : require
@@ -17,7 +22,7 @@ layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 #define FB_BINDING 6
 #include "fireball.glsl"
 
-layout(set = 1, binding = 1, rg16f) uniform writeonly image3D outB;
+layout(set = 1, binding = 1, rgba16f) uniform writeonly image3D outB;
 layout(set = 1, binding = 3) uniform sampler3D gridA;
 
 layout(push_constant) uniform Pass {
@@ -25,16 +30,27 @@ layout(push_constant) uniform Pass {
 	uint count;
 } pc;
 
+// the box's exit along unit direction dir from p (ball space)
+float Exit (FireballParams P, vec3 p, vec3 dir)
+{
+	vec3 inv = 1.0 / mix (dir, vec3 (1e-6), lessThan (abs (dir), vec3 (1e-6)));
+	vec3 tb = max ((P.boxMin.xyz - p) * inv, (P.boxMax.xyz - p) * inv);
+	return min (min (tb.x, tb.y), tb.z);
+}
+
+float Cell (FireballParams P)
+{
+	vec3 size = P.boxMax.xyz - P.boxMin.xyz;
+	return min (min (size.x / float (FB_GX), size.y / float (FB_GY)), size.z / float (FB_GZ));
+}
+
 // optical depth from p (ball space) along unit direction dir, up to the box
 float Depth (FireballParams P, vec3 p, vec3 dir, int nMax)
 {
 	vec3 size = P.boxMax.xyz - P.boxMin.xyz;
-	// (to the box's exit)
-	vec3 inv = 1.0 / mix (dir, vec3 (1e-6), lessThan (abs (dir), vec3 (1e-6)));
-	vec3 tb = max ((P.boxMin.xyz - p) * inv, (P.boxMax.xyz - p) * inv);
-	float tExit = min (min (tb.x, tb.y), tb.z);
+	float tExit = Exit (P, p, dir);
 	// (steps of about a cell and a half)
-	float cell = min (min (size.x / float (FB_GX), size.y / float (FB_GY)), size.z / float (FB_GZ));
+	float cell = Cell (P);
 	int n = clamp (int (ceil (tExit / (1.5 * cell))), 1, nMax);
 	float dt = tExit / float (n), tau = 0.0;
 	float r = P.shape.x;
@@ -45,6 +61,37 @@ float Depth (FireballParams P, vec3 p, vec3 dir, int nMax)
 		if (tau * dt / r > 12.0) break;
 	}
 	return tau * dt / r;
+}
+
+// the fire's luminance seen from p looking in towards the ball's centre
+// (through its soot; the burning gas's blackbody emission, FbPlanck), on to
+// the far side: what lights the soot there from inside
+float Inward (FireballParams P, vec3 p, int nMax)
+{
+	vec3 size = P.boxMax.xyz - P.boxMin.xyz;
+	float r = P.shape.x;
+	// (towards the ball's centre - the hot gas lifted with it, its base
+	// drawn in; from the centre itself: straight up)
+	vec3 dir = length (p) > 0.05 * r ? -normalize (p) : vec3 (0.0, 0.0, 1.0);
+	float tExit = min (Exit (P, p, dir), 2.5 * r);
+	float cell = Cell (P);
+	int n = clamp (int (ceil (tExit / (1.5 * cell))), 1, nMax);
+	float dt = tExit / float (n);
+	float T = 1.0, L = 0.0;
+	for (int i = 0; i < n; i++) {
+		vec3 x = p + dir * ((float (i) + 0.5) * dt);
+		vec4 A = textureLod (gridA, FbGridCoord ((x - P.boxMin.xyz) / size, P.boxMin.w), 0.0);
+		if (A.x < 0.002) continue;
+		float sig = A.x * (FB_SIGMA_FLAME + FB_SIGMA_SOOT * A.z) * P.flow.w * P.heat.w / r;
+		float a = 1.0 - exp (-sig * dt);
+		float alb = mix (0.05, 0.2, A.z);
+		// (the march erodes about a third of its density: its emission seen
+		// from closer; as bright as the march's, about)
+		L += T * a * (1.0 - alb) * dot (FbPlanck (A.y * 1000.0), vec3 (0.2126, 0.7152, 0.0722));
+		T *= 1.0 - a;
+		if (T < 0.01) break;
+	}
+	return L;
 }
 
 void main ()
@@ -58,5 +105,6 @@ void main ()
 	vec3 sun = normalize (mat3 (P.toBall) * frame.sunDir.xyz);
 	float ts = Depth (P, p, sun, 64);
 	float tu = Depth (P, p, vec3 (0.0, 0.0, 1.0), 32);
-	imageStore (outB, id, vec4 (ts, tu, 0.0, 0.0));
+	float li = Inward (P, p, 48);
+	imageStore (outB, id, vec4 (ts, tu, li, 0.0));
 }
