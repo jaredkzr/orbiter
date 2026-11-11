@@ -67,6 +67,12 @@ SCENES = {
     "midair": ("midair", dict(CAM="ground", CAM_FOV="50")),
     # (the same at 300 m/s: the trails of fast pieces - phase 5)
     "midair300": ("midair", dict(CAM="ground", CAM_FOV="50", SPEED="300")),
+    # (two DGs collide reentering: 7 km/s at 65 km, crossing at 2 deg - a closing speed of 244 m/s; the
+    # camera flying with them, 80 m off, beside and a little ahead, looking back along the trails)
+    "reentry": ("midair", dict(CAM="chase", ALT="65000", SPEED="7000", ANGLE="2", T="1.5", CAM_DIST="80", CAM_FOV="60")),
+    "reentrynight": ("midair_night", dict(CAM="chase", ALT="65000", SPEED="7000", ANGLE="2", T="1.5", CAM_DIST="80", CAM_FOV="60")),
+    # (the same seen from 600 m: the debris field spreading along the path)
+    "reentrywide": ("midair_night", dict(CAM="chase", ALT="65000", SPEED="7000", ANGLE="2", T="1.5", CAM_DIST="600", CAM_FOV="50", CAM_S="0.6", CAM_F="0.2", CAM_U="0.75")),
     # (a DG into the ISS at 30 m/s: the vacuum flash; vacspace: the camera below the station, space behind the shell)
     "vacuum": ("iss_hit", dict()),
     "vacspace": ("iss_hit", dict(CAM_OFS="0 -4 0")),

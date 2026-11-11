@@ -33,6 +33,7 @@ layout(push_constant) uniform Draw {
 	vec4 bodyPos; // the planet nearby (camera-relative), w: present
 	vec4 bodyVel; // its velocity (global frame)
 	vec4 omega;   // its angular velocity (global frame)
+	vec4 camVel;  // the camera's velocity (global frame): sparks' streaks (motion blur)
 } pc;
 
 layout(location = 0) out vec2 vUV;
@@ -118,7 +119,13 @@ void main ()
 	float streak = ParticleStreak (flags);
 	bool ballistic = (flags & PF_BALLISTIC) != 0u;
 	if ((ballistic || streak > 0.0) && pc.bodyPos.w > 0.5) {
+		// (sparks: blurred by their motion relative to the camera - a camera
+		// flying with reentering debris at 7 km/s saw their streaks as the
+		// motion through the air, 200 m long, their light spread over that and
+		// gone; flames and plasma: their shapes streaming in the air)
+		bool blur = ParticleClass (flags) == PC_SPARK && !ballistic;
 		vec3 vrel = ballistic ? velLife.xyz - pc.bodyVel.xyz - cross (posAge.xyz - pc.bodyPos.xyz, pc.omega.xyz)
+			: blur ? velLife.xyz - pc.camVel.xyz
 			: velLife.xyz - AirVelocity (posAge.xyz, pc.bodyPos, pc.bodyVel.xyz, pc.omega.xyz);
 		vec3 vv = transpose (mat3 (frame.viewToGlobal)) * vrel;
 		vec3 n = normalize (vp);
@@ -138,9 +145,14 @@ void main ()
 			// for their length - phase 5)
 			bool flame = ParticleClass (flags) == PC_FIRE;
 			float lMax = flame ? h + max (1.0, 2.5 * h) : h + 1.0;
+			// (a spark blurred by its motion: a thin line up to an eighth of the
+			// view, its light spread over the length drawn - capped at a metre
+			// with its light over the whole path, a reentry spark falling back
+			// at hundreds of m/s was a thousandth as bright: gone)
+			if (blur) lMax = lPath;
 			float l = min (min (lPath, lMax), max (h, 0.125 * dist / abs (frame.proj[1][1])));
 			a *= smoothstep (1.0, 3.0, dist); // (and gone within a few metres of the camera)
-			a *= flame ? max (h / lPath, 0.5) : h / lPath;
+			a *= flame ? max (h / lPath, 0.5) : blur ? h / l : h / lPath;
 			pos = vp + ax * (c.x * l) + ay * (c.y * h);
 			vMisc.xy = vec2 (1.0, 0.0);
 		}

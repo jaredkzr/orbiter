@@ -54,20 +54,72 @@ if ground then
 	oapi.set_cameratarget(A:get_handle(), 0)
 	oapi.set_cameramode({mode="ground", ref=os.getenv("PLANET") or "Earth", lng=math.deg(camE.lng), lat=math.deg(camE.lat), alt=alt + camY})
 	if os.getenv("CAM_FOV") then oapi.set_cameraaperture(math.rad(tonumber(os.getenv("CAM_FOV"))) / 2) end
-else
+elseif os.getenv("CAM") == "chase" then
+	-- (a reentry collision: the camera flies with them, CAM_DIST [m] off,
+	-- its offset fixed in space - beside the path (CAM_S), ahead (CAM_F), above
+	-- (CAM_U) - looking back at GL-01 and then at the heaviest piece: the
+	-- trails stream away behind them into the view)
+	oapi.set_focusobject(oapi.get_objhandle("GL-03"))
+	proc.wait_frames(1)
+end
+local chaseOff = nil
+local function chase(h)
+	local e = oapi.get_globalpos(earth)
+	local p = oapi.get_globalpos(h)
+	local upg = vec.unit(vec.sub(p, e))
+	local fv = vec.unit(vec.sub(oapi.get_globalvel(h), oapi.get_globalvel(earth)))
+	if not chaseOff then
+		local sd = vec.unit(vec.crossp(fv, upg))
+		chaseOff = vec.unit(vec.add(vec.add(vec.mul(sd, tonumber(os.getenv("CAM_S") or "0.85")), vec.mul(fv, tonumber(os.getenv("CAM_F") or "0.3"))),
+			vec.mul(upg, tonumber(os.getenv("CAM_U") or "0.3"))))
+	end
+	-- (GLOBAL (Inertial; "inertial" and "absdirection" are not names Camera.cpp knows: the camera stayed in Auto, orbiting): the camera's frame the global one - not turning with a
+	-- tumbling piece, as absdirection did; yaw and pitch of the offset u in
+	-- global axes: phi = atan2 (u.x, -u.z), tht = asin (-u.y))
+	local u = chaseOff
+	if os.getenv("CAM_LOG") then oapi.write_log(string.format("chase: set, offset wanted (%.2f %.2f %.2f)", u.x, u.y, u.z)) end
+	oapi.set_cameratarget(h, 0)
+	oapi.set_cameramode({mode="track", trackmode="global", reldist=tonumber(os.getenv("CAM_DIST") or "80") / oapi.get_size(h),
+		phi=math.atan2(u.x, -u.z), tht=math.asin(-u.y)})
+	if os.getenv("CAM_FOV") then oapi.set_cameraaperture(math.rad(tonumber(os.getenv("CAM_FOV"))) / 2) end
+end
+local chaseMode = os.getenv("CAM") == "chase"
+if chaseMode then chase(A:get_handle())
+elseif not ground then
 	oapi.set_cameramode({mode="track", trackmode="absdirection", reldist=tonumber(os.getenv("CAM_R") or "6"),
 		phi=tonumber(os.getenv("CAM_PHI") or "0.6"), tht=tonumber(os.getenv("CAM_THT") or "-0.35")})
 end
+local chased = false
 local t0 = oapi.get_simtime()
 oapi.write_log(string.format("midair: started t=%.2f", t0))
 local logged = 0
+local camLogT = 0
 while true do
 	proc.wait_frames(1)
+	if os.getenv("CAM_LOG") and oapi.get_simtime() - camLogT >= 0.5 then
+		camLogT = oapi.get_simtime()
+		local tg = oapi.get_cameratarget()
+		if tg then
+			local d = vec.sub(oapi.get_cameraglobalpos(), oapi.get_globalpos(tg))
+			local f = vec.unit(vec.sub(oapi.get_globalvel(tg), oapi.get_globalvel(earth)))
+			oapi.write_log(string.format("chase: t=%.2f cam-target %.0f m dir (%.2f %.2f %.2f) along motion %.2f", oapi.get_simtime() - t0, vec.length(d), d.x / vec.length(d), d.y / vec.length(d), d.z / vec.length(d), vec.dotp(vec.unit(d), f)))
+		end
+	end
 	local n = oapi.get_debriscount()
 	if n ~= logged then
 		oapi.write_log(string.format("midair: t=%.2f %d pieces", oapi.get_simtime() - t0, n))
 		logged = n
 		-- (the observer follows the heaviest piece of GL-01 once it broke up)
+		-- (the chase: once, to the heaviest piece of all, the offset kept in space)
+		if chaseMode and not chased and n >= 3 then
+			local best, bm = nil, 0
+			for i = 0, n - 1 do
+				local h = oapi.get_debris(i)
+				local d = oapi.get_debrisinfo(h)
+				if d.mass > bm then best, bm = h, d.mass end
+			end
+			if best then chase(best); chased = true end
+		end
 		if ground and n > 0 and A:get_partinfo(0).flags % 2 == 1 then
 			local best, bm = nil, 0
 			for i = 0, n - 1 do

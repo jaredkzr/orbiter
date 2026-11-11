@@ -522,8 +522,8 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 
 	// drawing: quads (triangle strips) from the pool, premultiplied or additive,
 	// with the reactive mask
-	drawLayout = layoutOf ({ frameLayout, setLayout, texSetLayout }, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 64);
-	thickLayout = layoutOf ({ frameLayout, setLayout }, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 64);
+	drawLayout = layoutOf ({ frameLayout, setLayout, texSetLayout }, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 80);
+	thickLayout = layoutOf ({ frameLayout, setLayout }, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 80);
 	VkShaderModule vs = ctx->CreateShaderModule (spv_gpuparticle_vert, spv_gpuparticle_vert_size);
 	VkShaderModule fs = ctx->CreateShaderModule (spv_gpuparticle_frag, spv_gpuparticle_frag_size);
 	VkPipelineShaderStageCreateInfo stages[2] = {
@@ -1010,7 +1010,12 @@ void ParticleSystem::Queue (Emission &e)
 		oapiCameraGlobalPos (&cam);
 		double d = std::max (length (e.p1 - cam), 1.0);
 		double px = (e.size + std::max (e.growth, 0.0) * e.lifetime * 0.5) * pxPerRad / d; // (its diameter, mid-life [px])
-		if (px < LOD_PX) {
+		// (not a fast line source - a trail laid along the source's path over
+		// the step, longer than its particles: thinned, a step's whole
+		// stretch of it went missing now and then - a reentering piece's
+		// trail seen from afar dashed, 230 m gaps)
+		double path = length ((e.p1 - e.p0) - e.vel * e.dt);
+		if (px < LOD_PX && path < 2.0 * e.size) {
 			double f = std::max ((px / LOD_PX) * (px / LOD_PX), LOD_MIN);
 			thin *= f, stats.lodThinned += (uint32_t)(e.count * (1.0 - f));
 		}
@@ -1415,6 +1420,14 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	lastCam = camPos, haveCam = true;
 	pxPerRad = ctx->RenderExtent ().height / (2.0 * std::tan (std::max (oapiCameraAperture (), 1e-3)));
 	up.camShift[0] = (float)shift.x, up.camShift[1] = (float)shift.y, up.camShift[2] = (float)shift.z;
+	// (the camera's velocity: its move over the step; a cut - more than 20
+	// km/s from the planet nearby's - or paused: the planet's)
+	if (pendingDt > 0.0) {
+		VECTOR3 cv = -shift / pendingDt, bv{};
+		if (OBJHANDLE hb = oapiCameraProxyGbody ()) oapiGetGlobalVel (hb, &bv); // (not up.bodyVel: filled in below - it was 0, every frame a cut)
+		if (length (cv - bv) > 2e4) cv = bv;
+		for (int k = 0; k < 3; k++) drawCamVel[k] = (float)(&cv.x)[k];
+	}
 	up.camShift[3] = (float)pendingDt;
 
 	if (OBJHANDLE hp = oapiCameraProxyGbody ()) { // the air of the planet nearby
@@ -1736,8 +1749,9 @@ void ParticleSystem::DrawSprites (VkDescriptorSet frameSet)
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawLayout, 0, 3, s, 0, nullptr);
 	uint32_t flags = (smokeMode == SMOKE_SCREEN || (smokeMode == SMOKE_VOLUME && volAlloc) ? 8u : 0u) | (smokeMode == SMOKE_VOLUME && volActive && volAlloc ? 32u : 0u)
 		| (fireballOcc && fbOccView ? 64u : 0u);
-	struct { uint32_t count, flags; float alpha, pad; float body[12]; } pc{ sortN[fi], flags, 1.0f, 0.0f, {} };
+	struct { uint32_t count, flags; float alpha, pad; float body[12]; float camVel[4]; } pc{ sortN[fi], flags, 1.0f, 0.0f, {}, {} };
 	memcpy (pc.body, drawBody, sizeof(drawBody));
+	memcpy (pc.camVel, drawCamVel, sizeof(drawCamVel));
 	vkCmdPushConstants (cmd, drawLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 	vkCmdDrawIndirect (cmd, drawArgs[fi].buffer, 0, 1, 4 * sizeof(uint32_t));
 	drawPending = false;
@@ -1879,8 +1893,9 @@ void ParticleSystem::RenderScreenSmoke (VkDescriptorSet frameSet)
 	VkDescriptorSet s[2] = { frameSet, sets[fi] };
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, thickLayout, 0, 2, s, 0, nullptr);
 	// (the sprites' list: its volumetric particles)
-	struct { uint32_t count, flags; float alpha, pad; float body[12]; } pc{ sortN[fi], 16u, 1.0f, 0.0f, {} };
+	struct { uint32_t count, flags; float alpha, pad; float body[12]; float camVel[4]; } pc{ sortN[fi], 16u, 1.0f, 0.0f, {}, {} };
 	memcpy (pc.body, drawBody, sizeof(drawBody));
+	memcpy (pc.camVel, drawCamVel, sizeof(drawCamVel));
 	vkCmdPushConstants (cmd, thickLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 	vkCmdDrawIndirect (cmd, drawArgs[fi].buffer, 0, 1, 4 * sizeof(uint32_t));
 	ctx->EndTarget ();

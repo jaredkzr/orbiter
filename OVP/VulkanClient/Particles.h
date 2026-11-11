@@ -229,6 +229,7 @@ private:
 	int idleUpdates = 0;
 	bool idle = false;
 	float drawBody[12] = {}; // the planet nearby, for drawing: position (camera-relative), velocity, angular velocity
+	float drawCamVel[4] = {}; // the camera's velocity (global frame), for drawing: sparks streaked by their motion relative to it (motion blur)
 	VECTOR3 lastCam{};
 	bool haveCam = false;
 	VkSampler noiseSampler = VK_NULL_HANDLE, clampSampler = VK_NULL_HANDLE;

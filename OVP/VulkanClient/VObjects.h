@@ -199,6 +199,7 @@ public:
 	void DrawParticles () override;
 	void CollectFireballs (class FireballRenderer &fr) override;
 	void CollectHeat (class PlumeRenderer &pr) override;
+	void DrawPlasma (class PlasmaRenderer &pr) override;
 
 private:
 	DWORD serial;
@@ -217,6 +218,18 @@ private:
 	};
 	Ring fire, smoke, sparks, dust;  // (sparks: also those of a blow)
 	Ring embers;                     // glowing bits as its flames die down (phase 5)
+	// reentering: its plasma sheath (heating level 0..1, the direction of its
+	// motion through the air, global), the wake streaming off it and its
+	// afterglow (EmitPlasmaWake), molten bits ablated off it (ablate)
+	Ring pwake, pglow, ablate;
+	float sheathLevel = 0.0f;
+	double sheathFlux = 0.0;
+	VECTOR3 sheathDir{};
+	void EmitReentry (double dt, double rho, double D, const VECTOR3 &vel, const VECTOR3 &airVel);
+	// (the free cloud in the air it formed in: the air's velocity there, and
+	// its drag's time scale - at reentry speed it is stripped off behind)
+	VECTOR3 fbCloudAir{};
+	double fbCloudTau = 1e30;
 	VECTOR3 flameDir{};              // the side its flames stream off (global; aft when flying, down (-up) at rest): the hull glows there
 	Ring frags;              // struck by another body: small bits of it
 	WaterSpray water;        // in the water: splash, spray, wake (from its water state)
@@ -295,7 +308,7 @@ private:
 	double flameF = 0.0;     // its flames now (0..1)
 	double dustT = -1e30, dustImpact = 0.0; // the last puff of dust: when, its impact [m/s]
 	void Effects ();
-	void Spray (const VECTOR3 &pos, const VECTOR3 &vel, double v, double airDrag);
+	void Spray (const VECTOR3 &pos, const VECTOR3 &vel, double v, double airDrag, double airSpeed);
 	/// (burst: the ring holds a couple of such bursts, not a stream over ringLife)
 	bool Emit (Ring &r, ParticleSystem::Emission e, uint32_t n, double ringLife, bool burst = false);
 	/// its groups cut along the torn surface between the vessel's parts
