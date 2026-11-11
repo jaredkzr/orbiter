@@ -4,7 +4,8 @@
 -- GROUND_REL=1: ALT above the terrain there (on land; else above the mean radius);
 -- logs every LOGDT s; EXIT_T [s]: exits after)
 proc.wait_frames(2)
-local earth = oapi.get_objhandle("Earth")
+local PLANET = os.getenv("PLANET") or "Earth" -- (the body crashed on: Earth, Moon, Mars - VACUUM_PLAN V0)
+local earth = oapi.get_objhandle(PLANET)
 local A = vessel.get_interface("V1")
 local function L(s) oapi.write_log("entry: " .. s) end
 local alt = tonumber(os.getenv("ALT") or "20")
@@ -58,7 +59,7 @@ if os.getenv("CAM_X") then
 	local base = vec.sub(g2, vec.mul(up2, e2.rad - oapi.get_size(earth)))
 	local c = vec.add(vec.add(base, vec.mul(z, tonumber(os.getenv("CAM_Z") or "60"))), vec.add(vec.mul(x, tonumber(os.getenv("CAM_X"))), vec.mul(up2, tonumber(os.getenv("CAM_Y") or "4"))))
 	local ce = oapi.global_to_equ(earth, c)
-	camGround = {mode="ground", ref="Earth", lng=math.deg(ce.lng), lat=math.deg(ce.lat), alt=tonumber(os.getenv("CAM_Y") or "4")}
+	camGround = {mode="ground", ref=PLANET, lng=math.deg(ce.lng), lat=math.deg(ce.lat), alt=tonumber(os.getenv("CAM_Y") or "4")}
 	-- (CAM_PHI, CAM_THT [deg]: a fixed view direction, from east towards north; up)
 	if os.getenv("CAM_PHI") then camGround.phi = math.rad(tonumber(os.getenv("CAM_PHI"))); camGround.tht = math.rad(tonumber(os.getenv("CAM_THT") or "0")) end
 	oapi.set_cameramode(camGround)
@@ -67,7 +68,7 @@ if os.getenv("CAM_X") then
 	if os.getenv("CUT_X") then
 		local cc = vec.add(vec.add(base, vec.mul(z, tonumber(os.getenv("CUT_Z") or "60"))), vec.add(vec.mul(x, tonumber(os.getenv("CUT_X"))), vec.mul(up2, tonumber(os.getenv("CUT_Y") or "4"))))
 		local cce = oapi.global_to_equ(earth, cc)
-		camCut = {mode="ground", ref="Earth", lng=math.deg(cce.lng), lat=math.deg(cce.lat), alt=tonumber(os.getenv("CUT_Y") or "4"),
+		camCut = {mode="ground", ref=PLANET, lng=math.deg(cce.lng), lat=math.deg(cce.lat), alt=tonumber(os.getenv("CUT_Y") or "4"),
 			phi=math.rad(tonumber(os.getenv("CUT_PHI") or "0")), tht=math.rad(tonumber(os.getenv("CUT_THT") or "0"))}
 	end
 	-- (camSetDist(d): the observer moved out along its bearing to d m from the crash point; PULL_T, PULL_D0,

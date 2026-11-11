@@ -70,6 +70,16 @@ SCENES = {
     # (a DG into the ISS at 30 m/s: the vacuum flash; vacspace: the camera below the station, space behind the shell)
     "vacuum": ("iss_hit", dict()),
     "vacspace": ("iss_hit", dict(CAM_OFS="0 -4 0")),
+    # (out of the air - VACUUM_PLAN.md: the land crash on the Moon and on Mars; the mid-air collision
+    # at 30, 50, 60, 70 and 90 km over Florida, the observer 250 m aside, 60 m below: the thinning air)
+    "moon":   ("fx_moon", dict(CRASH, PLANET="Moon", GROUND_REL="1")),
+    "moonwide": ("fx_moon", dict(CRASH, PLANET="Moon", GROUND_REL="1", CAM_X="-420", CAM_Z="270", CAM_Y="8", CAM_FOV="50", CAM_THT="12")),
+    "mars":   ("fx_mars", dict(CRASH, PLANET="Mars", GROUND_REL="1")),
+    "alt30":  ("midair", dict(CAM="ground", CAM_FOV="50", ALT="30000")),
+    "alt50":  ("midair", dict(CAM="ground", CAM_FOV="50", ALT="50000")),
+    "alt60":  ("midair", dict(CAM="ground", CAM_FOV="50", ALT="60000")),
+    "alt70":  ("midair", dict(CAM="ground", CAM_FOV="50", ALT="70000")),
+    "alt90":  ("midair", dict(CAM="ground", CAM_FOV="50", ALT="90000")),
     # (the sea crash seen by an observer 200 m aside and 1 km aside: the camera jolt - phase 4)
     "jolt200": ("fx_sea", dict(CRASH, CAM_X="-200", CAM_Z="110", CAM_PHI="-99", CAM_THT="3")),
     "jolt1k":  ("fx_sea", dict(CRASH, CAM_X="-1000", CAM_Z="110", CAM_PHI="-96", CAM_THT="1", CAM_FOV="10")),
@@ -135,7 +145,7 @@ def main():
     if cut is not None: os.environ["CUT_T"] = str(cut)
     if pull is not None: os.environ.update(PULL_T=str(pull[0]), PULL_D0=str(pull[1]), PULL_D1=str(pull[2]), PULL_DUR=str(pull[3]))
     os.environ.update(ORBCTL_MEMMAX=os.environ.get("ORBCTL_MEMMAX", "6G"), ORBITER_VK_HIDE_UI="1",
-                      ORBITER_VK_CUT_LOG="1", ORBITER_VK_FIREBALL_LOG="1", ORBITER_VK_PARTICLE_STATS="1", ORBITER_VK_JOLT_LOG="1")
+                      ORBITER_VK_CUT_LOG="1", ORBITER_VK_FIREBALL_LOG="1", ORBITER_VK_PARTICLE_STATS=os.environ.get("ORBITER_VK_PARTICLE_STATS", "0.2"), ORBITER_VK_JOLT_LOG="1")
     if ft:
         os.environ.update(ORBITER_VK_PROFILE="1", ORBITER_VK_FRAMETIMES=os.path.join(outdir, "frames.ft"))
     sess_name = "fxexpl"

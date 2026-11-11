@@ -35,6 +35,7 @@ void main ()
 			if (stats) {
 				atomicAdd (wgLive, 1u);
 				if ((p.flags & PF_VOLUMETRIC) != 0u) atomicAdd (wgVol, 1u);
+				if (statsOn == 2u) atomicAdd (liveCls[min (ParticleClass (p.flags), 15u)], 1u); // (ORBITER_VK_PARTICLE_STATS only: a global atomic per particle)
 			}
 			drawn = ParticleAlpha (p) > 0.002;
 			if (drawn && (p.flags & PF_VOLUMETRIC) != 0u && pc.ground.w > 0.5)

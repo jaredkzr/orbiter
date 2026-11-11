@@ -212,8 +212,8 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		ctx->ImmediateSubmit ([ob](VkCommandBuffer cmd) { vkCmdFillBuffer (cmd, ob, 0, VK_WHOLE_SIZE, 0); });
 	}
 	for (auto &b : windBuf) {
-		b = ctx->CreateBuffer ((WIND_LAYERS + 1) * 4 * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true); // (+ nearVol)
-		memset (b.mapped, 0, (WIND_LAYERS + 1) * 4 * sizeof(float));
+		b = ctx->CreateBuffer ((WIND_LAYERS + 5) * 4 * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true); // (+ nearVol and the counts, + the counts by class)
+		memset (b.mapped, 0, (WIND_LAYERS + 5) * 4 * sizeof(float));
 	}
 
 	VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
@@ -1067,6 +1067,14 @@ void ParticleSystem::LogStats (double simt)
 		stats.emissions, stats.maxEmissions, stats.dropped, stats.particles, stats.reentry, stats.allocs, stats.frees, stats.allocFails, stats.failWant,
 		stats.short_, stats.grows, stats.shrinks, stats.segments, stats.overwrites, stats.idleFrees, stats.thinned, stats.shed,
 		stats.drawn, stats.drawnMax, stats.sortMax, stats.lodThinned, stats.staleSrc);
+	{
+		// (the live particles by class: what lingers, e.g. smoke after a burst in vacuum)
+		static const char *cn[14] = { "engine", "trail", "dust", "spray", "fire", "fbsmoke", "spark", "frag", "legacy", "plasma", "contrail", "wreck", "steam", "puff" };
+		char buf[512]; int k = 0;
+		for (int c = 0; c < 14; c++) if (stats.liveCls[c]) k += snprintf (buf + k, sizeof(buf) - k, " %s=%u", cn[c], stats.liveCls[c]);
+		buf[k] = 0;
+		oapiWriteLogV ("VK particles: simt=%.1f by class:%s", simt, k ? buf : " none");
+	}
 	if (stats.ringLog) {
 		// (the pool by kind of ring: retired, priority, released when idle)
 		uint32_t sum[2][4][2] = {}, cnt[2][4][2] = {}, big = 0;
@@ -1335,8 +1343,9 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 		// budget; telemetry)
 		uint32_t *w = (uint32_t*)windBuf[fi].mapped + WIND_LAYERS * 4;
 		if (nearValid[fi]) liveNow = w[2], stats.live = w[2], stats.liveVol = w[3], stats.liveMax = std::max (stats.liveMax, stats.live);
-
-		w[1] = 1u, w[2] = w[3] = 0u;
+		if (nearValid[fi] && stats.every > 0.0) memcpy (stats.liveCls, w + 4, sizeof(stats.liveCls));
+		w[1] = stats.every > 0.0 ? 2u : 1u, w[2] = w[3] = 0u; // (statsOn: 2 counts by class too - telemetry)
+		memset (w + 4, 0, sizeof(stats.liveCls));
 	}
 	if (stats.every > 0.0) {
 		stats.frames++;

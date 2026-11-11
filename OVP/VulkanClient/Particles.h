@@ -316,6 +316,7 @@ private:
 		uint32_t lodThinned = 0, staleSrc = 0;
 		bool ringLog = false;
 		uint32_t live = 0, liveMax = 0, liveVol = 0, drawn = 0, drawnMax = 0, sortMax = 0;
+		uint32_t liveCls[16] = {}; // (the live particles by class, the last read back)
 		bool lastVol = false;
 	} stats;
 	void LogStats (double simt);

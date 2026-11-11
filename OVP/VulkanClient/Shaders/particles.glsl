@@ -101,6 +101,7 @@ layout(set = PARTICLE_WIND_SET, binding = 20, std430) PARTICLE_WIND_QUAL buffer 
 	uint nearVol; // the nearest volumetric particle's distance (float bits; particle_update.glsl, read back)
 	uint statsOn; // telemetry (ORBITER_VK_PARTICLE_STATS): particles counted by particle_sortkeys.comp
 	uint liveCount, liveVol;
+	uint liveCls[16]; // (telemetry: the live particles by class, PC_*)
 };
 
 // the wind at altitude altKm (local east, north) [m/s]: the layers' values

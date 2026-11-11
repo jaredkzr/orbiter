@@ -5,7 +5,7 @@
 -- CAM_Y below it (CAM=ground), following GL-01 and then its heaviest piece)
 proc.wait_frames(3)
 local A, B = vessel.get_interface("GL-01"), vessel.get_interface("GL-02")
-local earth = oapi.get_objhandle("Earth")
+local earth = oapi.get_objhandle(os.getenv("PLANET") or "Earth")
 local alt = tonumber(os.getenv("ALT") or "300")
 local speed = tonumber(os.getenv("SPEED") or "150")
 local ang = math.rad(tonumber(os.getenv("ANGLE") or "60"))
@@ -52,7 +52,7 @@ if ground then
 	oapi.set_focusobject(oapi.get_objhandle("GL-03"))
 	proc.wait_frames(1)
 	oapi.set_cameratarget(A:get_handle(), 0)
-	oapi.set_cameramode({mode="ground", ref="Earth", lng=math.deg(camE.lng), lat=math.deg(camE.lat), alt=alt + camY})
+	oapi.set_cameramode({mode="ground", ref=os.getenv("PLANET") or "Earth", lng=math.deg(camE.lng), lat=math.deg(camE.lat), alt=alt + camY})
 	if os.getenv("CAM_FOV") then oapi.set_cameraaperture(math.rad(tonumber(os.getenv("CAM_FOV"))) / 2) end
 else
 	oapi.set_cameramode({mode="track", trackmode="absdirection", reldist=tonumber(os.getenv("CAM_R") or "6"),
