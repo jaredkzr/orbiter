@@ -28,7 +28,7 @@ public:
 	struct GpuSeg {
 		float a[4];  // start; w: half width [m]
 		float b[4];  // end; w: depth [m]
-		float up[4]; // surface normal; w: 0 track, 1 imprint, 2 scorch mark
+		float up[4]; // surface normal; w: 0 track, 1 imprint, 2 scorch mark, 3 blast halo
 	};
 	static constexpr uint32_t MAX_GPU = 16384; // entries per frame (segments per tile, repeated)
 	static constexpr size_t MAX_SEGS = 4096;   // recorded segments (the oldest go first)
@@ -46,6 +46,9 @@ public:
 	/// A scorch mark (a fireball on the ground, a crash): radius, depth of
 	/// the crater [m]
 	void Scorch (OBJHANDLE body, const VECTOR3 &gpos, const VECTOR3 &gnormal, double radius, double depth);
+	/// A blast zone on an airless body's regolith (a burst's gas swept it:
+	/// lighter, smoother ground, the Apollo landers' halos): radius [m]
+	void BlastHalo (OBJHANDLE body, const VECTOR3 &gpos, const VECTOR3 &gnormal, double radius);
 
 	/// Start a frame (camera position and rotation, global frame)
 	void BeginFrame (uint32_t frame, const VECTOR3 &camPos, const MATRIX3 &camRot);

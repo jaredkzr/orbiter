@@ -90,6 +90,21 @@ void main ()
 			jets += (0.35 + 0.4 * h.z) * smoothstep (0.982, 0.997, dot (nd, dj)) * exp (-pow (rr / (1.7 + 0.6 * h.z), 2.0));
 		}
 		float rho = prof * streak + jets * (0.6 + 0.4 * n2);
+		// on an airless body's ground (axis.w: its height in ball space;
+		// -1e9 none): none below it - the gas going down is turned along it,
+		// a thin sheet racing out over the surface, thickening as it goes,
+		// in rays (VACUUM_PLAN.md 3.5)
+		float zg = P.axis.w;
+		if (zg > -1e8) {
+			float above = smoothstep (zg - 0.02 * s, zg + 0.03 * s, p.z);
+			vec2 hz = p.xy / s;
+			float rh = length (hz);
+			vec3 dh = vec3 (rh > 1e-4 ? hz / rh : vec2 (1.0, 0.0), 0.0);
+			float nh = Sh (dh * (1.4 + 0.12 * log (max (rh, 0.05))) + seed.yzx);
+			float zz = (p.z - zg) / ((0.1 + 0.08 * rh) * s);
+			float sheet = 0.7 * exp (-pow (rh / 1.5, 2.0)) * exp (-zz * zz) * clamp (0.45 + 0.6 * nh, 0.1, 1.5) * smoothstep (0.05, 0.4, rh);
+			rho = (rho + sheet) * above;
+		}
 		float T = max (P.heat.x * exp (-1.6 * rr * rr), 300.0);
 		imageStore (outA, id, vec4 (rho, T * 1e-3, 0.0, 0.0));
 		// (the march's detail: finer streamers, the same coordinates' kind)

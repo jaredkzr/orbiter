@@ -66,6 +66,16 @@ void GroundTracks::Scorch (OBJHANDLE body, const VECTOR3 &gpos, const VECTOR3 &g
 	Add ({ body, lp, lp, ln, radius, depth, 2 });
 }
 
+void GroundTracks::BlastHalo (OBJHANDLE body, const VECTOR3 &gpos, const VECTOR3 &gnormal, double radius)
+{
+	VECTOR3 bp;
+	MATRIX3 R;
+	oapiGetGlobalPos (body, &bp);
+	oapiGetRotationMatrix (body, &R);
+	VECTOR3 lp = tmul (R, gpos - bp), ln = unit (tmul (R, gnormal));
+	Add ({ body, lp, lp, ln, radius, 0.0, 3 });
+}
+
 void GroundTracks::NoContact (OBJHANDLE vessel, int idx)
 {
 	auto it = points.find ({ vessel, idx });
@@ -101,7 +111,7 @@ void GroundTracks::ForTile (OBJHANDLE body, const VECTOR3 &ppos, const MATRIX3 &
 				cand.push_back ({ i, unit (s.a), unit (s.b), e, cos (e), sin (e) });
 			}
 		}
-		std::stable_partition (cand.begin(), cand.end(), [this](const Cand &c) { return segs[c.i].kind == 2; });
+		std::stable_partition (cand.begin(), cand.end(), [this](const Cand &c) { return segs[c.i].kind >= 2; }); // (scorch marks, blast halos)
 		// caps: the mean direction, and the largest angle to an end plus its
 		// width (angles by atan2: acos loses metres near 1)
 		auto angle = [](const VECTOR3 &u, const VECTOR3 &v) { return atan2 (length (crossp (u, v)), dotp (u, v)); };

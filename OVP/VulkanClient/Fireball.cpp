@@ -589,6 +589,7 @@ void FireballRenderer::Compute (VkDescriptorSet frameSet)
 			for (int k = 0; k < 3; k++) bmax[k] = 2.6 * b.scale, bmin[k] = -bmax[k];
 		// (nothing below the ground)
 		if (b.ground > -1e8 && !b.vacuum) bmin[2] = std::min (std::max (bmin[2], b.ground - 0.05 * r), bmax[2] - 0.2 * r);
+		if (b.ground > -1e8 && b.vacuum) bmin[2] = std::min (std::max (bmin[2], b.ground - 0.1 * b.scale), bmax[2] - 0.5 * b.scale); // (the free cloud on the ground: its sheet just above it)
 		Params &p = pm[i];
 		memset (&p, 0, sizeof(p));
 		const VECTOR3 *ax[3] = { &ex, &ey, &ez };

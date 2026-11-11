@@ -74,6 +74,7 @@ SCENES = {
     # at 30, 50, 60, 70 and 90 km over Florida, the observer 250 m aside, 60 m below: the thinning air)
     "moon":   ("fx_moon", dict(CRASH, PLANET="Moon", GROUND_REL="1")),
     "moonwide": ("fx_moon", dict(CRASH, PLANET="Moon", GROUND_REL="1", CAM_X="-420", CAM_Z="270", CAM_Y="8", CAM_FOV="50", CAM_THT="12")),
+    "moontop": ("fx_moon", dict(CRASH, PLANET="Moon", GROUND_REL="1", CAM_X="-260", CAM_Z="160", CAM_Y="220", CAM_FOV="50", CAM_THT="-36")),
     "mars":   ("fx_mars", dict(CRASH, PLANET="Mars", GROUND_REL="1")),
     "alt30":  ("midair", dict(CAM="ground", CAM_FOV="50", ALT="30000")),
     "alt50":  ("midair", dict(CAM="ground", CAM_FOV="50", ALT="50000")),

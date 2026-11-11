@@ -1268,6 +1268,47 @@ void VDebris::Effects ()
 				// screen - CollectFireballs; else sprites)
 				fbVacVs = std::clamp (3.0 * R, 20.0, 300.0);
 				fbPos = gpos; // (now, not a step ago: the shell moves on from here with fbVel - CollectFireballs)
+				fbUp = up, fbPlanet = hp;
+				// on an airless body's ground (VACUUM_PLAN.md 3.5): its cloud
+				// cut by the ground and turned along it (fireball_grid.comp), the
+				// regolith thrown out on ballistic arcs, a blast halo left on it
+				{
+					double lng, lat, rad;
+					oapiGlobalToEqu (hp, gpos, &lng, &lat, &rad);
+					vksurf::Point pt = vksurf::Query (scene, hp, lng, lat);
+					double h = rad - oapiGetSize (hp) - (pt.IsWater () ? 0.0 : pt.elev);
+					double sEnd = CloudOf (fbFuel, R, fbVacVs).SEnd ();
+					fbGround = h < 1.2 * sEnd ? -h : -1e9;
+					static const bool fbLog4 = getenv ("ORBITER_VK_FIREBALL_LOG") != nullptr;
+					if (fbLog4) oapiWriteLogV ("VulkanClient: vacuum burst %.1f m above the ground (the cloud's end %.0f m): %s", h, sEnd,
+						h < 0.6 * sEnd && airDrag < 0.01 && !pt.IsWater () ? "on it - sheet, regolith, halo" : h < 1.2 * sEnd ? "near it - sheet" : "clear of it");
+					if (fbGround > -1e8 && h < 0.6 * sEnd && airDrag < 0.01 && !pt.IsWater ()) {
+						VECTOR3 foot = gpos - up * h;
+						if (scene->Tracks ()) scene->Tracks ()->BlastHalo (hp, foot, up, 1.2 * sEnd);
+						if (!dust.tex) dust.tex = sys->SmokeTexture ();
+						// (the regolith: grains in a fast, thin sheet - Particles:
+						// dust thrown in vacuum, drawn as streaks - low over the
+						// ground, falling back under the body's gravity)
+						VECTOR3 ex = crossp (up, fabs (up.x) < 0.9 ? _V(1, 0, 0) : _V(0, 1, 0));
+						ex = unit (ex);
+						VECTOR3 ey = crossp (up, ex);
+						const int K = 24;
+						for (int k = 0; k < K; k++) {
+							double a = (k + 0.5) * 2.0 * PI / K, el = (12.0 + 18.0 * ((k * 7) % 5) / 4.0) * RAD;
+							VECTOR3 rd = ex * cos (a) + ey * sin (a);
+							ParticleSystem::Emission e{};
+							e.p0 = e.p1 = foot + up * 0.3, e.vel = GroundVelocity (hp, foot), e.dir = -unit (rd * cos (el) + up * sin (el)), e.dt = dt;
+							e.v0 = 0.6 * fbVacVs, e.spread = 0.35 * fbVacVs;
+							e.lifetime = 8.0;
+							e.size = 0.5, e.growth = 0.0;
+							e.alpha = 0.7, e.slowdown = 0.0;
+							e.tinted = true, e.cold = true, e.ballistic = true;
+							vksurf::DustColourGlobal (scene, hp, foot, e.albedo);
+							e.cls = ParticleSystem::Class::Dust;
+							Emit (dust, e, (uint32_t)std::clamp (cbrt (fbFuel) * 2.0 * D, 6.0 * D, 60.0 * D), 8.0, true);
+						}
+					}
+				}
 				double Rs = 1.3 * CloudOf (fbFuel, R, fbVacVs).SEnd (); // (about its size seen, half-way)
 				FireballRenderer *fr = scene->Fireballs ();
 				fbVac = fr && fr->WantsVolume (id, Rs, length (gpos - scene->CameraPos ())); // (now, not p0: a step ago, a kilometre off)
@@ -2248,8 +2289,11 @@ void VDebris::CollectFireballs (FireballRenderer &fr)
 		b.r = 2.6 * b.scale;
 		b.R = 2.6 * c.SEnd ();
 		b.centre = scene->ViewPos (fbPos + fbVel * t);
-		b.up = scene->ViewDir (_V(0, 1, 0));
-		b.axis = scene->ViewDir (_V(1, 0, 0));
+		// (z up: on the ground, the ground below its centre - its sheet;
+		// it moves on with the pieces, the ground stays: at rest on it, about)
+		b.up = scene->ViewDir (fbUp);
+		b.axis = scene->ViewDir (crossp (fbUp, fabs (fbUp.x) < 0.9 ? _V(1, 0, 0) : _V(0, 1, 0)));
+		b.ground = fbGround > -1e8 ? fbGround - dotp (fbVel - GroundVelocity (fbPlanet ? fbPlanet : oapiGetGbodyByName ((char*)"Earth"), fbPos), fbUp) * t : -1e9;
 		b.t = t, b.tf = c.TEnd ();
 		b.seed = serial * 2654435761u;
 		fr.Add (b);

@@ -486,7 +486,7 @@ void TrackShading(vec3 P, inout vec3 N, inout vec3 base)
 	TrackSeg s;
 	// scorch marks overlap: blended (the darkest burn, the craters' slopes
 	// added), not the nearest alone (seams where one meets the next)
-	float burnMax = 0.0;
+	float burnMax = 0.0, haloMax = 0.0;
 	vec3 scorchGrad = vec3(0.0);
 	for (int i = 0; i < count; i++) {
 		TrackSeg c = tracks.seg[first + i];
@@ -497,6 +497,19 @@ void TrackShading(vec3 P, inout vec3 N, inout vec3 base)
 		float t = L2 > 1e-8 ? clamp(dot(ap, ab) / L2, 0.0, 1.0) : 0.0;
 		vec3 o = ap - ab * t;
 		float x = length(o) / c.a.w;
+		if (c.up.w > 2.5) {
+			// blast halo (an airless body: a burst's gas swept the regolith -
+			// lighter, smoother ground, brightest in a ring, in faint rays)
+			if (x >= 1.15) continue;
+			float hw = c.a.w;
+			vec3 lat = x > 1e-4 ? o / (x * hw) : vec3(0.0);
+			vec3 ref = normalize(abs(up.x) < 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0));
+			float ang = atan(dot(lat, cross(up, ref)), dot(lat, ref));
+			float rays = 0.75 + 0.15 * sin(ang * 11.0 + 1.3 * hw) + 0.1 * sin(ang * 23.0 + 2.1 * hw);
+			float h = smoothstep(0.1, 0.45, x) * (1.0 - smoothstep(0.75, 1.1, x)) * rays + 0.35 * (1.0 - smoothstep(0.0, 0.5, x));
+			haloMax = max(haloMax, h);
+			continue;
+		}
 		if (c.up.w > 1.5) {
 			if (x >= 1.8) continue;
 			// scorch mark: blackened ground, most at its centre, its rim
@@ -522,6 +535,7 @@ void TrackShading(vec3 P, inout vec3 N, inout vec3 base)
 			along = L2 > 1e-8 ? dot(ap, dir) : 0.0;
 		}
 	}
+	if (haloMax > 0.0) base *= 1.0 + 1.6 * haloMax; // (the lit regolith compresses it: at 0.55 it could not be seen from above, 3 a white disc)
 	if (burnMax > 0.0 || dot(scorchGrad, scorchGrad) > 0.0) {
 		base *= mix(1.0, 0.1, burnMax * (0.7 + 0.3 * burnMax));
 		vec3 g = scorchGrad - N * dot(scorchGrad, N);
