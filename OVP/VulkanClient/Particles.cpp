@@ -112,6 +112,7 @@ struct ParticleSystem::UpdateParams { // particle_common.glsl
 	float camShift[4], bodyPos[4], bodyVel[4], omega[4], noiseOrg[4];
 	float lightX[4], lightY[4], lightZ[4], ground[4], trailNoise[4];
 	float noiseRot[3][4], vol[4];
+	float atm[4]; // the air of the planet nearby: density at the mean radius, scale height (particle_common.glsl AirShare)
 };
 
 
@@ -1423,6 +1424,10 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 		bp -= camPos;
 		up.bodyPos[0] = (float)bp.x, up.bodyPos[1] = (float)bp.y, up.bodyPos[2] = (float)bp.z, up.bodyPos[3] = (float)oapiGetSize (hp);
 		up.bodyVel[0] = (float)bv.x, up.bodyVel[1] = (float)bv.y, up.bodyVel[2] = (float)bv.z;
+		if (const ATMCONST *ac = oapiGetPlanetAtmConstants (hp)) {
+			double g = GGRAV * oapiGetMass (hp) / (oapiGetSize (hp) * oapiGetSize (hp));
+			up.atm[0] = (float)ac->rho0, up.atm[1] = (float)(ac->rho0 > 0.0 && g > 0.0 ? ac->p0 / (ac->rho0 * g) : 8e3); // (isothermal: H = p0 / (rho0 g))
+		}
 		// the ground under the camera (collisions without ray tracing)
 		VECTOR3 loc;
 		oapiGlobalToLocal (hp, &camPos, &loc);

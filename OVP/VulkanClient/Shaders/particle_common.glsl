@@ -57,7 +57,21 @@ layout(push_constant) uniform Params {
 	vec4 noiseRot[3]; // rows of global -> planet axes, w: the smoke volume's erosion noise coordinates of the camera
 	vec4 vol;        // x: smoke volume pass (smoke_resolve.comp: 1 coarse), y: its frame parity (occupancy), z: bit 0 all its tiles,
 	                 // bit 1 the smoke shadows' frame parity, w: the volume's erosion noise scale [1/m]
+	vec4 atm;        // the air of the planet nearby: x: its density at the mean radius [kg/m^3] (0: none), y: its scale height [m]
 } pc;
+
+// the air's share of drag at pos (camera-relative): 1 in air, 0 in vacuum -
+// an airless body or above its air (density under about 1e-6 kg/m^3: 120 km
+// on Earth). Drag, the air's eddies and the hot smoke's rise fade with it, so
+// that a particle in vacuum coasts whatever its emitter asked for (VACUUM_PLAN
+// 3.2; in air the emitters scale their own drag by the density)
+float AirShare (vec3 pos)
+{
+	if (pc.atm.x <= 0.0 || pc.bodyPos.w <= 0.0) return 0.0;
+	float h = max (length (pos - pc.bodyPos.xyz) - pc.bodyPos.w, 0.0);
+	float rho = pc.atm.x * exp (-h / max (pc.atm.y, 1.0));
+	return clamp (rho / 1e-5, 0.0, 1.0);
+}
 
 // a camera-relative position (global axes) in the planet's axes
 vec3 NoiseFrame (vec3 pos) { return vec3 (dot (pc.noiseRot[0].xyz, pos), dot (pc.noiseRot[1].xyz, pos), dot (pc.noiseRot[2].xyz, pos)); }

@@ -147,6 +147,7 @@ void main ()
 	bool trail = (p.flags & PF_TRAIL) != 0u;
 	float slow = p.shape.w;
 	bool inAir = slow > 0.0 && pc.bodyPos.w > 0.0;
+	if (inAir) { slow *= AirShare (pos); inAir = slow > 0.0; } // (in vacuum: none of it, whatever the emitter asked)
 	if (inAir && dt > 0.0) {
 		// slowed down towards the velocity of the air (co-rotating, and its wind)
 		vec3 air = AirVel (pos);

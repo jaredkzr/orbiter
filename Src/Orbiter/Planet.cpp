@@ -266,6 +266,11 @@ Planet::Planet (char *fname)
 			atm.R = 286.91; // default to air
 		if (!GetItemReal (ifs, "AtmGamma", atm.gamma) && !atm.gamma)
 			atm.gamma = 1.4;  // default to air
+		// partial pressure of oxygen at zero altitude [Pa]: what burns on in
+		// the air (a fuel spill, burning wreckage - the Vulkan client's crash
+		// fires). Absent: none (a gas constant like air's does not say there
+		// is oxygen: Titan's nitrogen has it)
+		if (!GetItemReal (ifs, "AtmO2pp", atm.O2pp)) atm.O2pp = 0.0;
 		if (!GetItemReal (ifs, "AtmHazeExtent", hazerange)) hazerange = 0.1;
 		hazerange = max (0.0, min (0.9, hazerange));
 		if (!GetItemReal (ifs, "AtmHazeShift", hazeshift)) hazeshift = 0.0;

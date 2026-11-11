@@ -75,12 +75,12 @@ void FireballRenderer::ModelTemps (double u, double &Th, double &Ts)
 		}
 }
 
-double FireballRenderer::RingTurn (double u, double tf, double R)
+double FireballRenderer::RingTurn (double u, double tf, double R, double g)
 {
 	// (the integral of Lift: u - a sqrt(pi)/2 erf(u/a))
 	u = std::max (u, 0.0);
 	double I = u - LIFT_U * 0.886226925 * std::erf (u / LIFT_U);
-	return 1.4 * sqrt (9.81 / std::max (R, 1.0)) * tf * I;
+	return 1.4 * sqrt (g / std::max (R, 1.0)) * tf * I;
 }
 
 bool FireballRenderer::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout,
@@ -656,7 +656,7 @@ void FireballRenderer::Compute (VkDescriptorSet frameSet)
 				double wgt = 1.0 - fabs (2.0 * tau / period - 1.0);
 				p.adv[2 * k] = (float)(1.0 / (1.0 + rate * tau / tf));
 				p.adv[2 * k + 1] = (float)wgt;
-				p.adv2[k] = (float)(b.roll - RingTurn (std::max (ts, 0.0) / tf, tf, b.R));
+				p.adv2[k] = (float)(b.roll - RingTurn (std::max (ts, 0.0) / tf, tf, b.R, b.g));
 				p.adv2[2 + k] = (float)floor (2.0 * ts / period + 0.5); // (its number: k 0 even, k 1 odd)
 			}
 		}

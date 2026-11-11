@@ -242,6 +242,7 @@ private:
 	double fbV0 = 0.0;         // [m/s] how fast (relative to the air), as it ignited
 	VECTOR3 fbFlashPos{};      // where it ignited (the flash's light; moving with the air)
 	double fbFuelW = 0.0;      // (the pieces' velocities weighted by their propellant: fbVel)
+	double fbG = 9.81;         // [m/s^2] the surface gravity of the body it formed over
 	double fbRise = 0.0;       // [m/s] its buoyant rise now (a part of fbVel: FireballRenderer::Rise)
 	double fbRisen = 0.0;      // [m] how far it rose by it so far (its growth by the air it draws in)
 	// its shape now (the volume: FireballRenderer): drawn out along its path
@@ -264,7 +265,7 @@ private:
 	// sprites), expanding at fbVacVs [m/s]
 	bool fbVac = false;
 	double fbVacVs = 0.0;
-	void Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 &airVel, bool onWater);
+	void Fireball (double dt, double airDrag, const VECTOR3 &up, const VECTOR3 &airVel, bool onWater); // (airDrag: 1 at sea level - VObjects.cpp Air::Drag)
 	void VacuumFlash (double dt, double R, const VECTOR3 &vel);
 	// a burning wreck at rest on the ground: a rising column of smoke, and
 	// its long-lived drift with the wind (WreckSmoke)
@@ -286,7 +287,7 @@ private:
 	double flameF = 0.0;     // its flames now (0..1)
 	double dustT = -1e30, dustImpact = 0.0; // the last puff of dust: when, its impact [m/s]
 	void Effects ();
-	void Spray (const VECTOR3 &pos, const VECTOR3 &vel, double v, double rho);
+	void Spray (const VECTOR3 &pos, const VECTOR3 &vel, double v, double airDrag);
 	/// (burst: the ring holds a couple of such bursts, not a stream over ringLife)
 	bool Emit (Ring &r, ParticleSystem::Emission e, uint32_t n, double ringLife, bool burst = false);
 	/// its groups cut along the torn surface between the vessel's parts

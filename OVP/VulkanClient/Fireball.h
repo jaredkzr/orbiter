@@ -52,6 +52,7 @@ public:
 		// then a pale vapour shell fading (r: the box's; t over tf = 0.4 s)
 		bool vacuum = false;
 		double shell = 0.0, width = 1.0;
+		double g = 9.81;      // [m/s^2] the gravity it rises in (its rise, its ring's turn: sqrt (g R))
 		double fade = 1.0;    // its volume's weight (0..1): cross-faded with its sprites as it switches (phase 6)
 	};
 	/// the model's temperatures at u = t / t_f: the hottest gas (its core)
@@ -68,7 +69,7 @@ public:
 	/// the smoke cap it hands over to rises on as it did (VDebris: the
 	/// cap's particles emitted at its velocity, braked at about the rate
 	/// it slows by then)
-	static double Rise (double u, double R) { return RISE_K * std::sqrt (9.81 * R) * Lift (u) / std::sqrt (1.0 + u / RISE_U); }
+	static double Rise (double u, double R, double g = 9.81) { return RISE_K * std::sqrt (g * R) * Lift (u) / std::sqrt (1.0 + u / RISE_U); } // (g: the body's surface gravity)
 	/// its radius [m]: its burst slowed by the air (a third at once, nine
 	/// tenths of R by 0.23 t_f, all of it approached smoothly - not grown to
 	/// R and stopped), and growing on by a quarter of the height it rose
@@ -78,7 +79,7 @@ public:
 	/// the vortex ring's turn so far [rad] at u = t / t_f (about 1.4 sqrt (g / R)
 	/// once lifted - its surface rolling at about its rise speed: the integral
 	/// of Lift over u)
-	static double RingTurn (double u, double tf, double R);
+	static double RingTurn (double u, double tf, double R, double g = 9.81);
 
 	bool Init (vkc::Context *ctx, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout,
 		VkImageView shapeNoise, VkImageView detailNoise);
