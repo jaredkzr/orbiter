@@ -78,7 +78,7 @@ void CrashFires::Update (Scene *scene)
 		// (gone: its smoke thinned out; or the time is before it - the replay)
 		if (t < -1.0 || (t > 1.5 * f.tw && sm < 0.04)) {
 			if (FireLog ()) oapiWriteLogV ("VulkanClient: crash fire of t %.2f gone at +%.1f s", f.t0, t);
-			if (sys) for (Ring *r : { &f.flames, &f.stem }) if (r->sys == sys) sys->Release (*r);
+			if (sys) for (Ring *r : { &f.flames, &f.stem, &f.embers }) if (r->sys == sys) sys->Release (*r);
 			it = fires.erase (it);
 			continue;
 		}
@@ -119,38 +119,73 @@ void CrashFires::Update (Scene *scene)
 					ParticleSystem::Emission e{};
 					e.p1 = spot (1.0) + up * (0.3 * s0), e.p0 = e.p1 - gv * dt;
 					e.vel = gv, e.dir = -up, e.dt = dt;
-					e.v0 = 1.0 + 2.5 * fl, e.spread = 0.6 + 0.4 * fl;
+					e.v0 = 1.5 + 3.0 * fl, e.spread = 0.6 + 0.4 * fl;
 					e.lifetime = 0.6 + 0.4 * fl;
-					e.size = s0 * sz * (0.5 + 0.5 * fl), e.growth = 0.6 * s0 * sz;
-					e.alpha = 0.1 + 0.35 * fl, e.slowdown = 1.0;
+					e.size = 0.8 * s0 * sz * (0.5 + 0.5 * fl), e.growth = 0.6 * s0 * sz;
+					e.alpha = 0.12 + 0.4 * fl, e.slowdown = 1.0;
 					e.emissive = true, e.ramp = true, e.erode = true;
+					// (tongues: each flame drawn as a streak along its rise, of
+					// varying length - phase 5; a row of round puffs before)
+					e.streak = (float)(0.12 + 0.3 * U (rng));
 					e.tinted = true, e.albedo[0] = 1.0f, e.albedo[1] = 0.72f, e.albedo[2] = 0.38f;
 					e.cls = ParticleSystem::Class::Fire;
 					sys->Emit (f.flames, e, m);
 				}
 			}
 		}
+		// embers (phase 5): glowing bits carried up over the spill as its
+		// flames die down, until they are out
+		if (t > f.tw - 2.0 && t < 1.5 * f.tw) {
+			if (!f.embers.tex) f.embers.tex = scene->SparkTexture (), f.embers.emissive = true;
+			double k = std::clamp ((t - (f.tw - 2.0)) / 2.0, 0.0, 1.0) * std::clamp ((1.5 * f.tw - t) / (0.5 * f.tw), 0.0, 1.0);
+			double rate = std::clamp (4.0 * f.R, 20.0, 200.0) * D;
+			f.embers.accum += rate * k * dt;
+			uint32_t n = (uint32_t)f.embers.accum;
+			f.embers.accum -= n;
+			if (n && sys->Reserve (f.embers, rate, 2.5, ParticleSystem::Class::Spark, 0.0, f.embers.tex, true)) {
+				const int K = 4;
+				for (int k2 = 0; k2 < K && n; k2++) {
+					uint32_t m = (n + (K - 1 - k2)) / (K - k2);
+					n -= m;
+					if (!m) continue;
+					ParticleSystem::Emission e{};
+					e.p1 = spot (1.0) + up * 0.5, e.p0 = e.p1 - gv * dt;
+					e.vel = gv, e.dir = -up, e.dt = dt;
+					e.v0 = 2.5, e.spread = 1.5;
+					e.lifetime = 1.5 + 1.0 * (1.0 - k);
+					e.size = 0.07 * sz, e.growth = 0.0;
+					e.alpha = 1.0, e.slowdown = 0.6;
+					e.emissive = true, e.ramp = true, e.spherical = true, e.speck = true; // (a pixel at least: seen from afar)
+					e.tinted = true, e.albedo[0] = 1.0f, e.albedo[1] = 0.55f, e.albedo[2] = 0.2f;
+					e.streak = 0.04f;
+					e.cls = ParticleSystem::Class::Spark;
+					sys->Emit (f.embers, e, m);
+				}
+			}
+		}
 		// its smoke: a black stem rising from it (burning fuel smokes black,
-		// on the water too), thinning as it smoulders
+		// on the water too), thinning as it smoulders and lightening to grey
 		if (sm > 0.03) {
 			if (!f.stem.tex) f.stem.tex = sys->SmokeTexture ();
 			// (from about its middle, overlapping: one stem - puffs from all over
-			// it rose as a scatter of balls)
+			// it rose as a scatter of balls; phase 5: a few more, from a
+			// third of it, so that the column is one column from the spill up)
 			double Rc = std::clamp (0.25 * f.R, 2.5, 25.0);
-			double rate = 10.0 * D;
+			double rate = 14.0 * D;
 			f.stem.accum += rate * dt;
 			uint32_t n = (uint32_t)f.stem.accum;
 			f.stem.accum -= n;
 			if (n && sys->Reserve (f.stem, rate, 30.0, ParticleSystem::Class::WreckSmoke, 0.0, f.stem.tex, false)) {
 				ParticleSystem::Emission e{};
-				e.p1 = spot (0.15) + up * (0.5 * Rc), e.p0 = e.p1 - gv * dt;
+				e.p1 = spot (0.3) + up * (0.5 * Rc), e.p0 = e.p1 - gv * dt;
 				e.vel = gv, e.dir = -up, e.dt = dt;
 				e.v0 = 2.5 + 2.5 * fl, e.spread = 1.0;
 				e.lifetime = 30.0;
 				e.size = Rc * sz, e.growth = (0.12 * Rc + 0.6) * sz;
 				e.alpha = 0.6 * sm, e.slowdown = 0.4;
 				e.tinted = true, e.volumetric = true;
-				e.albedo[0] = e.albedo[1] = e.albedo[2] = 0.08f;
+				float alb = (float)(0.08 + 0.2 * (1.0 - std::min (1.0, fl / 0.7))); // (grey as it smoulders)
+				e.albedo[0] = e.albedo[1] = e.albedo[2] = alb;
 				e.cls = ParticleSystem::Class::WreckSmoke;
 				sys->Emit (f.stem, e, n);
 			}
@@ -213,7 +248,7 @@ void CrashFires::DrawParticles (Scene *scene)
 	if (!sys) return;
 	double simt = oapiGetSimTime ();
 	for (const Fire &f : fires)
-		for (const Ring *r : { &f.stem, &f.flames })
+		for (const Ring *r : { &f.stem, &f.flames, &f.embers })
 			if (r->sys == sys && simt - r->lastEmit < 1.5 * r->life + 0.1)
 				sys->Draw (*r, r->tex, r->emissive, scene->FrameSet ());
 }
@@ -221,7 +256,7 @@ void CrashFires::DrawParticles (Scene *scene)
 void CrashFires::Release (ParticleSystem *sys)
 {
 	for (Fire &f : fires)
-		for (Ring *r : { &f.flames, &f.stem })
+		for (Ring *r : { &f.flames, &f.stem, &f.embers })
 			if (sys && r->sys == sys) sys->Release (*r);
 	fires.clear ();
 }

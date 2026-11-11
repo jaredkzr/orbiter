@@ -42,6 +42,8 @@ SCENES = {
     "large":  ("fx_large", dict(CRASH, SPEED="60", ALT="60", CAM_X="-600", CAM_Z="250", CAM_Y="20", CAM_THT="8", CAM_PHI="-100")),
     # (two DGs collide at 300 m, 150 m/s: a ground observer 250 m aside, 60 m below)
     "midair": ("midair", dict(CAM="ground", CAM_FOV="50")),
+    # (the same at 300 m/s: the trails of fast pieces - phase 5)
+    "midair300": ("midair", dict(CAM="ground", CAM_FOV="50", SPEED="300")),
     # (a DG into the ISS at 30 m/s: the vacuum flash; vacspace: the camera below the station, space behind the shell)
     "vacuum": ("iss_hit", dict()),
     "vacspace": ("iss_hit", dict(CAM_OFS="0 -4 0")),

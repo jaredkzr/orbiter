@@ -978,7 +978,7 @@ VDebris::VDebris (OBJHANDLE h, Scene *s, DWORD sn)
 VDebris::~VDebris ()
 {
 	ParticleSystem *sys = scene->Particles ();
-	for (Ring *r : { &fire, &smoke, &sparks, &dust, &frags, &fbFire, &fbSmoke, &fbCore, &fbFlashR, &fbSkirt, &fbSteam, &column, &drift, &quench })
+	for (Ring *r : { &fire, &smoke, &sparks, &dust, &frags, &fbFire, &fbSmoke, &fbCore, &fbFlashR, &fbSkirt, &fbSteam, &column, &drift, &quench, &embers })
 		if (r->sys && r->sys == sys) sys->Release (*r); // (retired with r->tex while its particles live; rings idle for long were released already)
 	water.Release (sys);
 }
@@ -1273,6 +1273,9 @@ void VDebris::Effects ()
 	burning = flameLeft > 0.0 && rho > 1e-4 && !sunk;
 	flameF = burning ? std::min (1.0, flameLeft / 2.0) : 0.0;
 	bool atRest = alt < 2.0 * size + 3.0 && length (vel - groundVel) < 8.0;
+	// (the flames stream aft of a flying piece, up from one at rest: the
+	// hull glows on that side - Render)
+	flameDir = airSpd > 1.0 ? airVel / airSpd : -up;
 	if (burning) {
 		double f = flameF;
 		double s = std::max (0.6 * size, 0.5);
@@ -1288,18 +1291,53 @@ void VDebris::Effects ()
 		if (n) {
 			ParticleSystem::Emission e{};
 			e.p0 = fire.prev, e.p1 = gpos, e.vel = vel;
-			e.dir = airSpd > 1.0 ? airVel / airSpd : -up; // (thrown aft, off its windward side; up when at rest)
+			e.dir = flameDir; // (thrown aft, off its windward side; up when at rest)
 			e.v0 = 2.0, e.spread = 1.5;
 			// (the flames trail a few times its size behind it, however fast)
 			e.lifetime = std::clamp (FLAME_LENGTH * s / std::max (airSpd, 1.0), 0.15, 0.7), e.dt = dt;
 			e.size = s * szs, e.growth = 0.8 * s * szs;
 			e.alpha = 0.8 * f, e.slowdown = std::max (drag, 0.5);
 			e.emissive = true, e.ramp = true, e.erode = true;
+			// tongues (phase 5): each flame drawn as a streak along its motion
+			// through the air - aft of a flying piece, by its speed, up to
+			// about three times its size; up from one at rest (gpuparticle.vert)
+			e.streak = (float)std::clamp ((1.0 + 1.0 * fmod (simt * 7.3, 1.0)) * s / std::max (airSpd, 2.0), 0.03, 0.4);
 			e.cls = ParticleSystem::Class::Fire;
 			Emit (fire, e, n, 0.7);
 		}
 		fire.prev = gpos, fire.havePrev = true;
 	} else fire.havePrev = false;
+	// embers (phase 5): glowing bits carried up by the hot air as its flames
+	// die down (the last two seconds of them) and for half of t_w after,
+	// fewer and fewer
+	{
+		double ember = 0.0;
+		if (burning) ember = 0.25 + 0.75 * (1.0 - flameF);
+		else if (burnEndT > -1e29 && !sunk && rho > 1e-4) {
+			double tail = 0.5 * std::min (tw, 30.0);
+			ember = std::max (0.0, 1.0 - (simt - burnEndT) / tail);
+		}
+		if (ember > 0.01) {
+			double s = std::max (0.6 * size, 0.5);
+			embers.accum += 18.0 * D * ember * std::min (1.0, 0.5 + 0.5 * s) * dt;
+			uint32_t n = (uint32_t)embers.accum;
+			embers.accum -= n;
+			if (n) {
+				if (!embers.tex) embers.tex = scene->SparkTexture (), embers.emissive = true;
+				ParticleSystem::Emission e{};
+				e.p0 = gpos - vel * dt, e.p1 = gpos, e.vel = vel, e.dir = -up, e.dt = dt;
+				e.v0 = 2.5, e.spread = 1.5 + 0.5 * s;
+				e.lifetime = 1.2 + 0.8 * ember;
+				e.size = 0.07 * sz, e.growth = 0.0;
+				e.alpha = 1.0, e.slowdown = std::max (drag, 0.6);
+				e.emissive = true, e.ramp = true, e.spherical = true, e.speck = true; // (a pixel at least: seen from afar)
+				e.tinted = true, e.albedo[0] = 1.0f, e.albedo[1] = 0.55f, e.albedo[2] = 0.2f;
+				e.streak = 0.04f;
+				e.cls = ParticleSystem::Class::Spark;
+				Emit (embers, e, n, 2.0);
+			}
+		}
+	}
 	// its smoke: black while it burns (fuel burning on the water smokes
 	// black too: steam only from its splash and its quench); a hot piece
 	// flying on, its flames out: a thin grey trail, fading as it cools
@@ -1307,17 +1345,18 @@ void VDebris::Effects ()
 	// WreckSmoke; the trail's puffs drawn as sprites there were black discs)
 	double hot = !burning && !sunk && !atRest && rho > 1e-4 ? std::clamp ((info.temp - 700.0) / 500.0, 0.0, 1.0) : 0.0;
 	if ((burning && !atRest) || hot > 0.0) {
-		// (by the distance it moves through the air, D puffs every 0.5
-		// of its size - overlapping many times, an unbroken trail however
-		// fast it falls; 20 D a second at least while it is slow. Not by
-		// a rate capped per second: falling pieces left puffs metres
-		// apart, beads - f6 midair. The pool's share: a shorter life, not
-		// a wider spacing)
+		// (by the distance it moves through the air, D puffs every 0.4 of
+		// its size - overlapping many times, an unbroken trail however fast
+		// it falls; 20 D a second at least while it is slow. Not by a rate
+		// capped per second: falling pieces left puffs metres apart, beads -
+		// f6 midair. Phase 5: the spacing is the same whatever is left of
+		// its flames (the count was scaled by it: beads as they died down);
+		// the puffs larger and fainter, so that the band reads as a band,
+		// not as a row of discs)
 		double s = std::max (0.6 * size, 0.5);
-		double f = burning ? flameF : 1.0; // (a hot piece's: as many, fainter - fewer were beads)
 		if (!smoke.havePrev) smoke.prev = gpos - vel * dt;
-		double puff = 2.0 * s * sz;
-		smoke.accum += (airSpd * dt / (0.5 * s) + 12.0 * dt) * D * f;
+		double puff = 2.5 * s * sz;
+		smoke.accum += (airSpd * dt / (0.4 * s) + 12.0 * dt) * D;
 		uint32_t m = (uint32_t)std::min (smoke.accum, 400.0);
 		smoke.accum -= m;
 		if (m) {
@@ -1328,8 +1367,16 @@ void VDebris::Effects ()
 			e.v0 = 0.5, e.spread = 0.4;
 			e.lifetime = burning ? 8.0 : 4.0, e.dt = dt;
 			e.size = burning ? puff : 0.6 * puff, e.growth = 1.5 * s * sz;
-			e.alpha = burning ? 0.5 * flameF : 0.12 * hot, e.slowdown = std::max (drag, 0.3);
-			e.tinted = true; // (sprites: thin trails, the volume would draw them in beads)
+			e.alpha = burning ? 0.35 * std::max (flameF, 0.3) : 0.12 * hot, e.slowdown = std::max (drag, 0.3);
+			e.tinted = true;
+			// (a burning piece's trail into the smoke volume (phase 5): as
+			// sprites it was a band of round discs, polka dots, however many
+			// overlapped (the sum of round things); with D puffs per 0.4 of
+			// its size the volume draws an unbroken band at 300 m/s too (the
+			// beads of f6 midair were from a rate capped per second). On the
+			// water a slow piece's smoke joins the wreck's column and the
+			// spill's stem there. A hot piece's faint grey trail stays sprites)
+			e.volumetric = burning;
 			e.albedo[0] = e.albedo[1] = e.albedo[2] = burning ? 0.08f : 0.35f; // (soot; a hot piece's: grey)
 			// (a trail of smoke: keeps its coverage as it ages, thins by
 			// opacity - the band erosion; eroded as puffs it broke up)
@@ -1810,7 +1857,9 @@ void VDebris::WreckSmoke (double dt, double strength, const VECTOR3 &up, const V
 	for (const VECTOR3 &c : claimed)
 		if (length (c - gpos) < 30.0 + 2.0 * Rc) return;
 	claimed.push_back (gpos);
-	float alb = 0.09f; // (afloat too: burning fuel smokes black)
+	// (afloat too: burning fuel smokes black; as it smoulders, its flames
+	// out, a lighter grey - phase 5)
+	float alb = (float)(0.09 + 0.22 * (1.0 - std::min (strength, 1.0)));
 	if (!column.tex) column.tex = sys->SmokeTexture ();
 	if (!drift.tex) drift.tex = sys->SmokeTexture ();
 	column.accum += 6.0 * D * dt;
@@ -2050,7 +2099,7 @@ void VDebris::DrawParticles ()
 	ParticleSystem *sys = scene->Particles ();
 	if (!sys) return;
 	double simt = oapiGetSimTime ();
-	for (const Ring *r : { &drift, &column, &fbSmoke, &smoke, &quench, &fbSteam, &dust, &fbSkirt, &frags, &fire, &fbFire, &fbCore, &fbFlashR, &sparks })
+	for (const Ring *r : { &drift, &column, &fbSmoke, &smoke, &quench, &fbSteam, &dust, &fbSkirt, &frags, &fire, &fbFire, &fbCore, &fbFlashR, &sparks, &embers })
 		if (r->sys == sys && simt - r->lastEmit < 1.5 * r->life + 0.1)
 			sys->Draw (*r, r->tex, r->emissive, scene->FrameSet ()); // (if not released while idle)
 	water.Draw (scene);
@@ -2062,12 +2111,24 @@ void VDebris::Render (RenderPass pass)
 	Mat4 mv = scene->ModelView (gpos, grot);
 	scene->Sunlight (gpos);
 	if (pass == RenderPass::Depth) SetMotion ();
-	// hot (burned off, burning): glowing, most on its windward side
+	// hot (burned off, burning): glowing, most on its windward side; a
+	// burning piece's hull glows where its flames are (phase 5: the side
+	// they stream off, flickering with them), whatever its temperature
 	float glow = (float)std::clamp ((info.temp - 900.0) / 700.0, 0.0, 1.0);
+	if (flameF > 0.0) {
+		double simt = oapiGetSimTime ();
+		double flick = 0.8 + 0.2 * sin (simt * 19.0 + info.serial) * sin (simt * 5.7);
+		glow = std::max (glow, (float)(0.6 * flameF * flick));
+	}
 	if (glow > 0.0f) {
-		VECTOR3 v;
-		oapiGetGlobalVel (hObj, &v);
-		VECTOR3 d = length (v) > 1.0 ? unit (v) : _V(0, 1, 0);
+		// (the side the flames stream off: aft of a flying piece, the top of
+		// one at rest - the emission's direction reversed)
+		VECTOR3 d = length (flameDir) > 0.5 ? -flameDir : _V(0, 1, 0);
+		if (flameF <= 0.0) {
+			VECTOR3 v;
+			oapiGetGlobalVel (hObj, &v);
+			d = length (v) > 1.0 ? unit (v) : _V(0, 1, 0);
+		}
 		scene->SetObjectHeat (scene->ViewDir (d), glow);
 	}
 	scene->DrawMesh (mesh.get(), mv, pass);

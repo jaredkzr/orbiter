@@ -216,6 +216,8 @@ private:
 		bool emissive = false;
 	};
 	Ring fire, smoke, sparks, dust;  // (sparks: also those of a blow)
+	Ring embers;                     // glowing bits as its flames die down (phase 5)
+	VECTOR3 flameDir{};              // the side its flames stream off (global; aft when flying, down (-up) at rest): the hull glows there
 	Ring frags;              // struck by another body: small bits of it
 	WaterSpray water;        // in the water: splash, spray, wake (from its water state)
 	// the fireball (Fireball): its flames, each cooling over its life (the

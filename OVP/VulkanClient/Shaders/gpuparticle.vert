@@ -130,9 +130,14 @@ void main ()
 			// near the camera a streak became a slab)
 			float dist = length (vp);
 			float lPath = h + (ballistic ? (shape.w > 0.0 ? 0.05 : 0.07) : streak) * len;
-			float l = min (min (lPath, h + 1.0), max (h, 0.125 * dist / abs (frame.proj[1][1])));
+			// (flames: tongues of up to about three and a half times their
+			// size, streaming off a burning piece, and not dimmed below half
+			// for their length - phase 5)
+			bool flame = ParticleClass (flags) == PC_FIRE;
+			float lMax = flame ? h + max (1.0, 2.5 * h) : h + 1.0;
+			float l = min (min (lPath, lMax), max (h, 0.125 * dist / abs (frame.proj[1][1])));
 			a *= smoothstep (1.0, 3.0, dist); // (and gone within a few metres of the camera)
-			a *= h / lPath;
+			a *= flame ? max (h / lPath, 0.5) : h / lPath;
 			pos = vp + ax * (c.x * l) + ay * (c.y * h);
 			vMisc.xy = vec2 (1.0, 0.0);
 		}

@@ -691,3 +691,119 @@ boil outward without smearing, the ball leans ahead and is lobed; no flat sides.
 does not: the sea ball reads slightly smaller than 4b's from 1.2 s on; the 60 m/s
 ball at 0.3 s still shows faint vertical fibres (the elongated shape's limb
 darkening, not the noise); the march is ~25 % dearer.
+
+## Phase 5 (debris trail and wreck-fire polish)
+
+What changed (`VObjects.cpp/.h`, `CrashFire.cpp/.h`, `gpuparticle.vert`):
+- **Flame tongues**: a burning piece's flames are drawn as streaks along their motion
+  through the air (`Emission::streak`, 1-2 x its size over its airspeed, 0.03-0.4 s;
+  the length varying flame by flame): aft of a flying piece, up from one at rest. The
+  vertex shader's streak cap (1 m over the particle, for dust and sparks) is lifted for
+  `PC_FIRE` to 2.5 x its half size (tongues of up to ~3.5 sizes), and a flame is not
+  dimmed below half for its length. The spill's flames (CrashFires) streak along their
+  rise (0.12-0.42 s), rising a little faster, smaller (0.8 of 0.16 R) and a little
+  brighter: tongues over the slick instead of a row of round puffs.
+- **Trail spacing floor**: the puff count is by the distance moved only (D puffs per
+  0.4 of the piece's size, 12 D a second at least): phase 1 scaled it by the flames
+  left (f), so a piece dying down left beads. The puffs are larger (2.5 x its size,
+  was 2) and fainter (0.35 x max (f, 0.3), was 0.5 f): the band reads as a band.
+- **Burning pieces' trails into the smoke volume**: as sprites a trail was a band of
+  round discs, polka dots, however many overlapped (the sum of round things, as the
+  plan's 1.3 said of the fire sprites; the midair sheets at 3-8 s, the sea at 3-10 s).
+  Tried first for slow pieces only (under 12 m/s: the water-skipping ones, whose smoke
+  joins the wreck's column and the spill's stem), then for all: with D puffs per 0.4
+  of the piece's size the volume draws an unbroken soft band at 150 and at 300 m/s
+  (`dev/m150vol`, `dev/m300vol`; the beads of phase 1's "f6 midair" were from a rate
+  capped per second, not from the volume). A hot piece's faint grey trail stays sprites.
+- **Hot-piece trails**: as phase 1 (faint grey, the same spacing); kept.
+- **Quench**: as phase 1 (a 2 s steam burst as a burning or hot piece goes under);
+  kept - the sea log's "under ... quench" lines.
+- **Embers**: glowing specks (Class::Spark, ramp-coloured, streaked, at least a pixel)
+  carried up from a burning piece as its flames die down (the last two seconds) and
+  for half of t_w after; and over the spill from t_w - 2 s until its flames are out
+  (1.5 t_w), 4 R D a second.
+- **Smoulder**: the wreck's column and the spill's stem lighten from soot black (0.08-
+  0.09) towards grey (0.3) as their flames go out, over the 25 s smoulder.
+- **Hull glow tied to the flames**: a burning piece's mesh glows (`SetObjectHeat`) at
+  0.6 x its flames' strength, flickering, on the side its flames stream off (aft when
+  flying, the top at rest), whatever its temperature; the temperature glow as before.
+- **Land pieces burning for t_w**: as phase 1 (the visible flames `min (burn, t_w -
+  age)`); kept - the land sheet at 5-12 s burns, 15-25 s smoulders.
+- **The stem a column**: 14 D puffs a second (was 10) from a third of the spill (was a
+  seventh), the same 30 s life; the pieces' slow trails join it (above).
+- Harness: `run.py` scene `midair300` (the midair collision at 300 m/s);
+  `phase5/pre.sh` (the "before" sheets on the phase 4c build), `phase5/batch.sh`.
+
+### Hand-off for phase 6 (LOD, several fireballs, warp, pause, cuts, settings, budget)
+
+- **LOD**: the march's step is by screen size (0.5 / 0.7 / 1 cell at > 400 / > 150 px
+  of radius); below 12 px of radius sprites. Not done: a "light only" level, and the
+  march's phase-B detail taps could be skipped where phase B's weight is small (~0.15
+  ms close). The sprite fallback pops when the switch happens mid-burn (phase 2's note).
+- **Several fireballs and overlap merging**: at most 4 marched (the largest on screen),
+  the rest sprites; pieces of one break-up join; balls within R of each other join;
+  two balls whose spheres overlap by more than half do NOT merge yet (plan 2.6) -
+  overlapping balls are marched far to near into the same half images and read as one.
+  `ORBITER_VK_FIREBALL_NOJOIN=1` tests several at once. `large` (Atlantis into the sea)
+  formed two fireballs; it carries only ~8 t here (OMS/RCS): the 100 t case needs a
+  vessel with the tank (phase 0's deviation).
+- **Warp**: the model is analytic in the age (grid, lean, lift, roll, the flow map's
+  phases all from t): right at any warp; nothing accumulates. The froxel cap and the
+  CrashFires' particles are emitted per step: at high warp they thin out (fewer steps a
+  second). Not verified at 10x (plan 2.6 wants a 10x sheet).
+- **Pause**: the march's jitter sequence advances with the simulation time only; the
+  grid is frozen; `--pausecheck` showed sub-pixel TAA differences only (phase 2). The
+  flow map and the lean are in the age too.
+- **Cuts**: the grid is camera-independent; the TAA/SSR/RTL histories are reset by the
+  cut logic (6b4f4353); the jolt does not cut. Not re-verified since phase 4.
+- **Settings**: the graphics settings have no "Fireball: sprites / volumetric" entry yet
+  (`ORBITER_VK_FIREBALL=sprites|volume` only); the density setting applies to the
+  particles, not the march.
+- **Budget**: sea 1440p fb sum max 1.65-1.89 ms (3-3.8 s, the wide soot ball), close
+  1440p 2.33 ms peak frame (about 2 asked); the explosion's peak particle + fb frame
+  3.2-3.4 ms at 1440p (5 asked). The trails in the volume add to `pt volume` on the
+  midair scenes (not measured at 1440p). A `budget.py` "Crash" flight is still to do.
+- **The Atlantis 100 t case**: not possible with the stock Atlantis vessel (the ET is not
+  part of it); either a scratch vessel class with 100 t of propellant or the ET as a
+  vessel. R 95 m, t_f 3.7 s, the grid's cells 2-3 m: the march's detail may need the
+  finest octave scaled by R.
+- Open looks: the spill's tongues are a row of upright strokes (uniform heights would
+  need the spill's flames varying more in size and rate across the slick); the stem's
+  froxel puffs still show as soft blobs where the column is thin (3-5 s); the skirts
+  are sprites; the vacuum shell's first frame is grey.
+
+### Verification (phase 5)
+
+Sheets (1080p): `phase5/{sea,land,midair,midair300}_sheet.png` (sea 2-12 s, land 3-25 s,
+the midair break-ups at 150 and 300 m/s at the standard times); "before" on the phase
+4c build (`pre.sh`): `before_*_sheet.png`; A/B `ab_{sea,land,midair,midair300}.png`
+(4c left, 5 right). Videos `sea_crash.mp4` (12 s), `land_crash.mp4` (14 s),
+`midair_crash.mp4` (8 s), 1080p, the wreck-view frame dropped. Dev: `dev/m150vol`,
+`dev/m300vol` (the volumetric trails tried), `dev/{sea,land,midair}` (the first build).
+- Midair 150 and 300 m/s: the trails are soft unbroken bands at 2-8 s where phase 4c
+  had bands of round discs (polka dots) at both speeds; no beads at the far ends down
+  to 12 s; flame tongues stream aft of the pieces; the quench line in the sea log for
+  every piece going under (`sea/orbiter.log`: "under ... quench").
+- Sea 3-10 s: the spill's flames are rising tongues (a row of round puffs before); the
+  black trail discs of the skipping pieces are gone (their smoke is in the volume, a
+  dark haze at the surface joining the stem); the stem a column.
+- Land 5-25 s: the pieces and the spill burn for t_w (9.7 s) with tongues, the column
+  black; at 15-25 s the smoke lightens to grey as it smoulders; embers over the spill
+  and the pieces at 8-15 s (specks; small at 350 m).
+- Validation layer (sea, 3 and 8 s): clean (`phase5/validation`). ctest -R
+  "Particles|Water|Damage|Debris": the known DamageEffectsTest (AIR roll) failure only.
+
+Perf (sea 1440p, `perf1440.txt`, `fbperf.txt`; 4c -> 5): crash 0-3 s median frame
+19.92 -> 20.20 ms; 3-5 s 16.59 -> 16.27; 5-12 s 17.1-17.3 -> 15.5-15.6 ms (the
+trails' sprites 1.25-1.45 ms -> 0.1: into the volume, `pt volume` +0.1); peak particle
++ fb frame 3.41 -> 2.91 ms; fb passes unchanged (march 0.86 median over 1-2 s, sum max
+1.81 at 3-3.8 s). Budget: met as in 4c.
+
+### Status (phase 5)
+
+Done. What convinces: the trails as bands at any speed, the tongues off the pieces and
+over the slick, the smoulder's grey, the land wreck burning out over t_w. What does
+not: the spill's tongues are a row of upright strokes of much the same height; the
+embers are hardly seen at 350 m (a pixel each); a piece's dark trail puff sits on the
+piece itself as it flies (a black blob behind it at 2-3 s midair); the hull glow is not
+judged at this distance.

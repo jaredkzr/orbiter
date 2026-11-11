@@ -59,7 +59,7 @@ private:
 		bool logged = false, loggedOut = false;
 		double strength = 0.0;                  // its flames now (0..1)
 		double smoke = 0.0;                     // its smoke now (0..1)
-		Ring flames, stem;
+		Ring flames, stem, embers;
 		uint32_t seed = 0;
 	};
 	std::vector<Fire> fires;
