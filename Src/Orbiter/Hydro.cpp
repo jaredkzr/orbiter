@@ -10,7 +10,10 @@ namespace hydro {
 
 int debugPanels = 0;
 
+
 namespace {
+
+	double Smooth01 (double x) { x = std::clamp (x, 0.0, 1.0); return x * x * (3.0 - 2.0 * x); }
 
 	const double PI_ = 3.14159265358979323846;
 
@@ -144,6 +147,42 @@ void Forces (const Model &m, const Surface &s, const Body &b, Result &r, double 
 			}
 			add (Vector (0.0, fd, 0.0), p, c.part, true);
 		}
+		// pitch and roll: their own waves radiated - ZETA_ROT of the critical
+		// damping about each horizontal axis through the CG, by the
+		// waterplane's second moment there (its restoring stiffness, rho g
+		// I_wp) and the body's inertia, on its rotation relative to the
+		// water's surface (each waterline cell's vertical speed relative to
+		// the surface's there: it rides the swell; damping its rotation
+		// itself, it fought the waves and never settled); no reversal within
+		// the sub-step. (The heave's damping above gave pitch and roll only a
+		// fraction of their critical: an end striking the water set the body
+		// spinning end over end - cartwheels)
+		{
+			double Ix = 0.0, Iz = 0.0, Sx = 0.0, Sz = 0.0;
+			for (size_t i = 0; i < m.cells.size(); i++) {
+				double f = 0.5 + depth[i] / hc;
+				if (f <= 0.0 || f >= 1.0) continue;
+				const Cell &c = m.cells[i];
+				Vector p (b.x + mul (b.R, c.c));
+				Vector rc (p - xcg);
+				double a = c.w * hc * hc;
+				double vr = (vv + crossp (wl, rc)).y - s.Vel (p.x, p.z, 0.0).y;
+				Iz += a * rc.x * rc.x, Ix += a * rc.z * rc.z;    // (about z: the x arm; about x: the z arm)
+				Sx += a * rc.z * vr, Sz += a * rc.x * vr;        // (the relative rotation: -Sx / Ix about x, Sz / Iz about z)
+			}
+			for (int k = 0; k < 2; k++) {
+				Vector ax (k ? Vector (0, 0, 1) : Vector (1, 0, 0));
+				double Iwp = k ? Iz : Ix;
+				if (Iwp <= 1e-9) continue;
+				double om = k ? Sz / Iwp : -Sx / Iwp;            // (its rotation relative to the surface)
+				double Ib = dotp (ax, IinvL (ax)); Ib = Ib > 0.0 ? 1.0 / Ib : 0.0; // (the body's inertia about the axis)
+				double tq = -2.0 * ZETA_ROT * sqrt (s.rho * s.g * Iwp * Ib) * om;
+				if (dt > 0.0) { double lim = fabs (om) * Ib / dt; tq = std::clamp (tq, -lim, lim); }
+				Vector t (ax * tq);
+				T += t;
+				if (dt > 0.0) wl += IinvL (t) * dt;
+			}
+		}
 	}
 
 	// panels: pressure, slamming, friction. The laws give each panel's push
@@ -152,7 +191,7 @@ void Forces (const Model &m, const Surface &s, const Body &b, Result &r, double 
 	// Gauss-Seidel passes as the contact solver's: no panel is pushed beyond
 	// stopping it relative to the water, together (a body under water at
 	// speed is stopped, not thrown back by the pushes on its first panels)
-	struct PS { Vector p, n, rc, vw, dt; double jn, jt, ln, lt, kn, kt; int part; };
+	struct PS { Vector p, n, rc, vw, dt; double jn, js, jt, ln, lt, kn, kt; int part; };
 	static thread_local std::vector<PS> ps;
 	ps.clear();
 	double wetted = 0.0;
@@ -176,10 +215,40 @@ void Forces (const Model &m, const Surface &s, const Body &b, Result &r, double 
 		wetC += p * A;
 		double U = u.length();
 		double un = dotp (u, n);
-		double pn = 0.0;
+		double pn = 0.0, psu = 0.0;
+		// (the steady pressure of the flow over a panel develops as it is
+		// wetted to a depth like its size - over wf^DIG of its area, not wf:
+		// the free surface over a barely wetted edge relieves it, the water
+		// thrown off as spray. At wf a light hull's tail touching at speed
+		// had its full plate pressure on its first facets - a rigid ramp,
+		// the hull thrown back up nearly as fast as it came down. Its entry
+		// impulse is the slam's, below)
+		// (at impact speeds: from 5 m/s, full at 20 - a bobbing hull's
+		// waterline pressure damps its motion; at wf^DIG there, a DG dropped
+		// on the swell never settled)
+		double fastP = Smooth01 ((U - 5.0) / 15.0);
+		double Ap = q.area * pow (wf, 1.0 + (DIG - 1.0) * fastP);
 		if (un > 0.0 && U > 0.0) {
 			double sa = un / U;
 			pn = 0.5 * s.rho * U * U * std::min (PI_ * sa, CN_MAX);
+		} else if (un < 0.0 && U > 0.0) {
+			// suction: a wetted panel moving away from the water outside it
+			// (an aft bottom, a hull rising out) - the flow following it pulls
+			// it back as the flow pushes on the other side; at most the
+			// pressure there (the air's and the depth's: below it the water
+			// cavitates), less near the surface (air reaches it: ventilated,
+			// wf^2). A ditching hull's aft suction holds it down
+			// Near the surface only (gone below two of its sizes): deeper the
+			// pressure's law is already a body's whole drag, its wake's suction
+			// in it - doubled, sinking pieces slowed until the core put them
+			// to rest in mid-water
+			double sa = -un / U;
+			// And fast only (from 5 m/s, full at 20): at a boat's speed the flow
+			// stays on the hull and its pressure recovers at the stern - with
+			// suction there, a floating DG under half thrust made 4.4 m/s in 8 s
+			double near = std::clamp (1.0 - d / (2.0 * std::max (q.size, 0.1)), 0.0, 1.0);
+			double pmax = (P_AIR + s.rho * s.g * std::max (d, 0.0)) * wf * wf * near * fastP;
+			psu = SUCTION * std::min (0.5 * s.rho * U * U * std::min (PI_ * sa, CN_MAX), pmax);
 		}
 		// slamming: wetted from below, facing down into the surface. Wagner's
 		// pressure over the panel's wetting, as the impulse of the part of its
@@ -209,15 +278,16 @@ void Forces (const Model &m, const Surface &s, const Body &b, Result &r, double 
 			ft = 0.5 * s.rho * Cf (Ut * std::max (m.length, 0.1) / s.nu) * Ut * Ut * A;
 			dirT = ut / Ut;
 		}
-		if (pn <= 0.0 && ft <= 0.0 && jslam <= 0.0) continue;
+		if (pn <= 0.0 && psu <= 0.0 && ft <= 0.0 && jslam <= 0.0) continue;
 		PS x;
 		x.p = p, x.n = n, x.rc = rc, x.vw = vw, x.dt = dirT, x.part = q.part;
 		x.ln = x.lt = 0.0;
 		if (dt > 0.0) {
-			x.jn = pn * A * dt + jslam, x.jt = ft * dt;
+			x.jn = pn * Ap * dt + jslam, x.js = psu * A * dt, x.jt = ft * dt;
 			x.kn = kInv (rc, n), x.kt = ft > 0.0 ? kInv (rc, dirT) : 1.0;
 		} else {
-			x.ln = pn * A, x.lt = ft; // (the laws' forces as they are)
+			x.jn = x.js = 0.0;
+			x.ln = pn * Ap - psu * A, x.lt = ft; // (the laws' forces as they are)
 		}
 		ps.push_back (x);
 	}
@@ -228,7 +298,7 @@ void Forces (const Model &m, const Surface &s, const Body &b, Result &r, double 
 			for (size_t q = 0; q < ps.size(); q++) {
 				PS &x = ps[it % 2 ? ps.size() - 1 - q : q];
 				Vector u (vv + crossp (wl, x.rc) - x.vw);
-				double dn = std::clamp (dotp (u, x.n) / x.kn, -x.ln, x.jn - x.ln);
+				double dn = std::clamp (dotp (u, x.n) / x.kn, -x.js - x.ln, x.jn - x.ln); // (pushed out up to jn, pulled back - suction - up to js; never beyond stopping it)
 				if (dn != 0.0) {
 					x.ln += dn;
 					Vector J (x.n * -dn);

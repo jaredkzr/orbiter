@@ -20,8 +20,15 @@
 //     surface), capped for a flat bottom at CS_MAX (the air cushion, the
 //     spread over the patch);
 //   - skin friction: ITTC-57 on the wetted panels;
-//   - wave damping: the waterline's cells damp the heave (and so roll and
-//     pitch) at ZETA of critical (the energy radiated as waves).
+//   - suction: a wetted panel moving away from the water outside it is
+//     pulled back, SUCTION times the pressure's law, at most the air's and
+//     the depth's pressure (cavitation), ventilated near the surface (wf^2);
+//   - wave damping: the waterline's cells damp the heave at ZETA of
+//     critical, pitch and roll at ZETA_ROT (the energy radiated as waves).
+//   (The pressure acts over wf^DIG of a wetting panel: it develops with the
+//   depth. Without suction, the pitch and roll damping and DIG, a light
+//   hull glanced off its first facets as off a rigid ramp and cartwheeled:
+//   a ShuttlePB at 80 m/s skipped five times - Water W11)
 //
 // The motion (Step): water is dense, its forces stiff: a body striking it
 // at speed is stopped within a fraction of a frame. The step is therefore
@@ -44,6 +51,10 @@ namespace hydro {
 	const double CN_MAX = 1.0;
 	const double CS_MAX = 3.0;
 	const double ZETA = 0.15;
+	const double ZETA_ROT = 0.6;   ///< pitch and roll damping (their waves and spray), of critical
+	const double DIG = 3.0;        ///< a wetting panel's steady pressure over wf^DIG of its area
+	const double SUCTION = 2.0;    ///< suction on a wetted panel leaving the water, of the pressure's law (Cp down to -2: the flow following a curved aft hull)
+	const double P_AIR = 101325.0; ///< [Pa] the air's pressure over the water (suction at most this, plus the depth's)
 	const int MAX_SUBSTEPS = 64;
 	extern int debugPanels; ///< (diagnostics: print this many strongest panels of the next Forces calls)
 
