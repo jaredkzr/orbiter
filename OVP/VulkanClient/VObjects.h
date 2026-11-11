@@ -242,6 +242,8 @@ private:
 	double fbV0 = 0.0;         // [m/s] how fast (relative to the air), as it ignited
 	VECTOR3 fbFlashPos{};      // where it ignited (the flash's light; moving with the air)
 	double fbFuelW = 0.0;      // (the pieces' velocities weighted by their propellant: fbVel)
+	double fbRise = 0.0;       // [m/s] its buoyant rise now (a part of fbVel: FireballRenderer::Rise)
+	double fbRisen = 0.0;      // [m] how far it rose by it so far (its growth by the air it draws in)
 	// its shape now (the volume: FireballRenderer): drawn out along its path
 	// (>= 1), lifting off (0..1), the vortex ring's turn [rad], the ground
 	// below its centre [m] (along up: < 0 below), the local vertical

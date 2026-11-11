@@ -33,6 +33,8 @@ struct FireballRenderer::Params { // fireball.glsl
 };
 
 namespace {
+	// a smoothstep of x over 0..1 (clamped)
+	double Smooth01 (double x) { x = std::clamp (x, 0.0, 1.0); return x * x * (3.0 - 2.0 * x); }
 	constexpr VkFormat HALF_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
 	constexpr VkFormat OCC_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
 
@@ -75,9 +77,9 @@ void FireballRenderer::ModelTemps (double u, double &Th, double &Ts)
 
 double FireballRenderer::RingTurn (double u, double tf, double R)
 {
-	const double a = 0.35, b = 0.6;
-	double x = std::clamp ((u - a) / (b - a), 0.0, 1.0);
-	double I = (b - a) * (x * x * x - 0.5 * x * x * x * x) + std::max (0.0, u - b);
+	// (the integral of Lift: u - a sqrt(pi)/2 erf(u/a))
+	u = std::max (u, 0.0);
+	double I = u - LIFT_U * 0.886226925 * std::erf (u / LIFT_U);
 	return 1.4 * sqrt (9.81 / std::max (R, 1.0)) * tf * I;
 }
 
@@ -631,7 +633,7 @@ void FireballRenderer::Compute (VkDescriptorSet frameSet)
 		p.centre[3] = (float)Ts;
 		p.heat[1] = (float)(-0.55 + 1.15 * u);
 		p.heat[2] = (float)std::clamp ((0.1 - b.t) / 0.05, 0.0, 1.0);
-		p.heat[3] = (float)(std::clamp ((1.8 - u) / 0.5, 0.0, 1.0) * std::clamp (b.fade, 0.0, 1.0)); // (the soot ball, rising, fading into the smoke volume's cap; its cross-fade with its sprites)
+		p.heat[3] = (float)(Smooth01 ((1.8 - u) / 0.5) * std::clamp (b.fade, 0.0, 1.0)); // (the soot ball, rising, fading into the smoke volume's cap; its cross-fade with its sprites)
 		p.flow[0] = (float)b.roll;
 		p.flow[1] = 0.55f;
 		p.flow[2] = (float)(0.2 * b.t * tuneChurn); // (boiling: the warp field drifting - 0.08 left the billows frozen in place)

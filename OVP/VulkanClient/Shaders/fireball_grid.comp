@@ -98,7 +98,9 @@ void main ()
 			vec4 h = fract (sin (vec4 (12.9898, 78.233, 45.164, 94.673) * (P.time.w * 0.173 + float (i) * 1.618 + 0.5)) * 43758.5453);
 			vec4 h2 = fract (sin (vec4 (63.726, 29.512, 81.337, 17.994) * (P.time.w * 0.091 + float (i) * 2.718 + 0.25)) * 24634.6345);
 			if (i >= 3 && h.w > 0.55) continue;
-			float g = sqrt (clamp ((u - 0.2 * h.x) / 0.25, 0.0, 1.0));
+			// (its burst slowed by the air as the ball's is, FireballRenderer::Radius:
+			// grown on a square root to 0.25 t_f and stopped, each lobe halted dead)
+			float g = 1.0 - exp (-max (u - 0.2 * h.x, 0.0) / 0.1);
 			if (g <= 0.0) continue;
 			lobeR[nLobe] = (0.35 + 0.3 * h.y) * g;
 			lobeC[nLobe] = g * (ax * ((0.1 + 0.5 * h.z) * (h2.w < 0.7 ? 1.0 : -0.6)) + perp * (0.6 * h2.x - 0.3) + vec3 (0.0, 0.0, 0.4 * h2.y - 0.15 + L * (0.4 * h2.z - 0.1)));

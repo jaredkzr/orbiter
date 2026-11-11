@@ -92,7 +92,11 @@ void main ()
 	vec3 sdA = seed + FbPhaseSeed (P.adv2.z), sdB = seed + FbPhaseSeed (P.adv2.w);
 	// (a phase of the flow near its end or its start weighs little: its
 	// taps are left out - phase 6, a sixth of the march's noise taps)
-	float wA = P.adv.y > 0.07 ? P.adv.y : 0.0, wB = P.adv.w > 0.07 ? P.adv.w : 0.0;
+	// (a phase's taps skipped while its weight is small - phase 6 - its
+	// weight taken down to nought continuously over it: cut at 0.07, its
+	// share of the billows' edge went in a frame, a lobe's limb popping in
+	// or out each time a phase began or ended)
+	float wA = max (P.adv.y - 0.07, 0.0) / 0.93, wB = max (P.adv.w - 0.07, 0.0) / 0.93;
 	float wN = inversesqrt (max (wA * wA + wB * wB, 1e-4));
 	float fineW = P.asym.z; // (the finest octave: only where it can be seen)
 	// the light on it: the sun through the air to its centre (in the

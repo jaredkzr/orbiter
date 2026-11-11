@@ -52,6 +52,8 @@ SCENES = {
     "large100": ("fx_large100", dict(CRASH, SPEED="60", ALT="60", CAM_X="-450", CAM_Z="200", CAM_Y="12", CAM_THT="10", CAM_PHI="-102", CAM_FOV="50")),
     "large100l": ("fx_large100l", dict(CRASH, SPEED="60", ALT="60", GROUND_REL="1", CAM_X="-450", CAM_Z="200", CAM_Y="12", CAM_THT="10", CAM_PHI="-102", CAM_FOV="50")),
     # (two DGs side by side, 90 m apart, into the sea: two fireballs at once; "twinmerge" 30 m apart: they merge - phase 6)
+    # (the whole life in frame - the cap's climb too: the motion analysis, anim/motion.py)
+    "landwide": ("fx_land", dict(CRASH, GROUND_REL="1", CAM_X="-420", CAM_Z="270", CAM_Y="8", CAM_FOV="50", CAM_THT="12")),
     "twin":   ("fx_twin", dict(CRASH, SEP="90", SEP_SPEED="50", CAM_X="5", CAM_Z="-230", CAM_Y="10", CAM_PHI="-9", CAM_THT="2", CAM_FOV="55")),
     "twinmerge": ("fx_twin", dict(CRASH, SEP="20", SEP_SPEED="50", CAM_X="-200", CAM_Z="130", CAM_PHI="-97", CAM_THT="4", CAM_FOV="45")),
     # (the sea crash with a second observer on the other side for a camera cut: --cut T)

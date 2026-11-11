@@ -21,6 +21,7 @@
 
 #include "VkContext.h"
 #include "VkMath.h"
+#include <cmath>
 #include <functional>
 #include <vector>
 
@@ -56,9 +57,27 @@ public:
 	/// the model's temperatures at u = t / t_f: the hottest gas (its core)
 	/// and its surface (the mixing layer) [K] (fireball_grid.comp)
 	static void ModelTemps (double u, double &Th, double &Ts);
+	/// the motion of a crash fireball through its life (u = t / t_f), one
+	/// model from its burst to its smoke cap, so that each stage flows into
+	/// the next (no stage's motion begun or stopped at a set time):
+	/// its lifting off (0..1): its buoyancy taking over from its spreading
+	/// on the surface, smoothly from its birth, about full by 0.9 t_f
+	static double Lift (double u) { return 1.0 - std::exp (-(u / LIFT_U) * (u / LIFT_U)); }
+	/// its buoyant rise [m/s]: growing with Lift to some 0.7 sqrt (g R) about
+	/// its burn-out, slowing after as u^-1/2 (a thermal drawing air in);
+	/// the smoke cap it hands over to rises on as it did (VDebris: the
+	/// cap's particles emitted at its velocity, braked at about the rate
+	/// it slows by then)
+	static double Rise (double u, double R) { return RISE_K * std::sqrt (9.81 * R) * Lift (u) / std::sqrt (1.0 + u / RISE_U); }
+	/// its radius [m]: its burst slowed by the air (a third at once, nine
+	/// tenths of R by 0.23 t_f, all of it approached smoothly - not grown to
+	/// R and stopped), and growing on by a quarter of the height it rose
+	/// (the air it draws in) - risen [m]
+	static double Radius (double u, double R, double risen) { return R * (1.0 - 0.7 * std::exp (-u / BURST_U)) + ENTRAIN * risen; }
+	static constexpr double LIFT_U = 0.5, RISE_K = 0.95, RISE_U = 1.5, BURST_U = 0.1, ENTRAIN = 0.25;
 	/// the vortex ring's turn so far [rad] at u = t / t_f (about 1.4 sqrt (g / R)
 	/// once lifted - its surface rolling at about its rise speed: the integral
-	/// of the lift-off smoothstep over u)
+	/// of Lift over u)
 	static double RingTurn (double u, double tf, double R);
 
 	bool Init (vkc::Context *ctx, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout,
