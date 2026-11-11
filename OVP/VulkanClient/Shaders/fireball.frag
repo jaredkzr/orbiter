@@ -115,11 +115,13 @@ void main ()
 	const float SUN_TAPS[3] = float[3] (0.8, 1.8, 3.2); // [cells] along the sun
 	const float SUN_FAR = 4.2;
 	float sigB = (1.0 / r) * P.flow.w * P.heat.w; // (the grid's optical depth per metre per unit density, times the extinction)
-	// its soot's albedo: fresh soot near black; as it burns out and the cap
-	// ages (diluted by the air it draws in) a lighter grey, the lit top of
-	// a smoke cloud
+	// its soot's albedo: fresh soot near black, a little lighter as it burns
+	// out and the cap ages (diluted by the air it draws in). (Up to 0.3 the
+	// aging cap turned a pale mid-grey by 1.6 t_f - a hydrocarbon fire's
+	// smoke stays charcoal for minutes - and handed over to the smoke
+	// volume's cap a shade lighter still)
 	float u = P.time.y;
-	float albSoot = mix (0.13, 0.3, clamp ((u - 0.9) / 0.9, 0.0, 1.0));
+	float albSoot = mix (0.12, 0.16, clamp ((u - 0.9) / 0.9, 0.0, 1.0));
 	// (and as the ball fades out - into the smoke volume's cap, or to its
 	// sprites - its thinning soot loses its self-shadowing and would turn a
 	// pale sunlit grey for its last frames (a two-frame pale flash at 1.8

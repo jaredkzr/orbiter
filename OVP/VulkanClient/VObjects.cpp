@@ -1830,7 +1830,7 @@ void VDebris::Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 
 			m.size = (vol ? 1.15 : 0.8) * r * sz, m.growth = (vol ? 2.5 : 2.0) * R / m.lifetime * sz;
 			m.alpha = 0.7, m.slowdown = 0.5;
 			m.tinted = true, m.volumetric = true;
-			m.albedo[0] = m.albedo[1] = m.albedo[2] = vol ? 0.08f : 0.1f; // (soot: a dark grey, lit on top; on the sea too. The volume's: as dark as its soot ball)
+			m.albedo[0] = m.albedo[1] = m.albedo[2] = vol ? 0.025f : 0.07f; // (soot: charcoal, lit on top; on the sea too. The volume's: as dark as its soot ball as drawn - at 0.08 the smoke volume's cap took over a pale grey, 85 to the ball's 51 in sRGB; 0.045: 65)
 			m.cls = ParticleSystem::Class::FireballSmoke;
 			if (!vol) Emit (fbSmoke, m, n, m.lifetime);
 			else {

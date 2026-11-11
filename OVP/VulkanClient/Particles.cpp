@@ -903,8 +903,9 @@ bool ParticleSystem::Reserve (ParticleRing &r, double rate, double life, Class c
 	return true;
 }
 
-void ParticleSystem::Emit (ParticleRing &r, Emission &e, uint32_t n)
+void ParticleSystem::Emit (ParticleRing &r, const Emission &src, uint32_t n)
 {
+	Emission e = src; // (Queue thins and rescales it: not the caller's)
 	if (!Valid (r) || !n) return;
 	double simt = oapiGetSimTime ();
 	bool used = r.segStart > -1e29; // (written into since allocated)

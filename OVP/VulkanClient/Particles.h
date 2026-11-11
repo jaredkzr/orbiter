@@ -128,8 +128,12 @@ public:
 	bool Reserve (ParticleRing &r, double rate, double life, Class cls, double extra = 0.0,
 		VkTexture *tex = nullptr, bool emissive = false, bool idleRelease = true);
 	/// Queue n particles into the ring (thinned if the pool is short: fewer,
-	/// larger ones), its head advanced; fills in e's ring fields
-	void Emit (ParticleRing &r, Emission &e, uint32_t n);
+	/// larger ones), its head advanced. e is the caller's, unchanged: the
+	/// emission queued is a copy (the thinning scales the copy's size,
+	/// growth, alpha and lifetime - on e itself, a caller emitting e again
+	/// in a loop compounded it: a splash's crown, 20 emissions of one e,
+	/// grew to particles hundreds of metres across)
+	void Emit (ParticleRing &r, const Emission &e, uint32_t n);
 	/// the emitter is gone: its ring retired (its particles live on) or freed
 	void Release (ParticleRing &r);
 	/// the ring is the emitter's still (not released while idle)
