@@ -315,6 +315,8 @@ The Vulkan client reads it through `oapiGetPlanetAtmConstants`, scaled to the lo
 
 1. Venting: **include brief venting** (2-5 s white freezing jets from pieces with propellant
    left; V3).
+   Revised 2026-11-11 after seeing it: **removed** (the user: "remove the slower leak particle
+   effects ... I really like the short radial burst though").
 2. Thin atmospheres: **continuous blend** (3.1, 3.6, V5).
 3. Oxygen data: (not asked) load `AtmO2pp` in Planet.cpp, the default as in section 4.
 4. Cloud colour: (not asked) neutral white ice, per the earlier "hydrocarbon look for all".

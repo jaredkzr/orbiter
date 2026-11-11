@@ -55,6 +55,8 @@ public:
 		bool vacuum = false;
 		double scale = 1.0, sigma = 0.0;
 		double g = 9.81;      // [m/s^2] the gravity it rises in (its rise, its ring's turn: sqrt (g R))
+		double blend = 1.0;   // its weight (0..1): in thin air the ball's share of the burst, its opacity and light scaled by it (its extinction would not show it: still opaque at a sixth)
+		double ext = 1.0;     // its extinction's scale (thin air: its share of the burst, spread wider - VACUUM_PLAN V5)
 		double fade = 1.0;    // its volume's weight (0..1): cross-faded with its sprites as it switches (phase 6)
 	};
 	/// the model's temperatures at u = t / t_f: the hottest gas (its core)

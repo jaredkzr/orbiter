@@ -77,6 +77,7 @@ SCENES = {
     "moontop": ("fx_moon", dict(CRASH, PLANET="Moon", GROUND_REL="1", CAM_X="-260", CAM_Z="160", CAM_Y="220", CAM_FOV="50", CAM_THT="-36")),
     "mars":   ("fx_mars", dict(CRASH, PLANET="Mars", GROUND_REL="1")),
     "alt30":  ("midair", dict(CAM="ground", CAM_FOV="50", ALT="30000")),
+    "alt40":  ("midair", dict(CAM="ground", CAM_FOV="50", ALT="40000")),
     "alt50":  ("midair", dict(CAM="ground", CAM_FOV="50", ALT="50000")),
     "alt60":  ("midair", dict(CAM="ground", CAM_FOV="50", ALT="60000")),
     "alt70":  ("midair", dict(CAM="ground", CAM_FOV="50", ALT="70000")),

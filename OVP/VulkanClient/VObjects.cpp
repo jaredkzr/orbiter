@@ -987,7 +987,7 @@ VDebris::~VDebris ()
 	auto &live = LiveFireballs ();
 	live.erase (std::remove (live.begin (), live.end (), this), live.end ());
 	ParticleSystem *sys = scene->Particles ();
-	for (Ring *r : { &fire, &smoke, &sparks, &dust, &frags, &fbFire, &fbSmoke, &fbCore, &fbFlashR, &fbSkirt, &fbSteam, &column, &drift, &quench, &embers, &vent })
+	for (Ring *r : { &fire, &smoke, &sparks, &dust, &frags, &fbFire, &fbSmoke, &fbCore, &fbFlashR, &fbSkirt, &fbSteam, &column, &drift, &quench, &embers })
 		if (r->sys && r->sys == sys) sys->Release (*r); // (retired with r->tex while its particles live; rings idle for long were released already)
 	water.Release (sys);
 }
@@ -1218,10 +1218,12 @@ void VDebris::Effects ()
 		// growing - under 0.35 t_f old - whose spheres would overlap by more
 		// than half (centres closer than half the radii's sum) joins it: its
 		// radius grown is eased to the sum's over 0.2 s, not jumped - phase 6)
-		// (held together as a fireball, or expanding freely: by the air's
-		// pressure against the propellant's mass - Air::Confine; until the
-		// two are blended (VACUUM_PLAN V5), the one that dominates)
-		bool confined = here.Confine (info.fuel) >= 0.5;
+		// (held together as a fireball, expanding freely, or in thin air both
+		// - the share the air holds together a ball, the rest a free cloud:
+		// by the air's pressure against the propellant's mass, Air::Confine;
+		// VACUUM_PLAN V5)
+		double conf = here.Confine (info.fuel);
+		bool confined = conf > 0.02;
 		if (!own && !noJoin && confined) {
 			double Rn = FireModel (info.fuel, onWater).R;
 			static const bool fbLog3 = getenv ("ORBITER_VK_FIREBALL_LOG") != nullptr;
@@ -1240,9 +1242,13 @@ void VDebris::Effects ()
 			fbBreak = own->fbBreak;
 			FireballModel m = FireModel (own->fbFuel, own->fbWater);
 			if (own->fbTf > 0.0) {
-				own->fbRGoal = m.R, own->fbTf = m.tf;
-				if (!later) own->fbR = own->flashR = m.R;
-			} else own->fbR = own->fbRGoal = own->flashR = 2.9 * cbrt (own->fbFuel), own->fbVacVs = std::clamp (3.0 * own->flashR, 20.0, 300.0);
+				own->fbRGoal = m.R * own->fbThin, own->fbTf = m.tf / sqrt (own->fbThin);
+				if (!later) own->fbR = own->flashR = own->fbRGoal;
+			}
+			if (own->fbCloudW > 0.0) {
+				own->fbCloudR = 2.9 * cbrt (own->fbFuel), own->fbVacVs = std::clamp (3.0 * own->fbCloudR, 20.0, 300.0);
+				if (own->fbTf <= 0.0) own->fbR = own->fbRGoal = own->flashR = own->fbCloudR;
+			}
 			own->fbVel = (own->fbVel * own->fbFuelW + vel * info.fuel) / (own->fbFuelW + info.fuel);
 			own->fbFuelW += info.fuel;
 			static const bool fbLog2 = getenv ("ORBITER_VK_FIREBALL_LOG") != nullptr;
@@ -1252,8 +1258,16 @@ void VDebris::Effects ()
 			fbBreak = std::make_shared<BreakUp> ();
 			fbBreak->fuel = info.fuel;
 			FireballModel m = FireModel (info.fuel, onWater);
-			// (in vacuum all of it flashes: nothing holds it together)
-			double R = confined ? m.R : 2.9 * cbrt (info.fuel);
+			// (in thin air the ball the air holds is larger - its gas expands
+			// further before the air holds it, (p0 / p)^1/3 of the sea-level
+			// one's at most 2.5, softened: 1.7 at 30 km and on Mars - sooner
+			// burned out and thinner; in vacuum all of it flashes: nothing
+			// holds it together)
+			fbThin = pow (std::min (cbrt (101325.0 / std::max (here.p, 1.0)), 2.5), 0.6);
+			fbConf = conf, fbCloudW = conf < 0.98 ? 1.0 - conf : 0.0;
+			fbAirRho = std::min (rho / 1.225, 1.0);
+			fbCloudR = 2.9 * cbrt (info.fuel);
+			double R = confined ? m.R * fbThin : fbCloudR;
 			flashT = info.created, flashR = R, flashK = confined ? 3.0 : 10.0;
 			// (fbPos: where it was a step ago - Fireball moves it on to now; the
 			// global velocities carry Earth's orbit, a kilometre a step)
@@ -1262,12 +1276,14 @@ void VDebris::Effects ()
 			fbG = GGRAV * oapiGetMass (hp) / (oapiGetSize (hp) * oapiGetSize (hp)); // (Mars: 3.7 - its rise as sqrt (g R))
 			LiveFireballs ().push_back (this);
 			fbFlashPos = p0;
-			fbTf = confined ? m.tf : 0.0;
-			if (!confined) {
-				// (its shell marched as a volume when large enough on
+			fbTf = confined ? m.tf / sqrt (fbThin) : 0.0;
+			if (fbCloudW > 0.0) {
+				// (its cloud marched as a volume when large enough on
 				// screen - CollectFireballs; else sprites)
+				double R = fbCloudR;
 				fbVacVs = std::clamp (3.0 * R, 20.0, 300.0);
-				fbPos = gpos; // (now, not a step ago: the shell moves on from here with fbVel - CollectFireballs)
+				fbCloudPos = gpos, fbCloudVel = vel; // (now, not a step ago: the cloud moves on from here - CollectFireballs)
+				if (!confined) fbPos = gpos;
 				fbUp = up, fbPlanet = hp;
 				// on an airless body's ground (VACUUM_PLAN.md 3.5): its cloud
 				// cut by the ground and turned along it (fireball_grid.comp), the
@@ -1277,12 +1293,12 @@ void VDebris::Effects ()
 					oapiGlobalToEqu (hp, gpos, &lng, &lat, &rad);
 					vksurf::Point pt = vksurf::Query (scene, hp, lng, lat);
 					double h = rad - oapiGetSize (hp) - (pt.IsWater () ? 0.0 : pt.elev);
-					double sEnd = CloudOf (fbFuel, R, fbVacVs).SEnd ();
-					fbGround = h < 1.2 * sEnd ? -h : -1e9;
+					double sEnd = CloudOf (fbFuel * fbCloudW, R, fbVacVs).SEnd ();
+					fbCloudGround = h < 1.2 * sEnd ? -h : -1e9;
 					static const bool fbLog4 = getenv ("ORBITER_VK_FIREBALL_LOG") != nullptr;
 					if (fbLog4) oapiWriteLogV ("VulkanClient: vacuum burst %.1f m above the ground (the cloud's end %.0f m): %s", h, sEnd,
 						h < 0.6 * sEnd && airDrag < 0.01 && !pt.IsWater () ? "on it - sheet, regolith, halo" : h < 1.2 * sEnd ? "near it - sheet" : "clear of it");
-					if (fbGround > -1e8 && h < 0.6 * sEnd && airDrag < 0.01 && !pt.IsWater ()) {
+					if (fbCloudGround > -1e8 && h < 0.6 * sEnd && airDrag < 0.01 && !pt.IsWater ()) {
 						VECTOR3 foot = gpos - up * h;
 						if (scene->Tracks ()) scene->Tracks ()->BlastHalo (hp, foot, up, 1.2 * sEnd);
 						if (!dust.tex) dust.tex = sys->SmokeTexture ();
@@ -1309,12 +1325,12 @@ void VDebris::Effects ()
 						}
 					}
 				}
-				double Rs = 1.3 * CloudOf (fbFuel, R, fbVacVs).SEnd (); // (about its size seen, half-way)
+				double Rs = 1.3 * CloudOf (fbFuel * fbCloudW, R, fbVacVs).SEnd (); // (about its size seen, half-way)
 				FireballRenderer *fr = scene->Fireballs ();
 				fbVac = fr && fr->WantsVolume (id, Rs, length (gpos - scene->CameraPos ())); // (now, not p0: a step ago, a kilometre off)
 				if (!fbVac) VacuumFlash (dt, R, vel);
 				static const bool fbLog = getenv ("ORBITER_VK_FIREBALL_LOG") != nullptr;
-				if (fbLog) oapiWriteLogV ("VulkanClient: stage vacuum shell: R %.1f m, %.0f m/s, %s", R, fbVacVs, fbVac ? "volume" : "sprites");
+				if (fbLog) oapiWriteLogV ("VulkanClient: stage vacuum shell: R %.1f m, %.0f m/s, %s; its share %.2f (a ball of the rest: %s, %.1fx)", R, fbVacVs, fbVac ? "volume" : "sprites", fbCloudW, confined ? "yes" : "no", fbThin);
 			}
 			formed.push_back ({ this, p0 });
 		}
@@ -1482,45 +1498,6 @@ void VDebris::Effects ()
 				e.streak = 0.04f;
 				e.cls = ParticleSystem::Class::Spark;
 				Emit (embers, e, n, 2.0);
-			}
-		}
-	}
-	// out of the air, or in air without oxygen: what is left of its
-	// propellant vents from where its tanks or lines broke, a white jet
-	// freezing at once to droplets and ice - not burning (VACUUM_PLAN V3,
-	// the user's choice): for 2 to 5 s by its propellant, from a side of it
-	// fixed to the piece (turning with its tumble), each puff coasting on at
-	// the jet's speed plus the piece's, thinning out as it expands; dragged
-	// in thin air. Where it can burn, it burns instead (its flames above)
-	if (info.fuel > 5.0 && burnOn <= 0.02 && !sunk) {
-		double tv = std::clamp (1.5 + 0.35 * cbrt (info.fuel), 2.0, 5.0), age = simt - info.created;
-		if (age >= 0.0 && age < tv) {
-			double k = 1.0 - age / tv; // (its pressure falling)
-			double s = std::max (0.5 * size, 0.5);
-			vent.accum += 120.0 * D * k * dt;
-			uint32_t n = (uint32_t)vent.accum;
-			vent.accum -= n;
-			if (n) {
-				if (!vent.tex) vent.tex = sys->SmokeTexture ();
-				// (its side: a direction of its own frame, by its serial)
-				uint32_t h = info.serial * 2654435761u;
-				double z = ((h & 0xffff) / 65535.0) * 2.0 - 1.0, ph = ((h >> 16) / 65535.0) * 2.0 * PI, sr = sqrt (std::max (1.0 - z * z, 0.0));
-				VECTOR3 dl = _V(sr * cos (ph), sr * sin (ph), z);
-				VECTOR3 dg = mul (grot, dl); // (its frame to the global axes)
-				double vj = 25.0 + 35.0 * k; // [m/s] the jet
-				ParticleSystem::Emission e{};
-				VECTOR3 at = gpos + dg * (0.4 * size);
-				e.p0 = at - vel * dt, e.p1 = at, e.vel = vel, e.dir = -dg, e.dt = dt;
-				e.v0 = vj, e.spread = 0.18 * vj;
-				e.lifetime = 1.0;
-				// (expanding as it goes: a cone - the puffs large and faint, many
-				// overlapping; small and denser, the jet read as a spray of specks)
-				e.size = std::max (1.6 * s, 1.5) * sz, e.growth = 0.7 * vj * sz;
-				e.alpha = 0.2 * (0.4 + 0.6 * k), e.slowdown = 2.0 * std::min (airDrag, 1.0);
-				e.tinted = true, e.cold = true;
-				e.albedo[0] = 0.92f, e.albedo[1] = 0.93f, e.albedo[2] = 0.95f;
-				e.cls = ParticleSystem::Class::Spray;
-				Emit (vent, e, n, 1.0);
 			}
 		}
 	}
@@ -1775,7 +1752,7 @@ void VDebris::Fireball (double dt, double airDrag, const VECTOR3 &up, const VECT
 		fbFootKnown = fbGround > -1e8;
 		fbFoot = fbFootKnown ? fbPos + up * fbGround : fbFlashPos;
 		FireballModel m = FireModel (fbFuel, fbWater);
-		if (fbPlanet) scene->Jolt (fbPlanet, fbFoot, cbrt (m.Mp), R);
+		if (fbPlanet) scene->Jolt (fbPlanet, fbFoot, cbrt (m.Mp) * std::min (airDrag, 1.0), R); // (the thud carried by the air: weaker in thin air - VACUUM_PLAN V5)
 	} else fbFoot += air * dt;
 	// its size (FireballRenderer::Radius): its burst slowed by the air, and
 	// growing on as it rises (drawing air in) - the envelope never shrinks
@@ -1973,7 +1950,7 @@ void VDebris::Fireball (double dt, double airDrag, const VECTOR3 &up, const VECT
 	if (u > uStart && u < uEnd) {
 		if (!fbSmoke.tex) fbSmoke.tex = sys->SmokeTexture ();
 		FireballModel fm = FireModel (fbFuel, fbWater);
-		double total = std::clamp ((vol ? 6.0 : 4.0) * R * D, 8.0 * D, (vol ? 150.0 : 100.0) * D); // (the volume's: filling its soot ball)
+		double total = std::clamp ((vol ? 6.0 : 4.0) * R * D, 8.0 * D, (vol ? 150.0 : 100.0) * D) * fbConf; // (the volume's: filling its soot ball; in thin air the ball's share - VACUUM_PLAN V5)
 		double w = std::clamp ((u - uStart) / 0.25, 0.0, 1.0);
 		double k = w * w * (3.0 - 2.0 * w) * std::min (1.0, (uEnd - u) * 3.0);
 		fbSmoke.accum += total / ((uEnd - uStart) * tf) * k * dt;
@@ -2051,7 +2028,7 @@ void VDebris::VacuumFlash (double dt, double R, const VECTOR3 &vel)
 	if (!fbFire.tex) fbFire.tex = scene->FireballTexture (4), fbFire.emissive = true;
 	if (!fbSmoke.tex) fbSmoke.tex = scene->Particles ()->SmokeTexture ();
 	double D = scene->Particles ()->density, sz = std::pow (D, -1.0 / 3.0);
-	FreeCloud c = CloudOf (fbFuel, R, fbVacVs);
+	FreeCloud c = CloudOf (fbFuel * std::max (fbCloudW, 0.05), R, fbVacVs);
 	double v = fbVacVs, tEnd = std::max (c.TEnd (), 0.2);
 	const int NDIR = 48;
 	for (int i = 0; i < NDIR; i++) {
@@ -2275,30 +2252,31 @@ void VDebris::CollectFireballs (FireballRenderer &fr)
 	// its fireball in air, marched as a volume (VDebris::Fireball decided:
 	// large enough on screen), until its soot ball has passed to the smoke
 	// volume (1.8 t_f). Its age by the simulation time: frozen while paused
-	if (fbTf <= 0.0) {
-		// out of the air: its free cloud (VACUUM_PLAN.md 3.3), expanding from
-		// where it burst (moving on with the pieces), until it has thinned out
-		if (!fbVac || flashR <= 0.0) return;
+	if (fbCloudW > 0.0 && fbVac && fbCloudR > 0.0) {
+		// out of the air (or its share in thin air): its free cloud
+		// (VACUUM_PLAN.md 3.3), expanding from where it burst (moving on with
+		// the pieces), until it has thinned out
 		double t = oapiGetSimTime () - fbT0;
-		FreeCloud c = CloudOf (fbFuel, flashR, fbVacVs);
-		if (t < 0.0 || t > c.TEnd ()) return;
+		FreeCloud c = CloudOf (fbFuel * fbCloudW, fbCloudR, fbVacVs);
+		if (t >= 0.0 && t <= c.TEnd ()) {
 		FireballRenderer::Ball b;
 		b.owner = id;
 		b.vacuum = true;
 		b.scale = c.S (t), b.sigma = c.Sigma (t);
 		b.r = 2.6 * b.scale;
 		b.R = 2.6 * c.SEnd ();
-		b.centre = scene->ViewPos (fbPos + fbVel * t);
+		b.centre = scene->ViewPos (fbCloudPos + fbCloudVel * t);
 		// (z up: on the ground, the ground below its centre - its sheet;
 		// it moves on with the pieces, the ground stays: at rest on it, about)
 		b.up = scene->ViewDir (fbUp);
 		b.axis = scene->ViewDir (crossp (fbUp, fabs (fbUp.x) < 0.9 ? _V(1, 0, 0) : _V(0, 1, 0)));
-		b.ground = fbGround > -1e8 ? fbGround - dotp (fbVel - GroundVelocity (fbPlanet ? fbPlanet : oapiGetGbodyByName ((char*)"Earth"), fbPos), fbUp) * t : -1e9;
+		b.ground = fbCloudGround > -1e8 ? fbCloudGround - dotp (fbCloudVel - GroundVelocity (fbPlanet ? fbPlanet : oapiGetGbodyByName ((char*)"Earth"), fbCloudPos), fbUp) * t : -1e9;
 		b.t = t, b.tf = c.TEnd ();
 		b.seed = serial * 2654435761u;
 		fr.Add (b);
-		return;
+		}
 	}
+	if (fbTf <= 0.0) return;
 	if (!fbVolume && fbVolFade <= 0.0) return; // (or fading out to sprites)
 	double t = oapiGetSimTime () - fbT0;
 	if (t < 0.0 || t > 1.8 * fbTf || fbRNow <= 0.0) return;
@@ -2315,6 +2293,8 @@ void VDebris::CollectFireballs (FireballRenderer &fr)
 	b.r = fbRNow, b.R = fbR;
 	b.t = t, b.tf = fbTf;
 	b.elong = fbEl, b.lift = fbLift, b.roll = fbRoll, b.g = fbG;
+	b.ext = 1.0 / pow (fbThin, 1.5); // (thin air: spread wider, thinner - VACUUM_PLAN V5)
+	b.blend = fbConf; // (and its share of the burst: the rest a free cloud)
 	b.lean = scene->ViewDir (fbLean); // (phase 4b meant to pass it and did not: no lean was drawn - phase 4c)
 	b.ground = fbGround > -1e8 ? fbGround - raise : -1e9;
 	b.seed = serial * 2654435761u;
@@ -2340,7 +2320,7 @@ void VDebris::CollectHeat (PlumeRenderer &pr)
 	h.pos = scene->ViewPos (fbPos + up * raise);
 	h.up = scene->ViewDir (up);
 	h.r = 1.1 * fbRNow;
-	h.heat = std::clamp ((Th - 1100.0) / 1100.0, 0.0, 1.0) * std::min (1.0, fbR / 5.0);
+	h.heat = std::clamp ((Th - 1100.0) / 1100.0, 0.0, 1.0) * std::min (1.0, fbR / 5.0) * fbAirRho; // (the air's refraction: none to see in thin air - VACUUM_PLAN V5)
 	h.column = 1.5 * fbR;
 	h.columnHeat = h.heat * (1.0 - exp (-t / 0.3));
 	if (t < 0.3) {
@@ -2357,7 +2337,7 @@ void VDebris::DrawParticles ()
 	ParticleSystem *sys = scene->Particles ();
 	if (!sys) return;
 	double simt = oapiGetSimTime ();
-	for (const Ring *r : { &drift, &column, &fbSmoke, &smoke, &quench, &fbSteam, &dust, &fbSkirt, &frags, &vent, &fire, &fbFire, &fbCore, &fbFlashR, &sparks, &embers })
+	for (const Ring *r : { &drift, &column, &fbSmoke, &smoke, &quench, &fbSteam, &dust, &fbSkirt, &frags, &fire, &fbFire, &fbCore, &fbFlashR, &sparks, &embers })
 		if (r->sys == sys && simt - r->lastEmit < 1.5 * r->life + 0.1)
 			sys->Draw (*r, r->tex, r->emissive, scene->FrameSet ()); // (if not released while idle)
 	water.Draw (scene);

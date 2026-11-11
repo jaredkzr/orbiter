@@ -276,6 +276,10 @@ void main ()
 		vec3 Lin = AtmTonemap (Inscatter (normalize (mat3 (atm.viewToPlanet) * d), tW / wSum, Ta));
 		L = L * Ta + alpha * Lin;
 	}
+	// (in thin air its share of the burst - the rest a free cloud: its light
+	// and opacity scaled by it, linearly - VACUUM_PLAN V5)
+	float bw = P.asym.w;
+	L *= bw, alpha *= bw, T = 1.0 - alpha;
 	outColor = vec4 (L, alpha);
 	float lum = dot (L, vec3 (0.2126, 0.7152, 0.0722));
 	outReactive = clamp (max (alpha, lum / (1.0 + lum)), 0.0, 0.9);

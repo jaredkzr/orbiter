@@ -217,7 +217,6 @@ private:
 	};
 	Ring fire, smoke, sparks, dust;  // (sparks: also those of a blow)
 	Ring embers;                     // glowing bits as its flames die down (phase 5)
-	Ring vent;                       // out of the air (or air without oxygen): its propellant left venting, a white freezing jet (VACUUM_PLAN V3)
 	VECTOR3 flameDir{};              // the side its flames stream off (global; aft when flying, down (-up) at rest): the hull glows there
 	Ring frags;              // struck by another body: small bits of it
 	WaterSpray water;        // in the water: splash, spray, wake (from its water state)
@@ -266,6 +265,14 @@ private:
 	// sprites), expanding at fbVacVs [m/s]
 	bool fbVac = false;
 	double fbVacVs = 0.0;
+	// (VACUUM_PLAN V5: in thin air both, the burst held together by the air
+	// to the share fbConf - Air::Confine - the rest expanding freely: the
+	// ball's and the cloud's weights; the ball in thin air fbThin times as
+	// large; the cloud's radius (2.9 M^1/3), where and how it set off, the
+	// ground below it then (ball space z; -1e9 none))
+	double fbConf = 1.0, fbCloudW = 0.0, fbThin = 1.0, fbCloudR = 0.0, fbCloudGround = -1e9;
+	double fbAirRho = 1.0;     // the air's density where it formed, as sea level's (its heat shimmer)
+	VECTOR3 fbCloudPos{}, fbCloudVel{};
 	void Fireball (double dt, double airDrag, const VECTOR3 &up, const VECTOR3 &airVel, bool onWater); // (airDrag: 1 at sea level - VObjects.cpp Air::Drag)
 	void VacuumFlash (double dt, double R, const VECTOR3 &vel);
 	// a burning wreck at rest on the ground: a rising column of smoke, and

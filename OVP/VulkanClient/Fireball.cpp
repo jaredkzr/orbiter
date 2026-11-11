@@ -27,7 +27,7 @@ struct FireballRenderer::Params { // fireball.glsl
 	float flow[4];    // ring's turn [rad], ring radius / r, churn, extinction scale
 	float tune[4];    // (ORBITER_VK_FIREBALL_TUNE)
 	float mode[4];    // the free cloud (1), its scale [m], its peak extinction [1/m], its flash (0..1)
-	float asym[4];    // its lean (ball space xy, per unit height), -, -
+	float asym[4];    // its lean (ball space xy, per unit height), the finest octave's weight, its blend weight (thin air: its share)
 	float adv[4];     // the noise carried outward, two phases cross-faded (phase 4c): A's scale and weight, B's scale and weight
 	float adv2[4];    // the ring's turn since each phase began [rad] (A, B); each phase's number (its seed) (A, B)
 };
@@ -620,6 +620,7 @@ void FireballRenderer::Compute (VkDescriptorSet frameSet)
 		if (b.vacuum) step = 2.0;
 		p.boxMax[3] = (float)(cell * step);
 		p.asym[2] = (float)std::clamp ((px - 50.0) / 100.0, 0.0, 1.0);
+		p.asym[3] = (float)std::clamp (b.blend, 0.0, 1.0);
 		double tf = std::max (b.tf, 1e-3), u = b.t / tf;
 		p.shape[0] = (float)r, p.shape[1] = (float)b.R, p.shape[2] = (float)e, p.shape[3] = (float)b.lift;
 		p.axis[0] = (float)ab.x, p.axis[1] = (float)ab.y, p.axis[2] = (float)ab.z, p.axis[3] = (float)b.ground;
@@ -665,7 +666,7 @@ void FireballRenderer::Compute (VkDescriptorSet frameSet)
 				p.adv2[2 + k] = (float)floor (2.0 * ts / period + 0.5); // (its number: k 0 even, k 1 odd)
 			}
 		}
-		p.flow[3] = tuneSigma;
+		p.flow[3] = (float)(tuneSigma * b.ext);
 		for (int k = 0; k < 4; k++) p.tune[k] = tune[k];
 		if (b.vacuum) {
 			// the free cloud (VACUUM_PLAN.md 3.3): white-hot as it flashes
