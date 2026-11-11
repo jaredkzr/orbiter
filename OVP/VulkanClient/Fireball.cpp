@@ -26,7 +26,9 @@ struct FireballRenderer::Params { // fireball.glsl
 	float flow[4];    // ring's turn [rad], ring radius / r, churn, extinction scale
 	float tune[4];    // (ORBITER_VK_FIREBALL_TUNE)
 	float mode[4];    // vacuum shell (1), its radius [m], its width [m], its flash (0..1)
-	float asym[4];    // its lean (ball space xy, per unit height), the billows' outward drift [/ 0.9 r], -
+	float asym[4];    // its lean (ball space xy, per unit height), -, -
+	float adv[4];     // the noise carried outward, two phases cross-faded (phase 4c): A's scale and weight, B's scale and weight
+	float adv2[4];    // the ring's turn since each phase began [rad] (A, B); each phase's number (its seed) (A, B)
 };
 
 namespace {
@@ -34,18 +36,18 @@ namespace {
 	constexpr VkFormat OCC_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT;
 
 	// debugging factors of the model and the march (ORBITER_VK_FIREBALL_TUNE=
-	// raggedness,warp,erosion,emission[,extinction]: 1 = as tuned)
-	void Tune (float t[4], float &sigma)
+	// raggedness,warp,erosion,emission[,extinction[,churn[,flow]]]: 1 = as tuned)
+	void Tune (float t[4], float &sigma, float &churn, float &flow)
 	{
-		static float v[5] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
+		static float v[7] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
 		static bool read = false;
 		if (!read) {
 			read = true;
 			if (const char *e = getenv ("ORBITER_VK_FIREBALL_TUNE"))
-				sscanf (e, "%f,%f,%f,%f,%f", &v[0], &v[1], &v[2], &v[3], &v[4]);
+				sscanf (e, "%f,%f,%f,%f,%f,%f,%f", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6]);
 		}
 		for (int i = 0; i < 4; i++) t[i] = v[i];
-		sigma = v[4];
+		sigma = v[4], churn = v[5], flow = v[6];
 	}
 }
 
@@ -68,6 +70,14 @@ void FireballRenderer::ModelTemps (double u, double &Th, double &Ts)
 			Th = kT[k] + (kT[k + 1] - kT[k]) * f, Ts = kS[k] + (kS[k + 1] - kS[k]) * f;
 			break;
 		}
+}
+
+double FireballRenderer::RingTurn (double u, double tf, double R)
+{
+	const double a = 0.35, b = 0.6;
+	double x = std::clamp ((u - a) / (b - a), 0.0, 1.0);
+	double I = (b - a) * (x * x * x - 0.5 * x * x * x * x) + std::max (0.0, u - b);
+	return 1.4 * sqrt (9.81 / std::max (R, 1.0)) * tf * I;
 }
 
 bool FireballRenderer::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout,
@@ -490,8 +500,8 @@ void FireballRenderer::Compute (VkDescriptorSet frameSet)
 	if (!prepassView) return;
 
 	uint32_t slot = ctx->FrameIndex ();
-	float tune[4], tuneSigma;
-	Tune (tune, tuneSigma);
+	float tune[4], tuneSigma, tuneChurn, tuneFlow;
+	Tune (tune, tuneSigma, tuneChurn, tuneFlow);
 	Params *pm = (Params*)buf.mapped + slot * MAX_MARCHED;
 	for (size_t i = 0; i < list.size (); i++) {
 		Entry &en = list[i];
@@ -505,16 +515,28 @@ void FireballRenderer::Compute (VkDescriptorSet frameSet)
 		VECTOR3 ab = _V(dotp (b.axis, ex), dotp (b.axis, ey), dotp (b.axis, ez));
 		if (length (ab) > 1e-6) ab = unit (ab); else ab = _V(1, 0, 0);
 		// its box: the ellipsoid drawn out along ab (semi-axes r e along it,
-		// r across), its billows and erosion around it
-		double r = b.r, e = std::max (b.elong, 1.0);
-		double half[3];
+		// r across, widened across as it lifts), its billows out to 1.9 of
+		// 0.9 r (fireball_grid.comp: the shape's reach with its displacement
+		// and its lobes), and the lean of its top: the box is wider on the
+		// side it leans to (phase 4c: a box of 1.85 r cut the lobed, leaning
+		// ball flat - the grid fades the shape out at its faces besides)
+		double r = b.r, e = std::max (b.elong, 1.0), L = std::clamp (b.lift, 0.0, 1.0);
+		double lean[2] = { dotp (b.lean, ex), dotp (b.lean, ey) };
+		double half[3], bmin[3], bmax[3];
 		for (int k = 0; k < 3; k++) {
 			double c = (&ab.x)[k];
-			half[k] = 1.85 * r * sqrt (e * e * c * c + (1.0 - c * c)); // (1.7 before phase 4b's lobes and the cap's widening)
+			half[k] = 0.9 * r * 1.9 * sqrt (e * e * c * c + (1.0 - c * c)) / (k < 2 ? 1.0 - 0.12 * L : 1.0);
+			if (k == 2) half[k] += 0.9 * r * 0.1; // (the lobes lifting unevenly)
+			bmin[k] = -half[k], bmax[k] = half[k];
+			// (its top at about 2.0 of 0.9 r, carried on by lean x (z + 0.6))
+			if (k < 2) {
+				double s = 0.9 * r * 2.6 * lean[k];
+				if (s > 0.0) bmax[k] += s; else bmin[k] += s;
+			}
 		}
 		// (the vacuum shell: a cube just holding it)
-		if (b.vacuum) half[0] = half[1] = half[2] = b.shell + 3.0 * b.width;
-		double bmin[3] = { -half[0], -half[1], -half[2] }, bmax[3] = { half[0], half[1], half[2] };
+		if (b.vacuum)
+			for (int k = 0; k < 3; k++) bmax[k] = b.shell + 3.0 * b.width, bmin[k] = -bmax[k];
 		// (nothing below the ground)
 		if (b.ground > -1e8 && !b.vacuum) bmin[2] = std::min (std::max (bmin[2], b.ground - 0.05 * r), bmax[2] - 0.2 * r);
 		Params &p = pm[i];
@@ -555,12 +577,30 @@ void FireballRenderer::Compute (VkDescriptorSet frameSet)
 		p.heat[3] = (float)std::clamp ((1.8 - u) / 0.5, 0.0, 1.0); // (the soot ball, rising, fading into the smoke volume's cap)
 		p.flow[0] = (float)b.roll;
 		p.flow[1] = 0.55f;
-		p.flow[2] = (float)(0.2 * b.t); // (boiling: the warp field drifting - 0.08 left the billows frozen in place)
-		// (phase 4b: its lean, and its billows carried outward with the hot
-		// gas - a third of its radius over t_f - so that they emerge from
-		// inside and push out, not a texture pinned to the surface)
-		p.asym[0] = (float)dotp (b.lean, ex), p.asym[1] = (float)dotp (b.lean, ey);
-		p.asym[2] = (float)(0.5 * u);
+		p.flow[2] = (float)(0.2 * b.t * tuneChurn); // (boiling: the warp field drifting - 0.08 left the billows frozen in place)
+		// its lean (phase 4b)
+		p.asym[0] = (float)lean[0], p.asym[1] = (float)lean[1];
+		// its billows carried outward with the hot gas (phase 4c): the noise
+		// sampled at the coordinates scaled down about the centre, evenly, so
+		// that features emerge from inside and push out keeping their shape
+		// (phase 4b drew the coordinates in by a fixed length: the noise was
+		// stretched along the limb into brushed streaks). Each scaling runs
+		// for a period of 0.7 t_f, then a fresh phase takes over: two phases
+		// half a period apart, cross-faded (a flow map), each with its own
+		// seed and the ring's turn since it began - the stretch of neither
+		// ever accumulates
+		{
+			const double period = 0.7 * tf, rate = 0.5 * tuneFlow; // (the surface's features move out by about 0.45 r per t_f)
+			for (int k = 0; k < 2; k++) {
+				double ts = floor ((b.t + 0.5 * k * period) / period) * period - 0.5 * k * period;
+				double tau = b.t - ts;
+				double wgt = 1.0 - fabs (2.0 * tau / period - 1.0);
+				p.adv[2 * k] = (float)(1.0 / (1.0 + rate * tau / tf));
+				p.adv[2 * k + 1] = (float)wgt;
+				p.adv2[k] = (float)(b.roll - RingTurn (std::max (ts, 0.0) / tf, tf, b.R));
+				p.adv2[2 + k] = (float)floor (2.0 * ts / period + 0.5); // (its number: k 0 even, k 1 odd)
+			}
+		}
 		p.flow[3] = tuneSigma;
 		for (int k = 0; k < 4; k++) p.tune[k] = tune[k];
 		if (b.vacuum) {

@@ -1526,12 +1526,7 @@ void VDebris::Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 
 	// 1.4 sqrt (g / R) once lifted (its surface rolling at about its rise
 	// speed): the integral of its lift-off smoothstep over u)
 	fbEl = 1.0 + el, fbLift = lift;
-	{
-		const double a = 0.35, b = 0.6;
-		double x = std::clamp ((u - a) / (b - a), 0.0, 1.0);
-		double I = (b - a) * (x * x * x - 0.5 * x * x * x * x) + std::max (0.0, u - b);
-		fbRoll = 1.4 * sqrt (9.81 / std::max (R, 1.0)) * tf * I;
-	}
+	fbRoll = FireballRenderer::RingTurn (u, tf, R);
 	// (a line source: p0 a step back along its velocity - Emit's convention,
 	// the particles at the end of the step spread evenly from -ext to +ext)
 	VECTOR3 e0 = fbPos - ext - fbVel * dt, e1 = fbPos + ext;
@@ -2013,6 +2008,7 @@ void VDebris::CollectFireballs (FireballRenderer &fr)
 	b.r = fbRNow, b.R = fbR;
 	b.t = t, b.tf = fbTf;
 	b.elong = fbEl, b.lift = fbLift, b.roll = fbRoll;
+	b.lean = scene->ViewDir (fbLean); // (phase 4b meant to pass it and did not: no lean was drawn - phase 4c)
 	b.ground = fbGround > -1e8 ? fbGround - raise : -1e9;
 	b.seed = serial * 2654435761u;
 	fr.Add (b);

@@ -617,3 +617,77 @@ unchanged (0.17), fb sum max 1.13 ms; crash median frame 20.34 vs 20.16 ms. Budg
   curves (phase 4's videos) have the jolt's blip at 0.63 s.
 - Wind: no lean from wind (no wind model in the particle system).
 - The lobes are in the shape only; the noise coordinates and the roll are the one ball's.
+
+## Phase 4c (fireball animation fixes: brushed streaks, box clipping)
+
+The review of the 4b renders (`phase4b/full_2p6.png`, `land_2p0.png`, the strips): (a) the
+texture smeared into brushed, mostly vertical streaks on the flanks and the front from
+0.3 s on; (b) a straight vertical edge on the lower left of the land ball at 1.0 s, flat
+sides elsewhere.
+
+Causes found and what changed (`fireball_grid.comp`, `fireball.frag`, new
+`fireball_flow.glsl`, `Fireball.cpp/.h`, `VObjects.cpp`):
+- **The streaks were the warp**, not the drift: with `ORBITER_VK_FIREBALL_TUNE` the
+  warp off (`1,0,1,1`) the texture was an isotropic cauliflower, with it on (any
+  churn, with or without the 4b drift) brushed streaks (`phase4c/dev/n_sea*`,
+  `dev/sea_nowarp`). The warp field (0.22 of 0.9 r over features of 0.8 r, sampled at
+  0.3 per unit) had a gradient of up to ~1.7: the noise through it was drawn out ~3x
+  where it folded; 4b's 2.5x faster churn and the drift's tangential stretch made it
+  worse than phase 4's. Now 0.12 over features of 1.4 r (sampled at 0.18): the stretch
+  stays under ~1.5. The paused frame (`--pausecheck`) showed the same streaks: not TAA.
+- **The 4b drift (a radial remap)** is gone. The noise is carried outward by a flow map:
+  two phases, each the coordinates scaled down about the centre, evenly (1 / (1 + 0.5
+  tau / t_f): features emerge from inside and push out keeping their shape), each
+  living 0.7 t_f, half a period apart, cross-faded with triangle weights normalized to
+  keep the variance; each phase has its own seed and the ring's turn *since it began*
+  (`FbRolled`, the saturation 1.1 -> 1.5 rad), so no stretch ever accumulates. The
+  grid's warp is stored in C (was: the warped coordinates) and the march rebuilds both
+  phases' coordinates per sample (the lean, the roll, the warp, the scale): 5 noise taps
+  a step (was 3; the finest octave at 6.1 is not carried: too fine to be seen moving).
+  `ORBITER_VK_FIREBALL_TUNE` gains `,churn,flow` (the 6th and 7th factors).
+- **The lean was never drawn in 4b**: `Ball::lean` was declared but `CollectFireballs`
+  did not set it. It is passed now (a quarter of its height ahead at 20 m/s, a third at
+  most): the land and 60 m/s balls lean ahead visibly (`land_2p0.png`, `strip_after_seafast`).
+- **The box**: from 1.85 r a side to the shape's reach - 0.9 r x 1.9 (the ball with its
+  displacement and its lobes) x e along the path / (1 - 0.12 L) across, 0.1 r more
+  above, and 2.6 x the lean on the side it leans to (asymmetric); the early-out tests the
+  lobes too; the grid fades the shape out over the last 3 cells to the x, y and top
+  faces, so nothing can be cut flat whatever reaches a face. Cells are ~1.1-1.4x
+  larger (the march's step with them: it is cheaper per pixel, the ball larger).
+- The straight edge itself: soft (~10 px, the march's first jittered step at a face),
+  fixed in place as the ball moved. Not reproduced frame-for-frame (the crash differs
+  run to run); with the new box and fade there are no straight edges in the sea, land
+  and 60 m/s strips (`strip_after_*`), the full frames or the videos.
+
+### Verification (phase 4c)
+
+Strips (`strip_before_*` = 4b, `strip_after_*` = 4c, the same crops, 0.1 s steps from
+-0.1 s, shake off), full frames `full_2p6.png` (sea 1.6 s), `land_2p0.png` (land 1.0 s),
+`sea_3p4.png`, `land_3p0.png`; A/B `ab_{sea,land}.png`; videos `sea_crash.mp4`,
+`land_crash.mp4` (1080p, shake on, the wreck-view frame dropped). Silhouette
+(`silhouette.py`, `silhouette.png/.txt`): monotonic before the soot fade - the largest
+frame-to-frame drop before 2.6 s is -0.17 % of the frame (sea, 1.2 s), -0.11 % (land),
+-0.00 % (60 m/s); sea 12.0 % (0.4 s) -> 17.7 % (2.0 s) -> 21.0 % (2.9 s), land 11.9 ->
+22.8 -> 23.5, 60 m/s 12.2 -> 22.8 -> 26.1. The sea ball is ~1.5 % of the frame smaller
+than 4b's from 1.2 s (the smaller warp pushes less out; the box fade), the land and
+60 m/s balls larger. No popping: the cross-fade is continuous, the box changes
+continuously.
+
+Perf (sea 1440p, `perf1440.txt`, `fbperf.txt`; 4b -> 4c): march 0.68 -> 0.84 ms median
+over 1-2 s (max 0.86 -> 1.01), 0.61 -> 0.89 over 3-3.8 s (max 1.58: the soot ball in a
+wider box), grid 0.17 -> 0.19, fb sum max 1.13 -> 1.89 (3-3.8 s); crash 0-3 s median
+frame 20.34 -> 19.92 ms; peak particle + fb frame 2.99 -> 3.41 ms. Close (1440p,
+`fbperfclose.txt`, against phase 4's close run): march 0.74 -> 0.91 ms median over
+1-2 s (max 1.40 -> 1.82), fb sum max 1.80 -> 2.33 ms (one frame; the median sum
+~1.2). Budget (about 2 ms close, about 5 ms the explosion's peak at 1440p): the close
+peak frame is 0.3 ms over "about 2"; the explosion's peak frame 3.4 ms. If it matters,
+phase B's two detail taps could be skipped where its weight is under 0.15 (a third of
+the time) for ~0.15 ms.
+
+### Status (phase 4c)
+
+Done. What convinces: the texture is an isotropic cauliflower at all times, billows
+boil outward without smearing, the ball leans ahead and is lobed; no flat sides. What
+does not: the sea ball reads slightly smaller than 4b's from 1.2 s on; the 60 m/s
+ball at 0.3 s still shows faint vertical fibres (the elongated shape's limb
+darkening, not the noise); the march is ~25 % dearer.

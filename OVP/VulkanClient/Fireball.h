@@ -52,6 +52,10 @@ public:
 	/// the model's temperatures at u = t / t_f: the hottest gas (its core)
 	/// and its surface (the mixing layer) [K] (fireball_grid.comp)
 	static void ModelTemps (double u, double &Th, double &Ts);
+	/// the vortex ring's turn so far [rad] at u = t / t_f (about 1.4 sqrt (g / R)
+	/// once lifted - its surface rolling at about its rise speed: the integral
+	/// of the lift-off smoothstep over u)
+	static double RingTurn (double u, double tf, double R);
 
 	bool Init (vkc::Context *ctx, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout,
 		VkImageView shapeNoise, VkImageView detailNoise);

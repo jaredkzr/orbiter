@@ -25,9 +25,10 @@
 #define FB_SET 1
 #define FB_BINDING 0
 #include "fireball.glsl"
+#include "fireball_flow.glsl"
 layout(set = 1, binding = 1) uniform sampler3D gridA;       // density, temperature [kK], soot
 layout(set = 1, binding = 2) uniform sampler3D gridB;       // optical depth towards the sun, the sky
-layout(set = 1, binding = 3) uniform sampler3D gridC;       // the noise's coordinates (carried by the flow)
+layout(set = 1, binding = 3) uniform sampler3D gridC;       // the warp of the noise's coordinates
 layout(set = 1, binding = 4) uniform sampler3D shapeNoise;  // (repeating)
 layout(set = 1, binding = 5) uniform sampler3D detailNoise;
 layout(set = 1, binding = 6) uniform sampler2D prepass;     // view depth (w; 0: none)
@@ -87,6 +88,9 @@ void main ()
 	int n = min (int (ceil ((t1 - t0) / dt)), 256);
 	float jit = Hash (uvec3 (uvec2 (gl_FragCoord.xy), pc.frame));
 	vec3 seed = fract (vec3 (0.71, 0.37, 0.53) * P.time.w);
+	vec3 seedG = fract (vec3 (0.137, 0.291, 0.443) * P.time.w); // (the grid's: the roll's lopsidedness)
+	vec3 sdA = seed + FbPhaseSeed (P.adv2.z), sdB = seed + FbPhaseSeed (P.adv2.w);
+	float wA = P.adv.y, wB = P.adv.w, wN = inversesqrt (max (wA * wA + wB * wB, 1e-4));
 	// the light on it: the sun through the air to its centre (in the
 	// planet's shadow at night), forward-peaked (the sunlit edges of the
 	// billows seen against the sun bright), and the ambient light
@@ -131,13 +135,25 @@ void main ()
 		vec3 gc = FbGridCoord ((pb - P.boxMin.xyz) * isz, slab);
 		vec4 A = textureLod (gridA, gc, 0.0);
 		if (A.x < 0.002) continue;
-		vec3 q = textureLod (gridC, gc, 0.0).xyz;
+		// the noise's coordinates as the grid's (fireball_grid.comp): the
+		// point in units of 0.9 r, leaning, traced back by the ring's turn,
+		// warped (the warp from the grid), carried outward by the two
+		// phases of the flow, cross-faded
+		vec3 x = pb / (0.9 * r);
+		x.xy -= P.asym.xy * max (x.z + 0.6, 0.0);
+		vec3 wv = textureLod (gridC, gc, 0.0).xyz;
+		vec3 qA = (FbRolled (x, P.adv2.x, P.flow.y, seedG.x) + wv) * P.adv.x;
+		vec3 qB = (FbRolled (x, P.adv2.y, P.flow.y, seedG.x) + wv) * P.adv.z;
+		if (vac) qA = qB = wv; // (the shell: its own coordinates in C)
 		// detail: small billows eating into its thin parts (the edge ragged,
 		// tongues and holes), the dense inside kept
 		// (normalized: about +-1; the shape noise's sd 0.073 about 0.67, the detail's 0.12 about 0.475)
-		float dn = 0.6 * (textureLod (shapeNoise, q * 2.3 + seed, 0.0).r - 0.67) * 6.8 + 0.4 * (textureLod (detailNoise, q * 3.1 + seed.zxy, 0.0).r - 0.475) * 4.2;
-		// (and finer: about 1/25 of its radius, the flame's texture close up)
-		float df = (textureLod (shapeNoise, q * 6.1 + seed.yzx, 0.0).r - 0.67) * 6.8;
+		float dnA = 0.6 * (textureLod (shapeNoise, qA * 2.3 + sdA, 0.0).r - 0.67) * 6.8 + 0.4 * (textureLod (detailNoise, qA * 3.1 + sdA.zxy, 0.0).r - 0.475) * 4.2;
+		float dnB = 0.6 * (textureLod (shapeNoise, qB * 2.3 + sdB, 0.0).r - 0.67) * 6.8 + 0.4 * (textureLod (detailNoise, qB * 3.1 + sdB.zxy, 0.0).r - 0.475) * 4.2;
+		float dn = (wA * dnA + wB * dnB) * wN;
+		// (and finer: about 1/25 of its radius, the flame's texture close
+		// up; not carried: too fine to be seen moving)
+		float df = (textureLod (shapeNoise, (x + wv) * 6.1 + seed.yzx, 0.0).r - 0.67) * 6.8;
 		dn += 0.35 * df;
 		// (soot a little more: its small billows crisp - the cap's
 		// cauliflower; at 1.5x the sooty outer layer was eaten away as it

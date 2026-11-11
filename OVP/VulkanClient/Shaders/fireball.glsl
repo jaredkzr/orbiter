@@ -19,7 +19,9 @@ struct FireballParams { // must match FireballRenderer::Params
 	vec4 flow;     // the vortex ring's turn [rad], its radius (/ r), churn (billows boiling), extinction scale
 	vec4 tune;     // (ORBITER_VK_FIREBALL_TUNE: debugging factors, 1 = as tuned)
 	vec4 mode;     // in vacuum: a thin shell (1), its radius [m], its width [m], its flash (0..1)
-	vec4 asym;     // its lean (ball space xy, per unit height), the billows' outward drift [/ 0.9 r], -
+	vec4 asym;     // its lean (ball space xy, per unit height), -, -
+	vec4 adv;      // the noise carried outward, two phases cross-faded (phase 4c): A's scale and weight, B's scale and weight
+	vec4 adv2;     // the ring's turn since each phase began [rad] (A, B); each phase's number (its seed) (A, B)
 };
 
 const uint FB_MAX = 4u;                          // fireballs per frame slot (FireballRenderer::MAX_MARCHED)
