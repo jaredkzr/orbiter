@@ -2229,8 +2229,11 @@ void VDebris::CollectLights (std::vector<LightSource> &lights)
 		// ^-1.2 in temperature - a third by the second frame, gone within a
 		// fifth of a second)
 		// (phase 4: half of it - the cloud carries the look; at 12 the station was lit out white)
-		float I = (float)(std::min (1.0, flashR / 10.0) * 6.0 * pow (1.0 + (simt - flashT) / 0.08, -3.0));
-		if (I > 0.01f) add (gpos, I, fireCol, 10.0 * std::max (flashR, 2.0), 0.0, 0.0);
+		// (gone below 2 % of its peak, by 0.22 s: down to 0.01 it lived 0.6 s,
+		// its shadow rays over the lit ground of the Moon 5-11 ms at 1440p)
+		double f = pow (1.0 + (simt - flashT) / 0.08, -3.0);
+		float I = (float)(std::min (1.0, flashR / 10.0) * 6.0 * f);
+		if (f > 0.02 && I > 0.01f) add (gpos, I, fireCol, 10.0 * std::max (flashR, 2.0), 0.0, 0.0);
 	}
 	float I = 0.0f;
 	double range = 0.0;

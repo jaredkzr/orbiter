@@ -1046,3 +1046,36 @@ billows; a fifth ball pops; the sea Atlantis is hidden by its pieces' spray.
   callback for the sound module when there is one.
 - Recommended order if any: propellant types (cheap, visible) first; the fluid sim only
   after a look at the close-up review frames (`phase6/perfclose1440`, `phase4/close`).
+
+## Out of the air (VACUUM_PLAN.md) - 2026-11-11
+
+Commits (done in the main session, no agents, per the user):
+- d162857c V0: harness (scenes moon, moonwide, moontop, mars, alt30/40/50/60/70/90; `vac/classes.py`
+  reads the live particles by class, logged by ORBITER_VK_PARTICLE_STATS: "nothing lingers" as a number)
+- ba1e1f69 V1: `Air` (VObjects.cpp) - Drag sqrt(rho/1.225), Burn by O2 partial pressure (1.5-8 kPa),
+  Confine by pressure against the propellant; `AtmO2pp` loaded by Planet.cpp (Earth 21.2 kPa, Mars
+  0.8 Pa); particle_update.glsl `AirShare` - no drag, eddies or hot rise in vacuum whatever the emitter
+  asks; the rise and ring turn by the body's gravity
+- 1ee64c8c V2: the free cloud - self-similar Gaussian s0 + v t (FreeCloud, KAPPA 1 m^2/kg, gone at a
+  column depth 0.06: a DG's in ~0.7 s), radial streamers in (direction, log r), seven droplet jets, white
+  forward-scattering ice and droplets, analytic sun shadow (erfc), a core cooling (1 + t/0.08)^-1.2,
+  marched at 2 cells/step; sprites fallback of radial streaks
+- 7e061e88 V3: fragments coast 30 s and fade below a quarter pixel; sparks cool white to red without
+  slowing; debris cools by radiation (90 s) out of the air; venting (later removed)
+- b5dd82a1 V4: an airless body's ground - the cloud cut and turned along it (a sheet in rays), regolith
+  thrown on ballistic arcs, `GroundTracks::BlastHalo` (kind 3, tile_main.glsl: lighter rayed ring, 1 + 1.6 h)
+- 59690271 V5: thin air - the ball holds the share Confine, the cloud the rest, both drawn; the ball
+  larger (up to 1.7x), briefer, thinner, its light/opacity scaled by its share (`Ball::blend`); shimmer by
+  density, jolt by drag. Venting removed (the user: keep the short radial burst, not the slower leak)
+- V6: the vacuum flash light ended at 2 % of its peak (0.22 s; it lived 0.6 s and its RT shadows over
+  the lit Moon cost 5-11 ms at 1440p)
+
+Checks (vac/v6): validation clean on the Moon crash and the 40 km blend. 1440p: free cloud filling the
+view 1.0 ms march (1.3-1.5 ms fireball passes); the 40 km blend (ball + cloud) 3.0 ms peak (within the
+5 ms explosion budget, over the 2 ms single-ball one: two volumes). ctest: only DamageEffectsTest (known).
+
+Open:
+- the Moon crash's slowest frames (~30 ms at 1440p, 0.17-0.27 s) are the break-up's RT builds and shadow
+  cascades plus the flash light's shadow rays while it lasts
+- Mars, close view: the 1.7x ball fills the standard framing
+- the free cloud has no hypergolic tint (decision 4: white for all); hypervelocity impacts: a separate plan
