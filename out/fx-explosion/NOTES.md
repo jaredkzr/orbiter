@@ -807,3 +807,242 @@ not: the spill's tongues are a row of upright strokes of much the same height; t
 embers are hardly seen at 350 m (a pixel each); a piece's dark trail puff sits on the
 piece itself as it flies (a black blob behind it at 2-3 s midair); the hull glow is not
 judged at this distance.
+
+## Phase 6 (LOD, several fireballs, warp, pause, cuts, settings, budget)
+
+What changed (`Fireball.h/.cpp`, `fireball.frag`, `VObjects.cpp/.h`, `Particles.cpp/.h`,
+`GfxSettings.cpp/.h`, `Scene.cpp`, `Tests/Bench`):
+- **LOD by screen size**: the march's step by the ball's screen radius: 0.5 cells over
+  700 px, 0.6 over 400, 0.75 over 150, 1.0 over 60, 1.4 below (was 0.5 / 0.7 / 1 at 400 /
+  150); the finest noise octave (the flame's texture at r/25) weighted out below ~150 px
+  of radius (gone under 50: `Params.asym.z`); a phase of the flow map whose cross-fade
+  weight is under 0.07 skips its two noise taps (a sixth of the march's taps, on average).
+  Below 12 px of radius the sprites, as before.
+- **No pop at the switch**: hysteresis (one marched stays marched down to 8 px; one not
+  needs 12) and a cross-fade: `VDebris::fbVolFade` moves between 0 and 1 over 0.35 s as
+  the choice switches (at its birth no fade); the volume's extinction is scaled by it
+  (`Ball::fade` -> `heat.w`) and the flame and core sprites are emitted at `1 - fade` of
+  their alpha meanwhile (they build up over their lifetimes, about as long). A ball fading
+  out is still drawn down to 5 px (`DRAW_PIXELS`). A ball beyond the 4-fireball cap still
+  pops to sprites (rare: five or more at once).
+- **Overlap merging** (plan 2.6): a ball forming within a live ball under 0.35 t_f old,
+  with the centres closer than half the sum of the radii, joins it: its propellant is
+  added, R grown is eased to the new value over 0.2 s (`fbRGoal`; the same-step join sets
+  it at once as before), t_f follows. A registry of the live fireballs (`LiveFireballs`,
+  owners removed in `~VDebris`). The centres compared *now* (`gpos`): the other ball's
+  `fbPos` has been moved on this step - comparing against `p0` (a step ago) put them a
+  kilometre apart in the global frame (the Earth's orbital motion). Logged with
+  `ORBITER_VK_FIREBALL_LOG` ("forms N m from X's ball ...: joins it / apart / too old").
+- **Warp**: beyond 100x `WantsVolume` says sprites (the ball's whole life is a frame or
+  two); at 10x the model is drawn at its analytic age (nothing accumulates; the grid is
+  cheap to recompute - the plan's "grid step skipped at > 10x" is moot, there is no step).
+- **Pause**: unchanged (frozen; the jitter's sequence advances with the simulation time).
+- **Cuts**: unchanged (camera-independent grid; the history reset of 6b4f4353).
+- **Settings**: `Fireballs` on the Graphics page (Effects group, requires Particles):
+  Sprites / Volumetric / Volumetric, full resolution; presets 0 / 1 / 1 / 1; live;
+  `ORBITER_VK_FIREBALL=sprites|volume|full` overrides (and locks) it;
+  `ORBITER_VK_FIREBALL_FULLRES=1` still means full resolution. `FireballRenderer::
+  ApplySettings` runs each frame from `SetPrepass`; the half-size images are remade at the
+  new resolution when the choice changes.
+- **Memory release**: the half-size images (color, mask, occlusion, depth: ~20 MB at
+  1440p) are now made when the first fireball asks to be marched (`WantsVolume` in the
+  visuals' update sets `wanted`; `SetPrepass`, early in the render frame, allocates them
+  in-frame with no idle wait) and released with the grids (~70 MB: 4 slabs of A, B, C)
+  two minutes after the last fireball (`DeferDestroy`). The sprites' occlusion image is a
+  1x1 "nothing" meanwhile (`dummyOcc`; `onOcclusion` tells the particles of the change),
+  and `ParticleSystem::SetFireballOcclusion` no longer waits for the device: each frame
+  slot's set is written at its next `Simulate` (`fbOccDirty`), as the volume's sets are.
+- **Budget**: `Tests/Bench/Crash.scn` + `Script/Bench/crash.lua` (the sea case, observer
+  170 m aside, run to 12 s after the break-up, "bench: crash at T" logged), `run.sh Crash`
+  (fixed step 1/30, damage on), `budget.py` "Crash": the explosion's peak frame (particle
+  + fireball passes) <= 5.0 ms and the fireball passes' peak <= 2.0 ms (decision 8) over
+  0-12 s after the break-up; median and p95 reported.
+- Harness: `run.py --warp K` (time acceleration from the break-up, stills by simulation
+  time), `--cut T` (the camera cut to the scene's second observer, `fx_crash.lua CUT_*` ->
+  `camCut`, six frames `cut_N.png`), `--pull T D0 D1 DUR` (the observer pulled back
+  geometrically, `camSetDist`); scenes `large100`/`large100l` (`VkTest_Atlantis`: the
+  Atlantis with `PropellantResource1 = 136000` in `harness/Config/Vessels`, installed into
+  the build tree's Config/Vessels - 95 t of propellant aboard after the OMS/RCS levels),
+  `small300` (DG at PRPLEVEL 0.028: 308 kg), `twin` / `twinmerge` (`fx_twin.scn`: a second
+  DG V2 flown SEP m to the side at SEP_SPEED by `fx_crash.lua`), `seacut`, `lod200/1k/3k/8k`.
+- **Fixes found on the way**: (1) `WantsVolume` measured the ball's distance from `fbPos`
+  a step behind (the global frame moves 30 km/s with the Earth: a kilometre off at 1x,
+  ten at 10x) - at 10x warp the ball went to sprites in its second step, and at 1x every
+  LOD decision was made as if the ball were a kilometre farther; `FireballPosNow` (fbPos
+  moved on by fbVel to now) is used, and `gpos` for the vacuum shell. (2) The volume's
+  last two frames (1.8 t_f, extinction fading to 0) flashed a pale sunlit grey over the
+  dark cap taking over (thin soot loses its self-shadowing; seen in phase 5's sea video
+  at 3.57-3.60 s too): the soot albedo now goes down with the extinction to the cap's
+  (0.075 at the end). (3) The march's step was 0.5 cells at > 400 px: 0.6 there now (the
+  budget), 0.5 kept over 700 px.
+- **Perf** (1440p, RX 9070 XT, RT on, FSR 1.0; `phase6/fbperf.txt`, `perf1440.txt`,
+  `perfothers1440.txt`; the final build). Fireball passes (grid + march + composite), GPU ms:
+
+  | case | march median 1-2 s | fb sum max 1-2 s | fb sum max 3-3.8 s (soot ball) | peak particle + fb frame |
+  |---|---|---|---|---|
+  | sea 170 m, phase 5 | 0.86 | 1.26 | 1.81 | 2.91 |
+  | sea 170 m, phase 6 | 0.69 | 1.11 | 1.20 | 2.69 |
+  | close 72 m, phase 4c/5 | 0.91 | 2.33 | 1.46 | 3.4 (phase 5) |
+  | close 72 m, phase 6 | 0.85 | 1.66 | 1.67 | 4.21 (3.1 s: pt volume 0.9, march 1.2) |
+  | twin (two balls, 220 m) | 0.35 (grid 0.35: two slabs) | 0.81 | 1.03 | 3.69 (spray sprites 1.5) |
+  | Atlantis 93 m at 450 m | 0.42 | 0.89 | 1.17 | 2.80 |
+
+  Budget (decision 8: ~2 ms close, ~5 ms the explosion's peak): met - the close fireball's
+  passes peak at 1.67 ms (was 2.33), the explosion's particle + fireball peak 4.2 ms close,
+  2.7 ms at 170 m. Bench "Crash" flight (`bench/budget.txt`): peak 2.54 / fb 1.10 ms. The
+  savings: the 0.6-cell step over 400 px (was 0.5), the flow phases' taps skipped at low
+  weight, the fine octave only near, the fading soot ball's step up to 1.5x.
+
+### Deviations (phase 6)
+
+- **The settings entry** is Sprites / Volumetric / Volumetric, full resolution (the plan's
+  "off/sprites/volume or quality"): "off" would leave a crash with no fire at all, and the
+  full-resolution march is the one quality step that shows (about 4x the march's cost:
+  for screenshots). No separate "density" slider: the particle density applies to the
+  sprites around the ball as before; the march's step is by screen size.
+- **"Light only" below 6 px** (plan 2.6): not a separate level; below 12 px the sprites are
+  a few pixels and cheap.
+- **Grid step at > 10x warp** (plan 2.6): nothing to skip - the grids are recomputed from
+  the analytic model each frame (0.2 ms) and carry no state.
+- **The Atlantis 100 t case**: the stock Atlantis carries ~8 t (phase 0); `VkTest_Atlantis`
+  (a harness class: Atlantis + `PropellantResource1 = 136000`, which with the OMS/RCS
+  levels gives 95 t aboard) is installed into the build tree's Config/Vessels by `run.py`.
+  On land R 93 m, t_f 3.6 s (plan: 95 m, 4 s); on the sea R 83 m. The sea sheet is
+  dominated by the pieces' spray (60 m/s into the water) until ~2 s, as phase 0 noted.
+- **Two DGs mid-air**: in `midair` both DGs break up at the same step in one place and
+  their pieces join one ball (the join rule: within R; 16.7 t, R 52 m) - physically one
+  explosion. Two fireballs at once are shown by `twin`: two DGs in formation 90 m apart into
+  the sea (V2 at 50 m/s: at the same speed the water entry's outcome varied with the wave
+  met - one of the two did not break up); `twinmerge` (20 m apart) shows the overlap merge.
+- **The cross-fade beyond the 4-ball cap** is not done (the fifth ball pops to sprites).
+- **Memory**: the plan's "<= 4 x 2 MB" became ~70 MB of grids in phase 2 (96x96x112);
+  phase 6 adds their release and the half-size images' (~20 MB at 1440p): nothing stays
+  allocated while no fireball has burned for two minutes.
+- **The harness' cut and pull-away** are done by the scenario script (`CUT_T`, `PULL_*`
+  from `run.py`): the remote's `lua` command runs in its own interpreter (TestInput.cpp:
+  `oapiCreateInterpreter`), so the first pass's "cut" never cut (the cuts logged were the
+  wreck-view cut at the destruction) and the pull-away never moved; found by the frames.
+- **The sprite switch at 8 px** is exercised by `pullfast` (170 m to 8 km in 1.5 s), not by
+  the 4 s pull-away (the ball is gone before 6.5 km, where 8 px is at 1080p, FOV 40).
+
+### Verification (phase 6)
+
+All 1080p unless noted; `phase6/batch.sh` (first pass), `batch2.sh` (the cut and pull-away
+moved into the script, the warp and merge fixes), `batch3.sh` (the pull-away videos, the
+bench flight), `batch4.sh` (perf, validation, ctest on the final build).
+- **Atlantis 100 t**: `large100l_sheet.png` (land, R 93 m, t_f 3.6 s: a desert ball
+  lifting into a mushroom by 4-6 s), `atlantis100_land_crash.mp4` (1 s before to 10 s
+  after), `large100_sheet.png` (sea, R 83 m: the pieces' spray hides it until ~2 s).
+- **300 kg DG**: `small300_sheet.png` (M 361 kg aboard, M_p 90 kg: R 13 m, t_f 1.1 s - a
+  puff the pieces fly on out of).
+- **Two DGs**: `twin_sheet.png` + `twin_crash.mp4` (two balls 90 m apart, 0.1 s apart, each
+  marched, two soot balls, two slicks); `twinmerge_sheet.png` (20 m apart: V1's pieces join
+  V2's ball 0.1 s old - the log: "joins it (overlap): R 37.0 -> 40.2 m" and on to 45);
+  `midair_sheet.png` + `midair_crash.mp4` (the collision at 300 m: one ball of both, the
+  trails).
+- **10x warp**: `warp10_sheet.png` (`--warp 10`: stills by simulation time): the ball at its
+  analytic age at every still (full size 0.3 s, lifting 0.7, soot ball 1-2, cap 3 s), marched
+  throughout (0 switches to sprites after the distance fix; before it the second step went
+  to sprites). The spill's tongues and the cap's puffs are sparser (per-step emissions at
+  0.33 s steps), as the hand-off expected.
+- **Pause**: `pause_check.png`, `pausediff.py`: three frames 4 apart while paused at 0.8 s
+  differ by a mean of 0.4-0.7 (of 255), all pixels over 8 in the sea's rows (648-952: the
+  water moves), none in the fireball's.
+- **Cut**: `cut_check.png` (eight frames from one before the cut at +0.83 s to the observer
+  on the far side): the first frame after the cut is clean (the ball from its sunlit side,
+  no ghost of the shade side, no smear); the log's "camera cut at frame 83" resets the
+  histories.
+- **LOD**: `lod_row_1s.png` (200 m, 1 km, 3 km, 8 km at 1 s: marched at 260, 52 and 17 px
+  of radius, sprites at 6.5 px), `lod{200,1k,3k,8k}_sheet.png`; `lod_pullaway.mp4` (170 m
+  to 8 km over 4 s from 0.3 s: `pull_tiers.png` crops at the step changes 0.75 -> 1.0 cell
+  (1.0 s, 350 m) and 1.0 -> 1.4 (2.0 s, 865 m) show no pop; `pullcheck.py`: the largest
+  frame-to-frame changes after the flash are at 3.3-3.5 s, the ball fading out at 4 km);
+  `lod_pullaway_fast.mp4` (to 8 km in 1.5 s: the switch to sprites mid-burn at 1.77 s, 5.4
+  km, 8 px: `pullfast_switch.png` - the cross-fade leaves no pop at that size).
+- **Settings**: `settings_row_1s.png` (`ORBITER_VK_FIREBALL=sprites` / the default / `full`
+  / a `Fireballs = Volumetric, full resolution` line in a file via `ORBITER_VK_GRAPHICS_CFG`):
+  sprites a pile of discs, the volume the ball, full resolution the same ball with crisper
+  edges; `set_*_sheet.png`.
+- **Validation layer** (sync validation on): sea and the Atlantis on land: 0 lines
+  (`validation/`, `validation100/`), the twin too (`validationtwin/`).
+- **ctest** `-R "Particles|Water|Damage|Debris"` serial: 12/13, the known
+  DamageEffectsTest (AIR roll) failure only (`ctest.txt`).
+- **Bench Crash** (`Tests/Bench/run.sh Crash`, 1440p, fixed step 1/30; `bench/budget.txt`):
+  356 frames over 2-14 s: explosion peak frame 2.54 ms (<= 5.0), fireball passes' peak
+  1.10 ms (<= 2.0), median 1.07, p95 2.19; allocFails 0, dropped 0: met. (The first run
+  hit the 600 s timeout: the flight-over menu's pause stops `proc.wait_frames` from
+  returning, so the script could not unpause; the focus is a ShuttlePB `OBS` now.)
+- **The volume's end**: `seaend_strip.png` (3.40-3.73 s): the dark cap passes to the froxel
+  cap without the pale two-frame flash (`phase5_end_strip.png` for the before).
+
+### Status (phase 6)
+
+Done. What convinces: the same ball at 200 m, 1 km and 3 km with nothing seen at the
+step changes; the fade to sprites at 8 px invisible; the 10x warp sheet reads as the 1x
+sheet sampled; a cut mid-explosion lands on a clean frame; two balls side by side, each a
+fireball with its own cap; the overlap merge is seen only in the log and the ball's size
+(as it should be); the Atlantis ball on land is the plan's top end (93 m, lifting into a
+mushroom); the 300 kg puff is over in a second; the volume's end no longer flashes pale.
+What does not: the sprites at warp beyond ~30x are visibly sparse (per-step emission);
+the froxel cap that takes over from the ball is faint beyond ~3 km (the volume's far
+slices are coarse); the settings' "full resolution" sharpens the edges more than the
+billows; a fifth ball pops; the sea Atlantis is hidden by its pieces' spray.
+
+## State of the explosion (after phase 6)
+
+**Done** (phases 0-6, the plan's sections 2-6 and decisions 8.1):
+- Timing and scale by the propellant: f_p 0.35 land / 0.25 sea, R = 2.9 M_p^(1/3) (7 t DG:
+  35-39 m), t_f = 0.45 M_p^0.2 (2 s), the wreck's visible flames ~10 s then smouldering,
+  the soot rising ~50 s; a 300 kg DG a 13 m, 1.1 s puff, a 95 t Atlantis a 93 m, 3.6 s ball.
+- The fireball a marched volume: a procedural model (ellipsoid drawn out along the path,
+  lobes, billows of three sizes carried outward by a two-phase flow map and rolled by the
+  vortex ring, a lean, burn progress to soot) in 96x96x112 grids, blackbody emission with a
+  camera-like knee, self-shadowed sunlight, the fire's light on its own soot; the ignition
+  flash; the sea/ground skirts, boiling, scorch; heat shimmer; the camera jolt with the
+  sound delay; the vacuum shell; two lights (ball + foot) RT-shadowed; the exposure counts
+  it partly at night; the soot ball handed to the froxel smoke volume in place.
+- Debris: trails as soft bands in the volume at any speed, flame tongues, embers, quench
+  steam, hull glow, the spill's fire with tongues and a column, smoulder to grey.
+- Phase 6: LOD by screen size with hysteresis and a cross-fade (no pop at the switch), the
+  4-ball cap and overlap merging, warp (10x right, > 100x sprites), pause and cuts verified,
+  the Fireballs setting (sprites / volumetric / full), memory released when idle, the
+  bench "Crash" flight with the budget.
+- Cost (RX 9070 XT, 1440p, FSR 1.0, RT on): the fireball's passes 0.75 ms median, <= 1.9
+  ms peak close up; the whole explosion's particle + fireball peak 2.8 ms (sea, 170 m),
+  4.4 ms close (72 m); nothing allocated two minutes after the last fireball.
+
+**Open issues** (none blocking; by weight):
+1. Close up (< 100 m) the surface is soft: the half-resolution march and the 96^3 grid
+   give billows, not the curled flame tongues and crisp soot edges of footage; the full-
+   resolution setting sharpens the edges but not the structure (the model's).
+2. The soot ball's hand-over to the froxel cap is a swap of looks (volume's cauliflower ->
+   the froxel's soft puffs) over 1.3-1.8 t_f; it reads, but the cap afterwards is blurrier
+   than the ball was.
+3. A fifth fireball on screen pops to sprites (no cross-fade beyond the cap); rare.
+4. The spill's tongues are a row of upright strokes of similar height; the embers are a
+   pixel each at 350 m; a flying piece's trail puff sits on the piece for a frame or two.
+5. The streaky seam where the half-resolution composite meets the sea at the waterline
+   (phase 2's note) is faint but there in close views.
+6. The sea case's spray from fast heavy pieces (Atlantis at 60 m/s) hides the ball for its
+   first two seconds - the spray's scale for large pieces is the water effects', not this
+   work's.
+7. The vacuum shell's first frame is grey (phase 5's note); the flash light carries it.
+
+**Phase 7 recommendation** (for the user to decide; optional, after review):
+- *Fluid sim*: a 64^3 (or the grid's 96x96x112) semi-Lagrangian advection + a few Jacobi
+  pressure iterations behind the same grid interface would replace the flow map's "noise
+  carried outward" with real rolling: curls at the ring's edge, tongues pulled into the
+  cap, the stem's inflow. Cost: ~0.5-1 ms of compute per ball per frame (4-6 passes over 1
+  M cells), 2-3 agent-days, and it gives up frame-rate independence (a fixed sim step with
+  sub-stepping at warp; pause and cuts are fine since the state is in the grid). Worth it
+  only if the close-up look (open issue 1) matters to the user: at 170 m the present
+  procedural ball already reads as a fireball.
+- *Propellant types*: per vessel class via `Config/Damage/<class>.cfg` (e.g. `Propellant =
+  hydrogen | hydrocarbon | hypergolic`): hydrogen pale yellow-white, near-sootless, 0.6 t_f;
+  hypergolic a red-brown NTO cloud over an orange ball, less soot. About a day: a type in
+  FireballModel (emission colour, soot share, t_f factor) and the sprites' albedo. Cheap and
+  visible (the Atlantis/ET case would look different from the DG's).
+- *Audio hook*: the flash's thud at d / 340 s (the jolt already knows when): a one-line
+  callback for the sound module when there is one.
+- Recommended order if any: propellant types (cheap, visible) first; the fluid sim only
+  after a look at the close-up review frames (`phase6/perfclose1440`, `phase4/close`).

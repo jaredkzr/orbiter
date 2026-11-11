@@ -251,6 +251,10 @@ private:
 	VECTOR3 fbLean{};          // its lean: the top carried on ahead of its foot by its momentum (per unit height; global)
 	VECTOR3 fbUp{ 0, 1, 0 };
 	bool fbVolume = false;     // marched as a volume this step (its flame sprites left out)
+	double fbVolFade = -1.0;   // its volume's weight (0..1), cross-faded with its sprites over 0.35 s as the choice switches (-1: not set yet)
+	double fbRGoal = 0.0;      // [m] its radius grown, with the propellant of a ball that joined it later (fbR eased to it)
+	double fbPosT = -1e30;     // [s] the simulation time fbPos refers to (a step ago at its formation; now once Fireball has moved it)
+	VECTOR3 FireballPosNow (double simt) const { return fbPos + fbVel * (simt - fbPosT); }
 	VECTOR3 fbFoot{};          // its foot: the surface below where it ignited (moving with the air; fbFootKnown: on the ground or the sea)
 	bool fbFootKnown = false;
 	OBJHANDLE fbPlanet = nullptr; // the body it formed over (the ground's colour: the dust skirt)

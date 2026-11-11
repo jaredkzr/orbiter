@@ -90,7 +90,11 @@ void main ()
 	vec3 seed = fract (vec3 (0.71, 0.37, 0.53) * P.time.w);
 	vec3 seedG = fract (vec3 (0.137, 0.291, 0.443) * P.time.w); // (the grid's: the roll's lopsidedness)
 	vec3 sdA = seed + FbPhaseSeed (P.adv2.z), sdB = seed + FbPhaseSeed (P.adv2.w);
-	float wA = P.adv.y, wB = P.adv.w, wN = inversesqrt (max (wA * wA + wB * wB, 1e-4));
+	// (a phase of the flow near its end or its start weighs little: its
+	// taps are left out - phase 6, a sixth of the march's noise taps)
+	float wA = P.adv.y > 0.07 ? P.adv.y : 0.0, wB = P.adv.w > 0.07 ? P.adv.w : 0.0;
+	float wN = inversesqrt (max (wA * wA + wB * wB, 1e-4));
+	float fineW = P.asym.z; // (the finest octave: only where it can be seen)
 	// the light on it: the sun through the air to its centre (in the
 	// planet's shadow at night), forward-peaked (the sunlit edges of the
 	// billows seen against the sun bright), and the ambient light
@@ -116,6 +120,12 @@ void main ()
 	// a smoke cloud
 	float u = P.time.y;
 	float albSoot = mix (0.13, 0.3, clamp ((u - 0.9) / 0.9, 0.0, 1.0));
+	// (and as the ball fades out - into the smoke volume's cap, or to its
+	// sprites - its thinning soot loses its self-shadowing and would turn a
+	// pale sunlit grey for its last frames (a two-frame pale flash at 1.8
+	// t_f, phase 5's sea video): its albedo goes down to the cap's 0.08 with
+	// its extinction instead - phase 6)
+	albSoot *= mix (0.25, 1.0, smoothstep (0.0, 0.5, P.heat.w));
 	// (in vacuum: a thin vapour shell - pale, lit by the sun, its light the
 	// flash's for a frame; its opacity carries the look, not its emission)
 	bool vac = P.mode.x > 0.5;
@@ -148,12 +158,15 @@ void main ()
 		// detail: small billows eating into its thin parts (the edge ragged,
 		// tongues and holes), the dense inside kept
 		// (normalized: about +-1; the shape noise's sd 0.073 about 0.67, the detail's 0.12 about 0.475)
-		float dnA = 0.6 * (textureLod (shapeNoise, qA * 2.3 + sdA, 0.0).r - 0.67) * 6.8 + 0.4 * (textureLod (detailNoise, qA * 3.1 + sdA.zxy, 0.0).r - 0.475) * 4.2;
-		float dnB = 0.6 * (textureLod (shapeNoise, qB * 2.3 + sdB, 0.0).r - 0.67) * 6.8 + 0.4 * (textureLod (detailNoise, qB * 3.1 + sdB.zxy, 0.0).r - 0.475) * 4.2;
-		float dn = (wA * dnA + wB * dnB) * wN;
+		float dn = 0.0;
+		if (wA > 0.0) dn += wA * (0.6 * (textureLod (shapeNoise, qA * 2.3 + sdA, 0.0).r - 0.67) * 6.8 + 0.4 * (textureLod (detailNoise, qA * 3.1 + sdA.zxy, 0.0).r - 0.475) * 4.2);
+		if (wB > 0.0) dn += wB * (0.6 * (textureLod (shapeNoise, qB * 2.3 + sdB, 0.0).r - 0.67) * 6.8 + 0.4 * (textureLod (detailNoise, qB * 3.1 + sdB.zxy, 0.0).r - 0.475) * 4.2);
+		dn *= wN;
 		// (and finer: about 1/25 of its radius, the flame's texture close
-		// up; not carried: too fine to be seen moving)
-		float df = (textureLod (shapeNoise, (x + wv) * 6.1 + seed.yzx, 0.0).r - 0.67) * 6.8;
+		// up; not carried: too fine to be seen moving; left out when it is
+		// under a pixel or so - fineW)
+		float df = 0.0;
+		if (fineW > 0.0) df = fineW * (textureLod (shapeNoise, (x + wv) * 6.1 + seed.yzx, 0.0).r - 0.67) * 6.8;
 		dn += 0.35 * df;
 		// (soot a little more: its small billows crisp - the cap's
 		// cauliflower; at 1.5x the sooty outer layer was eaten away as it

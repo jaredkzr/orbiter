@@ -281,6 +281,8 @@ private:
 	void AllocMarch (VkCommandBuffer cmd); // (null: submitted and waited for)
 	void WriteVolumeSets (uint32_t slot);
 	bool volSetDirty[vkc::FRAMES_IN_FLIGHT] = {};
+	void WriteFireballOcclusion (uint32_t slot);
+	bool fbOccDirty[vkc::FRAMES_IN_FLIGHT] = {};
 	bool nearKnown = false, nearEmit = false; // (volumetric smoke within reach: read back, emitted)
 	struct VolGrave { uint64_t frame; std::vector<vkc::Image> images; vkc::Buffer occ; };
 	std::vector<VolGrave> volGrave;      // (released images, destroyed when no frame in flight uses them)

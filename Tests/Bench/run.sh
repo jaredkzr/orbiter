@@ -11,7 +11,9 @@
 # Launch (Shuttle launch from 39A, camera 850 m away, T+0-60 at 1x, particle
 # density 4), Launch8 (the same at density 8), LaunchFar (seen from 42 km,
 # T+0-240), LaunchNight (Launch at night: the flames light the smoke, its
-# local-light occlusion): the particle budget, checked by
+# local-light occlusion), Crash (a DG with 7 t of propellant into the sea,
+# observer 170 m aside: the crash explosion, 0-12 s after the break-up): the
+# particle budget, checked by
 #   python3 Tests/Bench/budget.py out_dir
 # (GPU time of the particle passes, allocation failures, dropped emissions;
 # ORBITER_VK_PARTICLE_STATS telemetry in the logs).
@@ -63,5 +65,6 @@ for n in ${@:-Atmos Ascent Moon Mars Jupiter Proxima Barnard Nyx}; do case $n in
 	Launch8)   ARGS=--fixedstep=0.02 run Launch8@Launch 900 BENCH_END=60 ORBITER_VK_PARTICLE_DENSITY=8 ORBITER_VK_PARTICLE_STATS=5 ORBITER_VK_FRAMETIME=0.016 ;;
 	LaunchNight) ARGS=--fixedstep=0.02 run LaunchNight 900 BENCH_END=60 ORBITER_VK_PARTICLE_DENSITY=4 ORBITER_VK_PARTICLE_STATS=5 ORBITER_VK_FRAMETIME=0.016 ;;
 	LaunchFar) ARGS=--fixedstep=0.02 run LaunchFar 1200 BENCH_END=240 ORBITER_VK_PARTICLE_DENSITY=4 ORBITER_VK_PARTICLE_STATS=5 ORBITER_VK_FRAMETIME=0.016 ;;
+	Crash)     ARGS=--fixedstep=0.0333 run Crash 600 BENCH_AFTER=12 ORBITER_DAMAGE=1 ORBITER_VK_PARTICLE_DENSITY=4 ORBITER_VK_PARTICLE_STATS=5 ORBITER_VK_FRAMETIME=0.016 ;;
 	*) echo "unknown flight $n" ;;
 esac; done

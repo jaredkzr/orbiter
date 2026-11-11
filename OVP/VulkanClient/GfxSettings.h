@@ -43,6 +43,8 @@ struct GfxSettings {
 	enum SmokeRendering { SMOKE_SPRITES, SMOKE_SCREEN, SMOKE_VOLUMETRIC };
 	int smokeRendering = SMOKE_VOLUMETRIC; ///< large smoke (launch clouds): sprites, screen-space or volumetric
 	bool smokeTrails = true;    ///< launch smoke trails that stay in the sky, carried by the wind
+	enum Fireballs { FIREBALL_SPRITES, FIREBALL_VOLUME, FIREBALL_FULL };
+	int fireballs = FIREBALL_VOLUME; ///< crash fireballs: sprites, marched volumes (half resolution), or at the full resolution
 	bool engineLight = true;    ///< engines light their surroundings
 	float cameraShake = 1.0f;
 	bool skyEnhanced = false;   ///< sky display: enhanced (long exposure) or realistic

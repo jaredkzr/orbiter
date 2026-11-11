@@ -52,6 +52,7 @@ namespace {
 	const char *AA_CHOICES[] = { "Off", "Multisampling (4\xC3\x97)", "Temporal (TAA)", "AMD FSR 3" };
 	const char *SKY_CHOICES[] = { "Realistic", "Enhanced" };
 	const char *SMOKE_CHOICES[] = { "Sprites", "Screen-space", "Volumetric" };
+	const char *FIREBALL_CHOICES[] = { "Sprites", "Volumetric", "Volumetric, full resolution" };
 }
 
 // One setting: where it is kept, how it is shown
@@ -151,6 +152,12 @@ const std::vector<GfxSettings::Item> &GfxSettings::Items ()
 	items.push_back (toggle ("SmokeTrails", "ORBITER_VK_SMOKE_TRAILS", G3, "Launch smoke trails",
 		"Rocket smoke that stays in the sky for minutes, carried by the wind.", T::LIVE, &GfxSettings::smokeTrails, {0, 1, 1, 1}));
 	items.back ().requires = "Particles";
+	Item fb{ "Fireballs", GRAPHICS_CFG, "ORBITER_VK_FIREBALL", G3, "Crash fireballs",
+		"Volumetric: the fireball of a crash as a ball of burning gas with billows, lit and shadowed (marched at half resolution; full resolution: finer, about four times the cost). Sprites: cheapest.",
+		T::CHOICE, T::LIVE };
+	fb.i = &GfxSettings::fireballs, fb.nchoice = 3, fb.choice = FIREBALL_CHOICES, fb.requires = "Particles";
+	{ float p[4] = { 0, 1, 1, 1 }; std::copy (p, p + 4, fb.preset); }
+	items.push_back (fb);
 	items.push_back (slider ("CameraShake", "ORBITER_VK_SHAKE", G3, "Camera shake",
 		"The cockpit view jolts in turbulence and buffeting; any view jolts with the thud of an explosion near it.", &GfxSettings::cameraShake, 0.0f, 2.0f, 0.05f, 100.0f, "%.0f %%"));
 
@@ -213,6 +220,10 @@ void GfxSettings::Load ()
 			}
 			if (!strcmp (it.key, "SmokeRendering")) { // (ORBITER_VK_SMOKE's words)
 				static const char *names[] = { "sprites", "screen", "volume" };
+				for (int c = 0; c < 3; c++) if (Same (s, names[c])) return (float)c;
+			}
+			if (!strcmp (it.key, "Fireballs")) { // (ORBITER_VK_FIREBALL's words)
+				static const char *names[] = { "sprites", "volume", "full" };
 				for (int c = 0; c < 3; c++) if (Same (s, names[c])) return (float)c;
 			}
 			return (float)atoi (s.c_str ());

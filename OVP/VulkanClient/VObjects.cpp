@@ -975,8 +975,17 @@ VDebris::VDebris (OBJHANDLE h, Scene *s, DWORD sn)
 	mesh = std::make_unique<VkMesh> (gc->Ctx(), gc->TexMgr(), parts);
 }
 
+namespace {
+	// the fireballs alive (their owners): a ball forming inside one that
+	// formed a little earlier joins it (PLAN.md 2.6: spheres overlapping by
+	// more than half merge)
+	std::vector<VDebris*> &LiveFireballs () { static std::vector<VDebris*> v; return v; }
+}
+
 VDebris::~VDebris ()
 {
+	auto &live = LiveFireballs ();
+	live.erase (std::remove (live.begin (), live.end (), this), live.end ());
 	ParticleSystem *sys = scene->Particles ();
 	for (Ring *r : { &fire, &smoke, &sparks, &dust, &frags, &fbFire, &fbSmoke, &fbCore, &fbFlashR, &fbSkirt, &fbSteam, &column, &drift, &quench, &embers })
 		if (r->sys && r->sys == sys) sys->Release (*r); // (retired with r->tex while its particles live; rings idle for long were released already)
@@ -1131,21 +1140,42 @@ void VDebris::Effects ()
 		static const bool noJoin = getenv ("ORBITER_VK_FIREBALL_NOJOIN") && atoi (getenv ("ORBITER_VK_FIREBALL_NOJOIN"));
 		// (in vacuum the pieces of one break-up join too: one shell, one
 		// flash - five flashes lit the station out white)
+		bool later = false; // (joining a ball that formed a step or more ago)
 		if (!noJoin)
 			for (auto &o : formed) {
 				const DEBRISINFO &oi = o.first->info;
 				bool same = !strcmp (oi.source, info.source) && std::fabs (oi.created - info.created) < 0.05; // (one break-up)
 				if (same || (rho >= 1e-4 && length (o.second - p0) < std::max (o.first->fbR, FireModel (info.fuel, onWater).R))) { own = o.first; break; }
 			}
+		// (overlap merging, PLAN.md 2.6: a ball forming within one still
+		// growing - under 0.35 t_f old - whose spheres would overlap by more
+		// than half (centres closer than half the radii's sum) joins it: its
+		// radius grown is eased to the sum's over 0.2 s, not jumped - phase 6)
+		if (!own && !noJoin && rho >= 1e-4) {
+			double Rn = FireModel (info.fuel, onWater).R;
+			static const bool fbLog3 = getenv ("ORBITER_VK_FIREBALL_LOG") != nullptr;
+			for (VDebris *o : LiveFireballs ()) {
+				if (o == this || o->fbTf <= 0.0 || simt - o->fbT0 > 1.3 * o->fbTf) continue;
+				double d = length (o->FireballPosNow (simt) - gpos); // (both now: p0 is a step ago, a kilometre off in the global frame)
+				if (fbLog3) oapiWriteLogV ("VulkanClient: fireball %s forms %.0f m from %s's ball (R %.0f m, %.2f s old): %s", info.name, d, o->info.name, o->fbR, simt - o->fbT0,
+					simt - o->fbT0 > 0.35 * o->fbTf ? "too old to join" : d < 0.5 * (o->fbR + Rn) ? "joins it" : "apart");
+				if (simt - o->fbT0 > 0.35 * o->fbTf) continue;
+				if (d < 0.5 * (o->fbR + Rn)) { own = o, later = true; break; }
+			}
+		}
 		if (own) {
 			own->fbFuel += info.fuel;
 			own->fbBreak->fuel += info.fuel;
 			fbBreak = own->fbBreak;
 			FireballModel m = FireModel (own->fbFuel, own->fbWater);
-			if (rho >= 1e-4) own->fbR = own->flashR = m.R, own->fbTf = m.tf;
-			else own->fbR = own->flashR = 2.9 * cbrt (own->fbFuel), own->fbVacVs = std::clamp (3.0 * own->flashR, 20.0, 300.0);
+			if (rho >= 1e-4) {
+				own->fbRGoal = m.R, own->fbTf = m.tf;
+				if (!later) own->fbR = own->flashR = m.R;
+			} else own->fbR = own->fbRGoal = own->flashR = 2.9 * cbrt (own->fbFuel), own->fbVacVs = std::clamp (3.0 * own->flashR, 20.0, 300.0);
 			own->fbVel = (own->fbVel * own->fbFuelW + vel * info.fuel) / (own->fbFuelW + info.fuel);
 			own->fbFuelW += info.fuel;
+			static const bool fbLog2 = getenv ("ORBITER_VK_FIREBALL_LOG") != nullptr;
+			if (later && fbLog2) oapiWriteLogV ("VulkanClient: fireball %s joins %s's ball at +%.2f s (overlap): R %.1f -> %.1f m", info.name, own->info.name, simt - own->fbT0, own->fbR, m.R);
 		} else {
 			fbFuel = info.fuel, fbWater = onWater;
 			fbBreak = std::make_shared<BreakUp> ();
@@ -1156,7 +1186,8 @@ void VDebris::Effects ()
 			flashT = info.created, flashR = R, flashK = rho < 1e-4 ? 10.0 : 3.0;
 			// (fbPos: where it was a step ago - Fireball moves it on to now; the
 			// global velocities carry Earth's orbit, a kilometre a step)
-			fbT0 = simt, fbR = R, fbPos = p0, fbVel = vel, fbFuelW = info.fuel, fbFlash = true, fbStage = 0;
+			fbT0 = simt, fbR = fbRGoal = R, fbPos = p0, fbPosT = simt - dt, fbVel = vel, fbFuelW = info.fuel, fbFlash = true, fbStage = 0;
+			LiveFireballs ().push_back (this);
 			fbFlashPos = p0;
 			fbTf = rho >= 1e-4 ? m.tf : 0.0;
 			if (rho < 1e-4) {
@@ -1166,7 +1197,7 @@ void VDebris::Effects ()
 				fbPos = gpos; // (now, not a step ago: the shell moves on from here with fbVel - CollectFireballs)
 				double Rs = 0.15 * R + 0.4 * fbVacVs + 3.0 * (0.1 * R + 0.04 * fbVacVs);
 				FireballRenderer *fr = scene->Fireballs ();
-				fbVac = fr && fr->WantsVolume (id, Rs, length (p0 - scene->CameraPos ()));
+				fbVac = fr && fr->WantsVolume (id, Rs, length (gpos - scene->CameraPos ())); // (now, not p0: a step ago, a kilometre off)
 				if (!fbVac) VacuumFlash (dt, R, vel);
 				static const bool fbLog = getenv ("ORBITER_VK_FIREBALL_LOG") != nullptr;
 				if (fbLog) oapiWriteLogV ("VulkanClient: stage vacuum shell: R %.1f m, %.0f m/s, %s", R, fbVacVs, fbVac ? "volume" : "sprites");
@@ -1177,7 +1208,7 @@ void VDebris::Effects ()
 		if (fbLog) oapiWriteLogV ("VulkanClient: fireball %s fuel %.0f kg (rho %.2f, water %d, v %.1f m/s)%s", info.name, info.fuel, rho, (int)onWater, length (vel - GroundVelocity (hp, gpos)), own ? " joins the first" : "");
 	}
 	// (the volume's soot ball rises on to 1.8 t_f: FireballRenderer)
-	if (fbTf > 0.0 && simt - fbT0 < (fbVolume ? 1.85 : 1.35) * fbTf) {
+	if (fbTf > 0.0 && simt - fbT0 < (fbVolume || fbVolFade > 0.0 ? 1.85 : 1.35) * fbTf) {
 		VECTOR3 air = GroundVelocity (hp, fbPos); // (the air there: turning with the planet)
 		bool ignite = fbFlash;
 		fbPlanet = hp;
@@ -1197,7 +1228,7 @@ void VDebris::Effects ()
 		// as it ignites (its pieces joined): the fuel spilled where it fell
 		// burns on as it lifts off (a fireball formed near the ground or the
 		// sea; not one in mid-air)
-		if (ignite && !fbFlash && scene->Fires ()) {
+		if (ignite && !fbFlash && fbTf > 0.0 && scene->Fires ()) { // (fbTf 0: it joined an older ball at its flash - that one's spill)
 			double lng, lat, rad;
 			oapiGlobalToEqu (hp, fbPos, &lng, &lat, &rad);
 			vksurf::Point pt = vksurf::Query (scene, hp, lng, lat);
@@ -1498,13 +1529,47 @@ void VDebris::Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 
 	double R = fbR;
 	static const bool fbLog = getenv ("ORBITER_VK_FIREBALL_LOG") != nullptr;
 	FireballRenderer *fr = scene->Fireballs ();
-	bool vol = fr && fr->WantsVolume (id, R, length (fbPos - scene->CameraPos ()));
+	// (its distance from where it is now: fbPos is a step behind here, and
+	// the global frame moves 30 km/s with the Earth - a kilometre a step
+	// at 1x, ten at 10x: at 10x warp the ball went to sprites - phase 6)
+	bool vol = fr && fr->WantsVolume (id, R, length (FireballPosNow (oapiGetSimTime ()) - scene->CameraPos ()));
 	if (vol != fbVolume && fbLog) oapiWriteLogV ("VulkanClient: stage fireball at +%.2f s: %s", t, vol ? "volume" : "sprites");
 	fbVolume = vol;
+	// (the switch cross-faded over 0.35 s: the volume's weight, the sprites
+	// at the rest - the sprites build up over their lifetimes, about as
+	// long; at its birth no fade - phase 6)
+	if (fbVolFade < 0.0) fbVolFade = vol ? 1.0 : 0.0;
+	else fbVolFade = std::clamp (fbVolFade + (vol ? 1.0 : -1.0) * dt / 0.35, 0.0, 1.0);
+	double spriteW = 1.0 - fbVolFade; // (the sprites' share)
+	// (a ball that joined it after it formed: its radius grown eased up)
+	if (fbRGoal > fbR) fbR += (fbRGoal - fbR) * (1.0 - exp (-dt / 0.2)), R = fbR;
 	fbUp = up;
 	// (the flash on its second step - the pieces' shares joined it by then)
 	bool flash = fbFlash && t > 0.0;
 	if (flash) {
+		// overlap merging (PLAN.md 2.6), the whole ball now known: one
+		// forming inside an older ball still growing (under 0.35 t_f old),
+		// the centres closer than half the sum of the radii, gives it its
+		// propellant and is no more (no flash of its own; the older ball's
+		// R grown eased up to the sum's) - phase 6
+		static const bool noJoin = getenv ("ORBITER_VK_FIREBALL_NOJOIN") && atoi (getenv ("ORBITER_VK_FIREBALL_NOJOIN"));
+		double simt = oapiGetSimTime ();
+		for (VDebris *o : noJoin ? std::vector<VDebris*> () : LiveFireballs ()) {
+			if (o == this || o->fbTf <= 0.0 || o->fbT0 >= fbT0 || simt - o->fbT0 > 0.35 * o->fbTf) continue;
+			double d = length (o->FireballPosNow (simt) - FireballPosNow (simt));
+			if (d >= 0.5 * (o->fbRGoal + fbR)) continue;
+			o->fbFuel += fbFuel;
+			if (o->fbBreak && fbBreak && o->fbBreak != fbBreak) o->fbBreak->fuel += fbBreak->fuel;
+			FireballModel m = FireModel (o->fbFuel, o->fbWater);
+			o->fbRGoal = m.R, o->fbTf = m.tf;
+			o->fbVel = (o->fbVel * o->fbFuelW + fbVel * fbFuelW) / (o->fbFuelW + fbFuelW);
+			o->fbFuelW += fbFuelW;
+			if (fbLog) oapiWriteLogV ("VulkanClient: fireball %s (M %.0f kg) %.0f m from %s's ball (R %.1f m, %.2f s old) joins it (overlap): R -> %.1f m", info.name, fbFuel, d, o->info.name, o->fbRGoal, simt - o->fbT0, m.R);
+			fbTf = 0.0, fbFlash = false, flashR = 0.0, fbR = fbRNow = 0.0;
+			auto &live = LiveFireballs ();
+			live.erase (std::remove (live.begin (), live.end (), this), live.end ());
+			return;
+		}
 		fbFlash = false;
 		VECTOR3 rel = fbVel - air;
 		fbV0 = length (rel);
@@ -1536,6 +1601,7 @@ void VDebris::Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 
 		fbVel += up * ((rise - dotp (rel, up)) * (1.0 - exp (-3.0 * dt)));
 	}
 	fbPos += fbVel * dt;
+	fbPosT = oapiGetSimTime ();
 	fbFlashPos += air * dt;
 	if (flash) {
 		// its foot: the surface below it (known from its first step), where
@@ -1676,7 +1742,7 @@ void VDebris::Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 
 			}
 		}
 	}
-	if (u < 1.0 && !vol) {
+	if (u < 1.0 && spriteW > 0.001) {
 		// (dim each and tinted towards orange: they overlap by the dozen.
 		// Brighter while it burns hard (the first half), dimmer as it dies)
 		// (particles by its size; many smaller ones: a few hundred large
@@ -1697,7 +1763,7 @@ void VDebris::Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 
 			// (cooling as it burns out: its late flames born darker, a dull red
 			// seen through its soot by t_f, not an orange ball to the end)
 			double heat = std::clamp (1.0 - (u - 0.3) / 0.9, 0.3, 1.0);
-			e.alpha = (0.3 + 0.3 * hard) * (0.5 + 0.5 * heat), e.slowdown = slow;
+			e.alpha = (0.3 + 0.3 * hard) * (0.5 + 0.5 * heat) * spriteW, e.slowdown = slow;
 			e.emissive = true, e.ramp = true, e.erode = true;
 			e.tinted = true, e.albedo[0] = (float)sqrt (heat), e.albedo[1] = (float)(0.58 * heat), e.albedo[2] = (float)(0.12 * heat * heat);
 			e.cls = ParticleSystem::Class::Fire;
@@ -1724,7 +1790,7 @@ void VDebris::Fireball (double dt, double rho, const VECTOR3 &up, const VECTOR3 
 				e.v0 = 0.05 * R, e.spread = 0.5 * r * std::max (slow, 1.0);
 				e.lifetime = std::max (0.18 * tf, 0.25);
 				e.size = 0.25 * r * sz, e.growth = 0.4 * r / e.lifetime * sz;
-				e.alpha = 1.0 * hard, e.slowdown = slow;
+				e.alpha = 1.0 * hard * spriteW, e.slowdown = slow;
 				e.emissive = true, e.ramp = true, e.erode = true;
 				e.tinted = true, e.albedo[0] = 1.0f, e.albedo[1] = 0.8f, e.albedo[2] = 0.45f; // (hotter: towards yellow-white)
 				e.cls = ParticleSystem::Class::Fire;
@@ -2042,11 +2108,12 @@ void VDebris::CollectFireballs (FireballRenderer &fr)
 		fr.Add (b);
 		return;
 	}
-	if (!fbVolume) return;
+	if (!fbVolume && fbVolFade <= 0.0) return; // (or fading out to sprites)
 	double t = oapiGetSimTime () - fbT0;
 	if (t < 0.0 || t > 1.8 * fbTf || fbRNow <= 0.0) return;
 	FireballRenderer::Ball b;
 	b.owner = id;
+	b.fade = fbVolFade;
 	// (formed on the ground or the sea: a ball resting on it, not a dome cut
 	// by it - its centre raised to 0.7 r above where it formed, rising on
 	// from there)

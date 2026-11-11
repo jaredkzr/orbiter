@@ -1,0 +1,32 @@
+BEGIN_DESC
+Benchmark: a DG (V1; the focus OBS elsewhere, so that no flight-over menu pauses the sim) with 7 t of propellant dives into the Atlantic at 40 m/s (Script Bench/crash): the crash explosion's budget (budget.py Crash).
+END_DESC
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Bench/crash
+END_ENVIRONMENT
+BEGIN_FOCUS
+  Ship OBS
+END_FOCUS
+BEGIN_CAMERA
+  TARGET V1
+  MODE Extern
+  POS 2.6 120 -12
+  TRACKMODE TargetRelative
+  FOV 45.00
+END_CAMERA
+BEGIN_SHIPS
+V1:DeltaGlider
+  STATUS Landed Earth
+  POS -70.0000 28.0000
+  HEADING 90.00
+  GEAR 0 0.0000
+  PRPLEVEL 0:0.500 1:1.000 2:0.500
+END
+OBS:ShuttlePB
+  STATUS Landed Earth
+  POS -70.0300 28.0300
+  HEADING 0.00
+END
+END_SHIPS

@@ -3,6 +3,7 @@
 re-based on the break-up, a labelled contact sheet; optionally a video and frame times.
 
   run.py SCENE OUTDIR [--video PRE POST] [--ft] [--size WxH] [--times t,t,...] [--tag NAME] [--pausecheck T]
+         [--warp K] [--cut T] [--pull T D0 D1 DUR]
 
 SCENE: sea land night small large midair vacuum (SCENES below). The break-up is the
 first frame with 3 pieces of debris or more (oapi.get_debriscount(): a piece or two
@@ -11,7 +12,12 @@ breaking off before it are not it - the land crash loses a section 0.25 s before
 --video PRE POST: every frame from PRE s before the break-up to POST s after,
 OUTDIR/video/f_NNNNN.png (then video.sh). --ft: ORBITER_VK_PROFILE=1 +
 ORBITER_VK_FRAMETIMES=OUTDIR/frames.ft (perf.py). The Orbiter log is copied to
-OUTDIR/orbiter.log. The sim pauses 4 s after the focus vessel is destroyed (the
+OUTDIR/orbiter.log. --warp K: time acceleration K from the break-up on (the stills by
+simulation time then). --cut T: at T s after the break-up the camera cuts to the scene's
+other observer (fx_crash.lua CUT_*, CUT_T), eight frames from one before the cut OUTDIR/cut_N.png.
+--pull T D0 D1 DUR: from T s after the break-up the observer is pulled back from D0 to D1 m
+(geometrically) over DUR s (fx_crash.lua PULL_*; with --video: the LOD sweep). Both are done
+by the scenario script (the remote's lua runs in its own interpreter). The sim pauses 4 s after the focus vessel is destroyed (the
 flight-over menu): unpaused every frame after the break-up.
 """
 import json, os, shutil, subprocess, sys, time
@@ -39,7 +45,22 @@ SCENES = {
     # (the sea crash from 60 m aside, 72 m from the crash, a wider view: the fireball's surface close up)
     "close":  ("fx_sea", dict(CRASH, CAM_X="-60", CAM_Z="39", CAM_FOV="70", CAM_THT="16", CAM_PHI="-72")),
     "small":  ("fx_small", dict(CRASH, SPEED="70", DIVE="15", CAM_X="-120", CAM_Z="150", CAM_Y="5")),
+    # (the DG with 300 kg of propellant: the small end - phase 6)
+    "small300": ("fx_small300", dict(CRASH, SPEED="70", DIVE="15", CAM_X="-120", CAM_Z="150", CAM_Y="5")),
     "large":  ("fx_large", dict(CRASH, SPEED="60", ALT="60", CAM_X="-600", CAM_Z="250", CAM_Y="20", CAM_THT="8", CAM_PHI="-100")),
+    # (the Atlantis with 100 t aboard (VkTest_Atlantis): R 85 m on the sea, 95 m on land; the observer 450 m aside - phase 6)
+    "large100": ("fx_large100", dict(CRASH, SPEED="60", ALT="60", CAM_X="-450", CAM_Z="200", CAM_Y="12", CAM_THT="10", CAM_PHI="-102", CAM_FOV="50")),
+    "large100l": ("fx_large100l", dict(CRASH, SPEED="60", ALT="60", GROUND_REL="1", CAM_X="-450", CAM_Z="200", CAM_Y="12", CAM_THT="10", CAM_PHI="-102", CAM_FOV="50")),
+    # (two DGs side by side, 90 m apart, into the sea: two fireballs at once; "twinmerge" 30 m apart: they merge - phase 6)
+    "twin":   ("fx_twin", dict(CRASH, SEP="90", SEP_SPEED="50", CAM_X="5", CAM_Z="-230", CAM_Y="10", CAM_PHI="-9", CAM_THT="2", CAM_FOV="55")),
+    "twinmerge": ("fx_twin", dict(CRASH, SEP="20", SEP_SPEED="50", CAM_X="-200", CAM_Z="130", CAM_PHI="-97", CAM_THT="4", CAM_FOV="45")),
+    # (the sea crash with a second observer on the other side for a camera cut: --cut T)
+    "seacut": ("fx_sea", dict(CRASH, CUT_X="170", CUT_Z="110", CUT_Y="8", CUT_PHI="97", CUT_THT="4")),
+    # (the sea crash seen from 200 m, 1 km, 3 km and 8 km: the LOD levels - phase 6)
+    "lod200": ("fx_sea", dict(CRASH, CAM_X="-200", CAM_Z="130", CAM_PHI="-97", CAM_THT="4")),
+    "lod1k":  ("fx_sea", dict(CRASH, CAM_X="-1000", CAM_Z="650", CAM_PHI="-97", CAM_THT="1")),
+    "lod3k":  ("fx_sea", dict(CRASH, CAM_X="-3000", CAM_Z="1950", CAM_PHI="-97", CAM_THT="0.3")),
+    "lod8k":  ("fx_sea", dict(CRASH, CAM_X="-8000", CAM_Z="5200", CAM_PHI="-97", CAM_THT="0", CAM_Y="12")),
     # (two DGs collide at 300 m, 150 m/s: a ground observer 250 m aside, 60 m below)
     "midair": ("midair", dict(CAM="ground", CAM_FOV="50")),
     # (the same at 300 m/s: the trails of fast pieces - phase 5)
@@ -57,7 +78,7 @@ SCENES = {
 
 def install():
     # (the harness' scratch scenes and scripts into the build tree: gitignored there)
-    for sub, dst in (("Scenarios", "Scenarios/VkTest"), ("Script", "Script/VkTest")):
+    for sub, dst in (("Scenarios", "Scenarios/VkTest"), ("Script", "Script/VkTest"), ("Config/Vessels", "Config/Vessels")):
         src = os.path.join(HERE, "harness", sub)
         for f in os.listdir(src):
             shutil.copy(os.path.join(src, f), os.path.join(BUILD, dst, f))
@@ -91,9 +112,13 @@ def main():
     scene, outdir = a[0], os.path.abspath(a[1])
     video, ft, size, times, tag = None, False, "1280x720", TIMES, None
     pausecheck = None  # (s after the break-up: paused there, three frames apart, OUTDIR/pause_N.png)
+    warp, cut, pull = None, None, None
     i = 2
     while i < len(a):
         if a[i] == "--video": video = (float(a[i + 1]), float(a[i + 2])); i += 2
+        elif a[i] == "--warp": warp = float(a[i + 1]); i += 1
+        elif a[i] == "--cut": cut = float(a[i + 1]); i += 1
+        elif a[i] == "--pull": pull = (float(a[i + 1]), float(a[i + 2]), float(a[i + 3]), float(a[i + 4])); i += 4
         elif a[i] == "--ft": ft = True
         elif a[i] == "--size": size = a[i + 1]; i += 1
         elif a[i] == "--times": times = [float(x) for x in a[i + 1].split(",")]; i += 1
@@ -105,6 +130,8 @@ def main():
     os.makedirs(outdir)
     install()
     os.environ.update(env)
+    if cut is not None: os.environ["CUT_T"] = str(cut)
+    if pull is not None: os.environ.update(PULL_T=str(pull[0]), PULL_D0=str(pull[1]), PULL_D1=str(pull[2]), PULL_DUR=str(pull[3]))
     os.environ.update(ORBCTL_MEMMAX=os.environ.get("ORBCTL_MEMMAX", "6G"), ORBITER_VK_HIDE_UI="1",
                       ORBITER_VK_CUT_LOG="1", ORBITER_VK_FIREBALL_LOG="1", ORBITER_VK_PARTICLE_STATS="1", ORBITER_VK_JOLT_LOG="1")
     if ft:
@@ -127,6 +154,8 @@ def main():
     pre, post = video if video else (0.0, 0.0)
     end = max(max(times), post) + 0.2
     snaps = {}
+    pending = []   # (--warp: the stills still to take, by simulation time after the break-up)
+    simt = None
     vid = os.path.join(outdir, "video")
     if video: os.makedirs(vid)
     ring = []   # (the frames before the break-up kept for the video: PRE s of them)
@@ -140,6 +169,10 @@ def main():
                     tb, simtb = frame, float(st)
                     print(f"break-up at frame {frame} sim {simtb:.3f} wall {time.time()-t0:.0f} s", flush=True)
                     snaps = {round(tb + t * FPS): (f"s{k:02d}", t) for k, t in enumerate(times)}
+                    if warp:
+                        req(f"lua oapi.set_tacc({warp})")
+                        pending = sorted(((t, f"s{k:02d}") for k, t in enumerate(times)))
+                        snaps = {}
                     # (the frames kept before it, renamed in order)
                     for p in ring: os.rename(p, os.path.join(vid, f"f_{nv:05d}.png")); nv += 1
                     ring = []
@@ -151,8 +184,20 @@ def main():
                     req("wait 4"); req("screenshot " + os.path.join(outdir, f"pause_{k}.png"))
             if tb is not None:
                 req("lua oapi.set_pause(false)")
-                if frame - tb > end * FPS: break
-            if tb is not None and frame in snaps:
+                if warp:
+                    q = req("eval oapi.get_simtime()")
+                    simt = float(q.get("result", simtb)) - simtb
+                    if simt > end + 1.0: break
+                elif frame - tb > end * FPS: break
+            if tb is not None and cut is not None and frame == tb + round(cut * FPS) - 1:
+                for k in range(8):
+                    req("screenshot " + os.path.join(outdir, f"cut_{k}.png"))
+                frame += 8
+            if warp and pending and simt is not None and simt >= pending[0][0]:
+                t, name = pending.pop(0)
+                req("screenshot " + os.path.join(outdir, name + ".png"))
+                snaps[frame] = (name, t)
+            elif tb is not None and frame in snaps:
                 req("screenshot " + os.path.join(outdir, snaps[frame][0] + ".png"))
             elif video and (tb is None or frame - tb <= post * FPS):
                 if tb is None:

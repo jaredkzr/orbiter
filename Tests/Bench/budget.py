@@ -13,6 +13,11 @@ For each flight found in out_dir (<name>.ft, <name>.log):
     LaunchNight  the same at night (the flames light the smoke): the same budget
     Launch8      the same at density 8:                 time reported only
     LaunchFar    T 0-240 s, from 42 km (nothing within 22 km): <= 0.25 ms median
+    Crash        0-12 s after the break-up (the log's "bench: crash at"), a DG
+                 with 7 t of propellant into the sea, observer 170 m aside: the
+                 whole explosion (particles + the fireball's passes "fb *")
+                 <= 5.0 ms in its peak frame, the fireball's passes alone
+                 <= 2.0 ms in theirs (out/fx-explosion/PLAN.md 8.1, decision 8)
 - the pool's health from the ORBITER_VK_PARTICLE_STATS lines: allocation
   failures and dropped emissions summed: must be 0 (all flights).
 Exit status 1 if any check fails.
@@ -21,12 +26,15 @@ import argparse, os, re, sys
 
 SKIP = 60
 PT = ["pt update", "pt emit", "pt shadow", "pt light", "pt volume", "pt sort", "pt march half", "particles", "pt march", "pt sprites"]
+FB = ["fb grid", "fb march", "fb comp"]  # (the crash fireball's passes: FireballRenderer)
 FLIGHTS = {  # name: (t0, t1, median budget, p95 budget)
 	"Launch": (0.0, 60.0, 0.85, 1.05),
 	"LaunchNight": (0.0, 60.0, 0.85, 1.05),
 	"Launch8": (0.0, 60.0, None, None),
 	"LaunchFar": (0.0, 240.0, 0.25, None),
+	"Crash": ("crash", 12.0, None, None),  # (t0 from the log; the peak-frame budgets: CRASH_PEAK, CRASH_FB)
 }
+CRASH_PEAK, CRASH_FB = 5.0, 2.0  # [ms] the explosion's peak frame (particles + fireball); the fireball's passes' peak
 
 def pct(xs, q):
 	s = sorted(xs)
@@ -34,7 +42,8 @@ def pct(xs, q):
 	k = (len(s) - 1) * q; i = int(k)
 	return s[i] if i + 1 >= len(s) else s[i] + (s[i + 1] - s[i]) * (k - i)
 
-def particle_ms(path, t0, t1):
+def particle_ms(path, t0, t1, keys=PT, fb=None):
+	# (fb: a list the fireball passes' sum per frame is appended to)
 	out = []
 	for i, ln in enumerate(open(path)):
 		p = ln.split()
@@ -44,8 +53,15 @@ def particle_ms(path, t0, t1):
 		marks = dict()
 		for k, v in re.findall(r"([A-Za-z][A-Za-z ]*?)=([\d.]+)", " ".join(ln.split(" CPU render")[0].split()[4:])):
 			marks[k.strip()] = marks.get(k.strip(), 0.0) + float(v)
-		out.append(sum(marks.get(k, 0.0) for k in PT))
+		out.append(sum(marks.get(k, 0.0) for k in keys))
+		if fb is not None: fb.append(sum(marks.get(k, 0.0) for k in FB))
 	return out
+
+def crash_time(path):
+	for ln in open(path, errors="replace"):
+		m = re.search(r"bench: crash at ([\d.]+)", ln)
+		if m: return float(m.group(1))
+	return None
 
 def pool_health(path):
 	fails = dropped = lines = 0
@@ -66,9 +82,22 @@ def main():
 		ft, log = os.path.join(a.dir, name + ".ft"), os.path.join(a.dir, name + ".log")
 		if not os.path.exists(ft): continue
 		found += 1
-		ms = particle_ms(ft, t0, t1)
-		med, p95 = pct(ms, 0.5), pct(ms, 0.95)
 		res = []
+		if t0 == "crash":
+			tc = crash_time(log) if os.path.exists(log) else None
+			if tc is None:
+				print(f"{name:10s}: no 'bench: crash at' in the log FAIL"); ok = False; continue
+			fbms = []
+			ms = particle_ms(ft, tc, tc + t1, PT + FB, fbms)
+			t0, t1 = tc, tc + t1
+			peak, fbpeak = max(ms), max(fbms)
+			good = peak <= CRASH_PEAK * a.scale
+			res.append(f"explosion peak frame {peak:.2f} ms (<= {CRASH_PEAK * a.scale:.1f}) {'ok' if good else 'OVER'}"); ok &= good
+			good = fbpeak <= CRASH_FB * a.scale
+			res.append(f"fireball passes peak {fbpeak:.2f} ms (<= {CRASH_FB * a.scale:.1f}) {'ok' if good else 'OVER'}"); ok &= good
+		else:
+			ms = particle_ms(ft, t0, t1)
+		med, p95 = pct(ms, 0.5), pct(ms, 0.95)
 		if bmed is not None:
 			good = med <= bmed * a.scale
 			res.append(f"median {med:.3f} ms (<= {bmed * a.scale:.2f}) {'ok' if good else 'OVER'}"); ok &= good

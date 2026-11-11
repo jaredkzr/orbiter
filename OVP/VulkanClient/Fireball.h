@@ -21,6 +21,7 @@
 
 #include "VkContext.h"
 #include "VkMath.h"
+#include <functional>
 #include <vector>
 
 class FireballRenderer {
@@ -28,6 +29,8 @@ public:
 	static constexpr uint32_t MAX_MARCHED = 4;          ///< fireballs marched at once (the others: sprites)
 	static constexpr uint32_t GX = 96, GY = 96, GZ = 112; ///< grid size (x along its path, y across, z up)
 	static constexpr double MIN_PIXELS = 12.0;          ///< marched from this screen radius [pixels] up (below: sprites)
+	static constexpr double KEEP_PIXELS = 8.0;          ///< one marched stays marched down to this (hysteresis: no flicker at the threshold)
+	static constexpr double DRAW_PIXELS = 5.0;          ///< one fading out to sprites is still drawn down to this
 
 	/// one fireball of this frame (filled by its visual: VDebris)
 	struct Ball {
@@ -48,6 +51,7 @@ public:
 		// then a pale vapour shell fading (r: the box's; t over tf = 0.4 s)
 		bool vacuum = false;
 		double shell = 0.0, width = 1.0;
+		double fade = 1.0;    // its volume's weight (0..1): cross-faded with its sprites as it switches (phase 6)
 	};
 	/// the model's temperatures at u = t / t_f: the hottest gas (its core)
 	/// and its surface (the mixing layer) [K] (fireball_grid.comp)
@@ -60,16 +64,22 @@ public:
 	bool Init (vkc::Context *ctx, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout,
 		VkImageView shapeNoise, VkImageView detailNoise);
 	void Shutdown ();
+	/// the graphics settings (Fireballs: sprites, volumetric, full resolution; live)
+	void ApplySettings ();
 	/// start collecting this frame's fireballs (before the visuals' CollectFireballs)
 	void BeginFrame (double pxPerRad);
 	/// add a fireball of this frame (marched if among the MAX_MARCHED largest on screen)
 	void Add (const Ball &b);
 	/// a fireball of R [m] at dist [m] is to be marched (not sprites): large
-	/// enough on screen, and marched in the last frame or room for it
+	/// enough on screen (with hysteresis), not at a time warp beyond 100x,
+	/// and marched in the last frame or room for it
 	bool WantsVolume (uint32_t owner, double R, double dist) const;
-	/// the prepass (view depth) the march stops at; the half-size images
-	/// made again with the swapchain: true (then OcclusionView changed)
-	bool SetPrepass (VkImageView prepass);
+	/// the prepass (view depth) the march stops at (each frame, first: the
+	/// settings applied, the half-size images made when first wanted and
+	/// with the swapchain - onOcclusion told of the new OcclusionView)
+	void SetPrepass (VkImageView prepass);
+	/// told when OcclusionView changes (the sprites' sets)
+	std::function<void (VkImageView)> onOcclusion;
 	/// the grids (compute; outside rendering scopes, after the frame's uniforms)
 	void Compute (VkDescriptorSet frameSet);
 	/// the march at half resolution into its own images (outside rendering scopes)
@@ -78,14 +88,16 @@ public:
 	/// the smoke volume in front (its integral: fog, its sampler; null: none)
 	void Draw (VkDescriptorSet frameSet, VkImageView fog, VkSampler fogSampler);
 	/// half-size image: inverse view depth where the fireballs begin (r) and
-	/// turn opaque (g), their transmittance (a); valid when Drawn ()
-	VkImageView OcclusionView () const { return halfOcc.view; }
+	/// turn opaque (g), their transmittance (a); valid when Drawn () (a 1x1
+	/// "nothing" while no fireball has been marched for two minutes)
+	VkImageView OcclusionView () const { return halfAlloc ? halfOcc.view : dummyOcc.view; }
 	bool Drawn () const { return drawn; }
 	uint32_t Count () const { return (uint32_t)list.size (); }
 	/// their share of the view (exposure metering: they count partly)
 	double ScreenShare () const { return share; }
 
-	bool enabled = true; ///< ORBITER_VK_FIREBALL=sprites: the sprites (off)
+	bool enabled = true; ///< the setting (ORBITER_VK_FIREBALL=sprites: off - the sprites)
+	bool fullRes = false; ///< marched at the full resolution (the setting's "full resolution")
 
 private:
 	struct Params;
@@ -97,6 +109,7 @@ private:
 	double pxPerRad = 1000.0;
 	double share = 0.0;
 	bool drawn = false, computed = false;
+	mutable bool wanted = false;       // (a fireball asked to be marched since the last frame: the images needed)
 	vkc::Buffer buf;                   // Params per frame slot and fireball
 	vkc::Image gridA, gridB, gridC;    // density, temperature, soot; sun and sky optical depth; noise coordinates (a slab per fireball)
 	bool gridAlloc = false;
@@ -115,10 +128,12 @@ private:
 	VkDescriptorSetLayout marchSetLayout = VK_NULL_HANDLE;
 	VkPipelineLayout marchLayout = VK_NULL_HANDLE;
 	VkPipeline marchPipe = VK_NULL_HANDLE;
-	vkc::Image halfColor, halfMask, halfOcc, halfDepth;
+	vkc::Image halfColor, halfMask, halfOcc, halfDepth, dummyOcc;
 	VkExtent2D halfExtent{};
-	uint32_t halfGen = ~0u;
-	void CreateHalf ();
+	bool halfAlloc = false, halfFull = false;
+	uint32_t halfGen = 0, halfSwapGen = ~0u; // (made the halfGen'th time; with the swapchain of halfSwapGen)
+	void AllocHalf ();
+	void FreeHalf ();
 	// composite
 	VkDescriptorSetLayout compoSetLayout = VK_NULL_HANDLE;
 	VkPipelineLayout compoLayout = VK_NULL_HANDLE;

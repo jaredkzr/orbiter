@@ -325,6 +325,7 @@ bool Scene::Init ()
 	if (rt->Enabled ()) particles->InitRT (frameLayout, rt->SetLayout(), rt->TextureLayout(), atm->SetLayout());
 	fireballs = std::make_unique<FireballRenderer>();
 	fireballs->Init (ctx, frameLayout, atm->SetLayout(), vclouds->ShapeNoiseView (), vclouds->DetailNoiseView ());
+	fireballs->onOcclusion = [this](VkImageView v) { particles->SetFireballOcclusion (v); };
 	particles->SetFireballOcclusion (fireballs->OcclusionView ());
 	plumes->rayCast = [this](uint32_t owner, const VECTOR3 &vo, const VECTOR3 &vd, double maxDist, double &t, VECTOR3 &vn, int *kind) {
 		VECTOR3 o = camPos + mul (camRot, vo), d = mul (camRot, vd);
@@ -2105,7 +2106,7 @@ void Scene::BeginFrame ()
 	// (before any of their sets are bound in this frame's commands)
 	plumes->SetPrepass (ao->PrepassView ());
 	particles->SetPrepass (ao->PrepassView ());
-	if (fireballs->SetPrepass (ao->PrepassView ())) particles->SetFireballOcclusion (fireballs->OcclusionView ());
+	fireballs->SetPrepass (ao->PrepassView ()); // (the settings applied, the half-size images made when first wanted; particles told of OcclusionView)
 	tracks->BeginFrame (fi, camPos, camRot);
 	if (rt) rt->BeginFrame ();
 	ctx->GpuMark ("begin");

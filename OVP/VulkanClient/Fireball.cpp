@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "Fireball.h"
+#include "GfxSettings.h"
 #include "OrbiterAPI.h"
 #include <algorithm>
 #include <cmath>
@@ -85,7 +86,7 @@ bool FireballRenderer::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout,
 {
 	ctx = c;
 	shapeView = shapeNoise, detailView = detailNoise;
-	if (const char *e = getenv ("ORBITER_VK_FIREBALL")) enabled = strcmp (e, "sprites") != 0;
+	ApplySettings ();
 	buf = ctx->CreateBuffer (sizeof(Params) * MAX_MARCHED * vkc::FRAMES_IN_FLIGHT, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
 	memset (buf.mapped, 0, sizeof(Params) * MAX_MARCHED * vkc::FRAMES_IN_FLIGHT);
 
@@ -282,20 +283,43 @@ bool FireballRenderer::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout,
 		vci.image = dummyFog.image, vci.viewType = VK_IMAGE_VIEW_TYPE_3D, vci.format = ici.format;
 		vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
 		VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &dummyFog.view));
-		VkImage im = dummyFog.image;
-		ctx->ImmediateSubmit ([im](VkCommandBuffer cmd) {
-			vkc::ImageBarrier (cmd, im, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-				VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+		// (and no fireball marched: the sprites' occlusion image while the
+		// half-size images are not allocated - nothing begins, transmittance 1)
+		ici.imageType = VK_IMAGE_TYPE_2D;
+		VK_CHECK(vmaCreateImage (ctx->allocator, &ici, &aci, &dummyOcc.image, &dummyOcc.alloc, nullptr));
+		vci.image = dummyOcc.image, vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &dummyOcc.view));
+		VkImage im = dummyFog.image, im2 = dummyOcc.image;
+		ctx->ImmediateSubmit ([im, im2](VkCommandBuffer cmd) {
 			VkClearColorValue cv{};
 			cv.float32[3] = 1.0f;
 			VkImageSubresourceRange rr{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+			vkc::ImageBarrier (cmd, im, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+				VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
 			vkCmdClearColorImage (cmd, im, VK_IMAGE_LAYOUT_GENERAL, &cv, 1, &rr);
 			vkc::ImageBarrier (cmd, im, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
 				VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+			vkc::ImageBarrier (cmd, im2, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+			vkCmdClearColorImage (cmd, im2, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cv, 1, &rr);
+			vkc::ImageBarrier (cmd, im2, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+				VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 		});
 	}
-	CreateHalf ();
+	// (the half-size images: made when the first fireball is marched,
+	// released with the grids two minutes after the last - AllocHalf)
 	return true;
+}
+
+void FireballRenderer::ApplySettings ()
+{
+	// (the graphics settings' Fireballs, live; the environment's
+	// ORBITER_VK_FIREBALL overrides it there; ORBITER_VK_FIREBALL_FULLRES=1
+	// as before phase 6: the full resolution)
+	const vkc::GfxSettings &g = vkc::Gfx ();
+	enabled = g.fireballs != vkc::GfxSettings::FIREBALL_SPRITES;
+	static const bool envFull = getenv ("ORBITER_VK_FIREBALL_FULLRES") && atoi (getenv ("ORBITER_VK_FIREBALL_FULLRES"));
+	fullRes = envFull || g.fireballs == vkc::GfxSettings::FIREBALL_FULL;
 }
 
 void FireballRenderer::Shutdown ()
@@ -308,19 +332,17 @@ void FireballRenderer::Shutdown ()
 	vkDestroyDescriptorPool (ctx->device, pool, nullptr);
 	for (VkDescriptorSetLayout l : { compSetLayout, marchSetLayout, compoSetLayout }) if (l) vkDestroyDescriptorSetLayout (ctx->device, l, nullptr);
 	for (VkSampler s : { linearClamp, repeatSampler, nearestClamp }) if (s) vkDestroySampler (ctx->device, s, nullptr);
-	for (vkc::Image *im : { &halfColor, &halfMask, &halfOcc, &halfDepth, &dummyFog }) ctx->DestroyImage (*im);
+	for (vkc::Image *im : { &halfColor, &halfMask, &halfOcc, &halfDepth, &dummyFog, &dummyOcc }) ctx->DestroyImage (*im);
 	ctx->DestroyBuffer (buf);
 	ctx = nullptr;
 }
 
-void FireballRenderer::CreateHalf ()
+void FireballRenderer::AllocHalf ()
 {
-	vkDeviceWaitIdle (ctx->device);
-	for (vkc::Image *im : { &halfColor, &halfMask, &halfOcc, &halfDepth }) ctx->DestroyImage (*im);
-	// (ORBITER_VK_FIREBALL_FULLRES=1: marched at the full resolution)
-	static const bool full = getenv ("ORBITER_VK_FIREBALL_FULLRES") && atoi (getenv ("ORBITER_VK_FIREBALL_FULLRES"));
+	// (within the frame: no wait - the images are new; FreeHalf defers)
 	VkExtent2D e = ctx->RenderExtent ();
-	halfExtent = full ? e : VkExtent2D{ (e.width + 1) / 2, (e.height + 1) / 2 };
+	halfFull = fullRes;
+	halfExtent = halfFull ? e : VkExtent2D{ (e.width + 1) / 2, (e.height + 1) / 2 };
 	auto create = [this](VkFormat fmt, VkImageUsageFlags usage, VkImageAspectFlags aspect) {
 		vkc::Image im;
 		VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
@@ -346,15 +368,27 @@ void FireballRenderer::CreateHalf ()
 	halfOcc = create (OCC_FORMAT, CU, VK_IMAGE_ASPECT_COLOR_BIT);
 	halfDepth = create (ctx->depthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
 	// (shader-read between uses: the sprites may sample the occlusion before the first march)
-	VkImage ims[3] = { halfColor.image, halfMask.image, halfOcc.image };
-	ctx->ImmediateSubmit ([ims](VkCommandBuffer cmd) {
-		for (VkImage im : ims)
-			vkc::ImageBarrier (cmd, im, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-				VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-	});
-	halfGen = ctx->SwapchainGeneration ();
-	prepassView = VK_NULL_HANDLE; // (the sets written again with the prepass)
+	VkCommandBuffer cmd = ctx->Cmd ();
+	for (VkImage im : { halfColor.image, halfMask.image, halfOcc.image })
+		vkc::ImageBarrier (cmd, im, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+	halfAlloc = true;
+	halfGen++;
+	halfSwapGen = ctx->SwapchainGeneration ();
 	for (auto &g : compoGen) g = ~0u;
+	if (onOcclusion) onOcclusion (OcclusionView ());
+}
+
+void FireballRenderer::FreeHalf ()
+{
+	if (!halfAlloc) return;
+	vkc::Image a = halfColor, b = halfMask, c = halfOcc, d = halfDepth;
+	vkc::Context *cx = ctx;
+	ctx->DeferDestroy ([cx, a, b, c, d]() mutable { cx->DestroyImage (a); cx->DestroyImage (b); cx->DestroyImage (c); cx->DestroyImage (d); });
+	halfColor = halfMask = halfOcc = halfDepth = vkc::Image{};
+	halfAlloc = false;
+	drawn = false;
+	if (onOcclusion) onOcclusion (OcclusionView ());
 }
 
 void FireballRenderer::AllocGrids ()
@@ -432,10 +466,14 @@ void FireballRenderer::FreeGrids ()
 	gridAlloc = false;
 }
 
-bool FireballRenderer::SetPrepass (VkImageView prepass)
+void FireballRenderer::SetPrepass (VkImageView prepass)
 {
-	bool remade = false;
-	if (halfGen != ctx->SwapchainGeneration ()) CreateHalf (), remade = true;
+	ApplySettings ();
+	// the half-size images: with the swapchain and the resolution chosen;
+	// made when a fireball first asks to be marched (WantsVolume, in the
+	// visuals' update before this), released with the grids (Compute)
+	if (halfAlloc && (halfSwapGen != ctx->SwapchainGeneration () || halfFull != fullRes)) FreeHalf ();
+	if (wanted && !halfAlloc && enabled) AllocHalf ();
 	if (prepass != prepassView) {
 		// (the march set is bound by no frame in flight while it is written:
 		// a new prepass comes with a new swapchain, after an idle wait)
@@ -444,7 +482,6 @@ bool FireballRenderer::SetPrepass (VkImageView prepass)
 		WriteMarchSet ();
 		for (auto &g : compoGen) g = ~0u;
 	}
-	return remade;
 }
 
 void FireballRenderer::BeginFrame (double pxr)
@@ -458,15 +495,23 @@ void FireballRenderer::BeginFrame (double pxr)
 bool FireballRenderer::WantsVolume (uint32_t owner, double R, double dist) const
 {
 	if (!enabled) return false;
-	double px = R / std::max (dist, 1.0) * pxPerRad;
-	if (px < MIN_PIXELS) return false;
-	// (marched in the last frame; or room among those and the ones told so since)
+	// (at a time warp beyond 100x the sprites: its whole life is a frame or
+	// two - PLAN.md 2.6; the model itself is right at any warp)
+	if (oapiGetTimeAcceleration () > 100.0) return false;
 	auto has = [owner](const std::vector<uint32_t> &v) { return std::find (v.begin (), v.end (), owner) != v.end (); };
-	if (has (marchedLast) || has (granted)) return true;
+	bool last = has (marchedLast);
+	// (large enough on screen: one marched stays so down to KEEP_PIXELS,
+	// one not needs MIN_PIXELS - no flicker at the threshold; the switch
+	// itself is cross-faded by its owner: Ball::fade)
+	double px = R / std::max (dist, 1.0) * pxPerRad;
+	if (px < (last ? KEEP_PIXELS : MIN_PIXELS)) return false;
+	// (marched in the last frame; or room among those and the ones told so since)
+	if (last || has (granted)) { wanted = true; return true; }
 	size_t n = granted.size ();
 	for (uint32_t o : marchedLast) n += std::find (granted.begin (), granted.end (), o) == granted.end () ? 1 : 0;
 	if (n >= MAX_MARCHED) return false;
 	granted.push_back (owner);
+	wanted = true;
 	return true;
 }
 
@@ -477,7 +522,8 @@ void FireballRenderer::Add (const Ball &b)
 	Entry en{};
 	en.b = b, en.dist = dist;
 	en.px = b.R / std::max (dist, 1.0) * pxPerRad;
-	if (en.px < MIN_PIXELS) return;
+	if (en.px < DRAW_PIXELS) return; // (one fading out to sprites is drawn below KEEP_PIXELS)
+	wanted = true;
 	list.push_back (en);
 }
 
@@ -491,13 +537,15 @@ void FireballRenderer::Compute (VkDescriptorSet frameSet)
 	granted.clear ();
 	double now = oapiGetSysTime ();
 	if (list.empty ()) {
-		// (the grids released two minutes after the last fireball)
-		if (gridAlloc && now - gridIdleSince > 120.0) FreeGrids ();
+		// (the grids and the half-size images released two minutes after
+		// the last fireball: about 70 MB and 20 MB at 1440p)
+		wanted = false;
+		if (gridAlloc && now - gridIdleSince > 120.0) FreeGrids (), FreeHalf ();
 		return;
 	}
 	gridIdleSince = now;
 	if (!gridAlloc) AllocGrids ();
-	if (!prepassView) return;
+	if (!prepassView || !halfAlloc) return;
 
 	uint32_t slot = ctx->FrameIndex ();
 	float tune[4], tuneSigma, tuneChurn, tuneFlow;
@@ -552,10 +600,19 @@ void FireballRenderer::Compute (VkDescriptorSet frameSet)
 		p.toBall[15] = 1.0f;
 		p.centre[0] = (float)b.centre.x, p.centre[1] = (float)b.centre.y, p.centre[2] = (float)b.centre.z;
 		p.boxMin[3] = (float)i;
-		// the march's step: by its size on screen (finer when large)
+		// the march's step: by its size on screen (finer when large; PLAN.md
+		// 2.6: the levels by the screen radius), and its finest noise octave
+		// (the flame's texture close up) only where it can be seen
 		double cell = std::min ({ (bmax[0] - bmin[0]) / GX, (bmax[1] - bmin[1]) / GY, (bmax[2] - bmin[2]) / GZ });
 		double px = r / std::max (en.dist, 1.0) * pxPerRad;
-		p.boxMax[3] = (float)(cell * (px > 400.0 ? 0.5 : px > 150.0 ? 0.7 : 1.0));
+		double step = px > 700.0 ? 0.5 : px > 400.0 ? 0.6 : px > 150.0 ? 0.75 : px > 60.0 ? 1.0 : 1.4;
+		// (the soot ball fading into the smoke volume's cap, 1.3-1.8 t_f: soft
+		// and thinning, its box the widest - half as coarse again by the end:
+		// the close view's widest frames were its costliest)
+		double uu = b.t / std::max (b.tf, 1e-3);
+		step *= 1.0 + 0.5 * std::clamp ((uu - 1.3) / 0.5, 0.0, 1.0);
+		p.boxMax[3] = (float)(cell * step);
+		p.asym[2] = (float)std::clamp ((px - 50.0) / 100.0, 0.0, 1.0);
 		double tf = std::max (b.tf, 1e-3), u = b.t / tf;
 		p.shape[0] = (float)r, p.shape[1] = (float)b.R, p.shape[2] = (float)e, p.shape[3] = (float)b.lift;
 		p.axis[0] = (float)ab.x, p.axis[1] = (float)ab.y, p.axis[2] = (float)ab.z, p.axis[3] = (float)b.ground;
@@ -574,7 +631,7 @@ void FireballRenderer::Compute (VkDescriptorSet frameSet)
 		p.centre[3] = (float)Ts;
 		p.heat[1] = (float)(-0.55 + 1.15 * u);
 		p.heat[2] = (float)std::clamp ((0.1 - b.t) / 0.05, 0.0, 1.0);
-		p.heat[3] = (float)std::clamp ((1.8 - u) / 0.5, 0.0, 1.0); // (the soot ball, rising, fading into the smoke volume's cap)
+		p.heat[3] = (float)(std::clamp ((1.8 - u) / 0.5, 0.0, 1.0) * std::clamp (b.fade, 0.0, 1.0)); // (the soot ball, rising, fading into the smoke volume's cap; its cross-fade with its sprites)
 		p.flow[0] = (float)b.roll;
 		p.flow[1] = 0.55f;
 		p.flow[2] = (float)(0.2 * b.t * tuneChurn); // (boiling: the warp field drifting - 0.08 left the billows frozen in place)
@@ -610,7 +667,7 @@ void FireballRenderer::Compute (VkDescriptorSet frameSet)
 			p.heat[0] = (float)(2500.0 - 1200.0 * std::clamp (b.t / 0.4, 0.0, 1.0));
 			p.centre[3] = p.heat[0];
 			p.heat[1] = 0.0f, p.heat[2] = 0.0f;
-			p.heat[3] = (float)std::clamp (1.0 - b.t / 0.4, 0.0, 1.0);
+			p.heat[3] = (float)(std::clamp (1.0 - b.t / 0.4, 0.0, 1.0) * std::clamp (b.fade, 0.0, 1.0));
 			p.flow[0] = 0.0f;
 			p.mode[0] = 1.0f, p.mode[1] = (float)b.shell, p.mode[2] = (float)b.width;
 			p.mode[3] = (float)std::clamp (1.0 - b.t / 0.08, 0.0, 1.0);

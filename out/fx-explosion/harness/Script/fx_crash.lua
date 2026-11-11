@@ -29,12 +29,25 @@ local elev = 0
 if os.getenv("GROUND_REL") then elev = oapi.surface_elevation(earth, e0.lng, e0.lat) end
 L(string.format("terrain elevation %.1f m", elev))
 st.rpos = vec.add(st.rpos, vec.mul(up, alt + elev - (e0.rad - oapi.get_size(earth))))
+local ground = st.rvel
 st.rvel = vec.add(st.rvel, vec.mul(path, speed))
 -- (the orientation in the status too: a landed vessel's status has it in the planet's frame)
 st.arot = {x=math.atan2(R.m23, R.m33), y=-math.asin(R.m13), z=math.atan2(R.m12, R.m11)}
 A:defset_status(st)
+-- (V2, if there is one: the same dive SEP m to the side - two fireballs)
+local B = nil
+pcall(function() B = vessel.get_interface("V2") end)
+if B then
+	local st2 = B:get_status(2)
+	st2.rpos = vec.add(st.rpos, vec.mul(x, tonumber(os.getenv("SEP") or "90")))
+	-- (SEP_SPEED: V2's own speed - the water entry's outcome varies with the wave it meets)
+	st2.rvel = vec.add(ground, vec.mul(path, tonumber(os.getenv("SEP_SPEED") or tostring(speed)))); st2.arot = st.arot; st2.vrot = st.vrot; st2.status = 0
+	B:defset_status(st2)
+	L(string.format("V2 placed %.1f m to the side", tonumber(os.getenv("SEP") or "90")))
+end
 proc.wait_frames(1)
 A:set_rotationmatrix(R)
+if B then B:set_rotationmatrix(R) end
 if os.getenv("VROTX") then A:set_angvel({x=tonumber(os.getenv("VROTX")), y=0, z=0}) end
 if os.getenv("CAM_X") then
 	-- a fixed observer CAM_Z m ahead along the path and CAM_X m to the side, CAM_Y up
@@ -50,6 +63,26 @@ if os.getenv("CAM_X") then
 	if os.getenv("CAM_PHI") then camGround.phi = math.rad(tonumber(os.getenv("CAM_PHI"))); camGround.tht = math.rad(tonumber(os.getenv("CAM_THT") or "0")) end
 	oapi.set_cameramode(camGround)
 	if os.getenv("CAM_FOV") then oapi.set_cameraaperture(math.rad(tonumber(os.getenv("CAM_FOV"))) / 2) end
+	-- (CUT_X/Z/Y, CUT_PHI/THT: a second observer the view cuts to CUT_T s after the break-up - run.py --cut)
+	if os.getenv("CUT_X") then
+		local cc = vec.add(vec.add(base, vec.mul(z, tonumber(os.getenv("CUT_Z") or "60"))), vec.add(vec.mul(x, tonumber(os.getenv("CUT_X"))), vec.mul(up2, tonumber(os.getenv("CUT_Y") or "4"))))
+		local cce = oapi.global_to_equ(earth, cc)
+		camCut = {mode="ground", ref="Earth", lng=math.deg(cce.lng), lat=math.deg(cce.lat), alt=tonumber(os.getenv("CUT_Y") or "4"),
+			phi=math.rad(tonumber(os.getenv("CUT_PHI") or "0")), tht=math.rad(tonumber(os.getenv("CUT_THT") or "0"))}
+	end
+	-- (camSetDist(d): the observer moved out along its bearing to d m from the crash point; PULL_T, PULL_D0,
+	-- PULL_D1, PULL_DUR: from PULL_T s after the break-up, from D0 to D1 m geometrically over DUR s - run.py --pull)
+	-- (in longitude and latitude from the start point: a global position goes stale at once - the frame
+	-- moves 30 km/s with the Earth; the offset scaled, flat over these few km)
+	local cx, cz = tonumber(os.getenv("CAM_X")), tonumber(os.getenv("CAM_Z") or "60")
+	local d0 = math.sqrt(cx * cx + cz * cz)
+	local eBase = oapi.global_to_equ(earth, base)
+	local dLng, dLat = ce.lng - eBase.lng, ce.lat - eBase.lat
+	function camSetDist(d)
+		local k = d / d0
+		camGround.lng, camGround.lat = math.deg(eBase.lng + dLng * k), math.deg(eBase.lat + dLat * k)
+		oapi.set_cameramode(camGround)
+	end
 end
 if os.getenv("ELEVATOR") then A:set_adclevel(AIRCTRL.ELEVATOR, tonumber(os.getenv("ELEVATOR"))) end
 local e00 = oapi.global_to_equ(earth, gpos(A))
@@ -65,11 +98,27 @@ while true do
 	if camGround and os.getenv("CAM_RESET_T") and not camReset and t > tonumber(os.getenv("CAM_RESET_T")) then camReset = true; oapi.set_cameramode(camGround) end
 	-- (CAM_HOLD_T: the observer re-set every frame until then - no wreck view)
 	if camGround and os.getenv("CAM_HOLD_T") and t < tonumber(os.getenv("CAM_HOLD_T")) then oapi.set_cameramode(camGround) end
+	-- (the break-up: the first frame with three pieces of debris or more, as run.py; the cut and the pull-away from it)
+	if not tbreak and oapi.get_debriscount() >= 3 then tbreak = t end
+	if tbreak and camGround then
+		local cutT, pullT = tonumber(os.getenv("CUT_T") or "-1"), tonumber(os.getenv("PULL_T") or "-1")
+		if camCut and not cutDone and cutT >= 0 and t - tbreak >= cutT then camGround = camCut; cutDone = true; L(string.format("camera cut to the second observer at +%.2f s", t - tbreak)) end
+		if pullT >= 0 and t - tbreak >= pullT then
+			local d0, d1, dur = tonumber(os.getenv("PULL_D0") or "170"), tonumber(os.getenv("PULL_D1") or "8000"), tonumber(os.getenv("PULL_DUR") or "4")
+			local f = math.min((t - tbreak - pullT) / dur, 1)
+			camSetDist(d0 * (d1 / d0) ^ f)
+		end
+	end
+	if B and math.floor(t / logdt) ~= math.floor((t - oapi.get_simstep()) / logdt) then
+		local gb = gpos(B); local eb = oapi.global_to_equ(earth, gb)
+		L(string.format("V2 t %.2f alt %.1f dist %.1f", t, eb.rad - oapi.get_size(earth), vec.length(vec.sub(gb, gpos(A)))))
+	end
 	local w = A:get_waterstate()
 	-- (HOLD: the pilot holds the attitude, wings level, until the water is touched)
 	-- (on land: until it is near the ground)
 	if os.getenv("GROUND_REL") and not firstWet and A:get_altitude(ALTMODE.GROUND) < 3 then firstWet = t end
 	if os.getenv("HOLD") and not w.wet and not firstWet then A:set_rotationmatrix(R); A:set_angvel({x=0, y=0, z=0}) end
+	if B and os.getenv("HOLD") and not firstWet then pcall(function() B:set_rotationmatrix(R); B:set_angvel({x=0, y=0, z=0}) end) end
 	peak = math.max(peak, w.accmax)
 	if w.wet and not firstWet then firstWet = t end
 	if os.getenv("TRACE") and t < tonumber(os.getenv("TRACE")) then

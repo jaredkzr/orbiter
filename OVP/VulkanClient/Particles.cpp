@@ -1398,6 +1398,7 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 		} else if (volAlloc && (smokeMode != SMOKE_VOLUME || !enabled || now - volIdleSince > 120.0)) FreeVolume (false);
 		if (!volOn || !volAlloc) volFull = true; // (stale when it is next used)
 		if (volSetDirty[fi]) WriteVolumeSets (fi);
+		if (fbOccDirty[fi]) WriteFireballOcclusion (fi);
 		ReapVolume (false);
 	}
 	lastCam = camPos, haveCam = true;
@@ -1736,16 +1737,22 @@ bool ParticleSystem::VolumeFog (VkImageView &view, VkSampler &sampler) const
 
 void ParticleSystem::SetFireballOcclusion (VkImageView view)
 {
+	// (each slot's set written at its next Simulate, before it is bound:
+	// no idle wait - the fireballs' images come and go within a frame)
 	if (view == fbOccView) return;
-	vkDeviceWaitIdle (ctx->device); // (the sets may be in use)
 	fbOccView = view;
-	VkDescriptorImageInfo ii{ volSampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-	for (uint32_t i = 0; i < vkc::FRAMES_IN_FLIGHT; i++) {
-		VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-		w.dstSet = sets[i], w.dstBinding = 48, w.descriptorCount = 1;
-		w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, w.pImageInfo = &ii;
-		vkUpdateDescriptorSets (ctx->device, 1, &w, 0, nullptr);
-	}
+	for (bool &d : fbOccDirty) d = true;
+}
+
+void ParticleSystem::WriteFireballOcclusion (uint32_t slot)
+{
+	fbOccDirty[slot] = false;
+	if (!fbOccView) return;
+	VkDescriptorImageInfo ii{ volSampler, fbOccView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+	VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+	w.dstSet = sets[slot], w.dstBinding = 48, w.descriptorCount = 1;
+	w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, w.pImageInfo = &ii;
+	vkUpdateDescriptorSets (ctx->device, 1, &w, 0, nullptr);
 }
 
 void ParticleSystem::DrawVolume (VkDescriptorSet frameSet)
