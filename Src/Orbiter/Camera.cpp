@@ -1751,7 +1751,9 @@ void Camera::KeepAboveTerrain ()
 	// where that is clear)
 	const double CLEARANCE = 2.0; // [m] above the elevation (the terrain's mesh lies between its samples)
 	const Planet *p = planet_proxy;
-	if (!p || alt_proxy > 0.05 * p->Size()) return;
+	// (a gas giant has no ground: the camera follows its target down
+	// through the decks - held at the 1-bar level it was left behind)
+	if (!p || !p->HasSurface () || alt_proxy > 0.05 * p->Size()) return;
 	ElevationManager *emgr = p->ElevMgr();
 	if (!emgr) return;
 	if (p != clampPlanet) {
