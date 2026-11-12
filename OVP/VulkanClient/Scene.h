@@ -14,6 +14,7 @@
 #include "RayTracing.h"
 #include "Plumes.h"
 #include "Plasma.h"
+#include "PlasmaTrail.h"
 #include "SkySettings.h"
 #include <algorithm>
 #include <cmath>
@@ -269,6 +270,8 @@ public:
 	class FireballRenderer *Fireballs ();
 	/// reentry plasma sheaths (null: off)
 	class PlasmaRenderer *Plasma () { return plasma && plasma->enabled ? plasma.get() : nullptr; }
+	/// reentry afterglows (the bodies' trails: laid as they move, released when they go)
+	PlasmaTrails *Trails () { return trails.get(); }
 	/// particle textures of fires and sparks (made when first needed)
 	class VkTexture *FireTexture ();
 	class VkTexture *SparkTexture ();
@@ -459,6 +462,7 @@ private:
 	std::unique_ptr<class FireballRenderer> fireballs;
 	std::unique_ptr<PlumeRenderer> plumes;
 	std::unique_ptr<class PlasmaRenderer> plasma;
+	std::unique_ptr<PlasmaTrails> trails;
 	std::unique_ptr<class ParticleSystem> particles;
 	vkc::Image reactive, reactiveMS; // (multisampled: drawn to, resolved into reactive)
 	uint32_t reactiveGen = ~0u;

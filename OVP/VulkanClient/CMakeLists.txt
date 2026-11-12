@@ -124,6 +124,13 @@ set(SHADER_SRC
 	Shaders/plume.frag
 	Shaders/plasma.vert
 	Shaders/plasma.frag
+	Shaders/plasma_flow.vert
+	Shaders/plasma_flow.frag
+	Shaders/plasma_jfa.comp
+	Shaders/plasma_vol.vert
+	Shaders/plasma_vol.frag
+	Shaders/plasma_trail.vert
+	Shaders/plasma_trail.frag
 	Shaders/plume_comp.frag
 	Shaders/fireball_grid.comp
 	Shaders/fireball_sun.comp
@@ -227,6 +234,7 @@ add_library(VulkanClient SHARED
 	ParticlePool.cpp
 	Plumes.cpp
 	Plasma.cpp
+	PlasmaTrail.cpp
 	TileArchive.cpp
 	ProcSurface.cpp
 	SurfaceQuery.cpp

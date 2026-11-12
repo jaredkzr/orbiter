@@ -166,8 +166,11 @@ private:
 	/// the reentry plasma's wake: glowing gas streaming off the sheath's
 	/// edge behind the vessel (near), and its afterglow along the path (far)
 	struct WakeRing : ParticleRing { double accum = 0.0; bool havePrev = false; VECTOR3 prev{}; };
-	WakeRing wake, afterglow;
+	WakeRing wake, flecks;
+	uint32_t trailId = 0; // its afterglow (PlasmaTrails)
 	void EmitWake (double dt);
+	/// flakes shed by the hull reentering, drifting back past it (EmitWake)
+	void EmitFlecks (const struct SheathState &sh, const VECTOR3 &vel, const VECTOR3 &air, const double ax[3], double dt);
 	/// the strongest of the vessel's legacy reentry streams (their amin/amax
 	/// over the friction power; scales the wake), -1: none
 	double LegacyReentry () const;
@@ -221,7 +224,8 @@ private:
 	// reentering: its plasma sheath (heating level 0..1, the direction of its
 	// motion through the air, global), the wake streaming off it and its
 	// afterglow (EmitPlasmaWake), molten bits ablated off it (ablate)
-	Ring pwake, pglow, ablate;
+	Ring pwake, ablate;
+	uint32_t trailId = 0; // its afterglow (PlasmaTrails)
 	float sheathLevel = 0.0f;
 	double sheathFlux = 0.0;
 	VECTOR3 sheathDir{};

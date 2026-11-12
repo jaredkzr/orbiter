@@ -1,0 +1,96 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// Reentry plasma (Plasma.cpp): the field of each flow map's tile, by jump
+// flooding from its outline (the covered texels next to uncovered ones):
+// mode 0 the seeds; 1, 2 a step (A -> B, B -> A); 3, 4 the field from A, B:
+//   r: signed distance to the outline (negative inside) [vessel sizes]
+//   g: the windward surface's s (outside: at the nearest point of the outline)
+//   b: the leeward surface's s (likewise)
+//   a: inside, the cosine of the flow's incidence on the windward surface
+
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D flowMap;
+layout(set = 0, binding = 1, r32ui) uniform uimage2D seedA;
+layout(set = 0, binding = 2, r32ui) uniform uimage2D seedB;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D field;
+
+layout(push_constant) uniform P {
+	int mode;
+	int step;
+	float wn;   // the map's half width [vessel sizes]
+	float pad;
+} pc;
+
+const int TILE = 256, ATLAS_N = 4;
+const uint NONE = 0xffffffffu;
+ivec2 org;
+
+bool In (ivec2 p) { return all (greaterThanEqual (p, ivec2 (0))) && all (lessThan (p, ivec2 (TILE))); }
+bool Covered (ivec2 p) { return In (p) && texelFetch (flowMap, org + p, 0).r < 500.0; }
+uint Load (ivec2 p, bool fromA) { return fromA ? imageLoad (seedA, org + p).r : imageLoad (seedB, org + p).r; }
+ivec2 Unpack (uint s) { return ivec2 (int (s & 0xffffu), int (s >> 16)); }
+
+void main ()
+{
+	int tile = int (gl_WorkGroupID.z);
+	org = ivec2 (tile % ATLAS_N, tile / ATLAS_N) * TILE;
+	ivec2 p = ivec2 (gl_GlobalInvocationID.xy);
+	if (pc.mode == 0) {
+		uint s = NONE;
+		if (Covered (p) && (!Covered (p + ivec2 (1, 0)) || !Covered (p - ivec2 (1, 0)) || !Covered (p + ivec2 (0, 1)) || !Covered (p - ivec2 (0, 1))))
+			s = uint (p.x) | (uint (p.y) << 16);
+		imageStore (seedA, org + p, uvec4 (s));
+		return;
+	}
+	bool fromA = pc.mode == 1 || pc.mode == 3;
+	if (pc.mode <= 2) {
+		uint best = Load (p, fromA);
+		float bd = 1e30;
+		if (best != NONE) { vec2 d = vec2 (p - Unpack (best)); bd = dot (d, d); }
+		for (int j = -1; j <= 1; j++)
+			for (int i = -1; i <= 1; i++) {
+				if (i == 0 && j == 0) continue;
+				ivec2 q = p + ivec2 (i, j) * pc.step;
+				if (!In (q)) continue;
+				uint s = Load (q, fromA);
+				if (s == NONE) continue;
+				vec2 d = vec2 (p - Unpack (s));
+				float dd = dot (d, d);
+				if (dd < bd) bd = dd, best = s;
+			}
+		if (fromA) imageStore (seedB, org + p, uvec4 (best));
+		else imageStore (seedA, org + p, uvec4 (best));
+		return;
+	}
+	// the field
+	uint s = Load (p, fromA);
+	float px = 2.0 * pc.wn / float (TILE);
+	bool cov = Covered (p);
+	vec2 fb = texelFetch (flowMap, org + p, 0).rg;
+	ivec2 sp = p;
+	float dist = 1e3;
+	if (s != NONE) sp = Unpack (s), dist = length (vec2 (p - sp));
+	// (half a texel either side of the outline: continuous across it)
+	float d = cov ? -(dist + 0.5) * px : (dist - 0.5) * px;
+	vec2 at = cov ? fb : (s != NONE ? texelFetch (flowMap, org + sp, 0).rg : vec2 (0.0));
+	float ci = 0.0;
+	if (cov) {
+		// the windward surface's slope (central differences where its
+		// neighbours are covered): the flow meets it at 1 / sqrt(1 + |grad s|^2)
+		vec2 g = vec2 (0.0);
+		for (int a = 0; a < 2; a++) {
+			ivec2 e = a == 0 ? ivec2 (1, 0) : ivec2 (0, 1);
+			bool cp = Covered (p + e), cm = Covered (p - e);
+			float fp = cp ? texelFetch (flowMap, org + p + e, 0).r : fb.r;
+			float fm = cm ? texelFetch (flowMap, org + p - e, 0).r : fb.r;
+			float n = float (int (cp) + int (cm));
+			g[a] = n > 0.0 ? (fp - fm) / (n * px) : 0.0;
+		}
+		ci = inversesqrt (1.0 + dot (g, g));
+	}
+	imageStore (field, org + p, vec4 (d, at.x, -at.y, ci));
+}

@@ -319,7 +319,9 @@ bool Scene::Init ()
 	plumes->Init (ctx, frameLayout, gc->TexMgr()->Layout(), atm->SetLayout(), vclouds->ShapeNoiseView (), vclouds->DetailNoiseView ());
 	ssr->SetPlumes (plumes->Buffer (), plumes->BufferSize (), plumes->ShapeNoise (), plumes->DetailNoise ());
 	plasma = std::make_unique<PlasmaRenderer>();
-	plasma->Init (ctx, frameLayout);
+	plasma->Init (ctx, frameLayout, vclouds->DetailNoiseView ());
+	trails = std::make_unique<PlasmaTrails>();
+	trails->Init (ctx, frameLayout);
 	particles = std::make_unique<ParticleSystem>();
 	particles->Init (ctx, gc->TexMgr(), frameLayout, atm->SetLayout(), gc->TexMgr()->Layout(), vclouds->ShapeNoiseView (), vclouds->DetailNoiseView ());
 	if (rt->Enabled ()) particles->InitRT (frameLayout, rt->SetLayout(), rt->TextureLayout(), atm->SetLayout());
@@ -513,6 +515,8 @@ void Scene::Shutdown ()
 	if (plumes) plumes->Shutdown ();
 	if (plasma) plasma->Shutdown ();
 	plasma.reset();
+	if (trails) trails->Shutdown ();
+	trails.reset();
 	plumes.reset();
 	ctx->DestroyImage (reactive);
 	ctx->DestroyImage (reactiveMS);
@@ -2106,6 +2110,7 @@ void Scene::BeginFrame ()
 	// (before any of their sets are bound in this frame's commands)
 	plumes->SetPrepass (ao->PrepassView ());
 	particles->SetPrepass (ao->PrepassView ());
+	plasma->SetPrepass (ao->PrepassView ());
 	fireballs->SetPrepass (ao->PrepassView ()); // (the settings applied, the half-size images made when first wanted; particles told of OcclusionView)
 	tracks->BeginFrame (fi, camPos, camRot);
 	if (rt) rt->BeginFrame ();
@@ -2867,19 +2872,26 @@ void Scene::Render ()
 	vkc::Target rtMS{ reactiveMS.image, reactiveMS.view, REACTIVE_FORMAT, ctx->RenderExtent () };
 	plumes->Render (FrameSet (), camAtmSet, gc->TexMgr()->White()); // (at half resolution)
 	// crash fireballs: their grids, marched at half resolution
-	if (fireballs->Count ()) ctx->EndTarget ();
+	// reentry plasma: the heated hulls' meshes seen along their flow and
+	// their fields (outside rendering scopes), marched after the plumes
+	PlasmaRenderer *pl = Plasma ();
+	if (pl) {
+		pl->Begin (FrameSet (), oapiGetSimTime ());
+		for (auto *vo : list) vo->DrawPlasma (*pl);
+	}
+	bool plasmaPrep = pl && pl->Pending ();
+	if (fireballs->Count () || plasmaPrep) ctx->EndTarget ();
+	if (plasmaPrep) pl->Prepare ();
 	fireballs->Compute (FrameSet ());
 	fireballs->Render (FrameSet (), camAtmSet);
 	particles->fireballOcc = fireballs->Drawn ();
 	ctx->BindSceneWithMask (rt, reactiveMS.image ? &rtMS : nullptr);
 	plumes->Draw (FrameSet (), camAtmSet, gc->TexMgr()->White());
 	ctx->GpuMark ("plumes");
-	// reentry plasma: the glowing shock layers ahead of heated hulls
-	if (PlasmaRenderer *pl = Plasma ()) {
-		pl->Begin (FrameSet (), oapiGetSimTime ());
-		for (auto *vo : list) vo->DrawPlasma (*pl);
-		if (pl->Count ()) ctx->GpuMark ("plasma");
-	}
+	// reentry plasma: the glowing gas around heated hulls and streaming off them
+	if (pl) pl->Draw ();
+	// their afterglows along their paths
+	if (trails) trails->Draw (FrameSet (), camPos, camRot);
 	particles->DrawVolume (FrameSet ());
 	particles->DrawScreenSmoke (FrameSet ());
 	// (over the smoke volume behind them, dimmed by its smoke in front; the
