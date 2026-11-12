@@ -151,7 +151,8 @@ void VesselSounds::Build (PerVessel &pv)
 		RocketSynth::Params rp;
 		rp.peak = RocketSynth::PeakFor (p.maxth);
 		rp.crackle = 0.3f;
-		rp.rumble = (float)std::clamp (std::log10 (p.maxth / 1e6) * 0.5 + 0.2, 0.0, 1.0);
+		rp.rumble = RocketSynth::RumbleFor (p.maxth / p.th.size ());
+		rp.pump = RocketSynth::PumpFor (p.maxth / p.th.size ());
 		synth->Set (rp);
 		c.em = world.Add (d, std::move (synth));
 		if (c.em) pv.engines.push_back (c);
@@ -215,7 +216,8 @@ void VesselSounds::UpdateVessel (PerVessel &pv)
 		rp.level = c.em->Recalled ()[0];
 		rp.peak = RocketSynth::PeakFor (c.maxth);
 		rp.crackle = 0.3f;
-		rp.rumble = (float)std::clamp (std::log10 (c.maxth / 1e6) * 0.5 + 0.2, 0.0, 1.0);
+		rp.rumble = RocketSynth::RumbleFor (c.maxth / c.th.size ());
+		rp.pump = RocketSynth::PumpFor (c.maxth / c.th.size ());
 		c.rocket->Set (rp);
 	}
 	for (auto &c : pv.rcs) {

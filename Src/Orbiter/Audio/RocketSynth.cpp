@@ -33,6 +33,20 @@ void RocketSynth::Set (const Params &p)
 	pPeak.store (std::clamp (p.peak, 10.0f, 4000.0f), std::memory_order_relaxed);
 	pCrackle.store (std::clamp (p.crackle, 0.0f, 1.0f), std::memory_order_relaxed);
 	pRumble.store (std::clamp (p.rumble, 0.0f, 1.0f), std::memory_order_relaxed);
+	pWhine.store (std::clamp (p.whine, 0.0f, 1.0f), std::memory_order_relaxed);
+	pPump.store (std::clamp (p.pump, 200.0f, 6000.0f), std::memory_order_relaxed);
+}
+
+float RocketSynth::RumbleFor (double maxThrust)
+{
+	// a DG engine (160 kN): 0.6; a launcher stage (35 MN): 1
+	return (float)std::clamp (0.6 + 0.17 * std::log10 (std::max (maxThrust, 1.0) / 1.6e5), 0.4, 1.0);
+}
+
+float RocketSynth::PumpFor (double maxThrust)
+{
+	// about 1.6 kHz for a 100 kN engine, lower for bigger ones
+	return (float)std::clamp (1600.0 * std::pow (std::max (maxThrust, 1.0) / 1e5, -0.12), 500.0, 3000.0);
 }
 
 float RocketSynth::PeakFor (double maxThrust)
@@ -62,7 +76,14 @@ void RocketSynth::Render (float *out, unsigned n, float dop)
 	hiss.HighPass (pk * 10.0f, 0.5f, rate);
 	crackHp.HighPass (std::max (300.0f, 2.0f * pk) * dop, 0.7f, rate);
 	crackShape.SetCutoff (2500.0f * dop, rate); // (rounder pops)
-	rumbleLp.LowPass (std::min (40.0f, pk) * dop, 0.7f, rate);
+	rumbleLp.LowPass (std::min (80.0f, 0.5f * pk + 20.0f) * dop, 0.9f, rate);
+	rumbleHp.HighPass (25.0f * dop, 0.7f, rate);
+	pumpWobble.SetCutoff (3.0f, rate);
+	const float whineMix = pWhine.load (std::memory_order_relaxed);
+	const float pumpF = pPump.load (std::memory_order_relaxed);
+	// the pumps: spool up with the throttle (0.7 s), wind down slowly (1.5 s)
+	const float pumpTarget = lit ? 0.55f + 0.45f * std::sqrt (std::max (lv, 0.0f)) : 0.0f;
+	pumpSpeed += (pumpTarget > pumpSpeed ? dsp::Smooth::K (0.7f, n, rate) : dsp::Smooth::K (1.5f, n, rate)) * (pumpTarget - pumpSpeed);
 	chuffBp.BandPass (pk * 2.0f, 0.8f, rate);
 	flutter.SetCutoff (4.0f * dop, rate);
 	// (white noise through the one-pole: sigma 0.577 sqrt(a/2); scaled to a
@@ -102,8 +123,18 @@ void RocketSynth::Render (float *out, unsigned n, float dop)
 		}
 		float cs = crackHp.Process (crackShape.Lp (c));
 		s += crackMix * (amp + 0.6f * burst) * cs * 2.0f;
-		// rumble
-		if (rumbleMix > 0.0f) s += rumbleMix * amp * 3.0f * rumbleLp.Process (p);
+		// rumble: the sub-bass
+		if (rumbleMix > 0.0f) s += rumbleMix * amp * 5.0f * rumbleHp.Process (rumbleLp.Process (p));
+		// the turbopumps' whine (a slow wobble of 0.3 % in pitch)
+		if (whineMix > 0.0f && pumpSpeed > 0.01f) {
+			float wob = 1.0f + 0.4f * pumpWobble.Lp (rng.White ()); // (sigma about 0.3 %)
+			float f1 = pumpF * pumpSpeed * wob * dop;
+			pumpPh1 += TWO_PI * f1 / rate;
+			pumpPh2 += TWO_PI * 2.03f * f1 / rate;
+			if (pumpPh1 > TWO_PI) pumpPh1 -= TWO_PI;
+			if (pumpPh2 > TWO_PI) pumpPh2 -= TWO_PI;
+			s += whineMix * 0.5f * pumpSpeed * pumpSpeed * (std::sin (pumpPh1) + 0.35f * std::sin (pumpPh2));
+		}
 		// ignition thump (a decaying low sine) and burst; shutdown chuff
 		if (thump > 1e-4f) {
 			thumpPh += TWO_PI * thumpF * dop / rate;

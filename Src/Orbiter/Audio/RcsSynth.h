@@ -3,10 +3,10 @@
 
 // =======================================================================
 // Attitude thrusters: a cluster of small engines firing in pulses. Each
-// pulse starts with a bang - a deep thump falling in pitch and a low whump,
-// carried by the structure (astronauts likened them to cannon shots), a
-// soft click of the valve above - and roars while it fires; it ends with a
-// softer thud.
+// pulse starts with a bang - a deep, short thump falling in pitch and a low
+// whump, carried by the structure (astronauts likened them to cannon shots),
+// a low snap of the valve at its start - and roars low while it fires; it
+// ends with a softer thud.
 // =======================================================================
 
 #ifndef __RCSSYNTH_H

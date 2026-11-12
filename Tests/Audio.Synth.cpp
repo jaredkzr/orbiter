@@ -101,10 +101,10 @@ TEST_CASE ("Rocket: level at full, silent off, ignition", "[audio][synth]")
 	CHECK_THAT (Db (rms), WithinAbs (Db (0.3), 3.0));   // (VesselSounds: ROCKET_RMS)
 	// the ignition: louder than the run, at first
 	CHECK (Rms (ign, 0, 4800) > Rms (run));
-	// off: silent after the chuff
+	// off: silent after the chuff, and the pumps wound down
 	p.level = 0.0f;
 	s->Set (p);
-	r.Take (1.5);
+	r.Take (8.0);
 	CHECK (Rms (r.Take (0.5)) < 1e-3);
 }
 
@@ -178,18 +178,67 @@ namespace {
 	}
 }
 
-TEST_CASE ("RCS: the bang is deep, not a click", "[audio][synth]")
+TEST_CASE ("RCS: the bang is deep and punchy, not a click", "[audio][synth]")
 {
 	Rig r;
 	auto s = RcsSynth::Make (r.e, 9);
-	s->Set (0.0f, 1500.0f);
+	s->Set (0.0f, 900.0f);
 	r.Attach (*s);
 	r.Take (0.3);
-	s->Set (1.0f, 1500.0f);
-	auto on = r.Take (0.1);
-	double low = BandRms (on, 0, 200, 48000), high = BandRms (on, 1000, 0, 48000);
-	INFO ("onset: below 200 Hz " << Db (low) << " dB, above 1 kHz " << Db (high) << " dB");
-	CHECK (low > 2.0 * high);
+	// a short pulse (50 ms)
+	s->Set (1.0f, 900.0f);
+	auto on = r.Take (0.05);
+	s->Set (0.0f, 900.0f);
+	auto after = r.Take (0.35);
+	on.insert (on.end (), after.begin (), after.begin () + 2400); // (the first 100 ms)
+	std::vector<float> tail (after.begin () + 7200, after.begin () + 14400); // (150-300 ms after the start... of the release)
+	double low = BandRms (on, 0, 120, 48000), high = BandRms (on, 500, 0, 48000);
+	INFO ("onset: below 120 Hz " << Db (low) << " dB, above 500 Hz " << Db (high) << " dB; tail " << Db (Rms (tail) / Rms (on)) << " dB");
+	CHECK (low > 3.0 * high);
+	// punchy: over within a few tenths of a second
+	CHECK (Rms (tail) < 0.1 * Rms (on));
+}
+
+TEST_CASE ("Rocket: a bass, and the turbopumps' whine", "[audio][synth]")
+{
+	Rig r;
+	auto s = RocketSynth::Make (r.e, 11);
+	RocketSynth::Params p;
+	p.level = 1.0f, p.peak = RocketSynth::PeakFor (1.6e5), p.crackle = 0.3f;
+	p.rumble = RocketSynth::RumbleFor (1.6e5), p.whine = 0.15f, p.pump = RocketSynth::PumpFor (1.6e5);
+	s->Set (p);
+	r.Attach (*s);
+	r.Take (2.0); // (the pumps spool up)
+	auto x = r.Take (2.0);
+	// the bass: below 100 Hz, a good part of it
+	double bass = BandRms (x, 25, 100, 48000), all = Rms (x);
+	INFO ("below 100 Hz " << Db (bass / all) << " dB of the whole");
+	CHECK (bass > 0.4 * all);
+	// the whine: a tone standing out of the roar around the pumps' frequency,
+	// but faint (well below the whole)
+	double f = p.pump;
+	// (power in 1 Hz bins over 2 s: within +-10 Hz of the whine, against as
+	// wide a stretch of its surroundings, 15-25 % above it)
+	auto bin = [&](double fq) {
+		double re = 0.0, im = 0.0, w = 2.0 * M_PI * fq / 48000.0;
+		for (size_t i = 0; i < x.size (); i++) re += x[i] * std::cos (w * i), im += x[i] * std::sin (w * i);
+		return (re * re + im * im) / ((double)x.size () * x.size ());
+	};
+	double tone = 0.0, side = 0.0;
+	for (int k = -10; k <= 10; k++) tone += bin (f + k);
+	for (int k = 0; k < 21; k++) side += bin (f * 1.15 + k * (0.1 * f / 20.0));
+	INFO ("whine at " << f << " Hz: " << 10.0 * std::log10 (tone / side) << " dB over its surroundings, " << 10.0 * std::log10 (2.0 * tone) - Db (all) << " dB of the whole");
+	CHECK (tone > 10.0 * side);                       // (stands out: 10 dB)
+	CHECK (std::sqrt (2.0 * tone) < 0.2 * all);       // (but faint: 14 dB under the whole)
+	// after shutdown the pumps wind down: the whine lingers, lower
+	p.level = 0.0f;
+	s->Set (p);
+	r.Take (0.6);
+	auto down = r.Take (0.3);
+	double lo = BandRms (down, (float)(f * 0.3), (float)(f * 0.85), 48000), at = BandRms (down, (float)(f * 0.97), (float)(f * 1.03), 48000);
+	INFO ("winding down: below its full speed " << Db (lo) << " dB, at it " << Db (at) << " dB");
+	CHECK (lo > 2.0 * at);
+	CHECK (lo > 1e-4);
 }
 
 TEST_CASE ("Rocket: crackle without spikes", "[audio][synth]")
