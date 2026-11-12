@@ -29,8 +29,8 @@ layout(set = 1, binding = 2) uniform sampler3D detailNoise;
 layout(push_constant) uniform Draw {
 	mat4 toFlow;  // view -> flow frame
 	vec4 tile;    // atlas offset (uv), tile scale (uv), the box's half width
-	vec4 box;     // s: start, near/far split, end; time [s]
-	vec4 look;    // glow, heating level, shock layer thickness, size [m]
+	vec4 box;     // s: start, near/far split, end; the streaks' phase (noise periods, mod 2)
+	vec4 look;    // glow, the streaks' stretch along the flow, shock layer thickness, size [m]
 	vec4 misc;    // jitter frame, sheet length, wake length, intensity
 } pc;
 
@@ -63,12 +63,13 @@ vec3 Ramp (float c)
 	return mix (k[i], k[i + 1], c - float (i));
 }
 
-// streaks along the flow, drifting downstream (0.35 .. 1.8, mean about 1)
+// streaks along the flow, moving downstream with the gas, longer the faster
+// it goes (Plasma.cpp: phase, stretch) (0.35 .. 1.8, mean about 1)
 float Streaks (vec3 q)
 {
-	float t = pc.box.w;
-	float n = textureLod (detailNoise, vec3 (q.xy * 1.6, q.z * 0.10 - t * 0.9), 0.0).r * 0.65
-		+ textureLod (detailNoise, vec3 (q.xy * 4.0 + 0.37, q.z * 0.25 - t * 2.1), 0.0).r * 0.35;
+	float P = pc.box.w, g = pc.look.y;
+	float n = textureLod (detailNoise, vec3 (q.xy * 1.6, q.z * 0.10 * g - P), 0.0).r * 0.65
+		+ textureLod (detailNoise, vec3 (q.xy * 4.0 + 0.37, q.z * 0.25 * g - 2.5 * P), 0.0).r * 0.35;
 	return clamp ((n - 0.475) * 2.6 + 1.0, 0.35, 1.8);
 }
 

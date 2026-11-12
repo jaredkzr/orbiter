@@ -53,8 +53,8 @@ namespace {
 	struct VolPC {
 		float toFlow[16]; // view -> flow frame (units of the vessel's size)
 		float tile[4];    // atlas offset (uv), tile scale (uv), WN
-		float box[4];     // s: start, near/far split, end; time [s]
-		float look[4];    // glow, heating level, shock layer thickness (units of size), size [m]
+		float box[4];     // s: start, near/far split, end; the streaks' phase
+		float look[4];    // glow, the streaks' stretch, shock layer thickness (units of size), size [m]
 		float misc[4];    // jitter frame, sheet length, wake length (units of size), intensity
 	};
 	static_assert (sizeof (VolPC) <= 128, "push constants");
@@ -425,14 +425,33 @@ void PlasmaRenderer::Begin (VkDescriptorSet fs, double simt)
 	}
 	// (the march's jitter: a new sequence each simulation step, the same
 	// while paused)
+	stepDt = std::clamp (simt - lastSimT, 0.0, 1.0);
 	if (simt != lastSimT) frameNo++, lastSimT = simt;
+	// (bodies gone for a while: their streaks forgotten)
+	for (auto it = flows.begin (); it != flows.end ();) it = simt - it->second.seen > 5.0 || simt < it->second.seen ? flows.erase (it) : ++it;
 }
 
-int PlasmaRenderer::AddSheath (const SheathState &s, double size, const VECTOR3 &centreView)
+int PlasmaRenderer::AddSheath (const SheathState &s, double size, const VECTOR3 &centreView, const void *key)
 {
 	if (!enabled || s.glow <= 0.0f || size <= 0.0) return -1;
 	Sheath sh;
 	sh.s = s, sh.size = size, sh.centre = centreView;
+	// the streaks move downstream with the gas streaming off the hull, some
+	// 0.3 of the airspeed - at a fixed rate (some 90 m/s for a glider) the
+	// plasma of a 47 km/s entry crept back in slow motion. Stretched along
+	// the flow by its motion over an exposure of three steps (at least 0.1
+	// s): its blur, and never more than a third of a noise period's move
+	// per frame (faster, it strobed)
+	{
+		double Vg = 0.3 * s.speed;
+		double T = std::max (0.1, 3.0 * stepDt);
+		double B = Vg * T / size;             // [sizes] moved over the exposure
+		double g = 1.0 / (1.0 + B / 4.0);    // (the finer layer's period 4 sizes)
+		Flow &fl = flows[key];
+		fl.phase = std::fmod (fl.phase + 0.10 * g * Vg * stepDt / size, 2.0); // (the coarse layer's frequency 0.10/size; mod 2: the fine layer's 2.5 times it whole)
+		fl.seen = lastSimT;
+		sh.phase = (float)fl.phase, sh.stretch = (float)g;
+	}
 	sh.px = size / std::max (length (centreView), 1.0);
 	// the flow's frame: s downstream (against the motion through the air),
 	// x, y across it; in units of the vessel's size, about its centre
@@ -611,8 +630,8 @@ void PlasmaRenderer::Draw ()
 		// (the sheets fade over some vessel sizes, the lee wake's glow
 		// behind it over more: longer at stronger heating)
 		float Lc = 1.5f + 3.0f * g, Lw = 1.0f + 2.5f * g;
-		p.box[0] = -1.6f, p.box[1] = 4.0f, p.box[2] = std::min (4.0f + 3.0f * Lw, 20.0f), p.box[3] = time;
-		p.look[0] = g, p.look[1] = sh.s.level, p.look[2] = 0.035f + 0.035f * g, p.look[3] = (float)sh.size;
+		p.box[0] = -1.6f, p.box[1] = 4.0f, p.box[2] = std::min (4.0f + 3.0f * Lw, 20.0f), p.box[3] = sh.phase;
+		p.look[0] = g, p.look[1] = sh.stretch, p.look[2] = 0.035f + 0.035f * g, p.look[3] = (float)sh.size;
 		p.misc[0] = (float)(frameNo & 0xffff), p.misc[1] = Lc, p.misc[2] = Lw, p.misc[3] = VOL_INTENSITY * g * g;
 		vkCmdPushConstants (cmd, volLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof (p), &p);
 		vkCmdDraw (cmd, 36, 1, 0, 0);

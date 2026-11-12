@@ -633,6 +633,7 @@ bool VVessel::Sheath (SheathState &s) const
 	s.glow = SheathState::Glow (s.flux);   // (the gas's: from 3e4 W/m^2, about 100 km at orbital speed)
 	if (s.glow <= 0.0f || spd <= 0.0) return false;
 	s.dirGlobal = mul (grot, as / spd);
+	s.speed = spd;
 	s.dirView = scene->ViewDir (s.dirGlobal);
 	return true;
 }
@@ -660,7 +661,7 @@ void VVessel::DrawPlasma (PlasmaRenderer &pr)
 	SheathState s;
 	if (!Sheath (s)) return;
 	Mat4 mv = scene->ModelView (gpos, grot);
-	int i = pr.AddSheath (s, size, mv.TransformPoint (_V(0, 0, 0)));
+	int i = pr.AddSheath (s, size, mv.TransformPoint (_V(0, 0, 0)), this);
 	if (i < 0) return;
 	for (size_t m = 0; m < meshes.size(); m++) {
 		MeshRec &rec = meshes[m];
@@ -1526,6 +1527,7 @@ void VDebris::Effects ()
 		sheathFlux = 1.74e-4 * sqrt (std::max (rho, 0.0) / rn) * V * V * V;
 		sheathLevel = SheathState::Level (sheathFlux);
 		sheathDir = V > 1.0 ? airVel / V : _V(0, 0, 0);
+		sheathSpeed = V;
 		if (sheathLevel > 0.0f && V > 300.0 && !sunk) EmitReentry (dt, rho, D, vel, airVel);
 	}
 	// (a part burned off in reentry, no propellant: the core's burn as it is)
@@ -2275,9 +2277,9 @@ void VDebris::DrawPlasma (PlasmaRenderer &pr)
 	if (!mesh || hidden || SheathState::Glow (sheathFlux) <= 0.0f) return;
 	SheathState s;
 	s.flux = sheathFlux, s.level = sheathLevel, s.glow = SheathState::Glow (sheathFlux);
-	s.dirGlobal = sheathDir, s.dirView = scene->ViewDir (sheathDir);
+	s.dirGlobal = sheathDir, s.dirView = scene->ViewDir (sheathDir), s.speed = sheathSpeed;
 	Mat4 mv = scene->ModelView (gpos, grot);
-	int i = pr.AddSheath (s, size, mv.TransformPoint (_V(0, 0, 0)));
+	int i = pr.AddSheath (s, size, mv.TransformPoint (_V(0, 0, 0)), this);
 	pr.AddMesh (i, mesh.get(), mv, nullptr, nullptr);
 }
 

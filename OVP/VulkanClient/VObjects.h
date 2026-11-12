@@ -229,6 +229,7 @@ private:
 	float sheathLevel = 0.0f;
 	double sheathFlux = 0.0;
 	VECTOR3 sheathDir{};
+	double sheathSpeed = 0.0; // [m/s] its airspeed
 	void EmitReentry (double dt, double rho, double D, const VECTOR3 &vel, const VECTOR3 &airVel);
 	// (the free cloud in the air it formed in: the air's velocity there, and
 	// its drag's time scale - at reentry speed it is stripped off behind)

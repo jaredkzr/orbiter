@@ -32,6 +32,7 @@
 #include "VkContext.h"
 #include "VkMath.h"
 #include <vector>
+#include <unordered_map>
 
 class VkMesh;
 
@@ -42,6 +43,7 @@ struct SheathState {
 	float glow = 0.0f;      // the gas's glow: 0 (onset, 3e4 W/m^2) .. 1 (5e5 W/m^2), by the log of the flux
 	VECTOR3 dirGlobal{};    // direction of motion through the air (global frame)
 	VECTOR3 dirView{};      // ... (view space)
+	double speed = 0.0;     // airspeed [m/s]
 	/// heating level and glow of a flux [W/m^2]
 	static float Level (double flux);
 	static float Glow (double flux);
@@ -63,9 +65,10 @@ public:
 	void SetPrepass (VkImageView prepass);
 	/// start of the frame's sheaths (before the transparent pass resumes)
 	void Begin (VkDescriptorSet frameSet, double simt);
-	/// a heated vessel: its sheath, radius size [m], its centre (view);
-	/// returns its index for AddMesh
-	int AddSheath (const SheathState &s, double size, const VECTOR3 &centreView);
+	/// a heated vessel: its sheath, radius size [m], its centre (view); key:
+	/// the body (its gas's streaks move on from frame to frame); returns its
+	/// index for AddMesh
+	int AddSheath (const SheathState &s, double size, const VECTOR3 &centreView, const void *key);
 	/// a mesh of sheath i: model-view, group transforms and visibility as
 	/// Scene::DrawMesh
 	void AddMesh (int i, const VkMesh *mesh, const Mat4 &modelView, const std::vector<Mat4> *groupTransforms,
@@ -95,6 +98,8 @@ private:
 		int tile = -1;           // in the atlas; -1: a shell
 		std::vector<MeshRef> meshes;
 		Mat4 toFlow;             // view -> flow frame (units of size)
+		float phase = 0.0f;      // its streaks' along the flow (noise periods, mod 2)
+		float stretch = 1.0f;    // their length's factor (the gas's motion over an exposure)
 	};
 	void DrawShell (const Sheath &sh);
 	bool AllocAtlas ();
@@ -121,6 +126,10 @@ private:
 	float time = 0.0f;
 	uint32_t frameNo = 0;
 	double lastSimT = -1e30;
+	double stepDt = 0.0;     // the simulation's step this frame [s]
+	// each body's streaks' phase, moved on with its gas (key: AddSheath's)
+	struct Flow { double phase = 0.0, seen = 0.0; };
+	std::unordered_map<const void*, Flow> flows;
 	uint32_t count = 0;
 	bool prepared = false;
 	std::vector<Sheath> sheaths;
