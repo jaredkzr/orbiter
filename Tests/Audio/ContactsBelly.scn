@@ -1,0 +1,31 @@
+BEGIN_HYPERDESC
+Audio test: a delta-glider set down on KSC's runway (Script/Tests/AudioContacts).
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51984.65
+  Script Tests/AudioContacts
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship BELLY
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET BELLY
+  MODE Extern
+  POS 4.0 -20.0 -30
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+BELLY:DeltaGlider
+  STATUS Landed Earth
+  POS -80.6825940 28.5969240
+  HEADING 330.01
+  PRPLEVEL 0:1.0 1:1.0
+  GEAR 0 0.0000
+END
+END_SHIPS

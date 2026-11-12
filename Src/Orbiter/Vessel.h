@@ -1353,6 +1353,8 @@ protected:
 	int ElementPart (const void *e, const Vector &ref) const;
 	// the part an element at ref is on (cached per element)
 	void ContactsResolved (const std::vector<contact::Point> &pts, int index, double h, const std::vector<contact::Body> *pre = nullptr) override;
+	/// What the step's contacts sound like (to the audio system)
+	void SoundContacts (const std::vector<contact::Point> &pts, int index, double h, const std::vector<contact::Body> *pre) const;
 	void UpdateStructuralLoads ();
 	void KeepImpulse (class Debris *d, const Vector &J);
 	Vector BoundKept (const std::vector<int> &parts, const Vector &dv) const;

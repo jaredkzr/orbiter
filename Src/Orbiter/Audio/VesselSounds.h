@@ -35,6 +35,20 @@ namespace audio {
 class RocketSynth;
 class RcsSynth;
 class WindSynth;
+class ContactSynth;
+
+/// A vessel's contacts over a time step (from the contact solver)
+struct ContactStep {
+	double wheelLoad = 0.0;      // the wheels' normal force [N]
+	double squealPower = 0.0;    // the wheels' friction times their slip [W]
+	double scrapePower = 0.0;    // the hull's friction times its slip [W]
+	double scrapeSpeed = 0.0;    // its slip [m/s]
+	double blowWheel = 0.0;      // closing speeds of contacts begun this step [m/s]
+	double blowHull = 0.0;
+	double blowVessel = 0.0;
+	V3 where;                    // the contacts' centre (vessel frame) [m]
+	bool any = false;
+};
 
 class VesselSounds {
 public:
@@ -46,6 +60,10 @@ public:
 
 	/// Once per time step, before the world's update
 	void Update ();
+	/// A vessel's contacts of the step (Vessel::ContactsResolved)
+	void Contacts (const Vessel *v, const ContactStep &c);
+	/// Docking and undocking (at the vessel's port, vessel frame)
+	void Docked (const Vessel *v, const V3 &port, bool dock);
 	void Forget (const Body *body);
 	void Clear ();
 
@@ -73,11 +91,20 @@ private:
 		std::vector<Cluster> engines, rcs;
 		Emitter *wind = nullptr;
 		WindSynth *windSynth = nullptr;
+		Emitter *contact = nullptr;
+		ContactSynth *contactSynth = nullptr;
+		ContactStep step;          // this step's contacts (summed until the update)
+		double lastBlow[3] = {-1e9, -1e9, -1e9}; // [s] the last blow of each kind (wheel, hull, vessel)
+		int blows[5] = {};         // blows struck so far, by kind (recalled with the travel time)
+		float blowStrength[5] = {};
+		int heardBlows[5] = {};
 		bool seen = false;
 	};
+	PerVessel *Find (const Vessel *v);
 	void Build (PerVessel &pv);
 	void Drop (PerVessel &pv);
 	void UpdateVessel (PerVessel &pv);
+	void UpdateContacts (PerVessel &pv, double t);
 
 	Engine &engine;
 	World &world;

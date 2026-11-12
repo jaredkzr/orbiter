@@ -148,6 +148,7 @@ set(headless_src
 	Audio/AudioEngine.cpp
 	Audio/AudioSystem.cpp
 	Audio/BoomSynth.cpp
+	Audio/ContactSynth.cpp
 	Audio/Ears.cpp
 	Audio/Medium.cpp
 	Audio/Miniaudio.cpp

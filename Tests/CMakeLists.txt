@@ -192,6 +192,7 @@ add_executable(Audio.Synth Audio.Synth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/RcsSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/WindSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/BoomSynth.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/ContactSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Miniaudio.cpp)
 target_compile_definitions(Audio.Synth PRIVATE AUDIO_SYNTH_TEST)
 target_include_directories(Audio.Synth PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter ${CMAKE_SOURCE_DIR}/Extern/miniaudio)
@@ -379,6 +380,43 @@ if (ORBITER_TEST_EXE)
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.MoonLiftoffCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioMoonLiftoff)
+
+		# Contacts (ContactSynth, Vessel::SoundContacts): a delta-glider set down
+		# on KSC's runway, heard from 40 m - silent until it touches down (1.28 s),
+		# the touchdown's thump, rolling; set down on its belly - the scrape, then
+		# silence when it has stopped. Docking (Scenarios/Tests/DockingTest): the
+		# clunk of A1's docking.
+		foreach(scene Land Belly)
+			add_test(
+				NAME "Audio.Contacts${scene}"
+				COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Audio/Contacts${scene}.scn" "--fixedstep=0.02"
+				WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+			)
+			set_tests_properties(Audio.Contacts${scene} PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioContacts${scene}
+				ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Contacts${scene}.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0")
+		endforeach()
+		set_tests_properties(Audio.ContactsLand PROPERTIES PASS_REGULAR_EXPRESSION "Audio: touchdown blow of LAND at 1\\.[2-3]")
+		add_test(
+			NAME "Audio.ContactsLandCheck"
+			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.ContactsLand.wav" --duration 12.0 --no-clip
+				--level 0.3:1.25:all:-inf:-90 --level 1.3:1.6:low:-75:-30 --level 2:5:all:-65:-30
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.ContactsLandCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioContactsLand)
+		add_test(
+			NAME "Audio.ContactsBellyCheck"
+			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.ContactsBelly.wav" --duration 12.0 --no-clip
+				--level 1.25:2:all:-75:-35 --level 4:11:all:-inf:-90
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.ContactsBellyCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioContactsBelly)
+		add_test(
+			NAME "Audio.Docking"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Scenarios/Tests/DockingTest.scn" "--fixedstep=0.02"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.Docking PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "Audio: docking of A1"
+			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Docking.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0")
 	endif()
 
 	# Launchpad (in the Vulkan client's window, rendered offscreen; needs a

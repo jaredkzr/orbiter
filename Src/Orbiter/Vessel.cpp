@@ -23,6 +23,7 @@
 #include <algorithm>
 #include "Orbiter.h"
 #include "Vessel.h"
+#include "Audio/AudioSystem.h"
 #include "Sea.h"
 #include "Relativity.h"
 #include "RelTravel.h"
@@ -2833,6 +2834,8 @@ int Vessel::Dock (Vessel *target, DWORD mydid, DWORD tgtdid, DWORD mode)
 	g_psys->DockVessels (this, target, mydid, tgtdid);
 	RegisterDocking (mydid, target, tgtdid);
 	target->RegisterDocking (tgtdid, this, mydid);
+	if (audio::System *as = g_pOrbiter->Audio ()) // (the clunk and the latches)
+		as->Docked (this, audio::V3 (dock[mydid]->ref.x, dock[mydid]->ref.y, dock[mydid]->ref.z), true);
 	if (this == g_focusobj || target == g_focusobj) { // (the player hears of it)
 		char detail[256];
 		// (the player's vessel first)
@@ -2859,6 +2862,11 @@ bool Vessel::Undock (UINT did, const Vessel *exclude, double vsep)
 				char detail[256];
 				snprintf (detail, sizeof (detail), "%s from %s", name.c_str(), dock[n]->mate->Name());
 				flightevent::Post (flightevent::INFO, "Undocked", detail);
+			}
+			if (audio::System *as = g_pOrbiter->Audio ()) { // (the latches and the push-off: on both)
+				as->Docked (this, audio::V3 (dock[n]->ref.x, dock[n]->ref.y, dock[n]->ref.z), false);
+				const PortSpec *mp = dock[n]->mate->dock[dock[n]->matedock];
+				as->Docked (dock[n]->mate, audio::V3 (mp->ref.x, mp->ref.y, mp->ref.z), false);
 			}
 			g_psys->UndockVessel (supervessel, this, n, vsep);
 			dock[n]->mate->UnregisterDocking (dock[n]->matedock);
@@ -5126,8 +5134,63 @@ void Vessel::RecordForce (const Vector &F, const void *e, const Vector &ref)
 	part_Frec += F;
 }
 
+// =======================================================================
+// What the contacts of a step sound like (Audio/VesselSounds): the wheels'
+// load and skids, the hull scraping, blows (contacts closing fast)
+
+void Vessel::SoundContacts (const std::vector<contact::Point> &pts, int index, double h, const std::vector<contact::Body> *pre) const
+{
+	audio::System *as = g_pOrbiter ? g_pOrbiter->Audio () : nullptr;
+	if (!as || !as->GetEngine ().Active ()) return;
+	audio::ContactStep cs;
+	const contact::Body me = (pre && index >= 0 && index < (int)pre->size ()) ? (*pre)[index] : ContactBody ();
+	// (the step's gravity: what a resting contact closes by)
+	double g = proxybody ? Ggrav * proxybody->Mass () / std::max (s0->pos.dist2 (proxybody->GPos ()), 1.0) : 0.0;
+	Vector wpos;
+	double wsum = 0.0;
+	for (const contact::Point &p : pts) {
+		if (p.a != index && p.b != index) continue;
+		double lt = std::hypot (p.l1, p.l2);
+		if (p.ln <= 0.0 && lt <= 0.0) continue;
+		bool isA = p.a == index;
+		const Vector &r = isA ? p.ra : p.rb;
+		Vector n = isA ? p.n : -p.n;               // (towards this vessel)
+		int o = isA ? p.b : p.a;
+		Vector vme = me.v + crossp (r, me.w);
+		Vector vo;
+		if (o < 0) vo = p.vs;
+		else if (pre && o < (int)pre->size ()) vo = (*pre)[o].v + crossp (isA ? p.rb : p.ra, (*pre)[o].w);
+		Vector vrel = vme - vo;
+		double vn = -dotp (vrel, n) - g * h;       // (closing, beyond the step's fall)
+		Vector vt = vrel - n * dotp (vrel, n);
+		double slip = vt.length ();
+		bool wheel = p.k > 0.0 && p.mu1 < 0.3;
+		if (o >= 0) {
+			cs.blowVessel = std::max (cs.blowVessel, vn);
+		} else if (wheel) {
+			cs.wheelLoad += p.ln / h;
+			// a wheel slips sideways; it skids along when braked hard
+			cs.squealPower += std::fabs (p.l2) / h * std::fabs (dotp (vrel, p.t2));
+			if (p.mu1 > 0.2) cs.squealPower += 0.3 * std::fabs (p.l1) / h * std::fabs (dotp (vrel, p.t1));
+			cs.blowWheel = std::max (cs.blowWheel, vn);
+		} else {
+			cs.scrapePower += lt / h * slip;
+			cs.scrapeSpeed = std::max (cs.scrapeSpeed, slip);
+			cs.blowHull = std::max (cs.blowHull, vn);
+		}
+		double w = p.ln + lt;
+		wpos += r * w, wsum += w;
+	}
+	if (wsum <= 0.0) return;
+	Vector loc (tmul (StartState ().R, wpos / wsum));
+	cs.where = audio::V3 (loc.x, loc.y, loc.z);
+	cs.any = true;
+	as->Contacts (this, cs);
+}
+
 void Vessel::ContactsResolved (const std::vector<contact::Point> &pts, int index, double h, const std::vector<contact::Body> *pre)
 {
+	if (h > 0.0) SoundContacts (pts, index, h, pre);
 	if (!loads_on || h <= 0.0 || part_Fc.empty()) return;
 	// Impacts are taken to decelerate the structure over a crush stroke
 	// (or the gear's stroke) rather than within the step (the contacts stop

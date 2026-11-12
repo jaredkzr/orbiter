@@ -13,6 +13,7 @@
 #include "Audio/RcsSynth.h"
 #include "Audio/WindSynth.h"
 #include "Audio/BoomSynth.h"
+#include "Audio/ContactSynth.h"
 #include "Audio/VesselSounds.h"
 #include "miniaudio.h"
 #include <cmath>
@@ -328,4 +329,61 @@ TEST_CASE ("Rocket noise: acoustic power", "[audio][synth]")
 	// at 1 km, free field: Lp = Lw - 20 log r - 11 = 132.6 dB SPL
 	double p = VesselSounds::PressureAt (W, 1000.0);
 	CHECK_THAT (Db (p / 20e-6), WithinAbs (10.0 * std::log10 (W / 1e-12) - 60.0 - 11.0, 0.3));
+}
+
+TEST_CASE ("Contacts: rolling, touchdown, squeal, docking", "[audio][synth]")
+{
+	{	// rolling at 40 m/s under the full load: the calibration (CONTACT_RMS)
+		Rig r;
+		auto s = ContactSynth::Make (r.e, 20);
+		ContactSynth::Params p;
+		p.rollSpeed = 40.0f, p.rollLoad = 1.0f;
+		s->Set (p);
+		r.Attach (*s);
+		r.Take (0.5);
+		auto x = r.Take (2.0);
+		INFO ("rolling RMS " << Rms (x));
+		CHECK_THAT (Db (Rms (x)), WithinAbs (Db (0.3), 4.0));
+		// low: most of it below 300 Hz
+		CHECK (BandRms (x, 0, 300, 48000) > 0.8 * Rms (x));
+	}
+	{	// a touchdown: deep and short
+		Rig r;
+		auto s = ContactSynth::Make (r.e, 21);
+		r.Attach (*s);
+		r.Take (0.1);
+		s->Strike (ContactSynth::TOUCHDOWN, 1.0f);
+		auto x = r.Take (0.6);
+		std::vector<float> head (x.begin (), x.begin () + 7200), tail (x.begin () + 19200, x.end ());
+		INFO ("touchdown: below 120 Hz " << Db (BandRms (head, 0, 120, 48000)) << " dB, above 500 Hz " << Db (BandRms (head, 500, 0, 48000)) << " dB");
+		CHECK (BandRms (head, 0, 120, 48000) > 2.0 * BandRms (head, 500, 0, 48000));
+		CHECK (Rms (tail) < 0.05 * Rms (head));
+	}
+	{	// a squeal: tonal, near 780 Hz
+		Rig r;
+		auto s = ContactSynth::Make (r.e, 22);
+		ContactSynth::Params p;
+		p.squeal = 1.0f;
+		s->Set (p);
+		r.Attach (*s);
+		r.Take (0.3);
+		auto x = r.Take (1.0);
+		INFO ("squeal: 600-1000 Hz " << Db (BandRms (x, 600, 1000, 48000) / Rms (x)) << " dB of the whole, 1400-1750 " << Db (BandRms (x, 1400, 1750, 48000) / Rms (x)) << ", below 500 " << Db (BandRms (x, 0, 500, 48000) / Rms (x)) << ", above 2k " << Db (BandRms (x, 2000, 0, 48000) / Rms (x)));
+		CHECK (BandRms (x, 600, 1000, 48000) > 0.4 * Rms (x)); // (white noise: about 0.17; a 2-pole resonator keeps half in its band)
+	}
+	{	// docking: the clunk, then two latches - three onsets within 0.8 s
+		Rig r;
+		auto s = ContactSynth::Make (r.e, 23);
+		r.Attach (*s);
+		r.Take (0.1);
+		s->Strike (ContactSynth::DOCK, 0.8f);
+		auto x = r.Take (1.0);
+		// the latches: low energy rising again after the clunk's first decay
+		auto win = [&](double t0, double t1) { std::vector<float> w (x.begin () + (size_t)(t0 * 48000), x.begin () + (size_t)(t1 * 48000)); return BandRms (w, 0, 200, 48000); };
+		double clunk = win (0.0, 0.05), gap = win (0.35, 0.44), latch1 = win (0.45, 0.5), latch2 = win (0.62, 0.67);
+		INFO ("clunk " << Db (clunk) << ", gap " << Db (gap) << ", latches " << Db (latch1) << " " << Db (latch2));
+		CHECK (latch1 > 1.5 * gap);
+		CHECK (latch2 > 1.2 * gap);
+		CHECK (clunk > latch1);
+	}
 }

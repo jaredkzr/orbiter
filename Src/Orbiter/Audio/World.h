@@ -88,11 +88,11 @@ public:
 	};
 	const State &Heard () const { return state; }
 
-	/// What its source does, as it changes (up to 4 numbers: a throttle, a
+	/// What its source does, as it changes (up to 16 numbers: a throttle, a
 	/// speed...), stamped with the simulation time; Recalled: as heard now,
 	/// when the sound now arriving left it (travel time ago; at once in the
 	/// cockpit of its vessel, and while not heard)
-	using Params = std::array<float, 4>;
+	using Params = std::array<float, 16>;
 	void Push (double t, const Params &p);
 	Params Recalled () const;
 

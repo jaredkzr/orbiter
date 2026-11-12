@@ -32,6 +32,7 @@
 #include <vector>
 
 class Orbiter;
+class Vessel;
 struct CFG_SOUNDPRM;
 
 namespace audio {
@@ -60,6 +61,9 @@ public:
 	void EndSession ();
 	/// A body is deleted: its sounds go
 	void Forget (const Body *body);
+	/// A vessel's contacts of a step; docking and undocking at a port
+	void Contacts (const Vessel *v, const ContactStep &c) { vessels.Contacts (v, c); }
+	void Docked (const Vessel *v, const V3 &port, bool dock) { vessels.Docked (v, port, dock); }
 
 	Engine &GetEngine () { return engine; }
 	World &GetWorld () { return world; }
