@@ -3,6 +3,7 @@
 
 #include "AudioEngine.h"
 #include "miniaudio.h"
+#include "Ears.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -28,6 +29,7 @@ float VolumeToGain (float v)
 struct Engine::Impl {
 	ma_sound_group group[NBUS];
 	bool groupInit[NBUS] = {};
+	Ears ears;
 };
 
 Engine::Engine () = default;
@@ -73,6 +75,10 @@ bool Engine::Init (const Options &opt)
 		if (ma_sound_group_init (engine.get(), 0, NULL, &impl->group[b]) == MA_SUCCESS)
 			impl->groupInit[b] = true;
 	}
+	if (opt.ears && impl->ears.Init (engine.get())) {
+		for (Bus b : { EXTERIOR, INTERIOR })
+			if (impl->groupInit[b]) ma_node_attach_output_bus (&impl->group[b], 0, impl->ears.Node (), 0);
+	}
 	simFade = 1.0f;
 	return true;
 }
@@ -82,6 +88,7 @@ void Engine::Shutdown ()
 	if (!engine) return;
 	for (int b = 0; b < NBUS; b++)
 		if (impl->groupInit[b]) ma_sound_group_uninit (&impl->group[b]), impl->groupInit[b] = false;
+	impl->ears.Uninit ();
 	ma_engine_uninit (engine.get());
 	engine.reset ();
 	impl.reset ();
@@ -126,6 +133,11 @@ uint64_t Engine::Render (float *out, uint64_t frames)
 	if (done < frames)
 		std::fill (out + done * channels, out + frames * channels, 0.0f);
 	return frames;
+}
+
+float Engine::EarsReduction () const
+{
+	return impl ? impl->ears.Reduction () : 0.0f;
 }
 
 uint64_t Engine::Time () const

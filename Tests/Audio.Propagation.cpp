@@ -217,3 +217,24 @@ TEST_CASE ("Track keeps a minute, thins close points", "[audio][track]")
 	tr.Add (5.0, V3 (0, 0, 0));
 	CHECK (tr.Size () == 1);
 }
+
+TEST_CASE ("Supersonic, a listener flying along behind it", "[audio][track]")
+{
+	// a chase camera 27 m behind (and 7 m above) a source at Mach 1.2: it
+	// overtakes the sound sent forwards and meets the sound sent back - two
+	// moments heard, both with the source's pitch (moving together)
+	const double c = 295.0, V = 353.0;
+	Track tr;
+	for (double t = 0.0; t <= 60.0 + 1e-9; t += 1.0 / 30.0) tr.Add (t, V3 (V * t, 0, 13000));
+	const double t = 60.0;
+	const V3 L (V * t - 27.0, 7.0, 13000);
+	Track::Image im[4];
+	int n = tr.Heard (t, L, c, im, 4);
+	REQUIRE (n == 2);
+	for (int k = 0; k < 2; k++) {
+		CHECK_THAT (c * (t - im[k].tau), WithinAbs ((L - im[k].pos).Len (), 1e-6));
+		V3 nv = (L - im[k].pos) * (1.0 / (L - im[k].pos).Len ());
+		double nn[3] = {nv.x, nv.y, nv.z}, vs[3] = {V, 0, 0};
+		CHECK_THAT (DopplerFactor (nn, vs, vs, c), WithinAbs (1.0, 1e-9));
+	}
+}

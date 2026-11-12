@@ -65,7 +65,8 @@ double AbsorptionCutoff (const Air &a, double dist, double fmax = 20000.0);
 
 /// Ratio of received to emitted frequency, for the unit vector `n` from
 /// source to listener and their velocities in the air (vs, vl)
-/// (equivalently dtau/dt, the rate of the emission time heard)
+/// (equivalently dtau/dt, the rate of the emission time heard; its
+/// magnitude: a sound heard backwards plays as fast), within 1/8..8
 double DopplerFactor (const double n[3], const double vs[3], const double vl[3], double c);
 
 } // namespace audio

@@ -28,6 +28,7 @@
 #include "AudioEngine.h"
 #include "WavWriter.h"
 #include "World.h"
+#include "VesselSounds.h"
 #include <vector>
 
 class Orbiter;
@@ -72,10 +73,12 @@ private:
 	void ApplySettings (const CFG_SOUNDPRM &s);
 	void RenderStep (double dt);
 	void TestTone ();
+	void Boom (const World::Boom &b);
 
 	Orbiter *orbiter;
 	Engine engine;
 	World world{engine};
+	VesselSounds vessels{engine, world};
 	WavWriter wav;
 	std::vector<float> block;
 	double renderTime = 0.0;        // seconds of sound asked for

@@ -9,7 +9,8 @@
 //   1: through the hull (to the Cockpit bus: the listener in the vessel
 //      the source is on hears it through the structure, in vacuum too)
 //
-// Each way has a gain, a low-pass (air absorption, the hull) and a
+// Each way has a gain, a low-pass (air absorption, the hull: two poles,
+// 12 dB/octave) and a
 // direction (panning). The simulation sets their targets every frame
 // (atomics: no locks on the audio thread); the node eases towards them
 // over a block, so nothing clicks.
@@ -20,6 +21,7 @@
 
 #include <atomic>
 #include <memory>
+#include <vector>
 
 struct ma_node_graph;
 struct ma_engine;
@@ -41,8 +43,9 @@ public:
 	PathNode (const PathNode&) = delete;
 	PathNode &operator= (const PathNode&) = delete;
 
-	/// Create the node in the engine's graph
-	bool Init (ma_engine *engine);
+	/// Create the node in the engine's graph; dcBlock: the input without
+	/// its DC and infrasound (below dcBlock Hz; 0: as it is)
+	bool Init (ma_engine *engine, float dcBlock = 5.0f);
 	void Uninit ();
 	bool Valid () const { return valid; }
 
@@ -65,9 +68,11 @@ private:
 		std::atomic<float> gain{0.0f}, cutoff{20000.0f}, pan{0.0f};
 		struct { std::atomic<float> gain{0.0f}; } cur;
 		float g = 0.0f, fc = 20000.0f, p = 0.0f; // (audio thread: where the easing is)
-		float y = 0.0f;                           // low-pass state
+		float y = 0.0f, y2 = 0.0f;                // low-pass state (two poles)
 	} way[NWAY];
 	std::atomic<bool> cut{false};
+	std::vector<float> dcBuf;  // (audio thread)
+	float dcLp = 0.0f, dcHz = 5.0f;
 	std::unique_ptr<Impl> impl;
 	unsigned rate = 48000;
 	bool valid = false;

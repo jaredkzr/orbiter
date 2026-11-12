@@ -163,6 +163,7 @@ set_tests_properties(Kerr.Geodesics PROPERTIES TIMEOUT 120)
 find_package(Threads REQUIRED)
 add_executable(Audio.Engine Audio.Engine.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/AudioEngine.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Ears.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/WavWriter.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Miniaudio.cpp)
 target_include_directories(Audio.Engine PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter ${CMAKE_SOURCE_DIR}/Extern/miniaudio)
@@ -180,6 +181,24 @@ target_link_libraries(Audio.Propagation Catch2::Catch2WithMain)
 set_target_properties(Audio.Propagation PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER_BINARY_ROOT_DIR}")
 add_test(NAME Audio.Propagation COMMAND $<TARGET_FILE:Audio.Propagation>)
 set_tests_properties(Audio.Propagation PROPERTIES TIMEOUT 60)
+
+# The synthesizers: levels, spectra, booms, rocket noise
+add_executable(Audio.Synth Audio.Synth.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/AudioEngine.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Ears.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/PathNode.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Synth.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/RocketSynth.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/RcsSynth.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/WindSynth.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/BoomSynth.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Miniaudio.cpp)
+target_compile_definitions(Audio.Synth PRIVATE AUDIO_SYNTH_TEST)
+target_include_directories(Audio.Synth PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter ${CMAKE_SOURCE_DIR}/Extern/miniaudio)
+target_link_libraries(Audio.Synth Catch2::Catch2WithMain ${CMAKE_DL_LIBS} Threads::Threads m)
+set_target_properties(Audio.Synth PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER_BINARY_ROOT_DIR}")
+add_test(NAME Audio.Synth COMMAND $<TARGET_FILE:Audio.Synth>)
+set_tests_properties(Audio.Synth PROPERTIES TIMEOUT 120)
 
 # Scenario tests need an Orbiter executable that runs without graphics client
 if (ORBITER_HEADLESS)
@@ -285,7 +304,7 @@ if (ORBITER_TEST_EXE)
 				WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 			)
 			set_tests_properties(Audio.Flyby${pass} PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioFlyby${pass}
-				ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Flyby${pass}.wav;ORBITER_AUDIO_TEST_TONE=SRC;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0")
+				ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Flyby${pass}.wav;ORBITER_AUDIO_TEST_TONE=SRC;ORBITER_AUDIO_VESSELS=0;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0")
 		endforeach()
 		set_tests_properties(Audio.FlybySuper PROPERTIES PASS_REGULAR_EXPRESSION "Audio: boom from test tone on SRC at 22\\.5[0-9]")
 		add_test(
@@ -316,22 +335,50 @@ if (ORBITER_TEST_EXE)
 				WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 			)
 			set_tests_properties(Audio.Cockpit${realism} PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioCockpit${realism}
-				ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Cockpit${realism}.wav;ORBITER_AUDIO_TEST_TONE=SRC;ORBITER_AUDIO_REALISM=${realism};ORBITER_DAMAGE=0")
+				ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Cockpit${realism}.wav;ORBITER_AUDIO_TEST_TONE=SRC;ORBITER_AUDIO_VESSELS=0;ORBITER_AUDIO_REALISM=${realism};ORBITER_DAMAGE=0")
 		endforeach()
 		add_test(
 			NAME "Audio.CockpitPhysicalCheck"
 			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.CockpitPhysical.wav" --duration 12.0 --no-clip --no-clicks
-				--level 0.5:2.8:all:-30:-6 --level 3.5:5.8:all:-inf:-90 --level 6.5:8.8:all:-inf:-90 --level 9.6:11.8:all:-30:-6
+				--level 0.5:2.8:all:-40:-10 --level 3.5:5.8:all:-inf:-90 --level 6.5:8.8:all:-inf:-90 --level 9.6:11.8:all:-40:-10
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.CockpitPhysicalCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioCockpitPhysical)
 		add_test(
 			NAME "Audio.CockpitCinematicCheck"
 			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.CockpitCinematic.wav" --duration 12.0 --no-clip --no-clicks
-				--level 0.5:2.8:all:-30:-6 --level 3.5:5.8:all:-40:-15 --level 6.5:8.8:all:-inf:-90 --level 9.6:11.8:all:-30:-6
+				--level 0.5:2.8:all:-40:-10 --level 3.5:5.8:all:-45:-15 --level 6.5:8.8:all:-inf:-90 --level 9.6:11.8:all:-40:-10
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.CockpitCinematicCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioCockpitCinematic)
+
+		# A vessel's own sounds (VesselSounds): a delta-glider's main engines on
+		# KSC's runway heard from 300 m - silent until the roar arrives (full at
+		# 2 s, 0.88 s on the way), loud, low; a delta-glider lifting off on the
+		# Moon - silent outside, its engines heard in the cockpit
+		foreach(scene Takeoff MoonLiftoff)
+			add_test(
+				NAME "Audio.${scene}"
+				COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Audio/${scene}.scn" "--fixedstep=0.02"
+				WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+			)
+			set_tests_properties(Audio.${scene} PROPERTIES TIMEOUT 120 FIXTURES_SETUP Audio${scene}
+				ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.${scene}.wav;ORBITER_AUDIO_REALISM=physical;ORBITER_DAMAGE=0")
+		endforeach()
+		add_test(
+			NAME "Audio.TakeoffCheck"
+			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.Takeoff.wav" --duration 12.0 --no-clip
+				--level 0.5:2.8:all:-inf:-90 --level 5:11:all:-35:-3 --level 5:11:low:-40:-3
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.TakeoffCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioTakeoff)
+		add_test(
+			NAME "Audio.MoonLiftoffCheck"
+			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.MoonLiftoff.wav" --duration 12.0 --no-clip
+				--level 0.5:5.8:all:-inf:-90 --level 6.5:11.5:all:-40:-6
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.MoonLiftoffCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioMoonLiftoff)
 	endif()
 
 	# Launchpad (in the Vulkan client's window, rendered offscreen; needs a

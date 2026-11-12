@@ -26,6 +26,8 @@
 #include "Medium.h"
 #include "PathNode.h"
 #include "Track.h"
+#include <array>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <string>
@@ -60,6 +62,10 @@ struct EmitterDesc {
 	float level = 1.0f;         ///< gain at refDist, in sea-level air
 	float refDist = 10.0f;      ///< distance within which it doesn't get louder [m] (about its size)
 	float hull = 0.0f;          ///< gain through the hull, for a listener in the vessel (0: none)
+	V3 dir;                     ///< the way it sounds loudest, in the body's frame (none: all ways alike)
+	float front = 1.0f;         ///< opposite that way: this much (a rocket's exhaust: about 0.1)
+	bool boom = false;          ///< its shock cone booms (the body itself, once per vessel)
+	float length = 10.0f;       ///< the body's length [m] (for its boom)
 	std::string name;           ///< (for the readout)
 };
 
@@ -67,7 +73,9 @@ class Emitter {
 public:
 	const EmitterDesc &Desc () const { return desc; }
 	void SetLevel (float l) { desc.level = l; }
+	void SetHull (float h) { desc.hull = h; }
 	void SetOffset (const V3 &o) { desc.offset = o; }
+	void SetDir (const V3 &d) { desc.dir = d; }
 	/// What is heard of it now (for the readout and tests)
 	struct State {
 		int images = 0;         // emission moments heard (0: not heard)
@@ -80,6 +88,14 @@ public:
 	};
 	const State &Heard () const { return state; }
 
+	/// What its source does, as it changes (up to 4 numbers: a throttle, a
+	/// speed...), stamped with the simulation time; Recalled: as heard now,
+	/// when the sound now arriving left it (travel time ago; at once in the
+	/// cockpit of its vessel, and while not heard)
+	using Params = std::array<float, 4>;
+	void Push (double t, const Params &p);
+	Params Recalled () const;
+
 private:
 	friend class World;
 	EmitterDesc desc;
@@ -88,6 +104,8 @@ private:
 	Track track;
 	State state;
 	bool gone = false;          // its body was deleted
+	std::deque<std::pair<double, Params>> history;
+	double hearDelay = 0.0;     // the travel time the source is heard with
 	V3 lastP;                   // where it was last step (jumps)
 	double lastT = 0.0;
 	bool hasLast = false;
@@ -112,8 +130,15 @@ public:
 	void Update ();
 
 	/// A sonic boom: a supersonic source's shock cone swept over the listener
-	struct Boom { const Emitter *emitter; double t; V3 dir; };
+	/// (dir: where it came from, camera frame; height: the source above the
+	/// listener [m]; mach: its speed in the air there; sAir: its air)
+	struct Boom { const Emitter *emitter; double t; V3 dir; double height, mach; Air sAir; };
 	void OnBoom (std::function<void (const Boom&)> f) { onBoom = std::move (f); }
+
+	/// Play a sound heard at once from a direction (camera frame): through
+	/// the air (muffled by the hull in a cockpit), at a gain, for `length`
+	/// seconds; then it goes
+	void PlayShot (std::unique_ptr<Source> src, const V3 &dir, float gain, double length);
 
 	const std::vector<std::unique_ptr<Emitter>> &Emitters () const { return emitters; }
 	/// The listener's air
@@ -126,8 +151,16 @@ public:
 private:
 	void UpdateEmitter (Emitter &e, double t);
 
+	struct Shot {
+		std::unique_ptr<Source> src;
+		std::unique_ptr<PathNode> node;
+		double end;   // [s] (system time: shots play at warp too)
+	};
+	void UpdateShots ();
+
 	Engine &engine;
 	std::vector<std::unique_ptr<Emitter>> emitters;
+	std::vector<Shot> shots;
 	Realism realism = PHYSICAL;
 	std::function<void (const Boom&)> onBoom;
 
@@ -137,6 +170,7 @@ private:
 	double tPrev = -1.0;
 	Air lAir;
 	bool inside = false;             // in a cockpit
+	bool listenerJump = false;       // the camera jumped this step (a cut)
 	const void *insideOf = nullptr;  // the vessel (structure) the cockpit is in
 	double camRot[9] = {1,0,0, 0,1,0, 0,0,1};
 	double airRot[9] = {1,0,0, 0,1,0, 0,0,1};

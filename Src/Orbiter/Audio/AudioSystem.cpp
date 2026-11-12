@@ -8,6 +8,8 @@
 #include "Log.h"
 #include "Psys.h"
 #include "Vessel.h"
+#include "BoomSynth.h"
+#include "Ears.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -76,15 +78,28 @@ void System::Start (bool graphicsClient)
 	renderTime = 0.0;
 	flushed = 0;
 	ApplySettings (s);
-	world.OnBoom ([](const World::Boom &b) {
-		LOGOUT ("Audio: boom from %s at %.3f s", b.emitter->Desc ().name.c_str (), b.t);
-		static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
-		if (log) printf ("Audio: boom from %s at %.3f s\n", b.emitter->Desc ().name.c_str (), b.t), fflush (stdout);
-	});
+	world.OnBoom ([this](const World::Boom &b) { Boom (b); });
+}
+
+void System::Boom (const World::Boom &b)
+{
+	double dp, T;
+	const Air &la = world.ListenerAir ();
+	BoomSynth::Strength (b.emitter->Desc ().length, b.mach, b.height, b.sAir.p, la.p, b.sAir.c, dp, T);
+	LOGOUT ("Audio: boom from %s at %.3f s: Mach %.2f, %.0f m, %.1f Pa, %.0f ms", b.emitter->Desc ().name.c_str (), b.t, b.mach, b.height, dp, T * 1e3);
+	static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+	if (log) printf ("Audio: boom from %s at %.3f s: Mach %.2f, %.0f m, %.1f Pa, %.0f ms\n", b.emitter->Desc ().name.c_str (), b.t, b.mach, b.height, dp, T * 1e3), fflush (stdout);
+	if (td.Warp () > WARP_MUTE) return;
+	static uint32_t seed = 7;
+	auto bs = BoomSynth::Make (engine, (float)T, seed++);
+	if (!bs) return;
+	double len = bs->Length ();
+	world.PlayShot (std::move (bs), b.dir, (float)(dp / P_FULL), len);
 }
 
 void System::EndSession ()
 {
+	vessels.Clear ();
 	world.Clear ();
 	testTone = nullptr;
 	logT = -1.0;
@@ -93,6 +108,7 @@ void System::EndSession ()
 void System::Forget (const Body *body)
 {
 	if (testTone && testTone->Desc ().body == body) testTone = nullptr;
+	vessels.Forget (body);
 	world.Forget (body);
 }
 
@@ -115,6 +131,8 @@ void System::TestTone ()
 	d.level = (float)level;
 	d.refDist = 10.0f;
 	d.hull = 0.5f;
+	d.boom = true;
+	d.length = (float)(2.0 * v->Size ());
 	d.name = "test tone on " + name;
 	testTone = world.Add (d, MakeToneSource (engine, freq, 0.5));
 	if (testTone) LOGOUT ("Audio: test tone %.0f Hz on %s", freq, name.c_str ());
@@ -170,6 +188,8 @@ void System::Step ()
 		static const char *realismEnv = getenv ("ORBITER_AUDIO_REALISM"); // (tests: physical|cinematic)
 		bool cinematic = realismEnv && *realismEnv ? (realismEnv[0] == 'c' || realismEnv[0] == 'C') : orbiter->Cfg()->CfgSoundPrm.Realism == 1;
 		world.SetRealism (cinematic ? CINEMATIC : PHYSICAL);
+		static const bool noVessels = getenv ("ORBITER_AUDIO_VESSELS") && *getenv ("ORBITER_AUDIO_VESSELS") == '0';
+		if (!noVessels) vessels.Update ();
 		world.Update ();
 		static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
 		if (log && (logT < 0.0 || td.SimT1 - logT >= 0.5 || td.SimT1 < logT)) {
@@ -177,6 +197,8 @@ void System::Step ()
 			const Air &la = world.ListenerAir ();
 			for (auto &e : world.Emitters ()) {
 				const Emitter::State &h = e->Heard ();
+				static const bool all = getenv ("ORBITER_AUDIO_LOG") && atoi (getenv ("ORBITER_AUDIO_LOG")) >= 2;
+				if (!all && h.air < 1e-6f && h.hull < 1e-6f && e.get () != testTone) continue; // (silent; ORBITER_AUDIO_LOG=2 logs them too)
 				LOGOUT ("Audio: t %.2f %s: images %d, dist %.0f m, delay %.3f s, doppler %.4f, air %.4f, hull %.4f, cutoff %.0f Hz (listener: rho %.4g, c %.1f%s)",
 					td.SimT1, e->Desc ().name.c_str (), h.images, h.dist, h.delay, h.doppler, h.air, h.hull, h.cutoff,
 					la.rho, la.c, world.ListenerInside () ? ", in the cockpit" : "");

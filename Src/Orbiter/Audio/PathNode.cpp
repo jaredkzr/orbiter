@@ -32,8 +32,9 @@ void *PathNode::Node ()
 	return valid ? &impl->base : nullptr;
 }
 
-bool PathNode::Init (ma_engine *engine)
+bool PathNode::Init (ma_engine *engine, float dcBlock)
 {
+	dcHz = dcBlock;
 	Uninit ();
 	if (!engine) return false;
 	impl = std::make_unique<Impl>();
@@ -53,6 +54,7 @@ bool PathNode::Init (ma_engine *engine)
 	cfg.pInputChannels = inCh;
 	cfg.pOutputChannels = outCh;
 	rate = ma_engine_get_sample_rate (engine);
+	dcBuf.assign (16384, 0.0f); // (no allocation on the audio thread, for blocks up to this)
 	if (ma_node_init (ma_engine_get_node_graph (engine), &cfg, NULL, &impl->base) != MA_SUCCESS) {
 		impl.reset ();
 		return false;
@@ -90,6 +92,15 @@ void PathNode::Process (void *node, const float **in, unsigned *nIn, float **out
 	*nIn = n;
 	const bool hardCut = self->cut.exchange (false, std::memory_order_acquire);
 	const float rate = (float)self->rate;
+	// the input without its DC and infrasound (synthesized noise drifts there)
+	float *xb = self->dcBuf.size () >= n ? self->dcBuf.data () : (self->dcBuf.resize (n), self->dcBuf.data ());
+	if (self->dcHz > 0.0f) {
+		const float a = 1.0f - std::exp (-2.0f * PI_F * self->dcHz / rate);
+		float lp = self->dcLp;
+		for (unsigned i = 0; i < n; i++) lp += a * (x[i] - lp), xb[i] = x[i] - lp;
+		self->dcLp = std::fabs (lp) < 1e-20f ? 0.0f : lp;
+		x = xb;
+	}
 	// (the cutoff's easing over this block)
 	const float k = 1.0f - std::exp (-(float)n / (CUTOFF_TAU * rate));
 
@@ -99,31 +110,35 @@ void PathNode::Process (void *node, const float **in, unsigned *nIn, float **out
 		float g1 = s.gain.load (std::memory_order_relaxed);
 		float p1 = s.pan.load (std::memory_order_relaxed);
 		float fc1 = s.cutoff.load (std::memory_order_relaxed);
-		if (hardCut) s.g = 0.0f, s.y = 0.0f;
+		if (hardCut) s.g = 0.0f, s.y = s.y2 = 0.0f;
 		float g0 = s.g, p0 = s.p;
 		// (the cutoff eases in the log: an octave is an octave)
 		s.fc = std::exp (std::log (s.fc) + (std::log (fc1) - std::log (s.fc)) * k);
-		float a = 1.0f - std::exp (-2.0f * PI_F * s.fc / rate);
+		// (two one-poles, each at 1.554 fc: -3 dB at fc, 12 dB/octave above)
+		float a = 1.0f - std::exp (-2.0f * PI_F * std::min (1.554f * s.fc, 0.45f * rate) / rate);
 		// equal-power panning, at the block's ends
 		float l0 = std::cos ((p0 + 1.0f) * 0.25f * PI_F), r0 = std::sin ((p0 + 1.0f) * 0.25f * PI_F);
 		float l1 = std::cos ((p1 + 1.0f) * 0.25f * PI_F), r1 = std::sin ((p1 + 1.0f) * 0.25f * PI_F);
 		if (g0 == 0.0f && g1 == 0.0f) {
 			// silent: only the filter follows the input
-			float y = s.y;
-			for (unsigned i = 0; i < n; i++) y += a * (x[i] - y);
+			float y = s.y, y2 = s.y2;
+			for (unsigned i = 0; i < n; i++) y += a * (x[i] - y), y2 += a * (y - y2);
 			s.y = std::fabs (y) < 1e-20f ? 0.0f : y;
+			s.y2 = std::fabs (y2) < 1e-20f ? 0.0f : y2;
 			std::fill (o, o + 2 * n, 0.0f);
 		} else {
-			float y = s.y, inv = 1.0f / (float)n;
+			float y = s.y, y2 = s.y2, inv = 1.0f / (float)n;
 			float dl = (g1 * l1 - g0 * l0) * inv, dr = (g1 * r1 - g0 * r0) * inv;
 			float gl = g0 * l0, gr = g0 * r0;
 			for (unsigned i = 0; i < n; i++) {
 				y += a * (x[i] - y);
+				y2 += a * (y - y2);
 				gl += dl, gr += dr;
-				o[2*i] = y * gl;
-				o[2*i+1] = y * gr;
+				o[2*i] = y2 * gl;
+				o[2*i+1] = y2 * gr;
 			}
 			s.y = std::fabs (y) < 1e-20f ? 0.0f : y;
+			s.y2 = std::fabs (y2) < 1e-20f ? 0.0f : y2;
 		}
 		s.g = g1, s.p = p1;
 		s.cur.gain.store (g1, std::memory_order_relaxed);

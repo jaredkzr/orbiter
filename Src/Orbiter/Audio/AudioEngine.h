@@ -8,6 +8,7 @@
 // simulation time, for repeatable renders (tests, videos).
 //
 //   sources -> bus (sound group, user volume x simulation fade) -> master
+//   (the outside and cockpit buses through the ears: a compressor, Ears.h)
 //
 // Buses: what is heard outside (through the air), in the cockpit (through
 // the structure), voice callouts, the radio, music and the interface.
@@ -48,6 +49,7 @@ public:
 		Mode mode = DEVICE;
 		unsigned sampleRate = 48000;
 		unsigned channels = 2;
+		bool ears = true;   ///< the outside and cockpit buses heard through the ears (Ears.h)
 	};
 
 	Engine ();
@@ -87,6 +89,9 @@ public:
 
 	/// The engine's clock: frames mixed since Init
 	uint64_t Time () const;
+
+	/// The ears' gain reduction now [dB] (0: none, or no ears)
+	float EarsReduction () const;
 
 private:
 	struct Impl;

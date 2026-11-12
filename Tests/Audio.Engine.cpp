@@ -8,6 +8,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "Audio/AudioEngine.h"
 #include "Audio/WavWriter.h"
+#include "Audio/Ears.h"
 #include "miniaudio.h"
 #include <cmath>
 #include <cstdio>
@@ -45,10 +46,11 @@ double RenderRms (Engine &e, double seconds)
 	return std::sqrt (s / n);
 }
 
-Engine::Options Offline ()
+Engine::Options Offline (bool ears = false)
 {
 	Engine::Options o;
 	o.mode = Engine::OFFLINE;
+	o.ears = ears; // (the gains exactly: no compression)
 	return o;
 }
 
@@ -168,4 +170,40 @@ TEST_CASE ("WAV file: header and samples", "[audio]")
 	memcpy (&last, b.data () + b.size () - 4, 4);
 	CHECK (last == (float)1999 / 2000);
 	std::filesystem::remove (path);
+}
+
+TEST_CASE ("Ears: quiet as it is, loud compressed, peaks held", "[audio]")
+{
+	Ears::Settings set;
+	CHECK (Ears::GainDb (-40.0f, set) == 0.0f);
+	CHECK (Ears::GainDb (-25.0f, set) == 0.0f);
+	CHECK_THAT (Ears::GainDb (-5.0f, set), WithinAbs (-10.0f, 1e-4f)); // (15 dB over: 5 dB over)
+	// in the mix: a tone at +20 dBFS comes out held below full scale, a
+	// quiet one as it is
+	for (double amp : {10.0, 0.005}) {
+		Engine e;
+		REQUIRE (e.Init (Offline (true)));
+		Tone t (e, EXTERIOR, 220.0, amp);
+		RenderRms (e, 2.0); // (the ears settle)
+		double rms = RenderRms (e, 0.5);
+		uint64_t n = 4800;
+		std::vector<float> buf (n * 2);
+		e.Render (buf.data (), n);
+		float peak = 0.0f;
+		for (float v : buf) peak = std::max (peak, std::fabs (v));
+		if (amp > 1.0) {
+			CHECK (peak <= 0.9f);
+			CHECK (rms > 0.05);
+			CHECK (e.EarsReduction () < -20.0f);
+		} else {
+			CHECK_THAT (rms, WithinRel (amp / std::sqrt (2.0) / std::sqrt (2.0) * std::sqrt (2.0), 0.6));
+			CHECK (e.EarsReduction () > -0.5f);
+		}
+	}
+	// music is not heard through the ears
+	Engine e;
+	REQUIRE (e.Init (Offline (true)));
+	Tone m (e, MUSIC, 220.0, 0.5);
+	RenderRms (e, 1.0);
+	CHECK (e.EarsReduction () == 0.0f);
 }

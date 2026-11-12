@@ -147,11 +147,18 @@ set(headless_src
 # Sound
 	Audio/AudioEngine.cpp
 	Audio/AudioSystem.cpp
+	Audio/BoomSynth.cpp
+	Audio/Ears.cpp
 	Audio/Medium.cpp
 	Audio/Miniaudio.cpp
 	Audio/PathNode.cpp
+	Audio/RcsSynth.cpp
+	Audio/RocketSynth.cpp
+	Audio/Synth.cpp
 	Audio/Track.cpp
+	Audio/VesselSounds.cpp
 	Audio/WavWriter.cpp
+	Audio/WindSynth.cpp
 	Audio/World.cpp
 # Platform layer
 	${PLATFORM_DIR}/posix/InputPosix.cpp

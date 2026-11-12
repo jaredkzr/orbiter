@@ -74,8 +74,11 @@ double DopplerFactor (const double n[3], const double vs[3], const double vl[3],
 	double ns = n[0]*vs[0] + n[1]*vs[1] + n[2]*vs[2]; // source speed towards the listener
 	double nl = n[0]*vl[0] + n[1]*vl[1] + n[2]*vl[2]; // listener speed away from the source
 	double den = c - ns, num = c - nl;
-	if (den <= c / DOPPLER_MAX) return DOPPLER_MAX * (num > 0.0 ? 1.0 : 0.0);
-	return std::clamp (num / den, 0.0, DOPPLER_MAX);
+	// (both negative: listener and source together faster than sound, the
+	// listener overtaking the sound: the ratio holds. One negative: the
+	// sound heard backwards, as fast as it would be forwards)
+	if (std::fabs (den) < std::fabs (num) / DOPPLER_MAX) return DOPPLER_MAX;
+	return std::clamp (std::fabs (num / den), 1.0 / DOPPLER_MAX, DOPPLER_MAX);
 }
 
 } // namespace audio

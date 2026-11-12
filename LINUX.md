@@ -211,7 +211,8 @@ These are for testing and tuning (`1` turns a feature on, `0` off).
 | `ORBITER_AUDIO=0`, `ORBITER_AUDIO=1` | no sound / sound on the output device even headless or offscreen (by default only with a graphics client, and not offscreen) |
 | `ORBITER_AUDIO_REALISM=physical\|cinematic` | sound in space as set, whatever the settings say (tests) |
 | `ORBITER_AUDIO_TEST_TONE=<vessel>[:<Hz>[:<level>]]` | a sine on a vessel, heard as any sound source: travel time, Doppler, shock cone (tests) |
-| `ORBITER_AUDIO_LOG=1` | what is heard of each sound source (travel time, Doppler, levels), twice a second in `Orbiter.log`; sonic booms also on the console |
+| `ORBITER_AUDIO_LOG=1` | what is heard of each sound source (travel time, Doppler, levels), twice a second in `Orbiter.log` (`2`: silent ones too); sonic booms also on the console |
+| `ORBITER_AUDIO_VESSELS=0` | no sounds of the vessels themselves (engines, thrusters, air): only test tones |
 
 Example: an offscreen screenshot of a test scene, validated and profiled:
 
@@ -255,8 +256,10 @@ ctest
   balance, clipping, clicks; `--png` draws a spectrogram): `Audio.Render`
   (silence), `Audio.Flyby*` (a tone flown past a listener: travel time,
   Doppler, the shock cone of a supersonic pass), `Audio.Cockpit*` (the
-  cockpit and the vacuum, physical and cinematic, time acceleration).
-  Unit tests: `Audio.Engine`, `Audio.Propagation`.
+  cockpit and the vacuum, physical and cinematic, time acceleration),
+  `Audio.Takeoff` and `Audio.MoonLiftoff` (a vessel's own engines, on Earth
+  and on the Moon). Unit tests: `Audio.Engine`, `Audio.Propagation`,
+  `Audio.Synth`.
 - **Test files:** add new test scenarios to `Scenarios/Tests/` and their
   scripts to `Script/Tests/`. The build copies them into the build tree.
 

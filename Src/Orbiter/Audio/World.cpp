@@ -26,15 +26,16 @@ namespace {
 	constexpr float STRUCTURE_CUTOFF = 2500.0f;
 	/// Cinematic: no travel time, a mild Doppler
 	constexpr float CINEMATIC_DOPPLER_MIN = 0.8f, CINEMATIC_DOPPLER_MAX = 1.25f;
-	/// Gains are held below this (a limit on what one source gives)
-	constexpr float GAIN_MAX = 4.0f;
+	/// Gains are held below this (a sanity limit: levels are physical, P_FULL
+	/// full scale, the ears compress them; 1e4 is 190 dB SPL)
+	constexpr float GAIN_MAX = 1e4f;
 	/// Panning: a source to the side is this far to the side (about 12 dB
 	/// between the speakers, as the head shadows the far ear; not a speaker
 	/// alone)
 	constexpr double PAN_WIDTH = 0.7;
 	/// A source moving further than this in a step jumped: faster than
 	/// JUMP_SPEED [m/s], and more than JUMP_MIN [m]
-	constexpr double JUMP_SPEED = 30000.0, JUMP_MIN = 1000.0;
+	constexpr double JUMP_SPEED = 30000.0, JUMP_MIN = 200.0;
 
 	V3 ToV3 (const Vector &v) { return V3 (v.x, v.y, v.z); }
 	V3 Mul (const double *R, const V3 &v)   // R v (row-major)
@@ -121,6 +122,25 @@ std::unique_ptr<Source> MakeFileSource (Engine &e, const std::string &path, bool
 
 // ---- the world ------------------------------------------------------------
 
+void Emitter::Push (double t, const Params &p)
+{
+	if (!history.empty () && t < history.back ().first) history.clear (); // (time went back)
+	if (!history.empty () && t == history.back ().first) history.back ().second = p;
+	else history.emplace_back (t, p);
+	// (a minute is as far back as sound is heard: the track's age)
+	while (history.size () > 2 && history[1].first < t - 61.0) history.pop_front ();
+}
+
+Emitter::Params Emitter::Recalled () const
+{
+	if (history.empty ()) return Params{};
+	double tq = history.back ().first - hearDelay;
+	// the newest entry not after tq (before the first: the first)
+	for (size_t i = history.size (); i-- > 0; )
+		if (history[i].first <= tq) return history[i].second;
+	return history.front ().second;
+}
+
 World::World (Engine &e): engine (e)
 {
 }
@@ -157,6 +177,37 @@ void World::Remove (Emitter *e)
 	}
 }
 
+void World::PlayShot (std::unique_ptr<Source> src, const V3 &dir, float gain, double length)
+{
+	if (!engine.Active () || !src) return;
+	Shot sh;
+	sh.node = std::make_unique<PathNode>();
+	if (!sh.node->Init (engine.Ma (), 0.0f)) return; // (a boom's N-wave keeps its low end)
+	ma_node_attach_output_bus (sh.node->Node (), PathNode::AIR, engine.Group (EXTERIOR), 0);
+	if (!src->Attach (sh.node->Node ())) return;
+	PathNode::Target t;
+	double len = dir.Len ();
+	t.gain = std::min (GAIN_MAX, gain * (inside ? HULL_AIR_GAIN : 1.0f));
+	t.cutoff = inside ? HULL_AIR_CUTOFF : 20000.0f;
+	t.pan = len > 0.0 ? (float)std::clamp (PAN_WIDTH * dir.x / len, -1.0, 1.0) : 0.0f;
+	sh.node->Set (PathNode::AIR, t);
+	src->Start ();
+	sh.src = std::move (src);
+	sh.end = td.SysT1 + length;
+	shots.push_back (std::move (sh));
+}
+
+void World::UpdateShots ()
+{
+	for (auto it = shots.begin (); it != shots.end (); ) {
+		if (td.SysT1 >= it->end) {
+			it->src.reset ();
+			it->node->Uninit ();
+			it = shots.erase (it);
+		} else ++it;
+	}
+}
+
 void World::Forget (const Body *body)
 {
 	for (auto &e : emitters)
@@ -174,6 +225,8 @@ void World::Clear ()
 {
 	for (auto &e : emitters) e->source.reset (), e->node.Uninit ();
 	emitters.clear ();
+	for (auto &sh : shots) sh.src.reset (), sh.node->Uninit ();
+	shots.clear ();
 	airBody = nullptr;
 	tPrev = -1.0;
 }
@@ -218,12 +271,19 @@ void World::Update ()
 		L = ToV3 (cg);
 		lAir = Air ();
 	}
-	if (tPrev >= 0.0 && t > tPrev) vL = (L - Lprev) * (1.0 / (t - tPrev));
-	else if (tPrev < 0.0) vL = V3 ();
+	listenerJump = false;
+	if (tPrev >= 0.0 && t > tPrev) {
+		V3 v = (L - Lprev) * (1.0 / (t - tPrev));
+		// a camera cut: no motion through the air (no Doppler from it, no
+		// boom from the change of what is heard)
+		if ((L - Lprev).Len () > std::max (JUMP_MIN, JUMP_SPEED * (t - tPrev))) listenerJump = true, vL = V3 ();
+		else vL = v;
+	} else if (tPrev < 0.0) vL = V3 ();
 	inside = g_camera->IsInternal () && target && target->Type () == OBJTP_VESSEL;
 	insideOf = inside ? Structure (target) : nullptr;
 
 	for (auto &e : emitters) UpdateEmitter (*e, t);
+	UpdateShots ();
 
 	Lprev = L;
 	tPrev = t;
@@ -282,9 +342,11 @@ void World::UpdateEmitter (Emitter &e, double t)
 			n = e.track.Heard (t, L, c, im, 4);
 		}
 		// a pair appearing: the shock cone arrived
-		if (n >= prevImages + 2 && e.track.Size () > 2 && onBoom && realism == PHYSICAL) {
+		if (n >= prevImages + 2 && !listenerJump && e.track.Size () > 2 && onBoom && realism == PHYSICAL && d.boom) {
 			V3 dir = Mul (airRot, im[0].pos - L);
-			onBoom ({&e, t, TMul (camRot, dir)});
+			double h = (im[0].pos - L).Len ();
+			double mach = im[0].vel.Len () / std::max (sAir.c, 1.0);
+			onBoom ({&e, t, TMul (camRot, dir), h, mach, sAir});
 		}
 		if (n > 0) {
 			const Track::Image &h = im[0]; // (the newest: the nearer sound)
@@ -295,6 +357,17 @@ void World::UpdateEmitter (Emitter &e, double t)
 			s.dist = dist;
 			// loudness: spreading, the air at both ends
 			double gain = d.level * Spreading (dist, d.refDist) * Coupling (sAir) * Coupling (la);
+			// the way it sounds loudest (when it left the source)
+			if (d.front < 1.0f && dist > 1e-3) {
+				Vector dg = mul (d.body->GRot (), Vector (d.dir.x, d.dir.y, d.dir.z));
+				V3 dl3 = airBody ? TMul (airRot, ToV3 (dg)) : ToV3 (dg);
+				double len = dl3.Len ();
+				if (len > 0.0) {
+					double cosT = -dl.Dot (dl3) / (dist * len); // (dl: from the listener to it)
+					double f = 0.5 * (1.0 + cosT);
+					gain *= d.front + (1.0 - d.front) * f * f;
+				}
+			}
 			// absorption: over the way, in the mean air
 			Air mean = la;
 			mean.rho = std::sqrt (std::max (sAir.rho, 1e-12) * la.rho);
@@ -320,7 +393,7 @@ void World::UpdateEmitter (Emitter &e, double t)
 			}
 			// (the own vessel's sound reaches the cockpit through the structure:
 			// through the air, too, but not panned around the head)
-			if (own) pan = 0.0f;
+			if (own) pan = 0.0f, dop = 1.0f; // (and not shifted: the structure carries it)
 			air.gain = (float)std::min<double> (GAIN_MAX, gain);
 			air.cutoff = (float)fc;
 			air.pan = pan;
@@ -329,9 +402,15 @@ void World::UpdateEmitter (Emitter &e, double t)
 			e.source->SetDoppler (dop);
 		}
 	}
-	if (!s.images && own) e.source->SetDoppler (1.0f);
+	if (!s.images) {
+		s.dist = (P - L).Len (), s.delay = 0.0; // (not heard: where it is now)
+		if (own) e.source->SetDoppler (1.0f);
+	}
 	e.node.Set (PathNode::AIR, air);
 	s.air = air.gain;
+	// the source as the sound now arriving left it (the structure carries
+	// its own vessel's sound at once)
+	e.hearDelay = (own || !s.images) ? 0.0 : s.delay;
 }
 
 } // namespace audio
