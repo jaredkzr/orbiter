@@ -198,7 +198,7 @@ target_compile_definitions(Audio.Synth PRIVATE AUDIO_SYNTH_TEST)
 target_include_directories(Audio.Synth PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter ${CMAKE_SOURCE_DIR}/Extern/miniaudio)
 target_link_libraries(Audio.Synth Catch2::Catch2WithMain ${CMAKE_DL_LIBS} Threads::Threads m)
 set_target_properties(Audio.Synth PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER_BINARY_ROOT_DIR}")
-add_test(NAME Audio.Synth COMMAND $<TARGET_FILE:Audio.Synth>)
+add_test(NAME Audio.Synth COMMAND $<TARGET_FILE:Audio.Synth> WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}) # (Sound/Contacts: the contacts' recordings)
 set_tests_properties(Audio.Synth PROPERTIES TIMEOUT 120)
 
 # Scenario tests need an Orbiter executable that runs without graphics client
