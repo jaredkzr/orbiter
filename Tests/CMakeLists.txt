@@ -381,7 +381,8 @@ if (ORBITER_TEST_EXE)
 		)
 		set_tests_properties(Audio.MoonLiftoffCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioMoonLiftoff)
 
-		# Contacts (ContactSynth, Vessel::SoundContacts): a delta-glider set down
+		# Contacts (ContactSynth, Vessel::SoundContacts; off in the game for now,
+		# ORBITER_AUDIO_CONTACTS=1 here): a delta-glider set down
 		# on KSC's runway, heard from 40 m - silent until it touches down (1.28 s),
 		# the touchdown's thump, rolling; set down on its belly - the scrape, then
 		# silence when it has stopped. Docking (Scenarios/Tests/DockingTest): the
@@ -393,7 +394,7 @@ if (ORBITER_TEST_EXE)
 				WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 			)
 			set_tests_properties(Audio.Contacts${scene} PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioContacts${scene}
-				ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Contacts${scene}.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0")
+				ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Contacts${scene}.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0;ORBITER_AUDIO_CONTACTS=1")
 		endforeach()
 		set_tests_properties(Audio.ContactsLand PROPERTIES PASS_REGULAR_EXPRESSION "Audio: touchdown blow of LAND at 1\\.[2-3]")
 		add_test(
@@ -421,7 +422,7 @@ if (ORBITER_TEST_EXE)
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.Api PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioApi
-			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Api.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0")
+			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Api.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0;ORBITER_AUDIO_CONTACTS=1")
 		add_test(
 			NAME "Audio.ApiCheck"
 			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.Api.wav" --duration 29.0 --no-clip
@@ -436,7 +437,7 @@ if (ORBITER_TEST_EXE)
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.Docking PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "Audio: docking of A1"
-			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Docking.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0")
+			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Docking.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0;ORBITER_AUDIO_CONTACTS=1")
 		# the voice's callouts (a takeoff, a descent with the gear up, Mach 1)
 		# and XRSound's API on Orbiter's sound (Lua's xrsound)
 		add_test(

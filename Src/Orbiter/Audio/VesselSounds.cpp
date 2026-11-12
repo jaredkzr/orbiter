@@ -200,8 +200,11 @@ void VesselSounds::Build (PerVessel &pv)
 		if (c.em) pv.rcs.push_back (c);
 	}
 
-	// its contacts
-	auto cs = ContactSynth::Make (engine, seed++);
+	// its contacts (wheels, hull, docking, animations' motors): off for now,
+	// to be reworked (user review 2026-11-12); ORBITER_AUDIO_CONTACTS=1 for
+	// development and tests
+	static const bool contactsOn = getenv ("ORBITER_AUDIO_CONTACTS") && *getenv ("ORBITER_AUDIO_CONTACTS") == '1';
+	auto cs = contactsOn ? ContactSynth::Make (engine, seed++) : nullptr;
 	if (cs) {
 		pv.contactSynth = cs.get ();
 		EmitterDesc d;

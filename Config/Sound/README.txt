@@ -1,7 +1,9 @@
 Sound of vessel classes (Src/Orbiter/Audio/VesselSounds.h)
 
 Every vessel sounds by itself: its engines, attitude thrusters, the air
-over it, its contacts (wheels, hull, other vessels) and docking. A file
+over it, its contacts (wheels, hull, other vessels) and docking. (The
+contacts, docking and animations' motors are off for now, while they are
+reworked: ORBITER_AUDIO_CONTACTS=1 turns them on.) A file
 <class>.cfg here (the vessel's class name, e.g. DeltaGlider.cfg) tunes it:
 
   ; factors on its sounds (1: as usual)
