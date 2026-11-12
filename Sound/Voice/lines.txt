@@ -1,0 +1,8 @@
+# Orbiter's own voice lines (callouts), made offline with Piper TTS by
+# Utils/Audio/make_voice.py: one line per file, "<file name>|<text>".
+# Keys in Src/Orbiter/Audio/Callouts.cpp; XRSound cfgs may name other files.
+Ignition|Ignition.
+Max Q|Max Q.
+MECO|Main engine cutoff.
+Orbit|Orbit achieved.
+Splashdown|Splashdown.

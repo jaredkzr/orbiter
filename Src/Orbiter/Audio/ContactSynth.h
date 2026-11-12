@@ -59,6 +59,7 @@ private:
 	dsp::Smooth motorS[NMOTOR];
 	float motorPh[NMOTOR][3] = {};
 	dsp::Biquad hydraulicBp;
+	dsp::OnePole motorWob[NMOTOR];  // (a motor's load wavering: its level and pitch)
 	// blows: a small queue (simulation thread writes, audio thread reads)
 	struct Pending { std::atomic<int> count{0}; std::atomic<float> strength{0.0f}; } pending[NBLOW];
 	int played[NBLOW] = {};
@@ -69,7 +70,8 @@ private:
 	dsp::Biquad rollLp, rollBp, squealBp, squealBp2, scrapeBp, scrapeHp, thudLp, chirpBp, crunchLp;
 	dsp::OnePole rollAm, scrapeAm;
 	dsp::Smooth rollS, loadS, squealS, scrapeS;
-	float rollPh = 0.0f;
+	float rollPh = 0.0f, wheelPh = 0.0f, jointT = 1.0f;
+	float squealPh = 0.0f, squealWob = 0.0f;
 	// a blow sounding: its kind, strength, time since it started
 	struct Voice { int kind = -1; float s = 0.0f, t = 0.0f, ph = 0.0f, ph2 = 0.0f, ph3 = 0.0f; float delay = 0.0f; };
 	Voice voices[6];

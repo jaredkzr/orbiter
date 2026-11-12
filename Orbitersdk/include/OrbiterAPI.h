@@ -4726,6 +4726,13 @@ OAPIFUNC void oapiAudioAnimation (OBJHANDLE hVessel, UINT anim, int kind, double
  * \return false: no such key
  */
 OAPIFUNC bool oapiAudioTune (OBJHANDLE hVessel, const char *key, double value);
+/**
+ * \brief The voice's callouts said lately (for the vessel in focus): the
+ *   files, newest first.
+ * \param n 0: the newest
+ * \return the file, or NULL: no such callout
+ */
+OAPIFUNC const char *oapiAudioCallout (int n);
 /** @} */
 
 	/**

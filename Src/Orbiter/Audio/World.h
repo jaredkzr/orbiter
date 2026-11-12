@@ -54,6 +54,11 @@ public:
 	virtual void SetPitch (float p) {}
 	/// It has played to its end (sound files not looped)
 	virtual bool Done () const { return false; }
+	/// Held (paused) or going again from where it was held
+	virtual void Pause (bool p) { if (p) Stop (); else Start (); }
+	/// Sound files: to a time [s] in the file; where it is [s] (< 0: not a file)
+	virtual bool Seek (double s) { return false; }
+	virtual double Cursor () const { return -1.0; }
 };
 
 /// A source playing a miniaudio data source (generators: tests) or a file
@@ -84,6 +89,7 @@ public:
 	void SetPitch (float p) { if (source) source->SetPitch (p); }
 	/// Its source has played to its end
 	bool SourceDone () const { return source && source->Done (); }
+	Source *GetSource () { return source.get (); }
 	/// What is heard of it now (for the readout and tests)
 	struct State {
 		int images = 0;         // emission moments heard (0: not heard)

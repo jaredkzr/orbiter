@@ -93,6 +93,12 @@ namespace {
 		void SetDoppler (float f) override { dop = f; if (soundInit) ma_sound_set_pitch (&sound, std::max (dop * pitch, 0.01f)); }
 		void SetPitch (float p) override { pitch = p; if (soundInit) ma_sound_set_pitch (&sound, std::max (dop * pitch, 0.01f)); }
 		bool Done () const override { return soundInit && ma_sound_at_end (&sound); }
+		bool Seek (double t) override { return soundInit && ma_sound_seek_to_second (&sound, (float)std::max (0.0, t)) == MA_SUCCESS; }
+		double Cursor () const override
+		{
+			float c = 0.0f;
+			return soundInit && ma_sound_get_cursor_in_seconds (&sound, &c) == MA_SUCCESS ? c : -1.0;
+		}
 	private:
 		bool Init (ma_engine *engine, ma_sound_config &sc)
 		{

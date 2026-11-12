@@ -87,6 +87,8 @@ public:
 	enum AnimKind { ANIM_NONE = 0, ANIM_MOTOR = 1, ANIM_DOOR = 2, ANIM_GEAR = 3 };
 	bool TuneVessel (const Vessel *v, const std::string &key, double value);
 	void Animation (const Vessel *v, unsigned anim, int kind, double level);
+	/// The animation given the gear's sound (-1: none)
+	int GearAnim (const Vessel *v) const;
 	void Forget (const Body *body);
 	void Clear ();
 

@@ -35,7 +35,7 @@ namespace {
 	constexpr double HULL_ENGINE = 0.01, HULL_RCS = 0.02;
 	/// The air over the hull: radiated p(r0) = WIND_RAD q (U / 300 m/s);
 	/// on the hull (in the cockpit) WIND_WALL q, through it WIND_TRANS of that
-	constexpr double WIND_RAD = 0.001, WIND_WALL = 0.006, WIND_TRANS = 0.018;
+	constexpr double WIND_RAD = 0.0004, WIND_WALL = 0.004, WIND_TRANS = 0.018;
 	/// Exhaust ahead of a rocket: this much (-20 dB)
 	constexpr float ROCKET_FRONT = 0.1f;
 	/// Clusters per vessel at most
@@ -46,7 +46,7 @@ namespace {
 	constexpr double CONTACT_P = 2.0, CONTACT_RMS = 0.3, CONTACT_HULL = 0.4;
 	/// Blows: closing speeds that strike one [m/s] (above the step's
 	/// gravity), and the speeds of a full one (a hard landing, a crash, a bump)
-	constexpr double BLOW_MIN[3] = {0.35, 0.4, 0.04}, BLOW_FULL[3] = {3.0, 6.0, 0.5};
+	constexpr double BLOW_MIN[3] = {0.35, 0.4, 0.04}, BLOW_FULL[3] = {3.0, 3.5, 0.5};
 	constexpr double BLOW_GAP = 0.3; // [s] between blows of a kind
 
 	V3 ToV3 (const VECTOR3 &v) { return V3 (v.x, v.y, v.z); }
@@ -388,6 +388,14 @@ void VesselSounds::Animation (const Vessel *v, unsigned anim, int kind, double l
 	if (kind > ANIM_NONE && kind <= ANIM_GEAR) anims.push_back ({anim, kind, (float)std::clamp (level, 0.0, 4.0)});
 }
 
+int VesselSounds::GearAnim (const Vessel *v) const
+{
+	auto it = configs.find (v);
+	if (it == configs.end ()) return -1;
+	for (auto &a : it->second.anims) if (a.kind == ANIM_GEAR) return (int)a.anim;
+	return -1;
+}
+
 VesselSounds::PerVessel *VesselSounds::Find (const Vessel *v)
 {
 	for (auto &p : vessels) if (p->v == v) return p.get ();
@@ -415,7 +423,7 @@ void VesselSounds::Docked (const Vessel *v, const V3 &port, bool dock)
 	PerVessel *pv = Find (v);
 	if (!pv || !pv->contact) return;
 	int k = dock ? ContactSynth::DOCK : ContactSynth::UNDOCK;
-	pv->blows[k]++, pv->blowStrength[k] = 0.8f;
+	pv->blows[k]++, pv->blowStrength[k] = 1.0f;
 	static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
 	if (log) printf ("Audio: %s of %s\n", dock ? "docking" : "undocking", v->Name ()), fflush (stdout);
 	pv->contact->SetOffset (port);

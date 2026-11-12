@@ -11,6 +11,8 @@
 #include "BoomSynth.h"
 #include "Replay.h"
 #include "Ears.h"
+#include "XRSoundShim.h"
+#include "Camera.h"
 #include "miniaudio.h"
 #include <filesystem>
 #include <algorithm>
@@ -19,6 +21,8 @@
 
 extern TimeData td;
 extern PlanetarySystem *g_psys;
+extern Vessel *g_focusobj;
+extern Camera *g_camera;
 
 namespace audio {
 
@@ -93,6 +97,10 @@ void System::Boom (const World::Boom &b)
 	static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
 	if (log) printf ("Audio: boom from %s at %.3f s: Mach %.2f, %.0f m, %.1f Pa, %.0f ms\n", b.emitter->Desc ().name.c_str (), b.t, b.mach, b.height, dp, T * 1e3), fflush (stdout);
 	if (td.Warp () > WARP_MUTE) return;
+	// (a source not faster than sound doesn't boom: its path jumped - a
+	// vessel moved by a script, a first frame - and the jump looked
+	// supersonic)
+	if (b.mach < 1.0) { LOGOUT ("Audio: (not a boom: Mach %.2f, a jump)", b.mach); return; }
 	static uint32_t seed = 7;
 	auto bs = BoomSynth::Make (engine, (float)T, seed++);
 	if (!bs) return;
@@ -101,41 +109,80 @@ void System::Boom (const World::Boom &b)
 }
 
 namespace {
-	std::string FindSound (const std::string &file)
+	/// A path as given, its backslashes as slashes, its case as on the disk
+	/// (files named in Windows' manner: add-ons' cfgs)
+	std::string ResolveCase (std::string f)
 	{
+		std::replace (f.begin (), f.end (), '\\', '/');
 		std::error_code ec;
-		if (std::filesystem::exists (file, ec)) return file;
-		std::string s = "Sound/" + file;
-		if (std::filesystem::exists (s, ec)) return s;
-		return std::string ();
+		if (f.empty () || std::filesystem::exists (f, ec)) return f;
+		namespace fs = std::filesystem;
+		fs::path in (f), out;
+		for (const fs::path &part : in) {
+			fs::path next = out.empty () ? part : out / part;
+			if (!fs::exists (next, ec)) {
+				bool found = false;
+				std::string want = part.string ();
+				for (const auto &de : fs::directory_iterator (out.empty () ? fs::path (".") : out, ec)) {
+					std::string name = de.path ().filename ().string ();
+					if (name.size () == want.size () && std::equal (name.begin (), name.end (), want.begin (),
+						[](char a, char b) { return std::tolower ((unsigned char)a) == std::tolower ((unsigned char)b); })) {
+						next = out.empty () ? fs::path (name) : out / name;
+						found = true;
+						break;
+					}
+				}
+				if (!found) return std::string ();
+			}
+			out = next;
+		}
+		return out.string ();
 	}
+}
+
+std::string System::FindSound (const std::string &file)
+{
+	if (file.empty ()) return std::string ();
+	std::string s = ResolveCase (file);
+	if (!s.empty ()) return s;
+	return ResolveCase ("Sound/" + file);
 }
 
 int System::Play (const Vessel *v, const std::string &file, const V3 &pos, double level, bool loop)
 {
+	if (!v) return PlayOn (UI, file, level, loop);
 	if (!engine.Active ()) return 0;
 	std::string path = FindSound (file);
 	if (path.empty ()) { LOGOUT ("Audio: no sound file %s", file.c_str ()); return 0; }
 	Played p;
 	p.loop = loop, p.level = level;
-	if (v) {
-		EmitterDesc d;
-		d.body = v;
-		d.offset = pos;
-		d.level = (float)level;
-		d.refDist = 2.0f;
-		d.hull = 0.5f;
-		d.name = file;
-		p.em = world.Add (d, MakeFileSource (engine, path, loop));
-		if (!p.em) return 0;
-	} else {
-		p.ui = std::make_unique<ma_sound>();
-		ma_uint32 flags = MA_SOUND_FLAG_NO_SPATIALIZATION | MA_SOUND_FLAG_DECODE;
-		if (ma_sound_init_from_file (engine.Ma (), path.c_str (), flags, engine.Group (UI), NULL, p.ui.get ()) != MA_SUCCESS) return 0;
-		ma_sound_set_looping (p.ui.get (), loop ? MA_TRUE : MA_FALSE);
-		ma_sound_set_volume (p.ui.get (), (float)level);
-		ma_sound_start (p.ui.get ());
-	}
+	EmitterDesc d;
+	d.body = v;
+	d.offset = pos;
+	d.level = (float)level;
+	d.refDist = 2.0f;
+	d.hull = 0.5f;
+	d.name = file;
+	p.em = world.Add (d, MakeFileSource (engine, path, loop));
+	if (!p.em) return 0;
+	int h = nextHandle++;
+	played[h] = std::move (p);
+	return h;
+}
+
+int System::PlayOn (Bus bus, const std::string &file, double level, bool loop)
+{
+	if (!engine.Active () || bus < 0 || bus >= NBUS) return 0;
+	std::string path = FindSound (file);
+	if (path.empty ()) { LOGOUT ("Audio: no sound file %s", file.c_str ()); return 0; }
+	Played p;
+	p.loop = loop, p.level = level, p.bus = bus;
+	p.flat = std::make_unique<ma_sound>();
+	ma_uint32 flags = MA_SOUND_FLAG_NO_SPATIALIZATION | MA_SOUND_FLAG_DECODE;
+	if (ma_sound_init_from_file (engine.Ma (), path.c_str (), flags, engine.Group (bus), NULL, p.flat.get ()) != MA_SUCCESS) return 0;
+	ma_sound_set_looping (p.flat.get (), loop ? MA_TRUE : MA_FALSE);
+	ma_sound_set_volume (p.flat.get (), (float)level);
+	ma_sound_start (p.flat.get ());
 	int h = nextHandle++;
 	played[h] = std::move (p);
 	return h;
@@ -146,7 +193,7 @@ bool System::StopSound (int h)
 	auto it = played.find (h);
 	if (it == played.end ()) return false;
 	if (it->second.em) world.Remove (it->second.em);
-	if (it->second.ui) ma_sound_uninit (it->second.ui.get ());
+	if (it->second.flat) ma_sound_uninit (it->second.flat.get ());
 	played.erase (it);
 	return true;
 }
@@ -158,14 +205,21 @@ bool System::SetSound (int h, double level, double pitch)
 	Played &p = it->second;
 	if (level >= 0.0) {
 		p.level = level;
-		if (p.em) p.em->SetLevel ((float)level);
-		if (p.ui) ma_sound_set_volume (p.ui.get (), (float)level);
+		ApplyLevel (p);
 	}
 	if (pitch > 0.0) {
+		p.pitch = pitch;
 		if (p.em) p.em->SetPitch ((float)pitch);
-		if (p.ui) ma_sound_set_pitch (p.ui.get (), (float)pitch);
+		if (p.flat) ma_sound_set_pitch (p.flat.get (), (float)pitch);
 	}
 	return true;
+}
+
+void System::ApplyLevel (Played &p)
+{
+	const float g = (float)(p.level * p.gate);
+	if (p.em) p.em->SetLevel (g);
+	if (p.flat) ma_sound_set_volume (p.flat.get (), g);
 }
 
 bool System::Playing (int h) const
@@ -173,23 +227,128 @@ bool System::Playing (int h) const
 	return played.count (h) > 0;
 }
 
+System::Played *System::Find (int h)
+{
+	auto it = played.find (h);
+	return it == played.end () ? nullptr : &it->second;
+}
+
+const System::Played *System::Find (int h) const
+{
+	auto it = played.find (h);
+	return it == played.end () ? nullptr : &it->second;
+}
+
+bool System::Pause (int h, bool pause)
+{
+	Played *p = Find (h);
+	if (!p) return false;
+	if (p->paused == pause) return true;
+	p->paused = pause;
+	if (p->flat) { if (pause) ma_sound_stop (p->flat.get ()); else ma_sound_start (p->flat.get ()); }
+	if (p->em && p->em->GetSource ()) p->em->GetSource ()->Pause (pause);
+	return true;
+}
+
+bool System::Paused (int h) const
+{
+	const Played *p = Find (h);
+	return p && p->paused;
+}
+
+bool System::SetPan (int h, float pan)
+{
+	Played *p = Find (h);
+	if (!p || !p->flat) return false; // (sounds on a vessel are where they are)
+	p->pan = std::clamp (pan, -1.0f, 1.0f);
+	ma_sound_set_pan (p->flat.get (), p->pan);
+	return true;
+}
+
+float System::GetPan (int h) const
+{
+	const Played *p = Find (h);
+	return p ? p->pan : -100.0f;
+}
+
+double System::GetPitch (int h) const
+{
+	const Played *p = Find (h);
+	return p ? p->pitch : 0.0;
+}
+
+bool System::Seek (int h, double s)
+{
+	Played *p = Find (h);
+	if (!p) return false;
+	if (p->flat) return ma_sound_seek_to_second (p->flat.get (), (float)std::max (0.0, s)) == MA_SUCCESS;
+	return p->em && p->em->GetSource () && p->em->GetSource ()->Seek (s);
+}
+
+double System::Cursor (int h) const
+{
+	const Played *p = Find (h);
+	if (!p) return -1.0;
+	if (p->flat) { float c = 0.0f; return ma_sound_get_cursor_in_seconds (p->flat.get (), &c) == MA_SUCCESS ? c : -1.0; }
+	return p->em && p->em->GetSource () ? p->em->GetSource ()->Cursor () : -1.0;
+}
+
+bool System::SetGate (int h, double g)
+{
+	Played *p = Find (h);
+	if (!p) return false;
+	g = std::clamp (g, 0.0, 1.0);
+	if (g != p->gate) { p->gate = g; ApplyLevel (*p); }
+	return true;
+}
+
+bool System::Speaking () const
+{
+	for (auto &p : played)
+		if (p.second.bus == VOICE && p.second.flat && !p.second.paused && p.second.gate > 0.0 && p.second.level > 0.0
+			&& ma_sound_is_playing (p.second.flat.get ())) return true;
+	return false;
+}
+
 void System::UpdatePlayed ()
 {
 	// (sounds not looped go when they have played)
 	for (auto it = played.begin (); it != played.end (); ) {
 		Played &p = it->second;
-		bool done = !p.loop && ((p.em && p.em->SourceDone ()) || (p.ui && ma_sound_at_end (p.ui.get ())));
+		bool done = !p.loop && !p.paused && ((p.em && p.em->SourceDone ()) || (p.flat && ma_sound_at_end (p.flat.get ())));
 		if (done) {
 			if (p.em) world.Remove (p.em);
-			if (p.ui) ma_sound_uninit (p.ui.get ());
+			if (p.flat) ma_sound_uninit (p.flat.get ());
 			it = played.erase (it);
 		} else ++it;
 	}
 }
 
+bool System::CalloutsOn () const
+{
+	static const char *env = getenv ("ORBITER_AUDIO_CALLOUTS"); // (tests: 0 or 1)
+	if (env && *env) return *env != '0';
+	return orbiter->Cfg()->CfgSoundPrm.bCallouts;
+}
+
+void System::Duck (double dt)
+{
+	// the voice speaking: the rest down 9 dB, quickly (80 ms); back slowly
+	// (0.5 s) after it
+	const float target = Speaking () ? 0.355f : 1.0f;
+	const float d = engine.Duck ();
+	const double tau = target < d ? 0.08 : 0.5;
+	const float k = (float)(1.0 - std::exp (-std::max (dt, 0.0) / tau));
+	float nd = d + (target - d) * k;
+	if (std::fabs (nd - target) < 1e-3f) nd = target;
+	engine.SetDuck (nd);
+}
+
 void System::EndSession ()
 {
-	for (auto &p : played) if (p.second.ui) ma_sound_uninit (p.second.ui.get ());
+	callouts.Reset ();
+	xr::Clear ();
+	for (auto &p : played) if (p.second.flat) ma_sound_uninit (p.second.flat.get ());
 	played.clear ();
 	vessels.Clear ();
 	world.Clear ();
@@ -204,6 +363,7 @@ void System::Forget (const Body *body)
 		it = (it->second.em && it->second.em->Desc ().body == body) ? played.erase (it) : std::next (it);
 	vessels.Forget (body);
 	world.Forget (body);
+	xr::Forget (body);
 }
 
 void System::TestTone ()
@@ -234,7 +394,7 @@ void System::TestTone ()
 
 void System::Stop ()
 {
-	for (auto &p : played) if (p.second.ui) ma_sound_uninit (p.second.ui.get ());
+	for (auto &p : played) if (p.second.flat) ma_sound_uninit (p.second.flat.get ());
 	played.clear ();
 	if (wav.IsOpen ()) {
 		LOGOUT ("Audio: rendered %.2f s", (double)wav.Frames() / std::max (1u, engine.SampleRate()));
@@ -296,7 +456,15 @@ void System::Step ()
 		static const bool noVessels = getenv ("ORBITER_AUDIO_VESSELS") && *getenv ("ORBITER_AUDIO_VESSELS") == '0';
 		if (!noVessels) vessels.Update (t, replay);
 		world.Update (t);
+		// the voice, XRSound's sounds (not in the replay: it isn't flown)
+		const bool cockpit = g_camera && g_camera->IsInternal ();
+		if (!replay) {
+			if (CalloutsOn ()) callouts.Step (g_focusobj, td.SimT1, td.SimDT, td.Warp ());
+			else callouts.Reset ();
+			xr::Step (*this, g_focusobj, cockpit, td.SimT1);
+		}
 		UpdatePlayed ();
+		Duck (td.UiDT ());
 		static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
 		if (log && (logT < 0.0 || t - logT >= 0.5 || t < logT)) {
 			logT = t;

@@ -11,7 +11,8 @@ add_library(LuaInterpreter SHARED
         lua_audio.cpp
 )
 
-if(ORBITER_BUILD_XRSOUND)
+if(ORBITER_BUILD_XRSOUND OR ORBITER_HEADLESS)
+  # (headless: XRSound's API is Orbiter's own sound, Src/Orbiter/Audio/XRSoundShim.cpp)
   target_sources(LuaInterpreter PRIVATE lua_xrsound.cpp)
 endif()
 
@@ -40,6 +41,8 @@ endif()
 if(ORBITER_BUILD_XRSOUND)
   add_dependencies(LuaInterpreter	XRSound_lib	XRSound_assets)
   target_link_libraries(LuaInterpreter XRSound_lib)
+  target_compile_definitions(LuaInterpreter PUBLIC XRSOUND)
+elseif(ORBITER_HEADLESS)
   target_compile_definitions(LuaInterpreter PUBLIC XRSOUND)
 endif()
 

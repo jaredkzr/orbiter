@@ -5428,6 +5428,7 @@ void Vessel::UpdateStructuralLoads ()
 			if (blow) snprintf (cbuf, sizeof (cbuf), "%s, in an impact at %0.1f m/s", name.c_str(), hit);
 			else snprintf (cbuf, sizeof (cbuf), "%s, under %0.1f g", name.c_str(), g);
 			flightevent::Post (flightevent::WARNING, title, cbuf);
+			if (audio::System *as = g_pOrbiter->Audio ()) as->Event (this, audio::Callouts::EV_PART_LOST);
 		} else LOGOUT ("%s", cbuf);
 		Vector Jx (-L[j] * ((1.0 - parts[j].strength / L[j].length()) * hJ)); // (the impulse the joint did not pass on)
 		{   // (bounded by what the parts beyond it touched)
@@ -5528,6 +5529,7 @@ void Vessel::UpdateHeating ()
 			title[0] = (char)toupper ((unsigned char)title[0]);
 			snprintf (cbuf, sizeof (cbuf), "%s, at %0.0f K", name.c_str(), part_temp[hottest]);
 			flightevent::Post (flightevent::WARNING, title, cbuf);
+			if (audio::System *as = g_pOrbiter->Audio ()) as->Event (this, audio::Callouts::EV_HEAT_DAMAGE);
 		} else LOGOUT ("%s", cbuf);
 		last_debris = nullptr;
 		BreakPart (hottest, 0.5);

@@ -10,6 +10,7 @@
 
 #include "Vesselbase.h"
 #include "Vessel.h"
+#include "Audio/AudioSystem.h"
 #include "Planet.h"
 #include "Sea.h"
 #include "Hydro.h"
@@ -574,6 +575,7 @@ void Vessel::ReportSplashdown ()
 	snprintf (detail, sizeof (detail), "%s at %.1f m/s, %.1f g", Name(), water.entrySpeed, water.accMax / structure::G0);
 	LOGOUT ("Splashdown: %s", detail);
 	if (this == g_focusobj) flightevent::Post (destroyed ? flightevent::WARNING : flightevent::INFO, "Splashdown", detail);
+	if (audio::System *as = g_pOrbiter ? g_pOrbiter->Audio () : nullptr) as->Event (this, audio::Callouts::EV_SPLASHDOWN);
 	if (modIntf.v->Version() >= 2) {
 		WATERSTATE ws;
 		((VESSEL*)modIntf.v)->GetWaterState (&ws);

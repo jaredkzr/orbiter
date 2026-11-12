@@ -76,6 +76,12 @@ public:
 	void SetMasterGain (float g);
 	void SetBusGain (Bus b, float g);
 
+	/// The voice's ducking: the other sounds of the simulation (outside,
+	/// cockpit, radio, music) at this gain (1: none) while a callout speaks
+	void SetDuck (float g);
+	float Duck () const { return duck; }
+	static bool Ducked (Bus b) { return b == EXTERIOR || b == INTERIOR || b == RADIO || b == MUSIC; }
+
 	/// The simulation buses' fade (pause, time acceleration): towards
 	/// `target` (0..1) over `seconds`. Repeated calls with the same target
 	/// don't restart the fade.
@@ -101,6 +107,8 @@ private:
 	unsigned sampleRate = 48000, channels = 2;
 	std::string deviceName;
 	float simFade = 1.0f;
+	float busGain[NBUS] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
+	float duck = 1.0f;
 };
 
 } // namespace audio

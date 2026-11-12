@@ -80,6 +80,7 @@ bool Engine::Init (const Options &opt)
 			if (impl->groupInit[b]) ma_node_attach_output_bus (&impl->group[b], 0, impl->ears.Node (), 0);
 	}
 	simFade = 1.0f;
+	duck = 1.0f;
 	return true;
 }
 
@@ -108,7 +109,18 @@ void Engine::SetMasterGain (float g)
 
 void Engine::SetBusGain (Bus b, float g)
 {
-	if (ma_sound_group *grp = Group (b)) ma_sound_group_set_volume (grp, std::max (0.0f, g));
+	if (b < 0 || b >= NBUS) return;
+	busGain[b] = std::max (0.0f, g);
+	if (ma_sound_group *grp = Group (b)) ma_sound_group_set_volume (grp, busGain[b] * (Ducked (b) ? duck : 1.0f));
+}
+
+void Engine::SetDuck (float g)
+{
+	g = std::clamp (g, 0.0f, 1.0f);
+	if (g == duck) return;
+	duck = g;
+	for (int b = 0; b < NBUS; b++)
+		if (Ducked ((Bus)b)) SetBusGain ((Bus)b, busGain[b]);
 }
 
 void Engine::SetSimFade (float target, double seconds)

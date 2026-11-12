@@ -29,6 +29,7 @@
 #include "WavWriter.h"
 #include "World.h"
 #include "VesselSounds.h"
+#include "Callouts.h"
 #include <map>
 #include <vector>
 
@@ -65,16 +66,48 @@ public:
 	void Forget (const Body *body);
 	/// A vessel's contacts of a step; docking and undocking at a port
 	void Contacts (const Vessel *v, const ContactStep &c) { vessels.Contacts (v, c); }
-	void Docked (const Vessel *v, const V3 &port, bool dock) { vessels.Docked (v, port, dock); }
+	void Docked (const Vessel *v, const V3 &port, bool dock)
+	{
+		vessels.Docked (v, port, dock);
+		callouts.OnEvent (v, dock ? Callouts::EV_DOCKED : Callouts::EV_UNDOCKED);
+	}
+	/// Something happened to a vessel the voice may call out
+	void Event (const Vessel *v, Callouts::Event e) { callouts.OnEvent (v, e); }
+	/// The animation given the gear's sound (-1: none)
+	int GearAnim (const Vessel *v) const { return vessels.GearAnim (v); }
+	Callouts &GetCallouts () { return callouts; }
+	/// The voice's callouts are on (the settings; ORBITER_AUDIO_CALLOUTS)
+	bool CalloutsOn () const;
 
 	// ---- the API (oapiAudio*, Lua's audio table) --------------------------
 	/// Play a sound file on a vessel (at pos, vessel frame: heard as any of
 	/// its sounds), or without one (null: the interface). The file: as given,
 	/// else under Sound/. Returns a handle (0: not played).
 	int Play (const Vessel *v, const std::string &file, const V3 &pos, double level, bool loop);
+	/// Play a sound file on a bus, not in the world (the voice, the radio,
+	/// music, the interface)
+	int PlayOn (Bus bus, const std::string &file, double level, bool loop);
 	bool StopSound (int handle);
+	/// Its level (< 0: as it is) and pitch (<= 0: as it is)
 	bool SetSound (int handle, double level, double pitch);
 	bool Playing (int handle) const;
+	bool Pause (int handle, bool pause);
+	bool Paused (int handle) const;
+	/// Left (-1) to right (1): sounds on a bus (false: on a vessel)
+	bool SetPan (int handle, float pan);
+	float GetPan (int handle) const;      ///< -100: no such sound
+	double GetPitch (int handle) const;   ///< 0: no such sound
+	/// To a time in the file [s]; where it is [s] (< 0: no such sound)
+	bool Seek (int handle, double s);
+	double Cursor (int handle) const;
+	/// A gate on its level (0..1): where it may be heard (the XRSound shim:
+	/// the cockpit only, the focus vessel only)
+	bool SetGate (int handle, double g);
+	/// A callout is speaking (the voice bus)
+	bool Speaking () const;
+	/// A sound file's path: as given (backslashes as slashes, any case),
+	/// else under Sound/ (empty: none)
+	static std::string FindSound (const std::string &file);
 	bool Tune (const Vessel *v, const std::string &key, double value) { return vessels.TuneVessel (v, key, value); }
 	void Animation (const Vessel *v, unsigned anim, int kind, double level) { vessels.Animation (v, anim, kind, level); }
 
@@ -96,6 +129,8 @@ private:
 	Engine engine;
 	World world{engine};
 	VesselSounds vessels{engine, world};
+	Callouts callouts{*this};
+	void Duck (double dt);
 	WavWriter wav;
 	std::vector<float> block;
 	double renderTime = 0.0;        // seconds of sound asked for
@@ -105,8 +140,18 @@ private:
 	bool forcedOff = false;         // ORBITER_AUDIO=0
 	Emitter *testTone = nullptr;    // ORBITER_AUDIO_TEST_TONE
 	// sounds played through the API: on vessels (emitters), on the interface
-	struct Played { Emitter *em = nullptr; std::unique_ptr<ma_sound> ui; bool loop = false; double level = 1.0; };
+	struct Played {
+		Emitter *em = nullptr;              // on a vessel
+		std::unique_ptr<ma_sound> flat;     // on a bus
+		Bus bus = UI;
+		bool loop = false, paused = false;
+		double level = 1.0, gate = 1.0, pitch = 1.0;
+		float pan = 0.0f;
+	};
 	std::map<int, Played> played;
+	Played *Find (int h);
+	const Played *Find (int h) const;
+	void ApplyLevel (Played &p);
 	int nextHandle = 1;
 	void UpdatePlayed ();
 	double logT = -1.0;             // ORBITER_AUDIO_LOG: last line

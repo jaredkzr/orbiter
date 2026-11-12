@@ -335,6 +335,7 @@ if(ORBITER_BUILD_VULKANCLIENT)
 endif()
 if(ORBITER_HEADLESS)
 	add_subdirectory(Utils/meshc) # mesh compiler, used to build vessel modules
+	add_subdirectory(Sound) # (XRSound's header and sounds: the shim)
 else()
 	add_subdirectory(Utils)
 	add_subdirectory(Orbitersdk)

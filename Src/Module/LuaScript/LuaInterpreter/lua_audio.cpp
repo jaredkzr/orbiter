@@ -143,6 +143,23 @@ int Interpreter::audio_tune (lua_State *L)
 	return 1;
 }
 
+/***
+The voice's callouts said lately (for the vessel in focus).
+@function callouts
+@treturn table the files, newest first
+*/
+int Interpreter::audio_callouts (lua_State *L)
+{
+	lua_newtable (L);
+	for (int i = 0; ; i++) {
+		const char *f = oapiAudioCallout (i);
+		if (!f) break;
+		lua_pushstring (L, f);
+		lua_rawseti (L, -2, i + 1);
+	}
+	return 1;
+}
+
 void Interpreter::LoadAudioAPI ()
 {
 	static const struct luaL_reg audioLib[] = {
@@ -152,6 +169,7 @@ void Interpreter::LoadAudioAPI ()
 		{"playing", audio_playing},
 		{"animation", audio_animation},
 		{"tune", audio_tune},
+		{"callouts", audio_callouts},
 		{NULL, NULL}
 	};
 	luaL_openlib (L, "audio", audioLib, 0);

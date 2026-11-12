@@ -1855,6 +1855,12 @@ DLLEXPORT bool oapiAudioTune (OBJHANDLE hVessel, const char *key, double value)
 	return as && v && key && as->Tune (v, key, value);
 }
 
+DLLEXPORT const char *oapiAudioCallout (int n)
+{
+	audio::System *as = Audio ();
+	return as ? as->GetCallouts ().Recent (n) : nullptr;
+}
+
 DLLEXPORT const ATMCONST *oapiGetPlanetAtmConstants (OBJHANDLE hPlanet)
 {
 	return ((Planet*)hPlanet)->AtmParams ();

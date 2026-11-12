@@ -22,3 +22,22 @@ latch or lock at their ends):
 
 Vessel modules can do the same from code: oapiAudioTune, oapiAudioAnimation
 (OrbiterAPI.h), or from Lua: audio.tune, audio.animation.
+
+The voice (Src/Orbiter/Audio/Callouts.h)
+
+The vessel in focus has its flight called out in the headset: liftoff,
+touchdown, "100 knots", heights from 5000 m down, Mach numbers, docking
+distances, modes (RCS, autopilot, aerodynamic controls), fuel and damage
+warnings, ignition, Max Q, MECO, orbit, splashdown. XRSound's recordings
+(XRSound/Default) and Orbiter's own lines (Sound/Voice, made with Piper by
+Utils/Audio/make_voice.py). The files are XRSound's settings: XRSound/
+XRSound.cfg, and a class's XRSound/XRSound-<class>.cfg over it ("none"
+switches a line off). Settings, Audio: "Voice callouts".
+
+XRSound
+
+Add-ons written for XRSound (XRSound.h: XRSound::CreateInstance) and Lua's
+xrsound play through Orbiter's own sound; there is no XRSound module. A
+class's XRSound-<class>.cfg still gives its animations sounds
+([animation_<n>]) and its engines files of their own (MainEngines...: in
+place of the synthesized roar).

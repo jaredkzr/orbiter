@@ -281,7 +281,7 @@ if (ORBITER_TEST_EXE)
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.Render PROPERTIES TIMEOUT 60 FIXTURES_SETUP AudioRender
-			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Render.wav")
+			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Render.wav;ORBITER_AUDIO_CALLOUTS=0")
 		add_test(
 			NAME "Audio.RenderCheck"
 			COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_SOURCE_DIR}/Tests/Audio/analyze.py "${ORBITER_BINARY_ROOT_DIR}/Audio.Render.wav"
@@ -305,7 +305,7 @@ if (ORBITER_TEST_EXE)
 				WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 			)
 			set_tests_properties(Audio.Flyby${pass} PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioFlyby${pass}
-				ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Flyby${pass}.wav;ORBITER_AUDIO_TEST_TONE=SRC;ORBITER_AUDIO_VESSELS=0;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0")
+				ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Flyby${pass}.wav;ORBITER_AUDIO_TEST_TONE=SRC;ORBITER_AUDIO_VESSELS=0;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0")
 		endforeach()
 		set_tests_properties(Audio.FlybySuper PROPERTIES PASS_REGULAR_EXPRESSION "Audio: boom from test tone on SRC at 22\\.5[0-9]")
 		add_test(
@@ -336,7 +336,7 @@ if (ORBITER_TEST_EXE)
 				WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 			)
 			set_tests_properties(Audio.Cockpit${realism} PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioCockpit${realism}
-				ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Cockpit${realism}.wav;ORBITER_AUDIO_TEST_TONE=SRC;ORBITER_AUDIO_VESSELS=0;ORBITER_AUDIO_REALISM=${realism};ORBITER_DAMAGE=0")
+				ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Cockpit${realism}.wav;ORBITER_AUDIO_TEST_TONE=SRC;ORBITER_AUDIO_VESSELS=0;ORBITER_AUDIO_REALISM=${realism};ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0")
 		endforeach()
 		add_test(
 			NAME "Audio.CockpitPhysicalCheck"
@@ -364,7 +364,7 @@ if (ORBITER_TEST_EXE)
 				WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 			)
 			set_tests_properties(Audio.${scene} PROPERTIES TIMEOUT 120 FIXTURES_SETUP Audio${scene}
-				ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.${scene}.wav;ORBITER_AUDIO_REALISM=physical;ORBITER_DAMAGE=0")
+				ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.${scene}.wav;ORBITER_AUDIO_REALISM=physical;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0")
 		endforeach()
 		add_test(
 			NAME "Audio.TakeoffCheck"
@@ -393,7 +393,7 @@ if (ORBITER_TEST_EXE)
 				WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 			)
 			set_tests_properties(Audio.Contacts${scene} PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioContacts${scene}
-				ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Contacts${scene}.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0")
+				ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Contacts${scene}.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0")
 		endforeach()
 		set_tests_properties(Audio.ContactsLand PROPERTIES PASS_REGULAR_EXPRESSION "Audio: touchdown blow of LAND at 1\\.[2-3]")
 		add_test(
@@ -421,7 +421,7 @@ if (ORBITER_TEST_EXE)
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.Api PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioApi
-			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Api.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0")
+			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Api.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0")
 		add_test(
 			NAME "Audio.ApiCheck"
 			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.Api.wav" --duration 29.0 --no-clip
@@ -436,7 +436,45 @@ if (ORBITER_TEST_EXE)
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.Docking PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "Audio: docking of A1"
-			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Docking.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0")
+			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Docking.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0")
+		# the voice's callouts (a takeoff, a descent with the gear up, Mach 1)
+		# and XRSound's API on Orbiter's sound (Lua's xrsound)
+		add_test(
+			NAME "Audio.Callouts"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Audio/Callouts.scn" "--fixedstep=0.02"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.Callouts PROPERTIES TIMEOUT 300 FIXTURES_SETUP AudioCallouts
+			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Callouts.wav;ORBITER_AUDIO_CALLOUTS=1;ORBITER_DAMAGE=0")
+		add_test(
+			NAME "Audio.CalloutsCheck"
+			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.Callouts.wav" --no-clip --no-clicks
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.CalloutsCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioCallouts)
+		add_test(
+			NAME "Audio.Ascent"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Audio/Ascent.scn" "--fixedstep=0.02"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.Ascent PROPERTIES TIMEOUT 300
+			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Ascent.wav;ORBITER_AUDIO_CALLOUTS=1;ORBITER_DAMAGE=0")
+		add_test(
+			NAME "Audio.XRSound"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Audio/XRSound.scn" "--fixedstep=0.02"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.XRSound PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioXRSound
+			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.XRSound.wav;ORBITER_AUDIO_CALLOUTS=0;ORBITER_DAMAGE=0")
+		add_test(
+			NAME "Audio.XRSoundCheck"
+			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.XRSound.wav" --duration 10.0 --no-clip
+				--level 0.3:0.9:all:-inf:-80 --level 1.0:1.3:all:-60:-5 --level 2.2:2.9:all:-60:-5
+				--level 3.15:3.45:all:-inf:-80 --level 5.4:5.9:all:-inf:-80 --level 6.0:6.3:all:-60:-5
+				--level 7.3:8.9:all:-inf:-80
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.XRSoundCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioXRSound)
 	endif()
 
 	# Launchpad (in the Vulkan client's window, rendered offscreen; needs a

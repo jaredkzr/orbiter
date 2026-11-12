@@ -1,0 +1,36 @@
+BEGIN_HYPERDESC
+Audio test: the voice's callouts for a rocket's ascent - Space Shuttle
+Atlantis on its pad: ignition, Mach 1, Max Q (Script/Tests/AudioAscent).
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51983.4772490220
+  Script Tests/AudioAscent
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship STS-101
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET STS-101
+  MODE Cockpit
+  FOV 40.00
+END_CAMERA
+
+BEGIN_SHIPS
+STS-101:Atlantis
+  STATUS Landed Earth
+  POS -80.6208630 28.6270927
+  HEADING 180.57
+  ALT 47.361
+  AROT 151.063 -8.225 4.515
+  PRPLEVEL 0:1.000 1:1.000 2:1.000
+  NAVFREQ 0 0
+  CONFIGURATION 0
+  CARGODOOR 0 0.0000
+  GEAR 0 0.0000
+  KUBAND 0 0.0000
+END
+END_SHIPS

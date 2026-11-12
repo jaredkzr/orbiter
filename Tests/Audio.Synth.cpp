@@ -343,20 +343,24 @@ TEST_CASE ("Contacts: rolling, touchdown, squeal, docking", "[audio][synth]")
 		r.Take (0.5);
 		auto x = r.Take (2.0);
 		INFO ("rolling RMS " << Rms (x));
-		CHECK_THAT (Db (Rms (x)), WithinAbs (Db (0.3), 4.0));
-		// low: most of it below 300 Hz
-		CHECK (BandRms (x, 0, 300, 48000) > 0.8 * Rms (x));
+		CHECK_THAT (Db (Rms (x)), WithinAbs (Db (0.18), 2.0)); // (gentle: 4 dB under the calibration)
+		// a low rumble: nearly all of it below 200 Hz, no hiss
+		INFO ("below 200 Hz " << Db (BandRms (x, 0, 200, 48000) / Rms (x)) << " dB, above 1 kHz " << Db (BandRms (x, 1000, 0, 48000) / Rms (x)) << " dB");
+		CHECK (BandRms (x, 0, 200, 48000) > 0.9 * Rms (x));
+		CHECK (BandRms (x, 1000, 0, 48000) < 0.03 * Rms (x));
 	}
-	{	// a touchdown: deep and short
+	{	// a touchdown: the strut's thump and the tyres' squeal (tonal, 650-900
+		// Hz), both short
 		Rig r;
 		auto s = ContactSynth::Make (r.e, 21);
 		r.Attach (*s);
 		r.Take (0.1);
 		s->Strike (ContactSynth::TOUCHDOWN, 1.0f);
-		auto x = r.Take (0.6);
-		std::vector<float> head (x.begin (), x.begin () + 7200), tail (x.begin () + 19200, x.end ());
-		INFO ("touchdown: below 120 Hz " << Db (BandRms (head, 0, 120, 48000)) << " dB, above 500 Hz " << Db (BandRms (head, 500, 0, 48000)) << " dB");
-		CHECK (BandRms (head, 0, 120, 48000) > 2.0 * BandRms (head, 500, 0, 48000));
+		auto x = r.Take (0.8);
+		std::vector<float> head (x.begin (), x.begin () + 7200), tail (x.begin () + 33600, x.end ());
+		INFO ("touchdown: below 120 Hz " << Db (BandRms (head, 0, 120, 48000)) << " dB, 600-950 Hz " << Db (BandRms (head, 600, 950, 48000)) << " dB");
+		CHECK (BandRms (head, 0, 120, 48000) > 0.3 * Rms (head));        // the thump
+		CHECK (BandRms (head, 600, 950, 48000) > 0.3 * Rms (head));      // the squeal
 		CHECK (Rms (tail) < 0.05 * Rms (head));
 	}
 	{	// a squeal: tonal, near 780 Hz
@@ -385,5 +389,10 @@ TEST_CASE ("Contacts: rolling, touchdown, squeal, docking", "[audio][synth]")
 		CHECK (latch1 > 1.5 * gap);
 		CHECK (latch2 > 1.2 * gap);
 		CHECK (clunk > latch1);
+		// clunks, not bells: nothing left ringing half a second after the last
+		// latch
+		auto late = r.Take (0.5);
+		INFO ("ringing after: " << Db (Rms (late)) << " dB vs the clunk " << Db (Rms (std::vector<float> (x.begin (), x.begin () + 4800))));
+		CHECK (Rms (late) < 0.01 * Rms (std::vector<float> (x.begin (), x.begin () + 4800)));
 	}
 }

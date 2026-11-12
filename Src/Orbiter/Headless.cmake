@@ -148,6 +148,7 @@ set(headless_src
 	Audio/AudioEngine.cpp
 	Audio/AudioSystem.cpp
 	Audio/BoomSynth.cpp
+	Audio/Callouts.cpp
 	Audio/ContactSynth.cpp
 	Audio/Ears.cpp
 	Audio/Medium.cpp
@@ -161,6 +162,8 @@ set(headless_src
 	Audio/WavWriter.cpp
 	Audio/WindSynth.cpp
 	Audio/World.cpp
+	Audio/XrConfig.cpp
+	Audio/XRSoundShim.cpp
 # Platform layer
 	${PLATFORM_DIR}/posix/InputPosix.cpp
 	${PLATFORM_DIR}/posix/LaunchpadPosix.cpp
@@ -180,6 +183,7 @@ target_include_directories(OrbiterCore PUBLIC
 	${CMAKE_SOURCE_DIR}/Orbitersdk/include
 	${CMAKE_SOURCE_DIR}/OVP
 	${CMAKE_SOURCE_DIR}/Extern/miniaudio
+	${ORBITER_BINARY_SDK_DIR}/XRSound
 	${CMAKE_CURRENT_BINARY_DIR}
 	${TRACY_CLIENT_INCLUDE}
 	${imgui_SOURCE_DIR}
