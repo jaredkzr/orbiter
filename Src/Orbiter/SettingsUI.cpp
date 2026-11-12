@@ -699,6 +699,9 @@ void SettingsUI::PageAudio ()
 	}
 	ImGui::BeginDisabled (!s.bEnabled);
 	changed |= VolumeRow ("Volume", "All of Orbiter's sound.", &s.Master);
+	static const char *realism[] = { "Physical", "Cinematic" };
+	changed |= ComboRow ("Sound in space", "Physical: sound needs air to travel - silence outside in vacuum, the cockpit hears its own vessel through the hull; it takes its time to arrive. Cinematic: everything heard everywhere, at once.",
+		&s.Realism, realism, 2);
 
 	Section ("Mix");
 	static const char *help[audio::NBUS][2] = {

@@ -123,6 +123,38 @@ def envelope(rate, data, band="all", window=0.05):
     return out
 
 
+def inst_freq(rate, data, fmin, fmax, smooth=0.01):
+    """The instantaneous frequency [(t, Hz)] of the strongest tone between
+    fmin and fmax (band-passed, from the analytic signal's phase), smoothed
+    over `smooth` seconds"""
+    mono = data.mean(axis=1)
+    sos = signal.butter(4, [fmin, fmax], "bandpass", fs=rate, output="sos")
+    x = signal.sosfiltfilt(sos, mono)
+    a = signal.hilbert(x)
+    ph = np.unwrap(np.angle(a))
+    f = np.diff(ph) * rate / (2 * np.pi)
+    n = max(1, int(smooth * rate))
+    f = np.convolve(f, np.ones(n) / n, mode="same")
+    env = np.abs(a[1:])
+    return f, env
+
+
+def dominant_freq(rate, data, t0, t1):
+    """The strongest frequency [Hz] from t0 to t1 (FFT peak, interpolated)"""
+    i0, i1 = int(t0 * rate), int(t1 * rate)
+    x = data[i0:i1].mean(axis=1)
+    if len(x) < 64:
+        return 0.0
+    w = np.hanning(len(x))
+    nfft = 1 << (len(x) * 4 - 1).bit_length()
+    sp = np.abs(np.fft.rfft(x * w, nfft))
+    k = int(np.argmax(sp[1:])) + 1
+    if 1 <= k < len(sp) - 1:
+        a, b, c = np.log(sp[k - 1] + 1e-30), np.log(sp[k] + 1e-30), np.log(sp[k + 1] + 1e-30)
+        k = k + 0.5 * (a - c) / (a - 2 * b + c)
+    return k * rate / nfft
+
+
 def spectrogram_png(rate, data, path, title=None):
     import matplotlib
     matplotlib.use("Agg")
@@ -165,6 +197,12 @@ def main(argv=None):
     ap.add_argument("--no-clicks", action="store_true", help="expect no clicks")
     ap.add_argument("--level", action="append", default=[], metavar="T0:T1:BAND:MIN:MAX",
                     help="expect the level from T0 to T1 [s] in BAND between MIN and MAX dBFS")
+    ap.add_argument("--freq", action="append", default=[], metavar="T0:T1:FMIN:FMAX",
+                    help="expect the strongest frequency from T0 to T1 [s] between FMIN and FMAX [Hz]")
+    ap.add_argument("--cross", action="append", default=[], metavar="F:T:TOL:FMIN:FMAX",
+                    help="expect the tone (between FMIN and FMAX Hz) to fall through F Hz at T s (within TOL s)")
+    ap.add_argument("--channel-balance", action="append", default=[], metavar="T0:T1:MIN:MAX",
+                    help="expect right minus left level [dB] from T0 to T1 between MIN and MAX")
     a = ap.parse_args(argv)
 
     rate, data = load(a.wav)
@@ -194,6 +232,40 @@ def main(argv=None):
         print(f"  level {t0}-{t1} s {band}: {v:.1f} dBFS (expected {lo}..{hi}) {'ok' if ok else 'FAILED'}")
         if not ok:
             failed.append(f"level {spec}: {v:.1f} dBFS")
+    for spec in a.freq:
+        t0, t1, lo, hi = (float(x) for x in spec.split(":"))
+        f = dominant_freq(rate, data, t0, t1)
+        ok = lo <= f <= hi
+        print(f"  frequency {t0}-{t1} s: {f:.1f} Hz (expected {lo:g}..{hi:g}) {'ok' if ok else 'FAILED'}")
+        if not ok:
+            failed.append(f"frequency {spec}: {f:.1f} Hz")
+    for spec in a.cross:
+        F, T, tol, lo, hi = (float(x) for x in spec.split(":"))
+        f, env = inst_freq(rate, data, lo, hi)
+        # (where the tone is there: within 30 dB of its loudest)
+        live = env > env.max() * 10 ** (-30 / 20)
+        above = (f > F) & live
+        below = (f < F) & live
+        tc = None
+        i0 = max(0, int((T - 5 * tol - 1.0) * rate))
+        idx = np.nonzero(above[i0:-1] & below[i0 + 1:])[0]
+        if len(idx):
+            # the crossing nearest the expected time
+            cand = (idx + i0 + 1) / rate
+            tc = float(cand[np.argmin(np.abs(cand - T))])
+        ok = tc is not None and abs(tc - T) <= tol
+        print(f"  {F:g} Hz crossed at {tc if tc is None else round(tc, 4)} s (expected {T:.3f} +- {tol:g}) {'ok' if ok else 'FAILED'}")
+        if not ok:
+            failed.append(f"cross {spec}: {tc}")
+    for spec in a.channel_balance:
+        t0, t1, lo, hi = (float(x) for x in spec.split(":"))
+        i0, i1 = int(t0 * rate), int(t1 * rate)
+        l, r = rms_db(data[i0:i1, 0]), rms_db(data[i0:i1, 1])
+        b = r - l
+        ok = lo <= b <= hi
+        print(f"  balance {t0}-{t1} s: right - left {b:.1f} dB (expected {lo:g}..{hi:g}) {'ok' if ok else 'FAILED'}")
+        if not ok:
+            failed.append(f"balance {spec}: {b:.1f} dB")
     for f in failed:
         print("FAILED: " + f)
     return 1 if failed else 0

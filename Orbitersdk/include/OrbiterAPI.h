@@ -4668,6 +4668,17 @@ OAPIFUNC void oapiGetPlanetAtmParams (OBJHANDLE hPlanet, double rad, ATMPARAM *p
 OAPIFUNC void oapiGetPlanetAtmParams (OBJHANDLE hPlanet, double alt, double lng, double lat, ATMPARAM *prm);
 
 	/**
+	* \brief Returns the speed of sound in a planet's air at a position.
+	* \param hPlanet planet handle
+	* \param gpos position in the global frame [m]
+	* \return speed of sound [m/s] (sqrt(gamma R T) of the air there), or 0
+	*   where there is no air to carry sound (beyond the atmosphere, or a
+	*   density below 1e-7 kg/m^3)
+	* \sa oapiGetPlanetAtmParams
+	*/
+OAPIFUNC double oapiGetSoundSpeed (OBJHANDLE hPlanet, const VECTOR3 *gpos);
+
+	/**
 	* \brief Returns atmospheric constants for a planet.
 	* \param hPlanet planet handle
 	* \return pointer to \c ATMCONST structure containing atmospheric coefficients for the planet (see notes)

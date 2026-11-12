@@ -147,8 +147,12 @@ set(headless_src
 # Sound
 	Audio/AudioEngine.cpp
 	Audio/AudioSystem.cpp
+	Audio/Medium.cpp
 	Audio/Miniaudio.cpp
+	Audio/PathNode.cpp
+	Audio/Track.cpp
 	Audio/WavWriter.cpp
+	Audio/World.cpp
 # Platform layer
 	${PLATFORM_DIR}/posix/InputPosix.cpp
 	${PLATFORM_DIR}/posix/LaunchpadPosix.cpp

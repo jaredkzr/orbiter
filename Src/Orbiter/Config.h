@@ -279,6 +279,7 @@ struct CFG_SOUNDPRM {           // sound (Src/Orbiter/Audio)
 	bool   bEnabled;            // sound on
 	float  Master;              // master volume (0-1, as on the slider)
 	float  Bus[6];              // volumes of the buses (audio::Bus): outside, cockpit, voice, radio, music, interface
+	int    Realism;             // 0: physical (no sound through vacuum), 1: cinematic (sound everywhere)
 };
 
 struct CFG_WINDOWPOS {

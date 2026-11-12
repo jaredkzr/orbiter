@@ -15,6 +15,11 @@
 //   - headless, offscreen (ORBITER_VK_OFFSCREEN), ORBITER_AUDIO=0, or
 //     sound off in the settings: nowhere
 //   - ORBITER_AUDIO=1: the device, even without a graphics client
+//
+// Tests: ORBITER_AUDIO_TEST_TONE=<vessel>[:<Hz>[:<level>]] puts a sine on
+// a vessel (travel time, Doppler, the shock cone in a render);
+// ORBITER_AUDIO_LOG=1 logs what is heard of each emitter, twice a second;
+// ORBITER_AUDIO_REALISM=physical|cinematic overrides the setting.
 // =======================================================================
 
 #ifndef __AUDIOSYSTEM_H
@@ -22,6 +27,7 @@
 
 #include "AudioEngine.h"
 #include "WavWriter.h"
+#include "World.h"
 #include <vector>
 
 class Orbiter;
@@ -49,7 +55,13 @@ public:
 	/// once, and the device opened if sound was switched on
 	void SettingsChanged ();
 
+	/// A session ends: its sounds go
+	void EndSession ();
+	/// A body is deleted: its sounds go
+	void Forget (const Body *body);
+
 	Engine &GetEngine () { return engine; }
+	World &GetWorld () { return world; }
 	bool Rendering () const { return wav.IsOpen (); }
 
 	/// The simulation buses' fade for a state of the simulation: 0 paused
@@ -59,9 +71,11 @@ public:
 private:
 	void ApplySettings (const CFG_SOUNDPRM &s);
 	void RenderStep (double dt);
+	void TestTone ();
 
 	Orbiter *orbiter;
 	Engine engine;
+	World world{engine};
 	WavWriter wav;
 	std::vector<float> block;
 	double renderTime = 0.0;        // seconds of sound asked for
@@ -69,6 +83,8 @@ private:
 	bool started = false;
 	bool client = false;            // a graphics client (sound on the device)
 	bool forcedOff = false;         // ORBITER_AUDIO=0
+	Emitter *testTone = nullptr;    // ORBITER_AUDIO_TEST_TONE
+	double logT = -1.0;             // ORBITER_AUDIO_LOG: last line
 };
 
 } // namespace audio

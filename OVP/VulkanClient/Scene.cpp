@@ -1180,10 +1180,13 @@ void Scene::Jolt (OBJHANDLE body, const VECTOR3 &gpos, double strength, double R
 {
 	// (PLAN.md section 3: amplitude by M_p^(1/3) / d^2 - about 0.7 deg at
 	// 200 m for 7 t, 2 deg at most - none beyond 10 R; it arrives with the
-	// sound, d / 340 s after the flash, and lasts 0.4 s. Kept in the body's
+	// sound, d / c after the flash (c: the speed of sound in the air there,
+	// 340 m/s where there is none), and lasts 0.4 s. Kept in the body's
 	// frame: the global frame moves a kilometre a step with the planet)
 	JoltEvent j{};
 	j.body = body;
+	j.c = oapiGetSoundSpeed (body, &gpos);
+	if (!(j.c > 0.0)) j.c = 340.0;
 	oapiGlobalToLocal (body, &gpos, &j.lpos);
 	j.t0 = oapiGetSimTime (), j.strength = strength, j.R = R, j.tStart = -1.0, j.amp = 0.0;
 	j.phase = fmod (length (gpos), 6.28);
@@ -1251,8 +1254,8 @@ void Scene::UpdateCamera ()
 					VECTOR3 g;
 					oapiLocalToGlobal (it->body, &it->lpos, &g);
 					double d = std::max (length (g - camPos), 1.0);
-					if (simt - it->t0 < d / 340.0) { ++it; continue; }
-					it->tStart = it->t0 + d / 340.0;
+					if (simt - it->t0 < d / it->c) { ++it; continue; }
+					it->tStart = it->t0 + d / it->c;
 					it->amp = std::min (2.0, 2333.0 * it->strength / (d * d)) * std::clamp ((10.0 * it->R - d) / (3.0 * it->R), 0.0, 1.0) * RAD;
 					if (joltLog) oapiWriteLogV ("VulkanClient: jolt arrived at %.3f from %.0f m: %.2f deg", it->tStart, d, it->amp * DEG);
 				}

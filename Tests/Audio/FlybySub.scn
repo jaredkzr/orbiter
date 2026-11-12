@@ -1,0 +1,31 @@
+BEGIN_HYPERDESC
+Audio test: a delta-glider with a 440 Hz tone (ORBITER_AUDIO_TEST_TONE=SRC)
+flies at Mach 0.5, 100 m over a listener on the sea (Script/Tests/AudioFlyby).
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Tests/AudioFlyby
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship SRC
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET SRC
+  MODE Extern
+  POS 4.0 -20.0 -30
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+SRC:DeltaGlider
+  STATUS Landed Earth
+  POS -80.6500000 28.6200000
+  HEADING 90.00
+  PRPLEVEL 0:0.500 1:1.000
+END
+END_SHIPS

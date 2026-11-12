@@ -8,6 +8,7 @@
 #include "Orbiter.h"
 #include "Launchpad.h"
 #include "Psys.h"
+#include "Audio/World.h"
 #include "BlackHole.h"
 #include "Debris.h"
 #include "Camera.h"
@@ -1791,6 +1792,15 @@ DLLEXPORT void oapiGetPlanetAtmParams (OBJHANDLE hPlanet, double alt, double lng
 {
 	Planet *planet = (Planet*)hPlanet;
 	planet->GetAtmParam (alt, lng, lat, prm);
+}
+
+DLLEXPORT double oapiGetSoundSpeed (OBJHANDLE hPlanet, const VECTOR3 *gpos)
+{
+	const Body *b = (const Body*)hPlanet;
+	if (!b || !gpos || b->Type () != OBJTP_PLANET) return 0.0;
+	double g[3] = { gpos->x, gpos->y, gpos->z };
+	audio::Air a = audio::World::AirAt ((const Planet*)b, g);
+	return a.Present () ? a.c : 0.0;
 }
 
 DLLEXPORT const ATMCONST *oapiGetPlanetAtmConstants (OBJHANDLE hPlanet)

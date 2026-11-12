@@ -965,6 +965,7 @@ void Orbiter::CloseSession ()
 
 	if (replay) replay->Exit (); // (the live state is saved)
 	bSession = false;
+	if (m_audio) m_audio->EndSession ();
 	predictor.reset(); // (stops its thread before the world goes)
 	planners.clear();  // (as their workers)
 	predictTarget = nullptr;

@@ -209,6 +209,9 @@ These are for testing and tuning (`1` turns a feature on, `0` off).
 | `ORBITER_VK_SHAKE=<f>` | scale of the cockpit view's jolts from turbulence and buffeting (`0` off) |
 | `ORBITER_AUDIO_RENDER=<file.wav>` | mix the sound offline into a WAV file (32-bit float, 48 kHz), one time step of sound per time step: with `--fixedstep`, repeatable renders (`Tests/Audio/analyze.py`) |
 | `ORBITER_AUDIO=0`, `ORBITER_AUDIO=1` | no sound / sound on the output device even headless or offscreen (by default only with a graphics client, and not offscreen) |
+| `ORBITER_AUDIO_REALISM=physical\|cinematic` | sound in space as set, whatever the settings say (tests) |
+| `ORBITER_AUDIO_TEST_TONE=<vessel>[:<Hz>[:<level>]]` | a sine on a vessel, heard as any sound source: travel time, Doppler, shock cone (tests) |
+| `ORBITER_AUDIO_LOG=1` | what is heard of each sound source (travel time, Doppler, levels), twice a second in `Orbiter.log`; sonic booms also on the console |
 
 Example: an offscreen screenshot of a test scene, validated and profiled:
 
@@ -247,9 +250,13 @@ ctest
 - **Unit tests:** transfer conics and routes, relativity, Kerr geodesics,
   collision geometry, the camera's geometry (`Camera.Rig`) and the audio
   engine (`Audio.Engine`).
-- **Audio tests:** `Audio.Render` renders a session's sound to a WAV file,
-  `Audio.RenderCheck` checks it with `Tests/Audio/analyze.py` (levels per
-  band and time, clipping, clicks; `--png` draws a spectrogram).
+- **Audio tests:** sessions rendered to WAV files and checked with
+  `Tests/Audio/analyze.py` (levels per band and time, frequencies, stereo
+  balance, clipping, clicks; `--png` draws a spectrogram): `Audio.Render`
+  (silence), `Audio.Flyby*` (a tone flown past a listener: travel time,
+  Doppler, the shock cone of a supersonic pass), `Audio.Cockpit*` (the
+  cockpit and the vacuum, physical and cinematic, time acceleration).
+  Unit tests: `Audio.Engine`, `Audio.Propagation`.
 - **Test files:** add new test scenarios to `Scenarios/Tests/` and their
   scripts to `Script/Tests/`. The build copies them into the build tree.
 

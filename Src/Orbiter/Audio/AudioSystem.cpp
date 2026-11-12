@@ -6,11 +6,14 @@
 #include "Config.h"
 #include "TimeData.h"
 #include "Log.h"
+#include "Psys.h"
+#include "Vessel.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
 
 extern TimeData td;
+extern PlanetarySystem *g_psys;
 
 namespace audio {
 
@@ -73,6 +76,48 @@ void System::Start (bool graphicsClient)
 	renderTime = 0.0;
 	flushed = 0;
 	ApplySettings (s);
+	world.OnBoom ([](const World::Boom &b) {
+		LOGOUT ("Audio: boom from %s at %.3f s", b.emitter->Desc ().name.c_str (), b.t);
+		static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+		if (log) printf ("Audio: boom from %s at %.3f s\n", b.emitter->Desc ().name.c_str (), b.t), fflush (stdout);
+	});
+}
+
+void System::EndSession ()
+{
+	world.Clear ();
+	testTone = nullptr;
+	logT = -1.0;
+}
+
+void System::Forget (const Body *body)
+{
+	if (testTone && testTone->Desc ().body == body) testTone = nullptr;
+	world.Forget (body);
+}
+
+void System::TestTone ()
+{
+	static const char *spec = getenv ("ORBITER_AUDIO_TEST_TONE");
+	if (!spec || !*spec || testTone || !g_psys) return;
+	std::string name (spec);
+	double freq = 440.0, level = 1.0;
+	size_t c = name.find (':');
+	if (c != std::string::npos) {
+		std::string rest = name.substr (c + 1);
+		name.resize (c);
+		sscanf (rest.c_str (), "%lf:%lf", &freq, &level);
+	}
+	Vessel *v = g_psys->GetVessel (name.c_str (), true);
+	if (!v) return;
+	EmitterDesc d;
+	d.body = v;
+	d.level = (float)level;
+	d.refDist = 10.0f;
+	d.hull = 0.5f;
+	d.name = "test tone on " + name;
+	testTone = world.Add (d, MakeToneSource (engine, freq, 0.5));
+	if (testTone) LOGOUT ("Audio: test tone %.0f Hz on %s", freq, name.c_str ());
 }
 
 void System::Stop ()
@@ -118,6 +163,26 @@ void System::Step ()
 	// pause and time acceleration: quick out, a little slower back in
 	float fade = SimFadeFor (orbiter->IsRunning (), td.Warp ());
 	engine.SetSimFade (fade, fade < engine.SimFadeTarget () ? 0.15 : 0.4);
+
+	// the sounds of the world, as heard now
+	if (g_psys) {
+		TestTone ();
+		static const char *realismEnv = getenv ("ORBITER_AUDIO_REALISM"); // (tests: physical|cinematic)
+		bool cinematic = realismEnv && *realismEnv ? (realismEnv[0] == 'c' || realismEnv[0] == 'C') : orbiter->Cfg()->CfgSoundPrm.Realism == 1;
+		world.SetRealism (cinematic ? CINEMATIC : PHYSICAL);
+		world.Update ();
+		static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+		if (log && (logT < 0.0 || td.SimT1 - logT >= 0.5 || td.SimT1 < logT)) {
+			logT = td.SimT1;
+			const Air &la = world.ListenerAir ();
+			for (auto &e : world.Emitters ()) {
+				const Emitter::State &h = e->Heard ();
+				LOGOUT ("Audio: t %.2f %s: images %d, dist %.0f m, delay %.3f s, doppler %.4f, air %.4f, hull %.4f, cutoff %.0f Hz (listener: rho %.4g, c %.1f%s)",
+					td.SimT1, e->Desc ().name.c_str (), h.images, h.dist, h.delay, h.doppler, h.air, h.hull, h.cutoff,
+					la.rho, la.c, world.ListenerInside () ? ", in the cockpit" : "");
+			}
+		}
+	}
 
 	if (Rendering ()) RenderStep (td.UiDT ());
 }

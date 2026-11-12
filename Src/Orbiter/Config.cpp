@@ -255,7 +255,8 @@ CFG_CAMERAPRM CfgCameraPrm_default = {
 CFG_SOUNDPRM CfgSoundPrm_default = {
 	true,       // bEnabled (sound on)
 	0.8f,       // Master volume
-	{ 1.0f, 1.0f, 0.9f, 0.7f, 0.6f, 0.7f } // Bus volumes: outside, cockpit, voice, radio, music, interface
+	{ 1.0f, 1.0f, 0.9f, 0.7f, 0.6f, 0.7f }, // Bus volumes: outside, cockpit, voice, radio, music, interface
+	0           // Realism (physical)
 };
 
 CFG_CMDLINEPRM CfgCmdlinePrm_default = {
@@ -744,6 +745,7 @@ bool Config::Load(const char *fname)
 		for (int b = 0; b < 6; b++)
 			if (GetReal (ifs, busKey[b], d)) CfgSoundPrm.Bus[b] = (float)std::clamp (d, 0.0, 1.0);
 	}
+	if (GetInt (ifs, "SoundRealism", i) && i >= 0 && i <= 1) CfgSoundPrm.Realism = i;
 
 	// user interface parameters
 	if (GetInt(ifs, "MouseFocusMode", i) && i >= 0 && i <= 2)
@@ -1288,6 +1290,8 @@ BOOL Config::Write (const char *fname) const
 		for (int b = 0; b < 6; b++)
 			if (CfgSoundPrm.Bus[b] != CfgSoundPrm_default.Bus[b] || bEchoAll)
 				ofs << busKey[b] << " = " << CfgSoundPrm.Bus[b] << '\n';
+		if (CfgSoundPrm.Realism != CfgSoundPrm_default.Realism || bEchoAll)
+			ofs << "SoundRealism = " << CfgSoundPrm.Realism << '\n';
 	}
 
 	// (the device's indices only when one was chosen; the window's settings

@@ -171,6 +171,16 @@ set_target_properties(Audio.Engine PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITE
 add_test(NAME Audio.Engine COMMAND $<TARGET_FILE:Audio.Engine>)
 set_tests_properties(Audio.Engine PROPERTIES TIMEOUT 60)
 
+# How sound travels: the air, travel time, Doppler, the shock cone
+add_executable(Audio.Propagation Audio.Propagation.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Medium.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Track.cpp)
+target_include_directories(Audio.Propagation PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter)
+target_link_libraries(Audio.Propagation Catch2::Catch2WithMain)
+set_target_properties(Audio.Propagation PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER_BINARY_ROOT_DIR}")
+add_test(NAME Audio.Propagation COMMAND $<TARGET_FILE:Audio.Propagation>)
+set_tests_properties(Audio.Propagation PROPERTIES TIMEOUT 60)
+
 # Scenario tests need an Orbiter executable that runs without graphics client
 if (ORBITER_HEADLESS)
 	set(ORBITER_TEST_EXE $<TARGET_FILE:${OrbiterTgt}>)
@@ -259,6 +269,69 @@ if (ORBITER_TEST_EXE)
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.RenderCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioRender)
+
+		# Sound through the air (Tests/Audio/Flyby*.scn, Script/Tests/AudioFlyby.lua):
+		# a 440 Hz tone on a delta-glider flown past a listener on the sea.
+		# Mach 0.5, 100 m up, overhead at 17.647 s: heard at twice the pitch
+		# coming (from the left), two thirds going (to the right), 440 Hz
+		# when the sound from overhead arrives, 100 m / 340 m/s later.
+		# Mach 2, 1000 m up, overhead at 20 s: silence until the shock cone
+		# arrives (22.57 s: 1748 m behind it), a boom then.
+		set(AUDIO_ANALYZE ${Python3_EXECUTABLE} -I ${CMAKE_SOURCE_DIR}/Tests/Audio/analyze.py)
+		foreach(pass Sub Super)
+			add_test(
+				NAME "Audio.Flyby${pass}"
+				COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Audio/Flyby${pass}.scn" "--fixedstep=0.02"
+				WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+			)
+			set_tests_properties(Audio.Flyby${pass} PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioFlyby${pass}
+				ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Flyby${pass}.wav;ORBITER_AUDIO_TEST_TONE=SRC;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0")
+		endforeach()
+		set_tests_properties(Audio.FlybySuper PROPERTIES PASS_REGULAR_EXPRESSION "Audio: boom from test tone on SRC at 22\\.5[0-9]")
+		add_test(
+			NAME "Audio.FlybySubCheck"
+			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.FlybySub.wav" --duration 36.0 --no-clip --no-clicks
+				--freq 1:8:860:885 --freq 10:14:860:885 --freq 29:34:290:296
+				--cross 440:17.941:0.03:200:1000
+				--channel-balance 10:14:-16:-8 --channel-balance 29:34:8:16
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.FlybySubCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioFlybySub)
+		add_test(
+			NAME "Audio.FlybySuperCheck"
+			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.FlybySuper.wav" --duration 45.0 --no-clip --no-clicks
+				--level 0.5:22.45:all:-inf:-90 --level 22.7:24:all:-60:-20
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.FlybySuperCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioFlybySuper)
+
+		# The cockpit and the vacuum (Tests/Audio/Cockpit.scn, Script/Tests/AudioCockpit.lua):
+		# a tone on a delta-glider in orbit, 3 s each: from the cockpit (through
+		# the hull), outside (silent when physical, heard when cinematic), the
+		# cockpit at 20x (faded out), at 1x (heard again)
+		foreach(realism Physical Cinematic)
+			add_test(
+				NAME "Audio.Cockpit${realism}"
+				COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Audio/Cockpit.scn" "--fixedstep=0.02"
+				WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+			)
+			set_tests_properties(Audio.Cockpit${realism} PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioCockpit${realism}
+				ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Cockpit${realism}.wav;ORBITER_AUDIO_TEST_TONE=SRC;ORBITER_AUDIO_REALISM=${realism};ORBITER_DAMAGE=0")
+		endforeach()
+		add_test(
+			NAME "Audio.CockpitPhysicalCheck"
+			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.CockpitPhysical.wav" --duration 12.0 --no-clip --no-clicks
+				--level 0.5:2.8:all:-30:-6 --level 3.5:5.8:all:-inf:-90 --level 6.5:8.8:all:-inf:-90 --level 9.6:11.8:all:-30:-6
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.CockpitPhysicalCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioCockpitPhysical)
+		add_test(
+			NAME "Audio.CockpitCinematicCheck"
+			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.CockpitCinematic.wav" --duration 12.0 --no-clip --no-clicks
+				--level 0.5:2.8:all:-30:-6 --level 3.5:5.8:all:-40:-15 --level 6.5:8.8:all:-inf:-90 --level 9.6:11.8:all:-30:-6
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.CockpitCinematicCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioCockpitCinematic)
 	endif()
 
 	# Launchpad (in the Vulkan client's window, rendered offscreen; needs a

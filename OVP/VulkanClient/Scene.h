@@ -263,7 +263,8 @@ public:
 	class CrashFires *Fires () { return crashFires.get(); }
 	/// the thud of an explosion at gpos (global) of strength (the cube root
 	/// of the propellant burned [kg]) and radius R [m]: the camera within
-	/// about 10 R jolted (any view) when the sound arrives (d / 340 s),
+	/// about 10 R jolted (any view) when the sound arrives (d / c, c the
+	/// speed of sound in the air there: oapiGetSoundSpeed),
 	/// amplitude by strength / d^2, scaled by the CameraShake setting
 	void Jolt (OBJHANDLE body, const VECTOR3 &gpos, double strength, double R);
 	/// crash fireballs as volumes (Fireball.h; null: sprites, ORBITER_VK_FIREBALL=sprites)
@@ -547,7 +548,7 @@ private:
 	// it flashed [s], its strength and radius; once it arrived at the camera
 	// (by the camera's distance then: the view may have cut away at the
 	// flash): when [s], its amplitude [rad]
-	struct JoltEvent { OBJHANDLE body; VECTOR3 lpos; double t0, strength, R, tStart, amp, phase; };
+	struct JoltEvent { OBJHANDLE body; VECTOR3 lpos; double t0, strength, R, tStart, amp, phase, c; }; // (c: speed of sound there)
 	std::vector<JoltEvent> jolts;
 	Mat4 view;            // global direction -> view (rotation only)
 	float proj[16] = {};

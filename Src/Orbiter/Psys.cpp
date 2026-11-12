@@ -24,9 +24,11 @@
 #include "Vessel.h"
 #include "SuperVessel.h"
 #include "Log.h"
+#include "Audio/AudioSystem.h"
 
 using namespace std;
 
+extern Orbiter *g_pOrbiter;
 extern TimeData td;
 extern bool g_bForceUpdate;
 extern char DBG_MSG[256];
@@ -464,6 +466,7 @@ bool PlanetarySystem::DelBody (Body *_body)
 	if (i == bodies.size())
 		return false; // bodies not found in list
 
+	if (g_pOrbiter && g_pOrbiter->Audio ()) g_pOrbiter->Audio ()->Forget (_body); // (its sounds)
 	//if (bodies[i]->s0) bodies[i]->s0 = NULL; // s0 is used in vessels destructor due to undocking of
 	//if (bodies[i]->s1) bodies[i]->s1 = NULL; // vessels before deletion.
 	
