@@ -9,7 +9,10 @@
 #include "Psys.h"
 #include "Vessel.h"
 #include "BoomSynth.h"
+#include "Replay.h"
 #include "Ears.h"
+#include "miniaudio.h"
+#include <filesystem>
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -97,8 +100,97 @@ void System::Boom (const World::Boom &b)
 	world.PlayShot (std::move (bs), b.dir, (float)(dp / P_FULL), len);
 }
 
+namespace {
+	std::string FindSound (const std::string &file)
+	{
+		std::error_code ec;
+		if (std::filesystem::exists (file, ec)) return file;
+		std::string s = "Sound/" + file;
+		if (std::filesystem::exists (s, ec)) return s;
+		return std::string ();
+	}
+}
+
+int System::Play (const Vessel *v, const std::string &file, const V3 &pos, double level, bool loop)
+{
+	if (!engine.Active ()) return 0;
+	std::string path = FindSound (file);
+	if (path.empty ()) { LOGOUT ("Audio: no sound file %s", file.c_str ()); return 0; }
+	Played p;
+	p.loop = loop, p.level = level;
+	if (v) {
+		EmitterDesc d;
+		d.body = v;
+		d.offset = pos;
+		d.level = (float)level;
+		d.refDist = 2.0f;
+		d.hull = 0.5f;
+		d.name = file;
+		p.em = world.Add (d, MakeFileSource (engine, path, loop));
+		if (!p.em) return 0;
+	} else {
+		p.ui = std::make_unique<ma_sound>();
+		ma_uint32 flags = MA_SOUND_FLAG_NO_SPATIALIZATION | MA_SOUND_FLAG_DECODE;
+		if (ma_sound_init_from_file (engine.Ma (), path.c_str (), flags, engine.Group (UI), NULL, p.ui.get ()) != MA_SUCCESS) return 0;
+		ma_sound_set_looping (p.ui.get (), loop ? MA_TRUE : MA_FALSE);
+		ma_sound_set_volume (p.ui.get (), (float)level);
+		ma_sound_start (p.ui.get ());
+	}
+	int h = nextHandle++;
+	played[h] = std::move (p);
+	return h;
+}
+
+bool System::StopSound (int h)
+{
+	auto it = played.find (h);
+	if (it == played.end ()) return false;
+	if (it->second.em) world.Remove (it->second.em);
+	if (it->second.ui) ma_sound_uninit (it->second.ui.get ());
+	played.erase (it);
+	return true;
+}
+
+bool System::SetSound (int h, double level, double pitch)
+{
+	auto it = played.find (h);
+	if (it == played.end ()) return false;
+	Played &p = it->second;
+	if (level >= 0.0) {
+		p.level = level;
+		if (p.em) p.em->SetLevel ((float)level);
+		if (p.ui) ma_sound_set_volume (p.ui.get (), (float)level);
+	}
+	if (pitch > 0.0) {
+		if (p.em) p.em->SetPitch ((float)pitch);
+		if (p.ui) ma_sound_set_pitch (p.ui.get (), (float)pitch);
+	}
+	return true;
+}
+
+bool System::Playing (int h) const
+{
+	return played.count (h) > 0;
+}
+
+void System::UpdatePlayed ()
+{
+	// (sounds not looped go when they have played)
+	for (auto it = played.begin (); it != played.end (); ) {
+		Played &p = it->second;
+		bool done = !p.loop && ((p.em && p.em->SourceDone ()) || (p.ui && ma_sound_at_end (p.ui.get ())));
+		if (done) {
+			if (p.em) world.Remove (p.em);
+			if (p.ui) ma_sound_uninit (p.ui.get ());
+			it = played.erase (it);
+		} else ++it;
+	}
+}
+
 void System::EndSession ()
 {
+	for (auto &p : played) if (p.second.ui) ma_sound_uninit (p.second.ui.get ());
+	played.clear ();
 	vessels.Clear ();
 	world.Clear ();
 	testTone = nullptr;
@@ -108,6 +200,8 @@ void System::EndSession ()
 void System::Forget (const Body *body)
 {
 	if (testTone && testTone->Desc ().body == body) testTone = nullptr;
+	for (auto it = played.begin (); it != played.end (); )
+		it = (it->second.em && it->second.em->Desc ().body == body) ? played.erase (it) : std::next (it);
 	vessels.Forget (body);
 	world.Forget (body);
 }
@@ -140,6 +234,8 @@ void System::TestTone ()
 
 void System::Stop ()
 {
+	for (auto &p : played) if (p.second.ui) ma_sound_uninit (p.second.ui.get ());
+	played.clear ();
 	if (wav.IsOpen ()) {
 		LOGOUT ("Audio: rendered %.2f s", (double)wav.Frames() / std::max (1u, engine.SampleRate()));
 		wav.Close ();
@@ -178,8 +274,17 @@ void System::Step ()
 	if (!engine.Active ()) return;
 	ApplySettings (orbiter->Cfg()->CfgSoundPrm);
 
+	// the instant replay: heard at its time while it plays forwards, not too
+	// fast (its contacts aren't: no physics then); entering and leaving it,
+	// time jumps
+	Replay *rp = orbiter->GetReplay ();
+	const bool replay = rp && rp->Active ();
+	if (replay != wasReplay) { world.ResetPaths (); wasReplay = replay; }
+	const double t = replay ? rp->Time () : td.SimT1;
+
 	// pause and time acceleration: quick out, a little slower back in
-	float fade = SimFadeFor (orbiter->IsRunning (), td.Warp ());
+	float fade = replay ? (rp->Playing () && rp->Speed () > 0.0 && rp->Speed () <= 2.0 ? 1.0f : 0.0f)
+	                    : SimFadeFor (orbiter->IsRunning (), td.Warp ());
 	engine.SetSimFade (fade, fade < engine.SimFadeTarget () ? 0.15 : 0.4);
 
 	// the sounds of the world, as heard now
@@ -189,18 +294,19 @@ void System::Step ()
 		bool cinematic = realismEnv && *realismEnv ? (realismEnv[0] == 'c' || realismEnv[0] == 'C') : orbiter->Cfg()->CfgSoundPrm.Realism == 1;
 		world.SetRealism (cinematic ? CINEMATIC : PHYSICAL);
 		static const bool noVessels = getenv ("ORBITER_AUDIO_VESSELS") && *getenv ("ORBITER_AUDIO_VESSELS") == '0';
-		if (!noVessels) vessels.Update ();
-		world.Update ();
+		if (!noVessels) vessels.Update (t, replay);
+		world.Update (t);
+		UpdatePlayed ();
 		static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
-		if (log && (logT < 0.0 || td.SimT1 - logT >= 0.5 || td.SimT1 < logT)) {
-			logT = td.SimT1;
+		if (log && (logT < 0.0 || t - logT >= 0.5 || t < logT)) {
+			logT = t;
 			const Air &la = world.ListenerAir ();
 			for (auto &e : world.Emitters ()) {
 				const Emitter::State &h = e->Heard ();
 				static const bool all = getenv ("ORBITER_AUDIO_LOG") && atoi (getenv ("ORBITER_AUDIO_LOG")) >= 2;
 				if (!all && h.air < 1e-6f && h.hull < 1e-6f && e.get () != testTone) continue; // (silent; ORBITER_AUDIO_LOG=2 logs them too)
-				LOGOUT ("Audio: t %.2f %s: images %d, dist %.0f m, delay %.3f s, doppler %.4f, air %.4f, hull %.4f, cutoff %.0f Hz (listener: rho %.4g, c %.1f%s)",
-					td.SimT1, e->Desc ().name.c_str (), h.images, h.dist, h.delay, h.doppler, h.air, h.hull, h.cutoff,
+				LOGOUT ("Audio: %st %.2f %s: images %d, dist %.0f m, delay %.3f s, doppler %.4f, air %.4f, hull %.4f, cutoff %.0f Hz (listener: rho %.4g, c %.1f%s)",
+					replay ? "replay " : "", t, e->Desc ().name.c_str (), h.images, h.dist, h.delay, h.doppler, h.air, h.hull, h.cutoff,
 					la.rho, la.c, world.ListenerInside () ? ", in the cockpit" : "");
 			}
 		}

@@ -103,6 +103,7 @@ GearControl::GearControl (GearSubsystem *_subsys)
 	static MGROUP_ROTATE RWheelICover2 (0, RWheelICoverGrp, 2,
 		_V( 2.175,-1.178,-3.438), _V(0,0,1), (float)( 90*RAD));
 	anim_gear = DG()->CreateAnimation (1);
+	oapiAudioAnimation (DG()->GetHandle(), anim_gear, AUDIO_ANIM_GEAR, 1.0); // (its motor's sound)
 	DG()->AddAnimationComponent (anim_gear, 0.3, 1, &NWheelStrut);
 	DG()->AddAnimationComponent (anim_gear, 0.3, 0.9, &NWheelFCover);
 	DG()->AddAnimationComponent (anim_gear, 0, 0.3, &NWheelLCover1);

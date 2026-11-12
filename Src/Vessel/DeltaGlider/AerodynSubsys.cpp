@@ -236,6 +236,7 @@ Airbrake::Airbrake (AerodynCtrlSubsystem *_subsys)
 		_V(-8.668,0.958,-6.204), _V(-0.143,0.975,-0.172), (float)(-25*RAD));
 
 	anim_brake = DG()->CreateAnimation (0);
+	oapiAudioAnimation (DG()->GetHandle(), anim_brake, AUDIO_ANIM_MOTOR, 1.0); // (its motor's sound)
 	DG()->AddAnimationComponent (anim_brake, 0, 1, &UpperBrake);
 	DG()->AddAnimationComponent (anim_brake, 0, 1, &LowerBrake);
 	DG()->AddAnimationComponent (anim_brake, 0, 1, &RRudderBrake);

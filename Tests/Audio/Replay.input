@@ -1,0 +1,18 @@
+# Sound in the instant replay (Tests/Input/Orbit.scn, rendered with
+# ORBITER_AUDIO_RENDER, steps of 0.02 s): from the cockpit, a 3 s burn
+# (1-4 s), heard through the structure; quiet; then the replay from its
+# start (10 s): the burn heard again (11-14 s), at the replay's time.
+
+lua v = vessel.get_focusinterface ()
+lua oapi.set_cameramode ({mode = 'cockpit'})
+wait 50
+lua v:set_thrustergrouplevel (THGROUP.MAIN, 1)
+wait 150
+lua v:set_thrustergrouplevel (THGROUP.MAIN, 0)
+wait 300
+# (the replay plays from 30 s before the end: the recording's start;
+# replay_seek would pause it)
+lua oapi.set_replay (true); r = oapi.get_replay ()
+lua check ("enter", r ~= nil, "replay on")
+wait 400
+exit

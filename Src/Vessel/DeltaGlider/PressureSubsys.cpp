@@ -293,6 +293,7 @@ AirlockCtrl::AirlockCtrl (PressureSubsystem *_subsys)
 	static MGROUP_ROTATE VCOLock (1, VCOLockGrp, 1,
 		_V(0,-0.080,9.851), _V(1,0,0), (float)(110*RAD));
 	anim_olock = DG()->CreateAnimation (0);
+	oapiAudioAnimation (DG()->GetHandle(), anim_olock, AUDIO_ANIM_DOOR, 1.0); // (its motor's sound)
 	DG()->AddAnimationComponent (anim_olock, 0, 1, &OLock);
 	DG()->AddAnimationComponent (anim_olock, 0, 1, &VCOLock);
 
@@ -305,6 +306,7 @@ AirlockCtrl::AirlockCtrl (PressureSubsystem *_subsys)
 	static MGROUP_ROTATE VCILock (1, VCILockGrp, 4,
 		_V(0,-0.573,7.800), _V(1,0,0), (float)(85*RAD));
 	anim_ilock = DG()->CreateAnimation (0);
+	oapiAudioAnimation (DG()->GetHandle(), anim_ilock, AUDIO_ANIM_DOOR, 1.0); // (its motor's sound)
 	DG()->AddAnimationComponent (anim_ilock, 0, 1, &ILock);
 	DG()->AddAnimationComponent (anim_ilock, 0, 1, &VCILock);
 }
@@ -614,6 +616,7 @@ TophatchCtrl::TophatchCtrl (PressureSubsystem *_subsys)
 	static MGROUP_ROTATE VCRearLadder2 (1, VCRearLadderGrp+1, 1,
 		_V(0,1.1173,4.1894), _V(1,0,0), (float)(180*RAD));
 	anim_hatch = DG()->CreateAnimation (0);
+	oapiAudioAnimation (DG()->GetHandle(), anim_hatch, AUDIO_ANIM_DOOR, 1.0); // (its motor's sound)
 	DG()->AddAnimationComponent (anim_hatch, 0, 1, &Hatch);
 	DG()->AddAnimationComponent (anim_hatch, 0, 1, &VCHatch);
 	DG()->AddAnimationComponent (anim_hatch, 0, 0.25, &RearLadder1);

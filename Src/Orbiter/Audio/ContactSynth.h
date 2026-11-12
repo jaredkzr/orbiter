@@ -12,7 +12,11 @@
 //  - blows: a wheel's touchdown (the strut's thump, the tyre's chirp), the
 //    hull striking the ground (a heavy thud and crunch), a vessel bumping
 //    another (a metallic clang, its ring), docking (the clunk, the latches
-//    closing a moment later) and undocking (the latches, the push-off)
+//    closing a moment later) and undocking (the latches, the push-off), a
+//    door's latch, the gear locking (a heavy thunk)
+//  - motors moving parts (animations): servos humming, doors' actuators, the
+//    gear's hydraulics (a low hum and the fluid's hiss), deep, their pitch
+//    rising a little with their speed
 //
 // Blows are counted: each new count (Strike) plays one, at its strength
 // (0..1, a blow's closing speed against a hard landing's).
@@ -27,7 +31,9 @@ namespace audio {
 
 class ContactSynth : public SynthSource {
 public:
-	enum Blow { TOUCHDOWN = 0, HULL = 1, CLANG = 2, DOCK = 3, UNDOCK = 4, NBLOW = 5 };
+	enum Blow { TOUCHDOWN = 0, HULL = 1, CLANG = 2, DOCK = 3, UNDOCK = 4, LATCH = 5, GEARLOCK = 6, NBLOW = 7 };
+	/// Motors moving parts: a servo, a door's actuator, the gear's hydraulics
+	enum Motor { SERVO = 0, DOOR = 1, GEAR = 2, NMOTOR = 3 };
 
 	struct Params {
 		float rollSpeed = 0.0f;   // wheels rolling [m/s]
@@ -35,6 +41,7 @@ public:
 		float squeal = 0.0f;      // tyres skidding 0..1
 		float scrape = 0.0f;      // the hull sliding over the ground 0..1
 		float scrapeSpeed = 0.0f; // [m/s]
+		float motor[NMOTOR] = {}; // motors running, by kind 0..1 (their speed)
 	};
 
 	static std::unique_ptr<ContactSynth> Make (Engine &e, uint32_t seed);
@@ -46,8 +53,12 @@ protected:
 	void Render (float *out, unsigned n, float dop) override;
 
 private:
-	explicit ContactSynth (uint32_t seed): rng (seed) {}
+	explicit ContactSynth (uint32_t seed): rng (seed) { for (auto &m : pMotor) m.store (0.0f); }
 	std::atomic<float> pRollSpeed{0.0f}, pRollLoad{0.0f}, pSqueal{0.0f}, pScrape{0.0f}, pScrapeSpeed{0.0f};
+	std::atomic<float> pMotor[NMOTOR];
+	dsp::Smooth motorS[NMOTOR];
+	float motorPh[NMOTOR][3] = {};
+	dsp::Biquad hydraulicBp;
 	// blows: a small queue (simulation thread writes, audio thread reads)
 	struct Pending { std::atomic<int> count{0}; std::atomic<float> strength{0.0f}; } pending[NBLOW];
 	int played[NBLOW] = {};

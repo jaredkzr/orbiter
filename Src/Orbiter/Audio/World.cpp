@@ -90,7 +90,9 @@ namespace {
 		}
 		void Start () override { if (soundInit) ma_sound_start (&sound); }
 		void Stop () override { if (soundInit) ma_sound_stop (&sound); }
-		void SetDoppler (float f) override { if (soundInit) ma_sound_set_pitch (&sound, std::max (f, 0.01f)); }
+		void SetDoppler (float f) override { dop = f; if (soundInit) ma_sound_set_pitch (&sound, std::max (dop * pitch, 0.01f)); }
+		void SetPitch (float p) override { pitch = p; if (soundInit) ma_sound_set_pitch (&sound, std::max (dop * pitch, 0.01f)); }
+		bool Done () const override { return soundInit && ma_sound_at_end (&sound); }
 	private:
 		bool Init (ma_engine *engine, ma_sound_config &sc)
 		{
@@ -101,6 +103,7 @@ namespace {
 		ma_waveform wave;
 		ma_sound sound;
 		bool waveInit = false, soundInit = false;
+		float dop = 1.0f, pitch = 1.0f;
 	};
 }
 
@@ -243,10 +246,15 @@ Air World::AirAt (const Planet *p, const double g[3])
 	return Air::From (prm.rho, prm.T, prm.p, ac->R, ac->gamma);
 }
 
-void World::Update ()
+void World::ResetPaths ()
+{
+	for (auto &e : emitters) e->track.Clear (), e->hasLast = false, e->history.clear (), e->state = Emitter::State ();
+	tPrev = -1.0;
+}
+
+void World::Update (double t)
 {
 	if (!g_camera) return;
-	const double t = td.SimT1;
 
 	// the listener: the camera, in the frame of the planet it is at
 	Body *target = g_camera->Target ();

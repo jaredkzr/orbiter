@@ -410,6 +410,26 @@ if (ORBITER_TEST_EXE)
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.ContactsBellyCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioContactsBelly)
+		# The sound API (oapiAudio*, Lua's audio table; Script/Tests/AudioApi):
+		# sound files on a vessel and the interface, looped, re-pitched,
+		# stopped; tune keys; the DG's nose cone's actuator and latch
+		file(COPY ${CMAKE_SOURCE_DIR}/Sound/XRSound/assets/XRSound/Default/BeepHigh.wav DESTINATION ${ORBITER_BINARY_ROOT_DIR}/Sound/Tests)
+		file(RENAME ${ORBITER_BINARY_ROOT_DIR}/Sound/Tests/BeepHigh.wav ${ORBITER_BINARY_ROOT_DIR}/Sound/Tests/beep.wav)
+		add_test(
+			NAME "Audio.Api"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Audio/Api.scn" "--fixedstep=0.02"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.Api PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioApi
+			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Api.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0")
+		add_test(
+			NAME "Audio.ApiCheck"
+			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.Api.wav" --duration 29.0 --no-clip
+				--level 0.5:0.8:all:-60:-5 --level 1.2:1.9:all:-inf:-80 --level 2.0:2.3:all:-60:-5
+				--level 5.3:5.9:all:-inf:-80 --level 8:24:120-200:-80:-20 --level 27:29:all:-inf:-80
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.ApiCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioApi)
 		add_test(
 			NAME "Audio.Docking"
 			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Scenarios/Tests/DockingTest.scn" "--fixedstep=0.02"
@@ -451,6 +471,25 @@ if (ORBITER_TEST_EXE)
 			set_tests_properties(Input.${test_name} PROPERTIES TIMEOUT 120
 				ENVIRONMENT "ORBITER_VK_OFFSCREEN=1;ORBITER_VK_SKY=0;ORBITER_MFD_WINDOWS=0;ORBITER_VK_TEST_INPUT=${InputTest}")
 		endforeach()
+
+		# Sound in the instant replay (Tests/Audio/Replay.input): a burn heard
+		# from the cockpit, and again when the replay plays it
+		if (Python3_FOUND)
+			add_test(
+				NAME "Audio.Replay"
+				COMMAND ${ORBITER_TEST_EXE} -p VulkanClient "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Input/Orbit.scn" "--fixedstep=0.02"
+				WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+			)
+			set_tests_properties(Audio.Replay PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioReplay
+				ENVIRONMENT "ORBITER_VK_OFFSCREEN=1;ORBITER_VK_SKY=0;ORBITER_MFD_WINDOWS=0;ORBITER_VK_TEST_INPUT=${CMAKE_SOURCE_DIR}/Tests/Audio/Replay.input;ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Replay.wav")
+			add_test(
+				NAME "Audio.ReplayCheck"
+				COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_SOURCE_DIR}/Tests/Audio/analyze.py "${ORBITER_BINARY_ROOT_DIR}/Audio.Replay.wav"
+					--level 0.3:0.9:all:-inf:-90 --level 1.5:3.5:all:-50:-5 --level 9.0:9.9:all:-inf:-60 --level 11.5:13.5:all:-50:-5 --level 16:17.5:all:-inf:-60
+				WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+			)
+			set_tests_properties(Audio.ReplayCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioReplay)
+		endif()
 
 		# Remote control for playtesting (OVP/VulkanClient/RemoteControl.h,
 		# Utils/Playtest/orbctl.py): a session driven over its socket

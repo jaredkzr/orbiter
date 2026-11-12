@@ -29,11 +29,13 @@
 #include "WavWriter.h"
 #include "World.h"
 #include "VesselSounds.h"
+#include <map>
 #include <vector>
 
 class Orbiter;
 class Vessel;
 struct CFG_SOUNDPRM;
+struct ma_sound;
 
 namespace audio {
 
@@ -65,6 +67,17 @@ public:
 	void Contacts (const Vessel *v, const ContactStep &c) { vessels.Contacts (v, c); }
 	void Docked (const Vessel *v, const V3 &port, bool dock) { vessels.Docked (v, port, dock); }
 
+	// ---- the API (oapiAudio*, Lua's audio table) --------------------------
+	/// Play a sound file on a vessel (at pos, vessel frame: heard as any of
+	/// its sounds), or without one (null: the interface). The file: as given,
+	/// else under Sound/. Returns a handle (0: not played).
+	int Play (const Vessel *v, const std::string &file, const V3 &pos, double level, bool loop);
+	bool StopSound (int handle);
+	bool SetSound (int handle, double level, double pitch);
+	bool Playing (int handle) const;
+	bool Tune (const Vessel *v, const std::string &key, double value) { return vessels.TuneVessel (v, key, value); }
+	void Animation (const Vessel *v, unsigned anim, int kind, double level) { vessels.Animation (v, anim, kind, level); }
+
 	Engine &GetEngine () { return engine; }
 	World &GetWorld () { return world; }
 	bool Rendering () const { return wav.IsOpen (); }
@@ -91,7 +104,13 @@ private:
 	bool client = false;            // a graphics client (sound on the device)
 	bool forcedOff = false;         // ORBITER_AUDIO=0
 	Emitter *testTone = nullptr;    // ORBITER_AUDIO_TEST_TONE
+	// sounds played through the API: on vessels (emitters), on the interface
+	struct Played { Emitter *em = nullptr; std::unique_ptr<ma_sound> ui; bool loop = false; double level = 1.0; };
+	std::map<int, Played> played;
+	int nextHandle = 1;
+	void UpdatePlayed ();
 	double logT = -1.0;             // ORBITER_AUDIO_LOG: last line
+	bool wasReplay = false;         // (the instant replay was showing last step)
 };
 
 } // namespace audio

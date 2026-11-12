@@ -14,6 +14,11 @@
 //  - the air rushing over it: as loud as the dynamic pressure and speed
 //    make it (boundary-layer noise, p ~ q U), buffeting; it booms when
 //    supersonic
+//  - its contacts (ContactSynth), and the motors of its animations named
+//    for sound (Config/Sound/<class>.cfg "Anim = <index> <motor|door|gear>
+//    [level]", or oapiAudioAnimation from its module)
+//
+// Config/Sound/<class>.cfg also tunes it ("engine_level = 1.2", ...: Tune)
 //
 // In the cockpit: engines and thrusters through the structure (also in
 // vacuum), the air through the hull. Vessels within RANGE of the camera.
@@ -25,7 +30,9 @@
 #include "World.h"
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <memory>
+#include <string>
 #include <vector>
 
 class Vessel;
@@ -58,12 +65,28 @@ public:
 	VesselSounds (Engine &engine, World &world);
 	~VesselSounds ();
 
-	/// Once per time step, before the world's update
-	void Update ();
+	/// Once per time step, before the world's update, at time t (the
+	/// simulation's, or a replay's: then the air over the vessels from their
+	/// states shown, no contacts)
+	void Update (double t, bool replay);
 	/// A vessel's contacts of the step (Vessel::ContactsResolved)
 	void Contacts (const Vessel *v, const ContactStep &c);
 	/// Docking and undocking (at the vessel's port, vessel frame)
 	void Docked (const Vessel *v, const V3 &port, bool dock);
+
+	/// How a vessel sounds, tuned (Config/Sound/<class>.cfg, oapiAudioTune):
+	/// factors on its sounds' levels and pitches
+	struct Tune {
+		double engineLevel = 1.0, enginePitch = 1.0, rumble = 1.0, whine = 1.0, crackle = 1.0;
+		double rcsLevel = 1.0, rcsPitch = 1.0, airLevel = 1.0, contactLevel = 1.0;
+		/// Set by its key (engine_level, engine_pitch, rumble, whine, crackle,
+		/// rcs_level, rcs_pitch, air_level, contact_level); false: no such key
+		bool Set (const std::string &key, double value);
+	};
+	/// Animations with a sound: a motor moving them (AUDIO_ANIM_*)
+	enum AnimKind { ANIM_NONE = 0, ANIM_MOTOR = 1, ANIM_DOOR = 2, ANIM_GEAR = 3 };
+	bool TuneVessel (const Vessel *v, const std::string &key, double value);
+	void Animation (const Vessel *v, unsigned anim, int kind, double level);
 	void Forget (const Body *body);
 	void Clear ();
 
@@ -95,15 +118,25 @@ private:
 		ContactSynth *contactSynth = nullptr;
 		ContactStep step;          // this step's contacts (summed until the update)
 		double lastBlow[3] = {-1e9, -1e9, -1e9}; // [s] the last blow of each kind (wheel, hull, vessel)
-		int blows[5] = {};         // blows struck so far, by kind (recalled with the travel time)
-		float blowStrength[5] = {};
-		int heardBlows[5] = {};
+		int blows[8] = {};         // blows struck so far, by kind (recalled with the travel time)
+		float blowStrength[8] = {};
+		int heardBlows[8] = {};
+		float motor[3] = {};       // motors running (animations), by kind
+		bool rebuild = false;      // its tune changed
 		bool seen = false;
 	};
 	PerVessel *Find (const Vessel *v);
+
+	struct AnimSound { unsigned anim; int kind; float level; double last = -1.0; bool moving = false; };
+	/// A vessel's configuration: from its class's file, then the API
+	struct VesselConfig { Tune tune; std::vector<AnimSound> anims; };
+	VesselConfig &Config (const Vessel *v);
+	std::map<const Vessel*, VesselConfig> configs;
 	void Build (PerVessel &pv);
 	void Drop (PerVessel &pv);
 	void UpdateVessel (PerVessel &pv);
+	double now = 0.0, dtNow = 0.0;  // (this update's time and step)
+	bool replaying = false;
 	void UpdateContacts (PerVessel &pv, double t);
 
 	Engine &engine;

@@ -157,6 +157,7 @@ void Interpreter::Initialise ()
 #ifdef XRSOUND
 	LoadXRSoundAPI ();
 #endif
+	LoadAudioAPI ();      // sound (lua_audio.cpp)
 	LoadStartupScript (); // load default initialisation script
 }
 

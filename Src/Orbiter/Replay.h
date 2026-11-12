@@ -57,6 +57,8 @@ public:
 	double Time () const { return t; }
 	void Seek (double simt);
 	void SetPlaying (bool play) { playing = play; }
+	bool Playing () const { return playing; }
+	double Speed () const { return speed; }
 	void ShowNow () { if (active_) Show (t); } // (immediately, e.g. after Seek)
 	void Export (double simt0, double simt1, int fps); // frames (and a video) of a time range
 	const std::string &Status () const { return status; }

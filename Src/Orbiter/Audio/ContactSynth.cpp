@@ -25,6 +25,7 @@ void ContactSynth::Set (const Params &p)
 	pSqueal.store (std::clamp (p.squeal, 0.0f, 1.0f), std::memory_order_relaxed);
 	pScrape.store (std::clamp (p.scrape, 0.0f, 1.0f), std::memory_order_relaxed);
 	pScrapeSpeed.store (std::max (0.0f, p.scrapeSpeed), std::memory_order_relaxed);
+	for (int k = 0; k < NMOTOR; k++) pMotor[k].store (std::clamp (p.motor[k], 0.0f, 1.0f), std::memory_order_relaxed);
 }
 
 void ContactSynth::Strike (Blow kind, float strength)
@@ -77,7 +78,14 @@ float ContactSynth::Voice1 (Voice &v, float chirp, float crunch)
 		y += 1.4f * std::exp (-t / 0.06f) * std::sin (TWO_PI * 60.0f * t);
 		if (t > 3.0f) v.kind = -1;
 		break; }
-	case NBLOW: {
+	case GEARLOCK: {
+		// the gear locking: a heavy thunk (60 Hz falling to 40), then its latch
+		float f = 40.0f + 20.0f * std::exp (-t / 0.02f);
+		v.ph += TWO_PI * f * dt;
+		y = 1.6f * std::exp (-t / 0.1f) * std::sin (v.ph) + 0.5f * crunch * std::exp (-t / 0.05f);
+		if (t > 0.6f) v.kind = -1;
+		break; }
+	case LATCH: {
 		// (a latch: a short, low clunk)
 		y = 1.5f * std::exp (-t / 0.05f) * std::sin (TWO_PI * (80.0f + 60.0f * std::exp (-t / 0.01f)) * t);
 		y += 0.3f * std::exp (-t / 0.03f) * std::sin (TWO_PI * 310.0f * t);
@@ -98,8 +106,9 @@ void ContactSynth::Render (float *out, unsigned n, float dop)
 		if (c == played[k]) continue;
 		played[k] = c;
 		float s = pending[k].strength.load (std::memory_order_relaxed);
-		if (k == DOCK) { Start (DOCK, s); Start (NBLOW, 0.8f, 0.45f); Start (NBLOW, 0.8f, 0.62f); }
-		else if (k == UNDOCK) { Start (NBLOW, 0.8f); Start (NBLOW, 0.7f, 0.15f); Start (UNDOCK, 0.6f * s, 0.4f); }
+		if (k == DOCK) { Start (DOCK, s); Start (LATCH, 0.8f, 0.45f); Start (LATCH, 0.8f, 0.62f); }
+		else if (k == UNDOCK) { Start (LATCH, 0.8f); Start (LATCH, 0.7f, 0.15f); Start (UNDOCK, 0.6f * s, 0.4f); }
+		else if (k == GEARLOCK) { Start (GEARLOCK, s); Start (LATCH, 0.5f * s, 0.12f); }
 		else Start (k, s);
 	}
 
@@ -124,6 +133,17 @@ void ContactSynth::Render (float *out, unsigned n, float dop)
 	scrapeAm.SetCutoff (40.0f, rate);
 	thudLp.LowPass (180.0f * dop, 0.7f, rate);
 	chirpBp.BandPass (750.0f * dop, 2.0f, rate);
+	hydraulicBp.BandPass (450.0f * dop, 1.5f, rate);
+	// motors: base pitch by kind (servo 180 Hz, a door's actuator 140, the
+	// gear's hydraulics 90), up 20 % at full speed
+	static const float motorF0[NMOTOR] = {180.0f, 140.0f, 90.0f};
+	float mspeed[NMOTOR], mf[NMOTOR];
+	bool motors = false;
+	for (int k = 0; k < NMOTOR; k++) {
+		mspeed[k] = motorS[k].Step (pMotor[k].load (std::memory_order_relaxed), dsp::Smooth::K (0.08f, n, rate));
+		mf[k] = motorF0[k] * (0.85f + 0.35f * mspeed[k]) * dop;
+		if (mspeed[k] > 1e-3f) motors = true;
+	}
 	crunchLp.LowPass (180.0f * dop, 0.7f, rate);
 
 	for (unsigned i = 0; i < n; i++) {
@@ -142,6 +162,20 @@ void ContactSynth::Render (float *out, unsigned n, float dop)
 		if (scrape > 1e-4f) {
 			float grains = std::max (0.0f, 1.0f + 40.0f * scrapeAm.Lp (rng.White ()));
 			s += scrape * (2.0f * grains * scrapeBp.Process (w) + 1.5f * scrapeHp.Process (thudLp.Process (p)));
+		}
+		if (motors) {
+			for (int k = 0; k < NMOTOR; k++) {
+				if (mspeed[k] <= 1e-3f) continue;
+				float y = 0.0f;
+				for (int h = 0; h < 3; h++) {
+					motorPh[k][h] += TWO_PI * mf[k] * (h + 1) / rate;
+					if (motorPh[k][h] > TWO_PI) motorPh[k][h] -= TWO_PI;
+					y += std::sin (motorPh[k][h]) / (1.0f + 1.5f * h);
+				}
+				// (the gear's hydraulics: the fluid's hiss under the hum)
+				if (k == GEAR) y += 1.5f * hydraulicBp.Process (p);
+				s += 0.9f * mspeed[k] * y;
+			}
 		}
 		// (the blows' noises, filtered once for all voices)
 		const float chirp = chirpBp.Process (w), crunch = crunchLp.Process (p);

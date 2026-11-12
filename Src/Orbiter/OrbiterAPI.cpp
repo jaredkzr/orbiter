@@ -8,7 +8,7 @@
 #include "Orbiter.h"
 #include "Launchpad.h"
 #include "Psys.h"
-#include "Audio/World.h"
+#include "Audio/AudioSystem.h"
 #include "BlackHole.h"
 #include "Debris.h"
 #include "Camera.h"
@@ -1801,6 +1801,58 @@ DLLEXPORT double oapiGetSoundSpeed (OBJHANDLE hPlanet, const VECTOR3 *gpos)
 	double g[3] = { gpos->x, gpos->y, gpos->z };
 	audio::Air a = audio::World::AirAt ((const Planet*)b, g);
 	return a.Present () ? a.c : 0.0;
+}
+
+// ---- sound -----------------------------------------------------------------
+
+namespace {
+	audio::System *Audio () { return g_pOrbiter ? g_pOrbiter->Audio () : nullptr; }
+	const Vessel *AsVessel (OBJHANDLE h)
+	{
+		const Body *b = (const Body*)h;
+		return b && b->Type () == OBJTP_VESSEL ? (const Vessel*)b : nullptr;
+	}
+}
+
+DLLEXPORT int oapiAudioPlay (OBJHANDLE hVessel, const char *file, const VECTOR3 *pos, double level, bool loop)
+{
+	audio::System *as = Audio ();
+	if (!as || !file) return 0;
+	const Vessel *v = hVessel ? AsVessel (hVessel) : nullptr;
+	if (hVessel && !v) return 0;
+	audio::V3 p = pos ? audio::V3 (pos->x, pos->y, pos->z) : audio::V3 ();
+	return as->Play (v, file, p, level, loop);
+}
+
+DLLEXPORT bool oapiAudioStop (int handle)
+{
+	audio::System *as = Audio ();
+	return as && as->StopSound (handle);
+}
+
+DLLEXPORT bool oapiAudioSet (int handle, double level, double pitch)
+{
+	audio::System *as = Audio ();
+	return as && as->SetSound (handle, level, pitch);
+}
+
+DLLEXPORT bool oapiAudioPlaying (int handle)
+{
+	audio::System *as = Audio ();
+	return as && as->Playing (handle);
+}
+
+DLLEXPORT void oapiAudioAnimation (OBJHANDLE hVessel, UINT anim, int kind, double level)
+{
+	audio::System *as = Audio ();
+	if (const Vessel *v = AsVessel (hVessel)) if (as) as->Animation (v, anim, kind, level);
+}
+
+DLLEXPORT bool oapiAudioTune (OBJHANDLE hVessel, const char *key, double value)
+{
+	audio::System *as = Audio ();
+	const Vessel *v = AsVessel (hVessel);
+	return as && v && key && as->Tune (v, key, value);
 }
 
 DLLEXPORT const ATMCONST *oapiGetPlanetAtmConstants (OBJHANDLE hPlanet)

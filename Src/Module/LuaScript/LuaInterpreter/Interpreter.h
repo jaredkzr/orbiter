@@ -1196,6 +1196,16 @@ protected:
 	// Keep this virtual slot in every build so Interpreter has the same layout for SDK consumers.
 	virtual void LoadXRSoundAPI ();
 
+	// sound (lua_audio.cpp: the audio table)
+	void LoadAudioAPI ();
+	static OBJHANDLE audio_vessel (lua_State *L, int idx);
+	static int audio_play (lua_State *L);
+	static int audio_stop (lua_State *L);
+	static int audio_set (lua_State *L);
+	static int audio_playing (lua_State *L);
+	static int audio_animation (lua_State *L);
+	static int audio_tune (lua_State *L);
+
 #ifdef XRSOUND
 	// -------------------------------------------
 	// XRSound

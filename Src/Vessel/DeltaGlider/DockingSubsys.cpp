@@ -114,6 +114,7 @@ NoseconeCtrl::NoseconeCtrl (DockingCtrlSubsystem *_subsys)
 	static MGROUP_ROTATE VCNConeTR (1, VCNConeTRGrp, 1,
 		_V( 0.424,-0.066,9.838), _V(-0.707, 0.707,0), (float)(150*RAD));
 	anim_nose = DG()->CreateAnimation (0);
+	oapiAudioAnimation (DG()->GetHandle(), anim_nose, AUDIO_ANIM_DOOR, 1.0); // (its motor's sound)
 	DG()->AddAnimationComponent (anim_nose, 0.01, 0.92, &NConeTL);
 	DG()->AddAnimationComponent (anim_nose, 0.01, 0.92, &VCNConeTL);
 	DG()->AddAnimationComponent (anim_nose, 0.02, 0.925, &NConeTR);
@@ -539,6 +540,7 @@ EscapeLadderCtrl::EscapeLadderCtrl (DockingCtrlSubsystem *_subsys)
 	static MGROUP_ROTATE Ladder2 (0, LadderGrp, 2,
 		_V(0,-1.05,9.85), _V(1,0,0), (float)(80*RAD));
 	anim_ladder = DG()->CreateAnimation (0);
+	oapiAudioAnimation (DG()->GetHandle(), anim_ladder, AUDIO_ANIM_MOTOR, 1.0); // (its motor's sound)
 	DG()->AddAnimationComponent (anim_ladder, 0, 0.5, &Ladder1);
 	DG()->AddAnimationComponent (anim_ladder, 0.5, 1, &Ladder2);
 }

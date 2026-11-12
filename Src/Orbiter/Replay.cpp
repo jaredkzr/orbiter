@@ -262,7 +262,7 @@ void Replay::Update ()
 		return;
 	}
 	if (playing) {
-		t += speed * td.SysDT;
+		t += speed * td.UiDT (); // (the fixed step in fixed-step runs: in step with them)
 		if (t >= tEnd) {
 			if (loop) t = std::max (Start(), tIn);
 			else t = tEnd, playing = false;

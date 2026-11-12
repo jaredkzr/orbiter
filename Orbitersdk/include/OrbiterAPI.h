@@ -4678,6 +4678,56 @@ OAPIFUNC void oapiGetPlanetAtmParams (OBJHANDLE hPlanet, double alt, double lng,
 	*/
 OAPIFUNC double oapiGetSoundSpeed (OBJHANDLE hPlanet, const VECTOR3 *gpos);
 
+/**
+ * \defgroup audio Sound
+ * Sounds of vessels and the interface (Src/Orbiter/Audio). A vessel's
+ * engines, thrusters, air, contacts and docking sound by themselves; these
+ * functions add sounds, give animations a motor's sound, and tune a
+ * vessel's sounds.
+ * @{
+ */
+#define AUDIO_ANIM_NONE  0 ///< no sound (removes one set before)
+#define AUDIO_ANIM_MOTOR 1 ///< a servo: a hum while it moves
+#define AUDIO_ANIM_DOOR  2 ///< a door or cover: its actuator, a latch at its ends
+#define AUDIO_ANIM_GEAR  3 ///< landing gear: hydraulics, a heavy lock at its ends
+
+/**
+ * \brief Plays a sound file on a vessel, or on the interface.
+ * \param hVessel the vessel (heard as its other sounds are: through the air
+ *   with its travel time and Doppler shift, through the hull in its cockpit,
+ *   not at all through vacuum), or NULL: the interface (no position)
+ * \param file WAV, FLAC or MP3 file (as given, or under Sound/)
+ * \param pos position in the vessel's frame [m] (ignored for the interface)
+ * \param level loudness: at 2 m from the vessel, as a fraction of 130 dB SPL
+ *   (1: very loud); for the interface, a gain
+ * \param loop play over and over until stopped
+ * \return a handle (0: not played: no sound, or no such file). A sound not
+ *   looped is gone when it has played.
+ */
+OAPIFUNC int oapiAudioPlay (OBJHANDLE hVessel, const char *file, const VECTOR3 *pos, double level, bool loop);
+/// \brief Stops a sound played with oapiAudioPlay. \return false: no such sound (any more)
+OAPIFUNC bool oapiAudioStop (int handle);
+/// \brief Sets a sound's level and pitch (a negative level, a pitch <= 0: unchanged). \return false: no such sound
+OAPIFUNC bool oapiAudioSet (int handle, double level, double pitch);
+/// \brief Is the sound still playing?
+OAPIFUNC bool oapiAudioPlaying (int handle);
+/**
+ * \brief Gives one of a vessel's animations a motor's sound (while it moves)
+ *   and, for doors and gear, a latch or lock at its ends.
+ * \param kind AUDIO_ANIM_MOTOR, _DOOR, _GEAR (_NONE: none)
+ * \param level loudness (1: as usual)
+ */
+OAPIFUNC void oapiAudioAnimation (OBJHANDLE hVessel, UINT anim, int kind, double level);
+/**
+ * \brief Tunes a vessel's own sounds: factors (1: as usual) on
+ *   "engine_level", "engine_pitch", "rumble", "whine", "crackle",
+ *   "rcs_level", "rcs_pitch", "air_level", "contact_level". (Also in
+ *   Config/Sound/<class>.cfg, as "key = value" lines.)
+ * \return false: no such key
+ */
+OAPIFUNC bool oapiAudioTune (OBJHANDLE hVessel, const char *key, double value);
+/** @} */
+
 	/**
 	* \brief Returns atmospheric constants for a planet.
 	* \param hPlanet planet handle

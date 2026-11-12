@@ -1042,6 +1042,7 @@ RadiatorControl::RadiatorControl (ThermalSubsystem *_subsys)
 	static MGROUP_ROTATE RbRadiator (0, RbRadiatorGrp, 1,
 		_V(0.91, 1.89, -4.27), axis2, (float)(-180*RAD));
 	anim_radiator = DG()->CreateAnimation (0);
+	oapiAudioAnimation (DG()->GetHandle(), anim_radiator, AUDIO_ANIM_MOTOR, 1.0); // (its motor's sound)
 	DG()->AddAnimationComponent (anim_radiator, 0, 0.25, &Raddoor);
 	DG()->AddAnimationComponent (anim_radiator, 0.28, 0.53, &FRadiator);
 	DG()->AddAnimationComponent (anim_radiator, 0.20, 0.4, &Radiator);

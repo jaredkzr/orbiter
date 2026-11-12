@@ -258,8 +258,13 @@ ctest
   Doppler, the shock cone of a supersonic pass), `Audio.Cockpit*` (the
   cockpit and the vacuum, physical and cinematic, time acceleration),
   `Audio.Takeoff` and `Audio.MoonLiftoff` (a vessel's own engines, on Earth
-  and on the Moon). Unit tests: `Audio.Engine`, `Audio.Propagation`,
-  `Audio.Synth`.
+  and on the Moon), `Audio.Contacts*` (touchdown, rolling, a belly's
+  scrape), `Audio.Docking`, `Audio.Api` (the sound API: files on vessels and
+  the interface, an animation's motor). Unit tests: `Audio.Engine`,
+  `Audio.Propagation`, `Audio.Synth`.
+- **Sound of vessel classes:** `Config/Sound/README.txt` (tuning, motors of
+  animations); the API in `OrbiterAPI.h` (`oapiAudio*`) and Lua's `audio`
+  table.
 - **Test files:** add new test scenarios to `Scenarios/Tests/` and their
   scripts to `Script/Tests/`. The build copies them into the build tree.
 

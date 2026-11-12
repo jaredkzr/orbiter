@@ -986,6 +986,7 @@ RetroCoverControl::RetroCoverControl (MainRetroSubsystem *_subsys)
 	static MGROUP_ROTATE RCoverBR (0, RCoverBRGrp, 2,
 		_V( 2.156,-0.49,6.886), _V( 0.434,-0.037,-0.9), (float)( 70*RAD));
 	anim_rcover = DG()->CreateAnimation (0);
+	oapiAudioAnimation (DG()->GetHandle(), anim_rcover, AUDIO_ANIM_DOOR, 1.0); // (its motor's sound)
 	DG()->AddAnimationComponent (anim_rcover, 0, 1, &RCoverTL);
 	DG()->AddAnimationComponent (anim_rcover, 0, 1, &RCoverBL);
 	DG()->AddAnimationComponent (anim_rcover, 0, 1, &RCoverTR);

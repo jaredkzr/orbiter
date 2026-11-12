@@ -50,6 +50,10 @@ public:
 	virtual void Stop () = 0;
 	/// The Doppler factor (received / emitted frequency)
 	virtual void SetDoppler (float f) = 0;
+	/// A pitch of its own (sound files: played faster), times the Doppler factor
+	virtual void SetPitch (float p) {}
+	/// It has played to its end (sound files not looped)
+	virtual bool Done () const { return false; }
 };
 
 /// A source playing a miniaudio data source (generators: tests) or a file
@@ -76,6 +80,10 @@ public:
 	void SetHull (float h) { desc.hull = h; }
 	void SetOffset (const V3 &o) { desc.offset = o; }
 	void SetDir (const V3 &d) { desc.dir = d; }
+	/// Its source's own pitch (sound files)
+	void SetPitch (float p) { if (source) source->SetPitch (p); }
+	/// Its source has played to its end
+	bool SourceDone () const { return source && source->Done (); }
 	/// What is heard of it now (for the readout and tests)
 	struct State {
 		int images = 0;         // emission moments heard (0: not heard)
@@ -88,11 +96,11 @@ public:
 	};
 	const State &Heard () const { return state; }
 
-	/// What its source does, as it changes (up to 16 numbers: a throttle, a
+	/// What its source does, as it changes (up to 24 numbers: a throttle, a
 	/// speed...), stamped with the simulation time; Recalled: as heard now,
 	/// when the sound now arriving left it (travel time ago; at once in the
 	/// cockpit of its vessel, and while not heard)
-	using Params = std::array<float, 16>;
+	using Params = std::array<float, 24>;
 	void Push (double t, const Params &p);
 	Params Recalled () const;
 
@@ -126,8 +134,12 @@ public:
 	void SetRealism (Realism r) { realism = r; }
 	Realism GetRealism () const { return realism; }
 
-	/// Once per time step (simulation thread)
-	void Update ();
+	/// Once per time step (simulation thread), at time t [s] (the
+	/// simulation's, or a replay's)
+	void Update (double t);
+	/// Time jumped (a replay began or ended): the sources' paths and
+	/// histories start over
+	void ResetPaths ();
 
 	/// A sonic boom: a supersonic source's shock cone swept over the listener
 	/// (dir: where it came from, camera frame; height: the source above the
