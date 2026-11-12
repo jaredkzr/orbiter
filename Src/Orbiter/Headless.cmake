@@ -144,6 +144,11 @@ set(headless_src
 	Memstat.cpp
 	Util.cpp
 	ZTreeMgr.cpp
+# Sound
+	Audio/AudioEngine.cpp
+	Audio/AudioSystem.cpp
+	Audio/Miniaudio.cpp
+	Audio/WavWriter.cpp
 # Platform layer
 	${PLATFORM_DIR}/posix/InputPosix.cpp
 	${PLATFORM_DIR}/posix/LaunchpadPosix.cpp
@@ -162,6 +167,7 @@ target_include_directories(OrbiterCore PUBLIC
 	${CMAKE_CURRENT_SOURCE_DIR}
 	${CMAKE_SOURCE_DIR}/Orbitersdk/include
 	${CMAKE_SOURCE_DIR}/OVP
+	${CMAKE_SOURCE_DIR}/Extern/miniaudio
 	${CMAKE_CURRENT_BINARY_DIR}
 	${TRACY_CLIENT_INCLUDE}
 	${imgui_SOURCE_DIR}

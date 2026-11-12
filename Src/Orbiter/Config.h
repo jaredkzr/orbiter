@@ -275,6 +275,12 @@ struct CFG_CAMERAPRM {
 	int    HUDCol;				// HUD colour index
 };
 
+struct CFG_SOUNDPRM {           // sound (Src/Orbiter/Audio)
+	bool   bEnabled;            // sound on
+	float  Master;              // master volume (0-1, as on the slider)
+	float  Bus[6];              // volumes of the buses (audio::Bus): outside, cockpit, voice, radio, music, interface
+};
+
 struct CFG_WINDOWPOS {
 	RECT DlgMap;                // map window position
 	RECT DlgInfo;               // info window position
@@ -413,6 +419,7 @@ public:
 	CFG_DEBUGPRM CfgDebugPrm;			// debugging parameters (shutdown method, fixed time steps, timer interface)
 	CFG_FONTPRM CfgFontPrm;				// ingame font characteristics
 	CFG_CAMERAPRM CfgCameraPrm;			// camera parameters
+	CFG_SOUNDPRM CfgSoundPrm;           // sound parameters
 	CFG_WINDOWPOS CfgWindowPos;         // subwindow positions
 	CFG_CMDLINEPRM CfgCmdlinePrm;       // Populated by command line parameters. Overrides interactive settings
 

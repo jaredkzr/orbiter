@@ -159,6 +159,18 @@ set_target_properties(Kerr.Geodesics PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBI
 add_test(NAME Kerr.Geodesics COMMAND $<TARGET_FILE:Kerr.Geodesics>)
 set_tests_properties(Kerr.Geodesics PROPERTIES TIMEOUT 120)
 
+# The audio engine, offline (no device): buses, volumes, fades, WAV files
+find_package(Threads REQUIRED)
+add_executable(Audio.Engine Audio.Engine.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/AudioEngine.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/WavWriter.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Miniaudio.cpp)
+target_include_directories(Audio.Engine PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter ${CMAKE_SOURCE_DIR}/Extern/miniaudio)
+target_link_libraries(Audio.Engine Catch2::Catch2WithMain ${CMAKE_DL_LIBS} Threads::Threads m)
+set_target_properties(Audio.Engine PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER_BINARY_ROOT_DIR}")
+add_test(NAME Audio.Engine COMMAND $<TARGET_FILE:Audio.Engine>)
+set_tests_properties(Audio.Engine PROPERTIES TIMEOUT 60)
+
 # Scenario tests need an Orbiter executable that runs without graphics client
 if (ORBITER_HEADLESS)
 	set(ORBITER_TEST_EXE $<TARGET_FILE:${OrbiterTgt}>)
@@ -228,6 +240,26 @@ if (ORBITER_TEST_EXE)
 	set_tests_properties(Scenario.WaterWarpTest PROPERTIES TIMEOUT 120 ENVIRONMENT "ORBITER_DAMAGE=0")
 	# (the destruction test needs the damage model on)
 	set_tests_properties(Scenario.DestructionTest Scenario.FocusLossTest PROPERTIES ENVIRONMENT "ORBITER_DAMAGE=1")
+
+	# Sound rendered offline from a session (ORBITER_AUDIO_RENDER), then
+	# checked by Tests/Audio/analyze.py: 100 steps of 0.02 s, 2 s of sound
+	find_package(Python3 COMPONENTS Interpreter)
+	if (Python3_FOUND)
+		add_test(
+			NAME "Audio.Render"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Scenarios/Delta-glider/Smack!.scn" "--maxframes=100" "--fixedstep=0.02"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.Render PROPERTIES TIMEOUT 60 FIXTURES_SETUP AudioRender
+			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Render.wav")
+		add_test(
+			NAME "Audio.RenderCheck"
+			COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_SOURCE_DIR}/Tests/Audio/analyze.py "${ORBITER_BINARY_ROOT_DIR}/Audio.Render.wav"
+				--duration 2.0 --silent
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.RenderCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioRender)
+	endif()
 
 	# Launchpad (in the Vulkan client's window, rendered offscreen; needs a
 	# Vulkan device): a scenario launched twice, returning to the launchpad.

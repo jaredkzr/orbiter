@@ -27,6 +27,7 @@
 #include "DlgMgr.h"
 #include "Keymap.h"
 #include "Replay.h"
+#include "Audio/AudioSystem.h"
 #include "Pane.h"
 #include "imgui.h"
 #include <cmath>
@@ -86,6 +87,10 @@ HRESULT Orbiter::Create (HINSTANCE hInstance)
 
 	bSysClearType = false;
 	memstat = new MemStat;
+
+	// sound (on the device with a graphics client)
+	m_audio = std::make_unique<audio::System> (this);
+	m_audio->Start (gclient != nullptr);
 
 	return S_OK;
 }

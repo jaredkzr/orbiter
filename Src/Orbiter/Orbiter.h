@@ -31,6 +31,7 @@ class OrbiterServer;
 class OrbiterClient;
 class PlaybackEditor;
 class MemStat;
+namespace audio { class System; }
 class DDEServer;
 class ImageIO;
 class ScriptInterface;
@@ -226,6 +227,9 @@ public:
 	inline DInput *GetInput() const { return pDI; }
 	inline LPDIRECTINPUTDEVICE8 GetKbdDevice() const { return pDI->GetKbdDevice(); }
 	inline LPDIRECTINPUTDEVICE8 GetJoyDevice() const { return pDI->GetJoyDevice(); }
+
+	/// Sound (null before Create)
+	audio::System *Audio () const { return m_audio.get(); }
 
 	// memory monitor
 	MemStat *memstat;
@@ -468,6 +472,7 @@ protected:
 
 private:
 	std::unique_ptr<trajectory::Predictor> predictor; // (exists during a session)
+	std::unique_ptr<audio::System> m_audio; // sound (Src/Orbiter/Audio)
 	const Body     *predictTarget = nullptr;
 	class MapView  *mapView = nullptr;      // map view and burn cue overlay (with a graphics client)
 	std::unique_ptr<class MfdWindows> mfdWindows; // MFD windows (with a graphics client)

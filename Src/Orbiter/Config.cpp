@@ -252,6 +252,12 @@ CFG_CAMERAPRM CfgCameraPrm_default = {
 	0			// HUDCol (green HUD colour)
 };
 
+CFG_SOUNDPRM CfgSoundPrm_default = {
+	true,       // bEnabled (sound on)
+	0.8f,       // Master volume
+	{ 1.0f, 1.0f, 0.9f, 0.7f, 0.6f, 0.7f } // Bus volumes: outside, cockpit, voice, radio, music, interface
+};
+
 CFG_CMDLINEPRM CfgCmdlinePrm_default = {
 	false,              // fast exit (false = return to Launchpad dialog)
 	false,              // open video tab (false = open Scenarios tab)
@@ -730,6 +736,15 @@ bool Config::Load(const char *fname)
 	GetReal (ifs, "CameraTerrainLimit", CfgCameraPrm.TerrainLimit);
 	GetInt (ifs, "HUDColIdx", CfgCameraPrm.HUDCol);
 
+	// sound parameters
+	GetBool (ifs, "Sound", CfgSoundPrm.bEnabled);
+	if (GetReal (ifs, "SoundVolume", d)) CfgSoundPrm.Master = (float)std::clamp (d, 0.0, 1.0);
+	{
+		static const char *busKey[6] = { "SoundOutside", "SoundCockpit", "SoundVoice", "SoundRadio", "SoundMusic", "SoundInterface" };
+		for (int b = 0; b < 6; b++)
+			if (GetReal (ifs, busKey[b], d)) CfgSoundPrm.Bus[b] = (float)std::clamp (d, 0.0, 1.0);
+	}
+
 	// user interface parameters
 	if (GetInt(ifs, "MouseFocusMode", i) && i >= 0 && i <= 2)
 		CfgUIPrm.MouseFocusMode = (DWORD)i;
@@ -885,6 +900,7 @@ void Config::SetDefaults ()
 	CfgDemoPrm = CfgDemoPrm_default;             // demo parameters
 	CfgFontPrm = CfgFontPrm_default;             // ingame font characteristics
 	CfgCameraPrm = CfgCameraPrm_default;         // camera parameters
+	CfgSoundPrm = CfgSoundPrm_default;           // sound parameters
 	CfgWindowPos = CfgWindowPos_default;         // subwindow positions
 	CfgCmdlinePrm = CfgCmdlinePrm_default;       // command line parameters
 
@@ -1260,6 +1276,18 @@ BOOL Config::Write (const char *fname) const
 			ofs << "CameraTerrainLimit = " << CfgCameraPrm.TerrainLimit << '\n';
 		if (CfgCameraPrm.HUDCol != CfgCameraPrm_default.HUDCol || bEchoAll)
 			ofs << "HUDColIdx = " << CfgCameraPrm.HUDCol << endl;
+	}
+
+	if (memcmp (&CfgSoundPrm, &CfgSoundPrm_default, sizeof(CFG_SOUNDPRM)) || bEchoAll) {
+		ofs << "\n; === Sound parameters ===\n";
+		if (CfgSoundPrm.bEnabled != CfgSoundPrm_default.bEnabled || bEchoAll)
+			ofs << "Sound = " << BoolStr (CfgSoundPrm.bEnabled) << '\n';
+		if (CfgSoundPrm.Master != CfgSoundPrm_default.Master || bEchoAll)
+			ofs << "SoundVolume = " << CfgSoundPrm.Master << '\n';
+		static const char *busKey[6] = { "SoundOutside", "SoundCockpit", "SoundVoice", "SoundRadio", "SoundMusic", "SoundInterface" };
+		for (int b = 0; b < 6; b++)
+			if (CfgSoundPrm.Bus[b] != CfgSoundPrm_default.Bus[b] || bEchoAll)
+				ofs << busKey[b] << " = " << CfgSoundPrm.Bus[b] << '\n';
 	}
 
 	// (the device's indices only when one was chosen; the window's settings

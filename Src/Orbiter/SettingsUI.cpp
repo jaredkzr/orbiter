@@ -8,6 +8,7 @@
 #include "Psys.h"
 #include "Planet.h"
 #include "GraphicsAPI.h"
+#include "Audio/AudioSystem.h"
 #include "IconsLucide.h"
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -21,8 +22,8 @@
 extern PlanetarySystem *g_psys;
 
 namespace {
-	const char *PAGE_NAMES[] = { "Display", "Graphics", "Scenery", "Simulation", "Instruments", "Controls", "Visual helpers" };
-	const char *PAGE_ICONS[] = { ICON_LC_MONITOR, ICON_LC_SPARKLES, ICON_LC_MOUNTAIN, ICON_LC_ORBIT, ICON_LC_GAUGE, ICON_LC_GAMEPAD_2, ICON_LC_LAYERS };
+	const char *PAGE_NAMES[] = { "Display", "Graphics", "Scenery", "Simulation", "Instruments", "Controls", "Audio", "Visual helpers" };
+	const char *PAGE_ICONS[] = { ICON_LC_MONITOR, ICON_LC_SPARKLES, ICON_LC_MOUNTAIN, ICON_LC_ORBIT, ICON_LC_GAUGE, ICON_LC_GAMEPAD_2, ICON_LC_VOLUME_2, ICON_LC_LAYERS };
 	const char *PRESETS[] = { "Low", "Medium", "High", "Ultra" };
 }
 
@@ -85,7 +86,7 @@ void SettingsUI::DrawNav ()
 		if (ui::ListRow ("##page", PAGE_ICONS[i], PAGE_NAMES[i], nullptr, page == i, nullptr, page == i ? ui::ACCENT : ui::TEXT_DIM))
 			SelectPage ((Page)i);
 		static const char *anchors[] = { "settings.display", "settings.graphics", "settings.scenery", "settings.simulation",
-			"settings.instruments", "settings.controls", "settings.helpers" };
+			"settings.instruments", "settings.controls", "settings.audio", "settings.helpers" };
 		uianchor::SetItem (anchors[i]); // (tests)
 		ImGui::PopID ();
 	}
@@ -106,6 +107,7 @@ void SettingsUI::DrawPage ()
 	case SIMULATION:  PageSimulation (); break;
 	case INSTRUMENTS: PageInstruments (); break;
 	case CONTROLS:    PageControls (); break;
+	case AUDIO:       PageAudio (); break;
 	case OVERLAYS:    PageOverlays (); break;
 	default: break;
 	}
@@ -262,6 +264,14 @@ bool SettingsUI::SliderRow (const char *label, const char *help, int *v, int vmi
 	ImGui::PopID ();
 	EndRow ();
 	return r;
+}
+
+bool SettingsUI::VolumeRow (const char *label, const char *help, float *v)
+{
+	int pct = (int)std::lround (*v * 100.0f);
+	if (!SliderRow (label, help, &pct, 0, 100, "%d %%")) return false;
+	*v = pct / 100.0f;
+	return true;
 }
 
 bool SettingsUI::ComboRow (const char *label, const char *help, int *sel, const char *const *items, int n)
@@ -664,6 +674,45 @@ void SettingsUI::PageControls ()
 	if (SliderRow ("Dead zone", "Stick movement ignored around the centre.", &j.Deadzone, 0, 10000, "%d"))
 		orbiter->OnOptionChanged (OPTCAT_JOYSTICK, OPTITEM_JOYSTICK_PARAM);
 	ImGui::EndDisabled ();
+}
+
+// ---- Audio ----------------------------------------------------------------
+
+void SettingsUI::PageAudio ()
+{
+	CFG_SOUNDPRM &s = orbiter->Cfg()->CfgSoundPrm;
+	audio::System *as = orbiter->Audio ();
+	bool changed = false;
+	Section ("Sound");
+	changed |= ToggleRow ("Sound", "Off: Orbiter is silent.", &s.bEnabled);
+	if (as) {
+		const audio::Engine &e = as->GetEngine ();
+		char note[320];
+		if (as->Rendering ())
+			snprintf (note, sizeof(note), "Rendering to a file (%u Hz).", e.SampleRate ());
+		else if (e.Active ())
+			snprintf (note, sizeof(note), "Output: %s, %u Hz.", e.DeviceName().empty() ? "the default device" : e.DeviceName().c_str(), e.SampleRate ());
+		else if (s.bEnabled)
+			snprintf (note, sizeof(note), "No sound device could be opened.");
+		else note[0] = '\0';
+		if (note[0]) Note (ICON_LC_VOLUME_2, note);
+	}
+	ImGui::BeginDisabled (!s.bEnabled);
+	changed |= VolumeRow ("Volume", "All of Orbiter's sound.", &s.Master);
+
+	Section ("Mix");
+	static const char *help[audio::NBUS][2] = {
+		{ "Outside", "Engines, wind, impacts: everything heard through the air." },
+		{ "Cockpit", "What reaches the cockpit through the hull, and its own sounds." },
+		{ "Voice callouts", "Altitudes, warnings and the flight's milestones." },
+		{ "Radio", "Ground control and radio chatter." },
+		{ "Music", "The ambient music." },
+		{ "Interface", "Menus, buttons and switches." },
+	};
+	for (int b = 0; b < audio::NBUS; b++)
+		changed |= VolumeRow (help[b][0], help[b][1], &s.Bus[b]);
+	ImGui::EndDisabled ();
+	if (changed && as) as->SettingsChanged ();
 }
 
 // ---- Visual helpers (in flight) ------------------------------------------

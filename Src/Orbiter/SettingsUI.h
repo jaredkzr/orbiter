@@ -25,7 +25,7 @@ namespace oapi { struct GraphicsSetting; }
 class SettingsUI {
 public:
 	enum Where { LAUNCHPAD, FLIGHT };
-	enum Page { DISPLAY, GRAPHICS, SCENERY, SIMULATION, INSTRUMENTS, CONTROLS, OVERLAYS, NPAGE };
+	enum Page { DISPLAY, GRAPHICS, SCENERY, SIMULATION, INSTRUMENTS, CONTROLS, AUDIO, OVERLAYS, NPAGE };
 
 	SettingsUI (Orbiter *orbiter, Where where);
 
@@ -49,6 +49,7 @@ private:
 	void PageSimulation ();
 	void PageInstruments ();
 	void PageControls ();
+	void PageAudio ();
 	void PageOverlays ();
 
 	// ---- rows -----------------------------------------------------------
@@ -63,6 +64,8 @@ private:
 	bool SliderRow (const char *label, const char *help, float *v, float vmin, float vmax, const char *format);
 	bool SliderRow (const char *label, const char *help, double *v, double vmin, double vmax, const char *format);
 	bool SliderRow (const char *label, const char *help, int *v, int vmin, int vmax, const char *format);
+	/// A volume (0..1) as a percentage slider
+	bool VolumeRow (const char *label, const char *help, float *v);
 	bool ComboRow (const char *label, const char *help, int *sel, const char *const *items, int n);
 	/// A note over a page or section (an icon and dimmed text)
 	void Note (const char *icon, const char *text, ui::Colour c = ui::TEXT_DIM);

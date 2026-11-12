@@ -58,6 +58,7 @@
 #include "MfdWindow.h"
 #include "Transfer.h"
 #include "Replay.h"
+#include "Audio/AudioSystem.h"
 #include "imgui.h"
 #ifdef _WIN32
 #include "imgui_impl_win32.h"
@@ -518,6 +519,7 @@ void Orbiter::SaveConfig ()
 VOID Orbiter::CloseApp (bool fast_shutdown)
 {
 	SaveConfig();
+	m_audio.reset (); // (also before a fast exit: the device stops, a render's file is closed)
 	while (m_Plugin.size()) UnloadModule (m_Plugin.begin()->hDLL);
 
 	if (bRoughType)
@@ -2115,6 +2117,9 @@ void Orbiter::EndTimeStep (bool running)
 	// Update visual states
 	if (gclient) gclient->clbkUpdate (bRunning);
 	g_bForceUpdate = false;                        // clear flag
+
+	// Sound (and a render's mix of this step)
+	if (m_audio) m_audio->Step ();
 
 	// check for termination of demo mode
 	if (SessionLimitReached()) {
