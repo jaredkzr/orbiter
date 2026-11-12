@@ -207,3 +207,28 @@ TEST_CASE ("Ears: quiet as it is, loud compressed, peaks held", "[audio]")
 	RenderRms (e, 1.0);
 	CHECK (e.EarsReduction () == 0.0f);
 }
+
+TEST_CASE ("Ears: the limiter holds peaks without distorting", "[audio]")
+{
+	// a 220 Hz tone 6 dB over full scale: out below the ceiling, its
+	// harmonics (from clipping) at least 40 dB down
+	Engine e;
+	REQUIRE (e.Init (Offline (true)));
+	Tone t (e, EXTERIOR, 220.0, 2.0);
+	RenderRms (e, 2.0);
+	const uint64_t n = 48000;
+	std::vector<float> buf (n * 2);
+	e.Render (buf.data (), n);
+	float peak = 0.0f;
+	for (float v : buf) peak = std::max (peak, std::fabs (v));
+	CHECK (peak <= 0.9f);
+	auto amp = [&](double f) {
+		double re = 0.0, im = 0.0;
+		for (uint64_t i = 0; i < n; i++) re += buf[2*i] * std::cos (2.0 * M_PI * f * i / 48000.0), im += buf[2*i] * std::sin (2.0 * M_PI * f * i / 48000.0);
+		return std::sqrt (re * re + im * im);
+	};
+	double a1 = amp (220.0), a3 = amp (660.0), a2 = amp (440.0);
+	INFO ("harmonics: 2nd " << 20.0 * std::log10 (a2 / a1) << " dB, 3rd " << 20.0 * std::log10 (a3 / a1) << " dB");
+	CHECK (a3 < a1 * 0.01);
+	CHECK (a2 < a1 * 0.01);
+}

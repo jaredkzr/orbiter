@@ -3,9 +3,10 @@
 
 // =======================================================================
 // Attitude thrusters: a cluster of small engines firing in pulses. Each
-// pulse starts with the valve's bang (a hard click, and a thump the
-// structure carries: astronauts likened them to cannon shots) and hisses
-// and roars while it fires; it ends with a softer click.
+// pulse starts with a bang - a deep thump falling in pitch and a low whump,
+// carried by the structure (astronauts likened them to cannon shots), a
+// soft click of the valve above - and roars while it fires; it ends with a
+// softer thud.
 // =======================================================================
 
 #ifndef __RCSSYNTH_H
@@ -30,9 +31,9 @@ private:
 	std::atomic<float> pLevel{0.0f}, pPeak{800.0f};
 	dsp::Rng rng;
 	dsp::Pink pink;
-	dsp::Biquad roarBp, hissHp, clickBp;
+	dsp::Biquad roarBp, hissHp, clickBp, whumpLp;
 	dsp::Smooth level;
-	float bang = 0.0f, bangPh = 0.0f, click = 0.0f;
+	float bang = 0.0f, bangT = 0.0f, bangPh = 0.0f, click = 0.0f, whump = 0.0f;
 	bool on = false;
 	float offTime = 1.0f; // [s] since the last pulse ended
 };

@@ -6,8 +6,9 @@
 // cabin to a launch pad, 120 dB and more; the ears take it in as a
 // compressor: below the threshold as it is, above it rising at 1/ratio,
 // with a fast attack and a slow recovery (a launch dulls what follows for
-// a while), and a soft limit on the peaks. Physical levels come in scaled
-// so that P_FULL [Pa] is full scale.
+// a while), and a peak limiter that looks 2 ms ahead (the gain comes down
+// smoothly before a peak, no clipping). Physical levels come in scaled so
+// that P_FULL [Pa] is full scale.
 // =======================================================================
 
 #ifndef __AUDIOEARS_H

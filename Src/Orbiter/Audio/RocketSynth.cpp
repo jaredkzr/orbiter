@@ -14,7 +14,10 @@ namespace {
 	/// below this level the engine is out
 	constexpr float LIT = 0.01f;
 	/// crackle: pops per second at full throttle
-	constexpr float CRACKLE_RATE = 900.0f;
+	constexpr float CRACKLE_RATE = 600.0f;
+	/// the biggest pop, against a typical one (the heavy tail capped: no spikes
+	/// that only the limiter can catch)
+	constexpr float CRACKLE_CAP = 2.5f;
 }
 
 std::unique_ptr<RocketSynth> RocketSynth::Make (Engine &e, uint32_t seed)
@@ -34,10 +37,11 @@ void RocketSynth::Set (const Params &p)
 
 float RocketSynth::PeakFor (double maxThrust)
 {
-	// a launcher stage (35 MN, D ~ 10 m) peaks at about 20 Hz; a 100 kN
-	// engine (D ~ 0.5 m) at a few hundred: f ~ thrust^-1/2
-	double f = 20.0 * std::sqrt (3.5e7 / std::max (maxThrust, 1.0));
-	return (float)std::clamp (f, 15.0, 1500.0);
+	// a launcher stage (35 MN, D ~ 10 m) peaks low, about 12 Hz; a 100 kN
+	// engine (D ~ 0.5 m) near 200 Hz: f ~ thrust^-1/2 (tuned by ear a little
+	// below the Strouhal estimate: a deep roar)
+	double f = 12.0 * std::sqrt (3.5e7 / std::max (maxThrust, 1.0));
+	return (float)std::clamp (f, 10.0, 900.0);
 }
 
 void RocketSynth::Render (float *out, unsigned n, float dop)
@@ -54,10 +58,10 @@ void RocketSynth::Render (float *out, unsigned n, float dop)
 	// (higher throttle: a faster jet, a higher peak)
 	float pk = peak * (0.8f + 0.3f * lv);
 	roarBp.BandPass (pk, 0.6f, rate);
-	roarLp.LowPass (pk * 6.0f, 0.5f, rate);
-	hiss.HighPass (pk * 8.0f, 0.5f, rate);
-	crackHp.HighPass (std::max (900.0f, 4.0f * pk) * dop, 0.7f, rate);
-	crackShape.SetCutoff (6000.0f * dop, rate);
+	roarLp.LowPass (pk * 3.5f, 0.5f, rate);
+	hiss.HighPass (pk * 10.0f, 0.5f, rate);
+	crackHp.HighPass (std::max (300.0f, 2.0f * pk) * dop, 0.7f, rate);
+	crackShape.SetCutoff (2500.0f * dop, rate); // (rounder pops)
 	rumbleLp.LowPass (std::min (40.0f, pk) * dop, 0.7f, rate);
 	chuffBp.BandPass (pk * 2.0f, 0.8f, rate);
 	flutter.SetCutoff (4.0f * dop, rate);
@@ -83,7 +87,7 @@ void RocketSynth::Render (float *out, unsigned n, float dop)
 		// the turbulence's flicker: 15 % RMS in amplitude
 		float fl = std::max (0.2f, 1.0f + flutterK * flutter.Lp (rng.White ()));
 		// roar: the hump around the peak, its skirt, a little hiss above
-		float roar = 2.2f * roarBp.Process (p) + 0.9f * roarLp.Process (p) + 0.12f * hiss.Process (pinkHi.Next (rng.White ()));
+		float roar = 2.4f * roarBp.Process (p) + 1.0f * roarLp.Process (p) + 0.04f * hiss.Process (pinkHi.Next (rng.White ()));
 		float s = amp * fl * roar;
 		// crackle: one-sided pops at random times, heavy-tailed
 		float c = 0.0f;
@@ -93,11 +97,11 @@ void RocketSynth::Render (float *out, unsigned n, float dop)
 				float u = std::max (rng.Uniform (), 1e-6f);
 				crackRun += -std::log (u) * rate / crackRate;
 				float g = rng.Gauss ();
-				c = std::exp (0.9f * g) * 0.6f;
+				c = std::min (std::exp (0.7f * g), CRACKLE_CAP) * 0.6f;
 			}
 		}
 		float cs = crackHp.Process (crackShape.Lp (c));
-		s += crackMix * (amp + 0.6f * burst) * cs * 3.0f;
+		s += crackMix * (amp + 0.6f * burst) * cs * 2.0f;
 		// rumble
 		if (rumbleMix > 0.0f) s += rumbleMix * amp * 3.0f * rumbleLp.Process (p);
 		// ignition thump (a decaying low sine) and burst; shutdown chuff

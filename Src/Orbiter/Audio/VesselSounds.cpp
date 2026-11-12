@@ -150,7 +150,7 @@ void VesselSounds::Build (PerVessel &pv)
 		d.name = std::string (pv.v->Name ()) + " engine " + std::to_string (pv.engines.size ());
 		RocketSynth::Params rp;
 		rp.peak = RocketSynth::PeakFor (p.maxth);
-		rp.crackle = 0.6f;
+		rp.crackle = 0.3f;
 		rp.rumble = (float)std::clamp (std::log10 (p.maxth / 1e6) * 0.5 + 0.2, 0.0, 1.0);
 		synth->Set (rp);
 		c.em = world.Add (d, std::move (synth));
@@ -175,7 +175,7 @@ void VesselSounds::Build (PerVessel &pv)
 		d.level = (float)(p0 / P_FULL / RCS_RMS);
 		d.hull = (float)HULL_RCS;
 		d.name = std::string (pv.v->Name ()) + " rcs " + std::to_string (pv.rcs.size ());
-		c.rcs->Set (0.0f, RocketSynth::PeakFor (Fmax) * 2.0f);
+		c.rcs->Set (0.0f, RocketSynth::PeakFor (Fmax));
 		c.em = world.Add (d, std::move (synth));
 		if (c.em) pv.rcs.push_back (c);
 	}
@@ -214,7 +214,7 @@ void VesselSounds::UpdateVessel (PerVessel &pv)
 		RocketSynth::Params rp;
 		rp.level = c.em->Recalled ()[0];
 		rp.peak = RocketSynth::PeakFor (c.maxth);
-		rp.crackle = 0.6f;
+		rp.crackle = 0.3f;
 		rp.rumble = (float)std::clamp (std::log10 (c.maxth / 1e6) * 0.5 + 0.2, 0.0, 1.0);
 		c.rocket->Set (rp);
 	}
@@ -227,7 +227,7 @@ void VesselSounds::UpdateVessel (PerVessel &pv)
 			Fmax = std::max (Fmax, F);
 		}
 		c.em->Push (t, {(float)lv, 0.0f, 0.0f, 0.0f});
-		c.rcs->Set (c.em->Recalled ()[0], RocketSynth::PeakFor (Fmax) * 2.0f);
+		c.rcs->Set (c.em->Recalled ()[0], RocketSynth::PeakFor (Fmax));
 	}
 	if (pv.wind) {
 		double q = 0.0, M = 0.0;

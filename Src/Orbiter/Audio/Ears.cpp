@@ -9,6 +9,11 @@
 
 namespace audio {
 
+namespace {
+	/// The peak limiter's look-ahead [samples]: 2 ms at 48 kHz
+	constexpr int LOOK = 96;
+}
+
 struct Ears::Impl {
 	ma_node_base base; // (first: the graph calls back with its address)
 	ma_node_vtable vtable;
@@ -18,6 +23,13 @@ struct Ears::Impl {
 	float gainDb = 0.0f;    // the smoothed gain
 	std::atomic<float> reduction{0.0f};
 	bool init = false;
+	// the peak limiter: the gain each sample needs (its window's minimum over
+	// the look-ahead), averaged over the look-ahead (so the gain is down,
+	// smoothly, by the time the peak plays), the sound delayed to match
+	float need[LOOK] = {}, mins[LOOK] = {}, delay[LOOK][2] = {};
+	float minSum = (float)LOOK, limG = 1.0f;
+	int pos = 0;
+	Impl () { for (int i = 0; i < LOOK; i++) need[i] = mins[i] = 1.0f; }
 };
 
 Ears::Ears () = default;
@@ -51,7 +63,9 @@ bool Ears::Init (ma_engine *engine, const Settings &s)
 		const float kEnv = 1.0f - std::exp (-1.0f / (0.05f * m->rate));
 		const float kAtt = 1.0f - std::exp (-1.0f / (s.attack * m->rate));
 		const float kRel = 1.0f - std::exp (-1.0f / (s.release * m->rate));
-		const float knee = 0.6f * s.ceiling, span = s.ceiling - knee;
+		// the limiter recovers in 60 ms; a last soft clip only above 95 % of the ceiling
+		const float kLimRel = 1.0f - std::exp (-1.0f / (0.06f * m->rate));
+		const float knee = 0.95f * s.ceiling, span = s.ceiling - knee;
 		float env = m->env, g = m->gainDb;
 		for (unsigned i = 0; i < n; i++) {
 			float l = x[2*i], r = x[2*i+1];
@@ -62,18 +76,36 @@ bool Ears::Init (ma_engine *engine, const Settings &s)
 			float tg = GainDb (lev, s);
 			g += (tg < g ? kAtt : kRel) * (tg - g);
 			float k = std::pow (10.0f, g * 0.05f);
+			float cl = l * k, cr = r * k;
+			// the peak limiter
+			float a = std::max (std::fabs (cl), std::fabs (cr));
+			int p = m->pos;
+			const float target = 0.92f * s.ceiling; // (headroom below the last soft clip)
+			m->need[p] = a > target ? target / a : 1.0f;
+			float mn = 1.0f;
+			for (int j = 0; j < LOOK; j++) mn = std::min (mn, m->need[j]);
+			m->minSum += mn - m->mins[p];
+			m->mins[p] = mn;
+			float box = m->minSum * (1.0f / LOOK);
+			m->limG = box < m->limG ? box : m->limG + kLimRel * (box - m->limG);
+			// out: the sample from LOOK - 1 samples ago, at the limiter's gain
+			int q = (p + 1) % LOOK;
+			float ol = m->delay[q][0] * m->limG, orr = m->delay[q][1] * m->limG;
+			m->delay[p][0] = cl, m->delay[p][1] = cr;
+			m->pos = q;
 			for (int c = 0; c < 2; c++) {
-				float v = x[2*i+c] * k;
-				// a soft limit on the peaks
-				float a = std::fabs (v);
-				if (a > knee) {
-					float over = (a - knee) / span;
-					a = knee + span * over / std::sqrt (1.0f + over * over);
-					v = v < 0.0f ? -a : a;
+				float v = c ? orr : ol;
+				float av = std::fabs (v);
+				if (av > knee) {
+					float over = (av - knee) / span;
+					av = knee + span * over / std::sqrt (1.0f + over * over);
+					v = v < 0.0f ? -av : av;
 				}
 				y[2*i+c] = v;
 			}
 		}
+		// (the running sum drifts with rounding: recomputed now and then)
+		if ((m->pos & 63) == 0) { float sum = 0.0f; for (int j = 0; j < LOOK; j++) sum += m->mins[j]; m->minSum = sum; }
 		m->env = env, m->gainDb = g;
 		m->reduction.store (g, std::memory_order_relaxed);
 	};

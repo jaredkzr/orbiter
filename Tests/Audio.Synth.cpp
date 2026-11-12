@@ -111,7 +111,8 @@ TEST_CASE ("Rocket: level at full, silent off, ignition", "[audio][synth]")
 TEST_CASE ("Rocket: bigger engines lower", "[audio][synth]")
 {
 	CHECK (RocketSynth::PeakFor (3.5e7) < 25.0f);
-	CHECK (RocketSynth::PeakFor (1e5) > 300.0f);
+	CHECK (RocketSynth::PeakFor (1e5) > 150.0f);
+	CHECK (RocketSynth::PeakFor (1e5) < 300.0f); // (a deep roar)
 	double c[2];
 	double F[2] = {3.5e7, 2e5};
 	for (int k = 0; k < 2; k++) {
@@ -157,6 +158,61 @@ TEST_CASE ("RCS: level when firing, a bang at the start", "[audio][synth]")
 	INFO ("rcs RMS firing " << Rms (run));
 	CHECK_THAT (Db (Rms (run)), WithinAbs (Db (0.3), 4.0));   // (RCS_RMS)
 	CHECK (Rms (on) > 1.5 * Rms (run));
+}
+
+namespace {
+	/// RMS of x in a band (a 4th-order Butterworth made of two biquads)
+	double BandRms (const std::vector<float> &x, float lo, float hi, float rate)
+	{
+		dsp::Biquad a, b, c, d;
+		if (lo > 0) a.HighPass (lo, 0.707f, rate), b.HighPass (lo, 0.707f, rate);
+		if (hi > 0) c.LowPass (hi, 0.707f, rate), d.LowPass (hi, 0.707f, rate);
+		double s = 0.0;
+		for (float v : x) {
+			float y = v;
+			if (lo > 0) y = b.Process (a.Process (y));
+			if (hi > 0) y = d.Process (c.Process (y));
+			s += (double)y * y;
+		}
+		return std::sqrt (s / std::max<size_t> (1, x.size ()));
+	}
+}
+
+TEST_CASE ("RCS: the bang is deep, not a click", "[audio][synth]")
+{
+	Rig r;
+	auto s = RcsSynth::Make (r.e, 9);
+	s->Set (0.0f, 1500.0f);
+	r.Attach (*s);
+	r.Take (0.3);
+	s->Set (1.0f, 1500.0f);
+	auto on = r.Take (0.1);
+	double low = BandRms (on, 0, 200, 48000), high = BandRms (on, 1000, 0, 48000);
+	INFO ("onset: below 200 Hz " << Db (low) << " dB, above 1 kHz " << Db (high) << " dB");
+	CHECK (low > 2.0 * high);
+}
+
+TEST_CASE ("Rocket: crackle without spikes", "[audio][synth]")
+{
+	// crackle adds texture, not spikes only a limiter can catch: the peaks
+	// against the RMS (the crest) at most 2 dB above the roar's own
+	double crest[2];
+	float mix[2] = {0.0f, 0.3f};
+	for (int k = 0; k < 2; k++) {
+		Rig r;
+		auto s = RocketSynth::Make (r.e, 10);
+		RocketSynth::Params p;
+		p.level = 1.0f, p.peak = RocketSynth::PeakFor (1.6e5), p.crackle = mix[k];
+		s->Set (p);
+		r.Attach (*s);
+		r.Take (0.5);
+		auto x = r.Take (5.0);
+		float peak = 0.0f;
+		for (float v : x) peak = std::max (peak, std::fabs (v));
+		crest[k] = Db (peak / Rms (x));
+	}
+	INFO ("crest without crackle " << crest[0] << " dB, with " << crest[1] << " dB");
+	CHECK (crest[1] - crest[0] < 2.0);
 }
 
 TEST_CASE ("Wind: level, brighter faster", "[audio][synth]")
