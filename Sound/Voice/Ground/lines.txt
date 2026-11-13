@@ -1,0 +1,12 @@
+# Mission Control's replies (Src/Orbiter/Audio/Radio.cpp), made offline with
+# Piper (en_US-norman, public domain) by Utils/Audio/make_voice.py
+# --model en_US-norman-medium.onnx --lines Sound/Voice/Ground/lines.txt --pitch 1.
+# "<file name>|<text>"
+Liftoff|Roger, liftoff. All systems look good from here.
+MECO|Houston copies main engine cutoff. Looking good.
+Orbit|Copy good orbit. Welcome to space.
+Docked|Houston copies capture. Nice work.
+Undocked|Copy physical separation.
+Splashdown|Houston copies splashdown. Recovery forces are on the way.
+Landed|Houston copies wheels stop. Welcome home.
+Reentry|Copy, you are go for entry interface. See you on the other side.

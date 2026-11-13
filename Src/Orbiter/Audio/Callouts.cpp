@@ -153,7 +153,7 @@ void Callouts::Reset ()
 
 bool Callouts::Say (const std::string &f, Prio prio, double maxAge)
 {
-	if (f.empty ()) return false;
+	if (f.empty () || muted) return false;
 	std::string file (f);
 	std::replace (file.begin (), file.end (), '\\', '/');
 	// (the same line waiting already: once)
@@ -190,13 +190,18 @@ void Callouts::Note (const std::string &f, double simt)
 	if (log) printf ("Audio: callout %s at %.2f\n", file.c_str (), simt), fflush (stdout);
 }
 
+void Callouts::Radio (int e)
+{
+	sys.GetRadio ().OnEvent ((audio::Radio::Event)e);
+}
+
 void Callouts::OnEvent (const Vessel *v, Event e)
 {
 	if (!v || v != vessel) return;
 	switch (e) {
-	case EV_DOCKED:      Say (Line ("DockingCallout")); st.undockAt = -1.0; break;
-	case EV_UNDOCKED:    st.undockAt = t + 0.667; break; // ("undocking confirmed" a moment later)
-	case EV_SPLASHDOWN:  Say (Line ("Splashdown"), WARNING, 4.0); st.ascent = false; break;
+	case EV_DOCKED:      Say (Line ("DockingCallout")); st.undockAt = -1.0; Radio (audio::Radio::DOCKED); break;
+	case EV_UNDOCKED:    st.undockAt = t + 0.667; Radio (audio::Radio::UNDOCKED); break; // ("undocking confirmed" a moment later)
+	case EV_SPLASHDOWN:  Say (Line ("Splashdown"), WARNING, 4.0); st.ascent = false; Radio (audio::Radio::SPLASHDOWN); break;
 	case EV_PART_LOST:   Say (Line ("WarningDamage"), WARNING, 4.0); break;
 	case EV_HEAT_DAMAGE: Say (Line ("WarningHeatDamage"), WARNING, 4.0); break;
 	}
@@ -279,6 +284,8 @@ void Callouts::Flight (VESSEL *v, double simt)
 			if (!st.rolledOut && ground < 0.2) {
 				st.rolledOut = true;
 				if (gearDown) Say (Line ("WheelStop"));
+				if (st.flewHigh) Radio (audio::Radio::LANDED); // (home from a flight to space)
+				st.flewHigh = false;
 			}
 		}
 	} else if (!st.flying) {
@@ -288,6 +295,7 @@ void Callouts::Flight (VESSEL *v, double simt)
 			st.flying = true;
 			st.rolledOut = true;
 			Say (Line ("Liftoff"));
+			Radio (audio::Radio::LIFTOFF);
 			st.ascent = true, st.maxqSaid = st.mecoSaid = st.orbitSaid = false, st.qMax = 0.0, st.mainOffAt = -1.0;
 		}
 	} else {
@@ -360,7 +368,7 @@ void Callouts::Docking (VESSEL *v, double simt)
 		}
 	}
 	// the radar's beep: faster as the port nears (every 4 s at 500 m, 0.5 s close)
-	if (dist > 0.0 && dist <= BEEP_RANGE) {
+	if (dist > 0.0 && dist <= BEEP_RANGE && !muted) {
 		if (simt >= st.nextBeep) {
 			if (beep) sys.StopSound (beep);
 			std::string f = Line ("DockingRadarBeep");
@@ -440,10 +448,13 @@ void Callouts::Ascent (VESSEL *v, double simt)
 		if (!st.mecoSaid && st.mainOffAt >= 0.0 && simt - st.mainOffAt >= 0.5 && (v->GetAltitude () > 10e3 || v->GetAtmPressure () < ATM_P)) {
 			Say (Line ("MECO"), NORMAL, 3.0);
 			st.mecoSaid = true;
+			Radio (audio::Radio::MECO);
 		}
 		if (!st.orbitSaid && orbit) {
 			Say (Line ("Orbit"), NORMAL, 4.0);
 			st.orbitSaid = true;
+			Radio (audio::Radio::ORBIT);
+			st.flewHigh = true;
 			st.ascent = false;
 		}
 	}

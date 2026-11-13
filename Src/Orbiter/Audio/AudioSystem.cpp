@@ -357,6 +357,7 @@ void System::EndSession ()
 	vessels.Clear ();
 	effects.Clear ();
 	ambience.Clear ();
+	radio.Clear ();
 	world.Clear ();
 	testTone = nullptr;
 	logT = -1.0;
@@ -402,6 +403,7 @@ void System::TestTone ()
 void System::Stop ()
 {
 	ambience.Clear ();
+	radio.Clear ();
 	for (auto &p : played) if (p.second.flat) ma_sound_uninit (p.second.flat.get ());
 	played.clear ();
 	if (wav.IsOpen ()) {
@@ -422,8 +424,10 @@ void System::ApplySettings (const CFG_SOUNDPRM &s)
 	}
 	engine.SetMasterGain (s.bEnabled ? VolumeToGain (s.Master) : 0.0f);
 	for (int b = 0; b < NBUS; b++) engine.SetBusGain ((Bus)b, VolumeToGain (s.Bus[b]));
+	// the dynamics' compression (the listening level with it: off with it)
+	engine.SetCompression (s.Compression);
 	static const char *adaptEnv = getenv ("ORBITER_AUDIO_ADAPT");
-	engine.SetAdapt (adaptEnv && *adaptEnv ? *adaptEnv != '0' : s.bAdapt);
+	engine.SetAdapt (adaptEnv && *adaptEnv ? *adaptEnv != '0' : s.Compression != Ears::COMP_OFF);
 }
 
 void System::SettingsChanged ()
@@ -472,8 +476,12 @@ void System::Step ()
 		// the voice, XRSound's sounds (not in the replay: it isn't flown)
 		const bool cockpit = g_camera && g_camera->IsInternal ();
 		if (!replay) {
-			if (CalloutsOn ()) callouts.Step (g_focusobj, td.SimT1, td.SimDT, td.Warp ());
-			else callouts.Reset ();
+			// (the flight's events followed even with the callouts off: the
+			// ground answers them on the radio)
+			callouts.SetMuted (!CalloutsOn ());
+			callouts.Step (g_focusobj, td.SimT1, td.SimDT, td.Warp ());
+			static const bool radioOff = getenv ("ORBITER_AUDIO_RADIO") && *getenv ("ORBITER_AUDIO_RADIO") == '0'; // (tests)
+			if (radioOff) radio.Clear (); else radio.Update (td.SimT1);
 			xr::Step (*this, g_focusobj, cockpit, td.SimT1);
 		}
 		UpdatePlayed ();

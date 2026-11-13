@@ -55,6 +55,8 @@ public:
 	void OnEvent (const Vessel *v, Event e);
 	/// A new session, or the focus moved: start afresh
 	void Reset ();
+	/// Silent (the setting off): the flight still followed (the radio's replies)
+	void SetMuted (bool m) { muted = m; if (m) queue.clear (); }
 
 	/// Lines said so far (tests); the n-th newest's file (null: none)
 	int Said () const { return said; }
@@ -92,6 +94,8 @@ private:
 	int speaking = 0;       // the line playing (a handle)
 	int beep = 0;           // the docking radar's beep playing
 	int said = 0;
+	bool muted = false;
+	void Radio (int e);
 	std::deque<std::string> recent; // (newest first; kept across focus changes)
 	double t = 0.0;
 
@@ -109,6 +113,7 @@ private:
 		// ascent
 		bool ascent = false, maxqSaid = false, mecoSaid = false, orbitSaid = false;
 		double qMax = 0.0, mainOffAt = -1.0, prevMain = 0.0;
+		bool flewHigh = false; // (been in orbit: a landing is a homecoming)
 		// fuel: the fraction left of the main and RCS tanks
 		double prevMainFuel = -1.0, prevRcsFuel = -1.0;
 	} st;

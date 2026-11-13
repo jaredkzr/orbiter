@@ -49,3 +49,15 @@ Events (Src/Orbiter/Audio/Effects.h)
 Explosions (a vessel breaking up with propellant: its blast wave),
 burning wreckage, water entries and wakes, thunder (oapiAudioLightning),
 the structure creaking under load in the cabin of the vessel in focus.
+
+The radio (Src/Orbiter/Audio/Radio.h)
+
+Near Earth, air-to-ground chatter now and then (XRSound's [ATC] settings);
+Mission Control answering the flight (liftoff, MECO, orbit, entry,
+docking, splashdown, wheels stop) after the light's round trip; silence in
+a reentry's blackout, the ground calling when it is through; Quindar tones,
+a voice channel, static growing with the distance. Settings, Audio: the
+Radio volume.
+
+Dynamic range (Settings, Audio): how much the range from a quiet cabin to
+a launch pad is squeezed - Off (the true levels), Light, Medium, Strong.

@@ -32,6 +32,7 @@
 #include "Callouts.h"
 #include "Effects.h"
 #include "Ambience.h"
+#include "Radio.h"
 #include <map>
 #include <vector>
 
@@ -81,6 +82,7 @@ public:
 	/// The animation given the gear's sound (-1: none)
 	int GearAnim (const Vessel *v) const { return vessels.GearAnim (v); }
 	Callouts &GetCallouts () { return callouts; }
+	Radio &GetRadio () { return radio; }
 	/// The voice's callouts are on (the settings; ORBITER_AUDIO_CALLOUTS)
 	bool CalloutsOn () const;
 
@@ -137,6 +139,7 @@ private:
 	Callouts callouts{*this};
 	Effects effects{engine, world};
 	Ambience ambience{*this};
+	Radio radio{*this};
 	void Duck (double dt);
 	WavWriter wav;
 	std::vector<float> block;

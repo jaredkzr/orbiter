@@ -4,6 +4,9 @@ with Piper TTS, offline, close to XRSound's recorded voice (a US English
 female voice, about 205 Hz, -18 dBFS RMS):
 
   make_voice.py --piper <venv>/bin/piper --model en_US-ljspeech-high.onnx [--only <name>...]
+  make_voice.py ... --model en_US-norman-medium.onnx --lines Sound/Voice/Ground/lines.txt --pitch 1
+    (the ground's lines: Mission Control, a male voice - Piper's en_US-norman,
+    LibriVox recordings, public domain; the radio's sound is added as it plays)
 
 The voice: Piper's en_US-ljspeech-high (https://huggingface.co/rhasspy/piper-voices,
 models MIT; its LJ Speech dataset public domain). Each line: Piper at a
@@ -31,9 +34,11 @@ def main():
     ap.add_argument("--model", required=True)
     ap.add_argument("--only", nargs="*")
     ap.add_argument("--pitch", type=float, default=2 ** (1 / 12))
+    ap.add_argument("--lines", default=os.path.join(VOICE, "lines.txt"))
     a = ap.parse_args()
     lines = []
-    for l in open(os.path.join(VOICE, "lines.txt"), encoding="utf-8"):
+    outdir = os.path.dirname(os.path.abspath(a.lines))
+    for l in open(a.lines, encoding="utf-8"):
         l = l.strip()
         if l and not l.startswith("#"):
             name, text = l.split("|", 1)
@@ -52,7 +57,7 @@ def main():
             x, sr = read_wav(shaped)
             rms = np.sqrt(np.mean(x[np.abs(x) > 1e-3] ** 2))   # (the speech, not the pauses)
             g = min(10 ** (RMS_DB / 20) / rms, 10 ** (PEAK_DB / 20) / np.abs(x).max())
-            out = os.path.join(VOICE, name + ".flac")
+            out = os.path.join(outdir, name + ".flac")
             subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", shaped, "-af", f"volume={g:.6f}",
                             "-c:a", "flac", "-sample_fmt", "s16", out], check=True)
             print(f"{name}.flac: {len(x) / sr:.2f} s, gain {20 * np.log10(g):+.1f} dB  \"{text}\"")

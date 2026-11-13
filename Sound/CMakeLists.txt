@@ -8,6 +8,7 @@ elseif(ORBITER_HEADLESS)
 	configure_file(${CMAKE_CURRENT_SOURCE_DIR}/XRSound/src/XRSound.h ${ORBITER_BINARY_SDK_DIR}/XRSound/XRSound.h COPYONLY)
 	file(GLOB xr_cfg ${XR_ASSETS}/*.cfg)
 	file(GLOB voice ${CMAKE_CURRENT_SOURCE_DIR}/Voice/*.flac ${CMAKE_CURRENT_SOURCE_DIR}/Voice/*.txt)
+	file(GLOB ground ${CMAKE_CURRENT_SOURCE_DIR}/Voice/Ground/*.flac ${CMAKE_CURRENT_SOURCE_DIR}/Voice/Ground/*.txt)
 	# the contacts' recordings (Src/Orbiter/Audio/ContactSynth.cpp)
 	file(GLOB contacts ${CMAKE_CURRENT_SOURCE_DIR}/Contacts/*.flac)
 	add_custom_target(XRSound_assets ALL
@@ -16,6 +17,8 @@ elseif(ORBITER_HEADLESS)
 		COMMAND ${CMAKE_COMMAND} -E copy_directory ${XR_ASSETS}/Default ${ORBITER_BINARY_ROOT_DIR}/XRSound/Default
 		COMMAND ${CMAKE_COMMAND} -E make_directory ${ORBITER_BINARY_ROOT_DIR}/Sound/Voice
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different ${voice} ${ORBITER_BINARY_ROOT_DIR}/Sound/Voice/
+		COMMAND ${CMAKE_COMMAND} -E make_directory ${ORBITER_BINARY_ROOT_DIR}/Sound/Voice/Ground
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ground} ${ORBITER_BINARY_ROOT_DIR}/Sound/Voice/Ground/
 		COMMAND ${CMAKE_COMMAND} -E make_directory ${ORBITER_BINARY_ROOT_DIR}/Sound/Contacts
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different ${contacts} ${ORBITER_BINARY_ROOT_DIR}/Sound/Contacts/
 	)
