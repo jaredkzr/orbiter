@@ -56,8 +56,9 @@ private:
 		const Planet *planet = nullptr;
 		double t0 = 0.0;      // when it went off
 		double W = 0.0;       // TNT equivalent [kg]
-		double sachsR = 1.0;  // (P0/P)^1/3 at the source: distances scaled
-		double sachsT = 1.0;  // times scaled: (P0/P)^1/3 c0/c
+		double p = 101325.0;  // the air at the source (cinematic: at least a
+		double c = 340.3;     // quarter of sea level's)
+		double coupling = 1.0; // the world's coupling into the air there
 		bool fired = false;
 	};
 	std::vector<Blast> blasts;

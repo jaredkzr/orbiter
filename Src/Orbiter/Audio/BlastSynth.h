@@ -7,7 +7,8 @@
 //  - its strength and length from the charge (a TNT equivalent W [kg]) and
 //    the distance R, by Kinney & Graham's fits for a chemical explosion in
 //    sea-level air (Explosive Shocks in Air, 1985), scaled to the air
-//    there (Sachs: distances by (P/P0)^1/3, times also by c0/c)
+//    there (Sachs: distances by (P0/P)^1/3, times also by c0/c, pressures
+//    by P/P0)
 //  - its shape: the Friedlander wave - an instant rise to the peak
 //    overpressure dP, a fall through zero at the positive phase's end td, a
 //    longer, shallower negative phase: p(t) = dP (1 - t/td) exp (-b t/td)
@@ -43,6 +44,12 @@ public:
 	/// doubled near the ground (a surface burst: its energy into a
 	/// hemisphere, reflected - 1.8 as fits put it)
 	static double TntEquivalent (double propellant, bool surface);
+	/// Its peak overpressure [Pa] and positive phase [s] at R [m] from a
+	/// charge W [kg TNT] in air at pressure p [Pa] and sound speed c [m/s]:
+	/// Sachs' scaling of the sea-level fits - distances by (P0/p)^1/3,
+	/// times also by c0/c, pressures by p/P0 (far out, the overpressure goes
+	/// as (p/P0)^4/3: Mars' air, under 1 % of Earth's, about 60 dB down)
+	static void Sachs (double R, double W, double p, double c, double &dP, double &td);
 	static constexpr double YIELD = 0.1, SURFACE = 1.8;
 
 	/// The listener's distance [m] and the blast's positive phase there [s]

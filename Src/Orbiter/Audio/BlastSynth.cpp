@@ -41,6 +41,15 @@ double BlastSynth::TntEquivalent (double propellant, bool surface)
 	return std::max (propellant, 0.0) * YIELD * (surface ? SURFACE : 1.0);
 }
 
+void BlastSynth::Sachs (double R, double W, double p, double c, double &dP, double &tdv)
+{
+	const double pr = std::max (p, 1e-3) / P0;
+	const double sR = std::cbrt (1.0 / pr);              // (P0/p)^1/3
+	const double Z = R * sR / std::cbrt (std::max (W, 1e-3));
+	dP = Overpressure (Z) * pr;
+	tdv = Duration (Z, W) * sR * 340.3 / std::max (c, 1.0);
+}
+
 void BlastSynth::Set (double R, double tdv)
 {
 	pR.store ((float)std::max (R, 1.0), std::memory_order_relaxed);

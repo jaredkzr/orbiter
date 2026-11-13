@@ -432,6 +432,16 @@ TEST_CASE ("Blast: Kinney & Graham's overpressure and duration; the Friedlander 
 	CHECK_THAT (BlastSynth::Duration (100.0, 1000.0), WithinRel (42e-3, 0.05)); // (times scale with W^1/3)
 	CHECK_THAT (BlastSynth::TntEquivalent (1000.0, false), WithinRel (100.0, 1e-9));
 	CHECK_THAT (BlastSynth::TntEquivalent (1000.0, true), WithinRel (180.0, 1e-9));
+	{	// Sachs: sea level as the fits; in Mars' air (600 Pa, c 240 m/s) far
+		// out, (p/P0)^4/3 of it - about 60 dB down - and longer (c0/c (P0/p)^1/3)
+		double dP0, td0, dPm, tdm;
+		BlastSynth::Sachs (5000.0, 100.0, 101325.0, 340.3, dP0, td0);
+		CHECK_THAT (dP0, WithinRel (BlastSynth::Overpressure (5000.0 / std::cbrt (100.0)), 1e-6));
+		BlastSynth::Sachs (5000.0, 100.0, 600.0, 240.0, dPm, tdm);
+		INFO ("Mars: " << 20.0 * std::log10 (dPm / dP0) << " dB, td x" << tdm / td0);
+		CHECK_THAT (20.0 * std::log10 (dPm / dP0), WithinAbs (80.0 / 3.0 * std::log10 (600.0 / 101325.0), 3.0));
+		CHECK (tdm > 5.0 * td0);
+	}
 
 	Rig r;
 	auto s = BlastSynth::Make (r.e, 31);

@@ -39,7 +39,8 @@ void Effects::Explosion (const Vessel *v, double propellant)
 	const Vector &g = v->GPos ();
 	const double gp[3] = { g.x, g.y, g.z };
 	const Air a = World::AirAt (pl, gp);
-	if (!a.Present ()) {
+	const bool cinematic = world.GetRealism () != PHYSICAL;
+	if (!a.Present () && !cinematic) {
 		LOGOUT ("Audio: %s broke up in vacuum: no blast heard", v->Name ());
 		return;
 	}
@@ -50,15 +51,17 @@ void Effects::Explosion (const Vessel *v, double propellant)
 	b.W = BlastSynth::TntEquivalent (propellant, alt < fireball);
 	b.planet = pl;
 	b.t0 = td.SimT1;
-	b.sachsR = std::cbrt (SEA_P / std::max (a.p, 1.0));
-	b.sachsT = b.sachsR * SEA_C / std::max (a.c, 1.0);
+	// (cinematic: the air there at least a quarter of sea level's)
+	b.p = cinematic ? std::max (a.p, CINEMATIC_RHO * SEA_P) : a.p;
+	b.c = a.c > 0.0 ? a.c : SEA_C;
+	b.coupling = Coupling (Effective (a, world.GetRealism ())); // (what the world multiplies it by at the source)
 	// an emitter on the planet where it went off; its history: nothing
 	// before, the blast from t0
 	EmitterDesc d;
 	d.body = pl;
 	Vector off = tmul (pl->GRot (), g - pl->GPos ());
 	d.offset = V3 (off.x, off.y, off.z);
-	d.refDist = (float)std::max (2.0, 2.0 * std::cbrt (b.W) * b.sachsR); // (Z = 2: the near field)
+	d.refDist = (float)std::max (2.0, 2.0 * std::cbrt (b.W) * std::cbrt (SEA_P / b.p)); // (Z = 2: the near field)
 	d.level = 0.0f;
 	d.name = std::string ("explosion of ") + v->Name ();
 	auto s = BlastSynth::Make (engine, seed++);
@@ -87,12 +90,15 @@ void Effects::Update (double t)
 			// its strength and length here (the listener moves while it comes):
 			// the world spreads it as 1/r from refDist, so the level there is
 			// dP(R) R / refDist
-			const double W3 = std::cbrt (b.W);
-			const double Z = R * b.sachsR / W3;
-			const double dP = BlastSynth::Overpressure (Z);
+			// (Sachs-scaled for the air at the source; the world multiplies every
+			// source by its coupling into the air there, (rho c / rho0 c0)^1/4 -
+			// here the scaling already says what the blast is, so that is
+			// divided out; the listener's coupling is the listener's own air)
+			double dP, tdv;
+			BlastSynth::Sachs (R, b.W, b.p, b.c, dP, tdv);
 			const double refDist = b.em->Desc ().refDist;
-			b.em->SetLevel ((float)(dP * std::max (R, refDist) / refDist / P_FULL));
-			b.synth->Set (R, BlastSynth::Duration (Z, b.W) * b.sachsT);
+			b.em->SetLevel ((float)(dP * std::max (R, refDist) / refDist / P_FULL / std::max (b.coupling, 1e-6)));
+			b.synth->Set (R, tdv);
 			Emitter::Params p{};
 			p[0] = 1.0f;
 			b.em->Push (t, p);
@@ -101,7 +107,7 @@ void Effects::Update (double t)
 			if (b.em->Heard ().images > 0 && b.em->Recalled ()[0] > 0.5f) {
 				b.synth->Fire ();
 				b.fired = true;
-				LOGOUT ("Audio: blast heard at %.3f s, %.0f m from it: %.0f Pa (%.0f dB), %.1f ms", t, R, dP, 20.0 * std::log10 (dP / 2e-5), 1e3 * BlastSynth::Duration (Z, b.W) * b.sachsT);
+				LOGOUT ("Audio: blast heard at %.3f s, %.0f m from it: %.0f Pa (%.0f dB), %.1f ms (air %.0f Pa)", t, R, dP, 20.0 * std::log10 (std::max (dP, 1e-12) / 2e-5), 1e3 * tdv, b.p);
 				static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
 				if (log) printf ("Audio: blast heard at %.3f s, %.0f m from it: %.0f Pa\n", t, R, dP), fflush (stdout);
 			}
