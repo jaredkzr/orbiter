@@ -520,6 +520,11 @@ void Clear ()
 	XrConfig::Reload ();
 }
 
+bool HasInstance (const Vessel *v)
+{
+	return v && XrInstance::For (v);
+}
+
 bool LineFor (const Vessel *v, const std::string &key, std::string &file)
 {
 	XrInstance *in = XrInstance::For (v);

@@ -1,0 +1,32 @@
+BEGIN_HYPERDESC
+Audio test: a cockpit's clicks - the MFD's buttons pressed in a
+delta-glider's cockpit, in orbit (silent outside): each heard in the cabin
+(Script/Tests/AudioClicks).
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Tests/AudioClicks
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship GL
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET GL
+  MODE Cockpit
+  FOV 50.00
+END_CAMERA
+
+BEGIN_MFD Left
+  TYPE Orbit
+END_MFD
+
+BEGIN_SHIPS
+GL:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 6671000.0 0.00000 28.5 0.0 0.0 0.0 51982.6685767396
+END
+END_SHIPS

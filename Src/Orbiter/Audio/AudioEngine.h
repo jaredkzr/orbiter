@@ -15,6 +15,18 @@
 // The first four belong to the simulation: they fade out when it pauses
 // or runs at high time acceleration (the fade); music and the interface
 // play on.
+//
+// The mix (loudness, EBU R128, at the default volumes; measured in the
+// Shuttle's ascent, Tests/Audio/Ascent.scn):
+//   the world      about -20 LUFS loud (the ears' compressor), quiet
+//                  scenes raised towards -28 dBFS (the listening level)
+//   voice          speech brought to -18 LUFS (each file: Loudness.h),
+//                  some 3 dB over the world - which ducks 9 dB under it
+//   radio          voices to -20 LUFS before the channel; some 4 dB under
+//                  the callouts - the world and the music duck 6 dB
+//   music          -30 dBFS RMS (MusicSynth): 10 dB under a launch, about
+//                  the level of a quiet scene
+//   interface      clicks peaking at -29 dBFS
 // =======================================================================
 
 #ifndef __AUDIOENGINE_H
@@ -82,6 +94,11 @@ public:
 	void SetDuck (float g);
 	float Duck () const { return duck; }
 	static bool Ducked (Bus b) { return b == EXTERIOR || b == INTERIOR || b == RADIO || b == MUSIC; }
+	/// The radio's: the world and the music (not the radio) at this gain
+	/// while a transmission is heard
+	void SetRadioDuck (float g);
+	float RadioDuck () const { return rduck; }
+	static bool RadioDucked (Bus b) { return b == EXTERIOR || b == INTERIOR || b == MUSIC; }
 
 	/// The simulation buses' fade (pause, time acceleration): towards
 	/// `target` (0..1) over `seconds`. Repeated calls with the same target
@@ -105,8 +122,15 @@ public:
 	/// The dynamics' compression (Ears::Compression)
 	void SetCompression (int level);
 
+	/// The mix's load: the audio thread's CPU time for a block over the
+	/// block's length (0.05: 5 % of a core), smoothed over seconds; the
+	/// worst block lately (it fades)
+	float Load () const;
+	float PeakLoad () const;
+
+	struct Impl; // (its graph's parts; the load's accounting)
+
 private:
-	struct Impl;
 	std::unique_ptr<ma_engine> engine;
 	std::unique_ptr<Impl> impl;
 	Mode mode = OFF;
@@ -114,7 +138,7 @@ private:
 	std::string deviceName;
 	float simFade = 1.0f;
 	float busGain[NBUS] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
-	float duck = 1.0f;
+	float duck = 1.0f, rduck = 1.0f;
 };
 
 } // namespace audio

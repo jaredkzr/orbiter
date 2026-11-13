@@ -4734,6 +4734,14 @@ OAPIFUNC bool oapiAudioTune (OBJHANDLE hVessel, const char *key, double value);
  */
 OAPIFUNC const char *oapiAudioCallout (int n);
 /**
+ * \brief A control's click, for an add-on's own controls (Orbiter's
+ *   cockpits, MFDs and menus click by themselves): played at the frame's
+ *   end, one a frame.
+ * \param kind 0: the interface's (a menu, a dialog); 1: a cockpit's switch
+ *   or knob (heard in the cabin); 2: a cockpit's push button
+ */
+OAPIFUNC void oapiAudioClick (int kind);
+/**
  * \brief The music's mood now (it follows the vessel in focus): "silent",
  *   "menu", "ground", "ascent", "orbit", "deep", "approach" or "reentry".
  */

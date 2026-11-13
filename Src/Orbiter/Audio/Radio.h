@@ -62,7 +62,7 @@ private:
 	dsp::Biquad hp1, hp2, lp1, lp2, hissBp;
 	bool setup = false;
 	size_t pos = 0;           // samples into the whole (tones, voice, tail)
-	float vrms = 0.1f;        // the voice's RMS (the static's reference)
+	float gain = 1.0f;        // the voice to the radio's loudness
 	size_t cutAt = 0;
 };
 
@@ -81,6 +81,8 @@ public:
 	/// (tests) transmissions played so far; in a blackout
 	int Played () const { return played; }
 	bool Blackout () const { return blackout; }
+	/// A transmission is being heard
+	bool Transmitting () const { return Busy (); }
 	/// The link's signal to noise [dB] at a distance from Earth [m]
 	static double Snr (double d);
 	static constexpr double REACT = 1.5; // [s] the ground's moment to answer

@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "Radio.h"
+#include "Loudness.h"
 #include "AudioSystem.h"
 #include "XrConfig.h"
 #include "Ears.h"
@@ -31,6 +32,12 @@ namespace {
 	constexpr float SQUELCH_LEN = 0.12f;
 	/// The radio's output: the voice's RMS on the radio bus (callouts' level)
 	constexpr float RADIO_RMS = 0.08f;
+	/// Each transmission's voice brought to this loudness first (BS.1770:
+	/// recordings of all levels alike; about RADIO_RMS for speech)
+	constexpr double RADIO_LUFS = -20.0;
+	/// After the channel's clipping (its peaks at half scale): up to this
+	/// (the radio about the callouts' loudness, a little under)
+	constexpr float RADIO_OUT = 1.7f;
 	/// A blackout: faster than this in air of this dynamic pressure
 	constexpr double BLACKOUT_V = 5000.0, BLACKOUT_Q = 300.0;
 	/// Entry interface: 120 km, coming down faster than 6 km/s
@@ -64,6 +71,8 @@ std::unique_ptr<RadioSynth> RadioSynth::Make (Engine &e, std::vector<float> &&bu
 {
 	std::unique_ptr<RadioSynth> s (new RadioSynth (std::move (buf), quindar, snr, seed));
 	if (!s->Init (e)) return nullptr;
+	const double L = Loudness (s->buf.data (), s->buf.size (), 1, e.SampleRate ());
+	s->gain = std::isfinite (L) ? (float)std::pow (10.0, std::clamp (RADIO_LUFS - L, -20.0, 20.0) / 20.0) : 1.0f;
 	return s;
 }
 
@@ -80,16 +89,11 @@ void RadioSynth::Render (float *out, unsigned n, float dop)
 		hp1.HighPass (300.0f, 0.7f, rate), hp2.HighPass (300.0f, 0.7f, rate);
 		lp1.LowPass (3400.0f, 0.7f, rate), lp2.LowPass (3400.0f, 0.7f, rate);
 		hissBp.BandPass (1800.0f, 0.5f, rate);
-		double ss = 0.0;
-		size_t nz = 0;
-		for (float v : buf) if (std::fabs (v) > 1e-3f) ss += v * v, nz++;
-		vrms = nz ? (float)std::sqrt (ss / nz) : 0.1f;
 	}
 	const size_t nTone = quindar ? (size_t)((QUINDAR_LEN + QUINDAR_GAP) * rate) : 0;
 	const size_t nVoice = buf.size (), nTail = (size_t)(SQUELCH_LEN * rate);
 	const size_t total = 2 * nTone + nVoice + nTail;
 	const float hiss = std::pow (10.0f, -snrDb / 20.0f) * 2.0f; // (static against the voice, band-limited)
-	const float gain = RADIO_RMS / std::max (vrms, 1e-4f);
 	if (cut.load (std::memory_order_acquire) && !cutAt) cutAt = pos + (size_t)(0.15f * rate);
 	for (unsigned i = 0; i < n; i++, pos++) {
 		if (pos >= total || (cutAt && pos >= cutAt)) { out[i] = 0.0f; continue; }
@@ -110,7 +114,7 @@ void RadioSynth::Render (float *out, unsigned n, float dop)
 		float y = lp2.Process (lp1.Process (hp2.Process (hp1.Process (x + hs)))) + tone * RADIO_RMS * 1.5f * carrier;
 		// (the channel's clipping: a little)
 		y = std::tanh (2.0f * y) / 2.0f;
-		out[i] = y;
+		out[i] = RADIO_OUT * y;
 	}
 	if (pos >= total || (cutAt && pos >= cutAt)) done.store (true, std::memory_order_release);
 }

@@ -68,6 +68,7 @@ void RocketSynth::Render (float *out, unsigned n, float dop)
 
 	// the block's settings (the Doppler factor shifts every frequency)
 	float lv = level.Step (target, dsp::Smooth::K (SPOOL_TAU, n, rate));
+	outLevel.store (lv, std::memory_order_relaxed);
 	peak = peakS.Step (peak, dsp::Smooth::K (0.3f, n, rate)) * dop;
 	// (higher throttle: a faster jet, a higher peak)
 	float pk = peak * (0.8f + 0.3f * lv);

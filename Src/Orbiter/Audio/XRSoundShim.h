@@ -52,6 +52,8 @@ namespace xr {
 	/// cfg key: "Touchdown", "AltitudeCalloutsGroup"...): set: true, file
 	/// empty if switched off
 	bool LineFor (const Vessel *v, const std::string &key, std::string &file);
+	/// A vessel's code uses XRSound (it plays its own switches' clicks)
+	bool HasInstance (const Vessel *v);
 }
 
 } // namespace audio

@@ -8,8 +8,10 @@
 #include "Planet.h"
 #include "TimeData.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
 
 extern Camera *g_camera;
 extern Vessel *g_focusobj;
@@ -199,6 +201,7 @@ void World::PlayShot (std::unique_ptr<Source> src, const V3 &dir, float gain, do
 	t.gain = std::min (GAIN_MAX, gain * (inside ? HULL_AIR_GAIN : 1.0f));
 	t.cutoff = inside ? HULL_AIR_CUTOFF : 20000.0f;
 	t.pan = len > 0.0 ? (float)std::clamp (PAN_WIDTH * dir.x / len, -1.0, 1.0) : 0.0f;
+	if (len > 0.0) t.dir[0] = (float)(dir.x / len), t.dir[1] = (float)(dir.y / len), t.dir[2] = (float)(dir.z / len);
 	sh.node->Set (PathNode::AIR, t);
 	src->Start ();
 	sh.src = std::move (src);
@@ -258,6 +261,30 @@ void World::ResetPaths ()
 	tPrev = -1.0;
 }
 
+void World::Cull ()
+{
+	const double now = std::chrono::duration<double> (std::chrono::steady_clock::now ().time_since_epoch ()).count ();
+	std::vector<std::pair<float, Emitter*>> c;
+	for (auto &e : emitters)
+		if (e->source && e->source->Continuous ()) c.push_back ({ std::max (e->state.air, e->state.hull) * e->source->Activity (), e.get () });
+	std::sort (c.begin (), c.end (), [] (const auto &a, const auto &b) { return a.first > b.first; });
+	voices = culled = 0;
+	static const int cap = getenv ("ORBITER_AUDIO_VOICES") ? std::max (1, atoi (getenv ("ORBITER_AUDIO_VOICES"))) : MAX_VOICES; // (tests)
+	for (auto &x : c) {
+		Emitter &e = *x.second;
+		if (x.first > CULL_LEVEL) e.silentSince = -1.0;
+		else if (e.silentSince < 0.0) e.silentSince = now;
+		const bool heard = e.silentSince < 0.0 || now - e.silentSince < CULL_AFTER;
+		if (heard && voices < cap) {
+			voices++;
+			if (e.culled) e.node.SetRunning (true), e.source->Start (), e.culled = false;
+		} else {
+			culled++;
+			if (!e.culled) e.source->Stop (), e.node.SetRunning (false), e.culled = true; // (its ways too: nothing to filter)
+		}
+	}
+}
+
 void World::Update (double t)
 {
 	if (!g_camera) return;
@@ -298,6 +325,7 @@ void World::Update (double t)
 
 	for (auto &e : emitters) UpdateEmitter (*e, t);
 	UpdateShots ();
+	Cull ();
 
 	Lprev = L;
 	tPrev = t;
@@ -396,9 +424,10 @@ void World::UpdateEmitter (Emitter &e, double t)
 			}
 			// direction: from where it was heard, in the camera's frame (x right)
 			float pan = 0.0f;
+			V3 dc;
 			if (dist > 1e-3) {
-				V3 dc = TMul (camRot, Mul (airRot, dl));
-				pan = (float)std::clamp (PAN_WIDTH * dc.x / dist, -1.0, 1.0);
+				dc = TMul (camRot, Mul (airRot, dl)) * (1.0 / dist);
+				pan = (float)std::clamp (PAN_WIDTH * dc.x, -1.0, 1.0);
 			}
 			// the cockpit's hull between
 			if (inside) {
@@ -407,10 +436,11 @@ void World::UpdateEmitter (Emitter &e, double t)
 			}
 			// (the own vessel's sound reaches the cockpit through the structure:
 			// through the air, too, but not panned around the head)
-			if (own) pan = 0.0f, dop = 1.0f; // (and not shifted: the structure carries it)
+			if (own) pan = 0.0f, dop = 1.0f, dc = V3 (); // (and not shifted: the structure carries it)
 			air.gain = (float)std::min<double> (GAIN_MAX, gain);
 			air.cutoff = (float)fc;
 			air.pan = pan;
+			air.dir[0] = (float)dc.x, air.dir[1] = (float)dc.y, air.dir[2] = (float)dc.z; // (binaural: its direction)
 			s.doppler = dop;
 			s.cutoff = air.cutoff;
 			e.source->SetDoppler (dop);

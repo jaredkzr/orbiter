@@ -21,6 +21,8 @@
 #include "Audio/CreakSynth.h"
 #include "Audio/AmbienceSynth.h"
 #include "Audio/MusicSynth.h"
+#include "Audio/Hrtf.h"
+#include "Audio/Loudness.h"
 #include "Audio/WavWriter.h"
 #include "Audio/VesselSounds.h"
 #include "miniaudio.h"
@@ -702,4 +704,174 @@ TEST_CASE ("Music: demos", "[audio][synth][music]")
 			}
 		w.Close ();
 	}
+}
+
+namespace {
+double Pw (const float *x) { double s = 0.0; for (int i = 0; i < Hrtf::TAPS; i++) s += (double)x[i] * x[i]; return s; }
+/// A sine (tests)
+class ToneSynth : public SynthSource {
+public:
+	static std::unique_ptr<ToneSynth> Make (Engine &e, float hz) { std::unique_ptr<ToneSynth> s (new ToneSynth ()); s->f = hz; if (!s->Init (e)) return nullptr; return s; }
+protected:
+	void Render (float *out, unsigned n, float) override { for (unsigned i = 0; i < n; i++) { out[i] = 0.5f * std::sin (ph); ph += 6.2831853f * f / rate; if (ph > 6.2831853f) ph -= 6.2831853f; } }
+private:
+	float f = 1000.0f, ph = 0.0f;
+};
+}
+
+TEST_CASE ("HRTF: KEMAR's ears - the level and delay between them, ahead and behind", "[audio][hrtf]")
+{
+	Hrtf h;
+	REQUIRE (h.Load ("Sound/HRTF/kemar.hrtf", 48000));
+	float l[Hrtf::TAPS], r[Hrtf::TAPS], dl, dr;
+	// from the right: the right ear louder (the head's shadow), first (some 0.65 ms)
+	h.Get (1, 0, 0, l, r, dl, dr);
+	INFO ("right: ILD " << 10 * std::log10 (Pw (r) / Pw (l)) << " dB, ITD " << (dl - dr) / 48.0 << " ms");
+	CHECK (10 * std::log10 (Pw (r) / Pw (l)) > 10.0);
+	CHECK ((dl - dr) / 48000.0 > 550e-6);
+	CHECK ((dl - dr) / 48000.0 < 800e-6);
+	// from the left: the mirror
+	float l2[Hrtf::TAPS], r2[Hrtf::TAPS], dl2, dr2;
+	h.Get (-1, 0, 0, l2, r2, dl2, dr2);
+	CHECK_THAT (Pw (l2), WithinRel (Pw (r), 1e-4));
+	CHECK_THAT (dr2 - dl2, WithinAbs (dl - dr, 1e-3));
+	// ahead: both alike
+	h.Get (0, 0, 1, l, r, dl, dr);
+	CHECK_THAT (Pw (l), WithinRel (Pw (r), 0.02));
+	CHECK (std::fabs (dl - dr) < 0.5f);
+	// behind: another colour (the pinnae) - the spectra apart by some dB
+	h.Get (0, 0, -1, l2, r2, dl2, dr2);
+	double most = 0.0;
+	for (int k = 4; k < 32; k++) { // (3 - 24 kHz in 0.75 kHz bins)
+		double a[2] = {0, 0}, b[2] = {0, 0};
+		for (int i = 0; i < Hrtf::TAPS; i++) {
+			const double w = 2.0 * M_PI * k * i / Hrtf::TAPS;
+			a[0] += l[i] * std::cos (w), a[1] -= l[i] * std::sin (w);
+			b[0] += l2[i] * std::cos (w), b[1] -= l2[i] * std::sin (w);
+		}
+		most = std::max (most, std::fabs (10 * std::log10 ((a[0] * a[0] + a[1] * a[1]) / (b[0] * b[0] + b[1] * b[1] + 1e-12))));
+	}
+	INFO ("ahead and behind apart by up to " << most << " dB");
+	CHECK (most > 6.0);
+	// the level over the sphere: both ears' power about 1 (panning's)
+	double sum = 0.0;
+	int n = 0;
+	for (int i = 0; i < 2000; i++) {
+		const double z = 1.0 - 2.0 * (i + 0.5) / 2000, rr = std::sqrt (1 - z * z), ph = i * 2.39996323;
+		if (std::asin (z) < -40.0 * M_PI / 180.0) continue; // (none measured below)
+		h.Get ((float)(rr * std::cos (ph)), (float)z, (float)(rr * std::sin (ph)), l, r, dl, dr);
+		sum += Pw (l) + Pw (r), n++;
+	}
+	INFO ("mean power " << 10 * std::log10 (sum / n) << " dB");
+	CHECK (std::fabs (10 * std::log10 (sum / n)) < 1.5);
+	// at 44.1 kHz: the same delay in seconds
+	Hrtf h44;
+	REQUIRE (h44.Load ("Sound/HRTF/kemar.hrtf", 44100));
+	h44.Get (1, 0, 0, l, r, dl2, dr2);
+	h.Get (1, 0, 0, l, r, dl, dr);
+	CHECK_THAT ((dl2 - dr2) / 44100.0, WithinAbs ((dl - dr) / 48000.0, 2e-6));
+}
+
+TEST_CASE ("HRTF: through a path node - binaural, turning about the head without clicks", "[audio][hrtf]")
+{
+	Rig rig;
+	Hrtf h;
+	REQUIRE (h.Load ("Sound/HRTF/kemar.hrtf", rig.e.SampleRate ()));
+	PathNode::SetHrtf (&h);
+	auto s = ToneSynth::Make (rig.e, 3000.0f);
+	rig.Attach (*s);
+	auto take = [&] (double sec, std::vector<float> &L, std::vector<float> &R) {
+		const uint64_t n = (uint64_t)(sec * rig.e.SampleRate ());
+		std::vector<float> b (2 * n);
+		rig.e.Render (b.data (), n);
+		L.resize (n), R.resize (n);
+		for (uint64_t i = 0; i < n; i++) L[i] = b[2 * i], R[i] = b[2 * i + 1];
+	};
+	PathNode::Target t;
+	t.gain = 1.0f;
+	t.dir[0] = 1.0f;
+	rig.node.Set (PathNode::AIR, t);
+	std::vector<float> L, R;
+	take (0.2, L, R);
+	take (0.5, L, R);
+	INFO ("from the right at 3 kHz: L " << Db (Rms (L)) << " dB, R " << Db (Rms (R)) << " dB");
+	CHECK (Db (Rms (R)) - Db (Rms (L)) > 6.0); // (a real head at 3 kHz: some 8-10 dB)
+	// about the head, twice a second, 10 ms steps: smooth (no jumps beyond
+	// the tone's own steps: 2 pi 3000/48000 of its peak)
+	double maxStep = 0.0, peak = 0.0;
+	for (int i = 0; i < 200; i++) {
+		const double a = 2.0 * M_PI * i / 50.0;
+		t.dir[0] = (float)std::sin (a), t.dir[1] = 0.3f * (float)std::sin (0.37 * a), t.dir[2] = (float)std::cos (a);
+		rig.node.Set (PathNode::AIR, t);
+		take (0.01, L, R);
+		for (size_t k = 1; k < L.size (); k++) maxStep = std::max ({ maxStep, (double)std::fabs (L[k] - L[k - 1]), (double)std::fabs (R[k] - R[k - 1]) });
+		peak = std::max ({ peak, Peak (L), Peak (R) });
+	}
+	INFO ("turning: peak " << peak << ", the largest step " << maxStep << " (" << maxStep / peak << " of the peak)");
+	CHECK (maxStep < 0.5 * peak);
+	PathNode::SetHrtf (nullptr);
+}
+
+TEST_CASE ("Loudness: BS.1770 - its sine, files as ffmpeg's meter reads them", "[audio][loudness]")
+{
+	for (unsigned rate : { 48000u, 44100u }) {
+		std::vector<float> x (rate * 5);
+		for (size_t i = 0; i < x.size (); i++) x[i] = (float)std::sin (2.0 * M_PI * 1000.0 * i / rate);
+		// (BS.1770: a full-scale 1 kHz sine in one channel reads -3.01)
+		CHECK_THAT (Loudness (x.data (), x.size (), 1, rate), WithinAbs (-3.01, 0.05));
+		for (float &v : x) v *= 0.1f;
+		CHECK_THAT (Loudness (x.data (), x.size (), 1, rate), WithinAbs (-23.01, 0.05));
+	}
+	// silence: none; gated: a pause doesn't make it quieter
+	std::vector<float> z (48000 * 3, 0.0f);
+	CHECK (!std::isfinite (Loudness (z.data (), z.size (), 1, 48000)));
+	std::vector<float> y (48000 * 6, 0.0f);
+	for (size_t i = 0; i < 48000 * 3; i++) y[i] = 0.1f * (float)std::sin (2.0 * M_PI * 1000.0 * i / 48000);
+	CHECK_THAT (Loudness (y.data (), y.size (), 1, 48000), WithinAbs (-23.01, 0.3)); // (the blocks across its end: a little less)
+	// files (ffmpeg's ebur128: -17.6, -11.6, -21.9 LUFS)
+	CHECK_THAT (FileLoudness ("Sound/Voice/Ignition.flac"), WithinAbs (-17.6, 0.3));
+	CHECK_THAT (FileLoudness ("XRSound/Default/Autopilot On.wav"), WithinAbs (-11.6, 0.3));
+	CHECK_THAT (FileLoudness ("Sound/Voice/Ground/Undocked.flac"), WithinAbs (-21.9, 0.3));
+	CHECK_THAT (LoudnessGain ("XRSound/Default/Autopilot On.wav", -18.0), WithinRel (std::pow (10.0, (-18.0 + 11.6) / 20.0), 0.05));
+}
+
+// ORBITER_MUSIC_DEMO=<dir>: an engine's roar about the head - around it
+// (ahead, right, behind, left), then over it - binaural, then panned
+// (<dir>/hrtf_circle.wav; headphones)
+TEST_CASE ("HRTF: demo", "[audio][hrtf]")
+{
+	const char *dir = getenv ("ORBITER_MUSIC_DEMO");
+	if (!dir || !*dir) return;
+	Hrtf h;
+	WavWriter w;
+	REQUIRE (w.Open (std::string (dir) + "/hrtf_circle.wav", 48000, 2));
+	for (int pass = 0; pass < 2; pass++) {
+		Rig rig;
+		REQUIRE (h.Load ("Sound/HRTF/kemar.hrtf", rig.e.SampleRate ()));
+		PathNode::SetHrtf (pass == 0 ? &h : nullptr);
+		auto s = RocketSynth::Make (rig.e, 7);
+		RocketSynth::Params p;
+		p.level = 0.6f, p.peak = 900.0f, p.crackle = 0.2f;
+		s->Set (p);
+		rig.Attach (*s);
+		std::vector<float> b (2 * 480);
+		for (int i = 0; i < 1400; i++) { // (14 s in 10 ms steps)
+			const double t = i * 0.01;
+			double az = 0.0, el = 0.0;
+			if (t < 8.0) az = 2.0 * M_PI * t / 8.0;               // around
+			else if (t < 12.0) el = M_PI * (t - 8.0) / 4.0;       // ahead, up, over, behind
+			else el = M_PI;
+			PathNode::Target tg;
+			tg.gain = 0.5f;
+			tg.dir[0] = (float)(std::sin (az) * std::cos (el)), tg.dir[1] = (float)std::sin (el), tg.dir[2] = (float)(std::cos (az) * std::cos (el));
+			tg.pan = (float)std::clamp (0.7 * tg.dir[0], -1.0, 1.0);
+			rig.node.Set (PathNode::AIR, tg);
+			rig.e.Render (b.data (), 480);
+			w.Write (b.data (), 480);
+		}
+		std::vector<float> gap (2 * 48000, 0.0f);
+		w.Write (gap.data (), 48000);
+	}
+	PathNode::SetHrtf (nullptr);
+	w.Close ();
 }

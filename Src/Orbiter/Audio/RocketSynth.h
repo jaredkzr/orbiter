@@ -23,11 +23,14 @@
 #define __ROCKETSYNTH_H
 
 #include "Synth.h"
+#include <algorithm>
 
 namespace audio {
 
 class RocketSynth : public SynthSource {
 public:
+	bool Continuous () const override { return true; }
+	float Activity () const override { return std::max (pLevel.load (std::memory_order_relaxed), outLevel.load (std::memory_order_relaxed)); }
 	struct Params {
 		float level = 0.0f;     // throttle 0..1
 		float peak = 200.0f;    // roar's spectral peak [Hz]
@@ -57,6 +60,7 @@ protected:
 private:
 	explicit RocketSynth (uint32_t seed): rng (seed) {}
 	std::atomic<float> pLevel{0.0f}, pPeak{200.0f}, pCrackle{0.5f}, pRumble{0.0f}, pWhine{0.15f}, pPump{1500.0f};
+	std::atomic<float> outLevel{0.0f}; // (the spooled level, for Activity)
 
 	// (audio thread)
 	dsp::Rng rng;

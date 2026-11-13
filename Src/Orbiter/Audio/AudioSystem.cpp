@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "AudioSystem.h"
+#include "Loudness.h"
 #include "Orbiter.h"
 #include "Config.h"
 #include "TimeData.h"
@@ -16,6 +17,7 @@
 #include "miniaudio.h"
 #include <filesystem>
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <cstdlib>
 
@@ -174,11 +176,12 @@ int System::Play (const Vessel *v, const std::string &file, const V3 &pos, doubl
 	return h;
 }
 
-int System::PlayOn (Bus bus, const std::string &file, double level, bool loop)
+int System::PlayOn (Bus bus, const std::string &file, double level, bool loop, bool speech)
 {
 	if (!engine.Active () || bus < 0 || bus >= NBUS) return 0;
 	std::string path = FindSound (file);
 	if (path.empty ()) { LOGOUT ("Audio: no sound file %s", file.c_str ()); return 0; }
+	if (speech && (bus == VOICE || bus == RADIO)) level *= LoudnessGain (path, SPEECH_LUFS);
 	Played p;
 	p.loop = loop, p.level = level, p.bus = bus;
 	p.flat = std::make_unique<ma_sound>();
@@ -343,6 +346,13 @@ bool System::MusicOn () const
 	return orbiter->Cfg()->CfgSoundPrm.bMusic;
 }
 
+bool System::HrtfOn () const
+{
+	static const char *env = getenv ("ORBITER_AUDIO_HRTF"); // (0 or 1)
+	if (env && *env) return *env != '0';
+	return orbiter->Cfg()->CfgSoundPrm.bHrtf;
+}
+
 void System::Explosion (const Vessel *v, double propellant)
 {
 	effects.Explosion (v, propellant);
@@ -355,6 +365,31 @@ void System::Event (const Vessel *v, Callouts::Event e)
 	if (v && v == g_focusobj && (e == Callouts::EV_PART_LOST || e == Callouts::EV_HEAT_DAMAGE)) music.Alarm ();
 }
 
+void System::PlayClick ()
+{
+	const int k = pendingClick;
+	pendingClick = -1;
+	if (k < 0 || !engine.Active ()) return;
+	clickRng ^= clickRng << 13, clickRng ^= clickRng >> 17, clickRng ^= clickRng << 5;
+	char f[64];
+	if (k == CLICK_UI) {
+		snprintf (f, sizeof (f), "Clicks/ui_%u.flac", 1 + clickRng % 3);
+		PlayOn (UI, f, UI_CLICK, false, false);
+		if (getenv ("ORBITER_AUDIO_LOG")) printf ("Audio: click %s (interface)\n", f), fflush (stdout);
+		return;
+	}
+	if (xr::HasInstance (g_focusobj)) return; // (an XRSound vessel clicks its own)
+	if (k == CLICK_SWITCH) snprintf (f, sizeof (f), "Clicks/switch_%s_%u.flac", switchUp ? "on" : "off", 1 + clickRng % 4), switchUp = !switchUp;
+	else snprintf (f, sizeof (f), "Clicks/button_%u.flac", 1 + clickRng % 4);
+	// (the recordings peak at -1 dBFS: at CLICK_P in the cabin; paused or
+	// time accelerated - the cockpit's bus faded - on the interface's)
+	const bool cabin = engine.SimFadeTarget () > 0.5f;
+	if (cabin) PlayOn (INTERIOR, f, CLICK_P / P_FULL / 0.891, false, false);
+	else PlayOn (UI, f, 1.4 * UI_CLICK, false, false);
+	static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+	if (log) printf ("Audio: click %s (%s)\n", f, cabin ? "cabin" : "interface"), fflush (stdout);
+}
+
 void System::Idle ()
 {
 	if (!engine.Active ()) return;
@@ -363,6 +398,8 @@ void System::Idle ()
 	const double dt = idleT.time_since_epoch ().count () ? std::min (0.25, std::chrono::duration<double> (now - idleT).count ()) : 0.0;
 	idleT = now;
 	music.Update (dt, true);
+	PlayClick ();
+	UpdatePlayed ();
 }
 
 void System::Duck (double dt)
@@ -376,6 +413,14 @@ void System::Duck (double dt)
 	float nd = d + (target - d) * k;
 	if (std::fabs (nd - target) < 1e-3f) nd = target;
 	engine.SetDuck (nd);
+	// a transmission heard: the world and the music down 6 dB (a headset's
+	// comms over the cabin), as quickly, back as slowly
+	const float rt = radio.Transmitting () ? 0.5f : 1.0f;
+	const float rd = engine.RadioDuck ();
+	const float rk = (float)(1.0 - std::exp (-std::max (dt, 0.0) / (rt < rd ? 0.08 : 0.5)));
+	float nr = rd + (rt - rd) * rk;
+	if (std::fabs (nr - rt) < 1e-3f) nr = rt;
+	engine.SetRadioDuck (nr);
 }
 
 void System::EndSession ()
@@ -432,6 +477,7 @@ void System::TestTone ()
 
 void System::Stop ()
 {
+	PathNode::SetHrtf (nullptr);
 	music.Clear ();
 	ambience.Clear ();
 	radio.Clear ();
@@ -447,10 +493,25 @@ void System::Stop ()
 
 void System::ApplySettings (const CFG_SOUNDPRM &s)
 {
+	// binaural: the HRTFs loaded at the engine's rate the first time
+	if (HrtfOn ()) {
+		if ((!hrtf.Loaded () || hrtf.Rate () != engine.SampleRate ()) && !hrtfTried) {
+			hrtfTried = true;
+			const std::string f = FindSound ("HRTF/kemar.hrtf");
+			if (!f.empty () && hrtf.Load (f, engine.SampleRate ())) LOGOUT ("Audio: binaural (%s)", f.c_str ());
+			else LOGOUT ("Audio: no HRTFs (Sound/HRTF/kemar.hrtf): panning");
+		}
+		PathNode::SetHrtf (hrtf.Loaded () ? &hrtf : nullptr);
+	} else PathNode::SetHrtf (nullptr);
 	// (a render is mixed at full volume, whatever the player's settings)
-	if (Rendering ()) {
+	static const bool renderVolumes = getenv ("ORBITER_AUDIO_RENDER_VOLUMES") && *getenv ("ORBITER_AUDIO_RENDER_VOLUMES") == '1'; // (listening reels)
+	if (Rendering () && !renderVolumes) {
+		// (ORBITER_AUDIO_SOLO=<bus>: that bus alone - outside, cockpit,
+		// voice, radio, music, interface; the world: outside,cockpit)
+		static const char *solo = getenv ("ORBITER_AUDIO_SOLO");
+		static const char *names[NBUS] = { "outside", "cockpit", "voice", "radio", "music", "interface" };
 		engine.SetMasterGain (1.0f);
-		for (int b = 0; b < NBUS; b++) engine.SetBusGain ((Bus)b, 1.0f);
+		for (int b = 0; b < NBUS; b++) engine.SetBusGain ((Bus)b, !solo || !*solo || strstr (solo, names[b]) ? 1.0f : 0.0f);
 		return;
 	}
 	engine.SetMasterGain (s.bEnabled ? VolumeToGain (s.Master) : 0.0f);
@@ -519,6 +580,14 @@ void System::Step ()
 		Duck (td.UiDT ());
 		static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
 		if (log && (logT < 0.0 || t - logT >= 0.5 || t < logT)) {
+			if (logT < 0.0 || t - logT >= 0.5) {
+				static double loadT = -1e9;
+				if (std::fabs (t - loadT) >= 5.0) {
+					loadT = t;
+					LOGOUT ("Audio: load %.1f %% (worst block %.1f %%), %d sources playing, %d stopped (not heard)",
+						100.0 * engine.Load (), 100.0 * engine.PeakLoad (), world.Voices (), world.Culled ());
+				}
+			}
 			logT = t;
 			const Air &la = world.ListenerAir ();
 			for (auto &e : world.Emitters ()) {
@@ -535,6 +604,7 @@ void System::Step ()
 	// the music (the launchpad's, behind it a scene of its own)
 	music.Update (td.UiDT (), orbiter->IsBackdrop ());
 	idleT = {};
+	PlayClick ();
 
 	if (Rendering ()) RenderStep (td.UiDT ());
 }

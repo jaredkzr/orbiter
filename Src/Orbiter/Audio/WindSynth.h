@@ -13,11 +13,14 @@
 #define __WINDSYNTH_H
 
 #include "Synth.h"
+#include <algorithm>
 
 namespace audio {
 
 class WindSynth : public SynthSource {
 public:
+	bool Continuous () const override { return true; }
+	float Activity () const override { return pSpeed.load (std::memory_order_relaxed) > 0.5f || pBuffet.load (std::memory_order_relaxed) > 0.0f ? 1.0f : 0.0f; }
 	struct Params {
 		float speed = 0.0f;   // airspeed [m/s]
 		float buffet = 0.0f;  // 0..1

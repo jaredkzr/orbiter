@@ -2,6 +2,8 @@
 // Licensed under the MIT License
 
 #include "AudioEngine.h"
+#include <atomic>
+#include <ctime>
 #include "miniaudio.h"
 #include "Ears.h"
 #include <algorithm>
@@ -30,7 +32,43 @@ struct Engine::Impl {
 	ma_sound_group group[NBUS];
 	bool groupInit[NBUS] = {};
 	Ears ears;
+	// the load (the audio thread's)
+	std::atomic<float> load{0.0f}, peak{0.0f};
+	double lastCpu = -1.0;
+	unsigned rate = 48000;
+	bool device = false;
+	void Account (double cpu, uint64_t frames) {
+		if (!frames) return;
+		const float l = (float)(cpu / (frames / (double)rate));
+		const float a = std::min (1.0f, (float)frames / (2.0f * rate)); // (some 2 s)
+		load.store (load.load (std::memory_order_relaxed) + a * (l - load.load (std::memory_order_relaxed)), std::memory_order_relaxed);
+		const float p = peak.load (std::memory_order_relaxed) * std::exp (-(float)frames / (10.0f * rate)); // (fading over 10 s)
+		peak.store (std::max (p, l), std::memory_order_relaxed);
+	}
 };
+
+namespace {
+	/// This thread's CPU time [s]
+	double ThreadCpu ()
+	{
+		timespec ts;
+		clock_gettime (CLOCK_THREAD_CPUTIME_ID, &ts);
+		return ts.tv_sec + 1e-9 * ts.tv_nsec;
+	}
+	/// (the engine's end of a block, on the device's thread: the CPU it took
+	/// since the last - the thread does nothing else but wait)
+	void OnProcess (void *user, float *, ma_uint64 frames)
+	{
+		Engine::Impl *im = static_cast<Engine::Impl*> (user);
+		if (!im->device) return;
+		const double c = ThreadCpu ();
+		if (im->lastCpu >= 0.0) im->Account (c - im->lastCpu, frames);
+		im->lastCpu = c;
+	}
+}
+
+float Engine::Load () const { return impl ? impl->load.load (std::memory_order_relaxed) : 0.0f; }
+float Engine::PeakLoad () const { return impl ? impl->peak.load (std::memory_order_relaxed) : 0.0f; }
 
 Engine::Engine () = default;
 
@@ -52,6 +90,9 @@ bool Engine::Init (const Options &opt)
 	if (opt.mode == OFFLINE) {
 		cfg.noDevice = MA_TRUE; // (mixed by Render)
 	}
+	impl->device = opt.mode == DEVICE;
+	cfg.onProcess = OnProcess;
+	cfg.pProcessUserData = impl.get ();
 	ma_result r = ma_engine_init (&cfg, engine.get());
 	if (r != MA_SUCCESS) {
 		fprintf (stderr, "Audio: no output (%s)\n", ma_result_description (r));
@@ -62,6 +103,7 @@ bool Engine::Init (const Options &opt)
 	mode = opt.mode;
 	channels = ma_engine_get_channels (engine.get());
 	sampleRate = ma_engine_get_sample_rate (engine.get());
+	impl->rate = sampleRate;
 	deviceName.clear ();
 	if (mode == DEVICE) {
 		if (ma_device *dev = ma_engine_get_device (engine.get())) {
@@ -82,7 +124,7 @@ bool Engine::Init (const Options &opt)
 			if (impl->groupInit[b]) ma_node_attach_output_bus (&impl->group[b], 0, impl->ears.Node (), 0);
 	}
 	simFade = 1.0f;
-	duck = 1.0f;
+	duck = rduck = 1.0f;
 	return true;
 }
 
@@ -113,7 +155,16 @@ void Engine::SetBusGain (Bus b, float g)
 {
 	if (b < 0 || b >= NBUS) return;
 	busGain[b] = std::max (0.0f, g);
-	if (ma_sound_group *grp = Group (b)) ma_sound_group_set_volume (grp, busGain[b] * (Ducked (b) ? duck : 1.0f));
+	if (ma_sound_group *grp = Group (b)) ma_sound_group_set_volume (grp, busGain[b] * (Ducked (b) ? duck : 1.0f) * (RadioDucked (b) ? rduck : 1.0f));
+}
+
+void Engine::SetRadioDuck (float g)
+{
+	g = std::clamp (g, 0.0f, 1.0f);
+	if (g == rduck) return;
+	rduck = g;
+	for (int b = 0; b < NBUS; b++)
+		if (RadioDucked ((Bus)b)) SetBusGain ((Bus)b, busGain[b]);
 }
 
 void Engine::SetDuck (float g)
@@ -142,7 +193,9 @@ uint64_t Engine::Render (float *out, uint64_t frames)
 {
 	if (mode != OFFLINE || !frames) return 0;
 	ma_uint64 done = 0;
+	const double c0 = ThreadCpu ();
 	ma_engine_read_pcm_frames (engine.get(), out, frames, &done);
+	impl->Account (ThreadCpu () - c0, frames);
 	// (the engine fills what it doesn't mix with silence, but be sure)
 	if (done < frames)
 		std::fill (out + done * channels, out + frames * channels, 0.0f);

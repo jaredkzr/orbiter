@@ -161,6 +161,17 @@ int Interpreter::audio_callouts (lua_State *L)
 }
 
 /***
+A control's click, for a script's own controls.
+@function click
+@tparam[opt=0] int kind 0: the interface's; 1: a cockpit's switch (in the cabin); 2: a cockpit's push button
+*/
+int Interpreter::audio_click (lua_State *L)
+{
+	oapiAudioClick (lua_isnumber (L, 1) ? (int)lua_tointeger (L, 1) : 0);
+	return 0;
+}
+
+/***
 The music's mood now (it follows the vessel in focus).
 @function music
 @treturn string "silent", "menu", "ground", "ascent", "orbit", "deep", "approach" or "reentry"
@@ -208,6 +219,7 @@ void Interpreter::LoadAudioAPI ()
 		{"tune", audio_tune},
 		{"callouts", audio_callouts},
 		{"music", audio_music},
+		{"click", audio_click},
 		{"lightning", audio_lightning},
 		{NULL, NULL}
 	};

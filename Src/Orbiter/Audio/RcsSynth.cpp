@@ -33,6 +33,7 @@ void RcsSynth::Render (float *out, unsigned n, float dop)
 	const float pk = pPeak.load (std::memory_order_relaxed) * dop;
 	// (valves open and close fast: 10 ms)
 	float lv = level.Step (target, dsp::Smooth::K (0.01f, n, rate));
+	outLevel.store (lv, std::memory_order_relaxed);
 	// (the roar while firing: low, about 0.4 of the size's peak)
 	roarBp.BandPass (0.4f * pk, 0.7f, rate);
 	hissHp.HighPass (std::max (2500.0f, 3.0f * pk), 0.6f, rate);

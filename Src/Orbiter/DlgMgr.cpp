@@ -12,6 +12,7 @@
 #include "UiAnchor.h"
 #include "resource.h"
 #include "Orbiter.h"
+#include "Audio/AudioSystem.h"
 #include "Log.h"
 #include "imgui.h"
 #include <set>
@@ -585,6 +586,21 @@ void DialogManager::ImGuiNewFrame()
 		if ((*current)->IsActive()) {
 			(*current)->Display();
 		}
+	}
+
+	// a control pressed (clicked, or by a key): its click - not a window
+	// moved or resized, nor scrolled
+	{
+		ImGuiContext &g = *GImGui;
+		ImGuiWindow *w = g.ActiveIdWindow;
+		bool control = g.ActiveId && g.ActiveIdIsJustActivated && !g.MovingWindow;
+		if (control && w) {
+			if (g.ActiveId == w->MoveId || g.ActiveId == ImGui::GetWindowScrollbarID (w, ImGuiAxis_X) || g.ActiveId == ImGui::GetWindowScrollbarID (w, ImGuiAxis_Y))
+				control = false;
+			for (int n = 0; n < 4 && control; n++)
+				if (g.ActiveId == ImGui::GetWindowResizeCornerID (w, n) || g.ActiveId == ImGui::GetWindowResizeBorderID (w, (ImGuiDir)n)) control = false;
+		}
+		if (control && pOrbiter->Audio ()) pOrbiter->Audio ()->Click (audio::System::CLICK_UI);
 	}
 
 	ImGui::EndFrame();

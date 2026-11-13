@@ -34,6 +34,7 @@
 #include "Ambience.h"
 #include "Radio.h"
 #include "Music.h"
+#include "Hrtf.h"
 #include <chrono>
 #include <map>
 #include <vector>
@@ -91,6 +92,18 @@ public:
 	bool CalloutsOn () const;
 	/// The music is on (the settings; a render: ORBITER_AUDIO_MUSIC=1)
 	bool MusicOn () const;
+	/// Binaural, for headphones (the settings; ORBITER_AUDIO_HRTF)
+	bool HrtfOn () const;
+
+	/// A control used: the interface's (the launchpad, the menus), a
+	/// cockpit's switch or knob, an MFD's button. Its click plays at the
+	/// frame's end - one a frame (a button's before a switch's, a cockpit's
+	/// before the interface's): recordings (Sound/Clicks), the cockpit's in
+	/// its cabin at a switch's loudness (CLICK_P), paused on the interface bus
+	enum ClickKind { CLICK_UI, CLICK_SWITCH, CLICK_BUTTON };
+	void Click (ClickKind k) { if (k > pendingClick) pendingClick = k; }
+	static constexpr double CLICK_P = 0.1;  ///< a cockpit control's click at the ear, peak [Pa] (74 dB)
+	static constexpr double UI_CLICK = 0.07;///< the interface's, peak (-23 dBFS before its bus)
 	Music &GetMusic () { return music; }
 
 	// ---- the API (oapiAudio*, Lua's audio table) --------------------------
@@ -99,8 +112,11 @@ public:
 	/// else under Sound/. Returns a handle (0: not played).
 	int Play (const Vessel *v, const std::string &file, const V3 &pos, double level, bool loop);
 	/// Play a sound file on a bus, not in the world (the voice, the radio,
-	/// music, the interface)
-	int PlayOn (Bus bus, const std::string &file, double level, bool loop);
+	/// music, the interface). Speech (the voice's, the radio's buses; not
+	/// asked otherwise) is brought to SPEECH_LUFS first: recordings of all
+	/// levels alike
+	int PlayOn (Bus bus, const std::string &file, double level, bool loop, bool speech = true);
+	static constexpr double SPEECH_LUFS = -18.0;
 	bool StopSound (int handle);
 	/// Its level (< 0: as it is) and pitch (<= 0: as it is)
 	bool SetSound (int handle, double level, double pitch);
@@ -148,6 +164,12 @@ private:
 	Ambience ambience{*this};
 	Radio radio{*this};
 	Music music{*this};
+	Hrtf hrtf;                      // (loaded when first asked for)
+	int pendingClick = -1;          // (a ClickKind)
+	bool switchUp = true;           // (switches flipped: one way, then the other)
+	uint32_t clickRng = 0x1b873593u;
+	void PlayClick ();
+	bool hrtfTried = false;
 	std::chrono::steady_clock::time_point idleT;
 	void Duck (double dt);
 	WavWriter wav;

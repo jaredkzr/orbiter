@@ -10,10 +10,13 @@
 //      the source is on hears it through the structure, in vacuum too)
 //
 // Each way has a gain, a low-pass (air absorption, the hull: two poles,
-// 12 dB/octave) and a
-// direction (panning). The simulation sets their targets every frame
-// (atomics: no locks on the audio thread); the node eases towards them
-// over a block, so nothing clicks.
+// 12 dB/octave) and a direction: panned left to right, or - for
+// headphones, with head-related transfer functions loaded (SetHrtf) and
+// the way given its direction - binaural, each ear's filter and delay
+// (Hrtf.h), crossfaded over a block as the direction moves. The
+// simulation sets their targets every frame (atomics: no locks on the
+// audio thread); the node eases towards them over a block, so nothing
+// clicks.
 // =======================================================================
 
 #ifndef __AUDIOPATHNODE_H
@@ -28,6 +31,8 @@ struct ma_engine;
 
 namespace audio {
 
+class Hrtf;
+
 class PathNode {
 public:
 	enum Way { AIR = 0, HULL = 1, NWAY = 2 };
@@ -36,7 +41,15 @@ public:
 		float gain = 0.0f;      // linear
 		float cutoff = 20000.0f;// low-pass [Hz]
 		float pan = 0.0f;       // -1 left .. 1 right
+		/// where it comes from, in the listener's frame (x right, y up, z
+		/// ahead; 0: nowhere in particular - panned): binaural with HRTFs
+		float dir[3] = { 0.0f, 0.0f, 0.0f };
 	};
+
+	/// The HRTFs for every node (null: panning only); kept while any node
+	/// may use them
+	static void SetHrtf (const Hrtf *h);
+	static const Hrtf *GetHrtf ();
 
 	PathNode ();
 	~PathNode ();
@@ -56,6 +69,9 @@ public:
 	void Set (Way w, const Target &t);
 	/// Silence both ways at once (no easing: the source vanished)
 	void Cut ();
+	/// Stopped (silent, not processed: its source stopped - World's voice
+	/// cap) or running
+	void SetRunning (bool on);
 
 	/// The levels last reached (for the readout), linear
 	float Level (Way w) const { return way[w].cur.gain.load (std::memory_order_relaxed); }
@@ -66,10 +82,20 @@ private:
 
 	struct WayState {
 		std::atomic<float> gain{0.0f}, cutoff{20000.0f}, pan{0.0f};
+		std::atomic<float> dir[3] = {0.0f, 0.0f, 0.0f};
 		struct { std::atomic<float> gain{0.0f}; } cur;
 		float g = 0.0f, fc = 20000.0f, p = 0.0f; // (audio thread: where the easing is)
 		float y = 0.0f, y2 = 0.0f;                // low-pass state (two poles)
+		// binaural (audio thread): the filters in use (each ear's delay's
+		// fraction folded in), the delays' whole samples, the direction;
+		// the signal's past (the filters' reach)
+		bool binaural = false;
+		float hl[64], hr[64];
+		int dl = 0, dr = 0;
+		float u[3] = {0.0f, 0.0f, 0.0f};
+		std::vector<float> past;
 	} way[NWAY];
+	unsigned pastLen = 0;   // (samples of the past kept)
 	std::atomic<bool> cut{false};
 	std::vector<float> dcBuf;  // (audio thread)
 	float dcLp = 0.0f, dcHz = 5.0f;

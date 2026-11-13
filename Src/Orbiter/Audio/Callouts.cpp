@@ -372,7 +372,7 @@ void Callouts::Docking (VESSEL *v, double simt)
 		if (simt >= st.nextBeep) {
 			if (beep) sys.StopSound (beep);
 			std::string f = Line ("DockingRadarBeep");
-			beep = f.empty () ? 0 : sys.PlayOn (VOICE, f, 0.4, false);
+			beep = f.empty () ? 0 : sys.PlayOn (VOICE, f, 0.4, false, false); // (a beep, not speech)
 			st.nextBeep = simt + 0.5 + 3.5 * (dist / BEEP_RANGE);
 		}
 	} else {

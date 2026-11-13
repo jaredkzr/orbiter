@@ -8,7 +8,11 @@ from and its licence.
 | `XRSound/assets/XRSound/Default/*` (callouts, effects, `Cabin Ambience/`, `Altea STS/`) | XRSound 3.0 by Douglas Beachy | MIT (`XRSound/LICENSE`) |
 | `XRSound/assets/XRSound/Default/Music/Solar Serenity.ogg` | by Grzegorz Lorens ("Loru"), licensed to XRSound | see `XRSound/assets/XRSound/ReadMe.txt` |
 | `Voice/*.flac` (Orbiter's own callouts; `Voice/lines.txt`) | made offline with [Piper](https://github.com/OHF-Voice/piper1-gpl) TTS, voice `en_US-ljspeech-high` ([rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices), MIT), trained on the [LJ Speech dataset](https://keithito.com/LJ-Speech-Dataset/) (public domain); `Utils/Audio/make_voice.py` | public domain dataset, MIT model; the generated audio is Orbiter's (MIT) |
+| `Voice/Ground/*.flac` (Mission Control's replies; `Voice/Ground/lines.txt`) | made offline with Piper TTS, voice `en_US-norman-medium` ([rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices), MIT), trained on LibriVox recordings (public domain); `Utils/Audio/make_voice.py` | public domain dataset, MIT model; the generated audio is Orbiter's (MIT) |
+| `XRSound/assets/XRSound/Default/Altea STS/*` (radio chatter) | NASA air-to-ground recordings of STS-114 and STS-121, as packaged with XRSound | public domain (NASA); XRSound's MIT |
 | `Contacts/*.flac` (the contacts' recordings, cut and normalized from Freesound previews; `Src/Orbiter/Audio/ContactSynth.cpp`) | see below | CC0 1.0 (each verified on its Freesound page) |
+| `Clicks/*.flac` (switches, buttons and the interface's clicks; `Utils/Audio/make_click_samples.py`) | see below | CC0 1.0 (each verified on its Freesound page) |
+| `HRTF/kemar.hrtf` (head-related transfer functions for headphones; `Utils/Audio/make_hrtf.py`) | the MIT Media Lab's KEMAR measurements: Bill Gardner and Keith Martin, "HRTF Measurements of a KEMAR Dummy-Head Microphone", MIT Media Lab Perceptual Computing Technical Report #280, 1994 ([sound.media.mit.edu/resources/KEMAR.html](https://sound.media.mit.edu/resources/KEMAR.html), the compact set) | "provided free with no restrictions on use, provided the authors are cited" (Copyright 1994 MIT Media Laboratory) |
 
 ## Contacts
 
@@ -27,5 +31,13 @@ Recordings under `Sound/Contacts/`, all Creative Commons 0 (public domain) on Fr
 | `squeal.flac` | tyres squealing (looped), a touchdown's chirp | [Tire.ogg](https://freesound.org/people/egomassive/sounds/536769/) (0.40-1.45 s) | egomassive |
 | `scrape.flac` | the hull scraping over the ground (looped), a belly landing's crunch | [Metal Drag Short.mp3](https://freesound.org/people/belanhud/sounds/543625/) (0.20-3.60 s) | belanhud |
 | `motor.flac` | the motors of animations (looped; servos, doors, the gear's hydraulics) | [Electric Motor Whir.aif](https://freesound.org/people/jasonLON/sounds/125401/) (2.00-6.00 s) | jasonLON |
-| `Voice/Ground/*.flac` (Mission Control's replies; `Voice/Ground/lines.txt`) | made offline with Piper TTS, voice `en_US-norman-medium` ([rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices), MIT), trained on LibriVox recordings (public domain); `Utils/Audio/make_voice.py` | public domain dataset, MIT model; the generated audio is Orbiter's (MIT) |
-| `XRSound/assets/XRSound/Default/Altea STS/*` (radio chatter) | NASA air-to-ground recordings of STS-114 and STS-121, as packaged with XRSound | public domain (NASA); XRSound's MIT |
+
+## Clicks
+
+Recordings under `Sound/Clicks/`, all Creative Commons 0 (public domain) on Freesound. Each is a cut of the source's high-quality preview (48 kHz mono FLAC, a high-pass at 80 Hz - 300 Hz for the interface's - short fades, peak -1 dBFS).
+
+| Files | Used for | Source | Author |
+| --- | --- | --- | --- |
+| `switch_on_1..4.flac`, `switch_off_1..4.flac` | a cockpit's switches and knobs (one way, then the other) | [Small Toggle Switch](https://freesound.org/people/loganzsound/sounds/877305/) (on: 0.609, 1.809, 3.009, 5.409 s; off: 0.855, 2.056, 3.241, 5.650 s; 180 ms each) | loganzsound |
+| `button_1..4.flac` | MFD buttons | [Button Switch Toggle Operation Click](https://freesound.org/people/DustyWind/sounds/700985/) (0.152, 1.628, 2.399, 3.140 s; 200 ms each) | DustyWind |
+| `ui_1..3.flac` | the launchpad's and the menus' controls | [Switch Click](https://freesound.org/people/adamdavidsmith/sounds/877181/) (1.976, 0.425, 3.782 s; 80 ms each) | adamdavidsmith |

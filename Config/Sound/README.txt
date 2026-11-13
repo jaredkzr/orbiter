@@ -70,3 +70,17 @@ volume.
 
 Dynamic range (Settings, Audio): how much the range from a quiet cabin to
 a launch pad is squeezed - Off (the true levels), Light, Medium, Strong.
+
+Headphones (Settings, Audio; SoundHeadphones): binaural sound - each
+sound filtered as a head and ears would hear it from its direction, ahead,
+behind, above, below (MIT's KEMAR measurements, Src/Orbiter/Audio/Hrtf.h).
+Off for speakers.
+
+Clicks: the launchpad's and the menus' controls; a cockpit's switches and
+knobs (a vessel's panels, its virtual cockpit) and its MFD buttons, heard
+in its cabin at a real switch's loudness (Sound/Clicks; vessels using
+XRSound click by themselves). Add-ons: oapiAudioClick, Lua audio.click.
+
+Loudness: the voice's and the radio's recordings are brought to one
+loudness (EBU R128) as they play; the radio ducks the rest a little while
+it is heard.

@@ -13,11 +13,14 @@
 #define __RCSSYNTH_H
 
 #include "Synth.h"
+#include <algorithm>
 
 namespace audio {
 
 class RcsSynth : public SynthSource {
 public:
+	bool Continuous () const override { return true; }
+	float Activity () const override { return std::max (pLevel.load (std::memory_order_relaxed), outLevel.load (std::memory_order_relaxed)); }
 	static std::unique_ptr<RcsSynth> Make (Engine &e, uint32_t seed);
 	/// The cluster's level (0..1: the strongest of its thrusters), and its
 	/// size (the roar's peak, Hz)
@@ -29,6 +32,7 @@ protected:
 private:
 	explicit RcsSynth (uint32_t seed): rng (seed) {}
 	std::atomic<float> pLevel{0.0f}, pPeak{800.0f};
+	std::atomic<float> outLevel{0.0f};
 	dsp::Rng rng;
 	dsp::Pink pink;
 	dsp::Biquad roarBp, hissHp, clickBp, whumpLp;

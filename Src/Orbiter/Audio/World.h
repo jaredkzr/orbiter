@@ -59,6 +59,13 @@ public:
 	/// Sound files: to a time [s] in the file; where it is [s] (< 0: not a file)
 	virtual bool Seek (double s) { return false; }
 	virtual double Cursor () const { return -1.0; }
+	/// A continuous sound, its state all in its parameters (an engine, the
+	/// wind): stopped while it can't be heard (World: the voice cap), going
+	/// on as it is when it can (one-shots aren't: they must finish in time)
+	virtual bool Continuous () const { return false; }
+	/// How much it sounds by itself now (0: silent - an engine off; 1: as
+	/// loud as it goes), from its parameters (the voice cap's ranking)
+	virtual float Activity () const { return 1.0f; }
 };
 
 /// A source playing a miniaudio data source (generators: tests) or a file
@@ -119,6 +126,8 @@ private:
 	Track track;
 	State state;
 	bool gone = false;          // its body was deleted
+	bool culled = false;        // its source stopped: not heard (World::Cull)
+	double silentSince = -1.0;
 	std::deque<std::pair<double, Params>> history;
 	double hearDelay = 0.0;     // the travel time the source is heard with
 	V3 lastP;                   // where it was last step (jumps)
@@ -160,6 +169,16 @@ public:
 	void PlayShot (std::unique_ptr<Source> src, const V3 &dir, float gain, double length);
 
 	const std::vector<std::unique_ptr<Emitter>> &Emitters () const { return emitters; }
+	/// The voice cap: continuous sources (Source::Continuous) not heard
+	/// for CULL_AFTER (their gain times their activity under CULL_LEVEL:
+	/// about 10 dB SPL), or beyond the MAX_VOICES loudest, are stopped; they
+	/// go on when they may be heard
+	static constexpr int MAX_VOICES = 32;
+	static constexpr float CULL_LEVEL = 1e-6f;
+	static constexpr double CULL_AFTER = 0.5; // [s] (real time)
+	/// Continuous sources playing now, stopped now
+	int Voices () const { return voices; }
+	int Culled () const { return culled; }
 	/// The listener's air
 	const Air &ListenerAir () const { return lAir; }
 	bool ListenerInside () const { return inside; }
@@ -169,6 +188,8 @@ public:
 
 private:
 	void UpdateEmitter (Emitter &e, double t);
+	void Cull ();
+	int voices = 0, culled = 0;
 
 	struct Shot {
 		std::unique_ptr<Source> src;

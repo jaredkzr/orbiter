@@ -148,6 +148,8 @@ set(headless_src
 	Audio/Ambience.cpp
 	Audio/AmbienceSynth.cpp
 	Audio/MusicSynth.cpp
+	Audio/Hrtf.cpp
+	Audio/Loudness.cpp
 	Audio/Music.cpp
 	Audio/AudioEngine.cpp
 	Audio/AudioSystem.cpp

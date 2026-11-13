@@ -15,6 +15,8 @@
 #include "Log.h"
 #include "DlgMgr.h"
 #include "UiAnchor.h"
+#include "Orbiter.h"
+#include "Audio/AudioSystem.h"
 #include <assert.h>
 
 using namespace std;
@@ -30,6 +32,13 @@ static COLORREF infoColor   = RGB (224, 192, 0);
 static COLORREF brightColor = RGB (255, 224, 128);
 
 			   
+
+// a control in the cockpit used: its click (Audio)
+static void Click (audio::System::ClickKind k)
+{
+	if (g_pOrbiter && g_pOrbiter->Audio ()) g_pOrbiter->Audio ()->Click (k);
+}
+
 Pane::Pane (oapi::GraphicsClient *gclient, HWND hwnd, int width, int height, int bpp)
 {
 	// Note: gclient is assumed to be a valid pointer. Nongraphics orbiter
@@ -670,7 +679,9 @@ void Pane::Update (double simt, double syst)
 			if (mstate) {
 				aid = panel2d->area[idx]->id;
 				context = panel2d->area[idx]->context;
-				if (g_focusobj->PanelMouseEvent (aid, mstate, mx, my, context) && (panel2d->area[idx]->redraw & PANEL_REDRAW_MOUSE))
+				const bool used = g_focusobj->PanelMouseEvent (aid, mstate, mx, my, context);
+				if (used && (mstate & (PANEL_MOUSE_LBDOWN | PANEL_MOUSE_RBDOWN))) Click (audio::System::CLICK_SWITCH); // (a switch, a knob: its click)
+				if (used && (panel2d->area[idx]->redraw & PANEL_REDRAW_MOUSE))
 					panel2d->RedrawArea (idx, PANEL_REDRAW_MOUSE);
 				int nmstate = 0;
 				if (panel2d->area[idx]->mouse & PANEL_MOUSE_LBPRESSED && mstate & (PANEL_MOUSE_LBDOWN | PANEL_MOUSE_LBPRESSED)) nmstate |= PANEL_MOUSE_LBPRESSED;
@@ -683,7 +694,9 @@ void Pane::Update (double simt, double syst)
 			panel->GetMouseState (idx, mstate, mx, my);
 			if (mstate) {
 				aid = panel->area[idx]->id;
-				if (g_focusobj->PanelMouseEvent (aid, mstate, mx, my, 0) && (panel->area[idx]->redraw & PANEL_REDRAW_MOUSE))
+				const bool used = g_focusobj->PanelMouseEvent (aid, mstate, mx, my, 0);
+				if (used && (mstate & (PANEL_MOUSE_LBDOWN | PANEL_MOUSE_RBDOWN))) Click (audio::System::CLICK_SWITCH); // (a switch, a knob: its click)
+				if (used && (panel->area[idx]->redraw & PANEL_REDRAW_MOUSE))
 					panel->RedrawArea (idx, PANEL_REDRAW_MOUSE);
 				int nmstate = 0;
 				if (panel->area[idx]->mouse & PANEL_MOUSE_LBPRESSED && mstate & (PANEL_MOUSE_LBDOWN | PANEL_MOUSE_LBPRESSED)) nmstate |= PANEL_MOUSE_LBPRESSED;
@@ -697,7 +710,9 @@ void Pane::Update (double simt, double syst)
 			vcockpit->GetMouseState (idx, mstate, vx);
 			if (mstate) {
 				aid = vcockpit->area[idx]->id;
-				if (g_focusobj->VCMouseEvent (aid, mstate, vx) && (vcockpit->area[idx]->redraw & PANEL_REDRAW_MOUSE))
+				const bool used = g_focusobj->VCMouseEvent (aid, mstate, vx);
+				if (used && (mstate & (PANEL_MOUSE_LBDOWN | PANEL_MOUSE_RBDOWN))) Click (audio::System::CLICK_SWITCH); // (a switch, a knob: its click)
+				if (used && (vcockpit->area[idx]->redraw & PANEL_REDRAW_MOUSE))
 					vcockpit->RedrawArea (idx, PANEL_REDRAW_MOUSE);
 				int nmstate = 0;
 				if (vcockpit->area[idx]->mouse & PANEL_MOUSE_LBPRESSED && mstate & (PANEL_MOUSE_LBDOWN | PANEL_MOUSE_LBPRESSED)) nmstate |= PANEL_MOUSE_LBPRESSED;
@@ -713,8 +728,8 @@ void Pane::Update (double simt, double syst)
 				if (mstate & (PANEL_MOUSE_LBDOWN | PANEL_MOUSE_LBPRESSED)) nmstate |= PANEL_MOUSE_LBPRESSED;
 				if (mstate & (PANEL_MOUSE_RBDOWN | PANEL_MOUSE_RBPRESSED)) nmstate |= PANEL_MOUSE_RBPRESSED;
 				defpanel->SetMouseState (nmstate);
-				if (mfd[mf].instr)
-					mfd[mf].instr->ConsumeButton (bt, mstate);
+				if (mfd[mf].instr && mfd[mf].instr->ConsumeButton (bt, mstate) && (mstate & (PANEL_MOUSE_LBDOWN | PANEL_MOUSE_RBDOWN)))
+					Click (audio::System::CLICK_BUTTON);
 			}
 		}
 

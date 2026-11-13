@@ -1869,6 +1869,12 @@ DLLEXPORT const char *oapiAudioCallout (int n)
 	return as ? as->GetCallouts ().Recent (n) : nullptr;
 }
 
+DLLEXPORT void oapiAudioClick (int kind)
+{
+	if (audio::System *as = Audio ())
+		as->Click (kind <= 0 ? audio::System::CLICK_UI : kind == 1 ? audio::System::CLICK_SWITCH : audio::System::CLICK_BUTTON);
+}
+
 DLLEXPORT const char *oapiAudioMusic ()
 {
 	audio::System *as = Audio ();
@@ -2784,8 +2790,14 @@ DLLEXPORT void oapiRefreshMFDButtons (int mfd, OBJHANDLE hVessel)
 
 DLLEXPORT bool oapiProcessMFDButton (int mfd, int bt, int event)
 {
-	Instrument *MFD = g_pane->MFD(mfd);
-	if (MFD) return MFD->ConsumeButton (bt, event);
+	Instrument *MFD = g_pane ? g_pane->MFD(mfd) : nullptr; // (no pane without a graphics client)
+	if (MFD) {
+		const bool used = MFD->ConsumeButton (bt, event);
+		// (pressed: its click; MFD here may be gone - a mode changed)
+		if (used && (event & (PANEL_MOUSE_LBDOWN | PANEL_MOUSE_RBDOWN)))
+			if (audio::System *as = Audio ()) as->Click (audio::System::CLICK_BUTTON);
+		return used;
+	}
 	else     return false;
 }
 

@@ -187,6 +187,8 @@ add_executable(Audio.Synth Audio.Synth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/AudioEngine.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Ears.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/PathNode.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Hrtf.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Loudness.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Synth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/RocketSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/RcsSynth.cpp
@@ -531,6 +533,31 @@ if (ORBITER_TEST_EXE)
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.CalloutsCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioCallouts)
+		# a cockpit's clicks (in its cabin, at a switch's loudness: physical,
+		# quiet in a render) and the interface's
+		add_test(
+			NAME "Audio.Clicks"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Audio/Clicks.scn" "--fixedstep=0.02" "--maxframes=400"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.Clicks PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioClicks PASS_REGULAR_EXPRESSION "Audio: click Clicks/switch_on_[1-4].flac \\(cabin\\).*Audio: click Clicks/button_[1-4].flac \\(cabin\\).*Audio: click Clicks/ui_[1-3].flac \\(interface\\)"
+			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Clicks.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0;ORBITER_AUDIO_AMBIENCE=0;ORBITER_AUDIO_RADIO=0")
+		add_test(
+			NAME "Audio.ClicksCheck"
+			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.Clicks.wav" --no-clip
+				--level 0.3:0.95:all:-inf:-100 --level 1.0:1.2:all:-95:-70 --level 2.0:2.2:all:-95:-70 --level 3.0:3.15:all:-65:-40
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.ClicksCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioClicks)
+		# a crowd: 40 vessels' engines fired together - the voice cap keeps
+		# the loudest 32 sources playing, the idle ones stopped
+		add_test(
+			NAME "Audio.Crowd"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Audio/Crowd.scn" "--fixedstep=0.02" "--maxframes=700"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.Crowd PROPERTIES TIMEOUT 300 PASS_REGULAR_EXPRESSION "Audio: load [0-9.]+ % \\(worst block [0-9.]+ %\\), 32 sources playing, 408 stopped"
+			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Crowd.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0;ORBITER_AUDIO_AMBIENCE=0;ORBITER_AUDIO_RADIO=0")
 		# the music follows the vessel in focus: ground, its breakup
 		# (silence), orbit, an approach, deep space, reentry
 		add_test(
