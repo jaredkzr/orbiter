@@ -158,6 +158,7 @@ set(headless_src
 	Audio/Miniaudio.cpp
 	Audio/PathNode.cpp
 	Audio/RcsSynth.cpp
+	Audio/SplashSynth.cpp
 	Audio/RocketSynth.cpp
 	Audio/Synth.cpp
 	Audio/Track.cpp

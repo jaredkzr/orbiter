@@ -109,6 +109,7 @@ public:
 	using Params = std::array<float, 24>;
 	void Push (double t, const Params &p);
 	Params Recalled () const;
+	const std::deque<std::pair<double, Params>> &History () const { return history; }
 
 private:
 	friend class World;

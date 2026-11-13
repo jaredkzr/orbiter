@@ -4,6 +4,7 @@
 #include "Effects.h"
 #include "BlastSynth.h"
 #include "FireSynth.h"
+#include "SplashSynth.h"
 #include "VesselSounds.h"
 #include "Debris.h"
 #include "Psys.h"
@@ -29,6 +30,8 @@ namespace {
 	/// world's reach)
 	constexpr double BLAST_MAX_AGE = 240.0;
 	constexpr double SEA_P = 101325.0, SEA_C = 340.3;
+	/// The wake's level (0.02 Pa at refDist)
+	const double WAKE_LEVEL = 0.02 / P_FULL / 0.3;
 }
 
 void Effects::Explosion (const Vessel *v, double propellant)
@@ -81,6 +84,7 @@ void Effects::Update (double t)
 {
 	if (!g_camera) return;
 	UpdateFires (t);
+	UpdateWater (t);
 	const Vector &cam = g_camera->GPos ();
 	for (auto it = blasts.begin (); it != blasts.end (); ) {
 		Blast &b = *it;
@@ -167,8 +171,102 @@ void Effects::UpdateFires (double t)
 	}
 }
 
+void Effects::UpdateWater (double t)
+{
+	if (!g_psys) return;
+	for (DWORD i = 0; i < g_psys->nVessel (); i++) {
+		Vessel *v = g_psys->GetVessel (i);
+		if (!v || v->Destroyed ()) continue;
+		VESSEL *vi = v->GetModuleInterface ();
+		if (!vi || vi->Version () < 2) continue;
+		WATERSTATE ws;
+		if (!vi->GetWaterState (&ws)) continue;
+		auto it = std::find_if (waters.begin (), waters.end (), [v](const Water &w) { return w.v == v; });
+		if (it == waters.end ()) {
+			if (!ws.nearWater && !ws.wet) continue;
+			// (near the water: an emitter, its history from now)
+			auto s = SplashSynth::Make (engine, seed++);
+			if (!s) continue;
+			Water w;
+			w.v = v;
+			w.synth = s.get ();
+			EmitterDesc d;
+			d.body = v;
+			d.refDist = (float)std::max (2.0, 0.5 * v->Size ());
+			d.level = 0.0f;
+			d.hull = 0.3f; // (in its cabin: the slam through the structure)
+			d.name = std::string (v->Name ()) + " water";
+			w.em = world.Add (d, std::move (s));
+			if (!w.em) continue;
+			w.em->Push (t - 1e-3, Emitter::Params{});
+			waters.push_back (w);
+			it = waters.end () - 1;
+		}
+		Water &w = *it;
+		if (ws.nearWater || ws.wet) w.lastNear = t;
+		// an entry: wet anew. Its sound: a part of its kinetic energy - the
+		// entry speed of the hull's fastest panel - over about the spray's
+		// time, as a pressure at refDist (sea-level air)
+		const double size = v->Size ();
+		Emitter::Params p = w.em->History ().empty () ? Emitter::Params{} : w.em->History ().back ().second;
+		// (the entry's speeds: into the water - the hull's own, the step before
+		// it touched (the water's measure of it comes later) - and along it)
+		VECTOR3 gv;
+		vi->GetGroundspeedVector (FRAME_HORIZON, gv);
+		const double vDown = std::max (-gv.y, 0.0), vAlong = std::hypot (gv.x, gv.z);
+		const bool newEntry = ws.wet && !w.wet && t - w.dryAt > 0.5; // (a skip, a bounce: one entry)
+		if (!ws.wet && w.wet) w.dryAt = t;
+		if (newEntry) {
+			const double vin = std::max ({ws.entrySpeed, w.vDown, 0.5});
+			// its energy: the fall into the water, and a part of a skim's along
+			// it (a ditching: the spray sheet it throws up as it slows)
+			const double E = SplashSynth::SPLASH_EFFICIENCY * 0.5 * v->Mass () * (vin * vin + 0.05 * w.vAlong * w.vAlong);
+			const double T = std::clamp (0.6 * vin / 9.81, 0.3, 4.0) + 0.3;
+			const double r0 = w.em->Desc ().refDist;
+			const double prms = std::sqrt (E / T * RHO0 * C0 / (4.0 * 3.14159265 * r0 * r0));
+			w.entries++;
+			p[0] = (float)w.entries, p[1] = (float)(prms / P_FULL / SplashSynth::SPLASH_RMS), p[2] = (float)size, p[3] = (float)vin;
+			LOGOUT ("Audio: %s into the water at %.1f m/s (%.0f m/s along): %.2g J of sound, %.2f Pa at %.0f m", v->Name (), vin, w.vAlong, E, prms, r0);
+			static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+			if (log) printf ("Audio: %s into the water at %.3f s, %.1f m/s\n", v->Name (), t, vin), fflush (stdout);
+		}
+		w.wet = ws.wet;
+		w.vDown = vDown, w.vAlong = vAlong;
+		// the wake: its speed through the water (wet), at a fixed level -
+		// a body moving through water at a few m/s: tens of dB at its side
+		p[4] = ws.wet ? (float)ws.speed : 0.0f;
+		w.em->Push (t, p);
+		if (ws.wet) {
+			const VECTOR3 &c = ws.contact;
+			const Vector off = tmul (v->GRot (), Vector (c.x, c.y, c.z) - v->GPos ());
+			w.em->SetOffset (V3 (off.x, off.y, off.z));
+		}
+		// as heard: entries counted, the strength of the last
+		const Emitter::Params h = w.em->Heard ().images > 0 ? w.em->Recalled () : Emitter::Params{};
+		const int n = (int)h[0];
+		if (n > w.heard) {
+			// (the emitter's level: this entry's; the synth's own strength 1)
+			w.em->SetLevel (h[1]);
+			w.synth->Entry (1.0f, h[2], h[3]);
+			w.heard = n;
+		} else if (w.heard == 0) w.em->SetLevel ((float)WAKE_LEVEL);
+		// the wake: a level of its own (a body moving through water at a few
+		// m/s: some 0.02 Pa at its side), whatever the last entry's
+		w.synth->Set (h[4], (float)size, (float)(WAKE_LEVEL / std::max ((double)w.em->Desc ().level, 1e-9)));
+	}
+	// (far from the water a while: gone)
+	for (auto it = waters.begin (); it != waters.end (); ) {
+		if (t - it->lastNear > 60.0) { world.Remove (it->em); it = waters.erase (it); }
+		else ++it;
+	}
+}
+
 void Effects::Forget (const Body *body)
 {
+	for (auto it = waters.begin (); it != waters.end (); ) {
+		if ((const Body*)it->v == body) { world.Remove (it->em); it = waters.erase (it); }
+		else ++it;
+	}
 	for (auto it = fires.begin (); it != fires.end (); ) {
 		if (it->debris == body) { world.Remove (it->em); it = fires.erase (it); }
 		else ++it;
@@ -185,6 +283,8 @@ void Effects::Clear ()
 	blasts.clear ();
 	for (auto &f : fires) world.Remove (f.em);
 	fires.clear ();
+	for (auto &w : waters) world.Remove (w.em);
+	waters.clear ();
 }
 
 } // namespace audio

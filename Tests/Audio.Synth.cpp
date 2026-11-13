@@ -16,6 +16,7 @@
 #include "Audio/ContactSynth.h"
 #include "Audio/BlastSynth.h"
 #include "Audio/FireSynth.h"
+#include "Audio/SplashSynth.h"
 #include "Audio/VesselSounds.h"
 #include "miniaudio.h"
 #include <cmath>
@@ -481,4 +482,25 @@ TEST_CASE ("Fire: the roar's level and spectrum", "[audio][synth]")
 	CHECK_THAT (Db (Rms (x)), WithinAbs (Db (FireSynth::FIRE_RMS), 3.0));
 	CHECK (BandRms (x, 0, (float)(2 * fpk), 48000) > 0.8 * Rms (x));
 	CHECK (BandRms (x, 1000, 0, 48000) < 0.1 * Rms (x));
+}
+
+TEST_CASE ("Splash: an entry's slam and bubbles, dying away", "[audio][synth]")
+{
+	CHECK_THAT (SplashSynth::Minnaert (0.001), WithinRel (3260.0, 1e-6)); // (a 1 mm bubble: 3.3 kHz)
+	Rig r;
+	auto s = SplashSynth::Make (r.e, 41);
+	r.Attach (*s);
+	r.Take (0.1);
+	s->Entry (1.0f, 4.0f, 9.0f); // (a capsule, 4 m, at 9 m/s)
+	auto x = r.Take (6.0);
+	std::vector<float> first (x.begin (), x.begin () + 48000), last (x.end () - 48000, x.end ());
+	INFO ("first second RMS " << Rms (first) << "; below 100 Hz " << Db (BandRms (first, 0, 100, 48000) / Rms (first)) << " dB, 100-500 Hz " << Db (BandRms (first, 100, 500, 48000) / Rms (first)) << " dB, 500-5000 " << Db (BandRms (first, 500, 5000, 48000) / Rms (first))
+		<< " dB, above 8k " << Db (BandRms (first, 8000, 0, 48000) / Rms (first)) << " dB; last second " << Db (Rms (last) / Rms (first)) << " dB");
+	CHECK_THAT (Db (Rms (first)), WithinAbs (Db (SplashSynth::SPLASH_RMS), 4.0));
+	// bubbles over the whole range: the cavity's low, the spray's high
+	CHECK (BandRms (first, 100, 500, 48000) > 0.1 * Rms (first));
+	CHECK (BandRms (first, 500, 5000, 48000) > 0.3 * Rms (first));
+	CHECK (BandRms (first, 8000, 0, 48000) < 0.3 * Rms (first));
+	// over within seconds
+	CHECK (Rms (last) < 0.03 * Rms (first));
 }

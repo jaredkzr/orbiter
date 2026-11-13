@@ -195,6 +195,7 @@ add_executable(Audio.Synth Audio.Synth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/ContactSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/BlastSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/FireSynth.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/SplashSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Miniaudio.cpp)
 target_compile_definitions(Audio.Synth PRIVATE AUDIO_SYNTH_TEST)
 target_include_directories(Audio.Synth PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter ${CMAKE_SOURCE_DIR}/Extern/miniaudio)
@@ -457,6 +458,22 @@ if (ORBITER_TEST_EXE)
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.BlastCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioBlast)
+		# water (Effects, SplashSynth): the water entry test heard - a ShuttlePB
+		# dropped flat at 9 m/s, a delta-glider ditching at 70 m/s: one entry
+		# each, at their speeds into the water
+		add_test(
+			NAME "Audio.Splash"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Scenarios/Tests/WaterEntryTest.scn" "--fixedstep=0.02" "--maxframes=4000"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.Splash PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioSplash PASS_REGULAR_EXPRESSION "DROP into the water at .* 9\\.[0-9] m/s"
+			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Splash.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0")
+		add_test(
+			NAME "Audio.SplashCheck"
+			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.Splash.wav" --no-clip --no-clicks --level 0.1:2.0:all:-60:-10
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.SplashCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioSplash)
 		# the voice's callouts (a takeoff, a descent with the gear up, Mach 1)
 		# and XRSound's API on Orbiter's sound (Lua's xrsound)
 		add_test(

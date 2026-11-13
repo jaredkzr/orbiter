@@ -8,6 +8,8 @@
 //    wave (BlastSynth), from where it broke up, heard when it arrives
 //  - fires: burning wreckage (Debris::Ignite) - the roar of its flames
 //    (FireSynth), as loud as a turbulent flame's share of its heat release
+//  - water: a vessel entering it (SplashSynth: the slam, the cavity's and
+//    the spray's bubbles), moving or floating in it (the wake's bubbles)
 //
 // Each is an emitter on the planet, at the place it happened, so the world
 // carries it as any sound: travel time, spreading, the air's absorption,
@@ -29,6 +31,7 @@ namespace audio {
 
 class BlastSynth;
 class FireSynth;
+class SplashSynth;
 
 class Effects {
 public:
@@ -65,6 +68,13 @@ private:
 	struct Fire { const Body *debris = nullptr; Emitter *em = nullptr; FireSynth *synth = nullptr; double out = -1.0; };
 	std::vector<Fire> fires;
 	void UpdateFires (double t);
+	struct Water {
+		const Vessel *v = nullptr; Emitter *em = nullptr; SplashSynth *synth = nullptr;
+		bool wet = false; double dryAt = -1e10; int entries = 0, heard = 0; double lastNear = 0.0;
+		double vDown = 0.0, vAlong = 0.0; // (the step before)
+	};
+	std::vector<Water> waters;
+	void UpdateWater (double t);
 	uint32_t seed = 101;
 };
 
