@@ -154,6 +154,11 @@ float Engine::EarsAdapt () const
 	return impl ? impl->ears.AdaptGain () : 0.0f;
 }
 
+void Engine::SetCompression (int level)
+{
+	if (impl) impl->ears.SetCompression (level);
+}
+
 void Engine::SetAdapt (bool on)
 {
 	if (impl) impl->ears.SetAdapt (on);

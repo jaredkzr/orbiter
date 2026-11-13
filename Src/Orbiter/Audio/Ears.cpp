@@ -25,6 +25,8 @@ struct Ears::Impl {
 	float gainDb = 0.0f;    // the smoothed gain
 	std::atomic<float> reduction{0.0f}, adaptGain{0.0f};
 	std::atomic<bool> adaptOn{false};
+	// (live: the compression's settings, set from the simulation thread)
+	std::atomic<float> thr{-20.0f}, ratio{3.0f}, aMax{45.0f}, aTarget{-28.0f};
 	float msFast = 0.0f, held = -200.0f, adaptDb = 0.0f;
 	bool init = false;
 	// the peak limiter: the gain each sample needs (its window's minimum over
@@ -56,6 +58,7 @@ bool Ears::Init (ma_engine *engine, const Settings &s)
 	impl->set = s;
 	impl->adaptOn.store (s.adapt);
 	impl->adaptDb = s.adapt ? s.adaptMax : 0.0f; // (starting adapted to quiet)
+	impl->thr.store (s.threshold), impl->ratio.store (s.ratio), impl->aMax.store (s.adaptMax), impl->aTarget.store (s.adaptTarget);
 	impl->rate = (float)ma_engine_get_sample_rate (engine);
 	impl->vtable = {};
 	impl->vtable.onProcess = [](ma_node *node, const float **in, ma_uint32 *nIn, float **out, ma_uint32 *nOut) {
@@ -64,7 +67,9 @@ bool Ears::Init (ma_engine *engine, const Settings &s)
 		*nIn = n;
 		const float *x = in[0];
 		float *y = out[0];
-		const Settings &s = m->set;
+		Settings s = m->set;
+		s.threshold = m->thr.load (std::memory_order_relaxed), s.ratio = m->ratio.load (std::memory_order_relaxed);
+		s.adaptMax = m->aMax.load (std::memory_order_relaxed), s.adaptTarget = m->aTarget.load (std::memory_order_relaxed);
 		// the detector: a mean square over 50 ms
 		const float kEnv = 1.0f - std::exp (-1.0f / (0.05f * m->rate));
 		const float kAtt = 1.0f - std::exp (-1.0f / (s.attack * m->rate));
@@ -164,6 +169,26 @@ void *Ears::Node ()
 float Ears::AdaptGain () const
 {
 	return impl ? impl->adaptGain.load (std::memory_order_relaxed) : 0.0f;
+}
+
+Ears::Settings Ears::ForCompression (int level)
+{
+	Settings s;
+	switch (level) {
+	case COMP_OFF:    s.ratio = 1.0f, s.adaptMax = 0.0f; break;                                 // (the limiter only)
+	case COMP_LIGHT:  s.threshold = -15.0f, s.ratio = 2.0f, s.adaptMax = 25.0f, s.adaptTarget = -32.0f; break;
+	case COMP_STRONG: s.threshold = -30.0f, s.ratio = 6.0f, s.adaptMax = 55.0f, s.adaptTarget = -24.0f; break;
+	default: break;                                                                              // (medium: the defaults)
+	}
+	return s;
+}
+
+void Ears::SetCompression (int level)
+{
+	if (!impl) return;
+	const Settings s = ForCompression (level);
+	impl->thr.store (s.threshold, std::memory_order_relaxed), impl->ratio.store (s.ratio, std::memory_order_relaxed);
+	impl->aMax.store (s.adaptMax, std::memory_order_relaxed), impl->aTarget.store (s.adaptTarget, std::memory_order_relaxed);
 }
 
 void Ears::SetAdapt (bool on)

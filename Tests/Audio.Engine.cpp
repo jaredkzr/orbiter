@@ -266,3 +266,30 @@ TEST_CASE ("Ears: the listening level raises a quiet scene, ducks for a loud one
 		CHECK (g2 > 40.0f);
 	}
 }
+
+TEST_CASE ("Ears: the dynamic range setting's levels", "[audio]")
+{
+	const Ears::Settings off = Ears::ForCompression (Ears::COMP_OFF), light = Ears::ForCompression (Ears::COMP_LIGHT);
+	const Ears::Settings med = Ears::ForCompression (Ears::COMP_MEDIUM), strong = Ears::ForCompression (Ears::COMP_STRONG);
+	// off: no compression (the limiter alone), no listening level
+	CHECK (Ears::GainDb (-5.0f, off) == 0.0f);
+	CHECK (off.adaptMax == 0.0f);
+	// medium: the defaults
+	CHECK (Ears::GainDb (-5.0f, med) == Ears::GainDb (-5.0f, Ears::Settings ()));
+	// harder as it goes: a loud scene brought down more, a quiet one raised more
+	CHECK (Ears::GainDb (-5.0f, light) > Ears::GainDb (-5.0f, med));
+	CHECK (Ears::GainDb (-5.0f, strong) < Ears::GainDb (-5.0f, med));
+	CHECK (light.adaptMax < med.adaptMax);
+	CHECK (strong.adaptMax > med.adaptMax);
+	// live: set on a running engine
+	Engine::Options o = Offline (true);
+	o.adapt = true;
+	Engine e;
+	REQUIRE (e.Init (o));
+	e.SetCompression (Ears::COMP_OFF);
+	Tone loud (e, EXTERIOR, 220.0, 0.3);
+	RenderRms (e, 1.0);
+	INFO ("off: reduction " << e.EarsReduction () << " dB, listening level " << e.EarsAdapt () << " dB");
+	CHECK (e.EarsReduction () > -0.5f);
+	CHECK (e.EarsAdapt () < 0.5f);
+}

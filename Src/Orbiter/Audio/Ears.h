@@ -58,6 +58,13 @@ public:
 	/// The listening level's gain now [dB] (>= 0)
 	float AdaptGain () const;
 	void SetAdapt (bool on);
+	/// How hard the dynamics are squeezed (the settings' "Dynamic range"):
+	/// 0 off (the true dynamics: only the peak limiter; no listening level),
+	/// 1 light, 2 medium (the defaults), 3 strong (night, a low volume)
+	enum Compression { COMP_OFF = 0, COMP_LIGHT = 1, COMP_MEDIUM = 2, COMP_STRONG = 3 };
+	static Settings ForCompression (int level);
+	/// Live: the compressor's and the listening level's settings of a level
+	void SetCompression (int level);
 
 	/// The gain computer's curve (tests): the gain [dB] for a level [dB]
 	static float GainDb (float levelDb, const Settings &s);

@@ -102,6 +102,8 @@ public:
 	/// The listening level's gain now [dB]; on or off
 	float EarsAdapt () const;
 	void SetAdapt (bool on);
+	/// The dynamics' compression (Ears::Compression)
+	void SetCompression (int level);
 
 private:
 	struct Impl;

@@ -702,7 +702,9 @@ void SettingsUI::PageAudio ()
 	static const char *realism[] = { "Physical", "Cinematic" };
 	changed |= ComboRow ("Sound in space", "Physical: sound needs air to travel - silence outside in vacuum, the cockpit hears its own vessel through the hull; it takes its time to arrive. Cinematic: everything heard everywhere, at once.",
 		&s.Realism, realism, 2);
-	changed |= ToggleRow ("Adapt to quiet scenes", "On: your hearing adapts - a quiet cabin is raised to a comfortable level, the loud still loud. Off: the true levels, a quiet cabin far quieter than a launch.", &s.bAdapt);
+	static const char *compression[] = { "Off", "Light", "Medium", "Strong" };
+	changed |= ComboRow ("Dynamic range", "How much the huge range between a quiet cabin and a launch pad is squeezed. Off: the true levels - a quiet cabin barely audible, a launch overwhelming. Light, Medium: quiet scenes raised as your hearing would adapt, loud ones held. Strong: everything brought close together (at night, at a low volume).",
+		&s.Compression, compression, 4);
 	changed |= ToggleRow ("Voice callouts", "The flight called out: altitudes and Mach numbers, liftoff, touchdown, Max Q, docking distances, warnings.", &s.bCallouts);
 
 	Section ("Mix");
