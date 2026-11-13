@@ -352,6 +352,7 @@ void System::EndSession ()
 	played.clear ();
 	vessels.Clear ();
 	effects.Clear ();
+	ambience.Clear ();
 	world.Clear ();
 	testTone = nullptr;
 	logT = -1.0;
@@ -396,6 +397,7 @@ void System::TestTone ()
 
 void System::Stop ()
 {
+	ambience.Clear ();
 	for (auto &p : played) if (p.second.flat) ma_sound_uninit (p.second.flat.get ());
 	played.clear ();
 	if (wav.IsOpen ()) {
@@ -458,6 +460,7 @@ void System::Step ()
 		static const bool noVessels = getenv ("ORBITER_AUDIO_VESSELS") && *getenv ("ORBITER_AUDIO_VESSELS") == '0';
 		if (!noVessels) vessels.Update (t, replay);
 		if (!replay) effects.Update (t);
+		ambience.Update (t, td.UiDT ());
 		world.Update (t);
 		// the voice, XRSound's sounds (not in the replay: it isn't flown)
 		const bool cockpit = g_camera && g_camera->IsInternal ();

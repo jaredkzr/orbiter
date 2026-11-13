@@ -31,6 +31,7 @@
 #include "VesselSounds.h"
 #include "Callouts.h"
 #include "Effects.h"
+#include "Ambience.h"
 #include <map>
 #include <vector>
 
@@ -135,6 +136,7 @@ private:
 	VesselSounds vessels{engine, world};
 	Callouts callouts{*this};
 	Effects effects{engine, world};
+	Ambience ambience{*this};
 	void Duck (double dt);
 	WavWriter wav;
 	std::vector<float> block;

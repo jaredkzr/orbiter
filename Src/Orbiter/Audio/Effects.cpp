@@ -33,10 +33,11 @@ namespace {
 	/// world's reach)
 	constexpr double BLAST_MAX_AGE = 240.0;
 	constexpr double SEA_P = 101325.0, SEA_C = 340.3;
-	/// The structure's creaks in its cabin: at the most this [Pa] (subtle:
-	/// near the limit some 65 dB, a moderate load's 55 - heard in a quiet
-	/// cabin, lost under the air's rush), carried through the structure
-	constexpr double CREAK_P = 0.06, CREAK_HULL = 50.0;
+	/// The structure's creaks in its cabin: at the most this [Pa] at their
+	/// peak (subtle: a moderate load's some 6 dB over the cabin's air
+	/// handling - 56 dB - near the limit 80 dB at the peak; lost under the
+	/// air's rush), carried through the structure
+	constexpr double CREAK_P = 0.2, CREAK_HULL = 50.0;
 	/// The wake's level (0.02 Pa at refDist)
 	const double WAKE_LEVEL = 0.02 / P_FULL / 0.3;
 }

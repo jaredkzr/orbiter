@@ -19,6 +19,7 @@
 #include "Audio/SplashSynth.h"
 #include "Audio/ThunderSynth.h"
 #include "Audio/CreakSynth.h"
+#include "Audio/AmbienceSynth.h"
 #include "Audio/VesselSounds.h"
 #include "miniaudio.h"
 #include <cmath>
@@ -555,5 +556,24 @@ TEST_CASE ("Creak: a structure's stick-slip, normalized", "[audio][synth]")
 		// (full strength: about full scale - the emitter's level makes it CREAK_P)
 		CHECK (pk > 0.4f);
 		CHECK (pk < 2.0f);
+	}
+}
+
+TEST_CASE ("Ambience: the wind's and the sea's pressure, as asked", "[audio][synth]")
+{
+	// Monahan's whitecaps: 0.29 % at 7 m/s; the sea's noise 0.02 Pa there
+	CHECK_THAT (AmbienceSynth::Whitecaps (7.0), WithinRel (0.00290, 0.03));
+	CHECK_THAT (AmbienceSynth::SeaPressure (7.0), WithinRel (0.02, 1e-9));
+	for (int k = 0; k < 2; k++) {
+		Rig r;
+		auto s = AmbienceSynth::Make (r.e, 60 + k);
+		if (k == 0) s->Set (1.0, 7.0, 0.0, 8.0); else s->Set (0.0, 7.0, 1.0, 8.0);
+		r.Attach (*s);
+		r.Take (3.0);
+		auto x = r.Take (16.0); // (two waves' periods and more: the swell's mean)
+		INFO ((k ? "sea" : "wind") << ": RMS " << Rms (x) << ", below 250 Hz " << Db (BandRms (x, 0, 250, 48000) / Rms (x)) << " dB, above 1 kHz " << Db (BandRms (x, 1000, 0, 48000) / Rms (x)) << " dB");
+		CHECK_THAT (Db (Rms (x)), WithinAbs (0.0, 2.0));
+		if (k == 0) CHECK (BandRms (x, 0, 250, 48000) > 0.8 * Rms (x)); // (the wind: low)
+		else CHECK (BandRms (x, 100, 6000, 48000) > 0.7 * Rms (x));    // (the sea: wash and fizz)
 	}
 }

@@ -145,6 +145,8 @@ set(headless_src
 	Util.cpp
 	ZTreeMgr.cpp
 # Sound
+	Audio/Ambience.cpp
+	Audio/AmbienceSynth.cpp
 	Audio/AudioEngine.cpp
 	Audio/AudioSystem.cpp
 	Audio/BlastSynth.cpp
