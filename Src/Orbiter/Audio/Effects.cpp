@@ -364,6 +364,7 @@ void Effects::UpdateCreaks (double t)
 		creak.em->Push (t - 1e-3, Emitter::Params{});
 		creak.t = t;
 	}
+	if (!v) return; // (none in focus, or its wreck: nothing to creak)
 	VESSEL *vi = const_cast<Vessel*>(v)->GetModuleInterface ();
 	if (!vi) return;
 	// its stress (0: none, 1: at its limit): its joints' worst load (the
