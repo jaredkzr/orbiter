@@ -20,9 +20,14 @@
 #include "Audio/ThunderSynth.h"
 #include "Audio/CreakSynth.h"
 #include "Audio/AmbienceSynth.h"
+#include "Audio/MusicSynth.h"
+#include "Audio/WavWriter.h"
 #include "Audio/VesselSounds.h"
 #include "miniaudio.h"
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
+#include <string>
 #include <vector>
 
 using namespace audio;
@@ -575,5 +580,126 @@ TEST_CASE ("Ambience: the wind's and the sea's pressure, as asked", "[audio][syn
 		CHECK_THAT (Db (Rms (x)), WithinAbs (0.0, 2.0));
 		if (k == 0) CHECK (BandRms (x, 0, 250, 48000) > 0.8 * Rms (x)); // (the wind: low)
 		else CHECK (BandRms (x, 100, 6000, 48000) > 0.7 * Rms (x));    // (the sea: wash and fizz)
+	}
+}
+
+namespace {
+/// A composer's output over `seconds` in a mood (left, right)
+void Compose (music::Composer &c, music::Mood m, double seconds, std::vector<float> &l, std::vector<float> &r, float intensity = 0.5f)
+{
+	c.SetMood (m);
+	c.SetIntensity (intensity);
+	const size_t n = (size_t)(seconds * 48000.0);
+	l.assign (n, 0.0f), r.assign (n, 0.0f);
+	for (size_t i = 0; i < n; i += 512) c.Render (l.data () + i, r.data () + i, (unsigned)std::min<size_t> (512, n - i));
+}
+}
+
+TEST_CASE ("Music: each mood at its level, moving, not clipping", "[audio][synth][music]")
+{
+	using namespace music;
+	for (int m = MENU; m < NMOOD; m++) {
+		Composer c (48000.0f, 11 + m);
+		std::vector<float> l, r;
+		Compose (c, (Mood)m, 10.0, l, r);   // (in: the level's glide)
+		Compose (c, (Mood)m, 60.0, l, r);
+		const double rms = std::sqrt (0.5 * (Rms (l) * Rms (l) + Rms (r) * Rms (r)));
+		INFO (Name ((Mood)m) << ": RMS " << Db (rms) << " dBFS, peak " << Db (std::max (Peak (l), Peak (r))) << " dBFS, chords " << c.Chords () << ", bells " << c.Bells () << ", pulses " << c.Pulses () << ", sounding " << c.Sounding ());
+		// (at its level, within a few dB of the composer's: the mood's own)
+		CHECK (Db (rms) < Db (Composer::RMS) + 4.0);
+		CHECK (Db (rms) > Db (Composer::RMS) - 12.0);
+		CHECK (Db (std::max (Peak (l), Peak (r))) < -3.0);
+		CHECK (c.Chords () >= 2);       // (a minute: chords change)
+		// stereo: the sides differ
+		double d = 0.0;
+		for (size_t i = 0; i < l.size (); i++) d += (double)(l[i] - r[i]) * (l[i] - r[i]);
+		CHECK (std::sqrt (d / l.size ()) > 0.1 * rms);
+	}
+}
+
+TEST_CASE ("Music: moods' character - pulses, bells, a pedal", "[audio][synth][music]")
+{
+	using namespace music;
+	std::vector<float> l, r;
+	{
+		Composer c (48000.0f, 3);
+		Compose (c, ASCENT, 30.0, l, r, 1.0f);
+		CHECK (c.Pulses () > 60);              // (some 3 a second)
+		CHECK (c.Chord ()[0] % 12 == c.Tonic ()); // (the pedal: the tonic)
+	}
+	{
+		Composer c (48000.0f, 4);
+		Compose (c, ORBIT, 120.0, l, r);
+		CHECK (c.Pulses () == 0);
+		CHECK (c.Bells () >= 2);
+		INFO ("orbit's chord " << c.Chord ().size ());
+		for (int n : c.Chord ()) { CHECK (n >= 31); CHECK (n <= 90); }
+	}
+}
+
+TEST_CASE ("Music: silence fades it out quickly, and it comes back", "[audio][synth][music]")
+{
+	using namespace music;
+	Composer c (48000.0f, 5);
+	std::vector<float> l, r;
+	Compose (c, ORBIT, 20.0, l, r);
+	const double before = Rms (l, l.size () - 48000);
+	Compose (c, SILENT, 6.0, l, r);
+	INFO ("before " << Db (before) << " dBFS, after 5 s of silence " << Db (Rms (l, l.size () - 48000) + 1e-12));
+	CHECK (Db (Rms (l, l.size () - 48000) + 1e-12) < Db (before) - 40.0);
+	Compose (c, SILENT, 30.0, l, r);
+	CHECK (c.Sounding () == 0);
+	Compose (c, ORBIT, 15.0, l, r);
+	CHECK (Db (Rms (l, l.size () - 48000)) > Db (before) - 10.0);
+}
+
+TEST_CASE ("Music: cheap enough to run beside everything", "[audio][synth][music]")
+{
+	using namespace music;
+	Composer c (48000.0f, 6);
+	std::vector<float> l, r;
+	Compose (c, MENU, 5.0, l, r);
+	auto t0 = std::chrono::steady_clock::now ();
+	Compose (c, MENU, 30.0, l, r);
+	const double s = std::chrono::duration<double> (std::chrono::steady_clock::now () - t0).count ();
+	INFO ("30 s rendered in " << s << " s");
+	CHECK (s < 30.0 * 0.05); // (under 5 % of a core)
+}
+
+// ORBITER_MUSIC_DEMO=<dir>: each mood's music into <dir>/music_<mood>.wav (listening)
+TEST_CASE ("Music: demos", "[audio][synth][music]")
+{
+	const char *dir = getenv ("ORBITER_MUSIC_DEMO");
+	if (!dir || !*dir) return;
+	const double secs = getenv ("ORBITER_MUSIC_SECONDS") ? atof (getenv ("ORBITER_MUSIC_SECONDS")) : 90.0;
+	using namespace music;
+	for (int m = MENU; m < NMOOD; m++) {
+		Composer c (48000.0f, 100 + m);
+		std::vector<float> l, r;
+		WavWriter w;
+		REQUIRE (w.Open (std::string (dir) + "/music_" + Name ((Mood)m) + ".wav", 48000, 2));
+		for (double t = 0.0; t < secs; t += 1.0) {
+			Compose (c, (Mood)m, 1.0, l, r, (float)std::min (1.0, t / secs));
+			std::vector<float> f (l.size () * 2);
+			for (size_t i = 0; i < l.size (); i++) f[2 * i] = l[i], f[2 * i + 1] = r[i];
+			w.Write (f.data (), l.size ());
+		}
+		w.Close ();
+	}
+	// a flight: each mood in turn (the changes between them)
+	{
+		static const Mood path[] = { MENU, GROUND, ASCENT, ORBIT, APPROACH, ORBIT, DEEP, REENTRY, GROUND };
+		Composer c (48000.0f, 200);
+		std::vector<float> l, r;
+		WavWriter w;
+		REQUIRE (w.Open (std::string (dir) + "/music_flight.wav", 48000, 2));
+		for (Mood m : path)
+			for (double t = 0.0; t < secs / 2.0; t += 1.0) {
+				Compose (c, m, 1.0, l, r, (float)std::min (1.0, t / (secs / 2.0)));
+				std::vector<float> f (l.size () * 2);
+				for (size_t i = 0; i < l.size (); i++) f[2 * i] = l[i], f[2 * i + 1] = r[i];
+				w.Write (f.data (), l.size ());
+			}
+		w.Close ();
 	}
 }

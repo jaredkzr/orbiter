@@ -1,0 +1,51 @@
+BEGIN_HYPERDESC
+Audio test: the music follows the vessel in focus - on the ground, its
+breakup (silence), in orbit, closing in on another, far out, falling into
+the air (Script/Tests/AudioMusic).
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Tests/AudioMusic
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship GROUND
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET GROUND
+  MODE Extern
+  POS 4.0 0 30
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+GROUND:DeltaGlider
+  STATUS Landed Earth
+  POS -80.6825940 28.5969240
+  HEADING 330.01
+END
+ORBIT:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 6671000.0 0.00000 28.5 0.0 0.0 120.0 51982.6685767396
+END
+TARGET:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 6771000.0 0.00000 28.5 0.0 0.0 0.0 51982.6685767396
+END
+CHASER:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 6770900.0 0.00000 28.5 0.0 0.0 -0.008 51982.6685767396
+END
+DEEP:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 500000000.0 0.00000 28.5 0.0 0.0 200.0 51982.6685767396
+END
+REENTRY:DeltaGlider
+  STATUS Orbiting Earth
+  RPOS 6421000 0 0
+  RVEL -200 0 3000
+END
+END_SHIPS

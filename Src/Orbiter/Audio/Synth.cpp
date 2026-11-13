@@ -18,7 +18,12 @@ SynthSource::SynthSource () = default;
 
 SynthSource::~SynthSource ()
 {
-	if (impl && impl->init) ma_node_uninit (&impl->base, NULL);
+	Release ();
+}
+
+void SynthSource::Release ()
+{
+	if (impl && impl->init) ma_node_uninit (&impl->base, NULL), impl->init = false;
 }
 
 bool SynthSource::Init (Engine &e)
@@ -34,7 +39,7 @@ bool SynthSource::Init (Engine &e)
 	};
 	impl->vtable.inputBusCount = 0;
 	impl->vtable.outputBusCount = 1;
-	ma_uint32 outCh[1] = { 1 };
+	ma_uint32 outCh[1] = { channels };
 	ma_node_config cfg = ma_node_config_init ();
 	cfg.vtable = &impl->vtable;
 	cfg.pOutputChannels = outCh;

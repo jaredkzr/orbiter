@@ -706,6 +706,7 @@ void SettingsUI::PageAudio ()
 	changed |= ComboRow ("Dynamic range", "How much the huge range between a quiet cabin and a launch pad is squeezed. Off: the true levels - a quiet cabin barely audible, a launch overwhelming. Light, Medium: quiet scenes raised as your hearing would adapt, loud ones held. Strong: everything brought close together (at night, at a low volume).",
 		&s.Compression, compression, 4);
 	changed |= ToggleRow ("Voice callouts", "The flight called out: altitudes and Mach numbers, liftoff, touchdown, Max Q, docking distances, warnings.", &s.bCallouts);
+	changed |= ToggleRow ("Music", "Ambient music, made as it plays, following the flight: the launch, orbit, deep space, an approach. Not a sound of the world: it goes quiet at critical moments.", &s.bMusic);
 
 	Section ("Mix");
 	static const char *help[audio::NBUS][2] = {

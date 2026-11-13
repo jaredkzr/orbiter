@@ -161,6 +161,17 @@ int Interpreter::audio_callouts (lua_State *L)
 }
 
 /***
+The music's mood now (it follows the vessel in focus).
+@function music
+@treturn string "silent", "menu", "ground", "ascent", "orbit", "deep", "approach" or "reentry"
+*/
+int Interpreter::audio_music (lua_State *L)
+{
+	lua_pushstring (L, oapiAudioMusic ());
+	return 1;
+}
+
+/***
 A lightning flash in a planet's air: its thunder, heard as its sound arrives.
 @function lightning
 @param planet handle
@@ -196,6 +207,7 @@ void Interpreter::LoadAudioAPI ()
 		{"animation", audio_animation},
 		{"tune", audio_tune},
 		{"callouts", audio_callouts},
+		{"music", audio_music},
 		{"lightning", audio_lightning},
 		{NULL, NULL}
 	};

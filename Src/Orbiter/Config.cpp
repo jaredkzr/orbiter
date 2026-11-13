@@ -255,9 +255,10 @@ CFG_CAMERAPRM CfgCameraPrm_default = {
 CFG_SOUNDPRM CfgSoundPrm_default = {
 	true,       // bEnabled (sound on)
 	true,       // bCallouts (the voice's callouts)
+	true,       // bMusic (the generative music)
 	2,          // Compression (medium)
 	0.8f,       // Master volume
-	{ 1.0f, 1.0f, 0.9f, 0.7f, 0.6f, 0.7f }, // Bus volumes: outside, cockpit, voice, radio, music, interface
+	{ 1.0f, 1.0f, 0.9f, 0.7f, 0.8f, 0.7f }, // Bus volumes: outside, cockpit, voice, radio, music, interface
 	0           // Realism (physical)
 };
 
@@ -742,6 +743,7 @@ bool Config::Load(const char *fname)
 	// sound parameters
 	GetBool (ifs, "Sound", CfgSoundPrm.bEnabled);
 	GetBool (ifs, "SoundCallouts", CfgSoundPrm.bCallouts);
+	GetBool (ifs, "SoundMusicOn", CfgSoundPrm.bMusic);
 	if (GetInt (ifs, "SoundCompression", i) && i >= 0 && i <= 3) CfgSoundPrm.Compression = i;
 	if (GetReal (ifs, "SoundVolume", d)) CfgSoundPrm.Master = (float)std::clamp (d, 0.0, 1.0);
 	{
@@ -1290,6 +1292,8 @@ BOOL Config::Write (const char *fname) const
 			ofs << "Sound = " << BoolStr (CfgSoundPrm.bEnabled) << '\n';
 		if (CfgSoundPrm.bCallouts != CfgSoundPrm_default.bCallouts || bEchoAll)
 			ofs << "SoundCallouts = " << BoolStr (CfgSoundPrm.bCallouts) << '\n';
+		if (CfgSoundPrm.bMusic != CfgSoundPrm_default.bMusic || bEchoAll)
+			ofs << "SoundMusicOn = " << BoolStr (CfgSoundPrm.bMusic) << '\n';
 		if (CfgSoundPrm.Compression != CfgSoundPrm_default.Compression || bEchoAll)
 			ofs << "SoundCompression = " << CfgSoundPrm.Compression << '\n';
 		if (CfgSoundPrm.Master != CfgSoundPrm_default.Master || bEchoAll)

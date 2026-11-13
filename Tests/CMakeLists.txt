@@ -199,6 +199,8 @@ add_executable(Audio.Synth Audio.Synth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/ThunderSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/CreakSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/AmbienceSynth.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/MusicSynth.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/WavWriter.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Miniaudio.cpp)
 target_compile_definitions(Audio.Synth PRIVATE AUDIO_SYNTH_TEST)
 target_include_directories(Audio.Synth PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter ${CMAKE_SOURCE_DIR}/Extern/miniaudio)
@@ -529,6 +531,22 @@ if (ORBITER_TEST_EXE)
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.CalloutsCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioCallouts)
+		# the music follows the vessel in focus: ground, its breakup
+		# (silence), orbit, an approach, deep space, reentry
+		add_test(
+			NAME "Audio.Music"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Audio/Music.scn" "--fixedstep=0.02" "--maxframes=2000"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.Music PROPERTIES TIMEOUT 300 FIXTURES_SETUP AudioMusic PASS_REGULAR_EXPRESSION "AudioMusic: all PASS"
+			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Music.wav;ORBITER_AUDIO_MUSIC=1;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=1;ORBITER_AUDIO_CALLOUTS=0;ORBITER_AUDIO_AMBIENCE=0;ORBITER_AUDIO_RADIO=0")
+		add_test(
+			NAME "Audio.MusicCheck"
+			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.Music.wav" --no-clip --no-clicks
+				--level 18:21:all:-45:-20 --level 24:27:all:-50:-20
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.MusicCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioMusic)
 		add_test(
 			NAME "Audio.Ascent"
 			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Audio/Ascent.scn" "--fixedstep=0.02"

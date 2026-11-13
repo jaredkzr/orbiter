@@ -64,6 +64,14 @@ public:
 	/// A line spoken elsewhere (an XRSound cfg's animation callout): noted
 	void Note (const std::string &file, double simt);
 
+	/// What it follows of the vessel in focus (the music's situation): it's
+	/// flying (not on the ground, not held on a pad); climbing to orbit
+	/// (from liftoff until in orbit); the distance to its docking target
+	/// [m] (< 0: none)
+	bool Flying () const { return st.flying; }
+	bool Ascending () const { return st.ascent; }
+	double DockDistance () const { return st.prevDist; }
+
 	/// The gear's state (0 up .. 1 down; < 0: not known) of a vessel: the
 	/// animation given the gear's sound, else the one its XRSound cfg names
 	double GearState (const Vessel *v) const;

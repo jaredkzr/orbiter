@@ -223,6 +223,7 @@ bool Orbiter::RunLaunchpad (std::string &scenario)
 		gclient->clbkRenderScene ();
 		gclient->clbkImGuiRenderDrawData ();
 		gclient->clbkDisplayFrame ();
+		if (m_audio) m_audio->Idle (); // (the music)
 		// (at most 60 frames per second, e.g. without vertical sync)
 		next += std::chrono::microseconds (16667);
 		auto now = std::chrono::steady_clock::now();

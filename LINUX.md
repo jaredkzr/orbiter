@@ -215,6 +215,7 @@ These are for testing and tuning (`1` turns a feature on, `0` off).
 | `ORBITER_AUDIO_VESSELS=0` | no sounds of the vessels themselves (engines, thrusters, air): only test tones |
 | `ORBITER_AUDIO_ADAPT=1`, `ORBITER_AUDIO_ADAPT=0` | the adapting listening level on / off, whatever the settings' "Dynamic range" says (renders: off by default, the physical levels) |
 | `ORBITER_AUDIO_RADIO=0` | no radio: chatter, the ground's replies (tests) |
+| `ORBITER_AUDIO_MUSIC=1`, `ORBITER_AUDIO_MUSIC=0` | the music on / off, whatever the settings say (renders: off by default) |
 | `ORBITER_AUDIO_AMBIENCE=0` | no ambience: the cabin's air handling, the wind and the sea about the listener (tests) |
 | `ORBITER_AUDIO_CONTACTS=1` | the vessels' contact sounds (wheels, hull, docking, animations' motors): off for now while they are reworked (development, tests) |
 | `ORBITER_AUDIO_CALLOUTS=0`, `ORBITER_AUDIO_CALLOUTS=1` | the voice's callouts off / on, whatever the settings say (tests); with `ORBITER_AUDIO_LOG`, each callout on the console |

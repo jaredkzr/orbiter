@@ -1869,6 +1869,12 @@ DLLEXPORT const char *oapiAudioCallout (int n)
 	return as ? as->GetCallouts ().Recent (n) : nullptr;
 }
 
+DLLEXPORT const char *oapiAudioMusic ()
+{
+	audio::System *as = Audio ();
+	return as ? audio::music::Name (as->GetMusic ().Current ()) : "silent";
+}
+
 DLLEXPORT const ATMCONST *oapiGetPlanetAtmConstants (OBJHANDLE hPlanet)
 {
 	return ((Planet*)hPlanet)->AtmParams ();

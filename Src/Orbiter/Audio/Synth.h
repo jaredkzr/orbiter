@@ -3,9 +3,10 @@
 
 // =======================================================================
 // Sound made as it plays: a node of the audio graph without inputs and one
-// mono output, rendering block by block from parameters the simulation
-// sets (atomics). The Doppler factor scales its frequencies (and the rates
-// of its events). Building blocks: noise, filters, smoothing.
+// mono output (or more channels: the music), rendering block by block from
+// parameters the simulation sets (atomics). The Doppler factor scales its
+// frequencies (and the rates of its events). Building blocks: noise,
+// filters, smoothing.
 // =======================================================================
 
 #ifndef __AUDIOSYNTH_H
@@ -38,6 +39,12 @@ protected:
 	/// frequencies and event rates with it)
 	virtual void Render (float *out, unsigned n, float dop) = 0;
 	float rate = 48000.0f;
+	/// Its output's channels (set before Init; more than one: interleaved
+	/// frames, attached to a node of as many - the music, on its bus)
+	unsigned channels = 1;
+	/// Take the node out of the graph (waits for the audio thread to leave
+	/// it): from a derived class's destructor, before its members go
+	void Release ();
 
 private:
 	struct Impl;

@@ -4734,6 +4734,11 @@ OAPIFUNC bool oapiAudioTune (OBJHANDLE hVessel, const char *key, double value);
  */
 OAPIFUNC const char *oapiAudioCallout (int n);
 /**
+ * \brief The music's mood now (it follows the vessel in focus): "silent",
+ *   "menu", "ground", "ascent", "orbit", "deep", "approach" or "reentry".
+ */
+OAPIFUNC const char *oapiAudioMusic ();
+/**
  * \brief A lightning flash: its thunder (the channel's N-waves, heard as
  *   their sound arrives; graphics clients post their storms' flashes).
  * \param hPlanet the planet whose air it is in

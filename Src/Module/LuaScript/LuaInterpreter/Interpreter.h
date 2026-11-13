@@ -1206,6 +1206,7 @@ protected:
 	static int audio_animation (lua_State *L);
 	static int audio_tune (lua_State *L);
 	static int audio_callouts (lua_State *L);
+	static int audio_music (lua_State *L);
 	static int audio_lightning (lua_State *L);
 
 #ifdef XRSOUND

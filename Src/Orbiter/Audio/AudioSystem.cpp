@@ -335,6 +335,36 @@ bool System::CalloutsOn () const
 	return orbiter->Cfg()->CfgSoundPrm.bCallouts;
 }
 
+bool System::MusicOn () const
+{
+	static const char *env = getenv ("ORBITER_AUDIO_MUSIC"); // (0 or 1)
+	if (env && *env) return *env != '0';
+	if (Rendering ()) return false; // (the tests' renders: the world alone)
+	return orbiter->Cfg()->CfgSoundPrm.bMusic;
+}
+
+void System::Explosion (const Vessel *v, double propellant)
+{
+	effects.Explosion (v, propellant);
+	if (v && v == g_focusobj) music.Alarm ();
+}
+
+void System::Event (const Vessel *v, Callouts::Event e)
+{
+	callouts.OnEvent (v, e);
+	if (v && v == g_focusobj && (e == Callouts::EV_PART_LOST || e == Callouts::EV_HEAT_DAMAGE)) music.Alarm ();
+}
+
+void System::Idle ()
+{
+	if (!engine.Active ()) return;
+	ApplySettings (orbiter->Cfg()->CfgSoundPrm);
+	const auto now = std::chrono::steady_clock::now ();
+	const double dt = idleT.time_since_epoch ().count () ? std::min (0.25, std::chrono::duration<double> (now - idleT).count ()) : 0.0;
+	idleT = now;
+	music.Update (dt, true);
+}
+
 void System::Duck (double dt)
 {
 	// the voice speaking: the rest down 9 dB, quickly (80 ms); back slowly
@@ -402,6 +432,7 @@ void System::TestTone ()
 
 void System::Stop ()
 {
+	music.Clear ();
 	ambience.Clear ();
 	radio.Clear ();
 	for (auto &p : played) if (p.second.flat) ma_sound_uninit (p.second.flat.get ());
@@ -500,6 +531,10 @@ void System::Step ()
 			}
 		}
 	}
+
+	// the music (the launchpad's, behind it a scene of its own)
+	music.Update (td.UiDT (), orbiter->IsBackdrop ());
+	idleT = {};
 
 	if (Rendering ()) RenderStep (td.UiDT ());
 }

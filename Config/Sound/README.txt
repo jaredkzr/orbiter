@@ -59,5 +59,14 @@ a reentry's blackout, the ground calling when it is through; Quindar tones,
 a voice channel, static growing with the distance. Settings, Audio: the
 Radio volume.
 
+The music (Src/Orbiter/Audio/Music.h)
+
+Ambient, generative (made as it plays: pads, a bass, bells, a pulse
+through a reverb), following the vessel in focus: the launchpad, the
+ground, an ascent, orbit, deep space, an approach, a reentry. Silent for a
+while after a critical moment (a breakup, a part lost, heat damage). Not a
+sound of the world. Settings, Audio: "Music" (SoundMusicOn) and the Music
+volume.
+
 Dynamic range (Settings, Audio): how much the range from a quiet cabin to
 a launch pad is squeezed - Off (the true levels), Light, Medium, Strong.

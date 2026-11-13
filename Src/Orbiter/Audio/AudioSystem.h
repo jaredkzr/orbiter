@@ -33,6 +33,8 @@
 #include "Effects.h"
 #include "Ambience.h"
 #include "Radio.h"
+#include "Music.h"
+#include <chrono>
 #include <map>
 #include <vector>
 
@@ -58,6 +60,8 @@ public:
 
 	/// Once per time step, after the step: settings, fades, offline mixing
 	void Step ();
+	/// Once per frame of the launchpad without a session (the music)
+	void Idle ();
 
 	/// The sound settings were changed (the settings screen): applied at
 	/// once, and the device opened if sound was switched on
@@ -75,9 +79,9 @@ public:
 		callouts.OnEvent (v, dock ? Callouts::EV_DOCKED : Callouts::EV_UNDOCKED);
 	}
 	/// Something happened to a vessel the voice may call out
-	void Event (const Vessel *v, Callouts::Event e) { callouts.OnEvent (v, e); }
+	void Event (const Vessel *v, Callouts::Event e);
 	/// A vessel breaks up with propellant [kg] aboard: its blast
-	void Explosion (const Vessel *v, double propellant) { effects.Explosion (v, propellant); }
+	void Explosion (const Vessel *v, double propellant);
 	Effects &GetEffects () { return effects; }
 	/// The animation given the gear's sound (-1: none)
 	int GearAnim (const Vessel *v) const { return vessels.GearAnim (v); }
@@ -85,6 +89,9 @@ public:
 	Radio &GetRadio () { return radio; }
 	/// The voice's callouts are on (the settings; ORBITER_AUDIO_CALLOUTS)
 	bool CalloutsOn () const;
+	/// The music is on (the settings; a render: ORBITER_AUDIO_MUSIC=1)
+	bool MusicOn () const;
+	Music &GetMusic () { return music; }
 
 	// ---- the API (oapiAudio*, Lua's audio table) --------------------------
 	/// Play a sound file on a vessel (at pos, vessel frame: heard as any of
@@ -140,6 +147,8 @@ private:
 	Effects effects{engine, world};
 	Ambience ambience{*this};
 	Radio radio{*this};
+	Music music{*this};
+	std::chrono::steady_clock::time_point idleT;
 	void Duck (double dt);
 	WavWriter wav;
 	std::vector<float> block;

@@ -147,6 +147,8 @@ set(headless_src
 # Sound
 	Audio/Ambience.cpp
 	Audio/AmbienceSynth.cpp
+	Audio/MusicSynth.cpp
+	Audio/Music.cpp
 	Audio/AudioEngine.cpp
 	Audio/AudioSystem.cpp
 	Audio/BlastSynth.cpp
