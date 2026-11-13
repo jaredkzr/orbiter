@@ -1855,6 +1855,14 @@ DLLEXPORT bool oapiAudioTune (OBJHANDLE hVessel, const char *key, double value)
 	return as && v && key && as->Tune (v, key, value);
 }
 
+DLLEXPORT void oapiAudioLightning (OBJHANDLE hPlanet, const VECTOR3 &start, const VECTOR3 &dir, double length, double El, int strokes, double duration, unsigned seed)
+{
+	audio::System *as = Audio ();
+	const Body *b = (const Body*)hPlanet;
+	if (!as || !b || b->Type () != OBJTP_PLANET) return;
+	as->GetEffects ().Lightning ((const Planet*)b, Vector (start.x, start.y, start.z), Vector (dir.x, dir.y, dir.z), length, El, strokes, duration, seed);
+}
+
 DLLEXPORT const char *oapiAudioCallout (int n)
 {
 	audio::System *as = Audio ();

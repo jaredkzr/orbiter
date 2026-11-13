@@ -17,6 +17,7 @@
 #include "Audio/BlastSynth.h"
 #include "Audio/FireSynth.h"
 #include "Audio/SplashSynth.h"
+#include "Audio/ThunderSynth.h"
 #include "Audio/VesselSounds.h"
 #include "miniaudio.h"
 #include <cmath>
@@ -503,4 +504,33 @@ TEST_CASE ("Splash: an entry's slam and bubbles, dying away", "[audio][synth]")
 	CHECK (BandRms (first, 8000, 0, 48000) < 0.3 * Rms (first));
 	// over within seconds
 	CHECK (Rms (last) < 0.03 * Rms (first));
+}
+
+TEST_CASE ("Thunder: Few's channel model", "[audio][synth]")
+{
+	// Earth: 2e5 J/m at 1 bar - a relaxation radius of about a quarter metre
+	CHECK_THAT (ThunderSynth::RelaxationRadius (2e5, 101325.0), WithinRel (0.79, 0.02));
+	// a channel 5 km long, from 1 km above the listener, going sideways
+	const double start[3] = {-2500.0, 1000.0, 0.0}, dir[3] = {1.0, 0.0, 0.0}, L[3] = {0.0, 0.0, 0.0};
+	auto ch = ThunderSynth::Make (start, dir, 5000.0, 20.0, 7);
+	REQUIRE (ch.x.size () > 200);
+	double dmin = 0.0;
+	auto x = ThunderSynth::Render (ch, L, {0.0, 0.08, 0.2}, 2e5, 101325.0, 340.0, 48000, dmin);
+	const double dur = x.size () / 48000.0;
+	float peak = 0.0f;
+	for (float v : x) peak = std::max (peak, std::fabs (v));
+	INFO ("nearest " << dmin << " m, " << dur << " s, peak " << peak << " Pa (" << 20.0 * std::log10 (peak / 2e-5) << " dB); below 200 Hz "
+		<< Db (BandRms (x, 0, 200, 48000) / Rms (x)) << " dB, above 1 kHz " << Db (BandRms (x, 1000, 0, 48000) / Rms (x)) << " dB");
+	CHECK (dmin > 900.0);
+	CHECK (dmin < 1300.0);
+	// rolling for seconds: the far end's 2.5 km further, and more
+	CHECK (dur > 4.0);
+	CHECK (dur < 15.0);
+	// loud: thunder a kilometre off peaks at some tens of pascals (Holmes et
+	// al. 1971: 0.5-10 Pa at 1-10 km)
+	CHECK (peak > 5.0f);
+	CHECK (peak < 80.0f);
+	// low: its energy mostly below 200 Hz
+	CHECK (BandRms (x, 0, 200, 48000) > 0.6 * Rms (x));
+	CHECK (BandRms (x, 1000, 0, 48000) < 0.2 * Rms (x));
 }

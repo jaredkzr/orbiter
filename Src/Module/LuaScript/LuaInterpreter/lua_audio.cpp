@@ -160,6 +160,32 @@ int Interpreter::audio_callouts (lua_State *L)
 	return 1;
 }
 
+/***
+A lightning flash in a planet's air: its thunder, heard as its sound arrives.
+@function lightning
+@param planet handle
+@tparam vector start where its channel starts (global frame) [m]
+@tparam vector dir its way (global frame)
+@tparam number length the channel's length [m]
+@tparam[opt=2e5] number energy per metre [J/m]
+@tparam[opt=3] int strokes
+@tparam[opt=0.3] number duration of its strokes [s]
+@tparam[opt=1] int seed its channel's kinks
+*/
+int Interpreter::audio_lightning (lua_State *L)
+{
+	ASSERT_SYNTAX (lua_islightuserdata (L, 1), "Argument 1: planet handle expected");
+	OBJHANDLE h = lua_toObject (L, 1);
+	VECTOR3 start = lua_tovector (L, 2), dir = lua_tovector (L, 3);
+	ASSERT_NUMBER (L, 4);
+	double El = lua_isnumber (L, 5) ? lua_tonumber (L, 5) : 2e5;
+	int strokes = lua_isnumber (L, 6) ? (int)lua_tonumber (L, 6) : 3;
+	double dur = lua_isnumber (L, 7) ? lua_tonumber (L, 7) : 0.3;
+	unsigned seed = lua_isnumber (L, 8) ? (unsigned)lua_tonumber (L, 8) : 1u;
+	oapiAudioLightning (h, start, dir, lua_tonumber (L, 4), El, strokes, dur, seed);
+	return 0;
+}
+
 void Interpreter::LoadAudioAPI ()
 {
 	static const struct luaL_reg audioLib[] = {
@@ -170,6 +196,7 @@ void Interpreter::LoadAudioAPI ()
 		{"animation", audio_animation},
 		{"tune", audio_tune},
 		{"callouts", audio_callouts},
+		{"lightning", audio_lightning},
 		{NULL, NULL}
 	};
 	luaL_openlib (L, "audio", audioLib, 0);

@@ -4733,6 +4733,18 @@ OAPIFUNC bool oapiAudioTune (OBJHANDLE hVessel, const char *key, double value);
  * \return the file, or NULL: no such callout
  */
 OAPIFUNC const char *oapiAudioCallout (int n);
+/**
+ * \brief A lightning flash: its thunder (the channel's N-waves, heard as
+ *   their sound arrives; graphics clients post their storms' flashes).
+ * \param hPlanet the planet whose air it is in
+ * \param start where its channel starts (global frame) [m]
+ * \param dir its way (global frame)
+ * \param length the channel's length [m]
+ * \param energyPerLength [J/m] (Earth's lightning about 1e5-1e6)
+ * \param strokes its return strokes, over `duration` [s]
+ * \param seed its channel's kinks
+ */
+OAPIFUNC void oapiAudioLightning (OBJHANDLE hPlanet, const VECTOR3 &start, const VECTOR3 &dir, double length, double energyPerLength, int strokes, double duration, unsigned seed);
 /** @} */
 
 	/**

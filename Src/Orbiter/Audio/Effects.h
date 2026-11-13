@@ -8,6 +8,8 @@
 //    wave (BlastSynth), from where it broke up, heard when it arrives
 //  - fires: burning wreckage (Debris::Ignite) - the roar of its flames
 //    (FireSynth), as loud as a turbulent flame's share of its heat release
+//  - thunder: a lightning flash (oapiAudioLightning: the graphics client's
+//    storms) - its channel's N-waves (ThunderSynth, Few's model)
 //  - water: a vessel entering it (SplashSynth: the slam, the cavity's and
 //    the spray's bubbles), moving or floating in it (the wake's bubbles)
 //
@@ -22,6 +24,7 @@
 #define __AUDIOEFFECTS_H
 
 #include "World.h"
+#include "Vecmat.h"
 #include <vector>
 
 class Vessel;
@@ -32,6 +35,7 @@ namespace audio {
 class BlastSynth;
 class FireSynth;
 class SplashSynth;
+class ThunderSynth;
 
 class Effects {
 public:
@@ -40,6 +44,10 @@ public:
 
 	/// A vessel breaks up with a mass of propellant [kg] aboard
 	void Explosion (const Vessel *v, double propellant);
+	/// A lightning flash in a planet's air: its channel from `start` along
+	/// `dir` (global frame), `length` [m], its energy per length [J/m], its
+	/// strokes over `duration` [s]
+	void Lightning (const Planet *pl, const Vector &start, const Vector &dir, double length, double El, int strokes, double duration, uint32_t seed);
 
 	/// Each step (t: the simulation's time)
 	void Update (double t);
@@ -74,6 +82,8 @@ private:
 		double vDown = 0.0, vAlong = 0.0; // (the step before)
 	};
 	std::vector<Water> waters;
+	struct Thunder { const Planet *planet = nullptr; Emitter *em = nullptr; ThunderSynth *synth = nullptr; double t0 = 0.0; bool fired = false; };
+	std::vector<Thunder> thunders;
 	void UpdateWater (double t);
 	uint32_t seed = 101;
 };

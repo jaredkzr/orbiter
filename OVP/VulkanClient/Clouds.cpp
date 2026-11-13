@@ -724,6 +724,8 @@ void VolumetricClouds::RenderGasGiant (const GasGiantFrame &f)
 	// strokes, somewhere in the tower's column between its base (the water
 	// deck) and 20 km below the 1-bar level
 	flashes.clear ();
+	// (the flashes heard: forgotten when long over)
+	for (auto it = heardFlashes.begin (); it != heardFlashes.end (); ) it = f.time - it->second > 5.0 || it->second > f.time + 1.0 ? heardFlashes.erase (it) : std::next (it);
 	{
 		const double SLOT = 0.1, MAXDUR = 0.6;
 		double t = f.time;
@@ -758,6 +760,19 @@ void VolumetricClouds::RenderGasGiant (const GasGiantFrame &f)
 				double rt = g.tower[i][3], a = PI2 * Unit16 (h2 >> 16), rr = 0.5 * rt * Unit16 (h3);
 				VECTOR3 pl = c * (R + alt) + e * (lean + rr * cos (a)) + n * (rr * sin (a));
 				VECTOR3 out = unit (e * cos (a) + n * sin (a));
+				// its thunder (the core's sound: the channel's N-waves, heard as
+				// they arrive), posted once per flash, within 100 km: its channel
+				// 10-25 km from the tower's flank out into the clear air, some 10x
+				// Earth lightning's energy per metre (Juno, Galileo: Jupiter's
+				// flashes are the stronger)
+				const uint64_t key = ((uint64_t)id << 32) | (uint32_t)k;
+				if (!heardFlashes.count (key) && length (pl - f.camPlanet) < 100e3) {
+					heardFlashes[key] = t;
+					VECTOR3 flank = c * (R + alt) + e * lean + out * (0.9 * rt);
+					VECTOR3 way = unit (out + c * (0.6 * (Unit16 (h3 >> 8) - 0.5)));
+					VECTOR3 gs = pp + mul (prot, flank), gd = mul (prot, way);
+					oapiAudioLightning (f.hPlanet, gs, gd, 10e3 + 15e3 * Unit16 (h3 >> 4), 1e6, ns, dur, h3);
+				}
 				lit.push_back ({ pl, b * (0.5 + 0.5 * Unit16 (h3 >> 16)), Pcg (h3 ^ 0x5bd1e995u), c, out, unit (n * cos (a) - e * sin (a)),
 					c * (R + alt) + e * lean + out * (0.9 * rt) }); // (the tower's flank, out from the flash)
 			}

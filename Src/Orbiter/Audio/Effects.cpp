@@ -5,6 +5,7 @@
 #include "BlastSynth.h"
 #include "FireSynth.h"
 #include "SplashSynth.h"
+#include "ThunderSynth.h"
 #include "VesselSounds.h"
 #include "Debris.h"
 #include "Psys.h"
@@ -80,9 +81,78 @@ void Effects::Explosion (const Vessel *v, double propellant)
 	blasts.push_back (b);
 }
 
+void Effects::Lightning (const Planet *pl, const Vector &start, const Vector &dir, double length, double El, int strokes, double duration, uint32_t seed)
+{
+	if (!pl || !engine.Active () || !g_camera) return;
+	// (everything in the planet's frame: it turns while the sound comes)
+	const Vector s = tmul (pl->GRot (), start - pl->GPos ()), d = tmul (pl->GRot (), dir);
+	const Vector L = tmul (pl->GRot (), g_camera->GPos () - pl->GPos ());
+	const double gs[3] = {start.x, start.y, start.z};
+	const Air a = World::AirAt (pl, gs);
+	const bool cinematic = world.GetRealism () != PHYSICAL;
+	if (!a.Present () && !cinematic) return;
+	const double ps[3] = {s.x, s.y, s.z}, pd[3] = {d.x, d.y, d.z}, pL[3] = {L.x, L.y, L.z};
+	// (segments of 20 m near, longer far off: the detail a distant listener
+	// can't tell apart costs time)
+	const double seg = std::clamp ((s - L).length () / 500.0, 20.0, 100.0);
+	ThunderSynth::Channel ch = ThunderSynth::Make (ps, pd, length, seg, seed);
+	std::vector<double> st;
+	for (int k = 0; k < std::max (strokes, 1); k++) st.push_back (duration * k / std::max (strokes, 1));
+	double dmin = 0.0;
+	const double p = cinematic ? std::max (a.p, CINEMATIC_RHO * SEA_P) : a.p;
+	std::vector<float> buf = ThunderSynth::Render (ch, pL, st, El, p, a.c > 0.0 ? a.c : SEA_C, engine.SampleRate (), dmin);
+	// the emitter at the channel's nearest point (its first sound): the buffer
+	// is the pressure there already (spreading 1 at refDist = its distance;
+	// the world's coupling at the source divided out)
+	size_t inear = 0;
+	double best = 1e30;
+	for (size_t i = 0; i < ch.x.size (); i++) {
+		double dd = std::hypot (ch.x[i] - L.x, ch.y[i] - L.y, ch.z[i] - L.z);
+		if (dd < best) best = dd, inear = i;
+	}
+	Thunder th;
+	th.planet = pl;
+	th.t0 = td.SimT1;
+	EmitterDesc ed;
+	ed.body = pl;
+	ed.offset = V3 (ch.x[inear], ch.y[inear], ch.z[inear]);
+	ed.refDist = (float)std::max (1.0, best);
+	ed.level = (float)(1.0 / P_FULL / std::max (Coupling (Effective (a, world.GetRealism ())), 1e-6));
+	ed.name = "thunder";
+	const size_t nbuf = buf.size ();
+	auto syn = ThunderSynth::Make (engine, std::move (buf));
+	if (!syn) return;
+	th.synth = syn.get ();
+	th.em = world.Add (ed, std::move (syn));
+	if (!th.em) return;
+	Emitter::Params pr{};
+	th.em->Push (th.t0 - 1e-3, pr);
+	pr[0] = 1.0f;
+	th.em->Push (th.t0, pr);
+	LOGOUT ("Audio: lightning %.0f m long, %.2g J/m, %d strokes; thunder from %.0f m, %.1f s long (air %.0f Pa, c %.0f m/s)",
+		length, El, strokes, best, nbuf / (double)engine.SampleRate (), p, a.c);
+	thunders.push_back (th);
+}
+
 void Effects::Update (double t)
 {
 	if (!g_camera) return;
+	for (auto it = thunders.begin (); it != thunders.end (); ) {
+		Thunder &th = *it;
+		if (!th.fired) {
+			Emitter::Params pr{};
+			pr[0] = 1.0f;
+			th.em->Push (t, pr);
+			if (th.em->Heard ().images > 0 && th.em->Recalled ()[0] > 0.5f) {
+				th.synth->Fire ();
+				th.fired = true;
+				static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+				if (log) printf ("Audio: thunder heard at %.3f s\n", t), fflush (stdout);
+			}
+		}
+		if ((th.fired && th.synth->Done ()) || t - th.t0 > BLAST_MAX_AGE || t < th.t0 - 1.0) { world.Remove (th.em); it = thunders.erase (it); }
+		else ++it;
+	}
 	UpdateFires (t);
 	UpdateWater (t);
 	const Vector &cam = g_camera->GPos ();
@@ -263,6 +333,10 @@ void Effects::UpdateWater (double t)
 
 void Effects::Forget (const Body *body)
 {
+	for (auto it = thunders.begin (); it != thunders.end (); ) {
+		if (it->planet == body) { world.Remove (it->em); it = thunders.erase (it); }
+		else ++it;
+	}
 	for (auto it = waters.begin (); it != waters.end (); ) {
 		if ((const Body*)it->v == body) { world.Remove (it->em); it = waters.erase (it); }
 		else ++it;
@@ -285,6 +359,8 @@ void Effects::Clear ()
 	fires.clear ();
 	for (auto &w : waters) world.Remove (w.em);
 	waters.clear ();
+	for (auto &th : thunders) world.Remove (th.em);
+	thunders.clear ();
 }
 
 } // namespace audio

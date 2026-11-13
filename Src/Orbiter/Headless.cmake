@@ -161,6 +161,7 @@ set(headless_src
 	Audio/SplashSynth.cpp
 	Audio/RocketSynth.cpp
 	Audio/Synth.cpp
+	Audio/ThunderSynth.cpp
 	Audio/Track.cpp
 	Audio/VesselSounds.cpp
 	Audio/WavWriter.cpp

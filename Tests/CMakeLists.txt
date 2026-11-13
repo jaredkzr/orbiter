@@ -196,6 +196,7 @@ add_executable(Audio.Synth Audio.Synth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/BlastSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/FireSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/SplashSynth.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/ThunderSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Miniaudio.cpp)
 target_compile_definitions(Audio.Synth PRIVATE AUDIO_SYNTH_TEST)
 target_include_directories(Audio.Synth PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter ${CMAKE_SOURCE_DIR}/Extern/miniaudio)
@@ -474,6 +475,23 @@ if (ORBITER_TEST_EXE)
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.SplashCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioSplash)
+		# thunder (Effects, ThunderSynth; Lua audio.lightning): a channel 2.8 km
+		# off at its nearest - silent until its first sound arrives (8.3 s),
+		# then rolling, low
+		add_test(
+			NAME "Audio.Thunder"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Audio/Thunder.scn" "--fixedstep=0.02" "--maxframes=1200"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.Thunder PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioThunder PASS_REGULAR_EXPRESSION "Audio: thunder heard at 9\\.[2-4]"
+			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Thunder.wav;ORBITER_AUDIO_LOG=1;ORBITER_AUDIO_CALLOUTS=0")
+		add_test(
+			NAME "Audio.ThunderCheck"
+			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.Thunder.wav" --duration 20.0 --no-clip
+				--level 0.5:9.0:all:-inf:-60 --level 9.2:12:all:-50:0 --level 9.2:14:high:-inf:-60
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.ThunderCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioThunder)
 		# the voice's callouts (a takeoff, a descent with the gear up, Mach 1)
 		# and XRSound's API on Orbiter's sound (Lua's xrsound)
 		add_test(

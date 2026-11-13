@@ -16,6 +16,7 @@
 #include "VkMath.h"
 #include <algorithm>
 #include <vector>
+#include <map>
 
 class PlanetSurface;
 class TextureManager;
@@ -154,6 +155,7 @@ private:
 	bool earthHistValid = false;
 	int earthStill = 0;
 	std::vector<Flash> flashes;
+	std::map<uint64_t, double> heardFlashes; // (flashes posted for their thunder: by tower and slot, when)
 	float ggOpacity = 1.0f;
 	vkc::Buffer ggBuf;                  // their parameters, one slot per frame in flight
 	bool active = false; // rendered this frame
