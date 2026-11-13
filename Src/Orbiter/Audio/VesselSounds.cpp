@@ -34,7 +34,8 @@ namespace {
 	/// the source's reference distance (a DG's main engines: about 115 dB)
 	constexpr double HULL_ENGINE = 0.01, HULL_RCS = 0.02;
 	/// The air over the hull: radiated p(r0) = WIND_RAD q (U / 300 m/s);
-	/// on the hull (in the cockpit) WIND_WALL q, through it WIND_TRANS of that
+	/// on the hull (in the cockpit) WIND_WALL q, through it WIND_TRANS of that;
+	/// both times Lowson's 1 / (1 + 0.14 M^2) (quieter at high Mach)
 	constexpr double WIND_RAD = 0.0004, WIND_WALL = 0.004, WIND_TRANS = 0.018;
 	/// Exhaust ahead of a rocket: this much (-20 dB)
 	constexpr float ROCKET_FRONT = 0.1f;
@@ -311,16 +312,21 @@ void VesselSounds::UpdateVessel (PerVessel &pv)
 				M = a.c > 0.0 ? U / a.c : 0.0;
 			}
 		}
-		pv.wind->Push (t, {(float)U, WindSynth::BuffetFor (vi->GetAOA (), M), (float)q, 0.0f});
+		pv.wind->Push (t, {(float)U, WindSynth::BuffetFor (vi->GetAOA (), M), (float)q, (float)M});
 		Emitter::Params h = pv.wind->Recalled ();
 		WindSynth::Params wp;
 		wp.speed = h[0];
 		wp.buffet = h[1];
 		pv.windSynth->Set (wp);
 		double qh = h[2], Uh = h[0];
-		double p0 = WIND_RAD * qh * (Uh / 300.0);
+		// (the turbulent boundary layer's pressure fluctuations fall off at
+		// high Mach: Lowson's p_rms / q = 0.006 / (1 + 0.14 M^2) for an attached
+		// layer - at Mach 20, a 57th of the subsonic: a reentry's first part is
+		// quiet in the cabin, its loud part lower and slower)
+		const double lowson = 1.0 / (1.0 + 0.14 * (double)h[3] * (double)h[3]);
+		double p0 = WIND_RAD * qh * (Uh / 300.0) * lowson;
 		pv.wind->SetLevel ((float)(tune.airLevel * p0 / P_FULL / WIND_RMS));
-		double cabin = WIND_WALL * qh * WIND_TRANS;
+		double cabin = WIND_WALL * qh * lowson * WIND_TRANS;
 		pv.wind->SetHull (p0 > 1e-9 ? (float)(cabin / p0) : 0.0f);
 	}
 	if (pv.contact) UpdateContacts (pv, t);
