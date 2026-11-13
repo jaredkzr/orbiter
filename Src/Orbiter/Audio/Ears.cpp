@@ -12,6 +12,8 @@ namespace audio {
 namespace {
 	/// The peak limiter's look-ahead [samples]: 2 ms at 48 kHz
 	constexpr int LOOK = 96;
+	/// The listening level's recovery: its scene level falling back [dB/s]
+	constexpr float ADAPT_FALL = 4.0f;
 }
 
 struct Ears::Impl {
@@ -21,7 +23,9 @@ struct Ears::Impl {
 	float rate = 48000.0f;
 	float env = 0.0f;       // detector: mean square
 	float gainDb = 0.0f;    // the smoothed gain
-	std::atomic<float> reduction{0.0f};
+	std::atomic<float> reduction{0.0f}, adaptGain{0.0f};
+	std::atomic<bool> adaptOn{false};
+	float msFast = 0.0f, held = -200.0f, adaptDb = 0.0f;
 	bool init = false;
 	// the peak limiter: the gain each sample needs (its window's minimum over
 	// the look-ahead), averaged over the look-ahead (so the gain is down,
@@ -50,6 +54,8 @@ bool Ears::Init (ma_engine *engine, const Settings &s)
 	Uninit ();
 	impl = std::make_unique<Impl>();
 	impl->set = s;
+	impl->adaptOn.store (s.adapt);
+	impl->adaptDb = s.adapt ? s.adaptMax : 0.0f; // (starting adapted to quiet)
 	impl->rate = (float)ma_engine_get_sample_rate (engine);
 	impl->vtable = {};
 	impl->vtable.onProcess = [](ma_node *node, const float **in, ma_uint32 *nIn, float **out, ma_uint32 *nOut) {
@@ -63,12 +69,29 @@ bool Ears::Init (ma_engine *engine, const Settings &s)
 		const float kEnv = 1.0f - std::exp (-1.0f / (0.05f * m->rate));
 		const float kAtt = 1.0f - std::exp (-1.0f / (s.attack * m->rate));
 		const float kRel = 1.0f - std::exp (-1.0f / (s.release * m->rate));
+		const float kFast = 1.0f - std::exp (-1.0f / (0.1f * m->rate)), fall = ADAPT_FALL / m->rate;
+		const float kDown = 1.0f - std::exp (-1.0f / (s.adaptDown * m->rate)), kUp = 1.0f - std::exp (-1.0f / (s.adaptUp * m->rate));
+		const bool adaptOn = m->adaptOn.load (std::memory_order_relaxed);
 		// the limiter recovers in 60 ms; a last soft clip only above 95 % of the ceiling
 		const float kLimRel = 1.0f - std::exp (-1.0f / (0.06f * m->rate));
 		const float knee = 0.95f * s.ceiling, span = s.ceiling - knee;
 		float env = m->env, g = m->gainDb;
 		for (unsigned i = 0; i < n; i++) {
 			float l = x[2*i], r = x[2*i+1];
+			if (adaptOn) {
+				// the scene's level: its mean square over 0.1 s, held - rising
+				// with it at once, falling back at ADAPT_FALL dB/s (the ears
+				// recovering: after something loud, seconds as it was loud); the
+				// gain to bring it to the target, smoothed
+				const float m0 = 0.5f * (l * l + r * r);
+				m->msFast += kFast * (m0 - m->msFast);
+				const float lev = 10.0f * std::log10 (m->msFast + 1e-20f);
+				m->held = std::max (lev, m->held - fall);
+				const float want = std::clamp (s.adaptTarget - m->held, 0.0f, s.adaptMax);
+				m->adaptDb += (want < m->adaptDb ? kDown : kUp) * (want - m->adaptDb);
+				const float a = std::pow (10.0f, m->adaptDb * 0.05f);
+				l *= a, r *= a;
+			}
 			float ms = 0.5f * (l * l + r * r);
 			env += kEnv * (ms - env);
 			// (an RMS level of a sine: +3 dB for its peak)
@@ -108,6 +131,7 @@ bool Ears::Init (ma_engine *engine, const Settings &s)
 		if ((m->pos & 63) == 0) { float sum = 0.0f; for (int j = 0; j < LOOK; j++) sum += m->mins[j]; m->minSum = sum; }
 		m->env = env, m->gainDb = g;
 		m->reduction.store (g, std::memory_order_relaxed);
+		m->adaptGain.store (adaptOn ? m->adaptDb : 0.0f, std::memory_order_relaxed);
 	};
 	impl->vtable.inputBusCount = 1;
 	impl->vtable.outputBusCount = 1;
@@ -135,6 +159,16 @@ void Ears::Uninit ()
 void *Ears::Node ()
 {
 	return impl && impl->init ? &impl->base : nullptr;
+}
+
+float Ears::AdaptGain () const
+{
+	return impl ? impl->adaptGain.load (std::memory_order_relaxed) : 0.0f;
+}
+
+void Ears::SetAdapt (bool on)
+{
+	if (impl) impl->adaptOn.store (on, std::memory_order_relaxed);
 }
 
 float Ears::Reduction () const

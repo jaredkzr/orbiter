@@ -278,6 +278,7 @@ struct CFG_CAMERAPRM {
 struct CFG_SOUNDPRM {           // sound (Src/Orbiter/Audio)
 	bool   bEnabled;            // sound on
 	bool   bCallouts;           // the voice's callouts (Audio/Callouts.h)
+	bool   bAdapt;              // an adapting listening level (Audio/Ears.h): quiet scenes raised
 	float  Master;              // master volume (0-1, as on the slider)
 	float  Bus[6];              // volumes of the buses (audio::Bus): outside, cockpit, voice, radio, music, interface
 	int    Realism;             // 0: physical (no sound through vacuum), 1: cinematic (sound everywhere)

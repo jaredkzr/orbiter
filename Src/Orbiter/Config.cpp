@@ -255,6 +255,7 @@ CFG_CAMERAPRM CfgCameraPrm_default = {
 CFG_SOUNDPRM CfgSoundPrm_default = {
 	true,       // bEnabled (sound on)
 	true,       // bCallouts (the voice's callouts)
+	true,       // bAdapt (an adapting listening level)
 	0.8f,       // Master volume
 	{ 1.0f, 1.0f, 0.9f, 0.7f, 0.6f, 0.7f }, // Bus volumes: outside, cockpit, voice, radio, music, interface
 	0           // Realism (physical)
@@ -741,6 +742,7 @@ bool Config::Load(const char *fname)
 	// sound parameters
 	GetBool (ifs, "Sound", CfgSoundPrm.bEnabled);
 	GetBool (ifs, "SoundCallouts", CfgSoundPrm.bCallouts);
+	GetBool (ifs, "SoundAdapt", CfgSoundPrm.bAdapt);
 	if (GetReal (ifs, "SoundVolume", d)) CfgSoundPrm.Master = (float)std::clamp (d, 0.0, 1.0);
 	{
 		static const char *busKey[6] = { "SoundOutside", "SoundCockpit", "SoundVoice", "SoundRadio", "SoundMusic", "SoundInterface" };
@@ -1288,6 +1290,8 @@ BOOL Config::Write (const char *fname) const
 			ofs << "Sound = " << BoolStr (CfgSoundPrm.bEnabled) << '\n';
 		if (CfgSoundPrm.bCallouts != CfgSoundPrm_default.bCallouts || bEchoAll)
 			ofs << "SoundCallouts = " << BoolStr (CfgSoundPrm.bCallouts) << '\n';
+		if (CfgSoundPrm.bAdapt != CfgSoundPrm_default.bAdapt || bEchoAll)
+			ofs << "SoundAdapt = " << BoolStr (CfgSoundPrm.bAdapt) << '\n';
 		if (CfgSoundPrm.Master != CfgSoundPrm_default.Master || bEchoAll)
 			ofs << "SoundVolume = " << CfgSoundPrm.Master << '\n';
 		static const char *busKey[6] = { "SoundOutside", "SoundCockpit", "SoundVoice", "SoundRadio", "SoundMusic", "SoundInterface" };

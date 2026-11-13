@@ -9,6 +9,13 @@
 // a while), and a peak limiter that looks 2 ms ahead (the gain comes down
 // smoothly before a peak, no clipping). Physical levels come in scaled so
 // that P_FULL [Pa] is full scale.
+//
+// Before all that, the listening level (adapt): ears adapt to where they
+// are - a quiet cabin heard as clearly as a busy pad - and so does the mix
+// (as games' "HDR audio" does): a slow gain raises a quiet scene towards a
+// comfortable level (up to adaptMax), comes down within a fraction of a
+// second when something loud starts (which still strikes through the
+// compressor at full force), and recovers over seconds after it.
 // =======================================================================
 
 #ifndef __AUDIOEARS_H
@@ -29,6 +36,11 @@ struct EarSettings {
 	float attack = 0.02f;     // [s]
 	float release = 1.5f;     // [s]
 	float ceiling = 0.9f;     // peaks softly limited to this
+	bool adapt = false;       // the listening level (off: physical levels, P_FULL full scale)
+	float adaptTarget = -28.0f; // [dBFS] the scene's level it raises a quiet one to
+	float adaptMax = 45.0f;   // [dB] the most it raises
+	float adaptDown = 0.15f;  // [s] coming down (something loud)
+	float adaptUp = 2.0f;     // [s] going up again (as the scene's level, held, falls back: 4 dB/s)
 };
 
 class Ears {
@@ -43,6 +55,9 @@ public:
 	void *Node ();
 	/// The gain reduction now [dB] (<= 0)
 	float Reduction () const;
+	/// The listening level's gain now [dB] (>= 0)
+	float AdaptGain () const;
+	void SetAdapt (bool on);
 
 	/// The gain computer's curve (tests): the gain [dB] for a level [dB]
 	static float GainDb (float levelDb, const Settings &s);

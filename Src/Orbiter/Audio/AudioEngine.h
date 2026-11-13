@@ -50,6 +50,7 @@ public:
 		unsigned sampleRate = 48000;
 		unsigned channels = 2;
 		bool ears = true;   ///< the outside and cockpit buses heard through the ears (Ears.h)
+		bool adapt = false; ///< ... at an adapting listening level (Ears.h)
 	};
 
 	Engine ();
@@ -98,6 +99,9 @@ public:
 
 	/// The ears' gain reduction now [dB] (0: none, or no ears)
 	float EarsReduction () const;
+	/// The listening level's gain now [dB]; on or off
+	float EarsAdapt () const;
+	void SetAdapt (bool on);
 
 private:
 	struct Impl;

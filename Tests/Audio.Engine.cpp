@@ -232,3 +232,37 @@ TEST_CASE ("Ears: the limiter holds peaks without distorting", "[audio]")
 	CHECK (a3 < a1 * 0.01);
 	CHECK (a2 < a1 * 0.01);
 }
+
+TEST_CASE ("Ears: the listening level raises a quiet scene, ducks for a loud one, recovers slowly", "[audio]")
+{
+	Engine::Options o = Offline (true);
+	o.adapt = true;
+	Engine e;
+	REQUIRE (e.Init (o));
+	// a quiet scene: a cabin's 56 dB, -74 dBFS - raised the most (45 dB)
+	{
+		Tone quiet (e, EXTERIOR, 220.0, 2.8e-4);
+		RenderRms (e, 4.0);
+		const double rms = RenderRms (e, 1.0);
+		INFO ("quiet: " << 20.0 * std::log10 (rms) << " dBFS out, gain " << e.EarsAdapt () << " dB");
+		CHECK (e.EarsAdapt () > 40.0f);
+		CHECK (20.0 * std::log10 (rms) > -40.0);
+		// something loud starts (-10 dBFS before the gain): down within a
+		// fraction of a second
+		{
+			Tone loud (e, EXTERIOR, 110.0, 0.3);
+			RenderRms (e, 0.3);
+			INFO ("loud: gain " << e.EarsAdapt () << " dB");
+			CHECK (e.EarsAdapt () < 10.0f);
+			RenderRms (e, 2.0);
+		}
+		// quiet again: recovering over seconds, not at once
+		RenderRms (e, 1.0);
+		const float g1 = e.EarsAdapt ();
+		RenderRms (e, 20.0);
+		const float g2 = e.EarsAdapt ();
+		INFO ("recovering: " << g1 << " dB after 1 s, " << g2 << " dB after 21 s");
+		CHECK (g1 < 30.0f);
+		CHECK (g2 > 40.0f);
+	}
+}

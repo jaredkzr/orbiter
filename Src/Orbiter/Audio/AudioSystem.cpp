@@ -51,6 +51,10 @@ void System::Start (bool graphicsClient)
 	const CFG_SOUNDPRM &s = orbiter->Cfg()->CfgSoundPrm;
 
 	Engine::Options opt;
+	// the listening level (Ears.h): on for the speakers; in a render (the
+	// tests' physical levels) only if ORBITER_AUDIO_ADAPT=1 (listening reels)
+	const char *adapt = getenv ("ORBITER_AUDIO_ADAPT");
+	opt.adapt = adapt && *adapt ? *adapt != '0' : !(render && *render);
 	if (render && *render) {
 		opt.mode = Engine::OFFLINE; // (renders regardless of the settings: tests)
 	} else if (force && *force) {
@@ -418,6 +422,8 @@ void System::ApplySettings (const CFG_SOUNDPRM &s)
 	}
 	engine.SetMasterGain (s.bEnabled ? VolumeToGain (s.Master) : 0.0f);
 	for (int b = 0; b < NBUS; b++) engine.SetBusGain ((Bus)b, VolumeToGain (s.Bus[b]));
+	static const char *adaptEnv = getenv ("ORBITER_AUDIO_ADAPT");
+	engine.SetAdapt (adaptEnv && *adaptEnv ? *adaptEnv != '0' : s.bAdapt);
 }
 
 void System::SettingsChanged ()
@@ -426,6 +432,7 @@ void System::SettingsChanged ()
 	if (!engine.Active () && s.bEnabled && client && !forcedOff) {
 		Engine::Options opt;
 		opt.mode = Engine::DEVICE;
+		opt.adapt = true;
 		if (engine.Init (opt))
 			LOGOUT ("Audio: %s (%u Hz, %u channels)", engine.DeviceName().empty() ? "default device" : engine.DeviceName().c_str(),
 				engine.SampleRate(), engine.Channels());
