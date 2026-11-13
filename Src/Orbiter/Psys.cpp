@@ -196,6 +196,7 @@ void PlanetarySystem::DelDebris (Debris *d)
 	extern Orbiter *g_pOrbiter;
 	collider.Forget (d);
 	if (Replay *rp = g_pOrbiter->GetReplay()) rp->Forget (d);
+	if (g_pOrbiter->Audio ()) g_pOrbiter->Audio ()->Forget (d); // (its sounds: a fire)
 	if (g_camera && g_camera->Target() == d) g_pOrbiter->SetView (g_focusobj, 1);
 	delete d;
 }

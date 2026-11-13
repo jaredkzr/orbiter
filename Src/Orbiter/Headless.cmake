@@ -147,10 +147,13 @@ set(headless_src
 # Sound
 	Audio/AudioEngine.cpp
 	Audio/AudioSystem.cpp
+	Audio/BlastSynth.cpp
 	Audio/BoomSynth.cpp
 	Audio/Callouts.cpp
 	Audio/ContactSynth.cpp
 	Audio/Ears.cpp
+	Audio/Effects.cpp
+	Audio/FireSynth.cpp
 	Audio/Medium.cpp
 	Audio/Miniaudio.cpp
 	Audio/PathNode.cpp

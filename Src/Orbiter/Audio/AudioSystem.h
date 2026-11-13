@@ -30,6 +30,7 @@
 #include "World.h"
 #include "VesselSounds.h"
 #include "Callouts.h"
+#include "Effects.h"
 #include <map>
 #include <vector>
 
@@ -73,6 +74,9 @@ public:
 	}
 	/// Something happened to a vessel the voice may call out
 	void Event (const Vessel *v, Callouts::Event e) { callouts.OnEvent (v, e); }
+	/// A vessel breaks up with propellant [kg] aboard: its blast
+	void Explosion (const Vessel *v, double propellant) { effects.Explosion (v, propellant); }
+	Effects &GetEffects () { return effects; }
 	/// The animation given the gear's sound (-1: none)
 	int GearAnim (const Vessel *v) const { return vessels.GearAnim (v); }
 	Callouts &GetCallouts () { return callouts; }
@@ -130,6 +134,7 @@ private:
 	World world{engine};
 	VesselSounds vessels{engine, world};
 	Callouts callouts{*this};
+	Effects effects{engine, world};
 	void Duck (double dt);
 	WavWriter wav;
 	std::vector<float> block;

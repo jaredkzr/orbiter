@@ -23,6 +23,7 @@ is -3 dBFS).
 import argparse
 import json
 import math
+import os
 import sys
 
 import numpy as np
@@ -33,7 +34,15 @@ BANDS = {"all": (0.0, None), "low": (20.0, 200.0), "mid": (200.0, 2000.0), "high
 SILENCE_DB = -90.0
 
 
+# (a render this big is a run that never ended: a 48 kHz stereo float WAV is
+# 23 MB a minute; loaded as float64 it would take several times its size)
+MAX_BYTES = 400 * 1024 * 1024
+
+
 def load(path):
+    size = os.path.getsize(path)
+    if size > MAX_BYTES:
+        sys.exit(f"{path}: {size / 2**20:.0f} MB - too long to be a test's render (a run that didn't end?); not loaded")
     rate, data = wavfile.read(path)
     if data.dtype.kind == "i":
         data = data.astype(np.float64) / np.iinfo(data.dtype).max

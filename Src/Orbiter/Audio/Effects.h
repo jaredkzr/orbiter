@@ -1,0 +1,72 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// =======================================================================
+// Sounds of events in the world (not of a vessel's own running):
+//
+//  - explosions: a vessel breaking up with propellant aboard - its blast
+//    wave (BlastSynth), from where it broke up, heard when it arrives
+//  - fires: burning wreckage (Debris::Ignite) - the roar of its flames
+//    (FireSynth), as loud as a turbulent flame's share of its heat release
+//
+// Each is an emitter on the planet, at the place it happened, so the world
+// carries it as any sound: travel time, spreading, the air's absorption,
+// into a cockpit muffled, not at all across vacuum. Its moment is kept in
+// the emitter's history (Push): it is heard when the sound from that
+// moment arrives.
+// =======================================================================
+
+#ifndef __AUDIOEFFECTS_H
+#define __AUDIOEFFECTS_H
+
+#include "World.h"
+#include <vector>
+
+class Vessel;
+class Planet;
+
+namespace audio {
+
+class BlastSynth;
+class FireSynth;
+
+class Effects {
+public:
+	Effects (Engine &e, World &w): engine (e), world (w) {}
+	~Effects () { Clear (); }
+
+	/// A vessel breaks up with a mass of propellant [kg] aboard
+	void Explosion (const Vessel *v, double propellant);
+
+	/// Each step (t: the simulation's time)
+	void Update (double t);
+	void Forget (const Body *body);
+	void Clear ();
+
+	/// The blasts waiting or sounding (tests)
+	size_t Blasts () const { return blasts.size (); }
+	size_t Fires () const { return fires.size (); }
+
+private:
+	Engine &engine;
+	World &world;
+	struct Blast {
+		Emitter *em = nullptr;
+		BlastSynth *synth = nullptr;
+		const Planet *planet = nullptr;
+		double t0 = 0.0;      // when it went off
+		double W = 0.0;       // TNT equivalent [kg]
+		double sachsR = 1.0;  // (P0/P)^1/3 at the source: distances scaled
+		double sachsT = 1.0;  // times scaled: (P0/P)^1/3 c0/c
+		bool fired = false;
+	};
+	std::vector<Blast> blasts;
+	struct Fire { const Body *debris = nullptr; Emitter *em = nullptr; FireSynth *synth = nullptr; double out = -1.0; };
+	std::vector<Fire> fires;
+	void UpdateFires (double t);
+	uint32_t seed = 101;
+};
+
+} // namespace audio
+
+#endif // !__AUDIOEFFECTS_H

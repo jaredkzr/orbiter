@@ -116,6 +116,7 @@ Debris::~Debris ()
 void Debris::Ignite (double f, double burnTime)
 {
 	fuel = f;
+	this->burnTime = burnTime;
 	burnEnd = td.SimT1 + burnTime;
 	temp0 = std::max (temp0, 1200.0), tempT = td.SimT1;
 }

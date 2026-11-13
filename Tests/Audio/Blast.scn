@@ -1,0 +1,37 @@
+BEGIN_HYPERDESC
+Audio test: a fuelled delta-glider breaking up on impact at KSC, its blast
+heard from the ground 1 km away (Script/Tests/AudioBlast).
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51984.65
+  Script Tests/AudioBlast
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship OBS
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET OBS
+  MODE Extern
+  POS 4.0 -20.0 -30
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+OBS:ShuttlePB
+  STATUS Landed Earth
+  POS -80.6825940 28.5969240
+  HEADING 330.01
+END
+BOOM:DeltaGlider
+  STATUS Landed Earth
+  POS -80.6825940 28.6059240
+  HEADING 330.01
+  PRPLEVEL 0:1.0 1:1.0
+  GEAR 1 1.0000
+END
+END_SHIPS

@@ -351,6 +351,7 @@ void System::EndSession ()
 	for (auto &p : played) if (p.second.flat) ma_sound_uninit (p.second.flat.get ());
 	played.clear ();
 	vessels.Clear ();
+	effects.Clear ();
 	world.Clear ();
 	testTone = nullptr;
 	logT = -1.0;
@@ -362,6 +363,7 @@ void System::Forget (const Body *body)
 	for (auto it = played.begin (); it != played.end (); )
 		it = (it->second.em && it->second.em->Desc ().body == body) ? played.erase (it) : std::next (it);
 	vessels.Forget (body);
+	effects.Forget (body);
 	world.Forget (body);
 	xr::Forget (body);
 }
@@ -455,6 +457,7 @@ void System::Step ()
 		world.SetRealism (cinematic ? CINEMATIC : PHYSICAL);
 		static const bool noVessels = getenv ("ORBITER_AUDIO_VESSELS") && *getenv ("ORBITER_AUDIO_VESSELS") == '0';
 		if (!noVessels) vessels.Update (t, replay);
+		if (!replay) effects.Update (t);
 		world.Update (t);
 		// the voice, XRSound's sounds (not in the replay: it isn't flown)
 		const bool cockpit = g_camera && g_camera->IsInternal ();

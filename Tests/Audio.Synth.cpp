@@ -14,6 +14,8 @@
 #include "Audio/WindSynth.h"
 #include "Audio/BoomSynth.h"
 #include "Audio/ContactSynth.h"
+#include "Audio/BlastSynth.h"
+#include "Audio/FireSynth.h"
 #include "Audio/VesselSounds.h"
 #include "miniaudio.h"
 #include <cmath>
@@ -417,4 +419,56 @@ TEST_CASE ("Contacts: rolling, touchdown, squeal, docking", "[audio][synth]")
 		INFO ("ringing after: " << Db (Rms (late)) << " dB vs the clunk " << Db (Rms (std::vector<float> (x.begin (), x.begin () + 4800))));
 		CHECK (Rms (late) < 0.02 * Rms (std::vector<float> (x.begin (), x.begin () + 4800)));
 	}
+}
+
+TEST_CASE ("Blast: Kinney & Graham's overpressure and duration; the Friedlander wave", "[audio][synth]")
+{
+	// (published values of the fits: Z = 1 m/kg^1/3 about 10 bar; Z = 10 about
+	// 0.1 bar; far out, 1/Z; the positive phase about 4.2 ms/kg^1/3 far out)
+	CHECK_THAT (BlastSynth::Overpressure (1.0) / 101325.0, WithinRel (9.96, 0.03));
+	CHECK_THAT (BlastSynth::Overpressure (10.0) / 101325.0, WithinRel (0.0985, 0.03));
+	CHECK_THAT (BlastSynth::Overpressure (300.0) * 300.0, WithinRel (BlastSynth::Overpressure (600.0) * 600.0, 0.02));
+	CHECK_THAT (BlastSynth::Duration (100.0, 1.0), WithinRel (4.2e-3, 0.05));
+	CHECK_THAT (BlastSynth::Duration (100.0, 1000.0), WithinRel (42e-3, 0.05)); // (times scale with W^1/3)
+	CHECK_THAT (BlastSynth::TntEquivalent (1000.0, false), WithinRel (100.0, 1e-9));
+	CHECK_THAT (BlastSynth::TntEquivalent (1000.0, true), WithinRel (180.0, 1e-9));
+
+	Rig r;
+	auto s = BlastSynth::Make (r.e, 31);
+	s->Set (1000.0, 0.03);
+	r.Attach (*s);
+	auto quiet = r.Take (0.2);
+	CHECK (Rms (quiet) < 1e-6); // (nothing until it arrives)
+	s->Fire ();
+	auto x = r.Take (6.0);
+	// the positive phase: up at once to about 1, falling through zero by td
+	// (30 ms); then negative
+	float peak = *std::max_element (x.begin (), x.begin () + 4800);
+	size_t ipk = std::max_element (x.begin (), x.begin () + 4800) - x.begin ();
+	INFO ("peak " << peak << " at " << ipk / 48.0 << " ms");
+	CHECK (peak > 0.7f);
+	CHECK (ipk < 48 * 3); // (within 3 ms: a shock)
+	double neg = 0.0;
+	for (size_t i = 48 * 35; i < 48 * 80; i++) neg = std::min (neg, (double)x[i]);
+	CHECK (neg < -0.05);
+	// then the rumble dying away: the last second far below the blast
+	std::vector<float> last (x.end () - 48000, x.end ());
+	CHECK (Rms (last) < 0.01 * peak);
+}
+
+TEST_CASE ("Fire: the roar's level and spectrum", "[audio][synth]")
+{
+	CHECK (FireSynth::PeakFor (1e9) < FireSynth::PeakFor (1e6)); // (bigger fires are deeper)
+	CHECK_THAT (FireSynth::PeakFor (1e6), WithinRel (400.0, 0.01));
+	Rig r;
+	auto s = FireSynth::Make (r.e, 32);
+	const double Q = 2e9, fpk = FireSynth::PeakFor (Q);
+	s->Set (fpk, FireSynth::DiameterFor (Q), 1.0);
+	r.Attach (*s);
+	r.Take (2.0);
+	auto x = r.Take (4.0);
+	INFO ("fire RMS " << Rms (x) << ", peak " << fpk << " Hz: below " << 2 * fpk << " Hz " << Db (BandRms (x, 0, (float)(2 * fpk), 48000) / Rms (x)) << " dB, above 1 kHz " << Db (BandRms (x, 1000, 0, 48000) / Rms (x)) << " dB");
+	CHECK_THAT (Db (Rms (x)), WithinAbs (Db (FireSynth::FIRE_RMS), 3.0));
+	CHECK (BandRms (x, 0, (float)(2 * fpk), 48000) > 0.8 * Rms (x));
+	CHECK (BandRms (x, 1000, 0, 48000) < 0.1 * Rms (x));
 }

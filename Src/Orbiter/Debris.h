@@ -62,6 +62,7 @@ public:
 	void Ignite (double fuel, double burnTime);
 	double Fuel () const { return fuel; }
 	double BurnLeft () const;                        ///< [s] (0: not burning)
+	double BurnTime () const { return burnTime; }    ///< [s] the whole burn, from Ignite
 	/// Its temperature [K] when it broke off (hot parts, burned off)
 	void SetTemp (double T) { temp0 = T, tempT = td.SimT1; }
 	double Temp () const;                            ///< [K] cooling down
@@ -135,7 +136,7 @@ private:
 	double proxyCheckT = 0.0;  // next check for the proxy bodies
 	double created_t = 0.0;    // [s] simulation time it broke off
 	DWORD serial;
-	double fuel = 0.0, burnEnd = 0.0;
+	double fuel = 0.0, burnEnd = 0.0, burnTime = 0.0;
 	double temp0 = 0.0, tempT = 0.0;
 	double scrape = 0.0, impact = 0.0;
 	bool hidden = false;

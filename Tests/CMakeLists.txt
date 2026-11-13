@@ -193,6 +193,8 @@ add_executable(Audio.Synth Audio.Synth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/WindSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/BoomSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/ContactSynth.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/BlastSynth.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/FireSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Miniaudio.cpp)
 target_compile_definitions(Audio.Synth PRIVATE AUDIO_SYNTH_TEST)
 target_include_directories(Audio.Synth PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter ${CMAKE_SOURCE_DIR}/Extern/miniaudio)
@@ -438,6 +440,23 @@ if (ORBITER_TEST_EXE)
 		)
 		set_tests_properties(Audio.Docking PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "Audio: docking of A1"
 			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Docking.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0;ORBITER_AUDIO_CONTACTS=1")
+		# an explosion's blast (Effects, BlastSynth): a fuelled DG breaking up
+		# 1 km away - silent until its blast arrives, 1001 m / 340 m/s later
+		# (frames capped: a script that didn't load would run on)
+		add_test(
+			NAME "Audio.Blast"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Audio/Blast.scn" "--fixedstep=0.02" "--maxframes=600"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.Blast PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioBlast PASS_REGULAR_EXPRESSION "Audio: blast heard at 4\\.[45][0-9]* s, 100[0-9] m"
+			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Blast.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=1;ORBITER_AUDIO_CALLOUTS=0")
+		add_test(
+			NAME "Audio.BlastCheck"
+			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.Blast.wav" --duration 8.0 --no-clip
+				--level 0.5:4.3:all:-inf:-50 --level 4.45:4.7:all:-30:0 --level 4.45:5.5:low:-40:0
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.BlastCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioBlast)
 		# the voice's callouts (a takeoff, a descent with the gear up, Mach 1)
 		# and XRSound's API on Orbiter's sound (Lua's xrsound)
 		add_test(

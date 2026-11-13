@@ -5582,6 +5582,7 @@ void Vessel::Destroy (const char *reason)
 	// every part a piece of its own, flying apart; then the core. The
 	// propellant left burns in them (shared out by mass: the fireball)
 	double fuel = mass - StructMass() - payload_mass, mleft = std::max (StructMass(), 1.0);
+	if (audio::System *as = g_pOrbiter->Audio ()) as->Explosion (this, std::max (fuel, 0.0)); // (the blast)
 	breaking_up = true;
 	double mmax = 0.0;
 	const Vector vstart (((g_bStateUpdate && s1 && s1 != s0) ? s1 : s0)->vel);
