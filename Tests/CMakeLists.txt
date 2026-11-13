@@ -197,6 +197,7 @@ add_executable(Audio.Synth Audio.Synth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/FireSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/SplashSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/ThunderSynth.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/CreakSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Miniaudio.cpp)
 target_compile_definitions(Audio.Synth PRIVATE AUDIO_SYNTH_TEST)
 target_include_directories(Audio.Synth PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter ${CMAKE_SOURCE_DIR}/Extern/miniaudio)
@@ -492,6 +493,17 @@ if (ORBITER_TEST_EXE)
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.ThunderCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioThunder)
+		# the structure creaking (Effects, CreakSynth): a delta-glider pulling up
+		# hard 4-8 s, its cockpit - creaks as the load rises and falls, none in
+		# steady flight
+		add_test(
+			NAME "Audio.Creak"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Audio/Creak.scn" "--fixedstep=0.02" "--maxframes=700"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.Creak PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "Audio: creak at [5-7]\\."
+			FAIL_REGULAR_EXPRESSION "Audio: (creak|groan) at [1-3]\\."
+			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Creak.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0")
 		# the voice's callouts (a takeoff, a descent with the gear up, Mach 1)
 		# and XRSound's API on Orbiter's sound (Lua's xrsound)
 		add_test(

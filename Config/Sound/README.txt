@@ -43,3 +43,9 @@ xrsound play through Orbiter's own sound; there is no XRSound module. A
 class's XRSound-<class>.cfg still gives its animations sounds
 ([animation_<n>]) and its engines files of their own (MainEngines...: in
 place of the synthesized roar).
+
+Events (Src/Orbiter/Audio/Effects.h)
+
+Explosions (a vessel breaking up with propellant: its blast wave),
+burning wreckage, water entries and wakes, thunder (oapiAudioLightning),
+the structure creaking under load in the cabin of the vessel in focus.

@@ -10,6 +10,8 @@
 //    (FireSynth), as loud as a turbulent flame's share of its heat release
 //  - thunder: a lightning flash (oapiAudioLightning: the graphics client's
 //    storms) - its channel's N-waves (ThunderSynth, Few's model)
+//  - the structure creaking under load (CreakSynth): the vessel in focus,
+//    in its cabin, subtle
 //  - water: a vessel entering it (SplashSynth: the slam, the cavity's and
 //    the spray's bubbles), moving or floating in it (the wake's bubbles)
 //
@@ -36,6 +38,7 @@ class BlastSynth;
 class FireSynth;
 class SplashSynth;
 class ThunderSynth;
+class CreakSynth;
 
 class Effects {
 public:
@@ -84,6 +87,10 @@ private:
 	std::vector<Water> waters;
 	struct Thunder { const Planet *planet = nullptr; Emitter *em = nullptr; ThunderSynth *synth = nullptr; double t0 = 0.0; bool fired = false; };
 	std::vector<Thunder> thunders;
+	struct Creak { const Vessel *v = nullptr; Emitter *em = nullptr; CreakSynth *synth = nullptr; double stress = -1.0, debt = 0.0, t = 0.0; int count[2] = {}, heard[2] = {}; } creak;
+	void UpdateCreaks (double t);
+	uint32_t creakRng = 0x2545f491u;
+	double CreakRand () { creakRng ^= creakRng << 13; creakRng ^= creakRng >> 17; creakRng ^= creakRng << 5; return (creakRng >> 8) * (1.0 / 16777216.0); }
 	void UpdateWater (double t);
 	uint32_t seed = 101;
 };

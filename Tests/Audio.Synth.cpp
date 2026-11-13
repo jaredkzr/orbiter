@@ -18,6 +18,7 @@
 #include "Audio/FireSynth.h"
 #include "Audio/SplashSynth.h"
 #include "Audio/ThunderSynth.h"
+#include "Audio/CreakSynth.h"
 #include "Audio/VesselSounds.h"
 #include "miniaudio.h"
 #include <cmath>
@@ -533,4 +534,26 @@ TEST_CASE ("Thunder: Few's channel model", "[audio][synth]")
 	// low: its energy mostly below 200 Hz
 	CHECK (BandRms (x, 0, 200, 48000) > 0.6 * Rms (x));
 	CHECK (BandRms (x, 1000, 0, 48000) < 0.2 * Rms (x));
+}
+
+TEST_CASE ("Creak: a structure's stick-slip, normalized", "[audio][synth]")
+{
+	for (int k = 0; k < 2; k++) {
+		Rig r;
+		auto s = CreakSynth::Make (r.e, 50 + k);
+		r.Attach (*s);
+		r.Take (0.1);
+		float pk = 0.0f;
+		double low = 0.0, all = 0.0;
+		for (int i = 0; i < 8; i++) {
+			s->Strike ((CreakSynth::Kind)k, 1.0f);
+			auto x = r.Take (2.0);
+			for (float v : x) pk = std::max (pk, std::fabs (v));
+			low += BandRms (x, 0, k ? 350.0f : 250.0f, 48000), all += Rms (x);
+		}
+		INFO ((k ? "groan" : "creak") << ": peak " << pk << ", low share " << low / all);
+		// (full strength: about full scale - the emitter's level makes it CREAK_P)
+		CHECK (pk > 0.4f);
+		CHECK (pk < 2.0f);
+	}
 }

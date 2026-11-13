@@ -1,0 +1,30 @@
+BEGIN_HYPERDESC
+Audio test: the structure creaking under load - a delta-glider pulling up
+hard, heard from its cockpit (Script/Tests/AudioCreak).
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51984.65
+  Script Tests/AudioCreak
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship CO
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET CO
+  MODE Cockpit
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+CO:DeltaGlider
+  STATUS Landed Earth
+  POS -80.6825940 28.5969240
+  HEADING 330.01
+  PRPLEVEL 0:1.0 1:1.0
+  GEAR 1 1.0000
+END
+END_SHIPS

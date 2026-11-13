@@ -6,6 +6,7 @@
 #include "FireSynth.h"
 #include "SplashSynth.h"
 #include "ThunderSynth.h"
+#include "CreakSynth.h"
 #include "VesselSounds.h"
 #include "Debris.h"
 #include "Psys.h"
@@ -23,6 +24,7 @@
 extern Camera *g_camera;
 extern TimeData td;
 extern PlanetarySystem *g_psys;
+extern Vessel *g_focusobj;
 
 namespace audio {
 
@@ -31,6 +33,10 @@ namespace {
 	/// world's reach)
 	constexpr double BLAST_MAX_AGE = 240.0;
 	constexpr double SEA_P = 101325.0, SEA_C = 340.3;
+	/// The structure's creaks in its cabin: at the most this [Pa] (subtle:
+	/// near the limit some 65 dB, a moderate load's 55 - heard in a quiet
+	/// cabin, lost under the air's rush), carried through the structure
+	constexpr double CREAK_P = 0.06, CREAK_HULL = 50.0;
 	/// The wake's level (0.02 Pa at refDist)
 	const double WAKE_LEVEL = 0.02 / P_FULL / 0.3;
 }
@@ -155,6 +161,7 @@ void Effects::Update (double t)
 	}
 	UpdateFires (t);
 	UpdateWater (t);
+	UpdateCreaks (t);
 	const Vector &cam = g_camera->GPos ();
 	for (auto it = blasts.begin (); it != blasts.end (); ) {
 		Blast &b = *it;
@@ -331,8 +338,85 @@ void Effects::UpdateWater (double t)
 	}
 }
 
+void Effects::UpdateCreaks (double t)
+{
+	// (the vessel in focus only: heard in its cabin)
+	const Vessel *v = g_focusobj && !g_focusobj->Destroyed () ? g_focusobj : nullptr;
+	if (creak.v != v) {
+		if (creak.em) world.Remove (creak.em);
+		creak = Creak ();
+		if (!v) return;
+		auto s = CreakSynth::Make (engine, seed++);
+		if (!s) return;
+		creak.v = v;
+		creak.synth = s.get ();
+		EmitterDesc d;
+		d.body = v;
+		// (through the structure, in the cabin: CREAK_P at the most; outside,
+		// a tiny source - refDist 0.1 m - nothing heard)
+		d.refDist = 0.1f;
+		d.level = (float)(CREAK_P / P_FULL / CREAK_HULL);
+		d.hull = (float)CREAK_HULL;
+		d.name = std::string (v->Name ()) + " structure";
+		creak.em = world.Add (d, std::move (s));
+		if (!creak.em) { creak = Creak (); return; }
+		creak.em->Push (t - 1e-3, Emitter::Params{});
+		creak.t = t;
+	}
+	VESSEL *vi = const_cast<Vessel*>(v)->GetModuleInterface ();
+	if (!vi) return;
+	// its stress (0: none, 1: at its limit): its joints' worst load (the
+	// structure's model, with damage on), else from its load factor (its
+	// non-gravitational acceleration; 6 g: a limit) and, half as much, the
+	// air's dynamic pressure on its panels (40 kPa)
+	double stress = 0.0;
+	const DWORD np = vi->GetPartCount ();
+	for (DWORD i = 1; i < np; i++) {
+		PARTINFO pi;
+		if (vi->GetPartInfo (i, &pi) && !(pi.flags & PART_LOST)) stress = std::max (stress, pi.load);
+	}
+	if (stress <= 0.0) {
+		VECTOR3 F, W;
+		double gl = 0.0;
+		if (vi->GetForceVector (F) && vi->GetWeightVector (W)) gl = length (F - W) / std::max (v->Mass (), 1.0) / 9.81;
+		const double q = v->GetSurfParam () ? v->GetSurfParam ()->dynp : 0.0;
+		stress = std::max (gl / 6.0, 0.5 * q / 40e3);
+	}
+	stress = std::clamp (stress, 0.0, 1.5);
+	const double dt = t - creak.t;
+	creak.t = t;
+	Emitter::Params p{};
+	p[0] = (float)creak.count[0], p[1] = (float)creak.count[1];
+	// (a jump - the vessel set somewhere, a first step: not a load changing)
+	if (creak.stress >= 0.0 && dt > 0.0 && dt < 1.0 && std::fabs (stress - creak.stress) < 0.3) {
+		// creaks at random: more often the faster the stress changes, and
+		// the higher it is; groans when a high stress holds
+		const double rate = 12.0 * std::fabs (stress - creak.stress) / dt * std::sqrt (stress) + 0.3 * std::pow (stress, 4.0);
+		creak.debt += rate * dt;
+		if (creak.debt > 1.0 || CreakRand () < rate * dt * 0.3) {
+			creak.debt = std::max (0.0, creak.debt - 1.0);
+			const int k = (std::fabs (stress - creak.stress) / dt < 0.05 && stress > 0.4) ? CreakSynth::GROAN : CreakSynth::CREAK;
+			creak.count[k]++;
+			p[k] = (float)creak.count[k];
+			p[2 + k] = (float)std::min (1.0, stress * (0.5 + 0.5 * CreakRand ()));
+		}
+	}
+	creak.stress = stress;
+	creak.em->Push (t, p);
+	const Emitter::Params h = creak.em->Recalled ();
+	for (int k = 0; k < 2; k++) {
+		if ((int)h[k] > creak.heard[k]) {
+			creak.synth->Strike ((CreakSynth::Kind)k, h[2 + k] > 0.0f ? h[2 + k] : 0.5f);
+			static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+			if (log) printf ("Audio: %s at %.2f s (stress %.2f)\n", k ? "groan" : "creak", t, creak.stress), fflush (stdout);
+			creak.heard[k] = (int)h[k];
+		}
+	}
+}
+
 void Effects::Forget (const Body *body)
 {
+	if ((const Body*)creak.v == body) { if (creak.em) world.Remove (creak.em); creak = Creak (); }
 	for (auto it = thunders.begin (); it != thunders.end (); ) {
 		if (it->planet == body) { world.Remove (it->em); it = thunders.erase (it); }
 		else ++it;
@@ -361,6 +445,8 @@ void Effects::Clear ()
 	waters.clear ();
 	for (auto &th : thunders) world.Remove (th.em);
 	thunders.clear ();
+	if (creak.em) world.Remove (creak.em);
+	creak = Creak ();
 }
 
 } // namespace audio
