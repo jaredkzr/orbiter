@@ -1,0 +1,3378 @@
+{
+ "AOS_c1_1": {
+  "takes": [
+   {
+    "heard": "We have you back, good to hear from you.",
+    "seed": 16
+   }
+  ],
+  "text": "We have you back. Good to hear from you.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18
+  ],
+  "voice": "capcom1"
+ },
+ "AOS_c1_2": {
+  "takes": [
+   {
+    "heard": "Houston has you loud and clear. Welcome back.",
+    "seed": 2
+   }
+  ],
+  "text": "Houston has you loud and clear. Welcome back.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "capcom1"
+ },
+ "AOS_c1_3": {
+  "takes": [
+   {
+    "heard": "Signal reacquired, glad to have you back.",
+    "seed": 6
+   }
+  ],
+  "text": "Signal reacquired. Glad to have you back.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6
+  ],
+  "voice": "capcom1"
+ },
+ "AOS_c1_4": {
+  "takes": [
+   {
+    "heard": "Good to hear you again. Signal is solid.",
+    "seed": 3
+   }
+  ],
+  "text": "Good to hear you again. Signal is solid.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "capcom1"
+ },
+ "AOS_c2_1": {
+  "takes": [
+   {
+    "heard": "We have you back. Good to hear from you.",
+    "seed": 10
+   }
+  ],
+  "text": "We have you back. Good to hear from you.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18
+  ],
+  "voice": "capcom2"
+ },
+ "AOS_c2_2": {
+  "takes": [
+   {
+    "heard": "Houston has you loud and clear. Welcome back.",
+    "seed": 9
+   }
+  ],
+  "text": "Houston has you loud and clear. Welcome back.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9
+  ],
+  "voice": "capcom2"
+ },
+ "AOS_c2_3": {
+  "takes": [
+   {
+    "heard": "Signal reacquired glad to have you back",
+    "seed": 6
+   }
+  ],
+  "text": "Signal reacquired. Glad to have you back.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6
+  ],
+  "voice": "capcom2"
+ },
+ "AOS_c2_4": {
+  "takes": [
+   {
+    "heard": "Good to hear you again, signal is solid.",
+    "seed": 4
+   }
+  ],
+  "text": "Good to hear you again. Signal is solid.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "capcom2"
+ },
+ "Approach_c1_1": {
+  "takes": [
+   {
+    "heard": "We show you inside one kilometer your go for final approach.",
+    "seed": 9
+   }
+  ],
+  "text": "We show you inside one kilometre. You're go for final approach.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9
+  ],
+  "voice": "capcom1"
+ },
+ "Approach_c1_2": {
+  "takes": [
+   {
+    "heard": "Copy one kilometer, take it slow.",
+    "seed": 2
+   }
+  ],
+  "text": "Copy one kilometre. Take it slow.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "capcom1"
+ },
+ "Approach_c1_3": {
+  "takes": [
+   {
+    "heard": "inside a kilometer looking good from here.",
+    "seed": 4
+   }
+  ],
+  "text": "Inside a kilometre. Looking good from here.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "capcom1"
+ },
+ "Approach_c2_1": {
+  "takes": [
+   {
+    "heard": "We show you inside one kilometer your gopher final approach",
+    "seed": 5
+   }
+  ],
+  "text": "We show you inside one kilometre. You're go for final approach.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "voice": "capcom2"
+ },
+ "Approach_c2_2": {
+  "takes": [
+   {
+    "heard": "Copy one kilometer. Take it slow.",
+    "seed": 14
+   }
+  ],
+  "text": "Copy one kilometre. Take it slow.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14
+  ],
+  "voice": "capcom2"
+ },
+ "Approach_c2_3": {
+  "takes": [
+   {
+    "heard": "Inside a kilometer looking good from here.",
+    "seed": 2
+   }
+  ],
+  "text": "Inside a kilometre. Looking good from here.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "capcom2"
+ },
+ "BoosterSep_c1_1": {
+  "takes": [
+   {
+    "heard": "Copy booster separation, you're looking good.",
+    "seed": 7
+   }
+  ],
+  "text": "Copy booster separation. You're looking good.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7
+  ],
+  "voice": "capcom1"
+ },
+ "BoosterSep_c1_2": {
+  "takes": [
+   {
+    "heard": "We confirm booster separation, performance is nominal.",
+    "seed": 12
+   }
+  ],
+  "text": "We confirm booster separation. Performance is nominal.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12
+  ],
+  "voice": "capcom1"
+ },
+ "BoosterSep_c1_3": {
+  "takes": [
+   {
+    "heard": "Copy staging looking good from here.",
+    "seed": 2
+   }
+  ],
+  "text": "Copy staging. Looking good from here.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "capcom1"
+ },
+ "BoosterSep_c2_1": {
+  "takes": [
+   {
+    "heard": "copy booster separation, you're looking good.",
+    "seed": 7
+   }
+  ],
+  "text": "Copy booster separation. You're looking good.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7
+  ],
+  "voice": "capcom2"
+ },
+ "BoosterSep_c2_2": {
+  "takes": [
+   {
+    "heard": "We confirm booster separation, performance is nominal.",
+    "seed": 1
+   }
+  ],
+  "text": "We confirm booster separation. Performance is nominal.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom2"
+ },
+ "BoosterSep_c2_3": {
+  "takes": [
+   {
+    "heard": "copy staging looking good from here.",
+    "seed": 26
+   }
+  ],
+  "text": "Copy staging. Looking good from here.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   21,
+   22,
+   23,
+   24,
+   25,
+   26
+  ],
+  "voice": "capcom2"
+ },
+ "Capture_c1_1": {
+  "takes": [
+   {
+    "heard": "Copy orbit insertion, good burn.",
+    "seed": 13
+   }
+  ],
+  "text": "Copy orbit insertion. Good burn.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13
+  ],
+  "voice": "capcom1"
+ },
+ "Capture_c1_2": {
+  "takes": [
+   {
+    "heard": "We confirm capture, nice flying.",
+    "seed": 1
+   }
+  ],
+  "text": "We confirm capture. Nice flying.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom1"
+ },
+ "Capture_c1_3": {
+  "takes": [
+   {
+    "heard": "Copy you're in orbit, looks stable from here.",
+    "seed": 2
+   }
+  ],
+  "text": "Copy, you're in orbit. Looks stable from here.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "capcom1"
+ },
+ "Capture_c2_1": {
+  "takes": [
+   {
+    "heard": "Copy orbit insertion. Good burn.",
+    "seed": 5
+   }
+  ],
+  "text": "Copy orbit insertion. Good burn.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "voice": "capcom2"
+ },
+ "Capture_c2_2": {
+  "takes": [
+   {
+    "heard": "We confirm capture, nice flying.",
+    "seed": 12
+   }
+  ],
+  "text": "We confirm capture. Nice flying.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12
+  ],
+  "voice": "capcom2"
+ },
+ "Capture_c2_3": {
+  "takes": [
+   {
+    "heard": "Copy you're in orbit, look stable from here.",
+    "seed": 4
+   }
+  ],
+  "text": "Copy, you're in orbit. Looks stable from here.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "capcom2"
+ },
+ "DeepSpace_c1_1": {
+  "takes": [
+   {
+    "heard": "copy you're leaving our near-earth coverage expect a late com from here",
+    "seed": 6
+   }
+  ],
+  "text": "Copy, you're leaving our near-Earth coverage. Expect delayed comm from here.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6
+  ],
+  "voice": "capcom1"
+ },
+ "DeepSpace_c1_2": {
+  "takes": [
+   {
+    "heard": "We have you on the deep space loop now.",
+    "seed": 6
+   }
+  ],
+  "text": "We have you on the deep-space loop now.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6
+  ],
+  "voice": "capcom1"
+ },
+ "DeepSpace_c1_3": {
+  "takes": [
+   {
+    "heard": "Copy going to the long delay loop, talk to you down the line.",
+    "seed": 2
+   }
+  ],
+  "text": "Copy, going to the long-delay loop. Talk to you down the line.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "capcom1"
+ },
+ "DeepSpace_c2_1": {
+  "takes": [
+   {
+    "heard": "Copy. You're leaving our near-Earth coverage. Expect delayed calm from here.",
+    "seed": 1
+   }
+  ],
+  "text": "Copy, you're leaving our near-Earth coverage. Expect delayed comm from here.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom2"
+ },
+ "DeepSpace_c2_2": {
+  "takes": [
+   {
+    "heard": "We have you on the deep space loop now.",
+    "seed": 1
+   }
+  ],
+  "text": "We have you on the deep-space loop now.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom2"
+ },
+ "DeepSpace_c2_3": {
+  "takes": [
+   {
+    "heard": "Copy going to the long delay loop talk to you down the line",
+    "seed": 10
+   }
+  ],
+  "text": "Copy, going to the long-delay loop. Talk to you down the line.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10
+  ],
+  "voice": "capcom2"
+ },
+ "Deorbit_c1_1": {
+  "takes": [
+   {
+    "heard": "Copy, deorbit burn complete. Good burn.",
+    "seed": 1
+   }
+  ],
+  "text": "Copy deorbit burn complete. Good burn.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom1"
+ },
+ "Deorbit_c1_2": {
+  "takes": [
+   {
+    "heard": "Houston copies the deorbit burn. Your trajectory looks good.",
+    "seed": 1
+   }
+  ],
+  "text": "Houston copies the deorbit burn. Your trajectory looks good.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom1"
+ },
+ "Deorbit_c1_3": {
+  "takes": [
+   {
+    "heard": "The orbit burn confirmed. Have a safe trip down.",
+    "seed": 11
+   }
+  ],
+  "text": "Deorbit burn confirmed. Have a safe trip down.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11
+  ],
+  "voice": "capcom1"
+ },
+ "Deorbit_c1_4": {
+  "takes": [
+   {
+    "heard": "Copy the burn. You're on your way down.",
+    "seed": 2
+   }
+  ],
+  "text": "Copy the burn. You're on your way down.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "capcom1"
+ },
+ "Deorbit_c2_1": {
+  "takes": [
+   {
+    "heard": "Copy deorbit burn complete. Good burn.",
+    "seed": 3
+   }
+  ],
+  "text": "Copy deorbit burn complete. Good burn.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "capcom2"
+ },
+ "Deorbit_c2_2": {
+  "takes": [
+   {
+    "heard": "Houston copies the deorbit burn. Your trajectory looks good.",
+    "seed": 5
+   }
+  ],
+  "text": "Houston copies the deorbit burn. Your trajectory looks good.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "voice": "capcom2"
+ },
+ "Deorbit_c2_3": {
+  "takes": [
+   {
+    "heard": "Deorbit burn confirmed. Have a safe trip down.",
+    "seed": 46
+   }
+  ],
+  "text": "Deorbit burn confirmed. Have a safe trip down.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   21,
+   22,
+   23,
+   24,
+   25,
+   26,
+   27,
+   28,
+   29,
+   30,
+   31,
+   32,
+   33,
+   34,
+   35,
+   36,
+   37,
+   38,
+   39,
+   40,
+   41,
+   42,
+   43,
+   44,
+   45,
+   46,
+   47,
+   48,
+   49,
+   50,
+   51,
+   52,
+   53,
+   54,
+   55,
+   56,
+   57,
+   58,
+   59,
+   60,
+   61,
+   62,
+   63,
+   64,
+   65,
+   66,
+   67,
+   68,
+   69,
+   70,
+   71,
+   72,
+   73
+  ],
+  "voice": "capcom2"
+ },
+ "Deorbit_c2_4": {
+  "takes": [
+   {
+    "heard": "Copy the burn. You're on your way down.",
+    "seed": 2
+   }
+  ],
+  "text": "Copy the burn. You're on your way down.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "capcom2"
+ },
+ "Descent_c1_1": {
+  "takes": [
+   {
+    "heard": "Copy powered descent, you're looking good.",
+    "seed": 2
+   }
+  ],
+  "text": "Copy powered descent. You're looking good.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "capcom1"
+ },
+ "Descent_c1_2": {
+  "takes": [
+   {
+    "heard": "We see the descent burn go for landing.",
+    "seed": 3
+   }
+  ],
+  "text": "We see the descent burn. Go for landing.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "capcom1"
+ },
+ "Descent_c1_3": {
+  "takes": [
+   {
+    "heard": "copy you're on your way down",
+    "seed": 1
+   }
+  ],
+  "text": "Copy, you're on your way down.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom1"
+ },
+ "Descent_c2_1": {
+  "takes": [
+   {
+    "heard": "Copy powered descent, you're looking good.",
+    "seed": 3
+   }
+  ],
+  "text": "Copy powered descent. You're looking good.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "capcom2"
+ },
+ "Descent_c2_2": {
+  "takes": [
+   {
+    "heard": "We see the descent burn, go for landing.",
+    "seed": 1
+   }
+  ],
+  "text": "We see the descent burn. Go for landing.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom2"
+ },
+ "Descent_c2_3": {
+  "takes": [
+   {
+    "heard": "Copy. You're on your way down.",
+    "seed": 4
+   }
+  ],
+  "text": "Copy, you're on your way down.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "capcom2"
+ },
+ "Docked_c1_1": {
+  "takes": [
+   {
+    "heard": "Houston copies capture. Nice work.",
+    "seed": 1
+   }
+  ],
+  "text": "Houston copies capture. Nice work.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom1"
+ },
+ "Docked_c1_2": {
+  "takes": [
+   {
+    "heard": "Copy hard, Doc. Good job.",
+    "seed": 1
+   }
+  ],
+  "text": "Copy hard dock. Good job.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom1"
+ },
+ "Docked_c1_3": {
+  "takes": [
+   {
+    "heard": "We see you docked, smooth approach.",
+    "seed": 3
+   }
+  ],
+  "text": "We see you docked. Smooth approach.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8
+  ],
+  "voice": "capcom1"
+ },
+ "Docked_c1_4": {
+  "takes": [
+   {
+    "heard": "copy capture good docking",
+    "seed": 1
+   }
+  ],
+  "text": "Copy capture. Good docking.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom1"
+ },
+ "Docked_c2_1": {
+  "takes": [
+   {
+    "heard": "Houston copies capture, nice work.",
+    "seed": 4
+   }
+  ],
+  "text": "Houston copies capture. Nice work.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "capcom2"
+ },
+ "Docked_c2_2": {
+  "takes": [
+   {
+    "heard": "Copy hard doc. Good job",
+    "seed": 1
+   }
+  ],
+  "text": "Copy hard dock. Good job.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom2"
+ },
+ "Docked_c2_3": {
+  "takes": [
+   {
+    "heard": "We see you docked, smooth approach.",
+    "seed": 13
+   }
+  ],
+  "text": "We see you docked. Smooth approach.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13
+  ],
+  "voice": "capcom2"
+ },
+ "Docked_c2_4": {
+  "takes": [
+   {
+    "heard": "Copy capture good docking",
+    "seed": 6
+   }
+  ],
+  "text": "Copy capture. Good docking.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6
+  ],
+  "voice": "capcom2"
+ },
+ "Escape_c1_1": {
+  "takes": [
+   {
+    "heard": "Copy your outbound safe travels.",
+    "seed": 2
+   }
+  ],
+  "text": "Copy, you're outbound. Safe travels.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "capcom1"
+ },
+ "Escape_c1_2": {
+  "takes": [
+   {
+    "heard": "We confirm the departure burn. Trajectory looks good.",
+    "seed": 4
+   }
+  ],
+  "text": "We confirm the departure burn. Trajectory looks good.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "capcom1"
+ },
+ "Escape_c1_3": {
+  "takes": [
+   {
+    "heard": "Copy, escape. We'll keep an eye on you.",
+    "seed": 4
+   }
+  ],
+  "text": "Copy escape. We'll keep an eye on you.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "capcom1"
+ },
+ "Escape_c2_1": {
+  "takes": [
+   {
+    "heard": "Copy your outbound, safe travels.",
+    "seed": 2
+   }
+  ],
+  "text": "Copy, you're outbound. Safe travels.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "capcom2"
+ },
+ "Escape_c2_2": {
+  "takes": [
+   {
+    "heard": "We confirm the departure burn trajectory looks good.",
+    "seed": 4
+   }
+  ],
+  "text": "We confirm the departure burn. Trajectory looks good.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "capcom2"
+ },
+ "Escape_c2_3": {
+  "takes": [
+   {
+    "heard": "Copy, Escape. We'll keep an eye on you.",
+    "seed": 14
+   }
+  ],
+  "text": "Copy escape. We'll keep an eye on you.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14
+  ],
+  "voice": "capcom2"
+ },
+ "Ignition_c1_1": {
+  "takes": [
+   {
+    "heard": "Copy ignition. Good luck.",
+    "seed": 4
+   }
+  ],
+  "text": "Copy ignition. Good luck.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15
+  ],
+  "voice": "capcom1"
+ },
+ "Ignition_c1_2": {
+  "takes": [
+   {
+    "heard": "Houston copies ignition, good luck up there.",
+    "seed": 1
+   }
+  ],
+  "text": "Houston copies ignition. Good luck up there.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom1"
+ },
+ "Ignition_c1_3": {
+  "takes": [
+   {
+    "heard": "We see ignition, have a good flight.",
+    "seed": 3
+   }
+  ],
+  "text": "We see ignition. Have a good flight.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "capcom1"
+ },
+ "Ignition_c1_4": {
+  "takes": [
+   {
+    "heard": "Copy ignition, engines look good.",
+    "seed": 1
+   }
+  ],
+  "text": "Copy ignition. Engines look good.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom1"
+ },
+ "Ignition_c2_1": {
+  "takes": [
+   {
+    "heard": "Copy ignition. Good luck.",
+    "seed": 1
+   }
+  ],
+  "text": "Copy ignition. Good luck.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom2"
+ },
+ "Ignition_c2_2": {
+  "takes": [
+   {
+    "heard": "Houston copies ignition, good luck up there.",
+    "seed": 11
+   }
+  ],
+  "text": "Houston copies ignition. Good luck up there.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11
+  ],
+  "voice": "capcom2"
+ },
+ "Ignition_c2_3": {
+  "takes": [
+   {
+    "heard": "We see ignition. Have a good flight.",
+    "seed": 1
+   }
+  ],
+  "text": "We see ignition. Have a good flight.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom2"
+ },
+ "Ignition_c2_4": {
+  "takes": [
+   {
+    "heard": "Copy ignition engines look good.",
+    "seed": 25
+   }
+  ],
+  "text": "Copy ignition. Engines look good.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   21,
+   22,
+   23,
+   24,
+   25
+  ],
+  "voice": "capcom2"
+ },
+ "LOS_c1_1": {
+  "takes": [
+   {
+    "heard": "",
+    "seed": 3
+   }
+  ],
+  "text": "We've lost your signal.",
+  "tried": [
+   3
+  ],
+  "voice": "capcom1"
+ },
+ "LOS_c1_2": {
+  "takes": [
+   {
+    "heard": "Houston has lost all data.",
+    "seed": 1
+   }
+  ],
+  "text": "Houston has lost all data.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom1"
+ },
+ "LOS_c1_3": {
+  "takes": [
+   {
+    "heard": "loss of signal please respond",
+    "seed": 5
+   }
+  ],
+  "text": "Loss of signal. Please respond.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8
+  ],
+  "voice": "capcom1"
+ },
+ "LOS_c1_4": {
+  "takes": [
+   {
+    "heard": "We've lost all data, stand by.",
+    "seed": 1
+   }
+  ],
+  "text": "We've lost all data. Stand by.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom1"
+ },
+ "LOS_c2_1": {
+  "takes": [
+   {
+    "heard": "We've lost your signal.",
+    "seed": 8
+   }
+  ],
+  "text": "We've lost your signal.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11
+  ],
+  "voice": "capcom2"
+ },
+ "LOS_c2_2": {
+  "takes": [
+   {
+    "heard": "Houston has lost all data.",
+    "seed": 4
+   }
+  ],
+  "text": "Houston has lost all data.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "capcom2"
+ },
+ "LOS_c2_3": {
+  "takes": [
+   {
+    "heard": "Loss of signal, please respond.",
+    "seed": 69
+   }
+  ],
+  "text": "Loss of signal. Please respond.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   21,
+   22,
+   23,
+   24,
+   25,
+   26,
+   27,
+   28,
+   29,
+   30,
+   31,
+   32,
+   33,
+   34,
+   35,
+   36,
+   37,
+   38,
+   39,
+   40,
+   41,
+   42,
+   43,
+   44,
+   45,
+   46,
+   47,
+   48,
+   49,
+   50,
+   51,
+   52,
+   53,
+   54,
+   55,
+   56,
+   57,
+   58,
+   59,
+   60,
+   61,
+   62,
+   63,
+   64,
+   65,
+   66,
+   67,
+   68,
+   69
+  ],
+  "voice": "capcom2"
+ },
+ "LOS_c2_4": {
+  "takes": [
+   {
+    "heard": "We've lost all data. Stand by.",
+    "seed": 8
+   }
+  ],
+  "text": "We've lost all data. Stand by.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8
+  ],
+  "voice": "capcom2"
+ },
+ "Landed_c1_1": {
+  "takes": [
+   {
+    "heard": "Houston copies. We'll stop. Welcome home.",
+    "seed": 22
+   }
+  ],
+  "text": "Houston copies wheels stop. Welcome home.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   21,
+   22
+  ],
+  "voice": "capcom1"
+ },
+ "Landed_c1_2": {
+  "takes": [
+   {
+    "heard": "Copy wheel stop, welcome home.",
+    "seed": 2
+   }
+  ],
+  "text": "Copy wheels stop. Welcome home.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "capcom1"
+ },
+ "Landed_c1_3": {
+  "takes": [
+   {
+    "heard": "We'll stop confirmed.",
+    "seed": 6
+   }
+  ],
+  "text": "Wheels stop confirmed.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6
+  ],
+  "voice": "capcom1"
+ },
+ "Landed_c1_4": {
+  "takes": [
+   {
+    "heard": "Copy wheels stop. Nice landing.",
+    "seed": 6
+   }
+  ],
+  "text": "Copy wheels stop. Nice landing.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6
+  ],
+  "voice": "capcom1"
+ },
+ "Landed_c2_1": {
+  "takes": [
+   {
+    "heard": "Houston Copies Wheels stop. Welcome home.",
+    "seed": 34
+   }
+  ],
+  "text": "Houston copies wheels stop. Welcome home.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   21,
+   22,
+   23,
+   24,
+   25,
+   26,
+   27,
+   28,
+   29,
+   30,
+   31,
+   32,
+   33,
+   34,
+   35,
+   36,
+   37,
+   38,
+   39,
+   40,
+   41,
+   42,
+   43,
+   44,
+   45,
+   46,
+   47,
+   48,
+   49,
+   50,
+   51,
+   52,
+   53,
+   54,
+   55,
+   56,
+   57,
+   58,
+   59,
+   60
+  ],
+  "voice": "capcom2"
+ },
+ "Landed_c2_2": {
+  "takes": [
+   {
+    "heard": "Copy wheels stop. Welcome home.",
+    "seed": 13
+   }
+  ],
+  "text": "Copy wheels stop. Welcome home.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15
+  ],
+  "voice": "capcom2"
+ },
+ "Landed_c2_3": {
+  "takes": [
+   {
+    "heard": "We'll stop confirmed.",
+    "seed": 22
+   }
+  ],
+  "text": "Wheels stop confirmed.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   21,
+   22
+  ],
+  "voice": "capcom2"
+ },
+ "Landed_c2_4": {
+  "takes": [
+   {
+    "heard": "Copy wheels. Stop. Nice landing.",
+    "seed": 7
+   }
+  ],
+  "text": "Copy wheels stop. Nice landing.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7
+  ],
+  "voice": "capcom2"
+ },
+ "Liftoff_c1_1": {
+  "takes": [
+   {
+    "heard": "Roger, liftoff, all systems look good from here.",
+    "seed": 2
+   }
+  ],
+  "text": "Roger, liftoff. All systems look good from here.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "capcom1"
+ },
+ "Liftoff_c1_2": {
+  "takes": [
+   {
+    "heard": "Houston copies liftoff, good start, everything looks nominal.",
+    "seed": 3
+   }
+  ],
+  "text": "Houston copies liftoff. Good start, everything looks nominal.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "capcom1"
+ },
+ "Liftoff_c1_3": {
+  "takes": [
+   {
+    "heard": "Lift off confirmed, we're with you all the way up.",
+    "seed": 2
+   }
+  ],
+  "text": "Liftoff confirmed. We're with you all the way up.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "capcom1"
+ },
+ "Liftoff_c1_4": {
+  "takes": [
+   {
+    "heard": "Copy liftoff clean start",
+    "seed": 4
+   }
+  ],
+  "text": "Copy liftoff. Clean start.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "capcom1"
+ },
+ "Liftoff_c2_1": {
+  "takes": [
+   {
+    "heard": "Roger, lift off. All systems look good from here.",
+    "seed": 1
+   }
+  ],
+  "text": "Roger, liftoff. All systems look good from here.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom2"
+ },
+ "Liftoff_c2_2": {
+  "takes": [
+   {
+    "heard": "Houston copies liftoff, good start, everything looks nominal.",
+    "seed": 2
+   }
+  ],
+  "text": "Houston copies liftoff. Good start, everything looks nominal.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "capcom2"
+ },
+ "Liftoff_c2_3": {
+  "takes": [
+   {
+    "heard": "liftoff confirmed, we're with you all the way up",
+    "seed": 17
+   }
+  ],
+  "text": "Liftoff confirmed. We're with you all the way up.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   21,
+   22,
+   23,
+   24,
+   25,
+   26,
+   27,
+   28,
+   29,
+   30,
+   31,
+   32,
+   33,
+   34,
+   35,
+   36,
+   37,
+   38,
+   39,
+   40,
+   41,
+   42,
+   43,
+   44,
+   45,
+   46
+  ],
+  "voice": "capcom2"
+ },
+ "Liftoff_c2_4": {
+  "takes": [
+   {
+    "heard": "copy liftoff, clean start",
+    "seed": 3
+   }
+  ],
+  "text": "Copy liftoff. Clean start.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "capcom2"
+ },
+ "Lost_c1_1": {
+  "takes": [
+   {
+    "heard": "We've lost the vehicle.",
+    "seed": 1
+   }
+  ],
+  "text": "We've lost the vehicle.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom1"
+ },
+ "Lost_c1_2": {
+  "takes": [
+   {
+    "heard": "Standby, we have lost contact with the vehicle.",
+    "seed": 1
+   }
+  ],
+  "text": "Stand by. We have lost contact with the vehicle.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom1"
+ },
+ "Lost_c1_3": {
+  "takes": [
+   {
+    "heard": "We have no data. Stand by.",
+    "seed": 1
+   }
+  ],
+  "text": "We have no data. Stand by.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom1"
+ },
+ "Lost_c2_1": {
+  "takes": [
+   {
+    "heard": "We've lost the vehicle",
+    "seed": 11
+   }
+  ],
+  "text": "We've lost the vehicle.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11
+  ],
+  "voice": "capcom2"
+ },
+ "Lost_c2_2": {
+  "takes": [
+   {
+    "heard": "Stand by, we have lost contact with the vehicle.",
+    "seed": 3
+   }
+  ],
+  "text": "Stand by. We have lost contact with the vehicle.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "capcom2"
+ },
+ "Lost_c2_3": {
+  "takes": [
+   {
+    "heard": "We have no data, stand by.",
+    "seed": 3
+   }
+  ],
+  "text": "We have no data. Stand by.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "capcom2"
+ },
+ "MECO_c1_1": {
+  "takes": [
+   {
+    "heard": "Houston copies main engine cut off, looking good.",
+    "seed": 3
+   }
+  ],
+  "text": "Houston copies main engine cutoff. Looking good.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "capcom1"
+ },
+ "MECO_c1_2": {
+  "takes": [
+   {
+    "heard": "Copy me code nice right up.",
+    "seed": 2
+   }
+  ],
+  "text": "Copy Mee-ko. Nice ride up.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20
+  ],
+  "voice": "capcom1"
+ },
+ "MECO_c1_3": {
+  "takes": [
+   {
+    "heard": "Copy main engine cut off. We see a good trajectory.",
+    "seed": 3
+   }
+  ],
+  "text": "Copy main engine cutoff. We see a good trajectory.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "capcom1"
+ },
+ "MECO_c1_4": {
+  "takes": [
+   {
+    "heard": "Copy engine cut off, good burn.",
+    "seed": 1
+   }
+  ],
+  "text": "Copy engine cutoff. Good burn.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom1"
+ },
+ "MECO_c2_1": {
+  "takes": [
+   {
+    "heard": "Houston copy's main engine cut off, looking good.",
+    "seed": 6
+   }
+  ],
+  "text": "Houston copies main engine cutoff. Looking good.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6
+  ],
+  "voice": "capcom2"
+ },
+ "MECO_c2_2": {
+  "takes": [
+   {
+    "heard": "Copy Meeko, nice ride up.",
+    "seed": 7
+   }
+  ],
+  "text": "Copy Mee-ko. Nice ride up.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   21,
+   22,
+   23,
+   24,
+   25,
+   26,
+   27,
+   28,
+   29,
+   30,
+   31,
+   32,
+   33,
+   34,
+   35,
+   36
+  ],
+  "voice": "capcom2"
+ },
+ "MECO_c2_3": {
+  "takes": [
+   {
+    "heard": "Copy main engine cutoff, we see a good trajectory.",
+    "seed": 5
+   }
+  ],
+  "text": "Copy main engine cutoff. We see a good trajectory.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "voice": "capcom2"
+ },
+ "MECO_c2_4": {
+  "takes": [
+   {
+    "heard": "Copy engine cutoff, good burn.",
+    "seed": 17
+   }
+  ],
+  "text": "Copy engine cutoff. Good burn.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   21,
+   22,
+   23,
+   24,
+   25,
+   26,
+   27,
+   28,
+   29,
+   30,
+   31,
+   32,
+   33,
+   34
+  ],
+  "voice": "capcom2"
+ },
+ "MaxQ_c1_1": {
+  "takes": [
+   {
+    "heard": "Copy Max-Q vehicle looks good.",
+    "seed": 2
+   }
+  ],
+  "text": "Copy max Q. Vehicle looks good.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "capcom1"
+ },
+ "MaxQ_c1_2": {
+  "takes": [
+   {
+    "heard": "Houston copies Max-Q, all systems nominal.",
+    "seed": 3
+   }
+  ],
+  "text": "Houston copies max Q. All systems nominal.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "capcom1"
+ },
+ "MaxQ_c1_3": {
+  "takes": [
+   {
+    "heard": "through Max-Q looking good from here.",
+    "seed": 2
+   }
+  ],
+  "text": "Through max Q. Looking good from here.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "capcom1"
+ },
+ "MaxQ_c1_4": {
+  "takes": [
+   {
+    "heard": "Max-Q, copy. All good from here.",
+    "seed": 6
+   }
+  ],
+  "text": "Max Q, copy. All good from here.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6
+  ],
+  "voice": "capcom1"
+ },
+ "MaxQ_c2_1": {
+  "takes": [
+   {
+    "heard": "Copy Max-Q. Vehicle looks good.",
+    "seed": 7
+   }
+  ],
+  "text": "Copy max Q. Vehicle looks good.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7
+  ],
+  "voice": "capcom2"
+ },
+ "MaxQ_c2_2": {
+  "takes": [
+   {
+    "heard": "Houston copies Max-Q all systems nominal.",
+    "seed": 1
+   }
+  ],
+  "text": "Houston copies max Q. All systems nominal.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom2"
+ },
+ "MaxQ_c2_3": {
+  "takes": [
+   {
+    "heard": "through Max-Q looking good from here.",
+    "seed": 2
+   }
+  ],
+  "text": "Through max Q. Looking good from here.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "capcom2"
+ },
+ "MaxQ_c2_4": {
+  "takes": [
+   {
+    "heard": "Max Q, copy all good from here.",
+    "seed": 13
+   }
+  ],
+  "text": "Max Q, copy. All good from here.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   21,
+   22,
+   23,
+   24
+  ],
+  "voice": "capcom2"
+ },
+ "Orbit_c1_1": {
+  "takes": [
+   {
+    "heard": "Copy good orbit, welcome to space.",
+    "seed": 10
+   }
+  ],
+  "text": "Copy good orbit. Welcome to space.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20
+  ],
+  "voice": "capcom1"
+ },
+ "Orbit_c1_2": {
+  "takes": [
+   {
+    "heard": "Houston confirms a stable orbit. Nice work.",
+    "seed": 1
+   }
+  ],
+  "text": "Houston confirms a stable orbit. Nice work.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom1"
+ },
+ "Orbit_c1_3": {
+  "takes": [
+   {
+    "heard": "Orbit confirmed. Enjoy the view.",
+    "seed": 27
+   }
+  ],
+  "text": "Orbit confirmed. Enjoy the view.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   21,
+   22,
+   23,
+   24,
+   25,
+   26,
+   27,
+   28,
+   29,
+   30,
+   31,
+   32,
+   33,
+   34
+  ],
+  "voice": "capcom1"
+ },
+ "Orbit_c1_4": {
+  "takes": [
+   {
+    "heard": "copy orbit good insertion",
+    "seed": 1
+   }
+  ],
+  "text": "Copy orbit. Good insertion.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom1"
+ },
+ "Orbit_c2_1": {
+  "takes": [
+   {
+    "heard": "Copy good orbit. Welcome to space.",
+    "seed": 1
+   }
+  ],
+  "text": "Copy good orbit. Welcome to space.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom2"
+ },
+ "Orbit_c2_2": {
+  "takes": [
+   {
+    "heard": "Houston confirms a stable orbit. Nice work.",
+    "seed": 3
+   }
+  ],
+  "text": "Houston confirms a stable orbit. Nice work.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "capcom2"
+ },
+ "Orbit_c2_3": {
+  "takes": [
+   {
+    "heard": "Orbit confirmed. Enjoy the view.",
+    "seed": 8
+   }
+  ],
+  "text": "Orbit confirmed. Enjoy the view.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8
+  ],
+  "voice": "capcom2"
+ },
+ "Orbit_c2_4": {
+  "takes": [
+   {
+    "heard": "Copy orbit, good insertion.",
+    "seed": 1
+   }
+  ],
+  "text": "Copy orbit. Good insertion.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom2"
+ },
+ "Reentry_c1_1": {
+  "takes": [
+   {
+    "heard": "Copy your go for entry interface, see you on the other side.",
+    "seed": 3
+   }
+  ],
+  "text": "Copy, you are go for entry interface. See you on the other side.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "capcom1"
+ },
+ "Reentry_c1_2": {
+  "takes": [
+   {
+    "heard": "Houston copies entry interface. Talk to you after the blackout.",
+    "seed": 3
+   }
+  ],
+  "text": "Houston copies entry interface. Talk to you after the blackout.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "capcom1"
+ },
+ "Reentry_c1_3": {
+  "takes": [
+   {
+    "heard": "Your go for entry will pick you up after the blackout.",
+    "seed": 3
+   }
+  ],
+  "text": "You're go for entry. We'll pick you up after the blackout.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "capcom1"
+ },
+ "Reentry_c1_4": {
+  "takes": [
+   {
+    "heard": "Copy entry. Talk to you on the other side.",
+    "seed": 2
+   }
+  ],
+  "text": "Copy entry. Talk to you on the other side.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "capcom1"
+ },
+ "Reentry_c2_1": {
+  "takes": [
+   {
+    "heard": "Copy your Gopher entry interface. See you on the other side.",
+    "seed": 4
+   }
+  ],
+  "text": "Copy, you are go for entry interface. See you on the other side.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "capcom2"
+ },
+ "Reentry_c2_2": {
+  "takes": [
+   {
+    "heard": "Houston Copies Entry Interface, talk to you after the blackout.",
+    "seed": 14
+   }
+  ],
+  "text": "Houston copies entry interface. Talk to you after the blackout.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   21,
+   22,
+   23,
+   24,
+   25,
+   26,
+   27,
+   28,
+   29,
+   30,
+   31,
+   32,
+   33,
+   34,
+   35,
+   36,
+   37,
+   38,
+   39,
+   40,
+   41,
+   42,
+   43,
+   44
+  ],
+  "voice": "capcom2"
+ },
+ "Reentry_c2_3": {
+  "takes": [
+   {
+    "heard": "Your go for entry will pick you up after the blackout.",
+    "seed": 6
+   }
+  ],
+  "text": "You're go for entry. We'll pick you up after the blackout.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6
+  ],
+  "voice": "capcom2"
+ },
+ "Reentry_c2_4": {
+  "takes": [
+   {
+    "heard": "Copy entry, talk to you on the other side.",
+    "seed": 10
+   }
+  ],
+  "text": "Copy entry. Talk to you on the other side.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10
+  ],
+  "voice": "capcom2"
+ },
+ "Splashdown_c1_1": {
+  "takes": [
+   {
+    "heard": "Houston copies splashdown, recovery forces are on the way.",
+    "seed": 14
+   }
+  ],
+  "text": "Houston copies splashdown. Recovery forces are on the way.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20
+  ],
+  "voice": "capcom1"
+ },
+ "Splashdown_c1_2": {
+  "takes": [
+   {
+    "heard": "Copy, splash down, recovery teams are moving in.",
+    "seed": 43
+   }
+  ],
+  "text": "Copy splashdown. Recovery teams are moving in.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   21,
+   22,
+   23,
+   24,
+   25,
+   26,
+   27,
+   28,
+   29,
+   30,
+   31,
+   32,
+   33,
+   34,
+   35,
+   36,
+   37,
+   38,
+   39,
+   40,
+   41,
+   42,
+   43
+  ],
+  "voice": "capcom1"
+ },
+ "Splashdown_c1_3": {
+  "takes": [
+   {
+    "heard": "Splashdown confirmed. Welcome home.",
+    "seed": 1
+   }
+  ],
+  "text": "Splashdown confirmed. Welcome home.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom1"
+ },
+ "Splashdown_c1_4": {
+  "takes": [
+   {
+    "heard": "Copy. Splashdown. Good job.",
+    "seed": 2
+   }
+  ],
+  "text": "Copy splashdown. Good job.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "capcom1"
+ },
+ "Splashdown_c2_1": {
+  "takes": [
+   {
+    "heard": "Houston copy's splashdown recovery forces are on the way.",
+    "seed": 4
+   }
+  ],
+  "text": "Houston copies splashdown. Recovery forces are on the way.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "capcom2"
+ },
+ "Splashdown_c2_2": {
+  "takes": [
+   {
+    "heard": "Copy splashdown recovery teams are moving in",
+    "seed": 19
+   }
+  ],
+  "text": "Copy splashdown. Recovery teams are moving in.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19
+  ],
+  "voice": "capcom2"
+ },
+ "Splashdown_c2_3": {
+  "takes": [
+   {
+    "heard": "Splashdown confirmed, welcome home.",
+    "seed": 22
+   }
+  ],
+  "text": "Splashdown confirmed. Welcome home.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   21,
+   22,
+   23,
+   24,
+   25
+  ],
+  "voice": "capcom2"
+ },
+ "Splashdown_c2_4": {
+  "takes": [
+   {
+    "heard": "Copy Splashdown, good job.",
+    "seed": 6
+   }
+  ],
+  "text": "Copy splashdown. Good job.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6
+  ],
+  "voice": "capcom2"
+ },
+ "Surface_c1_1": {
+  "takes": [
+   {
+    "heard": "Houston Copies, you're on the surface.",
+    "seed": 10
+   }
+  ],
+  "text": "Houston copies, you're on the surface.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18
+  ],
+  "voice": "capcom1"
+ },
+ "Surface_c1_2": {
+  "takes": [
+   {
+    "heard": "Copy touchdown. We see you down safe",
+    "seed": 23
+   }
+  ],
+  "text": "Copy touchdown. We see you down safe.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   21,
+   22,
+   23,
+   24,
+   25
+  ],
+  "voice": "capcom1"
+ },
+ "Surface_c1_3": {
+  "takes": [
+   {
+    "heard": "Houston copies touchdown.",
+    "seed": 11
+   }
+  ],
+  "text": "Houston copies touchdown.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13
+  ],
+  "voice": "capcom1"
+ },
+ "Surface_c1_4": {
+  "takes": [
+   {
+    "heard": "Copy, touchdown, good landing.",
+    "seed": 3
+   }
+  ],
+  "text": "Copy touchdown. Good landing.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "capcom1"
+ },
+ "Surface_c1_5": {
+  "takes": [
+   {
+    "heard": "We see you down. Nice work.",
+    "seed": 6
+   }
+  ],
+  "text": "We see you down. Nice work.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6
+  ],
+  "voice": "capcom1"
+ },
+ "Surface_c2_1": {
+  "takes": [
+   {
+    "heard": "Houston Copies, you're on the surface.",
+    "seed": 11
+   }
+  ],
+  "text": "Houston copies, you're on the surface.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11
+  ],
+  "voice": "capcom2"
+ },
+ "Surface_c2_2": {
+  "takes": [
+   {
+    "heard": "Copy touchdown, we see you down safe.",
+    "seed": 7
+   }
+  ],
+  "text": "Copy touchdown. We see you down safe.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7
+  ],
+  "voice": "capcom2"
+ },
+ "Surface_c2_3": {
+  "takes": [
+   {
+    "heard": "Houston Copies Touchdown.",
+    "seed": 55
+   }
+  ],
+  "text": "Houston copies touchdown.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   21,
+   22,
+   23,
+   24,
+   25,
+   26,
+   27,
+   28,
+   29,
+   30,
+   31,
+   32,
+   33,
+   34,
+   35,
+   36,
+   37,
+   38,
+   39,
+   40,
+   41,
+   42,
+   43,
+   44,
+   45,
+   46,
+   47,
+   48,
+   49,
+   50,
+   51,
+   52,
+   53,
+   54,
+   55,
+   56,
+   57,
+   58,
+   59,
+   60,
+   61,
+   62,
+   63,
+   64,
+   65,
+   66,
+   67,
+   68,
+   69,
+   70,
+   71,
+   72
+  ],
+  "voice": "capcom2"
+ },
+ "Surface_c2_4": {
+  "takes": [
+   {
+    "heard": "Copy touchdown, good landing.",
+    "seed": 3
+   }
+  ],
+  "text": "Copy touchdown. Good landing.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "capcom2"
+ },
+ "Surface_c2_5": {
+  "takes": [
+   {
+    "heard": "We see you down. Nice work.",
+    "seed": 13
+   }
+  ],
+  "text": "We see you down. Nice work.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13
+  ],
+  "voice": "capcom2"
+ },
+ "TankSep_c1_1": {
+  "takes": [
+   {
+    "heard": "We confirm tank separation, nice ride.",
+    "seed": 1
+   }
+  ],
+  "text": "We confirm tank separation. Nice ride.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom1"
+ },
+ "TankSep_c1_2": {
+  "takes": [
+   {
+    "heard": "Copy tank separation. Good job.",
+    "seed": 2
+   }
+  ],
+  "text": "Copy tank separation. Good job.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "capcom1"
+ },
+ "TankSep_c1_3": {
+  "takes": [
+   {
+    "heard": "Tanks separation confirmed. You're on your own now.",
+    "seed": 2
+   }
+  ],
+  "text": "Tank separation confirmed. You're on your own now.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "capcom1"
+ },
+ "TankSep_c2_1": {
+  "takes": [
+   {
+    "heard": "We confirm tank separation, nice ride.",
+    "seed": 1
+   }
+  ],
+  "text": "We confirm tank separation. Nice ride.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom2"
+ },
+ "TankSep_c2_2": {
+  "takes": [
+   {
+    "heard": "Copy tank separation. Good job.",
+    "seed": 4
+   }
+  ],
+  "text": "Copy tank separation. Good job.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "capcom2"
+ },
+ "TankSep_c2_3": {
+  "takes": [
+   {
+    "heard": "Tank separation confirmed. You're on your own now.",
+    "seed": 3
+   }
+  ],
+  "text": "Tank separation confirmed. You're on your own now.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "capcom2"
+ },
+ "Undocked_c1_1": {
+  "takes": [
+   {
+    "heard": "Copy physical separation.",
+    "seed": 1
+   }
+  ],
+  "text": "Copy physical separation.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom1"
+ },
+ "Undocked_c1_2": {
+  "takes": [
+   {
+    "heard": "Houston copies, undocking, clear to maneuver.",
+    "seed": 1
+   }
+  ],
+  "text": "Houston copies undocking. Clear to maneuver.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom1"
+ },
+ "Undocked_c1_3": {
+  "takes": [
+   {
+    "heard": "Separation confirmed. Fly safe.",
+    "seed": 1
+   }
+  ],
+  "text": "Separation confirmed. Fly safe.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom1"
+ },
+ "Undocked_c1_4": {
+  "takes": [
+   {
+    "heard": "Copy on dock, you're clear.",
+    "seed": 20
+   }
+  ],
+  "text": "Copy undock. You're clear.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13,
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20
+  ],
+  "voice": "capcom1"
+ },
+ "Undocked_c2_1": {
+  "takes": [
+   {
+    "heard": "Copy physical separation.",
+    "seed": 8
+   }
+  ],
+  "text": "Copy physical separation.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8
+  ],
+  "voice": "capcom2"
+ },
+ "Undocked_c2_2": {
+  "takes": [
+   {
+    "heard": "Houston copies undocking, clear to maneuver.",
+    "seed": 1
+   }
+  ],
+  "text": "Houston copies undocking. Clear to maneuver.",
+  "tried": [
+   1
+  ],
+  "voice": "capcom2"
+ },
+ "Undocked_c2_3": {
+  "takes": [
+   {
+    "heard": "Separation confirmed. Fly safe.",
+    "seed": 5
+   }
+  ],
+  "text": "Separation confirmed. Fly safe.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6
+  ],
+  "voice": "capcom2"
+ },
+ "Undocked_c2_4": {
+  "takes": [
+   {
+    "heard": "Copy undock. You're clear.",
+    "seed": 8
+   }
+  ],
+  "text": "Copy undock. You're clear.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8
+  ],
+  "voice": "capcom2"
+ }
+}

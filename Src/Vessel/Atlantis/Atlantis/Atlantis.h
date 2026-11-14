@@ -306,6 +306,13 @@ public:
 
 	void OpenRMSDlg();
 
+	// the APUs (hydraulics): heard from the main engines' ignition to a minute after the tank's
+	// separation, and from entry interface to wheels stop (XRSound's recordings; oapiAudioPlay)
+	int apuSnd = 0, apuState = 0;   // (0 off, 1 starting, 2 running, 3 stopping)
+	bool apuEntry = false;
+	double apuEtSepAt = -1.0;
+	void UpdateApu (double simt);
+
 	int status; // 0=launch configuration
 	            // 1=SRB's engaged
 	            // 2=SRB's separated

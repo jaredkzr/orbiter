@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
+#include <string>
 
 extern Camera *g_camera;
 extern Vessel *g_focusobj;
@@ -21,14 +23,42 @@ extern Vessel *g_focusobj;
 namespace audio {
 
 namespace {
-	const char *CABIN_FILE = "XRSound/Default/Air Conditioning.wav";
-	/// The recordings' RMS (measured), to set their levels in pascals
+	/// The cabin's air handling: generated (Utils/Audio/make_sfx.py), else XRSound's recording
+	const char *CABIN_FILE = "Sound/Generated/cabin_air.flac";
+	const char *CABIN_FILE_XR = "XRSound/Default/Air Conditioning.wav";
+	/// The recordings' RMS (measured; the generated ones are made to it), to set their levels in pascals
 	constexpr double CABIN_RMS = 0.01396;    // (-37.1 dBFS)
-	constexpr double EVENT_RMS = 0.06;       // (the cabin ambience's, about -24 dBFS)
+	constexpr double EVENT_RMS = 0.06;       // (the cabin's events, about -24 dBFS)
 	/// From a cockpit, the outside: as the world muffles the air's sound
 	constexpr float INSIDE_GAIN = 0.1f, INSIDE_CUTOFF = 700.0f;
 	/// Outdoors at rest: near the ground, not flying past
 	constexpr double OUT_ALT = 2000.0, OUT_SPEED = 30.0;
+}
+
+const std::string &Ambience::CabinFile ()
+{
+	static const std::string gen (CABIN_FILE), xr (CABIN_FILE_XR);
+	static const bool have = !System::FindSound (gen).empty ();
+	return have ? gen : xr;
+}
+
+void Ambience::FindEvents ()
+{
+	// (once: the generated events, Sound/Generated/event_*.flac; else XRSound's that exist)
+	if (!events.empty ()) return;
+	std::error_code ec;
+	const std::string dir = System::FindSound ("Sound/Generated");
+	if (!dir.empty ())
+		for (const auto &de : std::filesystem::directory_iterator (dir, ec)) {
+			const std::string n = de.path ().filename ().string ();
+			if (n.rfind ("event_", 0) == 0 && de.path ().extension () == ".flac") events.push_back ("Sound/Generated/" + n);
+		}
+	std::sort (events.begin (), events.end ());
+	if (events.empty ())
+		for (int i = 0; i < 13; i++) {
+			const std::string f = "XRSound/Default/Cabin Ambience/amb" + std::to_string (i) + ".wav";
+			if (!System::FindSound (f).empty ()) events.push_back (f);   // (amb7 is missing)
+		}
 }
 
 Ambience::Ambience (System &s): sys (s)
@@ -71,14 +101,18 @@ void Ambience::Update (double t, double dt)
 
 	// the cabin: its air handling while the camera is in the cockpit
 	if (cockpit) {
-		if (!cabin || !sys.Playing (cabin)) cabin = sys.PlayOn (INTERIOR, CABIN_FILE, CABIN_P / P_FULL / CABIN_RMS, true);
-		// now and then a pump, a valve
+		if (!cabin || !sys.Playing (cabin)) cabin = sys.PlayOn (INTERIOR, CabinFile (), CABIN_P / P_FULL / CABIN_RMS, true);
+		// now and then a pump, a valve, a fan (one at random, not the last one again)
 		if (nextEvent < 0.0 || t < nextEvent - 60.0) nextEvent = t + 7.0 + 28.0 * Rand ();
 		if (t >= nextEvent) {
-			char f[64];
-			snprintf (f, sizeof (f), "XRSound/Default/Cabin Ambience/amb%d.wav", (int)(Rand () * 13.0) % 13);
-			if (cabinEvent) sys.StopSound (cabinEvent);
-			cabinEvent = sys.PlayOn (INTERIOR, f, CABIN_EVENT_P / P_FULL / EVENT_RMS * (0.5 + 0.5 * Rand ()), false);
+			FindEvents ();
+			if (!events.empty ()) {
+				int k = (int)(Rand () * events.size ()) % (int)events.size ();
+				if (events.size () > 1 && k == lastEvent) k = (k + 1) % (int)events.size ();
+				lastEvent = k;
+				if (cabinEvent) sys.StopSound (cabinEvent);
+				cabinEvent = sys.PlayOn (INTERIOR, events[k], CABIN_EVENT_P / P_FULL / EVENT_RMS * (0.5 + 0.5 * Rand ()), false);
+			}
 			nextEvent = t + 7.0 + 28.0 * Rand ();
 		}
 	} else {

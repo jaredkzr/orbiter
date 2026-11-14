@@ -54,6 +54,9 @@ public:
 private:
 	bool docked;
 	double p_cabin, p_airlock;      // current pressure in cabin and airlock [Pa]
+	int hissIn = 0, hissOut = 0;    // the air's hiss, pressurizing and venting (oapiAudioPlay handles)
+	double hissQuiet = 0.0;         // [s] since the air last moved
+	void Hiss (double flowIn, double flowOut, double simdt);
 	double p_ext_hatch, p_ext_lock; // current pressure outside hatch and airlock [Pa]
 	static double v_cabin;          // cabin volume [m^3]
 	static double v_airlock;        // airlock volume [m^3]

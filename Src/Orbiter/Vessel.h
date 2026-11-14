@@ -1405,6 +1405,14 @@ protected:
 	// Should be called only after update phase, and assumes that sp is up to date.
 
 public:
+	/// The hottest part's temperature against what it stands (1: it burns off; 0: not known)
+	double HeatFraction () const;
+	/// The most loaded part's load against its strength, last step (1: it breaks; 0: not known)
+	double LoadFraction () const;
+	/// A black hole's tides pulling the core apart, against what tears it (1: it does; 0: none)
+	double TidalLoad () const { return tidal_load; }
+	/// Fraction of the sun's light reaching the vessel (0: in shadow; estimated every few seconds)
+	double IlluminationFactor () const;
 	bool ThrustEngaged () const { return m_bThrustEngaged; }
 
 	// Relativistic travel (RelFlight.cpp, Vessel.cpp): the ideal drive, a
@@ -1653,9 +1661,6 @@ private:
 
 	void UpdateReceiverStatus (DWORD idx = 0xffff);
 	// update reception status for NAV receiver idx (or for all by default)
-
-	double IlluminationFactor () const;
-	// returns the sun illumination factor (0-1) at current position.
 	// only considers shadowing effect from closest planet
 	// currently ignores atmospheric effects
 
@@ -1852,6 +1857,7 @@ private:
 	double contact_sr = 1.0;                     // share of the contacts' impulse taken as force in the step (crush stroke)
 	std::vector<Vector> break_J;                 // the impulse each part keeps when it breaks loose (vessel frame; Destroy)
 	std::vector<float> part_load;                // load / strength of each part's joint in the last step
+	float tidal_load = 0.0f;                     // a black hole's tides on the core / what tears it, last step
 	std::vector<double> part_temp;               // [K] temperature of each part
 	bool destroyed = false;
 	double destroyed_t = 0.0;                    // [s] simulation time when it was destroyed

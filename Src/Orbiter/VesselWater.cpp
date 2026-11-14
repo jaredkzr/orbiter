@@ -521,6 +521,7 @@ bool Vessel::InitAfloat (Planet *planet, double lng, double lat, double dir)
 		char detail[256];
 		snprintf (detail, sizeof (detail), "%s rests on the water", Name());
 		flightevent::Post (flightevent::INFO, "Afloat", detail);
+		if (audio::System *as = g_pOrbiter ? g_pOrbiter->Audio () : nullptr) as->Event (this, audio::Callouts::EV_AFLOAT);
 	}
 	LOGOUT ("%s rests afloat at %.1f s: origin %.2f m above the water, pitch %.1f, roll %.1f deg", Name(), td.SimT1, y, th * DEG, ph * DEG);
 	return true;

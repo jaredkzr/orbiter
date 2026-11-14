@@ -1,12 +1,189 @@
-# Mission Control's replies (Src/Orbiter/Audio/Radio.cpp), made offline with
-# Piper (en_US-norman, public domain) by Utils/Audio/make_voice.py
-# --model en_US-norman-medium.onnx --lines Sound/Voice/Ground/lines.txt --pitch 1.
-# "<file name>|<text>"
-Liftoff|Roger, liftoff. All systems look good from here.
-MECO|Houston copies main engine cutoff. Looking good.
-Orbit|Copy good orbit. Welcome to space.
-Docked|Houston copies capture. Nice work.
-Undocked|Copy physical separation.
-Splashdown|Houston copies splashdown. Recovery forces are on the way.
-Landed|Houston copies wheels stop. Welcome home.
-Reentry|Copy, you are go for entry interface. See you on the other side.
+# Mission Control's replies (Src/Orbiter/Audio/Radio.cpp): "<Event>_<voice>_<n>|<text>|<voice>".
+# Each event has three lines, each said by both CAPCOMs (Utils/Audio/voices: capcom1 "c1", capcom2
+# "c2"). One CAPCOM is on shift at a time (8-hour shifts by the simulation's clock, alternating): the
+# radio plays one of that CAPCOM's takes at random, never the same one twice running, a pause after the
+# crew's callout (and the light's round trip). Generic on purpose: no call sign, no quotes from real
+# missions. Made by Utils/Audio/make_voice.py --engine qwen3 --lines Sound/Voice/Ground/lines.txt
+# --max-rise -1.0 --end-stop -24 (the ending falls a semitone or more; capcom2 ends firmly); kept takes:
+# lines.takes.json, the reworked ones chosen by ear from --candidates. Takes that say "Houston" are
+# played at the Earth and the Moon only (Radio::SaysHouston); each event has three that don't.
+
+# liftoff (Callouts: off the pad)
+Liftoff_c1_1|Roger, liftoff. All systems look good from here.|capcom1
+Liftoff_c2_1|Roger, liftoff. All systems look good from here.|capcom2
+Liftoff_c1_2|Houston copies liftoff. Good start, everything looks nominal.|capcom1
+Liftoff_c2_2|Houston copies liftoff. Good start, everything looks nominal.|capcom2
+Liftoff_c1_3|Liftoff confirmed. We're with you all the way up.|capcom1
+Liftoff_c2_3|Liftoff confirmed. We're with you all the way up.|capcom2
+Liftoff_c1_4|Copy liftoff. Clean start.|capcom1
+Liftoff_c2_4|Copy liftoff. Clean start.|capcom2
+# ignition (Callouts: the main engines lit on the pad)
+Ignition_c1_1|Copy ignition. Good luck.|capcom1
+Ignition_c2_1|Copy ignition. Good luck.|capcom2
+Ignition_c1_2|Houston copies ignition. Good luck up there.|capcom1
+Ignition_c2_2|Houston copies ignition. Good luck up there.|capcom2
+Ignition_c1_3|We see ignition. Have a good flight.|capcom1
+Ignition_c2_3|We see ignition. Have a good flight.|capcom2
+Ignition_c1_4|Copy ignition. Engines look good.|capcom1
+Ignition_c2_4|Copy ignition. Engines look good.|capcom2
+# max Q (Callouts: past the peak dynamic pressure)
+MaxQ_c1_1|Copy max Q. Vehicle looks good.|capcom1
+MaxQ_c2_1|Copy max Q. Vehicle looks good.|capcom2
+MaxQ_c1_2|Houston copies max Q. All systems nominal.|capcom1
+MaxQ_c2_2|Houston copies max Q. All systems nominal.|capcom2
+MaxQ_c1_3|Through max Q. Looking good from here.|capcom1
+MaxQ_c2_3|Through max Q. Looking good from here.|capcom2
+MaxQ_c1_4|Max Q, copy. All good from here.|capcom1
+MaxQ_c2_4|Max Q, copy. All good from here.|capcom2
+# main engine cutoff (Callouts)
+MECO_c1_1|Houston copies main engine cutoff. Looking good.|capcom1
+MECO_c2_1|Houston copies main engine cutoff. Looking good.|capcom2
+MECO_c1_2|Copy Mee-ko. Nice ride up.|capcom1
+MECO_c2_2|Copy Mee-ko. Nice ride up.|capcom2
+MECO_c1_3|Copy main engine cutoff. We see a good trajectory.|capcom1
+MECO_c2_3|Copy main engine cutoff. We see a good trajectory.|capcom2
+MECO_c1_4|Copy engine cutoff. Good burn.|capcom1
+MECO_c2_4|Copy engine cutoff. Good burn.|capcom2
+# orbit (Callouts: the periapsis above the atmosphere)
+Orbit_c1_1|Copy good orbit. Welcome to space.|capcom1
+Orbit_c2_1|Copy good orbit. Welcome to space.|capcom2
+Orbit_c1_2|Houston confirms a stable orbit. Nice work.|capcom1
+Orbit_c2_2|Houston confirms a stable orbit. Nice work.|capcom2
+Orbit_c1_3|Orbit confirmed. Enjoy the view.|capcom1
+Orbit_c2_3|Orbit confirmed. Enjoy the view.|capcom2
+Orbit_c1_4|Copy orbit. Good insertion.|capcom1
+Orbit_c2_4|Copy orbit. Good insertion.|capcom2
+# docked, undocked (Callouts)
+Docked_c1_1|Houston copies capture. Nice work.|capcom1
+Docked_c2_1|Houston copies capture. Nice work.|capcom2
+Docked_c1_2|Copy hard dock. Good job.|capcom1
+Docked_c2_2|Copy hard dock. Good job.|capcom2
+Docked_c1_3|We see you docked. Smooth approach.|capcom1
+Docked_c2_3|We see you docked. Smooth approach.|capcom2
+Docked_c1_4|Copy capture. Good docking.|capcom1
+Docked_c2_4|Copy capture. Good docking.|capcom2
+Undocked_c1_1|Copy physical separation.|capcom1
+Undocked_c2_1|Copy physical separation.|capcom2
+Undocked_c1_2|Houston copies undocking. Clear to maneuver.|capcom1
+Undocked_c2_2|Houston copies undocking. Clear to maneuver.|capcom2
+Undocked_c1_3|Separation confirmed. Fly safe.|capcom1
+Undocked_c2_3|Separation confirmed. Fly safe.|capcom2
+Undocked_c1_4|Copy undock. You're clear.|capcom1
+Undocked_c2_4|Copy undock. You're clear.|capcom2
+# deorbit (Callouts: a burn begun in orbit that ends with the periapsis in the atmosphere)
+Deorbit_c1_1|Copy deorbit burn complete. Good burn.|capcom1
+Deorbit_c2_1|Copy deorbit burn complete. Good burn.|capcom2
+Deorbit_c1_2|Houston copies the deorbit burn. Your trajectory looks good.|capcom1
+Deorbit_c2_2|Houston copies the deorbit burn. Your trajectory looks good.|capcom2
+Deorbit_c1_3|Deorbit burn confirmed. Have a safe trip down.|capcom1
+Deorbit_c2_3|Deorbit burn confirmed. Have a safe trip down.|capcom2
+Deorbit_c1_4|Copy the burn. You're on your way down.|capcom1
+Deorbit_c2_4|Copy the burn. You're on your way down.|capcom2
+# into orbit about a body by a burn (not a launch's), onto an escape path (Callouts: a burn's end)
+Capture_c1_1|Copy orbit insertion. Good burn.|capcom1
+Capture_c2_1|Copy orbit insertion. Good burn.|capcom2
+Capture_c1_2|We confirm capture. Nice flying.|capcom1
+Capture_c2_2|We confirm capture. Nice flying.|capcom2
+Capture_c1_3|Copy, you're in orbit. Looks stable from here.|capcom1
+Capture_c2_3|Copy, you're in orbit. Looks stable from here.|capcom2
+Escape_c1_1|Copy, you're outbound. Safe travels.|capcom1
+Escape_c2_1|Copy, you're outbound. Safe travels.|capcom2
+Escape_c1_2|We confirm the departure burn. Trajectory looks good.|capcom1
+Escape_c2_2|We confirm the departure burn. Trajectory looks good.|capcom2
+Escape_c1_3|Copy escape. We'll keep an eye on you.|capcom1
+Escape_c2_3|Copy escape. We'll keep an eye on you.|capcom2
+# a powered descent on an airless world (Callouts: from orbit, braking down below 15 km)
+Descent_c1_1|Copy powered descent. You're looking good.|capcom1
+Descent_c2_1|Copy powered descent. You're looking good.|capcom2
+Descent_c1_2|We see the descent burn. Go for landing.|capcom1
+Descent_c2_2|We see the descent burn. Go for landing.|capcom2
+Descent_c1_3|Copy, you're on your way down.|capcom1
+Descent_c2_3|Copy, you're on your way down.|capcom2
+# a rendezvous inside one kilometre of the port (Callouts)
+Approach_c1_1|We show you inside one kilometre. You're go for final approach.|capcom1
+Approach_c2_1|We show you inside one kilometre. You're go for final approach.|capcom2
+Approach_c1_2|Copy one kilometre. Take it slow.|capcom1
+Approach_c2_2|Copy one kilometre. Take it slow.|capcom2
+Approach_c1_3|Inside a kilometre. Looking good from here.|capcom1
+Approach_c2_3|Inside a kilometre. Looking good from here.|capcom2
+# booster and tank separation (a vessel's own: oapiAudioEvent; the Shuttle)
+BoosterSep_c1_1|Copy booster separation. You're looking good.|capcom1
+BoosterSep_c2_1|Copy booster separation. You're looking good.|capcom2
+BoosterSep_c1_2|We confirm booster separation. Performance is nominal.|capcom1
+BoosterSep_c2_2|We confirm booster separation. Performance is nominal.|capcom2
+BoosterSep_c1_3|Copy staging. Looking good from here.|capcom1
+BoosterSep_c2_3|Copy staging. Looking good from here.|capcom2
+TankSep_c1_1|We confirm tank separation. Nice ride.|capcom1
+TankSep_c2_1|We confirm tank separation. Nice ride.|capcom2
+TankSep_c1_2|Copy tank separation. Good job.|capcom1
+TankSep_c2_2|Copy tank separation. Good job.|capcom2
+TankSep_c1_3|Tank separation confirmed. You're on your own now.|capcom1
+TankSep_c2_3|Tank separation confirmed. You're on your own now.|capcom2
+# the vehicle lost near the ground (Radio: destroyed below 10 km; LOS above)
+Lost_c1_1|We've lost the vehicle.|capcom1
+Lost_c2_1|We've lost the vehicle.|capcom2
+Lost_c1_2|Stand by. We have lost contact with the vehicle.|capcom1
+Lost_c2_2|Stand by. We have lost contact with the vehicle.|capcom2
+Lost_c1_3|We have no data. Stand by.|capcom1
+Lost_c2_3|We have no data. Stand by.|capcom2
+# leaving Earth's neighbourhood for the Sun's (Callouts: the reference body): the replies will lag from here
+DeepSpace_c1_1|Copy, you're leaving our near-Earth coverage. Expect delayed comm from here.|capcom1
+DeepSpace_c2_1|Copy, you're leaving our near-Earth coverage. Expect delayed comm from here.|capcom2
+DeepSpace_c1_2|We have you on the deep-space loop now.|capcom1
+DeepSpace_c2_2|We have you on the deep-space loop now.|capcom2
+DeepSpace_c1_3|Copy, going to the long-delay loop. Talk to you down the line.|capcom1
+DeepSpace_c2_3|Copy, going to the long-delay loop. Talk to you down the line.|capcom2
+# entry interface (Radio: through 120 km, coming down fast)
+Reentry_c1_1|Copy, you are go for entry interface. See you on the other side.|capcom1
+Reentry_c2_1|Copy, you are go for entry interface. See you on the other side.|capcom2
+Reentry_c1_2|Houston copies entry interface. Talk to you after the blackout.|capcom1
+Reentry_c2_2|Houston copies entry interface. Talk to you after the blackout.|capcom2
+Reentry_c1_3|You're go for entry. We'll pick you up after the blackout.|capcom1
+Reentry_c2_3|You're go for entry. We'll pick you up after the blackout.|capcom2
+Reentry_c1_4|Copy entry. Talk to you on the other side.|capcom1
+Reentry_c2_4|Copy entry. Talk to you on the other side.|capcom2
+# the signal back after the blackout (Radio)
+AOS_c1_1|We have you back. Good to hear from you.|capcom1
+AOS_c2_1|We have you back. Good to hear from you.|capcom2
+AOS_c1_2|Houston has you loud and clear. Welcome back.|capcom1
+AOS_c2_2|Houston has you loud and clear. Welcome back.|capcom2
+AOS_c1_3|Signal reacquired. Glad to have you back.|capcom1
+AOS_c2_3|Signal reacquired. Glad to have you back.|capcom2
+AOS_c1_4|Good to hear you again. Signal is solid.|capcom1
+AOS_c2_4|Good to hear you again. Signal is solid.|capcom2
+# landed (Callouts: wheels stop, home from orbit); splashdown; down on another world from orbit
+Landed_c1_1|Houston copies wheels stop. Welcome home.|capcom1
+Landed_c2_1|Houston copies wheels stop. Welcome home.|capcom2
+Landed_c1_2|Copy wheels stop. Welcome home.|capcom1
+Landed_c2_2|Copy wheels stop. Welcome home.|capcom2
+Landed_c1_3|Wheels stop confirmed.|capcom1
+Landed_c2_3|Wheels stop confirmed.|capcom2
+Landed_c1_4|Copy wheels stop. Nice landing.|capcom1
+Landed_c2_4|Copy wheels stop. Nice landing.|capcom2
+Splashdown_c1_1|Houston copies splashdown. Recovery forces are on the way.|capcom1
+Splashdown_c2_1|Houston copies splashdown. Recovery forces are on the way.|capcom2
+Splashdown_c1_2|Copy splashdown. Recovery teams are moving in.|capcom1
+Splashdown_c2_2|Copy splashdown. Recovery teams are moving in.|capcom2
+Splashdown_c1_3|Splashdown confirmed. Welcome home.|capcom1
+Splashdown_c2_3|Splashdown confirmed. Welcome home.|capcom2
+Splashdown_c1_4|Copy splashdown. Good job.|capcom1
+Splashdown_c2_4|Copy splashdown. Good job.|capcom2
+Surface_c1_1|Houston copies, you're on the surface.|capcom1
+Surface_c2_1|Houston copies, you're on the surface.|capcom2
+Surface_c1_2|Copy touchdown. We see you down safe.|capcom1
+Surface_c2_2|Copy touchdown. We see you down safe.|capcom2
+Surface_c1_3|Houston copies touchdown.|capcom1
+Surface_c2_3|Houston copies touchdown.|capcom2
+Surface_c1_4|Copy touchdown. Good landing.|capcom1
+Surface_c2_4|Copy touchdown. Good landing.|capcom2
+Surface_c1_5|We see you down. Nice work.|capcom1
+Surface_c2_5|We see you down. Nice work.|capcom2
+# the vessel in focus destroyed (Radio: a moment of silence first)
+LOS_c1_1|We've lost your signal.|capcom1
+LOS_c2_1|We've lost your signal.|capcom2
+LOS_c1_2|Houston has lost all data.|capcom1
+LOS_c2_2|Houston has lost all data.|capcom2
+LOS_c1_3|Loss of signal. Please respond.|capcom1
+LOS_c2_3|Loss of signal. Please respond.|capcom2
+LOS_c1_4|We've lost all data. Stand by.|capcom1
+LOS_c2_4|We've lost all data. Stand by.|capcom2

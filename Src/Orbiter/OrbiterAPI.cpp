@@ -1869,6 +1869,13 @@ DLLEXPORT const char *oapiAudioCallout (int n)
 	return as ? as->GetCallouts ().Recent (n) : nullptr;
 }
 
+DLLEXPORT bool oapiAudioEvent (OBJHANDLE hVessel, const char *event)
+{
+	audio::System *as = Audio ();
+	const Vessel *v = AsVessel (hVessel);
+	return as && v && event && as->VesselEvent (v, event);
+}
+
 DLLEXPORT void oapiAudioClick (int kind)
 {
 	if (audio::System *as = Audio ())

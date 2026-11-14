@@ -846,6 +846,7 @@ void Atlantis::SeparateBoosters (double met)
 	// reconfigure
 	status = 2;
 	RecordEvent ("JET", "SRB");
+	oapiAudioEvent (GetHandle (), "BoosterSeparation");
 	if (GetHandle () == oapiGetFocusObject ())
 		oapiAddNotification (OAPINOTIF_SUCCESS, "Booster separation", "The SRBs fall away (Camera dialog, Ctrl+F1: watch them)");
 }
@@ -868,6 +869,7 @@ void Atlantis::SeparateTank ()
 	// reconfigure
 	status = 3;
 	RecordEvent ("JET", "ET");
+	oapiAudioEvent (GetHandle (), "TankSeparation");
 	if (GetHandle () == oapiGetFocusObject ())
 		oapiAddNotification (OAPINOTIF_SUCCESS, "Tank separation", "The external tank falls away");
 }
@@ -1633,9 +1635,42 @@ void Atlantis::clbkFocusChanged (bool getfocus, OBJHANDLE newv, OBJHANDLE oldv)
 // --------------------------------------------------------------
 // Simulation time step
 // --------------------------------------------------------------
+void Atlantis::UpdateApu (double simt)
+{
+	if (status == 3 && apuEtSepAt < 0.0) apuEtSepAt = simt;
+	if (status < 3) apuEtSepAt = -1.0;
+	VECTOR3 hv;
+	GetHorizonAirspeedVector (hv);
+	if (status == 3 && GetAltitude () < 120e3 && hv.y < 0.0 && GetAirspeed () > 3000.0) apuEntry = true;
+	if (GroundContact () && GetGroundspeed () < 0.5) apuEntry = false;
+	const bool want = (status < 3 && GetThrusterGroupLevel (THGROUP_MAIN) > 0.0) || (status < 3 && apuState) ||
+		(status == 3 && simt - apuEtSepAt < 60.0) || apuEntry;
+	const VECTOR3 pos = _V(0, 0, -12);
+	const double LEVEL = 0.02;
+	switch (apuState) {
+	case 0:
+		if (want) { apuSnd = oapiAudioPlay (GetHandle (), "XRSound/Default/APU Startup.wav", &pos, LEVEL, false); apuState = 1; }
+		break;
+	case 1:
+		if (!oapiAudioPlaying (apuSnd)) { apuSnd = oapiAudioPlay (GetHandle (), "XRSound/Default/APU Run.wav", &pos, LEVEL, true); apuState = 2; }
+		break;
+	case 2:
+		if (!want) {
+			oapiAudioStop (apuSnd);
+			apuSnd = oapiAudioPlay (GetHandle (), "XRSound/Default/APU Shutdown.wav", &pos, LEVEL, false);
+			apuState = 3;
+		}
+		break;
+	case 3:
+		if (!oapiAudioPlaying (apuSnd)) apuSnd = 0, apuState = 0;
+		break;
+	}
+}
+
 void Atlantis::clbkPreStep (double simt, double simdt, double mjd)
 {
 	ascap->Update (simt);
+	UpdateApu (simt);
 
 	//double met = (status == 0 ? 0.0 : simt-t0);
 	double met = ascap->GetMET (simt);

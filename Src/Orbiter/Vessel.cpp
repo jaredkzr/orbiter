@@ -5290,6 +5290,7 @@ void Vessel::UpdateStructuralLoads ()
 	}
 	// a black hole's tides: each part pulled relative to the centre of
 	// gravity (the ideal drive and gravity themselves load nothing)
+	tidal_load = 0.0f;
 	if (const BlackHole *bh = StrongFieldHole ()) {
 		BlackHole::Local loc;
 		if (!swallowed && bh->LocalState (s0->pos - bh->GPos(), s0->vel - bh->GVel(), loc)) {
@@ -5305,6 +5306,7 @@ void Vessel::UpdateStructuralLoads ()
 			// radius out, exceed what breaks the core's joints)
 			double lim = structure::LOADFACTOR * structure::SAFETY * structure::CORE_FACTOR * structure::G0;
 			double arm = 0.5 * (np < 2 ? size : parts[0].radius);
+			tidal_load = (float)(loc.tidalMax * arm / lim);   // (the hull hears it coming: Audio/Effects' creaks)
 			if (loc.tidalMax * arm > lim) { Destroy ("torn apart by tides"); return; }
 			for (size_t j = 0; j < np && np > 1; j++)
 				if (!PartLost ((int)j)) part_F[j] += tide (parts[j].cg - dmg.cg) * parts[j].mass;
@@ -5477,6 +5479,24 @@ void Vessel::KeepImpulse (Debris *d, const Vector &J)
 	d->AddVelocity (Jg / d->Mass());
 	double M = OwnMass();
 	if (M > 1e-3) AddVelocity (-Jg / M);
+}
+
+double Vessel::LoadFraction () const
+{
+	double L = 0.0;
+	for (size_t j = 0; j < part_load.size(); j++)
+		if (!PartLost ((int)j)) L = std::max (L, (double)part_load[j]);
+	return L;
+}
+
+double Vessel::HeatFraction () const
+{
+	const structure::Model &sm = Structure();
+	if (sm.Indestructible() || sm.MaxTemp() <= 0.0) return 0.0;
+	double hot = 0.0;
+	for (size_t j = 0; j < part_temp.size() && j < sm.Parts().size(); j++)
+		if (!PartLost ((int)j)) hot = std::max (hot, part_temp[j]);
+	return hot / sm.MaxTemp();
 }
 
 void Vessel::UpdateHeating ()
@@ -5784,6 +5804,7 @@ void Vessel::DockRefused (DWORD port, Vessel *mate, DWORD mateport, int reason, 
 		char detail[384];
 		snprintf (detail, sizeof (detail), "%s to %s: %s", name.c_str(), mate->Name(), cbuf);
 		flightevent::Post (flightevent::WARNING, "Docking refused", detail);
+		if (audio::System *as = g_pOrbiter->Audio ()) as->Event (this, audio::Callouts::EV_DOCK_REFUSED);
 	}
 }
 

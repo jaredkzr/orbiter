@@ -1,0 +1,43 @@
+# Orbiter's generated sound effects (Sound/Generated/*.flac), made offline by Utils/Audio/make_sfx.py with
+# MOSS-SoundEffect v2.0 (Apache-2.0): "<name>|<prompt>|<seconds>|<seed>[|<post>]" (see make_sfx.py). Chosen by
+# ear from seeds; the same line makes the same sound. Names starting with "_" are parts (layers).
+#   cabin_air  the cabin's air handling (Audio/Ambience.cpp; replaces XRSound's Air Conditioning.wav)
+#   event_*    now and then in the cabin: pumps, valves, fans (Ambience.cpp; replaces XRSound's Cabin Ambience)
+#   warp_*     the Relativistic Travel drive (Audio/WarpDrive.cpp)
+#   caution, master_alarm  cues before a warning line, before damage (Audio/Callouts.cpp; synthesized)
+#   pyro       separations: bolts firing, heard through the structure (oapiAudioEvent)
+#   hiss_in, hiss_out  the DeltaGlider's air moving (Vessel/DeltaGlider/PressureSubsys.cpp)
+#   creak_*    a hull's creaks and groans, fire, plasma: beds under the synths (CreakSynth, FireSynth, WindSynth)
+cabin_air|Steady air handling inside a small spacecraft cabin: fans and ventilation ducts humming, a constant low broadband whoosh with a faint electrical hum, no voices, no music.|20|2|loop=2.0,level=-37.1
+event_pump|A small coolant pump starts inside a spacecraft cabin, runs with a soft whirring hum for a few seconds, then winds down. Close, dry, no voices.|6|1|fade=0.01/0.3,level=-24.4
+event_valve|A pneumatic valve inside a spacecraft actuates: one sharp metallic click and a very short, dry puff of compressed gas that stops abruptly. No fizzing, no bubbling, no lingering hiss. Close, dry, no voices.|1.5|1|keep=4,trim=0.13-1.95,fade=0.005/0.05,level=-24.4
+_creak_hi_a|Small, sharp creaks and ticks of metal panels and fasteners settling inside a spacecraft: mid and high pitched, short and dry, scattered and quiet. No groans, no low rumble, no impacts, no voices.|12|3|hp=400
+_creak_hi_b|Thin metallic creaks and tiny squeaks of riveted aluminium panels flexing slightly under load, crisp and high, sparse and subtle, with silence between them. No rumble, no impacts, no voices.|12|3|hp=400
+creak_1|Inside a spacecraft hull under flight loads: occasional slow, deep groans of the frame flexing, with a few small, higher-pitched creaks of panels settling. Subtle and sparse, solid and sound, nothing breaking, no voices.|12|3|layer=_creak_hi_a@-6,level=-24
+creak_2|Inside a spacecraft hull under flight loads: occasional slow, deep groans of the frame flexing, with a few small, higher-pitched creaks of panels settling. Subtle and sparse, solid and sound, nothing breaking, no voices.|12|3|layer=_creak_hi_b@-6,level=-24
+fire|A large fire of burning wreckage outdoors: a deep turbulent roar with crackling and popping, flames whooshing in gusts, no voices, no sirens.|12|1|loop=1.5,level=-24
+plasma|A spacecraft reentering the atmosphere heard from inside: a deep, roaring rush of hot plasma and air over the hull, rumbling and hissing, steady and intense, no voices, no music.|12|2|loop=1.5,level=-24
+event_relay|A small electrical relay clicking inside a spacecraft's avionics bay: two quick, dry clicks. Close, quiet, no voices.|1|1|fade=0.005/0.05,level=-24.4
+event_fan_up|A small cooling fan inside a spacecraft cabin spinning up: a soft whir rising in pitch, then steady. Quiet, no voices.|4|1|fade=0.005/0.05,level=-24.4
+event_fan_down|A small cooling fan inside a spacecraft cabin winding down to a stop: a soft whir falling in pitch. Quiet, no voices.|4|1|fade=0.005/0.05,level=-24.4
+event_pump_short|A small fluid pump behind a spacecraft cabin panel cycling briefly: a low hum starts, runs for a moment, and stops. Muffled, no voices.|4|1|fade=0.005/0.05,level=-24.4
+event_solenoid|A solenoid valve inside a spacecraft cabin: a muted thunk with a faint, short hiss. No voices.|1.2|1|fade=0.005/0.05,level=-24.4
+event_regulator|A pressure regulator inside a spacecraft cabin venting briefly: a soft, short hiss that rises and fades. Quiet, close, no voices.|2.5|1|fade=0.005/0.05,level=-24.4
+event_coolant|Coolant flowing in pipes behind a spacecraft cabin panel: a faint gurgle and trickle for a moment. Quiet, no voices.|3|1|fade=0.005/0.05,level=-24.4
+event_servo|A small servo motor inside a spacecraft instrument panel moving briefly: a short, soft electric whine. No voices.|1.5|1|fade=0.005/0.05,level=-24.4
+event_latch|A stowage locker latch inside a spacecraft cabin closing: a small, solid plastic-and-metal click. No voices.|0.8|1|fade=0.005/0.05,level=-24.4
+event_heater|A heater inside a spacecraft switching on: a faint electrical tick, then a quiet buzz fading in. No voices.|2|1|fade=0.005/0.05,level=-24.4
+event_duct|The air duct in a spacecraft cabin changing its flow: a gentle whoosh swelling and settling. Quiet, no voices.|3|1|fade=0.005/0.05,level=-24.4
+event_wheel|A reaction wheel deep inside a spacecraft changing speed: a faint, low hum gliding in pitch. Very quiet, no voices.|4|1|fade=0.005/0.05,level=-24.4
+event_pump_short_2|A small fluid pump behind a spacecraft cabin panel cycling briefly: a low hum starts, runs for a moment, and stops. Muffled, no voices.|4|2|fade=0.005/0.05,level=-24.4
+event_relay_2|A small electrical relay clicking inside a spacecraft's avionics bay: two quick, dry clicks. Close, quiet, no voices.|1|2|fade=0.005/0.05,level=-24.4
+warp_decel|A spacecraft's experimental drive decelerating, heard from inside: a low drone falling smoothly in pitch, a faint shimmering harmonic sweeping downward, settling. Subtle science fiction but grounded, no zaps, no voices, no music.|5|1|fade=0.01/0.3,level=-24
+warp_hum|A spacecraft's experimental drive running steadily, heard from inside: a deep, smooth drone, slightly pulsing, with a faint high shimmering harmonic, constant and even. Subtle science fiction but grounded, no zaps, no voices, no music.|20|2|loop=2.0,level=-24
+caution|tone:1200/0.06,0/0.05,1200/0.06,0/0.05,1200/0.06|0|0|level=-20
+master_alarm|tone:1000/0.08,1400/0.08,1000/0.08,1400/0.08,1000/0.08,1400/0.08,1000/0.08,1400/0.08|0|0|level=-18
+warp_engage|A spacecraft's experimental drive spooling up, heard from inside: a deep electrical hum rising steadily in pitch, like a large turbine or flywheel accelerating from low to high over three seconds, then holding steady. Smooth, mechanical and electrical, no zaps, no voices, no music.|4|1|fade=0.01/0.3,level=-24
+warp_accel|A spacecraft's experimental drive accelerating, heard from inside: its steady deep hum rising gradually in pitch and growing stronger, one smooth upward sweep, like a turbine winding up. Mechanical and electrical, no zaps, no voices, no music.|5|2|fade=0.01/0.3,level=-24
+warp_disengage|A spacecraft's experimental drive spooling up, heard from inside: a deep electrical hum rising steadily in pitch, like a large turbine or flywheel accelerating from low to high over three seconds, then holding steady. Smooth, mechanical and electrical, no zaps, no voices, no music.|4|1|reverse,fade=0.01/0.3,level=-24
+hiss_in|High-pressure air hissing steadily into a small sealed chamber through a valve, close and even, a smooth constant hiss, no voices, no music.|8|1|loop=1.5,level=-24
+hiss_out|Air venting out of a small chamber through a valve: a steady rushing hiss, slightly lower and breathier, close and even, no voices, no music.|8|2|loop=1.5,level=-24
+pyro|Pyrotechnic separation bolts firing, heard from inside a spacecraft cabin: a deep, heavy, muffled thud carried through the metal structure of the vehicle, a brief low rumble and a faint metallic shudder through the hull. No sharp crack, no echo, no debris, no voices.|1.5|3|fade=0.002/0.2,level=-20

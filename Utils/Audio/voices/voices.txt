@@ -1,0 +1,12 @@
+# Reference voices for Utils/Audio/make_voice.py --engine qwen3 (Qwen3-TTS Base clones each).
+# "<voice>|<what the reference says>". Designed voices, not recordings of any person: each was
+# generated from a text description by MOSS-VoiceGenerator (Apache-2.0), then chosen by ear;
+# pauses over 0.7 s cut to 0.55 s, silence trimmed, -18 dBFS RMS.
+#   crew       the onboard voice: callouts and warnings (female; deadpan, small-speaker sound)
+#   capcom1    Mission Control, CAPCOM (male)
+#   capcom2    Mission Control, second voice (female)
+#   commander  the spacecraft commander on air-to-ground (male)
+crew|Altitude five thousand. Gear down and locked. Warning, main fuel low. Mach two. Docking distance fifty meters. Contact. All systems nominal.
+capcom1|Houston copies main engine cutoff. Good burn, Kestrel. You're go for orbit operations. Kestrel, Houston, two minutes to loss of signal. We'll pick you up over Guam at forty-two past the hour.
+capcom2|Kestrel, Houston, good morning. We're watching a slight pressure trend in the number two tank, nothing to worry about. We'd like you to switch to the backup heater when you get a chance.
+commander|Houston, Kestrel. We're configured for the burn, attitude is good and we're holding steady. Main bus voltage is nominal and the crew is ready. We'll call you when it's done.

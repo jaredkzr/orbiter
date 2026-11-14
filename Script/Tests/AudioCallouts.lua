@@ -7,7 +7,8 @@
 --            ("wheels up", the DG's cfg); the gear up at 40 m (its cfg's
 --            voice: "gear up", "gear up and locked")
 --   then     set at 700 m, sinking 35 m/s, the gear up: the heights from
---            600 m down, "warning, gear is up" below 275 m
+--            600 m down, "warning, terrain" (closing fast), "warning, gear is up"
+--            below 275 m
 --   then     set at 8 km at Mach 1.1, engines off: "Mach 1", slowing through
 --            it: "subsonic"
 --   then     at 60 km, climbing, the main engines on for a second: "main
@@ -74,10 +75,11 @@ end
 while oapi.get_simtime() < 60 and (v:get_altitude() < 250 or v:get_animation(7) > 0) do fly(); proc.skip() end
 oapi.write_log(string.format("AudioCallouts: climbing at %.0f m, %.0f m/s, t %.1f", v:get_altitude(), v:get_airspeed(), oapi.get_simtime()))
 check("RCS modes called", said("Rotation") and said("Translation"))
-check("autopilot on and off called", said("Autopilot On") and said("Autopilot Off"))
+check("autopilot mode called by name, and off", said("Hold Level") and said("Autopilot Off"))
 check("aerodynamic controls off and on called", said("/Off.wav") and said("/On.wav"))
 check("100 knots called", said("100 Knots"))
 check("liftoff called (the DG's: wheels up)", said("Wheels Up"))
+check("positive rate called (a runway takeoff)", said("Positive Rate"))
 check("gear up called (the DG's cfg: its animation)", said("Gear Up"))
 check("no ignition for a plane", not said("Ignition"))
 
@@ -88,7 +90,7 @@ local t1 = oapi.get_simtime()
 while v:get_altitude() > 110 and oapi.get_simtime() < t1 + 30 do proc.skip() end
 oapi.write_log(string.format("AudioCallouts: down to %.0f m, t %.1f", v:get_altitude(), oapi.get_simtime()))
 check("heights called (500 m)", said("/500.wav"))
-check("heights called (300 m)", said("/300.wav"))
+check("terrain warning called (sinking 35 m/s near the ground)", said("Warning Terrain"))
 check("gear warning called", said("Warning Gear is Up"))
 
 -- through Mach 1, slowing

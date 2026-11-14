@@ -223,6 +223,10 @@ These are for testing and tuning (`1` turns a feature on, `0` off).
 | `ORBITER_AUDIO_AMBIENCE=0` | no ambience: the cabin's air handling, the wind and the sea about the listener (tests) |
 | `ORBITER_AUDIO_CONTACTS=1` | the vessels' contact sounds (wheels, hull, docking, animations' motors): off for now while they are reworked (development, tests) |
 | `ORBITER_AUDIO_CALLOUTS=0`, `ORBITER_AUDIO_CALLOUTS=1` | the voice's callouts off / on, whatever the settings say (tests); with `ORBITER_AUDIO_LOG`, each callout on the console |
+| `ORBITER_AUDIO_VOICE=orbiter`, `ORBITER_AUDIO_VOICE=xrsound` | the callouts in Orbiter's voice (`Sound/Voice`, also for XRSound's default lines in XR vessels and add-ons) / XRSound's recordings, whatever the "Callout voice" setting says |
+| `ORBITER_AUDIO_CAPCOM=1`, `ORBITER_AUDIO_CAPCOM=2` | Mission Control's replies always from this CAPCOM, whatever the shift (by default they take turns, 8-hour shifts by the sim clock from 06:00 UTC) |
+| `ORBITER_RADIO_CODEC=0` | the radio degrades with distance without its low-rate codec (only the narrower band, the fading, the dropouts; listening tests) |
+| `ORBITER_RADIO_REEL=<dir>` | `Audio.Synth "[radio-reel]"` (a hidden test): Mission Control's lines through the radio near Earth, at the Moon and further, as WAVs in `<dir>` (`ORBITER_RADIO_REEL_FILES`: which lines) |
 
 Example: an offscreen screenshot of a test scene, validated and profiled:
 
@@ -245,6 +249,49 @@ ORBITER_VK_SCREENSHOT=/tmp/shot.png ORBITER_VK_SCREENSHOT_FRAME=400 ORBITER_VK_S
 **Memory:** dense forest scenes can map more than 8 GB of virtual memory
 for the GPU, although only about 0.5 GB is resident. A `ulimit -v` cap
 below about 12 GB makes them fail, for example when saving screenshots.
+
+## Regenerating the voices and sounds
+
+The voices (`Sound/Voice`, `Sound/Voice/Ground`) and the generated sounds
+(`Sound/Generated`) are made offline with local models and committed; no
+model runs in the game. Each file can be made again exactly: the lines
+files keep the kept seed of every line (`lines.takes.json`), and
+`Sound/Generated/prompts.txt` the prompt and seed of every sound. The
+models, revisions and licences: `Sound/CREDITS.md`.
+
+They need a GPU with about 16 GB (here: ROCm on an RX 9070 XT) and Python
+3.12 venvs outside the repository, with PyTorch for the GPU:
+
+- voices: `qwen-tts` and `faster-whisper` (Qwen3-TTS-12Hz-1.7B-Base, Whisper
+  `small.en` as a gate);
+- sounds: the MOSS-SoundEffect v2.0 pipeline (`moss_soundeffect_v2`).
+
+Stop anything else holding the GPU's memory first (a local LLM server).
+On ROCm, `MIOPEN_FIND_MODE=FAST` (otherwise about 50 s a line) and, for
+the sounds, `TORCHDYNAMO_DISABLE=1`.
+
+```bash
+export MIOPEN_FIND_MODE=FAST
+# the onboard voice (crew, commander): every line without its file
+<voice-venv>/bin/python Utils/Audio/make_voice.py --engine qwen3
+# Mission Control (both CAPCOMs): endings that fall, the voice held
+<voice-venv>/bin/python Utils/Audio/make_voice.py --engine qwen3 --lines Sound/Voice/Ground/lines.txt \
+    --max-rise -1.0 --end-stop -24 --min-voice-sim 0.945
+# a line again, new takes to choose from, then the one chosen kept
+<voice-venv>/bin/python Utils/Audio/make_voice.py --engine qwen3 --only "Gear Down" --candidates 3 --review /tmp/review
+<voice-venv>/bin/python Utils/Audio/make_voice.py --engine qwen3 --review /tmp/review --keep "Gear Down=7"
+# the sounds
+TORCHDYNAMO_DISABLE=1 <sfx-venv>/bin/python Utils/Audio/make_sfx.py [--only <name>...] [--force]
+# every callout the game can say has its file
+python3 Utils/Audio/check_voice.py
+```
+
+`--force` remakes files from their kept seeds (the same audio on the same
+model). The scripts' own help has the rest: the gates that reject a take
+(off script, cut off, a rising ending, a voice drifting from its
+reference), the shaping, and the post-processing of the sounds. A take
+the gates accept is still listened to; the gates never choose between
+good takes.
 
 ## Tests
 
@@ -280,6 +327,13 @@ ctest
 
 ## Limitations
 
+- **Sound:** the voice and generated-sound overhaul (the cast, Mission
+  Control, the generated effects) started from what XRSound already had:
+  its callout list, its sound slots and cfgs, its default files as the
+  fallback, and the behaviour built around them. It re-voices and extends
+  that design rather than rethinking it. A full audit of Orbiter's sound -
+  what is heard, when and why, and which of XRSound's choices to keep - and
+  a wider overhaul is recommended.
 - The Windows build hasn't been compiled after these changes. Windows keeps
   its own launchpad and the D3D9 client.
 - `Src/Plugin` (TransX, scenario editor and others) isn't ported to Linux

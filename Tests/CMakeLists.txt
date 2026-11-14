@@ -202,6 +202,7 @@ add_executable(Audio.Synth Audio.Synth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/CreakSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/AmbienceSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/MusicSynth.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/RadioSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/WavWriter.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Miniaudio.cpp)
 target_compile_definitions(Audio.Synth PRIVATE AUDIO_SYNTH_TEST)
@@ -533,6 +534,43 @@ if (ORBITER_TEST_EXE)
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.CalloutsCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioCallouts)
+		# the Relativistic Travel drive's sound: a trip to Mars from an outside camera - heard with
+		# cinematic sound (engage, accelerate, decelerate, disengage, in that order), not with physical
+		add_test(
+			NAME "Audio.WarpDriveCinematic"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Scenarios/Tests/RelTripTest.scn" "--fixedstep=0.02" "--maxframes=6000"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.WarpDriveCinematic PROPERTIES TIMEOUT 300
+			PASS_REGULAR_EXPRESSION "warp_engage.flac.*warp_accel.flac.*warp_decel.flac.*warp_disengage.flac"
+			ENVIRONMENT "ORBITER_AUDIO_REALISM=cinematic;ORBITER_AUDIO_LOG=1;ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.WarpDrive.wav;ORBITER_AUDIO_AMBIENCE=0")
+		add_test(
+			NAME "Audio.WarpDrivePhysical"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Scenarios/Tests/RelTripTest.scn" "--fixedstep=0.02" "--maxframes=6000"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.WarpDrivePhysical PROPERTIES TIMEOUT 300
+			PASS_REGULAR_EXPRESSION "RelTripTest: PASS" FAIL_REGULAR_EXPRESSION "warp drive"
+			ENVIRONMENT "ORBITER_AUDIO_REALISM=physical;ORBITER_AUDIO_LOG=1;ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.WarpDrivePhysical.wav;ORBITER_AUDIO_AMBIENCE=0")
+		# the callout voice: XRSound's default lines in Orbiter's voice (Sound/Voice, through
+		# System::FindSound), or XRSound's own recordings
+		add_test(
+			NAME "Audio.VoiceOrbiter"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Audio/Callouts.scn" "--fixedstep=0.02" "--maxframes=100"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.VoiceOrbiter PROPERTIES TIMEOUT 120
+			PASS_REGULAR_EXPRESSION "Audio: callout XRSound/Default/Translation.wav at [0-9.]+ plays Sound/Voice/Translation.flac"
+			ENVIRONMENT "ORBITER_AUDIO_VOICE=orbiter;ORBITER_AUDIO_LOG=1;ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.VoiceOrbiter.wav;ORBITER_AUDIO_CALLOUTS=1;ORBITER_AUDIO_AMBIENCE=0;ORBITER_AUDIO_RADIO=0;ORBITER_DAMAGE=0")
+		add_test(
+			NAME "Audio.VoiceXRSound"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Audio/Callouts.scn" "--fixedstep=0.02" "--maxframes=100"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.VoiceXRSound PROPERTIES TIMEOUT 120
+			PASS_REGULAR_EXPRESSION "Audio: callout XRSound/Default/Translation.wav at [0-9.]+\n"
+			FAIL_REGULAR_EXPRESSION "plays Sound/Voice"
+			ENVIRONMENT "ORBITER_AUDIO_VOICE=xrsound;ORBITER_AUDIO_LOG=1;ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.VoiceXRSound.wav;ORBITER_AUDIO_CALLOUTS=1;ORBITER_AUDIO_AMBIENCE=0;ORBITER_AUDIO_RADIO=0;ORBITER_DAMAGE=0")
 		# a cockpit's clicks (in its cabin, at a switch's loudness: physical,
 		# quiet in a render) and the interface's
 		add_test(

@@ -87,7 +87,8 @@ private:
 	std::vector<Water> waters;
 	struct Thunder { const Planet *planet = nullptr; Emitter *em = nullptr; ThunderSynth *synth = nullptr; double t0 = 0.0; bool fired = false; };
 	std::vector<Thunder> thunders;
-	struct Creak { const Vessel *v = nullptr; Emitter *em = nullptr; CreakSynth *synth = nullptr; double stress = -1.0, debt = 0.0, t = 0.0; int count[2] = {}, heard[2] = {}; } creak;
+	struct Creak { const Vessel *v = nullptr; Emitter *em = nullptr; CreakSynth *synth = nullptr; double stress = -1.0, debt = 0.0, t = 0.0; int count[2] = {}, heard[2] = {};
+		Emitter *bed = nullptr; } creak;   // (bed: a black hole's tides near tearing it - a structure groaning, looped)
 	void UpdateCreaks (double t);
 	uint32_t creakRng = 0x2545f491u;
 	double CreakRand () { creakRng ^= creakRng << 13; creakRng ^= creakRng >> 17; creakRng ^= creakRng << 5; return (creakRng >> 8) * (1.0 / 16777216.0); }

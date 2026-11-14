@@ -1,0 +1,4286 @@
+{
+ "1": {
+  "takes": [
+   {
+    "heard": "One.",
+    "seed": 1
+   }
+  ],
+  "text": "One.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "10": {
+  "takes": [
+   {
+    "heard": "10",
+    "seed": 1
+   }
+  ],
+  "text": "Ten.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "100": {
+  "takes": [
+   {
+    "heard": "100.",
+    "seed": 1
+   }
+  ],
+  "text": "One hundred.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "100 Knots": {
+  "takes": [
+   {
+    "heard": "100 knots.",
+    "seed": 1
+   }
+  ],
+  "text": "One hundred knots.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "1000": {
+  "takes": [
+   {
+    "heard": "1000",
+    "seed": 4
+   }
+  ],
+  "text": "One thousand.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "crew"
+ },
+ "15": {
+  "takes": [
+   {
+    "heard": "15",
+    "seed": 1
+   }
+  ],
+  "text": "Fifteen.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "2": {
+  "takes": [
+   {
+    "heard": "2",
+    "seed": 1
+   }
+  ],
+  "text": "Two.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "20": {
+  "takes": [
+   {
+    "heard": "20.",
+    "seed": 1
+   }
+  ],
+  "text": "Twenty.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "200": {
+  "takes": [
+   {
+    "heard": "200",
+    "seed": 1
+   }
+  ],
+  "text": "Two hundred.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "2000": {
+  "takes": [
+   {
+    "heard": "2000",
+    "seed": 1
+   }
+  ],
+  "text": "Two thousand.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "3": {
+  "takes": [
+   {
+    "heard": "Three.",
+    "seed": 1
+   }
+  ],
+  "text": "Three.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "30": {
+  "takes": [
+   {
+    "heard": "30.",
+    "seed": 1
+   }
+  ],
+  "text": "Thirty.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "300": {
+  "takes": [
+   {
+    "heard": "300.",
+    "seed": 1
+   }
+  ],
+  "text": "Three hundred.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "3000": {
+  "takes": [
+   {
+    "heard": "3,000.",
+    "seed": 1
+   }
+  ],
+  "text": "Three thousand.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "4": {
+  "takes": [
+   {
+    "heard": "4",
+    "seed": 1
+   }
+  ],
+  "text": "Four.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "40": {
+  "takes": [
+   {
+    "heard": "40.",
+    "seed": 1
+   }
+  ],
+  "text": "Forty.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "400": {
+  "takes": [
+   {
+    "heard": "400.",
+    "seed": 1
+   }
+  ],
+  "text": "Four hundred.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "4000": {
+  "takes": [
+   {
+    "heard": "4,000",
+    "seed": 1
+   }
+  ],
+  "text": "Four thousand.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "5": {
+  "takes": [
+   {
+    "heard": "Five.",
+    "seed": 1
+   }
+  ],
+  "text": "Five.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "50": {
+  "takes": [
+   {
+    "heard": "50.",
+    "seed": 1
+   }
+  ],
+  "text": "Fifty.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "500": {
+  "takes": [
+   {
+    "heard": "500",
+    "seed": 1
+   }
+  ],
+  "text": "Five hundred.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "5000": {
+  "takes": [
+   {
+    "heard": "5,000.",
+    "seed": 1
+   }
+  ],
+  "text": "Five thousand.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "6": {
+  "takes": [
+   {
+    "heard": "6",
+    "seed": 1
+   }
+  ],
+  "text": "Six.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "600": {
+  "takes": [
+   {
+    "heard": "600.",
+    "seed": 1
+   }
+  ],
+  "text": "Six hundred.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "7": {
+  "takes": [
+   {
+    "heard": "Seven.",
+    "seed": 1
+   }
+  ],
+  "text": "Seven.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "700": {
+  "takes": [
+   {
+    "heard": "700.",
+    "seed": 1
+   }
+  ],
+  "text": "Seven hundred.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "75": {
+  "takes": [
+   {
+    "heard": "75.",
+    "seed": 1
+   }
+  ],
+  "text": "Seventy-five.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "8": {
+  "takes": [
+   {
+    "heard": "8.",
+    "seed": 1
+   }
+  ],
+  "text": "Eight.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "800": {
+  "takes": [
+   {
+    "heard": "800.",
+    "seed": 1
+   }
+  ],
+  "text": "Eight hundred.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "9": {
+  "takes": [
+   {
+    "heard": "9",
+    "seed": 1
+   }
+  ],
+  "text": "Nine.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "900": {
+  "takes": [
+   {
+    "heard": "900.",
+    "seed": 1
+   }
+  ],
+  "text": "Nine hundred.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "APU Autostart": {
+  "takes": [
+   {
+    "heard": "APU Autostart",
+    "seed": 3
+   }
+  ],
+  "text": "A.P.U. autostart.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "crew"
+ },
+ "APU Fuel Tanks Full": {
+  "takes": [
+   {
+    "heard": "APU fuel tanks full.",
+    "seed": 1
+   }
+  ],
+  "text": "A.P.U. fuel tanks full.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "APU Offline": {
+  "takes": [
+   {
+    "heard": "APU offline.",
+    "seed": 1
+   }
+  ],
+  "text": "A.P.U. offline.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Acceleration Burn": {
+  "takes": [
+   {
+    "heard": "Acceleration burn.",
+    "seed": 1
+   }
+  ],
+  "text": "Acceleration burn.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Afloat": {
+  "takes": [
+   {
+    "heard": "Vessel is stable in the water.",
+    "seed": 1
+   }
+  ],
+  "text": "Vessel is stable in the water.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Airlock Depressurizing": {
+  "takes": [
+   {
+    "heard": "Airlock depressurizing.",
+    "seed": 1
+   }
+  ],
+  "text": "Airlock depressurizing.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Airlock Pressure Fourteen Point Seven PSI": {
+  "takes": [
+   {
+    "heard": "Airlock pressure 14.7 PSI",
+    "seed": 2
+   }
+  ],
+  "text": "Airlock pressure fourteen point seven P-S-I.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "crew"
+ },
+ "Airlock Pressure Zero PSI": {
+  "takes": [
+   {
+    "heard": "Airlock pressure, zero PSI.",
+    "seed": 1
+   }
+  ],
+  "text": "Airlock pressure zero P-S-I.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Airlock Pressurizing": {
+  "takes": [
+   {
+    "heard": "airlock pressurizing",
+    "seed": 1
+   }
+  ],
+  "text": "Airlock pressurizing.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Airlock Safety Interlocks Enabled": {
+  "takes": [
+   {
+    "heard": "Airlock safety interlocks enabled.",
+    "seed": 1
+   }
+  ],
+  "text": "Airlock safety interlocks enabled.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "All Systems Nominal": {
+  "takes": [
+   {
+    "heard": "All systems nominal.",
+    "seed": 1
+   }
+  ],
+  "text": "All systems nominal.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "All Vanguard Systems Nominal": {
+  "takes": [
+   {
+    "heard": "All Vanguard systems nominal.",
+    "seed": 1
+   }
+  ],
+  "text": "All Vanguard systems nominal.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "All XR1 Systems Nominal": {
+  "takes": [
+   {
+    "heard": "All XR1 systems nominal.",
+    "seed": 1
+   }
+  ],
+  "text": "All X R one systems nominal.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Anti-Normal": {
+  "takes": [
+   {
+    "heard": "Anti-normal.",
+    "seed": 1
+   }
+  ],
+  "text": "Anti-normal.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Arrived": {
+  "takes": [
+   {
+    "heard": "arrived.",
+    "seed": 1
+   }
+  ],
+  "text": "Arrived.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Auto-Grapple Failed": {
+  "takes": [
+   {
+    "heard": "Auto grapple failed.",
+    "seed": 2
+   }
+  ],
+  "text": "Auto-grapple failed.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "crew"
+ },
+ "Bay Doors Are Closed": {
+  "takes": [
+   {
+    "heard": "Bay doors are closed.",
+    "seed": 1
+   }
+  ],
+  "text": "Bay doors are closed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Bay is Empty": {
+  "takes": [
+   {
+    "heard": "Payload Bay is empty.",
+    "seed": 1
+   }
+  ],
+  "text": "Payload bay is empty.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Bay is Full": {
+  "takes": [
+   {
+    "heard": "Payload Bay is full.",
+    "seed": 1
+   }
+  ],
+  "text": "Payload bay is full.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Booster Separation": {
+  "takes": [
+   {
+    "heard": "Booster separation.",
+    "seed": 1
+   }
+  ],
+  "text": "Booster separation.",
+  "tried": [
+   1
+  ],
+  "voice": "commander"
+ },
+ "Braking Burn": {
+  "takes": [
+   {
+    "heard": "Breaking Burn.",
+    "seed": 1
+   }
+  ],
+  "text": "Braking burn.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Cargo Deployed": {
+  "takes": [
+   {
+    "heard": "Payload deployed.",
+    "seed": 1
+   }
+  ],
+  "text": "Payload deployed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Cargo Deployment Failed": {
+  "takes": [
+   {
+    "heard": "Warning, payload deployment failed.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Payload deployment failed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Cargo Latched In Bay": {
+  "takes": [
+   {
+    "heard": "Payload latched in Bay.",
+    "seed": 1
+   }
+  ],
+  "text": "Payload latched in bay.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Center of Gravity Shift Online": {
+  "takes": [
+   {
+    "heard": "Center of gravity shift online.",
+    "seed": 1
+   }
+  ],
+  "text": "Center of gravity shift online.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Chatter Sunrise 1": {
+  "takes": [
+   {
+    "heard": "sunrise coming up beautiful",
+    "seed": 8
+   }
+  ],
+  "text": "Sunrise coming up. Beautiful.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8
+  ],
+  "voice": "commander"
+ },
+ "Chatter Sunrise 2": {
+  "takes": [
+   {
+    "heard": "There's the sun again.",
+    "seed": 1
+   }
+  ],
+  "text": "There's the sun again.",
+  "tried": [
+   1
+  ],
+  "voice": "commander"
+ },
+ "Chatter Sunrise 3": {
+  "takes": [
+   {
+    "heard": "Daylight, that view never gets old.",
+    "seed": 1
+   }
+  ],
+  "text": "Daylight. That view never gets old.",
+  "tried": [
+   1
+  ],
+  "voice": "commander"
+ },
+ "Chatter Sunset 1": {
+  "takes": [
+   {
+    "heard": "Here comes the night side.",
+    "seed": 2
+   }
+  ],
+  "text": "Here comes the night side.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7
+  ],
+  "voice": "commander"
+ },
+ "Chatter Sunset 2": {
+  "takes": [
+   {
+    "heard": "Going into the dark again.",
+    "seed": 4
+   }
+  ],
+  "text": "Going into the dark again.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "commander"
+ },
+ "Coasting": {
+  "takes": [
+   {
+    "heard": "Burn complete. Coasting.",
+    "seed": 1
+   }
+  ],
+  "text": "Burn complete. Coasting.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Communications Blackout": {
+  "takes": [
+   {
+    "heard": "Communications Blackout.",
+    "seed": 2
+   }
+  ],
+  "text": "Communications blackout.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "crew"
+ },
+ "Contact": {
+  "takes": [
+   {
+    "heard": "Contact.",
+    "seed": 1
+   }
+  ],
+  "text": "Contact.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Crew Member Transferred Successfully": {
+  "takes": [
+   {
+    "heard": "Crew member transferred successfully.",
+    "seed": 1
+   }
+  ],
+  "text": "Crew member transferred successfully.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Cross-Feed Main": {
+  "takes": [
+   {
+    "heard": "Cross-feed main.",
+    "seed": 11
+   }
+  ],
+  "text": "Cross-feed main.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11
+  ],
+  "voice": "crew"
+ },
+ "Cross-Feed Off": {
+  "takes": [
+   {
+    "heard": "Cross feet off",
+    "seed": 1
+   }
+  ],
+  "text": "Cross-feed off.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Cross-Feed RCS": {
+  "takes": [
+   {
+    "heard": "Crossfeed RCS",
+    "seed": 1
+   }
+  ],
+  "text": "Cross-feed R.C.S.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Docking": {
+  "takes": [
+   {
+    "heard": "Ship is docked.",
+    "seed": 1
+   }
+  ],
+  "text": "Ship is docked.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Docking Aborted": {
+  "takes": [
+   {
+    "heard": "Docking Aborted.",
+    "seed": 1
+   }
+  ],
+  "text": "Docking aborted.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Drive Disengaged": {
+  "takes": [
+   {
+    "heard": "Drive disengaged.",
+    "seed": 1
+   }
+  ],
+  "text": "Drive disengaged.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Drive Engaged": {
+  "takes": [
+   {
+    "heard": "Drive engaged.",
+    "seed": 1
+   }
+  ],
+  "text": "Drive engaged.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Egress Successful": {
+  "takes": [
+   {
+    "heard": "Egress successful.",
+    "seed": 4
+   }
+  ],
+  "text": "Egress successful.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "voice": "crew"
+ },
+ "Entry Interface": {
+  "takes": [
+   {
+    "heard": "Entry interface",
+    "seed": 1
+   }
+  ],
+  "text": "Entry interface.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Error Sound File Missing": {
+  "takes": [
+   {
+    "heard": "Error. Sound file missing.",
+    "seed": 4
+   }
+  ],
+  "text": "Error. Sound file missing.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "crew"
+ },
+ "Escape Trajectory": {
+  "takes": [
+   {
+    "heard": "Escape trajectory.",
+    "seed": 1
+   }
+  ],
+  "text": "Escape trajectory.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Excess DeltaV": {
+  "takes": [
+   {
+    "heard": "Excess Delta V",
+    "seed": 2
+   }
+  ],
+  "text": "Excess delta-V.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "crew"
+ },
+ "External Cooling Offline": {
+  "takes": [
+   {
+    "heard": "External cooling offline",
+    "seed": 1
+   }
+  ],
+  "text": "External cooling offline.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "External Cooling Online": {
+  "takes": [
+   {
+    "heard": "External cooling online.",
+    "seed": 1
+   }
+  ],
+  "text": "External cooling online.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Fuel Hatch Closed": {
+  "takes": [
+   {
+    "heard": "Fuel hatch closed.",
+    "seed": 1
+   }
+  ],
+  "text": "Fuel hatch closed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Fuel Hatch Open": {
+  "takes": [
+   {
+    "heard": "Fuel hatch open",
+    "seed": 2
+   }
+  ],
+  "text": "Fuel hatch open.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "crew"
+ },
+ "Gear Down": {
+  "takes": [
+   {
+    "heard": "Gear down.",
+    "seed": 1
+   }
+  ],
+  "text": "Gear down.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Gear Down and Locked": {
+  "takes": [
+   {
+    "heard": "Gear down and locked.",
+    "seed": 1
+   }
+  ],
+  "text": "Gear down and locked.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Gear Locked": {
+  "takes": [
+   {
+    "heard": "Gear locked.",
+    "seed": 1
+   }
+  ],
+  "text": "Gear locked.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Gear Up": {
+  "takes": [
+   {
+    "heard": "Gear up.",
+    "seed": 1
+   }
+  ],
+  "text": "Gear up.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Gear Up and Locked": {
+  "takes": [
+   {
+    "heard": "Gear up and locked.",
+    "seed": 1
+   }
+  ],
+  "text": "Gear up and locked.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Hatch Closed": {
+  "takes": [
+   {
+    "heard": "Hatch closed.",
+    "seed": 1
+   }
+  ],
+  "text": "Hatch closed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Hatch Open": {
+  "takes": [
+   {
+    "heard": "Hatch open.",
+    "seed": 1
+   }
+  ],
+  "text": "Hatch open.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Hatch Safety Interlocks Enabled": {
+  "takes": [
+   {
+    "heard": "Hatch safety interlocks enabled.",
+    "seed": 1
+   }
+  ],
+  "text": "Hatch safety interlocks enabled.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Hatch is Locked": {
+  "takes": [
+   {
+    "heard": "Hatch is locked.",
+    "seed": 1
+   }
+  ],
+  "text": "Hatch is locked.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Hold Altitude": {
+  "takes": [
+   {
+    "heard": "Hold altitude.",
+    "seed": 1
+   }
+  ],
+  "text": "Hold altitude.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Hold Level": {
+  "takes": [
+   {
+    "heard": "Hold level",
+    "seed": 1
+   }
+  ],
+  "text": "Hold level.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Hold to Dump Fuel": {
+  "takes": [
+   {
+    "heard": "Hold to dump fuel",
+    "seed": 1
+   }
+  ],
+  "text": "Hold to dump fuel.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Hold to Reset": {
+  "takes": [
+   {
+    "heard": "Hold to reset.",
+    "seed": 1
+   }
+  ],
+  "text": "Hold to reset.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Hold to dump LOX": {
+  "takes": [
+   {
+    "heard": "Hold to dump locks",
+    "seed": 1
+   }
+  ],
+  "text": "Hold to dump lox.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Holding Position": {
+  "takes": [
+   {
+    "heard": "Holding position.",
+    "seed": 2
+   }
+  ],
+  "text": "Holding position.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "crew"
+ },
+ "Hover": {
+  "takes": [
+   {
+    "heard": "hover",
+    "seed": 1
+   }
+  ],
+  "text": "Hover.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Hover doors are closed": {
+  "takes": [
+   {
+    "heard": "Hover doors are closed.",
+    "seed": 1
+   }
+  ],
+  "text": "Hover doors are closed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Ignition": {
+  "takes": [
+   {
+    "heard": "Ignition.",
+    "seed": 1
+   }
+  ],
+  "text": "Ignition.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Information APU Fuel 10 Percent": {
+  "takes": [
+   {
+    "heard": "Information, APU, fuel 10%.",
+    "seed": 2
+   }
+  ],
+  "text": "Information. A.P.U. fuel ten percent.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "crew"
+ },
+ "Information APU Fuel 20 Percent": {
+  "takes": [
+   {
+    "heard": "Information, APU fuel 20%.",
+    "seed": 1
+   }
+  ],
+  "text": "Information. A.P.U. fuel twenty percent.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Information APU Fuel 30 Percent": {
+  "takes": [
+   {
+    "heard": "Information, APU Fuel 30%.",
+    "seed": 3
+   }
+  ],
+  "text": "Information. A.P.U. fuel thirty percent.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6
+  ],
+  "voice": "crew"
+ },
+ "Information APU Fuel 40 Percent": {
+  "takes": [
+   {
+    "heard": "Information APU fuel 40%.",
+    "seed": 3
+   }
+  ],
+  "text": "Information. A.P.U. fuel forty percent.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "crew"
+ },
+ "Information APU Fuel 50 Percent": {
+  "takes": [
+   {
+    "heard": "Information, APU Fuel, 50%.",
+    "seed": 1
+   }
+  ],
+  "text": "Information. A.P.U. fuel fifty percent.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Information APU Fuel 60 Percent": {
+  "takes": [
+   {
+    "heard": "Information, APU fuel, 60%.",
+    "seed": 3
+   }
+  ],
+  "text": "Information. A.P.U. fuel sixty percent.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "crew"
+ },
+ "Information APU Fuel 70 Percent": {
+  "takes": [
+   {
+    "heard": "",
+    "seed": 2
+   }
+  ],
+  "text": "Information. A-P-U fuel seventy percent.",
+  "tried": [
+   2
+  ],
+  "voice": "crew"
+ },
+ "Information APU Fuel 80 Percent": {
+  "takes": [
+   {
+    "heard": "Information APU Fuel 80%.",
+    "seed": 1
+   }
+  ],
+  "text": "Information. A.P.U. fuel eighty percent.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Information APU Fuel 90 Percent": {
+  "takes": [
+   {
+    "heard": "Information APU Fuel 90%.",
+    "seed": 1
+   }
+  ],
+  "text": "Information. A.P.U. fuel ninety percent.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Information APU Running": {
+  "takes": [
+   {
+    "heard": "Information, APU running.",
+    "seed": 1
+   }
+  ],
+  "text": "Information. A.P.U. running.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Ingress Successful": {
+  "takes": [
+   {
+    "heard": "Ingress successful.",
+    "seed": 1
+   }
+  ],
+  "text": "Ingress successful.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Inner Door Closed": {
+  "takes": [
+   {
+    "heard": "Inner door closed.",
+    "seed": 1
+   }
+  ],
+  "text": "Inner door closed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Inner Door is Open": {
+  "takes": [
+   {
+    "heard": "Inner door is open.",
+    "seed": 1
+   }
+  ],
+  "text": "Inner door is open.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Interval Timer Reset": {
+  "takes": [
+   {
+    "heard": "Interval timer reset.",
+    "seed": 1
+   }
+  ],
+  "text": "Interval timer reset.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Kill Rotation": {
+  "takes": [
+   {
+    "heard": "Kill rotation.",
+    "seed": 1
+   }
+  ],
+  "text": "Kill rotation.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "LOX Consumption Disabled": {
+  "takes": [
+   {
+    "heard": "Locks consumption disabled.",
+    "seed": 1
+   }
+  ],
+  "text": "Lox consumption disabled.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "LOX Hatch Closed": {
+  "takes": [
+   {
+    "heard": "Locks hatch closed.",
+    "seed": 1
+   }
+  ],
+  "text": "Lox hatch closed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "LOX Hatch Open": {
+  "takes": [
+   {
+    "heard": "Lock's hatch open.",
+    "seed": 1
+   }
+  ],
+  "text": "Lox hatch open.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "LOX Resupply Systems Offline": {
+  "takes": [
+   {
+    "heard": "Locks resupply systems offline.",
+    "seed": 1
+   }
+  ],
+  "text": "Lox resupply systems offline.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "LOX Resupply Systems Online": {
+  "takes": [
+   {
+    "heard": "Locks resupply systems online.",
+    "seed": 1
+   }
+  ],
+  "text": "Lox resupply systems online.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "LOX Tanks Full": {
+  "takes": [
+   {
+    "heard": "Locks tanks full.",
+    "seed": 1
+   }
+  ],
+  "text": "Lox tanks full.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Liftoff": {
+  "takes": [
+   {
+    "heard": "liftoff",
+    "seed": 4
+   }
+  ],
+  "text": "Liftoff.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "crew"
+ },
+ "Locked by Attitude Hold": {
+  "takes": [
+   {
+    "heard": "Locked by attitude hold.",
+    "seed": 1
+   }
+  ],
+  "text": "Locked by attitude hold.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Locked by Auto Mode": {
+  "takes": [
+   {
+    "heard": "Locked by auto mode.",
+    "seed": 1
+   }
+  ],
+  "text": "Locked by auto mode.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "MECO": {
+  "takes": [
+   {
+    "heard": "main engine cut off",
+    "seed": 1
+   }
+  ],
+  "text": "Main engine cutoff.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 1": {
+  "takes": [
+   {
+    "heard": "Mach 1.",
+    "seed": 1
+   }
+  ],
+  "text": "Mach one.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 10": {
+  "takes": [
+   {
+    "heard": "Mach 10",
+    "seed": 1
+   }
+  ],
+  "text": "Mach ten.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 11": {
+  "takes": [
+   {
+    "heard": "Mach 11.",
+    "seed": 1
+   }
+  ],
+  "text": "Mach eleven.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 12": {
+  "takes": [
+   {
+    "heard": "Mach 12",
+    "seed": 1
+   }
+  ],
+  "text": "Mach twelve.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 13": {
+  "takes": [
+   {
+    "heard": "Mach 13",
+    "seed": 1
+   }
+  ],
+  "text": "Mach thirteen.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 14": {
+  "takes": [
+   {
+    "heard": "Mach 14",
+    "seed": 1
+   }
+  ],
+  "text": "Mach fourteen.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 15": {
+  "takes": [
+   {
+    "heard": "Mach 15",
+    "seed": 1
+   }
+  ],
+  "text": "Mach fifteen.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 16": {
+  "takes": [
+   {
+    "heard": "Mach 16",
+    "seed": 1
+   }
+  ],
+  "text": "Mach sixteen.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 17": {
+  "takes": [
+   {
+    "heard": "Mach 17.",
+    "seed": 1
+   }
+  ],
+  "text": "Mach seventeen.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 18": {
+  "takes": [
+   {
+    "heard": "Mach 18.",
+    "seed": 1
+   }
+  ],
+  "text": "Mach eighteen.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 19": {
+  "takes": [
+   {
+    "heard": "Mach 19",
+    "seed": 1
+   }
+  ],
+  "text": "Mach nineteen.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 2": {
+  "takes": [
+   {
+    "heard": "Mach 2.",
+    "seed": 1
+   }
+  ],
+  "text": "Mach two.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 20": {
+  "takes": [
+   {
+    "heard": "Mach 20.",
+    "seed": 1
+   }
+  ],
+  "text": "Mach twenty.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 21": {
+  "takes": [
+   {
+    "heard": "Mach 21",
+    "seed": 1
+   }
+  ],
+  "text": "Mach twenty-one.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 22": {
+  "takes": [
+   {
+    "heard": "Mach 22",
+    "seed": 1
+   }
+  ],
+  "text": "Mach twenty-two.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 23": {
+  "takes": [
+   {
+    "heard": "Mach 23.",
+    "seed": 1
+   }
+  ],
+  "text": "Mach twenty-three.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 24": {
+  "takes": [
+   {
+    "heard": "Mach 24.",
+    "seed": 1
+   }
+  ],
+  "text": "Mach twenty-four.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 25": {
+  "takes": [
+   {
+    "heard": "Mach 25.",
+    "seed": 1
+   }
+  ],
+  "text": "Mach twenty-five.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 26": {
+  "takes": [
+   {
+    "heard": "Mach 26.",
+    "seed": 1
+   }
+  ],
+  "text": "Mach twenty-six.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 27 Plus": {
+  "takes": [
+   {
+    "heard": "Mach 27 plus.",
+    "seed": 1
+   }
+  ],
+  "text": "Mach twenty-seven plus.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 3": {
+  "takes": [
+   {
+    "heard": "Mach 3.",
+    "seed": 1
+   }
+  ],
+  "text": "Mach three.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 4": {
+  "takes": [
+   {
+    "heard": "Mach 4.",
+    "seed": 1
+   }
+  ],
+  "text": "Mach four.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 5": {
+  "takes": [
+   {
+    "heard": "Mach 5",
+    "seed": 1
+   }
+  ],
+  "text": "Mach five.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 6": {
+  "takes": [
+   {
+    "heard": "Mach 6.",
+    "seed": 1
+   }
+  ],
+  "text": "Mach six.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 7": {
+  "takes": [
+   {
+    "heard": "Mach 7.",
+    "seed": 1
+   }
+  ],
+  "text": "Mach seven.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 8": {
+  "takes": [
+   {
+    "heard": "Mach 8.",
+    "seed": 1
+   }
+  ],
+  "text": "Mach eight.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mach 9": {
+  "takes": [
+   {
+    "heard": "Mach 9",
+    "seed": 1
+   }
+  ],
+  "text": "Mach nine.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Main": {
+  "takes": [
+   {
+    "heard": "Maine.",
+    "seed": 13
+   }
+  ],
+  "text": "Main.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13
+  ],
+  "voice": "crew"
+ },
+ "Main Fuel 10 Percent": {
+  "takes": [
+   {
+    "heard": "Main fuel 10%",
+    "seed": 2
+   }
+  ],
+  "text": "Main fuel ten percent.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "crew"
+ },
+ "Main Fuel 20 Percent": {
+  "takes": [
+   {
+    "heard": "Maine fuel 20%.",
+    "seed": 1
+   }
+  ],
+  "text": "Main fuel twenty percent.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Main Fuel Tanks Full": {
+  "takes": [
+   {
+    "heard": "Main fuel tanks full.",
+    "seed": 1
+   }
+  ],
+  "text": "Main fuel tanks full.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Max Q": {
+  "takes": [
+   {
+    "heard": "Max Q.",
+    "seed": 1
+   }
+  ],
+  "text": "Max Q.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Mission Elapsed Time Reset": {
+  "takes": [
+   {
+    "heard": "Mission elapsed, time reset.",
+    "seed": 1
+   }
+  ],
+  "text": "Mission elapsed time reset.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Must be landed to reset MET": {
+  "takes": [
+   {
+    "heard": "must be landed to reset MET.",
+    "seed": 1
+   }
+  ],
+  "text": "Must be landed to reset M E T.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "No Cargo in Grapple Range": {
+  "takes": [
+   {
+    "heard": "No payload in grapple range.",
+    "seed": 1
+   }
+  ],
+  "text": "No payload in grapple range.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "No External Line Pressure": {
+  "takes": [
+   {
+    "heard": "No external line pressure.",
+    "seed": 1
+   }
+  ],
+  "text": "No external line pressure.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "No Grapple Target Selected": {
+  "takes": [
+   {
+    "heard": "No grapple target selected.",
+    "seed": 1
+   }
+  ],
+  "text": "No grapple target selected.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "No Room In Selected Bay Slot": {
+  "takes": [
+   {
+    "heard": "No room in selected base slot.",
+    "seed": 1
+   }
+  ],
+  "text": "No room in selected bay slot.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "No Slot Selected": {
+  "takes": [
+   {
+    "heard": "No Bay slot selected.",
+    "seed": 1
+   }
+  ],
+  "text": "No bay slot selected.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Normal Oxygen Levels Restored": {
+  "takes": [
+   {
+    "heard": "normal oxygen levels restored.",
+    "seed": 1
+   }
+  ],
+  "text": "Normal oxygen levels restored.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Nose Cone Closed": {
+  "takes": [
+   {
+    "heard": "nose cone closed",
+    "seed": 1
+   }
+  ],
+  "text": "Nose cone closed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Nose Cone Open": {
+  "takes": [
+   {
+    "heard": "Nose cone open.",
+    "seed": 1
+   }
+  ],
+  "text": "Nose cone open.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Off": {
+  "takes": [
+   {
+    "heard": "Off.",
+    "seed": 1
+   }
+  ],
+  "text": "Off.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "On": {
+  "takes": [
+   {
+    "heard": "on",
+    "seed": 1
+   }
+  ],
+  "text": "On.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Orbit": {
+  "takes": [
+   {
+    "heard": "Orbit Achieved.",
+    "seed": 1
+   }
+  ],
+  "text": "Orbit achieved.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Orbit Insertion Complete": {
+  "takes": [
+   {
+    "heard": "Orbit insertion complete.",
+    "seed": 1
+   }
+  ],
+  "text": "Orbit insertion complete.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Orbit Normal": {
+  "takes": [
+   {
+    "heard": "Orbit normal.",
+    "seed": 1
+   }
+  ],
+  "text": "Orbit normal.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Out of Range": {
+  "takes": [
+   {
+    "heard": "Out of range.",
+    "seed": 1
+   }
+  ],
+  "text": "Out of range.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Outer Door Closed": {
+  "takes": [
+   {
+    "heard": "outer door closed.",
+    "seed": 2
+   }
+  ],
+  "text": "Outer door closed.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "crew"
+ },
+ "Outer Door is Open": {
+  "takes": [
+   {
+    "heard": "Outer Door is open.",
+    "seed": 1
+   }
+  ],
+  "text": "Outer door is open.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Pitch": {
+  "takes": [
+   {
+    "heard": "Pitch",
+    "seed": 1
+   }
+  ],
+  "text": "Pitch.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Positive Rate": {
+  "takes": [
+   {
+    "heard": "Positive rate",
+    "seed": 1
+   }
+  ],
+  "text": "Positive rate.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Prograde": {
+  "takes": [
+   {
+    "heard": "Pro grade",
+    "seed": 1
+   }
+  ],
+  "text": "Prograde.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "RCS Config Docking": {
+  "takes": [
+   {
+    "heard": "RCS config docking.",
+    "seed": 3
+   }
+  ],
+  "text": "R-C-S config docking.",
+  "tried": [
+   3
+  ],
+  "voice": "crew"
+ },
+ "RCS Config Normal": {
+  "takes": [
+   {
+    "heard": "RCS, config normal.",
+    "seed": 3
+   }
+  ],
+  "text": "R-C-S config normal.",
+  "tried": [
+   3
+  ],
+  "voice": "crew"
+ },
+ "RCS Fuel 10 Percent": {
+  "takes": [
+   {
+    "heard": "RCS fuel 10%.",
+    "seed": 2
+   }
+  ],
+  "text": "R.C.S. fuel ten percent.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "crew"
+ },
+ "RCS Fuel 20 Percent": {
+  "takes": [
+   {
+    "heard": "RCS fueled 20%.",
+    "seed": 1
+   }
+  ],
+  "text": "R.C.S. fuel twenty percent.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "RCS Fuel Tanks Full": {
+  "takes": [
+   {
+    "heard": "RCS fuel tanks full",
+    "seed": 1
+   }
+  ],
+  "text": "R.C.S. fuel tanks full.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "RCS Locked by Autopilot": {
+  "takes": [
+   {
+    "heard": "RCS locked by Autopilot.",
+    "seed": 6
+   }
+  ],
+  "text": "R.C.S. locked by autopilot.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6
+  ],
+  "voice": "crew"
+ },
+ "Radiator Deployed": {
+  "takes": [
+   {
+    "heard": "Radiator deployed.",
+    "seed": 1
+   }
+  ],
+  "text": "Radiator deployed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Radiator Stowed": {
+  "takes": [
+   {
+    "heard": "Radiator Stowed",
+    "seed": 1
+   }
+  ],
+  "text": "Radiator stowed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Reentry Check All Systems Green": {
+  "takes": [
+   {
+    "heard": "Re-entry check, all systems green.",
+    "seed": 1
+   }
+  ],
+  "text": "Reentry check. All systems green.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Refueling Systems Offline": {
+  "takes": [
+   {
+    "heard": "refueling systems offline.",
+    "seed": 1
+   }
+  ],
+  "text": "Refueling systems offline.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Refueling Systems Online": {
+  "takes": [
+   {
+    "heard": "refueling systems online.",
+    "seed": 1
+   }
+  ],
+  "text": "Refueling systems online.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Resupply hatches locked": {
+  "takes": [
+   {
+    "heard": "Resupply hatches locked.",
+    "seed": 1
+   }
+  ],
+  "text": "Resupply hatches locked.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Retro Doors Open": {
+  "takes": [
+   {
+    "heard": "Retro doors open",
+    "seed": 1
+   }
+  ],
+  "text": "Retro doors open.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Retro doors are closed": {
+  "takes": [
+   {
+    "heard": "Retro doors are closed.",
+    "seed": 10
+   }
+  ],
+  "text": "Retro doors are closed.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10
+  ],
+  "voice": "crew"
+ },
+ "Retrograde": {
+  "takes": [
+   {
+    "heard": "Retrograde.",
+    "seed": 1
+   }
+  ],
+  "text": "Retrograde.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Roll Program": {
+  "takes": [
+   {
+    "heard": "Roll program.",
+    "seed": 1
+   }
+  ],
+  "text": "Roll program.",
+  "tried": [
+   1
+  ],
+  "voice": "commander"
+ },
+ "Rotate": {
+  "takes": [
+   {
+    "heard": "Rotate",
+    "seed": 1
+   }
+  ],
+  "text": "Rotate.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Rotation": {
+  "takes": [
+   {
+    "heard": "Rotation",
+    "seed": 2
+   }
+  ],
+  "text": "Rotation.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "voice": "crew"
+ },
+ "SCRAM Fuel Tanks Full": {
+  "takes": [
+   {
+    "heard": "Scram fuel tanks full.",
+    "seed": 1
+   }
+  ],
+  "text": "Scram fuel tanks full.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "SCRAM doors are closed": {
+  "takes": [
+   {
+    "heard": "Scram doors are closed.",
+    "seed": 1
+   }
+  ],
+  "text": "Scram doors are closed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "SOI Changed": {
+  "takes": [
+   {
+    "heard": "Sphere of influence changed.",
+    "seed": 3
+   }
+  ],
+  "text": "Sphere of influence changed.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "crew"
+ },
+ "SOI Earth": {
+  "takes": [
+   {
+    "heard": "entering the sphere of influence of Earth.",
+    "seed": 3
+   }
+  ],
+  "text": "Entering the sphere of influence of Earth.",
+  "tried": [
+   1,
+   2,
+   3
+  ],
+  "voice": "crew"
+ },
+ "SOI Jupiter": {
+  "takes": [
+   {
+    "heard": "entering the sphere of influence of Jupiter.",
+    "seed": 2
+   }
+  ],
+  "text": "Entering the sphere of influence of Jupiter.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "crew"
+ },
+ "SOI Mars": {
+  "takes": [
+   {
+    "heard": "entering the sphere of influence of Mars.",
+    "seed": 2
+   }
+  ],
+  "text": "Entering the sphere of influence of Mars.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "crew"
+ },
+ "SOI Mercury": {
+  "takes": [
+   {
+    "heard": "Entering the sphere of influence of Mercury.",
+    "seed": 1
+   }
+  ],
+  "text": "Entering the sphere of influence of Mercury.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "SOI Moon": {
+  "takes": [
+   {
+    "heard": "Entering the sphere of influence of the moon.",
+    "seed": 2
+   }
+  ],
+  "text": "Entering the sphere of influence of the Moon.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "crew"
+ },
+ "SOI Saturn": {
+  "takes": [
+   {
+    "heard": "entering the sphere of influence of Saturn.",
+    "seed": 1
+   }
+  ],
+  "text": "Entering the sphere of influence of Saturn.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "SOI Sun": {
+  "takes": [
+   {
+    "heard": "Entering solar orbit.",
+    "seed": 1
+   }
+  ],
+  "text": "Entering solar orbit.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "SOI Titan": {
+  "takes": [
+   {
+    "heard": "Entering the sphere of influence of Titan.",
+    "seed": 1
+   }
+  ],
+  "text": "Entering the sphere of influence of Titan.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "SOI Venus": {
+  "takes": [
+   {
+    "heard": "entering the sphere of influence of Venus.",
+    "seed": 2
+   }
+  ],
+  "text": "Entering the sphere of influence of Venus.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "crew"
+ },
+ "Slot Is Full": {
+  "takes": [
+   {
+    "heard": "Bay slot is occupied.",
+    "seed": 1
+   }
+  ],
+  "text": "Bay slot is occupied.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Slot is Empty": {
+  "takes": [
+   {
+    "heard": "Bay slot is empty",
+    "seed": 1
+   }
+  ],
+  "text": "Bay slot is empty.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Splashdown": {
+  "takes": [
+   {
+    "heard": "Splashdown.",
+    "seed": 1
+   }
+  ],
+  "text": "Splashdown.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "System Reset": {
+  "takes": [
+   {
+    "heard": "System reset.",
+    "seed": 1
+   }
+  ],
+  "text": "System reset.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Systems Rebooted Oxygen Flow Restored": {
+  "takes": [
+   {
+    "heard": "Systems rebooted. Oxygen flow restored.",
+    "seed": 1
+   }
+  ],
+  "text": "Systems rebooted. Oxygen flow restored.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Tank Separation": {
+  "takes": [
+   {
+    "heard": "Tank separation.",
+    "seed": 2
+   }
+  ],
+  "text": "Tank separation.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "commander"
+ },
+ "Touchdown": {
+  "takes": [
+   {
+    "heard": "Touchdown",
+    "seed": 1
+   }
+  ],
+  "text": "Touchdown.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Tracking Cargo": {
+  "takes": [
+   {
+    "heard": "tracking payload.",
+    "seed": 1
+   }
+  ],
+  "text": "Tracking payload.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Translation": {
+  "takes": [
+   {
+    "heard": "Translation.",
+    "seed": 1
+   }
+  ],
+  "text": "Translation.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Undocking Confirmed": {
+  "takes": [
+   {
+    "heard": "Undocking confirmed.",
+    "seed": 1
+   }
+  ],
+  "text": "Undocking confirmed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Using External O2": {
+  "takes": [
+   {
+    "heard": "using external O2.",
+    "seed": 1
+   }
+  ],
+  "text": "Using external O2.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Using Onboard O2": {
+  "takes": [
+   {
+    "heard": "Using onboard O2.",
+    "seed": 1
+   }
+  ],
+  "text": "Using onboard O2.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "V1": {
+  "takes": [
+   {
+    "heard": "V1",
+    "seed": 1
+   }
+  ],
+  "text": "V one.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning AF Ctrl Surfaces Off": {
+  "takes": [
+   {
+    "heard": "Warning AF control surfaces off.",
+    "seed": 6
+   }
+  ],
+  "text": "Warning. A-F control surfaces off.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6
+  ],
+  "voice": "crew"
+ },
+ "Warning APU Fuel 1 Percent": {
+  "takes": [
+   {
+    "heard": "Warning, APU Fuel 1%.",
+    "seed": 2
+   }
+  ],
+  "text": "Warning. A.P.U. fuel one percent.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "crew"
+ },
+ "Warning APU Fuel 2 Percent": {
+  "takes": [
+   {
+    "heard": "Warning, APU fueled 2%.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. A.P.U. fuel two percent.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning APU Fuel 3 Percent": {
+  "takes": [
+   {
+    "heard": "Warning, APU Fuel 3%.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. A.P.U. fuel three percent.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning APU Fuel 4 Percent": {
+  "takes": [
+   {
+    "heard": "Warning, APU, fuel 4%.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. A.P.U. fuel four percent.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning APU Fuel Depleted Center of Gravity Shift Offline": {
+  "takes": [
+   {
+    "heard": "Warning, APU fuel depleted. Center of gravity shift offline.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. A.P.U. fuel depleted. Center of gravity shift offline.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning APU Fuel Depleted No Hydraulic Pressure": {
+  "takes": [
+   {
+    "heard": "Warning, APU fuel depleted, no hydraulic pressure.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. A.P.U. fuel depleted. No hydraulic pressure.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning APU Fuel Low": {
+  "takes": [
+   {
+    "heard": "Warning APU fuel low",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. A.P.U. fuel low.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Airlock Safety Interlocks Disabled": {
+  "takes": [
+   {
+    "heard": "Warning, airlock safety interlocks disabled.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Airlock safety interlocks disabled.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Aux Power Unit Failure": {
+  "takes": [
+   {
+    "heard": "Warning AUX power unit failure",
+    "seed": 3
+   }
+  ],
+  "text": "Warning. Aux power unit failure.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "crew"
+ },
+ "Warning Bay Door Failure": {
+  "takes": [
+   {
+    "heard": "Warning, bay door failure",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Bay door failure.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Bay Doors Open": {
+  "takes": [
+   {
+    "heard": "Warning bay doors open",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Bay doors open.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Bay Doors Open Radiator is Locked": {
+  "takes": [
+   {
+    "heard": "Warning. Bay doors open. Radiator is locked.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Bay doors open. Radiator is locked.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Bay Doors in Motion Radiator is Locked": {
+  "takes": [
+   {
+    "heard": "Warning. Bay doors in motion. Radiator is locked.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Bay doors in motion. Radiator is locked.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Center of Gravity Shift Offline": {
+  "takes": [
+   {
+    "heard": "Warning, center of gravity shift offline.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Center of gravity shift offline.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Chamber Depressurizing Outer Door is Locked": {
+  "takes": [
+   {
+    "heard": "Warning chamber depressurizing outer door is locked",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Chamber depressurizing. Outer door is locked.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Chamber Not Pressurized": {
+  "takes": [
+   {
+    "heard": "Warning chamber not pressurized inner door is locked",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Chamber not pressurized. Inner door is locked.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Chamber Pressurizing Outer Door is Locked": {
+  "takes": [
+   {
+    "heard": "Warning, chamber pressurizing, outer door is locked.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Chamber pressurizing. Outer door is locked.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Conditions Detected": {
+  "takes": [
+   {
+    "heard": "Warning conditions detected.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning conditions detected.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Coolant Temperature": {
+  "takes": [
+   {
+    "heard": "Warning, coolant temperature.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Coolant temperature.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Crew Member Transfer Failed": {
+  "takes": [
+   {
+    "heard": "Warning, crew member transfer failed.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Crew member transfer failed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Decompression Danger": {
+  "takes": [
+   {
+    "heard": "Warning decompression danger",
+    "seed": 3
+   }
+  ],
+  "text": "Warning. Decompression danger.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "crew"
+ },
+ "Warning Decompression Danger Hatch is Locked": {
+  "takes": [
+   {
+    "heard": "Warning, decompression danger, hatch is locked.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Decompression danger. Hatch is locked.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Decompression Danger Outer Door is Locked": {
+  "takes": [
+   {
+    "heard": "Warning, decompression danger. Outer door is locked.",
+    "seed": 5
+   }
+  ],
+  "text": "Warning. Decompression danger. Outer door is locked.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "voice": "crew"
+ },
+ "Warning Docked Ship Has a Full Complement": {
+  "takes": [
+   {
+    "heard": "Warning. Docked ship has a full complement.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Docked ship has a full complement.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Docked Ship's Outer Door is Closed": {
+  "takes": [
+   {
+    "heard": "Warning, dock ship's outer doors closed.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Docked ship's outer door is closed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Docking Port Deployed": {
+  "takes": [
+   {
+    "heard": "Warning docking port deployed.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Docking port deployed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Docking Port Failure": {
+  "takes": [
+   {
+    "heard": "Warning docking port failure",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Docking port failure.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Docking Port is Closed": {
+  "takes": [
+   {
+    "heard": "Warning docking port is closed",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Docking port is closed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Docking Port is Closed Outer Door is Locked": {
+  "takes": [
+   {
+    "heard": "Warning docking port is closed outer door is locked",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Docking port is closed. Outer door is locked.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Elevator Deployed": {
+  "takes": [
+   {
+    "heard": "Warning, elevator deployed.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Elevator deployed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Elevator Failure": {
+  "takes": [
+   {
+    "heard": "Warning elevator failure",
+    "seed": 3
+   }
+  ],
+  "text": "Warning. Elevator failure.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "crew"
+ },
+ "Warning Elevator is Closed": {
+  "takes": [
+   {
+    "heard": "Warning, elevator is closed.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Elevator is closed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning External Cooling Offline": {
+  "takes": [
+   {
+    "heard": "Warning external cooling offline",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. External cooling offline.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning External Pressure Higher than Chamber Pressure": {
+  "takes": [
+   {
+    "heard": "Warning external pressure higher than chamber pressure outer door is locked",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. External pressure higher than chamber pressure. Outer door is locked.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Fuel Dump": {
+  "takes": [
+   {
+    "heard": "warning fueled up",
+    "seed": 4
+   }
+  ],
+  "text": "Warning. Fuel dump.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "crew"
+ },
+ "Warning Gear Deployed": {
+  "takes": [
+   {
+    "heard": "Warning gear deployed",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Gear deployed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Gear Failure": {
+  "takes": [
+   {
+    "heard": "Warning gear failure",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Gear failure.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Gear is Up": {
+  "takes": [
+   {
+    "heard": "Warning gear is up",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Gear is up.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Hatch Failure": {
+  "takes": [
+   {
+    "heard": "Warning hatch failure",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Hatch failure.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Hatch Open": {
+  "takes": [
+   {
+    "heard": "Warning, hatch open.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Hatch open.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Hatch Safety Interlocks Disabled": {
+  "takes": [
+   {
+    "heard": "Warning, hatch safety interlocks disabled.",
+    "seed": 4
+   }
+  ],
+  "text": "Warning. Hatch safety interlocks disabled.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "crew"
+ },
+ "Warning Heat Damage": {
+  "takes": [
+   {
+    "heard": "Warning heat damage",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Heat damage.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Hover Doors Open": {
+  "takes": [
+   {
+    "heard": "Warning, hover doors open.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Hover doors open.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Hull Temperature": {
+  "takes": [
+   {
+    "heard": "Warning, hull temperature.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Hull temperature.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Hull Temperature Critical": {
+  "takes": [
+   {
+    "heard": "Warning hull temperature critical",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Hull temperature critical.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Inner Door is Closed": {
+  "takes": [
+   {
+    "heard": "Warning, inner doors closed.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Inner door is closed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Insufficient Hover Thrust Available": {
+  "takes": [
+   {
+    "heard": "Warning, insufficient hover thrust available.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Insufficient hover thrust available.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Insufficient Main Thrust Available": {
+  "takes": [
+   {
+    "heard": "Warning insufficient main thrust available",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Insufficient main thrust available.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning LOX dump": {
+  "takes": [
+   {
+    "heard": "Warning, lock stump.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Lox dump.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Main Fuel Depleted": {
+  "takes": [
+   {
+    "heard": "Warning main fuel depleted",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Main fuel depleted.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Main Fuel Low": {
+  "takes": [
+   {
+    "heard": "Warning main fuel low",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Main fuel low.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning No Trip Found": {
+  "takes": [
+   {
+    "heard": "Warning, no trip found.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. No trip found.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Nosecone Failure": {
+  "takes": [
+   {
+    "heard": "Warning, nose cone failure.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Nose cone failure.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Nosecone Open": {
+  "takes": [
+   {
+    "heard": "Warning nose cone open",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Nose cone open.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Nosecone is Closed": {
+  "takes": [
+   {
+    "heard": "Warning, nose cone is closed.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Nose cone is closed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Nosecone is Closed Outer Door is Locked": {
+  "takes": [
+   {
+    "heard": "Warning nose cone is closed outer door is locked",
+    "seed": 4
+   }
+  ],
+  "text": "Warning. Nose cone is closed. Outer door is locked.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "crew"
+ },
+ "Warning Outer Door is Closed": {
+  "takes": [
+   {
+    "heard": "Warning, outer door is closed.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Outer door is closed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Oxygen Depleted": {
+  "takes": [
+   {
+    "heard": "Warning oxygen depleted",
+    "seed": 4
+   }
+  ],
+  "text": "Warning. Oxygen depleted.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "crew"
+ },
+ "Warning Oxygen Levels Critical Hypoxia Imminent": {
+  "takes": [
+   {
+    "heard": "Warning oxygen levels critical hypoxia imminent",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Oxygen levels critical. Hypoxia imminent.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Oxygen Low": {
+  "takes": [
+   {
+    "heard": "Warning oxygen low",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Oxygen low.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning RCS Fuel Depleted": {
+  "takes": [
+   {
+    "heard": "Warning, RCS fuel depleted.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. R.C.S. fuel depleted.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning RCS Fuel Low": {
+  "takes": [
+   {
+    "heard": "Warning RCS fuel low",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. R.C.S. fuel low.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Radiator Deployed": {
+  "takes": [
+   {
+    "heard": "Warning radiator deployed",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Radiator deployed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Radiator Failure": {
+  "takes": [
+   {
+    "heard": "Warning radiator failure",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Radiator failure.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Radiator in Motion Bay Doors Are Locked": {
+  "takes": [
+   {
+    "heard": "Warning radiator in motion bay doors are locked",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Radiator in motion. Bay doors are locked.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Reentry Check Failed": {
+  "takes": [
+   {
+    "heard": "Warning reentry check failed",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Reentry check failed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Resupply Operations Terminated": {
+  "takes": [
+   {
+    "heard": "Warning resupply operations terminated",
+    "seed": 4
+   }
+  ],
+  "text": "Warning. Resupply operations terminated.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "voice": "crew"
+ },
+ "Warning Retro Door Failure": {
+  "takes": [
+   {
+    "heard": "Warning, retro door failure.",
+    "seed": 5
+   }
+  ],
+  "text": "Warning. Retro door failure.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "voice": "crew"
+ },
+ "Warning Retro Doors Open": {
+  "takes": [
+   {
+    "heard": "Warning retro doors open",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Retro doors open.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Retro Doors are Closed": {
+  "takes": [
+   {
+    "heard": "Warning, retro doors are closed.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Retro doors are closed.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning SCRAM Engine Damage": {
+  "takes": [
+   {
+    "heard": "Warning, scram engine damage.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Scram engine damage.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning SCRAM Engines Overheating": {
+  "takes": [
+   {
+    "heard": "Warning. Scram engine's overheating.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Scram engines overheating.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning SCRAM Fuel Depleted": {
+  "takes": [
+   {
+    "heard": "Warning. Scram fuel depleted.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Scram fuel depleted.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning SCRAM Fuel Low": {
+  "takes": [
+   {
+    "heard": "Warning scram fuel low",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Scram fuel low.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning SCRAM Temperature": {
+  "takes": [
+   {
+    "heard": "Warning, SCRAM temperature.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Scram temperature.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning SCRAM doors open": {
+  "takes": [
+   {
+    "heard": "Warning. Scram doors open.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Scram doors open.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Ship Damage Detected": {
+  "takes": [
+   {
+    "heard": "Warning, ship damage detected.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Ship damage detected.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Ship is Docked": {
+  "takes": [
+   {
+    "heard": "Warning, ship is docked.",
+    "seed": 2
+   }
+  ],
+  "text": "Warning. Ship is docked.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "voice": "crew"
+ },
+ "Warning Sink Rate": {
+  "takes": [
+   {
+    "heard": "Warning, sync rate.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Sink rate.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Structural Limit": {
+  "takes": [
+   {
+    "heard": "Warning, structural limit.",
+    "seed": 2
+   }
+  ],
+  "text": "Warning. Structural limit.",
+  "tried": [
+   1,
+   2
+  ],
+  "voice": "crew"
+ },
+ "Warning Systems Failure Oxygen Flow Offline": {
+  "takes": [
+   {
+    "heard": "Warning. Systems failure. Oxygen flow offline.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Systems failure. Oxygen flow offline.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Systems Overheating": {
+  "takes": [
+   {
+    "heard": "Warning, systems overheating.",
+    "seed": 2
+   }
+  ],
+  "text": "Warning. Systems overheating.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "crew"
+ },
+ "Warning Terrain": {
+  "takes": [
+   {
+    "heard": "Warning, terrain.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Terrain.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning Wing Stress": {
+  "takes": [
+   {
+    "heard": "Warning, wing stress.",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Wing stress.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning airframe damage": {
+  "takes": [
+   {
+    "heard": "Warning, airframe damage.",
+    "seed": 2
+   }
+  ],
+  "text": "Warning. Airframe damage.",
+  "tried": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "voice": "crew"
+ },
+ "Warning airframe overheating": {
+  "takes": [
+   {
+    "heard": "Warning airframe overheating",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Airframe overheating.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Warning dynamic pressure": {
+  "takes": [
+   {
+    "heard": "Warning dynamic pressure",
+    "seed": 1
+   }
+  ],
+  "text": "Warning. Dynamic pressure.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Welcome Aboard All Systems Nominal": {
+  "takes": [
+   {
+    "heard": "Welcome aboard, Commander. All systems nominal.",
+    "seed": 1
+   }
+  ],
+  "text": "Welcome aboard, Commander. All systems nominal.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Welcome Aboard All Vanguard Systems Nominal": {
+  "takes": [
+   {
+    "heard": "Welcome aboard, Commander. All Vanguard systems nominal.",
+    "seed": 1
+   }
+  ],
+  "text": "Welcome aboard, Commander. All Vanguard systems nominal.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Welcome Aboard All XR1 Systems Nominal": {
+  "takes": [
+   {
+    "heard": "Welcome aboard, Commander. All XR-1 systems nominal.",
+    "seed": 1
+   }
+  ],
+  "text": "Welcome aboard, Commander. All X R one systems nominal.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ },
+ "Wheel Stop": {
+  "takes": [
+   {
+    "heard": "We'll stop.",
+    "seed": 2
+   }
+  ],
+  "text": "Wheel stop.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8
+  ],
+  "voice": "crew"
+ },
+ "Wheels Down": {
+  "takes": [
+   {
+    "heard": "WHEELS DOWN",
+    "seed": 4
+   }
+  ],
+  "text": "Wheels down.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9
+  ],
+  "voice": "crew"
+ },
+ "Wheels Up": {
+  "takes": [
+   {
+    "heard": "Wheels up.",
+    "seed": 3
+   }
+  ],
+  "text": "Wheels up.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "voice": "crew"
+ },
+ "You Are Cleared to Land": {
+  "takes": [
+   {
+    "heard": "You're clear to land.",
+    "seed": 5
+   }
+  ],
+  "text": "You are cleared to land.",
+  "tried": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6
+  ],
+  "voice": "crew"
+ },
+ "subsonic": {
+  "takes": [
+   {
+    "heard": "subsonic",
+    "seed": 1
+   }
+  ],
+  "text": "Subsonic.",
+  "tried": [
+   1
+  ],
+  "voice": "crew"
+ }
+}

@@ -1,8 +1,327 @@
-# Orbiter's own voice lines (callouts), made offline with Piper TTS by
-# Utils/Audio/make_voice.py: one line per file, "<file name>|<text>".
-# Keys in Src/Orbiter/Audio/Callouts.cpp; XRSound cfgs may name other files.
+# Orbiter's crew voice (F1: the onboard voice), one line per XRSound default sound that is
+# speech: "<XRSound file name>|<text to say>". In-game, with "Callout voice: Orbiter", a request
+# for XRSound/Default/<name>.wav plays Sound/Voice/<name>.flac instead (System::FindSound).
+# The text is what XRSound's recording says (checked with Whisper), in one style; numbers spelled
+# out; acronyms spelled the way that makes the voice say the letters (chosen by ear: A.P.U.,
+# R.C.S., A-F, P-S-I, O2, delta-V). Not listed: XRSound's non-speech sounds, tones and music,
+# and "ambl" (a slogan, left as XRSound's).
+# Made by Utils/Audio/make_voice.py --engine qwen3 --voice crew (kept takes: lines.takes.json).
+# Docking: XRSound's latch sound, then the line (a "bed": "|||<sound>@<s>").
+1|One.
+10|Ten.
+100|One hundred.
+100 Knots|One hundred knots.
+1000|One thousand.
+15|Fifteen.
+2|Two.
+20|Twenty.
+200|Two hundred.
+2000|Two thousand.
+3|Three.
+30|Thirty.
+300|Three hundred.
+3000|Three thousand.
+4|Four.
+40|Forty.
+400|Four hundred.
+4000|Four thousand.
+5|Five.
+50|Fifty.
+500|Five hundred.
+5000|Five thousand.
+6|Six.
+600|Six hundred.
+7|Seven.
+700|Seven hundred.
+75|Seventy-five.
+8|Eight.
+800|Eight hundred.
+9|Nine.
+900|Nine hundred.
+Airlock Depressurizing|Airlock depressurizing.
+Airlock Pressure Fourteen Point Seven PSI|Airlock pressure fourteen point seven P-S-I.
+Airlock Pressure Zero PSI|Airlock pressure zero P-S-I.
+Airlock Pressurizing|Airlock pressurizing.
+Airlock Safety Interlocks Enabled|Airlock safety interlocks enabled.
+All Systems Nominal|All systems nominal.
+All Vanguard Systems Nominal|All Vanguard systems nominal.
+All XR1 Systems Nominal|All X R one systems nominal.
+APU Autostart|A.P.U. autostart.
+APU Fuel Tanks Full|A.P.U. fuel tanks full.
+APU Offline|A.P.U. offline.
+Auto-Grapple Failed|Auto-grapple failed.
+Bay Doors Are Closed|Bay doors are closed.
+Bay is Empty|Payload bay is empty.
+Bay is Full|Payload bay is full.
+Cargo Deployed|Payload deployed.
+Cargo Deployment Failed|Warning. Payload deployment failed.
+Cargo Latched In Bay|Payload latched in bay.
+Center of Gravity Shift Online|Center of gravity shift online.
+Contact|Contact.
+Crew Member Transferred Successfully|Crew member transferred successfully.
+Cross-Feed Main|Cross-feed main.
+Cross-Feed Off|Cross-feed off.
+Cross-Feed RCS|Cross-feed R.C.S.
+Docking|Ship is docked.|||Sound/XRSound/assets/XRSound/Default/Docking.wav@4.5,-14/0.4
+Egress Successful|Egress successful.
+Error Sound File Missing|Error. Sound file missing.
+Excess DeltaV|Excess delta-V.
+External Cooling Offline|External cooling offline.
+External Cooling Online|External cooling online.
+Fuel Hatch Closed|Fuel hatch closed.
+Fuel Hatch Open|Fuel hatch open.
+Gear Down|Gear down.
+Gear Down and Locked|Gear down and locked.
+Gear Locked|Gear locked.
+Gear Up|Gear up.
+Gear Up and Locked|Gear up and locked.
+Hatch Closed|Hatch closed.
+Hatch is Locked|Hatch is locked.
+Hatch Open|Hatch open.
+Hatch Safety Interlocks Enabled|Hatch safety interlocks enabled.
+Hold to Dump Fuel|Hold to dump fuel.
+Hold to dump LOX|Hold to dump lox.
+Hold to Reset|Hold to reset.
+Hover|Hover.
+Hover doors are closed|Hover doors are closed.
+Information APU Fuel 10 Percent|Information. A.P.U. fuel ten percent.
+Information APU Fuel 20 Percent|Information. A.P.U. fuel twenty percent.
+Information APU Fuel 30 Percent|Information. A.P.U. fuel thirty percent.
+Information APU Fuel 40 Percent|Information. A.P.U. fuel forty percent.
+Information APU Fuel 50 Percent|Information. A.P.U. fuel fifty percent.
+Information APU Fuel 60 Percent|Information. A.P.U. fuel sixty percent.
+Information APU Fuel 70 Percent|Information. A-P-U fuel seventy percent.
+Information APU Fuel 80 Percent|Information. A.P.U. fuel eighty percent.
+Information APU Fuel 90 Percent|Information. A.P.U. fuel ninety percent.
+Information APU Running|Information. A.P.U. running.
+Ingress Successful|Ingress successful.
+Inner Door is Open|Inner door is open.
+Interval Timer Reset|Interval timer reset.
+Liftoff|Liftoff.
+Locked by Attitude Hold|Locked by attitude hold.
+Locked by Auto Mode|Locked by auto mode.
+LOX Consumption Disabled|Lox consumption disabled.
+LOX Hatch Closed|Lox hatch closed.
+LOX Hatch Open|Lox hatch open.
+LOX Resupply Systems Offline|Lox resupply systems offline.
+LOX Resupply Systems Online|Lox resupply systems online.
+LOX Tanks Full|Lox tanks full.
+Mach 1|Mach one.
+Mach 10|Mach ten.
+Mach 11|Mach eleven.
+Mach 12|Mach twelve.
+Mach 13|Mach thirteen.
+Mach 14|Mach fourteen.
+Mach 15|Mach fifteen.
+Mach 16|Mach sixteen.
+Mach 17|Mach seventeen.
+Mach 18|Mach eighteen.
+Mach 19|Mach nineteen.
+Mach 2|Mach two.
+Mach 20|Mach twenty.
+Mach 21|Mach twenty-one.
+Mach 22|Mach twenty-two.
+Mach 23|Mach twenty-three.
+Mach 24|Mach twenty-four.
+Mach 25|Mach twenty-five.
+Mach 26|Mach twenty-six.
+Mach 27 Plus|Mach twenty-seven plus.
+Mach 3|Mach three.
+Mach 4|Mach four.
+Mach 5|Mach five.
+Mach 6|Mach six.
+Mach 7|Mach seven.
+Mach 8|Mach eight.
+Mach 9|Mach nine.
+Main|Main.
+Main Fuel Tanks Full|Main fuel tanks full.
+Mission Elapsed Time Reset|Mission elapsed time reset.
+Must be landed to reset MET|Must be landed to reset M E T.
+No Cargo in Grapple Range|No payload in grapple range.
+No External Line Pressure|No external line pressure.
+No Grapple Target Selected|No grapple target selected.
+No Room In Selected Bay Slot|No room in selected bay slot.
+No Slot Selected|No bay slot selected.
+Normal Oxygen Levels Restored|Normal oxygen levels restored.
+Off|Off.
+On|On.
+Out of Range|Out of range.
+Outer Door is Open|Outer door is open.
+Pitch|Pitch.
+Positive Rate|Positive rate.
+RCS Config Docking|R-C-S config docking.
+RCS Config Normal|R-C-S config normal.
+RCS Fuel Tanks Full|R.C.S. fuel tanks full.
+RCS Locked by Autopilot|R.C.S. locked by autopilot.
+Reentry Check All Systems Green|Reentry check. All systems green.
+Refueling Systems Offline|Refueling systems offline.
+Refueling Systems Online|Refueling systems online.
+Resupply hatches locked|Resupply hatches locked.
+Retro doors are closed|Retro doors are closed.
+Rotate|Rotate.
+Rotation|Rotation.
+SCRAM doors are closed|Scram doors are closed.
+SCRAM Fuel Tanks Full|Scram fuel tanks full.
+Slot is Empty|Bay slot is empty.
+Slot Is Full|Bay slot is occupied.
+subsonic|Subsonic.
+System Reset|System reset.
+Systems Rebooted Oxygen Flow Restored|Systems rebooted. Oxygen flow restored.
+Touchdown|Touchdown.
+Tracking Cargo|Tracking payload.
+Translation|Translation.
+Undocking Confirmed|Undocking confirmed.
+Using External O2|Using external O2.
+Using Onboard O2|Using onboard O2.
+V1|V one.
+Warning AF Ctrl Surfaces Off|Warning. A-F control surfaces off.
+Warning airframe damage|Warning. Airframe damage.
+Warning airframe overheating|Warning. Airframe overheating.
+Warning Airlock Safety Interlocks Disabled|Warning. Airlock safety interlocks disabled.
+Warning APU Fuel 1 Percent|Warning. A.P.U. fuel one percent.
+Warning APU Fuel 2 Percent|Warning. A.P.U. fuel two percent.
+Warning APU Fuel 3 Percent|Warning. A.P.U. fuel three percent.
+Warning APU Fuel 4 Percent|Warning. A.P.U. fuel four percent.
+Warning APU Fuel Depleted Center of Gravity Shift Offline|Warning. A.P.U. fuel depleted. Center of gravity shift offline.
+Warning APU Fuel Depleted No Hydraulic Pressure|Warning. A.P.U. fuel depleted. No hydraulic pressure.
+Warning APU Fuel Low|Warning. A.P.U. fuel low.
+Warning Aux Power Unit Failure|Warning. Aux power unit failure.
+Warning Bay Door Failure|Warning. Bay door failure.
+Warning Bay Doors in Motion Radiator is Locked|Warning. Bay doors in motion. Radiator is locked.
+Warning Bay Doors Open|Warning. Bay doors open.
+Warning Bay Doors Open Radiator is Locked|Warning. Bay doors open. Radiator is locked.
+Warning Center of Gravity Shift Offline|Warning. Center of gravity shift offline.
+Warning Chamber Depressurizing Outer Door is Locked|Warning. Chamber depressurizing. Outer door is locked.
+Warning Chamber Not Pressurized|Warning. Chamber not pressurized. Inner door is locked.
+Warning Chamber Pressurizing Outer Door is Locked|Warning. Chamber pressurizing. Outer door is locked.
+Warning Conditions Detected|Warning conditions detected.
+Warning Coolant Temperature|Warning. Coolant temperature.
+Warning Crew Member Transfer Failed|Warning. Crew member transfer failed.
+Warning Decompression Danger|Warning. Decompression danger.
+Warning Decompression Danger Hatch is Locked|Warning. Decompression danger. Hatch is locked.
+Warning Decompression Danger Outer Door is Locked|Warning. Decompression danger. Outer door is locked.
+Warning Docked Ship Has a Full Complement|Warning. Docked ship has a full complement.
+Warning Docked Ship's Outer Door is Closed|Warning. Docked ship's outer door is closed.
+Warning Docking Port Deployed|Warning. Docking port deployed.
+Warning Docking Port Failure|Warning. Docking port failure.
+Warning Docking Port is Closed|Warning. Docking port is closed.
+Warning Docking Port is Closed Outer Door is Locked|Warning. Docking port is closed. Outer door is locked.
+Warning dynamic pressure|Warning. Dynamic pressure.
+Warning Elevator Deployed|Warning. Elevator deployed.
+Warning Elevator Failure|Warning. Elevator failure.
+Warning Elevator is Closed|Warning. Elevator is closed.
+Warning External Cooling Offline|Warning. External cooling offline.
+Warning External Pressure Higher than Chamber Pressure|Warning. External pressure higher than chamber pressure. Outer door is locked.
+Warning Fuel Dump|Warning. Fuel dump.
+Warning Gear Deployed|Warning. Gear deployed.
+Warning Gear Failure|Warning. Gear failure.
+Warning Gear is Up|Warning. Gear is up.
+Warning Hatch Failure|Warning. Hatch failure.
+Warning Hatch Open|Warning. Hatch open.
+Warning Hatch Safety Interlocks Disabled|Warning. Hatch safety interlocks disabled.
+Warning Heat Damage|Warning. Heat damage.
+Warning Hover Doors Open|Warning. Hover doors open.
+Warning Hull Temperature|Warning. Hull temperature.
+Warning Inner Door is Closed|Warning. Inner door is closed.
+Warning Insufficient Hover Thrust Available|Warning. Insufficient hover thrust available.
+Warning Insufficient Main Thrust Available|Warning. Insufficient main thrust available.
+Warning LOX dump|Warning. Lox dump.
+Warning Main Fuel Depleted|Warning. Main fuel depleted.
+Warning Main Fuel Low|Warning. Main fuel low.
+Warning Nosecone Failure|Warning. Nose cone failure.
+Warning Nosecone is Closed|Warning. Nose cone is closed.
+Warning Nosecone is Closed Outer Door is Locked|Warning. Nose cone is closed. Outer door is locked.
+Warning Nosecone Open|Warning. Nose cone open.
+Warning Outer Door is Closed|Warning. Outer door is closed.
+Warning Oxygen Depleted|Warning. Oxygen depleted.
+Warning Oxygen Levels Critical Hypoxia Imminent|Warning. Oxygen levels critical. Hypoxia imminent.
+Warning Oxygen Low|Warning. Oxygen low.
+Warning Radiator Deployed|Warning. Radiator deployed.
+Warning Radiator Failure|Warning. Radiator failure.
+Warning Radiator in Motion Bay Doors Are Locked|Warning. Radiator in motion. Bay doors are locked.
+Warning RCS Fuel Depleted|Warning. R.C.S. fuel depleted.
+Warning RCS Fuel Low|Warning. R.C.S. fuel low.
+Warning Reentry Check Failed|Warning. Reentry check failed.
+Warning Resupply Operations Terminated|Warning. Resupply operations terminated.
+Warning Retro Door Failure|Warning. Retro door failure.
+Warning Retro Doors are Closed|Warning. Retro doors are closed.
+Warning Retro Doors Open|Warning. Retro doors open.
+Warning SCRAM doors open|Warning. Scram doors open.
+Warning SCRAM Engine Damage|Warning. Scram engine damage.
+Warning SCRAM Engines Overheating|Warning. Scram engines overheating.
+Warning SCRAM Fuel Depleted|Warning. Scram fuel depleted.
+Warning SCRAM Fuel Low|Warning. Scram fuel low.
+Warning SCRAM Temperature|Warning. Scram temperature.
+Warning Ship Damage Detected|Warning. Ship damage detected.
+Warning Ship is Docked|Warning. Ship is docked.
+Warning Systems Failure Oxygen Flow Offline|Warning. Systems failure. Oxygen flow offline.
+Warning Systems Overheating|Warning. Systems overheating.
+Warning Wing Stress|Warning. Wing stress.
+Welcome Aboard All Systems Nominal|Welcome aboard, Commander. All systems nominal.
+Welcome Aboard All Vanguard Systems Nominal|Welcome aboard, Commander. All Vanguard systems nominal.
+Welcome Aboard All XR1 Systems Nominal|Welcome aboard, Commander. All X R one systems nominal.
+Wheel Stop|Wheel stop.
+Wheels Down|Wheels down.
+Wheels Up|Wheels up.
+You Are Cleared to Land|You are cleared to land.
+
+# Orbiter's own lines (keys in Src/Orbiter/Audio/Callouts.cpp)
 Ignition|Ignition.
 Max Q|Max Q.
 MECO|Main engine cutoff.
 Orbit|Orbit achieved.
 Splashdown|Splashdown.
+Main Fuel 20 Percent|Main fuel twenty percent.
+Main Fuel 10 Percent|Main fuel ten percent.
+RCS Fuel 20 Percent|R.C.S. fuel twenty percent.
+RCS Fuel 10 Percent|R.C.S. fuel ten percent.
+Kill Rotation|Kill rotation.
+Hold Level|Hold level.
+Prograde|Prograde.
+Retrograde|Retrograde.
+Orbit Normal|Orbit normal.
+Anti-Normal|Anti-normal.
+Hold Altitude|Hold altitude.
+Warning Hull Temperature Critical|Warning. Hull temperature critical.
+Warning Terrain|Warning. Terrain.
+Warning Sink Rate|Warning. Sink rate.
+Orbit Insertion Complete|Orbit insertion complete.
+Escape Trajectory|Escape trajectory.
+Entry Interface|Entry interface.
+Communications Blackout|Communications blackout.
+SOI Moon|Entering the sphere of influence of the Moon.
+SOI Earth|Entering the sphere of influence of Earth.
+SOI Mars|Entering the sphere of influence of Mars.
+SOI Venus|Entering the sphere of influence of Venus.
+SOI Mercury|Entering the sphere of influence of Mercury.
+SOI Jupiter|Entering the sphere of influence of Jupiter.
+SOI Saturn|Entering the sphere of influence of Saturn.
+SOI Titan|Entering the sphere of influence of Titan.
+SOI Sun|Entering solar orbit.
+SOI Changed|Sphere of influence changed.
+Drive Engaged|Drive engaged.
+Acceleration Burn|Acceleration burn.
+Coasting|Burn complete. Coasting.
+Braking Burn|Braking burn.
+Arrived|Arrived.
+Warning No Trip Found|Warning. No trip found.
+Holding Position|Holding position.
+Drive Disengaged|Drive disengaged.
+Booster Separation|Booster separation.|commander
+Tank Separation|Tank separation.|commander
+Roll Program|Roll program.|commander
+Chatter Sunset 1|Here comes the night side.|commander
+Chatter Sunset 2|Going into the dark again.|commander
+Chatter Sunrise 1|Sunrise coming up. Beautiful.|commander
+Chatter Sunrise 2|There's the sun again.|commander
+Chatter Sunrise 3|Daylight. That view never gets old.|commander
+Afloat|Vessel is stable in the water.
+Docking Aborted|Docking aborted.
+Warning Structural Limit|Warning. Structural limit.
+Outer Door Closed|Outer door closed.
+Inner Door Closed|Inner door closed.
+Nose Cone Open|Nose cone open.
+Nose Cone Closed|Nose cone closed.
+Radiator Deployed|Radiator deployed.
+Radiator Stowed|Radiator stowed.
+Retro Doors Open|Retro doors open.

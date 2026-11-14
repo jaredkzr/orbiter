@@ -7,6 +7,7 @@
 #include "SplashSynth.h"
 #include "ThunderSynth.h"
 #include "CreakSynth.h"
+#include "AudioSystem.h"
 #include "VesselSounds.h"
 #include "Debris.h"
 #include "Psys.h"
@@ -345,6 +346,7 @@ void Effects::UpdateCreaks (double t)
 	const Vessel *v = g_focusobj && !g_focusobj->Destroyed () ? g_focusobj : nullptr;
 	if (creak.v != v) {
 		if (creak.em) world.Remove (creak.em);
+		if (creak.bed) world.Remove (creak.bed);
 		creak = Creak ();
 		if (!v) return;
 		auto s = CreakSynth::Make (engine, seed++);
@@ -384,6 +386,24 @@ void Effects::UpdateCreaks (double t)
 		const double q = v->GetSurfParam () ? v->GetSurfParam ()->dynp : 0.0;
 		stress = std::max (gl / 6.0, 0.5 * q / 40e3);
 	}
+	// (a black hole's tides on the core: heard as they near what tears it)
+	const double tide = std::clamp (v->TidalLoad (), 0.0, 1.5);
+	stress = std::max (stress, tide);
+	// tides near tearing it: the whole structure groaning under the creaks, from half the limit
+	// (a generated bed, looped, through the hull: Sound/Generated/creak_1)
+	const double bedGain = std::pow (std::clamp ((tide - 0.5) / 0.5, 0.0, 1.0), 1.5);
+	if (bedGain > 0.0 && !creak.bed) {
+		const std::string f = System::FindSound ("Sound/Generated/creak_1.flac");
+		if (!f.empty ()) {
+			EmitterDesc d;
+			d.body = v, d.refDist = 0.1f, d.hull = (float)CREAK_HULL, d.level = 0.0f;
+			d.name = std::string (v->Name ()) + " structure groaning";
+			creak.bed = world.Add (d, MakeFileSource (engine, f, true));
+			static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+			if (log) printf ("Audio: structure groaning at %.2f s (tides %.2f of tearing)\n", t, tide), fflush (stdout);
+		}
+	}
+	if (creak.bed) creak.bed->SetLevel ((float)(2.0 * CREAK_P / P_FULL / CREAK_HULL * bedGain));
 	stress = std::clamp (stress, 0.0, 1.5);
 	const double dt = t - creak.t;
 	creak.t = t;
@@ -393,14 +413,16 @@ void Effects::UpdateCreaks (double t)
 	if (creak.stress >= 0.0 && dt > 0.0 && dt < 1.0 && std::fabs (stress - creak.stress) < 0.3) {
 		// creaks at random: more often the faster the stress changes, and
 		// the higher it is; groans when a high stress holds
-		const double rate = 12.0 * std::fabs (stress - creak.stress) / dt * std::sqrt (stress) + 0.3 * std::pow (stress, 4.0);
+		const double rate = 12.0 * std::fabs (stress - creak.stress) / dt * std::sqrt (stress) + 0.3 * std::pow (stress, 4.0)
+			+ 20.0 * std::pow (tide, 3.0);   // (tides near tearing it: creaking all over)
 		creak.debt += rate * dt;
 		if (creak.debt > 1.0 || CreakRand () < rate * dt * 0.3) {
 			creak.debt = std::max (0.0, creak.debt - 1.0);
-			const int k = (std::fabs (stress - creak.stress) / dt < 0.05 && stress > 0.4) ? CreakSynth::GROAN : CreakSynth::CREAK;
+			int k = (std::fabs (stress - creak.stress) / dt < 0.05 && stress > 0.4) ? CreakSynth::GROAN : CreakSynth::CREAK;
+			if (tide > 0.6 && CreakRand () < tide - 0.3) k = CreakSynth::GROAN;   // (heavier the nearer it tears)
 			creak.count[k]++;
 			p[k] = (float)creak.count[k];
-			p[2 + k] = (float)std::min (1.0, stress * (0.5 + 0.5 * CreakRand ()));
+			p[2 + k] = (float)std::min (tide > 0.7 ? 1.5 : 1.0, stress * (0.5 + 0.5 * CreakRand ()) * (1.0 + 0.5 * std::max (0.0, tide - 0.7) / 0.3));
 		}
 	}
 	creak.stress = stress;
@@ -418,7 +440,7 @@ void Effects::UpdateCreaks (double t)
 
 void Effects::Forget (const Body *body)
 {
-	if ((const Body*)creak.v == body) { if (creak.em) world.Remove (creak.em); creak = Creak (); }
+	if ((const Body*)creak.v == body) { if (creak.em) world.Remove (creak.em); if (creak.bed) world.Remove (creak.bed); creak = Creak (); }
 	for (auto it = thunders.begin (); it != thunders.end (); ) {
 		if (it->planet == body) { world.Remove (it->em); it = thunders.erase (it); }
 		else ++it;
@@ -448,6 +470,7 @@ void Effects::Clear ()
 	for (auto &th : thunders) world.Remove (th.em);
 	thunders.clear ();
 	if (creak.em) world.Remove (creak.em);
+	if (creak.bed) world.Remove (creak.bed);
 	creak = Creak ();
 }
 

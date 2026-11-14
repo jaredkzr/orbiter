@@ -30,6 +30,7 @@
 #include "World.h"
 #include "VesselSounds.h"
 #include "Callouts.h"
+#include "WarpDrive.h"
 #include "Effects.h"
 #include "Ambience.h"
 #include "Radio.h"
@@ -140,6 +141,8 @@ public:
 	static std::string FindSound (const std::string &file);
 	bool Tune (const Vessel *v, const std::string &key, double value) { return vessels.TuneVessel (v, key, value); }
 	void Animation (const Vessel *v, unsigned anim, int kind, double level) { vessels.Animation (v, anim, kind, level); }
+	/// A moment a vessel's code tells of (oapiAudioEvent): its sound, line and reply (false: no such event)
+	bool VesselEvent (const Vessel *v, const std::string &event);
 
 	Engine &GetEngine () { return engine; }
 	World &GetWorld () { return world; }
@@ -163,6 +166,7 @@ private:
 	Effects effects{engine, world};
 	Ambience ambience{*this};
 	Radio radio{*this};
+	WarpDrive warpDrive{*this};
 	Music music{*this};
 	Hrtf hrtf;                      // (loaded when first asked for)
 	int pendingClick = -1;          // (a ClickKind)

@@ -25,6 +25,7 @@ extern TimeData td;
 extern PlanetarySystem *g_psys;
 extern Vessel *g_focusobj;
 extern Camera *g_camera;
+extern Orbiter *g_pOrbiter;
 
 namespace audio {
 
@@ -146,12 +147,72 @@ namespace {
 	}
 }
 
+namespace {
+	/// <name> if the file is one of XRSound's default sounds ("XRSound/Default/<name>.<ext>",
+	/// either slash, any case, under Sound/ or not), else empty
+	std::string XrDefaultName (const std::string &file)
+	{
+		std::string f = file;
+		std::replace (f.begin (), f.end (), '\\', '/');
+		std::string low = f;
+		std::transform (low.begin (), low.end (), low.begin (), [](unsigned char c) { return (char)std::tolower (c); });
+		size_t at = std::string::npos;
+		for (const char *pre : { "sound/xrsound/default/", "xrsound/default/" })
+			if (low.rfind (pre, 0) == 0) { at = strlen (pre); break; }
+		if (at == std::string::npos) return std::string ();
+		std::string name = f.substr (at);
+		if (name.empty () || name.find ('/') != std::string::npos) return std::string ();   // (not a subfolder's: chatter, music)
+		size_t dot = name.rfind ('.');
+		return dot == std::string::npos ? name : name.substr (0, dot);
+	}
+
+	/// Callouts in Orbiter's voice (Sound/Voice), not XRSound's recordings (the settings;
+	/// ORBITER_AUDIO_VOICE=orbiter or xrsound)
+	bool OrbiterVoice ()
+	{
+		static const char *env = getenv ("ORBITER_AUDIO_VOICE");
+		if (env && *env) return std::tolower ((unsigned char)*env) != 'x';
+		return !g_pOrbiter || g_pOrbiter->Cfg()->CfgSoundPrm.CalloutVoice == 0;
+	}
+}
+
 std::string System::FindSound (const std::string &file)
 {
 	if (file.empty ()) return std::string ();
+	// XRSound's default voice lines in Orbiter's voice: the one place every lookup passes
+	// (the callouts, XRSound configs, the XRSound shim), so XR vessels and add-ons that name
+	// the defaults speak with it too. A default with no Orbiter line (a sound, music) is XRSound's.
+	std::string xr = XrDefaultName (file);
+	if (!xr.empty () && OrbiterVoice ()) {
+		std::string v = ResolveCase ("Sound/Voice/" + xr + ".flac");
+		if (!v.empty ()) return v;
+	}
 	std::string s = ResolveCase (file);
 	if (!s.empty ()) return s;
 	return ResolveCase ("Sound/" + file);
+}
+
+bool System::VesselEvent (const Vessel *v, const std::string &event)
+{
+	// a separation: the pyro's bang on the vessel (as its other sounds: through the air, the hull;
+	// not across vacuum), the commander's call, the ground's reply (the vessel in focus)
+	struct Ev { const char *name, *line; int radio; };
+	static const Ev evs[] = {
+		{"BoosterSeparation", "Sound/Voice/Booster Separation.flac", Radio::BOOSTER_SEP},
+		{"TankSeparation", "Sound/Voice/Tank Separation.flac", Radio::TANK_SEP},
+	};
+	for (const Ev &e : evs) {
+		if (event != e.name) continue;
+		if (!FindSound ("Sound/Generated/pyro.flac").empty ()) Play (v, "Sound/Generated/pyro.flac", V3 (0, 0, 0), 10.0, false);   // (the bolts and separation motors: unmistakable over the engines - measured in a launch, -21 dB in the mix against the roar at -18)
+		if (v == g_focusobj) {
+			callouts.Crew (e.line, 3.0);
+			radio.OnEvent ((Radio::Event)e.radio);
+		}
+		static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+		if (log) printf ("Audio: vessel event %s\n", e.name), fflush (stdout);
+		return true;
+	}
+	return false;
 }
 
 int System::Play (const Vessel *v, const std::string &file, const V3 &pos, double level, bool loop)
@@ -427,6 +488,7 @@ void System::EndSession ()
 {
 	callouts.Reset ();
 	xr::Clear ();
+	warpDrive.Clear ();
 	for (auto &p : played) if (p.second.flat) ma_sound_uninit (p.second.flat.get ());
 	played.clear ();
 	vessels.Clear ();
@@ -481,6 +543,7 @@ void System::Stop ()
 	music.Clear ();
 	ambience.Clear ();
 	radio.Clear ();
+	warpDrive.Clear ();
 	for (auto &p : played) if (p.second.flat) ma_sound_uninit (p.second.flat.get ());
 	played.clear ();
 	if (wav.IsOpen ()) {
@@ -575,6 +638,7 @@ void System::Step ()
 			static const bool radioOff = getenv ("ORBITER_AUDIO_RADIO") && *getenv ("ORBITER_AUDIO_RADIO") == '0'; // (tests)
 			if (radioOff) radio.Clear (); else radio.Update (td.SimT1);
 			xr::Step (*this, g_focusobj, cockpit, td.SimT1);
+			warpDrive.Step (g_focusobj, cockpit, td.UiDT ());
 		}
 		UpdatePlayed ();
 		Duck (td.UiDT ());

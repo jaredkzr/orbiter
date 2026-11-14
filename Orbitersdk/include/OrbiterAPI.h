@@ -4742,6 +4742,15 @@ OAPIFUNC const char *oapiAudioCallout (int n);
  */
 OAPIFUNC void oapiAudioClick (int kind);
 /**
+ * \brief A moment of a vessel's flight its own code knows (a staging, a
+ *   separation): heard as the sound, the crew's line and the ground's
+ *   reply that go with it. Events: "BoosterSeparation", "TankSeparation"
+ *   (a pyrotechnic bang; the commander's call; Mission Control's reply).
+ *   The callouts and the radio follow the vessel in focus only.
+ * \return false: no such event
+ */
+OAPIFUNC bool oapiAudioEvent (OBJHANDLE hVessel, const char *event);
+/**
  * \brief The music's mood now (it follows the vessel in focus): "silent",
  *   "menu", "ground", "ascent", "orbit", "deep", "approach" or "reentry".
  */

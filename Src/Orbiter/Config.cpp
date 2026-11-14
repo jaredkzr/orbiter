@@ -260,7 +260,8 @@ CFG_SOUNDPRM CfgSoundPrm_default = {
 	2,          // Compression (medium)
 	0.9f,       // Master volume (-4 dB: the mix about -24 LUFS)
 	{ 1.0f, 1.0f, 0.9f, 0.85f, 0.8f, 0.7f }, // Bus volumes: outside, cockpit, voice, radio, music, interface
-	0           // Realism (physical)
+	0,          // Realism (physical)
+	0           // CalloutVoice (Orbiter's)
 };
 
 CFG_CMDLINEPRM CfgCmdlinePrm_default = {
@@ -754,6 +755,7 @@ bool Config::Load(const char *fname)
 			if (GetReal (ifs, busKey[b], d)) CfgSoundPrm.Bus[b] = (float)std::clamp (d, 0.0, 1.0);
 	}
 	if (GetInt (ifs, "SoundRealism", i) && i >= 0 && i <= 1) CfgSoundPrm.Realism = i;
+	if (GetInt (ifs, "SoundCalloutVoice", i) && i >= 0 && i <= 1) CfgSoundPrm.CalloutVoice = i;
 
 	// user interface parameters
 	if (GetInt(ifs, "MouseFocusMode", i) && i >= 0 && i <= 2)
@@ -1308,6 +1310,8 @@ BOOL Config::Write (const char *fname) const
 				ofs << busKey[b] << " = " << CfgSoundPrm.Bus[b] << '\n';
 		if (CfgSoundPrm.Realism != CfgSoundPrm_default.Realism || bEchoAll)
 			ofs << "SoundRealism = " << CfgSoundPrm.Realism << '\n';
+		if (CfgSoundPrm.CalloutVoice != CfgSoundPrm_default.CalloutVoice || bEchoAll)
+			ofs << "SoundCalloutVoice = " << CfgSoundPrm.CalloutVoice << '\n';
 	}
 
 	// (the device's indices only when one was chosen; the window's settings

@@ -17,7 +17,7 @@ std::unique_ptr<CreakSynth> CreakSynth::Make (Engine &e, uint32_t seed)
 void CreakSynth::Strike (Kind k, float strength)
 {
 	if (k < 0 || k > 1) return;
-	pending[k].strength.store (std::clamp (strength, 0.0f, 1.0f), std::memory_order_relaxed);
+	pending[k].strength.store (std::clamp (strength, 0.0f, 1.5f), std::memory_order_relaxed);   // (over 1: a structure near tearing)
 	pending[k].count.fetch_add (1, std::memory_order_release);
 }
 

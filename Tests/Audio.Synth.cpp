@@ -24,6 +24,7 @@
 #include "Audio/Hrtf.h"
 #include "Audio/Loudness.h"
 #include "Audio/WavWriter.h"
+#include "Audio/Radio.h"
 #include "Audio/VesselSounds.h"
 #include "miniaudio.h"
 #include <chrono>
@@ -828,10 +829,10 @@ TEST_CASE ("Loudness: BS.1770 - its sine, files as ffmpeg's meter reads them", "
 	std::vector<float> y (48000 * 6, 0.0f);
 	for (size_t i = 0; i < 48000 * 3; i++) y[i] = 0.1f * (float)std::sin (2.0 * M_PI * 1000.0 * i / 48000);
 	CHECK_THAT (Loudness (y.data (), y.size (), 1, 48000), WithinAbs (-23.01, 0.3)); // (the blocks across its end: a little less)
-	// files (ffmpeg's ebur128: -17.6, -11.6, -21.9 LUFS)
-	CHECK_THAT (FileLoudness ("Sound/Voice/Ignition.flac"), WithinAbs (-17.6, 0.3));
+	// files (ffmpeg's ebur128: -15.0, -11.6, -18.6 LUFS)
+	CHECK_THAT (FileLoudness ("Sound/Voice/Ignition.flac"), WithinAbs (-15.0, 0.3));
 	CHECK_THAT (FileLoudness ("XRSound/Default/Autopilot On.wav"), WithinAbs (-11.6, 0.3));
-	CHECK_THAT (FileLoudness ("Sound/Voice/Ground/Undocked.flac"), WithinAbs (-21.9, 0.3));
+	CHECK_THAT (FileLoudness ("Sound/Voice/Ground/Undocked_c2_1.flac"), WithinAbs (-18.6, 0.3));
 	CHECK_THAT (LoudnessGain ("XRSound/Default/Autopilot On.wav", -18.0), WithinRel (std::pow (10.0, (-18.0 + 11.6) / 20.0), 0.05));
 }
 
@@ -874,4 +875,45 @@ TEST_CASE ("HRTF: demo", "[audio][hrtf]")
 	}
 	PathNode::SetHrtf (nullptr);
 	w.Close ();
+}
+
+// A listening reel (not run by default: ctest -R Audio.Synth won't; run the test binary with
+// "[radio-reel]"): Mission Control's lines through the radio at distances from Earth, the link
+// degrading far out. ORBITER_RADIO_REEL=<dir> (the WAVs: <line>_<where>.wav); ORBITER_RADIO_REEL_FILES
+// a ';' list of files under Sound/Voice/Ground (default: a few of each CAPCOM).
+TEST_CASE ("Radio: a reel by distance (listening)", "[.][radio-reel]")
+{
+	const char *dir = getenv ("ORBITER_RADIO_REEL");
+	REQUIRE (dir);
+	std::vector<std::string> files;
+	const char *fl = getenv ("ORBITER_RADIO_REEL_FILES");
+	std::string list = fl ? fl : "Liftoff_c1_1;Orbit_c1_2;Undocked_c2_3;AOS_c2_1";
+	for (size_t a = 0, b; a < list.size (); a = b + 1) {
+		b = list.find (';', a); if (b == std::string::npos) b = list.size ();
+		files.push_back (list.substr (a, b - a));
+	}
+	const struct { const char *where; double d; } at[] = {
+		{"LEO", 400e3}, {"GEO", 36e6}, {"Moon", 384e6}, {"L2", 1.5e9}, {"Mars", 2.25e11} };
+	for (const auto &f : files) {
+		const std::string path = "Sound/Voice/Ground/" + f + ".flac";
+		for (const auto &w : at) {
+			Rig rig;
+			ma_decoder_config c = ma_decoder_config_init (ma_format_f32, 1, rig.e.SampleRate ());
+			ma_decoder d;
+			REQUIRE (ma_decoder_init_file (path.c_str (), &c, &d) == MA_SUCCESS);
+			std::vector<float> buf, tmp (4096);
+			for (;;) { ma_uint64 got = 0; if (ma_decoder_read_pcm_frames (&d, tmp.data (), 4096, &got) != MA_SUCCESS || !got) break; buf.insert (buf.end (), tmp.begin (), tmp.begin () + got); }
+			ma_decoder_uninit (&d);
+			auto s = RadioSynth::Make (rig.e, std::move (buf), true, (float)RadioSynth::Snr (w.d), 12345u, RadioSynth::SoundFor (path));
+			REQUIRE (s);
+			rig.Attach (*s);
+			std::vector<float> x = rig.Take (s->Length () + 0.2);
+			WavWriter out;
+			REQUIRE (out.Open (std::string (dir) + "/" + f + "_" + w.where + ".wav", rig.e.SampleRate (), 1));
+			out.Write (x.data (), x.size ());
+			out.Close ();
+			INFO (f << " at " << w.where << ": S/N " << RadioSynth::Snr (w.d) << " dB");
+			CHECK (Rms (x) > 0.0);
+		}
+	}
 }

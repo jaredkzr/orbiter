@@ -140,6 +140,7 @@ void PressureSubsystem::clbkPostStep (double simt, double simdt, double mjd)
 	else v_extdock = 2.0; // for now
 
 	double cs, pdiff, dvol, dpc, dpa, pc, pa;
+	const double pc0 = p_cabin, pa0 = p_airlock;   // (the air's flow this step: its hiss)
 
 	// exchange cabin - ext.hatch
 	cs = (valve_status[1] ? 2e-4:0.0);
@@ -211,6 +212,33 @@ void PressureSubsystem::clbkPostStep (double simt, double simdt, double mjd)
 		pa = p_airlock + dpa;
 		pa = min (pa, p_target);
 		p_airlock = pa;
+	}
+
+	// the air moving: its hiss (the gas into or out of the cabin and airlock [Pa m^3/s])
+	if (simdt > 0.0) {
+		const double fc = (p_cabin - pc0) * v_cabin / simdt, fa = (p_airlock - pa0) * v_airlock / simdt;
+		Hiss (std::max (fc, 0.0) + std::max (fa, 0.0), std::max (-fc, 0.0) + std::max (-fa, 0.0), simdt);
+	}
+}
+
+void PressureSubsystem::Hiss (double flowIn, double flowOut, double simdt)
+{
+	// a loop each (generated: Sound/Generated/hiss_in, hiss_out), as loud as the flow (full at an
+	// airlock's air out in ten seconds, about 40 kPa m^3/s); on the vessel: through the hull in the
+	// cockpit, through the air outside, not across vacuum
+	const double REF = 40e3, LEVEL = 0.004;
+	const VECTOR3 pos = _V(0, 0.5, 5.0);
+	auto run = [&](int &h, const char *file, double flow) {
+		const double lvl = flow > 10.0 ? LEVEL * std::sqrt (std::min (1.0, flow / REF)) : 0.0;
+		if (lvl > 0.0 && !h) h = oapiAudioPlay (DG()->GetHandle (), file, &pos, lvl, true);
+		else if (h) oapiAudioSet (h, lvl, -1.0);
+	};
+	run (hissIn, "Sound/Generated/hiss_in.flac", flowIn);
+	run (hissOut, "Sound/Generated/hiss_out.flac", flowOut);
+	hissQuiet = flowIn + flowOut > 10.0 ? 0.0 : hissQuiet + simdt;
+	if (hissQuiet > 0.5) {
+		if (hissIn) oapiAudioStop (hissIn), hissIn = 0;
+		if (hissOut) oapiAudioStop (hissOut), hissOut = 0;
 	}
 }
 

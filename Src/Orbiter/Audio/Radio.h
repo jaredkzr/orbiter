@@ -32,34 +32,58 @@
 #include <vector>
 
 class Vessel;
+class CelestialBody;
 
 namespace audio {
 
 class System;
 
+/// The radio's sound: its band [Hz] (each side: stages of a Q 0.7 biquad), its clipping
+/// (tanh of drive y, / drive), its static at best (S/N [dB]: the link's, no better)
+struct RadioSound { float hp = 300.0f, lp = 3400.0f; int stages = 2; float drive = 2.0f, snrMax = 50.0f; };
+
 /// A transmission: a recording through the radio's sound
 class RadioSynth : public SynthSource {
 public:
+	using Sound = RadioSound;
 	/// buf: the voice (mono, the engine's rate); quindar: the ground keying;
 	/// snr: signal to noise [dB]
-	static std::unique_ptr<RadioSynth> Make (Engine &e, std::vector<float> &&buf, bool quindar, float snr, uint32_t seed);
+	static std::unique_ptr<RadioSynth> Make (Engine &e, std::vector<float> &&buf, bool quindar, float snr, uint32_t seed,
+		const Sound &sound = Sound ());
 	bool Done () const override { return done.load (std::memory_order_acquire); }
 	/// Lost (a blackout): a burst of static, then nothing
 	void Cut () { cut.store (true, std::memory_order_release); }
 	double Length () const;
+	/// The link's signal to noise [dB] at a distance from Earth [m]
+	static double Snr (double d);
+	/// The radio's sound for a file (a CAPCOM's own: "_c2_" in its name; else the default)
+	static Sound SoundFor (const std::string &file);
 
 protected:
 	void Render (float *out, unsigned n, float dop) override;
 
 private:
-	RadioSynth (std::vector<float> &&b, bool q, float snr, uint32_t seed): buf (std::move (b)), quindar (q), snrDb (snr), rng (seed) {}
+	RadioSynth (std::vector<float> &&b, bool q, float snr, uint32_t seed, const Sound &s)
+		: buf (std::move (b)), quindar (q), snrDb (std::min (snr, s.snrMax)), rng (seed), sound (s) {}
 	std::vector<float> buf;
 	bool quindar;
 	float snrDb;
 	std::atomic<bool> done{false}, cut{false};
 	// (audio thread)
 	dsp::Rng rng;
+	Sound sound;
 	dsp::Biquad hp1, hp2, lp1, lp2, hissBp;
+	// the link's quality (1: near Earth; 0: the worst, far out), from the S/N: a narrower band,
+	// the signal fading, dropping out under the static
+	float link = 1.0f, fade = 1.0f, fadeTarget = 1.0f, drop = 1.0f;
+	size_t fadeNext = 0, dropEnd = 0;
+	// (a low data rate's codec: the voice held for `hold` samples, quantized to `levels`)
+	unsigned hold = 1, held = 0;
+	float levels = 0.0f, heldY = 0.0f;
+	float bandHp = 300.0f, bandLp = 3400.0f;   // (the band, narrowed far out)
+	/// The link's state from the S/N: its quality, its band, its codec; and the gain that keeps a
+	/// narrowed, fading voice as loud as near Earth
+	void Link (unsigned rate);
 	bool setup = false;
 	size_t pos = 0;           // samples into the whole (tones, voice, tail)
 	float gain = 1.0f;        // the voice to the radio's loudness
@@ -71,8 +95,16 @@ public:
 	explicit Radio (System &s);
 	~Radio ();
 
-	enum Event { LIFTOFF, MECO, ORBIT, DOCKED, UNDOCKED, SPLASHDOWN, LANDED, NEVENT };
-	/// Something the ground hears of (the focus vessel's): it replies
+	enum Event { LIFTOFF, MECO, ORBIT, DOCKED, UNDOCKED, SPLASHDOWN, LANDED,
+		MAXQ, IGNITION, DEORBIT, SURFACE,   // (the callouts' too)
+		CAPTURE, ESCAPE,                    // (into orbit about a body, onto an escape path: by a burn)
+		DESCENT, APPROACH,                  // (a powered descent on an airless world; a rendezvous inside 1 km)
+		BOOSTER_SEP, TANK_SEP,              // (a vessel's own: oapiAudioEvent)
+		DEEPSPACE,                          // (leaving Earth's neighbourhood: the replies will lag)
+		ENTRY, AOS, LOS, LOST,              // (the radio's own: entry interface, the signal back after a blackout, lost; the vehicle lost near the ground)
+		NEVENT };
+	/// Something the ground hears of (the focus vessel's): it replies, with one of
+	/// its takes (Sound/Voice/Ground/<Event>_<n>.flac; not the last one again)
 	void OnEvent (Event e);
 	/// Each step
 	void Update (double t);
@@ -85,14 +117,19 @@ public:
 	bool Transmitting () const { return Busy (); }
 	/// The link's signal to noise [dB] at a distance from Earth [m]
 	static double Snr (double d);
-	static constexpr double REACT = 1.5; // [s] the ground's moment to answer
+	/// The radio's sound for a file (a CAPCOM's own: "_c2_" in its name; else the default)
+	static RadioSynth::Sound SoundFor (const std::string &file);
+	static constexpr double REACT = 1.5; // [s] the ground's moment to answer (the chatter, AOS)
+	/// [s] the ground's pause before a reply, once the crew's callout is over: about half a
+	/// second, varied (0.25 to 1.3 s; lognormal: a conversation's turn-taking)
+	double ReplyGap ();
 
 private:
 	System &sys;
 	std::unique_ptr<PathNode> node;
 	struct Playing { std::unique_ptr<RadioSynth> s; };
 	std::vector<Playing> playing;
-	struct Pending { std::string file; double due; bool ground; };
+	struct Pending { std::string file; double due; bool ground; double gap; };
 	std::deque<Pending> replies;
 	double nextChatter = -1.0, t = 0.0, blackoutSince = -1.0;
 	bool blackout = false, entrySaid = false;
@@ -102,10 +139,25 @@ private:
 	double Rand () { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return (rng >> 8) * (1.0 / 16777216.0); }
 	const Vessel *vessel = nullptr;
 	double earthDist = 0.0;
+	int lastTake[NEVENT];                  // (the take played last, per event: -1 none)
+	double losDue = -1.0;                  // (the ground's "lost your signal": when)
+	double quietSince = 0.0;               // (the last transmission over: when)
+	bool wasBusy = false;
+	std::string Take (Event e);
+	/// The CAPCOM on shift ("c1", "c2"): 8-hour shifts by the simulation's clock, alternating
+	/// (ORBITER_AUDIO_CAPCOM=1 or 2: that one)
+	static const char *OnShift ();
+	/// The takes that name Houston (from Sound/Voice/Ground/lines.txt: their words), not said
+	/// beyond the Earth and the Moon
+	bool SaysHouston (const std::string &file);
+	std::vector<std::string> houston;
+	bool houstonRead = false;
+	const CelestialBody *lastRef = nullptr;   // (where the vessel was, for a reply after it's gone: LOS)
+	double lastAlt = 1e9;                     // (and how high: lost near the ground, a different reply)
 	bool Init ();
 	bool Transmit (const std::string &file, bool ground);
 	bool Busy () const;
-	void Reply (const char *file);
+	void Reply (Event e);
 };
 
 } // namespace audio

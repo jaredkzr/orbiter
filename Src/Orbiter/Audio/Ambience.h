@@ -22,6 +22,8 @@
 #include "AudioEngine.h"
 #include "Vecmat.h"
 #include <memory>
+#include <string>
+#include <vector>
 
 namespace audio {
 
@@ -49,6 +51,10 @@ private:
 	int cabin = 0;              // the cabin's loop (a handle)
 	int cabinEvent = 0;
 	double nextEvent = -1.0;
+	std::vector<std::string> events;   // the cabin's events (found once: Sound/Generated/event_*, else XRSound's)
+	int lastEvent = -1;
+	const std::string &CabinFile ();
+	void FindEvents ();
 	uint32_t rng = 0x6a09e667u;
 	double Rand () { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return (rng >> 8) * (1.0 / 16777216.0); }
 

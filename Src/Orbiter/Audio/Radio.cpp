@@ -11,39 +11,48 @@
 #include "Psys.h"
 #include "Camera.h"
 #include "Log.h"
+#include "TimeData.h"
 #include "miniaudio.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 
 extern Vessel *g_focusobj;
+extern TimeData td;
 extern PlanetarySystem *g_psys;
 
 namespace audio {
 
 namespace {
-	constexpr float TWO_PI = 6.2831853f;
 	constexpr double C_LIGHT = 299792458.0;
-	/// Quindar tones: 2525 Hz as the ground keys its transmitter, 2475 Hz as
-	/// it lets go (250 ms each)
-	constexpr float QUINDAR_IN = 2525.0f, QUINDAR_OUT = 2475.0f, QUINDAR_LEN = 0.25f, QUINDAR_GAP = 0.08f;
-	/// The squelch's tail (the carrier gone: noise for a moment)
-	constexpr float SQUELCH_LEN = 0.12f;
-	/// The radio's output: the voice's RMS on the radio bus (callouts' level)
-	constexpr float RADIO_RMS = 0.08f;
-	/// Each transmission's voice brought to this loudness first (BS.1770:
-	/// recordings of all levels alike; about RADIO_RMS for speech)
-	constexpr double RADIO_LUFS = -20.0;
-	/// After the channel's clipping (its peaks at half scale): up to this
-	/// (the radio about the callouts' loudness, a little under)
-	constexpr float RADIO_OUT = 1.7f;
 	/// A blackout: faster than this in air of this dynamic pressure
 	constexpr double BLACKOUT_V = 5000.0, BLACKOUT_Q = 300.0;
-	/// Entry interface: 120 km, coming down faster than 6 km/s
+	/// Entry interface: 120 km, coming down faster than 6 km/s (Earth's; each body's from its atmosphere)
 	constexpr double ENTRY_ALT = 120e3, ENTRY_V = 6000.0;
+
+	/// Entry and blackout by the body: the interface at its sensible atmosphere's top (14 scale
+	/// heights, as the callouts' orbit), faster than 0.8 of the circular speed there; the blackout
+	/// faster than 0.6 of the circular speed at the ground (Earth: 118 km, 6.3 km/s; 4.7 km/s)
+	struct Limits { bool atm = true; double top = ENTRY_ALT, vEntry = ENTRY_V, vBlackout = BLACKOUT_V; };
+	Limits LimitsFor (const CelestialBody *ref)
+	{
+		Limits L;
+		if (!ref) return L;
+		const ATMCONST *ac = oapiGetPlanetAtmConstants ((OBJHANDLE)ref);
+		if (!ac || ac->p0 <= 0.0 || ac->rho0 <= 0.0) { L.atm = false; return L; }
+		const double R = ref->Size (), GM = GGRAV * ref->Mass ();
+		L.top = std::min (ac->altlimit, 14.0 * ac->p0 / (ac->rho0 * GM / (R * R)));
+		L.vEntry = 0.8 * std::sqrt (GM / (R + L.top));
+		L.vBlackout = 0.6 * std::sqrt (GM / R);
+		return L;
+	}
 	const char *CHATTER_DIR = "XRSound/Default/Altea STS";
-	const char *AOS_CLIP = "XRSound/Default/Altea STS/we have you back on air-to-ground_two.wav";
+	const char *AOS_CLIP = "XRSound/Default/Altea STS/we have you back on air-to-ground_two.wav"; // (no AOS takes: NASA's)
+	/// Each event's file name in Sound/Voice/Ground (its takes <name>_<n>.flac)
+	const char *EVENT_NAME[Radio::NEVENT] = { "Liftoff", "MECO", "Orbit", "Docked", "Undocked", "Splashdown", "Landed",
+		"MaxQ", "Ignition", "Deorbit", "Surface", "Capture", "Escape", "Descent", "Approach", "BoosterSep", "TankSep", "DeepSpace", "Reentry", "AOS", "LOS", "Lost" };
 
 	/// A sound file decoded: mono, at a rate
 	std::vector<float> Decode (const std::string &file, unsigned rate)
@@ -65,64 +74,11 @@ namespace {
 	}
 }
 
-// ---- a transmission -------------------------------------------------------
-
-std::unique_ptr<RadioSynth> RadioSynth::Make (Engine &e, std::vector<float> &&buf, bool quindar, float snr, uint32_t seed)
-{
-	std::unique_ptr<RadioSynth> s (new RadioSynth (std::move (buf), quindar, snr, seed));
-	if (!s->Init (e)) return nullptr;
-	const double L = Loudness (s->buf.data (), s->buf.size (), 1, e.SampleRate ());
-	s->gain = std::isfinite (L) ? (float)std::pow (10.0, std::clamp (RADIO_LUFS - L, -20.0, 20.0) / 20.0) : 1.0f;
-	return s;
-}
-
-double RadioSynth::Length () const
-{
-	const double tones = quindar ? 2.0 * (QUINDAR_LEN + QUINDAR_GAP) : 0.0;
-	return tones + buf.size () / (double)rate + SQUELCH_LEN;
-}
-
-void RadioSynth::Render (float *out, unsigned n, float dop)
-{
-	if (!setup) {
-		setup = true;
-		hp1.HighPass (300.0f, 0.7f, rate), hp2.HighPass (300.0f, 0.7f, rate);
-		lp1.LowPass (3400.0f, 0.7f, rate), lp2.LowPass (3400.0f, 0.7f, rate);
-		hissBp.BandPass (1800.0f, 0.5f, rate);
-	}
-	const size_t nTone = quindar ? (size_t)((QUINDAR_LEN + QUINDAR_GAP) * rate) : 0;
-	const size_t nVoice = buf.size (), nTail = (size_t)(SQUELCH_LEN * rate);
-	const size_t total = 2 * nTone + nVoice + nTail;
-	const float hiss = std::pow (10.0f, -snrDb / 20.0f) * 2.0f; // (static against the voice, band-limited)
-	if (cut.load (std::memory_order_acquire) && !cutAt) cutAt = pos + (size_t)(0.15f * rate);
-	for (unsigned i = 0; i < n; i++, pos++) {
-		if (pos >= total || (cutAt && pos >= cutAt)) { out[i] = 0.0f; continue; }
-		float x = 0.0f, tone = 0.0f, carrier = 1.0f;
-		const float tt = (float)pos / rate;
-		if (pos < nTone) {
-			if (tt < QUINDAR_LEN) tone = 0.5f * std::sin (TWO_PI * QUINDAR_IN * tt);
-		} else if (pos < nTone + nVoice) {
-			x = buf[pos - nTone] * gain;
-		} else if (pos < 2 * nTone + nVoice) {
-			const float to = (float)(pos - nTone - nVoice) / rate - QUINDAR_GAP;
-			if (to >= 0.0f && to < QUINDAR_LEN) tone = 0.5f * std::sin (TWO_PI * QUINDAR_OUT * to);
-		} else carrier = 0.0f; // (the squelch's tail)
-		// (lost: a burst of static, then the squelch shuts)
-		float noise = hiss * RADIO_RMS;
-		if (cutAt || carrier == 0.0f) noise = 0.6f * RADIO_RMS;
-		const float hs = noise * 3.0f * hissBp.Process (rng.White ());
-		float y = lp2.Process (lp1.Process (hp2.Process (hp1.Process (x + hs)))) + tone * RADIO_RMS * 1.5f * carrier;
-		// (the channel's clipping: a little)
-		y = std::tanh (2.0f * y) / 2.0f;
-		out[i] = RADIO_OUT * y;
-	}
-	if (pos >= total || (cutAt && pos >= cutAt)) done.store (true, std::memory_order_release);
-}
-
 // ---- the radio --------------------------------------------------------------
 
 Radio::Radio (System &s): sys (s)
 {
+	std::fill (std::begin (lastTake), std::end (lastTake), -1);
 }
 
 Radio::~Radio ()
@@ -132,9 +88,12 @@ Radio::~Radio ()
 
 double Radio::Snr (double d)
 {
-	// (the received power falls as 1/d^2: the signal to noise as 20 log10 d;
-	// ground stations' dishes and gain keep it usable far out)
-	return std::clamp (80.0 - 20.0 * std::log10 (std::max (d, 1e6) / 1e6), 10.0, 50.0);
+	return RadioSynth::Snr (d);
+}
+
+RadioSynth::Sound Radio::SoundFor (const std::string &file)
+{
+	return RadioSynth::SoundFor (file);
 }
 
 bool Radio::Init ()
@@ -155,9 +114,12 @@ void Radio::Clear ()
 	playing.clear ();
 	if (node) node->Uninit (), node.reset ();
 	replies.clear ();
-	nextChatter = -1.0, blackoutSince = -1.0;
+	nextChatter = -1.0, blackoutSince = -1.0, losDue = -1.0, quietSince = 0.0;
+	lastRef = nullptr;
+	wasBusy = false;
 	blackout = entrySaid = false;
 	vessel = nullptr;
+	std::fill (std::begin (lastTake), std::end (lastTake), -1);
 }
 
 bool Radio::Busy () const
@@ -172,7 +134,7 @@ bool Radio::Transmit (const std::string &file, bool ground)
 	Engine &e = sys.GetEngine ();
 	std::vector<float> buf = Decode (file, e.SampleRate ());
 	if (buf.empty ()) { LOGOUT ("Audio: radio: no file %s", file.c_str ()); return false; }
-	auto s = RadioSynth::Make (e, std::move (buf), ground, (float)Snr (earthDist), (uint32_t)(Rand () * 1e9));
+	auto s = RadioSynth::Make (e, std::move (buf), ground, (float)Snr (earthDist), (uint32_t)(Rand () * 1e9), SoundFor (file));
 	if (!s || !s->Attach (node->Node ())) return false;
 	s->Start ();
 	playing.push_back ({std::move (s)});
@@ -183,19 +145,77 @@ bool Radio::Transmit (const std::string &file, bool ground)
 	return true;
 }
 
-void Radio::Reply (const char *file)
+double Radio::ReplyGap ()
 {
-	// (heard after the light's round trip to Earth and a moment to react)
-	const double rtt = 2.0 * earthDist / C_LIGHT;
-	replies.push_back ({file, t + rtt + REACT + Rand (), true});
+	// (lognormal, median 0.55 s, sigma 0.45: Box-Muller from two uniforms)
+	const double u1 = std::max (1e-9, Rand ()), u2 = Rand ();
+	const double n = std::sqrt (-2.0 * std::log (u1)) * std::cos (6.283185307179586 * u2);
+	return std::clamp (0.55 * std::exp (0.45 * n), 0.25, 1.3);
+}
+
+const char *Radio::OnShift ()
+{
+	static const char *env = getenv ("ORBITER_AUDIO_CAPCOM");
+	if (env && (*env == '1' || *env == '2')) return *env == '1' ? "c1" : "c2";
+	// (three shifts a day from 06:00 UTC, the CAPCOMs taking turns)
+	const long shift = (long)std::floor ((td.MJD0 * 24.0 - 6.0) / 8.0);
+	return (shift & 1) ? "c2" : "c1";
+}
+
+bool Radio::SaysHouston (const std::string &file)
+{
+	if (!houstonRead) {
+		houstonRead = true;
+		const std::string path = System::FindSound ("Sound/Voice/Ground/lines.txt");
+		if (FILE *f = path.empty () ? nullptr : fopen (path.c_str (), "r")) {
+			char line[512];
+			while (fgets (line, sizeof (line), f)) {
+				const char *bar = strchr (line, '|');
+				if (line[0] != '#' && bar && strstr (bar, "Houston")) houston.emplace_back (line, bar - line);
+			}
+			fclose (f);
+		}
+	}
+	for (const auto &h : houston)
+		if (file.size () >= h.size () + 5 && file.compare (file.size () - h.size () - 5, h.size () + 5, h + ".flac") == 0) return true;
+	return false;
+}
+
+std::string Radio::Take (Event e)
+{
+	// the event's takes by the CAPCOM on shift: <name>_<c1|c2>_<n> (else the other's; else
+	// <name>_<n>, <name>.flac); one at random, not the last one again; AOS: NASA's clip if none
+	const std::string dir = std::string ("Sound/Voice/Ground/") + EVENT_NAME[e];
+	const char *shift = OnShift ();
+	std::vector<std::string> takes;
+	// (beyond the Earth and the Moon, no "Houston": a Mars base isn't talked to as from Texas)
+	const CelestialBody *ref = vessel ? vessel->ElRef () : lastRef;
+	const bool home = !ref || !strcmp (ref->Name (), "Earth") || !strcmp (ref->Name (), "Moon");
+	for (const std::string &tag : { std::string ("_") + shift + "_", std::string (strcmp (shift, "c1") ? "_c1_" : "_c2_"), std::string ("_") }) {
+		for (int n = 1; n <= 9; n++) {
+			const std::string f = dir + tag + std::to_string (n) + ".flac";
+			if (!System::FindSound (f).empty () && (home || !SaysHouston (f))) takes.push_back (f);
+		}
+		if (!takes.empty ()) break;
+	}
+	if (takes.empty ()) return e == AOS ? AOS_CLIP : dir + ".flac";
+	int k = (int)((size_t)(Rand () * takes.size ()) % takes.size ());
+	if (takes.size () > 1 && k == lastTake[e]) k = (k + 1) % (int)takes.size ();
+	lastTake[e] = k;
+	return takes[k];
+}
+
+void Radio::Reply (Event e)
+{
+	// (heard after the light's round trip to Earth, and a pause once the crew's callout is over)
+	const double rtt = 2.0 * earthDist / C_LIGHT, gap = ReplyGap ();
+	replies.push_back ({Take (e), t + rtt + gap, true, gap});
 }
 
 void Radio::OnEvent (Event e)
 {
-	static const char *files[NEVENT] = { "Sound/Voice/Ground/Liftoff.flac", "Sound/Voice/Ground/MECO.flac", "Sound/Voice/Ground/Orbit.flac",
-		"Sound/Voice/Ground/Docked.flac", "Sound/Voice/Ground/Undocked.flac", "Sound/Voice/Ground/Splashdown.flac", "Sound/Voice/Ground/Landed.flac" };
 	if (e < 0 || e >= NEVENT || !vessel) return;
-	Reply (files[e]);
+	Reply (e);
 }
 
 void Radio::Update (double tnow)
@@ -203,8 +223,25 @@ void Radio::Update (double tnow)
 	t = tnow;
 	// (the transmissions over: gone)
 	playing.erase (std::remove_if (playing.begin (), playing.end (), [](const Playing &p) { return p.s->Done (); }), playing.end ());
+	const bool busy = Busy ();
+	if (wasBusy && !busy) quietSince = t;
+	wasBusy = busy;
+	// the vessel in focus destroyed: the ground loses its signal (a moment of silence, then says so)
+	if (vessel && vessel == g_focusobj && g_focusobj->Destroyed () && !blackout) {
+		for (auto &p : playing) p.s->Cut ();
+		losDue = t + 2.0 * earthDist / C_LIGHT + 2.5 + Rand ();
+	}
 	const Vessel *v = g_focusobj && !g_focusobj->Destroyed () ? g_focusobj : nullptr;
 	if (v != vessel) { replies.clear (); nextChatter = -1.0; entrySaid = false; blackout = false; vessel = v; }
+	if (v) {
+		losDue = -1.0, lastRef = v->ElRef ();
+		const SurfParam *s = v->GetSurfParam ();
+		lastAlt = s ? s->alt : 1e9;
+	}
+	else if (losDue >= 0.0 && t >= losDue && !Busy ()) {
+		losDue = -1.0;
+		Transmit (Take (lastAlt < 10e3 ? LOST : LOS), true);   // (near the ground: the vehicle lost, not the signal)
+	}
 	const CelestialBody *earth = g_psys ? g_psys->GetGravObj ("Earth", true) : nullptr;
 	if (!v || !earth) return;
 	earthDist = std::max (0.0, (v->GPos () - earth->GPos ()).length () - earth->Size ());
@@ -213,30 +250,40 @@ void Radio::Update (double tnow)
 	const SurfParam *sp = v->GetSurfParam ();
 	const double U = sp ? sp->airspd : 0.0, q = sp ? sp->dynp : 0.0, alt = sp ? sp->alt : 1e9;
 	const double vs = sp ? sp->vspd : 0.0;
-	const bool bo = sp && sp->is_in_atm && U > BLACKOUT_V && q > BLACKOUT_Q;
+	const Limits L = LimitsFor (sp ? sp->ref : nullptr);
+	const bool bo = sp && sp->is_in_atm && L.atm && U > L.vBlackout && q > BLACKOUT_Q;
 	if (bo && !blackout) {
 		blackout = true, blackoutSince = t;
 		for (auto &p : playing) p.s->Cut ();
 		LOGOUT ("Audio: radio blackout at %.1f s (%.0f m/s, %.0f Pa)", t, U, q);
+		sys.GetCallouts ().Crew ("CommBlackout");
 		static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
 		if (log) printf ("Audio: radio blackout at %.2f s\n", t), fflush (stdout);
 	} else if (!bo && blackout) {
 		blackout = false;
 		// (through it: the ground has us back)
-		if (t - blackoutSince > 5.0) replies.push_back ({AOS_CLIP, t + 2.0 * earthDist / C_LIGHT + REACT + 2.0 * Rand (), false});
+		if (t - blackoutSince > 5.0) {
+			std::string f = Take (AOS);
+			replies.push_back ({f, t + 2.0 * earthDist / C_LIGHT + REACT + 2.0 * Rand (), f != AOS_CLIP, 0.0});
+		}
 		LOGOUT ("Audio: radio blackout over at %.1f s", t);
 	}
 	// entry interface: coming down through 120 km fast (once per descent)
-	if (sp && alt < ENTRY_ALT && alt > 0.8 * ENTRY_ALT && U > ENTRY_V && vs < 0.0 && !entrySaid) {
+	if (sp && L.atm && alt < L.top && alt > 0.8 * L.top && U > L.vEntry && vs < 0.0 && !entrySaid) {
 		entrySaid = true;
-		Reply ("Sound/Voice/Ground/Reentry.flac");
+		sys.GetCallouts ().Crew ("EntryInterface");
+		Reply (ENTRY);
 	}
-	if (alt > 2.0 * ENTRY_ALT) entrySaid = false;
+	if (alt > 2.0 * L.top) entrySaid = false;
 	if (blackout) return;
 
-	// the ground's replies first (dropped if a minute late: a blackout)
+	// the ground's replies first (dropped if a minute late: a blackout); a reply waits for the
+	// crew's callout to be over, then its pause
 	while (!replies.empty () && replies.front ().due < t - 60.0) replies.pop_front ();
-	if (!replies.empty () && replies.front ().due <= t && !Busy ()) {
+	if (sys.Speaking ())
+		for (auto &r : replies) if (r.ground && r.gap > 0.0) r.due = std::max (r.due, t + r.gap);
+	// (and after a transmission, the same pause: two replies due together aren't back to back)
+	if (!replies.empty () && replies.front ().due <= t && !Busy () && t - quietSince >= replies.front ().gap) {
 		Pending r = replies.front ();
 		replies.pop_front ();
 		Transmit (r.file, r.ground);
