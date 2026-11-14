@@ -169,7 +169,7 @@ void Camera::UpdateMouse ()
 	GetCursorPos (&pt);
 	if (pt.x != pm.x || pt.y != pm.y) {
 		pm.x = pt.x, pm.y = pt.y;
-		mmoveT = td.SysT0;
+		mmoveT = td.UiT0;
 	}
 
 	if (mbdown[1]) {
@@ -204,7 +204,7 @@ void Camera::UpdateMouse ()
 	orbiter::platform::TakeMouseMotion (dx, dy);
 	if (x != pm.x || y != pm.y) {
 		pm.x = x, pm.y = y;
-		mmoveT = td.SysT0;
+		mmoveT = td.UiT0;
 	}
 
 	if (mbdown[1] && (dx || dy)) {
@@ -617,7 +617,7 @@ void Camera::Drag (const Vector &gshift)
 {
 	if (external_view) {
 		tref.Set (has_tref ? tref+gshift: gshift);
-		tref_t0  = td.SysT1;
+		tref_t0  = td.UiT1;
 		tref_d0  = tref.length();
 		tref_r0  = gspos.length();
 		tref_r1  = (has_tref && rshift ? tref_r1/tref_r0*rdist : rdist)*target->Size();
@@ -1182,7 +1182,7 @@ DWORD Camera::UpdateExternalControl (ExternalCameraControl *ecc)
 				if (ECC->clbkPoll (&data)) {
 					const ExternalCameraControl::TrackMode *trkmode = ECC->GetTrackMode();
 					double vel, datax, datay;
-					double dt = td.SysDT*trkmode->speed;
+					double dt = td.UiDT ()*trkmode->speed;
 					double dz = trkmode->deadzone;
 					if (trkmode->trackrotation) {
 						if (trkmode->rotationdata == ExternalCameraControl::TrackMode::BYPOSITION) {
@@ -1220,10 +1220,10 @@ DWORD Camera::UpdateExternalControl (ExternalCameraControl *ecc)
 				rotscale = vcmode->rotationrange/PI;
 				posrange = vcmode->positionrange;
 				if (frozen) {
-					if (td.SysT0-mmoveT > vcmode->freeze_t)
+					if (td.UiT0-mmoveT > vcmode->freeze_t)
 						frozen = false, dragrot = dorot, dragpos = dopos, action = CAMERA_RECENTER;
 				} else {
-					if (vcmode->freezeonmouse && td.SysT0-mmoveT < vcmode->freeze_t)
+					if (vcmode->freezeonmouse && td.UiT0-mmoveT < vcmode->freeze_t)
 						frozen = true;
 					else if (dragrot && action == CAMERA_NORMAL)
 						dragrot = false;
@@ -1264,7 +1264,7 @@ DWORD Camera::UpdateExternalControl (ExternalCameraControl *ecc)
 					if (dragpos) {
 						Vector D0(pr-rpos);
 						double d0 = D0.length();
-						double d = td.SysDT*1.0;
+						double d = td.UiDT ()*1.0;
 						if (d > d0) dragpos = false;
 						else pr = rpos + D0*(d/d0);
 					}
@@ -1280,7 +1280,7 @@ DWORD Camera::UpdateExternalControl (ExternalCameraControl *ecc)
 void Camera::Update ()
 {
 	double dt = td.UiDT ();
-	double t1 = td.SysT1;
+	double t1 = td.UiT1;
 	camT += dt;
 
 	// NOTE: Camera is updated after world state has been updated, but before state S1
@@ -1444,8 +1444,8 @@ void Camera::Update ()
 					else          dtht = max (max (max (-vmax, vtht-amax*dt), b*dfac) * dt, b);
 					dphi = dtht*a/b;
 				}
-				vphi = dphi*td.iSysDT;
-				vtht = dtht*td.iSysDT;
+				vphi = dphi*(1.0 / td.UiDT ());
+				vtht = dtht*(1.0 / td.UiDT ());
 				pf = fa+fb;
 			}
 			} break;
@@ -1459,8 +1459,8 @@ void Camera::Update ()
 			const double phirange = 0.8*Pi;   // make panel-dependent!
 			const double thtrange = 0.8*Pi05; // make panel-dependent!
 
-			vp = dphi*td.iSysDT;
-			vt = dtht*td.iSysDT;
+			vp = dphi*(1.0 / td.UiDT ());
+			vt = dtht*(1.0 / td.UiDT ());
 
 			double p = normangle (cphi);
 			if (vp > 0) vp = min (vp,  (dp_left-p)*dfac);
@@ -1474,8 +1474,8 @@ void Camera::Update ()
 			vp = vt = 0.0;
 		}
 		if (rot_smooth) {
-			if (fabs (vp-vphi)*td.iSysDT > amax) vp = (vp > vphi ? amax:-amax)*dt + vphi;
-			if (fabs (vt-vtht)*td.iSysDT > amax) vt = (vt > vtht ? amax:-amax)*dt + vtht;
+			if (fabs (vp-vphi)*(1.0 / td.UiDT ()) > amax) vp = (vp > vphi ? amax:-amax)*dt + vphi;
+			if (fabs (vt-vtht)*(1.0 / td.UiDT ()) > amax) vt = (vt > vtht ? amax:-amax)*dt + vtht;
 		}
 		if (vp || vt) {
 			SetCockpitDir (cphi + vp*dt, ctheta + vt*dt);

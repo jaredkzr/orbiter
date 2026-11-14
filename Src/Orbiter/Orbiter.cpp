@@ -506,6 +506,8 @@ HRESULT Orbiter::Create (HINSTANCE hInstance)
 //-----------------------------------------------------------------------------
 void Orbiter::SaveConfig ()
 {
+	const char *noSave = getenv ("ORBITER_NO_SAVE");
+	if (noSave && *noSave == '1') return; // (tests: ORBITER_NO_SAVE)
 	pConfig->Write (); // save current settings
 #ifdef _WIN32
 	m_pLaunchpad->WriteExtraParams ();
@@ -732,7 +734,8 @@ VOID Orbiter::Launch (const char *scenario)
 	HCURSOR hCursor = SetCursor (LoadCursor (NULL, IDC_WAIT));
 #endif
 	bool have_state = false;
-	pConfig->Write (); // save current settings
+	const char *noSave = getenv ("ORBITER_NO_SAVE");
+	if (!(noSave && *noSave == '1')) pConfig->Write (); // save current settings (tests: not - ORBITER_NO_SAVE)
 #ifdef _WIN32
 	m_pLaunchpad->WriteExtraParams ();
 #endif
@@ -973,12 +976,16 @@ void Orbiter::CloseSession ()
 	if      (bRecord)   ToggleRecorder();
 	else if (bPlayback) EndPlayback();
 	// (the launchpad's backdrop session leaves the user's state and windows as they were)
-	if (!bBackdrop) {
+	// (ORBITER_NO_SAVE=1: tests running side by side in one folder leave the user's state alone - and
+	// each other's)
+	const char *noSaveEnv = getenv ("ORBITER_NO_SAVE");
+	const bool noSave = noSaveEnv && *noSaveEnv == '1';
+	if (!bBackdrop && !noSave) {
 		const char* desc = pConfig->CfgDebugPrm.bSaveExitScreen ? "CurrentState_img" : "CurrentState";
 		SaveScenario (CurrentScenario, desc, 2);
 	}
 	if (mfdWindows) {
-		if (!bBackdrop)
+		if (!bBackdrop && !noSave)
 			if (const char *path = MfdWindowsFile ()) mfdWindows->Save (path);
 		mfdWindows->CloseAll ();
 	}
@@ -2113,7 +2120,7 @@ void Orbiter::EndTimeStep (bool running)
 
 	// Update panels
 	if (g_camera) g_camera->Update ();                           // camera
-	if (g_pane) g_pane->Update (td.SimT1, td.SysT1);
+	if (g_pane) g_pane->Update (td.SimT1, td.UiT1);   // (the session's clock: repeatable in fixed-step runs)
 
 	// Update visual states
 	if (gclient) gclient->clbkUpdate (bRunning);
@@ -2472,7 +2479,7 @@ void Orbiter::KbdInputImmediate_System (char *kstate)
 	bool smooth_cam = true; // make user-selectable
 
 	const double cam_acc = 0.02;
-	double cam_vmax = td.SysDT * 1.0;
+	double cam_vmax = td.UiDT () * 1.0;
 	double max_dv = cam_vmax*cam_acc;
 
 	static double dphi = 0.0, dtht = 0.0;
@@ -2564,10 +2571,10 @@ void Orbiter::KbdInputImmediate_System (char *kstate)
 		//if (keymap.IsLogicalKey (kstate, OAPI_LKEY_CockpitRotateUp))    g_camera->Rotate ( 0,  td.SysDT, true);
 		//if (keymap.IsLogicalKey (kstate, OAPI_LKEY_CockpitRotateDown))  g_camera->Rotate ( 0, -td.SysDT, true);
 		// shift 2-D panels
-		if (keymap.IsLogicalKey (kstate, OAPI_LKEY_PanelShiftLeft))     g_pane->ShiftPanel ( td.SysDT*pConfig->CfgLogicPrm.PanelScrollSpeed, 0.0);
-		if (keymap.IsLogicalKey (kstate, OAPI_LKEY_PanelShiftRight))    g_pane->ShiftPanel (-td.SysDT*pConfig->CfgLogicPrm.PanelScrollSpeed, 0.0);
-		if (keymap.IsLogicalKey (kstate, OAPI_LKEY_PanelShiftUp))       g_pane->ShiftPanel (0.0,  td.SysDT*pConfig->CfgLogicPrm.PanelScrollSpeed);
-		if (keymap.IsLogicalKey (kstate, OAPI_LKEY_PanelShiftDown))     g_pane->ShiftPanel (0.0, -td.SysDT*pConfig->CfgLogicPrm.PanelScrollSpeed);
+		if (keymap.IsLogicalKey (kstate, OAPI_LKEY_PanelShiftLeft))     g_pane->ShiftPanel ( td.UiDT ()*pConfig->CfgLogicPrm.PanelScrollSpeed, 0.0);
+		if (keymap.IsLogicalKey (kstate, OAPI_LKEY_PanelShiftRight))    g_pane->ShiftPanel (-td.UiDT ()*pConfig->CfgLogicPrm.PanelScrollSpeed, 0.0);
+		if (keymap.IsLogicalKey (kstate, OAPI_LKEY_PanelShiftUp))       g_pane->ShiftPanel (0.0,  td.UiDT ()*pConfig->CfgLogicPrm.PanelScrollSpeed);
+		if (keymap.IsLogicalKey (kstate, OAPI_LKEY_PanelShiftDown))     g_pane->ShiftPanel (0.0, -td.UiDT ()*pConfig->CfgLogicPrm.PanelScrollSpeed);
 	}
 	if (keymap.IsLogicalKey (kstate, OAPI_LKEY_IncFOV)) IncFOV ( 0.4*g_camera->Aperture()*td.UiDT());
 	if (keymap.IsLogicalKey (kstate, OAPI_LKEY_DecFOV)) IncFOV (-0.4*g_camera->Aperture()*td.UiDT());
@@ -2792,20 +2799,20 @@ void Orbiter::UserJoyInput_System (DIJOYSTATE2 *js)
 			} else {
 				if      (dir <  5000 || dir > 31000) g_camera->AddTheta (-td.UiDT());
 				else if (dir > 13000 && dir < 23000) g_camera->AddTheta ( td.UiDT());
-				if      (dir >  4000 && dir < 14000) g_camera->AddPhi   ( td.SysDT);
-				else if (dir > 22000 && dir < 32000) g_camera->AddPhi   (-td.SysDT);
+				if      (dir >  4000 && dir < 14000) g_camera->AddPhi   ( td.UiDT ());
+				else if (dir > 22000 && dir < 32000) g_camera->AddPhi   (-td.UiDT ());
 			}
 		} else { // internal view
 			if (js->rgbButtons[2]) { // shift instrument panel
-				if      (dir <  5000 || dir > 31000) g_pane->ShiftPanel (0.0,  td.SysDT*pConfig->CfgLogicPrm.PanelScrollSpeed);
-				else if (dir > 13000 && dir < 23000) g_pane->ShiftPanel (0.0, -td.SysDT*pConfig->CfgLogicPrm.PanelScrollSpeed);
-				if      (dir >  4000 && dir < 14000) g_pane->ShiftPanel (-td.SysDT*pConfig->CfgLogicPrm.PanelScrollSpeed, 0.0);
-				else if (dir > 22000 && dir < 32000) g_pane->ShiftPanel ( td.SysDT*pConfig->CfgLogicPrm.PanelScrollSpeed, 0.0);
+				if      (dir <  5000 || dir > 31000) g_pane->ShiftPanel (0.0,  td.UiDT ()*pConfig->CfgLogicPrm.PanelScrollSpeed);
+				else if (dir > 13000 && dir < 23000) g_pane->ShiftPanel (0.0, -td.UiDT ()*pConfig->CfgLogicPrm.PanelScrollSpeed);
+				if      (dir >  4000 && dir < 14000) g_pane->ShiftPanel (-td.UiDT ()*pConfig->CfgLogicPrm.PanelScrollSpeed, 0.0);
+				else if (dir > 22000 && dir < 32000) g_pane->ShiftPanel ( td.UiDT ()*pConfig->CfgLogicPrm.PanelScrollSpeed, 0.0);
 			} else {                 // rotate camera
-				if      (dir <  5000 || dir > 31000) g_camera->Rotate (0,  td.SysDT, true);
-				else if (dir > 13000 && dir < 23000) g_camera->Rotate (0, -td.SysDT, true);
-				if      (dir >  4000 && dir < 14000) g_camera->Rotate (-td.SysDT, 0, true);
-				else if (dir > 22000 && dir < 32000) g_camera->Rotate ( td.SysDT, 0, true);
+				if      (dir <  5000 || dir > 31000) g_camera->Rotate (0,  td.UiDT (), true);
+				else if (dir > 13000 && dir < 23000) g_camera->Rotate (0, -td.UiDT (), true);
+				if      (dir >  4000 && dir < 14000) g_camera->Rotate (-td.UiDT (), 0, true);
+				else if (dir > 22000 && dir < 32000) g_camera->Rotate ( td.UiDT (), 0, true);
 			}
 		}
 	}

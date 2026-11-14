@@ -18,6 +18,7 @@ void TimeData::Reset (double mjd_ref)
 	TWarp = TWarpTarget = 1.0;
 	TWarpDelay = 0.0;
 	SysT0 = SysT1 = SysDT = 0.0;
+	UiT0 = UiT1 = 0.0;
 	SimT0 = SimT1 = SimDT = SimDT0 = 0.0;
 	SimT1_ofs = SimT1_inc = 0.0;
 	MJD_ref = MJD0 = MJD1 = mjd_ref;
@@ -39,6 +40,7 @@ void TimeData::BeginStep (double deltat, bool running)
 {
 	bWarpChanged = false;
 	SysT1 = SysT0 + (SysDT = deltat);
+	UiT1 = UiT0 + UiDT ();
 	iSysDT = 1.0/SysDT; // note that delta_ms==0 is trapped earlier
 
 	framecount++;
@@ -54,12 +56,15 @@ void TimeData::BeginStep (double deltat, bool running)
 	if (running) { // only advance simulation time if simulation is not paused
 
 		if (TWarp != TWarpTarget) {
+			// (ramped by the frame's time as the session counts it: with fixed steps, the step - a run
+			// repeatable whatever the machine's load, not by the wall clock)
+			const double dt = UiDT ();
 			if (TWarpDelay == 0.0)
 				TWarp = TWarpTarget;
 			else if (TWarpTarget > TWarp)
-				TWarp = min (TWarpTarget, TWarp * pow (10, SysDT/TWarpDelay));
+				TWarp = min (TWarpTarget, TWarp * pow (10, dt/TWarpDelay));
 			else
-				TWarp = max (TWarpTarget, TWarp * pow (10, -SysDT/TWarpDelay));
+				TWarp = max (TWarpTarget, TWarp * pow (10, -dt/TWarpDelay));
 			bWarpChanged = true;
 		}
 
@@ -78,6 +83,7 @@ void TimeData::BeginStep (double deltat, bool running)
 void TimeData::EndStep (bool running)
 {
 	SysT0 = SysT1;
+	UiT0 = UiT1;
 
 	if (running) {
 		SimT0 = SimT1;

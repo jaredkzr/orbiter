@@ -471,6 +471,24 @@ void ElevationManager::AddDeck (double lat, double lng, double radius, double el
 	decks.push_back (d);
 }
 
+void ElevationManager::AddDryLand (double lat, double lng, double radius)
+{
+	Deck d;
+	d.lng = lng, d.slat = sin (lat), d.clat = cos (lat);
+	d.cosr = cos (radius / cbody->Size());
+	d.elev = 0.0;
+	dry.push_back (d);
+}
+
+bool ElevationManager::DryLand (double lat, double lng) const
+{
+	if (dry.empty()) return false;
+	const double slat = sin (lat), clat = cos (lat);
+	for (const Deck &d : dry)
+		if (slat * d.slat + clat * d.clat * cos (lng - d.lng) >= d.cosr) return true;   // (within its great-circle radius)
+	return false;
+}
+
 double ElevationManager::DeckElevation (double lat, double lng) const
 {
 	double e = -1e10;
@@ -707,7 +725,7 @@ double ElevationManager::Terrain (double lat, double lng, int reqlvl, std::vecto
 					*normal = Vector (normal->x / normal->y - sx, 1.0, normal->z / normal->y - sz).unit();
 				}
 			}
-			t->last_access = td.SysT0;
+			t->last_access = td.UiT0;
 			t->lat0 = lat0;
 			t->lng0 = lng0;
 			if (reslvl) *reslvl = t->lvl+7;

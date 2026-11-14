@@ -607,17 +607,17 @@ class InfoFrameRate {
 	uint64_t lastFrame = ~0ull;
 public:
 	void Update() {
-		if (td.SysT0 < 0.0) return;
+		if (td.UiT0 < 0.0) return;
 		ImGuiContext &g = *GImGui;
 		if ((uint64_t)g.FrameCount == lastFrame) return; // (once per frame, wherever it is shown)
 		lastFrame = (uint64_t)g.FrameCount;
-		float d = (float)td.SysDT;
+		float d = (float)td.UiDT ();
 		if (d <= 0.0f || d > 5.0f) return;
 		dt[head] = d;
 		head = (head + 1) % N;
 		count = std::min(count + 1, N);
-		if (td.SysT1 - shownT >= 0.25 || shownT < 0.0) {
-			shownT = td.SysT1;
+		if (td.UiT1 - shownT >= 0.25 || shownT < 0.0) {
+			shownT = td.UiT1;
 			// the mean of the last half second
 			float sum = 0.0f; int n = 0;
 			for (int k = 1; k <= count && sum < 0.5f; k++) sum += dt[(head - k + N) % N], n++;
@@ -774,7 +774,7 @@ public:
 					} else fmt (buf, td.Warp());
 					badge(buf, td.Warp() == 1.0 && g_pOrbiter->ShipWarp() <= 0.0 ? ui::TEXT_DIM : ui::CAUTION);
 				}
-				if (rec) badge(fmod (td.SysT1, 1.0) < 0.5 ? ICON_LC_CIRCLE_DOT " REC" : ICON_LC_CIRCLE " REC", ui::WARNING);
+				if (rec) badge(fmod (td.UiT1, 1.0) < 0.5 ? ICON_LC_CIRCLE_DOT " REC" : ICON_LC_CIRCLE " REC", ui::WARNING);
 				if (play) badge(ICON_LC_PLAY " PLAYBACK", ui::ACCENT);
 			}
 

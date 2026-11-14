@@ -26,6 +26,7 @@
 #include "Audio/Radio.h"
 #include "Audio/Hrtf.h"
 #include "Audio/Assets.h"
+#include "Audio/ClipSynth.h"
 #include "miniaudio.h"
 #include <atomic>
 #include <chrono>
@@ -378,4 +379,50 @@ TEST_CASE ("Two blows in one block: two", "[audio][events]")
 	const double one = energy (1), two = energy (2);
 	CHECK (one > 0.0);
 	CHECK (two > 1.2 * one);
+}
+
+TEST_CASE ("A recording on an emitter: its pitch glides, it seeks, loops, ends", "[audio][clip]")
+{
+	Engine e;
+	Engine::Options opt;
+	opt.mode = Engine::OFFLINE;
+	opt.ears = false;
+	REQUIRE (e.Init (opt));
+	auto clip = std::make_shared<Clip>();
+	clip->channels = 1, clip->rate = 48000, clip->frames = 48000;   // (a second of a 200 Hz tone)
+	clip->pcm.resize (48000);
+	for (size_t i = 0; i < 48000; i++) clip->pcm[i] = 0.5f * std::sin (6.2831853f * 200.0f * i / 48000.0f);
+	PathNode node;
+	REQUIRE (node.Init (e.Ma (), 0.0f));
+	ma_node_attach_output_bus (node.Node (), PathNode::AIR, e.Group (UI), 0);
+	PathNode::Target t;
+	t.gain = 1.0f;
+	node.Set (PathNode::AIR, t);
+	auto s = ClipSynth::Make (e, clip, false);
+	REQUIRE (s);
+	REQUIRE (s->Attach (node.Node ()));
+	static_cast<Source*> (s.get ())->Start ();
+	std::vector<float> buf (480 * e.Channels ());
+	auto block = [&] { e.Render (buf.data (), 480); return s->Cursor (); };
+	for (int i = 0; i < 10; i++) block ();
+	CHECK (std::fabs (s->Cursor () - 0.1) < 1e-3);
+	// its pitch doubled: across one block (1 to 2: 1.5 on average), then at 2
+	s->SetPitch (2.0f);
+	const double c0 = s->Cursor (), c1 = block (), c2 = block ();
+	CHECK (std::fabs ((c1 - c0) - 0.015) < 2e-4);
+	CHECK (std::fabs ((c2 - c1) - 0.020) < 2e-4);
+	// to half way; to its end (not looped): done
+	s->Seek (0.5);
+	CHECK (std::fabs (block () - 0.52) < 2e-3);
+	for (int i = 0; i < 60 && !s->Done (); i++) block ();
+	CHECK (s->Done ());
+	// looped: on and on
+	auto l = ClipSynth::Make (e, clip, true);
+	REQUIRE (l->Attach (node.Node ()));
+	static_cast<Source*> (l.get ())->Start ();
+	for (int i = 0; i < 300; i++) e.Render (buf.data (), 480);
+	CHECK (!l->Done ());
+	CHECK (l->Cursor () < 1.0);
+	s.reset (), l.reset ();
+	node.Uninit ();
 }

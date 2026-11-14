@@ -180,8 +180,8 @@ void DlgMfdWindow::OnDraw ()
 	// recreate the MFD at the new size once it holds
 	int want = std::max (MINPX, ((int)D / 4) * 4);
 	if (want != px) {
-		if (want != wantPx) wantPx = want, wantSince = td.SysT0;
-		else if (td.SysT0 - wantSince >= SETTLE && !ptrDown[0] && !ptrDown[1]) Resize (want);
+		if (want != wantPx) wantPx = want, wantSince = td.UiT0;
+		else if (td.UiT0 - wantSince >= SETTLE && !ptrDown[0] && !ptrDown[1]) Resize (want);
 	}
 
 	float x0 = std::floor ((avail.x - D - 2.0f * (bw + gap)) * 0.5f);

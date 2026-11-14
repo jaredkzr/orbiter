@@ -55,7 +55,14 @@ bool Callouts::SayKey (const char *key)
 {
 	const CrewLine *c = CrewLines::Game ().Find (key);
 	if (!c) return false;
-	return Say (Line (key), c->warning ? WARNING : NORMAL, c->wait, (float)c->gain);
+	// (its cooldown: not again so soon)
+	if (c->cooldown > 0.0) {
+		auto it = lastSaid.find (c->key);
+		if (it != lastSaid.end () && t - it->second < c->cooldown) return false;
+	}
+	if (!Say (Line (key), c->warning ? WARNING : NORMAL, c->wait, (float)c->gain)) return false;
+	if (c->cooldown > 0.0) lastSaid[c->key] = t;
+	return true;
 }
 
 bool Callouts::SayGroup (const char *group, const std::string &base)

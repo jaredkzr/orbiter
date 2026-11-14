@@ -137,7 +137,8 @@ INT Orbiter::Run ()
 		delete m_pPosixLaunchpad;
 		m_pPosixLaunchpad = nullptr;
 	}
-	pConfig->Write ();
+	const char *noSave = getenv ("ORBITER_NO_SAVE");
+	if (!(noSave && *noSave == '1')) pConfig->Write (); // (tests: ORBITER_NO_SAVE=1)
 	return 0;
 }
 

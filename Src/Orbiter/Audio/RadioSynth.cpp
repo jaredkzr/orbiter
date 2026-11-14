@@ -9,6 +9,9 @@
 #include "Loudness.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <map>
+#include <mutex>
 #include <string>
 
 namespace audio {
@@ -34,9 +37,11 @@ namespace {
 
 // ---- a transmission -------------------------------------------------------
 
-SourcePtr<RadioSynth> RadioSynth::Make (Engine &e, std::vector<float> &&buf, bool quindar, float snr, uint32_t seed, const Sound &sound, double lufs)
+SourcePtr<RadioSynth> RadioSynth::Make (Engine &e, std::vector<float> &&buf, bool quindar, float snr, uint32_t seed, const Sound &sound, double lufs,
+	const std::string &key)
 {
 	SourcePtr<RadioSynth> s (new RadioSynth (std::move (buf), quindar, snr, seed, sound));
+	s->key = key;
 	if (!s->Init (e)) return nullptr;
 	const double L = std::isnan (lufs) ? Loudness (s->buf.data (), s->buf.size (), 1, e.SampleRate ()) : lufs;
 	s->gain = std::isfinite (L) ? (float)std::pow (10.0, std::clamp (RADIO_LUFS - L, -20.0, 20.0) / 20.0) : 1.0f;
@@ -51,8 +56,8 @@ void RadioSynth::Link (unsigned r)
 	// narrower and coarser (a codec), fading and dropping out now and then, but clean of static
 	const float moon = std::clamp (((float)Snr (3.844e8) - 10.0f) / 30.0f, 0.0f, 1.0f);
 	link = std::clamp ((snrDb - 10.0f) / 30.0f, moon, 1.0f);
+	Band (snrDb, sound, bandHp, bandLp);
 	snrDb = std::max (snrDb, (float)Snr (3.844e8));
-	bandHp = sound.hp + 250.0f * (1.0f - link), bandLp = sound.lp * (0.4f + 0.6f * link);
 	if (link < 1.0f && Dbg ().radioCodec) {                         // (listening tests: ORBITER_RADIO_CODEC=0 off)
 		hold = std::max (1u, (unsigned)(r / (5.0f * bandLp)));         // (a sample rate of 5 x the band)
 		levels = std::pow (2.0f, 10.0f + 5.0f * link);                  // (15 bits near, about 13 at the Moon; by ear)
@@ -60,25 +65,48 @@ void RadioSynth::Link (unsigned r)
 	if (link >= 1.0f || buf.empty ()) return;
 	// as loud as near Earth: the loudness the narrower band takes away (the voice through each
 	// band, measured), and the fading's on average, made up
-	auto through = [&](float hp, float lp) {
-		dsp::Biquad a, b, c, d;
-		a.HighPass (hp, 0.7f, (float)r), b.HighPass (hp, 0.7f, (float)r), c.LowPass (lp, 0.7f, (float)r), d.LowPass (lp, 0.7f, (float)r);
-		std::vector<float> y (buf.size ());
-		for (size_t i = 0; i < buf.size (); i++) {
-			float v = a.Process (buf[i]);
-			if (sound.stages > 1) v = b.Process (v);
-			v = c.Process (v);
-			if (sound.stages > 1) v = d.Process (v);
-			y[i] = v;
-		}
-		return Loudness (y.data (), y.size (), 1, r);
-	};
+	auto through = [&](float hp, float lp) { return BandLoudness (key, buf, hp, lp, sound.stages, r); };
 	const double near = through (sound.hp, sound.lp), far = through (bandHp, bandLp);
 	const float bad = 1.0f - link;
 	const float fadeMean = 1.0f - 0.5f * 0.35f * bad;                 // (the fading's average)
 	const float dropped = 0.6f * bad * bad * 0.145f;                   // (the dropouts' share of the time)
 	if (std::isfinite (near) && std::isfinite (far))
 		gain *= (float)std::pow (10.0, std::clamp (near - far, 0.0, 12.0) / 20.0) / fadeMean / std::sqrt (1.0f - dropped);
+}
+
+void RadioSynth::Band (float snr, const Sound &sound, float &hp, float &lp)
+{
+	const float moon = std::clamp (((float)Snr (3.844e8) - 10.0f) / 30.0f, 0.0f, 1.0f);
+	const float link = std::clamp ((snr - 10.0f) / 30.0f, moon, 1.0f);
+	hp = sound.hp + 250.0f * (1.0f - link), lp = sound.lp * (0.4f + 0.6f * link);
+}
+
+double RadioSynth::BandLoudness (const std::string &key, const std::vector<float> &voice, float hp, float lp, int stages, unsigned r)
+{
+	// (remembered by the file and the band to a hertz: a link's band moves with the distance)
+	static std::mutex m;
+	static std::map<std::string, double> known;
+	char band[64];
+	snprintf (band, sizeof (band), "|%.0f|%.0f|%d|%u", hp, lp, stages, r);
+	const std::string k = key.empty () ? std::string () : key + band;
+	if (!k.empty ()) {
+		std::lock_guard<std::mutex> l (m);
+		auto it = known.find (k);
+		if (it != known.end ()) return it->second;
+	}
+	dsp::Biquad a, b, c, d;
+	a.HighPass (hp, 0.7f, (float)r), b.HighPass (hp, 0.7f, (float)r), c.LowPass (lp, 0.7f, (float)r), d.LowPass (lp, 0.7f, (float)r);
+	std::vector<float> y (voice.size ());
+	for (size_t i = 0; i < voice.size (); i++) {
+		float v = a.Process (voice[i]);
+		if (stages > 1) v = b.Process (v);
+		v = c.Process (v);
+		if (stages > 1) v = d.Process (v);
+		y[i] = v;
+	}
+	const double L = Loudness (y.data (), y.size (), 1, r);
+	if (!k.empty ()) { std::lock_guard<std::mutex> l (m); if (known.size () > 4096) known.clear (); known[k] = L; }
+	return L;
 }
 
 double RadioSynth::Length () const

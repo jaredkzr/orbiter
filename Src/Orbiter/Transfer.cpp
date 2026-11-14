@@ -2239,8 +2239,8 @@ void Planner::Update ()
 
 	// a correction due soon: refine it now (with the trajectory as flown)
 	if (busy || !settings.autoCorrect) return;
-	if (td.SysT1 - lastPlanCheck < 0.5) return;
-	lastPlanCheck = td.SysT1;
+	if (td.UiT1 - lastPlanCheck < 0.5) return;   // (the session's clock: repeatable in fixed-step runs)
+	lastPlanCheck = td.UiT1;
 	Plan pl = GetPlan ();
 	if (!pl.valid) return;
 	double now = td.MJD1;

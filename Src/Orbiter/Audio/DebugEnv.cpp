@@ -4,6 +4,7 @@
 #include "DebugEnv.h"
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 
 namespace audio {
@@ -20,7 +21,10 @@ DebugEnv DebugEnv::Read (const char *(*get) (const char *))
 	d.offscreen = set ("ORBITER_VK_OFFSCREEN") && first ("ORBITER_VK_OFFSCREEN") != '0';
 	d.adapt = tri ("ORBITER_AUDIO_ADAPT");
 	d.async = first ("ORBITER_AUDIO_ASYNC") == '1';
-	if (const char *v = get ("ORBITER_AUDIO_LOG")) d.log = atoi (v) >= 2 ? 2 : 1;   // (set at all: on)
+	if (const char *v = get ("ORBITER_AUDIO_LOG")) {   // (set at all: on)
+		d.log = atoi (v) >= 2 ? 2 : 1;
+		d.logStates = std::tolower ((unsigned char)*v) != 'e';   // ("events": the moments, not every source's state)
+	}
 	d.callouts = tri ("ORBITER_AUDIO_CALLOUTS");
 	d.music = tri ("ORBITER_AUDIO_MUSIC");
 	d.hrtf = tri ("ORBITER_AUDIO_HRTF");
@@ -39,6 +43,10 @@ DebugEnv DebugEnv::Read (const char *(*get) (const char *))
 	d.flightTrace = str ("ORBITER_AUDIO_FLIGHT_TRACE");
 	d.radioCodec = first ("ORBITER_RADIO_CODEC") != '0';
 	d.contactSamples = str ("ORBITER_CONTACT_SAMPLES");
+	if (const char *v = get ("ORBITER_XR_PA")) {
+		double a = 0.0, b = 0.0;
+		if (sscanf (v, "%lf,%lf", &a, &b) == 2 && a > 0.0 && b > 0.0) d.xrCockpitPa = a, d.xrClosePa = b;
+	}
 	return d;
 }
 

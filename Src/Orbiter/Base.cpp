@@ -330,6 +330,12 @@ void Base::DestroyDeviceObjects ()
 	Body::DestroyDeviceObjects ();
 }
 
+namespace {
+	/// A landing pad keeps at least this much ground about its centre dry [m] (a vessel on it:
+	/// some pads are markers, drawn at no size)
+	constexpr double DRY_PAD_MIN = 50.0;
+}
+
 void Base::Setup ()
 {
 	if (!floating) elev = RefPlanet()->Elevation (lng, lat);
@@ -344,6 +350,17 @@ void Base::Setup ()
 			Rel_EquPos (Vector (d.x, 0, d.z), dlng, dlat);
 			emgr->AddDeck (dlat, dlng, d.r, elev + d.h);
 		}
+		// (a land base's pads are ground, not sea: a coast's data at the datum and its water mask
+		// would have the swell over a pad)
+		if (!floating)
+			for (DWORD i = 0; i < nobj; i++)
+				if (obj[i]->GetSpecs() & OBJSPEC_LPAD) {
+					const Lpad *pad = (const Lpad*)obj[i];
+					double plng, plat;
+					Rel_EquPos (pad->GetPos (), plng, plat);
+					// (at least the ground a vessel on it stands on: some pads are markers, drawn at no size)
+					emgr->AddDryLand (plat, plng, std::max (pad->Radius (), DRY_PAD_MIN));
+				}
 	}
 
 	for (DWORD i = 0; i < nobj; i++)

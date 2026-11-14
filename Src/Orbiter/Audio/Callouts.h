@@ -35,6 +35,7 @@
 #include "World.h"
 #include "FlightState.h"
 #include <deque>
+#include <map>
 #include <initializer_list>
 #include <string>
 
@@ -119,6 +120,7 @@ private:
 		double undockAt = -1.0;  // ("undocking confirmed" a moment after)
 	} pace;
 	bool greeted = false;   // (the session's first vessel welcomed aboard)
+	std::map<std::string, double> lastSaid;   // (lines with a cooldown: when said)
 	int lastChatter[2] = { -1, -1 };   // (the line said last: sunrise, sunset)
 	double chatterAt = -1e9;            // (the last chatter: none again within CHATTER_GAP)
 };

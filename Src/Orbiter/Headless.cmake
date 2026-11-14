@@ -156,6 +156,7 @@ set(headless_src
 	Audio/FlightSampler.cpp
 	Audio/CrewLines.cpp
 	Audio/DebugEnv.cpp
+	Audio/ClipSynth.cpp
 	Audio/Music.cpp
 	Audio/AudioEngine.cpp
 	Audio/AudioSystem.cpp

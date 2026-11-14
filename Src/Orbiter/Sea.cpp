@@ -152,8 +152,8 @@ Point Sea::At (double lat, double lng, bool wantSeabed)
 	if (!active) return pt;
 	stats.queries++;
 	ElevationManager *emgr = planet->ElevMgr();
-	// (a deck over the water is ground)
-	if (emgr && emgr->DeckElevation (lat, lng) > -1e9) return pt;
+	// (a deck over the water is ground; so is a base's landing pad on a coast)
+	if (emgr && (emgr->DeckElevation (lat, lng) > -1e9 || emgr->DryLand (lat, lng))) return pt;
 	const double q = 1.5e-6; // [rad] ~10 m on Earth
 	uint64_t key = ((uint64_t)(uint32_t)(int32_t)floor (lat / q) << 32) | (uint32_t)(int32_t)floor (lng / q);
 	auto it = cache.find (key);

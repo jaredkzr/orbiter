@@ -194,7 +194,7 @@ void Instrument_RelTravel::DrawTarget (const RLayout &L)
 		ui.Tooltip ("The trip's target: any body, or another vessel");
 	} else {
 		const startargets::Catalogue &cat = startargets::Get ();
-		if (starOrder.size () != cat.Stars ().size () || td.SysT0 - starOrderT > 2.0) {
+		if (starOrder.size () != cat.Stars ().size () || td.UiT0 - starOrderT > 2.0) {
 			// (by distance from the vessel now; light years)
 			std::vector<std::pair<double, int>> d;
 			for (int i = 0; i < (int)cat.Stars ().size (); i++) {
@@ -210,7 +210,7 @@ void Instrument_RelTravel::DrawTarget (const RLayout &L)
 				snprintf (b, sizeof (b), "%-22s %10.4g ly  %s", st.name.c_str (), e.first / LY, st.designation.c_str ());
 				starOrder.push_back (e.second), starLabel.push_back (b);
 			}
-			starOrderT = td.SysT0;
+			starOrderT = td.UiT0;
 		}
 		for (size_t k = 0; k < starOrder.size (); k++) {
 			items.push_back (starLabel[k].c_str ());

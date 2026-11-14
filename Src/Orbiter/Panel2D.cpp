@@ -335,7 +335,7 @@ void Panel2D::Render ()
 		// use graphics client to render surface as billboard
 		gc->clbkRender2DPanel (hSurf, hBkgMesh, &transf);
 		extern TimeData td;
-		if (pane->blinkmesh.mesh2d && fmod(td.SysT0,1.0) < 0.7)
+		if (pane->blinkmesh.mesh2d && fmod(td.UiT0,1.0) < 0.7)
 			gc->clbkRender2DPanel (&pane->blinkmesh.tex, pane->blinkmesh.mesh2d, &transf);
 	}
 }

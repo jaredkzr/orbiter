@@ -43,12 +43,13 @@ bool CrewLines::Read (const std::string &path)
 			if (bar == std::string::npos) break;
 			at = bar + 1;
 		}
-		if (f.size () < 4 || f[0].empty ()) { fprintf (stderr, "Audio: %s:%d: <key> | <file> | <priority> | <wait> [| <gain>]\n", path.c_str (), n); continue; }
+		if (f.size () < 4 || f[0].empty ()) { fprintf (stderr, "Audio: %s:%d: <key> | <file> | <priority> | <wait> [| <gain> [| <cooldown>]]\n", path.c_str (), n); continue; }
 		CrewLine c;
 		c.key = f[0], c.file = f[1];
 		c.warning = Lower (f[2]) == "warning";
 		c.wait = atof (f[3].c_str ());
 		if (f.size () > 4 && !f[4].empty ()) c.gain = atof (f[4].c_str ());
+		if (f.size () > 5 && !f[5].empty ()) c.cooldown = atof (f[5].c_str ());
 		lines[Lower (c.key)] = c;
 	}
 	return true;

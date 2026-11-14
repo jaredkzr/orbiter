@@ -319,6 +319,8 @@ public:
 	DWORD GetPadno () const { return padno; }
 	const Vector &GetPos () const { return relpos; }
 	const float GetILSfreq () const { return ILSfreq; }
+	/// how far the pad reaches from its centre [m] (the octagon's corners, scaled)
+	double Radius () const { return 41.85 * fabs (scale.x); }
 
 protected:
 	DWORD padno;         // pad number

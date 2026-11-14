@@ -452,7 +452,7 @@ std::shared_ptr<Predictor::Input> Predictor::Snapshot (const Vessel *v, const Bo
 void Predictor::Update (const Vessel *v, const Body *target)
 {
 	if (!v) return;
-	double sys = td.SysT1, sim = td.SimT1;
+	double sys = td.UiT1, sim = td.SimT1;   // (the session's clock: repeatable in fixed-step runs)
 	const Vessel::RelDrive &rd = v->GetRelDrive();
 	bool changed = (v != lastVessel || target != lastTarget || v->ManeuverVersion() != lastNodeVersion ||
 		rd.on != lastDriveOn || rd.accel != lastDriveAccel);

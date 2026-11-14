@@ -505,7 +505,7 @@ Instrument::Instrument (Pane *_pane, INT_PTR _id, const Spec &spec, Vessel *_ves
 	use_skp_interface = true;
 	instrDT = g_pOrbiter->Cfg()->CfgLogicPrm.InstrUpdDT;
 	updT = td.SimT0-1.0;
-	updSysT = td.SysT0-1.0;
+	updSysT = td.UiT0-1.0;
 	dT = 1.0, pT = -1.0;
 	blink = true;
 	showmenu = false;
@@ -536,16 +536,16 @@ Instrument::~Instrument ()
 
 bool Instrument::BufKey (char key, double repdelay)
 {
-	if ((key == lastkey) && (td.SysT0 - lastkeytime < repdelay)) return false;
+	if ((key == lastkey) && (td.UiT0 - lastkeytime < repdelay)) return false;
 	lastkey = key;
-	lastkeytime = td.SysT0;
+	lastkeytime = td.UiT0;
 	return true;
 }
 
 void Instrument::SetBuf (char key)
 {
 	lastkey = key;
-	lastkeytime = td.SysT0;
+	lastkeytime = td.UiT0;
 }
 
 bool Instrument::ConsumeKeyImmediate (char *kstate)
@@ -822,10 +822,10 @@ void Instrument::EndDrawHDC (HDC hDC)
 bool Instrument::Update (double upDTscale)
 {
 	if (!gc) return false;
-	bool live = td.SysT1 < liveUntil;
+	bool live = td.UiT1 < liveUntil;
 	if (mfdui::Context *c = UIContext ())
 		live = live || c->Dirty () || c->Dragging ();
-	bool tstep = live || (td.SimT1 >= updT && td.SysT1 >= updSysT);
+	bool tstep = live || (td.SimT1 >= updT && td.UiT1 >= updSysT);
 	if (tstep && !showmenu && modepage < 0) {
 		dT = td.SimT1 - pT; // actual update interval
 		pT = td.SimT1;
@@ -850,7 +850,7 @@ bool Instrument::Update (double upDTscale)
 		}
 		if (tex) gc->clbkBlt (tex, 0, 0, surf); // 'tex' not used in ExternMFD
 		updT = td.SimT1 + instrDT * upDTscale;
-		updSysT = td.SysT1 + 0.1; // don't exceed 10Hz update rate
+		updSysT = td.UiT1 + 0.1; // don't exceed 10Hz update rate
 		return true;
 	} else return false;
 }
@@ -906,20 +906,20 @@ void Instrument::Anchors (std::vector<std::pair<std::string, oapi::FVECTOR2>> &l
 
 void Instrument::RedrawLive (double seconds)
 {
-	liveUntil = std::max (liveUntil, td.SysT0 + seconds);
+	liveUntil = std::max (liveUntil, td.UiT0 + seconds);
 }
 
 void Instrument::Timejump ()
 {
 	Refresh ();
 	pT = td.SimT0;
-	lastkeytime = td.SysT0;
+	lastkeytime = td.UiT0;
 }
 
 void Instrument::Refresh ()
 {
 	updT = td.SimT0-1.0;
-	updSysT = td.SysT0-1.0;
+	updSysT = td.UiT0-1.0;
 }
 
 void Instrument::RepaintButtons ()

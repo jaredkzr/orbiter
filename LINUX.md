@@ -211,7 +211,7 @@ These are for testing and tuning (`1` turns a feature on, `0` off).
 | `ORBITER_AUDIO=0`, `ORBITER_AUDIO=1` | no sound / sound on the output device even headless or offscreen (by default only with a graphics client, and not offscreen) |
 | `ORBITER_AUDIO_REALISM=physical\|cinematic` | sound in space as set, whatever the settings say (tests) |
 | `ORBITER_AUDIO_TEST_TONE=<vessel>[:<Hz>[:<level>]]` | a sine on a vessel, heard as any sound source: travel time, Doppler, shock cone (tests) |
-| `ORBITER_AUDIO_LOG=1` | what is heard of each sound source (travel time, Doppler, levels), twice a second in `Orbiter.log` (`2`: silent ones too); sonic booms also on the console |
+| `ORBITER_AUDIO_LOG=1` | what is heard of each sound source (travel time, Doppler, levels), twice a second in `Orbiter.log` (`2`: silent ones too); sonic booms also on the console (`events`: the moments only - callouts, booms, the drive - not each source's state) |
 | `ORBITER_AUDIO_VESSELS=0` | no sounds of the vessels themselves (engines, thrusters, air): only test tones |
 | `ORBITER_AUDIO_ADAPT=1`, `ORBITER_AUDIO_ADAPT=0` | the adapting listening level on / off, whatever the settings' "Dynamic range" says (renders: off by default, the physical levels) |
 | `ORBITER_AUDIO_RADIO=0` | no radio: chatter, the ground's replies (tests) |
@@ -227,6 +227,9 @@ These are for testing and tuning (`1` turns a feature on, `0` off).
 | `ORBITER_AUDIO_CAPCOM=1`, `ORBITER_AUDIO_CAPCOM=2` | Mission Control's replies always from this CAPCOM, whatever the shift (by default they take turns, 8-hour shifts by the sim clock from 06:00 UTC) |
 | `ORBITER_AUDIO_ASYNC=1` | renders: sound files decoded in the background, as on the device (each sound starts when its file is there, a step or so later; `Audio.*Async`) |
 | `ORBITER_AUDIO_FLIGHT_TRACE=<file>` | the focus vessel's flight as the sound follows it (a sample a step: `Src/Orbiter/Audio/FlightState.h`), for `Tests/Audio/*.trace` |
+| `ORBITER_XR_PA=<cockpit>,<close>` | XRSound's volume 1 as pressures [Pa], in the cockpit and close on a vessel (default `63.2,15.8`: full scale; listening tests) |
+| `ORBITER_LOG=<file>` | the log written there, not `Orbiter.log` (the tests: each its own, `Testing/logs/<test>.log`) |
+| `ORBITER_NO_SAVE=1` | nothing saved at a session's start or end: the settings, "(Current state)", the MFD windows (the tests: they run side by side in one folder) |
 | `ORBITER_RADIO_CODEC=0` | the radio degrades with distance without its low-rate codec (only the narrower band, the fading, the dropouts; listening tests) |
 | `ORBITER_RADIO_REEL=<dir>` | `Audio.Synth "[radio-reel]"` (a hidden test): Mission Control's lines through the radio near Earth, at the Moon and further, as WAVs in `<dir>` (`ORBITER_RADIO_REEL_FILES`: which lines) |
 
@@ -330,8 +333,17 @@ ctest
   ramped over a step, every blow struck; `Audio.ChurnTSan`: the same under
   ThreadSanitizer).
 - **The crew's lines:** `Sound/Voice/callouts.cfg` (each line's file,
-  priority, wait and level; when a line is said is the code's). XRSound's
-  cfgs and a vessel's code may give a line a file of their own.
+  priority, wait, level and cooldown; when a line is said is the code's).
+  XRSound's cfgs and a vessel's code may give a line a file of their own.
+  Mission Control's replies: `Sound/Voice/Ground/replies.cfg` (the moments
+  the ground answers, and with which takes).
+- **Repeatable runs:** with `--fixedstep`, everything that moves with the
+  frame - the camera's transitions, the time acceleration's ramp, the MFDs'
+  and planners' updates - goes by the fixed step (`TimeData::UiT1`), not the
+  wall clock; each test has its own log and saves nothing (`ORBITER_LOG`,
+  `ORBITER_NO_SAVE`). Scripts' `oapi.get_systime ()` stays the wall clock:
+  watchdogs only. The tests read the build's `Orbiter.cfg` (the planet
+  textures' folder: the high-resolution coasts and terrain).
 - **Sound of vessel classes:** `Config/Sound/README.txt` (tuning, motors of
   animations); the API in `OrbiterAPI.h` (`oapiAudio*`) and Lua's `audio`
   table.

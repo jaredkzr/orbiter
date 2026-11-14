@@ -85,6 +85,14 @@ public:
 	void AddDeck (double lat, double lng, double radius, double elev);
 	/// the highest deck covering (lat, lng) [m above the mean radius], or -1e10 if none
 	double DeckElevation (double lat, double lng) const;
+	/**
+	* \brief Ground a base has made: a landing pad on a coast - inside the
+	*   circle about (lat, lng) no water (the sea: Sea::At), whatever the
+	*   terrain's data and the water mask say
+	* \param radius [m]
+	*/
+	void AddDryLand (double lat, double lng, double radius);
+	bool DryLand (double lat, double lng) const;
 
 	/// nodes per tile side of RefTile's data (a border of one node before and two after)
 	static int RefStride ();
@@ -130,6 +138,7 @@ private:
 	bool dataOnly = false; // (SetNoDetail)
 	struct Deck { double lng, slat, clat, cosr, elev; };
 	std::vector<Deck> decks; // (AddDeck)
+	std::vector<Deck> dry;   // (AddDryLand: elev unused)
 };
 
 #endif // !__ELEVMGR_H

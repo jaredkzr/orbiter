@@ -53,7 +53,12 @@ public:
 	/// snr: signal to noise [dB]
 	/// (lufs: the voice's loudness, if known - Clip::lufs; else measured)
 	static SourcePtr<RadioSynth> Make (Engine &e, std::vector<float> &&buf, bool quindar, float snr, uint32_t seed,
-		const Sound &sound = Sound (), double lufs = NAN);
+		const Sound &sound = Sound (), double lufs = NAN, const std::string &key = std::string ());
+	/// The band of a link's S/N [dB] for a radio's sound [Hz]
+	static void Band (float snr, const Sound &sound, float &hp, float &lp);
+	/// A voice's loudness through a band [LUFS] (remembered by key - its file - and the band:
+	/// worked out ahead, off the simulation thread, for a transmission queued: Radio::Prefetch)
+	static double BandLoudness (const std::string &key, const std::vector<float> &voice, float hp, float lp, int stages, unsigned rate);
 	bool Done () const override { return done.load (std::memory_order_acquire); }
 	/// Lost (a blackout): a burst of static, then nothing
 	void Cut () { cut.store (true, std::memory_order_release); }
@@ -88,6 +93,7 @@ private:
 	/// The link's state from the S/N: its quality, its band, its codec; and the gain that keeps a
 	/// narrowed, fading voice as loud as near Earth
 	void Link (unsigned rate);
+	std::string key;          // (its file: BandLoudness remembered by it)
 	bool setup = false;
 	size_t pos = 0;           // samples into the whole (tones, voice, tail)
 	float gain = 1.0f;        // the voice to the radio's loudness
@@ -154,6 +160,8 @@ private:
 	double quietSince = 0.0;               // (the last transmission over: when)
 	bool wasBusy = false;
 	std::string Take (Event e);
+	/// Its takes' name (Sound/Voice/Ground/replies.cfg; empty: not answered)
+	static const std::string &Takes (Event e);
 	/// The CAPCOM on shift ("c1", "c2"): 8-hour shifts by the simulation's clock, alternating
 	/// (ORBITER_AUDIO_CAPCOM=1 or 2: that one)
 	static const char *OnShift ();

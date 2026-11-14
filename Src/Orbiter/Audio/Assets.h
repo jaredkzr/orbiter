@@ -25,6 +25,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -73,6 +74,10 @@ public:
 	struct Measure { double lufs = NAN, peak = 0.0; };
 	Measure Measured (const std::string &path);
 
+	/// Some work of the sound's, off the simulation thread (after the files asked
+	/// for before it; at once when not async)
+	void Run (std::function<void ()> task);
+
 	/// Decode in the background (the device) or at once (renders, tests)
 	void SetAsync (bool on);
 	bool Async () const { return async; }
@@ -104,7 +109,7 @@ private:
 	std::map<std::string, Entry> clips;
 	std::map<std::string, std::string> paths;
 	std::map<std::string, Measure> measures;
-	struct Job { std::string path, key; unsigned rate, channels; bool measure; };
+	struct Job { std::string path, key; unsigned rate, channels; bool measure; std::function<void ()> task; };
 	void Run (std::unique_lock<std::mutex> &l, const Job &j);
 	std::deque<Job> jobs;
 	std::thread worker;

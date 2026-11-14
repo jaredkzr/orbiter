@@ -181,7 +181,7 @@ void DlgCamera::DrawView() {
 	// direction: a pad of arrows (held down), and back to the forward view
 	ImGui::Dummy (ImVec2(0, ui::Px (2)));
 	ui::SectionHeader ("Direction");
-	double dt = td.SysDT;
+	double dt = td.UiDT ();
 	float b = ImGui::GetFrameHeight () * 1.15f, g = ui::Px (3);
 	ImVec2 o = ImGui::GetCursorScreenPos ();
 	struct { ImGuiDir dir; int cx, cy; const char *id; } pad[] = {

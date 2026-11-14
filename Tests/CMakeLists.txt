@@ -186,6 +186,8 @@ set_tests_properties(Audio.Propagation PROPERTIES TIMEOUT 60)
 # cockpit, vacuum; emitters' handles, bodies' identities
 add_executable(Audio.World Audio.World.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/World.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Synth.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/ClipSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Track.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Medium.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/PathNode.cpp
@@ -221,6 +223,7 @@ set(AUDIO_SYNTH_SOURCES
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Assets.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/DebugEnv.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Synth.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/ClipSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/RocketSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/RcsSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/WindSynth.cpp
@@ -623,7 +626,7 @@ if (ORBITER_TEST_EXE)
 		)
 		set_tests_properties(Audio.WarpDriveCinematic PROPERTIES TIMEOUT 300
 			PASS_REGULAR_EXPRESSION "warp_engage.flac.*warp_accel.flac.*warp_decel.flac.*warp_disengage.flac"
-			ENVIRONMENT "ORBITER_AUDIO_REALISM=cinematic;ORBITER_AUDIO_LOG=1;ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.WarpDrive.wav;ORBITER_AUDIO_AMBIENCE=0")
+			ENVIRONMENT "ORBITER_AUDIO_REALISM=cinematic;ORBITER_AUDIO_LOG=events;ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.WarpDrive.wav;ORBITER_AUDIO_AMBIENCE=0")
 		add_test(
 			NAME "Audio.WarpDrivePhysical"
 			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Scenarios/Tests/RelTripTest.scn" "--fixedstep=0.02" "--maxframes=6000"
@@ -631,7 +634,7 @@ if (ORBITER_TEST_EXE)
 		)
 		set_tests_properties(Audio.WarpDrivePhysical PROPERTIES TIMEOUT 300
 			PASS_REGULAR_EXPRESSION "RelTripTest: PASS" FAIL_REGULAR_EXPRESSION "warp drive"
-			ENVIRONMENT "ORBITER_AUDIO_REALISM=physical;ORBITER_AUDIO_LOG=1;ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.WarpDrivePhysical.wav;ORBITER_AUDIO_AMBIENCE=0")
+			ENVIRONMENT "ORBITER_AUDIO_REALISM=physical;ORBITER_AUDIO_LOG=events;ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.WarpDrivePhysical.wav;ORBITER_AUDIO_AMBIENCE=0")
 		# the callout voice: XRSound's default lines in Orbiter's voice (Sound/Voice, through
 		# System::FindSound), or XRSound's own recordings
 		add_test(
@@ -709,7 +712,7 @@ if (ORBITER_TEST_EXE)
 		add_test(
 			NAME "Audio.XRSoundCheck"
 			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.XRSound.wav" --duration 10.0 --no-clip
-				--level 0.3:0.9:all:-inf:-80 --level 1.0:1.3:all:-72:-45 --level 2.2:2.9:all:-60:-5
+				--level 0.3:0.9:all:-inf:-80 --level 1.0:1.3:all:-60:-5 --level 2.2:2.9:all:-60:-5
 				--level 3.15:3.45:all:-inf:-80 --level 5.4:5.9:all:-inf:-80 --level 6.0:6.3:all:-60:-5
 				--level 7.3:8.9:all:-inf:-80
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
@@ -829,3 +832,11 @@ if (ORBITER_TEST_EXE)
 	endif()
 
 endif()
+
+# Every test that runs Orbiter: a log of its own and no saves at its end (ORBITER_LOG, ORBITER_NO_SAVE):
+# tests run side by side in one folder, and Orbiter.log, the config and "(Current state)" are shared
+file(MAKE_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}/Testing/logs)
+get_property(_orbiter_tests DIRECTORY PROPERTY TESTS)
+foreach(_t ${_orbiter_tests})
+	set_property(TEST ${_t} APPEND PROPERTY ENVIRONMENT "ORBITER_LOG=${ORBITER_BINARY_ROOT_DIR}/Testing/logs/${_t}.log" "ORBITER_NO_SAVE=1")
+endforeach()

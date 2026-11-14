@@ -335,6 +335,7 @@ TEST_CASE ("The sound's environment options: read as they always were", "[audio]
 	CHECK (d.render == "x.wav");
 	CHECK (d.device == 0);
 	CHECK (d.log == 1);            // (set at all: on)
+	CHECK (d.logStates);
 	CHECK (d.callouts == 1);
 	CHECK (d.music == 0);
 	CHECK (d.realism == 1);
@@ -350,6 +351,7 @@ TEST_CASE ("The sound's environment options: read as they always were", "[audio]
 	fakeEnv = { {"ORBITER_AUDIO_LOG", "2"}, {"ORBITER_AUDIO_REALISM", "physical"}, {"ORBITER_AUDIO_VOICE", "orbiter"}, {"ORBITER_VK_OFFSCREEN", "0"}, {"ORBITER_AUDIO_CAPCOM", "3"} };
 	d = DebugEnv::Read (FakeGet);
 	CHECK (d.log == 2);
+	CHECK (d.logStates);
 	CHECK (d.realism == 0);
 	CHECK (d.voice == 1);
 	CHECK (!d.offscreen);

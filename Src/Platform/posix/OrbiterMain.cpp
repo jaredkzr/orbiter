@@ -7,6 +7,7 @@
 // plugin modules and tests link against; this executable only starts it.
 // =======================================================================
 
+#include <cstdlib>
 #include "Orbiter.h"
 #include "cmdline.h"
 #include "Log.h"
@@ -62,8 +63,9 @@ int main (int argc, char *argv[])
 	std::string cmdline = JoinArguments (argc, argv);
 	orbiter::CommandLine::Parse (g_pOrbiter, &cmdline[0]);
 
-	// Initialise the log
-	INITLOG("Orbiter.log", g_pOrbiter->Cfg()->CfgCmdlinePrm.bAppendLog);
+	// Initialise the log (ORBITER_LOG=<file>: a log of its own - tests run side by side in one folder)
+	const char *logfile = getenv ("ORBITER_LOG");
+	INITLOG(logfile && *logfile ? logfile : "Orbiter.log", g_pOrbiter->Cfg()->CfgCmdlinePrm.bAppendLog);
 	LOGOUT("Build %s [v.%06d] (headless)", __DATE__, g_pOrbiter->GetVersion());
 
 	// Initialise random number generator

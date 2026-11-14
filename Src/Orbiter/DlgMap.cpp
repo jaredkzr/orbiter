@@ -253,9 +253,9 @@ void DlgMap::DrawMap() {
         }
 
         const double updDT = 1.0;
-        if (td.SysT1 > updTmax || td.SysT1 < updTmin) {
-            updTmax = td.SysT1 + updDT;
-            updTmin = td.SysT1 - updDT;
+        if (td.UiT1 > updTmax || td.UiT1 < updTmin) {
+            updTmax = td.UiT1 + updDT;
+            updTmin = td.UiT1 - updDT;
 
             vectormap->Update();
             vectormap->DrawMap ();

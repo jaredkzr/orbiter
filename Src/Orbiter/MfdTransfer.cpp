@@ -536,11 +536,11 @@ bool Instrument_Transfer::KeyImmediate (char *kstate)
 	if (KEYDOWN (kstate, OAPI_KEY_MINUS)) {
 		if (BufKey (OAPI_KEY_MINUS, 0.1)) {
 			double da = 1.0;
-			if (td.SysT0-tbpress < 0.2)
-				da = (td.SysT0-tbdown < 1.0 ? 1.0:10.0);
+			if (td.UiT0-tbpress < 0.2)
+				da = (td.UiT0-tbdown < 1.0 ? 1.0:10.0);
 			else
-				tbdown = td.SysT0;
-			tbpress = td.SysT0;
+				tbdown = td.UiT0;
+			tbpress = td.UiT0;
 			deltav -= da;
 			dv_manip = true;
 			Refresh();
@@ -550,11 +550,11 @@ bool Instrument_Transfer::KeyImmediate (char *kstate)
 	if (KEYDOWN (kstate, OAPI_KEY_EQUALS)) {
 		if (BufKey (OAPI_KEY_EQUALS, 0.1)) {
 			double da = 1.0;
-			if (td.SysT0-tbpress < 0.2)
-				da = (td.SysT0-tbdown < 1.0 ? 1.0:10.0);
+			if (td.UiT0-tbpress < 0.2)
+				da = (td.UiT0-tbdown < 1.0 ? 1.0:10.0);
 			else
-				tbdown = td.SysT0;
-			tbpress = td.SysT0;
+				tbdown = td.UiT0;
+			tbpress = td.UiT0;
 			deltav += da;
 			dv_manip = true;
 			Refresh();

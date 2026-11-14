@@ -20,7 +20,8 @@ struct DebugEnv {
 	bool offscreen = false;    ///< ORBITER_VK_OFFSCREEN (not 0): off the speakers
 	int adapt = -1;            ///< ORBITER_AUDIO_ADAPT=0|1: the listening level (tristate)
 	bool async = false;        ///< ORBITER_AUDIO_ASYNC=1: files decoded in the background in a render too
-	int log = 0;               ///< ORBITER_AUDIO_LOG (set: 1; 2: silent sources too)
+	int log = 0;               ///< ORBITER_AUDIO_LOG (set: 1; 2: silent sources too; "events": 1, no sources' states)
+	bool logStates = false;    ///< ... what is heard of each source, twice a second (not with "events")
 	int callouts = -1;         ///< ORBITER_AUDIO_CALLOUTS=0|1 (tristate)
 	int music = -1;            ///< ORBITER_AUDIO_MUSIC=0|1 (tristate)
 	int hrtf = -1;             ///< ORBITER_AUDIO_HRTF=0|1 (tristate)
@@ -38,6 +39,8 @@ struct DebugEnv {
 	std::string flightTrace;   ///< ORBITER_AUDIO_FLIGHT_TRACE=<file>
 	bool radioCodec = true;    ///< ORBITER_RADIO_CODEC=0: the deep-space codec off (listening tests)
 	std::string contactSamples;///< ORBITER_CONTACT_SAMPLES=<dir>
+	double xrCockpitPa = 0.0;  ///< ORBITER_XR_PA=<cockpit>,<close>: XRSound's volume 1 as pressures [Pa] (listening tests; 0: the shim's - 63.2,15.8)
+	double xrClosePa = 0.0;
 
 	/// The process's (read at the first call)
 	static const DebugEnv &Get ();

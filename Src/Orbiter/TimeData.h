@@ -45,6 +45,10 @@ public:
 	/// videos), else the frame's system time step
 	inline double UiDT () const { return bFixedStep ? fixed_step : SysDT; }
 
+	/// The session's clock for what moves on screen and is heard as the user
+	/// sees it (the camera's transitions, planners' re-checks): the steps of
+	/// UiDT summed - the wall clock, but in fixed-step runs repeatable
+	double  UiT0, UiT1;
 	double  SysT0;        // current system time since simulation start [s]
 	double  SysT1;        // next frame system time (=SysT0+SysDT)
 	double  SysDT;        // current system step interval [s]

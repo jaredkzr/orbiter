@@ -52,7 +52,7 @@ namespace {
 	}
 	const char *CHATTER_DIR = "XRSound/Default/Altea STS";
 	const char *AOS_CLIP = "XRSound/Default/Altea STS/we have you back on air-to-ground_two.wav"; // (no AOS takes: NASA's)
-	/// Each event's file name in Sound/Voice/Ground (its takes <name>_<n>.flac)
+	/// Each event's name: its line in Sound/Voice/Ground/replies.cfg (and its takes', unless the table says other)
 	const char *EVENT_NAME[Radio::NEVENT] = { "Liftoff", "MECO", "Orbit", "Docked", "Undocked", "Splashdown", "Landed",
 		"MaxQ", "Ignition", "Deorbit", "Surface", "Capture", "Escape", "Descent", "Approach", "BoosterSep", "TankSep", "DeepSpace", "Reentry", "AOS", "LOS", "Lost" };
 
@@ -122,7 +122,22 @@ bool Radio::Busy () const
 void Radio::Prefetch (const std::string &file)
 {
 	const std::string path = System::FindSound (file);
-	if (!path.empty () && sys.GetEngine ().Active ()) Assets::Get ().Prefetch (path, sys.GetEngine ().SampleRate (), 1);
+	if (path.empty () || !sys.GetEngine ().Active ()) return;
+	const unsigned rate = sys.GetEngine ().SampleRate ();
+	Assets::Get ().Prefetch (path, rate, 1);
+	// far out, the link's narrower band: the voice's loudness through it and through the radio's own
+	// worked out now, off the simulation thread (the transmission only looks them up)
+	const float snr = (float)Snr (earthDist);
+	const RadioSynth::Sound sound = SoundFor (file);
+	float hp, lp;
+	RadioSynth::Band (snr, sound, hp, lp);
+	if (hp == sound.hp && lp == sound.lp) return;   // (near Earth: the radio's own band - nothing to make up)
+	Assets::Get ().Run ([path, rate, sound, hp, lp] {
+		ClipRef c = Assets::Get ().Load (path, rate, 1);
+		if (!c) return;
+		RadioSynth::BandLoudness (path, c->pcm, sound.hp, sound.lp, sound.stages, rate);
+		RadioSynth::BandLoudness (path, c->pcm, hp, lp, sound.stages, rate);
+	});
 }
 
 bool Radio::Transmit (const std::string &file, bool ground)
@@ -131,7 +146,8 @@ bool Radio::Transmit (const std::string &file, bool ground)
 	Engine &e = sys.GetEngine ();
 	ClipRef clip = Decode (file, e.SampleRate ());
 	if (!clip) { LOGOUT ("Audio: radio: no file %s", file.c_str ()); return false; }
-	auto s = RadioSynth::Make (e, std::vector<float> (clip->pcm), ground, (float)Snr (earthDist), (uint32_t)(Rand () * 1e9), SoundFor (file), clip->lufs);
+	auto s = RadioSynth::Make (e, std::vector<float> (clip->pcm), ground, (float)Snr (earthDist), (uint32_t)(Rand () * 1e9), SoundFor (file), clip->lufs,
+		System::FindSound (file));
 	if (!s || !s->Attach (node->Node ())) return false;
 	s->Start ();
 	playing.push_back ({std::move (s)});
@@ -177,11 +193,37 @@ bool Radio::SaysHouston (const std::string &file)
 	return false;
 }
 
+const std::string &Radio::Takes (Event e)
+{
+	// (the table, read once: Sound/Voice/Ground/replies.cfg - "<moment> | <takes>"; a moment not in it: its own name)
+	static std::string takes[NEVENT];
+	static bool read = false;
+	if (!read) {
+		read = true;
+		for (int i = 0; i < NEVENT; i++) takes[i] = EVENT_NAME[i];
+		const std::string path = System::FindSound ("Sound/Voice/Ground/replies.cfg");
+		if (FILE *f = path.empty () ? nullptr : fopen (path.c_str (), "r")) {
+			char line[256];
+			while (fgets (line, sizeof (line), f)) {
+				if (char *h = strchr (line, '#')) *h = 0;
+				char *bar = strchr (line, '|');
+				if (!bar) continue;
+				*bar = 0;
+				auto trim = [] (char *s) { while (*s == ' ' || *s == '\t') s++; char *e = s + strlen (s); while (e > s && strchr (" \t\r\n", e[-1])) *--e = 0; return std::string (s); };
+				const std::string moment = trim (line), what = trim (bar + 1);
+				for (int i = 0; i < NEVENT; i++) if (moment == EVENT_NAME[i]) takes[i] = what == "none" ? std::string () : what;
+			}
+			fclose (f);
+		}
+	}
+	return takes[e];
+}
+
 std::string Radio::Take (Event e)
 {
-	// the event's takes by the CAPCOM on shift: <name>_<c1|c2>_<n> (else the other's; else
-	// <name>_<n>, <name>.flac); one at random, not the last one again; AOS: NASA's clip if none
-	const std::string dir = std::string ("Sound/Voice/Ground/") + EVENT_NAME[e];
+	// the event's takes by the CAPCOM on shift: <takes>_<c1|c2>_<n> (else the other's; else
+	// <takes>_<n>, <takes>.flac); one at random, not the last one again; AOS: NASA's clip if none
+	const std::string dir = std::string ("Sound/Voice/Ground/") + Takes (e);
 	const char *shift = OnShift ();
 	std::vector<std::string> takes;
 	// (beyond the Earth and the Moon, no "Houston": a Mars base isn't talked to as from Texas)
@@ -212,7 +254,7 @@ void Radio::Reply (Event e)
 
 void Radio::OnEvent (Event e)
 {
-	if (e < 0 || e >= NEVENT || !vessel) return;
+	if (e < 0 || e >= NEVENT || !vessel || Takes (e).empty ()) return;   // (not answered: replies.cfg)
 	Reply (e);
 }
 
@@ -262,7 +304,8 @@ void Radio::Update (double tnow, double playNow)
 	}
 	else if (losDue >= 0.0 && t >= losDue && pt >= losReady && !Busy ()) {
 		losDue = -1.0;
-		Transmit (Take (lastAlt < 10e3 ? LOST : LOS), true);   // (near the ground: the vehicle lost, not the signal)
+		const Event e = lastAlt < 10e3 ? LOST : LOS;   // (near the ground: the vehicle lost, not the signal)
+		if (!Takes (e).empty ()) Transmit (Take (e), true);
 	}
 	const CelestialBody *earth = g_psys ? g_psys->GetGravObj ("Earth", true) : nullptr;
 	if (!v || !earth) return;
@@ -284,7 +327,7 @@ void Radio::Update (double tnow, double playNow)
 	} else if (!bo && blackout) {
 		blackout = false;
 		// (through it: the ground has us back)
-		if (t - blackoutSince > 5.0) {
+		if (t - blackoutSince > 5.0 && !Takes (AOS).empty ()) {
 			std::string f = Take (AOS);
 			const double react = REACT + 2.0 * Rand ();
 			replies.push_back ({f, t + 2.0 * earthDist / C_LIGHT, f != AOS_CLIP, 0.0, pt + react});

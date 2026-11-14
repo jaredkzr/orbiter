@@ -77,7 +77,7 @@ local function main()
 	check("C", docked.C == nil, "does not dock (misaligned)")
 
 	-- the refusals are reported (in the log, and to the vessel modules)
-	local f = io.open("Orbiter.log", "r")
+	local f = io.open(os.getenv("ORBITER_LOG") or "Orbiter.log", "r")   -- (a test's own log: ORBITER_LOG)
 	local txt = f and f:read("*a") or ""
 	if f then f:close() end
 	local function count(pat) local n = 0; for _ in txt:gmatch(pat) do n = n + 1 end; return n end

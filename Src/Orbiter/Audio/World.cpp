@@ -4,6 +4,7 @@
 #include "World.h"
 #include "DebugEnv.h"
 #include "Assets.h"
+#include "ClipSynth.h"
 #include "miniaudio.h"
 #include <algorithm>
 #include <chrono>
@@ -47,7 +48,6 @@ namespace {
 		{
 			if (soundInit) ma_sound_uninit (&sound), soundInit = false;
 			if (waveInit) ma_waveform_uninit (&wave), waveInit = false;
-			clip.Uninit ();
 		}
 		bool InitTone (Engine &e, double freq, double amp)
 		{
@@ -61,10 +61,6 @@ namespace {
 			if (ma_sound_init_ex (e.Ma (), &sc, &sound) != MA_SUCCESS) return false;
 			soundInit = true;
 			return true;
-		}
-		bool InitClip (Engine &e, ClipRef c, bool loop)
-		{
-			return clip.Init (e.Ma (), std::move (c), nullptr, 1, loop);
 		}
 		bool Attach (void *node) override
 		{
@@ -84,11 +80,10 @@ namespace {
 			return s && ma_sound_get_cursor_in_seconds (const_cast<ma_sound*> (s), &c) == MA_SUCCESS ? c : -1.0;
 		}
 	private:
-		ma_sound *S () { return soundInit ? &sound : clip ? clip.Sound () : nullptr; }
-		const ma_sound *S () const { return soundInit ? &sound : clip ? clip.Sound () : nullptr; }
+		ma_sound *S () { return soundInit ? &sound : nullptr; }
+		const ma_sound *S () const { return soundInit ? &sound : nullptr; }
 		ma_waveform wave;
-		ma_sound sound;               // (the tone's)
-		ClipSound clip;               // (a file's)
+		ma_sound sound;               // (the tone's: a generator, for tests)
 		bool waveInit = false, soundInit = false;
 		float dop = 1.0f, pitch = 1.0f;
 	};
@@ -104,10 +99,9 @@ SourcePtr<Source> MakeToneSource (Engine &e, double freq, double amp)
 
 SourcePtr<Source> MakeClipSource (Engine &e, ClipRef clip, bool loop)
 {
+	// (a synthesizer reading the clip: its pitch and Doppler factor glide, block by block)
 	if (!e.Active () || !clip) return nullptr;
-	SourcePtr<SoundSource> s (new SoundSource ());
-	if (!s->InitClip (e, std::move (clip), loop)) return nullptr;
-	return s;
+	return ClipSynth::Make (e, std::move (clip), loop);
 }
 
 SourcePtr<Source> MakeFileSource (Engine &e, const std::string &path, bool loop)

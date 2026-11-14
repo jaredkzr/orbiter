@@ -657,7 +657,7 @@ void System::Step ()
 		}
 		UpdatePlayed ();
 		Duck (td.UiDT ());
-		const bool log = Dbg ().log > 0;
+		const bool log = Dbg ().logStates;   // (each source's state; not with ORBITER_AUDIO_LOG=events)
 		if (log && (logT < 0.0 || t - logT >= 0.5 || t < logT)) {
 			if (logT < 0.0 || t - logT >= 0.5) {
 				static double loadT = -1e9;

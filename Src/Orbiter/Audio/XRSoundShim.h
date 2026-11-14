@@ -18,9 +18,10 @@
 //      Global: anywhere (the interface bus)
 //    a module's: Global
 //  - levels: XRSound's volume 1 (a file at full scale) is a pressure on
-//    the physical buses and on vessels - 1 Pa (94 dB) in the cockpit and
-//    for the wind; on the vessel, at 2 m, Close 4 Pa, Medium 8, Far 16; a
-//    gain on the voice's and the interface's buses
+//    the physical buses and on vessels - full scale (63 Pa, 130 dB) in the
+//    cockpit and for the wind; on the vessel, at 2 m, Close 16 Pa, Medium
+//    32, Far 63 (chosen by ear); a gain on the voice's and the interface's
+//    buses
 //  - the default sounds: what Orbiter synthesizes (engines, RCS, the air,
 //    contacts, booms) stays synthesized; switching one off
 //    (SetDefaultSoundEnabled: oapiAudioDefaultSound) silences that

@@ -142,7 +142,7 @@ bool Instrument_Map::KeyBuffered (DWORD key)
 		case OAPI_KEY_RBRACKET:
 		case OAPI_KEY_MINUS:
 		case OAPI_KEY_EQUALS:
-			scroll_t0 = scroll_tp = td.SysT0;
+			scroll_t0 = scroll_tp = td.UiT0;
 			break;
 		}
 		break;
@@ -177,7 +177,7 @@ bool Instrument_Map::KeyBuffered (DWORD key)
 
 bool Instrument_Map::KeyImmediate (char *kstate)
 {
-	double t = td.SysT0;
+	double t = td.UiT0;
 	double dt = max(t-scroll_t0, 0.0);
 	double mag = min(dt*0.5, 8.0);
 	double step = (t-scroll_tp) * mag / zoom;

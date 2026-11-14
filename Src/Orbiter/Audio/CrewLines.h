@@ -22,6 +22,7 @@ struct CrewLine {
 	bool warning = false;    ///< said first, its cue before it
 	double wait = 2.0;       ///< [s] dropped if not said by then
 	double gain = 1.0;
+	double cooldown = 0.0;   ///< [s] not said again within this (0: as often as it comes)
 };
 
 class CrewLines {

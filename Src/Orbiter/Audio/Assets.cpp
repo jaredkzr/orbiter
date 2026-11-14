@@ -127,13 +127,13 @@ void Assets::Prefetch (const std::string &path, unsigned rate, unsigned channels
 	if (!async) { if (measure) Measured (path); Load (path, rate, channels); return; }
 	const std::string key = Key (path, rate, channels);
 	std::lock_guard<std::mutex> l (m);
-	if (measure && !measures.count (path)) jobs.push_back ({path, std::string (), 0, 0, true}); // (first: ready with the clip)
+	if (measure && !measures.count (path)) jobs.push_back ({path, std::string (), 0, 0, true, nullptr}); // (first: ready with the clip)
 	auto it = clips.find (key);
 	if (it != clips.end () && (it->second.clip || it->second.failed || it->second.loading)) { it->second.used = ++clock; }
 	else {
 		clips[key].loading = true;
 		clips[key].used = ++clock;
-		jobs.push_back ({path, key, rate, channels, false});
+		jobs.push_back ({path, key, rate, channels, false, nullptr});
 	}
 	if (jobs.empty ()) return;
 	if (!worker.joinable ()) stopping = false, worker = std::thread (&Assets::Worker, this);
@@ -159,6 +159,16 @@ ClipRef Assets::Peek (const std::string &path, unsigned rate, unsigned channels,
 	return nullptr;
 }
 
+void Assets::Run (std::function<void ()> task)
+{
+	if (!task) return;
+	if (!async) { task (); return; }
+	std::lock_guard<std::mutex> l (m);
+	jobs.push_back ({std::string (), std::string (), 0, 0, false, std::move (task)});
+	if (!worker.joinable ()) stopping = false, worker = std::thread (&Assets::Worker, this);
+	cv.notify_one ();
+}
+
 void Assets::Worker ()
 {
 	std::unique_lock<std::mutex> l (m);
@@ -174,6 +184,7 @@ void Assets::Worker ()
 void Assets::Run (std::unique_lock<std::mutex> &l, const Job &j)
 {
 	l.unlock ();
+	if (j.task) { j.task (); l.lock (); return; }
 	if (j.measure) { Measured (j.path); l.lock (); return; }
 	ClipRef c = Decode (j.path, j.rate, j.channels);
 	l.lock ();
@@ -261,7 +272,7 @@ void Assets::Shutdown ()
 		std::lock_guard<std::mutex> l (m);
 		stopping = true;
 		// (jobs not begun: never loaded)
-		for (auto &j : jobs) if (!j.measure) { Entry &e = clips[j.key]; e.loading = false; e.failed = true; }
+		for (auto &j : jobs) if (!j.measure && !j.task) { Entry &e = clips[j.key]; e.loading = false; e.failed = true; }
 		jobs.clear ();
 		cv.notify_all ();
 		done.notify_all ();

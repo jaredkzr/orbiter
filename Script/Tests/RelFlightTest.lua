@@ -158,7 +158,7 @@ local function main()
 	fly:defset_status(st)
 	-- (a status is set some frames late: the attitude after it, the drive
 	-- once the attitude holds)
-	local function until_(cond) local tw = oapi.get_systime(); repeat proc.wait_frames(1) until cond() or oapi.get_systime() - tw > 10 end
+	local function until_(cond) local tw = oapi.get_systime(); repeat proc.wait_frames(1) until cond() or oapi.get_systime() - tw > 30 end   -- (a watchdog: wall time, generous - tests run side by side)
 	until_(function() return math.abs(prel().x + 1e11) < 1e6 and len(vrel()) < 1 end)
 	point(fly, {x = 1, y = 0, z = 0})
 	until_(function() local m = fly:get_rotationmatrix(); return m.m13 > 0.999999 end)
@@ -173,7 +173,7 @@ local function main()
 	local pred, predAt
 	local px, pm = prel().x, oapi.get_simmjd()
 	local tw = oapi.get_systime()
-	while prel().x < 0 and oapi.get_systime() - tw < 60 do
+	while prel().x < 0 and oapi.get_systime() - tw < 180 do
 		px, pm = prel().x, oapi.get_simmjd()
 		local ev = oapi.get_trajectoryevents(hf)
 		for _, e in ipairs(ev or {}) do

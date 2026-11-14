@@ -6,6 +6,7 @@
 #include "XRSound.h"
 #include "AudioSystem.h"
 #include "XrConfig.h"
+#include "Ears.h"
 #include "Orbiter.h"
 #include "Vessel.h"
 #include "Psys.h"
@@ -101,18 +102,20 @@ namespace {
 
 	System *Sys () { return g_pOrbiter ? g_pOrbiter->Audio () : nullptr; }
 
-	/// XRSound's volume 1 as a pressure: a file at full scale peaks at this [Pa]. In the cockpit
-	/// (InternalOnly), and the wind at the ear: 1 Pa (94 dB) - a loud cockpit sound, well over the
-	/// cabin's air (56 dB). On the vessel, at 2 m: Close 4 Pa (106 dB, a machine at hand; heard in
-	/// its cockpit through the hull some 10 dB over the cabin's air), Medium 8, Far 16 (XRSound's
-	/// steps of 6 dB). The voice's and the interface's buses: as a gain
-	constexpr double XR_COCKPIT_PA = 1.0, XR_CLOSE_PA = 4.0;
+	/// XRSound's volume 1 as a pressure: a file at full scale peaks at this [Pa]. Full scale (P_FULL,
+	/// 130 dB) in the cockpit (InternalOnly) and for the wind; on the vessel, at 2 m, Close a quarter
+	/// of it, Medium half, Far all (XRSound's steps of 6 dB) - chosen by ear (review 2026-11-14) over
+	/// quieter references: XR vessels' sounds as their authors balanced them, the ears' compressor
+	/// and listening level bringing them to the mix. The voice's and the interface's buses: as a gain
+	constexpr double XR_COCKPIT_PA = P_FULL, XR_CLOSE_PA = 0.25 * P_FULL;
 
 	/// Where a playback type's sound goes, and its level there (oapiAudioPlay's: AUDIO_LEVEL_PA)
 	struct Route { bool onVessel; Bus bus; double level; };
 	Route RouteFor (PT t, bool module)
 	{
-		const double close = XR_CLOSE_PA * AUDIO_LEVEL_PA, inside = XR_COCKPIT_PA * AUDIO_LEVEL_PA;
+		// (ORBITER_XR_PA=<cockpit>,<close>: other references, for listening tests)
+		const double close = (Dbg ().xrClosePa > 0.0 ? Dbg ().xrClosePa : XR_CLOSE_PA) * AUDIO_LEVEL_PA;
+		const double inside = (Dbg ().xrCockpitPa > 0.0 ? Dbg ().xrCockpitPa : XR_COCKPIT_PA) * AUDIO_LEVEL_PA;
 		if (module) return {false, UI, 1.0};
 		switch (t) {
 		case PT::BothViewFar:    return {true, EXTERIOR, 4.0 * close};

@@ -47,13 +47,13 @@ HELPCONTEXT *Instrument_Comms::HelpTopic () const
 bool Instrument_Comms::Update (double upDTscale)
 {
 	const double stept = 0.05;
-	if (scanning && td.SysT1-t_scan > stept) {
+	if (scanning && td.UiT1-t_scan > stept) {
 		const Nav *nav;
 		if (nav = vessel->nav[sel].sender)
 			scanning = false;
 		else {
 			SwitchFreq (sel, scanning, false);
-			t_scan = td.SysT1+stept;
+			t_scan = td.UiT1+stept;
 			Refresh();
 		}
 	}
@@ -142,7 +142,7 @@ bool Instrument_Comms::KeyBuffered (DWORD key)
 		if (sel < vessel->nnav) {
 			SwitchFreq (sel, -1, false);
 			scanning = -1;
-			t_scan = td.SysT0;
+			t_scan = td.UiT0;
 			Refresh();
 		}
 		return true;
@@ -150,7 +150,7 @@ bool Instrument_Comms::KeyBuffered (DWORD key)
 		if (sel < vessel->nnav) {
 			SwitchFreq (sel, 1, false);
 			scanning = 1;
-			t_scan = td.SysT0;
+			t_scan = td.UiT0;
 			Refresh();
 		}
 		return true;

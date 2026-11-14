@@ -139,11 +139,11 @@ void Vessel::FRecorder_Save (bool force)
 			double cddir = dotp (vel.unit(), frec_last.rvel.unit());
 
 			bool nextstep = (fstatus == FLIGHTSTATUS_FREEFLIGHT &&
-				(g_pOrbiter->Cfg()->CfgRecPlayPrm.bSysInterval ? td.SysT1 - frec_last_syst : td.SimT1 - frec_last.simt) > max_step);
+				(g_pOrbiter->Cfg()->CfgRecPlayPrm.bSysInterval ? td.UiT1 - frec_last_syst : td.SimT1 - frec_last.simt) > max_step);
 
 			if (nextstep || (cddir < 0.995) || force) {
 				frec_last.simt    = td.SimT1;
-				frec_last_syst    = td.SysT1;
+				frec_last_syst    = td.UiT1;
 				frec_last.fstatus = fstatus;
 				//frec_last.ref     = cbody;
 				//frec_last.rpos    = *gpos-cbody->GPos();
@@ -223,7 +223,7 @@ void Vessel::FRecorder_Save (bool force)
 				} break;
 			}
 			if (fstatus == FLIGHTSTATUS_FREEFLIGHT) {
-				bool finestep = ((g_pOrbiter->Cfg()->CfgRecPlayPrm.bSysInterval ? td.SysT1 - frec_att_last_syst : td.SimT1 - frec_att_last.simt) > att_step);
+				bool finestep = ((g_pOrbiter->Cfg()->CfgRecPlayPrm.bSysInterval ? td.UiT1 - frec_att_last_syst : td.SimT1 - frec_att_last.simt) > att_step);
 				alim = (finestep ? 1e-3 : 1e-2);
 				// the difference between two quaternions may have to be
 				// defined a bit more cleverly ...
@@ -243,7 +243,7 @@ void Vessel::FRecorder_Save (bool force)
 					ofs << ' ' << (/*frec_att_last.att[i] =*/ a[i]);
 				ofs << endl;
 				frec_att_last.q.Set (q);
-				frec_att_last_syst = td.SysT1;
+				frec_att_last_syst = td.UiT1;
 				frec_att_last.simt = td.SimT1;
 			}
 		
