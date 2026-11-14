@@ -46,7 +46,7 @@
 namespace audio {
 
 struct Clip;
-using ContactSample = Clip; // (a recording: mono, at the engine's rate)
+using ContactClip = Clip; // (a recording: mono, at the engine's rate)
 
 class ContactSynth : public SynthSource {
 public:
@@ -89,7 +89,7 @@ private:
 
 	// the recordings (shared, immutable once loaded)
 	enum Smp { S_CLUNK, S_THUMP, S_DOORCLOSE, S_BUMP, S_LATCH1, S_LATCH2, S_LATCH3, S_LOCK, S_SQUEAL, S_SCRAPE, S_MOTOR, NSMP };
-	std::shared_ptr<const ContactSample> smp[NSMP];
+	std::shared_ptr<const ContactClip> smp[NSMP];
 	bool hasSamples = false;
 
 	// (audio thread)
@@ -99,13 +99,13 @@ private:
 
 	/// A recording looped (crossfading at the seam)
 	struct Loop {
-		const ContactSample *s = nullptr;
+		const ContactClip *s = nullptr;
 		double pos = 0.0;
 		float Next (float rate);
 	};
 	/// A recording played once: at a rate (gliding), a gain (decaying), a tone
 	struct Shot {
-		const ContactSample *s = nullptr;
+		const ContactClip *s = nullptr;
 		double pos = 0.0;
 		float rate = 1.0f, glide = 1.0f, gain = 0.0f, decay = 1.0f, att = 1.0f, attK = 1.0f;
 		dsp::OnePole tone;

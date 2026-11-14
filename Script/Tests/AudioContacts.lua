@@ -4,9 +4,12 @@
 --   LAND:  gear down, 4 m up, 70 m/s, sinking 2 m/s: touchdown, rolling,
 --          brakes from 6 s
 --   BELLY: gear up, 1.5 m up, 30 m/s, sinking 1 m/s: the hull's thud, scraping
-local earth = oapi.get_objhandle("Earth")
+--   MOON:  gear down on the Moon's bare ground, 0.8 m up, sinking 1 m/s
 local belly = vessel.get_interface("BELLY") ~= nil
-local v = vessel.get_interface(belly and "BELLY" or "LAND")
+local moon = vessel.get_interface("MOON") ~= nil
+local v = vessel.get_interface(belly and "BELLY" or moon and "MOON" or "LAND")
+local earth = v:get_surfaceref()
+local earthName = oapi.get_objname(earth)
 local function at(t, f) while oapi.get_simtime() < t do if f then f() end; proc.skip() end end
 local function gpos() return oapi.get_globalpos(v:get_handle()) end
 local up = vec.unit(vec.sub(gpos(), oapi.get_globalpos(earth)))
@@ -15,7 +18,7 @@ local fwd = vec.sub(v:local2global({x=0, y=0, z=1}), gpos())
 local right = vec.sub(v:local2global({x=1, y=0, z=0}), gpos())
 local L = vec.add(gpos(), vec.add(vec.mul(fwd, belly and 30 or 90), vec.mul(right, 40)))
 local eq = oapi.global_to_equ(earth, L)
-oapi.set_cameramode({mode = 'ground', ref = 'Earth', lng = math.deg(eq.lng), lat = math.deg(eq.lat), alt = 2})
+oapi.set_cameramode({mode = 'ground', ref = earthName, lng = math.deg(eq.lng), lat = math.deg(eq.lat), alt = 2})
 at(1.0)
 -- (as DestructionTest's airborne(): level as on the ground; the attitude
 -- set again a frame later, as the status's angles don't hold it)
@@ -24,7 +27,7 @@ local y = vec.sub(v:local2global({x=0, y=1, z=0}), gpos())
 local z = fwd
 local R = {m11=x.x, m12=y.x, m13=z.x, m21=x.y, m22=y.y, m23=z.y, m31=x.z, m32=y.z, m33=z.z}
 local st = v:get_status(2)
-local h, spd, vs = belly and 0.5 or 0.8, belly and 30 or 70, -1.0
+local h, spd, vs = belly and 0.5 or 0.8, belly and 30 or moon and 0 or 70, -1.0
 st.status = 0
 st.arot = {x=math.atan2(R.m23, R.m33), y=-math.asin(R.m13), z=math.atan2(R.m12, R.m11)}
 st.rpos = vec.add(st.rpos, vec.mul(up, h))
@@ -39,6 +42,6 @@ local function report() oapi.write_log(string.format("AudioContacts: t %.2f alt 
 local nextReport = 0
 local function tick () if oapi.get_simtime() >= nextReport then report(); nextReport = oapi.get_simtime() + 0.5 end end
 at(6.0, tick)
-if not belly then at(12.0, function () v:set_wheelbrakelevel(1.0, 0, false); tick () end) end
+if not belly and not moon then at(12.0, function () v:set_wheelbrakelevel(1.0, 0, false); tick () end) end
 at(12.0, tick)
 oapi.exit(0)

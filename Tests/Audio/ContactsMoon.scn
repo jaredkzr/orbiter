@@ -1,0 +1,31 @@
+BEGIN_HYPERDESC
+Audio test: a delta-glider set down on the Moon's bare ground (Mare Tranquillitatis) (Script/Tests/AudioContacts).
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51985.24
+  Script Tests/AudioContacts
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship MOON
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET MOON
+  MODE Extern
+  POS 4.0 -20.0 -30
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+MOON:DeltaGlider
+  STATUS Landed Moon
+  POS 23.4700 0.6900
+  HEADING 330.01
+  PRPLEVEL 0:1.0 1:1.0
+  GEAR 1 1.0000
+END
+END_SHIPS

@@ -471,7 +471,11 @@ void Predictor::Update (const Vessel *v, const Body *target)
 	{
 		std::lock_guard<std::mutex> lock (mtx);
 		pending = in;
-		abort = true; // (a running prediction is outdated)
+		// (a running prediction is outdated when what it flies changed - the
+		// vessel, the target, the nodes, the drive; a refresh waits for it:
+		// refreshes as often as the session's clock asks, faster than a
+		// prediction takes in a fixed-step run, aborted each other forever)
+		if (changed) abort = true;
 	}
 	cv.notify_all();
 	lastVessel = v;

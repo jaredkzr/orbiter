@@ -419,32 +419,70 @@ VesselSounds::PerVessel *VesselSounds::Find (const Vessel *v)
 	return nullptr;
 }
 
-void VesselSounds::Contacts (const Vessel *v, const ContactStep &c)
+void VesselSounds::Contacts (const Vessel *v, const std::vector<ContactSample> &pts, SurfaceKind surface, double t, double h)
 {
 	PerVessel *pv = Find (v);
-	if (!pv || !c.any) return;
+	if (!pv || pts.empty ()) return;
+	pv->contacts.Step (t, h, pts, surface);
+	LogContacts (v, pv->contacts);
+	// (ContactSynth's: the step summed)
+	const ContactLevels &l = pv->contacts.Levels ();
 	ContactStep &s = pv->step;
-	s.wheelLoad += c.wheelLoad;
-	s.squealPower += c.squealPower;
-	s.scrapePower += c.scrapePower;
-	s.scrapeSpeed = std::max (s.scrapeSpeed, c.scrapeSpeed);
-	s.blowWheel = std::max (s.blowWheel, c.blowWheel);
-	s.blowHull = std::max (s.blowHull, c.blowHull);
-	s.blowVessel = std::max (s.blowVessel, c.blowVessel);
-	s.where = c.where;
+	s.wheelLoad += l.wheelLoad;
+	s.squealPower += l.scrubPower + 0.3 * l.brakePower;
+	s.scrapePower += l.scrapePower;
+	s.scrapeSpeed = std::max (s.scrapeSpeed, l.scrapeSpeed);
+	V3 wpos;
+	double wsum = 0.0;
+	for (const ContactSample &p : pts) {
+		double &blow = p.kind == ContactKind::WHEEL ? s.blowWheel : p.kind == ContactKind::VESSEL ? s.blowVessel : s.blowHull;
+		blow = std::max (blow, p.vn);
+		double w = p.Fn + std::hypot (p.Flong, p.Flat);
+		wpos = wpos + p.pos * w, wsum += w;
+	}
+	if (wsum > 0.0) s.where = wpos * (1.0 / wsum);
 	s.any = true;
 }
 
-void VesselSounds::Docked (const Vessel *v, const V3 &port, bool dock)
+void VesselSounds::LogContacts (const Vessel *v, ContactModel &m)
+{
+	if (Dbg ().log > 0)
+		for (const ContactEvent &e : m.Events ())
+			printf ("Audio: contact of %s: %s\n", v->Name (), Describe (e).c_str ()), fflush (stdout);
+	m.ClearEvents ();
+}
+
+void VesselSounds::Docked (const Vessel *v, const V3 &port, bool dock, double speed, double mred)
 {
 	PerVessel *pv = Find (v);
-	Emitter *contact = pv ? world.Get (pv->contact) : nullptr;
+	if (!pv) return;
+	if (dock) pv->contacts.Dock (now, port, speed, mred);
+	else pv->contacts.Undock (now, port, speed);
+	LogContacts (v, pv->contacts);
+	Emitter *contact = world.Get (pv->contact);
 	if (!contact) return;
 	int k = dock ? ContactSynth::DOCK : ContactSynth::UNDOCK;
 	pv->blows[k]++, pv->blowStrength[k] = 1.0f;
 	const bool log = Dbg ().log > 0;
 	if (log) printf ("Audio: %s of %s\n", dock ? "docking" : "undocking", v->Name ()), fflush (stdout);
 	contact->SetOffset (port);
+}
+
+void VesselSounds::PartBroke (const Vessel *v, const V3 &pos, double mass, double hit)
+{
+	PerVessel *pv = Find (v);
+	if (!pv) return;
+	pv->contacts.Break (now, pos, mass, hit);
+	LogContacts (v, pv->contacts);
+}
+
+void VesselSounds::Crash (const Vessel *v, double speed, double mass, double energy)
+{
+	if (Dbg ().log <= 0) return;
+	ContactEvent e;
+	e.type = ContactEvent::CRASH;
+	e.t = now, e.speed = speed, e.mass = mass, e.energy = energy;
+	printf ("Audio: contact of %s: %s\n", v->Name (), Describe (e).c_str ()), fflush (stdout);
 }
 
 void VesselSounds::UpdateContacts (PerVessel &pv, double t)

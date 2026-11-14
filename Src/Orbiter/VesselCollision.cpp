@@ -215,6 +215,7 @@ void VesselCollider::Resolve (double h)
 				p.mu1 = p.mu2 = FRICTION;
 				p.e = rel ? 0.0 : RESTITUTION;
 				p.warm = nullptr;
+				p.what = contact::VESSEL;
 				if (dynX) {
 					p.a = index[X], p.ra = g - cgX, p.n = mf.n;   // (out of y, towards x)
 					if (dynY) p.b = index[Y], p.rb = g - cgY;
@@ -254,6 +255,7 @@ void VesselCollider::Resolve (double h)
 				p.mu1 = p.mu2 = FRICTION;
 				p.e = RESTITUTION;
 				p.warm = nullptr;
+				p.what = contact::VESSEL;
 				if (dynA) {
 					p.a = index[A], p.ra = g - cgA, p.n = -pp.dir; // (out of B, towards A)
 					if (dynB) p.b = index[B], p.rb = g - cgB;
@@ -305,6 +307,7 @@ void VesselCollider::Resolve (double h)
 					p.k = p.c = 0.0;
 					p.mu1 = p.mu2 = FRICTION;
 					p.warm = nullptr;
+					p.what = contact::STRUCTURE;
 					p.a = index[A], p.ra = g - cgA, p.n = mf.n; // (out of the structure)
 					p.b = -1;
 					Vector pl (tmul (cb->s0->R, g + O - cb->s0->pos));

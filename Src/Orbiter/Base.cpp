@@ -698,6 +698,26 @@ void Base::Rel_EquPos (const Vector &relpos, double &_lng, double &_lat) const
 	_lat = atan2 (py, hypot (px, pz));
 }
 
+bool Base::Paved (double _lng, double _lat) const
+{
+	if (grades.empty ()) return false;
+	// (in its tangent plane: x south, z east; the inverse of Rel_EquPos)
+	double R = cbody->Size ();
+	double slng = sin (lng), clng = cos (lng), slat = sin (lat), clat = cos (lat);
+	Vector p (cos (_lat) * cos (_lng), sin (_lat), cos (_lat) * sin (_lng));
+	Vector c (clat * clng, slat, clat * slng);
+	if (dotp (p, c) < 0.99) return false; // (some 900 km away at least on Earth)
+	double x = R * dotp (p, Vector (slat * clng, -clat, slat * slng));
+	double z = R * dotp (p, Vector (-slng, 0.0, clng));
+	for (const Grade &g : grades) {
+		double br = g.bearing * RAD;
+		double dx = x - g.x, dz = z - g.z;
+		double along = -dx * cos (br) + dz * sin (br), across = dx * sin (br) + dz * cos (br);
+		if (fabs (along) <= 0.5 * g.len && fabs (across) <= 0.5 * g.wid) return true;
+	}
+	return false;
+}
+
 void Base::Pad_EquPos (DWORD padno, double &_lng, double &_lat) const
 {
 	_lng = lng;

@@ -213,6 +213,14 @@ set_target_properties(Audio.Flight PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITE
 add_test(NAME Audio.Flight COMMAND $<TARGET_FILE:Audio.Flight>)
 set_tests_properties(Audio.Flight PROPERTIES TIMEOUT 60)
 
+# What the contacts do (ContactModel): touchdowns, strikes, levels, docking; the log's lines
+add_executable(Audio.Contacts Audio.Contacts.cpp ${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Contacts.cpp ${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Track.cpp)
+target_include_directories(Audio.Contacts PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter)
+target_link_libraries(Audio.Contacts Catch2::Catch2WithMain)
+set_target_properties(Audio.Contacts PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER_BINARY_ROOT_DIR}")
+add_test(NAME Audio.Contacts COMMAND $<TARGET_FILE:Audio.Contacts>)
+set_tests_properties(Audio.Contacts PROPERTIES TIMEOUT 60)
+
 # The synthesizers: levels, spectra, booms, rocket noise
 set(AUDIO_SYNTH_SOURCES
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/AudioEngine.cpp
@@ -452,9 +460,13 @@ if (ORBITER_TEST_EXE)
 		# ORBITER_AUDIO_CONTACTS=1 here): a delta-glider set down
 		# on KSC's runway, heard from 40 m - silent until it touches down (1.28 s),
 		# the touchdown's thump, rolling; set down on its belly - the scrape, then
-		# silence when it has stopped. Docking (Scenarios/Tests/DockingTest): the
-		# clunk of A1's docking.
-		foreach(scene Land Belly)
+		# silence when it has stopped; set down on the Moon. Docking
+		# (Scenarios/Tests/DockingTest): the clunk of A1's docking.
+		# Their moments (Audio/Contacts.h, logged): on the runway the main gear's
+		# wheels strike, then the nose's, and braking hard from 6 s they are
+		# still wheels (no hull, no leg); on its belly the hull, not the gear;
+		# the Moon's ground is regolith; docking at its closing speed
+		foreach(scene Land Belly Moon)
 			add_test(
 				NAME "Audio.Contacts${scene}"
 				COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Audio/Contacts${scene}.scn" "--fixedstep=0.02"
@@ -463,7 +475,15 @@ if (ORBITER_TEST_EXE)
 			set_tests_properties(Audio.Contacts${scene} PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioContacts${scene}
 				ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Contacts${scene}.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0;ORBITER_AUDIO_AMBIENCE=0;ORBITER_AUDIO_RADIO=0;ORBITER_AUDIO_CONTACTS=1")
 		endforeach()
-		set_tests_properties(Audio.ContactsLand PROPERTIES PASS_REGULAR_EXPRESSION "Audio: touchdown blow of LAND at 1\\.[2-3]")
+		set_tests_properties(Audio.ContactsLand PROPERTIES
+			PASS_REGULAR_EXPRESSION "contact of LAND: impact wheel [12] at 1\\.2[0-9]* s[^\n]*paved.*contact of LAND: impact wheel 0 at 1\\.[23]"
+			FAIL_REGULAR_EXPRESSION "contact of LAND: impact (hull|leg|obstacle)")
+		set_tests_properties(Audio.ContactsBelly PROPERTIES
+			PASS_REGULAR_EXPRESSION "contact of BELLY: impact hull [0-2] at 0\\.4"
+			FAIL_REGULAR_EXPRESSION "contact of BELLY: impact (wheel|leg)")
+		set_tests_properties(Audio.ContactsMoon PROPERTIES
+			PASS_REGULAR_EXPRESSION "contact of MOON: impact wheel [0-2] at 1\\.[0-9]+ s[^\n]*regolith"
+			FAIL_REGULAR_EXPRESSION "contact of MOON: impact [^\n]*(paved|soil)")
 		add_test(
 			NAME "Audio.ContactsLandCheck"
 			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.ContactsLand.wav" --duration 12.0 --no-clip
@@ -520,8 +540,19 @@ if (ORBITER_TEST_EXE)
 			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Scenarios/Tests/DockingTest.scn" "--fixedstep=0.02"
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
-		set_tests_properties(Audio.Docking PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "Audio: docking of A1"
+		set_tests_properties(Audio.Docking PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "contact of A1: dock at [0-9.]+ s: 0\\.(1[5-9]|2[0-5])[0-9]* m/s, 1\\.2[0-9]*e\\+04 kg"
 			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Docking.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0;ORBITER_AUDIO_AMBIENCE=0;ORBITER_AUDIO_RADIO=0;ORBITER_AUDIO_CONTACTS=1")
+		# a part breaking off, a crash (Audio/Contacts.h, logged): the structure
+		# test's DROP, dropped flat from 150 m - its forward section breaks off
+		# on the ground at some 40 m/s, then it is destroyed in the impact
+		add_test(
+			NAME "Audio.Destruction"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Scenarios/Tests/DestructionTest.scn" "--fixedstep=0.02"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.Destruction PROPERTIES TIMEOUT 300
+			PASS_REGULAR_EXPRESSION "contact of DROP: break at [0-9.]+ s: [0-9]+ kg, [2-6][0-9]\\.[0-9]+ m/s.*contact of DROP: crash at [0-9.]+ s: [4-6][0-9]\\.[0-9]+ m/s"
+			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Destruction.wav;ORBITER_AUDIO_LOG=events;ORBITER_DAMAGE=1;ORBITER_AUDIO_CALLOUTS=0;ORBITER_AUDIO_AMBIENCE=0;ORBITER_AUDIO_RADIO=0")
 		# an explosion's blast (Effects, BlastSynth): a fuelled DG breaking up
 		# 1 km away - silent until its blast arrives, 1001 m / 340 m/s later
 		# (frames capped: a script that didn't load would run on)

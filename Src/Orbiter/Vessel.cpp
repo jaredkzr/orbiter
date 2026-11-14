@@ -2798,6 +2798,16 @@ int Vessel::Dock (Vessel *target, DWORD mydid, DWORD tgtdid, DWORD mode)
 		if (supervessel->isComponent (target)) return 3;
 		// error: we are already docked to the target (directly or indirectly)
 
+	// (how they met, for the sound: the ports' closing speed, the stacks' reduced mass)
+	double dockSpeed, dockMass;
+	{
+		collision::Port pa (PortState (*s0, mydid)), pb (target->PortState (*target->s0, tgtdid));
+		dockSpeed = (pa.vel - pb.vel).length ();
+		double ma = supervessel ? supervessel->Mass () : Mass ();
+		double mb = target->supervessel ? target->supervessel->Mass () : target->Mass ();
+		dockMass = ma + mb > 0.0 ? ma * mb / (ma + mb) : 0.0;
+	}
+
 	if (mode) {
 		Vector P;
 		Matrix R;
@@ -2835,7 +2845,7 @@ int Vessel::Dock (Vessel *target, DWORD mydid, DWORD tgtdid, DWORD mode)
 	RegisterDocking (mydid, target, tgtdid);
 	target->RegisterDocking (tgtdid, this, mydid);
 	if (audio::System *as = g_pOrbiter->Audio ()) // (the clunk and the latches)
-		as->Docked (this, audio::V3 (dock[mydid]->ref.x, dock[mydid]->ref.y, dock[mydid]->ref.z), true);
+		as->Docked (this, audio::V3 (dock[mydid]->ref.x, dock[mydid]->ref.y, dock[mydid]->ref.z), true, dockSpeed, dockMass);
 	if (this == g_focusobj || target == g_focusobj) { // (the player hears of it)
 		char detail[256];
 		// (the player's vessel first)
@@ -2864,9 +2874,9 @@ bool Vessel::Undock (UINT did, const Vessel *exclude, double vsep)
 				flightevent::Post (flightevent::INFO, "Undocked", detail);
 			}
 			if (audio::System *as = g_pOrbiter->Audio ()) { // (the latches and the push-off: on both)
-				as->Docked (this, audio::V3 (dock[n]->ref.x, dock[n]->ref.y, dock[n]->ref.z), false);
+				as->Docked (this, audio::V3 (dock[n]->ref.x, dock[n]->ref.y, dock[n]->ref.z), false, vsep);
 				const PortSpec *mp = dock[n]->mate->dock[dock[n]->matedock];
-				as->Docked (dock[n]->mate, audio::V3 (mp->ref.x, mp->ref.y, mp->ref.z), false);
+				as->Docked (dock[n]->mate, audio::V3 (mp->ref.x, mp->ref.y, mp->ref.z), false, vsep);
 			}
 			g_psys->UndockVessel (supervessel, this, n, vsep);
 			dock[n]->mate->UnregisterDocking (dock[n]->matedock);
@@ -4619,6 +4629,7 @@ void Vessel::CollectGroundContacts (const StateVectors &s, const StateVectors &s
 		}
 		p.mu2 = tv.mu;
 		p.warm = warm;
+		p.id = (int)i;
 		pts.push_back (p);
 
 		// (force vectors for display: friction of the last step)
@@ -4725,6 +4736,7 @@ void Vessel::CollectGroundContacts (const StateVectors &s, const StateVectors &s
 						p.k = p.c = 0.0;
 						p.mu1 = p.mu2 = 0.6;
 						p.warm = nullptr;
+						p.what = contact::OBSTACLE;
 						pts.push_back (p);
 					}
 				}
@@ -4945,6 +4957,13 @@ int Vessel::BreakPart (int part, double vsep)
 	for (int p : piece) m += parts[p].mass, cg += parts[p].cg * parts[p].mass;
 	if (m <= 0.0) return 0;
 	cg /= m;
+	if (!silent_break && !breaking_up) // (the sound of it tearing off: a crash is its own)
+		if (audio::System *as = g_pOrbiter->Audio ()) {
+			double hit = 0.0;
+			for (int p : piece) if (p < (int)part_hit.size ()) hit = std::max (hit, part_hit[p]);
+			if (td.SimT1 - touched_t < CRASH_CONTACT_T) hit = std::max (hit, sp.groundspd); // (the ground's blows aren't in part_hit)
+			as->PartBroke (this, audio::V3 (cg.x, cg.y, cg.z), m, hit);
+		}
 
 	// its triangles (in the order the structure was made from them)
 	std::vector<Debris::Group> groups;
@@ -5135,23 +5154,23 @@ void Vessel::RecordForce (const Vector &F, const void *e, const Vector &ref)
 }
 
 // =======================================================================
-// What the contacts of a step sound like (Audio/VesselSounds): the wheels'
-// load and skids, the hull scraping, blows (contacts closing fast)
+// What the contacts of a step sound like (Audio/Contacts.h): a sample of
+// each point - which, what kind, its force, slip, closing speed - and the
+// surface under the vessel
 
 void Vessel::SoundContacts (const std::vector<contact::Point> &pts, int index, double h, const std::vector<contact::Body> *pre) const
 {
 	audio::System *as = g_pOrbiter ? g_pOrbiter->Audio () : nullptr;
 	if (!as || !as->GetEngine ().Active ()) return;
-	audio::ContactStep cs;
+	static std::vector<audio::ContactSample> samples;
+	samples.clear ();
 	const contact::Body me = (pre && index >= 0 && index < (int)pre->size ()) ? (*pre)[index] : ContactBody ();
 	// (the step's gravity: what a resting contact closes by)
 	double g = proxybody ? Ggrav * proxybody->Mass () / std::max (s0->pos.dist2 (proxybody->GPos ()), 1.0) : 0.0;
-	Vector wpos;
-	double wsum = 0.0;
+	const Matrix &R = StartState ().R;
 	for (const contact::Point &p : pts) {
 		if (p.a != index && p.b != index) continue;
-		double lt = std::hypot (p.l1, p.l2);
-		if (p.ln <= 0.0 && lt <= 0.0) continue;
+		if (p.ln <= 0.0 && p.l1 == 0.0 && p.l2 == 0.0) continue;
 		bool isA = p.a == index;
 		const Vector &r = isA ? p.ra : p.rb;
 		Vector n = isA ? p.n : -p.n;               // (towards this vessel)
@@ -5161,35 +5180,61 @@ void Vessel::SoundContacts (const std::vector<contact::Point> &pts, int index, d
 		if (o < 0) vo = p.vs;
 		else if (pre && o < (int)pre->size ()) vo = (*pre)[o].v + crossp (isA ? p.rb : p.ra, (*pre)[o].w);
 		Vector vrel = vme - vo;
-		double vn = -dotp (vrel, n) - g * h;       // (closing, beyond the step's fall)
-		Vector vt = vrel - n * dotp (vrel, n);
-		double slip = vt.length ();
-		bool wheel = p.k > 0.0 && p.mu1 < 0.3;
-		if (o >= 0) {
-			cs.blowVessel = std::max (cs.blowVessel, vn);
-		} else if (wheel) {
-			cs.wheelLoad += p.ln / h;
-			// a wheel slips sideways; it skids along when braked hard
-			cs.squealPower += std::fabs (p.l2) / h * std::fabs (dotp (vrel, p.t2));
-			if (p.mu1 > 0.2) cs.squealPower += 0.3 * std::fabs (p.l1) / h * std::fabs (dotp (vrel, p.t1));
-			cs.blowWheel = std::max (cs.blowWheel, vn);
-		} else {
-			cs.scrapePower += lt / h * slip;
-			cs.scrapeSpeed = std::max (cs.scrapeSpeed, slip);
-			cs.blowHull = std::max (cs.blowHull, vn);
-		}
-		double w = p.ln + lt;
-		wpos += r * w, wsum += w;
+		audio::ContactSample cs;
+		// what touched: a touchdown point - the gear (the first three, sprung:
+		// a wheel if it rolls, by its own friction - braked, it is still one -
+		// else a leg, a skid), or the hull's (the rest; and the first three
+		// when stiff as a hull is: a third of the vessel on one bouncing above
+		// SPRUNG_HZ - the delta-glider's gear up, its belly); the hull
+		// touching the ground, an obstacle, another vessel
+		const double SPRUNG_HZ = 5.0;
+		if (p.what == contact::VESSEL || o >= 0) cs.kind = audio::ContactKind::VESSEL;
+		else if (p.what == contact::OBSTACLE || p.what == contact::STRUCTURE) cs.kind = audio::ContactKind::OBSTACLE;
+		else if (isA && p.id >= 0 && p.id < (int)ntouchdown_vtx) {
+			const TOUCHDOWN_VTX &tv = touchdown_vtx[p.id];
+			cs.id = p.id;
+			const double fn = std::sqrt (tv.stiffness / std::max (mass / 3.0, 1.0)) / Pi2;
+			if (p.id < 3 && tv.stiffness > 0.0 && fn < SPRUNG_HZ) {
+				cs.kind = tv.mu_lng < 0.3 ? audio::ContactKind::WHEEL : audio::ContactKind::LEG;
+				if (p.id && wbrake[p.id - 1]) cs.brake = wbrake[p.id - 1];
+			} else cs.kind = audio::ContactKind::HULL;
+		} else cs.kind = audio::ContactKind::HULL;
+		Vector t1 = isA ? p.t1 : -p.t1, t2 = isA ? p.t2 : -p.t2;
+		cs.Fn = p.ln / h;
+		cs.Flong = p.l1 / h, cs.Flat = p.l2 / h;
+		cs.slipLong = dotp (vrel, t1), cs.slipLat = dotp (vrel, t2);
+		cs.vn = -dotp (vrel, n) - g * h;           // (closing, beyond the step's fall)
+		cs.meff = p.Kn > 0.0 ? 1.0 / p.Kn : me.mass;
+		cs.mu = p.mu1;
+		Vector loc (tmul (R, r));
+		cs.pos = audio::V3 (loc.x, loc.y, loc.z);
+		samples.push_back (cs);
 	}
-	if (wsum <= 0.0) return;
-	Vector loc (tmul (StartState ().R, wpos / wsum));
-	cs.where = audio::V3 (loc.x, loc.y, loc.z);
-	cs.any = true;
-	as->Contacts (this, cs);
+	if (samples.empty ()) return;
+	as->Contacts (this, samples, ContactSurface (), td.SimT1, h);
+}
+
+audio::SurfaceKind Vessel::ContactSurface () const
+{
+	// (a base's pads, decks and graded ground first: a pad on the Moon is
+	// paved too; then the bare ground - an airless body's is regolith)
+	const Planet *pl = proxyplanet;
+	if (!pl) return audio::SurfaceKind::ROCK;
+	double lng, lat, rad;
+	pl->GlobalToEquatorial (s0->pos, lng, lat, rad);
+	if (const ElevationManager *emgr = pl->ElevMgr ())
+		if (emgr->DeckElevation (lat, lng) > -1e9 || emgr->DryLand (lat, lng)) return audio::SurfaceKind::PAVED;
+	for (DWORD i = 0; i < pl->nBase (); i++)
+		if (pl->GetBase (i)->Paved (lng, lat)) return audio::SurfaceKind::PAVED;
+	const ATMCONST *atm = pl->AtmParams ();
+	if (!atm || atm->p0 <= 0.0) return audio::SurfaceKind::REGOLITH;
+	return audio::SurfaceKind::SOIL;
 }
 
 void Vessel::ContactsResolved (const std::vector<contact::Point> &pts, int index, double h, const std::vector<contact::Body> *pre)
 {
+	for (const contact::Point &p : pts)
+		if ((p.a == index || p.b == index) && (p.ln > 0.0 || p.l1 != 0.0 || p.l2 != 0.0)) { touched_t = td.SimT1; break; }
 	if (h > 0.0) SoundContacts (pts, index, h, pre);
 	if (!loads_on || h <= 0.0 || part_Fc.empty()) return;
 	// Impacts are taken to decelerate the structure over a crush stroke
@@ -5602,7 +5647,17 @@ void Vessel::Destroy (const char *reason)
 	// every part a piece of its own, flying apart; then the core. The
 	// propellant left burns in them (shared out by mass: the fireball)
 	double fuel = mass - StructMass() - payload_mass, mleft = std::max (StructMass(), 1.0);
-	if (audio::System *as = g_pOrbiter->Audio ()) as->Explosion (this, std::max (fuel, 0.0)); // (the blast)
+	if (audio::System *as = g_pOrbiter->Audio ()) {
+		// (a crash: struck - the ground, a vessel, a building - within the
+		// last moments; its speed then, against what it hit)
+		if (td.SimT1 - touched_t < CRASH_CONTACT_T) {
+			double hit = 0.0;
+			for (double v : part_hit) hit = std::max (hit, v);
+			double speed = std::max (hit, sp.groundspd);
+			as->Crash (this, speed, mass, 0.5 * mass * speed * speed);
+		}
+		as->Explosion (this, std::max (fuel, 0.0)); // (the blast)
+	}
 	breaking_up = true;
 	double mmax = 0.0;
 	const Vector vstart (((g_bStateUpdate && s1 && s1 != s0) ? s1 : s0)->vel);

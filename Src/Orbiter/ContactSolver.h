@@ -30,6 +30,9 @@ namespace contact {
 		               ///< the body over the step, but are not kept (no energy gained by the correction)
 	};
 
+	/// What a point touches (for the sounds: the solver doesn't look)
+	enum Touches { GROUND = 0, OBSTACLE = 1, VESSEL = 2, STRUCTURE = 3 };
+
 	/// A point of contact of body a with body b, or with a fixed surface
 	/// (b < 0: the ground, or a vessel at rest on it), or about to be within
 	/// the step
@@ -44,6 +47,8 @@ namespace contact {
 		double mu1, mu2;    ///< friction coefficients along t1, t2
 		double e = 0.0;     ///< restitution of a blow (rigid contacts closing faster than REST_SPEED)
 		double *warm;       ///< impulses of the previous step (normal, t1, t2), for warm starting (or null)
+		int id = -1;        ///< which point of body a: a touchdown point's index (-1: none)
+		int what = GROUND;  ///< what it touches (Touches)
 
 		// (solver)
 		double Kn, K1, K2;  // inverse effective mass along n, t1, t2

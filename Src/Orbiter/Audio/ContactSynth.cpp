@@ -28,7 +28,7 @@ namespace {
 	std::mutex dirMx;
 	std::string sampleDir;
 
-	std::shared_ptr<const ContactSample> LoadOne (const std::string &dir, const char *name, unsigned rate)
+	std::shared_ptr<const ContactClip> LoadOne (const std::string &dir, const char *name, unsigned rate)
 	{
 		ClipRef c = Assets::Get ().Load (dir + "/" + name + ".flac", rate, 1);
 		return c && c->pcm.size () > 2 * SEAM ? c : nullptr;

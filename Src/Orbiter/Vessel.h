@@ -42,6 +42,7 @@ class Station;
 class HUD;
 class Panel2D;
 class Nav;
+namespace audio { enum class SurfaceKind; }
 class Nav_IDS;
 class Nav_XPDR;
 class ExhaustStream;
@@ -1355,6 +1356,8 @@ protected:
 	void ContactsResolved (const std::vector<contact::Point> &pts, int index, double h, const std::vector<contact::Body> *pre = nullptr) override;
 	/// What the step's contacts sound like (to the audio system)
 	void SoundContacts (const std::vector<contact::Point> &pts, int index, double h, const std::vector<contact::Body> *pre) const;
+	/// The ground under it, as it sounds (paved, regolith, soil)
+	audio::SurfaceKind ContactSurface () const;
 	void UpdateStructuralLoads ();
 	void KeepImpulse (class Debris *d, const Vector &J);
 	Vector BoundKept (const std::vector<int> &parts, const Vector &dv) const;
@@ -1916,6 +1919,8 @@ private:
 
 	Vessel *proxyvessel;      // closest vessel
 	SuperVessel *supervessel; // vessel superstructure (docking complex)
+	double touched_t = -1e10;     // [s] its last contact (ground, obstacle, vessel)
+	static constexpr double CRASH_CONTACT_T = 0.5; // [s] destroyed this soon after a contact: a crash
 	Base    *landtgt;         // landing target (base)
 	int   lstatus;            // landing/docking comms status (0=no contact, 1=contact,
 	DWORD nport;              // allocated landing pad/docking port no (>=0, (DWORD)-1=none)

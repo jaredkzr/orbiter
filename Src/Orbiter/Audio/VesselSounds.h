@@ -27,6 +27,7 @@
 #ifndef __VESSELSOUNDS_H
 #define __VESSELSOUNDS_H
 
+#include "Contacts.h"
 #include "World.h"
 #include <algorithm>
 #include <cmath>
@@ -44,7 +45,7 @@ class RcsSynth;
 class WindSynth;
 class ContactSynth;
 
-/// A vessel's contacts over a time step (from the contact solver)
+/// A vessel's contacts over a time step, summed (ContactSynth's)
 struct ContactStep {
 	double wheelLoad = 0.0;      // the wheels' normal force [N]
 	double squealPower = 0.0;    // the wheels' friction times their slip [W]
@@ -69,10 +70,15 @@ public:
 	/// simulation's, or a replay's: then the air over the vessels from their
 	/// states shown, no contacts)
 	void Update (double t, bool replay);
-	/// A vessel's contacts of the step (Vessel::ContactsResolved)
-	void Contacts (const Vessel *v, const ContactStep &c);
-	/// Docking and undocking (at the vessel's port, vessel frame)
-	void Docked (const Vessel *v, const V3 &port, bool dock);
+	/// A vessel's contact points of a step (Vessel::SoundContacts), to time t, of length h
+	void Contacts (const Vessel *v, const std::vector<ContactSample> &pts, SurfaceKind surface, double t, double h);
+	/// Docking and undocking (at the vessel's port, vessel frame; speed:
+	/// closing, separating [m/s]; mred: the reduced mass [kg])
+	void Docked (const Vessel *v, const V3 &port, bool dock, double speed, double mred);
+	/// A part broke off (its centre, vessel frame; its mass; struck at hit [m/s])
+	void PartBroke (const Vessel *v, const V3 &pos, double mass, double hit);
+	/// The vessel was destroyed in an impact
+	void Crash (const Vessel *v, double speed, double mass, double energy);
 
 	/// How a vessel sounds, tuned (Config/Sound/<class>.cfg, oapiAudioTune):
 	/// factors on its sounds' levels and pitches
@@ -121,6 +127,7 @@ private:
 		EmitterId contact;         // (a ContactSynth's)
 		double contactMass = 1.0;  // (its loudness by the vessel's mass, when made)
 		ContactStep step;          // this step's contacts (summed until the update)
+		ContactModel contacts;     // what its contacts do (the moments, the levels)
 		double lastBlow[3] = {-1e9, -1e9, -1e9}; // [s] the last blow of each kind (wheel, hull, vessel)
 		int blows[8] = {};         // blows struck so far, by kind (recalled with the travel time)
 		float blowStrength[8] = {};
@@ -141,6 +148,8 @@ private:
 	double now = 0.0, dtNow = 0.0;  // (this update's time and step)
 	bool replaying = false;
 	void UpdateContacts (PerVessel &pv, double t);
+	/// Its contacts' moments: logged (ORBITER_AUDIO_LOG), then cleared
+	void LogContacts (const Vessel *v, ContactModel &m);
 
 	Engine &engine;
 	World &world;

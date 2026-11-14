@@ -78,13 +78,20 @@ public:
 	/// A body is deleted: its sounds go (World::Forget: every emitter and
 	/// identity of it; each part of the sound finds its own gone)
 	void Forget (const Body *body) { world.Forget (body); }
-	/// A vessel's contacts of a step; docking and undocking at a port
-	void Contacts (const Vessel *v, const ContactStep &c) { vessels.Contacts (v, c); }
-	void Docked (const Vessel *v, const V3 &port, bool dock)
+	/// A vessel's contact points over a step (to time t [s], of length h),
+	/// on a surface; docking and undocking at a port (speed: closing, or
+	/// separating [m/s]; mred: the stacks' reduced mass [kg]); a part of it
+	/// breaking off (pos: the piece's centre, vessel frame; hit: what it was
+	/// struck at [m/s]); a crash (destroyed in an impact at speed [m/s])
+	void Contacts (const Vessel *v, const std::vector<ContactSample> &pts, SurfaceKind s, double t, double h)
+	{ vessels.Contacts (v, pts, s, t, h); }
+	void Docked (const Vessel *v, const V3 &port, bool dock, double speed = 0.0, double mred = 0.0)
 	{
-		vessels.Docked (v, port, dock);
+		vessels.Docked (v, port, dock, speed, mred);
 		Event (v, dock ? Callouts::EV_DOCKED : Callouts::EV_UNDOCKED);
 	}
+	void PartBroke (const Vessel *v, const V3 &pos, double mass, double hit) { vessels.PartBroke (v, pos, mass, hit); }
+	void Crash (const Vessel *v, double speed, double mass, double energy) { vessels.Crash (v, speed, mass, energy); }
 	/// Something happened to a vessel the voice may call out
 	void Event (const Vessel *v, Callouts::Event e);
 	/// A vessel breaks up with propellant [kg] aboard: its blast

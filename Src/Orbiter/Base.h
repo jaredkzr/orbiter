@@ -77,6 +77,9 @@ public:
 	/// a level area take its level
 	struct Grade { double x, z, len, wid, bearing; bool plane; int group; bool level = false; }; // (level: across it, a runway)
 	const std::vector<Grade> &Grades () const { return grades; }
+	/// A place (equatorial) on its graded ground: a runway, its overruns and
+	/// shoulders, a graded area (the sounds: paved)
+	bool Paved (double lng, double lat) const;
 
 	inline bool Floating() const { return floating; }
 	// A floating base (ALTITUDE in its file): an aerostat; its origin at its
