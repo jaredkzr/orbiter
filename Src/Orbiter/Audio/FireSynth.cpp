@@ -11,9 +11,9 @@ namespace {
 	constexpr float TWO_PI = 6.2831853f;
 }
 
-std::unique_ptr<FireSynth> FireSynth::Make (Engine &e, uint32_t seed)
+SourcePtr<FireSynth> FireSynth::Make (Engine &e, uint32_t seed)
 {
-	std::unique_ptr<FireSynth> s (new FireSynth (seed));
+	SourcePtr<FireSynth> s (new FireSynth (seed));
 	if (!s->Init (e)) return nullptr;
 	return s;
 }

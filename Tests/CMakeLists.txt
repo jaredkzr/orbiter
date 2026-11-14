@@ -182,13 +182,44 @@ set_target_properties(Audio.Propagation PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${O
 add_test(NAME Audio.Propagation COMMAND $<TARGET_FILE:Audio.Propagation>)
 set_tests_properties(Audio.Propagation PROPERTIES TIMEOUT 60)
 
+# The world without Orbiter (a scene of its own): fly-bys, the shock cone, the
+# cockpit, vacuum; emitters' handles, bodies' identities
+add_executable(Audio.World Audio.World.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/World.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Track.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Medium.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/PathNode.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Hrtf.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/AudioEngine.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Ears.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Assets.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/DebugEnv.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Loudness.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Miniaudio.cpp)
+target_include_directories(Audio.World PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter ${CMAKE_SOURCE_DIR}/Extern/miniaudio)
+target_link_libraries(Audio.World Catch2::Catch2WithMain ${CMAKE_DL_LIBS} Threads::Threads m)
+set_target_properties(Audio.World PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER_BINARY_ROOT_DIR}")
+add_test(NAME Audio.World COMMAND $<TARGET_FILE:Audio.World>)
+set_tests_properties(Audio.World PROPERTIES TIMEOUT 60)
+
+# The flight as the sound follows it (FlightState): recorded traces and tables; the crew's lines' table
+add_executable(Audio.Flight Audio.Flight.cpp ${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/FlightState.cpp ${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/CrewLines.cpp ${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/DebugEnv.cpp)
+target_include_directories(Audio.Flight PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter)
+target_compile_definitions(Audio.Flight PRIVATE TESTS_DIR="${CMAKE_SOURCE_DIR}/Tests" SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_link_libraries(Audio.Flight Catch2::Catch2WithMain)
+set_target_properties(Audio.Flight PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER_BINARY_ROOT_DIR}")
+add_test(NAME Audio.Flight COMMAND $<TARGET_FILE:Audio.Flight>)
+set_tests_properties(Audio.Flight PROPERTIES TIMEOUT 60)
+
 # The synthesizers: levels, spectra, booms, rocket noise
-add_executable(Audio.Synth Audio.Synth.cpp
+set(AUDIO_SYNTH_SOURCES
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/AudioEngine.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Ears.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/PathNode.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Hrtf.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Loudness.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Assets.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/DebugEnv.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Synth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/RocketSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/RcsSynth.cpp
@@ -205,12 +236,34 @@ add_executable(Audio.Synth Audio.Synth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/RadioSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/WavWriter.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Miniaudio.cpp)
+add_executable(Audio.Synth Audio.Synth.cpp ${AUDIO_SYNTH_SOURCES})
 target_compile_definitions(Audio.Synth PRIVATE AUDIO_SYNTH_TEST)
 target_include_directories(Audio.Synth PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter ${CMAKE_SOURCE_DIR}/Extern/miniaudio)
 target_link_libraries(Audio.Synth Catch2::Catch2WithMain ${CMAKE_DL_LIBS} Threads::Threads m)
 set_target_properties(Audio.Synth PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER_BINARY_ROOT_DIR}")
 add_test(NAME Audio.Synth COMMAND $<TARGET_FILE:Audio.Synth> WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}) # (Sound/Contacts: the contacts' recordings)
 set_tests_properties(Audio.Synth PROPERTIES TIMEOUT 120)
+
+# The audio thread's rules: rendering allocates nothing; sources created and
+# destroyed while a real audio thread (the null backend's) renders them
+add_executable(Audio.Churn Audio.Churn.cpp ${AUDIO_SYNTH_SOURCES})
+target_include_directories(Audio.Churn PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter ${CMAKE_SOURCE_DIR}/Extern/miniaudio)
+target_link_libraries(Audio.Churn Catch2::Catch2WithMain ${CMAKE_DL_LIBS} Threads::Threads m)
+set_target_properties(Audio.Churn PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER_BINARY_ROOT_DIR}")
+add_test(NAME Audio.Churn COMMAND $<TARGET_FILE:Audio.Churn> WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR})
+set_tests_properties(Audio.Churn PROPERTIES TIMEOUT 120)
+# ... with ThreadSanitizer: the races between the threads
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+	add_executable(Audio.ChurnTSan Audio.Churn.cpp ${AUDIO_SYNTH_SOURCES})
+	target_compile_definitions(Audio.ChurnTSan PRIVATE AUDIO_TSAN)
+	target_compile_options(Audio.ChurnTSan PRIVATE -fsanitize=thread -g -O1)
+	target_link_options(Audio.ChurnTSan PRIVATE -fsanitize=thread)
+	target_include_directories(Audio.ChurnTSan PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter ${CMAKE_SOURCE_DIR}/Extern/miniaudio)
+	target_link_libraries(Audio.ChurnTSan Catch2::Catch2WithMain ${CMAKE_DL_LIBS} Threads::Threads m)
+	set_target_properties(Audio.ChurnTSan PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER_BINARY_ROOT_DIR}")
+	add_test(NAME Audio.ChurnTSan COMMAND $<TARGET_FILE:Audio.ChurnTSan> "Sources come and go*" WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR})
+	set_tests_properties(Audio.ChurnTSan PROPERTIES TIMEOUT 300 ENVIRONMENT "TSAN_OPTIONS=halt_on_error=1 second_deadlock_stack=1")
+endif()
 
 # Scenario tests need an Orbiter executable that runs without graphics client
 if (ORBITER_HEADLESS)
@@ -442,6 +495,23 @@ if (ORBITER_TEST_EXE)
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.ApiCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioApi)
+		# ... the files decoded in the background as on the device (ORBITER_AUDIO_ASYNC=1):
+		# each sound waits for its file, then plays (a step or so later: the same checks)
+		add_test(
+			NAME "Audio.ApiAsync"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Audio/Api.scn" "--fixedstep=0.02"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.ApiAsync PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioApiAsync
+			ENVIRONMENT "ORBITER_AUDIO_ASYNC=1;ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.ApiAsync.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0;ORBITER_AUDIO_AMBIENCE=0;ORBITER_AUDIO_RADIO=0;ORBITER_AUDIO_CONTACTS=1")
+		add_test(
+			NAME "Audio.ApiAsyncCheck"
+			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.ApiAsync.wav" --duration 29.0 --no-clip
+				--level 0.5:0.8:all:-60:-5 --level 1.2:1.9:all:-inf:-80 --level 2.0:2.3:all:-60:-5
+				--level 5.3:5.9:all:-inf:-80 --level 8:24:120-200:-80:-20 --level 27:29:all:-inf:-80
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.ApiAsyncCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioApiAsync)
 		add_test(
 			NAME "Audio.Docking"
 			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Scenarios/Tests/DockingTest.scn" "--fixedstep=0.02"
@@ -534,11 +604,21 @@ if (ORBITER_TEST_EXE)
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.CalloutsCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioCallouts)
+		# ... the lines decoded in the background (as on the device): all of them still said
+		add_test(
+			NAME "Audio.CalloutsAsync"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Audio/Callouts.scn" "--fixedstep=0.02"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.CalloutsAsync PROPERTIES TIMEOUT 300
+			ENVIRONMENT "ORBITER_AUDIO_ASYNC=1;ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.CalloutsAsync.wav;ORBITER_AUDIO_CALLOUTS=1;ORBITER_AUDIO_AMBIENCE=0;ORBITER_AUDIO_RADIO=0;ORBITER_DAMAGE=0")
 		# the Relativistic Travel drive's sound: a trip to Mars from an outside camera - heard with
-		# cinematic sound (engage, accelerate, decelerate, disengage, in that order), not with physical
+		# cinematic sound (engage, accelerate, decelerate, disengage, in that order), not with physical.
+		# (The first trip arrives near frame 6000 - the time acceleration ramps on the wall clock,
+		# so a frame or so either way under load: run on past it, its disengage heard)
 		add_test(
 			NAME "Audio.WarpDriveCinematic"
-			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Scenarios/Tests/RelTripTest.scn" "--fixedstep=0.02" "--maxframes=6000"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Scenarios/Tests/RelTripTest.scn" "--fixedstep=0.02" "--maxframes=6600"
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.WarpDriveCinematic PROPERTIES TIMEOUT 300
@@ -629,7 +709,7 @@ if (ORBITER_TEST_EXE)
 		add_test(
 			NAME "Audio.XRSoundCheck"
 			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.XRSound.wav" --duration 10.0 --no-clip
-				--level 0.3:0.9:all:-inf:-80 --level 1.0:1.3:all:-60:-5 --level 2.2:2.9:all:-60:-5
+				--level 0.3:0.9:all:-inf:-80 --level 1.0:1.3:all:-72:-45 --level 2.2:2.9:all:-60:-5
 				--level 3.15:3.45:all:-inf:-80 --level 5.4:5.9:all:-inf:-80 --level 6.0:6.3:all:-60:-5
 				--level 7.3:8.9:all:-inf:-80
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}

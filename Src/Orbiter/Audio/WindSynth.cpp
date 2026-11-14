@@ -7,9 +7,9 @@
 
 namespace audio {
 
-std::unique_ptr<WindSynth> WindSynth::Make (Engine &e, uint32_t seed)
+SourcePtr<WindSynth> WindSynth::Make (Engine &e, uint32_t seed)
 {
-	std::unique_ptr<WindSynth> s (new WindSynth (seed));
+	SourcePtr<WindSynth> s (new WindSynth (seed));
 	if (!s->Init (e)) return nullptr;
 	return s;
 }

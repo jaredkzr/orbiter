@@ -2,7 +2,9 @@
 // Licensed under the MIT License
 
 #include "Radio.h"
+#include "DebugEnv.h"
 #include "Loudness.h"
+#include "Assets.h"
 #include "AudioSystem.h"
 #include "XrConfig.h"
 #include "Ears.h"
@@ -54,23 +56,11 @@ namespace {
 	const char *EVENT_NAME[Radio::NEVENT] = { "Liftoff", "MECO", "Orbit", "Docked", "Undocked", "Splashdown", "Landed",
 		"MaxQ", "Ignition", "Deorbit", "Surface", "Capture", "Escape", "Descent", "Approach", "BoosterSep", "TankSep", "DeepSpace", "Reentry", "AOS", "LOS", "Lost" };
 
-	/// A sound file decoded: mono, at a rate
-	std::vector<float> Decode (const std::string &file, unsigned rate)
+	/// A sound file decoded: mono, at a rate (Assets: remembered)
+	ClipRef Decode (const std::string &file, unsigned rate)
 	{
-		std::vector<float> out;
-		std::string path = System::FindSound (file);
-		if (path.empty ()) return out;
-		ma_decoder_config c = ma_decoder_config_init (ma_format_f32, 1, rate);
-		ma_decoder d;
-		if (ma_decoder_init_file (path.c_str (), &c, &d) != MA_SUCCESS) return out;
-		float tmp[4096];
-		for (;;) {
-			ma_uint64 got = 0;
-			if (ma_decoder_read_pcm_frames (&d, tmp, 4096, &got) != MA_SUCCESS || got == 0) break;
-			out.insert (out.end (), tmp, tmp + got);
-		}
-		ma_decoder_uninit (&d);
-		return out;
+		const std::string path = System::FindSound (file);
+		return path.empty () ? nullptr : Assets::Get ().Load (path, rate, 1);
 	}
 }
 
@@ -114,11 +104,12 @@ void Radio::Clear ()
 	playing.clear ();
 	if (node) node->Uninit (), node.reset ();
 	replies.clear ();
-	nextChatter = -1.0, blackoutSince = -1.0, losDue = -1.0, quietSince = 0.0;
+	nextChatter = -1.0, blackoutSince = -1.0, losDue = -1.0, losReady = 0.0, quietSince = 0.0;
 	lastRef = nullptr;
 	wasBusy = false;
 	blackout = entrySaid = false;
 	vessel = nullptr;
+	vref = BodyRef ();
 	std::fill (std::begin (lastTake), std::end (lastTake), -1);
 }
 
@@ -128,19 +119,25 @@ bool Radio::Busy () const
 	return false;
 }
 
+void Radio::Prefetch (const std::string &file)
+{
+	const std::string path = System::FindSound (file);
+	if (!path.empty () && sys.GetEngine ().Active ()) Assets::Get ().Prefetch (path, sys.GetEngine ().SampleRate (), 1);
+}
+
 bool Radio::Transmit (const std::string &file, bool ground)
 {
 	if (!node && !Init ()) return false;
 	Engine &e = sys.GetEngine ();
-	std::vector<float> buf = Decode (file, e.SampleRate ());
-	if (buf.empty ()) { LOGOUT ("Audio: radio: no file %s", file.c_str ()); return false; }
-	auto s = RadioSynth::Make (e, std::move (buf), ground, (float)Snr (earthDist), (uint32_t)(Rand () * 1e9), SoundFor (file));
+	ClipRef clip = Decode (file, e.SampleRate ());
+	if (!clip) { LOGOUT ("Audio: radio: no file %s", file.c_str ()); return false; }
+	auto s = RadioSynth::Make (e, std::vector<float> (clip->pcm), ground, (float)Snr (earthDist), (uint32_t)(Rand () * 1e9), SoundFor (file), clip->lufs);
 	if (!s || !s->Attach (node->Node ())) return false;
 	s->Start ();
 	playing.push_back ({std::move (s)});
 	played++;
 	LOGOUT ("Audio: radio: %s (S/N %.0f dB)", file.c_str (), Snr (earthDist));
-	static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+	const bool log = Dbg ().log > 0;
 	if (log) printf ("Audio: radio at %.2f s: %s\n", t, file.c_str ()), fflush (stdout);
 	return true;
 }
@@ -155,8 +152,7 @@ double Radio::ReplyGap ()
 
 const char *Radio::OnShift ()
 {
-	static const char *env = getenv ("ORBITER_AUDIO_CAPCOM");
-	if (env && (*env == '1' || *env == '2')) return *env == '1' ? "c1" : "c2";
+	if (Dbg ().capcom) return Dbg ().capcom == 1 ? "c1" : "c2";   // (ORBITER_AUDIO_CAPCOM)
 	// (three shifts a day from 06:00 UTC, the CAPCOMs taking turns)
 	const long shift = (long)std::floor ((td.MJD0 * 24.0 - 6.0) / 8.0);
 	return (shift & 1) ? "c2" : "c1";
@@ -209,7 +205,9 @@ void Radio::Reply (Event e)
 {
 	// (heard after the light's round trip to Earth, and a pause once the crew's callout is over)
 	const double rtt = 2.0 * earthDist / C_LIGHT, gap = ReplyGap ();
-	replies.push_back ({Take (e), t + rtt + gap, true, gap});
+	const std::string f = Take (e);
+	replies.push_back ({f, t + rtt, true, gap, pt + gap});
+	Prefetch (replies.back ().file);
 }
 
 void Radio::OnEvent (Event e)
@@ -218,27 +216,51 @@ void Radio::OnEvent (Event e)
 	Reply (e);
 }
 
-void Radio::Update (double tnow)
+void Radio::OnFlight (const std::vector<FlightEvent> &events)
 {
-	t = tnow;
+	using E = FlightEvent;
+	for (const FlightEvent &e : events) {
+		switch (e.kind) {
+		case E::SURFACE:   OnEvent (SURFACE); break;
+		case E::LANDED:    OnEvent (LANDED); break;
+		case E::LIFTOFF:   if (e.value > 0.5) OnEvent (LIFTOFF); break;   // (a rocket's, not a plane's)
+		case E::APPROACH:  OnEvent (APPROACH); break;
+		case E::IGNITION:  OnEvent (IGNITION); break;
+		case E::DEORBIT:   OnEvent (DEORBIT); break;
+		case E::CAPTURE:   OnEvent (CAPTURE); break;
+		case E::ESCAPE:    OnEvent (ESCAPE); break;
+		case E::DESCENT:   OnEvent (DESCENT); break;
+		case E::MAXQ:      OnEvent (MAXQ); break;
+		case E::MECO:      OnEvent (MECO); break;
+		case E::ORBIT:     OnEvent (ORBIT); break;
+		case E::DEEPSPACE: OnEvent (DEEPSPACE); break;
+		default: break;
+		}
+	}
+}
+
+void Radio::Update (double tnow, double playNow)
+{
+	t = tnow, pt = playNow;
 	// (the transmissions over: gone)
 	playing.erase (std::remove_if (playing.begin (), playing.end (), [](const Playing &p) { return p.s->Done (); }), playing.end ());
 	const bool busy = Busy ();
-	if (wasBusy && !busy) quietSince = t;
+	if (wasBusy && !busy) quietSince = pt;
 	wasBusy = busy;
 	// the vessel in focus destroyed: the ground loses its signal (a moment of silence, then says so)
-	if (vessel && vessel == g_focusobj && g_focusobj->Destroyed () && !blackout) {
+	if (vessel && vref == sys.GetWorld ().Known (g_focusobj) && g_focusobj->Destroyed () && !blackout) {
 		for (auto &p : playing) p.s->Cut ();
-		losDue = t + 2.0 * earthDist / C_LIGHT + 2.5 + Rand ();
+		losDue = t + 2.0 * earthDist / C_LIGHT, losReady = pt + 2.5 + Rand ();
 	}
 	const Vessel *v = g_focusobj && !g_focusobj->Destroyed () ? g_focusobj : nullptr;
-	if (v != vessel) { replies.clear (); nextChatter = -1.0; entrySaid = false; blackout = false; vessel = v; }
+	const BodyRef vr = sys.GetWorld ().Ref (v);
+	if (vr != vref) { replies.clear (); nextChatter = -1.0; entrySaid = false; blackout = false; vessel = v; vref = vr; }
 	if (v) {
 		losDue = -1.0, lastRef = v->ElRef ();
 		const SurfParam *s = v->GetSurfParam ();
 		lastAlt = s ? s->alt : 1e9;
 	}
-	else if (losDue >= 0.0 && t >= losDue && !Busy ()) {
+	else if (losDue >= 0.0 && t >= losDue && pt >= losReady && !Busy ()) {
 		losDue = -1.0;
 		Transmit (Take (lastAlt < 10e3 ? LOST : LOS), true);   // (near the ground: the vehicle lost, not the signal)
 	}
@@ -257,14 +279,16 @@ void Radio::Update (double tnow)
 		for (auto &p : playing) p.s->Cut ();
 		LOGOUT ("Audio: radio blackout at %.1f s (%.0f m/s, %.0f Pa)", t, U, q);
 		sys.GetCallouts ().Crew ("CommBlackout");
-		static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+		const bool log = Dbg ().log > 0;
 		if (log) printf ("Audio: radio blackout at %.2f s\n", t), fflush (stdout);
 	} else if (!bo && blackout) {
 		blackout = false;
 		// (through it: the ground has us back)
 		if (t - blackoutSince > 5.0) {
 			std::string f = Take (AOS);
-			replies.push_back ({f, t + 2.0 * earthDist / C_LIGHT + REACT + 2.0 * Rand (), f != AOS_CLIP, 0.0});
+			const double react = REACT + 2.0 * Rand ();
+			replies.push_back ({f, t + 2.0 * earthDist / C_LIGHT, f != AOS_CLIP, 0.0, pt + react});
+			Prefetch (f);
 		}
 		LOGOUT ("Audio: radio blackout over at %.1f s", t);
 	}
@@ -281,9 +305,9 @@ void Radio::Update (double tnow)
 	// crew's callout to be over, then its pause
 	while (!replies.empty () && replies.front ().due < t - 60.0) replies.pop_front ();
 	if (sys.Speaking ())
-		for (auto &r : replies) if (r.ground && r.gap > 0.0) r.due = std::max (r.due, t + r.gap);
+		for (auto &r : replies) if (r.ground && r.gap > 0.0) r.ready = std::max (r.ready, pt + r.gap);
 	// (and after a transmission, the same pause: two replies due together aren't back to back)
-	if (!replies.empty () && replies.front ().due <= t && !Busy () && t - quietSince >= replies.front ().gap) {
+	if (!replies.empty () && replies.front ().due <= t && replies.front ().ready <= pt && !Busy () && pt - quietSince >= replies.front ().gap) {
 		Pending r = replies.front ();
 		replies.pop_front ();
 		Transmit (r.file, r.ground);
@@ -301,10 +325,10 @@ void Radio::Update (double tnow)
 	const bool reentry = inAtm && U > 1500.0 && vs < 0.0 && alt > 20e3;
 	bool allowed = earthDist < 2e9 && (!landed || atc ("allowwhilelanded", 1) != 0.0) && (!inAtm || atc ("allowinatmosphere", 1) != 0.0)
 		&& (!reentry || atc ("allowduringreentry", 0) != 0.0);
-	if (nextChatter < 0.0) nextChatter = t + atc ("mindelay", 15.0) + Rand () * (atc ("maxdelay", 120.0) - atc ("mindelay", 15.0));
-	if (t >= nextChatter) {
+	if (nextChatter < 0.0) nextChatter = pt + atc ("mindelay", 15.0) + Rand () * (atc ("maxdelay", 120.0) - atc ("mindelay", 15.0));
+	if (pt >= nextChatter) {
 		const double far = earthDist > atc ("delayplanetdistance", 400.0) * 1e3 ? atc ("delayplanetmultiplier", 5.0) : 1.0;
-		nextChatter = t + far * (atc ("mindelay", 15.0) + Rand () * (atc ("maxdelay", 120.0) - atc ("mindelay", 15.0)));
+		nextChatter = pt + far * (atc ("mindelay", 15.0) + Rand () * (atc ("maxdelay", 120.0) - atc ("mindelay", 15.0)));
 		if (allowed && !Busy () && replies.empty ()) {
 			if (bag.empty ()) {
 				// (a shuffled bag: each clip once before any again; the AOS call
@@ -321,6 +345,7 @@ void Radio::Update (double tnow)
 				std::string f = bag.back ();
 				bag.pop_back ();
 				Transmit (f, false);
+				if (!bag.empty ()) Prefetch (bag.back ()); // (the next: decoded by its turn)
 			}
 		}
 	}

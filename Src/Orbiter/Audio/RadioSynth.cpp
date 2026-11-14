@@ -5,6 +5,7 @@
 // degrading far from Earth. Apart from Radio.cpp so the synth tests can build it alone.
 
 #include "Radio.h"
+#include "DebugEnv.h"
 #include "Loudness.h"
 #include <algorithm>
 #include <cmath>
@@ -33,11 +34,11 @@ namespace {
 
 // ---- a transmission -------------------------------------------------------
 
-std::unique_ptr<RadioSynth> RadioSynth::Make (Engine &e, std::vector<float> &&buf, bool quindar, float snr, uint32_t seed, const Sound &sound)
+SourcePtr<RadioSynth> RadioSynth::Make (Engine &e, std::vector<float> &&buf, bool quindar, float snr, uint32_t seed, const Sound &sound, double lufs)
 {
-	std::unique_ptr<RadioSynth> s (new RadioSynth (std::move (buf), quindar, snr, seed, sound));
+	SourcePtr<RadioSynth> s (new RadioSynth (std::move (buf), quindar, snr, seed, sound));
 	if (!s->Init (e)) return nullptr;
-	const double L = Loudness (s->buf.data (), s->buf.size (), 1, e.SampleRate ());
+	const double L = std::isnan (lufs) ? Loudness (s->buf.data (), s->buf.size (), 1, e.SampleRate ()) : lufs;
 	s->gain = std::isfinite (L) ? (float)std::pow (10.0, std::clamp (RADIO_LUFS - L, -20.0, 20.0) / 20.0) : 1.0f;
 	s->Link (e.SampleRate ());
 	return s;
@@ -52,8 +53,7 @@ void RadioSynth::Link (unsigned r)
 	link = std::clamp ((snrDb - 10.0f) / 30.0f, moon, 1.0f);
 	snrDb = std::max (snrDb, (float)Snr (3.844e8));
 	bandHp = sound.hp + 250.0f * (1.0f - link), bandLp = sound.lp * (0.4f + 0.6f * link);
-	static const char *codec = getenv ("ORBITER_RADIO_CODEC");     // (listening tests: 0 off)
-	if (link < 1.0f && !(codec && *codec == '0')) {
+	if (link < 1.0f && Dbg ().radioCodec) {                         // (listening tests: ORBITER_RADIO_CODEC=0 off)
 		hold = std::max (1u, (unsigned)(r / (5.0f * bandLp)));         // (a sample rate of 5 x the band)
 		levels = std::pow (2.0f, 10.0f + 5.0f * link);                  // (15 bits near, about 13 at the Moon; by ear)
 	}

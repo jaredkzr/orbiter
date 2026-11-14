@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "Ambience.h"
+#include "DebugEnv.h"
 #include "AmbienceSynth.h"
 #include "AudioSystem.h"
 #include "Ears.h"
@@ -92,10 +93,10 @@ void Ambience::Clear ()
 	nextEvent = -1.0;
 }
 
-void Ambience::Update (double t, double dt)
+void Ambience::Update (double t, double playT, double dt)
 {
 	if (!g_camera || !sys.GetEngine ().Active ()) return;
-	static const bool off = getenv ("ORBITER_AUDIO_AMBIENCE") && *getenv ("ORBITER_AUDIO_AMBIENCE") == '0'; // (tests)
+	const bool off = !Dbg ().ambience; // (tests: ORBITER_AUDIO_AMBIENCE=0)
 	if (off) { if (cabin || node) Clear (); return; }
 	const bool cockpit = g_camera->IsInternal () && g_focusobj && !g_focusobj->Destroyed ();
 
@@ -103,8 +104,9 @@ void Ambience::Update (double t, double dt)
 	if (cockpit) {
 		if (!cabin || !sys.Playing (cabin)) cabin = sys.PlayOn (INTERIOR, CabinFile (), CABIN_P / P_FULL / CABIN_RMS, true);
 		// now and then a pump, a valve, a fan (one at random, not the last one again)
-		if (nextEvent < 0.0 || t < nextEvent - 60.0) nextEvent = t + 7.0 + 28.0 * Rand ();
-		if (t >= nextEvent) {
+		// (on the clock of what is heard: not in a pause, not faster at time acceleration)
+		if (nextEvent < 0.0 || playT < nextEvent - 60.0) nextEvent = playT + 7.0 + 28.0 * Rand ();
+		if (playT >= nextEvent) {
 			FindEvents ();
 			if (!events.empty ()) {
 				int k = (int)(Rand () * events.size ()) % (int)events.size ();
@@ -113,7 +115,7 @@ void Ambience::Update (double t, double dt)
 				if (cabinEvent) sys.StopSound (cabinEvent);
 				cabinEvent = sys.PlayOn (INTERIOR, events[k], CABIN_EVENT_P / P_FULL / EVENT_RMS * (0.5 + 0.5 * Rand ()), false);
 			}
-			nextEvent = t + 7.0 + 28.0 * Rand ();
+			nextEvent = playT + 7.0 + 28.0 * Rand ();
 		}
 	} else {
 		if (cabin) sys.StopSound (cabin), cabin = 0;
@@ -157,7 +159,7 @@ void Ambience::Update (double t, double dt)
 			}
 		}
 	}
-	static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+	const bool log = Dbg ().log > 0;
 	static double logT = -1e9;
 	if (log && std::fabs (t - logT) >= 5.0) {
 		logT = t;

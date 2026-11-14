@@ -63,6 +63,7 @@ public:
 		unsigned channels = 2;
 		bool ears = true;   ///< the outside and cockpit buses heard through the ears (Ears.h)
 		bool adapt = false; ///< ... at an adapting listening level (Ears.h)
+		bool nullDevice = false; ///< DEVICE: miniaudio's null backend - a real audio thread, no hardware (tests)
 	};
 
 	Engine ();
@@ -105,6 +106,11 @@ public:
 	/// don't restart the fade.
 	void SetSimFade (float target, double seconds);
 	float SimFadeTarget () const { return simFade; }
+	/// Once faded out, the simulation's buses held (stopped: nothing upstream
+	/// is mixed - a line, a transmission, a blast stop where they are), and
+	/// going on from there as the fade comes back. Call each step
+	void Suspend ();
+	bool Suspended () const { return suspended; }
 
 	/// OFFLINE: mix the next `frames` frames into `out` (interleaved,
 	/// Channels() per frame). Returns the frames written (`frames`, or 0
@@ -137,6 +143,8 @@ private:
 	unsigned sampleRate = 48000, channels = 2;
 	std::string deviceName;
 	float simFade = 1.0f;
+	bool suspended = false;
+	uint64_t fadeEnd = 0;   // (the engine's time [frames] the last fade is over)
 	float busGain[NBUS] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
 	float duck = 1.0f, rduck = 1.0f;
 };

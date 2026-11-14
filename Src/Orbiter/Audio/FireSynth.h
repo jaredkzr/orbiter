@@ -28,7 +28,7 @@ class FireSynth : public SynthSource {
 public:
 	bool Continuous () const override { return true; }
 	float Activity () const override { return pLevel.load (std::memory_order_relaxed) > 0.0f ? 1.0f : 0.0f; }
-	static std::unique_ptr<FireSynth> Make (Engine &e, uint32_t seed);
+	static SourcePtr<FireSynth> Make (Engine &e, uint32_t seed);
 
 	/// Part of the heat release radiated as sound
 	static constexpr double EFFICIENCY = 3e-6;

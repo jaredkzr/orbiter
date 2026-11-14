@@ -27,7 +27,7 @@ namespace audio {
 class BoomSynth : public SynthSource {
 public:
 	/// duration: the N-wave's length [s]
-	static std::unique_ptr<BoomSynth> Make (Engine &e, float duration, uint32_t seed);
+	static SourcePtr<BoomSynth> Make (Engine &e, float duration, uint32_t seed);
 
 	/// Peak overpressure [Pa] and duration [s] of the boom of a body of
 	/// length l [m] at Mach M, h [m] above the listener, with the pressures

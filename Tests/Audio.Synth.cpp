@@ -712,7 +712,7 @@ double Pw (const float *x) { double s = 0.0; for (int i = 0; i < Hrtf::TAPS; i++
 /// A sine (tests)
 class ToneSynth : public SynthSource {
 public:
-	static std::unique_ptr<ToneSynth> Make (Engine &e, float hz) { std::unique_ptr<ToneSynth> s (new ToneSynth ()); s->f = hz; if (!s->Init (e)) return nullptr; return s; }
+	static SourcePtr<ToneSynth> Make (Engine &e, float hz) { SourcePtr<ToneSynth> s (new ToneSynth ()); s->f = hz; if (!s->Init (e)) return nullptr; return s; }
 protected:
 	void Render (float *out, unsigned n, float) override { for (unsigned i = 0; i < n; i++) { out[i] = 0.5f * std::sin (ph); ph += 6.2831853f * f / rate; if (ph > 6.2831853f) ph -= 6.2831853f; } }
 private:

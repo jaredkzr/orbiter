@@ -1824,6 +1824,67 @@ DLLEXPORT int oapiAudioPlay (OBJHANDLE hVessel, const char *file, const VECTOR3 
 	return as->Play (v, file, p, level, loop);
 }
 
+DLLEXPORT int oapiAudioPlayOn (int bus, const char *file, double level, bool loop)
+{
+	audio::System *as = Audio ();
+	if (!as || !file || bus < 0 || bus >= audio::NBUS) return 0;
+	return as->PlayOn ((audio::Bus)bus, file, level, loop);
+}
+
+DLLEXPORT bool oapiAudioPause (int handle, bool pause)
+{
+	audio::System *as = Audio ();
+	return as && as->Pause (handle, pause);
+}
+
+DLLEXPORT bool oapiAudioPaused (int handle)
+{
+	audio::System *as = Audio ();
+	return as && as->Paused (handle);
+}
+
+DLLEXPORT bool oapiAudioSeek (int handle, double seconds)
+{
+	audio::System *as = Audio ();
+	return as && as->Seek (handle, seconds);
+}
+
+DLLEXPORT double oapiAudioCursor (int handle)
+{
+	audio::System *as = Audio ();
+	return as ? as->Cursor (handle) : -1.0;
+}
+
+DLLEXPORT bool oapiAudioPan (int handle, double pan)
+{
+	audio::System *as = Audio ();
+	return as && as->SetPan (handle, (float)pan);
+}
+
+DLLEXPORT double oapiAudioGetPan (int handle)
+{
+	audio::System *as = Audio ();
+	return as ? as->GetPan (handle) : -100.0;
+}
+
+DLLEXPORT double oapiAudioGetPitch (int handle)
+{
+	audio::System *as = Audio ();
+	return as ? as->GetPitch (handle) : 0.0;
+}
+
+DLLEXPORT bool oapiAudioHasFile (const char *file)
+{
+	return file && !audio::System::FindSound (file).empty ();
+}
+
+DLLEXPORT bool oapiAudioDefaultSound (OBJHANDLE hVessel, int sound, bool on)
+{
+	audio::System *as = Audio ();
+	const Vessel *v = AsVessel (hVessel);
+	return as && v && as->DefaultSound (v, sound, on);
+}
+
 DLLEXPORT bool oapiAudioStop (int handle)
 {
 	audio::System *as = Audio ();

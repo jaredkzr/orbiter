@@ -31,7 +31,7 @@ namespace audio {
 
 class BlastSynth : public SynthSource {
 public:
-	static std::unique_ptr<BlastSynth> Make (Engine &e, uint32_t seed);
+	static SourcePtr<BlastSynth> Make (Engine &e, uint32_t seed);
 
 	/// Peak overpressure [Pa] at scaled distance Z = R / W^1/3 [m/kg^1/3] in
 	/// sea-level air (Kinney & Graham)

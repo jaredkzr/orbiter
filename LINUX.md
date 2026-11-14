@@ -225,6 +225,8 @@ These are for testing and tuning (`1` turns a feature on, `0` off).
 | `ORBITER_AUDIO_CALLOUTS=0`, `ORBITER_AUDIO_CALLOUTS=1` | the voice's callouts off / on, whatever the settings say (tests); with `ORBITER_AUDIO_LOG`, each callout on the console |
 | `ORBITER_AUDIO_VOICE=orbiter`, `ORBITER_AUDIO_VOICE=xrsound` | the callouts in Orbiter's voice (`Sound/Voice`, also for XRSound's default lines in XR vessels and add-ons) / XRSound's recordings, whatever the "Callout voice" setting says |
 | `ORBITER_AUDIO_CAPCOM=1`, `ORBITER_AUDIO_CAPCOM=2` | Mission Control's replies always from this CAPCOM, whatever the shift (by default they take turns, 8-hour shifts by the sim clock from 06:00 UTC) |
+| `ORBITER_AUDIO_ASYNC=1` | renders: sound files decoded in the background, as on the device (each sound starts when its file is there, a step or so later; `Audio.*Async`) |
+| `ORBITER_AUDIO_FLIGHT_TRACE=<file>` | the focus vessel's flight as the sound follows it (a sample a step: `Src/Orbiter/Audio/FlightState.h`), for `Tests/Audio/*.trace` |
 | `ORBITER_RADIO_CODEC=0` | the radio degrades with distance without its low-rate codec (only the narrower band, the fading, the dropouts; listening tests) |
 | `ORBITER_RADIO_REEL=<dir>` | `Audio.Synth "[radio-reel]"` (a hidden test): Mission Control's lines through the radio near Earth, at the Moon and further, as WAVs in `<dir>` (`ORBITER_RADIO_REEL_FILES`: which lines) |
 
@@ -317,8 +319,19 @@ ctest
   `Audio.Takeoff` and `Audio.MoonLiftoff` (a vessel's own engines, on Earth
   and on the Moon), `Audio.Contacts*` (touchdown, rolling, a belly's
   scrape), `Audio.Docking`, `Audio.Api` (the sound API: files on vessels and
-  the interface, an animation's motor). Unit tests: `Audio.Engine`,
-  `Audio.Propagation`, `Audio.Synth`.
+  the interface, an animation's motor; `Audio.ApiAsync`: their files decoded
+  in the background). Unit tests: `Audio.Engine`, `Audio.Propagation`,
+  `Audio.Synth`, `Audio.World` (the world without Orbiter: fly-bys, the
+  cone, the cockpit, vacuum, handles, a recording's travel time),
+  `Audio.Flight` (the flight's events from recorded traces and tables; the
+  crew's lines' table; the environment's options), `Audio.Churn` (the audio
+  thread's rules: no allocation while rendering, sources made and destroyed
+  while a real audio thread renders them, a pause holding the sounds, levels
+  ramped over a step, every blow struck; `Audio.ChurnTSan`: the same under
+  ThreadSanitizer).
+- **The crew's lines:** `Sound/Voice/callouts.cfg` (each line's file,
+  priority, wait and level; when a line is said is the code's). XRSound's
+  cfgs and a vessel's code may give a line a file of their own.
 - **Sound of vessel classes:** `Config/Sound/README.txt` (tuning, motors of
   animations); the API in `OrbiterAPI.h` (`oapiAudio*`) and Lua's `audio`
   table.

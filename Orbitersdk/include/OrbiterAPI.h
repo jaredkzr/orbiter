@@ -4711,6 +4711,50 @@ OAPIFUNC bool oapiAudioStop (int handle);
 OAPIFUNC bool oapiAudioSet (int handle, double level, double pitch);
 /// \brief Is the sound still playing?
 OAPIFUNC bool oapiAudioPlaying (int handle);
+/// Buses (oapiAudioPlayOn): heard as they are, not in the world
+#define AUDIO_BUS_OUTSIDE 0 ///< what is heard outside (through the air; levels physical: AUDIO_LEVEL_PA)
+#define AUDIO_BUS_COCKPIT 1 ///< in the cockpit (levels physical)
+#define AUDIO_BUS_VOICE   2 ///< the crew's voice, in the headset (speech brought to one loudness)
+#define AUDIO_BUS_RADIO   3 ///< the radio (speech brought to one loudness)
+#define AUDIO_BUS_MUSIC   4
+#define AUDIO_BUS_UI      5 ///< the interface (plays on in a pause)
+/// A level of one pascal (94 dB SPL) on the physical buses and on vessels (oapiAudioPlay)
+#define AUDIO_LEVEL_PA (1.0 / 63.2)
+/**
+ * \brief Plays a sound file on a bus: heard as it is, not in the world.
+ * \param bus AUDIO_BUS_*
+ * \param level on the physical buses (outside, cockpit), as oapiAudioPlay's
+ *   (AUDIO_LEVEL_PA: 1 Pa); else a gain - speech on the voice and radio
+ *   buses brought to one loudness first
+ * \return a handle (0: not played)
+ */
+OAPIFUNC int oapiAudioPlayOn (int bus, const char *file, double level, bool loop);
+/// \brief Holds a sound (pause: true) or lets it go on from where it was. \return false: no such sound
+OAPIFUNC bool oapiAudioPause (int handle, bool pause);
+/// \brief Is the sound held?
+OAPIFUNC bool oapiAudioPaused (int handle);
+/// \brief To a time in the sound's file [s]. \return false: no such sound
+OAPIFUNC bool oapiAudioSeek (int handle, double seconds);
+/// \brief Where the sound is in its file [s] (< 0: no such sound)
+OAPIFUNC double oapiAudioCursor (int handle);
+/// \brief Pans a sound on a bus, left (-1) to right (1). \return false: no such sound, or one on a vessel
+OAPIFUNC bool oapiAudioPan (int handle, double pan);
+/// \brief A sound's pan (-100: no such sound) and pitch (0: no such sound)
+OAPIFUNC double oapiAudioGetPan (int handle);
+OAPIFUNC double oapiAudioGetPitch (int handle);
+/// \brief Is there such a sound file (as given, or under Sound/)?
+OAPIFUNC bool oapiAudioHasFile (const char *file);
+/// A vessel's own sounds (oapiAudioDefaultSound)
+#define AUDIO_SOUND_ENGINES  0 ///< its engines' (all but the attitude thrusters)
+#define AUDIO_SOUND_RCS      1 ///< its attitude thrusters'
+#define AUDIO_SOUND_AIR      2 ///< the air over it
+#define AUDIO_SOUND_CONTACTS 3 ///< its wheels', its hull's, docking
+/**
+ * \brief Switches one of a vessel's own sounds off (a module playing its own
+ *   in its place) or on again. Its tune (oapiAudioTune) is kept.
+ * \return false: no such vessel or sound
+ */
+OAPIFUNC bool oapiAudioDefaultSound (OBJHANDLE hVessel, int sound, bool on);
 /**
  * \brief Gives one of a vessel's animations a motor's sound (while it moves)
  *   and, for doors and gear, a latch or lock at its ends.

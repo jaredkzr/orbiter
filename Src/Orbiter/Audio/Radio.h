@@ -26,6 +26,9 @@
 
 #include "PathNode.h"
 #include "Synth.h"
+#include "World.h"
+#include "FlightState.h"
+#include <cmath>
 #include <deque>
 #include <memory>
 #include <string>
@@ -48,8 +51,9 @@ public:
 	using Sound = RadioSound;
 	/// buf: the voice (mono, the engine's rate); quindar: the ground keying;
 	/// snr: signal to noise [dB]
-	static std::unique_ptr<RadioSynth> Make (Engine &e, std::vector<float> &&buf, bool quindar, float snr, uint32_t seed,
-		const Sound &sound = Sound ());
+	/// (lufs: the voice's loudness, if known - Clip::lufs; else measured)
+	static SourcePtr<RadioSynth> Make (Engine &e, std::vector<float> &&buf, bool quindar, float snr, uint32_t seed,
+		const Sound &sound = Sound (), double lufs = NAN);
 	bool Done () const override { return done.load (std::memory_order_acquire); }
 	/// Lost (a blackout): a burst of static, then nothing
 	void Cut () { cut.store (true, std::memory_order_release); }
@@ -106,8 +110,11 @@ public:
 	/// Something the ground hears of (the focus vessel's): it replies, with one of
 	/// its takes (Sound/Voice/Ground/<Event>_<n>.flac; not the last one again)
 	void OnEvent (Event e);
-	/// Each step
-	void Update (double t);
+	/// The flight's events of a step (FlightState): those the ground answers
+	void OnFlight (const std::vector<FlightEvent> &events);
+	/// Each step: the simulation's time (the light's travel, the plasma) and the clock of what is
+	/// heard (the ground's pauses, the chatter's: held in a pause, not hurried by time acceleration)
+	void Update (double t, double playT);
 	void Clear ();
 
 	/// (tests) transmissions played so far; in a blackout
@@ -127,20 +134,23 @@ public:
 private:
 	System &sys;
 	std::unique_ptr<PathNode> node;
-	struct Playing { std::unique_ptr<RadioSynth> s; };
+	struct Playing { SourcePtr<RadioSynth> s; };
 	std::vector<Playing> playing;
-	struct Pending { std::string file; double due; bool ground; double gap; };
+	/// (due: when it reaches the vessel - the simulation's time; ready: the ground's pause over - the
+	/// clock of what is heard)
+	struct Pending { std::string file; double due; bool ground; double gap; double ready; };
 	std::deque<Pending> replies;
-	double nextChatter = -1.0, t = 0.0, blackoutSince = -1.0;
+	double nextChatter = -1.0, t = 0.0, pt = 0.0, blackoutSince = -1.0;
 	bool blackout = false, entrySaid = false;
 	int played = 0;
 	std::vector<std::string> bag;  // chatter clips not played lately
 	uint32_t rng = 0x3c6ef372u;
 	double Rand () { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return (rng >> 8) * (1.0 / 16777216.0); }
 	const Vessel *vessel = nullptr;
+	BodyRef vref;          // (its identity)
 	double earthDist = 0.0;
 	int lastTake[NEVENT];                  // (the take played last, per event: -1 none)
-	double losDue = -1.0;                  // (the ground's "lost your signal": when)
+	double losDue = -1.0, losReady = 0.0;  // (the ground's "lost your signal": when - sim, heard)
 	double quietSince = 0.0;               // (the last transmission over: when)
 	bool wasBusy = false;
 	std::string Take (Event e);
@@ -156,6 +166,7 @@ private:
 	double lastAlt = 1e9;                     // (and how high: lost near the ground, a different reply)
 	bool Init ();
 	bool Transmit (const std::string &file, bool ground);
+	void Prefetch (const std::string &file);   // (decoded in the background before its turn)
 	bool Busy () const;
 	void Reply (Event e);
 };

@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "Loudness.h"
+#include "Assets.h"
 #include "miniaudio.h"
 #include <algorithm>
 #include <cmath>
@@ -81,47 +82,14 @@ double Loudness (const float *x, size_t frames, unsigned ch, unsigned rate)
 	return rel > 0.0 ? lufs (rel) : -INFINITY;
 }
 
-namespace {
-	struct Measured { double lufs = NAN, peak = 0.0; };
-	/// A file's loudness and peak (decoded once; remembered)
-	Measured Measure (const std::string &path)
-	{
-		static std::mutex m;
-		static std::map<std::string, Measured> known;
-		{
-			std::lock_guard<std::mutex> l (m);
-			auto it = known.find (path);
-			if (it != known.end ()) return it->second;
-		}
-		Measured r;
-		ma_decoder_config cfg = ma_decoder_config_init (ma_format_f32, 0, 0);
-		ma_decoder dec;
-		if (ma_decoder_init_file (path.c_str (), &cfg, &dec) == MA_SUCCESS) {
-			ma_uint64 n = 0;
-			const unsigned ch = dec.outputChannels, rate = dec.outputSampleRate;
-			if (ma_decoder_get_length_in_pcm_frames (&dec, &n) == MA_SUCCESS && n > 0 && n < (ma_uint64)rate * 600 && ch > 0) {
-				std::vector<float> buf ((size_t)n * ch);
-				ma_uint64 got = 0;
-				ma_decoder_read_pcm_frames (&dec, buf.data (), n, &got);
-				r.lufs = Loudness (buf.data (), (size_t)got, ch, rate);
-				for (size_t i = 0; i < (size_t)got * ch; i++) r.peak = std::max (r.peak, (double)std::fabs (buf[i]));
-			}
-			ma_decoder_uninit (&dec);
-		}
-		std::lock_guard<std::mutex> l (m);
-		known[path] = r;
-		return r;
-	}
-}
-
 double FileLoudness (const std::string &path)
 {
-	return Measure (path).lufs;
+	return Assets::Get ().Measured (path).lufs;
 }
 
 double LoudnessGain (const std::string &path, double target, double maxDb)
 {
-	const Measured r = Measure (path);
+	const Assets::Measure r = Assets::Get ().Measured (path);
 	if (!std::isfinite (r.lufs)) return 1.0;
 	double g = std::pow (10.0, std::clamp (target - r.lufs, -maxDb, maxDb) / 20.0);
 	if (r.peak > 0.0) g = std::min (g, std::max (1.0, PEAK_MAX / r.peak)); // (raised no further than its peak at -1 dBFS)

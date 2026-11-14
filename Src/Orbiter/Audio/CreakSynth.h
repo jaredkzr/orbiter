@@ -25,7 +25,7 @@ namespace audio {
 
 class CreakSynth : public SynthSource {
 public:
-	static std::unique_ptr<CreakSynth> Make (Engine &e, uint32_t seed);
+	static SourcePtr<CreakSynth> Make (Engine &e, uint32_t seed);
 	enum Kind { CREAK = 0, GROAN = 1 };
 	/// One (strength 0..1)
 	void Strike (Kind k, float strength);
@@ -35,8 +35,8 @@ protected:
 
 private:
 	explicit CreakSynth (uint32_t seed): rng (seed) {}
-	struct Pending { std::atomic<int> count{0}; std::atomic<float> strength{0.0f}; } pending[2];
-	int played[2] = {};
+	struct StrikeEvent { int kind; float strength; };
+	dsp::Events<StrikeEvent, 16> strikes;   // (in order, each one)
 
 	// (audio thread)
 	dsp::Rng rng;

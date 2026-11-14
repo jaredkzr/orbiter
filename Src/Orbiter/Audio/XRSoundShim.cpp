@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "XRSoundShim.h"
+#include "DebugEnv.h"
 #include "XRSound.h"
 #include "AudioSystem.h"
 #include "XrConfig.h"
@@ -100,20 +101,37 @@ namespace {
 
 	System *Sys () { return g_pOrbiter ? g_pOrbiter->Audio () : nullptr; }
 
-	/// Where a playback type's sound goes, and its level there
+	/// XRSound's volume 1 as a pressure: a file at full scale peaks at this [Pa]. In the cockpit
+	/// (InternalOnly), and the wind at the ear: 1 Pa (94 dB) - a loud cockpit sound, well over the
+	/// cabin's air (56 dB). On the vessel, at 2 m: Close 4 Pa (106 dB, a machine at hand; heard in
+	/// its cockpit through the hull some 10 dB over the cabin's air), Medium 8, Far 16 (XRSound's
+	/// steps of 6 dB). The voice's and the interface's buses: as a gain
+	constexpr double XR_COCKPIT_PA = 1.0, XR_CLOSE_PA = 4.0;
+
+	/// Where a playback type's sound goes, and its level there (oapiAudioPlay's: AUDIO_LEVEL_PA)
 	struct Route { bool onVessel; Bus bus; double level; };
 	Route RouteFor (PT t, bool module)
 	{
+		const double close = XR_CLOSE_PA * AUDIO_LEVEL_PA, inside = XR_COCKPIT_PA * AUDIO_LEVEL_PA;
 		if (module) return {false, UI, 1.0};
 		switch (t) {
-		case PT::BothViewFar:    return {true, EXTERIOR, 1.0};
-		case PT::BothViewMedium: return {true, EXTERIOR, 0.5};
-		case PT::BothViewClose:  return {true, EXTERIOR, 0.25};
-		case PT::InternalOnly:   return {false, INTERIOR, 1.0};
+		case PT::BothViewFar:    return {true, EXTERIOR, 4.0 * close};
+		case PT::BothViewMedium: return {true, EXTERIOR, 2.0 * close};
+		case PT::BothViewClose:  return {true, EXTERIOR, close};
+		case PT::InternalOnly:   return {false, INTERIOR, inside};
 		case PT::Radio:          return {false, VOICE, 1.0};
-		case PT::Wind:           return {false, EXTERIOR, 1.0};
+		case PT::Wind:           return {false, EXTERIOR, inside};
 		default:                 return {false, UI, 1.0};
 		}
+	}
+
+	/// A file played as a route has it (oapiAudio*: XRSound on the public API); 0: not played
+	int PlayRouted (const Vessel *v, const std::string &file, const Route &r, double volume, bool loop)
+	{
+		const std::string plays = xr::Voice (file);   // (XRSound's default lines: in Orbiter's voice, as set)
+		const VECTOR3 at = _V(0, 0, 0);
+		return r.onVessel ? oapiAudioPlay ((OBJHANDLE)v, plays.c_str (), &at, volume * r.level, loop)
+		                  : oapiAudioPlayOn (r.bus, plays.c_str (), volume * r.level, loop);
 	}
 
 	PT TypeNamed (const std::string &s, PT def)
@@ -131,20 +149,33 @@ namespace {
 
 class XrInstance : public XRSound {
 public:
-	explicit XrInstance (const Vessel *v): vessel (v) { Instances ().push_back (this); }
-	explicit XrInstance (const std::string &m): module (m) { Instances ().push_back (this); }
+	explicit XrInstance (const Vessel *v): vessel (v), isModule (!v)   // (no vessel: as a module's)
+	{
+		if (System *s = Sys ()) ref = s->GetWorld ().Ref (v);
+		Instances ().push_back (this);
+	}
+	explicit XrInstance (const std::string &m): module (m), isModule (true) { Instances ().push_back (this); }
 	~XrInstance () override
 	{
 		auto &all = Instances ();
 		all.erase (std::remove (all.begin (), all.end (), this), all.end ());
-		if (System *s = Sys ()) for (auto &sl : slots) if (sl.second.h) s->StopSound (sl.second.h);
+		for (auto &sl : slots) if (sl.second.h) oapiAudioStop (sl.second.h);
 	}
 
 	static std::vector<XrInstance*> &Instances () { static std::vector<XrInstance*> v; return v; }
 	static XrInstance *For (const Vessel *v)
 	{
-		for (auto *i : Instances ()) if (i->vessel == v && v) return i;
+		System *s = Sys ();
+		const BodyRef r = s && v ? s->GetWorld ().Known (v) : BodyRef ();
+		if (!r) return nullptr;
+		for (auto *i : Instances ()) if (!i->isModule && i->ref == r) return i;
 		return nullptr;
+	}
+	/// Its vessel, while it is there (deleted: null - its sounds can't play)
+	const Vessel *V () const
+	{
+		System *s = Sys ();
+		return s && s->GetWorld ().Alive (ref) ? vessel : nullptr;
 	}
 
 	bool IsPresent () const override { return true; }
@@ -152,9 +183,9 @@ public:
 
 	bool LoadWav (const int id, const char *file, const PlaybackType type) override
 	{
-		if (!file || !*file || System::FindSound (file).empty ()) return false;
+		if (!file || !*file || !oapiAudioHasFile (xr::Voice (file).c_str ())) return false;
 		Slot &s = slots[id];
-		if (s.h) if (System *sys = Sys ()) sys->StopSound (s.h);
+		if (s.h) oapiAudioStop (s.h);
 		s = Slot ();
 		s.file = file, s.type = type;
 		return true;
@@ -162,8 +193,7 @@ public:
 
 	bool PlayWav (const int id, const bool loop, const float volume) override
 	{
-		System *sys = Sys ();
-		if (!sys) return false;
+		if (!Sys ()) return false;
 		auto it = slots.find (id);
 		if (it == slots.end ()) {
 			// (a default sound not loaded: the cfgs' file)
@@ -177,18 +207,18 @@ public:
 		if (Default (id) && !Enabled (id)) return false;
 		Slot &s = it->second;
 		s.volume = std::clamp ((double)volume, 0.0, 1.0);
-		if (s.h && sys->Playing (s.h)) {
+		if (s.h && oapiAudioPlaying (s.h)) {
 			// (playing: its volume changes; it goes on)
-			sys->SetSound (s.h, s.volume * RouteFor (s.type, !vessel).level, -1.0);
 			s.loop = loop;
+			Apply (s);
 			return true;
 		}
-		Route r = RouteFor (s.type, !vessel);
+		if (!isModule && !V ()) return false;   // (its vessel gone)
 		s.loop = loop;
-		s.h = r.onVessel ? sys->Play (vessel, s.file, V3 (), s.volume * r.level, loop)
-		                 : sys->PlayOn (r.bus, s.file, s.volume * r.level, loop);
+		s.h = PlayRouted (V (), s.file, RouteFor (s.type, isModule), s.volume * s.gate, loop);
 		if (!s.h) return false;
-		Gate (*sys, s, Sys () ? lastFocus : nullptr, lastCockpit);
+		s.applied = s.gate;
+		Gate (s, lastFocus, lastCockpit);
 		return true;
 	}
 
@@ -196,7 +226,7 @@ public:
 	{
 		auto it = slots.find (id);
 		if (it == slots.end ()) return false;
-		if (it->second.h) if (System *sys = Sys ()) sys->StopSound (it->second.h);
+		if (it->second.h) oapiAudioStop (it->second.h);
 		it->second.h = 0;
 		return true;
 	}
@@ -204,36 +234,31 @@ public:
 	bool IsWavPlaying (const int id) const override
 	{
 		const Slot *s = Find (id);
-		System *sys = Sys ();
-		return s && s->h && sys && sys->Playing (s->h) && !sys->Paused (s->h);
+		return s && s->h && oapiAudioPlaying (s->h) && !oapiAudioPaused (s->h);
 	}
 
 	bool SetPaused (const int id, const bool pause) override
 	{
 		Slot *s = Find (id);
-		System *sys = Sys ();
-		return s && s->h && sys && sys->Pause (s->h, pause);
+		return s && s->h && oapiAudioPause (s->h, pause);
 	}
 
 	bool IsPaused (const int id) const override
 	{
 		const Slot *s = Find (id);
-		System *sys = Sys ();
-		return s && s->h && sys && sys->Paused (s->h);
+		return s && s->h && oapiAudioPaused (s->h);
 	}
 
 	bool SetDefaultSoundEnabled (const DefaultSoundID id, const bool on) override
 	{
 		const DefaultSound *d = Default (id);
-		if (!d || !vessel) return false;
+		if (!d || !V ()) return false;
 		enabled[id] = on;
-		if (System *sys = Sys ()) {
-			// (a synthesizer: on or off for the vessel)
-			const char *tune = d->kind == ENGINE_MAIN ? "engine_level" : d->kind == RCS ? "rcs_level"
-				: d->kind == AIR ? "air_level" : d->kind == CONTACT ? "contact_level" : nullptr;
-			if (tune) sys->Tune (vessel, tune, on ? 1.0 : 0.0);
-			if (!on) StopWav (id);
-		}
+		// (a synthesizer: on or off for the vessel - its tune kept)
+		const int sound = d->kind == ENGINE_MAIN ? AUDIO_SOUND_ENGINES : d->kind == RCS ? AUDIO_SOUND_RCS
+			: d->kind == AIR ? AUDIO_SOUND_AIR : d->kind == CONTACT ? AUDIO_SOUND_CONTACTS : -1;
+		if (sound >= 0) oapiAudioDefaultSound ((OBJHANDLE)V (), sound, on);
+		if (!on) StopWav (id);
 		return true;
 	}
 
@@ -245,7 +270,7 @@ public:
 	bool SetDefaultSoundGroupFolder (const DefaultSoundID id, const char *folder) override
 	{
 		const DefaultSound *d = Default (id);
-		if (!d || d->kind != GROUP || !folder || !*folder || !vessel) return false;
+		if (!d || d->kind != GROUP || !folder || !*folder || isModule) return false;
 		folders[id] = folder;
 		return true;
 	}
@@ -264,59 +289,54 @@ public:
 	bool SetPan (const int id, const float pan) override
 	{
 		Slot *s = Find (id);
-		System *sys = Sys ();
-		return s && s->h && sys && sys->SetPan (s->h, pan);
+		return s && s->h && oapiAudioPan (s->h, pan);
 	}
 
 	float GetPan (const int id) override
 	{
 		Slot *s = Find (id);
-		System *sys = Sys ();
-		return s && s->h && sys && sys->Playing (s->h) ? sys->GetPan (s->h) : -100.0f;
+		return s && s->h && oapiAudioPlaying (s->h) ? (float)oapiAudioGetPan (s->h) : -100.0f;
 	}
 
 	bool SetPlaybackSpeed (const int id, const float speed) override
 	{
 		Slot *s = Find (id);
-		System *sys = Sys ();
-		return s && s->h && sys && speed > 0.0f && sys->SetSound (s->h, -1.0, speed);
+		return s && s->h && speed > 0.0f && oapiAudioSet (s->h, -1.0, speed);
 	}
 
 	float GetPlaybackSpeed (const int id) override
 	{
 		Slot *s = Find (id);
-		System *sys = Sys ();
-		return s && s->h && sys ? (float)sys->GetPitch (s->h) : 0.0f;
+		return s && s->h ? (float)oapiAudioGetPitch (s->h) : 0.0f;
 	}
 
 	bool SetPlayPosition (const int id, const unsigned int ms) override
 	{
 		Slot *s = Find (id);
-		System *sys = Sys ();
-		return s && s->h && sys && sys->Seek (s->h, ms * 1e-3);
+		return s && s->h && oapiAudioSeek (s->h, ms * 1e-3);
 	}
 
 	int GetPlayPosition (const int id) override
 	{
 		Slot *s = Find (id);
-		System *sys = Sys ();
-		double c = s && s->h && sys ? sys->Cursor (s->h) : -1.0;
+		double c = s && s->h ? oapiAudioCursor (s->h) : -1.0;
 		return c < 0.0 ? -1 : (int)(c * 1e3 + 0.5);
 	}
 
 	// ---- for the core ----------------------------------------------------
 
-	struct Slot { std::string file; PT type = PT::Radio; int h = 0; double volume = 1.0; bool loop = false; };
+	/// (gate: where it may be heard - 0..1, by its type; applied: the gate its level has now)
+	struct Slot { std::string file; PT type = PT::Radio; int h = 0; double volume = 1.0, gate = 1.0, applied = -1.0; bool loop = false; };
 
 	/// Where its sounds may be heard (each step)
-	void Step (System &sys, const Vessel *focus, bool cockpit)
+	void Step (const Vessel *focus, bool cockpit)
 	{
 		lastFocus = focus, lastCockpit = cockpit;
 		for (auto &sl : slots) {
 			Slot &s = sl.second;
 			if (!s.h) continue;
-			if (!sys.Playing (s.h)) { s.h = 0; continue; }
-			Gate (sys, s, focus, cockpit);
+			if (!oapiAudioPlaying (s.h)) { s.h = 0; continue; }
+			Gate (s, focus, cockpit);
 		}
 	}
 
@@ -339,28 +359,38 @@ public:
 	}
 	const std::map<int, std::string> &Folders () const { return folders; }
 
-	const Vessel *vessel = nullptr;
 	std::string module;
 
 private:
-	std::string ClassName () const { return vessel && vessel->ClassName () ? vessel->ClassName () : ""; }
+	const Vessel *vessel = nullptr;   // (V (): while it is there)
+	BodyRef ref;
+	bool isModule = false;
+	std::string ClassName () const { const Vessel *v = V (); return v && v->ClassName () ? v->ClassName () : ""; }
 
-	void Gate (System &sys, Slot &s, const Vessel *focus, bool cockpit)
+	/// Its level: its volume at its route's level, times its gate
+	void Apply (Slot &s)
+	{
+		oapiAudioSet (s.h, s.volume * RouteFor (s.type, isModule).level * s.gate, -1.0);
+		s.applied = s.gate;
+	}
+
+	void Gate (Slot &s, const Vessel *focus, bool cockpit)
 	{
 		double g = 1.0;
-		if (vessel) {
+		if (const Vessel *own = V ()) {
 			switch (s.type) {
-			case PT::InternalOnly: g = vessel == focus && cockpit ? 1.0 : 0.0; break;
-			case PT::Radio:        g = vessel == focus ? 1.0 : 0.0; break;
+			case PT::InternalOnly: g = own == focus && cockpit ? 1.0 : 0.0; break;
+			case PT::Radio:        g = own == focus ? 1.0 : 0.0; break;
 			case PT::Wind: {
-				Vessel *v = const_cast<Vessel*>(vessel);
+				Vessel *v = const_cast<Vessel*>(own);
 				VESSEL *vi = v->GetModuleInterface ();
 				g = !cockpit && vi ? std::min (1.0, vi->GetAtmPressure () / 101325.0) : 0.0;
 				break; }
 			default: break;
 			}
 		}
-		sys.SetGate (s.h, g);
+		s.gate = std::clamp (g, 0.0, 1.0);
+		if (s.gate != s.applied) Apply (s);
 	}
 
 	std::map<int, Slot> slots;
@@ -379,9 +409,11 @@ namespace {
 		XrConfig::Anim a;
 		double prev = -1.0;
 		int oneShot = 0, moving = 0;
+		double gate[2] = {1.0, 1.0};   // (the gate each has now: one-shot, moving)
 	};
 	struct ClassSounds {
-		const Vessel *v = nullptr;
+		const Vessel *v = nullptr;  // (while ref is alive)
+		BodyRef ref;
 		bool init = false;
 		std::vector<AnimTrack> anims;
 		std::string engine[3];      // own files for main, retro, hover (empty: synthesized)
@@ -394,22 +426,24 @@ namespace {
 		return c;
 	}
 
-	ClassSounds &ClassFor (const Vessel *v)
+	ClassSounds &ClassFor (System &sys, const Vessel *v)
 	{
 		auto &all = Classes ();
-		for (auto &c : all) if (c->v == v) return *c;
+		const BodyRef r = sys.GetWorld ().Ref (v);
+		for (auto &c : all) if (c->ref == r) return *c;
 		all.push_back (std::make_unique<ClassSounds>());
-		all.back ()->v = v;
+		all.back ()->v = v, all.back ()->ref = r;
 		return *all.back ();
 	}
 
-	void Play1 (System &sys, const Vessel *v, const std::string &file, PT type, bool loop, int &h)
+	void Play1 (System &sys, const Vessel *v, const std::string &file, PT type, bool loop, int &h, double &gate)
 	{
 		if (file.empty ()) return;
 		Route r = RouteFor (type, false);
 		if (r.bus == VOICE && !sys.CalloutsOn ()) return; // (a voice's line: the callouts switched off)
-		if (h) sys.StopSound (h);
-		h = r.onVessel ? sys.Play (v, file, V3 (), r.level, loop) : sys.PlayOn (r.bus, file, r.level, loop);
+		if (h) oapiAudioStop (h);
+		h = PlayRouted (v, file, r, 1.0, loop);
+		gate = 1.0;
 		// (the voice's: noted with the callouts)
 		if (h && r.bus == VOICE && !loop) sys.GetCallouts ().Note (file, td.SimT1);
 	}
@@ -447,14 +481,16 @@ namespace {
 			own = true;
 			double lvl = vi->GetThrusterGroupLevel (groups[k]);
 			if (lvl > 0.01) {
-				if (!cs.engineH[k] || !sys.Playing (cs.engineH[k])) cs.engineH[k] = sys.Play (cs.v, cs.engine[k], V3 (), lvl, true);
-				else sys.SetSound (cs.engineH[k], lvl, -1.0);
+				// (XRSound's engines: BothViewFar)
+				const Route r = RouteFor (PT::BothViewFar, false);
+				if (!cs.engineH[k] || !oapiAudioPlaying (cs.engineH[k])) cs.engineH[k] = PlayRouted (cs.v, cs.engine[k], r, lvl, true);
+				else oapiAudioSet (cs.engineH[k], lvl * r.level, -1.0);
 			} else if (cs.engineH[k]) {
-				sys.StopSound (cs.engineH[k]);
+				oapiAudioStop (cs.engineH[k]);
 				cs.engineH[k] = 0;
 			}
 		}
-		if (own && !cs.synthOff) { sys.Tune (cs.v, "engine_level", 0.0); cs.synthOff = true; }
+		if (own && !cs.synthOff) { oapiAudioDefaultSound ((OBJHANDLE)cs.v, AUDIO_SOUND_ENGINES, false); cs.synthOff = true; }
 
 		// animations: opening (from closed), moving, open (at its end),
 		// closing (from open), closed (at its start)
@@ -464,22 +500,24 @@ namespace {
 			if (st < 0.0) continue; // (no such animation)
 			PT type = TypeNamed (t.a.playback, PT::BothViewClose);
 			if (t.prev >= 0.0 && st != t.prev) {
-				if (t.prev <= 0.0 && st > 0.0) Play1 (sys, cs.v, t.a.opening, type, false, t.oneShot);
-				else if (t.prev >= 1.0 && st < 1.0) Play1 (sys, cs.v, t.a.closing, type, false, t.oneShot);
-				if (st >= 1.0) Play1 (sys, cs.v, t.a.open, type, false, t.oneShot);
-				else if (st <= 0.0) Play1 (sys, cs.v, t.a.closed, type, false, t.oneShot);
-				if (st > 0.0 && st < 1.0 && !t.a.moving.empty () && (!t.moving || !sys.Playing (t.moving)))
-					Play1 (sys, cs.v, t.a.moving, type, true, t.moving);
+				if (t.prev <= 0.0 && st > 0.0) Play1 (sys, cs.v, t.a.opening, type, false, t.oneShot, t.gate[0]);
+				else if (t.prev >= 1.0 && st < 1.0) Play1 (sys, cs.v, t.a.closing, type, false, t.oneShot, t.gate[0]);
+				if (st >= 1.0) Play1 (sys, cs.v, t.a.open, type, false, t.oneShot, t.gate[0]);
+				else if (st <= 0.0) Play1 (sys, cs.v, t.a.closed, type, false, t.oneShot, t.gate[0]);
+				if (st > 0.0 && st < 1.0 && !t.a.moving.empty () && (!t.moving || !oapiAudioPlaying (t.moving)))
+					Play1 (sys, cs.v, t.a.moving, type, true, t.moving, t.gate[1]);
 			} else if (t.moving && (st == t.prev || st <= 0.0 || st >= 1.0)) {
-				sys.StopSound (t.moving);
+				oapiAudioStop (t.moving);
 				t.moving = 0;
 			}
-			if ((st <= 0.0 || st >= 1.0) && t.moving) { sys.StopSound (t.moving); t.moving = 0; }
-			// (heard as their type says)
-			for (int h : {t.oneShot, t.moving}) {
-				if (!h) continue;
-				double g = type == PT::InternalOnly ? (cs.v == focus && cockpit ? 1.0 : 0.0) : type == PT::Radio ? (cs.v == focus ? 1.0 : 0.0) : 1.0;
-				sys.SetGate (h, g);
+			if ((st <= 0.0 || st >= 1.0) && t.moving) { oapiAudioStop (t.moving); t.moving = 0; }
+			// (heard as their type says: its level at its route's, times where it may be heard)
+			const double g = type == PT::InternalOnly ? (cs.v == focus && cockpit ? 1.0 : 0.0) : type == PT::Radio ? (cs.v == focus ? 1.0 : 0.0) : 1.0;
+			int hs[2] = {t.oneShot, t.moving};
+			for (int i = 0; i < 2; i++) {
+				if (!hs[i] || g == t.gate[i]) continue;
+				oapiAudioSet (hs[i], RouteFor (type, false).level * g, -1.0);
+				t.gate[i] = g;
 			}
 			t.prev = st;
 		}
@@ -488,9 +526,50 @@ namespace {
 
 namespace xr {
 
+namespace {
+	/// <name> if the file is one of XRSound's default sounds ("XRSound/Default/<name>.<ext>",
+	/// either slash, any case, under Sound/ or not), else empty
+	std::string XrDefaultName (const std::string &file)
+	{
+		std::string f = file;
+		std::replace (f.begin (), f.end (), '\\', '/');
+		std::string low = f;
+		std::transform (low.begin (), low.end (), low.begin (), [](unsigned char c) { return (char)std::tolower (c); });
+		size_t at = std::string::npos;
+		for (const char *pre : { "sound/xrsound/default/", "xrsound/default/" })
+			if (low.rfind (pre, 0) == 0) { at = strlen (pre); break; }
+		if (at == std::string::npos) return std::string ();
+		std::string name = f.substr (at);
+		if (name.empty () || name.find ('/') != std::string::npos) return std::string ();   // (not a subfolder's: chatter, music)
+		size_t dot = name.rfind ('.');
+		return dot == std::string::npos ? name : name.substr (0, dot);
+	}
+
+	/// Callouts in Orbiter's voice (Sound/Voice), not XRSound's recordings (the settings;
+	/// ORBITER_AUDIO_VOICE=orbiter or xrsound)
+	bool OrbiterVoice ()
+	{
+		if (Dbg ().voice >= 0) return Dbg ().voice != 0;
+		return !g_pOrbiter || g_pOrbiter->Cfg()->CfgSoundPrm.CalloutVoice == 0;
+	}
+}
+
+std::string Voice (const std::string &file)
+{
+	// XRSound's default voice lines in Orbiter's voice: XR vessels and add-ons that name the
+	// defaults speak with it too. A default with no Orbiter line (a sound, music) stays XRSound's
+	std::string xr = XrDefaultName (file);
+	if (xr.empty () || !OrbiterVoice ()) return file;
+	const std::string v = "Sound/Voice/" + xr + ".flac";
+	return System::FindSound (v).empty () ? file : v;
+}
+
 void Step (System &sys, const Vessel *focus, bool cockpit, double simt)
 {
-	for (auto *in : XrInstance::Instances ()) in->Step (sys, focus, cockpit);
+	for (auto *in : XrInstance::Instances ()) in->Step (focus, cockpit);
+	// (vessels deleted: their class's sounds gone - their handles died with them)
+	auto &all = Classes ();
+	all.erase (std::remove_if (all.begin (), all.end (), [&sys](const std::unique_ptr<ClassSounds> &c) { return !sys.GetWorld ().Alive (c->ref); }), all.end ());
 	if (!g_psys) return;
 	// (the vessels whose class cfg gives them sounds, or whose code does)
 	for (DWORD i = 0; i < g_psys->nVessel (); i++) {
@@ -503,15 +582,8 @@ void Step (System &sys, const Vessel *focus, bool cockpit, double simt)
 			const XrConfig &g = XrConfig::For ("");
 			for (auto *k : keys) if (!c.File (k).empty () && c.File (k) != g.File (k)) any = true;
 		}
-		if (any) StepClass (sys, ClassFor (v), focus, cockpit);
+		if (any) StepClass (sys, ClassFor (sys, v), focus, cockpit);
 	}
-}
-
-void Forget (const Body *body)
-{
-	auto &all = Classes ();
-	all.erase (std::remove_if (all.begin (), all.end (), [body](const std::unique_ptr<ClassSounds> &c) { return (const Body*)c->v == body; }), all.end ());
-	for (auto *in : XrInstance::Instances ()) if ((const Body*)in->vessel == body) in->vessel = nullptr;
 }
 
 void Clear ()

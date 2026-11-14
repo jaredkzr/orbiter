@@ -2,7 +2,9 @@
 // Licensed under the MIT License
 
 #include "AudioSystem.h"
+#include "DebugEnv.h"
 #include "Loudness.h"
+#include "Assets.h"
 #include "Orbiter.h"
 #include "Config.h"
 #include "TimeData.h"
@@ -13,6 +15,8 @@
 #include "Replay.h"
 #include "Ears.h"
 #include "XRSoundShim.h"
+#include "OrbiterScene.h"
+#include "FlightSampler.h"
 #include "Camera.h"
 #include "miniaudio.h"
 #include <filesystem>
@@ -49,25 +53,23 @@ void System::Start (bool graphicsClient)
 	started = true;
 	client = graphicsClient;
 
-	const char *render = getenv ("ORBITER_AUDIO_RENDER");
-	const char *force = getenv ("ORBITER_AUDIO");
+	const DebugEnv &env = Dbg ();
+	const char *render = env.render.c_str ();
 	const CFG_SOUNDPRM &s = orbiter->Cfg()->CfgSoundPrm;
 
 	Engine::Options opt;
 	// the listening level (Ears.h): on for the speakers; in a render (the
 	// tests' physical levels) only if ORBITER_AUDIO_ADAPT=1 (listening reels)
-	const char *adapt = getenv ("ORBITER_AUDIO_ADAPT");
-	opt.adapt = adapt && *adapt ? *adapt != '0' : !(render && *render);
-	if (render && *render) {
+	opt.adapt = env.adapt >= 0 ? env.adapt != 0 : env.render.empty ();
+	if (!env.render.empty ()) {
 		opt.mode = Engine::OFFLINE; // (renders regardless of the settings: tests)
-	} else if (force && *force) {
-		opt.mode = *force != '0' ? Engine::DEVICE : Engine::OFF;
+	} else if (env.device >= 0) {
+		opt.mode = env.device ? Engine::DEVICE : Engine::OFF;
 		forcedOff = opt.mode == Engine::OFF;
 		client = !forcedOff;
 	} else {
 		// (offscreen runs, tests and recordings, keep off the speakers)
-		const char *offscreen = getenv ("ORBITER_VK_OFFSCREEN");
-		if (offscreen && *offscreen && *offscreen != '0') client = false;
+		if (env.offscreen) client = false;
 		opt.mode = client && s.bEnabled ? Engine::DEVICE : Engine::OFF;
 	}
 	if (opt.mode == Engine::OFF) {
@@ -91,6 +93,11 @@ void System::Start (bool graphicsClient)
 	}
 	renderTime = 0.0;
 	flushed = 0;
+	// files decoded in the background on the device (the simulation never
+	// waits on a disk); at once in a render (repeatable to the sample)
+	// (ORBITER_AUDIO_ASYNC=1: in the background in a render too - tests of the device's way)
+	Assets::Get ().SetAsync (opt.mode == Engine::DEVICE || env.async);
+	if (opt.mode == Engine::DEVICE) PrefetchClicks ();
 	ApplySettings (s);
 	world.OnBoom ([this](const World::Boom &b) { Boom (b); });
 }
@@ -101,7 +108,7 @@ void System::Boom (const World::Boom &b)
 	const Air &la = world.ListenerAir ();
 	BoomSynth::Strength (b.emitter->Desc ().length, b.mach, b.height, b.sAir.p, la.p, b.sAir.c, dp, T);
 	LOGOUT ("Audio: boom from %s at %.3f s: Mach %.2f, %.0f m, %.1f Pa, %.0f ms", b.emitter->Desc ().name.c_str (), b.t, b.mach, b.height, dp, T * 1e3);
-	static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+	const bool log = Dbg ().log > 0;
 	if (log) printf ("Audio: boom from %s at %.3f s: Mach %.2f, %.0f m, %.1f Pa, %.0f ms\n", b.emitter->Desc ().name.c_str (), b.t, b.mach, b.height, dp, T * 1e3), fflush (stdout);
 	if (td.Warp () > WARP_MUTE) return;
 	// (a source not faster than sound doesn't boom: its path jumped - a
@@ -115,81 +122,12 @@ void System::Boom (const World::Boom &b)
 	world.PlayShot (std::move (bs), b.dir, (float)(dp / P_FULL), len);
 }
 
-namespace {
-	/// A path as given, its backslashes as slashes, its case as on the disk
-	/// (files named in Windows' manner: add-ons' cfgs)
-	std::string ResolveCase (std::string f)
-	{
-		std::replace (f.begin (), f.end (), '\\', '/');
-		std::error_code ec;
-		if (f.empty () || std::filesystem::exists (f, ec)) return f;
-		namespace fs = std::filesystem;
-		fs::path in (f), out;
-		for (const fs::path &part : in) {
-			fs::path next = out.empty () ? part : out / part;
-			if (!fs::exists (next, ec)) {
-				bool found = false;
-				std::string want = part.string ();
-				for (const auto &de : fs::directory_iterator (out.empty () ? fs::path (".") : out, ec)) {
-					std::string name = de.path ().filename ().string ();
-					if (name.size () == want.size () && std::equal (name.begin (), name.end (), want.begin (),
-						[](char a, char b) { return std::tolower ((unsigned char)a) == std::tolower ((unsigned char)b); })) {
-						next = out.empty () ? fs::path (name) : out / name;
-						found = true;
-						break;
-					}
-				}
-				if (!found) return std::string ();
-			}
-			out = next;
-		}
-		return out.string ();
-	}
-}
-
-namespace {
-	/// <name> if the file is one of XRSound's default sounds ("XRSound/Default/<name>.<ext>",
-	/// either slash, any case, under Sound/ or not), else empty
-	std::string XrDefaultName (const std::string &file)
-	{
-		std::string f = file;
-		std::replace (f.begin (), f.end (), '\\', '/');
-		std::string low = f;
-		std::transform (low.begin (), low.end (), low.begin (), [](unsigned char c) { return (char)std::tolower (c); });
-		size_t at = std::string::npos;
-		for (const char *pre : { "sound/xrsound/default/", "xrsound/default/" })
-			if (low.rfind (pre, 0) == 0) { at = strlen (pre); break; }
-		if (at == std::string::npos) return std::string ();
-		std::string name = f.substr (at);
-		if (name.empty () || name.find ('/') != std::string::npos) return std::string ();   // (not a subfolder's: chatter, music)
-		size_t dot = name.rfind ('.');
-		return dot == std::string::npos ? name : name.substr (0, dot);
-	}
-
-	/// Callouts in Orbiter's voice (Sound/Voice), not XRSound's recordings (the settings;
-	/// ORBITER_AUDIO_VOICE=orbiter or xrsound)
-	bool OrbiterVoice ()
-	{
-		static const char *env = getenv ("ORBITER_AUDIO_VOICE");
-		if (env && *env) return std::tolower ((unsigned char)*env) != 'x';
-		return !g_pOrbiter || g_pOrbiter->Cfg()->CfgSoundPrm.CalloutVoice == 0;
-	}
-}
-
 std::string System::FindSound (const std::string &file)
 {
 	if (file.empty ()) return std::string ();
-	// XRSound's default voice lines in Orbiter's voice: the one place every lookup passes
-	// (the callouts, XRSound configs, the XRSound shim), so XR vessels and add-ons that name
-	// the defaults speak with it too. A default with no Orbiter line (a sound, music) is XRSound's.
-	std::string xr = XrDefaultName (file);
-	if (!xr.empty () && OrbiterVoice ()) {
-		std::string v = ResolveCase ("Sound/Voice/" + xr + ".flac");
-		if (!v.empty ()) return v;
-	}
-	std::string s = ResolveCase (file);
+	std::string s = Assets::Get ().Resolve (file);
 	if (!s.empty ()) return s;
-	return ResolveCase ("Sound/" + file);
+	return Assets::Get ().Resolve ("Sound/" + file);
 }
 
 bool System::VesselEvent (const Vessel *v, const std::string &event)
@@ -198,17 +136,17 @@ bool System::VesselEvent (const Vessel *v, const std::string &event)
 	// not across vacuum), the commander's call, the ground's reply (the vessel in focus)
 	struct Ev { const char *name, *line; int radio; };
 	static const Ev evs[] = {
-		{"BoosterSeparation", "Sound/Voice/Booster Separation.flac", Radio::BOOSTER_SEP},
-		{"TankSeparation", "Sound/Voice/Tank Separation.flac", Radio::TANK_SEP},
+		{"BoosterSeparation", "BoosterSeparation", Radio::BOOSTER_SEP},
+		{"TankSeparation", "TankSeparation", Radio::TANK_SEP},
 	};
 	for (const Ev &e : evs) {
 		if (event != e.name) continue;
 		if (!FindSound ("Sound/Generated/pyro.flac").empty ()) Play (v, "Sound/Generated/pyro.flac", V3 (0, 0, 0), 10.0, false);   // (the bolts and separation motors: unmistakable over the engines - measured in a launch, -21 dB in the mix against the roar at -18)
 		if (v == g_focusobj) {
-			callouts.Crew (e.line, 3.0);
+			callouts.Crew (e.line);
 			radio.OnEvent ((Radio::Event)e.radio);
 		}
-		static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+		const bool log = Dbg ().log > 0;
 		if (log) printf ("Audio: vessel event %s\n", e.name), fflush (stdout);
 		return true;
 	}
@@ -222,19 +160,16 @@ int System::Play (const Vessel *v, const std::string &file, const V3 &pos, doubl
 	std::string path = FindSound (file);
 	if (path.empty ()) { LOGOUT ("Audio: no sound file %s", file.c_str ()); return 0; }
 	Played p;
-	p.loop = loop, p.level = level;
-	EmitterDesc d;
-	d.body = v;
-	d.offset = pos;
-	d.level = (float)level;
-	d.refDist = 2.0f;
-	d.hull = 0.5f;
-	d.name = file;
-	p.em = world.Add (d, MakeFileSource (engine, path, loop));
-	if (!p.em) return 0;
-	int h = nextHandle++;
-	played[h] = std::move (p);
-	return h;
+	p.loop = loop, p.level = level, p.path = path;
+	p.desc.body = v;
+	p.vessel = world.Ref (v);
+	p.desc.offset = pos;
+	p.desc.level = (float)level;
+	p.desc.refDist = 2.0f;
+	p.desc.hull = 0.5f;
+	p.desc.name = file;
+	p.desc.delayed = true;   // (heard when the sound of its start arrives: 3 km off, 9 s later)
+	return Launch (std::move (p));
 }
 
 int System::PlayOn (Bus bus, const std::string &file, double level, bool loop, bool speech)
@@ -242,26 +177,67 @@ int System::PlayOn (Bus bus, const std::string &file, double level, bool loop, b
 	if (!engine.Active () || bus < 0 || bus >= NBUS) return 0;
 	std::string path = FindSound (file);
 	if (path.empty ()) { LOGOUT ("Audio: no sound file %s", file.c_str ()); return 0; }
-	if (speech && (bus == VOICE || bus == RADIO)) level *= LoudnessGain (path, SPEECH_LUFS);
 	Played p;
-	p.loop = loop, p.level = level, p.bus = bus;
-	p.flat = std::make_unique<ma_sound>();
-	ma_uint32 flags = MA_SOUND_FLAG_NO_SPATIALIZATION | MA_SOUND_FLAG_DECODE;
-	if (ma_sound_init_from_file (engine.Ma (), path.c_str (), flags, engine.Group (bus), NULL, p.flat.get ()) != MA_SUCCESS) return 0;
-	ma_sound_set_looping (p.flat.get (), loop ? MA_TRUE : MA_FALSE);
-	ma_sound_set_volume (p.flat.get (), (float)level);
-	ma_sound_start (p.flat.get ());
-	int h = nextHandle++;
-	played[h] = std::move (p);
+	p.loop = loop, p.level = level, p.bus = bus, p.path = path;
+	p.speech = speech && (bus == VOICE || bus == RADIO);
+	return Launch (std::move (p));
+}
+
+int System::Launch (Played &&p)
+{
+	// its file decoded (in the background on the device: it starts when
+	// it's there, a frame or so later; at once in a render)
+	Assets::Get ().Prefetch (p.path, engine.SampleRate (), 0, p.speech);
+	const int h = nextHandle++;
+	Played &q = played[h] = std::move (p);
+	q.pending = true;
+	if (!StartPending (q)) { played.erase (h); return 0; }
 	return h;
+}
+
+bool System::StartPending (Played &p)
+{
+	if (!p.pending) return true;
+	bool failed = false;
+	ClipRef clip = Assets::Get ().Peek (p.path, engine.SampleRate (), 0, failed);
+	if (failed) { LOGOUT ("Audio: can't read %s", p.path.c_str ()); return false; }
+	if (!clip) return true; // (still loading)
+	p.pending = false;
+	// speech (the voice's, the radio's buses) brought to SPEECH_LUFS: recordings of all levels alike
+	if (p.speech) p.level *= LoudnessGain (p.path, SPEECH_LUFS);
+	if (p.desc.body) {
+		if (!world.Alive (p.vessel)) return false; // (its vessel gone meanwhile)
+		p.desc.level = (float)(p.level * p.gate);
+		p.em = world.Add (p.desc, MakeClipSource (engine, clip, p.loop));
+		Emitter *e = world.Get (p.em);
+		if (!e) return false;
+		if (p.pitch != 1.0) e->SetPitch ((float)p.pitch);
+		if (p.seek >= 0.0 && e->GetSource ()) e->GetSource ()->Seek (p.seek);
+		if (p.paused) e->Hold (true);
+		return true;
+	}
+	p.flat = std::make_unique<ClipSound>();
+	if (!p.flat->Init (engine.Ma (), clip, engine.Group (p.bus), 0, p.loop)) return false;
+	ma_sound *s = p.flat->Sound ();
+	ma_sound_set_volume (s, (float)(p.level * p.gate));
+	if (p.pitch != 1.0) ma_sound_set_pitch (s, (float)p.pitch);
+	if (p.pan != 0.0f) ma_sound_set_pan (s, p.pan);
+	if (p.seek >= 0.0) ma_sound_seek_to_second (s, (float)p.seek);
+	if (!p.paused) ma_sound_start (s);
+	return true;
+}
+
+void System::Drop (Played &p)
+{
+	world.Remove (p.em), p.em = EmitterId ();
+	p.flat.reset ();
 }
 
 bool System::StopSound (int h)
 {
 	auto it = played.find (h);
 	if (it == played.end ()) return false;
-	if (it->second.em) world.Remove (it->second.em);
-	if (it->second.flat) ma_sound_uninit (it->second.flat.get ());
+	Drop (it->second);
 	played.erase (it);
 	return true;
 }
@@ -277,8 +253,8 @@ bool System::SetSound (int h, double level, double pitch)
 	}
 	if (pitch > 0.0) {
 		p.pitch = pitch;
-		if (p.em) p.em->SetPitch ((float)pitch);
-		if (p.flat) ma_sound_set_pitch (p.flat.get (), (float)pitch);
+		if (Emitter *e = world.Get (p.em)) e->SetPitch ((float)pitch);
+		if (p.flat) ma_sound_set_pitch (p.flat->Sound (), (float)pitch);
 	}
 	return true;
 }
@@ -286,13 +262,13 @@ bool System::SetSound (int h, double level, double pitch)
 void System::ApplyLevel (Played &p)
 {
 	const float g = (float)(p.level * p.gate);
-	if (p.em) p.em->SetLevel (g);
-	if (p.flat) ma_sound_set_volume (p.flat.get (), g);
+	if (Emitter *e = world.Get (p.em)) e->SetLevel (g);
+	if (p.flat) ma_sound_set_volume (p.flat->Sound (), g);
 }
 
 bool System::Playing (int h) const
 {
-	return played.count (h) > 0;
+	return played.count (h) > 0;   // (waiting for its file too)
 }
 
 System::Played *System::Find (int h)
@@ -313,8 +289,8 @@ bool System::Pause (int h, bool pause)
 	if (!p) return false;
 	if (p->paused == pause) return true;
 	p->paused = pause;
-	if (p->flat) { if (pause) ma_sound_stop (p->flat.get ()); else ma_sound_start (p->flat.get ()); }
-	if (p->em && p->em->GetSource ()) p->em->GetSource ()->Pause (pause);
+	if (p->flat) { if (pause) ma_sound_stop (p->flat->Sound ()); else ma_sound_start (p->flat->Sound ()); }
+	if (Emitter *e = world.Get (p->em)) e->Hold (pause);
 	return true;
 }
 
@@ -327,9 +303,9 @@ bool System::Paused (int h) const
 bool System::SetPan (int h, float pan)
 {
 	Played *p = Find (h);
-	if (!p || !p->flat) return false; // (sounds on a vessel are where they are)
+	if (!p || p->desc.body) return false; // (sounds on a vessel are where they are)
 	p->pan = std::clamp (pan, -1.0f, 1.0f);
-	ma_sound_set_pan (p->flat.get (), p->pan);
+	if (p->flat) ma_sound_set_pan (p->flat->Sound (), p->pan);
 	return true;
 }
 
@@ -349,16 +325,20 @@ bool System::Seek (int h, double s)
 {
 	Played *p = Find (h);
 	if (!p) return false;
-	if (p->flat) return ma_sound_seek_to_second (p->flat.get (), (float)std::max (0.0, s)) == MA_SUCCESS;
-	return p->em && p->em->GetSource () && p->em->GetSource ()->Seek (s);
+	if (p->pending) { p->seek = std::max (0.0, s); return true; }
+	if (p->flat) return ma_sound_seek_to_second (p->flat->Sound (), (float)std::max (0.0, s)) == MA_SUCCESS;
+	Emitter *e = world.Get (p->em);
+	return e && e->GetSource () && e->GetSource ()->Seek (s);
 }
 
 double System::Cursor (int h) const
 {
 	const Played *p = Find (h);
 	if (!p) return -1.0;
-	if (p->flat) { float c = 0.0f; return ma_sound_get_cursor_in_seconds (p->flat.get (), &c) == MA_SUCCESS ? c : -1.0; }
-	return p->em && p->em->GetSource () ? p->em->GetSource ()->Cursor () : -1.0;
+	if (p->pending) return std::max (0.0, p->seek);
+	if (p->flat) { float c = 0.0f; return ma_sound_get_cursor_in_seconds (const_cast<ma_sound*> (p->flat->Sound ()), &c) == MA_SUCCESS ? c : -1.0; }
+	Emitter *e = world.Get (p->em);
+	return e && e->GetSource () ? e->GetSource ()->Cursor () : -1.0;
 }
 
 bool System::SetGate (int h, double g)
@@ -372,21 +352,27 @@ bool System::SetGate (int h, double g)
 
 bool System::Speaking () const
 {
-	for (auto &p : played)
-		if (p.second.bus == VOICE && p.second.flat && !p.second.paused && p.second.gate > 0.0 && p.second.level > 0.0
-			&& ma_sound_is_playing (p.second.flat.get ())) return true;
+	for (auto &p : played) {
+		const Played &q = p.second;
+		if (q.bus != VOICE || q.desc.body || q.paused || q.gate <= 0.0 || q.level <= 0.0) continue;
+		if (q.pending || (q.flat && ma_sound_is_playing (q.flat->Sound ()))) return true; // (a line about to start: speaking)
+	}
 	return false;
 }
 
 void System::UpdatePlayed ()
 {
-	// (sounds not looped go when they have played)
 	for (auto it = played.begin (); it != played.end (); ) {
 		Played &p = it->second;
-		bool done = !p.loop && !p.paused && ((p.em && p.em->SourceDone ()) || (p.flat && ma_sound_at_end (p.flat.get ())));
+		// (waiting for its file: started when it's there; gone if it can't be read)
+		if (p.pending && !StartPending (p)) { Drop (p); it = played.erase (it); continue; }
+		// (on a vessel gone: gone with it)
+		const Emitter *e = world.Get (p.em);
+		if (p.desc.body && !p.pending && !e) { Drop (p); it = played.erase (it); continue; }
+		// (sounds not looped go when they have played)
+		bool done = !p.loop && !p.paused && !p.pending && ((e && e->SourceDone ()) || (p.flat && ma_sound_at_end (p.flat->Sound ())));
 		if (done) {
-			if (p.em) world.Remove (p.em);
-			if (p.flat) ma_sound_uninit (p.flat.get ());
+			Drop (p);
 			it = played.erase (it);
 		} else ++it;
 	}
@@ -394,23 +380,20 @@ void System::UpdatePlayed ()
 
 bool System::CalloutsOn () const
 {
-	static const char *env = getenv ("ORBITER_AUDIO_CALLOUTS"); // (tests: 0 or 1)
-	if (env && *env) return *env != '0';
+	if (Dbg ().callouts >= 0) return Dbg ().callouts != 0; // (tests)
 	return orbiter->Cfg()->CfgSoundPrm.bCallouts;
 }
 
 bool System::MusicOn () const
 {
-	static const char *env = getenv ("ORBITER_AUDIO_MUSIC"); // (0 or 1)
-	if (env && *env) return *env != '0';
+	if (Dbg ().music >= 0) return Dbg ().music != 0;
 	if (Rendering ()) return false; // (the tests' renders: the world alone)
 	return orbiter->Cfg()->CfgSoundPrm.bMusic;
 }
 
 bool System::HrtfOn () const
 {
-	static const char *env = getenv ("ORBITER_AUDIO_HRTF"); // (0 or 1)
-	if (env && *env) return *env != '0';
+	if (Dbg ().hrtf >= 0) return Dbg ().hrtf != 0;
 	return orbiter->Cfg()->CfgSoundPrm.bHrtf;
 }
 
@@ -422,7 +405,12 @@ void System::Explosion (const Vessel *v, double propellant)
 
 void System::Event (const Vessel *v, Callouts::Event e)
 {
-	callouts.OnEvent (v, e);
+	// (the vessel in focus: its crew says it, the ground hears of it)
+	if (callouts.OnEvent (v, e)) {
+		if (e == Callouts::EV_DOCKED) radio.OnEvent (Radio::DOCKED);
+		else if (e == Callouts::EV_UNDOCKED) radio.OnEvent (Radio::UNDOCKED);
+		else if (e == Callouts::EV_SPLASHDOWN) flight.Splashdown (), radio.OnEvent (Radio::SPLASHDOWN);
+	}
 	if (v && v == g_focusobj && (e == Callouts::EV_PART_LOST || e == Callouts::EV_HEAT_DAMAGE)) music.Alarm ();
 }
 
@@ -436,7 +424,7 @@ void System::PlayClick ()
 	if (k == CLICK_UI) {
 		snprintf (f, sizeof (f), "Clicks/ui_%u.flac", 1 + clickRng % 3);
 		PlayOn (UI, f, UI_CLICK, false, false);
-		if (getenv ("ORBITER_AUDIO_LOG")) printf ("Audio: click %s (interface)\n", f), fflush (stdout);
+		if (Dbg ().log) printf ("Audio: click %s (interface)\n", f), fflush (stdout);
 		return;
 	}
 	if (xr::HasInstance (g_focusobj)) return; // (an XRSound vessel clicks its own)
@@ -447,8 +435,31 @@ void System::PlayClick ()
 	const bool cabin = engine.SimFadeTarget () > 0.5f;
 	if (cabin) PlayOn (INTERIOR, f, CLICK_P / P_FULL / 0.891, false, false);
 	else PlayOn (UI, f, 1.4 * UI_CLICK, false, false);
-	static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+	const bool log = Dbg ().log > 0;
 	if (log) printf ("Audio: click %s (%s)\n", f, cabin ? "cabin" : "interface"), fflush (stdout);
+}
+
+void System::TraceFlight (const FlightSample *s)
+{
+	// (ORBITER_AUDIO_FLIGHT_TRACE=<file>: the samples, for Tests/Audio.Flight.cpp)
+	const std::string &path = Dbg ().flightTrace;
+	if (path.empty () || !s) return;
+	if (!flightTrace) flightTrace = fopen (path.c_str (), "w");
+	if (flightTrace) WriteSample (flightTrace, *s);
+}
+
+void System::PrefetchClicks ()
+{
+	// (the controls' clicks: there at the first click)
+	char f[64];
+	for (unsigned i = 1; i <= 4; i++) {
+		const char *kinds[] = { "Clicks/ui_%u.flac", "Clicks/switch_on_%u.flac", "Clicks/switch_off_%u.flac", "Clicks/button_%u.flac" };
+		for (const char *k : kinds) {
+			snprintf (f, sizeof (f), k, i);
+			const std::string p = FindSound (f);
+			if (!p.empty ()) Assets::Get ().Prefetch (p, engine.SampleRate ());
+		}
+	}
 }
 
 void System::Idle ()
@@ -487,34 +498,26 @@ void System::Duck (double dt)
 void System::EndSession ()
 {
 	callouts.Reset ();
+	flight.Reset ();
+	if (flightTrace) fclose (flightTrace), flightTrace = nullptr;
 	xr::Clear ();
 	warpDrive.Clear ();
-	for (auto &p : played) if (p.second.flat) ma_sound_uninit (p.second.flat.get ());
+	for (auto &p : played) Drop (p.second);
 	played.clear ();
 	vessels.Clear ();
 	effects.Clear ();
 	ambience.Clear ();
 	radio.Clear ();
 	world.Clear ();
-	testTone = nullptr;
+	testTone = EmitterId ();
 	logT = -1.0;
-}
-
-void System::Forget (const Body *body)
-{
-	if (testTone && testTone->Desc ().body == body) testTone = nullptr;
-	for (auto it = played.begin (); it != played.end (); )
-		it = (it->second.em && it->second.em->Desc ().body == body) ? played.erase (it) : std::next (it);
-	vessels.Forget (body);
-	effects.Forget (body);
-	world.Forget (body);
-	xr::Forget (body);
+	Assets::Get ().Forget (); // (files may come or go between sessions)
 }
 
 void System::TestTone ()
 {
-	static const char *spec = getenv ("ORBITER_AUDIO_TEST_TONE");
-	if (!spec || !*spec || testTone || !g_psys) return;
+	const std::string &spec = Dbg ().testTone;
+	if (spec.empty () || world.Get (testTone) || !g_psys) return;
 	std::string name (spec);
 	double freq = 440.0, level = 1.0;
 	size_t c = name.find (':');
@@ -539,18 +542,17 @@ void System::TestTone ()
 
 void System::Stop ()
 {
-	PathNode::SetHrtf (nullptr);
+	// every sound goes while the engine is there: their nodes and sounds
+	// belong to its graph (then the engine, and last the HRTFs they read)
+	EndSession ();
 	music.Clear ();
-	ambience.Clear ();
-	radio.Clear ();
-	warpDrive.Clear ();
-	for (auto &p : played) if (p.second.flat) ma_sound_uninit (p.second.flat.get ());
-	played.clear ();
 	if (wav.IsOpen ()) {
 		LOGOUT ("Audio: rendered %.2f s", (double)wav.Frames() / std::max (1u, engine.SampleRate()));
 		wav.Close ();
 	}
 	engine.Shutdown ();
+	PathNode::SetHrtf (nullptr);
+	Assets::Get ().Shutdown ();
 	started = false;
 }
 
@@ -567,22 +569,20 @@ void System::ApplySettings (const CFG_SOUNDPRM &s)
 		PathNode::SetHrtf (hrtf.Loaded () ? &hrtf : nullptr);
 	} else PathNode::SetHrtf (nullptr);
 	// (a render is mixed at full volume, whatever the player's settings)
-	static const bool renderVolumes = getenv ("ORBITER_AUDIO_RENDER_VOLUMES") && *getenv ("ORBITER_AUDIO_RENDER_VOLUMES") == '1'; // (listening reels)
-	if (Rendering () && !renderVolumes) {
+	if (Rendering () && !Dbg ().renderVolumes) { // (ORBITER_AUDIO_RENDER_VOLUMES=1: listening reels)
 		// (ORBITER_AUDIO_SOLO=<bus>: that bus alone - outside, cockpit,
 		// voice, radio, music, interface; the world: outside,cockpit)
-		static const char *solo = getenv ("ORBITER_AUDIO_SOLO");
+		const std::string &solo = Dbg ().solo;
 		static const char *names[NBUS] = { "outside", "cockpit", "voice", "radio", "music", "interface" };
 		engine.SetMasterGain (1.0f);
-		for (int b = 0; b < NBUS; b++) engine.SetBusGain ((Bus)b, !solo || !*solo || strstr (solo, names[b]) ? 1.0f : 0.0f);
+		for (int b = 0; b < NBUS; b++) engine.SetBusGain ((Bus)b, solo.empty () || solo.find (names[b]) != std::string::npos ? 1.0f : 0.0f);
 		return;
 	}
 	engine.SetMasterGain (s.bEnabled ? VolumeToGain (s.Master) : 0.0f);
 	for (int b = 0; b < NBUS; b++) engine.SetBusGain ((Bus)b, VolumeToGain (s.Bus[b]));
 	// the dynamics' compression (the listening level with it: off with it)
 	engine.SetCompression (s.Compression);
-	static const char *adaptEnv = getenv ("ORBITER_AUDIO_ADAPT");
-	engine.SetAdapt (adaptEnv && *adaptEnv ? *adaptEnv != '0' : s.Compression != Ears::COMP_OFF);
+	engine.SetAdapt (Dbg ().adapt >= 0 ? Dbg ().adapt != 0 : s.Compression != Ears::COMP_OFF);
 }
 
 void System::SettingsChanged ()
@@ -616,33 +616,48 @@ void System::Step ()
 	float fade = replay ? (rp->Playing () && rp->Speed () > 0.0 && rp->Speed () <= 2.0 ? 1.0f : 0.0f)
 	                    : SimFadeFor (orbiter->IsRunning (), td.Warp ());
 	engine.SetSimFade (fade, fade < engine.SimFadeTarget () ? 0.15 : 0.4);
+	const bool wasHeld = engine.Suspended ();
+	engine.Suspend ();   // (faded out: held where they are, until the fade comes back)
+	const bool logHold = Dbg ().log > 0;
+	if (logHold && wasHeld != engine.Suspended ()) printf ("Audio: the simulation's sounds %s at %.2f\n", engine.Suspended () ? "held" : "going on", td.SimT1), fflush (stdout);
+	// the clock of what is heard: real time while the simulation's sounds are (the voice's queue,
+	// the radio's pauses, the voice cap; the simulation's time drives propagation and the flight)
+	const double playDt = fade > 0.0f ? td.UiDT () : 0.0;
+	playT += playDt;
 
 	// the sounds of the world, as heard now
 	if (g_psys) {
 		TestTone ();
-		static const char *realismEnv = getenv ("ORBITER_AUDIO_REALISM"); // (tests: physical|cinematic)
-		bool cinematic = realismEnv && *realismEnv ? (realismEnv[0] == 'c' || realismEnv[0] == 'C') : orbiter->Cfg()->CfgSoundPrm.Realism == 1;
+		const bool cinematic = Dbg ().realism >= 0 ? Dbg ().realism == 1 : orbiter->Cfg()->CfgSoundPrm.Realism == 1; // (tests: ORBITER_AUDIO_REALISM)
 		world.SetRealism (cinematic ? CINEMATIC : PHYSICAL);
-		static const bool noVessels = getenv ("ORBITER_AUDIO_VESSELS") && *getenv ("ORBITER_AUDIO_VESSELS") == '0';
-		if (!noVessels) vessels.Update (t, replay);
+		if (Dbg ().vessels) vessels.Update (t, replay);
 		if (!replay) effects.Update (t);
-		ambience.Update (t, td.UiDT ());
-		world.Update (t);
+		ambience.Update (t, playT, td.UiDT ());
+		world.Update (scene.Take (t, playT), scene);
 		// the voice, XRSound's sounds (not in the replay: it isn't flown)
 		const bool cockpit = g_camera && g_camera->IsInternal ();
 		if (!replay) {
 			// (the flight's events followed even with the callouts off: the
 			// ground answers them on the radio)
 			callouts.SetMuted (!CalloutsOn ());
-			callouts.Step (g_focusobj, td.SimT1, td.SimDT, td.Warp ());
-			static const bool radioOff = getenv ("ORBITER_AUDIO_RADIO") && *getenv ("ORBITER_AUDIO_RADIO") == '0'; // (tests)
-			if (radioOff) radio.Clear (); else radio.Update (td.SimT1);
+			// the flight of the vessel in focus: its moments, said by the crew, answered by the ground
+			FlightSample fs;
+			const bool sampled = SampleFlight (*this, g_focusobj, td.SimT1, td.SimDT, fs);
+			flight.Step (world.Ref (g_focusobj).serial, sampled ? &fs : nullptr, td.Warp () > 10.0);
+			TraceFlight (sampled ? &fs : nullptr);
+			const bool logFlight = Dbg ().log > 0;
+			if (logFlight)
+				for (const FlightEvent &e : flight.Events ())
+					printf ("Audio: flight: %s %g%s%s at %.2f\n", FlightEventName (e.kind), e.value, e.text.empty () ? "" : " ", e.text.c_str (), td.SimT1), fflush (stdout);
+			callouts.Step (g_focusobj, flight, playT, td.Warp ());
+			radio.OnFlight (flight.Events ());
+			if (!Dbg ().radio) radio.Clear (); else radio.Update (td.SimT1, playT); // (tests: ORBITER_AUDIO_RADIO=0)
 			xr::Step (*this, g_focusobj, cockpit, td.SimT1);
-			warpDrive.Step (g_focusobj, cockpit, td.UiDT ());
+			warpDrive.Step (g_focusobj, cockpit, playDt);
 		}
 		UpdatePlayed ();
 		Duck (td.UiDT ());
-		static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+		const bool log = Dbg ().log > 0;
 		if (log && (logT < 0.0 || t - logT >= 0.5 || t < logT)) {
 			if (logT < 0.0 || t - logT >= 0.5) {
 				static double loadT = -1e9;
@@ -656,8 +671,8 @@ void System::Step ()
 			const Air &la = world.ListenerAir ();
 			for (auto &e : world.Emitters ()) {
 				const Emitter::State &h = e->Heard ();
-				static const bool all = getenv ("ORBITER_AUDIO_LOG") && atoi (getenv ("ORBITER_AUDIO_LOG")) >= 2;
-				if (!all && h.air < 1e-6f && h.hull < 1e-6f && e.get () != testTone) continue; // (silent; ORBITER_AUDIO_LOG=2 logs them too)
+				const bool all = Dbg ().log >= 2;
+				if (!all && h.air < 1e-6f && h.hull < 1e-6f && e->Id () != testTone) continue; // (silent; ORBITER_AUDIO_LOG=2 logs them too)
 				LOGOUT ("Audio: %st %.2f %s: images %d, dist %.0f m, delay %.3f s, doppler %.4f, air %.4f, hull %.4f, cutoff %.0f Hz (listener: rho %.4g, c %.1f%s)",
 					replay ? "replay " : "", t, e->Desc ().name.c_str (), h.images, h.dist, h.delay, h.doppler, h.air, h.hull, h.cutoff,
 					la.rho, la.c, world.ListenerInside () ? ", in the cockpit" : "");

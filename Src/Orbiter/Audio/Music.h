@@ -31,6 +31,7 @@
 #define __AUDIOMUSIC_H
 
 #include "MusicSynth.h"
+#include "World.h"
 #include <memory>
 
 namespace audio {
@@ -74,10 +75,10 @@ public:
 private:
 	Situation Observe (bool menu) const;
 	System &sys;
-	std::unique_ptr<MusicSynth> synth;
+	SourcePtr<MusicSynth> synth;
 	music::Mood mood = music::SILENT, candidate = music::SILENT;
 	double since = 0.0, alarm = 0.0, off = 0.0;
-	const void *focus = nullptr; // (another vessel in focus: the critical moment past)
+	BodyRef focus;               // (another vessel in focus: the critical moment past)
 };
 
 } // namespace audio

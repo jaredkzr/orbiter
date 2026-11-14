@@ -15,6 +15,8 @@
 #ifndef __AUDIOWARPDRIVE_H
 #define __AUDIOWARPDRIVE_H
 
+#include "World.h"
+
 class Vessel;
 
 namespace audio {
@@ -30,7 +32,7 @@ public:
 
 private:
 	System &sys;
-	const Vessel *vessel = nullptr;
+	BodyRef vessel;           // (the vessel followed)
 	int prevPhase = -1;
 	int hum = 0;              // the burn's hum (a handle)
 	int humBus = -1;          // (the bus it plays on)

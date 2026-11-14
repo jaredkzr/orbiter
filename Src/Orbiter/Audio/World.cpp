@@ -2,20 +2,14 @@
 // Licensed under the MIT License
 
 #include "World.h"
+#include "DebugEnv.h"
+#include "Assets.h"
 #include "miniaudio.h"
-#include "Camera.h"
-#include "Vessel.h"
-#include "Planet.h"
-#include "TimeData.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
-
-extern Camera *g_camera;
-extern Vessel *g_focusobj;
-extern TimeData td;
 
 namespace audio {
 
@@ -39,32 +33,21 @@ namespace {
 	/// JUMP_SPEED [m/s], and more than JUMP_MIN [m]
 	constexpr double JUMP_SPEED = 30000.0, JUMP_MIN = 200.0;
 
-	V3 ToV3 (const Vector &v) { return V3 (v.x, v.y, v.z); }
 	V3 Mul (const double *R, const V3 &v)   // R v (row-major)
 	{ return V3 (R[0]*v.x + R[1]*v.y + R[2]*v.z, R[3]*v.x + R[4]*v.y + R[5]*v.z, R[6]*v.x + R[7]*v.y + R[8]*v.z); }
 	V3 TMul (const double *R, const V3 &v)  // R^T v
 	{ return V3 (R[0]*v.x + R[3]*v.y + R[6]*v.z, R[1]*v.x + R[4]*v.y + R[7]*v.z, R[2]*v.x + R[5]*v.y + R[8]*v.z); }
 
-	/// The vessel structure a body belongs to (docked or attached
-	/// vessels are one)
-	const void *Structure (const Body *b)
-	{
-		if (!b || b->Type () != OBJTP_VESSEL) return b;
-		const Vessel *v = static_cast<const Vessel*>(b);
-		if (const SuperVessel *s = v->SuperStruct ()) return s;
-		const Vessel *root = v;
-		while (const Vessel *p = root->AttachParent ()) root = p;
-		return root;
-	}
-
 	// ---- sources ---------------------------------------------------------
 
 	class SoundSource : public Source {
 	public:
-		~SoundSource () override
+		~SoundSource () override { Detach (); }
+		void Detach () override
 		{
-			if (soundInit) ma_sound_uninit (&sound);
-			if (waveInit) ma_waveform_uninit (&wave);
+			if (soundInit) ma_sound_uninit (&sound), soundInit = false;
+			if (waveInit) ma_waveform_uninit (&wave), waveInit = false;
+			clip.Uninit ();
 		}
 		bool InitTone (Engine &e, double freq, double amp)
 		{
@@ -75,81 +58,97 @@ namespace {
 			sc.pDataSource = &wave;
 			sc.channelsOut = 1;
 			sc.flags = MA_SOUND_FLAG_NO_SPATIALIZATION | MA_SOUND_FLAG_NO_DEFAULT_ATTACHMENT;
-			return Init (e.Ma (), sc);
-		}
-		bool InitFile (Engine &e, const std::string &path, bool loop)
-		{
-			ma_sound_config sc = ma_sound_config_init_2 (e.Ma ());
-			sc.pFilePath = path.c_str ();
-			sc.channelsOut = 1;
-			sc.flags = MA_SOUND_FLAG_NO_SPATIALIZATION | MA_SOUND_FLAG_NO_DEFAULT_ATTACHMENT | MA_SOUND_FLAG_DECODE;
-			if (loop) sc.isLooping = MA_TRUE;
-			return Init (e.Ma (), sc);
-		}
-		bool Attach (void *node) override
-		{
-			return soundInit && ma_node_attach_output_bus (&sound, 0, node, 0) == MA_SUCCESS;
-		}
-		void Start () override { if (soundInit) ma_sound_start (&sound); }
-		void Stop () override { if (soundInit) ma_sound_stop (&sound); }
-		void SetDoppler (float f) override { dop = f; if (soundInit) ma_sound_set_pitch (&sound, std::max (dop * pitch, 0.01f)); }
-		void SetPitch (float p) override { pitch = p; if (soundInit) ma_sound_set_pitch (&sound, std::max (dop * pitch, 0.01f)); }
-		bool Done () const override { return soundInit && ma_sound_at_end (&sound); }
-		bool Seek (double t) override { return soundInit && ma_sound_seek_to_second (&sound, (float)std::max (0.0, t)) == MA_SUCCESS; }
-		double Cursor () const override
-		{
-			float c = 0.0f;
-			return soundInit && ma_sound_get_cursor_in_seconds (&sound, &c) == MA_SUCCESS ? c : -1.0;
-		}
-	private:
-		bool Init (ma_engine *engine, ma_sound_config &sc)
-		{
-			if (ma_sound_init_ex (engine, &sc, &sound) != MA_SUCCESS) return false;
+			if (ma_sound_init_ex (e.Ma (), &sc, &sound) != MA_SUCCESS) return false;
 			soundInit = true;
 			return true;
 		}
+		bool InitClip (Engine &e, ClipRef c, bool loop)
+		{
+			return clip.Init (e.Ma (), std::move (c), nullptr, 1, loop);
+		}
+		bool Attach (void *node) override
+		{
+			ma_sound *s = S ();
+			return s && ma_node_attach_output_bus (s, 0, node, 0) == MA_SUCCESS;
+		}
+		void Start () override { if (ma_sound *s = S ()) ma_sound_start (s); }
+		void Stop () override { if (ma_sound *s = S ()) ma_sound_stop (s); }
+		void SetDoppler (float f) override { dop = f; if (ma_sound *s = S ()) ma_sound_set_pitch (s, std::max (dop * pitch, 0.01f)); }
+		void SetPitch (float p) override { pitch = p; if (ma_sound *s = S ()) ma_sound_set_pitch (s, std::max (dop * pitch, 0.01f)); }
+		bool Done () const override { const ma_sound *s = S (); return s && ma_sound_at_end (s); }
+		bool Seek (double t) override { ma_sound *s = S (); return s && ma_sound_seek_to_second (s, (float)std::max (0.0, t)) == MA_SUCCESS; }
+		double Cursor () const override
+		{
+			float c = 0.0f;
+			const ma_sound *s = S ();
+			return s && ma_sound_get_cursor_in_seconds (const_cast<ma_sound*> (s), &c) == MA_SUCCESS ? c : -1.0;
+		}
+	private:
+		ma_sound *S () { return soundInit ? &sound : clip ? clip.Sound () : nullptr; }
+		const ma_sound *S () const { return soundInit ? &sound : clip ? clip.Sound () : nullptr; }
 		ma_waveform wave;
-		ma_sound sound;
+		ma_sound sound;               // (the tone's)
+		ClipSound clip;               // (a file's)
 		bool waveInit = false, soundInit = false;
 		float dop = 1.0f, pitch = 1.0f;
 	};
 }
 
-std::unique_ptr<Source> MakeToneSource (Engine &e, double freq, double amp)
+SourcePtr<Source> MakeToneSource (Engine &e, double freq, double amp)
 {
 	if (!e.Active ()) return nullptr;
-	auto s = std::make_unique<SoundSource>();
+	SourcePtr<SoundSource> s (new SoundSource ());
 	if (!s->InitTone (e, freq, amp)) return nullptr;
 	return s;
 }
 
-std::unique_ptr<Source> MakeFileSource (Engine &e, const std::string &path, bool loop)
+SourcePtr<Source> MakeClipSource (Engine &e, ClipRef clip, bool loop)
+{
+	if (!e.Active () || !clip) return nullptr;
+	SourcePtr<SoundSource> s (new SoundSource ());
+	if (!s->InitClip (e, std::move (clip), loop)) return nullptr;
+	return s;
+}
+
+SourcePtr<Source> MakeFileSource (Engine &e, const std::string &path, bool loop)
 {
 	if (!e.Active ()) return nullptr;
-	auto s = std::make_unique<SoundSource>();
-	if (!s->InitFile (e, path, loop)) return nullptr;
-	return s;
+	return MakeClipSource (e, Assets::Get ().Load (path, e.SampleRate ()), loop);
 }
 
 // ---- the world ------------------------------------------------------------
 
-void Emitter::Push (double t, const Params &p)
+void Emitter::PushBytes (double t, const void *p, size_t n)
 {
-	if (!history.empty () && t < history.back ().first) history.clear (); // (time went back)
-	if (!history.empty () && t == history.back ().first) history.back ().second = p;
-	else history.emplace_back (t, p);
+	if (n != histSize) ClearHistory (), histSize = n;              // (another kind of parameters)
+	size_t count = histTimes.size () - histFirst;
+	if (count && t < histNow) ClearHistory (), count = 0;           // (time went back)
+	histNow = t;
+	unsigned char *last = count ? histBytes.data () + (histTimes.size () - 1) * n : nullptr;
+	if (count && t == histTimes.back ()) memcpy (last, p, n);
+	else if (count && !memcmp (last, p, n)) {}                      // (as it was: kept once)
+	else {
+		histTimes.push_back (t);
+		histBytes.insert (histBytes.end (), (const unsigned char*)p, (const unsigned char*)p + n);
+		count++;
+	}
 	// (a minute is as far back as sound is heard: the track's age)
-	while (history.size () > 2 && history[1].first < t - 61.0) history.pop_front ();
+	while (count > 2 && histTimes[histFirst + 1] < t - 61.0) histFirst++, count--;
+	if (histFirst > 256 && histFirst > count) {
+		histTimes.erase (histTimes.begin (), histTimes.begin () + histFirst);
+		histBytes.erase (histBytes.begin (), histBytes.begin () + histFirst * n);
+		histFirst = 0;
+	}
 }
 
-Emitter::Params Emitter::Recalled () const
+const unsigned char *Emitter::RecalledBytes (size_t n) const
 {
-	if (history.empty ()) return Params{};
-	double tq = history.back ().first - hearDelay;
-	// the newest entry not after tq (before the first: the first)
-	for (size_t i = history.size (); i-- > 0; )
-		if (history[i].first <= tq) return history[i].second;
-	return history.front ().second;
+	if (histTimes.size () == histFirst || n != histSize) return nullptr;
+	// the newest moment not after the one now heard (before the first: the first)
+	const double tq = histNow - hearDelay;
+	auto it = std::upper_bound (histTimes.begin () + histFirst, histTimes.end (), tq);
+	size_t i = it == histTimes.begin () + histFirst ? histFirst : (size_t)(it - histTimes.begin ()) - 1;
+	return histBytes.data () + i * n;
 }
 
 World::World (Engine &e): engine (e)
@@ -161,34 +160,77 @@ World::~World ()
 	Clear ();
 }
 
-Emitter *World::Add (const EmitterDesc &d, std::unique_ptr<Source> src)
+EmitterId World::Add (const EmitterDesc &d, SourcePtr<Source> src)
 {
-	if (!engine.Active () || !src) return nullptr;
+	if (!engine.Active () || !src) return EmitterId ();
 	auto e = std::make_unique<Emitter>();
 	e->desc = d;
-	if (!e->node.Init (engine.Ma ())) return nullptr;
+	if (!e->node.Init (engine.Ma ())) return EmitterId ();
 	ma_node_attach_output_bus (e->node.Node (), PathNode::AIR, engine.Group (EXTERIOR), 0);
 	ma_node_attach_output_bus (e->node.Node (), PathNode::HULL, engine.Group (INTERIOR), 0);
-	if (!src->Attach (e->node.Node ())) return nullptr;
+	if (!src->Attach (e->node.Node ())) return EmitterId ();
 	e->source = std::move (src);
-	e->source->Start ();
+	e->created = tPrev;   // (< 0: the next update's time)
+	e->begun = !d.delayed;
+	if (e->begun) e->source->Start ();
+	// (a slot: a free one, else a new one; a generation never used before)
+	uint32_t slot;
+	if (!freeSlots.empty ()) slot = freeSlots.back (), freeSlots.pop_back ();
+	else slot = (uint32_t)slots.size (), slots.push_back ({0, nullptr});
+	if (++generation == 0) ++generation;
+	e->id = {slot, generation};
+	slots[slot] = {generation, e.get ()};
 	emitters.push_back (std::move (e));
-	return emitters.back ().get ();
+	return emitters.back ()->id;
 }
 
-void World::Remove (Emitter *e)
+Emitter *World::Get (EmitterId id) const
 {
-	for (auto it = emitters.begin (); it != emitters.end (); ++it) {
-		if (it->get () != e) continue;
-		// (the source first: it plays into the node)
-		(*it)->source.reset ();
-		(*it)->node.Uninit ();
-		emitters.erase (it);
-		return;
-	}
+	if (!id || id.slot >= slots.size () || slots[id.slot].first != id.gen) return nullptr;
+	return slots[id.slot].second;
 }
 
-void World::PlayShot (std::unique_ptr<Source> src, const V3 &dir, float gain, double length)
+void World::Erase (std::vector<std::unique_ptr<Emitter>>::iterator it)
+{
+	Emitter &e = **it;
+	// (the source first: it plays into the node)
+	e.source.reset ();
+	e.node.Uninit ();
+	slots[e.id.slot] = {0, nullptr};
+	freeSlots.push_back (e.id.slot);
+	emitters.erase (it);
+}
+
+void World::Remove (EmitterId id)
+{
+	Emitter *e = Get (id);
+	if (!e) return;
+	for (auto it = emitters.begin (); it != emitters.end (); ++it)
+		if (it->get () == e) { Erase (it); return; }
+}
+
+BodyRef World::Ref (const Body *b)
+{
+	if (!b) return BodyRef ();
+	auto it = serials.find (b);
+	if (it == serials.end ()) it = serials.emplace (b, ++nextSerial).first;
+	return {b, it->second};
+}
+
+BodyRef World::Known (const Body *b) const
+{
+	auto it = b ? serials.find (b) : serials.end ();
+	return it == serials.end () ? BodyRef () : BodyRef {b, it->second};
+}
+
+bool World::Alive (const BodyRef &r) const
+{
+	if (!r) return false;
+	auto it = serials.find (r.body);
+	return it != serials.end () && it->second == r.serial;
+}
+
+void World::PlayShot (SourcePtr<Source> src, const V3 &dir, float gain, double length)
 {
 	if (!engine.Active () || !src) return;
 	Shot sh;
@@ -205,14 +247,14 @@ void World::PlayShot (std::unique_ptr<Source> src, const V3 &dir, float gain, do
 	sh.node->Set (PathNode::AIR, t);
 	src->Start ();
 	sh.src = std::move (src);
-	sh.end = td.SysT1 + length;
+	sh.end = now + length;
 	shots.push_back (std::move (sh));
 }
 
 void World::UpdateShots ()
 {
 	for (auto it = shots.begin (); it != shots.end (); ) {
-		if (td.SysT1 >= it->end) {
+		if (now >= it->end) {
 			it->src.reset ();
 			it->node->Uninit ();
 			it = shots.erase (it);
@@ -222,54 +264,36 @@ void World::UpdateShots ()
 
 void World::Forget (const Body *body)
 {
-	for (auto &e : emitters)
-		if (e->desc.body == body) e->gone = true;
-	emitters.erase (std::remove_if (emitters.begin (), emitters.end (), [](std::unique_ptr<Emitter> &e) {
-		if (!e->gone) return false;
-		e->source.reset ();
-		e->node.Uninit ();
-		return true;
-	}), emitters.end ());
+	for (size_t i = emitters.size (); i-- > 0; )
+		if (emitters[i]->desc.body == body) Erase (emitters.begin () + i);
 	if (insideOf == body) insideOf = nullptr;
+	serials.erase (body);   // (a new body at its address: a new identity)
 }
 
 void World::Clear ()
 {
-	for (auto &e : emitters) e->source.reset (), e->node.Uninit ();
-	emitters.clear ();
+	while (!emitters.empty ()) Erase (emitters.end () - 1);
 	for (auto &sh : shots) sh.src.reset (), sh.node->Uninit ();
 	shots.clear ();
 	airBody = nullptr;
 	tPrev = -1.0;
-}
-
-Air World::AirAt (const Planet *p, const double g[3])
-{
-	Air a;
-	if (!p || !p->HasAtmosphere ()) return a;
-	double lng, lat, rad;
-	p->GlobalToEquatorial (Vector (g[0], g[1], g[2]), lng, lat, rad);
-	ATMPARAM prm;
-	if (!p->GetAtmParam (rad - p->Size (), lng, lat, &prm)) return a;
-	const ATMCONST *ac = p->AtmParams ();
-	return Air::From (prm.rho, prm.T, prm.p, ac->R, ac->gamma);
+	serials.clear ();   // (the session's bodies: all gone)
 }
 
 void World::ResetPaths ()
 {
-	for (auto &e : emitters) e->track.Clear (), e->hasLast = false, e->history.clear (), e->state = Emitter::State ();
+	for (auto &e : emitters) e->track.Clear (), e->hasLast = false, e->ClearHistory (), e->state = Emitter::State ();
 	tPrev = -1.0;
 }
 
 void World::Cull ()
 {
-	const double now = std::chrono::duration<double> (std::chrono::steady_clock::now ().time_since_epoch ()).count ();
-	std::vector<std::pair<float, Emitter*>> c;
+	std::vector<std::pair<float, Emitter*>> c;   // (now: the clock of what is heard)
 	for (auto &e : emitters)
 		if (e->source && e->source->Continuous ()) c.push_back ({ std::max (e->state.air, e->state.hull) * e->source->Activity (), e.get () });
 	std::sort (c.begin (), c.end (), [] (const auto &a, const auto &b) { return a.first > b.first; });
 	voices = culled = 0;
-	static const int cap = getenv ("ORBITER_AUDIO_VOICES") ? std::max (1, atoi (getenv ("ORBITER_AUDIO_VOICES"))) : MAX_VOICES; // (tests)
+	const int cap = Dbg ().voices > 0 ? Dbg ().voices : MAX_VOICES; // (tests: ORBITER_AUDIO_VOICES)
 	for (auto &x : c) {
 		Emitter &e = *x.second;
 		if (x.first > CULL_LEVEL) e.silentSince = -1.0;
@@ -285,31 +309,29 @@ void World::Cull ()
 	}
 }
 
-void World::Update (double t)
+void World::Update (const Snapshot &snap, const Scene &sc)
 {
-	if (!g_camera) return;
+	if (!snap.listener) return;
+	const double t = snap.t;
+	scene = &sc;
+	now = snap.playT;
+	ramp = snap.dt;
 
 	// the listener: the camera, in the frame of the planet it is at
-	Body *target = g_camera->Target ();
-	const Planet *pl = nullptr;
-	if (target && target->Type () == OBJTP_VESSEL) pl = static_cast<Vessel*>(target)->ProxyPlanet ();
-	else if (target && target->Type () == OBJTP_PLANET) pl = static_cast<const Planet*>(target);
-	if (!pl && g_focusobj) pl = g_focusobj->ProxyPlanet ();
-	if (pl != airBody || t < tPrev) {
+	if (snap.frame != airBody || t < tPrev) {
 		// a new frame (or time went back): the paths start over
 		for (auto &e : emitters) e->track.Clear (), e->hasLast = false;
 		tPrev = -1.0;
-		airBody = pl;
+		airBody = snap.frame;
 	}
-	const Vector &cg = g_camera->GPos ();
-	double cgp[3] = { cg.x, cg.y, cg.z };
-	memcpy (camRot, g_camera->GRot ().data, sizeof (camRot));
+	memcpy (camRot, snap.ear.rot, sizeof (camRot));
 	if (airBody) {
-		memcpy (airRot, airBody->GRot ().data, sizeof (airRot));
-		L = ToV3 (airBody->GlobalToLocal (cg));
-		lAir = AirAt (airBody, cgp);
+		memcpy (airRot, snap.framePose.rot, sizeof (airRot));
+		framePos = snap.framePose.pos;
+		L = TMul (airRot, snap.ear.pos - snap.framePose.pos);
+		lAir = snap.air;
 	} else {
-		L = ToV3 (cg);
+		L = snap.ear.pos;
 		lAir = Air ();
 	}
 	listenerJump = false;
@@ -320,8 +342,8 @@ void World::Update (double t)
 		if ((L - Lprev).Len () > std::max (JUMP_MIN, JUMP_SPEED * (t - tPrev))) listenerJump = true, vL = V3 ();
 		else vL = v;
 	} else if (tPrev < 0.0) vL = V3 ();
-	inside = g_camera->IsInternal () && target && target->Type () == OBJTP_VESSEL;
-	insideOf = inside ? Structure (target) : nullptr;
+	inside = snap.inside;
+	insideOf = inside ? snap.insideOf : nullptr;
 
 	for (auto &e : emitters) UpdateEmitter (*e, t);
 	UpdateShots ();
@@ -329,18 +351,19 @@ void World::Update (double t)
 
 	Lprev = L;
 	tPrev = t;
+	scene = nullptr;
 }
 
 void World::UpdateEmitter (Emitter &e, double t)
 {
 	Emitter::State &s = e.state;
 	const EmitterDesc &d = e.desc;
-	if (!d.body) { e.node.Set (PathNode::AIR, {}), e.node.Set (PathNode::HULL, {}); return; }
+	Pose bp;
+	if (!d.body || !scene->PoseOf (d.body, bp)) { e.node.Set (PathNode::AIR, {}, ramp), e.node.Set (PathNode::HULL, {}, ramp); return; }
 
 	// where it is now, in the air's frame
-	Vector off (d.offset.x, d.offset.y, d.offset.z);
-	Vector g = d.body->GPos () + mul (d.body->GRot (), off);
-	V3 P = airBody ? ToV3 (airBody->GlobalToLocal (g)) : ToV3 (g);
+	const V3 g = bp.pos + Mul (bp.rot, d.offset);
+	V3 P = airBody ? TMul (airRot, g - frameOrigin ()) : g;
 	// a jump (placed somewhere else: a scenario editor, a script): a new path
 	if (e.hasLast && t > e.lastT) {
 		double jump = (P - e.lastP).Len ();
@@ -351,19 +374,18 @@ void World::UpdateEmitter (Emitter &e, double t)
 
 	// ---- through the hull: the listener in its cockpit -----------------
 	PathNode::Target hull;
-	const bool own = inside && d.hull > 0.0f && Structure (d.body) == insideOf;
+	const bool own = inside && d.hull > 0.0f && scene->StructureOf (d.body) == insideOf;
 	if (own) {
 		double dist = (P - L).Len ();
-		hull.gain = std::min (GAIN_MAX, d.level * d.hull * (float)Spreading (dist, std::max<double> (d.refDist, 0.5 * d.body->Size ())));
+		hull.gain = std::min (GAIN_MAX, d.level * d.hull * (float)Spreading (dist, std::max<double> (d.refDist, 0.5 * scene->SizeOf (d.body))));
 		hull.cutoff = STRUCTURE_CUTOFF;
 		hull.pan = 0.0f;
 	}
-	e.node.Set (PathNode::HULL, hull);
+	e.node.Set (PathNode::HULL, hull, ramp);
 	s.hull = hull.gain;
 
 	// ---- through the air ------------------------------------------------
-	double gp[3] = { g.x, g.y, g.z };
-	Air sAir = Effective (AirAt (airBody, gp), realism);
+	Air sAir = Effective (scene->AirAt (airBody, g), realism);
 	Air la = Effective (lAir, realism);
 	PathNode::Target air;
 	const int prevImages = s.images;
@@ -401,8 +423,8 @@ void World::UpdateEmitter (Emitter &e, double t)
 			double gain = d.level * Spreading (dist, d.refDist) * Coupling (sAir) * Coupling (la);
 			// the way it sounds loudest (when it left the source)
 			if (d.front < 1.0f && dist > 1e-3) {
-				Vector dg = mul (d.body->GRot (), Vector (d.dir.x, d.dir.y, d.dir.z));
-				V3 dl3 = airBody ? TMul (airRot, ToV3 (dg)) : ToV3 (dg);
+				const V3 dg = Mul (bp.rot, d.dir);
+				V3 dl3 = airBody ? TMul (airRot, dg) : dg;
 				double len = dl3.Len ();
 				if (len > 0.0) {
 					double cosT = -dl.Dot (dl3) / (dist * len); // (dl: from the listener to it)
@@ -450,11 +472,19 @@ void World::UpdateEmitter (Emitter &e, double t)
 		s.dist = (P - L).Len (), s.delay = 0.0; // (not heard: where it is now)
 		if (own) e.source->SetDoppler (1.0f);
 	}
-	e.node.Set (PathNode::AIR, air);
+	e.node.Set (PathNode::AIR, air, ramp);
 	s.air = air.gain;
 	// the source as the sound now arriving left it (the structure carries
 	// its own vessel's sound at once)
 	e.hearDelay = (own || !s.images) ? 0.0 : s.delay;
+	// a recording begun when the sound of its start arrives (through the air: its travel time; the
+	// structure, a cinematic world: at once; time gone back - a replay: at once)
+	if (!e.begun && !e.held) {
+		if (e.created < 0.0) e.created = t;
+		// (no way through the air at all - vacuum at either end: begun now, unheard, so it ends)
+		const bool airPath = airBody && sAir.Present () && la.Present ();
+		if (own || !airPath || (s.images > 0 && t - s.delay >= e.created) || t < e.created) e.begun = true, e.source->Start ();
+	}
 }
 
 } // namespace audio

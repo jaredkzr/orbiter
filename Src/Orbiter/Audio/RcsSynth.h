@@ -21,7 +21,7 @@ class RcsSynth : public SynthSource {
 public:
 	bool Continuous () const override { return true; }
 	float Activity () const override { return std::max (pLevel.load (std::memory_order_relaxed), outLevel.load (std::memory_order_relaxed)); }
-	static std::unique_ptr<RcsSynth> Make (Engine &e, uint32_t seed);
+	static SourcePtr<RcsSynth> Make (Engine &e, uint32_t seed);
 	/// The cluster's level (0..1: the strongest of its thrusters), and its
 	/// size (the roar's peak, Hz)
 	void Set (float level, float peak);

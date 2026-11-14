@@ -25,7 +25,7 @@ public:
 		float speed = 0.0f;   // airspeed [m/s]
 		float buffet = 0.0f;  // 0..1
 	};
-	static std::unique_ptr<WindSynth> Make (Engine &e, uint32_t seed);
+	static SourcePtr<WindSynth> Make (Engine &e, uint32_t seed);
 	void Set (const Params &p);
 
 	/// Buffeting for an angle of attack [rad] and a Mach number: separated

@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "Effects.h"
+#include "DebugEnv.h"
 #include "BlastSynth.h"
 #include "FireSynth.h"
 #include "SplashSynth.h"
@@ -78,13 +79,13 @@ void Effects::Explosion (const Vessel *v, double propellant)
 	d.name = std::string ("explosion of ") + v->Name ();
 	auto s = BlastSynth::Make (engine, seed++);
 	if (!s) return;
-	b.synth = s.get ();
 	b.em = world.Add (d, std::move (s));
-	if (!b.em) return;
-	Emitter::Params p{};
-	b.em->Push (b.t0 - 1e-3, p);
+	Emitter *em = world.Get (b.em);
+	if (!em) return;
+	Floats<1> p;   // (gone off: 1)
+	em->Push (b.t0 - 1e-3, p);
 	p[0] = 1.0f;
-	b.em->Push (b.t0, p);
+	em->Push (b.t0, p);
 	LOGOUT ("Audio: explosion of %s: %.0f kg propellant, %.0f kg TNT%s, air %.3g kg/m^3", v->Name (), propellant, b.W, alt < fireball ? " (surface burst)" : "", a.rho);
 	blasts.push_back (b);
 }
@@ -119,7 +120,6 @@ void Effects::Lightning (const Planet *pl, const Vector &start, const Vector &di
 		if (dd < best) best = dd, inear = i;
 	}
 	Thunder th;
-	th.planet = pl;
 	th.t0 = td.SimT1;
 	EmitterDesc ed;
 	ed.body = pl;
@@ -130,13 +130,13 @@ void Effects::Lightning (const Planet *pl, const Vector &start, const Vector &di
 	const size_t nbuf = buf.size ();
 	auto syn = ThunderSynth::Make (engine, std::move (buf));
 	if (!syn) return;
-	th.synth = syn.get ();
 	th.em = world.Add (ed, std::move (syn));
-	if (!th.em) return;
-	Emitter::Params pr{};
-	th.em->Push (th.t0 - 1e-3, pr);
+	Emitter *tem = world.Get (th.em);
+	if (!tem) return;
+	Floats<1> pr;   // (flashed: 1)
+	tem->Push (th.t0 - 1e-3, pr);
 	pr[0] = 1.0f;
-	th.em->Push (th.t0, pr);
+	tem->Push (th.t0, pr);
 	LOGOUT ("Audio: lightning %.0f m long, %.2g J/m, %d strokes; thunder from %.0f m, %.1f s long (air %.0f Pa, c %.0f m/s)",
 		length, El, strokes, best, nbuf / (double)engine.SampleRate (), p, a.c);
 	thunders.push_back (th);
@@ -147,18 +147,21 @@ void Effects::Update (double t)
 	if (!g_camera) return;
 	for (auto it = thunders.begin (); it != thunders.end (); ) {
 		Thunder &th = *it;
+		Emitter *em = world.Get (th.em);
+		ThunderSynth *synth = world.Synth<ThunderSynth> (th.em);
+		if (!em || !synth) { it = thunders.erase (it); continue; } // (its planet gone)
 		if (!th.fired) {
-			Emitter::Params pr{};
+			Floats<1> pr;
 			pr[0] = 1.0f;
-			th.em->Push (t, pr);
-			if (th.em->Heard ().images > 0 && th.em->Recalled ()[0] > 0.5f) {
-				th.synth->Fire ();
+			em->Push (t, pr);
+			if (em->Heard ().images > 0 && em->Recalled<Floats<1>> ()[0] > 0.5f) {
+				synth->Fire ();
 				th.fired = true;
-				static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+				const bool log = Dbg ().log > 0;
 				if (log) printf ("Audio: thunder heard at %.3f s\n", t), fflush (stdout);
 			}
 		}
-		if ((th.fired && th.synth->Done ()) || t - th.t0 > BLAST_MAX_AGE || t < th.t0 - 1.0) { world.Remove (th.em); it = thunders.erase (it); }
+		if ((th.fired && synth->Done ()) || t - th.t0 > BLAST_MAX_AGE || t < th.t0 - 1.0) { world.Remove (th.em); it = thunders.erase (it); }
 		else ++it;
 	}
 	UpdateFires (t);
@@ -167,7 +170,10 @@ void Effects::Update (double t)
 	const Vector &cam = g_camera->GPos ();
 	for (auto it = blasts.begin (); it != blasts.end (); ) {
 		Blast &b = *it;
-		const Vector src = b.planet->GPos () + mul (b.planet->GRot (), Vector (b.em->Desc ().offset.x, b.em->Desc ().offset.y, b.em->Desc ().offset.z));
+		Emitter *em = world.Get (b.em);
+		BlastSynth *synth = world.Synth<BlastSynth> (b.em);
+		if (!em || !synth) { it = blasts.erase (it); continue; } // (its planet gone)
+		const Vector src = b.planet->GPos () + mul (b.planet->GRot (), Vector (em->Desc ().offset.x, em->Desc ().offset.y, em->Desc ().offset.z));
 		const double R = std::max (1.0, (cam - src).length ());
 		if (!b.fired) {
 			// its strength and length here (the listener moves while it comes):
@@ -179,23 +185,23 @@ void Effects::Update (double t)
 			// divided out; the listener's coupling is the listener's own air)
 			double dP, tdv;
 			BlastSynth::Sachs (R, b.W, b.p, b.c, dP, tdv);
-			const double refDist = b.em->Desc ().refDist;
-			b.em->SetLevel ((float)(dP * std::max (R, refDist) / refDist / P_FULL / std::max (b.coupling, 1e-6)));
-			b.synth->Set (R, tdv);
-			Emitter::Params p{};
+			const double refDist = em->Desc ().refDist;
+			em->SetLevel ((float)(dP * std::max (R, refDist) / refDist / P_FULL / std::max (b.coupling, 1e-6)));
+			synth->Set (R, tdv);
+			Floats<1> p;
 			p[0] = 1.0f;
-			b.em->Push (t, p);
+			em->Push (t, p);
 			// (heard: once the world has found its path - its travel time; before
 			// that its history would be recalled with none)
-			if (b.em->Heard ().images > 0 && b.em->Recalled ()[0] > 0.5f) {
-				b.synth->Fire ();
+			if (em->Heard ().images > 0 && em->Recalled<Floats<1>> ()[0] > 0.5f) {
+				synth->Fire ();
 				b.fired = true;
 				LOGOUT ("Audio: blast heard at %.3f s, %.0f m from it: %.0f Pa (%.0f dB), %.1f ms (air %.0f Pa)", t, R, dP, 20.0 * std::log10 (std::max (dP, 1e-12) / 2e-5), 1e3 * tdv, b.p);
-				static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+				const bool log = Dbg ().log > 0;
 				if (log) printf ("Audio: blast heard at %.3f s, %.0f m from it: %.0f Pa\n", t, R, dP), fflush (stdout);
 			}
 		}
-		if ((b.fired && b.synth->Done ()) || t - b.t0 > BLAST_MAX_AGE || t < b.t0 - 1.0) {
+		if ((b.fired && synth->Done ()) || t - b.t0 > BLAST_MAX_AGE || t < b.t0 - 1.0) {
 			world.Remove (b.em);
 			it = blasts.erase (it);
 		} else ++it;
@@ -209,12 +215,12 @@ void Effects::UpdateFires (double t)
 	for (size_t i = 0; i < g_psys->nDebris (); i++) {
 		Debris *d = g_psys->GetDebris (i);
 		if (!d || d->BurnLeft () <= 0.0 || d->Fuel () <= 0.0) continue;
-		if (std::any_of (fires.begin (), fires.end (), [d](const Fire &f) { return f.debris == d; })) continue;
+		const BodyRef dr = world.Ref (d);
+		if (std::any_of (fires.begin (), fires.end (), [dr](const Fire &f) { return f.debris == dr; })) continue;
 		auto s = FireSynth::Make (engine, seed++);
 		if (!s) continue;
 		Fire f;
-		f.debris = d;
-		f.synth = s.get ();
+		f.debris = dr;
 		const double Q = d->Fuel () * FireSynth::HEAT / std::max (d->BurnTime (), 1.0);
 		EmitterDesc ed;
 		ed.body = d;
@@ -223,26 +229,31 @@ void Effects::UpdateFires (double t)
 		ed.level = (float)(VesselSounds::PressureAt (FireSynth::EFFICIENCY * Q, ed.refDist) / P_FULL / FireSynth::FIRE_RMS);
 		ed.name = std::string ("fire of ") + d->Name ();
 		f.em = world.Add (ed, std::move (s));
-		if (!f.em) continue;
-		f.em->Push (t - 1e-3, Emitter::Params{});
+		Emitter *fem = world.Get (f.em);
+		if (!fem) continue;
+		fem->Push (t - 1e-3, Floats<3>{});   // (its level, peak, size)
 		LOGOUT ("Audio: %s burning: %.0f kg over %.0f s, %.2g W heat, %.2g W of sound, peak %.0f Hz, %.0f m across",
 			d->Name (), d->Fuel (), d->BurnTime (), Q, FireSynth::EFFICIENCY * Q, FireSynth::PeakFor (Q), FireSynth::DiameterFor (Q));
 		fires.push_back (f);
 	}
 	for (auto it = fires.begin (); it != fires.end (); ) {
 		Fire &f = *it;
-		const Debris *d = static_cast<const Debris*>(f.debris);
+		// (its wreckage gone - deleted: its emitter with it)
+		const Debris *d = static_cast<const Debris*> (world.Get (f.debris));
+		Emitter *em = world.Get (f.em);
+		FireSynth *synth = world.Synth<FireSynth> (f.em);
+		if (!d || !em || !synth) { world.Remove (f.em); it = fires.erase (it); continue; }
 		const double left = d->BurnLeft (), T = std::max (d->BurnTime (), 1.0);
 		const double Q = d->Fuel () * FireSynth::HEAT / T;
 		// (dying down over its last fifth)
 		const double level = left > 0.0 ? std::sqrt (std::min (1.0, left / (0.2 * T))) : 0.0;
-		Emitter::Params p{};
+		Floats<3> p;
 		p[0] = (float)level, p[1] = (float)FireSynth::PeakFor (Q), p[2] = (float)FireSynth::DiameterFor (Q);
-		f.em->Push (t, p);
+		em->Push (t, p);
 		// (as heard: from when the sound now arriving left it; nothing until
 		// the world has found its path)
-		const Emitter::Params h = f.em->Heard ().images > 0 ? f.em->Recalled () : Emitter::Params{};
-		f.synth->Set (h[1] > 0.0f ? h[1] : p[1], h[2] > 0.0f ? h[2] : p[2], h[0]);
+		const Floats<3> h = em->Heard ().images > 0 ? em->Recalled<Floats<3>> () : Floats<3>{};
+		synth->Set (h[1] > 0.0f ? h[1] : p[1], h[2] > 0.0f ? h[2] : p[2], h[0]);
 		// out: gone a minute after it stopped burning (its last sound arrived)
 		if (left <= 0.0 && f.out < 0.0) f.out = t;
 		if (f.out >= 0.0 && t - f.out > 60.0) { world.Remove (f.em); it = fires.erase (it); }
@@ -260,15 +271,15 @@ void Effects::UpdateWater (double t)
 		if (!vi || vi->Version () < 2) continue;
 		WATERSTATE ws;
 		if (!vi->GetWaterState (&ws)) continue;
-		auto it = std::find_if (waters.begin (), waters.end (), [v](const Water &w) { return w.v == v; });
+		const BodyRef vr = world.Ref (v);
+		auto it = std::find_if (waters.begin (), waters.end (), [vr](const Water &w) { return w.v == vr; });
 		if (it == waters.end ()) {
 			if (!ws.nearWater && !ws.wet) continue;
 			// (near the water: an emitter, its history from now)
 			auto s = SplashSynth::Make (engine, seed++);
 			if (!s) continue;
 			Water w;
-			w.v = v;
-			w.synth = s.get ();
+			w.v = vr;
 			EmitterDesc d;
 			d.body = v;
 			d.refDist = (float)std::max (2.0, 0.5 * v->Size ());
@@ -276,18 +287,22 @@ void Effects::UpdateWater (double t)
 			d.hull = 0.3f; // (in its cabin: the slam through the structure)
 			d.name = std::string (v->Name ()) + " water";
 			w.em = world.Add (d, std::move (s));
-			if (!w.em) continue;
-			w.em->Push (t - 1e-3, Emitter::Params{});
+			if (!world.Get (w.em)) continue;
+			world.Get (w.em)->Push (t - 1e-3, Floats<5>{});   // (entries, the last's strength, size, speed; the wake)
 			waters.push_back (w);
 			it = waters.end () - 1;
 		}
 		Water &w = *it;
+		Emitter *em = world.Get (w.em);
+		SplashSynth *synth = world.Synth<SplashSynth> (w.em);
+		if (!em || !synth) continue;
 		if (ws.nearWater || ws.wet) w.lastNear = t;
 		// an entry: wet anew. Its sound: a part of its kinetic energy - the
 		// entry speed of the hull's fastest panel - over about the spray's
 		// time, as a pressure at refDist (sea-level air)
 		const double size = v->Size ();
-		Emitter::Params p = w.em->History ().empty () ? Emitter::Params{} : w.em->History ().back ().second;
+		Floats<5> p;
+		em->Latest (p);
 		// (the entry's speeds: into the water - the hull's own, the step before
 		// it touched (the water's measure of it comes later) - and along it)
 		VECTOR3 gv;
@@ -301,12 +316,12 @@ void Effects::UpdateWater (double t)
 			// it (a ditching: the spray sheet it throws up as it slows)
 			const double E = SplashSynth::SPLASH_EFFICIENCY * 0.5 * v->Mass () * (vin * vin + 0.05 * w.vAlong * w.vAlong);
 			const double T = std::clamp (0.6 * vin / 9.81, 0.3, 4.0) + 0.3;
-			const double r0 = w.em->Desc ().refDist;
+			const double r0 = em->Desc ().refDist;
 			const double prms = std::sqrt (E / T * RHO0 * C0 / (4.0 * 3.14159265 * r0 * r0));
 			w.entries++;
 			p[0] = (float)w.entries, p[1] = (float)(prms / P_FULL / SplashSynth::SPLASH_RMS), p[2] = (float)size, p[3] = (float)vin;
 			LOGOUT ("Audio: %s into the water at %.1f m/s (%.0f m/s along): %.2g J of sound, %.2f Pa at %.0f m", v->Name (), vin, w.vAlong, E, prms, r0);
-			static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+			const bool log = Dbg ().log > 0;
 			if (log) printf ("Audio: %s into the water at %.3f s, %.1f m/s\n", v->Name (), t, vin), fflush (stdout);
 		}
 		w.wet = ws.wet;
@@ -314,28 +329,28 @@ void Effects::UpdateWater (double t)
 		// the wake: its speed through the water (wet), at a fixed level -
 		// a body moving through water at a few m/s: tens of dB at its side
 		p[4] = ws.wet ? (float)ws.speed : 0.0f;
-		w.em->Push (t, p);
+		em->Push (t, p);
 		if (ws.wet) {
 			const VECTOR3 &c = ws.contact;
 			const Vector off = tmul (v->GRot (), Vector (c.x, c.y, c.z) - v->GPos ());
-			w.em->SetOffset (V3 (off.x, off.y, off.z));
+			em->SetOffset (V3 (off.x, off.y, off.z));
 		}
 		// as heard: entries counted, the strength of the last
-		const Emitter::Params h = w.em->Heard ().images > 0 ? w.em->Recalled () : Emitter::Params{};
+		const Floats<5> h = em->Heard ().images > 0 ? em->Recalled<Floats<5>> () : Floats<5>{};
 		const int n = (int)h[0];
 		if (n > w.heard) {
 			// (the emitter's level: this entry's; the synth's own strength 1)
-			w.em->SetLevel (h[1]);
-			w.synth->Entry (1.0f, h[2], h[3]);
+			em->SetLevel (h[1]);
+			synth->Entry (1.0f, h[2], h[3]);
 			w.heard = n;
-		} else if (w.heard == 0) w.em->SetLevel ((float)WAKE_LEVEL);
+		} else if (w.heard == 0) em->SetLevel ((float)WAKE_LEVEL);
 		// the wake: a level of its own (a body moving through water at a few
 		// m/s: some 0.02 Pa at its side), whatever the last entry's
-		w.synth->Set (h[4], (float)size, (float)(WAKE_LEVEL / std::max ((double)w.em->Desc ().level, 1e-9)));
+		synth->Set (h[4], (float)size, (float)(WAKE_LEVEL / std::max ((double)em->Desc ().level, 1e-9)));
 	}
-	// (far from the water a while: gone)
+	// (far from the water a while, or its vessel gone: gone)
 	for (auto it = waters.begin (); it != waters.end (); ) {
-		if (t - it->lastNear > 60.0) { world.Remove (it->em); it = waters.erase (it); }
+		if (t - it->lastNear > 60.0 || !world.Get (it->em)) { world.Remove (it->em); it = waters.erase (it); }
 		else ++it;
 	}
 }
@@ -344,15 +359,15 @@ void Effects::UpdateCreaks (double t)
 {
 	// (the vessel in focus only: heard in its cabin)
 	const Vessel *v = g_focusobj && !g_focusobj->Destroyed () ? g_focusobj : nullptr;
-	if (creak.v != v) {
-		if (creak.em) world.Remove (creak.em);
-		if (creak.bed) world.Remove (creak.bed);
+	const BodyRef vr = world.Ref (v);
+	if (creak.v != vr || (v && !world.Get (creak.em))) {
+		world.Remove (creak.em);
+		world.Remove (creak.bed);
 		creak = Creak ();
 		if (!v) return;
 		auto s = CreakSynth::Make (engine, seed++);
 		if (!s) return;
-		creak.v = v;
-		creak.synth = s.get ();
+		creak.v = vr;
 		EmitterDesc d;
 		d.body = v;
 		// (through the structure, in the cabin: CREAK_P at the most; outside,
@@ -362,8 +377,8 @@ void Effects::UpdateCreaks (double t)
 		d.hull = (float)CREAK_HULL;
 		d.name = std::string (v->Name ()) + " structure";
 		creak.em = world.Add (d, std::move (s));
-		if (!creak.em) { creak = Creak (); return; }
-		creak.em->Push (t - 1e-3, Emitter::Params{});
+		if (!world.Get (creak.em)) { creak = Creak (); return; }
+		world.Get (creak.em)->Push (t - 1e-3, Floats<4>{});   // (creaks, groans counted; their strengths)
 		creak.t = t;
 	}
 	if (!v) return; // (none in focus, or its wreck: nothing to creak)
@@ -392,22 +407,22 @@ void Effects::UpdateCreaks (double t)
 	// tides near tearing it: the whole structure groaning under the creaks, from half the limit
 	// (a generated bed, looped, through the hull: Sound/Generated/creak_1)
 	const double bedGain = std::pow (std::clamp ((tide - 0.5) / 0.5, 0.0, 1.0), 1.5);
-	if (bedGain > 0.0 && !creak.bed) {
+	if (bedGain > 0.0 && !world.Get (creak.bed)) {
 		const std::string f = System::FindSound ("Sound/Generated/creak_1.flac");
 		if (!f.empty ()) {
 			EmitterDesc d;
 			d.body = v, d.refDist = 0.1f, d.hull = (float)CREAK_HULL, d.level = 0.0f;
 			d.name = std::string (v->Name ()) + " structure groaning";
 			creak.bed = world.Add (d, MakeFileSource (engine, f, true));
-			static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+			const bool log = Dbg ().log > 0;
 			if (log) printf ("Audio: structure groaning at %.2f s (tides %.2f of tearing)\n", t, tide), fflush (stdout);
 		}
 	}
-	if (creak.bed) creak.bed->SetLevel ((float)(2.0 * CREAK_P / P_FULL / CREAK_HULL * bedGain));
+	if (Emitter *bed = world.Get (creak.bed)) bed->SetLevel ((float)(2.0 * CREAK_P / P_FULL / CREAK_HULL * bedGain));
 	stress = std::clamp (stress, 0.0, 1.5);
 	const double dt = t - creak.t;
 	creak.t = t;
-	Emitter::Params p{};
+	Floats<4> p;
 	p[0] = (float)creak.count[0], p[1] = (float)creak.count[1];
 	// (a jump - the vessel set somewhere, a first step: not a load changing)
 	if (creak.stress >= 0.0 && dt > 0.0 && dt < 1.0 && std::fabs (stress - creak.stress) < 0.3) {
@@ -426,36 +441,18 @@ void Effects::UpdateCreaks (double t)
 		}
 	}
 	creak.stress = stress;
-	creak.em->Push (t, p);
-	const Emitter::Params h = creak.em->Recalled ();
+	Emitter *cem = world.Get (creak.em);
+	CreakSynth *csynth = world.Synth<CreakSynth> (creak.em);
+	if (!cem || !csynth) return;
+	cem->Push (t, p);
+	const Floats<4> h = cem->Recalled<Floats<4>> ();
 	for (int k = 0; k < 2; k++) {
 		if ((int)h[k] > creak.heard[k]) {
-			creak.synth->Strike ((CreakSynth::Kind)k, h[2 + k] > 0.0f ? h[2 + k] : 0.5f);
-			static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+			csynth->Strike ((CreakSynth::Kind)k, h[2 + k] > 0.0f ? h[2 + k] : 0.5f);
+			const bool log = Dbg ().log > 0;
 			if (log) printf ("Audio: %s at %.2f s (stress %.2f)\n", k ? "groan" : "creak", t, creak.stress), fflush (stdout);
 			creak.heard[k] = (int)h[k];
 		}
-	}
-}
-
-void Effects::Forget (const Body *body)
-{
-	if ((const Body*)creak.v == body) { if (creak.em) world.Remove (creak.em); if (creak.bed) world.Remove (creak.bed); creak = Creak (); }
-	for (auto it = thunders.begin (); it != thunders.end (); ) {
-		if (it->planet == body) { world.Remove (it->em); it = thunders.erase (it); }
-		else ++it;
-	}
-	for (auto it = waters.begin (); it != waters.end (); ) {
-		if ((const Body*)it->v == body) { world.Remove (it->em); it = waters.erase (it); }
-		else ++it;
-	}
-	for (auto it = fires.begin (); it != fires.end (); ) {
-		if (it->debris == body) { world.Remove (it->em); it = fires.erase (it); }
-		else ++it;
-	}
-	for (auto it = blasts.begin (); it != blasts.end (); ) {
-		if (it->planet == body) { world.Remove (it->em); it = blasts.erase (it); }
-		else ++it;
 	}
 }
 
@@ -469,8 +466,8 @@ void Effects::Clear ()
 	waters.clear ();
 	for (auto &th : thunders) world.Remove (th.em);
 	thunders.clear ();
-	if (creak.em) world.Remove (creak.em);
-	if (creak.bed) world.Remove (creak.bed);
+	world.Remove (creak.em);
+	world.Remove (creak.bed);
 	creak = Creak ();
 }
 

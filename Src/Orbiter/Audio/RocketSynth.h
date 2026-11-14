@@ -39,7 +39,7 @@ public:
 		float whine = 0.15f;    // 0..1 (the turbopumps)
 		float pump = 1500.0f;   // the pumps' whine at full speed [Hz]
 	};
-	static std::unique_ptr<RocketSynth> Make (Engine &e, uint32_t seed);
+	static SourcePtr<RocketSynth> Make (Engine &e, uint32_t seed);
 
 	/// Set from the simulation thread
 	void Set (const Params &p);

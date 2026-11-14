@@ -30,12 +30,16 @@
 #include "World.h"
 #include "VesselSounds.h"
 #include "Callouts.h"
+#include "FlightState.h"
+#include <cstdio>
 #include "WarpDrive.h"
 #include "Effects.h"
 #include "Ambience.h"
 #include "Radio.h"
 #include "Music.h"
 #include "Hrtf.h"
+#include "Assets.h"
+#include "OrbiterScene.h"
 #include <chrono>
 #include <map>
 #include <vector>
@@ -71,14 +75,15 @@ public:
 
 	/// A session ends: its sounds go
 	void EndSession ();
-	/// A body is deleted: its sounds go
-	void Forget (const Body *body);
+	/// A body is deleted: its sounds go (World::Forget: every emitter and
+	/// identity of it; each part of the sound finds its own gone)
+	void Forget (const Body *body) { world.Forget (body); }
 	/// A vessel's contacts of a step; docking and undocking at a port
 	void Contacts (const Vessel *v, const ContactStep &c) { vessels.Contacts (v, c); }
 	void Docked (const Vessel *v, const V3 &port, bool dock)
 	{
 		vessels.Docked (v, port, dock);
-		callouts.OnEvent (v, dock ? Callouts::EV_DOCKED : Callouts::EV_UNDOCKED);
+		Event (v, dock ? Callouts::EV_DOCKED : Callouts::EV_UNDOCKED);
 	}
 	/// Something happened to a vessel the voice may call out
 	void Event (const Vessel *v, Callouts::Event e);
@@ -88,6 +93,8 @@ public:
 	/// The animation given the gear's sound (-1: none)
 	int GearAnim (const Vessel *v) const { return vessels.GearAnim (v); }
 	Callouts &GetCallouts () { return callouts; }
+	/// The flight of the vessel in focus (its phase, this step's events)
+	const FlightState &GetFlight () const { return flight; }
 	Radio &GetRadio () { return radio; }
 	/// The voice's callouts are on (the settings; ORBITER_AUDIO_CALLOUTS)
 	bool CalloutsOn () const;
@@ -137,9 +144,12 @@ public:
 	/// A callout is speaking (the voice bus)
 	bool Speaking () const;
 	/// A sound file's path: as given (backslashes as slashes, any case),
-	/// else under Sound/ (empty: none)
+	/// else under Sound/ (empty: none). (XRSound's default lines in
+	/// Orbiter's voice: xr::Voice, where a line is played)
 	static std::string FindSound (const std::string &file);
 	bool Tune (const Vessel *v, const std::string &key, double value) { return vessels.TuneVessel (v, key, value); }
+	/// One of a vessel's own sounds (VesselSounds::Sound) on or off
+	bool DefaultSound (const Vessel *v, int sound, bool on) { return vessels.Enable (v, sound, on); }
 	void Animation (const Vessel *v, unsigned anim, int kind, double level) { vessels.Animation (v, anim, kind, level); }
 	/// A moment a vessel's code tells of (oapiAudioEvent): its sound, line and reply (false: no such event)
 	bool VesselEvent (const Vessel *v, const std::string &event);
@@ -159,9 +169,12 @@ private:
 	void Boom (const World::Boom &b);
 
 	Orbiter *orbiter;
+	OrbiterScene scene;             // (the world's input: Orbiter's globals read here)
 	Engine engine;
 	World world{engine};
 	VesselSounds vessels{engine, world};
+	FlightState flight;             // (the focus vessel's flight: the voice, the radio, the music follow it)
+	FILE *flightTrace = nullptr;    // (ORBITER_AUDIO_FLIGHT_TRACE)
 	Callouts callouts{*this};
 	Effects effects{engine, world};
 	Ambience ambience{*this};
@@ -173,26 +186,40 @@ private:
 	bool switchUp = true;           // (switches flipped: one way, then the other)
 	uint32_t clickRng = 0x1b873593u;
 	void PlayClick ();
+	void PrefetchClicks ();
+	void TraceFlight (const FlightSample *s);
 	bool hrtfTried = false;
 	std::chrono::steady_clock::time_point idleT;
 	void Duck (double dt);
 	WavWriter wav;
 	std::vector<float> block;
 	double renderTime = 0.0;        // seconds of sound asked for
+	double playT = 0.0;             // the clock of what is heard [s]: real time while the simulation's sounds are
 	uint64_t flushed = 0;           // frames in the file at its last flush
 	bool started = false;
 	bool client = false;            // a graphics client (sound on the device)
 	bool forcedOff = false;         // ORBITER_AUDIO=0
-	Emitter *testTone = nullptr;    // ORBITER_AUDIO_TEST_TONE
-	// sounds played through the API: on vessels (emitters), on the interface
+	EmitterId testTone;             // ORBITER_AUDIO_TEST_TONE
+	// sounds played through the API: on vessels (emitters), on the buses
 	struct Played {
-		Emitter *em = nullptr;              // on a vessel
-		std::unique_ptr<ma_sound> flat;     // on a bus
+		std::string path;                   // its file (resolved)
+		EmitterDesc desc;                   // on a vessel (desc.body): its emitter's
+		BodyRef vessel;                     // (that vessel: gone, the sound goes)
+		EmitterId em;                       // ... when playing
+		std::unique_ptr<ClipSound> flat;    // on a bus, when playing
+		/// waiting for its file (decoded in the background): what's asked
+		/// of it meanwhile kept, applied as it starts
+		bool pending = false;
+		bool speech = false;                // (brought to SPEECH_LUFS)
+		double seek = -1.0;
 		Bus bus = UI;
 		bool loop = false, paused = false;
 		double level = 1.0, gate = 1.0, pitch = 1.0;
 		float pan = 0.0f;
 	};
+	int Launch (Played &&p);
+	bool StartPending (Played &p);          // (false: it can't play)
+	void Drop (Played &p);
 	std::map<int, Played> played;
 	Played *Find (int h);
 	const Played *Find (int h) const;

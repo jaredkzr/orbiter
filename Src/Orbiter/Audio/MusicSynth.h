@@ -82,7 +82,7 @@ private:
 /// The composer as a source on the music bus (stereo: the engine's channels)
 class MusicSynth : public SynthSource {
 public:
-	static std::unique_ptr<MusicSynth> Make (Engine &e, uint32_t seed);
+	static SourcePtr<MusicSynth> Make (Engine &e, uint32_t seed);
 	~MusicSynth () override;
 	void SetMood (music::Mood m) { mood.store ((int)m, std::memory_order_relaxed); }
 	void SetIntensity (float x) { intensity.store (x, std::memory_order_relaxed); }

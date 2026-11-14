@@ -32,7 +32,7 @@ namespace audio {
 
 class SplashSynth : public SynthSource {
 public:
-	static std::unique_ptr<SplashSynth> Make (Engine &e, uint32_t seed);
+	static SourcePtr<SplashSynth> Make (Engine &e, uint32_t seed);
 
 	static constexpr double SPLASH_EFFICIENCY = 3e-6;
 	static constexpr double SPLASH_RMS = 0.3;
@@ -51,11 +51,11 @@ protected:
 
 private:
 	explicit SplashSynth (uint32_t seed): rng (seed) {}
-	struct Pending { std::atomic<int> count{0}; std::atomic<float> strength{0.0f}, size{1.0f}, speed{0.0f}; } pending;
+	struct EntryEvent { float strength, size, speed; };
+	dsp::Events<EntryEvent, 8> entries;   // (in order: each begins the splash afresh)
 	std::atomic<float> pSpeed{0.0f}, pSize{1.0f}, pWake{1.0f};
 
 	// (audio thread)
-	int played = 0;
 	dsp::Rng rng;
 	dsp::Pink pink;
 	dsp::Biquad slamHp, slamLp, rushBp1, rushBp2;

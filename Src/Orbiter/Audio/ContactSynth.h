@@ -45,7 +45,8 @@
 
 namespace audio {
 
-struct ContactSample;
+struct Clip;
+using ContactSample = Clip; // (a recording: mono, at the engine's rate)
 
 class ContactSynth : public SynthSource {
 public:
@@ -62,7 +63,7 @@ public:
 		float motor[NMOTOR] = {}; // motors running, by kind 0..1 (their speed)
 	};
 
-	static std::unique_ptr<ContactSynth> Make (Engine &e, uint32_t seed);
+	static SourcePtr<ContactSynth> Make (Engine &e, uint32_t seed);
 	void Set (const Params &p);
 	/// A blow of a kind at a strength (0..1)
 	void Strike (Blow kind, float strength);
@@ -82,9 +83,9 @@ private:
 
 	std::atomic<float> pRollSpeed{0.0f}, pRollLoad{0.0f}, pSqueal{0.0f}, pScrape{0.0f}, pScrapeSpeed{0.0f};
 	std::atomic<float> pMotor[NMOTOR];
-	// blows: a small queue (simulation thread writes, audio thread reads)
-	struct Pending { std::atomic<int> count{0}; std::atomic<float> strength{0.0f}; } pending[NBLOW];
-	int played[NBLOW] = {};
+	// blows: in order, each one (simulation thread writes, audio thread reads)
+	struct BlowEvent { int kind; float strength; };
+	dsp::Events<BlowEvent, 32> blows;
 
 	// the recordings (shared, immutable once loaded)
 	enum Smp { S_CLUNK, S_THUMP, S_DOORCLOSE, S_BUMP, S_LATCH1, S_LATCH2, S_LATCH3, S_LOCK, S_SQUEAL, S_SCRAPE, S_MOTOR, NSMP };

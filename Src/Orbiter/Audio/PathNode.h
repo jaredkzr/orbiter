@@ -23,6 +23,7 @@
 #define __AUDIOPATHNODE_H
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -65,8 +66,10 @@ public:
 	/// The node (for attaching: a source to input 0, outputs to buses)
 	void *Node ();
 
-	/// Set a way's target (simulation thread)
-	void Set (Way w, const Target &t);
+	/// Set a way's target (simulation thread): its level and pan reached over
+	/// `ramp` seconds (the simulation's step: till the next target), linearly;
+	/// 0: within a block. The low-pass eases by itself (CUTOFF_TAU)
+	void Set (Way w, const Target &t, double ramp = 0.0);
 	/// Silence both ways at once (no easing: the source vanished)
 	void Cut ();
 	/// Stopped (silent, not processed: its source stopped - World's voice
@@ -83,6 +86,11 @@ private:
 	struct WayState {
 		std::atomic<float> gain{0.0f}, cutoff{20000.0f}, pan{0.0f};
 		std::atomic<float> dir[3] = {0.0f, 0.0f, 0.0f};
+		std::atomic<unsigned> ramp{0};     // [frames] the target reached over this
+		std::atomic<uint32_t> gen{0};      // (bumped by each Set: a new target)
+		uint32_t seen = 0;                 // (audio thread: the target taken; its level, pan; frames left of its ramp)
+		float tg = 0.0f, tp = 0.0f;
+		unsigned left = 0;
 		struct { std::atomic<float> gain{0.0f}; } cur;
 		float g = 0.0f, fc = 20000.0f, p = 0.0f; // (audio thread: where the easing is)
 		float y = 0.0f, y2 = 0.0f;                // low-pass state (two poles)
@@ -97,7 +105,9 @@ private:
 	} way[NWAY];
 	unsigned pastLen = 0;   // (samples of the past kept)
 	std::atomic<bool> cut{false};
-	std::vector<float> dcBuf;  // (audio thread)
+	std::vector<float> dcBuf;  // (audio thread; sized at Init)
+	std::vector<float> scratch;// (binaural: the ears' blocks; sized at Init)
+	void ProcessBlock (const float *x, float **out, unsigned n);
 	float dcLp = 0.0f, dcHz = 5.0f;
 	std::unique_ptr<Impl> impl;
 	unsigned rate = 48000;

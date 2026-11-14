@@ -52,7 +52,7 @@ public:
 		double El, double p, double c, unsigned rate, double &dmin);
 
 	/// A buffer to play (pressure, normalized by the caller's level)
-	static std::unique_ptr<ThunderSynth> Make (Engine &e, std::vector<float> &&buf);
+	static SourcePtr<ThunderSynth> Make (Engine &e, std::vector<float> &&buf);
 	void Fire () { fire.store (true, std::memory_order_release); }
 	bool Done () const override { return done.load (std::memory_order_acquire); }
 

@@ -26,9 +26,15 @@
 #include "Medium.h"
 #include "PathNode.h"
 #include "Track.h"
+#include "Source.h"
+#include "Assets.h"
+#include "Sim.h"
 #include <array>
+#include <cstring>
+#include <type_traits>
 #include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -38,39 +44,31 @@ class Planet;
 
 namespace audio {
 
-/// What makes the sound of an emitter: a sound file, a generator, a
-/// synthesizer. It plays into the emitter's path node and follows the
-/// Doppler factor (its playback rate).
-class Source {
-public:
-	virtual ~Source () = default;
-	/// Connect the output to a node's input 0 (mono)
-	virtual bool Attach (void *node) = 0;
-	virtual void Start () = 0;
-	virtual void Stop () = 0;
-	/// The Doppler factor (received / emitted frequency)
-	virtual void SetDoppler (float f) = 0;
-	/// A pitch of its own (sound files: played faster), times the Doppler factor
-	virtual void SetPitch (float p) {}
-	/// It has played to its end (sound files not looped)
-	virtual bool Done () const { return false; }
-	/// Held (paused) or going again from where it was held
-	virtual void Pause (bool p) { if (p) Stop (); else Start (); }
-	/// Sound files: to a time [s] in the file; where it is [s] (< 0: not a file)
-	virtual bool Seek (double s) { return false; }
-	virtual double Cursor () const { return -1.0; }
-	/// A continuous sound, its state all in its parameters (an engine, the
-	/// wind): stopped while it can't be heard (World: the voice cap), going
-	/// on as it is when it can (one-shots aren't: they must finish in time)
-	virtual bool Continuous () const { return false; }
-	/// How much it sounds by itself now (0: silent - an engine off; 1: as
-	/// loud as it goes), from its parameters (the voice cap's ranking)
-	virtual float Activity () const { return 1.0f; }
+/// A source playing a miniaudio data source (generators: tests) or a file
+SourcePtr<Source> MakeToneSource (Engine &e, double freq, double amp);
+/// (the file: a resolved path, decoded through Assets - remembered)
+SourcePtr<Source> MakeFileSource (Engine &e, const std::string &path, bool loop);
+SourcePtr<Source> MakeClipSource (Engine &e, ClipRef clip, bool loop);
+
+/// A body's identity for the sound: the same while the body lives; a body
+/// forgotten (deleted: World::Forget) is never the same again, even if a new
+/// one comes at its address. Compare these, not pointers
+struct BodyRef {
+	const Body *body = nullptr;
+	uint64_t serial = 0;
+	explicit operator bool () const { return serial != 0; }
+	bool operator== (const BodyRef &o) const { return serial == o.serial; }
+	bool operator!= (const BodyRef &o) const { return serial != o.serial; }
 };
 
-/// A source playing a miniaudio data source (generators: tests) or a file
-std::unique_ptr<Source> MakeToneSource (Engine &e, double freq, double amp);
-std::unique_ptr<Source> MakeFileSource (Engine &e, const std::string &path, bool loop);
+/// An emitter, as its owner holds it: checked by its generation - one
+/// removed (or gone with its body) is null from then on, never another's
+struct EmitterId {
+	uint32_t slot = 0, gen = 0;
+	explicit operator bool () const { return gen != 0; }
+	bool operator== (const EmitterId &o) const { return slot == o.slot && gen == o.gen; }
+	bool operator!= (const EmitterId &o) const { return !(*this == o); }
+};
 
 struct EmitterDesc {
 	const Body *body = nullptr; ///< the body it's on
@@ -82,12 +80,23 @@ struct EmitterDesc {
 	float front = 1.0f;         ///< opposite that way: this much (a rocket's exhaust: about 0.1)
 	bool boom = false;          ///< its shock cone booms (the body itself, once per vessel)
 	float length = 10.0f;       ///< the body's length [m] (for its boom)
+	bool delayed = false;       ///< a recording begun now: heard from when the sound of its start arrives
+	                            ///< (its travel time; at once through the structure, or cinematic)
 	std::string name;           ///< (for the readout)
+};
+
+/// A source's parameters as a few numbers, for its emitter's history (Push,
+/// Recalled): its kind's own, as many as it has
+template <int N> struct Floats {
+	float v[N] = {};
+	float &operator[] (int i) { return v[i]; }
+	float operator[] (int i) const { return v[i]; }
 };
 
 class Emitter {
 public:
 	const EmitterDesc &Desc () const { return desc; }
+	EmitterId Id () const { return id; }
 	void SetLevel (float l) { desc.level = l; }
 	void SetHull (float h) { desc.hull = h; }
 	void SetOffset (const V3 &o) { desc.offset = o; }
@@ -96,6 +105,10 @@ public:
 	void SetPitch (float p) { if (source) source->SetPitch (p); }
 	/// Its source has played to its end
 	bool SourceDone () const { return source && source->Done (); }
+	/// Held (paused) or going on; one not begun yet (delayed) begins only when let go
+	void Hold (bool h) { held = h; if (begun && source) source->Pause (h); }
+	/// Its source started (a delayed recording: once the sound of its start has arrived)
+	bool Begun () const { return begun; }
 	Source *GetSource () { return source.get (); }
 	/// What is heard of it now (for the readout and tests)
 	struct State {
@@ -109,26 +122,56 @@ public:
 	};
 	const State &Heard () const { return state; }
 
-	/// What its source does, as it changes (up to 24 numbers: a throttle, a
-	/// speed...), stamped with the simulation time; Recalled: as heard now,
-	/// when the sound now arriving left it (travel time ago; at once in the
-	/// cockpit of its vessel, and while not heard)
-	using Params = std::array<float, 24>;
-	void Push (double t, const Params &p);
-	Params Recalled () const;
-	const std::deque<std::pair<double, Params>> &History () const { return history; }
+	/// What its source does, as it changes - its own parameters (a struct of
+	/// its kind's: a throttle, a speed, blows counted...; plain data), stamped
+	/// with the simulation time; Recalled: as heard now, when the sound now
+	/// arriving left it (travel time ago; at once in the cockpit of its
+	/// vessel, and while not heard). A minute of it kept (the farthest sound's
+	/// travel), a value kept once while it holds (the newest at or before a
+	/// time is the same: nothing lost)
+	template <class T> void Push (double t, const T &p)
+	{
+		static_assert (std::is_trivially_copyable<T>::value, "an emitter's parameters: plain data");
+		PushBytes (t, &p, sizeof (T));
+	}
+	template <class T> T Recalled () const
+	{
+		T p{};
+		const unsigned char *b = RecalledBytes (sizeof (T));
+		if (b) memcpy (&p, b, sizeof (T));
+		return p;
+	}
+	/// The newest pushed (false: none)
+	template <class T> bool Latest (T &p) const
+	{
+		if (histTimes.size () == histFirst || histSize != sizeof (T)) return false;
+		memcpy (&p, histBytes.data () + (histTimes.size () - 1) * histSize, sizeof (T));
+		return true;
+	}
+	/// (tests) the moments kept
+	size_t HistoryLength () const { return histTimes.size () - histFirst; }
 
 private:
 	friend class World;
+	EmitterId id;
 	EmitterDesc desc;
-	std::unique_ptr<Source> source;
+	SourcePtr<Source> source;
 	PathNode node;
 	Track track;
 	State state;
-	bool gone = false;          // its body was deleted
 	bool culled = false;        // its source stopped: not heard (World::Cull)
+	bool begun = true;          // its source started (delayed: once the sound of its start arrives)
+	bool held = false;          // (paused: Hold)
+	double created = -1.0;      // [s] (simulation time) when it was added
 	double silentSince = -1.0;
-	std::deque<std::pair<double, Params>> history;
+	// its parameters' history: times, and as many records of histSize bytes (from histFirst on)
+	std::vector<double> histTimes;
+	std::vector<unsigned char> histBytes;
+	size_t histFirst = 0, histSize = 0;
+	double histNow = 0.0;    // (the last push's time: what is heard is recalled from it)
+	void PushBytes (double t, const void *p, size_t n);
+	const unsigned char *RecalledBytes (size_t n) const;
+	void ClearHistory () { histTimes.clear (), histBytes.clear (), histFirst = 0; }
 	double hearDelay = 0.0;     // the travel time the source is heard with
 	V3 lastP;                   // where it was last step (jumps)
 	double lastT = 0.0;
@@ -140,19 +183,33 @@ public:
 	explicit World (Engine &engine);
 	~World ();
 
-	/// A new emitter with its source (playing), or null if the engine is off
-	Emitter *Add (const EmitterDesc &d, std::unique_ptr<Source> src);
-	void Remove (Emitter *e);
-	/// A body is deleted: its emitters go
+	/// A new emitter with its source (playing); a null id if the engine is off
+	EmitterId Add (const EmitterDesc &d, SourcePtr<Source> src);
+	/// (a null id, or one gone: nothing)
+	void Remove (EmitterId id);
+	/// The emitter, if it is still there
+	Emitter *Get (EmitterId id) const;
+	/// Its source as what it is (a synthesizer's type), if still there
+	template <class T> T *Synth (EmitterId id) const { Emitter *e = Get (id); return e ? static_cast<T*> (e->GetSource ()) : nullptr; }
+	/// A body is deleted: its emitters go, its identity with them (the one
+	/// place a body is forgotten: every handle and BodyRef to it dies here)
 	void Forget (const Body *body);
 	void Clear ();
+
+	/// A body's identity (null: none); is it still there
+	BodyRef Ref (const Body *b);
+	/// (its identity if it has one yet - not given one: null)
+	BodyRef Known (const Body *b) const;
+	bool Alive (const BodyRef &r) const;
+	/// The body, if still there
+	const Body *Get (const BodyRef &r) const { return Alive (r) ? r.body : nullptr; }
 
 	void SetRealism (Realism r) { realism = r; }
 	Realism GetRealism () const { return realism; }
 
-	/// Once per time step (simulation thread), at time t [s] (the
-	/// simulation's, or a replay's)
-	void Update (double t);
+	/// Once per time step (simulation thread): the simulation as it is now
+	/// (its time: the simulation's, or a replay's), the bodies asked of scene
+	void Update (const Snapshot &snap, const Scene &scene);
 	/// Time jumped (a replay began or ended): the sources' paths and
 	/// histories start over
 	void ResetPaths ();
@@ -166,7 +223,7 @@ public:
 	/// Play a sound heard at once from a direction (camera frame): through
 	/// the air (muffled by the hull in a cockpit), at a gain, for `length`
 	/// seconds; then it goes
-	void PlayShot (std::unique_ptr<Source> src, const V3 &dir, float gain, double length);
+	void PlayShot (SourcePtr<Source> src, const V3 &dir, float gain, double length);
 
 	const std::vector<std::unique_ptr<Emitter>> &Emitters () const { return emitters; }
 	/// The voice cap: continuous sources (Source::Continuous) not heard
@@ -175,7 +232,7 @@ public:
 	/// go on when they may be heard
 	static constexpr int MAX_VOICES = 32;
 	static constexpr float CULL_LEVEL = 1e-6f;
-	static constexpr double CULL_AFTER = 0.5; // [s] (real time)
+	static constexpr double CULL_AFTER = 0.5; // [s] (the clock of what is heard)
 	/// Continuous sources playing now, stopped now
 	int Voices () const { return voices; }
 	int Culled () const { return culled; }
@@ -183,7 +240,8 @@ public:
 	const Air &ListenerAir () const { return lAir; }
 	bool ListenerInside () const { return inside; }
 
-	/// The air at a global position near a planet (none beyond its atmosphere)
+	/// The air at a global position near a planet (none beyond its
+	/// atmosphere: OrbiterScene.cpp - Orbiter's, not the world's)
 	static Air AirAt (const Planet *p, const double gpos[3]);
 
 private:
@@ -192,20 +250,31 @@ private:
 	int voices = 0, culled = 0;
 
 	struct Shot {
-		std::unique_ptr<Source> src;
+		SourcePtr<Source> src;
 		std::unique_ptr<PathNode> node;
 		double end;   // [s] (system time: shots play at warp too)
 	};
 	void UpdateShots ();
 
 	Engine &engine;
-	std::vector<std::unique_ptr<Emitter>> emitters;
+	std::vector<std::unique_ptr<Emitter>> emitters;   // (in the order they came)
+	std::vector<std::pair<uint32_t, Emitter*>> slots; // (by EmitterId::slot: its generation, the emitter)
+	std::vector<uint32_t> freeSlots;
+	uint32_t generation = 0;
+	std::map<const Body*, uint64_t> serials;          // (the bodies' identities)
+	uint64_t nextSerial = 0;
+	void Erase (std::vector<std::unique_ptr<Emitter>>::iterator it);
 	std::vector<Shot> shots;
 	Realism realism = PHYSICAL;
 	std::function<void (const Boom&)> onBoom;
 
+	const Scene *scene = nullptr;    // (during Update)
+	double now = 0.0;                // the clock of what is heard (Snapshot::playT)
+	double ramp = 0.0;               // [s] the step: the paths' levels ramp over it
 	// the listener
-	const Planet *airBody = nullptr; // the frame and air of this step
+	const void *airBody = nullptr;   // the frame and air of this step
+	V3 frameOrigin () const { return framePos; }
+	V3 framePos;
 	V3 L, Lprev, vL;
 	double tPrev = -1.0;
 	Air lAir;

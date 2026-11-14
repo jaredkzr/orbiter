@@ -200,10 +200,10 @@ struct Composer::Impl {
 	double nextChord = 0.0, nextBell = 0.0, nextPulse = 0.0;
 	int root = -1, sinceTonic = 0, chordCount = 0, bellCount = 0, pulseCount = 0;
 	bool wasRest = false;
-	std::vector<int> chord; // the bass, then the pads (MIDI)
+	dsp::Fixed<int, 8> chord; // the bass, then the pads (MIDI)
 	int lastBell = 0, pulseStep = 0;
 	struct Pending { double at; int midi; float vel; };
-	std::vector<Pending> pendingBells;
+	dsp::Fixed<Pending, 16> pendingBells; // (in place, as every list here: the composer runs on the audio thread)
 	// glides: the whole's level, each kind's, the brightness (the output's low-pass)
 	dsp::Smooth level, kind[NKIND], bright;
 	float lpL = 0.0f, lpR = 0.0f;
@@ -214,7 +214,6 @@ struct Composer::Impl {
 		tonic = tonics[rng.Next () % 7];
 		rev.Init (rate, 6.5f, 4500.0f);
 		dryL.resize (BLOCK), dryR.resize (BLOCK), wetL.resize (BLOCK), wetR.resize (BLOCK);
-		pendingBells.reserve (8);
 		bright.v = MOODS[ORBIT].bright;
 	}
 
@@ -346,7 +345,7 @@ struct Composer::Impl {
 			float x = rng.Uniform () * vt;
 			for (v = 0; v < NVOICING - 1 && x >= m.voicing[v]; v++) x -= m.voicing[v];
 		}
-		std::vector<int> tones;
+		dsp::Fixed<int, 4> tones;
 		for (int i = 4 - m.notes; i < 4; i++) tones.push_back (tonic + 48 + Pc (r + VOICE[v][i]));
 		float mean = 0.0f;
 		for (int t : tones) mean += t;
@@ -358,7 +357,7 @@ struct Composer::Impl {
 		const int bass = m.bassLow + ((bpc - m.bassLow) % 12 + 12) % 12;
 
 		// pads: common tones held over, the rest released and struck anew
-		std::vector<int> fresh;
+		dsp::Fixed<int, 4> fresh;
 		if (!rest) fresh = tones;
 		for (Note &n : notes) {
 			if (!n.on || n.releasing || n.kind != PAD) continue;
@@ -380,14 +379,14 @@ struct Composer::Impl {
 		if (!held) StartHeld (BASS, bass, 1.0f, 0.0f, m.attack * 1.3f, 2.0f, m.wet * 0.7f);
 		chord.clear ();
 		chord.push_back (bass);
-		if (!rest) chord.insert (chord.end (), tones.begin (), tones.end ());
+		if (!rest) for (int t : tones) chord.push_back (t);
 		nextChord = now + Sec (U (m.chordMin, m.chordMax));
 	}
 
 	void Bells () {
 		const MoodDef &m = Def ();
 		// a phrase: one to three notes, stepping near the last
-		std::vector<int> cand;
+		dsp::Fixed<int, 16> cand;
 		static const int degs[5] = { 0, 1, 2, 4, 5 };
 		for (int midi = m.bellCenter - 5; midi <= m.bellCenter + 10; midi++) {
 			const int pc = ((midi - tonic) % 12 + 12) % 12;
@@ -402,7 +401,7 @@ struct Composer::Impl {
 		for (int i = 0; i < count; i++) {
 			int midi = cand[rng.Next () % cand.size ()];
 			if (lastBell && rng.Uniform () < 0.7f) { // (near the last)
-				std::vector<int> near;
+				dsp::Fixed<int, 16> near;
 				for (int c : cand) if (c != lastBell && std::abs (c - lastBell) <= 5) near.push_back (c);
 				if (!near.empty ()) midi = near[rng.Next () % near.size ()];
 			}
@@ -416,7 +415,7 @@ struct Composer::Impl {
 		const MoodDef &m = Def ();
 		if (chord.size () < 2) return;
 		// an arpeggio of the chord, up and down, in the middle
-		std::vector<int> t;
+		dsp::Fixed<int, 8> t;
 		for (size_t i = 1; i < chord.size (); i++) {
 			int x = chord[i];
 			while (x > 70) x -= 12;
@@ -592,16 +591,16 @@ int Composer::Chords () const { return p->chordCount; }
 int Composer::Bells () const { return p->bellCount; }
 int Composer::Pulses () const { return p->pulseCount; }
 int Composer::Sounding () const { int c = 0; for (const Note &n : p->notes) c += n.on; return c; }
-std::vector<int> Composer::Chord () const { return p->chord; }
+std::vector<int> Composer::Chord () const { return std::vector<int> (p->chord.begin (), p->chord.end ()); }
 float Composer::Level () const { const float l = MOODS[p->mood].level; return l > 0.0f ? p->level.v / l : p->level.v; }
 
 } // namespace music
 
 // ---- on the music bus ------------------------------------------------------
 
-std::unique_ptr<MusicSynth> MusicSynth::Make (Engine &e, uint32_t seed)
+SourcePtr<MusicSynth> MusicSynth::Make (Engine &e, uint32_t seed)
 {
-	std::unique_ptr<MusicSynth> s (new MusicSynth ());
+	SourcePtr<MusicSynth> s (new MusicSynth ());
 	s->channels = std::max (1u, e.Channels ());
 	if (!s->Init (e)) return nullptr;
 	s->comp = std::make_unique<music::Composer> (s->rate, seed);

@@ -20,6 +20,7 @@
 
 #include "PathNode.h"
 #include "AudioEngine.h"
+#include "Source.h"
 #include "Vecmat.h"
 #include <memory>
 #include <string>
@@ -34,8 +35,8 @@ class Ambience {
 public:
 	explicit Ambience (System &s);
 	~Ambience ();
-	/// Each step (t: simulation time; dt: the step)
-	void Update (double t, double dt);
+	/// Each step (t: simulation time; playT: the clock of what is heard; dt: the step)
+	void Update (double t, double playT, double dt);
 	void Clear ();
 
 	/// The cabin's level [Pa RMS]
@@ -59,7 +60,7 @@ private:
 	double Rand () { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return (rng >> 8) * (1.0 / 16777216.0); }
 
 	std::unique_ptr<PathNode> node;
-	std::unique_ptr<AmbienceSynth> synth;
+	SourcePtr<AmbienceSynth> synth;
 	double windP = 0.0, seaP = 0.0;
 	Vector lastLoc;
 	double lastT = -1.0;

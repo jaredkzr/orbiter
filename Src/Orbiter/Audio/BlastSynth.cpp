@@ -13,9 +13,9 @@ namespace {
 	constexpr float FRIEDLANDER_B = 1.2f;
 }
 
-std::unique_ptr<BlastSynth> BlastSynth::Make (Engine &e, uint32_t seed)
+SourcePtr<BlastSynth> BlastSynth::Make (Engine &e, uint32_t seed)
 {
-	std::unique_ptr<BlastSynth> s (new BlastSynth (seed));
+	SourcePtr<BlastSynth> s (new BlastSynth (seed));
 	if (!s->Init (e)) return nullptr;
 	return s;
 }

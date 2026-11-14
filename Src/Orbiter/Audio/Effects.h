@@ -54,7 +54,6 @@ public:
 
 	/// Each step (t: the simulation's time)
 	void Update (double t);
-	void Forget (const Body *body);
 	void Clear ();
 
 	/// The blasts waiting or sounding (tests)
@@ -65,8 +64,7 @@ private:
 	Engine &engine;
 	World &world;
 	struct Blast {
-		Emitter *em = nullptr;
-		BlastSynth *synth = nullptr;
+		EmitterId em;         // (a BlastSynth's, on the planet: gone with it)
 		const Planet *planet = nullptr;
 		double t0 = 0.0;      // when it went off
 		double W = 0.0;       // TNT equivalent [kg]
@@ -76,19 +74,19 @@ private:
 		bool fired = false;
 	};
 	std::vector<Blast> blasts;
-	struct Fire { const Body *debris = nullptr; Emitter *em = nullptr; FireSynth *synth = nullptr; double out = -1.0; };
+	struct Fire { BodyRef debris; EmitterId em; double out = -1.0; };
 	std::vector<Fire> fires;
 	void UpdateFires (double t);
 	struct Water {
-		const Vessel *v = nullptr; Emitter *em = nullptr; SplashSynth *synth = nullptr;
+		BodyRef v; EmitterId em;
 		bool wet = false; double dryAt = -1e10; int entries = 0, heard = 0; double lastNear = 0.0;
 		double vDown = 0.0, vAlong = 0.0; // (the step before)
 	};
 	std::vector<Water> waters;
-	struct Thunder { const Planet *planet = nullptr; Emitter *em = nullptr; ThunderSynth *synth = nullptr; double t0 = 0.0; bool fired = false; };
+	struct Thunder { EmitterId em; double t0 = 0.0; bool fired = false; };
 	std::vector<Thunder> thunders;
-	struct Creak { const Vessel *v = nullptr; Emitter *em = nullptr; CreakSynth *synth = nullptr; double stress = -1.0, debt = 0.0, t = 0.0; int count[2] = {}, heard[2] = {};
-		Emitter *bed = nullptr; } creak;   // (bed: a black hole's tides near tearing it - a structure groaning, looped)
+	struct Creak { BodyRef v; EmitterId em; double stress = -1.0, debt = 0.0, t = 0.0; int count[2] = {}, heard[2] = {};
+		EmitterId bed; } creak;   // (bed: a black hole's tides near tearing it - a structure groaning, looped)
 	void UpdateCreaks (double t);
 	uint32_t creakRng = 0x2545f491u;
 	double CreakRand () { creakRng ^= creakRng << 13; creakRng ^= creakRng >> 17; creakRng ^= creakRng << 5; return (creakRng >> 8) * (1.0 / 16777216.0); }

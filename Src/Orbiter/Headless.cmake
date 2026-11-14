@@ -150,6 +150,12 @@ set(headless_src
 	Audio/MusicSynth.cpp
 	Audio/Hrtf.cpp
 	Audio/Loudness.cpp
+	Audio/Assets.cpp
+	Audio/OrbiterScene.cpp
+	Audio/FlightState.cpp
+	Audio/FlightSampler.cpp
+	Audio/CrewLines.cpp
+	Audio/DebugEnv.cpp
 	Audio/Music.cpp
 	Audio/AudioEngine.cpp
 	Audio/AudioSystem.cpp

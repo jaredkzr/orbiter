@@ -4,14 +4,21 @@
 #include "Synth.h"
 #include "miniaudio.h"
 #include <algorithm>
+#include <cmath>
 
 namespace audio {
+
+namespace {
+	/// The Doppler factor eases to a new one with this time constant [s] (a simulation step)
+	constexpr float DOPPLER_TAU = 0.02f;
+}
 
 struct SynthSource::Impl {
 	ma_node_base base; // (first: the graph calls back with its address)
 	SynthSource *owner;
 	ma_node_vtable vtable;
 	bool init = false;
+	float dop = 1.0f;   // (audio thread: the Doppler factor now, easing to its target)
 };
 
 SynthSource::SynthSource () = default;
@@ -35,7 +42,12 @@ bool SynthSource::Init (Engine &e)
 	impl->vtable = {};
 	impl->vtable.onProcess = [](ma_node *node, const float **, ma_uint32 *, float **out, ma_uint32 *nOut) {
 		SynthSource *s = static_cast<Impl*>(node)->owner;
-		s->Render (out[0], *nOut, s->doppler.load (std::memory_order_relaxed));
+		// (the Doppler factor eased over about a simulation step: its frequencies glide, no steps)
+		const float target = s->doppler.load (std::memory_order_relaxed);
+		Impl *im = static_cast<Impl*>(node);
+		im->dop += (target - im->dop) * (1.0f - std::exp (-(float)*nOut / (DOPPLER_TAU * s->rate)));
+		if (std::fabs (im->dop - target) < 1e-6f) im->dop = target;
+		s->Render (out[0], *nOut, im->dop);
 	};
 	impl->vtable.inputBusCount = 0;
 	impl->vtable.outputBusCount = 1;

@@ -13,9 +13,9 @@ namespace {
 	constexpr float WIND_NORM = 2.56f, SEA_NORM = 6.21f;
 }
 
-std::unique_ptr<AmbienceSynth> AmbienceSynth::Make (Engine &e, uint32_t seed)
+SourcePtr<AmbienceSynth> AmbienceSynth::Make (Engine &e, uint32_t seed)
 {
-	std::unique_ptr<AmbienceSynth> s (new AmbienceSynth (seed));
+	SourcePtr<AmbienceSynth> s (new AmbienceSynth (seed));
 	if (!s->Init (e)) return nullptr;
 	return s;
 }

@@ -7,9 +7,9 @@
 
 namespace audio {
 
-std::unique_ptr<BoomSynth> BoomSynth::Make (Engine &e, float duration, uint32_t seed)
+SourcePtr<BoomSynth> BoomSynth::Make (Engine &e, float duration, uint32_t seed)
 {
-	std::unique_ptr<BoomSynth> s (new BoomSynth (std::clamp (duration, 0.02f, 0.6f), seed));
+	SourcePtr<BoomSynth> s (new BoomSynth (std::clamp (duration, 0.02f, 0.6f), seed));
 	if (!s->Init (e)) return nullptr;
 	return s;
 }

@@ -26,7 +26,7 @@ namespace audio {
 
 class AmbienceSynth : public SynthSource {
 public:
-	static std::unique_ptr<AmbienceSynth> Make (Engine &e, uint32_t seed);
+	static SourcePtr<AmbienceSynth> Make (Engine &e, uint32_t seed);
 
 	/// The wind's noise at the ear, of its dynamic pressure
 	static constexpr double WIND_EAR = 0.001;

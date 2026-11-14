@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "VesselSounds.h"
+#include "DebugEnv.h"
 #include "Ears.h"
 #include "RocketSynth.h"
 #include "RcsSynth.h"
@@ -75,12 +76,10 @@ VesselSounds::~VesselSounds ()
 void VesselSounds::Drop (PerVessel &pv)
 {
 	for (auto *cl : { &pv.engines, &pv.rcs })
-		for (auto &c : *cl) if (c.em) world.Remove (c.em);
+		for (auto &c : *cl) world.Remove (c.em);
 	pv.engines.clear (), pv.rcs.clear ();
-	if (pv.wind) world.Remove (pv.wind);
-	pv.wind = nullptr, pv.windSynth = nullptr;
-	if (pv.contact) world.Remove (pv.contact);
-	pv.contact = nullptr, pv.contactSynth = nullptr;
+	world.Remove (pv.wind), pv.wind = EmitterId ();
+	world.Remove (pv.contact), pv.contact = EmitterId ();
 }
 
 void VesselSounds::Clear ()
@@ -89,20 +88,9 @@ void VesselSounds::Clear ()
 	vessels.clear ();
 }
 
-void VesselSounds::Forget (const Body *body)
-{
-	for (auto it = configs.begin (); it != configs.end (); )
-		it = (const Body*)it->first == body ? configs.erase (it) : std::next (it);
-	// (the world forgets the emitters itself)
-	vessels.erase (std::remove_if (vessels.begin (), vessels.end (), [body](std::unique_ptr<PerVessel> &pv) {
-		return pv->v == body;
-	}), vessels.end ());
-}
-
 void VesselSounds::Build (PerVessel &pv)
 {
 	Drop (pv);
-	pv.rebuild = false;
 	VESSEL *vi = pv.v->GetModuleInterface ();
 	if (!vi) return;
 	const Tune &tune = Config (pv.v).tune;
@@ -154,7 +142,6 @@ void VesselSounds::Build (PerVessel &pv)
 		c.th = p.th, c.maxth = p.maxth;
 		auto synth = RocketSynth::Make (engine, seed++);
 		if (!synth) continue;
-		c.rocket = synth.get ();
 		double ve = std::min (p.isp / p.maxth, VE_MAX);
 		double D = 0.5 * std::sqrt (p.maxth / 1e5);     // (the nozzle: 0.5 m at 100 kN)
 		EmitterDesc d;
@@ -165,6 +152,7 @@ void VesselSounds::Build (PerVessel &pv)
 		d.front = ROCKET_FRONT;
 		d.refDist = (float)std::max (3.0, 5.0 * D);
 		double p0 = PressureAt (JetPower (p.maxth, ve), d.refDist);
+		c.p0 = p0;
 		d.level = (float)(tune.engineLevel * p0 / P_FULL / ROCKET_RMS);
 		d.hull = (float)HULL_ENGINE;
 		d.name = std::string (pv.v->Name ()) + " engine " + std::to_string (pv.engines.size ());
@@ -182,7 +170,6 @@ void VesselSounds::Build (PerVessel &pv)
 		c.th = p.th, c.maxth = p.maxth;
 		auto synth = RcsSynth::Make (engine, seed++);
 		if (!synth) continue;
-		c.rcs = synth.get ();
 		double ve = std::min (p.isp / p.maxth, VE_RCS_MAX);
 		EmitterDesc d;
 		d.body = pv.v;
@@ -193,10 +180,11 @@ void VesselSounds::Build (PerVessel &pv)
 		VESSEL *vi2 = vi;
 		for (int i : p.th) Fmax = std::max (Fmax, vi2->GetThrusterMax0 (vi2->GetThrusterHandleByIndex (i)));
 		double p0 = PressureAt (2.0 * JetPower (Fmax, ve), d.refDist);
+		c.p0 = p0;
 		d.level = (float)(tune.rcsLevel * p0 / P_FULL / RCS_RMS);
 		d.hull = (float)HULL_RCS;
 		d.name = std::string (pv.v->Name ()) + " rcs " + std::to_string (pv.rcs.size ());
-		c.rcs->Set (0.0f, (float)(tune.rcsPitch * RocketSynth::PeakFor (Fmax)));
+		synth->Set (0.0f, (float)(tune.rcsPitch * RocketSynth::PeakFor (Fmax)));
 		c.em = world.Add (d, std::move (synth));
 		if (c.em) pv.rcs.push_back (c);
 	}
@@ -204,25 +192,23 @@ void VesselSounds::Build (PerVessel &pv)
 	// its contacts (wheels, hull, docking, animations' motors): off for now,
 	// to be reworked (user review 2026-11-12); ORBITER_AUDIO_CONTACTS=1 for
 	// development and tests
-	static const bool contactsOn = getenv ("ORBITER_AUDIO_CONTACTS") && *getenv ("ORBITER_AUDIO_CONTACTS") == '1';
+	const bool contactsOn = Dbg ().contacts;
 	auto cs = contactsOn ? ContactSynth::Make (engine, seed++) : nullptr;
 	if (cs) {
-		pv.contactSynth = cs.get ();
 		EmitterDesc d;
 		d.body = pv.v;
 		d.refDist = (float)std::max (3.0, 0.5 * size);
 		double m = std::max (pv.v->Mass (), 100.0);
-		d.level = (float)(tune.contactLevel * CONTACT_P * std::clamp (std::sqrt (m / 15000.0), 0.3, 5.0) / P_FULL / CONTACT_RMS);
+		pv.contactMass = std::clamp (std::sqrt (m / 15000.0), 0.3, 5.0);
+		d.level = (float)(tune.contactLevel * CONTACT_P * pv.contactMass / P_FULL / CONTACT_RMS);
 		d.hull = (float)CONTACT_HULL;
 		d.name = std::string (pv.v->Name ()) + " contacts";
 		pv.contact = world.Add (d, std::move (cs));
-		if (!pv.contact) pv.contactSynth = nullptr;
 	}
 
 	// the air over it
 	auto ws = WindSynth::Make (engine, seed++);
 	if (ws) {
-		pv.windSynth = ws.get ();
 		EmitterDesc d;
 		d.body = pv.v;
 		d.refDist = (float)std::max (3.0, 0.5 * size);
@@ -231,7 +217,6 @@ void VesselSounds::Build (PerVessel &pv)
 		d.length = (float)(2.0 * size);
 		d.name = std::string (pv.v->Name ()) + " air";
 		pv.wind = world.Add (d, std::move (ws));
-		if (!pv.wind) pv.windSynth = nullptr;
 	}
 }
 
@@ -240,7 +225,7 @@ void VesselSounds::UpdateVessel (PerVessel &pv)
 	const double t = now;
 	VESSEL *vi = pv.v->GetModuleInterface ();
 	if (!vi) return;
-	if (vi->GetThrusterCount () != pv.nth || pv.rebuild) Build (pv);
+	if (vi->GetThrusterCount () != pv.nth) Build (pv);
 	VesselConfig &cfg = Config (pv.v);
 	const Tune &tune = cfg.tune;
 	// the motors of animations with a sound: running while they move, a
@@ -269,16 +254,21 @@ void VesselSounds::UpdateVessel (PerVessel &pv)
 			THRUSTER_HANDLE th = vi->GetThrusterHandleByIndex (i);
 			lv += vi->GetThrusterLevel (th) * vi->GetThrusterMax0 (th);
 		}
+		Emitter *em = world.Get (c.em);
+		RocketSynth *rocket = world.Synth<RocketSynth> (c.em);
+		if (!em || !rocket) continue;
 		// (as heard: when the sound now arriving left it)
-		c.em->Push (t, {(float)(lv / c.maxth), 0.0f, 0.0f, 0.0f});
+		em->Push (t, Floats<1>{{(float)(lv / c.maxth)}});   // (the throttle)
 		RocketSynth::Params rp;
-		rp.level = c.em->Recalled ()[0];
+		rp.level = em->Recalled<Floats<1>> ()[0];
 		rp.peak = (float)(tune.enginePitch * RocketSynth::PeakFor (c.maxth));
 		rp.crackle = (float)(0.3 * tune.crackle);
 		rp.rumble = (float)(tune.rumble * RocketSynth::RumbleFor (c.maxth / c.th.size ()));
 		rp.whine = (float)(0.15 * tune.whine);
 		rp.pump = (float)(tune.enginePitch * RocketSynth::PumpFor (c.maxth / c.th.size ()));
-		c.rocket->Set (rp);
+		rocket->Set (rp);
+		// (its tune, on or off: as they are now)
+		em->SetLevel (cfg.on[SOUND_ENGINES] ? (float)(tune.engineLevel * c.p0 / P_FULL / ROCKET_RMS) : 0.0f);
 	}
 	for (auto &c : pv.rcs) {
 		double lv = 0.0, Fmax = 0.0;
@@ -288,10 +278,16 @@ void VesselSounds::UpdateVessel (PerVessel &pv)
 			lv = std::max (lv, vi->GetThrusterLevel (th));
 			Fmax = std::max (Fmax, F);
 		}
-		c.em->Push (t, {(float)lv, 0.0f, 0.0f, 0.0f});
-		c.rcs->Set (c.em->Recalled ()[0], (float)(tune.rcsPitch * RocketSynth::PeakFor (Fmax)));
+		Emitter *em = world.Get (c.em);
+		RcsSynth *rcs = world.Synth<RcsSynth> (c.em);
+		if (!em || !rcs) continue;
+		em->Push (t, Floats<1>{{(float)lv}});
+		rcs->Set (em->Recalled<Floats<1>> ()[0], (float)(tune.rcsPitch * RocketSynth::PeakFor (Fmax)));
+		em->SetLevel (cfg.on[SOUND_RCS] ? (float)(tune.rcsLevel * c.p0 / P_FULL / RCS_RMS) : 0.0f);
 	}
-	if (pv.wind) {
+	Emitter *wind = world.Get (pv.wind);
+	WindSynth *windSynth = world.Synth<WindSynth> (pv.wind);
+	if (wind && windSynth) {
 		double q = 0.0, M = 0.0;
 		pv.v->DynPressure (q);
 		pv.v->MachNumber (M);
@@ -312,12 +308,12 @@ void VesselSounds::UpdateVessel (PerVessel &pv)
 				M = a.c > 0.0 ? U / a.c : 0.0;
 			}
 		}
-		pv.wind->Push (t, {(float)U, WindSynth::BuffetFor (vi->GetAOA (), M), (float)q, (float)M});
-		Emitter::Params h = pv.wind->Recalled ();
+		wind->Push (t, Floats<4>{{(float)U, WindSynth::BuffetFor (vi->GetAOA (), M), (float)q, (float)M}}); // (speed, buffet, q, Mach)
+		const Floats<4> h = wind->Recalled<Floats<4>> ();
 		WindSynth::Params wp;
 		wp.speed = h[0];
 		wp.buffet = h[1];
-		pv.windSynth->Set (wp);
+		windSynth->Set (wp);
 		double qh = h[2], Uh = h[0];
 		// (the turbulent boundary layer's pressure fluctuations fall off at
 		// high Mach: Lowson's p_rms / q = 0.006 / (1 + 0.14 M^2) for an attached
@@ -325,11 +321,14 @@ void VesselSounds::UpdateVessel (PerVessel &pv)
 		// quiet in the cabin, its loud part lower and slower)
 		const double lowson = 1.0 / (1.0 + 0.14 * (double)h[3] * (double)h[3]);
 		double p0 = WIND_RAD * qh * (Uh / 300.0) * lowson;
-		pv.wind->SetLevel ((float)(tune.airLevel * p0 / P_FULL / WIND_RMS));
+		wind->SetLevel (cfg.on[SOUND_AIR] ? (float)(tune.airLevel * p0 / P_FULL / WIND_RMS) : 0.0f);
 		double cabin = WIND_WALL * qh * lowson * WIND_TRANS;
-		pv.wind->SetHull (p0 > 1e-9 ? (float)(cabin / p0) : 0.0f);
+		wind->SetHull (p0 > 1e-9 ? (float)(cabin / p0) : 0.0f);
 	}
-	if (pv.contact) UpdateContacts (pv, t);
+	if (Emitter *ce = world.Get (pv.contact)) {
+		ce->SetLevel (cfg.on[SOUND_CONTACTS] ? (float)(tune.contactLevel * CONTACT_P * pv.contactMass / P_FULL / CONTACT_RMS) : 0.0f);
+		UpdateContacts (pv, t);
+	}
 }
 
 bool VesselSounds::Tune::Set (const std::string &key, double v)
@@ -349,9 +348,11 @@ bool VesselSounds::Tune::Set (const std::string &key, double v)
 
 VesselSounds::VesselConfig &VesselSounds::Config (const Vessel *v)
 {
-	auto it = configs.find (v);
+	const BodyRef r = world.Ref (v);
+	auto it = configs.find (r.serial);
 	if (it != configs.end ()) return it->second;
-	VesselConfig &c = configs[v];
+	VesselConfig &c = configs[r.serial];
+	c.ref = r;
 	// Config/Sound/<class>.cfg: "key = value" lines (Tune), and
 	// "Anim = <index> <motor|door|gear> [level]"; ';' starts a comment
 	const char *cls = v->ClassName ();
@@ -385,8 +386,13 @@ VesselSounds::VesselConfig &VesselSounds::Config (const Vessel *v)
 
 bool VesselSounds::TuneVessel (const Vessel *v, const std::string &key, double value)
 {
-	if (!Config (v).tune.Set (key, value)) return false;
-	if (PerVessel *pv = Find (v)) pv->rebuild = true;
+	return Config (v).tune.Set (key, value);   // (heard from the next step: levels and pitches follow it)
+}
+
+bool VesselSounds::Enable (const Vessel *v, int sound, bool on)
+{
+	if (!v || sound < 0 || sound >= NSOUND) return false;
+	Config (v).on[sound] = on;
 	return true;
 }
 
@@ -399,7 +405,7 @@ void VesselSounds::Animation (const Vessel *v, unsigned anim, int kind, double l
 
 int VesselSounds::GearAnim (const Vessel *v) const
 {
-	auto it = configs.find (v);
+	auto it = configs.find (world.Known (v).serial);
 	if (it == configs.end ()) return -1;
 	for (auto &a : it->second.anims) if (a.kind == ANIM_GEAR) return (int)a.anim;
 	return -1;
@@ -407,7 +413,9 @@ int VesselSounds::GearAnim (const Vessel *v) const
 
 VesselSounds::PerVessel *VesselSounds::Find (const Vessel *v)
 {
-	for (auto &p : vessels) if (p->v == v) return p.get ();
+	const BodyRef r = world.Known (v);
+	if (!r) return nullptr;
+	for (auto &p : vessels) if (p->ref == r) return p.get ();
 	return nullptr;
 }
 
@@ -430,17 +438,21 @@ void VesselSounds::Contacts (const Vessel *v, const ContactStep &c)
 void VesselSounds::Docked (const Vessel *v, const V3 &port, bool dock)
 {
 	PerVessel *pv = Find (v);
-	if (!pv || !pv->contact) return;
+	Emitter *contact = pv ? world.Get (pv->contact) : nullptr;
+	if (!contact) return;
 	int k = dock ? ContactSynth::DOCK : ContactSynth::UNDOCK;
 	pv->blows[k]++, pv->blowStrength[k] = 1.0f;
-	static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+	const bool log = Dbg ().log > 0;
 	if (log) printf ("Audio: %s of %s\n", dock ? "docking" : "undocking", v->Name ()), fflush (stdout);
-	pv->contact->SetOffset (port);
+	contact->SetOffset (port);
 }
 
 void VesselSounds::UpdateContacts (PerVessel &pv, double t)
 {
 	ContactStep &c = pv.step;
+	Emitter *contact = world.Get (pv.contact);
+	ContactSynth *contactSynth = world.Synth<ContactSynth> (pv.contact);
+	if (!contact || !contactSynth) return;
 	const double m = std::max (pv.v->Mass (), 100.0);
 	const double g = 9.81; // (normalizing only)
 	const double mg = m * g;
@@ -454,12 +466,12 @@ void VesselSounds::UpdateContacts (PerVessel &pv, double t)
 		pv.lastBlow[k] = t;
 		pv.blows[kinds[k]]++;
 		pv.blowStrength[kinds[k]] = (float)std::min (1.5, vb[k] / BLOW_FULL[k]);
-		static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+		const bool log = Dbg ().log > 0;
 		static const char *names[3] = {"touchdown", "hull", "vessel"};
 		if (log) printf ("Audio: %s blow of %s at %.3f s (%.2f m/s)\n", names[k], pv.v->Name (), t, vb[k]), fflush (stdout);
 	}
-	if (c.any) pv.contact->SetOffset (c.where);
-	Emitter::Params p{};
+	if (c.any) contact->SetOffset (c.where);
+	Floats<22> p;   // (rolling, its load, squeal, scrape, its speed; the blows counted, their strengths; the motors)
 	p[0] = c.wheelLoad > 0.0 ? (float)gs : 0.0f;                 // rolling speed
 	p[1] = (float)(c.wheelLoad / mg);                             // the load on the wheels
 	p[2] = (float)std::min (1.0, std::sqrt (c.squealPower / (4.0 * mg)));
@@ -467,18 +479,18 @@ void VesselSounds::UpdateContacts (PerVessel &pv, double t)
 	p[4] = (float)c.scrapeSpeed;
 	for (int k = 0; k < ContactSynth::NBLOW; k++) p[5 + k] = (float)pv.blows[k], p[12 + k] = pv.blowStrength[k];
 	for (int k = 0; k < ContactSynth::NMOTOR; k++) p[19 + k] = pv.motor[k];
-	pv.contact->Push (t, p);
+	contact->Push (t, p);
 	c = ContactStep ();
 
 	// as heard: the sound now arriving
-	Emitter::Params h = pv.contact->Recalled ();
+	const Floats<22> h = contact->Recalled<Floats<22>> ();
 	ContactSynth::Params cp;
 	cp.rollSpeed = h[0], cp.rollLoad = h[1], cp.squeal = h[2], cp.scrape = h[3], cp.scrapeSpeed = h[4];
 	for (int k = 0; k < ContactSynth::NMOTOR; k++) cp.motor[k] = h[19 + k];
-	pv.contactSynth->Set (cp);
+	contactSynth->Set (cp);
 	for (int k = 0; k < ContactSynth::NBLOW; k++) {
 		int n = (int)h[5 + k];
-		if (n > pv.heardBlows[k]) pv.contactSynth->Strike ((ContactSynth::Blow)k, h[12 + k]);
+		if (n > pv.heardBlows[k]) contactSynth->Strike ((ContactSynth::Blow)k, h[12 + k]);
 		pv.heardBlows[k] = std::max (pv.heardBlows[k], n);
 	}
 }
@@ -495,22 +507,26 @@ void VesselSounds::Update (double t, bool replay)
 		Vessel *v = g_psys->GetVessel (i);
 		if (!v || v->Destroyed ()) continue;
 		if ((v->GPos () - cam).length () > RANGE + v->Size ()) continue;
+		const BodyRef ref = world.Ref (v);
 		PerVessel *pv = nullptr;
-		for (auto &p : vessels) if (p->v == v) { pv = p.get (); break; }
+		for (auto &p : vessels) if (p->ref == ref) { pv = p.get (); break; }
 		if (!pv) {
 			vessels.push_back (std::make_unique<PerVessel>());
 			pv = vessels.back ().get ();
-			pv->v = v;
+			pv->v = v, pv->ref = ref;
 			Build (*pv);
 		}
 		pv->seen = true;
 		UpdateVessel (*pv);
 	}
-	// out of range (or destroyed): their sounds go
+	// out of range (or destroyed, or deleted): their sounds go
 	for (auto it = vessels.begin (); it != vessels.end (); ) {
 		if (!(*it)->seen) { Drop (**it); it = vessels.erase (it); }
 		else ++it;
 	}
+	// (the configurations of vessels deleted: gone too)
+	for (auto it = configs.begin (); it != configs.end (); )
+		it = world.Alive (it->second.ref) ? std::next (it) : configs.erase (it);
 }
 
 } // namespace audio

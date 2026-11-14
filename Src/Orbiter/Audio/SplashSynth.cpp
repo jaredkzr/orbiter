@@ -15,19 +15,16 @@ namespace {
 	constexpr float OUT_GAIN = 1.0f; // (the whole: a full entry's first second about SPLASH_RMS)
 }
 
-std::unique_ptr<SplashSynth> SplashSynth::Make (Engine &e, uint32_t seed)
+SourcePtr<SplashSynth> SplashSynth::Make (Engine &e, uint32_t seed)
 {
-	std::unique_ptr<SplashSynth> s (new SplashSynth (seed));
+	SourcePtr<SplashSynth> s (new SplashSynth (seed));
 	if (!s->Init (e)) return nullptr;
 	return s;
 }
 
 void SplashSynth::Entry (float strength, float size, float speed)
 {
-	pending.strength.store (std::clamp (strength, 0.0f, 4.0f), std::memory_order_relaxed);
-	pending.size.store (std::max (size, 0.1f), std::memory_order_relaxed);
-	pending.speed.store (std::max (speed, 0.0f), std::memory_order_relaxed);
-	pending.count.fetch_add (1, std::memory_order_release);
+	entries.Push ({std::clamp (strength, 0.0f, 4.0f), std::max (size, 0.1f), std::max (speed, 0.0f)});
 }
 
 void SplashSynth::Set (float waterSpeed, float size, float wakeGain)
@@ -67,12 +64,10 @@ void SplashSynth::Spawn (float r, float amp)
 
 void SplashSynth::Render (float *out, unsigned n, float dop)
 {
-	int c = pending.count.load (std::memory_order_acquire);
-	if (c != played) {
-		played = c;
-		es = pending.strength.load (std::memory_order_relaxed);
-		eSize = pending.size.load (std::memory_order_relaxed);
-		const float v = pending.speed.load (std::memory_order_relaxed);
+	for (EntryEvent ev; entries.Pop (ev); ) {
+		es = ev.strength;
+		eSize = ev.size;
+		const float v = ev.speed;
 		et = 0.0f;
 		// the spray up for about 2 v_spray / g, its drops' speed some of the
 		// entry's; the cavity's largest bubbles about a tenth of the body

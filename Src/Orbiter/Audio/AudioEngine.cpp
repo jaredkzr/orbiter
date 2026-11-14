@@ -31,6 +31,8 @@ float VolumeToGain (float v)
 struct Engine::Impl {
 	ma_sound_group group[NBUS];
 	bool groupInit[NBUS] = {};
+	ma_context context;          // (the null backend's: Options::nullDevice)
+	bool contextInit = false;
 	Ears ears;
 	// the load (the audio thread's)
 	std::atomic<float> load{0.0f}, peak{0.0f};
@@ -93,9 +95,17 @@ bool Engine::Init (const Options &opt)
 	impl->device = opt.mode == DEVICE;
 	cfg.onProcess = OnProcess;
 	cfg.pProcessUserData = impl.get ();
+	if (opt.mode == DEVICE && opt.nullDevice) {
+		ma_backend nullBackend = ma_backend_null;
+		if (ma_context_init (&nullBackend, 1, NULL, &impl->context) == MA_SUCCESS) {
+			impl->contextInit = true;
+			cfg.pContext = &impl->context;
+		}
+	}
 	ma_result r = ma_engine_init (&cfg, engine.get());
 	if (r != MA_SUCCESS) {
 		fprintf (stderr, "Audio: no output (%s)\n", ma_result_description (r));
+		if (impl->contextInit) ma_context_uninit (&impl->context);
 		engine.reset ();
 		impl.reset ();
 		return false;
@@ -124,6 +134,7 @@ bool Engine::Init (const Options &opt)
 			if (impl->groupInit[b]) ma_node_attach_output_bus (&impl->group[b], 0, impl->ears.Node (), 0);
 	}
 	simFade = 1.0f;
+	suspended = false;
 	duck = rduck = 1.0f;
 	return true;
 }
@@ -135,6 +146,7 @@ void Engine::Shutdown ()
 		if (impl->groupInit[b]) ma_sound_group_uninit (&impl->group[b]), impl->groupInit[b] = false;
 	impl->ears.Uninit ();
 	ma_engine_uninit (engine.get());
+	if (impl->contextInit) ma_context_uninit (&impl->context);
 	engine.reset ();
 	impl.reset ();
 	mode = OFF;
@@ -181,12 +193,29 @@ void Engine::SetSimFade (float target, double seconds)
 	target = std::clamp (target, 0.0f, 1.0f);
 	if (!engine || target == simFade) return;
 	simFade = target;
+	// (held: going on where they stopped, fading in)
+	if (target > 0.0f && suspended) {
+		for (int b = 0; b < NBUS; b++)
+			if (SimBus ((Bus)b)) if (ma_sound_group *grp = Group ((Bus)b)) ma_sound_group_start (grp);
+		suspended = false;
+	}
 	ma_uint64 ms = (ma_uint64)std::max (0.0, seconds * 1000.0);
+	fadeEnd = Time () + (uint64_t)(ms * sampleRate / 1000) + 1;
 	for (int b = 0; b < NBUS; b++) {
 		if (!SimBus ((Bus)b)) continue;
 		// (from the current level: a fade reversed half way doesn't jump)
 		if (ma_sound_group *grp = Group ((Bus)b)) ma_sound_group_set_fade_in_milliseconds (grp, -1.0f, target, ms);
 	}
+}
+
+void Engine::Suspend ()
+{
+	// (the fade out over by the engine's clock: a bus with nothing on it isn't mixed, its fader
+	// doesn't move - no use asking it)
+	if (!engine || suspended || simFade > 0.0f || Time () < fadeEnd) return;
+	for (int b = 0; b < NBUS; b++)
+		if (SimBus ((Bus)b)) if (ma_sound_group *grp = Group ((Bus)b)) ma_sound_group_stop (grp);
+	suspended = true;
 }
 
 uint64_t Engine::Render (float *out, uint64_t frames)

@@ -86,10 +86,13 @@ public:
 	/// Animations with a sound: a motor moving them (AUDIO_ANIM_*)
 	enum AnimKind { ANIM_NONE = 0, ANIM_MOTOR = 1, ANIM_DOOR = 2, ANIM_GEAR = 3 };
 	bool TuneVessel (const Vessel *v, const std::string &key, double value);
+	/// Its own sounds, each on or off (AUDIO_SOUND_*: a module playing its
+	/// own in their place); the tune kept
+	enum Sound { SOUND_ENGINES = 0, SOUND_RCS = 1, SOUND_AIR = 2, SOUND_CONTACTS = 3, NSOUND };
+	bool Enable (const Vessel *v, int sound, bool on);
 	void Animation (const Vessel *v, unsigned anim, int kind, double level);
 	/// The animation given the gear's sound (-1: none)
 	int GearAnim (const Vessel *v) const;
-	void Forget (const Body *body);
 	void Clear ();
 
 	/// Part of a rocket jet's power that becomes sound
@@ -106,34 +109,32 @@ private:
 	struct Cluster {
 		std::vector<int> th;       // thruster indices
 		double maxth = 0.0;        // their summed rating [N]
-		Emitter *em = nullptr;
-		RocketSynth *rocket = nullptr;
-		RcsSynth *rcs = nullptr;
+		double p0 = 0.0;           // its pressure at full, at its reference distance [Pa] (before its tune)
+		EmitterId em;              // (a RocketSynth's, or an RcsSynth's)
 	};
 	struct PerVessel {
-		Vessel *v;
+		Vessel *v;                 // (while ref is alive)
+		BodyRef ref;
 		size_t nth = 0;            // thrusters when the clusters were made
 		std::vector<Cluster> engines, rcs;
-		Emitter *wind = nullptr;
-		WindSynth *windSynth = nullptr;
-		Emitter *contact = nullptr;
-		ContactSynth *contactSynth = nullptr;
+		EmitterId wind;            // (a WindSynth's)
+		EmitterId contact;         // (a ContactSynth's)
+		double contactMass = 1.0;  // (its loudness by the vessel's mass, when made)
 		ContactStep step;          // this step's contacts (summed until the update)
 		double lastBlow[3] = {-1e9, -1e9, -1e9}; // [s] the last blow of each kind (wheel, hull, vessel)
 		int blows[8] = {};         // blows struck so far, by kind (recalled with the travel time)
 		float blowStrength[8] = {};
 		int heardBlows[8] = {};
 		float motor[3] = {};       // motors running (animations), by kind
-		bool rebuild = false;      // its tune changed
 		bool seen = false;
 	};
 	PerVessel *Find (const Vessel *v);
 
 	struct AnimSound { unsigned anim; int kind; float level; double last = -1.0; bool moving = false; };
 	/// A vessel's configuration: from its class's file, then the API
-	struct VesselConfig { Tune tune; std::vector<AnimSound> anims; };
+	struct VesselConfig { BodyRef ref; Tune tune; std::vector<AnimSound> anims; bool on[NSOUND] = {true, true, true, true}; };
 	VesselConfig &Config (const Vessel *v);
-	std::map<const Vessel*, VesselConfig> configs;
+	std::map<uint64_t, VesselConfig> configs;   // (by the vessel's BodyRef serial)
 	void Build (PerVessel &pv);
 	void Drop (PerVessel &pv);
 	void UpdateVessel (PerVessel &pv);

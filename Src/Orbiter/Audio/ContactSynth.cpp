@@ -2,21 +2,17 @@
 // Licensed under the MIT License
 
 #include "ContactSynth.h"
+#include "DebugEnv.h"
+#include "Assets.h"
 #include "miniaudio.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <map>
 #include <mutex>
 #include <vector>
 
 namespace audio {
-
-/// A recording decoded (mono, at the engine's rate)
-struct ContactSample {
-	std::vector<float> d;
-};
 
 namespace {
 	constexpr float TWO_PI = 6.2831853f, PI = 3.14159265f;
@@ -28,35 +24,14 @@ namespace {
 
 	const char *SMP_NAME[] = {"clunk_heavy", "thump_door", "door_close", "bump", "latch_1", "latch_2", "latch_3", "lock", "squeal", "scrape", "motor"};
 
-	// the recordings, shared by every synth (loaded once per rate)
-	std::mutex bankMx;
-	std::map<std::string, std::shared_ptr<const ContactSample>> bank;
+	// where the recordings are (each decoded once per rate: Assets)
+	std::mutex dirMx;
 	std::string sampleDir;
 
 	std::shared_ptr<const ContactSample> LoadOne (const std::string &dir, const char *name, unsigned rate)
 	{
-		const std::string key = dir + "/" + name + "@" + std::to_string (rate);
-		std::lock_guard<std::mutex> lock (bankMx);
-		auto it = bank.find (key);
-		if (it != bank.end ()) return it->second;
-		std::shared_ptr<const ContactSample> res;
-		ma_decoder_config cfg = ma_decoder_config_init (ma_format_f32, 1, rate);
-		ma_decoder dec;
-		const std::string path = dir + "/" + name + ".flac";
-		if (ma_decoder_init_file (path.c_str (), &cfg, &dec) == MA_SUCCESS) {
-			auto s = std::make_shared<ContactSample>();
-			float buf[4096];
-			for (;;) {
-				ma_uint64 got = 0;
-				ma_result r = ma_decoder_read_pcm_frames (&dec, buf, 4096, &got);
-				if (got) s->d.insert (s->d.end (), buf, buf + got);
-				if (r != MA_SUCCESS || got < 4096) break;
-			}
-			ma_decoder_uninit (&dec);
-			if (s->d.size () > 2 * SEAM) res = s;
-		}
-		bank[key] = res;
-		return res;
+		ClipRef c = Assets::Get ().Load (dir + "/" + name + ".flac", rate, 1);
+		return c && c->pcm.size () > 2 * SEAM ? c : nullptr;
 	}
 
 	// the blows' bodies: a few damped low modes of the airframe (f [Hz],
@@ -89,7 +64,7 @@ namespace {
 
 void ContactSynth::SetSampleDir (const std::string &dir)
 {
-	std::lock_guard<std::mutex> lock (bankMx);
+	std::lock_guard<std::mutex> lock (dirMx);
 	sampleDir = dir;
 }
 
@@ -97,10 +72,9 @@ void ContactSynth::LoadSamples (unsigned rate)
 {
 	std::string dir;
 	{
-		std::lock_guard<std::mutex> lock (bankMx);
+		std::lock_guard<std::mutex> lock (dirMx);
 		if (sampleDir.empty ()) {
-			const char *env = getenv ("ORBITER_CONTACT_SAMPLES");
-			sampleDir = env && *env ? env : "Sound/Contacts";
+			sampleDir = Dbg ().contactSamples.empty () ? std::string ("Sound/Contacts") : Dbg ().contactSamples;
 		}
 		dir = sampleDir;
 	}
@@ -120,7 +94,7 @@ void ContactSynth::LoadSamples (unsigned rate)
 float ContactSynth::Loop::Next (float rate)
 {
 	if (!s) return 0.0f;
-	const std::vector<float> &d = s->d;
+	const std::vector<float> &d = s->pcm;
 	const size_t L = d.size ();
 	const double X = std::min ((double)L * 0.25, SEAM);
 	const double span = (double)(L - 1) - X;
@@ -139,12 +113,12 @@ float ContactSynth::Loop::Next (float rate)
 
 bool ContactSynth::Shot::Alive () const
 {
-	return s && gain > 1e-3f && pos < (double)(s->d.size () - 1);
+	return s && gain > 1e-3f && pos < (double)(s->pcm.size () - 1);
 }
 
 float ContactSynth::Shot::Next ()
 {
-	const std::vector<float> &d = s->d;
+	const std::vector<float> &d = s->pcm;
 	size_t i = (size_t)pos;
 	float f = (float)(pos - (double)i);
 	float y = d[i] + f * (d[i + 1] - d[i]);
@@ -188,16 +162,16 @@ float ContactSynth::Body::Next (float dt, float dop)
 
 // ---- the synth ------------------------------------------------------------
 
-std::unique_ptr<ContactSynth> ContactSynth::Make (Engine &e, uint32_t seed)
+SourcePtr<ContactSynth> ContactSynth::Make (Engine &e, uint32_t seed)
 {
-	std::unique_ptr<ContactSynth> s (new ContactSynth (seed));
+	SourcePtr<ContactSynth> s (new ContactSynth (seed));
 	if (!s->Init (e)) return nullptr;
 	s->LoadSamples (e.SampleRate ());
 	s->squealLoop.s = s->smp[S_SQUEAL].get ();
 	s->scrapeLoop.s = s->smp[S_SCRAPE].get ();
 	for (int k = 0; k < NMOTOR; k++) {
 		s->motorLoop[k].s = s->smp[S_MOTOR].get ();
-		s->motorLoop[k].pos = s->smp[S_MOTOR] ? (double)(s->smp[S_MOTOR]->d.size () / 3 * k) : 0.0;
+		s->motorLoop[k].pos = s->smp[S_MOTOR] ? (double)(s->smp[S_MOTOR]->pcm.size () / 3 * k) : 0.0;
 	}
 	return s;
 }
@@ -215,8 +189,7 @@ void ContactSynth::Set (const Params &p)
 void ContactSynth::Strike (Blow kind, float strength)
 {
 	if (kind < 0 || kind >= NBLOW) return;
-	pending[kind].strength.store (std::clamp (strength, 0.0f, 1.5f), std::memory_order_relaxed);
-	pending[kind].count.fetch_add (1, std::memory_order_release);
+	blows.Push ({(int)kind, std::clamp (strength, 0.0f, 1.5f)});
 }
 
 void ContactSynth::Start (int kind, float s, float delay)
@@ -270,7 +243,7 @@ void ContactSynth::Begin (Voice &v)
 		shot (v.shot[0], S_CLUNK, 6.0f * s1, vary (0.9f), tone);
 		v.crunch = 3.0f * s1;
 		v.crunchLoop.s = smp[S_SCRAPE].get ();
-		v.crunchLoop.pos = v.crunchLoop.s ? rng.Uniform () * (double)(v.crunchLoop.s->d.size () / 2) : 0.0;
+		v.crunchLoop.pos = v.crunchLoop.s ? rng.Uniform () * (double)(v.crunchLoop.s->pcm.size () / 2) : 0.0;
 		break;
 	case CLANG:
 		// a vessel bumping another: a dull bump
@@ -359,11 +332,9 @@ void ContactSynth::Render (float *out, unsigned n, float dop)
 {
 	// new blows (docking: the clunk, then two latches; undocking: the latches,
 	// then the push-off; the gear locking: the thunk, then the downlock)
-	for (int k = 0; k < NBLOW; k++) {
-		int c = pending[k].count.load (std::memory_order_acquire);
-		if (c == played[k]) continue;
-		played[k] = c;
-		float s = pending[k].strength.load (std::memory_order_relaxed);
+	for (BlowEvent b; blows.Pop (b); ) {
+		const int k = b.kind;
+		const float s = b.strength;
 		if (k == DOCK) { Start (DOCK, s); Start (K_DLATCH1, 1.0f, 0.45f); Start (K_DLATCH2, 1.0f, 0.62f); }
 		else if (k == UNDOCK) { Start (K_RELEASE, 1.0f); Start (K_DLATCH2, 0.9f, 0.15f); Start (K_PUSH, 0.9f * s, 0.4f); }
 		else if (k == GEARLOCK) { Start (GEARLOCK, s); Start (K_DOWNLOCK, 0.8f * s, 0.12f); }

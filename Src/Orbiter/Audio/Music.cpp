@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "Music.h"
+#include "DebugEnv.h"
 #include "AudioSystem.h"
 #include "Vessel.h"
 #include "Psys.h"
@@ -33,7 +34,7 @@ void Music::Clear ()
 	synth.reset ();
 	mood = candidate = SILENT;
 	since = alarm = off = 0.0;
-	focus = nullptr;
+	focus = BodyRef ();
 }
 
 void Music::Alarm ()
@@ -63,7 +64,7 @@ Music::Situation Music::Observe (bool menu) const
 	if (g_focusobj->Destroyed ()) { s.destroyed = true; return s; }
 	VESSEL *v = const_cast<Vessel*> (g_focusobj)->GetModuleInterface ();
 	if (!v) return s;
-	Callouts &c = sys.GetCallouts ();
+	const FlightState &c = sys.GetFlight ();
 	const double p = v->GetAtmPressure ();
 	s.landed = !c.Flying ();
 	s.air = p > 10.0;
@@ -120,7 +121,7 @@ void Music::Update (double dt, bool menu)
 {
 	Engine &e = sys.GetEngine ();
 	if (!e.Active ()) return;
-	static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+	const bool log = Dbg ().log > 0;
 	if (!sys.MusicOn ()) {
 		// (faded out, then gone)
 		if (synth) {
@@ -138,7 +139,8 @@ void Music::Update (double dt, bool menu)
 		if (!synth || !synth->Attach (e.Group (MUSIC))) { synth.reset (); return; }
 		synth->Start ();
 	}
-	if (g_focusobj != focus) focus = g_focusobj, alarm = 0.0;
+	const BodyRef fr = sys.GetWorld ().Ref (g_focusobj);
+	if (fr != focus) focus = fr, alarm = 0.0;
 	alarm = std::max (0.0, alarm - dt);
 	const Situation s = Observe (menu);
 	const Mood m = alarm > 0.0 ? SILENT : MoodFor (s);

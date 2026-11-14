@@ -101,9 +101,9 @@ std::vector<float> ThunderSynth::Render (const Channel &ch, const double L[3], c
 	return buf;
 }
 
-std::unique_ptr<ThunderSynth> ThunderSynth::Make (Engine &e, std::vector<float> &&buf)
+SourcePtr<ThunderSynth> ThunderSynth::Make (Engine &e, std::vector<float> &&buf)
 {
-	std::unique_ptr<ThunderSynth> s (new ThunderSynth (std::move (buf)));
+	SourcePtr<ThunderSynth> s (new ThunderSynth (std::move (buf)));
 	if (!s->Init (e)) return nullptr;
 	return s;
 }

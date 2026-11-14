@@ -14,9 +14,9 @@ namespace {
 	constexpr float ON = 0.06f, OFF = 0.02f, HOLD = 0.15f;
 }
 
-std::unique_ptr<RcsSynth> RcsSynth::Make (Engine &e, uint32_t seed)
+SourcePtr<RcsSynth> RcsSynth::Make (Engine &e, uint32_t seed)
 {
-	std::unique_ptr<RcsSynth> s (new RcsSynth (seed));
+	SourcePtr<RcsSynth> s (new RcsSynth (seed));
 	if (!s->Init (e)) return nullptr;
 	return s;
 }

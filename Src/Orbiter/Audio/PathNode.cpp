@@ -14,8 +14,10 @@ namespace {
 	constexpr float PI_F = 3.14159265358979f;
 	/// The low-pass cutoff eases with this time constant [s]
 	constexpr float CUTOFF_TAU = 0.03f;
-	/// Blocks up to this many frames without allocating on the audio thread
-	constexpr unsigned MAX_BLOCK = 16384;
+	/// Blocks up to this many frames at once (miniaudio hands a node with
+	/// two outputs at most its cache, 480 frames; longer ones are split):
+	/// every buffer sized for it on the simulation thread, at Init
+	constexpr unsigned MAX_BLOCK = 512;
 	constexpr int TAPS = Hrtf::TAPS;
 	/// A new direction's filters when it moves this far (cosine: about 1 degree)
 	constexpr float HRTF_MOVE = 0.99985f;
@@ -86,7 +88,8 @@ bool PathNode::Init (ma_engine *engine, float dcBlock)
 	cfg.pInputChannels = inCh;
 	cfg.pOutputChannels = outCh;
 	rate = ma_engine_get_sample_rate (engine);
-	dcBuf.assign (MAX_BLOCK, 0.0f); // (no allocation on the audio thread, for blocks up to this)
+	dcBuf.assign (MAX_BLOCK, 0.0f); // (no allocation on the audio thread)
+	scratch.assign (4 * MAX_BLOCK, 0.0f);
 	// (the filters' reach: their taps and the longest delay)
 	pastLen = TAPS + (unsigned)std::ceil (Hrtf::MAX_DELAY * rate) + 4;
 	for (int w = 0; w < NWAY; w++) way[w].past.assign (pastLen + MAX_BLOCK, 0.0f), way[w].binaural = false;
@@ -106,12 +109,14 @@ void PathNode::Uninit ()
 	valid = false;
 }
 
-void PathNode::Set (Way w, const Target &t)
+void PathNode::Set (Way w, const Target &t, double ramp)
 {
 	way[w].gain.store (std::max (0.0f, t.gain), std::memory_order_relaxed);
 	way[w].cutoff.store (std::clamp (t.cutoff, 10.0f, 20000.0f), std::memory_order_relaxed);
 	way[w].pan.store (std::clamp (t.pan, -1.0f, 1.0f), std::memory_order_relaxed);
 	for (int i = 0; i < 3; i++) way[w].dir[i].store (t.dir[i], std::memory_order_relaxed);
+	way[w].ramp.store ((unsigned)std::clamp (ramp * rate, 0.0, 10.0 * rate), std::memory_order_relaxed);
+	way[w].gen.fetch_add (1, std::memory_order_release);   // (the audio thread: a new target, all of it)
 }
 
 void PathNode::SetRunning (bool on)
@@ -121,7 +126,7 @@ void PathNode::SetRunning (bool on)
 
 void PathNode::Cut ()
 {
-	for (int w = 0; w < NWAY; w++) way[w].gain.store (0.0f, std::memory_order_relaxed);
+	for (int w = 0; w < NWAY; w++) way[w].gain.store (0.0f, std::memory_order_relaxed), way[w].ramp.store (0), way[w].gen.fetch_add (1, std::memory_order_release);
 	cut.store (true, std::memory_order_release);
 }
 
@@ -129,12 +134,23 @@ void PathNode::Process (void *node, const float **in, unsigned *nIn, float **out
 {
 	PathNode *self = static_cast<Impl*>(node)->owner;
 	const unsigned n = *nOut;
-	const float *x = in[0];
 	*nIn = n;
+	// (a block longer than the buffers: in parts, each easing a share of the way)
+	for (unsigned done = 0; done < n; ) {
+		const unsigned m = std::min (MAX_BLOCK, n - done);
+		float *o[NWAY] = { out[0] + 2 * done, out[1] + 2 * done };
+		self->ProcessBlock (in[0] + done, o, m);
+		done += m;
+	}
+}
+
+void PathNode::ProcessBlock (const float *x, float **out, unsigned n)
+{
+	PathNode *self = this;
 	const bool hardCut = self->cut.exchange (false, std::memory_order_acquire);
 	const float rate = (float)self->rate;
 	// the input without its DC and infrasound (synthesized noise drifts there)
-	float *xb = self->dcBuf.size () >= n ? self->dcBuf.data () : (self->dcBuf.resize (n), self->dcBuf.data ());
+	float *xb = self->dcBuf.data ();
 	if (self->dcHz > 0.0f) {
 		const float a = 1.0f - std::exp (-2.0f * PI_F * self->dcHz / rate);
 		float lp = self->dcLp;
@@ -148,10 +164,23 @@ void PathNode::Process (void *node, const float **in, unsigned *nIn, float **out
 	for (int w = 0; w < NWAY; w++) {
 		WayState &s = self->way[w];
 		float *o = out[w];
-		float g1 = s.gain.load (std::memory_order_relaxed);
-		float p1 = s.pan.load (std::memory_order_relaxed);
+		// (a new target: ramped to over the time it was given - the simulation's step - from where
+		// the last one left it: no steps in the level at the simulation's rate)
+		const uint32_t gen = s.gen.load (std::memory_order_acquire);
+		if (gen != s.seen) {
+			s.seen = gen;
+			s.tg = s.gain.load (std::memory_order_relaxed);
+			s.tp = s.pan.load (std::memory_order_relaxed);
+			s.left = s.ramp.load (std::memory_order_relaxed);
+		}
+		float g1, p1;
+		if (s.left > n) {
+			const float f = (float)n / (float)s.left;
+			g1 = s.g + (s.tg - s.g) * f, p1 = s.p + (s.tp - s.p) * f;
+			s.left -= n;
+		} else g1 = s.tg, p1 = s.tp, s.left = 0;
 		float fc1 = s.cutoff.load (std::memory_order_relaxed);
-		if (hardCut) s.g = 0.0f, s.y = s.y2 = 0.0f;
+		if (hardCut) s.g = 0.0f, s.y = s.y2 = 0.0f, g1 = s.tg = 0.0f, s.left = 0;
 		float g0 = s.g, p0 = s.p;
 		// (the cutoff eases in the log: an octave is an octave)
 		s.fc = std::exp (std::log (s.fc) + (std::log (fc1) - std::log (s.fc)) * k);
@@ -165,7 +194,7 @@ void PathNode::Process (void *node, const float **in, unsigned *nIn, float **out
 		float d[3] = { s.dir[0].load (std::memory_order_relaxed), s.dir[1].load (std::memory_order_relaxed), s.dir[2].load (std::memory_order_relaxed) };
 		const float dn = std::sqrt (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
 		const bool bin = hrtf && hrtf->Loaded () && hrtf->Rate () == self->rate && dn > 1e-6f
-			&& hrtf->MaxDelay () + TAPS + 1 <= (int)self->pastLen && n <= MAX_BLOCK;
+			&& hrtf->MaxDelay () + TAPS + 1 <= (int)self->pastLen;
 		if (g0 == 0.0f && g1 == 0.0f) {
 			// silent: only the filter follows the input
 			float y = s.y, y2 = s.y2;
@@ -190,8 +219,7 @@ void PathNode::Process (void *node, const float **in, unsigned *nIn, float **out
 			for (int i = 0; i < 3; i++) d[i] /= dn;
 			const bool fresh = !s.binaural;
 			const bool moved = fresh || d[0] * s.u[0] + d[1] * s.u[1] + d[2] * s.u[2] < HRTF_MOVE;
-			static thread_local std::vector<float> scratch (4 * MAX_BLOCK);
-			float *L1 = scratch.data (), *R1 = L1 + MAX_BLOCK, *L0 = R1 + MAX_BLOCK, *R0 = L0 + MAX_BLOCK;
+			float *L1 = self->scratch.data (), *R1 = L1 + MAX_BLOCK, *L0 = R1 + MAX_BLOCK, *R0 = L0 + MAX_BLOCK;
 			float ol[TAPS], orr[TAPS];
 			int odl = s.dl, odr = s.dr;
 			if (moved) {

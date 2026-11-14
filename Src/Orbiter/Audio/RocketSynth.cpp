@@ -20,9 +20,9 @@ namespace {
 	constexpr float CRACKLE_CAP = 2.5f;
 }
 
-std::unique_ptr<RocketSynth> RocketSynth::Make (Engine &e, uint32_t seed)
+SourcePtr<RocketSynth> RocketSynth::Make (Engine &e, uint32_t seed)
 {
-	std::unique_ptr<RocketSynth> s (new RocketSynth (seed));
+	SourcePtr<RocketSynth> s (new RocketSynth (seed));
 	if (!s->Init (e)) return nullptr;
 	return s;
 }

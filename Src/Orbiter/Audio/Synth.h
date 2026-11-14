@@ -12,7 +12,8 @@
 #ifndef __AUDIOSYNTH_H
 #define __AUDIOSYNTH_H
 
-#include "World.h"
+#include "AudioEngine.h"
+#include "Source.h"
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -33,6 +34,7 @@ public:
 	void Start () override;
 	void Stop () override;
 	void SetDoppler (float f) override { doppler.store (f, std::memory_order_relaxed); }
+	void Detach () override { Release (); }
 
 protected:
 	/// Render n samples (audio thread); dop: the Doppler factor (scale
@@ -43,7 +45,8 @@ protected:
 	/// frames, attached to a node of as many - the music, on its bus)
 	unsigned channels = 1;
 	/// Take the node out of the graph (waits for the audio thread to leave
-	/// it): from a derived class's destructor, before its members go
+	/// it). SourceDeleter does this before any destructor runs; owning a
+	/// synth by SourcePtr is what keeps teardown safe
 	void Release ();
 
 private:
@@ -103,6 +106,50 @@ struct Biquad {
 		z1 = b1 * x - a1 * y + z2;
 		z2 = b2 * x - a2 * y;
 		return y;
+	}
+};
+
+/// A list of at most N items in place: no allocation (the audio thread).
+/// Adding to a full list does nothing (returns false)
+template <class T, unsigned N>
+struct Fixed {
+	T v[N];
+	unsigned n = 0;
+	bool push_back (const T &x) { if (n >= N) return false; v[n++] = x; return true; }
+	void clear () { n = 0; }
+	void erase (T *it) { if (it < v || it >= v + n) return; for (T *p = it; p + 1 < v + n; p++) *p = p[1]; n--; }
+	size_t size () const { return n; }
+	bool empty () const { return n == 0; }
+	T *begin () { return v; }
+	T *end () { return v + n; }
+	const T *begin () const { return v; }
+	const T *end () const { return v + n; }
+	T &operator[] (size_t i) { return v[i]; }
+	const T &operator[] (size_t i) const { return v[i]; }
+};
+
+/// Events from the simulation thread to the audio thread - in order, none
+/// lost (two blows in one block: two), up to N waiting: a single-producer,
+/// single-consumer ring (Push: the simulation thread; Pop: the audio thread)
+template <class T, unsigned N>
+struct Events {
+	T buf[N];
+	std::atomic<unsigned> head{0}, tail{0};
+	bool Push (const T &e)
+	{
+		const unsigned h = head.load (std::memory_order_relaxed);
+		if (h - tail.load (std::memory_order_acquire) >= N) return false; // (full: dropped)
+		buf[h % N] = e;
+		head.store (h + 1, std::memory_order_release);
+		return true;
+	}
+	bool Pop (T &e)
+	{
+		const unsigned t = tail.load (std::memory_order_relaxed);
+		if (t == head.load (std::memory_order_acquire)) return false;
+		e = buf[t % N];
+		tail.store (t + 1, std::memory_order_release);
+		return true;
 	}
 };
 

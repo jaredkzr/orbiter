@@ -7,9 +7,9 @@
 
 namespace audio {
 
-std::unique_ptr<CreakSynth> CreakSynth::Make (Engine &e, uint32_t seed)
+SourcePtr<CreakSynth> CreakSynth::Make (Engine &e, uint32_t seed)
 {
-	std::unique_ptr<CreakSynth> s (new CreakSynth (seed));
+	SourcePtr<CreakSynth> s (new CreakSynth (seed));
 	if (!s->Init (e)) return nullptr;
 	return s;
 }
@@ -17,8 +17,7 @@ std::unique_ptr<CreakSynth> CreakSynth::Make (Engine &e, uint32_t seed)
 void CreakSynth::Strike (Kind k, float strength)
 {
 	if (k < 0 || k > 1) return;
-	pending[k].strength.store (std::clamp (strength, 0.0f, 1.5f), std::memory_order_relaxed);   // (over 1: a structure near tearing)
-	pending[k].count.fetch_add (1, std::memory_order_release);
+	strikes.Push ({(int)k, std::clamp (strength, 0.0f, 1.5f)});   // (over 1: a structure near tearing)
 }
 
 void CreakSynth::Start (Kind k, float s)
@@ -51,12 +50,7 @@ void CreakSynth::Start (Kind k, float s)
 
 void CreakSynth::Render (float *out, unsigned n, float dop)
 {
-	for (int k = 0; k < 2; k++) {
-		int c = pending[k].count.load (std::memory_order_acquire);
-		if (c == played[k]) continue;
-		played[k] = c;
-		Start ((Kind)k, pending[k].strength.load (std::memory_order_relaxed));
-	}
+	for (StrikeEvent e; strikes.Pop (e); ) Start ((Kind)e.kind, e.strength);   // (two in a block: two)
 	const float dt = 1.0f / rate;
 	for (unsigned i = 0; i < n; i++) {
 		float y = 0.0f;

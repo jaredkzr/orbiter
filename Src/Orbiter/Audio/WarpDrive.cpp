@@ -2,6 +2,8 @@
 // Licensed under the MIT License
 
 #include "WarpDrive.h"
+#include "DebugEnv.h"
+#include "CrewLines.h"
 #include "AudioSystem.h"
 #include "World.h"
 #include "RelTravel.h"
@@ -36,7 +38,7 @@ void WarpDrive::Play (int bus, const char *file, double level)
 {
 	if (System::FindSound (file).empty ()) return;   // (not made: silent)
 	sys.PlayOn ((Bus)bus, file, level, false, false);
-	static const bool log = getenv ("ORBITER_AUDIO_LOG") != nullptr;
+	const bool log = Dbg ().log > 0;
 	if (log) printf ("Audio: warp drive %s\n", file), fflush (stdout);
 }
 
@@ -45,7 +47,11 @@ void WarpDrive::Step (const Vessel *focus, bool cockpit, double dt)
 	if (focus && focus->Destroyed ()) focus = nullptr;
 	const reltravel::Controller *trip = focus ? focus->RelTripIf () : nullptr;
 	const int ph = trip ? trip->GetPhase () : reltravel::PH_IDLE;
-	if (focus != vessel) { vessel = focus; prevPhase = ph; }   // (a vessel taken over: no sound for its state)
+	const BodyRef fr = sys.GetWorld ().Ref (focus);
+	if (fr != vessel) { vessel = fr; prevPhase = ph; }   // (a vessel taken over: no sound for its state)
+
+	const bool logPhase = Dbg ().log > 0;
+	if (logPhase && ph != prevPhase) printf ("Audio: drive phase %d -> %d%s\n", prevPhase, ph, fr != vessel ? " (another vessel)" : ""), fflush (stdout);
 
 	// heard: in the cockpit; outside only with cinematic sound (physical: vacuum)
 	const bool heard = cockpit || sys.GetWorld ().GetRealism () == CINEMATIC;
@@ -53,18 +59,20 @@ void WarpDrive::Step (const Vessel *focus, bool cockpit, double dt)
 	// the crew's word on it (a beat after the sound; through the callouts: their setting, any view)
 	if (ph != prevPhase && prevPhase >= 0) {
 		const char *say = nullptr;
-		if (!Engaged (prevPhase) && Engaged (ph)) say = "Sound/Voice/Drive Engaged.flac";
-		else if (ph == reltravel::PH_BURN1) say = "Sound/Voice/Acceleration Burn.flac";
-		else if (ph == reltravel::PH_COAST) say = "Sound/Voice/Coasting.flac";
-		else if (ph == reltravel::PH_BURN2) say = "Sound/Voice/Braking Burn.flac";
-		else if (ph == reltravel::PH_ARRIVED) say = "Sound/Voice/Arrived.flac";
-		else if (ph == reltravel::PH_FAILED) say = "Sound/Voice/Warning No Trip Found.flac";
-		else if (ph == reltravel::PH_HOLD) say = "Sound/Voice/Holding Position.flac";
-		else if (ph == reltravel::PH_IDLE && Engaged (prevPhase)) say = "Sound/Voice/Drive Disengaged.flac";
+		if (!Engaged (prevPhase) && Engaged (ph)) say = "DriveEngaged";
+		else if (ph == reltravel::PH_BURN1) say = "AccelerationBurn";
+		else if (ph == reltravel::PH_COAST) say = "Coasting";
+		else if (ph == reltravel::PH_BURN2) say = "BrakingBurn";
+		else if (ph == reltravel::PH_ARRIVED) say = "Arrived";
+		else if (ph == reltravel::PH_FAILED) say = "WarningNoTripFound";
+		else if (ph == reltravel::PH_HOLD) say = "HoldingPosition";
+		else if (ph == reltravel::PH_IDLE && Engaged (prevPhase)) say = "DriveDisengaged";
 		if (say) line = say, lineIn = 1.2;
 	}
 	if (line && (lineIn -= dt) <= 0.0) {
-		if (!System::FindSound (line).empty ()) sys.GetCallouts ().Crew (line, 4.0);
+		// (a line not made: silent)
+		const CrewLine *c = CrewLines::Game ().Find (line);
+		if (c && !System::FindSound (c->file).empty ()) sys.GetCallouts ().Crew (line);
 		line = nullptr;
 	}
 	if (heard && ph != prevPhase && prevPhase >= 0) {
@@ -91,7 +99,7 @@ void WarpDrive::Clear ()
 	if (hum) sys.StopSound (hum), hum = 0;
 	humLevel = 0.0f;
 	line = nullptr;
-	vessel = nullptr;
+	vessel = BodyRef ();
 	prevPhase = -1;
 }
 
