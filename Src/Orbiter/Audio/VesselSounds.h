@@ -132,6 +132,10 @@ private:
 		// (ORBITER_AUDIO_CONTACTS=2) its contacts heard outside, through its structure (ContactVoices)
 		EmitterId contactAir, contactStruct;
 		double contactRef = 3.0;   // the air one's reference distance [m]
+		Chirps chirps;             // (which wheels' touchdowns chirp)
+		bool bedTakes[2] = {};     // (its beds' takes given: rolling, braking)
+		double bedPushT = -1e9;    // [s] its beds' levels last pushed
+		double bedLogT = -1e9;     // [s] (ORBITER_AUDIO_LOG states) last logged
 		double lastRattle = -1e9, rattleA = 0.0, lastContactT = -1e9;
 		double peakA = 0.0, peakT = 0.0;   // (the cabin's rattle: this blow's peak deceleration, when)
 		bool rattleOn = false, rattleFired = false;
@@ -158,6 +162,9 @@ private:
 	/// Its contacts' moments heard (ContactVoices: the blows, the struts, the
 	/// cabin's rattle), at time t
 	void PlayContacts (PerVessel &pv, const std::vector<ContactSample> &pts, double t);
+	/// Its contacts' beds (rolling, braking: ContactVoices) as heard now; their
+	/// takes given once there; silence pushed when it has no contacts
+	void UpdateContactBeds (PerVessel &pv);
 	SampleBank bank;
 	int bankState = 0;             // (0: not read yet, 1: read, -1: none)
 	bool ContactBank ();

@@ -37,7 +37,7 @@ struct EarSettings {
 	float release = 1.5f;     // [s]
 	float ceiling = 0.9f;     // peaks softly limited to this
 	bool adapt = false;       // the listening level (off: physical levels, P_FULL full scale)
-	float adaptTarget = -28.0f; // [dBFS] the scene's level it raises a quiet one to
+	float adaptTarget = -24.0f; // [dBFS] the scene's level it raises a quiet one to
 	float adaptMax = 45.0f;   // [dB] the most it raises
 	float adaptDown = 0.15f;  // [s] coming down (something loud)
 	float adaptUp = 2.0f;     // [s] going up again (as the scene's level, held, falls back: 4 dB/s)

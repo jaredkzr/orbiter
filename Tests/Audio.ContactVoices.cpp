@@ -415,6 +415,104 @@ TEST_CASE ("ContactVoices: no body ringing; in the cabin the blow dulled, as lou
 	CHECK ((cab < air && cab > 0.1 * air));
 }
 
+namespace {
+/// A steady take (as a bed's): noise low-passed (smooth: a jump between
+/// stretches would show), its RMS 1/sqrt(2)-ish, len s
+std::vector<float> Steady (unsigned seed, double len = 2.5, float fc = 300.0f)
+{
+	dsp::Rng rng (seed);
+	dsp::OnePole a, b;
+	a.SetCutoff (fc, 48000.0f), b.SetCutoff (fc, 48000.0f);
+	std::vector<float> x ((size_t)(len * 48000));
+	for (auto &v : x) v = b.Lp (a.Lp (rng.White ()));
+	double e = 0.0;
+	for (float v : x) e += (double)v * v;
+	const float k = (float)(0.3 / std::sqrt (e / x.size ()));   // (RMS 0.3)
+	for (auto &v : x) v *= k;
+	return x;
+}
+double Rms (const std::vector<float> &x, size_t a, size_t b)
+{
+	double e = 0.0;
+	for (size_t i = a; i < b; i++) e += (double)x[i] * x[i];
+	return std::sqrt (e / std::max<size_t> (1, b - a));
+}
+}
+
+TEST_CASE ("ContactVoices: a chirp played only its spin-up long", "[audio][contacts]")
+{
+	Fixture f;
+	auto v = ContactVoices::Make (f.e, ContactVoices::AIR, 15.0, 1);
+	auto take = MakeClip (Steady (3, 1.0, 8000.0f));
+	REQUIRE (v->Fire (ContactVoices::Shot (ContactVoices::CHIRP, take.get (), 1.0f, 1.0f, 20000.0f, 0.0f, 0.1f), 0.0f));
+	auto y = Render (*v, 0.5);
+	CHECK (v->Playing () == 0);
+	// all of it within 0.1 s; its first 60 % at full, then faded
+	CHECK (Rms (y, 4900, y.size ()) == 0.0);
+	CHECK (Rms (y, 500, 2800) > 0.2);
+	CHECK (Rms (y, 4300, 4800) < 0.5 * Rms (y, 500, 2800));
+}
+
+TEST_CASE ("ContactVoices: a bed at its level, grains crossfading unheard; silent at nothing", "[audio][contacts]")
+{
+	Fixture f;
+	auto a = MakeClip (Steady (11)), b = MakeClip (Steady (12));
+	const float ga = (float)(1.0 / std::sqrt (Energy (a->pcm) / 2.5)), gb = (float)(1.0 / std::sqrt (Energy (b->pcm) / 2.5));
+	for (auto p : {ContactVoices::AIR, ContactVoices::STRUCTURE}) {
+		INFO ("profile " << p);
+		auto v = ContactVoices::Make (f.e, p, 15.0, 2);
+		// no takes yet: silent whatever its level
+		v->SetBed (ContactVoices::ROLL, 0.5f, 1.0f);
+		auto y0 = Render (*v, 0.2);
+		CHECK (Rms (y0, 0, y0.size ()) == 0.0);
+		REQUIRE (v->SetBedTakes (ContactVoices::ROLL, a.get (), ga, b.get (), gb));
+		auto y = Render (*v, 8.0);
+		// eased up (about 0.1 s), then at its level (unit RMS x 0.5): 0.3 s windows within 2.5 dB of it,
+		// over many grains and their crossfades (the cabin's: below 400 Hz - the takes are below 300)
+		CHECK (Rms (y, 0, 2400) < 0.5 * 0.5);
+		const double want = 0.5 * (p == ContactVoices::STRUCTURE ? 0.85 : 1.0);
+		double lo = 1e9, hi = 0.0;
+		for (size_t i = 48000; i + 14400 <= y.size (); i += 14400) {
+			const double r = Rms (y, i, i + 14400);
+			lo = std::min (lo, r), hi = std::max (hi, r);
+		}
+		INFO ("windows' RMS " << lo << " .. " << hi << " (want about " << want << ")");
+		CHECK ((lo > want * 0.75 && hi < want * 1.33));
+		// no clicks: no step between samples more than the takes' own (as smooth: a hard cut between
+		// two stretches would step by about their RMS)
+		float maxStep = 0.0f, ownStep = 0.0f;
+		for (size_t i = 48001; i < y.size (); i++) maxStep = std::max (maxStep, std::fabs (y[i] - y[i - 1]));
+		for (size_t i = 1; i < a->pcm.size (); i++) ownStep = std::max (ownStep, std::fabs (a->pcm[i] - a->pcm[i - 1]) * ga * 0.5f);
+		INFO ("largest step " << maxStep << ", the take's own " << ownStep);
+		CHECK (maxStep < 2.0f * ownStep);
+		// to nothing: eased away (0.15 s; cut 60 dB down, about a second on), then silent
+		v->SetBed (ContactVoices::ROLL, 0.0f, 1.0f);
+		auto z = Render (*v, 2.0);
+		CHECK (Rms (z, 0, 2400) > 0.1);
+		CHECK (Rms (z, 72000, z.size ()) == 0.0);
+		CHECK (v->BedLevel (ContactVoices::ROLL) == 0.0f);
+	}
+}
+
+TEST_CASE ("ContactVoices: two beds, louder with a higher level; the rate followed", "[audio][contacts]")
+{
+	Fixture f;
+	auto a = MakeClip (Steady (21, 2.5, 4000.0f));
+	const float ga = (float)(1.0 / std::sqrt (Energy (a->pcm) / 2.5));
+	auto v = ContactVoices::Make (f.e, ContactVoices::AIR, 15.0, 3);
+	REQUIRE (v->SetBedTakes (ContactVoices::ROLL, a.get (), ga));
+	REQUIRE (v->SetBedTakes (ContactVoices::BRAKE, a.get (), ga));
+	v->SetBed (ContactVoices::ROLL, 0.1f, 0.8f);
+	auto y1 = Render (*v, 2.0);
+	v->SetBed (ContactVoices::BRAKE, 0.2f, 1.2f);
+	auto y2 = Render (*v, 2.0);
+	// the brake's on top: louder (uncorrelated: about sqrt(0.1^2 + 0.2^2))
+	const double r1 = Rms (y1, 24000, y1.size ()), r2 = Rms (y2, 24000, y2.size ());
+	INFO ("rolling " << r1 << ", with the brakes " << r2);
+	CHECK_THAT (r1, WithinRel (0.1, 0.25));
+	CHECK_THAT (r2, WithinRel (std::sqrt (0.05), 0.25));
+}
+
 TEST_CASE ("ContactVoices: sixteen at once, the quietest's voice taken", "[audio][contacts]")
 {
 	Fixture f;
@@ -427,11 +525,15 @@ TEST_CASE ("ContactVoices: sixteen at once, the quietest's voice taken", "[audio
 	CHECK (v->Playing () == ContactVoices::VOICES);
 }
 
-TEST_CASE ("ContactVoices: its time per block (16 voices, the body)", "[audio][contacts][cpu]")
+TEST_CASE ("ContactVoices: its time per block (16 voices, the two beds)", "[audio][contacts][cpu]")
 {
 	Fixture f;
 	auto v = ContactVoices::Make (f.e, ContactVoices::STRUCTURE, 20.0, 1);
 	auto longBlow = MakeClip (Blow (4, 30.0, 10.0));
+	auto bed = MakeClip (Steady (5));
+	v->SetBedTakes (ContactVoices::ROLL, bed.get (), 1.0f, bed.get (), 1.0f);
+	v->SetBedTakes (ContactVoices::BRAKE, bed.get (), 1.0f);
+	v->SetBed (ContactVoices::ROLL, 0.1f, 1.1f), v->SetBed (ContactVoices::BRAKE, 0.1f, 0.9f);
 	for (int i = 0; i < ContactVoices::VOICES; i++)
 		v->Fire (ContactVoices::Shot (ContactVoices::IMPACT, longBlow.get (), 0.05f, 1.0f + 0.01f * i, 4000.0f, 0.5f), 0.0f);
 	std::vector<float> y (480);
@@ -454,7 +556,7 @@ TEST_CASE ("ContactVoices: its time per block (16 voices, the body)", "[audio][c
 		double ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count () / 200.0;
 		best = std::min (best, ms);
 	}
-	printf ("ContactVoices: %.4f ms per 480-frame block (16 voices, 12 modes)\n", best);
+	printf ("ContactVoices: %.4f ms per 480-frame block (16 voices, two beds)\n", best);
 	CHECK (v->Playing () == ContactVoices::VOICES);
 	CHECK (best < 0.15);
 }

@@ -131,7 +131,7 @@ public:
 	/// asked otherwise) is brought to SPEECH_LUFS first: recordings of all
 	/// levels alike
 	int PlayOn (Bus bus, const std::string &file, double level, bool loop, bool speech = true);
-	static constexpr double SPEECH_LUFS = -18.0;
+	static constexpr double SPEECH_LUFS = -24.0;   // (was -18: the callouts some 10 dB over a landing - by ear far too loud)
 	bool StopSound (int handle);
 	/// Its level (< 0: as it is) and pitch (<= 0: as it is)
 	bool SetSound (int handle, double level, double pitch);

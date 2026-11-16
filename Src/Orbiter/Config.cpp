@@ -258,7 +258,7 @@ CFG_SOUNDPRM CfgSoundPrm_default = {
 	true,       // bMusic (the generative music)
 	false,      // bHrtf (headphones: binaural)
 	2,          // Compression (medium)
-	0.9f,       // Master volume (-4 dB: the mix about -24 LUFS)
+	1.0f,       // Master volume (0 dB: the mix about -20 LUFS)
 	{ 1.0f, 1.0f, 0.9f, 0.85f, 0.8f, 0.7f }, // Bus volumes: outside, cockpit, voice, radio, music, interface
 	0,          // Realism (physical)
 	0           // CalloutVoice (Orbiter's)

@@ -476,18 +476,18 @@ void System::Idle ()
 
 void System::Duck (double dt)
 {
-	// the voice speaking: the rest down 9 dB, quickly (80 ms); back slowly
+	// the voice speaking: the rest down 5 dB, quickly (80 ms); back slowly
 	// (0.5 s) after it
-	const float target = Speaking () ? 0.355f : 1.0f;
+	const float target = Speaking () ? 0.562f : 1.0f;
 	const float d = engine.Duck ();
 	const double tau = target < d ? 0.08 : 0.5;
 	const float k = (float)(1.0 - std::exp (-std::max (dt, 0.0) / tau));
 	float nd = d + (target - d) * k;
 	if (std::fabs (nd - target) < 1e-3f) nd = target;
 	engine.SetDuck (nd);
-	// a transmission heard: the world and the music down 6 dB (a headset's
+	// a transmission heard: the world and the music down 4 dB (a headset's
 	// comms over the cabin), as quickly, back as slowly
-	const float rt = radio.Transmitting () ? 0.5f : 1.0f;
+	const float rt = radio.Transmitting () ? 0.631f : 1.0f;
 	const float rd = engine.RadioDuck ();
 	const float rk = (float)(1.0 - std::exp (-std::max (dt, 0.0) / (rt < rd ? 0.08 : 0.5)));
 	float nr = rd + (rt - rd) * rk;
@@ -568,18 +568,20 @@ void System::ApplySettings (const CFG_SOUNDPRM &s)
 		}
 		PathNode::SetHrtf (hrtf.Loaded () ? &hrtf : nullptr);
 	} else PathNode::SetHrtf (nullptr);
-	// (a render is mixed at full volume, whatever the player's settings)
-	if (Rendering () && !Dbg ().renderVolumes) { // (ORBITER_AUDIO_RENDER_VOLUMES=1: listening reels)
-		// (ORBITER_AUDIO_SOLO=<bus>: that bus alone - outside, cockpit,
-		// voice, radio, music, interface; the world: outside,cockpit)
-		const std::string &solo = Dbg ().solo;
-		static const char *names[NBUS] = { "outside", "cockpit", "voice", "radio", "music", "interface" };
+	// (a render is mixed at full volume, whatever the player's settings - or
+	// at them: ORBITER_AUDIO_RENDER_VOLUMES=1, listening reels. Either way
+	// ORBITER_AUDIO_SOLO=<bus>: that bus alone - outside, cockpit, voice,
+	// radio, music, interface; the world: outside,cockpit)
+	const std::string &solo = Dbg ().solo;
+	static const char *names[NBUS] = { "outside", "cockpit", "voice", "radio", "music", "interface" };
+	auto heard = [&](int b) { return !Rendering () || solo.empty () || solo.find (names[b]) != std::string::npos; };
+	if (Rendering () && !Dbg ().renderVolumes) {
 		engine.SetMasterGain (1.0f);
-		for (int b = 0; b < NBUS; b++) engine.SetBusGain ((Bus)b, solo.empty () || solo.find (names[b]) != std::string::npos ? 1.0f : 0.0f);
+		for (int b = 0; b < NBUS; b++) engine.SetBusGain ((Bus)b, heard (b) ? 1.0f : 0.0f);
 		return;
 	}
 	engine.SetMasterGain (s.bEnabled ? VolumeToGain (s.Master) : 0.0f);
-	for (int b = 0; b < NBUS; b++) engine.SetBusGain ((Bus)b, VolumeToGain (s.Bus[b]));
+	for (int b = 0; b < NBUS; b++) engine.SetBusGain ((Bus)b, heard (b) ? VolumeToGain (s.Bus[b]) : 0.0f);
 	// the dynamics' compression (the listening level with it: off with it)
 	engine.SetCompression (s.Compression);
 	engine.SetAdapt (Dbg ().adapt >= 0 ? Dbg ().adapt != 0 : s.Compression != Ears::COMP_OFF);

@@ -12,9 +12,17 @@
 //    (a send), the lowest about 25 Hz for a 30 m vessel, 60 Hz for a 5 m
 //    one; ringing 0.6 s (the lowest) to 0.15 s (the highest)
 //
-// Two of them per vessel, by profile: AIR (outside - the recordings, the
-// body under them, -10 dB) and STRUCTURE (its own structure, in the cabin -
-// the body, the recordings dulled under it, -12 dB below 800 Hz).
+// Two of them per vessel, by profile: AIR (outside - the recordings) and
+// STRUCTURE (its own structure, in the cabin - the recordings dulled). The
+// body's modes are there but off (by ear a gong: the recordings carry it).
+//
+// Beds (stage 2): sounds going on while it rolls or brakes - ROLL, BRAKE -
+// from steady recordings (up to two takes each): random stretches of them
+// (grains, GRAIN_MIN..GRAIN_MAX long) one after another, each crossfading
+// into the next over GRAIN_XFADE at equal power, so no loop is heard; their
+// level and rate eased to what SetBed gives (the level: a take's RMS as
+// 1 - SetBedTakes gives each take's 1 / RMS). In the cabin the rolling a
+// rumble (below 400 Hz), the brakes below 900 Hz.
 //
 // The one-shots come from the simulation thread (Fire: an emitter releases
 // them when their sound arrives), in order, each once; nothing is
@@ -34,15 +42,27 @@ public:
 	enum Profile { AIR = 0, STRUCTURE = 1 };
 	/// One-shots' kinds (the design's layers): the blow, the strut, the
 	/// cabin's rattle
-	enum Kind { IMPACT = 1, STRUT = 2, RATTLE = 3 };
+	enum Kind { IMPACT = 1, STRUT = 2, RATTLE = 3, CHIRP = 4 };
 	static constexpr int VOICES = 16, MODES = 12;
+	enum Bed { ROLL = 0, BRAKE = 1, BEDS = 2 };
+	static constexpr float GRAIN_MIN = 0.35f, GRAIN_MAX = 0.8f, GRAIN_XFADE = 0.06f;   // [s]
 
 	/// size: the vessel's [m] (its body's modes); seed: their spread
 	static SourcePtr<ContactVoices> Make (Engine &e, Profile p, double size, uint32_t seed);
 	/// A one-shot of a clip (mono): its gain, playback rate, low-pass [Hz],
-	/// its share in the body (0..1)
-	static OneShot Shot (int kind, const Clip *clip, float gain, float rate, float cutoff, float send);
+	/// its share in the body (0..1); len: only so long of it [s], faded out
+	/// over its last 40 % (0: all of it)
+	static OneShot Shot (int kind, const Clip *clip, float gain, float rate, float cutoff, float send, float len = 0.0f);
 	bool Fire (const OneShot &s, float delay) override;
+	/// A bed's takes (mono; b may be null) and their gains (1 / RMS: a take
+	/// at its gain is unit RMS); the bed silent until it has one. False: not
+	/// taken (try again)
+	bool SetBedTakes (int bed, const Clip *a, float ga, const Clip *b = nullptr, float gb = 1.0f);
+	/// A bed's level (unit RMS: as a one-shot's gain) and playback rate, eased
+	/// to (rising over about 0.1 s, falling over 0.15 s)
+	void SetBed (int bed, float gain, float rate);
+	/// (tests) a bed's level now (eased)
+	float BedLevel (int bed) const { return bedNow[bed].load (std::memory_order_relaxed); }
 
 	/// The body's lowest mode for a vessel of a size [Hz]
 	static float BodyFreq (double size);
@@ -60,7 +80,7 @@ protected:
 private:
 	ContactVoices (Profile p, double size, uint32_t seed);
 	Profile profile;
-	struct Start { const Clip *clip; float gain, rate, cutoff, send, delay; };
+	struct Start { const Clip *clip; float gain, rate, cutoff, send, delay, len; };
 	dsp::Events<Start, 64> starts;
 	std::atomic<int> playing{0};
 	float modeF[MODES] = {}, modeTau[MODES] = {}, modeAmp[MODES] = {};
@@ -72,8 +92,31 @@ private:
 		double pos = 0.0;
 		float rate = 1.0f, gain = 0.0f, send = 0.0f;
 		unsigned wait = 0;     // [samples] before it starts
+		unsigned len = 0, played = 0;   // [samples] to play (0: all), played
 		dsp::OnePole lp;
 	};
+	// the beds
+	struct BedTakes { int bed; const Clip *take[2]; float g[2]; };
+	dsp::Events<BedTakes, 8> bedTakes;
+	std::atomic<float> bedGain[BEDS], bedRate[BEDS], bedNow[BEDS];
+	struct Grain { const Clip *clip = nullptr; float g = 1.0f; double pos = 0.0; unsigned left = 0, len = 0; };
+	struct BedState {
+		const Clip *take[2] = {};
+		float tg[2] = {1.0f, 1.0f};
+		int n = 0;
+		Grain gr[2];
+		int cur = 0;           // (the grain playing; the other: fading in, while its len - left < xfade)
+		float gain = 0.0f, rate = 1.0f;
+		float held = 0.0f;     // (its level while it was wanted: going to nothing, cut 60 dB under it)
+		dsp::OnePole lp[2];    // (STRUCTURE: dulled)
+		dsp::Rng rng;
+	};
+	BedState beds[BEDS];
+	static constexpr int XF_TAB = 4096;
+	float xfTab[XF_TAB + 1] = {};   // (sin over a quarter turn: the crossfades' gains)
+	unsigned xfade = 2880;          // [samples]
+	void NewGrain (BedState &b, Grain &g, float rateNow);
+	float BedSample (BedState &b, float dop);
 	Voice voices[VOICES];
 	dsp::Resonator modes[MODES];
 	float modeIn[MODES] = {};  // (each mode's input scale: alike rung whatever its decay)

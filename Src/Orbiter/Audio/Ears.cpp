@@ -26,7 +26,7 @@ struct Ears::Impl {
 	std::atomic<float> reduction{0.0f}, adaptGain{0.0f};
 	std::atomic<bool> adaptOn{false};
 	// (live: the compression's settings, set from the simulation thread)
-	std::atomic<float> thr{-20.0f}, ratio{3.0f}, aMax{45.0f}, aTarget{-28.0f};
+	std::atomic<float> thr{-20.0f}, ratio{3.0f}, aMax{45.0f}, aTarget{-24.0f};
 	float msFast = 0.0f, held = -200.0f, adaptDb = 0.0f;
 	bool init = false;
 	// the peak limiter: the gain each sample needs (its window's minimum over
@@ -176,8 +176,8 @@ Ears::Settings Ears::ForCompression (int level)
 	Settings s;
 	switch (level) {
 	case COMP_OFF:    s.ratio = 1.0f, s.adaptMax = 0.0f; break;                                 // (the limiter only)
-	case COMP_LIGHT:  s.threshold = -15.0f, s.ratio = 2.0f, s.adaptMax = 25.0f, s.adaptTarget = -32.0f; break;
-	case COMP_STRONG: s.threshold = -30.0f, s.ratio = 6.0f, s.adaptMax = 55.0f, s.adaptTarget = -24.0f; break;
+	case COMP_LIGHT:  s.threshold = -15.0f, s.ratio = 2.0f, s.adaptMax = 25.0f, s.adaptTarget = -28.0f; break;
+	case COMP_STRONG: s.threshold = -30.0f, s.ratio = 6.0f, s.adaptMax = 55.0f, s.adaptTarget = -20.0f; break;
 	default: break;                                                                              // (medium: the defaults)
 	}
 	return s;

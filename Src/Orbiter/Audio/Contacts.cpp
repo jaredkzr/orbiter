@@ -146,4 +146,48 @@ void ContactModel::Break (double t, const V3 &pos, double mass, double hitSpeed)
 	events.push_back (e);
 }
 
+ContactBeds BedsFor (const ContactLevels &l)
+{
+	ContactBeds b;
+	const double v = std::min (std::max (l.rollSpeed, 0.0), ROLL_VMAX);
+	if (l.wheelLoad > 0.0 && v > 0.0)
+		b.rollP = ROLL_P * std::pow (v / ROLL_V, 1.5) * std::sqrt (l.wheelLoad / ROLL_LOAD);
+	b.rollRate = ROLL_RATE0 + (ROLL_RATE1 - ROLL_RATE0) * std::min (v / ROLL_RATE_V, 1.0);
+	const double W = std::max (l.brakePower, 0.0) + std::max (l.scrubPower, 0.0);
+	if (W > 0.0) b.brakeP = std::min (BRAKE_P * std::sqrt (W / BRAKE_W), 4.0 * BRAKE_P);
+	b.brakeRate = BRAKE_RATE0 + (BRAKE_RATE1 - BRAKE_RATE0) * std::min (v / BRAKE_RATE_V, 1.0);
+	return b;
+}
+
+std::vector<Chirp> Chirps::Step (double t, const std::vector<ContactSample> &pts, const std::vector<ContactEvent> &events, double mass)
+{
+	std::vector<Chirp> out;
+	for (const ContactSample &p : pts)
+		if (p.kind == ContactKind::WHEEL && p.id >= 0 && !seen.count (p.id)) seen[p.id] = -1e9, wheels++;
+	const double g = 9.81;
+	const double load = mass * g / std::max (wheels, 3);       // (a wheel's static load [N])
+	const double mw = WHEEL_MASS * load / g;                    // (its wheel's mass [kg])
+	for (const ContactEvent &e : events) {
+		if (e.type != ContactEvent::IMPACT || e.kind != ContactKind::WHEEL || e.id < 0) continue;
+		const ContactSample *p = nullptr;
+		for (const ContactSample &q : pts) if (q.id == e.id && q.kind == ContactKind::WHEEL) { p = &q; break; }
+		if (!p) continue;
+		const double v = std::fabs (p->slipLong);
+		if (v <= CHIRP_V) continue;
+		if (t - seen[e.id] < CHIRP_AIR + 1e-9) continue;           // (rolling all along: spun up)
+		auto c = chirped.find (e.id);
+		if (c != chirped.end () && t - c->second < CHIRP_GAP) continue;
+		const double Fn = std::max (p->Fn, load / 3.0);
+		Chirp ch;
+		ch.on = true, ch.id = e.id, ch.t = e.t, ch.speed = v;
+		ch.spinUp = std::clamp (0.6 * mw * v / (MU_TYRE * Fn), CHIRP_T[0], CHIRP_T[1]);
+		ch.work = MU_TYRE * Fn * 0.5 * v * ch.spinUp;
+		chirped[e.id] = t;
+		out.push_back (ch);
+	}
+	for (const ContactSample &p : pts)
+		if (p.kind == ContactKind::WHEEL && p.id >= 0) seen[p.id] = t;
+	return out;
+}
+
 } // namespace audio

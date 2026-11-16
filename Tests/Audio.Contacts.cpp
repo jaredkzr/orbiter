@@ -11,6 +11,8 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include "Audio/Contacts.h"
+#include <algorithm>
+#include <cmath>
 
 using namespace audio;
 using Catch::Matchers::WithinRel;
@@ -170,4 +172,92 @@ TEST_CASE ("Contacts: docking, undocking, a part breaking off", "[contacts]")
 	ContactEvent c;
 	c.type = ContactEvent::CRASH, c.t = 5.0, c.speed = 50.0, c.mass = 1e4, c.energy = 1.25e7;
 	CHECK (Describe (c) == "crash at 5.000 s: 50.00 m/s, 1e+04 kg, 1.25e+07 J");
+}
+
+TEST_CASE ("Contacts: rolling rises with speed and load, silent at rest; braking by its power", "[contacts]")
+{
+	ContactLevels l;
+	l.wheelLoad = ROLL_LOAD, l.rollSpeed = ROLL_V;
+	CHECK_THAT (BedsFor (l).rollP, WithinRel (ROLL_P, 1e-9));
+	// v^1.5, sqrt(load)
+	l.rollSpeed = 2.25 * ROLL_V;
+	CHECK_THAT (BedsFor (l).rollP, WithinRel (3.375 * ROLL_P, 1e-9));
+	l.wheelLoad = 0.25 * ROLL_LOAD;
+	CHECK_THAT (BedsFor (l).rollP, WithinRel (0.5 * 3.375 * ROLL_P, 1e-9));
+	// (no faster than ROLL_VMAX)
+	ContactLevels vmax = l;
+	vmax.rollSpeed = 2.0 * ROLL_VMAX;
+	CHECK_THAT (BedsFor (vmax).rollP, WithinRel (ROLL_P * std::pow (ROLL_VMAX / ROLL_V, 1.5) * 0.5, 1e-9));
+	// faster: higher (ROLL_RATE0 at rest .. ROLL_RATE1)
+	ContactLevels slow = l, fast = l;
+	slow.rollSpeed = 10.0, fast.rollSpeed = 90.0;
+	CHECK (BedsFor (slow).rollRate < BedsFor (fast).rollRate);
+	CHECK (BedsFor (fast).rollRate <= ROLL_RATE1);
+	// at rest, or nothing on the wheels: silent
+	l.rollSpeed = 0.0;
+	CHECK (BedsFor (l).rollP == 0.0);
+	l.rollSpeed = 50.0, l.wheelLoad = 0.0;
+	CHECK (BedsFor (l).rollP == 0.0);
+	// braking: as the root of its power (and the tyres' scrub), capped; none: silent
+	ContactLevels b;
+	b.rollSpeed = 30.0, b.wheelLoad = ROLL_LOAD;
+	CHECK (BedsFor (b).brakeP == 0.0);
+	b.brakePower = BRAKE_W;
+	CHECK_THAT (BedsFor (b).brakeP, WithinRel (BRAKE_P, 1e-9));
+	b.brakePower = 2.0 * BRAKE_W, b.scrubPower = 2.0 * BRAKE_W;
+	CHECK_THAT (BedsFor (b).brakeP, WithinRel (2.0 * BRAKE_P, 1e-9));
+	b.brakePower = 1e3 * BRAKE_W;
+	CHECK_THAT (BedsFor (b).brakeP, WithinRel (4.0 * BRAKE_P, 1e-9));
+	ContactLevels bs = b;
+	bs.rollSpeed = 3.0;
+	CHECK (BedsFor (bs).brakeRate < BedsFor (b).brakeRate);
+}
+
+namespace {
+ContactSample Rolling (int id, double vn, double ground, double Fn = 4e4)
+{
+	ContactSample s = Wheel (id, vn, Fn, ground);
+	return s;
+}
+}
+
+TEST_CASE ("Contacts: a wheel chirps touching down over 15 m/s, once per touchdown", "[contacts]")
+{
+	ContactModel m;
+	Chirps c;
+	const double M = 12000.0;
+	double t = 1.0;
+	auto step = [&](std::vector<ContactSample> pts) {
+		m.ClearEvents ();
+		m.Step (t, H, pts, SurfaceKind::PAVED);
+		auto r = c.Step (t, pts, m.Events (), M);
+		t += H;
+		return r;
+	};
+	// the mains down at 90 m/s: each chirps once, at its touchdown
+	auto r = step ({Rolling (1, 1.2, 90.0), Rolling (2, 1.2, 90.0)});
+	REQUIRE (r.size () == 2);
+	CHECK (r[0].id == 1);
+	CHECK (r[0].t == 1.0);
+	// its spin-up: 0.6 m v / (mu Fn), the wheel 1 % of its static load (M g / 3)
+	const double mw = Chirps::WHEEL_MASS * M / 3.0;
+	CHECK_THAT (r[0].spinUp, WithinRel (std::clamp (0.6 * mw * 90.0 / (Chirps::MU_TYRE * 4e4), 0.04, 0.4), 1e-9));
+	CHECK_THAT (r[0].work, WithinRel (0.3 * mw * 90.0 * 90.0, 1e-6));
+	// rolling on, a bump struck again: no chirp (spun up)
+	for (int i = 0; i < 20; i++) CHECK (step ({Rolling (1, 0.02, 89.0), Rolling (2, 0.02, 89.0)}).empty ());
+	CHECK (step ({Rolling (1, 1.5, 88.0), Rolling (2, 0.02, 88.0)}).empty ());
+	CHECK (m.Events ().size () == 1);   // (struck: an impact - but no chirp)
+	// the nose down later: it chirps
+	r = step ({Rolling (1, 0.0, 88.0), Rolling (2, 0.0, 88.0), Rolling (0, 1.0, 88.0)});
+	REQUIRE (r.size () == 1);
+	CHECK (r[0].id == 0);
+	// a bounce: off 0.3 s, down again within 0.5 s of its chirp - none
+	t += 0.3;
+	CHECK (step ({Rolling (0, 1.0, 87.0)}).empty ());
+	// slow (a hop at taxiing speed): none
+	t += 2.0;
+	CHECK (step ({Rolling (0, 1.0, 10.0)}).empty ());
+	// down again after a long hop, fast: again
+	t += 2.0;
+	CHECK (step ({Rolling (0, 1.0, 60.0)}).size () == 1);
 }

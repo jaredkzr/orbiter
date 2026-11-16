@@ -84,6 +84,65 @@ struct ContactLevels {
 	bool any = false;
 };
 
+/// What the wheels' rolling and the brakes sound like over a step (stage 2):
+/// pressures at 10 m [Pa] (as heard outside; the beds' levels), playback rates
+struct ContactBeds {
+	double rollP = 0.0, rollRate = 1.0;
+	double brakeP = 0.0, brakeRate = 1.0;
+};
+
+/// The tyres' rolling and the brakes' groan from a step's levels:
+///  - rolling: ROLL_P at ROLL_V on ROLL_LOAD, as v^1.5 sqrt(load) (silent
+///    at rest, or with no load on the wheels); playback rate ROLL_RATE0 at
+///    rest to ROLL_RATE1 from ROLL_RATE_V on (more than an octave: a rumble
+///    is noise - a smaller change isn't heard)
+///  - braking and the tyres' scrub: BRAKE_P at BRAKE_W of friction power,
+///    as its root (capped at 4x); rate BRAKE_RATE0 at rest to BRAKE_RATE1
+///    from BRAKE_RATE_V on
+ContactBeds BedsFor (const ContactLevels &l);
+/// (the design said 0.2 Pa - 80 dB at 10 m - at 40 m/s for 15 t; that buries
+/// a gentle touchdown's thump at landing speed: a 1 m/s touchdown's take is
+/// about 0.2 Pa RMS at 10 m. 0.06 Pa keeps it ~10 dB over rolling at 95 m/s)
+constexpr double ROLL_P = 0.06, ROLL_V = 40.0, ROLL_LOAD = 15000.0 * 9.81, ROLL_VMAX = 150.0, ROLL_RATE_V = 100.0;
+constexpr double ROLL_RATE0 = 0.6, ROLL_RATE1 = 1.4;
+constexpr double BRAKE_P = 0.08, BRAKE_W = 1e6, BRAKE_RATE0 = 0.7, BRAKE_RATE1 = 1.3, BRAKE_RATE_V = 80.0;
+/// A chirp's rate by the wheel's sliding speed: CHIRP_RATE0 at 15 m/s to
+/// CHIRP_RATE1 from CHIRP_RATE_V on
+constexpr double CHIRP_RATE0 = 0.9, CHIRP_RATE1 = 1.1, CHIRP_RATE_V = 120.0;
+
+/// A wheel's chirp at touchdown: the still wheel spun up by the runway's
+/// friction - how long that takes, and the friction's work meanwhile
+struct Chirp {
+	bool on = false;
+	int id = -1;
+	double t = 0.0;        ///< [s] when (the wheel's touchdown)
+	double speed = 0.0;    ///< the slip at touchdown (the ground speed) [m/s]
+	double spinUp = 0.0;   ///< [s]
+	double work = 0.0;     ///< [J] the friction's: mu Fn (v/2) spinUp
+};
+
+/// Which wheel impacts chirp. A wheel touching down (an impact of a wheel
+/// in the air at least CHIRP_AIR before, not chirped within CHIRP_GAP)
+/// sliding over CHIRP_V chirps. Its spin-up, from a guess of the wheel:
+/// its mass WHEEL_MASS of the static load it carries (an airliner's main
+/// wheel and tyre, ~200 kg for ~20 t; the load: the vessel's weight over
+/// its wheels, at least 3), its inertia 0.6 m r^2 (the tyre's mass outward),
+/// the runway's friction MU_TYRE pressing with the larger of the sample's
+/// force and a third of its static load: t = 0.6 m v / (mu Fn), clamped to
+/// CHIRP_T; the work mu Fn (v/2) t = 0.3 m v^2 (the spun wheel's energy)
+class Chirps {
+public:
+	static constexpr double CHIRP_V = 15.0, CHIRP_AIR = 0.25, CHIRP_GAP = 0.5;
+	static constexpr double WHEEL_MASS = 0.01, MU_TYRE = 0.7, CHIRP_T[2] = {0.04, 0.4};
+	/// A step's: of its impacts (m.Events ()), those that chirp; mass: the
+	/// vessel's [kg]. Call once per step, after ContactModel::Step
+	std::vector<Chirp> Step (double t, const std::vector<ContactSample> &pts, const std::vector<ContactEvent> &events, double mass);
+	void Reset () { seen.clear (), chirped.clear (); }
+private:
+	std::map<int, double> seen, chirped;   // (by wheel: last in contact, last chirped)
+	int wheels = 0;
+};
+
 class ContactModel {
 public:
 	/// A point touching anew closing at least this fast strikes [m/s]

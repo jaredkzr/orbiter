@@ -27,7 +27,7 @@ namespace {
 	constexpr float RADIO_RMS = 0.08f;
 	/// Each transmission's voice brought to this loudness first (BS.1770:
 	/// recordings of all levels alike; about RADIO_RMS for speech)
-	constexpr double RADIO_LUFS = -20.0;
+	constexpr double RADIO_LUFS = -26.0;   // (2 dB under the callouts' speech, as before: both down 6 dB)
 	/// After the channel's clipping (its peaks at half scale): up to this
 	/// (the radio about the callouts' loudness, a little under)
 	constexpr float RADIO_OUT = 1.7f;

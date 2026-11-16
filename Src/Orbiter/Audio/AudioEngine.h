@@ -19,11 +19,13 @@
 // The mix (loudness, EBU R128, at the default volumes; measured in the
 // Shuttle's ascent, Tests/Audio/Ascent.scn):
 //   the world      about -20 LUFS loud (the ears' compressor), quiet
-//                  scenes raised towards -28 dBFS (the listening level)
-//   voice          speech brought to -18 LUFS (each file: Loudness.h),
-//                  some 3 dB over the world - which ducks 9 dB under it
-//   radio          voices to -20 LUFS before the channel; some 4 dB under
-//                  the callouts - the world and the music duck 6 dB
+//                  scenes raised towards -24 dBFS (the listening level)
+//   voice          speech brought to -24 LUFS (each file: Loudness.h),
+//                  a little over a quiet scene - which ducks 5 dB under it
+//                  (2026-11-15: at -18, ducking 9 dB, the callouts stood
+//                  some 10 dB over a landing - by ear far too loud)
+//   radio          voices to -26 LUFS before the channel; some 4 dB under
+//                  the callouts - the world and the music duck 4 dB
 //   music          -30 dBFS RMS (MusicSynth): 10 dB under a launch, about
 //                  the level of a quiet scene
 //   interface      clicks peaking at -29 dBFS

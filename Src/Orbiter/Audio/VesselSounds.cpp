@@ -62,6 +62,15 @@ namespace {
 	/// RATTLE_P [Pa] at ten times it; not again within RATTLE_GAP [s] unless
 	/// twice as hard
 	constexpr double RATTLE_A = 0.3 * 9.81, RATTLE_P = 0.4, RATTLE_GAP = 0.3;
+	/// A chirp: of the friction's work spinning a wheel up, this much
+	/// becomes sound (with the wheel guess of Chirps, a delta-glider's
+	/// touchdown at 95 m/s ~0.1 MJ: ~8 dB more energy than its gear's thump -
+	/// louder outside, as a real one); in the cabin CHIRP_CABIN of it,
+	/// dulled below CHIRP_CABIN_FC (a zip)
+	constexpr double ETA_CHIRP = 3e-6, CHIRP_CABIN = 0.056;   // (-25 dB)
+	constexpr float CHIRP_CABIN_FC = 1500.0f;
+	/// The beds' parameters as pushed (rolling gain, rate, braking gain, rate)
+	using BedParams = Floats<4>;
 
 	V3 ToV3 (const VECTOR3 &v) { return V3 (v.x, v.y, v.z); }
 
@@ -367,6 +376,7 @@ void VesselSounds::UpdateVessel (PerVessel &pv)
 		wind->SetHull (p0 > 1e-9 ? (float)(cabin / p0) : 0.0f);
 	}
 	if (Emitter *ca = world.Get (pv.contactAir)) ca->SetLevel (cfg.on[SOUND_CONTACTS] ? (float)tune.contactLevel : 0.0f);
+	UpdateContactBeds (pv);
 	if (Emitter *cs = world.Get (pv.contactStruct))
 		cs->SetLevel (cfg.on[SOUND_CONTACTS] ? StructureEmitter (pv.v, P_FULL * tune.contactLevel, "").level : 0.0f);
 	if (Emitter *ce = world.Get (pv.contact)) {
@@ -469,6 +479,16 @@ void VesselSounds::Contacts (const Vessel *v, const std::vector<ContactSample> &
 	if (!pv || pts.empty ()) return;
 	pv->contacts.Step (t, h, pts, surface);
 	PlayContacts (*pv, pts, t);
+	if (Emitter *ca = world.Get (pv->contactAir)) {
+		// the beds: their pressures at 10 m as at the reference distance (spherical)
+		const ContactBeds b = BedsFor (pv->contacts.Levels ());
+		const double k = 10.0 / pv->contactRef / P_FULL;
+		BedParams bp;
+		bp[0] = (float)(b.rollP * k), bp[1] = (float)b.rollRate, bp[2] = (float)(b.brakeP * k), bp[3] = (float)b.brakeRate;
+		ca->Push (t, bp);
+		if (Emitter *cs = world.Get (pv->contactStruct)) cs->Push (t, bp);
+		pv->bedPushT = t;
+	}
 	LogContacts (v, pv->contacts);
 	// (ContactSynth's: the step summed)
 	const ContactLevels &l = pv->contacts.Levels ();
@@ -521,6 +541,26 @@ void VesselSounds::PlayContacts (PerVessel &pv, const std::vector<ContactSample>
 		if (b.w > 0.05f) play (ContactVoices::IMPACT, layer, b.next, b.w, e.energy, eta, cutoff, e.pos, e.t);
 		if (gear) play (ContactVoices::STRUT, "strut", SampleBank::ANY, 1.0f, e.energy, ETA_STRUT, 12000.0f, e.pos, e.t);
 	}
+	// the tyres' chirps: a wheel touching down sliding (Chirps), the take
+	// played the spin-up long, its level from the friction's work
+	for (const Chirp &c : pv.chirps.Step (t, pts, pv.contacts.Events (), m)) {
+		SampleBank::Take k = bank.Pick ("chirp");
+		if (!k || k.energy <= 0.0 || !k.clip->frames) continue;
+		const double dur = (double)k.clip->frames / k.clip->rate;
+		const double len = std::min (c.spinUp, dur);
+		const double played = k.energy * (len / dur) * 0.8;   // (the energy played: so much of it, its fade)
+		const double p2 = ETA_CHIRP * c.work * RHO0 * C0 / (4.0 * 3.14159265358979 * pv.contactRef * pv.contactRef);
+		const float g = (float)(std::sqrt (p2 / played) / P_FULL) * k.gain;
+		// (faster: a little higher)
+		const float rate = k.rate * (float)(CHIRP_RATE0 + (CHIRP_RATE1 - CHIRP_RATE0) * std::clamp ((c.speed - 15.0) / (CHIRP_RATE_V - 15.0), 0.0, 1.0));
+		V3 pos;
+		for (const ContactSample &p : pts) if (p.id == c.id) pos = p.pos;
+		air->SetOffset (pos);
+		air->Schedule (c.t, ContactVoices::Shot (ContactVoices::CHIRP, k.clip.get (), g, rate, 16000.0f, 0.0f, (float)len));
+		st->Schedule (c.t, ContactVoices::Shot (ContactVoices::CHIRP, k.clip.get (), g * (float)CHIRP_CABIN, rate, CHIRP_CABIN_FC, 0.0f, (float)len));
+		if (Dbg ().log > 0)
+			printf ("Audio: contact of %s: chirp wheel %d at %.3f s: %.1f m/s, spin-up %.3f s, %.3g J\n", pv.v->Name (), c.id, c.t, c.speed, c.spinUp, c.work), fflush (stdout);
+	}
 	// the cabin's rattle: decelerated over RATTLE_A (the contacts' force
 	// beyond holding its weight up; braking), as loud as log a - of the
 	// blow's peak: rattled when it falls off it (or holds, braking), at
@@ -549,6 +589,49 @@ void VesselSounds::PlayContacts (PerVessel &pv, const std::vector<ContactSample>
 		pv.rattleFired = true, pv.rattleA = pv.peakA, pv.lastRattle = t;
 	}
 	if (a <= RATTLE_A) pv.rattleOn = pv.rattleFired = false;
+}
+
+void VesselSounds::UpdateContactBeds (PerVessel &pv)
+{
+	Emitter *air = world.Get (pv.contactAir), *st = world.Get (pv.contactStruct);
+	ContactVoices *va = world.Synth<ContactVoices> (pv.contactAir), *vs = world.Synth<ContactVoices> (pv.contactStruct);
+	if (!air || !st || !va || !vs) return;
+	// their takes (two of each, at unit RMS), once there
+	static const char *layer[2] = {"rolling", "brake"};
+	for (int b = 0; b < 2; b++) {
+		if (pv.bedTakes[b]) continue;
+		const Clip *c[2] = {};
+		float g[2] = {1.0f, 1.0f};
+		int n = 0;
+		const int takes = std::min (2, std::max (1, bank.Count (layer[b])));   // (none there: one Pick - its one warning)
+		for (int i = 0; i < takes; i++) {
+			SampleBank::Take k = bank.Pick (layer[b]);
+			if (!k || k.energy <= 0.0 || !k.clip->frames) continue;
+			if (n && k.clip.get () == c[0]) continue;
+			c[n] = k.clip.get (), g[n] = (float)(1.0 / std::sqrt (k.energy / ((double)k.clip->frames / k.clip->rate))), n++;
+		}
+		if (!n) continue;
+		if (va->SetBedTakes (b, c[0], g[0], c[1], g[1]) && vs->SetBedTakes (b, c[0], g[0], c[1], g[1])) pv.bedTakes[b] = true;
+	}
+	// (no contacts this while: silence, once)
+	if (now - pv.bedPushT > 0.1) {
+		BedParams z;
+		z[1] = z[3] = 1.0f;
+		BedParams last;
+		if (!air->Latest (last) || last[0] != 0.0f || last[2] != 0.0f) air->Push (now, z), st->Push (now, z);
+	}
+	// as heard now (the travel time ago outside; at once in its cabin)
+	const BedParams a = air->Recalled<BedParams> (), s = st->Recalled<BedParams> ();
+	va->SetBed (ContactVoices::ROLL, a[0], a[1]), va->SetBed (ContactVoices::BRAKE, a[2], a[3]);
+	vs->SetBed (ContactVoices::ROLL, s[0], s[1]), vs->SetBed (ContactVoices::BRAKE, s[2], s[3]);
+	// (the log, with the sources' states: twice a second while either sounds - at the reference
+	// distance as wanted, [Pa], and as playing outside, eased, [Pa])
+	if (Dbg ().logStates && (a[0] > 0.0f || a[2] > 0.0f || va->BedLevel (0) > 0.0f || va->BedLevel (1) > 0.0f) && now - pv.bedLogT >= 0.5) {
+		pv.bedLogT = now;
+		printf ("Audio: t %.2f %s contact beds: rolling %.3g Pa (playing %.3g, rate %.2f), braking %.3g Pa (playing %.3g, rate %.2f) at %.0f m\n",
+			now, pv.v->Name (), a[0] * P_FULL, va->BedLevel (0) * P_FULL, a[1], a[2] * P_FULL, va->BedLevel (1) * P_FULL, a[3], pv.contactRef);
+		fflush (stdout);
+	}
 }
 
 void VesselSounds::LogContacts (const Vessel *v, ContactModel &m)
