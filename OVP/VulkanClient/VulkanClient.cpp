@@ -32,6 +32,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <csignal>
+#include <unistd.h>
 
 static VulkanClient *g_client = nullptr;
 
@@ -74,6 +76,7 @@ void VulkanClient::Teardown ()
 {
 	for (auto &w : writers) w.wait ();
 	writers.clear ();
+	CloseVideo ();
 	if (frameTimes) { fclose (frameTimes); frameTimes = nullptr; }
 	// Must run before process exit: once the driver library has been
 	// finalised, Vulkan objects can no longer be destroyed.
@@ -162,6 +165,12 @@ bool VulkanClient::clbkInitialise ()
 		if (!frameTimes) oapiWriteLogError ("VulkanClient: could not write %s", ft);
 	}
 	if (const char *h = getenv ("ORBITER_VK_HIDE_UI")) hideUi = *h && *h != '0';
+	// ORBITER_VK_VIDEO_FILE=<file.mp4>: every frame streamed to an ffmpeg
+	// process that encodes it (no frames on disk; offscreen too, so with the
+	// screen locked); ORBITER_VK_VIDEO_FPS its frame rate (30: with
+	// --fixedstep=1/30, one frame a step - the sound rendered alongside fits)
+	if (const char *v = getenv ("ORBITER_VK_VIDEO_FILE")) videoFile = v;
+	if (const char *r = getenv ("ORBITER_VK_VIDEO_FPS")) videoFps = std::max (1.0, atof (r));
 	if (const char *shot = getenv ("ORBITER_VK_SCREENSHOT")) {
 		autoScreenshot = shot;
 		if (const char *n = getenv ("ORBITER_VK_SCREENSHOT_FRAME")) autoScreenshotFrame = (unsigned)atoi (n);
@@ -256,6 +265,7 @@ void VulkanClient::clbkSaveSettings ()
 
 void VulkanClient::clbkCloseSession (bool fastclose)
 {
+	CloseVideo (); // (the session's video ends with it)
 	GraphicsClient::clbkCloseSession (fastclose);
 	DeleteStreams (true);
 	if (testInput) testInput->SessionEnd ();
@@ -451,6 +461,7 @@ bool VulkanClient::clbkDisplayFrame ()
 		lastFrameWall = now;
 	}
 	if (frameActive) {
+		if (!videoFile.empty ()) StreamFrame ();
 		if (!autoScreenshot.empty() && !videoDir.empty() && frameCount + 1 + videoFrames >= autoScreenshotFrame && frameCount + 1 < autoScreenshotFrame) {
 			char name[64];
 			snprintf (name, sizeof(name), "/frame_%05u.png", videoIndex++);
@@ -492,6 +503,43 @@ bool VulkanClient::clbkDisplayFrame ()
 
 // ======================================================================
 // Screenshots
+
+void VulkanClient::StreamFrame ()
+{
+	ctx.RequestCapture ([this](const uint8_t *px, uint32_t w, uint32_t h, VkFormat fmt) {
+		if (!videoPipe) {
+			const bool bgr = (fmt == VK_FORMAT_B8G8R8A8_SRGB || fmt == VK_FORMAT_B8G8R8A8_UNORM);
+			// on the GPU (VAAPI) where there is one, else x264 (ORBITER_VK_VIDEO_CODEC=x264: always)
+			const char *codec = getenv ("ORBITER_VK_VIDEO_CODEC");
+			const bool vaapi = !(codec && !strcmp (codec, "x264")) && access ("/dev/dri/renderD128", R_OK | W_OK) == 0;
+			char cmd[1024];
+			snprintf (cmd, sizeof (cmd), "ffmpeg -hide_banner -loglevel error -y -f rawvideo -pix_fmt %s -s %ux%u -framerate %g -i - %s '%s'",
+				bgr ? "bgra" : "rgba", w, h, videoFps,
+				vaapi ? "-vaapi_device /dev/dri/renderD128 -vf format=nv12,hwupload -c:v h264_vaapi -qp 18"
+				      : "-c:v libx264 -preset veryfast -crf 18 -pix_fmt yuv420p",
+				videoFile.c_str ());
+			signal (SIGPIPE, SIG_IGN); // (ffmpeg gone: a failed write, not the end of Orbiter)
+			videoPipe = popen (cmd, "w");
+			if (!videoPipe) { oapiWriteLogError ("VulkanClient: could not start ffmpeg for %s", videoFile.c_str ()); videoFile.clear (); return; }
+			oapiWriteLogV ("VulkanClient: video to %s (%ux%u, %g fps, %s)", videoFile.c_str (), w, h, videoFps, vaapi ? "VAAPI H.264" : "x264");
+		}
+		if (fwrite (px, 4, (size_t)w * h, videoPipe) != (size_t)w * h) {
+			oapiWriteLogError ("VulkanClient: video: ffmpeg stopped taking frames (%u written)", videoStreamed);
+			CloseVideo ();
+			videoFile.clear ();
+			return;
+		}
+		videoStreamed++;
+	});
+}
+
+void VulkanClient::CloseVideo ()
+{
+	if (!videoPipe) return;
+	const int rc = pclose (videoPipe); // (ffmpeg finishes the file)
+	videoPipe = nullptr;
+	oapiWriteLogV ("VulkanClient: video: %u frames to %s (ffmpeg %d)", videoStreamed, videoFile.c_str (), rc);
+}
 
 void VulkanClient::CaptureBackbuffer (const std::string &path, bool async)
 {

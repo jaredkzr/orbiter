@@ -167,6 +167,12 @@ private:
 	std::string videoDir;         // ORBITER_VK_VIDEO: frames written as PNGs before the screenshot frame
 	unsigned videoFrames = 0;     // ORBITER_VK_VIDEO_FRAMES
 	unsigned videoIndex = 0;
+	std::string videoFile;        // ORBITER_VK_VIDEO_FILE: every frame streamed to ffmpeg, encoded to this file (no frames on disk)
+	double videoFps = 30.0;       // ORBITER_VK_VIDEO_FPS
+	FILE *videoPipe = nullptr;    // (ffmpeg's stdin, opened at the first frame)
+	unsigned videoStreamed = 0;
+	void StreamFrame ();
+	void CloseVideo ();
 	FILE *frameTimes = nullptr;   // ORBITER_VK_FRAMETIMES: per frame, the wall-clock interval and GPU times
 	double lastFrameWall = -1.0;  // [s]
 	unsigned frameTimesCount = 0;
