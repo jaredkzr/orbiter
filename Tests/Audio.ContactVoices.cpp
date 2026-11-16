@@ -513,6 +513,80 @@ TEST_CASE ("ContactVoices: two beds, louder with a higher level; the rate follow
 	CHECK_THAT (r2, WithinRel (std::sqrt (0.05), 0.25));
 }
 
+TEST_CASE ("ContactVoices: the scrape's bed - brighter with its cutoff; in the cabin a grind", "[audio][contacts]")
+{
+	Fixture f;
+	auto a = MakeClip (Steady (31, 2.5, 12000.0f));   // (a bright take)
+	const float ga = (float)(1.0 / std::sqrt (Energy (a->pcm) / 2.5));
+	// brightness: the share of its sample-to-sample change (high frequencies) against its level
+	auto bright = [&](ContactVoices::Profile p, float fc) {
+		auto v = ContactVoices::Make (f.e, p, 15.0, 4);
+		v->SetBedTakes (ContactVoices::SCRAPE, a.get (), ga);
+		v->SetBed (ContactVoices::SCRAPE, 0.3f, 1.0f, fc);
+		auto y = Render (*v, 2.0);
+		double d = 0.0, e = 0.0;
+		for (size_t i = 24001; i < y.size (); i++) d += (double)(y[i] - y[i - 1]) * (y[i] - y[i - 1]), e += (double)y[i] * y[i];
+		return std::sqrt (d / e);
+	};
+	const double dull = bright (ContactVoices::AIR, 800.0f), sharp = bright (ContactVoices::AIR, 12000.0f), cabin = bright (ContactVoices::STRUCTURE, 12000.0f);
+	INFO ("brightness at 800 Hz " << dull << ", at 12 kHz " << sharp << ", in the cabin " << cabin);
+	CHECK (sharp > 3.0 * dull);
+	CHECK (cabin < 0.5 * sharp);   // (in the cabin below 600 Hz whatever its cutoff)
+	// its level held (unit RMS x 0.3, the cutoff taking some of it)
+	auto v = ContactVoices::Make (f.e, ContactVoices::AIR, 15.0, 5);
+	v->SetBedTakes (ContactVoices::SCRAPE, a.get (), ga);
+	v->SetBed (ContactVoices::SCRAPE, 0.3f, 1.0f, 20000.0f);
+	auto y = Render (*v, 2.0);
+	CHECK_THAT (Rms (y, 24000, y.size ()), WithinRel (0.3, 0.25));
+	CHECK_THAT ((double)v->BedLevel (ContactVoices::SCRAPE), WithinRel (0.3, 0.05));
+}
+
+TEST_CASE ("ContactVoices: a tear, the clatter, the crash played as one-shots", "[audio][contacts]")
+{
+	Fixture f;
+	auto v = ContactVoices::Make (f.e, ContactVoices::AIR, 15.0, 1);
+	auto blow = MakeClip (Blow (7, 0.3, 0.1));
+	REQUIRE (v->Fire (ContactVoices::Shot (ContactVoices::TEAR, blow.get (), 0.5f, 0.8f, 12000.0f, 0.0f), 0.0f));
+	REQUIRE (v->Fire (ContactVoices::Shot (ContactVoices::CLATTER, blow.get (), 0.5f, 1.0f, 10000.0f, 0.0f), 0.2f));
+	REQUIRE (v->Fire (ContactVoices::Shot (ContactVoices::CRASH, blow.get (), 0.5f, 1.0f, 16000.0f, 0.0f), 0.0f));
+	auto y = Render (*v, 0.05);
+	CHECK (v->Playing () == 3);
+	CHECK (Rms (y, 0, y.size ()) > 0.0);
+}
+
+TEST_CASE ("A crash's one-shots on the planet: heard, the vessel's emitter gone meanwhile", "[audio][contacts]")
+{
+	// (VesselSounds::Detach: the crash on an emitter of its own on the planet -
+	// the vessel's emitters removed as it is destroyed don't take it along)
+	Fixture f;
+	World w (f.e);
+	TestScene sc;
+	const double c = Air::SeaLevel ().c;
+	int bodyP;
+	const Body *P = reinterpret_cast<const Body*> (&bodyP);
+	sc.at[A] = V3 (c, 0, 0), sc.at[P] = V3 (c, 0, 0);    // (1 s away, both)
+	auto onPlanet = Recorder::Make (f.e), onVessel = Recorder::Make (f.e);
+	Recorder *rp = onPlanet.get ();
+	EmitterDesc d;
+	d.body = A;
+	EmitterId vid = w.Add (d, std::move (onVessel));
+	d.body = P;
+	EmitterId pid = w.Add (d, std::move (onPlanet));
+	REQUIRE (w.Get (pid));
+	w.Get (pid)->Schedule (0.5, Kind (ContactVoices::CRASH));
+	w.Get (pid)->Schedule (0.8, Kind (ContactVoices::TEAR));
+	const double dt = 0.02;
+	for (int i = 0; i <= 150; i++) {
+		const double t = i * dt;
+		if (i == 30) w.Remove (vid);   // (the vessel destroyed at 0.6 s: its emitters go)
+		rp->now = t;
+		w.Update (sc.At (t, V3 (), dt), sc);
+	}
+	REQUIRE (rp->got.size () == 2);
+	CHECK_THAT (rp->got[0].at, WithinAbs (1.5, dt * 1.01));
+	CHECK_THAT (rp->got[1].at, WithinAbs (1.8, dt * 1.01));
+}
+
 TEST_CASE ("ContactVoices: sixteen at once, the quietest's voice taken", "[audio][contacts]")
 {
 	Fixture f;
@@ -525,7 +599,7 @@ TEST_CASE ("ContactVoices: sixteen at once, the quietest's voice taken", "[audio
 	CHECK (v->Playing () == ContactVoices::VOICES);
 }
 
-TEST_CASE ("ContactVoices: its time per block (16 voices, the two beds)", "[audio][contacts][cpu]")
+TEST_CASE ("ContactVoices: its time per block (16 voices, the three beds)", "[audio][contacts][cpu]")
 {
 	Fixture f;
 	auto v = ContactVoices::Make (f.e, ContactVoices::STRUCTURE, 20.0, 1);
@@ -533,7 +607,8 @@ TEST_CASE ("ContactVoices: its time per block (16 voices, the two beds)", "[audi
 	auto bed = MakeClip (Steady (5));
 	v->SetBedTakes (ContactVoices::ROLL, bed.get (), 1.0f, bed.get (), 1.0f);
 	v->SetBedTakes (ContactVoices::BRAKE, bed.get (), 1.0f);
-	v->SetBed (ContactVoices::ROLL, 0.1f, 1.1f), v->SetBed (ContactVoices::BRAKE, 0.1f, 0.9f);
+	v->SetBedTakes (ContactVoices::SCRAPE, bed.get (), 1.0f, bed.get (), 1.0f);
+	v->SetBed (ContactVoices::ROLL, 0.1f, 1.1f), v->SetBed (ContactVoices::BRAKE, 0.1f, 0.9f), v->SetBed (ContactVoices::SCRAPE, 0.1f, 1.2f, 3000.0f);
 	for (int i = 0; i < ContactVoices::VOICES; i++)
 		v->Fire (ContactVoices::Shot (ContactVoices::IMPACT, longBlow.get (), 0.05f, 1.0f + 0.01f * i, 4000.0f, 0.5f), 0.0f);
 	std::vector<float> y (480);
@@ -556,7 +631,7 @@ TEST_CASE ("ContactVoices: its time per block (16 voices, the two beds)", "[audi
 		double ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count () / 200.0;
 		best = std::min (best, ms);
 	}
-	printf ("ContactVoices: %.4f ms per 480-frame block (16 voices, two beds)\n", best);
+	printf ("ContactVoices: %.4f ms per 480-frame block (16 voices, three beds)\n", best);
 	CHECK (v->Playing () == ContactVoices::VOICES);
 	CHECK (best < 0.15);
 }

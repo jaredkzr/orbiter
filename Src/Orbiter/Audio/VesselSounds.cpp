@@ -69,8 +69,15 @@ namespace {
 	/// dulled below CHIRP_CABIN_FC (a zip)
 	constexpr double ETA_CHIRP = 3e-6, CHIRP_CABIN = 0.056;   // (-25 dB)
 	constexpr float CHIRP_CABIN_FC = 1500.0f;
-	/// The beds' parameters as pushed (rolling gain, rate, braking gain, rate)
-	using BedParams = Floats<4>;
+	/// The beds' parameters as pushed (rolling gain, rate, braking gain, rate,
+	/// scraping gain, rate, its low-pass)
+	using BedParams = Floats<7>;
+	/// The scrape in the cabin: this much louder than outside's share (the
+	/// grind carried through the hull; dulled there, ContactVoices)
+	constexpr double SCRAPE_CABIN = 1.6;
+	/// A tear's, a clatter's, a crash's one-shots: low-passed so (the tear's
+	/// in the cabin: dulled with the rest)
+	constexpr float TEAR_FC = 12000.0f, CLATTER_FC = 10000.0f, CRASH_FC = 16000.0f;
 
 	V3 ToV3 (const VECTOR3 &v) { return V3 (v.x, v.y, v.z); }
 
@@ -103,6 +110,7 @@ void VesselSounds::Drop (PerVessel &pv)
 	world.Remove (pv.contact), pv.contact = EmitterId ();
 	world.Remove (pv.contactAir), pv.contactAir = EmitterId ();
 	world.Remove (pv.contactStruct), pv.contactStruct = EmitterId ();
+	pv.bedTakes[0] = pv.bedTakes[1] = pv.bedTakes[2] = false;
 }
 
 bool VesselSounds::ContactBank ()
@@ -119,6 +127,8 @@ void VesselSounds::Clear ()
 {
 	for (auto &pv : vessels) Drop (*pv);
 	vessels.clear ();
+	for (auto &d : detached) world.Remove (d.em);
+	detached.clear ();
 }
 
 void VesselSounds::Build (PerVessel &pv)
@@ -481,11 +491,15 @@ void VesselSounds::Contacts (const Vessel *v, const std::vector<ContactSample> &
 	PlayContacts (*pv, pts, t);
 	if (Emitter *ca = world.Get (pv->contactAir)) {
 		// the beds: their pressures at 10 m as at the reference distance (spherical)
-		const ContactBeds b = BedsFor (pv->contacts.Levels ());
+		const ContactLevels &lv = pv->contacts.Levels ();
+		const ContactBeds b = BedsFor (lv);
 		const double k = 10.0 / pv->contactRef / P_FULL;
+		const double burst = pv->scrapeBurst.Step (t, lv.scrapePower + lv.vesselScrape);
 		BedParams bp;
 		bp[0] = (float)(b.rollP * k), bp[1] = (float)b.rollRate, bp[2] = (float)(b.brakeP * k), bp[3] = (float)b.brakeRate;
+		bp[4] = (float)(b.scrapeP * burst * k), bp[5] = (float)b.scrapeRate, bp[6] = (float)b.scrapeCutoff;
 		ca->Push (t, bp);
+		bp[4] = (float)(bp[4] * SCRAPE_CABIN);
 		if (Emitter *cs = world.Get (pv->contactStruct)) cs->Push (t, bp);
 		pv->bedPushT = t;
 	}
@@ -597,8 +611,8 @@ void VesselSounds::UpdateContactBeds (PerVessel &pv)
 	ContactVoices *va = world.Synth<ContactVoices> (pv.contactAir), *vs = world.Synth<ContactVoices> (pv.contactStruct);
 	if (!air || !st || !va || !vs) return;
 	// their takes (two of each, at unit RMS), once there
-	static const char *layer[2] = {"rolling", "brake"};
-	for (int b = 0; b < 2; b++) {
+	static const char *layer[3] = {"rolling", "brake", "scrape"};
+	for (int b = 0; b < 3; b++) {
 		if (pv.bedTakes[b]) continue;
 		const Clip *c[2] = {};
 		float g[2] = {1.0f, 1.0f};
@@ -616,20 +630,22 @@ void VesselSounds::UpdateContactBeds (PerVessel &pv)
 	// (no contacts this while: silence, once)
 	if (now - pv.bedPushT > 0.1) {
 		BedParams z;
-		z[1] = z[3] = 1.0f;
+		z[1] = z[3] = z[5] = 1.0f;
 		BedParams last;
-		if (!air->Latest (last) || last[0] != 0.0f || last[2] != 0.0f) air->Push (now, z), st->Push (now, z);
+		if (!air->Latest (last) || last[0] != 0.0f || last[2] != 0.0f || last[4] != 0.0f) air->Push (now, z), st->Push (now, z);
 	}
 	// as heard now (the travel time ago outside; at once in its cabin)
 	const BedParams a = air->Recalled<BedParams> (), s = st->Recalled<BedParams> ();
 	va->SetBed (ContactVoices::ROLL, a[0], a[1]), va->SetBed (ContactVoices::BRAKE, a[2], a[3]);
 	vs->SetBed (ContactVoices::ROLL, s[0], s[1]), vs->SetBed (ContactVoices::BRAKE, s[2], s[3]);
+	va->SetBed (ContactVoices::SCRAPE, a[4], a[5], a[6]), vs->SetBed (ContactVoices::SCRAPE, s[4], s[5], s[6]);
 	// (the log, with the sources' states: twice a second while either sounds - at the reference
 	// distance as wanted, [Pa], and as playing outside, eased, [Pa])
-	if (Dbg ().logStates && (a[0] > 0.0f || a[2] > 0.0f || va->BedLevel (0) > 0.0f || va->BedLevel (1) > 0.0f) && now - pv.bedLogT >= 0.5) {
+	if (Dbg ().logStates && (a[0] > 0.0f || a[2] > 0.0f || a[4] > 0.0f || va->BedLevel (0) > 0.0f || va->BedLevel (1) > 0.0f || va->BedLevel (2) > 0.0f) && now - pv.bedLogT >= 0.5) {
 		pv.bedLogT = now;
-		printf ("Audio: t %.2f %s contact beds: rolling %.3g Pa (playing %.3g, rate %.2f), braking %.3g Pa (playing %.3g, rate %.2f) at %.0f m\n",
-			now, pv.v->Name (), a[0] * P_FULL, va->BedLevel (0) * P_FULL, a[1], a[2] * P_FULL, va->BedLevel (1) * P_FULL, a[3], pv.contactRef);
+		printf ("Audio: t %.2f %s contact beds: rolling %.3g Pa (playing %.3g, rate %.2f), braking %.3g Pa (playing %.3g, rate %.2f), scraping %.3g Pa (playing %.3g, rate %.2f, below %.0f Hz) at %.0f m\n",
+			now, pv.v->Name (), a[0] * P_FULL, va->BedLevel (0) * P_FULL, a[1], a[2] * P_FULL, va->BedLevel (1) * P_FULL, a[3],
+			a[4] * P_FULL, va->BedLevel (2) * P_FULL, a[5], a[6], pv.contactRef);
 		fflush (stdout);
 	}
 }
@@ -658,21 +674,87 @@ void VesselSounds::Docked (const Vessel *v, const V3 &port, bool dock, double sp
 	contact->SetOffset (port);
 }
 
+Emitter *VesselSounds::Detach (PerVessel &pv, const V3 &pos, double dur, const char *what)
+{
+	const Planet *pl = pv.v->ProxyPlanet ();
+	if (!pl) return nullptr;
+	auto cv = ContactVoices::Make (engine, ContactVoices::AIR, pv.v->Size (), seed++);
+	if (!cv) return nullptr;
+	// where it happened, in the planet's frame (it turns while the sound comes)
+	const Vector g = pv.v->GPos () + mul (pv.v->GRot (), Vector (pos.x, pos.y, pos.z));
+	const Vector off = tmul (pl->GRot (), g - pl->GPos ());
+	EmitterDesc d;
+	d.body = pl;
+	d.offset = V3 (off.x, off.y, off.z);
+	d.refDist = (float)pv.contactRef;
+	d.level = (float)Config (pv.v).tune.contactLevel;
+	d.name = std::string (what) + " of " + pv.v->Name ();
+	const EmitterId id = world.Add (d, std::move (cv));
+	Emitter *em = world.Get (id);
+	if (!em) return nullptr;
+	// (heard out: its length, then the farthest heard's travel time)
+	detached.push_back ({id, td.SimT1 + dur + RANGE / 300.0});
+	return em;
+}
+
+bool VesselSounds::PlayEnergy (Emitter *em, Emitter *em2, const char *layer, double E, double r0, float rate, float cutoff, double tAt, int kind)
+{
+	if ((!em && !em2) || E <= 0.0) return false;
+	SampleBank::Take k = bank.Pick (layer);
+	if (!k || k.energy <= 0.0) return false;
+	// (as the blows: p^2 integrated at r0, E rho c / 4 pi r0^2)
+	const double p2 = E * RHO0 * C0 / (4.0 * 3.14159265358979 * r0 * r0);
+	const float g = (float)(std::sqrt (p2 / k.energy) / P_FULL) * k.gain;
+	const OneShot s = ContactVoices::Shot (kind, k.clip.get (), g, k.rate * rate, cutoff, 0.0f);
+	bool ok = false;
+	if (em) ok = em->Schedule (tAt, s) || ok;
+	if (em2) ok = em2->Schedule (tAt, s) || ok;
+	return ok;
+}
+
 void VesselSounds::PartBroke (const Vessel *v, const V3 &pos, double mass, double hit)
 {
 	PerVessel *pv = Find (v);
 	if (!pv) return;
 	pv->contacts.Break (now, pos, mass, hit);
 	LogContacts (v, pv->contacts);
+	if (!Dbg ().contactVoices || !ContactBank ()) return;
+	// a part torn off: its tear, the debris' clatter after it - outside from
+	// where it broke (outliving the vessel: it may be breaking up); in its
+	// cabin through its structure, the tear as loud
+	const BreakSound b = BreakFor (mass, hit, Rand01 ());
+	const double t = td.SimT1;
+	Emitter *out = Detach (*pv, pos, 3.0, "a part torn off");
+	Emitter *st = world.Get (pv->contactStruct);
+	PlayEnergy (out, st, "tear", b.tearE, pv->contactRef, (float)b.rate, TEAR_FC, t, ContactVoices::TEAR);
+	PlayEnergy (out, nullptr, "clatter", b.clatterE, pv->contactRef, 1.0f, CLATTER_FC, t + b.clatterDelay, ContactVoices::CLATTER);
+	if (Dbg ().log > 0)
+		printf ("Audio: contact of %s: tear at %.3f s: %.3g J of sound (rate %.2f), clatter %.3f s on\n", v->Name (), t, b.tearE, b.rate, b.clatterDelay), fflush (stdout);
 }
 
 void VesselSounds::Crash (const Vessel *v, double speed, double mass, double energy)
 {
-	if (Dbg ().log <= 0) return;
-	ContactEvent e;
-	e.type = ContactEvent::CRASH;
-	e.t = now, e.speed = speed, e.mass = mass, e.energy = energy;
-	printf ("Audio: contact of %s: %s\n", v->Name (), Describe (e).c_str ()), fflush (stdout);
+	if (Dbg ().log > 0) {
+		ContactEvent e;
+		e.type = ContactEvent::CRASH;
+		e.t = now, e.speed = speed, e.mass = mass, e.energy = energy;
+		printf ("Audio: contact of %s: %s\n", v->Name (), Describe (e).c_str ()), fflush (stdout);
+	}
+	PerVessel *pv = Find (v);
+	if (!pv || !Dbg ().contactVoices || !ContactBank ()) return;
+	// the crash: its take, tears staggered, the debris - from where it
+	// struck, on the planet (the vessel's own sounds go with it now)
+	Emitter *em = Detach (*pv, V3 (), 6.0, "crash");
+	if (!em) return;
+	const double t = td.SimT1;
+	static const char *layer[3] = {"crash", "tear", "clatter"};
+	static const int kind[3] = {ContactVoices::CRASH, ContactVoices::TEAR, ContactVoices::CLATTER};
+	static const float fc[3] = {CRASH_FC, TEAR_FC, CLATTER_FC};
+	int n = 0;
+	for (const CrashPart &c : CrashFor (energy, mass, Rand01 (), Rand01 ()))
+		n += PlayEnergy (em, nullptr, layer[c.layer], c.energy, pv->contactRef, (float)c.rate, fc[c.layer], t + c.t, kind[c.layer]) ? 1 : 0;
+	if (Dbg ().log > 0)
+		printf ("Audio: contact of %s: crash heard: %d one-shots, %.3g J of sound\n", v->Name (), n, ETA_CRASH * energy), fflush (stdout);
 }
 
 void VesselSounds::UpdateContacts (PerVessel &pv, double t)
@@ -746,6 +828,11 @@ void VesselSounds::Update (double t, bool replay)
 		}
 		pv->seen = true;
 		UpdateVessel (*pv);
+	}
+	// sounds outliving their vessels, heard out: gone
+	for (auto it = detached.begin (); it != detached.end (); ) {
+		if (now > it->until || !world.Get (it->em)) { world.Remove (it->em); it = detached.erase (it); }
+		else ++it;
 	}
 	// out of range (or destroyed, or deleted): their sounds go
 	for (auto it = vessels.begin (); it != vessels.end (); ) {

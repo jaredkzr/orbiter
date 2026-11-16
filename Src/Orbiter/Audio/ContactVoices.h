@@ -22,7 +22,9 @@
 // into the next over GRAIN_XFADE at equal power, so no loop is heard; their
 // level and rate eased to what SetBed gives (the level: a take's RMS as
 // 1 - SetBedTakes gives each take's 1 / RMS). In the cabin the rolling a
-// rumble (below 400 Hz), the brakes below 900 Hz.
+// rumble (below 400 Hz), the brakes below 900 Hz. Stage 3: SCRAPE, the hull
+// grinding on the ground - its brightness a low-pass set with it (SetBed's
+// cutoff, eased), in the cabin below 600 Hz (the grind through the hull).
 //
 // The one-shots come from the simulation thread (Fire: an emitter releases
 // them when their sound arrives), in order, each once; nothing is
@@ -42,9 +44,9 @@ public:
 	enum Profile { AIR = 0, STRUCTURE = 1 };
 	/// One-shots' kinds (the design's layers): the blow, the strut, the
 	/// cabin's rattle
-	enum Kind { IMPACT = 1, STRUT = 2, RATTLE = 3, CHIRP = 4 };
+	enum Kind { IMPACT = 1, STRUT = 2, RATTLE = 3, CHIRP = 4, TEAR = 5, CLATTER = 6, CRASH = 7 };
 	static constexpr int VOICES = 16, MODES = 12;
-	enum Bed { ROLL = 0, BRAKE = 1, BEDS = 2 };
+	enum Bed { ROLL = 0, BRAKE = 1, SCRAPE = 2, BEDS = 3 };
 	static constexpr float GRAIN_MIN = 0.35f, GRAIN_MAX = 0.8f, GRAIN_XFADE = 0.06f;   // [s]
 
 	/// size: the vessel's [m] (its body's modes); seed: their spread
@@ -59,8 +61,9 @@ public:
 	/// taken (try again)
 	bool SetBedTakes (int bed, const Clip *a, float ga, const Clip *b = nullptr, float gb = 1.0f);
 	/// A bed's level (unit RMS: as a one-shot's gain) and playback rate, eased
-	/// to (rising over about 0.1 s, falling over 0.15 s)
-	void SetBed (int bed, float gain, float rate);
+	/// to (rising over about 0.1 s, falling over 0.15 s); cutoff: a low-pass
+	/// on it [Hz] (0: none), eased as the rate
+	void SetBed (int bed, float gain, float rate, float cutoff = 0.0f);
 	/// (tests) a bed's level now (eased)
 	float BedLevel (int bed) const { return bedNow[bed].load (std::memory_order_relaxed); }
 
@@ -98,7 +101,7 @@ private:
 	// the beds
 	struct BedTakes { int bed; const Clip *take[2]; float g[2]; };
 	dsp::Events<BedTakes, 8> bedTakes;
-	std::atomic<float> bedGain[BEDS], bedRate[BEDS], bedNow[BEDS];
+	std::atomic<float> bedGain[BEDS], bedRate[BEDS], bedNow[BEDS], bedCut[BEDS];
 	struct Grain { const Clip *clip = nullptr; float g = 1.0f; double pos = 0.0; unsigned left = 0, len = 0; };
 	struct BedState {
 		const Clip *take[2] = {};
@@ -109,6 +112,8 @@ private:
 		float gain = 0.0f, rate = 1.0f;
 		float held = 0.0f;     // (its level while it was wanted: going to nothing, cut 60 dB under it)
 		dsp::OnePole lp[2];    // (STRUCTURE: dulled)
+		dsp::OnePole tone[2];  // (its cutoff: brightness)
+		float cut = 0.0f;      // (the cutoff now [Hz], eased; 0: none)
 		dsp::Rng rng;
 	};
 	BedState beds[BEDS];

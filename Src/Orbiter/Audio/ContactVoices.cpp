@@ -23,7 +23,7 @@ namespace {
 	/// as loud as itself at BODY_SCALE (Tests/Audio.ContactVoices.cpp)
 	constexpr float BODY_SCALE = 0.025f;
 	/// The beds in the cabin: the rolling a rumble, the brakes' groan
-	constexpr float STRUCT_BED_CUTOFF[ContactVoices::BEDS] = {400.0f, 900.0f};
+	constexpr float STRUCT_BED_CUTOFF[ContactVoices::BEDS] = {400.0f, 900.0f, 600.0f};
 	/// The beds' easing [s]: up, down; their rate's
 	constexpr float BED_UP = 0.1f, BED_DOWN = 0.15f, BED_RATE_T = 0.2f;
 	/// A bed going to nothing is silent (its grains stop) this far under the
@@ -48,7 +48,7 @@ ContactVoices::ContactVoices (Profile p, double size, uint32_t seed): profile (p
 		modeAmp[k] = (1.0f + 0.3f * rng.White ()) / std::sqrt (1.0f + k);
 	}
 	for (int b = 0; b < BEDS; b++) {
-		bedGain[b].store (0.0f), bedRate[b].store (1.0f), bedNow[b].store (0.0f);
+		bedGain[b].store (0.0f), bedRate[b].store (1.0f), bedNow[b].store (0.0f), bedCut[b].store (0.0f);
 		beds[b].rng = dsp::Rng (seed * 7919u + 17u * (b + 1));
 	}
 }
@@ -74,16 +74,17 @@ bool ContactVoices::SetBedTakes (int bed, const Clip *a, float ga, const Clip *b
 	return bedTakes.Push ({bed, {a, b}, {ga, gb}});
 }
 
-void ContactVoices::SetBed (int bed, float gain, float rate)
+void ContactVoices::SetBed (int bed, float gain, float rate, float cutoff)
 {
 	if (bed < 0 || bed >= BEDS) return;
 	bedGain[bed].store (std::max (gain, 0.0f), std::memory_order_relaxed);
 	bedRate[bed].store (std::clamp (rate, 0.25f, 4.0f), std::memory_order_relaxed);
+	bedCut[bed].store (cutoff > 0.0f ? std::clamp (cutoff, 50.0f, 20000.0f) : 0.0f, std::memory_order_relaxed);
 }
 
 bool ContactVoices::Fire (const OneShot &s, float delay)
 {
-	if (s.kind < IMPACT || s.kind > CHIRP || !s.ref) return true;   // (not one of ours: taken, nothing played)
+	if (s.kind < IMPACT || s.kind > CRASH || !s.ref) return true;   // (not one of ours: taken, nothing played)
 	return starts.Push ({(const Clip*)s.ref, s.v[0], s.v[1], s.v[2], s.v[3], std::max (delay, 0.0f), std::max (s.v[4], 0.0f)});
 }
 
@@ -181,10 +182,19 @@ void ContactVoices::Render (float *out, unsigned n, float dop)
 	// the beds' easing, per sample (one-pole); their targets this block
 	float bTgt[BEDS], bRate[BEDS];
 	bool bedOn = false;
+	const float blockK = 1.0f - std::exp (-(float)n / (BED_RATE_T * rate));
 	for (int k = 0; k < BEDS; k++) {
 		bTgt[k] = beds[k].n ? bedGain[k].load (std::memory_order_relaxed) : 0.0f;
 		bRate[k] = bedRate[k].load (std::memory_order_relaxed);
 		if (bTgt[k] > 0.0f || beds[k].gain > 0.0f) bedOn = true;
+		// (its brightness: eased per block, in octaves; none: off)
+		const float c = bedCut[k].load (std::memory_order_relaxed);
+		BedState &bs = beds[k];
+		if (c <= 0.0f) bs.cut = 0.0f;
+		else {
+			bs.cut = bs.cut <= 0.0f ? c : std::exp2 (std::log2 (bs.cut) + blockK * (std::log2 (c) - std::log2 (bs.cut)));
+			for (auto &f : bs.tone) f.SetCutoff (std::min (bs.cut, 0.45f * rate), rate);
+		}
 	}
 	const float aUp = 1.0f - std::exp (-1.0f / (BED_UP * rate)), aDown = 1.0f - std::exp (-1.0f / (BED_DOWN * rate));
 	const float aRate = 1.0f - std::exp (-1.0f / (BED_RATE_T * rate));
@@ -228,6 +238,7 @@ void ContactVoices::Render (float *out, unsigned n, float dop)
 				}
 				if (!bs.gr[bs.cur].clip || !bs.gr[bs.cur].left) { NewGrain (bs, bs.gr[bs.cur], bs.rate); bs.gr[bs.cur].len = bs.gr[bs.cur].left; }
 				float v = bs.gain * BedSample (bs, dop);
+				if (bs.cut > 0.0f) v = bs.tone[1].Lp (bs.tone[0].Lp (v));
 				if (dulled) v = bs.lp[1].Lp (bs.lp[0].Lp (v));
 				bed += v;
 			}

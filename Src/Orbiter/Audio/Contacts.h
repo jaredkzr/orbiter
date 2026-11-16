@@ -89,6 +89,7 @@ struct ContactLevels {
 struct ContactBeds {
 	double rollP = 0.0, rollRate = 1.0;
 	double brakeP = 0.0, brakeRate = 1.0;
+	double scrapeP = 0.0, scrapeRate = 1.0, scrapeCutoff = 20000.0;   ///< (stage 3) [Pa], rate, its low-pass [Hz]
 };
 
 /// The tyres' rolling and the brakes' groan from a step's levels:
@@ -99,7 +100,55 @@ struct ContactBeds {
 ///  - braking and the tyres' scrub: BRAKE_P at BRAKE_W of friction power,
 ///    as its root (capped at 4x); rate BRAKE_RATE0 at rest to BRAKE_RATE1
 ///    from BRAKE_RATE_V on
+///  - scraping (stage 3: the hull, legs, obstacles, other vessels): SCRAPE_P
+///    at SCRAPE_W of friction power, as its root (capped at SCRAPE_CAP x);
+///    faster slipping: higher (SCRAPE_RATE0 at rest to SCRAPE_RATE1 from
+///    SCRAPE_V on) and brighter (its low-pass SCRAPE_FC0 to SCRAPE_FC1, on
+///    a log scale)
 ContactBeds BedsFor (const ContactLevels &l);
+/// (a delta-glider on its belly: its hull's friction 3 - at 100 m/s some
+/// 35 MW, at the cap: 2 Pa, 100 dB at 10 m, sustained; its hull's blows at
+/// touchdown, ~1e4 J, ~1 Pa RMS at 10 m over their 0.3 s and peaks some 10 dB
+/// over that - the slams cut through the grind, not under it)
+constexpr double SCRAPE_P = 0.5, SCRAPE_W = 1e6, SCRAPE_CAP = 4.0;
+constexpr double SCRAPE_RATE0 = 0.7, SCRAPE_RATE1 = 1.3, SCRAPE_V = 40.0;
+constexpr double SCRAPE_FC0 = 800.0, SCRAPE_FC1 = 12000.0;
+
+/// A scrape's start (or a re-contact after leaving SCRAPE_GAP): louder at
+/// first - BURST_GAIN over its level, easing back over BURST_T (the first
+/// bite of metal on the ground)
+class ScrapeBurst {
+public:
+	static constexpr double SCRAPE_GAP = 0.2, BURST_GAIN = 2.0, BURST_T = 0.3;
+	/// A step at time t with this friction power [W]: the factor on its level
+	double Step (double t, double power);
+private:
+	double lastOn = -1e9, startT = -1e9;
+};
+
+/// A part breaking off (BREAK): the tear's energy of sound [J], the debris'
+/// clatter's, the tear's playback rate, the clatter's delay [s]. The blow's
+/// energy: the piece's at the speed it was struck (at least BREAK_VMIN: a
+/// part torn off by load is still torn), ETA_TEAR of it the tear (a hull
+/// blow's ETA_METAL a tenth: the energy goes into tearing, not ringing),
+/// CLATTER_SHARE of that the clatter; heavier pieces lower: (m / 1000 kg)^-0.1
+/// within TEAR_RATE
+struct BreakSound { double tearE = 0.0, clatterE = 0.0, rate = 1.0, clatterDelay = 0.2; };
+BreakSound BreakFor (double mass, double hitSpeed, double u01);
+constexpr double BREAK_VMIN = 5.0, ETA_TEAR = 1e-5, CLATTER_SHARE = 0.5;
+constexpr double TEAR_RATE[2] = {0.7, 1.3}, CLATTER_DELAY[2] = {0.1, 0.3};
+
+/// A crash (the vessel destroyed striking the ground): ETA_CRASH of its
+/// kinetic energy as sound (the design's 1e-4: a 10 t vessel at 50 m/s,
+/// 12.5 MJ, ~125 dB at 10 m - a car crash's 110 dB at a hundredth of it),
+/// shared out: the crash's take CRASH_SHARE, CRASH_TEARS tears staggered over
+/// CRASH_TEAR_T (TEAR_SHARE each), the clatter after CRASH_CLATTER_T
+/// (CLATTER_SHARE_C)
+struct CrashPart { int layer; double t, energy, rate; };   // (layer: 0 crash, 1 tear, 2 clatter; t after the crash [s])
+std::vector<CrashPart> CrashFor (double energy, double mass, double u01a, double u01b);
+constexpr double ETA_CRASH = 1e-4, CRASH_SHARE = 0.6, TEAR_SHARE = 0.08, CLATTER_SHARE_C = 0.16;
+constexpr int CRASH_TEARS = 3;
+constexpr double CRASH_TEAR_T = 0.3, CRASH_CLATTER_T = 0.5;
 /// (the design said 0.2 Pa - 80 dB at 10 m - at 40 m/s for 15 t; that buries
 /// a gentle touchdown's thump at landing speed: a 1 m/s touchdown's take is
 /// about 0.2 Pa RMS at 10 m. 0.06 Pa keeps it ~10 dB over rolling at 95 m/s)

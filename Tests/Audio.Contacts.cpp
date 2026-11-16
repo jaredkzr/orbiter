@@ -16,6 +16,7 @@
 
 using namespace audio;
 using Catch::Matchers::WithinRel;
+using Catch::Matchers::WithinAbs;
 using Catch::Matchers::ContainsSubstring;
 
 namespace {
@@ -260,4 +261,77 @@ TEST_CASE ("Contacts: a wheel chirps touching down over 15 m/s, once per touchdo
 	// down again after a long hop, fast: again
 	t += 2.0;
 	CHECK (step ({Rolling (0, 1.0, 60.0)}).size () == 1);
+}
+
+TEST_CASE ("Contacts: scraping - louder with its power, higher and brighter faster", "[contacts]")
+{
+	ContactLevels l;
+	CHECK (BedsFor (l).scrapeP == 0.0);   // (no scrape: silent)
+	l.scrapePower = SCRAPE_W, l.scrapeSpeed = 0.0;
+	CHECK_THAT (BedsFor (l).scrapeP, WithinRel (SCRAPE_P, 1e-9));
+	CHECK_THAT (BedsFor (l).scrapeRate, WithinRel (SCRAPE_RATE0, 1e-9));
+	CHECK_THAT (BedsFor (l).scrapeCutoff, WithinRel (SCRAPE_FC0, 1e-9));
+	ContactLevels four = l;
+	four.scrapePower = 4.0 * SCRAPE_W;
+	CHECK_THAT (BedsFor (four).scrapeP, WithinRel (2.0 * SCRAPE_P, 1e-9));   // (as the power's root)
+	four.scrapePower = 1e3 * SCRAPE_W;
+	CHECK_THAT (BedsFor (four).scrapeP, WithinRel (SCRAPE_CAP * SCRAPE_P, 1e-9));
+	ContactLevels fast = l;
+	fast.scrapeSpeed = 20.0;
+	CHECK (BedsFor (fast).scrapeRate > BedsFor (l).scrapeRate);
+	CHECK (BedsFor (fast).scrapeCutoff > 2.0 * BedsFor (l).scrapeCutoff);
+	fast.scrapeSpeed = 1e3;
+	CHECK_THAT (BedsFor (fast).scrapeCutoff, WithinRel (SCRAPE_FC1, 1e-9));
+	// against another vessel: the same bed
+	ContactLevels ves;
+	ves.vesselScrape = SCRAPE_W;
+	CHECK_THAT (BedsFor (ves).scrapeP, WithinRel (SCRAPE_P, 1e-9));
+}
+
+TEST_CASE ("Contacts: a scrape's first bite louder; again only after leaving", "[contacts]")
+{
+	ScrapeBurst b;
+	CHECK (b.Step (1.0, 0.0) == 1.0);                                   // (not scraping)
+	CHECK_THAT (b.Step (2.0, 1e5), WithinRel (ScrapeBurst::BURST_GAIN, 1e-9));
+	double t = 2.0, last = 0.0;
+	for (int i = 0; i < 50; i++) last = b.Step (t += 0.02, 1e5);        // (scraping on: eased back)
+	CHECK_THAT (last, WithinAbs (1.0, 0.05));
+	CHECK (b.Step (t += 0.1, 1e5) < 1.05);                              // (a step missed: still the same scrape)
+	t += 1.0;                                                           // (left, touching again: a new bite)
+	CHECK_THAT (b.Step (t, 1e5), WithinRel (ScrapeBurst::BURST_GAIN, 1e-9));
+}
+
+TEST_CASE ("Contacts: a part torn off - its tear by its mass and speed, the clatter after", "[contacts]")
+{
+	const BreakSound a = BreakFor (1000.0, 20.0, 0.0), heavy = BreakFor (8000.0, 20.0, 1.0), light = BreakFor (10.0, 20.0, 0.5);
+	CHECK_THAT (a.tearE, WithinRel (ETA_TEAR * 0.5 * 1000.0 * 400.0, 1e-9));
+	CHECK_THAT (a.clatterE, WithinRel (CLATTER_SHARE * a.tearE, 1e-9));
+	CHECK_THAT (a.rate, WithinRel (1.0, 1e-9));
+	CHECK (heavy.rate < a.rate);
+	CHECK (light.rate > a.rate);
+	CHECK (light.rate <= TEAR_RATE[1]);
+	CHECK (heavy.tearE > a.tearE);
+	CHECK_THAT (a.clatterDelay, WithinRel (CLATTER_DELAY[0], 1e-9));
+	CHECK_THAT (heavy.clatterDelay, WithinRel (CLATTER_DELAY[1], 1e-9));
+	// torn off by load, barely moving: still torn (as at BREAK_VMIN)
+	CHECK_THAT (BreakFor (1000.0, 0.0, 0.0).tearE, WithinRel (ETA_TEAR * 0.5 * 1000.0 * BREAK_VMIN * BREAK_VMIN, 1e-9));
+}
+
+TEST_CASE ("Contacts: a crash - its take, tears over 0.3 s, the clatter; the energy shared out", "[contacts]")
+{
+	const double E = 1.25e7;
+	const auto parts = CrashFor (E, 1e4, 0.3, 0.7);
+	REQUIRE (parts.size () == 2 + CRASH_TEARS);
+	double sum = 0.0, lastTear = -1.0;
+	int tears = 0;
+	for (const CrashPart &p : parts) {
+		sum += p.energy;
+		if (p.layer == 0) CHECK (p.t == 0.0);
+		if (p.layer == 1) { CHECK (p.t >= lastTear); CHECK (p.t <= CRASH_TEAR_T); lastTear = p.t; tears++; }
+		if (p.layer == 2) CHECK_THAT (p.t, WithinRel (CRASH_CLATTER_T, 1e-9));
+	}
+	CHECK (tears == CRASH_TEARS);
+	CHECK_THAT (sum, WithinRel (ETA_CRASH * E, 1e-9));
+	CHECK (parts[0].energy > parts[1].energy);   // (the crash's take: most of it)
+	CHECK (CrashFor (0.0, 1e4, 0.5, 0.5).empty ());
 }

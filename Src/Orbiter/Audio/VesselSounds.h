@@ -133,7 +133,8 @@ private:
 		EmitterId contactAir, contactStruct;
 		double contactRef = 3.0;   // the air one's reference distance [m]
 		Chirps chirps;             // (which wheels' touchdowns chirp)
-		bool bedTakes[2] = {};     // (its beds' takes given: rolling, braking)
+		bool bedTakes[3] = {};     // (its beds' takes given: rolling, braking, scraping)
+		ScrapeBurst scrapeBurst;   // (a scrape's first bite)
 		double bedPushT = -1e9;    // [s] its beds' levels last pushed
 		double bedLogT = -1e9;     // [s] (ORBITER_AUDIO_LOG states) last logged
 		double lastRattle = -1e9, rattleA = 0.0, lastContactT = -1e9;
@@ -162,9 +163,22 @@ private:
 	/// Its contacts' moments heard (ContactVoices: the blows, the struts, the
 	/// cabin's rattle), at time t
 	void PlayContacts (PerVessel &pv, const std::vector<ContactSample> &pts, double t);
-	/// Its contacts' beds (rolling, braking: ContactVoices) as heard now; their
-	/// takes given once there; silence pushed when it has no contacts
+	/// Its contacts' beds (rolling, braking, scraping: ContactVoices) as heard
+	/// now; their takes given once there; silence pushed when it has no contacts
 	void UpdateContactBeds (PerVessel &pv);
+	/// Sounds that outlive their vessel (a part torn off, a crash): their own
+	/// ContactVoices on the planet, where it happened - the travel time, the
+	/// air, as any; removed once surely heard out
+	struct Detached { EmitterId em; double until = 0.0; };
+	std::vector<Detached> detached;
+	/// One for a vessel's event at pos (its frame), heard out by `until` [s]
+	/// (the world's time) - a travel time on; null: no planet, no contacts
+	Emitter *Detach (PerVessel &pv, const V3 &pos, double dur, const char *what);
+	/// A layer's take as a one-shot at energy E [J] of sound (its gain at
+	/// refDist r0 [m]) on em, and on em2 (the same take; may be null)
+	bool PlayEnergy (Emitter *em, Emitter *em2, const char *layer, double E, double r0, float rate, float cutoff, double tAt, int kind);
+	uint32_t rng = 0x9e3779b9u;
+	double Rand01 () { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return (rng >> 8) * (1.0 / 16777216.0); }
 	SampleBank bank;
 	int bankState = 0;             // (0: not read yet, 1: read, -1: none)
 	bool ContactBank ();

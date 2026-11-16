@@ -156,7 +156,47 @@ ContactBeds BedsFor (const ContactLevels &l)
 	const double W = std::max (l.brakePower, 0.0) + std::max (l.scrubPower, 0.0);
 	if (W > 0.0) b.brakeP = std::min (BRAKE_P * std::sqrt (W / BRAKE_W), 4.0 * BRAKE_P);
 	b.brakeRate = BRAKE_RATE0 + (BRAKE_RATE1 - BRAKE_RATE0) * std::min (v / BRAKE_RATE_V, 1.0);
+	const double S = std::max (l.scrapePower, 0.0) + std::max (l.vesselScrape, 0.0);
+	const double u = std::clamp (l.scrapeSpeed / SCRAPE_V, 0.0, 1.0);
+	if (S > 0.0) b.scrapeP = std::min (SCRAPE_P * std::sqrt (S / SCRAPE_W), SCRAPE_CAP * SCRAPE_P);
+	b.scrapeRate = SCRAPE_RATE0 + (SCRAPE_RATE1 - SCRAPE_RATE0) * u;
+	b.scrapeCutoff = SCRAPE_FC0 * std::pow (SCRAPE_FC1 / SCRAPE_FC0, u);
 	return b;
+}
+
+double ScrapeBurst::Step (double t, double power)
+{
+	if (power <= 0.0) return 1.0;
+	if (t - lastOn > SCRAPE_GAP) startT = t;   // (begun, or touching again after a while)
+	lastOn = t;
+	return 1.0 + (BURST_GAIN - 1.0) * std::exp (-(t - startT) / BURST_T);
+}
+
+BreakSound BreakFor (double mass, double hitSpeed, double u01)
+{
+	BreakSound b;
+	const double m = std::max (mass, 0.0), v = std::max (hitSpeed, BREAK_VMIN);
+	b.tearE = ETA_TEAR * 0.5 * m * v * v;
+	b.clatterE = CLATTER_SHARE * b.tearE;
+	b.rate = std::clamp (std::pow (std::max (m, 1.0) / 1000.0, -0.1), TEAR_RATE[0], TEAR_RATE[1]);
+	b.clatterDelay = CLATTER_DELAY[0] + (CLATTER_DELAY[1] - CLATTER_DELAY[0]) * std::clamp (u01, 0.0, 1.0);
+	return b;
+}
+
+std::vector<CrashPart> CrashFor (double energy, double mass, double u01a, double u01b)
+{
+	std::vector<CrashPart> parts;
+	const double E = ETA_CRASH * std::max (energy, 0.0);
+	if (E <= 0.0) return parts;
+	const double rate = std::clamp (std::pow (std::max (mass, 1.0) / 15000.0, -0.12), 0.7, 1.3);   // (heavier: lower - as the blows')
+	parts.push_back ({0, 0.0, CRASH_SHARE * E, rate});
+	for (int k = 0; k < CRASH_TEARS; k++) {
+		// (staggered over CRASH_TEAR_T: evenly, a little shuffled)
+		const double u = (k + (k == 0 ? std::clamp (u01a, 0.0, 1.0) : k == 1 ? std::clamp (u01b, 0.0, 1.0) : 0.5)) / CRASH_TEARS;
+		parts.push_back ({1, CRASH_TEAR_T * u, TEAR_SHARE * E, rate * (0.9 + 0.2 * u)});
+	}
+	parts.push_back ({2, CRASH_CLATTER_T, CLATTER_SHARE_C * E, rate});
+	return parts;
 }
 
 std::vector<Chirp> Chirps::Step (double t, const std::vector<ContactSample> &pts, const std::vector<ContactEvent> &events, double mass)
