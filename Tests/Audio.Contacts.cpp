@@ -73,6 +73,20 @@ TEST_CASE ("Contacts: a contact kept strikes again only closing hard", "[contact
 	CHECK (m.Events ().size () == 1);
 }
 
+TEST_CASE ("Contacts: a strut compressing is one strike; a bounce in contact another", "[contacts]")
+{
+	ContactModel m;
+	double t = 1.0;
+	// (the wheel down at 2 m/s, its strut taking it over a quarter second: closing ever more slowly)
+	for (double v : {2.0, 1.9, 1.8, 1.77, 1.6, 1.4, 1.2, 1.0, 0.8, 0.6, 0.4, 0.2, 0.0}) m.Step (t += H, H, {Wheel (1, v)}, SurfaceKind::PAVED);
+	CHECK (m.Events ().size () == 1);
+	m.ClearEvents ();
+	// (rebounding - opening, still touching - then down again hard)
+	for (double v : {-0.3, -0.5, -0.2, 0.3, 0.9}) m.Step (t += H, H, {Wheel (1, v)}, SurfaceKind::PAVED);
+	REQUIRE (m.Events ().size () == 1);
+	CHECK_THAT (m.Events ()[0].speed, WithinRel (0.9, 1e-9));
+}
+
 TEST_CASE ("Contacts: a point that left strikes anew; a missed step isn't leaving", "[contacts]")
 {
 	ContactModel m;

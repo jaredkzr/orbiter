@@ -8,12 +8,15 @@
 #include "RcsSynth.h"
 #include "WindSynth.h"
 #include "ContactSynth.h"
+#include "ContactVoices.h"
+#include "AudioSystem.h"
 #include "Vessel.h"
 #include "Psys.h"
 #include "Camera.h"
 #include "VesselAPI.h"
 #include "TimeData.h"
 #include "Planet.h"
+#include "Astro.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -50,6 +53,15 @@ namespace {
 	/// gravity), and the speeds of a full one (a hard landing, a crash, a bump)
 	constexpr double BLOW_MIN[3] = {0.35, 0.4, 0.04}, BLOW_FULL[3] = {3.0, 3.5, 0.5};
 	constexpr double BLOW_GAP = 0.3; // [s] between blows of a kind
+	/// The new contacts (ContactVoices): of a blow's energy (1/2 m v^2) this
+	/// much becomes sound - the sprung gear's, rigid metal's (the struts:
+	/// -6 dB under the gear's blow); closing speeds of the hardest tier
+	constexpr double ETA_GEAR = 1e-5, ETA_METAL = 1e-4, ETA_STRUT = 0.25e-5;
+	constexpr double VFULL_GEAR = 3.0, VFULL_METAL = 3.5, VFULL_VESSEL = 0.5;
+	/// The cabin's rattle: from RATTLE_A [m/s^2] of deceleration (0.3 g),
+	/// RATTLE_P [Pa] at ten times it; not again within RATTLE_GAP [s] unless
+	/// twice as hard
+	constexpr double RATTLE_A = 0.3 * 9.81, RATTLE_P = 0.4, RATTLE_GAP = 0.3;
 
 	V3 ToV3 (const VECTOR3 &v) { return V3 (v.x, v.y, v.z); }
 
@@ -80,6 +92,18 @@ void VesselSounds::Drop (PerVessel &pv)
 	pv.engines.clear (), pv.rcs.clear ();
 	world.Remove (pv.wind), pv.wind = EmitterId ();
 	world.Remove (pv.contact), pv.contact = EmitterId ();
+	world.Remove (pv.contactAir), pv.contactAir = EmitterId ();
+	world.Remove (pv.contactStruct), pv.contactStruct = EmitterId ();
+}
+
+bool VesselSounds::ContactBank ()
+{
+	if (bankState == 0) {
+		const std::string f = System::FindSound ("Sound/Contacts/contacts.txt");
+		bankState = !f.empty () && bank.Load (f, engine.SampleRate ()) ? 1 : -1;
+		if (bankState < 0) fprintf (stderr, "Audio: no Sound/Contacts/contacts.txt: the contacts are silent\n");
+	}
+	return bankState > 0;
 }
 
 void VesselSounds::Clear ()
@@ -206,6 +230,23 @@ void VesselSounds::Build (PerVessel &pv)
 		pv.contact = world.Add (d, std::move (cs));
 	}
 
+	// (ORBITER_AUDIO_CONTACTS=2) the new contacts: heard outside (its blows'
+	// energy at the reference distance: levels set per one-shot), and
+	// through its structure in its cabin (one-shots' full scale P_FULL)
+	if (Dbg ().contactVoices && ContactBank ()) {
+		auto air = ContactVoices::Make (engine, ContactVoices::AIR, size, seed++);
+		auto st = ContactVoices::Make (engine, ContactVoices::STRUCTURE, size, seed++);
+		if (air && st) {
+			EmitterDesc d;
+			d.body = pv.v;
+			d.refDist = (float)(pv.contactRef = std::max (3.0, 0.5 * size));
+			d.level = (float)tune.contactLevel;
+			d.name = std::string (pv.v->Name ()) + " contacts";
+			pv.contactAir = world.Add (d, std::move (air));
+			pv.contactStruct = world.Add (StructureEmitter (pv.v, P_FULL * tune.contactLevel, std::string (pv.v->Name ()) + " contacts (structure)"), std::move (st));
+		}
+	}
+
 	// the air over it
 	auto ws = WindSynth::Make (engine, seed++);
 	if (ws) {
@@ -325,6 +366,9 @@ void VesselSounds::UpdateVessel (PerVessel &pv)
 		double cabin = WIND_WALL * qh * lowson * WIND_TRANS;
 		wind->SetHull (p0 > 1e-9 ? (float)(cabin / p0) : 0.0f);
 	}
+	if (Emitter *ca = world.Get (pv.contactAir)) ca->SetLevel (cfg.on[SOUND_CONTACTS] ? (float)tune.contactLevel : 0.0f);
+	if (Emitter *cs = world.Get (pv.contactStruct))
+		cs->SetLevel (cfg.on[SOUND_CONTACTS] ? StructureEmitter (pv.v, P_FULL * tune.contactLevel, "").level : 0.0f);
 	if (Emitter *ce = world.Get (pv.contact)) {
 		ce->SetLevel (cfg.on[SOUND_CONTACTS] ? (float)(tune.contactLevel * CONTACT_P * pv.contactMass / P_FULL / CONTACT_RMS) : 0.0f);
 		UpdateContacts (pv, t);
@@ -424,6 +468,7 @@ void VesselSounds::Contacts (const Vessel *v, const std::vector<ContactSample> &
 	PerVessel *pv = Find (v);
 	if (!pv || pts.empty ()) return;
 	pv->contacts.Step (t, h, pts, surface);
+	PlayContacts (*pv, pts, t);
 	LogContacts (v, pv->contacts);
 	// (ContactSynth's: the step summed)
 	const ContactLevels &l = pv->contacts.Levels ();
@@ -442,6 +487,68 @@ void VesselSounds::Contacts (const Vessel *v, const std::vector<ContactSample> &
 	}
 	if (wsum > 0.0) s.where = wpos * (1.0 / wsum);
 	s.any = true;
+}
+
+void VesselSounds::PlayContacts (PerVessel &pv, const std::vector<ContactSample> &pts, double t)
+{
+	Emitter *air = world.Get (pv.contactAir), *st = world.Get (pv.contactStruct);
+	if (!air || !st) return;
+	const double m = std::max (pv.v->Mass (), 100.0);
+	const float rate = (float)std::pow (m / 15000.0, -0.12);   // (heavier: lower)
+	// a take of a layer at a blow's energy E [J] (eta of it sound), on both:
+	// its gain for the energy at the reference distance (p^2 integrated:
+	// eta E rho c / 4 pi r0^2), its tier's share
+	auto play = [&](int kind, const char *layer, SampleBank::Tier tier, float share, double E, double eta, float cutoff, const V3 &pos, double tAt) {
+		SampleBank::Take k = bank.Pick (layer, tier);
+		if (!k || k.energy <= 0.0) return;
+		const double p2 = eta * E * RHO0 * C0 / (4.0 * 3.14159265358979 * pv.contactRef * pv.contactRef);
+		const float g = (float)(std::sqrt (p2 * share / k.energy) / P_FULL) * k.gain;
+		const OneShot s = ContactVoices::Shot (kind, k.clip.get (), g, k.rate * rate, cutoff, 1.0f);
+		air->SetOffset (pos);
+		air->Schedule (tAt, s);
+		st->Schedule (tAt, s);
+	};
+	for (const ContactEvent &e : pv.contacts.Events ()) {
+		if (e.type != ContactEvent::IMPACT) continue;
+		const bool gear = e.kind == ContactKind::WHEEL || e.kind == ContactKind::LEG;
+		const double vfull = gear ? VFULL_GEAR : e.kind == ContactKind::VESSEL ? VFULL_VESSEL : VFULL_METAL;
+		const float s = (float)std::clamp (e.speed / vfull, 0.0, 1.0);
+		const float cutoff = (float)(1500.0 * std::pow (8.0, s));   // (1.5 kHz soft .. 12 kHz hard)
+		const SampleBank::Blend b = SampleBank::ForStrength (s);
+		const char *layer = gear ? "impact_gear" : "impact_metal";
+		const double eta = gear ? ETA_GEAR : ETA_METAL;
+		play (ContactVoices::IMPACT, layer, b.tier, 1.0f - b.w, e.energy, eta, cutoff, e.pos, e.t);
+		if (b.w > 0.05f) play (ContactVoices::IMPACT, layer, b.next, b.w, e.energy, eta, cutoff, e.pos, e.t);
+		if (gear) play (ContactVoices::STRUT, "strut", SampleBank::ANY, 1.0f, e.energy, ETA_STRUT, 12000.0f, e.pos, e.t);
+	}
+	// the cabin's rattle: decelerated over RATTLE_A (the contacts' force
+	// beyond holding its weight up; braking), as loud as log a - of the
+	// blow's peak: rattled when it falls off it (or holds, braking), at
+	// that moment; again only after it has eased, or twice as hard
+	double Fn = 0.0, Ft = 0.0;
+	for (const ContactSample &p : pts) Fn += p.Fn, Ft += std::fabs (p.Flong);
+	double g = 0.0;
+	if (const CelestialBody *pb = pv.v->ProxyBody ())
+		g = Ggrav * pb->Mass () / std::max (pv.v->GPos ().dist2 (pb->GPos ()), 1.0);
+	const double a = std::max (Fn / m - g, Ft / m);
+	if (t - pv.lastContactT > 0.1) pv.rattleOn = pv.rattleFired = false;   // (touching again after a while: from rest)
+	pv.lastContactT = t;
+	if (a > RATTLE_A) {
+		if (!pv.rattleOn || a > pv.peakA) pv.peakA = a, pv.peakT = t;
+		pv.rattleOn = true;
+		if (pv.rattleFired && a > 2.0 * pv.rattleA && t - pv.lastRattle > RATTLE_GAP) pv.rattleFired = false, pv.peakA = a, pv.peakT = t;
+	}
+	if (pv.rattleOn && !pv.rattleFired && (a < 0.8 * pv.peakA || t - pv.peakT > 0.1)) {
+		SampleBank::Take k = bank.Pick ("rattle");
+		if (k && k.energy > 0.0 && k.clip->frames > 0) {
+			const double p = RATTLE_P * std::clamp (std::log10 (pv.peakA / RATTLE_A), 0.1, 1.0);
+			const double rms = std::sqrt (k.energy / ((double)k.clip->frames / k.clip->rate));
+			st->Schedule (pv.peakT, ContactVoices::Shot (ContactVoices::RATTLE, k.clip.get (), (float)(p / P_FULL / rms) * k.gain, k.rate, 12000.0f, 0.3f));
+			if (Dbg ().log > 0) printf ("Audio: contact of %s: rattle at %.3f s: %.2f g\n", pv.v->Name (), pv.peakT, pv.peakA / 9.81), fflush (stdout);
+		}
+		pv.rattleFired = true, pv.rattleA = pv.peakA, pv.lastRattle = t;
+	}
+	if (a <= RATTLE_A) pv.rattleOn = pv.rattleFired = false;
 }
 
 void VesselSounds::LogContacts (const Vessel *v, ContactModel &m)

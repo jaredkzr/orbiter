@@ -109,6 +109,17 @@ struct Biquad {
 	}
 };
 
+/// A damped resonator (two poles) rung by impulses: a mode of a structure
+struct Resonator {
+	float a1 = 0.0f, a2 = 0.0f, g = 1.0f, y1 = 0.0f, y2 = 0.0f;
+	/// at f [Hz], its ring decaying over tau [s]; an impulse of 1 rings it at about 1
+	void Set (float f, float tau, float rate) {
+		float r = std::exp (-1.0f / (tau * rate)), w = 6.2831853f * f / rate;
+		a1 = 2.0f * r * std::cos (w), a2 = -r * r, g = std::sin (w);
+	}
+	inline float Process (float x) { float y = g * x + a1 * y1 + a2 * y2; y2 = y1, y1 = y; return y; }
+};
+
 /// A list of at most N items in place: no allocation (the audio thread).
 /// Adding to a full list does nothing (returns false)
 template <class T, unsigned N>

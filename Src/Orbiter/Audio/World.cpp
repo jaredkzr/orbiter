@@ -3,6 +3,7 @@
 
 #include "World.h"
 #include "DebugEnv.h"
+#include "Ears.h"
 #include "Assets.h"
 #include "ClipSynth.h"
 #include "miniaudio.h"
@@ -110,6 +111,17 @@ SourcePtr<Source> MakeFileSource (Engine &e, const std::string &path, bool loop)
 	return MakeClipSource (e, Assets::Get ().Load (path, e.SampleRate ()), loop);
 }
 
+EmitterDesc StructureEmitter (const Body *body, double cabinP, const std::string &name)
+{
+	EmitterDesc d;
+	d.body = body;
+	d.refDist = 0.1f;
+	d.hull = STRUCTURE_HULL;
+	d.level = (float)(cabinP / P_FULL / STRUCTURE_HULL);
+	d.name = name;
+	return d;
+}
+
 // ---- the world ------------------------------------------------------------
 
 void Emitter::PushBytes (double t, const void *p, size_t n)
@@ -143,6 +155,33 @@ const unsigned char *Emitter::RecalledBytes (size_t n) const
 	auto it = std::upper_bound (histTimes.begin () + histFirst, histTimes.end (), tq);
 	size_t i = it == histTimes.begin () + histFirst ? histFirst : (size_t)(it - histTimes.begin ()) - 1;
 	return histBytes.data () + i * n;
+}
+
+bool Emitter::Schedule (double tEmit, const OneShot &s)
+{
+	if (pending.size () >= MAX_PENDING) return false;
+	// (in order: a late one goes in its place)
+	auto it = pending.end ();
+	while (it != pending.begin () && std::prev (it)->t > tEmit) --it;
+	pending.insert (it, {tEmit, s});
+	return true;
+}
+
+void Emitter::Release (double heard, double ramp)
+{
+	// the one-shots whose sound has arrived: each at its moment within
+	// the step to come (the time heard went from heardAt to heard over the
+	// last step; played over the next, ramp long - a step late, spaced as
+	// they were)
+	const double span = heard - heardAt;
+	while (!pending.empty () && pending.front ().t <= heard) {
+		const Timed &x = pending.front ();
+		double f = span > 0.0 && span < 1e9 ? (x.t - heardAt) / span : 1.0;
+		float delay = (float)(std::clamp (f, 0.0, 1.0) * std::max (ramp, 0.0));
+		if (!source || !source->Fire (x.s, delay)) break;   // (no room: offered again next step)
+		pending.pop_front ();
+	}
+	heardAt = std::max (heardAt, heard);
 }
 
 World::World (Engine &e): engine (e)
@@ -276,7 +315,7 @@ void World::Clear ()
 
 void World::ResetPaths ()
 {
-	for (auto &e : emitters) e->track.Clear (), e->hasLast = false, e->ClearHistory (), e->state = Emitter::State ();
+	for (auto &e : emitters) e->track.Clear (), e->hasLast = false, e->ClearHistory (), e->state = Emitter::State (), e->pending.clear (), e->heardAt = -1e300, e->releaseDelay = -1.0;
 	tPrev = -1.0;
 }
 
@@ -314,7 +353,10 @@ void World::Update (const Snapshot &snap, const Scene &sc)
 	// the listener: the camera, in the frame of the planet it is at
 	if (snap.frame != airBody || t < tPrev) {
 		// a new frame (or time went back): the paths start over
-		for (auto &e : emitters) e->track.Clear (), e->hasLast = false;
+		for (auto &e : emitters) {
+			e->track.Clear (), e->hasLast = false;
+			if (t < tPrev) e->pending.clear (), e->heardAt = -1e300, e->releaseDelay = -1.0;   // (time went back: what waited is gone)
+		}
 		tPrev = -1.0;
 		airBody = snap.frame;
 	}
@@ -353,7 +395,7 @@ void World::UpdateEmitter (Emitter &e, double t)
 	Emitter::State &s = e.state;
 	const EmitterDesc &d = e.desc;
 	Pose bp;
-	if (!d.body || !scene->PoseOf (d.body, bp)) { e.node.Set (PathNode::AIR, {}, ramp), e.node.Set (PathNode::HULL, {}, ramp); return; }
+	if (!d.body || !scene->PoseOf (d.body, bp)) { e.node.Set (PathNode::AIR, {}, ramp), e.node.Set (PathNode::HULL, {}, ramp); e.Release (t, ramp); return; }
 
 	// where it is now, in the air's frame
 	const V3 g = bp.pos + Mul (bp.rot, d.offset);
@@ -471,6 +513,18 @@ void World::UpdateEmitter (Emitter &e, double t)
 	// the source as the sound now arriving left it (the structure carries
 	// its own vessel's sound at once)
 	e.hearDelay = (own || !s.images) ? 0.0 : s.delay;
+	// its one-shots: when their sound arrives - the travel time it is heard
+	// with; not heard this step but on its way through the air, the last
+	// travel time known (else as far as it is: a step unheard is no reason
+	// to play them early); at once through the structure, or with no air
+	{
+		const bool airWay = airBody && sAir.Present () && la.Present () && !own;
+		double rd = 0.0;
+		if (airWay && s.images) rd = s.delay;
+		else if (airWay) rd = e.releaseDelay >= 0.0 ? e.releaseDelay : realism == CINEMATIC ? 0.0 : (P - L).Len () / std::max (0.5 * (sAir.c + la.c), 1.0);
+		e.releaseDelay = airWay ? rd : -1.0;
+		e.Release (t - rd, ramp);
+	}
 	// a recording begun when the sound of its start arrives (through the air: its travel time; the
 	// structure, a cinematic world: at once; time gone back - a replay: at once)
 	if (!e.begun && !e.held) {

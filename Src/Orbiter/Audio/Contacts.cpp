@@ -68,6 +68,7 @@ void ContactModel::Step (double t, double h, const std::vector<ContactSample> &p
 	// (the points of a key struck together: the fastest's speed and place, the largest energy)
 	struct Strike { double vn = 0.0, energy = 0.0; int n = 0; V3 pos; ContactKind kind; int id; };
 	std::map<int, Strike> struck;
+	std::map<int, double> stepv;   // (each key's fastest closing this step)
 	const double left = std::max (LEFT_AFTER, 1.5 * h);
 	for (const ContactSample &p : pts) {
 		levels.any = true;
@@ -90,7 +91,11 @@ void ContactModel::Step (double t, double h, const std::vector<ContactSample> &p
 		const int k = Key (p);
 		auto it = touch.find (k);
 		const bool anew = it == touch.end () || t - it->second.lastSeen > left;
-		const double vmin = anew ? STRIKE_V : RESTRIKE_V;
+		// (kept: struck again only when its closing jumps - a bump, a bounce -, not
+		// while it goes on closing ever more slowly, the strut compressing)
+		const double vmin = anew ? STRIKE_V : std::max (RESTRIKE_V, it->second.vlow + RESTRIKE_V);
+		auto sv = stepv.find (k);
+		if (sv == stepv.end ()) stepv[k] = p.vn; else sv->second = std::max (sv->second, p.vn);
 		if (p.vn < vmin) continue;
 		if (it != touch.end () && t - it->second.lastStrike < STRIKE_GAP) continue;
 		Strike &st = struck[k];
@@ -98,9 +103,14 @@ void ContactModel::Step (double t, double h, const std::vector<ContactSample> &p
 		st.energy = std::max (st.energy, 0.5 * p.meff * p.vn * p.vn); // (one body: each point's effective mass is about all of it)
 		st.n++, st.kind = p.kind, st.id = p.id;
 	}
-	for (const ContactSample &p : pts) touch[Key (p)].lastSeen = t;
+	for (const auto &kv : stepv) {
+		Touch &tc = touch[kv.first];
+		tc.vlow = t - tc.lastSeen > left ? kv.second : std::min (tc.vlow, kv.second);
+		tc.lastSeen = t;
+	}
 	for (auto &kv : struck) {
-		touch[kv.first].lastStrike = t;
+		Touch &tc = touch[kv.first];
+		tc.lastStrike = t, tc.vlow = kv.second.vn;
 		ContactEvent e;
 		e.type = ContactEvent::IMPACT;
 		e.t = t, e.kind = kv.second.kind, e.id = kv.second.id, e.points = kv.second.n;

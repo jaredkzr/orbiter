@@ -165,6 +165,8 @@ set(headless_src
 	Audio/Callouts.cpp
 	Audio/ContactSynth.cpp
 	Audio/Contacts.cpp
+	Audio/ContactVoices.cpp
+	Audio/SampleBank.cpp
 	Audio/CreakSynth.cpp
 	Audio/Ears.cpp
 	Audio/Effects.cpp

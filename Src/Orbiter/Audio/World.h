@@ -85,6 +85,15 @@ struct EmitterDesc {
 	std::string name;           ///< (for the readout)
 };
 
+/// An emitter heard only through its body's structure - in a cockpit of
+/// it, or of a vessel docked to it, also in vacuum: outside, a tiny source
+/// (refDist 0.1 m: nothing heard). Its source's full scale is `cabinP`
+/// [Pa] in the cabin (an AIR and a STRUCTURE emitter per vessel: what is
+/// heard outside, what its own structure carries in)
+EmitterDesc StructureEmitter (const Body *body, double cabinP, const std::string &name);
+/// (the gain through the hull it is given: its air level that much less)
+constexpr float STRUCTURE_HULL = 50.0f;
+
 /// A source's parameters as a few numbers, for its emitter's history (Push,
 /// Recalled): its kind's own, as many as it has
 template <int N> struct Floats {
@@ -141,6 +150,16 @@ public:
 		if (b) memcpy (&p, b, sizeof (T));
 		return p;
 	}
+	/// A one-shot of its source's at simulation time tEmit [s] (a blow at
+	/// that moment): released to the source (Source::Fire) when its sound
+	/// arrives - a travel time later through the air, at once through the
+	/// structure or cinematic - in order, each once, timed within the step
+	/// it arrives in. False: too many waiting (MAX_PENDING)
+	bool Schedule (double tEmit, const OneShot &s);
+	/// (tests) one-shots waiting for their sound to arrive
+	size_t Pending () const { return pending.size (); }
+	static constexpr size_t MAX_PENDING = 256;
+
 	/// The newest pushed (false: none)
 	template <class T> bool Latest (T &p) const
 	{
@@ -173,6 +192,11 @@ private:
 	const unsigned char *RecalledBytes (size_t n) const;
 	void ClearHistory () { histTimes.clear (), histBytes.clear (), histFirst = 0; }
 	double hearDelay = 0.0;     // the travel time the source is heard with
+	struct Timed { double t; OneShot s; };
+	std::deque<Timed> pending;  // (Schedule: by time)
+	double heardAt = -1e300;    // the time last heard (the step's: one-shots before it are out)
+	double releaseDelay = -1.0; // the travel time one-shots were last released with (< 0: none)
+	void Release (double heard, double ramp);
 	V3 lastP;                   // where it was last step (jumps)
 	double lastT = 0.0;
 	bool hasLast = false;

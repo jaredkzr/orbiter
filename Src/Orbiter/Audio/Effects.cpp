@@ -39,7 +39,7 @@ namespace {
 	/// peak (subtle: a moderate load's some 6 dB over the cabin's air
 	/// handling - 56 dB - near the limit 80 dB at the peak; lost under the
 	/// air's rush), carried through the structure
-	constexpr double CREAK_P = 0.2, CREAK_HULL = 50.0;
+	constexpr double CREAK_P = 0.2;
 	/// The wake's level (0.02 Pa at refDist)
 	const double WAKE_LEVEL = 0.02 / P_FULL / 0.3;
 }
@@ -368,15 +368,8 @@ void Effects::UpdateCreaks (double t)
 		auto s = CreakSynth::Make (engine, seed++);
 		if (!s) return;
 		creak.v = vr;
-		EmitterDesc d;
-		d.body = v;
-		// (through the structure, in the cabin: CREAK_P at the most; outside,
-		// a tiny source - refDist 0.1 m - nothing heard)
-		d.refDist = 0.1f;
-		d.level = (float)(CREAK_P / P_FULL / CREAK_HULL);
-		d.hull = (float)CREAK_HULL;
-		d.name = std::string (v->Name ()) + " structure";
-		creak.em = world.Add (d, std::move (s));
+		// (through the structure, in the cabin: CREAK_P at the most; outside, nothing heard)
+		creak.em = world.Add (StructureEmitter (v, CREAK_P, std::string (v->Name ()) + " structure"), std::move (s));
 		if (!world.Get (creak.em)) { creak = Creak (); return; }
 		world.Get (creak.em)->Push (t - 1e-3, Floats<4>{});   // (creaks, groans counted; their strengths)
 		creak.t = t;
@@ -410,15 +403,12 @@ void Effects::UpdateCreaks (double t)
 	if (bedGain > 0.0 && !world.Get (creak.bed)) {
 		const std::string f = System::FindSound ("Sound/Generated/creak_1.flac");
 		if (!f.empty ()) {
-			EmitterDesc d;
-			d.body = v, d.refDist = 0.1f, d.hull = (float)CREAK_HULL, d.level = 0.0f;
-			d.name = std::string (v->Name ()) + " structure groaning";
-			creak.bed = world.Add (d, MakeFileSource (engine, f, true));
+			creak.bed = world.Add (StructureEmitter (v, 0.0, std::string (v->Name ()) + " structure groaning"), MakeFileSource (engine, f, true));
 			const bool log = Dbg ().log > 0;
 			if (log) printf ("Audio: structure groaning at %.2f s (tides %.2f of tearing)\n", t, tide), fflush (stdout);
 		}
 	}
-	if (Emitter *bed = world.Get (creak.bed)) bed->SetLevel ((float)(2.0 * CREAK_P / P_FULL / CREAK_HULL * bedGain));
+	if (Emitter *bed = world.Get (creak.bed)) bed->SetLevel ((float)(2.0 * CREAK_P / P_FULL / STRUCTURE_HULL * bedGain));
 	stress = std::clamp (stress, 0.0, 1.5);
 	const double dt = t - creak.t;
 	creak.t = t;

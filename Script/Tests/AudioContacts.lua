@@ -5,6 +5,9 @@
 --          brakes from 6 s
 --   BELLY: gear up, 1.5 m up, 30 m/s, sinking 1 m/s: the hull's thud, scraping
 --   MOON:  gear down on the Moon's bare ground, 0.8 m up, sinking 1 m/s
+-- For listening (not the tests'): CONTACTS_SINK=<m/s> (how fast it sinks),
+-- CONTACTS_PITCH=<deg> (nose up: the mains first, the nose some time after),
+-- CONTACTS_VIEW=cockpit (heard from the cockpit, not from the ground)
 local belly = vessel.get_interface("BELLY") ~= nil
 local moon = vessel.get_interface("MOON") ~= nil
 local v = vessel.get_interface(belly and "BELLY" or moon and "MOON" or "LAND")
@@ -18,16 +21,25 @@ local fwd = vec.sub(v:local2global({x=0, y=0, z=1}), gpos())
 local right = vec.sub(v:local2global({x=1, y=0, z=0}), gpos())
 local L = vec.add(gpos(), vec.add(vec.mul(fwd, belly and 30 or 90), vec.mul(right, 40)))
 local eq = oapi.global_to_equ(earth, L)
-oapi.set_cameramode({mode = 'ground', ref = earthName, lng = math.deg(eq.lng), lat = math.deg(eq.lat), alt = 2})
+if os.getenv("CONTACTS_VIEW") == "cockpit" then
+	oapi.set_cameramode({mode = 'cockpit'})
+else
+	oapi.set_cameramode({mode = 'ground', ref = earthName, lng = math.deg(eq.lng), lat = math.deg(eq.lat), alt = 2})
+end
 at(1.0)
 -- (as DestructionTest's airborne(): level as on the ground; the attitude
 -- set again a frame later, as the status's angles don't hold it)
 local x = vec.sub(v:local2global({x=1, y=0, z=0}), gpos())
 local y = vec.sub(v:local2global({x=0, y=1, z=0}), gpos())
 local z = fwd
+local pitch = math.rad(tonumber(os.getenv("CONTACTS_PITCH") or "0"))
+if pitch ~= 0 then   -- (nose up: about the vessel's right axis)
+	local c, sn = math.cos(pitch), math.sin(pitch)
+	y, z = vec.sub(vec.mul(y, c), vec.mul(z, sn)), vec.add(vec.mul(z, c), vec.mul(y, sn))
+end
 local R = {m11=x.x, m12=y.x, m13=z.x, m21=x.y, m22=y.y, m23=z.y, m31=x.z, m32=y.z, m33=z.z}
 local st = v:get_status(2)
-local h, spd, vs = belly and 0.5 or 0.8, belly and 30 or moon and 0 or 70, -1.0
+local h, spd, vs = belly and 0.5 or 0.8, belly and 30 or moon and 0 or 70, -tonumber(os.getenv("CONTACTS_SINK") or "1.0")
 st.status = 0
 st.arot = {x=math.atan2(R.m23, R.m33), y=-math.asin(R.m13), z=math.atan2(R.m12, R.m11)}
 st.rpos = vec.add(st.rpos, vec.mul(up, h))

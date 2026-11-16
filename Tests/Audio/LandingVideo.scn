@@ -1,0 +1,31 @@
+BEGIN_HYPERDESC
+A delta-glider landing on KSC runway 33 by autopilot, for its sounds (Script/Tests/LandingVideo).
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51984.65
+  Script Tests/LandingVideo
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship LAND
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET LAND
+  MODE Extern
+  POS 4.0 -20.0 -30
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+LAND:DeltaGlider
+  STATUS Landed Earth
+  POS -80.6825940 28.5969240
+  HEADING 330.01
+  PRPLEVEL 0:0.1 1:0.1
+  GEAR 1 1.0000
+END
+END_SHIPS

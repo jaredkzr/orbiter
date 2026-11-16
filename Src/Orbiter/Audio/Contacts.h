@@ -88,8 +88,9 @@ class ContactModel {
 public:
 	/// A point touching anew closing at least this fast strikes [m/s]
 	static constexpr double STRIKE_V = 0.05;
-	/// A point in contact all along, closing faster than this, strikes again
-	/// (a bounce within the step, a bump rolled over) [m/s]
+	/// A point in contact all along strikes again when its closing speed rises
+	/// this much over its slowest since it last struck (a bump rolled over, a
+	/// bounce within the step; not a strut compressing ever more slowly) [m/s]
 	static constexpr double RESTRIKE_V = 0.5;
 	/// The shortest time between two strikes of one point [s]
 	static constexpr double STRIKE_GAP = 0.1;
@@ -110,7 +111,7 @@ public:
 	void Reset () { touch.clear (); }
 
 private:
-	struct Touch { double lastSeen = -1e9, lastStrike = -1e9; };
+	struct Touch { double lastSeen = -1e9, lastStrike = -1e9, vlow = 0.0; };
 	std::map<int, Touch> touch;  // (by Key)
 	static int Key (const ContactSample &p) { return p.id >= 0 ? p.id : -1 - (int)p.kind; }
 	std::vector<ContactEvent> events;

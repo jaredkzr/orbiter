@@ -37,6 +37,7 @@ DebugEnv DebugEnv::Read (const char *(*get) (const char *))
 	d.radio = first ("ORBITER_AUDIO_RADIO") != '0';
 	d.ambience = first ("ORBITER_AUDIO_AMBIENCE") != '0';
 	d.contacts = first ("ORBITER_AUDIO_CONTACTS") == '1';
+	d.contactVoices = first ("ORBITER_AUDIO_CONTACTS") == '2';
 	d.renderVolumes = first ("ORBITER_AUDIO_RENDER_VOLUMES") == '1';
 	d.solo = str ("ORBITER_AUDIO_SOLO");
 	d.testTone = str ("ORBITER_AUDIO_TEST_TONE");

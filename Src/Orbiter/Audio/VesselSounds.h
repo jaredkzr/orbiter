@@ -28,6 +28,7 @@
 #define __VESSELSOUNDS_H
 
 #include "Contacts.h"
+#include "SampleBank.h"
 #include "World.h"
 #include <algorithm>
 #include <cmath>
@@ -128,6 +129,12 @@ private:
 		double contactMass = 1.0;  // (its loudness by the vessel's mass, when made)
 		ContactStep step;          // this step's contacts (summed until the update)
 		ContactModel contacts;     // what its contacts do (the moments, the levels)
+		// (ORBITER_AUDIO_CONTACTS=2) its contacts heard outside, through its structure (ContactVoices)
+		EmitterId contactAir, contactStruct;
+		double contactRef = 3.0;   // the air one's reference distance [m]
+		double lastRattle = -1e9, rattleA = 0.0, lastContactT = -1e9;
+		double peakA = 0.0, peakT = 0.0;   // (the cabin's rattle: this blow's peak deceleration, when)
+		bool rattleOn = false, rattleFired = false;
 		double lastBlow[3] = {-1e9, -1e9, -1e9}; // [s] the last blow of each kind (wheel, hull, vessel)
 		int blows[8] = {};         // blows struck so far, by kind (recalled with the travel time)
 		float blowStrength[8] = {};
@@ -148,6 +155,12 @@ private:
 	double now = 0.0, dtNow = 0.0;  // (this update's time and step)
 	bool replaying = false;
 	void UpdateContacts (PerVessel &pv, double t);
+	/// Its contacts' moments heard (ContactVoices: the blows, the struts, the
+	/// cabin's rattle), at time t
+	void PlayContacts (PerVessel &pv, const std::vector<ContactSample> &pts, double t);
+	SampleBank bank;
+	int bankState = 0;             // (0: not read yet, 1: read, -1: none)
+	bool ContactBank ();
 	/// Its contacts' moments: logged (ORBITER_AUDIO_LOG), then cleared
 	void LogContacts (const Vessel *v, ContactModel &m);
 

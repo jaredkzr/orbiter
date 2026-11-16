@@ -1,0 +1,460 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// The contacts' shared parts, without Orbiter:
+//  - one-shots on an emitter (Emitter::Schedule): released when their sound
+//    arrives - a travel time later through the air, at once through the
+//    structure - in order, each once, timed within the step; offered again
+//    when the source has no room; gone when time goes back
+//  - an emitter heard only through its structure (StructureEmitter)
+//  - recordings in takes and tiers (SampleBank): each in turn, never twice
+//    running, a little off in rate and gain, repeatably; a layer not there
+//    silent; strengths as tiers
+//  - ContactVoices: one-shots played, the quietest's voice taken, the
+//    body's modes by the vessel's size (not rung: off), nothing
+//    allocated rendering, its time per block
+
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include "Audio/AudioEngine.h"
+#include "Audio/World.h"
+#include "Audio/SampleBank.h"
+#include "Audio/ContactVoices.h"
+#include "Audio/Ears.h"
+#include <algorithm>
+#include <atomic>
+#include <cstdlib>
+#include <new>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <functional>
+#include <map>
+#include <set>
+#include <vector>
+
+using namespace audio;
+
+// ---- counting allocations on a thread (as Audio.Churn) ---------------------------
+namespace {
+	thread_local bool g_watch = false;
+	std::atomic<long> g_allocs{0};
+}
+void *operator new (size_t n)
+{
+	if (g_watch) g_allocs.fetch_add (1, std::memory_order_relaxed);
+	if (void *p = std::malloc (n ? n : 1)) return p;
+	throw std::bad_alloc ();
+}
+void *operator new[] (size_t n) { return operator new (n); }
+void operator delete (void *p) noexcept { std::free (p); }
+void operator delete[] (void *p) noexcept { std::free (p); }
+void operator delete (void *p, size_t) noexcept { std::free (p); }
+void operator delete[] (void *p, size_t) noexcept { std::free (p); }
+
+using Catch::Matchers::WithinRel;
+using Catch::Matchers::WithinAbs;
+
+namespace {
+
+int bodyA, planet;
+const Body *A = reinterpret_cast<const Body*> (&bodyA);
+const void *PLANET = &planet;
+
+/// A scene of our own (as Audio.World's): bodies at given places, sea-level air
+struct TestScene : Scene {
+	double t = 0.0;
+	std::map<const Body*, V3> at;
+	bool PoseOf (const Body *b, Pose &p) const override
+	{
+		auto it = at.find (b);
+		if (it == at.end ()) return false;
+		p.pos = it->second;
+		return true;
+	}
+	const void *StructureOf (const Body *b) const override { return b; }
+	double SizeOf (const Body *) const override { return 5.0; }
+	Air AirAt (const void *frame, const V3 &) const override { return frame ? Air::SeaLevel () : Air (); }
+	Snapshot At (double time, const V3 &ear, double dt, bool inside = false, const void *of = nullptr)
+	{
+		t = time;
+		Snapshot s;
+		s.t = s.playT = time;
+		s.dt = dt;
+		s.listener = true;
+		s.ear.pos = ear;
+		s.frame = PLANET;
+		s.air = Air::SeaLevel ();
+		s.inside = inside, s.insideOf = of;
+		return s;
+	}
+};
+
+struct Fixture {
+	Engine e;
+	Fixture () { Engine::Options o; o.mode = Engine::OFFLINE; o.ears = false; e.Init (o); }
+};
+
+/// A source that writes down the one-shots it is given (and can refuse some)
+class Recorder : public SynthSource {
+public:
+	struct Got { double at; int kind; float delay; };
+	std::vector<Got> got;
+	double now = 0.0;
+	int refuse = 0;      // (refuse this many first)
+	static SourcePtr<Recorder> Make (Engine &e)
+	{
+		SourcePtr<Recorder> r (new Recorder ());
+		if (!r->Init (e)) return nullptr;
+		return r;
+	}
+	bool Fire (const OneShot &s, float delay) override
+	{
+		if (refuse > 0) { refuse--; return false; }
+		got.push_back ({now, s.kind, delay});
+		return true;
+	}
+protected:
+	void Render (float *out, unsigned n, float) override { for (unsigned i = 0; i < n; i++) out[i] = 0.0f; }
+};
+
+OneShot Kind (int k) { OneShot s; s.kind = k; return s; }
+
+/// A mono 16-bit WAV file
+void WriteWav (const std::string &path, const std::vector<float> &x)
+{
+	std::ofstream f (path, std::ios::binary);
+	auto u32 = [&](uint32_t v) { f.write ((const char*)&v, 4); };
+	auto u16 = [&](uint16_t v) { f.write ((const char*)&v, 2); };
+	f.write ("RIFF", 4); u32 (36 + 2 * (uint32_t)x.size ()); f.write ("WAVE", 4);
+	f.write ("fmt ", 4); u32 (16); u16 (1); u16 (1); u32 (48000); u32 (96000); u16 (2); u16 (16);
+	f.write ("data", 4); u32 (2 * (uint32_t)x.size ());
+	for (float v : x) { int16_t s = (int16_t)std::lround (std::clamp (v, -1.0f, 1.0f) * 32767.0f); f.write ((const char*)&s, 2); }
+}
+
+/// A blow's recording: a decaying noise burst (peak about 1)
+std::vector<float> Blow (unsigned seed, double len = 0.15, double tau = 0.03)
+{
+	dsp::Rng rng (seed);
+	std::vector<float> x ((size_t)(len * 48000));
+	for (size_t i = 0; i < x.size (); i++) x[i] = 0.9f * rng.White () * (float)std::exp (-(double)i / (tau * 48000));
+	return x;
+}
+
+double Energy (const std::vector<float> &x) { double e = 0.0; for (float v : x) e += (double)v * v; return e / 48000.0; }
+
+} // namespace
+
+// ---- one-shots on an emitter --------------------------------------------------
+
+TEST_CASE ("One-shots: released when their sound arrives, in order, each once", "[audio][contacts]")
+{
+	Fixture f;
+	World w (f.e);
+	TestScene sc;
+	const double c = Air::SeaLevel ().c;
+	sc.at[A] = V3 (2.0 * c, 0, 0);    // (2 s away)
+	auto rec = Recorder::Make (f.e);
+	Recorder *r = rec.get ();
+	EmitterDesc d;
+	d.body = A, d.level = 1.0f;
+	EmitterId id = w.Add (d, std::move (rec));
+	Emitter *em = w.Get (id);
+	REQUIRE (em);
+	const double dt = 0.02;
+	em->Schedule (1.0, Kind (1));
+	em->Schedule (1.0, Kind (2));     // (two at one moment: two)
+	em->Schedule (1.505, Kind (3));
+	em->Schedule (0.5, Kind (0));     // (scheduled late, out of order: in its place)
+	r->refuse = 1;                    // (the first offer refused: offered again)
+	for (int i = 0; i <= 300; i++) {
+		const double t = i * dt;
+		r->now = t;
+		w.Update (sc.At (t, V3 (), dt), sc);
+	}
+	REQUIRE (r->got.size () == 4);
+	CHECK (r->got[0].kind == 0);
+	CHECK (r->got[1].kind == 1);
+	CHECK (r->got[2].kind == 2);
+	CHECK (r->got[3].kind == 3);
+	// each when its sound arrived: 2 s after (the refused one a step later)
+	CHECK_THAT (r->got[0].at, WithinAbs (2.5 + dt, dt * 1.01));
+	CHECK_THAT (r->got[1].at, WithinAbs (3.0, dt * 1.01));
+	CHECK_THAT (r->got[3].at, WithinAbs (3.505, dt * 1.01));
+	// timed within the step: 1.505 heard between two updates - a quarter
+	// step after the previous update's, played a quarter step in
+	CHECK_THAT (r->got[3].delay, WithinAbs (0.25 * dt, 2e-4));
+	for (auto &g : r->got) CHECK ((g.delay >= 0.0f && g.delay <= dt + 1e-6));
+	CHECK (em->Pending () == 0);
+}
+
+TEST_CASE ("One-shots: at once through the structure; gone when time goes back", "[audio][contacts]")
+{
+	Fixture f;
+	World w (f.e);
+	TestScene sc;
+	sc.at[A] = V3 (3, 0, 0);
+	auto rec = Recorder::Make (f.e);
+	Recorder *r = rec.get ();
+	EmitterId id = w.Add (StructureEmitter (A, 0.2, "structure"), std::move (rec));
+	Emitter *em = w.Get (id);
+	REQUIRE (em);
+	const double dt = 0.02;
+	// in the cabin of its structure: at once (no travel through the air)
+	em->Schedule (0.1, Kind (1));
+	for (int i = 0; i <= 10; i++) { r->now = i * dt; w.Update (sc.At (i * dt, V3 (), dt, true, A), sc); }
+	REQUIRE (r->got.size () == 1);
+	CHECK_THAT (r->got[0].at, WithinAbs (0.1, 1e-9));
+	// one in the future, then time goes back (a replay): never played
+	em->Schedule (5.0, Kind (2));
+	CHECK (em->Pending () == 1);
+	r->now = 0.0;
+	w.Update (sc.At (0.0, V3 (), dt, true, A), sc);
+	CHECK (em->Pending () == 0);
+	for (int i = 0; i < 400; i++) { r->now = i * dt; w.Update (sc.At (i * dt, V3 (), dt, true, A), sc); }
+	CHECK (r->got.size () == 1);
+}
+
+TEST_CASE ("A structure's emitter: heard in its cabin, not outside", "[audio][contacts]")
+{
+	Fixture f;
+	World w (f.e);
+	TestScene sc;
+	sc.at[A] = V3 (2, 0, 0);
+	const double cabin = 0.5;   // [Pa] its full scale in the cabin
+	EmitterId id = w.Add (StructureEmitter (A, cabin, "structure"), MakeToneSource (f.e, 100.0, 0.5));
+	REQUIRE (w.Get (id));
+	w.Update (sc.At (0.0, V3 (), 0.02, true, A), sc);
+	CHECK_THAT (w.Get (id)->Heard ().hull, WithinRel ((float)(cabin / P_FULL), 1e-4));
+	// outside, 20 m off: some 70 dB under
+	sc.at[A] = V3 (20, 0, 0);
+	w.Update (sc.At (0.02, V3 (), 0.02), sc);
+	w.Update (sc.At (0.04, V3 (), 0.02), sc);
+	CHECK (w.Get (id)->Heard ().hull == 0.0f);
+	CHECK (w.Get (id)->Heard ().air < 3e-4f * (float)(cabin / P_FULL));
+}
+
+// ---- recordings in takes and tiers -------------------------------------------
+
+namespace {
+struct BankDir {
+	std::filesystem::path dir;
+	BankDir ()
+	{
+		dir = std::filesystem::temp_directory_path () / ("samplebank_" + std::to_string ((unsigned long)std::chrono::steady_clock::now ().time_since_epoch ().count ()));
+		std::filesystem::create_directories (dir / "impact_gear");
+		std::filesystem::create_directories (dir / "rattle");
+		std::ofstream m (dir / "contacts.txt");
+		m << "# a test bank\n";
+		unsigned seed = 1;
+		for (const char *tier : {"soft", "mid", "hard"})
+			for (int i = 1; i <= 4; i++) {
+				std::string f = std::string ("impact_gear/impact_gear_") + tier + "_" + std::to_string (i) + ".wav";
+				auto x = Blow (seed++);
+				WriteWav ((dir / f).string (), x);
+				m << f << " impact_gear " << tier << " " << Energy (x) << "   # take\n";
+			}
+		for (int i = 1; i <= 2; i++) {
+			std::string f = "rattle/rattle_" + std::to_string (i) + ".wav";
+			auto x = Blow (100 + i, 0.5, 0.2);
+			WriteWav ((dir / f).string (), x);
+			m << f << " rattle - " << Energy (x) << "\n";
+		}
+		m << "impact_gear/missing.wav impact_gear hard 0.1\n";   // (not there: passed over)
+	}
+	~BankDir () { std::error_code ec; std::filesystem::remove_all (dir, ec); }
+	std::string Manifest () const { return (dir / "contacts.txt").string (); }
+};
+}
+
+TEST_CASE ("SampleBank: takes in turn, never twice running, a little off", "[audio][contacts]")
+{
+	Assets::Get ().SetAsync (false);
+	BankDir bd;
+	SampleBank b (7);
+	REQUIRE (b.Load (bd.Manifest (), 48000));
+	CHECK (b.Has ("impact_gear"));
+	CHECK (b.Count ("impact_gear", SampleBank::HARD) == 4);
+	CHECK (b.Count ("impact_gear") == 12);
+	CHECK (b.Count ("rattle") == 2);
+	std::string last;
+	std::map<std::string, int> seen;
+	for (int round = 0; round < 50; round++) {
+		std::set<std::string> inRound;
+		for (int i = 0; i < 4; i++) {
+			SampleBank::Take k = b.Pick ("impact_gear", SampleBank::MID);
+			REQUIRE (k);
+			CHECK (k.file.find ("_mid_") != std::string::npos);
+			CHECK (k.file != last);                 // (never twice running)
+			inRound.insert (k.file);
+			seen[k.file]++;
+			last = k.file;
+			CHECK ((k.rate >= 0.94f && k.rate <= 1.06f));
+			CHECK ((k.gain >= 0.84f && k.gain <= 1.19f));   // (+-1.5 dB)
+			CHECK (k.energy > 0.0);
+			CHECK (k.clip->channels == 1);
+		}
+		CHECK (inRound.size () == 4);               // (each in turn)
+	}
+	CHECK (seen.size () == 4);
+	// the energy as listed
+	SampleBank::Take r = b.Pick ("rattle");
+	REQUIRE (r);
+	CHECK_THAT (r.energy, WithinRel (Energy (Blow (r.file.find ("_1.") != std::string::npos ? 101 : 102, 0.5, 0.2)), 1e-3));
+	// repeatable: the same seed, the same takes and jitter
+	SampleBank b1 (3), b2 (3);
+	REQUIRE (b1.Load (bd.Manifest (), 48000));
+	REQUIRE (b2.Load (bd.Manifest (), 48000));
+	for (int i = 0; i < 20; i++) {
+		SampleBank::Take x = b1.Pick ("impact_gear", SampleBank::SOFT), y = b2.Pick ("impact_gear", SampleBank::SOFT);
+		CHECK (x.file == y.file);
+		CHECK (x.rate == y.rate);
+		CHECK (x.gain == y.gain);
+	}
+	// a layer not there: silent, never another's sound
+	CHECK_FALSE (b.Pick ("strut"));
+	CHECK_FALSE (b.Pick ("rattle", SampleBank::HARD));
+	// none at all
+	SampleBank none;
+	CHECK_FALSE (none.Load ((bd.dir / "nothing.txt").string (), 48000));
+	CHECK_FALSE (none.Pick ("impact_gear"));
+}
+
+TEST_CASE ("SampleBank: strengths as tiers, crossfading at their edges", "[audio][contacts]")
+{
+	auto b = SampleBank::ForStrength (0.0f);
+	CHECK (b.tier == SampleBank::SOFT);
+	CHECK (b.w == 0.0f);
+	b = SampleBank::ForStrength (0.5f);       // (the middle of mid: mid alone)
+	CHECK (b.tier == SampleBank::MID);
+	CHECK_THAT (b.w, WithinAbs (0.0, 1e-6));
+	b = SampleBank::ForStrength (0.6f);       // (towards hard)
+	CHECK (b.tier == SampleBank::MID);
+	CHECK (b.next == SampleBank::HARD);
+	CHECK_THAT (b.w, WithinAbs (0.3, 1e-5));
+	b = SampleBank::ForStrength (0.3f);       // (soft, near mid)
+	CHECK (b.tier == SampleBank::SOFT);
+	CHECK (b.next == SampleBank::MID);
+	CHECK_THAT (b.w, WithinAbs (0.4, 1e-5));
+	b = SampleBank::ForStrength (1.0f);
+	CHECK (b.tier == SampleBank::HARD);
+	CHECK (b.w == 0.0f);
+	// (continuous across an edge: half and half)
+	auto lo = SampleBank::ForStrength (0.6666f), hi = SampleBank::ForStrength (0.6668f);
+	CHECK_THAT (lo.w, WithinAbs (0.5, 1e-3));
+	CHECK_THAT (hi.w, WithinAbs (0.5, 1e-3));
+	CHECK (lo.next == hi.tier);
+}
+
+// ---- the voices --------------------------------------------------------------
+
+namespace {
+std::shared_ptr<Clip> MakeClip (const std::vector<float> &x)
+{
+	auto c = std::make_shared<Clip>();
+	c->channels = 1, c->rate = 48000, c->frames = x.size (), c->pcm = x;
+	return c;
+}
+std::vector<float> Render (ContactVoices &v, double secs)
+{
+	std::vector<float> y ((size_t)(secs * 48000));
+	for (size_t i = 0; i < y.size (); i += 480) v.RenderBlock (y.data () + i, (unsigned)std::min<size_t> (480, y.size () - i));
+	return y;
+}
+}
+
+TEST_CASE ("ContactVoices: one-shots played, the body by the vessel's size", "[audio][contacts]")
+{
+	Fixture f;
+	CHECK_THAT (ContactVoices::BodyFreq (30.0), WithinRel (25.0, 0.01));
+	CHECK_THAT (ContactVoices::BodyFreq (5.0), WithinRel (60.0, 0.01));
+	auto v = ContactVoices::Make (f.e, ContactVoices::AIR, 18.0, 1);
+	REQUIRE (v);
+	CHECK_THAT (v->ModeFreq (0), WithinRel (ContactVoices::BodyFreq (18.0), 0.05));
+	CHECK_THAT (v->ModeTau (0), WithinRel (0.6, 1e-5));
+	CHECK_THAT (v->ModeTau (ContactVoices::MODES - 1), WithinRel (0.15, 1e-5));
+	auto blow = MakeClip (Blow (5));
+	// not ours: taken, nothing played
+	OneShot other;
+	other.kind = 99;
+	CHECK (v->Fire (other, 0.0f));
+	// a blow at gain 0.5, its recording as it is (no low-pass to speak of), no body
+	REQUIRE (v->Fire (ContactVoices::Shot (ContactVoices::IMPACT, blow.get (), 0.5f, 1.0f, 20000.0f, 0.0f), 0.01f));
+	auto y = Render (*v, 0.5);
+	CHECK (v->Playing () == 0);
+	// (10 ms late: silent till then; its energy a quarter of the recording's - a low-pass at 20 kHz, nearly all)
+	double pre = 0.0;
+	for (size_t i = 0; i < 470; i++) pre += std::fabs (y[i]);
+	CHECK (pre == 0.0);
+	CHECK_THAT (Energy (y), WithinRel (0.25 * Energy (Blow (5)), 0.15));
+}
+
+TEST_CASE ("ContactVoices: no body ringing; in the cabin the blow dulled, as loud", "[audio][contacts]")
+{
+	// (the body's modes are off: by ear a gong, not a hull - the recordings carry
+	// their own body. Sent to it, a blow sounds as without)
+	Fixture f;
+	auto blow = MakeClip (Blow (9));
+	auto run = [&](ContactVoices::Profile p, float send) {
+		auto v = ContactVoices::Make (f.e, p, 15.0, 3);
+		v->Fire (ContactVoices::Shot (ContactVoices::IMPACT, blow.get (), 1.0f, 1.0f, 20000.0f, send), 0.0f);
+		return Render (*v, 1.0);
+	};
+	for (auto p : {ContactVoices::AIR, ContactVoices::STRUCTURE}) {
+		auto dry = run (p, 0.0f), wet = run (p, 1.0f);
+		double diff = 0.0;
+		for (size_t i = 0; i < dry.size (); i++) diff += std::fabs (wet[i] - dry[i]);
+		INFO ("profile " << p);
+		CHECK (diff == 0.0);
+	}
+	// in the cabin: dulled (below 1.8 kHz), still most of the blow's energy (it is low)
+	const double air = Energy (run (ContactVoices::AIR, 0.0f)), cab = Energy (run (ContactVoices::STRUCTURE, 0.0f));
+	INFO ("the cabin's " << 10.0 * std::log10 (cab / air) << " dB against outside");
+	CHECK ((cab < air && cab > 0.1 * air));
+}
+
+TEST_CASE ("ContactVoices: sixteen at once, the quietest's voice taken", "[audio][contacts]")
+{
+	Fixture f;
+	auto v = ContactVoices::Make (f.e, ContactVoices::AIR, 10.0, 1);
+	auto longBlow = MakeClip (Blow (2, 1.0, 0.5));
+	for (int i = 0; i < 20; i++)
+		REQUIRE (v->Fire (ContactVoices::Shot (ContactVoices::IMPACT, longBlow.get (), 0.01f * (i + 1), 1.0f, 8000.0f, 0.5f), 0.0f));
+	std::vector<float> y (480);
+	v->RenderBlock (y.data (), 480);
+	CHECK (v->Playing () == ContactVoices::VOICES);
+}
+
+TEST_CASE ("ContactVoices: its time per block (16 voices, the body)", "[audio][contacts][cpu]")
+{
+	Fixture f;
+	auto v = ContactVoices::Make (f.e, ContactVoices::STRUCTURE, 20.0, 1);
+	auto longBlow = MakeClip (Blow (4, 30.0, 10.0));
+	for (int i = 0; i < ContactVoices::VOICES; i++)
+		v->Fire (ContactVoices::Shot (ContactVoices::IMPACT, longBlow.get (), 0.05f, 1.0f + 0.01f * i, 4000.0f, 0.5f), 0.0f);
+	std::vector<float> y (480);
+	v->RenderBlock (y.data (), 480);
+	REQUIRE (v->Playing () == ContactVoices::VOICES);
+	// nothing allocated rendering (one-shots arriving, voices taken)
+	g_allocs = 0;
+	for (int b = 0; b < 50; b++) {
+		v->Fire (ContactVoices::Shot (ContactVoices::IMPACT, longBlow.get (), 0.05f, 1.0f, 4000.0f, 0.5f), 0.0f);
+		g_watch = true;
+		v->RenderBlock (y.data (), 480);
+		g_watch = false;
+	}
+	CHECK (g_allocs.load () == 0);
+	// the best of several runs of 200 blocks (others' load on the machine: not ours)
+	double best = 1e9;
+	for (int run = 0; run < 5; run++) {
+		auto t0 = std::chrono::steady_clock::now ();
+		for (int b = 0; b < 200; b++) v->RenderBlock (y.data (), 480);
+		double ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count () / 200.0;
+		best = std::min (best, ms);
+	}
+	printf ("ContactVoices: %.4f ms per 480-frame block (16 voices, 12 modes)\n", best);
+	CHECK (v->Playing () == ContactVoices::VOICES);
+	CHECK (best < 0.15);
+}

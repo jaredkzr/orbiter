@@ -204,6 +204,31 @@ set_target_properties(Audio.World PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER
 add_test(NAME Audio.World COMMAND $<TARGET_FILE:Audio.World>)
 set_tests_properties(Audio.World PROPERTIES TIMEOUT 60)
 
+# The contacts' shared parts (no Orbiter): one-shots released when their sound
+# arrives, the structure's emitter, recordings in takes and tiers
+# (SampleBank), ContactVoices - its voices, its body, its time per block
+add_executable(Audio.ContactVoices Audio.ContactVoices.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/World.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Synth.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/ClipSynth.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/ContactVoices.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/SampleBank.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Track.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Medium.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/PathNode.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Hrtf.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/AudioEngine.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Ears.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Assets.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/DebugEnv.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Loudness.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/Miniaudio.cpp)
+target_include_directories(Audio.ContactVoices PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter ${CMAKE_SOURCE_DIR}/Extern/miniaudio)
+target_link_libraries(Audio.ContactVoices Catch2::Catch2WithMain ${CMAKE_DL_LIBS} Threads::Threads m)
+set_target_properties(Audio.ContactVoices PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ORBITER_BINARY_ROOT_DIR}")
+add_test(NAME Audio.ContactVoices COMMAND $<TARGET_FILE:Audio.ContactVoices>)
+set_tests_properties(Audio.ContactVoices PROPERTIES TIMEOUT 60)
+
 # The flight as the sound follows it (FlightState): recorded traces and tables; the crew's lines' table
 add_executable(Audio.Flight Audio.Flight.cpp ${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/FlightState.cpp ${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/CrewLines.cpp ${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/DebugEnv.cpp)
 target_include_directories(Audio.Flight PRIVATE ${CMAKE_SOURCE_DIR}/Src/Orbiter)

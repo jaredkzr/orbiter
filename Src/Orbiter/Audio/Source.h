@@ -14,6 +14,16 @@
 
 namespace audio {
 
+/// A one-shot an emitter's source plays when its sound arrives (a blow, a
+/// latch: World releases it - Emitter::Schedule): plain data, its kind's
+/// own - which sound, a pointer it keeps alive elsewhere (a clip of a
+/// SampleBank), a few numbers
+struct OneShot {
+	int kind = 0;
+	const void *ref = nullptr;
+	float v[6] = {};
+};
+
 /// What makes the sound of an emitter: a sound file, a generator, a
 /// synthesizer. It plays into the emitter's path node and follows the
 /// Doppler factor (its playback rate).
@@ -42,6 +52,11 @@ public:
 	/// How much it sounds by itself now (0: silent - an engine off; 1: as
 	/// loud as it goes), from its parameters (the voice cap's ranking)
 	virtual float Activity () const { return 1.0f; }
+	/// A one-shot arrived (Emitter::Schedule): play it `delay` seconds into
+	/// what comes next (simulation thread; the source passes it on to the
+	/// audio thread). False: not taken (none of its kind, or no room yet -
+	/// offered again)
+	virtual bool Fire (const OneShot &s, float delay) { return false; }
 	/// Out of the audio graph, waiting for the audio thread to leave it:
 	/// called by SourceDeleter while the whole object still lives, before
 	/// any destructor runs (a derived class's members are what it renders)

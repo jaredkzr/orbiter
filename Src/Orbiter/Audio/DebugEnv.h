@@ -33,6 +33,7 @@ struct DebugEnv {
 	bool radio = true;         ///< ORBITER_AUDIO_RADIO=0: no radio
 	bool ambience = true;      ///< ORBITER_AUDIO_AMBIENCE=0: no ambience
 	bool contacts = false;     ///< ORBITER_AUDIO_CONTACTS=1: the contacts' sounds on
+	bool contactVoices = false;///< ORBITER_AUDIO_CONTACTS=2: the new contacts' sounds (ContactVoices, Sound/Contacts/contacts.txt) instead
 	bool renderVolumes = false;///< ORBITER_AUDIO_RENDER_VOLUMES=1: a render at the settings' volumes
 	std::string solo;          ///< ORBITER_AUDIO_SOLO=<buses>: a render's buses heard (empty: all)
 	std::string testTone;      ///< ORBITER_AUDIO_TEST_TONE=<vessel>[:<Hz>[:<level>]]
