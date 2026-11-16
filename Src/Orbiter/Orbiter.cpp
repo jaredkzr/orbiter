@@ -2317,18 +2317,9 @@ VOID Orbiter::UpdateWorld ()
 #endif
 	}
 
-	// the focus vessel lost: after a few seconds of its wreck, the flight menu
-	// offers what next (restart, quicksave, another vessel)
-	if (bSession && g_focusobj && gclient && pDlgMgr && !(replay && replay->Active())) {
-		const double FLIGHT_OVER_DELAY = 4.0; // [s] of the wreck first
-		if (!g_focusobj->Destroyed ()) flightOverShown = false, flightOverWait = 0.0;
-		else if (!flightOverShown && (flightOverWait += td.UiDT ()) > FLIGHT_OVER_DELAY) { // (real time: seen first, at any time acceleration)
-			flightOverShown = true;
-			DlgFlightMenu *menu = pDlgMgr->EntryExists<DlgFlightMenu>();
-			if (!menu) menu = pDlgMgr->MakeEntry<DlgFlightMenu>();
-			menu->FlightOver (g_focusobj->Name (), g_focusobj->DestroyReason ());
-		}
-	}
+	// (the focus vessel lost: the simulation runs on - the wreck, its debris
+	// and fire, as they come; its banner (Vessel::Destroy) says so, and Esc
+	// opens the flight menu as "flight over": nothing pauses by itself)
 
 	// trajectory prediction of the focus vessel
 	if (predictor && g_focusobj && bSession && !(replay && replay->Active()))

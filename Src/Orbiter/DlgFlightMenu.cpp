@@ -59,23 +59,19 @@ DlgFlightMenu::DlgFlightMenu (): ImGuiDialog ("Flight menu")
 {
 }
 
-void DlgFlightMenu::FlightOver (const std::string &vessel, const std::string &reason)
-{
-	if (active) return; // (open already: as it is)
-	Toggle ();
-	over = true;
-	overTitle = vessel + " destroyed";
-	overReason = reason;
-	if (!overReason.empty ()) overReason[0] = (char)toupper ((unsigned char)overReason[0]);
-}
-
 void DlgFlightMenu::Toggle ()
 {
 	if (active) {
 		Close ();
 		return;
 	}
-	over = false;
+	// (the focus vessel lost: opened as "flight over" - what next)
+	over = g_focusobj && g_focusobj->Destroyed ();
+	if (over) {
+		overTitle = std::string (g_focusobj->Name ()) + " destroyed";
+		overReason = g_focusobj->DestroyReason ();
+		if (!overReason.empty ()) overReason[0] = (char)toupper ((unsigned char)overReason[0]);
+	}
 	active = true;
 	saving = false;
 	openFrame = ImGui::GetFrameCount ();

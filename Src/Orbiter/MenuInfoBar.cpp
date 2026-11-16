@@ -899,7 +899,7 @@ namespace {
 
 void flightevent::Post (Level level, const char *title, const char *detail, const char *key, const char *hint, double duration)
 {
-	static const double DURATION[4] = { 6.0, 5.0, 9.0, 10.0 }; // (a vessel lost: the flight menu follows)
+	static const double DURATION[4] = { 6.0, 5.0, 9.0, 10.0 }; // (a vessel lost: Esc opens the flight menu as "flight over")
 	std::string t (title ? title : ""), d (detail ? detail : "");
 	LOGOUT ("%s%s%s", t.c_str(), d.empty() ? "" : ": ", d.c_str());
 	for (auto it = g_events.begin(); it != g_events.end(); ++it)

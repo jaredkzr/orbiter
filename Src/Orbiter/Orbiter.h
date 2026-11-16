@@ -179,8 +179,6 @@ public:
 	double AtmWarpLimit () const;
 	static constexpr double ATM_WARP_LIMIT = 10.0;   ///< time acceleration in the air
 	std::string relaunch;                            // (a scenario to launch as the session closes)
-	bool flightOverShown = false;                    // (the focus vessel's loss: the flight menu offered once)
-	double flightOverWait = 0.0;                     // [s] real time the wreck has been shown
 	std::string rootScenario, relaunchRoot;          // (the scenario the player chose; a quicksave of it keeps it)
 	static constexpr double ATM_WARP_DYNP = 1e3;     ///< [Pa] dynamic pressure from which it applies
 	// Lower the time acceleration (Orbiter's clock) to at most warp (a ship-

@@ -5695,7 +5695,7 @@ void Vessel::Destroy (const char *reason)
 		}
 		std::string key = g_pOrbiter->keymap.Label (OAPI_LKEY_DlgSelectVessel);
 		if (other) flightevent::Post (flightevent::DANGER, title, detail, key.c_str(), "Switch to another vessel");
-		else flightevent::Post (flightevent::DANGER, title, detail);
+		else flightevent::Post (flightevent::DANGER, title, detail, "Esc", "Restart, or load a quicksave"); // (the flight menu, as "flight over")
 	}
 }
 

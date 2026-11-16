@@ -4,7 +4,9 @@
 // =======================================================================
 // The flight menu (Esc): the simulation pauses and a menu opens over the
 // view: resume, save, quick save, settings, help, quit to the launchpad,
-// exit.
+// exit. With the focus vessel lost it opens as "flight over" (restart,
+// load the latest quicksave, switch vessel, keep watching) - only on Esc:
+// a crash doesn't pause the simulation, the wreck plays on
 // =======================================================================
 
 #ifndef __DLGFLIGHTMENU_H
@@ -18,9 +20,6 @@ public:
 	DlgFlightMenu ();
 	/// Open the menu (pausing), or close it (resuming as before)
 	void Toggle ();
-	/// The focus vessel was lost: the menu opens as "flight over" - restart,
-	/// load the latest quicksave, switch to another vessel, or keep watching
-	void FlightOver (const std::string &vessel, const std::string &reason);
 	void Display () override;
 	void OnDraw () override {}
 	void OnClose () override;
