@@ -23,7 +23,7 @@ namespace {
 	/// as loud as itself at BODY_SCALE (Tests/Audio.ContactVoices.cpp)
 	constexpr float BODY_SCALE = 0.025f;
 	/// The beds in the cabin: the rolling a rumble, the brakes' groan
-	constexpr float STRUCT_BED_CUTOFF[ContactVoices::BEDS] = {400.0f, 900.0f, 600.0f};
+	constexpr float STRUCT_BED_CUTOFF[ContactVoices::BEDS] = {400.0f, 900.0f, 600.0f, 5000.0f, 5000.0f};
 	/// The beds' easing [s]: up, down; their rate's
 	constexpr float BED_UP = 0.1f, BED_DOWN = 0.15f, BED_RATE_T = 0.2f;
 	/// A bed going to nothing is silent (its grains stop) this far under the
@@ -84,8 +84,8 @@ void ContactVoices::SetBed (int bed, float gain, float rate, float cutoff)
 
 bool ContactVoices::Fire (const OneShot &s, float delay)
 {
-	if (s.kind < IMPACT || s.kind > CRASH || !s.ref) return true;   // (not one of ours: taken, nothing played)
-	return starts.Push ({(const Clip*)s.ref, s.v[0], s.v[1], s.v[2], s.v[3], std::max (delay, 0.0f), std::max (s.v[4], 0.0f)});
+	if (s.kind < IMPACT || s.kind > THUD || !s.ref) return true;   // (not one of ours: taken, nothing played)
+	return starts.Push ({(const Clip*)s.ref, s.v[0], s.v[1], s.v[2], s.v[3], std::max (delay, 0.0f), std::max (s.v[4], 0.0f), Clear (s.kind)});
 }
 
 void ContactVoices::SetModes ()
@@ -123,6 +123,7 @@ void ContactVoices::Begin (const Start &s)
 	v->send = std::clamp (s.send, 0.0f, 1.0f);
 	v->wait = (unsigned)(s.delay * rate);
 	v->len = s.len > 0.0f ? std::max (1u, (unsigned)(s.len * rate)) : 0u;
+	v->clear = s.clear;
 	v->lp.SetCutoff (std::max (s.cutoff, 20.0f), rate);
 }
 
@@ -204,7 +205,7 @@ void ContactVoices::Render (float *out, unsigned n, float dop)
 	int on = 0;
 	for (auto &v : voices) if (v.clip) on++;
 	for (unsigned i = 0; i < n; i++) {
-		float y = 0.0f, x = 0.0f;
+		float y = 0.0f, x = 0.0f, yc = 0.0f;   // (yc: not dulled - the mechanisms)
 		if (on) {
 			for (auto &v : voices) {
 				if (!v.clip) continue;
@@ -218,7 +219,7 @@ void ContactVoices::Render (float *out, unsigned n, float dop)
 					if (v.played >= fadeAt) s *= (float)(v.len - v.played) / (float)(v.len - fadeAt);
 					v.played++;
 				}
-				y += s, x += s * v.send;
+				(v.clear ? yc : y) += s, x += s * v.send;
 				v.pos += v.rate * dop;
 				if (v.pos >= (double)(v.clip->frames - 1) || (v.len && v.played >= v.len)) v.clip = nullptr, on--;
 			}
@@ -243,7 +244,7 @@ void ContactVoices::Render (float *out, unsigned n, float dop)
 				bed += v;
 			}
 		}
-		out[i] = direct * (dulled ? dull.Lp (y) : y) + body * b + bed;
+		out[i] = direct * ((dulled ? dull.Lp (y) : y) + yc) + body * b + bed;
 	}
 	for (int k = 0; k < BEDS; k++) bedNow[k].store (beds[k].gain, std::memory_order_relaxed);
 	playing.store (on, std::memory_order_relaxed);

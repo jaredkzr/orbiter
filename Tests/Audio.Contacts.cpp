@@ -335,3 +335,101 @@ TEST_CASE ("Contacts: a crash - its take, tears over 0.3 s, the clatter; the ene
 	CHECK (parts[0].energy > parts[1].energy);   // (the crash's take: most of it)
 	CHECK (CrashFor (0.0, 1e4, 0.5, 0.5).empty ());
 }
+
+// ---- stage 4: docking's mechanisms, the animations' motors -----------------------
+
+TEST_CASE ("Docking's timeline: the blow, the latch, the hooks rippling, the seal", "[contacts]")
+{
+	for (uint32_t seed : {1u, 2u, 3u, 77u}) {
+		Uniforms u (seed);
+		const auto tl = DockTimeline (0.2, 1.2e4, u);
+		REQUIRE (tl.size () >= 1 + 1 + DOCK_HOOKS[0] + 1);
+		CHECK (tl.front ().what == MechShot::BLOW);
+		CHECK (tl.front ().t == 0.0);
+		CHECK_THAT (tl.front ().level, WithinRel (MECH_ETA * 0.5 * 1.2e4 * 0.04, 1e-9));
+		CHECK (tl[1].what == MechShot::LATCH);
+		CHECK ((tl[1].t >= DOCK_LATCH_T[0] && tl[1].t <= DOCK_LATCH_T[1]));
+		CHECK (tl[1].level == LATCH_P);
+		// the hooks: one after another, HOOK_GAP apart, from HOOK_AFTER after the latch
+		std::vector<double> hooks;
+		for (const auto &s : tl) if (s.what == MechShot::HOOK) hooks.push_back (s.t);
+		CHECK (((int)hooks.size () >= DOCK_HOOKS[0] && (int)hooks.size () <= DOCK_HOOKS[1]));
+		CHECK_THAT (hooks[0], WithinRel (tl[1].t + HOOK_AFTER, 1e-9));
+		for (size_t i = 1; i < hooks.size (); i++) CHECK ((hooks[i] - hooks[i - 1] >= HOOK_GAP[0] - 1e-9 && hooks[i] - hooks[i - 1] <= HOOK_GAP[1] + 1e-9));
+		// the seal last, after the hooks, within about 2 s of the contact
+		CHECK (tl.back ().what == MechShot::SEAL);
+		CHECK (tl.back ().t > hooks.back ());
+		CHECK (tl.back ().t <= DOCK_SEAL_T[1] + 0.06);
+		for (size_t i = 1; i < tl.size (); i++) CHECK (tl[i].t >= tl[i - 1].t);
+	}
+	// repeatable by its seed, another seed another ripple
+	Uniforms a (5), b (5), c (6);
+	const auto ta = DockTimeline (0.2, 1e4, a), tb = DockTimeline (0.2, 1e4, b), tc = DockTimeline (0.2, 1e4, c);
+	REQUIRE (ta.size () == tb.size ());
+	for (size_t i = 0; i < ta.size (); i++) CHECK (ta[i].t == tb[i].t);
+	bool differ = ta.size () != tc.size ();
+	for (size_t i = 0; !differ && i < ta.size (); i++) differ = ta[i].t != tc[i].t;
+	CHECK (differ);
+}
+
+TEST_CASE ("Undocking's timeline: the release, fewer hooks opening, the push-off", "[contacts]")
+{
+	Uniforms u (9);
+	const auto tl = UndockTimeline (0.15, 1.2e4, u);
+	REQUIRE (tl.size () >= 1 + UNDOCK_HOOKS[0] + 1);
+	CHECK (tl.front ().what == MechShot::RELEASE);
+	CHECK (tl.front ().t == 0.0);
+	int hooks = 0;
+	for (const auto &s : tl) hooks += s.what == MechShot::HOOK;
+	CHECK ((hooks >= UNDOCK_HOOKS[0] && hooks <= UNDOCK_HOOKS[1]));
+	CHECK (tl.back ().what == MechShot::PUSH);
+	CHECK (tl.back ().t > tl[tl.size () - 2].t);
+	CHECK_THAT (tl.back ().level, WithinRel (MECH_ETA * 0.5 * 0.6e4 * 0.0225, 1e-9));
+}
+
+TEST_CASE ("A motor's moments: starting, stopping at an end, stopping on the way", "[contacts]")
+{
+	MotorTrack m;
+	const double dt = 0.02;
+	double t = 0.0, s = 0.0;
+	CHECK (m.Step (t, dt, s) == MotorTrack::NONE);            // (the first: nothing to compare)
+	CHECK (m.Step (t += dt, dt, s) == MotorTrack::NONE);      // (still)
+	CHECK_FALSE (m.Moving ());
+	// opening at 0.1 a second: started, then running
+	CHECK (m.Step (t += dt, dt, s += 0.002) == MotorTrack::START);
+	CHECK (m.Moving ());
+	CHECK_THAT (m.Speed (), WithinRel (0.1, 1e-6));
+	while (s < 1.0 - 1e-9) { s = std::min (1.0, s + 0.002); CHECK (m.Step (t += dt, dt, s) == MotorTrack::NONE); }
+	// there: stopped at its end
+	CHECK (m.Step (t += dt, dt, s) == MotorTrack::END);
+	CHECK_FALSE (m.Moving ());
+	// closing, turned back half way (still moving: no stop), then halted half way: stopped on the way
+	CHECK (m.Step (t += dt, dt, s -= 0.002) == MotorTrack::START);
+	while (s > 0.5) CHECK (m.Step (t += dt, dt, s -= 0.002) == MotorTrack::NONE);
+	CHECK (m.Step (t += dt, dt, s += 0.002) == MotorTrack::NONE);
+	CHECK (m.Step (t += dt, dt, s) == MotorTrack::STOP);
+	// at an end within MOTOR_END: an end
+	MotorTrack n;
+	n.Step (0.0, dt, 0.5);
+	n.Step (dt, dt, 0.995);
+	CHECK (n.Step (2 * dt, dt, 0.995) == MotorTrack::END);
+}
+
+TEST_CASE ("A motor heard: louder by kind and level, a little higher faster, wobbling", "[contacts]")
+{
+	const MotorSound servo = MotorFor (0, 1.0, 0.25, 0.0, 0.0), door = MotorFor (1, 1.0, 0.25, 0.0, 0.0), gear = MotorFor (2, 1.0, 0.25, 0.0, 0.0);
+	CHECK (servo.p < door.p);
+	CHECK (door.p < gear.p);
+	CHECK_THAT (MotorFor (1, 0.5, 0.25, 0.0, 0.0).p, WithinRel (0.5 * door.p, 1e-9));
+	for (double p : {servo.p, door.p, gear.p}) CHECK ((p >= 0.03 && p <= 0.1));   // (the design's range)
+	// faster: higher, within +-MOTOR_PITCH (and the wobble)
+	CHECK (MotorFor (1, 1.0, 0.05, 0.0, 0.0).rate < MotorFor (1, 1.0, 0.2, 0.0, 0.0).rate);
+	for (double t = 0.0; t < 5.0; t += 0.1) {
+		const double r = MotorFor (1, 1.0, 0.1, t, 0.3).rate;
+		CHECK ((r >= MOTOR_RATE[1] * (1 - MOTOR_PITCH) * (1 - MOTOR_WOBBLE) - 1e-9 && r <= MOTOR_RATE[1] * (1 + MOTOR_PITCH) * (1 + MOTOR_WOBBLE) + 1e-9));
+	}
+	CHECK (MotorFor (1, 1.0, 0.1, 0.0, 0.0).rate != MotorFor (1, 1.0, 0.1, 0.7, 0.0).rate);   // (wobbling)
+	// the gear lower than a door, a servo higher
+	CHECK (gear.rate < door.rate);
+	CHECK (door.rate < servo.rate);
+}

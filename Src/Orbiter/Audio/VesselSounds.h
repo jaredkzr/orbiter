@@ -28,6 +28,7 @@
 #define __VESSELSOUNDS_H
 
 #include "Contacts.h"
+#include "ContactVoices.h"
 #include "SampleBank.h"
 #include "World.h"
 #include <algorithm>
@@ -133,10 +134,14 @@ private:
 		EmitterId contactAir, contactStruct;
 		double contactRef = 3.0;   // the air one's reference distance [m]
 		Chirps chirps;             // (which wheels' touchdowns chirp)
-		bool bedTakes[3] = {};     // (its beds' takes given: rolling, braking, scraping)
+		bool bedTakes[ContactVoices::BEDS] = {}; // (its beds' takes given: rolling, braking, scraping, the motors)
+		float motorAir[4] = {}, motorCab[4] = {}; // (stage 4: the two motor beds' gain, rate - outside, in the cabin)
+		int motorSlot[2] = {-1, -1};   // (the animations playing in them: their animation's index; -1 none)
+		Uniforms mechRng{1};       // (the mechanisms' timelines' spread)
 		ScrapeBurst scrapeBurst;   // (a scrape's first bite)
 		double bedPushT = -1e9;    // [s] its beds' levels last pushed
 		double bedLogT = -1e9;     // [s] (ORBITER_AUDIO_LOG states) last logged
+		double motorLogT = -1e9;   // [s] (... the motors')
 		double lastRattle = -1e9, rattleA = 0.0, lastContactT = -1e9;
 		double peakA = 0.0, peakT = 0.0;   // (the cabin's rattle: this blow's peak deceleration, when)
 		bool rattleOn = false, rattleFired = false;
@@ -149,7 +154,8 @@ private:
 	};
 	PerVessel *Find (const Vessel *v);
 
-	struct AnimSound { unsigned anim; int kind; float level; double last = -1.0; bool moving = false; };
+	struct AnimSound { unsigned anim; int kind; float level; double last = -1.0; bool moving = false;
+		MotorTrack track; double phase = 0.0; };   // (stage 4: its motor's moments; its wobble's phase)
 	/// A vessel's configuration: from its class's file, then the API
 	struct VesselConfig { BodyRef ref; Tune tune; std::vector<AnimSound> anims; bool on[NSOUND] = {true, true, true, true}; };
 	VesselConfig &Config (const Vessel *v);
@@ -166,6 +172,15 @@ private:
 	/// Its contacts' beds (rolling, braking, scraping: ContactVoices) as heard
 	/// now; their takes given once there; silence pushed when it has no contacts
 	void UpdateContactBeds (PerVessel &pv);
+	/// (stage 4) Its animations' motors: started, running (the two motor
+	/// beds), stopped at an end (the lock, the gear's thud, a door's seal)
+	void UpdateMotors (PerVessel &pv, VesselConfig &cfg);
+	/// (stage 4) A take of a layer at a fixed level in the cabin p [Pa] (its
+	/// RMS), on its structure's emitter, and airShare of it outside
+	bool PlayFixed (PerVessel &pv, const char *layer, int tier, double p, double airShare, int kind, double tAt, float rate, float cutoff, const V3 &pos);
+	/// (stage 4) A blow of a layer by its energy of sound E [J] at a strength
+	/// 0..1 (its tier), on both of its emitters
+	bool PlayBlow (PerVessel &pv, const char *layer, double strength, double E, int kind, double tAt, const V3 &pos);
 	/// Sounds that outlive their vessel (a part torn off, a crash): their own
 	/// ContactVoices on the planet, where it happened - the travel time, the
 	/// air, as any; removed once surely heard out

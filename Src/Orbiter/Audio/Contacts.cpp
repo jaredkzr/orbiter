@@ -231,3 +231,68 @@ std::vector<Chirp> Chirps::Step (double t, const std::vector<ContactSample> &pts
 }
 
 } // namespace audio
+
+namespace audio {
+
+std::vector<MechShot> DockTimeline (double speed, double mred, Uniforms &u)
+{
+	std::vector<MechShot> out;
+	auto between = [&](const double r[2]) { return r[0] + (r[1] - r[0]) * u (); };
+	auto vary = [&]() { return 0.94 + 0.12 * u (); };
+	// the ports meeting
+	out.push_back ({MechShot::BLOW, 0.0, MECH_ETA * 0.5 * std::max (mred, 0.0) * speed * speed, 1.0});
+	// captured; the hooks closing one after another; sealed
+	const double tl = between (DOCK_LATCH_T);
+	out.push_back ({MechShot::LATCH, tl, LATCH_P, vary ()});
+	const int n = DOCK_HOOKS[0] + (int)(u () * (DOCK_HOOKS[1] - DOCK_HOOKS[0] + 1) * 0.999);
+	double t = tl + HOOK_AFTER;
+	for (int i = 0; i < n; i++) {
+		out.push_back ({MechShot::HOOK, t, HOOK_P * (0.8 + 0.4 * u ()), vary ()});
+		if (i < n - 1) t += between (HOOK_GAP);
+	}
+	const double ts = std::clamp (t + SEAL_AFTER, DOCK_SEAL_T[0], DOCK_SEAL_T[1]);
+	out.push_back ({MechShot::SEAL, std::max (ts, t + 0.05), SEAL_P, vary ()});
+	return out;
+}
+
+std::vector<MechShot> UndockTimeline (double speed, double mass, Uniforms &u)
+{
+	std::vector<MechShot> out;
+	auto between = [&](const double r[2]) { return r[0] + (r[1] - r[0]) * u (); };
+	auto vary = [&]() { return 0.94 + 0.12 * u (); };
+	out.push_back ({MechShot::RELEASE, 0.0, RELEASE_P, vary ()});
+	const int n = UNDOCK_HOOKS[0] + (int)(u () * (UNDOCK_HOOKS[1] - UNDOCK_HOOKS[0] + 1) * 0.999);
+	double t = HOOK_AFTER;
+	for (int i = 0; i < n; i++) {
+		out.push_back ({MechShot::HOOK, t, HOOK_P * (0.7 + 0.3 * u ()), vary ()});
+		if (i < n - 1) t += between (HOOK_GAP);
+	}
+	out.push_back ({MechShot::PUSH, t + PUSH_AFTER, MECH_ETA * 0.5 * (0.5 * std::max (mass, 0.0)) * speed * speed, 1.0});
+	return out;
+}
+
+MotorTrack::Event MotorTrack::Step (double t, double dt, double state)
+{
+	Event e = NONE;
+	if (last >= 0.0 && dt > 0.0) {
+		speed = std::fabs (state - last) / dt;
+		const bool now = speed > MOVING;
+		if (now && !moving) e = START, startT = t;
+		else if (!now && moving) e = (state < MOTOR_END || state > 1.0 - MOTOR_END) ? END : STOP;
+		moving = now;
+	}
+	last = state;
+	return e;
+}
+
+MotorSound MotorFor (int kind, double level, double speed, double t, double phase)
+{
+	MotorSound m;
+	const int k = std::clamp (kind, 0, 2);
+	m.p = MOTOR_P[k] * std::max (level, 0.0);
+	const double s = std::clamp (speed / MOTOR_SPEED_REF, 0.0, 1.0);   // (slower: lower - a start's run-up too)
+	m.rate = MOTOR_RATE[k] * (1.0 - MOTOR_PITCH + 2.0 * MOTOR_PITCH * s) * (1.0 + MOTOR_WOBBLE * std::sin (2.0 * 3.14159265358979 * MOTOR_WOBBLE_HZ * t + phase));
+	return m;
+}
+
+} // namespace audio

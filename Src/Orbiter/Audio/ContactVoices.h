@@ -25,6 +25,9 @@
 // rumble (below 400 Hz), the brakes below 900 Hz. Stage 3: SCRAPE, the hull
 // grinding on the ground - its brightness a low-pass set with it (SetBed's
 // cutoff, eased), in the cabin below 600 Hz (the grind through the hull).
+// Stage 4: MOTOR_A, MOTOR_B, two animations' motors at once (looped
+// recordings), in the cabin below 5 kHz; the mechanisms' one-shots (LATCH,
+// HOOK, RELEASE, SEAL, LOCK) in the cabin as they are.
 //
 // The one-shots come from the simulation thread (Fire: an emitter releases
 // them when their sound arrives), in order, each once; nothing is
@@ -44,9 +47,13 @@ public:
 	enum Profile { AIR = 0, STRUCTURE = 1 };
 	/// One-shots' kinds (the design's layers): the blow, the strut, the
 	/// cabin's rattle
-	enum Kind { IMPACT = 1, STRUT = 2, RATTLE = 3, CHIRP = 4, TEAR = 5, CLATTER = 6, CRASH = 7 };
+	enum Kind { IMPACT = 1, STRUT = 2, RATTLE = 3, CHIRP = 4, TEAR = 5, CLATTER = 6, CRASH = 7,
+		LATCH = 8, HOOK = 9, RELEASE = 10, SEAL = 11, LOCK = 12, THUD = 13 };
+	/// The mechanisms' (stage 4): in the cabin as they are, not dulled - the
+	/// main signal there (the blows come through the hull, dulled)
+	static bool Clear (int kind) { return kind >= LATCH && kind <= LOCK; }
 	static constexpr int VOICES = 16, MODES = 12;
-	enum Bed { ROLL = 0, BRAKE = 1, SCRAPE = 2, BEDS = 3 };
+	enum Bed { ROLL = 0, BRAKE = 1, SCRAPE = 2, MOTOR_A = 3, MOTOR_B = 4, BEDS = 5 };
 	static constexpr float GRAIN_MIN = 0.35f, GRAIN_MAX = 0.8f, GRAIN_XFADE = 0.06f;   // [s]
 
 	/// size: the vessel's [m] (its body's modes); seed: their spread
@@ -83,7 +90,7 @@ protected:
 private:
 	ContactVoices (Profile p, double size, uint32_t seed);
 	Profile profile;
-	struct Start { const Clip *clip; float gain, rate, cutoff, send, delay, len; };
+	struct Start { const Clip *clip; float gain, rate, cutoff, send, delay, len; bool clear; };
 	dsp::Events<Start, 64> starts;
 	std::atomic<int> playing{0};
 	float modeF[MODES] = {}, modeTau[MODES] = {}, modeAmp[MODES] = {};
@@ -96,6 +103,7 @@ private:
 		float rate = 1.0f, gain = 0.0f, send = 0.0f;
 		unsigned wait = 0;     // [samples] before it starts
 		unsigned len = 0, played = 0;   // [samples] to play (0: all), played
+		bool clear = false;             // (STRUCTURE: not dulled - a mechanism)
 		dsp::OnePole lp;
 	};
 	// the beds

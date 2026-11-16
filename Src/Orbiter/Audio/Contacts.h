@@ -27,6 +27,7 @@
 #define __AUDIOCONTACTS_H
 
 #include "Track.h"
+#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -191,6 +192,79 @@ private:
 	std::map<int, double> seen, chirped;   // (by wheel: last in contact, last chirped)
 	int wheels = 0;
 };
+
+// -----------------------------------------------------------------------
+// Stage 4: docking's and undocking's mechanisms, the animations' motors
+// -----------------------------------------------------------------------
+
+/// Uniform draws in [0, 1) from a seed (the timelines' spread: repeatable)
+struct Uniforms {
+	explicit Uniforms (uint32_t seed): s (seed * 2654435761u + 0x9e3779b9u) {}
+	double operator() () { s = s * 1664525u + 1013904223u; return (double)(s >> 8) / 16777216.0; }
+	uint32_t s;
+};
+
+/// A mechanism's sound in a timeline: what (its layer), when after the
+/// moment [s], how loud - the blows (BLOW, PUSH) by their energy of sound
+/// [J] (as a hull blow's: ETA_METAL of the docking's, the separation's), the
+/// mechanisms at a fixed level in the cabin [Pa] (heard outside MECH_AIR of
+/// it, at the reference distance) - and its playback rate
+struct MechShot {
+	enum What { BLOW, LATCH, HOOK, RELEASE, SEAL, PUSH };
+	What what;
+	double t = 0.0, level = 0.0, rate = 1.0;
+};
+
+/// Docking (the design's row J, its timeline over 0 to ~2 s): the ports'
+/// blow at once (impact_metal by the docking's energy 1/2 m_red v^2), the
+/// capture latch DOCK_LATCH_T later, a ripple of DOCK_HOOKS hooks closing
+/// HOOK_GAP apart from HOOK_AFTER after it, the seal's thump once they are
+/// in (SEAL_AFTER after the last, within DOCK_SEAL_T of the contact)
+std::vector<MechShot> DockTimeline (double speed, double mred, Uniforms &u);
+/// Undocking: the release at once, UNDOCK_HOOKS hooks opening (the ripple
+/// reversed, fewer) from HOOK_AFTER on, the push-off after them by the
+/// separation's energy (1/2 (m/2) v^2: m the vessel's mass)
+std::vector<MechShot> UndockTimeline (double speed, double mass, Uniforms &u);
+constexpr double LATCH_P = 0.3, HOOK_P = 0.12, RELEASE_P = 0.25, SEAL_P = 0.35;   // [Pa] in the cabin (design: 0.1-0.4)
+constexpr double MECH_AIR = 0.178;      // (outside: -15 dB, at the reference distance; in vacuum nothing)
+constexpr double DOCK_LATCH_T[2] = {0.1, 0.3}, HOOK_AFTER = 0.25, HOOK_GAP[2] = {0.08, 0.16};
+constexpr int DOCK_HOOKS[2] = {4, 8}, UNDOCK_HOOKS[2] = {2, 4};
+constexpr double SEAL_AFTER = 0.25, DOCK_SEAL_T[2] = {1.0, 2.0}, PUSH_AFTER = 0.15;
+constexpr double MECH_ETA = 1e-4;       // (the blows: as a hull's, ETA_METAL)
+
+/// An animation's motor (the design's row K): moving or not, from its state
+/// step to step; the moments - it started; it stopped at an end (within
+/// MOTOR_END of 0 or 1: it closed, locked); it stopped on the way
+class MotorTrack {
+public:
+	enum Event { NONE, START, END, STOP };
+	static constexpr double MOTOR_END = 0.01, MOVING = 1e-4;   // (of its travel; [1/s])
+	/// Its state (0..1) at time t, dt after the last: the moment, if one
+	Event Step (double t, double dt, double state);
+	bool Moving () const { return moving; }
+	double Speed () const { return speed; }   ///< [travels/s]
+	double Since () const { return startT; }  ///< [s] when it started
+private:
+	double last = -1.0, speed = 0.0, startT = -1e9;
+	bool moving = false;
+};
+
+/// A motor heard: its level in the cabin [Pa] and playback rate, for its
+/// kind (0 a motor/servo, 1 a door, 2 the gear: AUDIO_ANIM_* - 1), its
+/// level (the vessel's setting), its speed [travels/s], the time [s] (a
+/// slow wobble; phase: its own). Levels MOTOR_P (design 0.03-0.1 Pa), rates
+/// MOTOR_RATE by kind, +-MOTOR_PITCH with the speed (MOTOR_SPEED_REF: a
+/// travel in 4 s, full), wobbling MOTOR_WOBBLE at MOTOR_WOBBLE_HZ; outside
+/// MOTOR_AIR of it (-20 dB)
+struct MotorSound { double p = 0.0, rate = 1.0; };
+MotorSound MotorFor (int kind, double level, double speed, double t, double phase);
+constexpr double MOTOR_P[3] = {0.04, 0.06, 0.09}, MOTOR_RATE[3] = {1.12, 1.0, 0.9};
+constexpr double MOTOR_PITCH = 0.12, MOTOR_SPEED_REF = 0.25, MOTOR_WOBBLE = 0.02, MOTOR_WOBBLE_HZ = 0.37;
+constexpr double MOTOR_AIR = 0.1;
+/// At an end: the lock (a latch take) LOCK_T after the motor stops, at
+/// LOCK_P by kind [Pa]; the gear's low thud (impact_gear, soft) GEAR_THUD_P,
+/// a door's seal SEAL_DOOR_P after DOOR_SEAL_T
+constexpr double LOCK_T = 0.08, LOCK_P[3] = {0.1, 0.25, 0.3}, GEAR_THUD_P = 0.3, SEAL_DOOR_P = 0.25, DOOR_SEAL_T = 0.12;
 
 class ContactModel {
 public:

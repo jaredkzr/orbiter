@@ -587,6 +587,51 @@ TEST_CASE ("A crash's one-shots on the planet: heard, the vessel's emitter gone 
 	CHECK_THAT (rp->got[1].at, WithinAbs (1.8, dt * 1.01));
 }
 
+TEST_CASE ("ContactVoices: the mechanisms in the cabin as they are, the blows dulled", "[audio][contacts]")
+{
+	Fixture f;
+	auto blow = MakeClip (Blow (11, 0.2, 0.05));
+	auto energy = [&](ContactVoices::Profile p, int kind) {
+		auto v = ContactVoices::Make (f.e, p, 15.0, 2);
+		REQUIRE (v->Fire (ContactVoices::Shot (kind, blow.get (), 1.0f, 1.0f, 20000.0f, 0.0f), 0.0f));
+		return Energy (Render (*v, 0.5));
+	};
+	for (int k : {ContactVoices::LATCH, ContactVoices::HOOK, ContactVoices::RELEASE, ContactVoices::SEAL, ContactVoices::LOCK}) {
+		INFO ("kind " << k);
+		CHECK (ContactVoices::Clear (k));
+		// (outside and in the cabin alike: not dulled)
+		CHECK_THAT (energy (ContactVoices::STRUCTURE, k), WithinRel (energy (ContactVoices::AIR, k), 0.02));
+	}
+	CHECK_FALSE (ContactVoices::Clear (ContactVoices::IMPACT));
+	CHECK_FALSE (ContactVoices::Clear (ContactVoices::THUD));
+	// a blow in the cabin: dulled (the noise's high end gone)
+	CHECK (energy (ContactVoices::STRUCTURE, ContactVoices::IMPACT) < 0.7 * energy (ContactVoices::AIR, ContactVoices::IMPACT));
+}
+
+TEST_CASE ("ContactVoices: two motors' beds at once, each its level; silent stopped", "[audio][contacts]")
+{
+	Fixture f;
+	auto a = MakeClip (Steady (31, 2.5, 3000.0f));
+	const float ga = (float)(1.0 / std::sqrt (Energy (a->pcm) / 2.5));
+	auto v = ContactVoices::Make (f.e, ContactVoices::STRUCTURE, 15.0, 4);
+	REQUIRE (v->SetBedTakes (ContactVoices::MOTOR_A, a.get (), ga));
+	REQUIRE (v->SetBedTakes (ContactVoices::MOTOR_B, a.get (), ga));
+	v->SetBed (ContactVoices::MOTOR_A, 0.05f, 0.95f);
+	auto y1 = Render (*v, 1.5);
+	CHECK_THAT (v->BedLevel (ContactVoices::MOTOR_A), WithinRel (0.05, 0.02));
+	CHECK (v->BedLevel (ContactVoices::MOTOR_B) == 0.0f);
+	v->SetBed (ContactVoices::MOTOR_B, 0.1f, 1.1f);
+	auto y2 = Render (*v, 1.5);
+	CHECK_THAT (v->BedLevel (ContactVoices::MOTOR_B), WithinRel (0.1, 0.02));
+	CHECK (Rms (y2, 24000, y2.size ()) > Rms (y1, 24000, y1.size ()));
+	// stopped: both out, silent
+	v->SetBed (ContactVoices::MOTOR_A, 0.0f, 1.0f), v->SetBed (ContactVoices::MOTOR_B, 0.0f, 1.0f);
+	auto y3 = Render (*v, 2.0);
+	CHECK (v->BedLevel (ContactVoices::MOTOR_A) == 0.0f);
+	CHECK (v->BedLevel (ContactVoices::MOTOR_B) == 0.0f);
+	CHECK (Rms (y3, 48000 + 24000, y3.size ()) == 0.0);
+}
+
 TEST_CASE ("ContactVoices: sixteen at once, the quietest's voice taken", "[audio][contacts]")
 {
 	Fixture f;
@@ -599,7 +644,7 @@ TEST_CASE ("ContactVoices: sixteen at once, the quietest's voice taken", "[audio
 	CHECK (v->Playing () == ContactVoices::VOICES);
 }
 
-TEST_CASE ("ContactVoices: its time per block (16 voices, the three beds)", "[audio][contacts][cpu]")
+TEST_CASE ("ContactVoices: its time per block (16 voices, the five beds)", "[audio][contacts][cpu]")
 {
 	Fixture f;
 	auto v = ContactVoices::Make (f.e, ContactVoices::STRUCTURE, 20.0, 1);
@@ -608,7 +653,9 @@ TEST_CASE ("ContactVoices: its time per block (16 voices, the three beds)", "[au
 	v->SetBedTakes (ContactVoices::ROLL, bed.get (), 1.0f, bed.get (), 1.0f);
 	v->SetBedTakes (ContactVoices::BRAKE, bed.get (), 1.0f);
 	v->SetBedTakes (ContactVoices::SCRAPE, bed.get (), 1.0f, bed.get (), 1.0f);
+	v->SetBedTakes (ContactVoices::MOTOR_A, bed.get (), 1.0f), v->SetBedTakes (ContactVoices::MOTOR_B, bed.get (), 1.0f);
 	v->SetBed (ContactVoices::ROLL, 0.1f, 1.1f), v->SetBed (ContactVoices::BRAKE, 0.1f, 0.9f), v->SetBed (ContactVoices::SCRAPE, 0.1f, 1.2f, 3000.0f);
+	v->SetBed (ContactVoices::MOTOR_A, 0.05f, 0.95f), v->SetBed (ContactVoices::MOTOR_B, 0.05f, 1.05f);
 	for (int i = 0; i < ContactVoices::VOICES; i++)
 		v->Fire (ContactVoices::Shot (ContactVoices::IMPACT, longBlow.get (), 0.05f, 1.0f + 0.01f * i, 4000.0f, 0.5f), 0.0f);
 	std::vector<float> y (480);
@@ -631,7 +678,7 @@ TEST_CASE ("ContactVoices: its time per block (16 voices, the three beds)", "[au
 		double ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count () / 200.0;
 		best = std::min (best, ms);
 	}
-	printf ("ContactVoices: %.4f ms per 480-frame block (16 voices, three beds)\n", best);
+	printf ("ContactVoices: %.4f ms per 480-frame block (16 voices, five beds)\n", best);
 	CHECK (v->Playing () == ContactVoices::VOICES);
 	CHECK (best < 0.15);
 }

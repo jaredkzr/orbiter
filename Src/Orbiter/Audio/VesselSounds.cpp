@@ -71,7 +71,7 @@ namespace {
 	constexpr float CHIRP_CABIN_FC = 1500.0f;
 	/// The beds' parameters as pushed (rolling gain, rate, braking gain, rate,
 	/// scraping gain, rate, its low-pass)
-	using BedParams = Floats<7>;
+	using BedParams = Floats<11>;   // (stage 4: then the two motor beds' gain, rate)
 	/// The scrape in the cabin: this much louder than outside's share (the
 	/// grind carried through the hull; dulled there, ContactVoices)
 	constexpr double SCRAPE_CABIN = 1.6;
@@ -110,7 +110,8 @@ void VesselSounds::Drop (PerVessel &pv)
 	world.Remove (pv.contact), pv.contact = EmitterId ();
 	world.Remove (pv.contactAir), pv.contactAir = EmitterId ();
 	world.Remove (pv.contactStruct), pv.contactStruct = EmitterId ();
-	pv.bedTakes[0] = pv.bedTakes[1] = pv.bedTakes[2] = false;
+	for (bool &b : pv.bedTakes) b = false;
+	pv.motorSlot[0] = pv.motorSlot[1] = -1;
 }
 
 bool VesselSounds::ContactBank ()
@@ -262,6 +263,7 @@ void VesselSounds::Build (PerVessel &pv)
 			d.level = (float)tune.contactLevel;
 			d.name = std::string (pv.v->Name ()) + " contacts";
 			pv.contactAir = world.Add (d, std::move (air));
+			pv.mechRng = Uniforms (seed++);
 			pv.contactStruct = world.Add (StructureEmitter (pv.v, P_FULL * tune.contactLevel, std::string (pv.v->Name ()) + " contacts (structure)"), std::move (st));
 		}
 	}
@@ -386,6 +388,7 @@ void VesselSounds::UpdateVessel (PerVessel &pv)
 		wind->SetHull (p0 > 1e-9 ? (float)(cabin / p0) : 0.0f);
 	}
 	if (Emitter *ca = world.Get (pv.contactAir)) ca->SetLevel (cfg.on[SOUND_CONTACTS] ? (float)tune.contactLevel : 0.0f);
+	if (Dbg ().contactVoices) UpdateMotors (pv, cfg);
 	UpdateContactBeds (pv);
 	if (Emitter *cs = world.Get (pv.contactStruct))
 		cs->SetLevel (cfg.on[SOUND_CONTACTS] ? StructureEmitter (pv.v, P_FULL * tune.contactLevel, "").level : 0.0f);
@@ -498,8 +501,10 @@ void VesselSounds::Contacts (const Vessel *v, const std::vector<ContactSample> &
 		BedParams bp;
 		bp[0] = (float)(b.rollP * k), bp[1] = (float)b.rollRate, bp[2] = (float)(b.brakeP * k), bp[3] = (float)b.brakeRate;
 		bp[4] = (float)(b.scrapeP * burst * k), bp[5] = (float)b.scrapeRate, bp[6] = (float)b.scrapeCutoff;
+		for (int i = 0; i < 4; i++) bp[7 + i] = pv->motorAir[i];
 		ca->Push (t, bp);
 		bp[4] = (float)(bp[4] * SCRAPE_CABIN);
+		for (int i = 0; i < 4; i++) bp[7 + i] = pv->motorCab[i];
 		if (Emitter *cs = world.Get (pv->contactStruct)) cs->Push (t, bp);
 		pv->bedPushT = t;
 	}
@@ -611,8 +616,8 @@ void VesselSounds::UpdateContactBeds (PerVessel &pv)
 	ContactVoices *va = world.Synth<ContactVoices> (pv.contactAir), *vs = world.Synth<ContactVoices> (pv.contactStruct);
 	if (!air || !st || !va || !vs) return;
 	// their takes (two of each, at unit RMS), once there
-	static const char *layer[3] = {"rolling", "brake", "scrape"};
-	for (int b = 0; b < 3; b++) {
+	static const char *layer[ContactVoices::BEDS] = {"rolling", "brake", "scrape", "motor", "motor"};
+	for (int b = 0; b < ContactVoices::BEDS; b++) {
 		if (pv.bedTakes[b]) continue;
 		const Clip *c[2] = {};
 		float g[2] = {1.0f, 1.0f};
@@ -629,18 +634,34 @@ void VesselSounds::UpdateContactBeds (PerVessel &pv)
 	}
 	// (no contacts this while: silence, once)
 	if (now - pv.bedPushT > 0.1) {
-		BedParams z;
+		BedParams z, zc;
 		z[1] = z[3] = z[5] = 1.0f;
+		for (int i = 0; i < 4; i++) z[7 + i] = pv.motorAir[i];
+		zc = z;
+		for (int i = 0; i < 4; i++) zc[7 + i] = pv.motorCab[i];
 		BedParams last;
-		if (!air->Latest (last) || last[0] != 0.0f || last[2] != 0.0f || last[4] != 0.0f) air->Push (now, z), st->Push (now, z);
+		bool same = air->Latest (last);
+		for (int i = 0; i < 11 && same; i++) same = last[i] == z[i];
+		BedParams lastc;
+		bool samec = st->Latest (lastc);
+		for (int i = 0; i < 11 && samec; i++) samec = lastc[i] == zc[i];
+		if (!same || !samec) air->Push (now, z), st->Push (now, zc);
 	}
 	// as heard now (the travel time ago outside; at once in its cabin)
 	const BedParams a = air->Recalled<BedParams> (), s = st->Recalled<BedParams> ();
 	va->SetBed (ContactVoices::ROLL, a[0], a[1]), va->SetBed (ContactVoices::BRAKE, a[2], a[3]);
 	vs->SetBed (ContactVoices::ROLL, s[0], s[1]), vs->SetBed (ContactVoices::BRAKE, s[2], s[3]);
 	va->SetBed (ContactVoices::SCRAPE, a[4], a[5], a[6]), vs->SetBed (ContactVoices::SCRAPE, s[4], s[5], s[6]);
+	va->SetBed (ContactVoices::MOTOR_A, a[7], a[8] > 0.0f ? a[8] : 1.0f), vs->SetBed (ContactVoices::MOTOR_A, s[7], s[8] > 0.0f ? s[8] : 1.0f);
+	va->SetBed (ContactVoices::MOTOR_B, a[9], a[10] > 0.0f ? a[10] : 1.0f), vs->SetBed (ContactVoices::MOTOR_B, s[9], s[10] > 0.0f ? s[10] : 1.0f);
 	// (the log, with the sources' states: twice a second while either sounds - at the reference
 	// distance as wanted, [Pa], and as playing outside, eased, [Pa])
+	if (Dbg ().logStates && (s[7] > 0.0f || s[9] > 0.0f || vs->BedLevel (ContactVoices::MOTOR_A) > 0.0f || vs->BedLevel (ContactVoices::MOTOR_B) > 0.0f) && now - pv.motorLogT >= 0.5) {
+		pv.motorLogT = now;
+		printf ("Audio: t %.2f %s motors in the cabin: %.3g Pa (playing %.3g, rate %.2f), %.3g Pa (playing %.3g, rate %.2f)\n",
+			now, pv.v->Name (), s[7] * P_FULL, vs->BedLevel (ContactVoices::MOTOR_A) * P_FULL, s[8], s[9] * P_FULL, vs->BedLevel (ContactVoices::MOTOR_B) * P_FULL, s[10]);
+		fflush (stdout);
+	}
 	if (Dbg ().logStates && (a[0] > 0.0f || a[2] > 0.0f || a[4] > 0.0f || va->BedLevel (0) > 0.0f || va->BedLevel (1) > 0.0f || va->BedLevel (2) > 0.0f) && now - pv.bedLogT >= 0.5) {
 		pv.bedLogT = now;
 		printf ("Audio: t %.2f %s contact beds: rolling %.3g Pa (playing %.3g, rate %.2f), braking %.3g Pa (playing %.3g, rate %.2f), scraping %.3g Pa (playing %.3g, rate %.2f, below %.0f Hz) at %.0f m\n",
@@ -665,6 +686,49 @@ void VesselSounds::Docked (const Vessel *v, const V3 &port, bool dock, double sp
 	if (dock) pv->contacts.Dock (now, port, speed, mred);
 	else pv->contacts.Undock (now, port, speed);
 	LogContacts (v, pv->contacts);
+	// (stage 4) the mechanisms: docking's blow, the capture latch, the hooks
+	// closing, the seal; undocking's release, the hooks opening, the push-off
+	// - in its cabin (its structure: both vessels' while docked) at fixed
+	// levels, outside less (in vacuum not at all)
+	if (Dbg ().contactVoices && ContactBank ()) {
+		const double t = now;
+		const double m = std::max (v->Mass (), 100.0);
+		const auto tl = dock ? DockTimeline (speed, mred, pv->mechRng) : UndockTimeline (speed, m, pv->mechRng);
+		int n = 0, hooks = 0;
+		double tSeal = -1.0, tHook0 = -1.0, tHook1 = -1.0;
+		for (const MechShot &s : tl) {
+			bool ok = false;
+			switch (s.what) {
+			case MechShot::BLOW:
+				ok = PlayBlow (*pv, "impact_metal", std::clamp (speed / VFULL_VESSEL, 0.0, 1.0), s.level, ContactVoices::IMPACT, t + s.t, port);
+				break;
+			case MechShot::PUSH:
+				ok = PlayBlow (*pv, "impact_metal", 0.0, s.level, ContactVoices::IMPACT, t + s.t, port);
+				break;
+			case MechShot::LATCH:
+				ok = PlayFixed (*pv, "latch", SampleBank::ANY, s.level, MECH_AIR, ContactVoices::LATCH, t + s.t, (float)s.rate, 16000.0f, port);
+				break;
+			case MechShot::HOOK:
+				ok = PlayFixed (*pv, "hook", SampleBank::ANY, s.level, MECH_AIR, ContactVoices::HOOK, t + s.t, (float)s.rate, 16000.0f, port);
+				if (ok) { if (!hooks) tHook0 = s.t; tHook1 = s.t; hooks++; }
+				break;
+			case MechShot::RELEASE:
+				ok = PlayFixed (*pv, "release", SampleBank::ANY, s.level, MECH_AIR, ContactVoices::RELEASE, t + s.t, (float)s.rate, 16000.0f, port);
+				break;
+			case MechShot::SEAL:
+				ok = PlayFixed (*pv, "seal", SampleBank::ANY, s.level, MECH_AIR, ContactVoices::SEAL, t + s.t, (float)s.rate, 16000.0f, port);
+				if (ok) tSeal = s.t;
+				break;
+			}
+			n += ok ? 1 : 0;
+		}
+		if (Dbg ().log > 0) {
+			printf ("Audio: contact of %s: %s heard: %d one-shots, %d hooks", v->Name (), dock ? "docking" : "undocking", n, hooks);
+			if (hooks) printf (" %.2f-%.2f s on", tHook0, tHook1);
+			if (tSeal >= 0.0) printf (", the seal %.2f s on", tSeal);
+			printf ("\n"), fflush (stdout);
+		}
+	}
 	Emitter *contact = world.Get (pv->contact);
 	if (!contact) return;
 	int k = dock ? ContactSynth::DOCK : ContactSynth::UNDOCK;
@@ -672,6 +736,95 @@ void VesselSounds::Docked (const Vessel *v, const V3 &port, bool dock, double sp
 	const bool log = Dbg ().log > 0;
 	if (log) printf ("Audio: %s of %s\n", dock ? "docking" : "undocking", v->Name ()), fflush (stdout);
 	contact->SetOffset (port);
+}
+
+bool VesselSounds::PlayFixed (PerVessel &pv, const char *layer, int tier, double p, double airShare, int kind, double tAt, float rate, float cutoff, const V3 &pos)
+{
+	Emitter *air = world.Get (pv.contactAir), *st = world.Get (pv.contactStruct);
+	if ((!air && !st) || p <= 0.0) return false;
+	SampleBank::Take k = bank.Pick (layer, (SampleBank::Tier)tier);
+	if (!k || k.energy <= 0.0 || !k.clip->frames) return false;
+	// (its RMS over its length the level: p in the cabin, airShare of it outside at the reference distance)
+	const double rms = std::sqrt (k.energy / ((double)k.clip->frames / k.clip->rate));
+	const float g = (float)(p / P_FULL / rms) * k.gain;
+	bool ok = false;
+	if (st) ok = st->Schedule (tAt, ContactVoices::Shot (kind, k.clip.get (), g, k.rate * rate, cutoff, 0.0f)) || ok;
+	if (air && airShare > 0.0) {
+		air->SetOffset (pos);
+		ok = air->Schedule (tAt, ContactVoices::Shot (kind, k.clip.get (), g * (float)airShare, k.rate * rate, cutoff, 0.0f)) || ok;
+	}
+	return ok;
+}
+
+bool VesselSounds::PlayBlow (PerVessel &pv, const char *layer, double strength, double E, int kind, double tAt, const V3 &pos)
+{
+	Emitter *air = world.Get (pv.contactAir), *st = world.Get (pv.contactStruct);
+	if ((!air && !st) || E <= 0.0) return false;
+	const float s = (float)std::clamp (strength, 0.0, 1.0);
+	const float cutoff = (float)(1500.0 * std::pow (8.0, s));   // (as the impacts: 1.5 kHz soft .. 12 kHz hard)
+	const SampleBank::Blend b = SampleBank::ForStrength (s);
+	const double p2 = E * RHO0 * C0 / (4.0 * 3.14159265358979 * pv.contactRef * pv.contactRef);
+	bool ok = false;
+	for (int i = 0; i < 2; i++) {
+		const float share = i ? b.w : 1.0f - b.w;
+		if (share <= 0.05f) continue;
+		SampleBank::Take k = bank.Pick (layer, i ? b.next : b.tier);
+		if (!k || k.energy <= 0.0) continue;
+		const float g = (float)(std::sqrt (p2 * share / k.energy) / P_FULL) * k.gain;
+		const OneShot sh = ContactVoices::Shot (kind, k.clip.get (), g, k.rate, cutoff, 1.0f);
+		if (air) { air->SetOffset (pos); ok = air->Schedule (tAt, sh) || ok; }
+		if (st) ok = st->Schedule (tAt, sh) || ok;
+	}
+	return ok;
+}
+
+void VesselSounds::UpdateMotors (PerVessel &pv, VesselConfig &cfg)
+{
+	for (int i = 0; i < 4; i++) pv.motorAir[i] = pv.motorCab[i] = (i % 2) ? 1.0f : 0.0f;
+	VESSEL *vi = pv.v->GetModuleInterface ();
+	if (!vi) return;
+	const double t = now;
+	static const char *kindName[4] = {"", "motor", "door", "gear"};
+	// the moments: started; stopped at an end (the lock, the gear's thud, a door's seal); stopped on the way
+	for (AnimSound &a : cfg.anims) {
+		if (a.phase == 0.0) a.phase = 6.28318530718 * pv.mechRng () + 1e-3;
+		const MotorTrack::Event e = a.track.Step (t, dtNow, vi->GetAnimation (a.anim));
+		const int k = std::clamp (a.kind - 1, 0, 2);
+		if (e == MotorTrack::END) {
+			PlayFixed (pv, "latch", SampleBank::ANY, LOCK_P[k] * a.level, MECH_AIR, ContactVoices::LOCK, t + LOCK_T, 1.0f, 16000.0f, V3 ());
+			if (a.kind == ANIM_GEAR) PlayFixed (pv, "impact_gear", SampleBank::SOFT, GEAR_THUD_P * a.level, MECH_AIR, ContactVoices::THUD, t + LOCK_T, 1.0f, 4000.0f, V3 ());
+			if (a.kind == ANIM_DOOR) PlayFixed (pv, "seal", SampleBank::ANY, SEAL_DOOR_P * a.level, MECH_AIR, ContactVoices::SEAL, t + DOOR_SEAL_T, 1.0f, 16000.0f, V3 ());
+		}
+		if (e != MotorTrack::NONE && Dbg ().log > 0)
+			printf ("Audio: motor of %s: animation %u (%s) %s at %.3f s\n", pv.v->Name (), a.anim, kindName[std::clamp (a.kind, 0, 3)],
+				e == MotorTrack::START ? "starts" : e == MotorTrack::END ? "stops at its end" : "stops on the way", t), fflush (stdout);
+	}
+	// the two beds: one playing keeps its animation while it moves; a free one
+	// takes the moving one first by kind (gear, door, motor), then level
+	auto find = [&](int anim) -> AnimSound * {
+		for (AnimSound &a : cfg.anims) if ((int)a.anim == anim) return &a;
+		return nullptr;
+	};
+	for (int &s : pv.motorSlot) {
+		AnimSound *a = s >= 0 ? find (s) : nullptr;
+		if (!a || !a->track.Moving ()) s = -1;
+	}
+	for (int s = 0; s < 2; s++) {
+		if (pv.motorSlot[s] >= 0) continue;
+		AnimSound *best = nullptr;
+		for (AnimSound &a : cfg.anims) {
+			if (!a.track.Moving () || (int)a.anim == pv.motorSlot[1 - s]) continue;
+			if (!best || a.kind > best->kind || (a.kind == best->kind && a.level > best->level)) best = &a;
+		}
+		if (best) pv.motorSlot[s] = (int)best->anim;
+	}
+	for (int s = 0; s < 2; s++) {
+		AnimSound *a = pv.motorSlot[s] >= 0 ? find (pv.motorSlot[s]) : nullptr;
+		if (!a) continue;
+		const MotorSound ms = MotorFor (a->kind - 1, a->level, a->track.Speed (), t, a->phase);
+		pv.motorCab[2 * s] = (float)(ms.p / P_FULL), pv.motorCab[2 * s + 1] = (float)ms.rate;
+		pv.motorAir[2 * s] = (float)(ms.p * MOTOR_AIR / P_FULL), pv.motorAir[2 * s + 1] = (float)ms.rate;
+	}
 }
 
 Emitter *VesselSounds::Detach (PerVessel &pv, const V3 &pos, double dur, const char *what)
