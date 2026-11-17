@@ -1358,6 +1358,9 @@ protected:
 	void SoundContacts (const std::vector<contact::Point> &pts, int index, double h, const std::vector<contact::Body> *pre) const;
 	/// The ground under it, as it sounds (paved, regolith, soil)
 	audio::SurfaceKind ContactSurface () const;
+	/// what the ground is at a point of its proxy planet (paved, regolith,
+	/// or by the surface texture: soil, rock, snow, water)
+	static audio::SurfaceKind SurfaceAt (const Planet *pl, double lng, double lat);
 	void UpdateStructuralLoads ();
 	void KeepImpulse (class Debris *d, const Vector &J);
 	Vector BoundKept (const std::vector<int> &parts, const Vector &dv) const;
@@ -1920,6 +1923,12 @@ private:
 	Vessel *proxyvessel;      // closest vessel
 	SuperVessel *supervessel; // vessel superstructure (docking complex)
 	double touched_t = -1e10;     // [s] its last contact (ground, obstacle, vessel)
+	// (ContactSurface's: where it last looked, what it found - again only
+	// SURFACE_MOVE m on, or on another planet)
+	mutable const Planet *surf_pl = nullptr;
+	mutable double surf_lng = 0.0, surf_lat = 0.0;
+	mutable audio::SurfaceKind surf_kind {};
+	static constexpr double SURFACE_MOVE = 5.0;
 	static constexpr double CRASH_CONTACT_T = 0.5; // [s] destroyed this soon after a contact: a crash
 	Base    *landtgt;         // landing target (base)
 	int   lstatus;            // landing/docking comms status (0=no contact, 1=contact,

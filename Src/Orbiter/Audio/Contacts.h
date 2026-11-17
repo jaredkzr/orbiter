@@ -16,9 +16,14 @@
 //  - and the moments that come from elsewhere: docking (its closing speed,
 //    the vessels' reduced mass), undocking, a part breaking off, a crash
 //
-// The surface under a vessel: paved (a base's runways, graded areas, pads
-// and decks), regolith (an airless body), soil (any other ground, until the
-// surfaces are told apart).
+// The surface under a vessel (Vessel::ContactSurface): paved (a base's
+// runways, graded areas, pads and decks), regolith (an airless body), and
+// on other ground by the planet's surface texture as the ground scatter
+// reads it (SurfaceFromCover): soil (green: grass, meadow, bush, forest
+// floor, farmland), rock (not green: bare, arid, desert - gravelly), snow,
+// water. Each its layers (LayersFor): soil, rock and snow roll and scrape
+// on the ground's own takes, a dirt spray where a tyre would chirp; on
+// regolith a crunch through the structure at every blow.
 //
 // Pure logic (no Orbiter): the tests feed it samples of their own.
 // =======================================================================
@@ -35,10 +40,38 @@
 namespace audio {
 
 enum class ContactKind { WHEEL, LEG, HULL, OBSTACLE, VESSEL };
-enum class SurfaceKind { PAVED, SOIL, REGOLITH, ROCK, SNOW };
+enum class SurfaceKind { PAVED, SOIL, REGOLITH, ROCK, SNOW, WATER };
 
 const char *ContactKindName (ContactKind k);
 const char *SurfaceKindName (SurfaceKind s);
+
+/// The ground's kind from its surface texture's colour (linear 0-1) and the
+/// water mask (0 or 1) at a point - the same rules as the ground scatter's
+/// cover (GroundScatter::CoverFactor): water; snow (bright, grey, not warm); soil
+/// (green); else rock (bare, arid, desert). have: false - no surface tiles
+/// there (soil)
+SurfaceKind SurfaceFromCover (double r, double g, double b, double water, bool have = true);
+/// Whether white ground can be snow there: far from the equator (|lat|
+/// over SNOW_LAT) or high up (over SNOW_ELEV) - a bright flat at low
+/// latitudes and heights is a dry lake's bed, a salt pan, sand, as white
+/// on the surface texture (Rogers Dry Lake: 0.91 0.91 0.94)
+bool SnowLikely (double latDeg, double elev);
+constexpr double SNOW_LAT = 50.0, SNOW_ELEV = 1500.0;   // [deg], [m]
+
+/// What a surface sounds of (layers of Sound/Contacts/contacts.txt; null:
+/// none), each falling back to the paved one where its own is missing
+struct SurfaceLayers {
+	const char *rolling;   ///< the rolling bed
+	const char *scrape;    ///< the scrape bed (hull, legs, obstacles)
+	const char *touch;     ///< a wheel touching down sliding (Chirps): a tyre's chirp, a spray of dirt; null: none
+	const char *blow;      ///< more at a blow on the ground (spray: the hull's; crunch: every one); null: none
+	bool blowGear;         ///< ... also at the wheels' and legs' blows
+	bool blowAir;          ///< ... heard outside too (else through the structure only)
+	double rollGain;       ///< the rolling bed's level, of the paved law's
+};
+SurfaceLayers LayersFor (SurfaceKind s);
+/// the paved layer a surface's own one falls back to (null: none)
+const char *FallbackLayer (const char *layer);
 
 /// A contact point of a vessel over a step (after the contact solver)
 struct ContactSample {

@@ -9,6 +9,8 @@
 --   LV_CRASH=1: a crash (LandingVideoCrash.scn, with ORBITER_DAMAGE=1): no
 --     flare, flown into the runway sinking LV_CRASH_SINK (12 m/s), nose down
 --   LV_TD: where the ground camera stands, past the threshold [m] (1350)
+--   LV_SIDE: the approach that far to the right of the runway's centreline
+--     [m] (0; e.g. 120: down on the grass beside it - the ground's sounds)
 local v = vessel.get_interface("LAND")
 local earth = v:get_surfaceref()
 local earthName = oapi.get_objname(earth)
@@ -20,6 +22,7 @@ local H0, SINK = env("LV_HEIGHT", 35.0), env("LV_SINK", BELLY and 1.0 or 1.3)
 local CRASH_SINK = env("LV_CRASH_SINK", 12.0)
 local VREF, BACK = env("LV_SPEED", 105.0), -200.0   -- [m/s] approach speed, [m] start short of where it stands (the threshold; < 0: past it - over the runway all the way: no terrain under the approach)
 local view = os.getenv("LV_VIEW") or "ground"
+local SIDE = env("LV_SIDE", 0.0)
 LV_ROLL = env("LV_ROLL", 30.0)   -- [s] of the rollout shown (at most: it ends stopped)
 LV_BRAKE = env("LV_BRAKE", 0.2)  -- the brakes' level (full: about 1.3 g - far harder than an airliner's)
 
@@ -40,7 +43,7 @@ local function past()   -- [m] past the threshold (along the runway, roughly: it
 end
 local td = vec.add(gpos(), vec.mul(fwd, env("LV_TD", 1350)))
 if view == "ground" then
-	local e = oapi.global_to_equ(earth, vec.add(td, vec.mul(right, 45)))
+	local e = oapi.global_to_equ(earth, vec.add(td, vec.mul(right, SIDE + 45)))
 	oapi.set_cameramode({mode = 'ground', ref = earthName, lng = math.deg(e.lng), lat = math.deg(e.lat), alt = 2})
 elseif view == "cockpit" then
 	oapi.set_cameramode({mode = 'cockpit'})
@@ -58,7 +61,7 @@ proc.skip()
 local st = v:get_status(2)
 st.status = 0
 st.arot = {x=math.atan2(R.m23, R.m33), y=-math.asin(R.m13), z=math.atan2(R.m12, R.m11)}
-st.rpos = vec.add(st.rpos, vec.add(vec.mul(fwd, -BACK), vec.mul(up, H0)))
+st.rpos = vec.add(st.rpos, vec.add(vec.add(vec.mul(fwd, -BACK), vec.mul(up, H0)), vec.mul(right, SIDE)))
 st.rvel = vec.add(st.rvel, vec.add(vec.mul(fwd, VREF), vec.mul(up, -3.0)))
 st.vrot = {x = 0, y = 0, z = 0}
 v:defset_status(st)

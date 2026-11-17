@@ -19,6 +19,7 @@
 #include "Astro.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -69,6 +70,14 @@ namespace {
 	/// dulled below CHIRP_CABIN_FC (a zip)
 	constexpr double ETA_CHIRP = 3e-6, CHIRP_CABIN = 0.056;   // (-25 dB)
 	constexpr float CHIRP_CABIN_FC = 1500.0f;
+	/// (stage 5) On dirt and gravel: a spray of it where a tyre would chirp,
+	/// ETA_SPRAY of the same friction work (some 5 dB under a chirp: grit
+	/// thrown, not a bark); at the hull's blows on them ETA_SPRAY_BLOW of
+	/// the blow's energy (10 dB under its slam). On regolith the gear's (and
+	/// hull's) crunch at every blow, ETA_CRUNCH of its energy - as loud as
+	/// the gear's own blow - through the structure only (no air)
+	constexpr double ETA_SPRAY = 1e-6, ETA_SPRAY_BLOW = 1e-5, ETA_CRUNCH = 1e-5;
+	constexpr float SPRAY_FC = 12000.0f, CRUNCH_FC = 8000.0f;
 	/// The beds' parameters as pushed (rolling gain, rate, braking gain, rate,
 	/// scraping gain, rate, its low-pass)
 	using BedParams = Floats<11>;   // (stage 4: then the two motor beds' gain, rate)
@@ -491,6 +500,7 @@ void VesselSounds::Contacts (const Vessel *v, const std::vector<ContactSample> &
 	PerVessel *pv = Find (v);
 	if (!pv || pts.empty ()) return;
 	pv->contacts.Step (t, h, pts, surface);
+	pv->surface = surface;
 	PlayContacts (*pv, pts, t);
 	if (Emitter *ca = world.Get (pv->contactAir)) {
 		// the beds: their pressures at 10 m as at the reference distance (spherical)
@@ -499,7 +509,7 @@ void VesselSounds::Contacts (const Vessel *v, const std::vector<ContactSample> &
 		const double k = 10.0 / pv->contactRef / P_FULL;
 		const double burst = pv->scrapeBurst.Step (t, lv.scrapePower + lv.vesselScrape);
 		BedParams bp;
-		bp[0] = (float)(b.rollP * k), bp[1] = (float)b.rollRate, bp[2] = (float)(b.brakeP * k), bp[3] = (float)b.brakeRate;
+		bp[0] = (float)(b.rollP * k * LayersFor (surface).rollGain), bp[1] = (float)b.rollRate, bp[2] = (float)(b.brakeP * k), bp[3] = (float)b.brakeRate;
 		bp[4] = (float)(b.scrapeP * burst * k), bp[5] = (float)b.scrapeRate, bp[6] = (float)b.scrapeCutoff;
 		for (int i = 0; i < 4; i++) bp[7 + i] = pv->motorAir[i];
 		ca->Push (t, bp);
@@ -537,14 +547,16 @@ void VesselSounds::PlayContacts (PerVessel &pv, const std::vector<ContactSample>
 	// a take of a layer at a blow's energy E [J] (eta of it sound), on both:
 	// its gain for the energy at the reference distance (p^2 integrated:
 	// eta E rho c / 4 pi r0^2), its tier's share
-	auto play = [&](int kind, const char *layer, SampleBank::Tier tier, float share, double E, double eta, float cutoff, const V3 &pos, double tAt) {
+	auto play = [&](int kind, const char *layer, SampleBank::Tier tier, float share, double E, double eta, float cutoff, const V3 &pos, double tAt, bool inAir = true) {
 		SampleBank::Take k = bank.Pick (layer, tier);
 		if (!k || k.energy <= 0.0) return;
 		const double p2 = eta * E * RHO0 * C0 / (4.0 * 3.14159265358979 * pv.contactRef * pv.contactRef);
 		const float g = (float)(std::sqrt (p2 * share / k.energy) / P_FULL) * k.gain;
 		const OneShot s = ContactVoices::Shot (kind, k.clip.get (), g, k.rate * rate, cutoff, 1.0f);
-		air->SetOffset (pos);
-		air->Schedule (tAt, s);
+		if (inAir) {
+			air->SetOffset (pos);
+			air->Schedule (tAt, s);
+		}
 		st->Schedule (tAt, s);
 	};
 	for (const ContactEvent &e : pv.contacts.Events ()) {
@@ -559,26 +571,38 @@ void VesselSounds::PlayContacts (PerVessel &pv, const std::vector<ContactSample>
 		play (ContactVoices::IMPACT, layer, b.tier, 1.0f - b.w, e.energy, eta, cutoff, e.pos, e.t);
 		if (b.w > 0.05f) play (ContactVoices::IMPACT, layer, b.next, b.w, e.energy, eta, cutoff, e.pos, e.t);
 		if (gear) play (ContactVoices::STRUT, "strut", SampleBank::ANY, 1.0f, e.energy, ETA_STRUT, 12000.0f, e.pos, e.t);
+		// (stage 5) the ground's own at a blow on it: a spray of dirt at the
+		// hull's, the regolith's crunch at every one (through the structure)
+		const SurfaceLayers L = LayersFor (e.surface);
+		if (L.blow && e.kind != ContactKind::VESSEL && (L.blowGear || !gear))
+			if (const char *bl = Layer (L.blow, false)) {
+				const bool crunch = !L.blowAir;
+				play (ContactVoices::IMPACT, bl, SampleBank::ANY, 1.0f, e.energy, crunch ? ETA_CRUNCH : ETA_SPRAY_BLOW, crunch ? CRUNCH_FC : SPRAY_FC, e.pos, e.t, L.blowAir);
+			}
 	}
 	// the tyres' chirps: a wheel touching down sliding (Chirps), the take
 	// played the spin-up long, its level from the friction's work
+	const SurfaceLayers SL = LayersFor (pv.surface);
+	const char *touch = SL.touch ? Layer (SL.touch) : nullptr;   // (dirt: a spray - or a chirp, none of it there; snow, regolith: nothing)
+	const bool spray = touch && strcmp (touch, "chirp") != 0;
 	for (const Chirp &c : pv.chirps.Step (t, pts, pv.contacts.Events (), m)) {
-		SampleBank::Take k = bank.Pick ("chirp");
+		if (!touch) continue;
+		SampleBank::Take k = bank.Pick (touch);
 		if (!k || k.energy <= 0.0 || !k.clip->frames) continue;
 		const double dur = (double)k.clip->frames / k.clip->rate;
 		const double len = std::min (c.spinUp, dur);
 		const double played = k.energy * (len / dur) * 0.8;   // (the energy played: so much of it, its fade)
-		const double p2 = ETA_CHIRP * c.work * RHO0 * C0 / (4.0 * 3.14159265358979 * pv.contactRef * pv.contactRef);
+		const double p2 = (spray ? ETA_SPRAY : ETA_CHIRP) * c.work * RHO0 * C0 / (4.0 * 3.14159265358979 * pv.contactRef * pv.contactRef);
 		const float g = (float)(std::sqrt (p2 / played) / P_FULL) * k.gain;
 		// (faster: a little higher)
 		const float rate = k.rate * (float)(CHIRP_RATE0 + (CHIRP_RATE1 - CHIRP_RATE0) * std::clamp ((c.speed - 15.0) / (CHIRP_RATE_V - 15.0), 0.0, 1.0));
 		V3 pos;
 		for (const ContactSample &p : pts) if (p.id == c.id) pos = p.pos;
 		air->SetOffset (pos);
-		air->Schedule (c.t, ContactVoices::Shot (ContactVoices::CHIRP, k.clip.get (), g, rate, 16000.0f, 0.0f, (float)len));
+		air->Schedule (c.t, ContactVoices::Shot (ContactVoices::CHIRP, k.clip.get (), g, rate, spray ? SPRAY_FC : 16000.0f, 0.0f, (float)len));
 		st->Schedule (c.t, ContactVoices::Shot (ContactVoices::CHIRP, k.clip.get (), g * (float)CHIRP_CABIN, rate, CHIRP_CABIN_FC, 0.0f, (float)len));
 		if (Dbg ().log > 0)
-			printf ("Audio: contact of %s: chirp wheel %d at %.3f s: %.1f m/s, spin-up %.3f s, %.3g J\n", pv.v->Name (), c.id, c.t, c.speed, c.spinUp, c.work), fflush (stdout);
+			printf ("Audio: contact of %s: %s wheel %d at %.3f s: %.1f m/s, spin-up %.3f s, %.3g J, %s\n", pv.v->Name (), spray ? "spray" : "chirp", c.id, c.t, c.speed, c.spinUp, c.work, SurfaceKindName (pv.surface)), fflush (stdout);
 	}
 	// the cabin's rattle: decelerated over RATTLE_A (the contacts' force
 	// beyond holding its weight up; braking), as loud as log a - of the
@@ -615,10 +639,14 @@ void VesselSounds::UpdateContactBeds (PerVessel &pv)
 	Emitter *air = world.Get (pv.contactAir), *st = world.Get (pv.contactStruct);
 	ContactVoices *va = world.Synth<ContactVoices> (pv.contactAir), *vs = world.Synth<ContactVoices> (pv.contactStruct);
 	if (!air || !st || !va || !vs) return;
-	// their takes (two of each, at unit RMS), once there
-	static const char *layer[ContactVoices::BEDS] = {"rolling", "brake", "scrape", "motor", "motor"};
+	// their takes (two of each, at unit RMS), once there - again when the
+	// ground changes what it rolls and scrapes on (stage 5)
+	const SurfaceLayers SL = LayersFor (pv.surface);
+	const char *layer[ContactVoices::BEDS] = {Layer (SL.rolling), "brake", Layer (SL.scrape), "motor", "motor"};
 	for (int b = 0; b < ContactVoices::BEDS; b++) {
-		if (pv.bedTakes[b]) continue;
+		if (!layer[b]) continue;
+		if (pv.bedTakes[b] && pv.bedLayer[b] == layer[b]) continue;
+		pv.bedTakes[b] = false;
 		const Clip *c[2] = {};
 		float g[2] = {1.0f, 1.0f};
 		int n = 0;
@@ -630,7 +658,7 @@ void VesselSounds::UpdateContactBeds (PerVessel &pv)
 			c[n] = k.clip.get (), g[n] = (float)(1.0 / std::sqrt (k.energy / ((double)k.clip->frames / k.clip->rate))), n++;
 		}
 		if (!n) continue;
-		if (va->SetBedTakes (b, c[0], g[0], c[1], g[1]) && vs->SetBedTakes (b, c[0], g[0], c[1], g[1])) pv.bedTakes[b] = true;
+		if (va->SetBedTakes (b, c[0], g[0], c[1], g[1]) && vs->SetBedTakes (b, c[0], g[0], c[1], g[1])) pv.bedTakes[b] = true, pv.bedLayer[b] = layer[b];
 	}
 	// (no contacts this while: silence, once)
 	if (now - pv.bedPushT > 0.1) {
@@ -669,6 +697,18 @@ void VesselSounds::UpdateContactBeds (PerVessel &pv)
 			a[4] * P_FULL, va->BedLevel (2) * P_FULL, a[5], a[6], pv.contactRef);
 		fflush (stdout);
 	}
+}
+
+const char *VesselSounds::Layer (const char *want, bool fallback)
+{
+	if (!want) return nullptr;
+	if (bank.Count (want) > 0) return want;
+	const char *fb = fallback ? FallbackLayer (want) : nullptr;
+	if (layerNoted.insert (want).second) {
+		if (fb) fprintf (stderr, "Audio: no recordings of %s: %s instead\n", want, fb);
+		else fprintf (stderr, "Audio: no recordings of %s: silent\n", want);
+	}
+	return fb;
 }
 
 void VesselSounds::LogContacts (const Vessel *v, ContactModel &m)

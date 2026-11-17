@@ -28,8 +28,64 @@ const char *SurfaceKindName (SurfaceKind s)
 	case SurfaceKind::REGOLITH: return "regolith";
 	case SurfaceKind::ROCK: return "rock";
 	case SurfaceKind::SNOW: return "snow";
+	case SurfaceKind::WATER: return "water";
 	}
 	return "?";
+}
+
+namespace {
+	double SmoothStep (double e0, double e1, double x)
+	{
+		const double t = std::clamp ((x - e0) / (e1 - e0), 0.0, 1.0);
+		return t * t * (3.0 - 2.0 * t);
+	}
+}
+
+SurfaceKind SurfaceFromCover (double r, double g, double b, double water, bool have)
+{
+	if (!have) return SurfaceKind::SOIL;
+	if (water > 0.5) return SurfaceKind::WATER;
+	const double sum = r + g + b + 1e-3, lum = sum / 3.0, green = g / sum;
+	const double mx = std::max ({r, g, b}), mn = std::min ({r, g, b});
+	const double sat = (mx - mn) / (mx + 1e-3);
+	// (snow: bright, grey - and not warm: a dry lake's bed, a salt flat are as
+	// bright and grey but tan; snow's blue is at least its red)
+	if (SmoothStep (0.55, 0.7, lum) * SmoothStep (0.25, 0.1, sat) > 0.5 && b >= 0.97 * r) return SurfaceKind::SNOW;
+	if (SmoothStep (0.345, 0.385, green) > 0.5) return SurfaceKind::SOIL;
+	return SurfaceKind::ROCK;
+}
+
+bool SnowLikely (double latDeg, double elev)
+{
+	return std::fabs (latDeg) > SNOW_LAT || elev > SNOW_ELEV;
+}
+
+SurfaceLayers LayersFor (SurfaceKind s)
+{
+	switch (s) {
+	case SurfaceKind::SOIL:
+	case SurfaceKind::ROCK:     // (dirt and gravel: rolling and scraping on them, a spray of it at touchdown and at the hull's blows)
+		return {"rolling_soil", "scrape_soil", "spray", "spray", false, true, 1.0};
+	case SurfaceKind::SNOW:     // (packed snow: the ground's rolling, no chirp - a tyre doesn't bark on snow - nor spray)
+		return {"rolling_soil", "scrape_soil", nullptr, nullptr, false, true, 1.0};
+	case SurfaceKind::REGOLITH: // (no air: heard through the structure only - the gear's crunch at every blow, a quieter rolling)
+		return {"rolling_soil", "scrape_soil", nullptr, "crunch", true, false, 0.5};
+	case SurfaceKind::WATER:    // (the splash is VesselWater's: nothing of the ground's)
+		return {"rolling_soil", "scrape_soil", nullptr, nullptr, false, true, 1.0};
+	case SurfaceKind::PAVED:
+	default:
+		return {"rolling", "scrape", "chirp", nullptr, false, true, 1.0};
+	}
+}
+
+const char *FallbackLayer (const char *layer)
+{
+	if (!layer) return nullptr;
+	const std::string l (layer);
+	if (l == "rolling_soil") return "rolling";
+	if (l == "scrape_soil") return "scrape";
+	if (l == "spray") return "chirp";
+	return nullptr;   // (crunch: none - silent)
 }
 
 std::string Describe (const ContactEvent &e)

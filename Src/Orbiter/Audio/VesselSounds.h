@@ -34,6 +34,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <set>
 #include <memory>
 #include <string>
 #include <vector>
@@ -134,6 +135,8 @@ private:
 		EmitterId contactAir, contactStruct;
 		double contactRef = 3.0;   // the air one's reference distance [m]
 		Chirps chirps;             // (which wheels' touchdowns chirp)
+		SurfaceKind surface = SurfaceKind::PAVED; // (stage 5) the ground it touches now
+		std::string bedLayer[ContactVoices::BEDS]; // (the layers its beds' takes are of: by the surface)
 		bool bedTakes[ContactVoices::BEDS] = {}; // (its beds' takes given: rolling, braking, scraping, the motors)
 		float motorAir[4] = {}, motorCab[4] = {}; // (stage 4: the two motor beds' gain, rate - outside, in the cabin)
 		int motorSlot[2] = {-1, -1};   // (the animations playing in them: their animation's index; -1 none)
@@ -153,6 +156,11 @@ private:
 		bool seen = false;
 	};
 	PerVessel *Find (const Vessel *v);
+	/// (stage 5) A surface's layer if there are takes of it, else its paved
+	/// one (FallbackLayer; fallback false: none) - each missing once noted;
+	/// null: neither
+	const char *Layer (const char *want, bool fallback = true);
+	std::set<std::string> layerNoted;
 
 	struct AnimSound { unsigned anim; int kind; float level; double last = -1.0; bool moving = false;
 		MotorTrack track; double phase = 0.0; };   // (stage 4: its motor's moments; its wobble's phase)

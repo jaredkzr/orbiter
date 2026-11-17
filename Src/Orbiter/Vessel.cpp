@@ -44,6 +44,7 @@
 #include "Util.h"
 #include "elevmgr.h"
 #include "GroundScatter.h"
+#include "ProcTerrain.h"
 #include "Cities.h"
 #include "Debris.h"
 #include "Replay.h"
@@ -5216,18 +5217,51 @@ void Vessel::SoundContacts (const std::vector<contact::Point> &pts, int index, d
 
 audio::SurfaceKind Vessel::ContactSurface () const
 {
-	// (a base's pads, decks and graded ground first: a pad on the Moon is
-	// paved too; then the bare ground - an airless body's is regolith)
 	const Planet *pl = proxyplanet;
 	if (!pl) return audio::SurfaceKind::ROCK;
 	double lng, lat, rad;
 	pl->GlobalToEquatorial (s0->pos, lng, lat, rad);
+	// (the same as a step or two ago, unless it moved a few metres)
+	if (pl == surf_pl) {
+		double dlng = lng - surf_lng;
+		if (dlng > Pi) dlng -= Pi2; else if (dlng < -Pi) dlng += Pi2;
+		if (pl->Size () * std::hypot (lat - surf_lat, dlng * cos (lat)) < SURFACE_MOVE) return surf_kind;
+	}
+	surf_pl = pl, surf_lng = lng, surf_lat = lat;
+	return surf_kind = SurfaceAt (pl, lng, lat);
+}
+
+audio::SurfaceKind Vessel::SurfaceAt (const Planet *pl, double lng, double lat)
+{
+	// (a base's pads, decks and graded ground first: a pad on the Moon is
+	// paved too; then the bare ground - an airless body's is regolith)
 	if (const ElevationManager *emgr = pl->ElevMgr ())
 		if (emgr->DeckElevation (lat, lng) > -1e9 || emgr->DryLand (lat, lng)) return audio::SurfaceKind::PAVED;
 	for (DWORD i = 0; i < pl->nBase (); i++)
 		if (pl->GetBase (i)->Paved (lng, lat)) return audio::SurfaceKind::PAVED;
 	const ATMCONST *atm = pl->AtmParams ();
 	if (!atm || atm->p0 <= 0.0) return audio::SurfaceKind::REGOLITH;
+	// the surface texture (and the water mask), as the ground scatter reads it
+	if (scatter::Cover *c = pl->GroundCover ()) {
+		Vector rgb;
+		double water = 0.0;
+		if (c->Sample (lat, lng, rgb, water)) {
+			// (the mask's water under a contact: wet ground - marsh, a ditch, a
+			// shore; its texels are tens of metres, and a splashdown is
+			// VesselWater's, not the contacts')
+			audio::SurfaceKind k = audio::SurfaceFromCover (rgb.x, rgb.y, rgb.z, water);
+			if (k == audio::SurfaceKind::WATER) k = audio::SurfaceKind::SOIL;
+			if (k == audio::SurfaceKind::SNOW && !audio::SnowLikely (lat * DEG, pl->Elevation (lng, lat))) k = audio::SurfaceKind::ROCK;
+			return k;
+		}
+	}
+	// no tiles there: a procedural world's climate, as the client draws it -
+	// its seas, its snow (not over real textures: its climate isn't theirs)
+	if (const ProcTerrain *pt = pl->ProcSurface ()) {
+		const ProcTerrain::Ground g = pt->GroundAt (cos (lat) * cos (lng), sin (lat), cos (lat) * sin (lng), pl->TidallyLocked ());
+		if (g.sea > 0.5) return audio::SurfaceKind::WATER;
+		if (g.snow > 0.5) return audio::SurfaceKind::SNOW;
+	}
 	return audio::SurfaceKind::SOIL;
 }
 

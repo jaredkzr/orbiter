@@ -1183,6 +1183,15 @@ scatter::GroundScatter *Planet::Scatter () const
 	return scatter_.get();
 }
 
+scatter::Cover *Planet::GroundCover () const
+{
+	if (!coverInit) {
+		coverInit = true;
+		cover_ = std::make_unique<scatter::Cover> (this);
+	}
+	return cover_.get();
+}
+
 void Planet::ClearScatter (const Vector &p, double radius)
 {
 	scatterClear.push_back ({ p, radius });

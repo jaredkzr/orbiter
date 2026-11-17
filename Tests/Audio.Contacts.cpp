@@ -433,3 +433,58 @@ TEST_CASE ("A motor heard: louder by kind and level, a little higher faster, wob
 	CHECK (gear.rate < door.rate);
 	CHECK (door.rate < servo.rate);
 }
+
+TEST_CASE ("Contacts: the ground's kind from its surface texture", "[contacts][surface]")
+{
+	// (colours linear 0-1, as the ground scatter reads the Surf tiles)
+	CHECK (SurfaceFromCover (0.10, 0.20, 0.08, 0.0) == SurfaceKind::SOIL);   // grass, meadow
+	CHECK (SurfaceFromCover (0.05, 0.09, 0.04, 0.0) == SurfaceKind::SOIL);   // forest, dark
+	CHECK (SurfaceFromCover (0.45, 0.35, 0.25, 0.0) == SurfaceKind::ROCK);   // arid, tan
+	CHECK (SurfaceFromCover (0.30, 0.30, 0.30, 0.0) == SurfaceKind::ROCK);   // bare, grey
+	CHECK (SurfaceFromCover (0.85, 0.86, 0.88, 0.0) == SurfaceKind::SNOW);   // bright, grey: snow
+	CHECK (SurfaceFromCover (0.80, 0.76, 0.70, 0.0) == SurfaceKind::ROCK);   // as bright, warm: a dry lake's bed
+	CHECK (SurfaceFromCover (0.10, 0.20, 0.08, 1.0) == SurfaceKind::WATER);  // the mask: water
+	CHECK (SurfaceFromCover (0.0, 0.0, 0.0, 0.0, false) == SurfaceKind::SOIL); // no tiles there
+	CHECK (std::string (SurfaceKindName (SurfaceKind::WATER)) == "water");
+	// white ground: snow far north or high up, else a dry lake's bed (rock)
+	CHECK (SnowLikely (65.0, 100.0));
+	CHECK (SnowLikely (-70.0, 0.0));
+	CHECK (SnowLikely (37.0, 3500.0));    // (the Sierra Nevada's peaks)
+	CHECK_FALSE (SnowLikely (34.9, 700.0)); // (Rogers Dry Lake)
+}
+
+TEST_CASE ("Contacts: each surface's layers, each falling back to the paved one", "[contacts][surface]")
+{
+	const SurfaceLayers paved = LayersFor (SurfaceKind::PAVED);
+	CHECK (std::string (paved.rolling) == "rolling");
+	CHECK (std::string (paved.scrape) == "scrape");
+	CHECK (std::string (paved.touch) == "chirp");
+	CHECK (paved.blow == nullptr);
+	// dirt and gravel: their own rolling and scrape, a spray for the chirp, a spray at the hull's blows (not the gear's), heard outside
+	for (SurfaceKind s : {SurfaceKind::SOIL, SurfaceKind::ROCK}) {
+		const SurfaceLayers l = LayersFor (s);
+		CHECK (std::string (l.rolling) == "rolling_soil");
+		CHECK (std::string (l.scrape) == "scrape_soil");
+		CHECK (std::string (l.touch) == "spray");
+		CHECK (std::string (l.blow) == "spray");
+		CHECK_FALSE (l.blowGear);
+		CHECK (l.blowAir);
+		CHECK (l.rollGain == 1.0);
+	}
+	// snow: no chirp, no spray
+	CHECK (LayersFor (SurfaceKind::SNOW).touch == nullptr);
+	CHECK (LayersFor (SurfaceKind::SNOW).blow == nullptr);
+	// regolith: no chirp; the crunch at every blow (the gear's too) through the structure only; rolling quieter
+	const SurfaceLayers reg = LayersFor (SurfaceKind::REGOLITH);
+	CHECK (reg.touch == nullptr);
+	CHECK (std::string (reg.blow) == "crunch");
+	CHECK (reg.blowGear);
+	CHECK_FALSE (reg.blowAir);
+	CHECK (reg.rollGain < 1.0);
+	// a surface's own missing: the paved one (the crunch: none - silent)
+	CHECK (std::string (FallbackLayer ("rolling_soil")) == "rolling");
+	CHECK (std::string (FallbackLayer ("scrape_soil")) == "scrape");
+	CHECK (std::string (FallbackLayer ("spray")) == "chirp");
+	CHECK (FallbackLayer ("crunch") == nullptr);
+	CHECK (FallbackLayer ("rolling") == nullptr);
+}

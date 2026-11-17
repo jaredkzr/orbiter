@@ -286,6 +286,13 @@ void Camera::SetCMode (const CameraMode *cm)
 {
 	bool ext = (cm->GetMode() != CameraMode::CM_COCKPIT);
 	Body *tgt = (Body*)cm->GetTarget();
+	// (a cockpit is a vessel's: the camera looking at a planet - e.g. a
+	// scenario's TARGET naming a vessel as a body is named, "MOON" - goes to
+	// the focus vessel's, not to the planet taken for one)
+	if (!ext) {
+		Body *b = tgt ? tgt : target;
+		if (!b || b->Type () != OBJTP_VESSEL) tgt = g_focusobj;
+	}
 
 	if ((tgt && tgt != target) || ext != external_view) {
 		if (!tgt) tgt = target;

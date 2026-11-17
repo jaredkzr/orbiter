@@ -26,7 +26,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
-namespace scatter { class GroundScatter; }
+namespace scatter { class GroundScatter; class Cover; }
 namespace cities { class CityMap; }
 namespace sea { class Sea; }
 #include <filesystem>
@@ -204,6 +204,10 @@ public:
 	const ProcTerrain *ProcSurface () const { return proc_.get(); }
 	/// rocks and vegetation on the ground (GroundScatter.h; null if the planet has none)
 	scatter::GroundScatter *Scatter() const;
+	/// the ground's cover read from the surface texture and water mask tiles
+	/// (a vessel's contacts: what it stands on; made on first use, its own
+	/// tile cache - not the scatter's)
+	scatter::Cover *GroundCover () const;
 	/// clear the ground scatter around a point (planet frame) where a vessel
 	/// is placed on the ground (kept until the scatter is made)
 	void ClearScatter (const Vector &p, double radius);
@@ -339,6 +343,8 @@ private:
 	std::unique_ptr<ProcTerrain> proc_;  // procedural relief (SurfaceClass)
 	mutable std::unique_ptr<scatter::GroundScatter> scatter_;
 	mutable bool scatterInit = false;
+	mutable std::unique_ptr<scatter::Cover> cover_;
+	mutable bool coverInit = false;
 	mutable std::unique_ptr<cities::CityMap> cities_;
 	mutable std::once_flag citiesOnce; // (TerrainDetail asks from the client's threads)
 	mutable std::unique_ptr<sea::Sea> sea_;

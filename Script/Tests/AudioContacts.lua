@@ -7,7 +7,9 @@
 --   MOON:  gear down on the Moon's bare ground, 0.8 m up, sinking 1 m/s
 -- For listening (not the tests'): CONTACTS_SINK=<m/s> (how fast it sinks),
 -- CONTACTS_PITCH=<deg> (nose up: the mains first, the nose some time after),
--- CONTACTS_VIEW=cockpit (heard from the cockpit, not from the ground)
+-- CONTACTS_VIEW=cockpit (heard from the cockpit, not from the ground) |
+-- outside (a camera 30 m beside it, 6 m up: on the Moon, vacuum - its contacts unheard),
+-- CONTACTS_SPEED=<m/s> (along at touchdown: the Moon's regolith rolled on)
 local belly = vessel.get_interface("BELLY") ~= nil
 local moon = vessel.get_interface("MOON") ~= nil
 local v = vessel.get_interface(belly and "BELLY" or moon and "MOON" or "LAND")
@@ -23,6 +25,10 @@ local L = vec.add(gpos(), vec.add(vec.mul(fwd, belly and 30 or 90), vec.mul(righ
 local eq = oapi.global_to_equ(earth, L)
 if os.getenv("CONTACTS_VIEW") == "cockpit" then
 	oapi.set_cameramode({mode = 'cockpit'})
+elseif os.getenv("CONTACTS_VIEW") == "outside" then
+	local e = oapi.global_to_equ(earth, vec.add(gpos(), vec.add(vec.mul(fwd, 15), vec.mul(right, 30))))
+	oapi.set_cameratarget(v:get_handle(), 1)   -- (on the vessel: a scenario's "TARGET MOON" may mean the Moon)
+	oapi.set_cameramode({mode = 'ground', ref = earthName, lng = math.deg(e.lng), lat = math.deg(e.lat), alt = 6})
 else
 	oapi.set_cameramode({mode = 'ground', ref = earthName, lng = math.deg(eq.lng), lat = math.deg(eq.lat), alt = 2})
 end
@@ -39,7 +45,7 @@ if pitch ~= 0 then   -- (nose up: about the vessel's right axis)
 end
 local R = {m11=x.x, m12=y.x, m13=z.x, m21=x.y, m22=y.y, m23=z.y, m31=x.z, m32=y.z, m33=z.z}
 local st = v:get_status(2)
-local h, spd, vs = belly and 0.5 or 0.8, belly and 30 or moon and 0 or 70, -tonumber(os.getenv("CONTACTS_SINK") or "1.0")
+local h, spd, vs = belly and 0.5 or 0.8, tonumber(os.getenv("CONTACTS_SPEED") or "") or (belly and 30 or moon and 0 or 70), -tonumber(os.getenv("CONTACTS_SINK") or "1.0")
 st.status = 0
 st.arot = {x=math.atan2(R.m23, R.m33), y=-math.asin(R.m13), z=math.atan2(R.m12, R.m11)}
 st.rpos = vec.add(st.rpos, vec.mul(up, h))
