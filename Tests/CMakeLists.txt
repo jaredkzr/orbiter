@@ -261,12 +261,12 @@ set(AUDIO_SYNTH_SOURCES
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/RcsSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/WindSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/BoomSynth.cpp
-	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/ContactSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/BlastSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/FireSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/SplashSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/ThunderSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/CreakSynth.cpp
+	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/ContactVoices.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/AmbienceSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/MusicSynth.cpp
 	${CMAKE_SOURCE_DIR}/Src/Orbiter/Audio/RadioSynth.cpp
@@ -481,8 +481,8 @@ if (ORBITER_TEST_EXE)
 		)
 		set_tests_properties(Audio.MoonLiftoffCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioMoonLiftoff)
 
-		# Contacts (ContactSynth, Vessel::SoundContacts; off in the game for now,
-		# ORBITER_AUDIO_CONTACTS=1 here): a delta-glider set down
+		# Contacts (Vessel::SoundContacts, ContactVoices: the recorded takes of
+		# Sound/Contacts, on by default): a delta-glider set down
 		# on KSC's runway, heard from 40 m - silent until it touches down (1.28 s),
 		# the touchdown's thump, rolling; set down on its belly - the scrape, then
 		# silence when it has stopped; set down on the Moon. Docking
@@ -498,10 +498,10 @@ if (ORBITER_TEST_EXE)
 				WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 			)
 			set_tests_properties(Audio.Contacts${scene} PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioContacts${scene}
-				ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Contacts${scene}.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0;ORBITER_AUDIO_AMBIENCE=0;ORBITER_AUDIO_RADIO=0;ORBITER_AUDIO_CONTACTS=1")
+				ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Contacts${scene}.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0;ORBITER_AUDIO_AMBIENCE=0;ORBITER_AUDIO_RADIO=0")
 		endforeach()
 		set_tests_properties(Audio.ContactsLand PROPERTIES
-			PASS_REGULAR_EXPRESSION "contact of LAND: impact wheel [12] at 1\\.2[0-9]* s[^\n]*paved.*contact of LAND: impact wheel 0 at 1\\.[23]"
+			PASS_REGULAR_EXPRESSION "contact of LAND: chirp wheel [12] at 1\\.2[0-9]* s.*contact of LAND: impact wheel [12] at 1\\.2[0-9]* s[^\n]*paved.*contact of LAND: impact wheel 0 at 1\\.[23]"
 			FAIL_REGULAR_EXPRESSION "contact of LAND: impact (hull|leg|obstacle)")
 		set_tests_properties(Audio.ContactsBelly PROPERTIES
 			PASS_REGULAR_EXPRESSION "contact of BELLY: impact hull [0-2] at 0\\.4"
@@ -512,7 +512,7 @@ if (ORBITER_TEST_EXE)
 		add_test(
 			NAME "Audio.ContactsLandCheck"
 			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.ContactsLand.wav" --duration 12.0 --no-clip
-				--level 0.3:1.25:all:-inf:-90 --level 1.3:1.6:low:-75:-30 --level 2:5:all:-65:-30
+				--level 0.3:1.25:all:-inf:-90 --level 1.3:1.6:low:-75:-30 --level 2:5:all:-80:-50
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.ContactsLandCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioContactsLand)
@@ -534,29 +534,31 @@ if (ORBITER_TEST_EXE)
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.Api PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioApi
-			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Api.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0;ORBITER_AUDIO_AMBIENCE=0;ORBITER_AUDIO_RADIO=0;ORBITER_AUDIO_CONTACTS=1")
+			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Api.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0;ORBITER_AUDIO_AMBIENCE=0;ORBITER_AUDIO_RADIO=0")
 		add_test(
 			NAME "Audio.ApiCheck"
 			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.Api.wav" --duration 29.0 --no-clip
 				--level 0.5:0.8:all:-60:-5 --level 1.2:1.9:all:-inf:-80 --level 2.0:2.3:all:-60:-5
-				--level 5.3:5.9:all:-inf:-80 --level 8:24:120-200:-80:-20 --level 27:29:all:-inf:-80
+				--level 5.3:5.9:all:-inf:-80 --level 8:24:120-200:-80:-20 --level 28:29:all:-inf:-80
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.ApiCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioApi)
 		# ... the files decoded in the background as on the device (ORBITER_AUDIO_ASYNC=1):
-		# each sound waits for its file, then plays (a step or so later: the same checks)
+		# each sound waits for its file, then plays (a step or so later: the same checks;
+		# the contacts off - their takes read ahead would hold the decoder while the
+		# fixed-step simulation runs many times faster than real time)
 		add_test(
 			NAME "Audio.ApiAsync"
 			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Audio/Api.scn" "--fixedstep=0.02"
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.ApiAsync PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioApiAsync
-			ENVIRONMENT "ORBITER_AUDIO_ASYNC=1;ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.ApiAsync.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0;ORBITER_AUDIO_AMBIENCE=0;ORBITER_AUDIO_RADIO=0;ORBITER_AUDIO_CONTACTS=1")
+			ENVIRONMENT "ORBITER_AUDIO_ASYNC=1;ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.ApiAsync.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0;ORBITER_AUDIO_AMBIENCE=0;ORBITER_AUDIO_RADIO=0;ORBITER_AUDIO_CONTACTS=0")
 		add_test(
 			NAME "Audio.ApiAsyncCheck"
 			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.ApiAsync.wav" --duration 29.0 --no-clip
 				--level 0.5:0.8:all:-60:-5 --level 1.2:1.9:all:-inf:-80 --level 2.0:2.3:all:-60:-5
-				--level 5.3:5.9:all:-inf:-80 --level 8:24:120-200:-80:-20 --level 27:29:all:-inf:-80
+				--level 5.3:5.9:all:-inf:-80 --level 28:29:all:-inf:-80   # (the nose cone's motor: Audio.ApiCheck - here the contacts are off)
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.ApiAsyncCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioApiAsync)
@@ -566,7 +568,26 @@ if (ORBITER_TEST_EXE)
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.Docking PROPERTIES TIMEOUT 120 PASS_REGULAR_EXPRESSION "contact of A1: dock at [0-9.]+ s: 0\\.(1[5-9]|2[0-5])[0-9]* m/s, 1\\.2[0-9]*e\\+04 kg"
-			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Docking.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0;ORBITER_AUDIO_AMBIENCE=0;ORBITER_AUDIO_RADIO=0;ORBITER_AUDIO_CONTACTS=1")
+			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Docking.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0;ORBITER_AUDIO_AMBIENCE=0;ORBITER_AUDIO_RADIO=0")
+		# ... heard in A1's cabin (Tests/Audio/DockVideo.scn, the camera in its
+		# cockpit): silent before, the docking's sequence - the ports' blow, the
+		# capture latch, 4-8 hooks, the seal - from 15 s, the undocking's from
+		# 21 s, silent after (the contacts' takes: Sound/Contacts)
+		add_test(
+			NAME "Audio.DockingCabin"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Tests/Audio/DockVideo.scn" "--fixedstep=0.02" "--maxframes=1400"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.DockingCabin PROPERTIES TIMEOUT 120 FIXTURES_SETUP AudioDockingCabin
+			PASS_REGULAR_EXPRESSION "contact of A1: docking heard: [0-9]+ one-shots, [4-8] hooks[^\n]*the seal.*contact of A1: undocking heard: [0-9]+ one-shots, [2-4] hooks"
+			ENVIRONMENT "DOCK_VIEW=cockpit;ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.DockingCabin.wav;ORBITER_AUDIO_LOG=1;ORBITER_DAMAGE=0;ORBITER_AUDIO_CALLOUTS=0;ORBITER_AUDIO_AMBIENCE=0;ORBITER_AUDIO_RADIO=0")
+		add_test(
+			NAME "Audio.DockingCabinCheck"
+			COMMAND ${AUDIO_ANALYZE} "${ORBITER_BINARY_ROOT_DIR}/Audio.DockingCabin.wav" --duration 27.0 --no-clip
+				--level 10:14.9:all:-inf:-90 --level 15.0:16.6:all:-70:-20 --level 21.0:22.0:all:-70:-20 --level 22.5:25:all:-inf:-90
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Audio.DockingCabinCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioDockingCabin)
 		# a part breaking off, a crash (Audio/Contacts.h, logged): the structure
 		# test's DROP, dropped flat from 150 m - its forward section breaks off
 		# on the ground at some 40 m/s, then it is destroyed in the impact

@@ -324,12 +324,12 @@ TEST_CASE ("The sound's environment options: read as they always were", "[audio]
 	CHECK (d.callouts == -1);
 	CHECK (d.vessels);
 	CHECK (d.radio);
-	CHECK (!d.contacts);
+	CHECK (d.contacts);            // (on unless ORBITER_AUDIO_CONTACTS=0)
 	CHECK (d.voices == 0);
 	CHECK (d.radioCodec);
 	fakeEnv = { {"ORBITER_AUDIO_RENDER", "x.wav"}, {"ORBITER_AUDIO", "0"}, {"ORBITER_AUDIO_LOG", ""}, {"ORBITER_AUDIO_CALLOUTS", "1"},
 		{"ORBITER_AUDIO_MUSIC", "0"}, {"ORBITER_AUDIO_REALISM", "Cinematic"}, {"ORBITER_AUDIO_VOICE", "xrsound"},
-		{"ORBITER_AUDIO_CAPCOM", "2"}, {"ORBITER_AUDIO_VOICES", "0"}, {"ORBITER_AUDIO_VESSELS", "0"}, {"ORBITER_AUDIO_CONTACTS", "1"},
+		{"ORBITER_AUDIO_CAPCOM", "2"}, {"ORBITER_AUDIO_VOICES", "0"}, {"ORBITER_AUDIO_VESSELS", "0"}, {"ORBITER_AUDIO_CONTACTS", "0"},
 		{"ORBITER_AUDIO_ASYNC", "1"}, {"ORBITER_RADIO_CODEC", "0"}, {"ORBITER_VK_OFFSCREEN", "1"}, {"ORBITER_AUDIO_SOLO", "voice,radio"} };
 	d = DebugEnv::Read (FakeGet);
 	CHECK (d.render == "x.wav");
@@ -343,7 +343,7 @@ TEST_CASE ("The sound's environment options: read as they always were", "[audio]
 	CHECK (d.capcom == 2);
 	CHECK (d.voices == 1);         // (at least one)
 	CHECK (!d.vessels);
-	CHECK (d.contacts);
+	CHECK (!d.contacts);
 	CHECK (d.async);
 	CHECK (!d.radioCodec);
 	CHECK (d.offscreen);

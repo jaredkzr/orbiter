@@ -36,14 +36,12 @@ DebugEnv DebugEnv::Read (const char *(*get) (const char *))
 	d.vessels = first ("ORBITER_AUDIO_VESSELS") != '0';
 	d.radio = first ("ORBITER_AUDIO_RADIO") != '0';
 	d.ambience = first ("ORBITER_AUDIO_AMBIENCE") != '0';
-	d.contacts = first ("ORBITER_AUDIO_CONTACTS") == '1';
-	d.contactVoices = first ("ORBITER_AUDIO_CONTACTS") == '2';
+	d.contacts = first ("ORBITER_AUDIO_CONTACTS") != '0';
 	d.renderVolumes = first ("ORBITER_AUDIO_RENDER_VOLUMES") == '1';
 	d.solo = str ("ORBITER_AUDIO_SOLO");
 	d.testTone = str ("ORBITER_AUDIO_TEST_TONE");
 	d.flightTrace = str ("ORBITER_AUDIO_FLIGHT_TRACE");
 	d.radioCodec = first ("ORBITER_RADIO_CODEC") != '0';
-	d.contactSamples = str ("ORBITER_CONTACT_SAMPLES");
 	if (const char *v = get ("ORBITER_XR_PA")) {
 		double a = 0.0, b = 0.0;
 		if (sscanf (v, "%lf,%lf", &a, &b) == 2 && a > 0.0 && b > 0.0) d.xrCockpitPa = a, d.xrClosePa = b;

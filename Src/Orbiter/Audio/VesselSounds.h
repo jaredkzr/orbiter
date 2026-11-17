@@ -14,7 +14,8 @@
 //  - the air rushing over it: as loud as the dynamic pressure and speed
 //    make it (boundary-layer noise, p ~ q U), buffeting; it booms when
 //    supersonic
-//  - its contacts (ContactSynth), and the motors of its animations named
+//  - its contacts (ContactVoices: recorded takes, Sound/Contacts/contacts.txt;
+//    the laws in Contacts.h), and the motors of its animations named
 //    for sound (Config/Sound/<class>.cfg "Anim = <index> <motor|door|gear>
 //    [level]", or oapiAudioAnimation from its module)
 //
@@ -46,20 +47,6 @@ namespace audio {
 class RocketSynth;
 class RcsSynth;
 class WindSynth;
-class ContactSynth;
-
-/// A vessel's contacts over a time step, summed (ContactSynth's)
-struct ContactStep {
-	double wheelLoad = 0.0;      // the wheels' normal force [N]
-	double squealPower = 0.0;    // the wheels' friction times their slip [W]
-	double scrapePower = 0.0;    // the hull's friction times its slip [W]
-	double scrapeSpeed = 0.0;    // its slip [m/s]
-	double blowWheel = 0.0;      // closing speeds of contacts begun this step [m/s]
-	double blowHull = 0.0;
-	double blowVessel = 0.0;
-	V3 where;                    // the contacts' centre (vessel frame) [m]
-	bool any = false;
-};
 
 class VesselSounds {
 public:
@@ -83,8 +70,8 @@ public:
 	/// The vessel was destroyed in an impact
 	/// (frame: in space - no planet below - the body its sound goes with: the wreck)
 	void Crash (const Vessel *v, double speed, double mass, double energy, const Body *frame = nullptr);
-	/// The contacts' recordings (ORBITER_AUDIO_CONTACTS=2 and the manifest
-	/// read; else null) - also the world's aftermath (Effects: the boom,
+	/// The contacts' recordings (the manifest read; ORBITER_AUDIO_CONTACTS=0
+	/// or none: null) - also the world's aftermath (Effects: the boom,
 	/// fires, debris)
 	SampleBank *Bank ();
 
@@ -132,11 +119,8 @@ private:
 		size_t nth = 0;            // thrusters when the clusters were made
 		std::vector<Cluster> engines, rcs;
 		EmitterId wind;            // (a WindSynth's)
-		EmitterId contact;         // (a ContactSynth's)
-		double contactMass = 1.0;  // (its loudness by the vessel's mass, when made)
-		ContactStep step;          // this step's contacts (summed until the update)
 		ContactModel contacts;     // what its contacts do (the moments, the levels)
-		// (ORBITER_AUDIO_CONTACTS=2) its contacts heard outside, through its structure (ContactVoices)
+		// its contacts heard outside, through its structure (ContactVoices)
 		EmitterId contactAir, contactStruct;
 		double contactRef = 3.0;   // the air one's reference distance [m]
 		Chirps chirps;             // (which wheels' touchdowns chirp)
@@ -153,11 +137,6 @@ private:
 		double lastRattle = -1e9, rattleA = 0.0, lastContactT = -1e9;
 		double peakA = 0.0, peakT = 0.0;   // (the cabin's rattle: this blow's peak deceleration, when)
 		bool rattleOn = false, rattleFired = false;
-		double lastBlow[3] = {-1e9, -1e9, -1e9}; // [s] the last blow of each kind (wheel, hull, vessel)
-		int blows[8] = {};         // blows struck so far, by kind (recalled with the travel time)
-		float blowStrength[8] = {};
-		int heardBlows[8] = {};
-		float motor[3] = {};       // motors running (animations), by kind
 		bool seen = false;
 	};
 	PerVessel *Find (const Vessel *v);
@@ -167,8 +146,8 @@ private:
 	const char *Layer (const char *want, bool fallback = true);
 	std::set<std::string> layerNoted;
 
-	struct AnimSound { unsigned anim; int kind; float level; double last = -1.0; bool moving = false;
-		MotorTrack track; double phase = 0.0; };   // (stage 4: its motor's moments; its wobble's phase)
+	struct AnimSound { unsigned anim; int kind; float level;
+		MotorTrack track; double phase = 0.0; };   // (its motor's moments; its wobble's phase)
 	/// A vessel's configuration: from its class's file, then the API
 	struct VesselConfig { BodyRef ref; Tune tune; std::vector<AnimSound> anims; bool on[NSOUND] = {true, true, true, true}; };
 	VesselConfig &Config (const Vessel *v);
@@ -178,7 +157,6 @@ private:
 	void UpdateVessel (PerVessel &pv);
 	double now = 0.0, dtNow = 0.0;  // (this update's time and step)
 	bool replaying = false;
-	void UpdateContacts (PerVessel &pv, double t);
 	/// Its contacts' moments heard (ContactVoices: the blows, the struts, the
 	/// cabin's rattle), at time t
 	void PlayContacts (PerVessel &pv, const std::vector<ContactSample> &pts, double t);

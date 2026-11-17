@@ -15,7 +15,7 @@
 #include "Audio/RcsSynth.h"
 #include "Audio/WindSynth.h"
 #include "Audio/BoomSynth.h"
-#include "Audio/ContactSynth.h"
+#include "Audio/ContactVoices.h"
 #include "Audio/BlastSynth.h"
 #include "Audio/FireSynth.h"
 #include "Audio/SplashSynth.h"
@@ -70,7 +70,8 @@ struct Zoo {
 	BlastSynth *blast = nullptr;
 	ThunderSynth *thunder = nullptr;
 	CreakSynth *creak = nullptr;
-	ContactSynth *contact = nullptr;
+	ContactVoices *contact = nullptr;
+	std::shared_ptr<Clip> blow;   // (the contacts' take: a decaying noise burst, as a recording)
 	SplashSynth *splash = nullptr;
 	MusicSynth *music = nullptr;
 
@@ -103,8 +104,22 @@ struct Zoo {
 		if (auto *r = Add (e, RcsSynth::Make (e, seed++), binaural, next ())) r->Set (1.0f, 200.0f);
 		if (auto *w = Add (e, WindSynth::Make (e, seed++), binaural, next ())) { WindSynth::Params p; p.speed = 150.0f; p.buffet = 0.3f; w->Set (p); }
 		Add (e, BoomSynth::Make (e, 0.2f, seed++), binaural, next ());
-		contact = Add (e, ContactSynth::Make (e, seed++), binaural, next ());
-		if (contact) { ContactSynth::Params p; p.rollSpeed = 40.0f; p.rollLoad = 1.0f; contact->Set (p); contact->Strike (ContactSynth::DOCK, 1.0f); }
+		if (!blow) {
+			blow = std::make_shared<Clip> ();
+			blow->channels = 1, blow->rate = e.SampleRate (), blow->frames = e.SampleRate () / 2;
+			blow->pcm.resize (blow->frames);
+			uint32_t r = 12345u;
+			for (size_t i = 0; i < blow->pcm.size (); i++) {
+				r = r * 1664525u + 1013904223u;
+				blow->pcm[i] = ((r >> 8) * (1.0f / 8388608.0f) - 1.0f) * std::exp (-6.0f * i / blow->pcm.size ());
+			}
+		}
+		contact = Add (e, ContactVoices::Make (e, ContactVoices::AIR, 15.0, seed++), binaural, next ());
+		if (contact) {
+			contact->SetBedTakes (ContactVoices::ROLL, blow.get (), 1.0f);
+			contact->SetBed (ContactVoices::ROLL, 0.3f, 1.0f);
+			contact->Fire (ContactVoices::Shot (ContactVoices::IMPACT, blow.get (), 0.5f, 1.0f, 8000.0f, 1.0f), 0.0f);
+		}
 		blast = Add (e, BlastSynth::Make (e, seed++), binaural, next ());
 		if (blast) { blast->Set (500.0, 0.01); blast->Fire (); }
 		if (auto *f = Add (e, FireSynth::Make (e, seed++), binaural, next ())) f->Set (FireSynth::PeakFor (1e8), FireSynth::DiameterFor (1e8), 1.0);
@@ -154,7 +169,6 @@ const Hrtf *LoadHrtf (Hrtf &h, unsigned rate)
 
 TEST_CASE ("Rendering allocates nothing on the audio thread", "[audio][realtime]")
 {
-	ContactSynth::SetSampleDir ("Sound/Contacts");
 	Engine e;
 	Engine::Options opt;
 	opt.mode = Engine::OFFLINE;
@@ -174,7 +188,7 @@ TEST_CASE ("Rendering allocates nothing on the audio thread", "[audio][realtime]
 		if (b == 600 && z.music) z.music->SetMood (music::ORBIT);
 		if (b % 200 == 0) {
 			if (z.creak) z.creak->Strike (CreakSynth::CREAK, 0.8f);
-			if (z.contact) z.contact->Strike (ContactSynth::TOUCHDOWN, 1.0f);
+			if (z.contact) z.contact->Fire (ContactVoices::Shot (ContactVoices::IMPACT, z.blow.get (), 0.5f, 1.0f, 8000.0f, 1.0f), 0.0f);
 			if (z.splash) z.splash->Entry (0.8f, 20.0f, 8.0f);
 		}
 		g_allocs.store (0);
@@ -190,7 +204,6 @@ TEST_CASE ("Rendering allocates nothing on the audio thread", "[audio][realtime]
 
 TEST_CASE ("Sources come and go while the audio thread renders", "[audio][realtime]")
 {
-	ContactSynth::SetSampleDir ("Sound/Contacts");
 	Engine e;
 	Engine::Options opt;
 	opt.mode = Engine::DEVICE;

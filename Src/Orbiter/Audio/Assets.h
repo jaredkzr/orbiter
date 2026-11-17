@@ -63,8 +63,10 @@ public:
 	/// own): now, waiting for it if it is being loaded (null: not readable)
 	ClipRef Load (const std::string &path, unsigned rate, unsigned channels = 0);
 	/// The same, in the background (synchronous: SetAsync (false));
-	/// measure: its loudness too (Measured), before the clip is ready
-	void Prefetch (const std::string &path, unsigned rate, unsigned channels = 0, bool measure = false);
+	/// measure: its loudness too (Measured), before the clip is ready;
+	/// later: only once nothing else waits (a bank's takes, read ahead - not
+	/// before the sounds asked for now; asked for, it moves up)
+	void Prefetch (const std::string &path, unsigned rate, unsigned channels = 0, bool measure = false, bool later = false);
 	/// Loaded yet? The clip, or null while it loads (failed: true when
 	/// it can't be read - nothing will come)
 	ClipRef Peek (const std::string &path, unsigned rate, unsigned channels, bool &failed);
@@ -111,7 +113,8 @@ private:
 	std::map<std::string, Measure> measures;
 	struct Job { std::string path, key; unsigned rate, channels; bool measure; std::function<void ()> task; };
 	void Run (std::unique_lock<std::mutex> &l, const Job &j);
-	std::deque<Job> jobs;
+	std::deque<Job> jobs, laterJobs;   // (laterJobs: once jobs is empty)
+	void Promote (const std::string &key);   // (with the lock held: its later job now)
 	std::thread worker;
 	bool stopping = false, async = false;
 	uint64_t clock = 0;

@@ -9,8 +9,10 @@ elseif(ORBITER_HEADLESS)
 	file(GLOB xr_cfg ${XR_ASSETS}/*.cfg)
 	file(GLOB voice CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/Voice/*.flac ${CMAKE_CURRENT_SOURCE_DIR}/Voice/*.txt ${CMAKE_CURRENT_SOURCE_DIR}/Voice/*.cfg)
 	file(GLOB ground CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/Voice/Ground/*.flac ${CMAKE_CURRENT_SOURCE_DIR}/Voice/Ground/*.txt ${CMAKE_CURRENT_SOURCE_DIR}/Voice/Ground/*.cfg)
-	# the contacts' recordings (Src/Orbiter/Audio/ContactSynth.cpp)
-	file(GLOB contacts ${CMAKE_CURRENT_SOURCE_DIR}/Contacts/*.flac)
+	# the contacts' takes (Src/Orbiter/Audio/ContactVoices.cpp, SampleBank.cpp):
+	# a folder per layer, the manifest contacts.txt, their sources SOURCES.md
+	# (globbed only so that new takes reconfigure: the folder is copied whole)
+	file(GLOB_RECURSE contacts CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/Contacts/*)
 	file(GLOB hrtf ${CMAKE_CURRENT_SOURCE_DIR}/HRTF/*.hrtf)
 	file(GLOB clicks ${CMAKE_CURRENT_SOURCE_DIR}/Clicks/*.flac)
 	# the generated sound effects (Utils/Audio/make_sfx.py: the cabin's air, its events, beds)
@@ -23,8 +25,7 @@ elseif(ORBITER_HEADLESS)
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different ${voice} ${ORBITER_BINARY_ROOT_DIR}/Sound/Voice/
 		COMMAND ${CMAKE_COMMAND} -E make_directory ${ORBITER_BINARY_ROOT_DIR}/Sound/Voice/Ground
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ground} ${ORBITER_BINARY_ROOT_DIR}/Sound/Voice/Ground/
-		COMMAND ${CMAKE_COMMAND} -E make_directory ${ORBITER_BINARY_ROOT_DIR}/Sound/Contacts
-		COMMAND ${CMAKE_COMMAND} -E copy_if_different ${contacts} ${ORBITER_BINARY_ROOT_DIR}/Sound/Contacts/
+		COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different ${CMAKE_CURRENT_SOURCE_DIR}/Contacts ${ORBITER_BINARY_ROOT_DIR}/Sound/Contacts
 		COMMAND ${CMAKE_COMMAND} -E make_directory ${ORBITER_BINARY_ROOT_DIR}/Sound/HRTF
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different ${hrtf} ${ORBITER_BINARY_ROOT_DIR}/Sound/HRTF/
 		COMMAND ${CMAKE_COMMAND} -E make_directory ${ORBITER_BINARY_ROOT_DIR}/Sound/Clicks

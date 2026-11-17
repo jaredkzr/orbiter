@@ -163,7 +163,6 @@ set(headless_src
 	Audio/BlastSynth.cpp
 	Audio/BoomSynth.cpp
 	Audio/Callouts.cpp
-	Audio/ContactSynth.cpp
 	Audio/Contacts.cpp
 	Audio/ContactVoices.cpp
 	Audio/SampleBank.cpp

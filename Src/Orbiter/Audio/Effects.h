@@ -8,7 +8,7 @@
 //    wave (BlastSynth), from where it broke up, heard when it arrives
 //  - fires: burning wreckage (Debris::Ignite) - the roar of its flames
 //    (FireSynth), as loud as a turbulent flame's share of its heat release
-//  - with the contacts' recordings (ORBITER_AUDIO_CONTACTS=2, a manifest:
+//  - with the contacts' recordings (on unless ORBITER_AUDIO_CONTACTS=0; a manifest:
 //    VesselSounds::Bank), the aftermath from them instead: a blast's boom
 //    (an `explosion` take and its echo, under the blast's onset), each
 //    piece's flames (a looped `fire` bed in place of FireSynth), then its

@@ -121,7 +121,7 @@ ClipRef Assets::Load (const std::string &path, unsigned rate, unsigned channels)
 	return c;
 }
 
-void Assets::Prefetch (const std::string &path, unsigned rate, unsigned channels, bool measure)
+void Assets::Prefetch (const std::string &path, unsigned rate, unsigned channels, bool measure, bool later)
 {
 	if (path.empty ()) return;
 	if (!async) { if (measure) Measured (path); Load (path, rate, channels); return; }
@@ -129,13 +129,15 @@ void Assets::Prefetch (const std::string &path, unsigned rate, unsigned channels
 	std::lock_guard<std::mutex> l (m);
 	if (measure && !measures.count (path)) jobs.push_back ({path, std::string (), 0, 0, true, nullptr}); // (first: ready with the clip)
 	auto it = clips.find (key);
-	if (it != clips.end () && (it->second.clip || it->second.failed || it->second.loading)) { it->second.used = ++clock; }
-	else {
+	if (it != clips.end () && (it->second.clip || it->second.failed || it->second.loading)) {
+		it->second.used = ++clock;
+		if (!later && it->second.loading) Promote (key);
+	} else {
 		clips[key].loading = true;
 		clips[key].used = ++clock;
-		jobs.push_back ({path, key, rate, channels, false, nullptr});
+		(later ? laterJobs : jobs).push_back ({path, key, rate, channels, false, nullptr});
 	}
-	if (jobs.empty ()) return;
+	if (jobs.empty () && laterJobs.empty ()) return;
 	if (!worker.joinable ()) stopping = false, worker = std::thread (&Assets::Worker, this);
 	cv.notify_one ();
 }
@@ -153,7 +155,7 @@ ClipRef Assets::Peek (const std::string &path, unsigned rate, unsigned channels,
 			failed = it->second.failed;
 			return it->second.clip;
 		}
-		if (it != clips.end () && it->second.loading) return nullptr;
+		if (it != clips.end () && it->second.loading) { Promote (it->first); return nullptr; }
 	}
 	Prefetch (path, rate, channels);
 	return nullptr;
@@ -169,14 +171,23 @@ void Assets::Run (std::function<void ()> task)
 	cv.notify_one ();
 }
 
+void Assets::Promote (const std::string &key)
+{
+	auto it = std::find_if (laterJobs.begin (), laterJobs.end (), [&key](const Job &j) { return j.key == key; });
+	if (it == laterJobs.end ()) return;
+	jobs.push_back (*it);
+	laterJobs.erase (it);
+}
+
 void Assets::Worker ()
 {
 	std::unique_lock<std::mutex> l (m);
 	for (;;) {
-		cv.wait (l, [this] { return stopping || !jobs.empty (); });
+		cv.wait (l, [this] { return stopping || !jobs.empty () || !laterJobs.empty (); });
 		if (stopping) return;
-		Job j = jobs.front ();
-		jobs.pop_front ();
+		std::deque<Job> &q = jobs.empty () ? laterJobs : jobs;
+		Job j = q.front ();
+		q.pop_front ();
 		Run (l, j);
 	}
 }
@@ -244,11 +255,12 @@ void Assets::SetAsync (bool on)
 	if (!on) {
 		// (what is queued: loaded now)
 		std::unique_lock<std::mutex> l (m);
-		while (!jobs.empty () || std::any_of (clips.begin (), clips.end (), [](auto &kv) { return kv.second.loading; })) {
-			if (!worker.joinable () && !jobs.empty ()) {
-				// (no worker: the queue's jobs done here)
-				Job j = jobs.front ();
-				jobs.pop_front ();
+		while (!jobs.empty () || !laterJobs.empty () || std::any_of (clips.begin (), clips.end (), [](auto &kv) { return kv.second.loading; })) {
+			if (!worker.joinable () && (!jobs.empty () || !laterJobs.empty ())) {
+				// (no worker: the queues' jobs done here)
+				std::deque<Job> &q = jobs.empty () ? laterJobs : jobs;
+				Job j = q.front ();
+				q.pop_front ();
 				Run (l, j);
 				continue;
 			}
@@ -272,8 +284,9 @@ void Assets::Shutdown ()
 		std::lock_guard<std::mutex> l (m);
 		stopping = true;
 		// (jobs not begun: never loaded)
-		for (auto &j : jobs) if (!j.measure && !j.task) { Entry &e = clips[j.key]; e.loading = false; e.failed = true; }
-		jobs.clear ();
+		for (auto *q : {&jobs, &laterJobs})
+			for (auto &j : *q) if (!j.measure && !j.task) { Entry &e = clips[j.key]; e.loading = false; e.failed = true; }
+		jobs.clear (), laterJobs.clear ();
 		cv.notify_all ();
 		done.notify_all ();
 	}

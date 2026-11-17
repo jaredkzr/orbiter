@@ -328,6 +328,10 @@ Emitter *Effects::WreckEmitter (Wreck &w, const Debris *d, float refDist)
 	ed.name = std::string ("wreck of ") + d->Name ();
 	w.em = world.Add (ed, std::move (cv));
 	w.takes = false;
+	// (silence before it began: recalled from before its first levels - the
+	// travel time not yet over - it is not yet heard; else the first levels
+	// were recalled at once, its fire heard far off without delay)
+	if (Emitter *em = world.Get (w.em)) em->Push (td.SimT1 - 1e-3, Floats<4>{});
 	return world.Get (w.em);
 }
 

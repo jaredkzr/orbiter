@@ -7,7 +7,6 @@
 #include "RocketSynth.h"
 #include "RcsSynth.h"
 #include "WindSynth.h"
-#include "ContactSynth.h"
 #include "ContactVoices.h"
 #include "AudioSystem.h"
 #include "Vessel.h"
@@ -46,15 +45,7 @@ namespace {
 	constexpr float ROCKET_FRONT = 0.1f;
 	/// Clusters per vessel at most
 	constexpr size_t MAX_CLUSTERS = 6;
-	/// Contacts: rolling at full (rollAmp 1) is CONTACT_P [Pa] at the
-	/// vessel's size (about 100 dB at 10 m, for 15 t: louder heavier); in the
-	/// cockpit, through the structure, CONTACT_HULL of it
-	constexpr double CONTACT_P = 2.0, CONTACT_RMS = 0.3, CONTACT_HULL = 0.4;
-	/// Blows: closing speeds that strike one [m/s] (above the step's
-	/// gravity), and the speeds of a full one (a hard landing, a crash, a bump)
-	constexpr double BLOW_MIN[3] = {0.35, 0.4, 0.04}, BLOW_FULL[3] = {3.0, 3.5, 0.5};
-	constexpr double BLOW_GAP = 0.3; // [s] between blows of a kind
-	/// The new contacts (ContactVoices): of a blow's energy (1/2 m v^2) this
+	/// The contacts (ContactVoices): of a blow's energy (1/2 m v^2) this
 	/// much becomes sound - the sprung gear's, rigid metal's (the struts:
 	/// -6 dB under the gear's blow); closing speeds of the hardest tier
 	constexpr double ETA_GEAR = 1e-5, ETA_METAL = 1e-4, ETA_STRUT = 0.25e-5;
@@ -116,7 +107,6 @@ void VesselSounds::Drop (PerVessel &pv)
 		for (auto &c : *cl) world.Remove (c.em);
 	pv.engines.clear (), pv.rcs.clear ();
 	world.Remove (pv.wind), pv.wind = EmitterId ();
-	world.Remove (pv.contact), pv.contact = EmitterId ();
 	world.Remove (pv.contactAir), pv.contactAir = EmitterId ();
 	world.Remove (pv.contactStruct), pv.contactStruct = EmitterId ();
 	for (bool &b : pv.bedTakes) b = false;
@@ -135,7 +125,7 @@ bool VesselSounds::ContactBank ()
 
 SampleBank *VesselSounds::Bank ()
 {
-	return Dbg ().contactVoices && ContactBank () ? &bank : nullptr;
+	return Dbg ().contacts && ContactBank () ? &bank : nullptr;
 }
 
 void VesselSounds::Clear ()
@@ -247,27 +237,11 @@ void VesselSounds::Build (PerVessel &pv)
 		if (c.em) pv.rcs.push_back (c);
 	}
 
-	// its contacts (wheels, hull, docking, animations' motors): off for now,
-	// to be reworked (user review 2026-11-12); ORBITER_AUDIO_CONTACTS=1 for
-	// development and tests
-	const bool contactsOn = Dbg ().contacts;
-	auto cs = contactsOn ? ContactSynth::Make (engine, seed++) : nullptr;
-	if (cs) {
-		EmitterDesc d;
-		d.body = pv.v;
-		d.refDist = (float)std::max (3.0, 0.5 * size);
-		double m = std::max (pv.v->Mass (), 100.0);
-		pv.contactMass = std::clamp (std::sqrt (m / 15000.0), 0.3, 5.0);
-		d.level = (float)(tune.contactLevel * CONTACT_P * pv.contactMass / P_FULL / CONTACT_RMS);
-		d.hull = (float)CONTACT_HULL;
-		d.name = std::string (pv.v->Name ()) + " contacts";
-		pv.contact = world.Add (d, std::move (cs));
-	}
-
-	// (ORBITER_AUDIO_CONTACTS=2) the new contacts: heard outside (its blows'
-	// energy at the reference distance: levels set per one-shot), and
-	// through its structure in its cabin (one-shots' full scale P_FULL)
-	if (Dbg ().contactVoices && ContactBank ()) {
+	// its contacts (wheels, hull, docking, animations' motors; recorded takes
+	// - ORBITER_AUDIO_CONTACTS=0: none): heard outside (its blows' energy at
+	// the reference distance: levels set per one-shot), and through its
+	// structure in its cabin (one-shots' full scale P_FULL)
+	if (Dbg ().contacts && ContactBank ()) {
 		auto air = ContactVoices::Make (engine, ContactVoices::AIR, size, seed++);
 		auto st = ContactVoices::Make (engine, ContactVoices::STRUCTURE, size, seed++);
 		if (air && st) {
@@ -304,26 +278,6 @@ void VesselSounds::UpdateVessel (PerVessel &pv)
 	if (vi->GetThrusterCount () != pv.nth) Build (pv);
 	VesselConfig &cfg = Config (pv.v);
 	const Tune &tune = cfg.tune;
-	// the motors of animations with a sound: running while they move, a
-	// latch or lock at their ends
-	for (int k = 0; k < 3; k++) pv.motor[k] = 0.0f;
-	for (AnimSound &a : cfg.anims) {
-		double st = vi->GetAnimation (a.anim);
-		if (a.last >= 0.0 && dtNow > 0.0) {
-			double speed = std::fabs (st - a.last) / dtNow;      // [1/s]: a full travel in 1/speed s
-			int mk = a.kind == ANIM_GEAR ? ContactSynth::GEAR : a.kind == ANIM_DOOR ? ContactSynth::DOOR : ContactSynth::SERVO;
-			bool moving = speed > 1e-4;
-			if (moving) pv.motor[mk] = std::max (pv.motor[mk], (float)(a.level * std::min (1.0, 0.4 + 4.0 * speed)));
-			// (stopped at an end: it closed, locked)
-			if (a.moving && !moving && (st < 1e-6 || st > 1.0 - 1e-6)) {
-				int b = a.kind == ANIM_GEAR ? ContactSynth::GEARLOCK : ContactSynth::LATCH;
-				pv.blows[b]++, pv.blowStrength[b] = (float)(a.level * (a.kind == ANIM_MOTOR ? 0.3 : 0.8));
-			}
-			a.moving = moving;
-		}
-		a.last = st;
-	}
-
 	for (auto &c : pv.engines) {
 		double lv = 0.0;
 		for (int i : c.th) {
@@ -402,14 +356,10 @@ void VesselSounds::UpdateVessel (PerVessel &pv)
 		wind->SetHull (p0 > 1e-9 ? (float)(cabin / p0) : 0.0f);
 	}
 	if (Emitter *ca = world.Get (pv.contactAir)) ca->SetLevel (cfg.on[SOUND_CONTACTS] ? (float)tune.contactLevel : 0.0f);
-	if (Dbg ().contactVoices) UpdateMotors (pv, cfg);
+	if (Dbg ().contacts) UpdateMotors (pv, cfg);
 	UpdateContactBeds (pv);
 	if (Emitter *cs = world.Get (pv.contactStruct))
 		cs->SetLevel (cfg.on[SOUND_CONTACTS] ? StructureEmitter (pv.v, P_FULL * tune.contactLevel, "").level : 0.0f);
-	if (Emitter *ce = world.Get (pv.contact)) {
-		ce->SetLevel (cfg.on[SOUND_CONTACTS] ? (float)(tune.contactLevel * CONTACT_P * pv.contactMass / P_FULL / CONTACT_RMS) : 0.0f);
-		UpdateContacts (pv, t);
-	}
 }
 
 bool VesselSounds::Tune::Set (const std::string &key, double v)
@@ -524,23 +474,6 @@ void VesselSounds::Contacts (const Vessel *v, const std::vector<ContactSample> &
 		pv->bedPushT = t;
 	}
 	LogContacts (v, pv->contacts);
-	// (ContactSynth's: the step summed)
-	const ContactLevels &l = pv->contacts.Levels ();
-	ContactStep &s = pv->step;
-	s.wheelLoad += l.wheelLoad;
-	s.squealPower += l.scrubPower + 0.3 * l.brakePower;
-	s.scrapePower += l.scrapePower;
-	s.scrapeSpeed = std::max (s.scrapeSpeed, l.scrapeSpeed);
-	V3 wpos;
-	double wsum = 0.0;
-	for (const ContactSample &p : pts) {
-		double &blow = p.kind == ContactKind::WHEEL ? s.blowWheel : p.kind == ContactKind::VESSEL ? s.blowVessel : s.blowHull;
-		blow = std::max (blow, p.vn);
-		double w = p.Fn + std::hypot (p.Flong, p.Flat);
-		wpos = wpos + p.pos * w, wsum += w;
-	}
-	if (wsum > 0.0) s.where = wpos * (1.0 / wsum);
-	s.any = true;
 }
 
 void VesselSounds::PlayContacts (PerVessel &pv, const std::vector<ContactSample> &pts, double t)
@@ -735,7 +668,7 @@ void VesselSounds::Docked (const Vessel *v, const V3 &port, bool dock, double sp
 	// closing, the seal; undocking's release, the hooks opening, the push-off
 	// - in its cabin (its structure: both vessels' while docked) at fixed
 	// levels, outside less (in vacuum not at all)
-	if (Dbg ().contactVoices && ContactBank ()) {
+	if (Dbg ().contacts && ContactBank ()) {
 		const double t = now;
 		const double m = std::max (v->Mass (), 100.0);
 		const auto tl = dock ? DockTimeline (speed, mred, pv->mechRng) : UndockTimeline (speed, m, pv->mechRng);
@@ -774,13 +707,6 @@ void VesselSounds::Docked (const Vessel *v, const V3 &port, bool dock, double sp
 			printf ("\n"), fflush (stdout);
 		}
 	}
-	Emitter *contact = world.Get (pv->contact);
-	if (!contact) return;
-	int k = dock ? ContactSynth::DOCK : ContactSynth::UNDOCK;
-	pv->blows[k]++, pv->blowStrength[k] = 1.0f;
-	const bool log = Dbg ().log > 0;
-	if (log) printf ("Audio: %s of %s\n", dock ? "docking" : "undocking", v->Name ()), fflush (stdout);
-	contact->SetOffset (port);
 }
 
 bool VesselSounds::PlayFixed (PerVessel &pv, const char *layer, int tier, double p, double airShare, int kind, double tAt, float rate, float cutoff, const V3 &pos)
@@ -921,7 +847,7 @@ void VesselSounds::PartBroke (const Vessel *v, const V3 &pos, double mass, doubl
 	if (!pv) return;
 	pv->contacts.Break (now, pos, mass, hit);
 	LogContacts (v, pv->contacts);
-	if (!Dbg ().contactVoices || !ContactBank ()) return;
+	if (!Dbg ().contacts || !ContactBank ()) return;
 	// a part torn off: its tear, the debris' clatter after it - outside from
 	// where it broke (outliving the vessel: it may be breaking up); in its
 	// cabin through its structure, the tear as loud
@@ -944,7 +870,7 @@ void VesselSounds::Crash (const Vessel *v, double speed, double mass, double ene
 		printf ("Audio: contact of %s: %s\n", v->Name (), Describe (e).c_str ()), fflush (stdout);
 	}
 	PerVessel *pv = Find (v);
-	if (!pv || !Dbg ().contactVoices || !ContactBank ()) return;
+	if (!pv || !Dbg ().contacts || !ContactBank ()) return;
 	// the crash: its take, tears staggered, the debris - from where it
 	// struck, on the planet (the vessel's own sounds go with it now)
 	Emitter *em = Detach (*pv, V3 (), 6.0, "crash", frame);
@@ -958,54 +884,6 @@ void VesselSounds::Crash (const Vessel *v, double speed, double mass, double ene
 		n += PlayEnergy (em, nullptr, layer[c.layer], c.energy, pv->contactRef, (float)c.rate, fc[c.layer], t + c.t, kind[c.layer]) ? 1 : 0;
 	if (Dbg ().log > 0)
 		printf ("Audio: contact of %s: crash heard: %d one-shots, %.3g J of sound\n", v->Name (), n, ETA_CRASH * energy), fflush (stdout);
-}
-
-void VesselSounds::UpdateContacts (PerVessel &pv, double t)
-{
-	ContactStep &c = pv.step;
-	Emitter *contact = world.Get (pv.contact);
-	ContactSynth *contactSynth = world.Synth<ContactSynth> (pv.contact);
-	if (!contact || !contactSynth) return;
-	const double m = std::max (pv.v->Mass (), 100.0);
-	const double g = 9.81; // (normalizing only)
-	const double mg = m * g;
-	const SurfParam *sp = pv.v->GetSurfParam ();
-	const double gs = sp ? sp->groundspd : 0.0;
-	// blows (once per kind within BLOW_GAP)
-	const double vb[3] = {c.blowWheel, c.blowHull, c.blowVessel};
-	const int kinds[3] = {ContactSynth::TOUCHDOWN, ContactSynth::HULL, ContactSynth::CLANG};
-	for (int k = 0; k < 3; k++) {
-		if (vb[k] < BLOW_MIN[k] || t - pv.lastBlow[k] < BLOW_GAP) continue;
-		pv.lastBlow[k] = t;
-		pv.blows[kinds[k]]++;
-		pv.blowStrength[kinds[k]] = (float)std::min (1.5, vb[k] / BLOW_FULL[k]);
-		const bool log = Dbg ().log > 0;
-		static const char *names[3] = {"touchdown", "hull", "vessel"};
-		if (log) printf ("Audio: %s blow of %s at %.3f s (%.2f m/s)\n", names[k], pv.v->Name (), t, vb[k]), fflush (stdout);
-	}
-	if (c.any) contact->SetOffset (c.where);
-	Floats<22> p;   // (rolling, its load, squeal, scrape, its speed; the blows counted, their strengths; the motors)
-	p[0] = c.wheelLoad > 0.0 ? (float)gs : 0.0f;                 // rolling speed
-	p[1] = (float)(c.wheelLoad / mg);                             // the load on the wheels
-	p[2] = (float)std::min (1.0, std::sqrt (c.squealPower / (4.0 * mg)));
-	p[3] = (float)std::min (1.0, std::sqrt (c.scrapePower / (5.0 * mg)));
-	p[4] = (float)c.scrapeSpeed;
-	for (int k = 0; k < ContactSynth::NBLOW; k++) p[5 + k] = (float)pv.blows[k], p[12 + k] = pv.blowStrength[k];
-	for (int k = 0; k < ContactSynth::NMOTOR; k++) p[19 + k] = pv.motor[k];
-	contact->Push (t, p);
-	c = ContactStep ();
-
-	// as heard: the sound now arriving
-	const Floats<22> h = contact->Recalled<Floats<22>> ();
-	ContactSynth::Params cp;
-	cp.rollSpeed = h[0], cp.rollLoad = h[1], cp.squeal = h[2], cp.scrape = h[3], cp.scrapeSpeed = h[4];
-	for (int k = 0; k < ContactSynth::NMOTOR; k++) cp.motor[k] = h[19 + k];
-	contactSynth->Set (cp);
-	for (int k = 0; k < ContactSynth::NBLOW; k++) {
-		int n = (int)h[5 + k];
-		if (n > pv.heardBlows[k]) contactSynth->Strike ((ContactSynth::Blow)k, h[12 + k]);
-		pv.heardBlows[k] = std::max (pv.heardBlows[k], n);
-	}
 }
 
 void VesselSounds::Update (double t, bool replay)

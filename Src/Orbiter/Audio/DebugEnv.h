@@ -32,14 +32,12 @@ struct DebugEnv {
 	bool vessels = true;       ///< ORBITER_AUDIO_VESSELS=0: the vessels' own sounds off
 	bool radio = true;         ///< ORBITER_AUDIO_RADIO=0: no radio
 	bool ambience = true;      ///< ORBITER_AUDIO_AMBIENCE=0: no ambience
-	bool contacts = false;     ///< ORBITER_AUDIO_CONTACTS=1: the contacts' sounds on
-	bool contactVoices = false;///< ORBITER_AUDIO_CONTACTS=2: the new contacts' sounds (ContactVoices, Sound/Contacts/contacts.txt) instead
+	bool contacts = true;      ///< ORBITER_AUDIO_CONTACTS=0: the contacts' sounds off (Sound/Contacts/contacts.txt's takes)
 	bool renderVolumes = false;///< ORBITER_AUDIO_RENDER_VOLUMES=1: a render at the settings' volumes
 	std::string solo;          ///< ORBITER_AUDIO_SOLO=<buses>: a render's buses heard (empty: all)
 	std::string testTone;      ///< ORBITER_AUDIO_TEST_TONE=<vessel>[:<Hz>[:<level>]]
 	std::string flightTrace;   ///< ORBITER_AUDIO_FLIGHT_TRACE=<file>
 	bool radioCodec = true;    ///< ORBITER_RADIO_CODEC=0: the deep-space codec off (listening tests)
-	std::string contactSamples;///< ORBITER_CONTACT_SAMPLES=<dir>
 	double xrCockpitPa = 0.0;  ///< ORBITER_XR_PA=<cockpit>,<close>: XRSound's volume 1 as pressures [Pa] (listening tests; 0: the shim's - 63.2,15.8)
 	double xrClosePa = 0.0;
 

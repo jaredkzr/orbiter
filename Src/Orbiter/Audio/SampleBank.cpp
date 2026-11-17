@@ -60,7 +60,7 @@ bool SampleBank::Load (const std::string &manifest, unsigned r)
 		Entry e{path, energy};
 		layers[layer][(int)TierNamed (tier)].push_back (e);
 		if (TierNamed (tier) != ANY) layers[layer][(int)ANY].push_back (e);
-		Assets::Get ().Prefetch (path, rate, 1);
+		Assets::Get ().Prefetch (path, rate, 1, false, true);   // (read ahead: after the sounds asked for now)
 		n++;
 	}
 	return n > 0;

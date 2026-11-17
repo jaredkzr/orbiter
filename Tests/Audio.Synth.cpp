@@ -13,7 +13,6 @@
 #include "Audio/RcsSynth.h"
 #include "Audio/WindSynth.h"
 #include "Audio/BoomSynth.h"
-#include "Audio/ContactSynth.h"
 #include "Audio/BlastSynth.h"
 #include "Audio/FireSynth.h"
 #include "Audio/SplashSynth.h"
@@ -344,93 +343,6 @@ TEST_CASE ("Rocket noise: acoustic power", "[audio][synth]")
 	// at 1 km, free field: Lp = Lw - 20 log r - 11 = 132.6 dB SPL
 	double p = VesselSounds::PressureAt (W, 1000.0);
 	CHECK_THAT (Db (p / 20e-6), WithinAbs (10.0 * std::log10 (W / 1e-12) - 60.0 - 11.0, 0.3));
-}
-
-TEST_CASE ("Contacts: rolling, touchdown, squeal, docking", "[audio][synth]")
-{
-	// (the recordings: Sound/Contacts, under the build root, where this runs)
-	{	// rolling at 40 m/s under the full load: the calibration (CONTACT_RMS)
-		Rig r;
-		auto s = ContactSynth::Make (r.e, 20);
-		REQUIRE (s->HasSamples ());
-		ContactSynth::Params p;
-		p.rollSpeed = 40.0f, p.rollLoad = 1.0f;
-		s->Set (p);
-		r.Attach (*s);
-		r.Take (0.5);
-		auto x = r.Take (2.0);
-		INFO ("rolling RMS " << Rms (x));
-		CHECK_THAT (Db (Rms (x)), WithinAbs (Db (0.18), 2.0)); // (gentle: 4 dB under the calibration)
-		// a low rumble: nearly all of it below 200 Hz, no hiss
-		INFO ("below 200 Hz " << Db (BandRms (x, 0, 200, 48000) / Rms (x)) << " dB, above 1 kHz " << Db (BandRms (x, 1000, 0, 48000) / Rms (x)) << " dB");
-		INFO ("bands 0-60 " << Db (BandRms (x, 0, 60, 48000)) << " 60-120 " << Db (BandRms (x, 60, 120, 48000)) << " 120-250 " << Db (BandRms (x, 120, 250, 48000)));
-		INFO ("bands 250-500 " << Db (BandRms (x, 250, 500, 48000)) << " 500-1k " << Db (BandRms (x, 500, 1000, 48000)));
-		CHECK (BandRms (x, 0, 200, 48000) > 0.9 * Rms (x));
-		CHECK (BandRms (x, 1000, 0, 48000) < 0.03 * Rms (x));
-		// textured (impacts), not a steady hum: its 20 ms envelope varies
-		std::vector<double> env;
-		for (size_t i = 0; i + 960 <= x.size (); i += 960) env.push_back (Rms (x, i, i + 960));
-		double mean = 0.0, var = 0.0;
-		for (double e : env) mean += e;
-		mean /= env.size ();
-		for (double e : env) var += (e - mean) * (e - mean);
-		double cv = std::sqrt (var / env.size ()) / mean;
-		INFO ("envelope variation " << cv);
-		CHECK (cv > 0.12);
-	}
-	{	// a touchdown: the strut's thump (low) and the tyres' chirp (a squeal
-		// near 1 kHz, falling), the chirp louder than the thump, both over
-		// within a second
-		Rig r;
-		auto s = ContactSynth::Make (r.e, 21);
-		r.Attach (*s);
-		r.Take (0.1);
-		s->Strike (ContactSynth::TOUCHDOWN, 1.0f);
-		auto x = r.Take (1.0);
-		std::vector<float> head (x.begin (), x.begin () + 7200), chirp (x.begin () + 2400, x.begin () + 19200), tail (x.begin () + 43200, x.end ());
-		INFO ("touchdown: peak " << Db (Peak (x)) << ", head below 120 Hz " << Db (BandRms (head, 0, 120, 48000)) << " dB of " << Db (Rms (head)));
-		INFO ("chirp 600-1400 Hz " << Db (BandRms (chirp, 600, 1400, 48000)) << " dB of " << Db (Rms (chirp)) << "; tail " << Db (Rms (tail)));
-		CHECK (BandRms (head, 0, 120, 48000) > 0.3 * Rms (head));        // the thump
-		CHECK (BandRms (chirp, 600, 1400, 48000) > 0.4 * Rms (chirp));   // the chirp
-		CHECK (BandRms (chirp, 600, 1400, 48000) > BandRms (chirp, 0, 120, 48000)); // (clearly audible over the thump)
-		CHECK (Rms (tail) < 0.05 * Rms (head));
-	}
-	{	// a squeal: tonal, near 1.1 kHz (the recording re-pitched), wavering
-		Rig r;
-		auto s = ContactSynth::Make (r.e, 22);
-		ContactSynth::Params p;
-		p.squeal = 1.0f;
-		s->Set (p);
-		r.Attach (*s);
-		r.Take (0.3);
-		auto x = r.Take (1.0);
-		INFO ("squeal: RMS " << Db (Rms (x)) << "; 900-1400 Hz " << Db (BandRms (x, 900, 1400, 48000) / Rms (x)) << " dB of the whole");
-		INFO ("1800-2800 " << Db (BandRms (x, 1800, 2800, 48000) / Rms (x)) << ", below 500 " << Db (BandRms (x, 0, 500, 48000) / Rms (x)) << ", above 4k " << Db (BandRms (x, 4000, 0, 48000) / Rms (x)));
-		CHECK (BandRms (x, 900, 1400, 48000) > 0.35 * Rms (x)); // (its fundamental)
-		CHECK (BandRms (x, 900, 3000, 48000) > 0.6 * Rms (x));  // (and its overtones)
-		CHECK (BandRms (x, 0, 500, 48000) < 0.3 * Rms (x));
-		CHECK_THAT (Db (Rms (x)), WithinAbs (Db (0.3), 3.0)); // (a full skid: about the calibration)
-	}
-	{	// docking: the clunk (heavy, dull), then two latches (hard mid clacks)
-		// 0.45 and 0.62 s later - three onsets within 0.8 s; nothing ringing
-		// like a bell once the structure has settled (1.3 s on)
-		Rig r;
-		auto s = ContactSynth::Make (r.e, 23);
-		r.Attach (*s);
-		r.Take (0.1);
-		s->Strike (ContactSynth::DOCK, 0.8f);
-		auto x = r.Take (1.3); // (the clunk's rattle, the structure settling, lasts over a second)
-		auto win = [&](double t0, double t1, double lo, double hi) { std::vector<float> w (x.begin () + (size_t)(t0 * 48000), x.begin () + (size_t)(t1 * 48000)); return BandRms (w, lo, hi, 48000); };
-		double clunkLo = win (0.0, 0.1, 0, 200), clunkMid = win (0.0, 0.1, 200, 2000), gap = win (0.35, 0.44, 200, 2000), latch1 = win (0.45, 0.5, 200, 2000), latch2 = win (0.62, 0.67, 200, 2000);
-		INFO ("clunk: peak " << Db (Peak (std::vector<float> (x.begin (), x.begin () + 4800))) << ", low " << Db (clunkLo) << " mid " << Db (clunkMid));
-		INFO ("gap (mid) " << Db (gap) << ", latches " << Db (latch1) << " " << Db (latch2));
-		CHECK (clunkLo > clunkMid);        // dull
-		CHECK (latch1 > 2.0 * gap);        // the latches: clacks
-		CHECK (latch2 > 2.0 * gap);
-		auto late = r.Take (0.5);
-		INFO ("ringing after: " << Db (Rms (late)) << " dB vs the clunk " << Db (Rms (std::vector<float> (x.begin (), x.begin () + 4800))));
-		CHECK (Rms (late) < 0.02 * Rms (std::vector<float> (x.begin (), x.begin () + 4800)));
-	}
 }
 
 TEST_CASE ("Blast: Kinney & Graham's overpressure and duration; the Friedlander wave", "[audio][synth]")
