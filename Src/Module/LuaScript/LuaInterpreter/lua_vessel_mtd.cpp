@@ -10101,8 +10101,12 @@ table.
 
 The return value is 1 if the vessel could process the key message, or 0 otherwise.
 
+An optional table of modifier keys held with it: {ctrl=true, shift=true, alt=true}
+(e.g. the delta-glider's Ctrl+H, folding its HUD away).
+
 @function send_bufferedkey
 @tparam int keycode key identifier
+@tparam[opt] table modifiers held: ctrl, shift, alt (booleans)
 @treturn int processing flag (1=key was processed, 0=key was ignored)
 */
 int Interpreter::v_send_bufferedkey (lua_State *L)
@@ -10111,7 +10115,17 @@ int Interpreter::v_send_bufferedkey (lua_State *L)
 	AssertMtdMinPrmCount(L, 2, funcname);
 	VESSEL *v = lua_tovessel_safe(L, 1, funcname);
 	int key = luamtd_tointeger_safe (L, 2, funcname);
-	int res = v->SendBufferedKey (key);
+	char kstate[256] = {0};
+	bool mods = false;
+	if (lua_istable (L, 3)) {
+		static const struct { const char *name; int k; } M[] = {{"ctrl", OAPI_KEY_LCONTROL}, {"shift", OAPI_KEY_LSHIFT}, {"alt", OAPI_KEY_LALT}};
+		for (const auto &m : M) {
+			lua_getfield (L, 3, m.name);
+			if (lua_toboolean (L, -1)) kstate[m.k] = (char)0x80, mods = true;
+			lua_pop (L, 1);
+		}
+	}
+	int res = mods ? v->SendBufferedKey (key, true, kstate) : v->SendBufferedKey (key);
 	lua_pushnumber (L, res);
 	return 1;
 }

@@ -1,0 +1,30 @@
+BEGIN_HYPERDESC
+<h1>Black holes: tides (the trailer shot)</h1>
+A delta-glider lowered nose-first towards a black hole of 600 solar masses (spin 0.8, a faint disc), the damage model on, by script
+(Script/Tests/TrailerTides): heard from its cockpit as the tides build - creaks, groans,
+its parts tearing off - then seen from outside as it breaks up and falls in, in slow motion.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System BlackHoleTrailer
+  Date MJD 51982.6685767396
+  Script Tests/TrailerTides
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship TIDE
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET TIDE
+  MODE Cockpit
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+TIDE:DeltaGlider
+  STATUS Orbiting TrailerHole
+  ELEMENTS 1.0e9 0.00000 0.0 0.0 0.0 0.0 51982.6685767396
+  AROT 0 0 0
+END
+END_SHIPS

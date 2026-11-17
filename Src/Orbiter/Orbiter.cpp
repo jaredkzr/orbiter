@@ -1495,7 +1495,10 @@ void Orbiter::SetWarpFactor (double warp, bool force, double delay)
 		return; // nothing to do
 	if (bPlayback && pConfig->CfgRecPlayPrm.bReplayWarp && !force) return;
 	const double EPS = 1e-6;
-	if      (warp < MinWarpLimit) warp = MinWarpLimit;
+	// (ORBITER_MIN_WARP=<w>: slower than MinWarpLimit allowed - renders' deep
+	// slow motion, e.g. a black hole's break-up; not for play)
+	static const double minWarp = [] { const char *e = getenv ("ORBITER_MIN_WARP"); double w = e ? atof (e) : 0.0; return w > 0.0 ? std::min (w, MinWarpLimit) : MinWarpLimit; } ();
+	if      (warp < minWarp) warp = minWarp;
 	else if (warp > MaxWarpLimit) warp = MaxWarpLimit;
 	if (warp > td.Warp() && warp > ATM_WARP_LIMIT) {
 		double lim = AtmWarpLimit ();

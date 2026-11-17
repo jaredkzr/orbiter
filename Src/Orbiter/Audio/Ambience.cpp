@@ -143,17 +143,25 @@ void Ambience::Update (double t, double playT, double dt)
 			VECTOR3 w = oapiGetModelWind ((OBJHANDLE)pl, lng, lat, r - pl->Size () + 10.0);
 			U = std::sqrt (w.x * w.x + w.y * w.y + w.z * w.z);
 			windP = AmbienceSynth::WIND_EAR * 0.5 * a.rho * U * U;
-			// the sea, if there is water within some hundreds of metres
+			// the sea: as much of it as there is water about (its share within
+			// SEA_R, how near: SeaNearness - not marsh as a beach)
 			SEAPARAM sp;
 			if (oapiGetSeaParams ((OBJHANDLE)pl, &sp, sizeof (sp)) && alt < 300.0) {
-				bool water = false;
-				const double d = 300.0 / std::max (r, 1.0);
-				for (int k = 0; k < 5 && !water; k++) {
-					const double dl = k == 1 ? d : k == 2 ? -d : 0.0, db = k == 3 ? d : k == 4 ? -d : 0.0;
-					water = oapiIsWater ((OBJHANDLE)pl, lng + dl / std::max (std::cos (lat), 0.1), lat + db);
+				int n = 0, wet = 0;
+				double nearest = 1e9;
+				const double coslat = std::max (std::cos (lat), 0.1);
+				for (int ring = 0; ring <= 3; ring++) {
+					const double dist = AmbienceSynth::SEA_R * ring / 3.0;
+					for (int k = 0; k < (ring ? 8 : 1); k++) {
+						const double az = k * 0.7853981634, d = dist / std::max (r, 1.0);
+						n++;
+						if (oapiIsWater ((OBJHANDLE)pl, lng + d * std::sin (az) / coslat, lat + d * std::cos (az)))
+							wet++, nearest = std::min (nearest, dist);
+					}
 				}
-				if (water) {
-					seaP = AmbienceSynth::SeaPressure (sp.wind) * std::min (1.0, 50.0 / std::max (alt, 50.0)); // (fading as the listener rises above it)
+				const double near = AmbienceSynth::SeaNearness ((double)wet / n, nearest);
+				if (near > 0.0) {
+					seaP = AmbienceSynth::SeaPressure (sp.wind) * near * std::min (1.0, 50.0 / std::max (alt, 50.0)); // (fading as the listener rises above it)
 					period = sp.tp > 0.0 ? sp.tp : 8.0;
 				}
 			}

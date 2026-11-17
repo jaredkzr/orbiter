@@ -305,6 +305,7 @@ void Camera::SetCMode (const CameraMode *cm)
 	case CameraMode::CM_COCKPIT: {
 		const CameraMode_Cockpit *cmc = (const CameraMode_Cockpit*)cm;
 		int pos = cmc->GetPosition();
+		if (!g_pane) break; // (headless: no panes - the cockpit's view taken, its kind moot)
 		switch (cmc->GetCockpitMode()) {
 		case CameraMode_Cockpit::CM_GENERIC:
 			g_pane->SetPanelMode(1);

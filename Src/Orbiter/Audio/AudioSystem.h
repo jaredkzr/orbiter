@@ -91,7 +91,7 @@ public:
 		Event (v, dock ? Callouts::EV_DOCKED : Callouts::EV_UNDOCKED);
 	}
 	void PartBroke (const Vessel *v, const V3 &pos, double mass, double hit) { vessels.PartBroke (v, pos, mass, hit); }
-	void Crash (const Vessel *v, double speed, double mass, double energy) { vessels.Crash (v, speed, mass, energy); }
+	void Crash (const Vessel *v, double speed, double mass, double energy, const Body *frame = nullptr) { vessels.Crash (v, speed, mass, energy, frame); }
 	/// Something happened to a vessel the voice may call out
 	void Event (const Vessel *v, Callouts::Event e);
 	/// A vessel breaks up with propellant [kg] aboard: its blast
@@ -183,7 +183,7 @@ private:
 	FlightState flight;             // (the focus vessel's flight: the voice, the radio, the music follow it)
 	FILE *flightTrace = nullptr;    // (ORBITER_AUDIO_FLIGHT_TRACE)
 	Callouts callouts{*this};
-	Effects effects{engine, world};
+	Effects effects{engine, world, &vessels};
 	Ambience ambience{*this};
 	Radio radio{*this};
 	WarpDrive warpDrive{*this};

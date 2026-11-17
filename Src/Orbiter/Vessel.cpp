@@ -5692,6 +5692,7 @@ void Vessel::Destroy (const char *reason)
 		}
 		as->Explosion (this, std::max (fuel, 0.0)); // (the blast)
 	}
+	const double mass0 = mass;   // (its mass whole: the pieces take it)
 	breaking_up = true;
 	double mmax = 0.0;
 	const Vector vstart (((g_bStateUpdate && s1 && s1 != s0) ? s1 : s0)->vel);
@@ -5712,12 +5713,26 @@ void Vessel::Destroy (const char *reason)
 	}
 	breaking_up = false;
 	destroyed_t = td.SimT0;
+	// (broken up in flight - torn apart by tides, overloaded - with nothing
+	// struck: its structure failing at once, heard as a crash of BREAKUP_V
+	// (its parts' own tears were silent while it broke up); out in space its
+	// sound goes with the wreck)
+	if (td.SimT1 - touched_t >= CRASH_CONTACT_T)
+		if (audio::System *as = g_pOrbiter->Audio ()) {
+			const double BREAKUP_V = 20.0;
+			as->Crash (this, BREAKUP_V, mass0, 0.5 * mass0 * BREAKUP_V * BREAKUP_V, wreck);
+		}
 
 	// (a ghost now; the camera follows the wreck)
 	if (this == g_focusobj && wreck) {
+		// (a ground observer stays where it stands, watching the wreck; any
+		// other view - the cockpit, a chase - backs off to frame it)
+		const bool ground = g_camera->IsExternal () && g_camera->GetExtMode () == CAMERA_GROUNDOBSERVER;
 		g_pOrbiter->SetView (wreck, 1);
-		g_camera->SetTrackMode (CAMERA_FREE); // (horizon level, not tumbling with the piece)
-		g_camera->FrameWreck (Size ()); // (back from the fireball, looking down on the debris)
+		if (!ground) {
+			g_camera->SetTrackMode (CAMERA_FREE); // (horizon level, not tumbling with the piece)
+			g_camera->FrameWreck (Size ()); // (back from the fireball, looking down on the debris)
+		}
 		char title[160], detail[256];
 		snprintf (title, sizeof (title), "%s destroyed", name.c_str());
 		snprintf (detail, sizeof (detail), "%s", reason);

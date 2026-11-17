@@ -8,6 +8,14 @@
 //    wave (BlastSynth), from where it broke up, heard when it arrives
 //  - fires: burning wreckage (Debris::Ignite) - the roar of its flames
 //    (FireSynth), as loud as a turbulent flame's share of its heat release
+//  - with the contacts' recordings (ORBITER_AUDIO_CONTACTS=2, a manifest:
+//    VesselSounds::Bank), the aftermath from them instead: a blast's boom
+//    (an `explosion` take and its echo, under the blast's onset), each
+//    piece's flames (a looped `fire` bed in place of FireSynth), then its
+//    smoulder (the bed low and dulled) and hot metal ticking as it cools
+//    (`tick`), and each piece landing (`debris_land`; else `clatter`,
+//    `impact_metal`) - the laws in Contacts.h (BoomHeard, FireBedFor,
+//    SmoulderLevel, TickRate, DebrisLands, DebrisLandFor, DebrisGate)
 //  - thunder: a lightning flash (oapiAudioLightning: the graphics client's
 //    storms) - its channel's N-waves (ThunderSynth, Few's model)
 //  - the structure creaking under load (CreakSynth): the vessel in focus,
@@ -26,11 +34,13 @@
 #define __AUDIOEFFECTS_H
 
 #include "World.h"
+#include "Contacts.h"
 #include "Vecmat.h"
 #include <vector>
 
 class Vessel;
 class Planet;
+class Debris;
 
 namespace audio {
 
@@ -39,10 +49,15 @@ class FireSynth;
 class SplashSynth;
 class ThunderSynth;
 class CreakSynth;
+class VesselSounds;
+class SampleBank;
 
 class Effects {
 public:
-	Effects (Engine &e, World &w): engine (e), world (w) {}
+	/// vs: the contacts' recordings (VesselSounds::Bank) for the aftermath of
+	/// a blast and a wreck - the boom, fires, smoulder, ticks, debris landing;
+	/// without them (null, or none there) the synthesized blast and fires
+	Effects (Engine &e, World &w, VesselSounds *vs = nullptr): engine (e), world (w), sounds (vs) {}
 	~Effects () { Clear (); }
 
 	/// A vessel breaks up with a mass of propellant [kg] aboard
@@ -58,11 +73,16 @@ public:
 
 	/// The blasts waiting or sounding (tests)
 	size_t Blasts () const { return blasts.size (); }
-	size_t Fires () const { return fires.size (); }
+	size_t Fires () const;
+	/// (tests) the pieces of wreckage heard from recordings (fire, smoulder,
+	/// ticks, landing)
+	size_t Wrecks () const { return wrecks.size (); }
 
 private:
 	Engine &engine;
 	World &world;
+	VesselSounds *sounds = nullptr;
+	SampleBank *Bank () const;
 	struct Blast {
 		EmitterId em;         // (a BlastSynth's, on the planet: gone with it)
 		const Planet *planet = nullptr;
@@ -72,11 +92,36 @@ private:
 		double c = 340.3;     // quarter of sea level's)
 		double coupling = 1.0; // the world's coupling into the air there
 		bool fired = false;
+		EmitterId boom;       // (the recordings': its boom and echo, a ContactVoices on the planet)
+		double boomLen = 0.0; // [s] the boom and its echo
+		double firedT = 0.0;
 	};
 	std::vector<Blast> blasts;
+	struct Boom { EmitterId em; double until = 0.0; };
+	std::vector<Boom> booms;      // (heard on after their blast's synth is done)
 	struct Fire { BodyRef debris; EmitterId em; double out = -1.0; };
 	std::vector<Fire> fires;
 	void UpdateFires (double t);
+	/// The wreckage from recordings: each piece's state, an emitter on it once
+	/// it burns or lands (removed when it's gone or long quiet)
+	struct Wreck {
+		BodyRef debris;
+		EmitterId em;
+		float refDist = 2.0f;
+		double prevImpact = 0.0, lastLand = -1e9, lastEvent = -1e9;
+		bool burned = false;     // it caught fire (its smoulder, ticks after)
+		double fireP = 0.0;      // [Pa RMS at refDist] its flames at full
+		double outT = -1.0;      // its flames out (the propellant burned)
+		double nextTick = -1.0;
+		bool takes = false;      // (its beds' takes given)
+		int ticks = 0, lands = 0;
+	};
+	std::vector<Wreck> wrecks;
+	DebrisGate debrisGate;
+	void UpdateWrecks (double t, SampleBank &bank);
+	Emitter *WreckEmitter (Wreck &w, const Debris *d, float refDist);
+	uint32_t wreckRng = 0x6c8e9cf5u;
+	double WreckRand () { wreckRng ^= wreckRng << 13; wreckRng ^= wreckRng >> 17; wreckRng ^= wreckRng << 5; return (wreckRng >> 8) * (1.0 / 16777216.0); }
 	struct Water {
 		BodyRef v; EmitterId em;
 		bool wet = false; double dryAt = -1e10; int entries = 0, heard = 0; double lastNear = 0.0;

@@ -145,8 +145,9 @@ ContactBeds BedsFor (const ContactLevels &l);
 /// touchdown, ~1e4 J, ~1 Pa RMS at 10 m over their 0.3 s and peaks some 10 dB
 /// over that - the slams cut through the grind, not under it)
 constexpr double SCRAPE_P = 0.5, SCRAPE_W = 1e6, SCRAPE_CAP = 4.0;
-constexpr double SCRAPE_RATE0 = 0.7, SCRAPE_RATE1 = 1.3, SCRAPE_V = 40.0;
-constexpr double SCRAPE_FC0 = 800.0, SCRAPE_FC1 = 12000.0;
+// (0.7-1.3 and 800 Hz-12 kHz till 2026-11-17: by ear "pitch shifted too much" - now subtle)
+constexpr double SCRAPE_RATE0 = 0.92, SCRAPE_RATE1 = 1.08, SCRAPE_V = 40.0;
+constexpr double SCRAPE_FC0 = 2500.0, SCRAPE_FC1 = 10000.0;
 
 /// A scrape's start (or a re-contact after leaving SCRAPE_GAP): louder at
 /// first - BURST_GAIN over its level, easing back over BURST_T (the first
@@ -183,6 +184,68 @@ std::vector<CrashPart> CrashFor (double energy, double mass, double u01a, double
 constexpr double ETA_CRASH = 1e-4, CRASH_SHARE = 0.6, TEAR_SHARE = 0.08, CLATTER_SHARE_C = 0.16;
 constexpr int CRASH_TEARS = 3;
 constexpr double CRASH_TEAR_T = 0.3, CRASH_CLATTER_T = 0.5;
+
+// --- the aftermath (Effects: a blast, a crash's wreck), from recordings ---
+// (2026-11-16, Jared: "The explosion should have more of a lingering boom.
+// We also need fire and debris sounds.")
+
+/// The boom (an `explosion` take, under the blast's own onset): its RMS
+/// pressure heard at R [m] from a blast of W [kg TNT] - BOOM_ETA of the
+/// TNT's energy (TNT_J a kg) as sound, spread as 1/r^2 and over BOOM_T -
+/// softly no louder than BOOM_HEARD_MAX (as the blast's cap: the boom the
+/// loudest thing going, its long tail not burying what follows: 16 Pa,
+/// about P_FULL / 4, -12 dBFS RMS). 243 kg TNT: at 33 m capped (~14 Pa), at
+/// 1 km ~1 Pa (94 dB)
+double BoomHeard (double W, double R);
+constexpr double BOOM_ETA = 1e-4, BOOM_T = 3.0, BOOM_HEARD_MAX = 16.0, TNT_J = 4.184e6;
+/// Its echo off the ground about: the same take ECHO_GAIN as loud (-8 dB),
+/// dulled below ECHO_FC, a little slower, ECHO_T after (by u01) - the boom
+/// rolling on
+constexpr double ECHO_GAIN = 0.4, ECHO_FC = 1500.0, ECHO_RATE = 0.97, ECHO_T[2] = {0.6, 1.2};
+
+/// A burning piece's flames: a looped `fire` bed at the fire's pressure
+/// (FireSynth's law), its rate and brightness by the fire's size D [m]:
+/// bigger, lower and darker - (D / 10 m)^-0.15 within FIRE_RATE, a low-pass
+/// 8 kHz sqrt(10 m / D) within FIRE_FC
+struct FireBed { double rate = 1.0, cutoff = 8000.0; };
+FireBed FireBedFor (double D);
+constexpr double FIRE_RATE[2] = {0.8, 1.25}, FIRE_FC[2] = {2500.0, 14000.0};
+/// The flames out (its propellant burned), the wreck smoulders: the same
+/// bed SMOULDER_FRAC of its flames' pressure (-30 dB: a break-up's ten
+/// pieces at -22 dB were 94 dB at 33 m - a roar, not embers), dulled below
+/// SMOULDER_FC, slower, fading as the root of what's left over SMOULDER_T
+/// (since [s]: the flames out); 0 after
+double SmoulderLevel (double since);
+constexpr double SMOULDER_FRAC = 0.03, SMOULDER_T = 45.0, SMOULDER_FC = 1200.0, SMOULDER_RATE = 0.9;
+/// Hot metal ticking as it cools (`tick` takes; a burned piece on the
+/// ground): ticks a second, TICK_RATE0 e^-(age / TICK_TAU) (age [s]: since
+/// the flames went out), none after TICK_T (0.4: a piece every few seconds
+/// at first - a break-up's ten at 1.2 a second each were a rain of ticks);
+/// each TICK_P [Pa RMS] at the piece's reference distance, +-TICK_DB
+double TickRate (double age);
+constexpr double TICK_RATE0 = 0.4, TICK_TAU = 20.0, TICK_T = 60.0, TICK_P = 0.05, TICK_DB = 4.0;
+
+/// A piece of debris landing (or struck): its impact v - the ground's
+/// velocity change of the step (Debris::Impact) - rising over DEBRIS_V_MIN
+/// from under half of it the step before (resting, the ground's support is
+/// g h a step: ~0.3 m/s), DEBRIS_GAP after its last; ETA_DEBRIS of 1/2 m v^2
+/// as sound (a tear's: the energy goes into denting, scattering), heavier
+/// lower: (m / 100 kg)^-0.1 within DEBRIS_RATE
+struct DebrisLand { double energy = 0.0, rate = 1.0; };
+bool DebrisLands (double impact, double prevImpact, double t, double lastT);
+DebrisLand DebrisLandFor (double mass, double v);
+constexpr double DEBRIS_V_MIN = 1.5, DEBRIS_GAP = 0.2, ETA_DEBRIS = 1e-5, DEBRIS_RATE[2] = {0.7, 1.3};
+/// At most DEBRIS_MAX landings heard within DEBRIS_WINDOW [s] (a break-up's
+/// dozens of pieces: not a hail - the loudest first)
+constexpr int DEBRIS_MAX = 3;
+constexpr double DEBRIS_WINDOW = 0.1;
+class DebrisGate {
+public:
+	/// May one more be heard at t? (counted if so)
+	bool Allow (double t);
+private:
+	double recent[DEBRIS_MAX] = {-1e9, -1e9, -1e9};
+};
 /// (the design said 0.2 Pa - 80 dB at 10 m - at 40 m/s for 15 t; that buries
 /// a gentle touchdown's thump at landing speed: a 1 m/s touchdown's take is
 /// about 0.2 Pa RMS at 10 m. 0.06 Pa keeps it ~10 dB over rolling at 95 m/s)
@@ -288,12 +351,12 @@ private:
 /// slow wobble; phase: its own). Levels MOTOR_P (design 0.03-0.1 Pa), rates
 /// MOTOR_RATE by kind, +-MOTOR_PITCH with the speed (MOTOR_SPEED_REF: a
 /// travel in 4 s, full), wobbling MOTOR_WOBBLE at MOTOR_WOBBLE_HZ; outside
-/// MOTOR_AIR of it (-20 dB)
+/// MOTOR_AIR of it (-12 dB; -20 was lost under a breeze outside)
 struct MotorSound { double p = 0.0, rate = 1.0; };
 MotorSound MotorFor (int kind, double level, double speed, double t, double phase);
 constexpr double MOTOR_P[3] = {0.04, 0.06, 0.09}, MOTOR_RATE[3] = {1.12, 1.0, 0.9};
 constexpr double MOTOR_PITCH = 0.12, MOTOR_SPEED_REF = 0.25, MOTOR_WOBBLE = 0.02, MOTOR_WOBBLE_HZ = 0.37;
-constexpr double MOTOR_AIR = 0.1;
+constexpr double MOTOR_AIR = 0.25;
 /// At an end: the lock (a latch take) LOCK_T after the motor stops, at
 /// LOCK_P by kind [Pa]; the gear's low thud (impact_gear, soft) GEAR_THUD_P,
 /// a door's seal SEAL_DOOR_P after DOOR_SEAL_T

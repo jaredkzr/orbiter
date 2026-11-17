@@ -1,8 +1,9 @@
 -- A delta-glider's animations heard (Tests/Audio/AnimVideo.scn), on KSC's
--- runway: the nose cone and the top hatch opening together (two motors at
--- once), the outer airlock opening, the hatch closing, the airlock closing
--- and, half way, opening again (turned back on the way); then the end.
---   ANIM_VIEW=cockpit (default) | ground (25 m off its nose, to the side)
+-- runway, one at a time (each heard alone, a gap between): the top hatch
+-- opening and closing, the outer airlock opening, closing and - half way -
+-- opening again (turned back on the way), the nose cone opening and, half
+-- way, closing again; then the end.
+--   ANIM_VIEW=cockpit (default) | ground (10 m off its nose, to the side)
 local v = vessel.get_interface("LAND")
 local view = os.getenv("ANIM_VIEW") or "cockpit"
 local function log(s) oapi.write_log("AnimVideo: " .. s) end
@@ -17,14 +18,15 @@ else
 	local function gpos() return oapi.get_globalpos(v:get_handle()) end
 	local fwd = vec.unit(vec.sub(v:local2global({x=0, y=0, z=1}), gpos()))
 	local right = vec.unit(vec.sub(v:local2global({x=1, y=0, z=0}), gpos()))
-	local e = oapi.global_to_equ(earth, vec.add(gpos(), vec.add(vec.mul(fwd, 12), vec.mul(right, 22))))
+	local e = oapi.global_to_equ(earth, vec.add(gpos(), vec.add(vec.mul(fwd, 6), vec.mul(right, 8))))
 	oapi.set_cameramode({mode = 'ground', ref = oapi.get_objname(earth), lng = math.deg(e.lng), lat = math.deg(e.lat), alt = 2})
 end
-at(1.0);  key(OAPI_KEY.K, "nose cone opening")
-at(1.5);  key(OAPI_KEY.U, "top hatch opening")
-at(12.0); key(OAPI_KEY.O, "outer airlock opening")
-at(24.0); key(OAPI_KEY.U, "top hatch closing")
-at(27.0); key(OAPI_KEY.O, "outer airlock closing")
-at(30.5); key(OAPI_KEY.O, "outer airlock opening again (turned back on the way)")
-at(42.0)
+at(1.0);  key(OAPI_KEY.U, "top hatch opening")
+at(10.0); key(OAPI_KEY.U, "top hatch closing")
+at(19.0); key(OAPI_KEY.O, "outer airlock opening")
+at(31.0); key(OAPI_KEY.O, "outer airlock closing")
+at(34.0); key(OAPI_KEY.O, "outer airlock opening again (turned back on the way)")
+at(41.0); key(OAPI_KEY.K, "nose cone opening")
+at(47.0); key(OAPI_KEY.K, "nose cone closing again (turned back on the way)")
+at(56.0)
 oapi.exit(0)

@@ -132,6 +132,6 @@ while true do
 	if not oapi.get_objhandle("LAND") then break end
 end
 oapi.write_log(string.format("LandingVideo: stopped at %.2f s", oapi.get_simtime() - tstart))
-local tend = oapi.get_simtime() + (CRASH and 6.0 or 1.5)   -- (a crash heard out: its debris, the wreck's fire)
+local tend = oapi.get_simtime() + (CRASH and env("LV_HEAROUT", 6.0) or 1.5)   -- (a crash heard out: its debris, the wreck's fire, smoulder, ticking - LV_HEAROUT [s])
 while oapi.get_simtime() < tend do proc.skip() end
 oapi.exit(0)

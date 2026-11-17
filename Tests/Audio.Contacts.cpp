@@ -279,7 +279,7 @@ TEST_CASE ("Contacts: scraping - louder with its power, higher and brighter fast
 	ContactLevels fast = l;
 	fast.scrapeSpeed = 20.0;
 	CHECK (BedsFor (fast).scrapeRate > BedsFor (l).scrapeRate);
-	CHECK (BedsFor (fast).scrapeCutoff > 2.0 * BedsFor (l).scrapeCutoff);
+	CHECK (BedsFor (fast).scrapeCutoff > 1.5 * BedsFor (l).scrapeCutoff);   // (half way: brighter, subtly)
 	fast.scrapeSpeed = 1e3;
 	CHECK_THAT (BedsFor (fast).scrapeCutoff, WithinRel (SCRAPE_FC1, 1e-9));
 	// against another vessel: the same bed
@@ -487,4 +487,63 @@ TEST_CASE ("Contacts: each surface's layers, each falling back to the paved one"
 	CHECK (std::string (FallbackLayer ("spray")) == "chirp");
 	CHECK (FallbackLayer ("crunch") == nullptr);
 	CHECK (FallbackLayer ("rolling") == nullptr);
+}
+
+TEST_CASE ("Aftermath: the boom - as loud as its blast's energy at a distance, softly capped", "[contacts][aftermath]")
+{
+	// far: as 1/r (well under the cap)
+	const double p1 = BoomHeard (243.0, 1000.0), p2 = BoomHeard (243.0, 2000.0);
+	CHECK_THAT (p1 / p2, WithinRel (2.0, 0.01));
+	CHECK ((p1 > 0.5 && p1 < 2.0));   // (~1 Pa, 94 dB at 1 km)
+	// near: under the cap, rising no more
+	const double pn = BoomHeard (243.0, 33.0);
+	CHECK (pn < BOOM_HEARD_MAX);
+	CHECK (pn > 0.8 * BOOM_HEARD_MAX);
+	CHECK (BoomHeard (243.0, 1.0) < BOOM_HEARD_MAX);
+	CHECK (BoomHeard (0.0, 10.0) == 0.0);
+	// a bigger blast louder where not capped
+	CHECK (BoomHeard (1000.0, 2000.0) > BoomHeard (100.0, 2000.0));
+}
+
+TEST_CASE ("Aftermath: fire - bigger lower and darker; the smoulder fades; ticks sparser", "[contacts][aftermath]")
+{
+	const FireBed small = FireBedFor (3.0), big = FireBedFor (30.0);
+	CHECK (big.rate < small.rate);
+	CHECK (big.cutoff < small.cutoff);
+	CHECK ((big.rate >= FIRE_RATE[0] && small.rate <= FIRE_RATE[1]));
+	CHECK ((big.cutoff >= FIRE_FC[0] && FireBedFor (0.2).cutoff <= FIRE_FC[1]));
+	// the smoulder: SMOULDER_FRAC at first, fading, nothing after SMOULDER_T
+	CHECK_THAT (SmoulderLevel (0.0), WithinRel (SMOULDER_FRAC, 1e-9));
+	CHECK (SmoulderLevel (0.5 * SMOULDER_T) < SmoulderLevel (0.0));
+	CHECK (SmoulderLevel (SMOULDER_T) == 0.0);
+	CHECK (SmoulderLevel (-1.0) == 0.0);
+	// ticks: TICK_RATE0 at first, sparser, none after TICK_T
+	CHECK_THAT (TickRate (0.0), WithinRel (TICK_RATE0, 1e-9));
+	CHECK (TickRate (30.0) < 0.5 * TickRate (0.0));
+	CHECK (TickRate (TICK_T) == 0.0);
+}
+
+TEST_CASE ("Aftermath: a piece landing - a rising blow, not resting on the ground; the gate", "[contacts][aftermath]")
+{
+	// resting: the ground's support a step (~0.3 m/s) - never a landing
+	CHECK_FALSE (DebrisLands (0.33, 0.33, 10.0, -1e9));
+	// a landing: from nothing to a blow over DEBRIS_V_MIN
+	CHECK (DebrisLands (4.0, 0.0, 10.0, -1e9));
+	CHECK (DebrisLands (4.0, 0.33, 10.0, -1e9));   // (from resting: a bounce down again)
+	// not again while the blow goes on, nor within DEBRIS_GAP
+	CHECK_FALSE (DebrisLands (4.0, 3.0, 10.0, -1e9));
+	CHECK_FALSE (DebrisLands (4.0, 0.0, 10.1, 10.0));
+	CHECK (DebrisLands (4.0, 0.0, 10.3, 10.0));
+	// its sound: ETA_DEBRIS of 1/2 m v^2; heavier lower, within DEBRIS_RATE
+	const DebrisLand l = DebrisLandFor (100.0, 10.0);
+	CHECK_THAT (l.energy, WithinRel (ETA_DEBRIS * 0.5 * 100.0 * 100.0, 1e-9));
+	CHECK_THAT (l.rate, WithinRel (1.0, 1e-9));
+	CHECK (DebrisLandFor (1000.0, 10.0).rate < 1.0);
+	CHECK (DebrisLandFor (1e6, 10.0).rate == DEBRIS_RATE[0]);
+	// the gate: DEBRIS_MAX within DEBRIS_WINDOW, then free again
+	DebrisGate g;
+	int n = 0;
+	for (int i = 0; i < 10; i++) n += g.Allow (5.0 + 0.001 * i) ? 1 : 0;
+	CHECK (n == DEBRIS_MAX);
+	CHECK (g.Allow (5.0 + DEBRIS_WINDOW + 0.01));
 }

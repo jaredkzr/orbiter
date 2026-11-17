@@ -572,6 +572,11 @@ TEST_CASE ("Ambience: the wind's and the sea's pressure, as asked", "[audio][syn
 	// Monahan's whitecaps: 0.29 % at 7 m/s; the sea's noise 0.02 Pa there
 	CHECK_THAT (AmbienceSynth::Whitecaps (7.0), WithinRel (0.00290, 0.03));
 	CHECK_THAT (AmbienceSynth::SeaPressure (7.0), WithinRel (0.02, 1e-9));
+	// heard by the water about: a beach (half of it water, 20 m off) full;
+	// marsh patches (a tenth, 130 m off) some 20 dB down; none, nothing
+	CHECK_THAT (AmbienceSynth::SeaNearness (0.5, 20.0), WithinRel (1.0, 1e-9));
+	CHECK (20.0 * std::log10 (AmbienceSynth::SeaNearness (0.1, 130.0)) < -18.0);
+	CHECK (AmbienceSynth::SeaNearness (0.0, 1e9) == 0.0);
 	for (int k = 0; k < 2; k++) {
 		Rig r;
 		auto s = AmbienceSynth::Make (r.e, 60 + k);

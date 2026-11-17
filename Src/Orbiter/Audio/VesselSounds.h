@@ -81,7 +81,12 @@ public:
 	/// A part broke off (its centre, vessel frame; its mass; struck at hit [m/s])
 	void PartBroke (const Vessel *v, const V3 &pos, double mass, double hit);
 	/// The vessel was destroyed in an impact
-	void Crash (const Vessel *v, double speed, double mass, double energy);
+	/// (frame: in space - no planet below - the body its sound goes with: the wreck)
+	void Crash (const Vessel *v, double speed, double mass, double energy, const Body *frame = nullptr);
+	/// The contacts' recordings (ORBITER_AUDIO_CONTACTS=2 and the manifest
+	/// read; else null) - also the world's aftermath (Effects: the boom,
+	/// fires, debris)
+	SampleBank *Bank ();
 
 	/// How a vessel sounds, tuned (Config/Sound/<class>.cfg, oapiAudioTune):
 	/// factors on its sounds' levels and pitches
@@ -196,7 +201,7 @@ private:
 	std::vector<Detached> detached;
 	/// One for a vessel's event at pos (its frame), heard out by `until` [s]
 	/// (the world's time) - a travel time on; null: no planet, no contacts
-	Emitter *Detach (PerVessel &pv, const V3 &pos, double dur, const char *what);
+	Emitter *Detach (PerVessel &pv, const V3 &pos, double dur, const char *what, const Body *frame = nullptr);
 	/// A layer's take as a one-shot at energy E [J] of sound (its gain at
 	/// refDist r0 [m]) on em, and on em2 (the same take; may be null)
 	bool PlayEnergy (Emitter *em, Emitter *em2, const char *layer, double E, double r0, float rate, float cutoff, double tAt, int kind);

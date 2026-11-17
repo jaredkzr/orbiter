@@ -49,12 +49,18 @@ Snapshot OrbiterScene::Take (double t, double playT) const
 	const Vector &cg = g_camera->GPos ();
 	s.ear.pos = ToV3 (cg);
 	Rot (g_camera->GRot (), s.ear.rot);
-	s.frame = pl;
-	if (pl) {
-		s.framePose.pos = ToV3 (pl->GPos ());
-		Rot (pl->GRot (), s.framePose.rot);
+	// (out in space - no planet near: a black hole, deep space - the frame
+	// is the camera's target's, moving with it: in global coordinates a
+	// wreck falling into a hole, its listener with it, moved so far each
+	// step that every path started over, unheard. No air there - a cinematic
+	// world's goes with it)
+	const Body *frame = pl ? static_cast<const Body*>(pl) : target;
+	s.frame = frame;
+	if (frame) {
+		s.framePose.pos = ToV3 (frame->GPos ());
+		Rot (frame->GRot (), s.framePose.rot);
 		const double g[3] = { cg.x, cg.y, cg.z };
-		s.air = World::AirAt (pl, g);
+		if (pl) s.air = World::AirAt (pl, g);
 	}
 	s.inside = g_camera->IsInternal () && target && target->Type () == OBJTP_VESSEL;
 	s.insideOf = s.inside ? Structure (target) : nullptr;
@@ -82,7 +88,10 @@ double OrbiterScene::SizeOf (const Body *b) const
 Air OrbiterScene::AirAt (const void *frame, const V3 &g) const
 {
 	const double gp[3] = { g.x, g.y, g.z };
-	return World::AirAt (static_cast<const Planet*>(frame), gp);
+	// (a frame not a planet's - a vessel, a wreck out in space: no air)
+	const Body *b = static_cast<const Body*>(frame);
+	if (!b || b->Type () != OBJTP_PLANET) return Air ();
+	return World::AirAt (static_cast<const Planet*>(b), gp);
 }
 
 Air World::AirAt (const Planet *p, const double g[3])

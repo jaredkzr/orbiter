@@ -72,6 +72,10 @@ bool SampleFlight (System &sys, const Vessel *vessel, double simt, double simdt,
 	s.mach = s.atmP > FlightState::ATM_P ? v->GetMachNumber () : 0.0;
 	s.q = v->GetDynPressure ();
 	s.contact = v->GroundContact () || (v->GetFlightStatus () & 1);
+	// (a black hole has no ground: its horizon no terrain to warn of, nothing
+	// to touch down on or lift off from - only far above it)
+	if (OBJHANDLE ref = v->GetSurfaceRef ())
+		if (oapiGetObjectType (ref) == OBJTP_BLACKHOLE) s.alt = s.altitude = 1e12, s.vs = s.hvUp = 0.0, s.contact = false;
 	s.gear = GearState (sys, vessel);
 	// engines
 	s.main = v->GetThrusterGroupLevel (THGROUP_MAIN);

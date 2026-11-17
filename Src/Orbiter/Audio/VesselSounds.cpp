@@ -133,6 +133,11 @@ bool VesselSounds::ContactBank ()
 	return bankState > 0;
 }
 
+SampleBank *VesselSounds::Bank ()
+{
+	return Dbg ().contactVoices && ContactBank () ? &bank : nullptr;
+}
+
 void VesselSounds::Clear ()
 {
 	for (auto &pv : vessels) Drop (*pv);
@@ -867,9 +872,14 @@ void VesselSounds::UpdateMotors (PerVessel &pv, VesselConfig &cfg)
 	}
 }
 
-Emitter *VesselSounds::Detach (PerVessel &pv, const V3 &pos, double dur, const char *what)
+Emitter *VesselSounds::Detach (PerVessel &pv, const V3 &pos, double dur, const char *what, const Body *frame)
 {
-	const Planet *pl = pv.v->ProxyPlanet ();
+	// (on the planet below; out in space - a black hole, a star - the frame
+	// given (a wreck: its sound falls with it), else its gravity's body: a
+	// break-up there is heard too, cinematic)
+	const Body *pl = pv.v->ProxyPlanet ();
+	if (!pl) pl = frame;
+	if (!pl) pl = pv.v->ProxyBody ();
 	if (!pl) return nullptr;
 	auto cv = ContactVoices::Make (engine, ContactVoices::AIR, pv.v->Size (), seed++);
 	if (!cv) return nullptr;
@@ -925,7 +935,7 @@ void VesselSounds::PartBroke (const Vessel *v, const V3 &pos, double mass, doubl
 		printf ("Audio: contact of %s: tear at %.3f s: %.3g J of sound (rate %.2f), clatter %.3f s on\n", v->Name (), t, b.tearE, b.rate, b.clatterDelay), fflush (stdout);
 }
 
-void VesselSounds::Crash (const Vessel *v, double speed, double mass, double energy)
+void VesselSounds::Crash (const Vessel *v, double speed, double mass, double energy, const Body *frame)
 {
 	if (Dbg ().log > 0) {
 		ContactEvent e;
@@ -937,7 +947,7 @@ void VesselSounds::Crash (const Vessel *v, double speed, double mass, double ene
 	if (!pv || !Dbg ().contactVoices || !ContactBank ()) return;
 	// the crash: its take, tears staggered, the debris - from where it
 	// struck, on the planet (the vessel's own sounds go with it now)
-	Emitter *em = Detach (*pv, V3 (), 6.0, "crash");
+	Emitter *em = Detach (*pv, V3 (), 6.0, "crash", frame);
 	if (!em) return;
 	const double t = td.SimT1;
 	static const char *layer[3] = {"crash", "tear", "clatter"};

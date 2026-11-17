@@ -515,8 +515,8 @@ void VulkanClient::StreamFrame ()
 			char cmd[1024];
 			snprintf (cmd, sizeof (cmd), "ffmpeg -hide_banner -loglevel error -y -f rawvideo -pix_fmt %s -s %ux%u -framerate %g -i - %s '%s'",
 				bgr ? "bgra" : "rgba", w, h, videoFps,
-				vaapi ? "-vaapi_device /dev/dri/renderD128 -vf format=nv12,hwupload -c:v h264_vaapi -qp 18"
-				      : "-c:v libx264 -preset veryfast -crf 18 -pix_fmt yuv420p",
+				vaapi ? "-vaapi_device /dev/dri/renderD128 -vf format=nv12,hwupload -c:v h264_vaapi -qp 18 -g 30"
+				      : "-c:v libx264 -preset veryfast -crf 18 -pix_fmt yuv420p -g 30", // (a keyframe a second: seekable)
 				videoFile.c_str ());
 			signal (SIGPIPE, SIG_IGN); // (ffmpeg gone: a failed write, not the end of Orbiter)
 			videoPipe = popen (cmd, "w");

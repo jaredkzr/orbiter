@@ -1,0 +1,30 @@
+BEGIN_HYPERDESC
+<h1>Black holes: tides (a review clip)</h1>
+A delta-glider lowered towards a black hole of 10 solar masses (spin 0.7), the damage model on, by script
+(Script/Tests/TidesVideo): heard from its cockpit as the tides build - creaks, groans,
+its parts tearing off - then seen from outside as it breaks up.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System BlackHoleSmallTest
+  Date MJD 51982.6685767396
+  Script Tests/TidesVideo
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship TIDE
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET TIDE
+  MODE Cockpit
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+TIDE:DeltaGlider
+  STATUS Orbiting SmallHole
+  ELEMENTS 1.0e9 0.00000 0.0 0.0 0.0 0.0 51982.6685767396
+  AROT 0 0 0
+END
+END_SHIPS

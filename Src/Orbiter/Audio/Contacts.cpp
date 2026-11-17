@@ -255,6 +255,63 @@ std::vector<CrashPart> CrashFor (double energy, double mass, double u01a, double
 	return parts;
 }
 
+double BoomHeard (double W, double R)
+{
+	if (W <= 0.0) return 0.0;
+	const double RHOC = 1.225 * 340.3;   // (sea-level air: the world couples it at the source and the ear)
+	const double r = std::max (R, 1.0);
+	const double dose = BOOM_ETA * TNT_J * W * RHOC / (4.0 * 3.14159265358979 * r * r);   // [Pa^2 s]
+	const double p = std::sqrt (dose / BOOM_T);
+	return p / std::sqrt (1.0 + (p / BOOM_HEARD_MAX) * (p / BOOM_HEARD_MAX));
+}
+
+FireBed FireBedFor (double D)
+{
+	FireBed f;
+	const double d = std::max (D, 0.1);
+	f.rate = std::clamp (std::pow (d / 10.0, -0.15), FIRE_RATE[0], FIRE_RATE[1]);
+	f.cutoff = std::clamp (8000.0 * std::sqrt (10.0 / d), FIRE_FC[0], FIRE_FC[1]);
+	return f;
+}
+
+double SmoulderLevel (double since)
+{
+	if (since < 0.0 || since >= SMOULDER_T) return 0.0;
+	return SMOULDER_FRAC * std::sqrt (1.0 - since / SMOULDER_T);
+}
+
+double TickRate (double age)
+{
+	if (age < 0.0 || age >= TICK_T) return 0.0;
+	return TICK_RATE0 * std::exp (-age / TICK_TAU);
+}
+
+bool DebrisLands (double impact, double prevImpact, double t, double lastT)
+{
+	return impact >= DEBRIS_V_MIN && prevImpact < 0.5 * DEBRIS_V_MIN && t - lastT >= DEBRIS_GAP;
+}
+
+DebrisLand DebrisLandFor (double mass, double v)
+{
+	DebrisLand d;
+	const double m = std::max (mass, 0.0);
+	d.energy = ETA_DEBRIS * 0.5 * m * v * v;
+	d.rate = std::clamp (std::pow (std::max (m, 1.0) / 100.0, -0.1), DEBRIS_RATE[0], DEBRIS_RATE[1]);
+	return d;
+}
+
+bool DebrisGate::Allow (double t)
+{
+	int oldest = 0;
+	for (int i = 0; i < DEBRIS_MAX; i++) {
+		if (recent[i] > t) recent[i] = -1e9;   // (time went back: forgotten)
+		if (recent[i] < recent[oldest]) oldest = i;
+	}
+	if (t - recent[oldest] < DEBRIS_WINDOW) return false;   // (all DEBRIS_MAX within the window)
+	recent[oldest] = t;
+	return true;
+}
+
 std::vector<Chirp> Chirps::Step (double t, const std::vector<ContactSample> &pts, const std::vector<ContactEvent> &events, double mass)
 {
 	std::vector<Chirp> out;

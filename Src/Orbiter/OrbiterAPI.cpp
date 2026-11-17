@@ -1745,7 +1745,7 @@ DLLEXPORT int oapiCameraMode ()
 
 DLLEXPORT int oapiCockpitMode ()
 {
-	return g_pane->GetPanelMode();
+	return g_pane ? g_pane->GetPanelMode() : COCKPIT_GENERIC; // (headless: no panes - a vessel's poststep asking crashed it)
 }
 
 // Functions for planetary bodies

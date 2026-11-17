@@ -8,6 +8,8 @@
 #include "SplashSynth.h"
 #include "ThunderSynth.h"
 #include "CreakSynth.h"
+#include "ContactVoices.h"
+#include "SampleBank.h"
 #include "AudioSystem.h"
 #include "VesselSounds.h"
 #include "Debris.h"
@@ -34,6 +36,10 @@ namespace {
 	/// A blast unheard this long after it went off is dropped (beyond the
 	/// world's reach)
 	constexpr double BLAST_MAX_AGE = 240.0;
+	/// A blast heard no louder than this [Pa] (softly): twice the mix's full
+	/// scale, 136 dB - still the loudest thing, the limiter takes it, not
+	/// tens of kPa over everything for seconds (2026-11-16, by ear)
+	constexpr double BLAST_HEARD_MAX = 2.0 * P_FULL;
 	constexpr double SEA_P = 101325.0, SEA_C = 340.3;
 	/// The structure's creaks in its cabin: at the most this [Pa] at their
 	/// peak (subtle: a moderate load's some 6 dB over the cabin's air
@@ -87,6 +93,26 @@ void Effects::Explosion (const Vessel *v, double propellant)
 	p[0] = 1.0f;
 	em->Push (b.t0, p);
 	LOGOUT ("Audio: explosion of %s: %.0f kg propellant, %.0f kg TNT%s, air %.3g kg/m^3", v->Name (), propellant, b.W, alt < fireball ? " (surface burst)" : "", a.rho);
+	// the boom (recordings): an `explosion` take and its echo, on an emitter
+	// of their own beside the blast's (its level set as the blast's, as it's
+	// heard: BoomHeard), kept on after the blast's synth is done
+	if (SampleBank *bank = Bank ()) {
+		SampleBank::Take k = bank->Pick ("explosion");
+		auto cv = k && k.energy > 0.0 && k.clip->frames ? ContactVoices::Make (engine, ContactVoices::AIR, 10.0, seed++) : nullptr;
+		if (cv) {
+			EmitterDesc bd = d;
+			bd.name = std::string ("boom of ") + v->Name ();
+			b.boom = world.Add (bd, std::move (cv));
+			if (Emitter *be = world.Get (b.boom)) {
+				const double dur = (double)k.clip->frames / k.clip->rate;
+				const float g = (float)(k.gain / std::sqrt (k.energy / dur));   // (the take at unit RMS: the emitter's level is the boom's)
+				const double echoT = ECHO_T[0] + (ECHO_T[1] - ECHO_T[0]) * WreckRand ();
+				be->Schedule (b.t0, ContactVoices::Shot (ContactVoices::CRASH, k.clip.get (), g, k.rate, 16000.0f, 0.0f));
+				be->Schedule (b.t0 + echoT, ContactVoices::Shot (ContactVoices::CRASH, k.clip.get (), g * (float)ECHO_GAIN, (float)(k.rate * ECHO_RATE), (float)ECHO_FC, 0.0f));
+				b.boomLen = echoT + dur / std::max (k.rate * ECHO_RATE, 0.5);
+			}
+		}
+	}
 	blasts.push_back (b);
 }
 
@@ -185,8 +211,15 @@ void Effects::Update (double t)
 			// divided out; the listener's coupling is the listener's own air)
 			double dP, tdv;
 			BlastSynth::Sachs (R, b.W, b.p, b.c, dP, tdv);
+			// (heard no louder than BLAST_HEARD_MAX, softly: a near blast's
+			// tens of kPa went 50 dB over full scale - clipped, and the ears'
+			// compressor buried the crash's debris for seconds after it)
+			const double dPh = dP / std::sqrt (1.0 + (dP / BLAST_HEARD_MAX) * (dP / BLAST_HEARD_MAX));
 			const double refDist = em->Desc ().refDist;
-			em->SetLevel ((float)(dP * std::max (R, refDist) / refDist / P_FULL / std::max (b.coupling, 1e-6)));
+			em->SetLevel ((float)(dPh * std::max (R, refDist) / refDist / P_FULL / std::max (b.coupling, 1e-6)));
+			// (its boom: as loud as BoomHeard at R - the world spreads it the same)
+			if (Emitter *be = world.Get (b.boom))
+				be->SetLevel ((float)(BoomHeard (b.W, R) * std::max (R, refDist) / refDist / P_FULL / std::max (b.coupling, 1e-6)));
 			synth->Set (R, tdv);
 			Floats<1> p;
 			p[0] = 1.0f;
@@ -196,13 +229,19 @@ void Effects::Update (double t)
 			if (em->Heard ().images > 0 && em->Recalled<Floats<1>> ()[0] > 0.5f) {
 				synth->Fire ();
 				b.fired = true;
-				LOGOUT ("Audio: blast heard at %.3f s, %.0f m from it: %.0f Pa (%.0f dB), %.1f ms (air %.0f Pa)", t, R, dP, 20.0 * std::log10 (std::max (dP, 1e-12) / 2e-5), 1e3 * tdv, b.p);
+				b.firedT = t;
+				if (world.Get (b.boom) && Dbg ().log > 0)
+					printf ("Audio: boom heard at %.3f s, %.0f m from it: %.2f Pa RMS (%.1f s with its echo)\n", t, R, BoomHeard (b.W, R), b.boomLen), fflush (stdout);
+				LOGOUT ("Audio: blast heard at %.3f s, %.0f m from it: %.0f Pa (%.0f dB; heard as %.0f Pa), %.1f ms (air %.0f Pa)", t, R, dP, 20.0 * std::log10 (std::max (dP, 1e-12) / 2e-5), dPh, 1e3 * tdv, b.p);
 				const bool log = Dbg ().log > 0;
-				if (log) printf ("Audio: blast heard at %.3f s, %.0f m from it: %.0f Pa\n", t, R, dP), fflush (stdout);
+				if (log) printf ("Audio: blast heard at %.3f s, %.0f m from it: %.0f Pa (heard as %.0f Pa)\n", t, R, dP, dPh), fflush (stdout);
 			}
 		}
 		if ((b.fired && synth->Done ()) || t - b.t0 > BLAST_MAX_AGE || t < b.t0 - 1.0) {
 			world.Remove (b.em);
+			// (its boom heard on: its length and echo after it was heard)
+			if (b.fired && t >= b.t0 && world.Get (b.boom)) booms.push_back ({b.boom, b.firedT + b.boomLen + 2.0});
+			else world.Remove (b.boom);
 			it = blasts.erase (it);
 		} else ++it;
 	}
@@ -211,6 +250,10 @@ void Effects::Update (double t)
 void Effects::UpdateFires (double t)
 {
 	if (!g_psys) return;
+	for (auto it = booms.begin (); it != booms.end (); )
+		if (t > it->until || t < it->until - 600.0 || !world.Get (it->em)) { world.Remove (it->em); it = booms.erase (it); }
+		else ++it;
+	if (SampleBank *bank = Bank ()) { UpdateWrecks (t, *bank); return; }
 	// fires lit: an emitter each, its history from the moment it was lit
 	for (size_t i = 0; i < g_psys->nDebris (); i++) {
 		Debris *d = g_psys->GetDebris (i);
@@ -258,6 +301,156 @@ void Effects::UpdateFires (double t)
 		if (left <= 0.0 && f.out < 0.0) f.out = t;
 		if (f.out >= 0.0 && t - f.out > 60.0) { world.Remove (f.em); it = fires.erase (it); }
 		else ++it;
+	}
+}
+
+SampleBank *Effects::Bank () const
+{
+	return sounds ? sounds->Bank () : nullptr;
+}
+
+size_t Effects::Fires () const
+{
+	size_t n = fires.size ();
+	for (const Wreck &w : wrecks) if (w.burned && w.outT < 0.0) n++;
+	return n;
+}
+
+Emitter *Effects::WreckEmitter (Wreck &w, const Debris *d, float refDist)
+{
+	if (Emitter *em = world.Get (w.em)) return em;
+	auto cv = ContactVoices::Make (engine, ContactVoices::AIR, 5.0, seed++);
+	if (!cv) return nullptr;
+	EmitterDesc ed;
+	ed.body = d;
+	ed.refDist = w.refDist = refDist;
+	ed.level = 1.0f;   // (its one-shots' and beds' gains are pressures at refDist, over P_FULL)
+	ed.name = std::string ("wreck of ") + d->Name ();
+	w.em = world.Add (ed, std::move (cv));
+	w.takes = false;
+	return world.Get (w.em);
+}
+
+void Effects::UpdateWrecks (double t, SampleBank &bank)
+{
+	const bool log = Dbg ().log > 0;
+	// (each piece: followed from when it broke off - its landings, its fire)
+	struct Land { size_t w; const Debris *d; double v; DebrisLand l; };   // (w: an index - wrecks may grow meanwhile)
+	std::vector<Land> lands;
+	for (size_t i = 0; i < g_psys->nDebris (); i++) {
+		const Debris *d = g_psys->GetDebris (i);
+		if (!d || d->Hidden ()) continue;
+		const BodyRef ref = world.Ref (d);
+		auto wi = std::find_if (wrecks.begin (), wrecks.end (), [ref](const Wreck &w) { return w.debris == ref; });
+		if (wi == wrecks.end ()) { Wreck nw; nw.debris = ref; wrecks.push_back (nw); wi = wrecks.end () - 1; }
+		const size_t widx = (size_t)(wi - wrecks.begin ());
+		Wreck &w = *wi;
+		// landing (the ground's blow of the step rising), or struck by another body
+		const double imp = d->Impact ();
+		if (DebrisLands (imp, w.prevImpact, t, w.lastLand))
+			lands.push_back ({widx, d, imp, DebrisLandFor (d->Mass (), imp)});
+		else if (d->HitT () == td.SimT1 && d->Hit () >= 2.0 * DEBRIS_V_MIN && t - w.lastLand >= DEBRIS_GAP)
+			lands.push_back ({widx, d, d->Hit (), DebrisLandFor (d->Mass (), d->Hit ())});
+		w.prevImpact = imp;
+		// catching fire: its emitter sized by the flames (FireSynth's law)
+		if (!w.burned && d->BurnLeft () > 0.0 && d->Fuel () > 0.0) {
+			const double Q = d->Fuel () * FireSynth::HEAT / std::max (d->BurnTime (), 1.0);
+			Emitter *em = WreckEmitter (w, d, (float)std::max (1.0, 0.5 * FireSynth::DiameterFor (Q)));
+			if (em) {
+				w.burned = true;
+				w.fireP = VesselSounds::PressureAt (FireSynth::EFFICIENCY * Q, em->Desc ().refDist);
+				w.lastEvent = t;
+				if (log) printf ("Audio: fire of %s at %.3f s: %.0f kg over %.0f s, %.2f Pa at %.1f m (%.0f m across)\n",
+					d->Name (), t, d->Fuel (), d->BurnTime (), w.fireP, em->Desc ().refDist, FireSynth::DiameterFor (Q)), fflush (stdout);
+			}
+		}
+	}
+	// the landings heard: the loudest first, DEBRIS_MAX within DEBRIS_WINDOW
+	std::sort (lands.begin (), lands.end (), [](const Land &a, const Land &b) { return a.l.energy > b.l.energy; });
+	for (Land &L : lands) {
+		Wreck &lw = wrecks[L.w];
+		lw.lastLand = t;
+		if (L.l.energy <= 0.0 || !debrisGate.Allow (t)) continue;
+		Emitter *em = WreckEmitter (lw, L.d, 2.0f);
+		if (!em) continue;
+		const char *layer = bank.Count ("debris_land") ? "debris_land" : bank.Count ("clatter") ? "clatter" : "impact_metal";
+		SampleBank::Take k = bank.Pick (layer, layer[0] == 'i' ? SampleBank::SOFT : SampleBank::ANY);
+		if (!k || k.energy <= 0.0) continue;
+		const double r0 = em->Desc ().refDist;
+		const double p2 = L.l.energy * RHO0 * C0 / (4.0 * 3.14159265358979 * r0 * r0);
+		const float g = (float)(std::sqrt (p2 / k.energy) / P_FULL) * k.gain;
+		em->Schedule (t, ContactVoices::Shot (ContactVoices::CLATTER, k.clip.get (), g, (float)(k.rate * L.l.rate), 16000.0f, 0.0f));
+		lw.lastEvent = t, lw.lands++;
+		if (log) printf ("Audio: debris %s lands at %.3f s: %.1f m/s, %.0f kg, %.3g J of sound (%s)\n",
+			L.d->Name (), t, L.v, L.d->Mass (), L.l.energy, layer), fflush (stdout);
+	}
+	// each piece's fire, smoulder, ticks
+	for (auto it = wrecks.begin (); it != wrecks.end (); ) {
+		Wreck &w = *it;
+		const Debris *d = static_cast<const Debris*> (world.Get (w.debris));
+		if (!d) { world.Remove (w.em); it = wrecks.erase (it); continue; }   // (gone: deleted)
+		Emitter *em = world.Get (w.em);
+		if (em && w.burned) {
+			if (!w.takes) {
+				// (two takes of the fire, each at unit RMS: the flames, and the
+				// same low and dulled for its smoulder)
+				const Clip *c[2] = {};
+				float gk[2] = {1.0f, 1.0f};
+				int n = 0;
+				for (int k = 0; k < std::min (2, std::max (1, bank.Count ("fire"))); k++) {
+					SampleBank::Take tk = bank.Pick ("fire");
+					if (!tk || tk.energy <= 0.0 || !tk.clip->frames || (n && tk.clip.get () == c[0])) continue;
+					c[n] = tk.clip.get (), gk[n] = (float)(1.0 / std::sqrt (tk.energy / ((double)tk.clip->frames / tk.clip->rate))), n++;
+				}
+				ContactVoices *cv = world.Synth<ContactVoices> (w.em);
+				if (n && cv && cv->SetBedTakes (ContactVoices::ROLL, c[0], gk[0], c[1], gk[1]) && cv->SetBedTakes (ContactVoices::BRAKE, c[0], gk[0], c[1], gk[1]))
+					w.takes = true;
+			}
+			// the flames (dying down over their last fifth, as FireSynth's),
+			// then the smoulder
+			const double left = d->BurnLeft (), T = std::max (d->BurnTime (), 1.0);
+			const double Q = d->Fuel () * FireSynth::HEAT / T;
+			const FireBed fb = FireBedFor (FireSynth::DiameterFor (Q));
+			Floats<4> p;   // (flames' gain, rate, cutoff; the smoulder's gain)
+			if (left > 0.0) {
+				p[0] = (float)(w.fireP * std::sqrt (std::min (1.0, left / (0.2 * T))) / P_FULL);
+				w.lastEvent = t;
+			} else if (w.outT < 0.0) {
+				w.outT = t;
+				if (log) printf ("Audio: fire of %s out at %.3f s: smouldering %.0f s, ticking %.0f s\n", d->Name (), t, SMOULDER_T, TICK_T), fflush (stdout);
+			}
+			p[1] = (float)fb.rate, p[2] = (float)fb.cutoff;
+			if (w.outT >= 0.0) p[3] = (float)(w.fireP * SmoulderLevel (t - w.outT) / P_FULL);
+			em->Push (t, p);
+			const Floats<4> h = em->Heard ().images > 0 ? em->Recalled<Floats<4>> () : Floats<4>{};
+			if (ContactVoices *cv = world.Synth<ContactVoices> (w.em)) {
+				cv->SetBed (ContactVoices::ROLL, h[0], h[1] > 0.0f ? h[1] : (float)fb.rate, h[2] > 0.0f ? h[2] : (float)fb.cutoff);
+				cv->SetBed (ContactVoices::BRAKE, h[3], (float)(SMOULDER_RATE * fb.rate), (float)SMOULDER_FC);
+			}
+			// hot metal ticking as it cools: on the ground, sparser over time
+			const double age = w.outT >= 0.0 ? t - w.outT : -1.0;
+			const double rate = TickRate (age);
+			if (rate > 0.0 && (d->AtRest () || d->Impact () > 0.0)) {
+				if (w.nextTick < 0.0) w.nextTick = t - std::log (std::max (WreckRand (), 1e-6)) / rate;
+				if (t >= w.nextTick) {
+					SampleBank::Take k = bank.Pick ("tick");
+					if (k && k.energy > 0.0 && k.clip->frames) {
+						const double rms = std::sqrt (k.energy / ((double)k.clip->frames / k.clip->rate));
+						const double pk = TICK_P * std::pow (10.0, TICK_DB * (2.0 * WreckRand () - 1.0) / 20.0);
+						em->Schedule (t, ContactVoices::Shot (ContactVoices::CLATTER, k.clip.get (), (float)(pk / P_FULL / rms) * k.gain, k.rate, 12000.0f, 0.0f));
+						w.ticks++;
+						if (log) printf ("Audio: tick of %s at %.3f s (%.0f s after its fire)\n", d->Name (), t, age), fflush (stdout);
+					}
+					w.nextTick = t - std::log (std::max (WreckRand (), 1e-6)) / rate;
+				}
+				w.lastEvent = t;
+			}
+		}
+		// (long quiet - out, smouldered, ticked out, not landing: its emitter
+		// gone; followed on, should it land again)
+		const bool done = !w.burned || (w.outT >= 0.0 && t - w.outT > std::max (SMOULDER_T, TICK_T));
+		if (em && done && t - w.lastEvent > 20.0) { world.Remove (w.em); w.em = EmitterId (); }
+		++it;
 	}
 }
 
@@ -448,8 +641,13 @@ void Effects::UpdateCreaks (double t)
 
 void Effects::Clear ()
 {
-	for (auto &b : blasts) world.Remove (b.em);
+	for (auto &b : blasts) world.Remove (b.em), world.Remove (b.boom);
 	blasts.clear ();
+	for (auto &b : booms) world.Remove (b.em);
+	booms.clear ();
+	for (auto &w : wrecks) world.Remove (w.em);
+	wrecks.clear ();
+	debrisGate = DebrisGate ();
 	for (auto &f : fires) world.Remove (f.em);
 	fires.clear ();
 	for (auto &w : waters) world.Remove (w.em);
