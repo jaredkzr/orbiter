@@ -1,0 +1,25 @@
+BEGIN_HYPERDESC
+<h1>The bases' generic buildings</h1>
+The generic buildings of Brighton Beach, Olympus, Edwards and Baikonur as
+the core describes them (oapiGetBaseBuildings): as many as their files
+have, tanks' sizes their radii, standing on the ground.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51983.25
+  Script Tests/BaseBuildingsTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship V
+END_FOCUS
+
+BEGIN_SHIPS
+V:DeltaGlider
+  STATUS Landed Moon
+  BASE Brighton Beach:1
+  HEADING 0.00
+  GEAR 1 1.0000
+END
+END_SHIPS

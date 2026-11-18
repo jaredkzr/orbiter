@@ -5630,6 +5630,40 @@ typedef struct {
 	*/
 OAPIFUNC DWORD oapiGetBaseBuildings (OBJHANDLE hBase, BASEBUILDINGSPEC *spec, DWORD n);
 
+/**
+ * \brief A base's train (TRAIN1, TRAIN2), described by oapiGetBaseTrains (a
+ *   client may draw and move its own; the core's groups of it carry
+ *   MESHGRP_TRAIN). Its cars shuttle between minpos and maxpos along the
+ *   track from end1: from rest at 1 m/s, the speed growing with the distance
+ *   from the end, (d - minpos) (maxspeed - 1) / (slowzone - minpos) + 1, up
+ *   to maxspeed; the same towards the other end (Train::MoveCabin). TRAIN1:
+ *   one car riding on a rail on the ground, from minpos; TRAIN2: two cars
+ *   hanging 1 m under a rail on portals height up, 2.5 m either side of the
+ *   track (+x' the first, from minpos; -x' the second, from maxpos).
+ */
+typedef struct {
+	int type;          ///< TRAIN_MONORAIL (TRAIN1), TRAIN_HANGRAIL (TRAIN2)
+	VECTOR3 end1;      ///< the track's ends (base frame, on the ground there) [m]
+	VECTOR3 end2;
+	double height;     ///< TRAIN2: the rail's height over the ground [m]
+	double maxspeed;   ///< [m/s]
+	double slowzone;   ///< [m]
+	double minpos;     ///< the cars' turning points (distance from end1) [m]
+	double maxpos;
+	char tex[32];      ///< the core's texture (Config/Base.cfg)
+} TRAINSPEC;
+#define TRAIN_MONORAIL 1
+#define TRAIN_HANGRAIL 2
+
+	/**
+	* \brief The trains of a base.
+	* \param hBase surface base handle
+	* \param spec array to receive up to n of them (may be NULL)
+	* \param n its size
+	* \return the number of trains of the base
+	*/
+OAPIFUNC DWORD oapiGetBaseTrains (OBJHANDLE hBase, TRAINSPEC *spec, DWORD n);
+
 	/**
 	* \brief A landing pad of a base.
 	* \param hBase surface base handle

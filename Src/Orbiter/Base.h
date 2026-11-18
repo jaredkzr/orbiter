@@ -98,6 +98,8 @@ public:
 	DWORD GetRunways (RUNWAYSPEC *spec, DWORD n) const;
 	/// Its generic buildings (BLOCK, HANGAR, HANGAR2, HANGAR3, TANK; up to n into spec): their number
 	DWORD GetBuildings (BASEBUILDINGSPEC *spec, DWORD n) const;
+	/// Its trains (TRAIN1, TRAIN2; up to n into spec): their number
+	DWORD GetTrains (TRAINSPEC *spec, DWORD n) const;
 	/// a generic texture's name (Config/Base.cfg) by its id (NameToId); null: none
 	static const char *GenericTextureName (LONGLONG id);
 	/// Its landing pad pad (0-based); false: none

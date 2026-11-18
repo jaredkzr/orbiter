@@ -70,6 +70,10 @@ public:
 	/// A generic building's description (BLOCK, HANGAR, HANGAR2, HANGAR3, TANK:
 	/// oapiGetBaseBuildings; spec may be null); false: not one
 	virtual bool GetBuildingSpec (BASEBUILDINGSPEC *spec) const { return false; }
+
+	/// A train's description (TRAIN1, TRAIN2: oapiGetBaseTrains; spec may be
+	/// null); false: not one
+	virtual bool GetTrainSpec (TRAINSPEC *spec) const { return false; }
 	// Allow the object to export its groups into vertex list vtx and index list idx
 	// On call, idx_ofs is the current total length of the index list and should be
 	// updated by the function
@@ -601,6 +605,9 @@ protected:
 	// 'ofs' is a translation applied up front
 
 	D3DVALUE MoveCabin (D3DVALUE &pos, D3DVALUE &vel, bool &atmin);
+
+	void FillTrainSpec (TRAINSPEC *spec, int type, double height) const;
+	char texname[32] = "";   // its texture's name (TEX: as read; the generic textures' names are known only with a graphics client)
 	// update cabin position 'pos' and velocity 'vel' and return
 	// the displacement. if 'atmin' is true on exit, the cabin is
 	// at minpos
@@ -625,6 +632,7 @@ public:
 	~Train1 ();
 	int Read (std::istream &is);
 	DWORD GetSpecs() const { return OBJSPEC_EXPORTVERTEX | OBJSPEC_EXPORTSHADOW | OBJSPEC_UPDATEVERTEX; }
+	bool GetTrainSpec (TRAINSPEC *spec) const { if (spec) FillTrainSpec (spec, TRAIN_MONORAIL, 0.0); return true; }
 	bool GetGroupSpec (int grp, DWORD &nvtx, DWORD &nidx, LONGLONG &_texid,
 		bool &undershadow, bool &groundshadow);
 	void ExportGroup (int grp, NTVERTEX *vtx, WORD *idx, DWORD &idx_ofs);
@@ -658,6 +666,7 @@ public:
 	int Read (std::istream &is);
 	DWORD GetSpecs() const { return OBJSPEC_EXPORTVERTEX | OBJSPEC_EXPORTSHADOW |
 		OBJSPEC_RENDERAFTERSHADOW | OBJSPEC_RENDERSHADOW | OBJSPEC_UPDATEVERTEX; }
+	bool GetTrainSpec (TRAINSPEC *spec) const { if (spec) FillTrainSpec (spec, TRAIN_HANGRAIL, height); return true; }
 	bool GetGroupSpec (int grp, DWORD &nvtx, DWORD &nidx, LONGLONG &_texid,
 		bool &undershadow, bool &groundshadow);
 	void ExportGroup (int grp, NTVERTEX *vtx, WORD *idx, DWORD &idx_ofs);

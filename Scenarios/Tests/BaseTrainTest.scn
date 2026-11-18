@@ -1,0 +1,25 @@
+BEGIN_HYPERDESC
+<h1>The bases' trains</h1>
+Brighton Beach's hangrail and Habana's monorail and hangrails as the core
+describes them (oapiGetBaseTrains): their tracks on the ground, their
+speeds and turning points as the bases' files give them.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51983.25
+  Script Tests/BaseTrainTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship V
+END_FOCUS
+
+BEGIN_SHIPS
+V:DeltaGlider
+  STATUS Landed Moon
+  BASE Brighton Beach:1
+  HEADING 0.00
+  GEAR 1 1.0000
+END
+END_SHIPS

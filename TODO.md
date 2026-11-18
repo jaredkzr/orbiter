@@ -31,8 +31,17 @@ canals and ponds. Left over:
   texture); nor do ray traced reflections show them.
 - **Base asset overhaul** (plan: Phase 0 infrastructure and Phase 1a/1b done - client-drawn
   generic buildings, the off-world kit in Blender, night maps, kit lights, collision flags):
-  left - Brighton's monorail (TRAIN2: girders, moving cars), the Earth kit and Earth looks
-  (Phase 2), Cape Canaveral's VAB/LCC and modern LC-39A/B (Phase 3), SOLARPLANT, Train1.
+  left - Cape Canaveral's VAB/LCC and modern LC-39A/B (Phase 3), SOLARPLANT. (Done: trains,
+  the Earth kit in Blender, the Earth buildings' regional looks.)
+- **Scenario builder in the main menu** (Launchpad): build a scenario without editing files -
+  pick the focus vessel and its class, where it starts (landed at a base: its pad or runway;
+  on a planet's surface by longitude/latitude and heading; in orbit, by elements or relative
+  to another object), add other ships with their own states and locations, set the date and
+  the camera; preview it, then save it as a `.scn` under `Scenarios/` and launch it.
+- **Legacy night textures**: `Fcd*_n`, `Roof0*_n`, `Wall01_n`, `Door01_n` are named in
+  `Config/Base.cfg` but missing from `Textures/` (the client logs it at each start).
+- **The Moon by day**: near new moon it shows as a dark disc in Earth's daytime sky (seen
+  from Habana, MJD 51985.7) - the sky's light in front of it missing.
 - **Classic pads' curvature**: `STYLE classic` pads (and other base objects
   kilometres from their base's centre) are still planes at the curvature of
   their centre, tilted against the ground by up to centimetres; the marked

@@ -227,8 +227,10 @@ base's centre were tilted against the ground, partly under it).
   doors, round roofs and arches, tanks; off-world (under 10 kPa) pressurised modules with
   portholes and airlocks, long halls and arches under regolith. The core's geometry stays the
   collision shape and other clients' look. `ORBITER_VK_BASE_BUILDINGS=0`: the core's, for A/B.
-- The kits' meshes (`Meshes/BaseKit`, off-world so far) are built in Blender:
-  `blender -b --python Utils/BaseKit/blender_kit.py -- offworld <asset|all> --check`
+  On Earth they take their region's look by where the base is (`Kit::BaseRegion`: Soviet precast
+  and painted sheds, East Asian, Japanese, Middle Eastern, Latin American...).
+- The kits' meshes (`Meshes/BaseKit`: off-world, Earth, trains) are built in Blender:
+  `blender -b --python Utils/BaseKit/blender_kit.py -- <offworld|earth|trains> <asset|all> --check`
   (`kitlib.py`: shapes, world-scale texturing, groups by material and role). Their textures are
   tiling materials at real size (`Utils/BaseKit/kittex.py` → `Textures/BaseKit/kit_*`, with
   `_norm`, `_rghn`, `_metal`, `_night`). `--check` runs `Utils/BlenderMsh/msh_check.py
@@ -244,12 +246,23 @@ base's centre were tilted against the ground, partly under it).
   lines (`LIGHTABS` on a floating base) in `Config/VK/Bases/<Name>.cfg`.
 - The kits' ground (roads, tracks, aprons: `Meshes/BaseKit/<Base>_ground.msh`) is built from
   its description (`Utils/BaseKit/ground/<Base>.json`) by `python3 Utils/BaseKit/ground.py build
-  [Base]`: roads go around the bases' pads (and off-world pads' blast berms), aprons have holes
-  where pads stand (the ground mesh lies a few cm over the pads: it hid them). It writes the
+  [Base]`: roads go around the bases' pads (and off-world pads' blast berms), their buildings,
+  corridors and runways (the shortest way about them: a visibility graph; a road ending in one
+  stops at its edge), roads fanning out from one point become a network (each branching off
+  the nearest point of those laid), aprons have holes where pads stand (the ground mesh lies a
+  few cm over the pads: it hid them). `ground.py berms`: the off-world pads' blast berms turned,
+  their openings towards what reaches into them (a tunnel's arch), else the base's buildings. It writes the
   roads' and aprons' lights too (the `groundlights` block of `Config/VK/Bases/<Name>.cfg`: edge
   markers along tracks and taxiways, streetlights, apron masts and off-world work lights along
   the tracks about a base's core, with `FLOODLIGHTH` - a floodlight's height above the ground
   there). The glows (`LIGHT`) light nothing; only floodlights do (the nearest 64 in a frame). `basekit.py`/`offworld.py layout` go through it.
+- Trains (`TRAIN1` monorail, `TRAIN2` hangrail; `oapiGetBaseTrains`, groups `MESHGRP_TRAIN`,
+  out of collision): the Vulkan client draws its own (`BaseKit/train_*`, `blender_kit.py trains`)
+  - portals on the ground about every 200 m, the rail's beams between, a monorail's guideway
+  following the ground - and moves the cars by the sim time (the core's `Train::MoveCabin`
+  profile in closed form: the same at any time warp). TRAIN2's girders are now exported (a
+  static group) for every client. Lua: `oapi.get_basetrains`, `oapi.get_basebuildings`
+  (`Scenario.BaseTrainTest`, `Scenario.BaseBuildingsTest`).
 - The client-drawn buildings have lamps at night (`CityKit` `Kit::BaseLights`): over hangar
   doors (and a floodlight on the apron before them), airlocks and doors, amber markers along
   covered tunnels, red obstruction lights on roofs 40 m and higher and on pressurised hubs.

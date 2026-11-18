@@ -2874,6 +2874,17 @@ void Train::Setup ()
 	end2.y += base->RefPlanet()->Elevation (lng, lat)-base->Elevation();
 }
 
+void Train::FillTrainSpec (TRAINSPEC *spec, int type, double height) const
+{
+	memset (spec, 0, sizeof (TRAINSPEC));
+	spec->type = type;
+	spec->end1 = _V(end1.x, end1.y, end1.z), spec->end2 = _V(end2.x, end2.y, end2.z);
+	spec->height = height;
+	spec->maxspeed = maxspeed, spec->slowzone = slowzone;
+	spec->minpos = minpos, spec->maxpos = maxpos;
+	strncpy (spec->tex, texname, sizeof (spec->tex) - 1);
+}
+
 void Train::SetCabin (DWORD nvtx, const NTVERTEX *ref, NTVERTEX *res, const D3DVECTOR &pos, const D3DVECTOR &ofs)
 {
 	// rotation matrix
@@ -2999,6 +3010,7 @@ int Train1::Read (istream &is)
 		else if (!_stricmp (label, "TEX")) {
 			sscanf (cp+3, "%s%f", label, &tuscale_track);
 			texid = NameToId (label);
+			strncpy (texname, label, sizeof (texname) - 1);
 		}
 	} while (_stricmp (label, "END"));
 
@@ -3245,7 +3257,7 @@ Train2::Train2 (const Base *_base): Train (_base)
 {
 	texid = 0;
 	tuscale_track = 1.0f;
-	ngrp = 2;
+	ngrp = 3; // (the cabins; the girders and traverses: static)
 	height = 11;
 	dyndata = 0;
 }
@@ -3276,6 +3288,7 @@ int Train2::Read (istream &is)
 		else if (!_stricmp (label, "TEX")) {
 			sscanf (cp+3, "%s%f", label, &tuscale_track);
 			texid = NameToId (label);
+			strncpy (texname, label, sizeof (texname) - 1);
 		}
 	} while (_stricmp (label, "END"));
 
@@ -3390,6 +3403,14 @@ bool Train2::GetGroupSpec (int grp, DWORD &nvtx, DWORD &nidx, LONGLONG &_texid,
 		undershadow = false;
 		groundshadow = true;
 		return true;
+	case 2: // the girders (two strips of 6 each) and traverses (two strips of 4 each; Render drew them)
+		if (!dyndata) return false;
+		nvtx = (dyndata->ng + 1) * 12 + dyndata->ng * 8;
+		nidx = ((dyndata->ng + 1) * 2 * 4 + dyndata->ng * 2 * 2) * 3;
+		_texid = texid;
+		undershadow = false;
+		groundshadow = true;
+		return true;
 	default:
 		return false;
 	}
@@ -3427,6 +3448,24 @@ void Train2::ExportGroup (int grp, NTVERTEX *vtx, WORD *idx, DWORD &idx_ofs)
 		ofs.z = (grp ? maxpos : minpos);
 		SetCabin (30, cabin2, vtx, end1, ofs);
 		for (i = 0; i < 78; i++) *idx++ = cabin1_idx[i] + iofs;
+		break;
+	case 2: { // girders and traverses (the strips as triangles, front faces outward: by the vertices' normals)
+		DWORD nv = (dyndata->ng + 1) * 12 + dyndata->ng * 8;
+		memcpy (vtx, dyndata->rail, nv * sizeof (NTVERTEX));
+		auto strip = [&](DWORD first, DWORD n) {
+			for (DWORD k = 0; k + 2 < n; k++) {
+				WORD a = (WORD)(first + k), b = (WORD)(first + k + 1), c = (WORD)(first + k + 2);
+				const NTVERTEX &p = vtx[a], &q = vtx[b], &r = vtx[c];
+				D3DVALUE ux = q.x - p.x, uy = q.y - p.y, uz = q.z - p.z, wx = r.x - p.x, wy = r.y - p.y, wz = r.z - p.z;
+				D3DVALUE nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+				if (nx * p.nx + ny * p.ny + nz * p.nz < 0.0f) std::swap (b, c); // (clockwise fronts: the right-handed cross product along the normal)
+				*idx++ = a + iofs, *idx++ = b + iofs, *idx++ = c + iofs;
+			}
+		};
+		DWORD v = 0;
+		for (int g = 0; g <= dyndata->ng; g++) { strip (v, 6); v += 6; strip (v, 6); v += 6; }
+		for (int g = 0; g < dyndata->ng; g++) { strip (v, 4); v += 4; strip (v, 4); v += 4; }
+		break; }
 	}
 }
 

@@ -19,6 +19,10 @@ its markings, an apron hid the pads on it.)
         client's: Config/VK/Bases/<Name>.cfg, its groundlights block)
     ground.py check [Base ...]
         ground triangles on pads (and roads within the berms), per base
+    ground.py berms [Base ...]
+        the blast berms turned (their configuration files): their openings
+        towards what reaches into them (a tunnel's arch), else towards the
+        base's buildings
 
 Description (base frame [m]: x south, z east, as the configuration files):
     {"strips": [{"pts": [[x, z], ...], "w": width, "mat": m, "tex": t|null, "y": h}],
@@ -181,94 +185,271 @@ def pads (cfgpath):
 		out.append ((outline, (px, pz), berm))
 	return out
 
-def keepouts (P, half_w):
+def grow (P, g):
+	"""a convex polygon (ccw) grown by g: each corner moved out along its bisector"""
+	n = len (P)
+	out = []
+	for i in range (n):
+		a, b, c = P[i - 1], P[i], P[(i + 1) % n]
+		def nrm (p, q):
+			l = math.hypot (q[0] - p[0], q[1] - p[1]) or 1.0
+			return ((q[1] - p[1]) / l, -(q[0] - p[0]) / l)
+		n1, n2 = nrm (a, b), nrm (b, c)
+		m = (n1[0] + n2[0], n1[1] + n2[1])
+		k = g / max (0.2, (1 + n1[0] * n2[0] + n1[1] * n2[1]))
+		out.append ((b[0] + m[0] * k, b[1] + m[1] * k))
+	return out
+
+def keepouts (P, half_w, clear=CLEAR):
 	"""where roads of half width half_w must not go: about each pad (and its
-	berm), grown by the road's half width; overlapping ones as one (their hull)"""
+	berm), grown by the road's half width and clear"""
 	ks = []
 	for outline, (px, pz), berm in P:
 		if berm:
-			r = (BERM_R + half_w + CLEAR) / math.cos (math.pi / 16)  # (16-gon about the circle)
-			ks.append ([(px + r * math.cos (2 * math.pi * k / 16), pz + r * math.sin (2 * math.pi * k / 16)) for k in range (16)])
+			r = (BERM_R + half_w + clear) / math.cos (math.pi / 16)  # (16-gon about the circle)
+			ks.append (ccw ([(px + r * math.cos (2 * math.pi * k / 16), pz + r * math.sin (2 * math.pi * k / 16)) for k in range (16)]))
 		else:
-			g = half_w + CLEAR
-			# (the outline grown: each corner moved out along its bisector)
-			n = len (outline)
-			grown = []
-			for i in range (n):
-				a, b, c = outline[i - 1], outline[i], outline[(i + 1) % n]
-				def nrm (p, q):
-					l = math.hypot (q[0] - p[0], q[1] - p[1])
-					return ((q[1] - p[1]) / l, -(q[0] - p[0]) / l)
-				n1, n2 = nrm (a, b), nrm (b, c)
-				m = (n1[0] + n2[0], n1[1] + n2[1])
-				k = g / max (0.2, (1 + n1[0] * n2[0] + n1[1] * n2[1]))
-				grown.append ((b[0] + m[0] * k, b[1] + m[1] * k))
-			ks.append (grown)
-	# (merged while any overlap)
-	merged = True
-	while merged:
-		merged = False
-		for i in range (len (ks)):
-			for j in range (i + 1, len (ks)):
-				if overlaps (ks[i], ks[j]):
-					ks[i] = hull (ks[i] + ks[j]); del ks[j]; merged = True
-					break
-			if merged: break
-	return [ccw (k) for k in ks]
+			ks.append (ccw (grow (outline, half_w + clear)))
+	return ks
 
-# ======================================================================
-# Roads
+# ----------------------------------------------------------------------
+# What else roads keep clear of: the base's buildings (its meshes - kit,
+# legacy - by their footprints, its generic buildings), its corridors, its
+# runways
 
-def route (pts, K):
-	"""a road (a polyline) around the keep-outs K: where it crosses one, along
-	its edge the shorter way; where it starts or ends in one, from or to its
-	edge. Polylines (a part wholly in one: left out)"""
-	lines, cur = [], []
-	a, i, guard = tuple (pts[0]), 0, 0
-	while i < len (pts) - 1 and guard < 10000:
-		guard += 1
-		b = tuple (pts[i + 1])
-		hit = None
-		for P in K:
-			r = seg_poly (a, b, P)
-			if r and (hit is None or r[0] < hit[1][0]): hit = (P, r)
-		if not hit:
-			if not cur: cur = [a]
-			cur.append (b); a = b; i += 1
-			continue
-		P, (t0, t1, e0, e1) = hit
-		at = lambda t: (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
-		E, X = at (t0), at (t1)
-		if e0 < 0:  # (from inside: on from where it leaves)
-			if len (cur) >= 2: lines.append (cur)
-			cur = []
-			if e1 < 0: a = b; i += 1
-			else: a = X
-			continue
-		if not cur: cur = [a]
-		if e1 < 0:  # (into it: up to its edge)
-			cur.append (E); lines.append (cur); cur = []
-			a = b; i += 1
-			continue
-		n = len (P)
-		fwd = [P[(e0 + 1 + k) % n] for k in range ((e1 - e0) % n)]
-		bwd = [P[(e0 - k) % n] for k in range ((e0 - e1) % n)]
-		L = lambda path: sum (math.hypot (q[0] - p[0], q[1] - p[1]) for p, q in zip ([E] + path, path + [X]))
-		cur += [E] + (fwd if L (fwd) <= L (bwd) else bwd) + [X]
-		a = X
-	if len (cur) >= 2: lines.append (cur)
+LONG = 400.0  # (longer objects - a mass driver's rail - roads may cross)
+_bounds = {}
+
+def mesh_bounds (name):
+	"""a mesh's footprint (x0, z0, x1, z1) in its frame: the kit's recorded one, else its vertices'"""
+	key = name.lower ()
+	if key in _bounds: return _bounds[key]
+	fp = {k.lower (): v for k, v in json.load (open (os.path.join (HERE, 'footprints.json'))).items ()}
+	b = None
+	if key.split ('\\')[-1] in fp:
+		v = fp[key.split ('\\')[-1]]
+		b = (v['lo'][0], v['lo'][2], v['hi'][0], v['hi'][2])
+	else:
+		path = os.path.join (ROOT, 'Meshes', *name.split ('\\')) + '.msh'
+		if os.path.exists (path):
+			xs, zs = [], []
+			for _, _, V, _ in read_msh (path):
+				xs += [v[0] for v in V]; zs += [v[2] for v in V]
+			if xs: b = (min (xs), min (zs), max (xs), max (zs))
+	_bounds[key] = b
+	return b
+
+def place_rect (x0, z0, x1, z1, pos, rot, sc=(1.0, 1.0)):
+	c, s = math.cos (math.radians (rot)), math.sin (math.radians (rot))
+	pts = [(x * sc[0], z * sc[1]) for x, z in ((x0, z0), (x1, z0), (x1, z1), (x0, z1))]
+	return ccw ([(pos[0] + c * x - s * z, pos[1] + s * x + c * z) for x, z in pts])
+
+def corridors (path):
+	"""the corridors of a tubes mesh: each a convex outline (its pieces - joined
+	by their triangles, and where they meet, within 0.5 m)"""
+	pts, grp = [], []
+	def find (i):
+		while grp[i] != i: grp[i] = grp[grp[i]]; i = grp[i]
+		return i
+	for _, _, V, T in read_msh (path):
+		base = len (pts)
+		pts += [(v[0], v[2]) for v in V]
+		grp += list (range (base, base + len (V)))
+		for t in T:
+			for k in (1, 2): grp[find (base + t[k])] = find (base + t[0])
+	cell = {}
+	for i, (x, z) in enumerate (pts):
+		k = (int (math.floor (x / 0.5)), int (math.floor (z / 0.5)))
+		for dx in (-1, 0, 1):
+			for dz in (-1, 0, 1):
+				for j in cell.get ((k[0] + dx, k[1] + dz), []):
+					if math.hypot (x - pts[j][0], z - pts[j][1]) < 0.5: grp[find (i)] = find (j)
+		cell.setdefault (k, []).append (i)
+	out = {}
+	for i, p in enumerate (pts): out.setdefault (find (i), []).append (p)
+	return [ccw (hull (v)) for v in out.values () if len (v) >= 3]
+
+def buildings (cfgpath):
+	"""the base's obstacles to roads: (outline (ccw, base frame), kind:
+	'building', 'corridor', 'runway', what it is: a mesh's file, a generic building's type)"""
+	t = open (cfgpath, encoding='latin-1').read ().replace ('\r\n', '\n')
+	t = t[t.upper ().find ('BEGIN_OBJECTLIST'):]
 	out = []
-	for line in lines:  # (repeated and collinear points out)
-		clean = []
-		for p in line:
-			if clean and math.hypot (p[0] - clean[-1][0], p[1] - clean[-1][1]) < 0.05: continue
-			clean.append (p)
-		k = 1
-		while k < len (clean) - 1:
-			p, q, r = clean[k - 1], clean[k], clean[k + 1]
-			if abs ((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])) < 1e-3 * math.hypot (r[0] - p[0], r[1] - p[1]): del clean[k]
-			else: k += 1
-		if len (clean) >= 2 and sum (math.hypot (q[0] - p[0], q[1] - p[1]) for p, q in zip (clean, clean[1:])) > 1.0: out.append (clean)
+	num = lambda m, k, d=0.0: float (m.group (k)) if m and m.group (k) else d
+	for m in re.finditer (r'^(MESH|BLOCK|HANGAR|HANGAR2|HANGAR3|TANK|RUNWAY)\s*\n(.*?)^END\s*$', t, re.M | re.S):
+		kind, body = m.group (1), m.group (2)
+		pos = re.search (r'POS\s+(\S+)\s+\S+\s+(\S+)', body)
+		p = (float (pos.group (1)), float (pos.group (2))) if pos else (0.0, 0.0)
+		rot = num (re.search (r'ROT\s+(\S+)', body), 1)
+		sc = re.search (r'SCALE\s+(\S+)(?:\s+(\S+)\s+(\S+))?', body)
+		if kind == 'RUNWAY':
+			e1 = re.search (r'END1\s+(\S+)\s+\S+\s+(\S+)', body); e2 = re.search (r'END2\s+(\S+)\s+\S+\s+(\S+)', body)
+			w = num (re.search (r'WIDTH\s+(\S+)', body), 1, 50.0) + 20.0  # (with its shoulders)
+			a, b = (float (e1.group (1)), float (e1.group (2))), (float (e2.group (1)), float (e2.group (2)))
+			L = math.hypot (b[0] - a[0], b[1] - a[1]); ux, uz = (b[0] - a[0]) / L, (b[1] - a[1]) / L
+			e = 60.0  # (its overruns)
+			out.append ((ccw ([(a[0] - ux * e - uz * w / 2, a[1] - uz * e + ux * w / 2), (a[0] - ux * e + uz * w / 2, a[1] - uz * e - ux * w / 2),
+				(b[0] + ux * e + uz * w / 2, b[1] + uz * e - ux * w / 2), (b[0] + ux * e - uz * w / 2, b[1] + uz * e + ux * w / 2)]), 'runway', 'RUNWAY'))
+			continue
+		if kind == 'MESH':
+			f = re.search (r'FILE\s+(\S+)', body)
+			if not f: continue
+			name = f.group (1)
+			low = name.lower ()
+			if low.endswith ('_tubes'):  # (corridors: wrapped onto the ground, on their supports)
+				path = os.path.join (ROOT, 'Meshes', *name.split ('\\')) + '.msh'
+				if os.path.exists (path): out += [(c, 'corridor', name) for c in corridors (path)]
+				continue
+			if re.search (r'WRAPTOSURFACE', body, re.I): continue
+			if low.endswith ('_ground') or 'padberm' in low: continue
+			bd = mesh_bounds (name)
+			if not bd: continue
+			s3 = (num (sc, 1, 1.0), num (sc, 3, num (sc, 1, 1.0))) if sc else (1.0, 1.0)
+			if max ((bd[2] - bd[0]) * s3[0], (bd[3] - bd[1]) * s3[1]) > LONG: continue
+			out.append ((place_rect (bd[0], bd[1], bd[2], bd[3], p, rot, s3), 'building', name))
+			continue
+		if not sc: continue
+		sx, sz = num (sc, 1), num (sc, 3, num (sc, 1))
+		if kind == 'TANK':  # (SCALE: radius, height, radius)
+			r = sx / math.cos (math.pi / 8)
+			out.append ((ccw ([(p[0] + r * math.cos (math.pi / 4 * k + math.pi / 8), p[1] + r * math.sin (math.pi / 4 * k + math.pi / 8)) for k in range (8)]), 'building', kind))
+		elif max (sx, sz) <= LONG or kind != 'BLOCK':
+			out.append ((place_rect (-sx / 2, -sz / 2, sx / 2, sz / 2, p, rot), 'building', kind))
+	return out
+
+# ----------------------------------------------------------------------
+# Roads: around what is in their way (the shortest way about the obstacles,
+# grown by a road's half width and clear: a visibility graph of their
+# corners), roads fanning out from a point joined into a network
+
+def dist_in (p, P):
+	"""how far p is inside convex P (ccw): its least distance to an edge's line (< 0: outside)"""
+	d = 1e30
+	for i in range (len (P)):
+		a, b = P[i], P[(i + 1) % len (P)]
+		l = math.hypot (b[0] - a[0], b[1] - a[1]) or 1.0
+		d = min (d, ((b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])) / l)
+	return d
+
+def blocked (a, b, polys, eps=1e-3):
+	"""does the segment a-b pass through any polygon's inside (along an edge: not)"""
+	for P in polys:
+		r = seg_poly (a, b, P)
+		if not r: continue
+		t = 0.5 * (r[0] + r[1])
+		if dist_in ((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t), P) > eps: return True
+	return False
+
+def leave (a, b, polys):
+	"""a moved along a-b out of the polygons it is in (None: b too is in them)"""
+	for _ in range (20):
+		inside = [P for P in polys if dist_in (a, P) > 1e-6]
+		if not inside: return a
+		t = 0.0
+		for P in inside:
+			r = seg_poly (a, b, P)
+			if r: t = max (t, r[1])
+		if t >= 1.0 - 1e-9: return None
+		a = (a[0] + (b[0] - a[0]) * (t + 1e-6), a[1] + (b[1] - a[1]) * (t + 1e-6))
+	return a
+
+def shortest (a, b, polys):
+	"""the shortest way from a to b about the polygons (their corners outside
+	the others: a visibility graph); from and to their edges where a, b are inside"""
+	a2 = leave (a, b, polys)
+	if a2 is None: return None
+	b2 = leave (b, a2, polys)
+	if b2 is None: return None
+	a, b = a2, b2
+	if not blocked (a, b, polys): return [a, b]
+	# (the polygons near the way only)
+	m = 600.0  # (by their bounding boxes: a long runway's corners are far from where a road meets it)
+	x0, x1, z0, z1 = min (a[0], b[0]) - m, max (a[0], b[0]) + m, min (a[1], b[1]) - m, max (a[1], b[1]) + m
+	near = [P for P in polys if min (v[0] for v in P) < x1 and max (v[0] for v in P) > x0 and min (v[1] for v in P) < z1 and max (v[1] for v in P) > z0]
+	nodes = [a, b] + [v for P in near for v in P if all (dist_in (v, Q) <= 1e-6 for Q in near)]
+	import heapq
+	dist, prev, done = {0: 0.0}, {}, set ()
+	q = [(0.0, 0)]
+	while q:
+		d, i = heapq.heappop (q)
+		if i in done: continue
+		done.add (i)
+		if i == 1: break
+		for j in range (len (nodes)):
+			if j in done: continue
+			nd = d + math.hypot (nodes[j][0] - nodes[i][0], nodes[j][1] - nodes[i][1])
+			if nd >= dist.get (j, 1e30): continue
+			if blocked (nodes[i], nodes[j], near): continue
+			dist[j], prev[j] = nd, i
+			heapq.heappush (q, (nd, j))
+	if 1 not in prev: return [a, b]  # (no way about: straight, as before)
+	path, k = [nodes[1]], 1
+	while k != 0: k = prev[k]; path.append (nodes[k])
+	return path[::-1]
+
+def clean (line):
+	"""repeated and collinear points out; None if under a metre long"""
+	out = []
+	for p in line:
+		if out and math.hypot (p[0] - out[-1][0], p[1] - out[-1][1]) < 0.05: continue
+		out.append (p)
+	k = 1
+	while k < len (out) - 1:
+		p, q, r = out[k - 1], out[k], out[k + 1]
+		if abs ((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])) < 1e-3 * math.hypot (r[0] - p[0], r[1] - p[1]): del out[k]
+		else: k += 1
+	if len (out) < 2 or sum (math.hypot (q[0] - p[0], q[1] - p[1]) for p, q in zip (out, out[1:])) < 1.0: return None
+	return out
+
+def nearest_on (lines, p):
+	"""the point of the polylines nearest p"""
+	best, bd = None, 1e30
+	for line in lines:
+		for a, b in zip (line, line[1:]):
+			dx, dz = b[0] - a[0], b[1] - a[1]
+			l2 = dx * dx + dz * dz or 1e-12
+			t = max (0.0, min (1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / l2))
+			q = (a[0] + dx * t, a[1] + dz * t)
+			d = math.hypot (p[0] - q[0], p[1] - q[1])
+			if d < bd: best, bd = q, d
+	return best
+
+def plan_roads (strips, P, B):
+	"""the roads (polylines, their strips) clear of the pads P and the
+	obstacles B (buildings, corridors, runways): a road through any, or
+	ending in one, the shortest way about them (to their edge); roads from
+	one point (a fan) a network - each from the nearest point of those laid"""
+	out = []
+	def obstacles (s):
+		hw = s['w'] / 2
+		taxi = s['w'] >= 20.0
+		touch = keepouts (P, hw, 0.0) + [grow (o, hw) for o, k, _ in B if not (taxi and k == 'runway')]
+		keep = keepouts (P, hw) + [grow (o, hw + CLEAR) for o, k, _ in B if not (taxi and k == 'runway')]
+		return touch, keep
+	# (fans: straight roads, of one kind, from a common end)
+	groups = {}
+	for s in strips:
+		a = s['pts'][0]
+		key = (round (a[0], 0), round (a[1], 0), s['mat'], s['w'])
+		groups.setdefault (key, []).append (s)
+	for key, g in groups.items ():
+		root = tuple (g[0]['pts'][0])
+		touch, keep = obstacles (g[0])
+		if len (g) == 1:
+			s = g[0]
+			pts = [tuple (p) for p in s['pts']]
+			if not any (blocked (p, q, touch) for p, q in zip (pts, pts[1:])) and not any (dist_in (q, T) > 1e-6 for q in (pts[0], pts[-1]) for T in touch):
+				out.append ((pts, s)); continue  # (clear: as it was laid)
+			path = shortest (pts[0], pts[-1], keep)
+			if path and clean (path): out.append ((clean (path), s))
+			continue
+		net = []
+		for s in sorted (g, key=lambda s: math.hypot (s['pts'][-1][0] - root[0], s['pts'][-1][1] - root[1])):
+			e = tuple (s['pts'][-1])
+			start = nearest_on (net, e) if net else root
+			path = shortest (start, e, keep)
+			if path and clean (path):
+				net.append (clean (path)); out.append ((clean (path), s))
 	return out
 
 def inside_any (p, K):
@@ -348,8 +529,8 @@ def write_desc (name, desc):
 		f.write ('{"strips": [\n' + ',\n'.join (json.dumps (s) for s in d['strips']) + '],\n"polys": [\n'
 			+ ',\n'.join (json.dumps (p) for p in d['polys']) + ']}\n')
 
-def build (name, desc, P, path):
-	"""the ground mesh from its description, clear of the pads P"""
+def build (name, desc, P, path, obst=()):
+	"""the ground mesh from its description, its roads clear of the pads P and the obstacles obst"""
 	B = MeshBuilder ()
 	outlines = [o for o, _, _ in P]
 	def poly (Q, y, mat, tex):
@@ -380,17 +561,60 @@ def build (name, desc, P, path):
 		for c in pts[1:-1]:
 			disc = [(c[0] + hw * math.cos (2 * math.pi * k / 12), c[1] + hw * math.sin (2 * math.pi * k / 12)) for k in range (12)]
 			for Q in clear_of_pads (disc): poly (Q, s['y'], s['mat'], s['tex'])
-	roads = []
-	for s in desc['strips']:
-		hw = s['w'] / 2
-		for pts in route ([tuple (p) for p in s['pts']], keepouts (P, hw)):
-			strip (pts, hw, s)
-			roads.append ((pts, s))
+	roads = plan_roads (desc['strips'], P, obst)
+	for pts, s in roads: strip (pts, s['w'] / 2, s)
 	for p in desc['polys']:
 		for Q in clear_of_pads ([tuple (q) for q in p['pts']]):
 			poly (Q, p['y'], p['mat'], p['tex'])
 	B.write (path)
 	return roads
+
+# ======================================================================
+# Blast berms: their opening (+z of the mesh) towards what reaches into them
+# (a tunnel's arch), else towards the base's buildings about them
+
+def dist_to (p, P):
+	"""from p to convex P (0 inside)"""
+	if dist_in (p, P) >= 0: return 0.0
+	d = 1e30
+	for a, b in zip (P, P[1:] + P[:1]):
+		dx, dz = b[0] - a[0], b[1] - a[1]
+		t = max (0.0, min (1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / (dx * dx + dz * dz or 1e-12)))
+		d = min (d, math.hypot (p[0] - a[0] - dx * t, p[1] - a[1] - dz * t))
+	return d
+
+def orient_berms (cfgpath):
+	"""the berms' ROT in a configuration file: their openings towards what
+	reaches into them, else towards the buildings within 800 m (their middle);
+	the number turned"""
+	B = [(o, nm) for o, k, nm in buildings (cfgpath) if k == 'building']
+	t = open (cfgpath, encoding='latin-1', newline='').read ()
+	n = 0
+	def fix (m):
+		nonlocal n
+		body = m.group (0)
+		pos = re.search (r'POS\s+(\S+)\s+\S+\s+(\S+)', body)
+		c = (float (pos.group (1)), float (pos.group (2)))
+		close = [(dist_to (c, o), o) for o, _ in B if dist_to (c, o) < BERM_R + 12.0]
+		if close:
+			o = min (close)[1]
+			# (the point of it nearest the pad)
+			best = min (((a[0] + (b[0] - a[0]) * k / 20, a[1] + (b[1] - a[1]) * k / 20) for a, b in zip (o, o[1:] + o[:1]) for k in range (21)),
+				key=lambda q: math.hypot (q[0] - c[0], q[1] - c[1]))
+			tx, tz = best
+		else:
+			near = [o for o, _ in B if 0 < dist_to (c, o) < 800.0]
+			if not near: return body
+			cs = [(sum (v[0] for v in o) / len (o), sum (v[1] for v in o) / len (o)) for o in near]
+			tx, tz = sum (q[0] for q in cs) / len (cs), sum (q[1] for q in cs) / len (cs)
+		bearing = math.degrees (math.atan2 (tz - c[1], -(tx - c[0])))  # (east, north: x south, z east)
+		rot = bk.BROT (bearing)
+		new = re.sub (r'(ROT\s+)\S+', lambda r: r.group (1) + '%.1f' % rot, body, count=1) if re.search (r'ROT\s+\S+', body) else body.replace (pos.group (0), pos.group (0) + '\n\tROT %.1f' % rot)
+		if new != body: n += 1
+		return new
+	t2 = re.sub (r'MESH\s*\r?\n\s*FILE\s+BaseKit\\space_padberm_\w+.*?\r?\nEND', fix, t, flags=re.S)
+	if t2 != t: open (cfgpath, 'w', encoding='latin-1', newline='').write (t2)
+	return n
 
 # ======================================================================
 # Lights (the Vulkan client's: Config/VK/Bases/<Name>.cfg, between
@@ -559,7 +783,7 @@ def make (name, L, cfgpath, meshdir, tex=None):
 	desc = describe (L, tex)
 	write_desc (name, desc)
 	desc = json.load (open (os.path.join (DESC_DIR, name + '.json')))
-	roads = build (name, desc, pads (cfgpath), os.path.join (meshdir, 'BaseKit', name + '_ground.msh'))
+	roads = build (name, desc, pads (cfgpath), os.path.join (meshdir, 'BaseKit', name + '_ground.msh'), buildings (cfgpath))
 	write_lights (cfgpath, roads, desc)
 
 # ======================================================================
@@ -575,11 +799,14 @@ def check (name, cfgs):
 
 def main ():
 	a = sys.argv[1:]
-	if not a or a[0] not in ('extract', 'build', 'check'): print (__doc__); sys.exit (1)
+	if not a or a[0] not in ('extract', 'build', 'check', 'berms'): print (__doc__); sys.exit (1)
 	cfgs = base_cfgs ()
 	names = a[1:] or sorted (cfgs)
 	for n in names:
 		if n not in cfgs: print ('%s: no base with its ground' % n); continue
+		if a[0] == 'berms':
+			print ('%-16s %s' % (n, ', '.join ('%d berms turned' % orient_berms (c) for c in cfgs[n])))
+			continue
 		if a[0] == 'extract':
 			d = extract (n)
 			write_desc (n, d)
@@ -588,7 +815,7 @@ def main ():
 			dp = os.path.join (DESC_DIR, n + '.json')
 			if not os.path.exists (dp): print ('%s: no description (ground.py extract)' % n); continue
 			desc = json.load (open (dp))
-			roads = build (n, desc, pads (cfgs[n][0]), os.path.join (MESH_DIR, n + '_ground.msh'))
+			roads = build (n, desc, pads (cfgs[n][0]), os.path.join (MESH_DIR, n + '_ground.msh'), buildings (cfgs[n][0]))
 			nl, nf = write_lights (cfgs[n][0], roads, desc)
 			print ('%-16s built, %d triangles on pads; %d lights, %d floodlights' % (n, check (n, cfgs[n]), nl, nf))
 		else:

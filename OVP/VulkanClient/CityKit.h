@@ -73,6 +73,7 @@ namespace vkcity {
 		bool vacuum = false;   // (surface pressure under 10 kPa: pressurised modules, regolith cover)
 		bool insulated = false; // (cold and dense: Titan)
 		float soil[3] = { 0.5f, 0.5f, 0.5f }; // the ground's colour (regolith cover; linear)
+		int region = 0;        // (Earth: the region whose look its buildings take - Kit::BaseRegion)
 	};
 
 	/// A lamp of a base's building (Kit::BaseLights; base frame): a glow, or a
@@ -100,6 +101,8 @@ namespace vkcity {
 		/// oapiGetBaseBuildings): its instance (frame and position in the base
 		/// frame, looks by its textures' names and where the base is) and shape
 		int MakeBase (const BASEBUILDINGSPEC &b, const BaseEnv &env, BInst &inst) const;
+		/// The region of a base on Earth by where it is (lng, lat [rad]): BaseEnv::region
+		static int BaseRegion (double lng, double lat);
 		/// A shape's triangles as an instance makes them (the instance's frame:
 		/// shadows, ray tracing, ray hits): appended to vtx (positions, normals) and idx
 		void Expand (int shape, const BInst &inst, std::vector<NTVERTEX> &vtx, std::vector<uint16_t> &idx) const;

@@ -2424,6 +2424,11 @@ DLLEXPORT DWORD oapiGetBaseBuildings (OBJHANDLE hBase, BASEBUILDINGSPEC *spec, D
 	return ((Base*)hBase)->GetBuildings (spec, n);
 }
 
+DLLEXPORT DWORD oapiGetBaseTrains (OBJHANDLE hBase, TRAINSPEC *spec, DWORD n)
+{
+	return ((Base*)hBase)->GetTrains (spec, n);
+}
+
 DLLEXPORT bool oapiGetBasePadSpec (OBJHANDLE hBase, DWORD pad, PADSPEC *spec)
 {
 	return ((Base*)hBase)->GetPadSpec (pad, spec);

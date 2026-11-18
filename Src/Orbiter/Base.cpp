@@ -497,6 +497,7 @@ static DWORD GroupFlag (BaseObject *bo, bool groundsh)
 	if ((bo->GetSpecs() & OBJSPEC_RWY) && ((Runway*)bo)->Marked ()) f |= MESHGRP_RUNWAY;
 	if ((bo->GetSpecs() & OBJSPEC_LPAD) && ((Lpad*)bo)->Marked ()) f |= MESHGRP_PAD;
 	if (bo->GetBuildingSpec (nullptr)) f |= MESHGRP_BUILDING;
+	if (bo->GetTrainSpec (nullptr)) f |= MESHGRP_TRAIN | MESHGRP_NOCOLLIDE; // (trains: no collision shapes, as before)
 	return f;
 }
 
@@ -523,6 +524,17 @@ DWORD Base::GetBuildings (BASEBUILDINGSPEC *spec, DWORD n) const
 	for (DWORD i = 0; i < nobj; i++)
 		if (obj[i]->GetBuildingSpec (nullptr)) {
 			if (spec && k < n) obj[i]->GetBuildingSpec (spec + k), spec[k].index = k;
+			k++;
+		}
+	return k;
+}
+
+DWORD Base::GetTrains (TRAINSPEC *spec, DWORD n) const
+{
+	DWORD k = 0;
+	for (DWORD i = 0; i < nobj; i++)
+		if (obj[i]->GetTrainSpec (nullptr)) {
+			if (spec && k < n) obj[i]->GetTrainSpec (spec + k);
 			k++;
 		}
 	return k;

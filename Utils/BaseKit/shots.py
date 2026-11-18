@@ -27,7 +27,7 @@ import argparse, math, os, re, subprocess, sys, concurrent.futures
 ROOT = os.path.normpath (os.path.join (os.path.dirname (os.path.abspath (__file__)), '..', '..'))
 SCN_DIR = os.path.join (ROOT, 'Scenarios', 'VkTest')
 OUT = os.path.join (ROOT, 'out', 'baseshots')
-RADIUS = {'Earth': 6.37101e6, 'Moon': 1.738e6, 'Mars': 3.39e6}
+RADIUS = {'Earth': 6.37101e6, 'Moon': 1.738e6, 'Mars': 3.39e6, 'Venus': 6.0518e6}
 
 # base: body, location (lng, lat [deg]), the pad the glider stands on, MJD by day and by night (None: none)
 BASES = {
@@ -39,6 +39,8 @@ BASES = {
 	'Edwards':    ('Earth', 'Edwards', (-117.889999, 34.919998), 1, 51985.73, 51985.33),
 	'Baikonur':   ('Earth', 'Baikonur', (63.330002, 45.919998), 1, 51985.28, 51985.83),
 	'Jiuquan':    ('Earth', 'Jiuquan', (100.2915, 40.9581), 1, 51985.31, 51985.73),
+	'Habana':     ('Earth', 'Habana', (-82.40, 23.00), 1, 51985.70, 51985.20),
+	'Aphrodite':  ('Venus', 'Aphrodite', (105.00, -5.00), 1, 51983.25, 52040.0),  # (the floating base, 55 km up: its deck the ground)
 }
 
 # shot: base, camera (east, north [m] from the base's origin, height [m] above the ground), the point looked at
@@ -57,13 +59,23 @@ SHOTS = {
 	'Canaveral_39b':   ('Canaveral', (3001 + 380, 4759 - 380, 40), (3001, 4759, 40), 60, ('day',)),
 	'Edwards':         ('Edwards', (800, 250, 250), (92, 945, 0), 55, ('day', 'night')),
 	'Baikonur':        ('Baikonur', (-1300, 4300, 250), (-2000, 5000, 0), 55, ('day', 'night')),
+	'Baikonur_close':  ('Baikonur', (-1700, 4600, 60), (-2050, 5080, 5), 55, ('day',)),
 	'Jiuquan':         ('Jiuquan', (700, -700, 250), (0, 0, 0), 55, ('day', 'night')),
 	# pads seen from above (roads and aprons about them)
 	'Brighton_pad3':   ('Brighton', (-173, 30, 150), (-173, 100, 0), 60, ('day', 'night')),
 	'Brighton_pad5':   ('Brighton', (173, 30, 150), (173, 100, 0), 60, ('day',)),
 	'Jiuquan_pad1':    ('Jiuquan', (0, -70, 150), (0, 0, 0), 60, ('day',)),
 	'Jiuquan_pad3':    ('Jiuquan', (-616, -1189, 150), (-616, -1119, 0), 60, ('day', 'night')),
+	'Brighton_train':  ('Brighton', (-200, 330, 35), (-400, 700, 10), 60, ('day', 'night')),
+	'Brighton_trainside': ('Brighton', (-626, 1165, 12), (-661, 1145, 8), 60, ('day',)),  # (a car there at frame 400)
+	'Habana_mono':     ('Habana', (420, 420, 8), (380, 300, 1), 60, ('day',)),
+	'Habana_train':    ('Habana', (700, 250, 45), (380, 0, 5), 60, ('day',)),
+	# (off its deck the ground is the planet's, 55 km down: heights over that)
+	'Aphrodite':       ('Aphrodite', (220, -220, 55090), (0, 0, 55000), 55, ('day', 'night')),
+	'Aphrodite_deck':  ('Aphrodite', (60, -45, 6), (-20, 30, 4), 60, ('day',)),
+	'Aphrodite_below': ('Aphrodite', (260, -200, 54940), (0, 0, 54930), 55, ('day',)),
 	'Edwards_top':     ('Edwards', (92, 700, 350), (92, 945, 0), 60, ('night',)),
+	'Jiuquan_roof':    ('Jiuquan', (-234 + 70, -1221 - 70, 95), (-234, -1221, 40), 55, ('day',)),
 	'Jiuquan_campus':  ('Jiuquan', (-350, -1350, 60), (-616, -1119, 0), 60, ('day',)),
 }
 

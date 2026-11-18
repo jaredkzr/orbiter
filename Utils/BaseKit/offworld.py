@@ -420,16 +420,18 @@ def m_aerostat_terminal ():
 def aerostat_layout ():
 	"""the aerostat's objects and lights: (cfg lines of its object list, floodlights (east, y, north, de, dy, dn))"""
 	pads, floods = [], []
+	# (three pads of 36 m - scale 0.45 - 42 m out: wholly on the deck (r 75 m), clear of each
+	# other and of the terminal)
 	for k in range (3):
 		b = 120.0 * k
-		e, n = 38 * math.sin (math.radians (b)), 38 * math.cos (math.radians (b))
+		e, n = 42 * math.sin (math.radians (b)), 42 * math.cos (math.radians (b))
 		pads.append ((e, n, b))
 		floods.append ((e * 1.75, 12.0, n * 1.75, -e, -12.0 * 1.8, -n))
 	# (pads first: their numbers)
 	lines = []
 	for k, (e, n, b) in enumerate (pads):
 		x, z = BF (e, n)
-		lines += ["LPAD2", "\tPOS %.1f 0 %.1f" % (x, z), "\tSCALE 1", "\tROT %.1f" % BROT (b), "\tTEX Lpad02", "\tNAV %.2f" % (130.10 + 0.2 * k), "END"]
+		lines += ["LPAD2", "\tPOS %.1f 0 %.1f" % (x, z), "\tSCALE 0.45", "\tROT %.1f" % BROT (b), "\tTEX Lpad02", "\tNAV %.2f" % (130.10 + 0.2 * k), "END"]
 	lines += ["MESH", "\tFILE BaseKit\\space_aerostat", "\tPOS 0 0 0", "\tOWNMATERIAL", "END"]
 	tb = 60.0 # (the terminal between pads 1 and 2, at the deck's edge, its door to the centre)
 	e, n = 55 * math.sin (math.radians (tb)), 55 * math.cos (math.radians (tb))
@@ -732,8 +734,9 @@ def cmd_layout (gridfile, root=".", meshdir=None, vkdir=None):
 		if vkdir:
 			title = re.search (r"Name\s*=\s*(.+)", cfgtext).group (1).strip ()
 			bk.update_vk (os.path.join (vkdir, bk.vk_name (title)), L, title)
-		if meshdir: # (its tracks, clear of its pads; their lights)
-			import ground
+		import ground
+		for c in cfgs: ground.orient_berms (os.path.join (root, c))  # (the berms' openings towards the base)
+		if meshdir: # (its tracks, clear of its pads and buildings; their lights)
 			ground.make (b, L, os.path.join (root, cfgs[0]), meshdir)
 		print ("%-10s %-8s %-7s %2d objects" % (b, body, size, len (L.objs)))
 

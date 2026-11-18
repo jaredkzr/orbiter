@@ -864,6 +864,8 @@ void Interpreter::LoadAPI ()
 		{"get_baseequpos", oapi_get_baseequpos},
 		{"get_basepadcount", oapi_get_basepadcount},
 		{"get_basepadequpos", oapi_get_basepadequpos},
+		{"get_basebuildings", oapi_get_basebuildings},
+		{"get_basetrains", oapi_get_basetrains},
 		{"create_annotation", oapiCreateAnnotation},
 		{"del_annotation", oapiDelAnnotation},
 		{"get_annotations", oapiGetAnnotations},
@@ -3105,6 +3107,67 @@ int Interpreter::oapi_get_basepadequpos (lua_State *L)
 	if (!::oapiGetBasePadEquPos (hB, (DWORD)lua_tointeger (L,2), &lng, &lat, &rad)) { lua_pushnil (L); return 1; }
 	lua_pushnumber (L, lng); lua_pushnumber (L, lat); lua_pushnumber (L, rad);
 	return 3;
+}
+
+/***
+Returns the generic buildings of a surface base (BLOCK, HANGAR, HANGAR2,
+HANGAR3, TANK: oapiGetBaseBuildings).
+@function get_basebuildings
+@tparam handle hbase base handle
+@treturn table a list of tables {type, pos (vector, base frame), rot [rad], size (vector; a tank: radius in x and z), wallh, nstep, tex}
+*/
+int Interpreter::oapi_get_basebuildings (lua_State *L)
+{
+	OBJHANDLE hB;
+	ASSERT_SYNTAX(lua_islightuserdata (L,1) && (hB = lua_toObject (L,1)), "Argument 1: invalid object");
+	DWORD n = ::oapiGetBaseBuildings (hB, nullptr, 0);
+	std::vector<BASEBUILDINGSPEC> spec (n);
+	if (n) ::oapiGetBaseBuildings (hB, spec.data (), n);
+	lua_createtable (L, (int)n, 0);
+	for (DWORD i = 0; i < n; i++) {
+		const BASEBUILDINGSPEC &s = spec[i];
+		lua_createtable (L, 0, 7);
+		lua_pushinteger (L, s.type); lua_setfield (L, -2, "type");
+		lua_pushvector (L, s.pos); lua_setfield (L, -2, "pos");
+		lua_pushnumber (L, s.rot); lua_setfield (L, -2, "rot");
+		lua_pushvector (L, s.size); lua_setfield (L, -2, "size");
+		lua_pushnumber (L, s.wallh); lua_setfield (L, -2, "wallh");
+		lua_pushinteger (L, s.nstep); lua_setfield (L, -2, "nstep");
+		lua_pushstring (L, s.tex[0]); lua_setfield (L, -2, "tex");
+		lua_rawseti (L, -2, (int)i + 1);
+	}
+	return 1;
+}
+
+/***
+Returns the trains of a surface base (TRAIN1, TRAIN2: oapiGetBaseTrains).
+@function get_basetrains
+@tparam handle hbase base handle
+@treturn table a list of tables {type (1 monorail, 2 hangrail), end1, end2 (vectors, base frame), height, maxspeed, slowzone, minpos, maxpos, tex}
+*/
+int Interpreter::oapi_get_basetrains (lua_State *L)
+{
+	OBJHANDLE hB;
+	ASSERT_SYNTAX(lua_islightuserdata (L,1) && (hB = lua_toObject (L,1)), "Argument 1: invalid object");
+	DWORD n = ::oapiGetBaseTrains (hB, nullptr, 0);
+	std::vector<TRAINSPEC> spec (n);
+	if (n) ::oapiGetBaseTrains (hB, spec.data (), n);
+	lua_createtable (L, (int)n, 0);
+	for (DWORD i = 0; i < n; i++) {
+		const TRAINSPEC &s = spec[i];
+		lua_createtable (L, 0, 10);
+		lua_pushinteger (L, s.type); lua_setfield (L, -2, "type");
+		lua_pushvector (L, s.end1); lua_setfield (L, -2, "end1");
+		lua_pushvector (L, s.end2); lua_setfield (L, -2, "end2");
+		lua_pushnumber (L, s.height); lua_setfield (L, -2, "height");
+		lua_pushnumber (L, s.maxspeed); lua_setfield (L, -2, "maxspeed");
+		lua_pushnumber (L, s.slowzone); lua_setfield (L, -2, "slowzone");
+		lua_pushnumber (L, s.minpos); lua_setfield (L, -2, "minpos");
+		lua_pushnumber (L, s.maxpos); lua_setfield (L, -2, "maxpos");
+		lua_pushstring (L, s.tex); lua_setfield (L, -2, "tex");
+		lua_rawseti (L, -2, (int)i + 1);
+	}
+	return 1;
 }
 
 /***

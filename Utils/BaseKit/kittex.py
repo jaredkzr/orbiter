@@ -41,6 +41,7 @@ MATERIALS = {
 	'kit_growglass': 2.0,  # greenhouse glazing: green-tinged panes in white frames; grow lights at night
 	'kit_hazard': 1.0,     # hazard stripes, yellow and black
 	'kit_concrete': 4.0,   # cast concrete: formwork panels, tie holes
+	'kit_cladding': 2.0,   # trapezoidal steel siding (Earth's sheds and halls): ribs, a lap, streaks (tinted)
 }
 
 
@@ -276,10 +277,29 @@ def m_concrete (N, T, rng):
 	return rgb, smooth, height, None, None
 
 
+def m_cladding (N, T, rng):
+	# trapezoidal sheet: ribs every 0.25 m (crests 0.07 m, 0.03 m proud), a horizontal lap
+	# every 2 m (a tile), rain streaks down from the laps
+	du = T / N
+	c = (np.arange (N) + 0.5) * du
+	v = c[:, None] * np.ones ((1, N)); u = np.ones ((N, 1)) * c[None, :]
+	p = np.abs ((u % 0.25) - 0.125)
+	rib = np.clip ((0.06 - p) / 0.02, 0, 1)                    # (1 on the crests, ramps on the webs)
+	web = np.clip (1 - np.abs (p - 0.05) / 0.012, 0, 1)        # (the webs: shaded)
+	lap = np.clip ((0.008 - np.abs (((v / 2.0) + 0.5) % 1 - 0.5) * 2.0) / du + 0.5, 0, 1)
+	streak = np.repeat (tile_noise (N, 0.08, T, rng)[:1, :], N, axis=0)
+	streak = np.clip (streak - 0.6, 0, None) * np.clip (1 - (v % 2.0) / 1.4, 0, 1)
+	big, fine = tile_noise (N, 1.2, T, rng), tile_noise (N, 0.01, T, rng)
+	rgb = np.full ((N, N, 3), 0.86) * (1 + 0.02 * big + 0.01 * fine - 0.10 * web - 0.12 * streak - 0.35 * lap)[..., None]
+	height = 0.03 * rib - 0.002 * lap + 0.0002 * fine
+	smooth = 0.5 - 0.15 * streak - 0.2 * lap
+	return rgb, smooth, height, None, None
+
+
 BUILD = {'kit_panel': m_panel, 'kit_mli': m_mli, 'kit_regolith': m_regolith, 'kit_steel': m_steel,
 	'kit_grating': m_grating, 'kit_solar': m_solar, 'kit_radiator': m_radiator, 'kit_glass': m_glass,
 	'kit_growglass': m_growglass,
-	'kit_hazard': m_hazard, 'kit_concrete': m_concrete}
+	'kit_hazard': m_hazard, 'kit_concrete': m_concrete, 'kit_cladding': m_cladding}
 
 
 def main ():

@@ -400,6 +400,8 @@ protected:
 	static int oapi_get_baseequpos (lua_State *L);
 	static int oapi_get_basepadcount (lua_State *L);
 	static int oapi_get_basepadequpos (lua_State *L);
+	static int oapi_get_basebuildings (lua_State *L);
+	static int oapi_get_basetrains (lua_State *L);
 	static int oapiCreateAnnotation (lua_State *L);
 	static int oapiDelAnnotation (lua_State *L);
 	static int oapiGetAnnotations (lua_State *L);

@@ -908,6 +908,26 @@ namespace {
 	}
 }
 
+int Kit::BaseRegion (double lng, double lat)
+{
+	// (the bases' regions, roughly: the former Soviet Union, China and its
+	// neighbours, Japan, south Asia, the Middle East and north Africa, Europe,
+	// Africa, Oceania, Latin America, north America)
+	double lo = lng * 180.0 / PI, la = lat * 180.0 / PI;
+	if (lo > 180.0) lo -= 360.0;
+	if ((la > 44.0 && lo > 25.0) || (la > 36.0 && lo > 44.0 && lo < 75.0)) return R_SOVIET;
+	if (lo >= 130.0 && lo < 146.0 && la > 24.0 && la < 46.0) return R_JAPAN;
+	if (lo > 73.0 && lo < 135.0 && la > 18.0 && la < 54.0) return R_EASTASIA;
+	if (lo > 60.0 && lo < 98.0 && la > 5.0 && la < 36.0) return R_SOUTHASIA;
+	if (lo > -12.0 && lo < 40.0 && la >= 36.0) return R_EUROPE;
+	if (lo > -18.0 && lo < 60.0 && la > 12.0 && la < 42.0) return R_MIDEAST;
+	if (lo > -20.0 && lo < 55.0 && la < 12.0) return R_AFRICA;
+	if (lo > 110.0 && la < -10.0) return R_OCEANIA;
+	if (lo > -170.0 && lo < -50.0 && la > 25.0) return R_NAMERICA;
+	if (lo > -120.0 && lo < -30.0) return R_LATIN;
+	return R_GENERIC;
+}
+
 int Kit::MakeBase (const BASEBUILDINGSPEC &b, const BaseEnv &env, BInst &inst) const
 {
 	Rnd r (0x5eedu ^ (b.index * 2654435761u) ^ (uint32_t)(b.pos.x * 13.0) ^ (uint32_t)(b.pos.z * 7.0));
@@ -952,6 +972,45 @@ int Kit::MakeBase (const BASEBUILDINGSPEC &b, const BaseEnv &env, BInst &inst) c
 		roof = M_ROOF_METAL;
 	}
 	if (b.type == BLDG_ARCH) win = W_HANGAR, roof = M_ROOF_METAL;
+	if (!env.vacuum && !env.insulated) {
+		// (Earth: the region's look - its offices' walls and windows, its sheds' paint, their roofs)
+		const bool shed = b.type != BLDG_BLOCK || win == W_INDUSTRIAL;
+		static const Col SOV_SHED[] = { { 0.62f, 0.74f, 0.66f }, { 0.64f, 0.72f, 0.84f }, { 0.80f, 0.80f, 0.76f }, { 0.86f, 0.84f, 0.74f } };
+		static const Col ASIA_SHED[] = { { 0.70f, 0.82f, 0.94f }, { 0.92f, 0.93f, 0.92f }, { 0.78f, 0.86f, 0.90f } };
+		static const Col SAND[] = { { 0.93f, 0.85f, 0.68f }, { 0.95f, 0.90f, 0.78f }, { 0.88f, 0.80f, 0.66f } };
+		static const Col LATIN[] = { { 1.0f, 1.0f, 1.0f }, { 0.98f, 0.90f, 0.74f }, { 0.80f, 0.92f, 0.88f }, { 0.98f, 0.84f, 0.80f } };
+		static const Col WEST_SHED[] = { { 0.96f, 0.96f, 0.95f }, { 0.84f, 0.85f, 0.86f }, { 0.90f, 0.87f, 0.80f } };
+		switch (env.region) {
+		case R_SOVIET:
+			if (shed) tint = PickCol (r, SOV_SHED), roofCol = r () < 0.5f ? RC_GREY : RC_DARKGREEN;
+			else wall = M_CONCRETE, win = W_PANEL, tint = { 0.86f, 0.83f, 0.75f };
+			break;
+		case R_EASTASIA:
+			if (shed) tint = PickCol (r, ASIA_SHED), roofCol = r () < 0.6f ? RC_BLUEGREY : RC_TEAL;
+			else wall = M_PLASTER, tint = { 0.93f, 0.94f, 0.93f };
+			break;
+		case R_JAPAN:
+			if (shed) tint = { 0.88f, 0.90f, 0.91f }, roofCol = RC_BLUEGREY;
+			else wall = M_PLASTER, tint = { 0.92f, 0.92f, 0.90f };
+			break;
+		case R_MIDEAST: case R_AFRICA:
+			if (shed) tint = PickCol (r, SAND), roofCol = RC_SAND;
+			else wall = M_PLASTER, tint = PickCol (r, SAND);
+			break;
+		case R_LATIN:
+			if (shed) tint = PickCol (r, WEST_SHED), roofCol = r () < 0.5f ? RC_TEAL : RC_LIGHTGREY;
+			else wall = M_PLASTER, tint = PickCol (r, LATIN);
+			break;
+		case R_SOUTHASIA:
+			if (shed) tint = { 0.92f, 0.90f, 0.82f }, roofCol = r () < 0.6f ? RC_BLUEGREY : RC_TERRACOTTA;
+			else wall = M_PLASTER, tint = { 0.95f, 0.91f, 0.80f };
+			break;
+		default:
+			if (shed && wall == M_PANEL) tint = PickCol (r, WEST_SHED);
+			break;
+		}
+		if (b.type == BLDG_TANK && win == W_NONE) tint = { 0.93f, 0.93f, 0.91f }; // (tanks: white everywhere)
+	}
 	if (env.vacuum || env.insulated) {
 		// pressurised modules: white (or insulation) panels, portholes, airlocks; long low
 		// halls and arches under regolith (shielding), the soil's colour

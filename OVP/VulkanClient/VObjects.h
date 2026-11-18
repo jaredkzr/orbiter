@@ -372,6 +372,19 @@ private:
 	std::vector<BldBatch> bldBatches;
 	vkc::Buffer bldBuf;
 	std::vector<std::unique_ptr<VkMesh>> bldMesh;
+	// its trains (TRAIN1, TRAIN2: oapiGetBaseTrains; the core's groups hidden): the kit's
+	// meshes (BaseKit/train_*) placed along their tracks, the cars moved by the sim
+	// time (closed form: the core's Train::MoveCabin profile)
+	enum { TR_GIRDER, TR_BEAM, TR_HCAR, TR_MBEAM, TR_MCAR, TR_N };
+	struct Train { TRAINSPEC s; VECTOR3 dir; double len, ph, th; double step; std::vector<double> gy; /* (TRAIN1: the ground under its track every step [m]) */ };
+	std::vector<Train> trains;
+	std::unique_ptr<VkMesh> trMesh[TR_N];
+	std::vector<std::pair<int, Mat4>> trStatic; // (mesh, model: base frame)
+	struct TrainCar { int mesh; Mat4 model; double lampZ, lampY; };
+	void ReadTrains ();
+	/// the ground's height in the base frame at (x, z) (its elevation there and the curvature)
+	double GroundY (double x, double z) const;
+	void TrainCars (double t, std::vector<TrainCar> &cars) const;
 	void ReadBuildings ();
 	float BaseHour () const;
 	int padFirst = 0, padCount = 0;

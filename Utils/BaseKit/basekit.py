@@ -829,9 +829,12 @@ def update_cfg (path, L):
 		k = next (i for i, l in enumerate (lines) if l.strip ().upper () == "BEGIN_OBJECTLIST")
 		while k > 0 and lines[k - 1].strip ().startswith (";"): k -= 1 # (before the list's comment)
 		lines[k:k] = gr + [""]
-	# the pad drawn (it was a marker only)
+	# the pad drawn (it was a marker only), turned as its complex (its aprons' bearing)
 	t2 = nl.join (lines)
 	t2 = re.sub (r"(LPAD2\s*[\r\n]+\s*POS 0 0 0\s*[\r\n]+\s*SCALE) 0 0 0", r"\1 1", t2)
+	b0 = next ((g[3] for g in L.ground if g[0] == "grade" and abs (g[1][0]) + abs (g[1][1]) < 0.5), None)
+	if b0 is not None:
+		t2 = re.sub (r"(BEGIN_OBJECTLIST\s*[\r\n]+LPAD2\s*[\r\n]+\s*POS 0 0 0\s*[\r\n]+\s*SCALE 1(\r?\n))(?!\s*ROT)", lambda m: m.group (1) + "\tROT %.1f" % BROT (b0) + m.group (2), t2)
 	with open (path, "w", encoding="latin-1", newline="") as f: f.write (t2)
 
 def vk_name (title):

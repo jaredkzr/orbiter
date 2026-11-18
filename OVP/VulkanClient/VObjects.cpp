@@ -3705,6 +3705,7 @@ VBase::VBase (OBJHANDLE h, Scene *s) : hBase(h), scene(s)
 	ReadLights ();
 	ReadPads ();
 	ReadBuildings ();
+	ReadTrains ();
 	// runways with markings
 	DWORD n = oapiGetBaseRunways (hBase, nullptr, 0);
 	std::vector<RUNWAYSPEC> rs (n);
@@ -3843,6 +3844,7 @@ void VBase::ReadBuildings ()
 		float rgb[3];
 		vksurf::DustColour (scene, hp, lng, lat, rgb); // (its table's colour while the tiles are read)
 		for (int k = 0; k < 3; k++) env.soil[k] = std::clamp (rgb[k], 0.03f, 0.9f);
+		if (!strcmp (pname, "Earth")) env.region = vkcity::Kit::BaseRegion (lng, lat);
 	}
 	std::vector<std::pair<int, vkcity::BInst>> b;
 	for (const BASEBUILDINGSPEC &s : specs) {
@@ -3900,6 +3902,145 @@ void VBase::ReadBuildings ()
 	oapiGetObjectName (hBase, name, 256);
 	oapiWriteLogV ("VulkanClient: base %s: %u buildings drawn by the client (%zu shapes)%s", name, (unsigned)n, bldBatches.size(),
 		env.vacuum ? ", pressurised" : "");
+}
+
+namespace {
+	// a train car's run from one end to the other (Train::MoveCabin, in closed form):
+	// from 1 m/s, dx/dt = k x + 1 over the slow zone (x from the end), maxspeed
+	// between, the same down to the far end
+	struct TrainRun { double k, xa, ta, va, tc, T, D; };
+	TrainRun MakeRun (const TRAINSPEC &s)
+	{
+		TrainRun r{};
+		r.D = std::max (s.maxpos - s.minpos, 1.0);
+		double zone = s.slowzone - s.minpos;
+		r.k = zone > 1e-3 ? (s.maxspeed - 1.0) / zone : 0.0;
+		r.xa = std::min (std::max (zone, 0.0), 0.5 * r.D);
+		r.ta = r.k > 0.0 ? std::log (1.0 + r.k * r.xa) / r.k : 0.0;
+		r.va = r.k > 0.0 ? 1.0 + r.k * r.xa : std::max (s.maxspeed, 1.0);
+		r.tc = (r.D - 2.0 * r.xa) / r.va;
+		r.T = 2.0 * r.ta + r.tc;
+		return r;
+	}
+	double RunX (const TrainRun &r, double tau) // (distance from the start at time tau of the run)
+	{
+		auto acc = [&](double t) { return r.k > 0.0 ? std::expm1 (r.k * t) / r.k : t; };
+		if (tau < r.ta) return acc (tau);
+		if (tau < r.ta + r.tc) return r.xa + r.va * (tau - r.ta);
+		return r.D - acc (std::max (r.T - tau, 0.0));
+	}
+	// the track's frame (Train::SetCabin): x across, y up, z along (yaw ph, pitch th)
+	MATRIX3 TrackRot (double ph, double th)
+	{
+		double cp = cos (ph), sp = sin (ph), ct = cos (th), st = sin (th);
+		return _M(cp, -sp * st, sp * ct,  0.0, ct, st,  -sp, -cp * st, cp * ct);
+	}
+	constexpr double TRAIN_KIT_H = 12.0;        // (the girder's rail height: blender_kit.py TRAIN_H)
+	constexpr double BEAM_LEN = 150.0, MBEAM_LEN = 100.0; // (the spans' lengths as made)
+}
+
+double VBase::GroundY (double x, double z) const
+{
+	// (the base frame's point on the planet: exact, as Base::Rel_EquPos - the tangent plane at the base)
+	OBJHANDLE hp = oapiGetBasePlanet (hBase);
+	double lng0, lat0, R = oapiGetSize (hp);
+	oapiGetBaseEquPos (hBase, &lng0, &lat0);
+	double sn = sin (lng0), cn = cos (lng0), st = sin (lat0), ct = cos (lat0);
+	double px = R * ct * cn + x * st * cn - z * sn, py = R * st - x * ct, pz = R * ct * sn + x * st * sn + z * cn;
+	double lng = atan2 (pz, px), lat = atan2 (py, std::sqrt (px * px + pz * pz));
+	return oapiSurfaceElevation (hp, lng, lat) - oapiSurfaceElevation (hp, lng0, lat0) + (R - std::sqrt (R * R + x * x + z * z));
+}
+
+void VBase::ReadTrains ()
+{
+	DWORD n = oapiGetBaseTrains (hBase, nullptr, 0);
+	if (!n) return;
+	std::vector<TRAINSPEC> specs (n);
+	oapiGetBaseTrains (hBase, specs.data(), n);
+	VulkanClient *gc = scene->Client();
+	const char *names[TR_N] = { "BaseKit\\train_hangrail_girder", "BaseKit\\train_hangrail_beam", "BaseKit\\train_hangrail_car",
+		"BaseKit\\train_monorail_beam", "BaseKit\\train_monorail_car" };
+	for (int i = 0; i < TR_N; i++)
+		if (MESHHANDLE h = oapiLoadMeshGlobal (names[i])) trMesh[i] = std::make_unique<VkMesh> (gc->Ctx(), gc->TexMgr(), h);
+	const float red[3] = { 1.0f, 0.1f, 0.06f };
+	for (const TRAINSPEC &s : specs) {
+		Train t{};
+		t.s = s;
+		VECTOR3 d = s.end2 - s.end1;
+		t.len = length (d);
+		if (t.len < 1.0) continue;
+		t.dir = d / t.len;
+		t.ph = atan2 (d.x, d.z), t.th = asin (std::clamp (d.y / t.len, -1.0, 1.0));
+		MATRIX3 yaw = TrackRot (t.ph, 0.0), along = TrackRot (t.ph, t.th);
+		if (s.type == TRAIN_HANGRAIL) {
+			// portals about every 200 m (Train2::Activate), each on the ground there, its legs
+			// up to the rail (straight from end to end, height up, as the core's); its two beams between
+			int ng = (int)(t.len / 200.0) + 1;
+			double span = t.len / ng;
+			for (int i = 0; i <= ng; i++) {
+				VECTOR3 p = s.end1 + d * ((double)i / ng);
+				double rail = p.y + s.height;
+				p.y = GroundY (p.x, p.z);
+				double f = std::max (rail - p.y + 1.2, 6.0) / (TRAIN_KIT_H + 1.2);
+				trStatic.push_back ({ TR_GIRDER, Mat4::FromRotTrans (yaw, p) * Mat4::Scale (1.0, f, 1.0) });
+				lights.push_back ({ p + _V(0, (TRAIN_KIT_H + 4.3) * f, 0), { red[0], red[1], red[2] }, 0.8f });
+				if (i < ng) trStatic.push_back ({ TR_BEAM, Mat4::FromRotTrans (along, s.end1 + d * ((double)i / ng) + _V(0, s.height, 0)) * Mat4::Scale (1.0, 1.0, span / BEAM_LEN) });
+			}
+		} else {
+			// the guideway on the ground: spans between its heights every ~50 m (the core's
+			// straight line from end to end would be buried where the ground rises)
+			int nb = std::max (1, (int)ceil (t.len / 50.0));
+			t.step = t.len / nb;
+			for (int i = 0; i <= nb; i++) {
+				VECTOR3 p = s.end1 + t.dir * (t.step * i);
+				t.gy.push_back (GroundY (p.x, p.z));
+			}
+			for (int i = 0; i < nb; i++) {
+				VECTOR3 p = s.end1 + t.dir * (t.step * i);
+				p.y = t.gy[i];
+				double rise = t.gy[i + 1] - t.gy[i], hl = t.step * cos (t.th);
+				double seg = std::sqrt (hl * hl + rise * rise);
+				trStatic.push_back ({ TR_MBEAM, Mat4::FromRotTrans (TrackRot (t.ph, atan2 (rise, hl)), p) * Mat4::Scale (1.0, 1.0, seg / MBEAM_LEN) });
+			}
+		}
+		trains.push_back (t);
+		oapiWriteLogV ("VulkanClient:   train %d: %.0f m from (%.1f %.1f %.1f), rail %.1f m up, cars %.0f-%.0f m, %.0f m/s", s.type, t.len,
+			s.end1.x, s.end1.y, s.end1.z, s.height, s.minpos, s.maxpos, s.maxspeed);
+	}
+	for (auto &m : structures) m->AddUserFlagWhere (VkMesh::GRP_TRAIN, VkMesh::GRP_HIDDEN);
+	for (auto &m : ground) m->AddUserFlagWhere (VkMesh::GRP_TRAIN, VkMesh::GRP_HIDDEN);
+	char name[256];
+	oapiGetObjectName (hBase, name, 256);
+	oapiWriteLogV ("VulkanClient: base %s: %zu trains drawn by the client", name, trains.size ());
+}
+
+void VBase::TrainCars (double t, std::vector<TrainCar> &cars) const
+{
+	for (const Train &tr : trains) {
+		const TRAINSPEC &s = tr.s;
+		TrainRun r = MakeRun (s);
+		double ph = fmod (std::max (t, 0.0), 2.0 * r.T);
+		bool fwd = ph < r.T;
+		double d0 = fwd ? s.minpos + RunX (r, ph) : s.maxpos - RunX (r, ph - r.T);
+		auto car = [&](double d, double side, double y, bool ahead, int mesh, double lampZ, double lampY) {
+			VECTOR3 p = s.end1 + tr.dir * d + _V(cos (tr.ph), 0, -sin (tr.ph)) * side + _V(0, y, 0);
+			double th = tr.th;
+			if (!tr.gy.empty ()) { // (on the guideway's ground)
+				double u = std::clamp (d / tr.step, 0.0, (double)tr.gy.size () - 1.001);
+				int i = (int)u;
+				p.y = tr.gy[i] + (tr.gy[i + 1] - tr.gy[i]) * (u - i) + y;
+				th = atan2 (tr.gy[i + 1] - tr.gy[i], tr.step * cos (tr.th));
+			}
+			// (its front the way it goes: the white lamps ahead, the red ones behind)
+			MATRIX3 R = ahead ? TrackRot (tr.ph, th) : TrackRot (tr.ph + PI, -th);
+			cars.push_back ({ mesh, Mat4::FromRotTrans (R, p), lampZ, lampY });
+		};
+		if (s.type == TRAIN_HANGRAIL) {
+			car (d0, 2.5, s.height, fwd, TR_HCAR, 6.05, -2.0);
+			car (s.minpos + s.maxpos - d0, -2.5, s.height, !fwd, TR_HCAR, 6.05, -2.0); // (the other: from the far end)
+		} else
+			car (d0, 0.0, 0.0, fwd, TR_MCAR, 10.05, 2.0);
+	}
 }
 
 float VBase::BaseHour () const
@@ -4003,10 +4144,6 @@ void VBase::ReadLights ()
 	for (auto &c : vk) if (c == ' ') c = '_';
 	std::ifstream f (vk);
 	std::string line;
-	OBJHANDLE hp = oapiGetBasePlanet (hBase);
-	double lng0, lat0, R = oapiGetSize (hp);
-	oapiGetBaseEquPos (hBase, &lng0, &lat0);
-	double e0 = oapiSurfaceElevation (hp, lng0, lat0);
 	while (std::getline (f, line)) {
 		if (auto c = line.find (';'); c != std::string::npos) line.resize (c);
 		std::istringstream ss (line);
@@ -4018,11 +4155,7 @@ void VBase::ReadLights ()
 			l.pos = vec (ss);
 			ss >> l.col[0] >> l.col[1] >> l.col[2] >> l.size;
 			if (!ss) continue;
-			if (tag == "light") { // (h above the ground: the ground's height there in the base frame, as Baseobj's Setup)
-				double x = l.pos.x, z = l.pos.z;
-				double lat = lat0 - x / R, lng = lng0 + z / (R * std::max (cos (lat0), 1e-6));
-				l.pos.y += oapiSurfaceElevation (hp, lng, lat) - e0 + (R - std::sqrt (R * R + x * x + z * z));
-			}
+			if (tag == "light") l.pos.y += GroundY (l.pos.x, l.pos.z); // (h above the ground there)
 			lights.push_back (l);
 			continue;
 		}
@@ -4031,11 +4164,7 @@ void VBase::ReadLights ()
 		fl.pos = vec (ss), fl.dir = vec (ss);
 		ss >> fl.range >> fl.col[0] >> fl.col[1] >> fl.col[2] >> fl.umbra >> fl.penumbra;
 		if (!ss) continue;
-		if (tag == "floodlighth") { // (FLOODLIGHTH: h above the ground there, as LIGHT)
-			double x = fl.pos.x, z = fl.pos.z;
-			double lat = lat0 - x / R, lng = lng0 + z / (R * std::max (cos (lat0), 1e-6));
-			fl.pos.y += oapiSurfaceElevation (hp, lng, lat) - e0 + (R - std::sqrt (R * R + x * x + z * z));
-		}
+		if (tag == "floodlighth") fl.pos.y += GroundY (fl.pos.x, fl.pos.z); // (FLOODLIGHTH: h above the ground there, as LIGHT)
 		fl.dir = unit (fl.dir), fl.umbra *= RAD, fl.penumbra *= RAD;
 		floods.push_back (fl);
 	}
@@ -4099,6 +4228,12 @@ void VBase::Render (RenderPass pass)
 	for (auto &m : ground) scene->DrawMesh (m.get(), pulled, pass);
 	scene->SetBaseGround (false);
 	for (auto &m : structures) scene->DrawMesh (m.get(), mv, pass);
+	std::vector<TrainCar> cars;
+	if (!trains.empty ()) {
+		TrainCars (oapiGetSimTime (), cars);
+		for (auto &st : trStatic) if (trMesh[st.first]) scene->DrawMesh (trMesh[st.first].get(), mv * st.second, pass);
+		for (auto &c : cars) if (trMesh[c.mesh]) scene->DrawMesh (trMesh[c.mesh].get(), mv * c.model, pass);
+	}
 	scene->SetObjectNight (1.0f);
 	// the generic buildings (drawn by the client)
 	if (!bldBatches.empty () && pass != RenderPass::Transparent) {
@@ -4130,6 +4265,11 @@ void VBase::Render (RenderPass pass)
 			v.insert (v.end(), { q[0], q[1], q[2], q[0], q[2], q[3] });
 		};
 		for (const Light &l : lights) glow (l.pos, l.col, l.size, 4.0f);
+		const float carWhite[3] = { 1.0f, 0.95f, 0.85f }, carRed[3] = { 1.0f, 0.1f, 0.06f };
+		for (auto &c : cars) { // (the cars' head and tail lamps)
+			glow (c.model.TransformPoint (_V(0, c.lampY, c.lampZ)), carWhite, 0.5, 4.0f);
+			glow (c.model.TransformPoint (_V(0, c.lampY, -c.lampZ)), carRed, 0.4, 4.0f);
+		}
 		VECTOR3 cam = scene->CameraPos ();
 		for (const Flood &fl : floods) {
 			VECTOR3 toCam = unit (cam - (gpos + mul (grot, fl.pos)));
@@ -4169,6 +4309,12 @@ void VBase::RenderShadow (ShadowMap &sm)
 	Mat4 model = Mat4::FromRotTrans (grot, gpos - sm.Centre());
 	for (auto &m : structures) sm.DrawMesh (m.get(), model);
 	for (auto &m : bldMesh) sm.DrawMesh (m.get(), model);
+	if (!trains.empty ()) {
+		for (auto &st : trStatic) if (trMesh[st.first]) sm.DrawMesh (trMesh[st.first].get(), model * st.second);
+		std::vector<TrainCar> cars;
+		TrainCars (oapiGetSimTime (), cars);
+		for (auto &c : cars) if (trMesh[c.mesh]) sm.DrawMesh (trMesh[c.mesh].get(), model * c.model);
+	}
 }
 
 // ======================================================================

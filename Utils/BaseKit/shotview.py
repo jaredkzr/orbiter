@@ -8,6 +8,8 @@ slider, or flipped in place; or all labels of a shot at once. The folder is
 read on every request, so new renders show up on a reload.
 
     shotview.py [--port 8766] [--bind 0.0.0.0] [--dir out/baseshots]
+
+A view as a link (the address bar keeps it): http://<host>:8766/#<shot>&a=<label>&b=<label>&m=<side|wipe|flip|all>
 """
 
 import argparse, http.server, json, os, re, socketserver, urllib.parse
@@ -122,13 +124,19 @@ async function load () {
   }
   $('#list').innerHTML = h || '<div class="empty">No shots yet</div>';
   document.querySelectorAll('#side a').forEach(a => a.onclick = () => { pick(a.dataset.s); drawer(false); });
-  const want = decodeURIComponent(location.hash.slice(1)) || localStorage.shot;
+  // (a link: #<shot>&a=<label>&b=<label>&m=<side|wipe|flip|all>)
+  const [hs, ...hp] = location.hash.slice(1).split('&');
+  const q = new URLSearchParams(hp.join('&'));
+  if (q.get('a')) localStorage.laba = q.get('a');
+  if (q.get('b')) localStorage.labb = q.get('b');
+  if (q.get('m')) mode = q.get('m');
+  const want = decodeURIComponent(hs) || localStorage.shot;
   pick(D.shots[want] ? want : Object.keys(D.shots).sort()[0]);
 }
 
 function pick (s) {
   if (!s) return;
-  shot = s; localStorage.shot = s; history.replaceState(null, '', '#' + encodeURIComponent(s));
+  shot = s; localStorage.shot = s;
   document.querySelectorAll('#side a').forEach(a => a.classList.toggle('on', a.dataset.s === s));
   $('#title').textContent = pretty(s);
   const labels = D.shots[s];
@@ -144,6 +152,7 @@ function draw () {
   document.querySelectorAll('#bar button[data-m]').forEach(b => b.classList.toggle('on', b.dataset.m === mode));
   const A = $('#a').value, B = $('#b').value, v = $('#view');
   localStorage.laba = A; localStorage.labb = B; localStorage.mode = mode;
+  history.replaceState(null, '', '#' + encodeURIComponent(shot) + '&a=' + encodeURIComponent(A) + '&b=' + encodeURIComponent(B) + '&m=' + mode); // (the view, as a link)
   $('#hint').textContent = {side:'click an image to zoom', wipe:'drag or move across the image', flip:'click or press space to flip', all:'oldest first'}[mode];
   if (mode === 'side') {
     v.innerHTML = '<div class="pair">' + [A, B].map(l => '<figure><figcaption>' + l + '</figcaption><img src="' + url(l, shot) + '"></figure>').join('') + '</div>';
