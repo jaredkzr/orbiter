@@ -1,0 +1,30 @@
+BEGIN_DESC
+Edwards base (Edwards_close): its assets by night (Utils/BaseKit/shots.py)
+END_DESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51985.3300
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship V
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET V
+  MODE Extern
+  TRACKMODE Ground Earth
+  GROUNDLOCATION -117.8867086 34.9262932 40.0
+  GROUNDDIRECTION 130.33 -5.69
+  FOV 55.00
+END_CAMERA
+
+BEGIN_SHIPS
+V:DeltaGlider
+  STATUS Landed Earth
+  BASE Edwards:1
+  HEADING 0
+  GEAR 1 1.0000
+END
+END_SHIPS
