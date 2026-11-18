@@ -14,7 +14,8 @@ layout(set = 3, binding = 5) uniform sampler2D reflMap;   // reflection colour a
 layout(set = 3, binding = 6) uniform sampler2D translMap; // translucence (lit from behind)
 layout(set = 3, binding = 7) uniform sampler2D transmMap; // transmittance (sun shining through)
 const uint MAP_NORM = 1u, MAP_RGHN = 2u, MAP_METAL = 4u, MAP_EMIS = 8u,
-           MAP_SPEC = 16u, MAP_REFL = 32u, MAP_TRANSL = 64u, MAP_TRANSM = 128u;
+           MAP_SPEC = 16u, MAP_REFL = 32u, MAP_TRANSL = 64u, MAP_TRANSM = 128u,
+           MAP_NIGHT = 256u; // (a flag: the emission map lit at night only, VkTexture.h MAP_NIGHT_BIT)
 
 // Tangent frame from screen-space derivatives of position and texture
 // coordinates (no per-vertex tangents needed): T along +u, B along +v
@@ -39,8 +40,12 @@ struct Material {
 	vec3 reflTint;      // colour of environment reflections
 };
 
-// pbr: metalness, roughness, reflectivity (material parameters)
-Material SurfaceMaterial (vec3 normalView, vec3 posView, vec2 uv, uint maps, vec4 pbr)
+// pbr: metalness, roughness, reflectivity (material parameters). The maps
+// sampled at uv; grad: at suv with gradients sdx, sdy instead, their normals
+// turned by rot into uv's frame (a runway's slabs: runway.glsl)
+#define MAT_SAMPLE(map) (grad ? textureGrad (map, suv, sdx, sdy) : texture (map, uv))
+Material SurfaceMaterialS (vec3 normalView, vec3 posView, vec2 uv, uint maps, vec4 pbr,
+	bool grad, vec2 suv, vec2 sdx, vec2 sdy, mat2 rot)
 {
 	Material m;
 	vec3 N = normalize (normalView);
@@ -48,7 +53,8 @@ Material SurfaceMaterial (vec3 normalView, vec3 posView, vec2 uv, uint maps, vec
 	if ((maps & MAP_NORM) != 0u) {
 		// (z from x and y: two-channel maps such as BC5 have none)
 		vec3 n;
-		n.xy = texture (normMap, uv).xy * 2.0 - 1.0;
+		n.xy = MAT_SAMPLE (normMap).xy * 2.0 - 1.0;
+		if (grad) n.xy = rot * n.xy;
 		n.z = sqrt (max (0.0, 1.0 - dot (n.xy, n.xy)));
 		vec3 Np = normalize (CotangentFrame (N, posView, uv) * n);
 		if (all (equal (Np, Np))) N = Np; // degenerate texture coordinates: keep N
@@ -59,21 +65,28 @@ Material SurfaceMaterial (vec3 normalView, vec3 posView, vec2 uv, uint maps, vec
 	m.reflectivity = pbr.z;
 	m.specTint = vec3 (1.0);
 	if ((maps & MAP_SPEC) != 0u) {
-		vec4 sp = texture (specMap, uv);
+		vec4 sp = MAT_SAMPLE (specMap);
 		m.specTint = sp.rgb;
 		m.rough = 1.0 - sp.a;
 	}
-	if ((maps & MAP_RGHN) != 0u) m.rough = 1.0 - texture (rghnMap, uv).g;
-	if ((maps & MAP_METAL) != 0u) m.metal = texture (metalMap, uv).g;
+	if ((maps & MAP_RGHN) != 0u) m.rough = 1.0 - MAT_SAMPLE (rghnMap).g;
+	if ((maps & MAP_METAL) != 0u) m.metal = MAT_SAMPLE (metalMap).g;
 	m.rough = clamp (m.rough, 0.04, 1.0);
 	m.reflTint = vec3 (1.0);
 	if ((maps & MAP_REFL) != 0u) {
-		m.reflTint = texture (reflMap, uv).rgb;
+		m.reflTint = MAT_SAMPLE (reflMap).rgb;
 		m.reflectivity = 1.0; // the map masks the reflections per pixel
 	} else if ((maps & (MAP_RGHN | MAP_METAL)) != 0u) {
 		m.reflectivity = max (m.reflectivity, 1.0 - m.rough);
 	}
 	return m;
+}
+
+#undef MAT_SAMPLE
+
+Material SurfaceMaterial (vec3 normalView, vec3 posView, vec2 uv, uint maps, vec4 pbr)
+{
+	return SurfaceMaterialS (normalView, posView, uv, maps, pbr, false, uv, vec2 (0.0), vec2 (0.0), mat2 (1.0));
 }
 
 // Octahedral encoding of unit vectors

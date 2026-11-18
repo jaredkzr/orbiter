@@ -1540,12 +1540,174 @@ void Tank::UpdateShadow (Vector &fromsun, double az)
 #endif
 
 // ======================================================================================
+// generic buildings' descriptions (oapiGetBaseBuildings)
+
+void BaseObject::FillBuildingSpec (BASEBUILDINGSPEC *spec, int type, double wallh, const LONGLONG *texid, const D3DVALUE *tus, const D3DVALUE *tvs, int ntex, int nstep) const
+{
+	if (!spec) return;
+	memset (spec, 0, sizeof (*spec));
+	spec->type = type;
+	spec->pos = _V(relpos.x, relpos.y, relpos.z);
+	spec->rot = rot;
+	spec->size = _V(scale.x, scale.y, scale.z);
+	spec->wallh = wallh;
+	spec->nstep = nstep;
+	for (int i = 0; i < ntex && i < 3; i++) {
+		const char *n = texid[i] ? Base::GenericTextureName (texid[i]) : nullptr;
+		if (n) strncpy (spec->tex[i], n, 31);
+		spec->texrep[i][0] = tus[i], spec->texrep[i][1] = tvs[i];
+	}
+}
+
+bool Block::GetBuildingSpec (BASEBUILDINGSPEC *spec) const
+{
+	FillBuildingSpec (spec, BLDG_BLOCK, scale.y, texid, tuscale, tvscale, 3);
+	return true;
+}
+
+bool Hangar::GetBuildingSpec (BASEBUILDINGSPEC *spec) const
+{
+	FillBuildingSpec (spec, BLDG_HANGAR, 0.5 * scale.y, texid, tuscale, tvscale, 3);
+	return true;
+}
+
+bool Hangar2::GetBuildingSpec (BASEBUILDINGSPEC *spec) const
+{
+	double dy = scale.y, dy2 = (roofh < 0.0 || roofh > dy ? 0.5 * dy : roofh);
+	FillBuildingSpec (spec, BLDG_GABLE, dy - dy2, texid, tuscale, tvscale, 3);
+	return true;
+}
+
+bool Hangar3::GetBuildingSpec (BASEBUILDINGSPEC *spec) const
+{
+	FillBuildingSpec (spec, BLDG_ARCH, 0.0, texid, tuscale, tvscale, 3);
+	return true;
+}
+
+bool Tank::GetBuildingSpec (BASEBUILDINGSPEC *spec) const
+{
+	FillBuildingSpec (spec, BLDG_TANK, scale.y, texid, tuscale, tvscale, 2, (int)nstep);
+	return true;
+}
+
+// ======================================================================================
 // class Lpad: base class for landing pads
 
 Lpad::Lpad (const Base *_base): BaseObject (_base)
 {
 	padno = 0; // default
 	ILSfreq = 0.0f; // undefined
+	shape = PADSHAPE_SQUARE;
+}
+
+void Lpad::ParseCommon (const char *label, const char *value)
+{
+	char v[32] = "";
+	sscanf (value, "%31s", v);
+	if (!_stricmp (label, "STYLE")) classic = !_stricmp (v, "classic");
+	else if (!_stricmp (label, "SURFACE")) surface = !_stricmp (v, "concrete") ? PADSURF_CONCRETE : PADSURF_PAVERS;
+}
+
+int Lpad::Surface () const
+{
+	if (surface >= 0) return surface;
+	return !_stricmp (base->RefPlanet()->Name(), "Earth") ? PADSURF_CONCRETE : PADSURF_PAVERS;
+}
+
+void Lpad::GetSpec (PADSPEC *spec) const
+{
+	spec->pos = _V(relpos.x, relpos.y, relpos.z);
+	spec->rot = rot;
+	spec->scale = scale.x;
+	spec->shape = shape;
+	spec->number = (int)padno + 1;
+	spec->surface = Surface ();
+	spec->marked = Marked ();
+}
+
+void Lpad::BuildMarked ()
+{
+	// the pad's flat top: a fan about its centre through a ring halfway out
+	// (its ground followed: MapToAltitude), then the octagon's rim
+	mvtx.clear (), midx.clear ();
+	auto vtx = [&](double x, double z) {
+		NTVERTEX v{};
+		v.x = (float)x, v.z = (float)z, v.ny = 1.0f;
+		mvtx.push_back (v);
+		return (WORD)(mvtx.size() - 1);
+	};
+	auto tri = [&](WORD a, WORD b, WORD c) { // (front: clockwise seen from above, as the templates)
+		const NTVERTEX &p = mvtx[a], &q = mvtx[b], &r = mvtx[c];
+		double cr = (q.x - p.x) * (r.z - p.z) - (q.z - p.z) * (r.x - p.x);
+		if (cr > 0.0) std::swap (b, c);
+		midx.insert (midx.end(), { a, b, c });
+	};
+	if (shape == PADSHAPE_OCTAGON) {
+		WORD c = vtx (0, 0), in[8], out[8];
+		for (int k = 0; k < 8; k++) {
+			const NTVERTEX &t = Lpad01::Vtx[20 + k]; // (the octagon's corners)
+			in[k] = vtx (0.5 * t.x, 0.5 * t.z);
+			out[k] = vtx (t.x, t.z);
+		}
+		for (int k = 0; k < 8; k++) {
+			int j = (k + 1) % 8;
+			tri (c, in[k], in[j]);
+			tri (in[k], out[k], out[j]);
+			tri (in[k], out[j], in[j]);
+		}
+		WORD r0 = (WORD)mvtx.size();
+		for (int k = 20; k < 44; k++) mvtx.push_back (Lpad01::Vtx[k]);
+		for (int k = 54; k < 144; k++) midx.push_back ((WORD)(Lpad01::Idx[k] - 20 + r0));
+	} else {
+		const int N = 4; // (20 m cells)
+		WORD g[N + 1][N + 1];
+		for (int i = 0; i <= N; i++)
+			for (int j = 0; j <= N; j++) g[i][j] = vtx (-40.0 + 80.0 * i / N, -40.0 + 80.0 * j / N);
+		for (int i = 0; i < N; i++)
+			for (int j = 0; j < N; j++) {
+				tri (g[i][j], g[i + 1][j + 1], g[i + 1][j]);
+				tri (g[i][j], g[i][j + 1], g[i + 1][j + 1]);
+			}
+	}
+}
+
+bool Lpad::MarkedGroupSpec (int grp, DWORD &nvtx, DWORD &nidx, LONGLONG &texid, bool &undershadow, bool &groundshadow)
+{
+	if (grp != 0) return false;
+	if (mvtx.empty ()) BuildMarked ();
+	nvtx = (DWORD)mvtx.size(), nidx = (DWORD)midx.size();
+	texid = NameToId (Surface () == PADSURF_CONCRETE ? "RunwayConcrete" : "PadPavers");
+	undershadow = true;
+	groundshadow = false;
+	return true;
+}
+
+void Lpad::ExportMarkedGroup (int grp, NTVERTEX *vtx, WORD *idx, DWORD &idx_ofs)
+{
+	if (grp != 0) return;
+	if (mvtx.empty ()) BuildMarked ();
+	double s = scale.x, c = cos (rot), sn = sin (rot), tex = 1.0 / (PAVE_SLAB * PAVE_TEXSLABS);
+	for (size_t i = 0; i < mvtx.size(); i++) {
+		const NTVERTEX &v = mvtx[i];
+		NTVERTEX &o = vtx[i];
+		o = v;
+		o.x = (float)(s * (c * v.x - sn * v.z) + relpos.x);
+		o.y = (float)(s * v.y + relpos.y);
+		o.z = (float)(s * (sn * v.x + c * v.z) + relpos.z);
+		o.nx = (float)(c * v.nx - sn * v.nz), o.nz = (float)(sn * v.nx + c * v.nz);
+		o.tu = (float)(s * v.x * tex), o.tv = (float)(s * v.z * tex);
+	}
+	MapToAltitude (vtx, (int)mvtx.size());
+	// (the planet's curvature across the pad: its height (relpos) has the
+	// curvature's drop at its centre, its vertices the difference from it -
+	// a pad kilometres from the base's centre otherwise a plane tilted
+	// against the ground, partly under it: 7 km out, 9 cm across it)
+	if (base->MapObjectsToSphere ()) {
+		D3DVALUE c0 = ElevCorrection ((D3DVALUE)relpos.x, (D3DVALUE)relpos.z);
+		for (size_t i = 0; i < mvtx.size(); i++) vtx[i].y += ElevCorrection (vtx[i].x, vtx[i].z) - c0;
+	}
+	WORD iofs = (WORD)idx_ofs;
+	for (WORD w : midx) *idx++ = w + iofs;
 }
 
 // ======================================================================================
@@ -1618,6 +1780,7 @@ Lpad01::Lpad01 (const Base *_base): Lpad (_base)
 {
 	ngrp = 1;
 	texid = 0;
+	shape = PADSHAPE_OCTAGON;
 }
 
 int Lpad01::ParseLine (const char *label, const char *value)
@@ -1630,13 +1793,14 @@ int Lpad01::ParseLine (const char *label, const char *value)
 			ParseError ("Lpad1: NAV: expected scalar value");
 			res = 2;
 		}
-	}
+	} else ParseCommon (label, value);
 	return res;
 }
 
 bool Lpad01::GetGroupSpec (int grp, DWORD &nvtx, DWORD &nidx, LONGLONG &_texid,
 	bool &undershadow, bool &groundshadow)
 {
+	if (Marked ()) return MarkedGroupSpec (grp, nvtx, nidx, _texid, undershadow, groundshadow);
 	if (grp == 0) {
 		nvtx = 44;
 		nidx = 144;
@@ -1649,6 +1813,7 @@ bool Lpad01::GetGroupSpec (int grp, DWORD &nvtx, DWORD &nidx, LONGLONG &_texid,
 
 void Lpad01::ExportGroup (int grp, NTVERTEX *vtx, WORD *idx, DWORD &idx_ofs)
 {
+	if (Marked ()) { ExportMarkedGroup (grp, vtx, idx, idx_ofs); return; }
 	if (grp == 0) {
 		D3DVALUE cosr = scale.x*(D3DVALUE)cos(rot), sinr = scale.x*(D3DVALUE)sin(rot);
 		DWORD i;
@@ -1729,13 +1894,14 @@ int Lpad02::ParseLine (const char *label, const char *value)
 			ParseError ("Lpad2: NAV: expected scalar value");
 			res = 2;
 		}
-	}
+	} else ParseCommon (label, value);
 	return res;
 }
 
 bool Lpad02::GetGroupSpec (int grp, DWORD &nvtx, DWORD &nidx, LONGLONG &_texid,
 	bool &undershadow, bool &groundshadow)
 {
+	if (Marked ()) return MarkedGroupSpec (grp, nvtx, nidx, _texid, undershadow, groundshadow);
 	if (grp == 0) {
 		nvtx = 28;
 		nidx = 60;
@@ -1748,6 +1914,7 @@ bool Lpad02::GetGroupSpec (int grp, DWORD &nvtx, DWORD &nidx, LONGLONG &_texid,
 
 void Lpad02::ExportGroup (int grp, NTVERTEX *vtx, WORD *idx, DWORD &idx_ofs)
 {
+	if (Marked ()) { ExportMarkedGroup (grp, vtx, idx, idx_ofs); return; }
 	if (grp == 0) {
 		D3DVALUE cosr = scale.x*(D3DVALUE)cos(rot), sinr = scale.x*(D3DVALUE)sin(rot);
 		DWORD i;
@@ -1847,13 +2014,14 @@ int Lpad02a::ParseLine (const char *label, const char *value)
 			ParseError ("Lpad2a: NAV: expected scalar value");
 			res = 2;
 		}
-	}
+	} else ParseCommon (label, value);
 	return res;
 }
 
 bool Lpad02a::GetGroupSpec (int grp, DWORD &nvtx, DWORD &nidx, LONGLONG &_texid,
 	bool &undershadow, bool &groundshadow)
 {
+	if (Marked ()) return MarkedGroupSpec (grp, nvtx, nidx, _texid, undershadow, groundshadow);
 	if (grp == 0) {
 		nvtx = 37;
 		nidx = 96;
@@ -1866,6 +2034,7 @@ bool Lpad02a::GetGroupSpec (int grp, DWORD &nvtx, DWORD &nidx, LONGLONG &_texid,
 
 void Lpad02a::ExportGroup (int grp, NTVERTEX *vtx, WORD *idx, DWORD &idx_ofs)
 {
+	if (Marked ()) { ExportMarkedGroup (grp, vtx, idx, idx_ofs); return; }
 	if (grp == 0) {
 		D3DVALUE cosr = scale.x*(D3DVALUE)cos(rot), sinr = scale.x*(D3DVALUE)sin(rot);
 		DWORD i;
@@ -1933,6 +2102,15 @@ Runway::~Runway ()
 bool Runway::GetGroupSpec (int grp, DWORD &nvtx, DWORD &nidx, LONGLONG &_texid,
 	bool &undershadow, bool &groundshadow)
 {
+	if (Marked ()) {
+		if (grp < 0 || grp >= (int)mgrp.size()) return false;
+		nvtx = (DWORD)mgrp[grp].vtx.size();
+		nidx = (DWORD)mgrp[grp].idx.size();
+		_texid = mgrp[grp].tex;
+		undershadow = true;
+		groundshadow = false;
+		return true;
+	}
 	switch (grp) {
 	case 0:
 		nvtx = dyndata->nRwVtx;
@@ -1951,6 +2129,12 @@ void Runway::ExportGroup (int grp, NTVERTEX *vtx, WORD *idx, DWORD &idx_ofs)
 	DWORD i;
 	WORD iofs = (WORD)idx_ofs;
 
+	if (Marked ()) {
+		if (grp < 0 || grp >= (int)mgrp.size()) return;
+		memcpy (vtx, mgrp[grp].vtx.data(), mgrp[grp].vtx.size()*sizeof(NTVERTEX));
+		for (WORD w : mgrp[grp].idx) *idx++ = w + iofs;
+		return;
+	}
 	switch (grp) {
 	case 0:
 		memcpy (vtx, dyndata->RwVtx, dyndata->nRwVtx*sizeof(NTVERTEX));
@@ -2012,13 +2196,100 @@ int Runway::Read (istream &is)
 		} else if (!_stricmp (label, "RWTEX")) {
 			sscanf (cp+5, "%s", label);
 			texid[0] = NameToId (label);
+		} else if (!_stricmp (label, "MARKINGS")) {
+			char m[32] = "";
+			sscanf (cp+8, "%31s", m);
+			markings = !_stricmp (m, "precision") ? RWMARK_PRECISION : !_stricmp (m, "nonprecision") ? RWMARK_NONPRECISION
+				: !_stricmp (m, "visual") ? RWMARK_VISUAL : RWMARK_NONE;
+		} else if (!_stricmp (label, "DESIG")) {
+			sscanf (cp+5, "%3s%3s", desig[0], desig[1]);
+		} else if (!_stricmp (label, "OVERRUN")) {
+			int n = sscanf (cp+7, "%f%f", &overrun[0], &overrun[1]);
+			if (n == 1) overrun[1] = overrun[0];
+		} else if (!_stricmp (label, "SURFACE")) {
+			char m[32] = "";
+			sscanf (cp+7, "%31s%f", m, &concreteEnds);
+			surface = !_stricmp (m, "asphalt") ? RWSURF_ASPHALT : RWSURF_CONCRETE;
 		}
 	} while (_stricmp (label, "END"));
+	if (Marked ()) {
+		// designators not given: from the true heading (END1 to END2: north -x, east z)
+		double hdg = atan2 (end2.z - end1.z, -(end2.x - end1.x)) * DEG;
+		for (int k = 0; k < 2; k++)
+			if (!desig[k][0]) {
+				int n = (int)floor (posangle ((hdg + (k ? 180.0 : 0.0)) * RAD) * DEG / 10.0 + 0.5) % 36;
+				sprintf (desig[k], "%02d", n ? n : 36);
+			}
+	}
 	return 0;
+}
+
+void Runway::GetSpec (RUNWAYSPEC *spec) const
+{
+	spec->end1 = _V(end1.x, end1.y, end1.z);
+	spec->end2 = _V(end2.x, end2.y, end2.z);
+	spec->width = 2.0 * width;
+	spec->overrun[0] = overrun[0], spec->overrun[1] = overrun[1];
+	memcpy (spec->desig, desig, sizeof(desig));
+	spec->markings = markings;
+	spec->surface = surface;
+	spec->concreteEnds = concreteEnds;
+}
+
+void Runway::ActivateMarked ()
+{
+	// pieces along it by surface (an asphalt runway's concrete ends), each
+	// a strip of quads at most MAXQ long (curvature: their sag 0.2 mm)
+	const double MAXQ = 100.0;
+	double dx = end2.x - end1.x, dz = end2.z - end1.z, len = std::hypot (dx, dz);
+	if (len <= 0.0) return;
+	double ux = dx / len, uz = dz / len, rx = uz, rz = -ux; // along, to the right
+	LONGLONG tex[2] = { texid[0] ? texid[0] : NameToId ("RunwayConcrete"), texid[0] ? texid[0] : NameToId ("RunwayAsphalt") };
+	struct Piece { double s0, s1; int surf; };
+	std::vector<Piece> pieces;
+	if (surface == RWSURF_ASPHALT && concreteEnds > 0.0f) {
+		double a = std::min ((double)overrun[0] + concreteEnds, 0.5 * len), b = std::max (len - overrun[1] - concreteEnds, 0.5 * len);
+		pieces = { { 0.0, a, RWSURF_CONCRETE }, { a, b, RWSURF_ASPHALT }, { b, len, RWSURF_CONCRETE } };
+	} else
+		pieces = { { 0.0, len, surface } };
+	mgrp.clear ();
+	for (const Piece &pc : pieces) {
+		if (pc.s1 - pc.s0 < 1e-3) continue;
+		MarkedGroup *g = nullptr;
+		for (auto &m : mgrp) if (m.tex == tex[pc.surf]) g = &m;
+		if (!g) { mgrp.push_back ({ tex[pc.surf] }); g = &mgrp.back(); }
+		int nq = std::max (1, (int)ceil ((pc.s1 - pc.s0) / MAXQ));
+		WORD v0 = (WORD)g->vtx.size();
+		for (int j = 0; j <= nq; j++) {
+			double s = pc.s0 + (pc.s1 - pc.s0) * j / nq;
+			for (int side = 1; side >= -1; side -= 2) { // (right edge, then left: as RWSEG)
+				NTVERTEX v{};
+				v.x = (float)(end1.x + ux * s + rx * width * side);
+				v.z = (float)(end1.z + uz * s + rz * width * side);
+				v.ny = 1.0f;
+				v.tu = (float)(side * width / (SLAB * TEXSLABS));
+				v.tv = (float)(s / (SLAB * TEXSLABS));
+				g->vtx.push_back (v);
+			}
+		}
+		for (int j = 0; j < nq; j++) {
+			WORD o = (WORD)(v0 + 2 * j);
+			for (WORD w : { o, (WORD)(o+1), (WORD)(o+2), (WORD)(o+3), (WORD)(o+2), (WORD)(o+1) }) g->idx.push_back (w);
+		}
+	}
+	for (auto &m : mgrp) {
+		MapToAltitude (m.vtx.data(), (int)m.vtx.size());
+		MapToCurvature (m.vtx.data(), (int)m.vtx.size());
+	}
+	ngrp = (int)mgrp.size();
 }
 
 void Runway::Activate ()
 {
+	if (Marked ()) {
+		if (mgrp.empty ()) ActivateMarked ();
+		return;
+	}
 	if (dyndata) return; // active already
 	dyndata = new struct DYNDATA; TRACENEW
 
@@ -2086,6 +2357,7 @@ void Runway::Activate ()
 
 void Runway::Deactivate ()
 {
+	mgrp.clear ();
 	if (dyndata) {
 		delete []dyndata->RwVtx;
 		dyndata->RwVtx = NULL;

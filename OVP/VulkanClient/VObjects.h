@@ -37,6 +37,8 @@ public:
 	virtual void PrepareFrame () {}
 	virtual void RenderShadow (ShadowMap &sm) {}
 	virtual void CollectLights (std::vector<LightSource> &lights) {}
+	/// runways and landing pads with markings of its bases near the camera (frame runways[], pads[])
+	virtual void CollectGroundMarks (std::vector<RunwayGpu> &rws, std::vector<PadGpu> &pads) {}
 	/// engine plumes of this frame (before the prepass)
 	virtual void CollectPlumes (class PlumeRenderer &pr) {}
 	/// crash fireballs of this frame, marched as volumes (before the prepass)
@@ -340,6 +342,10 @@ public:
 	bool RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n);
 	/// floodlights of the base, at night
 	void CollectLights (std::vector<LightSource> &lights);
+	/// its runways and landing pads with markings (from the core:
+	/// oapiGetBaseRunways, oapiGetBasePadSpec), their place in the frame's
+	/// lists kept for Render
+	void CollectGroundMarks (std::vector<RunwayGpu> &rws, std::vector<PadGpu> &pads);
 
 private:
 	/// lights of the base (base frame): runway edge lights and beacon arrays
@@ -350,10 +356,27 @@ private:
 	std::vector<Flood> floods;
 	void ReadLights ();
 	bool Night () const;
+	/// how dark it is at the base (0 day .. 1 night: the sun below the horizon)
+	float NightFactor () const;
 	OBJHANDLE hBase;
 	Scene *scene;
 	std::vector<std::unique_ptr<VkMesh>> ground;     // rendered before shadows (runways, pads)
 	std::vector<std::unique_ptr<VkMesh>> structures; // rendered after shadows (buildings)
+	std::vector<RunwayGpu> runways; // (with markings)
+	int rwFirst = 0, rwCount = 0;   // (in this frame's list)
+	std::vector<PadGpu> pads;       // (with markings)
+	// the generic buildings (BLOCK, HANGAR*, TANK), drawn by the client (the core's groups hidden):
+	// instances of the base kit's shapes in the base frame (batches by shape), and the same as
+	// a mesh (shadows, ray tracing, ray hits)
+	struct BldBatch { int shape; uint32_t first, count; };
+	std::vector<BldBatch> bldBatches;
+	vkc::Buffer bldBuf;
+	std::vector<std::unique_ptr<VkMesh>> bldMesh;
+	void ReadBuildings ();
+	float BaseHour () const;
+	int padFirst = 0, padCount = 0;
+	bool padTint = false;           // (the pavers' tint found: the ground's colour, read from its tiles)
+	void ReadPads ();
 };
 
 namespace vksurf { class TileProbe; }
@@ -369,6 +392,7 @@ public:
 	void PrepareFrame () override;
 	bool RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n) override;
 	void CollectLights (std::vector<LightSource> &lights) override;
+	void CollectGroundMarks (std::vector<RunwayGpu> &rws, std::vector<PadGpu> &pads) override;
 	Atmosphere *GetAtmosphere () override { return atmosphere.get(); }
 	/// tiled cloud layer (or nullptr) and its altitude [m]
 	PlanetSurface *CloudLayer () const { return clouds.get(); }

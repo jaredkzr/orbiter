@@ -66,6 +66,13 @@
 // (the factor, 0 on landing pads; the levelling only where the data resolve hummocks, spacing below 2 x the level-10 spacing) also sets the noise amplitude (x0.05) and the fade (x0.2: no pebbles,
 // craters or micro relief), and Height gives w to the client (cracks, blotch damping; no base fade). Elsewhere the heights
 // are unchanged.
+// Bare earth (BareEarth): about bases that ask for it (Base::BareEarthRadius)
+// the data are levelled to the ground under their trees and buildings (a
+// GroundFilter: the lowest tenth of the data within 600 m), blended back to
+// the data beyond the radius; not the sea, lagoons and rivers (data at the
+// datum), but ditches within the land filled. The noise there takes the
+// ground's relief, not the canopy's, and the base's pads and runways are
+// graded on that ground. Elsewhere nothing changes.
 // Sea gate: on bodies with seas (TerrainDetailSea) the craters, pebbles and
 // micro relief are off on the flat sea, so that the sea (and its ice) stays
 // flat: at and below the data's sea level (fading in between 0.25 m and 1 m
@@ -83,6 +90,7 @@
 
 class Planet;
 class PlayaMap;
+class GroundFilter;
 namespace cities { class CityMap; }
 
 class TerrainDetail {
@@ -233,13 +241,13 @@ private:
 	double siteKpMax = 1.0, siteKrMax = 1.0;   // largest pebble and rock factors (at least 1)
 	double SiteField (const Vector &dir, bool b) const; // (field A or B)
 	void InitSite ();
-	struct Pad { Vector dir; double g; };     // a landing pad: its centre, its level (the data's there) [m]
+	struct Pad { Vector dir; double g, r0, r1; }; // a landing pad: its centre, its level (the data's there), level within r0, blended back by r1 [m]
 	struct Grade { Vector dir, along, across; double hl, hw, g0, gl, gw; }; // graded ground: centre, axes, half extents [m], level g0 + gl s + gw t
-	struct Flat { Vector dir; double r0, r1; std::vector<Pad> pads; std::vector<Grade> grades; double reach; }; // fully flat within r0, detail beyond r1; pads and grades within reach [m]
+	struct Flat { Vector dir; double r0, r1; std::vector<Pad> pads; std::vector<Grade> grades; double reach; double bare0 = 0.0, bare1 = 0.0; std::vector<std::pair<Vector, double>> bareKeep; }; // fully flat within r0, detail beyond r1; pads and grades within reach [m]; bare earth within bare0, blended out by bare1 [m] (Base::BareEarthRadius; 0: none), but not within the keep areas (centre, radius [m])
 	mutable std::vector<Flat> flats;
 	/// landing pads and graded ground (Base::Grades): the ground levelled
-	/// to the pad's level within PAD_R0 of it, blended back to the data's
-	/// by PAD_R1; graded areas likewise, blended over GRADE_BLEND (the share
+	/// to the pad's level over its mesh (Pad::r0: its reach and 2 m, PAD_R0
+	/// at least), blended back to the data's by r1 (PAD_BLEND further); graded areas likewise, blended over GRADE_BLEND (the share
 	/// of the level returned; g: the level)
 	double PadLevel (const Vector &dir, double &g) const;
 	mutable cities::CityMap *cities = nullptr; // (flattened where built up)
@@ -247,6 +255,13 @@ private:
 	/// the flats that may reach a point (of those that may reach points about
 	/// it: the thread's last few), in their order
 	const std::vector<int> &FlatsNear (const Vector &dir) const;
+	/// bare earth about bases (Base::BareEarthRadius): the share (0-1) of
+	/// the data levelled to the ground under their canopy at a point of
+	/// elevation elev [m], and that ground g [m] (bare: the ground filter,
+	/// made by InitBases if a base asks for it)
+	double BareEarth (const Vector &dir, double lat, double lng, double elev, double &g) const;
+	double BareWeight (const Flat &fl, const Vector &dir, double lat, double lng, double elev, double &g) const;
+	mutable std::unique_ptr<GroundFilter> bare;
 	mutable std::once_flag playaOnce;          // (any thread)
 	mutable std::unique_ptr<PlayaMap> playaMap;
 	const uint64_t serial;                     // (this one, for the threads' caches: not its address, reused)

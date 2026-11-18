@@ -10,7 +10,9 @@
 #define FRAME_SET 0
 #endif
 
-const int MAX_LIGHTS = 32;
+const int MAX_LIGHTS = 64; // (Scene.h)
+const int MAX_RUNWAYS = 32; // (Scene.h)
+const int MAX_PADS = 64;    // (Scene.h)
 const int SWELL_MAX = 192; // (Scene.cpp)
 
 struct LocalLight {
@@ -51,6 +53,8 @@ layout(set = FRAME_SET, binding = 0) uniform Frame {
 	vec4 swellComp[SWELL_MAX];          // a [m], k [1/m], direction of travel east, north
 	vec4 swellPhase[SWELL_MAX / 4];     // phases at the reference [rad]
 	LocalLight lights[MAX_LIGHTS];
+	vec4 runways[MAX_RUNWAYS * 4]; // bases' runways with markings (Scene.h RunwayGpu; runway.glsl)
+	vec4 pads[MAX_PADS * 3];       // their landing pads with markings (Scene.h PadGpu; pad.glsl)
 } frame;
 
 // Relativistic view (the camera faster than 0.001 c): what the camera sees

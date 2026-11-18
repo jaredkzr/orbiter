@@ -106,6 +106,7 @@ set(common_src
 	ProcTerrain.cpp
 	GroundScatter.cpp
 	Cities.cpp
+	GroundFilter.cpp
 	Sea.cpp
 	SeaSwell.cpp
 	HullWater.cpp

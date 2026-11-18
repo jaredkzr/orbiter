@@ -24,6 +24,7 @@ layout(location = 2) in vec2 inUV;
 layout(location = 0) out vec3 vPosView;
 layout(location = 1) out vec3 vNormalView;
 layout(location = 2) out vec2 vUV;
+layout(location = 3) out vec3 vPosObj; // object frame (a base's: its frame [m]; the ground's detail, mesh.frag)
 
 invariant gl_Position; // (ring.vert draws over the same geometry)
 
@@ -33,5 +34,6 @@ void main()
 	vPosView = p.xyz;
 	vNormalView = mat3(draw.modelView) * inNormal;
 	vUV = inUV;
+	vPosObj = inPos;
 	gl_Position = frame.proj * RelApparent (p); // (relativistic view: as seen)
 }

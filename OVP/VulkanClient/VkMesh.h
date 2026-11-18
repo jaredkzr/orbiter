@@ -17,6 +17,8 @@
 class VkTexture;
 class TextureManager;
 
+struct TexMaps;
+
 class VkMesh {
 public:
 	struct Group {
@@ -34,6 +36,7 @@ public:
 		VkTexture *sideTex = nullptr;
 		uint32_t sideMaterial = 0;
 		float alphaTest = 0.0f;  // texture alpha below which fragments are discarded (foliage; 0: none)
+		TexMaps *nightMaps = nullptr; // (a night texture, TexIdxEx: the texture's maps with it as emission, at night; owned)
 	};
 
 	/// Mesh group flags from the Orbiter mesh format
@@ -42,6 +45,12 @@ public:
 	static constexpr DWORD GRP_HIDDEN   = 0x2;
 	static constexpr DWORD GRP_NOLIGHT  = 0x4;
 	static constexpr DWORD GRP_ADDITIVE = 0x8;
+	static constexpr DWORD GRP_RUNWAY   = MESHGRP_RUNWAY; // a base's runway with markings (runway.glsl)
+	static constexpr DWORD GRP_PAD      = MESHGRP_PAD;    // a base's landing pad with markings (pad.glsl)
+	static constexpr DWORD GRP_BUILDING = MESHGRP_BUILDING;  // a base's generic buildings (BaseBuildings: drawn by the client)
+	static constexpr DWORD GRP_TRAIN    = MESHGRP_TRAIN;     // a base's trains (drawn and moved by the client)
+	static constexpr DWORD GRP_NOCOLLIDE = MESHGRP_NOCOLLIDE; // detail, no collision (drawn)
+	static constexpr DWORD GRP_COLLISION = MESHGRP_COLLISION; // a collision proxy (never drawn)
 
 	VkMesh (vkc::Context *ctx, TextureManager *texmgr, MESHHANDLE hMesh);
 
@@ -79,6 +88,12 @@ public:
 	/// Nearest intersection of a ray (mesh frame, |d| = 1) with the mesh
 	/// within maxDist: distance t and the triangle's unit normal n
 	bool RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n) const;
+	/// add user flags (add) to the groups with any of those in has (e.g. hide a base's flagged groups)
+	void AddUserFlagWhere (DWORD has, DWORD add)
+	{
+		for (auto &g : groups) if (g.usrFlag & has) g.usrFlag |= add;
+		haveBvh = false;
+	}
 	/// groups that were ever drawn with an animation transform (separate
 	/// ray tracing instances)
 	mutable std::vector<uint8_t> rtAnimated;

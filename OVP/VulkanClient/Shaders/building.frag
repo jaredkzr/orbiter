@@ -52,10 +52,10 @@ layout(location = 0) out vec4 outColor;
 #include "meshshade.glsl"
 
 // parts (CityKit.h)
-const int P_FACADE = 0, P_WALL = 1, P_ROOF_FLAT = 2, P_ROOF = 3, P_TRIM = 4, P_SOFFIT = 5;
+const int P_FACADE = 0, P_WALL = 1, P_ROOF_FLAT = 2, P_ROOF = 3, P_TRIM = 4, P_SOFFIT = 5, P_CURVED = 6;
 // materials (CityKit.cpp): the size of their tiles [m]
-const int M_ROOF_FLAT = 10;
-const float TILE[12] = float[](4.0, 3.6, 3.6, 4.0, 4.0, 4.0, 4.0, 3.0, 3.0, 3.0, 4.0, 4.0);
+const int M_ROOF_FLAT = 10, M_PANEL = 12, M_REGOLITH = 13;
+const float TILE[14] = float[](4.0, 3.6, 3.6, 4.0, 4.0, 4.0, 4.0, 3.0, 3.0, 3.0, 4.0, 4.0, 4.0, 4.0);
 // roof colours (factors on the material's own)
 const vec3 ROOF_TINT[16] = vec3[](
 	vec3(1.0), vec3(0.75, 0.42, 0.32), vec3(0.42, 0.43, 0.46), vec3(0.45, 0.68, 0.58),
@@ -64,14 +64,17 @@ const vec3 ROOF_TINT[16] = vec3[](
 	vec3(0.65, 0.65, 0.62), vec3(0.30, 0.38, 0.30), vec3(0.95, 0.95, 0.92), vec3(0.62, 0.52, 0.48));
 // window styles (CityKit.h): bay width [m], window width and height (shares
 // of the bay and storey), sill height (share of the storey), frame colour
-const float WS_BAY[12]  = float[](3.4, 3.0, 3.0, 3.3, 3.0, 1.6, 1.5, 2.0, 6.0, 3.4, 2.8, 3.2);
-const float WS_W[12]    = float[](0.34, 0.32, 0.45, 0.40, 0.50, 0.92, 0.94, 0.60, 0.80, 0.30, 0.55, 0.42);
-const float WS_H[12]    = float[](0.45, 0.50, 0.46, 0.62, 0.42, 0.50, 0.80, 0.55, 0.18, 0.40, 0.50, 0.50);
-const float WS_SILL[12] = float[](0.30, 0.28, 0.30, 0.12, 0.32, 0.30, 0.08, 0.25, 0.72, 0.36, 0.26, 0.28);
-const vec3 WS_FRAME[12] = vec3[](
+// (the last four: bases' - hangars: a big door on the front, high windows about;
+// portholes: pressurised modules; none; strips: ribbon windows)
+const float WS_BAY[16]  = float[](3.4, 3.0, 3.0, 3.3, 3.0, 1.6, 1.5, 2.0, 6.0, 3.4, 2.8, 3.2, 6.0, 3.0, 3.0, 2.0);
+const float WS_W[16]    = float[](0.34, 0.32, 0.45, 0.40, 0.50, 0.92, 0.94, 0.60, 0.80, 0.30, 0.55, 0.42, 0.80, 0.20, 0.0, 0.96);
+const float WS_H[16]    = float[](0.45, 0.50, 0.46, 0.62, 0.42, 0.50, 0.80, 0.55, 0.18, 0.40, 0.50, 0.50, 0.12, 0.20, 0.0, 0.30);
+const float WS_SILL[16] = float[](0.30, 0.28, 0.30, 0.12, 0.32, 0.30, 0.08, 0.25, 0.72, 0.36, 0.26, 0.28, 0.80, 0.45, 0.0, 0.42);
+const vec3 WS_FRAME[16] = vec3[](
 	vec3(0.85), vec3(0.85), vec3(0.6), vec3(0.35, 0.33, 0.30), vec3(0.7), vec3(0.25),
-	vec3(0.22, 0.23, 0.25), vec3(0.5), vec3(0.4), vec3(0.6, 0.55, 0.45), vec3(0.65), vec3(0.3));
-const int WS_BANDS = 5, WS_CURTAIN = 6, WS_GRID = 7, WS_INDUSTRIAL = 8;
+	vec3(0.22, 0.23, 0.25), vec3(0.5), vec3(0.4), vec3(0.6, 0.55, 0.45), vec3(0.65), vec3(0.3),
+	vec3(0.4), vec3(0.55), vec3(0.5), vec3(0.3));
+const int WS_BANDS = 5, WS_CURTAIN = 6, WS_GRID = 7, WS_INDUSTRIAL = 8, WS_HANGAR = 12, WS_PORTHOLE = 13, WS_NONE = 14;
 // luminance of a lit window (the sun's illuminance on white: 1)
 const float WIN_LUM = 0.25;
 
@@ -107,13 +110,42 @@ struct Surf {
 };
 
 // Windows (and doors) on a facade: s along the side from its centre, y
-// above the ground [m]
-void Facade (inout Surf sf, vec3 Ng, vec3 nO, float s, float y, uint bits, uint seed)
+// above the ground [m]; curved: a cylinder's wall (s about it)
+void Facade (inout Surf sf, vec3 Ng, vec3 nO, float s, float y, uint bits, uint seed, bool curved)
 {
 	int storeys = int(bits & 255u), ws = int((bits >> 16) & 15u);
 	float sh = vPrm.x;
 	bool sideX = abs(nO.x) > abs(nO.z);
-	float faceW = (sideX ? vDim.y : vDim.x) * vShape.y;
+	float faceW = curved ? 1.5707963 * (vDim.x + vDim.y) : (sideX ? vDim.y : vDim.x) * vShape.y;
+	if (ws == WS_NONE) return;
+	float px0 = max(length(fwidth(vObj)), 1e-4);
+	if (ws == WS_HANGAR) { // (a base's hangar: one big door on its front, high windows about)
+		int fc = sideX ? (nO.x > 0.0 ? 0 : 1) : (nO.z > 0.0 ? 2 : 3);
+		bool fr = (bits & (1u << 27)) != 0u ? fc == 1 : fc == 3;
+		if (fr && !curved) {
+			float H = vDim.z > 0.0 ? vDim.z : vDim.w; // (walls, or an arch's height)
+			float hh = min(0.86 * (vDim.z > 0.0 ? vDim.z : 0.62 * vDim.w), 16.0);
+			float hw = vDim.z > 0.0 ? 0.42 * faceW : 0.5 * faceW * sqrt(max(1.0 - hh / max(H, 1.0), 0.0)) - 0.6;
+			float dd = max(abs(s) - hw, y - hh);
+			float inDoor = 1.0 - smoothstep(-0.5 * px0, 0.5 * px0, dd);
+			float frameD = 1.0 - smoothstep(-0.5 * px0, 0.5 * px0, dd - 0.35);
+			if (frameD > 0.0) {
+				float groove = 1.0 - smoothstep(0.02, 0.02 + px0, abs(fract(y / 0.6) - 0.5) * 0.6);
+				float seamV = 1.0 - smoothstep(0.02, 0.02 + px0, abs(fract((s + hw) / max(2.0 * hw / 4.0, 1.0)) - 0.5) * 2.0 * hw / 4.0);
+				vec3 dc = vec3(0.42, 0.44, 0.46) * (1.0 - 0.3 * max(groove, seamV) * (1.0 - smoothstep(0.03, 0.1, px0)));
+				sf.base = mix(sf.base, vec3(0.30, 0.30, 0.32), frameD - inDoor);
+				sf.base = mix(sf.base, dc, inDoor);
+				sf.rough = mix(sf.rough, 0.5, frameD);
+				sf.metal = mix(sf.metal, 0.6, inDoor);
+				// (at night: light under it, the gap at its foot)
+				float dark = smoothstep(0.06, -0.06, dot(vUpView, frame.sunDir.xyz));
+				sf.emis += vec3(1.0, 0.85, 0.6) * 0.6 * dark * inDoor * (1.0 - smoothstep(0.0, 0.25, y));
+				sf.N = normalize(mix(sf.N, Ng, frameD));
+			}
+			if (inDoor > 0.99) return;
+		}
+		ws = WS_INDUSTRIAL;
+	}
 	float nb = max(1.0, floor(faceW / WS_BAY[ws] + 0.5));
 	float bay = faceW / nb;
 	vec2 g = vec2((s / faceW + 0.5) * nb, y / sh);
@@ -127,7 +159,7 @@ void Facade (inout Surf sf, vec3 Ng, vec3 nO, float s, float y, uint bits, uint 
 		sf.base *= 1.0 - 0.45 * joint * (1.0 - smoothstep(0.02, 0.06, px));
 	}
 	if (y <= 0.0 || y >= float(storeys) * sh) return;
-	int face = sideX ? (nO.x > 0.0 ? 0 : 1) : (nO.z > 0.0 ? 2 : 3);
+	int face = curved ? 0 : sideX ? (nO.x > 0.0 ? 0 : 1) : (nO.z > 0.0 ? 2 : 3);
 	uint fseed = seed * 4u + uint(face);
 
 	float ww = WS_W[ws], wh = WS_H[ws], sill = WS_SILL[ws];
@@ -136,10 +168,11 @@ void Facade (inout Surf sf, vec3 Ng, vec3 nO, float s, float y, uint bits, uint 
 	bool door = false;
 	if (shop) ww = 0.86, wh = 0.70, sill = 0.04, frameCol = vec3(0.2);
 	// a house's door: on its front, in the bay nearest the middle
-	bool front = (bits & (1u << 27)) != 0u ? face == 1 : face == 3;
-	if ((bits & (1u << 25)) != 0u && front && cell.y == 0 && cell.x == int(floor(0.5 * nb))) {
+	bool front = curved ? true : (bits & (1u << 27)) != 0u ? face == 1 : face == 3;
+	if ((bits & (1u << 25)) != 0u && front && cell.y == 0 && cell.x == (curved ? 0 : int(floor(0.5 * nb)))) {
 		door = true;
-		ww = min(1.0 / bay, 0.8), wh = min(2.1 / sh, 0.85), sill = 0.0;
+		if (ws == WS_PORTHOLE) ww = min(2.0 / bay, 0.9), wh = min(2.3 / sh, 0.9), sill = 0.0; // (an airlock)
+		else ww = min(1.0 / bay, 0.8), wh = min(2.1 / sh, 0.85), sill = 0.0;
 	}
 	// sheds: roller doors on the ground
 	if (ws == WS_INDUSTRIAL && cell.y == 0 && Rnd(cell, fseed, 7u) < 0.35) {
@@ -151,6 +184,7 @@ void Facade (inout Surf sf, vec3 Ng, vec3 nO, float s, float y, uint bits, uint 
 	float dx = (abs(f.x - 0.5) - 0.5 * ww) * bay;
 	float dy = max(sill - f.y, f.y - (sill + wh)) * sh;
 	float d = max(dx, dy);
+	if (ws == WS_PORTHOLE && !door) d = length(vec2((f.x - 0.5) * bay, (f.y - 0.55) * sh)) - 0.45; // (round)
 	float fw = door ? 0.05 : (ws == WS_CURTAIN ? 0.05 : 0.08); // frame width [m]
 	float opening = 1.0 - smoothstep(-0.5 * px, 0.5 * px, d);
 	float glass = 1.0 - smoothstep(-fw - 0.5 * px, -fw + 0.5 * px, d);
@@ -191,8 +225,9 @@ void Facade (inout Surf sf, vec3 Ng, vec3 nO, float s, float y, uint bits, uint 
 	// at night: rooms lit by the local time, the building's own habits
 	float dark = smoothstep(0.06, -0.06, dot(vUpView, frame.sunDir.xyz));
 	if (dark > 0.0) {
-		int use = shop ? 2 : ws == WS_INDUSTRIAL ? 3 : (ws == WS_BANDS || ws == WS_CURTAIN || ws == WS_GRID) ? 1 : 0;
+		int use = shop ? 2 : ws == WS_INDUSTRIAL ? 3 : (ws == WS_BANDS || ws == WS_CURTAIN || ws == WS_GRID || ws == 15) ? 1 : 0;
 		float occ = clamp(Occupancy(use, draw.heat.x) * (0.6 + 0.8 * Rnd(ivec2(0), seed, 13u)), 0.0, 1.0);
+		if (ws == WS_PORTHOLE) occ = 0.7; // (a base's habitats: crews about the clock)
 		// (far: not the occupancy as an even glow, which looked like a grey
 		// haze over the skylines, but blocks of windows about a pixel in size,
 		// each lit or not at that rate: the lights' sparkle; the blocks' sizes
@@ -210,7 +245,7 @@ void Facade (inout Surf sf, vec3 Ng, vec3 nO, float s, float y, uint bits, uint 
 		vec3 lc = use == 1 ? (c < 0.8 ? vec3(0.85, 0.9, 1.0) : vec3(1.0, 0.8, 0.55))
 			: use == 2 ? vec3(1.0, 0.88, 0.7)
 			: c < 0.68 ? vec3(1.0, 0.66, 0.36) : c < 0.95 ? vec3(0.88, 0.88, 0.92) : vec3(0.55, 0.65, 1.0);
-		float lum = WIN_LUM * (use == 2 ? 2.0 : 1.0) * (r < 0.18 ? 0.6 : 1.0) * (0.6 + 0.8 * Rnd(cell, fseed, 14u));
+		float lum = WIN_LUM * (use == 2 ? 2.0 : 1.0) * (ws == WS_PORTHOLE ? 2.0 : 1.0) * (r < 0.18 ? 0.6 : 1.0) * (0.6 + 0.8 * Rnd(cell, fseed, 14u));
 		lc = mix(lc, vec3(0.95, 0.8, 0.62), far); // (the average)
 		sf.emis += lc * (lum * lit * glass * dark);
 	}
@@ -262,9 +297,17 @@ void main()
 			uv = vec2(dot(vObj.xz, vec2(-dn.y, dn.x)), dot(vObj.xz, dn) / max(nO.y, 0.15));
 		}
 		m = roofM, tint = roofTint;
+	} else if (part == P_CURVED) { // a cylinder's wall: about it, up from the ground
+		s = atan(vObj.z, vObj.x) * 0.25 * (vDim.x + vDim.y);
+		uv = vec2(s, vObj.y - sunk), m = wallM, tint = wallTint;
 	} else { // walls: along the side, up from the ground
 		s = abs(nO.x) > abs(nO.z) ? vObj.z * sign(nO.x) : -vObj.x * sign(nO.z);
 		uv = vec2(s, vObj.y - sunk), m = wallM, tint = wallTint;
+	}
+	// (a base's regolith cover, deco 2: the roof the soil's colour (the wall tint), the walls' panels white)
+	if ((bits >> 28) == 2u) {
+		if (part == P_ROOF) tint = wallTint;
+		else if (m == M_PANEL) tint = vec3(0.9);
 	}
 	vec2 tuv = uv / TILE[m];
 	vec4 alb = texture(kit, vec3(tuv, float(2 * m)));
@@ -283,7 +326,8 @@ void main()
 
 	if (part == P_TRIM) sf.base = mix(sf.base, vec3(0.55, 0.54, 0.52), 0.7);
 	else if (part == P_SOFFIT) sf.base *= 0.45;
-	else if (part == P_FACADE) Facade(sf, Ng, nO, s, vObj.y - sunk, bits, seed);
+	else if (part == P_FACADE) Facade(sf, Ng, nO, s, vObj.y - sunk, bits, seed, false);
+	else if (part == P_CURVED) Facade(sf, Ng, nO, s, vObj.y - sunk, bits, seed, true);
 
 	Material mat;
 	mat.N = sf.N;

@@ -1,0 +1,28 @@
+BEGIN_HYPERDESC
+<h1>Cape Canaveral's ground</h1>
+The ground about Cape Canaveral is flat coastal land a few metres above
+the sea; its elevation data are a surface model (tree canopy, buildings).
+The ground the physics and the meshes share must be bare earth there:
+no spikes or bumps along the runways and their approaches, nor out to
+the horizon; the runways' graded strips flush with the ground about them;
+the levels the physics reads at different heights in agreement. Needs
+Earth's elevation data (skipped without it).
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Tests/CapeGroundTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship CG
+END_FOCUS
+
+BEGIN_SHIPS
+CG:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 6671000.0 0.00000 51.6 30.0 0.0 100.0 51982.6685767396
+  AROT 0 0 0
+END
+END_SHIPS

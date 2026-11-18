@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "Scene.h"
+#include "CityKit.h"
 #include "GfxSettings.h"
 #include "AO.h"
 #include "SSR.h"
@@ -99,6 +100,8 @@ namespace {
 			float att[4];   // attenuation coefficients, cos(umbra/2)
 			float spot[4];  // cos(penumbra/2)
 		} lights[MAX_LIGHTS];
+		RunwayGpu runways[MAX_RUNWAYS]; // (bases near the camera: VObject::CollectGroundMarks)
+		PadGpu pads[MAX_PADS];
 	};
 
 	// shadows are cast within this range of the camera target, in units of
@@ -518,6 +521,7 @@ void Scene::Shutdown ()
 	if (trails) trails->Shutdown ();
 	trails.reset();
 	plumes.reset();
+	baseKit.reset();
 	ctx->DestroyImage (reactive);
 	ctx->DestroyImage (reactiveMS);
 	if (vclouds) vclouds->Shutdown ();
@@ -2552,6 +2556,13 @@ void Scene::FillFrameUniforms (void *pfu)
 		if (pick[1] >= 0) fu.lightCount[3] = (float)pick[1];
 	}
 	Mat4::FromRotTrans (camRot, _V(0, 0, 0)).ToFloat (fu.viewToGlobal);
+	// runways with markings of the bases near the camera
+	// and landing pads
+	std::vector<RunwayGpu> rws;
+	std::vector<PadGpu> pads;
+	for (auto &it : visuals) it.second->CollectGroundMarks (rws, pads);
+	memcpy (fu.runways, rws.data(), std::min (rws.size(), (size_t)MAX_RUNWAYS) * sizeof(RunwayGpu));
+	memcpy (fu.pads, pads.data(), std::min (pads.size(), (size_t)MAX_PADS) * sizeof(PadGpu));
 }
 
 
@@ -3003,7 +3014,7 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 				vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 1, 1, &tex->set, 0, nullptr);
 				boundTex = tex->set;
 			}
-			const TexMaps *maps = ovr ? nullptr : tex->maps;
+			const TexMaps *maps = ovr ? nullptr : (!part && grp.nightMaps) ? grp.nightMaps : tex->maps;
 			VkDescriptorSet ms = maps ? maps->set : gc->TexMgr()->DefaultMapSet();
 			if (ms != boundMaps) {
 				vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 3, 1, &ms, 0, nullptr);
@@ -3020,13 +3031,21 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 			pc.specular[0] = m.specular.r, pc.specular[1] = m.specular.g, pc.specular[2] = m.specular.b;
 			pc.specular[3] = m.power;
 			pc.light[0] = pc.light[1] = pc.light[2] = objLight;
+			pc.light[3] = objNight;
 			const PBRParams &pp = mesh->PBR (mat);
 			pc.pbr[0] = pp.metalness, pc.pbr[1] = pp.roughness, pc.pbr[2] = pp.reflectivity, pc.pbr[3] = pp.f0;
 			memcpy (pc.heat, objHeat, sizeof(objHeat));
 			pc.maps[0] = maps ? (float)maps->flags : 0.0f;
 			pc.maps[1] = transparent ? 1.0f : 0.0f; // not in the prepass: no ambient occlusion
 			pc.maps[2] = grp.alphaTest;
-			pc.maps[3] = 0.0f;
+			// (a base's ground: its detail; -1 - (first + 128 count + 16384 kind) its
+			// runways' (kind 0) or pads' (1) markings: mesh.frag)
+			if (!groundOn) pc.maps[3] = 0.0f;
+			else {
+				const int *r = (grp.usrFlag & VkMesh::GRP_RUNWAY) ? groundRw : (grp.usrFlag & VkMesh::GRP_PAD) ? groundPad : nullptr;
+				int kind = (grp.usrFlag & VkMesh::GRP_RUNWAY) ? 0 : 1;
+				pc.maps[3] = r && r[1] > 0 ? -(1.0f + (float)(r[0] + 128 * r[1] + 16384 * kind)) : -1.0f;
+			}
 			if (transparent && !ovr)
 				for (int k = 0; k < 3; k++) pc.emissive[k] += objGlassGlow[k];
 			if (ovr) { // self-illuminated display
@@ -3123,6 +3142,7 @@ void Scene::DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize i
 		pc.emissive[0] = m.emissive.r, pc.emissive[1] = m.emissive.g, pc.emissive[2] = m.emissive.b, pc.emissive[3] = 0.0f;
 		pc.specular[0] = m.specular.r, pc.specular[1] = m.specular.g, pc.specular[2] = m.specular.b, pc.specular[3] = m.power;
 		pc.light[0] = pc.light[1] = pc.light[2] = objLight;
+		pc.light[3] = objNight;
 		pc.pbr[0] = pp.metalness, pc.pbr[1] = pp.roughness, pc.pbr[2] = pp.reflectivity, pc.pbr[3] = pp.f0;
 		memset (pc.heat, 0, sizeof(pc.heat));
 		pc.maps[0] = maps ? (float)maps->flags : 0.0f;
@@ -3146,8 +3166,19 @@ void Scene::DrawMeshInstanced (const VkMesh *mesh, VkBuffer inst, VkDeviceSize i
 	}
 }
 
+vkcity::Kit *Scene::BaseKit ()
+{
+	if (!baseKit) {
+		auto t0 = std::chrono::steady_clock::now ();
+		baseKit = std::make_unique<vkcity::Kit> (ctx, gc->TexMgr());
+		oapiWriteLogV ("VulkanClient: the bases' building kit made in %.0f ms",
+			std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ());
+	}
+	return baseKit.get ();
+}
+
 void Scene::DrawBuildings (VkBuffer vb, VkBuffer ib, uint32_t firstIndex, uint32_t nIndex, VkBuffer inst, VkDeviceSize instOfs,
-	uint32_t count, RenderPass pass, const Mat4 &frameToView, VkDescriptorSet kit, float hour)
+	uint32_t count, RenderPass pass, const Mat4 &frameToView, VkDescriptorSet kit, float hour, bool base)
 {
 	if (!count || !nIndex || pass == RenderPass::Transparent) return;
 	VkCommandBuffer cmd = ctx->Cmd();
@@ -3168,13 +3199,16 @@ void Scene::DrawBuildings (VkBuffer vb, VkBuffer ib, uint32_t firstIndex, uint32
 	frameToView.ToFloat (pc.modelView);
 	pc.diffuse[0] = pc.diffuse[1] = pc.diffuse[2] = pc.diffuse[3] = 1.0f;
 	pc.light[0] = pc.light[1] = pc.light[2] = objLight;
+	pc.light[3] = objNight;
 	pc.pbr[0] = 0.0f, pc.pbr[1] = 0.8f, pc.pbr[2] = 0.0f, pc.pbr[3] = 1.0f;
 	pc.heat[0] = hour; // (building.frag: the windows lit at night)
+	pc.specular[0] = base ? 1.0f : 0.0f; // (building.vert: a base's, no fade)
 	if (pass == RenderPass::Depth) {
 		float pr[40] = {};
 		memcpy (pr, pc.modelView, sizeof(pc.modelView));
 		memcpy (pr + 16, objMotion, sizeof(objMotion));
 		memcpy (pr + 32, pc.pbr, sizeof(pc.pbr));
+		pr[39] = base ? 1.0f : 0.0f; // (prepass_building.vert)
 		vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pr), pr);
 	} else {
 		vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
@@ -3324,6 +3358,7 @@ void Scene::DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &m
 	modelView.ToFloat (pc.modelView);
 	memcpy (pc.diffuse, colour, 4 * sizeof(float));
 	pc.light[0] = pc.light[1] = pc.light[2] = 1.0f;
+	pc.light[3] = 1.0f;
 	pc.pbr[1] = 1.0f; // matte, no reflections
 	pc.emissive[3] = unlit ? 1.0f : 0.0f;
 	pc.maps[1] = 1.0f; // not in the prepass: no ambient occlusion

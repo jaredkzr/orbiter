@@ -77,9 +77,33 @@ public:
 	/// a level area take its level
 	struct Grade { double x, z, len, wid, bearing; bool plane; int group; bool level = false; }; // (level: across it, a runway)
 	const std::vector<Grade> &Grades () const { return grades; }
+	/// Bare earth about the base (BareEarth = radius [blend], [m]; default
+	/// none, blend 3000): the elevation data are surface models (trees,
+	/// buildings: Cape Canaveral's canopy stood 5-10 m over its flat ground);
+	/// within radius of the base the terrain is levelled to the ground under
+	/// them (GroundFilter), blended back to the data over blend beyond it.
+	/// Its pads and graded ground levelled to that ground too. Areas where
+	/// the data stay (BEGIN_BAREEARTH_KEEP: "x z radius" per line, base
+	/// frame [m]; blended back over 200 m beyond): ground built up on
+	/// purpose, e.g. launch pads on their mounds, the pads' meshes and
+	/// vessels' heights set on the data there
+	double BareEarthRadius () const { return bareR; }
+	double BareEarthBlend () const { return bareBlend; }
+	struct BareKeep { double x, z, r; };
+	const std::vector<BareKeep> &BareEarthKeep () const { return bareKeep; }
 	/// A place (equatorial) on its graded ground: a runway, its overruns and
 	/// shoulders, a graded area (the sounds: paved)
 	bool Paved (double lng, double lat) const;
+	/// Its runways (up to n into spec, which may be null): their number
+	DWORD GetRunways (RUNWAYSPEC *spec, DWORD n) const;
+	/// Its generic buildings (BLOCK, HANGAR, HANGAR2, HANGAR3, TANK; up to n into spec): their number
+	DWORD GetBuildings (BASEBUILDINGSPEC *spec, DWORD n) const;
+	/// a generic texture's name (Config/Base.cfg) by its id (NameToId); null: none
+	static const char *GenericTextureName (LONGLONG id);
+	/// Its landing pad pad (0-based); false: none
+	bool GetPadSpec (DWORD pad, PADSPEC *spec) const;
+	/// how far its landing pad pad's mesh reaches from its centre [m] (0: none)
+	double PadReach (DWORD pad) const;
 
 	inline bool Floating() const { return floating; }
 	// A floating base (ALTITUDE in its file): an aerostat; its origin at its
@@ -209,6 +233,8 @@ private:
 	struct Deck { double x, z, r, h; };
 	std::vector<Deck> decks;       // a floating base's decks (base frame)
 	std::vector<Grade> grades;     // graded ground (base frame)
+	double bareR = 0.0, bareBlend = 3000.0; // bare earth about the base (BareEarth) [m]
+	std::vector<BareKeep> bareKeep; // areas the bare earth leaves alone (base frame)
 	Vector rpos;                   // base position in local planet frame
 	Matrix rrot;                   // rotation matrix in local planet frame
 	double objscale;               // size of "typical" base object (for camera-distance dependent render cutoff)

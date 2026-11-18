@@ -53,6 +53,18 @@ namespace collision {
 	/// file name)
 	const std::vector<Hull> &MeshHulls (const std::string &key, const Mesh &mesh);
 
+	/// Whether a mesh has collision proxies (groups flagged MESHGRP_COLLISION)
+	bool HasProxy (const Mesh &mesh);
+	/// Whether a mesh group (its user flag) takes part in collisions: with
+	/// proxies (HasProxy), only they; else every group but hidden ones (0x2)
+	/// and detail (MESHGRP_NOCOLLIDE)
+	constexpr unsigned long GRP_HIDDEN = 0x2, GRP_NOCOLLIDE = 0x100, GRP_COLLISION = 0x200; // (OrbiterAPI.h MESHGRP_*)
+	inline bool Collides (unsigned long usrFlag, bool proxy)
+	{
+		if (proxy) return (usrFlag & GRP_COLLISION) != 0;
+		return !(usrFlag & (GRP_HIDDEN | GRP_NOCOLLIDE)); // (the group's user flag - not its texture-wrap Flags)
+	}
+
 	/// Convex parts of sets of triangles (each decomposed on its own; cached
 	/// on disk by their contents); label: for the log. Thread-safe without
 	/// the log (cached: set if they came from the cache).

@@ -452,11 +452,38 @@ float ShoreDistance (vec2 muv, float texM)
 	return max (0.5 - a, 0.0) / max (length (gr), 0.3) * texM;
 }
 
+// the surf band's width [m]: the developed sea's (shorePrm.x), within the mask field's reach
+float ShoreBandWidth (float texM)
+{
+	return min (atm.shorePrm.x, (atm.coastPrm.z > 0.0 ? 0.9 * atm.coastPrm.z : 1.5) * texM); // (the field reaches coastPrm.z texels)
+}
+
+// open water off a shore (0-1): the water still deepening a surf band's width
+// further out, away from the nearest bank. Canals, ditches and ponds narrower
+// than about twice the band meet their far bank first: no surf there (the
+// sea's waves do not reach them; KSC's canals had the coast's surf along both
+// banks). Needs the distance field (F1); without it, 1. muv: clamped within
+// the tile (hm: half a texel)
+float OpenWater (vec2 muv, float texM, vec2 hm)
+{
+	if (atm.coastPrm.z <= 0.0 || texM <= 0.0) return 1.0;
+	vec2 e = 1.0 / vec2 (textureSize (maskTex, 0));
+	// (explicit levels: the caller's branch is not uniform)
+	float sd0 = MaskSd (textureLod (maskTex, muv, 0.0).a);
+	vec2 g = vec2 (MaskSd (textureLod (maskTex, muv + vec2 (e.x, 0.0), 0.0).a) - MaskSd (textureLod (maskTex, muv - vec2 (e.x, 0.0), 0.0).a),
+	               MaskSd (textureLod (maskTex, muv + vec2 (0.0, e.y), 0.0).a) - MaskSd (textureLod (maskTex, muv - vec2 (0.0, e.y), 0.0).a));
+	if (dot (g, g) < 1e-6) return 1.0;
+	float P = clamp (ShoreBandWidth (texM) / texM, 1.0, 0.8 * atm.coastPrm.z); // the probe [texels]
+	float sd1 = MaskSd (textureLod (maskTex, clamp (muv - normalize (g) * P * e, hm, 1.0 - hm), 0.0).a);
+	// (open water: sd1 about sd0 - P; a canal: past its middle, towards the far bank)
+	return smoothstep (0.35, 0.75, (sd0 - sd1) / P);
+}
+
 // surf: a swash line at the water's edge and bores running in, in a band
 // that widens with the sea (shorePrm, from the developed sea's Hs and period)
 float ShoreFoam (vec3 pw, float d, float texM, float footprint)
 {
-	float W = min (atm.shorePrm.x, (atm.coastPrm.z > 0.0 ? 0.9 * atm.coastPrm.z : 1.5) * texM); // (the field reaches coastPrm.z texels)
+	float W = ShoreBandWidth (texM);
 	if (texM <= 0.0 || d < 0.0 || W <= 0.0 || d >= W) return 0.0;
 	float vis = 1.0 - smoothstep (1.0, 2.5, footprint / W);
 	if (vis <= 0.0) return 0.0;
@@ -937,6 +964,7 @@ void main()
 				float cap = Whitecaps(pP, pw, footprint, fadeW, capVar) * fl;
 				capVar *= fl;
 				float shore = ShoreFoam(pw, ShoreDistance(clamp(muv, hm, 1.0 - hm), texM), texM, footprint);
+				if (shore > 0.0) shore *= OpenWater(clamp(muv, hm, 1.0 - hm), texM, hm);
 				if (cap > 0.0 || shore > 0.0) {
 					g3 = 1.0 - (1.0 - cap) * (1.0 - shore);
 					fxFoam = 1.0 - (1.0 - fxJet) * (1.0 - g3);

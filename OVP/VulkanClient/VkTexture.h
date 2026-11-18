@@ -21,6 +21,10 @@ class VkTexture;
 /// Additional texture maps of a mesh texture, found next to it by name
 /// suffix (see the Orbiter mesh documentation, "Advanced texturing")
 enum MapSlot { MAP_NORM, MAP_RGHN, MAP_METAL, MAP_EMIS, MAP_SPEC, MAP_REFL, MAP_TRANSL, MAP_TRANSM, MAP_COUNT };
+/// TexMaps::flags: the emission map (MAP_EMIS) is lit at night only (a
+/// "_night" map; a mesh group's night texture, TexIdxEx): scaled by the
+/// object's night factor (Scene::SetObjectNight; material.glsl MAP_NIGHT)
+constexpr uint32_t MAP_NIGHT_BIT = 1u << 8;
 
 struct TexMaps {
 	VkTexture *tex[MAP_COUNT] = {};
@@ -75,6 +79,13 @@ public:
 	/// Give a texture a tangent-space normal map (RGBA8 linear: x along +u,
 	/// y along +v, as in DirectX normal maps), with mip levels
 	void SetNormalMap (VkTexture *tex, uint32_t w, uint32_t h, const uint8_t *rgba);
+
+	/// Maps of a mesh group whose texture has a night texture (the core's
+	/// TexIdxEx: legacy "<name>_n" textures of bases): the texture's own maps
+	/// with the night texture as its emission, lit at night only. Owned by the
+	/// caller: FreeGroupMaps (the textures stay the texture manager's)
+	TexMaps *MakeNightMaps (const VkTexture *tex, VkTexture *night);
+	void FreeGroupMaps (TexMaps *maps);
 
 	/// Create a texture from a DDS file in memory. deferred: record the upload
 	/// into the current frame instead of waiting for it (texture streaming);

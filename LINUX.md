@@ -171,6 +171,94 @@ settings.
 `TerrainDetailPebbles`, `TerrainDetailLevel` and `SurfaceSaturation`. They
 are documented in `Src/Orbiter/TerrainDetail.h`.
 
+**Per base** (`Config/<Planet>/Base/<Base>.cfg`): `BareEarth = <radius> [<blend>]`
+(metres; documented in `Src/Orbiter/Base.h`) levels the terrain within `radius` of
+the base to the ground under the elevation data's trees and buildings (the
+data are surface models), blended back over `blend` (3000). Its pads and runways
+are graded on that ground. Areas to leave alone (ground built up on purpose, the
+base's meshes set on the data there) are listed as `x z radius` lines between
+`BEGIN_BAREEARTH_KEEP` and `END_BAREEARTH_KEEP`: Cape Canaveral's launch complex 39
+pads. Also on at Wallops Island, Matagorda, Sriharikota, Peenemünde and Kourou
+(flat, wooded ground); not where the filter would cut real relief (`TODO.md`). Cape Canaveral has `BareEarth = 40000`: the canopy
+stood 5-10 m over its flat coastal land, as spiky hills about the runways.
+`Scenario.CapeGroundTest` checks the ground there.
+
+**Runway surfaces:** a base file's `RUNWAY` with `MARKINGS precision|nonprecision|visual|none`
+(and `DESIG <d1> <d2>`, `OVERRUN <m1> [<m2>]`, `SURFACE concrete|asphalt [<m>]`;
+documented in `Src/Orbiter/Baseobj.h`) gets a pavement texture of 25 ft slabs
+(`RunwayConcrete`, `RunwayAsphalt`: an atlas of 4 x 4 different slabs) instead of
+an `RWSEG` layout, and its markings are drawn by the Vulkan client at their real
+size from that description (`Shaders/runway.glsl`: FAA threshold stripes,
+designators, touchdown zone, aiming point, centreline, side stripes, overrun
+chevrons; slabs' shade, stains, rubber, transverse grooves): sharp at any
+distance, no texture of their own. Each slab of a runway takes one of the
+atlas's slabs, turned or mirrored one of 8 ways, by a hash of its place (other
+clients tile the atlas: it repeats every 100 ft). The core
+hands the client the runways with `oapiGetBaseRunways`; their mesh groups carry
+`MESHGRP_RUNWAY`. All of Earth's paved runways have them: Cape Canaveral's Shuttle
+Landing Facility and Skid Strip with their ends from the FAA, the rest with their
+ends and widths as they were, designators from their headings (Edwards, Baikonur
+and Havana: the real ones). Base ground meshes (runways, pads) also get a fine
+grain below their textures' texels (`mesh.frag` `GroundDetail`), and wheels
+leave no tracks on paved ground (`oapiSurfacePaved`: runways with their overruns
+and shoulders, pads, decks). The pavement textures:
+
+```bash
+python3 Utils/runway/make_pavement.py [--preview <dir>]
+```
+
+**Landing pads** (`LPAD1`, `LPAD2`, `LPAD2A`, all bodies) are drawn the same way
+(`Shaders/pad.glsl`, `oapiGetBasePadSpec`, `MESHGRP_PAD`), after heliports and
+rocket landing zones: a hazard band at the edge (the octagon's raised rim), a white
+perimeter stripe, a yellow touchdown circle, the pad's number large in white, the
+blast's scorch at the centre; concrete slabs on Earth, slabs of sintered regolith
+elsewhere (`PadPavers`, tinted to the ground about the base: `SURFACE concrete|pavers`
+overrides), green perimeter and yellow touchdown lights at night. `STYLE classic` in
+an `LPADx` block keeps its old texture. The ground under a pad is levelled over
+all of it (a square's corners too), pads side by side to one level, and the
+pad's mesh follows the planet's curvature across it (pads kilometres from the
+base's centre were tilted against the ground, partly under it).
+
+**Base buildings and kits** (the overhaul of the bases' assets, in progress):
+- Generic buildings (`BLOCK`, `HANGAR`, `HANGAR2`, `HANGAR3`, `TANK`) are drawn by the Vulkan
+  client from their description (`oapiGetBaseBuildings`; groups flagged `MESHGRP_BUILDING`),
+  with the city kit's shapes and shaders (`CityKit` `MakeBase`, `building.frag`): facades with
+  real-size windows and doors by their old textures' look (`Fcd01`-`15`, `Wall01`, ...), hangar
+  doors, round roofs and arches, tanks; off-world (under 10 kPa) pressurised modules with
+  portholes and airlocks, long halls and arches under regolith. The core's geometry stays the
+  collision shape and other clients' look. `ORBITER_VK_BASE_BUILDINGS=0`: the core's, for A/B.
+- The kits' meshes (`Meshes/BaseKit`, off-world so far) are built in Blender:
+  `blender -b --python Utils/BaseKit/blender_kit.py -- offworld <asset|all> --check`
+  (`kitlib.py`: shapes, world-scale texturing, groups by material and role). Their textures are
+  tiling materials at real size (`Utils/BaseKit/kittex.py` → `Textures/BaseKit/kit_*`, with
+  `_norm`, `_rghn`, `_metal`, `_night`). `--check` runs `Utils/BlenderMsh/msh_check.py
+  --bounds-json Utils/BaseKit/footprints.json`: footprints and heights as the layouts expect.
+- Mesh group flags: `MESHGRP_NOCOLLIDE` (0x100: detail out of the collision hulls),
+  `MESHGRP_COLLISION` (0x200, with hidden 0x2: a collision proxy; a mesh with any collides with
+  those alone). Hidden groups are tested by their user flag (they were tested by the texture-wrap
+  flags).
+- Night-only emission: a texture's `<name>_night.dds` (and the legacy `<name>_n.dds` night
+  textures of the generic buildings) are lit as the base's sun sets.
+- Kit lights (aviation reds, door lamps): `Utils/BaseKit/kit_lights.json` (written by
+  `blender_kit.py`), placed by `python3 Utils/BaseKit/kitlights.py` as `LIGHT x h z r g b size`
+  lines (`LIGHTABS` on a floating base) in `Config/VK/Bases/<Name>.cfg`.
+- The kits' ground (roads, tracks, aprons: `Meshes/BaseKit/<Base>_ground.msh`) is built from
+  its description (`Utils/BaseKit/ground/<Base>.json`) by `python3 Utils/BaseKit/ground.py build
+  [Base]`: roads go around the bases' pads (and off-world pads' blast berms), aprons have holes
+  where pads stand (the ground mesh lies a few cm over the pads: it hid them). It writes the
+  roads' and aprons' lights too (the `groundlights` block of `Config/VK/Bases/<Name>.cfg`: edge
+  markers along tracks and taxiways, streetlights, apron masts and off-world work lights along
+  the tracks about a base's core, with `FLOODLIGHTH` - a floodlight's height above the ground
+  there). The glows (`LIGHT`) light nothing; only floodlights do (the nearest 64 in a frame). `basekit.py`/`offworld.py layout` go through it.
+- The client-drawn buildings have lamps at night (`CityKit` `Kit::BaseLights`): over hangar
+  doors (and a floodlight on the apron before them), airlocks and doors, amber markers along
+  covered tunnels, red obstruction lights on roofs 40 m and higher and on pressurised hubs.
+- Before/after screenshots of the showcase bases: `python3 Utils/BaseKit/shots.py scenes`
+  (`Scenarios/VkTest/base_*.scn`), `shots.py render --label L [--only X] [--validate]
+  [--env ORBITER_VK_BASE_BUILDINGS=0]`, `shots.py compare A B` (`out/baseshots/`);
+  `python3 Utils/BaseKit/shotview.py` serves them on the LAN (port 8766: side by side, wipe,
+  flip; phones too).
+
 **Ground scatter:** layers and plants are in `Config/Scatter/<Body>.cfg`
 (documented in `Src/Orbiter/GroundScatter.h`). The rock meshes and textures
 are made with Blender:

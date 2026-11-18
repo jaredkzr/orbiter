@@ -5235,10 +5235,7 @@ audio::SurfaceKind Vessel::SurfaceAt (const Planet *pl, double lng, double lat)
 {
 	// (a base's pads, decks and graded ground first: a pad on the Moon is
 	// paved too; then the bare ground - an airless body's is regolith)
-	if (const ElevationManager *emgr = pl->ElevMgr ())
-		if (emgr->DeckElevation (lat, lng) > -1e9 || emgr->DryLand (lat, lng)) return audio::SurfaceKind::PAVED;
-	for (DWORD i = 0; i < pl->nBase (); i++)
-		if (pl->GetBase (i)->Paved (lng, lat)) return audio::SurfaceKind::PAVED;
+	if (pl->Paved (lng, lat)) return audio::SurfaceKind::PAVED;
 	const ATMCONST *atm = pl->AtmParams ();
 	if (!atm || atm->p0 <= 0.0) return audio::SurfaceKind::REGOLITH;
 	// the surface texture (and the water mask), as the ground scatter reads it

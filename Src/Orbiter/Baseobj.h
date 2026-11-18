@@ -7,6 +7,7 @@
 #include "D3dmath.h"
 #include "D3d7util.h"
 #include "Shadow.h"
+#include <vector>
 
 #define OBJSPEC_EXPORTMESH         0x0001 // object exports mesh
 #define OBJSPEC_EXPORTVERTEX       0x0002 // object exports vertex groups
@@ -24,6 +25,11 @@
 
 // ======================================================================================
 // Atomic objects for surface bases
+
+/// pavement textures of runways and pads (RunwayConcrete, RunwayAsphalt,
+/// PadPavers: Utils/runway/make_pavement.py): slabs this size [m], this many a side
+constexpr float PAVE_SLAB = 7.62f;
+constexpr int PAVE_TEXSLABS = 4;
 
 class Base;
 class Mesh;
@@ -60,6 +66,10 @@ public:
 	// Only objects which set OBJSPEC_EXPORTVERTEX need to implement this
 
 	virtual void ExportGroup (int grp, NTVERTEX *vtx, WORD *idx, DWORD &idx_ofs) {}
+
+	/// A generic building's description (BLOCK, HANGAR, HANGAR2, HANGAR3, TANK:
+	/// oapiGetBaseBuildings; spec may be null); false: not one
+	virtual bool GetBuildingSpec (BASEBUILDINGSPEC *spec) const { return false; }
 	// Allow the object to export its groups into vertex list vtx and index list idx
 	// On call, idx_ofs is the current total length of the index list and should be
 	// updated by the function
@@ -124,6 +134,9 @@ protected:
 
 	const Base *base; // pointer to associated surface base
 	int ngrp;         // number of mesh groups used by the object
+	/// (the generic buildings' GetBuildingSpec: type, wall height, textures (ids, repeats) and their number, tank segments)
+	void FillBuildingSpec (BASEBUILDINGSPEC *spec, int type, double wallh, const LONGLONG *texid, const D3DVALUE *tus, const D3DVALUE *tvs, int ntex, int nstep = 0) const;
+
 	Vector relpos;    // object position relative to basis frame
 	Vector equpos;    // object position in equatorial frame: x=lng [rad], y=lat [rad], z=radius [m]
 	Vector scale;     // object scaling factors
@@ -176,6 +189,7 @@ public:
 	~Block ();
 	int ParseLine (const char *label, const char *value);
 	DWORD GetSpecs() const { return OBJSPEC_EXPORTVERTEX | OBJSPEC_EXPORTSHADOWMESH; }
+	bool GetBuildingSpec (BASEBUILDINGSPEC *spec) const;
 	bool GetGroupSpec (int grp, DWORD &nvtx, DWORD &nidx, LONGLONG &texid,
 		bool &undershadow, bool &groundshadow);
 	void ExportGroup (int grp, NTVERTEX *vtx, WORD *idx, DWORD &idx_ofs);
@@ -205,6 +219,7 @@ public:
 	~Hangar ();
 	int ParseLine (const char *label, const char *value);
 	DWORD GetSpecs() const { return OBJSPEC_EXPORTVERTEX | OBJSPEC_EXPORTSHADOWMESH; }
+	bool GetBuildingSpec (BASEBUILDINGSPEC *spec) const;
 	bool GetGroupSpec (int grp, DWORD &nvtx, DWORD &nidx, LONGLONG &texid,
 		bool &undershadow, bool &groundshadow);
 	void ExportGroup (int grp, NTVERTEX *vtx, WORD *idx, DWORD &idx_ofs);
@@ -233,6 +248,7 @@ public:
 	~Hangar2 ();
 	int ParseLine (const char *label, const char *value);
 	DWORD GetSpecs() const { return OBJSPEC_EXPORTVERTEX | OBJSPEC_EXPORTSHADOWMESH; }
+	bool GetBuildingSpec (BASEBUILDINGSPEC *spec) const;
 	bool GetGroupSpec (int grp, DWORD &nvtx, DWORD &nidx, LONGLONG &texid,
 		bool &undershadow, bool &groundshadow);
 	void ExportGroup (int grp, NTVERTEX *vtx, WORD *idx, DWORD &idx_ofs);
@@ -263,6 +279,7 @@ public:
 	~Hangar3 ();
 	int ParseLine (const char *label, const char *value);
 	DWORD GetSpecs() const { return OBJSPEC_EXPORTVERTEX | OBJSPEC_EXPORTSHADOWMESH; }
+	bool GetBuildingSpec (BASEBUILDINGSPEC *spec) const;
 	bool GetGroupSpec (int grp, DWORD &nvtx, DWORD &nidx, LONGLONG &texid,
 		bool &undershadow, bool &groundshadow);
 	void ExportGroup (int grp, NTVERTEX *vtx, WORD *idx, DWORD &idx_ofs);
@@ -290,6 +307,7 @@ public:
 	Tank (const Base *_base);
 	int ParseLine (const char *label, const char *value);
 	DWORD GetSpecs() const { return OBJSPEC_EXPORTVERTEX | OBJSPEC_EXPORTSHADOWMESH; }
+	bool GetBuildingSpec (BASEBUILDINGSPEC *spec) const;
 	bool GetGroupSpec (int grp, DWORD &nvtx, DWORD &nidx, LONGLONG &texid,
 		bool &undershadow, bool &groundshadow);
 	void ExportGroup (int grp, NTVERTEX *vtx, WORD *idx, DWORD &idx_ofs);
@@ -311,6 +329,17 @@ private:
 
 // ======================================================================================
 // class Lpad: base class for landing pads
+//
+// A pad's surface: pavement (a texture of slabs 25 ft square: concrete,
+// RunwayConcrete, on Earth; slabs of sintered regolith, PadPavers,
+// elsewhere), its markings described for the graphics client to draw
+// (oapiGetBasePadSpec: a perimeter stripe, a touchdown circle, the pad's
+// number; ring lights at night). Lines of an LPADx block:
+//   STYLE classic        the pad's own texture (TEX) as it was laid out
+//   SURFACE concrete|pavers
+// The mesh's texture coordinates: across the pad in units of the pavement
+// texture (PAVE_TEXSLABS slabs a side; u along the pad's x, v its z, 0 at
+// its centre); its group flagged MESHGRP_PAD (UsrFlag 0x20)
 
 class Lpad: public BaseObject {
 public:
@@ -321,16 +350,34 @@ public:
 	const float GetILSfreq () const { return ILSfreq; }
 	/// how far the pad reaches from its centre [m] (the octagon's corners, scaled)
 	double Radius () const { return 41.85 * fabs (scale.x); }
+	/// how far its mesh reaches from its centre [m] (the octagon's rim, the square's corners)
+	double Reach () const { return (shape == PADSHAPE_OCTAGON ? 45.3 : 56.57) * fabs (scale.x); }
+	/// markings described (not STYLE classic): drawn by the client, the pavement tiled
+	bool Marked () const { return !classic; }
+	void GetSpec (PADSPEC *spec) const;
 
 protected:
 	DWORD padno;         // pad number
 	float ILSfreq;       // frequency of pad's VTOL ILS signal transmitter [MHz]
+	int shape;           // PADSHAPE_xxx
+	bool classic = false;
+	int surface = -1;    // PADSURF_xxx (-1: by the body: concrete on Earth, pavers elsewhere)
+	/// STYLE, SURFACE (the subclasses' ParseLine)
+	void ParseCommon (const char *label, const char *value);
+	int Surface () const;
+	// (Marked: the mesh in the pad's frame, its texture coordinates in metres)
+	std::vector<NTVERTEX> mvtx;
+	std::vector<WORD> midx;
+	void BuildMarked ();
+	bool MarkedGroupSpec (int grp, DWORD &nvtx, DWORD &nidx, LONGLONG &texid, bool &undershadow, bool &groundshadow);
+	void ExportMarkedGroup (int grp, NTVERTEX *vtx, WORD *idx, DWORD &idx_ofs);
 };
 
 // ======================================================================================
 // class Lpad01: octagonal landing pad
 
 class Lpad01: public Lpad {
+	friend class Lpad; // (its rim's template: the marked mesh's)
 public:
 	Lpad01 (const Base *_base);
 	int ParseLine (const char *label, const char *value);
@@ -410,6 +457,22 @@ private:
 
 // ======================================================================================
 // class Runway: mesh for runway (no lighting)
+//
+// Its surface either as a texture laid out along it (RWTEX, NRWSEG, RWSEGi:
+// the texture's rectangles), or, with MARKINGS, its pavement (a texture
+// of slabs 25 ft square: RunwayConcrete, RunwayAsphalt, or RWTEX) and its
+// markings described for the graphics client to draw (oapiGetBaseRunways):
+//   MARKINGS precision|nonprecision|visual|none
+//   DESIG <d1> <d2>      designators at END1 (landing towards END2) and END2
+//                        (default: from the true heading, two digits)
+//   OVERRUN <m1> [<m2>]  paved beyond the thresholds at END1, END2 [m]
+//                        (blast pads: chevrons; default 0)
+//   SURFACE concrete|asphalt [<m>]  asphalt: concrete this far past each
+//                        threshold [m] (default 0)
+// The mesh's texture coordinates: across and along it in units of the
+// texture, TEXSLABS slabs a side (u: 0 on the centreline, to the right looking
+// from END1 to END2; v: 0 at END1); its groups flagged MESHGRP_RUNWAY
+// (UsrFlag 0x10)
 
 class Runway: public BaseObject {
 	friend class Base;
@@ -424,8 +487,23 @@ public:
 	void Activate ();
 	void Deactivate();
 	const float GetILSfreq (int i) const { return ILSfreq[i]; }
+	/// markings described (MARKINGS): drawn by the client, the pavement tiled
+	bool Marked () const { return markings >= 0; }
+	void GetSpec (RUNWAYSPEC *spec) const;
+
+	static constexpr float SLAB = PAVE_SLAB;      // [m] a slab of the pavement (25 ft)
+	static constexpr int TEXSLABS = PAVE_TEXSLABS; // slabs a side of the pavement textures
 
 private:
+	int markings = -1;        // RWMARK_xxx; -1: none described (RWSEG layout)
+	char desig[2][4] = {};    // designators at END1, END2 ("": from the heading)
+	float overrun[2] = {};    // [m]
+	int surface = RWSURF_CONCRETE;
+	float concreteEnds = 0.0f; // [m] (asphalt)
+	struct MarkedGroup { LONGLONG tex; std::vector<NTVERTEX> vtx; std::vector<WORD> idx; };
+	std::vector<MarkedGroup> mgrp; // (Marked: the mesh, a group per texture)
+	void ActivateMarked ();
+
 	D3DVECTOR end1, end2;
 	float ILSfreq[2];
 	DWORD nrwseg;      // number of texture segments in runway mesh

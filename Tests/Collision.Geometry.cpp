@@ -237,3 +237,24 @@ TEST_CASE("Decomposition of a U (a bay): the bay stays open", "[collision]")
 	REQUIRE(InsideAny (parts, {-3.25, 2, 5}));     // (a wall)
 	for (const auto &p : parts) REQUIRE(convex::Concavity (t, p) >= 0.0);
 }
+
+// Which mesh groups take part in collisions (CollisionHull.h Collides): the
+// group's user flag decides - hidden groups (0x2) and detail
+// (MESHGRP_NOCOLLIDE) are left out; a mesh with collision proxies
+// (MESHGRP_COLLISION) collides with those alone, hidden as they are
+#include "CollisionHull.h"
+
+TEST_CASE ("collision groups by their user flags", "[collision][groups]")
+{
+	using collision::Collides;
+	// (no proxies: all but hidden groups and detail)
+	CHECK (Collides (0x0, false));
+	CHECK (Collides (0x1, false));                       // (no ground shadow: collides)
+	CHECK_FALSE (Collides (0x2, false));                 // hidden
+	CHECK_FALSE (Collides (0x100, false));               // detail
+	CHECK (Collides (0x10 | 0x20 | 0x40, false));        // (runway, pad, building flags: drawn by a client, collide)
+	// (proxies: only they, though hidden)
+	CHECK (Collides (0x200 | 0x2, true));
+	CHECK_FALSE (Collides (0x0, true));
+	CHECK_FALSE (Collides (0x100, true));
+}

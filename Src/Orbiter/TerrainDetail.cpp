@@ -8,10 +8,12 @@
 #include "ProcTerrain.h"
 #include "elevmgr.h"
 #include "PlayaMap.h"
+#include "GroundFilter.h"
 #include "Log.h"
 #include <chrono>
 #include <memory>
 #include <map>
+#include <functional>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -575,9 +577,53 @@ void TerrainDetail::InitSite ()
 }
 
 namespace {
-	constexpr double PAD_R0 = 30.0; // landing pads: level within [m]
-	constexpr double PAD_R1 = 80.0; // and blended back to the data's ground by [m]
+	constexpr double PAD_R0 = 30.0; // landing pads: level within [m] at least (the pad's mesh, and 2 m)
+	constexpr double PAD_BLEND = 50.0; // and blended back to the data's ground over [m]
 	constexpr double GRADE_BLEND = 50.0; // graded ground: blended back over [m]
+	// bare earth about bases (BareEarth): the ground filter's nodes 0.002 deg
+	// (about 220 m) apart, from 9 x 9 samples 150 m apart (+-600 m: wider
+	// than most woods), their lowest tenth; never below BARE_MIN on land (the
+	// data's overlays hold lines at the datum: not the sea). Tuned at Cape
+	// Canaveral (Scenarios/Tests/CapeGroundTest): the SLF flush with the
+	// ground beside it (its concrete, clear of canopy in the data, at the
+	// real field's 3 m), its approaches within 1-1.6 m over 500 m
+	const GroundFilter::Params BARE_PRM{ 0.002 * RAD, 150.0, 9, 0.10, 10 };
+	constexpr double BARE_MIN = 1.0; // [m]
+	constexpr double BARE_KEEP_BLEND = 200.0; // [m] keep areas (Base::BareEarthKeep): the bare earth blended back in over
+}
+
+double TerrainDetail::BareWeight (const Flat &fl, const Vector &dir, double lat, double lng, double elev, double &g) const
+{
+	if (fl.bare0 <= 0.0 || !bare) return 0.0;
+	double d = (dir - fl.dir).length() * radius;
+	if (d >= fl.bare1) return 0.0;
+	double w = SmoothStep (fl.bare1, fl.bare0, d);
+	for (const auto &k : fl.bareKeep) {
+		double dk = (dir - k.first).length() * radius;
+		if (dk < k.second + BARE_KEEP_BLEND) w *= SmoothStep (k.second, k.second + BARE_KEEP_BLEND, dk);
+	}
+	if (w <= 0.0) return 0.0;
+	double land;
+	g = bare->Ground (lat, std::remainder (lng, Pi2), &land);
+	if (std::isnan (g)) return 0.0;
+	if (prm.sea) {
+		// not the sea, lagoons and rivers (data at the datum; their shores
+		// blended): but ditches and the overlays' lines at the datum within
+		// the land (nearly all the samples about them land) are filled
+		w *= std::max (SmoothStep (0.25, 1.0, fabs (elev)), SmoothStep (0.85, 0.97, land));
+		g = std::max (g, BARE_MIN);
+	}
+	return w;
+}
+
+double TerrainDetail::BareEarth (const Vector &dir, double lat, double lng, double elev, double &g) const
+{
+	double w = 0.0;
+	for (int i : FlatsNear (dir)) { // (InitBases first: bare)
+		double gi, wi = BareWeight (flats[i], dir, lat, lng, elev, gi);
+		if (wi > w) w = wi, g = gi;
+	}
+	return w;
 }
 
 void TerrainDetail::InitBases () const
@@ -586,12 +632,33 @@ void TerrainDetail::InitBases () const
 	// (the pads' levels: the data at their centres, from a manager of its
 	// own without the detail; this is called from within the planet's)
 	std::unique_ptr<ElevationManager> raw;
+	for (DWORD i = 0; i < planet->nBase(); i++)
+		if (planet->GetBase (i)->BareEarthRadius () > 0.0 && !planet->GetBase (i)->Floating ()) {
+			bare = std::make_unique<GroundFilter> (planet, BARE_PRM);
+			break;
+		}
 	for (DWORD i = 0; i < planet->nBase(); i++) {
 		const Base *b = planet->GetBase (i);
 		double lng, lat;
 		b->EquPos (lng, lat);
 		double r = b->FootprintRadius () + 300.0;
 		Flat fl{ Vector (cos (lat) * cos (lng), sin (lat), cos (lat) * sin (lng)), r, r * 1.5 + 1000.0, {}, {}, r * 1.5 + 1000.0 };
+		if (bare && !b->Floating () && b->BareEarthRadius () > 0.0) {
+			fl.bare0 = b->BareEarthRadius ();
+			fl.bare1 = fl.bare0 + b->BareEarthBlend ();
+			fl.reach = std::max (fl.reach, fl.bare1);
+			for (const Base::BareKeep &k : b->BareEarthKeep ()) {
+				double klng, klat;
+				b->Rel_EquPos (Vector (k.x, 0.0, k.z), klng, klat);
+				fl.bareKeep.push_back ({ Vector (cos (klat) * cos (klng), sin (klat), cos (klat) * sin (klng)), k.r });
+			}
+		}
+		// (the pads' and grades' levels: the data's, or the bare earth's about the base)
+		auto groundAt = [&](double la, double ln) {
+			double e = raw->Elevation (la, ln), g;
+			double w = BareWeight (fl, Vector (cos (la) * cos (ln), sin (la), cos (la) * sin (ln)), la, ln, e, g);
+			return w > 0.0 ? e + w * (g - e) : e;
+		};
 		if (!b->Floating ()) { // (a floating base's pads: on its decks)
 			for (DWORD k = 0; k < b->nPad (); k++) {
 				double plng, plat;
@@ -599,14 +666,16 @@ void TerrainDetail::InitBases () const
 				if (!raw) raw = std::make_unique<ElevationManager> (planet), raw->SetNoDetail ();
 				// (the level: the data's mean over the pad, not a point of it, which
 				// a surface model's bumps would set off from the ground about it)
+				// (level over all of it: a square pad's corners reach 57 m)
+				double r0 = std::max (PAD_R0, b->PadReach (k) + 2.0);
 				double g = 0.0;
 				int n = 0;
-				for (double rr : { 0.0, 0.5 * PAD_R0, PAD_R0 })
+				for (double rr : { 0.0, 0.5 * r0, r0 })
 					for (int a = 0; a < (rr > 0.0 ? 8 : 1); a++, n++) {
 						double ang = Pi2 * a / 8.0;
-						g += raw->Elevation (plat + rr * cos (ang) / radius, plng + rr * sin (ang) / (radius * std::max (cos (plat), 1e-6)));
+						g += groundAt (plat + rr * cos (ang) / radius, plng + rr * sin (ang) / (radius * std::max (cos (plat), 1e-6)));
 					}
-				fl.pads.push_back ({ Vector (cos (plat) * cos (plng), sin (plat), cos (plat) * sin (plng)), g / n });
+				fl.pads.push_back ({ Vector (cos (plat) * cos (plng), sin (plat), cos (plat) * sin (plng)), g / n, r0, r0 + PAD_BLEND });
 			}
 		}
 		std::map<int, std::pair<double, int>> groupSum; // (graded areas of a group: their samples' sum, count)
@@ -631,7 +700,7 @@ void TerrainDetail::InitBases () const
 					for (int k = 0; k < NT; k++) {
 						double s = g.hl * (2.0 * i / (NS - 1) - 1.0), tq = g.hw * (2.0 * k / (NT - 1) - 1.0);
 						Vector p = (c * radius + g.along * s + g.across * tq).unit();
-						double e = raw->Elevation (asin (p.y), atan2 (p.z, p.x));
+						double e = groundAt (asin (p.y), atan2 (p.z, p.x));
 						se += e, sse += s * e, tse += tq * e, ss += s * s, tt += tq * tq;
 					}
 				g.g0 = se / (NS * NT);
@@ -645,6 +714,21 @@ void TerrainDetail::InitBases () const
 		}
 		for (size_t k = 0; k < fl.grades.size(); k++) // (a group: one level)
 			if (groupOf[k] > 0) fl.grades[k].g0 = groupSum[groupOf[k]].first / groupSum[groupOf[k]].second;
+		{	// (pads side by side, an apron of them: one level, their mean - each its
+			// own, the step between them broke through the coarser terrain's
+			// triangles over the lower one)
+			size_t n = fl.pads.size ();
+			std::vector<size_t> grp (n);
+			for (size_t i = 0; i < n; i++) grp[i] = i;
+			std::function<size_t (size_t)> root = [&](size_t i) { return grp[i] == i ? i : grp[i] = root (grp[i]); };
+			for (size_t i = 0; i < n; i++)
+				for (size_t j = i + 1; j < n; j++)
+					if ((fl.pads[i].dir - fl.pads[j].dir).length () * radius < fl.pads[i].r0 + fl.pads[j].r0)
+						grp[root (i)] = root (j);
+			std::map<size_t, std::pair<double, int>> sum;
+			for (size_t i = 0; i < n; i++) sum[root (i)].first += fl.pads[i].g, sum[root (i)].second++;
+			for (size_t i = 0; i < n; i++) fl.pads[i].g = sum[root (i)].first / sum[root (i)].second;
+		}
 		for (Pad &p : fl.pads) // (pads in a level area: its level)
 			for (const Grade &gr : fl.grades) {
 				if (gr.gl != 0.0 || gr.gw != 0.0) continue;
@@ -684,8 +768,8 @@ double TerrainDetail::PadLevel (const Vector &dir, double &g) const
 		if ((dir - fl.dir).length() * radius > fl.reach) continue;
 		for (const Pad &p : fl.pads) {
 			double d = (dir - p.dir).length() * radius;
-			if (d >= PAD_R1) continue;
-			double wp = SmoothStep (PAD_R1, PAD_R0, d);
+			if (d >= p.r1) continue;
+			double wp = SmoothStep (p.r1, p.r0, d);
 			if (wp > w) w = wp, g = p.g;
 		}
 		for (const Grade &gr : fl.grades) {
@@ -721,13 +805,17 @@ double TerrainDetail::Levelled (double lat, double lng, double spacing, double e
 	Vector dir (cos (lat) * cos (lng), sin (lat), cos (lat) * sin (lng));
 	double g, lp = PadLevel (dir, g); // (landing pads)
 	double r = lp;
+	{	// bare earth about bases
+		double gb, wbe = BareEarth (dir, lat, lng, elev, gb);
+		if (wbe > 0.0) r = 1.0 - (1.0 - r) * (1.0 - wbe);
+	}
 	if (cities) {
 		double wl = SmoothStep (LEVEL_SPACING, 0.5 * LEVEL_SPACING, spacing);
 		if (wl > 0.0) {
 			double fb, b;
 			const double ll[2] = { lat, std::remainder (lng, Pi2) };
 			Fade (dir, &fb, &b, SmoothStep (BUILT_SPACING, 0.5 * BUILT_SPACING, spacing), ll);
-			r = std::max (lp, fb * b * wl);
+			r = std::max (r, fb * b * wl);
 		}
 	}
 	// dry lakes: levelled to the smoothed ground (Height)
@@ -780,13 +868,17 @@ double TerrainDetail::Height (double lat, double lng, double elev, double spacin
 	double fb, built = 0.0;
 	const double ll[2] = { lat, std::remainder (lng, Pi2) }; // (as from dir: the longitude within +-pi)
 	double f = Fade (dir, &fb, wb > 0.0 ? &built : nullptr, wb, ll);
+	// bare earth about bases that ask for it (the data's canopy and
+	// buildings levelled to the ground under them)
+	double lev = 0.0, gb;
+	double wbe = BareEarth (dir, ll[0], ll[1], elev, gb);
+	if (wbe > 0.0) lev = wbe * (gb - elev);
 	// built-up ground levelled to the ground the data's buildings and trees
 	// stand on (surface models)
-	double lev = 0.0;
 	double wl = fb * built * SmoothStep (LEVEL_SPACING, 0.5 * LEVEL_SPACING, spacing);
 	if (wl > 0.0 && (!prm.sea || fabs (elev) > 0.25)) { // (not the sea; holes in the data are)
 		double g = cities->Ground (lat, lng);
-		if (!std::isnan (g)) lev = wl * (g - elev);
+		if (!std::isnan (g)) lev = lev * (1.0 - wl) + wl * (g - elev);
 	}
 	// landing pads: level
 	double gp, wp = PadLevel (dir, gp);
@@ -806,6 +898,8 @@ double TerrainDetail::Height (double lat, double lng, double elev, double spacin
 		if (playa) *playa = pl * (1.0 - wp);
 	}
 	if (f <= 0.0) return lev;
+	// (bare earth: the noise scaled to the ground's relief, not the canopy's)
+	if (wbe > 0.0) relief *= 1.0 - wbe;
 	// plains get the floor's relief (not the sea)
 	if (prm.floor > 0.0 && (!prm.sea || elev > 1.0)) relief = std::max (relief, prm.floor * spacing);
 	double A = prm.gain * std::max (relief, 0.0) * f; // amplitude at the data's node spacing

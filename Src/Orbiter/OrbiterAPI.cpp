@@ -2331,6 +2331,13 @@ DLLEXPORT double oapiSurfacePlaya (OBJHANDLE hPlanet, double lng, double lat, do
 	return det ? det->Playa (lat, lng, elev, relief) : 0.0;
 }
 
+DLLEXPORT bool oapiSurfacePaved (OBJHANDLE hPlanet, double lng, double lat)
+{
+	Body *body = (Body*)hPlanet;
+	if (!body || body->Type() != OBJTP_PLANET) return false;
+	return ((const Planet*)body)->Paved (lng, lat);
+}
+
 DLLEXPORT bool oapiGetDustRing (OBJHANDLE hStar, DUSTRINGINFO *ring)
 {
 	Body *body = (Body*)hStar;
@@ -2405,6 +2412,21 @@ DLLEXPORT void oapiGetBaseEquPos (OBJHANDLE hBase, double *lng, double *lat, dou
 	Base *base = (Base*)hBase;
 	base->EquPos (*lng, *lat);
 	if (rad) *rad = base->RefPlanet()->Size(); // for now
+}
+
+DLLEXPORT DWORD oapiGetBaseRunways (OBJHANDLE hBase, RUNWAYSPEC *spec, DWORD n)
+{
+	return ((Base*)hBase)->GetRunways (spec, n);
+}
+
+DLLEXPORT DWORD oapiGetBaseBuildings (OBJHANDLE hBase, BASEBUILDINGSPEC *spec, DWORD n)
+{
+	return ((Base*)hBase)->GetBuildings (spec, n);
+}
+
+DLLEXPORT bool oapiGetBasePadSpec (OBJHANDLE hBase, DWORD pad, PADSPEC *spec)
+{
+	return ((Base*)hBase)->GetPadSpec (pad, spec);
 }
 
 DLLEXPORT DWORD oapiGetBasePadCount (OBJHANDLE hBase)

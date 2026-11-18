@@ -31,12 +31,14 @@ layout(location = 5) in vec4 inst2;
 layout(location = 0) out vec3 vPosView;
 layout(location = 1) out vec3 vNormalView;
 layout(location = 2) out vec2 vUV;
+layout(location = 3) out vec3 vPosObj; // (mesh.frag: the ground's detail; not used for instances)
 
 void main()
 {
 	mat4 M = transpose(mat4(inst0, inst1, inst2, vec4(0.0, 0.0, 0.0, 1.0)));
 	vec4 p = draw.modelView * (M * vec4(inPos, 1.0));
 	vPosView = p.xyz;
+	vPosObj = inPos;
 	vNormalView = mat3(draw.modelView) * (mat3(M) * inNormal);
 	vUV = inUV;
 	gl_Position = frame.proj * RelApparent (p); // (relativistic view: as seen)

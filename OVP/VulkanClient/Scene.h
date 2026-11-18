@@ -25,6 +25,7 @@
 class VulkanClient;
 class VObject;
 class VkMesh;
+namespace vkcity { class Kit; }
 class StarSphere;
 class StarField;
 class GalaxySky;
@@ -62,7 +63,22 @@ struct LightSource {
 	double radius = 0.0;    // a point light's source radius [m] (an extended source: a flame; lights.glsl)
 	double sortRange = 0.0; // its reach for the order of the lights (if above range: the range capped)
 };
-constexpr int MAX_LIGHTS = 32; // must match frame.glsl
+constexpr int MAX_LIGHTS = 64; // must match frame.glsl (the nearest; each costs every lit pixel a test: 64 in use ~0.6 ms more than 26 at 1080p, RX 9070 XT)
+/// A base's runway with markings, as the shaders take it (frame.glsl
+/// runways[], 4 vec4; mesh.frag Runway): base frame [m]
+///   [0] END1 (x, z), the unit vector along it (x, z)
+///   [1] its length, half width, overruns at END1 and END2
+///   [2] markings (RWMARK_xxx), surface (RWSURF_xxx), concrete ends [m], a seed
+///   [3] designators at END1 and END2 (VBase: digits and letter coded)
+struct RunwayGpu { float v[16]; };
+constexpr int MAX_RUNWAYS = 32; // must match frame.glsl
+/// A base's landing pad with markings, as the shaders take it (frame.glsl
+/// pads[], 3 vec4; pad.glsl): base frame [m]
+///   [0] its centre (x, z), cos, sin of its rotation
+///   [1] its scale, shape (PADSHAPE_xxx), number, surface (PADSURF_xxx)
+///   [2] the pavers' tint (rgb: the local ground's colour over theirs), a seed
+struct PadGpu { float v[12]; };
+constexpr int MAX_PADS = 64; // must match frame.glsl
 
 /// Replacement texture for a mesh group, rendered unlit (e.g. VC MFD displays)
 struct GroupTexOverride {
@@ -153,8 +169,11 @@ public:
 	/// solar time [h] (lit windows at night). Lit and moving as set for the
 	/// current object.
 	static constexpr uint32_t BUILDING_VERTEX = 52, BUILDING_INSTANCE = 80;
+	/// base: a base's buildings (no fade by distance or the camera's altitude)
 	void DrawBuildings (VkBuffer vb, VkBuffer ib, uint32_t firstIndex, uint32_t nIndex, VkBuffer inst, VkDeviceSize instOfs,
-		uint32_t count, RenderPass pass, const Mat4 &frameToView, VkDescriptorSet kit, float hour = 12.0f);
+		uint32_t count, RenderPass pass, const Mat4 &frameToView, VkDescriptorSet kit, float hour = 12.0f, bool base = false);
+	/// the building kit of the bases' generic buildings (made on first use)
+	vkcity::Kit *BaseKit ();
 	/// Street lamps of the cities (lamp.vert): count instances in buf (four
 	/// floats each: position, LED or not) in the frame frameToView maps to
 	/// the view, with origin centre (planet frame); sun: direction to the sun
@@ -208,6 +227,15 @@ public:
 	/// (exclude: a body not counted, e.g. the one the point is on)
 	double SunVisibility (const VECTOR3 &gpos, OBJHANDLE exclude = nullptr) const;
 	void SetObjectLight (double f) { objLight = (float)f; }
+	/// how dark it is about the objects drawn next (0 day .. 1 night): night-only
+	/// emission (MAP_NIGHT_BIT: windows) scaled by it; 1 unless an object sets it
+	void SetObjectNight (float f) { objNight = f; }
+	/// a base's ground in subsequent DrawMesh calls (its runways and pads:
+	/// the fine detail of mesh.frag GroundDetail; its runway groups'
+	/// markings, from frame runways[first, first + count); its pad groups'
+	/// from pads[]: CollectGroundMarks)
+	void SetBaseGround (bool on, int rwFirst = 0, int rwCount = 0, int padFirst = 0, int padCount = 0)
+	{ groundOn = on, groundRw[0] = rwFirst, groundRw[1] = rwCount, groundPad[0] = padFirst, groundPad[1] = padCount; }
 	float ObjectLight () const { return objLight; }
 	/// emission added to transparent (glass) groups of subsequent DrawMesh calls
 	void SetObjectGlassGlow (const float g[3]) { for (int i = 0; i < 3; i++) objGlassGlow[i] = g[i]; }
@@ -462,6 +490,7 @@ private:
 	std::unique_ptr<class CrashFires> crashFires;
 	std::unique_ptr<class FireballRenderer> fireballs;
 	std::unique_ptr<PlumeRenderer> plumes;
+	std::unique_ptr<vkcity::Kit> baseKit; // (BaseKit)
 	std::unique_ptr<class PlasmaRenderer> plasma;
 	std::unique_ptr<PlasmaTrails> trails;
 	std::unique_ptr<class ParticleSystem> particles;
@@ -561,6 +590,8 @@ private:
 	class VkTexture *fireTex = nullptr, *sparkTex = nullptr, *fragTex = nullptr, *fireballTex[6] = {};
 	OBJHANDLE hSun = nullptr;
 	float objLight = 1.0f;
+	float objNight = 1.0f; // (SetObjectNight)
+	bool groundOn = false; int groundRw[2] = { 0, 0 }, groundPad[2] = { 0, 0 }; // (SetBaseGround)
 	float objGlassGlow[3] = { 0, 0, 0 };
 	float objHeat[4] = { 0, 0, 0, 0 };
 	uint32_t objOwner = 0;  // VObject::Id of the object being drawn into the prepass

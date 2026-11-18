@@ -538,7 +538,8 @@ def plan (name, body, size, T, cfgtext, new=None):
 	# blast berms about the landing pads
 	for (x, z) in pads:
 		L.place ("space_padberm_" + l, x, z, round (r (0, 360) / 30) * 30, 100, 100, shadow=False)
-	L.floods += [(x + 30, 15, z, -0.8, -0.6, 0) for (x, z) in pads]
+	# (a wide beam over the pad, its berm and the ground beyond: aimed 10 m past its middle)
+	L.floods += [(x + 30, 15, z, -40, -15, 0, 80, 130) for (x, z) in pads]
 
 	n_hab = {"outpost": 2, "station": 4, "colony": 6}[size]
 	# the habitat cluster: modules about a hub, joined by corridors
@@ -560,7 +561,7 @@ def plan (name, body, size, T, cfgtext, new=None):
 		add_tube (L, [(hx, hz), (gx, gz)])
 		L.keep.append ((hx, hz, 130.0))
 		links.append ((hx, hz))
-		L.floods += [(px, 12, pz, 0, -1, 0) for (px, pz) in hubs[:3]]
+		L.floods += [(px, 12, pz, 0, -1, 0, 110, 160) for (px, pz) in hubs[:3]]  # (washes: the hubs' ground about them)
 
 	# colony: domes and greenhouses about the habitats
 	if size in ("station", "colony"):
@@ -660,24 +661,12 @@ def add_tube (L, pts):
 	"""a pressurized corridor along pts (east, north)"""
 	L.ground.append (("tube", pts))
 
-def ground_and_tubes (L, path_ground, path_tubes, body):
-	"""tracks (flat, on the ground) and corridors (tubes on low supports)"""
-	G = MeshBuilder ()
+def tubes (L, path_tubes, body):
+	"""corridors (tubes on low supports); (the tracks: ground.py, after the
+	configuration is written - clear of the pads)"""
 	T = MeshBuilder ()
 	for g in L.ground:
-		if g[0] == "strip":
-			_, pts, w, mat = g
-			for (a, b) in zip (pts[:-1], pts[1:]):
-				dx, dz = b[0] - a[0], b[1] - a[1]
-				l = math.hypot (dx, dz)
-				if l < 1e-3: continue
-				n = max (1, int (math.ceil (l / 20.0)))
-				px, pz = -dz / l * w / 2, dx / l * w / 2
-				for k in range (n):
-					p0 = (a[0] + dx * k / n, a[1] + dz * k / n); p1 = (a[0] + dx * (k + 1) / n, a[1] + dz * (k + 1) / n)
-					q = [(p0[0] - px, p0[1] - pz), (p1[0] - px, p1[1] - pz), (p1[0] + px, p1[1] + pz), (p0[0] + px, p0[1] + pz)]
-					G.poly ([(BF (*e)[0], 0.05, BF (*e)[1]) for e in q], (0, 1, 0), mat, uv=[(0, 0)] * 4)
-		elif g[0] == "tube":
+		if g[0] == "tube":
 			pts = g[1]
 			a, b = pts[0], pts[-1]
 			dx, dz = b[0] - a[0], b[1] - a[1]
@@ -693,7 +682,6 @@ def ground_and_tubes (L, path_ground, path_tubes, body):
 				A, Bp = BF (*pa), BF (*pb)
 				T.beam ((A[0], 2.2, A[1]), (Bp[0], 2.2, Bp[1]), 2.6, "hull")
 				T.box (A[0] - 0.4, A[0] + 0.4, 0, 1.0, A[1] - 0.4, A[1] + 0.4, "hull_dark")
-	G.write (path_ground)
 	T.write (path_tubes)
 	return bool (T.groups)
 
@@ -728,7 +716,7 @@ def cmd_layout (gridfile, root=".", meshdir=None, vkdir=None):
 		if b not in grids: print ("%s: no terrain grid, skipped" % b); continue
 		cfgtext = open (os.path.join (root, cfgs[0]), encoding="latin-1").read ()
 		L = plan (b, body, size, grids[b], cfgtext, new)
-		has_tubes = ground_and_tubes (L, os.path.join (meshdir, "BaseKit", b + "_ground.msh"), os.path.join (meshdir, "BaseKit", b + "_tubes.msh"), body) if meshdir else False
+		has_tubes = tubes (L, os.path.join (meshdir, "BaseKit", b + "_tubes.msh"), body) if meshdir else False
 		block = cfg_block (L, has_tubes)
 		for c in cfgs:
 			path = os.path.join (root, c)
@@ -744,6 +732,9 @@ def cmd_layout (gridfile, root=".", meshdir=None, vkdir=None):
 		if vkdir:
 			title = re.search (r"Name\s*=\s*(.+)", cfgtext).group (1).strip ()
 			bk.update_vk (os.path.join (vkdir, bk.vk_name (title)), L, title)
+		if meshdir: # (its tracks, clear of its pads; their lights)
+			import ground
+			ground.make (b, L, os.path.join (root, cfgs[0]), meshdir)
 		print ("%-10s %-8s %-7s %2d objects" % (b, body, size, len (L.objs)))
 
 if __name__ == "__main__":

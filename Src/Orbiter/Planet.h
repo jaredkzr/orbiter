@@ -200,6 +200,10 @@ public:
 	TileManager *TileMgr() const { return tmgr; }
 	TileManager2<SurfTile> *SurfMgr2() const { return smgr2; }
 	ElevationManager *ElevMgr() const { return emgr; }
+	/// Paved ground at a point: a floating deck, a landing pad's dry land,
+	/// a base's graded ground (its runways with their overruns and
+	/// shoulders, graded areas). Contacts sound paved there; no tracks
+	bool Paved (double lng, double lat) const;
 	/// procedural relief (no elevation data: the exoplanets), or null
 	const ProcTerrain *ProcSurface () const { return proc_.get(); }
 	/// rocks and vegetation on the ground (GroundScatter.h; null if the planet has none)

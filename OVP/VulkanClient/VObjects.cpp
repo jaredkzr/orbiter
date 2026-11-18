@@ -12,6 +12,7 @@
 #include "ScatterAssets.h"
 #include "ScatterField.h"
 #include "CityField.h"
+#include "CityKit.h"
 #include "VkMesh.h"
 #include "VulkanClient.h"
 #include "Particles.h"
@@ -460,6 +461,13 @@ void VVessel::UpdateTracks ()
 			continue;
 		}
 		waterContact[i] = 0;
+		// no tracks on paved ground: runways (their mesh lies flush with the
+		// terrain, which the ray above may hit first), pads, decks
+		{
+			double lng, lat, rad;
+			oapiGlobalToEqu (hp, g, &lng, &lat, &rad);
+			if (oapiSurfacePaved (hp, lng, lat)) { gt->NoContact (hObj, (int)i); continue; }
+		}
 		// (track size from the vessel's size and mass: about 0.15 m wide and
 		// 2 cm deep for the delta-glider)
 		double hw = std::clamp (0.012 * size, 0.05, 0.4);
@@ -3695,10 +3703,222 @@ VBase::VBase (OBJHANDLE h, Scene *s) : hBase(h), scene(s)
 	for (DWORD i = 0; i < nas; i++)
 		if (as[i]) structures.push_back (std::make_unique<VkMesh> (gc->Ctx(), gc->TexMgr(), as[i]));
 	ReadLights ();
+	ReadPads ();
+	ReadBuildings ();
+	// runways with markings
+	DWORD n = oapiGetBaseRunways (hBase, nullptr, 0);
+	std::vector<RUNWAYSPEC> rs (n);
+	if (n) oapiGetBaseRunways (hBase, rs.data(), n);
+	// (a designator: its digits, 0-9 or 10 none, and letter, 0 none, 1 L, 2 C, 3 R: d0 + 11 d1 + 121 letter)
+	auto code = [](const char *d) {
+		int c[2] = { 10, 10 }, k = 0, l = 0;
+		for (const char *p = d; *p && p < d + 4; p++) {
+			if (*p >= '0' && *p <= '9' && k < 2) c[k++] = *p - '0';
+			else if (*p == 'L' || *p == 'l') l = 1;
+			else if (*p == 'C' || *p == 'c') l = 2;
+			else if (*p == 'R' || *p == 'r') l = 3;
+		}
+		return (float)(c[0] + 11 * c[1] + 121 * l);
+	};
+	for (const RUNWAYSPEC &r : rs) {
+		if (r.markings < 0) continue;
+		double dx = r.end2.x - r.end1.x, dz = r.end2.z - r.end1.z, len = std::hypot (dx, dz);
+		if (len <= 0.0 || r.width <= 0.0) continue;
+		RunwayGpu g{};
+		float *v = g.v;
+		v[0] = (float)r.end1.x, v[1] = (float)r.end1.z, v[2] = (float)(dx / len), v[3] = (float)(dz / len);
+		v[4] = (float)len, v[5] = (float)(0.5 * r.width), v[6] = (float)r.overrun[0], v[7] = (float)r.overrun[1];
+		v[8] = (float)r.markings, v[9] = (float)r.surface, v[10] = (float)r.concreteEnds;
+		v[11] = (float)(runways.size() * 17 + 3);
+		v[12] = code (r.desig[0]), v[13] = code (r.desig[1]);
+		runways.push_back (g);
+	}
+}
+
+namespace {
+	// PadPavers' mean colour (linear: Utils/runway/make_pavement.py): the
+	// pavers' tint is the local ground's colour over it
+	constexpr float PAVER_MEAN = 0.331f;
+	// a pad's lights at night: green about its perimeter, every PAD_LIGHT_STEP
+	// at most; yellow about its touchdown circle (pad.glsl's sizes)
+	constexpr double PAD_LIGHT_STEP = 6.0, PAD_PERIM_INSET = 2.0, PAD_TD_RADIUS = 0.6 * 40.0;
+}
+
+void VBase::ReadPads ()
+{
+	DWORD n = oapiGetBasePadCount (hBase);
+	for (DWORD i = 0; i < n; i++) {
+		PADSPEC ps{};
+		if (!oapiGetBasePadSpec (hBase, i, &ps) || !ps.marked) continue;
+		PadGpu g{};
+		float *v = g.v;
+		double c = cos (ps.rot), s = sin (ps.rot);
+		v[0] = (float)ps.pos.x, v[1] = (float)ps.pos.z, v[2] = (float)c, v[3] = (float)s;
+		v[4] = (float)ps.scale, v[5] = (float)ps.shape, v[6] = (float)ps.number, v[7] = (float)ps.surface;
+		v[8] = v[9] = v[10] = 1.0f;
+		v[11] = (float)(i * 13 + 5);
+		pads.push_back (g);
+		// its lights: about the perimeter (the octagon's or the square's edges, inset), about the touchdown circle
+		double sc = fabs (ps.scale), h = 40.0 * sc - PAD_PERIM_INSET * sc;
+		auto put = [&](double x, double z, const float *col, float size) {
+			lights.push_back ({ ps.pos + _V(c * x - s * z, 0.4, s * x + c * z), { col[0], col[1], col[2] }, size });
+		};
+		const float green[3] = { 0.25f, 1.0f, 0.35f }, yellow[3] = { 1.0f, 0.78f, 0.2f };
+		std::vector<std::pair<double, double>> corner;
+		if (ps.shape == PADSHAPE_OCTAGON) {
+			double t = h * tan (PI / 8.0);
+			for (int k = 0; k < 8; k++) {
+				double a = PI / 4.0 * k;
+				double ca = cos (a), sa = sin (a);
+				corner.push_back ({ h * ca - t * sa, h * sa + t * ca });
+			}
+		} else
+			corner = { { h, h }, { -h, h }, { -h, -h }, { h, -h } };
+		for (size_t k = 0; k < corner.size (); k++) {
+			auto a = corner[k], b = corner[(k + 1) % corner.size ()];
+			double len = std::hypot (b.first - a.first, b.second - a.second);
+			int m = std::max (1, (int)ceil (len / (PAD_LIGHT_STEP * sc)));
+			for (int j = 0; j < m; j++) {
+				double f = (double)j / m;
+				put (a.first + (b.first - a.first) * f, a.second + (b.second - a.second) * f, green, 0.8f);
+			}
+		}
+		for (int k = 0; k < 16; k++) {
+			double a = PI2 * k / 16;
+			put (PAD_TD_RADIUS * sc * cos (a), PAD_TD_RADIUS * sc * sin (a), yellow, 0.8f);
+		}
+	}
+}
+
+void VBase::CollectGroundMarks (std::vector<RunwayGpu> &rws, std::vector<PadGpu> &pd)
+{
+	rwFirst = (int)rws.size ();
+	rwCount = std::max (0, std::min ((int)runways.size (), MAX_RUNWAYS - rwFirst));
+	rws.insert (rws.end (), runways.begin (), runways.begin () + rwCount);
+	// the pavers' tint: the ground's colour about the base (its tiles read in the background: until then grey)
+	if (!padTint && !pads.empty ()) {
+		double lng, lat;
+		oapiGetBaseEquPos (hBase, &lng, &lat);
+		float rgb[3];
+		if (vksurf::DustColour (scene, oapiGetBasePlanet (hBase), lng, lat, rgb)) {
+			padTint = true;
+			for (PadGpu &g : pads)
+				for (int k = 0; k < 3; k++) g.v[8 + k] = std::clamp (rgb[k] / PAVER_MEAN, 0.05f, 2.5f);
+		}
+	}
+	padFirst = (int)pd.size ();
+	padCount = std::max (0, std::min ((int)pads.size (), MAX_PADS - padFirst));
+	pd.insert (pd.end (), pads.begin (), pads.begin () + padCount);
 }
 
 VBase::~VBase ()
 {
+	if (bldBuf.buffer) {
+		vkc::Context *c = scene->Client()->Ctx();
+		vkc::Buffer b = bldBuf;
+		c->DeferDestroy ([c, b]() mutable { c->DestroyBuffer (b); });
+	}
+}
+
+void VBase::ReadBuildings ()
+{
+	// (ORBITER_VK_BASE_BUILDINGS=0: the core's geometry, as before - A/B)
+	static const bool on = !getenv ("ORBITER_VK_BASE_BUILDINGS") || atoi (getenv ("ORBITER_VK_BASE_BUILDINGS"));
+	DWORD n = on ? oapiGetBaseBuildings (hBase, nullptr, 0) : 0;
+	if (!n) return;
+	std::vector<BASEBUILDINGSPEC> specs (n);
+	oapiGetBaseBuildings (hBase, specs.data(), n);
+	vkcity::Kit *kit = scene->BaseKit ();
+	// where the base stands: an atmosphere (pressurised modules where there is next to none), its soil
+	OBJHANDLE hp = oapiGetBasePlanet (hBase);
+	const ATMCONST *atm = oapiGetPlanetAtmConstants (hp);
+	vkcity::BaseEnv env;
+	env.vacuum = !atm || atm->p0 < 10e3;
+	char pname[64];
+	oapiGetObjectName (hp, pname, 64);
+	env.insulated = !strcmp (pname, "Titan");
+	{
+		double lng, lat;
+		oapiGetBaseEquPos (hBase, &lng, &lat);
+		float rgb[3];
+		vksurf::DustColour (scene, hp, lng, lat, rgb); // (its table's colour while the tiles are read)
+		for (int k = 0; k < 3; k++) env.soil[k] = std::clamp (rgb[k], 0.03f, 0.9f);
+	}
+	std::vector<std::pair<int, vkcity::BInst>> b;
+	for (const BASEBUILDINGSPEC &s : specs) {
+		vkcity::BInst inst{};
+		int shape = kit->MakeBase (s, env, inst);
+		b.push_back ({ shape, inst });
+	}
+	// their lamps at night (doors, airlocks, tunnels' ridges, obstruction lights; floodlights before hangars)
+	{
+		std::vector<vkcity::BaseLamp> lamps;
+		for (auto &x : b) kit->BaseLights (x.first, x.second, lamps);
+		size_t nf = 0;
+		for (const vkcity::BaseLamp &l : lamps) {
+			VECTOR3 p = _V(l.pos[0], l.pos[1], l.pos[2]);
+			if (!l.flood) { lights.push_back ({ p, { l.col[0], l.col[1], l.col[2] }, l.size }); continue; }
+			Flood fl{};
+			fl.pos = p, fl.dir = _V(l.dir[0], l.dir[1], l.dir[2]);
+			for (int k = 0; k < 3; k++) fl.col[k] = l.col[k];
+			fl.range = l.range, fl.umbra = l.umbra * RAD, fl.penumbra = l.penumbra * RAD;
+			floods.push_back (fl), nf++;
+		}
+		if (!lamps.empty ()) {
+			char nm[256];
+			oapiGetObjectName (hBase, nm, 256);
+			oapiWriteLogV ("VulkanClient: base %s: %zu lamps of its buildings (%zu floodlights)", nm, lamps.size () - nf, nf);
+		}
+	}
+	std::stable_sort (b.begin(), b.end(), [](const auto &x, const auto &y) { return x.first < y.first; });
+	std::vector<vkcity::BInst> inst;
+	for (size_t i = 0; i < b.size(); i++) {
+		if (bldBatches.empty () || bldBatches.back().shape != b[i].first) bldBatches.push_back ({ b[i].first, (uint32_t)i, 0 });
+		bldBatches.back().count++;
+		inst.push_back (b[i].second);
+	}
+	vkc::Context *ctx = scene->Client()->Ctx();
+	bldBuf = ctx->CreateBuffer (inst.size() * sizeof(vkcity::BInst), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
+	memcpy (bldBuf.mapped, inst.data(), inst.size() * sizeof(vkcity::BInst));
+	// the same as a mesh (parts under 16-bit indices)
+	std::vector<VkMesh::Part> parts (1);
+	for (auto &x : b) {
+		if (parts.back().vtx.size() > 60000) parts.emplace_back ();
+		VkMesh::Part &p = parts.back();
+		kit->Expand (x.first, x.second, p.vtx, p.idx);
+	}
+	for (auto &p : parts) {
+		p.mat.diffuse = { 0.8f, 0.8f, 0.8f, 1.0f };
+		p.mat.specular = { 0.05f, 0.05f, 0.05f, 1.0f };
+		p.pbr.roughness = 0.85f;
+	}
+	bldMesh.push_back (std::make_unique<VkMesh> (ctx, scene->Client()->TexMgr(), parts));
+	// the core's groups of them: hidden (they stay its collision shapes, and other clients' look)
+	for (auto &m : structures) m->AddUserFlagWhere (VkMesh::GRP_BUILDING, VkMesh::GRP_HIDDEN);
+	for (auto &m : ground) m->AddUserFlagWhere (VkMesh::GRP_BUILDING, VkMesh::GRP_HIDDEN);
+	char name[256];
+	oapiGetObjectName (hBase, name, 256);
+	oapiWriteLogV ("VulkanClient: base %s: %u buildings drawn by the client (%zu shapes)%s", name, (unsigned)n, bldBatches.size(),
+		env.vacuum ? ", pressurised" : "");
+}
+
+float VBase::BaseHour () const
+{
+	// the windows' hour: local solar time on Earth; elsewhere the crews' shifts (the mission's clock)
+	OBJHANDLE hp = oapiGetBasePlanet (hBase);
+	char pname[64];
+	oapiGetObjectName (hp, pname, 64);
+	if (strcmp (pname, "Earth") != 0) return (float)fmod (oapiGetSimMJD () * 24.0, 24.0);
+	OBJHANDLE hSun = scene->Sun ();
+	if (!hSun) return 12.0f;
+	MATRIX3 Rp;
+	oapiGetRotationMatrix (hp, &Rp);
+	VECTOR3 gp, sp;
+	oapiGetGlobalPos (hp, &gp), oapiGetGlobalPos (hSun, &sp);
+	VECTOR3 sun = tmul (Rp, sp - gp);
+	double lng, lat;
+	oapiGetBaseEquPos (hBase, &lng, &lat);
+	return (float)fmod (12.0 + (lng - atan2 (sun.z, sun.x)) * 12.0 / PI + 48.0, 24.0);
 }
 
 namespace {
@@ -3776,19 +3996,46 @@ void VBase::ReadLights ()
 		}
 	}
 	// floodlights (Vulkan client additions): FLOODLIGHT x y z dx dy dz range r g b umbra penumbra [deg]
+	// (FLOODLIGHTH: y its height above the ground there);
+	// lamps of the bases' kit assets (Utils/BaseKit/kitlights.py): LIGHT x h z r g b size (h above
+	// the ground there), LIGHTABS x y z r g b size (base frame: a floating base's)
 	std::string vk = std::string ("Config/VK/Bases/") + name + ".cfg";
 	for (auto &c : vk) if (c == ' ') c = '_';
 	std::ifstream f (vk);
 	std::string line;
+	OBJHANDLE hp = oapiGetBasePlanet (hBase);
+	double lng0, lat0, R = oapiGetSize (hp);
+	oapiGetBaseEquPos (hBase, &lng0, &lat0);
+	double e0 = oapiSurfaceElevation (hp, lng0, lat0);
 	while (std::getline (f, line)) {
 		if (auto c = line.find (';'); c != std::string::npos) line.resize (c);
 		std::istringstream ss (line);
 		std::string tag;
-		if (!(ss >> tag) || BaseLower (tag) != "floodlight") continue;
+		if (!(ss >> tag)) continue;
+		tag = BaseLower (tag);
+		if (tag == "light" || tag == "lightabs") {
+			Light l{};
+			l.pos = vec (ss);
+			ss >> l.col[0] >> l.col[1] >> l.col[2] >> l.size;
+			if (!ss) continue;
+			if (tag == "light") { // (h above the ground: the ground's height there in the base frame, as Baseobj's Setup)
+				double x = l.pos.x, z = l.pos.z;
+				double lat = lat0 - x / R, lng = lng0 + z / (R * std::max (cos (lat0), 1e-6));
+				l.pos.y += oapiSurfaceElevation (hp, lng, lat) - e0 + (R - std::sqrt (R * R + x * x + z * z));
+			}
+			lights.push_back (l);
+			continue;
+		}
+		if (tag != "floodlight" && tag != "floodlighth") continue;
 		Flood fl{};
 		fl.pos = vec (ss), fl.dir = vec (ss);
 		ss >> fl.range >> fl.col[0] >> fl.col[1] >> fl.col[2] >> fl.umbra >> fl.penumbra;
 		if (!ss) continue;
+		if (tag == "floodlighth") { // (FLOODLIGHTH: h above the ground there, as LIGHT)
+			double x = fl.pos.x, z = fl.pos.z;
+			double lat = lat0 - x / R, lng = lng0 + z / (R * std::max (cos (lat0), 1e-6));
+			fl.pos.y += oapiSurfaceElevation (hp, lng, lat) - e0 + (R - std::sqrt (R * R + x * x + z * z));
+		}
 		fl.dir = unit (fl.dir), fl.umbra *= RAD, fl.penumbra *= RAD;
 		floods.push_back (fl);
 	}
@@ -3799,13 +4046,22 @@ void VBase::ReadLights ()
 bool VBase::Night () const
 {
 	// lights on when the sun is below a few degrees above the horizon
+	return NightFactor () > 0.5f;
+}
+
+float VBase::NightFactor () const
+{
+	// (the sine of the sun's elevation: lit windows fading in from 6 degrees to
+	// the horizon, half at 3 - the lights' switch)
 	OBJHANDLE hSun = scene->Sun ();
-	if (!hSun) return false;
+	if (!hSun) return 0.0f;
 	VECTOR3 gpos, sp, pp;
 	oapiGetGlobalPos (hBase, &gpos);
 	oapiGetGlobalPos (hSun, &sp);
 	oapiGetGlobalPos (oapiGetBasePlanet (hBase), &pp);
-	return dotp (unit (gpos - pp), unit (sp - gpos)) < 0.05;
+	double s = dotp (unit (gpos - pp), unit (sp - gpos));
+	double t = std::clamp ((0.10 - s) / 0.10, 0.0, 1.0);
+	return (float)(t * t * (3.0 - 2.0 * t));
 }
 
 void VBase::CollectLights (std::vector<LightSource> &out)
@@ -3838,8 +4094,23 @@ void VBase::Render (RenderPass pass)
 	Mat4 mv = scene->ModelView (gpos, grot);
 	scene->Sunlight (gpos);
 	Mat4 pulled = Mat4::Scale (1.0 - GROUND_DEPTH_PULL, 1.0 - GROUND_DEPTH_PULL, 1.0 - GROUND_DEPTH_PULL) * mv;
+	scene->SetObjectNight (NightFactor ()); // (night maps: windows lit as it gets dark)
+	scene->SetBaseGround (true, rwFirst, rwCount, padFirst, padCount); // (runways, pads: the pavement's grain below their texels; their markings)
 	for (auto &m : ground) scene->DrawMesh (m.get(), pulled, pass);
+	scene->SetBaseGround (false);
 	for (auto &m : structures) scene->DrawMesh (m.get(), mv, pass);
+	scene->SetObjectNight (1.0f);
+	// the generic buildings (drawn by the client)
+	if (!bldBatches.empty () && pass != RenderPass::Transparent) {
+		vkcity::Kit *kit = scene->BaseKit ();
+		float hour = BaseHour ();
+		for (const BldBatch &bb : bldBatches) {
+			const vkcity::Kit::Range &r = kit->Indices (bb.shape);
+			scene->DrawBuildings (kit->VertexBuffer(), kit->IndexBuffer(), r.first, r.count, bldBuf.buffer,
+				(VkDeviceSize)bb.first * Scene::BUILDING_INSTANCE, bb.count, pass, mv, kit->Set(), hour, true);
+		}
+		if (pass == RenderPass::Depth) for (auto &m : bldMesh) scene->AddMeshRT (m.get(), mv, true);
+	}
 	// lights at night: glows (floodlights larger, and brighter towards their beam)
 	if (pass == RenderPass::Transparent && (!lights.empty () || !floods.empty ()) && Night ()) {
 		std::vector<PVtx> v;
@@ -3880,9 +4151,13 @@ bool VBase::RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &
 	VECTOR3 n1, n2;
 	bool h1 = MeshesRayHit (ground, get, gpos, grot, o, d, maxDist, t1, n1);
 	bool h2 = MeshesRayHit (structures, get, gpos, grot, o, d, h1 ? t1 : maxDist, t2, n2);
-	if (h2) t = t2, n = n2;
+	double t3;
+	VECTOR3 n3;
+	bool h3 = MeshesRayHit (bldMesh, get, gpos, grot, o, d, h2 ? t2 : h1 ? t1 : maxDist, t3, n3);
+	if (h3) t = t3, n = n3;
+	else if (h2) t = t2, n = n2;
 	else if (h1) t = t1, n = n1;
-	return h1 || h2;
+	return h1 || h2 || h3;
 }
 
 void VBase::RenderShadow (ShadowMap &sm)
@@ -3893,6 +4168,7 @@ void VBase::RenderShadow (ShadowMap &sm)
 	oapiGetRotationMatrix (hBase, &grot);
 	Mat4 model = Mat4::FromRotTrans (grot, gpos - sm.Centre());
 	for (auto &m : structures) sm.DrawMesh (m.get(), model);
+	for (auto &m : bldMesh) sm.DrawMesh (m.get(), model);
 }
 
 // ======================================================================
@@ -3993,6 +4269,11 @@ bool VPlanet::RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double
 void VPlanet::CollectLights (std::vector<LightSource> &lights)
 {
 	for (auto &b : bases) b->CollectLights (lights);
+}
+
+void VPlanet::CollectGroundMarks (std::vector<RunwayGpu> &rws, std::vector<PadGpu> &pads)
+{
+	for (auto &b : bases) b->CollectGroundMarks (rws, pads);
 }
 
 void VPlanet::PrepareFrame ()

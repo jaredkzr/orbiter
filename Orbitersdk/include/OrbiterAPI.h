@@ -5193,6 +5193,16 @@ OAPIFUNC bool oapiSiteMaterial (OBJHANDLE hPlanet, double lng, double lat, doubl
 OAPIFUNC double oapiSurfacePlaya (OBJHANDLE hPlanet, double lng, double lat, double elev, double relief = 0.0);
 
 /**
+ * \brief Paved ground at a point: a floating deck, a landing pad, a base's
+ *   graded ground (its runways with their overruns and shoulders). Wheels
+ *   leave no tracks there; contacts sound paved.
+ * \param hPlanet planet handle
+ * \param lng, lat longitude and latitude [rad]
+ * \return false if hPlanet is not a planet
+ */
+OAPIFUNC bool oapiSurfacePaved (OBJHANDLE hPlanet, double lng, double lat);
+
+/**
  * \brief A graphics client that renders the procedural terrain detail
  *   (oapiSurfaceDetail) calls this when it is initialised. With other
  *   graphics clients the surface elevation has no detail, so that vessels
@@ -5518,6 +5528,125 @@ OAPIFUNC bool oapiGetBasePadStatus (OBJHANDLE hBase, DWORD pad, int *status);
 	* \note 0 <= pad < oapiGetBasePadCount() is required.
 	*/
 OAPIFUNC NAVHANDLE oapiGetBasePadNav (OBJHANDLE hBase, DWORD pad);
+
+/// Runway markings (RUNWAYSPEC::markings)
+#define RWMARK_NONE          0
+#define RWMARK_VISUAL        1
+#define RWMARK_NONPRECISION  2
+#define RWMARK_PRECISION     3
+/// Runway surfaces (RUNWAYSPEC::surface)
+#define RWSURF_CONCRETE      0
+#define RWSURF_ASPHALT       1
+
+	/**
+	* \brief A runway of a base, as its file describes it (RUNWAY).
+	* \note Runways with markings (markings >= 0: MARKINGS in the base's file)
+	*  have a mesh whose texture coordinates run across and along it in units
+	*  of 4 slabs (30.48 m), the pavement tiled; their markings are the
+	*  graphics client's to draw. The mesh's groups carry user flag
+	*  MESHGRP_RUNWAY.
+	*/
+typedef struct {
+	VECTOR3 end1, end2;  ///< the paved ends, base frame [m] (thresholds: overrun[] in from them)
+	double width;        ///< [m]
+	double overrun[2];   ///< paved beyond the thresholds at END1, END2 [m] (blast pads)
+	char desig[2][4];    ///< designators at END1 (landing towards END2) and END2 ("33", "22L")
+	int markings;        ///< RWMARK_xxx; -1: none described (a texture laid out along it)
+	int surface;         ///< RWSURF_xxx
+	double concreteEnds; ///< asphalt runways: concrete this far past each threshold [m]
+} RUNWAYSPEC;
+
+/// Mesh group user flag: a runway's surface (its markings drawn by the client)
+#define MESHGRP_RUNWAY 0x10
+/// Mesh group user flag: a landing pad's surface (its markings drawn by the client)
+#define MESHGRP_PAD    0x20
+/// Mesh group user flag: a base's generic buildings (BLOCK, HANGAR, HANGAR2,
+/// HANGAR3, TANK), described by oapiGetBaseBuildings (a client may draw its own)
+#define MESHGRP_BUILDING  0x40
+/// Mesh group user flag: a base's trains (track, cars at rest), described by
+/// oapiGetBaseTrains (a client may draw and move its own)
+#define MESHGRP_TRAIN     0x80
+/// Mesh group user flag (mesh files): detail left out of the collision hulls
+/// (railings, lattice, antennas, pipes)
+#define MESHGRP_NOCOLLIDE 0x100
+/// Mesh group user flag (mesh files): a collision proxy - with the hidden flag
+/// (0x2): not drawn. A mesh with any: only those collide
+#define MESHGRP_COLLISION 0x200
+
+/// Landing pad shapes (PADSPEC::shape)
+#define PADSHAPE_OCTAGON 0   ///< LPAD1: 80 m across the flats, a raised rim about it
+#define PADSHAPE_SQUARE  1   ///< LPAD2, LPAD2A: 80 m square
+/// Landing pad surfaces (PADSPEC::surface)
+#define PADSURF_CONCRETE 0
+#define PADSURF_PAVERS   1   ///< sintered regolith, the local ground's colour
+
+	/**
+	* \brief A landing pad of a base, as its file describes it (LPADx).
+	* \note Pads with markings (marked: all but STYLE classic) have a mesh
+	*  whose texture coordinates run across the pad in units of 4 slabs
+	*  (30.48 m) from its centre (u along its x axis, v its z), the pavement
+	*  tiled; their markings are the graphics client's to draw. The mesh's
+	*  group carries user flag MESHGRP_PAD.
+	*/
+typedef struct {
+	VECTOR3 pos;    ///< its centre, base frame [m]
+	double rot;     ///< its rotation about the vertical [rad] (base frame x = cos x' - sin z', z = sin x' + cos z')
+	double scale;   ///< its size against the standard (80 m across)
+	int shape;      ///< PADSHAPE_xxx
+	int number;     ///< its number (1-based, as the base's pads are counted)
+	int surface;    ///< PADSURF_xxx
+	bool marked;    ///< markings described (else the pad's own texture, as laid out)
+} PADSPEC;
+
+	/**
+	* \brief A generic building of a base (BLOCK, HANGAR, HANGAR2, HANGAR3, TANK),
+	*  as its file describes it; its geometry the core exports in groups
+	*  flagged MESHGRP_BUILDING (a client may draw its own).
+	*/
+typedef struct {
+	int type;           ///< BLDG_xxx
+	DWORD index;        ///< its place among the base's buildings (a stable seed)
+	VECTOR3 pos;        ///< its base's centre, base frame [m] (on the ground there)
+	double rot;         ///< its rotation about the vertical [rad] (base frame x = cos x' - sin z', z = sin x' + cos z')
+	VECTOR3 size;       ///< SCALE: width (x'), height, depth (z') [m]; a TANK: radius, height, radius
+	double wallh;       ///< height of its walls [m] (HANGAR: half the height; HANGAR2: to the eaves; HANGAR3: 0, an arch from the ground)
+	int nstep;          ///< a TANK's segments
+	char tex[3][32];    ///< its textures' names (TEX1..3; "": none): style hints
+	float texrep[3][2]; ///< their repeats (su, sv)
+} BASEBUILDINGSPEC;
+/// building types (BASEBUILDINGSPEC::type)
+#define BLDG_BLOCK  0   ///< walls and a flat roof
+#define BLDG_HANGAR 1   ///< walls half the height, a round roof across x', along z'; its door at -z'
+#define BLDG_GABLE  2   ///< walls, a gable roof, its ridge along z' (HANGAR2)
+#define BLDG_ARCH   3   ///< an arch from the ground (height (1 - (2x'/w)^2)), along z'; its door, recessed, at +z' (HANGAR3)
+#define BLDG_TANK   4   ///< a vertical cylinder
+
+	/**
+	* \brief The generic buildings of a base.
+	* \param hBase surface base handle
+	* \param spec array to receive up to n of them (may be NULL)
+	* \param n its size
+	* \return the number of generic buildings of the base
+	*/
+OAPIFUNC DWORD oapiGetBaseBuildings (OBJHANDLE hBase, BASEBUILDINGSPEC *spec, DWORD n);
+
+	/**
+	* \brief A landing pad of a base.
+	* \param hBase surface base handle
+	* \param pad pad index (0 <= pad < oapiGetBasePadCount())
+	* \param spec receives it
+	* \return false: no such pad
+	*/
+OAPIFUNC bool oapiGetBasePadSpec (OBJHANDLE hBase, DWORD pad, PADSPEC *spec);
+
+	/**
+	* \brief The runways of a base.
+	* \param hBase surface base handle
+	* \param spec array to receive up to n of them (may be NULL)
+	* \param n its size
+	* \return the number of runways of the base
+	*/
+OAPIFUNC DWORD oapiGetBaseRunways (OBJHANDLE hBase, RUNWAYSPEC *spec, DWORD n);
 //@}
 
 

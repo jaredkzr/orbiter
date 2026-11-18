@@ -62,6 +62,7 @@ void Impostor (mat4 modelView, mat4 M, inout vec3 pos, inout vec3 nrm, inout vec
 layout(location = 0) out vec3 vPosView;
 layout(location = 1) out vec3 vNormalView;
 layout(location = 2) out vec2 vUV;
+layout(location = 3) out vec3 vPosObj; // (mesh.frag: the ground's detail; not used for impostors)
 
 void main()
 {
@@ -71,6 +72,7 @@ void main()
 	Impostor(draw.modelView, M, pos, nrm, uv, draw.maps.w);
 	vec4 p = draw.modelView * (M * vec4(pos, 1.0));
 	vPosView = p.xyz;
+	vPosObj = pos;
 	vNormalView = mat3(draw.modelView) * (mat3(M) * nrm);
 	vUV = uv;
 	gl_Position = frame.proj * RelApparent (p); // (relativistic view: as seen)

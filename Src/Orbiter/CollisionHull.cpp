@@ -93,6 +93,16 @@ namespace collision {
 		}
 	}
 
+	bool HasProxy (const Mesh &mesh)
+	{
+		for (DWORD g = 0; g < mesh.nGroup(); g++)
+			if (const GroupSpec *grp = const_cast<Mesh&>(mesh).GetGroup (g))
+				if (grp->UsrFlag & MESHGRP_COLLISION) return true;
+		return false;
+	}
+
+	static_assert (GRP_NOCOLLIDE == MESHGRP_NOCOLLIDE && GRP_COLLISION == MESHGRP_COLLISION, "OrbiterAPI.h group flags");
+
 	const std::vector<Hull> &MeshHulls (const std::string &key, const Mesh &mesh)
 	{
 		static std::map<std::string, std::vector<Hull>> cache;
@@ -100,11 +110,13 @@ namespace collision {
 		if (it != cache.end()) return it->second;
 		std::vector<Hull> &hulls = cache[key];
 
-		// the groups' triangles (hidden groups and tiny ones left out)
+		// the groups' triangles (hidden groups, detail and tiny ones left out;
+		// collision proxies alone where the mesh has any: Collides)
 		std::vector<std::vector<convex::Triangle>> groups;
+		bool proxy = HasProxy (mesh);
 		for (DWORD g = 0; g < mesh.nGroup(); g++) {
 			const GroupSpec *grp = const_cast<Mesh&>(mesh).GetGroup (g);
-			if (!grp || grp->nVtx < 3 || grp->nIdx < 3 || (grp->Flags & 0x2)) continue;
+			if (!grp || grp->nVtx < 3 || grp->nIdx < 3 || !Collides (grp->UsrFlag, proxy)) continue;
 			Vector lo (1e30, 1e30, 1e30), hi (-1e30, -1e30, -1e30);
 			for (DWORD k = 0; k < grp->nVtx; k++) {
 				Vector p (grp->Vtx[k].x, grp->Vtx[k].y, grp->Vtx[k].z);

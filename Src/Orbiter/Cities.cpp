@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "Cities.h"
+#include "GroundFilter.h"
 #include <future>
 #include <thread>
 #include "GroundScatter.h"
@@ -326,6 +327,9 @@ namespace {
 CityMap::CityMap (const Planet *p): planet (p), R (p->Size()), serial (citySerial++)
 {
 	etile = std::make_unique<std::vector<ElevationTile>> (16);
+	// the ground: the lowest eighth of 5 x 5 samples 90 m apart (downtowns:
+	// mostly roofs), at nodes 0.0025 deg apart
+	ground = std::make_unique<GroundFilter> (planet, GroundFilter::Params{ 0.0025 * RAD, 90.0, 5, 0.125, 6 });
 	seed = 0xc17u;
 	for (const char *c = planet->Name(); *c; c++) seed = seed * 31u + (uint8_t)*c;
 	Load ();
@@ -649,138 +653,10 @@ double CityMap::Urban (const Vector &dir)
 	return SmoothStep (0.06, 0.4, lights->Sample (lat, lng));
 }
 
-namespace {
-	const double GROUND_STEP = 0.0025 * RAD; // node spacing [rad]
-}
-
-float CityMap::GroundNode (int64_t i, int64_t j)
-{
-	// an elevation manager not in use (the data alone)
-	RawElev *re = nullptr;
-	{
-		std::lock_guard<std::mutex> lock (rawMtx);
-		for (auto &r : rawElev)
-			if (r->m.try_lock ()) { re = r.get(); break; }
-		if (!re) {
-			rawElev.push_back (std::make_unique<RawElev> ());
-			re = rawElev.back().get();
-			re->m.lock ();
-			re->em = std::make_unique<ElevationManager> (planet);
-			re->em->SetNoDetail ();
-			re->tiles = std::make_unique<std::vector<ElevationTile>> (16);
-		}
-	}
-	// samples 5 x 5, 90 m apart; their lowest eighth (downtowns: mostly roofs)
-	double lat = i * GROUND_STEP, lng = j * GROUND_STEP;
-	double dlat = 90.0 / R, dlng = 90.0 / (R * std::max (cos (lat), 0.01));
-	float e[25];
-	int n = 0;
-	for (int a = -2; a <= 2; a++)
-		for (int b = -2; b <= 2; b++) {
-			double h = re->em->Elevation (lat + a * dlat, lng + b * dlng, 0, re->tiles.get());
-			if (fabs (h) > 0.25) e[n++] = (float)h; // (not the sea)
-		}
-	re->m.unlock ();
-	float g = std::numeric_limits<float>::quiet_NaN ();
-	if (n >= 6) {
-		std::nth_element (e, e + n / 8, e + n);
-		g = e[n / 8];
-	}
-	return g;
-}
-
-std::shared_ptr<const CityMap::GroundBlock> CityMap::MakeGroundBlock (int64_t bi, int64_t bj)
-{
-	// The nodes in parallel (the pool of data-only elevation managers:
-	// one per thread at a time). ORBITER_CITY_GROUND_SYNC=1: on the calling
-	// thread (threads crashed here in ElevationManager::Elevation once, at
-	// Sriharikota; not reproduced since, 2026-10-30)
-	auto blk = std::make_shared<GroundBlock> ();
-	auto rows = [&](int r0, int r1) {
-		for (int r = r0; r < r1; r++)
-			for (int c = 0; c < GBLOCK; c++) (*blk)[r * GBLOCK + c] = GroundNode (bi * GBLOCK + r, bj * GBLOCK + c);
-	};
-	static const bool sync = getenv ("ORBITER_CITY_GROUND_SYNC") && atoi (getenv ("ORBITER_CITY_GROUND_SYNC"));
-	// (one thread a block while others make blocks too, e.g. a client's
-	// mesh workers: each thread of each takes an elevation manager, whose
-	// tiles it loads anew)
-	const bool alone = groundMaking.load () <= 1;
-	const int nt = sync || !alone ? 1 : (int)std::clamp (std::thread::hardware_concurrency () / 2, 1u, 4u);
-	std::vector<std::future<void>> fs;
-	for (int k = 1; k < nt; k++)
-		fs.push_back (std::async (std::launch::async, rows, GBLOCK * k / nt, GBLOCK * (k + 1) / nt));
-	rows (0, GBLOCK / nt);
-	for (auto &f : fs) f.get ();
-	return blk;
-}
-
 double CityMap::Ground (double lat, double lng)
 {
 	if (!active) return std::numeric_limits<double>::quiet_NaN ();
-	double u = lat / GROUND_STEP, v = lng / GROUND_STEP;
-	int64_t i = (int64_t)floor (u), j = (int64_t)floor (v);
-	double fu = u - i, fv = v - j;
-	float g[4];
-	for (int k = 0; k < 4; k++) {
-		int64_t ni = i + (k >> 1), nj = j + (k & 1);
-		int64_t bi = ni >= 0 ? ni / GBLOCK : (ni - GBLOCK + 1) / GBLOCK, bj = nj >= 0 ? nj / GBLOCK : (nj - GBLOCK + 1) / GBLOCK;
-		int64_t key = NodeKey (bi, bj);
-		// (the thread's last blocks first: the shared lock and the block's
-		// count, taken by every thread making meshes for every point, were
-		// most of their time; blocks don't change once made)
-		struct Cached { uint64_t map = 0; int64_t key = 0; std::shared_ptr<const GroundBlock> blk; };
-		thread_local Cached cache[4];
-		thread_local unsigned next = 0;
-		const GroundBlock *b = nullptr;
-		for (const Cached &c : cache)
-			if (c.map == serial && c.key == key) { b = c.blk.get(); break; }
-		if (!b) {
-			std::shared_ptr<const GroundBlock> blk;
-			{
-				std::shared_lock<std::shared_mutex> lock (groundMtx);
-				auto it = groundBlocks.find (key);
-				if (it != groundBlocks.end()) blk = it->second;
-			}
-			if (!blk) { // (made outside the lock, by one thread: others needing it wait)
-				std::promise<std::shared_ptr<const GroundBlock>> made;
-				std::shared_future<std::shared_ptr<const GroundBlock>> pending;
-				bool mine = false;
-				{
-					std::unique_lock<std::shared_mutex> lock (groundMtx);
-					auto it = groundBlocks.find (key);
-					if (it != groundBlocks.end()) blk = it->second;
-					else {
-						auto p = groundPending.find (key);
-						if (p != groundPending.end()) pending = p->second;
-						else {
-							pending = groundPending[key] = made.get_future ().share ();
-							mine = true;
-						}
-					}
-				}
-				if (mine) {
-					groundMaking++;
-					blk = MakeGroundBlock (bi, bj);
-					groundMaking--;
-					{
-						std::unique_lock<std::shared_mutex> lock (groundMtx);
-						if (groundBlocks.size() > 50000) groundBlocks.clear();
-						groundBlocks[key] = blk;
-						groundPending.erase (key);
-					}
-					made.set_value (blk);
-				} else if (!blk) blk = pending.get ();
-			}
-			Cached &c = cache[next++ & 3];
-			c.map = serial, c.key = key, c.blk = std::move (blk);
-			b = c.blk.get();
-		}
-		g[k] = (*b)[(ni - bi * GBLOCK) * GBLOCK + (nj - bj * GBLOCK)];
-	}
-	double w[4] = { (1 - fu) * (1 - fv), (1 - fu) * fv, fu * (1 - fv), fu * fv }, s = 0.0, sw = 0.0;
-	for (int k = 0; k < 4; k++)
-		if (!std::isnan (g[k])) s += w[k] * g[k], sw += w[k];
-	return sw > 0.5 ? s / sw : std::numeric_limits<double>::quiet_NaN ();
+	return ground->Ground (lat, lng);
 }
 
 double CityMap::Built (const Vector &dir)

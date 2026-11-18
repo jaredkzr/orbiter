@@ -12,6 +12,8 @@
 layout(push_constant) uniform Prepass {
 	mat4 modelView;        // frame of the transforms -> view
 	mat4 prevClipFromView; // view space now -> clip space of the previous frame
+	vec4 pbr;
+	vec4 maps;             // w: a base's buildings (no fade)
 } pp;
 
 #include "building.glsl"
@@ -26,7 +28,7 @@ void main()
 {
 	// (gone by the hand-off to the night light texture: not drawn, as in
 	// the colour pass, building.vert)
-	if (BuildingFadedOut(BuildingAltFade(frame.city[3].w))) {
+	if (pp.maps.w < 0.5 && BuildingFadedOut(BuildingAltFade(frame.city[3].w))) {
 		gl_Position = vec4(2.0, 2.0, 2.0, 1.0); // (outside: none)
 		vPosView = vNormalView = vec3(0.0), vClip = vPrevClip = vec4(0.0), vUV = vec2(0.0);
 		return;

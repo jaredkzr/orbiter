@@ -2,21 +2,47 @@
 
 Noted for later; not yet started.
 
-## Scenery: Cape Canaveral's terrain and the Shuttle Landing Facility's runway
+## Scenery: after the bases' ground and runways (2026-11-17)
 
-Seen in the landing videos (2026-11-15: `Tests/Audio/LandingVideo.scn`, a delta-glider landing on
-the SLF, runway 33, rendered by the Vulkan client):
+Done: bare earth (`BareEarth` in base files) at Cape Canaveral, Wallops Island,
+Matagorda, Sriharikota, Peenemünde and Kourou; every paved runway of Earth's
+bases drawn with its markings (`MARKINGS` in the base files, drawn by the Vulkan
+client: `runway.glsl`; the SLF and the Skid Strip surveyed); tiled pavement
+textures with normal and roughness maps; landing pads restyled (`pad.glsl`:
+markings, per-body pavement, night lights); a
+fine grain on base ground meshes; no tyre tracks on paved ground; no surf on
+canals and ponds. Left over:
 
-- **The terrain around the Cape is spiky.** The ground near the runway and along the horizon shows
-  steep, jagged hills where the real Cape is flat coastal land (a few metres above sea level).
-  Suspect the elevation data or its interpolation at this location (spikes or noise in the tiles,
-  or the procedural detail added on top). It also upsets anything flying low over it: a landing
-  autopilot reading its height above the ground porpoised over it (the approach now starts over
-  the runway to avoid it).
-- **The runway has no proper surface.** Its definition (`Src/Celbody/Vsop87/Earth/Config/Earth/Base/Canaveral.cfg`,
-  the `RUNWAY` with `END1 -1150 0 -2880`, `END2 -5600 0 -5435`, `WIDTH 100`, `RWTEX Runway2`) has
-  `NRWSEG 0`, its 15 textured segments commented out. So no runway is drawn: what is seen is the
-  satellite texture under it, blurred at low height, without markings. Wanted: a runway mesh and
-  texture at the real dimensions (4,572 m x 91 m) with its markings (threshold, designators,
-  touchdown zone, centreline, edges), crisp from the cockpit at touchdown; and checking how the
-  Vulkan client draws base runways (`RUNWAY` segments) once they are enabled.
+- **Bare earth elsewhere**: surveyed, not enabled (radial profiles to 15 km,
+  with and without):
+  - Alcântara and Svobodniy: the ground filter (the lowest tenth within
+    600 m) cut real relief - Alcântara's plateau by its cliffs, Svobodniy's
+    hills (mean drops of 10 and 14 m). They need a filter that tells canopy
+    from slopes (e.g. the lowest tenth of the slope-detrended data).
+  - Plesetsk: unbroken taiga - no ground within 600 m to find; little change.
+  - Havana: built up; the cities' own levelling (`CityMap::Ground`) is off
+    near bases (their fade) - decide which of the two should hold there.
+- **Runway designators** not given (`DESIG`) come from the true heading; real
+  designators are magnetic (a few are one off). Most of Earth's runways are
+  placeholders (3000 x 60 m at round headings); real ones can be surveyed (the
+  FAA's or the AIP's ends) and given their designators, overruns and surfaces.
+- **Runway and pad markings in other clients**: only the Vulkan client draws
+  them (others show the tiled pavement; `STYLE classic` keeps a pad's old
+  texture); nor do ray traced reflections show them.
+- **Base asset overhaul** (plan: Phase 0 infrastructure and Phase 1a/1b done - client-drawn
+  generic buildings, the off-world kit in Blender, night maps, kit lights, collision flags):
+  left - Brighton's monorail (TRAIN2: girders, moving cars), the Earth kit and Earth looks
+  (Phase 2), Cape Canaveral's VAB/LCC and modern LC-39A/B (Phase 3), SOLARPLANT, Train1.
+- **Classic pads' curvature**: `STYLE classic` pads (and other base objects
+  kilometres from their base's centre) are still planes at the curvature of
+  their centre, tilted against the ground by up to centimetres; the marked
+  pads follow it (`Lpad::ExportMarkedGroup`).
+- **White Sands' lakebed runways** (width 0, the gypsum) still use `Runway2`:
+  nothing is drawn; they could get painted lines on the bare ground.
+- **Wet sand along canals**: the shore field's wet-sand band (`coastPrm.x`)
+  still runs along narrow water, like the surf did; the same open-water test
+  (`OpenWater`, tile_main.glsl) could scale it.
+- **`ORBITER_VK_VIDEO_FILE` flights are not repeatable**: the landing autopilot
+  (`Script/Tests/LandingVideo.lua`) touches down 560-740 m in with it, 1099 m
+  without, every time; so do real-time runs. Its control loop seems to miss
+  frames when they are paced by the encoder or the clock.

@@ -58,5 +58,6 @@ void main()
 	// the hand-off to the night light texture by the camera's altitude above
 	// the ground (building.glsl BuildingAltFade)
 	vFade *= BuildingAltFade(frame.city[3].w);
+	if (draw.specular.x > 0.5) vFade = 1.0; // (a base's buildings: drawn with it, no fade)
 	gl_Position = frame.proj * RelApparent (p); // (relativistic view: as seen)
 }

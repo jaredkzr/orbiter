@@ -59,11 +59,25 @@ namespace vkcity {
 	// a door on the front, coated glass, front on -x (else -z), decoration (4)
 	// BInst::bits[1]: wall colour (RGB 565), seed (16)
 
-	/// parts of a shape (building.frag)
-	enum Part { P_FACADE = 0, P_WALL = 1, P_ROOF_FLAT = 2, P_ROOF = 3, P_TRIM = 4, P_SOFFIT = 5 };
+	/// parts of a shape (building.frag); P_CURVED: a cylinder's wall (windows
+	/// about its circumference)
+	enum Part { P_FACADE = 0, P_WALL = 1, P_ROOF_FLAT = 2, P_ROOF = 3, P_TRIM = 4, P_SOFFIT = 5, P_CURVED = 6 };
 
-	/// shapes
-	enum Shape { S_BOX, S_FLAT, S_PLANT, S_GABLE, S_HIP, S_MANSARD, S_SETBACK, S_SETBACK2, S_PYRAMID, S_SHED, NSHAPE };
+	/// shapes; S_BARREL, S_ARCH, S_CYL: the bases' (HANGAR: walls and a round
+	/// roof across x, along z; HANGAR3: an arch from the ground, along z; TANK)
+	enum Shape { S_BOX, S_FLAT, S_PLANT, S_GABLE, S_HIP, S_MANSARD, S_SETBACK, S_SETBACK2, S_PYRAMID, S_SHED,
+		S_BARREL, S_ARCH, S_CYL, NSHAPE };
+
+	/// where a base stands, for its buildings' looks (Kit::MakeBase)
+	struct BaseEnv {
+		bool vacuum = false;   // (surface pressure under 10 kPa: pressurised modules, regolith cover)
+		bool insulated = false; // (cold and dense: Titan)
+		float soil[3] = { 0.5f, 0.5f, 0.5f }; // the ground's colour (regolith cover; linear)
+	};
+
+	/// A lamp of a base's building (Kit::BaseLights; base frame): a glow, or a
+	/// floodlight (dir: its beam) lighting the ground about it
+	struct BaseLamp { double pos[3]; float col[3]; float size; bool flood; double dir[3]; double range, umbra, penumbra; /* [m], [deg] */ };
 
 	class Kit {
 	public:
@@ -82,6 +96,19 @@ namespace vkcity {
 		int Make (const CITYBUILDING &b, BInst &inst, bool far) const;
 		/// the simpler shape for far buildings
 		static int Far (int shape);
+		/// A base's generic building (BLOCK, HANGAR, HANGAR2, HANGAR3, TANK:
+		/// oapiGetBaseBuildings): its instance (frame and position in the base
+		/// frame, looks by its textures' names and where the base is) and shape
+		int MakeBase (const BASEBUILDINGSPEC &b, const BaseEnv &env, BInst &inst) const;
+		/// A shape's triangles as an instance makes them (the instance's frame:
+		/// shadows, ray tracing, ray hits): appended to vtx (positions, normals) and idx
+		void Expand (int shape, const BInst &inst, std::vector<NTVERTEX> &vtx, std::vector<uint16_t> &idx) const;
+		/// A base's building's lamps at night (as MakeBase made it): lamps over a
+		/// hangar's door and a floodlight on the ground before it; a lamp over an
+		/// airlock or a door; marker lights along a covered tunnel's ridge; red
+		/// obstruction lights on high roofs (and on pressurised hubs, with a
+		/// floodlight over them: the ground about them)
+		void BaseLights (int shape, const BInst &inst, std::vector<BaseLamp> &out) const;
 		/// Boxes for the ray tracing scene (the unit box: x, z -0.5 to 0.5, y 0
 		/// to 1): rows of their 3x4 transforms (scaled) appended to rows; below
 		/// the roofs (a flat roof is not inside its box), tiers of setbacks
@@ -93,6 +120,8 @@ namespace vkcity {
 		vkc::Context *ctx;
 		TextureManager *tm;
 		vkc::Buffer vb, ib;
+		std::vector<BVertex> cv;    // (the shapes, on the CPU: Expand)
+		std::vector<uint16_t> cidx;
 		Range range[NSHAPE] = {};
 		VkTexture *tex = nullptr;
 		std::vector<int> styles; // per CITYBUILDING::style: region (Kit.cpp)

@@ -627,7 +627,8 @@ def pad_complex (L, r, cx, cz, b0):
 	L.grade (cx, cz, b0, 100, 80) # (the pad between the aprons: one level with them)
 	for (lx, lz) in ((0, -100), (0, 100), (-100, 0), (100, 0)):
 		px, pz = P (lx, lz)
-		L.floods.append ((px, 25, pz, cx - px, 0.15 * math.hypot (lx, lz), cz - pz))
+		# (wide beams: the pad, its aprons and the ground about them)
+		L.floods.append ((px, 25, pz, cx - px, 0.15 * math.hypot (lx, lz), cz - pz, 60, 100))
 	L.keep.append ((cx, cz, 260.0))
 
 def flat_site (T, occ, w, d, r_occ, rmin, rmax, bearings, step=250.0):
@@ -775,34 +776,6 @@ def campus (L, r, cx, cz, bb):
 	L.keep.append ((cx, cz, 350.0))
 	return (cx, cz)
 
-def ground_mesh (L, path):
-	"""roads and aprons as a mesh (base frame; wrapped onto the ground by Orbiter)"""
-	B = MeshBuilder ()
-	SEG = 20.0
-	for g in L.ground:
-		if g[0] == "strip":
-			_, pts, w, mat = g
-			for (a, b) in zip (pts[:-1], pts[1:]):
-				dx, dz = b[0] - a[0], b[1] - a[1]
-				l = math.hypot (dx, dz)
-				if l < 1e-3: continue
-				n = max (1, int (math.ceil (l / SEG)))
-				px, pz = -dz / l * w / 2, dx / l * w / 2
-				for k in range (n):
-					p0 = (a[0] + dx * k / n, a[1] + dz * k / n); p1 = (a[0] + dx * (k + 1) / n, a[1] + dz * (k + 1) / n)
-					q = [(p0[0] - px, p0[1] - pz), (p1[0] - px, p1[1] - pz), (p1[0] + px, p1[1] + pz), (p0[0] + px, p0[1] + pz)]
-					B.poly ([(BF (*e)[0], 0.05, BF (*e)[1]) for e in q], (0, 1, 0), mat, tex="Concrete.dds")
-		elif g[0] == "rect":
-			_, (x, z), (w, d), bb, mat = g
-			s, c = math.sin (math.radians (bb)), math.cos (math.radians (bb))
-			nx, nz = max (1, int (math.ceil (w / SEG))), max (1, int (math.ceil (d / SEG)))
-			for i in range (nx):
-				for k in range (nz):
-					q = [(-w / 2 + w * ii / nx, -d / 2 + d * kk / nz) for (ii, kk) in ((i, k), (i + 1, k), (i + 1, k + 1), (i, k + 1))]
-					e = [(x + lx * c + lz * s, z - lx * s + lz * c) for (lx, lz) in q]
-					B.poly ([(BF (*p)[0], 0.03, BF (*p)[1]) for p in e], (0, 1, 0), mat, tex="Concrete.dds")
-	B.write (path)
-
 BEGIN, END = ";; BaseKit: generic launch complex (Utils/BaseKit/basekit.py)", ";; BaseKit end"
 
 GBEGIN, GEND = ";; BaseKit grade: graded ground of the kit (Utils/BaseKit/basekit.py)", ";; BaseKit grade end"
@@ -824,14 +797,11 @@ def cfg_block (L):
 		out += ["LPAD2", "\tPOS %.1f 0 %.1f" % (x, z), "\tSCALE 1", "\tROT %.1f" % BROT (bearing), "\tTEX Lpad02", "END"]
 	for (a, b, w) in L.runways:
 		(x1, z1), (x2, z2) = BF (*a), BF (*b)
-		rl = math.hypot (x2 - x1, z2 - z1)
-		segs = [(0.018, 0.25, 0.5, 1, 0.875), (0.088, 0, 0.25, 0.5, 0), (0.018, 0.25, 0.5, 0.75, 0.625), (0.088, 0, 0.25, 0.5, 0),
-			(0.576, 0, 0.25, 1, 0.5), (0.088, 0, 0.25, 0.5, 0), (0.02, 0.25, 0.5, 0.625, 0.75), (0.088, 0, 0.25, 0, 0.5),
-			(0.02, 0.25, 0.5, 0.875, 1)]
-		out += ["RUNWAY", "\tEND1 %.1f 0 %.1f" % (x1, z1), "\tEND2 %.1f 0 %.1f" % (x2, z2), "\tWIDTH %g" % w, "\tNRWSEG %d" % len (segs)]
-		for k, sg in enumerate (segs): # (subdivided: vertices at most 40 m apart, on the ground)
-			out.append ("\tRWSEG%d %d \t%g \t%g \t%g \t%g \t%g" % ((k + 1, max (1, int (math.ceil (sg[0] * rl / 40.0)))) + sg))
-		out += ["\tRWTEX Runway2", "END",
+		# (markings drawn by the client: runway.glsl; designators by the heading from each end, END1's towards END2)
+		hdg = math.degrees (math.atan2 (z2 - z1, -(x2 - x1))) % 360.0
+		desig = lambda h: "%02d" % (int (round (h / 10.0)) % 36 or 36)
+		out += ["RUNWAY", "\tEND1 %.2f 0 %.2f" % (x1, z1), "\tEND2 %.2f 0 %.2f" % (x2, z2), "\tWIDTH %.2f" % w,
+			"\tMARKINGS precision", "\tDESIG %s %s" % (desig (hdg), desig (hdg + 180.0)), "\tSURFACE asphalt", "END",
 			"RUNWAYLIGHTS", "\tEND1 %.1f 0 %.1f" % (x1, z1), "\tEND2 %.1f 0 %.1f" % (x2, z2), "\tWIDTH %g" % w, "\tCOUNT1 40", "END"]
 	for (mesh, e, y, n, bearing, shadow) in L.objs:
 		x, z = BF (e, n)
@@ -880,10 +850,20 @@ def update_vk (path, L, title):
 		"; r g b: the lamp's brightness (its glow; about 6 for a xenon flood). As a light it gives r g b x 0.01",
 		"; of sunlight (VObjects.cpp FLOOD_IRRADIANCE) out to a fifth of the range, the inverse square beyond",
 		"; (made by Utils/BaseKit/basekit.py: floodlights about the pad)"]
-	for (e, y, n, de, dy, dn) in L.floods:
+	for f in L.floods:
+		(e, y, n, de, dy, dn), (um, pen) = f[:6], (f[6:8] if len (f) >= 8 else (30, 50))
 		(x, z), (dx, dz) = BF (e, n), BF (de, dn)
 		l = math.sqrt (dx * dx + dy * dy + dz * dz)
-		lines.append ("FLOODLIGHT %.0f %.0f %.0f  %.3f %.3f %.3f  400  6 5.6 5  30 50" % (x, y, z, dx / l, dy / l, dz / l))
+		lines.append ("FLOODLIGHT %.0f %.0f %.0f  %.3f %.3f %.3f  400  6 5.6 5  %d %d" % (x, y, z, dx / l, dy / l, dz / l, um, pen))
+	# (the other tools' blocks kept: "; BEGIN <tool>" to "; END <tool>", kitlights.py, ground.py)
+	if os.path.exists (path):
+		old = open (path).read ().split ("\n")
+		keep, on = [], False
+		for l in old:
+			if l.startswith ("; BEGIN "): on = True
+			if on: keep.append (l)
+			if l.startswith ("; END "): on = False
+		lines += keep
 	with open (path, "w", newline="\n") as f: f.write ("\n".join (lines) + "\n")
 
 def cmd_layout (gridfile, cfgdirs, meshdir=None, vkdir=None):
@@ -896,11 +876,13 @@ def cmd_layout (gridfile, cfgdirs, meshdir=None, vkdir=None):
 		L.regrade ()
 		for d in cfgdirs:
 			update_cfg (os.path.join (d, b + ".cfg"), L)
-		if meshdir: ground_mesh (L, os.path.join (meshdir, "BaseKit", b + "_ground.msh"))
 		if vkdir:
 			t, _, _ = read_cfg (os.path.join (cfgdirs[0], b + ".cfg"))
 			title = re.search (r"Name\s*=\s*(.+)", t).group (1).strip ()
 			update_vk (os.path.join (vkdir, vk_name (title)), L, title)
+		if meshdir: # (its roads and aprons, clear of its pads; their lights: ground.py)
+			import ground
+			ground.make (b, L, os.path.join (cfgdirs[0], b + ".cfg"), meshdir, tex="Concrete.dds")
 		print ("%-15s %2d objects, %d new pads, %d runways" % (b, len (L.objs), len (L.pads), len (L.runways)))
 
 if __name__ == "__main__":

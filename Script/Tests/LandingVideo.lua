@@ -1,6 +1,7 @@
 -- A delta-glider's landing on KSC's runway 33, flown by a simple autopilot,
 -- for listening to its contact sounds in context (Tests/Audio/LandingVideo.scn):
--- final approach from LV_HEIGHT m (default 35), sinking 3 m/s at LV_SPEED m/s (105),
+-- final approach from LV_BACK m short of the threshold (1500; < 0: past it), sinking 3 m/s at
+-- LV_SPEED m/s (105) from LV_HEIGHT m (by default as high as puts it down about 1350 m in),
 -- flare to about LV_SINK m/s (default 1.3: the wheels close at about 1.2 m/s), thrust cut, the nose lowered,
 -- the brakes (LV_BRAKE) from 2 s after touchdown to a stop.
 --   LV_VIEW=ground (default: beside the runway where it comes down) | chase | cockpit
@@ -18,9 +19,14 @@ local function gpos() return oapi.get_globalpos(v:get_handle()) end
 local function env(n, d) return tonumber(os.getenv(n) or "") or d end
 local BELLY = os.getenv("LV_GEAR") == "up"
 local CRASH = os.getenv("LV_CRASH") == "1"
-local H0, SINK = env("LV_HEIGHT", 35.0), env("LV_SINK", BELLY and 1.0 or 1.3)
+local SINK = env("LV_SINK", BELLY and 1.0 or 1.3)
 local CRASH_SINK = env("LV_CRASH_SINK", 12.0)
-local VREF, BACK = env("LV_SPEED", 105.0), -200.0   -- [m/s] approach speed, [m] start short of where it stands (the threshold; < 0: past it - over the runway all the way: no terrain under the approach)
+-- [m/s] approach speed; [m] start short of where it stands (the threshold), over the ground
+-- before it (Cape Canaveral's bare earth: once canopy 5-10 m high, which the approach then
+-- avoided by starting 200 m past the threshold, over the runway); [m] the height there: from
+-- 35 m at 200 m past the threshold, 3 m/s further up for each second further back
+local VREF, BACK = env("LV_SPEED", 105.0), env("LV_BACK", 1500.0)
+local H0 = env("LV_HEIGHT", 35.0 + (BACK + 200.0) * 3.0 / VREF)
 local view = os.getenv("LV_VIEW") or "ground"
 local SIDE = env("LV_SIDE", 0.0)
 LV_ROLL = env("LV_ROLL", 30.0)   -- [s] of the rollout shown (at most: it ends stopped)
@@ -61,7 +67,8 @@ proc.skip()
 local st = v:get_status(2)
 st.status = 0
 st.arot = {x=math.atan2(R.m23, R.m33), y=-math.asin(R.m13), z=math.atan2(R.m12, R.m11)}
-st.rpos = vec.add(st.rpos, vec.add(vec.add(vec.mul(fwd, -BACK), vec.mul(up, H0)), vec.mul(right, SIDE)))
+local fwdH = vec.unit(vec.sub(fwd, vec.mul(up, vec.dotp(fwd, up))))   -- (level: the nose's tilt on the ground over BACK would be metres of height)
+st.rpos = vec.add(st.rpos, vec.add(vec.add(vec.mul(fwdH, -BACK), vec.mul(up, H0)), vec.mul(right, SIDE)))
 st.rvel = vec.add(st.rvel, vec.add(vec.mul(fwd, VREF), vec.mul(up, -3.0)))
 st.vrot = {x = 0, y = 0, z = 0}
 v:defset_status(st)
@@ -117,7 +124,7 @@ local function step()   -- (one frame's flying; true: done)
 	v:set_adclevel(AIRCTRL.AILERON, clamp(2.0 * bank + 0.8 * w.z, -1, 1))
 	v:set_adclevel(AIRCTRL.RUDDER, clamp(-3.0 * cross + 1.0 * w.y, -1, 1))
 	if t >= nextLog then
-		oapi.write_log(string.format("LandingVideo: t %.2f h %.2f vs %.2f air %.1f pitch %.1f bank %.1f cross %.3f elev %.2f mode %d", t - tstart, h, vs, as, math.deg(pitch), math.deg(bank), cross, v:get_adclevel(AIRCTRL.ELEVATOR), v:get_adcmode()))
+		oapi.write_log(string.format("LandingVideo: t %.2f h %.2f hg %.2f vs %.2f air %.1f pitch %.1f bank %.1f cross %.3f elev %.2f mode %d", t - tstart, h, hg, vs, as, math.deg(pitch), math.deg(bank), cross, v:get_adclevel(AIRCTRL.ELEVATOR), v:get_adcmode()))
 		nextLog = t + 0.5
 	end
 	if CRASH and tdown and t > tdown + 8 then return true end

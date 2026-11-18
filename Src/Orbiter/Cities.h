@@ -71,6 +71,7 @@ class Planet;
 class ZTreeMgr;
 class ElevationManager;
 struct ElevationTile;
+class GroundFilter;
 namespace scatter { class Cover; }
 
 namespace cities {
@@ -247,24 +248,8 @@ namespace cities {
 		std::vector<Clearing> clear;
 		bool basesDone = false;
 		unsigned generation = 0;
-		// the ground (Ground): its nodes, made from the data alone by elevation
-		// managers of our own (one per thread at a time)
-		// in blocks of GBLOCK x GBLOCK nodes
-		static const int GBLOCK = 8;
-		typedef std::array<float, GBLOCK * GBLOCK> GroundBlock;
-		std::shared_mutex groundMtx;
-		std::unordered_map<int64_t, std::shared_ptr<const GroundBlock>> groundBlocks;
-		// (blocks being made: other threads needing one wait for it; made
-		// by each, they took a cold elevation manager each, 30 ms a block)
-		std::unordered_map<int64_t, std::shared_future<std::shared_ptr<const GroundBlock>>> groundPending;
-		std::atomic<int> groundMaking{ 0 }; // blocks being made
-		const uint64_t serial;     // (this map, for the threads' caches of its blocks: not its address, reused)
-		struct RawElev { std::mutex m; std::unique_ptr<::ElevationManager> em; std::unique_ptr<std::vector<ElevationTile>> tiles; };
-		std::vector<std::unique_ptr<RawElev>> rawElev;
-		std::mutex rawMtx;
-		float GroundNode (int64_t i, int64_t j);
-		std::shared_ptr<const GroundBlock> MakeGroundBlock (int64_t bi, int64_t bj);
-		static int64_t NodeKey (int64_t i, int64_t j) { return i * 1000003 + j; }
+		std::unique_ptr<GroundFilter> ground; // (Ground)
+		const uint64_t serial;     // (this map, for the threads' caches of its cells: not its address, reused)
 	};
 
 } // namespace cities

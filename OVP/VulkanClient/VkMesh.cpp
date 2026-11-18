@@ -53,10 +53,15 @@ VkMesh::VkMesh (vkc::Context *c, TextureManager *tm, MESHHANDLE h)
 			g.material = (mg->MtrlIdx == SPEC_NONE || mg->MtrlIdx + 1 >= materials.size()) ? 0 : mg->MtrlIdx + 1;
 			g.flags = mg->Flags;
 			g.usrFlag = mg->UsrFlag;
+			if (g.usrFlag & GRP_COLLISION) g.usrFlag |= GRP_HIDDEN; // (a collision proxy: never drawn)
 			DWORD ti = (mg->TexIdx == SPEC_NONE || mg->TexIdx >= textures.size()) ? SPEC_NONE : mg->TexIdx;
 			groupTexIdx.push_back (ti);
 			groupMtrlIdx.push_back (mg->MtrlIdx);
 			g.tex = (ti == SPEC_NONE ? nullptr : textures[ti]);
+			// (a night texture: lit at night only - bases' legacy "<name>_n" textures)
+			if (MESHGROUPEX *mx = oapiMeshGroupEx (hMesh, i))
+				if (mx->TexIdxEx[0] < textures.size() && textures[mx->TexIdxEx[0]])
+					g.nightMaps = texmgr->MakeNightMaps (g.tex, textures[mx->TexIdxEx[0]]);
 			g.transparent = IsTransparent (materials[g.material], g);
 			vtx.insert (vtx.end(), mg->Vtx, mg->Vtx + mg->nVtx);
 			idx.insert (idx.end(), mg->Idx, mg->Idx + mg->nIdx);
@@ -126,9 +131,13 @@ VkMesh::~VkMesh ()
 	for (auto tex : cfgTextures) texmgr->Release (tex);
 	vkc::Context *c = ctx;
 	vkc::Buffer vb = vbuf, ib = ibuf;
-	ctx->DeferDestroy ([c, vb, ib]() mutable {
+	std::vector<TexMaps*> nm;
+	for (auto &g : groups) if (g.nightMaps) nm.push_back (g.nightMaps);
+	TextureManager *tm = texmgr;
+	ctx->DeferDestroy ([c, vb, ib, nm, tm]() mutable {
 		c->DestroyBuffer (vb);
 		c->DestroyBuffer (ib);
+		for (TexMaps *m : nm) tm->FreeGroupMaps (m);
 	});
 }
 

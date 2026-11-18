@@ -962,6 +962,15 @@ double Planet::Elevation (double lng, double lat) const
 	return (emgr ? emgr->Elevation(lat,lng) : 0.0);
 }
 
+bool Planet::Paved (double lng, double lat) const
+{
+	// (a base's pads, decks and graded ground: a pad on the Moon is paved too)
+	if (emgr && (emgr->DeckElevation (lat, lng) > -1e9 || emgr->DryLand (lat, lng))) return true;
+	for (DWORD i = 0; i < nBase (); i++)
+		if (GetBase (i)->Paved (lng, lat)) return true;
+	return false;
+}
+
 Vector Planet::GroundVelocity (double lng, double lat, double alt, int frame)
 {
 	if (frame < 2 || frame > 3) return Vector(0,0,0); // sanity check

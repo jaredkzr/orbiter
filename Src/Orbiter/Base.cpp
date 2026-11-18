@@ -74,6 +74,11 @@ Base::Base (char *fname, Planet *_planet, double _lng, double _lat)
 
 	// a floating base: its altitude, its decks
 	if (GetItemReal (ifs, "ALTITUDE", elev)) floating = true;
+	// bare earth about the base (TerrainDetail): radius [blend] [m]
+	if (GetItemString (ifs, "BAREEARTH", cbuf)) {
+		double r = 0.0, b = bareBlend;
+		if (sscanf (cbuf, "%lf%lf", &r, &b) >= 1 && r > 0.0) bareR = r, bareBlend = std::max (b, 1.0);
+	}
 	ifs.clear (); // (an item not found leaves the stream failed: FindLine would not rewind it)
 	if (floating && FindLine (ifs, "BEGIN_DECKS")) {
 		for (;;) {
@@ -82,6 +87,16 @@ Base::Base (char *fname, Planet *_planet, double _lng, double _lat)
 			if (sscanf (cbuf, "%lf%lf%lf%lf", &d.x, &d.z, &d.r, &d.h) == 4) decks.push_back (d);
 		}
 	}
+
+	// areas the bare earth leaves alone
+	if (bareR > 0.0 && FindLine (ifs, "BEGIN_BAREEARTH_KEEP")) {
+		for (;;) {
+			if (!ifs.getline (cbuf, 256) || !_strnicmp (trim_string (cbuf), "END_BAREEARTH_KEEP", 18)) break;
+			BareKeep k;
+			if (sscanf (cbuf, "%lf%lf%lf", &k.x, &k.z, &k.r) == 3) bareKeep.push_back (k);
+		}
+	}
+	ifs.clear ();
 
 	// graded ground
 	if (FindLine (ifs, "BEGIN_GRADE")) {
@@ -359,7 +374,7 @@ void Base::Setup ()
 					double plng, plat;
 					Rel_EquPos (pad->GetPos (), plng, plat);
 					// (at least the ground a vessel on it stands on: some pads are markers, drawn at no size)
-					emgr->AddDryLand (plat, plng, std::max (pad->Radius (), DRY_PAD_MIN));
+					emgr->AddDryLand (plat, plng, std::max (pad->Reach (), DRY_PAD_MIN));
 				}
 	}
 
@@ -473,6 +488,64 @@ void Base::ExportShadowGeometry (Mesh ***mesh_shadow, double **elev, DWORD *nmes
 	*nmesh_shadow = nobjmsh_sh;
 }
 
+// the merged meshes' group flags: bit 0 no ground shadow; MESHGRP_RUNWAY a
+// runway with markings (its texture coordinates its slabs: the client draws
+// the markings)
+static DWORD GroupFlag (BaseObject *bo, bool groundsh)
+{
+	DWORD f = groundsh ? 0 : 1;
+	if ((bo->GetSpecs() & OBJSPEC_RWY) && ((Runway*)bo)->Marked ()) f |= MESHGRP_RUNWAY;
+	if ((bo->GetSpecs() & OBJSPEC_LPAD) && ((Lpad*)bo)->Marked ()) f |= MESHGRP_PAD;
+	if (bo->GetBuildingSpec (nullptr)) f |= MESHGRP_BUILDING;
+	return f;
+}
+
+double Base::PadReach (DWORD pad) const
+{
+	for (DWORD i = 0; i < nobj; i++)
+		if ((obj[i]->GetSpecs() & OBJSPEC_LPAD) && ((Lpad*)obj[i])->GetPadno () == pad) return ((Lpad*)obj[i])->Reach ();
+	return 0.0;
+}
+
+bool Base::GetPadSpec (DWORD pad, PADSPEC *spec) const
+{
+	for (DWORD i = 0; i < nobj; i++)
+		if ((obj[i]->GetSpecs() & OBJSPEC_LPAD) && ((Lpad*)obj[i])->GetPadno () == pad) {
+			((Lpad*)obj[i])->GetSpec (spec);
+			return true;
+		}
+	return false;
+}
+
+DWORD Base::GetBuildings (BASEBUILDINGSPEC *spec, DWORD n) const
+{
+	DWORD k = 0;
+	for (DWORD i = 0; i < nobj; i++)
+		if (obj[i]->GetBuildingSpec (nullptr)) {
+			if (spec && k < n) obj[i]->GetBuildingSpec (spec + k), spec[k].index = k;
+			k++;
+		}
+	return k;
+}
+
+const char *Base::GenericTextureName (LONGLONG id)
+{
+	for (int i = 0; i < ngenerictex; i++)
+		if (generic_tex_id[i] == id) return generic_tex_name[i];
+	return nullptr;
+}
+
+DWORD Base::GetRunways (RUNWAYSPEC *spec, DWORD n) const
+{
+	DWORD k = 0;
+	for (DWORD i = 0; i < nobj; i++)
+		if (obj[i]->GetSpecs() & OBJSPEC_RWY) {
+			if (spec && k < n) ((Runway*)obj[i])->GetSpec (spec + k);
+			k++;
+		}
+	return k;
+}
+
 void Base::ScanObjectMeshes () const
 {
 	if (objmsh_valid) return; // done already
@@ -496,8 +569,9 @@ void Base::ScanObjectMeshes () const
 					DWORD &ngrp     = (undersh ? ngrp_us : ngrp_os);
 					GroupSpec *&grp = (undersh ? grp_us : grp_os);
 					DWORD texidx = GetGenericTextureIdx (texid);
+					DWORD flag = GroupFlag (bo, groundsh);
 					for (k = 0; k < ngrp; k++) {
-						if (grp[k].TexIdx == texidx && (grp[k].UsrFlag & 0x1) != groundsh) {
+						if (grp[k].TexIdx == texidx && grp[k].UsrFlag == flag) {
 							grp[k].nVtx += nvtx;
 							grp[k].nIdx += nidx;
 							break;
@@ -513,7 +587,7 @@ void Base::ScanObjectMeshes () const
 						grp[ngrp].nVtx = nvtx;
 						grp[ngrp].nIdx = nidx;
 						grp[ngrp].TexIdx = texidx;
-						grp[ngrp].UsrFlag = (groundsh ? 0:1);
+						grp[ngrp].UsrFlag = flag;
 						ngrp++;
 					}
 				}
@@ -551,8 +625,9 @@ void Base::ScanObjectMeshes () const
 				DWORD &ngrp     = (undersh ? ngrp_us : ngrp_os);
 				GroupSpec *&grp = (undersh ? grp_us : grp_os);
 				DWORD texidx = GetGenericTextureIdx (texid);
+				DWORD flag = GroupFlag (bo, groundsh);
 				for (k = 0; k < ngrp; k++) {
-					if (grp[k].TexIdx == texidx && (grp[k].UsrFlag & 0x1) != groundsh) break;
+					if (grp[k].TexIdx == texidx && grp[k].UsrFlag == flag) break;
 				}
 				bo->ExportGroup (j, grp[k].Vtx+grp[k].nVtx, grp[k].Idx+grp[k].nIdx, grp[k].nVtx);
 				grp[k].nVtx += nvtx;
@@ -641,9 +716,10 @@ const std::vector<collision::Hull> &Base::CollisionHulls () const
 		}
 		if (spec & OBJSPEC_EXPORTMESH) {
 			if (Mesh *m = bo->ExportMesh()) {
+				bool proxy = collision::HasProxy (*m);
 				for (DWORD g = 0; g < m->nGroup(); g++) {
 					const GroupSpec *grp = m->GetGroup (g);
-					if (!grp || (grp->Flags & 0x2) || grp->nIdx < 3) continue; // (hidden)
+					if (!grp || grp->nIdx < 3 || !collision::Collides (grp->UsrFlag, proxy)) continue;
 					addTris (grp->Vtx, grp->Idx, grp->nIdx);
 				}
 			}

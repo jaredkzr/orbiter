@@ -408,10 +408,32 @@ void TextureManager::LoadMaps (VkTexture *tex, const std::string &path)
 		else if (i == MAP_NORM && FileExists (stem + "_bump" + ext)) m = LoadBumpAsNormal (stem + "_bump" + ext);
 		if (m) maps.tex[i] = m, maps.flags |= 1u << i;
 	}
+	// (a "_night" map: emission at night only - windows, lamps)
+	if (!(maps.flags & (1u << MAP_EMIS)) && FileExists (stem + "_night" + ext))
+		if (VkTexture *m = LoadDDS (stem + "_night" + ext, false))
+			maps.tex[MAP_EMIS] = m, maps.flags |= (1u << MAP_EMIS) | MAP_NIGHT_BIT;
 	if (!maps.flags) return;
 	tex->maps = new TexMaps (maps);
 	tex->maps->set = AllocMapSet (tex->maps);
 	oapiWriteLogV ("VulkanClient: texture maps for %s (flags 0x%02x)", path.c_str(), maps.flags);
+}
+
+TexMaps *TextureManager::MakeNightMaps (const VkTexture *tex, VkTexture *night)
+{
+	if (!night) return nullptr;
+	TexMaps *m = new TexMaps ();
+	if (tex && tex->maps) *m = *tex->maps;
+	m->tex[MAP_EMIS] = night;
+	m->flags |= (1u << MAP_EMIS) | MAP_NIGHT_BIT;
+	m->set = AllocMapSet (m);
+	return m;
+}
+
+void TextureManager::FreeGroupMaps (TexMaps *maps)
+{
+	if (!maps) return;
+	if (maps->set) vkFreeDescriptorSets (ctx->device, pool, 1, &maps->set);
+	delete maps;
 }
 
 void TextureManager::SetNormalMap (VkTexture *tex, uint32_t w, uint32_t h, const uint8_t *rgba)
