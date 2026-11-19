@@ -187,6 +187,11 @@ def rod_between (a, b, r, n=4):
 def _uv (p, n, part):
 	if part.mat is None: return (0.0, 0.0)  # (a proxy)
 	T = part.mat.tile
+	if part.uv == 'decal':  # (axis: (origin, u edge, v edge, (u0, v0, u1, v1)) - the face's rectangle onto the sheet's)
+		o, eu, ev, (u0, v0, u1, v1) = part.axis
+		d = p - Vector (o); eu, ev = Vector (eu), Vector (ev)
+		su, sv = d.dot (eu) / eu.length_squared, d.dot (ev) / ev.length_squared
+		return (u0 + su * (u1 - u0), v0 + sv * (v1 - v0))
 	if part.uv == 'cyl' and part.axis is not None:
 		ax = Vector (part.axis).normalized (); c = Vector (part.centre)
 		d = p - c

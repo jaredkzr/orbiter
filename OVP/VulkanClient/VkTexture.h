@@ -20,11 +20,17 @@ class VkTexture;
 
 /// Additional texture maps of a mesh texture, found next to it by name
 /// suffix (see the Orbiter mesh documentation, "Advanced texturing")
-enum MapSlot { MAP_NORM, MAP_RGHN, MAP_METAL, MAP_EMIS, MAP_SPEC, MAP_REFL, MAP_TRANSL, MAP_TRANSM, MAP_COUNT };
+/// MAP_DETAIL ("_detail"): a tiling detail texture laid over the base texture at a finer
+/// scale - DETAIL_RATIO (8) of its texels to one of the base's, whatever the two textures'
+/// sizes - multiplying the albedo by 0.5 + its colour (0.5: no change; linear, its mips
+/// tend to 0.5: it fades out by itself with distance). For large surfaces mapped once
+/// (no repeat) by a unique texture of some centimetres a texel: the detail gives them
+/// their grain close by (mesh.frag).
+enum MapSlot { MAP_NORM, MAP_RGHN, MAP_METAL, MAP_EMIS, MAP_SPEC, MAP_REFL, MAP_TRANSL, MAP_TRANSM, MAP_DETAIL, MAP_COUNT };
 /// TexMaps::flags: the emission map (MAP_EMIS) is lit at night only (a
 /// "_night" map; a mesh group's night texture, TexIdxEx): scaled by the
 /// object's night factor (Scene::SetObjectNight; material.glsl MAP_NIGHT)
-constexpr uint32_t MAP_NIGHT_BIT = 1u << 8;
+constexpr uint32_t MAP_NIGHT_BIT = 1u << 16; // (above the slots' bits)
 
 struct TexMaps {
 	VkTexture *tex[MAP_COUNT] = {};

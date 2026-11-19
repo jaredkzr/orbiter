@@ -43,9 +43,9 @@ namespace {
 	constexpr uint32_t DDPF_BUMPDUDV = 0x80000;
 
 	// file name suffixes of the additional maps, in MapSlot order
-	const char *const MAP_SUFFIX[MAP_COUNT] = { "norm", "rghn", "metal", "emis", "spec", "refl", "transl", "transm" };
+	const char *const MAP_SUFFIX[MAP_COUNT] = { "norm", "rghn", "metal", "emis", "spec", "refl", "transl", "transm", "detail" };
 	// maps holding data rather than colours are sampled without sRGB decoding
-	const bool MAP_LINEAR[MAP_COUNT] = { true, true, true, false, false, false, false, false };
+	const bool MAP_LINEAR[MAP_COUNT] = { true, true, true, false, false, false, false, false, true };
 
 	std::string NativePath (std::string p)
 	{

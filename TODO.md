@@ -31,8 +31,9 @@ canals and ponds. Left over:
   texture); nor do ray traced reflections show them.
 - **Base asset overhaul** (plan: Phase 0 infrastructure and Phase 1a/1b done - client-drawn
   generic buildings, the off-world kit in Blender, night maps, kit lights, collision flags):
-  left - Cape Canaveral's VAB/LCC and modern LC-39A/B (Phase 3), SOLARPLANT. (Done: trains,
-  the Earth kit in Blender, the Earth buildings' regional looks.)
+  left - SOLARPLANT (Phase 4), and checking the legacy `_n` night textures (missing from
+  `Textures`). (Done: trains, the Earth kit in Blender, the Earth buildings' regional looks,
+  Cape Canaveral's VAB/LCC and modern pads 39A/39B with the shuttle's MLP on 39B.)
 - **Scenario builder in the main menu** (Launchpad): build a scenario without editing files -
   pick the focus vessel and its class, where it starts (landed at a base: its pad or runway;
   on a planet's surface by longitude/latitude and heading; in orbit, by elements or relative

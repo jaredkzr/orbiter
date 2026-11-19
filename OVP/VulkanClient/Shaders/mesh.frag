@@ -121,6 +121,8 @@ void main()
 	}
 
 	uint maps = uint(draw.maps.x + 0.5);
+	// (a detail map: the grain of a surface whose texture is mapped once over all of it)
+	if ((maps & MAP_DETAIL) != 0u && rw == 0) base *= 0.5 + texture(detailMap, DETAIL_UV(tex, vUV)).rgb;
 	Material mat;
 	if (rw > 0) mat = SurfaceMaterialS(vNormalView, vPosView, vUV, maps, draw.pbr, true, suv, sdx, sdy, srot);
 	else mat = SurfaceMaterial(vNormalView, vPosView, vUV, maps, draw.pbr);

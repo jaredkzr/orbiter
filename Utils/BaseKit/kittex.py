@@ -12,7 +12,12 @@ lit at night only: windows, lamps).
 The colours are neutral where a mesh tints them by its material's diffuse
 colour (regolith: the body's soil; panels: their paint).
 
-    kittex.py [--only NAME] [--preview DIR] [--size N]
+A tile repeats: fine for parts a few tiles across, not for surfaces of
+hundreds of metres. Those (the Cape's pads, the Vehicle Assembly Building)
+have unique sheets instead, mapped once, with a "_detail" tile for their
+grain: capesurf.py.
+
+    kittex.py [--only NAME] [--preview DIR] [--size N]   (N: 1024, or SIZES')
 
 Writes Textures/BaseKit/<name>.dds and its maps.
 """
@@ -42,7 +47,16 @@ MATERIALS = {
 	'kit_hazard': 1.0,     # hazard stripes, yellow and black
 	'kit_concrete': 4.0,   # cast concrete: formwork panels, tie holes
 	'kit_cladding': 2.0,   # trapezoidal steel siding (Earth's sheds and halls): ribs, a lap, streaks (tinted)
+	'kit_turf': 4.0,       # mown grass on embankments (the Cape's pad mounds): patches, bare spots
+	'kit_gravel': 2.0,     # river rock (the crawlerway's surface): pebbles of 3-6 cm
+	# (the three below: once the Cape's pads'; no asset uses them now - the pads' surfaces are capesurf.py's
+	# unique sheet, cape_pad. Kept so the list's order, and with it the others' seeds, stays.)
+	'kit_padslab': 32.0,   # a launch pad's hardstand: 4 x 4 poured slabs of 8 m, each its own (joints, stains, cracks, a patch)
+	'kit_padturf': 32.0,   # grass on a pad's mound, to be seen from afar: even, nothing to catch the eye as it repeats
+	'kit_crawlerway': 12.0,  # a crawlerway lane, its width a tile (u across): river rock, crushed pale where the treads run
 }
+# (their size [px] where not --size's 1024: large tiles)
+SIZES = {'kit_padslab': 2048, 'kit_padturf': 2048, 'kit_crawlerway': 2048}
 
 
 def tile_noise (N, scale_m, T, rng):
@@ -66,13 +80,14 @@ def seams (N, T, pitch_u, pitch_v, width, offset_rows=False):
 	return cov, u, v
 
 
-def write (name, rgb, smooth, height, T, metal=None, night=None, preview=None):
+def write (name, rgb, smooth, height, T, metal=None, night=None, preview=None, norm=True):
 	N = rgb.shape[0]
 	os.makedirs (OUT, exist_ok=True)
 	base = os.path.join (OUT, name)
 	mp.write_dds (base + '.dds', np.clip (rgb, 0, 1), srgb=True)
-	nm = mp.normals (height, T / N)
-	mp.write_dds (base + '_norm.dds', nm, srgb=False, fmt='ATI2')
+	if norm:  # (not for a flat sheet: no relief to show)
+		nm = mp.normals (height, T / N)
+		mp.write_dds (base + '_norm.dds', nm, srgb=False, fmt='ATI2')
 	q = smooth.reshape (N // 4, 4, N // 4, 4).mean (axis=(1, 3))
 	z = np.zeros_like (q)
 	mp.write_dds (base + '_rghn.dds', np.stack ([z, np.clip (q, 0, 1), z], axis=2), srgb=False)
@@ -277,6 +292,52 @@ def m_concrete (N, T, rng):
 	return rgb, smooth, height, None, None
 
 
+def m_turf (N, T, rng):
+	big, mid, fine, blade = tile_noise (N, 1.2, T, rng), tile_noise (N, 0.25, T, rng), tile_noise (N, 0.03, T, rng), tile_noise (N, 0.004, T, rng)
+	dry = np.clip ((tile_noise (N, 0.6, T, rng) - 0.9) * 0.8, 0, 1)    # (yellowed patches)
+	bare = np.clip ((tile_noise (N, 0.15, T, rng) - 2.1) * 0.8, 0, 0.7)  # (sand showing through)
+	green, straw, sand = np.array ([0.33, 0.45, 0.20]), np.array ([0.55, 0.53, 0.30]), np.array ([0.70, 0.64, 0.50])
+	rgb = green[None, None, :] * (1 - dry[..., None]) + straw[None, None, :] * dry[..., None]
+	rgb = rgb * (1 + 0.06 * big + 0.06 * mid + 0.08 * fine + 0.10 * blade)[..., None]
+	rgb = rgb * (1 - bare[..., None]) + sand[None, None, :] * bare[..., None]
+	height = 0.004 * blade + 0.003 * fine + 0.01 * mid
+	smooth = 0.06 + 0.03 * blade
+	return rgb, smooth, height, None, None
+
+
+def m_gravel (N, T, rng):
+	# rounded pebbles of 2-5 cm (two layers of jittered cells of 4 cm, the second offset by half
+	# a cell; wrapping: the tile seamless), fines between them
+	C = int (round (T / 0.04)); s = T / C
+	du = T / N
+	c = (np.arange (N) + 0.5) * du
+	v0 = c[:, None] * np.ones ((1, N)); u0 = np.ones ((N, 1)) * c[None, :]
+	dome = np.zeros ((N, N)); cid = np.zeros ((N, N))
+	for off in (0.0, 0.5):
+		pts = rng.random ((C, C, 2)); col = rng.random ((C, C)); rad = rng.random ((C, C))
+		u, v = (u0 + off * s) % T, (v0 + off * s) % T
+		iu, iv = np.floor (u / s).astype (int), np.floor (v / s).astype (int)
+		for dv in (-1, 0, 1):
+			for dw in (-1, 0, 1):
+				ju, jv = iu + dw, iv + dv
+				k = (jv % C, ju % C)
+				p = pts[k]
+				r = s * (0.36 + 0.22 * rad[k])
+				d = np.hypot (u - (ju + 0.3 + 0.4 * p[..., 0]) * s, v - (jv + 0.3 + 0.4 * p[..., 1]) * s)
+				h = np.sqrt (np.clip (1 - (d / r) ** 2, 0, 1)) * r / s
+				cid = np.where (h > dome, col[k], cid)
+				dome = np.maximum (dome, h)
+	fine = tile_noise (N, 0.003, T, rng)
+	grey, beige = np.array ([0.72, 0.71, 0.68]), np.array ([0.86, 0.80, 0.68])
+	stone = (grey[None, None, :] * (1 - cid[..., None]) + beige[None, None, :] * cid[..., None]) * (0.9 + 0.04 * fine)[..., None]
+	fines = np.array ([0.50, 0.47, 0.42])[None, None, :] * (1 + 0.1 * fine)[..., None]
+	on = np.clip (dome * 6, 0, 1)[..., None]
+	rgb = fines * (1 - on) + stone * on * (0.75 + 0.25 * np.clip (dome / 0.5, 0, 1))[..., None]
+	height = 0.03 * dome + 0.0005 * fine
+	smooth = 0.12 + 0.25 * np.clip (dome * 3, 0, 1)
+	return rgb, smooth, height, None, None
+
+
 def m_cladding (N, T, rng):
 	# trapezoidal sheet: ribs every 0.25 m (crests 0.07 m, 0.03 m proud), a horizontal lap
 	# every 2 m (a tile), rain streaks down from the laps
@@ -296,21 +357,91 @@ def m_cladding (N, T, rng):
 	return rgb, smooth, height, None, None
 
 
+def m_padslab (N, T, rng):
+	P = 8.0; n = int (round (T / P))
+	cov, u, v = seams (N, T, P, P, 0.035)
+	du = T / N
+	i, j = np.floor (u / P).astype (int) % n, np.floor (v / P).astype (int) % n
+	edge = np.minimum (np.abs (((u / P) + 0.5) % 1.0 - 0.5), np.abs (((v / P) + 0.5) % 1.0 - 0.5)) * P  # (to the nearest joint [m])
+	per = lambda lo, hi: (lo + (hi - lo) * rng.random ((n, n)))[j, i]   # (a value per slab)
+	big, mid, fine, grain = tile_noise (N, 2.5, T, rng), tile_noise (N, 0.5, T, rng), tile_noise (N, 0.08, T, rng), tile_noise (N, 0.012, T, rng)
+	broom = mp.noise (N, N, (1.2, 60.0), rng)                          # (the finish: brushed along u)
+	tone = per (-0.045, 0.045)
+	dirt = np.exp (-edge / 0.18) * per (0.3, 1.0)                       # (grime gathers along the joints)
+	stain = np.clip (tile_noise (N, 0.9, T, rng) - 1.1, 0, 1.2) * per (0.0, 1.0) ** 2   # (old spills, rust: on some slabs)
+	spot = np.clip (tile_noise (N, 0.25, T, rng) - 2.2, 0, 1.0)         # (drips)
+	# (cracks: stretches of a wandering field's zero line, hair-thin)
+	c1, c2 = tile_noise (N, 2.2, T, rng), tile_noise (N, 3.0, T, rng)
+	gy, gx = np.gradient (c1, du)
+	dist = np.abs (c1) / (np.hypot (gx, gy) + 1e-3)
+	crack = np.clip ((0.012 - dist) / du + 0.5, 0, 1) * np.clip ((c2 - 0.75) * 4, 0, 1) * np.clip (edge / 0.3, 0, 1)
+	# (a repair on two slabs: a rectangle of newer concrete, its edge sawn)
+	patch = np.zeros ((N, N)); pedge = np.zeros ((N, N))
+	for (pi, pj, a0, b0, a1, b1) in ((1, 2, 1.2, 4.6, 4.4, 7.1), (3, 0, 4.9, 0.9, 7.2, 3.9)):
+		a, b = u - pi * P, v - pj * P
+		d = np.minimum (np.minimum (a - a0, a1 - a), np.minimum (b - b0, b1 - b))
+		patch = np.maximum (patch, np.clip (d / du + 0.5, 0, 1))
+		pedge = np.maximum (pedge, np.clip ((0.012 - np.abs (d)) / du + 0.5, 0, 1))
+	lum = (1 + tone + 0.030 * big + 0.030 * mid + 0.030 * fine + 0.035 * grain + 0.012 * broom) * (1 - 0.10 * dirt) * (1 - 0.16 * stain - 0.25 * spot)
+	lum = lum * (1 + 0.07 * patch) * (1 - 0.35 * crack) * (1 - 0.30 * pedge) * (1 - 0.55 * cov)
+	warm = np.clip (0.6 * stain + 0.2 * dirt, 0, 1)[..., None]           # (stains: browner)
+	rgb = (np.array ([0.74, 0.73, 0.70])[None, None, :] * (1 - warm) + np.array ([0.74, 0.69, 0.61])[None, None, :] * warm) * lum[..., None]
+	height = 0.0006 * fine + 0.0004 * grain + 0.0004 * broom - 0.008 * cov - 0.003 * crack - 0.002 * pedge
+	smooth = 0.12 + 0.03 * mid + 0.10 * spot
+	return rgb, smooth, height, None, None
+
+
+def m_padturf (N, T, rng):
+	# (nothing thresholded: patches would show the tile's repeat; the variation soft, of all sizes)
+	n8, n3, n1, n03, n008, blade = [tile_noise (N, sc, T, rng) for sc in (8.0, 3.0, 1.0, 0.3, 0.08, 0.02)]
+	dry = np.clip (0.36 + 0.07 * n8 + 0.10 * n3 + 0.11 * n1 + 0.08 * n03 + 0.05 * n008, 0, 1)[..., None]
+	green, straw = np.array ([0.32, 0.49, 0.29]), np.array ([0.50, 0.56, 0.35])
+	rgb = green[None, None, :] * (1 - dry) + straw[None, None, :] * dry
+	rgb = rgb * (1 + 0.03 * n8 + 0.04 * n3 + 0.05 * n1 + 0.07 * n03 + 0.10 * n008 + 0.12 * blade)[..., None]
+	height = 0.006 * blade + 0.008 * n008 + 0.012 * n03
+	smooth = 0.06 + 0.03 * blade
+	return rgb, smooth, height, None, None
+
+
+def m_crawlerway (N, T, rng):
+	# (river rock as kit_gravel's; across the lane (u) two bands where the crawler's treads run:
+	# the stone crushed pale and flat, faint ribs of the shoes' pitch; the edges coarser, darker)
+	rgb, smooth, height, _, _ = m_gravel (N, T, rng)
+	du = T / N
+	c = (np.arange (N) + 0.5) * du
+	v = c[:, None] * np.ones ((1, N)); u = np.ones ((N, 1)) * c[None, :]
+	wob = 0.07 * tile_noise (N, 4.0, T, rng)[:, :1]                     # (the bands wander a little along the lane)
+	band = np.zeros ((N, N))
+	for uc in (T / 2 - 2.7, T / 2 + 2.7):
+		band = np.maximum (band, np.clip ((1.35 - np.abs (u - uc - wob)) / 0.5, 0, 1))
+	band = band * band * (3 - 2 * band) * (0.75 + 0.12 * tile_noise (N, 1.5, T, rng))
+	rib = np.sin (2 * math.pi * v / 0.5) * band
+	lowf, fine = tile_noise (N, 3.0, T, rng), tile_noise (N, 0.02, T, rng)
+	edge = np.clip (1 - np.minimum (u, T - u) / 0.8, 0, 1)
+	crushed = np.array ([0.80, 0.78, 0.73])[None, None, :] * (1 + 0.05 * fine)[..., None]
+	rgb = rgb * (1 - 0.55 * band[..., None]) + crushed * 0.55 * band[..., None]
+	rgb = rgb * ((1 + 0.035 * lowf + 0.012 * rib) * (1 - 0.14 * edge))[..., None]
+	height = height * (1 - 0.6 * band) + 0.002 * rib
+	smooth = smooth * (1 - 0.4 * band)
+	return rgb, smooth, height, None, None
+
+
 BUILD = {'kit_panel': m_panel, 'kit_mli': m_mli, 'kit_regolith': m_regolith, 'kit_steel': m_steel,
 	'kit_grating': m_grating, 'kit_solar': m_solar, 'kit_radiator': m_radiator, 'kit_glass': m_glass,
 	'kit_growglass': m_growglass,
-	'kit_hazard': m_hazard, 'kit_concrete': m_concrete, 'kit_cladding': m_cladding}
+	'kit_hazard': m_hazard, 'kit_concrete': m_concrete, 'kit_cladding': m_cladding, 'kit_turf': m_turf, 'kit_gravel': m_gravel,
+	'kit_padslab': m_padslab, 'kit_padturf': m_padturf, 'kit_crawlerway': m_crawlerway}
 
 
 def main ():
 	ap = argparse.ArgumentParser (description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 	ap.add_argument ('--only')
 	ap.add_argument ('--preview')
-	ap.add_argument ('--size', type=int, default=1024)
+	ap.add_argument ('--size', type=int)
 	a = ap.parse_args ()
 	for k, (name, T) in enumerate (MATERIALS.items ()):
 		if a.only and a.only != name: continue
-		rgb, smooth, height, metal, night = BUILD[name] (a.size, T, np.random.default_rng (100 + k))
+		rgb, smooth, height, metal, night = BUILD[name] (a.size or SIZES.get (name, 1024), T, np.random.default_rng (100 + k))
 		write (name, rgb, smooth, height, T, metal, night, a.preview)
 
 

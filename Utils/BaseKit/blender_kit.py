@@ -18,6 +18,7 @@ Utils/BaseKit/kit_lights.json (for the layouts' LIGHT lines).
 
 import json, math, os, subprocess, sys
 import bmesh
+from mathutils import Vector
 
 HERE = os.path.dirname (os.path.abspath (__file__))
 sys.path.insert (0, HERE)
@@ -1089,6 +1090,605 @@ def a_radome ():
 	proxy_box (A, 16, 9, 16, (0, 0, 0)); proxy_box (A, 15, 11.5, 15, (0, 9, 0)); proxy_box (A, 10, 10, 10, (16, 2.5, 0))
 	return A
 
+# ----------------------------------------------------------------------
+# Cape Canaveral: launch complex 39 in its modern form (the base's frame,
+# the pads' meshes unturned: x south, y up, z east; y = 0 the ground at the
+# pad's origin (Canaveral.cfg BAREEARTH_KEEP holds it level about the pads),
+# the hardstand 16 m up on its mound, the flame trench north-south under it)
+
+# (the pad's surfaces - hardstand, the mound's flanks and the ramp paved with concrete slope panels as at the
+# real pads, the crawler's lanes - and the launcher platform: painted once, as a whole, on a sheet of their
+# own (capesurf.py cape_pad) and mapped onto it from above: nothing tiles)
+import capesurf
+PAD_SHEET = KitMat ('cape_pad', 'cape_pad', (1, 1, 1), tile=1.0)
+PAD_SHEET_DARK = KitMat ('cape_pad_dark', 'cape_pad', (0.40, 0.40, 0.41), tile=1.0)   # (the platform's underside, its holes' walls)
+REFRACTORY = KitMat ('refractory', 'kit_concrete', (0.46, 0.45, 0.44))
+DEFLECTOR = KitMat ('deflector', 'kit_steel', (0.36, 0.37, 0.38))
+TOWER_STEEL = KitMat ('tower_steel', 'kit_steel', (0.70, 0.71, 0.72))
+
+PAD_H = 16.0                        # (the hardstand)
+PAD_X, PAD_Z = (-95.0, 95.0), (-56.0, 64.0)   # (its extent)
+SLOPE = 2.0                         # (the mound's sides: run per rise)
+TR_Z = (-5.1, 12.9)                 # (the flame trench's sides)
+TR_OPEN = (-25.0, 22.0)             # (its opening under the vehicle)
+TR_X0 = -135.0                      # (its exit, north of the mound)
+RAMP_X1, RAMP_W = 400.0, 44.0       # (the crawlerway's ramp: its foot, its width)
+LANES = (3.9 - 13.7, 3.9 + 13.7)    # (the crawler's lanes: their centres, 12 m wide)
+# (the trench's floor: x, y - the main flame deflector rising south to under the
+# vehicle, the trench closed south of it (the shuttle's second deflector filled in))
+TR_FLOOR = ((TR_X0, 0.05), (-57.4, 0.05), (-21.9, 2.0), (-13.2, 5.0), (3.9, 14.0), (TR_OPEN[1], 14.0))
+# (the shuttle's mobile launcher platform: deck, holes, the boosters' skirts as
+# Atlantis stands on it: "Atlantis satellite Launch", ALT 47.361 - 18.962)
+MLP_X, MLP_Z, MLP_Y = (-30.5, 19.5), (-17.12, 24.88), (22.7, 30.3)
+MLP_HOLES = ((-6.85, 5.0, -5.28, 0.62), (-6.85, 5.0, 7.12, 13.03), (7.5, 17.4, -0.78, 8.53))
+SKIRT_Y = 28.39
+assert (PAD_H, PAD_X, PAD_Z, SLOPE, TR_Z, TR_OPEN, RAMP_X1, RAMP_W, LANES, MLP_X, MLP_Z, MLP_Y, MLP_HOLES) == (capesurf.PAD_H, capesurf.PAD_X,
+	capesurf.PAD_Z, capesurf.SLOPE, capesurf.TR_Z, capesurf.TR_OPEN, capesurf.RAMP_X1, capesurf.RAMP_W, capesurf.LANES, capesurf.MLP_X,
+	capesurf.MLP_Z, capesurf.MLP_Y, capesurf.MLP_HOLES), 'capesurf.py paints another pad'
+
+def sheet_part (A, bm, sheet, name, ua, ub, mat, role='drawn'):
+	"""a part mapped onto a region of one of the Cape's sheets (capesurf.py REGIONS): ua, ub the
+	directions (unit, Orbiter's frame) of the region's a and b - a pad from above: x, z; a wall:
+	along it, up"""
+	r, rect = capesurf.region (sheet, name)
+	ua, ub = Vector (ua), Vector (ub)
+	return A.add (bm, mat, role=role, uv='decal', axis=(tuple (ua * r.a0 + ub * r.b0), tuple (ua * (r.a1 - r.a0)), tuple (ub * (r.b1 - r.b0)), rect))
+
+def pad_part (A, bm, name, role='drawn'):
+	return sheet_part (A, bm, 'cape_pad', name, (1, 0, 0), (0, 0, 1), PAD_SHEET, role)
+
+def quad (bm, p, up=None):
+	"""a face of the points p; up: a direction its normal must face (else as given)"""
+	f = bm.faces.new ([bm.verts.new (q) for q in p])
+	f.normal_update ()
+	if up is not None and f.normal.dot (Vector (up)) < 0: f.normal_flip ()
+	return f
+
+def floor_y (x):
+	pts = TR_FLOOR
+	if x <= pts[0][0]: return pts[0][1]
+	for (x0, y0), (x1, y1) in zip (pts, pts[1:]):
+		if x <= x1: return y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+	return pts[-1][1]
+
+def ramp_y (x):
+	"""the ramp's surface (and the hardstand's) along x"""
+	return PAD_H if x <= PAD_X[1] else max (0.0, PAD_H * (RAMP_X1 - x) / (RAMP_X1 - PAD_X[1]))
+
+def _split (a, b, n): return [a + (b - a) * k / n for k in range (n + 1)]
+
+def hardstand (A):
+	"""the hardstand: slabs of about 8 m (the trench's opening whole slabs left out), their joints
+	where the sheet paints them (capesurf.hardstand_joints)"""
+	xs, zs = capesurf.hardstand_joints ()
+	H = PAD_H
+	bm = kl._bm ()
+	for (xa, xb) in zip (xs, xs[1:]):
+		for (za, zb) in zip (zs, zs[1:]):
+			xm, zm = (xa + xb) / 2, (za + zb) / 2
+			if TR_OPEN[0] < xm < TR_OPEN[1] and TR_Z[0] < zm < TR_Z[1]: continue
+			quad (bm, [(xa, H, za), (xb, H, za), (xb, H, zb), (xa, H, zb)], up=(0, 1, 0))
+	pad_part (A, bm, 'mound')
+
+def pad_mound (A, lanes_from=30.0):
+	"""the mound: hardstand (the trench open under the vehicle), sides paved with concrete,
+	the trench's walls and its exit north, the ramp up from the south with the
+	crawler's gravel lanes - hardstand, sides, ramp and lanes all one painting (capesurf.py)"""
+	(x0, x1), (z0, z1) = PAD_X, PAD_Z
+	H, s = PAD_H, SLOPE
+	hardstand (A)
+	# (the sides: a frustum, its north face cut by the trench's exit)
+	X0, X1, Z0, Z1 = x0 - s * H, x1 + s * H, z0 - s * H, z1 + s * H
+	# (the sheet's regions: the mound's - hardstand and flanks, the ramp to CUT -, the ramp's beyond, the lanes' on the mound)
+	CUT = capesurf.RAMP_CUT
+	mound, ramp, lanes = kl._bm (), kl._bm (), [kl._bm (), kl._bm ()]
+	def side (faces, up):
+		for f in faces: quad (mound if max (p[0] for p in f) <= CUT + 1e-6 else ramp, f, up=up)
+	side ([[(x0, H, z0), (X0, 0, Z0), (X0, 0, TR_Z[0]), (x0, H, TR_Z[0])], [(x0, H, TR_Z[1]), (X0, 0, TR_Z[1]), (X0, 0, Z1), (x0, H, z1)]], (-1, 1, 0))
+	side ([[(x1, H, z0), (X1, 0, Z0), (X1, 0, Z1), (x1, H, z1)]], (1, 1, 0))
+	side ([[(x0, H, z0), (x1, H, z0), (X1, 0, Z0), (X0, 0, Z0)]], (0, 1, -1))
+	side ([[(x0, H, z1), (x1, H, z1), (X1, 0, Z1), (X0, 0, Z1)]], (0, 1, 1))
+	# (the ramp: its sides down to the ground, the paving between and beside the lanes; cut where the regions meet)
+	rz0, rz1 = 3.9 - RAMP_W / 2, 3.9 + RAMP_W / 2
+	xs = sorted (set ([x1 + (RAMP_X1 - x1) * k / 8 for k in range (9)] + [CUT]))
+	side ([[(xa, ramp_y (xa), rz0), (xb, ramp_y (xb), rz0), (xb, 0, rz0 - s * ramp_y (xb)), (xa, 0, rz0 - s * ramp_y (xa))] for (xa, xb) in zip (xs, xs[1:])], (0, 1, -1))
+	side ([[(xa, ramp_y (xa), rz1), (xb, ramp_y (xb), rz1), (xb, 0, rz1 + s * ramp_y (xb)), (xa, 0, rz1 + s * ramp_y (xa))] for (xa, xb) in zip (xs, xs[1:])], (0, 1, 1))
+	edges = [rz0, LANES[0] - 6, LANES[0] + 6, LANES[1] - 6, LANES[1] + 6, rz1]
+	for (xa, xb) in zip (xs, xs[1:]):
+		ya, yb = ramp_y (xa), ramp_y (xb)
+		on_mound = xb <= CUT + 1e-6
+		for i, (za, zb) in enumerate (zip (edges, edges[1:])):
+			quad ((lanes[i // 2] if on_mound else ramp) if i % 2 else (mound if on_mound else ramp), [(xa, ya, za), (xb, yb, za), (xb, yb, zb), (xa, ya, zb)], up=(0, 1, 0))
+	for k, z in enumerate (LANES):  # (on the hardstand to the vehicle; past the ramp's foot)
+		quad (lanes[k], [(lanes_from, H + 0.03, z - 6), (x1, H + 0.03, z - 6), (x1, H + 0.03, z + 6), (lanes_from, H + 0.03, z + 6)], up=(0, 1, 0))
+		quad (ramp, [(RAMP_X1, 0.04, z - 6), (RAMP_X1 + 60, 0.04, z - 6), (RAMP_X1 + 60, 0.04, z + 6), (RAMP_X1, 0.04, z + 6)], up=(0, 1, 0))
+		pad_part (A, lanes[k], 'lane%d' % k)
+	pad_part (A, mound, 'mound'); pad_part (A, ramp, 'ramp')
+	# (the trench's walls: from its floor to the hardstand, or to the mound's side north of it)
+	walls = kl._bm ()
+	wx = sorted (set ([TR_X0, X0, x0, TR_OPEN[0], TR_OPEN[1]] + [p[0] for p in TR_FLOOR]))
+	topy = lambda x: H if x >= x0 else max (0.0, H - (x0 - x) / s)
+	for (xa, xb) in zip (wx, wx[1:]):
+		if xb > TR_OPEN[1] + 1e-6: break
+		for z, sgn in ((TR_Z[0], 1), (TR_Z[1], -1)):
+			if topy (xa) - floor_y (xa) < 0.01 and topy (xb) - floor_y (xb) < 0.01: continue
+			quad (walls, [(xa, floor_y (xa), z), (xb, floor_y (xb), z), (xb, topy (xb), z), (xa, topy (xa), z)], up=(0, 0, sgn))
+	quad (walls, [(TR_OPEN[1], floor_y (TR_OPEN[1]), TR_Z[0]), (TR_OPEN[1], H, TR_Z[0]), (TR_OPEN[1], H, TR_Z[1]), (TR_OPEN[1], floor_y (TR_OPEN[1]), TR_Z[1])], up=(-1, 0, 0))
+	quad (walls, [(x0, H - 0.4, TR_Z[0]), (TR_OPEN[0], H - 0.4, TR_Z[0]), (TR_OPEN[0], H - 0.4, TR_Z[1]), (x0, H - 0.4, TR_Z[1])], up=(0, -1, 0))  # (the tunnel's roof)
+	quad (walls, [(TR_OPEN[0], H - 0.4, TR_Z[0]), (TR_OPEN[0], H, TR_Z[0]), (TR_OPEN[0], H, TR_Z[1]), (TR_OPEN[0], H - 0.4, TR_Z[1])], up=(1, 0, 0))
+	A.add (walls, REFRACTORY)
+	# (hazard edging about the trench's opening)
+	hz = kl._bm ()
+	for (a, b, c, d) in ((TR_OPEN[0] - 0.8, TR_OPEN[1] + 0.8, TR_Z[0] - 0.8, TR_Z[0]), (TR_OPEN[0] - 0.8, TR_OPEN[1] + 0.8, TR_Z[1], TR_Z[1] + 0.8),
+			(TR_OPEN[0] - 0.8, TR_OPEN[0], TR_Z[0], TR_Z[1]), (TR_OPEN[1], TR_OPEN[1] + 0.8, TR_Z[0], TR_Z[1])):
+		quad (hz, [(a, H + 0.04, c), (b, H + 0.04, c), (b, H + 0.04, d), (a, H + 0.04, d)], up=(0, 1, 0))
+	A.add (hz, HAZARD, role='detail')
+	# collision: the hardstand, its sides, the ramp (proxies: the drawn mound, simple as it is, collides)
+
+def a_pad_ground ():
+	"""the flame trench's floor (KLC39Bground: both pads), the main flame deflector rising south"""
+	A = Asset ('KLC39Bground')
+	fl = kl._bm (); df = kl._bm ()
+	for (xa, ya), (xb, yb) in zip (TR_FLOOR, TR_FLOOR[1:]):
+		quad (df if -21.95 <= xa and xb <= 3.95 else fl, [(xa, ya, TR_Z[0]), (xb, yb, TR_Z[0]), (xb, yb, TR_Z[1]), (xa, ya, TR_Z[1])], up=(0, 1, 0))
+	A.add (fl, REFRACTORY); A.add (df, DEFLECTOR)
+	return A
+
+def pipe (A, pts, r, mat=STEEL_GREY, role='detail', n=8):
+	A.add (merge (*[rod_between (a, b, r, n) for a, b in zip (pts, pts[1:])]), mat, role=role)
+
+def wire (A, a, b, sag, r=0.12, n=16):
+	"""a sagging wire (a parabola) from a to b"""
+	pts = []
+	for k in range (n + 1):
+		t = k / n
+		pts.append ((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t - 4 * sag * t * (1 - t), a[2] + (b[2] - a[2]) * t))
+	pipe (A, pts, r, STEEL_GREY, n=4)
+
+def tapered_lattice (A, cx, cz, y0, y1, w0, w1, levels, mat, col=0.5):
+	"""a four-legged lattice tower tapering from w0 to w1 (half widths), girts and X braces"""
+	hw = lambda y: w0 + (w1 - w0) * (y - y0) / (y1 - y0)
+	cs = [(-1, -1), (1, -1), (1, 1), (-1, 1)]
+	legs, br = [], []
+	for (sx, sz) in cs: legs.append (rod_between ((cx + sx * w0, y0, cz + sz * w0), (cx + sx * w1, y1, cz + sz * w1), col, 6))
+	for i in range (levels + 1):
+		y = y0 + (y1 - y0) * i / levels
+		for k in range (4):
+			a, b = cs[k], cs[(k + 1) % 4]
+			br.append (rod_between ((cx + a[0] * hw (y), y, cz + a[1] * hw (y)), (cx + b[0] * hw (y), y, cz + b[1] * hw (y)), col * 0.45))
+	for i in range (levels):
+		ya, yb = y0 + (y1 - y0) * i / levels, y0 + (y1 - y0) * (i + 1) / levels
+		for k in range (4):
+			a, b = cs[k], cs[(k + 1) % 4]
+			br.append (rod_between ((cx + a[0] * hw (ya), ya, cz + a[1] * hw (ya)), (cx + b[0] * hw (yb), yb, cz + b[1] * hw (yb)), col * 0.3))
+			br.append (rod_between ((cx + b[0] * hw (ya), ya, cz + b[1] * hw (ya)), (cx + a[0] * hw (yb), yb, cz + a[1] * hw (yb)), col * 0.3))
+	A.add (merge (*legs), mat)
+	A.add (merge (*br), mat, role='detail')
+
+def lightning_tower (A, cx, cz):
+	"""a lightning protection tower: a lattice of 150 m, a fibreglass mast to 180 m, aviation lights;
+	returns its top"""
+	for (sx, sz) in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+		A.add (box (3.0, 1.2, 3.0, (cx + sx * 7.0, 0, cz + sz * 7.0)), CONCRETE)
+	tapered_lattice (A, cx, cz, 1.2, 150.0, 7.0, 1.6, 25, TOWER_STEEL, col=0.45)
+	A.add (cylinder (2.0, 1.0, 16, (cx, 150.0, cz)), TOWER_STEEL)
+	A.add (cylinder (0.9, 30.0, 12, (cx, 151.0, cz), r2=0.35), FIBRE)
+	for y in (60.0, 120.0, 181.2):
+		A.light ((cx, y, cz), RED, 1.6)
+	proxy_box (A, 15, 150, 15, (cx, 0, cz))
+	return (cx, 180.5, cz)
+
+def lathe (prof, cx, cz, n=40):
+	"""a surface of revolution about the vertical through (cx, cz): prof the (radius, y) of its
+	outline from bottom to top (a radius 0 closes it to a point)"""
+	bm = kl._bm ()
+	rings = []
+	for (r, y) in prof:
+		rings.append ([bm.verts.new ((cx + r * math.sin (2 * math.pi * k / n), y, cz + r * math.cos (2 * math.pi * k / n))) for k in range (n)])
+	for ra, rb in zip (rings, rings[1:]):
+		for k in range (n):
+			vs = [ra[k], ra[(k + 1) % n], rb[(k + 1) % n], rb[k]]
+			if len (set (v.co.to_tuple (5) for v in vs)) < 3: continue
+			f = bm.faces.new (vs)
+			f.smooth = True
+	bmesh.ops.remove_doubles (bm, verts=bm.verts, dist=1e-4)
+	bmesh.ops.recalc_face_normals (bm, faces=bm.faces)
+	return bm
+
+def pad_watertower (A, cx, cz):
+	"""the sound suppression water tower as at 39A and 39B (88 m, 1.1 million litres): a
+	capsule tank 75 m up on a standpipe of 4 m, a concrete plinth at its foot; six raked
+	legs about it, ring girts and X braces in six panels, struts in to the pipe; returns its foot"""
+	T0, T1, RT = 75.0, 88.0, 6.8      # (the tank: its bottom, its top, its radius)
+	NL, R0, R1 = 6, 11.5, 6.4         # (the legs: at the ground, under the tank)
+	A.add (box (9.0, 1.0, 9.0, (cx, 0, cz)), CONCRETE)
+	A.add (box (7.0, 6.0, 7.0, (cx, 1.0, cz)), CONCRETE)
+	A.add (cylinder (2.0, T0 - 6.5, 24, (cx, 7.0, cz)), PAINT_WHITE, uv='cyl', axis=(0, 1, 0), centre=(cx, 0, cz))
+	# (the tank: elliptical heads 3 m deep, a cylinder between)
+	hd = 3.0
+	prof = [(RT * math.sin (math.pi / 2 * k / 6), T0 + hd * (1 - math.cos (math.pi / 2 * k / 6))) for k in range (7)]
+	prof += [(RT * math.cos (math.pi / 2 * k / 6), T1 - hd + hd * math.sin (math.pi / 2 * k / 6)) for k in range (7)]
+	A.add (lathe (prof, cx, cz), PAINT_WHITE, uv='cyl', axis=(0, 1, 0), centre=(cx, 0, cz))
+	A.add (cylinder (0.9, 0.8, 16, (cx, T1 - 0.1, cz)), STEEL_GREY, role='detail')             # (the roof hatch, its vent)
+	rail = [rod_between ((cx + 1.8 * math.sin (2 * math.pi * k / 12), T1 + 0.9, cz + 1.8 * math.cos (2 * math.pi * k / 12)),
+		(cx + 1.8 * math.sin (2 * math.pi * (k + 1) / 12), T1 + 0.9, cz + 1.8 * math.cos (2 * math.pi * (k + 1) / 12)), 0.04, 4) for k in range (12)]
+	A.add (merge (*rail), STEEL_GREY, role='detail')
+	# (the legs: footings, the legs raked in to the tank's bottom; girts, X braces, struts to the pipe)
+	ang = [2 * math.pi * (k + 0.5) / NL for k in range (NL)]
+	at = lambda k, y: (cx + (R0 + (R1 - R0) * y / T0) * math.sin (ang[k % NL]), y, cz + (R0 + (R1 - R0) * y / T0) * math.cos (ang[k % NL]))
+	legs, br, gi = [], [], []
+	for k in range (NL):
+		x, _, z = at (k, 0.0)
+		A.add (box (2.2, 1.0, 2.2, (x, 0, z)), CONCRETE)
+		legs.append (rod_between (at (k, 1.0), at (k, T0 + 1.0), 0.42, 8))
+	levels = [1.0 + (T0 - 1.0) * i / 6 for i in range (7)]
+	for i, y in enumerate (levels):
+		if i == 0: continue
+		for k in range (NL):
+			gi.append (rod_between (at (k, y), at (k + 1, y), 0.2, 6))
+			p = at (k, y)
+			gi.append (rod_between (p, (cx + (p[0] - cx) * 2.0 / math.hypot (p[0] - cx, p[2] - cz), y, cz + (p[2] - cz) * 2.0 / math.hypot (p[0] - cx, p[2] - cz)), 0.15, 6))
+		A.add (cylinder (2.25, 0.5, 24, (cx, y - 0.25, cz)), STEEL_GREY, role='detail')            # (the pipe's collars)
+	for ya, yb in zip (levels, levels[1:]):
+		for k in range (NL):
+			br.append (rod_between (at (k, ya), at (k + 1, yb), 0.09, 4))
+			br.append (rod_between (at (k + 1, ya), at (k, yb), 0.09, 4))
+	A.add (merge (*legs), PAINT_WHITE)
+	A.add (merge (*gi), PAINT_WHITE, role='detail')
+	A.add (merge (*br), PAINT_WHITE, role='detail')
+	A.light ((cx, T1 + 1.6, cz), RED, 1.4)
+	proxy_box (A, 2 * R0, T0, 2 * R0, (cx, 0, cz)); proxy_box (A, 2 * RT, T1 - T0 + 1, 2 * RT, (cx, T0, cz))
+	return (cx, 1.0, cz)
+
+def pad_sphere (A, cx, cz, r=10.5):
+	"""a cryogenic propellant sphere (liquid oxygen, liquid hydrogen) on its legs, a vent"""
+	A.add (sphere (r, (cx, r + 4.0, cz), 32, 16), PAINT_WHITE, uv='cyl', axis=(0, 1, 0), centre=(cx, 0, cz))
+	legs = [rod_between ((cx + (r - 0.8) * math.sin (2 * math.pi * k / 10), 0, cz + (r - 0.8) * math.cos (2 * math.pi * k / 10)),
+		(cx + (r - 1.2) * math.sin (2 * math.pi * k / 10), r + 3.0, cz + (r - 1.2) * math.cos (2 * math.pi * k / 10)), 0.4, 8) for k in range (10)]
+	A.add (merge (*legs), STEEL_GREY)
+	A.add (cylinder (r, 0.5, 32, (cx, 0, cz)), CONCRETE)
+	A.add (cylinder (0.35, 3.0, 8, (cx, 2 * r + 3.5, cz)), STEEL_GREY, role='detail')
+	A.light ((cx, 2 * r + 6.8, cz), RED, 1.0)
+	proxy_box (A, 2 * r * 0.95, 2 * r + 4, 2 * r * 0.95, (cx, 0, cz))
+
+def pad_services (A, west):
+	"""what both pads have about the mound: the water tower and its pipes to the
+	trench, the liquid oxygen sphere (west) and liquid hydrogen sphere (east), their lines"""
+	wt = pad_watertower (A, -40.0, west * 215.0)
+	zw = west * 215.0
+	# (the deluge mains: from the tower along the ground, up the mound's side, to the trench's edge)
+	edge = PAD_Z[0] if west < 0 else PAD_Z[1]
+	for dz in (-1.6, 1.6):
+		pipe (A, [(-40.0 + dz, 1.0, zw - west * 3.5), (-40.0 + dz, 1.0, edge + west * (SLOPE * PAD_H + 4)), (-40.0 + dz, PAD_H + 1.0, edge + west * 2.0),
+			(-40.0 + dz, PAD_H + 1.0, TR_Z[0] - 2.0 if west < 0 else TR_Z[1] + 2.0)], 0.9, STEEL_GREY, role='drawn')
+	pad_sphere (A, -95.0, -150.0)   # (LOX)
+	pad_sphere (A, -95.0, 160.0, 11.0)   # (LH2)
+	for (cz, end) in ((-150.0, PAD_Z[0]), (160.0, PAD_Z[1])):
+		sg = 1 if cz > 0 else -1
+		pipe (A, [(-95.0, 1.5, cz - sg * 12), (-95.0, 1.5, end + sg * (SLOPE * PAD_H + 3)), (-60.0, PAD_H + 1.2, end + sg * 1.5), (-20.0, PAD_H + 1.2, end + sg * 1.5)], 0.6, PAINT_WHITE)
+
+def a_mlp ():
+	"""the shuttle's mobile launcher platform, parked on a pad's mount pedestals: its
+	deck (the boosters' and the main engines' exhaust holes), the boosters' hold-down
+	posts, the tail service masts, rainbirds"""
+	A = Asset ('MLP')
+	(x0, x1), (z0, z1), (y0, y1) = MLP_X, MLP_Z, MLP_Y
+	xs = sorted (set ([x0, x1] + [h[0] for h in MLP_HOLES] + [h[1] for h in MLP_HOLES]))
+	zs = sorted (set ([z0, z1] + [h[2] for h in MLP_HOLES] + [h[3] for h in MLP_HOLES]))
+	hole = lambda x, z: any (h[0] < x < h[1] and h[2] < z < h[3] for h in MLP_HOLES)
+	deck, under, hw = kl._bm (), kl._bm (), {'x': kl._bm (), 'z': kl._bm ()}
+	for (xa, xb) in zip (xs, xs[1:]):
+		for (za, zb) in zip (zs, zs[1:]):
+			if hole ((xa + xb) / 2, (za + zb) / 2): continue
+			quad (deck, [(xa, y1, za), (xb, y1, za), (xb, y1, zb), (xa, y1, zb)], up=(0, 1, 0))
+			quad (under, [(xa, y0, za), (xb, y0, za), (xb, y0, zb), (xa, y0, zb)], up=(0, -1, 0))
+			proxy_box (A, xb - xa, y1 - y0, zb - za, ((xa + xb) / 2, y0, (za + zb) / 2))
+	# (its sides, each its own painting on the pad's sheet: a along it, b down from the deck)
+	for (a, b, c, d, n, rg, ua) in ((x0, x1, z0, z0, (0, 0, -1), 'mlp_w', (1, 0, 0)), (x0, x1, z1, z1, (0, 0, 1), 'mlp_e', (1, 0, 0)),
+			(x0, x0, z0, z1, (-1, 0, 0), 'mlp_n', (0, 0, 1)), (x1, x1, z0, z1, (1, 0, 0), 'mlp_s', (0, 0, 1))):
+		wl = kl._bm ()
+		quad (wl, [(a, y0, c), (b, y0, d), (b, y1, d), (a, y1, c)], up=n)
+		sheet_part (A, wl, 'cape_pad', rg, ua, (0, 1, 0), PAD_SHEET)
+	for (a, b, c, d) in MLP_HOLES:  # (the holes' walls, facing in: a side's plates, sooted)
+		quad (hw['x'], [(a, y0, c), (b, y0, c), (b, y1, c), (a, y1, c)], up=(0, 0, 1))
+		quad (hw['x'], [(a, y0, d), (b, y0, d), (b, y1, d), (a, y1, d)], up=(0, 0, -1))
+		quad (hw['z'], [(a, y0, c), (a, y0, d), (a, y1, d), (a, y1, c)], up=(1, 0, 0))
+		quad (hw['z'], [(b, y0, c), (b, y0, d), (b, y1, d), (b, y1, c)], up=(-1, 0, 0))
+	sheet_part (A, hw['x'], 'cape_pad', 'mlp_w', (1, 0, 0), (0, 1, 0), PAD_SHEET_DARK)
+	sheet_part (A, hw['z'], 'cape_pad', 'mlp_n', (0, 0, 1), (0, 1, 0), PAD_SHEET_DARK)
+	sheet_part (A, deck, 'cape_pad', 'mlp_deck', (0, 0, 1), (1, 0, 0), PAD_SHEET)
+	sheet_part (A, under, 'cape_pad', 'mlp_deck', (0, 0, 1), (1, 0, 0), PAD_SHEET_DARK)
+	# (the pad's mount pedestals it stands on)
+	for x in (-29.3, -11.0, 17.5):
+		for z in (-15.9, 23.7):
+			A.add (box (3.2, y0 - PAD_H, 3.2, (x, PAD_H, z)), CONCRETE)
+			proxy_box (A, 3.2, y0 - PAD_H, 3.2, (x, PAD_H, z))
+	# (hold-down posts: four a booster, at the holes' sides, the skirts on them)
+	for (a, b, c, d) in MLP_HOLES[:2]:
+		xc, zc = (a + b) / 2, (c + d) / 2
+		for sx in (-1, 1):
+			for sz in (-1, 1):
+				A.add (box (0.9, SKIRT_Y - 26.6, 0.75, (xc + sx * 1.7, 26.6, zc + sz * (d - c - 0.75) / 2)), STEEL_RED, role='detail')
+	# (hazard edging about the holes)
+	hz = kl._bm ()
+	for (a, b, c, d) in MLP_HOLES:
+		for (p, q, r_, s_) in ((a - 0.6, b + 0.6, c - 0.6, c), (a - 0.6, b + 0.6, d, d + 0.6), (a - 0.6, a, c, d), (b, b + 0.6, c, d)):
+			quad (hz, [(p, y1 + 0.02, r_), (q, y1 + 0.02, r_), (q, y1 + 0.02, s_), (p, y1 + 0.02, s_)], up=(0, 1, 0))
+	A.add (hz, HAZARD, role='detail')
+	# (the tail service masts either side of the main engines' hole)
+	for zc in (-2.6, 11.0):
+		A.add (box (4.6, 9.4, 2.7, (12.3, y1, zc)), PAINT_WHITE)
+		A.add (box (4.8, 0.3, 2.9, (12.3, y1 + 9.4, zc)), STEEL_GREY)
+		proxy_box (A, 4.6, 9.4, 2.7, (12.3, y1, zc))
+	for (x, z) in ((-12.0, -10.0), (-12.0, 18.0), (0.0, -11.5), (0.0, 19.5), (11.0, -11.5), (11.0, 19.5)):  # (rainbirds)
+		pipe (A, [(x, y1, z), (x, y1 + 3.2, z), (x + 0.0, y1 + 3.7, z + (1.2 if z < 4 else -1.2))], 0.35, STEEL_GREY)
+	# (railings about the deck)
+	rails = []
+	for (a, b) in (((x0, z0), (x1, z0)), ((x1, z0), (x1, z1)), ((x1, z1), (x0, z1)), ((x0, z1), (x0, z0))):
+		rails.append (rod_between ((a[0], y1 + 1.1, a[1]), (b[0], y1 + 1.1, b[1]), 0.04, 4))
+		L = math.hypot (b[0] - a[0], b[1] - a[1]); n = int (L / 2.5)
+		for k in range (n + 1):
+			p = (a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n)
+			rails.append (rod_between ((p[0], y1, p[1]), (p[0], y1 + 1.1, p[1]), 0.03, 4))
+	A.add (merge (*rails), STEEL_GREY, role='detail')
+	for (x, z) in ((x0, z0), (x0, z1), (x1, z0), (x1, z1)):
+		A.light ((x, y1 + 1.4, z), WHITE, 1.0)
+	return A
+
+def a_klc39b ():
+	"""pad 39B as NASA rebuilt it for SLS (from 2011): a clean hardstand on its mound,
+	the trench with the new main flame deflector (KLC39Bground), no service
+	structures; three lightning towers of 180 m carrying a catenary above the
+	pad; the water tower, the propellant spheres"""
+	A = Asset ('KLC39B')
+	pad_mound (A)
+	tops = [lightning_tower (A, -150.0, -125.0), lightning_tower (A, -140.0, 140.0), lightning_tower (A, 150.0, -95.0)]
+	for i in range (3):
+		a, b = tops[i], tops[(i + 1) % 3]
+		wire (A, a, b, 28.0)
+	for t in tops:  # (down-leads, out and away from the pad)
+		d = math.hypot (t[0], t[2])
+		wire (A, t, (t[0] * (d + 120) / d, 0.5, t[2] * (d + 120) / d), 6.0)
+	pad_services (A, west=-1)
+	return A
+
+def a_klc39a ():
+	"""pad 39A as it is now (from 2014): the shuttle's fixed service structure kept,
+	a crew access arm on it, a lightning mast and catenary on top; the
+	transporter-erector lowered on its rails up the ramp; the water tower, the
+	propellant spheres"""
+	A = Asset ('KLC39A')
+	pad_mound (A, lanes_from=PAD_X[1] - 10.0)
+	fx, fz, fw = 2.0, -26.0, 12.0
+	y0, y1 = PAD_H, PAD_H + 81.0
+	lattice (A, fx - fw / 2, fx + fw / 2, fz - fw / 2, fz + fw / 2, y0, y1, 6.0, STEEL_GREY, w=0.8, role='drawn')
+	A.add (box (4.0, y1 - y0 + 4.0, 4.0, (fx - fw / 2 - 2.2, y0, fz)), PAINT_WHITE)  # (the lift's shaft)
+	for lv in range (1, 14):  # (floors)
+		A.add (box (fw, 0.3, fw, (fx, y0 + 6.0 * lv, fz)), GRATING, role='detail')
+	for lv in (2, 7, 11):  # (enclosed rooms)
+		A.add (box (fw - 1.0, 4.5, fw - 1.0, (fx, y0 + 6.0 * lv + 0.3, fz)), PAINT_WHITE)
+	A.add (box (fw + 1.0, 1.0, fw + 1.0, (fx, y1, fz)), STEEL_GREY)
+	# (the crew access arm, swung to the vehicle over the trench, its white room)
+	ya = y0 + 59.0
+	A.add (box (3.0, 3.2, 22.0, (fx, ya, fz + fw / 2 + 11.0)), PAINT_WHITE)
+	A.add (box (4.2, 4.2, 3.5, (fx, ya - 0.5, fz + fw / 2 + 22.0)), PAINT_WHITE)
+	A.add (box (3.2, 0.8, 18.0, (fx, ya + 0.6, fz + fw / 2 + 11.0)), KitMat ('arm_windows', 'kit_glass', (1, 1, 1), power=60), role='detail')
+	proxy_box (A, fw, y1 - y0, fw, (fx, y0, fz)); proxy_box (A, 3.0, 3.2, 22.0, (fx, ya, fz + fw / 2 + 11.0))
+	# (the lightning mast and its catenary, north and south to the ground)
+	A.add (cylinder (1.0, 24.0, 12, (fx, y1 + 1.0, fz), r2=0.35), FIBRE)
+	top = (fx, y1 + 25.0, fz)
+	A.light ((top[0], top[1] + 0.4, top[2]), RED, 1.6)
+	A.light ((fx + fw / 2, y1 + 1.5, fz + fw / 2), RED, 1.2)
+	for gx in (-320.0, 330.0):
+		wire (A, top, (gx, 0.5, fz), 18.0)
+		A.add (box (2.0, 1.0, 2.0, (gx, 0, fz)), CONCRETE)
+	# (the transporter-erector, lowered, on its rails up the ramp)
+	tz = 3.9
+	for dz in (-6.0, 6.0):
+		rails = kl._bm ()
+		xs = [PAD_X[1] - 70.0 + 10.0 * k for k in range (int ((RAMP_X1 + 40 - (PAD_X[1] - 70.0)) / 10.0) + 1)]
+		for (xa, xb) in zip (xs, xs[1:]):
+			ya_, yb_ = ramp_y (xa) + 0.25, ramp_y (xb) + 0.25
+			quad (rails, [(xa, ya_, tz + dz - 0.4), (xb, yb_, tz + dz - 0.4), (xb, yb_, tz + dz + 0.4), (xa, ya_, tz + dz + 0.4)], up=(0, 1, 0))
+		A.add (rails, STEEL_GREY, role='detail')
+	te0, te1 = 26.0, 92.0
+	for dz in (-2.6, 2.6):
+		A.add (truss ((te0, PAD_H + 3.6, tz + dz), (te1, PAD_H + 3.6, tz + dz), 1.6, 3.6, 3.0, 0.22), PAINT_WHITE, role='detail')
+	for k in range (12):
+		x = te0 + (te1 - te0) * k / 11
+		A.add (rod_between ((x, PAD_H + 5.3, tz - 2.6), (x, PAD_H + 5.3, tz + 2.6), 0.2, 4), PAINT_WHITE, role='detail')
+	for x in (te0 + 4.0, te1 - 6.0):
+		A.add (box (9.0, 1.8, 3.0, (x, PAD_H, tz - 6.0)), STEEL_GREY); A.add (box (9.0, 1.8, 3.0, (x, PAD_H, tz + 6.0)), STEEL_GREY)
+	A.add (box (12.0, 7.0, 12.0, (te0 - 8.0, PAD_H, tz)), STEEL_GREY)  # (its launch mount's base, beside the trench)
+	proxy_box (A, te1 - te0, 7.4, 6.8, ((te0 + te1) / 2, PAD_H, tz))
+	pad_services (A, west=-1)
+	return A
+
+# (the Vehicle Assembly Building and the Launch Control Center, at their real
+# size where Meshes/Vab.msh had them (Canaveral.cfg: POS 0 0 0, ROT 10))
+VAB_HB = (-240.6, -106.6, 20.4, 178.4, 160.0)    # (the high bay: x0, x1, z0, z1, height)
+VAB_LB = (-106.6, -22.6, 31.9, 166.9, 64.0)      # (the low bay, south of it)
+VAB_DOORS = (-204.1, -142.6)                     # (the high bays' doors, east and west: their centres along x)
+VAB_CLAD = KitMat ('vab_clad', 'kit_cladding', (0.88, 0.89, 0.90))
+VAB_DARK = KitMat ('vab_dark', 'kit_cladding', (0.46, 0.47, 0.49))
+VAB_DOOR = KitMat ('vab_door', 'kit_cladding', (0.70, 0.71, 0.73))
+DECALS = KitMat ('cape_decals', 'cape_decals', (1, 1, 1), tile=64.0)
+LCC_O, LCC_U, LCC_LWH = (-72.1, 201.0), (0.7432, 0.6691), (109.1, 40.9, 23.5)
+# (the building's faces - the high bay's four, the low bay's three, the Launch Control Center's - painted as wholes: capesurf.py cape_vab)
+VAB_SHEET = KitMat ('cape_vab', 'cape_vab', (1, 1, 1), tile=1.0)
+assert (VAB_HB, VAB_LB, VAB_DOORS, LCC_O, LCC_U, LCC_LWH) == (capesurf.VAB_HB, capesurf.VAB_LB, capesurf.VAB_DOORS, capesurf.LCC_O,
+	capesurf.LCC_U, capesurf.LCC_LWH), 'capesurf.py paints another building'
+
+def vab_part (A, bm, name, axis):
+	"""a face's part on the building's sheet: axis 'x': the face spans z; 'z': it spans x"""
+	return sheet_part (A, bm, 'cape_vab', name, (0, 0, 1) if axis == 'x' else (1, 0, 0), (0, 1, 0), VAB_SHEET)
+
+def wall (bm, axis, c, a0, a1, y0, y1, holes, n):
+	"""a wall in the plane axis = c (axis 'x': it spans z = a; 'z': it spans x = a), y0..y1,
+	less the holes (a0, a1, y0, y1); n: its outward normal"""
+	As = sorted (set ([a0, a1] + [h[0] for h in holes] + [h[1] for h in holes]))
+	Ys = sorted (set ([y0, y1] + [h[2] for h in holes] + [h[3] for h in holes]))
+	P = (lambda a, y: (c, y, a)) if axis == 'x' else (lambda a, y: (a, y, c))
+	for (aa, ab) in zip (As, As[1:]):
+		for (ya, yb) in zip (Ys, Ys[1:]):
+			am, ym = (aa + ab) / 2, (ya + yb) / 2
+			if not (a0 <= am <= a1 and y0 <= ym <= y1): continue
+			if any (h[0] < am < h[1] and h[2] < ym < h[3] for h in holes): continue
+			quad (bm, [P (aa, ya), P (ab, ya), P (ab, yb), P (aa, yb)], up=n)
+
+def door_recess (A, axis, c, n, holes, depth, joints_y=(), joints_a=(), face=None):
+	"""door leaves set back in the holes, their reveals (dark), the leaves' joints; face: the
+	building's sheet's region the wall is on (the leaves are painted in its holes)"""
+	back, rev, jn = kl._bm (), kl._bm (), []
+	s = n[0] if axis == 'x' else n[2]
+	cb = c - s * depth
+	P = (lambda a, y, cc: (cc, y, a)) if axis == 'x' else (lambda a, y, cc: (a, y, cc))
+	na = (0, 0, 1) if axis == 'x' else (1, 0, 0)
+	for (ha, hb, hy0, hy1) in holes:
+		quad (back, [P (ha, hy0, cb), P (hb, hy0, cb), P (hb, hy1, cb), P (ha, hy1, cb)], up=n)
+		quad (rev, [P (ha, hy0, c), P (ha, hy1, c), P (ha, hy1, cb), P (ha, hy0, cb)], up=na)
+		quad (rev, [P (hb, hy0, c), P (hb, hy1, c), P (hb, hy1, cb), P (hb, hy0, cb)], up=tuple (-q for q in na))
+		quad (rev, [P (ha, hy1, c), P (hb, hy1, c), P (hb, hy1, cb), P (ha, hy1, cb)], up=(0, -1, 0))
+		cj = cb + s * 0.06
+		for y in joints_y:
+			if hy0 < y < hy1: jn.append ((P (ha, y, cj), P (hb, y, cj)))
+		for a in joints_a:
+			if ha < a < hb: jn.append ((P (a, hy0, cj), P (a, hy1, cj)))
+	if face: vab_part (A, back, face, axis)
+	else: A.add (back, VAB_DOOR)
+	A.add (rev, VAB_DARK)
+	if jn: A.add (merge (*[rod_between (p, q, 0.25, 4) for p, q in jn]), VAB_DARK, role='detail')
+
+def decal (A, o, eu, ev, rect, n):
+	"""a decal on a wall: the rectangle o + s eu + t ev (s, t in 0..1), the sheet's rect onto it"""
+	bm = kl._bm ()
+	O, U, V = Vector (o), Vector (eu), Vector (ev)
+	quad (bm, [tuple (O), tuple (O + U), tuple (O + U + V), tuple (O + V)], up=n)
+	A.add (bm, DECALS, uv='decal', axis=(o, eu, ev, rect))
+
+def a_vab ():
+	"""the Vehicle Assembly Building: its high bay (160 m) with the four high bays'
+	doors (east and west: 139 m, an inverted T, leaves set back), the transfer
+	aisle's door north; the low bay (64 m) south; the flag and the NASA insignia
+	on the south face (capetex.py); the utility annexes; the Launch Control
+	Center by its south-east corner, its firing rooms' windows leaning out
+	towards the pads, a bridge to the low bay"""
+	A = Asset ('vab')
+	x0, x1, z0, z1, H = VAB_HB
+	holes = []
+	for xc in VAB_DOORS:
+		holes += [(xc - 23.0, xc + 23.0, 0.0, 35.0), (xc - 11.5, xc + 11.5, 35.0, 139.0)]
+	jy = [35.0 + 104.0 * k / 7 for k in range (1, 7)]
+	ja = [xc + d for xc in VAB_DOORS for d in (-11.5, 0.0, 11.5)]
+	for (zc, sg) in ((z0, -1), (z1, 1)):  # (west, east: the one painting, the bays' paint and the doors' guides in it)
+		wl = kl._bm ()
+		wall (wl, 'z', zc, x0, x1, 0.0, H, holes, (0, 0, sg))
+		vab_part (A, wl, 'e', 'z')
+		door_recess (A, 'z', zc, (0, 0, sg), holes, 1.5, jy, ja, face='e')
+	nh = [(99.4 - 12.5, 99.4 + 12.5, 0.0, 62.0)]  # (the transfer aisle's door, north)
+	wl = kl._bm ()
+	wall (wl, 'x', x0, z0, z1, 0.0, H, nh, (-1, 0, 0))
+	vab_part (A, wl, 'n', 'x')
+	door_recess (A, 'x', x0, (-1, 0, 0), nh, 1.2, [62.0 * k / 5 for k in range (1, 5)], face='n')
+	wl = kl._bm ()
+	wall (wl, 'x', x1, z0, z1, VAB_LB[4], H, [], (1, 0, 0))
+	quad (wl, [(x1, 0, z0), (x1, VAB_LB[4], z0), (x1, VAB_LB[4], VAB_LB[2]), (x1, 0, VAB_LB[2])], up=(1, 0, 0))
+	quad (wl, [(x1, 0, VAB_LB[3]), (x1, VAB_LB[4], VAB_LB[3]), (x1, VAB_LB[4], z1), (x1, 0, z1)], up=(1, 0, 0))
+	vab_part (A, wl, 's', 'x')
+	roof = kl._bm ()
+	quad (roof, [(x0, H, z0), (x1, H, z0), (x1, H, z1), (x0, H, z1)], up=(0, 1, 0))
+	A.add (roof, ROOFING)
+	for (px, pz, sx, sz) in ((x0 + 0.3, (z0 + z1) / 2, 0.6, z1 - z0), (x1 - 0.3, (z0 + z1) / 2, 0.6, z1 - z0), ((x0 + x1) / 2, z0 + 0.3, x1 - x0, 0.6), ((x0 + x1) / 2, z1 - 0.3, x1 - x0, 0.6)):
+		A.add (box (sx, 1.2, sz, (px, H, pz)), VAB_CLAD, role='detail')
+	for (bx, bz, sx, sz, h) in ((-180.0, 60.0, 14.0, 10.0, 5.0), (-150.0, 130.0, 10.0, 18.0, 4.0), (-210.0, 140.0, 8.0, 8.0, 6.0), (-130.0, 50.0, 12.0, 8.0, 4.5)):
+		A.add (box (sx, h, sz, (bx, H, bz)), VAB_CLAD)
+	pipe (A, [(-166.0, H, 106.0), (-166.0, H + 12.0, 106.0)], 0.15, STEEL_GREY)  # (the flagpole)
+	for (x, z) in ((x0 + 1, z0 + 1), (x0 + 1, z1 - 1), (x1 - 1, z0 + 1), (x1 - 1, z1 - 1)):
+		A.light ((x, H + 1.8, z), RED, 1.6)
+	# (the low bay)
+	lx0, lx1, lz0, lz1, LH = VAB_LB
+	lb = kl._bm ()
+	sd = [((lz0 + lz1) / 2 - 15.0, (lz0 + lz1) / 2 + 15.0, 0.0, 24.0)]
+	wall (lb, 'x', lx1, lz0, lz1, 0.0, LH, sd, (1, 0, 0))
+	vab_part (A, lb, 'ls', 'x')
+	door_recess (A, 'x', lx1, (1, 0, 0), sd, 1.0, [8.0, 16.0], face='ls')
+	lb = kl._bm ()
+	wall (lb, 'z', lz0, lx0, lx1, 0.0, LH, [], (0, 0, -1))
+	wall (lb, 'z', lz1, lx0, lx1, 0.0, LH, [], (0, 0, 1))
+	vab_part (A, lb, 'le', 'z')
+	lr = kl._bm (); quad (lr, [(lx0, LH, lz0), (lx1, LH, lz0), (lx1, LH, lz1), (lx0, LH, lz1)], up=(0, 1, 0)); A.add (lr, ROOFING)
+	for (gz, gy) in ((lz0, 0), (lz1, 0)):  # (window bands: the low bay's offices)
+		for y in (6.0, 14.0, 22.0, 30.0):
+			bm = kl._bm (); sg = 1 if gz == lz1 else -1
+			quad (bm, [(lx0 + 6, y, gz + sg * 0.06), (lx1 - 6, y, gz + sg * 0.06), (lx1 - 6, y + 1.8, gz + sg * 0.06), (lx0 + 6, y + 1.8, gz + sg * 0.06)], up=(0, 0, sg))
+			A.add (bm, GLASS)
+	# (the flag and the insignia on the high bay's south face, above the low bay: west, east)
+	import capetex
+	fu0, fv0, fu1, fv1 = capetex.DECALS['flag']; nu0, nv0, nu1, nv1 = capetex.DECALS['nasa']
+	decal (A, (x1 + 0.08, 136.0, 26.0), (0, 0, 33.5), (0, -63.7, 0), (fu0, fv0, fu1, fv1), (1, 0, 0))
+	# (the insignia, 40.2 m across and 33.5 m up, its centre where it was: its decal cut to the
+	# sphere and the vector's ends out past it (capetex.insignia_patches), the wall between its own)
+	iw, ih = capetex.INSIGNIA_SIZE
+	o, eu, ev = (x1 + 0.08, 107.9 + ih / 2, z1 - 24.75 - iw / 2), (0, 0, iw), (0, -ih, 0)
+	bm = kl._bm ()
+	for poly in capetex.insignia_patches ():
+		quad (bm, [(o[0], o[1] - t * ih, o[2] + s * iw) for (s, t) in poly], up=(1, 0, 0))
+	A.add (bm, DECALS, uv='decal', axis=(o, eu, ev, (nu0, nv0, nu1, nv1)))
+	proxy_box (A, x1 - x0, H, z1 - z0, ((x0 + x1) / 2, 0, (z0 + z1) / 2))
+	proxy_box (A, lx1 - lx0, LH, lz1 - lz0, ((lx0 + lx1) / 2, 0, (lz0 + lz1) / 2))
+	# (the utility annex west, the cooling plant south-west with its fans)
+	shed (A, -91.7, -39.8, 30.0, 77.0, 9.0, wall=VAB_CLAD)
+	shed (A, -21.6, -40.0, 17.0, 50.0, 9.0, wall=VAB_CLAD)
+	for z in (-22.0, -33.5, -45.7, -57.4):
+		A.add (cylinder (4.6, 3.0, 24, (-21.0, 9.0, z)), VAB_CLAD)
+		A.add (cylinder (4.0, 0.1, 24, (-21.0, 12.0, z)), GRATING, role='detail')
+	proxy_box (A, 30, 9, 77, (-91.7, 0, -39.8)); proxy_box (A, 17, 12, 50, (-21.6, 0, -40.0))
+	lcc (A)
+	return A
+
+def lcc (A):
+	"""the Launch Control Center: four storeys, window bands; the firing rooms' windows
+	(the third and fourth storeys of its north-east face, towards the pads) leaning out"""
+	(ox, oz), (ux, uz), (L, W, H) = LCC_O, LCC_U, LCC_LWH
+	vx, vz = -uz, ux
+	P = lambda a, b, y: (ox + a * ux + b * vx, y, oz + a * uz + b * vz)
+	lean = capesurf.LCC_LEAN
+	sw, ne, en, gl, rf = kl._bm (), kl._bm (), kl._bm (), kl._bm (), kl._bm ()
+	quad (sw, [P (0, 0, 0), P (L, 0, 0), P (L, 0, H), P (0, 0, H)], up=(-vx, 0, -vz))
+	quad (ne, [P (0, W, 0), P (L, W, 0), P (L, W, 12.8), P (0, W, 12.8)], up=(vx, 0, vz))
+	quad (gl, [P (0, W, 12.8), P (L, W, 12.8), P (L, W + lean, H - 1.2), P (0, W + lean, H - 1.2)], up=(vx, 0.7, vz))
+	quad (ne, [P (0, W + lean, H - 1.2), P (L, W + lean, H - 1.2), P (L, W + lean, H), P (0, W + lean, H)], up=(vx, 0, vz))
+	for (a, sg) in ((0.0, -1), (L, 1)):
+		quad (en, [P (a, 0, 0), P (a, W, 0), P (a, W, 12.8), P (a, W + lean, H - 1.2), P (a, W + lean, H), P (a, 0, H)], up=(sg * ux, 0, sg * uz))
+	quad (rf, [P (0, 0, H), P (L, 0, H), P (L, W + lean, H), P (0, W + lean, H)], up=(0, 1, 0))
+	# (its faces on the building's sheet: along its length, across it)
+	sheet_part (A, sw, 'cape_vab', 'lcc_sw', (ux, 0, uz), (0, 1, 0), VAB_SHEET)
+	sheet_part (A, ne, 'cape_vab', 'lcc_ne', (ux, 0, uz), (0, 1, 0), VAB_SHEET)
+	sheet_part (A, en, 'cape_vab', 'lcc_end', (vx, 0, vz), (0, 1, 0), VAB_SHEET)
+	A.add (gl, GLASS); A.add (rf, ROOFING)
+	bands = kl._bm ()
+	for y in (2.2, 7.8, 13.4, 19.0):  # (window bands: the south-west face, the ends)
+		quad (bands, [P (3, -0.06, y), P (L - 3, -0.06, y), P (L - 3, -0.06, y + 1.8), P (3, -0.06, y + 1.8)], up=(-vx, 0, -vz))
+		for (a, sg) in ((-0.06, -1), (L + 0.06, 1)):
+			quad (bands, [P (a, 3, y), P (a, W - 3, y), P (a, W - 3, y + 1.8), P (a, 3, y + 1.8)], up=(sg * ux, 0, sg * uz))
+	for y in (2.2, 7.8):  # (and below the firing rooms on the north-east)
+		quad (bands, [P (3, W + 0.06, y), P (L - 3, W + 0.06, y), P (L - 3, W + 0.06, y + 1.8), P (3, W + 0.06, y + 1.8)], up=(vx, 0, vz))
+	A.add (bands, GLASS)
+	rot = -math.degrees (math.atan2 (uz, ux))
+	for (a, b, sx, sz, h) in ((20.0, 12.0, 10.0, 8.0, 3.5), (55.0, 20.0, 14.0, 10.0, 4.0), (88.0, 14.0, 8.0, 8.0, 3.0)):
+		c = P (a, b, H); A.add (box (sx, h, sz, (c[0], H, c[2]), rot), VAB_CLAD)
+	c = P (70.0, 30.0, H); pipe (A, [(c[0], H, c[2]), (c[0], H + 14.0, c[2])], 0.2, STEEL_GREY); A.light ((c[0], H + 14.4, c[2]), RED, 1.0)
+	c = P (L / 2, -4.0, 0); A.add (box (16.0, 0.4, 6.0, (c[0], 4.2, c[2]), rot), VAB_DARK)  # (the entrance's canopy)
+	c = P (L / 2, W / 2 + lean / 2, 0); proxy_box (A, L, H, W + lean, (c[0], 0, c[2]), rot)
+	# (the bridge from the low bay's east face to the LCC's end, the third storey)
+	a, b = Vector ((-92.0, 10.0, VAB_LB[3])), Vector (P (0.0, W / 2, 10.0))
+	d = b - a; Lb = d.length; rb = -math.degrees (math.atan2 (d.z, d.x)) + 90.0
+	m = (a + b) / 2
+	A.add (box (5.0, 4.5, Lb, (m.x, 10.0, m.z), rb), VAB_CLAD)
+	A.add (box (5.1, 1.2, Lb - 1.0, (m.x, 11.6, m.z), rb), GLASS, role='detail')
+	for t in (0.33, 0.67):
+		p = a + d * t; A.add (box (2.0, 10.0, 2.0, (p.x, 0, p.z)), CONCRETE)
+
 KITS = {
 	'earth': {'tower_red': lambda: a_tower ('red'), 'tower_grey': lambda: a_tower ('grey'), 'mast': a_earth_mast,
 		'watertower': a_watertower, 'spheres': a_spheres, 'tanks': a_tanks,
@@ -1103,6 +1703,7 @@ KITS = {
 		   ('space_radiator', a_radiator), ('space_reactor', a_reactor), ('space_comms', a_comms),
 		   ('space_garage', a_garage), ('space_massdriver', a_massdriver), ('space_solar_tower', a_solar_tower),
 		   ('space_radioarray', a_radioarray), ('space_aerostat', a_aerostat), ('space_aerostat_terminal', a_aerostat_terminal)]),
+	'cape': {'KLC39B': a_klc39b, 'KLC39A': a_klc39a, 'KLC39Bground': a_pad_ground, 'MLP': a_mlp, 'vab': a_vab},
 }
 
 # ----------------------------------------------------------------------
@@ -1126,7 +1727,7 @@ def main ():
 		if check:
 			r = subprocess.run ([sys.executable if not sys.executable.endswith ('blender') else 'python3',
 				os.path.join (ROOT, 'Utils', 'BlenderMsh', 'msh_check.py'), path, '--textures', os.path.join (ROOT, 'Textures')]
-				+ ([] if kit == 'trains' else ['--bounds-json', os.path.join (HERE, 'footprints.json')]),  # (trains: new, nothing to keep)
+				+ ([] if kit in ('trains', 'cape') else ['--bounds-json', os.path.join (HERE, 'footprints.json')]),  # (trains, the Cape: new, nothing to keep)
 				capture_output=True, text=True)
 			print (r.stdout.rstrip ())
 			if r.returncode: failed.append (name)

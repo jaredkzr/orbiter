@@ -143,7 +143,10 @@ Known gaps and limitations, to be addressed later.
   _transm) are loaded next to mesh textures. Normal maps are taken as
   DirectX convention (green towards +v). Tested with generated maps only:
   stock Orbiter ships none for vessels. DXT5nm-packed normal maps are not
-  detected. _heat is not used.
+  detected. _heat is not used. _detail (the client's own): a tiling detail
+  texture over the base, 8 of its texels to one of the base's, albedo x
+  (0.5 + rgb) - the grain of large surfaces mapped once by a unique texture
+  (the Cape's pads and VAB); albedo only, no relief.
 
 ## Ray traced lighting
 - With hardware ray queries (RTLighting.cpp, rtlight_*.comp;

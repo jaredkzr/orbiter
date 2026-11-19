@@ -229,16 +229,48 @@ base's centre were tilted against the ground, partly under it).
   collision shape and other clients' look. `ORBITER_VK_BASE_BUILDINGS=0`: the core's, for A/B.
   On Earth they take their region's look by where the base is (`Kit::BaseRegion`: Soviet precast
   and painted sheds, East Asian, Japanese, Middle Eastern, Latin American...).
-- The kits' meshes (`Meshes/BaseKit`: off-world, Earth, trains) are built in Blender:
-  `blender -b --python Utils/BaseKit/blender_kit.py -- <offworld|earth|trains> <asset|all> --check`
+- The kits' meshes (`Meshes/BaseKit`: off-world, Earth, trains, the Cape) are built in Blender:
+  `blender -b --python Utils/BaseKit/blender_kit.py -- <offworld|earth|trains|cape> <asset|all> --check`
   (`kitlib.py`: shapes, world-scale texturing, groups by material and role). Their textures are
-  tiling materials at real size (`Utils/BaseKit/kittex.py` → `Textures/BaseKit/kit_*`, with
+  tiling materials at real size (the Cape's large surfaces excepted: unique sheets, below) (`Utils/BaseKit/kittex.py` → `Textures/BaseKit/kit_*`, with
   `_norm`, `_rghn`, `_metal`, `_night`). `--check` runs `Utils/BlenderMsh/msh_check.py
   --bounds-json Utils/BaseKit/footprints.json`: footprints and heights as the layouts expect.
+- Cape Canaveral in its modern form (`blender_kit.py cape`; both `Canaveral.cfg` copies): `vab`
+  (the Vehicle Assembly Building at its real size - the high bays' doors, the low bay, the flag
+  and NASA insignia put by `Utils/BaseKit/capetex.py` into `Textures/BaseKit/cape_decals`: the
+  insignia rendered from the official artwork, `Utils/BaseKit/assets/NASA_insignia.svg` from
+  Wikimedia Commons, public domain, with librsvg (`gi` Rsvg, `python3-gi-cairo`) - and
+  the Launch Control Center), `KLC39B` (pad 39B as rebuilt for SLS: a clean hardstand on its
+  mound, three 180 m lightning towers and their catenary, the water tower, the propellant
+  spheres), `KLC39A` (pad 39A now: the fixed service structure with a crew access arm and a
+  lightning mast, the transporter-erector on its rails up the ramp), `KLC39Bground` (the trench's
+  floor and flame deflector) and `MLP` (the shuttle's mobile launcher platform, on 39B: Atlantis in
+  "Atlantis satellite Launch" stands on its deck; `Scenario.Cape39StackTest`). The old meshes
+  (`Meshes/Vab.msh`, `KLC39B.msh`) stay for add-ons. Nothing on the pads or the building tiles:
+  their large surfaces are painted once, as wholes, on two sheets of their own
+  (`Utils/BaseKit/capesurf.py` → `Textures/BaseKit/cape_pad` 4096², 8 cm a texel; `cape_vab`
+  4096 x 2048, 11 cm) and mapped onto them once (`capesurf.REGIONS`; `blender_kit.py
+  sheet_part()`). `cape_pad` is a pad seen from above in its own frame - the hardstand's slabs
+  (joints in line with the trench), pours, weathering, spills, repairs and the blast's soot
+  about the trench; the mound's flanks and the ramp's sides as the real pads' cream slope paving
+  (strips down the fall line, courses, runoff streaks, mildew towards the foot, panels replaced);
+  the crawler's river-rock lanes with their tread bands - plus the launcher platform's deck and
+  sides. `cape_vab` is the building's faces as repainted in 2020 (white towers, grey bays, the
+  white frame about the transfer aisle's panel, the high bays' door leaves, the low bay) and the
+  Launch Control Center's. Their grain close by is a detail map (`cape_*_detail`: concrete's
+  grain; the siding's ribs) - the client's `_detail` map, below. Painted after NASA's
+  photographs (listed in `capesurf.py`), none used as texture. `kit_padslab`, `kit_crawlerway`
+  and `kit_padturf` are no longer used. The insignia is 40.2 x 33.5 m (132 x 110 ft), its faces cut to the sphere and the
+  vector's ends (`capetex.insignia_patches`); the decal sheet's rectangles are stretched to fill it.
 - Mesh group flags: `MESHGRP_NOCOLLIDE` (0x100: detail out of the collision hulls),
   `MESHGRP_COLLISION` (0x200, with hidden 0x2: a collision proxy; a mesh with any collides with
   those alone). Hidden groups are tested by their user flag (they were tested by the texture-wrap
   flags).
+- Detail maps (Vulkan client): a texture's `<name>_detail.dds` is a tiling texture laid over it
+  at a finer scale - 8 of its texels to one of the texture's, whatever the two sizes - that
+  multiplies the albedo by 0.5 + its colour (linear; 0.5 leaves it; its mips tend to 0.5, so it
+  fades out by itself with distance). For surfaces mapped once by a unique texture of some
+  centimetres a texel (`VkTexture.h MAP_DETAIL`, `Shaders/mesh.frag`); albedo only.
 - Night-only emission: a texture's `<name>_night.dds` (and the legacy `<name>_n.dds` night
   textures of the generic buildings) are lit as the base's sun sets.
 - Kit lights (aviation reds, door lamps): `Utils/BaseKit/kit_lights.json` (written by

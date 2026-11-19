@@ -31,7 +31,7 @@ def read_base (path):
 	name = m.group (1)
 	floating = re.search (r'^\s*Altitude\s*=', t, re.M | re.I) is not None
 	objs = []
-	for b in re.finditer (r'^\s*MESH\s*\n(.*?)^\s*END\s*$', t, re.M | re.S):
+	for b in re.finditer (r'^\s*MESH\b[^\n]*\n(.*?)^\s*END\s*$', t, re.M | re.S):
 		body = b.group (1)
 		f = re.search (r'^\s*FILE\s+BaseKit[\\/](\S+)', body, re.M | re.I)
 		if not f: continue

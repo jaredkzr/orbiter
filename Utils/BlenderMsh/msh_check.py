@@ -123,7 +123,7 @@ def main ():
 			w, h, fmt = info
 			if w & (w - 1) or h & (h - 1): errors.append ("texture %s: %d x %d, not powers of two" % (name, w, h))
 			stem, ext = os.path.splitext (p)
-			maps = [s for s in ("norm", "rghn", "metal", "emis", "night") if os.path.exists ("%s_%s%s" % (stem, s, ext))]
+			maps = [s for s in ("norm", "rghn", "metal", "emis", "night", "detail") if os.path.exists ("%s_%s%s" % (stem, s, ext))]
 			notes.append ("texture %s: %d x %d %s%s" % (name, w, h, fmt, (", maps " + " ".join (maps)) if maps else ""))
 	for n in notes: print ("  " + n)
 	for e in errors: print ("ERROR " + e)

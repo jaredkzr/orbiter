@@ -56,7 +56,14 @@ SHOTS = {
 	'Jezero':          ('Jezero', (450, -450, 200), (0, 0, 0), 55, ('day', 'night')),
 	'Canaveral':       ('Canaveral', (900, -900, 300), (0, 0, 40), 55, ('day', 'night')),
 	'Canaveral_vab':   ('Canaveral', (380, -330, 25), (0, 0, 70), 60, ('day', 'night')),
-	'Canaveral_39b':   ('Canaveral', (3001 + 380, 4759 - 380, 40), (3001, 4759, 40), 60, ('day',)),
+	'Canaveral_vabeast': ('Canaveral', (330, 40, 30), (150, 170, 75), 60, ('day',)),   # (its east face: the high bays' doors)
+	'Canaveral_vabwall': ('Canaveral', (150, -75, 12), (95, 20, 45), 60, ('day',)),      # (its siding, close)
+	'Canaveral_39bramp': ('Canaveral', (3001 + 75, 4759 - 330, 28), (3001, 4759 - 140, 6), 60, ('day',)),  # (the crawlerway's ramp)
+	'Canaveral_39b':   ('Canaveral', (3001 + 380, 4759 - 380, 40), (3001, 4759, 40), 60, ('day', 'night')),
+	'Canaveral_39btower': ('Canaveral', (3001 - 215 - 95, 4759 + 40 - 135, 22), (3001 - 215, 4759 + 40, 48), 50, ('day',)),  # (its water tower)
+	'Canaveral_39bpad': ('Canaveral', (3001 + 75, 4759 - 95, 38), (3003, 4757, 26), 60, ('day',)),
+	'Canaveral_39a':   ('Canaveral', (4635 + 330, 2659 - 300, 45), (4635, 2659, 45), 60, ('day', 'night')),
+	'Canaveral_39apad': ('Canaveral', (4635 + 95, 2659 - 40, 30), (4615, 2659, 40), 60, ('day',)),
 	'Edwards':         ('Edwards', (800, 250, 250), (92, 945, 0), 55, ('day', 'night')),
 	'Baikonur':        ('Baikonur', (-1300, 4300, 250), (-2000, 5000, 0), 55, ('day', 'night')),
 	'Baikonur_close':  ('Baikonur', (-1700, 4600, 60), (-2050, 5080, 5), 55, ('day',)),

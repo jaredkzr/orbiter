@@ -13,9 +13,16 @@ layout(set = 3, binding = 4) uniform sampler2D specMap;   // specular colour, sm
 layout(set = 3, binding = 5) uniform sampler2D reflMap;   // reflection colour and mask
 layout(set = 3, binding = 6) uniform sampler2D translMap; // translucence (lit from behind)
 layout(set = 3, binding = 7) uniform sampler2D transmMap; // transmittance (sun shining through)
+layout(set = 3, binding = 8) uniform sampler2D detailMap; // tiling detail over the base texture (albedo x (0.5 + rgb))
 const uint MAP_NORM = 1u, MAP_RGHN = 2u, MAP_METAL = 4u, MAP_EMIS = 8u,
            MAP_SPEC = 16u, MAP_REFL = 32u, MAP_TRANSL = 64u, MAP_TRANSM = 128u,
-           MAP_NIGHT = 256u; // (a flag: the emission map lit at night only, VkTexture.h MAP_NIGHT_BIT)
+           MAP_DETAIL = 256u,
+           MAP_NIGHT = 65536u; // (a flag: the emission map lit at night only, VkTexture.h MAP_NIGHT_BIT)
+
+// The detail map's texture coordinates for the base texture's uv: DETAIL_RATIO of its
+// texels to one of the base's (VkTexture.h MAP_DETAIL), by the two textures' sizes
+const float DETAIL_RATIO = 8.0;
+#define DETAIL_UV(baseTex, uv) ((uv) * (vec2 (textureSize (baseTex, 0)) / vec2 (textureSize (detailMap, 0)) * DETAIL_RATIO))
 
 // Tangent frame from screen-space derivatives of position and texture
 // coordinates (no per-vertex tangents needed): T along +u, B along +v
