@@ -76,6 +76,10 @@ DEFL_X = (-21.9, 3.9)                  # (the main flame deflector: its foot, it
 VAB_HB = (-240.6, -106.6, 20.4, 178.4, 160.0)
 VAB_LB = (-106.6, -22.6, 31.9, 166.9, 64.0)
 VAB_DOORS = (-204.1, -142.6)
+# (the low bay's blocks, west to east: z0, z1, height - stepped (as the aerial photograph KSC-98PC-0998 has it): its middle
+# block over the transfer aisle, 64 m, its door; 35 m wings either side of it, grey; lower wings beyond them, white)
+LB_BLOCKS = ((31.9, 60.0, 16.0), (60.0, 74.4, 35.0), (74.4, 124.4, 64.0), (124.4, 140.0, 35.0), (140.0, 166.9, 20.0))
+assert LB_BLOCKS[0][0] == VAB_LB[2] and LB_BLOCKS[-1][1] == VAB_LB[3] and max (b[2] for b in LB_BLOCKS) == VAB_LB[4]
 LCC_O, LCC_U, LCC_LWH, LCC_LEAN = (-72.1, 201.0), (0.7432, 0.6691), (109.1, 40.9, 23.5), 2.6
 
 def hardstand_joints ():
@@ -482,15 +486,22 @@ def vab_paint (face, A, Y, px, rng):
 	x0, x1, z0, z1, H = VAB_HB
 	lx0, lx1, lz0, lz1, LH = VAB_LB
 	if face.startswith ('lcc'): return lcc_paint (face, A, Y, px, rng)
-	top = LH if face in ('ls', 'le') else H
+	top = H
+	if face == 'ls':   # (each block's own top)
+		top = np.full (A.shape, LH, np.float32)
+		for (za, zb, h) in LB_BLOCKS: top = np.where ((A >= za) & (A < zb), h, top)
+	elif face == 'le': top = LH
 	lum, dirt = vab_weather (A, Y, top, {'s': 100, 'n': 120, 'e': 140, 'ls': 160, 'le': 180}[face], px)
 	rgb = np.broadcast_to (col (VAB_WHITE), A.shape + (3,)).copy ()
 	shade = np.ones (A.shape, np.float32)
 	if face in ('s', 'n', 'ls'):
-		if face == 'ls': ac, g = (lz0 + lz1) / 2, _frame (A, Y, (lz0 + lz1) / 2, LH, 26.0, 20.0, 54.0, 15.0, 46.0, 24.0)
+		if face == 'ls': ac, g = (lz0 + lz1) / 2, _frame (A, Y, (lz0 + lz1) / 2, LH, 21.5, 17.0, 54.0, 15.0, 46.0, 24.0)
 		else: ac, g = (z0 + z1) / 2, _frame (A, Y, (z0 + z1) / 2, H, 31.0, 21.0, 136.0, 12.5, 124.0, VAB_LB[4] if face == 's' else 62.0)
 		grey, panel = g
 		rgb[grey] = VAB_GREY
+		if face == 'ls':   # (the 35 m wings grey)
+			for (za, zb, h) in LB_BLOCKS:
+				if h == 35.0: rgb[(A >= za) & (A < zb)] = VAB_GREY
 		# (the panel: translucent sheets in a grid of mullions)
 		mu = np.minimum (np.abs (((A - ac) / 6.25 + 0.5) % 1.0 - 0.5) * 6.25, np.abs ((Y / 5.9 + 0.5) % 1.0 - 0.5) * 5.9)
 		pt = 1 + 0.05 * (cellhash (np.floor ((A - ac) / 6.25 + 0.5), np.floor (Y / 5.9 + 0.5), 201) - 0.5) + 0.03 * fbm (A, Y, 9.0, 202, 3)
@@ -532,7 +543,9 @@ def vab_paint (face, A, Y, px, rng):
 			guide = ((c >= 11.5) & (c < 13.3) & (Y >= LEAF_Y0 + 4.5) & (Y < LEAF_Y1 + 2.5)) | ((c < 13.3) & (Y >= LEAF_Y1) & (Y < LEAF_Y1 + 2.5))
 			shade = np.where (guide, 0.74, shade)
 	elif face == 'le':
-		band = (Y > 2.0) & (Y < 37.0) & (A > lx0 + 3.5) & (A < lx1 - 3.5)
+		band = (Y > 2.0) & (Y < 14.5) & (A > lx0 + 3.5) & (A < lx1 - 3.5)
+		for h in sorted (set (b[2] for b in LB_BLOCKS))[:-1]:   # (the flashing where a lower block's roof meets the side)
+			shade = np.where (np.abs (Y - h - 0.3) < 0.3, 0.82, shade)
 		rgb[band] = (0.74, 0.75, 0.76)
 		shade = np.where (band & (np.abs (((A - lx0) / 10.5 + 0.5) % 1.0 - 0.5) * 10.5 < 0.5), 1.12, shade)   # (pilasters)
 	grainy = 0.006 * rng.standard_normal (A.shape).astype (np.float32)

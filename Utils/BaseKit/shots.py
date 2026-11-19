@@ -58,6 +58,7 @@ SHOTS = {
 	'Canaveral_vab':   ('Canaveral', (380, -330, 25), (0, 0, 70), 60, ('day', 'night')),
 	'Canaveral_vabeast': ('Canaveral', (330, 40, 30), (150, 170, 75), 60, ('day',)),   # (its east face: the high bays' doors)
 	'Canaveral_vabroof': ('Canaveral', (330, 360, 300), (95, 130, 140), 60, ('day',)),   # (its roofs, the LCC's)
+	'Canaveral_lowbay': ('Canaveral', (330, -300, 230), (100, 60, 30), 45, ('day',)),   # (the low bay's steps, as KSC-98PC-0998)
 	'Canaveral_vabwall': ('Canaveral', (150, -75, 12), (95, 20, 45), 60, ('day',)),      # (its siding, close)
 	'Canaveral_39bramp': ('Canaveral', (3001 + 75, 4759 - 330, 28), (3001, 4759 - 140, 6), 60, ('day',)),  # (the crawlerway's ramp)
 	'Canaveral_39btop': ('Canaveral', (3001 + 30, 4759 - 250, 520), (3001, 4759 - 245, 0), 60, ('day',)),   # (its mound and ramp from above)

@@ -1512,6 +1512,7 @@ def a_klc39a ():
 VAB_HB = (-240.6, -106.6, 20.4, 178.4, 160.0)    # (the high bay: x0, x1, z0, z1, height)
 VAB_LB = (-106.6, -22.6, 31.9, 166.9, 64.0)      # (the low bay, south of it)
 VAB_DOORS = (-204.1, -142.6)                     # (the high bays' doors, east and west: their centres along x)
+LB_BLOCKS = capesurf.LB_BLOCKS                   # (the low bay's blocks west to east: z0, z1, height)
 VAB_CLAD = KitMat ('vab_clad', 'kit_cladding', (0.88, 0.89, 0.90))
 VAB_DARK = KitMat ('vab_dark', 'kit_cladding', (0.46, 0.47, 0.49))
 VAB_DOOR = KitMat ('vab_door', 'kit_cladding', (0.70, 0.71, 0.73))
@@ -1594,9 +1595,8 @@ def a_vab ():
 	vab_part (A, wl, 'n', 'x')
 	door_recess (A, 'x', x0, (-1, 0, 0), nh, 1.2, [62.0 * k / 5 for k in range (1, 5)], face='n')
 	wl = kl._bm ()
-	wall (wl, 'x', x1, z0, z1, VAB_LB[4], H, [], (1, 0, 0))
-	quad (wl, [(x1, 0, z0), (x1, VAB_LB[4], z0), (x1, VAB_LB[4], VAB_LB[2]), (x1, 0, VAB_LB[2])], up=(1, 0, 0))
-	quad (wl, [(x1, 0, VAB_LB[3]), (x1, VAB_LB[4], VAB_LB[3]), (x1, VAB_LB[4], z1), (x1, 0, z1)], up=(1, 0, 0))
+	for (za, zb, h) in ((z0, VAB_LB[2], 0.0),) + LB_BLOCKS + ((VAB_LB[3], z1, 0.0),):  # (above the low bay's blocks)
+		quad (wl, [(x1, h, za), (x1, H, za), (x1, H, zb), (x1, h, zb)], up=(1, 0, 0))
 	vab_part (A, wl, 's', 'x')
 	roof = kl._bm ()   # (the high bay's and the low bay's: one painting in plan (capesurf.py roof))
 	quad (roof, [(x0, H, z0), (x1, H, z0), (x1, H, z1), (x0, H, z1)], up=(0, 1, 0))
@@ -1607,24 +1607,30 @@ def a_vab ():
 	pipe (A, [(-166.0, H, 106.0), (-166.0, H + 12.0, 106.0)], 0.15, STEEL_GREY)  # (the flagpole)
 	for (x, z) in ((x0 + 1, z0 + 1), (x0 + 1, z1 - 1), (x1 - 1, z0 + 1), (x1 - 1, z1 - 1)):
 		A.light ((x, H + 1.8, z), RED, 1.6)
-	# (the low bay)
+	# (the low bay: stepped - its middle block over the transfer aisle, 64 m, the door in it; wings either
+	# side stepping down (LB_BLOCKS); their south faces one painting, their sides another, their roofs the plan's)
 	lx0, lx1, lz0, lz1, LH = VAB_LB
-	lb = kl._bm ()
+	lb, ls = kl._bm (), kl._bm ()
 	sd = [((lz0 + lz1) / 2 - 15.0, (lz0 + lz1) / 2 + 15.0, 0.0, 24.0)]
-	wall (lb, 'x', lx1, lz0, lz1, 0.0, LH, sd, (1, 0, 0))
-	vab_part (A, lb, 'ls', 'x')
+	for (za, zb, h) in LB_BLOCKS:
+		wall (ls, 'x', lx1, za, zb, 0.0, h, sd if h == LH else [], (1, 0, 0))
+		quad (roof, [(lx0, h, za), (lx1, h, za), (lx1, h, zb), (lx0, h, zb)], up=(0, 1, 0))
+	vab_part (A, ls, 'ls', 'x')
 	door_recess (A, 'x', lx1, (1, 0, 0), sd, 1.0, [8.0, 16.0], face='ls')
-	lb = kl._bm ()
-	wall (lb, 'z', lz0, lx0, lx1, 0.0, LH, [], (0, 0, -1))
-	wall (lb, 'z', lz1, lx0, lx1, 0.0, LH, [], (0, 0, 1))
+	hs = [0.0] + [b[2] for b in LB_BLOCKS] + [0.0]
+	for k, (za, zb, h) in enumerate (LB_BLOCKS):  # (the sides: where a block stands over its neighbour)
+		if h > hs[k]: wall (lb, 'z', za, lx0, lx1, hs[k], h, [], (0, 0, -1))
+		if h > hs[k + 2]: wall (lb, 'z', zb, lx0, lx1, hs[k + 2], h, [], (0, 0, 1))
 	vab_part (A, lb, 'le', 'z')
-	quad (roof, [(lx0, LH, lz0), (lx1, LH, lz0), (lx1, LH, lz1), (lx0, LH, lz1)], up=(0, 1, 0))
 	sheet_part (A, roof, 'cape_vab', 'roof', (1, 0, 0), (0, 0, 1), VAB_SHEET)
-	for (gz, gy) in ((lz0, 0), (lz1, 0)):  # (window bands: the low bay's offices)
+	for (gz, h, sg) in ((lz0, LB_BLOCKS[0][2], -1), (lz1, LB_BLOCKS[-1][2], 1)):  # (window bands: the wings' offices)
 		for y in (6.0, 14.0, 22.0, 30.0):
-			bm = kl._bm (); sg = 1 if gz == lz1 else -1
+			if y + 1.8 > h - 2.0: continue
+			bm = kl._bm ()
 			quad (bm, [(lx0 + 6, y, gz + sg * 0.06), (lx1 - 6, y, gz + sg * 0.06), (lx1 - 6, y + 1.8, gz + sg * 0.06), (lx0 + 6, y + 1.8, gz + sg * 0.06)], up=(0, 0, sg))
 			A.add (bm, GLASS)
+	c = ((lx0 + lx1) / 2, LB_BLOCKS[-1][2], (LB_BLOCKS[-1][0] + LB_BLOCKS[-1][1]) / 2 - 3.0)   # (the east wing's penthouse)
+	A.add (box (24.0, 4.5, 14.0, c), VAB_CLAD)
 	# (the flag and the insignia on the high bay's south face, above the low bay: west, east)
 	import capetex
 	fu0, fv0, fu1, fv1 = capetex.DECALS['flag']; nu0, nv0, nu1, nv1 = capetex.DECALS['nasa']
@@ -1638,7 +1644,8 @@ def a_vab ():
 		quad (bm, [(o[0], o[1] - t * ih, o[2] + s * iw) for (s, t) in poly], up=(1, 0, 0))
 	A.add (bm, DECALS, uv='decal', axis=(o, eu, ev, (nu0, nv0, nu1, nv1)))
 	proxy_box (A, x1 - x0, H, z1 - z0, ((x0 + x1) / 2, 0, (z0 + z1) / 2))
-	proxy_box (A, lx1 - lx0, LH, lz1 - lz0, ((lx0 + lx1) / 2, 0, (lz0 + lz1) / 2))
+	for (za, zb, h) in LB_BLOCKS:
+		proxy_box (A, lx1 - lx0, h, zb - za, ((lx0 + lx1) / 2, 0, (za + zb) / 2))
 	# (the utility annex west, the cooling plant south-west with its fans)
 	shed (A, -91.7, -39.8, 30.0, 77.0, 9.0, wall=VAB_CLAD)
 	shed (A, -21.6, -40.0, 17.0, 50.0, 9.0, wall=VAB_CLAD)
