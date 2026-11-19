@@ -211,7 +211,7 @@ bool Orbiter::RunLaunchpad (std::string &scenario)
 	dlg->AddEntry (&lpdlg);
 	PosixLaunchpad::Action action = PosixLaunchpad::NONE;
 	auto next = std::chrono::steady_clock::now();
-	while (action == PosixLaunchpad::NONE) {
+	while (action == PosixLaunchpad::NONE || action == PosixLaunchpad::PREVIEW) { // (no scene to preview in)
 		gclient->clbkUpdate (false); // window events
 		platformKbuf.clear();
 		if (bPlatformClose) { // window closed
@@ -265,51 +265,58 @@ bool Orbiter::RunBackdrop (std::string &scenario)
 	if (!m_pPosixLaunchpad) m_pPosixLaunchpad = new PosixLaunchpad (this);
 	else m_pPosixLaunchpad->Refresh ();
 
-	ApplyVideoSettings ();
-	bBackdrop = true;
-	Launch (scn.c_str());
-	LaunchpadDlg lpdlg (m_pPosixLaunchpad, true);
-	pDlgMgr->AddEntry (&lpdlg);
-	pDlgMgr->SetExclusive (&lpdlg);
+	// (the scene: the backdrop's, or the scenario the builder asks to see -
+	// a session each, the launchpad over it)
+	PosixLaunchpad::Action action;
+	for (;;) {
+		ApplyVideoSettings ();
+		bBackdrop = true;
+		Launch (scn.c_str());
+		LaunchpadDlg lpdlg (m_pPosixLaunchpad, true);
+		pDlgMgr->AddEntry (&lpdlg);
+		pDlgMgr->SetExclusive (&lpdlg);
 
-	PosixLaunchpad::Action action = PosixLaunchpad::NONE;
-	while (bSession && action == PosixLaunchpad::NONE) {
-		if (BeginTimeStep (bRunning)) {
-			UpdateWorld ();
-			EndTimeStep (bRunning); // (window events)
-			if (!bSession) break;
-			platformKbuf.clear (); // (keys go to the launchpad only)
-			{
-				double w = 2.0 * PI / BACKDROP_PERIOD;
-				oapiCameraRotAzimuth (BACKDROP_SWAY * w * std::cos (w * td.SysT1) * td.SysDT);
+		action = PosixLaunchpad::NONE;
+		while (bSession && action == PosixLaunchpad::NONE) {
+			if (BeginTimeStep (bRunning)) {
+				UpdateWorld ();
+				EndTimeStep (bRunning); // (window events)
+				if (!bSession) break;
+				platformKbuf.clear (); // (keys go to the launchpad only)
+				{
+					double w = 2.0 * PI / BACKDROP_PERIOD;
+					oapiCameraRotAzimuth (BACKDROP_SWAY * w * std::cos (w * td.SysT1) * td.SysDT);
+				}
+				Render3DEnvironment ();
+				action = lpdlg.action;
 			}
-			Render3DEnvironment ();
-			action = lpdlg.action;
+			if (bPlatformClose) {
+				bPlatformClose = false;
+				action = PosixLaunchpad::EXIT;
+			}
 		}
-		if (bPlatformClose) {
-			bPlatformClose = false;
-			action = PosixLaunchpad::EXIT;
+		if (action == PosixLaunchpad::LAUNCH) {
+			// the loading screen, shown while the scenario loads (frames in flight: twice)
+			m_pPosixLaunchpad->SetLoading (true);
+			for (int i = 0; i < 2; i++) Render3DEnvironment ();
+			m_pPosixLaunchpad->SetLoading (false);
 		}
+		// (the session may have ended by itself, e.g. at --maxframes: then it
+		// is gone with its dialog manager, and the application exits)
+		if (!bSession && action == PosixLaunchpad::NONE) action = PosixLaunchpad::EXIT;
+		if (pDlgMgr) {
+			pDlgMgr->SetExclusive (nullptr);
+			pDlgMgr->DelEntry (&lpdlg);
+		}
+		m_pPosixLaunchpad->ReleaseResources ();
+		if (bSession) {
+			PreCloseSession ();
+			CloseSession ();
+		}
+		bBackdrop = false;
+		if (action != PosixLaunchpad::PREVIEW) break;
+		if (std::filesystem::exists (m_pPosixLaunchpad->PreviewScenario (), ec)) scn = m_pPosixLaunchpad->PreviewScenario ();
 	}
-	if (action == PosixLaunchpad::LAUNCH) {
-		// the loading screen, shown while the scenario loads (frames in flight: twice)
-		m_pPosixLaunchpad->SetLoading (true);
-		for (int i = 0; i < 2; i++) Render3DEnvironment ();
-		m_pPosixLaunchpad->SetLoading (false);
-	}
-	// (the session may have ended by itself, e.g. at --maxframes: then it
-	// is gone with its dialog manager, and the application exits)
-	if (!bSession && action == PosixLaunchpad::NONE) action = PosixLaunchpad::EXIT;
-	if (pDlgMgr) {
-		pDlgMgr->SetExclusive (nullptr);
-		pDlgMgr->DelEntry (&lpdlg);
-	}
-	m_pPosixLaunchpad->ReleaseResources ();
-	if (bSession) {
-		PreCloseSession ();
-		CloseSession ();
-	}
-	bBackdrop = false;
 
 	if (action != PosixLaunchpad::LAUNCH) return false;
 	scenario = m_pPosixLaunchpad->Scenario ();

@@ -810,6 +810,20 @@ if (ORBITER_TEST_EXE)
 		set_tests_properties(Launchpad.Cycle PROPERTIES TIMEOUT 120
 			ENVIRONMENT "ORBITER_VK_OFFSCREEN=1;ORBITER_VK_SKY=0;ORBITER_LAUNCHPAD_AUTO=Delta-glider/Smack!;ORBITER_LAUNCHPAD_RUNS=2"
 			PASS_REGULAR_EXPRESSION "Launchpad: session 2 closed")
+		# the scenario builder (Src/Platform/posix/ScenarioBuilder.h): a scenario
+		# with a ship of each kind of start (a pad, a runway, the surface, an
+		# orbit, beside another ship) written and launched; its script
+		# (Script/Tests/BuilderTest.lua, run by the test's configuration) checks
+		# where the ships are
+		add_test(
+			NAME "Launchpad.Builder"
+			COMMAND ${ORBITER_TEST_EXE} "--maxframes=40"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Launchpad.Builder PROPERTIES TIMEOUT 120
+			ENVIRONMENT "ORBITER_VK_OFFSCREEN=1;ORBITER_VK_SKY=0;ORBITER_LAUNCHPAD_BUILD=BuilderTest;ORBITER_BUILDER_CHECK=1"
+			PASS_REGULAR_EXPRESSION "Scenario builder: check passed"
+			FAIL_REGULAR_EXPRESSION "Scenario builder: check failed")
 
 		# Scripted mouse and keyboard input (Tests/Input/*.input, see
 		# OVP/VulkanClient/TestInput.h): the map view and the instant replay

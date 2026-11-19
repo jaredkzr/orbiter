@@ -4,8 +4,8 @@
 // =======================================================================
 // Launchpad for non-Windows platforms: an ImGui user interface drawn in
 // the graphics client's window, over a live scene (a backdrop session)
-// or between simulation sessions: scenario browser and preview,
-// settings, add-on modules.
+// or between simulation sessions: scenario browser and preview, the
+// scenario builder (ScenarioBuilder.h), settings, add-on modules.
 // =======================================================================
 
 #ifndef __LAUNCHPADPOSIX_H
@@ -19,10 +19,12 @@
 
 class Orbiter;
 class SettingsUI;
+class ScenarioBuilder;
 
 class PosixLaunchpad {
 public:
-	enum Action { NONE, LAUNCH, EXIT };
+	/// (PREVIEW: the scene behind the launchpad is to show PreviewScenario())
+	enum Action { NONE, LAUNCH, EXIT, PREVIEW };
 
 	explicit PosixLaunchpad (Orbiter *orbiter);
 	~PosixLaunchpad ();
@@ -34,6 +36,9 @@ public:
 
 	/// The selected scenario (path relative to the scenario directory, without extension)
 	const std::string &Scenario () const { return selScenario; }
+
+	/// The scenario file the builder asked to see behind the launchpad (absolute path)
+	const std::string &PreviewScenario () const { return previewScenario; }
 
 	/// Release graphics resources (before a session starts)
 	void ReleaseResources ();
@@ -68,7 +73,7 @@ public:
 	static ScenarioInfo ReadInfo (const std::string &path);
 
 private:
-	enum Page { SCENARIOS, SETTINGS, ADDONS, ABOUT, NPAGE };
+	enum Page { SCENARIOS, SETTINGS, ADDONS, ABOUT, BUILDER, NPAGE }; // (ORBITER_LAUNCHPAD_TAB's numbers)
 
 	struct Node {
 		std::string name;  // display name
@@ -117,6 +122,9 @@ private:
 	ui::Fill previewFill; // (the preview above its actions)
 	int settingsPage = 0; // (kept between runs)
 	std::unique_ptr<class SettingsUI> settings; // (the settings screen, shared with the flight's Settings dialog)
+	std::unique_ptr<ScenarioBuilder> builder;   // (made when its page is first shown)
+	std::string previewScenario;
+	int buildTest = 0; // (ORBITER_LAUNCHPAD_BUILD: 1 to do, 2.. done: frames since)
 	std::vector<std::string> recent; // recently launched scenarios, the latest first
 	bool loading = false;
 	bool exitRequest = false; // (the power button or Ctrl+Q)
@@ -129,7 +137,9 @@ private:
 	DWORD imageW = 0, imageH = 0;
 
 	// test automation (environment): ORBITER_LAUNCHPAD_TAB selects the
-	// initial page (0: scenarios, 1: settings, 2: add-ons, 3: about),
+	// initial page (0: scenarios, 1: settings, 2: add-ons, 3: about, 4: the
+	// scenario builder; ORBITER_LAUNCHPAD_BUILD=<name>: it saves and launches
+	// a scenario with a ship of each kind of start),
 	// ORBITER_LAUNCHPAD_SETTINGS the settings page (SettingsUI::Page);
 	// ORBITER_LAUNCHPAD_AUTO=<scenario> launches it after a few frames,
 	// ORBITER_LAUNCHPAD_RUNS times (default 1), then exits

@@ -194,6 +194,7 @@ set(headless_src
 	${PLATFORM_DIR}/posix/LaunchpadPosix.cpp
 	${PLATFORM_DIR}/posix/OrbiterPosix.cpp
 	${PLATFORM_DIR}/posix/PosixPlatform.cpp
+	${PLATFORM_DIR}/posix/ScenarioBuilder.cpp
 )
 
 # The simulation core is a shared library, so that plugin modules and tests

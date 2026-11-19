@@ -9,6 +9,7 @@
 #include "imgui.h"
 #include "UiTheme.h"
 #include "IconsLucide.h"
+#include "ScenarioBuilder.h"
 #include "UiAnchor.h"
 #include <algorithm>
 #include <cmath>
@@ -209,6 +210,7 @@ PosixLaunchpad::PosixLaunchpad (Orbiter *orbiter): orbiter(orbiter)
 		int p = atoi (t);
 		if (p >= 0 && p < NPAGE) page = (Page)p;
 	}
+	if (const char *t = getenv ("ORBITER_LAUNCHPAD_BUILD")) if (*t) page = BUILDER, buildTest = 1;
 	if (const char *t = getenv ("ORBITER_LAUNCHPAD_SETTINGS")) settingsPage = atoi (t);
 	if (const char *a = getenv ("ORBITER_LAUNCHPAD_AUTO")) {
 		autoScenario = a;
@@ -596,6 +598,21 @@ PosixLaunchpad::Action PosixLaunchpad::Draw (bool backdrop)
 	case SETTINGS:  DrawSettings (x, top, w, h); break;
 	case ADDONS:    DrawAddons (x, top, w, h); break;
 	case ABOUT:     DrawAbout (x, top, w, h); break;
+	case BUILDER: {
+		if (!builder) builder = std::make_unique<ScenarioBuilder> (orbiter);
+		ScenarioBuilder::Result r = builder->Draw (x, top, w, h, backdrop);
+		if (buildTest > 1 && ++buildTest > 20) action = EXIT; // (the test's scenario flown: done)
+		if (r == ScenarioBuilder::LAUNCH) {
+			if (buildTest) buildTest = 2;
+			selScenario = builder->Saved ();
+			scanned = false; // (the new file: in the browser's tree next time)
+			action = LAUNCH;
+		} else if (r == ScenarioBuilder::PREVIEW) {
+			previewScenario = builder->PreviewFile ();
+			action = PREVIEW;
+		}
+		break;
+	}
 	default: break;
 	}
 	if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed (ImGuiKey_Q, false)) exitRequest = true;
@@ -656,7 +673,9 @@ void PosixLaunchpad::DrawHeader (float x, float y, float w)
 	ui::PopFont ();
 
 	// pages, right-aligned, and the power button
-	static const char *names[NPAGE] = { "Scenarios", "Settings", "Add-ons", "About" };
+	// (in the header's order: the builder beside the scenarios)
+	static const char *names[NPAGE] = { "Scenarios", "Build", "Settings", "Add-ons", "About" };
+	static const Page pages[NPAGE] = { SCENARIOS, BUILDER, SETTINGS, ADDONS, ABOUT };
 	float gap = ui::Px (30);
 	ui::PushFont (f.medium, ui::SIZE_LARGE);
 	float tw = 0;
@@ -666,7 +685,8 @@ void PosixLaunchpad::DrawHeader (float x, float y, float w)
 	float tx = bx - ui::Px (12) - tw;
 	for (int i = 0; i < NPAGE; i++) {
 		ImGui::SetCursorScreenPos (ImVec2(tx, y + ui::Px (2)));
-		if (ui::NavTab (names[i], page == i)) page = (Page)i;
+		if (ui::NavTab (names[i], page == pages[i])) page = pages[i];
+		uianchor::SetItem ((std::string ("launchpad.page.") + names[i]).c_str());
 		tx = ImGui::GetItemRectMax().x + gap;
 	}
 	ImGui::SetCursorScreenPos (ImVec2(bx, y));
