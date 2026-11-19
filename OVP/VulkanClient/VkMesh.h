@@ -47,6 +47,7 @@ public:
 	static constexpr DWORD GRP_ADDITIVE = 0x8;
 	static constexpr DWORD GRP_RUNWAY   = MESHGRP_RUNWAY; // a base's runway with markings (runway.glsl)
 	static constexpr DWORD GRP_PAD      = MESHGRP_PAD;    // a base's landing pad with markings (pad.glsl)
+	static constexpr DWORD GRP_UNPAVED  = MESHGRP_UNPAVED; // a runway marked out on bare ground: its lines blended over the terrain
 	static constexpr DWORD GRP_BUILDING = MESHGRP_BUILDING;  // a base's generic buildings (BaseBuildings: drawn by the client)
 	static constexpr DWORD GRP_TRAIN    = MESHGRP_TRAIN;     // a base's trains (drawn and moved by the client)
 	static constexpr DWORD GRP_NOCOLLIDE = MESHGRP_NOCOLLIDE; // detail, no collision (drawn)

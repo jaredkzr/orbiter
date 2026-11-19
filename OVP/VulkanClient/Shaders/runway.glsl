@@ -12,12 +12,13 @@
 // Needs GNoise (mesh.frag) and frame.glsl.
 
 const float RW_FT = 0.3048;
-const int RWMARK_VISUAL = 1, RWMARK_NONPRECISION = 2, RWMARK_PRECISION = 3; // (OrbiterAPI.h)
+const int RWMARK_VISUAL = 1, RWMARK_NONPRECISION = 2, RWMARK_PRECISION = 3, RWMARK_LAKEBED = 4; // (OrbiterAPI.h)
 
 // (linear colours)
 const vec3 RW_PAINT = vec3 (0.86, 0.86, 0.83);
 const vec3 RW_YELLOW = vec3 (0.73, 0.39, 0.03);
 const vec3 RW_RUBBER = vec3 (0.022, 0.022, 0.022);
+const vec3 RW_OIL = vec3 (0.035, 0.033, 0.03); // (a lakebed's lines: asphalt oil sprayed on the ground)
 // roughness
 const float RW_ROUGH_PAINT = 0.66, RW_ROUGH_RUBBER = 0.78;
 
@@ -344,4 +345,56 @@ void RunwayShade (vec2 p, vec2 dpx, vec2 dpy, RunwayHit h, inout vec3 alb, inout
 	alb = mix (alb, RW_PAINT, white);
 	alb = mix (alb, RW_YELLOW, yellow);
 	rough = mix (rough, RW_ROUGH_PAINT, max (white, yellow));
+}
+
+// ---------------------------------------------------------------------
+// A runway marked out on the bare ground of a dry lake (RWMARK_LAKEBED:
+// Rogers Dry Lake, White Sands' gypsum): no pavement - lines of asphalt oil
+// on the ground, dark on the pale playa, renewed when the lake has dried.
+// Edge lines along all of it (the overruns too), a bar across at each
+// threshold, the centreline between them and the designators.
+
+bool RunwayLakebed (RunwayHit h)
+{
+	return int (frame.runways[4 * h.i + 2].x + 0.5) == RWMARK_LAKEBED;
+}
+
+// the lines' coverage of the pixel at the hit (p, dpx, dpy as RunwayShade)
+float RunwayLakebedLines (vec2 p, vec2 dpx, vec2 dpy, RunwayHit h)
+{
+	int i = h.i;
+	float s = h.s, t = h.t;
+	vec4 r0 = frame.runways[4 * i], r1 = frame.runways[4 * i + 1], r2 = frame.runways[4 * i + 2], r3 = frame.runways[4 * i + 3];
+	vec2 u = r0.zw, rt = vec2 (u.y, -u.x);
+	float L = r1.x, hw = r1.y;
+	float hs = max (0.5 * (abs (dot (dpx, u)) + abs (dot (dpy, u))), 1e-4);
+	float ht = max (0.5 * (abs (dot (dpx, rt)) + abs (dot (dpy, rt))), 1e-4);
+	const float LW = 4.0 * RW_FT; // (the lines' width)
+	bool far = s > 0.5 * L;
+	float thr = far ? r1.w : r1.z;
+	float d = far ? L - s - thr : s - thr;
+	float x = far ? -t : t;
+	float mid = 0.5 * (L - r1.z - r1.w);
+	float ax = abs (x);
+	float inL = RwCover (s, hs, 0.0, L);
+	// the edges, the ends
+	float c = RwCover (ax, ht, hw - LW, hw) * inL;
+	c = max (c, RwCover (d, hs, -thr, -thr + LW) * RwCover (ax, ht, 0.0, hw));
+	// the threshold: a bar 10 ft wide
+	c = max (c, RwCover (d, hs, 0.0, 10.0 * RW_FT) * RwCover (ax, ht, 0.0, hw));
+	if (d > 0.0) {
+		float dft = d / RW_FT, xft = x / RW_FT, hdf = hs / RW_FT, hxf = ht / RW_FT;
+		// the designator (twice the paved runways': 120 ft tall, from 40 ft)
+		float code = far ? r3.y : r3.x;
+		if (dft > 20.0 - 2.0 * hdf && dft < 370.0 + 2.0 * hdf)
+			c = max (c, RwDesignator (code, 0.5 * xft, 0.5 * (dft - 40.0) + 190.0, 0.5 * hxf, 0.5 * hdf));
+		// the centreline: 120 ft stripes, 80 ft gaps, from beyond the designator
+		float c0 = (code > 120.5 ? 400.0 : 240.0) * RW_FT;
+		c = max (c, RwStripes (d, hs, c0, 200.0 * RW_FT, 120.0 * RW_FT, -1.0) * RwCover (d, hs, c0, mid) * RwCover (x, ht, -0.5 * LW, 0.5 * LW));
+	}
+	// the oil taken up unevenly, worn by the wind's sand
+	float fp = max (hs, ht);
+	float wear = clamp (0.88 + 0.10 * GNoise (p / 6.0 + r2.w) - 0.30 * max (GNoise (p / 0.6 + 9.0) - 0.35, 0.0)
+		* (1.0 - smoothstep (0.15, 0.6, fp)), 0.45, 1.0);
+	return clamp (c, 0.0, 1.0) * wear;
 }

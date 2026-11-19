@@ -85,6 +85,7 @@ public:
 	/// bind the sea field's images (bindings 9, 10; null: white)
 	void WriteOcean (VkDescriptorSet set, VkImageView longV, VkImageView rippleV) const;
 	VkPipeline SkyPipeline () const { return skyPipeline; }
+	VkPipeline VeilPipeline () const { return veilPipeline; }
 	VkPipelineLayout SkyLayout () const { return skyLayout; }
 	/// set with uniform data for "no atmosphere"
 	VkDescriptorSet NoAtmosphereSet () const { return noneSet; }
@@ -107,6 +108,7 @@ private:
 	VkDescriptorPool pool = VK_NULL_HANDLE;
 	VkPipelineLayout skyLayout = VK_NULL_HANDLE;
 	VkPipeline skyPipeline = VK_NULL_HANDLE;
+	VkPipeline veilPipeline = VK_NULL_HANDLE; // (the sky over bodies beyond the air)
 	vkc::Buffer noneUbo;
 	VkSampler oceanSampler = VK_NULL_HANDLE; // (the sea field: repeat, mip mapped)
 	VkDescriptorSet noneSet = VK_NULL_HANDLE;
@@ -133,7 +135,12 @@ public:
 	/// Write this frame's uniform data (camera and sun relative to the planet)
 	void Update ();
 	/// Draw the sky (if the camera can see the atmosphere)
-	void RenderSky ();
+	/// the sky; veil: over the bodies beyond the air drawn since (where
+	/// depth was written): dimmed by the air, its light in front of them
+	void RenderSky (bool veil = false);
+	/// the sky is drawn (the air covers some of the view)
+	bool SkyVisible () const { return visible; }
+	double AtmRadius () const { return atmRadius; }
 	/// Descriptor set with this frame's uniform data
 	VkDescriptorSet Set () const;
 	/// Planet surface (hemisphere textures, level 4 tiles) and mean colour, used

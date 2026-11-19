@@ -107,7 +107,18 @@ the launchpad over a live scene (a session of its own, never saved). It
 lists the scenarios with their preview images (`<scenario>.jpg` beside the
 scenario file, rendered with `Utils/ScenarioShots/render.py`), the
 recently launched ones first. Enter launches the selected scenario, Ctrl+Q
-quits.
+quits. Its **Build** page makes a scenario without editing files
+(`Src/Platform/posix/ScenarioBuilder.h`): the date, the view, the ships -
+each with its class and where it starts: on a base's pad or runway (read
+from the base files), on a body's surface by longitude, latitude and
+heading, in orbit by its elements over the body's equator, or beside
+another ship (behind it on its orbit, east of it on the ground) - and the
+one in focus. The file is shown as it will be written; Preview shows the
+scenario behind the launchpad (with the live backdrop), Save writes
+`Scenarios/Custom/<name>.scn`, Save and launch flies it.
+`ORBITER_LAUNCHPAD_BUILD=<name>` (tests: `Launchpad.Builder`) writes and
+launches a scenario with a ship of each kind of start, checked in the
+session by `Script/Tests/BuilderTest.lua`.
 
 **In the simulation:** `M` toggles the 3D map view with manoeuvre nodes;
 `F5` opens replay. A gamepad works once `JoystickIndex` is set in
@@ -203,7 +214,11 @@ ends and widths as they were, designators from their headings (Edwards, Baikonur
 and Havana: the real ones). Base ground meshes (runways, pads) also get a fine
 grain below their textures' texels (`mesh.frag` `GroundDetail`), and wheels
 leave no tracks on paved ground (`oapiSurfacePaved`: runways with their overruns
-and shoulders, pads, decks). The pavement textures:
+and shoulders, pads, decks). `MARKINGS lakebed` is a runway marked out on the bare
+ground of a dry lake (White Sands' three on the gypsum, placed on the runways the
+hi-res surface tiles show): no pavement - its group (`MESHGRP_UNPAVED`) is blended
+over the terrain with only its lines drawn, dark asphalt oil (edges, a bar at each
+threshold, centreline, designators twice the FAA's size); the ground stays unpaved. The pavement textures:
 
 ```bash
 python3 Utils/runway/make_pavement.py [--preview <dir>]
@@ -333,6 +348,8 @@ These are for testing and tuning (`1` turns a feature on, `0` off).
 | `ORBITER_VK_SCREENSHOT_EXIT=1` | … and exit afterwards |
 | `ORBITER_VK_SCREENSHOT_NOUI=1` | … without the user interface, HUD and panels (scenario previews: `Utils/ScenarioShots/render.py`) |
 | `ORBITER_VK_FRAMETIME=<s>` | a fixed frame time for exposure, sky adaptation and the upscaler: with `--fixedstep`, images that do not depend on how fast the frames were (A/B comparisons) |
+| `ORBITER_VK_SKY_VEIL=0` | the sky's light not drawn in front of the bodies beyond the air (the Moon by day: a dark disc, as it was; for comparisons). On by default: bodies drawn from tiles beyond the nearest atmosphere whose sky is drawn come first, with their cloud layers, and the sky is drawn again over them (`sky.frag` `VEIL`); rings and bodies drawn as plain spheres take the air in their own shaders |
+| `ORBITER_BARE_SLOPES=0` | bare earth about bases (`BareEarth`) without the slopes' correction: the lowest tenth of the samples everywhere, not of their heights over the samples' plane where it slopes (`GroundFilter.h`; for comparisons) |
 | `ORBITER_VK_VIDEO=<dir>`, `ORBITER_VK_VIDEO_FRAMES=<n>` | write `n` frames as PNG files |
 | `ORBITER_MIN_WARP=<w>` | time acceleration allowed down to `w` (below the usual 0.1): deep slow motion in renders, e.g. `Tests/Audio/TrailerTides.scn` (a black hole's break-up at 0.015) |
 | `ORBITER_VK_VIDEO_FILE=<file.mp4>` | stream every frame into ffmpeg, encoded to that file (H.264, on the GPU with VAAPI, else x264; `ORBITER_VK_VIDEO_CODEC=x264` forces it): no frames on disk, and offscreen (`ORBITER_VK_OFFSCREEN=1`) no screen needed. `ORBITER_VK_VIDEO_FPS` its frame rate (30). With `--fixedstep=0.0333333` a frame a step, and `ORBITER_AUDIO_RENDER` the game's sound alongside, to join to it |

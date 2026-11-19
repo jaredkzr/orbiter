@@ -2200,7 +2200,7 @@ int Runway::Read (istream &is)
 			char m[32] = "";
 			sscanf (cp+8, "%31s", m);
 			markings = !_stricmp (m, "precision") ? RWMARK_PRECISION : !_stricmp (m, "nonprecision") ? RWMARK_NONPRECISION
-				: !_stricmp (m, "visual") ? RWMARK_VISUAL : RWMARK_NONE;
+				: !_stricmp (m, "visual") ? RWMARK_VISUAL : !_stricmp (m, "lakebed") ? RWMARK_LAKEBED : RWMARK_NONE;
 		} else if (!_stricmp (label, "DESIG")) {
 			sscanf (cp+5, "%3s%3s", desig[0], desig[1]);
 		} else if (!_stricmp (label, "OVERRUN")) {

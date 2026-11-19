@@ -5534,6 +5534,7 @@ OAPIFUNC NAVHANDLE oapiGetBasePadNav (OBJHANDLE hBase, DWORD pad);
 #define RWMARK_VISUAL        1
 #define RWMARK_NONPRECISION  2
 #define RWMARK_PRECISION     3
+#define RWMARK_LAKEBED       4   ///< a runway marked out on bare ground (a dry lake): dark lines, no pavement
 /// Runway surfaces (RUNWAYSPEC::surface)
 #define RWSURF_CONCRETE      0
 #define RWSURF_ASPHALT       1
@@ -5560,6 +5561,9 @@ typedef struct {
 #define MESHGRP_RUNWAY 0x10
 /// Mesh group user flag: a landing pad's surface (its markings drawn by the client)
 #define MESHGRP_PAD    0x20
+/// Mesh group user flag (with MESHGRP_RUNWAY): a runway marked out on bare
+/// ground (RWMARK_LAKEBED) - no pavement: only its lines are drawn, over the terrain
+#define MESHGRP_UNPAVED 0x400
 /// Mesh group user flag: a base's generic buildings (BLOCK, HANGAR, HANGAR2,
 /// HANGAR3, TANK), described by oapiGetBaseBuildings (a client may draw its own)
 #define MESHGRP_BUILDING  0x40

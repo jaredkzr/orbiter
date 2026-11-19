@@ -463,8 +463,13 @@ float ShoreBandWidth (float texM)
 // than about twice the band meet their far bank first: no surf there (the
 // sea's waves do not reach them; KSC's canals had the coast's surf along both
 // banks). Needs the distance field (F1); without it, 1. muv: clamped within
-// the tile (hm: half a texel)
-float OpenWater (vec2 muv, float texM, vec2 hm)
+// the tile (hm: half a texel). Also from the land beside it (the wet sand:
+// no swash runs up a canal's bank): the probe then starts at the water's
+// edge. W: the band [m] the water must be open over - no less than
+// SHORE_OPEN_MIN (a barge canal 55 m wide passed for open water under a low
+// sea's narrow band; where the mask's texels allow: the probe is a texel at least)
+const float SHORE_OPEN_MIN = 100.0;
+float OpenWater (vec2 muv, float texM, vec2 hm, float W)
 {
 	if (atm.coastPrm.z <= 0.0 || texM <= 0.0) return 1.0;
 	vec2 e = 1.0 / vec2 (textureSize (maskTex, 0));
@@ -473,10 +478,21 @@ float OpenWater (vec2 muv, float texM, vec2 hm)
 	vec2 g = vec2 (MaskSd (textureLod (maskTex, muv + vec2 (e.x, 0.0), 0.0).a) - MaskSd (textureLod (maskTex, muv - vec2 (e.x, 0.0), 0.0).a),
 	               MaskSd (textureLod (maskTex, muv + vec2 (0.0, e.y), 0.0).a) - MaskSd (textureLod (maskTex, muv - vec2 (0.0, e.y), 0.0).a));
 	if (dot (g, g) < 1e-6) return 1.0;
-	float P = clamp (ShoreBandWidth (texM) / texM, 1.0, 0.8 * atm.coastPrm.z); // the probe [texels]
-	float sd1 = MaskSd (textureLod (maskTex, clamp (muv - normalize (g) * P * e, hm, 1.0 - hm), 0.0).a);
-	// (open water: sd1 about sd0 - P; a canal: past its middle, towards the far bank)
-	return smoothstep (0.35, 0.75, (sd0 - sd1) / P);
+	float want = max (W, SHORE_OPEN_MIN) / texM; // [texels]
+	float P = clamp (want, 1.0, 0.8 * atm.coastPrm.z); // the probe [texels]
+	float D = max (sd0, 0.0) + P; // (from the land: to the edge first)
+	vec2 dir = normalize (g) * e;
+	float sd1 = MaskSd (textureLod (maskTex, clamp (muv - dir * D, hm, 1.0 - hm), 0.0).a);
+	// (open water: sd1 about sd0 - D; a canal: past its middle, towards the far bank)
+	float open = smoothstep (0.35, 0.75, (sd0 - sd1) / D);
+	// (the band beyond the field's reach - fine masks, texels of a metre or two: a second probe as
+	// far again, unless the first is already as deep as the field tells; the barge canal at KSC,
+	// 55 m and 45 texels wide, passed the first from either bank)
+	if (open > 0.0 && want > P && sd1 > 1.0 - atm.coastPrm.z) {
+		float sd2 = MaskSd (textureLod (maskTex, clamp (muv - dir * (D + P), hm, 1.0 - hm), 0.0).a);
+		if (sd2 > 1.0 - atm.coastPrm.z) open *= smoothstep (0.35, 0.75, (sd1 - sd2) / P);
+	}
+	return open;
 }
 
 // surf: a swash line at the water's edge and bores running in, in a band
@@ -806,6 +822,8 @@ void main()
 				float Ww = atm.coastPrm.x;
 				float icy = smoothstep(0.0, 0.06, (base.b - base.r) / max(max(base.r, max(base.g, base.b)), 1e-3)); // (snow, ice: not wetted)
 				float wet = smoothstep(-0.05 * Ww, 0.05 * Ww, dM) * (1.0 - smoothstep(0.55 * Ww, Ww, dM)) * (1.0 - smoothstep(1.0, 3.0, fpL / Ww)) * (1.0 - icy);
+				// (not along canals, ditches and ponds: no swash there, as no surf)
+				if (wet > 0.0) wet *= OpenWater(clamp(muvL, hmL, 1.0 - hmL), texML, hmL, max(ShoreBandWidth(texML), 2.0 * Ww));
 				base *= mix(vec3(1.0), vec3(0.6, 0.6, 0.64), wet);
 				if (atm.coastPrm.y > 0.5 && dM < 0.0) {
 					// (the sediment of the surf zone seen through the water, fading within about 60 m: no
@@ -964,7 +982,7 @@ void main()
 				float cap = Whitecaps(pP, pw, footprint, fadeW, capVar) * fl;
 				capVar *= fl;
 				float shore = ShoreFoam(pw, ShoreDistance(clamp(muv, hm, 1.0 - hm), texM), texM, footprint);
-				if (shore > 0.0) shore *= OpenWater(clamp(muv, hm, 1.0 - hm), texM, hm);
+				if (shore > 0.0) shore *= OpenWater(clamp(muv, hm, 1.0 - hm), texM, hm, ShoreBandWidth(texM));
 				if (cap > 0.0 || shore > 0.0) {
 					g3 = 1.0 - (1.0 - cap) * (1.0 - shore);
 					fxFoam = 1.0 - (1.0 - fxJet) * (1.0 - g3);

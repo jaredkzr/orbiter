@@ -2850,8 +2850,33 @@ void Scene::Render ()
 	// scene geometry
 	VkDescriptorSet fset = FrameSet ();
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &fset, 0, nullptr);
+	// (the bodies beyond the air the camera looks through - the nearest
+	// planet's whose sky is drawn - first, and its sky again over them: the
+	// Moon by day is seen through the sky's light, its dark side lost in it
+	// (drawn over the sky it showed as a dark disc near new moon). Bodies
+	// drawn as meshes (a sphere, no tiles) take the air in their shader
+	// (mesh.frag AerialPerspective), as do rings (ring.frag): not these)
+	// (ORBITER_VK_SKY_VEIL=0: as before, for tests)
+	static const bool veilOff = [] { const char *e = getenv ("ORBITER_VK_SKY_VEIL"); return e && *e && !atoi (e); }();
+	VPlanet *airP = nullptr;
 	for (auto *vo : list)
-		if (dynamic_cast<VPlanet*>(vo)) vo->Render (RenderPass::Opaque);
+		if (auto *p = dynamic_cast<VPlanet*>(vo))
+			if (!veilOff && p->SkyReach () > 0.0 && (!airP || p->CamDist () < airP->CamDist ())) airP = p;
+	double airReach = airP ? airP->SkyReach () : 0.0;
+	bool veiled = false;
+	for (auto *vo : list)
+		if (auto *p = dynamic_cast<VPlanet*>(vo))
+			if (airP && p != airP && p->Beyond (airReach)) {
+				p->Render (RenderPass::Opaque), veiled = true;
+				p->RenderCloudLayerEarly (); // (its cloud layer under the veil too; its rings take the air in their shader)
+			}
+	if (veiled) {
+		airP->RenderSkyVeil ();
+		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &fset, 0, nullptr);
+	}
+	for (auto *vo : list)
+		if (auto *p = dynamic_cast<VPlanet*>(vo))
+			if (!(airP && p != airP && p->Beyond (airReach))) p->Render (RenderPass::Opaque);
 	RenderNearStars (false);
 	ctx->GpuMark ("planets");
 	for (auto *vo : list)
@@ -2995,8 +3020,14 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 				if (o.group == g) { ovr = &o; break; }
 		bool transparent = ovr ? ovr->additive : grp.transparent;
 		if (transparent != (pass == RenderPass::Transparent)) continue;
+		// (a runway marked out on bare ground: its lines blended over the
+		// terrain just drawn - in the opaque pass, under the clouds and all
+		// that is transparent; not in the prepass: the ground there is the terrain's)
+		bool decal = groundOn && (grp.usrFlag & VkMesh::GRP_UNPAVED);
+		if (decal && pass != RenderPass::Opaque) continue;
 
 		VkPipeline pipe = pass == RenderPass::Depth ? meshPrepass
+			: decal ? meshBlend
 			: !transparent ? meshOpaque : (ovr || (grp.usrFlag & VkMesh::GRP_ADDITIVE)) ? meshAdditive : meshBlend;
 		if (pipe != bound) {
 			vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
@@ -3036,7 +3067,7 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 			pc.pbr[0] = pp.metalness, pc.pbr[1] = pp.roughness, pc.pbr[2] = pp.reflectivity, pc.pbr[3] = pp.f0;
 			memcpy (pc.heat, objHeat, sizeof(objHeat));
 			pc.maps[0] = maps ? (float)maps->flags : 0.0f;
-			pc.maps[1] = transparent ? 1.0f : 0.0f; // not in the prepass: no ambient occlusion
+			pc.maps[1] = transparent || decal ? 1.0f : 0.0f; // not in the prepass: no ambient occlusion
 			pc.maps[2] = grp.alphaTest;
 			// (a base's ground: its detail; -1 - (first + 128 count + 16384 kind) its
 			// runways' (kind 0) or pads' (1) markings: mesh.frag)
@@ -3327,6 +3358,7 @@ void Scene::DrawRing (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &model
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadow ? ringShadowPipe : ringPipe);
 	VkDescriptorSet fset = FrameSet ();
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &fset, 0, nullptr);
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 2, 1, &camAtmSet, 0, nullptr); // (ring.frag: the air about the camera)
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 1, 1, &tex->set, 0, nullptr);
 	VkDeviceSize ofs = 0;
 	vkCmdBindVertexBuffers (cmd, 0, 1, &vb, &ofs);

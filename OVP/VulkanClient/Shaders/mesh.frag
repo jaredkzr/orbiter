@@ -96,7 +96,7 @@ void main()
 	vec3 dpx = dFdx (vPosObj), dpy = dFdy (vPosObj);
 	RunwayHit hit;
 	PadHit phit;
-	bool onRw = false, onPad = false;
+	bool onRw = false, onPad = false, lakebed = false; // (lakebed: marked out on bare ground, its lines only)
 	vec2 suv = vUV, sdx = dFdx (vUV), sdy = dFdy (vUV);
 	mat2 srot = mat2 (1.0);
 	vec4 texel;
@@ -104,6 +104,7 @@ void main()
 		if (gkind == 0) {
 			onRw = RunwayFind (vPosObj.xz, gfirst, gcount, hit);
 			if (onRw) RunwaySlabUV (hit, dpx.xz, dpy.xz, suv, sdx, sdy, srot);
+			lakebed = onRw && RunwayLakebed (hit);
 		} else {
 			onPad = PadFind (vPosObj.xz, gfirst, gcount, phit);
 			if (onPad) PadSlabUV (phit, dpx.xz, dpy.xz, suv, sdx, sdy, srot);
@@ -129,11 +130,14 @@ void main()
 	if (draw.maps.w < 0.0) { // a base's ground: its fine detail (uniform: derivatives are defined)
 		float fp = max (length (dpx), length (dpy));
 		// a runway: its markings, the pavement's variation and grooves
-		if (onRw) RunwayShade (vPosObj.xz, dpx.xz, dpy.xz, hit, base, mat.rough);
+		if (lakebed) {
+			alpha = RunwayLakebedLines (vPosObj.xz, dpx.xz, dpy.xz, hit);
+			base = RW_OIL, mat.rough = 0.9, mat.N = normalize (vNormalView);
+		} else if (onRw) RunwayShade (vPosObj.xz, dpx.xz, dpy.xz, hit, base, mat.rough);
 		if (onPad) PadShade (dpx.xz, dpy.xz, phit, base, mat.rough);
 		float alb;
 		float h = GroundDetail (vPosObj.xz, fp, alb);
-		if (onRw) h += RunwayGrooves (hit, dpx.xz, dpy.xz);
+		if (onRw && !lakebed) h += RunwayGrooves (hit, dpx.xz, dpy.xz);
 		base *= alb;
 		// bump (Mikkelsen: the surface gradient from the height's screen derivatives)
 		vec3 sx = dFdx (vPosView), sy = dFdy (vPosView);

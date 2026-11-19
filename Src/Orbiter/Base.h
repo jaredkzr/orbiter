@@ -75,7 +75,7 @@ public:
 	/// on a slope), blended back to the data's ground about it. Areas of one
 	/// group (> 0) share a level: the mean over all of them. Landing pads in
 	/// a level area take its level
-	struct Grade { double x, z, len, wid, bearing; bool plane; int group; bool level = false; }; // (level: across it, a runway)
+	struct Grade { double x, z, len, wid, bearing; bool plane; int group; bool level = false; bool paved = true; }; // (level: across it, a runway; paved: not a lakebed runway's bare ground)
 	const std::vector<Grade> &Grades () const { return grades; }
 	/// Bare earth about the base (BareEarth = radius [blend], [m]; default
 	/// none, blend 3000): the elevation data are surface models (trees,

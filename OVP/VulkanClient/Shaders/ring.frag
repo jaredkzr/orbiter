@@ -11,6 +11,8 @@
 
 #include "frame.glsl"
 #include "ring.glsl"
+#define ATM_SET 2
+#include "atmosphere.glsl" // (the air about the camera: the rings seen through it)
 
 layout(location = 0) in vec3 vObj;
 layout(location = 1) in vec3 vPosView;
@@ -66,5 +68,12 @@ void main()
 	vec3 col = albedo * K * phase * sun;
 	float alpha = 1.0 - exp (-tau / mu);
 	col += c * frame.ambient.rgb * alpha;
+	// seen through the air about the camera (Saturn in a daytime sky): dimmed by
+	// it, its light in front of the rings (as mesh.frag's AerialPerspective)
+	if (atm.misc.x > 0.5) {
+		vec3 T;
+		vec3 Lin = Inscatter (normalize (mat3 (atm.viewToPlanet) * vPosView), length (vPosView), T);
+		col = col * T + AtmTonemap (Lin) * alpha;
+	}
 	outColor = vec4 (col, alpha);
 }

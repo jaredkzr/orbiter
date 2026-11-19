@@ -11,46 +11,40 @@ client: `runway.glsl`; the SLF and the Skid Strip surveyed); tiled pavement
 textures with normal and roughness maps; landing pads restyled (`pad.glsl`:
 markings, per-body pavement, night lights); a
 fine grain on base ground meshes; no tyre tracks on paved ground; no surf on
-canals and ponds. Left over:
+canals and ponds, nor wet sand along them (the same open-water test); White
+Sands' lakebed runways marked out on the gypsum (`MARKINGS lakebed`: dark lines
+blended over the terrain, placed on the runways the hi-res surface tiles show);
+the sky's light in front of bodies beyond the air (the Moon by day: its dark
+side lost in the sky; `ORBITER_VK_SKY_VEIL=0` as before), also in front of
+their cloud layers and rings. Then (2026-11-19): bare earth on slopes (the
+ground filter takes the lowest tenth over the samples' plane where it slopes:
+`GroundFilter.h`), enabled at Alcântara and Svobodniy; Edwards' lakebed runways
+18L/36R, 18R/36L and 15/33; surf and wet sand only along water open over some
+100 m (a second probe of the shore field: KSC's barge canal clear of surf); the
+launchpad's scenario builder (its Build page: `ScenarioBuilder.h`,
+`Launchpad.Builder`); scripts' `proc.skip()` waits for a frame of the
+simulation whatever the machine's load (the interpreter's turn: the landing
+autopilot came down 500 m short while a video was encoded). Left over:
 
-- **Bare earth elsewhere**: surveyed, not enabled (radial profiles to 15 km,
-  with and without):
-  - Alcântara and Svobodniy: the ground filter (the lowest tenth within
-    600 m) cut real relief - Alcântara's plateau by its cliffs, Svobodniy's
-    hills (mean drops of 10 and 14 m). They need a filter that tells canopy
-    from slopes (e.g. the lowest tenth of the slope-detrended data).
-  - Plesetsk: unbroken taiga - no ground within 600 m to find; little change.
-  - Havana: built up; the cities' own levelling (`CityMap::Ground`) is off
-    near bases (their fade) - decide which of the two should hold there.
-- **Runway designators** not given (`DESIG`) come from the true heading; real
-  designators are magnetic (a few are one off). Most of Earth's runways are
-  placeholders (3000 x 60 m at round headings); real ones can be surveyed (the
-  FAA's or the AIP's ends) and given their designators, overruns and surfaces.
-- **Runway and pad markings in other clients**: only the Vulkan client draws
-  them (others show the tiled pavement; `STYLE classic` keeps a pad's old
-  texture); nor do ray traced reflections show them.
-- **After the base asset overhaul** (all phases done): both LC-39 pads share one surface painting
-  (and the VAB's east and west faces); the Cape's rooftop plant, the pads' lattice, pipes, plinths
-  and the MLP's parts still use tiled textures (the sheds are `BLOCK`s: client-drawn). The low bay's steps (`capesurf.LB_BLOCKS`) are read off one aerial
-  photograph (KSC-98PC-0998): their widths are estimates. `SOLARPLANT` (now a fixed array, exported) has no test: no stock
-  base uses it (checked at a temporary plant at Edwards: drawn, shadowed, collides).
-- **Scenario builder in the main menu** (Launchpad): build a scenario without editing files -
-  pick the focus vessel and its class, where it starts (landed at a base: its pad or runway;
-  on a planet's surface by longitude/latitude and heading; in orbit, by elements or relative
-  to another object), add other ships with their own states and locations, set the date and
-  the camera; preview it, then save it as a `.scn` under `Scenarios/` and launch it.
-- **The Moon by day**: near new moon it shows as a dark disc in Earth's daytime sky (seen
-  from Habana, MJD 51985.7) - the sky's light in front of it missing.
-- **Classic pads' curvature**: `STYLE classic` pads (and other base objects
-  kilometres from their base's centre) are still planes at the curvature of
-  their centre, tilted against the ground by up to centimetres; the marked
-  pads follow it (`Lpad::ExportMarkedGroup`).
-- **White Sands' lakebed runways** (width 0, the gypsum) still use `Runway2`:
-  nothing is drawn; they could get painted lines on the bare ground.
-- **Wet sand along canals**: the shore field's wet-sand band (`coastPrm.x`)
-  still runs along narrow water, like the surf did; the same open-water test
-  (`OpenWater`, tile_main.glsl) could scale it.
-- **`ORBITER_VK_VIDEO_FILE` flights are not repeatable**: the landing autopilot
-  (`Script/Tests/LandingVideo.lua`) touches down 560-740 m in with it, 1099 m
-  without, every time; so do real-time runs. Its control loop seems to miss
-  frames when they are paced by the encoder or the clock.
+- **Bare earth, decided against**: Plesetsk (unbroken taiga: no ground to find,
+  and its ravines' banks cut by 16 m even over the samples' plane) and Havana
+  (hilly, built up: the cities' own levelling holds there, 2 m on the mean
+  against the bare earth's 5 m). At Alcântara the plateau's cliff edges still
+  come out some 5 m lower than its flat ground (a step is no plane).
+- **Narrow fields of view from the ground exhaust the GPU's memory**: a ground
+  observer's aperture set below about 2 degrees (`oapi.set_cameraaperture`)
+  loads terrain until the heap limit stops Orbiter (6-7 GB within 20 s at
+  Habana). It also kept the rings' share of the sky's veil from being looked at
+  close up (Saturn by day): checked only as far as the planet's disc (Jupiter's
+  pixel as bright as the sky).
+- **Edwards' lakebed runways**: their axes and north ends are from the level 17
+  surface tiles, their far ends not (the lakebed is saturated in the imagery:
+  18L/R to where they leave the lake, 15/33 its nominal length); the lake's
+  other runways (17/35, 05/23, 06/24, 07/25, 09/27, 12/30) are not marked out.
+  The Shuttle's aim-point marks at White Sands are only in the hi-res tiles.
+- **Scenario builder**: no docked starts, no fuel or gear states, orbits only
+  by elements over the body's equator (not relative to a base's overflight),
+  the bodies of `Sol` only, bases from `Config/<body>/Base` only (not a
+  planet's other base directories), no Windows launchpad page.
+- **A build does not copy changed base files** (`Src/Celbody/*/Config/Earth/Base`)
+  into the build tree unless something else there changed: copied by hand.

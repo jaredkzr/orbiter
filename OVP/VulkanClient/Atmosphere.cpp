@@ -424,6 +424,16 @@ bool AtmosphereRenderer::Init (vkc::Context *c, TextureManager *tm)
 	gpi.pDynamicState = &dy;
 	gpi.layout = skyLayout;
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &skyPipeline));
+	// the veil over bodies beyond the air (sky.frag VEIL): where something
+	// was drawn (the pass at the far plane, reversed z 0: below what is stored)
+	const int32_t veil = 1;
+	VkSpecializationMapEntry sme{ 0, 0, sizeof(veil) };
+	VkSpecializationInfo spi{ 1, &sme, sizeof(veil), &veil };
+	stages[1].pSpecializationInfo = &spi;
+	ds.depthTestEnable = VK_TRUE;
+	ds.depthWriteEnable = VK_FALSE;
+	ds.depthCompareOp = VK_COMPARE_OP_LESS;
+	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &veilPipeline));
 	vkDestroyShaderModule (ctx->device, vs, nullptr);
 	vkDestroyShaderModule (ctx->device, fs, nullptr);
 	return true;
@@ -546,6 +556,7 @@ void AtmosphereRenderer::Shutdown ()
 	vkDestroyDescriptorSetLayout (ctx->device, lutSetLayout, nullptr);
 	vkDestroySampler (ctx->device, lutSampler, nullptr);
 	vkDestroyPipeline (ctx->device, skyPipeline, nullptr);
+	vkDestroyPipeline (ctx->device, veilPipeline, nullptr);
 	vkDestroyPipelineLayout (ctx->device, skyLayout, nullptr);
 	vkDestroyDescriptorPool (ctx->device, pool, nullptr);
 	vkDestroyDescriptorSetLayout (ctx->device, setLayout, nullptr);
@@ -1394,12 +1405,12 @@ void Atmosphere::Update ()
 	visible = present && scene->PixelSize (atmRadius, length (scene->CameraPos() - ppos)) > 2.0;
 }
 
-void Atmosphere::RenderSky ()
+void Atmosphere::RenderSky (bool veil)
 {
 	if (!visible) return;
 	AtmosphereRenderer *ar = scene->Atm();
 	VkCommandBuffer cmd = ctx->Cmd();
-	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ar->SkyPipeline());
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, veil ? ar->VeilPipeline() : ar->SkyPipeline());
 	VkDescriptorSet s = Set ();
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ar->SkyLayout(), 0, 1, &s, 0, nullptr);
 	vkCmdDraw (cmd, 3, 1, 0, 0);

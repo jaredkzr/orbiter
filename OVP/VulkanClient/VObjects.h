@@ -401,6 +401,15 @@ public:
 	void Update () override;
 	void Render (RenderPass pass) override;
 	void RenderSky () override;
+	/// its sky is drawn: how far from the camera its air reaches [m] (else 0)
+	double SkyReach () const;
+	/// its sky over the bodies beyond its air drawn since RenderSky (Scene::Render)
+	void RenderSkyVeil ();
+	/// wholly beyond this distance from the camera [m] (not a star: its disc is the sky pass's own)
+	/// (drawn from tiles: a sphere's mesh takes the air about the camera in its shader)
+	bool Beyond (double dist) const { return !isStar && surface && camDist - size > dist; }
+	/// its tiled cloud layer now, before the sky's veil, not in the transparent pass of this frame
+	void RenderCloudLayerEarly ();
 	void RenderShadow (ShadowMap &sm) override;
 	void PrepareFrame () override;
 	bool RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n) override;
@@ -430,6 +439,7 @@ private:
 	std::unique_ptr<Atmosphere> atmosphere;
 	std::unique_ptr<PlanetSurface> surface; // tiled surface, if available
 	std::unique_ptr<PlanetSurface> clouds;  // tiled cloud layer, if available
+	bool cloudsEarly = false;               // (drawn before the sky's veil this frame: RenderCloudLayerEarly)
 	std::vector<std::unique_ptr<VBase>> bases; // bases near the camera
 	std::unique_ptr<vkscatter::Gallery> gallery; // preview of the ground scatter assets (ORBITER_VK_SCATTER_GALLERY)
 	std::unique_ptr<vkscatter::Field> field;     // the ground scatter around the camera

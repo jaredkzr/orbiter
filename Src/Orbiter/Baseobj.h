@@ -466,7 +466,10 @@ private:
 // the texture's rectangles), or, with MARKINGS, its pavement (a texture
 // of slabs 25 ft square: RunwayConcrete, RunwayAsphalt, or RWTEX) and its
 // markings described for the graphics client to draw (oapiGetBaseRunways):
-//   MARKINGS precision|nonprecision|visual|none
+//   MARKINGS precision|nonprecision|visual|none|lakebed
+//                        (lakebed: marked out on the bare ground of a dry
+//                        lake in dark lines - edges, thresholds, centreline,
+//                        designators; no pavement, the terrain shows)
 //   DESIG <d1> <d2>      designators at END1 (landing towards END2) and END2
 //                        (default: from the true heading, two digits)
 //   OVERRUN <m1> [<m2>]  paved beyond the thresholds at END1, END2 [m]
@@ -493,6 +496,8 @@ public:
 	const float GetILSfreq (int i) const { return ILSfreq[i]; }
 	/// markings described (MARKINGS): drawn by the client, the pavement tiled
 	bool Marked () const { return markings >= 0; }
+	/// marked out on bare ground (MARKINGS lakebed): no pavement
+	bool Unpaved () const { return markings == RWMARK_LAKEBED; }
 	void GetSpec (RUNWAYSPEC *spec) const;
 
 	static constexpr float SLAB = PAVE_SLAB;      // [m] a slab of the pavement (25 ft)

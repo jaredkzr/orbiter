@@ -186,6 +186,7 @@ Base::Base (char *fname, Planet *_planet, double _lng, double _lat)
 					g.wid = std::max (2.0 * prwy->width, MINWIDTH) + 2.0 * SHOULDER;
 					g.bearing = rwy[nrwy].appr1 * DEG;
 					g.plane = true, g.group = 0, g.level = true; // (sloping along it as the ground does, level across)
+					g.paved = !prwy->Unpaved (); // (marked out on a dry lake: bare ground - tracks, its sound)
 					grades.push_back (g);
 				}
 				if (float freq = prwy->GetILSfreq(0)) {
@@ -490,11 +491,13 @@ void Base::ExportShadowGeometry (Mesh ***mesh_shadow, double **elev, DWORD *nmes
 
 // the merged meshes' group flags: bit 0 no ground shadow; MESHGRP_RUNWAY a
 // runway with markings (its texture coordinates its slabs: the client draws
-// the markings)
+// the markings; with MESHGRP_UNPAVED one marked out on bare ground: its
+// lines only)
 static DWORD GroupFlag (BaseObject *bo, bool groundsh)
 {
 	DWORD f = groundsh ? 0 : 1;
 	if ((bo->GetSpecs() & OBJSPEC_RWY) && ((Runway*)bo)->Marked ()) f |= MESHGRP_RUNWAY;
+	if ((bo->GetSpecs() & OBJSPEC_RWY) && ((Runway*)bo)->Unpaved ()) f |= MESHGRP_UNPAVED;
 	if ((bo->GetSpecs() & OBJSPEC_LPAD) && ((Lpad*)bo)->Marked ()) f |= MESHGRP_PAD;
 	if (bo->GetBuildingSpec (nullptr)) f |= MESHGRP_BUILDING;
 	if (bo->GetTrainSpec (nullptr)) f |= MESHGRP_TRAIN | MESHGRP_NOCOLLIDE; // (trains: no collision shapes, as before)
@@ -798,6 +801,7 @@ bool Base::Paved (double _lng, double _lat) const
 	double x = R * dotp (p, Vector (slat * clng, -clat, slat * slng));
 	double z = R * dotp (p, Vector (-slng, 0.0, clng));
 	for (const Grade &g : grades) {
+		if (!g.paved) continue;
 		double br = g.bearing * RAD;
 		double dx = x - g.x, dz = z - g.z;
 		double along = -dx * cos (br) + dz * sin (br), across = dx * sin (br) + dz * cos (br);
