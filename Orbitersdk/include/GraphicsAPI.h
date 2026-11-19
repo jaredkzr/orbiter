@@ -527,6 +527,8 @@ public:
 	 *   - bit 1 set: decompress, even if format is supported by device
 	 *   - bit 2 set: don't load mipmaps, even if supported by device
 	 *   - bit 3 set: load as global resource (can be managed by graphics client)
+	 *   - bit 4 set: the file is optional (e.g. a night texture "<name>_n.dds"):
+	 *     if it does not exist, return NULL without reporting an error
 	 * \note If bit 3 of flags is set, orbiter will not try to modify or release
 	 *   the texture. The client should manage the texture (i.e. keep it in a
 	 *   repository and release it at destruction). Any further call of

@@ -29,18 +29,16 @@ canals and ponds. Left over:
 - **Runway and pad markings in other clients**: only the Vulkan client draws
   them (others show the tiled pavement; `STYLE classic` keeps a pad's old
   texture); nor do ray traced reflections show them.
-- **Base asset overhaul** (plan: Phase 0 infrastructure and Phase 1a/1b done - client-drawn
-  generic buildings, the off-world kit in Blender, night maps, kit lights, collision flags):
-  left - SOLARPLANT (Phase 4), and checking the legacy `_n` night textures (missing from
-  `Textures`). (Done: trains, the Earth kit in Blender, the Earth buildings' regional looks,
-  Cape Canaveral's VAB/LCC and modern pads 39A/39B with the shuttle's MLP on 39B.)
+- **After the base asset overhaul** (all phases done): the Cape's pad slopes are greyer than the
+  cream of the photos; both LC-39 pads share one surface painting (and the VAB's east and west
+  faces); the trench, roofs and sheds still use tiled textures; the VAB's low bay is one box
+  (the real one is stepped). `SOLARPLANT` (now a fixed array, exported) has no test: no stock
+  base uses it (checked at a temporary plant at Edwards: drawn, shadowed, collides).
 - **Scenario builder in the main menu** (Launchpad): build a scenario without editing files -
   pick the focus vessel and its class, where it starts (landed at a base: its pad or runway;
   on a planet's surface by longitude/latitude and heading; in orbit, by elements or relative
   to another object), add other ships with their own states and locations, set the date and
   the camera; preview it, then save it as a `.scn` under `Scenarios/` and launch it.
-- **Legacy night textures**: `Fcd*_n`, `Roof0*_n`, `Wall01_n`, `Door01_n` are named in
-  `Config/Base.cfg` but missing from `Textures/` (the client logs it at each start).
 - **The Moon by day**: near new moon it shows as a dark disc in Earth's daytime sky (seen
   from Habana, MJD 51985.7) - the sky's light in front of it missing.
 - **Classic pads' curvature**: `STYLE classic` pads (and other base objects

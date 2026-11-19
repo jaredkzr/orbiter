@@ -3601,19 +3601,17 @@ void Train2::RenderShadow (LPDIRECT3DDEVICE7 dev)
 }
 
 // ==============================================================================
-// class SolarPlant (self-aligning solar panel array)
+// class SolarPlant (a fixed array of solar panels)
 
 SolarPlant::SolarPlant (const Base *_base): BaseObject (_base)
 {
-	pos.x = pos.y = pos.z = 0.0f;
-	scale = 1.0f;
-	rot = 0.0f;
+	ngrp = 2; // panels, stands
 	sepx = sepz = 40.0;
 	nrow = 2;
 	ncol = 2;
 	texid = 0;
-	tuscale = tvscale = 1.0f;
 	npanel = nrow*ncol;
+	Vtx = NULL;
 }
 
 SolarPlant::~SolarPlant ()
@@ -3621,266 +3619,161 @@ SolarPlant::~SolarPlant ()
 	Deactivate();
 }
 
-int SolarPlant::Read (istream &is)
+int SolarPlant::ParseLine (const char *label, const char *value)
 {
-	char cbuf[256], *cp, label[32];
-	int i;
-
-	do {
-		if (!is.getline (cbuf, 256)) return 1; // premature end of file
-		cp = trim_string (cbuf);
-		sscanf (cp, "%s", label);
-		if (!_stricmp (label, "POS"))
-			sscanf (cp+3, "%f%f%f", &pos.x, &pos.y, &pos.z);
-		else if (!_stricmp (label, "SCALE"))
-			sscanf (cp+5, "%f", &scale);
-		else if (!_stricmp (label, "SPACING"))
-			sscanf (cp+7, "%f%f", &sepx, &sepz);
-		else if (!_stricmp (label, "GRID"))
-			sscanf (cp+4, "%d%d", &nrow, &ncol);
-		else if (!_stricmp (label, "ROT")) {
-			sscanf (cp+3, "%f", &rot);
-			rot *= (D3DVALUE)RAD;
-		} else if (!_stricmp (label, "TEX")) {
-			D3DVALUE su, sv;
-			i = sscanf (cp+3, "%s%f%f", label, &su, &sv);
-			texid = NameToId (label);
-			if (i > 1) tuscale = su;
-			if (i > 2) tvscale = sv;
+	int res = 0;
+	if (!_stricmp (label, "SPACING")) {
+		if (sscanf (value, "%lf%lf", &sepx, &sepz) != 2) {
+			ParseError("SolarPlant: SPACING: expected 2 scalar values");
+			res = 2;
 		}
-	} while (_stricmp (label, "END"));
-	npanel = nrow*ncol;
-	return 0;
-}
-
-void SolarPlant::Render (LPDIRECT3DDEVICE7 dev, bool)
-{
-#ifdef _WIN32
-	int i, j;
-
-	// check for flashing panels
-	Vector pc, cdir (tmul (base->GRot(), g_camera->GPos()-base->GPos()));
-	bool anyflash = false;
-	double alpha;
-	for (i = 0; i < npanel; i++) {
-		pc.Set (cdir.x - ppos[i].x, cdir.y - ppos[i].y, cdir.z - ppos[i].z);
-		pc.unify();
-		alpha = dotp (pc, nml);
-		if (alpha > 0.999) {
-			anyflash = flash[i] = true;
-			for (j = i*4; j < (i+1)*4; j++) Vtx[j].tu += 0.25;
+	} else if (!_stricmp (label, "GRID")) {
+		if (sscanf (value, "%d%d", &nrow, &ncol) != 2 || nrow < 1 || ncol < 1) {
+			ParseError("SolarPlant: GRID: expected 2 positive integers");
+			res = 2;
 		}
+		nrow = std::max (nrow, 1), ncol = std::max (ncol, 1);
+		// (a group's indices are WORDs: the stands' group has SV vertices a panel)
+		while (nrow*ncol*SV > 65535) (nrow > ncol ? nrow : ncol)--;
+	} else if (!_stricmp (label, "TEX")) {
+		char name[32];
+		if (sscanf (value, "%31s", name) == 1) texid = NameToId (name);
+		// (u, v scales after the name are accepted and not used: the panel's and the
+		// stand's parts of the texture are fixed)
 	}
-
-	// render panels and stands
-	dev->SetTexture (0, tex);
-	dev->SetRenderState (D3DRENDERSTATE_ALPHABLENDENABLE, TRUE);
-	dev->DrawIndexedPrimitive (
-		D3DPT_TRIANGLELIST, D3DFVF_VERTEX, Vtx, nVtx, Idx, nIdx, 0);
-	if (anyflash)
-		for (i = 0; i < npanel; i++)
-			if (flash[i]) {
-				for (j = i*4; j < (i+1)*4; j++) Vtx[j].tu -= 0.25;
-				flash[i] = false;
-			}
-	dev->SetRenderState (D3DRENDERSTATE_ALPHABLENDENABLE, FALSE);
-#endif
-}
-
-void SolarPlant::RenderShadow (LPDIRECT3DDEVICE7 dev)
-{
-#ifdef _WIN32
-	if (have_shadows)
-		dev->DrawIndexedPrimitive (
-			D3DPT_TRIANGLELIST, D3DFVF_XYZ /*| D3DFVF_DIFFUSE*/, ShVtx, nShVtx, ShIdx, nShIdx, 0);
-#endif
+	npanel = nrow*ncol;
+	return res;
 }
 
 void SolarPlant::Activate ()
 {
-	int i, j, idx, idx_ofs, vtx_ofs;
-	DWORD n;
-	D3DVALUE x, z;
-	D3DVALUE crot = (D3DVALUE)cos(rot);
-	D3DVALUE srot = (D3DVALUE)sin(rot);
-	ppos = new D3DVECTOR[npanel]; TRACENEW
-	for (i = idx = 0; i < nrow; i++) {
-		x = sepx * (i-0.5f*(nrow-1));
-		for (j = 0; j < ncol; j++) {
-			z = sepz * (j-0.5f*(ncol-1));
-			ppos[idx].x = pos.x + x*crot - z*srot;
-			ppos[idx].y = pos.y + scale*10.0f;
-			ppos[idx].z = pos.z + x*srot + z*crot;
-			idx++;
+	if (Vtx) return; // active already
+	// (the panels face the equator, tilted at the latitude: base frame x south, y up, z east)
+	double lat = equpos.y;
+	Vector nml (sin(lat), cos(lat), 0.0);
+	double tht = acos (nml.y), phi = atan2 (nml.z, nml.x);
+	double ctht = cos(tht), stht = sin(tht), cphi = cos(phi), sphi = sin(phi);
+	double r11 = cphi*ctht, r13 = -sphi, r21 = -stht, r31 = sphi*ctht, r33 = cphi;
+	double sc = scale.x;
+	double dx = 8.0*sc, dz = 4.0*sc;                // (half the panel's sides: along its slope, across)
+	double crot = cos(rot), srot = sin(rot);
+	double lr = 0.18*sc;                            // (the legs' half width)
+	const Vector feet[3] = {Vector (2.5*sc, 0, -1.44*sc), Vector (-2.5*sc, 0, -1.44*sc), Vector (0, 0, 2.89*sc)};
+	static const float tu[4] = {0.0f, 0.25f, 0.25f, 0.0f}, tv[4] = {0.0f, 0.0f, 0.5f, 0.5f};
+	static const double sx[4] = {-1, -1, 1, 1}, sz[4] = {-1, 1, 1, -1};
+	Vtx = new NTVERTEX[npanel*(8+SV)]; TRACENEW
+	memset (Vtx, 0, npanel*(8+SV)*sizeof(NTVERTEX));
+	NTVERTEX *front = Vtx, *back = Vtx + npanel*4, *stand = Vtx + npanel*8;
+	int i, j, k, n = 0;
+	for (i = 0; i < nrow; i++) {
+		double x = sepx * (i-0.5*(nrow-1));
+		for (j = 0; j < ncol; j++, n++) {
+			double z = sepz * (j-0.5*(ncol-1));
+			Vector c (relpos.x + x*crot - z*srot, relpos.y + 10.0*sc, relpos.z + x*srot + z*crot);
+			for (k = 0; k < 4; k++) {
+				NTVERTEX &f = front[n*4+k], &b = back[n*4+k];
+				f.x = b.x = (float)(c.x + sx[k]*r11*dx + sz[k]*r13*dz);
+				f.y = b.y = (float)(c.y + sx[k]*r21*dx);
+				f.z = b.z = (float)(c.z + sx[k]*r31*dx + sz[k]*r33*dz);
+				f.nx = (float)nml.x, f.ny = (float)nml.y, f.nz = (float)nml.z;
+				b.nx = -f.nx, b.ny = -f.ny, b.nz = -f.nz;
+				f.tu = b.tu = tu[k];
+				f.tv = tv[k], b.tv = tv[k] + 0.5f;
+			}
+			// (the stand: three legs from the ground up to under the panel's centre, square
+			// rods mapped to the texture's opaque right half: its lattice image needs alpha)
+			NTVERTEX *s = stand + n*SV;
+			Vector top (c.x, c.y - 0.3*sc, c.z);
+			for (int l = 0; l < 3; l++) {
+				Vector ft (c.x + feet[l].x, relpos.y, c.z + feet[l].z);
+				Vector ax = top - ft; ax.unify();
+				Vector e1 = crossp (ax, Vector (0, 1, 0)); e1.unify();
+				Vector e2 = crossp (e1, ax);
+				for (int f = 0; f < 4; f++, s += 4) {
+					double a0 = Pi05*f, a1 = Pi05*(f+1);
+					Vector d0 = (e1*cos(a0) + e2*sin(a0))*lr, d1 = (e1*cos(a1) + e2*sin(a1))*lr;
+					Vector nm = e1*cos(a0+Pi05*0.5) + e2*sin(a0+Pi05*0.5);
+					const Vector q[4] = {ft+d0, ft+d1, top+d1, top+d0};
+					for (int m = 0; m < 4; m++) {
+						s[m].x = (float)q[m].x, s[m].y = (float)q[m].y, s[m].z = (float)q[m].z;
+						s[m].nx = (float)nm.x, s[m].ny = (float)nm.y, s[m].nz = (float)nm.z;
+						s[m].tu = (m == 0 || m == 3) ? 0.6f : 0.9f;
+						s[m].tv = (m < 2) ? 0.9f : 0.1f;
+					}
+				}
+			}
 		}
 	}
-	Vtx = new NTVERTEX[nVtx = npanel*12]; TRACENEW
-	Idx = new WORD[nIdx = npanel*21]; TRACENEW
-	flash = new bool[npanel]; TRACENEW
-
-	// mesh for all panels
-	idx_ofs = npanel*6, vtx_ofs = npanel*4;
-	for (i = 0; i < npanel; i++) {
-		flash[i] = false;
-		Idx[i*6]             = i*4;
-		Idx[i*6+1]           = i*4+1;
-		Idx[i*6+2]           = i*4+2;
-		Idx[i*6+3]           = i*4+2;
-		Idx[i*6+4]           = i*4+3;
-		Idx[i*6+5]           = i*4;
-		Idx[idx_ofs + i*6]   = vtx_ofs + i*4+2;
-		Idx[idx_ofs + i*6+1] = vtx_ofs + i*4+1;
-		Idx[idx_ofs + i*6+2] = vtx_ofs + i*4;
-		Idx[idx_ofs + i*6+3] = vtx_ofs + i*4;
-		Idx[idx_ofs + i*6+4] = vtx_ofs + i*4+3;
-		Idx[idx_ofs + i*6+5] = vtx_ofs + i*4+2;
-
-		Vtx[i*4].tu   = 0.0;
-		Vtx[i*4].tv   = 0.0;
-		Vtx[i*4+1].tu = 0.25;
-		Vtx[i*4+1].tv = 0.0;
-		Vtx[i*4+2].tu = 0.25;
-		Vtx[i*4+2].tv = 0.5;
-		Vtx[i*4+3].tu = 0.0;
-		Vtx[i*4+3].tv = 0.5;
-		Vtx[vtx_ofs+i*4].tu   = 0.0;
-		Vtx[vtx_ofs+i*4].tv   = 0.5;
-		Vtx[vtx_ofs+i*4+1].tu = 0.25;
-		Vtx[vtx_ofs+i*4+1].tv = 0.5;
-		Vtx[vtx_ofs+i*4+2].tu = 0.25;
-		Vtx[vtx_ofs+i*4+2].tv = 1.0;
-		Vtx[vtx_ofs+i*4+3].tu = 0.0;
-		Vtx[vtx_ofs+i*4+3].tv = 1.0;
-	}
-	// the panel stands
-	idx_ofs = npanel*12; vtx_ofs = npanel*8;
-	D3DVALUE v1 = 2.89f*scale, v2 = 2.5f*scale, v3 = 1.44f*scale;
-	for (i = 0; i < npanel; i++) {
-		Idx[idx_ofs++] = vtx_ofs;
-		Idx[idx_ofs++] = vtx_ofs+1;
-		Idx[idx_ofs++] = vtx_ofs+2;
-		Idx[idx_ofs++] = vtx_ofs;
-		Idx[idx_ofs++] = vtx_ofs+2;
-		Idx[idx_ofs++] = vtx_ofs+3;
-		Idx[idx_ofs++] = vtx_ofs;
-		Idx[idx_ofs++] = vtx_ofs+3;
-		Idx[idx_ofs++] = vtx_ofs+1;
-		Vtx[vtx_ofs].x = ppos[i].x;           Vtx[vtx_ofs].nx = 0.0;        Vtx[vtx_ofs].tu = 0.375;
-		Vtx[vtx_ofs].y = 14.0f*scale;	  	  Vtx[vtx_ofs].ny = 1.0f;       Vtx[vtx_ofs].tv = 0.5f;
-		Vtx[vtx_ofs].z = ppos[i].z;           Vtx[vtx_ofs].nz = 0.0;
-		Vtx[vtx_ofs+1].x = ppos[i].x + v2;    Vtx[vtx_ofs+1].nx = 0.87f;    Vtx[vtx_ofs+1].tu = 0.25f;
-		Vtx[vtx_ofs+1].y = 0.0;               Vtx[vtx_ofs+1].ny = 0.0;      Vtx[vtx_ofs+1].tv = 1.0;
-		Vtx[vtx_ofs+1].z = ppos[i].z - v3;    Vtx[vtx_ofs+1].nz = -0.5;
-		Vtx[vtx_ofs+2].x = ppos[i].x - v2;    Vtx[vtx_ofs+2].nx = -0.87f;   Vtx[vtx_ofs+2].tu = 0.5f;
-		Vtx[vtx_ofs+2].y = 0.0;               Vtx[vtx_ofs+2].ny = 0.0;      Vtx[vtx_ofs+2].tv = 1.0;
-		Vtx[vtx_ofs+2].z = ppos[i].z - v3;    Vtx[vtx_ofs+2].nz = -0.5;
-		Vtx[vtx_ofs+3].x = ppos[i].x;         Vtx[vtx_ofs+3].nx = 0.0;      Vtx[vtx_ofs+3].tu = 0.375;
-		Vtx[vtx_ofs+3].y = 0.0;               Vtx[vtx_ofs+3].ny = 0.0;      Vtx[vtx_ofs+3].tv = 1.0;
-		Vtx[vtx_ofs+3].z = ppos[i].z + v1;    Vtx[vtx_ofs+3].nz = 1.0;
-		vtx_ofs += 4;
-	}
-	// shadow mesh
-	if (g_pOrbiter->Cfg()->CfgVisualPrm.bShadows) {
-		ShVtx = new VERTEX_XYZ[nShVtx = npanel*4]; TRACENEW
-		ShIdx = new WORD[nShIdx = npanel*6]; TRACENEW
-		Vector4 shadowCol = base->ShadowColor();
-		D3DCOLOR shcol = D3DRGBA(shadowCol.x, shadowCol.y, shadowCol.z, shadowCol.w);
-		for (n = 0; n < nShVtx; n++) {
-			ShVtx[n].y = 0.0f;
-			//ShVtx[n].col = shcol;
-		}
-		for (i = idx_ofs = 0; i < npanel; i++) {
-			ShIdx[idx_ofs++] = i*4;
-			ShIdx[idx_ofs++] = i*4+1;
-			ShIdx[idx_ofs++] = i*4+2;
-			ShIdx[idx_ofs++] = i*4+2;
-			ShIdx[idx_ofs++] = i*4+3;
-			ShIdx[idx_ofs++] = i*4;
-		}
-	}
-	have_shadows = false; // don't use before updated
-	SURFHANDLE dummy;
-	base->GetGenericTexture (texid, (SURFHANDLE&)tex, dummy);
-	updT = -1.0; // force update
 }
 
 void SolarPlant::Deactivate ()
 {
-	delete []ppos;
-	ppos = NULL;
 	delete []Vtx;
 	Vtx = NULL;
-	delete []Idx;
-	Idx = NULL;
-	delete []flash;
-	flash = NULL;
-	if (g_pOrbiter->Cfg()->CfgVisualPrm.bShadows) {
-		delete []ShVtx;
-		ShVtx = NULL;
-		delete []ShIdx;
-		ShIdx = NULL;
-	}
 }
 
-void SolarPlant::Update ()
+bool SolarPlant::GetGroupSpec (int grp, DWORD &nvtx, DWORD &nidx, LONGLONG &_texid,
+	bool &undershadow, bool &groundshadow)
 {
-	if (td.SimT1 < updT) return;
-
-	// panel orientation
-	nml = *base->SunDirectionBuffered();
-	if (nml.y < 0.0) {
-		nml.y = 0.0;
-		nml.unify();
+	switch (grp) {
+	case 0: // panels: front and back faces
+		nvtx = npanel*8;
+		nidx = npanel*12;
+		break;
+	case 1: // stands
+		nvtx = npanel*SV;
+		nidx = npanel*SV/4*6;
+		break;
+	default:
+		return false;
 	}
-
-	int i, vtx_ofs = npanel*4;
-	D3DVALUE dx = 8.0f*scale, dz = 4.0f*scale;
-	double tht = acos (nml.y);         // tilt angle
-	double phi = atan2 (nml.z, nml.x); // rotation angle
-	D3DVALUE ctht = (D3DVALUE)cos(tht), stht = (D3DVALUE)sin(tht);
-	D3DVALUE cphi = (D3DVALUE)cos(phi), sphi = (D3DVALUE)sin(phi);
-	// rotation matrix
-	D3DVALUE r11 = cphi*ctht, r12 = cphi*stht, r13 = -sphi;
-	D3DVALUE r21 = -stht,     r22 = ctht,      r23 = 0.0f;
-	D3DVALUE r31 = sphi*ctht, r32 = sphi*stht, r33 = cphi;
-
-	for (i = 0; i < npanel; i++) { // rotate panels into sun
-		Vtx[i*4].x   = Vtx[vtx_ofs+i*4].x   = ppos[i].x - r11*dx - r13*dz;
-		Vtx[i*4].y   = Vtx[vtx_ofs+i*4].y   = ppos[i].y - r21*dx;
-		Vtx[i*4].z   = Vtx[vtx_ofs+i*4].z   = ppos[i].z - r31*dx - r33*dz;
-		Vtx[i*4+1].x = Vtx[vtx_ofs+i*4+1].x = ppos[i].x - r11*dx + r13*dz;
-		Vtx[i*4+1].y = Vtx[vtx_ofs+i*4+1].y = ppos[i].y - r21*dx;
-		Vtx[i*4+1].z = Vtx[vtx_ofs+i*4+1].z = ppos[i].z - r31*dx + r33*dz;
-		Vtx[i*4+2].x = Vtx[vtx_ofs+i*4+2].x = ppos[i].x + r11*dx + r13*dz;
-		Vtx[i*4+2].y = Vtx[vtx_ofs+i*4+2].y = ppos[i].y + r21*dx;
-		Vtx[i*4+2].z = Vtx[vtx_ofs+i*4+2].z = ppos[i].z + r31*dx + r33*dz;
-		Vtx[i*4+3].x = Vtx[vtx_ofs+i*4+3].x = ppos[i].x + r11*dx - r13*dz;
-		Vtx[i*4+3].y = Vtx[vtx_ofs+i*4+3].y = ppos[i].y + r21*dx;
-		Vtx[i*4+3].z = Vtx[vtx_ofs+i*4+3].z = ppos[i].z + r31*dx - r33*dz;
-		Vtx[i*4].nx = Vtx[i*4+1].nx = Vtx[i*4+2].nx = Vtx[i*4+3].nx = (D3DVALUE)nml.x;
-		Vtx[i*4].ny = Vtx[i*4+1].ny = Vtx[i*4+2].ny = Vtx[i*4+3].ny = (D3DVALUE)nml.y;
-		Vtx[i*4].nz = Vtx[i*4+1].nz = Vtx[i*4+2].nz = Vtx[i*4+3].nz = (D3DVALUE)nml.z;
-		Vtx[vtx_ofs+i*4].nx = Vtx[vtx_ofs+i*4+1].nx = Vtx[vtx_ofs+i*4+2].nx = Vtx[vtx_ofs+i*4+3].nx = -(D3DVALUE)nml.x;
-		Vtx[vtx_ofs+i*4].ny = Vtx[vtx_ofs+i*4+1].ny = Vtx[vtx_ofs+i*4+2].ny = Vtx[vtx_ofs+i*4+3].ny = -(D3DVALUE)nml.x;
-		Vtx[vtx_ofs+i*4].nz = Vtx[vtx_ofs+i*4+1].nz = Vtx[vtx_ofs+i*4+2].nz = Vtx[vtx_ofs+i*4+3].nz = -(D3DVALUE)nml.x;
-	}
-	updT = td.SimT1 + 60.0;
+	_texid = texid;
+	undershadow = false;
+	groundshadow = true;
+	return true;
 }
 
-void SolarPlant::UpdateShadow (Vector &fromsun, double az)
+void SolarPlant::ExportGroup (int grp, NTVERTEX *vtx, WORD *idx, DWORD &idx_ofs)
 {
-	if (!g_pOrbiter->Cfg()->CfgVisualPrm.bShadows) return;
-	if (have_shadows = (nml.y > 0.2)) {
-		int i, j;
-		double a;
-		D3DVALUE anx, anz;
-		for (i = 0; i < 4; i++) {
-			a = Vtx[i].y/nml.y;
-			anx = (D3DVALUE)(a*nml.x), anz = (D3DVALUE)(a*nml.z);
-			for (j = 0; j < npanel; j++) {
-				ShVtx[j*4+i].x = Vtx[j*4+i].x - anx;
-				ShVtx[j*4+i].z = Vtx[j*4+i].z - anz;
-			}
+	WORD ofs = (WORD)idx_ofs;
+	int i;
+	switch (grp) {
+	case 0: {
+		memcpy (vtx, Vtx, npanel*8*sizeof(NTVERTEX));
+		WORD bk = (WORD)(npanel*4);
+		for (i = 0; i < npanel; i++) {
+			WORD p = (WORD)(ofs + i*4), q = (WORD)(ofs + bk + i*4);
+			*idx++ = p;   *idx++ = p+1; *idx++ = p+2;
+			*idx++ = p+2; *idx++ = p+3; *idx++ = p;
+			*idx++ = q+2; *idx++ = q+1; *idx++ = q;
+			*idx++ = q;   *idx++ = q+3; *idx++ = q+2;
 		}
+		} return;
+	case 1:
+		memcpy (vtx, Vtx + npanel*8, npanel*SV*sizeof(NTVERTEX));
+		for (i = 0; i < npanel*SV/4; i++) { // (quads)
+			WORD s = (WORD)(ofs + i*4);
+			*idx++ = s; *idx++ = s+2; *idx++ = s+1;
+			*idx++ = s; *idx++ = s+3; *idx++ = s+2;
+		}
+		return;
 	}
+}
+
+Mesh *SolarPlant::ExportShadowMesh (double &shelev)
+{
+	// (the panels and the stands, for their shadows on the ground)
+	DWORD nq = npanel*(1+SV/4), nvtx = nq*4, nidx = nq*6;
+	NTVERTEX *vtx = new NTVERTEX[nvtx]; TRACENEW
+	WORD *idx = new WORD[nidx]; TRACENEW
+	memcpy (vtx, Vtx, npanel*4*sizeof(NTVERTEX));
+	memcpy (vtx + npanel*4, Vtx + npanel*8, npanel*SV*sizeof(NTVERTEX));
+	WORD *id = idx;
+	for (DWORD i = 0; i < nq; i++) {
+		WORD p = (WORD)(i*4);
+		*id++ = p;   *id++ = p+1; *id++ = p+2;
+		*id++ = p+2; *id++ = p+3; *id++ = p;
+	}
+	shelev = yofs;
+	TRACENEW; return new Mesh (vtx, nvtx, idx, nidx);
 }

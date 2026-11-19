@@ -629,7 +629,7 @@ void VulkanClient::clbkDeleteVessel (OBJHANDLE hVessel)
 SURFHANDLE VulkanClient::clbkLoadTexture (const char *fname, DWORD flags)
 {
 	if (!ready) return NULL;
-	return (SURFHANDLE)texmgr.Load (fname);
+	return (SURFHANDLE)texmgr.Load (fname, true, false, (flags & 0x10) != 0); // (bit 4: optional, no error if missing)
 }
 
 void VulkanClient::clbkReleaseTexture (SURFHANDLE hTex)

@@ -304,7 +304,7 @@ void Base::CreateStaticDeviceObjects ()
 			sprintf (fname, "%s.dds", generic_tex_name[i]);
 			generic_dtex[i] = gclient->clbkLoadTexture (fname);
 			sprintf (fname, "%s_n.dds", generic_tex_name[i]);
-			generic_ntex[i] = gclient->clbkLoadTexture (fname);
+			generic_ntex[i] = gclient->clbkLoadTexture (fname, 0x10); // (optional: few textures have a night map)
 		} else {
 			generic_dtex[i] = NULL;
 			generic_ntex[i] = NULL;

@@ -856,7 +856,7 @@ A linear array of illuminated beacons, usable e.g. for taxiway night lighting.
 
 \noindent
 \textbf{SOLARPLANT}\\
-A grid of ground-mounted solar panels, smart enough to align themselves with the Sun. The following parameters are supported:
+A grid of ground-mounted solar panels on three-legged stands, facing the equator and tilted at the site's latitude (a fixed array: every graphics client draws it, and vessels collide with it). Each panel is 16 m along its slope and 8 m across, its centre 10 m up (times SCALE). The following parameters are supported:
 
 %\begin{table}[H]
 	%\centering
@@ -866,7 +866,7 @@ A grid of ground-mounted solar panels, smart enough to align themselves with the
 	\hline\rule{0pt}{2ex}
 	POS & Vector & Centre position of the panel grid [m]. Default: 0 0 0\\
 	\hline\rule{0pt}{2ex}
-	SCALE & Vector & Scaling factor for each panel [m]. Default: 1.0\\
+	SCALE & Float & Scaling factor for each panel and its stand. Default: 1.0\\
 	\hline\rule{0pt}{2ex}
 	SPACING & Float Float & Distance between panels in x and z directions [m]. Default: 40 40\\
 	\hline\rule{0pt}{2ex}
@@ -874,7 +874,7 @@ A grid of ground-mounted solar panels, smart enough to align themselves with the
 	\hline\rule{0pt}{2ex}
 	ROT & Float & Rotation of plant around vertical axis [deg]. Default: 0\\
 	\hline\rule{0pt}{2ex}
-	TEX & String [Float Float] & Texture name and u, v scaling factors for panels. Default: no texture\\
+	TEX & String [Float Float] & Texture name (its layout as \texttt{Textures/solpanel.dds}: the panel's front top left, its back below, the stands in the right half). Scaling factors after the name are accepted and ignored. Default: no texture\\
 	\hline
 	\end{longtable}
 %\end{table}

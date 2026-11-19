@@ -179,7 +179,7 @@ void TextureManager::Shutdown ()
 	ctx = nullptr;
 }
 
-VkTexture *TextureManager::Load (const char *fname, bool shared, bool fullPath)
+VkTexture *TextureManager::Load (const char *fname, bool shared, bool fullPath, bool quiet)
 {
 	std::string key = (fullPath ? std::string (":") : std::string()) + fname;
 	if (shared) {
@@ -207,7 +207,7 @@ VkTexture *TextureManager::Load (const char *fname, bool shared, bool fullPath)
 		else
 			oapiWriteLogV ("VulkanClient: could not read %s", path.c_str());
 	} else {
-		tex = LoadDDS (path);
+		tex = LoadDDS (path, false, quiet);
 		if (tex && shared) LoadMaps (tex, path);
 	}
 	if (tex && shared) {

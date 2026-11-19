@@ -697,43 +697,30 @@ private:
 };
 
 // ======================================================================================
-// SolarPlant: array of solar panels, aligning themselves with the sun
+// SolarPlant: a grid of ground-mounted solar panels, each on a tripod stand, facing
+// the equator and tilted at the site's latitude (a fixed array: exported as static
+// geometry, so every client draws it and vessels collide with it)
 
 class SolarPlant: public BaseObject {
 public:
 	SolarPlant (const Base *_base);
 	~SolarPlant ();
-	int Read (std::istream &is);
-	DWORD GetSpecs() const { return OBJSPEC_RENDERAFTERSHADOW | OBJSPEC_RENDERSHADOW | OBJSPEC_UPDATEVERTEX; }
-	void Render (LPDIRECT3DDEVICE7 dev, bool day=true);
-	void RenderShadow (LPDIRECT3DDEVICE7 dev);
-	void Update ();
-	void UpdateShadow (Vector &fromsun, double az);
+	int ParseLine (const char *label, const char *value);
+	DWORD GetSpecs() const { return OBJSPEC_EXPORTVERTEX | OBJSPEC_EXPORTSHADOWMESH; }
+	bool GetGroupSpec (int grp, DWORD &nvtx, DWORD &nidx, LONGLONG &texid,
+		bool &undershadow, bool &groundshadow);
+	void ExportGroup (int grp, NTVERTEX *vtx, WORD *idx, DWORD &idx_ofs);
+	Mesh *ExportShadowMesh (double &elev);
 	void Activate ();
 	void Deactivate();
 
 private:
-	D3DVECTOR pos;             // position of footprint centre in local base coords
-	D3DVALUE scale;            // scale factor for panels
-	D3DVALUE rot;              // rotation around vertical axis
-	D3DVALUE sepx, sepz;       // panel spacing in x and z direction [m]
+	double sepx, sepz;         // panel spacing in x and z direction [m]
 	int nrow, ncol;            // number of rows and columns of panel matrix
 	int npanel;                // number of panels in the plant
 	LONGLONG texid;            // texture id
-	D3DVALUE tuscale, tvscale; // texture scaling factors
-	D3DVECTOR *ppos;           // reference positions for each panel
-	NTVERTEX *Vtx;            // panel vertices
-	VERTEX_XYZ *ShVtx;         // shadow vertices
-	WORD *Idx, *ShIdx;         // panel and shadow mesh indices
-	DWORD nVtx, nShVtx;        // number of vertices
-	DWORD nIdx, nShIdx;        // number of indices
-	bool *flash;               // panel flashing in sunlight?
-	LPDIRECTDRAWSURFACE7 tex;  // texture to use
-	Vector nml;                // pointing direction of panels (towards sun)
-	//VBase *vbase;              // associated base visual
-
-	double updT;             // time of next direction update
-	bool have_shadows;       // draw panel shadows?
+	static const int SV = 48;  // stand vertices a panel: three legs, four quads each
+	NTVERTEX *Vtx;             // panels (front faces, back faces: 8 vertices a panel), then the stands
 };
 
 

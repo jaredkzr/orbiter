@@ -63,7 +63,7 @@ public:
 	/// Load a texture file from the Textures directory. Shared textures are
 	/// cached by name; unshared ones are private copies (e.g. for drawing on).
 	/// With fullPath, fname is relative to the Orbiter root instead.
-	VkTexture *Load (const char *fname, bool shared = true, bool fullPath = false);
+	VkTexture *Load (const char *fname, bool shared = true, bool fullPath = false, bool quiet = false); // (quiet: a missing file is no error)
 
 	/// Create a texture from RGBA8 pixel data (sRGB)
 	VkTexture *CreateRGBA (uint32_t w, uint32_t h, const uint8_t *rgba);

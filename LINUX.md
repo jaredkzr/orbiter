@@ -295,6 +295,13 @@ base's centre were tilted against the ground, partly under it).
   profile in closed form: the same at any time warp). TRAIN2's girders are now exported (a
   static group) for every client. Lua: `oapi.get_basetrains`, `oapi.get_basebuildings`
   (`Scenario.BaseTrainTest`, `Scenario.BaseBuildingsTest`).
+- `SOLARPLANT` is a fixed array now: its panels face the equator, tilted at the site's latitude,
+  on three-legged stands, exported as static groups (every client draws them, shadows, vessels
+  collide with them). It used to turn to the Sun, drawn only by the old Direct3D 7 path, and
+  invisible and intangible elsewhere. No stock base uses it.
+- The generic textures' night maps (`<name>_n.dds`: `Lpad*`, `Taxiway*`, `Hangrail`, `Monorail`, some
+  `Fcd*`) light up at night only in the Vulkan client. They are optional: the core asks for them
+  with `clbkLoadTexture` flag bit 4 (the file is optional), and a missing one is not logged.
 - The client-drawn buildings have lamps at night (`CityKit` `Kit::BaseLights`): over hangar
   doors (and a floodlight on the apron before them), airlocks and doors, amber markers along
   covered tunnels, red obstruction lights on roofs 40 m and higher and on pressurised hubs.
