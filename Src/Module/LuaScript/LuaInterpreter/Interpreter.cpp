@@ -16,6 +16,9 @@ typedef void *CAMERAHANDLE;
 #endif
 #include <list>
 #include <mutex>
+#include <condition_variable>
+#include <thread>
+#include <chrono>
 
 using std::min;
 using std::max;
@@ -58,6 +61,49 @@ VECTOR3 lua_tovector (lua_State *L, int idx)
 // ============================================================================
 // class Interpreter
 
+#ifndef _WIN32
+// The turn to execute, passed between the Orbiter thread and an interpreter's
+// thread (WaitExec, EndExec). A thread that gives the turn up does not get it
+// back before another thread has had it: a script's proc.skip() then waits
+// for a frame of the simulation, whenever the Orbiter thread comes for its
+// turn. (A pair of mutexes, as under Win32, left a gap between Orbiter's
+// EndExec and its WaitExec: was it held up there - the machine busy, a video
+// being encoded - the script took the turn again and again, and ran tens of
+// its steps in one frame of the simulation; a landing autopilot came down
+// 500 m short.) Should no other thread come within a second (the
+// interpreter's thread gone), the turn is taken back.
+namespace {
+	class ExecTurn {
+	public:
+		void Take ()
+		{
+			const std::thread::id me = std::this_thread::get_id ();
+			std::unique_lock<std::mutex> lk (m);
+			if (count && owner == me) { count++; return; } // (recursive)
+			auto mine = [&] { return !count && !(barred && barredId == me); };
+			if (!cv.wait_for (lk, std::chrono::seconds (1), mine))
+				cv.wait (lk, [&] { return !count; }); // (no one else came)
+			owner = me, count = 1, barred = false;
+		}
+		void Give ()
+		{
+			const std::thread::id me = std::this_thread::get_id ();
+			std::lock_guard<std::mutex> lk (m);
+			if (!count || owner != me) return; // (not the holder's to give)
+			if (--count) return;
+			barred = true, barredId = me;
+			cv.notify_all ();
+		}
+	private:
+		std::mutex m;
+		std::condition_variable cv;
+		std::thread::id owner, barredId;
+		int count = 0;
+		bool barred = false;
+	};
+}
+#endif
+
 Interpreter::Interpreter ()
 {
 	L = luaL_newstate();  // create new Lua context
@@ -78,11 +124,11 @@ Interpreter::Interpreter ()
 	hExecMutex = CreateMutex (NULL, TRUE, NULL);
 	hWaitMutex = CreateMutex (NULL, FALSE, NULL);
 #else
-	// Like Win32 mutexes, these are recursive and owned by the locking thread.
-	// The execution mutex is initially owned by the creating (Orbiter) thread.
-	hExecMutex = new std::recursive_mutex;
-	hWaitMutex = new std::recursive_mutex;
-	static_cast<std::recursive_mutex*>(hExecMutex)->lock();
+	// The execution turn (ExecTurn, below): recursive and owned by the taking
+	// thread, like a Win32 mutex; initially the creating (Orbiter) thread's.
+	hExecMutex = new ExecTurn;
+	hWaitMutex = NULL;
+	static_cast<ExecTurn*>(hExecMutex)->Take();
 #endif
 
 }
@@ -135,8 +181,7 @@ Interpreter::~Interpreter ()
 	if (hExecMutex) CloseHandle (hExecMutex);
 	if (hWaitMutex) CloseHandle (hWaitMutex);
 #else
-	delete static_cast<std::recursive_mutex*>(hExecMutex);
-	delete static_cast<std::recursive_mutex*>(hWaitMutex);
+	delete static_cast<ExecTurn*>(hExecMutex);
 #endif
 }
 
@@ -715,10 +760,7 @@ void Interpreter::WaitExec (DWORD timeout)
 	WaitForSingleObject (hExecMutex, timeout); // wait for execution mutex
 	ReleaseMutex (hWaitMutex);              // release synchronisation mutex
 #else
-	// all callers wait without timeout
-	static_cast<std::recursive_mutex*>(hWaitMutex)->lock();   // wait for synchronisation mutex
-	static_cast<std::recursive_mutex*>(hExecMutex)->lock();   // wait for execution mutex
-	static_cast<std::recursive_mutex*>(hWaitMutex)->unlock(); // release synchronisation mutex
+	static_cast<ExecTurn*>(hExecMutex)->Take();
 #endif
 }
 
@@ -728,7 +770,7 @@ void Interpreter::EndExec ()
 #ifdef _WIN32
 	ReleaseMutex (hExecMutex);
 #else
-	static_cast<std::recursive_mutex*>(hExecMutex)->unlock();
+	static_cast<ExecTurn*>(hExecMutex)->Give();
 #endif
 }
 

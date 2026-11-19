@@ -91,6 +91,7 @@ local nextLog = 0
 local LIMIT = env("LV_LIMIT", 90.0)   -- [s] at the most (a video run must end, whatever happens)
 local function step()   -- (one frame's flying; true: done)
 	local t = oapi.get_simtime()
+	local dt = math.min(oapi.get_simstep(), 0.1)
 	if t > tstart + LIMIT then return true end
 	local hg = v:get_altitude(ALTMODE.GROUND) - alt0         -- the wheels' height over the ground (touchdown)
 	local h = v:get_altitude(ALTMODE.MEANRAD) - altM0        -- ... over the threshold's level (flown by)
@@ -111,7 +112,9 @@ local function step()   -- (one frame's flying; true: done)
 		local vt = -clamp(SINK + (3.0 - SINK) * (h - 1.0) / 7.0, SINK, 3.0)
 		if CRASH and h < 25 then vt = -CRASH_SINK end
 		local pt = clamp(KV * (vt - vs) + pitchI, math.rad(-5), math.rad(14))
-		pitchI = clamp(pitchI + 0.02 * (vt - vs) * 0.0333, math.rad(-3), math.rad(10))
+		-- (integrated over the step as it is: at a fixed 1/30 s a frame, as it was written, the
+		-- loop's gain changed with the frame rate, and with it where it came down)
+		pitchI = clamp(pitchI + 0.02 * (vt - vs) * dt, math.rad(-3), math.rad(10))
 		v:set_adclevel(AIRCTRL.ELEVATOR, clamp(KP * (pt - pitch) + QD * w.x, -1, 1))
 		v:set_thrustergrouplevel(THGROUP.MAIN, h > 5 and clamp(0.05 * (VREF - as), 0, 1) or 0)
 	else
