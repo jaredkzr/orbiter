@@ -243,7 +243,8 @@ private:
 	void InitSite ();
 	struct Pad { Vector dir; double g, r0, r1; }; // a landing pad: its centre, its level (the data's there), level within r0, blended back by r1 [m]
 	struct Grade { Vector dir, along, across; double hl, hw, g0, gl, gw; }; // graded ground: centre, axes, half extents [m], level g0 + gl s + gw t
-	struct Flat { Vector dir; double r0, r1; std::vector<Pad> pads; std::vector<Grade> grades; double reach; double bare0 = 0.0, bare1 = 0.0; std::vector<std::pair<Vector, double>> bareKeep; }; // fully flat within r0, detail beyond r1; pads and grades within reach [m]; bare earth within bare0, blended out by bare1 [m] (Base::BareEarthRadius; 0: none), but not within the keep areas (centre, radius [m])
+	struct Keep { Vector dir; double r, blend; }; // (an area the bare earth leaves alone: centre, radius, the bare earth blended back in over [m])
+	struct Flat { Vector dir; double r0, r1; std::vector<Pad> pads; std::vector<Grade> grades; double reach; double bare0 = 0.0, bare1 = 0.0; std::vector<Keep> bareKeep; }; // fully flat within r0, detail beyond r1; pads and grades within reach [m]; bare earth within bare0, blended out by bare1 [m] (Base::BareEarthRadius; 0: none), but not within the keep areas
 	mutable std::vector<Flat> flats;
 	/// landing pads and graded ground (Base::Grades): the ground levelled
 	/// to the pad's level over its mesh (Pad::r0: its reach and 2 m, PAD_R0

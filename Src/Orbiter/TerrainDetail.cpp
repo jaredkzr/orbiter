@@ -589,7 +589,6 @@ namespace {
 	// real field's 3 m), its approaches within 1-1.6 m over 500 m
 	const GroundFilter::Params BARE_PRM{ 0.002 * RAD, 150.0, 9, 0.10, 10 };
 	constexpr double BARE_MIN = 1.0; // [m]
-	constexpr double BARE_KEEP_BLEND = 200.0; // [m] keep areas (Base::BareEarthKeep): the bare earth blended back in over
 }
 
 double TerrainDetail::BareWeight (const Flat &fl, const Vector &dir, double lat, double lng, double elev, double &g) const
@@ -599,8 +598,8 @@ double TerrainDetail::BareWeight (const Flat &fl, const Vector &dir, double lat,
 	if (d >= fl.bare1) return 0.0;
 	double w = SmoothStep (fl.bare1, fl.bare0, d);
 	for (const auto &k : fl.bareKeep) {
-		double dk = (dir - k.first).length() * radius;
-		if (dk < k.second + BARE_KEEP_BLEND) w *= SmoothStep (k.second, k.second + BARE_KEEP_BLEND, dk);
+		double dk = (dir - k.dir).length() * radius;
+		if (dk < k.r + k.blend) w *= SmoothStep (k.r, k.r + k.blend, dk);
 	}
 	if (w <= 0.0) return 0.0;
 	double land;
@@ -650,7 +649,7 @@ void TerrainDetail::InitBases () const
 			for (const Base::BareKeep &k : b->BareEarthKeep ()) {
 				double klng, klat;
 				b->Rel_EquPos (Vector (k.x, 0.0, k.z), klng, klat);
-				fl.bareKeep.push_back ({ Vector (cos (klat) * cos (klng), sin (klat), cos (klat) * sin (klng)), k.r });
+				fl.bareKeep.push_back ({ Vector (cos (klat) * cos (klng), sin (klat), cos (klat) * sin (klng)), k.r, k.blend });
 			}
 		}
 		// (the pads' and grades' levels: the data's, or the bare earth's about the base)

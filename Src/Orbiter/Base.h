@@ -83,13 +83,13 @@ public:
 	/// within radius of the base the terrain is levelled to the ground under
 	/// them (GroundFilter), blended back to the data over blend beyond it.
 	/// Its pads and graded ground levelled to that ground too. Areas where
-	/// the data stay (BEGIN_BAREEARTH_KEEP: "x z radius" per line, base
-	/// frame [m]; blended back over 200 m beyond): ground built up on
-	/// purpose, e.g. launch pads on their mounds, the pads' meshes and
-	/// vessels' heights set on the data there
+	/// the data stay (BEGIN_BAREEARTH_KEEP: "x z radius [blend]" per line,
+	/// base frame [m]; the bare earth blended back in over blend beyond,
+	/// default 200 m): ground built up on purpose, e.g. launch pads on their
+	/// mounds, the pads' meshes and vessels' heights set on the data there
 	double BareEarthRadius () const { return bareR; }
 	double BareEarthBlend () const { return bareBlend; }
-	struct BareKeep { double x, z, r; };
+	struct BareKeep { double x, z, r, blend; };
 	const std::vector<BareKeep> &BareEarthKeep () const { return bareKeep; }
 	/// A place (equatorial) on its graded ground: a runway, its overruns and
 	/// shoulders, a graded area (the sounds: paved)

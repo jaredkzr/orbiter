@@ -176,9 +176,11 @@ are documented in `Src/Orbiter/TerrainDetail.h`.
 the base to the ground under the elevation data's trees and buildings (the
 data are surface models), blended back over `blend` (3000). Its pads and runways
 are graded on that ground. Areas to leave alone (ground built up on purpose, the
-base's meshes set on the data there) are listed as `x z radius` lines between
+base's meshes set on the data there) are listed as `x z radius [blend]` lines
+(the bare earth blended back in over `blend`, default 200 m) between
 `BEGIN_BAREEARTH_KEEP` and `END_BAREEARTH_KEEP`: Cape Canaveral's launch complex 39
-pads. Also on at Wallops Island, Matagorda, Sriharikota, Peenemünde and Kourou
+pads, circles over each mound and its ramp (blend 60 m: the woods about them
+levelled too). Also on at Wallops Island, Matagorda, Sriharikota, Peenemünde and Kourou
 (flat, wooded ground); not where the filter would cut real relief (`TODO.md`). Cape Canaveral has `BareEarth = 40000`: the canopy
 stood 5-10 m over its flat coastal land, as spiky hills about the runways.
 `Scenario.CapeGroundTest` checks the ground there.

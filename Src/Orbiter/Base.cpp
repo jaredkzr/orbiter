@@ -92,8 +92,8 @@ Base::Base (char *fname, Planet *_planet, double _lng, double _lat)
 	if (bareR > 0.0 && FindLine (ifs, "BEGIN_BAREEARTH_KEEP")) {
 		for (;;) {
 			if (!ifs.getline (cbuf, 256) || !_strnicmp (trim_string (cbuf), "END_BAREEARTH_KEEP", 18)) break;
-			BareKeep k;
-			if (sscanf (cbuf, "%lf%lf%lf", &k.x, &k.z, &k.r) == 3) bareKeep.push_back (k);
+			BareKeep k{ 0.0, 0.0, 0.0, 200.0 };
+			if (sscanf (cbuf, "%lf%lf%lf%lf", &k.x, &k.z, &k.r, &k.blend) >= 3) bareKeep.push_back (k);
 		}
 	}
 	ifs.clear ();

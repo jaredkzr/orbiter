@@ -9,7 +9,8 @@
 --    mean against the ground's 150-400 m to either side
 --  - 8 radial lines from the base out to 40 km (land only): the same
 --  - the levels the physics reads at heights of 30 m to 2 km agree
---  - launch complex 39's pads keep the data's ground (their mounds)
+--  - launch complex 39's pads keep the data's ground (their mounds), the woods
+--    about them levelled
 -- Skipped (passes) without elevation data.
 
 local failed = false
@@ -178,6 +179,16 @@ local function main()
 		local lng, lat = base2equ(pad[2], pad[3])
 		local h = oapi.surface_elevation(E, lng, lat)
 		check("pad" .. pad[1], math.abs(h - 5.0) < 0.3, string.format("%.2f m", h))
+		-- (and only the mound and its ramp: the woods about it levelled, no canopy standing
+		-- 5-10 m as hills; rings of 250-450 m, the highest of them)
+		local top = -1e9
+		for _, d in ipairs({ 250, 350, 450 }) do
+			for a = 0, 355, 5 do
+				local l, t = base2equ(pad[2] + d * math.cos(r(a)), pad[3] + d * math.sin(r(a)))
+				top = math.max(top, oapi.surface_elevation(E, l, t))
+			end
+		end
+		check("pad" .. pad[1] .. "woods", top < 6.5, string.format("highest %.2f m", top))
 	end
 	-- (the runways' ends, as in Canaveral.cfg: the SLF's with its overruns)
 	runwayChecks("slf", -1141.69, -2877.44, -5644.87, -5462.46)
