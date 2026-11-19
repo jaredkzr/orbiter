@@ -57,8 +57,11 @@ SHOTS = {
 	'Canaveral':       ('Canaveral', (900, -900, 300), (0, 0, 40), 55, ('day', 'night')),
 	'Canaveral_vab':   ('Canaveral', (380, -330, 25), (0, 0, 70), 60, ('day', 'night')),
 	'Canaveral_vabeast': ('Canaveral', (330, 40, 30), (150, 170, 75), 60, ('day',)),   # (its east face: the high bays' doors)
+	'Canaveral_vabroof': ('Canaveral', (330, 360, 300), (95, 130, 140), 60, ('day',)),   # (its roofs, the LCC's)
 	'Canaveral_vabwall': ('Canaveral', (150, -75, 12), (95, 20, 45), 60, ('day',)),      # (its siding, close)
 	'Canaveral_39bramp': ('Canaveral', (3001 + 75, 4759 - 330, 28), (3001, 4759 - 140, 6), 60, ('day',)),  # (the crawlerway's ramp)
+	'Canaveral_39btop': ('Canaveral', (3001 + 30, 4759 - 250, 520), (3001, 4759 - 245, 0), 60, ('day',)),   # (its mound and ramp from above)
+	'Canaveral_39btrench': ('Canaveral', (3001 + 30, 4759 + 175, 16), (3001 + 4, 4759 + 20, 4), 55, ('day',)),   # (the flame trench from its exit)
 	'Canaveral_39b':   ('Canaveral', (3001 + 380, 4759 - 380, 40), (3001, 4759, 40), 60, ('day', 'night')),
 	'Canaveral_39btower': ('Canaveral', (3001 - 215 - 95, 4759 + 40 - 135, 22), (3001 - 215, 4759 + 40, 48), 50, ('day',)),  # (its water tower)
 	'Canaveral_39bpad': ('Canaveral', (3001 + 75, 4759 - 95, 38), (3003, 4757, 26), 60, ('day',)),

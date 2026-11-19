@@ -1103,7 +1103,6 @@ import capesurf
 PAD_SHEET = KitMat ('cape_pad', 'cape_pad', (1, 1, 1), tile=1.0)
 PAD_SHEET_DARK = KitMat ('cape_pad_dark', 'cape_pad', (0.40, 0.40, 0.41), tile=1.0)   # (the platform's underside, its holes' walls)
 REFRACTORY = KitMat ('refractory', 'kit_concrete', (0.46, 0.45, 0.44))
-DEFLECTOR = KitMat ('deflector', 'kit_steel', (0.36, 0.37, 0.38))
 TOWER_STEEL = KitMat ('tower_steel', 'kit_steel', (0.70, 0.71, 0.72))
 
 PAD_H = 16.0                        # (the hardstand)
@@ -1124,7 +1123,7 @@ MLP_HOLES = ((-6.85, 5.0, -5.28, 0.62), (-6.85, 5.0, 7.12, 13.03), (7.5, 17.4, -
 SKIRT_Y = 28.39
 assert (PAD_H, PAD_X, PAD_Z, SLOPE, TR_Z, TR_OPEN, RAMP_X1, RAMP_W, LANES, MLP_X, MLP_Z, MLP_Y, MLP_HOLES) == (capesurf.PAD_H, capesurf.PAD_X,
 	capesurf.PAD_Z, capesurf.SLOPE, capesurf.TR_Z, capesurf.TR_OPEN, capesurf.RAMP_X1, capesurf.RAMP_W, capesurf.LANES, capesurf.MLP_X,
-	capesurf.MLP_Z, capesurf.MLP_Y, capesurf.MLP_HOLES), 'capesurf.py paints another pad'
+	capesurf.MLP_Z, capesurf.MLP_Y, capesurf.MLP_HOLES) and (TR_X0, TR_FLOOR) == (capesurf.TR_X0, capesurf.TR_FLOOR), 'capesurf.py paints another pad'
 
 def sheet_part (A, bm, sheet, name, ua, ub, mat, role='drawn'):
 	"""a part mapped onto a region of one of the Cape's sheets (capesurf.py REGIONS): ua, ub the
@@ -1204,19 +1203,22 @@ def pad_mound (A, lanes_from=30.0):
 		quad (ramp, [(RAMP_X1, 0.04, z - 6), (RAMP_X1 + 60, 0.04, z - 6), (RAMP_X1 + 60, 0.04, z + 6), (RAMP_X1, 0.04, z + 6)], up=(0, 1, 0))
 		pad_part (A, lanes[k], 'lane%d' % k)
 	pad_part (A, mound, 'mound'); pad_part (A, ramp, 'ramp')
-	# (the trench's walls: from its floor to the hardstand, or to the mound's side north of it)
-	walls = kl._bm ()
+	# (the trench's walls: from its floor to the hardstand, or to the mound's side north of it - their sides painted
+	# (capesurf.py trench_w, trench_e), the end and the tunnel's roof refractory)
+	walls, side_w, side_e = kl._bm (), kl._bm (), kl._bm ()
 	wx = sorted (set ([TR_X0, X0, x0, TR_OPEN[0], TR_OPEN[1]] + [p[0] for p in TR_FLOOR]))
 	topy = lambda x: H if x >= x0 else max (0.0, H - (x0 - x) / s)
 	for (xa, xb) in zip (wx, wx[1:]):
 		if xb > TR_OPEN[1] + 1e-6: break
 		for z, sgn in ((TR_Z[0], 1), (TR_Z[1], -1)):
 			if topy (xa) - floor_y (xa) < 0.01 and topy (xb) - floor_y (xb) < 0.01: continue
-			quad (walls, [(xa, floor_y (xa), z), (xb, floor_y (xb), z), (xb, topy (xb), z), (xa, topy (xa), z)], up=(0, 0, sgn))
+			quad (side_w if sgn > 0 else side_e, [(xa, floor_y (xa), z), (xb, floor_y (xb), z), (xb, topy (xb), z), (xa, topy (xa), z)], up=(0, 0, sgn))
 	quad (walls, [(TR_OPEN[1], floor_y (TR_OPEN[1]), TR_Z[0]), (TR_OPEN[1], H, TR_Z[0]), (TR_OPEN[1], H, TR_Z[1]), (TR_OPEN[1], floor_y (TR_OPEN[1]), TR_Z[1])], up=(-1, 0, 0))
 	quad (walls, [(x0, H - 0.4, TR_Z[0]), (TR_OPEN[0], H - 0.4, TR_Z[0]), (TR_OPEN[0], H - 0.4, TR_Z[1]), (x0, H - 0.4, TR_Z[1])], up=(0, -1, 0))  # (the tunnel's roof)
 	quad (walls, [(TR_OPEN[0], H - 0.4, TR_Z[0]), (TR_OPEN[0], H, TR_Z[0]), (TR_OPEN[0], H, TR_Z[1]), (TR_OPEN[0], H - 0.4, TR_Z[1])], up=(1, 0, 0))
 	A.add (walls, REFRACTORY)
+	sheet_part (A, side_w, 'cape_pad', 'trench_w', (1, 0, 0), (0, 1, 0), PAD_SHEET)
+	sheet_part (A, side_e, 'cape_pad', 'trench_e', (1, 0, 0), (0, 1, 0), PAD_SHEET)
 	# (hazard edging about the trench's opening)
 	hz = kl._bm ()
 	for (a, b, c, d) in ((TR_OPEN[0] - 0.8, TR_OPEN[1] + 0.8, TR_Z[0] - 0.8, TR_Z[0]), (TR_OPEN[0] - 0.8, TR_OPEN[1] + 0.8, TR_Z[1], TR_Z[1] + 0.8),
@@ -1226,12 +1228,13 @@ def pad_mound (A, lanes_from=30.0):
 	# collision: the hardstand, its sides, the ramp (proxies: the drawn mound, simple as it is, collides)
 
 def a_pad_ground ():
-	"""the flame trench's floor (KLC39Bground: both pads), the main flame deflector rising south"""
+	"""the flame trench's floor (KLC39Bground: both pads), the main flame deflector rising south: painted
+	from above (capesurf.py trench_floor)"""
 	A = Asset ('KLC39Bground')
-	fl = kl._bm (); df = kl._bm ()
+	fl = kl._bm ()
 	for (xa, ya), (xb, yb) in zip (TR_FLOOR, TR_FLOOR[1:]):
-		quad (df if -21.95 <= xa and xb <= 3.95 else fl, [(xa, ya, TR_Z[0]), (xb, yb, TR_Z[0]), (xb, yb, TR_Z[1]), (xa, ya, TR_Z[1])], up=(0, 1, 0))
-	A.add (fl, REFRACTORY); A.add (df, DEFLECTOR)
+		quad (fl, [(xa, ya, TR_Z[0]), (xb, yb, TR_Z[0]), (xb, yb, TR_Z[1]), (xa, ya, TR_Z[1])], up=(0, 1, 0))
+	pad_part (A, fl, 'trench_floor')
 	return A
 
 def pipe (A, pts, r, mat=STEEL_GREY, role='detail', n=8):
@@ -1595,12 +1598,11 @@ def a_vab ():
 	quad (wl, [(x1, 0, z0), (x1, VAB_LB[4], z0), (x1, VAB_LB[4], VAB_LB[2]), (x1, 0, VAB_LB[2])], up=(1, 0, 0))
 	quad (wl, [(x1, 0, VAB_LB[3]), (x1, VAB_LB[4], VAB_LB[3]), (x1, VAB_LB[4], z1), (x1, 0, z1)], up=(1, 0, 0))
 	vab_part (A, wl, 's', 'x')
-	roof = kl._bm ()
+	roof = kl._bm ()   # (the high bay's and the low bay's: one painting in plan (capesurf.py roof))
 	quad (roof, [(x0, H, z0), (x1, H, z0), (x1, H, z1), (x0, H, z1)], up=(0, 1, 0))
-	A.add (roof, ROOFING)
 	for (px, pz, sx, sz) in ((x0 + 0.3, (z0 + z1) / 2, 0.6, z1 - z0), (x1 - 0.3, (z0 + z1) / 2, 0.6, z1 - z0), ((x0 + x1) / 2, z0 + 0.3, x1 - x0, 0.6), ((x0 + x1) / 2, z1 - 0.3, x1 - x0, 0.6)):
 		A.add (box (sx, 1.2, sz, (px, H, pz)), VAB_CLAD, role='detail')
-	for (bx, bz, sx, sz, h) in ((-180.0, 60.0, 14.0, 10.0, 5.0), (-150.0, 130.0, 10.0, 18.0, 4.0), (-210.0, 140.0, 8.0, 8.0, 6.0), (-130.0, 50.0, 12.0, 8.0, 4.5)):
+	for (bx, bz, sx, sz), h in zip (capesurf.VAB_PLANT, (5.0, 4.0, 6.0, 4.5)):  # (the plant: the roof's painting has its grime about it)
 		A.add (box (sx, h, sz, (bx, H, bz)), VAB_CLAD)
 	pipe (A, [(-166.0, H, 106.0), (-166.0, H + 12.0, 106.0)], 0.15, STEEL_GREY)  # (the flagpole)
 	for (x, z) in ((x0 + 1, z0 + 1), (x0 + 1, z1 - 1), (x1 - 1, z0 + 1), (x1 - 1, z1 - 1)):
@@ -1616,7 +1618,8 @@ def a_vab ():
 	wall (lb, 'z', lz0, lx0, lx1, 0.0, LH, [], (0, 0, -1))
 	wall (lb, 'z', lz1, lx0, lx1, 0.0, LH, [], (0, 0, 1))
 	vab_part (A, lb, 'le', 'z')
-	lr = kl._bm (); quad (lr, [(lx0, LH, lz0), (lx1, LH, lz0), (lx1, LH, lz1), (lx0, LH, lz1)], up=(0, 1, 0)); A.add (lr, ROOFING)
+	quad (roof, [(lx0, LH, lz0), (lx1, LH, lz0), (lx1, LH, lz1), (lx0, LH, lz1)], up=(0, 1, 0))
+	sheet_part (A, roof, 'cape_vab', 'roof', (1, 0, 0), (0, 0, 1), VAB_SHEET)
 	for (gz, gy) in ((lz0, 0), (lz1, 0)):  # (window bands: the low bay's offices)
 		for y in (6.0, 14.0, 22.0, 30.0):
 			bm = kl._bm (); sg = 1 if gz == lz1 else -1
@@ -1665,7 +1668,8 @@ def lcc (A):
 	sheet_part (A, sw, 'cape_vab', 'lcc_sw', (ux, 0, uz), (0, 1, 0), VAB_SHEET)
 	sheet_part (A, ne, 'cape_vab', 'lcc_ne', (ux, 0, uz), (0, 1, 0), VAB_SHEET)
 	sheet_part (A, en, 'cape_vab', 'lcc_end', (vx, 0, vz), (0, 1, 0), VAB_SHEET)
-	A.add (gl, GLASS); A.add (rf, ROOFING)
+	A.add (gl, GLASS)
+	sheet_part (A, rf, 'cape_vab', 'lcc_roof', (ux, 0, uz), (vx, 0, vz), VAB_SHEET)
 	bands = kl._bm ()
 	for y in (2.2, 7.8, 13.4, 19.0):  # (window bands: the south-west face, the ends)
 		quad (bands, [P (3, -0.06, y), P (L - 3, -0.06, y), P (L - 3, -0.06, y + 1.8), P (3, -0.06, y + 1.8)], up=(-vx, 0, -vz))
@@ -1675,7 +1679,7 @@ def lcc (A):
 		quad (bands, [P (3, W + 0.06, y), P (L - 3, W + 0.06, y), P (L - 3, W + 0.06, y + 1.8), P (3, W + 0.06, y + 1.8)], up=(vx, 0, vz))
 	A.add (bands, GLASS)
 	rot = -math.degrees (math.atan2 (uz, ux))
-	for (a, b, sx, sz, h) in ((20.0, 12.0, 10.0, 8.0, 3.5), (55.0, 20.0, 14.0, 10.0, 4.0), (88.0, 14.0, 8.0, 8.0, 3.0)):
+	for (a, b, sx, sz), h in zip (capesurf.LCC_PLANT, (3.5, 4.0, 3.0)):
 		c = P (a, b, H); A.add (box (sx, h, sz, (c[0], H, c[2]), rot), VAB_CLAD)
 	c = P (70.0, 30.0, H); pipe (A, [(c[0], H, c[2]), (c[0], H + 14.0, c[2])], 0.2, STEEL_GREY); A.light ((c[0], H + 14.4, c[2]), RED, 1.0)
 	c = P (L / 2, -4.0, 0); A.add (box (16.0, 0.4, 6.0, (c[0], 4.2, c[2]), rot), VAB_DARK)  # (the entrance's canopy)

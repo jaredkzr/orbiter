@@ -21,14 +21,20 @@ its faces to REGIONS of the sheets, uv 'decal').
     river rock, crushed pale where the crawler's treads run.
     Also the shuttle's mobile launcher platform (20 px/m): its deck (plates,
     soot and the boosters' pale deposit about the exhaust holes) and its four
-    sides (plate seams, stiffeners, hatches, rust from the deck's edge).
+    sides (plate seams, stiffeners, hatches, rust from the deck's edge). And
+    the flame trench (10 px/m): its walls (refractory concrete in pours, soot
+    swept north along them by the exhaust, the water's runs and tide marks,
+    repairs) and its floor (wet, sooted; the flame deflector's scorched,
+    rusting plates).
 
   cape_vab (4096 x 2048, 9 px/m: 11 cm a texel)
     the Vehicle Assembly Building's faces as repainted (2020): white towers
     and pilasters, light grey bays; south and north the grey middle with its
     white frame about the transfer aisle's translucent panel; east and west
     the high bays' doors (seven leaves up each, the four of the base), and
-    the low bay. Rain streaks, the siding's bays and courses faintly.
+    the low bay. Rain streaks, the siding's bays and courses faintly. The
+    roofs (3 px/m, the high bay's and the low bay's one plan; the Launch
+    Control Center's): membrane in strips, ponding, grime about the plant.
 
   cape_pad_detail, cape_vab_detail
     their grain close by (the client's "_detail" map, VkTexture.h MAP_DETAIL:
@@ -64,6 +70,9 @@ LANES, LANE_W = (3.9 - 13.7, 3.9 + 13.7), 12.0
 RAMP_CUT = 127.0   # (the mound's region ends, the ramp's begins: blender_kit.py cuts the ramp's faces there)
 MLP_X, MLP_Z, MLP_Y = (-30.5, 19.5), (-17.12, 24.88), (22.7, 30.3)
 MLP_HOLES = ((-6.85, 5.0, -5.28, 0.62), (-6.85, 5.0, 7.12, 13.03), (7.5, 17.4, -0.78, 8.53))
+TR_X0 = -135.0                         # (the trench's exit)
+TR_FLOOR = ((TR_X0, 0.05), (-57.4, 0.05), (-21.9, 2.0), (-13.2, 5.0), (3.9, 14.0), (TR_OPEN[1], 14.0))   # (its floor: x, y)
+DEFL_X = (-21.9, 3.9)                  # (the main flame deflector: its foot, its top)
 VAB_HB = (-240.6, -106.6, 20.4, 178.4, 160.0)
 VAB_LB = (-106.6, -22.6, 31.9, 166.9, 64.0)
 VAB_DOORS = (-204.1, -142.6)
@@ -83,7 +92,7 @@ class Region:
 	"""a rectangle of a sheet [px] and what it shows: a from a0 (its left edge) to a1 (its
 	right), b from b0 (its top) to b1 (its bottom) - metres, of the surface's own frame"""
 	def __init__ (self, x, y, a0, a1, b0, b1, s):
-		self.x, self.y, self.a0, self.a1, self.b0, self.b1 = x, y, a0, a1, b0, b1
+		self.x, self.y, self.a0, self.a1, self.b0, self.b1, self.s = x, y, a0, a1, b0, b1, s
 		self.w, self.h = int (round (abs (a1 - a0) * s)), int (round (abs (b1 - b0) * s))
 
 	def rect (self, size):
@@ -98,8 +107,8 @@ class Region:
 		b = (self.b0 + cb * (self.b1 - self.b0)).astype (np.float32)
 		return np.broadcast_to (a[None, :], (len (b), len (a))), np.broadcast_to (b[:, None], (len (b), len (a)))
 
-PAD_SIZE, PAD_S, MLP_S = (4096, 4096), 12.0, 20.0
-VAB_SIZE, VAB_S = (4096, 2048), 9.0
+PAD_SIZE, PAD_S, MLP_S, TR_S = (4096, 4096), 12.0, 20.0, 10.0
+VAB_SIZE, VAB_S, ROOF_S, LCC_ROOF_S = (4096, 2048), 9.0, 3.0, 3.5
 _my0, _my1 = MLP_Y[1], MLP_Y[0]
 _hx0, _hx1, _hz0, _hz1, _hh = VAB_HB
 _lx0, _lx1, _lz0, _lz1, _lh = VAB_LB
@@ -118,6 +127,10 @@ REGIONS = {
 		'mlp_s': Region (3080, 1172, MLP_Z[0], MLP_Z[1], _my0, _my1, MLP_S),
 		'mlp_w': Region (3080, 1334, MLP_X[0], MLP_X[1], _my0, _my1, MLP_S),
 		'mlp_e': Region (3080, 1496, MLP_X[0], MLP_X[1], _my0, _my1, MLP_S),
+		# (the flame trench: its walls (a = x, b the height down from the hardstand's), west (z = TR_Z[0]) and east; its floor in plan)
+		'trench_w': Region (2380, 3552, TR_X0, TR_OPEN[1], PAD_H, 0.0, TR_S),
+		'trench_e': Region (2380, 3720, TR_X0, TR_OPEN[1], PAD_H, 0.0, TR_S),
+		'trench_floor': Region (2380, 3888, TR_X0, TR_OPEN[1], TR_Z[0], TR_Z[1], TR_S),
 	},
 	'cape_vab': {
 		# (a along the face: z (south, north), x (east and west: the one painting); b the height, down from the top)
@@ -130,6 +143,9 @@ REGIONS = {
 		'lcc_sw': Region (1991, 1450, _lu, _lu + LCC_LWH[0], LCC_LWH[2], 0.0, VAB_S),
 		'lcc_ne': Region (1991, 1672, _lu, _lu + LCC_LWH[0], LCC_LWH[2], 0.0, VAB_S),
 		'lcc_end': Region (2983, 1450, _lv, _lv + LCC_LWH[1] + LCC_LEAN, LCC_LWH[2], 0.0, VAB_S),
+		# (the roofs in plan: the high bay's and the low bay's (a = x, b = z), the Launch Control Center's (along, across))
+		'roof': Region (3385, 1450, _hx0, _lx1, _hz0, _hz1, ROOF_S),
+		'lcc_roof': Region (2985, 1670, _lu, _lu + LCC_LWH[0], _lv, _lv + LCC_LWH[1] + LCC_LEAN, LCC_ROOF_S),
 	},
 }
 SIZES = {'cape_pad': PAD_SIZE, 'cape_vab': VAB_SIZE}
@@ -193,7 +209,9 @@ def mix (c0, c1, t): return c0 * (1 - t[..., None]) + c1 * t[..., None]
 # ----------------------------------------------------------------------
 # the pad
 
-HARD, PAVE, PAVE_NEW = (0.800, 0.785, 0.742), (0.825, 0.775, 0.660), (0.845, 0.815, 0.725)
+# (the slopes' cream as the photographs have it in the sun - R/B 1.25-1.32, G/B 1.12-1.18 - warmer still, the
+# grass's light thrown up onto them greening them)
+HARD, PAVE, PAVE_NEW, MILDEW = (0.815, 0.790, 0.738), (0.880, 0.780, 0.665), (0.890, 0.820, 0.725), (0.660, 0.605, 0.525)
 ROCK, CRUSHED = (0.700, 0.628, 0.497), (0.835, 0.785, 0.672)
 
 def slope_paint (t, dp, htop, face, px, rng):
@@ -213,7 +231,7 @@ def slope_paint (t, dp, htop, face, px, rng):
 	mil = mil * (1 - 0.8 * new)
 	jd = np.minimum (np.abs ((t / P + 0.5) % 1.0 - 0.5) * P, np.abs ((dp / C + 0.5) % 1.0 - 0.5) * C)
 	jn = line (jd, 0.05, px)
-	lum = (1 + tone) * (1 - 0.20 * run * (1 - 0.6 * new)) * (1 - 0.14 * seep * (1 - 0.6 * new)) * (1 - 0.15 * mil)
+	lum = (1 + tone) * (1 - 0.17 * run * (1 - 0.6 * new)) * (1 - 0.12 * seep * (1 - 0.6 * new)) * (1 - 0.10 * mil)
 	lum = lum * (1 - 0.06 * np.exp (-jd / 0.2)) * (1 - 0.42 * jn)
 	return lum, mil, new
 
@@ -290,7 +308,7 @@ def pad_paint (X, Z, lanes, px, rng):
 	l2, m2, n2 = slope_paint (X, np.maximum (cz, 0), np.maximum (ry, 0.01), np.where (Z < RAMP_C, 4, 5), px, rng)
 	ls, ms, ns = np.where (rside, l2, l1), np.where (rside, m2, m1), np.where (rside, n2, n1)
 	ls = ls * (1 + mott + 0.012 * grain)
-	rgb_s = mix (mix (col (PAVE), col (PAVE_NEW), ns), col ((0.67, 0.64, 0.56)), 0.45 * ms) * ls[..., None]
+	rgb_s = mix (mix (col (PAVE), col (PAVE_NEW), ns), col (MILDEW), 0.35 * ms) * ls[..., None]
 
 	# the ramp's top: paving between and beside the lanes, its joints across; the lanes
 	jr = np.minimum (np.abs ((X / 6.1 + 0.5) % 1.0 - 0.5) * 6.1, np.minimum (np.abs (np.abs (Z - RAMP_C) - (13.7 - 6.0)), np.abs (np.abs (Z - RAMP_C) - (13.7 + 6.0))))
@@ -308,6 +326,78 @@ def pad_paint (X, Z, lanes, px, rng):
 			lrgb, lsm = lane_paint (X, Z - zc, k, px, rng)
 			rgb = np.where (on[..., None], lrgb, rgb); smooth = np.where (on, lsm, smooth)
 	return rgb.astype (np.float32), smooth
+
+# ----------------------------------------------------------------------
+# the flame trench
+
+def floor_y (X):
+	xs, ys = zip (*TR_FLOOR)
+	return np.interp (X, xs, ys).astype (np.float32)
+
+def trench_soot (X):
+	"""how sooted along the trench: the deflector's (and the opening's) the worst, swept north (-x) by the exhaust"""
+	return np.clip (np.where (X > -18.0, 1.0, np.exp (-(-18.0 - X) / 75.0)), 0, 1)
+
+def trench_wall_paint (A, Y, side, px, rng):
+	"""a trench wall: A along it (x [m]), Y the height [m] (side: 0 west, 1 east)"""
+	sd = 300 + 20 * side
+	fy = floor_y (A)
+	h = Y - fy                                                         # (above the floor)
+	# (the pours: lifts 3.2 m high, bays 9.1 m long; tone pour by pour)
+	ib, il = np.floor ((A - TR_X0) / 9.1), np.floor (Y / 3.2)
+	jd = np.minimum (np.abs (((A - TR_X0) / 9.1 + 0.5) % 1.0 - 0.5) * 9.1, np.abs ((Y / 3.2 + 0.5) % 1.0 - 0.5) * 3.2)
+	tone = 0.07 * (cellhash (ib, il, sd) - 0.5) + 0.04 * fbm (A, Y, 6.0, sd + 1, 4) + 0.03 * fbm (A, Y, 0.8, sd + 2, 3)
+	# (form ties: rows of small dark holes, 0.6 m apart in each pour)
+	ta, ty = np.abs ((A / 0.6 + 0.5) % 1.0 - 0.5) * 0.6, np.abs (((Y - il * 3.2) / 0.8 + 0.5) % 1.0 - 0.5) * 0.8
+	tie = np.clip (1 - np.hypot (ta, ty) / 0.07, 0, 1) * (cellhash (ib, il, sd + 3) > 0.25)
+	# (soot: the plume's, swept along the wall - streaks long in x -, worst low and at the deflector)
+	k = trench_soot (A)
+	sw = 0.55 + 0.45 * np.clip (vnoise (A / 14.0, Y / 0.7, sd + 4) * 1.2 + 0.2, 0, 1) * np.clip (vnoise (A / 4.0, Y / 0.35, sd + 5) + 0.7, 0, 1)
+	soot = np.clip (k * sw * (0.55 + 0.45 * np.exp (-np.maximum (h, 0) / 5.0)) * (0.85 + 0.3 * fbm (A, Y, 3.0, sd + 6, 3)), 0, 1)
+	# (spalled and repaired: patches of newer refractory, paler, less sooted)
+	pi, pj = np.floor (A / 4.3), np.floor (Y / 2.1)
+	pr = cellhash (pi, pj, sd + 7)
+	pq = np.minimum (np.minimum ((A / 4.3 - pi), (pi + 1 - A / 4.3)) * 4.3, np.minimum ((Y / 2.1 - pj), (pj + 1 - Y / 2.1)) * 2.1)
+	patch = (pr < 0.05) * np.clip ((pq - 0.35) / px + 0.5, 0, 1)
+	# (water: the deluge's tide marks and the wet foot, runs from the hardstand's edge)
+	wet = np.exp (-np.maximum (h, 0) / 0.9) * (0.7 + 0.3 * np.clip (fbm (A, Y, 2.0, sd + 8, 3) + 0.5, 0, 1))
+	tide = sum (line (np.abs (h - t - 0.25 * vnoise (A / 9.0, t, sd + 9)), 0.08, px) * w for t, w in ((0.6, 0.6), (1.3, 0.45), (2.4, 0.3)))
+	run = np.clip (vnoise (A / 0.5, Y / 30.0, sd + 10) * 1.3 - 0.15, 0, 1) * np.exp (-(PAD_H - Y) / 3.5) * (Y < PAD_H)
+	lum = (1 + tone + 0.02 * rng.standard_normal (A.shape).astype (np.float32)) * (1 - 0.30 * line (jd, 0.04, px)) * (1 - 0.06 * np.exp (-jd / 0.15))
+	lum = lum * (1 - 0.55 * tie) * (1 - 0.18 * run) * (1 + 0.04 * patch) * (1 - 0.22 * tide * (1 - 0.5 * soot))
+	rgb = col ((0.600, 0.585, 0.555)) * lum[..., None]
+	rgb = mix (rgb, col ((0.39, 0.40, 0.35)) * lum[..., None], 0.55 * wet)                     # (wet: dark, a little green)
+	rgb = mix (rgb, col ((0.12, 0.115, 0.105)) * (0.9 + 0.2 * lum[..., None]), 0.88 * soot * (1 - 0.30 * patch))
+	return rgb.astype (np.float32), (0.10 + 0.25 * wet).astype (np.float32)
+
+def trench_floor_paint (X, Z, px, rng):
+	"""the trench's floor in plan (x, z [m]): concrete north of the deflector, the deflector's steel, the fill south of it"""
+	k = trench_soot (X)
+	c = Z - (TR_Z[0] + TR_Z[1]) / 2
+	# (concrete: slabs 6 m long, puddles, the plume's soot streaked along it)
+	ib = np.floor ((X - TR_X0) / 6.0)
+	jd = np.minimum (np.abs (((X - TR_X0) / 6.0 + 0.5) % 1.0 - 0.5) * 6.0, np.abs (c))
+	tone = 0.06 * (cellhash (ib, (c > 0) * 1.0, 341) - 0.5) + 0.04 * fbm (X, Z, 5.0, 342, 4) + 0.03 * fbm (X, Z, 0.7, 343, 3)
+	pud = sstep (0.30, 0.65, fbm (X, Z, 3.5, 344, 4) + 0.35 * np.exp (-((TR_Z[1] - TR_Z[0]) / 2 - np.abs (c)) / 1.0))   # (puddles: along the walls' feet)
+	streak = 0.55 + 0.45 * np.clip (vnoise (X / 16.0, Z / 0.5, 345) * 1.3 + 0.2, 0, 1)
+	soot = np.clip (k * streak * (0.9 + 0.2 * fbm (X, Z, 2.5, 346, 3)), 0, 1)
+	lum = (1 + tone + 0.02 * rng.standard_normal (X.shape).astype (np.float32)) * (1 - 0.30 * line (jd, 0.05, px))
+	conc = col ((0.560, 0.550, 0.520)) * lum[..., None]
+	conc = mix (conc, col ((0.13, 0.12, 0.11)), 0.85 * soot)
+	conc = mix (conc, conc * col ((0.74, 0.76, 0.74)), pud)                                   # (water standing: darker)
+	# (the deflector: plates 1.9 m down its slope, 3 m across; scorched, the coating gone in places, rust)
+	dfl = (X >= DEFL_X[0]) & (X < DEFL_X[1])
+	pa, pb = np.floor ((X - DEFL_X[0]) / 1.9), np.floor ((Z - TR_Z[0]) / 3.0)
+	pd = np.minimum (np.abs (((X - DEFL_X[0]) / 1.9 + 0.5) % 1.0 - 0.5) * 1.9, np.abs (((Z - TR_Z[0]) / 3.0 + 0.5) % 1.0 - 0.5) * 3.0)
+	ptone = 0.10 * (cellhash (pa, pb, 347) - 0.5) + 0.05 * fbm (X, Z, 1.5, 348, 3)
+	rust = np.clip (fbm (X, Z, 1.2, 349, 4) * 1.4 - 0.25, 0, 1)
+	coat = np.clip (fbm (X, Z, 2.2, 350, 4) * 1.5 - 0.35, 0, 1)                                 # (the ablative coating, pale where it holds)
+	dl = (1 + ptone) * (1 - 0.40 * line (pd, 0.05, px)) * (1 + 0.08 * np.exp (-pd / 0.10))
+	steel = mix (col ((0.20, 0.19, 0.18)), col ((0.36, 0.27, 0.20)), 0.50 * rust)
+	steel = mix (steel, col ((0.55, 0.54, 0.51)), 0.55 * coat * (1 - 0.5 * rust)) * dl[..., None]
+	rgb = np.where (dfl[..., None], steel, conc)
+	sm = np.where (dfl, 0.22, 0.12 + 0.45 * pud)
+	return rgb.astype (np.float32), sm.astype (np.float32)
 
 # ----------------------------------------------------------------------
 # the mobile launcher platform
@@ -470,6 +560,67 @@ def lcc_paint (face, A, Y, px, rng):
 	rgb = col ((0.875, 0.872, 0.858)) * (lum * (1 - 0.11 * dirt))[..., None] * (1 - dirt[..., None] * col ((0.0, 0.008, 0.028)))
 	return rgb.astype (np.float32), np.full (A.shape, 0.25, np.float32)
 
+# (the plant on the roofs (blender_kit.py a_vab, lcc): x, z, size x, z [m]; the LCC's: along, across, size along, across)
+VAB_PLANT = ((-180.0, 60.0, 14.0, 10.0), (-150.0, 130.0, 10.0, 18.0), (-210.0, 140.0, 8.0, 8.0), (-130.0, 50.0, 12.0, 8.0), (-166.0, 106.0, 0.6, 0.6))
+LCC_PLANT = ((20.0, 12.0, 10.0, 8.0), (55.0, 20.0, 14.0, 10.0), (88.0, 14.0, 8.0, 8.0), (70.0, 30.0, 0.5, 0.5))
+
+def plant_grime (X, Z, plant, seed):
+	"""grime about the roofs' plant: its run-off, the feet worn about it"""
+	g = np.zeros (X.shape, np.float32)
+	for n, (px_, pz, sx, sz) in enumerate (plant):
+		d = np.maximum (np.maximum (np.abs (X - px_) - sx / 2, np.abs (Z - pz) - sz / 2), 0)
+		g = np.maximum (g, np.exp (-d / (2.5 + 1.5 * vnoise (X / 3.0 + n, Z / 3.0, seed))) * (d > 0))
+	return g
+
+def roof_membrane (X, Z, base, strip, along_x, seed, px, rng):
+	"""a membrane roof in plan: sheets in strips (strip [m] wide, run along x or z), their laps, weathering, ponding"""
+	a, b = (X, Z) if along_x else (Z, X)
+	js = np.floor (b / strip)
+	lap = np.abs ((b / strip + 0.5) % 1.0 - 0.5) * strip
+	ends = np.abs (((a + 7.3 * cellhash (js, js * 0, seed)) / 18.3 + 0.5) % 1.0 - 0.5) * 18.3   # (the sheets' ends, staggered)
+	tone = 0.035 * (cellhash (js, np.floor ((a + 7.3 * cellhash (js, js * 0, seed)) / 18.3), seed + 1) - 0.5)
+	dirt = np.clip (fbm (X, Z, 24.0, seed + 2, 5) * 1.1 + 0.05, 0, 1)
+	dirt = dirt * dirt
+	pond = sstep (0.50, 0.75, fbm (X, Z, 9.0, seed + 3, 4)) * (0.6 + 0.4 * np.clip (fbm (X, Z, 2.0, seed + 4, 3) + 0.5, 0, 1))
+	ring = line (np.abs (fbm (X, Z, 9.0, seed + 3, 4) - 0.50) * 9.0, 0.35, px) * 0.6     # (the ponds' dried rims)
+	speck = 0.025 * fbm (X, Z, 0.9, seed + 5, 3) + 0.015 * rng.standard_normal (X.shape).astype (np.float32)
+	lum = (1 + tone + speck) * (1 + 0.06 * line (lap, 0.12, px)) * (1 - 0.05 * line (ends, 0.10, px))
+	lum = lum * (1 - 0.12 * dirt) * (1 - 0.08 * pond) * (1 - 0.06 * ring)
+	rgb = col (base) * lum[..., None]
+	rgb = mix (rgb, rgb * col ((0.90, 0.89, 0.85)), np.clip (0.6 * pond + 0.5 * dirt, 0, 1))  # (the grime: a little brown)
+	return rgb, pond
+
+def roof_paint (X, Z, px, rng):
+	"""the high bay's roof and the low bay's in plan (x, z [m])"""
+	x0, x1, z0, z1, _ = VAB_HB
+	lx0, lx1, lz0, lz1, _ = VAB_LB
+	hb = X < x1
+	rh, ph = roof_membrane (X, Z, (0.800, 0.805, 0.800), 3.05, False, 410, px, rng)
+	rl, pl = roof_membrane (X, Z, (0.715, 0.718, 0.712), 2.44, True, 430, px, rng)
+	rgb, pond = np.where (hb[..., None], rh, rl), np.where (hb, ph, pl)
+	# (the edges: the parapets' grime; the plant's; the walkway from the roof's hatch to it (pavers))
+	edge = np.minimum (np.where (hb, np.minimum (X - x0, x1 - X), np.minimum (X - lx0, lx1 - X)), np.where (hb, np.minimum (Z - z0, z1 - Z), np.minimum (Z - lz0, lz1 - Z)))
+	eg = np.exp (-np.maximum (edge, 0) / 1.8) * (0.7 + 0.3 * np.clip (vnoise (X / 2.0, Z / 2.0, 450) + 0.5, 0, 1))
+	g = plant_grime (X, Z, VAB_PLANT, 451)
+	wk = (np.abs (Z - 99.4) < 0.6) & (X > -205.0) & (X < -125.0) | (np.abs (X - -166.0) < 0.6) & (Z > 60.0) & (Z < 140.0)
+	pav = np.abs (((X + Z) / 0.6 + 0.5) % 1.0 - 0.5)
+	rgb = rgb * (1 - 0.22 * eg - 0.20 * g)[..., None]
+	rgb = np.where (wk[..., None], col ((0.66, 0.65, 0.62)) * (1 - 0.25 * line (pav * 0.6, 0.03, px))[..., None], rgb)
+	return rgb.astype (np.float32), (0.25 + 0.30 * pond).astype (np.float32)
+
+def lcc_roof_paint (U, V, px, rng):
+	"""the Launch Control Center's roof (U along, V across [m], of the sheet's frame): ballast over membrane"""
+	a, b = U - _lu, V - _lv
+	L, W = LCC_LWH[0], LCC_LWH[1] + LCC_LEAN
+	grain = rng.standard_normal (U.shape).astype (np.float32)
+	tone = 0.05 * fbm (a, b, 8.0, 470, 4) + 0.04 * fbm (a, b, 0.6, 471, 3)
+	bare = sstep (0.30, 0.55, fbm (a, b, 5.0, 472, 4))                                       # (the ballast thin: membrane showing)
+	g = plant_grime (a, b, LCC_PLANT, 473)
+	edge = np.exp (-np.maximum (np.minimum (np.minimum (a, L - a), np.minimum (b, W - b)), 0) / 1.2)
+	lum = (1 + tone + 0.025 * grain * (1 - bare)) * (1 - 0.20 * g) * (1 - 0.18 * edge)
+	rgb = mix (col ((0.600, 0.592, 0.570)), col ((0.70, 0.70, 0.69)), 0.6 * bare) * lum[..., None]
+	return rgb.astype (np.float32), np.full (U.shape, 0.15, np.float32) + 0.15 * bare
+
 # ----------------------------------------------------------------------
 # the detail maps (tiles: periodic)
 
@@ -504,14 +655,18 @@ def paint_sheet (name, rng):
 	G = 4
 	for rn, r in REGIONS[name].items ():
 		a, b = r.grid (G)
+		px = 1.0 / r.s
 		if name == 'cape_pad':
-			px = 1.0 / (MLP_S if rn.startswith ('mlp') else PAD_S)
 			if rn in ('mound', 'ramp'): c, s = pad_paint (a, b, rn == 'ramp', px, rng)
 			elif rn.startswith ('lane'): c, s = lane_paint (a, b - LANES[int (rn[-1])], int (rn[-1]), px, rng)
 			elif rn == 'mlp_deck': c, s = mlp_deck_paint (a, b, px, rng)
-			else: c, s = mlp_side_paint (a, b, 'nswe'.index (rn[-1]), px, rng)
+			elif rn.startswith ('mlp'): c, s = mlp_side_paint (a, b, 'nswe'.index (rn[-1]), px, rng)
+			elif rn == 'trench_floor': c, s = trench_floor_paint (a, b, px, rng)
+			else: c, s = trench_wall_paint (a, b, rn == 'trench_e', px, rng)
+		elif rn == 'roof': c, s = roof_paint (a, b, px, rng)
+		elif rn == 'lcc_roof': c, s = lcc_roof_paint (a, b, px, rng)
 		else:
-			c, s = vab_paint (rn, a, b, 1.0 / VAB_S, rng)
+			c, s = vab_paint (rn, a, b, px, rng)
 		ya, xa = max (r.y - G, 0), max (r.x - G, 0)
 		yb, xb = min (r.y + r.h + G, Hh), min (r.x + r.w + G, W)
 		rgb[ya:yb, xa:xb] = c[ya - (r.y - G):yb - (r.y - G), xa - (r.x - G):xb - (r.x - G)]

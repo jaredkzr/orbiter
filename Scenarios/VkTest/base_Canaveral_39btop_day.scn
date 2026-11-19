@@ -1,0 +1,30 @@
+BEGIN_DESC
+Cape Canaveral base (Canaveral_39btop): its assets by day (Utils/BaseKit/shots.py)
+END_DESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51985.8500
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship V
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET V
+  MODE Extern
+  TRACKMODE Ground Earth
+  GROUNDLOCATION -80.6206080 28.6249303 520.0
+  GROUNDDIRECTION 170.54 -86.65
+  FOV 60.00
+END_CAMERA
+
+BEGIN_SHIPS
+V:DeltaGlider
+  STATUS Landed Earth
+  BASE Cape Canaveral:1
+  HEADING 0
+  GEAR 1 1.0000
+END
+END_SHIPS
