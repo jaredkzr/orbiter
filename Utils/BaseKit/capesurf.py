@@ -4,7 +4,7 @@
 
 """The Cape's unique surface sheets: textures painted for one surface each and
 mapped onto it once - nothing tiles, nothing repeats (blender_kit.py cape maps
-its faces to REGIONS of the sheets, uv 'decal').
+its faces to REGIONS of the sheets, uv 'decal'; round things uv 'wrap').
 
   cape_pad (4096 x 4096, 12 px/m: 8.3 cm a texel)
     a launch pad of complex 39 seen from above - one painting in the pad's
@@ -25,7 +25,12 @@ its faces to REGIONS of the sheets, uv 'decal').
     the flame trench (10 px/m): its walls (refractory concrete in pours, soot
     swept north along them by the exhaust, the water's runs and tide marks,
     repairs) and its floor (wet, sooted; the flame deflector's scorched,
-    rusting plates).
+    rusting plates). The pads' round things, each painted once about (16, 8
+    and 10 px/m): the water tower's tank (plate courses, its heads in gores,
+    streaks down the shell from the knuckle, grime under it), its standpipe
+    (courses, run-off under the girts' collars, splash at its foot), the
+    propellant spheres (orange-peel plates, a rust run under each leg,
+    streaks and grime over the lower half).
 
   cape_vab (4096 x 2048, 9 px/m: 11 cm a texel)
     the Vehicle Assembly Building's faces as repainted (2020): white towers
@@ -82,6 +87,35 @@ LB_BLOCKS = ((31.9, 60.0, 16.0), (60.0, 74.4, 35.0), (74.4, 124.4, 64.0), (124.4
 assert LB_BLOCKS[0][0] == VAB_LB[2] and LB_BLOCKS[-1][1] == VAB_LB[3] and max (b[2] for b in LB_BLOCKS) == VAB_LB[4]
 LCC_O, LCC_U, LCC_LWH, LCC_LEAN = (-72.1, 201.0), (0.7432, 0.6691), (109.1, 40.9, 23.5), 2.6
 
+# (the pads' sound suppression water tower: its tank (bottom, top, radius, its heads' depth), its standpipe (radius,
+# bottom, top); the propellant spheres' radius (the LOX's; the LH2's 11 m painted the same) - all about the vertical)
+WT_T0, WT_T1, WT_R, WT_HD = 75.0, 88.0, 6.8, 3.0
+WT_PIPE = (2.0, 7.0, 75.5)
+SPH_R = 10.5
+
+def wt_profile ():
+	"""the tank's outline (radius, y), bottom to top: elliptical heads, a cylinder between"""
+	q = [math.pi / 2 * k / 6 for k in range (7)]
+	return [(WT_R * math.sin (t), WT_T0 + WT_HD * (1 - math.cos (t))) for t in q] + \
+		[(WT_R * math.cos (t), WT_T1 - WT_HD + WT_HD * math.sin (t)) for t in q]
+
+def _wt_arc ():
+	pr = wt_profile ()
+	s = [0.0]
+	for (r0, y0), (r1, y1) in zip (pr, pr[1:]): s.append (s[-1] + math.hypot (r1 - r0, y1 - y0))
+	return pr, s
+WT_L = _wt_arc ()[1][-1]      # (the outline's length)
+
+def wt_down (y):
+	"""how far down the tank's outline from its crown [m] the height y lies"""
+	pr, s = _wt_arc ()
+	return WT_L - float (np.interp (y, [p[1] for p in pr], s))
+
+def wt_radius (b):
+	"""the tank's radius b [m] down its outline"""
+	pr, s = _wt_arc ()
+	return np.interp (WT_L - b, s, [p[0] for p in pr])
+
 def hardstand_joints ():
 	"""the hardstand's slabs: their joints along x, along z (the trench's opening whole slabs)"""
 	sp = lambda a, b, n: [a + (b - a) * k / n for k in range (n + 1)]
@@ -135,6 +169,12 @@ REGIONS = {
 		'trench_w': Region (2380, 3552, TR_X0, TR_OPEN[1], PAD_H, 0.0, TR_S),
 		'trench_e': Region (2380, 3720, TR_X0, TR_OPEN[1], PAD_H, 0.0, TR_S),
 		'trench_floor': Region (2380, 3888, TR_X0, TR_OPEN[1], TR_Z[0], TR_Z[1], TR_S),
+		# (round things, once about: a the bearing as metres about (0 at +z, east; a quarter round at +x,
+		# south), b down from the top - the water tower's tank (down its outline), its standpipe; the spheres
+		# (down a meridian))
+		'wt_tank': Region (3080, 1658, 0.0, 2 * math.pi * WT_R, 0.0, WT_L, 16.0),
+		'wt_pipe': Region (3774, 1658, 0.0, 2 * math.pi * WT_PIPE[0], 0.0, WT_PIPE[2] - WT_PIPE[1], 8.0),
+		'sphere': Region (0, 3708, 0.0, 2 * math.pi * SPH_R, 0.0, math.pi * SPH_R, 10.0),
 	},
 	'cape_vab': {
 		# (a along the face: z (south, north), x (east and west: the one painting); b the height, down from the top)
@@ -454,6 +494,118 @@ def mlp_side_paint (A, Y, side, px, rng):
 	return rgb.astype (np.float32), np.full (A.shape, 0.32, np.float32)
 
 # ----------------------------------------------------------------------
+# the pads' round things: the water tower's tank and standpipe, the propellant spheres - white paint
+# on welded plate, each about once (their seam east, blended over: no edge)
+
+PAINT, GRIME, RUST, MILDEW_G = (0.862, 0.866, 0.855), (0.540, 0.535, 0.505), (0.560, 0.390, 0.265), (0.600, 0.615, 0.555)
+
+def wrapped (fn, A, B, C, band=2.5):
+	"""a painting fn (A, B) of a surface about, made to meet itself where a reaches round (C [m])"""
+	c1, s1 = fn (A, B)
+	c2, s2 = fn (A - C, B)
+	t = sstep (C - band, C, A)
+	return mix (c1, c2, t), s1 * (1 - t) + s2 * t
+
+def seam_rows (A, B, rows, counts, C, px, w=0.035):
+	"""welds: rings at the b of rows, between them counts[i] plates about (C [m]), each band's
+	joints half a plate on from the last's; returns the welds' darkening, a plate's index"""
+	rows = np.asarray (rows, np.float32)
+	j = np.searchsorted (rows, B)
+	ring = near (B, rows)
+	n = np.asarray ((1,) + tuple (counts) + (1,), np.float32)[j]
+	sp = C / n
+	q = A / sp + 0.5 * (j % 2)
+	vert = np.abs ((q + 0.5) % 1.0 - 0.5) * sp
+	vert = np.where (n > 1, vert, 1e3)
+	weld = np.maximum (line (ring, w, px), line (vert, w, px))
+	return weld, (np.floor (q) % n) + 37 * j
+
+def round_weather (A, B, Ar, north, seed, px):
+	"""streaks down the meridians (Ar: the bearing [m]), mildew (more on the north side)"""
+	st = np.clip (vnoise (Ar / 0.30, B / 5.0, seed) * 1.35 - 0.30, 0, 1) * np.clip (vnoise (Ar / 2.6, 0.5, seed + 1) + 0.45, 0, 1)
+	st2 = np.clip (vnoise (Ar / 0.9, B / 9.0, seed + 2) * 1.2 - 0.35, 0, 1)
+	mil = np.clip (fbm (Ar, B, 3.5, seed + 3, 4) * 0.8 + 0.25 * north, 0, 1)
+	return st, st2, mil
+
+def wt_tank_paint (A, B, px, rng):
+	"""the tank: A about [m at its radius], B down its outline from the crown"""
+	C = 2 * math.pi * WT_R
+	def fn (A, B):
+		th = A / WT_R
+		north = -np.sin (th)
+		kt = (WT_L - (WT_T1 - WT_T0 - 2 * WT_HD)) / 2      # (the knuckles' b: the top's, the bottom's)
+		kb = kt + WT_T1 - WT_T0 - 2 * WT_HD
+		shell = kt + (kb - kt) * np.arange (4) / 3
+		weld, plate = seam_rows (A, B, (2.6,) + tuple (shell) + (WT_L - 2.6,), (12, 6, 6, 6, 12), C, px)
+		tone = 0.022 * (cellhash (plate, plate * 0, 401) - 0.5) + 0.014 * fbm (A, B, 6.0, 402, 3)
+		st, st2, mil = round_weather (A, B, A, north, 403, px)
+		side = sstep (kt - 1.0, kt + 0.5, B) * (1 - sstep (kb - 0.2, kb + 1.5, B))          # (the shell: streaks run down it)
+		down = np.clip ((B - kt) / (kb - kt), 0, 1)
+		# (streaks from the knuckle and from each course's weld; the crown chalky in patches; under it all, grime)
+		under = sstep (kb - 0.5, WT_L, B)
+		dirt = side * (0.45 * st * (0.55 + 0.45 * down) + 0.30 * st2) + 0.08 * (1 - side) * np.clip (fbm (A, B, 2.2, 404, 4) + 0.3, 0, 1) * (B < kt)
+		dirt = dirt + under * (0.18 + 0.25 * np.clip (vnoise (A / 0.25, B / 1.5, 405) + 0.2, 0, 1))
+		rust = np.clip (vnoise (A / 0.18, B / 2.4, 406) * 1.6 - 0.95, 0, 1) * np.exp (-near (B, shell) / 1.4) * side
+		rust = rust + 0.35 * sstep (WT_L - 1.2, WT_L - 0.6, B) * np.clip (vnoise (A / 0.6, B / 0.4, 407) + 0.3, 0, 1)   # (where the pipe meets it)
+		lum = (1 + tone + 0.012 * rng.standard_normal (A.shape).astype (np.float32)) * (1 - 0.075 * weld)
+		rgb = mix (col (PAINT), col (MILDEW_G), np.clip (0.30 * mil * (0.4 + 0.6 * under + 0.4 * side), 0, 0.35))
+		rgb = mix (rgb, col (GRIME), np.clip (dirt, 0, 0.62))
+		rgb = mix (rgb, col (RUST), np.clip (0.65 * rust, 0, 0.7)) * lum[..., None]
+		return rgb.astype (np.float32), (0.40 - 0.18 * np.clip (dirt + rust, 0, 1)).astype (np.float32)
+	return wrapped (fn, A, B, C)
+
+def wt_pipe_paint (A, B, px, rng):
+	"""the standpipe: A about, B down from where it meets the tank; its collars (blender_kit.py's girts' levels)"""
+	R, y0, y1 = WT_PIPE
+	C = 2 * math.pi * R
+	collars = [y1 - (1.0 + (WT_T0 - 1.0) * i / 6) for i in range (6, 0, -1)]
+	courses = list (np.arange (3.05, y1 - y0, 3.05))
+	def fn (A, B):
+		north = -np.sin (A / R)
+		weld, plate = seam_rows (A, B, courses, (2,) * (len (courses) - 1), C, px)
+		tone = 0.02 * (cellhash (plate, plate * 0, 411) - 0.5)
+		st, st2, mil = round_weather (A, B, A, north, 412, px)
+		dc = B - np.asarray (collars, np.float32)[np.clip (np.searchsorted (np.asarray (collars, np.float32), B) - 1, 0, 5)]
+		below = np.where (dc >= 0, np.exp (-dc / 4.5), 0.0)                                 # (the collars' run-off)
+		dirt = 0.18 * st + 0.12 * st2 + 0.22 * below * np.clip (vnoise (A / 0.2, B / 3.0, 413) + 0.3, 0, 1)
+		dirt = dirt + 0.45 * np.exp (-(y1 - y0 - B) / 1.6)                                    # (splashed at its foot)
+		rust = 0.6 * below * np.clip (vnoise (A / 0.12, B / 1.8, 414) * 1.6 - 0.9, 0, 1)
+		lum = (1 + tone + 0.012 * rng.standard_normal (A.shape).astype (np.float32)) * (1 - 0.07 * weld)
+		rgb = mix (col (PAINT), col (MILDEW_G), np.clip (0.25 * mil, 0, 0.3))
+		rgb = mix (rgb, col (GRIME), np.clip (dirt, 0, 0.6))
+		rgb = mix (rgb, col (RUST), np.clip (rust, 0, 0.6)) * lum[..., None]
+		return rgb.astype (np.float32), (0.40 - 0.18 * np.clip (dirt + rust, 0, 1)).astype (np.float32)
+	return wrapped (fn, A, B, C)
+
+def sphere_paint (A, B, px, rng):
+	"""a propellant sphere: A about [m at its equator], B down a meridian; its ten legs (blender_kit.py
+	pad_sphere) meet it a little under the equator"""
+	R = SPH_R
+	C = 2 * math.pi * R
+	rows = [f * math.pi * R for f in (0.07, 0.22, 0.39, 0.5, 0.61, 0.78, 0.93)]
+	legs = 0.5 * math.pi * R + R * math.asin (1.0 / R)     # (b where they meet it)
+	def fn (A, B):
+		phi = B / R
+		north = -np.sin (A / R)
+		weld, plate = seam_rows (A, B, rows, (8, 12, 16, 16, 12, 8), C, px)
+		tone = 0.022 * (cellhash (plate, plate * 0, 421) - 0.5) + 0.012 * fbm (A, B, 7.0, 422, 3)
+		st, st2, mil = round_weather (A, B, A, north, 423, px)
+		lower = sstep (0.42 * math.pi * R, 0.62 * math.pi * R, B)
+		top = 1 - sstep (0.10 * math.pi * R, 0.30 * math.pi * R, B)
+		# (from each leg's foot on it, a rust run straight down; streaks over the lower half; grime under it)
+		dl = np.abs ((A / (C / 10) + 0.5) % 1.0 - 0.5) * (C / 10) * np.sin (phi)
+		run = np.exp (-dl / 0.22) * np.where (B > legs - 0.3, np.exp (-(B - legs) / 5.0), 0.0) * np.clip (vnoise (A / 0.15, B / 2.0, 424) + 0.8, 0, 1)
+		dirt = lower * (0.40 * st + 0.30 * st2) + 0.10 * top * np.clip (fbm (A, B, 2.0, 425, 4) + 0.3, 0, 1)
+		dirt = dirt + 0.30 * sstep (0.72 * math.pi * R, math.pi * R, B) + 0.35 * np.exp (-np.abs (B - legs) / 0.25)
+		rust = 0.55 * run + 0.3 * np.exp (-B / 0.35) * np.clip (vnoise (A / 0.8, B / 0.3, 426) + 0.3, 0, 1)
+		lum = (1 + tone + 0.012 * rng.standard_normal (A.shape).astype (np.float32)) * (1 - 0.075 * weld)
+		rgb = mix (col (PAINT), col (MILDEW_G), np.clip (0.35 * mil * (0.3 + lower), 0, 0.35))
+		rgb = mix (rgb, col (GRIME), np.clip (dirt, 0, 0.6))
+		rgb = mix (rgb, col (RUST), np.clip (rust, 0, 0.65)) * lum[..., None]
+		return rgb.astype (np.float32), (0.40 - 0.18 * np.clip (dirt + rust, 0, 1)).astype (np.float32)
+	return wrapped (fn, A, B, C)
+
+# ----------------------------------------------------------------------
 # the Vehicle Assembly Building
 
 VAB_WHITE, VAB_GREY, VAB_PANEL, VAB_LEAF = (0.885, 0.888, 0.882), (0.615, 0.628, 0.640), (0.600, 0.640, 0.585), (0.505, 0.515, 0.530)
@@ -675,6 +827,9 @@ def paint_sheet (name, rng):
 			elif rn == 'mlp_deck': c, s = mlp_deck_paint (a, b, px, rng)
 			elif rn.startswith ('mlp'): c, s = mlp_side_paint (a, b, 'nswe'.index (rn[-1]), px, rng)
 			elif rn == 'trench_floor': c, s = trench_floor_paint (a, b, px, rng)
+			elif rn == 'wt_tank': c, s = wt_tank_paint (a, b, px, rng)
+			elif rn == 'wt_pipe': c, s = wt_pipe_paint (a, b, px, rng)
+			elif rn == 'sphere': c, s = sphere_paint (a, b, px, rng)
 			else: c, s = trench_wall_paint (a, b, rn == 'trench_e', px, rng)
 		elif rn == 'roof': c, s = roof_paint (a, b, px, rng)
 		elif rn == 'lcc_roof': c, s = lcc_roof_paint (a, b, px, rng)

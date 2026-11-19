@@ -212,6 +212,21 @@ def _uv (p, n, part):
 	t = Vector ((-n.z, 0, n.x)).normalized () if Vector ((n.x, 0, n.z)).length > 1e-6 else Vector ((1, 0, 0))
 	return (p.dot (t) / T, -p.y / T)
 
+def _wrap_uv (verts, part):
+	"""uv 'wrap' (axis: (cx, cz, (u0, v0, u1, v1), vfun)): a surface about the vertical through (cx, cz)
+	onto a rectangle of a sheet once - u the bearing (0 at +z, a quarter at +x), vfun (p) 0..1 down
+	it; a face's bearings unwrapped together (its seam at +z, between 1 and 0), a pole's its face's"""
+	cx, cz, (u0, v0, u1, v1), vfun = part.axis
+	th = []
+	for v in verts:
+		dx, dz = v.co.x - cx, v.co.z - cz
+		th.append (None if dx * dx + dz * dz < 1e-10 else math.atan2 (dx, dz) % (2 * math.pi))
+	ts = [t for t in th if t is not None]
+	if ts and max (ts) - min (ts) > math.pi: th = [None if t is None else (t + 2 * math.pi if t < math.pi else t) for t in th]
+	ts = [t for t in th if t is not None]
+	mean = sum (ts) / len (ts) if ts else 0.0
+	return [(u0 + (mean if t is None else t) / (2 * math.pi) * (u1 - u0), v0 + vfun (v.co) * (v1 - v0)) for t, v in zip (th, verts)]
+
 def _part_triangles (part, smooth_deg):
 	"""(vertices (x,y,z,nx,ny,nz,u,v), triangles) of a part, normals smoothed
 	across edges whose faces meet under smooth_deg"""
@@ -223,12 +238,13 @@ def _part_triangles (part, smooth_deg):
 	for f in bm.faces:
 		fn = f.normal.copy ()
 		ids = []
+		if part.uv == 'wrap': wuv = _wrap_uv (f.verts, part)
 		for v in f.verts:
 			acc = Vector ((0, 0, 0))
 			for g in v.link_faces:
 				if g.normal.dot (fn) >= cos_lim: acc += g.normal * g.calc_area ()
 			n = acc.normalized () if acc.length > 1e-12 else fn
-			uv = _uv (v.co, fn, part)
+			uv = wuv[f.verts[:].index (v)] if part.uv == 'wrap' else _uv (v.co, fn, part)
 			k = (round (v.co.x, 4), round (v.co.y, 4), round (v.co.z, 4), round (n.x, 3), round (n.y, 3), round (n.z, 3), round (uv[0], 4), round (uv[1], 4))
 			if k not in key:
 				key[k] = len (vtx)

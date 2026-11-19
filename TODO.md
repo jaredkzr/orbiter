@@ -30,8 +30,8 @@ canals and ponds. Left over:
   them (others show the tiled pavement; `STYLE classic` keeps a pad's old
   texture); nor do ray traced reflections show them.
 - **After the base asset overhaul** (all phases done): both LC-39 pads share one surface painting
-  (and the VAB's east and west faces); the Cape's sheds, rooftop plant and the MLP's parts still
-  use tiled textures. The low bay's steps (`capesurf.LB_BLOCKS`) are read off one aerial
+  (and the VAB's east and west faces); the Cape's rooftop plant, the pads' lattice, pipes, plinths
+  and the MLP's parts still use tiled textures (the sheds are `BLOCK`s: client-drawn). The low bay's steps (`capesurf.LB_BLOCKS`) are read off one aerial
   photograph (KSC-98PC-0998): their widths are estimates. `SOLARPLANT` (now a fixed array, exported) has no test: no stock
   base uses it (checked at a temporary plant at Edwards: drawn, shadowed, collides).
 - **Scenario builder in the main menu** (Launchpad): build a scenario without editing files -

@@ -1302,16 +1302,14 @@ def pad_watertower (A, cx, cz):
 	"""the sound suppression water tower as at 39A and 39B (88 m, 1.1 million litres): a
 	capsule tank 75 m up on a standpipe of 4 m, a concrete plinth at its foot; six raked
 	legs about it, ring girts and X braces in six panels, struts in to the pipe; returns its foot"""
-	T0, T1, RT = 75.0, 88.0, 6.8      # (the tank: its bottom, its top, its radius)
+	T0, T1, RT = capesurf.WT_T0, capesurf.WT_T1, capesurf.WT_R      # (the tank: its bottom, its top, its radius)
 	NL, R0, R1 = 6, 11.5, 6.4         # (the legs: at the ground, under the tank)
 	A.add (box (9.0, 1.0, 9.0, (cx, 0, cz)), CONCRETE)
 	A.add (box (7.0, 6.0, 7.0, (cx, 1.0, cz)), CONCRETE)
-	A.add (cylinder (2.0, T0 - 6.5, 24, (cx, 7.0, cz)), PAINT_WHITE, uv='cyl', axis=(0, 1, 0), centre=(cx, 0, cz))
-	# (the tank: elliptical heads 3 m deep, a cylinder between)
-	hd = 3.0
-	prof = [(RT * math.sin (math.pi / 2 * k / 6), T0 + hd * (1 - math.cos (math.pi / 2 * k / 6))) for k in range (7)]
-	prof += [(RT * math.cos (math.pi / 2 * k / 6), T1 - hd + hd * math.sin (math.pi / 2 * k / 6)) for k in range (7)]
-	A.add (lathe (prof, cx, cz), PAINT_WHITE, uv='cyl', axis=(0, 1, 0), centre=(cx, 0, cz))
+	# (the standpipe and the tank - its heads elliptical, a cylinder between -: each painted about once (capesurf.py))
+	pr, p0, p1 = capesurf.WT_PIPE
+	A.add (lathe ([(pr, p0), (pr, p1)], cx, cz, 24), PAD_SHEET, uv='wrap', axis=(cx, cz, capesurf.region ('cape_pad', 'wt_pipe')[1], lambda p: (p1 - p.y) / (p1 - p0)))
+	A.add (lathe (capesurf.wt_profile (), cx, cz), PAD_SHEET, uv='wrap', axis=(cx, cz, capesurf.region ('cape_pad', 'wt_tank')[1], lambda p: capesurf.wt_down (p.y) / capesurf.WT_L))
 	A.add (cylinder (0.9, 0.8, 16, (cx, T1 - 0.1, cz)), STEEL_GREY, role='detail')             # (the roof hatch, its vent)
 	rail = [rod_between ((cx + 1.8 * math.sin (2 * math.pi * k / 12), T1 + 0.9, cz + 1.8 * math.cos (2 * math.pi * k / 12)),
 		(cx + 1.8 * math.sin (2 * math.pi * (k + 1) / 12), T1 + 0.9, cz + 1.8 * math.cos (2 * math.pi * (k + 1) / 12)), 0.04, 4) for k in range (12)]
@@ -1345,7 +1343,10 @@ def pad_watertower (A, cx, cz):
 
 def pad_sphere (A, cx, cz, r=10.5):
 	"""a cryogenic propellant sphere (liquid oxygen, liquid hydrogen) on its legs, a vent"""
-	A.add (sphere (r, (cx, r + 4.0, cz), 32, 16), PAINT_WHITE, uv='cyl', axis=(0, 1, 0), centre=(cx, 0, cz))
+	cy = r + 4.0
+	prof = [(r * math.sin (math.pi * k / 24), cy - r * math.cos (math.pi * k / 24)) for k in range (25)]
+	A.add (lathe (prof, cx, cz, 40), PAD_SHEET, uv='wrap', axis=(cx, cz, capesurf.region ('cape_pad', 'sphere')[1],
+		lambda p: math.acos (max (-1.0, min (1.0, (p.y - cy) / r))) / math.pi))
 	legs = [rod_between ((cx + (r - 0.8) * math.sin (2 * math.pi * k / 10), 0, cz + (r - 0.8) * math.cos (2 * math.pi * k / 10)),
 		(cx + (r - 1.2) * math.sin (2 * math.pi * k / 10), r + 3.0, cz + (r - 1.2) * math.cos (2 * math.pi * k / 10)), 0.4, 8) for k in range (10)]
 	A.add (merge (*legs), STEEL_GREY)
