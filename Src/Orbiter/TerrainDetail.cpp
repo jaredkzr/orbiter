@@ -587,7 +587,18 @@ namespace {
 	// Canaveral (Scenarios/Tests/CapeGroundTest): the SLF flush with the
 	// ground beside it (its concrete, clear of canopy in the data, at the
 	// real field's 3 m), its approaches within 1-1.6 m over 500 m
-	const GroundFilter::Params BARE_PRM{ 0.002 * RAD, 150.0, 9, 0.10, 10 };
+	// On slopes of more than 1.5 % (in full from 3 %) the lowest tenth over
+	// the samples' plane (GroundFilter.h: the lowest tenth of a hillside is
+	// its foot - Svobodniy's hills and Alcantara's plateau came out 10-14 m
+	// lower); a wood's edge on flat ground tilts the plane by 1 % at most
+	// (ORBITER_BARE_SLOPES=0: never, for tests)
+	GroundFilter::Params BarePrm ()
+	{
+		GroundFilter::Params p{ 0.002 * RAD, 150.0, 9, 0.10, 10 };
+		const char *e = getenv ("ORBITER_BARE_SLOPES");
+		if (!(e && *e && !atoi (e))) p.slope0 = 0.015, p.slope1 = 0.03;
+		return p;
+	}
 	constexpr double BARE_MIN = 1.0; // [m]
 }
 
@@ -633,7 +644,7 @@ void TerrainDetail::InitBases () const
 	std::unique_ptr<ElevationManager> raw;
 	for (DWORD i = 0; i < planet->nBase(); i++)
 		if (planet->GetBase (i)->BareEarthRadius () > 0.0 && !planet->GetBase (i)->Floating ()) {
-			bare = std::make_unique<GroundFilter> (planet, BARE_PRM);
+			bare = std::make_unique<GroundFilter> (planet, BarePrm ());
 			break;
 		}
 	for (DWORD i = 0; i < planet->nBase(); i++) {

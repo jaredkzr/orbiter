@@ -9,7 +9,8 @@
 // ground from the data alone: at nodes on a regular latitude/longitude
 // grid (step), a low percentile of n x n samples spacing metres apart
 // about the node (the sea's samples, |h| <= 0.25 m, left out),
-// interpolated between the nodes; NaN where too few samples are land.
+// interpolated between the nodes; NaN where too few samples are land. On
+// slopes the percentile of the heights over the samples' plane (Params).
 //
 // Nodes are made in blocks, on demand, in parallel, by elevation managers
 // of the filter's own (the data alone: no detail, no levelling), and
@@ -45,6 +46,13 @@ public:
 		int n;             ///< samples per side (odd: n x n about the node)
 		double percentile; ///< the ground: this fraction of the land samples lie below it (0-1)
 		int minLand;       ///< land samples a node needs (fewer: NaN)
+		/// Slopes: on sloping ground the low percentile of the samples is the
+		/// foot of the slope, not the ground under the trees (hills and
+		/// plateaus were cut down by 10 m and more). Where the samples' plane
+		/// (least squares) slopes more than slope0, the percentile is taken
+		/// of their heights over that plane instead, and set on the plane at
+		/// the node - in full from slope1 (rise over run; 0, 0: never)
+		double slope0 = 0.0, slope1 = 0.0;
 	};
 
 	GroundFilter (const Planet *planet, const Params &prm);

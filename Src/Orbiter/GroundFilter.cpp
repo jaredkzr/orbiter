@@ -47,21 +47,51 @@ GroundFilter::NodeVal GroundFilter::Node (int64_t i, int64_t j)
 	// n x n samples about the node; a low percentile of the land's
 	double lat = i * prm.step, lng = j * prm.step;
 	double dlat = prm.spacing / R, dlng = prm.spacing / (R * std::max (cos (lat), 0.01));
-	thread_local std::vector<float> e;
-	e.clear ();
+	thread_local std::vector<float> e, ea, eb;
+	e.clear (), ea.clear (), eb.clear ();
 	const int h = prm.n / 2, ns = (2 * h + 1) * (2 * h + 1);
 	for (int a = -h; a <= h; a++)
 		for (int b = -h; b <= h; b++) {
 			double v = re->em->Elevation (lat + a * dlat, lng + b * dlng, 0, re->tiles.get());
-			if (fabs (v) > 0.25) e.push_back ((float)v); // (not the sea)
+			if (fabs (v) > 0.25) e.push_back ((float)v), ea.push_back ((float)a), eb.push_back ((float)b); // (not the sea)
 		}
 	re->m.unlock ();
 	float g = std::numeric_limits<float>::quiet_NaN ();
 	const int n = (int)e.size ();
 	if (n >= prm.minLand) {
-		int k = std::clamp ((int)(n * prm.percentile), 0, n - 1);
+		const int k = std::clamp ((int)(n * prm.percentile), 0, n - 1);
+		// the samples' plane v = c0 + ca a + cb b (least squares; a, b in spacings)
+		double w = 0.0, c0 = 0.0, ca = 0.0, cb = 0.0;
+		if (prm.slope1 > 0.0) {
+			double sa = 0, sb = 0, sv = 0, saa = 0, sbb = 0, sab = 0, sav = 0, sbv = 0;
+			for (int q = 0; q < n; q++) {
+				sa += ea[q], sb += eb[q], sv += e[q];
+				saa += ea[q] * ea[q], sbb += eb[q] * eb[q], sab += ea[q] * eb[q];
+				sav += ea[q] * e[q], sbv += eb[q] * e[q];
+			}
+			// (about the samples' centroid)
+			const double ma = sa / n, mb = sb / n, mv = sv / n;
+			const double Saa = saa - n * ma * ma, Sbb = sbb - n * mb * mb, Sab = sab - n * ma * mb;
+			const double Sav = sav - n * ma * mv, Sbv = sbv - n * mb * mv;
+			const double det = Saa * Sbb - Sab * Sab;
+			if (det > 1e-6 * std::max (Saa * Sbb, 1.0)) {
+				ca = (Sav * Sbb - Sbv * Sab) / det, cb = (Sbv * Saa - Sav * Sab) / det;
+				c0 = mv - ca * ma - cb * mb;
+				const double slope = std::hypot (ca, cb) / prm.spacing;
+				w = std::clamp ((slope - prm.slope0) / std::max (prm.slope1 - prm.slope0, 1e-9), 0.0, 1.0);
+				w = w * w * (3.0 - 2.0 * w);
+			}
+		}
+		float gd = 0.0f;
+		if (w > 0.0) { // (the heights over the plane: before the samples are reordered)
+			thread_local std::vector<float> res;
+			res.resize (n);
+			for (int q = 0; q < n; q++) res[q] = (float)(e[q] - (c0 + ca * ea[q] + cb * eb[q]));
+			std::nth_element (res.begin(), res.begin() + k, res.end());
+			gd = (float)(c0 + res[k]);
+		}
 		std::nth_element (e.begin(), e.begin() + k, e.end());
-		g = e[k];
+		g = (float)(e[k] + (gd - e[k]) * w);
 	}
 	return { g, (float)n / ns };
 }
