@@ -58,7 +58,8 @@ stations and launch sites. Left over:
   directories of a period or a context are left out; the launch sites are a
   built-in list for Earth (approximate places, no pads of their own); no
   attached payloads, no Windows launchpad page.
-- **FSR 4** (opt-in, `ORBITER_VK_UPSCALER=fsr4`: `Fsr4.h`): AMD's Windows DLLs
+- **FSR 4** (the default upscaler where it starts; `ORBITER_VK_UPSCALER=fsr3`
+  for FSR 3: `Fsr4.h`): AMD's Windows DLLs
   run through a loader that is weeks old, by one author - to be replaced by
   AMD's own Linux library or source when there is one. Looked at so far: a
   static scene at full and half render scale, a launch (smoke, plume), the

@@ -25,7 +25,7 @@ using oapi::GraphicsSetting;
 struct GfxSettings {
 	enum AntiAliasing { AA_OFF, AA_MSAA, AA_TAA, AA_FSR, AA_FSR4 };
 
-	int antiAliasing = AA_FSR;  ///< (AA_TAA where FSR 3 is not built in)
+	int antiAliasing = AA_FSR4; ///< (FSR 3 where FSR 4 is not installed or does not start; AA_TAA where FSR 3 is not built in)
 	float renderScale = 1.0f;   ///< scene images: display size times this (upscaled)
 	float sharpness = 0.5f;     ///< FSR 3's sharpening
 	bool rayTracing = true;     ///< ray tracing (where the hardware has ray queries)
@@ -61,7 +61,7 @@ struct GfxSettings {
 	int SceneSamples () const { return aaLocked ? lockSamples : antiAliasing == AA_MSAA ? 4 : 1; }
 	bool TemporalAA () const { return aaLocked ? lockTaa : antiAliasing == AA_TAA || antiAliasing == AA_FSR || antiAliasing == AA_FSR4; }
 	bool UseFsr () const { return aaLocked ? lockFsr : antiAliasing == AA_FSR || antiAliasing == AA_FSR4; }
-	/// FSR 4 in FSR 3's place (ORBITER_VK_UPSCALER=fsr4; where it does not start, FSR 3)
+	/// FSR 4 in FSR 3's place (the default; not with ORBITER_VK_UPSCALER=fsr3; where it does not start, FSR 3)
 	bool UseFsr4 () const { return UseFsr () && (aaLocked ? lockFsr4 : antiAliasing == AA_FSR4); }
 
 	/// The settings for the user interface (values current); hardware:
@@ -84,7 +84,7 @@ private:
 	bool started = false;
 	std::string gfxPath, skyPath; // ("": none)
 	// anti-aliasing set by the environment (ORBITER_VK_TAA, _MSAA, _UPSCALER)
-	bool aaLocked = false, lockTaa = true, lockFsr = true, lockFsr4 = false;
+	bool aaLocked = false, lockTaa = true, lockFsr = true, lockFsr4 = true;
 	int lockSamples = 1;
 };
 

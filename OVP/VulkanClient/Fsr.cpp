@@ -173,7 +173,7 @@ bool FsrUpscaler::Init (vkc::Context *ctx)
 	impl->ctx = ctx;
 	sharpness = vkc::Gfx ().sharpness;
 	if (const char *e = getenv ("ORBITER_VK_FSR_DEBUG")) debugView = atoi (e) != 0;
-	// FSR 4 if chosen and it starts; else FSR 3.1
+	// FSR 4 (the default) if it is installed and starts; else FSR 3.1
 	if (vkc::Gfx ().UseFsr4 ()) {
 		if (!Fsr4Backend::Available ()) oapiWriteLogV ("VulkanClient: FSR 4 is not installed (Modules/Plugin/FSR4): FSR 3 in its place");
 		else {

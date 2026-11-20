@@ -49,7 +49,7 @@ namespace {
 		return kv;
 	}
 
-	const char *AA_CHOICES[] = { "Off", "Multisampling (4\xC3\x97)", "Temporal (TAA)", "AMD FSR 3", "AMD FSR 4 (experimental)" };
+	const char *AA_CHOICES[] = { "Off", "Multisampling (4\xC3\x97)", "Temporal (TAA)", "AMD FSR 3", "AMD FSR 4" };
 	const char *SKY_CHOICES[] = { "Realistic", "Enhanced" };
 	const char *SMOKE_CHOICES[] = { "Sprites", "Screen-space", "Volumetric" };
 	const char *FIREBALL_CHOICES[] = { "Sprites", "Volumetric", "Volumetric, full resolution" };
@@ -97,7 +97,7 @@ const std::vector<GfxSettings::Item> &GfxSettings::Items ()
 	const char *G1 = "Anti-aliasing and resolution", *G2 = "Lighting", *G3 = "Effects", *G4 = "Sky";
 
 	Item aa{ "AntiAliasing", GRAPHICS_CFG, "ORBITER_VK_TAA", G1, "Anti-aliasing",
-		"Smooths jagged edges. FSR 3 and FSR 4 also upscale the scene from a lower render resolution. FSR 4 (AMD Radeon RX 6000 and later) runs from AMD's Windows library through a loader: experimental; where it does not start, FSR 3 is used.", T::CHOICE, T::NEXT_SESSION };
+		"Smooths jagged edges. FSR 3 and FSR 4 also upscale the scene from a lower render resolution. FSR 4 (AMD Radeon RX 6000 and later) runs from AMD's Windows library through a loader; where it is not installed or does not start, FSR 3 is used.", T::CHOICE, T::NEXT_SESSION };
 	aa.i = &GfxSettings::antiAliasing, aa.nchoice = 5, aa.choice = AA_CHOICES;
 	items.push_back (aa);
 	items.push_back (slider ("RenderScale", "ORBITER_VK_RENDER_SCALE", G1, "Render resolution",
@@ -249,7 +249,7 @@ void GfxSettings::Load ()
 		if (!strcmp (it.key, "AntiAliasing")) {
 			if (EnvTaa () < 0 && EnvMsaa () < 0 && !EnvUpscaler ()) continue;
 			// (as before the settings: temporal anti-aliasing unless ORBITER_VK_TAA=0,
-			// then 4x multisampling unless ORBITER_VK_MSAA; FSR 3 unless ORBITER_VK_UPSCALER=taa, FSR 4 with =fsr4)
+			// then 4x multisampling unless ORBITER_VK_MSAA; FSR 4 unless ORBITER_VK_UPSCALER=fsr3 (FSR 3) or =taa)
 			locked[n] = EnvTaa () >= 0 ? "ORBITER_VK_TAA" : EnvMsaa () > 0 ? "ORBITER_VK_MSAA" : "ORBITER_VK_UPSCALER";
 			int t = EnvTaa (), m = EnvMsaa ();
 			const char *u = EnvUpscaler ();
@@ -257,7 +257,7 @@ void GfxSettings::Load ()
 			lockTaa = t != 0;
 			lockSamples = m > 0 ? m : t == 0 ? 4 : 1;
 			lockFsr = lockTaa && lockSamples == 1 && !(u && !strcmp (u, "taa"));
-			lockFsr4 = lockFsr && u && !strcmp (u, "fsr4");
+			lockFsr4 = lockFsr && !(u && strcmp (u, "fsr4"));
 			antiAliasing = lockSamples > 1 ? AA_MSAA : !lockTaa ? AA_OFF : lockFsr4 ? AA_FSR4 : lockFsr ? AA_FSR : AA_TAA;
 			continue;
 		}

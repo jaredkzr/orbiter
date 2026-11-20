@@ -825,7 +825,7 @@ if (ORBITER_TEST_EXE)
 			PASS_REGULAR_EXPRESSION "Scenario builder: check passed"
 			FAIL_REGULAR_EXPRESSION "Scenario builder: check failed")
 
-		# FSR 4 chosen as the upscaler (OVP/VulkanClient/Fsr4.h): a session runs and
+		# FSR 4 as the upscaler (the default: OVP/VulkanClient/Fsr4.h): a session runs and
 		# ends with it - or, where FSR 4 is not built in or the graphics card is
 		# given none, with FSR 3 in its place (the test says which)
 		add_test(
@@ -837,6 +837,18 @@ if (ORBITER_TEST_EXE)
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Vulkan.Fsr4 PROPERTIES TIMEOUT 180
+			PASS_REGULAR_EXPRESSION "Fsr4Test: passed"
+			FAIL_REGULAR_EXPRESSION "Fsr4Test: failed")
+		# (FSR 3 asked for: FSR 4 is the default)
+		add_test(
+			NAME "Vulkan.Fsr3"
+			COMMAND ${CMAKE_COMMAND}
+				"-DEXE=$<TARGET_FILE:${OrbiterTgt}>" "-DROOT=${ORBITER_BINARY_ROOT_DIR}"
+				"-DSCN=${CMAKE_SOURCE_DIR}/Tests/Input/Orbit.scn" -DUPSCALER=fsr3
+				-P ${CMAKE_CURRENT_SOURCE_DIR}/Fsr4Test.cmake
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		set_tests_properties(Vulkan.Fsr3 PROPERTIES TIMEOUT 180
 			PASS_REGULAR_EXPRESSION "Fsr4Test: passed"
 			FAIL_REGULAR_EXPRESSION "Fsr4Test: failed")
 
