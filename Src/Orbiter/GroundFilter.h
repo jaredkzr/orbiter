@@ -10,7 +10,8 @@
 // grid (step), a low percentile of n x n samples spacing metres apart
 // about the node (the sea's samples, |h| <= 0.25 m, left out),
 // interpolated between the nodes; NaN where too few samples are land. On
-// slopes the percentile of the heights over the samples' plane (Params).
+// slopes the percentile of the heights over the samples' plane, at steps
+// that of the samples on the node's side (Params).
 //
 // Nodes are made in blocks, on demand, in parallel, by elevation managers
 // of the filter's own (the data alone: no detail, no levelling), and
@@ -53,6 +54,12 @@ public:
 		/// of their heights over that plane instead, and set on the plane at
 		/// the node - in full from slope1 (rise over run; 0, 0: never)
 		double slope0 = 0.0, slope1 = 0.0;
+		/// Steps (cliffs, banks): where the samples scatter about their plane
+		/// by more than step0 [m, rms] (a step is no plane: its upper edge
+		/// came out metres low), the ground of the half of them on one side
+		/// of the node that scatters least is taken, if that is much less -
+		/// in full from step1 (0: never; needs slope1 > 0)
+		double step0 = 0.0, step1 = 0.0;
 	};
 
 	GroundFilter (const Planet *planet, const Params &prm);

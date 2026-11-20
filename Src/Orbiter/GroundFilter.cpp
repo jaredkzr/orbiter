@@ -58,21 +58,33 @@ GroundFilter::NodeVal GroundFilter::Node (int64_t i, int64_t j)
 	re->m.unlock ();
 	float g = std::numeric_limits<float>::quiet_NaN ();
 	const int n = (int)e.size ();
-	if (n >= prm.minLand) {
-		const int k = std::clamp ((int)(n * prm.percentile), 0, n - 1);
+	// The ground of the samples picked (sel: 0 all, 1-4 the half of them
+	// north, south, west, east of the node, with its own row or column):
+	// false if they are too few. rms: their scatter about their plane [m]
+	thread_local std::vector<float> se, sa_, sb_, res;
+	auto ground = [&](int sel, float &gs, double &rms) -> bool {
+		se.clear (), sa_.clear (), sb_.clear ();
+		for (int q = 0; q < n; q++) {
+			if ((sel == 1 && ea[q] > 0) || (sel == 2 && ea[q] < 0) || (sel == 3 && eb[q] > 0) || (sel == 4 && eb[q] < 0)) continue;
+			se.push_back (e[q]), sa_.push_back (ea[q]), sb_.push_back (eb[q]);
+		}
+		const int m = (int)se.size ();
+		if (m < (sel ? std::max (prm.minLand / 2, 6) : prm.minLand)) return false;
+		const int k = std::clamp ((int)(m * prm.percentile), 0, m - 1);
 		// the samples' plane v = c0 + ca a + cb b (least squares; a, b in spacings)
 		double w = 0.0, c0 = 0.0, ca = 0.0, cb = 0.0;
+		rms = 0.0;
 		if (prm.slope1 > 0.0) {
 			double sa = 0, sb = 0, sv = 0, saa = 0, sbb = 0, sab = 0, sav = 0, sbv = 0;
-			for (int q = 0; q < n; q++) {
-				sa += ea[q], sb += eb[q], sv += e[q];
-				saa += ea[q] * ea[q], sbb += eb[q] * eb[q], sab += ea[q] * eb[q];
-				sav += ea[q] * e[q], sbv += eb[q] * e[q];
+			for (int q = 0; q < m; q++) {
+				sa += sa_[q], sb += sb_[q], sv += se[q];
+				saa += sa_[q] * sa_[q], sbb += sb_[q] * sb_[q], sab += sa_[q] * sb_[q];
+				sav += sa_[q] * se[q], sbv += sb_[q] * se[q];
 			}
 			// (about the samples' centroid)
-			const double ma = sa / n, mb = sb / n, mv = sv / n;
-			const double Saa = saa - n * ma * ma, Sbb = sbb - n * mb * mb, Sab = sab - n * ma * mb;
-			const double Sav = sav - n * ma * mv, Sbv = sbv - n * mb * mv;
+			const double ma = sa / m, mb = sb / m, mv = sv / m;
+			const double Saa = saa - m * ma * ma, Sbb = sbb - m * mb * mb, Sab = sab - m * ma * mb;
+			const double Sav = sav - m * ma * mv, Sbv = sbv - m * mb * mv;
 			const double det = Saa * Sbb - Sab * Sab;
 			if (det > 1e-6 * std::max (Saa * Sbb, 1.0)) {
 				ca = (Sav * Sbb - Sbv * Sab) / det, cb = (Sbv * Saa - Sav * Sab) / det;
@@ -80,18 +92,45 @@ GroundFilter::NodeVal GroundFilter::Node (int64_t i, int64_t j)
 				const double slope = std::hypot (ca, cb) / prm.spacing;
 				w = std::clamp ((slope - prm.slope0) / std::max (prm.slope1 - prm.slope0, 1e-9), 0.0, 1.0);
 				w = w * w * (3.0 - 2.0 * w);
+			} else c0 = mv;
+			res.resize (m);
+			for (int q = 0; q < m; q++) {
+				res[q] = (float)(se[q] - (c0 + ca * sa_[q] + cb * sb_[q]));
+				rms += (double)res[q] * res[q];
 			}
+			rms = sqrt (rms / m);
 		}
 		float gd = 0.0f;
-		if (w > 0.0) { // (the heights over the plane: before the samples are reordered)
-			thread_local std::vector<float> res;
-			res.resize (n);
-			for (int q = 0; q < n; q++) res[q] = (float)(e[q] - (c0 + ca * ea[q] + cb * eb[q]));
+		if (w > 0.0) { // (the heights over the plane)
 			std::nth_element (res.begin(), res.begin() + k, res.end());
 			gd = (float)(c0 + res[k]);
 		}
-		std::nth_element (e.begin(), e.begin() + k, e.end());
-		g = (float)(e[k] + (gd - e[k]) * w);
+		std::nth_element (se.begin(), se.begin() + k, se.end());
+		gs = (float)(se[k] + (gd - se[k]) * w);
+		return true;
+	};
+	if (n >= prm.minLand) {
+		double rms = 0.0;
+		ground (0, g, rms);
+		// A step in the ground (a plateau's cliff, a river's bank) is no
+		// plane: across it the samples scatter by a share of its height, and
+		// its upper edge came out metres low. Where they scatter this much
+		// (more than a canopy does), the ground of the half of them about
+		// the node that scatters least, if by much less than all of them:
+		// the node's own side of the step
+		if (prm.step0 > 0.0 && rms > prm.step0) {
+			float gb = g;
+			double rb = rms;
+			for (int sel = 1; sel <= 4; sel++) {
+				float gs;
+				double rs;
+				if (ground (sel, gs, rs) && rs < rb) gb = gs, rb = rs;
+			}
+			if (rb < 0.6 * rms) {
+				double w = std::clamp ((rms - prm.step0) / std::max (prm.step1 - prm.step0, 1e-9), 0.0, 1.0);
+				g = (float)(g + (gb - g) * w);
+			}
+		}
 	}
 	return { g, (float)n / ns };
 }

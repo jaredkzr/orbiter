@@ -597,6 +597,10 @@ namespace {
 		GroundFilter::Params p{ 0.002 * RAD, 150.0, 9, 0.10, 10 };
 		const char *e = getenv ("ORBITER_BARE_SLOPES");
 		if (!(e && *e && !atoi (e))) p.slope0 = 0.015, p.slope1 = 0.03;
+		// (steps: from a scatter of ORBITER_BARE_STEP metres [4], in full at twice that; 0: never)
+		const char *st = getenv ("ORBITER_BARE_STEP");
+		p.step0 = st && *st ? atof (st) : 4.0, p.step1 = 2.0 * p.step0;
+		if (p.slope1 <= 0.0) p.step0 = p.step1 = 0.0;
 		return p;
 	}
 	constexpr double BARE_MIN = 1.0; // [m]
