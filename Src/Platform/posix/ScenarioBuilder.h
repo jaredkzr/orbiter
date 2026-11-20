@@ -3,16 +3,20 @@
 
 // =======================================================================
 // Scenario builder of the launchpad: a scenario made without editing
-// files. The date, the ships (each with its class and where it starts:
-// on a base's pad or runway, on a body's surface by longitude, latitude
-// and heading, in orbit by its elements over the body's equator, or
-// beside another ship), the ship in focus and the camera - written as a
+// files. The planetary system, the date, the ships (each with its class
+// and where it starts: on a base's pad or runway, on a body's surface by
+// longitude, latitude and heading or at a launch site, in orbit by its
+// elements over the body's equator or so as to pass over a base a given
+// time after the start, beside another ship, or docked to one), their
+// fuel and landing gear, the ship in focus and the camera - written as a
 // scenario file (Scenarios/Custom/<name>.scn), previewed behind the
-// launchpad, launched.
+// launchpad, launched. Stations (the ISS, Mir, ...) are added in their
+// orbits, over the base of the ship selected: a launch to a rendezvous.
 //
 // What there is to choose from is read from the configuration files (the
-// planetary system's bodies, their bases with pads and runways, the vessel
-// classes): no session is needed.
+// planetary systems, their bodies with their axes and rotation, the bases
+// of their base directories with pads and runways, the vessel classes
+// with their docking ports): no session is needed.
 // =======================================================================
 
 #ifndef __SCENARIOBUILDER_H
@@ -54,11 +58,13 @@ public:
 	struct Body {
 		std::string name, parent;
 		bool star = false;
-		double size = 0, mass = 0, obliquity = 0, lan = 0; // [m], [kg], [rad]
+		double size = 0, mass = 0, obliquity = 0, lan = 0; // [m], [kg], [rad] (the axis against its precession's reference)
+		// (its rotation and precession, as CelestialBody has them)
+		double rotT = 86400, rotOff = 0, lanMjd = 51544.5, precT = 0, precLan = 0, precObl = 0, epochMjd = 51544.5;
 		bool basesRead = false;
 		std::vector<BaseRec> bases;
 	};
-	enum Where { AT_BASE, ON_SURFACE, IN_ORBIT, BESIDE, NWHERE };
+	enum Where { AT_BASE, ON_SURFACE, IN_ORBIT, BESIDE, DOCKED, NWHERE };
 	struct Ship {
 		char name[40] = "";
 		int cls = 0;
@@ -67,12 +73,27 @@ public:
 		int base = 0, site = 0; // site: pads first (0..npad-1), then each runway's two ends
 		double lng = 0, lat = 0, heading = 0; // [deg]
 		double alt = 300, ecc = 0, inc = 0, lan = 0, argp = 0, anom = 0; // [km above the mean radius, at periapsis], [deg]
-		int beside = 0;        // (index into ships)
+		int orbitBy = 0;       // in orbit: 0 by the elements, 1 over a base (the node and anomaly from it)
+		int obase = 0;         // that base (of the body)
+		double passMin = 10;   // [min] after the start it passes over it,
+		int southbound = 0;    // heading north (0) or south (1)
+		int beside = 0;        // (index into ships: the ship it is beside or docked to)
 		double dist = 200;     // [m] behind it (in orbit), east of it (landed)
+		int port = 0, tport = 0; // docked: its docking port, the other ship's
+		double fuel = 100;     // [%] in all its tanks
+		int gear = 0;          // landing gear: 0 as the start has it (down on the ground), 1 up, 2 down
+		char extra[512] = "";  // further lines of its scenario block (as the class reads them)
 	};
 
 private:
+	void ReadSystems ();
 	void ReadSystem ();
+	/// the body's axis at a date: its node and tilt on the ecliptic [rad], its rotation angle [rad]
+	void Axis (const Body &b, double mjd, double &lan, double &obl, double &rot) const;
+	/// an orbit's node and true anomaly [rad] at the start (by its elements, or over its base)
+	bool OrbitAngles (const Ship &s, const Body &b, double &lan, double &anom) const;
+	void AddStation (int k);
+	int Docks (int cls) const;
 	void ReadBases (Body &b);
 	void ReadClasses ();
 	void DrawGeneral (float w);
@@ -91,6 +112,9 @@ private:
 	std::string cfgDir, scnDir;
 	std::vector<Body> bodies;
 	std::vector<std::string> classes;
+	std::vector<int> classDocks; // (their docking ports)
+	std::vector<std::string> systems;
+	int sysSel = 0;
 	std::vector<Ship> ships;
 	int focus = 0, sel = 0;
 	char name[64] = "My scenario";

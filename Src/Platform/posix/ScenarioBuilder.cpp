@@ -109,6 +109,52 @@ namespace {
 		return ch;
 	}
 
+	// what the builder knows of the stock classes' own scenario lines
+	struct ClassLines { const char *cls; const char *gearUp, *gearDown, *docked; int docks; };
+	const ClassLines CLASS_LINES[] = {
+		{ "DeltaGlider", "GEAR 0 0.0000", "GEAR 1 1.0000", "NOSECONE 1 1.0000", 1 },
+		{ "DG-S", "GEAR 0 0.0000", "GEAR 1 1.0000", "NOSECONE 1 1.0000", 1 },
+		{ "ShuttleA", "GEAR 0 0.0000", "GEAR 1 1.0000", nullptr, 1 },
+		{ "Atlantis", "GEAR 0 0.0000", "GEAR 1 1.0000", nullptr, 1 },
+		{ "ShuttlePB", nullptr, nullptr, nullptr, 0 },
+	};
+	const ClassLines *LinesOf (const std::string &cls)
+	{
+		for (const ClassLines &c : CLASS_LINES) if (IEq (cls, c.cls)) return &c;
+		return nullptr;
+	}
+
+	// stations to add: their class, body and orbit [km, deg]
+	struct Station { const char *name, *cls, *body; double alt, inc; };
+	const Station STATIONS[] = {
+		{ "ISS", "ProjectAlpha_ISS", "Earth", 360.0, 51.6 },
+		{ "Mir", "Mir", "Earth", 300.0, 51.6 },
+		{ "HST", "HST", "Earth", 540.0, 28.5 },
+		{ "Luna-OB1", "Wheel", "Moon", 500.0, 90.0 },
+	};
+
+	// launch sites that are no pads of a base (Earth; approximate) [deg]
+	struct Site { const char *name; double lng, lat, heading; };
+	const Site SITES[] = {
+		{ "Kennedy LC-39A", -80.60433, 28.60839, 0 }, { "Kennedy LC-39B", -80.62083, 28.62722, 0 },
+		{ "Cape Canaveral SLC-40", -80.57718, 28.56211, 0 }, { "Cape Canaveral SLC-41", -80.58290, 28.58346, 0 },
+		{ "Vandenberg SLC-4E", -120.61106, 34.63209, 0 }, { "Boca Chica", -97.15700, 25.99700, 0 },
+		{ "Baikonur Site 1", 63.34222, 45.92028, 0 }, { "Kourou ELA-3", -52.76851, 5.23900, 0 },
+		{ "Tanegashima Yoshinobu", 130.97544, 30.40083, 0 }, { "Jiuquan", 100.29111, 40.95806, 0 },
+		{ "Wenchang", 110.95111, 19.61444, 0 }, { "Sriharikota SLP", 80.23040, 13.71990, 0 },
+		{ "Mahia LC-1", 177.86490, -39.26150, 0 },
+	};
+
+	// the true anomaly a time dt [s] later on an orbit (e < 1; n: its mean motion [rad/s])
+	double AnomalyAfter (double nu, double e, double n, double dt)
+	{
+		double E = 2.0 * std::atan2 (std::sqrt (1.0 - e) * std::sin (0.5 * nu), std::sqrt (1.0 + e) * std::cos (0.5 * nu));
+		double M = E - e * std::sin (E) + n * dt;
+		E = M;
+		for (int i = 0; i < 30; i++) E -= (E - e * std::sin (E) - M) / (1.0 - e * std::cos (E));
+		return 2.0 * std::atan2 (std::sqrt (1.0 + e) * std::sin (0.5 * E), std::sqrt (1.0 - e) * std::cos (0.5 * E));
+	}
+
 	// a runway's designator from its true heading [rad]
 	std::string Designator (double hdg)
 	{
@@ -125,6 +171,7 @@ ScenarioBuilder::ScenarioBuilder (Orbiter *o) : orbiter (o)
 {
 	cfgDir = Native (o->Cfg()->CfgDirPrm.ConfigDir);
 	scnDir = Native (o->Cfg()->CfgDirPrm.ScnDir);
+	ReadSystems ();
 	ReadSystem ();
 	ReadClasses ();
 	// a first ship: a delta-glider (if there is one) on the first base of Earth
@@ -141,6 +188,19 @@ ScenarioBuilder::ScenarioBuilder (Orbiter *o) : orbiter (o)
 	// (today, at noon)
 	time_t t = time (nullptr);
 	if (struct tm *g = gmtime (&t)) date[0] = g->tm_year + 1900, date[1] = g->tm_mon + 1, date[2] = g->tm_mday;
+}
+
+void ScenarioBuilder::ReadSystems ()
+{
+	// the planetary systems: the configuration files that name a star
+	systems.clear ();
+	std::error_code ec;
+	for (auto &e : fs::directory_iterator (cfgDir, ec)) {
+		if (e.path().extension() != ".cfg") continue;
+		if (!Item (e.path().string(), "Star1").empty()) systems.push_back (e.path().stem().string());
+	}
+	std::sort (systems.begin(), systems.end());
+	for (int i = 0; i < (int)systems.size(); i++) if (systems[i] == system) sysSel = i;
 }
 
 void ScenarioBuilder::ReadSystem ()
@@ -160,6 +220,10 @@ void ScenarioBuilder::ReadSystem ()
 		std::string f = cfgDir + "/" + v + ".cfg";
 		b.size = ItemReal (f, "Size", 0.0), b.mass = ItemReal (f, "Mass", 0.0);
 		b.obliquity = ItemReal (f, "Obliquity", 0.0), b.lan = ItemReal (f, "LAN", 0.0);
+		b.rotT = ItemReal (f, "SidRotPeriod", 86400.0), b.rotOff = ItemReal (f, "SidRotOffset", 0.0);
+		b.lanMjd = ItemReal (f, "LAN_MJD", 51544.5), b.precT = ItemReal (f, "PrecessionPeriod", 0.0);
+		b.precLan = ItemReal (f, "PrecessionLAN", 0.0), b.precObl = ItemReal (f, "PrecessionObliquity", 0.0);
+		b.epochMjd = (ItemReal (f, "Epoch", 2000.0) - 2000.0) * 365.25 + 51544.5;
 		if (b.size > 0.0 && b.mass > 0.0) bodies.push_back (b);
 	}
 }
@@ -169,9 +233,31 @@ void ScenarioBuilder::ReadBases (Body &b)
 	if (b.basesRead) return;
 	b.basesRead = true;
 	std::error_code ec;
+	// its base directories (BEGIN_SURFBASE of its configuration file: DIR lines; those of a
+	// period or a context left out: their bases are not in every scenario); else <body>/Base
+	std::vector<std::string> dirs;
+	{
+		std::ifstream ifs (cfgDir + "/" + b.name + ".cfg");
+		std::string line;
+		bool in = false, any = false;
+		while (std::getline (ifs, line)) {
+			std::string t = Trim (line);
+			if (IEq (t, "BEGIN_SURFBASE")) { in = any = true; continue; }
+			if (IEq (t, "END_SURFBASE")) break;
+			if (!in || t.size() < 5 || !IEq (t.substr (0, 3), "DIR")) continue;
+			std::istringstream is (t.substr (3));
+			std::string d, w;
+			is >> d;
+			bool plain = true;
+			while (is >> w) if (IEq (w, "PERIOD") || IEq (w, "CONTEXT")) plain = false;
+			if (plain && !d.empty()) dirs.push_back (cfgDir + "/" + Native (d));
+		}
+		if (!any) dirs.push_back (cfgDir + "/" + b.name + "/Base");
+	}
 	std::vector<fs::path> files;
-	for (auto &e : fs::directory_iterator (cfgDir + "/" + b.name + "/Base", ec))
-		if (e.path().extension() == ".cfg") files.push_back (e.path());
+	for (const std::string &d : dirs)
+		for (auto &e : fs::directory_iterator (d, ec))
+			if (e.path().extension() == ".cfg") files.push_back (e.path());
 	std::sort (files.begin(), files.end());
 	for (auto &f : files) {
 		std::ifstream ifs (f);
@@ -232,6 +318,8 @@ void ScenarioBuilder::ReadBases (Body &b)
 void ScenarioBuilder::ReadClasses ()
 {
 	classes.clear ();
+	classDocks.clear ();
+	std::vector<std::pair<std::string, int>> found;
 	std::error_code ec;
 	std::string root = cfgDir + "/Vessels";
 	for (auto it = fs::recursive_directory_iterator (root, ec); !ec && it != fs::recursive_directory_iterator (); it.increment (ec)) {
@@ -240,9 +328,27 @@ void ScenarioBuilder::ReadClasses ()
 		// not those a scenario editor may not create: parts of other vessels)
 		if (IEq (Item (it->path().string(), "EditorCreate"), "FALSE")) continue;
 		std::string rel = fs::relative (it->path(), root, ec).replace_extension ("").generic_string ();
-		if (!rel.empty()) classes.push_back (rel);
+		if (rel.empty()) continue;
+		// (its docking ports: those of its file (BEGIN_DOCKLIST), else what is known of its module; 1 if unknown)
+		int nd = -1;
+		{
+			std::ifstream ifs (it->path());
+			std::string line;
+			bool in = false;
+			while (std::getline (ifs, line)) {
+				size_t c = line.find (';');
+				if (c != std::string::npos) line.erase (c);
+				std::string t = Trim (line);
+				if (IEq (t, "BEGIN_DOCKLIST")) { in = true, nd = 0; continue; }
+				if (IEq (t, "END_DOCKLIST")) break;
+				if (in && !t.empty()) nd++;
+			}
+		}
+		if (nd < 0) { const ClassLines *cl = LinesOf (rel); nd = cl ? cl->docks : 1; }
+		found.push_back ({ rel, nd });
 	}
-	std::sort (classes.begin(), classes.end());
+	std::sort (found.begin(), found.end());
+	for (auto &f : found) classes.push_back (f.first), classDocks.push_back (f.second);
 }
 
 // =======================================================================
@@ -273,9 +379,9 @@ const ScenarioBuilder::Ship *ScenarioBuilder::Root (const Ship &s, double &dist)
 {
 	const Ship *p = &s;
 	dist = 0.0;
-	for (int n = 0; p->where == BESIDE; n++) {
+	for (int n = 0; p->where == BESIDE || p->where == DOCKED; n++) {
 		if (n > (int)ships.size() || p->beside < 0 || p->beside >= (int)ships.size() || &ships[p->beside] == p) return nullptr;
-		dist += p->dist;
+		if (p->where == BESIDE) dist += p->dist;
 		p = &ships[p->beside];
 	}
 	return p;
@@ -307,6 +413,62 @@ bool ScenarioBuilder::LandedAt (const Ship &s, double &lng, double &lat, double 
 	return true;
 }
 
+void ScenarioBuilder::Axis (const Body &b, double mjd, double &lan, double &obl, double &rot) const
+{
+	// (CelestialBody::UpdatePrecession, UpdateRotation: the axis precessing about its
+	// reference, itself tilted against the ecliptic's normal; the rotation counted from
+	// the elements' epoch)
+	const double PI2 = 2.0 * PI_;
+	double Lrel = b.lan + (b.precT ? PI2 / b.precT : 0.0) * (mjd - b.lanMjd);
+	double sl = std::sin (Lrel), cl = std::cos (Lrel), se = std::sin (b.obliquity), ce = std::cos (b.obliquity);
+	double R[3][3] = { { cl, -sl * se, -sl * ce }, { 0, ce, -se }, { sl, cl * se, cl * ce } };
+	if (b.precObl) {
+		double sr = std::sin (b.precObl), cr = std::cos (b.precObl), sn = std::sin (b.precLan), cn = std::cos (b.precLan);
+		double T[3][3] = { { 1, 0, 0 }, { 0, cr, -sr }, { 0, sr, cr } }, Y[3][3] = { { cn, 0, -sn }, { 0, 1, 0 }, { sn, 0, cn } };
+		double A[3][3], B[3][3];
+		for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) { A[i][j] = 0; for (int k = 0; k < 3; k++) A[i][j] += Y[i][k] * T[k][j]; }
+		for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) { B[i][j] = 0; for (int k = 0; k < 3; k++) B[i][j] += A[i][k] * R[k][j]; }
+		for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) R[i][j] = B[i][j];
+	}
+	obl = std::acos (std::clamp (R[1][1], -1.0, 1.0));
+	lan = std::atan2 (-R[0][1], R[2][1]);
+	double sL = std::sin (lan), cL = std::cos (lan);
+	double off = std::atan2 (-(cL * R[0][2] + sL * R[2][2]), cL * R[0][0] + sL * R[2][0]);
+	rot = b.rotOff + (mjd - b.epochMjd) * 86400.0 * PI2 / b.rotT + (b.lan - Lrel) * ce + off;
+	rot = std::fmod (rot, PI2);
+}
+
+bool ScenarioBuilder::OrbitAngles (const Ship &s, const Body &b, double &lan, double &anom) const
+{
+	lan = s.lan * RAD_, anom = s.anom * RAD_;
+	if (!s.orbitBy) return true;
+	if (s.obase < 0 || s.obase >= (int)b.bases.size()) return false;
+	// Over the base a time after the start: there the orbit's plane holds the base's
+	// place among the stars then (the body turned on), on its way north or south; the
+	// ship as far back on it as it moves in that time
+	const BaseRec &r = b.bases[s.obase];
+	double dt = s.passMin * 60.0, mjd1 = Mjd () + dt / 86400.0;
+	double al, ob, rot;
+	Axis (b, mjd1, al, ob, rot);
+	double ra = r.lng * RAD_ + rot, dec = r.lat * RAD_;
+	double si = std::sin (s.inc * RAD_), ci = std::cos (s.inc * RAD_);
+	// (an inclination below the base's latitude: its northernmost point over the base's meridian)
+	double su = std::fabs (si) > 1e-9 ? std::clamp (std::sin (dec) / si, -1.0, 1.0) : (dec >= 0 ? 1.0 : -1.0);
+	double u = std::asin (su);
+	if (s.southbound) u = PI_ - u;
+	lan = ra - std::atan2 (ci * std::sin (u), std::cos (u));
+	lan = std::fmod (lan + 4.0 * PI_, 2.0 * PI_);
+	double e = std::clamp (s.ecc, 0.0, 0.99), a = (b.size + s.alt * 1e3) / (1.0 - e);
+	double n = std::sqrt (GGRAV_ * b.mass / (a * a * a));
+	anom = AnomalyAfter (u - s.argp * RAD_, e, n, -dt);
+	return true;
+}
+
+int ScenarioBuilder::Docks (int cls) const
+{
+	return cls >= 0 && cls < (int)classDocks.size() ? classDocks[cls] : 0;
+}
+
 std::string ScenarioBuilder::ShipText (const Ship &s) const
 {
 	char c[512];
@@ -321,7 +483,9 @@ std::string ScenarioBuilder::ShipText (const Ship &s) const
 		// a ship beside it: that far behind on the same orbit), turned to the ecliptic's frame
 		double e = std::clamp (root->ecc, 0.0, 0.99), rp = b.size + root->alt * 1e3, a = rp / (1.0 - e);
 		double mu = GGRAV_ * b.mass, p = a * (1.0 - e * e);
-		double nu = root->anom * RAD_ - along / a, inc = root->inc * RAD_, O = root->lan * RAD_, w = root->argp * RAD_;
+		double O, nu, inc = root->inc * RAD_, w = root->argp * RAD_;
+		if (!OrbitAngles (*root, b, O, nu)) return "";
+		nu -= along / a;
 		double r = p / (1.0 + e * std::cos (nu));
 		// (perifocal: P to the periapsis, Q a quarter ahead)
 		double xp = r * std::cos (nu), yp = r * std::sin (nu);
@@ -334,7 +498,9 @@ std::string ScenarioBuilder::ShipText (const Ship &s) const
 		pe[0] = xp * P[0] + yp * Q[0], pe[2] = xp * P[1] + yp * Q[1], pe[1] = xp * P[2] + yp * Q[2];
 		ve[0] = vxp * P[0] + vyp * Q[0], ve[2] = vxp * P[1] + vyp * Q[1], ve[1] = vxp * P[2] + vyp * Q[2];
 		// (equator to ecliptic: the body's axis, CelestialBody::UpdatePrecession)
-		double sl = std::sin (b.lan), cl = std::cos (b.lan), se = std::sin (b.obliquity), ce = std::cos (b.obliquity);
+		double alan, aobl, arot;
+		Axis (b, Mjd (), alan, aobl, arot);
+		double sl = std::sin (alan), cl = std::cos (alan), se = std::sin (aobl), ce = std::cos (aobl);
 		double R[3][3] = { { cl, -sl * se, -sl * ce }, { 0, ce, -se }, { sl, cl * se, cl * ce } };
 		double pg[3], vg[3];
 		for (int i = 0; i < 3; i++) {
@@ -355,6 +521,39 @@ std::string ScenarioBuilder::ShipText (const Ship &s) const
 			snprintf (c, sizeof(c), "  STATUS Landed %s\n  POS %.7f %.7f\n  HEADING %.2f\n", b.name.c_str(), lng, lat, hdg);
 		}
 		out += c;
+	}
+	// its fuel (all its tanks: indices a class does not have are passed over), its docking
+	// ports in use (its own and those others are docked to), its gear, its further lines
+	const bool landed = root->where != IN_ORBIT;
+	if (s.fuel < 99.995) {
+		out += "  PRPLEVEL";
+		for (int i = 0; i < 8; i++) { snprintf (c, sizeof(c), " %d:%.4f", i, std::clamp (s.fuel, 0.0, 100.0) * 0.01); out += c; }
+		out += "\n";
+	}
+	std::string di;
+	bool docked = false;
+	if (s.where == DOCKED && !landed && s.beside >= 0 && s.beside < (int)ships.size()) {
+		snprintf (c, sizeof(c), " %d:%d,%s", s.port, s.tport, ships[s.beside].name);
+		di += c, docked = true;
+	}
+	for (const Ship &o : ships)
+		if (&o != &s && o.where == DOCKED && o.beside >= 0 && o.beside < (int)ships.size() && &ships[o.beside] == &s && !landed) {
+			snprintf (c, sizeof(c), " %d:%d,%s", o.tport, o.port, o.name);
+			di += c, docked = true;
+		}
+	if (!di.empty()) out += "  DOCKINFO" + di + "\n";
+	if (const ClassLines *cl = LinesOf (cls)) {
+		bool down = s.gear == 2 || (s.gear == 0 && landed);
+		if (cl->gearUp) out += std::string ("  ") + (down ? cl->gearDown : cl->gearUp) + "\n";
+		if (docked && cl->docked) out += std::string ("  ") + cl->docked + "\n";
+	}
+	{
+		std::istringstream is (s.extra);
+		std::string line;
+		while (std::getline (is, line)) {
+			line = Trim (line);
+			if (!line.empty() && !IEq (line, "END")) out += "  " + line + "\n";
+		}
 	}
 	return out + "END\n";
 }
@@ -415,7 +614,16 @@ bool ScenarioBuilder::Save (std::string &err)
 		std::string n = ships[i].name;
 		if (Trim (n).empty() || n.find_first_of (" \t:") != std::string::npos) { err = "A ship's name may not be empty or hold spaces or colons."; return false; }
 		for (size_t j = 0; j < i; j++) if (n == ships[j].name) { err = "Two ships are named " + n + "."; return false; }
-		if (ShipText (ships[i]).empty()) { err = n + " has no place to start (the ship it is beside, its base)."; return false; }
+		if (ShipText (ships[i]).empty()) { err = n + " has no place to start (the ship it is beside or docked to, its base)."; return false; }
+		if (ships[i].where == DOCKED) {
+			double d;
+			const Ship *r = Root (ships[i], d);
+			if (r && r->where != IN_ORBIT) { err = n + " is docked to a ship on the ground: ships dock in orbit."; return false; }
+			const Ship &t = ships[ships[i].beside];
+			if (ships[i].port >= Docks (ships[i].cls) || ships[i].tport >= Docks (t.cls)) { err = n + " or " + t.name + " has no such docking port."; return false; }
+			for (size_t j = 0; j < i; j++)
+				if (ships[j].where == DOCKED && ships[j].beside == ships[i].beside && ships[j].tport == ships[i].tport) { err = n + " and " + ships[j].name + " are docked to the same port."; return false; }
+		}
 		if (ships[i].cls >= (int)classes.size()) { err = "No vessel classes were found."; return false; }
 	}
 	std::error_code ec;
@@ -444,6 +652,12 @@ void ScenarioBuilder::MakeTestScenario ()
 	ob.alt = 300.0, ob.inc = 51.6, ob.lan = 40.0;
 	Ship &bs = add ("NEAR", BESIDE);
 	bs.beside = 3, bs.dist = 500.0;
+	// docked to the one in orbit; a station passing over the base 10 minutes on; the one in orbit half fuelled
+	Ship &dk = add ("DOCK", DOCKED);
+	dk.beside = 3;
+	Ship &ov = add ("OVER", IN_ORBIT);
+	ov.orbitBy = 1, ov.obase = base.base, ov.alt = 350.0, ov.inc = 51.6, ov.passMin = 10.0;
+	ships[3].fuel = 50.0; // (not one on a pad: those are refuelled there)
 	focus = 3, sel = 3;
 }
 
@@ -459,6 +673,17 @@ void ScenarioBuilder::DrawGeneral (float w)
 	uianchor::SetItem ("builder.name");
 	Label ("Description", lw);
 	ImGui::InputTextWithHint ("##descr", "(written for you)", descr, sizeof(descr));
+	Label ("System", lw);
+	if (Choice ("##system", &sysSel, systems, "(no planetary systems found)") && sysSel < (int)systems.size()) {
+		// (another system: its bodies; the ships start anew on its first body)
+		snprintf (system, sizeof(system), "%s", systems[sysSel].c_str());
+		ReadSystem ();
+		for (Ship &q : ships) {
+			q.body = 0, q.base = q.site = q.obase = 0;
+			if (q.where == AT_BASE) q.where = IN_ORBIT, q.orbitBy = 0;
+			for (int i = 0; i < (int)bodies.size(); i++) if (!bodies[i].star) { q.body = i; break; }
+		}
+	}
 	Label ("Date (UTC)", lw);
 	{
 		float avail = ImGui::GetContentRegionAvail().x, gap = ImGui::GetStyle().ItemSpacing.x;
@@ -492,7 +717,9 @@ void ScenarioBuilder::DrawShips (float w)
 	ImGui::Dummy (ImVec2(0, ui::Px (6)));
 	float bw = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
 	if (ui::SecondaryButton (ICON_LC_PLUS "  Add a ship", ImVec2(bw, 0))) {
-		Ship s = ships.empty() ? Ship () : ships[sel];
+		// (as the ship in focus - the ship selected may be a station - beside the one selected)
+		Ship s = ships.empty() ? Ship () : ships[focus < (int)ships.size() ? focus : sel];
+		s.extra[0] = 0;
 		for (int n = (int)ships.size() + 1; ; n++) {
 			snprintf (s.name, sizeof(s.name), "SHIP-%02d", n);
 			if (std::none_of (ships.begin(), ships.end(), [&](const Ship &o) { return !strcmp (o.name, s.name); })) break;
@@ -506,10 +733,36 @@ void ScenarioBuilder::DrawShips (float w)
 	ImGui::BeginDisabled (ships.size() < 2);
 	if (ui::SecondaryButton (ICON_LC_TRASH_2 "  Remove", ImVec2(bw, 0))) remove = sel;
 	ImGui::EndDisabled ();
+	// a station in its orbit (those whose class and body there are)
+	{
+		std::vector<int> avail;
+		for (int k = 0; k < (int)(sizeof (STATIONS) / sizeof (STATIONS[0])); k++) {
+			bool cls = std::any_of (classes.begin(), classes.end(), [&](const std::string &c) { return IEq (c, STATIONS[k].cls); });
+			bool body = std::any_of (bodies.begin(), bodies.end(), [&](const Body &b) { return b.name == STATIONS[k].body; });
+			bool there = std::any_of (ships.begin(), ships.end(), [&](const Ship &o) { return !strcmp (o.name, STATIONS[k].name); });
+			if (cls && body && !there) avail.push_back (k);
+		}
+		if (!avail.empty()) {
+			ImGui::SetNextItemWidth (-FLT_MIN);
+			if (ui::BeginCombo ("##station", ICON_LC_ORBIT "  Add a station")) {
+				for (int k : avail) {
+					ImGui::PushID (k);
+					char lbl[96];
+					snprintf (lbl, sizeof(lbl), "%s  (%s, %.0f km)", STATIONS[k].name, STATIONS[k].body, STATIONS[k].alt);
+					if (ui::ComboItem (lbl, false)) AddStation (k);
+					uianchor::SetItem ((std::string ("builder.station.") + STATIONS[k].name).c_str());
+					ImGui::PopID ();
+				}
+				ui::EndCombo ();
+			}
+			uianchor::SetItem ("builder.station");
+			if (ImGui::IsItemHovered ()) ImGui::SetTooltip ("In its orbit; if the ship selected is at a base of its body,\nso as to pass over that base 10 minutes after the start");
+		}
+	}
 	if (remove >= 0) {
 		ships.erase (ships.begin() + remove);
-		for (Ship &s : ships) { // (those beside it: on their own, where it was; the indices after it shift)
-			if (s.beside == remove) s.beside = 0;
+		for (Ship &s : ships) { // (those beside it or docked to it: on their own, where it was; the indices after it shift)
+			if (s.beside == remove) { s.beside = 0; if (s.where == DOCKED) s.where = BESIDE; }
 			else if (s.beside > remove) s.beside--;
 		}
 		if (focus == remove) focus = 0; else if (focus > remove) focus--;
@@ -517,9 +770,30 @@ void ScenarioBuilder::DrawShips (float w)
 	}
 }
 
+void ScenarioBuilder::AddStation (int k)
+{
+	const Station &st = STATIONS[k];
+	Ship s;
+	snprintf (s.name, sizeof(s.name), "%s", st.name);
+	for (int i = 0; i < (int)classes.size(); i++) if (IEq (classes[i], st.cls)) s.cls = i;
+	for (int i = 0; i < (int)bodies.size(); i++) if (bodies[i].name == st.body) s.body = i;
+	s.where = IN_ORBIT, s.alt = st.alt, s.inc = st.inc;
+	// (over the base of the ship selected, if that is on this body: a launch to it)
+	if (sel < (int)ships.size()) {
+		double d;
+		const Ship *r = Root (ships[sel], d);
+		if (r && r->where == AT_BASE && r->body == s.body && r->base < (int)bodies[s.body].bases.size()) {
+			s.orbitBy = 1, s.obase = r->base, s.passMin = 10.0;
+			s.inc = std::max (s.inc, std::fabs (bodies[s.body].bases[r->base].lat) + 0.5);
+		}
+	}
+	ships.push_back (s);
+	sel = (int)ships.size() - 1;
+}
+
 void ScenarioBuilder::DrawShip (Ship &s, int idx, float w)
 {
-	float lw = ui::Px (120);
+	float lw = ui::Px (168);
 	ui::SectionHeader ("Ship");
 	Label ("Name", lw);
 	ImGui::InputText ("##sname", s.name, sizeof(s.name), ImGuiInputTextFlags_CharsNoBlank);
@@ -531,15 +805,15 @@ void ScenarioBuilder::DrawShip (Ship &s, int idx, float w)
 
 	ImGui::Dummy (ImVec2(0, ui::Px (8)));
 	ui::SectionHeader ("Where it starts");
-	static const char *wh[NWHERE] = { "At a base", "On the surface", "In orbit", "Beside a ship" };
-	int nw = ships.size() > 1 ? NWHERE : NWHERE - 1;
+	static const char *wh[NWHERE] = { "Base", "Surface", "Orbit", "Beside", "Docked" };
+	int nw = ships.size() > 1 ? NWHERE : NWHERE - 2;
 	if (s.where >= nw) s.where = AT_BASE;
 	ui::Segmented ("##where", wh, nw, &s.where);
 	ImGui::Dummy (ImVec2(0, ui::Px (4)));
 
 	std::vector<std::string> bn;
 	for (const Body &b : bodies) bn.push_back (b.name);
-	if (s.where != BESIDE) {
+	if (s.where != BESIDE && s.where != DOCKED) {
 		Label ("Body", lw);
 		if (Choice ("##body", &s.body, bn, "(no bodies found)")) s.base = s.site = 0;
 	}
@@ -562,6 +836,17 @@ void ScenarioBuilder::DrawShip (Ship &s, int idx, float w)
 			}
 		}
 	} else if (s.where == ON_SURFACE) {
+		if (b.name == "Earth" && !strcmp (system, "Sol")) { // (launch sites that are no base's pads)
+			Label ("Launch site", lw);
+			if (ui::BeginCombo ("##lsite", "(pick one, or set the place below)")) {
+				for (int i = 0; i < (int)(sizeof (SITES) / sizeof (SITES[0])); i++) {
+					ImGui::PushID (i);
+					if (ui::ComboItem (SITES[i].name, false)) s.lng = SITES[i].lng, s.lat = SITES[i].lat, s.heading = SITES[i].heading;
+					ImGui::PopID ();
+				}
+				ui::EndCombo ();
+			}
+		}
 		Label ("Longitude [deg]", lw);
 		Number ("##lng", &s.lng, "%.5f", -180.0, 180.0);
 		Label ("Latitude [deg]", lw);
@@ -569,23 +854,76 @@ void ScenarioBuilder::DrawShip (Ship &s, int idx, float w)
 		Label ("Heading [deg]", lw);
 		Number ("##hdg", &s.heading, "%.1f", 0.0, 360.0);
 	} else if (s.where == IN_ORBIT) {
+		ReadBases (b);
+		Label ("Placed", lw);
+		static const char *by[2] = { "By its elements", "Over a base" };
+		if (b.bases.empty()) s.orbitBy = 0;
+		ImGui::BeginDisabled (b.bases.empty());
+		ui::Segmented ("##orbitby", by, 2, &s.orbitBy);
+		ImGui::EndDisabled ();
+		if (s.orbitBy) {
+			std::vector<std::string> names;
+			for (const BaseRec &r : b.bases) names.push_back (r.name);
+			Label ("Base", lw);
+			Choice ("##obase", &s.obase, names);
+			Label ("Overhead after [min]", lw);
+			Number ("##pass", &s.passMin, "%.1f", 0.0, 1e5);
+			Label ("Heading", lw);
+			static const char *nsb[2] = { "North", "South" };
+			ui::Segmented ("##pdir", nsb, 2, &s.southbound);
+		}
 		Label ("Periapsis [km]", lw);
 		Number ("##alt", &s.alt, "%.1f", 1.0, 1e9);
 		Label ("Eccentricity", lw);
 		Number ("##ecc", &s.ecc, "%.4f", 0.0, 0.99);
 		Label ("Inclination [deg]", lw);
 		Number ("##inc", &s.inc, "%.3f", 0.0, 180.0);
-		Label ("Ascending node [deg]", lw);
-		Number ("##lan", &s.lan, "%.3f", 0.0, 360.0);
+		if (!s.orbitBy) {
+			Label ("Ascending node [deg]", lw);
+			Number ("##lan", &s.lan, "%.3f", 0.0, 360.0);
+		}
 		Label ("Arg. of periapsis [deg]", lw);
 		Number ("##argp", &s.argp, "%.3f", 0.0, 360.0);
-		Label ("True anomaly [deg]", lw);
-		Number ("##anom", &s.anom, "%.3f", 0.0, 360.0);
+		if (!s.orbitBy) {
+			Label ("True anomaly [deg]", lw);
+			Number ("##anom", &s.anom, "%.3f", 0.0, 360.0);
+		}
 		// (what it comes to)
 		double e = std::clamp (s.ecc, 0.0, 0.99), a = (b.size + s.alt * 1e3) / (1.0 - e);
 		double T = 2.0 * PI_ * std::sqrt (a * a * a / (GGRAV_ * b.mass));
 		ImGui::Dummy (ImVec2(0, ui::Px (4)));
-		ui::TextDim ("Over %s's equator. Apoapsis %.1f km, period %.1f min.", b.name.c_str(), (a * (1.0 + e) - b.size) * 1e-3, T / 60.0);
+		ImGui::PushTextWrapPos (0.0f);
+		double O, nu;
+		if (s.orbitBy && OrbitAngles (s, b, O, nu)) {
+			const BaseRec &r = b.bases[s.obase];
+			ui::TextDim ("Over %s %.1f min after the start%s: node %.2f deg, anomaly %.2f deg. Apoapsis %.1f km, period %.1f min.",
+				r.name.c_str(), s.passMin, std::fabs (r.lat) > std::min (s.inc, 180.0 - s.inc) ? " (as near as its inclination comes)" : "",
+				O * DEG_, std::fmod (nu * DEG_ + 720.0, 360.0), (a * (1.0 + e) - b.size) * 1e-3, T / 60.0);
+		} else ui::TextDim ("Over %s's equator. Apoapsis %.1f km, period %.1f min.", b.name.c_str(), (a * (1.0 + e) - b.size) * 1e-3, T / 60.0);
+		ImGui::PopTextWrapPos ();
+	} else if (s.where == DOCKED) {
+		std::vector<std::string> names;
+		std::vector<int> index;
+		for (int i = 0; i < (int)ships.size(); i++) if (i != idx) names.push_back (ships[i].name), index.push_back (i);
+		int k = 0;
+		for (int i = 0; i < (int)index.size(); i++) if (index[i] == s.beside) k = i;
+		Label ("Ship", lw);
+		Choice ("##dockto", &k, names);
+		if (!index.empty()) s.beside = index[k];
+		int nd = Docks (s.cls), nt = s.beside < (int)ships.size() ? Docks (ships[s.beside].cls) : 0;
+		auto ports = [](int n) { std::vector<std::string> p; for (int i = 0; i < n; i++) p.push_back ("Port " + std::to_string (i + 1)); return p; };
+		Label ("Its port", lw);
+		Choice ("##port", &s.port, ports (nd), "(this class has no docking port)");
+		Label ("The other's port", lw);
+		Choice ("##tport", &s.tport, ports (nt), "(that ship has no docking port)");
+		double d;
+		const Ship *r = Root (s, d);
+		ImGui::Dummy (ImVec2(0, ui::Px (4)));
+		ImGui::PushTextWrapPos (0.0f);
+		if (!r) ui::TextDim ("These ships are each placed by the other: one of them needs a place of its own.");
+		else if (r->where != IN_ORBIT) ui::TextDim ("Ships dock in orbit: the other ship is on the ground.");
+		else ui::TextDim ("Docked from the start, on the other ship's orbit.");
+		ImGui::PopTextWrapPos ();
 	} else {
 		std::vector<std::string> names;
 		std::vector<int> index;
@@ -606,6 +944,20 @@ void ScenarioBuilder::DrawShip (Ship &s, int idx, float w)
 		else ui::TextDim ("On the ground, that far to its east.");
 		ImGui::PopTextWrapPos ();
 	}
+
+	ImGui::Dummy (ImVec2(0, ui::Px (8)));
+	ui::SectionHeader ("Its state");
+	Label ("Fuel [%]", lw);
+	Number ("##fuel", &s.fuel, "%.0f", 0.0, 100.0);
+	const ClassLines *cl = s.cls < (int)classes.size() ? LinesOf (classes[s.cls]) : nullptr;
+	if (cl && cl->gearUp) {
+		Label ("Landing gear", lw);
+		static const char *gr[3] = { "As it starts", "Up", "Down" };
+		ui::Segmented ("##gear", gr, 3, &s.gear);
+	}
+	Label ("Further lines", lw);
+	ImGui::InputTextMultiline ("##extra", s.extra, sizeof(s.extra), ImVec2(-FLT_MIN, ImGui::GetTextLineHeight () * 3.5f));
+	if (ImGui::IsItemHovered ()) ImGui::SetTooltip ("Lines of the ship's scenario block as its class reads them,\none a line (e.g. AIRLOCK 1 1.0000)");
 }
 
 ScenarioBuilder::Result ScenarioBuilder::Draw (float x, float y, float w, float h, bool canPreview)
