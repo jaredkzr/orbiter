@@ -312,6 +312,7 @@ namespace {
 	constexpr double DAYLIGHT_MAX_EXPOSURE = 1.3; // with the camera in sunlight
 	constexpr double NIGHT_MIN_EXPOSURE = 0.15;   // lowest exposure with the camera in darkness (flames lighting the view)
 	constexpr double NIGHT_METER_LOW = 0.4, NIGHT_METER_HIGH = 0.9; // metering window with the camera in darkness (PostFX meterLow/High)
+	constexpr double FLAME_DISPLAY = 3.0; // a flame's drawn core at night, exposed: this many times white (blown out)
 	constexpr double STAR_DISC_DISPLAY = 0.9; // a large star disc's centre, displayed
 }
 
@@ -399,6 +400,18 @@ void VulkanClient::clbkRenderScene ()
 			if (FireballRenderer *fb = scene->Fireballs ())
 				fl = std::min (fl + 0.6 * fb->ScreenShare (), 0.9);
 			postfx->meterFlames = (float)(fl * night);
+			// (and exposed for them, as a photograph of a night launch: the
+			// flame's core blown out at FLAME_DISPLAY times white, the smoke
+			// it lights bright beside it and falling off, the sky black - the
+			// meter alone, leaving the flames out, exposed for the dark sky
+			// and the stars; smoke and pad then all evenly bright)
+			if (PlumeRenderer *pr = scene->Plumes ())
+				if (pr->FlameRadiance () > 0.0 && fl > 0.0) {
+					double w = night * std::clamp ((fl - 2e-4) / 2e-3, 0.0, 1.0);
+					double cap = FLAME_DISPLAY / pr->FlameRadiance ();
+					if (w > 0.0 && cap < postfx->maxExposure)
+						postfx->maxExposure = (float)std::exp2 (std::log2 (postfx->maxExposure) + (std::log2 (std::max (cap, (double)postfx->minExposure)) - std::log2 (postfx->maxExposure)) * w);
+				}
 		}
 		if (fill > 0.0 && !disc) {
 			float c[3];

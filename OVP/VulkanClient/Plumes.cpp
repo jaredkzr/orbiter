@@ -44,8 +44,8 @@ namespace {
 		                  { 0.58f, 0.49f, 0.40f },  0.45f, 10.0f, 0.6f, 0.95f, 0.5f, 0.7f, 150.0f, 150.0f },
 		{ "hypergolic",   3e4,   { 1.0f, 0.58f, 0.45f }, 0.9f, { 1.0f, 0.75f, 0.6f }, 3.0f, { 1.0f, 0.5f, 0.3f },  1.2f, 0.01f, 0.5f, 0.7f, 45.0f,
 		                  { 0.74f, 0.50f, 0.32f },  0.40f, 12.0f, 0.3f, 0.9f, 0.4f, 0.0f, 60.0f, 150.0f },
-		{ "solid",        7e4,   { 1.0f, 0.88f, 0.65f }, 6.0f, { 1.0f, 0.9f, 0.7f }, 4.0f, { 1.0f, 0.65f, 0.3f }, 6.0f, 0.25f, 0.6f, 1.2f, 35.0f,
-		                  { 0.95f, 0.95f, 0.93f },  0.85f, 40.0f, 0.0001f, 0.03f, 1.0f, 0.0f, 300.0f, 200.0f },
+		{ "solid",        7e4,   { 1.0f, 0.94f, 0.82f }, 6.0f, { 1.0f, 0.9f, 0.7f }, 4.0f, { 1.0f, 0.65f, 0.3f }, 6.0f, 0.25f, 0.6f, 1.2f, 35.0f,
+		                  { 0.95f, 0.95f, 0.93f },  0.85f, 40.0f, 0.0001f, 0.03f, 1.0f, 0.0f, 300.0f, 200.0f, { 1.0f, 0.48f, 0.14f } },
 		// (hypergolic attitude thrusters: a narrow yellow-orange cone, after
 		// photographs of the Shuttle's and Dragon's RCS; a brief puff of
 		// unburnt propellant as they light)
@@ -731,6 +731,7 @@ void PlumeRenderer::BeginFrame (double t)
 	heat.clear ();
 	((uint32_t*)buf.mapped)[slot] = 0;
 	solidAngle = 0.0;
+	flameRadiance = 0.0;
 }
 
 int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
@@ -953,6 +954,12 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 		}
 		for (int k = 0; k < 3; k++)
 			info->lightCol[k] = 1.1f * ls * (0.5f * pc.core[k] + 0.35f * pc.outer[k] + (float)(0.05 * diamonds) * pc.diamond[k]);
+		// (in the class's light colour: the same luminance)
+		if (c.lightTint[0] + c.lightTint[1] + c.lightTint[2] > 0.0f) {
+			auto lum = [](const float *v) { return 0.2126f * v[0] + 0.7152f * v[1] + 0.0722f * v[2]; };
+			float l = lum (info->lightCol), t = lum (c.lightTint);
+			for (int k = 0; k < 3; k++) info->lightCol[k] = l * c.lightTint[k] / std::max (t, 1e-4f);
+		}
 		info->lightArea = 2.0 * radiusAt (zl) * re * zEnd * re;
 		for (int k = 0; k < 3; k++)
 			info->radiance[k] = 1.1f * (0.5f * pc.core[k] + 0.35f * pc.outer[k] + (float)(0.05 * diamonds) * pc.diamond[k]);
@@ -979,6 +986,12 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 			double om = std::min ((2.0 * R * Lm * s + PI * R * R * c) / (d * d), 2.0 * PI);
 			solidAngle += om;
 			if (info) info->solid = om;
+			// (its core's and afterburning's drawn radiance, as the light's)
+			if (om > 1e-5) {
+				double L = 1.1 * (0.2126 * (0.5 * pc.core[0] + 0.35 * pc.outer[0]) + 0.7152 * (0.5 * pc.core[1] + 0.35 * pc.outer[1])
+					+ 0.0722 * (0.5 * pc.core[2] + 0.35 * pc.outer[2]));
+				flameRadiance = std::max (flameRadiance, L);
+			}
 		}
 	}
 	uint32_t index = slot * MAX_PLUMES + (uint32_t)list.size();

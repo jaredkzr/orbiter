@@ -75,7 +75,10 @@ yaw as the thrust does, their exhausts leave each bell's exit along its axis
 (they started inside the bells, along the thrust: the top engine's 4 deg off
 its bell), and the gimbal starts as angles (the SRBs began with an 8 deg roll
 gimbal at lift-off); a ship near a ringed planet is lit by the rings
-(`VPlanet::RingLight`, in the planet-light term). Left over:
+(`VPlanet::RingLight`, in the planet-light term); a night launch as in
+photographs (a solid motor's flame light gold, `PlumeClass::lightTint`; at
+night the exposure capped by the visible flames' radiance, FLAME_DISPLAY:
+the sky black, the flames blown out; the flame's core whiter). Left over:
 
 - **Jupiter's cloud towers**: a fixed grain at the cloud buffer's (half
   resolution) pixel scale on the domes. Not the march's jitter (frames
@@ -92,6 +95,11 @@ gimbal at lift-off); a ship near a ringed planet is lit by the rings
   peach disc from behind. Framing: the side view.
 - **Ring light**: some 0.3% of sunlight at 4 Saturn radii, under the ambient
   level (1%), which lights a ship in the planet's shadow evenly all round.
+- **Night launch**: the exhaust cloud is lit about evenly across its width
+  (the flame's light points sit along the flame, deep in the trench; a
+  steeper fall-off through the smoke, tried in `LightTransmittance`, was
+  undone by the exposure); the drawn SRB flame is short, the long bright
+  column is lit smoke.
 - Not yet looked at: the reentry plasma's radial streaks and hard lower
   edge; the night launch's blocky smoke edges, dotted catenary wires and
   shard-like reflections; the Delta-glider's virtual cockpit HUD combiner (an

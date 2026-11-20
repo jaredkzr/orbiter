@@ -65,6 +65,11 @@ struct PlumeClass {
 	// the smoke leaves the end of the flame with this much of the jet's
 	// speed left at full thrust [m/s], relative to the air (0: at rest)
 	float smokeJet;
+	// the colour of the light the flame casts (linear; 0: the drawn flame's):
+	// a solid motor's alumina at some 2400 K lights its smoke and the pad
+	// gold-orange in photographs, while the flame itself, blown out, looks
+	// near white
+	float lightTint[3];
 };
 
 /// where a plume's flame ends and what it meets (PlumeRenderer::Add)
@@ -153,6 +158,9 @@ public:
 	/// the solid angle of the flames added this frame [sr] (their bright
 	/// parts, unoccluded)
 	double SolidAngle () const { return solidAngle; }
+	/// the drawn radiance (luminance) of the brightest flame this frame of
+	/// those that cover a noticeable part of the view (the night exposure)
+	double FlameRadiance () const { return flameRadiance; }
 	/// The prepass image (view depth) the plumes are clipped against
 	void SetPrepass (VkImageView prepass);
 	/// At half resolution (halfRes): march the plumes into half-size images
@@ -210,6 +218,7 @@ private:
 	vkc::Buffer buf;
 	uint32_t slot = 0;
 	double solidAngle = 0.0;
+	double flameRadiance = 0.0;
 	double simt = 0.0;
 	std::vector<Entry> list;
 	VkSampler clampSampler = VK_NULL_HANDLE, repeatSampler = VK_NULL_HANDLE;
