@@ -2448,6 +2448,26 @@ void Scene::FillFrameUniforms (void *pfu)
 			fu.planetDir[3] = (float)std::min (1.0, R / d);
 			for (int k = 0; k < 3; k++) fu.planetLight[k] = (float)(e * alb[k]);
 			fu.planetLight[3] = e > 1e-5 ? 1.0f : 0.0f;
+			// and by its rings: one source with the planet's, from where the
+			// two shine on average (the rings a broad source)
+			auto it = visuals.find (hp);
+			VPlanet *vp = it != visuals.end () ? dynamic_cast<VPlanet*>(it->second.get ()) : nullptr;
+			float rl[3];
+			VECTOR3 rdir;
+			if (vp && vp->RingLight (camPos, sp, rl, rdir)) {
+				double ePl = e * (alb[0] + alb[1] + alb[2]), eRg = rl[0] + rl[1] + rl[2];
+				VECTOR3 dg = unit (unit (toP) * ePl + rdir * eRg);
+				VECTOR3 dv2 = view.TransformPoint (dg);
+				fu.planetDir[0] = (float)dv2.x, fu.planetDir[1] = (float)dv2.y, fu.planetDir[2] = (float)dv2.z;
+				fu.planetDir[3] = (float)std::max ((double)fu.planetDir[3], eRg > ePl ? 0.5 : 0.0);
+				for (int k = 0; k < 3; k++) fu.planetLight[k] += rl[k];
+				fu.planetLight[3] = 1.0f;
+				static double lastLog = -1e9;
+				if (oapiGetSysTime () - lastLog > 10.0) {
+					lastLog = oapiGetSysTime ();
+					oapiWriteLogV ("VulkanClient: ring light %.4f %.4f %.4f (planet's %.4f)", rl[0], rl[1], rl[2], ePl / 3.0);
+				}
+			}
 		}
 	auto shadowUniforms = [this](const ShadowMap &sm, float *mat, float *prm) {
 		sm.ReceiverMatrix (camPos, camRot).ToFloat (mat);

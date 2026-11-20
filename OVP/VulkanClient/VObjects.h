@@ -418,6 +418,10 @@ public:
 	void CollectLights (std::vector<LightSource> &lights) override;
 	void CollectGroundMarks (std::vector<RunwayGpu> &rws, std::vector<PadGpu> &pads) override;
 	Atmosphere *GetAtmosphere () override { return atmosphere.get(); }
+	/// sunlight scattered by its rings onto a point (global frame): the
+	/// irradiance (units of the sun's at normal incidence, rgb) and where it
+	/// comes from on average (unit vector); false: no rings, or none lit in view
+	bool RingLight (const VECTOR3 &at, const VECTOR3 &sunPos, float rgb[3], VECTOR3 &dir) const;
 	/// tiled cloud layer (or nullptr) and its altitude [m]
 	PlanetSurface *CloudLayer () const { return clouds.get(); }
 	/// cloud decks of a gas giant (Config/VK/GasGiant), or null
@@ -461,6 +465,7 @@ private:
 	vkc::Buffer ringVtx, ringIdx;
 	uint32_t ringNIdx = 0;
 	float ringPrm[4] = {}, ringLegacy[4] = {}; // (Scene::DrawRing)
+	std::vector<float> ringProfile;         // (RingLight: the rings' colour from the inner to the outer radius, linear rgb)
 	void LoadLegacyTextures ();
 	void BuildRing (double irad, double orad);
 	void RenderRing ();

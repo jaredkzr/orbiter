@@ -66,3 +66,34 @@ stations and launch sites. Left over:
   validation layer; not yet long flights, the cockpit, resizing the window,
   FSR 4 Lite, frame generation. The loader's own library is not checked
   against a hash (it is built here), AMD's DLLs are.
+
+## Showcase review (2026-11-19)
+
+Ten ray-traced showcase screenshots reviewed (`out/showcase-shots`, build
+tree only). Done: the Shuttle's SSME nozzles gimbal per engine in pitch and
+yaw as the thrust does, their exhausts leave each bell's exit along its axis
+(they started inside the bells, along the thrust: the top engine's 4 deg off
+its bell), and the gimbal starts as angles (the SRBs began with an 8 deg roll
+gimbal at lift-off); a ship near a ringed planet is lit by the rings
+(`VPlanet::RingLight`, in the planet-light term). Left over:
+
+- **Jupiter's cloud towers**: a fixed grain at the cloud buffer's (half
+  resolution) pixel scale on the domes. Not the march's jitter (frames
+  correlate 0.92 with the history off), the history (its tolerance, edge
+  handling), the noise filtering (a coarser lodBias smooths the outlines
+  only), nor the upscaler (multisampling shows it as blocks). Next: the
+  light march's sampling, and the deck shading under the domes.
+- **Sea horizon**: a row of dots some 2 px above it (40-50 m apart at 6 km).
+  Not the small waves, nor the swell's displacement (zeroed: still there);
+  `ORBITER_VK_SWELL=0` hid them, maybe by the camera's height.
+- **Plume light**: the SRBs' flames (300 times a sunlit surface) light the
+  tank's aft dome and the orbiter's base to white in daylight - physically
+  about right (an alumina flame at some 2400 K); the dome reads as a flat
+  peach disc from behind. Framing: the side view.
+- **Ring light**: some 0.3% of sunlight at 4 Saturn radii, under the ambient
+  level (1%), which lights a ship in the planet's shadow evenly all round.
+- Not yet looked at: the reentry plasma's radial streaks and hard lower
+  edge; the night launch's blocky smoke edges, dotted catenary wires and
+  shard-like reflections; the Delta-glider's virtual cockpit HUD combiner (an
+  opaque green panel at night); the Delta-glider's black nozzle interiors;
+  the Shuttle's evenly beaded shock diamonds.

@@ -3609,6 +3609,11 @@ void VPlanet::LoadLegacyTextures ()
 					rgba[4*i] = s[2], rgba[4*i+1] = s[1], rgba[4*i+2] = s[0], rgba[4*i+3] = 255;
 				}
 				ringTex = tm->CreateRGBA (size, 1, rgba.data());
+				// (RingLight's profile: 64 bins, linear)
+				ringProfile.assign (64 * 3, 0.0f);
+				for (int i = 0; i < size; i++)
+					for (int c = 0; c < 3; c++)
+						ringProfile[3 * (i * 64 / size) + c] += std::pow (rgba[4*i+c] / 255.0f, 2.2f) * 64.0f / size;
 				break;
 			}
 			if (ringTex) break;
@@ -3617,11 +3622,78 @@ void VPlanet::LoadLegacyTextures ()
 		if (!ringTex && load (std::string (name) + "_ring.tex", images) && legacytex::Decode (images.back(), w, h, rgba)) {
 			ringTex = tm->CreateRGBA (w, h, rgba.data());
 			ringPrm[3] = 1.0f;
+			// (RingLight: the legacy texture's mean colour at every radius)
+			double m[3] = { 0, 0, 0 };
+			for (size_t i = 0; i < (size_t)w * h; i++)
+				for (int c = 0; c < 3; c++) m[c] += std::pow (rgba[4*i+c] / 255.0, 2.2) * rgba[4*i+3] / 255.0;
+			ringProfile.assign (64 * 3, 0.0f);
+			for (int i = 0; i < 64; i++)
+				for (int c = 0; c < 3; c++) ringProfile[3*i+c] = (float)(m[c] / std::max (1.0, (double)w * h));
 		}
 		if (ringTex)
 			BuildRing (*(const double*)oapiGetObjectParam (hObj, OBJPRM_PLANET_RINGMINRAD),
 			           *(const double*)oapiGetObjectParam (hObj, OBJPRM_PLANET_RINGMAXRAD));
 	}
+}
+
+bool VPlanet::RingLight (const VECTOR3 &at, const VECTOR3 &sunPos, float rgb[3], VECTOR3 &dir) const
+{
+	// The annulus in patches (64 radii by 96 directions), each a Lambertian
+	// reflector of the sunlight at the profile's colour seen from the lit
+	// side, a third of it from the other (the light through the rings).
+	// Patches in the planet's shadow, or behind the planet from the point,
+	// give none. (Lit from the far side, the rings were the brightest thing
+	// in the sky of a ship in the planet's shadow, which got none of their
+	// light: it was lit only by the ambient level, all round)
+	rgb[0] = rgb[1] = rgb[2] = 0.0f;
+	dir = _V(0, 0, 0);
+	if (ringProfile.size () != 64 * 3 || ringPrm[1] <= ringPrm[0]) return false;
+	VECTOR3 pp;
+	MATRIX3 R;
+	oapiGetGlobalPos (hObj, &pp);
+	oapiGetRotationMatrix (hObj, &R);
+	const double rad = oapiGetSize (hObj);
+	const double ri = ringPrm[0] * rad, ro = ringPrm[1] * rad;
+	if (length (at - pp) > 50.0 * ro) return false; // (far: the rings a point, their light nothing)
+	VECTOR3 n = mul (R, _V(0, 1, 0));
+	VECTOR3 s = unit (sunPos - pp);
+	double cosI = std::fabs (dotp (n, s));
+	if (cosI < 1e-4) return false; // (edge-on to the sun: unlit)
+	double sideSun = dotp (n, s);
+	const int NR = 64, NA = 96;
+	double dr = (ro - ri) / NR, da = 2.0 * PI / NA;
+	double E[3] = { 0, 0, 0 };
+	VECTOR3 acc = _V(0, 0, 0);
+	for (int i = 0; i < NR; i++) {
+		double r = ri + (i + 0.5) * dr;
+		const float *c = &ringProfile[3 * i];
+		for (int j = 0; j < NA; j++) {
+			double a = (j + 0.5) * da;
+			VECTOR3 q = pp + mul (R, _V(r * cos (a), 0, r * sin (a)));
+			// (in the planet's shadow)
+			VECTOR3 v = q - pp;
+			double al = dotp (v, s);
+			if (al < 0.0 && length (v - s * al) < rad) continue;
+			VECTOR3 toQ = q - at;
+			double d2 = dotp (toQ, toQ);
+			if (d2 < 1.0) continue;
+			double d = sqrt (d2);
+			VECTOR3 u = toQ / d;
+			// (behind the planet: the line from the point to it through the sphere)
+			VECTOR3 w = pp - at;
+			double tc = dotp (w, u);
+			if (tc > 0.0 && tc < d && dotp (w, w) - tc * tc < rad * rad) continue;
+			double cosV = std::fabs (dotp (n, u));
+			double lit = (dotp (n, at - q) * sideSun > 0.0) ? 1.0 : 0.33; // (seen from the sun's side, or through)
+			double f = lit * cosI * cosV * r * dr * da / (PI * d2);
+			for (int k = 0; k < 3; k++) E[k] += f * c[k];
+			acc += u * (f * (c[0] + c[1] + c[2]));
+		}
+	}
+	if (E[0] + E[1] + E[2] < 1e-6) return false;
+	for (int k = 0; k < 3; k++) rgb[k] = (float)E[k];
+	dir = unit (acc);
+	return true;
 }
 
 void VPlanet::BuildRing (double irad, double orad)
