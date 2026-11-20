@@ -24,27 +24,37 @@ ground filter takes the lowest tenth over the samples' plane where it slopes:
 launchpad's scenario builder (its Build page: `ScenarioBuilder.h`,
 `Launchpad.Builder`); scripts' `proc.skip()` waits for a frame of the
 simulation whatever the machine's load (the interpreter's turn: the landing
-autopilot came down 500 m short while a video was encoded). Left over:
+autopilot came down 500 m short while a video was encoded). Then, the same
+day: all of Rogers Dry Lake's marked runways at Edwards (18L/C/R, 15/33, 05L/R,
+30L/R, 06/24, the south lakebed's 07/25 and 09/27, the lakebed beyond the paved
+22L and 25: from OpenStreetMap, which agrees with the tiles within 5 m); bare
+earth at steps (cliffs, banks: the ground of the samples on the node's side,
+`ORBITER_BARE_STEP`); zoomed views from the ground no longer exhaust the GPU's
+memory (small tiles bounded by their own elevations, not their data tile's
+range: the ground under a line of sight into the sky was "in view"); a far
+planet's cloud layer through the sky's veil takes the air in its shader (drawn
+before the veil, the upscaler left black streaks about it: seen once the zoom
+worked); a build copies changed body and base files; the scenario builder's
+systems, base directories, docked starts, fuel, gear, orbits over a base,
+stations and launch sites. Left over:
 
-- **Bare earth, decided against**: Plesetsk (unbroken taiga: no ground to find,
-  and its ravines' banks cut by 16 m even over the samples' plane) and Havana
-  (hilly, built up: the cities' own levelling holds there, 2 m on the mean
-  against the bare earth's 5 m). At Alcântara the plateau's cliff edges still
-  come out some 5 m lower than its flat ground (a step is no plane).
-- **Narrow fields of view from the ground exhaust the GPU's memory**: a ground
-  observer's aperture set below about 2 degrees (`oapi.set_cameraaperture`)
-  loads terrain until the heap limit stops Orbiter (6-7 GB within 20 s at
-  Habana). It also kept the rings' share of the sky's veil from being looked at
-  close up (Saturn by day): checked only as far as the planet's disc (Jupiter's
-  pixel as bright as the sky).
-- **Edwards' lakebed runways**: their axes and north ends are from the level 17
-  surface tiles, their far ends not (the lakebed is saturated in the imagery:
-  18L/R to where they leave the lake, 15/33 its nominal length); the lake's
-  other runways (17/35, 05/23, 06/24, 07/25, 09/27, 12/30) are not marked out.
-  The Shuttle's aim-point marks at White Sands are only in the hi-res tiles.
-- **Scenario builder**: no docked starts, no fuel or gear states, orbits only
-  by elements over the body's equator (not relative to a base's overflight),
-  the bodies of `Sol` only, bases from `Config/<body>/Base` only (not a
-  planet's other base directories), no Windows launchpad page.
-- **A build does not copy changed base files** (`Src/Celbody/*/Config/Earth/Base`)
-  into the build tree unless something else there changed: copied by hand.
+- **Bare earth**: decided against at Plesetsk (unbroken taiga: no ground to
+  find) and Havana (hilly, built up: the cities' own levelling holds there).
+  At steps the rim still comes out some 4 m lower than flat ground (Alcântara:
+  10 m under the smoothed data against 5 m; it was 16 m): the nodes are 220 m
+  apart and the ground between them is interpolated across the edge.
+- **Zoomed views**: a view of half a degree along the ground settles at two
+  to three times a normal view's GPU memory (7 GB at Habana: every tile on
+  the line of sight at full detail to 280 km). With the FSR upscaler a small
+  planet's disc by day has a faint dotted halo about it (not with
+  multisampling); Saturn's rings through the sky's veil are still unseen
+  close up.
+- **Edwards' lakebed runways**: 17/35 is not in OpenStreetMap and is not
+  marked out; the runways' lighter strips are the surface tiles' own colour
+  where the grade keeps the terrain detail off. The Shuttle's aim-point marks
+  at White Sands are only in the hi-res tiles.
+- **Scenario builder**: gear and docking lines only for the stock classes
+  (others: "Further lines"); fuel is one level for all tanks; base
+  directories of a period or a context are left out; the launch sites are a
+  built-in list for Earth (approximate places, no pads of their own); no
+  attached payloads, no Windows launchpad page.
