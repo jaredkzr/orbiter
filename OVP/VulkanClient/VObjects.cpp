@@ -4366,14 +4366,6 @@ double VPlanet::SkyReach () const
 	return atmosphere && atmosphere->SkyVisible () ? camDist + atmosphere->AtmRadius () : 0.0;
 }
 
-void VPlanet::RenderCloudLayerEarly ()
-{
-	if (!clouds || DecksHide () || scene->PixelSize (size, camDist) < 0.5) return;
-	clouds->layerAlpha = 1.0f;
-	clouds->Render (atmosphere.get());
-	cloudsEarly = true;
-}
-
 void VPlanet::RenderSkyVeil ()
 {
 	if (atmosphere) atmosphere->RenderSky (true);
@@ -4498,11 +4490,14 @@ void VPlanet::Render (RenderPass pass)
 		// they fade in from afar, fading out over them (drawn after them: at
 		// full opacity it hid their fade, and vanished at once where it ended))
 		float deckOp = hasDecks && scene->CloudsActive () && oapiCameraProxyGbody () == hObj ? scene->VClouds ()->DeckOpacity () : 0.0f;
-		if (clouds && deckOp < 1.0f && !cloudsEarly) {
+		if (clouds && deckOp < 1.0f) {
 			clouds->layerAlpha = 1.0f - deckOp;
-			clouds->Render (atmosphere.get());
+			// (seen through another planet's sky: that air between the camera
+			// and the layer, in place of its own. Drawn before the sky's veil
+			// instead, the upscaler left black streaks about the planet)
+			clouds->Render (veilAir ? veilAir : atmosphere.get());
 		}
-		cloudsEarly = false;
+		veilAir = nullptr;
 		if (scene->PixelSize (size, camDist) >= 0.5) {
 			if (cloudTex) {
 				// legacy cloud layer: longitude 0 of the map at the -x axis

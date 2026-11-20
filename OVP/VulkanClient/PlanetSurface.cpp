@@ -1275,22 +1275,54 @@ uint32_t PlanetSurface::Select (Node *n)
 	// Distance: a lower bound for the points of the tile, between the
 	// lowest and highest elevation of its data (LowerDist). The morph of
 	// the continuous level of detail relies on it being a lower bound.
-	double emin = 0.0, emax = 0.0;
+	double emin = 0.0, emax = 0.0, slope = 1.0; // (slope: the relief of its elevation data over their extent)
 	if (!clouds) {
-		if (const Node *src = ElevSource (n)) emin = src->elev->emin, emax = src->elev->emax;
+		if (const Node *src = ElevSource (n)) emin = src->elev->emin, emax = src->elev->emax, slope = (emax - emin) / SplitSize (src);
 		else emin = -maxElev, emax = maxElev;
 	}
 	double dist = LowerDist (n, fromCam, cang, emin, emax);
 	double size = SplitSize (n);
+	static const double zoomAniso = getenv ("ORBITER_VK_ZOOM_ANISO") ? atof (getenv ("ORBITER_VK_ZOOM_ANISO")) : 16.0;
 	// (out of view, at most a FOV_OUT view's scale: the tiles around a
 	// zoomed view (no frustum culling: the ray tracing's) would be split
 	// as finely as those seen, all round: a 10 deg view took 26000 tiles,
 	// the video memory. A tile in view has its parent in view: graded)
-	double ppr = n->parent ? n->parent->pixPerRad : pixPerRad;
+	double ppr = n->parent ? n->parent->viewPixPerRad : pixPerRad;
 	if (ppr > pixPerRadOut) {
-		VECTOR3 c = n->centre * ((radius + 0.5 * (emin + emax)) / radius);
-		double b = (radius + emax) * n->angRadius + 0.5 * (emax - emin);
+		// (zoomed in, the view is metres wide: a tile much smaller than its
+		// elevation data's tile bounded by their range over all of that tile
+		// (tens of metres) was in view all about the camera's line of sight:
+		// 16000 tiles of 0.15 m where 1500 were seen. Bounded by the data at
+		// its corners and centre instead, with a margin for the detail)
+		double e0 = emin, e1 = emax;
+		const Node *src = clouds ? nullptr : ElevSource (n);
+		if (src && src != n && size * 64.0 < SplitSize (src)) {
+			double la[5] = { n->latmin, n->latmin, n->latmax, n->latmax, 0.5 * (n->latmin + n->latmax) };
+			double lo[5] = { n->lngmin, n->lngmax, n->lngmin, n->lngmax, 0.5 * (n->lngmin + n->lngmax) };
+			e0 = 1e30, e1 = -1e30;
+			for (int i = 0; i < 5; i++) {
+				double e = SampleElev (src, la[i], lo[i]);
+				e0 = std::min (e0, e), e1 = std::max (e1, e);
+			}
+			double m = 1.0 + 0.25 * size;
+			e0 = std::max (emin, e0 - m), e1 = std::min (emax, e1 + m);
+		}
+		VECTOR3 c = n->centre * ((radius + 0.5 * (e0 + e1)) / radius);
+		double b = (radius + e1) * n->angRadius + 0.5 * (e1 - e0);
 		ppr = scene->SphereInView (ppos + mul (prot, c) - scene->CameraPos (), b) ? pixPerRad : pixPerRadOut;
+	}
+	n->viewPixPerRad = ppr;
+	// (zoomed in along the ground: a tile seen edge-on is split by its
+	// width, whatever its depth on screen: at 0.5 deg, 250 tiles deep for
+	// each doubling of the distance, all of them slivers a pixel high -
+	// the video memory within seconds. The zoom beyond FOV_OUT counts only
+	// as far as the tile's lesser extent on screen (its depth seen at the
+	// camera's height, its relief seen from the side) is within the
+	// texture filter's anisotropy of its width: finer texels than that
+	// are not sampled anyway)
+	if (ppr > pixPerRadOut && !clouds && zoomAniso > 0.0) {
+		double h = std::max (0.0, fromCam.r - (radius + 0.5 * (emin + emax)));
+		ppr = pixPerRadOut + (ppr - pixPerRadOut) * std::min (1.0, zoomAniso * (h / dist + slope));
 	}
 	n->pixPerRad = ppr;
 	bool split = size / dist * ppr > splitPixels && size > minSplit;
@@ -1425,6 +1457,19 @@ void PlanetSurface::Prepare ()
 		for (auto &r : root) if (r) walk (r.get());
 		oapiWriteLogV ("VulkanClient: %s tiles: %zu drawn, %zu nodes, %zu meshes, %zu surface, %zu mask textures, %zu elevation grids",
 			clouds ? "cloud" : "surface", drawList.size(), nn, nb, ns, nm, ne);
+		if (drawList.size () > 1000) { // (where they are: by level, those in view and their distance)
+			int cnt[32] = {}, inv[32] = {};
+			double dmin[32], dmax[32];
+			for (int i = 0; i < 32; i++) dmin[i] = 1e30, dmax[i] = 0.0;
+			for (const Node *n : drawList) {
+				int l = std::min (n->lvl, 31);
+				double d = length (camLocal - n->centre);
+				cnt[l]++, inv[l] += n->viewPixPerRad > pixPerRadOut ? 1 : 0;
+				dmin[l] = std::min (dmin[l], d), dmax[l] = std::max (dmax[l], d);
+			}
+			for (int i = 0; i < 32; i++)
+				if (cnt[i]) oapiWriteLogV ("VulkanClient:   level %d: %d drawn, %d in view, %.0f to %.0f m from the camera", i, cnt[i], inv[i], dmin[i], dmax[i]);
+		}
 	}
 	// nearest tiles first, so that they get their data first
 	{
@@ -1894,9 +1939,9 @@ bool PlanetSurface::InView (const Node *n) const
 	// a sphere about the tile: its cap, raised to the highest and lowered to
 	// the lowest elevation of its data (with a margin for the terrain detail
 	// and the skirts)
-	double emin = 0.0, emax = 0.0;
+	double emin = 0.0, emax = 0.0, slope = 1.0; // (slope: the relief of its elevation data over their extent)
 	if (!clouds) {
-		if (const Node *src = ElevSource (n)) emin = src->elev->emin, emax = src->elev->emax;
+		if (const Node *src = ElevSource (n)) emin = src->elev->emin, emax = src->elev->emax, slope = (emax - emin) / SplitSize (src);
 		else emin = -maxElev, emax = maxElev;
 	}
 	double rad = n->angRadius * (radius + std::max (emax, 0.0)) + std::max (-emin, emax) + 100.0;

@@ -185,6 +185,7 @@ private:
 		bool meshDetailed = false; // the mesh has the terrain detail's geometry
 		int vessel = -1;      // nearest vessel on the ground (groundVessels)
 		double pixPerRad = 1.0; // the screen scale its split went by (smaller out of view: Select)
+		double viewPixPerRad = 1.0; // the view's scale if it is in view, else the scale out of view (its children's: Select)
 		float detailSpacing = 0.0f; // terrain detail: node spacing of the elevation data [m]
 		float detailLmesh = 0.0f;   // shortest detail wavelength in the mesh [m]
 		uint64_t lastUsed = 0;

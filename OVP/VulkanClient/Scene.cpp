@@ -2868,7 +2868,7 @@ void Scene::Render ()
 		if (auto *p = dynamic_cast<VPlanet*>(vo))
 			if (airP && p != airP && p->Beyond (airReach)) {
 				p->Render (RenderPass::Opaque), veiled = true;
-				p->RenderCloudLayerEarly (); // (its cloud layer under the veil too; its rings take the air in their shader)
+				p->SetVeilAir (airP->Air ()); // (its cloud layer, drawn later, takes that air in its shader, as its rings do)
 			}
 	if (veiled) {
 		airP->RenderSkyVeil ();
