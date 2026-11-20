@@ -2,6 +2,7 @@
 // Licensed under the MIT License
 
 #include "Fsr.h"
+#include "Fsr4.h"
 #include "GfxSettings.h"
 #include "OrbiterAPI.h"
 #include <cfloat>
@@ -34,8 +35,10 @@ namespace {
 	VKAPI_ATTR void VKAPI_CALL NoMarker (VkCommandBuffer, VkPipelineStageFlagBits, VkBuffer, VkDeviceSize, uint32_t) {}
 	VKAPI_ATTR void VKAPI_CALL NoMarker2 (VkCommandBuffer, VkPipelineStageFlags2, VkBuffer, VkDeviceSize, uint32_t) {}
 
-	VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL GetDeviceProc (VkDevice device, const char *name)
-	{
+}
+
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL FfxGetDeviceProc (VkDevice device, const char *name)
+{
 		if (PFN_vkVoidFunction f = vkGetDeviceProcAddr (device, name)) return f;
 		std::string n (name);
 		for (const char *suffix : { "KHR", "EXT" })
@@ -47,7 +50,9 @@ namespace {
 		if (n == "vkCmdWriteBufferMarkerAMD") return (PFN_vkVoidFunction)NoMarker;
 		if (n == "vkCmdWriteBufferMarker2AMD") return (PFN_vkVoidFunction)NoMarker2;
 		return nullptr;
-	}
+}
+
+namespace {
 
 	FfxResourceDescription Desc (VkFormat fmt, VkExtent2D e, uint32_t usage)
 	{
@@ -71,6 +76,7 @@ struct FsrUpscaler::Impl {
 	uint32_t generation = ~0u;
 	VkExtent2D renderSize{}, displaySize{};
 	vkc::Image output;
+	std::unique_ptr<Fsr4Backend> fsr4; // (FSR 4 in FSR 3's place, while it works)
 	// resources the upscaler shares with later effects, owned by the caller
 	struct Shared { vkc::Image img; VkFormat fmt; FfxResourceDescription desc; } shared[3];
 
@@ -109,7 +115,7 @@ struct FsrUpscaler::Impl {
 		renderSize = ctx->RenderExtent (), displaySize = ctx->Extent ();
 		size_t size = ffxGetScratchMemorySizeVK (ctx->physicalDevice, FFX_FSR3UPSCALER_CONTEXT_COUNT);
 		scratch.assign (size, 0);
-		VkDeviceContext dc{ ctx->device, ctx->physicalDevice, GetDeviceProc };
+		VkDeviceContext dc{ ctx->device, ctx->physicalDevice, FfxGetDeviceProc };
 		if (ffxGetInterfaceVK (&backend, ffxGetDeviceVK (&dc), scratch.data(), size, FFX_FSR3UPSCALER_CONTEXT_COUNT) != FFX_OK)
 			return false;
 		FfxFsr3UpscalerContextDescription cd{};
@@ -167,12 +173,28 @@ bool FsrUpscaler::Init (vkc::Context *ctx)
 	impl->ctx = ctx;
 	sharpness = vkc::Gfx ().sharpness;
 	if (const char *e = getenv ("ORBITER_VK_FSR_DEBUG")) debugView = atoi (e) != 0;
+	// FSR 4 if chosen and it starts; else FSR 3.1
+	if (vkc::Gfx ().UseFsr4 ()) {
+		if (!Fsr4Backend::Available ()) oapiWriteLogV ("VulkanClient: FSR 4 is not installed (Modules/Plugin/FSR4): FSR 3 in its place");
+		else {
+			impl->fsr4 = std::make_unique<Fsr4Backend> ();
+			if (!impl->fsr4->Init (ctx)) {
+				oapiWriteLogV ("VulkanClient: FSR 4 did not start: FSR 3 in its place");
+				impl->fsr4->Shutdown ();
+				impl->fsr4.reset ();
+			}
+		}
+	}
 	return true;
 }
+
+bool FsrUpscaler::IsFsr4 () const { return impl && impl->fsr4; }
 
 void FsrUpscaler::Shutdown ()
 {
 	if (!impl->ctx) return;
+	if (impl->fsr4) impl->fsr4->Shutdown ();
+	impl->fsr4.reset ();
 	impl->DestroyContext ();
 	impl->ctx = nullptr;
 }
@@ -186,6 +208,14 @@ void FsrUpscaler::Jitter (uint32_t n, uint32_t renderW, uint32_t displayW, float
 VkImageView FsrUpscaler::Dispatch (const Inputs &in)
 {
 	vkc::Context *ctx = impl->ctx;
+	if (impl->fsr4) {
+		if (VkImageView v = impl->fsr4->Dispatch (in, sharpness, debugView)) return v;
+		// (it failed: this frame goes without, FSR 3 from the next)
+		oapiWriteLogV ("VulkanClient: FSR 4 failed: FSR 3 in its place");
+		impl->fsr4->Shutdown ();
+		impl->fsr4.reset ();
+		return VK_NULL_HANDLE;
+	}
 	if (impl->generation != ctx->SwapchainGeneration () && !impl->CreateContext ()) {
 		oapiWriteLogV ("VulkanClient: FSR 3 context creation failed");
 		return VK_NULL_HANDLE;
@@ -240,6 +270,7 @@ FsrUpscaler::FsrUpscaler () {}
 FsrUpscaler::~FsrUpscaler () {}
 bool FsrUpscaler::Available () { return false; }
 bool FsrUpscaler::Init (vkc::Context *) { return false; }
+bool FsrUpscaler::IsFsr4 () const { return false; }
 void FsrUpscaler::Shutdown () {}
 void FsrUpscaler::Jitter (uint32_t, uint32_t, uint32_t, float &jx, float &jy) { jx = jy = 0.0f; }
 VkImageView FsrUpscaler::Dispatch (const Inputs &) { return VK_NULL_HANDLE; }

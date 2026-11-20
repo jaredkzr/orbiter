@@ -4,7 +4,8 @@
 // =======================================================================
 // AMD FidelityFX Super Resolution 3 upscaler (FidelityFX SDK, Vulkan
 // backend): temporal anti-aliasing and upscaling of the scene from the
-// render size to the display size
+// render size to the display size. With FSR 4 chosen and available, by
+// FSR 4 instead (Fsr4.h)
 // =======================================================================
 
 #ifndef __FSR_H
@@ -22,6 +23,8 @@ public:
 
 	bool Init (vkc::Context *ctx);
 	void Shutdown ();
+	/// upscaling with FSR 4 (chosen in the settings, and it started: Fsr4.h)
+	bool IsFsr4 () const;
 
 	/// Projection jitter [pixels] of frame n, for upscaling from renderW to displayW
 	static void Jitter (uint32_t n, uint32_t renderW, uint32_t displayW, float &jx, float &jy);

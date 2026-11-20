@@ -294,7 +294,7 @@ bool Scene::Init ()
 	fsr = std::make_unique<FsrUpscaler>();
 	useFsr = taaEnabled && FsrUpscaler::Available () && ctx->sceneSamples == VK_SAMPLE_COUNT_1_BIT && vkc::Gfx ().UseFsr ();
 	if (useFsr) fsr->Init (ctx);
-	oapiWriteLogV ("VulkanClient: temporal anti-aliasing: %s", !taaEnabled ? "off" : useFsr ? "FSR 3" : "TAA");
+	oapiWriteLogV ("VulkanClient: temporal anti-aliasing: %s", !taaEnabled ? "off" : useFsr ? (fsr->IsFsr4 () ? "FSR 4" : "FSR 3") : "TAA");
 	WriteAODescriptors ();
 
 	atm = std::make_unique<AtmosphereRenderer>();
@@ -2952,6 +2952,7 @@ VkImageView Scene::ResolveTemporal (VkExtent2D &size)
 	ssr->StoreColor (ctx->SceneImage ()); // reflected in the next frame
 	VkImageView out = ctx->SceneView ();
 	size = ctx->RenderExtent ();
+	ctx->GpuMark ("effects");
 	if (taaEnabled) {
 		// rotation from the view now to the view then, for directions (sky)
 		Mat4 rot = prevView * view.RigidInverse ();
@@ -2982,6 +2983,7 @@ VkImageView Scene::ResolveTemporal (VkExtent2D &size)
 			out = taa->Resolve (ctx->SceneView (), ao->PrepassView (), ao->VelocityView (), reactive.view, skyMotion,
 				proj[0], -proj[5], reset);
 	}
+	ctx->GpuMark ("upscale"); // (temporal anti-aliasing: ours, FSR 3 or FSR 4)
 	// this frame's camera and object poses, for the next frame's motion
 	prevCamPos = camPos;
 	prevView = view;

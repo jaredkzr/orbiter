@@ -23,7 +23,7 @@ namespace vkc {
 using oapi::GraphicsSetting;
 
 struct GfxSettings {
-	enum AntiAliasing { AA_OFF, AA_MSAA, AA_TAA, AA_FSR };
+	enum AntiAliasing { AA_OFF, AA_MSAA, AA_TAA, AA_FSR, AA_FSR4 };
 
 	int antiAliasing = AA_FSR;  ///< (AA_TAA where FSR 3 is not built in)
 	float renderScale = 1.0f;   ///< scene images: display size times this (upscaled)
@@ -59,12 +59,15 @@ struct GfxSettings {
 	/// anti-aliasing and the FSR 3 upscaler as set (with the environment's
 	/// ORBITER_VK_MSAA, ORBITER_VK_TAA and ORBITER_VK_UPSCALER)
 	int SceneSamples () const { return aaLocked ? lockSamples : antiAliasing == AA_MSAA ? 4 : 1; }
-	bool TemporalAA () const { return aaLocked ? lockTaa : antiAliasing == AA_TAA || antiAliasing == AA_FSR; }
-	bool UseFsr () const { return aaLocked ? lockFsr : antiAliasing == AA_FSR; }
+	bool TemporalAA () const { return aaLocked ? lockTaa : antiAliasing == AA_TAA || antiAliasing == AA_FSR || antiAliasing == AA_FSR4; }
+	bool UseFsr () const { return aaLocked ? lockFsr : antiAliasing == AA_FSR || antiAliasing == AA_FSR4; }
+	/// FSR 4 in FSR 3's place (ORBITER_VK_UPSCALER=fsr4; where it does not start, FSR 3)
+	bool UseFsr4 () const { return UseFsr () && (aaLocked ? lockFsr4 : antiAliasing == AA_FSR4); }
 
 	/// The settings for the user interface (values current); hardware:
-	/// ray queries are available, fsr: the FSR 3 upscaler is built in
-	const std::vector<GraphicsSetting> &List (bool hardwareRT, bool fsr);
+	/// ray queries are available, fsr: the FSR 3 upscaler is built in, fsr4:
+	/// FSR 4 is installed
+	const std::vector<GraphicsSetting> &List (bool hardwareRT, bool fsr, bool fsr4);
 	/// Change a setting by its index in List
 	void Set (int index, float value);
 	/// The values in effect (for List's "effective"): set when a session
@@ -81,7 +84,7 @@ private:
 	bool started = false;
 	std::string gfxPath, skyPath; // ("": none)
 	// anti-aliasing set by the environment (ORBITER_VK_TAA, _MSAA, _UPSCALER)
-	bool aaLocked = false, lockTaa = true, lockFsr = true;
+	bool aaLocked = false, lockTaa = true, lockFsr = true, lockFsr4 = false;
 	int lockSamples = 1;
 };
 

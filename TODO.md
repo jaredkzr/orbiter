@@ -45,9 +45,9 @@ stations and launch sites. Left over:
   apart and the ground between them is interpolated across the edge.
 - **Zoomed views**: a view of half a degree along the ground settles at two
   to three times a normal view's GPU memory (7 GB at Habana: every tile on
-  the line of sight at full detail to 280 km). With the FSR upscaler a small
-  planet's disc by day has a faint dotted halo about it (not with
-  multisampling); Saturn's rings through the sky's veil are still unseen
+  the line of sight at full detail to 280 km). With FSR 3 and with FSR 4 a
+  small planet's disc by day has a faint dotted halo about it (not with
+  multisampling: something in what the upscalers are given, not theirs); Saturn's rings through the sky's veil are still unseen
   close up.
 - **Edwards' lakebed runways**: 17/35 is not in OpenStreetMap and is not
   marked out; the runways' lighter strips are the surface tiles' own colour
@@ -58,3 +58,10 @@ stations and launch sites. Left over:
   directories of a period or a context are left out; the launch sites are a
   built-in list for Earth (approximate places, no pads of their own); no
   attached payloads, no Windows launchpad page.
+- **FSR 4** (opt-in, `ORBITER_VK_UPSCALER=fsr4`: `Fsr4.h`): AMD's Windows DLLs
+  run through a loader that is weeks old, by one author - to be replaced by
+  AMD's own Linux library or source when there is one. Looked at so far: a
+  static scene at full and half render scale, a launch (smoke, plume), the
+  validation layer; not yet long flights, the cockpit, resizing the window,
+  FSR 4 Lite, frame generation. The loader's own library is not checked
+  against a hash (it is built here), AMD's DLLs are.

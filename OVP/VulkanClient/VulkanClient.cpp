@@ -5,6 +5,7 @@
 #include "VulkanClient.h"
 #include "Fsr.h"
 #include "GfxSettings.h"
+#include "Fsr4.h"
 #include "SkySettings.h"
 #include "Scene.h"
 #include "VObjects.h"
@@ -243,7 +244,7 @@ void VulkanClient::clbkOptionChanged (DWORD cat, DWORD item)
 
 int VulkanClient::clbkGetSettings (const oapi::GraphicsSetting **list)
 {
-	const auto &l = vkc::Gfx ().List (ctx.rayTracing, FsrUpscaler::Available ());
+	const auto &l = vkc::Gfx ().List (ctx.rayTracing, FsrUpscaler::Available (), Fsr4Backend::Available ());
 	*list = l.data ();
 	return (int)l.size ();
 }

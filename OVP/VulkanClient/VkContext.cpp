@@ -4,6 +4,7 @@
 #include <chrono>
 #include "VkContext.h"
 #include "GfxSettings.h"
+#include "Fsr4.h"
 #include <vector>
 #include "OrbiterAPI.h"
 #include <SDL3/SDL.h>
@@ -330,10 +331,73 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 	deviceAddress = s12.bufferDeviceAddress;
 	if (deviceAddress) f12.bufferDeviceAddress = VK_TRUE;
 	f2.features.independentBlend = deviceFeatures.independentBlend; // (colour and reactive mask of plumes and particles)
+	// FSR 4 (chosen and installed: Fsr4.h): what its network's shaders use, where the
+	// device has it - 8 and 16 bit arithmetic and storage, the integer dot product,
+	// storage images without a format, derivatives in compute shaders
+	VkPhysicalDeviceVulkan11Features f11{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
+	VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR fDer{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_KHR};
+	VkPhysicalDeviceCooperativeMatrixFeaturesKHR fCm{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
+#ifdef VK_EXT_SHADER_FLOAT8_EXTENSION_NAME
+	VkPhysicalDeviceShaderFloat8FeaturesEXT fF8{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT8_FEATURES_EXT};
+#endif
+	bool derivatives = false, coopMatrix = false, float8 = false;
+	if (Gfx ().UseFsr4 () && Fsr4Backend::Available ()) {
+		VkPhysicalDeviceVulkan11Features s11{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
+		VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR sDer{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_KHR};
+		VkPhysicalDeviceFeatures2 q{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+		q.pNext = &s11;
+		if (hasExt (VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME)) s11.pNext = &sDer;
+		// (its network's matrix products: cooperative matrices, 8 bit floats)
+		VkPhysicalDeviceCooperativeMatrixFeaturesKHR sCm{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
+		if (hasExt (VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME)) sCm.pNext = q.pNext, q.pNext = &sCm;
+#ifdef VK_EXT_SHADER_FLOAT8_EXTENSION_NAME
+		VkPhysicalDeviceShaderFloat8FeaturesEXT sF8{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT8_FEATURES_EXT};
+		if (hasExt (VK_EXT_SHADER_FLOAT8_EXTENSION_NAME)) sF8.pNext = q.pNext, q.pNext = &sF8;
+#endif
+		vkGetPhysicalDeviceFeatures2 (physicalDevice, &q);
+		f12.vulkanMemoryModel = s12.vulkanMemoryModel;
+		f12.vulkanMemoryModelDeviceScope = s12.vulkanMemoryModelDeviceScope;
+		f11.variablePointers = s11.variablePointers, f11.variablePointersStorageBuffer = s11.variablePointersStorageBuffer;
+		if (sCm.cooperativeMatrix) {
+			fCm.cooperativeMatrix = VK_TRUE;
+			fCm.pNext = f2.pNext, f2.pNext = &fCm;
+			coopMatrix = true;
+		}
+#ifdef VK_EXT_SHADER_FLOAT8_EXTENSION_NAME
+		if (sF8.shaderFloat8) {
+			fF8.shaderFloat8 = VK_TRUE, fF8.shaderFloat8CooperativeMatrix = sF8.shaderFloat8CooperativeMatrix && coopMatrix;
+			fF8.pNext = f2.pNext, f2.pNext = &fF8;
+			float8 = true;
+		}
+#endif
+		f11.storageBuffer16BitAccess = s11.storageBuffer16BitAccess;
+		f11.uniformAndStorageBuffer16BitAccess = s11.uniformAndStorageBuffer16BitAccess;
+		f12.shaderInt8 = s12.shaderInt8;
+		f12.storageBuffer8BitAccess = s12.storageBuffer8BitAccess;
+		f12.uniformAndStorageBuffer8BitAccess = s12.uniformAndStorageBuffer8BitAccess;
+		f13.shaderIntegerDotProduct = s13.shaderIntegerDotProduct;
+		f13.maintenance4 = s13.maintenance4;
+		f2.features.shaderStorageImageWriteWithoutFormat = deviceFeatures.shaderStorageImageWriteWithoutFormat;
+		f2.features.shaderStorageImageReadWithoutFormat = deviceFeatures.shaderStorageImageReadWithoutFormat;
+		f2.features.shaderStorageImageExtendedFormats = deviceFeatures.shaderStorageImageExtendedFormats;
+		f2.features.shaderImageGatherExtended = deviceFeatures.shaderImageGatherExtended;
+		f11.pNext = f2.pNext, f2.pNext = &f11;
+		if (sDer.computeDerivativeGroupQuads || sDer.computeDerivativeGroupLinear) {
+			fDer.computeDerivativeGroupQuads = sDer.computeDerivativeGroupQuads;
+			fDer.computeDerivativeGroupLinear = sDer.computeDerivativeGroupLinear;
+			fDer.pNext = f2.pNext, f2.pNext = &fDer;
+			derivatives = true;
+		}
+	}
 
 	std::vector<const char*> devExt;
 	if (!offscreen) devExt.push_back (VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 	if (coherent && sCoh.deviceCoherentMemory) devExt.push_back (VK_AMD_DEVICE_COHERENT_MEMORY_EXTENSION_NAME);
+	if (derivatives) devExt.push_back (VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME);
+	if (coopMatrix) devExt.push_back (VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+#ifdef VK_EXT_SHADER_FLOAT8_EXTENSION_NAME
+	if (float8) devExt.push_back (VK_EXT_SHADER_FLOAT8_EXTENSION_NAME);
+#endif
 	if (rayTracing) {
 		devExt.push_back (VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
 		devExt.push_back (VK_KHR_RAY_QUERY_EXTENSION_NAME);

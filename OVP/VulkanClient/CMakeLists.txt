@@ -216,6 +216,7 @@ add_library(VulkanClient SHARED
 	Fracture.cpp
 	EnvProbe.cpp
 	Fsr.cpp
+	Fsr4.cpp
 	GfxSettings.cpp
 	StarSphere.cpp
 	GalaxySky.cpp
@@ -291,6 +292,18 @@ if(ORBITER_VK_FSR)
 	if(FFX_FOUND)
 		target_link_libraries(VulkanClient PRIVATE ffx_fsr3_vk)
 		target_compile_definitions(VulkanClient PRIVATE VKC_HAVE_FSR=1)
+		# AMD FSR 4, opt-in (its loader and AMD's DLLs: ffx/Fsr4.cmake)
+		option(ORBITER_VK_FSR4 "Build AMD FSR 4 (run from AMD's Windows DLLs) into the Vulkan client" ON)
+		if(ORBITER_VK_FSR4)
+			include(ffx/Fsr4.cmake)
+			if(FSR4_FOUND)
+				target_compile_definitions(VulkanClient PRIVATE VKC_HAVE_FSR4=1
+					VKC_FSR4_LOADER_DLL_SHA256="${FSR4_LOADER_DLL_SHA256}" VKC_FSR4_UPSCALER_DLL_SHA256="${FSR4_UPSCALER_DLL_SHA256}")
+				target_include_directories(VulkanClient PRIVATE ${FSR4_INCLUDE_DIRS})
+				target_link_libraries(VulkanClient PRIVATE ${CMAKE_DL_LIBS})
+				add_dependencies(VulkanClient ffx_vk_linux)
+			endif()
+		endif()
 	endif()
 endif()
 

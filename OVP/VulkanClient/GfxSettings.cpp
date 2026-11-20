@@ -49,7 +49,7 @@ namespace {
 		return kv;
 	}
 
-	const char *AA_CHOICES[] = { "Off", "Multisampling (4\xC3\x97)", "Temporal (TAA)", "AMD FSR 3" };
+	const char *AA_CHOICES[] = { "Off", "Multisampling (4\xC3\x97)", "Temporal (TAA)", "AMD FSR 3", "AMD FSR 4 (experimental)" };
 	const char *SKY_CHOICES[] = { "Realistic", "Enhanced" };
 	const char *SMOKE_CHOICES[] = { "Sprites", "Screen-space", "Volumetric" };
 	const char *FIREBALL_CHOICES[] = { "Sprites", "Volumetric", "Volumetric, full resolution" };
@@ -97,8 +97,8 @@ const std::vector<GfxSettings::Item> &GfxSettings::Items ()
 	const char *G1 = "Anti-aliasing and resolution", *G2 = "Lighting", *G3 = "Effects", *G4 = "Sky";
 
 	Item aa{ "AntiAliasing", GRAPHICS_CFG, "ORBITER_VK_TAA", G1, "Anti-aliasing",
-		"Smooths jagged edges. FSR 3 also upscales the scene from a lower render resolution.", T::CHOICE, T::NEXT_SESSION };
-	aa.i = &GfxSettings::antiAliasing, aa.nchoice = 4, aa.choice = AA_CHOICES;
+		"Smooths jagged edges. FSR 3 and FSR 4 also upscale the scene from a lower render resolution. FSR 4 (AMD Radeon RX 6000 and later) runs from AMD's Windows library through a loader: experimental; where it does not start, FSR 3 is used.", T::CHOICE, T::NEXT_SESSION };
+	aa.i = &GfxSettings::antiAliasing, aa.nchoice = 5, aa.choice = AA_CHOICES;
 	items.push_back (aa);
 	items.push_back (slider ("RenderScale", "ORBITER_VK_RENDER_SCALE", G1, "Render resolution",
 		"The 3D scene is rendered at this share of the window's size and upscaled. Lower is faster.",
@@ -215,8 +215,8 @@ void GfxSettings::Load ()
 			for (int c = 0; c < it.nchoice; c++)
 				if (Same (s, it.choice[c])) return (float)c;
 			if (!strcmp (it.key, "AntiAliasing")) { // (short names)
-				static const char *names[] = { "off", "msaa", "taa", "fsr" };
-				for (int c = 0; c < 4; c++) if (Same (s, names[c])) return (float)c;
+				static const char *names[] = { "off", "msaa", "taa", "fsr", "fsr4" };
+				for (int c = 0; c < 5; c++) if (Same (s, names[c])) return (float)c;
 			}
 			if (!strcmp (it.key, "SmokeRendering")) { // (ORBITER_VK_SMOKE's words)
 				static const char *names[] = { "sprites", "screen", "volume" };
@@ -249,7 +249,7 @@ void GfxSettings::Load ()
 		if (!strcmp (it.key, "AntiAliasing")) {
 			if (EnvTaa () < 0 && EnvMsaa () < 0 && !EnvUpscaler ()) continue;
 			// (as before the settings: temporal anti-aliasing unless ORBITER_VK_TAA=0,
-			// then 4x multisampling unless ORBITER_VK_MSAA; FSR 3 unless ORBITER_VK_UPSCALER=taa)
+			// then 4x multisampling unless ORBITER_VK_MSAA; FSR 3 unless ORBITER_VK_UPSCALER=taa, FSR 4 with =fsr4)
 			locked[n] = EnvTaa () >= 0 ? "ORBITER_VK_TAA" : EnvMsaa () > 0 ? "ORBITER_VK_MSAA" : "ORBITER_VK_UPSCALER";
 			int t = EnvTaa (), m = EnvMsaa ();
 			const char *u = EnvUpscaler ();
@@ -257,7 +257,8 @@ void GfxSettings::Load ()
 			lockTaa = t != 0;
 			lockSamples = m > 0 ? m : t == 0 ? 4 : 1;
 			lockFsr = lockTaa && lockSamples == 1 && !(u && !strcmp (u, "taa"));
-			antiAliasing = lockSamples > 1 ? AA_MSAA : !lockTaa ? AA_OFF : lockFsr ? AA_FSR : AA_TAA;
+			lockFsr4 = lockFsr && u && !strcmp (u, "fsr4");
+			antiAliasing = lockSamples > 1 ? AA_MSAA : !lockTaa ? AA_OFF : lockFsr4 ? AA_FSR4 : lockFsr ? AA_FSR : AA_TAA;
 			continue;
 		}
 		const char *e = it.env ? getenv (it.env) : nullptr;
@@ -284,7 +285,7 @@ void GfxSettings::Save () const
 		char buf[64];
 		if (it.type == GraphicsSetting::TOGGLE) return v[n] != 0.0f ? "TRUE" : "FALSE";
 		if (it.type == GraphicsSetting::CHOICE) {
-			if (!strcmp (it.key, "AntiAliasing")) { static const char *names[] = { "Off", "MSAA", "TAA", "FSR" }; return names[(int)v[n]]; }
+			if (!strcmp (it.key, "AntiAliasing")) { static const char *names[] = { "Off", "MSAA", "TAA", "FSR", "FSR4" }; return names[std::clamp ((int)v[n], 0, 4)]; }
 			return it.choice[(int)v[n]];
 		}
 		snprintf (buf, sizeof(buf), "%g", v[n]);
@@ -344,7 +345,7 @@ void GfxSettings::Save () const
 	}
 }
 
-const std::vector<GraphicsSetting> &GfxSettings::List (bool hardwareRT, bool fsr)
+const std::vector<GraphicsSetting> &GfxSettings::List (bool hardwareRT, bool fsr, bool fsr4)
 {
 	const auto &items = Items ();
 	std::vector<float> v = Values ();
@@ -364,14 +365,15 @@ const std::vector<GraphicsSetting> &GfxSettings::List (bool hardwareRT, bool fsr
 		s.lockedBy = n < locked.size () && locked[n].size () ? locked[n].c_str () : nullptr;
 		s.requires = it.requires;
 		if (it.rt && !hardwareRT) s.unavailable = "Needs a graphics card with hardware ray tracing";
-		if (!strcmp (it.key, "AntiAliasing") && !fsr) {
-			s.nchoice = 3; // (FSR 3 is not built in)
-			s.value = std::min (s.value, 2.0f), s.effective = std::min (s.effective, 2.0f);
+		if (!strcmp (it.key, "AntiAliasing") && !(fsr && fsr4)) {
+			s.nchoice = fsr ? 4 : 3; // (FSR 4 is not installed; FSR 3 is not built in)
+			float top = (float)(s.nchoice - 1);
+			s.value = std::min (s.value, top), s.effective = std::min (s.effective, top);
 		}
 		if (SceneSamples () > 1 && (!strcmp (it.key, "Reflections") || !strcmp (it.key, "HeatShimmer")))
 			s.unavailable = "Not with multisampling";
 		if (!strcmp (it.key, "RenderScale") && !TemporalAA ())
-			s.unavailable = "Needs temporal anti-aliasing or FSR 3 to upscale";
+			s.unavailable = "Needs temporal anti-aliasing or FSR to upscale";
 	}
 	return list;
 }
