@@ -301,6 +301,7 @@ Atlantis::~Atlantis ()
 	delete plop;
 	int i;
 	for (i = 0; i < 6; i++) delete rms_anim[i];
+	for (i = 0; i < 6; i++) delete ssme_anim[i];
 }
 
 // --------------------------------------------------------------
@@ -342,11 +343,20 @@ void Atlantis::CreateSSME()
 	th_main[1] = CreateThruster (THRUSTREF_SSME1, THRUSTGIMBAL_LAUNCH, ORBITER_MAIN_THRUST, NULL, ORBITER_MAIN_ISP0, ORBITER_MAIN_ISP1);
 	th_main[2] = CreateThruster (THRUSTREF_SSME2, THRUSTGIMBAL_LAUNCH, ORBITER_MAIN_THRUST, NULL, ORBITER_MAIN_ISP0, ORBITER_MAIN_ISP1);
 	thg_main = CreateThrusterGroup (th_main, 3, THGROUP_MAIN);
-	gimbal_pos = THRUSTGIMBAL_LAUNCH; // the initial pitch gimbal setting positions the SSMEs to cancel pitch moment in launch configuration
+	// the initial pitch gimbal setting positions the SSMEs to cancel pitch moment in launch
+	// configuration (gimbal_pos holds angles: pitch, yaw, roll [rad]; it held the thrust's
+	// direction vector before, so the first gimbal steps started from 2.3 deg of yaw and a
+	// roll the SRBs' limit cut to 8 deg)
+	gimbal_pos = _V(THRUSTPITCH_LAUNCH, 0, 0);
 
+	// each exhaust from its nozzle's exit, along the nozzle's axis, as the mesh is gimballed
+	// (SetSSMEMeshes), not from the thrust's reference point inside the bell
 	SURFHANDLE tex_main = oapiRegisterExhaustTexture ((char*)"Exhaust_atsme");
-	for (int i = 0; i < 3; i++)
-		AddExhaust (th_main[i], 30.0, 2.0, tex_main);
+	for (int i = 0; i < 3; i++) {
+		ssme_exh_pos[i] = SSME_EXIT0[i], ssme_exh_dir[i] = SSME_AXIS0[i];
+		EXHAUSTSPEC es = { th_main[i], NULL, &ssme_exh_pos[i], &ssme_exh_dir[i], 30.0, 2.0 * SSME_EXIT_RADIUS, 0.0, 0.0, tex_main, 0 };
+		AddExhaust (&es);
+	}
 }
 
 // --------------------------------------------------------------
@@ -790,22 +800,19 @@ void Atlantis::DefineAnimations (void)
 	anim_arm_wr = CreateAnimation (0.5);
 	hAC_arm = AddAnimationComponent (anim_arm_wr, 0, 1, rms_anim[5], parent);
 
-	// ***** 9. SSME pitch gimbal animations
-	double init_gimbal = -10*RAD;
-	float max_gimbal = (float)(-0.2*PI);
-	anim_ssme = CreateAnimation (init_gimbal/max_gimbal);
-
-	static UINT SSMEL_Grp = GRP_SSMEL;
-	ssme_anim[0] = new MGROUP_ROTATE (midx, &SSMEL_Grp, 1, _V(-1.55,-0.37,-12.5), _V(-1,0,0), max_gimbal);
-	AddAnimationComponent (anim_ssme, 0, 1, ssme_anim[0]);
-
-	static UINT SSMER_Grp = GRP_SSMER;
-	ssme_anim[1] = new MGROUP_ROTATE (midx, &SSMER_Grp, 1, _V( 1.55,-0.37,-12.5), _V(-1,0,0), max_gimbal);
-	AddAnimationComponent (anim_ssme, 0, 1, ssme_anim[1]);
-
-	static UINT SSMET_Grp = GRP_SSMET;
-	ssme_anim[2] = new MGROUP_ROTATE (midx, &SSMET_Grp, 1, _V(0.0,  2.7, -12.5), _V(-1,0,0), max_gimbal);
-	AddAnimationComponent (anim_ssme, 0, 1, ssme_anim[2]);
+	// ***** 9. SSME gimbal animations: each engine's pitch (its own: the roll
+	// gimbal pitches the lower two apart), and yaw (all alike) within it
+	// (the mesh as stored is at SSME_REST_PITCH)
+	static UINT SSME_Grp[3] = { GRP_SSMEL, GRP_SSMER, GRP_SSMET };
+	for (int i = 0; i < 3; i++) {
+		anim_ssme_p[i] = CreateAnimation ((SSME_REST_PITCH-SSME_PITCH_MIN)/(SSME_PITCH_MAX-SSME_PITCH_MIN));
+		ssme_anim[i] = new MGROUP_ROTATE (midx, &SSME_Grp[i], 1, SSME_PIVOT[i], _V(-1,0,0), (float)(SSME_PITCH_MAX-SSME_PITCH_MIN));
+		ANIMATIONCOMPONENT_HANDLE hp = AddAnimationComponent (anim_ssme_p[i], 0, 1, ssme_anim[i]);
+		if (!i) anim_ssme_y = CreateAnimation (0.5);
+		ssme_anim[3+i] = new MGROUP_ROTATE (midx, &SSME_Grp[i], 1, SSME_PIVOT[i], _V(0,-1,0), (float)(2.0*SSME_ANIM_YAW));
+		AddAnimationComponent (anim_ssme_y, 0, 1, ssme_anim[3+i], hp);
+	}
+	SetSSMEPosition (gimbal_pos.x/SSME_ANIM_PITCH); // (the nozzles where the thrust points)
 
 	// ======================================================
 	// VC animation definitions
@@ -1036,7 +1043,6 @@ double Atlantis::GetSRBThrustLevel (int which)
 
 void Atlantis::SetSSMEGimbal (const VECTOR3 &angle)
 {
-	const double pitch_gimbal_max = -0.2*PI;
 	VECTOR3 dir;
 
 	dir.x = -sin(angle.y);        // yaw gimbal
@@ -1052,7 +1058,13 @@ void Atlantis::SetSSMEGimbal (const VECTOR3 &angle)
 	dir.z = sqrt(1.0-dir.x*dir.x-dir.y*dir.y);
 	SetThrusterDir (th_main[2], dir); // top SSME
 
-	SetSSMEPosition (gimbal_pos.x/pitch_gimbal_max);
+	// the nozzles (and their exhausts) as the thrust: each engine's pitch, the yaw
+	double pitch[3];
+	for (int i = 0; i < 3; i++) {
+		GetThrusterDir (th_main[i], dir);
+		pitch[i] = asin (dir.y);
+	}
+	SetSSMEMeshes (pitch, -asin (dir.x));
 }
 
 // --------------------------------------------------------------
@@ -1321,7 +1333,31 @@ void Atlantis::SetKuAntennaPosition (double pos)
 
 void Atlantis::SetSSMEPosition (double pos)
 {
-	SetAnimation (anim_ssme, pos);
+	const double p = pos*SSME_ANIM_PITCH;
+	const double pitch[3] = { p, p, p };
+	SetSSMEMeshes (pitch, 0.0);
+}
+
+// --------------------------------------------------------------
+// The SSME nozzles' meshes gimballed (each turned about its pivot: by the
+// yaw, then by its pitch from the mesh's rest), and the exhausts with them
+// --------------------------------------------------------------
+void Atlantis::SetSSMEMeshes (const double pitch[3], double yaw)
+{
+	yaw = max (-SSME_ANIM_YAW, min (SSME_ANIM_YAW, yaw));
+	// (the rotations as MGROUP_ROTATE applies them: Rodrigues about its axis)
+	auto rot = [](const VECTOR3 &v, const VECTOR3 &k, double a) {
+		return v*cos(a) + crossp (k, v)*sin(a) + k*(dotp (k, v)*(1.0-cos(a)));
+	};
+	SetAnimation (anim_ssme_y, 0.5 + yaw/(2.0*SSME_ANIM_YAW));
+	for (int i = 0; i < 3; i++) {
+		const double p = max (SSME_PITCH_MIN, min (SSME_PITCH_MAX, pitch[i]));
+		SetAnimation (anim_ssme_p[i], (p-SSME_PITCH_MIN)/(SSME_PITCH_MAX-SSME_PITCH_MIN));
+		const double a = p - SSME_REST_PITCH;
+		const VECTOR3 &c = SSME_PIVOT[i];
+		ssme_exh_pos[i] = c + rot (rot (SSME_EXIT0[i]-c, _V(0,-1,0), yaw), _V(-1,0,0), a);
+		ssme_exh_dir[i] = rot (rot (SSME_AXIS0[i], _V(0,-1,0), yaw), _V(-1,0,0), a);
+	}
 }
 
 void Atlantis::OperateLandingGear (AnimState::Action action)

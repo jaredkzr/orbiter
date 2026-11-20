@@ -161,6 +161,21 @@ const VECTOR3 THRUSTREF_SRB        = { 0.0,  0.0, -20.4};
 const double THRUSTPITCH_LAUNCH = -2.3*RAD;
 const VECTOR3 THRUSTGIMBAL_LAUNCH = {0, sin(THRUSTPITCH_LAUNCH), cos(THRUSTPITCH_LAUNCH)};
 
+// The SSME nozzles (left, right, top: th_main's order) as the orbiter mesh has
+// them, at a pitch gimbal of SSME_REST_PITCH: gimbal pivots (the thrusters'
+// reference points), the centres of the nozzles' exits and their axes as
+// thrust directions (from the bells' vertices: the lower two at 9.1 deg, the
+// top one at 12.9 deg), the exits' radius [m]
+const double SSME_REST_PITCH = -10.0*RAD;
+const VECTOR3 SSME_PIVOT[3] = { THRUSTREF_SSME0, THRUSTREF_SSME1, THRUSTREF_SSME2 };
+const VECTOR3 SSME_EXIT0[3] = { {-1.546,-0.029,-14.735}, { 1.465,-0.029,-14.735}, {-0.041, 2.973,-13.980} };
+const VECTOR3 SSME_AXIS0[3] = { { 0.0057,-0.1585, 0.9873}, {-0.0057,-0.1585, 0.9873}, { 0.0,   -0.2236, 0.9747} };
+const double SSME_EXIT_RADIUS = 1.2;
+// (the nozzles' animations: pitch over SSME_PITCH_MIN..MAX [rad], yaw +-SSME_ANIM_YAW [rad])
+const double SSME_PITCH_MIN = -40.0*RAD, SSME_PITCH_MAX = 20.0*RAD;
+const double SSME_ANIM_PITCH = -0.2*PI; // (SetSSMEPosition's scale: pos = pitch / SSME_ANIM_PITCH)
+const double SSME_ANIM_YAW = 10.0*RAD;
+
 const VECTOR3 THRUSTDIR_OMSL = { 0.19299542, -0.24495572, 0.95013129};
 const VECTOR3 THRUSTDIR_OMSR = {-0.19299542, -0.24495572, 0.95013129};
 
@@ -287,7 +302,10 @@ public:
 	void SetRadiatorPosition (double pos);
 	void SetRadLatchPosition (double pos) {}
 	void SetKuAntennaPosition (double pos);
-	void SetSSMEPosition (double pos);
+	void SetSSMEPosition (double pos); // (all three nozzles pitched alike: pos = pitch / -36 deg)
+	/// The SSME nozzles' meshes and exhausts at a gimbal: each engine's thrust
+	/// pitch [rad] (asin of its direction's y), the common yaw [rad] (asin of -x)
+	void SetSSMEMeshes (const double pitch[3], double yaw);
 	void OperateLandingGear (AnimState::Action action);
 	void RevertLandingGear ();
 	void OperateSpeedbrake (AnimState::Action action);
@@ -424,7 +442,8 @@ private:
 	UINT anim_raileron;						   // handle for right aileron animation
 	UINT anim_rudder;						   // handle for rudder animation
 	UINT anim_spdb;                            // handle for speed brake animation
-	UINT anim_ssme;                            // handle for SSME pitch gimbal animation
+	UINT anim_ssme_p[3], anim_ssme_y;          // handles for the SSMEs' pitch gimbal animations (each engine) and yaw (all)
+	VECTOR3 ssme_exh_pos[3], ssme_exh_dir[3];  // the SSME exhausts: each nozzle's exit and axis (thrust direction), as gimballed
 	UINT mesh_orbiter;                         // index for orbiter mesh
 	UINT mesh_cockpit;                         // index for cockpit mesh for external view
 	UINT mesh_vc;                              // index for virtual cockpit mesh
@@ -438,7 +457,7 @@ private:
 	// RMS arm animation status
 	ANIMATIONCOMPONENT_HANDLE hAC_arm, hAC_sat, hAC_satref;
 	MGROUP_TRANSFORM *rms_anim[6];
-	MGROUP_TRANSFORM *ssme_anim[3];
+	MGROUP_TRANSFORM *ssme_anim[6];            // (pitch 0-2, yaw 3-5)
 	UINT anim_arm_sy, anim_arm_sp, anim_arm_ep, anim_arm_wp, anim_arm_wy, anim_arm_wr;
 	double arm_sy, arm_sp, arm_ep, arm_wp, arm_wy, arm_wr;
 	double launchelev;                         // elevation of launch stack on the ground [m]
