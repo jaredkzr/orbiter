@@ -37,14 +37,14 @@ namespace {
 		{ "plasma",       5e3,   { 0.55f, 0.62f, 1.0f }, 1.4f, { 0.85f, 0.8f, 1.0f }, 4.0f, { 0.8f, 0.55f, 1.0f }, 0.6f, 0.0f,  0.6f, 0.5f, 60.0f,
 		                  { 0, 0, 0 },              0.0f,  0.0f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f, 0.0f },
 		{ "hydrolox",     2e4,   { 0.45f, 0.55f, 1.0f }, 0.35f, { 1.0f, 0.82f, 0.7f }, 5.0f, { 1.0f, 0.55f, 0.3f }, 0.3f, 0.0f,  0.4f, 0.6f, 50.0f,
-		                  { 0.96f, 0.96f, 0.96f },  0.30f, 12.0f, 0.4f, 0.9f, 0.25f, 1.0f, 20.0f, 120.0f },
+		                  { 0.96f, 0.96f, 0.96f },  0.30f, 12.0f, 0.4f, 0.9f, 0.25f, 1.0f, 20.0f, 120.0f, { 0, 0, 0 }, 0.9f },
 		{ "methalox",     4e4,   { 0.40f, 0.50f, 1.0f }, 0.6f, { 0.9f, 0.75f, 1.0f }, 5.0f, { 1.0f, 0.5f, 0.2f },  0.8f, 0.0f,  0.5f, 0.7f, 45.0f,
 		                  { 0.95f, 0.95f, 0.95f },  0.22f, 10.0f, 0.5f, 0.95f, 0.2f, 0.9f, 40.0f, 150.0f },
 		{ "kerolox",      7e4,   { 1.0f, 0.62f, 0.25f }, 2.5f, { 1.0f, 0.85f, 0.6f }, 5.0f, { 1.0f, 0.45f, 0.12f }, 4.0f, 0.02f, 0.35f, 1.0f, 40.0f,
 		                  { 0.58f, 0.49f, 0.40f },  0.45f, 10.0f, 0.6f, 0.95f, 0.5f, 0.7f, 150.0f, 150.0f },
 		{ "hypergolic",   3e4,   { 1.0f, 0.58f, 0.45f }, 0.9f, { 1.0f, 0.75f, 0.6f }, 3.0f, { 1.0f, 0.5f, 0.3f },  1.2f, 0.01f, 0.5f, 0.7f, 45.0f,
 		                  { 0.74f, 0.50f, 0.32f },  0.40f, 12.0f, 0.3f, 0.9f, 0.4f, 0.0f, 60.0f, 150.0f },
-		{ "solid",        7e4,   { 1.0f, 0.94f, 0.82f }, 6.0f, { 1.0f, 0.9f, 0.7f }, 4.0f, { 1.0f, 0.65f, 0.3f }, 6.0f, 0.25f, 0.6f, 1.2f, 35.0f,
+		{ "solid",        7e4,   { 1.0f, 0.94f, 0.82f }, 6.0f, { 0, 0, 0 },          0.0f, { 1.0f, 0.65f, 0.3f }, 6.0f, 0.25f, 0.6f, 1.2f, 35.0f,
 		                  { 0.95f, 0.95f, 0.93f },  0.85f, 40.0f, 0.0001f, 0.03f, 1.0f, 0.0f, 300.0f, 200.0f, { 1.0f, 0.48f, 0.14f } },
 		// (hypergolic attitude thrusters: a narrow yellow-orange cone, after
 		// photographs of the Shuttle's and Dragon's RCS; a brief puff of
@@ -227,7 +227,7 @@ PlumeOverride PlumeConfig::Get (VESSEL *v, unsigned idx)
 struct PlumeRenderer::Params { // plume.glsl
 	float toLocal[16]; // view -> plume space [m]: z along the flow, origin at the nozzle exit
 	float shape[4];    // exit radius [m], length, jet radius after the exit (expansion), spread (tan of the half angle)
-	float shape2[4];   // shock cell spacing, shock diamond strength, -, -
+	float shape2[4];   // shock cell spacing, shock diamond strength, attitude thruster cone (1), cells of the diamonds' fade
 	float core[4];     // core emission (rgb), vacuum fraction
 	float diamond[4];  // shock diamond emission (rgb), spread of the mixing layer
 	float outer[4];    // afterburning emission (rgb), -
@@ -762,7 +762,11 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 	len *= COLLAPSE_MIN + (1.0 - COLLAPSE_MIN) * sqrt (std::min (1.0, delivered / COLLAPSE_KNEE));
 	double cell = 2.6 * rj;
 	double lk = (log (k) - log (0.6)) / 1.3;
-	double diamonds = exp (-lk * lk) * (1.0 - vac);
+	// (none where the class draws none: a solid motor's exhaust, a third
+	// of it glowing alumina by mass, is opaque - photographs of the
+	// Shuttle's SRBs show a smooth flame from the nozzle, no Mach discs, and
+	// no cells' bulges in its envelope either)
+	double diamonds = c.diamondBrightness > 0.0f ? exp (-lk * lk) * (1.0 - vac) : 0.0;
 	double bright = p.level * p.brightness * p.flicker * (1.0 + (c.vacuumBrightness - 1.0) * vac);
 
 	// plume frame (view space)
@@ -898,6 +902,7 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 	memcpy (pc.shape, sh, sizeof(sh));
 	pc.shape2[0] = (float)cell, pc.shape2[1] = (float)diamonds;
 	pc.shape2[2] = attitude ? 1.0f : 0.0f;
+	pc.shape2[3] = c.cellDecay > 0.0f ? c.cellDecay : 2.5f;
 	for (int i = 0; i < 3; i++) {
 		pc.core[i] = (float)(c.core[i] * c.coreBrightness * bright);
 		pc.diamond[i] = (float)(c.diamond[i] * c.diamondBrightness * bright);
@@ -936,12 +941,16 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 		// emission of the core (half of its peak, cooling along the flame),
 		// the afterburning and the shock diamonds. (Meeting a surface: the
 		// last point by the bright spot there)
+		// (over its hottest part, at most some 25 exit radii: a booster's length
+		// for the Shuttle's SRBs, whose flame at sea level is drawn far
+		// longer - lit by all of it, the orbiter's side turned peach in sunlight)
+		const double zLit = std::min (zEnd, 25.0);
 		const double zf[3] = { 0.2, 0.5, 0.9 };
 		for (int k = 0; k < 3; k++) {
-			info->lightPos[k] = viewOf (zf[k] * zEnd);
-			info->lightRadius[k] = radiusAt (zf[k] * zEnd) * re;
+			info->lightPos[k] = viewOf (zf[k] * zLit);
+			info->lightRadius[k] = radiusAt (zf[k] * zLit) * re;
 		}
-		double zl = 0.3 * zEnd;
+		double zl = 0.3 * zLit;
 		// (radiance through the jet: about 1.1 times the emission per exit
 		// radius; as a light, scaled to the class's radiance: the drawn one's
 		// at full thrust in sea-level air to it)
@@ -960,7 +969,7 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 			float l = lum (info->lightCol), t = lum (c.lightTint);
 			for (int k = 0; k < 3; k++) info->lightCol[k] = l * c.lightTint[k] / std::max (t, 1e-4f);
 		}
-		info->lightArea = 2.0 * radiusAt (zl) * re * zEnd * re;
+		info->lightArea = 2.0 * radiusAt (zl) * re * zLit * re;
 		for (int k = 0; k < 3; k++)
 			info->radiance[k] = 1.1f * (0.5f * pc.core[k] + 0.35f * pc.outer[k] + (float)(0.05 * diamonds) * pc.diamond[k]);
 		info->endDir = unit (viewOf (zEnd + 0.5) - viewOf (zEnd - 0.5));

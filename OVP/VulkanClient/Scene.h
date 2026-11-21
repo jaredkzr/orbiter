@@ -62,6 +62,7 @@ struct LightSource {
 	double shadowOfs;       // shadow rays start this far along dir (spot light emitters inside the hull)
 	double radius = 0.0;    // a point light's source radius [m] (an extended source: a flame; lights.glsl)
 	double sortRange = 0.0; // its reach for the order of the lights (if above range: the range capped)
+	float smoke = 1.0f;     // the share of its light the smoke takes (a flame: its drawn radiance over its light's; VObjects.cpp)
 };
 constexpr int MAX_LIGHTS = 64; // must match frame.glsl (the nearest; each costs every lit pixel a test: 64 in use ~0.6 ms more than 26 at 1080p, RX 9070 XT)
 /// A base's runway with markings, as the shaders take it (frame.glsl

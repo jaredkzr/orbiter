@@ -16,7 +16,7 @@
 struct PlumeParams { // must match PlumeRenderer::Params
 	mat4 toLocal;  // view -> plume space [m]
 	vec4 shape;    // exit radius [m], length, jet radius after the exit, spread (tan of the half angle)
-	vec4 shape2;   // shock cell spacing, shock diamond strength, attitude thruster cone (1), -
+	vec4 shape2;   // shock cell spacing, shock diamond strength, attitude thruster cone (1), cells over which the diamonds fade (1/e)
 	vec4 core;     // core emission (rgb), vacuum fraction
 	vec4 diamond;  // shock diamond emission (rgb), spread of the mixing layer
 	vec4 outer;    // afterburning emission (rgb), -
@@ -126,7 +126,7 @@ vec4 PlumeMedium (PlumeParams P, vec3 p)
 		float c = x / cell - 0.6;
 		float k = max (floor (c + 0.5), 0.0);
 		float dx = (c - k) * cell;
-		float fade = exp (-k / 2.5) * smoothstep (-0.6, -0.45, c);
+		float fade = exp (-k / P.shape2.w) * smoothstep (-0.6, -0.45, c);
 		float disc = exp (-PlumeSq (dx / (0.07 * cell))) * exp (-PlumeSq (PlumeSq (r / (0.5 * rj))));
 		float tri = 1.0 - abs (2.0 * fract (x / cell + 0.4) - 1.0);
 		float oblique = exp (-PlumeSq ((r - rj * 0.85 * tri) / (0.07 * rj)));
@@ -247,18 +247,44 @@ PlumeLight MarchPlume (PlumeParams P, vec3 lo, vec3 ld, float t0, float t1, int 
 	// 5.7 -> 1.8 ms, plume_vac 4.3 -> 1.2; ORBITER_VK_FRAMETIME=0.016
 	// renders differ by about what another jitter seed gives). Never
 	// fewer than n steps' worth of the ray: long rays were cut short)
+	// Jets with shock cells or meeting a surface (the others: adapt): the
+	// fine steps within the jet's envelope up to some six cells (where the
+	// cells have faded), adaptive in the rest of it and in the gas spread
+	// over the surface, and across the empty box half the distance to where
+	// the medium can begin - the Shuttle's SRB flame drawn its full 120 m at
+	// sea level meets the pad's ground, its box a cube of 180 m each pixel
+	// of which took 192 steps (plumes 0.4 -> 2.4 ms in a view of the pad)
 	bool adapt = adaptive && PlumeAdaptive (P); // (then n: the most steps)
+	bool tail = adaptive && !adapt;
 	bool att = P.shape2.z > 0.5;
 	float dtMin = max (0.3 * stepScale, (t1 - t0) / float (n)); // (n steps reach t1)
+	float dtFine = (t1 - t0) / float (n), xCells = 6.0 * P.shape2.x;
 	float tc = t0;
 	for (int i = 0; i < n; i++) {
-		if (adapt) {
+		if (adapt || tail) {
 			if (tc >= t1) break;
-			float x = max ((lo + ld * tc).z, 0.0);
+			vec3 pc = lo + ld * tc;
+			float x = max (pc.z, 0.0);
 			float R = att ? 1.0 + x * P.shape.w : 1.0 + (P.shape.z - 1.0) * (1.0 - exp (-0.8 * x)) + x * P.shape.w;
-			dt = min (clamp (0.25 * stepScale * R, dtMin, max (1.5 * stepScale, dtMin)), t1 - tc);
+			dt = clamp (0.25 * stepScale * R, dtMin, max (1.5 * stepScale, dtMin));
+			if (tail) {
+				// (the envelope: PlumeMedium's, with room for its bend, widening
+				// past half the length, turbulence and cells; nothing beyond three
+				// times it)
+				float Re = (R + max (0.0, x - 0.5 * P.shape.y) * P.diamond.w) * 1.6;
+				float freeJet = length (pc.xy) - abs (PlumeBend (P, x)) - 3.0 * Re;
+				float free = freeJet;
+				if (P.hit.w > 0.0) {
+					vec3 rel = pc - P.hit.xyz;
+					float h = dot (rel, P.hitN.xyz), rw = length (rel - h * P.hitN.xyz);
+					free = min (free, max (h - 5.0 * (0.3 * P.hitN.w + 0.12 * rw), rw - 2.5 * P.hit2.x));
+				}
+				if (free > 0.0) dt = max (dt, 0.5 * free);
+				else if (freeJet <= 0.0 && x < xCells) dt = dtFine;
+			}
+			dt = min (dt, t1 - tc);
 		}
-		float t = adapt ? tc + jit * dt : t0 + (float (i) + jit) * dt;
+		float t = adapt || tail ? tc + jit * dt : t0 + (float (i) + jit) * dt;
 		tc += dt;
 		vec4 m = PlumeMedium (P, lo + ld * t);
 		float Ts = exp (-m.a * dt);

@@ -2535,6 +2535,7 @@ void Scene::FillFrameUniforms (void *pfu)
 		u.pos[0] = (float)p.x, u.pos[1] = (float)p.y, u.pos[2] = (float)p.z, u.pos[3] = (float)l.range;
 		u.dir[0] = (float)d.x, u.dir[1] = (float)d.y, u.dir[2] = (float)d.z, u.dir[3] = l.spot ? 2.0f : 1.0f;
 		for (int k = 0; k < 3; k++) u.col[k] = l.col[k], u.att[k] = (float)l.att[k];
+		u.col[3] = l.smoke;
 		u.att[3] = l.spot ? (float)cos (0.5 * l.umbra) : (float)l.radius; // (a point light: its source's radius)
 		u.spot[0] = (float)cos (0.5 * l.penumbra);
 		u.spot[1] = (float)l.owner;

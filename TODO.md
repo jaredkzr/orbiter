@@ -95,13 +95,23 @@ the sky black, the flames blown out; the flame's core whiter). Left over:
   peach disc from behind. Framing: the side view.
 - **Ring light**: some 0.3% of sunlight at 4 Saturn radii, under the ambient
   level (1%), which lights a ship in the planet's shadow evenly all round.
-- **Night launch**: the exhaust cloud is lit about evenly across its width
-  (the flame's light points sit along the flame, deep in the trench; a
-  steeper fall-off through the smoke, tried in `LightTransmittance`, was
-  undone by the exposure); the drawn SRB flame is short, the long bright
-  column is lit smoke.
+- **Night launch smoke** (2026-11-20, `out/showcase-shots/plume`): done -
+  the stripes over the smoke (the erosion noise's trilinear lattice, now a
+  mip coarser), the SRB flame drawn 120 m at sea level as in photographs,
+  the smoke taking only the flame's drawn share of its light (it was lit 60
+  times brighter than the flame: white for 250 m), billows of some 30 m
+  shaded towards the flame at night, no shock cells in solid motors' flames
+  and the SSMEs' fading after the first disc, the plume march skipping
+  empty space (the long flame meeting the pad: 2.4 -> 0.9 ms). Left over:
+  the ground cloud stays softer than photographs' cauliflower (not the
+  grid's resolution: 320 x 180 tried, no gain - the puffs' soft profiles
+  and the half-resolution march); a cellular pattern of some 15 px in the
+  SRB flame's far part (the plume's afterburning noise; photographs show
+  streaks at its edges); stars behind a launch exposed for its flames; a
+  herringbone pattern on the pad's ground under the smoke (not the smoke's
+  noise; shown since the smoke is no longer white); the SSMEs' faint blue
+  column at night (lost in the SRBs' glow and steam in photographs).
 - Not yet looked at: the reentry plasma's radial streaks and hard lower
-  edge; the night launch's blocky smoke edges, dotted catenary wires and
-  shard-like reflections; the Delta-glider's virtual cockpit HUD combiner (an
-  opaque green panel at night); the Delta-glider's black nozzle interiors;
-  the Shuttle's evenly beaded shock diamonds.
+  edge; the night launch's dotted catenary wires and shard-like
+  reflections; the Delta-glider's virtual cockpit HUD combiner (an opaque
+  green panel at night); the Delta-glider's black nozzle interiors.

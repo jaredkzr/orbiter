@@ -70,6 +70,10 @@ struct PlumeClass {
 	// gold-orange in photographs, while the flame itself, blown out, looks
 	// near white
 	float lightTint[3];
+	// the shock cells over which the diamonds fade by 1/e (0: 2.5): the
+	// Shuttle's SSMEs at sea level show the first Mach disc bright, the next
+	// faint, and no more (photographs of launches); they were evenly beaded
+	float cellDecay;
 };
 
 /// where a plume's flame ends and what it meets (PlumeRenderer::Add)

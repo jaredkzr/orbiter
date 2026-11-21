@@ -16,6 +16,7 @@ layout(local_size_x = 8, local_size_y = 8) in;
 
 #include "particle_common.glsl"
 #include "smokevol.glsl"
+#include "lights.glsl"
 layout(set = 0, binding = 4) uniform sampler2D prepass;       // view depth (w; 0: none)
 layout(set = 0, binding = 17) uniform sampler3D volTex;       // light (rgb), extinction (a)
 layout(set = 0, binding = 18) uniform sampler2D volColumnsTex;
@@ -27,10 +28,14 @@ layout(set = 0, binding = 40, rg16f) uniform writeonly image2D marchDepth;  // t
 // the erosion noise: smooth tiling gradient noise (64^3, 4 and 8 cells a
 // tile, with mips: Particles.cpp SmokeNoise), sampled at the level of the
 // pixels' footprint (fp: a pixel in noise units; k: the octave's
-// frequency) — no creases, no aliasing of octaves finer than the pixels
+// frequency) — no creases, no aliasing of octaves finer than the pixels.
+// A texel of two pixels: at one, the trilinear filter's lattice (its kinks
+// at the texels), the same in every ray of a narrow view, beat with the
+// rays as fine diagonal stripes over the smoke (not 8-bit steps: 16 bits
+// changed nothing)
 layout(set = 0, binding = 44) uniform sampler3D smokeNoise;
 const float SMOKE_NOISE_TEXELS = 64.0, SMOKE_NOISE_CELLS = 8.0;
-float EroNoise (vec3 w, float fp, float k) { return textureLod (smokeNoise, w * k, max (log2 (fp * k * SMOKE_NOISE_TEXELS), 0.0)).r; }
+float EroNoise (vec3 w, float fp, float k) { return textureLod (smokeNoise, w * k, max (log2 (fp * k * SMOKE_NOISE_TEXELS) + 1.0, 0.0)).r; }
 // (an octave fades to its mean once a pixel covers a good part of its finest cells)
 float OctaveWeight (float fp, float k) { return 1.0 - smoothstep (0.3, 1.0, fp * k * SMOKE_NOISE_CELLS); }
 
@@ -85,7 +90,14 @@ void main ()
 	float ds = (s1 - s0) / float (N);
 	// (towards the sun in noise units: the billows' lit tops and shaded
 	// undersides, from the noise's gradient that way)
-	vec3 sunN = NoiseFrame (v2g * frame.sunDir.xyz) * 0.06;
+	vec3 sunG = v2g * frame.sunDir.xyz;
+	// (at night the brightest flame's: its light share at each sample, the
+	// direction blended from the sun's to the flame's - lit by the flames,
+	// the billows facing them bright, the far sides dark, as in photographs
+	// of night launches; the cloud was evenly lit)
+	int fa = int (frame.lightCount.y), fb = int (frame.lightCount.z);
+	vec3 flameP = fa >= 0 ? (fb >= 0 ? 0.5 * (frame.lights[fa].pos.xyz + frame.lights[fb].pos.xyz) : frame.lights[fa].pos.xyz) : vec3 (0.0);
+	const vec3 LUM = vec3 (0.2126, 0.7152, 0.0722);
 	for (int i = 0; i < N; i++) {
 		float sa = s0 + (float (i) + jit) * ds;
 		float z0 = VolDepth (s0 + float (i) * ds), z1 = min (VolDepth (s0 + float (i + 1) * ds), zEnd);
@@ -117,14 +129,36 @@ void main ()
 			float f1 = OctaveWeight (fp, 1.0), f3 = OctaveWeight (fp, 3.0);
 			float n1 = mix (0.476, EroNoise (w, fp, 1.0), f1);
 			float n = n1 * 0.6 + mix (0.476, EroNoise (w, fp, 3.0), f3) * 0.4;
+			// (and lobes of some 30 m, a quarter of the frequency: a cloud
+			// hundreds of metres across seen from kilometres away, whose finer
+			// octaves have faded to their mean, still billows - it was a smooth
+			// blob. By its deviation from the mean: the contrast kept)
+			float fc = OctaveWeight (fp, 0.25);
+			float nc = mix (0.476, EroNoise (w, fp, 0.25), fc);
+			n += (nc - 0.476) * 0.9;
 			uint dbg = uint (pc.vol.z) >> 4; // (debugging: 1 no billow shading, 2 octave 1 only, 4 no density modulation, 8 no erosion)
 			if ((dbg & 2u) != 0u) n = n1;
 			keep = (dbg & 8u) != 0u ? 1.0 : VolKeep (n, textureLod (volCoreTex, vec3 (uv, sa), 0.0).r);
 			// (denser where the noise is: billows inside dense smoke too)
 			sigma = v.a * keep * 1.6 * ((dbg & 4u) != 0u ? 1.0 : 0.4 + 1.2 * n);
 			// (lit tops and shaded undersides of the billows: the noise's
-			// gradient towards the sun)
-			shade = (dbg & 1u) != 0u ? 1.0 : clamp (1.0 + 4.0 * (n1 - mix (0.476, EroNoise (w + sunN, fp, 1.0), f1)) * f1, 0.35, 1.4);
+			// gradient towards the light, of the first octave and of the
+			// coarse one over four times the distance)
+			if ((dbg & 1u) == 0u) {
+				vec3 lg = sunG;
+				if (fa >= 0) {
+					vec3 pv = d * (zs / d.z);
+					LocalLight l = frame.lights[fa];
+					// (its three points about the one taken; the smoke's albedo about 0.9, scattering 0.8)
+					float ef = 3.0 * 0.72 * dot (l.col.rgb, LUM) * l.col.w * LightReach (l, pv);
+					float wf = clamp (ef / max (dot (v.rgb, LUM), 1e-6), 0.0, 1.0);
+					lg = normalize (mix (sunG, v2g * normalize (flameP - pv), wf) + 1e-4);
+				}
+				vec3 lN = NoiseFrame (lg) * 0.06;
+				float g = (n1 - mix (0.476, EroNoise (w + lN, fp, 1.0), f1)) * f1
+					+ 0.9 * (nc - mix (0.476, EroNoise (w + 4.0 * lN, fp, 0.25), fc)) * fc;
+				shade = clamp (1.0 + 7.0 * g, 0.2, 1.6);
+			}
 		}
 		// (crevices between billows, where the noise eats in, are darker)
 		vec3 lk = v.rgb * mix (0.55, 1.05, keep) * shade;

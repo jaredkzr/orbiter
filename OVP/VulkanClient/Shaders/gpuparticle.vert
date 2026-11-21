@@ -207,7 +207,7 @@ void main ()
 		if (l.dir.w > 2.5) { amb += l.col.rgb * 0.8; continue; } // (a star: from afar)
 		float la = LightReach (l, pos, ext2);
 		if (la <= 0.0) continue;
-		vec3 e = l.col.rgb * (0.8 * la);
+		vec3 e = l.col.rgb * (0.8 * la * l.col.w);
 		float el = dot (e, vec3 (0.2126, 0.7152, 0.0722));
 		loc += e, lsum += el;
 		ldir += normalize (l.pos.xyz - pos) * el;

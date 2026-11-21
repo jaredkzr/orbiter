@@ -99,7 +99,7 @@ vec3 LocalLightAt (vec3 p, float minLum)
 	for (int k = 0; k < nl; k++) {
 		LocalLight l = frame.lights[k];
 		if (l.dir.w > 2.5) continue;
-		vec3 e = l.col.rgb * LightReach (l, p);
+		vec3 e = l.col.rgb * (l.col.w * LightReach (l, p));
 		bool flame = l.dir.w < 1.5 && l.att.w > 0.0;
 		if (flame && l.spot.y == o0) f0 += e;
 		else if (flame && l.spot.y == o1) f1 += e;

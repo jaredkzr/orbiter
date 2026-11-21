@@ -2738,6 +2738,7 @@ void VVessel::CollectLights (std::vector<LightSource> &lights)
 				if (length (l.pos - cam) > l.range + 150e3) continue;
 				l.att[0] = 0.0, l.att[1] = 0.0, l.att[2] = PI / area;
 				for (int c = 0; c < 3; c++) l.col[c] = pl.col[c];
+				l.smoke = pl.smoke;
 				lights.push_back (l);
 			}
 		}
@@ -2824,6 +2825,23 @@ bool VVessel::RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double
 	}, gpos, grot, o, d, maxDist, t, n);
 }
 
+// the share of a flame's light its smoke takes: the flame drawn over its
+// light's radiance (PlumeClass::lightRadiance, physical: a solid motor's
+// flame some 300 times a sunlit surface, drawn some 5 times). Lit by the
+// light's whole radiance, the faintest smoke beside the flame outshone the
+// flame (60 times) and, at night with the exposure set by the flame, the
+// column below it was white for 200 m, the flame lost in it; photographs
+// show the flame, the smoke by it dimmer, its far side dark. (Five times
+// the drawn share: the smoke at the flame's end still glows, as in photos
+// of night launches; the bare ratio left it a little dull)
+static float SmokeShare (const PlumeInfo &info)
+{
+	constexpr double GAIN = 5.0;
+	auto lum = [](const float *v) { return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]; };
+	double l = lum (info.lightCol);
+	return l > 0.0 ? (float)std::clamp (GAIN * lum (info.radiance) / l, 0.0, 1.0) : 1.0f;
+}
+
 void VVessel::CollectPlumes (PlumeRenderer &pr)
 {
 	EmitWake (oapiGetPause () ? 0.0 : oapiGetSimStep ());
@@ -2896,7 +2914,7 @@ void VVessel::CollectPlumes (PlumeRenderer &pr)
 			// (a flame lights its surroundings; cold gas does not glow)
 			if (type != PlumeType::ColdGas) {
 				PlumeLight pl{ { scene->GlobalPos (info.lightPos[0]), scene->GlobalPos (info.lightPos[1]), scene->GlobalPos (info.lightPos[2]) },
-					{ info.lightRadius[0], info.lightRadius[1], info.lightRadius[2] }, { info.lightCol[0], info.lightCol[1], info.lightCol[2] }, info.lightArea };
+					{ info.lightRadius[0], info.lightRadius[1], info.lightRadius[2] }, { info.lightCol[0], info.lightCol[1], info.lightCol[2] }, info.lightArea, SmokeShare (info) };
 				plumeLights.push_back (pl);
 			}
 		}
