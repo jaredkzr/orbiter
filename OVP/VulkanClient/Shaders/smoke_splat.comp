@@ -32,13 +32,13 @@ layout(set = 0, binding = 45, r32ui) uniform uimage3D volOccl; // the fine grid'
 	imageAtomicAdd (img[VA_G], q, u.g); imageAtomicAdd (img[VA_B], q, u.b); imageAtomicAdd (img[VA_S], q, us); imageAtomicMax (img[VA_M], q, um); \
 	if (ul != 0u) imageAtomicAdd (img[VA_L], q, ul); }
 
-void Add (int level, ivec3 q, float s, float c, float m, vec3 col, float share, float alb)
+void Add (int level, ivec3 q, float s, float c, float m, float speed, vec3 col, float share, float alb)
 {
 	c = min (c, 4.0);
 	uint ud = uint (min (s, 16.0) * VOL_FIXED_D + 0.5), uc = uint (c * VOL_FIXED_C + 0.5);
 	if (ud == 0u && uc == 0u) return;
 	uvec3 u = uvec3 (min (col, vec3 (32.0)) * (c * VOL_FIXED_C) + 0.5);
-	uint us = uint (share * c * VOL_FIXED_C + 0.5), um = uint (min (m, 4.0) * VOL_FIXED_C + 0.5), ul = uint (alb * c * VOL_FIXED_C + 0.5);
+	uint us = uint (share * c * VOL_FIXED_C + 0.5), um = VolCoreSpeedPack (m, speed), ul = uint (alb * c * VOL_FIXED_C + 0.5);
 	if (level == 0) ADD(volFine) else if (level == 1) ADD(volMid) else ADD(volCoarse)
 }
 
@@ -114,6 +114,14 @@ void main ()
 	const vec3 LUM = vec3 (0.2126, 0.7152, 0.0722);
 	float share = clamp (dot (sun, LUM) / max (dot (col, LUM), 1e-6), 0.0, 1.0);
 	float alb = dot (albedo, LUM);
+	// (an engine's smoke: whole - its opacity is lower where the same smoke
+	// is spread wider (a flared flame in thin air, the altitude's fade), not
+	// thinner in substance: with its opacity, the SRBs' puffs at 30 km
+	// eroded to their centres, a column of separate blobs)
+	float coreA = cls == PC_ENGINE_SMOKE ? 0.75 : min (p.shape.z * 2.0, 1.0);
+	// (engine smoke's speed through the air, carried by its jet: its noise
+	// faded while it is fast, VolCoreSpeedPack)
+	float speed = cls == PC_ENGINE_SMOKE ? length (p.velLife.xyz - AirVelocity (p.posAge.xyz, pc.bodyPos, pc.bodyVel.xyz, pc.omega.xyz)) : 0.0;
 	vec3 ce = c * size;
 	ivec3 c0 = ivec3 (floor (ce));
 	// the column tiles it touches (a coarser grid's: as far as it is
@@ -132,16 +140,23 @@ void main ()
 			for (int x = -r.x; x <= r.x; x++) {
 				ivec3 q = c0 + ivec3 (x, y, z);
 				if (any (lessThan (q, ivec3 (0))) || any (greaterThanEqual (q, lim))) continue;
-				vec3 d = (vec3 (q) + 0.5 - ce) / max (rad, vec3 (0.5));
+				// (particles smaller than a froxel are spread over a froxel's
+				// half-width each side, their weight by as much less: the
+				// weights of a froxel's neighbours sum to the same at any offset.
+				// Half a froxel each side, a particle at a froxel's centre took
+				// it all and one at its boundary none: a trail receding from the
+				// camera was bunched into a clump per depth slice (8 percent of
+				// the depth: a kilometre apart at 15 km), unlit at night - a row
+				// of dark blobs)
+				vec3 d = (vec3 (q) + 0.5 - ce) / max (rad, vec3 (1.0));
 				float d2 = dot (d, d);
 				if (d2 >= 1.0) continue;
 				float w = 1.0 - smoothstep (1.0 - edge, 1.0, sqrt (d2));
-				// (particles smaller than a froxel are spread over it)
-				float fill = clamp (rad.x * 2.0, 0.05, 1.0) * clamp (rad.y * 2.0, 0.05, 1.0) * clamp (rad.z * 2.0, 0.05, 1.0);
+				float fill = clamp (rad.x, 0.025, 1.0) * clamp (rad.y, 0.025, 1.0) * clamp (rad.z, 0.025, 1.0);
 				// (the core, as a sprite's thickness: its profile and age, not its
 				// fading opacity — with that, old smoke was faded twice and then
 				// eroded away: gaps in an old trail)
-				Add (level, q, sigma * dens * w * fill, a * w * fill * ageK, 0.67 * min (p.shape.z * 2.0, 1.0) * w * fill * ageK, col, share, alb);
+				Add (level, q, sigma * dens * w * fill, a * w * fill * ageK, 0.67 * coreA * w * fill * ageK, speed, col, share, alb);
 			}
 	// the fine grid's particles' extinction at the half resolution as well
 	// (the coarser grids' are there already): what the local lights' paths
@@ -150,13 +165,13 @@ void main ()
 	if (level == 0 && local) {
 		vec3 sm = vec3 (VOL_MID), rm = rad * 0.5, cm = c * sm;
 		ivec3 m0 = ivec3 (floor (cm)), rr = ivec3 (ceil (rm));
-		float fm = clamp (rm.x * 2.0, 0.05, 1.0) * clamp (rm.y * 2.0, 0.05, 1.0) * clamp (rm.z * 2.0, 0.05, 1.0);
+		float fm = clamp (rm.x, 0.025, 1.0) * clamp (rm.y, 0.025, 1.0) * clamp (rm.z, 0.025, 1.0); // (as above)
 		for (int z = -rr.z; z <= rr.z; z++)
 			for (int y = -rr.y; y <= rr.y; y++)
 				for (int x = -rr.x; x <= rr.x; x++) {
 					ivec3 q = m0 + ivec3 (x, y, z);
 					if (any (lessThan (q, ivec3 (0))) || any (greaterThanEqual (q, VOL_MID))) continue;
-					vec3 d = (vec3 (q) + 0.5 - cm) / max (rm, vec3 (0.5));
+					vec3 d = (vec3 (q) + 0.5 - cm) / max (rm, vec3 (1.0));
 					float d2 = dot (d, d);
 					if (d2 >= 1.0) continue;
 					float w = 1.0 - smoothstep (1.0 - edge, 1.0, sqrt (d2));

@@ -14,7 +14,8 @@ const ivec3 VOL_MID = ivec3 (120, 68, 64), VOL_COARSE = ivec3 (60, 34, 32);
 ivec3 VolLevelSize (int l) { return l == 0 ? VOL_SIZE : l == 1 ? VOL_MID : VOL_COARSE; }
 // the accumulators of each level: extinction, coverage, light x coverage
 // (rgb), the sun's share x coverage, the largest coverage of one particle
-// (the erosion's core: overlapping old puffs still erode, as sprites do),
+// (the erosion's core: overlapping old puffs still erode, as sprites do;
+// packed with its particle's speed, VolCoreSpeedPack),
 // the albedo's luminance x coverage (the local lights: per froxel at the
 // resolve, smoke_resolve.comp)
 const int VA_D = 0, VA_C = 1, VA_R = 2, VA_G = 3, VA_B = 4, VA_S = 5, VA_M = 6, VA_L = 7, VA_COUNT = 8;
@@ -29,9 +30,34 @@ const float VOL_FIXED_D = 262144.0, VOL_FIXED_C = 65536.0;
 // smoke_resolve.comp): what is kept, from the noise n (0..1, mean 0.5) and
 // the smoke's core (the largest coverage of one particle: 0 at the edges of
 // the particles, 1 inside dense young ones), relative to the particles, not
-// in absolute units, so that large thin puffs keep their shape
-float VolKeep (float n, float core) { return smoothstep (0.35, 0.6, n * 0.8 + core * 0.45); }
+// in absolute units, so that large thin puffs keep their shape. A narrow
+// threshold (about one standard deviation of the noise): the billows' edges
+// sharp, as in photographs (it was over two and a half: soft blobs)
+float VolKeep (float n, float core) { return smoothstep (0.42, 0.54, n * 0.8 + core * 0.45); }
+// the extinction of the smoke volume per unit of density, eroded: young
+// exhaust clouds opaque within a few metres of their surface (it was half:
+// a puff some 0.7 optical depths across, every billow seen through)
+const float VOL_SIGMA = 3.2;
 float VolCore (float coverage) { return min (coverage * 1.5, 1.0); }
+// engine smoke's speed through the air: the erosion's noise rests in the
+// air, and smoke crossing it fast had its billows re-formed every frame
+// (puffs popping in and out behind a flame). Each octave fades where it
+// would slide visibly in a frame (smoke_march.comp): a smooth column leaves
+// the flame, its large lobes showing as it slows, the fine billows last.
+// Carried in the core's accumulator (a maximum) below the core: the
+// largest core, as before, with the speed of its particle (the smoke that
+// dominates there. Speed first, the fastest particle's own core, showed
+// each one's outline where a faster one overlapped: a string of balls)
+const float VOL_SPEED_FULL = 400.0; // [m/s]
+uint VolCoreSpeedPack (float core, float speed)
+{
+	return (uint (clamp (core, 0.0, 1.0) * 65535.0 + 0.5) << 16) | uint (clamp (speed / VOL_SPEED_FULL, 0.0, 1.0) * 65535.0 + 0.5);
+}
+// the core (VolCore) and the speed [m/s] of the accumulator's maximum
+vec2 VolCoreSpeed (uint m)
+{
+	return vec2 (VolCore (float (m >> 16) / 65535.0), VOL_SPEED_FULL * float (m & 0xffffu) / 65535.0);
+}
 
 float VolSlice (float z) { return log (max (z, VOL_NEAR) / VOL_NEAR) / log (VOL_FAR / VOL_NEAR); }
 float VolDepth (float s) { return VOL_NEAR * exp (s * log (VOL_FAR / VOL_NEAR)); }

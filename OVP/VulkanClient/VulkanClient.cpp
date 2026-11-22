@@ -341,11 +341,13 @@ void VulkanClient::clbkRenderScene ()
 	scene->RenderProbe ();
 	ctx.GpuMark ("probe");
 	ctx.BindScene (true);
+	float le = 0.0f;
 	if (postfx->autoExposure) {
-		float le, ll;
+		float ll;
 		postfx->ExposureState (le, ll);
 		scene->SkyAdapt (ll, vkc::FrameDt (oapiGetSysStep ()));
 	}
+	if (PlumeRenderer *pr = scene->Plumes ()) pr->exposure = postfx->exposure * (postfx->autoExposure ? std::exp2 (le) : 1.0f);
 	scene->Render ();
 	ctx.GpuMark ("effects");
 	VkExtent2D sceneSize;

@@ -36,16 +36,18 @@ namespace {
 		                  { 0, 0, 0 },              0.0f,  0.0f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f, 0.0f },
 		{ "plasma",       5e3,   { 0.55f, 0.62f, 1.0f }, 1.4f, { 0.85f, 0.8f, 1.0f }, 4.0f, { 0.8f, 0.55f, 1.0f }, 0.6f, 0.0f,  0.6f, 0.5f, 60.0f,
 		                  { 0, 0, 0 },              0.0f,  0.0f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f, 0.0f },
-		{ "hydrolox",     2e4,   { 0.45f, 0.55f, 1.0f }, 0.35f, { 1.0f, 0.82f, 0.7f }, 5.0f, { 1.0f, 0.55f, 0.3f }, 0.3f, 0.0f,  0.4f, 0.6f, 50.0f,
-		                  { 0.96f, 0.96f, 0.96f },  0.30f, 12.0f, 0.4f, 0.9f, 0.25f, 1.0f, 20.0f, 120.0f, { 0, 0, 0 }, 0.9f },
+		// (hydrolox: no long trail - its steam is unseen beside a launch's
+		// solid motors; VVessel::EmitSmoke thins its free jet's smoke too)
+		{ "hydrolox",     2e4,   { 0.45f, 0.55f, 1.0f }, 0.35f, { 1.0f, 0.82f, 0.7f }, 5.0f, { 1.0f, 0.55f, 0.3f }, 0.3f, 0.0f,  0.4f, 0.6f, 200.0f,
+		                  { 0.96f, 0.96f, 0.96f },  0.30f, 12.0f, 0.4f, 0.9f, 0.0f,  1.0f, 20.0f, 120.0f, { 0, 0, 0 }, 0.9f },
 		{ "methalox",     4e4,   { 0.40f, 0.50f, 1.0f }, 0.6f, { 0.9f, 0.75f, 1.0f }, 5.0f, { 1.0f, 0.5f, 0.2f },  0.8f, 0.0f,  0.5f, 0.7f, 45.0f,
 		                  { 0.95f, 0.95f, 0.95f },  0.22f, 10.0f, 0.5f, 0.95f, 0.2f, 0.9f, 40.0f, 150.0f },
 		{ "kerolox",      7e4,   { 1.0f, 0.62f, 0.25f }, 2.5f, { 1.0f, 0.85f, 0.6f }, 5.0f, { 1.0f, 0.45f, 0.12f }, 4.0f, 0.02f, 0.35f, 1.0f, 40.0f,
 		                  { 0.58f, 0.49f, 0.40f },  0.45f, 10.0f, 0.6f, 0.95f, 0.5f, 0.7f, 150.0f, 150.0f },
 		{ "hypergolic",   3e4,   { 1.0f, 0.58f, 0.45f }, 0.9f, { 1.0f, 0.75f, 0.6f }, 3.0f, { 1.0f, 0.5f, 0.3f },  1.2f, 0.01f, 0.5f, 0.7f, 45.0f,
 		                  { 0.74f, 0.50f, 0.32f },  0.40f, 12.0f, 0.3f, 0.9f, 0.4f, 0.0f, 60.0f, 150.0f },
-		{ "solid",        7e4,   { 1.0f, 0.94f, 0.82f }, 6.0f, { 0, 0, 0 },          0.0f, { 1.0f, 0.65f, 0.3f }, 6.0f, 0.25f, 0.6f, 1.2f, 35.0f,
-		                  { 0.95f, 0.95f, 0.93f },  0.85f, 40.0f, 0.0001f, 0.03f, 1.0f, 0.0f, 300.0f, 200.0f, { 1.0f, 0.48f, 0.14f } },
+		{ "solid",        7e4,   { 1.0f, 0.94f, 0.82f }, 6.0f, { 0, 0, 0 },          0.0f, { 1.0f, 0.65f, 0.3f }, 6.0f, 0.25f, 0.6f, 1.2f, 150.0f,
+		                  { 0.95f, 0.95f, 0.93f },  0.85f, 40.0f, 0.0001f, 0.03f, 1.0f, 0.0f, 300.0f, 500.0f, { 1.0f, 0.48f, 0.14f } },
 		// (hypergolic attitude thrusters: a narrow yellow-orange cone, after
 		// photographs of the Shuttle's and Dragon's RCS; a brief puff of
 		// unburnt propellant as they light)
@@ -245,6 +247,11 @@ namespace {
 	// (shimmer.frag HeatBuffer: the slots' counts, then the sources, slot * MAX_HEAT + i, four vec4 each)
 	constexpr VkDeviceSize HEAT_SRC = 4 * 16;
 	constexpr VkDeviceSize HEAT_BUF = 16 + HEAT_SRC * PlumeRenderer::MAX_HEAT * vkc::FRAMES_IN_FLIGHT;
+	// a flame's hot part: at most some 25 exit radii (a booster's length for
+	// the Shuttle's SRBs, whose flame at sea level is drawn far longer, as
+	// photographs show it): its light and the gas it spreads along a surface
+	// it meets
+	constexpr double HOT_LENGTH = 25.0;
 }
 
 VkDeviceSize PlumeRenderer::BufferSize () const
@@ -291,7 +298,7 @@ bool PlumeRenderer::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout, Vk
 	VK_CHECK(vkAllocateDescriptorSets (ctx->device, &dai, &set));
 
 	VkDescriptorSetLayout sets[4] = { frameLayout, setLayout, texLayout, atmLayout };
-	VkPushConstantRange pcr{ VK_SHADER_STAGE_FRAGMENT_BIT, 0, 2 * sizeof(uint32_t) };
+	VkPushConstantRange pcr{ VK_SHADER_STAGE_FRAGMENT_BIT, 0, 3 * sizeof(uint32_t) };
 	VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 	plci.setLayoutCount = 4, plci.pSetLayouts = sets;
 	plci.pushConstantRangeCount = 1, plci.pPushConstantRanges = &pcr;
@@ -366,13 +373,22 @@ bool PlumeRenderer::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout, Vk
 		// transmittance multiplied in alpha, from 1), single-sampled
 		VkPipelineMultisampleStateCreateInfo hms = ms;
 		hms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-		VkPipelineColorBlendAttachmentState hcbs[2] = { cba, cbm };
+		// (and where the plumes are: their light-weighted distance, summed)
+		VkPipelineColorBlendAttachmentState cbz{};
+		cbz.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT;
+		cbz.blendEnable = VK_TRUE;
+		cbz.srcColorBlendFactor = cbz.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+		cbz.colorBlendOp = VK_BLEND_OP_ADD;
+		cbz.srcAlphaBlendFactor = cbz.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+		cbz.alphaBlendOp = VK_BLEND_OP_ADD;
+		VkPipelineColorBlendAttachmentState hcbs[3] = { cba, cbm, cbz };
 		hcbs[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
 		hcbs[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
 		VkPipelineColorBlendStateCreateInfo hcb = cb;
-		hcb.pAttachments = hcbs;
-		VkFormat hformats[2] = { HALF_FORMAT, VK_FORMAT_R8_UNORM };
+		hcb.attachmentCount = 3, hcb.pAttachments = hcbs;
+		VkFormat hformats[3] = { HALF_FORMAT, VK_FORMAT_R8_UNORM, HALF_Z_FORMAT };
 		VkPipelineRenderingCreateInfo hrci = rci;
+		hrci.colorAttachmentCount = 3;
 		hrci.pColorAttachmentFormats = hformats;
 		VkGraphicsPipelineCreateInfo hgpi = gpi;
 		hgpi.pNext = &hrci;
@@ -611,6 +627,7 @@ void PlumeRenderer::Shutdown ()
 	ctx->DestroyImage (halfColor);
 	ctx->DestroyImage (halfMask);
 	ctx->DestroyImage (halfDepth);
+	ctx->DestroyImage (halfZ);
 	vkDestroyPipelineLayout (ctx->device, layout, nullptr);
 	vkDestroyDescriptorPool (ctx->device, pool, nullptr);
 	vkDestroyDescriptorSetLayout (ctx->device, setLayout, nullptr);
@@ -635,6 +652,7 @@ void PlumeRenderer::CreateHalf ()
 	ctx->DestroyImage (halfColor);
 	ctx->DestroyImage (halfMask);
 	ctx->DestroyImage (halfDepth);
+	ctx->DestroyImage (halfZ);
 	VkExtent2D e = ctx->RenderExtent ();
 	halfExtent = { (e.width + 1) / 2, (e.height + 1) / 2 };
 	auto create = [this](VkFormat fmt, VkImageUsageFlags usage, VkImageAspectFlags aspect) {
@@ -658,7 +676,15 @@ void PlumeRenderer::CreateHalf ()
 	};
 	halfColor = create (HALF_FORMAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
 	halfMask = create (VK_FORMAT_R8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+	halfZ = create (HALF_Z_FORMAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
 	halfDepth = create (ctx->depthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+	// (sampled by the particles' sets before the plumes are first drawn into
+	// them: in the layout they are kept in between)
+	ctx->ImmediateSubmit ([this](VkCommandBuffer cmd) {
+		for (VkImage im : { halfColor.image, halfZ.image })
+			vkc::ImageBarrier (cmd, im, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+				VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+	});
 	halfGen = ctx->SwapchainGeneration ();
 	prepassView = VK_NULL_HANDLE; // (the sets are written again with the prepass)
 }
@@ -728,6 +754,8 @@ void PlumeRenderer::BeginFrame (double t)
 	slot = ctx->FrameIndex ();
 	simt = t;
 	list.clear ();
+	frameNo++;
+	for (auto it = clips.begin (); it != clips.end ();) it = it->second.frame + 2 < frameNo ? clips.erase (it) : std::next (it);
 	heat.clear ();
 	((uint32_t*)buf.mapped)[slot] = 0;
 	solidAngle = 0.0;
@@ -869,6 +897,27 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 			coverage = wSum / (EDGE + 2.0);
 			hitP = pSum / wSum;
 			hitN = length (nSum) > 1e-6 ? unit (nSum) : _V(0, 0, -1);
+			// (where the surface cuts the jet - the rays' mean hit, and their
+			// normal - moves at most twice as far as the nozzle did since the
+			// last frame: a flat surface followed, a step in it - one of the
+			// rays meeting the deck, then the flame trench below - spread over
+			// as far again as the step, at any rate of climb. Taken as it was,
+			// the flame's end and its glow on the pad jumped some 5 m in a
+			// frame, the cloud they light flickering)
+			if (p.gposSet) {
+				uint64_t key = ((uint64_t)owner << 32) ^ p.seed;
+				auto it = clips.find (key);
+				if (it != clips.end () && it->second.frame + 1 == frameNo) {
+					double lim = 2.0 * length (p.gpos - it->second.gpos) / re;
+					VECTOR3 dh = hitP - it->second.p;
+					double dl = length (dh);
+					if (dl > lim) hitP = it->second.p + dh * (lim / dl);
+					VECTOR3 dn = hitN - it->second.n;
+					double nl = length (dn), nlim = lim / std::max (length (it->second.p), 1.0); // (turned as far as the point moves, seen from the nozzle)
+					if (nl > nlim) hitN = unit (it->second.n + dn * (nlim / nl));
+				}
+				clips[key] = { hitP, hitN, p.gpos, frameNo };
+			}
 		}
 	}
 	double hitHeat = 0.0, hitR = 0.0, reach = 0.0;
@@ -878,8 +927,10 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 		hitR = radiusAt (z);
 		double mixed = bendScale > 0.0 ? exp (-pow (bz / (0.75 * bendScale + 2.5), 2.0)) : 1.0;
 		hitHeat = exp (-3.0 * xi * xi) * (xi < 1.6 ? 1.0 : 0.0) * mixed;
-		// the spreading gas reaches further with more of the jet left
-		reach = 2.5 * hitR + 0.4 * std::max (0.0, 1.6 * len - sArc);
+		// the spreading gas reaches further with more of the jet's hot part
+		// left (by the whole drawn length, the SRBs' 120 m flame at ignition
+		// spread a glowing layer 75 m around the pad, cut off by the box)
+		reach = 2.5 * hitR + 0.4 * std::max (0.0, 1.6 * std::min (len, HOT_LENGTH) - sArc);
 		double ext = 1.3 * reach + hitR;
 		for (int k = 0; k < 3; k++) {
 			double c = (&hitP.x)[k];
@@ -936,15 +987,15 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 			return p.pos + (ex * (bx * b) + ey * (by * b) + ez * z) * re;
 		};
 		info->end = viewOf (zEnd);
+		info->endFree = viewOf (std::min (len, boxZ));
 		// light: an extended source along the flame (three points: the hull
 		// beside the nozzles sees the flame below it from the side); the mean
 		// emission of the core (half of its peak, cooling along the flame),
 		// the afterburning and the shock diamonds. (Meeting a surface: the
 		// last point by the bright spot there)
-		// (over its hottest part, at most some 25 exit radii: a booster's length
-		// for the Shuttle's SRBs, whose flame at sea level is drawn far
-		// longer - lit by all of it, the orbiter's side turned peach in sunlight)
-		const double zLit = std::min (zEnd, 25.0);
+		// (over its hot part, HOT_LENGTH - lit by all of a long flame, the
+		// orbiter's side turned peach in sunlight)
+		const double zLit = std::min (zEnd, HOT_LENGTH);
 		const double zf[3] = { 0.2, 0.5, 0.9 };
 		for (int k = 0; k < 3; k++) {
 			info->lightPos[k] = viewOf (zf[k] * zLit);
@@ -1028,17 +1079,18 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 
 void PlumeRenderer::Render (VkDescriptorSet frameSet, VkDescriptorSet atmSet, VkTexture *white)
 {
-	halfDrawn = false;
+	halfDrawn = layerReady = false;
 	if (!halfRes || !halfColor.image || !prepassView || list.empty()) return;
-	// (cleared to no light, full transmittance; no reactive mask)
-	vkc::Target t[2] = { { halfColor.image, halfColor.view, HALF_FORMAT, halfExtent },
-		{ halfMask.image, halfMask.view, VK_FORMAT_R8_UNORM, halfExtent } };
+	// (cleared to no light, full transmittance; no reactive mask; nowhere)
+	vkc::Target t[3] = { { halfColor.image, halfColor.view, HALF_FORMAT, halfExtent },
+		{ halfMask.image, halfMask.view, VK_FORMAT_R8_UNORM, halfExtent },
+		{ halfZ.image, halfZ.view, HALF_Z_FORMAT, halfExtent } };
 	vkc::Target d{ halfDepth.image, halfDepth.view, ctx->depthFormat, halfExtent };
 	const float clear[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
-	ctx->BindTargetsWithDepth (t, 2, d, clear);
+	ctx->BindTargetsWithDepth (t, 3, d, clear);
 	DrawList (frameSet, atmSet, white, halfPipe, 2);
 	ctx->EndTarget ();
-	halfDrawn = true;
+	halfDrawn = layerReady = true;
 }
 
 void PlumeRenderer::Draw (VkDescriptorSet frameSet, VkDescriptorSet atmSet, VkTexture *white)
@@ -1071,7 +1123,8 @@ void PlumeRenderer::DrawList (VkDescriptorSet frameSet, VkDescriptorSet atmSet, 
 		vkc::Context::Transient vb = ctx->AllocTransient (sizeof(en->box));
 		memcpy (vb.ptr, en->box, sizeof(en->box));
 		vkCmdBindVertexBuffers (cmd, 0, 1, &vb.buffer, &vb.offset);
-		uint32_t pc[2] = { en->index, scale };
+		uint32_t pc[3] = { en->index, scale, 0 };
+		memcpy (&pc[2], &exposure, sizeof(float));
 		vkCmdPushConstants (cmd, layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), pc);
 		vkCmdDraw (cmd, 36, 1, 0, 0);
 	}

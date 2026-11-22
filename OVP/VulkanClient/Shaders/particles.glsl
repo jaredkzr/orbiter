@@ -27,6 +27,8 @@ const uint PF_SPECK = 128u;      // fragments, sparks: at least a pixel, under g
 const uint PF_TRAIL = 256u;      // a trail's smoke: long-lived, carried by the wind
 const uint PF_RAMP = 512u;       // emissive: cools over its life (ParticleRamp: white-yellow, orange, dark red; dimming)
 const uint PF_ERODE = 1024u;     // emissive: eroded by noise as it ages (flames break up into tongues)
+const uint PF_JET = 2048u;       // a jet's smoke: born narrower than its size of reference, shape.y / JET_GROWTH (ParticleAlpha)
+const float JET_GROWTH = 0.65;   // (ParticleSystem::Emission::JET_GROWTH)
 uint ParticleClass (uint flags) { return (flags >> 16) & 0xffu; }
 // classes (ParticleSystem::Class)
 const uint PC_ENGINE_SMOKE = 0u, PC_TRAIL = 1u, PC_DUST = 2u, PC_SPRAY = 3u, PC_FIRE = 4u, PC_FIREBALL_SMOKE = 5u,
@@ -83,6 +85,19 @@ float ParticleAlpha (Particle p)
 	// left a gap between the flame and the column)
 	float fin = ParticleClass (p.flags) == PC_ENGINE_SMOKE ? min (0.08, 0.08 / p.velLife.w) : 0.08;
 	float a = p.shape.z * (1.0 - t) * smoothstep (0.0, fin, t);
+	// (engine smoke spreading: opaque until twice its size, then thinning
+	// as the square of it - the same smoke over a larger area; neighbours
+	// overlap, the column stays. The solid motors' wide smoke of 40 s grew
+	// to puffs hundreds of metres across, still opaque: dark discs behind
+	// the lit part of the column, seen from afar at night)
+	// (a jet's smoke: born about as wide as the flame's end, narrower than its
+	// size of reference, denser by as much - the same smoke; then as above
+	// from that size)
+	if (ParticleClass (p.flags) == PC_ENGINE_SMOKE) {
+		float s0 = (p.flags & PF_JET) != 0u ? max (p.shape.x, p.shape.y / JET_GROWTH) : p.shape.x;
+		float k = s0 / max (p.shape.x + p.shape.y * p.posAge.w, 1e-3);
+		a *= k >= 1.0 ? k : min (4.0 * k * k, 1.0);
+	}
 	// (a trail's smoke: spread over more as it grows (the puffs at a fixed
 	// spacing overlap the more, the trail as thick); dense at first, it
 	// stays opaque until four times its size (and fading in as the engine's

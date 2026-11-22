@@ -88,15 +88,19 @@ vec4 PlumeMedium (PlumeParams P, vec3 p)
 			+ max (0.0, x - 0.5 * len) * P.diamond.w + 0.3 * bend) * (1.0 + 0.12 * D) * (1.0 + 0.45 * turb);
 		if (r > 3.0 * max (Rmax, rj) || xi > 1.6) return vec4 (0.0);
 	}
+	// (the noise stretched along the flow, about three times: streaks along
+	// the jet, as photographs show, not round cells)
 	vec3 q = vec3 (p.xy, x - P.misc.x * P.misc.y) + P.misc2.y * 7.31;
-	float n1 = texture (plumeShapeNoise, q * 0.045).r;
-	float n2 = texture (plumeDetailNoise, q * 0.23 + 0.4 * n1).r;
+	const vec3 STRETCH = vec3 (1.0, 1.0, 0.35);
+	float n1 = texture (plumeShapeNoise, q * STRETCH * 0.045).r;
+	float n2 = texture (plumeDetailNoise, q * STRETCH * 0.23 + 0.4 * n1).r;
 
 	// envelope radius
 	float R = 1.0 + (rj - 1.0) * (1.0 - exp (-max (x, 0.0) * 0.8)) + max (x, 0.0) * spread
 		+ max (0.0, x - 0.5 * len) * P.diamond.w + 0.3 * bend;
 	R *= 1.0 + 0.12 * D * sin (6.2831853 * x / cell) * exp (-x / (5.0 * cell));
-	R *= 1.0 + turb * (n1 - 0.5) * 0.9;
+	// (ragged by the finer noise too as the jet mixes: a smooth cone was it)
+	R *= 1.0 + turb * ((n1 - 0.5) * 0.9 + (n2 - 0.5) * 0.4 * smoothstep (0.1, 0.5, xi));
 	float u = r / R;
 	// radial profile: a sharp jet boundary at the exit, diffusing downstream
 	float mixing = smoothstep (0.0, 0.6, xi);
@@ -149,8 +153,10 @@ vec4 PlumeMedium (PlumeParams P, vec3 p)
 		float rw = length (rel - h * P.hitN.xyz);
 		float reach = P.hit2.x;
 		float delta = 0.3 * Rh + 0.12 * rw; // layer thickness
+		// (to nothing at the box's side, 1.3 reach + Rh from the hit:
+		// Plumes.cpp; cut off there, a long jet's layer showed its edges)
 		float wall = exp (-max (h, 0.0) / delta) * smoothstep (-0.1 * Rh, 0.0, h) * exp (-PlumeSq (rw / reach))
-			* Rh / (delta * (Rh + rw)) * blocked;
+			* (1.0 - smoothstep (reach, 1.3 * reach + Rh, rw)) * Rh / (delta * (Rh + rw)) * blocked;
 		float cool = exp (-rw / reach);
 		float lamW = 0.25 + 1.5 * n1 * n2 * 2.0;
 		vec3 ew = (P.core.rgb * P.hit.w * cool + P.outer.rgb * 0.5 * (1.0 - cool)) * wall * lamW;

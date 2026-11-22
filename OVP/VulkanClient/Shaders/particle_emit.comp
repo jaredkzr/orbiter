@@ -53,6 +53,7 @@ void main ()
 	if ((em.misc.y & 512u) != 0u) flags |= PF_TRAIL;
 	if ((em.misc.y & 1024u) != 0u) flags |= PF_RAMP;
 	if ((em.misc.y & 2048u) != 0u) flags |= PF_ERODE;
+	if ((em.misc.y & 4096u) != 0u) flags |= PF_JET;
 	p.flags = flags | ((em.misc.w & 0xffu) << 16) | (((em.misc.w >> 8) & 0xffu) << 24); // (class, streak)
 	p.light = PackRGB9E5 (vec3 (1.0));
 	p.albedo = em.misc.z | 0xff000000u;

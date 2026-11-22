@@ -32,7 +32,9 @@ layout(set = 0, binding = 31, rgba16f) uniform writeonly image3D lvlL[2];   // m
 layout(set = 0, binding = 32, rgba16f) uniform writeonly image3D lvlD[2];   //   extinction, sun share x coverage, core, albedo x coverage
 layout(set = 0, binding = 33) uniform sampler3D lvlLTex[2];
 layout(set = 0, binding = 34) uniform sampler3D lvlDTex[2];
-layout(set = 0, binding = 35, r8) uniform writeonly image3D volCore;      // the core (VolCore)
+layout(set = 0, binding = 51, r8) uniform writeonly image3D lvlV[2];     //   engine smoke's speed / VOL_SPEED_FULL
+layout(set = 0, binding = 52) uniform sampler3D lvlVTex[2];
+layout(set = 0, binding = 35, rg8) uniform writeonly image3D volCore;     // the core (VolCore), the speed / VOL_SPEED_FULL (VolCoreSpeed)
 layout(set = 0, binding = 37, std430) buffer VolOcc { uint volOcc[]; };
 // the fine grid's particles' extinction at the half resolution (smoke_splat.comp),
 // into floats (pass 1, cleared), for the local lights' occlusion
@@ -55,7 +57,9 @@ layout(set = 0, binding = 47) uniform sampler3D occlTex;
 	LOAD8 (img, q, u); \
 	if ((u[VA_D] | u[VA_C]) != 0u) CLEAR8 (img, q); \
 	imageStore (lvlL[l], q, vec4 (float (u[VA_R]), float (u[VA_G]), float (u[VA_B]), float (u[VA_C])) / VOL_FIXED_C); \
-	imageStore (lvlD[l], q, vec4 (float (u[VA_D]) / VOL_FIXED_D, float (u[VA_S]) / VOL_FIXED_C, float (u[VA_M]) / VOL_FIXED_C, float (u[VA_L]) / VOL_FIXED_C)); \
+	vec2 cm = VolCoreSpeed (u[VA_M]); /* (the core and the speed apart: filtered) */ \
+	imageStore (lvlD[l], q, vec4 (float (u[VA_D]) / VOL_FIXED_D, float (u[VA_S]) / VOL_FIXED_C, cm.x, float (u[VA_L]) / VOL_FIXED_C)); \
+	imageStore (lvlV[l], q, vec4 (cm.y / VOL_SPEED_FULL)); \
 	if (l == 0) { uint o = imageLoad (volOccl, q).r; if (o != 0u) imageStore (volOccl, q, uvec4 (0u)); imageStore (occlOut, q, vec4 (float (o) / VOL_FIXED_D)); } }
 
 // the extinction [1/m] at a view-space point (all grids; the fine one's at the
@@ -77,7 +81,7 @@ float LightTransmittance (vec3 p, vec3 lp)
 	float dist = length (lp - p), tau = 0.0;
 	for (int t = 0; t < 4; t++)
 		tau += OcclExtinction (mix (p, lp, 0.5 * (T[t] + T[t + 1]))) * (T[t + 1] - T[t]) * dist;
-	tau *= 0.9; // (as the march's erosion: 1.6 x the density, about half kept)
+	tau *= 0.56 * VOL_SIGMA; // (as the march's erosion: VOL_SIGMA x the density, about half kept)
 	return 0.08 + 0.92 * (0.75 * exp (-tau) + 0.25 * exp (-0.15 * tau));
 }
 
@@ -147,7 +151,9 @@ void main ()
 		vec4 d1 = textureLod (lvlDTex[0], tc, 0.0), d2 = textureLod (lvlDTex[1], tc, 0.0);
 		float d = float (u[VA_D]) / VOL_FIXED_D + d1.r + d2.r;
 		float cov = float (u[VA_C]) / VOL_FIXED_C + l1.a + l2.a;
-		float m = max (float (u[VA_M]) / VOL_FIXED_C, max (d1.b, d2.b));
+		vec2 cs = VolCoreSpeed (u[VA_M]);
+		cs.x = max (cs.x, max (d1.b, d2.b));
+		cs.y = max (cs.y, VOL_SPEED_FULL * max (textureLod (lvlVTex[0], tc, 0.0).r, textureLod (lvlVTex[1], tc, 0.0).r));
 		vec3 lc = vec3 (0.0);
 		if (cov > 1e-5) {
 			float share = clamp ((float (u[VA_S]) / VOL_FIXED_C + d1.g + d2.g) / cov, 0.0, 1.0);
@@ -172,14 +178,14 @@ void main ()
 			if (alb > 0.0) lc += LocalLightAt (pv, 0.01 * lum / (0.8 * alb)) * (0.8 * alb) * clamp (tint, vec3 (0.0), vec3 (2.0));
 		}
 		if (d < 1e-6) d = 0.0;
-		float core = VolCore (m);
+		float core = cs.x;
 		imageStore (volOut, q, vec4 (lc, d));
-		imageStore (volCore, q, vec4 (core));
+		imageStore (volCore, q, vec4 (core, cs.y / VOL_SPEED_FULL, 0.0, 0.0));
 		if (d > 0.0) zmin = min (zmin, z), zmax = max (zmax, z);
-		// (the march: extinction 1.6 x density, eroded by noise of mean 0.5;
+		// (the march: extinction VOL_SIGMA x density, eroded by noise of mean 0.5;
 		// half the slice to its middle, stored, then the other half)
 		float keep = VolKeep (0.5, core);
-		float sigma = d * keep * 1.6;
+		float sigma = d * keep * VOL_SIGMA;
 		vec3 lk = lc * mix (0.55, 1.05, keep);
 		float z0 = VolDepth (float (z) / float (VOL_SIZE.z)), z1 = VolDepth (float (z + 1) / float (VOL_SIZE.z));
 		float zm = VolDepth ((float (z) + 0.5) / float (VOL_SIZE.z));

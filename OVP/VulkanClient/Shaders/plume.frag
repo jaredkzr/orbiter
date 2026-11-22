@@ -21,13 +21,15 @@ layout(set = 2, binding = 0) uniform sampler2D exhaustTex; // add-on exhaust tex
 #include "atmosphere.glsl"
 
 layout(push_constant) uniform Draw {
-	uint index; // into the plume buffer
-	uint scale; // 2: drawn at half resolution (plume_comp.frag)
+	uint index;     // into the plume buffer
+	uint scale;     // 2: drawn at half resolution (plume_comp.frag)
+	float exposure; // displayed (the last frame's)
 } pc;
 
 layout(location = 0) in vec3 vPos;
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out float outReactive; // how much temporal filters should rely on this frame
+layout(location = 2) out vec2 outDist;     // at half resolution: where it is, by its light (sum of w t [km], sum of w)
 
 float Hash (uvec3 v)
 {
@@ -86,7 +88,31 @@ void main ()
 		vec3 Lin = AtmTonemap (Inscatter (normalize (mat3 (atm.viewToPlanet) * d), l.tAvg, Ta));
 		col = col * Ta + a * Lin;
 	}
+	// the flame's highlights rolled off: displayed above half of white its
+	// light compressed logarithmically, the core about full white - its
+	// streaks, cells and colour seen. Exposed as a camera for the scene the
+	// flames light, they were three to ten times white, flat white (the tone
+	// curve's shoulder leaves a few percent between those); the light they
+	// cast, the exposure and all else as they were
+	// what is behind a bright flame hidden by its glare: a camera exposed
+	// for the flame records nothing behind it (an SRB flame is some 300
+	// times a sunlit surface); its light rolled off below, city lights at
+	// full strength shone through the flared exhaust's glow in thin air
+	{
+		const float VEIL = 6.0;
+		float L = dot (col, vec3 (0.2126, 0.7152, 0.0722)) * pc.exposure;
+		a = max (a, 1.0 - exp (-VEIL * L));
+	}
+	{
+		const float KNEE = 0.35, SOFT = 0.15;
+		float L = dot (col, vec3 (0.2126, 0.7152, 0.0722)) * pc.exposure;
+		if (L > KNEE) col *= (KNEE + SOFT * log (1.0 + (L - KNEE) / SOFT)) / L;
+	}
 	outColor = vec4 (col, a);
 	float lum = dot (col, vec3 (0.2126, 0.7152, 0.0722));
+	// (weighted by what it does to what is behind: its light as displayed
+	// and its opacity)
+	float wz = l.tAvg > 0.0 ? lum * pc.exposure + a : 0.0;
+	outDist = vec2 (wz * l.tAvg * 1e-3, wz);
 	outReactive = clamp (max (a, lum / (1.0 + lum)), 0.0, 0.9);
 }

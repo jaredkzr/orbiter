@@ -2117,6 +2117,11 @@ void Scene::BeginFrame ()
 	// (before any of their sets are bound in this frame's commands)
 	plumes->SetPrepass (ao->PrepassView ());
 	particles->SetPrepass (ao->PrepassView ());
+	{
+		VkImageView pl, pz;
+		plumes->LayerViews (pl, pz);
+		particles->SetPlumeLayer (pl, pz);
+	}
 	plasma->SetPrepass (ao->PrepassView ());
 	fireballs->SetPrepass (ao->PrepassView ()); // (the settings applied, the half-size images made when first wanted; particles told of OcclusionView)
 	tracks->BeginFrame (fi, camPos, camRot);
@@ -2628,7 +2633,7 @@ void Scene::RenderPrepass ()
 			if (VObject *pv = GetVisual (hp))
 				if (Atmosphere *a = pv->GetAtmosphere ()) a->UploadOcean (ctx->Cmd (), camPos);
 		particles->Simulate (camPos, sunDir, frameSet[ctx->FrameIndex()], camAtmSet, rtSets[0] ? rtSets : nullptr, oapiGetSimTime ());
-		particles->RenderScreenSmoke (frameSet[ctx->FrameIndex()]);
+		particles->RenderScreenSmoke (frameSet[ctx->FrameIndex()], camRot, proj);
 		ctx->GpuMark ("particles");
 	}
 	if (!relOn) RenderVolumetricClouds (); // (relativistic view: it marches through the depth seen)
@@ -2945,6 +2950,7 @@ void Scene::Render ()
 	fireballs->Compute (FrameSet ());
 	fireballs->Render (FrameSet (), camAtmSet);
 	particles->fireballOcc = fireballs->Drawn ();
+	particles->plumeLayer = plumes->LayerReady ();
 	ctx->BindSceneWithMask (rt, reactiveMS.image ? &rtMS : nullptr);
 	plumes->Draw (FrameSet (), camAtmSet, gc->TexMgr()->White());
 	ctx->GpuMark ("plumes");

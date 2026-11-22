@@ -2741,6 +2741,28 @@ void VVessel::CollectLights (std::vector<LightSource> &lights)
 				l.smoke = pl.smoke;
 				lights.push_back (l);
 			}
+			// (the smoke at the flame's end, for the brightest: a point lighting
+			// the smoke only - its light on surfaces a hundredth, its share of it
+			// for the smoke a hundred times (Scene.cpp: col.w) - the whole flame
+			// as seen from the smoke beyond it: its side's area as drawn (the
+			// hot part's third fell off within metres))
+			if (np == 3 && pl.endSmoke > 0.0f && length (pl.endPos - cam) < std::min (reach, 25e3) + 150e3) {
+				const float HULL = 0.01f;
+				LightSource l{};
+				l.owner = id;
+				l.pos = pl.endPos;
+				l.range = std::min (reach, 25e3);
+				l.sortRange = 0.0; // (no shadowed slot)
+				l.radius = pl.endRadius;
+				// (near it at most a twelfth of the light: the smoke there
+				// dimmer than the flame as drawn - by the smoke share's gain
+				// (SmokeShare: 5) it outshone it, the puffs beyond the flame
+				// glowing balls)
+				l.att[0] = 12.0, l.att[1] = 0.0, l.att[2] = PI / std::max (pl.endArea, area);
+				for (int c = 0; c < 3; c++) l.col[c] = pl.col[c] * HULL;
+				l.smoke = pl.endSmoke / HULL;
+				lights.push_back (l);
+			}
 		}
 	}
 
@@ -2882,7 +2904,11 @@ void VVessel::CollectPlumes (PlumeRenderer &pr)
 		if (lvl <= 0.0) continue;
 		VECTOR3 gd = mul (grot, *es.ldir);
 		PlumeDraw pd{};
-		pd.pos = scene->ViewPos (gpos + mul (grot, *es.lpos) - gd * es.lofs);
+		VECTOR3 gn = gpos + mul (grot, *es.lpos) - gd * es.lofs;
+		pd.pos = scene->ViewPos (gn);
+		// (in the frame of the planet's surface: the global frame moves with
+		// the planets, a kilometre a frame)
+		if (OBJHANDLE sref = vessel->GetSurfaceRef ()) oapiGlobalToLocal (sref, &gn, &pd.gpos), pd.gposSet = true;
 		pd.dir = scene->ViewDir (-gd);
 		pd.wind = wind;
 		pd.exitRadius = 0.5 * es.wsize * o.scale;
@@ -2913,8 +2939,42 @@ void VVessel::CollectPlumes (PlumeRenderer &pr)
 			AddPlumePoint (info, (int)type);
 			// (a flame lights its surroundings; cold gas does not glow)
 			if (type != PlumeType::ColdGas) {
+				// (the smoke leaving the flame's end lit by it from there: the
+				// light points stop at its hot part (HOT_LENGTH), the smoke 100 m
+				// on was dark - from afar a dull trail under the flame, and from
+				// the ground below, looking up the trail, a dark cloud over it at
+				// 40 km. Half of it in dense air: none there, the SRBs' column
+				// under their 120 m flames was a dim haze beside the SSMEs' lit
+				// steam; all of it, the pad's cloud white)
+				double airP = pd.ambientPressure / 101325.0;
+				const double END_DENSE = 0.5;
+				// (faded in by the height of the flame's end above the ground, over
+				// one flame length - where it would end with nothing in the way:
+				// none while it reaches the pad, the same at any rate of climb.
+				// Switched on as the jet's ray cast left the surface - reaching
+				// past the flame, some 100 m below its end - the pad's cloud
+				// jumped brighter in a step for each booster; by the end the
+				// surface cuts it at, in steps as the rays met the deck or the
+				// flame trench, some 5 m apart)
+				double lit = 0.0;
+				{
+					double hEnd = info.length;
+					if (OBJHANDLE ref = vessel->GetSurfaceRef ()) {
+						VECTOR3 pp, gv;
+						oapiGetGlobalPos (ref, &pp);
+						vessel->GetGlobalPos (gv);
+						VECTOR3 ge = scene->GlobalPos (info.endFree);
+						// (the ground under the vessel: its radius there)
+						double rGround = length (gv - pp) - vessel->GetAltitude (ALTMODE_GROUND);
+						hEnd = length (ge - pp) - rGround;
+					}
+					double u = std::clamp (hEnd / std::max (info.length, 1.0), 0.0, 1.0);
+					lit = u * u * (3.0 - 2.0 * u);
+				}
+				float endSmoke = (float)(SmokeShare (info) * lit * (END_DENSE + (1.0 - END_DENSE) * (1.0 - std::clamp ((airP - 0.3) / 0.3, 0.0, 1.0))));
 				PlumeLight pl{ { scene->GlobalPos (info.lightPos[0]), scene->GlobalPos (info.lightPos[1]), scene->GlobalPos (info.lightPos[2]) },
-					{ info.lightRadius[0], info.lightRadius[1], info.lightRadius[2] }, { info.lightCol[0], info.lightCol[1], info.lightCol[2] }, info.lightArea, SmokeShare (info) };
+					{ info.lightRadius[0], info.lightRadius[1], info.lightRadius[2] }, { info.lightCol[0], info.lightCol[1], info.lightCol[2] }, info.lightArea, SmokeShare (info),
+					scene->GlobalPos (info.end), info.endRadius, 2.0 * info.endRadius * info.length, endSmoke };
 				plumeLights.push_back (pl);
 			}
 		}
@@ -2997,21 +3057,39 @@ void VVessel::EmitSmoke (DWORD idx, int type, const PlumeDraw &pd, const PlumeIn
 	// the flame out of its end instead of the vessel's path
 	const double CARRY = 1.5;
 	bool jet = !atSurface && !rcs && !cold && c.smokeJet > 0.0f;
+	// (a hydrogen engine's free jet: steam, nearly unseen in photographs of
+	// launches beside the solid motors' column; where it meets the pad, a
+	// cloud. At its full opacity the Shuttle's SSMEs' smoke, born beside the
+	// SRB flames' bright part, was a lit streak outshining the SRBs' dark
+	// column)
+	if (jet && type == (int)PlumeType::Hydrolox) fade *= 0.12;
 	double Lf = std::max (info.length, 1.0);
-	// (as wide as the flame where it visibly ends, about)
-	// (in thin air the flame's bell is far wider than at sea level (its end
-	// radius 6 m to 15 m for the Shuttle's SRBs): the smoke grows with it by
-	// the square root only, and the opacity goes down with the square of the
-	// size: about the same smoke spread wider, not a ball hiding the flame)
-	// (Rref: about the jet's end radius at sea level, 3.2 exit radii; a
-	// smaller one, another class's flame, is taken as it is)
-	double Rref = 3.2 * pd.exitRadius;
-	double Reff = atSurface || info.endRadius <= Rref ? info.endRadius : Rref * std::sqrt (info.endRadius / Rref);
-	double thinAlt = std::min (1.0, (info.endRadius <= Rref || atSurface) ? 1.0 : (Rref / Reff) * (Rref / Reff));
+	// (as wide as the flame where it visibly ends: in thin air the flame's
+	// bell is far wider than at sea level (its end radius 12 m to 27 m for
+	// the Shuttle's SRBs up to 27 km), and the smoke leaving it with it -
+	// the same smoke spread wider, its opacity across the trail down as the
+	// width goes up. It grew by the square root only, its opacity down by
+	// the square: a thin, faint trail behind a flared flame)
+	// (Rref: about the jet's end radius at sea level, 6.5 exit radii (the
+	// SRBs' 120 m flame); a smaller one, another class's flame, is taken as
+	// it is)
+	double Rref = 6.5 * pd.exitRadius;
+	double Reff = info.endRadius;
+	double thinAlt = atSurface || info.endRadius <= Rref ? 1.0 : Rref / info.endRadius;
 	double size = 5.0 * Reff * sizeScale;
 	double v0 = 40.0 * pd.level;
 	// spacing of a third of the particle size along the trail
 	double rate = std::clamp ((length (as) + v0) / (0.35 * std::max (size / sizeScale, 0.5)), 6.0, 250.0) * D;
+	// (a jet's smoke: an eighth, over the stream's speed from the flame -
+	// the jet's on top of the airspeed - each the thinner: the same smoke.
+	// A third over the airspeed left two or three puffs a frame for a stream
+	// moving 40 m a frame past the vessel (the SRBs at 30 km): a chain of
+	// round puffs, each a frame's step on in the next)
+	double jetThin = 1.0;
+	if (jet) {
+		double r1 = std::clamp ((length (as) + c.smokeJet * pd.level) / (0.12 * std::max (size / sizeScale, 0.5)), 6.0, 1000.0) * D;
+		jetThin = rate / r1, rate = r1;
+	}
 	if (atSurface) rate = 120.0 * D; // (a cloud building up around the point)
 	r.onTime = r.havePrev ? r.onTime + dt : 0.0;
 	if (rcs || cold) {
@@ -3037,14 +3115,23 @@ void VVessel::EmitSmoke (DWORD idx, int type, const PlumeDraw &pd, const PlumeIn
 		e.planar = atSurface;
 		e.lifetime = c.smokeLife, e.dt = dt;
 		e.size = size, e.growth = (jet ? 0.65 : 0.4) * size + 2.0 * sizeScale;
-		e.alpha = fade * thinAlt * std::min (1.0, 1.3 / (D * sizeScale * sizeScale));
+		e.alpha = fade * thinAlt * jetThin * std::min (1.0, 1.3 / (D * sizeScale * sizeScale));
 		e.slowdown = atSurface ? 0.8 : ParticleSystem::ExhaustDrag (pd.airDensity);
 		if (jet) {
 			VECTOR3 asg;
 			vessel->GetAirspeedVector (FRAME_GLOBAL, asg);
 			e.vel = vel - asg; // (the air's velocity there)
 			e.v0 = c.smokeJet * pd.level;
-			e.spread = 15.0 + 0.1 * e.v0;
+			e.spread = 15.0 + 0.04 * e.v0; // (some 35 m/s: faster, more scattered puffs came apart)
+			// (born half as wide again as the flame's end, growing to the size
+			// above: born at it - two and a half times the flame's width,
+			// scattered by half of that - the flame ended in a ball of smoke
+			// several times as wide as itself, in thin air; born as wide as
+			// it, the trail seen from the ground was narrower than the flame,
+			// whose glow reads wider from afar)
+			e.jetSmoke = true;
+			e.growth = ParticleSystem::Emission::JET_GROWTH * size;
+			e.size = std::min (size, 3.0 * Reff);
 			e.slowdown = std::max (e.v0 / (CARRY * Lf), 0.05);
 		}
 		if (rcs || cold) {

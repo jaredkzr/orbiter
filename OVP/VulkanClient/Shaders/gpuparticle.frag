@@ -23,11 +23,13 @@ layout(set = 1, binding = 3) uniform sampler3D detailNoise;
 layout(set = 1, binding = 4) uniform sampler2D prepass; // view depth (w; 0: none)
 layout(set = 1, binding = 23) uniform sampler3D volInteg; // smoke in front: light (rgb), transmittance (a)
 layout(set = 1, binding = 48) uniform sampler2D fbOcc;    // crash fireballs (fireball.frag): 1/depth where they begin (r), turn opaque (g), transmittance (a)
+layout(set = 1, binding = 53) uniform sampler2D plumeLight; // the plumes at half size (plume.frag): light (rgb), transmittance (a)
+layout(set = 1, binding = 54) uniform sampler2D plumeDist;  // where they are: sum of w t [km] (r), sum of w (g)
 layout(set = 2, binding = 0) uniform sampler2D ptex[32];  // the rings' textures (ringInfo bits 0-7)
 
 layout(push_constant) uniform Draw {
 	uint count;
-	uint flags;   // 32: fogged by the smoke volume (gpuparticle.vert), 64: hidden behind crash fireballs
+	uint flags;   // 32: fogged by the smoke volume (gpuparticle.vert), 64: hidden behind crash fireballs, 128: the plumes' layer (behind them: under them)
 	float alpha;
 	float pad;
 	vec4 bodyPos, bodyVel, omega; // (vertex shader)
@@ -146,5 +148,21 @@ void main ()
 	} else {
 		outColor = vec4 (a * (c * fog.a + fog.rgb), a) * hide;
 		outReactive = clamp (a, 0.0, 0.9);
+	}
+	// behind a flame (the plumes are drawn first, over the scene): as under
+	// it - its light dimmed by the flame's transmittance and the flame's
+	// light in place of what it hides (with this blending, dst (1 - a) +
+	// rgb, the same as drawing the flame after it). Drawn over the flame, a
+	// launch's old trail kilometres behind it was a black column across the
+	// glowing exhaust
+	if ((pc.flags & 128u) != 0u) {
+		vec2 uv = gl_FragCoord.xy / frame.jitter.zw;
+		vec2 pz = textureLod (plumeDist, uv, 0.0).rg;
+		if (pz.g > 1e-4) {
+			vec4 pl = textureLod (plumeLight, uv, 0.0);
+			float zp = 1e3 * pz.r / pz.g, z = length (vPosView);
+			float under = smoothstep (0.97 * zp, 1.03 * zp, z);
+			outColor.rgb = outColor.rgb * mix (1.0, pl.a, under) + outColor.a * under * pl.rgb;
+		}
 	}
 }

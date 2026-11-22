@@ -108,6 +108,11 @@ public:
 		/// emissive: eroded by noise as it ages (thin parts first: flames
 		/// break up into tongues as they cool)
 		bool erode = false;
+		/// a jet's smoke (engine smoke): born at size, growing towards
+		/// growth / JET_GROWTH, denser while narrower (particles.glsl
+		/// ParticleAlpha: the same smoke) - as wide as the flame's end
+		bool jetSmoke = false;
+		static constexpr double JET_GROWTH = 0.65; ///< (particles.glsl)
 		/// its motion relative to the air drawn as a streak over this time
 		/// [s] (up to 0.5; brightness spread over the streak). 0: the
 		/// class's (Spark 0.03, PlasmaWake 0.04, others none), < 0: none
@@ -163,7 +168,7 @@ public:
 	/// Screen-space smoke: thickness of the volumetric particles, blurred
 	/// (outside rendering scopes, after Simulate); its composite (scene with
 	/// reactive mask, before the particles)
-	void RenderScreenSmoke (VkDescriptorSet frameSet);
+	void RenderScreenSmoke (VkDescriptorSet frameSet, const MATRIX3 &camRot, const float *proj);
 	void DrawScreenSmoke (VkDescriptorSet frameSet);
 	void EnsureScreenSmoke ();
 	/// the graphics settings' smoke rendering and trails (live: each frame)
@@ -184,6 +189,12 @@ public:
 	void SetFireballOcclusion (VkImageView view);
 	/// the fireballs were marched this frame (their occlusion valid)
 	bool fireballOcc = false;
+	/// the plumes' half-size images (PlumeRenderer::LayerViews; null: none):
+	/// sprites behind a flame drawn as under it (set each frame before the
+	/// sets are bound; the GPU idled when they change)
+	void SetPlumeLayer (VkImageView light, VkImageView dist);
+	/// the plumes were drawn into them this frame (PlumeRenderer::LayerReady)
+	bool plumeLayer = false;
 	/// billowing smoke puffs (four in the quadrants)
 	VkTexture *SmokeTexture () const { return smokeTex; }
 	/// drag of exhaust gas in air [1/s] at density rho [kg/m^3]: it takes
@@ -233,10 +244,11 @@ private:
 	VECTOR3 lastCam{};
 	bool haveCam = false;
 	VkSampler noiseSampler = VK_NULL_HANDLE, clampSampler = VK_NULL_HANDLE;
-	static constexpr int SMOKE_NOISE_SIZE = 64;   // the smoke volume's erosion noise (texels a side; mips)
+	static constexpr int SMOKE_NOISE_SIZE = 64;   // the smoke volume's erosion noise (texels a side)
 	vkc::Image smokeNoise;
 	VkSampler smokeNoiseSampler = VK_NULL_HANDLE;
-	VkImageView shapeView = VK_NULL_HANDLE, detailView = VK_NULL_HANDLE, prepassView = VK_NULL_HANDLE, fbOccView = VK_NULL_HANDLE;
+	VkImageView shapeView = VK_NULL_HANDLE, detailView = VK_NULL_HANDLE, prepassView = VK_NULL_HANDLE, fbOccView = VK_NULL_HANDLE, plLightView = VK_NULL_HANDLE, plDistView = VK_NULL_HANDLE;
+	bool plSet = false; // (SetPlumeLayer's views written)
 	VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
 	VkDescriptorPool dpool = VK_NULL_HANDLE;
 	VkDescriptorSet sets[vkc::FRAMES_IN_FLIGHT] = {};
@@ -271,12 +283,23 @@ private:
 	// grids for larger particles (each D, C, R, G, B, sun share, core: smokevol.glsl VA_*), the resolved volume, its core, the columns
 	// with smoke, the smoke in front of each froxel (sprites fogged), the
 	// column tiles with smoke (two frames), the half-resolution march
-	vkc::Image volAccum[8], volMid[8], volCoarse[8], lvlL[2], lvlD[2], volOut, volCore, volColumns, volInteg;
+	vkc::Image volAccum[8], volMid[8], volCoarse[8], lvlL[2], lvlD[2], lvlV[2], volOut, volCore, volColumns, volInteg;
 	vkc::Image volOccl, occl; // the fine grid's extinction at the half resolution (accumulator, floats): the local lights' occlusion
 	vkc::Image volDummy;                 // (the sprites' fog while there is no volume: none)
 	vkc::Buffer volOcc;
-	vkc::Image march[3];                 // near, far, depths (half resolution)
+	// the half-resolution march: near, far (frame slot 0), depths, near, far
+	// (slot 1: each slot's march blends in the other's, the last frame's -
+	// MarchNear/MarchFar)
+	vkc::Image march[5];
+	static uint32_t MarchNear (uint32_t slot) { return slot ? 3 : 0; }
+	static uint32_t MarchFar (uint32_t slot) { return slot ? 4 : 1; }
 	VkExtent2D marchExtent{};
+	// (the last march's camera: its history reprojected; frameNo of that march)
+	MATRIX3 marchRot{};
+	VECTOR3 marchCam{};
+	float marchProj[2] = {};
+	uint64_t marchFrame = 0;
+	uint32_t marchCount = 0;
 	bool volAlloc = false, volFull = true;
 	uint32_t volParity = 0, marchGen = ~0u;
 	double volIdleSince = -1e30;         // [s] wall: volume unused since (released after a while)
@@ -291,7 +314,7 @@ private:
 	bool nearKnown = false, nearEmit = false; // (volumetric smoke within reach: read back, emitted)
 	struct VolGrave { uint64_t frame; std::vector<vkc::Image> images; vkc::Buffer occ; };
 	std::vector<VolGrave> volGrave;      // (released images, destroyed when no frame in flight uses them)
-	void RenderMarch (VkDescriptorSet frameSet);
+	void RenderMarch (VkDescriptorSet frameSet, const MATRIX3 &camRot, const float *proj);
 	VkSampler volSampler = VK_NULL_HANDLE;
 	VkPipeline volSplatPipe = VK_NULL_HANDLE, volResolvePipe = VK_NULL_HANDLE, volMarchPipe = VK_NULL_HANDLE, marchPipe = VK_NULL_HANDLE;
 	VkPipelineLayout volMarchLayout = VK_NULL_HANDLE;

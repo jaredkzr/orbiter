@@ -7,7 +7,10 @@
 // the four pixels (smoke_march.frag picks per pixel by its depth). The
 // smoke's edges are eroded by noise anchored to the planet (it turns with
 // the air), so that the coarse grid shows billows; octaves finer than the
-// pixels are left at their mean
+// pixels are left at their mean. Each frame's rays are offset within their
+// pixels and blended into the last frame's results, reprojected and held to
+// the range of their neighbours' (the noise resolved to about a pixel: a
+// single ray a pixel aliased finer octaves as stripes and stipple)
 
 #version 450
 #extension GL_GOOGLE_include_directive : require
@@ -24,27 +27,38 @@ layout(set = 0, binding = 36) uniform sampler3D volCoreTex;
 layout(set = 0, binding = 38, rgba16f) uniform writeonly image2D marchNear; // light (rgb), transmittance (a) up to the nearest surface
 layout(set = 0, binding = 39, rgba16f) uniform writeonly image2D marchFar;  //   to the farthest
 layout(set = 0, binding = 40, rg16f) uniform writeonly image2D marchDepth;  // those depths (none: 2 VOL_FAR)
+layout(set = 0, binding = 49) uniform sampler2D histNear; // the last frame's near, far (the other frame slot's)
+layout(set = 0, binding = 50) uniform sampler2D histFar;
+// (the history's parameters, in fields the march does not use otherwise:
+// Particles.cpp RenderMarch) rows of the rotation from this view to the
+// last's, w: the shift; the last view's projection scales; whether there is
+// a history; the march's count
+#define HIST_ROW0 pc.lightX
+#define HIST_ROW1 pc.lightY
+#define HIST_ROW2 pc.lightZ
+#define HIST_PROJ pc.trailNoise.xy
+#define HIST_VALID (pc.trailNoise.z > 0.5)
+#define MARCH_COUNT uint (pc.trailNoise.w)
 
 // the erosion noise: smooth tiling gradient noise (64^3, 4 and 8 cells a
-// tile, with mips: Particles.cpp SmokeNoise), sampled at the level of the
-// pixels' footprint (fp: a pixel in noise units; k: the octave's
-// frequency) — no creases, no aliasing of octaves finer than the pixels.
-// A texel of two pixels: at one, the trilinear filter's lattice (its kinks
-// at the texels), the same in every ray of a narrow view, beat with the
-// rays as fine diagonal stripes over the smoke (not 8-bit steps: 16 bits
-// changed nothing)
+// tile of cells of even variance: Particles.cpp SmokeNoise; k: the
+// octave's frequency), no mips: smooth over its cells of eight texels, its
+// octaves faded by the pixels' footprint instead (fp: a pixel in noise
+// units). A mip's cells of a texel or two showed the trilinear filter's
+// lattice as fine stripes over the smoke; the rays offset over the frames
+// resolve what the faded octaves leave finer than a ray
 layout(set = 0, binding = 44) uniform sampler3D smokeNoise;
-const float SMOKE_NOISE_TEXELS = 64.0, SMOKE_NOISE_CELLS = 8.0;
-float EroNoise (vec3 w, float fp, float k) { return textureLod (smokeNoise, w * k, max (log2 (fp * k * SMOKE_NOISE_TEXELS) + 1.0, 0.0)).r; }
-// (an octave fades to its mean once a pixel covers a good part of its finest cells)
-float OctaveWeight (float fp, float k) { return 1.0 - smoothstep (0.3, 1.0, fp * k * SMOKE_NOISE_CELLS); }
+const float SMOKE_NOISE_CELLS = 8.0;
+float EroNoise (vec3 w, float k) { return textureLod (smokeNoise, w * k, 0.0).r; }
+// (an octave fades to its mean as a pixel comes to cover one of its finest cells)
+float OctaveWeight (float fp, float k) { return 1.0 - smoothstep (0.4, 1.4, fp * k * SMOKE_NOISE_CELLS); }
 
-void main ()
+// the ray of half-resolution pixel hp, offset o [pixels] from the centre of
+// its four: the light and transmittance up to the nearest and the farthest
+// surface, the depth of the smoke seen (weighted by its opacity; 0: none)
+void March (ivec2 hp, ivec2 full, vec2 o, out vec4 resNear, out vec4 resFar, out float zSeen)
 {
-	ivec2 hp = ivec2 (gl_GlobalInvocationID.xy);
-	ivec2 full = ivec2 (frame.jitter.zw);
-	ivec2 hs = (full + 1) / 2;
-	if (any (greaterThanEqual (hp, hs))) return;
+	zSeen = 0.0;
 	// the depths of its four pixels
 	const float NONE = 2.0 * VOL_FAR;
 	float zn = NONE, zf = 0.0;
@@ -54,12 +68,12 @@ void main ()
 		zn = min (zn, z), zf = max (zf, z);
 	}
 	imageStore (marchDepth, hp, vec4 (zn, zf, 0.0, 0.0));
-	vec4 resNear = vec4 (0.0, 0.0, 0.0, 1.0), resFar = resNear;
+	resNear = vec4 (0.0, 0.0, 0.0, 1.0), resFar = resNear;
 	// the smoke's depth range in this column and its neighbours (the volume
 	// is filtered across froxels); the columns' own ranges (filtered, the
 	// ranges of neighbours at other depths would blend into one holding
 	// neither: blocks missing along the ground)
-	vec2 uv = (vec2 (hp * 2) + 1.0) / vec2 (full);
+	vec2 uv = (vec2 (hp * 2) + 1.0 + o) / vec2 (full);
 	ivec2 col = ivec2 (uv * vec2 (VOL_SIZE.xy));
 	vec2 rng = vec2 (1.0, 0.0);
 	for (int y = -1; y <= 1; y++)
@@ -70,24 +84,34 @@ void main ()
 	float zEnd = min (zf, VOL_FAR);
 	float s0 = max (rng.x - 1.0 / float (VOL_SIZE.z), 0.0), s1 = min (rng.y + 1.0 / float (VOL_SIZE.z), VolSlice (zEnd));
 	if (rng.x >= rng.y || s1 <= s0) {
-		imageStore (marchNear, hp, resNear), imageStore (marchFar, hp, resFar);
 		return;
 	}
 	vec2 ndc = uv * 2.0 - 1.0;
 	vec3 d = normalize (vec3 (ndc.x / frame.proj[0][0], ndc.y / frame.proj[1][1], 1.0));
-	const int N = 40;
+	const int N = 64;
 	// (interleaved gradient noise: an even spread of the steps' offsets)
-	vec2 fc = vec2 (hp) + 5.588238 * float (uint (pc.bodyVel.w * 60.0) & 63u);
+	vec2 fc = vec2 (hp) + 5.588238 * float (MARCH_COUNT & 63u);
 	float jit = fract (52.9829189 * fract (dot (fc, vec2 (0.06711056, 0.00583715))));
 	float T = 1.0;
 	vec3 L = vec3 (0.0);
+	float zw = 0.0, ow = 0.0;
 	bool nearDone = false;
 	mat3 v2g = mat3 (frame.viewToGlobal);
 	vec3 org = vec3 (pc.noiseRot[0].w, pc.noiseRot[1].w, pc.noiseRot[2].w);
 	// (a pixel's size at unit distance, half resolution: noise octaves
-	// finer than about two of them fade to their mean)
+	// with cells under about one of them fade to their mean)
 	float pix = 4.0 / (abs (frame.proj[1][1]) * float (full.y));
-	float ds = (s1 - s0) / float (N);
+	// the steps, in depth: about three pixel footprints where there is smoke
+	// (the noise's octaves are kept down to the pixels, not to the steps: N
+	// even steps over the smoke's whole depth were tens of metres in a
+	// ground cloud, its finer octaves faded with them), longer as less of
+	// what lies behind shows; through empty froxels half a slice, the step
+	// that finds smoke taken again finely; at least what reaches the end in
+	// the steps left (a long thin trail)
+	float zA = VolDepth (s0), zB = VolDepth (s1);
+	float dzFine = 3.0 * pix * d.z, dzEmpty = 0.5 * (exp (log (VOL_FAR / VOL_NEAR) / float (VOL_SIZE.z)) - 1.0);
+	float z0 = zA;
+	bool empty = false;
 	// (towards the sun in noise units: the billows' lit tops and shaded
 	// undersides, from the noise's gradient that way)
 	vec3 sunG = v2g * frame.sunDir.xyz;
@@ -98,12 +122,14 @@ void main ()
 	int fa = int (frame.lightCount.y), fb = int (frame.lightCount.z);
 	vec3 flameP = fa >= 0 ? (fb >= 0 ? 0.5 * (frame.lights[fa].pos.xyz + frame.lights[fb].pos.xyz) : frame.lights[fa].pos.xyz) : vec3 (0.0);
 	const vec3 LUM = vec3 (0.2126, 0.7152, 0.0722);
-	for (int i = 0; i < N; i++) {
-		float sa = s0 + (float (i) + jit) * ds;
-		float z0 = VolDepth (s0 + float (i) * ds), z1 = min (VolDepth (s0 + float (i + 1) * ds), zEnd);
-		if (z1 <= z0) break;
-		vec4 v = textureLod (volTex, vec3 (uv, sa), 0.0);
-		float zs = VolDepth (sa);
+	for (int i = 0; i < N && z0 < zB; i++) {
+		float fine = dzFine * z0 / sqrt (max (T, 0.05));
+		float dz = max (empty ? dzEmpty * z0 : fine, (zB - z0) / float (N - i));
+		float z1 = min (z0 + dz, zB);
+		float zs = z0 + jit * (z1 - z0);
+		vec4 v = textureLod (volTex, vec3 (uv, VolSlice (zs)), 0.0);
+		if (empty && v.a > 1e-6 && z1 - z0 > 1.5 * fine) { empty = false; continue; }
+		empty = v.a <= 1e-6;
 		float sigma = 0.0, keep = 1.0, shade = 1.0;
 		if (v.a > 1e-6) {
 			// erosion: billows of tens of metres, drifting slowly (in the noise origin)
@@ -113,34 +139,40 @@ void main ()
 			// of the step along the ray if longer: finer noise would alias between the
 			// jittered steps as stipple)
 			float fp = (uint (pc.vol.z) & 8u) != 0u ? 1e3 : max (pix * zs, 0.25 * (z1 - z0) / d.z) * pc.vol.w; // (bit 3: no noise, debugging)
+			// (the core, and the speed of engine smoke through the air: each
+			// octave faded where it would slide visibly in a frame, about 3 %
+			// of its cell - the noise rests in the air; smoke crossing it fast
+			// had its billows re-formed every frame)
+			vec2 cy = textureLod (volCoreTex, vec3 (uv, VolSlice (zs)), 0.0).rg;
+			float speed = cy.y * VOL_SPEED_FULL;
 			// (the lattice of any lattice noise, integrated along the view
 			// rays, shows as straight lines converging on its axes' vanishing
 			// points: the coordinates bent by a noise of half the frequency,
 			// about two cells, first)
 			{
-				float fw = OctaveWeight (fp, 0.5);
-				// (two mips coarser: smooth enough for a warp, and cheap)
-				float fw4 = max (fp, 1.0 / 32.0) * 4.0;
-				vec3 wv = vec3 (EroNoise (w, fw4, 0.5), EroNoise (w + vec3 (0.31, 0.17, 0.77), fw4, 0.5), EroNoise (w + vec3 (0.63, 0.89, 0.41), fw4, 0.5)) - 0.476;
-				w += wv * (2.0 * fw);
+				float fw = OctaveWeight (fp, 0.5) * (1.0 - smoothstep (100.0, 200.0, speed));
+				vec3 wv = vec3 (EroNoise (w, 0.5), EroNoise (w + vec3 (0.31, 0.17, 0.77), 0.5), EroNoise (w + vec3 (0.63, 0.89, 0.41), 0.5)) - 0.476;
+				w += wv * fw;
 			}
 			// (two octaves: a third, finer one was mostly below the pixels
 			// and only added stipple)
-			float f1 = OctaveWeight (fp, 1.0), f3 = OctaveWeight (fp, 3.0);
-			float n1 = mix (0.476, EroNoise (w, fp, 1.0), f1);
-			float n = n1 * 0.6 + mix (0.476, EroNoise (w, fp, 3.0), f3) * 0.4;
+			// (the octaves' lattices offset from each other's)
+			const vec3 O3 = vec3 (0.173, 0.391, 0.527), OC = vec3 (0.619, 0.287, 0.443);
+			float f1 = OctaveWeight (fp, 1.0) * (1.0 - smoothstep (50.0, 120.0, speed)), f3 = OctaveWeight (fp, 3.0) * (1.0 - smoothstep (25.0, 60.0, speed));
+			float n1 = mix (0.476, EroNoise (w, 1.0), f1);
+			float n = n1 * 0.6 + mix (0.476, EroNoise (w + O3, 3.0), f3) * 0.4;
 			// (and lobes of some 30 m, a quarter of the frequency: a cloud
 			// hundreds of metres across seen from kilometres away, whose finer
 			// octaves have faded to their mean, still billows - it was a smooth
 			// blob. By its deviation from the mean: the contrast kept)
-			float fc = OctaveWeight (fp, 0.25);
-			float nc = mix (0.476, EroNoise (w, fp, 0.25), fc);
+			float fc = OctaveWeight (fp, 0.25) * (1.0 - smoothstep (150.0, 300.0, speed));
+			float nc = mix (0.476, EroNoise (w + OC, 0.25), fc);
 			n += (nc - 0.476) * 0.9;
 			uint dbg = uint (pc.vol.z) >> 4; // (debugging: 1 no billow shading, 2 octave 1 only, 4 no density modulation, 8 no erosion)
 			if ((dbg & 2u) != 0u) n = n1;
-			keep = (dbg & 8u) != 0u ? 1.0 : VolKeep (n, textureLod (volCoreTex, vec3 (uv, sa), 0.0).r);
+			keep = (dbg & 8u) != 0u ? 1.0 : VolKeep (n, cy.x);
 			// (denser where the noise is: billows inside dense smoke too)
-			sigma = v.a * keep * 1.6 * ((dbg & 4u) != 0u ? 1.0 : 0.4 + 1.2 * n);
+			sigma = v.a * keep * VOL_SIGMA * ((dbg & 4u) != 0u ? 1.0 : 0.4 + 1.2 * n);
 			// (lit tops and shaded undersides of the billows: the noise's
 			// gradient towards the light, of the first octave and of the
 			// coarse one over four times the distance)
@@ -155,8 +187,8 @@ void main ()
 					lg = normalize (mix (sunG, v2g * normalize (flameP - pv), wf) + 1e-4);
 				}
 				vec3 lN = NoiseFrame (lg) * 0.06;
-				float g = (n1 - mix (0.476, EroNoise (w + lN, fp, 1.0), f1)) * f1
-					+ 0.9 * (nc - mix (0.476, EroNoise (w + 4.0 * lN, fp, 0.25), fc)) * fc;
+				float g = (n1 - mix (0.476, EroNoise (w + lN, 1.0), f1)) * f1
+					+ 0.9 * (nc - mix (0.476, EroNoise (w + OC + 4.0 * lN, 0.25), fc)) * fc;
 				shade = clamp (1.0 + 7.0 * g, 0.2, 1.6);
 			}
 		}
@@ -171,10 +203,55 @@ void main ()
 		}
 		float Ts = exp (-sigma * dt);
 		L += T * (1.0 - Ts) * lk;
+		zw += T * (1.0 - Ts) * zs, ow += T * (1.0 - Ts);
 		T *= Ts;
 		if (T < 0.005) break;
+		z0 = z1;
 	}
 	resFar = vec4 (L, T);
-	if (!nearDone) resNear = zn <= VolDepth (s0) ? vec4 (0.0, 0.0, 0.0, 1.0) : resFar;
-	imageStore (marchNear, hp, resNear), imageStore (marchFar, hp, resFar);
+	if (!nearDone) resNear = zn <= zA ? vec4 (0.0, 0.0, 0.0, 1.0) : resFar;
+	zSeen = ow > 1e-4 ? zw / ow : 0.0;
+}
+
+shared vec4 sNear[64], sFar[64];
+
+void main ()
+{
+	ivec2 hp = ivec2 (gl_GlobalInvocationID.xy);
+	ivec2 full = ivec2 (frame.jitter.zw);
+	ivec2 hs = (full + 1) / 2;
+	bool inside = all (lessThan (hp, hs));
+	// (this frame's offset within the four pixels: an R2 sequence)
+	vec2 o = fract (0.5 + float (MARCH_COUNT) * vec2 (0.7548777, 0.5698403)) * 2.0 - 1.0;
+	vec4 rn = vec4 (0.0, 0.0, 0.0, 1.0), rf = rn;
+	float zSeen = 0.0;
+	if (inside) March (hp, full, o, rn, rf, zSeen);
+	// the history: where the smoke seen here was in the last frame's view
+	// (or what lies 100 m away, where none is), held to the range of this
+	// frame's rays around (the group's: its edges see fewer); a share of
+	// about a seventh this frame's
+	ivec2 li = ivec2 (gl_LocalInvocationID.xy);
+	sNear[li.y * 8 + li.x] = rn, sFar[li.y * 8 + li.x] = rf;
+	barrier ();
+	if (!inside) return;
+	if (HIST_VALID) {
+		vec2 ndc = (vec2 (hp * 2) + 1.0) / vec2 (full) * 2.0 - 1.0;
+		vec3 p = vec3 (ndc.x / frame.proj[0][0], ndc.y / frame.proj[1][1], 1.0) * (zSeen > 0.0 ? zSeen : 100.0);
+		vec3 q = vec3 (dot (HIST_ROW0.xyz, p), dot (HIST_ROW1.xyz, p), dot (HIST_ROW2.xyz, p)) + vec3 (HIST_ROW0.w, HIST_ROW1.w, HIST_ROW2.w);
+		vec2 huv = vec2 (q.x * HIST_PROJ.x, q.y * HIST_PROJ.y) / max (q.z, 1e-3) * 0.5 + 0.5;
+		if (q.z > 0.0 && all (greaterThanEqual (huv, vec2 (0.0))) && all (lessThanEqual (huv, vec2 (1.0)))) {
+			vec4 nMin = rn, nMax = rn, fMin = rf, fMax = rf;
+			for (int y = -1; y <= 1; y++)
+				for (int x = -1; x <= 1; x++) {
+					ivec2 k = li + ivec2 (x, y);
+					if (any (lessThan (k, ivec2 (0))) || any (greaterThan (k, ivec2 (7))) || any (greaterThanEqual (hp + ivec2 (x, y), hs))) continue;
+					vec4 a = sNear[k.y * 8 + k.x], b = sFar[k.y * 8 + k.x];
+					nMin = min (nMin, a), nMax = max (nMax, a), fMin = min (fMin, b), fMax = max (fMax, b);
+				}
+			const float A = 0.15;
+			rn = mix (clamp (textureLod (histNear, huv, 0.0), nMin, nMax), rn, A);
+			rf = mix (clamp (textureLod (histFar, huv, 0.0), fMin, fMax), rf, A);
+		}
+	}
+	imageStore (marchNear, hp, rn), imageStore (marchFar, hp, rf);
 }

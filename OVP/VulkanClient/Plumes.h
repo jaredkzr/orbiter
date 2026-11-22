@@ -79,6 +79,7 @@ struct PlumeClass {
 /// where a plume's flame ends and what it meets (PlumeRenderer::Add)
 struct PlumeInfo {
 	VECTOR3 end;            // end of the flame, view space [m]
+	VECTOR3 endFree;        // where it would end with nothing in the way (view space) [m]
 	VECTOR3 endDir;         // flow direction there (view space)
 	double endRadius;       // jet radius there [m]
 	double length;          // from the nozzle exit to the end [m]
@@ -125,6 +126,8 @@ private:
 /// One plume to draw (filled by the vessel visual)
 struct PlumeDraw {
 	VECTOR3 pos;            // nozzle exit, view space [m]
+	VECTOR3 gpos{};         // the same, in the frame of the surface below [m] (where the surface cuts the jet: its moves limited by the nozzle's; gposSet)
+	bool gposSet = false;
 	VECTOR3 dir;            // flow direction, view space
 	VECTOR3 wind;           // velocity of the air relative to the nozzle, view space [m/s]
 	double exitRadius;      // [m]
@@ -150,6 +153,7 @@ class PlumeRenderer {
 public:
 	static constexpr uint32_t MAX_PLUMES = 64; ///< per frame (plume.glsl)
 	static constexpr VkFormat HALF_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT; ///< the half-size image of the plumes' light
+	static constexpr VkFormat HALF_Z_FORMAT = VK_FORMAT_R16G16_SFLOAT; ///< their light-weighted distance: sum of w t [km], sum of w
 
 	bool Init (vkc::Context *ctx, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout texLayout,
 		VkDescriptorSetLayout atmLayout, VkImageView shapeNoise, VkImageView detailNoise);
@@ -165,6 +169,8 @@ public:
 	/// the drawn radiance (luminance) of the brightest flame this frame of
 	/// those that cover a noticeable part of the view (the night exposure)
 	double FlameRadiance () const { return flameRadiance; }
+	/// the displayed exposure (the last frame's): the flames' highlights rolled off by it (plume.frag)
+	float exposure = 1.0f;
 	/// The prepass image (view depth) the plumes are clipped against
 	void SetPrepass (VkImageView prepass);
 	/// At half resolution (halfRes): march the plumes into half-size images
@@ -173,6 +179,12 @@ public:
 	/// Draw the plumes, far to near, or composite those of Render (scene
 	/// with reactive mask, Context::BindSceneWithMask)
 	void Draw (VkDescriptorSet frameSet, VkDescriptorSet atmSet, VkTexture *white);
+	/// The half-size images of this frame's plumes (Render; false: none, or
+	/// drawn at full size): light (rgb) and transmittance (a), and where
+	/// they are (rg: sum of w t [km], sum of w). Smoke drawn after them
+	/// behind a flame is drawn as under it (gpuparticle.frag)
+	void LayerViews (VkImageView &light, VkImageView &dist) const { light = halfColor.view, dist = halfZ.view; }
+	bool LayerReady () const { return layerReady; }
 
 	/// Heat shimmer: distort the scene drawn so far behind the hot exhaust
 	/// (before the plumes are drawn; outside rendering scopes or in the
@@ -234,7 +246,13 @@ private:
 	// half resolution: the plumes' light and transmittance, their reactive
 	// mask (and a depth buffer the pass needs); the composite's set and pipeline
 	VkPipeline halfPipe = VK_NULL_HANDLE;
-	vkc::Image halfColor, halfMask, halfDepth;
+	vkc::Image halfColor, halfMask, halfDepth, halfZ;
+	// where the surface cut each jet last frame (the jet's frame, in exit radii), its normal, and
+	// the nozzle then (the surface's frame): its moves limited by the nozzle's (Add)
+	struct Clip { VECTOR3 p, n, gpos; uint64_t frame; };
+	std::map<uint64_t, Clip> clips;
+	uint64_t frameNo = 0;
+	bool layerReady = false;
 	uint32_t halfGen = ~0u;
 	VkExtent2D halfExtent{};
 	bool halfDrawn = false;

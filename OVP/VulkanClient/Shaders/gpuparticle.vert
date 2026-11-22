@@ -66,7 +66,7 @@ void main ()
 	vec4 posAge = pt.posAge, velLife = pt.velLife, shape = pt.shape;
 	float age = posAge.w, life = velLife.w;
 	float tl = life > 0.0 ? age / life : 1.0;
-	float a = life > 0.0 ? pc.alpha * ParticleAlpha (pt) : 0.0;
+	float a = life > 0.0 ? pc.alpha * min (ParticleAlpha (pt), 1.0) : 0.0; // (a narrow jet's smoke: over 1)
 	bool trail = (pt.flags & PF_TRAIL) != 0u;
 	if (a <= 0.002) { gl_Position = vec4 (0.0, 0.0, -2.0, 1.0); return; } // (outside the clip volume)
 	uint flags = pt.flags;
@@ -90,6 +90,12 @@ void main ()
 	// (the camera inside or at the edge of a puff: faded, not a screen-filling
 	// blob — a sprite has no inside)
 	a *= smoothstep (0.4 * h, 1.5 * h, length (posAge.xyz));
+	// (engine smoke beyond the volume: as wide as the volume draws it. The
+	// sprite's eroded puff covers about the middle half of its square, the
+	// volume's overlapping puffs their whole extent: the column from the
+	// ground 25 km off was some 60 percent of its width in the volume,
+	// narrower than the flame's end)
+	if (vol && ParticleClass (flags) == PC_ENGINE_SMOKE) h *= 1.8;
 	if (a <= 0.002) { gl_Position = vec4 (0.0, 0.0, -2.0, 1.0); return; }
 	if ((flags & PF_SPECK) != 0u) {
 		// specks: at least about a pixel across (fainter for it: a bright

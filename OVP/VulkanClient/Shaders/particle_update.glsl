@@ -161,7 +161,11 @@ void main ()
 			: pl * pc.noiseOrg.w + pc.noiseOrg.xyz + pc.bodyVel.w * 0.03;
 		vec3 n = vec3 (texture (detailNoise, q).r, texture (detailNoise, q + vec3 (0.37, 0.71, 0.13)).r,
 			texture (detailNoise, q + vec3 (0.59, 0.23, 0.87)).r) - 0.5;
-		vel += n * (trail ? 8.0 * slow * dt : 6.0 * slow * max (p.shape.x, 0.5) * dt);
+		// (engine smoke: eddies of the noise's size, whatever the puff's - a
+		// puff of 75 m (the SRBs' in thin air) was thrown about at some
+		// 200 m/s, the column torn into clumps)
+		float eddy = ParticleClass (p.flags) == PC_ENGINE_SMOKE ? min (p.shape.x, 12.0) : p.shape.x;
+		vel += n * (trail ? 8.0 * slow * dt : 6.0 * slow * max (eddy, 0.5) * dt);
 		// hot smoke rises, less as it cools and mixes
 		if ((p.flags & PF_HOT) != 0u)
 			vel += normalize (pos - pc.bodyPos.xyz) * (4.0 * exp (-p.posAge.w / 6.0) * dt);

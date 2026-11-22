@@ -45,6 +45,7 @@ layout(push_constant) uniform Params {
 	vec4 bodyVel;   // its velocity (global frame), w: time [s]
 	vec4 omega;     // its angular velocity (global frame), w: particles in the allocated blocks (passes over them)
 	vec4 noiseOrg;  // turbulence noise coordinates of the camera position (xyz), w: their scale [1/m]
+	// (lightX..Z, trailNoise: in the march, smoke_march.comp, its history's parameters instead)
 	vec4 lightX;    // shadow grid axes (global): across the sunlight, w: half width [m]
 	vec4 lightY;    //   w: half depth along the sunlight [m]
 	vec4 lightZ;    //   towards the sun, w: extinction per unit of smoke

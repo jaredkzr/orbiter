@@ -62,29 +62,40 @@ namespace {
 	// whose cell ridges and creases showed as straight lines in thin smoke)
 	std::vector<uint8_t> SmokeNoise (int N)
 	{
-		auto hash = [](int x, int y, int z) {
-			uint32_t h = (uint32_t)x * 0x8da6b343u ^ (uint32_t)y * 0xd8163841u ^ (uint32_t)z * 0xcb1ab31fu;
+		auto hash = [](int x, int y, int z, uint32_t seed) {
+			uint32_t h = (uint32_t)x * 0x8da6b343u ^ (uint32_t)y * 0xd8163841u ^ (uint32_t)z * 0xcb1ab31fu ^ seed * 0x9e3779b9u;
 			h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;
 			return h;
 		};
-		auto grad = [&](int x, int y, int z, double fx, double fy, double fz) {
-			uint32_t h = hash (x, y, z);
+		auto grad = [&](int x, int y, int z, double fx, double fy, double fz, uint32_t seed) {
+			uint32_t h = hash (x, y, z, seed);
 			double gx = (h & 0x3ff) / 511.5 - 1.0, gy = ((h >> 10) & 0x3ff) / 511.5 - 1.0, gz = ((h >> 20) & 0x3ff) / 511.5 - 1.0;
 			double l = std::sqrt (gx * gx + gy * gy + gz * gz) + 1e-9;
 			return (gx * fx + gy * fy + gz * fz) / l;
 		};
 		auto fade = [](double t) { return t * t * t * (t * (t * 6.0 - 15.0) + 10.0); };
-		auto perlin = [&](double px, double py, double pz, int P) {
+		auto perlin = [&](double px, double py, double pz, int P, uint32_t seed) {
 			double qx = px * P, qy = py * P, qz = pz * P;
 			int cx = (int)std::floor (qx), cy = (int)std::floor (qy), cz = (int)std::floor (qz);
 			double fx = qx - cx, fy = qy - cy, fz = qz - cz;
 			double u = fade (fx), v = fade (fy), w = fade (fz), n[8];
 			for (int k = 0; k < 8; k++) {
 				int ox = k & 1, oy = (k >> 1) & 1, oz = k >> 2;
-				n[k] = grad (((cx + ox) % P + P) % P, ((cy + oy) % P + P) % P, ((cz + oz) % P + P) % P, fx - ox, fy - oy, fz - oz);
+				n[k] = grad (((cx + ox) % P + P) % P, ((cy + oy) % P + P) % P, ((cz + oz) % P + P) % P, fx - ox, fy - oy, fz - oz, seed);
 			}
 			auto l = [](double a, double b, double t) { return a + (b - a) * t; };
 			return l (l (l (n[0], n[1], u), l (n[2], n[3], u), v), l (l (n[4], n[5], u), l (n[6], n[7], u), v), w);
+		};
+		// (each octave the sum of four, their lattices offset by half cells: a
+		// gradient noise's variance is nil at its lattice's points, largest
+		// between them - through the erosion's threshold, integrated along the
+		// view rays, a mean that repeats with the cells, seen as a fine
+		// cross-hatch over the smoke)
+		const double OFS[4][3] = { { 0, 0, 0 }, { 0.5, 0.5, 0 }, { 0.5, 0, 0.5 }, { 0, 0.5, 0.5 } };
+		auto octave = [&](double px, double py, double pz, int P, uint32_t seed) {
+			double v = 0.0;
+			for (int k = 0; k < 4; k++) v += perlin (px + OFS[k][0] / P, py + OFS[k][1] / P, pz + OFS[k][2] / P, P, seed + k);
+			return v;
 		};
 		std::vector<double> f ((size_t)N * N * N);
 		double sum = 0.0, sum2 = 0.0;
@@ -92,7 +103,7 @@ namespace {
 			for (int y = 0; y < N; y++)
 				for (int x = 0; x < N; x++) {
 					double px = (x + 0.5) / N, py = (y + 0.5) / N, pz = (z + 0.5) / N;
-					double v = perlin (px, py, pz, 4) + 0.5 * perlin (px + 0.37, py + 0.71, pz + 0.13, 8);
+					double v = octave (px, py, pz, 4, 0) + 0.5 * octave (px, py, pz, 8, 4);
 					f[((size_t)z * N + y) * N + x] = v, sum += v, sum2 += v * v;
 				}
 		double n = (double)f.size (), mean = sum / n, sd = std::sqrt (std::max (sum2 / n - mean * mean, 1e-12));
@@ -222,11 +233,12 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 	sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
 	VK_CHECK(vkCreateSampler (ctx->device, &sci, nullptr, &noiseSampler));
 	{
-		// the smoke volume's erosion noise, with its mips (sampled by the
-		// pixels' footprint: smoke_march.comp)
+		// the smoke volume's erosion noise (smoke_march.comp: no mips - smooth
+		// over its cells of eight texels, its octaves faded by the pixels'
+		// footprint instead; a mip's cells of a texel or two showed the
+		// trilinear filter's lattice)
 		const int N = SMOKE_NOISE_SIZE;
-		uint32_t levels = 0;
-		while ((N >> levels) > 0) levels++;
+		const uint32_t levels = 1;
 		VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 		ici.imageType = VK_IMAGE_TYPE_3D, ici.format = VK_FORMAT_R8_UNORM, ici.extent = { (uint32_t)N, (uint32_t)N, (uint32_t)N };
 		ici.mipLevels = levels, ici.arrayLayers = 1, ici.samples = VK_SAMPLE_COUNT_1_BIT, ici.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -238,19 +250,7 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		vci.image = smokeNoise.image, vci.viewType = VK_IMAGE_VIEW_TYPE_3D, vci.format = VK_FORMAT_R8_UNORM;
 		vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, levels, 0, 1 };
 		VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &smokeNoise.view));
-		// (the levels on the CPU: box-filtered, tiling)
 		std::vector<std::vector<uint8_t>> lv{ SmokeNoise (N) };
-		for (uint32_t l = 1; l < levels; l++) {
-			int n = N >> l, m = n * 2;
-			const std::vector<uint8_t> &src = lv.back ();
-			std::vector<uint8_t> d ((size_t)n * n * n);
-			for (int z = 0; z < n; z++) for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) {
-				int s = 0;
-				for (int k = 0; k < 8; k++) s += src[((size_t)(2 * z + (k >> 2)) * m + 2 * y + ((k >> 1) & 1)) * m + 2 * x + (k & 1)];
-				d[((size_t)z * n + y) * n + x] = (uint8_t)((s + 4) / 8);
-			}
-			lv.push_back (std::move (d));
-		}
 		size_t total = 0;
 		for (auto &v : lv) total += v.size ();
 		vkc::Buffer stage = ctx->CreateBuffer (total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
@@ -387,7 +387,10 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		{ 41, CI, 1, FS, nullptr }, { 42, CI, 1, FS, nullptr }, { 43, CI, 1, FS, nullptr },
 		{ 44, CI, 1, CS, nullptr }, // (the smoke volume's erosion noise)
 		{ 45, SI, 1, CS, nullptr }, { 46, SI, 1, CS, nullptr }, { 47, CI, 1, CS, nullptr }, // (the local lights' occlusion: the fine grid's extinction)
-		{ 48, CI, 1, FS, nullptr } }; // (the crash fireballs' occlusion: FireballRenderer)
+		{ 48, CI, 1, FS, nullptr }, // (the crash fireballs' occlusion: FireballRenderer)
+		{ 49, CI, 1, CS, nullptr }, { 50, CI, 1, CS, nullptr }, // (the march's history: the other slot's near, far)
+		{ 51, SI, 2, CS, nullptr }, { 52, CI, 2, CS, nullptr }, // (mid, coarse: engine smoke's speed)
+		{ 53, CI, 1, FS, nullptr }, { 54, CI, 1, FS, nullptr } }; // (the plumes' light and transmittance, their distance: PlumeRenderer::LayerViews)
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
 	lci.bindingCount = (uint32_t)b.size (), lci.pBindings = b.data ();
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &setLayout));
@@ -399,7 +402,7 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &tci, nullptr, &texSetLayout));
 	}
 	VkDescriptorPoolSize ps[3] = { { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 12 * vkc::FRAMES_IN_FLIGHT },
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, (20 + TEX_SLOTS) * vkc::FRAMES_IN_FLIGHT + 2 },
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, (22 + TEX_SLOTS) * vkc::FRAMES_IN_FLIGHT + 2 },
 		{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 48 * vkc::FRAMES_IN_FLIGHT + 2 } };
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.maxSets = 2 * vkc::FRAMES_IN_FLIGHT + 2, pci.poolSizeCount = 3, pci.pPoolSizes = ps;
@@ -1155,11 +1158,12 @@ void ParticleSystem::AllocVolume (VkCommandBuffer cmd)
 		VkExtent3D e = l ? VkExtent3D{ VOLC_X, VOLC_Y, VOLC_Z } : VkExtent3D{ VOLM_X, VOLM_Y, VOLM_Z };
 		lvlL[l] = MakeImage (ctx, T3, VK_FORMAT_R16G16B16A16_SFLOAT, e, OUT);
 		lvlD[l] = MakeImage (ctx, T3, VK_FORMAT_R16G16B16A16_SFLOAT, e, OUT);
+		lvlV[l] = MakeImage (ctx, T3, VK_FORMAT_R8_UNORM, e, OUT); // (engine smoke's speed: smokevol.glsl VolCoreSpeed)
 	}
 	volOccl = MakeImage (ctx, T3, VK_FORMAT_R32_UINT, { VOLM_X, VOLM_Y, VOLM_Z }, ACC);
 	occl = MakeImage (ctx, T3, VK_FORMAT_R16_SFLOAT, { VOLM_X, VOLM_Y, VOLM_Z }, OUT);
 	volOut = MakeImage (ctx, T3, VK_FORMAT_R16G16B16A16_SFLOAT, { VOL_X, VOL_Y, VOL_Z }, OUT);
-	volCore = MakeImage (ctx, T3, VK_FORMAT_R8_UNORM, { VOL_X, VOL_Y, VOL_Z }, OUT);
+	volCore = MakeImage (ctx, T3, VK_FORMAT_R8G8_UNORM, { VOL_X, VOL_Y, VOL_Z }, OUT); // (core, speed: smokevol.glsl VolCoreSpeed)
 	volInteg = MakeImage (ctx, T3, VK_FORMAT_R16G16B16A16_SFLOAT, { VOL_X, VOL_Y, VOL_Z }, OUT);
 	volColumns = MakeImage (ctx, VK_IMAGE_TYPE_2D, VK_FORMAT_R16G16_SFLOAT, { VOL_X, VOL_Y, 1 }, OUT);
 	volOcc = ctx->CreateBuffer (2 * VOL_TILE_COUNT * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false);
@@ -1168,7 +1172,7 @@ void ParticleSystem::AllocVolume (VkCommandBuffer cmd)
 	for (auto &v : volAccum) cl.push_back ({ v.image, zero });
 	for (auto &v : volMid) cl.push_back ({ v.image, zero });
 	for (auto &v : volCoarse) cl.push_back ({ v.image, zero });
-	for (int l = 0; l < 2; l++) cl.push_back ({ lvlL[l].image, zero }), cl.push_back ({ lvlD[l].image, zero });
+	for (int l = 0; l < 2; l++) cl.push_back ({ lvlL[l].image, zero }), cl.push_back ({ lvlD[l].image, zero }), cl.push_back ({ lvlV[l].image, zero });
 	for (VkImage im : { volOut.image, volCore.image, volColumns.image, volOccl.image, occl.image }) cl.push_back ({ im, zero });
 	cl.push_back ({ volInteg.image, none });
 	RecordClears (cmd, cl);
@@ -1185,11 +1189,12 @@ void ParticleSystem::AllocMarch (VkCommandBuffer cmd)
 	marchExtent = { std::max (1u, (re.width + 1) / 2), std::max (1u, (re.height + 1) / 2) };
 	for (auto &m : march) ctx->DestroyImage (m);
 	const VkImageUsageFlags U = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-	march[0] = MakeImage (ctx, VK_IMAGE_TYPE_2D, VK_FORMAT_R16G16B16A16_SFLOAT, { marchExtent.width, marchExtent.height, 1 }, U);
-	march[1] = MakeImage (ctx, VK_IMAGE_TYPE_2D, VK_FORMAT_R16G16B16A16_SFLOAT, { marchExtent.width, marchExtent.height, 1 }, U);
-	march[2] = MakeImage (ctx, VK_IMAGE_TYPE_2D, VK_FORMAT_R16G16_SFLOAT, { marchExtent.width, marchExtent.height, 1 }, U);
+	for (uint32_t k = 0; k < 5; k++)
+		march[k] = MakeImage (ctx, VK_IMAGE_TYPE_2D, k == 2 ? VK_FORMAT_R16G16_SFLOAT : VK_FORMAT_R16G16B16A16_SFLOAT, { marchExtent.width, marchExtent.height, 1 }, U);
 	VkClearColorValue none{ { 0.0f, 0.0f, 0.0f, 1.0f } };
-	std::vector<std::pair<VkImage, VkClearColorValue>> cl = { { march[0].image, none }, { march[1].image, none }, { march[2].image, VkClearColorValue{} } };
+	std::vector<std::pair<VkImage, VkClearColorValue>> cl;
+	for (uint32_t k = 0; k < 5; k++) cl.push_back ({ march[k].image, k == 2 ? VkClearColorValue{} : none });
+	marchFrame = 0; // (no history)
 	if (cmd) RecordClears (cmd, cl);
 	else ctx->ImmediateSubmit ([&cl](VkCommandBuffer c) { RecordClears (c, cl); });
 	marchGen = ctx->SwapchainGeneration ();
@@ -1203,7 +1208,7 @@ void ParticleSystem::WriteVolumeSets (uint32_t slot)
 	for (VkDescriptorSet st : { sets[slot] }) {
 		std::vector<VkWriteDescriptorSet> w;
 		std::vector<VkDescriptorImageInfo> ii;
-		ii.reserve (64);
+		ii.reserve (96);
 		auto add = [&](uint32_t binding, uint32_t elem, VkDescriptorType t, VkSampler smp, VkImageView v) {
 			ii.push_back ({ smp, v, G });
 			VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
@@ -1229,14 +1234,18 @@ void ParticleSystem::WriteVolumeSets (uint32_t slot)
 				add (32, l, SI, VK_NULL_HANDLE, lvlD[l].view);
 				add (33, l, CI, volSampler, lvlL[l].view);
 				add (34, l, CI, volSampler, lvlD[l].view);
+				add (51, l, SI, VK_NULL_HANDLE, lvlV[l].view);
+				add (52, l, CI, volSampler, lvlV[l].view);
 			}
 			add (35, 0, SI, VK_NULL_HANDLE, volCore.view);
 			add (45, 0, SI, VK_NULL_HANDLE, volOccl.view);
 			add (46, 0, SI, VK_NULL_HANDLE, occl.view);
 			add (47, 0, CI, volSampler, occl.view);
 			add (36, 0, CI, volSampler, volCore.view);
-			for (uint32_t k = 0; k < 3; k++) add (38 + k, 0, SI, VK_NULL_HANDLE, march[k].view);
-			for (uint32_t k = 0; k < 3; k++) add (41 + k, 0, CI, volSampler, march[k].view); // (linear: the composite's early out; taps by texelFetch)
+			const uint32_t mk[3] = { MarchNear (slot), MarchFar (slot), 2 };
+			for (uint32_t k = 0; k < 3; k++) add (38 + k, 0, SI, VK_NULL_HANDLE, march[mk[k]].view);
+			for (uint32_t k = 0; k < 3; k++) add (41 + k, 0, CI, volSampler, march[mk[k]].view); // (linear: the composite's early out; taps by texelFetch)
+			add (49, 0, CI, volSampler, march[MarchNear (slot ^ 1)].view), add (50, 0, CI, volSampler, march[MarchFar (slot ^ 1)].view);
 		} else add (23, 0, CI, volSampler, volDummy.view);
 		vkUpdateDescriptorSets (ctx->device, (uint32_t)w.size (), w.data (), 0, nullptr);
 		if (volAlloc) {
@@ -1260,8 +1269,8 @@ void ParticleSystem::FreeVolume (bool now)
 	for (auto &v : volAccum) ims.push_back (v), v = vkc::Image{};
 	for (auto &v : volMid) ims.push_back (v), v = vkc::Image{};
 	for (auto &v : volCoarse) ims.push_back (v), v = vkc::Image{};
-	for (int l = 0; l < 2; l++) ims.push_back (lvlL[l]), ims.push_back (lvlD[l]), lvlL[l] = lvlD[l] = vkc::Image{};
-	for (vkc::Image *im : { &volOut, &volCore, &volInteg, &volColumns, &volOccl, &occl, &march[0], &march[1], &march[2] }) ims.push_back (*im), *im = vkc::Image{};
+	for (int l = 0; l < 2; l++) ims.push_back (lvlL[l]), ims.push_back (lvlD[l]), ims.push_back (lvlV[l]), lvlL[l] = lvlD[l] = lvlV[l] = vkc::Image{};
+	for (vkc::Image *im : { &volOut, &volCore, &volInteg, &volColumns, &volOccl, &occl, &march[0], &march[1], &march[2], &march[3], &march[4] }) ims.push_back (*im), *im = vkc::Image{};
 	volGrave.push_back ({ frameNo, ims, volOcc });
 	volOcc = vkc::Buffer{};
 	marchGen = ~0u;
@@ -1579,7 +1588,8 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 			g.slab[0] = e.first, g.slab[1] = e.capacity, g.slab[2] = e.head, g.slab[3] = count;
 			g.misc[0] = seed++, g.misc[1] = (e.emissive ? 1u : 0u) | (e.reentry ? 2u : 0u) | (e.tinted ? 4u : 0u) | (e.planar ? 8u : 0u)
 				| (e.ballistic ? 16u : 0u) | (e.cold ? 32u : 0u) | (e.volumetric ? 64u : 0u) | (e.speck ? 128u : 0u) | (e.spherical ? 256u : 0u)
-				| (e.trail || e.slowdown < 0.0 ? 512u : 0u) | (e.ramp ? 1024u : 0u) | (e.erode ? 2048u : 0u);
+				| (e.trail || e.slowdown < 0.0 ? 512u : 0u) | (e.ramp ? 1024u : 0u) | (e.erode ? 2048u : 0u)
+				| (e.jetSmoke ? 4096u : 0u);
 			uint32_t rgb = 0;
 			for (int k = 0; k < 3; k++) rgb |= (uint32_t)std::lround (std::clamp (e.albedo[k], 0.0f, 1.0f) * 255.0f) << (8 * k);
 			// (streak: 0 the class's, 255 none, else 2 ms units: particles.glsl ParticleStreak)
@@ -1748,7 +1758,7 @@ void ParticleSystem::DrawSprites (VkDescriptorSet frameSet)
 	VkDescriptorSet s[3] = { frameSet, sets[fi], texSets[fi] };
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawLayout, 0, 3, s, 0, nullptr);
 	uint32_t flags = (smokeMode == SMOKE_SCREEN || (smokeMode == SMOKE_VOLUME && volAlloc) ? 8u : 0u) | (smokeMode == SMOKE_VOLUME && volActive && volAlloc ? 32u : 0u)
-		| (fireballOcc && fbOccView ? 64u : 0u);
+		| (fireballOcc && fbOccView ? 64u : 0u) | (plumeLayer && plLightView ? 128u : 0u);
 	struct { uint32_t count, flags; float alpha, pad; float body[12]; float camVel[4]; } pc{ sortN[fi], flags, 1.0f, 0.0f, {}, {} };
 	memcpy (pc.body, drawBody, sizeof(drawBody));
 	memcpy (pc.camVel, drawCamVel, sizeof(drawCamVel));
@@ -1771,6 +1781,26 @@ void ParticleSystem::SetFireballOcclusion (VkImageView view)
 	if (view == fbOccView) return;
 	fbOccView = view;
 	for (bool &d : fbOccDirty) d = true;
+}
+
+void ParticleSystem::SetPlumeLayer (VkImageView light, VkImageView dist)
+{
+	// (none: the prepass, a view of the same kind - not sampled then)
+	if (plSet && light == plLightView && dist == plDistView) return;
+	if (!prepassView && !light) return;
+	if (plSet) vkDeviceWaitIdle (ctx->device); // (the sets may be in use)
+	plLightView = light, plDistView = dist, plSet = true;
+	VkDescriptorImageInfo ii[2] = { { volSampler, light ? light : prepassView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+		{ volSampler, light ? dist : prepassView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL } };
+	for (VkDescriptorSet st : sets) {
+		VkWriteDescriptorSet w[2]{};
+		for (int k = 0; k < 2; k++) {
+			w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			w[k].dstSet = st, w[k].dstBinding = 53 + k, w[k].descriptorCount = 1;
+			w[k].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, w[k].pImageInfo = &ii[k];
+		}
+		vkUpdateDescriptorSets (ctx->device, 2, w, 0, nullptr);
+	}
 }
 
 void ParticleSystem::WriteFireballOcclusion (uint32_t slot)
@@ -1796,7 +1826,7 @@ void ParticleSystem::DrawVolume (VkDescriptorSet frameSet)
 	ctx->GpuMark ("pt march");
 }
 
-void ParticleSystem::RenderMarch (VkDescriptorSet frameSet)
+void ParticleSystem::RenderMarch (VkDescriptorSet frameSet, const MATRIX3 &camRot, const float *proj)
 {
 	marchReady = false;
 	if (!enabled || smokeMode != SMOKE_VOLUME || !prepassView || idle || !volActive || !volAlloc || marchGen != ctx->SwapchainGeneration ()) return;
@@ -1811,7 +1841,28 @@ void ParticleSystem::RenderMarch (VkDescriptorSet frameSet)
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, marchPipe);
 	VkDescriptorSet s[3] = { sets[ctx->FrameIndex ()], frameSet, lastAtm };
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, updateLayout, 0, 3, s, 0, nullptr);
-	vkCmdPushConstants (cmd, updateLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(UpdateParams), lastUp);
+	// (its history: the last frame's march, if there was one, reprojected -
+	// a point in this view to the last's: p' = Rl^T R p + Rl^T (c - cl).
+	// In the parameters the march does not use: lightX..Z rows of that
+	// rotation, w the shift; trailNoise the last projection's scales, its
+	// share kept (0: none), the march's count (its rays' and steps' offsets))
+	UpdateParams up;
+	memcpy (&up, lastUp, sizeof(up));
+	bool hist = marchFrame != 0 && marchFrame + 1 == frameNo;
+	VECTOR3 t = tmul (marchRot, lastCam - marchCam);
+	float *rows[3] = { up.lightX, up.lightY, up.lightZ };
+	for (int i = 0; i < 3; i++) {
+		for (int j = 0; j < 3; j++) {
+			double m = 0.0;
+			for (int k = 0; k < 3; k++) m += marchRot.data[3 * k + i] * camRot.data[3 * k + j];
+			rows[i][j] = (float)m;
+		}
+		rows[i][3] = (float)(&t.x)[i];
+	}
+	up.trailNoise[0] = marchProj[0], up.trailNoise[1] = marchProj[1];
+	up.trailNoise[2] = hist ? 1.0f : 0.0f, up.trailNoise[3] = (float)(marchCount++ & 1023u);
+	marchRot = camRot, marchCam = lastCam, marchProj[0] = proj[0], marchProj[1] = proj[5], marchFrame = frameNo;
+	vkCmdPushConstants (cmd, updateLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(UpdateParams), &up);
 	vkCmdDispatch (cmd, (marchExtent.width + 7) / 8, (marchExtent.height + 7) / 8, 1);
 	mb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, mb.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
 	mb.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, mb.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
@@ -1876,9 +1927,9 @@ void ParticleSystem::EnsureScreenSmoke ()
 	}
 }
 
-void ParticleSystem::RenderScreenSmoke (VkDescriptorSet frameSet)
+void ParticleSystem::RenderScreenSmoke (VkDescriptorSet frameSet, const MATRIX3 &camRot, const float *proj)
 {
-	RenderMarch (frameSet);
+	RenderMarch (frameSet, camRot, proj);
 	if (!enabled || smokeMode != SMOKE_SCREEN || !prepassView || idle || thickGen != ctx->SwapchainGeneration ()) return;
 	VkExtent2D re = ctx->RenderExtent ();
 	VkExtent2D e = { std::max (1u, re.width / 2), std::max (1u, re.height / 2) };

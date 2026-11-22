@@ -179,7 +179,9 @@ private:
 	void EmitTrail (DWORD idx, const struct PlumeClass &c, double fade, const VECTOR3 &src, const VECTOR3 &srcPrev, double startSize, double dt);
 	void EmitDust (DWORD idx, int type, const struct PlumeDraw &pd, double dt);
 	/// plumes as light sources this frame (global position, emission, side area)
-	struct PlumeLight { VECTOR3 pos[3]; double radius[3]; float col[3]; double area; float smoke; }; // (PlumeInfo: three points along the flame)
+	// (PlumeInfo: three points along the flame; the flame's end, lighting
+	// its smoke only (endSmoke: its share, 0: none))
+	struct PlumeLight { VECTOR3 pos[3]; double radius[3]; float col[3]; double area; float smoke; VECTOR3 endPos; double endRadius, endArea; float endSmoke; };
 	std::vector<PlumeLight> plumeLights;
 	/// distant flames drawn as points of light this frame (CollectPlumes, RenderExhaust)
 	std::vector<PVtx> plumePoints;
