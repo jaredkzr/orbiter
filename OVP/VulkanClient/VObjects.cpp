@@ -643,6 +643,7 @@ bool VVessel::Sheath (SheathState &s) const
 	s.dirGlobal = mul (grot, as / spd);
 	s.speed = spd;
 	s.dirView = scene->ViewDir (s.dirGlobal);
+	s.refView = scene->ViewDir (mul (grot, std::fabs (as.y / spd) < 0.9 ? _V(0, 1, 0) : _V(0, 0, 1))); // (the vessel's up, or its nose: across the flow)
 	return true;
 }
 
@@ -1954,7 +1955,7 @@ void VDebris::Fireball (double dt, double airDrag, const VECTOR3 &up, const VECT
 				n -= nk;
 				double a = a0 + k * 2.0 * PI / K, b = a + 2.0 * PI / K;
 				VECTOR3 ra = ex * cos (a) + ey * sin (a), rb = ex * cos (b) + ey * sin (b), rm = unit (ra + rb);
-				e.p0 = fbFoot + ra * rs, e.p1 = fbFoot + rb * rs;
+				e.Segment (fbFoot + ra * rs, fbFoot + rb * rs); // (an arc at one time, not a path)
 				e.dir = -unit (rm * 0.9 + up * 0.35);
 				Emit (fbSkirt, e, nk, e.lifetime + 0.5);
 			}
@@ -1984,10 +1985,10 @@ void VDebris::Fireball (double dt, double airDrag, const VECTOR3 &up, const VECT
 			// (chords across its foot, along its path and across it)
 			double w = 1.0 * r;
 			uint32_t n1 = (n + 1) / 2;
-			e.p0 = fbFoot - ex * w, e.p1 = fbFoot + ex * w;
+			e.Segment (fbFoot - ex * w, fbFoot + ex * w);
 			Emit (fbSteam, e, n1, 2.0);
 			if (n > n1) {
-				e.p0 = fbFoot - ey * w, e.p1 = fbFoot + ey * w;
+				e.Segment (fbFoot - ey * w, fbFoot + ey * w);
 				Emit (fbSteam, e, n - n1, 2.0);
 			}
 		}
@@ -2286,6 +2287,10 @@ void VDebris::DrawPlasma (PlasmaRenderer &pr)
 	SheathState s;
 	s.flux = sheathFlux, s.level = sheathLevel, s.glow = SheathState::Glow (sheathFlux);
 	s.dirGlobal = sheathDir, s.dirView = scene->ViewDir (sheathDir), s.speed = sheathSpeed;
+	{
+		VECTOR3 dl = tmul (grot, sheathDir); // (the piece's axis most across the flow)
+		s.refView = scene->ViewDir (mul (grot, std::fabs (dl.y) < 0.9 ? _V(0, 1, 0) : _V(0, 0, 1)));
+	}
 	Mat4 mv = scene->ModelView (gpos, grot);
 	int i = pr.AddSheath (s, size, mv.TransformPoint (_V(0, 0, 0)), this);
 	pr.AddMesh (i, mesh.get(), mv, nullptr, nullptr);
@@ -2472,7 +2477,7 @@ void VDebris::CollectFireballs (FireballRenderer &fr)
 		// it moves on with the pieces, the ground stays: at rest on it, about)
 		b.up = scene->ViewDir (fbUp);
 		b.axis = scene->ViewDir (crossp (fbUp, fabs (fbUp.x) < 0.9 ? _V(1, 0, 0) : _V(0, 1, 0)));
-		b.ground = fbCloudGround > -1e8 ? fbCloudGround - dotp (fbCloudVel - GroundVelocity (fbPlanet ? fbPlanet : oapiGetGbodyByName ((char*)"Earth"), fbCloudPos), fbUp) * t : -1e9;
+		b.ground = fbCloudGround > -1e8 ? fbCloudGround - dotp (fbCloudVel - fbCloudAir, fbUp) * t : -1e9; // (the ground's velocity where it burst: fbCloudPos is that point then, not now)
 		b.t = t, b.tf = c.TEnd ();
 		b.seed = serial * 2654435761u;
 		fr.Add (b);
@@ -2912,6 +2917,9 @@ void VVessel::CollectPlumes (PlumeRenderer &pr)
 		// the planets, a kilometre a frame)
 		if (OBJHANDLE sref = vessel->GetSurfaceRef ()) oapiGlobalToLocal (sref, &gn, &pd.gpos), pd.gposSet = true;
 		pd.dir = scene->ViewDir (-gd);
+		// (the vessel's axis most across the thruster's, picked in its own
+		// frame: fixed for the thruster)
+		pd.ref = scene->ViewDir (mul (grot, std::fabs (unit (*es.ldir).y) < 0.9 ? _V(0, 1, 0) : _V(1, 0, 0)));
 		pd.wind = wind;
 		pd.exitRadius = 0.5 * es.wsize * o.scale;
 		pd.length = es.lsize * o.scale * o.length;
@@ -3058,6 +3066,12 @@ void VVessel::EmitSmoke (DWORD idx, int type, const PlumeDraw &pd, const PlumeIn
 	VECTOR3 flow = scene->GlobalDir (atSurface ? info.hitN : info.endDir);
 	VECTOR3 vel;
 	vessel->GetGlobalVel (vel);
+	// (spreading from the surface the jet meets: at rest with the ground
+	// there, not moving with the vessel - climbing away, its velocity threw
+	// the pad's smoke up after it)
+	VECTOR3 srcVel = vel;
+	if (atSurface)
+		if (OBJHANDLE hs = vessel->GetSurfaceRef ()) srcVel = GroundVelocity (hs, src);
 	VECTOR3 as;
 	vessel->GetAirspeedVector (FRAME_LOCAL, as);
 	double D = sys->density, sizeScale = std::pow (D, -1.0 / 3.0);
@@ -3113,11 +3127,11 @@ void VVessel::EmitSmoke (DWORD idx, int type, const PlumeDraw &pd, const PlumeIn
 	r.accum += rate * dt;
 	uint32_t n = (uint32_t)std::max (r.accum, 0.0);
 	r.accum -= n;
-	if (!r.havePrev) r.prev = src - vel * dt;
+	if (!r.havePrev) r.prev = src - srcVel * dt;
 	if (n && ring) {
 		ParticleSystem::Emission e{};
 		e.p0 = r.prev, e.p1 = src;
-		e.vel = vel, e.dir = -flow; // (emitted along -dir)
+		e.vel = srcVel, e.dir = -flow; // (emitted along -dir)
 		// (deflected by a surface: it spreads far along it, carried by the jet,
 		// and rises)
 		e.v0 = atSurface ? 4.0 : v0;
@@ -3270,10 +3284,10 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 		double D = sys->density, sizeScale = std::pow (D, -1.0 / 3.0);
 		double rate = 60.0 * D * std::min (1.0, strength * 2.0); // [1/s] (the ring: for the rate emitted)
 		if (!sys->Reserve (r, rate, life, ParticleSystem::Class::Steam)) { r.havePrev = false; mist[idx].havePrev = false; return; } // (no stale source next time)
-		VECTOR3 vel;
-		vessel->GetGlobalVel (vel);
+		// (at rest with the pad, not moving with the vessel)
+		VECTOR3 vel = GroundVelocity (hp, hit);
 		VECTOR3 src = hit + n * 2.0;
-		if (!r.havePrev) r.prev = src;
+		if (!r.havePrev) r.prev = src - vel * dt;
 		r.accum += rate * dt;
 		uint32_t cnt = (uint32_t)r.accum;
 		r.accum -= cnt;
@@ -3321,7 +3335,7 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 	VECTOR3 vel;
 	vessel->GetGlobalVel (vel);
 	VECTOR3 src = hit + n * (air ? 0.3 : 0.8); // (in vacuum: clear of the ground, the sheet's particles start a metre across)
-	if (!r.havePrev) r.prev = src;
+	if (!r.havePrev) r.prev = src - GroundVelocity (hp, src) * dt; // (a step back with the ground)
 	r.accum += rate * dt;
 	uint32_t cnt = (uint32_t)r.accum;
 	r.accum -= cnt;
@@ -3378,7 +3392,7 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 	SmokeRing &m = mist[idx];
 	double mrate = 40.0 * D * std::min (1.0, 0.3 + strength); // [1/s]
 	if (!sys->Reserve (m, mrate, 3.0, ParticleSystem::Class::Spray)) { m.havePrev = false; return; }
-	if (!m.havePrev) m.prev = src;
+	if (!m.havePrev) m.prev = src - GroundVelocity (hp, src) * dt;
 	m.accum += mrate * dt;
 	uint32_t mc = (uint32_t)m.accum;
 	m.accum -= mc;

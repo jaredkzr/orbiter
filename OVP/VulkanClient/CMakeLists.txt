@@ -232,6 +232,7 @@ add_library(VulkanClient SHARED
 	Draw2D.cpp
 	Sketchpad.cpp
 	Fonts.cpp
+	FrameState.cpp
 	Particles.cpp
 	ParticleStream.cpp
 	ParticlePool.cpp

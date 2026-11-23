@@ -227,7 +227,7 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 	}
 	for (auto &b : windBuf) {
 		// (+ nearVol and the counts, + the counts by class, + the ground jets' count and theirs)
-		const size_t n = (WIND_LAYERS + 5 + 1 + 3 * MAX_GROUND_JETS + 4 + FLAME_POINTS) * 4; // (+ the flames' dust grid: FlameBox)
+		const size_t n = (WIND_LAYERS + 5 + 1 + 3 * MAX_GROUND_JETS + 4 + FLAME_POINTS + 2 + 3 + 1) * 4; // (+ the flames' dust grid: FlameBox; telemetry; the carry; the camera's height)
 		b = ctx->CreateBuffer (n * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
 		memset (b.mapped, 0, n * sizeof(float));
 	}
@@ -1023,9 +1023,22 @@ void ParticleSystem::Queue (Emission &e)
 	// (the path less the step's motion at the emission's velocity: the source
 	// moving relative to that, e.g. a vessel through the air, is far less
 	// than half the frame's motion: tens of km/s)
-	if (length ((e.p1 - e.p0) - e.vel * e.dt) > std::max (0.5 * length (e.vel) * e.dt, 200.0)) {
-		e.p0 = e.p1 - e.vel * e.dt;
-		stats.staleSrc++;
+	// (relative to the ground (FrameState's carry), where the frame's state is
+	// for this step - not for emissions before Scene::Update, the legacy
+	// streams': the source's path less what the ground's motion and its
+	// velocity relative to it explain; in the global frame the threshold
+	// grew with the orbital speed, 750 m at 0.05 s, and an origin shift threw
+	// the source light-years. 200 m: a segment's chord (Emission::Segment)
+	// passes)
+	{
+		const vkframe::FrameState *fs = frameState;
+		bool rel = fs && fs->Continuous () && fs->Now ().t == oapiGetSimTime () && fs->Dt () > 0.0 && std::fabs (fs->Dt () - e.dt) < 1e-6 * std::max (e.dt, 1.0);
+		VECTOR3 vr = rel ? e.vel - fs->FrameVel (e.p1) : e.vel;
+		VECTOR3 dev = rel ? e.p1 - fs->CarryPrevToNow (e.p0) - vr * e.dt : (e.p1 - e.p0) - e.vel * e.dt;
+		if (length (dev) > std::max (0.5 * length (vr) * e.dt, 200.0)) {
+			e.p0 = e.p1 - e.vel * e.dt;
+			stats.staleSrc++;
+		}
 	}
 	// dust and spray are sprites: lit puffs with their own colour, not the
 	// smoke volume
@@ -1124,6 +1137,13 @@ void ParticleSystem::LogStats (double simt)
 		buf[k] = 0;
 		oapiWriteLogV ("VK particles: simt=%.1f by class:%s", simt, k ? buf : " none");
 	}
+	if (stats.updateFrames) {
+		double f = 1.0 / stats.updateFrames;
+		oapiWriteLogV ("VK particles: simt=%.1f per update (%u): under ground %.1f, specks under %.1f, bounces %.2f, ground rays %.0f m; in air %.0f, mean speed relative to it %.3f m/s",
+			simt, stats.updateFrames, stats.update[0] * f, stats.update[1] * f, stats.update[2] * f, (double)stats.update[3] * f,
+			stats.update[4] * f, stats.update[4] ? 0.01 * stats.update[5] / stats.update[4] : 0.0);
+	}
+	memset (stats.update, 0, sizeof(stats.update)), stats.updateFrames = 0;
 	if (stats.ringLog) {
 		// (the pool by kind of ring: retired, priority, released when idle)
 		uint32_t sum[2][4][2] = {}, cnt[2][4][2] = {}, big = 0;
@@ -1356,9 +1376,10 @@ void ParticleSystem::SetPrepass (VkImageView prepass)
 	}
 }
 
-void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkDescriptorSet frameSet, VkDescriptorSet atmSet,
+void ParticleSystem::Simulate (const vkframe::Snapshot &now, const VECTOR3 &sunDir, VkDescriptorSet frameSet, VkDescriptorSet atmSet,
 	const VkDescriptorSet *rt, double simt)
 {
+	const VECTOR3 &camPos = now.cam;
 	VkCommandBuffer cmd = ctx->Cmd ();
 	uint32_t fi = ctx->FrameIndex ();
 	VkDescriptorSet set = sets[fi];
@@ -1401,6 +1422,13 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 		if (nearValid[fi] && stats.every > 0.0) memcpy (stats.liveCls, w + 4, sizeof(stats.liveCls));
 		w[1] = stats.every > 0.0 ? 2u : 1u, w[2] = w[3] = 0u; // (statsOn: 2 counts by class too - telemetry)
 		memset (w + 4, 0, sizeof(stats.liveCls));
+		// (particle_update.glsl's telemetry: summed until the next log line)
+		uint32_t *tl = (uint32_t*)windBuf[fi].mapped + (WIND_LAYERS + 5 + 1 + 3 * MAX_GROUND_JETS + 4 + FLAME_POINTS) * 4;
+		if (nearValid[fi] && stats.every > 0.0) {
+			for (int k = 0; k < 6; k++) stats.update[k] += tl[k];
+			stats.updateFrames++;
+		}
+		memset (tl, 0, 8 * sizeof(uint32_t));
 	}
 	if (stats.every > 0.0) {
 		stats.frames++;
@@ -1421,8 +1449,9 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 			LogStats (simt);
 			for (bool &v : nearValid) v = false;
 			for (bool &v : drawValid) v = false;
-			lastCam = camPos, haveCam = true;
+			lastSnap = now;
 			pendingDt = 0.0;
+			groundJets.clear (); // (this frame's: stale by the next, kilometres off in the global frame)
 			return;
 		}
 		idleUpdates++;
@@ -1431,7 +1460,12 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 
 	// move and light the existing particles
 	UpdateParams up{};
-	VECTOR3 shift = haveCam ? lastCam - camPos : _V(0, 0, 0);
+	// the particles carried with the ground (FrameState.h): their positions
+	// relative to the last Simulate's camera, at its time, to this one's;
+	// shift: the move of a point at rest in the global frame (the camera's
+	// move in it, reversed)
+	const vkframe::Carry carry = vkframe::CarryBetween (lastSnap, now);
+	const VECTOR3 &shift = carry.shift;
 	// the smoke volume: only while a volumetric particle may be within its
 	// reach (the nearest one's distance as found by this frame slot's last
 	// update, FRAMES_IN_FLIGHT frames ago; the camera's moves since; new
@@ -1440,7 +1474,7 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 		uint32_t *nearBits = (uint32_t*)windBuf[fi].mapped + WIND_LAYERS * 4;
 		float nearPrev;
 		memcpy (&nearPrev, nearBits, sizeof(float));
-		double reach = VOL_REACH + 2000.0 + 2.0 * vkc::FRAMES_IN_FLIGHT * length (shift);
+		double reach = VOL_REACH + 2000.0 + 2.0 * vkc::FRAMES_IN_FLIGHT * carry.dist; // (relative to the ground: the smoke's frame)
 		nearKnown = nearValid[fi] && nearPrev < reach;
 		volActive = !nearValid[fi] || nearPrev < reach;
 		nearEmit = false;
@@ -1466,7 +1500,7 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 		if (fbOccDirty[fi]) WriteFireballOcclusion (fi);
 		ReapVolume (false);
 	}
-	lastCam = camPos, haveCam = true;
+	lastSnap = now;
 	pxPerRad = ctx->RenderExtent ().height / (2.0 * std::tan (std::max (oapiCameraAperture (), 1e-3)));
 	up.camShift[0] = (float)shift.x, up.camShift[1] = (float)shift.y, up.camShift[2] = (float)shift.z;
 	// (the camera's velocity: its move over the step; a cut - more than 20
@@ -1479,6 +1513,7 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	}
 	up.camShift[3] = (float)pendingDt;
 
+	double camHeight = 0.0; // the camera's above the ground under it (particles.glsl camGround)
 	if (OBJHANDLE hp = oapiCameraProxyGbody ()) { // the air of the planet nearby
 		VECTOR3 bp, bv;
 		oapiGetGlobalPos (hp, &bp);
@@ -1494,8 +1529,11 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 		VECTOR3 loc;
 		oapiGlobalToLocal (hp, &camPos, &loc);
 		double rad = length (loc);
-		if (rad > 0.0)
-			up.ground[0] = (float)(oapiGetSize (hp) + oapiSurfaceElevation (hp, atan2 (loc.z, loc.x), asin (std::clamp (loc.y / rad, -1.0, 1.0))));
+		if (rad > 0.0) {
+			double rg = oapiGetSize (hp) + oapiSurfaceElevation (hp, atan2 (loc.z, loc.x), asin (std::clamp (loc.y / rad, -1.0, 1.0)));
+			up.ground[0] = (float)rg;
+			camHeight = rad - rg; // (in double: particles.glsl camGround)
+		}
 		up.ground[1] = (float)(GGRAV * oapiGetMass (hp) / (oapiGetSize (hp) * oapiGetSize (hp)));
 		// the wind's layers (above the camera's point; on terrestrial planets
 		// the same everywhere)
@@ -1557,6 +1595,17 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 				e[0] = (float)l.x, e[1] = (float)l.y, e[2] = (float)l.z, e[3] = (float)(b.weight[k] / wsum);
 			}
 		}
+		// the carry (particles.glsl frameCarry; after the telemetry)
+		float *fc = fbx + 4 * (4 + FLAME_POINTS) + 8;
+		for (int k = 0; k < 3; k++)
+			fc[k] = (float)(&carry.T.x)[k], fc[4 + k] = (float)(&carry.v.x)[k], fc[8 + k] = (float)(&carry.D0.x)[k];
+		fc[3] = (float)(int)carry.frame, fc[7] = carry.continuous ? 1.0f : 0.0f, fc[11] = 0.0f;
+		fc[12] = (float)camHeight, fc[13] = fc[14] = fc[15] = 0.0f;
+		static const bool carryLog = getenv ("ORBITER_VK_CARRY_LOG") != nullptr; // (debugging: the carry's rotation against omega dt)
+		if (carryLog && pendingDt > 0.0)
+			oapiWriteLogV ("VK particles: carry frame %d |T| %.3f m, v/dt (%.4g %.4g %.4g), omega (%.4g %.4g %.4g), |D0| %.1f m, |shift| %.1f m, dt %.4f",
+				(int)carry.frame, carry.dist, carry.v.x / pendingDt, carry.v.y / pendingDt, carry.v.z / pendingDt,
+				now.body.omega.x, now.body.omega.y, now.body.omega.z, length (carry.D0), length (shift), pendingDt);
 	}
 	for (int k = 0; k < 3; k++)
 		drawBody[k] = up.bodyPos[k], drawBody[4 + k] = up.bodyVel[k], drawBody[8 + k] = up.omega[k];
@@ -1577,7 +1626,7 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	for (const Emission &e : queued) emitted += std::min (e.count, e.capacity);
 	emitHist[fi] = emitted;
 	uint32_t sortSize = nslots;
-	if (drawValid[fi] && prevDrawn < sortN[fi] && length (shift) < 1000.0 && smokeMode == lastMode) {
+	if (drawValid[fi] && prevDrawn < sortN[fi] && carry.dist < 1000.0 && smokeMode == lastMode) {
 		uint64_t b = (uint64_t)prevDrawn + std::max (prevDrawn / 4, 2048u);
 		for (uint32_t k : emitHist) b += k;
 		sortSize = (uint32_t)std::min<uint64_t> (b, nslots);
@@ -1945,26 +1994,38 @@ void ParticleSystem::RenderMarch (VkDescriptorSet frameSet, const MATRIX3 &camRo
 	VkDescriptorSet s[3] = { sets[ctx->FrameIndex ()], frameSet, lastAtm };
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, updateLayout, 0, 3, s, 0, nullptr);
 	// (its history: the last frame's march, if there was one, reprojected -
-	// a point in this view to the last's: p' = Rl^T R p + Rl^T (c - cl).
+	// the smoke moves with the ground (the air), not with the global frame
+	// (a kilometre and a half a step near Earth): a point in this view
+	// carried back to the last's, x = R p (camera-relative now), x_l = Q^T
+	// (x - T) (FrameState carry, last march -> now): p' = Rl^T Q^T R p -
+	// Rl^T Q^T T.
 	// In the parameters the march does not use: lightX..Z rows of that
 	// rotation, w the shift; trailNoise the last projection's scales, its
 	// share kept (0: none), the march's count (its rays' and steps' offsets))
 	UpdateParams up;
 	memcpy (&up, lastUp, sizeof(up));
-	bool hist = marchFrame != 0 && marchFrame + 1 == frameNo;
-	VECTOR3 t = tmul (marchRot, lastCam - marchCam);
+	const vkframe::Carry carry = vkframe::CarryBetween (marchSnap, lastSnap); // (lastSnap: this frame's, Simulate)
+	bool hist = marchFrame != 0 && marchFrame + 1 == frameNo && carry.continuous;
+	VECTOR3 t = -tmul (marchRot, tmul (carry.Q, carry.T));
+	MATRIX3 qr; // Q^T R
+	for (int i = 0; i < 3; i++)
+		for (int j = 0; j < 3; j++) {
+			double m = 0.0;
+			for (int k = 0; k < 3; k++) m += carry.Q.data[3 * k + i] * camRot.data[3 * k + j];
+			qr.data[3 * i + j] = m;
+		}
 	float *rows[3] = { up.lightX, up.lightY, up.lightZ };
 	for (int i = 0; i < 3; i++) {
 		for (int j = 0; j < 3; j++) {
 			double m = 0.0;
-			for (int k = 0; k < 3; k++) m += marchRot.data[3 * k + i] * camRot.data[3 * k + j];
+			for (int k = 0; k < 3; k++) m += marchRot.data[3 * k + i] * qr.data[3 * k + j];
 			rows[i][j] = (float)m;
 		}
 		rows[i][3] = (float)(&t.x)[i];
 	}
 	up.trailNoise[0] = marchProj[0], up.trailNoise[1] = marchProj[1];
 	up.trailNoise[2] = hist ? 1.0f : 0.0f, up.trailNoise[3] = (float)(marchCount++ & 1023u);
-	marchRot = camRot, marchCam = lastCam, marchProj[0] = proj[0], marchProj[1] = proj[5], marchFrame = frameNo;
+	marchRot = camRot, marchSnap = lastSnap, marchProj[0] = proj[0], marchProj[1] = proj[5], marchFrame = frameNo;
 	vkCmdPushConstants (cmd, updateLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(UpdateParams), &up);
 	vkCmdDispatch (cmd, (marchExtent.width + 7) / 8, (marchExtent.height + 7) / 8, 1);
 	mb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, mb.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;

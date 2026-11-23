@@ -129,6 +129,7 @@ struct PlumeDraw {
 	VECTOR3 gpos{};         // the same, in the frame of the surface below [m] (where the surface cuts the jet: its moves limited by the nozzle's; gposSet)
 	bool gposSet = false;
 	VECTOR3 dir;            // flow direction, view space
+	VECTOR3 ref{};          // an axis fixed to the vessel, across the flow, view space: the plume's frame turns with the vessel, not the view (0: the view's)
 	VECTOR3 wind;           // velocity of the air relative to the nozzle, view space [m/s]
 	double exitRadius;      // [m]
 	double length;          // [m]

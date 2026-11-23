@@ -42,6 +42,8 @@ public:
 	};
 	/// Coverage map and ray-march (outside rendering scopes, after the prepass)
 	void Render (const Frame &f);
+	/// the next frame keeps no history (a time jump)
+	void InvalidateHistory () { ggHistValid = earthHistValid = false; }
 
 	/// Cloud decks of a gas giant (Config/VK/GasGiant/<name>.cfg; altitudes
 	/// above the 1-bar level)

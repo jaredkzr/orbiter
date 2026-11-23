@@ -51,6 +51,7 @@ public:
 	// --- per-frame ---
 	void clbkUpdate (bool running) override;
 	void clbkRenderScene () override;
+	void clbkTimeJump (double simt, double simdt, double mjd) override;
 	bool clbkDisplayFrame () override;
 
 	// --- render parameters ---

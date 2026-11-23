@@ -455,8 +455,10 @@ int PlasmaRenderer::AddSheath (const SheathState &s, double size, const VECTOR3 
 	sh.px = size / std::max (length (centreView), 1.0);
 	// the flow's frame: s downstream (against the motion through the air),
 	// x, y across it; in units of the vessel's size, about its centre
+	// (turning with the vessel - s.refView: built from the view's y it
+	// rolled with the camera, and popped where the flow crossed 0.9 of it)
 	VECTOR3 e3 = -unit (s.dirView);
-	VECTOR3 e1 = unit (crossp (e3, std::fabs (e3.y) < 0.9 ? _V(0, 1, 0) : _V(1, 0, 0)));
+	VECTOR3 e1 = unit (length (s.refView) > 0.5 ? crossp (e3, s.refView) : crossp (e3, std::fabs (e3.y) < 0.9 ? _V(0, 1, 0) : _V(1, 0, 0)));
 	VECTOR3 e2 = crossp (e3, e1);
 	MATRIX3 R = _M(e1.x, e1.y, e1.z, e2.x, e2.y, e2.z, e3.x, e3.y, e3.z);
 	VECTOR3 t = -mul (R, centreView);

@@ -61,6 +61,8 @@ public:
 	double CamDist () const { return camDist; }
 	/// remember the pose of this frame for the motion vectors of the next
 	void StorePrev () { prevGpos = gpos, prevGrot = grot, havePrev = true; }
+	/// the global frame's origin moved by d: the last frame's pose in the new frame
+	void ShiftPrev (const VECTOR3 &d) { prevGpos -= d; }
 	double Size () const { return size; }
 	/// small number identifying the object (ray traced light shadows)
 	uint32_t Id () const { return id; }

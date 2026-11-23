@@ -308,6 +308,12 @@ void VulkanClient::clbkUpdate (bool running)
 	if (scene) scene->Update ();
 }
 
+void VulkanClient::clbkTimeJump (double simt, double simdt, double mjd)
+{
+	GraphicsClient::clbkTimeJump (simt, simdt, mjd);
+	if (scene) scene->OnTimeJump ();
+}
+
 namespace {
 	constexpr double DAYLIGHT_MAX_EXPOSURE = 1.3; // with the camera in sunlight
 	constexpr double NIGHT_MIN_EXPOSURE = 0.15;   // lowest exposure with the camera in darkness (flames lighting the view)

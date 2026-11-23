@@ -802,9 +802,13 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 	double diamonds = c.diamondBrightness > 0.0f ? exp (-lk * lk) * (1.0 - vac) : 0.0;
 	double bright = p.level * p.brightness * p.flicker * (1.0 + (c.vacuumBrightness - 1.0) * vac);
 
-	// plume frame (view space)
+	// plume frame (view space), turning with the vessel (p.ref): its noise,
+	// streaks and heat shimmer, and where a surface cuts the jet (kept from
+	// frame to frame below, clips), are in it - built from the view's axes
+	// they rolled with the camera about the jet, popped where it crossed
+	// 0.9 of the view's y, and a cached cut turned with the view
 	VECTOR3 ez = unit (p.dir);
-	VECTOR3 ex = crossp (ez, fabs (ez.y) < 0.9 ? _V(0, 1, 0) : _V(1, 0, 0));
+	VECTOR3 ex = length (p.ref) > 0.5 ? crossp (ez, p.ref) : crossp (ez, fabs (ez.y) < 0.9 ? _V(0, 1, 0) : _V(1, 0, 0));
 	ex = unit (ex);
 	VECTOR3 ey = crossp (ez, ex);
 

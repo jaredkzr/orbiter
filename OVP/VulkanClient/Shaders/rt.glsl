@@ -26,7 +26,7 @@ struct RTInstance { // must match InstanceRecord in RayTracing.cpp
 	vec4 emissive;      // rgb, w: sunlight reaching the object
 	vec4 pbr;           // metalness, roughness, reflectivity, F0 scale
 	vec4 uv;            // texture coordinates: offset, scale
-	vec4 vel;           // velocity of the object (global frame) [m/s] (0 for terrain)
+	vec4 vel;           // velocity of the object (global frame) [m/s] (0 for terrain), w: 1 at rest on the ground (a planet's bases...: the ground's velocity there instead)
 };
 // a ray the traversal can take: finite (NaN or infinite origins and
 // directions can keep the hardware's traversal from ending: the GPU hangs)

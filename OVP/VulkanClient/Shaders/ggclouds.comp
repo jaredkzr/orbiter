@@ -51,7 +51,7 @@ struct GGParams {
 	vec4 flash[8];           // lightning: position (planet frame), brightness
 	vec4 flashInfo;          // count, diffusion length [m]
 	vec4 prevRot[3];         // last frame's camera frame -> planet frame (columns)
-	vec4 prevCam;            // its position (planet frame); w: history valid (1), and the camera still: half the tiles marched (2)
+	vec4 prevCam;            // the camera's move since (this frame's position less that one's, planet frame, from doubles - the positions themselves, some 7e7 m, resolve 8 m in floats); w: history valid (1), and the camera still: half the tiles marched (2)
 	vec4 pres[4];            // log2 of the pressure [bar] at 16 radii (presInfo)
 	vec4 presInfo;           // the first of them [m], their spacing [m]
 	vec4 gasK;               // the gas's and aerosols' absorption per bar of the column above (rgb)
@@ -911,26 +911,28 @@ void Store (ivec2 px, vec4 c, float depth)
 }
 
 // the last frame's light and transmittance where the point x (planet
-// frame) was seen, and whether it is the same cloud (its distance then)
+// frame's axes, relative to the camera now) was seen, and whether it is
+// the same cloud (its distance then)
 bool History (vec3 x, float dist, out vec4 h)
 {
 	h = vec4 (0.0);
 	if (P.prevCam.w < 0.5) return false;
 	mat3 R = mat3 (P.prevRot[0].xyz, P.prevRot[1].xyz, P.prevRot[2].xyz);
-	vec3 v = transpose (R) * (x - P.prevCam.xyz);
+	x += P.prevCam.xyz; // (relative to the last frame's camera)
+	vec3 v = transpose (R) * x;
 	if (v.z <= 0.0) return false;
 	vec2 uv = vec2 (v.x / v.z * pc.proj.x, -v.y / v.z * pc.proj.y) * 0.5 + 0.5;
 	if (any (lessThan (uv, vec2 (0.0))) || any (greaterThan (uv, vec2 (1.0)))) return false;
 	h = textureLod (histIn[prv], uv, 0.0);
 	float dp = textureLod (depthIn[prv], uv, 0.0).r;
-	float dn = dist > 0.0 ? length (x - P.prevCam.xyz) : 0.0;
+	float dn = dist > 0.0 ? length (x) : 0.0;
 	if (dn == 0.0 || dp == 0.0) return (dn == 0.0) == (dp == 0.0);
 	return abs (dp - dn) < 0.15 * dn + 2e3;
 }
 
 // the march for pixel px: its light and transmittance (res), the clouds'
-// distance (0: none), where they were seen (planet frame: the history's
-// point), and whether res is final (taken from the history, or empty: false)
+// distance (0: none), where they were seen (planet frame's axes, relative
+// to the camera: the history's point), and whether res is final (taken from the history, or empty: false)
 bool March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 {
 	vec2 size = pc.proj.zw;
@@ -953,9 +955,9 @@ bool March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 	// valid: half the pixels marched per frame
 	if (P.prevCam.w > 1.5 && ((gl_WorkGroupID.x + gl_WorkGroupID.y + uint (cur)) & 1u) == 1u) {
 		float dl = texelFetch (depthIn[prv], px, 0).r;
-		vec3 x = o + dc * (dl > 0.0 ? dl : 1e7);
+		vec3 x = dc * (dl > 0.0 ? dl : 1e7); // (relative to the camera)
 		vec4 h;
-		if (History (x, dl, h)) { res = h, dist = dl > 0.0 ? length (x - o) : 0.0; return false; }
+		if (History (x, dl, h)) { res = h, dist = dl > 0.0 ? length (x) : 0.0; return false; }
 	}
 
 	// the segment within the decks' shell (above the floor), up to the
@@ -1266,7 +1268,7 @@ bool March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 	// (fading out towards their reach: the planet's cloud layer behind)
 	L *= P.mapInfo.y, T = mix (vec3 (1.0), T, P.mapInfo.y);
 	res = vec4 (L, dot (T, vec3 (0.2126, 0.7152, 0.0722)));
-	hx = o + dc * (dist > 0.0 ? dist : 1e7);
+	hx = dc * (dist > 0.0 ? dist : 1e7); // (relative to the camera: History)
 	return true;
 }
 

@@ -505,7 +505,9 @@ void VolumetricClouds::Render (const Frame &f)
 			hc.rot[c][3] = 0.0f;
 		}
 		VECTOR3 pc0 = earthHistValid ? ggPrevCam : f.camPlanet;
-		hc.cam[0] = (float)pc0.x, hc.cam[1] = (float)pc0.y, hc.cam[2] = (float)pc0.z, hc.cam[3] = 0.0f;
+		// (the camera's move since, from doubles: clouds.comp History)
+		VECTOR3 dc = f.camPlanet - pc0;
+		hc.cam[0] = (float)dc.x, hc.cam[1] = (float)dc.y, hc.cam[2] = (float)dc.z, hc.cam[3] = 0.0f;
 		// (still for a few frames: the samples kept sharp, only averaged
 		// over frames)
 		bool still = false;
@@ -891,7 +893,12 @@ void VolumetricClouds::RenderGasGiant (const GasGiantFrame &f)
 	const double pm[9] = { pr.m11, pr.m21, pr.m31, pr.m12, pr.m22, pr.m32, pr.m13, pr.m23, pr.m33 }; // (columns)
 	for (int c = 0; c < 3; c++) for (int k = 0; k < 3; k++) g.prevRot[c][k] = (float)pm[c * 3 + k];
 	VECTOR3 pc0 = ggHistValid ? ggPrevCam : f.camPlanet;
-	g.prevCam[0] = (float)pc0.x, g.prevCam[1] = (float)pc0.y, g.prevCam[2] = (float)pc0.z, g.prevCam[3] = ggHistValid ? 1.0f : 0.0f;
+	{
+		// (the camera's move since, from doubles: ggclouds.comp History - its
+		// positions, some 7e7 m from Jupiter's centre, resolve 8 m in floats)
+		VECTOR3 dc = f.camPlanet - pc0;
+		g.prevCam[0] = (float)dc.x, g.prevCam[1] = (float)dc.y, g.prevCam[2] = (float)dc.z, g.prevCam[3] = ggHistValid ? 1.0f : 0.0f;
+	}
 	// (half the tiles marched per frame only with the camera nearly still:
 	// moving fast, the reprojected tiles would not match the marched ones)
 	// (still for several frames: a camera moved only every other frame

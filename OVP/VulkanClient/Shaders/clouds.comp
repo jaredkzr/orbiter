@@ -81,7 +81,7 @@ float HG (float c, float g)
 
 // the march for pixel px: light (rgb, premultiplied) and transmittance
 // (a), the clouds' distance (0: none) and where they were seen (planet
-// frame: the history's point)
+// frame's axes, relative to the camera: the history's point)
 void March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 {
 	vec2 size = pc.proj.zw;
@@ -92,7 +92,7 @@ void March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 	vec3 dv = normalize (vec3 (ndc.x / pc.proj.x, -ndc.y / pc.proj.y, 1.0));
 	vec3 d = normalize (mat3 (atm.viewToPlanet) * dv);
 	vec3 o = atm.camPos.xyz;
-	hx = o + d * 1e7;
+	hx = d * 1e7; // (relative to the camera: History)
 
 	// segment inside the cloud shell
 	vec2 tt = RaySphere (o, d, pc.shell.y);
@@ -175,7 +175,7 @@ void March (ivec2 px, out vec4 res, out float dist, out vec3 hx)
 	vec3 Tair;
 	vec3 Lair = AtmTonemap (Inscatter (d, tc, Tair));
 	res = vec4 (L * Tair + (1.0 - T) * Lair, T);
-	dist = tc, hx = o + d * tc;
+	dist = tc, hx = d * tc;
 }
 
 void Store (ivec2 px, vec4 c, float depth)
@@ -187,21 +187,22 @@ void Store (ivec2 px, vec4 c, float depth)
 }
 
 // the last frame's light and transmittance where the point x (planet
-// frame) was seen, and whether it is the same cloud (its distance then)
+// frame's axes, relative to the camera now) was seen, and whether it is
+// the same cloud (its distance then)
 bool History (vec3 x, float dist, out vec4 h)
 {
 	h = vec4 (0.0);
 	if (pc.hist.z < 0.5) return false;
 	int b = int (pc.hist.x), prv = 1 - int (pc.hist.y);
 	mat3 R = mat3 (histCam[b].xyz, histCam[b + 1].xyz, histCam[b + 2].xyz);
-	vec3 pcam = histCam[b + 3].xyz;
-	vec3 v = transpose (R) * (x - pcam);
+	x += histCam[b + 3].xyz; // (relative to the last frame's camera: the camera's move since, from doubles)
+	vec3 v = transpose (R) * x;
 	if (v.z <= 0.0) return false;
 	vec2 uv = vec2 (v.x / v.z * pc.proj.x, -v.y / v.z * pc.proj.y) * 0.5 + 0.5;
 	if (any (lessThan (uv, vec2 (0.0))) || any (greaterThan (uv, vec2 (1.0)))) return false;
 	h = textureLod (histIn[prv], uv, 0.0);
 	float dp = textureLod (depthIn[prv], uv, 0.0).r;
-	float dn = dist > 0.0 ? length (x - pcam) : 0.0;
+	float dn = dist > 0.0 ? length (x) : 0.0;
 	if (dn == 0.0 || dp == 0.0) return (dn == 0.0) == (dp == 0.0);
 	return abs (dp - dn) < 0.1 * dn + 300.0;
 }

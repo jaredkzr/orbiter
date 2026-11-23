@@ -17,6 +17,7 @@
 #include "GraphicsAPI.h"
 #include "VkContext.h"
 #include "ParticlePool.h"
+#include "FrameState.h"
 #include <cmath>
 #include <string>
 #include <random>
@@ -117,6 +118,11 @@ public:
 		/// [s] (up to 0.5; brightness spread over the streak). 0: the
 		/// class's (Spark 0.03, PlasmaWake 0.04, others none), < 0: none
 		float streak = 0.0f;
+		/// a segment a..b at the end of the step (not a source's path over
+		/// it): the particles at the step's end spread evenly along it.
+		/// (particle_emit.comp moves a particle born at fraction f of the step
+		/// on with vel for the rest of it: p0 = a - vel dt.) vel and dt first
+		void Segment (const VECTOR3 &a, const VECTOR3 &b) { p0 = a - vel * dt, p1 = b; }
 	};
 	/// Queue an emission (e.first, capacity, head, count set): thinned if the
 	/// pool is short (e.count, size, alpha, lifetime changed: advance the
@@ -155,6 +161,8 @@ public:
 	void DrawRetired (VkDescriptorSet frameSet);
 	/// simulation time passed (clbkUpdate)
 	void AddTime (double dt) { pendingDt += dt; }
+	/// the scene's frame state (Queue: a source's path relative to the ground)
+	void SetFrameState (const vkframe::FrameState *f) { frameState = f; }
 	/// A jet meeting the ground in air this frame (global position and the
 	/// ground's normal): the gas turned along the ground drives an outward
 	/// wind there - speed at its peak [m/s], peaking r0 from the impact,
@@ -182,8 +190,10 @@ public:
 	/// Move, emit and light the particles (outside rendering scopes, after
 	/// the ray tracing scene was built); rt: sets of the ray tracing scene
 	/// and textures (or null)
-	/// sunDir: towards the sun (global frame; smoke shadows)
-	void Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkDescriptorSet frameSet, VkDescriptorSet atmSet,
+	/// sunDir: towards the sun (global frame; smoke shadows); now: the
+	/// frame's snapshot (FrameState: the particles are carried with the
+	/// ground from the last Simulate's to it)
+	void Simulate (const vkframe::Snapshot &now, const VECTOR3 &sunDir, VkDescriptorSet frameSet, VkDescriptorSet atmSet,
 		const VkDescriptorSet *rt, double simt);
 	void SetPrepass (VkImageView prepass);
 	/// Draw the smoke volume (scene with reactive mask, before the particles)
@@ -266,8 +276,8 @@ private:
 	bool idle = false;
 	float drawBody[12] = {}; // the planet nearby, for drawing: position (camera-relative), velocity, angular velocity
 	float drawCamVel[4] = {}; // the camera's velocity (global frame), for drawing: sparks streaked by their motion relative to it (motion blur)
-	VECTOR3 lastCam{};
-	bool haveCam = false;
+	vkframe::Snapshot lastSnap; // (the last Simulate's: the particles' positions are relative to its camera)
+	const vkframe::FrameState *frameState = nullptr;
 	VkSampler noiseSampler = VK_NULL_HANDLE, clampSampler = VK_NULL_HANDLE;
 	static constexpr int SMOKE_NOISE_SIZE = 64;   // the smoke volume's erosion noise (texels a side)
 	vkc::Image smokeNoise;
@@ -324,7 +334,7 @@ private:
 	VkExtent2D marchExtent{};
 	// (the last march's camera: its history reprojected; frameNo of that march)
 	MATRIX3 marchRot{};
-	VECTOR3 marchCam{};
+	vkframe::Snapshot marchSnap; // (the last march's frame: its history carried with the ground)
 	float marchProj[2] = {};
 	uint64_t marchFrame = 0;
 	uint32_t marchCount = 0;
@@ -369,6 +379,8 @@ private:
 		bool ringLog = false;
 		uint32_t live = 0, liveMax = 0, liveVol = 0, drawn = 0, drawnMax = 0, sortMax = 0;
 		uint32_t liveCls[16] = {}; // (the live particles by class, the last read back)
+		uint64_t update[6] = {};   // (particle_update.glsl: under the ground, specks under it, bounces, ground rays [m], in air, speed relative to it [cm/s]; summed)
+		uint32_t updateFrames = 0;
 		bool lastVol = false;
 	} stats;
 	void LogStats (double simt);

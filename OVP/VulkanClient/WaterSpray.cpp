@@ -125,7 +125,7 @@ void WaterSpray::Update (Scene *scene, OBJHANDLE hp, const WATERSTATE &ws, const
 	f.vh = length (f.hv), f.vn = std::max (-vu, 0.0);
 	f.fwd = f.vh > 0.1 ? f.hv / f.vh : unit (crossp (f.up, fabs (f.up.y) > 0.9 ? _V(1,0,0) : _V(0,1,0)));
 	f.side = unit (crossp (f.up, f.fwd));
-	f.from = havePrev ? prev : f.at - f.hv * dt;
+	f.from = havePrev ? prev : f.at - (f.gv + f.hv) * dt; // (a step back: the ground's and its own motion)
 	prev = f.at, havePrev = true;
 
 	// the body's scale and its footprint on the water: from the waterplane
@@ -200,7 +200,7 @@ void WaterSpray::Burst (const Frame &f, double v)
 			e.lifetime = std::clamp (0.8 * e.v0 / f.g + 1.2, 1.5, 7.0);
 			e.growth = 1.5 * e.size / e.lifetime;
 			for (int i = 0; i < 4; i++) {
-				e.p0 = c[i], e.p1 = c[(i + 1) & 3];
+				e.Segment (c[i], c[(i + 1) & 3]); // (the footprint's edges at one time, not a path)
 				sys->Emit (crown, e, n);
 			}
 		}
@@ -222,9 +222,9 @@ void WaterSpray::Burst (const Frame &f, double v)
 			e.v0 = vt * k, e.spread = (0.08 + 0.08 * (1.0 - k)) * vt + 0.5;
 			e.lifetime = std::clamp (2.2 * e.v0 / f.g + 1.0, 1.5, 9.0);
 			e.growth = 1.2 * e.size / e.lifetime;
-			e.p0 = f.at - side * w, e.p1 = f.at + side * w;
+			e.Segment (f.at - side * w, f.at + side * w);
 			sys->Emit (column, e, n);
-			e.p0 = f.at - fwd * w, e.p1 = f.at + fwd * w;
+			e.Segment (f.at - fwd * w, f.at + fwd * w);
 			sys->Emit (column, e, n);
 		}
 	}
@@ -238,7 +238,7 @@ void WaterSpray::Burst (const Frame &f, double v)
 			e.size = (0.2 + 0.06 * L) * (1.0 + f.vh / 60.0) * sz;
 			e.alpha = 0.55 * f.alpha;
 			e.slowdown = 1.2;
-			e.p0 = f.at + side * (sg * f.b) - fwd * f.a, e.p1 = f.at + side * (sg * f.b) + fwd * f.a;
+			e.Segment (f.at + side * (sg * f.b) - fwd * f.a, f.at + side * (sg * f.b) + fwd * f.a);
 			for (int j = 0; j < SIDE_LAYERS; j++) {
 				double k = (j + 1.0) / SIDE_LAYERS;
 				double vt = Thrown (0.5 * f.vh + v);

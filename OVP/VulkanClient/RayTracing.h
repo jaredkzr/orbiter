@@ -46,6 +46,7 @@ public:
 		bool shadowOnly = false; // a stand-in that only blocks light (not seen in reflections; instance mask 0x04)
 		uint32_t owner = 0;   // VObject::Id (0: terrain)
 		float vel[3] = { 0, 0, 0 }; // velocity of the object (global frame) [m/s] (sparks bounce off it)
+		bool ground = false;  // at rest on the ground of the object (a planet's bases, cities, scatter): its velocity is the ground's there, not vel
 	};
 	/// Indexed triangles (NTVERTEX vertices, 16-bit indices)
 	struct Geometry {

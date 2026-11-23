@@ -43,6 +43,7 @@ struct SheathState {
 	float glow = 0.0f;      // the gas's glow: 0 (onset, 3e4 W/m^2) .. 1 (5e5 W/m^2), by the log of the flux
 	VECTOR3 dirGlobal{};    // direction of motion through the air (global frame)
 	VECTOR3 dirView{};      // ... (view space)
+	VECTOR3 refView{};      // an axis of the vessel across it (view space): the flow's frame turns with the vessel, not the view (0: the view's)
 	double speed = 0.0;     // airspeed [m/s]
 	/// heating level and glow of a flux [W/m^2]
 	static float Level (double flux);

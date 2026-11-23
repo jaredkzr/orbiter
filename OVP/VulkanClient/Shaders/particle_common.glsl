@@ -4,6 +4,16 @@
 // GPU particles: the sets and parameters of the compute passes after
 // emission (motion, smoke shadows, lighting); with RT, the ray tracing
 // scene for collisions and shadows of vessels and bases
+//
+// Frames and times (FrameState.h): everything uploaded for a frame is for
+// the end of its step (t_n). Between frames the particles' positions are
+// relative to the last update's camera at its time (C_{n-1}), their
+// velocities in Orbiter's global frame (heliocentric: the ground moves
+// through it at tens of km/s). particle_update.glsl carries them with the
+// ground to this frame first (CarryPrev): from then on - in it and in
+// every later pass - positions are relative to this frame's camera at
+// t_n, and only a particle's motion relative to the ground is left to
+// integrate.
 
 #define PARTICLE_WIND_SET 0 // (the wind table: particles.glsl)
 #define PARTICLE_WIND_QUAL
@@ -40,7 +50,7 @@ const float SHADOW_FIXED = 1024.0; // (accumulation scale)
 #endif
 
 layout(push_constant) uniform Params {
-	vec4 camShift;  // previous camera position - this one (global axes), w: step [s]
+	vec4 camShift;  // previous camera position - this one (global axes; the update carries with the ground instead: frameCarry), w: step [s]
 	vec4 bodyPos;   // centre of the planet nearby (camera-relative), w: its radius (0: none)
 	vec4 bodyVel;   // its velocity (global frame), w: time [s]
 	vec4 omega;     // its angular velocity (global frame), w: particles in the allocated blocks (passes over them)

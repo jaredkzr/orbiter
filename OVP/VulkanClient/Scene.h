@@ -16,6 +16,7 @@
 #include "Plasma.h"
 #include "PlasmaTrail.h"
 #include "SkySettings.h"
+#include "FrameState.h"
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -297,6 +298,11 @@ public:
 	/// speed of sound in the air there: oapiGetSoundSpeed),
 	/// amplitude by strength / d^2, scaled by the CameraShake setting
 	void Jolt (OBJHANDLE body, const VECTOR3 &gpos, double strength, double R);
+	/// the frame's clock and frames (sampled in UpdateCamera: FrameState.h)
+	const vkframe::FrameState &Frame () const { return frameState; }
+	/// the simulation time jumped (clbkTimeJump): nothing carried across it,
+	/// no history kept
+	void OnTimeJump ();
 	/// crash fireballs as volumes (Fireball.h; null: sprites, ORBITER_VK_FIREBALL=sprites)
 	class FireballRenderer *Fireballs ();
 	/// reentry plasma sheaths (null: off)
@@ -475,6 +481,7 @@ private:
 		VECTOR3 rel{}, rel2{}, fwd{}; // the camera from its target (this frame, the one before); its view direction
 	} cut_;
 	bool DetectCameraCut ();
+	vkframe::FrameState frameState;
 	void WriteSSRDescriptors ();
 	void WriteCityDescriptors ();
 	VkTexture *cityMap[3] = {}, *cityNone = nullptr;
@@ -598,6 +605,7 @@ private:
 	float objHeat[4] = { 0, 0, 0, 0 };
 	uint32_t objOwner = 0;  // VObject::Id of the object being drawn into the prepass
 	float objVel[3] = { 0, 0, 0 }; // and its velocity (global frame)
+	bool objGround = false; // ... a planet: what it draws (bases, cities, scatter) is at rest on its ground (RTScene::Material::ground)
 };
 
 #endif // !__SCENE_H

@@ -3174,6 +3174,19 @@ OAPIFUNC void oapiGetGlobalPos (OBJHANDLE hObj, VECTOR3 *pos);
 OAPIFUNC void oapiGetGlobalVel (OBJHANDLE hObj, VECTOR3 *vel);
 
 /**
+ * \brief Returns the global reference frame's origin relative to the
+ *  barycentre of the system it is in.
+ * \param origin pointer to vector receiving the origin [m]
+ * \note Zero in the Solar System. In deep space, or in another star system,
+ *  the core moves the origin near the focus to keep precision; every
+ *  global position then shifts by minus the move, from one frame to the
+ *  next. A position kept across frames carries over as
+ *  pos - (origin_now - origin_then).
+ * \sa oapiGetGlobalPos
+ */
+OAPIFUNC void oapiGetGlobalOrigin (VECTOR3 *origin);
+
+/**
  * \brief Where an observer sees an object: its place when it emitted the
  *  light now reaching the observer (light-time).
  * \param hObj object handle

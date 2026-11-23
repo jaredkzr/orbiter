@@ -382,6 +382,7 @@ void RTScene::Add (uint64_t key, const Part *parts, const float (*offsets)[3], u
 		memcpy (rec.pbr, mat.pbr, sizeof(rec.pbr));
 		memcpy (rec.uv, mat.uv, sizeof(rec.uv));
 		memcpy (rec.vel, mat.vel, sizeof(mat.vel));
+		rec.vel[3] = mat.ground ? 1.0f : 0.0f;
 		memcpy ((InstanceRecord*)f.records.mapped + nRec, &rec, sizeof(rec));
 		nRec++;
 	}

@@ -933,6 +933,12 @@ DLLEXPORT void oapiGetGlobalVel (OBJHANDLE hObj, VECTOR3 *vel)
 	}
 }
 
+DLLEXPORT void oapiGetGlobalOrigin (VECTOR3 *origin)
+{
+	Vector o = g_psys ? g_psys->Origin () : Vector ();
+	origin->x = o.x, origin->y = o.y, origin->z = o.z;
+}
+
 DLLEXPORT double oapiGetObservedPos (OBJHANDLE hObj, const VECTOR3 &obsPos, const VECTOR3 &obsVel, VECTOR3 *pos)
 {
 	const Body *b = (const Body*)hObj;

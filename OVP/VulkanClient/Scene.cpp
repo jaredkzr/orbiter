@@ -330,6 +330,7 @@ bool Scene::Init ()
 	trails = std::make_unique<PlasmaTrails>();
 	trails->Init (ctx, frameLayout);
 	particles = std::make_unique<ParticleSystem>();
+	particles->SetFrameState (&frameState);
 	particles->Init (ctx, gc->TexMgr(), frameLayout, atm->SetLayout(), gc->TexMgr()->Layout(), vclouds->ShapeNoiseView (), vclouds->DetailNoiseView ());
 	// (the dust's transmittance towards a vessel's flames: the particles' grid)
 	for (uint32_t j = 0; j < 2 * vkc::FRAMES_IN_FLIGHT; j++) {
@@ -1212,6 +1213,16 @@ void Scene::Jolt (OBJHANDLE body, const VECTOR3 &gpos, double strength, double R
 	if (joltLog) oapiWriteLogV ("VulkanClient: jolt registered at %.3f (R %.0f m, strength %.1f)", j.t0, R, strength);
 }
 
+void Scene::OnTimeJump ()
+{
+	// (the camera relative to its target may not change: not seen as a cut,
+	// the reflections, traced light and anti-aliasing kept a few frames of
+	// the old lighting)
+	frameState.MarkDiscontinuity ();
+	cut_.valid = false;
+	if (vclouds) vclouds->InvalidateHistory ();
+}
+
 void Scene::UpdateCamera ()
 {
 	oapiCameraGlobalPos (&camPos);
@@ -1306,6 +1317,21 @@ void Scene::UpdateCamera ()
 		camRot.m13, camRot.m23, camRot.m33
 	};
 	view = Mat4::FromRotTrans (vt, _V(0, 0, 0));
+	frameState.Advance (camPos, camRot);
+	{
+		// the global frame's origin moved (deep space, another star system:
+		// Orbiter::UpdateOrigin): the last frame's positions kept in it into
+		// the new one (the motion vectors)
+		const vkframe::Snapshot &n = frameState.Now (), &p = frameState.Prev ();
+		VECTOR3 dO = n.origin - p.origin;
+		if (p.valid && (dO.x != 0.0 || dO.y != 0.0 || dO.z != 0.0)) {
+			prevCamPos -= dO;
+			for (auto &it : visuals) it.second->ShiftPrev (dO);
+			vkframe::Carry c = frameState.FrameCarry ();
+			oapiWriteLogV ("VulkanClient: global frame's origin moved %.6g m: the carry's shift %.6g m (camera's move in G as read %.6g m), |T| %.6g m",
+				length (dO), length (c.shift), length (n.cam - p.cam), c.dist);
+		}
+	}
 
 	VkExtent2D ext = ctx->RenderExtent();
 	viewW = std::max (1u, ext.width);
@@ -2638,7 +2664,7 @@ void Scene::FillFrameUniforms (void *pfu)
 					fu.flameOcc[k + 1][0] = (float)av[k].x, fu.flameOcc[k + 1][1] = (float)av[k].y, fu.flameOcc[k + 1][2] = (float)av[k].z, fu.flameOcc[k + 1][3] = 0.0f;
 			}
 		}
-		if (particles) particles->SetFlameBox (fb);
+		if (particles && !inProbe) particles->SetFlameBox (fb); // (the main view's: the probe's camera fills these again after Simulate)
 	}
 	Mat4::FromRotTrans (camRot, _V(0, 0, 0)).ToFloat (fu.viewToGlobal);
 	// runways with markings of the bases near the camera
@@ -2660,10 +2686,12 @@ void Scene::RenderPrepass ()
 		VECTOR3 v{};
 		if (it.second->Handle ()) oapiGetGlobalVel (it.second->Handle (), &v);
 		objVel[0] = (float)v.x, objVel[1] = (float)v.y, objVel[2] = (float)v.z;
+		objGround = dynamic_cast<VPlanet*>(it.second.get ()) != nullptr;
 		it.second->Render (RenderPass::Depth);
 	}
 	objOwner = 0;
 	objVel[0] = objVel[1] = objVel[2] = 0.0f;
+	objGround = false;
 	ctx->EndTarget ();
 	ctx->GpuMark ("prepass");
 	if (ao->enabled && !rtl->Enabled () && !relOn) ao->Compute (proj[0], -proj[5]);
@@ -2691,7 +2719,7 @@ void Scene::RenderPrepass ()
 		if (OBJHANDLE hp = oapiCameraProxyGbody ())
 			if (VObject *pv = GetVisual (hp))
 				if (Atmosphere *a = pv->GetAtmosphere ()) a->UploadOcean (ctx->Cmd (), camPos);
-		particles->Simulate (camPos, sunDir, frameSet[ctx->FrameIndex()], camAtmSet, rtSets[0] ? rtSets : nullptr, oapiGetSimTime ());
+		particles->Simulate (frameState.Now (), sunDir, frameSet[ctx->FrameIndex()], camAtmSet, rtSets[0] ? rtSets : nullptr, oapiGetSimTime ());
 		particles->RenderScreenSmoke (frameSet[ctx->FrameIndex()], camRot, proj);
 		ctx->GpuMark ("particles");
 	}
@@ -3207,6 +3235,7 @@ void Scene::DrawMesh (const VkMesh *mesh, const Mat4 &modelView, RenderPass pass
 				rm.alphaTest = grp.alphaTest > 0.0f;
 				rm.owner = objOwner;
 				memcpy (rm.vel, objVel, sizeof(rm.vel));
+				rm.ground = objGround;
 				// static groups: one instance for the mesh (below); animated
 				// ones on their own
 				if (mesh->rtAnimated.size() != mesh->nGroup()) mesh->rtAnimated.assign (mesh->nGroup(), 0);
@@ -3358,6 +3387,7 @@ void Scene::AddMeshRT (const VkMesh *mesh, const Mat4 &modelView, bool shadowOnl
 		rm.alphaTest = grp.alphaTest > 0.0f;
 		rm.owner = shadowOnly ? 0 : objOwner;
 		memcpy (rm.vel, objVel, sizeof(rm.vel));
+		rm.ground = objGround;
 		rm.shadowOnly = shadowOnly;
 		rtParts.push_back (part);
 	}

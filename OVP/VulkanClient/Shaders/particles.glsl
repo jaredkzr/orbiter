@@ -129,6 +129,22 @@ layout(set = PARTICLE_WIND_SET, binding = 20, std430) PARTICLE_WIND_QUAL buffer 
 	// size along each [m]; then the flames' points (camera-relative), w: their
 	// weights (summing to 1; 0: none)
 	vec4 flameBox[4 + 12];
+	// (telemetry, ORBITER_VK_PARTICLE_STATS: particle_update.glsl this frame -
+	// x smoke and dust ending the step under the ground near the camera,
+	// y specks under it, z specks bounced, w the ground rays' length [m];
+	// [1] x smoke and dust in air, y their speed relative to the air [cm/s], summed)
+	uvec4 telemetry[2];
+	// the carry (FrameState.h; particle_update.glsl CarryPrev): a point at
+	// rest in the frame chosen (the ground nearby) from the last update's
+	// camera-relative coordinates (C_{n-1}) to this one's (C_n): Q x + T,
+	// with [0] xyz T, w the frame (0 global, 1 the body's centre, 2 its
+	// ground); [1] xyz Q's rotation as sin (angle) times its axis, w 1 if
+	// continuous (no time jump); [2] xyz the frame's displacement over the
+	// step (global) at the last camera
+	vec4 frameCarry[3];
+	// x: the camera's height above the ground under it (a sphere: radius
+	// pc.ground.x) [m], from doubles (particle_update.glsl GroundHeight)
+	vec4 camGround;
 };
 
 // the outward wind along the ground from the jets meeting it at pos: the
