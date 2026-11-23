@@ -933,6 +933,12 @@ DLLEXPORT void oapiGetGlobalVel (OBJHANDLE hObj, VECTOR3 *vel)
 	}
 }
 
+extern double g_coreStepTimes[3];
+DLLEXPORT void oapiGetCoreStepTimes (double *t)
+{
+	for (int i = 0; i < 3; i++) t[i] = g_coreStepTimes[i];
+}
+
 DLLEXPORT void oapiGetGlobalOrigin (VECTOR3 *origin)
 {
 	Vector o = g_psys ? g_psys->Origin () : Vector ();

@@ -1213,6 +1213,12 @@ void Scene::Jolt (OBJHANDLE body, const VECTOR3 &gpos, double strength, double R
 	if (joltLog) oapiWriteLogV ("VulkanClient: jolt registered at %.3f (R %.0f m, strength %.1f)", j.t0, R, strength);
 }
 
+std::string Scene::AntiAliasingName () const
+{
+	if (ctx->sceneSamples != VK_SAMPLE_COUNT_1_BIT) return "msaa" + std::to_string ((int)ctx->sceneSamples);
+	return !taaEnabled ? "off" : useFsr ? (fsr && fsr->IsFsr4 () ? "fsr4" : "fsr3") : "taa";
+}
+
 void Scene::OnTimeJump ()
 {
 	// (the camera relative to its target may not change: not seen as a cut,

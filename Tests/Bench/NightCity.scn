@@ -1,0 +1,31 @@
+BEGIN_DESC
+Benchmark: a camera flying 600 m over Houston at night, 200 m/s (Script Bench/city_fly).
+END_DESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Script Bench/city_fly
+  Date MJD 51983.2200
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship GL-01
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET GL-01
+  MODE Extern
+  TRACKMODE Ground Earth
+  GROUNDLOCATION -95.5200 29.6200 600
+  FOV 60.00
+END_CAMERA
+
+BEGIN_SHIPS
+GL-01:DeltaGlider
+  STATUS Landed Earth
+  POS -95.3700 29.7600
+  HEADING 0
+  GEAR 1 1.0000
+  PRPLEVEL 0:1.000 1:1.000
+END
+END_SHIPS

@@ -268,6 +268,8 @@ public:
 	const class VolumetricClouds *VClouds () const { return vclouds.get(); }
 	/// temporal anti-aliasing active (projection jitter, motion vectors)
 	bool TemporalAAEnabled () const { return taaEnabled; }
+	/// The anti-aliasing in effect, for logs: off, msaaN, taa, fsr3 or fsr4
+	std::string AntiAliasingName () const;
 	/// view-space position of a global point
 	VECTOR3 ViewPos (const VECTOR3 &gpos) const { return view.TransformPoint (gpos - camPos); }
 	/// view-space direction of a global direction

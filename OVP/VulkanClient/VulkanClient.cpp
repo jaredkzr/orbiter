@@ -158,12 +158,12 @@ bool VulkanClient::clbkInitialise ()
 	ctx.SetOffscreenExtent ((uint32_t)w, (uint32_t)h);
 	if (!ctx.Init (window, val && *val && *val != '0', offscreen)) return false;
 	if (offscreen) oapiWriteLogV ("VulkanClient: rendering offscreen (%dx%d)", w, h);
-	// ORBITER_VK_FRAMETIMES=<file>: a line per frame: the frame, the sim time,
-	// the wall-clock time since the previous frame [ms], and the GPU's times
-	// [ms] (with ORBITER_VK_PROFILE: total, then per mark; a frame or two behind)
+	// ORBITER_VK_FRAMETIMES=<file>: a line per frame (Tests/Bench/analyze.py
+	// reads it; format in clbkDisplayFrame)
 	if (const char *ft = getenv ("ORBITER_VK_FRAMETIMES")) {
 		frameTimes = fopen (ft, "w");
 		if (!frameTimes) oapiWriteLogError ("VulkanClient: could not write %s", ft);
+		ctx.cpuTiming = frameTimes != nullptr;
 	}
 	if (const char *h = getenv ("ORBITER_VK_HIDE_UI")) hideUi = *h && *h != '0';
 	// ORBITER_VK_VIDEO_FILE=<file.mp4>: every frame streamed to an ffmpeg
@@ -288,8 +288,30 @@ void VulkanClient::clbkDestroyRenderWindow (bool fastclose)
 // ======================================================================
 // Per-frame
 
+static double WallNow () // [s]
+{
+	return std::chrono::duration<double> (std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 void VulkanClient::clbkUpdate (bool running)
 {
+	double t0 = 0.0;
+	if (frameTimes) {
+		// the core's part of the frame since the last one was displayed: its
+		// state update's parts, and the rest (time step, camera)
+		t0 = WallNow ();
+		double c[3] = { 0.0, 0.0, 0.0 };
+		if (running) oapiGetCoreStepTimes (c);
+		ctx.CpuAdd ("core pre", c[0]), ctx.CpuAdd ("core step", c[1]), ctx.CpuAdd ("core post", c[2]);
+		if (displayEnd > 0.0) ctx.CpuAdd ("core other", std::max (0.0, (t0 - displayEnd) * 1e3 - c[0] - c[1] - c[2]));
+	}
+	double w0 = ctx.WaitTotal ();
+	auto section = [&](const char *name) { // (less any wait on the GPU in it)
+		if (!frameTimes) return;
+		double t = WallNow (), w = ctx.WaitTotal ();
+		ctx.CpuAdd (name, std::max (0.0, (t - t0) * 1e3 - (w - w0)));
+		t0 = t, w0 = w;
+	};
 	if (window) {
 		updateCount++;
 		if (remote) {
@@ -299,13 +321,17 @@ void VulkanClient::clbkUpdate (bool running)
 		if (testInput && (scene || remote)) testInput->Step (window); // (remote: the launchpad too)
 		input::ProcessEvents (window);
 	}
+	section ("input");
 	if (running) {
 		double dt = oapiGetSimStep ();
 		if (scene) scene->Particles ()->AddTime (dt);
 		for (auto *ps : streams) ps->Update (dt);
 		DeleteStreams (false);
 	}
+	section ("streams");
 	if (scene) scene->Update ();
+	section ("scene update");
+	updateEnd = t0;
 }
 
 void VulkanClient::clbkTimeJump (double simt, double simdt, double mjd)
@@ -335,7 +361,11 @@ void VulkanClient::clbkRenderScene ()
 		ctx.BindBackbuffer (false);
 		return;
 	}
-	if (frameTimes) renderStart = std::chrono::duration<double> (std::chrono::steady_clock::now().time_since_epoch()).count();
+	if (frameTimes) {
+		renderStart = WallNow ();
+		if (updateEnd > 0.0) ctx.CpuAdd ("core input", (renderStart - updateEnd) * 1e3); // (user input, the dialogs' frame)
+		ctx.BeginCpuFrame ();
+	}
 	if (!ctx.BeginFrame ()) return;
 	frameActive = true;
 	r2d->Flush ();
@@ -445,6 +475,7 @@ void VulkanClient::clbkRenderScene ()
 	postfx->Apply (sceneImage, sceneSize);   // HDR scene -> backbuffer
 	ctx.GpuMark ("post");
 	if (!CleanShotFrame ()) Render2DOverlay (); // panels, MFDs and HUD
+	ctx.CpuMark ("overlay");
 }
 
 void VulkanClient::clbkImGuiRenderDrawData ()
@@ -469,19 +500,42 @@ bool VulkanClient::clbkDisplayFrame ()
 		auto t = std::chrono::steady_clock::now ();
 		if (t - last > std::chrono::seconds (20)) { last = t; vkc::LogHeaps (); }
 	}
-	if (frameTimes && frameActive) {
-		double now = std::chrono::duration<double> (std::chrono::steady_clock::now().time_since_epoch()).count();
+	if (frameTimes && frameActive && scene) {
+		ctx.CpuMark ("2d ui"); // (the core's 2D output, the dialogs)
+		double now = WallNow ();
+		if (!frameTimesCount) {
+			// a header: what the frames were measured on (ORBITER_BENCH_STAMP:
+			// the benchmark's own, e.g. the build and the run's settings)
+			const auto &g = vkc::Gfx ();
+			VkExtent2D e = ctx.Extent (), r = ctx.RenderExtent ();
+			const char *stamp = getenv ("ORBITER_BENCH_STAMP");
+			fprintf (frameTimes, "# orbiter-frametimes 2 %s size=%ux%u render=%ux%u offscreen=%d frames_in_flight=%u aa=%s rt=%d rt_lighting=%d rt_reflections=%d"
+				" clouds=%d plumes=%d particles=%d particle_density=%g smoke=%d fireballs=%d %s\n",
+				ctx.DeviceStamp ().c_str (), e.width, e.height, r.width, r.height, offscreen ? 1 : 0, vkc::FRAMES_IN_FLIGHT,
+				scene->AntiAliasingName ().c_str (), scene->RT () ? 1 : 0, g.rtLighting ? 1 : 0, g.rtReflections ? 1 : 0,
+				g.clouds ? 1 : 0, g.plumes ? 1 : 0, g.particles ? 1 : 0, g.particleDensity, g.smokeRendering, g.fireballs, stamp ? stamp : "");
+		}
+		// a frame: its number, the sim time [s], the wall-clock time since the
+		// previous frame [ms], the GPU's total [ms] and its passes (with
+		// ORBITER_VK_PROFILE; a frame or two behind), "CPU render=" the
+		// client's time from clbkRenderScene to here and "CPU wait=" its time
+		// waiting on the GPU (frames in flight, the swapchain) [ms]; after
+		// "@cpu" the CPU's sections [ms] (the core's parts, clbkUpdate's, then
+		// per GPU pass the CPU time up to its mark, less any wait; "submit":
+		// the previous frame's); "@bound=" G when the CPU waited on the GPU,
+		// else C
 		const auto &gpu = ctx.LastGpuTimes ();
 		double total = 0.0;
 		for (const auto &m : gpu) total += m.second;
-		fprintf (frameTimes, "%u %.6f %.3f %.3f", ++frameTimesCount, oapiGetSimTime (), lastFrameWall < 0.0 ? 0.0 : (now - lastFrameWall) * 1e3, total);
+		double wall = lastFrameWall < 0.0 ? 0.0 : (now - lastFrameWall) * 1e3, wait = ctx.TakeFenceWait ();
+		fprintf (frameTimes, "%u %.6f %.3f %.3f", ++frameTimesCount, oapiGetSimTime (), wall, total);
 		for (const auto &m : gpu) fprintf (frameTimes, " %s=%.3f", m.first, m.second);
-		// (the CPU: the client's frame, from clbkRenderScene to here, and
-		// the time waited on frames in flight; the rest is the core's)
-		fprintf (frameTimes, " CPU render=%.3f CPU wait=%.3f", (now - renderStart) * 1e3, ctx.TakeFenceWait ());
-		fputc ('\n', frameTimes);
+		fprintf (frameTimes, " CPU render=%.3f CPU wait=%.3f @cpu", (now - renderStart) * 1e3, wait);
+		for (const auto &m : ctx.CpuTimes ()) fprintf (frameTimes, " %s=%.3f", m.first, m.second);
+		fprintf (frameTimes, " @bound=%c\n", wait > std::max (0.5, 0.05 * wall) ? 'G' : 'C');
+		ctx.ClearCpuTimes ();
 		lastFrameWall = now;
-	}
+	} else if (frameTimes) ctx.ClearCpuTimes ();
 	if (frameActive) {
 		if (!videoFile.empty ()) StreamFrame ();
 		if (!autoScreenshot.empty() && !videoDir.empty() && frameCount + 1 + videoFrames >= autoScreenshotFrame && frameCount + 1 < autoScreenshotFrame) {
@@ -515,7 +569,12 @@ bool VulkanClient::clbkDisplayFrame ()
 			const char *ex = getenv ("ORBITER_VK_SCREENSHOT_EXIT");
 			if (ex && *ex && *ex != '0') oapiInputCloseRequest ();
 		}
+		double ts = frameTimes ? WallNow () : 0.0;
 		ctx.EndFrame ();
+		if (frameTimes) {
+			displayEnd = WallNow ();
+			ctx.CpuAdd ("submit", (displayEnd - ts) * 1e3); // (the next frame's line)
+		}
 	} else {
 		ctx.SubmitPending (); // offscreen work recorded without a frame
 	}

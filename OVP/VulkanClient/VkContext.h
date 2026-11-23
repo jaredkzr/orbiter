@@ -11,6 +11,7 @@
 #include <vulkan/vulkan.h>
 #include <vk_mem_alloc.h>
 #include <functional>
+#include <string>
 #include <vector>
 
 struct SDL_Window;
@@ -179,7 +180,23 @@ namespace vkc {
 		/// The GPU times [ms] of the last frame whose timestamps were read
 		/// (profiling; a frame or two behind the one recorded), per mark
 		const std::vector<std::pair<const char*, double>> &LastGpuTimes () const { return lastMarks; }
-		double TakeFenceWait () { double w = fenceWait; fenceWait = 0.0; return w; } // [ms] waited on frames in flight since the last call
+		double TakeFenceWait () { double w = fenceWait; fenceWait = 0.0; return w; } // [ms] waited on frames in flight (and the swapchain) since the last call
+
+		/// CPU time per section (the frame-time log, cpuTiming): each
+		/// CpuMark ends a section begun at the previous mark or at
+		/// BeginCpuFrame, less the time waited on the GPU in it; GpuMark
+		/// marks the CPU too, under the same name. CpuAdd adds a section
+		/// timed elsewhere (before the frame's render). The list holds the
+		/// frame since ClearCpuTimes
+		bool cpuTiming = false;
+		void BeginCpuFrame ();
+		void CpuMark (const char *name);
+		void CpuAdd (const char *name, double ms) { if (cpuTiming) cpuMarks.push_back ({ name, ms }); }
+		const std::vector<std::pair<const char*, double>> &CpuTimes () const { return cpuMarks; }
+		void ClearCpuTimes () { cpuMarks.clear (); }
+		double WaitTotal () const { return waitTotal; } // [ms] all waits on the GPU so far
+		/// The device for logs: name, driver and its version, as key="value" pairs
+		std::string DeviceStamp () const;
 
 		/// Read back the next presented frame. The callback receives the pixels
 		/// (4 bytes per pixel in colorFormat, rows top to bottom).
@@ -245,6 +262,10 @@ namespace vkc {
 		static constexpr uint32_t MAX_MARKS = 64;
 		bool profiling = false;
 		double fenceWait = 0.0; // [ms]
+		double waitTotal = 0.0; // [ms] all waits on the GPU (CpuMark)
+		double cpuLast = 0.0, cpuLastWait = 0.0; // [ms] the last CPU mark: steady clock, waitTotal
+		std::vector<std::pair<const char*, double>> cpuMarks; // [ms]
+		void AddWait (double ms) { fenceWait += ms; waitTotal += ms; }
 		double timestampPeriod = 1.0; // [ns]
 		uint32_t profFrames = 0;
 		std::vector<std::pair<const char*, double>> profSum; // [ms], in order of first appearance

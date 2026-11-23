@@ -3187,6 +3187,16 @@ OAPIFUNC void oapiGetGlobalVel (OBJHANDLE hObj, VECTOR3 *vel);
 OAPIFUNC void oapiGetGlobalOrigin (VECTOR3 *origin);
 
 /**
+ * \brief The wall-clock time the core's last state update took, in parts
+ * \param t array of 3 receiving [ms]: the pre-step callbacks (plugins and
+ *  vessels, and any origin shift), the state update (the planetary system,
+ *  vessels, playback, dialogs), the post-step callbacks
+ * \note For profiling (the graphics client's frame-time log); zero before
+ *  the first step.
+ */
+OAPIFUNC void oapiGetCoreStepTimes (double *t);
+
+/**
  * \brief Where an observer sees an object: its place when it emitted the
  *  light now reaching the observer (light-time).
  * \param hObj object handle

@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <fstream>
+#include <chrono>
 #ifdef _WIN32
 #include <process.h>
 #endif
@@ -2283,11 +2284,19 @@ void Orbiter::ModulePostStep ()
 // Name: UpdateWorld()
 // Desc: Update world to current time
 //-----------------------------------------------------------------------------
+// wall-clock time of the last UpdateWorld's parts [ms]: the pre-step
+// callbacks, the state update, the post-step callbacks (oapiGetCoreStepTimes)
+double g_coreStepTimes[3] = { 0.0, 0.0, 0.0 };
+
 VOID Orbiter::UpdateWorld ()
 {
+	using clk = std::chrono::steady_clock;
+	auto ms = [](clk::time_point a, clk::time_point b) { return std::chrono::duration<double, std::milli> (b - a).count (); };
+	auto t0 = clk::now ();
 	// the global frame's origin (deep space), then module pre-timestep callbacks
 	if (bRunning && td.SimDT) UpdateOrigin ();
 	if (bRunning) ModulePreStep ();
+	auto t1 = clk::now ();
 
 	// update world
 	g_bStateUpdate = true;
@@ -2308,9 +2317,12 @@ VOID Orbiter::UpdateWorld ()
 	}
 	if (replay && replay->Active()) replay->Update ();
 	if (pDlgMgr) pDlgMgr->UpdateDialogs(); // SHOULD BE DONE BY GRAPHICS CLIENT!
+	auto t2 = clk::now ();
 
 	// module post-timestep callbacks
 	if (bRunning) ModulePostStep ();
+	auto t3 = clk::now ();
+	g_coreStepTimes[0] = ms (t0, t1), g_coreStepTimes[1] = ms (t1, t2), g_coreStepTimes[2] = ms (t2, t3);
 
 	g_bStateUpdate = false;
 

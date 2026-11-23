@@ -178,6 +178,8 @@ private:
 	double lastFrameWall = -1.0;  // [s]
 	unsigned frameTimesCount = 0;
 	double renderStart = 0.0;     // [s] clbkRenderScene's start
+	double updateEnd = -1.0;      // [s] clbkUpdate's end
+	double displayEnd = -1.0;     // [s] clbkDisplayFrame's end (the frame submitted)
 };
 
 #endif // !__VULKANCLIENT_H

@@ -763,7 +763,7 @@ VkCommandBuffer Context::Rec ()
 	if (!recording) {
 		auto t0 = std::chrono::steady_clock::now ();
 		vkWaitForFences (device, 1, &f.inFlight, VK_TRUE, UINT64_MAX);
-		fenceWait += std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ();
+		AddWait (std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ());
 		FlushDeferred (frameIndex);
 		f.transientUsed = 0;
 		f.transientChunk = 0;
@@ -795,7 +795,9 @@ bool Context::BeginFrame ()
 		bbState = BB_NONE;
 		return true;
 	}
+	auto ta = std::chrono::steady_clock::now ();
 	VkResult res = vkAcquireNextImageKHR (device, swapchain, UINT64_MAX, f.imageAvailable, VK_NULL_HANDLE, &imageIndex);
+	AddWait (std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - ta).count ());
 	if (res == VK_ERROR_OUT_OF_DATE_KHR) {
 		swapchainDirty = true;
 		return false;
@@ -809,8 +811,40 @@ bool Context::BeginFrame ()
 	return true;
 }
 
+static double NowMs ()
+{
+	return std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now ().time_since_epoch ()).count ();
+}
+
+std::string Context::DeviceStamp () const
+{
+	VkPhysicalDeviceDriverProperties dp{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+	VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+	p2.pNext = &dp;
+	vkGetPhysicalDeviceProperties2 (physicalDevice, &p2);
+	char buf[512];
+	snprintf (buf, sizeof (buf), "gpu=\"%s\" driver=\"%s %s\" vulkan=%u.%u.%u",
+		p2.properties.deviceName, dp.driverName, dp.driverInfo,
+		VK_API_VERSION_MAJOR (p2.properties.apiVersion), VK_API_VERSION_MINOR (p2.properties.apiVersion), VK_API_VERSION_PATCH (p2.properties.apiVersion));
+	return buf;
+}
+
+void Context::BeginCpuFrame ()
+{
+	cpuLast = NowMs (), cpuLastWait = waitTotal;
+}
+
+void Context::CpuMark (const char *name)
+{
+	if (!cpuTiming) return;
+	double t = NowMs ();
+	cpuMarks.push_back ({ name, std::max (0.0, t - cpuLast - (waitTotal - cpuLastWait)) });
+	cpuLast = t, cpuLastWait = waitTotal;
+}
+
 void Context::GpuMark (const char *name)
 {
+	CpuMark (name);
 	if (!profiling) return;
 	Frame &f = frames[frameIndex];
 	Rec ();
@@ -1343,7 +1377,9 @@ void Context::EndFrame ()
 	pi.swapchainCount = 1;
 	pi.pSwapchains = &swapchain;
 	pi.pImageIndices = &imageIndex;
+	auto tp = std::chrono::steady_clock::now ();
 	VkResult res = vkQueuePresentKHR (queue, &pi);
+	AddWait (std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - tp).count ()); // (FIFO: blocks on a full queue)
 	if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR)
 		swapchainDirty = true;
 
