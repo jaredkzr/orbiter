@@ -18,6 +18,8 @@
 #include "particle_light_rt.comp.h"
 #include "particle_shadow_splat.comp.h"
 #include "particle_shadow_sum.comp.h"
+#include "flame_splat.comp.h"
+#include "flame_trans.comp.h"
 #include "particle_sortkeys.comp.h"
 #include "particle_sort.comp.h"
 #include "particle_sort_local.comp.h"
@@ -224,8 +226,10 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		ctx->ImmediateSubmit ([ob](VkCommandBuffer cmd) { vkCmdFillBuffer (cmd, ob, 0, VK_WHOLE_SIZE, 0); });
 	}
 	for (auto &b : windBuf) {
-		b = ctx->CreateBuffer ((WIND_LAYERS + 5) * 4 * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true); // (+ nearVol and the counts, + the counts by class)
-		memset (b.mapped, 0, (WIND_LAYERS + 5) * 4 * sizeof(float));
+		// (+ nearVol and the counts, + the counts by class, + the ground jets' count and theirs)
+		const size_t n = (WIND_LAYERS + 5 + 1 + 3 * MAX_GROUND_JETS + 4 + FLAME_POINTS) * 4; // (+ the flames' dust grid: FlameBox)
+		b = ctx->CreateBuffer (n * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+		memset (b.mapped, 0, n * sizeof(float));
 	}
 
 	VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
@@ -351,6 +355,24 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		});
 	}
 	shadowDepth = image3D (VK_FORMAT_R16_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+	// the dust around a vessel's flames (FlameBox): its extinction, the
+	// transmittance towards them (all clear: 1)
+	flameAccum = image (VK_IMAGE_TYPE_3D, VK_FORMAT_R32_UINT, { FLAME_NX, FLAME_NX, FLAME_NZ }, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+	flameOcc = image (VK_IMAGE_TYPE_3D, VK_FORMAT_R16_SFLOAT, { FLAME_NX, FLAME_NX, FLAME_NZ }, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+	{
+		VkImage fa = flameAccum.image, fo = flameOcc.image;
+		ctx->ImmediateSubmit ([fa, fo](VkCommandBuffer cmd) {
+			VkImageSubresourceRange r{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+			VkClearColorValue zero{}, one{ { 1.0f, 1.0f, 1.0f, 1.0f } };
+			for (VkImage im : { fa, fo })
+				vkc::ImageBarrier (cmd, im, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+					VK_PIPELINE_STAGE_2_NONE, 0, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+			vkCmdClearColorImage (cmd, fa, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &r);
+			vkCmdClearColorImage (cmd, fo, VK_IMAGE_LAYOUT_GENERAL, &one, 1, &r);
+			vkc::ImageBarrier (cmd, fo, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+				VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+		});
+	}
 	VkImage gi[2] = { shadowAccum.image, shadowDepth.image };
 	ctx->ImmediateSubmit ([gi](VkCommandBuffer cmd) {
 		VkClearColorValue zero{};
@@ -390,7 +412,8 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		{ 48, CI, 1, FS, nullptr }, // (the crash fireballs' occlusion: FireballRenderer)
 		{ 49, CI, 1, CS, nullptr }, { 50, CI, 1, CS, nullptr }, // (the march's history: the other slot's near, far)
 		{ 51, SI, 2, CS, nullptr }, { 52, CI, 2, CS, nullptr }, // (mid, coarse: engine smoke's speed)
-		{ 53, CI, 1, FS, nullptr }, { 54, CI, 1, FS, nullptr } }; // (the plumes' light and transmittance, their distance: PlumeRenderer::LayerViews)
+		{ 53, CI, 1, FS, nullptr }, { 54, CI, 1, FS, nullptr }, // (the plumes' light and transmittance, their distance: PlumeRenderer::LayerViews)
+		{ 55, SI, 1, CS, nullptr }, { 56, SI, 1, CS, nullptr } }; // (the dust around a vessel's flames: FlameBox)
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
 	lci.bindingCount = (uint32_t)b.size (), lci.pBindings = b.data ();
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &setLayout));
@@ -403,7 +426,7 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 	}
 	VkDescriptorPoolSize ps[3] = { { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 12 * vkc::FRAMES_IN_FLIGHT },
 		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, (22 + TEX_SLOTS) * vkc::FRAMES_IN_FLIGHT + 2 },
-		{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 48 * vkc::FRAMES_IN_FLIGHT + 2 } };
+		{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 50 * vkc::FRAMES_IN_FLIGHT + 2 } };
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.maxSets = 2 * vkc::FRAMES_IN_FLIGHT + 2, pci.poolSizeCount = 3, pci.pPoolSizes = ps;
 	VK_CHECK(vkCreateDescriptorPool (ctx->device, &pci, nullptr, &dpool));
@@ -453,6 +476,14 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		nw.dstSet = sets[i], nw.dstBinding = 44, nw.descriptorCount = 1;
 		nw.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, nw.pImageInfo = &ni;
 		vkUpdateDescriptorSets (ctx->device, 1, &nw, 0, nullptr);
+		VkDescriptorImageInfo fii[2] = { { VK_NULL_HANDLE, flameAccum.view, VK_IMAGE_LAYOUT_GENERAL }, { VK_NULL_HANDLE, flameOcc.view, VK_IMAGE_LAYOUT_GENERAL } };
+		VkWriteDescriptorSet fw[2]{};
+		for (uint32_t k = 0; k < 2; k++) {
+			fw[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			fw[k].dstSet = sets[i], fw[k].dstBinding = 55 + k, fw[k].descriptorCount = 1;
+			fw[k].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, fw[k].pImageInfo = &fii[k];
+		}
+		vkUpdateDescriptorSets (ctx->device, 2, fw, 0, nullptr);
 		VkDescriptorBufferInfo dbi[2] = { { drawArgs[i].buffer, 0, VK_WHOLE_SIZE }, { ringInfoBuf[i].buffer, 0, VK_WHOLE_SIZE } };
 		VkDescriptorImageInfo dii{ volSampler, volDummy.view, VK_IMAGE_LAYOUT_GENERAL };
 		VkWriteDescriptorSet dw[3]{};
@@ -515,6 +546,8 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 	lightPipe = compute (spv_particle_light_comp, spv_particle_light_comp_size, updateLayout);
 	splatPipe = compute (spv_particle_shadow_splat_comp, spv_particle_shadow_splat_comp_size, updateLayout);
 	sumPipe = compute (spv_particle_shadow_sum_comp, spv_particle_shadow_sum_comp_size, updateLayout);
+	flameSplatPipe = compute (spv_flame_splat_comp, spv_flame_splat_comp_size, updateLayout);
+	flameTransPipe = compute (spv_flame_trans_comp, spv_flame_trans_comp_size, updateLayout);
 	sortKeysPipe = compute (spv_particle_sortkeys_comp, spv_particle_sortkeys_comp_size, updateLayout);
 	sortLayout = layoutOf ({ setLayout }, CS, 4 * sizeof(uint32_t));
 	sortPipe = compute (spv_particle_sort_comp, spv_particle_sort_comp_size, sortLayout);
@@ -720,7 +753,7 @@ void ParticleSystem::Shutdown ()
 	vkDeviceWaitIdle (ctx->device);
 	FreeVolume (true);
 	ReapVolume (true);
-	for (VkPipeline p : { emitPipe, updatePipe, updateRTPipe, lightPipe, lightRTPipe, splatPipe, sumPipe, sortKeysPipe, sortPipe, sortLocalPipe, drawBlend,
+	for (VkPipeline p : { emitPipe, updatePipe, updateRTPipe, lightPipe, lightRTPipe, splatPipe, sumPipe, flameSplatPipe, flameTransPipe, sortKeysPipe, sortPipe, sortLocalPipe, drawBlend,
 		volSplatPipe, volResolvePipe, volMarchPipe, marchPipe, thickPipe, blurPipe, screenCompPipe })
 		if (p) vkDestroyPipeline (ctx->device, p, nullptr);
 	for (VkPipelineLayout l : { emitLayout, updateLayout, updateRTLayout, drawLayout, thickLayout, sortLayout, volMarchLayout, blurLayout })
@@ -750,6 +783,8 @@ void ParticleSystem::Shutdown ()
 	ctx->DestroyImage (shadowAccum);
 	ctx->DestroyBuffer (shadowOcc);
 	ctx->DestroyImage (shadowDepth);
+	ctx->DestroyImage (flameAccum);
+	ctx->DestroyImage (flameOcc);
 	if (smokeTex) texmgr->Release (smokeTex);
 	ctx = nullptr;
 }
@@ -905,6 +940,11 @@ bool ParticleSystem::Reserve (ParticleRing &r, double rate, double life, Class c
 	ParticlePool::Ring *pr = slots.RingAt (r.first);
 	pr->thin = (float)(ParticlePool::PressureFactor (fill, r.prio) * r.shortfall);
 	return true;
+}
+
+void ParticleSystem::AddGroundJet (const VECTOR3 &pos, const VECTOR3 &n, double speed, double r0, double reach, double thick)
+{
+	if (speed > 0.0 && reach > 0.0 && groundJets.size () < 64) groundJets.push_back ({ pos, n, speed, r0, reach, thick }); // (64: if no Simulate clears them)
 }
 
 void ParticleSystem::Emit (ParticleRing &r, const Emission &src, uint32_t n)
@@ -1477,6 +1517,47 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 		}
 	}
 	up.bodyVel[3] = (float)fmod (simt, 1e4);
+	// the ground jets (camera-relative; the strongest, if more)
+	{
+		if ((int)groundJets.size () > MAX_GROUND_JETS)
+			std::partial_sort (groundJets.begin (), groundJets.begin () + MAX_GROUND_JETS, groundJets.end (),
+				[](const GroundJet &a, const GroundJet &b) { return a.speed * a.reach > b.speed * b.reach; });
+		int nj = std::min ((int)groundJets.size (), MAX_GROUND_JETS);
+		uint32_t *cnt = (uint32_t*)windBuf[fi].mapped + (WIND_LAYERS + 5) * 4;
+		float *j = (float*)(cnt + 4);
+		cnt[0] = (uint32_t)nj;
+		for (int k = 0; k < nj; k++) {
+			const GroundJet &g = groundJets[k];
+			VECTOR3 p = g.pos - camPos; // (as the emissions: Queue)
+			float *e = j + 12 * k; // (particles.glsl groundJet: three vec4 each)
+			e[0] = (float)p.x, e[1] = (float)p.y, e[2] = (float)p.z, e[3] = (float)g.r0;
+			e[4] = (float)g.n.x, e[5] = (float)g.n.y, e[6] = (float)g.n.z, e[7] = (float)g.speed;
+			e[8] = (float)g.reach, e[9] = (float)g.thick, e[10] = e[11] = 0.0f;
+		}
+		groundJets.clear ();
+		// the flames' dust grid (particles.glsl flameBox: camera-relative)
+		float *fbx = j + 12 * MAX_GROUND_JETS;
+		memset (fbx, 0, (4 + FLAME_POINTS) * 4 * sizeof(float));
+		if (flameBox.on) {
+			const FlameBox &b = flameBox;
+			VECTOR3 c = b.centre - camPos;
+			const double hw[3] = { FLAME_HALF_W, FLAME_HALF_W, FLAME_HALF_H };
+			const int nc[3] = { FLAME_NX, FLAME_NX, FLAME_NZ };
+			const VECTOR3 *ax[3] = { &b.ax, &b.ay, &b.az };
+			fbx[0] = (float)c.x, fbx[1] = (float)c.y, fbx[2] = (float)c.z, fbx[3] = 1.0f;
+			for (int k = 0; k < 3; k++) {
+				VECTOR3 a = *ax[k] / (2.0 * hw[k]);
+				fbx[4 + 4 * k] = (float)a.x, fbx[5 + 4 * k] = (float)a.y, fbx[6 + 4 * k] = (float)a.z, fbx[7 + 4 * k] = (float)(2.0 * hw[k] / nc[k]);
+			}
+			double wsum = 0.0;
+			for (int k = 0; k < b.n; k++) wsum += b.weight[k];
+			for (int k = 0; k < std::min (b.n, FLAME_POINTS) && wsum > 0.0; k++) {
+				VECTOR3 l = b.light[k] - camPos;
+				float *e = fbx + 16 + 4 * k;
+				e[0] = (float)l.x, e[1] = (float)l.y, e[2] = (float)l.z, e[3] = (float)(b.weight[k] / wsum);
+			}
+		}
+	}
 	for (int k = 0; k < 3; k++)
 		drawBody[k] = up.bodyPos[k], drawBody[4 + k] = up.bodyVel[k], drawBody[8 + k] = up.omega[k];
 	drawBody[3] = up.bodyPos[3] > 0.0f ? 1.0f : 0.0f;
@@ -1625,6 +1706,28 @@ void ParticleSystem::Simulate (const VECTOR3 &camPos, const VECTOR3 &sunDir, VkD
 	barrier (VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, CS, RW);
 	shadowParity ^= 1u;
 	ctx->GpuMark ("pt shadow");
+
+	// the dust around the brightest vessel's flames: its extinction, then
+	// each cell's transmittance towards them (the lights' shadows of the
+	// dust: lights.glsl FlameOcc - the surfaces, the sprites and the smoke
+	// volume drawn after this read it)
+	if (flameBox.on) {
+		VkClearColorValue zero{};
+		VkImageSubresourceRange r{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		barrier (CS, RW, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+		vkCmdClearColorImage (cmd, flameAccum.image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &r);
+		barrier (VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, CS, RW);
+		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, flameSplatPipe);
+		bindSets (updateLayout, false);
+		vkCmdDispatch (cmd, groups, 1, 1);
+		// (the transmittance, read by the last frame's surfaces and sprites -
+		// one image for the frames in flight: not rewritten under them)
+		barrier (CS | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, RW, CS, RW);
+		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, flameTransPipe);
+		vkCmdDispatch (cmd, FLAME_NX / 4, FLAME_NX / 4, FLAME_NZ / 4);
+		barrier (CS, RW, CS | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+		ctx->GpuMark ("pt flame dust");
+	}
 
 	// sunlight on the particles
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, useRT ? lightRTPipe : lightPipe);

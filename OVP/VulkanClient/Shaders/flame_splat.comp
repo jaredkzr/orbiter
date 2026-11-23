@@ -1,0 +1,57 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// GPU particles, the dust around a vessel's flames (ParticleSystem::FlameBox):
+// each dust or smoke particle in the grid adds its extinction - its optical
+// depth across its middle, -ln (1 - opacity), over its sphere: 2/3 pi r^2
+// times that [m^2] - to the cells it covers, spread over its sphere (at
+// most four cells in radius: a large puff's the same total, closer in; at
+// least one: no single-cell spikes). flame_trans.comp sums it towards the
+// flames
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 64) in;
+
+#include "particle_common.glsl"
+
+layout(set = 0, binding = 55, r32ui) uniform uimage3D flameAccum;
+const ivec3 FLAME_GRID = ivec3 (64, 64, 32); // (ParticleSystem::FLAME_NX, FLAME_NZ)
+const float FLAME_FIXED = 1024.0;            // (flame_trans.comp)
+
+void main ()
+{
+	if (flameBox[0].w < 0.5) return;
+	uint i = ParticleSlot (gl_GlobalInvocationID.x);
+	if (i == ~0u) return;
+	Particle p = particles[i];
+	if (p.velLife.w <= 0.0 || (p.flags & (PF_EMISSIVE | PF_SPECK)) != 0u) return;
+	float a = ParticleAlpha (p), h = ParticleRadius (p);
+	if (a <= 0.002 || h <= 0.0) return;
+	vec3 rel = p.posAge.xyz - flameBox[0].xyz;
+	vec3 g = (vec3 (dot (rel, flameBox[1].xyz), dot (rel, flameBox[2].xyz), dot (rel, flameBox[3].xyz)) + 0.5) * vec3 (FLAME_GRID);
+	vec3 cell = vec3 (flameBox[1].w, flameBox[2].w, flameBox[3].w);
+	vec3 rr = clamp (vec3 (h) / cell, vec3 (1.0), vec3 (4.0)); // (its radius in cells, each axis)
+	if (any (lessThan (g + rr, vec3 (0.0))) || any (greaterThan (g - rr, vec3 (FLAME_GRID)))) return;
+	float E = -log (1.0 - min (a, 0.95)) * 2.0944 * h * h;
+	ivec3 c0 = ivec3 (floor (g)), R = ivec3 (ceil (rr));
+	float wsum = 0.0;
+	for (int z = -R.z; z <= R.z; z++)
+		for (int y = -R.y; y <= R.y; y++)
+			for (int x = -R.x; x <= R.x; x++) {
+				vec3 d = (vec3 (c0 + ivec3 (x, y, z)) + 0.5 - g) / rr;
+				wsum += max (1.0 - dot (d, d), 0.0);
+			}
+	if (wsum <= 0.0) return;
+	for (int z = -R.z; z <= R.z; z++)
+		for (int y = -R.y; y <= R.y; y++)
+			for (int x = -R.x; x <= R.x; x++) {
+				ivec3 q = c0 + ivec3 (x, y, z);
+				if (any (lessThan (q, ivec3 (0))) || any (greaterThanEqual (q, FLAME_GRID))) continue;
+				vec3 d = (vec3 (q) + 0.5 - g) / rr;
+				float w = max (1.0 - dot (d, d), 0.0);
+				uint add = uint (E * w / wsum * FLAME_FIXED + 0.5);
+				if (add != 0u) imageAtomicAdd (flameAccum, q, add);
+			}
+}

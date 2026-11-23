@@ -52,6 +52,12 @@ layout(set = FRAME_SET, binding = 0) uniform Frame {
 	vec4 swellNorth;   // its north (view space)
 	vec4 swellComp[SWELL_MAX];          // a [m], k [1/m], direction of travel east, north
 	vec4 swellPhase[SWELL_MAX / 4];     // phases at the reference [rad]
+	// the dust and smoke between a flaming vessel's flames and what they
+	// light (ParticleSystem: flame_trans.comp; lights.glsl FlameOcc): the
+	// box of its transmittance grid - centre (view space), w: the vessel's
+	// id (its lights' spot.y; -1: none); the box's axes over its size (view
+	// space: dot (p - centre, axis) + 0.5 in [0, 1] inside)
+	vec4 flameOcc[4];
 	LocalLight lights[MAX_LIGHTS];
 	vec4 runways[MAX_RUNWAYS * 4]; // bases' runways with markings (Scene.h RunwayGpu; runway.glsl)
 	vec4 pads[MAX_PADS * 3];       // their landing pads with markings (Scene.h PadGpu; pad.glsl)

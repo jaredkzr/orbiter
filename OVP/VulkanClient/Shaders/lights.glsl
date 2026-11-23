@@ -5,6 +5,21 @@
 // extra stars (a binary's other star, a black hole's disc: directional, type
 // 3, first in the list). Requires frame.glsl.
 
+// the transmittance of the dust and smoke towards a flaming vessel's flames
+// (one grid around the brightest such vessel, towards the middle of its
+// flames: frame.flameOcc), for its lights (owner: their spot.y); 1 outside
+// the grid, faded to it at the grid's faces
+layout(set = FRAME_SET, binding = 11) uniform sampler3D flameOccTex;
+float FlameOcc (vec3 p, float owner)
+{
+	if (frame.flameOcc[0].w < 0.0 || abs (owner - frame.flameOcc[0].w) > 0.5) return 1.0;
+	vec3 r = p - frame.flameOcc[0].xyz;
+	vec3 u = vec3 (dot (r, frame.flameOcc[1].xyz), dot (r, frame.flameOcc[2].xyz), dot (r, frame.flameOcc[3].xyz));
+	float e = max (abs (u.x), max (abs (u.y), abs (u.z)));
+	if (e >= 0.5) return 1.0;
+	return mix (texture (flameOccTex, u + 0.5).r, 1.0, smoothstep (0.42, 0.5, e));
+}
+
 // the share of a local light (not a star) reaching a point p (view space),
 // without its direction: the attenuation (at most 1: Orbiter's coefficients
 // make it far larger near the light), faded to nothing at the range, a
@@ -19,6 +34,7 @@ float LightReach (LocalLight l, vec3 p, float ext2)
 	float x = clamp (1.0 - pow (d / l.pos.w, 4.0), 0.0, 1.0);
 	a *= x * x;
 	if (l.dir.w > 1.5) a *= smoothstep (l.spot.x, l.att.w, dot (normalize (p - l.pos.xyz), l.dir.xyz));
+	else if (l.spot.w > 0.5) a *= FlameOcc (p, l.spot.y); // (a flame)
 	return a;
 }
 
@@ -64,6 +80,7 @@ vec3 LocalLighting (vec3 posView, vec3 N, vec4 vis)
 		if (l.dir.w > 1.5) // spot: full intensity inside the umbra cone, none outside the penumbra
 			a *= smoothstep(l.spot.x, l.att.w, dot(-L, l.dir.xyz));
 		if (i < 4) a *= vis[i];
+		if (l.dir.w < 1.5 && l.spot.w > 0.5) a *= FlameOcc (posView, l.spot.y); // (a flame)
 		sum += l.col.rgb * a * SphereLightCos (dot (N, L), l.dir.w < 1.5 ? l.att.w / d : 0.0);
 	}
 	return sum;

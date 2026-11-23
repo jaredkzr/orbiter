@@ -35,8 +35,12 @@ namespace {
 		//                smoke colour              opacity life  air0   air1   trail contrail light radiance jet
 		{ "ion",          1.0,   { 0.35f, 0.55f, 1.0f }, 0.7f, { 0, 0, 0 },          0.0f, { 0, 0, 0 },          0.0f, 0.0f,  1.0f, 0.2f,  4.0f,
 		                  { 0, 0, 0 },              0.0f,  0.0f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f, 0.0f },
+		// (plasma: a light of 60 - with none, as drawn, its flame and its
+		// splash on the ground left the dust they raise dark at night - in
+		// the violet of its afterglow: the drawn flame's near-white lit the
+		// dust grey, the splash lost in it)
 		{ "plasma",       5e3,   { 0.55f, 0.62f, 1.0f }, 1.4f, { 0.85f, 0.8f, 1.0f }, 4.0f, { 0.8f, 0.55f, 1.0f }, 0.6f, 0.0f,  0.6f, 0.5f, 60.0f,
-		                  { 0, 0, 0 },              0.0f,  0.0f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f, 0.0f },
+		                  { 0, 0, 0 },              0.0f,  0.0f, 0.0f,  1.0f, 0.0f, 0.0f, 60.0f, 0.0f, { 0.75f, 0.5f, 1.0f } },
 		// (hydrolox: no long trail - its steam is unseen beside a launch's
 		// solid motors; VVessel::EmitSmoke thins its free jet's smoke too)
 		{ "hydrolox",     2e4,   { 0.45f, 0.55f, 1.0f }, 0.35f, { 1.0f, 0.82f, 0.7f }, 5.0f, { 1.0f, 0.55f, 0.3f }, 0.3f, 0.0f,  0.4f, 0.6f, 200.0f,
@@ -868,6 +872,20 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 	if (rayCast) {
 		const int SEG = 8, EDGE = 6;
 		const double z0 = 0.3; // (clear of the nozzle)
+		// (as far as the hot gas goes on, unseen, past the drawn flame: three
+		// lengths - a hovering ship's jets splash on the ground metres below
+		// the flame's end - or where a bent jet has mixed out, as boxZ. Not
+		// boxZ for any bent jet: a climbing ship's slight crossflow cut the
+		// splash off in a frame)
+		double zHit = std::max (boxZ, 3.0 * len);
+		if (bendScale > 0.0 && bendAt (zHit) > bendLimit) {
+			double lo = 0.0, hi = zHit;
+			for (int k = 0; k < 30; k++) {
+				double m = 0.5 * (lo + hi);
+				(bendAt (m) > bendLimit ? hi : lo) = m;
+			}
+			zHit = std::max (boxZ, hi);
+		}
 		double wSum = 0.0;
 		VECTOR3 pSum{}, nSum{};
 		for (int k = 0; k <= EDGE; k++) {
@@ -878,7 +896,7 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 				return _V(bx * b + ox * r, by * b + oy * r, z);
 			};
 			for (int i = 0; i < SEG; i++) {
-				VECTOR3 a = pathPoint (z0 + (boxZ - z0) * i / SEG), b = pathPoint (z0 + (boxZ - z0) * (i + 1) / SEG);
+				VECTOR3 a = pathPoint (z0 + (zHit - z0) * i / SEG), b = pathPoint (z0 + (zHit - z0) * (i + 1) / SEG);
 				VECTOR3 va = toView (a), vb = toView (b);
 				double segLen = length (vb - va), t;
 				VECTOR3 n;
@@ -927,11 +945,18 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 		double sArc = sqrt (z * z + bz * bz), xi = sArc / len;
 		hitR = radiusAt (z);
 		double mixed = bendScale > 0.0 ? exp (-pow (bz / (0.75 * bendScale + 2.5), 2.0)) : 1.0;
-		hitHeat = exp (-3.0 * xi * xi) * (xi < 1.6 ? 1.0 : 0.0) * mixed;
+		// (the gas where it lands: cooling more slowly than the flame's light
+		// along the jet, exp (-3 xi^2) - by its end, at a hover's few metres,
+		// the splash was gone; the Delta-glider's now fades out by some 12 m)
+		double fz = std::clamp ((xi - 2.4) / 0.6, 0.0, 1.0);
+		hitHeat = exp (-0.6 * xi * xi) * (1.0 - fz * fz * (3.0 - 2.0 * fz)) * mixed;
 		// the spreading gas reaches further with more of the jet's hot part
 		// left (by the whole drawn length, the SRBs' 120 m flame at ignition
-		// spread a glowing layer 75 m around the pad, cut off by the box)
-		reach = 2.5 * hitR + 0.4 * std::max (0.0, 1.6 * std::min (len, HOT_LENGTH) - sArc);
+		// spread a glowing layer 75 m around the pad, cut off by the box);
+		// the flame splashing out from under a hovering ship some twenty
+		// exit radii (2.5 jet radii and 0.4 of the hot part left: 3 m under
+		// the Delta-glider, hidden in its dust)
+		reach = 3.5 * hitR + 0.6 * std::max (0.0, 1.6 * std::min (len, HOT_LENGTH) - sArc);
 		double ext = 1.3 * reach + hitR;
 		for (int k = 0; k < 3; k++) {
 			double c = (&hitP.x)[k];
@@ -1032,6 +1057,19 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 			info->lightPos[k] = viewOf (zf[k] * zLit);
 			info->lightRadius[k] = radiusAt (zf[k] * zLit) * re;
 		}
+		// (the flame splashing on a surface: the last point moved there, by
+		// how hot the gas is where it lands - lighting the dust it raises;
+		// gone smoothly as the ship climbs. Whether the surface is within
+		// the flame or below its end: moved only below it, the point jumped
+		// a metre down, its radius doubled, as the end passed the ground -
+		// the dust brightening in a step)
+		if (hit) {
+			double w = std::clamp (3.0 * hitHeat, 0.0, 1.0);
+			VECTOR3 spot = p.pos + (ex * hitP.x + ey * hitP.y + ez * hitP.z) * re
+				+ (ex * hitN.x + ey * hitN.y + ez * hitN.z) * (0.5 * hitR * re);
+			info->lightPos[2] = info->lightPos[2] * (1.0 - w) + spot * w;
+			info->lightRadius[2] = info->lightRadius[2] * (1.0 - w) + 2.0 * hitR * re * w;
+		}
 		double zl = 0.3 * zLit;
 		// (radiance through the jet: about 1.1 times the emission per exit
 		// radius; as a light, scaled to the class's radiance: the drawn one's
@@ -1052,6 +1090,10 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 			for (int k = 0; k < 3; k++) info->lightCol[k] = l * c.lightTint[k] / std::max (t, 1e-4f);
 		}
 		info->lightArea = 2.0 * radiusAt (zl) * re * zLit * re;
+		// (and the splash on a surface: the gas spread over it glows too, a
+		// disc seen edge-on (its reach by the jet's width there), by its heat -
+		// a hovering ship's flame cut short by the pad lit a quarter as much)
+		if (hit) info->lightArea += hitHeat * coverage * 2.0 * hitR * re * reach * re;
 		for (int k = 0; k < 3; k++)
 			info->radiance[k] = 1.1f * (0.5f * pc.core[k] + 0.35f * pc.outer[k] + (float)(0.05 * diamonds) * pc.diamond[k]);
 		info->endDir = unit (viewOf (zEnd + 0.5) - viewOf (zEnd - 0.5));

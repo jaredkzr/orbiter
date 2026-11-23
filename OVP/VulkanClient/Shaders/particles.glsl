@@ -117,7 +117,43 @@ layout(set = PARTICLE_WIND_SET, binding = 20, std430) PARTICLE_WIND_QUAL buffer 
 	uint statsOn; // telemetry (ORBITER_VK_PARTICLE_STATS): particles counted by particle_sortkeys.comp
 	uint liveCount, liveVol;
 	uint liveCls[16]; // (telemetry: the live particles by class, PC_*)
+	// jets meeting the ground in air this frame (ParticleSystem::AddGroundJet):
+	// per jet xyz the impact (camera-relative), w r0 [m]; the ground's
+	// normal, w the outflow's peak speed [m/s]; x reach [m], y the layer's
+	// thickness [m]
+	uvec4 groundJetCount;
+	vec4 groundJet[3 * 8];
+	// the dust around a vessel's flames (ParticleSystem::FlameBox; flame_*.comp):
+	// the grid's centre (camera-relative), w: 1 = on; its axes over its
+	// size (dot (p - centre, axis) + 0.5 in [0, 1] inside), w: a cell's
+	// size along each [m]; then the flames' points (camera-relative), w: their
+	// weights (summing to 1; 0: none)
+	vec4 flameBox[4 + 12];
 };
+
+// the outward wind along the ground from the jets meeting it at pos: the
+// gas turned at the impact spreads as a wall jet, its speed rising to a
+// peak r0 out and falling as r0 / r beyond (2 x / (1 + x^2), x = r / r0),
+// gone by the reach, in a layer some thickness deep (exp (-h / thick)),
+// lifting a little as it goes (a tenth of it up, the dust billowing)
+vec3 GroundJetWind (vec3 pos)
+{
+	vec3 u = vec3 (0.0);
+	uint n = min (groundJetCount.x, 8u);
+	for (uint k = 0u; k < n; k++) {
+		vec4 a = groundJet[3u * k], b = groundJet[3u * k + 1u], c = groundJet[3u * k + 2u];
+		vec3 rel = pos - a.xyz;
+		float h = dot (rel, b.xyz);
+		if (h < -1.0) continue;
+		vec3 rad = rel - h * b.xyz;
+		float r = length (rad);
+		if (r < 1e-3 || r > c.x) continue;
+		float x = r / max (a.w, 0.1);
+		float f = 2.0 * x / (1.0 + x * x) * (1.0 - smoothstep (0.6 * c.x, c.x, r)) * exp (-max (h, 0.0) / max (c.y, 0.1));
+		u += b.w * f * (rad / r + 0.1 * b.xyz);
+	}
+	return u;
+}
 
 // the wind at altitude altKm (local east, north) [m/s]: the layers' values
 // interpolated as the core does (cubic Hermite, Catmull-Rom tangents),
@@ -141,14 +177,14 @@ vec3 AirVelocity (vec3 pos, vec4 bodyPos, vec3 bodyVel, vec3 omega)
 	vec3 r = pos - bodyPos.xyz;
 	vec3 air = bodyVel + cross (r, omega);
 	float rl = length (r);
-	if (rl <= 0.0 || dot (omega, omega) <= 0.0) return air;
+	if (rl <= 0.0 || dot (omega, omega) <= 0.0) return air + GroundJetWind (pos);
 	vec3 up = r / rl;
 	vec3 e = cross (normalize (omega), up);
 	float el = length (e);
-	if (el < 1e-3) return air; // (at a pole)
+	if (el < 1e-3) return air + GroundJetWind (pos); // (at a pole)
 	vec3 east = e / el, north = cross (up, east);
 	vec2 w = LayerWind ((rl - bodyPos.w) * 1e-3);
-	return air + east * w.x + north * w.y;
+	return air + east * w.x + north * w.y + GroundJetWind (pos);
 }
 #endif
 

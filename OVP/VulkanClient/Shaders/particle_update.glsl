@@ -67,13 +67,15 @@ vec3 GroundVel (vec3 pos)
 // fraction of the velocity, or its part along the normal, is a kick of
 // kilometres per second, which threw smoke touching the ground a kilometre
 // into the sky)
-vec3 SlideOnGround (vec3 pos, vec3 vel, vec3 Ng, bool ballistic)
+vec3 SlideOnGround (vec3 pos, vec3 vel, vec3 Ng, bool ballistic, bool dust)
 {
 	vec3 vg = GroundVel (pos);
 	vec3 rel = vel - vg;
 	float into = dot (rel, Ng);
 	if (into < 0.0) rel -= Ng * into;
-	return vg + rel * (ballistic ? 0.5 : 0.85); // (friction)
+	// (friction; dust in air the least: carried along the ground by a jet's
+	// outflow (GroundJetWind), at 0.85 a step it parked on the runway)
+	return vg + rel * (ballistic ? 0.5 : dust ? 0.97 : 0.85);
 }
 
 // a speck (fragment, spark) that strikes a surface in this step bounces off
@@ -150,7 +152,11 @@ void main ()
 	if (inAir) { slow *= AirShare (pos); inAir = slow > 0.0; } // (in vacuum: none of it, whatever the emitter asked)
 	if (inAir && dt > 0.0) {
 		// slowed down towards the velocity of the air (co-rotating, and its wind)
-		vec3 air = AirVel (pos);
+		// (where the ground carries it by the step's end: the planet's
+		// centre and the ground jets are given for then - from where it was,
+		// the jets' outflow was a step of the planet's orbital motion away,
+		// 1.5 km at 0.05 s, and never felt)
+		vec3 air = AirVel (pos + GroundVel (pos) * dt);
 		vel = air + (vel - air) * exp (-slow * dt);
 		// turbulence of the air: eddies a few particle sizes across (a
 		// trail's: a few metres a second, slowly varying, so that it
@@ -199,7 +205,7 @@ void main ()
 			if (ballistic && !inAir) { particles[i].velLife.w = 0.0; return; } // (dust in vacuum: lands)
 			vec3 Ng = mat3 (frame.viewToGlobal) * N;
 			pos += d * max (t - gap, 0.0);
-			vel = SlideOnGround (pos, vel, Ng, ballistic);
+			vel = SlideOnGround (pos, vel, Ng, ballistic, ParticleClass (p.flags) == PC_DUST && inAir);
 			move = vec3 (0.0);
 		}
 #else
@@ -210,7 +216,7 @@ void main ()
 			if (ballistic && !inAir) { particles[i].velLife.w = 0.0; return; }
 			up /= r;
 			move += up * (pc.ground.x + gap - r);
-			vel = SlideOnGround (pos, vel, up, ballistic);
+			vel = SlideOnGround (pos, vel, up, ballistic, ParticleClass (p.flags) == PC_DUST && inAir);
 		}
 #endif
 	}

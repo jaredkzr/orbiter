@@ -93,6 +93,7 @@ namespace {
 		float swellNorth[4];   // its north (view)
 		float swellComp[SWELL_MAX][4];   // a [m], k [1/m], direction east, north
 		float swellPhase[SWELL_MAX / 4][4];
+		float flameOcc[4][4];  // the dust's transmittance towards a vessel's flames: the grid's centre (view), w: the vessel (-1: none); its axes over its size (view)
 		struct {
 			float pos[4];   // view space position, range
 			float dir[4];   // view space direction, type (1 point, 2 spot)
@@ -167,7 +168,7 @@ bool Scene::Init ()
 	tracks->Init (ctx);
 	waterFx = std::make_unique<WaterFx>();
 	crashFires = std::make_unique<CrashFires>();
-	VkDescriptorSetLayoutBinding b[10]{};
+	VkDescriptorSetLayoutBinding b[11]{};
 	b[0].binding = 0;
 	b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	b[0].descriptorCount = 1;
@@ -197,14 +198,17 @@ bool Scene::Init ()
 	b[8].descriptorCount = 3;
 	b[9] = b[1];
 	b[9].binding = 10; // the shadow maps' depths (soft shadows: blocker search)
+	b[10] = b[2];
+	b[10].binding = 11; // the dust's transmittance towards a vessel's flames (lights.glsl FlameOcc: sprites, surfaces, the smoke volume)
+	b[10].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 10;
+	lci.bindingCount = 11;
 	lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &frameLayout));
 
 	VkDescriptorPoolSize ps[3] = {
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 * vkc::FRAMES_IN_FLIGHT },
-		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * (2 * SHADOW_CASCADES + 8) * vkc::FRAMES_IN_FLIGHT }, // (+1: the cities' far map)
+		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * (2 * SHADOW_CASCADES + 9) * vkc::FRAMES_IN_FLIGHT }, // (+1: the cities' far map; +1 the flames' dust transmittance)
 		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * vkc::FRAMES_IN_FLIGHT }
 	};
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -327,6 +331,15 @@ bool Scene::Init ()
 	trails->Init (ctx, frameLayout);
 	particles = std::make_unique<ParticleSystem>();
 	particles->Init (ctx, gc->TexMgr(), frameLayout, atm->SetLayout(), gc->TexMgr()->Layout(), vclouds->ShapeNoiseView (), vclouds->DetailNoiseView ());
+	// (the dust's transmittance towards a vessel's flames: the particles' grid)
+	for (uint32_t j = 0; j < 2 * vkc::FRAMES_IN_FLIGHT; j++) {
+		VkDescriptorImageInfo fi{ particles->FlameOccSampler (), particles->FlameOccView (), VK_IMAGE_LAYOUT_GENERAL };
+		VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+		w.dstSet = j < vkc::FRAMES_IN_FLIGHT ? frameSet[j] : probeFrameSet[j - vkc::FRAMES_IN_FLIGHT];
+		w.dstBinding = 11, w.descriptorCount = 1;
+		w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, w.pImageInfo = &fi;
+		vkUpdateDescriptorSets (ctx->device, 1, &w, 0, nullptr);
+	}
 	if (rt->Enabled ()) particles->InitRT (frameLayout, rt->SetLayout(), rt->TextureLayout(), atm->SetLayout());
 	fireballs = std::make_unique<FireballRenderer>();
 	fireballs->Init (ctx, frameLayout, atm->SetLayout(), vclouds->ShapeNoiseView (), vclouds->DetailNoiseView ());
@@ -2545,6 +2558,7 @@ void Scene::FillFrameUniforms (void *pfu)
 		u.spot[0] = (float)cos (0.5 * l.penumbra);
 		u.spot[1] = (float)l.owner;
 		u.spot[2] = (float)l.shadowOfs;
+		u.spot[3] = l.flame ? 1.0f : 0.0f;
 	}
 	// the flames the smoke volume's light is occluded towards
 	// (smoke_resolve.comp): the brightest vessel's (its flames' points by
@@ -2580,6 +2594,51 @@ void Scene::FillFrameUniforms (void *pfu)
 			}
 		}
 		if (pick[1] >= 0) fu.lightCount[3] = (float)pick[1];
+		// the dust and smoke shadowing that vessel's flames: a grid around
+		// the middle of its flames (their points by power), along the
+		// ground, reaching below them (a hovering ship's dust on the ground
+		// under it), its transmittance towards there (ParticleSystem)
+		fu.flameOcc[0][3] = -1.0f;
+		ParticleSystem::FlameBox fb{};
+		// (ORBITER_VK_FLAME_DUST=0: none - testing)
+		static const bool flameDust = !getenv ("ORBITER_VK_FLAME_DUST") || atoi (getenv ("ORBITER_VK_FLAME_DUST"));
+		if (pick[0] >= 0 && particles && flameDust) {
+			float owner = fu.lights[pick[0]].spot[1];
+			VECTOR3 c{};
+			double w = 0.0;
+			for (int j = ne; j < ne + nl; j++)
+				if (flame (j) && fu.lights[j].spot[1] == owner) {
+					double pw = power (j);
+					c += _V(fu.lights[j].pos[0], fu.lights[j].pos[1], fu.lights[j].pos[2]) * pw, w += pw;
+				}
+			OBJHANDLE hp = oapiCameraProxyGbody ();
+			if (w > 0.0 && hp && length (c / w) < 3000.0) {
+				c /= w;
+				VECTOR3 lg = camPos + mul (camRot, c), pp;
+				oapiGetGlobalPos (hp, &pp);
+				VECTOR3 up = unit (lg - pp);
+				VECTOR3 ax = crossp (up, fabs (up.y) < 0.9 ? _V(0, 1, 0) : _V(1, 0, 0));
+				ax = unit (ax);
+				VECTOR3 ay = crossp (up, ax);
+				const double HX = ParticleSystem::FLAME_HALF_W, HZ = ParticleSystem::FLAME_HALF_H;
+				fb.on = true, fb.centre = lg - up * (0.5 * HZ);
+				// (the shadows towards each of its flames' points, by power - towards
+				// their middle alone, the dust lit up in a few frames as that point
+				// rose out of the dense dust at the jets' feet)
+				for (int j = ne; j < ne + nl && fb.n < ParticleSystem::FLAME_POINTS; j++)
+					if (flame (j) && fu.lights[j].spot[1] == owner) {
+						fb.light[fb.n] = camPos + mul (camRot, _V(fu.lights[j].pos[0], fu.lights[j].pos[1], fu.lights[j].pos[2]));
+						fb.weight[fb.n++] = power (j);
+					}
+				fb.ax = ax, fb.ay = ay, fb.az = up;
+				VECTOR3 cv = view.TransformPoint (fb.centre - camPos);
+				VECTOR3 av[3] = { view.TransformPoint (ax) / (2.0 * HX), view.TransformPoint (ay) / (2.0 * HX), view.TransformPoint (up) / (2.0 * HZ) };
+				fu.flameOcc[0][0] = (float)cv.x, fu.flameOcc[0][1] = (float)cv.y, fu.flameOcc[0][2] = (float)cv.z, fu.flameOcc[0][3] = owner;
+				for (int k = 0; k < 3; k++)
+					fu.flameOcc[k + 1][0] = (float)av[k].x, fu.flameOcc[k + 1][1] = (float)av[k].y, fu.flameOcc[k + 1][2] = (float)av[k].z, fu.flameOcc[k + 1][3] = 0.0f;
+			}
+		}
+		if (particles) particles->SetFlameBox (fb);
 	}
 	Mat4::FromRotTrans (camRot, _V(0, 0, 0)).ToFloat (fu.viewToGlobal);
 	// runways with markings of the bases near the camera

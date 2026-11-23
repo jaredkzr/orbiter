@@ -60,6 +60,18 @@ float PlumeValue2 (vec2 q, int seed)
 	return mix (mix (a, b, f.x), mix (d, e, f.x), f.y);
 }
 
+// the same, periodic across (x) with period n cells (around a circle: no seam)
+float PlumeValue2P (vec2 q, int n, int seed)
+{
+	ivec2 c = ivec2 (floor (q));
+	vec2 f = fract (q);
+	f = f * f * (3.0 - 2.0 * f);
+	int x0 = ((c.x % n) + n) % n, x1 = (x0 + 1) % n;
+	float a = PlumeHash (ivec3 (x0, c.y, seed)), b = PlumeHash (ivec3 (x1, c.y, seed));
+	float d = PlumeHash (ivec3 (x0, c.y + 1, seed)), e = PlumeHash (ivec3 (x1, c.y + 1, seed));
+	return mix (mix (a, b, f.x), mix (d, e, f.x), f.y);
+}
+
 // lateral displacement of the jet axis by the crossflow at distance x
 // (jet in crossflow: x / (r d) = 1.6 (y / (r d))^(1/3), slope capped),
 // after the jet's stiff core; the bent jet mixes out quickly (PlumeMedium)
@@ -241,7 +253,38 @@ vec4 PlumeMedium (PlumeParams P, vec3 p, vec3 ld)
 			* (1.0 - smoothstep (reach, 1.3 * reach + Rh, rw)) * Rh / (delta * (Rh + rw)) * blocked;
 		float cool = exp (-rw / reach);
 		float lamW = 0.25 + 1.5 * n1 * n2 * 2.0;
-		vec3 ew = (P.core.rgb * P.hit.w * cool + P.outer.rgb * 0.5 * (1.0 - cool)) * wall * lamW;
+		// the blast: the gas races out from where the jet meets the surface,
+		// in spokes (WALL_SPOKES around) broken into puffs - the eddies
+		// rolling along the ground, WALL_PUFF jet radii long or a quarter of
+		// the layer's reach - that ride out at half the jet's visible drift,
+		// at most WALL_RATE puffs a second (faster, they jumped by most of
+		// one a frame: a flicker), slowing as the layer spreads (the time of
+		// flight to rw at a speed falling as 1 / (1 + rw / (2 Rh)):
+		// rw (1 + rw / (4 Rh))). Not blurred by the shutter as the jet is:
+		// the gas along the wall has lost most of its speed
+		const int WALL_SPOKES = 14;
+		const float WALL_PUFF = 1.6, WALL_RATE = 10.0;
+		vec3 t1 = normalize (cross (P.hitN.xyz, abs (P.hitN.z) < 0.9 ? vec3 (0.0, 0.0, 1.0) : vec3 (1.0, 0.0, 0.0)));
+		vec3 t2 = cross (P.hitN.xyz, t1);
+		float phi = atan (dot (rel, t2), dot (rel, t1)) * (0.5 / 3.14159265);
+		float flight = rw * (1.0 + rw / (4.0 * Rh));
+		float L = max (WALL_PUFF * Rh, 0.25 * reach), vr = min (0.5 * P.misc.y, WALL_RATE * L);
+		float rad = mod ((flight - vr * P.misc.x) / L, 4096.0);
+		int seedW = int (P.misc2.y) + 101;
+		float puffs = 0.6 * PlumeValue2P (vec2 (phi * float (WALL_SPOKES), rad), WALL_SPOKES, seedW)
+			+ 0.4 * PlumeValue2P (vec2 (phi * float (2 * WALL_SPOKES), 2.0 * rad + 17.0), 2 * WALL_SPOKES, seedW + 1);
+		float blast = 1.0 + 1.6 * (puffs - 0.5) * smoothstep (0.3 * Rh, 1.2 * Rh, rw);
+		lamW *= max (blast, 0.0);
+		// (the flame splashing out: as bright as the jet where it lands
+		// (WALL_GLOW), white-hot at the foot, its glow showing through the
+		// dust it raises)
+		const float WALL_GLOW = 3.0;
+		float peak = max (P.core.r, max (P.core.g, P.core.b));
+		vec3 hot = mix (P.core.rgb, vec3 (peak), 0.4 * exp (-rw / Rh));
+		// (the afterburning's share too by the heat where it lands: at full
+		// strength whatever the height, it went out in a frame as the ship
+		// climbed past the search for the surface)
+		vec3 ew = (hot * P.hit.w * cool + P.outer.rgb * 0.5 * (1.0 - cool) * min (1.0, 4.0 * P.hit.w)) * wall * lamW * WALL_GLOW;
 		m += vec4 (ew, P.misc.z * wall * Rh * (0.3 + 1.4 * n1));
 	}
 	return m;

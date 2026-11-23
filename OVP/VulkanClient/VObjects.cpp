@@ -2739,6 +2739,7 @@ void VVessel::CollectLights (std::vector<LightSource> &lights)
 				l.att[0] = 0.0, l.att[1] = 0.0, l.att[2] = PI / area;
 				for (int c = 0; c < 3; c++) l.col[c] = pl.col[c];
 				l.smoke = pl.smoke;
+				l.flame = true;
 				lights.push_back (l);
 			}
 			// (the smoke at the flame's end, for the brightest: a point lighting
@@ -2761,6 +2762,7 @@ void VVessel::CollectLights (std::vector<LightSource> &lights)
 				l.att[0] = 12.0, l.att[1] = 0.0, l.att[2] = PI / std::max (pl.endArea, area);
 				for (int c = 0; c < 3; c++) l.col[c] = pl.col[c] * HULL;
 				l.smoke = pl.endSmoke / HULL;
+				l.flame = true;
 				lights.push_back (l);
 			}
 		}
@@ -2972,6 +2974,13 @@ void VVessel::CollectPlumes (PlumeRenderer &pr)
 					double u = std::clamp (hEnd / std::max (info.length, 1.0), 0.0, 1.0);
 					lit = u * u * (3.0 - 2.0 * u);
 				}
+				// (a flame with no smoke of its own - the Delta-glider's - landing
+				// on the ground: lit by its splash there, by how hot the gas is
+				// where it lands. Faded by the free end's height alone, the dust
+				// under it on the pad was dark until the ship had climbed a
+				// flame's length; the smoky ones keep their dark pad cloud)
+				if (info.hit && PlumeConfig::Class (type).smokeOpacity <= 0.0f)
+					lit = std::max (lit, std::clamp (info.heat * info.coverage, 0.0, 1.0));
 				float endSmoke = (float)(SmokeShare (info) * lit * (END_DENSE + (1.0 - END_DENSE) * (1.0 - std::clamp ((airP - 0.3) / 0.3, 0.0, 1.0))));
 				PlumeLight pl{ { scene->GlobalPos (info.lightPos[0]), scene->GlobalPos (info.lightPos[1]), scene->GlobalPos (info.lightPos[2]) },
 					{ info.lightRadius[0], info.lightRadius[1], info.lightRadius[2] }, { info.lightCol[0], info.lightCol[1], info.lightCol[2] }, info.lightArea, SmokeShare (info),
@@ -3290,6 +3299,17 @@ void VVessel::EmitDust (DWORD idx, int type, const PlumeDraw &pd, double dt)
 	}
 	// water: spray instead of dust
 	bool air = pd.ambientPressure > 100.0;
+	// the jet's gas turned along the ground blows outward: a wind there that
+	// carries the dust (and spray) out while the jet blows (particles.glsl
+	// GroundJetWind) - thrown and left in still air, it stopped within a
+	// second and lay on the runway. Peak speed by the strength, about the
+	// jet's width out; out to a few widths and the thrust's square root (the
+	// Delta-glider's some 28 m: out where its dust cloud lies)
+	if (air) {
+		double r0 = std::max (1.0, pd.exitRadius + 0.25 * t);
+		double reachR = 6.0 * r0 + 3.0 * sqrt (thrust * strength / 1e3);
+		sys->AddGroundJet (hit, n, 12.0 + 28.0 * strength, r0, reachR, 0.5 + 0.12 * reachR);
+	}
 
 	double life = air ? (water ? 2.2 : 6.0) : 2.5; // (a sheet from hovering lingered half a minute at 10 s)
 	double D = sys->density, sizeScale = std::pow (D, -1.0 / 3.0);

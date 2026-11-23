@@ -1,0 +1,49 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// GPU particles, the dust around a vessel's flames (ParticleSystem::FlameBox):
+// each cell's transmittance towards the flames - the extinction splatted by
+// flame_splat.comp (per cell: its sum over the cell's volume) summed along
+// the line from the cell's centre to each of the flames' points, a step
+// each cell and a half, to where it leaves the grid; their mean by the
+// points' weights (lights.glsl FlameOcc). Off: all clear
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+#include "particle_common.glsl"
+
+layout(set = 0, binding = 55, r32ui) uniform uimage3D flameAccum;
+layout(set = 0, binding = 56, r16f) uniform image3D flameOcc;
+const ivec3 FLAME_GRID = ivec3 (64, 64, 32); // (ParticleSystem::FLAME_NX, FLAME_NZ)
+const float FLAME_FIXED = 1024.0;            // (flame_splat.comp)
+
+void main ()
+{
+	ivec3 c = ivec3 (gl_GlobalInvocationID);
+	if (any (greaterThanEqual (c, FLAME_GRID))) return;
+	if (flameBox[0].w < 0.5) { imageStore (flameOcc, c, vec4 (1.0)); return; }
+	vec3 cell = vec3 (flameBox[1].w, flameBox[2].w, flameBox[3].w);
+	float V = cell.x * cell.y * cell.z;
+	vec3 g0 = vec3 (c) + 0.5;
+	float T = 0.0;
+	for (int p = 0; p < 12; p++) {
+		float wp = flameBox[4 + p].w;
+		if (wp <= 0.0) continue;
+		vec3 rl = flameBox[4 + p].xyz - flameBox[0].xyz;
+		vec3 gl = (vec3 (dot (rl, flameBox[1].xyz), dot (rl, flameBox[2].xyz), dot (rl, flameBox[3].xyz)) + 0.5) * vec3 (FLAME_GRID);
+		vec3 d = gl - g0; // (cells)
+		float Lm = length (d * cell); // [m]
+		int n = clamp (int (ceil (length (d) / 1.5)), 1, 48); // (a step each cell and a half)
+		float tau = 0.0;
+		for (int k = 0; k < n; k++) {
+			vec3 q = g0 + d * ((float (k) + 0.5) / float (n));
+			if (any (lessThan (q, vec3 (0.0))) || any (greaterThanEqual (q, vec3 (FLAME_GRID)))) break;
+			tau += float (imageLoad (flameAccum, ivec3 (q)).r) / (FLAME_FIXED * V);
+		}
+		T += wp * exp (-tau * Lm / float (n));
+	}
+	imageStore (flameOcc, c, vec4 (T));
+}

@@ -155,6 +155,29 @@ public:
 	void DrawRetired (VkDescriptorSet frameSet);
 	/// simulation time passed (clbkUpdate)
 	void AddTime (double dt) { pendingDt += dt; }
+	/// A jet meeting the ground in air this frame (global position and the
+	/// ground's normal): the gas turned along the ground drives an outward
+	/// wind there - speed at its peak [m/s], peaking r0 from the impact,
+	/// gone by reach [m], in a layer thick [m] deep (particles.glsl
+	/// AirVelocity: dust and smoke near it carried out). Up to
+	/// MAX_GROUND_JETS a frame (the strongest), cleared after each Simulate
+	void AddGroundJet (const VECTOR3 &pos, const VECTOR3 &n, double speed, double r0, double reach, double thick);
+	static constexpr int MAX_GROUND_JETS = 8;
+	/// The dust and smoke between a vessel's flames and what they light: a
+	/// grid of FLAME_NX x FLAME_NX x FLAME_NZ cells, FLAME_HALF_W and
+	/// FLAME_HALF_H [m] each way from its centre along ax, ay (the ground)
+	/// and az (up), the particles' extinction in it (flame_splat.comp), and
+	/// each cell's transmittance towards the flames' points (light, by
+	/// weight: their power; flame_trans.comp) - sampled
+	/// by lights.glsl FlameOcc (Scene: the frame's flameOcc). Global
+	/// positions and axes; set each frame before Simulate (off: none)
+	static constexpr int FLAME_POINTS = 12;
+	struct FlameBox { bool on = false; VECTOR3 centre{}, ax{}, ay{}, az{}; int n = 0; VECTOR3 light[FLAME_POINTS]{}; double weight[FLAME_POINTS]{}; };
+	void SetFlameBox (const FlameBox &b) { flameBox = b; }
+	VkImageView FlameOccView () const { return flameOcc.view; }
+	VkSampler FlameOccSampler () const { return volSampler; }
+	static constexpr int FLAME_NX = 64, FLAME_NZ = 32;
+	static constexpr double FLAME_HALF_W = 24.0, FLAME_HALF_H = 12.0;
 
 	/// Move, emit and light the particles (outside rendering scopes, after
 	/// the ray tracing scene was built); rt: sets of the ray tracing scene
@@ -219,6 +242,8 @@ private:
 	vkc::Buffer pool;
 	vkc::Buffer emitBuf[vkc::FRAMES_IN_FLIGHT];
 	static constexpr int WIND_LAYERS = 64;     // the wind table: a layer each kilometre
+	struct GroundJet { VECTOR3 pos, n; double speed, r0, reach, thick; };
+	std::vector<GroundJet> groundJets;         // (AddGroundJet: this frame's)
 	static constexpr double TRAIL_NOISE_SCALE = 2e-4; // trails' eddies [1/m]
 	vkc::Buffer windBuf[vkc::FRAMES_IN_FLIGHT];
 	ParticlePool slots{ CAPACITY, BLOCK }; // (the rings in the pool)
@@ -256,6 +281,9 @@ private:
 	VkPipeline emitPipe = VK_NULL_HANDLE, updatePipe = VK_NULL_HANDLE, updateRTPipe = VK_NULL_HANDLE;
 	VkPipeline lightPipe = VK_NULL_HANDLE, lightRTPipe = VK_NULL_HANDLE, splatPipe = VK_NULL_HANDLE, sumPipe = VK_NULL_HANDLE;
 	vkc::Image shadowAccum, shadowDepth; // smoke shadow grid (three cascades)
+	vkc::Image flameAccum, flameOcc;     // the dust around a vessel's flames: extinction, transmittance towards them (FlameBox)
+	FlameBox flameBox;
+	VkPipeline flameSplatPipe = VK_NULL_HANDLE, flameTransPipe = VK_NULL_HANDLE;
 	vkc::Buffer shadowOcc;               // its column tiles with smoke (two frames)
 	uint32_t shadowParity = 0;
 	VkPipeline sortKeysPipe = VK_NULL_HANDLE, sortPipe = VK_NULL_HANDLE, sortLocalPipe = VK_NULL_HANDLE;
