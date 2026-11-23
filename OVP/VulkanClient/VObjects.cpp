@@ -2920,6 +2920,7 @@ void VVessel::CollectPlumes (PlumeRenderer &pr)
 		double th0 = es.th ? vessel->GetThrusterMax0 (es.th) : 0.0;
 		double phys = th0 > 0.0 ? std::clamp (vessel->GetThrusterMax (es.th, pa) / th0, 0.0, 2.0) : 1.0;
 		pd.thrust = th0;
+		pd.exhaustSpeed = es.th ? vessel->GetThrusterIsp0 (es.th) : 0.0;
 		pd.delivered = thrustVacuum ? 1.0 : phys;
 		pd.ambientPressure = pa;
 		pd.airDensity = rho;

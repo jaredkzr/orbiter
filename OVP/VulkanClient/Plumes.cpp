@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -232,9 +233,9 @@ struct PlumeRenderer::Params { // plume.glsl
 	float shape2[4];   // shock cell spacing, shock diamond strength, attitude thruster cone (1), cells of the diamonds' fade
 	float core[4];     // core emission (rgb), vacuum fraction
 	float diamond[4];  // shock diamond emission (rgb), spread of the mixing layer
-	float outer[4];    // afterburning emission (rgb), -
+	float outer[4];    // afterburning emission (rgb), streakiness (0..1: the lower the Isp, the more)
 	float misc[4];     // time [s], turbulence drift, smoke extinction, turbulence
-	float misc2[4];    // texture tint amount, seed, sunlight reaching the plume, -
+	float misc2[4];    // texture tint amount, seed, sunlight reaching the plume, shutter blur [exit radii]
 	float bend[4];     // crossflow direction (xy, plume space), bending scale, -
 	float boxMin[4];   // bounding box
 	float boxMax[4];
@@ -964,7 +965,37 @@ int PlumeRenderer::Add (const PlumeDraw &p, uint32_t owner, PlumeInfo *info)
 	pc.core[3] = (float)vac;
 	pc.diamond[3] = (float)mixSpread;
 	pc.misc[0] = (float)fmod (simt, 1000.0);
-	pc.misc[1] = c.flow;
+	// the turbulence's drift: the class's rate [exit radii/s], for a small
+	// nozzle at least VIS_FLOW m/s (the Delta-glider's 0.5 m nozzles drifted
+	// at 30 m/s, its hover engines' at 15: smoke, not a jet), at most
+	// FLOW_MAX radii/s (an eighth of the shape noise's period a frame at 30
+	// fps; the finer noise beyond its period, a shimmer). The ion glow and
+	// cold gas keep their own.
+	const double VIS_FLOW = 300.0, FLOW_MAX = 240.0;
+	double flow = c.flow;
+	if (c.flow >= 30.0) flow = std::max (flow, std::min (VIS_FLOW / re, FLOW_MAX));
+	pc.misc[1] = (float)flow;
+	// the shutter blur (plume.glsl): how far the gas moves in an exposure
+	// [exit radii] (an exhaust speed of 0.2 to 50 km/s: the faster ones,
+	// helpers' with a huge Isp, are a flat glow anyway); ORBITER_VK_PLUME_BLUR=0: none
+	// (testing: ORBITER_VK_PLUME_ISP [m/s] stands for every engine's Isp, as
+	// ORBITER_VK_PLUME_TYPE for its class)
+	const double SHUTTER = 1.0 / 60.0;
+	static const bool blur = !getenv ("ORBITER_VK_PLUME_BLUR") || atoi (getenv ("ORBITER_VK_PLUME_BLUR"));
+	static const double ispTest = getenv ("ORBITER_VK_PLUME_ISP") ? atof (getenv ("ORBITER_VK_PLUME_ISP")) : 0.0;
+	const double isp = ispTest > 0.0 ? ispTest : p.exhaustSpeed;
+	pc.misc2[3] = blur && c.flow >= 30.0 ? (float)(std::clamp (isp, 0.0, 5e4) * SHUTTER / re) : 0.0f;
+	// streakiness (plume.glsl's darker streaks): the lower the Isp, the more
+	// streaks at once and the finer - kerosene's and solid motors' plumes in
+	// photographs are combed with them (a fuel-rich, sooty film off the
+	// nozzle wall and the injector's outer ring), a hydrogen engine's are
+	// clear; from none at 4400 m/s (and an unknown Isp) to all at 2900.
+	// A solid motor's at most STREAK_SOLID: its plume is mostly a uniform
+	// glare, the aluminium oxide's, its streaks fainter than a kerosene
+	// engine's
+	const double STREAK_SOLID = 0.7;
+	const double sk = isp > 0.0 ? std::clamp ((4400.0 - isp) / 1500.0, 0.0, 1.0) : 0.0;
+	pc.outer[3] = (float)(sk * sk * (3.0 - 2.0 * sk) * (p.type == PlumeType::Solid ? STREAK_SOLID : 1.0));
 	pc.misc[2] = (float)(c.smoke * air);
 	pc.misc[3] = c.turbulence;
 	pc.misc2[0] = p.tint ? 0.35f : 0.0f;

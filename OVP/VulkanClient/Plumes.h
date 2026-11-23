@@ -134,6 +134,7 @@ struct PlumeDraw {
 	double length;          // [m]
 	double level;           // 0..1
 	double thrust;          // vacuum rating at full level [N] (0: unknown)
+	double exhaustSpeed = 0.0; // the gas's at the exit: the thruster's Isp [m/s] (0: unknown)
 	double delivered = 1.0;   // fraction of it delivered in the ambient air (GetThrusterMax (th, p) / GetThrusterMax0; 0..2; 1: unknown or nothing lost)
 	double ambientPressure; // [Pa]
 	double airDensity;      // [kg/m^3]

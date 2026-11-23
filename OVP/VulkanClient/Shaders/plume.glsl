@@ -19,9 +19,9 @@ struct PlumeParams { // must match PlumeRenderer::Params
 	vec4 shape2;   // shock cell spacing, shock diamond strength, attitude thruster cone (1), cells over which the diamonds fade (1/e)
 	vec4 core;     // core emission (rgb), vacuum fraction
 	vec4 diamond;  // shock diamond emission (rgb), spread of the mixing layer
-	vec4 outer;    // afterburning emission (rgb), -
+	vec4 outer;    // afterburning emission (rgb), streakiness (0..1: the lower the Isp, the more streaks)
 	vec4 misc;     // time [s], turbulence drift [exit radii/s], smoke extinction, turbulence
-	vec4 misc2;    // texture tint amount, seed, sunlight reaching the plume, -
+	vec4 misc2;    // texture tint amount, seed, sunlight reaching the plume, shutter blur (how far the gas moves in an exposure [exit radii])
 	vec4 bend;     // crossflow direction (xy, plume space), bending scale (z; 0: none), length of the stiff core (w)
 	vec4 boxMin;   // bounding box (plume space, exit radii)
 	vec4 boxMax;
@@ -40,6 +40,25 @@ layout(set = PLUME_SET, binding = PLUME_BINDING + 1) uniform sampler3D plumeShap
 layout(set = PLUME_SET, binding = PLUME_BINDING + 2) uniform sampler3D plumeDetailNoise;
 
 float PlumeSq (float x) { return x * x; }
+
+// a value in [0,1) per integer cell (the low-Isp streaks' pattern)
+float PlumeHash (ivec3 c)
+{
+	uint h = uint (c.x) * 0x8da6b343u ^ uint (c.y) * 0xd8163841u ^ uint (c.z) * 0xcb1ab31fu;
+	h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;
+	return float (h >> 8) / 16777216.0;
+}
+
+// smooth value noise over a (across, along) plane: cells of 1 x 1
+float PlumeValue2 (vec2 q, int seed)
+{
+	ivec2 c = ivec2 (floor (q));
+	vec2 f = fract (q);
+	f = f * f * (3.0 - 2.0 * f);
+	float a = PlumeHash (ivec3 (c, seed)), b = PlumeHash (ivec3 (c + ivec2 (1, 0), seed));
+	float d = PlumeHash (ivec3 (c + ivec2 (0, 1), seed)), e = PlumeHash (ivec3 (c + ivec2 (1, 1), seed));
+	return mix (mix (a, b, f.x), mix (d, e, f.x), f.y);
+}
 
 // lateral displacement of the jet axis by the crossflow at distance x
 // (jet in crossflow: x / (r d) = 1.6 (y / (r d))^(1/3), slope capped),
@@ -64,7 +83,8 @@ float PlumeBendSlope (PlumeParams P, float x)
 }
 
 // emission (rgb) and smoke extinction (a) per exit radius at p
-vec4 PlumeMedium (PlumeParams P, vec3 p)
+// (ld: the ray's direction, plume space: the low-Isp streaks are seen across it)
+vec4 PlumeMedium (PlumeParams P, vec3 p, vec3 ld)
 {
 	vec3 p0 = p;
 	if (p.z < -0.15 && P.hit.w <= 0.0) return vec4 (0.0);
@@ -90,10 +110,42 @@ vec4 PlumeMedium (PlumeParams P, vec3 p)
 	}
 	// (the noise stretched along the flow, about three times: streaks along
 	// the jet, as photographs show, not round cells)
-	vec3 q = vec3 (p.xy, x - P.misc.x * P.misc.y) + P.misc2.y * 7.31;
+	// Blurred by the shutter: in an exposure the gas moves B exit radii
+	// (misc2.w: at the exit, at the exhaust's speed, from the Isp), slowing
+	// to a tenth as it mixes with the air. Each noise, averaged along the
+	// flow over B, is stretched to its own length (L1, L2: the cells' along
+	// the flow) plus B, its contrast down by the square root of the ratio:
+	// a fast jet's core steady streaks, as in photographs, its eddies seen
+	// downstream where it has slowed. The drift itself (misc.y) is a
+	// visible rate, not the gas's (at its speed the noise moved several of
+	// its periods a frame: a random flicker).
+	// Boiling: the fine noise drifts faster than the coarse one that warps
+	// it, so the eddies change shape as they go, not only slide.
+	const float L1 = 16.0, L2 = 3.0;
+	float B = P.misc2.w * mix (1.0, 0.1, smoothstep (0.05, 1.0, xi));
+	float s1 = L1 / (L1 + B), s2 = L2 / (L2 + B);
+	vec3 q = vec3 (p.xy, x) + P.misc2.y * 7.31;
+	float t = P.misc.x * P.misc.y;
 	const vec3 STRETCH = vec3 (1.0, 1.0, 0.35);
-	float n1 = texture (plumeShapeNoise, q * STRETCH * 0.045).r;
-	float n2 = texture (plumeDetailNoise, q * STRETCH * 0.23 + 0.4 * n1).r;
+	float n1 = texture (plumeShapeNoise, vec3 (q.xy, (q.z - t) * s1) * STRETCH * 0.045).r;
+	n1 = 0.5 + (n1 - 0.5) * sqrt (s1);
+	float n2 = texture (plumeDetailNoise, vec3 (q.xy, (q.z - 1.7 * t) * s2) * STRETCH * 0.23 + 0.4 * n1).r;
+	n2 = 0.5 + (n2 - 0.5) * sqrt (s2);
+	// Darker streaks along the flow now and then: cooler, fuel-rich film
+	// off the nozzle wall or the injector's edge, as photographs show. A
+	// few azimuths at a time (the noise around a circle: no seam), each
+	// for a second or so (the noise's third axis: time, and the distance
+	// down the jet over twice its length, so that one rides out with the
+	// flow), from near the exit to where the jet has mixed; none on the
+	// axis, where the azimuth means nothing (STREAK_DARK: the core's
+	// light taken there)
+	const float STREAK_DARK = 0.7, STREAK_DARK_LOW = 0.85;
+	float streak = 0.0, streakLow = 0.0, streakEnv = smoothstep (0.0, 0.08, xi) * (1.0 - smoothstep (0.7, 1.2, xi));
+	if (P.shape2.z < 0.5 && xi < 1.2) {
+		float ang = atan (p.y, p.x);
+		float sk = texture (plumeShapeNoise, vec3 (0.5 * cos (ang), 0.5 * sin (ang), P.misc.x * 0.35 + (x - t) / (2.0 * len)) + P.misc2.y * 0.137).r;
+		streak = smoothstep (0.6, 0.7, sk) * streakEnv * smoothstep (0.05, 0.3, r);
+	}
 
 	// envelope radius
 	float R = 1.0 + (rj - 1.0) * (1.0 - exp (-max (x, 0.0) * 0.8)) + max (x, 0.0) * spread
@@ -102,6 +154,31 @@ vec4 PlumeMedium (PlumeParams P, vec3 p)
 	// (ragged by the finer noise too as the jet mixes: a smooth cone was it)
 	R *= 1.0 + turb * ((n1 - 0.5) * 0.9 + (n2 - 0.5) * 0.4 * smoothstep (0.1, 0.5, xi));
 	float u = r / R;
+	// A low-Isp engine's streaks (streakiness, outer.w) are many more and
+	// darker (STREAK_DARK_LOW), fibres rather than bands: two sizes (about
+	// six and sixteen cells across the jet, about half dark at once),
+	// broken along the flow into filaments a sixth of the jet long (the
+	// finer ones shorter) that ride out with it, wandering a little across
+	// it, fewer as the jet mixes. A sooty plume is seen by its near side,
+	// so they are sheets along the line of sight, by the place across the
+	// jet as seen (fine wedges around the axis, as the occasional ones, a
+	// ray crosses dozens of: they averaged out); none seen end-on.
+	float K = P.outer.w;
+	if (K > 0.0 && P.shape2.z < 0.5 && xi < 1.2) {
+		float side = length (ld.xy);
+		vec2 w = side > 1e-4 ? vec2 (-ld.y, ld.x) / side : vec2 (1.0, 0.0);
+		float sl = dot (p.xy, w) / R; // -1 to 1 across the jet as seen
+		// (value noise: the clouds' billowy noise is mostly above any
+		// threshold that leaves gaps; the cells' along the flow wrapped to
+		// keep their indices small)
+		int seed = int (P.misc2.y);
+		float along = mod (P.misc.x * 0.5 + (x - t) / (0.18 * len), 4096.0);
+		sl += 0.24 * (PlumeValue2 (vec2 (0.4 * along, 0.5), seed + 11) - 0.5);
+		float sf = 0.6 * PlumeValue2 (vec2 (sl * 3.0, along), seed)
+			+ 0.4 * PlumeValue2 (vec2 (sl * 8.0, 1.7 * along + 37.0), seed + 5);
+		streakLow = K * smoothstep (0.44, 0.55, sf) * smoothstep (0.15, 0.5, side) * streakEnv
+			* (1.0 - 0.5 * smoothstep (0.2, 0.8, xi));
+	}
 	// radial profile: a sharp jet boundary at the exit, diffusing downstream
 	float mixing = smoothstep (0.0, 0.6, xi);
 	float edge = mix (0.05, 0.5, mixing);
@@ -113,7 +190,7 @@ vec4 PlumeMedium (PlumeParams P, vec3 p)
 	if (P.bend.z > 0.0) fadeOut *= exp (-PlumeSq (bend / (0.75 * P.bend.z + 2.5)));
 
 	// hot core, cooling as the jet mixes
-	float lam = mix (1.0, 0.3 + 1.4 * n2, min (turb, 1.0));
+	float lam = mix (1.0, 0.3 + 1.4 * n2, min (turb, 1.0)) * (1.0 - STREAK_DARK * streak);
 	vec3 e = P.core.rgb * rho * exp (-3.0 * xi * xi) * lam;
 	if (P.shape2.z > 0.5) {
 		// attitude thrusters: a narrow cone whose brightness across falls off
@@ -138,9 +215,14 @@ vec4 PlumeMedium (PlumeParams P, vec3 p)
 	}
 	// afterburning in the mixing layer
 	float ab = smoothstep (0.08, 0.35, xi) * exp (-1.5 * xi) * exp (-PlumeSq ((u - 0.75) / 0.5)) / R;
-	e += P.outer.rgb * ab * (0.15 + 2.0 * n1 * n2);
+	e += P.outer.rgb * ab * (0.15 + 2.0 * n1 * n2) * (1.0 - 0.6 * STREAK_DARK * streak);
 	// smoke downstream
 	float smoke = P.misc.z * smoothstep (0.2, 1.0, xi) * exp (-1.5 * u * u) / R * (0.3 + 1.4 * n1);
+	// (the low-Isp streaks: all of the jet's light, deeply - so bright a
+	// jet is far up the tone curve's shoulder, where 70 % less is hardly
+	// seen - and evenly: kept redder, a near-white jet's turned pink; soot
+	// as smoke scattered the sunlight: grey haze, not darker)
+	e *= 1.0 - STREAK_DARK_LOW * streakLow;
 	vec4 m = vec4 (e, smoke) * fadeIn * fadeOut;
 
 	// a surface in the way: the jet ends there, and its gas spreads along
@@ -292,7 +374,7 @@ PlumeLight MarchPlume (PlumeParams P, vec3 lo, vec3 ld, float t0, float t1, int 
 		}
 		float t = adapt || tail ? tc + jit * dt : t0 + (float (i) + jit) * dt;
 		tc += dt;
-		vec4 m = PlumeMedium (P, lo + ld * t);
+		vec4 m = PlumeMedium (P, lo + ld * t, ld);
 		float Ts = exp (-m.a * dt);
 		float w = m.a > 1e-5 ? (1.0 - Ts) / m.a : dt; // emission absorbed within the step
 		vec3 e = r.T * w * m.rgb;
