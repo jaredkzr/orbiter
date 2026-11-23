@@ -685,6 +685,44 @@ vec3 CityGround (vec3 posView, inout vec3 base, out float cover)
 	return lamp * (CITY_LAMP_IRR * m.b * fade);
 }
 
+// The night light texture's lights as points (tile main: magnified, its
+// lit texels are blobs): on a grid of cells cell m wide on the ground (gm:
+// east, north [m]; jx, jy: their change a pixel), one point in each, lit or
+// not by the texture's density there (averaged at mip level lod); muv, mx,
+// my: the mask's coordinates and their change a pixel; seed: the grid's own
+vec3 NightPoints(vec2 gm, vec2 jx, vec2 jy, vec2 muv, vec2 mx, vec2 my, float cell, float lod, vec2 hm, int seed)
+{
+	gm /= cell, jx /= cell, jy /= cell;
+	float detJ = jx.x * jy.y - jy.x * jx.y;
+	if (abs(detJ) < 1e-12) return vec3(0.0);
+	// (cell offsets to pixels: the inverse of the screen derivatives, so
+	// that the points stay round at a grazing view; the density at the
+	// point, so that it is lit or not as a whole)
+	mat2 toPx = inverse(mat2(jx, jy)), pxToM = mat2(mx, my);
+	float cpx = 1.0 / max(max(length(jx), length(jy)), 1e-6);
+	float area = min(cpx * cpx / 2.2, 12.0); // (a cell's pixels over a point's: its light gathered into the point; capped)
+	ivec2 c0 = ivec2(floor(gm));
+	vec3 pl = vec3(0.0);
+	for (int i = -1; i <= 1; i++)
+		for (int j = -1; j <= 1; j++) {
+			ivec2 c = c0 + ivec2(i, j);
+			vec2 o = vec2(c) + 0.15 + 0.7 * vec2(Hash(ivec3(c, seed)), Hash(ivec3(c, seed + 1)));
+			vec2 dp = toPx * (o - gm);
+			float d2 = dot(dp, dp);
+			if (d2 > 30.0) continue;
+			vec3 dn = textureLod(maskTex, clamp(muv + pxToM * dp, hm, 1.0 - hm), lod).rgb;
+			float dl = max(dn.r, max(dn.g, dn.b));
+			float prob = smoothstep(0.02, 0.5, dl);
+			if (Hash(ivec3(c, seed + 2)) >= prob) continue;
+			// (sodium orange, warm white, white LEDs; some dimmer)
+			float k = Hash(ivec3(c, seed + 3));
+			vec3 tint = k < 0.45 ? vec3(1.0, 0.62, 0.3) : k < 0.75 ? vec3(1.0, 0.86, 0.66) : vec3(0.86, 0.9, 1.0);
+			float L = 3.0 * dl * dl * smoothstep(0.04, 0.25, dl) / max(prob, 0.1);
+			pl += tint * (L * area * (0.45 + 0.55 * Hash(ivec3(c, seed + 4)))) * (exp(-d2 * 1.4) + 0.05 * exp(-d2 * 0.15));
+		}
+	return pl;
+}
+
 // Texture gradients towards the poles: the textures' texels (equal steps
 // of longitude and latitude) narrow to slivers, cos(lat) as wide as they are
 // long; the columns' own noise showed as streaks along the meridians. The
@@ -964,7 +1002,34 @@ void main()
 			texM = sqrt(length(cross(dFdx(vPosView), dFdy(vPosView))) / max(abs(ma.x * mb.y - ma.y * mb.x), 1e-12));
 		}
 		float lm = max (ml.r, max (ml.g, ml.b));
-		col += ml * (3.0 * lm * smoothstep (0.04, 0.25, lm)) * night * tile.params.y;
+		vec3 lights = ml * (3.0 * lm * smoothstep (0.04, 0.25, lm));
+		// (closer, the finest levels' lights are blobs of lit texels, drawn
+		// so in the data, 50 to 100 m wide: from 11 km a mottle of yellow
+		// patches over the towns. There the texture is taken as the lights'
+		// density and the lights are points (NightPoints), on a grid of
+		// LIGHT_CELL m, doubled until a cell is 3 pixels the narrower way
+		// (two sizes blended); beyond cells of some 450 m, the texture again)
+		const float LIGHT_CELL = 28.0, LIGHT_AVG = 160.0;
+		vec3 pPl = mat3(atm.viewToPlanet) * vPosView + atm.camPos.xyz;
+		float rPl = length(pPl);
+		vec3 nPl = pPl / rPl;
+		float latP = asin(clamp(nPl.y, -1.0, 1.0));
+		vec2 gm = vec2(atan(nPl.z, nPl.x) * cos(latP), latP) * rPl; // (east, north [m])
+		vec2 jx = dFdx(gm), jy = dFdy(gm), mx = dFdx(muv), my = dFdy(muv);
+		float mpx = max(max(length(jx), length(jy)), 1e-6); // (metres a pixel, the narrower way)
+		float lvP = max(log2(3.0 * mpx / LIGHT_CELL), 0.0); // (the grid's level: cells 3 pixels wide)
+		float pts = 1.0 - smoothstep(2.5, 4.0, lvP);
+		vec2 mszL = vec2(textureSize(maskTex, 0));
+		float detM = abs(mx.x * my.y - my.x * mx.y) * mszL.x * mszL.y;
+		float texL = sqrt(length(cross(dFdx(vPosView), dFdy(vPosView))) / max(detM, 1e-12)); // (a texel [m])
+		if (pts > 0.0 && night > 0.0) {
+			float l0 = floor(lvP), f = lvP - l0;
+			float c0 = LIGHT_CELL * exp2(l0), c1 = 2.0 * c0;
+			vec3 p0 = NightPoints(gm, jx, jy, muv, mx, my, c0, log2(max(max(LIGHT_AVG, 4.0 * c0) / max(texL, 1e-3), 1.0)), hm, 21 + 8 * int(l0));
+			vec3 p1 = f > 0.0 ? NightPoints(gm, jx, jy, muv, mx, my, c1, log2(max(max(LIGHT_AVG, 4.0 * c1) / max(texL, 1e-3), 1.0)), hm, 29 + 8 * int(l0)) : vec3(0.0);
+			lights = mix(lights, mix(p0, p1, f), pts);
+		}
+		col += lights * night * tile.params.y;
 		// water (mask alpha 0): reflection of the sky and the sun's glitter,
 		// which spreads out when seen from afar
 		if (m.a < 0.5) {
