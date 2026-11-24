@@ -877,14 +877,14 @@ void main()
 			float salt = PlayaSalt(normalize(mat3(atm.viewToPlanet) * vPosView + atm.camPos.xyz));
 			base = mix(base, PlayaColour(base, salt), clamp(vDetailA.z, 0.0, 1.0) * land);
 		}
-		TerrainDetailShading(vPosView, N, base, vDetailA, detailShadow, land, detailSky, playa, siteG, siteSmooth);
+		if (PartOn(8192)) TerrainDetailShading(vPosView, N, base, vDetailA, detailShadow, land, detailSky, playa, siteG, siteSmooth);
 		// the pack ice of a procedural ocean world: land in the mask, flat at the sea level (the core's
 		// sea gate holds the detail's fade at 0 there)
 		if (atm.coastPrm.w > 0.5) SeaIceShading(vPosView, N, base, land * (1.0 - smoothstep(0.1, 0.5, vDetailA.y)));
 #endif
-		cityLight = CityGround(vPosView, base, cityCover);
-		TrackShading(vPosView, N, base);
-		SurfaceDetail(vPosView, length(vPosView), N, base, max(playa, siteSmooth));
+		if (PartOn(128)) cityLight = CityGround(vPosView, base, cityCover);
+		if (PartOn(256)) TrackShading(vPosView, N, base);
+		if (PartOn(64)) SurfaceDetail(vPosView, length(vPosView), N, base, max(playa, siteSmooth));
 #ifdef TERRAIN_DETAIL
 		// mottling at 16-256 m (T1): weaker on Earth (its textures vary at those scales) and with the
 		// site materials (their patches); not on the water
@@ -939,7 +939,7 @@ void main()
 		if (hasAtm && frame.overcast.w > 0.0 && AtmOvercast())
 			ambT += OvercastAmbientDelta(frame.overcast.rgb, frame.overcast.rgb, base, clamp(dot(N, upV), -1.0, 1.0));
 	}
-	vec3 irr = ambT * ao * ambNight * detailSky + (frame.sunColor.rgb * sunT * sunRefl + LocalLighting(vPosView, N, lv)) * aoDirect;
+	vec3 irr = ambT * ao * ambNight * detailSky + (frame.sunColor.rgb * sunT * sunRefl + (PartOn(2048) ? LocalLighting(vPosView, N, lv) : vec3(0.0))) * aoDirect;
 	vec3 col = base * irr;
 	// street lamps, lit when the sun is down
 	col += base * cityLight * smoothstep(0.05, -0.03, dot(Ng, L));
@@ -1022,7 +1022,7 @@ void main()
 		vec2 mszL = vec2(textureSize(maskTex, 0));
 		float detM = abs(mx.x * my.y - my.x * mx.y) * mszL.x * mszL.y;
 		float texL = sqrt(length(cross(dFdx(vPosView), dFdy(vPosView))) / max(detM, 1e-12)); // (a texel [m])
-		if (pts > 0.0 && night > 0.0) {
+		if (pts > 0.0 && night > 0.0 && PartOn(512)) {
 			float l0 = floor(lvP), f = lvP - l0;
 			float c0 = LIGHT_CELL * exp2(l0), c1 = 2.0 * c0;
 			vec3 p0 = NightPoints(gm, jx, jy, muv, mx, my, c0, log2(max(max(LIGHT_AVG, 4.0 * c0) / max(texL, 1e-3), 1.0)), hm, 21 + 8 * int(l0));
@@ -1032,7 +1032,7 @@ void main()
 		col += lights * night * tile.params.y;
 		// water (mask alpha 0): reflection of the sky and the sun's glitter,
 		// which spreads out when seen from afar
-		if (m.a < 0.5) {
+		if (m.a < 0.5 && PartOn(1024)) {
 			float dist = length(vPosView);
 			vec3 V = normalize(-vPosView);
 			float fxVar, fxFoam, waveVar;
@@ -1134,7 +1134,7 @@ void main()
 			}
 		}
 	}
-	if (hasAtm) { // aerial perspective
+	if (hasAtm && PartOn(4096)) { // aerial perspective
 		vec3 T;
 		vec3 L = Inscatter(dPlanet, length(vPosView), T);
 		col = col * T + AtmTonemap(L);
