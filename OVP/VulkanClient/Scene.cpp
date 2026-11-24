@@ -1806,6 +1806,15 @@ void Scene::ObservedPos (OBJHANDLE h, VECTOR3 &p) const
 	else oapiGetObservedPos (h, camPos, camVel, &p);
 }
 
+bool Scene::WarmUpStep (bool report)
+{
+	frameNo++;
+	bool busy = false;
+	for (auto &it : visuals)
+		if (VPlanet *vp = dynamic_cast<VPlanet*> (it.second.get ())) busy = vp->WarmUp (report) || busy;
+	return busy;
+}
+
 void Scene::RenderShadows ()
 {
 	frameNo++;

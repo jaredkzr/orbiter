@@ -443,6 +443,7 @@ void VulkanClient::clbkRenderScene ()
 		ctx.BindBackbuffer (false);
 		return;
 	}
+	if (!warmedUp) WarmUp ();
 	if (frameTimes) {
 		renderStart = WallNow ();
 		if (updateEnd > 0.0) ctx.CpuAdd ("core input", (renderStart - updateEnd) * 1e3); // (user input, the dialogs' frame)
@@ -558,6 +559,36 @@ void VulkanClient::clbkRenderScene ()
 	ctx.GpuMark ("post");
 	if (!CleanShotFrame ()) Render2DOverlay (); // panels, MFDs and HUD
 	ctx.CpuMark ("overlay");
+}
+
+void VulkanClient::WarmUp ()
+{
+	// (the first frames had shown the terrain made from scratch, 1.5-3 s of
+	// 7-15 fps: the meshes, the first city set's 100 ms a frame, the
+	// scatter's 50 ms. Instead the loading goes on, with cleared frames,
+	// until the tiles, cities and scatter of the first view are in)
+	warmedUp = true;
+	static const double cap = getenv ("ORBITER_VK_WARMUP_S") ? atof (getenv ("ORBITER_VK_WARMUP_S")) : 3.0;
+	if (cap <= 0.0 || !scene) return;
+	auto t0 = std::chrono::steady_clock::now ();
+	int frames = 0, idle = 0;
+	bool busy = true;
+	while (std::chrono::duration<double> (std::chrono::steady_clock::now () - t0).count () < cap) {
+		if (!ctx.BeginFrame ()) break;
+		bool last = std::chrono::duration<double> (std::chrono::steady_clock::now () - t0).count () > cap - 0.01;
+		busy = scene->WarmUpStep (last);
+		r2d->Flush ();
+		ctx.BindBackbuffer (false);
+		ctx.EndFrame ();
+		frames++;
+		if (busy) idle = 0;
+		else if (++idle >= 3) break;
+	}
+	oapiWriteLogV ("VulkanClient: loading held %.2f s, %d frames, for the first view's tiles, cities and scatter%s",
+		std::chrono::duration<double> (std::chrono::steady_clock::now () - t0).count (), frames, busy ? " (not all in)" : "");
+	vkc::Stats () = vkc::FrameStats (); // (not the first frame's)
+	ctx.ClearCpuTimes ();
+	ctx.TakeFenceWait ();
 }
 
 void VulkanClient::clbkImGuiRenderDrawData ()

@@ -104,6 +104,10 @@ public:
 	void Render ();
 	/// Render the sun shadow map (before the main rendering scope)
 	void RenderShadows ();
+	/// a frame of the loading's hold (VulkanClient::WarmUp): the planets'
+	/// tiles, cities and scatter streamed, nothing drawn; whether any are
+	/// still coming
+	bool WarmUpStep (bool report = false);
 
 	VObject *GetVisual (OBJHANDLE hObj);
 	void DeleteVisual (OBJHANDLE hObj);

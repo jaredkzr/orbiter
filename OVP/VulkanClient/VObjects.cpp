@@ -4671,6 +4671,22 @@ void VPlanet::PrepareFrame ()
 	part (3);
 }
 
+bool VPlanet::WarmUp (bool report)
+{
+	if (surface) surface->Update ();
+	if (clouds) clouds->Update ();
+	PrepareFrame ();
+	bool busy = (surface && surface->Busy ()) || (clouds && clouds->Busy ()) || (field && field->Busy ()) || (cities && cities->Busy ());
+	if (report && busy) {
+		char name[64];
+		oapiGetObjectName (hObj, name, 64);
+		oapiWriteLogV ("VulkanClient: loading held for %s: surface %s (%s); clouds %s; scatter %d, cities %d", name,
+			surface && surface->Busy () ? "busy" : "in", surface ? surface->BusyText ().c_str () : "-",
+			clouds && clouds->Busy () ? clouds->BusyText ().c_str () : "in", field && field->Busy () ? 1 : 0, cities && cities->Busy () ? 1 : 0);
+	}
+	return busy;
+}
+
 double VPlanet::CloudAlt () const
 {
 	const double *alt = (const double*)oapiGetObjectParam (hObj, OBJPRM_PLANET_CLOUDALT);

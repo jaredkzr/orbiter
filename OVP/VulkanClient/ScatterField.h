@@ -34,6 +34,8 @@ namespace vkscatter {
 		~Field ();
 		/// the planet has ground scatter
 		bool Active () const { return active; }
+		/// cells still to read (the loading's hold: VulkanClient::WarmUp)
+		bool Busy () const { return active && !pending.empty (); }
 		/// Read cells, sort the instances, upload them (before the shadow maps)
 		void Prepare ();
 		void Render (RenderPass pass);

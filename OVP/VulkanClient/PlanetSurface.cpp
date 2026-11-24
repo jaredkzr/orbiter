@@ -24,6 +24,11 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#ifdef __linux__
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
 
 #include "tile.vert.h"
 #include "tile.frag.h"
@@ -63,74 +68,16 @@ void SitePush (const SURFDETAILPARAM &d, float p4[4], float p5[4], float p6[4])
 	constexpr double SPLIT_PIXELS = 500.0;  // split tiles that cover more than this on screen (at resolution bias 0; GRID quads per edge)
 	constexpr size_t MAX_OUTSTANDING = 24;  // tile requests in flight
 	constexpr int MAX_UPLOADS = 12;         // tiles accepted per frame
-	constexpr uint64_t PRUNE_FRAMES = 120;  // unused subtrees are released after this
-	constexpr size_t MESH_SPARE = 1024;     // meshes kept beyond the selection (at least; else half its count)
+	constexpr double RETAIN_S = 20.0;       // [s] unused subtrees are released after this (or sooner: over the terrain's memory budget)
+	constexpr double TERRAIN_SHARE = 0.10;  // the terrain meshes' share of the device memory budget (VK_EXT_memory_budget)
+	constexpr double PRESSURE = 0.90;       // over this share of its budget in use, the device's: only the selection kept
+	constexpr size_t TILE_BUDGET = 4000;    // tiles drawn at most (a zoomed view: the tiles' split threshold raised)
+	size_t g_meshBytes = 0;                 // [bytes] all surfaces' tile meshes (main thread)
 	constexpr double FOV_OUT = 40.0 * 3.14159265358979 / 180.0; // out of view, tiles split at most as in a view of this (vertical) aperture
 	constexpr double MOTION_TIME = 0.05;    // [s] tiles the camera crosses faster than this (at the time warp) not split
 	constexpr double VESSEL_TILE = 10.0;    // [m] the finest tiles under a vessel on the ground,
 	constexpr double VESSEL_CAM = 0.1;      // at least this part of the camera's distance,
 	constexpr double VESSEL_ALT = 1.0;      // and of its height above the ground
-
-	// Worker threads kept for the meshes (they were made and joined twice
-	// a frame)
-	class Workers {
-	public:
-		static Workers &Get () { static Workers w; return w; }
-		/// fn (i) for each i < n, on the workers and the calling thread;
-		/// returns when all are done
-		void Run (size_t n, const std::function<void (size_t)> &fn)
-		{
-			if (n < 2 || threads.empty ()) { for (size_t i = 0; i < n; i++) fn (i); return; }
-			std::lock_guard<std::mutex> one (runMtx);
-			{
-				std::lock_guard<std::mutex> lk (m);
-				job = &fn, count = n, next = 0, busy = threads.size (), gen++;
-			}
-			cv.notify_all ();
-			for (size_t i; (i = next++) < n; ) fn (i);
-			std::unique_lock<std::mutex> lk (m);
-			done.wait (lk, [this] { return busy == 0; });
-			job = nullptr;
-		}
-		~Workers ()
-		{
-			{ std::lock_guard<std::mutex> lk (m); quit = true, gen++; }
-			cv.notify_all ();
-			for (auto &t : threads) t.join ();
-		}
-	private:
-		Workers ()
-		{
-			unsigned n = std::max (2u, std::thread::hardware_concurrency ()) - 2; // (and the caller's)
-			for (unsigned i = 0; i < n; i++) threads.emplace_back ([this] { Loop (); });
-		}
-		void Loop ()
-		{
-			uint64_t seen = 0;
-			for (;;) {
-				const std::function<void (size_t)> *fn;
-				size_t n;
-				{
-					std::unique_lock<std::mutex> lk (m);
-					cv.wait (lk, [&] { return gen != seen; });
-					seen = gen;
-					if (quit) return;
-					fn = job, n = count;
-				}
-				for (size_t i; (i = next++) < n; ) (*fn) (i);
-				std::lock_guard<std::mutex> lk (m);
-				if (--busy == 0) done.notify_one ();
-			}
-		}
-		std::vector<std::thread> threads;
-		std::mutex m, runMtx;
-		std::condition_variable cv, done;
-		const std::function<void (size_t)> *job = nullptr;
-		size_t count = 0, busy = 0;
-		std::atomic<size_t> next{ 0 };
-		uint64_t gen = 0;
-		bool quit = false;
-	};
 
 	VECTOR3 SurfaceDir (double lat, double lng)
 	{
@@ -306,6 +253,63 @@ void TileLoader::Process (const Request &req, Result &res)
 			DecodeElv (d, res.elev, true);
 		break;
 	}
+	}
+}
+
+// ======================================================================
+// MeshWorkers
+
+MeshWorkers::MeshWorkers ()
+{
+	// (two cores left: the main thread's frame and the tile loader)
+	unsigned n = std::max (2u, std::thread::hardware_concurrency ()) - 2;
+	if (const char *e = getenv ("ORBITER_VK_MESH_THREADS")) n = (unsigned)std::max (1, atoi (e));
+	for (unsigned i = 0; i < std::max (1u, n); i++) threads.emplace_back ([this] { Loop (); });
+}
+
+MeshWorkers::~MeshWorkers ()
+{
+	{ std::lock_guard<std::mutex> lk (mtx); quit = true; queue.clear (); }
+	cv.notify_all ();
+	for (auto &t : threads) t.join ();
+}
+
+void MeshWorkers::Push (const void *owner, std::function<void ()> task)
+{
+	{ std::lock_guard<std::mutex> lk (mtx); queue.emplace_back (owner, std::move (task)); }
+	cv.notify_one ();
+}
+
+void MeshWorkers::Drop (const void *owner)
+{
+	std::unique_lock<std::mutex> lk (mtx);
+	for (auto it = queue.begin (); it != queue.end (); )
+		if (it->first == owner) it = queue.erase (it); else ++it;
+	idle.wait (lk, [&] { return std::find (running.begin (), running.end (), owner) == running.end (); });
+}
+
+void MeshWorkers::Loop ()
+{
+#ifdef __linux__
+	// (below the main thread: the frame first, meshes in the time left)
+	setpriority (PRIO_PROCESS, (id_t)syscall (SYS_gettid), 5);
+#endif
+	for (;;) {
+		std::pair<const void*, std::function<void ()>> t;
+		{
+			std::unique_lock<std::mutex> lk (mtx);
+			cv.wait (lk, [this] { return quit || !queue.empty (); });
+			if (quit) return;
+			t = std::move (queue.front ());
+			queue.pop_front ();
+			running.push_back (t.first);
+		}
+		t.second ();
+		{
+			std::lock_guard<std::mutex> lk (mtx);
+			running.erase (std::find (running.begin (), running.end (), t.first));
+		}
+		idle.notify_all ();
 	}
 }
 
@@ -577,12 +581,14 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 		(ctx->rayTracing ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT : 0));
 
 	loader = std::make_unique<TileLoader>();
+	meshers = std::make_unique<MeshWorkers>();
 	return true;
 }
 
 void TileRenderer::Shutdown ()
 {
 	if (!ctx) return;
+	meshers.reset ();
 	loader.reset ();
 	if (meshPipe) vkDestroyPipeline (ctx->device, meshPipe, nullptr);
 	if (meshLayout) vkDestroyPipelineLayout (ctx->device, meshLayout, nullptr);
@@ -718,6 +724,7 @@ PlanetSurface::PlanetSurface (OBJHANDLE h, Scene *s, std::shared_ptr<PlanetLayer
 
 PlanetSurface::~PlanetSurface ()
 {
+	if (MeshWorkers *mw = tr->MeshersIf ()) mw->Drop (this); // (its jobs read this surface)
 	layers->alive = false;
 	tr->Loader().Drop (layers.get());
 	for (auto &r : root) if (r) FreeNode (r.get());
@@ -762,6 +769,7 @@ PlanetSurface::Node *PlanetSurface::NewNode (int lvl, int ilat, int ilng, Node *
 	double ratio = n->latmin < 0.0 && n->latmax > 0.0 ? 1.0 : cos (std::min (fabs (n->latmin), fabs (n->latmax)));
 	while (n->cols + 1 < TileRenderer::NCOLS && ratio * (2 << n->cols) <= 1.0) n->cols++;
 	n->lastUsed = frame;
+	n->usedTime = frameTime;
 	return n;
 }
 
@@ -778,6 +786,7 @@ void PlanetSurface::FreeNode (Node *n)
 		ctx->DeferDestroy ([c, b]() mutable { c->DestroyBuffer (b); });
 		n->vbuf = vkc::Buffer();
 		nMeshes--;
+		g_meshBytes -= MeshBytes ();
 		dbgFreed++;
 		vkc::Stats ().tilesFreed++;
 		RTForgetGeometry (n->rtId);
@@ -787,13 +796,13 @@ void PlanetSurface::FreeNode (Node *n)
 	n->rtCluster = 0;
 }
 
-void PlanetSurface::PruneChildren (Node *n, uint64_t age)
+void PlanetSurface::PruneChildren (Node *n, double tmin)
 {
 	bool any = false, used = false;
 	for (auto &c : n->child)
 		if (c) {
 			any = true;
-			if (c->lastUsed + age > frame) used = true;
+			if (c->lastUsed == frame || c->usedTime >= tmin) used = true;
 		}
 	if (!any) return;
 	if (!used) {
@@ -802,7 +811,49 @@ void PlanetSurface::PruneChildren (Node *n, uint64_t age)
 		return;
 	}
 	for (auto &c : n->child)
-		if (c) PruneChildren (c.get(), age);
+		if (c) PruneChildren (c.get(), tmin);
+}
+
+void PlanetSurface::Retain ()
+{
+	// Tiles out of the selection are kept a while for a camera coming back
+	// (going back to the cockpit had freed its tiles: 0.4 s of slow frames
+	// each time): those unused for RETAIN_S, and over the terrain's memory
+	// budget (TERRAIN_SHARE of the device's, or ORBITER_VK_TERRAIN_MB) the
+	// least recently used first, are released. Near the device's own budget
+	// only the selection is kept. (Before: a count beyond the selection,
+	// all unused released at once over it; low and fast over the ground, a
+	// hundred new meshes a frame had filled the video memory within a minute)
+	static uint64_t checked = ~0ull;
+	static size_t budget = 1024ull << 20;
+	static bool pressure = false;
+	if (checked == ~0ull || scene->FrameNo () >= checked + 30) {
+		checked = scene->FrameNo ();
+		uint64_t use, bud;
+		if (const char *e = getenv ("ORBITER_VK_TERRAIN_MB")) budget = (size_t)std::max (16, atoi (e)) << 20;
+		else if (ctx->HeapBudget (use, bud) && bud) budget = std::clamp ((size_t)(bud * TERRAIN_SHARE), (size_t)256 << 20, (size_t)4096 << 20);
+		pressure = ctx->HeapBudget (use, bud) && bud && use > PRESSURE * bud;
+	}
+	for (auto &r : root) PruneChildren (r.get(), pressure ? 1e300 : frameTime - RETAIN_S);
+	if (g_meshBytes <= budget) return;
+	// (the subtrees unused this frame, oldest first)
+	std::vector<std::pair<double, Node*>> cand;
+	std::function<void (Node *)> walk = [&](Node *n) {
+		bool any = false, used = false;
+		double t = 0.0;
+		for (auto &c : n->child)
+			if (c) any = true, used = used || c->lastUsed == frame, t = std::max (t, c->usedTime);
+		if (!any) return;
+		if (!used) { cand.push_back ({ t, n }); return; }
+		for (auto &c : n->child) if (c) walk (c.get ());
+	};
+	for (auto &r : root) walk (r.get ());
+	std::sort (cand.begin (), cand.end (), [](const auto &a, const auto &b) { return a.first < b.first; });
+	for (auto &c : cand) {
+		if (g_meshBytes <= budget) break;
+		for (auto &ch : c.second->child)
+			if (ch) { FreeNode (ch.get ()); ch.reset (); }
+	}
 }
 
 PlanetSurface::Node *PlanetSurface::Find (int lvl, int ilat, int ilng) const
@@ -821,6 +872,25 @@ const PlanetSurface::Node *PlanetSurface::ElevSource (const Node *n) const
 }
 
 double PlanetSurface::SampleElev (const Node *src, double lat, double lng) const
+{
+	return SampleElevT (src, lat, lng);
+}
+
+double PlanetSurface::SurfaceElev (const Node *src, double lat, double lng, double lmin, double *amp, double *fade, double *playa) const
+{
+	return SurfaceElevT (src, lat, lng, lmin, amp, fade, playa);
+}
+
+namespace {
+	// (the same elevation data: the same grid, or both none)
+	bool SameSrc (const void *a, const void *b, const std::shared_ptr<const ElevGrid> *ga, const std::shared_ptr<const ElevGrid> *gb)
+	{
+		if (!a || !b) return a == b;
+		return *ga == *gb;
+	}
+}
+
+template <class S> double PlanetSurface::SampleElevT (const S *src, double lat, double lng) const
 {
 	const int N = ElevGrid::N;
 	double fx = (lng - src->lngmin) / (src->lngmax - src->lngmin) * (N - 3) + 1.0;
@@ -854,7 +924,7 @@ double PlanetSurface::SampleElev (const Node *src, double lat, double lng) const
 	return e0 * (1.0 - wy) + e1 * wy;
 }
 
-double PlanetSurface::SurfaceElev (const Node *src, double lat, double lng, double lmin, double *amp, double *fade, double *playa) const
+template <class S> double PlanetSurface::SurfaceElevT (const S *src, double lat, double lng, double lmin, double *amp, double *fade, double *playa) const
 {
 	if (amp) *amp = 0.0;
 	if (fade) *fade = 0.0;
@@ -863,7 +933,7 @@ double PlanetSurface::SurfaceElev (const Node *src, double lat, double lng, doub
 		if (clouds || !detail || layers->elev) return 0.0;
 		return oapiSurfaceDetail (hPlanet, lng, lat, 0.0, detailPrm.flatSpacing, 0.0, lmin, amp, fade, playa);
 	}
-	double h = SampleElev (src, lat, lng);
+	double h = SampleElevT (src, lat, lng);
 	if (clouds || !detail) return h;
 	// the relief of the data cell (as the core computes it for its elevation)
 	const int N = ElevGrid::N;
@@ -884,7 +954,7 @@ double PlanetSurface::SurfaceElev (const Node *src, double lat, double lng, doub
 	return h + oapiSurfaceDetail (hPlanet, lng, lat, h, spacing, relief, lmin, amp, fade, playa);
 }
 
-void PlanetSurface::ComputeMesh (const Node *n, const Node *src, bool detailed, MeshData &md) const
+void PlanetSurface::ComputeMesh (const TileGeo *n, const ElevSrc *src, const ElevSrc *psrc, bool detailed, MeshData &md) const
 {
 	const int G = TileRenderer::GRID, V = G + 1, W = G + 3; // W: grid with a one-node border
 	double dlat = (n->latmax - n->latmin) / G, dlng = (n->lngmax - n->lngmin) / G;
@@ -899,7 +969,7 @@ void PlanetSurface::ComputeMesh (const Node *n, const Node *src, bool detailed, 
 			double lng = n->lngmin + (j - 1) * dlng;
 			VECTOR3 d = SurfaceDir (lat, lng);
 			double a = 0.0, f = 0.0, pl = 0.0;
-			double h = SurfaceElev (src, lat, lng, lmin, &a, &f, &pl);
+			double h = SurfaceElevT (src, lat, lng, lmin, &a, &f, &pl);
 			A[3 * (i*W + j)] = (float)a, A[3 * (i*W + j) + 1] = (float)f, A[3 * (i*W + j) + 2] = (float)pl;
 			D[i*W + j] = d;
 			P[i*W + j] = d * (radius + h);
@@ -930,17 +1000,16 @@ void PlanetSurface::ComputeMesh (const Node *n, const Node *src, bool detailed, 
 	// shader blends to them with the distance, so that a tile matches its
 	// coarser neighbours and changes smoothly to its parent's shape.
 	std::vector<VECTOR3> T ((size_t)V * V);
-	const Node *psrc = n->parent ? ElevSource (n->parent) : nullptr;
 	if (n->parent && !clouds) {
 		double lminP = detailed ? 2.0 * lmin : 1e30;
 		// (from the same data, and no detail in the mesh at either's spacing:
 		// the tile's own nodes, the same values)
 		double sp = src ? radius * (src->latmax - src->latmin) / (ElevGrid::N - 3) : detailPrm.flatSpacing;
-		bool same = psrc == src && std::max (lmin, detailPrm.lambdaMin) >= sp;
+		bool same = SameSrc (psrc, src, psrc ? &psrc->elev : nullptr, src ? &src->elev : nullptr) && std::max (lmin, detailPrm.lambdaMin) >= sp;
 		for (int i = 0; i <= G; i += 2)
 			for (int j = 0; j <= G; j += 2) {
 				double lat = std::clamp (n->latmax - i * dlat, -PI05, PI05), lng = n->lngmin + j * dlng;
-				T[i*V + j] = same ? at (i, j) : D[(i + 1) * W + (j + 1)] * (radius + SurfaceElev (psrc, lat, lng, lminP));
+				T[i*V + j] = same ? at (i, j) : D[(i + 1) * W + (j + 1)] * (radius + SurfaceElevT (psrc, lat, lng, lminP, nullptr, nullptr, nullptr));
 			}
 		for (int i = 0; i <= G; i++)
 			for (int j = 0; j <= G; j++) {
@@ -1100,6 +1169,7 @@ void PlanetSurface::EnsureVertexBuffer (Node *n)
 	if (n->vbuf.buffer) return;
 	VkDeviceSize size = MeshBytes ();
 	nMeshes++;
+	g_meshBytes += size;
 	n->vbuf = ctx->CreateBuffer (size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
 		(ctx->rayTracing ? VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR : 0) |
 		(ctx->rayTracing || ctx->deviceAddress ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT : 0), false);
@@ -1115,7 +1185,7 @@ void PlanetSurface::SplitPoint (const VECTOR3 &D, int32_t I[3], float F[3]) cons
 	}
 }
 
-void PlanetSurface::PrepareGpuMesh (const Node *n, const Node *src, GpuJob &job, std::vector<float> &pts, MeshData &md) const
+void PlanetSurface::PrepareGpuMesh (const TileGeo *n, const ElevSrc *src, const ElevSrc *psrc, GpuJob &job, std::vector<float> &pts, MeshData &md) const
 {
 	const int G = TileRenderer::GRID, V = G + 1, W = G + 3, M = G / 2 + 1;
 	double dlat = (n->latmax - n->latmin) / G, dlng = (n->lngmax - n->lngmin) / G;
@@ -1127,21 +1197,20 @@ void PlanetSurface::PrepareGpuMesh (const Node *n, const Node *src, GpuJob &job,
 	pts.resize ((size_t)(W * W + M * M) * 4);
 	// (elevations relative to the tile's reference elevation href, so that
 	// their single precision rounding is far below the node spacing)
-	const float href = (float)SurfaceElev (src, 0.5 * (n->latmin + n->latmax), 0.5 * (n->lngmin + n->lngmax), lsplit);
+	const float href = (float)SurfaceElevT (src, 0.5 * (n->latmin + n->latmax), 0.5 * (n->lngmin + n->lngmax), lsplit, nullptr, nullptr, nullptr);
 	for (int i = 0; i < W; i++) {
 		double lat = std::clamp (n->latmax - (i - 1) * dlat, -PI05, PI05);
 		for (int j = 0; j < W; j++) {
 			double lng = n->lngmin + (j - 1) * dlng;
 			double a = 0.0, f = 0.0, pl = 0.0;
 			float *p = &pts[4 * (i * W + j)];
-			p[0] = (float)(SurfaceElev (src, lat, lng, lsplit, &a, &f, &pl) - (double)href);
+			p[0] = (float)(SurfaceElevT (src, lat, lng, lsplit, &a, &f, &pl) - (double)href);
 			p[1] = (float)a, p[2] = (float)f, p[3] = (float)pl;
 		}
 	}
-	const Node *psrc = n->parent ? ElevSource (n->parent) : nullptr;
 	// (from the same data, the parent's nodes are every other one of the
 	// tile's, the same values: copied, a fifth of the core's evaluations)
-	if (n->parent && psrc == src)
+	if (n->parent && SameSrc (psrc, src, psrc ? &psrc->elev : nullptr, src ? &src->elev : nullptr))
 		for (int i = 0; i < M; i++)
 			for (int j = 0; j < M; j++)
 				memcpy (&pts[4 * (W * W + i * M + j)], &pts[4 * ((2 * i + 1) * W + 2 * j + 1)], 4 * sizeof(float));
@@ -1151,11 +1220,11 @@ void PlanetSurface::PrepareGpuMesh (const Node *n, const Node *src, GpuJob &job,
 			for (int j = 0; j < M; j++) {
 				double a = 0.0, f = 0.0, pl = 0.0;
 				float *p = &pts[4 * (W * W + i * M + j)];
-				p[0] = (float)(SurfaceElev (psrc, lat, n->lngmin + 2 * j * dlng, lsplit, &a, &f, &pl) - (double)href);
+				p[0] = (float)(SurfaceElevT (psrc, lat, n->lngmin + 2 * j * dlng, lsplit, &a, &f, &pl) - (double)href);
 				p[1] = (float)a, p[2] = (float)f, p[3] = (float)pl;
 			}
 		}
-	auto spacingOf = [&](const Node *s) {
+	auto spacingOf = [&](const ElevSrc *s) {
 		return s ? radius * (s->latmax - s->latmin) / (ElevGrid::N - 3) : (detail && !layers->elev ? detailPrm.flatSpacing : 0.0);
 	};
 	// (the centre: d0 R; offsets from it in single precision)
@@ -1189,6 +1258,7 @@ void PlanetSurface::Request (Node *n, TileLoader::Kind kind)
 	if (!layer || !layer->HasTile (n->lvl, n->ilat, n->ilng)) { state = 3; return; }
 	if (tr->Loader().Outstanding() >= MAX_OUTSTANDING) return;
 	state = 1;
+	pendingLoads++;
 	tr->Loader().Push ({ layers, kind, n->lvl, n->ilat, n->ilng });
 }
 
@@ -1197,6 +1267,7 @@ void PlanetSurface::Update ()
 	TileLoader::Result res;
 	int n = 0;
 	while (n < MAX_UPLOADS && tr->Loader().Pop (res, layers.get())) {
+		pendingLoads--;
 		Node *node = Find (res.req.lvl, res.req.ilat, res.req.ilng);
 		if (!node) continue; // released in the meantime
 		switch (res.req.kind) {
@@ -1259,12 +1330,14 @@ double PlanetSurface::LowerDist (const Node *n, const From &f, double cang, doub
 	return std::max (sqrt (std::max (0.0, f.r * f.r + r * r - 2.0 * f.r * r * cg)), 1.0);
 }
 
-uint32_t PlanetSurface::Select (Node *n)
+uint32_t PlanetSurface::Select (Node *n, bool &covered)
 {
 	n->lastUsed = frame;
+	n->usedTime = frameTime;
 	n->drawn = false;
 	n->hidden = true;
 	n->rtTris = 0;
+	covered = true;
 
 	// horizon culling: compare the angle between the tile and the camera
 	// direction with the horizon angle (extended by the highest mountains)
@@ -1325,7 +1398,7 @@ uint32_t PlanetSurface::Select (Node *n)
 		ppr = pixPerRadOut + (ppr - pixPerRadOut) * std::min (1.0, zoomAniso * (h / dist + slope));
 	}
 	n->pixPerRad = ppr;
-	bool split = size / dist * ppr > splitPixels && size > minSplit;
+	bool split = size / dist * ppr > splitEff && size > minSplit;
 	// Vessels on or near the ground stand on the finest mesh, which has the
 	// terrain detail of the ground contact, wherever the camera is: tiles
 	// are also split as if seen from the nearest one (graded, so the morph
@@ -1341,7 +1414,7 @@ uint32_t PlanetSurface::Select (Node *n)
 	// wavelength of the ground contact's detail, elevmgr PHYSICS_LMIN;
 	// finer ones only for the camera: thousands of them, each in the ray
 	// tracing scene)
-	if (n->vessel >= 0 && size > groundTile[n->vessel] && size / dv * ppr > splitPixels) split = true;
+	if (n->vessel >= 0 && size > groundTile[n->vessel] && size / dv * ppr > splitEff) split = true;
 	bool ready = true; // (the children have their meshes)
 	if (n->lvl < maxLevel && split) {
 		for (int c = 0; c < 4; c++) {
@@ -1350,27 +1423,49 @@ uint32_t PlanetSurface::Select (Node *n)
 			if (!n->child[c]->vbuf.buffer) ready = false;
 		}
 	}
-	// A tile is replaced by its children once all four have their meshes
-	// (a number is made per frame): until then it is drawn itself, else its
-	// ground would be missing for some frames (zooming fast: holes in the
-	// terrain showing the upscaler's history of the view before)
-	if (n->lvl < maxLevel && split && !ready && n->vbuf.buffer) {
-		for (auto &c : n->child) {
-			c->lastUsed = frame;
-			c->drawn = false, c->hidden = true, c->rtTris = 0;
-			buildList.push_back (c.get());
-		}
-		split = false;
-	}
-	if (n->lvl < maxLevel && split) {
-		for (int c = 0; c < 4; c++)
-			n->rtTris += Select (n->child[c].get());
-	} else {
+	auto draw = [&]() {
 		drawList.push_back (n);
 		n->drawn = true;
 		n->rtTris = tr->Columns (n->cols).rtCount / 3;
 		if (thinning) ChooseThinning (n, dist, ppr);
+		covered = n->vbuf.buffer != VK_NULL_HANDLE;
+	};
+	// A tile is replaced by its children once all four have their meshes
+	// (made in the background, the nearest first): until then it is drawn
+	// itself, else its ground would be missing for some frames (zooming
+	// fast, cutting to another view: holes in the terrain showing the
+	// upscaler's history of the view before)
+	auto standIn = [&]() {
+		for (auto &c : n->child) {
+			if (c->lastUsed != frame) c->lastUsed = frame, c->usedTime = frameTime, c->drawn = false, c->hidden = true, c->rtTris = 0;
+			if (!c->vbuf.buffer) buildList.push_back (c.get());
+		}
+		draw ();
+	};
+	if (n->lvl < maxLevel && split && !ready && n->vbuf.buffer) {
+		standIn ();
+		return n->rtTris;
 	}
+	if (n->lvl < maxLevel && split) {
+		// (a tile without its mesh: its children, as far down as they have
+		// theirs; where they don't cover it, the nearest tile up that has
+		// one stands in for all of it - their draws undone)
+		size_t d0 = drawList.size ();
+		bool all = true;
+		for (int c = 0; c < 4; c++) {
+			bool cc;
+			n->rtTris += Select (n->child[c].get(), cc);
+			all = all && cc;
+		}
+		covered = all;
+		if (all || !n->vbuf.buffer) return n->rtTris;
+		for (size_t i = d0; i < drawList.size (); i++) drawList[i]->drawn = false;
+		drawList.resize (d0);
+		n->rtTris = 0;
+		standIn ();
+		return n->rtTris;
+	}
+	draw ();
 	return n->rtTris;
 }
 
@@ -1393,6 +1488,7 @@ void PlanetSurface::Prepare ()
 	if (!std::isfinite (camDist)) return; // (no camera: keep the last selection)
 	pixPerRad = scene->PixPerRad ();
 	pixPerRadOut = std::min (pixPerRad, 0.5 * scene->ViewHeight () / tan (0.5 * FOV_OUT));
+	splitEff = splitPixels * lodScale;
 	// (low and fast over the ground, the finest tiles about the camera
 	// were all replaced every frame: a thousand new meshes a frame on a
 	// takeoff run with the chase camera a metre up. No finer than the
@@ -1439,13 +1535,23 @@ void PlanetSurface::Prepare ()
 	for (const VECTOR3 &v : groundVessels) fromVessels.push_back (MakeFrom (v));
 	drawList.clear ();
 	buildList.clear ();
-	for (auto &r : root) Select (r.get());
+	frameTime = std::chrono::duration<double> (std::chrono::steady_clock::now ().time_since_epoch ()).count ();
+	for (auto &r : root) { bool cov; Select (r.get(), cov); }
 	// (unused subtrees kept a while, for a camera coming back; but low and
 	// fast over the ground the finest tiles change every frame, ~100 new
 	// meshes a frame at a low frame rate: over a budget, only this frame's
 	// selection is kept; it had filled the video memory within a minute)
-	size_t budget = drawList.size () + std::max<size_t> (MESH_SPARE, drawList.size () / 2);
-	for (auto &r : root) PruneChildren (r.get(), nMeshes > budget ? 1 : PRUNE_FRAMES);
+	Retain ();
+	if (!clouds) {
+		// (a zoomed view: thousands of tiles in view, all split for its scale -
+		// 6700 drawn at 4 deg, the video memory. Over the budget the split
+		// threshold is raised for all of them, the tiles nearest to it, the
+		// least seen, merged first; lowered again under 80 % of it)
+		static const size_t budget = getenv ("ORBITER_VK_TILE_BUDGET") ? (size_t)std::max (100, atoi (getenv ("ORBITER_VK_TILE_BUDGET"))) : TILE_BUDGET;
+		size_t nd = drawList.size ();
+		if (nd > budget) lodScale = std::min (lodScale * std::sqrt ((double)nd / budget) * 1.01, 64.0);
+		else if (nd < 0.8 * budget && lodScale > 1.0) lodScale = std::max (1.0, lodScale / 1.01);
+	}
 	vkc::Stats ().tilesDrawn += (uint32_t)drawList.size ();
 	vkc::Stats ().tileMeshes += (uint32_t)nMeshes;
 	vkc::Stats ().tileBytes += (uint64_t)nMeshes * MeshBytes ();
@@ -1492,30 +1598,45 @@ void PlanetSurface::Prepare ()
 			if (st != 3) break; // loaded, pending, or deferred (too many requests)
 		}
 	};
-	static const unsigned nThreads = std::max (1u, std::thread::hardware_concurrency () - 1);
-	const size_t maxJobs = 2 * nThreads;
 	const bool gpu = tr->MeshPipeline () != VK_NULL_HANDLE;
-	const size_t maxGpuJobs = 96;
+	constexpr size_t MAX_GPU_APPLY = 96; // (GPU meshes a frame: errBuf's records)
 	// (the decimation errors of the meshes made in this slot's last use)
 	const uint32_t slot = ctx->FrameIndex ();
 	if (gpu && !errBuf[slot].buffer)
-		errBuf[slot] = ctx->CreateBuffer (maxGpuJobs * 8 * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
+		errBuf[slot] = ctx->CreateBuffer (MAX_GPU_APPLY * 8 * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
 	for (size_t k = 0; k < errPending[slot].size(); k++) {
 		const ErrPending &e = errPending[slot][k];
 		Node *n = Find (e.lvl, e.ilat, e.ilng);
 		if (n && n->rtVersion == e.ver) memcpy (n->decErr, (const float*)errBuf[slot].mapped + 8 * k, sizeof(n->decErr));
 	}
 	errPending[slot].clear ();
-	std::vector<std::pair<Node*, const Node*>> jobs;
-	// (meshes made at once: a number per frame, the nearest first; each is
-	// staged in memory of the frame, which a jump to a new place would
-	// otherwise fill with thousands of them)
-	constexpr int MAX_PLAIN_MESHES = 256;
-	struct PlainJob { Node *n; const Node *src; bool detailed; };
-	std::vector<PlainJob> plain;
-	// (the tiles drawn, then those due to replace their parents)
+	// Meshes are made in the background (MeshWorkers), the nearest first, at
+	// most queueMax of this surface's outstanding (submitted, not yet
+	// applied: a camera cut leaves at most that much work for tiles no
+	// longer wanted); the finished ones applied below under a budget per
+	// frame. A tile is drawn only once its mesh is there (Select: until
+	// then the nearest tile up that has one stands in). Meshes with the
+	// terrain detail: their inputs made on the CPU, the mesh on the GPU.
+	// (ORBITER_VK_ASYNC_MESH=0: each frame waits for the meshes it asked
+	// for and applies them all, as before; ORBITER_VK_MESH_APPLY_MS: the
+	// CPU meshes' budget per frame [ms])
+	static const bool asyncMesh = !getenv ("ORBITER_VK_ASYNC_MESH") || atoi (getenv ("ORBITER_VK_ASYNC_MESH")) != 0;
+	static const double applyMs = getenv ("ORBITER_VK_MESH_APPLY_MS") ? atof (getenv ("ORBITER_VK_MESH_APPLY_MS")) : 2.0;
+	const int queueMax = asyncMesh ? 6 * (int)tr->Meshers ().Threads () : 352;
+	if (detail && !clouds && !detailWarm) { // (the core's terrain detail initialises itself on first use: here, not on the workers)
+		oapiSurfaceDetail (hPlanet, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0);
+		detailWarm = true;
+	}
+	// (the tiles drawn, then those due to replace their parents, each the nearest first)
+	{
+		std::vector<std::pair<double, Node*>> by (buildList.size ());
+		for (size_t i = 0; i < buildList.size (); i++) by[i] = { length (camLocal - buildList[i]->centre), buildList[i] };
+		std::sort (by.begin(), by.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+		for (size_t i = 0; i < by.size (); i++) buildList[i] = by[i].second;
+	}
 	std::vector<Node*> prepList (drawList);
 	prepList.insert (prepList.end (), buildList.begin (), buildList.end ());
+	needMeshes = 0;
 	for (Node *n : prepList) {
 		requestUp (n, TileLoader::SURF);
 		if (layers->mask) requestUp (n, TileLoader::MASK);
@@ -1535,83 +1656,104 @@ void PlanetSurface::Prepare ()
 		}
 		const Node *src = ElevSource (n);
 		int srcLvl = src ? src->lvl : 0;
-		// Meshes with the terrain detail take long to build: a number per
-		// frame (the nearest first) on worker threads; others get a plain mesh
-		// at once and the detail later
 		bool rebuild = !n->vbuf.buffer || n->meshElevLvl != srcLvl;
 		bool withDetail = detail && !clouds && (src || !layers->elev);
-		if (!n->vbuf.buffer) dbgRbNew++; else if (n->meshElevLvl != srcLvl) dbgRbElev++; else if (withDetail && !n->meshDetailed) dbgDetail++;
-		if (withDetail && gpu && (rebuild || !n->meshDetailed) && jobs.size() < maxGpuJobs) {
-			jobs.push_back ({ n, src });
-		} else if (withDetail && !gpu && (rebuild || !n->meshDetailed) && jobs.size() < maxJobs) {
-			jobs.push_back ({ n, src });
-		} else if (rebuild && plain.size() < MAX_PLAIN_MESHES) {
-			plain.push_back ({ n, src, !withDetail });
-		}
+		if (!rebuild && !(withDetail && !n->meshDetailed)) continue;
+		needMeshes++;
+		if (n->meshJob) continue; // (one being made)
+		if (!n->vbuf.buffer) dbgRbNew++; else if (n->meshElevLvl != srcLvl) dbgRbElev++; else dbgDetail++;
+		if (meshOutstanding >= queueMax) continue;
+		if (withDetail) SubmitMesh (n, gpu ? JOB_GPU : JOB_PLAIN, true);
+		else SubmitMesh (n, JOB_PLAIN, true);
 	}
 	// (the tiles the probe draws, without a mesh: plain ones, a few a frame)
-	for (const NodeKey &k : probeNeed) {
-		if (plain.size () >= MAX_PLAIN_MESHES || plain.size () >= 4) break;
-		Node *n = Find (k.lvl, k.ilat, k.ilng);
-		if (!n || n->vbuf.buffer || n->drawn) continue;
-		plain.push_back ({ n, ElevSource (n), false });
+	{
+		int np = 0;
+		for (const NodeKey &k : probeNeed) {
+			if (np >= 4 || meshOutstanding >= queueMax) break;
+			Node *n = Find (k.lvl, k.ilat, k.ilng);
+			if (!n || n->vbuf.buffer || n->drawn || n->meshJob) continue;
+			SubmitMesh (n, JOB_PLAIN, false);
+			np++;
+		}
+		probeNeed.clear ();
 	}
-	probeNeed.clear ();
-	if (!plain.empty()) {
-		// (on the worker threads too: low and fast over the ground, a hundred
-		// or more a frame, ~1 ms each with the core's elevation and detail;
-		// one after another, most of the frame)
-		auto t0 = std::chrono::steady_clock::now ();
-		if (detail && !clouds) oapiSurfaceDetail (hPlanet, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0); // (initialised before the threads)
-		std::vector<MeshData> out (plain.size());
-		Workers::Get ().Run (plain.size(), [&](size_t i) { ComputeMesh (plain[i].n, plain[i].src, plain[i].detailed, out[i]); });
-		for (size_t i = 0; i < plain.size(); i++) ApplyMesh (plain[i].n, out[i]);
-		meshTime += std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ();
-		meshCount += (int)plain.size();
-		vkc::Stats ().meshPlain += (uint32_t)plain.size ();
+	if (!asyncMesh) { // (all of them now)
+		std::unique_lock<std::mutex> lk (meshMtx);
+		meshCv.wait (lk, [this] { return (int)meshDone.size () >= meshOutstanding.load (); });
 	}
-	if (!jobs.empty() && gpu) {
-		// the inputs per grid point (worker threads), then one dispatch
-		oapiSurfaceDetail (hPlanet, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0);
-		auto t0 = std::chrono::steady_clock::now();
-		std::vector<GpuJob> gj (jobs.size());
-		std::vector<std::vector<float>> pts (jobs.size());
-		std::vector<MeshData> md (jobs.size());
-		Workers::Get ().Run (jobs.size(), [&](size_t i) { PrepareGpuMesh (jobs[i].first, jobs[i].second, gj[i], pts[i], md[i]); });
+
+	// the finished meshes: the CPU's uploaded within the budget, the GPU's
+	// (their inputs) dispatched at once, up to MAX_GPU_APPLY
+	std::deque<MeshResult> got;
+	{
+		std::lock_guard<std::mutex> lk (meshMtx);
+		got.swap (meshDone);
+	}
+	std::deque<MeshResult> later;
+	std::vector<MeshResult*> gpuJobs;
+	auto t0 = std::chrono::steady_clock::now ();
+	int nPlain = 0;
+	for (MeshResult &r : got) {
+		Node *n = Find (r.job.geo.lvl, r.job.geo.ilat, r.job.geo.ilng);
+		if (!n || n->meshJob != r.job.gen) { meshOutstanding--; continue; } // (released meanwhile, or asked again)
+		if (r.job.kind == JOB_GPU) {
+			if (gpuJobs.size () >= MAX_GPU_APPLY) { later.push_back (std::move (r)); continue; }
+			gpuJobs.push_back (&r);
+			continue;
+		}
+		if (asyncMesh && nPlain >= 4 && std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count () > applyMs) {
+			later.push_back (std::move (r));
+			continue;
+		}
+		ApplyMesh (n, r.md);
+		n->meshJob = 0;
+		meshOutstanding--;
+		nPlain++;
+	}
+	vkc::Stats ().meshPlain += nPlain;
+	if (!gpuJobs.empty ()) {
+		// the inputs per grid point (made on the workers), then one dispatch
 		size_t nf = 0;
-		for (auto &p : pts) nf += p.size();
+		for (MeshResult *r : gpuJobs) nf += r->pts.size ();
 		vkc::Context::Transient tp = ctx->AllocTransient (nf * sizeof(float));
-		vkc::Context::Transient tj = ctx->AllocTransient (jobs.size() * sizeof(GpuJob) + 32);
+		vkc::Context::Transient tj = ctx->AllocTransient (gpuJobs.size () * sizeof(GpuJob) + 32);
 		VkDeviceAddress pa = ctx->BufferAddress (tp.buffer) + tp.offset;
 		VkDeviceAddress ja = ctx->BufferAddress (tj.buffer) + tj.offset;
 		size_t jalign = (size_t)((16 - (ja & 15)) & 15); // (the records: 16-byte aligned)
 		ja += jalign;
 		size_t at = 0;
-		for (size_t i = 0; i < jobs.size(); i++) {
-			Node *n = jobs[i].first;
+		std::vector<GpuJob> gj (gpuJobs.size ());
+		for (size_t i = 0; i < gpuJobs.size (); i++) {
+			MeshResult &r = *gpuJobs[i];
+			Node *n = Find (r.job.geo.lvl, r.job.geo.ilat, r.job.geo.ilng);
 			EnsureVertexBuffer (n);
-			memcpy ((float*)tp.ptr + at, pts[i].data(), pts[i].size() * sizeof(float));
+			gj[i] = r.gj;
+			memcpy ((float*)tp.ptr + at, r.pts.data (), r.pts.size () * sizeof(float));
 			gj[i].ptsAddr = pa + at * sizeof(float);
 			gj[i].outAddr = ctx->BufferAddress (n->vbuf.buffer);
 			gj[i].errAddr = ctx->BufferAddress (errBuf[slot].buffer) + i * 8 * sizeof(float);
-			at += pts[i].size();
-			n->detailSpacing = md[i].detailSpacing, n->detailLmesh = md[i].detailLmesh;
+			at += r.pts.size ();
+			n->detailSpacing = r.md.detailSpacing, n->detailLmesh = r.md.detailLmesh;
 			n->nVtx = (uint32_t)((TileRenderer::GRID + 1) * (TileRenderer::GRID + 1) + 4 * (TileRenderer::GRID + 1));
 			n->rtVersion++;
-			n->meshElevLvl = md[i].elevLvl;
+			n->meshElevLvl = r.md.elevLvl;
 			n->meshDetailed = true;
 			for (float &e : n->decErr) e = 1e30f; // (until read back)
 			errPending[slot].push_back ({ n->lvl, n->ilat, n->ilng, n->rtVersion });
+			n->meshJob = 0;
+			meshOutstanding--;
 		}
-		memcpy ((uint8_t*)tj.ptr + jalign, gj.data(), gj.size() * sizeof(GpuJob));
+		memcpy ((uint8_t*)tj.ptr + jalign, gj.data (), gj.size () * sizeof(GpuJob));
 		// (ORBITER_VK_MESH_CHECK: the first meshes also made at once into
 		// host memory and compared with the CPU's)
 		static const int checkArg = getenv ("ORBITER_VK_MESH_CHECK") ? atoi (getenv ("ORBITER_VK_MESH_CHECK")) : 0;
 		static const bool check = checkArg != 0;
 		static int nChecked = 0;
-		for (size_t i = 0; check && i < jobs.size() && nChecked < 24; i++) {
-			if (checkArg > 1 && jobs[i].first->lvl < checkArg) continue; // (n > 1: only the levels from n)
-			if (jobs[i].first->lvl < 14 && nChecked % 3) continue;
+		for (size_t i = 0; check && i < gpuJobs.size () && nChecked < 24; i++) {
+			const MeshJob &job = gpuJobs[i]->job;
+			if (checkArg > 1 && job.geo.lvl < checkArg) continue; // (n > 1: only the levels from n)
+			if (job.geo.lvl < 14 && nChecked % 3) continue;
 			nChecked++;
 			const int V = TileRenderer::GRID + 1, NV = V * V + 4 * V;
 			vkc::Buffer hb = ctx->CreateBuffer ((VkDeviceSize)NV * 14 * sizeof(float), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true);
@@ -1636,9 +1778,9 @@ void PlanetSurface::Prepare ()
 				vkCmdDispatch (c, 1, 1, 1);
 			});
 			MeshData cpu;
-			ComputeMesh (jobs[i].first, jobs[i].second, true, cpu);
+			ComputeMesh (&job.geo, job.hasSrc ? &job.src : nullptr, job.hasPsrc ? &job.psrc : nullptr, true, cpu);
 			const float *g = (const float*)hb.mapped;
-			double dp = 0.0, dn = 0.0, dt = 0.0, da = 0.0, relief = 0.0;
+			double dp = 0.0, dn = 0.0, dt = 0.0, da = 0.0;
 			for (int k = 0; k < NV; k++) {
 				const NTVERTEX &v = cpu.vtx[k];
 				const float *w = g + 8 * k;
@@ -1650,7 +1792,7 @@ void PlanetSurface::Prepare ()
 				dt = std::max (dt, (double)std::max ({ std::fabs (e[3] - c[3]), std::fabs (e[4] - c[4]), std::fabs (e[5] - c[5]) }));
 			}
 			oapiWriteLogV ("VulkanClient: mesh check level %d: position %.4f m, normal %.5f, morph target %.4f m, detail stream %.5f",
-				jobs[i].first->lvl, dp, dn, dt, da);
+				job.geo.lvl, dp, dn, dt, da);
 			ctx->DestroyBuffer (hb);
 		}
 		VkCommandBuffer cmd = ctx->Cmd ();
@@ -1674,27 +1816,23 @@ void PlanetSurface::Prepare ()
 		pc.prm3[2] = (float)detailPrm.pebbleBevel, pc.prm3[3] = (float)detailPrm.pebbleTilt;
 		SitePush (detailPrm, pc.prm4, pc.prm5, pc.prm6);
 		vkCmdPushConstants (cmd, tr->MeshLayout (), VK_SHADER_STAGE_COMPUTE_BIT, 0, 112, &pc);
-		vkCmdDispatch (cmd, (uint32_t)jobs.size(), 1, 1);
+		vkCmdDispatch (cmd, (uint32_t)gpuJobs.size (), 1, 1);
 		mb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 		mb.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
 		mb.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 		mb.dstAccessMask = VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_SHADER_READ_BIT |
 			(ctx->rayTracing ? VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR : 0);
 		vkCmdPipelineBarrier2 (cmd, &dep);
-		meshTime += std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ();
-		meshCount += (int)jobs.size();
-		vkc::Stats ().meshGpu += (uint32_t)jobs.size ();
-	} else if (!jobs.empty()) {
-		// (the core's terrain detail initialises itself on first use: here)
-		oapiSurfaceDetail (hPlanet, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0);
-		std::vector<MeshData> out (jobs.size());
-		auto t0 = std::chrono::steady_clock::now ();
-		Workers::Get ().Run (jobs.size(), [&](size_t i) { ComputeMesh (jobs[i].first, jobs[i].second, true, out[i]); });
-		for (size_t i = 0; i < jobs.size(); i++) ApplyMesh (jobs[i].first, out[i]);
-		meshTime += std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ();
-		meshCount += (int)jobs.size();
-		vkc::Stats ().meshPlain += (uint32_t)jobs.size ();
+		vkc::Stats ().meshGpu += (uint32_t)gpuJobs.size ();
 	}
+	meshCount += nPlain + (int)gpuJobs.size ();
+	meshTime += std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ();
+	if (!later.empty ()) { // (the rest next frame, first)
+		std::lock_guard<std::mutex> lk (meshMtx);
+		for (auto it = later.rbegin (); it != later.rend (); ++it) meshDone.push_front (std::move (*it));
+	}
+	vkc::Stats ().meshApplied += nPlain + (uint32_t)gpuJobs.size ();
+	vkc::Stats ().meshPending += (uint32_t)std::max (0, meshOutstanding.load ());
 	// (ORBITER_VK_TILE_DEBUG: the deepest tiles drawn and the deepest surface
 	// and elevation data among them)
 	static const bool debug = getenv ("ORBITER_VK_TILE_DEBUG") && atoi (getenv ("ORBITER_VK_TILE_DEBUG"));
@@ -1747,6 +1885,48 @@ void PlanetSurface::Prepare ()
 	}
 }
 
+bool PlanetSurface::Busy () const
+{
+	// (tiles still to come for the view: their data, meshes, or children to replace them)
+	return pendingLoads > 0 || meshOutstanding > 0 || needMeshes > 0 || !buildList.empty ();
+}
+
+std::string PlanetSurface::BusyText () const
+{
+	char b[160];
+	snprintf (b, sizeof (b), "loads %zu, meshes %d, needing %d, children waiting %zu, drawn %zu",
+		(size_t)pendingLoads, meshOutstanding.load (), needMeshes, buildList.size (), drawList.size ());
+	return b;
+}
+
+bool PlanetSurface::SubmitMesh (Node *n, JobKind kind, bool detailed)
+{
+	MeshJob job;
+	job.gen = ++meshGen;
+	job.kind = kind;
+	job.detailed = detailed;
+	job.geo = GeoOf (n);
+	const Node *src = ElevSource (n), *psrc = n->parent ? ElevSource (n->parent) : nullptr;
+	job.hasSrc = src != nullptr, job.hasPsrc = psrc != nullptr;
+	if (src) job.src = SrcOf (src);
+	if (psrc) job.psrc = SrcOf (psrc);
+	n->meshJob = job.gen;
+	meshOutstanding++;
+	tr->Meshers ().Push (this, [this, job] () {
+		MeshResult r;
+		r.job = job;
+		const ElevSrc *s = job.hasSrc ? &job.src : nullptr, *ps = job.hasPsrc ? &job.psrc : nullptr;
+		if (job.kind == JOB_GPU) PrepareGpuMesh (&job.geo, s, ps, r.gj, r.pts, r.md);
+		else ComputeMesh (&job.geo, s, ps, job.detailed, r.md);
+		{
+			std::lock_guard<std::mutex> lk (meshMtx);
+			meshDone.push_back (std::move (r));
+		}
+		meshCv.notify_all ();
+	});
+	return true;
+}
+
 void PlanetSurface::RenderDepth ()
 {
 	// into the ambient occlusion prepass (bound by the caller)
@@ -1772,7 +1952,7 @@ void PlanetSurface::GatherDrawn (Node *n, std::vector<Node*> &out) const
 	for (auto &c : n->child) if (c) GatherDrawn (c.get(), out);
 }
 
-void PlanetSurface::AddRTClusters (Node *n, RTScene *rt)
+void PlanetSurface::AddRTClusters (Node *n, RTScene *rt, bool churn)
 {
 	// Each tile an instance of its own: their boxes overlap (most of all the
 	// slivers about a pole, all reaching it), and long rays (the sun's, low
@@ -1788,7 +1968,7 @@ void PlanetSurface::AddRTClusters (Node *n, RTScene *rt)
 	constexpr uint64_t RT_CHURN = 60;
 	if (n->lastUsed != frame || !n->rtTris) return;
 	if (n->rtTris > RT_CLUSTER && !n->drawn) {
-		for (auto &c : n->child) if (c) AddRTClusters (c.get(), rt);
+		for (auto &c : n->child) if (c) AddRTClusters (c.get(), rt, churn);
 		return;
 	}
 	if (!n->drawn && n->rtTris > RT_CLUSTER / 16) {
@@ -1799,7 +1979,10 @@ void PlanetSurface::AddRTClusters (Node *n, RTScene *rt)
 			sig = (sig ^ (t->vbuf.buffer ? t->rtId * 0x9E3779B97F4A7C15ull + t->rtVersion : 0x5bd1e995ull)) * 1099511628211ull;
 		if (sig != n->rtSig) n->rtSig = sig, n->rtChanged = frame;
 		if (frame - n->rtChanged < RT_CHURN) {
-			for (auto &c : n->child) if (c) AddRTClusters (c.get(), rt);
+			// (the smaller clusters of a churning region: built for speed,
+			// ORBITER_VK_RT_FAST_CHURN=0: not; they are rebuilt often)
+			static const bool fast = !getenv ("ORBITER_VK_RT_FAST_CHURN") || atoi (getenv ("ORBITER_VK_RT_FAST_CHURN")) != 0;
+			for (auto &c : n->child) if (c) AddRTClusters (c.get(), rt, fast);
 			return;
 		}
 	}
@@ -1826,7 +2009,7 @@ void PlanetSurface::AddRTClusters (Node *n, RTScene *rt)
 	if (parts.empty()) return;
 	if (!n->rtCluster) n->rtCluster = RTNewGeometryId ();
 	rt->AddCluster (n->rtCluster, parts.data(), reinterpret_cast<const float (*)[3]> (ofs.data()), (uint32_t)parts.size(),
-		scene->ModelView (ppos + mul (prot, n->centre), prot));
+		scene->ModelView (ppos + mul (prot, n->centre), prot), churn);
 }
 
 void PlanetSurface::RenderShadow (ShadowMap &sm)
@@ -1996,7 +2179,7 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 		// vessel on the ground (whichever is closer)
 		// (by the size the split goes by: near a pole, a sliver's length would
 		// put the morph far beyond its coarser neighbours, leaving cracks)
-		double D = SplitSize (n->parent) * n->parent->pixPerRad / splitPixels;
+		double D = SplitSize (n->parent) * n->parent->pixPerRad / splitEff;
 		pc.morph[0] = (float)(0.7 * D);
 		pc.morph[1] = (float)(1.0 / (0.2 * D));
 	}

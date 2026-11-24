@@ -255,12 +255,12 @@ void RTScene::AddInstance (const Part *parts, uint32_t nParts, const Mat4 &model
 	Add (0, parts, nullptr, nParts, modelView);
 }
 
-void RTScene::AddCluster (uint64_t key, const Part *parts, const float (*offsets)[3], uint32_t nParts, const Mat4 &modelView)
+void RTScene::AddCluster (uint64_t key, const Part *parts, const float (*offsets)[3], uint32_t nParts, const Mat4 &modelView, bool fastBuild)
 {
-	Add (key, parts, offsets, nParts, modelView);
+	Add (key, parts, offsets, nParts, modelView, fastBuild);
 }
 
-void RTScene::Add (uint64_t key, const Part *parts, const float (*offsets)[3], uint32_t nParts, const Mat4 &modelView)
+void RTScene::Add (uint64_t key, const Part *parts, const float (*offsets)[3], uint32_t nParts, const Mat4 &modelView, bool fastBuild)
 {
 	if (!ctx || nInst >= MAX_INSTANCES || !nParts || nRec + nParts > MAX_RECORDS) return;
 	if (offsets && nXform + nParts > MAX_RECORDS) return;
@@ -304,6 +304,7 @@ void RTScene::Add (uint64_t key, const Part *parts, const float (*offsets)[3], u
 	if (!b.as) {
 		BlasBuild bb;
 		bb.b = &b;
+		bb.flags = fastBuild ? VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR : VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
 		Frame &f = frames[ctx->FrameIndex()];
 		for (auto &s : src) {
 			const Geometry &g = s.p->geo;
@@ -331,7 +332,7 @@ void RTScene::Add (uint64_t key, const Part *parts, const float (*offsets)[3], u
 		}
 		VkAccelerationStructureBuildGeometryInfoKHR bi{VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
 		bi.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-		bi.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+		bi.flags = bb.flags;
 		bi.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
 		bi.geometryCount = (uint32_t)bb.geoms.size();
 		bi.pGeometries = bb.geoms.data();
@@ -420,7 +421,7 @@ void RTScene::Build ()
 			auto &bi = infos[i];
 			bi = { VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR };
 			bi.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-			bi.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+			bi.flags = builds[i].flags;
 			bi.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
 			bi.geometryCount = (uint32_t)builds[i].geoms.size();
 			bi.pGeometries = builds[i].geoms.data();

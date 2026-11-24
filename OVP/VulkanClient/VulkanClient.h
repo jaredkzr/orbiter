@@ -151,6 +151,11 @@ private:
 	bool frameActive = false; // a frame is being recorded
 	bool windowShown = false;
 	void ShowWindow ();
+	/// The loading's hold: before the session's first frame, frames that
+	/// stream the view's tiles, cities and scatter (the simulation held)
+	/// until they are in, at most ORBITER_VK_WARMUP_S (default 3; 0: none)
+	void WarmUp ();
+	bool warmedUp = false;
 	void ApplyVideoMode ();
 	void CaptureBackbuffer (const std::string &path, bool async = false);
 	std::vector<std::future<void>> writers; // image files being written
