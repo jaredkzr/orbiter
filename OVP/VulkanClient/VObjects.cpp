@@ -3572,11 +3572,8 @@ VPlanet::VPlanet (OBJHANDLE h, Scene *s, bool star)
 		atmosphere = std::make_unique<Atmosphere> (hObj, scene);
 		surface = PlanetSurface::Create (hObj, scene);
 		if (surface) clouds = PlanetSurface::Create (hObj, scene, true);
-		atmosphere->SetGround (surface ? surface->RootTexture (0) : nullptr, surface ? surface->RootTexture (1) : nullptr, colour);
-		if (clouds) {
-			const double *alt = (const double*)oapiGetObjectParam (hObj, OBJPRM_PLANET_CLOUDALT);
-			atmosphere->SetClouds (clouds->RootTexture (0), clouds->RootTexture (1), alt ? *alt : 0.0);
-		}
+		// (the atmosphere's ground and clouds: at the first Update, the
+		// roots of a procedural surface made meanwhile with the other planets')
 		LoadLegacyTextures ();
 	}
 }
@@ -4560,6 +4557,14 @@ void VPlanet::UpdateBases ()
 
 void VPlanet::Update ()
 {
+	if (atmosphere && !groundSet) {
+		groundSet = true;
+		atmosphere->SetGround (surface ? surface->RootTexture (0) : nullptr, surface ? surface->RootTexture (1) : nullptr, colour);
+		if (clouds) {
+			const double *alt = (const double*)oapiGetObjectParam (hObj, OBJPRM_PLANET_CLOUDALT);
+			atmosphere->SetClouds (clouds->RootTexture (0), clouds->RootTexture (1), alt ? *alt : 0.0);
+		}
+	}
 	VObject::Update ();
 	if (!isStar) UpdateBases ();
 	if (surface) surface->Update ();
