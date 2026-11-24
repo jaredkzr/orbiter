@@ -27,6 +27,7 @@ layout(push_constant) uniform Params {
 	float aoMaxDist;  // ambient occlusion fades out up to this view depth [m]
 	float sunRadius;  // angular radius of the sun [rad]
 	float nLights;    // local lights with shadows
+	float shadowCut;  // a local light bringing less light than this (scene units): no shadow ray (0: always one)
 } pc;
 
 vec3 ViewPos (vec2 pix, float z)

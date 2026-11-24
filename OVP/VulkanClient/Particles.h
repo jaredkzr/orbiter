@@ -22,6 +22,7 @@
 #include <string>
 #include <random>
 #include <vector>
+#include <functional>
 
 class VkTexture;
 class Scene;
@@ -367,6 +368,25 @@ private:
 	VkPipelineLayout blurLayout = VK_NULL_HANDLE;
 	VkPipeline thickPipe = VK_NULL_HANDLE, blurPipe = VK_NULL_HANDLE, screenCompPipe = VK_NULL_HANDLE;
 	VkPipeline drawBlend = VK_NULL_HANDLE; // (premultiplied; emissive: alpha 0)
+	// the sprites at half resolution (ORBITER_VK_SPRITES_HALF=0: at full
+	// resolution, as before): into images of their own, light and
+	// transmittance as the plumes' half-size pass (gpuparticle.frag HALF),
+	// composited over the scene by plume_comp.frag. rebindScene: the scene
+	// with the reactive mask bound again (Scene)
+	bool spritesHalf = true;
+	VkPipeline drawHalf = VK_NULL_HANDLE, sprCompPipe = VK_NULL_HANDLE;
+	VkPipelineLayout sprCompLayout = VK_NULL_HANDLE;
+	VkDescriptorSetLayout sprCompSetLayout = VK_NULL_HANDLE;
+	VkDescriptorPool sprCompPool = VK_NULL_HANDLE;
+	VkDescriptorSet sprCompSet = VK_NULL_HANDLE;
+	vkc::Image sprColor, sprMask, sprDepth;
+	VkExtent2D sprExtent{};
+	uint32_t sprGen = ~0u;
+	VkImageView sprCompPrepass = VK_NULL_HANDLE;
+	void EnsureSpriteHalf ();
+public:
+	std::function<void()> rebindScene;
+private:
 	static constexpr uint32_t MAX_EMISSIONS = 16384;
 	// telemetry (ORBITER_VK_PARTICLE_STATS = seconds between log lines; off: 0)
 	struct Stats {

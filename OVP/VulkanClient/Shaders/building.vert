@@ -34,6 +34,8 @@ layout(location = 7) flat out uvec2 vBits;
 layout(location = 8) flat out vec3 vUpView;   // the building's up (view)
 layout(location = 9) flat out float vFade;    // 1: drawn, 0: gone (dithered between)
 
+invariant gl_Position; // (the scene's depth starts as the prepass's: the same surfaces at the same depths, Scene::RenderPrepass)
+
 void main()
 {
 	mat4 M = BuildingFrame();

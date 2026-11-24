@@ -32,7 +32,10 @@ public:
 	OBJHANDLE Handle () const { return hObj; }
 	virtual void Update ();
 	virtual void Render (RenderPass pass) = 0;
-	virtual void RenderSky () {}
+	/// its sky: SKY_UPDATE its uniforms (before the scene that uses them),
+	/// SKY_DRAW the pass (where nothing is drawn, after the opaque scene)
+	enum { SKY_UPDATE = 1, SKY_DRAW = 2 };
+	virtual void RenderSky (int parts = SKY_UPDATE | SKY_DRAW) {}
 	/// work before the frame's rendering scopes (data uploads)
 	virtual void PrepareFrame () {}
 	virtual void RenderShadow (ShadowMap &sm) {}
@@ -404,7 +407,7 @@ public:
 	~VPlanet ();
 	void Update () override;
 	void Render (RenderPass pass) override;
-	void RenderSky () override;
+	void RenderSky (int parts = SKY_UPDATE | SKY_DRAW) override;
 	/// its sky is drawn: how far from the camera its air reaches [m] (else 0)
 	double SkyReach () const;
 	/// its sky over the bodies beyond its air drawn since RenderSky (Scene::Render)

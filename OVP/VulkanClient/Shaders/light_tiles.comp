@@ -1,0 +1,72 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// The local lights that may reach each 16 x 16 pixel tile of the view
+// (Scene::BuildLightTiles): the depth range of the tile's prepass
+// geometry, and the lights whose range (a sphere) meets the part of the
+// tile's frustum within it. The surface shaders loop over those only where
+// their fragment lies in that range (lights.glsl LocalLighting; elsewhere
+// all of them): a light left out is beyond its range there, so the light
+// they sum is the same.
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+#include "frame.glsl"
+
+layout(std430, set = 0, binding = 12) writeonly buffer LightTiles { uvec4 lightTiles[]; }; // light bits 0-31, 32-63, depth range [m] (z0 > z1: none)
+layout(set = 1, binding = 0) uniform sampler2D prepass; // view depth (w; 0: none)
+
+layout(push_constant) uniform Params { ivec2 size; int tilesX; } pc;
+
+shared float sMin[256], sMax[256];
+shared uint sMask[2];
+
+void main ()
+{
+	ivec2 p = ivec2 (gl_GlobalInvocationID.xy);
+	uint li = gl_LocalInvocationIndex;
+	float z = all (lessThan (p, pc.size)) ? texelFetch (prepass, p, 0).w : 0.0;
+	sMin[li] = z > 0.0 ? z : 1e30;
+	sMax[li] = z > 0.0 ? z : -1e30;
+	if (li < 2u) sMask[li] = 0u;
+	barrier ();
+	for (uint s = 128u; s > 0u; s >>= 1) {
+		if (li < s) {
+			sMin[li] = min (sMin[li], sMin[li + s]);
+			sMax[li] = max (sMax[li], sMax[li + s]);
+		}
+		barrier ();
+	}
+	// (margins: the colour pass's interpolated depths, the lights' ranges)
+	float z0 = sMin[0] * 0.999 - 0.01, z1 = sMax[0] * 1.001 + 0.01;
+	bool any_ = sMax[0] > 0.0;
+	int n = min (int (frame.lightCount.x), MAX_LIGHTS);
+	if (any_ && int (li) < n) {
+		LocalLight l = frame.lights[li];
+		bool in_ = true;
+		if (l.dir.w < 2.5) { // (a star: its direction, everywhere)
+			vec3 c = l.pos.xyz;
+			float r = l.pos.w * 1.001 + 0.01;
+			in_ = c.z + r >= z0 && c.z - r <= z1;
+			// the tile's sides (a pixel's margin): clip.x >= a0 clip.w etc.
+			ivec2 t0 = ivec2 (gl_WorkGroupID.xy) * 16;
+			vec2 lo = (vec2 (t0) - 1.0) / vec2 (pc.size) * 2.0 - 1.0, hi = (vec2 (t0 + 16) + 1.0) / vec2 (pc.size) * 2.0 - 1.0;
+			vec4 rx = vec4 (frame.proj[0][0], frame.proj[1][0], frame.proj[2][0], frame.proj[3][0]);
+			vec4 ry = vec4 (frame.proj[0][1], frame.proj[1][1], frame.proj[2][1], frame.proj[3][1]);
+			vec4 rw = vec4 (frame.proj[0][3], frame.proj[1][3], frame.proj[2][3], frame.proj[3][3]);
+			vec4 pl[4] = vec4[4] (rx - lo.x * rw, hi.x * rw - rx, ry - lo.y * rw, hi.y * rw - ry);
+			for (int k = 0; k < 4 && in_; k++)
+				in_ = dot (pl[k].xyz, c) + pl[k].w >= -r * length (pl[k].xyz);
+		}
+		if (in_) atomicOr (sMask[li >> 5], 1u << (li & 31u));
+	}
+	barrier ();
+	if (li == 0u) {
+		uvec2 t = gl_WorkGroupID.xy;
+		lightTiles[t.y * uint (pc.tilesX) + t.x] = any_ ? uvec4 (sMask[0], sMask[1], floatBitsToUint (z0), floatBitsToUint (z1))
+			: uvec4 (0u, 0u, floatBitsToUint (1.0), floatBitsToUint (0.0));
+	}
+}

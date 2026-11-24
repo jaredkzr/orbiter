@@ -15,6 +15,10 @@
 layout(set = 1, binding = 0) uniform sampler2D prepass;    // view depth (w; 0: none)
 #define PLUME_SET 1
 #define PLUME_BINDING 1
+// (0: an attitude thruster's jet meeting a surface marched through all its
+// box, as before: ORBITER_VK_PLUME_SKIP=0, for tests; Plumes.cpp)
+layout(constant_id = 0) const int SKIP_ON = 1;
+#define PLUME_SKIP_ON SKIP_ON
 #include "plume.glsl"
 layout(set = 2, binding = 0) uniform sampler2D exhaustTex; // add-on exhaust texture (tint)
 #define ATM_SET 3

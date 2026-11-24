@@ -5,6 +5,7 @@
 #include "GfxSettings.h"
 #include "OrbiterAPI.h"
 #include <cstdlib>
+#include <algorithm>
 #include <vector>
 
 #include "rtlight_trace.comp.h"
@@ -15,6 +16,7 @@ namespace {
 	struct Params { // must match rtlight.glsl
 		float focal[2], size[2], jitter[2];
 		float frame, reset, aoRadius, aoMaxDist, sunRadius, nLights;
+		float shadowCut; // (a light's displayed light below which its shadow ray is left out; 0: none)
 	};
 	constexpr VkAccessFlags2 RW = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
 
@@ -38,6 +40,7 @@ bool RTLighting::Init (vkc::Context *c, VkDescriptorSetLayout frame, VkDescripto
 	if (!vkc::Gfx ().rtLighting) return false; // (ORBITER_VK_RT_LIGHTING=0: off)
 	ctx = c;
 	if (const char *e = getenv ("ORBITER_VK_AO_RADIUS")) aoRadius = (float)atof (e);
+	if (const char *e = getenv ("ORBITER_VK_FLAME_REACH")) shadowCut = (float)atof (e);
 
 	VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
 	sci.magFilter = sci.minFilter = VK_FILTER_NEAREST;
@@ -69,6 +72,8 @@ bool RTLighting::Init (vkc::Context *c, VkDescriptorSetLayout frame, VkDescripto
 	VK_CHECK(vkCreatePipelineLayout (ctx->device, &plci, nullptr, &traceLayout));
 	plci.setLayoutCount = 1;
 	VK_CHECK(vkCreatePipelineLayout (ctx->device, &plci, nullptr, &layout));
+	// (tests: another seed of the rays' noise, for the floor of image comparisons)
+	if (const char *e = getenv ("ORBITER_VK_RTL_SEED")) frameNo = (uint32_t)atoi (e);
 	auto compute = [this](const unsigned char *code, size_t size, VkPipelineLayout l) {
 		VkShaderModule cs = ctx->CreateShaderModule (code, size);
 		VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
@@ -208,7 +213,8 @@ void RTLighting::Compute (VkDescriptorSet frameSet, VkDescriptorSet rtSet, VkDes
 	VkCommandBuffer cmd = ctx->Cmd();
 	cur = 1 - cur;
 	Params p{ { fx, fy }, { (float)extent.width, (float)extent.height }, { jitter[0], jitter[1] },
-		(float)(frameNo++ & 0xffff), (reset || !historyValid) ? 1.0f : 0.0f, aoRadius, aoMaxDist, sunRadius, (float)SHADOWED_LIGHTS };
+		(float)(frameNo++ & 0xffff), (reset || !historyValid) ? 1.0f : 0.0f, aoRadius, aoMaxDist, sunRadius, (float)SHADOWED_LIGHTS,
+		shadowCut > 0.0f ? shadowCut / std::max (exposure, 1e-12f) : 0.0f };
 	historyValid = true;
 	const VkPipelineStageFlags2 CS = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 	// the previous frame's passes and scene shaders are done with the images

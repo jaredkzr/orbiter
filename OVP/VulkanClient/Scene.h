@@ -454,8 +454,28 @@ private:
 	vkc::Buffer frameUbo[vkc::FRAMES_IN_FLIGHT];
 	VkDescriptorSet probeFrameSet[vkc::FRAMES_IN_FLIGHT] = {};
 	vkc::Buffer probeFrameUbo[vkc::FRAMES_IN_FLIGHT];
+	// the local lights that may reach each 16 x 16 pixel tile (frame set
+	// binding 12; light_tiles.comp), built after the prepass
+	static constexpr uint32_t LIGHT_TILE = 16, LIGHT_TILES_MAX = 512 * 512;
+	vkc::Buffer lightTileBuf[vkc::FRAMES_IN_FLIGHT];
+	VkDescriptorSetLayout lightTileSetLayout = VK_NULL_HANDLE;
+	VkDescriptorPool lightTilePool = VK_NULL_HANDLE;
+	VkDescriptorSet lightTileSet = VK_NULL_HANDLE;
+	VkSampler lightTileSampler = VK_NULL_HANDLE;
+	VkImageView lightTilePrepass = VK_NULL_HANDLE;
+	VkPipelineLayout lightTileLayout = VK_NULL_HANDLE;
+	VkPipeline lightTilePipe = VK_NULL_HANDLE;
+	bool lightTilesOn = false; // (this frame's: FillFrameUniforms)
+	bool LightTilesWanted () const;
+	void BuildLightTiles ();
 	std::unique_ptr<class EnvProbe> probe;
 	bool inProbe = false, probeEnabled = true;
+	// the prepass's draws of the cities' buildings, kept until the scene's
+	// depth has been copied from it (RenderPrepass: the buildings fading
+	// out are dithered in the colour pass, whole in the prepass)
+	struct DeferredBuildings { VkBuffer vb, ib, inst; VkDeviceSize instOfs; uint32_t firstIndex, nIndex, count; VkDescriptorSet atmSet; float pr[40]; };
+	std::vector<DeferredBuildings> deferredBuildings;
+	bool deferBuildings = false;
 	double softSunRadius = 0.0; // C3: angular radius of the light's apparent source under an overcast (0: none; the RT sun cone)
 	int probeFace = 0, probeFacesDone = 0;
 	OBJHANDLE probeTarget = nullptr;

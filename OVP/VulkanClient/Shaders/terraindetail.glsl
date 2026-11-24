@@ -15,6 +15,20 @@
 // Site-scale materials (F3) compiled in: the tile pipeline variant for worlds with them
 // (specialization constant; the default variant has the whole site path folded away)
 layout(constant_id = 0) const bool SITE_MATERIALS = false;
+// Parts of the terrain shading left out (ORBITER_VK_TILE_PARTS_OFF, a bit mask:
+// diagnostics, to time them; PlanetSurface.cpp lists the bits)
+layout(constant_id = 1) const int PARTS_OFF = 0;
+bool PartOn (int bit) { return (PARTS_OFF & bit) == 0; }
+// Cheaper far detail (a look trade, ORBITER_VK_FAR_DETAIL=<m>; 0: off, the
+// default): where a pixel spans more than FAR_CUT m of ground the terrain
+// detail fades out, gone at twice that (not evaluated there)
+layout(constant_id = 2) const float FAR_CUT = 0.0;
+// Cheaper far mottling (on by default; ORBITER_VK_MOTTLE_QUAD=0: off): each
+// pixel of a 2 x 2 quad evaluates one of the three octaves at its own point
+// and takes the other two from its neighbours in the quad
+// (the octaves' wavelengths are 16 to 256 m, faded out below some 3 to 5
+// pixels: a pixel's offset changes them little)
+layout(constant_id = 3) const bool MOTTLE_QUAD = true;
 
 struct DetailSample {
 	vec3 grad;     // gradient, planet frame [m/m]
@@ -120,7 +134,7 @@ DetailSample TerrainDetailEval (DetPoint pt, vec3 d, float A, float fade, float 
 	ds.grad = vec3 (0.0), ds.height = 0.0, ds.albedo = 1.0, ds.shadow = 1.0;
 	int j1 = min (20, int (floor (log2 (spacing))));
 	// noise octaves
-	for (int j = j1; j >= DET_JMIN && A > 0.0; j--) {
+	for (int j = j1; j >= DET_JMIN && A > 0.0 && PartOn (1); j--) {
 		float lambda = exp2 (float (j));
 		float wA = 1.0 - smoothstep (0.15, 0.35, footprint / lambda); // (craters down to 3 to 7 pixels) // (5 to 12 pixels: no aliasing, no grain)
 		if (wA <= 0.0) break;
@@ -148,7 +162,7 @@ DetailSample TerrainDetailEval (DetPoint pt, vec3 d, float A, float fade, float 
 	// against the mesh, as TerrainDetail.cpp)
 	const float CRATER_D = 0.22, CRATER_G = 0.1;
 	int k1 = min (16, int (floor (log2 (spacing / CRATER_D))));
-	for (int k = k1; k >= -2 && density > 0.0 && fade > 0.0; k--) {
+	for (int k = k1; k >= -2 && density > 0.0 && fade > 0.0 && PartOn (2); k--) {
 		float s = exp2 (float (k)), lambda = CRATER_D * s, lg = CRATER_G * s;
 		float wA = 1.0 - smoothstep (0.15, 0.35, footprint / lambda); // (craters down to 3 to 7 pixels)
 		if (wA <= 0.0) break;
@@ -351,11 +365,24 @@ DetPoint DetPixelPoint (vec3 posView, out vec3 d)
 // the ground [m] (stretched at grazing angles)
 float DetFarMottle (vec3 posView, float footprint, float amp)
 {
-	if (amp <= 0.0) return 1.0;
+	if (amp <= 0.0 || !PartOn (32)) return 1.0;
 	vec3 d;
 	DetPoint pt = DetPixelPoint (posView, d);
 	float m = 0.0;
 	const float W[3] = float[3] (0.5, 0.35, 0.25);
+	if (MOTTLE_QUAD) {
+		// (in uniform control flow: the caller's branch is per tile)
+		uint q = gl_SubgroupInvocationID & 3u;
+		int k = q == 3u ? 0 : int (q); // (the quad's fourth pixel: the widest octave, its own)
+		ivec3 cell, p; vec3 sg;
+		vec3 f = DetLattice (231 + k, pt, 8 - 2 * k, cell, p, sg);
+		float n = DetNoise (cell, f, 9300u + uint (k)).w;
+		float o[3] = float[3] (subgroupQuadBroadcast (n, 0u), subgroupQuadBroadcast (n, 1u), subgroupQuadBroadcast (n, 2u));
+		o[k] = n;
+		for (int i = 0; i < 3; i++)
+			m += W[i] * (1.0 - smoothstep (0.12, 0.3, footprint / exp2 (float (8 - 2 * i)))) * o[i];
+		return max (1.0 + amp * m, 0.5);
+	}
 	for (int i = 0; i < 3; i++) {
 		int e = 8 - 2 * i;
 		float v = 1.0 - smoothstep (0.12, 0.3, footprint / exp2 (float (e)));
@@ -488,6 +515,7 @@ void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec3 Af
 	// pixel size [m] (stretched along the view at grazing angles)
 	float footprint = dist * 2.0 * atm.misc.z / max (frame.jitter.w, 1.0)
 		/ max (abs (dot (posView / dist, Nv)), 0.1);
+	float farW = FAR_CUT > 0.0 ? 1.0 - smoothstep (FAR_CUT, 2.0 * FAR_CUT, footprint) : 1.0;
 	// (the mesh's band reaches twice as far when morphed to the parent's)
 	// site materials: the weights of the coarse, fine and flat material (the ground share
 	// siteG and the land mask keep them off the sea, ice floes and snow)
@@ -508,13 +536,16 @@ void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec3 Af
 		siteSmooth = dot (sw, vec3 (atm.siteMat[2].z, atm.siteMat[5].z, atm.siteMat[8].z));
 		siteDens = DetSiteDensity (sw, st);
 	}
+	if (farW <= 0.0) return; // (FAR_CUT: no detail this far; the site materials' colours kept)
+	vec3 Nv0 = Nv, base0 = base;
+	float sunShadow0 = sunShadow, skyVis0 = skyVis;
 	DetailSample ds = TerrainDetailEval (pt, d, Af.x, Af.y, tile.detail.x, tile.detail.y * (1.0 + vMorph), tile.detail.z, footprint, atm.sunDir.xyz);
 	// pebbles: their slopes per pixel (the meshes have their shape, but
 	// normals of the ground under them), with crags on their faces; down
 	// to stones of a few pixels
 	// (all stones of two pixels and more: the meshes have the larger ones'
 	// shape, but not their slopes)
-	if (tile.morph.w > 0.0 && footprint < 0.03 && Af.y > 0.0 && pg > 0.0) {
+	if (tile.morph.w > 0.0 && footprint < 0.03 && Af.y > 0.0 && pg > 0.0 && PartOn (4)) {
 		// (site materials: the lattices fill in sequence, as DetPebbles)
 		int nl = site ? int (ceil (tile.morph.w * atm.sitePrm.w)) : int (ceil (tile.morph.w));
 		float P = tile.morph.w * siteDens;
@@ -549,7 +580,7 @@ void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec3 Af
 		ds.albedo *= mix (1.0, atm.pebPrm.x * (1.0 + atm.pebShape2.w * ts / max (hs, 1e-6)), smoothstep (0.001, 0.004, hs));
 	}
 	// grit: grains of a few mm (shading only, never in meshes or physics)
-	if (atm.pebPrm.y > 0.0 && footprint < 0.004 && Af.y > 0.0 && pg > 0.0) {
+	if (atm.pebPrm.y > 0.0 && footprint < 0.004 && Af.y > 0.0 && pg > 0.0 && PartOn (8)) {
 		float gc = 0.0, gt = 0.0;
 		for (int k = -5; k >= -6; k--) {
 			float s = exp2 (float (k));
@@ -571,7 +602,7 @@ void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec3 Af
 		ds.albedo *= mix (1.0, atm.pebPrm.x * (1.0 + atm.pebShape2.w * gt / max (gc, 1e-4)), 0.7 * smoothstep (0.15, 0.5, gc));
 	}
 	// desiccation cracks of the playas (shading only; the slopes of the rims)
-	if (playa > 0.0) {
+	if (playa > 0.0 && PartOn (16)) {
 		float alb = 1.0, ptone = 0.0;
 		for (int L = 0; L < 3; L++) {
 			float s = exp2 (float (PLAYA_K[L]));
@@ -603,4 +634,10 @@ void TerrainDetailShading (vec3 posView, inout vec3 Nv, inout vec3 base, vec3 Af
 	vec3 gv = transpose (v2p) * g; // view space
 	gv -= Nv * dot (gv, Nv);
 	Nv = normalize (Nv - gv);
+	if (farW < 1.0) {
+		Nv = normalize (mix (Nv0, Nv, farW));
+		base = mix (base0, base, farW);
+		sunShadow = mix (sunShadow0, sunShadow, farW);
+		skyVis = mix (skyVis0, skyVis, farW);
+	}
 }

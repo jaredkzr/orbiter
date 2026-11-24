@@ -42,6 +42,8 @@ layout(location = 2) out vec2 vUV;
 layout(location = 3) out vec3 vDetailA;
 layout(location = 4) out float vMorph;
 
+invariant gl_Position; // (the scene's depth starts as the prepass's: the same surfaces at the same depths, Scene::RenderPrepass)
+
 void main()
 {
 	// morph to the parent tile's shape with the distance (continuous level of detail)

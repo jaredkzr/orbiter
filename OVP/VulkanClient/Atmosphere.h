@@ -87,6 +87,16 @@ public:
 	VkPipeline SkyPipeline () const { return skyPipeline; }
 	VkPipeline VeilPipeline () const { return veilPipeline; }
 	VkPipelineLayout SkyLayout () const { return skyLayout; }
+	/// the sky-view table (ORBITER_VK_SKY_LUT=0: off; skylut.glsl):
+	/// on; its sets (the sky pass's set 1, the table pass's), a stand-in set
+	bool SkyLutOn () const { return skyLutOn; }
+	static constexpr uint32_t SKY_LUT_W = 256, SKY_LUT_H = 128;
+	void AllocSkyLutSets (VkDescriptorSet &sky, VkDescriptorSet &comp) const;
+	void FreeSkyLutSets (VkDescriptorSet sky, VkDescriptorSet comp) const;
+	VkDescriptorSet SkyLutNone () const { return skyLutNoneSet; }
+	VkSampler SkyLutSampler () const { return skyLutSampler; }
+	VkPipeline SkyLutPipe () const { return skyLutPipe; }
+	VkPipelineLayout SkyLutLayout () const { return skyLutLayout; }
 	/// set with uniform data for "no atmosphere"
 	VkDescriptorSet NoAtmosphereSet () const { return noneSet; }
 	/// the volumetric clouds' coverage map and shape noise (for their
@@ -109,6 +119,14 @@ private:
 	VkPipelineLayout skyLayout = VK_NULL_HANDLE;
 	VkPipeline skyPipeline = VK_NULL_HANDLE;
 	VkPipeline veilPipeline = VK_NULL_HANDLE; // (the sky over bodies beyond the air)
+	bool skyLutOn = true;
+	VkDescriptorSetLayout skyLutSetLayout = VK_NULL_HANDLE, skyLutCompSetLayout = VK_NULL_HANDLE;
+	VkDescriptorPool skyLutPool = VK_NULL_HANDLE;
+	VkDescriptorSet skyLutNoneSet = VK_NULL_HANDLE;
+	vkc::Image skyLutNone;
+	VkSampler skyLutSampler = VK_NULL_HANDLE;
+	VkPipelineLayout skyLutLayout = VK_NULL_HANDLE;
+	VkPipeline skyLutPipe = VK_NULL_HANDLE;
 	vkc::Buffer noneUbo;
 	VkSampler oceanSampler = VK_NULL_HANDLE; // (the sea field: repeat, mip mapped)
 	VkDescriptorSet noneSet = VK_NULL_HANDLE;
@@ -140,6 +158,10 @@ public:
 	/// the sky; veil: over the bodies beyond the air drawn since (where
 	/// depth was written): dimmed by the air, its light in front of them
 	void RenderSky (bool veil = false);
+	/// the sky-view table of this frame, for the main view's sky pass (the
+	/// camera in the air; outside rendering scopes; the uniforms written
+	/// later in this frame's recording)
+	void ComputeSkyLut ();
 	/// the sky is drawn (the air covers some of the view)
 	bool SkyVisible () const { return visible; }
 	double AtmRadius () const { return atmRadius; }
@@ -172,6 +194,9 @@ private:
 	float groundAlbedo = 0.3f;            // for light reflected into the sky
 	bool gasGiant = false;                // no ground at the planet's radius (GG_FLOOR_DEPTH below it)
 	vkc::Image transmittanceLut, multiscatLut; // precomputed tables
+	vkc::Image skyLutL, skyLutT;          // the sky-view table (ComputeSkyLut)
+	VkDescriptorSet skyLutSet = VK_NULL_HANDLE, skyLutCompSet = VK_NULL_HANDLE;
+	bool skyLutReady = false;             // (computed for this frame's main view)
 	bool visible = false;
 	// per frame slot, for the main view and the environment probe
 	static constexpr uint32_t NSETS = 2 * vkc::FRAMES_IN_FLIGHT;

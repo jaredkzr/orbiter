@@ -21,6 +21,7 @@
 
 #include "sky.vert.h"
 #include "sky.frag.h"
+#include "sky_lut.comp.h"
 #include "atm_transmittance.comp.h"
 #include "atm_multiscat.comp.h"
 
@@ -366,9 +367,76 @@ bool AtmosphereRenderer::Init (vkc::Context *c, TextureManager *tm)
 	transmittancePipe = compute (spv_atm_transmittance_comp, spv_atm_transmittance_comp_size);
 	multiscatPipe = compute (spv_atm_multiscat_comp, spv_atm_multiscat_comp_size);
 
+	// the sky-view table (ORBITER_VK_SKY_LUT=0: off, the march): the sky pass's
+	// set 1 (its light and transmittance; a stand-in where there is none),
+	// the table pass's images
+	if (const char *e = getenv ("ORBITER_VK_SKY_LUT")) skyLutOn = atoi (e) != 0;
+	{
+		VkDescriptorSetLayoutBinding sb[2] = {
+			{ 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
+			{ 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr } };
+		VkDescriptorSetLayoutCreateInfo slci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+		slci.bindingCount = 2, slci.pBindings = sb;
+		VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &slci, nullptr, &skyLutSetLayout));
+		sb[0].descriptorType = sb[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+		sb[0].stageFlags = sb[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+		VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &slci, nullptr, &skyLutCompSetLayout));
+		VkDescriptorPoolSize sps[2] = { { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * (MAX_ATMOSPHERES + 1) }, { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 * MAX_ATMOSPHERES } };
+		VkDescriptorPoolCreateInfo spci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+		spci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+		spci.maxSets = 2 * MAX_ATMOSPHERES + 1, spci.poolSizeCount = 2, spci.pPoolSizes = sps;
+		VK_CHECK(vkCreateDescriptorPool (ctx->device, &spci, nullptr, &skyLutPool));
+		VkSamplerCreateInfo lsci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+		lsci.magFilter = lsci.minFilter = VK_FILTER_LINEAR;
+		lsci.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT; // (azimuth)
+		lsci.addressModeV = lsci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		VK_CHECK(vkCreateSampler (ctx->device, &lsci, nullptr, &skyLutSampler));
+		// the stand-in: a texel, in general layout
+		VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+		ici.imageType = VK_IMAGE_TYPE_2D, ici.format = VK_FORMAT_R16G16B16A16_SFLOAT, ici.extent = { 1, 1, 1 };
+		ici.mipLevels = 1, ici.arrayLayers = 1, ici.samples = VK_SAMPLE_COUNT_1_BIT, ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+		ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+		VmaAllocationCreateInfo aci{};
+		aci.usage = VMA_MEMORY_USAGE_AUTO;
+		VK_CHECK(vmaCreateImage (ctx->allocator, &ici, &aci, &skyLutNone.image, &skyLutNone.alloc, nullptr));
+		VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+		vci.image = skyLutNone.image, vci.viewType = VK_IMAGE_VIEW_TYPE_2D, vci.format = ici.format;
+		vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &skyLutNone.view));
+		VkImage ni = skyLutNone.image;
+		ctx->ImmediateSubmit ([ni](VkCommandBuffer cmd) {
+			vkc::ImageBarrier (cmd, ni, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+				VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+		});
+		VkDescriptorSetAllocateInfo sai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+		sai.descriptorPool = skyLutPool, sai.descriptorSetCount = 1, sai.pSetLayouts = &skyLutSetLayout;
+		VK_CHECK(vkAllocateDescriptorSets (ctx->device, &sai, &skyLutNoneSet));
+		VkDescriptorImageInfo ni2{ skyLutSampler, skyLutNone.view, VK_IMAGE_LAYOUT_GENERAL };
+		VkWriteDescriptorSet w[2]{};
+		for (uint32_t k = 0; k < 2; k++) {
+			w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			w[k].dstSet = skyLutNoneSet, w[k].dstBinding = k, w[k].descriptorCount = 1;
+			w[k].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, w[k].pImageInfo = &ni2;
+		}
+		vkUpdateDescriptorSets (ctx->device, 2, w, 0, nullptr);
+		VkDescriptorSetLayout ll[2] = { setLayout, skyLutCompSetLayout };
+		VkPipelineLayoutCreateInfo lpl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+		lpl.setLayoutCount = 2, lpl.pSetLayouts = ll;
+		VK_CHECK(vkCreatePipelineLayout (ctx->device, &lpl, nullptr, &skyLutLayout));
+		VkShaderModule cs = ctx->CreateShaderModule (spv_sky_lut_comp, spv_sky_lut_comp_size);
+		VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+		cpi.stage = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, cs, "main" };
+		cpi.layout = skyLutLayout;
+		VK_CHECK(vkCreateComputePipelines (ctx->device, VK_NULL_HANDLE, 1, &cpi, nullptr, &skyLutPipe));
+		vkDestroyShaderModule (ctx->device, cs, nullptr);
+	}
+	VkDescriptorSetLayout skySets[2] = { setLayout, skyLutSetLayout };
+	VkPushConstantRange skyPc{ VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(int32_t) };
 	VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-	plci.setLayoutCount = 1;
-	plci.pSetLayouts = &setLayout;
+	plci.setLayoutCount = 2;
+	plci.pSetLayouts = skySets;
+	plci.pushConstantRangeCount = 1;
+	plci.pPushConstantRanges = &skyPc;
 	VK_CHECK(vkCreatePipelineLayout (ctx->device, &plci, nullptr, &skyLayout));
 
 	VkShaderModule vs = ctx->CreateShaderModule (spv_sky_vert, spv_sky_vert_size);
@@ -423,6 +491,12 @@ bool AtmosphereRenderer::Init (vkc::Context *c, TextureManager *tm)
 	gpi.pColorBlendState = &cb;
 	gpi.pDynamicState = &dy;
 	gpi.layout = skyLayout;
+	// (where nothing was drawn: the far plane, reversed z 0, as cleared. The
+	// scene draws its sky after its opaque geometry, which covers the rest:
+	// not marched there)
+	ds.depthTestEnable = VK_TRUE;
+	ds.depthWriteEnable = VK_FALSE;
+	ds.depthCompareOp = VK_COMPARE_OP_EQUAL;
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &skyPipeline));
 	// the veil over bodies beyond the air (sky.frag VEIL): where something
 	// was drawn (the pass at the far plane, reversed z 0: below what is stored)
@@ -437,6 +511,22 @@ bool AtmosphereRenderer::Init (vkc::Context *c, TextureManager *tm)
 	vkDestroyShaderModule (ctx->device, vs, nullptr);
 	vkDestroyShaderModule (ctx->device, fs, nullptr);
 	return true;
+}
+
+void AtmosphereRenderer::AllocSkyLutSets (VkDescriptorSet &sky, VkDescriptorSet &comp) const
+{
+	VkDescriptorSetLayout l[2] = { skyLutSetLayout, skyLutCompSetLayout };
+	VkDescriptorSet s[2] = {};
+	VkDescriptorSetAllocateInfo sai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+	sai.descriptorPool = skyLutPool, sai.descriptorSetCount = 2, sai.pSetLayouts = l;
+	if (vkAllocateDescriptorSets (ctx->device, &sai, s) != VK_SUCCESS) { sky = comp = VK_NULL_HANDLE; return; }
+	sky = s[0], comp = s[1];
+}
+
+void AtmosphereRenderer::FreeSkyLutSets (VkDescriptorSet sky, VkDescriptorSet comp) const
+{
+	VkDescriptorSet s[2] = { sky, comp };
+	if (sky && comp) vkFreeDescriptorSets (ctx->device, skyLutPool, 2, s);
 }
 
 void AtmosphereRenderer::SetCloudVolume (VkImageView coverage, VkSampler covSampler, VkImageView shape, VkSampler shapeSampler)
@@ -558,6 +648,13 @@ void AtmosphereRenderer::Shutdown ()
 	vkDestroyPipeline (ctx->device, skyPipeline, nullptr);
 	vkDestroyPipeline (ctx->device, veilPipeline, nullptr);
 	vkDestroyPipelineLayout (ctx->device, skyLayout, nullptr);
+	vkDestroyPipeline (ctx->device, skyLutPipe, nullptr);
+	vkDestroyPipelineLayout (ctx->device, skyLutLayout, nullptr);
+	vkDestroyDescriptorPool (ctx->device, skyLutPool, nullptr);
+	vkDestroyDescriptorSetLayout (ctx->device, skyLutSetLayout, nullptr);
+	vkDestroyDescriptorSetLayout (ctx->device, skyLutCompSetLayout, nullptr);
+	vkDestroySampler (ctx->device, skyLutSampler, nullptr);
+	ctx->DestroyImage (skyLutNone);
 	vkDestroyDescriptorPool (ctx->device, pool, nullptr);
 	vkDestroyDescriptorSetLayout (ctx->device, setLayout, nullptr);
 	ctx->DestroyBuffer (noneUbo);
@@ -862,6 +959,12 @@ Atmosphere::~Atmosphere ()
 	vkc::Context *c = ctx;
 	vkc::Image tl = transmittanceLut, ml = multiscatLut;
 	ctx->DeferDestroy ([c, tl, ml]() mutable { c->DestroyImage (tl); c->DestroyImage (ml); });
+	if (skyLutL.image) {
+		vkc::Image a = skyLutL, b = skyLutT;
+		VkDescriptorSet s1 = skyLutSet, s2 = skyLutCompSet;
+		AtmosphereRenderer *ar = scene->Atm();
+		ctx->DeferDestroy ([c, a, b, s1, s2, ar]() mutable { c->DestroyImage (a); c->DestroyImage (b); ar->FreeSkyLutSets (s1, s2); });
+	}
 	VkDescriptorPool pool = scene->Atm()->Pool();
 	for (uint32_t i = 0; i < NSETS; i++) {
 		vkc::Buffer b = ubo[i];
@@ -1422,7 +1525,80 @@ void Atmosphere::RenderSky (bool veil)
 	AtmosphereRenderer *ar = scene->Atm();
 	VkCommandBuffer cmd = ctx->Cmd();
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, veil ? ar->VeilPipeline() : ar->SkyPipeline());
-	VkDescriptorSet s = Set ();
-	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ar->SkyLayout(), 0, 1, &s, 0, nullptr);
+	// (the sky-view table: computed for the main view this frame, ComputeSkyLut)
+	bool lut = !veil && skyLutReady && !scene->InProbe ();
+	VkDescriptorSet s[2] = { Set (), lut ? skyLutSet : ar->SkyLutNone () };
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ar->SkyLayout(), 0, 2, s, 0, nullptr);
+	int32_t on = lut ? 1 : 0;
+	vkCmdPushConstants (cmd, ar->SkyLayout(), VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(on), &on);
 	vkCmdDraw (cmd, 3, 1, 0, 0);
+	if (!veil && !scene->InProbe ()) skyLutReady = false;
+}
+
+void Atmosphere::ComputeSkyLut ()
+{
+	AtmosphereRenderer *ar = scene->Atm();
+	skyLutReady = false;
+	if (!present || !ar->SkyLutOn () || scene->InProbe ()) return;
+	// (inside the air: the table's frame is the camera's zenith)
+	VECTOR3 pp;
+	oapiGetGlobalPos (hPlanet, &pp);
+	if (length (scene->CameraPos () - pp) >= atmRadius) return;
+	if (!skyLutL.image) {
+		auto create = [this]() {
+			vkc::Image im;
+			VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+			ici.imageType = VK_IMAGE_TYPE_2D, ici.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+			ici.extent = { AtmosphereRenderer::SKY_LUT_W, AtmosphereRenderer::SKY_LUT_H, 1 };
+			ici.mipLevels = 1, ici.arrayLayers = 1, ici.samples = VK_SAMPLE_COUNT_1_BIT, ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+			ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+			VmaAllocationCreateInfo aci{};
+			aci.usage = VMA_MEMORY_USAGE_AUTO;
+			VK_CHECK(vmaCreateImage (ctx->allocator, &ici, &aci, &im.image, &im.alloc, nullptr));
+			VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+			vci.image = im.image, vci.viewType = VK_IMAGE_VIEW_TYPE_2D, vci.format = ici.format;
+			vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+			VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &im.view));
+			return im;
+		};
+		ar->AllocSkyLutSets (skyLutSet, skyLutCompSet);
+		if (!skyLutSet) return;
+		skyLutL = create (), skyLutT = create ();
+		VkImage a = skyLutL.image, b = skyLutT.image;
+		ctx->ImmediateSubmit ([a, b](VkCommandBuffer cmd) {
+			for (VkImage im : { a, b })
+				vkc::ImageBarrier (cmd, im, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+					VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+		});
+		VkDescriptorImageInfo si[2] = { { ar->SkyLutSampler (), skyLutL.view, VK_IMAGE_LAYOUT_GENERAL }, { ar->SkyLutSampler (), skyLutT.view, VK_IMAGE_LAYOUT_GENERAL } };
+		VkDescriptorImageInfo ci[2] = { { VK_NULL_HANDLE, skyLutL.view, VK_IMAGE_LAYOUT_GENERAL }, { VK_NULL_HANDLE, skyLutT.view, VK_IMAGE_LAYOUT_GENERAL } };
+		VkWriteDescriptorSet w[4]{};
+		for (uint32_t k = 0; k < 4; k++) {
+			w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			w[k].dstSet = k < 2 ? skyLutSet : skyLutCompSet, w[k].dstBinding = k & 1, w[k].descriptorCount = 1;
+			w[k].descriptorType = k < 2 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+			w[k].pImageInfo = k < 2 ? &si[k] : &ci[k - 2];
+		}
+		vkUpdateDescriptorSets (ctx->device, 4, w, 0, nullptr);
+	}
+	ctx->EndTarget ();
+	VkCommandBuffer cmd = ctx->Cmd ();
+	VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+	mb.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT; // (the last frame's sky pass)
+	mb.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+	mb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+	mb.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+	VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+	dep.memoryBarrierCount = 1, dep.pMemoryBarriers = &mb;
+	vkCmdPipelineBarrier2 (cmd, &dep);
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, ar->SkyLutPipe ());
+	VkDescriptorSet s[2] = { sets[ctx->FrameIndex ()], skyLutCompSet }; // (the main view's uniforms)
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, ar->SkyLutLayout (), 0, 2, s, 0, nullptr);
+	vkCmdDispatch (cmd, AtmosphereRenderer::SKY_LUT_W / 8, AtmosphereRenderer::SKY_LUT_H / 8, 1);
+	mb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+	mb.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+	mb.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+	mb.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+	vkCmdPipelineBarrier2 (cmd, &dep);
+	skyLutReady = true;
 }

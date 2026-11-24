@@ -33,6 +33,8 @@ layout(location = 1) out vec3 vNormalView;
 layout(location = 2) out vec2 vUV;
 layout(location = 3) out vec3 vPosObj; // (mesh.frag: the ground's detail; not used for instances)
 
+invariant gl_Position; // (the scene's depth starts as the prepass's: the same surfaces at the same depths, Scene::RenderPrepass)
+
 void main()
 {
 	mat4 M = transpose(mat4(inst0, inst1, inst2, vec4(0.0, 0.0, 0.0, 1.0)));

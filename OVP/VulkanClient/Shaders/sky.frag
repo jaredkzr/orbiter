@@ -17,6 +17,13 @@ layout(constant_id = 0) const int VEIL = 0;
 layout(location = 0) in vec3 vDirView;
 layout(location = 0) out vec4 outColor; // premultiplied: the sky adds to the stars, the ground covers them
 
+// the sky-view table (a look trade, ORBITER_VK_SKY_LUT=1: skylut.glsl,
+// sky_lut.comp): its light and transmittance in place of the march
+#include "skylut.glsl"
+layout(set = 1, binding = 0) uniform sampler2D skyLutL;
+layout(set = 1, binding = 1) uniform sampler2D skyLutT;
+layout(push_constant) uniform SkyDraw { int lut; } sd;
+
 void main ()
 {
 	// (relativistic view: the direction at rest of what is seen here)
@@ -30,7 +37,13 @@ void main ()
 	bool ground = tg.x > 0.0 && tg.x <= tg.y;
 	float tMax = ground ? tg.x : ATM_NONE;
 	vec3 T;
-	vec3 L = AtmTonemap (Inscatter (d, tMax, T));
+	vec3 L;
+	if (VEIL == 0 && sd.lut != 0) {
+		vec2 uv = SkyLutUv (d, float (textureSize (skyLutL, 0).y), ground);
+		L = AtmTonemap (textureLod (skyLutL, uv, 0.0).rgb);
+		T = textureLod (skyLutT, uv, 0.0).rgb;
+	} else
+		L = AtmTonemap (Inscatter (d, tMax, T));
 	if (ground)
 		outColor = vec4 (DopplerShiftRGB (AtmGround (normalize (atm.camPos.xyz + d * tg.x)) * T + L, D), 1.0);
 	else {

@@ -5,6 +5,7 @@
 #include "CityKit.h"
 #include "GfxSettings.h"
 #include "AO.h"
+#include "light_tiles.comp.h"
 #include "SSR.h"
 #include "RayTracing.h"
 #include "RTLighting.h"
@@ -168,7 +169,7 @@ bool Scene::Init ()
 	tracks->Init (ctx);
 	waterFx = std::make_unique<WaterFx>();
 	crashFires = std::make_unique<CrashFires>();
-	VkDescriptorSetLayoutBinding b[11]{};
+	VkDescriptorSetLayoutBinding b[12]{};
 	b[0].binding = 0;
 	b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	b[0].descriptorCount = 1;
@@ -201,15 +202,19 @@ bool Scene::Init ()
 	b[10] = b[2];
 	b[10].binding = 11; // the dust's transmittance towards a vessel's flames (lights.glsl FlameOcc: sprites, surfaces, the smoke volume)
 	b[10].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+	b[11].binding = 12; // the local lights per screen tile (lights.glsl LocalLighting; light_tiles.comp)
+	b[11].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	b[11].descriptorCount = 1;
+	b[11].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 11;
+	lci.bindingCount = 12;
 	lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &frameLayout));
 
 	VkDescriptorPoolSize ps[3] = {
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 * vkc::FRAMES_IN_FLIGHT },
 		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * (2 * SHADOW_CASCADES + 9) * vkc::FRAMES_IN_FLIGHT }, // (+1: the cities' far map; +1 the flames' dust transmittance)
-		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * vkc::FRAMES_IN_FLIGHT }
+		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * 2 * vkc::FRAMES_IN_FLIGHT } // (ground tracks, light tiles)
 	};
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.maxSets = 2 * vkc::FRAMES_IN_FLIGHT;
@@ -243,7 +248,10 @@ bool Scene::Init ()
 			dii2[k] = { shadows[k]->DepthSampler(), shadows[k]->View(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 		VkDescriptorImageInfo pii{ probe->Sampler(), probe->CubeView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 		VkDescriptorBufferInfo tbi{ tracks->Buffer (i), 0, GroundTracks::BUFFER_SIZE };
-		VkWriteDescriptorSet wr[5]{};
+		if (!lightTileBuf[i].buffer)
+			lightTileBuf[i] = ctx->CreateBuffer (LIGHT_TILES_MAX * 16, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false);
+		VkDescriptorBufferInfo lbi{ lightTileBuf[i].buffer, 0, LIGHT_TILES_MAX * 16 };
+		VkWriteDescriptorSet wr[6]{};
 		for (auto &w : wr) w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, w.dstSet = set;
 		wr[3].dstBinding = 8;
 		wr[3].descriptorCount = 1;
@@ -265,7 +273,48 @@ bool Scene::Init ()
 		wr[4].descriptorCount = SHADOW_CASCADES;
 		wr[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		wr[4].pImageInfo = dii2;
-		vkUpdateDescriptorSets (ctx->device, 5, wr, 0, nullptr);
+		wr[5].dstBinding = 12;
+		wr[5].descriptorCount = 1;
+		wr[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		wr[5].pBufferInfo = &lbi;
+		vkUpdateDescriptorSets (ctx->device, 6, wr, 0, nullptr);
+	}
+	// the light tiles' pass: the frame set, and set 1 with the prepass
+	{
+		VkDescriptorSetLayoutBinding pb{ 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+		VkDescriptorSetLayoutCreateInfo pci2{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+		pci2.bindingCount = 1;
+		pci2.pBindings = &pb;
+		VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &pci2, nullptr, &lightTileSetLayout));
+		VkDescriptorPoolSize lps{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 };
+		VkDescriptorPoolCreateInfo lpci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+		lpci.maxSets = 1;
+		lpci.poolSizeCount = 1;
+		lpci.pPoolSizes = &lps;
+		VK_CHECK(vkCreateDescriptorPool (ctx->device, &lpci, nullptr, &lightTilePool));
+		VkDescriptorSetAllocateInfo lai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+		lai.descriptorPool = lightTilePool;
+		lai.descriptorSetCount = 1;
+		lai.pSetLayouts = &lightTileSetLayout;
+		VK_CHECK(vkAllocateDescriptorSets (ctx->device, &lai, &lightTileSet));
+		VkSamplerCreateInfo nsi{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+		nsi.magFilter = nsi.minFilter = VK_FILTER_NEAREST;
+		nsi.addressModeU = nsi.addressModeV = nsi.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		VK_CHECK(vkCreateSampler (ctx->device, &nsi, nullptr, &lightTileSampler));
+		VkDescriptorSetLayout tl[2] = { frameLayout, lightTileSetLayout };
+		VkPushConstantRange tpc{ VK_SHADER_STAGE_COMPUTE_BIT, 0, 4 * sizeof(int32_t) };
+		VkPipelineLayoutCreateInfo tplci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+		tplci.setLayoutCount = 2;
+		tplci.pSetLayouts = tl;
+		tplci.pushConstantRangeCount = 1;
+		tplci.pPushConstantRanges = &tpc;
+		VK_CHECK(vkCreatePipelineLayout (ctx->device, &tplci, nullptr, &lightTileLayout));
+		VkShaderModule cs = ctx->CreateShaderModule (spv_light_tiles_comp, spv_light_tiles_comp_size);
+		VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+		cpi.stage = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, cs, "main" };
+		cpi.layout = lightTileLayout;
+		VK_CHECK(vkCreateComputePipelines (ctx->device, VK_NULL_HANDLE, 1, &cpi, nullptr, &lightTilePipe));
+		vkDestroyShaderModule (ctx->device, cs, nullptr);
 	}
 
 	// the cities' road map: none yet (a black texel), sampled with mip levels
@@ -560,6 +609,12 @@ void Scene::Shutdown ()
 	if (citySampler) vkDestroySampler (ctx->device, citySampler, nullptr);
 	vkDestroyDescriptorPool (ctx->device, framePool, nullptr);
 	vkDestroyDescriptorSetLayout (ctx->device, frameLayout, nullptr);
+	for (auto &b : lightTileBuf) ctx->DestroyBuffer (b);
+	if (lightTilePipe) vkDestroyPipeline (ctx->device, lightTilePipe, nullptr);
+	if (lightTileLayout) vkDestroyPipelineLayout (ctx->device, lightTileLayout, nullptr);
+	if (lightTilePool) vkDestroyDescriptorPool (ctx->device, lightTilePool, nullptr);
+	if (lightTileSetLayout) vkDestroyDescriptorSetLayout (ctx->device, lightTileSetLayout, nullptr);
+	if (lightTileSampler) vkDestroySampler (ctx->device, lightTileSampler, nullptr);
 	ctx = nullptr;
 }
 
@@ -2311,6 +2366,9 @@ void Scene::BeginFrame ()
 	fu.rt[0] = rtl->Enabled () && !relOn ? 1.0f : 0.0f;
 	if (relOn) fu.aoParams[3] = 1.0f;
 	fu.rt[1] = (float)RTLighting::SHADOWED_LIGHTS;
+	lightTilesOn = LightTilesWanted ();
+	fu.rt[2] = lightTilesOn ? 1.0f : 0.0f; // (the probe's: 0, its view is another)
+	fu.rt[3] = (float)((ctx->RenderExtent ().width + LIGHT_TILE - 1) / LIGHT_TILE);
 	memcpy (frameUbo[fi].mapped, &fu, sizeof(fu));
 	UpdateCamAtmSet ();
 }
@@ -2713,6 +2771,19 @@ void Scene::FillFrameUniforms (void *pfu)
 
 void Scene::RenderPrepass ()
 {
+	// The scene's depth starts as the prepass's: its surfaces hidden behind
+	// nearer ones are not shaded (the terrain under the vessels, the far
+	// side of hills). The scene's vertices are placed exactly as the
+	// prepass's (invariant positions; the same transforms and meshes), so
+	// that what is seen passes its depth test as before. The cities'
+	// buildings are drawn into the prepass after the copy: those fading out
+	// are dithered in the colour pass, the ground behind seen between.
+	// (ORBITER_VK_DEPTH_REUSE=0: the scene's depth cleared, as before)
+	static const bool depthReuse = [] { const char *e = getenv ("ORBITER_VK_DEPTH_REUSE"); return !e || atoi (e) != 0; }();
+	bool reuse = depthReuse && ctx->sceneSamples == VK_SAMPLE_COUNT_1_BIT
+		&& ao->Extent ().width == ctx->RenderExtent ().width && ao->Extent ().height == ctx->RenderExtent ().height;
+	deferBuildings = reuse;
+	deferredBuildings.clear ();
 	// (planet surfaces were prepared before the shadow maps)
 	ao->BeginPrepass ();
 	for (auto &it : visuals) {
@@ -2726,8 +2797,37 @@ void Scene::RenderPrepass ()
 	objOwner = 0;
 	objVel[0] = objVel[1] = objVel[2] = 0.0f;
 	objGround = false;
+	deferBuildings = false;
+	if (reuse && ctx->CopySceneDepth (ao->DepthImage ()) && !deferredBuildings.empty ()) {
+		ao->ResumePrepass ();
+		VkCommandBuffer cmd = ctx->Cmd();
+		VkDescriptorSet fset = FrameSet ();
+		VkDescriptorSet tset = gc->TexMgr()->White()->set, ms = gc->TexMgr()->DefaultMapSet();
+		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, buildPrepass);
+		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &fset, 0, nullptr);
+		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 1, 1, &tset, 0, nullptr);
+		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 3, 1, &ms, 0, nullptr);
+		for (const DeferredBuildings &d : deferredBuildings) {
+			VkBuffer vbs[2] = { d.vb, d.inst };
+			VkDeviceSize ofs[2] = { 0, d.instOfs };
+			vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 2, 1, &d.atmSet, 0, nullptr);
+			vkCmdBindVertexBuffers (cmd, 0, 2, vbs, ofs);
+			vkCmdBindIndexBuffer (cmd, d.ib, 0, VK_INDEX_TYPE_UINT16);
+			vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(d.pr), d.pr);
+			vkCmdDrawIndexed (cmd, d.nIndex, d.count, d.firstIndex, 0, 0);
+		}
+	}
+	deferredBuildings.clear ();
 	ctx->EndTarget ();
 	ctx->GpuMark ("prepass");
+	BuildLightTiles ();
+	if (lightTilesOn) ctx->GpuMark ("light tiles");
+	// the sky-view table of the air the camera is in (a look trade,
+	// ORBITER_VK_SKY_LUT=1): the sky pass's light from it
+	if (atm->SkyLutOn ())
+		if (OBJHANDLE hp = oapiCameraProxyGbody ())
+			if (VObject *pv = GetVisual (hp))
+				if (Atmosphere *a = pv->GetAtmosphere ()) { a->ComputeSkyLut (); ctx->GpuMark ("sky lut"); }
 	if (ao->enabled && !rtl->Enabled () && !relOn) ao->Compute (proj[0], -proj[5]);
 	ctx->GpuMark ("ao");
 	if (rt && rt->Enabled ()) {
@@ -2738,6 +2838,7 @@ void Scene::RenderPrepass ()
 			if (hSun || !light.sun) // (the light's disc)
 				sunRadius = asin (std::min (1.0, light.radius / std::max (length (light.pos - camPos), 1.0)));
 			if (softSunRadius > sunRadius) sunRadius = softSunRadius; // (under an overcast: the light's apparent source, soft shadows)
+			rtl->exposure = plumes->exposure; // (the last frame's display exposure: VulkanClient)
 			rtl->Compute (frameSet[ctx->FrameIndex()], rt->Set (), rt->TextureSet (), proj[0], -proj[5], jitter, (float)sunRadius, cameraCut);
 			ctx->GpuMark ("rt lighting");
 		}
@@ -2835,6 +2936,55 @@ void Scene::RenderProbe ()
 	camAtmSet = sAtm, cloudsActive = sClouds;
 	probeFace = (probeFace + 1) % 6;
 	if (probeFacesDone < 6) probeFacesDone++;
+}
+
+bool Scene::LightTilesWanted () const
+{
+	// (ORBITER_VK_LIGHT_TILES=0: every surface pixel loops over all lights)
+	static const bool off = [] { const char *e = getenv ("ORBITER_VK_LIGHT_TILES"); return e && *e && !atoi (e); }();
+	VkExtent2D e = ctx->RenderExtent ();
+	uint32_t n = ((e.width + LIGHT_TILE - 1) / LIGHT_TILE) * ((e.height + LIGHT_TILE - 1) / LIGHT_TILE);
+	// (a relativistic or lensed view: the tiles' frusta are not where the
+	// positions are)
+	return !off && lightTilePipe && !relOn && !lensOn && n <= LIGHT_TILES_MAX
+		&& ao->Extent ().width == e.width && ao->Extent ().height == e.height;
+}
+
+void Scene::BuildLightTiles ()
+{
+	if (!lightTilesOn) return;
+	if (ao->PrepassView () != lightTilePrepass) {
+		if (lightTilePrepass) vkDeviceWaitIdle (ctx->device); // (the set may be in use)
+		lightTilePrepass = ao->PrepassView ();
+		VkDescriptorImageInfo ii{ lightTileSampler, lightTilePrepass, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+		w.dstSet = lightTileSet, w.dstBinding = 0, w.descriptorCount = 1;
+		w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, w.pImageInfo = &ii;
+		vkUpdateDescriptorSets (ctx->device, 1, &w, 0, nullptr);
+	}
+	ctx->EndTarget ();
+	VkCommandBuffer cmd = ctx->Cmd ();
+	VkExtent2D e = ctx->RenderExtent ();
+	int32_t pc[4] = { (int32_t)e.width, (int32_t)e.height, (int32_t)((e.width + LIGHT_TILE - 1) / LIGHT_TILE), 0 };
+	VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+	mb.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT; // (the last frame's reads of this slot's buffer: fenced; the prepass)
+	mb.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+	mb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+	mb.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+	VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+	dep.memoryBarrierCount = 1;
+	dep.pMemoryBarriers = &mb;
+	vkCmdPipelineBarrier2 (cmd, &dep);
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, lightTilePipe);
+	VkDescriptorSet s[2] = { frameSet[ctx->FrameIndex()], lightTileSet };
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, lightTileLayout, 0, 2, s, 0, nullptr);
+	vkCmdPushConstants (cmd, lightTileLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
+	vkCmdDispatch (cmd, (uint32_t)pc[2], (e.height + LIGHT_TILE - 1) / LIGHT_TILE, 1);
+	mb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+	mb.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+	mb.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+	mb.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+	vkCmdPipelineBarrier2 (cmd, &dep);
 }
 
 bool Scene::SunOnScreen (float uv[2]) const
@@ -2990,9 +3140,16 @@ void Scene::Render ()
 	std::vector<VObject*> list;
 	for (auto &it : visuals) list.push_back (it.second.get());
 
-	// skies of planetary atmospheres, over the stars
-	for (auto *vo : list) vo->RenderSky ();
-	ctx->GpuMark ("sky");
+	// skies of planetary atmospheres, over the stars: their uniforms now
+	// (the scene's shaders read them), the passes after the opaque scene,
+	// where it left the background (the sky pipeline's depth test: its
+	// pixels only; drawn first, the sky was marched under all the ground
+	// and vessels). Near a black hole as before (its gas over the scene).
+	// (ORBITER_VK_SKY_FIRST=1: drawn first, for tests)
+	static const bool skyFirst = [] { const char *e = getenv ("ORBITER_VK_SKY_FIRST"); return e && atoi (e) != 0; }();
+	bool skyLast = !lensOn && !skyFirst;
+	for (auto *vo : list) vo->RenderSky (skyLast ? VObject::SKY_UPDATE : VObject::SKY_UPDATE | VObject::SKY_DRAW);
+	if (!skyLast) ctx->GpuMark ("sky");
 
 	// scene geometry
 	VkDescriptorSet fset = FrameSet ();
@@ -3029,6 +3186,11 @@ void Scene::Render ()
 	for (auto *vo : list)
 		if (!dynamic_cast<VPlanet*>(vo)) vo->Render (RenderPass::Opaque);
 	ctx->GpuMark ("opaque");
+	if (skyLast) {
+		for (auto *vo : list) vo->RenderSky (VObject::SKY_DRAW);
+		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &fset, 0, nullptr);
+		ctx->GpuMark ("sky");
+	}
 	// (near a black hole: its gas over what lies behind it, a donor star)
 	if (lensOn) lens->RenderGas (cmd, (float)nearPlane, (float)lensM);
 
@@ -3056,6 +3218,7 @@ void Scene::Render ()
 	// effects that also write the reactive mask: engine plumes, particles
 	vkc::Target rt{ reactive.image, reactive.view, REACTIVE_FORMAT, ctx->RenderExtent () };
 	vkc::Target rtMS{ reactiveMS.image, reactiveMS.view, REACTIVE_FORMAT, ctx->RenderExtent () };
+	particles->rebindScene = [this, rt, rtMS]() { ctx->BindSceneWithMask (rt, reactiveMS.image ? &rtMS : nullptr, true); };
 	plumes->Render (FrameSet (), camAtmSet, gc->TexMgr()->White()); // (at half resolution)
 	// crash fireballs: their grids, marched at half resolution
 	// reentry plasma: the heated hulls' meshes seen along their flow and
@@ -3363,6 +3526,14 @@ void Scene::DrawBuildings (VkBuffer vb, VkBuffer ib, uint32_t firstIndex, uint32
 	uint32_t count, RenderPass pass, const Mat4 &frameToView, VkDescriptorSet kit, float hour, bool base)
 {
 	if (!count || !nIndex || pass == RenderPass::Transparent) return;
+	if (pass == RenderPass::Depth && deferBuildings && !base) { // (RenderPrepass)
+		DeferredBuildings d{ vb, ib, inst, instOfs, firstIndex, nIndex, count, camAtmSet, {} };
+		frameToView.ToFloat (d.pr);
+		memcpy (d.pr + 16, objMotion, sizeof(objMotion));
+		d.pr[32] = 0.0f, d.pr[33] = 0.8f, d.pr[34] = 0.0f, d.pr[35] = 1.0f; // (pbr, as below)
+		deferredBuildings.push_back (d);
+		return;
+	}
 	VkCommandBuffer cmd = ctx->Cmd();
 	VkBuffer vbs[2] = { vb, inst };
 	VkDeviceSize ofs[2] = { 0, instOfs };

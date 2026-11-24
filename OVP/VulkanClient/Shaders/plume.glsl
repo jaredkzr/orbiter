@@ -398,20 +398,37 @@ PlumeLight MarchPlume (PlumeParams P, vec3 lo, vec3 ld, float t0, float t1, int 
 			float x = max (pc.z, 0.0);
 			float R = att ? 1.0 + x * P.shape.w : 1.0 + (P.shape.z - 1.0) * (1.0 - exp (-0.8 * x)) + x * P.shape.w;
 			dt = clamp (0.25 * stepScale * R, dtMin, max (1.5 * stepScale, dtMin));
-			if (tail) {
+			// (an attitude thruster's jet meeting a surface - a shuttle's
+			// forward jets on the station it backs away from - is not clipped
+			// to its cone (PlumeClip): its box takes the gas spread over the
+			// surface, some 40 m across, all of it marched in the most steps
+			// for each of three jets, 8 ms each. Its empty parts as the tail's)
+#ifdef PLUME_SKIP_ON
+			bool skipAtt = PLUME_SKIP_ON != 0;
+#else
+			const bool skipAtt = true;
+#endif
+			if (tail || (skipAtt && att && P.hit.w > 0.0)) {
 				// (the envelope: PlumeMedium's, with room for its bend, widening
 				// past half the length, turbulence and cells; nothing beyond three
-				// times it)
-				float Re = (R + max (0.0, x - 0.5 * P.shape.y) * P.diamond.w) * 1.6;
+				// times it. An attitude thruster's: PlumeClip's cone)
+				float Re = att ? (max (P.shape.z, 1.0) + (x + 0.15) * (P.shape.w + P.diamond.w)) * (1.0 + 0.12 * P.shape2.y) * (1.0 + 0.45 * P.misc.w)
+					: (R + max (0.0, x - 0.5 * P.shape.y) * P.diamond.w) * 1.6;
 				float freeJet = length (pc.xy) - abs (PlumeBend (P, x)) - 3.0 * Re;
 				float free = freeJet;
 				if (P.hit.w > 0.0) {
 					vec3 rel = pc - P.hit.xyz;
 					float h = dot (rel, P.hitN.xyz), rw = length (rel - h * P.hitN.xyz);
 					free = min (free, max (h - 5.0 * (0.3 * P.hitN.w + 0.12 * rw), rw - 2.5 * P.hit2.x));
+					// (an attitude thruster's: within the gas over the surface,
+					// outside the jet, steps of half the finer of the layer's
+					// thickness and its puffs' length - not the jet's own, fine
+					// at its nozzle, or the box's most steps across 40 m)
+					if (att && freeJet > 0.0)
+						dt = max (dt, 0.5 * min (0.3 * P.hitN.w + 0.12 * rw, max (1.6 * P.hitN.w, 0.25 * P.hit2.x)));
 				}
 				if (free > 0.0) dt = max (dt, 0.5 * free);
-				else if (freeJet <= 0.0 && x < xCells) dt = dtFine;
+				else if (tail && freeJet <= 0.0 && x < xCells) dt = dtFine;
 			}
 			dt = min (dt, t1 - tc);
 		}
