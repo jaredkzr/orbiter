@@ -130,6 +130,8 @@ public:
 	/// the sea field's slopes for this frame into its images (the camera's planet; before the frame's
 	/// passes, outside rendering: cmd records transfers)
 	void UploadOcean (VkCommandBuffer cmd, const VECTOR3 &camGlobal);
+	/// UploadOcean's slopes started on a worker, early in the frame
+	void StartOcean (const VECTOR3 &camGlobal);
 	/// share of a salt flat at a point [rad] (Config/VK/Playa.cfg: the playa ground there is a salt crust, not clay)
 	float SaltShare (double lat, double lng) const;
 	/// Write this frame's uniform data (camera and sun relative to the planet)
@@ -150,6 +152,7 @@ public:
 	void SetClouds (class VkTexture *west, class VkTexture *east, double alt);
 
 private:
+	bool OceanWanted (const VECTOR3 &camGlobal, bool log);
 	OBJHANDLE hPlanet;
 	Scene *scene;
 	vkc::Context *ctx;
@@ -175,7 +178,6 @@ private:
 	vkc::Buffer ubo[NSETS];
 	vkc::Image oceanImg[vkc::FRAMES_IN_FLIGHT][2]; // the sea field (W3, OceanFft): the long layer with its levels, the ripples
 	vkc::Buffer oceanStage[vkc::FRAMES_IN_FLIGHT];
-	std::vector<float> oceanScratch;
 	uint64_t oceanFrame = 0;              // (the frame UploadOcean last wrote)
 	static size_t OceanStageBytes ();
 	OceanFft ocean;

@@ -1810,6 +1810,11 @@ void Scene::RenderShadows ()
 {
 	frameNo++;
 	for (bool &v : shadowValid) v = false;
+	// the sea field's slopes (UploadOcean, after the depth prepass) on a
+	// worker, meanwhile
+	if (OBJHANDLE hp = oapiCameraProxyGbody ())
+		if (VObject *pv = GetVisual (hp))
+			if (Atmosphere *a = pv->GetAtmosphere ()) a->StartOcean (camPos);
 	// planet surfaces select their tiles and upload data first (transfers
 	// end rendering scopes, and shadow maps are cleared when bound)
 	for (auto &it : visuals) it.second->PrepareFrame ();

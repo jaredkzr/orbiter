@@ -43,6 +43,12 @@ void OceanFft::Ifft2 (std::complex<float> *a)
 
 bool OceanFft::Setup (double U, double azimuth, double g, double l0, double targetVar, uint32_t seed)
 {
+	{
+		// (not while an evaluation runs; its result is of the old sea)
+		std::unique_lock<std::mutex> lk (mtx);
+		cv.wait (lk, [this] { return !jobPending && !busy; });
+		haveResult = false;
+	}
 	valid = false;
 	if (U < 0.3 || targetVar <= 0.0 || g <= 0.0) return false;
 	L[0] = std::clamp (2.0 * l0, 16.0, 800.0);
@@ -145,4 +151,59 @@ void OceanFft::Evaluate (double t, float *out)
 		src = dst;
 		dst += (size_t)n * n * 2;
 	}
+}
+
+OceanFft::~OceanFft ()
+{
+	if (!worker.joinable ()) return;
+	{
+		std::lock_guard<std::mutex> lk (mtx);
+		quit = true;
+	}
+	cv.notify_all ();
+	worker.join ();
+}
+
+void OceanFft::Loop ()
+{
+	std::unique_lock<std::mutex> lk (mtx);
+	for (;;) {
+		cv.wait (lk, [this] { return jobPending || quit; });
+		if (quit) return;
+		double t = jobT;
+		jobPending = false, busy = true;
+		lk.unlock ();
+		Evaluate (t, result.data ());
+		lk.lock ();
+		busy = false, haveResult = true, resultT = t;
+		cv.notify_all ();
+	}
+}
+
+void OceanFft::Start (double t)
+{
+	if (!valid) return;
+	std::lock_guard<std::mutex> lk (mtx);
+	if (busy || jobPending || (haveResult && resultT == t)) return;
+	if (result.size () != Floats ()) result.resize (Floats ());
+	if (!worker.joinable ()) worker = std::thread ([this] { Loop (); });
+	jobT = t, jobPending = true, haveResult = false;
+	cv.notify_all ();
+}
+
+const float *OceanFft::Wait (double t)
+{
+	if (!valid) return nullptr;
+	{
+		std::unique_lock<std::mutex> lk (mtx);
+		cv.wait (lk, [this] { return !jobPending && !busy; });
+		if (haveResult && resultT == t) return result.data ();
+		haveResult = false;
+	}
+	// (none started for this time: here)
+	if (result.size () != Floats ()) result.resize (Floats ());
+	Evaluate (t, result.data ());
+	std::lock_guard<std::mutex> lk (mtx);
+	haveResult = true, resultT = t;
+	return result.data ();
 }
