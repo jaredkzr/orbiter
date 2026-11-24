@@ -2104,6 +2104,13 @@ DLLEXPORT int oapiScatterCell (OBJHANDLE hPlanet, int layer, int row, int col, S
 	return (int)c.size();
 }
 
+DLLEXPORT void oapiScatterPrefetchCell (OBJHANDLE hPlanet, int layer, int row, int col)
+{
+	Body *body = (Body*)hPlanet;
+	if (!body || body->Type() != OBJTP_PLANET) return;
+	if (scatter::GroundScatter *gs = ((Planet*)body)->ScatterIfMade ()) gs->Prefetch (layer, row, col);
+}
+
 DLLEXPORT unsigned oapiScatterGeneration (OBJHANDLE hPlanet)
 {
 	scatter::GroundScatter *gs = PlanetScatter (hPlanet);

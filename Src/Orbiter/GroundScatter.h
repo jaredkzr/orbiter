@@ -77,9 +77,12 @@
 
 #include "Vecmat.h"
 #include "ConvexGeometry.h"
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <vector>
 
@@ -142,7 +145,7 @@ namespace scatter {
 		Cover (const Planet *planet);
 		~Cover ();
 		/// colour (linear 0-1) and water (0 or 1) at a point; false if there are no tiles
-		bool Sample (double lat, double lng, Vector &rgb, double &water);
+		bool Sample (double lat, double lng, Vector &rgb, double &water); ///< (any thread)
 		/// whether there is a water mask tile at a point
 		bool HasMask (double lat, double lng) { return Get (1, lat, lng) != nullptr; }
 	private:
@@ -155,6 +158,7 @@ namespace scatter {
 		std::vector<Tile> cache[2];
 		uint64_t clock = 0;
 		int maxLevel;
+		std::mutex mtx; // (Sample: the tile cache, from any thread)
 	};
 
 	class GroundScatter {
@@ -174,6 +178,10 @@ namespace scatter {
 		void CellsNear (int layer, const Vector &p, double radius, std::vector<std::pair<int,int>> &cells) const;
 		/// The objects of a cell (cached)
 		const std::vector<Instance> &Cell (int layer, int row, int col);
+		/// Make a cell's objects ahead, on any thread, for Cell (on the main
+		/// thread) to take: the same objects. CellsNear first (on the main
+		/// thread: what it needs set up). Nothing if the cell is made already
+		void Prefetch (int layer, int row, int col);
 		/// The obstacles of colliding layers within radius [m] of a point
 		/// (planet frame)
 		void Obstacles (const Vector &p, double radius, std::vector<const Obstacle*> &out);
@@ -197,6 +205,14 @@ namespace scatter {
 		bool LoadAssets (const std::string &file, bool included = false, double sizeMin = 0.0, double sizeMax = 1e30);
 		Vector tint = Vector (1, 1, 1); // (TINT: of the assets that follow)
 		void Make (int layer, int row, int col, CellData &cd);
+		/// Make's objects of a cell, any thread (with PrepareThreads done):
+		/// those in built-up ground with the margin to check for buildings
+		/// (occ: < 0 none), which Finish does (on the main thread: the city
+		/// map's cells), etile the thread's elevation tiles
+		void MakeObjects (int layer, int row, int col, std::vector<Instance> &inst, std::vector<double> &occ, std::vector<ElevationTile> *etile);
+		void Finish (std::vector<Instance> &inst, const std::vector<double> &occ) const;
+		/// what Make sets up on first use, before Prefetch's threads (main thread)
+		void PrepareThreads () const;
 		double CoverFactor (const Layer &L, const Vector &rgb, double water, bool haveCover) const;
 		double Clearance (const Vector &dir) const; // 0 at bases and cleared ground, 1 away from them
 		void Trim ();
@@ -227,6 +243,15 @@ namespace scatter {
 		double statTotal = 0.0, statClimate = 0.0; // [s]
 		int statCells = 0, statEvals = 0;
 		bool statLogged = false;
+		std::mutex statMtx;
+		// (Prefetch: cells made ahead, taken by Cell; Clear waits for those
+		// being made and drops them)
+		struct Prefetched { std::vector<Instance> inst; std::vector<double> occ; };
+		std::map<uint64_t, Prefetched> prefetched;
+		std::mutex prefMtx;
+		mutable std::shared_mutex makeMtx;
+		mutable std::atomic<bool> threadsReady{ false };
+		const uint64_t serial;            // (the threads' elevation tiles: whose)
 	};
 
 } // namespace scatter

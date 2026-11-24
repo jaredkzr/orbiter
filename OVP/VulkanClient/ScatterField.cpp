@@ -7,9 +7,26 @@
 #include "VulkanClient.h"
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
+#include <mutex>
+#include <thread>
+#ifdef __linux__
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
 
 namespace vkscatter {
+
+// A field's cells being made on the prefetch threads
+struct PrefetchJobs {
+	std::mutex m;
+	std::condition_variable cv;
+	std::unordered_map<uint64_t, int> done; // (made, not yet read: a cell may be sent again after a clear)
+	int queued = 0, running = 0;
+	bool cancelled = false;
+};
 
 namespace {
 
@@ -39,6 +56,73 @@ namespace {
 	{
 		return ((uint64_t)layer << 56) | ((uint64_t)(uint32_t)row << 28) | (uint64_t)(uint32_t)col;
 	}
+
+	const size_t MAX_INFLIGHT = 96;   // cells sent to the prefetch threads, not yet read
+	const unsigned PREFETCH_THREADS = 3;
+	const int PRIO_NICE = 5;          // (Linux: the prefetch threads' nice value)
+
+	// Threads making cells in the core (oapiScatterPrefetchCell): the cells
+	// were made on the main thread, 3 ms of most frames over a city
+	class Prefetcher {
+	public:
+		static Prefetcher &Get () { static Prefetcher p; return p; }
+		void Push (const std::shared_ptr<PrefetchJobs> &j, OBJHANDLE hp, uint64_t key, int layer, int row, int col)
+		{
+			{
+				std::lock_guard<std::mutex> jl (j->m);
+				j->queued++;
+			}
+			std::lock_guard<std::mutex> lk (m);
+			queue.push_back ({ j, hp, key, layer, row, col });
+			cv.notify_one ();
+		}
+		~Prefetcher ()
+		{
+			{ std::lock_guard<std::mutex> lk (m); quit = true; }
+			cv.notify_all ();
+			for (auto &t : threads) t.join ();
+		}
+	private:
+		struct Job { std::shared_ptr<PrefetchJobs> j; OBJHANDLE hp; uint64_t key; int layer, row, col; };
+		Prefetcher ()
+		{
+			for (unsigned i = 0; i < PREFETCH_THREADS; i++) threads.emplace_back ([this] { Loop (); });
+		}
+		void Loop ()
+		{
+#ifdef __linux__
+			// (background work: below the frame's threads, the terrain's
+			// workers and the sea field's, which the frame waits for)
+			setpriority (PRIO_PROCESS, (id_t)syscall (SYS_gettid), PRIO_NICE);
+#endif
+			for (;;) {
+				Job job;
+				{
+					std::unique_lock<std::mutex> lk (m);
+					cv.wait (lk, [this] { return quit || !queue.empty (); });
+					if (quit) return;
+					job = std::move (queue.front ());
+					queue.pop_front ();
+				}
+				{
+					std::lock_guard<std::mutex> jl (job.j->m);
+					job.j->queued--;
+					if (job.j->cancelled) { job.j->cv.notify_all (); continue; }
+					job.j->running++;
+				}
+				oapiScatterPrefetchCell (job.hp, job.layer, job.row, job.col);
+				std::lock_guard<std::mutex> jl (job.j->m);
+				job.j->running--;
+				job.j->done[job.key]++;
+				job.j->cv.notify_all ();
+			}
+		}
+		std::vector<std::thread> threads;
+		std::mutex m;
+		std::condition_variable cv;
+		std::deque<Job> queue;
+		bool quit = false;
+	};
 
 } // namespace
 
@@ -94,6 +178,11 @@ Field::Field (Scene *s, OBJHANDLE hp): scene (s), hPlanet (hp)
 
 Field::~Field ()
 {
+	if (jobs) { // (cells being made: dropped, those running waited for)
+		std::unique_lock<std::mutex> jl (jobs->m);
+		jobs->cancelled = true;
+		jobs->cv.wait (jl, [this] { return jobs->running == 0 && jobs->queued == 0; });
+	}
 	vkc::Context *ctx = scene->Client()->Ctx();
 	if (far.buf.buffer) {
 		vkc::Buffer bb = far.buf;
@@ -161,6 +250,8 @@ void Field::Prepare ()
 	double alt = length (P) - R;
 	auto clear = [this] () {
 		cells.clear(), pending.clear();
+		for (Pending &m : inflight) m.stale = true; // (still read in turn when made, and dropped)
+		inflightKeys.clear ();
 		for (Listing &ls : listing) ls = Listing();
 	};
 	if (alt > maxRange + 10e3) { // (far above: nothing to draw; cells kept a while)
@@ -207,25 +298,62 @@ void Field::Prepare ()
 		relisted = true;
 	}
 	if (relisted) {
+		// (cells being made that left the lists: dropped when made)
+		if (!inflight.empty ()) {
+			std::unordered_set<uint64_t> listed;
+			for (const Listing &ls : listing) listed.insert (ls.keys.begin (), ls.keys.end ());
+			for (Pending &m : inflight)
+				if (!m.stale && !listed.count (m.key)) m.stale = true, inflightKeys.erase (m.key);
+		}
 		// (the cells to read: nearest first, any layer; taken from the back)
 		pending.clear();
 		for (int l = 0; l < (int)layers.size(); l++)
 			for (uint64_t k : listing[l].keys)
-				if (!cells.count (k)) {
+				if (!cells.count (k) && !inflightKeys.count (k)) {
 					int row = (int)((k >> 28) & 0xfffffff), col = (int)(k & 0xfffffff);
 					pending.push_back ({ k, l, row, col, length (CellCentre (l, row, col) - P) });
 				}
 		std::sort (pending.begin(), pending.end(), [](const Pending &a, const Pending &b) { return a.d > b.d; });
 	}
+	// the cells to read: made by the core on the prefetch threads, nearest
+	// first, then read here in that order as they are done (at once: made
+	// already). While none are there yet, up to 50 ms waiting for them
 	auto t0 = std::chrono::steady_clock::now();
-	double budget = cells.empty() ? 0.05 : FETCH_BUDGET;
-	while (!pending.empty()) {
-		Pending m = pending.back();
-		pending.pop_back();
-		Cell &c = cells[m.key];
-		Fetch (m.layer, m.row, m.col, c);
-		c.used = frame;
-		if (!c.inst.empty()) listing[m.layer].live.push_back ({ m.key, &c });
+	const bool first = cells.empty();
+	double budget = first ? 0.05 : FETCH_BUDGET;
+	if (!jobs) jobs = std::make_shared<PrefetchJobs> ();
+	auto send = [&] () {
+		while (!pending.empty() && inflight.size() < MAX_INFLIGHT) {
+			Pending m = pending.back();
+			pending.pop_back();
+			inflight.push_back (m);
+			inflightKeys.insert (m.key);
+			Prefetcher::Get ().Push (jobs, hPlanet, m.key, m.layer, m.row, m.col);
+		}
+	};
+	send ();
+	while (!inflight.empty()) {
+		Pending m = inflight.front();
+		{
+			std::unique_lock<std::mutex> jl (jobs->m);
+			auto done = [&] { auto it = jobs->done.find (m.key); return it != jobs->done.end() && it->second > 0; };
+			if (!done ()) {
+				if (!first) break;
+				double left = budget - std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count();
+				if (left <= 0.0 || !jobs->cv.wait_for (jl, std::chrono::duration<double> (left), done))
+					break;
+			}
+			if (--jobs->done[m.key] == 0) jobs->done.erase (m.key);
+		}
+		inflight.pop_front();
+		if (!m.stale) {
+			inflightKeys.erase (m.key);
+			Cell &c = cells[m.key];
+			Fetch (m.layer, m.row, m.col, c); // (made: taken from the core at once)
+			c.used = frame;
+			if (!c.inst.empty()) listing[m.layer].live.push_back ({ m.key, &c });
+		}
+		send ();
 		if (std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count() > budget) break;
 	}
 

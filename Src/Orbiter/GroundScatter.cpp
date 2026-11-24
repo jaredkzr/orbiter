@@ -231,6 +231,7 @@ const Cover::Tile *Cover::Get (int layer, double lat, double lng)
 
 bool Cover::Sample (double lat, double lng, Vector &rgb, double &water)
 {
+	std::lock_guard<std::mutex> lk (mtx);
 	const Tile *t = Get (0, lat, lng);
 	if (!t) return false;
 	auto texel = [&](const Tile *t) {
@@ -251,7 +252,12 @@ bool Cover::Sample (double lat, double lng, Vector &rgb, double &water)
 // =======================================================================
 // GroundScatter
 
-GroundScatter::GroundScatter (const Planet *p): planet (p), R (p->Size())
+namespace {
+	std::atomic<uint64_t> scatterSerial{ 0 };
+	const size_t PREFETCH_MAX = 4096; // cells made ahead and not taken (dropped beyond)
+}
+
+GroundScatter::GroundScatter (const Planet *p): planet (p), R (p->Size()), serial (++scatterSerial)
 {
 	etile = std::make_unique<std::vector<ElevationTile>> (16);
 	seed = 0x5ca7u;
@@ -428,6 +434,7 @@ int GroundScatter::Cols (const Layer &L, int row) const
 
 void GroundScatter::CellsNear (int layer, const Vector &p, double radius, std::vector<std::pair<int,int>> &out) const
 {
+	PrepareThreads ();
 	out.clear();
 	if (layer < 0 || layer >= (int)layers.size()) return;
 	const Layer &L = layers[layer];
@@ -481,6 +488,11 @@ double GroundScatter::Clearance (const Vector &dir) const
 void GroundScatter::Clear (const Vector &p, double radius)
 {
 	if (!active) return;
+	std::unique_lock<std::shared_mutex> lk (makeMtx); // (cells being made ahead: done first, then dropped)
+	{
+		std::lock_guard<std::mutex> pk (prefMtx);
+		prefetched.clear();
+	}
 	if (basesDone) clear.push_back ({ p.unit(), radius, radius * 1.2 }); // (else: with the bases, from the planet's list)
 	cells.clear();
 	generation++;
@@ -512,10 +524,80 @@ double GroundScatter::CoverFactor (const Layer &L, const Vector &c, double water
 	}
 }
 
+void GroundScatter::PrepareThreads () const
+{
+	if (threadsReady) return;
+	auto *self = const_cast<GroundScatter*> (this);
+	std::unique_lock<std::shared_mutex> lk (makeMtx);
+	// site materials (F3): rocks follow the mask on procedural worlds, up to krMax times the climate's
+	// density; the bound of the early tests grows with it (the cap of the slope factor, coverMax, does not)
+	if (proc && !siteChecked) {
+		self->siteChecked = true;
+		ElevationManager *em = planet->ElevMgr();
+		const TerrainDetail *d = em ? em->Detail () : nullptr;
+		if (d && d->Prm().site.on) self->site = d, self->krMax = d->SiteKrMax ();
+	}
+	Clearance (Vector (0, 1, 0)); // (the bases' clearings)
+	if (ElevationManager *em = planet->ElevMgr()) em->Detail (); // (made on first use)
+	threadsReady = true;
+}
+
 void GroundScatter::Make (int layer, int row, int col, CellData &cd)
 {
+	PrepareThreads ();
+	std::vector<double> occ;
+	{
+		std::shared_lock<std::shared_mutex> lk (makeMtx);
+		MakeObjects (layer, row, col, cd.inst, occ, etile.get());
+	}
+	Finish (cd.inst, occ);
+}
+
+void GroundScatter::Finish (std::vector<Instance> &inst, const std::vector<double> &occ) const
+{
+	// (cities: none in buildings)
+	if (std::none_of (occ.begin(), occ.end(), [](double o) { return o >= 0.0; })) return;
+	cities::CityMap *cm = planet->Cities ();
+	size_t k = 0;
+	for (size_t i = 0; i < inst.size(); i++) {
+		if (occ[i] >= 0.0 && cm && cm->Occupied (inst[i].pos, occ[i])) continue;
+		inst[k++] = inst[i];
+	}
+	inst.resize (k);
+}
+
+void GroundScatter::Prefetch (int layer, int row, int col)
+{
+	if (!active || layer < 0 || layer >= (int)layers.size() || !threadsReady) return;
+	uint64_t key = CellKey (layer, row, col);
+	{
+		std::lock_guard<std::mutex> pk (prefMtx);
+		if (prefetched.count (key)) return;
+	}
+	// (the thread's elevation tiles, per planet's scatter)
+	struct Tiles { uint64_t owner = 0; std::unique_ptr<std::vector<ElevationTile>> t; };
+	thread_local Tiles tiles[2];
+	thread_local unsigned next = 0;
+	Tiles *tl = nullptr;
+	for (Tiles &t : tiles) if (t.owner == serial) tl = &t;
+	if (!tl) {
+		tl = &tiles[next++ & 1];
+		tl->owner = serial;
+		tl->t = std::make_unique<std::vector<ElevationTile>> (16);
+	}
+	Prefetched pf;
+	std::shared_lock<std::shared_mutex> lk (makeMtx);
+	MakeObjects (layer, row, col, pf.inst, pf.occ, tl->t.get());
+	std::lock_guard<std::mutex> pk (prefMtx);
+	if (prefetched.size() >= PREFETCH_MAX) prefetched.clear();
+	prefetched[key] = std::move (pf);
+}
+
+void GroundScatter::MakeObjects (int layer, int row, int col, std::vector<Instance> &inst, std::vector<double> &occ,
+	std::vector<ElevationTile> *etile)
+{
 	const Layer &L = layers[layer];
-	cd.inst.clear();
+	inst.clear(), occ.clear();
 	if (L.assets.empty()) return;
 	ElevationManager *emgr = planet->ElevMgr();
 	int nr = Rows (L), nc = Cols (L, row);
@@ -526,14 +608,7 @@ void GroundScatter::Make (int layer, int row, int col, CellData &cd)
 	int nx = std::max (1, (int)lround (wm / L.spacing)), ny = std::max (1, (int)lround (hm / L.spacing));
 	double area = wm * hm / ((double)nx * ny);
 	double coverMax = L.cover == Layer::SLOPE ? 3.0 : L.cover == Layer::BARE ? 2.0 : 1.0;
-	// site materials (F3): rocks follow the mask on procedural worlds, up to krMax times the climate's
-	// density; the bound of the early tests grows with it (the cap of the slope factor, coverMax, does not)
-	if (proc && !siteChecked) {
-		siteChecked = true;
-		ElevationManager *em = planet->ElevMgr();
-		const TerrainDetail *d = em ? em->Detail () : nullptr;
-		if (d && d->Prm().site.on) site = d, krMax = d->SiteKrMax ();
-	}
+	// (site materials: PrepareThreads)
 	const bool siteRocks = site && L.kind == ROCK;
 	const double rkMax = siteRocks ? krMax : 1.0;
 	double pmax = L.density * area * coverMax * rkMax;
@@ -555,6 +630,7 @@ void GroundScatter::Make (int layer, int row, int col, CellData &cd)
 	auto climate = [&](const Vector &d) {
 		auto t1 = Clock::now();
 		ProcTerrain::Ground g = proc->GroundAt (d.x, d.y, d.z, tidal);
+		std::lock_guard<std::mutex> sk (statMtx);
 		statClimate += std::chrono::duration<double> (Clock::now() - t1).count();
 		statEvals++;
 		return g;
@@ -590,6 +666,7 @@ void GroundScatter::Make (int layer, int row, int col, CellData &cd)
 					double sw[3];
 					site->SiteWeights (dir, sw);
 					p *= site->SiteRocks (sw);
+					std::lock_guard<std::mutex> sk (statMtx);
 					statSite += std::chrono::duration<double> (Clock::now() - t2).count();
 				}
 				if (u >= p * coverMax) continue;
@@ -647,7 +724,7 @@ void GroundScatter::Make (int layer, int row, int col, CellData &cd)
 
 			// the ground: slope
 			Vector nh (0, 1, 0);
-			double elev = emgr ? emgr->Elevation (lat, lng, 0, etile.get(), &nh) : 0.0;
+			double elev = emgr ? emgr->Elevation (lat, lng, 0, etile, &nh) : 0.0;
 			double slope = 1.0 - std::clamp (nh.y, 0.0, 1.0); // (0: flat; 0.3: 45 deg)
 			if (L.cover == Layer::SLOPE || L.cover == Layer::BARE)
 				p *= std::min (coverMax, 0.4 + 6.0 * slope);
@@ -681,10 +758,12 @@ void GroundScatter::Make (int layer, int row, int col, CellData &cd)
 			in.rot = Matrix (xr.x, up.x, zr.x, xr.y, up.y, zr.y, xr.z, up.z, zr.z);
 			in.scale = exp (log (0.75) + rnd () * (log (1.3) - log (0.75)));
 			in.pos = dir * (R + elev);
-			if (urban > 0.0 && cm->Occupied (in.pos, assets[asset].radius * in.scale + 1.0)) continue;
-			cd.inst.push_back (in);
+			// (in built-up ground: none in buildings, Finish)
+			inst.push_back (in);
+			occ.push_back (urban > 0.0 ? assets[asset].radius * in.scale + 1.0 : -1.0);
 		}
 	if (proc) {
+		std::lock_guard<std::mutex> sk (statMtx);
 		statTotal += std::chrono::duration<double> (Clock::now() - t0).count();
 		if (++statCells == PROC_STAT_CELLS && !statLogged) {
 			statLogged = true;
@@ -714,7 +793,18 @@ const std::vector<Instance> &GroundScatter::Cell (int layer, int row, int col)
 	auto it = cells.find (key);
 	if (it == cells.end()) {
 		it = cells.emplace (key, CellData ()).first;
-		Make (layer, row, col, it->second);
+		// (made ahead by Prefetch: taken, the buildings checked here)
+		bool ahead = false;
+		Prefetched pf;
+		{
+			std::lock_guard<std::mutex> pk (prefMtx);
+			auto pi = prefetched.find (key);
+			if (pi != prefetched.end()) pf = std::move (pi->second), prefetched.erase (pi), ahead = true;
+		}
+		if (ahead) {
+			Finish (pf.inst, pf.occ);
+			it->second.inst = std::move (pf.inst);
+		} else Make (layer, row, col, it->second);
 	}
 	it->second.used = ++clock;
 	return it->second.inst;

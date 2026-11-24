@@ -5345,6 +5345,13 @@ OAPIFUNC int oapiScatterCells (OBJHANDLE hPlanet, int layer, const VECTOR3 &pos,
 OAPIFUNC int oapiScatterCell (OBJHANDLE hPlanet, int layer, int row, int col, SCATTERINSTANCE *inst, int maxInst);
 
 /**
+ * \brief Make the objects of a cell ahead, on any thread (a client's worker),
+ *   so that oapiScatterCell (on the main thread) returns them at once: the
+ *   same objects. oapiScatterCells is called first (on the main thread).
+ */
+OAPIFUNC void oapiScatterPrefetchCell (OBJHANDLE hPlanet, int layer, int row, int col);
+
+/**
  * \brief Incremented whenever cells of the planet's scatter change (e.g.
  *   the ground cleared under a vessel placed there): cells kept by a
  *   client must then be read again.
