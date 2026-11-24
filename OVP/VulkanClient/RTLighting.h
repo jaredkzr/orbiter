@@ -41,6 +41,12 @@ public:
 	VkImageView LightView () const { return outL.view; }
 	VkSampler Sampler () const { return nearest; }
 
+	/// a local light's shadow ray is left out where the light it brings,
+	/// as displayed (times the exposure), is below this (a look trade:
+	/// ORBITER_VK_FLAME_REACH=<threshold>, e.g. 0.002; 0: off, the default)
+	float shadowCut = 0.0f;
+	/// the display's exposure (the last frame's: scene light -> display)
+	float exposure = 1.0f;
 	float aoRadius = 4.0f;     // [m]
 	float aoMaxDist = 2000.0f; // [m]
 

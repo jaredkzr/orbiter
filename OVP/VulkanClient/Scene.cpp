@@ -2804,6 +2804,7 @@ void Scene::RenderPrepass ()
 			if (hSun || !light.sun) // (the light's disc)
 				sunRadius = asin (std::min (1.0, light.radius / std::max (length (light.pos - camPos), 1.0)));
 			if (softSunRadius > sunRadius) sunRadius = softSunRadius; // (under an overcast: the light's apparent source, soft shadows)
+			rtl->exposure = plumes->exposure; // (the last frame's display exposure: VulkanClient)
 			rtl->Compute (frameSet[ctx->FrameIndex()], rt->Set (), rt->TextureSet (), proj[0], -proj[5], jitter, (float)sunRadius, cameraCut);
 			ctx->GpuMark ("rt lighting");
 		}

@@ -210,6 +210,7 @@ void main ()
 	for (int i = 0; i < nl; i++) {
 		if (shared_[i]) continue;
 		LocalLight l = frame.lights[i];
+		float groupN = 1.0; // (the lights sharing this ray)
 		if (l.dir.w < 1.5 && l.att.w > 0.0) {
 			int group[4], ng = 0;
 			for (int k = i; k < nl; k++)
@@ -218,6 +219,7 @@ void main ()
 				vec4 rg = vec4 (Hash4 (uvec3 (p, uint (pc.frame) * 4u + 977u))) / 4294967296.0;
 				l = frame.lights[group[min (int (rg.x * float (ng)), ng - 1)]];
 				for (int k = 1; k < ng; k++) shared_[group[k]] = true;
+				groupN = float (ng);
 			}
 		}
 		if (l.dir.w > 2.5) { // a star: towards it over its disc (soft), objects only, far
@@ -258,6 +260,15 @@ void main ()
 				j += vec3 (szf * cos (phf), szf * sin (phf), czf) * ((rad - rp) * pow (rf.z, 1.0 / 3.0));
 			}
 			if (dot (j, Lv) > 0.0) j = -j;
+		}
+		// (a look trade, RTLighting::shadowCut: where the light brings too
+		// little to be seen, as displayed, it is taken as unshadowed - the
+		// light's attenuation as lights.glsl LocalLighting's)
+		if (pc.shadowCut > 0.0) {
+			float a = min (1.0 / max (l.att.x + l.att.y * dist + l.att.z * dist * dist, 1e-4), 1.0);
+			float x = dist / l.pos.w;
+			x = clamp (1.0 - x * x * x * x, 0.0, 1.0);
+			if (a * x * x * groupN * dot (l.col.rgb, vec3 (0.2126, 0.7152, 0.0722)) < pc.shadowCut) continue;
 		}
 		// (spot light emitters inside the hull: from where the beam leaves it)
 		vec3 lp = l.pos.xyz + (l.dir.w > 1.5 ? l.dir.xyz * l.spot.z : vec3 (0.0));
