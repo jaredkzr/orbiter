@@ -59,7 +59,13 @@ vec3 LocalLighting (vec3 posView, vec3 N, vec4 vis)
 {
 	vec3 sum = vec3(0.0);
 	int n = int(frame.lightCount.x);
+#ifdef FRAME_AO
+	uvec2 mask = n > 0 ? LightMask(posView.z) : uvec2(0u); // (the lights that may reach it, frame.glsl)
+#else
+	uvec2 mask = uvec2(0xffffffffu);
+#endif
 	for (int i = 0; i < n; i++) {
+		if ((mask[i >> 5] & (1u << (i & 31))) == 0u) continue; // (beyond its range)
 		LocalLight l = frame.lights[i];
 		if (l.dir.w > 2.5) { // a star: from its direction, unattenuated
 			sum += l.col.rgb * (i < 4 ? vis[i] : 1.0) * max (dot (N, l.dir.xyz), 0.0);

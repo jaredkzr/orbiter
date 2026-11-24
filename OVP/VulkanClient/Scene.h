@@ -445,6 +445,20 @@ private:
 	vkc::Buffer frameUbo[vkc::FRAMES_IN_FLIGHT];
 	VkDescriptorSet probeFrameSet[vkc::FRAMES_IN_FLIGHT] = {};
 	vkc::Buffer probeFrameUbo[vkc::FRAMES_IN_FLIGHT];
+	// the local lights that may reach each 16 x 16 pixel tile (frame set
+	// binding 12; light_tiles.comp), built after the prepass
+	static constexpr uint32_t LIGHT_TILE = 16, LIGHT_TILES_MAX = 512 * 512;
+	vkc::Buffer lightTileBuf[vkc::FRAMES_IN_FLIGHT];
+	VkDescriptorSetLayout lightTileSetLayout = VK_NULL_HANDLE;
+	VkDescriptorPool lightTilePool = VK_NULL_HANDLE;
+	VkDescriptorSet lightTileSet = VK_NULL_HANDLE;
+	VkSampler lightTileSampler = VK_NULL_HANDLE;
+	VkImageView lightTilePrepass = VK_NULL_HANDLE;
+	VkPipelineLayout lightTileLayout = VK_NULL_HANDLE;
+	VkPipeline lightTilePipe = VK_NULL_HANDLE;
+	bool lightTilesOn = false; // (this frame's: FillFrameUniforms)
+	bool LightTilesWanted () const;
+	void BuildLightTiles ();
 	std::unique_ptr<class EnvProbe> probe;
 	bool inProbe = false, probeEnabled = true;
 	// the prepass's draws of the cities' buildings, kept until the scene's

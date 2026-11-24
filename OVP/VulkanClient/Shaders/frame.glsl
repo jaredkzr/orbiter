@@ -131,6 +131,18 @@ layout(set = FRAME_SET, binding = 5) uniform sampler2D ssrMap;
 layout(set = FRAME_SET, binding = 9) uniform sampler2D cityMap[3]; // fine, coarse road map; far built-up map
 vec4 ScreenReflection (vec2 ofs) { return frame.probe.z > 0.5 ? texture(ssrMap, gl_FragCoord.xy * frame.aoParams.xy + ofs) : vec4(0.0); }
 bool RTLighting () { return frame.rt.x > 0.5; }
+// the local lights that may reach this fragment (bits; light_tiles.comp):
+// its tile's, where it lies within the tile's depth range; else all
+layout(std430, set = FRAME_SET, binding = 12) readonly buffer LightTiles { uvec4 lightTiles[]; };
+uvec2 LightMask (float zView)
+{
+	if (frame.rt.z > 0.5) {
+		ivec2 t = ivec2 (gl_FragCoord.xy) >> 4;
+		uvec4 e = lightTiles[t.y * int (frame.rt.w) + t.x];
+		if (zView >= uintBitsToFloat (e.z) && zView <= uintBitsToFloat (e.w)) return e.xy;
+	}
+	return uvec2 (0xffffffffu);
+}
 vec4 RTVisibility () { return texture(rtVisMap, gl_FragCoord.xy * frame.aoParams.xy); }
 vec4 RTLightVisibility () { return texture(rtLightMap, gl_FragCoord.xy * frame.aoParams.xy); }
 // light of the planet nearby on a surface with normal N (a large source:

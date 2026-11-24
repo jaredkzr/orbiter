@@ -5,6 +5,7 @@
 #include "CityKit.h"
 #include "GfxSettings.h"
 #include "AO.h"
+#include "light_tiles.comp.h"
 #include "SSR.h"
 #include "RayTracing.h"
 #include "RTLighting.h"
@@ -168,7 +169,7 @@ bool Scene::Init ()
 	tracks->Init (ctx);
 	waterFx = std::make_unique<WaterFx>();
 	crashFires = std::make_unique<CrashFires>();
-	VkDescriptorSetLayoutBinding b[11]{};
+	VkDescriptorSetLayoutBinding b[12]{};
 	b[0].binding = 0;
 	b[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 	b[0].descriptorCount = 1;
@@ -201,15 +202,19 @@ bool Scene::Init ()
 	b[10] = b[2];
 	b[10].binding = 11; // the dust's transmittance towards a vessel's flames (lights.glsl FlameOcc: sprites, surfaces, the smoke volume)
 	b[10].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+	b[11].binding = 12; // the local lights per screen tile (lights.glsl LocalLighting; light_tiles.comp)
+	b[11].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+	b[11].descriptorCount = 1;
+	b[11].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 	VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-	lci.bindingCount = 11;
+	lci.bindingCount = 12;
 	lci.pBindings = b;
 	VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &lci, nullptr, &frameLayout));
 
 	VkDescriptorPoolSize ps[3] = {
 		{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2 * vkc::FRAMES_IN_FLIGHT },
 		{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * (2 * SHADOW_CASCADES + 9) * vkc::FRAMES_IN_FLIGHT }, // (+1: the cities' far map; +1 the flames' dust transmittance)
-		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * vkc::FRAMES_IN_FLIGHT }
+		{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * 2 * vkc::FRAMES_IN_FLIGHT } // (ground tracks, light tiles)
 	};
 	VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 	pci.maxSets = 2 * vkc::FRAMES_IN_FLIGHT;
@@ -243,7 +248,10 @@ bool Scene::Init ()
 			dii2[k] = { shadows[k]->DepthSampler(), shadows[k]->View(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 		VkDescriptorImageInfo pii{ probe->Sampler(), probe->CubeView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 		VkDescriptorBufferInfo tbi{ tracks->Buffer (i), 0, GroundTracks::BUFFER_SIZE };
-		VkWriteDescriptorSet wr[5]{};
+		if (!lightTileBuf[i].buffer)
+			lightTileBuf[i] = ctx->CreateBuffer (LIGHT_TILES_MAX * 16, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false);
+		VkDescriptorBufferInfo lbi{ lightTileBuf[i].buffer, 0, LIGHT_TILES_MAX * 16 };
+		VkWriteDescriptorSet wr[6]{};
 		for (auto &w : wr) w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, w.dstSet = set;
 		wr[3].dstBinding = 8;
 		wr[3].descriptorCount = 1;
@@ -265,7 +273,48 @@ bool Scene::Init ()
 		wr[4].descriptorCount = SHADOW_CASCADES;
 		wr[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		wr[4].pImageInfo = dii2;
-		vkUpdateDescriptorSets (ctx->device, 5, wr, 0, nullptr);
+		wr[5].dstBinding = 12;
+		wr[5].descriptorCount = 1;
+		wr[5].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+		wr[5].pBufferInfo = &lbi;
+		vkUpdateDescriptorSets (ctx->device, 6, wr, 0, nullptr);
+	}
+	// the light tiles' pass: the frame set, and set 1 with the prepass
+	{
+		VkDescriptorSetLayoutBinding pb{ 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
+		VkDescriptorSetLayoutCreateInfo pci2{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+		pci2.bindingCount = 1;
+		pci2.pBindings = &pb;
+		VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &pci2, nullptr, &lightTileSetLayout));
+		VkDescriptorPoolSize lps{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 };
+		VkDescriptorPoolCreateInfo lpci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+		lpci.maxSets = 1;
+		lpci.poolSizeCount = 1;
+		lpci.pPoolSizes = &lps;
+		VK_CHECK(vkCreateDescriptorPool (ctx->device, &lpci, nullptr, &lightTilePool));
+		VkDescriptorSetAllocateInfo lai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+		lai.descriptorPool = lightTilePool;
+		lai.descriptorSetCount = 1;
+		lai.pSetLayouts = &lightTileSetLayout;
+		VK_CHECK(vkAllocateDescriptorSets (ctx->device, &lai, &lightTileSet));
+		VkSamplerCreateInfo nsi{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+		nsi.magFilter = nsi.minFilter = VK_FILTER_NEAREST;
+		nsi.addressModeU = nsi.addressModeV = nsi.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		VK_CHECK(vkCreateSampler (ctx->device, &nsi, nullptr, &lightTileSampler));
+		VkDescriptorSetLayout tl[2] = { frameLayout, lightTileSetLayout };
+		VkPushConstantRange tpc{ VK_SHADER_STAGE_COMPUTE_BIT, 0, 4 * sizeof(int32_t) };
+		VkPipelineLayoutCreateInfo tplci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+		tplci.setLayoutCount = 2;
+		tplci.pSetLayouts = tl;
+		tplci.pushConstantRangeCount = 1;
+		tplci.pPushConstantRanges = &tpc;
+		VK_CHECK(vkCreatePipelineLayout (ctx->device, &tplci, nullptr, &lightTileLayout));
+		VkShaderModule cs = ctx->CreateShaderModule (spv_light_tiles_comp, spv_light_tiles_comp_size);
+		VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+		cpi.stage = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, cs, "main" };
+		cpi.layout = lightTileLayout;
+		VK_CHECK(vkCreateComputePipelines (ctx->device, VK_NULL_HANDLE, 1, &cpi, nullptr, &lightTilePipe));
+		vkDestroyShaderModule (ctx->device, cs, nullptr);
 	}
 
 	// the cities' road map: none yet (a black texel), sampled with mip levels
@@ -560,6 +609,12 @@ void Scene::Shutdown ()
 	if (citySampler) vkDestroySampler (ctx->device, citySampler, nullptr);
 	vkDestroyDescriptorPool (ctx->device, framePool, nullptr);
 	vkDestroyDescriptorSetLayout (ctx->device, frameLayout, nullptr);
+	for (auto &b : lightTileBuf) ctx->DestroyBuffer (b);
+	if (lightTilePipe) vkDestroyPipeline (ctx->device, lightTilePipe, nullptr);
+	if (lightTileLayout) vkDestroyPipelineLayout (ctx->device, lightTileLayout, nullptr);
+	if (lightTilePool) vkDestroyDescriptorPool (ctx->device, lightTilePool, nullptr);
+	if (lightTileSetLayout) vkDestroyDescriptorSetLayout (ctx->device, lightTileSetLayout, nullptr);
+	if (lightTileSampler) vkDestroySampler (ctx->device, lightTileSampler, nullptr);
 	ctx = nullptr;
 }
 
@@ -2283,6 +2338,9 @@ void Scene::BeginFrame ()
 	fu.rt[0] = rtl->Enabled () && !relOn ? 1.0f : 0.0f;
 	if (relOn) fu.aoParams[3] = 1.0f;
 	fu.rt[1] = (float)RTLighting::SHADOWED_LIGHTS;
+	lightTilesOn = LightTilesWanted ();
+	fu.rt[2] = lightTilesOn ? 1.0f : 0.0f; // (the probe's: 0, its view is another)
+	fu.rt[3] = (float)((ctx->RenderExtent ().width + LIGHT_TILE - 1) / LIGHT_TILE);
 	memcpy (frameUbo[fi].mapped, &fu, sizeof(fu));
 	UpdateCamAtmSet ();
 }
@@ -2734,6 +2792,8 @@ void Scene::RenderPrepass ()
 	deferredBuildings.clear ();
 	ctx->EndTarget ();
 	ctx->GpuMark ("prepass");
+	BuildLightTiles ();
+	if (lightTilesOn) ctx->GpuMark ("light tiles");
 	if (ao->enabled && !rtl->Enabled () && !relOn) ao->Compute (proj[0], -proj[5]);
 	ctx->GpuMark ("ao");
 	if (rt && rt->Enabled ()) {
@@ -2841,6 +2901,55 @@ void Scene::RenderProbe ()
 	camAtmSet = sAtm, cloudsActive = sClouds;
 	probeFace = (probeFace + 1) % 6;
 	if (probeFacesDone < 6) probeFacesDone++;
+}
+
+bool Scene::LightTilesWanted () const
+{
+	// (ORBITER_VK_LIGHT_TILES=0: every surface pixel loops over all lights)
+	static const bool off = [] { const char *e = getenv ("ORBITER_VK_LIGHT_TILES"); return e && *e && !atoi (e); }();
+	VkExtent2D e = ctx->RenderExtent ();
+	uint32_t n = ((e.width + LIGHT_TILE - 1) / LIGHT_TILE) * ((e.height + LIGHT_TILE - 1) / LIGHT_TILE);
+	// (a relativistic or lensed view: the tiles' frusta are not where the
+	// positions are)
+	return !off && lightTilePipe && !relOn && !lensOn && n <= LIGHT_TILES_MAX
+		&& ao->Extent ().width == e.width && ao->Extent ().height == e.height;
+}
+
+void Scene::BuildLightTiles ()
+{
+	if (!lightTilesOn) return;
+	if (ao->PrepassView () != lightTilePrepass) {
+		if (lightTilePrepass) vkDeviceWaitIdle (ctx->device); // (the set may be in use)
+		lightTilePrepass = ao->PrepassView ();
+		VkDescriptorImageInfo ii{ lightTileSampler, lightTilePrepass, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+		VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+		w.dstSet = lightTileSet, w.dstBinding = 0, w.descriptorCount = 1;
+		w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, w.pImageInfo = &ii;
+		vkUpdateDescriptorSets (ctx->device, 1, &w, 0, nullptr);
+	}
+	ctx->EndTarget ();
+	VkCommandBuffer cmd = ctx->Cmd ();
+	VkExtent2D e = ctx->RenderExtent ();
+	int32_t pc[4] = { (int32_t)e.width, (int32_t)e.height, (int32_t)((e.width + LIGHT_TILE - 1) / LIGHT_TILE), 0 };
+	VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+	mb.srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT; // (the last frame's reads of this slot's buffer: fenced; the prepass)
+	mb.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+	mb.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+	mb.dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+	VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+	dep.memoryBarrierCount = 1;
+	dep.pMemoryBarriers = &mb;
+	vkCmdPipelineBarrier2 (cmd, &dep);
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, lightTilePipe);
+	VkDescriptorSet s[2] = { frameSet[ctx->FrameIndex()], lightTileSet };
+	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_COMPUTE, lightTileLayout, 0, 2, s, 0, nullptr);
+	vkCmdPushConstants (cmd, lightTileLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc);
+	vkCmdDispatch (cmd, (uint32_t)pc[2], (e.height + LIGHT_TILE - 1) / LIGHT_TILE, 1);
+	mb.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+	mb.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+	mb.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+	mb.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+	vkCmdPipelineBarrier2 (cmd, &dep);
 }
 
 bool Scene::SunOnScreen (float uv[2]) const

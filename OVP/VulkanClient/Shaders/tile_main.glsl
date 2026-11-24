@@ -1093,7 +1093,9 @@ void main()
 			// light is (the first four: ray traced)
 			{
 				int nl = int(frame.lightCount.x);
+				uvec2 lmask = nl > 0 ? LightMask(vPosView.z) : uvec2(0u);
 				for (int i = 0; i < nl; i++) {
+					if ((lmask[i >> 5] & (1u << (i & 31))) == 0u) continue; // (beyond its range)
 					LocalLight l = frame.lights[i];
 					if (l.dir.w > 2.5) continue;
 					vec3 Ll = l.pos.xyz - vPosView;
