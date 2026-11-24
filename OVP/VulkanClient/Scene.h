@@ -108,6 +108,7 @@ public:
 	/// tiles, cities and scatter streamed, nothing drawn; whether any are
 	/// still coming
 	bool WarmUpStep (bool report = false);
+	bool warmingUp = false; // (the loading's hold: streaming budgets raised)
 
 	VObject *GetVisual (OBJHANDLE hObj);
 	void DeleteVisual (OBJHANDLE hObj);

@@ -155,6 +155,7 @@ private:
 	/// stream the view's tiles, cities and scatter (the simulation held)
 	/// until they are in, at most ORBITER_VK_WARMUP_S (default 3; 0: none)
 	void WarmUp ();
+	void DrawHoldOverlay ();
 	bool warmedUp = false;
 	void ApplyVideoMode ();
 	void CaptureBackbuffer (const std::string &path, bool async = false);

@@ -31,6 +31,7 @@
 #include <future>
 #include <atomic>
 #include <cstring>
+#include <cfloat>
 #include <thread>
 #include <algorithm>
 #include <chrono>
@@ -573,22 +574,79 @@ void VulkanClient::WarmUp ()
 	auto t0 = std::chrono::steady_clock::now ();
 	int frames = 0, idle = 0;
 	bool busy = true;
+	scene->warmingUp = true;
 	while (std::chrono::duration<double> (std::chrono::steady_clock::now () - t0).count () < cap) {
 		if (!ctx.BeginFrame ()) break;
 		bool last = std::chrono::duration<double> (std::chrono::steady_clock::now () - t0).count () > cap - 0.01;
 		busy = scene->WarmUpStep (last);
 		r2d->Flush ();
 		ctx.BindBackbuffer (false);
+		DrawHoldOverlay ();
+		// (ORBITER_VK_WARMUP_SHOT=<png>: the hold's 20th frame, to check the overlay)
+		static const char *holdShot = getenv ("ORBITER_VK_WARMUP_SHOT");
+		if (holdShot && frames == 20) CaptureBackbuffer (holdShot);
 		ctx.EndFrame ();
 		frames++;
 		if (busy) idle = 0;
 		else if (++idle >= 3) break;
 	}
+	scene->warmingUp = false;
 	oapiWriteLogV ("VulkanClient: loading held %.2f s, %d frames, for the first view's tiles, cities and scatter%s",
 		std::chrono::duration<double> (std::chrono::steady_clock::now () - t0).count (), frames, busy ? " (not all in)" : "");
 	vkc::Stats () = vkc::FrameStats (); // (not the first frame's)
 	ctx.ClearCpuTimes ();
 	ctx.TakeFenceWait ();
+}
+
+void VulkanClient::DrawHoldOverlay ()
+{
+	// The loading's hold over the cleared frame, in the launcher's loading
+	// screen's style (LaunchpadPosix DrawLoading): the backdrop, and at the
+	// bottom left "LOADING TERRAIN" in small spaced capitals in the accent
+	// colour over a short accent line. Drawn into a draw list of its own (an
+	// ImGui frame is open: the core began it before the scene), with the
+	// interface's fonts and colours
+	if (!imguiReady || !ImGui::GetCurrentContext ()) return;
+	ImGuiIO &io = ImGui::GetIO ();
+	if (io.Fonts->Fonts.Size == 0) return;
+	VkExtent2D e = ctx.Extent ();
+	const float W = (float)e.width, H = (float)e.height, s = H / 1080.0f; // (ui::Px: the scale follows the height)
+	// (the theme's sRGB colours, linear as the interface draws them: UiTheme.cpp)
+	auto lin = [](unsigned rgb, float a) {
+		auto L = [](float c) { return c <= 0.04045f ? c / 12.92f : std::pow ((c + 0.055f) / 1.055f, 2.4f); };
+		return ImGui::ColorConvertFloat4ToU32 (ImVec4 (L (((rgb >> 16) & 0xff) / 255.0f), L (((rgb >> 8) & 0xff) / 255.0f), L ((rgb & 0xff) / 255.0f), a));
+	};
+	const ImU32 backdrop = lin (0x060A13, 1.0f), accent = lin (0x4CC3FF, 1.0f);
+	ImFont *font = io.FontDefault ? io.FontDefault : io.Fonts->Fonts[0];
+	for (ImFont *f : io.Fonts->Fonts) // (Inter Medium: the launcher's labels)
+		if (f && strstr (f->GetDebugName (), "Medium")) { font = f; break; }
+	ImDrawList dl (ImGui::GetDrawListSharedData ());
+	dl._ResetForNewFrame ();
+	dl.PushClipRect (ImVec2 (0, 0), ImVec2 (W, H));
+	dl.PushTexture (io.Fonts->TexRef);
+	dl.AddRectFilled (ImVec2 (0, 0), ImVec2 (W, H), backdrop);
+	const float m = 56.0f * s, size = 12.5f * s, spacing = 3.0f * s;
+	// (the spaced capitals, glyph by glyph)
+	auto spaced = [&](float x, float y, const char *t, ImU32 col) {
+		for (const char *p = t; *p; p++) {
+			char c[2] = { *p, 0 };
+			dl.AddText (font, size, ImVec2 (x, y), col, c);
+			x += font->CalcTextSizeA (size, FLT_MAX, 0.0f, c).x + spacing;
+		}
+		return x;
+	};
+	float y = H - m - size;
+	spaced (m, y, "LOADING TERRAIN", accent);
+	dl.AddRectFilled (ImVec2 (m, H - m + 12.0f * s), ImVec2 (m + 72.0f * s, H - m + 15.0f * s), accent, 2.0f * s);
+	ImDrawData dd;
+	dd.Valid = true;
+	dd.DisplayPos = ImVec2 (0, 0);
+	dd.DisplaySize = ImVec2 (W, H);
+	dd.FramebufferScale = ImVec2 (1, 1);
+	dd.OwnerViewport = ImGui::GetMainViewport (); // (the backend's buffers per viewport)
+	dd.Textures = &ImGui::GetPlatformIO ().Textures; // (glyphs baked for these sizes uploaded)
+	dd.AddDrawList (&dl);
+	ImGui_ImplVulkan_RenderDrawData (&dd, ctx.Cmd ());
 }
 
 void VulkanClient::clbkImGuiRenderDrawData ()

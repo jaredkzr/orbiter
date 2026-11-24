@@ -218,7 +218,7 @@ void Field::Prepare ()
 		std::sort (pending.begin(), pending.end(), [](const Pending &a, const Pending &b) { return a.d > b.d; });
 	}
 	auto t0 = std::chrono::steady_clock::now();
-	double budget = cells.empty() ? 0.05 : FETCH_BUDGET;
+	double budget = cells.empty() || scene->warmingUp ? 0.05 : FETCH_BUDGET; // (more while empty, and in the loading's hold)
 	while (!pending.empty()) {
 		Pending m = pending.back();
 		pending.pop_back();
