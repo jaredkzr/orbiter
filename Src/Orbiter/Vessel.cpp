@@ -249,6 +249,17 @@ Vessel::~Vessel ()
 
 // ==============================================================
 
+bool Vessel::ClassExists (const char *classname)
+{
+	if (!classname || !*classname) return false;
+	char cbuf[256];
+	snprintf (cbuf, sizeof (cbuf), "Vessels\\%s", classname);
+	ifstream f (g_pOrbiter->ConfigPath (cbuf));
+	if (f.good()) return true;
+	ifstream g (g_pOrbiter->ConfigPath (cbuf + 8));
+	return g.good();
+}
+
 bool Vessel::OpenConfigFile (ifstream &cfgfile) const
 {
 	char cbuf[256];

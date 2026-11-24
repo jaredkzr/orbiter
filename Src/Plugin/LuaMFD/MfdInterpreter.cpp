@@ -154,6 +154,7 @@ unsigned int WINAPI InterpreterList::Environment::InterpreterThreadProc (LPVOID 
 	MFDInterpreter *interp = (MFDInterpreter*)env->interp;
 
 	// interpreter loop
+	interp->BindThread (); // (the turn's other side: Orbiter's)
 	for (;;) {
 		interp->WaitExec(); // wait for execution permission
 		if (interp->Status() == 1) break; // close thread requested

@@ -87,6 +87,7 @@ Interpreter *InterpreterList::Environment::CreateInterpreter ()
 	(void)id;
 	threadDone = false;
 	hThread = new std::thread (InterpreterThreadProc, this);
+	interp->BindThread (static_cast<std::thread*>(hThread)->get_id ()); // (all others: Orbiter's side of the turn)
 #endif
 	return interp;
 }

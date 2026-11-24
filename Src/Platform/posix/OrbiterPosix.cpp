@@ -21,6 +21,8 @@
 #include "Camera.h"
 #include "Select.h"
 #include "Vessel.h"
+#include <cstdio>
+#include <cstdlib>
 #include "Platform.h"
 #include "posix/OrbiterInput.h"
 #include "LaunchpadPosix.h"
@@ -332,7 +334,11 @@ void Orbiter::TerminateOnError ()
 {
 	LogOut (">>> TERMINATING <<<");
 	fprintf (stderr, "Orbiter: terminating after critical error. See Orbiter.log for details.\n");
-	exit (1);
+	// (at once: called on any thread - a script's - exit's destructors and
+	// handlers ran there while the others went on: a hang or a crash. The
+	// log is written a line at a time)
+	fflush (nullptr);
+	_Exit (1);
 }
 
 void Orbiter::UpdateServerWnd (HWND hWnd)

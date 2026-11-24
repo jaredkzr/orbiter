@@ -384,8 +384,18 @@ DLLEXPORT VESSEL *oapiGetFocusInterface ()
 	return g_focusobj->GetModuleInterface();
 }
 
+// (no class configuration: no vessel, instead of terminating Orbiter; from a
+// script's thread that also hung or crashed it)
+static bool CreatableClass (const char *name, const char *classname)
+{
+	if (Vessel::ClassExists (classname ? classname : name)) return true;
+	LOGOUT_WARN ("oapiCreateVessel: no configuration file for vessel class %s: %s not created", classname ? classname : name, name ? name : "");
+	return false;
+}
+
 DLLEXPORT OBJHANDLE oapiCreateVessel (const char *name, const char *classname, const VESSELSTATUS &status)
 {
+	if (!CreatableClass (name, classname)) return NULL;
 	Vessel *vessel = new Vessel (g_psys, name, classname, status); TRACENEW
 	g_pOrbiter->InsertVessel (vessel);
 	return (OBJHANDLE)vessel;
@@ -393,6 +403,7 @@ DLLEXPORT OBJHANDLE oapiCreateVessel (const char *name, const char *classname, c
 
 DLLEXPORT OBJHANDLE oapiCreateVesselEx (const char *name, const char *classname, const void *status)
 {
+	if (!CreatableClass (name, classname)) return NULL;
 	Vessel *vessel = new Vessel (g_psys, name, classname, status); TRACENEW
 	g_pOrbiter->InsertVessel (vessel);
 	return (OBJHANDLE)vessel;

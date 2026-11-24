@@ -1311,6 +1311,10 @@ public:
 
 protected:
 	bool OpenConfigFile (std::ifstream &cfgfile) const;
+public:
+	/// a vessel class's configuration file is there (where OpenConfigFile looks)
+	static bool ClassExists (const char *classname);
+private:
 	// returns configuration file for the vessel
 	// This first looks in Config\Vessels, then in Config
 
