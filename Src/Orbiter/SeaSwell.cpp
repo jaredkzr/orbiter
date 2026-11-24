@@ -172,17 +172,12 @@ void Swell::Accumulate (const Cell &c, double w, const Vector &u, double t, doub
 	}
 }
 
-template<bool FULL>
-void Swell::Eval (const Vector &u, double t, double z, SwellSample &s) const
+int Swell::Blend (double lat, double lng, CellW cells[4], double &norm) const
 {
-	s = SwellSample();
-	if (calm) return;
-	double lat = asin (std::clamp (u.y, -1.0, 1.0)), lng = atan2 (u.z, u.x);
 	int r[2];
 	double wr;
 	Rows (lat, r[0], r[1], wr);
 	double wrow[2] = { 1.0 - wr, wr };
-	struct W { int row, col; double w; } cells[4];
 	int n = 0;
 	double w2 = 0.0;
 	for (int i = 0; i < 2; i++) {
@@ -194,7 +189,19 @@ void Swell::Eval (const Vector &u, double t, double z, SwellSample &s) const
 		if (wc > 0.0 && c1 != c0) cells[n++] = { r[i], c1, wrow[i] * wc };
 	}
 	for (int i = 0; i < n; i++) w2 += cells[i].w * cells[i].w;
-	double norm = w2 > 0.0 ? 1.0 / sqrt (w2) : 0.0;
+	norm = w2 > 0.0 ? 1.0 / sqrt (w2) : 0.0;
+	return n;
+}
+
+template<bool FULL>
+void Swell::Eval (const Vector &u, double t, double z, SwellSample &s) const
+{
+	s = SwellSample();
+	if (calm) return;
+	double lat = asin (std::clamp (u.y, -1.0, 1.0)), lng = atan2 (u.z, u.x);
+	CellW cells[4];
+	double norm;
+	int n = Blend (lat, lng, cells, norm);
 	// (the point's own east and north: the cells' frames turned onto them)
 	double slat = sin (lat), clat = cos (lat), slng = sin (lng), clng = cos (lng);
 	Vector ep (-slng, 0.0, clng), np (-slat * clng, clat, -slat * slng);
@@ -224,23 +231,9 @@ void Swell::Components (const Vector &u, double t, std::vector<Comp2> &out) cons
 	out.clear();
 	if (calm) return;
 	double lat = asin (std::clamp (u.y, -1.0, 1.0)), lng = atan2 (u.z, u.x);
-	int r[2];
-	double wr;
-	Rows (lat, r[0], r[1], wr);
-	double wrow[2] = { 1.0 - wr, wr };
-	struct W { int row, col; double w; } cells[4];
-	int n = 0;
-	for (int i = 0; i < 2; i++) {
-		if (wrow[i] <= 0.0 || (i == 1 && r[1] == r[0])) continue;
-		int c0, c1;
-		double wc;
-		Cols (r[i], lng, c0, c1, wc);
-		if (1.0 - wc > 0.0) cells[n++] = { r[i], c0, wrow[i] * (1.0 - wc) };
-		if (wc > 0.0 && c1 != c0) cells[n++] = { r[i], c1, wrow[i] * wc };
-	}
-	double w2 = 0.0;
-	for (int i = 0; i < n; i++) w2 += cells[i].w * cells[i].w;
-	double norm = w2 > 0.0 ? 1.0 / sqrt (w2) : 0.0;
+	CellW cells[4];
+	double norm;
+	int n = Blend (lat, lng, cells, norm);
 	double slat = sin (lat), clat = cos (lat), slng = sin (lng), clng = cos (lng);
 	Vector ep (-slng, 0.0, clng), np (-slat * clng, clat, -slat * slng);
 	const double R = prm.radius;
@@ -268,6 +261,103 @@ double Swell::Height (const Vector &u, double t) const
 	SwellSample s;
 	Eval<false> (u, t, 0.0, s);
 	return s.h;
+}
+
+void Swell::SampleGrid (const Vector &O, const Vector &e, const Vector &nn, double x0, double z0, double ds, int n,
+	double t, double *h, Vector *vel) const
+{
+	if (n <= 0) return;
+	const size_t N = (size_t)n * n;
+	for (size_t p = 0; p < N; p++) h[p] = 0.0, vel[p] = Vector (0, 0, 0);
+	if (calm) return;
+	// (a grid wider than this: the plane's curvature would show in the phases)
+	const double HALF_MAX = 1000.0;
+	if (0.5 * (n - 1) * ds > HALF_MAX) {
+		for (int j = 0; j < n; j++)
+			for (int i = 0; i < n; i++) {
+				SwellSample s;
+				Eval<true> ((O + e * (x0 + i * ds) + nn * (z0 + j * ds)).unit(), t, 0.0, s);
+				h[(size_t)j * n + i] = s.h, vel[(size_t)j * n + i] = s.vel;
+			}
+		return;
+	}
+	const double R = prm.radius;
+	// the nodes: the cells blended at each (as Eval), its own east and north
+	struct Node { CellW cells[4]; int nc; double norm; Vector ep, np; };
+	std::vector<Node> nodes (N);
+	std::vector<std::pair<int, int>> used; // (the cells any node takes)
+	for (int j = 0; j < n; j++)
+		for (int i = 0; i < n; i++) {
+			Node &d = nodes[(size_t)j * n + i];
+			Vector u ((O + e * (x0 + i * ds) + nn * (z0 + j * ds)).unit());
+			double lat = asin (std::clamp (u.y, -1.0, 1.0)), lng = atan2 (u.z, u.x);
+			d.nc = Blend (lat, lng, d.cells, d.norm);
+			double slat = sin (lat), clat = cos (lat), slng = sin (lng), clng = cos (lng);
+			d.ep = Vector (-slng, 0.0, clng), d.np = Vector (-slat * clng, clat, -slat * slng);
+			for (int k = 0; k < d.nc; k++)
+				if (std::find (used.begin(), used.end(), std::make_pair (d.cells[k].row, d.cells[k].col)) == used.end())
+					used.emplace_back (d.cells[k].row, d.cells[k].col);
+		}
+	// (a cell's plane coordinates of a node, R u.e and R u.n with u = P / |P|
+	// the node's direction: P's are linear over the grid, and the scale
+	// R / |P| is the centre's times 1 + q, q = qx (i) + qz (j) to first order
+	// in the plane's curvature: |P|^2 = |O|^2 + x^2 + z^2)
+	const double xc = x0 + 0.5 * (n - 1) * ds, zc = z0 + 0.5 * (n - 1) * ds;
+	const Vector P00 (O + e * x0 + nn * z0), Pc (O + e * xc + nn * zc);
+	const double s = R / Pc.length(), pc2 = 2.0 * Pc.length2();
+	std::vector<double> qx (n), qz (n);
+	for (int i = 0; i < n; i++) {
+		double x = x0 + i * ds, z = z0 + i * ds;
+		qx[i] = -(x * x - xc * xc) / pc2, qz[i] = -(z * z - zc * zc) / pc2;
+	}
+	// each cell's sums at the nodes: height; velocity east, up, north of the cell's frame
+	std::vector<double> sh (N), svx (N), svy (N), svz (N), ci (n), si (n);
+	std::lock_guard<std::mutex> lk (cacheLock);
+	for (const auto &key : used) {
+		const Cell &c = GetCell (key.first, key.second);
+		std::fill (sh.begin(), sh.end(), 0.0), std::fill (svx.begin(), svx.end(), 0.0);
+		std::fill (svy.begin(), svy.end(), 0.0), std::fill (svz.begin(), svz.end(), 0.0);
+		double X0 = s * dotp (P00, c.e), Y0 = s * dotp (P00, c.n);
+		double Xc = s * dotp (Pc, c.e), Yc = s * dotp (Pc, c.n);
+		double Xi = s * ds * dotp (e, c.e), Yi = s * ds * dotp (e, c.n);
+		double Xj = s * ds * dotp (nn, c.e), Yj = s * ds * dotp (nn, c.n);
+		for (const Comp &k : c.comp) {
+			// (the phase at node (i, j), as Accumulate's: A + i bi + j bj,
+			// and the curvature's share, the centre's plane phase times q)
+			double A = k.k * (k.dx * X0 + k.dz * Y0) - fmod (k.w * t, 2.0 * PI_) + k.phase;
+			double bi = k.k * (k.dx * Xi + k.dz * Yi), bj = k.k * (k.dx * Xj + k.dz * Yj);
+			double Fc = k.k * (k.dx * Xc + k.dz * Yc);
+			for (int i = 0; i < n; i++) ci[i] = cos (i * bi + Fc * qx[i]), si[i] = sin (i * bi + Fc * qx[i]);
+			const double a = k.a, avx = k.a * k.w * k.dx, avz = k.a * k.w * k.dz, avy = k.a * k.w;
+			for (int j = 0; j < n; j++) {
+				double cj = cos (A + j * bj + Fc * qz[j]), sj = sin (A + j * bj + Fc * qz[j]);
+				double *__restrict rh = &sh[(size_t)j * n], *__restrict rx = &svx[(size_t)j * n];
+				double *__restrict ry = &svy[(size_t)j * n], *__restrict rz = &svz[(size_t)j * n];
+				const double *__restrict pc = ci.data(), *__restrict ps = si.data();
+				for (int i = 0; i < n; i++) {
+					double cp = cj * pc[i] - sj * ps[i];
+					double sp = sj * pc[i] + cj * ps[i];
+					rh[i] += a * cp;
+					rx[i] += avx * cp;
+					rz[i] += avz * cp;
+					ry[i] += avy * sp;
+				}
+			}
+		}
+		// into the nodes that blend this cell: weighted, its frame turned onto theirs
+		for (size_t p = 0; p < N; p++) {
+			const Node &d = nodes[p];
+			double w = 0.0;
+			for (int k = 0; k < d.nc; k++)
+				if (d.cells[k].row == key.first && d.cells[k].col == key.second) w = d.cells[k].w * d.norm;
+			if (w == 0.0) continue;
+			double ee = dotp (d.ep, c.e), en = dotp (d.ep, c.n), ne = dotp (d.np, c.e), nnn = dotp (d.np, c.n);
+			h[p] += w * sh[p];
+			vel[p].x += w * (svx[p] * ee + svz[p] * en);
+			vel[p].z += w * (svx[p] * ne + svz[p] * nnn);
+			vel[p].y += w * svy[p];
+		}
+	}
 }
 
 } // namespace sea

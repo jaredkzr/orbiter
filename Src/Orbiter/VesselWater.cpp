@@ -97,6 +97,12 @@ void VesselBase::HydroStep (double h)
 	toLocal (*s1, P1, x1, v1, R1);
 	const Vector cg (WaterCG());
 
+	// (quick: not reaching the water in the step at all)
+	{
+		double lowest = std::min (x0.y, x1.y) - m->radius;
+		if (lowest > sw.CrestMax() + 0.5) { water.wet = false; return; }
+	}
+
 	// the swell about the body at the step's end
 	hydro::Surface srf;
 	srf.rho = sea->Density(), srf.nu = sea->Viscosity();
@@ -111,22 +117,10 @@ void VesselBase::HydroStep (double h)
 		srf.h.resize ((size_t)n * n), srf.vel.resize ((size_t)n * n);
 		double t = sea::Sea::SwellTime (td.MJD1);
 		Vector e (L.m11, L.m12, L.m13), nn (L.m31, L.m32, L.m33); // (east, north: planet frame)
-		for (int j = 0; j < n; j++)
-			for (int i = 0; i < n; i++) {
-				Vector u ((O + e * (srf.x0 + i * ds) + nn * (srf.z0 + j * ds)).unit());
-				sea::SwellSample ss;
-				sw.Sample (u, t, 0.0, ss);
-				srf.h[(size_t)j * n + i] = ss.h;
-				srf.vel[(size_t)j * n + i] = ss.vel;
-			}
+		// (the grid's Samples, as plane waves over it)
+		sw.SampleGrid (O, e, nn, srf.x0, srf.z0, ds, n, t, srf.h.data(), srf.vel.data());
 		double wp = Pi2 / std::max (sw.Tp(), 0.1);
 		srf.kp = wp * wp / srf.g;
-	}
-
-	// (quick: not reaching the water in the step at all)
-	{
-		double lowest = std::min (x0.y, x1.y) - m->radius;
-		if (lowest > sw.CrestMax() + 0.5) { water.wet = false; return; }
 	}
 
 	// the step again, in the water: from the start, with the other forces'
