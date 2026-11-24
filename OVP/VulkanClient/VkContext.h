@@ -78,6 +78,8 @@ namespace vkc {
 		void EndFrame ();
 		void SubmitPending ();
 		bool InFrame () const { return inFrame; }
+		/// a frame's commands being recorded (Rec)
+		bool Recording () const { return recording; }
 
 		// Rendering scopes. Binding a target ends the current scope if it
 		// refers to a different target. The backbuffer is cleared on its

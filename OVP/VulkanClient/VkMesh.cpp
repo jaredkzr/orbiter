@@ -124,8 +124,24 @@ VkMesh::VkMesh (vkc::Context *c, TextureManager *tm, const std::vector<Part> &pa
 	}
 }
 
+namespace {
+	std::vector<VkMesh*> editedMeshes; // (meshes with vertex edits made between frames)
+}
+
+void VkMesh::FlushEdits ()
+{
+	for (VkMesh *m : editedMeshes) {
+		if (m->vbuf.buffer && m->editMin <= m->editMax)
+			m->ctx->UpdateBuffer (m->vbuf.buffer, m->editMin * sizeof(NTVERTEX), m->vtx.data() + m->editMin,
+				(m->editMax - m->editMin + 1) * sizeof(NTVERTEX));
+		m->editMin = UINT32_MAX, m->editMax = 0;
+	}
+	editedMeshes.clear ();
+}
+
 VkMesh::~VkMesh ()
 {
+	if (editMin <= editMax) editedMeshes.erase (std::remove (editedMeshes.begin(), editedMeshes.end(), this), editedMeshes.end());
 	RTForgetGeometry (id);
 	for (auto tex : textures) texmgr->Release (tex);
 	for (auto tex : cfgTextures) texmgr->Release (tex);
@@ -461,8 +477,18 @@ int VkMesh::EditGroup (DWORD grp, GROUPEDITSPEC *ges)
 			vmax = std::max (vmax, vi);
 		}
 		if (vmin <= vmax) geomVersion++;
-		if (vmin <= vmax && vbuf.buffer)
-			ctx->UpdateBuffer (vbuf.buffer, (g.vertexOffset + vmin) * sizeof(NTVERTEX), gv + vmin, (vmax - vmin + 1) * sizeof(NTVERTEX));
+		if (vmin <= vmax && vbuf.buffer) {
+			if (ctx->Recording ())
+				ctx->UpdateBuffer (vbuf.buffer, (g.vertexOffset + vmin) * sizeof(NTVERTEX), gv + vmin, (vmax - vmin + 1) * sizeof(NTVERTEX));
+			else {
+				// (between frames, from the core's step: uploaded as the next
+				// frame starts, FlushEdits, instead of recording into the next
+				// frame's slot now, which waits for its fence)
+				if (editMin > editMax) editedMeshes.push_back (this);
+				editMin = std::min (editMin, (uint32_t)(g.vertexOffset + vmin));
+				editMax = std::max (editMax, (uint32_t)(g.vertexOffset + vmax));
+			}
+		}
 	}
 	return 0;
 }
