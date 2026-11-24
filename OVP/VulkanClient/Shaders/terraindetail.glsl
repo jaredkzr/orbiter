@@ -19,16 +19,16 @@ layout(constant_id = 0) const bool SITE_MATERIALS = false;
 // diagnostics, to time them; PlanetSurface.cpp lists the bits)
 layout(constant_id = 1) const int PARTS_OFF = 0;
 bool PartOn (int bit) { return (PARTS_OFF & bit) == 0; }
-// Cheaper far detail (ORBITER_VK_FAR_DETAIL=<m>, default 0.25; 0: off): where
-// a pixel spans more than FAR_CUT m of ground the terrain detail fades out,
-// gone at twice that (not evaluated there)
-layout(constant_id = 2) const float FAR_CUT = 0.25;
-// Cheaper far mottling (a look trade, ORBITER_VK_MOTTLE_QUAD=1; off by
-// default): each pixel of a 2 x 2 quad evaluates one of the three octaves
-// at its own point and takes the other two from its neighbours in the quad
+// Cheaper far detail (a look trade, ORBITER_VK_FAR_DETAIL=<m>; 0: off, the
+// default): where a pixel spans more than FAR_CUT m of ground the terrain
+// detail fades out, gone at twice that (not evaluated there)
+layout(constant_id = 2) const float FAR_CUT = 0.0;
+// Cheaper far mottling (on by default; ORBITER_VK_MOTTLE_QUAD=0: off): each
+// pixel of a 2 x 2 quad evaluates one of the three octaves at its own point
+// and takes the other two from its neighbours in the quad
 // (the octaves' wavelengths are 16 to 256 m, faded out below some 3 to 5
 // pixels: a pixel's offset changes them little)
-layout(constant_id = 3) const bool MOTTLE_QUAD = false;
+layout(constant_id = 3) const bool MOTTLE_QUAD = true;
 
 struct DetailSample {
 	vec3 grad;     // gradient, planet frame [m/m]

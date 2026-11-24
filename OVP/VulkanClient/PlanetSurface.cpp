@@ -412,11 +412,12 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	// 8 grit, 16 playa cracks, 32 far mottling, 64 surface detail, 128 city
 	// ground, 256 tracks, 512 night light points, 1024 water, 2048 local
 	// lights, 4096 aerial perspective, 8192 all of the terrain detail)
-	// (ORBITER_VK_FAR_DETAIL=<m>: the terrain detail faded out where a pixel
-	// spans more than that much ground, gone at twice; 0: everywhere, as before)
-	// (a look trade, ORBITER_VK_MOTTLE_QUAD=1: the far mottling's octaves
-	// shared within 2 x 2 pixels, terraindetail.glsl; off by default)
-	struct { VkBool32 site; int32_t partsOff; float farCut; VkBool32 mottleQuad; } spec{ VK_FALSE, 0, 0.25f, VK_FALSE };
+	// (a look trade, ORBITER_VK_FAR_DETAIL=<m>: the terrain detail faded out
+	// where a pixel spans more than that much ground, gone at twice; 0, the
+	// default: everywhere)
+	// (ORBITER_VK_MOTTLE_QUAD=0: the far mottling's octaves each evaluated per
+	// pixel, as before; by default shared within 2 x 2 pixels, terraindetail.glsl)
+	struct { VkBool32 site; int32_t partsOff; float farCut; VkBool32 mottleQuad; } spec{ VK_FALSE, 0, 0.0f, VK_TRUE };
 	if (const char *e = getenv ("ORBITER_VK_TILE_PARTS_OFF")) spec.partsOff = (int32_t)strtol (e, nullptr, 0);
 	if (const char *e = getenv ("ORBITER_VK_FAR_DETAIL")) spec.farCut = (float)atof (e);
 	if (const char *e = getenv ("ORBITER_VK_MOTTLE_QUAD")) spec.mottleQuad = atoi (e) != 0 ? VK_TRUE : VK_FALSE;
