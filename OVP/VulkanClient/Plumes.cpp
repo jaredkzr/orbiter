@@ -372,6 +372,12 @@ bool PlumeRenderer::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout, Vk
 	gpi.pColorBlendState = &cb;
 	gpi.pDynamicState = &dy;
 	gpi.layout = layout;
+	// (ORBITER_VK_PLUME_SKIP=0: an attitude thruster's jet meeting a
+	// surface marched through all its box, as before, for tests; plume.frag)
+	static int skipOn = getenv ("ORBITER_VK_PLUME_SKIP") ? atoi (getenv ("ORBITER_VK_PLUME_SKIP")) : 1;
+	VkSpecializationMapEntry nme{ 0, 0, sizeof(int) };
+	VkSpecializationInfo nsi{ 1, &nme, sizeof(int), &skipOn };
+	stages[1].pSpecializationInfo = &nsi;
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &pipe));
 	{
 		// half resolution: into the plumes' own images (light; the
