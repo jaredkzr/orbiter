@@ -32,8 +32,9 @@
 # frames).
 # Heavy: HighWarp (a DG in low Earth orbit, the ground in view, time warp 1,
 # 100, 1000, 10000: tile and ray tracing churn, the core's step), ManyVessels
-# (50 vessels of six classes made at the Cape one a second, then a pan along
-# them: their visuals, texture uploads, the cost per vessel), Splashdown (a
+# (50 vessels of six classes parked at the Cape, a ground observer flying in
+# from 12 km, then panning along them: their visuals made as they come within
+# range, texture uploads, the cost per vessel), Splashdown (a
 # DG ditching at 70 m/s, the chase camera, then the wreck: spray, debris, the
 # explosion, first use of the effects), Reentry (a DG at 70 km and 7 km/s,
 # nose up 40 deg: the plasma; terrain streaming under a hypersonic descent),
@@ -145,6 +146,7 @@ run() { local base=${1%@*} scn=${1#*@} tmo=$2; shift 2
 	for k in $(seq 1 "$REPEAT"); do
 		name=$base; [ "$REPEAT" -gt 1 ] && name=$base-r$k
 		memwait || { echo "$name: skipped (no memory)"; continue; }
+		[ -n "${PRERUN:-}" ] && eval "$PRERUN" # (per run: e.g. ColdStart's empty shader cache)
 		cp "$OUT/Orbiter.cfg.bench" Orbiter.cfg
 		local t0=$(date +%s)
 		# (the stamp: shlex-quoted values in the frame log's header)
@@ -200,10 +202,10 @@ for n in $FLIGHTS; do case $n in
 	NightCity) run NightCity 600 BENCH_END=45 ;;
 	CamCuts)   run CamCuts 600 BENCH_END=64 BENCH_HOLD=4 ;;
 	CamToggle) run CamToggle@CamCuts 600 BENCH_END=24 BENCH_HOLD=1 BENCH_VIEWS=1,3 BENCH_FIXED=1 ;;
-	ColdStart) rm -rf "$OUT/mesa-cold"; mkdir -p "$OUT/mesa-cold"
+	ColdStart) PRERUN='rm -rf "$OUT/mesa-cold"; mkdir -p "$OUT/mesa-cold"' \
 	           run ColdStart@NightCity 600 BENCH_END=10 MESA_SHADER_CACHE_DIR="$OUT/mesa-cold" ;;
 	HighWarp)  run HighWarp 600 BENCH_SCHED="0:1,10:100,20:1000,30:10000" BENCH_END=40 ;;
-	ManyVessels) run ManyVessels 600 BENCH_COUNT=50 BENCH_PAN=20 ;;
+	ManyVessels) run ManyVessels 600 BENCH_SPEED=400 BENCH_PAN=20 ;;
 	Splashdown) run Splashdown 600 BENCH_AFTER=12 ORBITER_DAMAGE=1 ;;
 	Reentry)   run Reentry 600 BENCH_END=60 BENCH_SWITCH=30 ;;
 	CloudDeck) run CloudDeck 600 BENCH_END=90 ;;

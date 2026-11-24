@@ -1,0 +1,32 @@
+BEGIN_DESC
+Benchmark (nightly soak): a Delta-glider in a 300 km orbit for 30 minutes, the camera cut every 30 s, time warp bursts every 2 minutes (Script Bench/soak): the heap and process memory over time.
+END_DESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Script Bench/soak
+  Date MJD 51982.5292925579
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship GL-01
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET GL-01
+  MODE Extern
+  POS 4 20 30
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+GL-01:DeltaGlider
+  STATUS Orbiting Earth
+  ELEMENTS 6671002.2 0.00060 51.6 30.0 357.33521 248.31516 51982.51829991
+  AROT -52.67 -56.93 90.32
+  PRPLEVEL 0:0.553 1:0.9
+  NOSECONE 0 0.0000
+  GEAR 0 0.0000
+END
+END_SHIPS
