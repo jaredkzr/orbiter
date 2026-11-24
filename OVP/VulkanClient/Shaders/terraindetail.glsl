@@ -23,6 +23,12 @@ bool PartOn (int bit) { return (PARTS_OFF & bit) == 0; }
 // a pixel spans more than FAR_CUT m of ground the terrain detail fades out,
 // gone at twice that (not evaluated there)
 layout(constant_id = 2) const float FAR_CUT = 0.25;
+// Cheaper far mottling (a look trade, ORBITER_VK_MOTTLE_QUAD=1; off by
+// default): each pixel of a 2 x 2 quad evaluates one of the three octaves
+// at its own point and takes the other two from its neighbours in the quad
+// (the octaves' wavelengths are 16 to 256 m, faded out below some 3 to 5
+// pixels: a pixel's offset changes them little)
+layout(constant_id = 3) const bool MOTTLE_QUAD = false;
 
 struct DetailSample {
 	vec3 grad;     // gradient, planet frame [m/m]
@@ -364,6 +370,19 @@ float DetFarMottle (vec3 posView, float footprint, float amp)
 	DetPoint pt = DetPixelPoint (posView, d);
 	float m = 0.0;
 	const float W[3] = float[3] (0.5, 0.35, 0.25);
+	if (MOTTLE_QUAD) {
+		// (in uniform control flow: the caller's branch is per tile)
+		uint q = gl_SubgroupInvocationID & 3u;
+		int k = q == 3u ? 0 : int (q); // (the quad's fourth pixel: the widest octave, its own)
+		ivec3 cell, p; vec3 sg;
+		vec3 f = DetLattice (231 + k, pt, 8 - 2 * k, cell, p, sg);
+		float n = DetNoise (cell, f, 9300u + uint (k)).w;
+		float o[3] = float[3] (subgroupQuadBroadcast (n, 0u), subgroupQuadBroadcast (n, 1u), subgroupQuadBroadcast (n, 2u));
+		o[k] = n;
+		for (int i = 0; i < 3; i++)
+			m += W[i] * (1.0 - smoothstep (0.12, 0.3, footprint / exp2 (float (8 - 2 * i)))) * o[i];
+		return max (1.0 + amp * m, 0.5);
+	}
 	for (int i = 0; i < 3; i++) {
 		int e = 8 - 2 * i;
 		float v = 1.0 - smoothstep (0.12, 0.3, footprint / exp2 (float (e)));

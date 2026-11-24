@@ -414,18 +414,22 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	// lights, 4096 aerial perspective, 8192 all of the terrain detail)
 	// (ORBITER_VK_FAR_DETAIL=<m>: the terrain detail faded out where a pixel
 	// spans more than that much ground, gone at twice; 0: everywhere, as before)
-	struct { VkBool32 site; int32_t partsOff; float farCut; } spec{ VK_FALSE, 0, 0.25f };
+	// (a look trade, ORBITER_VK_MOTTLE_QUAD=1: the far mottling's octaves
+	// shared within 2 x 2 pixels, terraindetail.glsl; off by default)
+	struct { VkBool32 site; int32_t partsOff; float farCut; VkBool32 mottleQuad; } spec{ VK_FALSE, 0, 0.25f, VK_FALSE };
 	if (const char *e = getenv ("ORBITER_VK_TILE_PARTS_OFF")) spec.partsOff = (int32_t)strtol (e, nullptr, 0);
 	if (const char *e = getenv ("ORBITER_VK_FAR_DETAIL")) spec.farCut = (float)atof (e);
-	VkSpecializationMapEntry smes[3] = { { 0, 0, sizeof (VkBool32) }, { 1, sizeof (VkBool32), sizeof (int32_t) }, { 2, sizeof (VkBool32) + sizeof (int32_t), sizeof (float) } };
-	VkSpecializationInfo pinfo{ 2, &smes[1], sizeof (spec), &spec };
+	if (const char *e = getenv ("ORBITER_VK_MOTTLE_QUAD")) spec.mottleQuad = atoi (e) != 0 ? VK_TRUE : VK_FALSE;
+	VkSpecializationMapEntry smes[4] = { { 0, 0, sizeof (VkBool32) }, { 1, sizeof (VkBool32), sizeof (int32_t) }, { 2, sizeof (VkBool32) + sizeof (int32_t), sizeof (float) },
+		{ 3, sizeof (VkBool32) + sizeof (int32_t) + sizeof (float), sizeof (VkBool32) } };
+	VkSpecializationInfo pinfo{ 3, &smes[1], sizeof (spec), &spec };
 	stages[1].pSpecializationInfo = &pinfo;
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &pipeline));
 
 	// the variant with the site-scale materials (F3): the same pipeline, SITE_MATERIALS = true
 	{
 		spec.site = VK_TRUE;
-		VkSpecializationInfo sinfo{ 3, smes, sizeof (spec), &spec };
+		VkSpecializationInfo sinfo{ 4, smes, sizeof (spec), &spec };
 		VkPipelineShaderStageCreateInfo sst[2] = { stages[0], stages[1] };
 		sst[1].pSpecializationInfo = &sinfo;
 		VkGraphicsPipelineCreateInfo sgpi = gpi;
