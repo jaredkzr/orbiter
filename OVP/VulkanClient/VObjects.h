@@ -418,6 +418,9 @@ public:
 	Atmosphere *Air () const { return atmosphere.get(); }
 	void RenderShadow (ShadowMap &sm) override;
 	void PrepareFrame () override;
+	/// a frame of the loading's hold: loaded tiles accepted, the frame
+	/// prepared; whether tiles, cities or scatter are still coming
+	bool WarmUp (bool report = false);
 	bool RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n) override;
 	void CollectLights (std::vector<LightSource> &lights) override;
 	void CollectGroundMarks (std::vector<RunwayGpu> &rws, std::vector<PadGpu> &pads) override;

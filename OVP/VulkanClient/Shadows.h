@@ -53,6 +53,9 @@ public:
 		uint32_t count, const MATRIX3 &R, const VECTOR3 &origin, float camAlt);
 	/// Draw indexed geometry (NTVERTEX, 16-bit indices), e.g. a terrain tile
 	void DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &model, uint32_t firstIdx = 0);
+	/// the same for a terrain tile's compact vertices (PlanetSurface::Pack:
+	/// 24 bytes, the position snorm16 first; its scale in model)
+	void DrawCompact (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &model, uint32_t firstIdx = 0);
 	/// whether a sphere (global position, radius) may cast into the map
 	bool MayCast (const VECTOR3 &gpos, double rad) const;
 	const VECTOR3 &Centre () const { return centre; }
@@ -69,6 +72,7 @@ private:
 	VkSampler sampler = VK_NULL_HANDLE, depthSampler = VK_NULL_HANDLE;
 	VkPipelineLayout layout = VK_NULL_HANDLE;
 	VkPipeline pipeline = VK_NULL_HANDLE;
+	VkPipeline compactPipeline = VK_NULL_HANDLE; // (DrawCompact)
 	VkPipelineLayout alphaLayout = VK_NULL_HANDLE; // casters with alpha-tested textures (foliage)
 	VkPipeline alphaPipeline = VK_NULL_HANDLE;
 	VkPipeline instPipeline = VK_NULL_HANDLE;  // instanced casters (alpha-tested where textured)

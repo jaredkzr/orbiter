@@ -347,7 +347,7 @@ bool VolumetricClouds::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSe
 void VolumetricClouds::Shutdown ()
 {
 	if (!ctx) return;
-	vkDeviceWaitIdle (ctx->device);
+	ctx->WaitIdle ();
 	VkPipeline pipes[] = { marchPipe, compPipe, coveragePipe, ggPipe };
 	ctx->DestroyBuffer (ggBuf);
 	for (int k = 0; k < 2; k++) ctx->DestroyImage (ggHist[k]), ctx->DestroyImage (ggDepth[k]);
@@ -371,7 +371,7 @@ void VolumetricClouds::Shutdown ()
 
 void VolumetricClouds::CreateOutput (VkImageView prepass)
 {
-	vkDeviceWaitIdle (ctx->device);
+	ctx->WaitIdle ();
 	ctx->DestroyImage (output);
 	for (int k = 0; k < 2; k++) ctx->DestroyImage (ggHist[k]), ctx->DestroyImage (ggDepth[k]);
 	vkResetDescriptorPool (ctx->device, pool, 0);

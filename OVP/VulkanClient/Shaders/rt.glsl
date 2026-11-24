@@ -44,6 +44,7 @@ layout(set = 3, binding = 0) uniform sampler2D rtTex[];
 
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer RTFloats { float f[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer RTUints { uint u[]; };
+#include "rtvertex.glsl"
 
 struct RTHit {
 	float t;
@@ -65,11 +66,8 @@ bool RTCandidateSolid (rayQueryEXT q)
 	vec2 bc = rayQueryGetIntersectionBarycentricsEXT (q, false);
 	vec3 w = vec3 (1.0 - bc.x - bc.y, bc.x, bc.y);
 	vec2 uv = vec2 (0.0);
-	for (int k = 0; k < 3; k++) {
-		uint vi = RTIndex (r.idx, r.firstIndex + prim * 3u + uint (k)) * 8u;
-		RTFloats v = RTFloats (r.vtx);
-		uv += w[k] * vec2 (v.f[vi + 6u], v.f[vi + 7u]);
-	}
+	for (int k = 0; k < 3; k++)
+		uv += w[k] * RTVertexUV (r.vtx, r.flags, RTIndex (r.idx, r.firstIndex + prim * 3u + uint (k)));
 	return textureLod (rtTex[nonuniformEXT (r.tex)], uv * r.uv.zw + r.uv.xy, 0.0).a >= 0.5;
 }
 
@@ -103,10 +101,9 @@ bool TraceRT (vec3 o, vec3 d, float tMin, out RTHit h)
 	vec3 n = vec3 (0.0);
 	vec2 uv = vec2 (0.0);
 	for (int k = 0; k < 3; k++) {
-		uint vi = RTIndex (r.idx, r.firstIndex + prim * 3u + uint (k)) * 8u;
-		RTFloats v = RTFloats (r.vtx);
-		n += w[k] * vec3 (v.f[vi + 3u], v.f[vi + 4u], v.f[vi + 5u]);
-		uv += w[k] * vec2 (v.f[vi + 6u], v.f[vi + 7u]);
+		uint vi = RTIndex (r.idx, r.firstIndex + prim * 3u + uint (k));
+		n += w[k] * RTVertexNormal (r.vtx, r.flags, vi);
+		uv += w[k] * RTVertexUV (r.vtx, r.flags, vi);
 	}
 	mat4x3 o2w = rayQueryGetIntersectionObjectToWorldEXT (rq, true);
 	vec3 N = normalize (mat3 (o2w) * n);

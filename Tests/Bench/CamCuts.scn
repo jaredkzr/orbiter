@@ -1,0 +1,29 @@
+BEGIN_DESC
+Benchmark: camera cuts around a Delta-glider parked at Mojave (day): the cockpit, a ground observer zoomed to 4 deg, a close chase and a high observer in turn, with new places each round (Script Bench/cuts): terrain streaming after cuts, the tile cache, video memory at the zoom.
+END_DESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Script Bench/cuts
+  Date MJD 51982.7357482732
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship GL-01
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET GL-01
+  MODE Cockpit
+  FOV 40.00
+END_CAMERA
+
+BEGIN_SHIPS
+GL-01:DeltaGlider
+  STATUS Landed Earth
+  POS -118.1520 35.0590
+  HEADING 300
+  GEAR 1 1.0000
+  PRPLEVEL 0:1.000 1:1.000
+END
+END_SHIPS

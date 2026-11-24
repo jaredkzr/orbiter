@@ -233,7 +233,7 @@ struct Fsr4Backend::Impl {
 	void DestroyContext ()
 	{
 		if (!context) return;
-		vkDeviceWaitIdle (ctx->device);
+		ctx->WaitIdle ();
 		g_lib.destroyContext (&context, nullptr);
 		context = nullptr;
 		if (output.image) ctx->DestroyImage (output);

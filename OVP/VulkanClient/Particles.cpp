@@ -750,7 +750,7 @@ void ParticleSystem::InitRT (VkDescriptorSetLayout frameLayout, VkDescriptorSetL
 void ParticleSystem::Shutdown ()
 {
 	if (!ctx) return;
-	vkDeviceWaitIdle (ctx->device);
+	ctx->WaitIdle ();
 	FreeVolume (true);
 	ReapVolume (true);
 	for (VkPipeline p : { emitPipe, updatePipe, updateRTPipe, lightPipe, lightRTPipe, splatPipe, sumPipe, flameSplatPipe, flameTransPipe, sortKeysPipe, sortPipe, sortLocalPipe, drawBlend,
@@ -1364,7 +1364,7 @@ void ParticleSystem::SetPrepass (VkImageView prepass)
 	ApplySettings ();
 	EnsureScreenSmoke (); // (before any of this frame's sets are bound)
 	if (prepass == prepassView) return;
-	if (prepassView) vkDeviceWaitIdle (ctx->device); // (the sets may be in use)
+	if (prepassView) ctx->WaitIdle (); // (the sets may be in use)
 	prepassView = prepass;
 	VkDescriptorImageInfo ii{ clampSampler, prepass, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 	for (VkDescriptorSet s : sets) {
@@ -1940,7 +1940,7 @@ void ParticleSystem::SetPlumeLayer (VkImageView light, VkImageView dist)
 	// (none: the prepass, a view of the same kind - not sampled then)
 	if (plSet && light == plLightView && dist == plDistView) return;
 	if (!prepassView && !light) return;
-	if (plSet) vkDeviceWaitIdle (ctx->device); // (the sets may be in use)
+	if (plSet) ctx->WaitIdle (); // (the sets may be in use)
 	plLightView = light, plDistView = dist, plSet = true;
 	VkDescriptorImageInfo ii[2] = { { volSampler, light ? light : prepassView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
 		{ volSampler, light ? dist : prepassView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL } };
@@ -2038,14 +2038,14 @@ void ParticleSystem::RenderMarch (VkDescriptorSet frameSet, const MATRIX3 &camRo
 void ParticleSystem::EnsureScreenSmoke ()
 {
 	if (volAlloc && marchGen != ctx->SwapchainGeneration ()) {
-		vkDeviceWaitIdle (ctx->device); // (the swapchain was made again: idle anyway)
+		ctx->WaitIdle (); // (the swapchain was made again: idle anyway)
 		AllocMarch (VK_NULL_HANDLE);
 	}
 	if (smokeMode != SMOKE_SCREEN) return;
 	VkExtent2D re = ctx->RenderExtent ();
 	VkExtent2D e = { std::max (1u, re.width / 2), std::max (1u, re.height / 2) };
 	if (thickGen != ctx->SwapchainGeneration ()) {
-		vkDeviceWaitIdle (ctx->device);
+		ctx->WaitIdle ();
 		for (auto &t : thick) ctx->DestroyImage (t);
 		for (auto &t : thick) {
 			VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};

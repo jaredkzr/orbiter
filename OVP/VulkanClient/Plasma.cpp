@@ -375,7 +375,7 @@ bool PlasmaRenderer::AllocAtlas ()
 void PlasmaRenderer::FreeAtlas ()
 {
 	if (!atlasAlloc) return;
-	vkDeviceWaitIdle (ctx->device);
+	ctx->WaitIdle ();
 	for (vkc::Image *im : { &flowMap, &seedA, &seedB, &field }) ctx->DestroyImage (*im);
 	atlasAlloc = false;
 }
@@ -399,7 +399,7 @@ void PlasmaRenderer::SetPrepass (VkImageView prepass)
 	if (prepass == prepassView) return;
 	// (the march set is bound by no frame in flight while it is written:
 	// a new prepass comes with a new swapchain, after an idle wait)
-	if (prepassView && atlasAlloc) vkDeviceWaitIdle (ctx->device);
+	if (prepassView && atlasAlloc) ctx->WaitIdle ();
 	prepassView = prepass;
 	WriteSets ();
 }
@@ -413,7 +413,7 @@ void PlasmaRenderer::Begin (VkDescriptorSet fs, double simt)
 	time = (float)std::fmod (simt, 1000.0);
 	if (dumpState == 0 && getenv ("ORBITER_VK_PLASMA_DUMP")) dumpState = 1;
 	if (dumpState == 2) {
-		vkDeviceWaitIdle (ctx->device);
+		ctx->WaitIdle ();
 		vmaInvalidateAllocation (ctx->allocator, dumpBuf.alloc, 0, VK_WHOLE_SIZE);
 		if (FILE *f = fopen (getenv ("ORBITER_VK_PLASMA_DUMP"), "wb")) {
 			fwrite (dumpBuf.mapped, 8, (size_t)ATLAS * ATLAS, f);

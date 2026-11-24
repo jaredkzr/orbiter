@@ -493,7 +493,7 @@ bool Scene::Init ()
 void Scene::Shutdown ()
 {
 	if (!ctx) return;
-	vkDeviceWaitIdle (ctx->device);
+	ctx->WaitIdle ();
 	for (auto &it : visuals) gc->UnregisterVisObject (it.first);
 	visuals.clear();
 	ctx->Drain (); // releases deferred by the visuals use the shared renderers' pools
@@ -878,7 +878,7 @@ void Scene::DrawLamps (VkBuffer buf, uint32_t count, const Mat4 &frameToView, co
 void Scene::EnsureReactiveMask ()
 {
 	if (reactiveGen == ctx->SwapchainGeneration ()) return;
-	vkDeviceWaitIdle (ctx->device);
+	ctx->WaitIdle ();
 	ctx->DestroyImage (reactive);
 	ctx->DestroyImage (reactiveMS);
 	VkExtent2D e = ctx->RenderExtent ();
@@ -1813,6 +1813,15 @@ void Scene::ObservedPos (OBJHANDLE h, VECTOR3 &p) const
 	else oapiGetObservedPos (h, camPos, camVel, &p);
 }
 
+bool Scene::WarmUpStep (bool report)
+{
+	frameNo++;
+	bool busy = false;
+	for (auto &it : visuals)
+		if (VPlanet *vp = dynamic_cast<VPlanet*> (it.second.get ())) busy = vp->WarmUp (report) || busy;
+	return busy;
+}
+
 void Scene::RenderShadows ()
 {
 	frameNo++;
@@ -1823,7 +1832,15 @@ void Scene::RenderShadows ()
 			if (Atmosphere *a = pv->GetAtmosphere ()) a->StartOcean (camPos);
 	// planet surfaces select their tiles and upload data first (transfers
 	// end rendering scopes, and shadow maps are cleared when bound)
+	for (double &m : prepMs) m = 0.0;
 	for (auto &it : visuals) it.second->PrepareFrame ();
+	// (the frame-time log: "prepare" the planets' tiles, scatter, cities and
+	// clouds; its parts "prep terrain" etc. are within it, not added to it)
+	ctx->CpuMark ("prepare");
+	if (ctx->cpuTiming) {
+		static const char *names[4] = { "prep terrain", "prep scatter", "prep cities", "prep clouds" };
+		for (int i = 0; i < 4; i++) if (prepMs[i] > 0.0) ctx->CpuAdd (names[i], prepMs[i]);
+	}
 	if (!hSun) return;
 	if (rtl && rtl->Enabled ()) return; // ray traced shadows instead (glass and probe faces are unshadowed)
 	OBJHANDLE hTgt = oapiCameraTarget ();

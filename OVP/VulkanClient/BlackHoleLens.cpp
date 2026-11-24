@@ -74,7 +74,7 @@ bool BlackHoleLens::Init (vkc::Context *c, GalaxySky *s, StarField *sf)
 void BlackHoleLens::Shutdown ()
 {
 	if (!ctx) return;
-	vkDeviceWaitIdle (ctx->device);
+	ctx->WaitIdle ();
 	for (Image *im : { &map, &overlay, &fine, &fineOverlay }) DestroyImage (*im);
 	ctx->DestroyBuffer (params);
 	for (vkc::Buffer *b : { &counts, &offsets, &scratch, &records }) ctx->DestroyBuffer (*b);
@@ -266,7 +266,7 @@ void BlackHoleLens::EnsureMap (uint32_t w, uint32_t h)
 	uint32_t mw = w / grid + 2, mh = h / grid + 2;
 	if (map.image && mw == mapW && mh == mapH && w == imgW && h == imgH) return;
 	if (map.image) {
-		vkDeviceWaitIdle (ctx->device); // (the sets are rewritten: rare, the image resized)
+		ctx->WaitIdle (); // (the sets are rewritten: rare, the image resized)
 		for (Image *im : { &map, &overlay, &fine, &fineOverlay }) DestroyImage (*im);
 	}
 	mapW = mw, mapH = mh, imgW = w, imgH = h;

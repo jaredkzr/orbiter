@@ -16,6 +16,7 @@ local function cam () oapi.set_cameramode({mode='track', trackmode='locked', rel
 cam()
 proc.wait_simdt(start)
 oapi.write_log("DGHOVER: hover up at " .. oapi.get_simtime())
+oapi.write_log(string.format("bench: measure at %.3f", oapi.get_simtime()))
 local function clamp(x, a, b) return math.max(a, math.min(b, x)) end
 local HOLD = 60          -- hover altitude [m]
 local hov, main = 0, 0   -- thrust levels

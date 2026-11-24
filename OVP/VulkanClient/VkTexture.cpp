@@ -640,6 +640,7 @@ VkTexture *TextureManager::CreateImage (VkFormat fmt, uint32_t w, uint32_t h, ui
 	tex->width = w, tex->height = h;
 	tex->format = fmt;
 	live.insert (tex);
+	vkc::Stats ().texUploads++;
 
 	VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 	ici.imageType = VK_IMAGE_TYPE_2D;

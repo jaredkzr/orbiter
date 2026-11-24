@@ -19,8 +19,11 @@ if probe then
 	for n in string.gmatch(c, "[^,]+") do pnames[#pnames + 1] = n end
 end
 local earth = oapi.get_objhandle("Earth")
+-- (the measured window from BENCH_MEASURE [s] of sim time after the start, default 2: the loading's last frames before it)
+local tmeas = oapi.get_simtime() + tonumber(os.getenv("BENCH_MEASURE") or "2")
 while true do
 	local t = oapi.get_simtime()
+	if tmeas and t >= tmeas then oapi.write_log(string.format("bench: measure at %.3f", oapi.get_simtime())); tmeas = nil end
 	if probe and t >= p0 and t <= p1 then
 		for _, n in ipairs(pnames) do
 			local h = oapi.get_objhandle(n)

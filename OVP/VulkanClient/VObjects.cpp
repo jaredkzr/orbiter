@@ -4651,7 +4651,11 @@ void VPlanet::CollectGroundMarks (std::vector<RunwayGpu> &rws, std::vector<PadGp
 
 void VPlanet::PrepareFrame ()
 {
+	vkc::Context *c = scene->Ctx ();
+	double t = c->cpuTiming ? c->CpuClock () : 0.0;
+	auto part = [&](int i) { if (c->cpuTiming) { double n = c->CpuClock (); scene->prepMs[i] += n - t; t = n; } };
 	if (surface) surface->Prepare ();
+	part (0);
 	// the ground scatter: made when the camera comes near the surface
 	if (surface && !fieldInit && camDist < size + 20e3) {
 		fieldInit = true;
@@ -4659,6 +4663,7 @@ void VPlanet::PrepareFrame ()
 		if (!field->Active ()) field.reset ();
 	}
 	if (field) field->Prepare ();
+	part (1);
 	// the cities: likewise
 	if (surface && !citiesInit && camDist < size + 30e3) {
 		citiesInit = true;
@@ -4666,7 +4671,25 @@ void VPlanet::PrepareFrame ()
 		if (!cities->Active ()) cities.reset ();
 	}
 	if (cities) cities->Prepare ();
+	part (2);
 	if (clouds) clouds->Prepare (); // (coverage map of the volumetric clouds)
+	part (3);
+}
+
+bool VPlanet::WarmUp (bool report)
+{
+	if (surface) surface->Update ();
+	if (clouds) clouds->Update ();
+	PrepareFrame ();
+	bool busy = (surface && surface->Busy ()) || (clouds && clouds->Busy ()) || (field && field->Busy ()) || (cities && cities->Busy ());
+	if (report && busy) {
+		char name[64];
+		oapiGetObjectName (hObj, name, 64);
+		oapiWriteLogV ("VulkanClient: loading held for %s: surface %s (%s); clouds %s; scatter %d, cities %d", name,
+			surface && surface->Busy () ? "busy" : "in", surface ? surface->BusyText ().c_str () : "-",
+			clouds && clouds->Busy () ? clouds->BusyText ().c_str () : "in", field && field->Busy () ? 1 : 0, cities && cities->Busy () ? 1 : 0);
+	}
+	return busy;
 }
 
 double VPlanet::CloudAlt () const

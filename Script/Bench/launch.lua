@@ -4,6 +4,7 @@
 proc.wait_simdt(3)
 oapi.simulatebufferedkey(OAPI_KEY.L, OAPI_KEY.LSHIFT)
 local t0 = oapi.get_simtime()
+oapi.write_log(string.format("bench: measure at %.3f", oapi.get_simtime()))
 local tend = tonumber(os.getenv("BENCH_END") or "60")
 local w1, t1 = tonumber(os.getenv("BENCH_WARP") or "1"), tonumber(os.getenv("BENCH_WARP_AT") or "1e9")
 while true do

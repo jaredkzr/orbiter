@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -77,6 +78,26 @@ private:
 	bool quit = false;
 };
 
+/// Worker threads making tile meshes in the background (PlanetSurface):
+/// tasks of an owner run in the order given; Drop removes an owner's
+/// queued tasks and waits for its running ones
+class MeshWorkers {
+public:
+	MeshWorkers ();
+	~MeshWorkers ();
+	void Push (const void *owner, std::function<void ()> task);
+	void Drop (const void *owner);
+	unsigned Threads () const { return (unsigned)threads.size (); }
+private:
+	void Loop ();
+	std::vector<std::thread> threads;
+	std::mutex mtx;
+	std::condition_variable cv, idle;
+	std::deque<std::pair<const void*, std::function<void ()>>> queue;
+	std::vector<const void*> running; // (the owners of the tasks being run)
+	bool quit = false;
+};
+
 /// Shared GPU resources for rendering tiles (owned by the scene)
 class TileRenderer {
 public:
@@ -85,6 +106,8 @@ public:
 	bool Init (vkc::Context *ctx, TextureManager *texmgr, VkDescriptorSetLayout frameLayout, VkDescriptorSetLayout atmLayout);
 	void Shutdown ();
 	TileLoader &Loader () { return *loader; }
+	MeshWorkers &Meshers () { return *meshers; }
+	MeshWorkers *MeshersIf () { return meshers.get (); }
 	VkPipeline Pipeline () const { return pipeline; }
 	VkPipeline SitePipeline () const { return sitePipeline; }
 	VkPipeline CloudPipeline () const { return cloudPipeline; }
@@ -95,6 +118,9 @@ public:
 	VkPipeline MeshPipeline () const { return meshPipe; }
 	VkPipelineLayout MeshLayout () const { return meshLayout; }
 	VkBuffer IndexBuffer () const { return ibuf.buffer; }
+	/// surface tiles (not cloud layers) with compact vertices (PlanetSurface::Pack;
+	/// ORBITER_VK_TILE_COMPACT=0: NTVERTEX and the detail stream, 56 bytes)
+	bool Compact () const { return compact; }
 	/// The tile grid taking every 2^c-th column (c < NCOLS): its indices
 	/// from first, gridCount without the skirts (which come last), count
 	/// with them; and every 2nd row and column of it (at most every GRID-th),
@@ -128,6 +154,8 @@ private:
 	Grid thinned[NCOLS][NDEC][NDEC]{};
 	uint32_t coarseFirst = 0, coarseCount = 0;
 	std::unique_ptr<TileLoader> loader;
+	std::unique_ptr<MeshWorkers> meshers;
+	bool compact = false;
 };
 
 class PlanetSurface {
@@ -139,6 +167,10 @@ public:
 
 	/// Accept loaded tiles (call before rendering)
 	void Update ();
+	/// Meshes of the view still being made (the loading's hold: VulkanClient::WarmUp)
+	bool Busy () const;
+	/// (what keeps it busy, for the log)
+	std::string BusyText () const;
 	/// Tile selection, data requests and mesh updates, once per frame
 	/// (outside rendering scopes); called by the render functions if needed
 	void Prepare ();
@@ -170,13 +202,26 @@ private:
 		double cosLat = 1.0;  // cos of the latitude farthest from the equator
 		Node *elevNode = nullptr; // the tile its mesh's elevation data is requested from (an ancestor or itself)
 		int cols = 0;         // grid columns taken: every 2^cols-th (TileRenderer::Columns)
+		float vscale = 1.0f;  // compact vertices: their scale [m] (Pack)
+		VECTOR3 vorg{};       // ... and their origin, relative to the centre
 		// thinned for the view this frame (TileRenderer::Thinned): every 2^decR-th
 		// row, 2^decQ-th of the columns; by the mesh's largest deviation [m]
 		// from it taking every 2nd, 4th, 8th row (0-2) or column (3-5)
 		int decR = 0, decQ = 0;
 		float decErr[6] = { 1e30f, 1e30f, 1e30f, 1e30f, 1e30f, 1e30f };
 		VkTexture *surf = nullptr, *mask = nullptr;
-		std::unique_ptr<ElevGrid> elev;
+		uint32_t texBytes = 0; // (their size: Retain's budget)
+		/// DrawNode's per-tile values, the same in all of a frame's passes
+		/// (prepass, probe, colour): worked out once a frame
+		struct DrawCache {
+			uint64_t frame = ~0ull;
+			VkTexture *surf = nullptr, *mask = nullptr; // (mask: white if none)
+			bool hasMask = false;
+			float surfUV[4], maskUV[4], morph[4], refF[4], refRel[4];
+			int32_t refI[4];
+		};
+		std::unique_ptr<DrawCache> dc;
+		std::shared_ptr<const ElevGrid> elev; // (shared with mesh jobs in the background)
 		uint8_t surfState = 0, maskState = 0, elevState = 0; // 0: unknown, 1: requested, 2: loaded, 3: missing
 		vkc::Buffer vbuf;
 		uint32_t nVtx = 0;
@@ -190,6 +235,8 @@ private:
 		float detailSpacing = 0.0f; // terrain detail: node spacing of the elevation data [m]
 		float detailLmesh = 0.0f;   // shortest detail wavelength in the mesh [m]
 		uint64_t lastUsed = 0;
+		double usedTime = 0.0; // [s] steady clock when last selected (lastUsed: the frame)
+		uint64_t meshJob = 0;  // the mesh job in the background (MeshJob::gen), 0: none
 		bool drawn = false;   // in this frame's draw list (lastUsed: this frame)
 		bool hidden = false;  // beyond the horizon (lastUsed: this frame)
 		uint32_t rtTris = 0;  // ray tracing triangles of the tiles drawn of this one and its descendants
@@ -216,11 +263,15 @@ private:
 	void TakeRoots () const { if (rootJob.valid ()) { RootData d = rootJob.get (); ApplyRoots (d); } }
 	Node *NewNode (int lvl, int ilat, int ilng, Node *parent);
 	void FreeNode (Node *n);
-	void PruneChildren (Node *n, uint64_t age);
+	/// the subtrees under n not used since tmin [s] released
+	void PruneChildren (Node *n, double tmin);
+	/// the tiles out of the selection kept or released (time, memory budget)
+	void Retain ();
 	/// a tile's size for the level of detail [m]: split where it would cover more than splitPixels
 	double SplitSize (const Node *n) const;
 	/// returns rtTris (the tiles drawn of n and its descendants: their ray tracing triangles)
-	uint32_t Select (Node *n);
+	/// covered: the tiles drawn of n and its descendants have their meshes
+	uint32_t Select (Node *n, bool &covered);
 	void Request (Node *n, TileLoader::Kind kind);
 	Node *Find (int lvl, int ilat, int ilng) const;
 	const Node *ElevSource (const Node *n) const;
@@ -229,6 +280,26 @@ private:
 	/// (oapiSurfaceDetail); amp, fade: receive the noise amplitude factor
 	/// and the crater fade factor
 	double SurfaceElev (const Node *src, double lat, double lng, double lmin, double *amp = nullptr, double *fade = nullptr, double *playa = nullptr) const;
+	/// An elevation tile as the mesh jobs see it (a node's data and extent,
+	/// the grid shared: the node may go while the job runs)
+	struct ElevSrc {
+		std::shared_ptr<const ElevGrid> elev;
+		double latmin, latmax, lngmin, lngmax;
+		int lvl;
+	};
+	static ElevSrc SrcOf (const Node *n) { return { n->elev, n->latmin, n->latmax, n->lngmin, n->lngmax, n->lvl }; }
+	template <class S> double SampleElevT (const S *src, double lat, double lng) const;
+	template <class S> double SurfaceElevT (const S *src, double lat, double lng, double lmin, double *amp, double *fade, double *playa) const;
+	/// A tile as the mesh jobs see it
+	struct TileGeo {
+		int lvl, ilat, ilng;
+		double latmin, latmax, lngmin, lngmax;
+		VECTOR3 centre;
+		double angRadius;
+		int cols;
+		bool parent;  // (a child: morph targets)
+	};
+	static TileGeo GeoOf (const Node *n) { return { n->lvl, n->ilat, n->ilng, n->latmin, n->latmax, n->lngmin, n->lngmax, n->centre, n->angRadius, n->cols, n->parent != nullptr }; }
 	/// a mesh's data, made on worker threads (ComputeMesh: no GPU calls) and
 	/// uploaded after (ApplyMesh)
 	struct MeshData {
@@ -238,9 +309,13 @@ private:
 		int elevLvl = 0;
 		bool detailed = false;
 		float decErr[6];     // (as Node::decErr)
+		std::vector<uint32_t> packed; // compact vertices (Pack), their scale and origin
+		float scale = 1.0f;
+		VECTOR3 org{};
 	};
-	/// detailed: with the terrain detail's geometry (else only its shading)
-	void ComputeMesh (const Node *n, const Node *src, bool detailed, MeshData &md) const;
+	/// detailed: with the terrain detail's geometry (else only its shading);
+	/// src, psrc: the tile's and its parent's elevation data (null: none)
+	void ComputeMesh (const TileGeo *n, const ElevSrc *src, const ElevSrc *psrc, bool detailed, MeshData &md) const;
 	void ApplyMesh (Node *n, MeshData &md);
 	/// MeshData::decErr from the grid's vertices (every 2^cols-th column drawn)
 	static void DecimationErrors (const NTVERTEX *vtx, int cols, float err[6]);
@@ -256,7 +331,8 @@ private:
 		float d0[4];
 		uint64_t outAddr, ptsAddr;
 		float sp[4], misc[4];
-		uint64_t errAddr, pad;  // the mesh's decimation errors (Node::decErr), host memory
+		uint64_t errAddr;    // the mesh's decimation errors (Node::decErr), host memory
+		uint64_t cmp;        // compact vertices: scale [m] (float bits), 1 << 32; 0: NTVERTEX
 	};
 	// GPU meshes' decimation errors, read in the frame slot's next use:
 	// per slot a buffer, and the tiles (by place and mesh version)
@@ -266,17 +342,58 @@ private:
 	/// a point d R split into integer metres and the fraction (single
 	/// precision lattices in the shaders: detailcore.glsl's DetPoint)
 	void SplitPoint (const VECTOR3 &D, int32_t I[3], float F[3]) const;
-	void PrepareGpuMesh (const Node *n, const Node *src, GpuJob &job, std::vector<float> &pts, MeshData &md) const;
-	/// the vertex buffer of a tile (made if needed)
+	void PrepareGpuMesh (const TileGeo *n, const ElevSrc *src, const ElevSrc *psrc, GpuJob &job, std::vector<float> &pts, MeshData &md) const;
+	/// Meshes made in the background (MeshWorkers): a job per tile, its
+	/// inputs copied (the tile may go meanwhile); the results applied by
+	/// Prepare under a budget per frame (the nearest first), each to its
+	/// tile if it is still there and still waiting for it (Node::meshJob)
+	enum JobKind { JOB_PLAIN, JOB_GPU };
+	struct MeshJob {
+		uint64_t gen;
+		JobKind kind;
+		bool detailed;
+		TileGeo geo;
+		bool hasSrc, hasPsrc;
+		ElevSrc src, psrc;
+	};
+	struct MeshResult {
+		MeshJob job;
+		MeshData md;
+		GpuJob gj;
+		std::vector<float> pts;
+	};
+	bool SubmitMesh (Node *n, JobKind kind, bool detailed);
+	std::mutex meshMtx;
+	std::deque<MeshResult> meshDone; // (finished, waiting to be applied)
+	std::condition_variable meshCv;
+	std::atomic<int> meshOutstanding{ 0 }; // (submitted, not yet applied)
+	uint64_t meshGen = 0;
+	int needMeshes = 0;        // tiles of this frame's selection waiting for a mesh (Prepare)
+	int pendingLoads = 0;      // its tile requests in the loader
+	bool detailWarm = false;   // (the core's terrain detail initialised, on the main thread)
+	/// the vertex buffer of a tile (made if needed), and its size [bytes]
 	void EnsureVertexBuffer (Node *n);
+	bool Compact () const { return tr->Compact () && !clouds; }
+	static constexpr size_t COMPACT_VTX = 24; // [bytes] (Pack)
+	VkDeviceSize MeshBytes () const
+	{
+		const size_t V = TileRenderer::GRID + 1, nv = V * V + 4 * V;
+		return nv * (Compact () ? COMPACT_VTX : sizeof(NTVERTEX) + 6 * sizeof(float));
+	}
+	/// Compact vertices (24 bytes, tile_mesh.comp the same): position and morph
+	/// target snorm16 relative to org in scale (the morph's w: the crater fade),
+	/// octahedral normal snorm16, noise amplitude and playa weight halves; the
+	/// texture coordinates from the vertex's place (tilevertex.glsl)
+	static void Pack (const std::vector<NTVERTEX> &vtx, const std::vector<float> &amp, std::vector<uint32_t> &out, float &scale, VECTOR3 &org);
 	/// whether a tile may be in the camera's view
 	bool InView (const Node *n) const;
 	/// texture of a tile: its own, or the matching part (uv: offset, scale) of its nearest ancestor's
 	static VkTexture *TexFor (const Node *n, VkTexture *Node::*member, float uv[4]);
 	void DrawNode (Node *n, bool prepass = false);
+	void DrawCacheFill (Node *n, Node::DrawCache &dc);
 	/// all drawn tiles into the ray tracing scene, in clusters (with those
 	/// out of view: they cast shadows into it)
-	void AddRTClusters (Node *n, class RTScene *rt);
+	void AddRTClusters (Node *n, class RTScene *rt, bool churn = false);
 	void GatherDrawn (Node *n, std::vector<Node*> &out) const;
 	/// the tiles the environment probe draws (seen from pc, planet frame):
 	/// the first as coarse as its resolution needs that has a mesh, else
@@ -301,10 +418,13 @@ private:
 	double meshTime = 0.0; int meshCount = 0; // (ORBITER_VK_TILE_DEBUG)
 	int dbgNew = 0, dbgFreed = 0, dbgRbNew = 0, dbgRbElev = 0, dbgDetail = 0; // (ORBITER_VK_TILE_DEBUG: the tree's churn)
 	double splitPixels = 300.0; // split tiles that cover more than this on screen
+	double lodScale = 1.0;      // that raised by this over the tile budget (a zoomed view)
+	double splitEff = 300.0;    // splitPixels * lodScale (this frame)
 	int elevMode = 1;     // interpolation of the elevation data as in the core: 1 linear, 2 cubic spline
 	bool detail = false;  // procedural terrain detail (oapiSurfaceDetail)
 	SURFDETAILPARAM detailPrm{}; // its parameters
 	uint64_t frame = 0;
+	double frameTime = 0.0; // [s] steady clock at this frame's selection
 	size_t nMeshes = 0;     // nodes holding a mesh (the tree's video memory, ~0.25 MB each)
 	int requestsThisFrame = 0;
 
@@ -329,6 +449,7 @@ private:
 	double LowerDist (const Node *n, const From &f, double cang, double emin, double emax) const;
 	From fromCam;
 	std::vector<From> fromVessels;
+	double vesselRmin = 0.0; // [m] the nearest of them to the planet's centre (Select's chord bound)
 	double horizon = 0.0; // [rad] beyond which tiles are hidden (with the highest mountains); <0: none
 	std::vector<VECTOR3> groundVessels; // positions of vessels near the ground, planet frame (finest tiles under them)
 	std::vector<double> groundTile;     // [m] the finest tile under each (by the camera's distance)

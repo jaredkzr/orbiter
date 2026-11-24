@@ -299,7 +299,7 @@ void PostFX::CreateTargets ()
 void PostFX::DestroyTargets ()
 {
 	if (generation == ~0u) return;
-	vkDeviceWaitIdle (ctx->device);
+	ctx->WaitIdle ();
 	vkResetDescriptorPool (ctx->device, pool, 0);
 	for (auto &l : levels) {
 		ctx->DestroyImage (l.img);

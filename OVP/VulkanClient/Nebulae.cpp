@@ -397,7 +397,7 @@ bool Nebulae::Bin (const galactic::Observer &obs, int slot)
 	bool replaced = false;
 	if (!tiles[slot].buffer || total > tileCapacity[slot]) {
 		if (tiles[slot].buffer) {
-			vkDeviceWaitIdle (ctx->device);
+			ctx->WaitIdle ();
 			ctx->DestroyBuffer (tiles[slot]);
 		}
 		tileCapacity[slot] = total + total / 2 + 65536;

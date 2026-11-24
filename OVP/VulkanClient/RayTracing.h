@@ -57,6 +57,8 @@ public:
 		uint32_t nVtx;
 		VkBuffer ib;          // (whole 32-bit words: the shaders read pairs)
 		uint32_t firstIndex, nIndex;
+		bool compact = false; // a terrain tile's compact vertices (PlanetSurface::Pack: positions snorm16 in scale, rtvertex.glsl)
+		float scale = 1.0f;   // [m] (compact; in a cluster's part only)
 	};
 
 	bool Init (vkc::Context *ctx, TextureManager *texmgr);
@@ -85,7 +87,8 @@ public:
 	/// level structure for neighbouring tiles instead of an instance each,
 	/// whose boxes overlap). Kept under key (RTNewGeometryId; forgotten with
 	/// RTForgetGeometry) and rebuilt in place when the parts change.
-	void AddCluster (uint64_t key, const Part *parts, const float (*offsets)[3], uint32_t nParts, const Mat4 &modelView);
+	/// fastBuild: a cluster that changes often (built for speed, traced a little slower)
+	void AddCluster (uint64_t key, const Part *parts, const float (*offsets)[3], uint32_t nParts, const Mat4 &modelView, bool fastBuild = false);
 	/// Build the acceleration structures of this frame (outside rendering
 	/// scopes; before the shaders that trace)
 	void Build ();
@@ -114,7 +117,7 @@ private:
 		uint64_t lastUse = 0;     // frame
 		uint32_t linger = 256;    // frames kept unused
 	};
-	void Add (uint64_t key, const Part *parts, const float (*offsets)[3], uint32_t nParts, const Mat4 &modelView);
+	void Add (uint64_t key, const Part *parts, const float (*offsets)[3], uint32_t nParts, const Mat4 &modelView, bool fastBuild = false);
 	uint64_t frameCount = 0;
 	uint32_t TextureSlot (VkTexture *tex);
 	void DestroyBlas (Blas &b);
@@ -128,6 +131,7 @@ private:
 		Blas *b;
 		std::vector<VkAccelerationStructureGeometryKHR> geoms;
 		std::vector<uint32_t> nPrim;
+		VkBuildAccelerationStructureFlagsKHR flags;
 	};
 	std::vector<BlasBuild> builds; // new this frame
 	// top level, per frame in flight

@@ -115,6 +115,16 @@ bool ShadowMap::Init (vkc::Context *c, VkDescriptorSetLayout texLayout)
 	gpi.pDynamicState = &dy;
 	gpi.layout = layout;
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &pipeline));
+	{ // (terrain tiles' compact vertices: the position snorm16, 24 bytes a vertex)
+		VkVertexInputBindingDescription cbind{ 0, 24, VK_VERTEX_INPUT_RATE_VERTEX };
+		VkVertexInputAttributeDescription cattr{ 0, 0, VK_FORMAT_R16G16B16A16_SNORM, 0 };
+		VkPipelineVertexInputStateCreateInfo cvi = vi;
+		cvi.pVertexBindingDescriptions = &cbind;
+		cvi.pVertexAttributeDescriptions = &cattr;
+		VkGraphicsPipelineCreateInfo cgpi = gpi;
+		cgpi.pVertexInputState = &cvi;
+		VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &cgpi, nullptr, &compactPipeline));
+	}
 	vkDestroyShaderModule (ctx->device, vs, nullptr);
 
 	// alpha-tested casters: the texture decides where there is a shadow
@@ -211,6 +221,7 @@ void ShadowMap::Shutdown ()
 {
 	if (!ctx) return;
 	vkDestroyPipeline (ctx->device, pipeline, nullptr);
+	vkDestroyPipeline (ctx->device, compactPipeline, nullptr);
 	vkDestroyPipelineLayout (ctx->device, layout, nullptr);
 	vkDestroyPipeline (ctx->device, alphaPipeline, nullptr);
 	vkDestroyPipeline (ctx->device, instPipeline, nullptr);
@@ -353,6 +364,15 @@ void ShadowMap::DrawGeometry (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat
 	(lightVP * model).ToFloat (f);
 	vkCmdPushConstants (cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(f), f);
 	vkCmdDrawIndexed (cmd, nIdx, 1, firstIdx, 0, 0);
+}
+
+void ShadowMap::DrawCompact (VkBuffer vb, VkBuffer ib, uint32_t nIdx, const Mat4 &model, uint32_t firstIdx)
+{
+	if (!active) return;
+	VkCommandBuffer cmd = ctx->Cmd();
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, compactPipeline);
+	DrawGeometry (vb, ib, nIdx, model, firstIdx);
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline); // (the casters' after it)
 }
 
 bool ShadowMap::MayCast (const VECTOR3 &gpos, double rad) const

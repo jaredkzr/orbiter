@@ -327,7 +327,7 @@ void FireballRenderer::ApplySettings ()
 void FireballRenderer::Shutdown ()
 {
 	if (!ctx) return;
-	vkDeviceWaitIdle (ctx->device);
+	ctx->WaitIdle ();
 	FreeGrids ();
 	for (VkPipeline p : { gridPipe, sunPipe, marchPipe, compoPipe }) if (p) vkDestroyPipeline (ctx->device, p, nullptr);
 	for (VkPipelineLayout l : { compLayout, marchLayout, compoLayout }) if (l) vkDestroyPipelineLayout (ctx->device, l, nullptr);
@@ -479,7 +479,7 @@ void FireballRenderer::SetPrepass (VkImageView prepass)
 	if (prepass != prepassView) {
 		// (the march set is bound by no frame in flight while it is written:
 		// a new prepass comes with a new swapchain, after an idle wait)
-		if (prepassView) vkDeviceWaitIdle (ctx->device);
+		if (prepassView) ctx->WaitIdle ();
 		prepassView = prepass;
 		WriteMarchSet ();
 		for (auto &g : compoGen) g = ~0u;

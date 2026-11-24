@@ -39,6 +39,8 @@ namespace vkcity {
 		~Field ();
 		/// the planet has cities
 		bool Active () const { return active; }
+		/// a set being built (the loading's hold: VulkanClient::WarmUp)
+		bool Busy () const { return active && (build.active || roadJob.valid ()); }
 		/// Read cells, continue the instance set (before the shadow maps)
 		void Prepare ();
 		void Render (RenderPass pass);

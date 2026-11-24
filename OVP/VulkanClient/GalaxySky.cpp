@@ -805,7 +805,7 @@ bool GalaxySky::Init (vkc::Context *c, const galactic::Observer &obs, const gala
 void GalaxySky::Shutdown ()
 {
 	if (!ctx) return;
-	vkDeviceWaitIdle (ctx->device);
+	ctx->WaitIdle ();
 	vkDestroyQueryPool (ctx->device, queries, nullptr);
 	queries = VK_NULL_HANDLE;
 	if (asyncPool) vkDestroyCommandPool (ctx->device, asyncPool, nullptr);

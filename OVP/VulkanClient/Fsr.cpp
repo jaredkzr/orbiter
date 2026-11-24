@@ -154,7 +154,7 @@ struct FsrUpscaler::Impl {
 	void DestroyContext ()
 	{
 		if (!haveContext) return;
-		vkDeviceWaitIdle (ctx->device);
+		ctx->WaitIdle ();
 		ffxFsr3UpscalerContextDestroy (&context);
 		haveContext = false;
 		ctx->DestroyImage (output);

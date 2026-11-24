@@ -17,12 +17,16 @@ layout(push_constant) uniform Prepass {
 	vec4 params;
 	vec4 morph;            // morph: start distance [m], 1/range [1/m] (0: none)
 	vec4 vessel;           // nearest vessel on the ground, view space (w: present)
+	vec4 scale;            // x: the compact vertices' scale [m] (tile.vert)
 } pp;
 
-layout(location = 0) in vec3 inPos;
+layout(constant_id = 1) const bool COMPACT = false; // (tile.vert)
+layout(location = 0) in vec4 inPos;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec2 inUV;
-layout(location = 4) in vec3 inMorph;
+layout(location = 4) in vec4 inMorph;
+
+#include "tilevertex.glsl"
 
 layout(location = 0) out vec3 vPosView;
 layout(location = 1) out vec3 vNormalView;
@@ -32,17 +36,24 @@ layout(location = 4) out vec2 vUV;
 
 void main()
 {
-	vec3 p0 = (pp.modelView * vec4(inPos, 1.0)).xyz;
+	vec3 pos = inPos.xyz, mor = inMorph.xyz, nrm = inNormal;
+	vec2 uv = inUV;
+	if (COMPACT) {
+		pos *= pp.scale.x, mor *= pp.scale.x;
+		nrm = TileOctDecode (inNormal.xy);
+		uv = TileGridUV (uint (gl_VertexIndex));
+	}
+	vec3 p0 = (pp.modelView * vec4(pos, 1.0)).xyz;
 	float d = length (p0);
 	if (pp.vessel.w > 0.5) d = min (d, length (p0 - pp.vessel.xyz));
 	float m = clamp ((d - pp.morph.x) * pp.morph.y, 0.0, 1.0);
-	vec4 p = pp.modelView * vec4(mix (inPos, inMorph, m), 1.0);
-	vec3 nsw = mat3(pp.modelView) * inNormal;
+	vec4 p = pp.modelView * vec4(mix (pos, mor, m), 1.0);
+	vec3 nsw = mat3(pp.modelView) * nrm;
 	p.xyz = SwellDisplace (p.xyz, nsw); // (the sea's swell, Water W8)
 	vPosView = p.xyz;
 	vNormalView = nsw;
 	gl_Position = frame.proj * RelApparent (p); // (relativistic view: as seen)
 	vClip = gl_Position - vec4(frame.jitter.xy * gl_Position.w, 0.0, 0.0);
 	vPrevClip = pp.prevClipFromView * RelApparent (p);
-	vUV = inUV;
+	vUV = uv;
 }

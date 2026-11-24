@@ -29,6 +29,9 @@
 #include <SDL3/SDL_vulkan.h>
 #include <cstdlib>
 #include <future>
+#include <atomic>
+#include <cstring>
+#include <cfloat>
 #include <thread>
 #include <algorithm>
 #include <chrono>
@@ -273,7 +276,7 @@ void VulkanClient::clbkCloseSession (bool fastclose)
 	if (ready) {
 		r2d->Flush ();
 		ctx.SubmitPending ();
-		vkDeviceWaitIdle (ctx.device);
+		ctx.WaitIdle ();
 	}
 	scene.reset();
 }
@@ -291,6 +294,86 @@ void VulkanClient::clbkDestroyRenderWindow (bool fastclose)
 static double WallNow () // [s]
 {
 	return std::chrono::duration<double> (std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+namespace {
+	// The GPU's clocks, power and temperature for the frame-time log (Linux
+	// amdgpu: its hwmon files), sampled every 100 ms on a thread of its own (a
+	// power reading asks the GPU's firmware)
+	class GpuSensors {
+	public:
+		static GpuSensors &Get () { static GpuSensors g; return g; }
+		bool Valid () const { return !dir.empty (); }
+		double RssMb () const { return v[5].load (); } // [MB] the process's resident memory (negative: not read)
+		// [MHz], [MHz], [W], [deg C], [%] (negative: not read)
+		void Read (double &sclk, double &mclk, double &watts, double &tj, double &busy) const
+		{
+			sclk = v[0].load () * 1e-6, mclk = v[1].load () * 1e-6, watts = v[2].load () * 1e-6, tj = v[3].load () * 1e-3, busy = v[4].load ();
+		}
+		~GpuSensors ()
+		{
+			quit = true;
+			if (thread.joinable ()) thread.join ();
+		}
+	private:
+		std::string dir, busyFile;
+		std::atomic<double> v[6];
+		std::atomic<bool> quit{ false };
+		std::thread thread;
+		GpuSensors ()
+		{
+			for (auto &x : v) x = -1e30;
+#ifndef _WIN32
+			// (the first card with an amdgpu hwmon)
+			for (int c = 0; c < 8 && dir.empty (); c++)
+				for (int h = 0; h < 16; h++) {
+					char d[128];
+					snprintf (d, sizeof (d), "/sys/class/drm/card%d/device/hwmon/hwmon%d/", c, h);
+					if (FILE *f = fopen ((std::string (d) + "name").c_str (), "r")) {
+						char name[32] = {};
+						if (fgets (name, sizeof (name), f) && !strncmp (name, "amdgpu", 6)) {
+							dir = d;
+							char b[96];
+							snprintf (b, sizeof (b), "/sys/class/drm/card%d/device/gpu_busy_percent", c);
+							busyFile = b;
+						}
+						fclose (f);
+						if (!dir.empty ()) break;
+					}
+				}
+			thread = std::thread ([this] { Loop (); });
+#endif
+		}
+		static double ReadNum (const std::string &path)
+		{
+			double x = -1e30;
+			if (FILE *f = fopen (path.c_str (), "r")) {
+				if (fscanf (f, "%lf", &x) != 1) x = -1e30;
+				fclose (f);
+			}
+			return x;
+		}
+		void Loop ()
+		{
+			const double page = (double)sysconf (_SC_PAGESIZE) / (1 << 20);
+			while (!quit) {
+				if (!dir.empty ()) {
+					v[0] = ReadNum (dir + "freq1_input");
+					v[1] = ReadNum (dir + "freq2_input");
+					double w = ReadNum (dir + "power1_average");
+					v[2] = w > -1e29 ? w : ReadNum (dir + "power1_input");
+					v[3] = ReadNum (dir + "temp2_input"); // (junction)
+					v[4] = ReadNum (busyFile);
+				}
+				if (FILE *f = fopen ("/proc/self/statm", "r")) {
+					unsigned long long size, rss;
+					if (fscanf (f, "%llu %llu", &size, &rss) == 2) v[5] = rss * page;
+					fclose (f);
+				}
+				for (int i = 0; i < 10 && !quit; i++) std::this_thread::sleep_for (std::chrono::milliseconds (10));
+			}
+		}
+	};
 }
 
 void VulkanClient::clbkUpdate (bool running)
@@ -361,6 +444,7 @@ void VulkanClient::clbkRenderScene ()
 		ctx.BindBackbuffer (false);
 		return;
 	}
+	if (!warmedUp) WarmUp ();
 	if (frameTimes) {
 		renderStart = WallNow ();
 		if (updateEnd > 0.0) ctx.CpuAdd ("core input", (renderStart - updateEnd) * 1e3); // (user input, the dialogs' frame)
@@ -479,6 +563,93 @@ void VulkanClient::clbkRenderScene ()
 	ctx.CpuMark ("overlay");
 }
 
+void VulkanClient::WarmUp ()
+{
+	// (the first frames had shown the terrain made from scratch, 1.5-3 s of
+	// 7-15 fps: the meshes, the first city set's 100 ms a frame, the
+	// scatter's 50 ms. Instead the loading goes on, with cleared frames,
+	// until the tiles, cities and scatter of the first view are in)
+	warmedUp = true;
+	static const double cap = getenv ("ORBITER_VK_WARMUP_S") ? atof (getenv ("ORBITER_VK_WARMUP_S")) : 3.0;
+	if (cap <= 0.0 || !scene) return;
+	auto t0 = std::chrono::steady_clock::now ();
+	int frames = 0, idle = 0;
+	bool busy = true;
+	scene->warmingUp = true;
+	while (std::chrono::duration<double> (std::chrono::steady_clock::now () - t0).count () < cap) {
+		if (!ctx.BeginFrame ()) break;
+		bool last = std::chrono::duration<double> (std::chrono::steady_clock::now () - t0).count () > cap - 0.01;
+		busy = scene->WarmUpStep (last);
+		r2d->Flush ();
+		ctx.BindBackbuffer (false);
+		DrawHoldOverlay ();
+		// (ORBITER_VK_WARMUP_SHOT=<png>: the hold's 20th frame, to check the overlay)
+		static const char *holdShot = getenv ("ORBITER_VK_WARMUP_SHOT");
+		if (holdShot && frames == 20) CaptureBackbuffer (holdShot);
+		ctx.EndFrame ();
+		frames++;
+		if (busy) idle = 0;
+		else if (++idle >= 3) break;
+	}
+	scene->warmingUp = false;
+	oapiWriteLogV ("VulkanClient: loading held %.2f s, %d frames, for the first view's tiles, cities and scatter%s",
+		std::chrono::duration<double> (std::chrono::steady_clock::now () - t0).count (), frames, busy ? " (not all in)" : "");
+	vkc::Stats () = vkc::FrameStats (); // (not the first frame's)
+	ctx.ClearCpuTimes ();
+	ctx.TakeFenceWait ();
+}
+
+void VulkanClient::DrawHoldOverlay ()
+{
+	// The loading's hold over the cleared frame, in the launcher's loading
+	// screen's style (LaunchpadPosix DrawLoading): the backdrop, and at the
+	// bottom left "LOADING TERRAIN" in small spaced capitals in the accent
+	// colour over a short accent line. Drawn into a draw list of its own (an
+	// ImGui frame is open: the core began it before the scene), with the
+	// interface's fonts and colours
+	if (!imguiReady || !ImGui::GetCurrentContext ()) return;
+	ImGuiIO &io = ImGui::GetIO ();
+	if (io.Fonts->Fonts.Size == 0) return;
+	VkExtent2D e = ctx.Extent ();
+	const float W = (float)e.width, H = (float)e.height, s = H / 1080.0f; // (ui::Px: the scale follows the height)
+	// (the theme's sRGB colours, linear as the interface draws them: UiTheme.cpp)
+	auto lin = [](unsigned rgb, float a) {
+		auto L = [](float c) { return c <= 0.04045f ? c / 12.92f : std::pow ((c + 0.055f) / 1.055f, 2.4f); };
+		return ImGui::ColorConvertFloat4ToU32 (ImVec4 (L (((rgb >> 16) & 0xff) / 255.0f), L (((rgb >> 8) & 0xff) / 255.0f), L ((rgb & 0xff) / 255.0f), a));
+	};
+	const ImU32 backdrop = lin (0x060A13, 1.0f), accent = lin (0x4CC3FF, 1.0f);
+	ImFont *font = io.FontDefault ? io.FontDefault : io.Fonts->Fonts[0];
+	for (ImFont *f : io.Fonts->Fonts) // (Inter Medium: the launcher's labels)
+		if (f && strstr (f->GetDebugName (), "Medium")) { font = f; break; }
+	ImDrawList dl (ImGui::GetDrawListSharedData ());
+	dl._ResetForNewFrame ();
+	dl.PushClipRect (ImVec2 (0, 0), ImVec2 (W, H));
+	dl.PushTexture (io.Fonts->TexRef);
+	dl.AddRectFilled (ImVec2 (0, 0), ImVec2 (W, H), backdrop);
+	const float m = 56.0f * s, size = 12.5f * s, spacing = 3.0f * s;
+	// (the spaced capitals, glyph by glyph)
+	auto spaced = [&](float x, float y, const char *t, ImU32 col) {
+		for (const char *p = t; *p; p++) {
+			char c[2] = { *p, 0 };
+			dl.AddText (font, size, ImVec2 (x, y), col, c);
+			x += font->CalcTextSizeA (size, FLT_MAX, 0.0f, c).x + spacing;
+		}
+		return x;
+	};
+	float y = H - m - size;
+	spaced (m, y, "LOADING TERRAIN", accent);
+	dl.AddRectFilled (ImVec2 (m, H - m + 12.0f * s), ImVec2 (m + 72.0f * s, H - m + 15.0f * s), accent, 2.0f * s);
+	ImDrawData dd;
+	dd.Valid = true;
+	dd.DisplayPos = ImVec2 (0, 0);
+	dd.DisplaySize = ImVec2 (W, H);
+	dd.FramebufferScale = ImVec2 (1, 1);
+	dd.OwnerViewport = ImGui::GetMainViewport (); // (the backend's buffers per viewport)
+	dd.Textures = &ImGui::GetPlatformIO ().Textures; // (glyphs baked for these sizes uploaded)
+	dd.AddDrawList (&dl);
+	ImGui_ImplVulkan_RenderDrawData (&dd, ctx.Cmd ());
+}
+
 void VulkanClient::clbkImGuiRenderDrawData ()
 {
 	if (!imguiReady) return;
@@ -501,6 +672,10 @@ bool VulkanClient::clbkDisplayFrame ()
 		auto t = std::chrono::steady_clock::now ();
 		if (t - last > std::chrono::seconds (20)) { last = t; vkc::LogHeaps (); }
 	}
+	{ // (the log's time of the session's first frame: the load time, Tests/Bench ColdStart)
+		static bool firstLogged = false;
+		if (frameActive && scene && !firstLogged) firstLogged = true, oapiWriteLog ("VulkanClient: first frame");
+	}
 	if (frameTimes && frameActive && scene) {
 		ctx.CpuMark ("2d ui"); // (the core's 2D output, the dialogs)
 		double now = WallNow ();
@@ -510,7 +685,7 @@ bool VulkanClient::clbkDisplayFrame ()
 			const auto &g = vkc::Gfx ();
 			VkExtent2D e = ctx.Extent (), r = ctx.RenderExtent ();
 			const char *stamp = getenv ("ORBITER_BENCH_STAMP");
-			fprintf (frameTimes, "# orbiter-frametimes 2 %s size=%ux%u render=%ux%u offscreen=%d frames_in_flight=%u aa=%s rt=%d rt_lighting=%d rt_reflections=%d"
+			fprintf (frameTimes, "# orbiter-frametimes 3 %s size=%ux%u render=%ux%u offscreen=%d frames_in_flight=%u aa=%s rt=%d rt_lighting=%d rt_reflections=%d"
 				" clouds=%d plumes=%d particles=%d particle_density=%g smoke=%d fireballs=%d %s\n",
 				ctx.DeviceStamp ().c_str (), e.width, e.height, r.width, r.height, offscreen ? 1 : 0, vkc::FRAMES_IN_FLIGHT,
 				scene->AntiAliasingName ().c_str (), scene->RT () ? 1 : 0, g.rtLighting ? 1 : 0, g.rtReflections ? 1 : 0,
@@ -525,6 +700,13 @@ bool VulkanClient::clbkDisplayFrame ()
 		// per GPU pass the CPU time up to its mark, less any wait; "submit":
 		// the previous frame's); "@bound=" G when the CPU waited on the GPU,
 		// else C
+		// Then (version 3): "@glag=" how many frames before this one the GPU
+		// times are from (frames in flight: the GPU's frame N-2 on line N);
+		// "@n" the frame's workload counters (vkc::FrameStats, those not 0);
+		// "@mem" the device-local heap's use and budget [MB] (the driver's,
+		// VK_EXT_memory_budget); "@hw" the GPU's clocks [MHz], power [W],
+		// junction temperature [C] and busy share [%] (amdgpu, sampled every 100 ms);
+		// "@mem rss=" the process's resident memory [MB]
 		const auto &gpu = ctx.LastGpuTimes ();
 		double total = 0.0;
 		for (const auto &m : gpu) total += m.second;
@@ -533,10 +715,43 @@ bool VulkanClient::clbkDisplayFrame ()
 		for (const auto &m : gpu) fprintf (frameTimes, " %s=%.3f", m.first, m.second);
 		fprintf (frameTimes, " CPU render=%.3f CPU wait=%.3f @cpu", (now - renderStart) * 1e3, wait);
 		for (const auto &m : ctx.CpuTimes ()) fprintf (frameTimes, " %s=%.3f", m.first, m.second);
-		fprintf (frameTimes, " @bound=%c\n", wait > std::max (0.5, 0.05 * wall) ? 'G' : 'C');
+		fprintf (frameTimes, " @bound=%c", wait > std::max (0.5, 0.05 * wall) ? 'G' : 'C');
+		// (this frame is submitted as FrameSerial + 1)
+		if (!gpu.empty ()) fprintf (frameTimes, " @glag=%llu", (unsigned long long)(ctx.FrameSerial () + 1 - ctx.LastGpuSerial ()));
+		{
+			vkc::FrameStats &st = vkc::Stats ();
+			fprintf (frameTimes, " @n");
+			auto cnt = [&](const char *name, uint64_t x) { if (x) fprintf (frameTimes, " %s=%llu", name, (unsigned long long)x); };
+			cnt ("idle", st.idleWaits);
+			if (st.idleMs > 0.0) fprintf (frameTimes, " idlems=%.3f", st.idleMs);
+			cnt ("imm", st.immediate); cnt ("bufnew", st.bufNew); cnt ("buffree", st.bufFree); cnt ("imgnew", st.imgNew);
+			cnt ("memnew", st.memNew); cnt ("memfree", st.memFree); cnt ("memnewmb", st.memNewBytes >> 20);
+			cnt ("deferred", st.deferred); cnt ("tex", st.texUploads); cnt ("blas", st.blas); cnt ("blastri", st.blasTris);
+			cnt ("tdrawn", st.tilesDrawn); cnt ("tnew", st.tilesNew); cnt ("tfreed", st.tilesFreed);
+			cnt ("mplain", st.meshPlain); cnt ("mgpu", st.meshGpu); cnt ("mapplied", st.meshApplied); cnt ("mpending", st.meshPending);
+			cnt ("tmeshes", st.tileMeshes); cnt ("tmb", st.tileBytes >> 20); cnt ("tdraws", st.tileDraws);
+			st = vkc::FrameStats ();
+		}
+		uint64_t use, bud;
+		if (ctx.HeapBudget (use, bud)) {
+			fprintf (frameTimes, " @mem used=%llu budget=%llu", (unsigned long long)(use >> 20), (unsigned long long)(bud >> 20));
+			double rss = GpuSensors::Get ().RssMb ();
+			if (rss > 0) fprintf (frameTimes, " rss=%.0f", rss);
+		}
+		if (GpuSensors::Get ().Valid ()) {
+			double sclk, mclk, watts, tj, busy;
+			GpuSensors::Get ().Read (sclk, mclk, watts, tj, busy);
+			fprintf (frameTimes, " @hw");
+			if (sclk > 0) fprintf (frameTimes, " sclk=%.0f", sclk);
+			if (mclk > 0) fprintf (frameTimes, " mclk=%.0f", mclk);
+			if (watts > 0) fprintf (frameTimes, " watts=%.1f", watts);
+			if (tj > -1e3) fprintf (frameTimes, " tj=%.0f", tj);
+			if (busy >= 0) fprintf (frameTimes, " busy=%.0f", busy);
+		}
+		fputc ('\n', frameTimes);
 		ctx.ClearCpuTimes ();
 		lastFrameWall = now;
-	} else if (frameTimes) ctx.ClearCpuTimes ();
+	} else if (frameTimes) ctx.ClearCpuTimes (), vkc::Stats () = vkc::FrameStats ();
 	if (frameActive) {
 		if (!videoFile.empty ()) StreamFrame ();
 		if (!autoScreenshot.empty() && !videoDir.empty() && frameCount + 1 + videoFrames >= autoScreenshotFrame && frameCount + 1 < autoScreenshotFrame) {
@@ -1034,7 +1249,7 @@ void VulkanClient::clbkImGuiInit ()
 void VulkanClient::clbkImGuiShutdown ()
 {
 	if (!imguiReady) return;
-	vkDeviceWaitIdle (ctx.device);
+	ctx.WaitIdle ();
 	ImGui_ImplVulkan_Shutdown ();
 	ImGui_ImplSDL3_Shutdown ();
 	imguiReady = false;

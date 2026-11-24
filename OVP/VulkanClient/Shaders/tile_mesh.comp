@@ -14,6 +14,7 @@
 #extension GL_EXT_buffer_reference_uvec2 : require
 
 #include "detailcore.glsl"
+#include "tilevertex.glsl"
 
 layout(local_size_x = 256) in;
 
@@ -32,12 +33,14 @@ struct Job {
 	vec4 sp;        // lmin, the parent's lmin, data spacing, the parent's data spacing [m]
 	vec4 misc;      // skirt depth [m], parent (1/0), lsplit: the coarser detail is in the points' elevations [m],
 	                // href: the points' elevations are relative to it [m]
-	uvec2 errAddr;  // the mesh's decimation errors (PlanetSurface::DecimationErrors): 6 floats
-	uvec2 pad;
+	uvec2 errAddr;  // the mesh's decimation errors (PlanetSurface::DecimationErrors): 6 floats; 7th: compact, the
+	                // largest coordinate over the scale (over 1: clamped)
+	uvec2 cmp;      // x: the compact vertices' scale [m] (float bits), y: 1 compact (PlanetSurface::Pack), 0 NTVERTEX
 };
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Jobs { Job job[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Floats { float f[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) coherent buffer OutFloats { float f[]; };
+layout(buffer_reference, std430, buffer_reference_align = 4) coherent buffer OutUints { uint u[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) writeonly buffer OutErr { float e[]; };
 
 layout(push_constant) uniform Params {
@@ -52,7 +55,7 @@ layout(push_constant) uniform Params {
 } pc;
 
 shared vec3 P[W * W]; // positions relative to the tile centre raised to href
-shared uint sErr[6];  // decimation errors (float bits: positive floats order as uints)
+shared uint sErr[7];  // decimation errors (float bits: positive floats order as uints); the compact range
 // (the morph targets go through the output: the detail stream's records)
 
 // The direction at latitude and longitude offsets (da, db) from the centre
@@ -67,15 +70,17 @@ vec3 DirOffset (float lat0, float lng0, float da, float db)
 	return vec3 (dcl * cos (lng0 + db) + cl0 * dcn, dsl, dcl * sin (lng0 + db) + cl0 * dsn);
 }
 
-// a morph target, in the vertex's detail record
+// a morph target, in the vertex's detail record (compact: in its own
+// vertex's last three words, written over by the vertex at the end)
+uint tBase = uint (NV * 8), tStride = uint (NE);
 void SetT (OutFloats o, int idx, vec3 t)
 {
-	uint e = uint (NV * 8 + idx * NE);
+	uint e = tBase + uint (idx) * tStride;
 	o.f[e + 3] = t.x, o.f[e + 4] = t.y, o.f[e + 5] = t.z;
 }
 vec3 GetT (OutFloats o, int idx)
 {
-	uint e = uint (NV * 8 + idx * NE);
+	uint e = tBase + uint (idx) * tStride;
 	return vec3 (o.f[e + 3], o.f[e + 4], o.f[e + 5]);
 }
 
@@ -87,6 +92,9 @@ void main ()
 	Floats pts = Floats (jb.ptsAddr);
 	OutFloats o = OutFloats (jb.outAddr);
 	uint tid = gl_LocalInvocationID.x;
+	bool compact = jb.cmp.y != 0u;
+	float cScale = uintBitsToFloat (jb.cmp.x);
+	if (compact) tBase = 0u, tStride = 6u;
 	float R = jb.refF.w, dlat = jb.ll.z, dlng = jb.ll.w;
 	vec3 d0 = jb.d0.xyz;
 	bool parent = jb.misc.y > 0.5;
@@ -94,7 +102,7 @@ void main ()
 	#define DA(i) clamp (jb.off.x - float (i) * dlat, jb.off.w, jb.off.z)
 	#define DB(j) (jb.off.y + float (j) * dlng)
 
-	if (tid < 6u) sErr[tid] = 0u;
+	if (tid < 7u) sErr[tid] = 0u;
 	// the grid with a border of one node
 	for (uint k = tid; k < uint (W * W); k += 256u) {
 		int i = int (k) / W, j = int (k) % W;
@@ -204,6 +212,16 @@ void main ()
 			if (idx < 0) continue;
 			vec3 off = s == 0 ? vec3 (0.0) : d * depth;
 			vec3 pp = p - off, tt = t - off;
+			if (compact) {
+				OutUints u = OutUints (jb.outAddr);
+				uint b = uint (idx) * 6u;
+				vec3 qp = (pp - href0) / cScale, qt = (tt - href0) / cScale; // (relative to d0 href: PlanetSurface's vorg)
+				atomicMax (sErr[6], floatBitsToUint (max (max (abs (qp.x), max (abs (qp.y), abs (qp.z))), max (abs (qt.x), max (abs (qt.y), abs (qt.z))))));
+				u.u[b] = packSnorm2x16 (qp.xy), u.u[b + 1] = packSnorm2x16 (vec2 (qp.z, 0.0));
+				u.u[b + 2] = packSnorm2x16 (qt.xy), u.u[b + 3] = packSnorm2x16 (vec2 (qt.z, f));
+				u.u[b + 4] = packSnorm2x16 (OctEncode (nm)), u.u[b + 5] = packHalf2x16 (vec2 (A, pl));
+				continue;
+			}
 			uint b = uint (idx) * 8u;
 			o.f[b] = pp.x, o.f[b + 1] = pp.y, o.f[b + 2] = pp.z;
 			o.f[b + 3] = nm.x, o.f[b + 4] = nm.y, o.f[b + 5] = nm.z;
@@ -219,4 +237,5 @@ void main ()
 		bool none = tid >= 3u && (Kb << (int (tid) - 2)) > G / 4;
 		OutErr (jb.errAddr).e[tid] = none ? 1e30 : uintBitsToFloat (sErr[tid]);
 	}
+	if (tid == 6u) OutErr (jb.errAddr).e[6] = compact ? uintBitsToFloat (sErr[6]) : 0.0;
 }

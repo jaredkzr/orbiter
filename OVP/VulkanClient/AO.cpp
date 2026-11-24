@@ -162,7 +162,7 @@ void AmbientOcclusion::CreateImages ()
 void AmbientOcclusion::DestroyImages ()
 {
 	if (generation == ~0u) return;
-	vkDeviceWaitIdle (ctx->device);
+	ctx->WaitIdle ();
 	vkResetDescriptorPool (ctx->device, pool, 0);
 	ctx->DestroyImage (prepassColor);
 	ctx->DestroyImage (prepassDepth);

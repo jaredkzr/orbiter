@@ -542,7 +542,7 @@ bool PlumeRenderer::Init (vkc::Context *c, VkDescriptorSetLayout frameLayout, Vk
 void PlumeRenderer::CreateShimmerSource ()
 {
 	if (shimmerSrc.image) {
-		vkDeviceWaitIdle (ctx->device);
+		ctx->WaitIdle ();
 		ctx->DestroyImage (shimmerSrc);
 	}
 	VkExtent2D e = ctx->RenderExtent ();
@@ -653,7 +653,7 @@ void PlumeRenderer::Shutdown ()
 
 void PlumeRenderer::CreateHalf ()
 {
-	vkDeviceWaitIdle (ctx->device);
+	ctx->WaitIdle ();
 	ctx->DestroyImage (halfColor);
 	ctx->DestroyImage (halfMask);
 	ctx->DestroyImage (halfDepth);
@@ -699,7 +699,7 @@ void PlumeRenderer::SetPrepass (VkImageView prepass)
 	if (shimmerPipe && shimmerGen != ctx->SwapchainGeneration ()) CreateShimmerSource ();
 	if (halfRes && halfGen != ctx->SwapchainGeneration ()) CreateHalf ();
 	if (prepass == prepassView) return;
-	if (prepassView) vkDeviceWaitIdle (ctx->device); // (the set may be in use)
+	if (prepassView) ctx->WaitIdle (); // (the set may be in use)
 	prepassView = prepass;
 	VkDescriptorImageInfo ii[3] = {
 		{ clampSampler, prepass, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },

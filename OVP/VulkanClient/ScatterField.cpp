@@ -319,7 +319,8 @@ void Field::Prepare ()
 	// first, then read here in that order as they are done (at once: made
 	// already). While none are there yet, up to 50 ms waiting for them
 	auto t0 = std::chrono::steady_clock::now();
-	const bool first = cells.empty();
+	// (while empty, and in the loading's hold: up to 50 ms, waiting for them)
+	const bool first = cells.empty() || scene->warmingUp;
 	double budget = first ? 0.05 : FETCH_BUDGET;
 	if (!jobs) jobs = std::make_shared<PrefetchJobs> ();
 	auto send = [&] () {

@@ -35,11 +35,7 @@ bool RTStrike (vec3 o, vec3 d, float tMin, float tMax, uint mask, out float t, o
 	owner = r.owner, vel = r.vel;
 	uint prim = uint (rayQueryGetIntersectionPrimitiveIndexEXT (rq, true));
 	vec3 v[3];
-	RTFloats f = RTFloats (r.vtx);
-	for (int k = 0; k < 3; k++) {
-		uint vi = RTIndex (r.idx, r.firstIndex + prim * 3u + uint (k)) * 8u;
-		v[k] = vec3 (f.f[vi], f.f[vi + 1u], f.f[vi + 2u]);
-	}
+	for (int k = 0; k < 3; k++) v[k] = RTVertexPos (r.vtx, r.flags, RTIndex (r.idx, r.firstIndex + prim * 3u + uint (k)));
 	N = normalize (mat3 (rayQueryGetIntersectionObjectToWorldEXT (rq, true)) * cross (v[1] - v[0], v[2] - v[0]));
 	return true;
 }
