@@ -2962,9 +2962,16 @@ void Scene::Render ()
 	std::vector<VObject*> list;
 	for (auto &it : visuals) list.push_back (it.second.get());
 
-	// skies of planetary atmospheres, over the stars
-	for (auto *vo : list) vo->RenderSky ();
-	ctx->GpuMark ("sky");
+	// skies of planetary atmospheres, over the stars: their uniforms now
+	// (the scene's shaders read them), the passes after the opaque scene,
+	// where it left the background (the sky pipeline's depth test: its
+	// pixels only; drawn first, the sky was marched under all the ground
+	// and vessels). Near a black hole as before (its gas over the scene).
+	// (ORBITER_VK_SKY_FIRST=1: drawn first, for tests)
+	static const bool skyFirst = [] { const char *e = getenv ("ORBITER_VK_SKY_FIRST"); return e && atoi (e) != 0; }();
+	bool skyLast = !lensOn && !skyFirst;
+	for (auto *vo : list) vo->RenderSky (skyLast ? VObject::SKY_UPDATE : VObject::SKY_UPDATE | VObject::SKY_DRAW);
+	if (!skyLast) ctx->GpuMark ("sky");
 
 	// scene geometry
 	VkDescriptorSet fset = FrameSet ();
@@ -3001,6 +3008,11 @@ void Scene::Render ()
 	for (auto *vo : list)
 		if (!dynamic_cast<VPlanet*>(vo)) vo->Render (RenderPass::Opaque);
 	ctx->GpuMark ("opaque");
+	if (skyLast) {
+		for (auto *vo : list) vo->RenderSky (VObject::SKY_DRAW);
+		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &fset, 0, nullptr);
+		ctx->GpuMark ("sky");
+	}
 	// (near a black hole: its gas over what lies behind it, a donor star)
 	if (lensOn) lens->RenderGas (cmd, (float)nearPlane, (float)lensM);
 

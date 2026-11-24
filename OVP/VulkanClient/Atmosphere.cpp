@@ -423,6 +423,12 @@ bool AtmosphereRenderer::Init (vkc::Context *c, TextureManager *tm)
 	gpi.pColorBlendState = &cb;
 	gpi.pDynamicState = &dy;
 	gpi.layout = skyLayout;
+	// (where nothing was drawn: the far plane, reversed z 0, as cleared. The
+	// scene draws its sky after its opaque geometry, which covers the rest:
+	// not marched there)
+	ds.depthTestEnable = VK_TRUE;
+	ds.depthWriteEnable = VK_FALSE;
+	ds.depthCompareOp = VK_COMPARE_OP_EQUAL;
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &skyPipeline));
 	// the veil over bodies beyond the air (sky.frag VEIL): where something
 	// was drawn (the pass at the far plane, reversed z 0: below what is stored)

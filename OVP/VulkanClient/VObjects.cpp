@@ -4566,11 +4566,11 @@ void VPlanet::Update ()
 	if (clouds) clouds->Update ();
 }
 
-void VPlanet::RenderSky ()
+void VPlanet::RenderSky (int parts)
 {
 	if (!atmosphere) return;
-	atmosphere->Update ();
-	atmosphere->RenderSky ();
+	if (parts & SKY_UPDATE) atmosphere->Update ();
+	if (parts & SKY_DRAW) atmosphere->RenderSky ();
 }
 
 double VPlanet::SkyReach () const
