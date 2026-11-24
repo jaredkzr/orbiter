@@ -1036,7 +1036,7 @@ void Context::BindMain (bool scene, bool withDepth)
 	cur.extent = ext;
 }
 
-void Context::BindSceneWithMask (const Target &extra, const Target *extraMS)
+void Context::BindSceneWithMask (const Target &extra, const Target *extraMS, bool keepMask)
 {
 	if (!inFrame || redirect.active) return;
 	EndTarget ();
@@ -1047,8 +1047,9 @@ void Context::BindSceneWithMask (const Target &extra, const Target *extraMS)
 		(bbState & BB_SCENE) ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
 		VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT,
 		VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, CA);
+	keepMask = keepMask && !sceneColorMS.image;
 	ImageBarrier (cmd, extra.image, VK_IMAGE_ASPECT_COLOR_BIT,
-		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+		keepMask ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
 		VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT,
 		VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, CA);
 	ImageBarrier (cmd, depth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
@@ -1064,7 +1065,7 @@ void Context::BindSceneWithMask (const Target &extra, const Target *extraMS)
 	color[0].imageView = sceneColor.view;
 	color[0].loadOp = (bbState & BB_SCENE) ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
 	color[1].imageView = extra.view;
-	color[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	color[1].loadOp = keepMask ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
 	if (sceneColorMS.image) {
 		color[0].imageView = sceneColorMS.view;
 		color[0].resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;

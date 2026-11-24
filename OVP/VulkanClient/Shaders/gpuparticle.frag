@@ -50,6 +50,12 @@ layout(location = 10) in vec3 vLocDir;
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out float outReactive;
 
+// 1: drawn at half resolution into images of their own (Particles.cpp,
+// ORBITER_VK_SPRITES_HALF; composited by plume_comp.frag): the full-size
+// pixel coordinates of this one's 2 x 2, the nearest surface of the four
+layout(constant_id = 0) const int HALF = 0;
+vec2 FullCoord () { return HALF != 0 ? gl_FragCoord.xy * 2.0 : gl_FragCoord.xy; }
+
 void main ()
 {
 	vec4 t = texture (ptex[nonuniformEXT (vInfo & 0xffu)], vUV);
@@ -113,7 +119,15 @@ void main ()
 			a *= smoothstep (e, e + 0.35, t.a + 0.8 * (n - 0.5));
 		}
 	}
-	float zs = texelFetch (prepass, ivec2 (gl_FragCoord.xy), 0).w;
+	float zs;
+	if (HALF != 0) {
+		ivec2 f = ivec2 (gl_FragCoord.xy) * 2, fmax = textureSize (prepass, 0) - 1;
+		zs = 0.0;
+		for (int k = 0; k < 4; k++) {
+			float z = texelFetch (prepass, min (f + ivec2 (k & 1, k >> 1), fmax), 0).w;
+			if (z > 0.0 && (zs <= 0.0 || z < zs)) zs = z;
+		}
+	} else zs = texelFetch (prepass, ivec2 (gl_FragCoord.xy), 0).w;
 	if (zs > 0.0) a *= clamp ((zs - vPosView.z) / max (0.6 * vSize, 0.05), 0.0, 1.0);
 	if (a <= 0.001) discard;
 	// the smoke in front of it (the volume was drawn first, over all of the
@@ -121,13 +135,13 @@ void main ()
 	// that smoke's light in place of what the sprite hides of it)
 	vec4 fog = vec4 (0.0, 0.0, 0.0, 1.0);
 	if ((pc.flags & 32u) != 0u)
-		fog = textureLod (volInteg, vec3 (gl_FragCoord.xy / frame.jitter.zw, VolSlice (vPosView.z)), 0.0);
+		fog = textureLod (volInteg, vec3 (FullCoord () / frame.jitter.zw, VolSlice (vPosView.z)), 0.0);
 	// behind a crash fireball (drawn before the sprites, over the scene):
 	// hidden by its opacity at this depth, from where it begins to where
 	// it turns opaque
 	float hide = 1.0;
 	if ((pc.flags & 64u) != 0u) {
-		vec4 o = textureLod (fbOcc, gl_FragCoord.xy / frame.jitter.zw, 0.0);
+		vec4 o = textureLod (fbOcc, FullCoord () / frame.jitter.zw, 0.0);
 		if (o.r > 0.0) {
 			float zi = 1.0 / o.r, zo = max (1.0 / max (o.g, 1e-6), zi + 0.01);
 			hide = mix (1.0, o.a, smoothstep (zi, zo, vPosView.z));
@@ -156,7 +170,7 @@ void main ()
 	// launch's old trail kilometres behind it was a black column across the
 	// glowing exhaust
 	if ((pc.flags & 128u) != 0u) {
-		vec2 uv = gl_FragCoord.xy / frame.jitter.zw;
+		vec2 uv = FullCoord () / frame.jitter.zw;
 		vec2 pz = textureLod (plumeDist, uv, 0.0).rg;
 		if (pz.g > 1e-4) {
 			vec4 pl = textureLod (plumeLight, uv, 0.0);

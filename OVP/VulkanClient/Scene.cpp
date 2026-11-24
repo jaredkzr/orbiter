@@ -3184,6 +3184,7 @@ void Scene::Render ()
 	// effects that also write the reactive mask: engine plumes, particles
 	vkc::Target rt{ reactive.image, reactive.view, REACTIVE_FORMAT, ctx->RenderExtent () };
 	vkc::Target rtMS{ reactiveMS.image, reactiveMS.view, REACTIVE_FORMAT, ctx->RenderExtent () };
+	particles->rebindScene = [this, rt, rtMS]() { ctx->BindSceneWithMask (rt, reactiveMS.image ? &rtMS : nullptr, true); };
 	plumes->Render (FrameSet (), camAtmSet, gc->TexMgr()->White()); // (at half resolution)
 	// crash fireballs: their grids, marched at half resolution
 	// reentry plasma: the heated hulls' meshes seen along their flow and

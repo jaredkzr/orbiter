@@ -32,6 +32,7 @@
 #include "smoke_screen.frag.h"
 #include "post.vert.h"
 #include "gpuparticle.vert.h"
+#include "plume_comp.frag.h"
 #include "gpuparticle.frag.h"
 
 namespace {
@@ -618,6 +619,73 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		gpi.pDynamicState = &dy;
 		gpi.layout = drawLayout;
 		VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &drawBlend));
+		// at half resolution (a look trade, ORBITER_VK_SPRITES_HALF=1): into
+		// their own images (light; the transmittance multiplied in alpha,
+		// from 1; the reactive mask), single-sampled, no depth test (the
+		// shader's soft depth hides them behind surfaces); then composited
+		if (const char *e = getenv ("ORBITER_VK_SPRITES_HALF")) spritesHalf = atoi (e) != 0 && ctx->sceneSamples == VK_SAMPLE_COUNT_1_BIT;
+		if (spritesHalf) {
+			const int32_t half = 1;
+			VkSpecializationMapEntry sme{ 0, 0, sizeof(half) };
+			VkSpecializationInfo spi{ 1, &sme, sizeof(half), &half };
+			VkPipelineShaderStageCreateInfo hst[2] = { stages[0], stages[1] };
+			hst[1].pSpecializationInfo = &spi;
+			VkPipelineColorBlendAttachmentState hcb[2] = { cb[0], cb[1] };
+			hcb[0].srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+			hcb[0].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+			VkPipelineColorBlendStateCreateInfo hcbs = cbs;
+			hcbs.pAttachments = hcb;
+			VkFormat hfmt[2] = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R8_UNORM };
+			VkPipelineRenderingCreateInfo hrci = rci;
+			hrci.pColorAttachmentFormats = hfmt;
+			VkPipelineMultisampleStateCreateInfo hms = ms;
+			hms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+			VkPipelineDepthStencilStateCreateInfo hds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+			VkGraphicsPipelineCreateInfo hgpi = gpi;
+			hgpi.pNext = &hrci;
+			hgpi.pStages = hst;
+			hgpi.pColorBlendState = &hcbs;
+			hgpi.pMultisampleState = &hms;
+			hgpi.pDepthStencilState = &hds;
+			VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &hgpi, nullptr, &drawHalf));
+			// the composite: the scene times the transmittance, plus the light; the reactive mask the strongest
+			VkDescriptorSetLayoutBinding cbd[3]{};
+			for (uint32_t i = 0; i < 3; i++) cbd[i] = { i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr };
+			VkDescriptorSetLayoutCreateInfo clci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+			clci.bindingCount = 3, clci.pBindings = cbd;
+			VK_CHECK(vkCreateDescriptorSetLayout (ctx->device, &clci, nullptr, &sprCompSetLayout));
+			VkDescriptorPoolSize cps{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3 };
+			VkDescriptorPoolCreateInfo cpci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+			cpci.maxSets = 1, cpci.poolSizeCount = 1, cpci.pPoolSizes = &cps;
+			VK_CHECK(vkCreateDescriptorPool (ctx->device, &cpci, nullptr, &sprCompPool));
+			VkDescriptorSetAllocateInfo cdai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+			cdai.descriptorPool = sprCompPool, cdai.descriptorSetCount = 1, cdai.pSetLayouts = &sprCompSetLayout;
+			VK_CHECK(vkAllocateDescriptorSets (ctx->device, &cdai, &sprCompSet));
+			VkPipelineLayoutCreateInfo cplci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+			cplci.setLayoutCount = 1, cplci.pSetLayouts = &sprCompSetLayout;
+			VK_CHECK(vkCreatePipelineLayout (ctx->device, &cplci, nullptr, &sprCompLayout));
+			VkShaderModule cvs = ctx->CreateShaderModule (spv_post_vert, spv_post_vert_size);
+			VkShaderModule cfs = ctx->CreateShaderModule (spv_plume_comp_frag, spv_plume_comp_frag_size);
+			VkPipelineShaderStageCreateInfo cst[2] = {
+				{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, cvs, "main" },
+				{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, cfs, "main" } };
+			VkPipelineInputAssemblyStateCreateInfo cia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+			cia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+			VkPipelineColorBlendAttachmentState ccb[2] = { cb[0], cb[1] };
+			ccb[0].dstColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+			VkPipelineColorBlendStateCreateInfo ccbs = cbs;
+			ccbs.pAttachments = ccb;
+			VkPipelineDepthStencilStateCreateInfo cds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+			VkGraphicsPipelineCreateInfo cgpi = gpi;
+			cgpi.pStages = cst;
+			cgpi.pInputAssemblyState = &cia;
+			cgpi.pColorBlendState = &ccbs;
+			cgpi.pDepthStencilState = &cds;
+			cgpi.layout = sprCompLayout;
+			VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &cgpi, nullptr, &sprCompPipe));
+			vkDestroyShaderModule (ctx->device, cvs, nullptr);
+			vkDestroyShaderModule (ctx->device, cfs, nullptr);
+		}
 	}
 	vkDestroyShaderModule (ctx->device, vs, nullptr);
 	vkDestroyShaderModule (ctx->device, fs, nullptr);
@@ -753,6 +821,11 @@ void ParticleSystem::Shutdown ()
 	vkDeviceWaitIdle (ctx->device);
 	FreeVolume (true);
 	ReapVolume (true);
+	for (VkPipeline p : { drawHalf, sprCompPipe }) if (p) vkDestroyPipeline (ctx->device, p, nullptr);
+	if (sprCompLayout) vkDestroyPipelineLayout (ctx->device, sprCompLayout, nullptr);
+	if (sprCompPool) vkDestroyDescriptorPool (ctx->device, sprCompPool, nullptr);
+	if (sprCompSetLayout) vkDestroyDescriptorSetLayout (ctx->device, sprCompSetLayout, nullptr);
+	ctx->DestroyImage (sprColor), ctx->DestroyImage (sprMask), ctx->DestroyImage (sprDepth);
 	for (VkPipeline p : { emitPipe, updatePipe, updateRTPipe, lightPipe, lightRTPipe, splatPipe, sumPipe, flameSplatPipe, flameTransPipe, sortKeysPipe, sortPipe, sortLocalPipe, drawBlend,
 		volSplatPipe, volResolvePipe, volMarchPipe, marchPipe, thickPipe, blurPipe, screenCompPipe })
 		if (p) vkDestroyPipeline (ctx->device, p, nullptr);
@@ -1905,8 +1978,16 @@ void ParticleSystem::DrawSprites (VkDescriptorSet frameSet)
 			nw++;
 		}
 	if (nw) vkUpdateDescriptorSets (ctx->device, nw, w, 0, nullptr);
+	bool half = spritesHalf && drawHalf && rebindScene;
+	if (half) {
+		EnsureSpriteHalf ();
+		const float clear[4] = { 0.0f, 0.0f, 0.0f, 1.0f }; // (no light, full transmittance)
+		vkc::Target t[2] = { { sprColor.image, sprColor.view, VK_FORMAT_R16G16B16A16_SFLOAT, sprExtent },
+			{ sprMask.image, sprMask.view, VK_FORMAT_R8_UNORM, sprExtent } };
+		ctx->BindTargetsWithDepth (t, 2, { sprDepth.image, sprDepth.view, ctx->depthFormat, sprExtent }, clear);
+	}
 	VkCommandBuffer cmd = ctx->Cmd ();
-	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawBlend);
+	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, half ? drawHalf : drawBlend);
 	VkDescriptorSet s[3] = { frameSet, sets[fi], texSets[fi] };
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, drawLayout, 0, 3, s, 0, nullptr);
 	uint32_t flags = (smokeMode == SMOKE_SCREEN || (smokeMode == SMOKE_VOLUME && volAlloc) ? 8u : 0u) | (smokeMode == SMOKE_VOLUME && volActive && volAlloc ? 32u : 0u)
@@ -1917,6 +1998,64 @@ void ParticleSystem::DrawSprites (VkDescriptorSet frameSet)
 	vkCmdPushConstants (cmd, drawLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
 	vkCmdDrawIndirect (cmd, drawArgs[fi].buffer, 0, 1, 4 * sizeof(uint32_t));
 	drawPending = false;
+	if (half) {
+		ctx->EndTarget ();
+		rebindScene ();
+		cmd = ctx->Cmd ();
+		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, sprCompPipe);
+		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, sprCompLayout, 0, 1, &sprCompSet, 0, nullptr);
+		vkCmdDraw (cmd, 3, 1, 0, 0);
+	}
+}
+
+void ParticleSystem::EnsureSpriteHalf ()
+{
+	if (sprGen != ctx->SwapchainGeneration ()) {
+		vkDeviceWaitIdle (ctx->device);
+		ctx->DestroyImage (sprColor), ctx->DestroyImage (sprMask), ctx->DestroyImage (sprDepth);
+		VkExtent2D e = ctx->RenderExtent ();
+		sprExtent = { (e.width + 1) / 2, (e.height + 1) / 2 };
+		auto create = [this](VkFormat fmt, VkImageUsageFlags usage, VkImageAspectFlags aspect) {
+			vkc::Image im;
+			VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+			ici.imageType = VK_IMAGE_TYPE_2D;
+			ici.format = fmt;
+			ici.extent = { sprExtent.width, sprExtent.height, 1 };
+			ici.mipLevels = 1, ici.arrayLayers = 1;
+			ici.samples = VK_SAMPLE_COUNT_1_BIT;
+			ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+			ici.usage = usage;
+			VmaAllocationCreateInfo aci{};
+			aci.usage = VMA_MEMORY_USAGE_AUTO;
+			VK_CHECK(vmaCreateImage (ctx->allocator, &ici, &aci, &im.image, &im.alloc, nullptr));
+			VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+			vci.image = im.image, vci.viewType = VK_IMAGE_VIEW_TYPE_2D, vci.format = fmt;
+			vci.subresourceRange = { aspect, 0, 1, 0, 1 };
+			VK_CHECK(vkCreateImageView (ctx->device, &vci, nullptr, &im.view));
+			return im;
+		};
+		sprColor = create (VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+		sprMask = create (VK_FORMAT_R8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+		sprDepth = create (ctx->depthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+		sprGen = ctx->SwapchainGeneration ();
+		sprCompPrepass = VK_NULL_HANDLE;
+	}
+	if (sprCompPrepass != prepassView) {
+		sprCompPrepass = prepassView;
+		VkDescriptorImageInfo ci[3] = {
+			{ clampSampler, sprColor.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+			{ clampSampler, sprMask.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+			{ clampSampler, prepassView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL } };
+		VkWriteDescriptorSet cw[3]{};
+		for (uint32_t i = 0; i < 3; i++) {
+			cw[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			cw[i].dstSet = sprCompSet, cw[i].dstBinding = i, cw[i].descriptorCount = 1;
+			cw[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			cw[i].pImageInfo = &ci[i];
+		}
+		vkDeviceWaitIdle (ctx->device); // (the set may be in use)
+		vkUpdateDescriptorSets (ctx->device, 3, cw, 0, nullptr);
+	}
 }
 
 bool ParticleSystem::VolumeFog (VkImageView &view, VkSampler &sampler) const

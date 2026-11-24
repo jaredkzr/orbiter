@@ -90,7 +90,8 @@ namespace vkc {
 		/// (same size and sample count as the scene; with multisampling,
 		/// `extraMS` is drawn to and resolved into `extra`), and the depth
 		/// buffer (loaded): effects that also write a mask (plumes, particles)
-		void BindSceneWithMask (const Target &extra, const Target *extraMS);
+		/// (keepMask: the mask kept, single-sampled scenes; else cleared)
+		void BindSceneWithMask (const Target &extra, const Target *extraMS, bool keepMask = false);
 		VkImageView SceneView () const { return sceneColor.view; }
 		VkImage SceneImage () const { return sceneColor.image; }
 		/// depth buffer of the scene (depth-attachment layout after the scene)
