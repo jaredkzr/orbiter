@@ -15,6 +15,7 @@ using namespace oapi;
 typedef void *CAMERAHANDLE;
 #endif
 #include <list>
+#include <atomic>
 #include <mutex>
 #include <condition_variable>
 #include <thread>
@@ -72,12 +73,35 @@ VECTOR3 lua_tovector (lua_State *L, int idx)
 // its steps in one frame of the simulation; a landing autopilot came down
 // 500 m short.) Should no other thread come within a second (the
 // interpreter's thread gone), the turn is taken back.
+//
+// The turn has two sides: the interpreter's own thread (BindThread) and the
+// Orbiter side, every other thread. The Orbiter side holds it to begin with,
+// whichever thread makes the interpreter, and takes it again recursively from
+// any of its threads: a script running in another interpreter's turn acts
+// for the Orbiter thread, which waits meanwhile. (Held by the thread that
+// made it - a Delta-glider, whose autopilot has an interpreter, created by
+// oapi.create_vessel from a script - the turn was that script thread's, which
+// never gave it up: the Orbiter thread, coming for it in clbkPostStep, waited
+// forever.) Before BindThread, sides are threads, as before.
 namespace {
 	class ExecTurn {
 	public:
+		ExecTurn () { owner = Side (), count = 1; } // (the Orbiter side's to begin with)
+		/// thread id is the interpreter's own; every other thread the Orbiter side
+		void BindThread (std::thread::id id)
+		{
+			std::lock_guard<std::mutex> lk (m);
+			// (a hold or a bar of another thread's - the one that made the
+			// interpreter - is the Orbiter side's from now on)
+			if (count && owner != id) owner = ORBITER;
+			if (barred && barredId != id) barredId = ORBITER;
+			interpThread = id;
+			bound = true;
+			cv.notify_all ();
+		}
 		void Take ()
 		{
-			const std::thread::id me = std::this_thread::get_id ();
+			const std::thread::id me = Side ();
 			std::unique_lock<std::mutex> lk (m);
 			if (count && owner == me) { count++; return; } // (recursive)
 			auto mine = [&] { return !count && !(barred && barredId == me); };
@@ -87,7 +111,7 @@ namespace {
 		}
 		void Give ()
 		{
-			const std::thread::id me = std::this_thread::get_id ();
+			const std::thread::id me = Side ();
 			std::lock_guard<std::mutex> lk (m);
 			if (!count || owner != me) return; // (not the holder's to give)
 			if (--count) return;
@@ -95,9 +119,18 @@ namespace {
 			cv.notify_all ();
 		}
 	private:
+		// (the Orbiter side: a thread id no thread has)
+		static inline const std::thread::id ORBITER{};
+		std::thread::id Side () const
+		{
+			std::thread::id t = std::this_thread::get_id ();
+			if (!bound) return t;
+			return t == interpThread ? t : ORBITER;
+		}
 		std::mutex m;
 		std::condition_variable cv;
-		std::thread::id owner, barredId;
+		std::thread::id owner, barredId, interpThread;
+		std::atomic<bool> bound{ false };
 		int count = 0;
 		bool barred = false;
 	};
@@ -124,11 +157,10 @@ Interpreter::Interpreter ()
 	hExecMutex = CreateMutex (NULL, TRUE, NULL);
 	hWaitMutex = CreateMutex (NULL, FALSE, NULL);
 #else
-	// The execution turn (ExecTurn, below): recursive and owned by the taking
-	// thread, like a Win32 mutex; initially the creating (Orbiter) thread's.
+	// The execution turn (ExecTurn, above): recursive, held by a side; the
+	// Orbiter side's to begin with.
 	hExecMutex = new ExecTurn;
 	hWaitMutex = NULL;
-	static_cast<ExecTurn*>(hExecMutex)->Take();
 #endif
 
 }
@@ -761,6 +793,15 @@ void Interpreter::WaitExec (DWORD timeout)
 	ReleaseMutex (hWaitMutex);              // release synchronisation mutex
 #else
 	static_cast<ExecTurn*>(hExecMutex)->Take();
+#endif
+}
+
+void Interpreter::BindThread (std::thread::id id)
+{
+#ifndef _WIN32
+	static_cast<ExecTurn*>(hExecMutex)->BindThread (id);
+#else
+	(void)id;
 #endif
 }
 
@@ -3235,14 +3276,45 @@ Create a vessel object.
 @function create_vessel
 @tparam string name vessel name
 @tparam string classname vessel class name
-@treturn handle|nil vessel handle
+@tparam vesselstatus|vesselstatus2|table status its state: from vessel:get_rawstatus(1 or 2), or a table
+  of VESSELSTATUS fields (as vessel:get_status(1) gives; rbody needed)
+@treturn handle|nil vessel handle (nil: no such vessel class)
 */
 int Interpreter::oapi_create_vessel(lua_State* L)
 {
+	static const char *funcname = "create_vessel";
+	AssertPrmType(L, 1, 1, PRMTP_STRING, funcname);
+	AssertPrmType(L, 2, 2, PRMTP_STRING, funcname);
 	const char* name = lua_tostring(L, 1);
 	const char* classname = lua_tostring(L, 2);
-	VESSELSTATUS *vs = (VESSELSTATUS*)lua_touserdata(L, 3);
-	OBJHANDLE hObj = oapiCreateVessel(name, classname, *vs);
+	// (the status: a raw VESSELSTATUS or VESSELSTATUS2, or a table; anything
+	// else was read as a VESSELSTATUS: a table crashed Orbiter)
+	auto isRaw = [L](const char *mt) {
+		if (!lua_isuserdata (L, 3) || lua_islightuserdata (L, 3) || !lua_getmetatable (L, 3)) return false;
+		luaL_getmetatable (L, mt);
+		bool same = lua_rawequal (L, -1, -2) != 0;
+		lua_pop (L, 2);
+		return same;
+	};
+	OBJHANDLE hObj = NULL;
+	if (isRaw ("VESSELSTATUS2.table")) {
+		hObj = oapiCreateVesselEx (name, classname, lua_touserdata (L, 3));
+	} else if (isRaw ("VESSELSTATUS.table")) {
+		hObj = oapiCreateVessel (name, classname, *(VESSELSTATUS*)lua_touserdata (L, 3));
+	} else if (lua_istable (L, 3)) {
+		VESSELSTATUS *vs = (VESSELSTATUS*)lua_newuserdata (L, sizeof (VESSELSTATUS));
+		memset (vs, 0, sizeof (VESSELSTATUS));
+		int ud = lua_gettop (L);
+		lua_pushcfunction (L, vsset);
+		lua_pushvalue (L, ud);
+		lua_pushvalue (L, 3);
+		lua_call (L, 2, 0);
+		if (!vs->rbody) return luaL_error (L, "%s: the status table has no rbody", funcname);
+		hObj = oapiCreateVessel (name, classname, *vs);
+		lua_pop (L, 1);
+	} else {
+		return luaL_error (L, "%s: argument 3: a vessel status expected (vessel:get_rawstatus or a table)", funcname);
+	}
 	if (hObj) lua_pushlightuserdata(L, hObj);
 	else lua_pushnil(L);
 	return 1;

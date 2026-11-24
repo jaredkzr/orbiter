@@ -1159,21 +1159,33 @@ size_t Atmosphere::OceanStageBytes ()
 	return texels * 4; // (RG16F)
 }
 
-void Atmosphere::UploadOcean (VkCommandBuffer cmd, const VECTOR3 &camGlobal)
+bool Atmosphere::OceanWanted (const VECTOR3 &camGlobal, bool log)
 {
 	// (the camera's planet: waves on, their spectrum set at an anchor near the camera)
 	const bool *rip = (const bool*)scene->Client()->GetConfigParam (CFGPRM_SURFACERIPPLE);
 	static int dbg = 0;
-	auto why = [&] (const char *w) { if (getenv ("ORBITER_VK_WAVE_LOG") && dbg++ < 5) oapiWriteLogV ("VulkanClient: sea field upload skipped: %s", w); };
-	if (!oceanOn || !waves || (rip && !*rip)) { why ("off"); return; }
-	if (!ocean.Valid () || !waveAnchored) { why ("no spectrum or anchor"); return; }
+	auto why = [&] (const char *w) { if (log && getenv ("ORBITER_VK_WAVE_LOG") && dbg++ < 5) oapiWriteLogV ("VulkanClient: sea field upload skipped: %s", w); };
+	if (!oceanOn || !waves || (rip && !*rip)) { why ("off"); return false; }
+	if (!ocean.Valid () || !waveAnchored) { why ("no spectrum or anchor"); return false; }
 	VECTOR3 ppos;
 	scene->ObservedPos (hPlanet, ppos);
-	if (length (camGlobal - ppos) - radius > 50e3) { why ("camera far"); return; }
+	if (length (camGlobal - ppos) - radius > 50e3) { why ("camera far"); return false; }
+	if (!oceanImg[ctx->FrameIndex ()][0].image) { why ("no images"); return false; }
+	return true;
+}
+
+void Atmosphere::StartOcean (const VECTOR3 &camGlobal)
+{
+	// (this frame's sea field on the sea's thread, while the frame's tiles are prepared)
+	if (OceanWanted (camGlobal, false)) ocean.Start (oapiGetSimTime ());
+}
+
+void Atmosphere::UploadOcean (VkCommandBuffer cmd, const VECTOR3 &camGlobal)
+{
+	if (!OceanWanted (camGlobal, true)) return;
 	uint32_t f = ctx->FrameIndex ();
-	if (!oceanImg[f][0].image) { why ("no images"); return; }
-	if (oceanScratch.size () != OceanFft::Floats ()) oceanScratch.resize (OceanFft::Floats ());
-	ocean.Evaluate (oapiGetSimTime (), oceanScratch.data ());
+	const float *src = ocean.Wait (oapiGetSimTime ()); // (StartOcean's, or now)
+	if (!src) return;
 	// float -> half (the slopes are small: no infinities, denormals flushed)
 	auto half = [] (float v) -> uint16_t {
 		uint32_t x; memcpy (&x, &v, 4);
@@ -1187,7 +1199,6 @@ void Atmosphere::UploadOcean (VkCommandBuffer cmd, const VECTOR3 &camGlobal)
 		return (uint16_t)h;
 	};
 	uint16_t *dst = (uint16_t*)oceanStage[f].mapped;
-	const float *src = oceanScratch.data ();
 	const size_t NN = (size_t)OceanFft::N * OceanFft::N;
 	// staging: the long layer's levels 0..MIPS, then the ripples
 	size_t o = 0;

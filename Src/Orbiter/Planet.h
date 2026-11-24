@@ -23,6 +23,7 @@
 #include "Orbiter.h"
 #include "TerrainDetail.h"
 #include "GasGiant.h"
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -208,6 +209,8 @@ public:
 	const ProcTerrain *ProcSurface () const { return proc_.get(); }
 	/// rocks and vegetation on the ground (GroundScatter.h; null if the planet has none)
 	scatter::GroundScatter *Scatter() const;
+	/// (as Scatter, without making it: any thread)
+	scatter::GroundScatter *ScatterIfMade () const { return scatterReady ? scatter_.get() : nullptr; }
 	/// the ground's cover read from the surface texture and water mask tiles
 	/// (a vessel's contacts: what it stands on; made on first use, its own
 	/// tile cache - not the scatter's)
@@ -347,6 +350,7 @@ private:
 	std::unique_ptr<ProcTerrain> proc_;  // procedural relief (SurfaceClass)
 	mutable std::unique_ptr<scatter::GroundScatter> scatter_;
 	mutable bool scatterInit = false;
+	mutable std::atomic<bool> scatterReady{ false };
 	mutable std::unique_ptr<scatter::Cover> cover_;
 	mutable bool coverInit = false;
 	mutable std::unique_ptr<cities::CityMap> cities_;

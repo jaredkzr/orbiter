@@ -57,6 +57,8 @@ public:
 	bool Valid () const { return archive != nullptr || cacheExists || legacy || proc; }
 	/// the layer comes from the legacy patch textures
 	bool Legacy () const { return legacy != nullptr; }
+	/// a procedural planet's tiles (made, not read: seconds for a planet's roots)
+	bool Procedural () const { return proc != nullptr; }
 
 	/// Quick check whether a tile has data. Tiles present only in the cache
 	/// are reported as available (checked on read).

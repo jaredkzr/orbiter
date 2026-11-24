@@ -454,6 +454,7 @@ private:
 	std::unique_ptr<vkscatter::Gallery> gallery; // preview of the ground scatter assets (ORBITER_VK_SCATTER_GALLERY)
 	std::unique_ptr<vkscatter::Field> field;     // the ground scatter around the camera
 	bool fieldInit = false;
+	bool groundSet = false; // (the atmosphere's ground and clouds: Update)
 	std::unique_ptr<vkcity::Field> cities;       // the procedural cities around the camera
 	bool citiesInit = false;
 	void UpdateGallery ();

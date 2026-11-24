@@ -1160,6 +1160,13 @@ void Scene::Update ()
 
 	for (auto &it : visuals) it.second->Update();
 	if (crashFires) crashFires->Update (this); // (after the debris: a fireball registers its fire)
+
+	// the sea field's slopes for the frame to come (UploadOcean, after the
+	// depth prepass) on its thread from here: the camera and the sim time
+	// are this frame's
+	if (OBJHANDLE hp = oapiCameraProxyGbody ())
+		if (VObject *pv = GetVisual (hp))
+			if (Atmosphere *a = pv->GetAtmosphere ()) a->StartOcean (camPos);
 }
 
 // ======================================================================
@@ -1810,6 +1817,10 @@ void Scene::RenderShadows ()
 {
 	frameNo++;
 	for (bool &v : shadowValid) v = false;
+	// (the sea field's slopes: started in Update; here if it was not)
+	if (OBJHANDLE hp = oapiCameraProxyGbody ())
+		if (VObject *pv = GetVisual (hp))
+			if (Atmosphere *a = pv->GetAtmosphere ()) a->StartOcean (camPos);
 	// planet surfaces select their tiles and upload data first (transfers
 	// end rendering scopes, and shadow maps are cleared when bound)
 	for (auto &it : visuals) it.second->PrepareFrame ();

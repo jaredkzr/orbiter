@@ -1,0 +1,36 @@
+BEGIN_HYPERDESC
+<h1>Vessels created from a script</h1>
+oapi.create_vessel from a Lua script, at its start and between frames: from
+a raw VESSELSTATUS and VESSELSTATUS2 (vessel:get_rawstatus), from a status
+table, several in a row, and with a vessel class that does not exist. A
+Delta-glider makes a Lua interpreter of its own (its autopilot): made on
+the script's thread, the session hung at the next frame. The session must
+go on, the vessels be there, and the missing class give nil.
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51982.6685767396
+  Script Tests/CreateVesselTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship DG
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET DG
+  MODE Extern
+  POS 4 0 -20
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_SHIPS
+DG:DeltaGlider
+  STATUS Landed Earth
+  POS -80.6758 28.5978
+  HEADING 330.00
+  PRPLEVEL 0:1.000 1:1.000
+END
+END_SHIPS

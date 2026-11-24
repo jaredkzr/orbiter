@@ -108,6 +108,9 @@ public:
 	bool SetTexture (DWORD texidx, VkTexture *tex);
 	int GetGroupData (DWORD grp, GROUPREQUESTSPEC *grs) const;
 	int EditGroup (DWORD grp, GROUPEDITSPEC *ges);
+	/// Record the vertex edits made between frames (EditGroup from the core's
+	/// step: a virtual cockpit's displays), at the start of the frame
+	static void FlushEdits ();
 	int SetMaterial (DWORD matidx, const MATERIAL *mat);
 	int GetMaterial (DWORD matidx, MATERIAL *mat) const;
 
@@ -118,6 +121,9 @@ private:
 	uint64_t id;
 	uint32_t geomVersion = 0;
 	vkc::Buffer vbuf, ibuf;
+	// (vertices edited between frames, not yet uploaded: recording then
+	// would wait for the next frame's slot; FlushEdits)
+	uint32_t editMin = UINT32_MAX, editMax = 0;
 	std::vector<Group> groups;
 	std::vector<MATERIAL> materials; // [0] = default material, [i+1] = mesh material i, then side materials
 	size_t nTemplateMtrl = 0;        // default and mesh materials

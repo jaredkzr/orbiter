@@ -24,7 +24,10 @@
 
 #include "ScatterAssets.h"
 #include "VkContext.h"
+#include <deque>
+#include <memory>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace vkscatter {
 
@@ -104,8 +107,13 @@ namespace vkscatter {
 			std::vector<std::pair<uint64_t, Cell*>> live; // those read, not empty
 		};
 		std::vector<Listing> listing; // per layer
-		struct Pending { uint64_t key; int layer, row, col; double d; };
+		struct Pending { uint64_t key; int layer, row, col; double d; bool stale = false; };
 		std::vector<Pending> pending; // cells to read, farthest first
+		// (cells made by the core on worker threads, oapiScatterPrefetchCell;
+		// read in the order they were sent, nearest first, when made)
+		std::deque<Pending> inflight;
+		std::unordered_set<uint64_t> inflightKeys;
+		std::shared_ptr<struct PrefetchJobs> jobs;
 		unsigned generation = 0;
 		uint64_t frame = 0;
 

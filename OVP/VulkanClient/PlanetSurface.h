@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <condition_variable>
 #include <deque>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -153,7 +154,7 @@ public:
 	/// by the caller); toMap: planet frame -> map clip space
 	void RenderCoverage (const Mat4 &toMap, VkPipelineLayout layout, const VECTOR3 &mapCentre, double mapRadius);
 	/// level 4 root texture of the western (0) or eastern (1) hemisphere
-	VkTexture *RootTexture (int i) const { return root[i] ? root[i]->surf : nullptr; }
+	VkTexture *RootTexture (int i) const { TakeRoots (); return root[i] ? root[i]->surf : nullptr; }
 	/// the tile layers (shared with the loader thread; SurfaceQuery reads masks through them)
 	const std::shared_ptr<PlanetLayers> &Layers () const { return layers; }
 
@@ -200,6 +201,19 @@ private:
 	bool thinning = !getenv ("ORBITER_VK_TILE_THIN") || atoi (getenv ("ORBITER_VK_TILE_THIN")) != 0;
 
 	PlanetSurface (OBJHANDLE hPlanet, Scene *scene, std::shared_ptr<PlanetLayers> layers, bool clouds);
+	/// the roots' tiles as read (any thread), then taken in (textures: the
+	/// main thread). A procedural planet's are made on a thread of their
+	/// own from the constructor (a third of a second each: the exoplanets'
+	/// added seconds to every load), taken in at the first use
+	struct RootData {
+		std::vector<uint8_t> surf[2], mask[2];
+		bool surfOk[2] = {}, maskOk[2] = {}, elevOk[2] = {};
+		ElevGrid elev[2];
+	};
+	static RootData ReadRoots (const std::shared_ptr<PlanetLayers> &layers);
+	void ApplyRoots (RootData &d) const;
+	mutable std::future<RootData> rootJob;
+	void TakeRoots () const { if (rootJob.valid ()) { RootData d = rootJob.get (); ApplyRoots (d); } }
 	Node *NewNode (int lvl, int ilat, int ilng, Node *parent);
 	void FreeNode (Node *n);
 	void PruneChildren (Node *n, uint64_t age);

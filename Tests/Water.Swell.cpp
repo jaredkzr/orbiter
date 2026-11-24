@@ -10,7 +10,9 @@
 #include "SeaSwell.h"
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include <algorithm>
 #include <cmath>
+#include <vector>
 
 using namespace sea;
 using Catch::Matchers::WithinRel;
@@ -147,5 +149,48 @@ TEST_CASE ("The components about a point give the surface near it", "[Water.Swel
 				// (the tangent plane over a km or two: within a centimetre or so)
 				CHECK_THAT (h, WithinAbs (s.Height (Offset (lat, -63.2, e, n), t), 0.03));
 			}
+	}
+}
+
+TEST_CASE ("A grid of samples as plane waves is the samples'", "[Water.Swell]")
+{
+	// (SampleGrid, the physics' grid about a body in the water: on cell
+	// borders, where two to four cells blend, and inside a cell; grids of a
+	// few metres to a kilometre)
+	for (double U : { 7.0, 15.0 }) {
+		Swell s = Make (U);
+		const double t = 4.1e8 + 12.7 * U;
+		struct Place { double lat, lng, ds; int n; } places[] = {
+			{ 28.0, -70.0, 0.5, 17 },  // (a corner of four cells)
+			{ 28.03, -70.4, 2.1, 17 },  // (a row border)
+			{ 12.55, -63.2, 0.9, 9 },  // (inside a cell)
+			{ 41.7, 151.0, 3.7, 17 },
+			{ -33.0, 18.0, 60.0, 17 },  // (a kilometre wide)
+		};
+		for (const Place &pl : places) {
+			double la = pl.lat * PI / 180.0, lo = pl.lng * PI / 180.0;
+			Vector up (cos (la) * cos (lo), sin (la), cos (la) * sin (lo));
+			Vector e (-sin (lo), 0.0, cos (lo)), nn (-sin (la) * cos (lo), cos (la), -sin (la) * sin (lo));
+			Vector O (up * (R + 0.3));
+			const int n = pl.n;
+			double x0 = -0.5 * pl.ds * (n - 1) + 1.3, z0 = -0.5 * pl.ds * (n - 1) - 0.7;
+			std::vector<double> h ((size_t)n * n);
+			std::vector<Vector> vel ((size_t)n * n);
+			s.SampleGrid (O, e, nn, x0, z0, pl.ds, n, t, h.data (), vel.data ());
+			double dh = 0.0, dv = 0.0;
+			for (int j = 0; j < n; j++)
+				for (int i = 0; i < n; i++) {
+					SwellSample ss;
+					s.Sample ((O + e * (x0 + i * pl.ds) + nn * (z0 + j * pl.ds)).unit (), t, 0.0, ss);
+					dh = std::max (dh, fabs (ss.h - h[(size_t)j * n + i]));
+					dv = std::max (dv, (ss.vel - vel[(size_t)j * n + i]).length ());
+				}
+			INFO ("U " << U << " lat " << pl.lat << " lng " << pl.lng << ": dh " << dh << " dv " << dv);
+			// (to rounding: 1e-6 m and m/s; a kilometre wide, the curvature's
+			// second order: 1e-5)
+			const double tol = pl.ds * (n - 1) > 200.0 ? 1e-5 : 1e-6;
+			CHECK (dh < tol);
+			CHECK (dv < tol);
+		}
 	}
 }

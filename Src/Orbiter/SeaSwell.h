@@ -77,6 +77,17 @@ namespace sea {
 		/// height only (cheaper)
 		double Height (const Vector &u, double t) const;
 
+		/// Sample's heights and velocities (at the mean level, z = 0) on an
+		/// n x n grid in a tangent plane: node (i, j) over the point
+		/// O + e (x0 + i ds) + nn (z0 + j ds) (planet frame [m]; e and nn unit,
+		/// perpendicular to each other and to O), into h[j n + i] and
+		/// vel[j n + i]. The same as n^2 Samples to rounding (the sphere's
+		/// curvature over the grid taken to first order; wider than 2 km: the
+		/// Samples), at a small part of the cost: each cell's waves are plane
+		/// waves over the grid, their phases separable in i and j. Thread-safe.
+		void SampleGrid (const Vector &O, const Vector &e, const Vector &nn, double x0, double z0, double ds, int n,
+			double t, double *h, Vector *vel) const;
+
 		/// The components about a reference point (unit vector u, planet frame)
 		/// at time t, for evaluating the surface near it (a few km: the graphics
 		/// client): the height at a point x east, z north [m] of it (its tangent
@@ -98,6 +109,9 @@ namespace sea {
 		const Cell &GetCell (int row, int col) const;
 		template<bool FULL> void Accumulate (const Cell &c, double w, const Vector &u, double t, double z, SwellSample &s) const;
 		template<bool FULL> void Eval (const Vector &u, double t, double z, SwellSample &s) const;
+		/// the cells blended at (lat, lng) and their weights (before normalising: norm)
+		struct CellW { int row, col; double w; };
+		int Blend (double lat, double lng, CellW cells[4], double &norm) const;
 		void Rows (double lat, int &r0, int &r1, double &w1) const;
 		void Cols (int row, double lng, int &c0, int &c1, double &w1) const;
 		int RowCols (int row) const;

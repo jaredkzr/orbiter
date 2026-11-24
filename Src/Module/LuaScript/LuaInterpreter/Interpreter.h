@@ -12,6 +12,7 @@ extern "C" {
 
 #include "OrbiterAPI.h"
 #include "VesselAPI.h" // for TOUCHDOWNVTX
+#include <thread>
 #include <unordered_set>
 
 class gcCore;
@@ -154,6 +155,14 @@ public:
 	 *   thread.
 	 */
 	virtual void EndExec ();
+
+	/**
+	 * \brief Thread id is the interpreter's own (the one that runs its chunks
+	 *   in turn with Orbiter): set by whoever starts it, before the turn is
+	 *   first passed. Every other thread is then on Orbiter's side of the turn
+	 *   (WaitExec, EndExec), whichever thread made the interpreter.
+	 */
+	void BindThread (std::thread::id id = std::this_thread::get_id ());
 
 	/**
 	 * \brief Define functions for interfacing with Orbiter API

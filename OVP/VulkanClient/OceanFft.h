@@ -20,7 +20,10 @@
 #define __OCEANFFT_H
 
 #include <complex>
+#include <condition_variable>
 #include <cstdint>
+#include <mutex>
+#include <thread>
 #include <vector>
 
 class OceanFft {
@@ -40,6 +43,14 @@ public:
 	void Evaluate (double t, float *out);
 	double mipVar[MIPS + 1] = {};
 
+	/// Evaluate (t) started on the sea's own thread, into its own buffer
+	/// (the frame's other work meanwhile); Wait (t) its result (Floats ()),
+	/// computed then if none was started for t; nullptr if not Valid. The
+	/// same values as Evaluate's. Setup waits for a started evaluation.
+	void Start (double t);
+	const float *Wait (double t);
+	~OceanFft ();
+
 	bool Valid () const { return valid; }
 	double L[LAYERS] = {};     ///< patch sizes [m]
 	double var[LAYERS] = {};   ///< mean-square slope (both axes) of each layer
@@ -51,6 +62,14 @@ private:
 	std::vector<double> omega[LAYERS];
 	std::vector<std::complex<float>> work;
 	void Ifft2 (std::complex<float> *a);
+	// (Start's thread: one evaluation at a time)
+	std::thread worker;
+	std::mutex mtx;
+	std::condition_variable cv;
+	std::vector<float> result;
+	double jobT = 0.0, resultT = 0.0;
+	bool jobPending = false, busy = false, haveResult = false, quit = false;
+	void Loop ();
 };
 
 #endif // !__OCEANFFT_H

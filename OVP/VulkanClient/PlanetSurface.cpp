@@ -696,21 +696,44 @@ PlanetSurface::PlanetSurface (OBJHANDLE h, Scene *s, std::shared_ptr<PlanetLayer
 	}
 
 	// The quadtree roots are loaded right away, so that the planet is never
-	// rendered without textures.
+	// rendered without textures (a procedural planet's: made meanwhile, and
+	// taken in before the first use, TakeRoots)
+	for (int i = 0; i < 2; i++) root[i].reset (NewNode (4, 0, i, nullptr));
+	if (layers->surf->Procedural ())
+		rootJob = std::async (std::launch::async, [l = layers] { return ReadRoots (l); });
+	else {
+		RootData d = ReadRoots (layers);
+		ApplyRoots (d);
+	}
+}
+
+PlanetSurface::RootData PlanetSurface::ReadRoots (const std::shared_ptr<PlanetLayers> &layers)
+{
+	RootData r;
 	for (int i = 0; i < 2; i++) {
-		root[i].reset (NewNode (4, 0, i, nullptr));
-		Node *n = root[i].get();
+		r.surfOk[i] = layers->surf->Read (4, 0, i, r.surf[i]);
+		r.maskOk[i] = layers->mask && layers->mask->Read (4, 0, i, r.mask[i]) && (vkshore::EncodeShoreField (r.mask[i]), true);
 		std::vector<uint8_t> d;
-		if (layers->surf->Read (4, 0, i, d) && (n->surf = texmgr->CreateFromDDS (d.data(), d.size(), true, true)))
+		if (layers->elev && layers->elev->Read (4, 0, i, d) && DecodeElv (d, r.elev[i], false)) {
+			if (layers->elevMod && layers->elevMod->Read (4, 0, i, d)) DecodeElv (d, r.elev[i], true);
+			r.elevOk[i] = true;
+		}
+	}
+	return r;
+}
+
+void PlanetSurface::ApplyRoots (RootData &d) const
+{
+	for (int i = 0; i < 2; i++) {
+		Node *n = root[i].get();
+		if (d.surfOk[i] && (n->surf = texmgr->CreateFromDDS (d.surf[i].data(), d.surf[i].size(), true, true)))
 			n->surfState = 2;
 		else
 			n->surfState = 3;
-		if (layers->mask && layers->mask->Read (4, 0, i, d) && (vkshore::EncodeShoreField (d), true) && (n->mask = texmgr->CreateFromDDS (d.data(), d.size(), true, true)))
+		if (d.maskOk[i] && (n->mask = texmgr->CreateFromDDS (d.mask[i].data(), d.mask[i].size(), true, true)))
 			n->maskState = 2;
-		ElevGrid g;
-		if (layers->elev && layers->elev->Read (4, 0, i, d) && DecodeElv (d, g, false)) {
-			if (layers->elevMod && layers->elevMod->Read (4, 0, i, d)) DecodeElv (d, g, true);
-			n->elev = std::make_unique<ElevGrid> (std::move (g));
+		if (d.elevOk[i]) {
+			n->elev = std::make_unique<ElevGrid> (std::move (d.elev[i]));
 			n->elevState = 2;
 		}
 	}
@@ -718,6 +741,7 @@ PlanetSurface::PlanetSurface (OBJHANDLE h, Scene *s, std::shared_ptr<PlanetLayer
 
 PlanetSurface::~PlanetSurface ()
 {
+	TakeRoots (); // (a root job still running: its textures, freed with the nodes)
 	layers->alive = false;
 	tr->Loader().Drop (layers.get());
 	for (auto &r : root) if (r) FreeNode (r.get());
@@ -1194,6 +1218,7 @@ void PlanetSurface::Request (Node *n, TileLoader::Kind kind)
 
 void PlanetSurface::Update ()
 {
+	TakeRoots ();
 	TileLoader::Result res;
 	int n = 0;
 	while (n < MAX_UPLOADS && tr->Loader().Pop (res, layers.get())) {
@@ -1376,6 +1401,7 @@ uint32_t PlanetSurface::Select (Node *n)
 
 void PlanetSurface::Prepare ()
 {
+	TakeRoots ();
 	if (preparedFrame == scene->FrameNo ()) return;
 	preparedFrame = scene->FrameNo ();
 	frame++;
@@ -1743,6 +1769,7 @@ void PlanetSurface::Prepare ()
 
 void PlanetSurface::RenderDepth ()
 {
+	TakeRoots ();
 	// into the ambient occlusion prepass (bound by the caller)
 	Prepare ();
 	if (drawList.empty() || clouds) return;
@@ -1825,6 +1852,7 @@ void PlanetSurface::AddRTClusters (Node *n, RTScene *rt)
 
 void PlanetSurface::RenderShadow (ShadowMap &sm)
 {
+	TakeRoots ();
 	Prepare ();
 	if (clouds) return;
 	double R = oapiGetSize (hPlanet);
@@ -1841,6 +1869,7 @@ void PlanetSurface::RenderShadow (ShadowMap &sm)
 
 void PlanetSurface::RenderCoverage (const Mat4 &toMap, VkPipelineLayout layout, const VECTOR3 &mapCentre, double mapRadius)
 {
+	TakeRoots ();
 	Prepare ();
 	// the tiles are in the cloud layer's frame (rotated about the axis
 	// relative to the planet)
@@ -1879,6 +1908,7 @@ void PlanetSurface::RenderCoverage (const Mat4 &toMap, VkPipelineLayout layout, 
 
 void PlanetSurface::Render (Atmosphere *atm)
 {
+	TakeRoots ();
 	Prepare ();
 	if (drawList.empty()) return;
 

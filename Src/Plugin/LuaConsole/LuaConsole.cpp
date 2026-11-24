@@ -351,6 +351,7 @@ unsigned int WINAPI LuaConsole::InterpreterThreadProc (LPVOID context)
 	ConsoleInterpreter *interp = (ConsoleInterpreter*)console->interp;
 
 	// interpreter loop
+	interp->BindThread (); // (the turn's other side: Orbiter's)
 	for (;;) {
 		interp->WaitExec(); // wait for execution permission
 		if (console->termInterp) break; // close thread requested

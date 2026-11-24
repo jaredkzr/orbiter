@@ -368,6 +368,7 @@ void VulkanClient::clbkRenderScene ()
 	}
 	if (!ctx.BeginFrame ()) return;
 	frameActive = true;
+	VkMesh::FlushEdits (); // (vertex edits from the core's step)
 	r2d->Flush ();
 	ctx.GpuMark ("start");
 	scene->RenderShadows ();

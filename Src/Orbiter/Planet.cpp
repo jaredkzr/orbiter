@@ -1188,6 +1188,7 @@ scatter::GroundScatter *Planet::Scatter () const
 		scatterInit = true;
 		auto gs = std::make_unique<scatter::GroundScatter> (this);
 		if (gs->Active ()) scatter_ = std::move (gs);
+		scatterReady = true;
 	}
 	return scatter_.get();
 }
