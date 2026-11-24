@@ -69,10 +69,10 @@ void SitePush (const SURFDETAILPARAM &d, float p4[4], float p5[4], float p6[4])
 	constexpr size_t MAX_OUTSTANDING = 24;  // tile requests in flight
 	constexpr int MAX_UPLOADS = 12;         // tiles accepted per frame
 	constexpr double RETAIN_S = 20.0;       // [s] unused subtrees are released after this (or sooner: over the terrain's memory budget)
-	constexpr double TERRAIN_SHARE = 0.10;  // the terrain meshes' share of the device memory budget (VK_EXT_memory_budget)
+	constexpr double TERRAIN_SHARE = 0.15;  // the terrain tiles' (meshes and textures) share of the device memory budget (VK_EXT_memory_budget)
 	constexpr double PRESSURE = 0.90;       // over this share of its budget in use, the device's: only the selection kept
 	constexpr size_t TILE_BUDGET = 4000;    // tiles drawn at most (a zoomed view: the tiles' split threshold raised)
-	size_t g_meshBytes = 0;                 // [bytes] all surfaces' tile meshes (main thread)
+	size_t g_meshBytes = 0;                 // [bytes] all surfaces' tile meshes and textures (main thread; Retain's budget)
 	constexpr double FOV_OUT = 40.0 * 3.14159265358979 / 180.0; // out of view, tiles split at most as in a view of this (vertical) aperture
 	constexpr double MOTION_TIME = 0.05;    // [s] tiles the camera crosses faster than this (at the time warp) not split
 	constexpr double VESSEL_TILE = 10.0;    // [m] the finest tiles under a vessel on the ground,
@@ -338,7 +338,9 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	}
 	VkDescriptorSetLayout sets[4] = { frameLayout, texmgr->Layout(), texmgr->Layout(), atmLayout };
 	// (the prepass pushes two matrices and the water mask's coordinates)
-	VkPushConstantRange pcr{ VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, (uint32_t)std::max (sizeof(TilePushConstants), 48 * sizeof(float)) };
+	compact = !getenv ("ORBITER_VK_TILE_COMPACT") || atoi (getenv ("ORBITER_VK_TILE_COMPACT")) != 0;
+	if (compact) oapiWriteLog ("VulkanClient: surface tiles with compact vertices (24 bytes)");
+	VkPushConstantRange pcr{ VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, (uint32_t)std::max (sizeof(TilePushConstants), 52 * sizeof(float)) };
 	VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 	plci.setLayoutCount = 4;
 	plci.pSetLayouts = sets;
@@ -370,6 +372,22 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	vi.pVertexBindingDescriptions = bind;
 	vi.vertexAttributeDescriptionCount = 5;
 	vi.pVertexAttributeDescriptions = attr;
+	// (the surface's compact vertices, Pack; the cloud layers' as above)
+	VkVertexInputBindingDescription cbind{ 0, 24, VK_VERTEX_INPUT_RATE_VERTEX }; // (PlanetSurface::COMPACT_VTX)
+	VkVertexInputAttributeDescription cattr[5] = {
+		{ 0, 0, VK_FORMAT_R16G16B16A16_SNORM, 0 },  // position
+		{ 1, 0, VK_FORMAT_R16G16_SNORM, 16 },       // normal (octahedral)
+		{ 2, 0, VK_FORMAT_R16G16_SFLOAT, 20 },      // (not read)
+		{ 3, 0, VK_FORMAT_R16G16_SFLOAT, 20 },      // noise amplitude, playa weight
+		{ 4, 0, VK_FORMAT_R16G16B16A16_SNORM, 8 }   // morph target, crater fade
+	};
+	VkPipelineVertexInputStateCreateInfo cvi = vi;
+	cvi.vertexBindingDescriptionCount = 1;
+	cvi.pVertexBindingDescriptions = &cbind;
+	cvi.pVertexAttributeDescriptions = cattr;
+	VkBool32 compactOn = VK_TRUE;
+	VkSpecializationMapEntry vme{ 1, 0, sizeof (VkBool32) };
+	VkSpecializationInfo vspec{ 1, &vme, sizeof (compactOn), &compactOn };
 	VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
 	ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 	VkPipelineViewportStateCreateInfo vps{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
@@ -402,7 +420,8 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	gpi.pNext = &rci;
 	gpi.stageCount = 2;
 	gpi.pStages = stages;
-	gpi.pVertexInputState = &vi;
+	gpi.pVertexInputState = compact ? &cvi : &vi;
+	if (compact) stages[0].pSpecializationInfo = &vspec;
 	gpi.pInputAssemblyState = &ia;
 	gpi.pViewportState = &vps;
 	gpi.pRasterizationState = &rs;
@@ -434,6 +453,7 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
 	cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
 	cba.alphaBlendOp = VK_BLEND_OP_ADD;
+	gpi.pVertexInputState = &vi, stages[0].pSpecializationInfo = nullptr; // (cloud layers: NTVERTEX)
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &cloudPipeline));
 
 	// prepass: single-sampled normal and depth, and screen motion
@@ -451,6 +471,7 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	rci.pColorAttachmentFormats = AmbientOcclusion::PrepassFormats ();
 	attr[3] = attr[4]; // (the morph target, not the terrain detail)
 	vi.vertexAttributeDescriptionCount = 4;
+	if (compact) gpi.pVertexInputState = &cvi, stages[0].pSpecializationInfo = &vspec;
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &depthPipeline));
 	vkDestroyShaderModule (ctx->device, pvs, nullptr);
 	vkDestroyShaderModule (ctx->device, pfs, nullptr);
@@ -780,6 +801,8 @@ void PlanetSurface::FreeNode (Node *n)
 	texmgr->Release (n->surf);
 	texmgr->Release (n->mask);
 	n->surf = n->mask = nullptr;
+	g_meshBytes -= n->texBytes;
+	n->texBytes = 0;
 	if (n->vbuf.buffer) {
 		vkc::Context *c = ctx;
 		vkc::Buffer b = n->vbuf;
@@ -1070,8 +1093,81 @@ void PlanetSurface::ComputeMesh (const TileGeo *n, const ElevSrc *src, const Ele
 	md.elevLvl = src ? src->lvl : 0;
 	md.detailed = detailed;
 	DecimationErrors (vtx.data(), n->cols, md.decErr);
+	if (Compact ()) Pack (vtx, amp, md.packed, md.scale, md.org);
 	md.vtx = std::move (vtx);
 	md.amp = std::move (amp);
+}
+
+namespace {
+	uint32_t PackSnorm2 (float a, float b)
+	{
+		auto q = [](float x) { return (uint32_t)(uint16_t)(int16_t)std::lround (std::clamp (x, -1.0f, 1.0f) * 32767.0f); };
+		return q (a) | (q (b) << 16);
+	}
+	uint16_t Half (float f)
+	{
+		// (IEEE half, round to nearest; amplitudes and weights: small, finite)
+		uint32_t x;
+		memcpy (&x, &f, 4);
+		uint32_t s = (x >> 16) & 0x8000u;
+		int e = (int)((x >> 23) & 0xff) - 127 + 15;
+		uint32_t m = x & 0x7fffffu;
+		if (e <= 0) {
+			if (e < -10) return (uint16_t)s;
+			m |= 0x800000u;
+			uint32_t t = 14 - e;
+			uint32_t h = m >> t;
+			if ((m >> (t - 1)) & 1u) h++;
+			return (uint16_t)(s | h);
+		}
+		if (e >= 31) return (uint16_t)(s | 0x7bffu);
+		uint32_t h = s | ((uint32_t)e << 10) | (m >> 13);
+		if (m & 0x1000u) h++;
+		return (uint16_t)h;
+	}
+	void OctEncode (float x, float y, float z, float &u, float &v)
+	{
+		float l = std::fabs (x) + std::fabs (y) + std::fabs (z);
+		if (l <= 0.0f) { u = v = 0.0f; return; }
+		x /= l, y /= l, z /= l;
+		if (z < 0.0f) {
+			float ox = (1.0f - std::fabs (y)) * (x >= 0.0f ? 1.0f : -1.0f);
+			float oy = (1.0f - std::fabs (x)) * (y >= 0.0f ? 1.0f : -1.0f);
+			x = ox, y = oy;
+		}
+		u = x, v = y;
+	}
+}
+
+void PlanetSurface::Pack (const std::vector<NTVERTEX> &vtx, const std::vector<float> &amp, std::vector<uint32_t> &out, float &scale, VECTOR3 &org)
+{
+	// (the origin: the middle of the box of positions and morph targets; the
+	// scale: their largest offset from it)
+	const size_t n = vtx.size ();
+	double lo[3] = { 1e30, 1e30, 1e30 }, hi[3] = { -1e30, -1e30, -1e30 };
+	for (size_t i = 0; i < n; i++) {
+		const float p[6] = { vtx[i].x, vtx[i].y, vtx[i].z, amp[6 * i + 3], amp[6 * i + 4], amp[6 * i + 5] };
+		for (int k = 0; k < 6; k++) lo[k % 3] = std::min (lo[k % 3], (double)p[k]), hi[k % 3] = std::max (hi[k % 3], (double)p[k]);
+	}
+	org = _V(0.5 * (lo[0] + hi[0]), 0.5 * (lo[1] + hi[1]), 0.5 * (lo[2] + hi[2]));
+	double s = 1e-3;
+	for (int k = 0; k < 3; k++) s = std::max (s, 0.5 * (hi[k] - lo[k]));
+	scale = (float)(s * 1.0001);
+	const float is = 1.0f / scale, ox = (float)org.x, oy = (float)org.y, oz = (float)org.z;
+	out.resize (n * 6);
+	for (size_t i = 0; i < n; i++) {
+		const NTVERTEX &v = vtx[i];
+		const float *e = &amp[6 * i];
+		uint32_t *o = &out[6 * i];
+		o[0] = PackSnorm2 ((v.x - ox) * is, (v.y - oy) * is);
+		o[1] = PackSnorm2 ((v.z - oz) * is, 0.0f);
+		o[2] = PackSnorm2 ((e[3] - ox) * is, (e[4] - oy) * is);
+		o[3] = PackSnorm2 ((e[5] - oz) * is, e[1]);
+		float nu, nv;
+		OctEncode (v.nx, v.ny, v.nz, nu, nv);
+		o[4] = PackSnorm2 (nu, nv);
+		o[5] = (uint32_t)Half (e[0]) | ((uint32_t)Half (e[2]) << 16);
+	}
 }
 
 void PlanetSurface::DecimationErrors (const NTVERTEX *vtx, int cols, float err[6])
@@ -1155,8 +1251,13 @@ void PlanetSurface::ApplyMesh (Node *n, MeshData &md)
 	n->detailLmesh = md.detailLmesh;
 	VkDeviceSize vsize = vtx.size() * sizeof(NTVERTEX);
 	EnsureVertexBuffer (n);
-	ctx->UpdateBuffer (n->vbuf.buffer, 0, vtx.data(), vsize);
-	ctx->UpdateBuffer (n->vbuf.buffer, vsize, amp.data(), amp.size() * sizeof(float));
+	if (Compact ()) {
+		ctx->UpdateBuffer (n->vbuf.buffer, 0, md.packed.data (), md.packed.size () * sizeof(uint32_t));
+		n->vscale = md.scale, n->vorg = md.org;
+	} else {
+		ctx->UpdateBuffer (n->vbuf.buffer, 0, vtx.data(), vsize);
+		ctx->UpdateBuffer (n->vbuf.buffer, vsize, amp.data(), amp.size() * sizeof(float));
+	}
 	n->nVtx = (uint32_t)vtx.size();
 	n->rtVersion++;
 	n->meshElevLvl = md.elevLvl;
@@ -1243,6 +1344,22 @@ void PlanetSurface::PrepareGpuMesh (const TileGeo *n, const ElevSrc *src, const 
 	job.misc[1] = n->parent ? 1.0f : 0.0f;
 	job.misc[2] = (float)lsplit, job.misc[3] = href;
 	job.outAddr = job.ptsAddr = 0;
+	job.cmp = 0;
+	if (Compact ()) {
+		// (compact vertices, written by the shader relative to d0 href in a scale
+		// bounding them: the heights' range from the inputs, the detail the
+		// shader adds within a few times the amplitude (beyond: clamped, logged))
+		double hmax = 0.0;
+		for (size_t k = 0; k + 3 < pts.size (); k += 4) hmax = std::max (hmax, (double)std::fabs (pts[k]) + 6.0 * std::fabs (pts[k + 1]));
+		hmax += 2.0 + std::fabs (detailPrm.craterDepth);
+		double s = (hmax + n->angRadius * 1.01 * (radius + std::fabs ((double)href) + hmax) + radius * (n->latmax - n->latmin) * 0.02) * 1.05;
+		float fs = (float)s;
+		uint32_t bits;
+		memcpy (&bits, &fs, 4);
+		job.cmp = (uint64_t)bits | (1ull << 32);
+		md.scale = fs;
+		md.org = n->centre * ((double)href / radius);
+	}
 	md.detailSpacing = (float)spacingOf (src);
 	double lmesh = std::max (lmin, detailPrm.lambdaMin);
 	md.detailLmesh = (lmesh >= md.detailSpacing) ? 1e30f : (float)lmesh;
@@ -1273,11 +1390,13 @@ void PlanetSurface::Update ()
 		switch (res.req.kind) {
 		case TileLoader::SURF:
 			node->surf = res.ok ? texmgr->CreateFromDDS (res.data.data(), res.data.size(), true, true) : nullptr;
+			if (node->surf) node->texBytes += (uint32_t)res.data.size (), g_meshBytes += res.data.size (); // (the file: compressed, with its mips)
 			node->surfState = node->surf ? 2 : 3;
 			n++;
 			break;
 		case TileLoader::MASK:
 			node->mask = res.ok ? texmgr->CreateFromDDS (res.data.data(), res.data.size(), true, true) : nullptr;
+			if (node->mask) node->texBytes += (uint32_t)res.data.size (), g_meshBytes += res.data.size ();
 			node->maskState = node->mask ? 2 : 3;
 			n++;
 			break;
@@ -1608,6 +1727,13 @@ void PlanetSurface::Prepare ()
 		const ErrPending &e = errPending[slot][k];
 		Node *n = Find (e.lvl, e.ilat, e.ilng);
 		if (n && n->rtVersion == e.ver) memcpy (n->decErr, (const float*)errBuf[slot].mapped + 8 * k, sizeof(n->decErr));
+		// (compact vertices beyond the scale estimated: clamped - logged, a few times)
+		static int clampLogs = 0;
+		float range = ((const float*)errBuf[slot].mapped)[8 * k + 6];
+		if (range > 1.0f && clampLogs < 10) {
+			clampLogs++;
+			oapiWriteLogV ("VulkanClient: compact tile vertices clamped (level %d, %.2f times the scale %.1f m)", e.lvl, range, n ? n->vscale : 0.0f);
+		}
 	}
 	errPending[slot].clear ();
 	// Meshes are made in the background (MeshWorkers), the nearest first, at
@@ -1739,6 +1865,7 @@ void PlanetSurface::Prepare ()
 			n->rtVersion++;
 			n->meshElevLvl = r.md.elevLvl;
 			n->meshDetailed = true;
+			n->vscale = r.md.scale, n->vorg = r.md.org;
 			for (float &e : n->decErr) e = 1e30f; // (until read back)
 			errPending[slot].push_back ({ n->lvl, n->ilat, n->ilng, n->rtVersion });
 			n->meshJob = 0;
@@ -1762,6 +1889,7 @@ void PlanetSurface::Prepare ()
 			size_t al = (size_t)((16 - (a1 & 15)) & 15);
 			GpuJob one = gj[i];
 			one.outAddr = ctx->BufferAddress (hb.buffer);
+			one.cmp = 0; // (NTVERTEX, compared with the CPU's)
 			memcpy ((uint8_t*)t1.ptr + al, &one, sizeof(one));
 			ctx->ImmediateSubmit ([&](VkCommandBuffer c) {
 				vkCmdBindPipeline (c, VK_PIPELINE_BIND_POINT_COMPUTE, tr->MeshPipeline ());
@@ -1887,8 +2015,10 @@ void PlanetSurface::Prepare ()
 
 bool PlanetSurface::Busy () const
 {
-	// (tiles still to come for the view: their data, meshes, or children to replace them)
-	return pendingLoads > 0 || meshOutstanding > 0 || needMeshes > 0 || !buildList.empty ();
+	// (meshes still to come for the view, or children to replace their parents:
+	// what costs frames. Not the textures and elevation data still loading:
+	// the Earth's thousands take 10 s and more, and come in without hitches)
+	return meshOutstanding > 0 || needMeshes > 0 || !buildList.empty ();
 }
 
 std::string PlanetSurface::BusyText () const
@@ -2002,8 +2132,9 @@ void PlanetSurface::AddRTClusters (Node *n, RTScene *rt, bool churn)
 		p.mat.light = 1.0f;
 		p.mat.pbr[1] = 1.0f, p.mat.pbr[3] = 1.0f; // matte
 		p.mat.unlit = false;
+		if (Compact ()) p.geo.compact = true, p.geo.scale = t->vscale;
 		parts.push_back (p);
-		VECTOR3 d = t->centre - n->centre;
+		VECTOR3 d = t->centre + (Compact () ? t->vorg : _V(0, 0, 0)) - n->centre;
 		ofs.push_back ({ (float)d.x, (float)d.y, (float)d.z });
 	}
 	if (parts.empty()) return;
@@ -2024,7 +2155,10 @@ void PlanetSurface::RenderShadow (ShadowMap &sm)
 		double rad = n->angRadius * R * 1.5 + 10e3;
 		if (!sm.MayCast (gc, rad)) continue;
 		const TileRenderer::Grid &g = tr->Thinned (n->cols, n->decR, n->decQ);
-		sm.DrawGeometry (n->vbuf.buffer, tr->IndexBuffer(), g.count, Mat4::FromRotTrans (prot, gc - sm.Centre()), g.first);
+		if (Compact ())
+			sm.DrawCompact (n->vbuf.buffer, tr->IndexBuffer(), g.count, Mat4::FromRotTrans (prot, gc + mul (prot, n->vorg) - sm.Centre()) * Mat4::Scale (n->vscale, n->vscale, n->vscale), g.first);
+		else
+			sm.DrawGeometry (n->vbuf.buffer, tr->IndexBuffer(), g.count, Mat4::FromRotTrans (prot, gc - sm.Centre()), g.first);
 	}
 }
 
@@ -2139,6 +2273,11 @@ bool PlanetSurface::InView (const Node *n) const
 
 void PlanetSurface::BindVertices (const Node *n)
 {
+	if (Compact ()) { // (all in one: Pack)
+		VkDeviceSize o = 0;
+		vkCmdBindVertexBuffers (ctx->Cmd(), 0, 1, &n->vbuf.buffer, &o);
+		return;
+	}
 	// the vertices, and the terrain detail amplitudes after them
 	VkBuffer b[2] = { n->vbuf.buffer, n->vbuf.buffer };
 	VkDeviceSize ofs[2] = { 0, n->nVtx * sizeof(NTVERTEX) };
@@ -2185,7 +2324,11 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 	}
 	if (!mask) mask = texmgr->White ();
 
-	Mat4 mv = scene->ModelView (ppos + mul (prot, n->centre), prot);
+	// (compact vertices: relative to the centre moved by vorg)
+	const bool cmp = Compact ();
+	const VECTOR3 org = cmp ? n->centre + n->vorg : n->centre;
+	Mat4 mv = scene->ModelView (ppos + mul (prot, org), prot);
+	if (cmp) pc.tracks[2] = n->vscale;
 	mv.ToFloat (pc.modelView);
 	// (a moon in its planet's shadow: the share of the sun's disc seen from the tile)
 	pc.morph[2] = prepass ? 1.0f : (float)scene->SunVisibility (ppos + mul (prot, n->centre), hPlanet);
@@ -2202,7 +2345,7 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 	if (!prepass && !clouds && !scene->InProbe ())
 		if (GroundTracks *gt = scene->Tracks ()) gt->ForTile (hPlanet, ppos, prot, n->centre / radius, n->angRadius, pc.tracks);
 	if (pc.morph[1] > 0.0f && n->vessel >= 0 && n->vessel < (int)groundVessels.size()) {
-		VECTOR3 v = groundVessels[n->vessel] - n->centre; // (tile frame)
+		VECTOR3 v = groundVessels[n->vessel] - org; // (tile frame)
 		pc.vessel[0] = (float)(mv.m[0] * v.x + mv.m[4] * v.y + mv.m[8] * v.z + mv.m[12]);
 		pc.vessel[1] = (float)(mv.m[1] * v.x + mv.m[5] * v.y + mv.m[9] * v.z + mv.m[13]);
 		pc.vessel[2] = (float)(mv.m[2] * v.x + mv.m[6] * v.y + mv.m[10] * v.z + mv.m[14]);
@@ -2212,13 +2355,14 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 	if (prepass) {
 		// view-space motion of the planet frame (set by the planet's visual),
 		// and the water mask
-		float pp[48];
+		float pp[52] = {};
 		mv.ToFloat (pp);
 		memcpy (pp + 16, scene->ObjectMotion (), 16 * sizeof(float));
 		memcpy (pp + 32, pc.maskUV, sizeof(pc.maskUV));
 		memcpy (pp + 36, pc.params, sizeof(pc.params));
 		memcpy (pp + 40, pc.morph, sizeof(pc.morph));
 		memcpy (pp + 44, pc.vessel, sizeof(pc.vessel));
+		pp[48] = n->vscale;
 		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr->Layout(), 2, 1, &mask->set, 0, nullptr);
 		vkCmdPushConstants (cmd, tr->Layout(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pp), pp);
 		BindVertices (n);

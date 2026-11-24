@@ -26,6 +26,7 @@ struct RTInstance { uvec2 vtx, idx; uint firstIndex, tex, flags, owner; vec4 dif
 layout(set = 2, binding = 1, std430) readonly buffer Instances { RTInstance inst[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer RTFloats { float f[]; };
 layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer RTUints { uint u[]; };
+#include "rtvertex.glsl"
 layout(set = 3, binding = 0) uniform sampler2D rtTex[];
 const uint RT_ALPHA = 2u; // (rt.glsl)
 
@@ -41,9 +42,7 @@ bool CandidateSolid (rayQueryEXT q)
 	for (int k = 0; k < 3; k++) {
 		uint i = r.firstIndex + prim * 3u + uint (k);
 		uint word = RTUints (r.idx).u[i >> 1];
-		uint vi = ((i & 1u) != 0u ? word >> 16 : word & 0xffffu) * 8u;
-		RTFloats v = RTFloats (r.vtx);
-		uv += w[k] * vec2 (v.f[vi + 6u], v.f[vi + 7u]);
+		uv += w[k] * RTVertexUV (r.vtx, r.flags, (i & 1u) != 0u ? word >> 16 : word & 0xffffu);
 	}
 	return textureLod (rtTex[nonuniformEXT (r.tex)], uv * r.uv.zw + r.uv.xy, 0.0).a >= 0.5;
 }
@@ -93,11 +92,11 @@ vec3 CandidateNormal (rayQueryEXT q)
 	for (int k = 0; k < 3; k++) {
 		uint i = r.firstIndex + prim * 3u + uint (k);
 		uint word = RTUints (r.idx).u[i >> 1];
-		uint vi = ((i & 1u) != 0u ? word >> 16 : word & 0xffffu) * 8u;
-		RTFloats v = RTFloats (r.vtx);
-		n += w[k] * vec3 (v.f[vi + 3u], v.f[vi + 4u], v.f[vi + 5u]);
+		n += w[k] * RTVertexNormal (r.vtx, r.flags, (i & 1u) != 0u ? word >> 16 : word & 0xffffu);
 	}
-	return mat3 (rayQueryGetIntersectionObjectToWorldEXT (q, false)) * n;
+	vec3 N = mat3 (rayQueryGetIntersectionObjectToWorldEXT (q, false)) * n;
+	// (a compact tile's transform has its scale: the normal's length as from the vertices)
+	return (r.flags & RT_COMPACT) != 0u ? normalize (N) * length (n) : N;
 }
 
 // Light from a local light at lp reaching o: traced from the light. Emitters

@@ -57,6 +57,8 @@ public:
 		uint32_t nVtx;
 		VkBuffer ib;          // (whole 32-bit words: the shaders read pairs)
 		uint32_t firstIndex, nIndex;
+		bool compact = false; // a terrain tile's compact vertices (PlanetSurface::Pack: positions snorm16 in scale, rtvertex.glsl)
+		float scale = 1.0f;   // [m] (compact; in a cluster's part only)
 	};
 
 	bool Init (vkc::Context *ctx, TextureManager *texmgr);

@@ -21,6 +21,7 @@ namespace {
 	};
 	constexpr uint32_t FLAG_UNLIT = 1;
 	constexpr uint32_t FLAG_ALPHA = 2; // alpha-tested texture (foliage): not opaque to rays
+	constexpr uint32_t FLAG_COMPACT = 4; // a terrain tile's compact vertices (rtvertex.glsl)
 	uint64_t nextGeometryId = 1;
 	RTScene *active = nullptr;
 }
@@ -280,6 +281,7 @@ void RTScene::Add (uint64_t key, const Part *parts, const float (*offsets)[3], u
 		src.push_back ({ ctx->BufferAddress (g.vb) + g.vbOffset, ctx->BufferAddress (g.ib), &parts[i], offsets ? offsets[i] : nullptr });
 		mix (hash, g.id), mix (hash, g.vbOffset), mix (hash, g.firstIndex), mix (hash, g.nIndex), mix (hash, parts[i].mat.alphaTest);
 		mix (vhash, g.version);
+		if (g.compact) { uint32_t sb; memcpy (&sb, &g.scale, 4); mix (vhash, sb); }
 		if (offsets) {
 			uint32_t o[3];
 			memcpy (o, offsets[i], sizeof(o));
@@ -313,16 +315,16 @@ void RTScene::Add (uint64_t key, const Part *parts, const float (*offsets)[3], u
 			geom.flags = s.p->mat.alphaTest ? 0 : VK_GEOMETRY_OPAQUE_BIT_KHR; // (alpha-tested: decided in the shaders)
 			auto &tri = geom.geometry.triangles;
 			tri.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-			tri.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+			tri.vertexFormat = g.compact ? VK_FORMAT_R16G16B16A16_SNORM : VK_FORMAT_R32G32B32_SFLOAT;
 			tri.vertexData.deviceAddress = s.vaddr;
-			tri.vertexStride = sizeof(NTVERTEX);
+			tri.vertexStride = g.compact ? 24 : sizeof(NTVERTEX);
 			tri.maxVertex = g.nVtx - 1;
 			tri.indexType = VK_INDEX_TYPE_UINT16;
 			tri.indexData.deviceAddress = s.iaddr + (VkDeviceAddress)g.firstIndex * sizeof(uint16_t);
-			if (s.ofs) { // (read by the build in this frame)
+			if (s.ofs || g.compact) { // (read by the build in this frame)
 				VkTransformMatrixKHR t{};
-				t.matrix[0][0] = t.matrix[1][1] = t.matrix[2][2] = 1.0f;
-				for (int r = 0; r < 3; r++) t.matrix[r][3] = s.ofs[r];
+				t.matrix[0][0] = t.matrix[1][1] = t.matrix[2][2] = g.compact ? g.scale : 1.0f; // (compact: the snorm positions' scale)
+				for (int r = 0; r < 3; r++) t.matrix[r][3] = s.ofs ? s.ofs[r] : 0.0f;
 				memcpy ((VkTransformMatrixKHR*)f.transforms.mapped + nXform, &t, sizeof(t));
 				tri.transformData.deviceAddress = ctx->BufferAddress (f.transforms.buffer) + nXform * sizeof(VkTransformMatrixKHR);
 				nXform++;
@@ -377,7 +379,7 @@ void RTScene::Add (uint64_t key, const Part *parts, const float (*offsets)[3], u
 		rec.idx[0] = (uint32_t)s.iaddr, rec.idx[1] = (uint32_t)(s.iaddr >> 32);
 		rec.firstIndex = s.p->geo.firstIndex;
 		rec.tex = TextureSlot (s.p->tex);
-		rec.flags = (mat.unlit ? FLAG_UNLIT : 0) | (mat.alphaTest ? FLAG_ALPHA : 0);
+		rec.flags = (mat.unlit ? FLAG_UNLIT : 0) | (mat.alphaTest ? FLAG_ALPHA : 0) | (s.p->geo.compact ? FLAG_COMPACT : 0);
 		rec.owner = mat.owner;
 		memcpy (rec.diffuse, mat.diffuse, sizeof(rec.diffuse));
 		memcpy (rec.emissive, mat.emissive, 3 * sizeof(float));

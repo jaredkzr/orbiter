@@ -6,11 +6,16 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
-layout(location = 0) in vec3 inPos;
+// (COMPACT: the surface tiles' compact vertices, PlanetSurface::Pack: position
+// and morph target snorm16 in the tile's scale (tracks.z), the morph's w the
+// crater fade; octahedral normal; noise amplitude and playa weight halves; the
+// texture coordinates from the vertex's place in the grid)
+layout(constant_id = 1) const bool COMPACT = false;
+layout(location = 0) in vec4 inPos;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec2 inUV;
 layout(location = 3) in vec3 inDetailA; // terrain detail: noise amplitude [m], crater fade, playa weight (the core's)
-layout(location = 4) in vec3 inMorph;   // position on the parent tile's mesh (continuous level of detail)
+layout(location = 4) in vec4 inMorph;   // position on the parent tile's mesh (continuous level of detail)
 
 #include "frame.glsl"
 #include "swell.glsl"
@@ -23,7 +28,13 @@ layout(push_constant) uniform Tile {
 	vec4 detail;   // terrain detail: data node spacing [m], shortest wavelength of the mesh [m], Hurst exponent, w: on
 	vec4 morph;    // morph to the parent's mesh: start distance [m], 1/range [1/m] (0: none)
 	vec4 vessel;   // nearest vessel on the ground, view space (w: present): morph from it too
+	ivec4 refI;
+	vec4 refF;
+	vec4 refRel;
+	vec4 tracks;   // z: the compact vertices' scale [m]
 } tile;
+
+#include "tilevertex.glsl"
 
 layout(location = 0) out vec3 vPosView;
 layout(location = 1) out vec3 vNormalView;
@@ -35,17 +46,27 @@ void main()
 {
 	// morph to the parent tile's shape with the distance (continuous level of detail)
 	// (from the camera or the nearest vessel on the ground, whichever is closer)
-	vec3 p0 = (tile.modelView * vec4(inPos, 1.0)).xyz;
+	vec3 pos, mor, nrm, det;
+	vec2 uv;
+	if (COMPACT) {
+		pos = inPos.xyz * tile.tracks.z, mor = inMorph.xyz * tile.tracks.z;
+		nrm = TileOctDecode (inNormal.xy);
+		det = vec3 (inDetailA.x, inMorph.w, inDetailA.y);
+		uv = TileGridUV (uint (gl_VertexIndex));
+	} else {
+		pos = inPos.xyz, mor = inMorph.xyz, nrm = inNormal, det = inDetailA, uv = inUV;
+	}
+	vec3 p0 = (tile.modelView * vec4(pos, 1.0)).xyz;
 	float d = length(p0);
 	if (tile.vessel.w > 0.5) d = min(d, length(p0 - tile.vessel.xyz));
 	float m = clamp((d - tile.morph.x) * tile.morph.y, 0.0, 1.0);
-	vec4 p = tile.modelView * vec4(mix(inPos, inMorph, m), 1.0);
-	vec3 nsw = mat3(tile.modelView) * inNormal;
+	vec4 p = tile.modelView * vec4(mix(pos, mor, m), 1.0);
+	vec3 nsw = mat3(tile.modelView) * nrm;
 	p.xyz = SwellDisplace (p.xyz, nsw); // (the sea's swell, Water W8)
 	vMorph = m;
 	vPosView = p.xyz;
 	vNormalView = nsw;
-	vUV = inUV;
-	vDetailA = inDetailA;
+	vUV = uv;
+	vDetailA = det;
 	gl_Position = frame.proj * RelApparent (p); // (relativistic view: as seen)
 }

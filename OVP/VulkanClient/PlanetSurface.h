@@ -117,6 +117,9 @@ public:
 	VkPipeline MeshPipeline () const { return meshPipe; }
 	VkPipelineLayout MeshLayout () const { return meshLayout; }
 	VkBuffer IndexBuffer () const { return ibuf.buffer; }
+	/// surface tiles (not cloud layers) with compact vertices (PlanetSurface::Pack;
+	/// ORBITER_VK_TILE_COMPACT=0: NTVERTEX and the detail stream, 56 bytes)
+	bool Compact () const { return compact; }
 	/// The tile grid taking every 2^c-th column (c < NCOLS): its indices
 	/// from first, gridCount without the skirts (which come last), count
 	/// with them; and every 2nd row and column of it (at most every GRID-th),
@@ -151,6 +154,7 @@ private:
 	uint32_t coarseFirst = 0, coarseCount = 0;
 	std::unique_ptr<TileLoader> loader;
 	std::unique_ptr<MeshWorkers> meshers;
+	bool compact = false;
 };
 
 class PlanetSurface {
@@ -162,7 +166,7 @@ public:
 
 	/// Accept loaded tiles (call before rendering)
 	void Update ();
-	/// Tiles of the view still being loaded or made (the loading's hold: VulkanClient::WarmUp)
+	/// Meshes of the view still being made (the loading's hold: VulkanClient::WarmUp)
 	bool Busy () const;
 	/// (what keeps it busy, for the log)
 	std::string BusyText () const;
@@ -197,12 +201,15 @@ private:
 		double cosLat = 1.0;  // cos of the latitude farthest from the equator
 		Node *elevNode = nullptr; // the tile its mesh's elevation data is requested from (an ancestor or itself)
 		int cols = 0;         // grid columns taken: every 2^cols-th (TileRenderer::Columns)
+		float vscale = 1.0f;  // compact vertices: their scale [m] (Pack)
+		VECTOR3 vorg{};       // ... and their origin, relative to the centre
 		// thinned for the view this frame (TileRenderer::Thinned): every 2^decR-th
 		// row, 2^decQ-th of the columns; by the mesh's largest deviation [m]
 		// from it taking every 2nd, 4th, 8th row (0-2) or column (3-5)
 		int decR = 0, decQ = 0;
 		float decErr[6] = { 1e30f, 1e30f, 1e30f, 1e30f, 1e30f, 1e30f };
 		VkTexture *surf = nullptr, *mask = nullptr;
+		uint32_t texBytes = 0; // (their size: Retain's budget)
 		std::shared_ptr<const ElevGrid> elev; // (shared with mesh jobs in the background)
 		uint8_t surfState = 0, maskState = 0, elevState = 0; // 0: unknown, 1: requested, 2: loaded, 3: missing
 		vkc::Buffer vbuf;
@@ -264,10 +271,11 @@ private:
 		int lvl, ilat, ilng;
 		double latmin, latmax, lngmin, lngmax;
 		VECTOR3 centre;
+		double angRadius;
 		int cols;
 		bool parent;  // (a child: morph targets)
 	};
-	static TileGeo GeoOf (const Node *n) { return { n->lvl, n->ilat, n->ilng, n->latmin, n->latmax, n->lngmin, n->lngmax, n->centre, n->cols, n->parent != nullptr }; }
+	static TileGeo GeoOf (const Node *n) { return { n->lvl, n->ilat, n->ilng, n->latmin, n->latmax, n->lngmin, n->lngmax, n->centre, n->angRadius, n->cols, n->parent != nullptr }; }
 	/// a mesh's data, made on worker threads (ComputeMesh: no GPU calls) and
 	/// uploaded after (ApplyMesh)
 	struct MeshData {
@@ -277,6 +285,9 @@ private:
 		int elevLvl = 0;
 		bool detailed = false;
 		float decErr[6];     // (as Node::decErr)
+		std::vector<uint32_t> packed; // compact vertices (Pack), their scale and origin
+		float scale = 1.0f;
+		VECTOR3 org{};
 	};
 	/// detailed: with the terrain detail's geometry (else only its shading);
 	/// src, psrc: the tile's and its parent's elevation data (null: none)
@@ -296,7 +307,8 @@ private:
 		float d0[4];
 		uint64_t outAddr, ptsAddr;
 		float sp[4], misc[4];
-		uint64_t errAddr, pad;  // the mesh's decimation errors (Node::decErr), host memory
+		uint64_t errAddr;    // the mesh's decimation errors (Node::decErr), host memory
+		uint64_t cmp;        // compact vertices: scale [m] (float bits), 1 << 32; 0: NTVERTEX
 	};
 	// GPU meshes' decimation errors, read in the frame slot's next use:
 	// per slot a buffer, and the tiles (by place and mesh version)
@@ -337,11 +349,18 @@ private:
 	bool detailWarm = false;   // (the core's terrain detail initialised, on the main thread)
 	/// the vertex buffer of a tile (made if needed), and its size [bytes]
 	void EnsureVertexBuffer (Node *n);
-	static VkDeviceSize MeshBytes ()
+	bool Compact () const { return tr->Compact () && !clouds; }
+	static constexpr size_t COMPACT_VTX = 24; // [bytes] (Pack)
+	VkDeviceSize MeshBytes () const
 	{
 		const size_t V = TileRenderer::GRID + 1, nv = V * V + 4 * V;
-		return nv * (sizeof(NTVERTEX) + 6 * sizeof(float));
+		return nv * (Compact () ? COMPACT_VTX : sizeof(NTVERTEX) + 6 * sizeof(float));
 	}
+	/// Compact vertices (24 bytes, tile_mesh.comp the same): position and morph
+	/// target snorm16 relative to org in scale (the morph's w: the crater fade),
+	/// octahedral normal snorm16, noise amplitude and playa weight halves; the
+	/// texture coordinates from the vertex's place (tilevertex.glsl)
+	static void Pack (const std::vector<NTVERTEX> &vtx, const std::vector<float> &amp, std::vector<uint32_t> &out, float &scale, VECTOR3 &org);
 	/// whether a tile may be in the camera's view
 	bool InView (const Node *n) const;
 	/// texture of a tile: its own, or the matching part (uv: offset, scale) of its nearest ancestor's
