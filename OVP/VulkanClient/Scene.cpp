@@ -2794,6 +2794,12 @@ void Scene::RenderPrepass ()
 	ctx->GpuMark ("prepass");
 	BuildLightTiles ();
 	if (lightTilesOn) ctx->GpuMark ("light tiles");
+	// the sky-view table of the air the camera is in (a look trade,
+	// ORBITER_VK_SKY_LUT=1): the sky pass's light from it
+	if (atm->SkyLutOn ())
+		if (OBJHANDLE hp = oapiCameraProxyGbody ())
+			if (VObject *pv = GetVisual (hp))
+				if (Atmosphere *a = pv->GetAtmosphere ()) { a->ComputeSkyLut (); ctx->GpuMark ("sky lut"); }
 	if (ao->enabled && !rtl->Enabled () && !relOn) ao->Compute (proj[0], -proj[5]);
 	ctx->GpuMark ("ao");
 	if (rt && rt->Enabled ()) {

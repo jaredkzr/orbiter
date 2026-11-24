@@ -81,6 +81,7 @@ set(SHADER_SRC
 	Shaders/shadow_inst.vert
 	Shaders/tile_mesh.comp
 	Shaders/light_tiles.comp
+	Shaders/sky_lut.comp
 	Shaders/shadow_impostor_inst.vert
 	Shaders/mesh_inst.vert
 	Shaders/prepass_inst.vert

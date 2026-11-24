@@ -1,0 +1,33 @@
+// Copyright (c) Martin Schweiger
+// Licensed under the MIT License
+
+// The sky-view table (skylut.glsl): per texel, the light of the air along
+// its direction to the ground or out of the air, and the transmittance
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+#define ATM_SET 0
+#include "atmosphere.glsl"
+#include "skylut.glsl"
+
+layout(set = 1, binding = 0, rgba16f) uniform writeonly image2D lutL; // light (rgb, before AtmTonemap)
+layout(set = 1, binding = 1, rgba16f) uniform writeonly image2D lutT; // transmittance (rgb)
+
+void main ()
+{
+	ivec2 p = ivec2 (gl_GlobalInvocationID.xy), sz = imageSize (lutL);
+	if (p.x >= sz.x || p.y >= sz.y) return;
+	vec2 uv = (vec2 (p) + 0.5) / vec2 (sz);
+	vec3 d = SkyLutDir (uv);
+	// (as sky.frag: to the ground, beyond the horizon's row; out of the air above it)
+	vec2 tg = RaySphereC (atm.camPos.xyz, d, atm.camC.x);
+	bool ground = uv.y < 0.5;
+	float tMax = ground && tg.x > 0.0 && tg.x <= tg.y ? tg.x : ATM_NONE;
+	vec3 T;
+	vec3 L = Inscatter (d, tMax, T);
+	imageStore (lutL, p, vec4 (L, 0.0));
+	imageStore (lutT, p, vec4 (T, 0.0));
+}
