@@ -39,6 +39,20 @@ namespace {
 		return r;
 	}
 
+	// two placed hulls apart along the line between their centres by more than
+	// margin (their cores farther apart than margin and both skins, GJK's
+	// tolerance aside): convex::Collide finds no contact, at the cost of two
+	// support points instead of GJK's iterations
+	bool ApartAlong (const convex::Placed &a, const convex::Placed &b, const Vector &ca, const Vector &cb, double margin)
+	{
+		Vector d (cb - ca);
+		double l = d.length();
+		if (!(l > 1e-9)) return false;
+		d /= l;
+		double gap = dotp (b.Support (-d), d) - dotp (a.Support (d), d);
+		return gap > margin + a.skin + b.skin + 1e-6;
+	}
+
 	// relative speed of two bodies' furthest points (bound)
 	double SpeedBound (VesselBase *a, VesselBase *b, double ra, double rb)
 	{
@@ -194,9 +208,10 @@ void VesselCollider::Resolve (double h)
 
 		// contacts of hull x (of vessel X) with hull y (of vessel Y)
 		convex::Manifold mf;
-		auto Test = [&](VesselBase *X, const collision::HullRef &x, bool dynX, const Vector &cgX,
-		                VesselBase *Y, const collision::HullRef &y, bool dynY, const Vector &cgY) {
+		auto Test = [&](VesselBase *X, const collision::HullRef &x, bool dynX, const Vector &cgX, const Vector &cx,
+		                VesselBase *Y, const collision::HullRef &y, bool dynY, const Vector &cgY, const Vector &cy) {
 			convex::Placed px{x.hull, x.R, x.pos - O, collision::SKIN}, py{y.hull, y.R, y.pos - O, collision::SKIN};
+			if (ApartAlong (px, py, cx, cy, margin)) return;
 			if (!convex::Collide (px, py, margin, mf)) return;
 			if (rel) {
 				// (released from each other: no contacts while any parts touch)
@@ -237,7 +252,7 @@ void VesselCollider::Resolve (double h)
 		for (size_t i = 0; i < ha.size(); i++)
 			for (size_t j = 0; j < hb.size(); j++) {
 				if (ca[i].dist (cb[j]) > ha[i].hull->radius + hb[j].hull->radius + 2.0*collision::SKIN + margin) continue;
-				Test (A, ha[i], dynA, cgA, B, hb[j], dynB, cgB);
+				Test (A, ha[i], dynA, cgA, ca[i], B, hb[j], dynB, cgB, cb[j]);
 			}
 		if (rel && !touching) rel->clear = true; // (apart: they collide from now on)
 
