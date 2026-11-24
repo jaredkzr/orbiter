@@ -19,10 +19,10 @@ layout(constant_id = 0) const bool SITE_MATERIALS = false;
 // diagnostics, to time them; PlanetSurface.cpp lists the bits)
 layout(constant_id = 1) const int PARTS_OFF = 0;
 bool PartOn (int bit) { return (PARTS_OFF & bit) == 0; }
-// Cheaper far detail (a look trade, ORBITER_VK_FAR_DETAIL=<m>; 0: off, the
-// default): where a pixel spans more than FAR_CUT m of ground the terrain
-// detail fades out, gone at twice that (not evaluated there)
-layout(constant_id = 2) const float FAR_CUT = 0.0;
+// Cheaper far detail (ORBITER_VK_FAR_DETAIL=<m>, default 0.25; 0: off): where
+// a pixel spans more than FAR_CUT m of ground the terrain detail fades out,
+// gone at twice that (not evaluated there)
+layout(constant_id = 2) const float FAR_CUT = 0.25;
 
 struct DetailSample {
 	vec3 grad;     // gradient, planet frame [m/m]

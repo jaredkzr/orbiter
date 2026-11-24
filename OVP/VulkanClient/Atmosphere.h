@@ -87,7 +87,7 @@ public:
 	VkPipeline SkyPipeline () const { return skyPipeline; }
 	VkPipeline VeilPipeline () const { return veilPipeline; }
 	VkPipelineLayout SkyLayout () const { return skyLayout; }
-	/// the sky-view table (a look trade, ORBITER_VK_SKY_LUT=1; skylut.glsl):
+	/// the sky-view table (ORBITER_VK_SKY_LUT=0: off; skylut.glsl):
 	/// on; its sets (the sky pass's set 1, the table pass's), a stand-in set
 	bool SkyLutOn () const { return skyLutOn; }
 	static constexpr uint32_t SKY_LUT_W = 256, SKY_LUT_H = 128;
@@ -119,7 +119,7 @@ private:
 	VkPipelineLayout skyLayout = VK_NULL_HANDLE;
 	VkPipeline skyPipeline = VK_NULL_HANDLE;
 	VkPipeline veilPipeline = VK_NULL_HANDLE; // (the sky over bodies beyond the air)
-	bool skyLutOn = false;
+	bool skyLutOn = true;
 	VkDescriptorSetLayout skyLutSetLayout = VK_NULL_HANDLE, skyLutCompSetLayout = VK_NULL_HANDLE;
 	VkDescriptorPool skyLutPool = VK_NULL_HANDLE;
 	VkDescriptorSet skyLutNoneSet = VK_NULL_HANDLE;

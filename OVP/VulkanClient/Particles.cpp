@@ -619,11 +619,12 @@ bool ParticleSystem::Init (vkc::Context *c, TextureManager *tm, VkDescriptorSetL
 		gpi.pDynamicState = &dy;
 		gpi.layout = drawLayout;
 		VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &drawBlend));
-		// at half resolution (a look trade, ORBITER_VK_SPRITES_HALF=1): into
+		// at half resolution (ORBITER_VK_SPRITES_HALF=0: full, as before): into
 		// their own images (light; the transmittance multiplied in alpha,
 		// from 1; the reactive mask), single-sampled, no depth test (the
 		// shader's soft depth hides them behind surfaces); then composited
-		if (const char *e = getenv ("ORBITER_VK_SPRITES_HALF")) spritesHalf = atoi (e) != 0 && ctx->sceneSamples == VK_SAMPLE_COUNT_1_BIT;
+		if (const char *e = getenv ("ORBITER_VK_SPRITES_HALF")) spritesHalf = atoi (e) != 0;
+		spritesHalf = spritesHalf && ctx->sceneSamples == VK_SAMPLE_COUNT_1_BIT;
 		if (spritesHalf) {
 			const int32_t half = 1;
 			VkSpecializationMapEntry sme{ 0, 0, sizeof(half) };

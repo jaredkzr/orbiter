@@ -412,14 +412,14 @@ bool TileRenderer::Init (vkc::Context *c, TextureManager *texmgr, VkDescriptorSe
 	// 8 grit, 16 playa cracks, 32 far mottling, 64 surface detail, 128 city
 	// ground, 256 tracks, 512 night light points, 1024 water, 2048 local
 	// lights, 4096 aerial perspective, 8192 all of the terrain detail)
-	// (a look trade, ORBITER_VK_FAR_DETAIL=<m>: the terrain detail faded out
-	// where a pixel spans more than that much ground, gone at twice; 0: off)
-	struct { VkBool32 site; int32_t partsOff; float farCut; } spec{ VK_FALSE, 0, 0.0f };
+	// (ORBITER_VK_FAR_DETAIL=<m>: the terrain detail faded out where a pixel
+	// spans more than that much ground, gone at twice; 0: everywhere, as before)
+	struct { VkBool32 site; int32_t partsOff; float farCut; } spec{ VK_FALSE, 0, 0.25f };
 	if (const char *e = getenv ("ORBITER_VK_TILE_PARTS_OFF")) spec.partsOff = (int32_t)strtol (e, nullptr, 0);
 	if (const char *e = getenv ("ORBITER_VK_FAR_DETAIL")) spec.farCut = (float)atof (e);
 	VkSpecializationMapEntry smes[3] = { { 0, 0, sizeof (VkBool32) }, { 1, sizeof (VkBool32), sizeof (int32_t) }, { 2, sizeof (VkBool32) + sizeof (int32_t), sizeof (float) } };
 	VkSpecializationInfo pinfo{ 2, &smes[1], sizeof (spec), &spec };
-	if (spec.partsOff || spec.farCut > 0.0f) stages[1].pSpecializationInfo = &pinfo;
+	stages[1].pSpecializationInfo = &pinfo;
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &pipeline));
 
 	// the variant with the site-scale materials (F3): the same pipeline, SITE_MATERIALS = true

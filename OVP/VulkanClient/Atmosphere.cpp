@@ -367,7 +367,7 @@ bool AtmosphereRenderer::Init (vkc::Context *c, TextureManager *tm)
 	transmittancePipe = compute (spv_atm_transmittance_comp, spv_atm_transmittance_comp_size);
 	multiscatPipe = compute (spv_atm_multiscat_comp, spv_atm_multiscat_comp_size);
 
-	// the sky-view table (a look trade, ORBITER_VK_SKY_LUT=1): the sky pass's
+	// the sky-view table (ORBITER_VK_SKY_LUT=0: off, the march): the sky pass's
 	// set 1 (its light and transmittance; a stand-in where there is none),
 	// the table pass's images
 	if (const char *e = getenv ("ORBITER_VK_SKY_LUT")) skyLutOn = atoi (e) != 0;

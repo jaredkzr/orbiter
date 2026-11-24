@@ -368,12 +368,12 @@ private:
 	VkPipelineLayout blurLayout = VK_NULL_HANDLE;
 	VkPipeline thickPipe = VK_NULL_HANDLE, blurPipe = VK_NULL_HANDLE, screenCompPipe = VK_NULL_HANDLE;
 	VkPipeline drawBlend = VK_NULL_HANDLE; // (premultiplied; emissive: alpha 0)
-	// the sprites at half resolution (ORBITER_VK_SPRITES_HALF=1: a look
-	// trade, off by default): into images of their own, light and
+	// the sprites at half resolution (ORBITER_VK_SPRITES_HALF=0: at full
+	// resolution, as before): into images of their own, light and
 	// transmittance as the plumes' half-size pass (gpuparticle.frag HALF),
 	// composited over the scene by plume_comp.frag. rebindScene: the scene
 	// with the reactive mask bound again (Scene)
-	bool spritesHalf = false;
+	bool spritesHalf = true;
 	VkPipeline drawHalf = VK_NULL_HANDLE, sprCompPipe = VK_NULL_HANDLE;
 	VkPipelineLayout sprCompLayout = VK_NULL_HANDLE;
 	VkDescriptorSetLayout sprCompSetLayout = VK_NULL_HANDLE;
