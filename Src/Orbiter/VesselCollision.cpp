@@ -152,6 +152,7 @@ void VesselCollider::Resolve (double h)
 
 	// contacts between the hulls of each pair
 	std::vector<collision::HullRef> ha, hb;
+	std::vector<Vector> ca, cb;
 	std::vector<collision::Port> pa, pb;
 	std::vector<Vector> excl;
 	std::vector<bool> landed;
@@ -196,8 +197,6 @@ void VesselCollider::Resolve (double h)
 		auto Test = [&](VesselBase *X, const collision::HullRef &x, bool dynX, const Vector &cgX,
 		                VesselBase *Y, const collision::HullRef &y, bool dynY, const Vector &cgY) {
 			convex::Placed px{x.hull, x.R, x.pos - O, collision::SKIN}, py{y.hull, y.R, y.pos - O, collision::SKIN};
-			Vector cx (px.pos + mul (x.R, x.hull->centre)), cy (py.pos + mul (y.R, y.hull->centre));
-			if (cx.dist (cy) > x.hull->radius + y.hull->radius + 2.0*collision::SKIN + margin) return;
 			if (!convex::Collide (px, py, margin, mf)) return;
 			if (rel) {
 				// (released from each other: no contacts while any parts touch)
@@ -230,9 +229,16 @@ void VesselCollider::Resolve (double h)
 				owner.push_back (!dynX ? X : !dynY ? Y : nullptr);
 			}
 		};
-		for (const auto &x : ha)
-			for (const auto &y : hb)
-				Test (A, x, dynA, cgA, B, y, dynB, cgB);
+		// (the hulls' bounding spheres first: their centres relative to O once
+		// per pair of vessels, not for each pair of hulls)
+		ca.resize (ha.size()), cb.resize (hb.size());
+		for (size_t i = 0; i < ha.size(); i++) ca[i] = (ha[i].pos - O) + mul (ha[i].R, ha[i].hull->centre);
+		for (size_t j = 0; j < hb.size(); j++) cb[j] = (hb[j].pos - O) + mul (hb[j].R, hb[j].hull->centre);
+		for (size_t i = 0; i < ha.size(); i++)
+			for (size_t j = 0; j < hb.size(); j++) {
+				if (ca[i].dist (cb[j]) > ha[i].hull->radius + hb[j].hull->radius + 2.0*collision::SKIN + margin) continue;
+				Test (A, ha[i], dynA, cgA, B, hb[j], dynB, cgB);
+			}
 		if (rel && !touching) rel->clear = true; // (apart: they collide from now on)
 
 		// (two ports facing each other, docking refused - too fast, askew: their
