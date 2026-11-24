@@ -2685,6 +2685,19 @@ void Scene::FillFrameUniforms (void *pfu)
 
 void Scene::RenderPrepass ()
 {
+	// The scene's depth starts as the prepass's: its surfaces hidden behind
+	// nearer ones are not shaded (the terrain under the vessels, the far
+	// side of hills). The scene's vertices are placed exactly as the
+	// prepass's (invariant positions; the same transforms and meshes), so
+	// that what is seen passes its depth test as before. The cities'
+	// buildings are drawn into the prepass after the copy: those fading out
+	// are dithered in the colour pass, the ground behind seen between.
+	// (ORBITER_VK_DEPTH_REUSE=0: the scene's depth cleared, as before)
+	static const bool depthReuse = [] { const char *e = getenv ("ORBITER_VK_DEPTH_REUSE"); return !e || atoi (e) != 0; }();
+	bool reuse = depthReuse && ctx->sceneSamples == VK_SAMPLE_COUNT_1_BIT
+		&& ao->Extent ().width == ctx->RenderExtent ().width && ao->Extent ().height == ctx->RenderExtent ().height;
+	deferBuildings = reuse;
+	deferredBuildings.clear ();
 	// (planet surfaces were prepared before the shadow maps)
 	ao->BeginPrepass ();
 	for (auto &it : visuals) {
@@ -2698,6 +2711,27 @@ void Scene::RenderPrepass ()
 	objOwner = 0;
 	objVel[0] = objVel[1] = objVel[2] = 0.0f;
 	objGround = false;
+	deferBuildings = false;
+	if (reuse && ctx->CopySceneDepth (ao->DepthImage ()) && !deferredBuildings.empty ()) {
+		ao->ResumePrepass ();
+		VkCommandBuffer cmd = ctx->Cmd();
+		VkDescriptorSet fset = FrameSet ();
+		VkDescriptorSet tset = gc->TexMgr()->White()->set, ms = gc->TexMgr()->DefaultMapSet();
+		vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, buildPrepass);
+		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &fset, 0, nullptr);
+		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 1, 1, &tset, 0, nullptr);
+		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 3, 1, &ms, 0, nullptr);
+		for (const DeferredBuildings &d : deferredBuildings) {
+			VkBuffer vbs[2] = { d.vb, d.inst };
+			VkDeviceSize ofs[2] = { 0, d.instOfs };
+			vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 2, 1, &d.atmSet, 0, nullptr);
+			vkCmdBindVertexBuffers (cmd, 0, 2, vbs, ofs);
+			vkCmdBindIndexBuffer (cmd, d.ib, 0, VK_INDEX_TYPE_UINT16);
+			vkCmdPushConstants (cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(d.pr), d.pr);
+			vkCmdDrawIndexed (cmd, d.nIndex, d.count, d.firstIndex, 0, 0);
+		}
+	}
+	deferredBuildings.clear ();
 	ctx->EndTarget ();
 	ctx->GpuMark ("prepass");
 	if (ao->enabled && !rtl->Enabled () && !relOn) ao->Compute (proj[0], -proj[5]);
@@ -3347,6 +3381,14 @@ void Scene::DrawBuildings (VkBuffer vb, VkBuffer ib, uint32_t firstIndex, uint32
 	uint32_t count, RenderPass pass, const Mat4 &frameToView, VkDescriptorSet kit, float hour, bool base)
 {
 	if (!count || !nIndex || pass == RenderPass::Transparent) return;
+	if (pass == RenderPass::Depth && deferBuildings && !base) { // (RenderPrepass)
+		DeferredBuildings d{ vb, ib, inst, instOfs, firstIndex, nIndex, count, camAtmSet, {} };
+		frameToView.ToFloat (d.pr);
+		memcpy (d.pr + 16, objMotion, sizeof(objMotion));
+		d.pr[32] = 0.0f, d.pr[33] = 0.8f, d.pr[34] = 0.0f, d.pr[35] = 1.0f; // (pbr, as below)
+		deferredBuildings.push_back (d);
+		return;
+	}
 	VkCommandBuffer cmd = ctx->Cmd();
 	VkBuffer vbs[2] = { vb, inst };
 	VkDeviceSize ofs[2] = { 0, instOfs };

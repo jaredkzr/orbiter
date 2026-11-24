@@ -30,6 +30,8 @@ layout(location = 2) out vec4 vClip;
 layout(location = 3) out vec4 vPrevClip;
 layout(location = 4) out vec2 vUV;
 
+invariant gl_Position; // (the scene's depth starts as the prepass's: the same surfaces at the same depths, Scene::RenderPrepass)
+
 void main()
 {
 	vec3 p0 = (pp.modelView * vec4(inPos, 1.0)).xyz;

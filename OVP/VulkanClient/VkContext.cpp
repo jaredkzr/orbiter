@@ -639,7 +639,7 @@ bool Context::CreateSwapchain ()
 	ici.arrayLayers = 1;
 	ici.samples = sceneSamples; // the depth buffer belongs to the (multisampled) scene
 	ici.tiling = VK_IMAGE_TILING_OPTIMAL;
-	ici.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT; // (read by the upscaler)
+	ici.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT; // (read by the upscaler; PreloadSceneDepth)
 	VmaAllocationCreateInfo aci{};
 	aci.usage = VMA_MEMORY_USAGE_AUTO;
 	VK_CHECK(vmaCreateImage (allocator, &ici, &aci, &depth.image, &depth.alloc, nullptr));
@@ -1135,7 +1135,33 @@ void Context::BindTarget (const Target &t)
 	cur.extent = t.extent;
 }
 
-void Context::BindTargetsWithDepth (const Target *ts, uint32_t n, const Target &d, const float clearColor[4])
+bool Context::CopySceneDepth (VkImage src)
+{
+	if (!inFrame || sceneSamples != VK_SAMPLE_COUNT_1_BIT) return false;
+	EndTarget ();
+	VkCommandBuffer cmd = frames[frameIndex].cmd;
+	const VkPipelineStageFlags2 FT = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+	ImageBarrier (cmd, src, VK_IMAGE_ASPECT_DEPTH_BIT,
+		VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+		FT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+		VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
+	ImageBarrier (cmd, depth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT,
+		VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+	VkImageCopy cp{};
+	cp.srcSubresource = cp.dstSubresource = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1 };
+	cp.extent = { renderExtent.width, renderExtent.height, 1 };
+	vkCmdCopyImage (cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, depth.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cp);
+	ImageBarrier (cmd, depth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+		VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+		FT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
+	bbState |= BB_DEPTH; // (BindMain: loaded, not cleared)
+	return true;
+}
+
+void Context::BindTargetsWithDepth (const Target *ts, uint32_t n, const Target &d, const float clearColor[4], bool keepDepth, bool resume)
 {
 	EndTarget ();
 	VkCommandBuffer cmd = Rec ();
@@ -1143,26 +1169,27 @@ void Context::BindTargetsWithDepth (const Target *ts, uint32_t n, const Target &
 	VkRenderingAttachmentInfo color[4]{};
 	for (uint32_t i = 0; i < n; i++) {
 		ImageBarrier (cmd, ts[i].image, VK_IMAGE_ASPECT_COLOR_BIT,
-			VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+			resume ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
 			VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_SHADER_READ_BIT,
-			VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+			VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | (resume ? VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT : 0));
 		color[i].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
 		color[i].imageView = ts[i].view;
 		color[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-		color[i].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		color[i].loadOp = resume ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
 		color[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 		for (int k = 0; k < 4; k++) color[i].clearValue.color.float32[k] = clearColor[k];
 	}
 	ImageBarrier (cmd, d.image, VK_IMAGE_ASPECT_DEPTH_BIT,
-		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-		VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+		resume ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+		VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT | (resume ? VK_PIPELINE_STAGE_2_COPY_BIT : 0),
+		VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | (resume ? VK_ACCESS_2_TRANSFER_READ_BIT : 0),
 		VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
 		VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
 	VkRenderingAttachmentInfo dep{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
 	dep.imageView = d.view;
 	dep.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-	dep.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-	dep.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	dep.loadOp = resume ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+	dep.storeOp = keepDepth ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE;
 	dep.clearValue.depthStencil = { 0.0f, 0 }; // reversed z: far = 0
 	VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
 	ri.renderArea = { {0, 0}, ts[0].extent };

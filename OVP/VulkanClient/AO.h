@@ -33,6 +33,8 @@ public:
 
 	/// Bind the prepass targets (normal and depth, velocity, material; cleared)
 	void BeginPrepass ();
+	/// Bind them again, their contents kept (after Context::CopySceneDepth)
+	void ResumePrepass ();
 	/// Ambient occlusion from the prepass (fx, fy: projection factors)
 	void Compute (float fx, float fy);
 
@@ -44,6 +46,8 @@ public:
 	VkImageView VelocityView () const { return velocity.view; }
 	VkImageView MaterialView () const { return material.view; }
 	VkImage VelocityImage () const { return velocity.image; }
+	/// the prepass's depth buffer (depth attachment layout after the prepass)
+	VkImage DepthImage () const { return prepassDepth.image; }
 	VkExtent2D Extent () const { return extent; }
 
 	bool enabled = true;

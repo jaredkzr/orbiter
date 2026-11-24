@@ -447,6 +447,12 @@ private:
 	vkc::Buffer probeFrameUbo[vkc::FRAMES_IN_FLIGHT];
 	std::unique_ptr<class EnvProbe> probe;
 	bool inProbe = false, probeEnabled = true;
+	// the prepass's draws of the cities' buildings, kept until the scene's
+	// depth has been copied from it (RenderPrepass: the buildings fading
+	// out are dithered in the colour pass, whole in the prepass)
+	struct DeferredBuildings { VkBuffer vb, ib, inst; VkDeviceSize instOfs; uint32_t firstIndex, nIndex, count; VkDescriptorSet atmSet; float pr[40]; };
+	std::vector<DeferredBuildings> deferredBuildings;
+	bool deferBuildings = false;
 	double softSunRadius = 0.0; // C3: angular radius of the light's apparent source under an overcast (0: none; the RT sun cone)
 	int probeFace = 0, probeFacesDone = 0;
 	OBJHANDLE probeTarget = nullptr;
