@@ -1524,8 +1524,25 @@ uint32_t PlanetSurface::Select (Node *n, bool &covered)
 	// joins the levels)
 	n->vessel = -1;
 	double dv = 1e30;
+	// (a vessel matters to this tile only within the distance that would split
+	// it, or nearer than the camera to its points (the morph from the nearest
+	// of the two): those farther, by a chord bound below LowerDist, are left
+	// out by their direction alone - 50 vessels on the ground had cost 5 ms)
+	double cosLim = -2.0;
+	if (!fromVessels.empty ()) {
+		double rad = n->angRadius * (radius + std::max (emax, 0.0)) + std::max (-emin, emax) + 100.0;
+		double drel = std::max (size * ppr / splitEff, length (camLocal - n->centre) + rad);
+		double m = std::min (vesselRmin, radius + emin);
+		double s = m > 0.0 ? drel / (2.0 * m) : 2.0;
+		if (s < 1.0) {
+			double glim = 2.0 * asin (s) + n->angRadius;
+			if (glim < PI) cosLim = cos (glim);
+		}
+	}
 	for (size_t i = 0; i < fromVessels.size(); i++) {
-		double d = LowerDist (n, fromVessels[i], dotp (n->centre, fromVessels[i].u) / radius, emin, emax);
+		double cang = dotp (n->centre, fromVessels[i].u) / radius;
+		if (cang <= cosLim) continue;
+		double d = LowerDist (n, fromVessels[i], cang, emin, emax);
 		if (d < dv) dv = d, n->vessel = (int)i;
 	}
 	// (down to tiles of 10 m (groundTile; coarser for a camera farther
@@ -1651,7 +1668,8 @@ void PlanetSurface::Prepare ()
 	fromCam = MakeFrom (camLocal);
 	horizon = camDist > radius ? acos (radius / camDist) + acos (radius / (radius + maxElev + 1.0)) : -1.0;
 	fromVessels.clear ();
-	for (const VECTOR3 &v : groundVessels) fromVessels.push_back (MakeFrom (v));
+	vesselRmin = 1e30;
+	for (const VECTOR3 &v : groundVessels) fromVessels.push_back (MakeFrom (v)), vesselRmin = std::min (vesselRmin, length (v));
 	drawList.clear ();
 	buildList.clear ();
 	frameTime = std::chrono::duration<double> (std::chrono::steady_clock::now ().time_since_epoch ()).count ();
@@ -2301,28 +2319,25 @@ VkTexture *PlanetSurface::TexFor (const Node *n, VkTexture *Node::*member, float
 void PlanetSurface::DrawNode (Node *n, bool prepass)
 {
 	if (!n->vbuf.buffer) return; // (its mesh not made yet: a number per frame)
-	// texture: the tile's own, or the matching part of the nearest ancestor's
-	auto texFor = [n](VkTexture *Node::*member, float uv[4]) { return TexFor (n, member, uv); };
 	TilePushConstants pc{};
-	VkTexture *surf = texFor (&Node::surf, pc.surfUV);
+	if (!n->dc) n->dc = std::make_unique<Node::DrawCache> ();
+	Node::DrawCache &dc = *n->dc;
+	if (dc.frame != frame) { // (the first pass this frame: the values all passes share)
+		dc.frame = frame;
+		DrawCacheFill (n, dc);
+	}
+	VkTexture *surf = dc.surf, *mask = dc.mask;
 	if (!surf) return;
-	VkTexture *mask = layers->mask ? texFor (&Node::mask, pc.maskUV) : nullptr;
-	pc.params[0] = mask ? 1.0f : 0.0f;
+	memcpy (pc.surfUV, dc.surfUV, sizeof(pc.surfUV));
+	memcpy (pc.maskUV, dc.maskUV, sizeof(pc.maskUV));
+	memcpy (pc.morph, dc.morph, sizeof(pc.morph));
+	memcpy (pc.refI, dc.refI, sizeof(pc.refI));
+	memcpy (pc.refF, dc.refF, sizeof(pc.refF));
+	memcpy (pc.refRel, dc.refRel, sizeof(pc.refRel));
+	pc.params[0] = dc.hasMask ? 1.0f : 0.0f;
 	pc.params[1] = clouds ? layerAlpha : 1.0f; // (night lights' scale; a cloud layer's opacity)
 	pc.params[2] = clouds ? 1.0f : 0.0f;
 	pc.params[3] = clouds ? scene->CloudFadeRadius () : 0.0f; // volumetric clouds take over within
-	if (n->parent && !clouds) {
-		// morph to the parent's shape between 0.7 and 0.9 times the distance
-		// at which the parent is no longer split (where coarser neighbours
-		// begin; finer ones end within 0.7), from the camera or the nearest
-		// vessel on the ground (whichever is closer)
-		// (by the size the split goes by: near a pole, a sliver's length would
-		// put the morph far beyond its coarser neighbours, leaving cracks)
-		double D = SplitSize (n->parent) * n->parent->pixPerRad / splitEff;
-		pc.morph[0] = (float)(0.7 * D);
-		pc.morph[1] = (float)(1.0 / (0.2 * D));
-	}
-	if (!mask) mask = texmgr->White ();
 
 	// (compact vertices: relative to the centre moved by vorg)
 	const bool cmp = Compact ();
@@ -2330,18 +2345,7 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 	Mat4 mv = scene->ModelView (ppos + mul (prot, org), prot);
 	if (cmp) pc.tracks[2] = n->vscale;
 	mv.ToFloat (pc.modelView);
-	// (a moon in its planet's shadow: the share of the sun's disc seen from the tile)
-	pc.morph[2] = prepass ? 1.0f : (float)scene->SunVisibility (ppos + mul (prot, n->centre), hPlanet);
-	pc.morph[3] = detail && !clouds ? (float)detailPrm.pebbles : 0.0f; // (the pebbles shaded per pixel)
-	if (detail && !clouds) { // (the detail's reference point, single precision: terraindetail.glsl)
-		SplitPoint (n->centre, pc.refI, pc.refF);
-		pc.refF[3] = (float)radius;
-		const Node *es = ElevSource (n);
-		double h0 = es ? 0.5 * (es->elev->emin + es->elev->emax) : 0.0;
-		VECTOR3 rel = n->centre * ((radius + h0) / radius) - camLocal;
-		pc.refRel[0] = (float)rel.x, pc.refRel[1] = (float)rel.y, pc.refRel[2] = (float)rel.z;
-		pc.refRel[3] = (float)(radius + h0);
-	}
+	if (prepass) pc.morph[2] = 1.0f;
 	if (!prepass && !clouds && !scene->InProbe ())
 		if (GroundTracks *gt = scene->Tracks ()) gt->ForTile (hPlanet, ppos, prot, n->centre / radius, n->angRadius, pc.tracks);
 	if (pc.morph[1] > 0.0f && n->vessel >= 0 && n->vessel < (int)groundVessels.size()) {
@@ -2387,4 +2391,44 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 		const TileRenderer::Grid &g = tr->Thinned (n->cols, n->decR, n->decQ);
 		vkCmdDrawIndexed (cmd, clouds ? g.gridCount : g.count, 1, g.first, 0, 0);
 	}
+}
+
+void PlanetSurface::DrawCacheFill (Node *n, Node::DrawCache &dc)
+{
+	// texture: the tile's own, or the matching part of the nearest ancestor's
+	auto texFor = [n](VkTexture *Node::*member, float uv[4]) { return TexFor (n, member, uv); };
+	TilePushConstants pc{};
+	dc.surf = texFor (&Node::surf, pc.surfUV);
+	VkTexture *mask = layers->mask ? texFor (&Node::mask, pc.maskUV) : nullptr;
+	dc.hasMask = mask != nullptr;
+	if (n->parent && !clouds) {
+		// morph to the parent's shape between 0.7 and 0.9 times the distance
+		// at which the parent is no longer split (where coarser neighbours
+		// begin; finer ones end within 0.7), from the camera or the nearest
+		// vessel on the ground (whichever is closer)
+		// (by the size the split goes by: near a pole, a sliver's length would
+		// put the morph far beyond its coarser neighbours, leaving cracks)
+		double D = SplitSize (n->parent) * n->parent->pixPerRad / splitEff;
+		pc.morph[0] = (float)(0.7 * D);
+		pc.morph[1] = (float)(1.0 / (0.2 * D));
+	}
+	dc.mask = mask ? mask : texmgr->White ();
+	// (a moon in its planet's shadow: the share of the sun's disc seen from the tile)
+	pc.morph[2] = (float)scene->SunVisibility (ppos + mul (prot, n->centre), hPlanet);
+	pc.morph[3] = detail && !clouds ? (float)detailPrm.pebbles : 0.0f; // (the pebbles shaded per pixel)
+	if (detail && !clouds) { // (the detail's reference point, single precision: terraindetail.glsl)
+		SplitPoint (n->centre, pc.refI, pc.refF);
+		pc.refF[3] = (float)radius;
+		const Node *es = ElevSource (n);
+		double h0 = es ? 0.5 * (es->elev->emin + es->elev->emax) : 0.0;
+		VECTOR3 rel = n->centre * ((radius + h0) / radius) - camLocal;
+		pc.refRel[0] = (float)rel.x, pc.refRel[1] = (float)rel.y, pc.refRel[2] = (float)rel.z;
+		pc.refRel[3] = (float)(radius + h0);
+	}
+	memcpy (dc.surfUV, pc.surfUV, sizeof(pc.surfUV));
+	memcpy (dc.maskUV, pc.maskUV, sizeof(pc.maskUV));
+	memcpy (dc.morph, pc.morph, sizeof(pc.morph));
+	memcpy (dc.refI, pc.refI, sizeof(pc.refI));
+	memcpy (dc.refF, pc.refF, sizeof(pc.refF));
+	memcpy (dc.refRel, pc.refRel, sizeof(pc.refRel));
 }

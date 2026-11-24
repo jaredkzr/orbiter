@@ -210,6 +210,16 @@ private:
 		float decErr[6] = { 1e30f, 1e30f, 1e30f, 1e30f, 1e30f, 1e30f };
 		VkTexture *surf = nullptr, *mask = nullptr;
 		uint32_t texBytes = 0; // (their size: Retain's budget)
+		/// DrawNode's per-tile values, the same in all of a frame's passes
+		/// (prepass, probe, colour): worked out once a frame
+		struct DrawCache {
+			uint64_t frame = ~0ull;
+			VkTexture *surf = nullptr, *mask = nullptr; // (mask: white if none)
+			bool hasMask = false;
+			float surfUV[4], maskUV[4], morph[4], refF[4], refRel[4];
+			int32_t refI[4];
+		};
+		std::unique_ptr<DrawCache> dc;
 		std::shared_ptr<const ElevGrid> elev; // (shared with mesh jobs in the background)
 		uint8_t surfState = 0, maskState = 0, elevState = 0; // 0: unknown, 1: requested, 2: loaded, 3: missing
 		vkc::Buffer vbuf;
@@ -366,6 +376,7 @@ private:
 	/// texture of a tile: its own, or the matching part (uv: offset, scale) of its nearest ancestor's
 	static VkTexture *TexFor (const Node *n, VkTexture *Node::*member, float uv[4]);
 	void DrawNode (Node *n, bool prepass = false);
+	void DrawCacheFill (Node *n, Node::DrawCache &dc);
 	/// all drawn tiles into the ray tracing scene, in clusters (with those
 	/// out of view: they cast shadows into it)
 	void AddRTClusters (Node *n, class RTScene *rt, bool churn = false);
@@ -424,6 +435,7 @@ private:
 	double LowerDist (const Node *n, const From &f, double cang, double emin, double emax) const;
 	From fromCam;
 	std::vector<From> fromVessels;
+	double vesselRmin = 0.0; // [m] the nearest of them to the planet's centre (Select's chord bound)
 	double horizon = 0.0; // [rad] beyond which tiles are hidden (with the highest mountains); <0: none
 	std::vector<VECTOR3> groundVessels; // positions of vessels near the ground, planet frame (finest tiles under them)
 	std::vector<double> groundTile;     // [m] the finest tile under each (by the camera's distance)
