@@ -149,7 +149,7 @@ void RTScene::Shutdown ()
 {
 	if (!ctx) return;
 	if (active == this) active = nullptr;
-	vkDeviceWaitIdle (ctx->device);
+	ctx->WaitIdle ();
 	for (auto &it : blas) {
 		ctx->rt.destroyAS (ctx->device, it.second.as, nullptr);
 		ctx->DestroyBuffer (it.second.buf);
@@ -348,6 +348,8 @@ void RTScene::Add (uint64_t key, const Part *parts, const float (*offsets)[3], u
 		dai.accelerationStructure = b.as;
 		b.addr = ctx->rt.asAddress (ctx->device, &dai);
 		b.geomVersion = vhash;
+		vkc::Stats ().blas++;
+		for (uint32_t np : bb.nPrim) vkc::Stats ().blasTris += np;
 		builds.push_back (std::move (bb));
 	}
 	b.lastUse = frameCount;

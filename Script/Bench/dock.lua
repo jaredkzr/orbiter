@@ -8,6 +8,7 @@ local tsw = tonumber(os.getenv("BENCH_SWITCH") or "30")
 proc.wait_simdt(2)
 v:undock(0)
 local t0 = oapi.get_simtime()
+oapi.write_log(string.format("bench: measure at %.3f", oapi.get_simtime()))
 -- (back away first; then each pair of opposite groups in turn, so that the
 -- shuttle stays near the station)
 local seq = {
@@ -22,7 +23,7 @@ while true do
 	if T >= tend then break end
 	if not switched and T >= tsw then
 		oapi.set_cameramode({mode='track', trackmode='locked', reldist=1.4, phi=2.4, tht=0.3}) -- (reldist: in the shuttle's size)
-		oapi.write_log(string.format("bench: camera outside at T+%.1f", T))
+		oapi.write_log(string.format("bench: camera outside at %.3f", oapi.get_simtime())) -- (T+ in the sim time: event windows, analyze.py -e)
 		switched = true
 	end
 	if oapi.get_simtime() >= tNext then

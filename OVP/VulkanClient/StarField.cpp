@@ -319,7 +319,7 @@ void StarField::CreatePipelines (const GalaxySky &sky)
 void StarField::Shutdown ()
 {
 	if (!ctx) return;
-	vkDeviceWaitIdle (ctx->device);
+	ctx->WaitIdle ();
 	vkDestroyPipeline (ctx->device, selectPipe, nullptr);
 	vkDestroyPipeline (ctx->device, genPipe, nullptr);
 	vkDestroyPipeline (ctx->device, drawPipe, nullptr);

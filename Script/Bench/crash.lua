@@ -41,6 +41,7 @@ local cam = {mode="ground", ref="Earth", lng=math.deg(ce.lng), lat=math.deg(ce.l
 oapi.set_cameramode(cam)
 oapi.set_cameraaperture(math.rad(40) / 2)
 local t0 = oapi.get_simtime()
+oapi.write_log(string.format("bench: measure at %.3f", oapi.get_simtime()))
 local after = tonumber(os.getenv("BENCH_AFTER") or "12")
 local crashT, wet = nil, false
 while true do

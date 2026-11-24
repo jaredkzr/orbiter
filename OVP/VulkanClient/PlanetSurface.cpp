@@ -733,6 +733,7 @@ PlanetSurface::Node *PlanetSurface::NewNode (int lvl, int ilat, int ilng, Node *
 {
 	Node *n = new Node;
 	dbgNew++;
+	vkc::Stats ().tilesNew++;
 	n->lvl = lvl, n->ilat = ilat, n->ilng = ilng;
 	n->parent = parent;
 	int nlat = 1 << (lvl - 4), nlng = 2 << (lvl - 4);
@@ -778,6 +779,7 @@ void PlanetSurface::FreeNode (Node *n)
 		n->vbuf = vkc::Buffer();
 		nMeshes--;
 		dbgFreed++;
+		vkc::Stats ().tilesFreed++;
 		RTForgetGeometry (n->rtId);
 		n->rtId = 0;
 	}
@@ -1096,9 +1098,7 @@ void PlanetSurface::ApplyMesh (Node *n, MeshData &md)
 void PlanetSurface::EnsureVertexBuffer (Node *n)
 {
 	if (n->vbuf.buffer) return;
-	const int V = TileRenderer::GRID + 1;
-	const size_t nv = (size_t)V * V + 4 * V;
-	VkDeviceSize size = nv * (sizeof(NTVERTEX) + 6 * sizeof(float));
+	VkDeviceSize size = MeshBytes ();
 	nMeshes++;
 	n->vbuf = ctx->CreateBuffer (size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
 		(ctx->rayTracing ? VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR : 0) |
@@ -1446,6 +1446,9 @@ void PlanetSurface::Prepare ()
 	// selection is kept; it had filled the video memory within a minute)
 	size_t budget = drawList.size () + std::max<size_t> (MESH_SPARE, drawList.size () / 2);
 	for (auto &r : root) PruneChildren (r.get(), nMeshes > budget ? 1 : PRUNE_FRAMES);
+	vkc::Stats ().tilesDrawn += (uint32_t)drawList.size ();
+	vkc::Stats ().tileMeshes += (uint32_t)nMeshes;
+	vkc::Stats ().tileBytes += (uint64_t)nMeshes * MeshBytes ();
 
 	static const bool profileTree = getenv ("ORBITER_VK_PROFILE") && atoi (getenv ("ORBITER_VK_PROFILE"));
 	if (profileTree && frame % 100 == 0) { // (what the tile tree holds)
@@ -1565,6 +1568,7 @@ void PlanetSurface::Prepare ()
 		for (size_t i = 0; i < plain.size(); i++) ApplyMesh (plain[i].n, out[i]);
 		meshTime += std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ();
 		meshCount += (int)plain.size();
+		vkc::Stats ().meshPlain += (uint32_t)plain.size ();
 	}
 	if (!jobs.empty() && gpu) {
 		// the inputs per grid point (worker threads), then one dispatch
@@ -1679,6 +1683,7 @@ void PlanetSurface::Prepare ()
 		vkCmdPipelineBarrier2 (cmd, &dep);
 		meshTime += std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ();
 		meshCount += (int)jobs.size();
+		vkc::Stats ().meshGpu += (uint32_t)jobs.size ();
 	} else if (!jobs.empty()) {
 		// (the core's terrain detail initialises itself on first use: here)
 		oapiSurfaceDetail (hPlanet, 0.0, 0.0, 0.0, 100.0, 0.0, 0.0);
@@ -1688,6 +1693,7 @@ void PlanetSurface::Prepare ()
 		for (size_t i = 0; i < jobs.size(); i++) ApplyMesh (jobs[i].first, out[i]);
 		meshTime += std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ();
 		meshCount += (int)jobs.size();
+		vkc::Stats ().meshPlain += (uint32_t)jobs.size ();
 	}
 	// (ORBITER_VK_TILE_DEBUG: the deepest tiles drawn and the deepest surface
 	// and elevation data among them)
@@ -2039,6 +2045,7 @@ void PlanetSurface::DrawNode (Node *n, bool prepass)
 	}
 	VkDescriptorSet sets[2] = { surf->set, mask->set };
 	vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tr->Layout(), 1, 2, sets, 0, nullptr);
+	if (!scene->InProbe ()) vkc::Stats ().tileDraws++;
 	if (detail && !clouds && n->detailSpacing > 0.0f) {
 		pc.detail[0] = n->detailSpacing;
 		pc.detail[1] = n->detailLmesh;

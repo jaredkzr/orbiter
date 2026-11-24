@@ -125,7 +125,7 @@ bool EnvProbe::Init (vkc::Context *c)
 void EnvProbe::Shutdown ()
 {
 	if (!ctx) return;
-	vkDeviceWaitIdle (ctx->device);
+	ctx->WaitIdle ();
 	vkDestroyPipeline (ctx->device, pipe, nullptr);
 	vkDestroyPipelineLayout (ctx->device, layout, nullptr);
 	vkDestroyDescriptorPool (ctx->device, pool, nullptr);

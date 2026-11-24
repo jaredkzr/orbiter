@@ -24,6 +24,22 @@ namespace vkc {
 
 static VmaAllocator g_allocator = VK_NULL_HANDLE; // (for the report of Check)
 
+FrameStats &Stats ()
+{
+	static FrameStats s;
+	return s;
+}
+
+// (VMA's device memory blocks: the frame-time log's counters)
+static void VKAPI_PTR OnDeviceAlloc (VmaAllocator, uint32_t, VkDeviceMemory, VkDeviceSize size, void*)
+{
+	Stats ().memNew++, Stats ().memNewBytes += size;
+}
+static void VKAPI_PTR OnDeviceFree (VmaAllocator, uint32_t, VkDeviceMemory, VkDeviceSize, void*)
+{
+	Stats ().memFree++;
+}
+
 // ORBITER_VK_MEMLOG=1: the live buffers by where they were made (three
 // callers up; module + offset, for addr2line), logged with the heaps
 namespace memlog {
@@ -94,8 +110,9 @@ void LogHeaps ()
 	const VkPhysicalDeviceMemoryProperties *mp;
 	vmaGetMemoryProperties (g_allocator, &mp);
 	for (uint32_t i = 0; i < mp->memoryHeapCount; i++)
-		oapiWriteLogV ("VulkanClient: heap %u: %u allocations, %llu MB in blocks, %llu MB used (driver: %llu of %llu MB)", i, b[i].statistics.allocationCount,
-			(unsigned long long)(b[i].statistics.blockBytes >> 20), (unsigned long long)(b[i].usage >> 20),
+		// (usage and budget: the driver's with VK_EXT_memory_budget, else VMA's estimate)
+		oapiWriteLogV ("VulkanClient: heap %u: %u allocations, %llu MB allocated, %llu MB in blocks (process use %llu of a budget of %llu MB)", i, b[i].statistics.allocationCount,
+			(unsigned long long)(b[i].statistics.allocationBytes >> 20), (unsigned long long)(b[i].statistics.blockBytes >> 20),
 			(unsigned long long)(b[i].usage >> 20), (unsigned long long)(b[i].budget >> 20));
 	memlog::Log ();
 }
@@ -393,6 +410,9 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 	std::vector<const char*> devExt;
 	if (!offscreen) devExt.push_back (VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 	if (coherent && sCoh.deviceCoherentMemory) devExt.push_back (VK_AMD_DEVICE_COHERENT_MEMORY_EXTENSION_NAME);
+	// (the driver's heap use and budget: the frame-time log, the terrain's memory budget)
+	memoryBudget = hasExt (VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+	if (memoryBudget) devExt.push_back (VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
 	if (derivatives) devExt.push_back (VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME);
 	if (coopMatrix) devExt.push_back (VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
 #ifdef VK_EXT_SHADER_FLOAT8_EXTENSION_NAME
@@ -455,6 +475,10 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 		oapiWriteLogV ("VulkanClient: memory heap %u: %llu MB, limit %llu MB", i, (unsigned long long)(sz >> 20), (unsigned long long)(heapLimit[i] >> 20));
 	}
 	aci.pHeapSizeLimit = heapLimit.data();
+	if (memoryBudget) aci.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
+	oapiWriteLogV ("VulkanClient: memory budget from the driver (VK_EXT_memory_budget): %s", memoryBudget ? "yes" : "no (VMA's estimate)");
+	static const VmaDeviceMemoryCallbacks memCb = { OnDeviceAlloc, OnDeviceFree, nullptr };
+	aci.pDeviceMemoryCallbacks = &memCb;
 	VK_CHECK(vmaCreateAllocator (&aci, &allocator));
 	g_allocator = allocator;
 
@@ -497,7 +521,7 @@ void Context::Drain ()
 {
 	if (!device) return;
 	SubmitPending ();
-	vkDeviceWaitIdle (device);
+	WaitIdle ();
 	for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) FlushDeferred (i);
 }
 
@@ -727,7 +751,7 @@ void Context::SetRenderScale (float scale)
 
 bool Context::RecreateSwapchain ()
 {
-	vkDeviceWaitIdle (device);
+	WaitIdle ();
 	DestroySwapchain ();
 	swapchainDirty = false;
 	return CreateSwapchain ();
@@ -861,6 +885,7 @@ void Context::ReadTimestamps (Frame &f)
 		uint64_t t[MAX_MARKS];
 		if (vkGetQueryPoolResults (device, f.queries, 0, n, sizeof(t), t, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
 			lastMarks.clear ();
+			lastMarksSerial = f.serial;
 			for (uint32_t i = 1; i < n; i++) {
 				double ms = (double)(t[i] - t[i-1]) * timestampPeriod * 1e-6;
 				lastMarks.push_back ({ f.marks[i], ms });
@@ -1357,8 +1382,13 @@ void Context::EndFrame ()
 	vkResetFences (device, 1, &f.inFlight);
 	VK_CHECK(vkQueueSubmit2 (queue, 1, &si, f.inFlight));
 
+	f.serial = ++frameSerial;
+	// (VMA refreshes the driver's heap budgets on a new frame index: every 10 frames)
+	if (frameSerial % 10 == 0) vmaSetCurrentFrameIndex (allocator, (uint32_t)(frameSerial / 10));
 	if (capture.buffer) {
+		auto tc = std::chrono::steady_clock::now ();
 		vkWaitForFences (device, 1, &f.inFlight, VK_TRUE, UINT64_MAX);
+		AddIdleWait (std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - tc).count ());
 		vmaInvalidateAllocation (allocator, capture.alloc, 0, VK_WHOLE_SIZE);
 		CaptureFunc cb = std::move (captureCb);
 		captureCb = nullptr;
@@ -1411,6 +1441,7 @@ void Context::SubmitPending ()
 	si.pSignalSemaphoreInfos = &signal;
 	vkResetFences (device, 1, &f.inFlight);
 	VK_CHECK(vkQueueSubmit2 (queue, 1, &si, f.inFlight));
+	f.serial = frameSerial;
 	frameIndex = (frameIndex + 1) % FRAMES_IN_FLIGHT;
 }
 
@@ -1438,6 +1469,7 @@ void Context::Share (VkImageCreateInfo &ici) const
 void Context::FlushDeferred (uint32_t frame)
 {
 	auto &list = frames[frame].deferred;
+	Stats ().deferred += (uint32_t)list.size ();
 	for (auto &fn : list) fn();
 	list.clear();
 }
@@ -1471,6 +1503,7 @@ Buffer Context::CreateBuffer (VkDeviceSize size, VkBufferUsageFlags usage, bool 
 	VK_CHECK(vmaCreateBuffer (allocator, &bci, &aci, &buf.buffer, &buf.alloc, &info));
 	buf.mapped = info.pMappedData;
 	memlog::Add (buf.buffer, size);
+	Stats ().bufNew++;
 	return buf;
 }
 
@@ -1502,7 +1535,7 @@ VkDeviceAddress Context::BufferAddress (VkBuffer buf) const
 void Context::DestroyBuffer (Buffer &buf)
 {
 	memlog::Remove (buf.buffer);
-	if (buf.buffer) vmaDestroyBuffer (allocator, buf.buffer, buf.alloc);
+	if (buf.buffer) vmaDestroyBuffer (allocator, buf.buffer, buf.alloc), Stats ().bufFree++;
 	buf = Buffer();
 }
 
@@ -1545,8 +1578,44 @@ void Context::ImmediateSubmit (const std::function<void(VkCommandBuffer)> &recor
 	si.commandBufferInfoCount = 1;
 	si.pCommandBufferInfos = &cbi;
 	VK_CHECK(vkQueueSubmit2 (queue, 1, &si, VK_NULL_HANDLE));
+	auto t0 = std::chrono::steady_clock::now ();
 	vkQueueWaitIdle (queue);
+	AddIdleWait (std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ());
+	Stats ().immediate++;
 	vkFreeCommandBuffers (device, uploadPool, 1, &cmd);
+}
+
+void Context::WaitIdle ()
+{
+	auto t0 = std::chrono::steady_clock::now ();
+	vkDeviceWaitIdle (device);
+	AddIdleWait (std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now () - t0).count ());
+}
+
+bool Context::HeapBudget (uint64_t &usage, uint64_t &budget, int heap) const
+{
+	usage = budget = 0;
+	if (!allocator) return false;
+	VmaBudget b[VK_MAX_MEMORY_HEAPS];
+	vmaGetHeapBudgets (allocator, b);
+	const VkPhysicalDeviceMemoryProperties *mp;
+	vmaGetMemoryProperties (allocator, &mp);
+	if (heap < 0) {
+		// (the largest device-local heap)
+		VkDeviceSize best = 0;
+		for (uint32_t i = 0; i < mp->memoryHeapCount; i++)
+			if ((mp->memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) && mp->memoryHeaps[i].size > best)
+				best = mp->memoryHeaps[i].size, heap = (int)i;
+		if (heap < 0) heap = 0;
+	}
+	if (heap >= (int)mp->memoryHeapCount) return false;
+	usage = b[heap].usage, budget = b[heap].budget;
+	return true;
+}
+
+double Context::CpuClock () const
+{
+	return NowMs () - waitTotal;
 }
 
 VkShaderModule Context::CreateShaderModule (const unsigned char *code, size_t size)

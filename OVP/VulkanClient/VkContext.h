@@ -29,6 +29,29 @@ namespace vkc {
 
 	constexpr uint32_t FRAMES_IN_FLIGHT = 2;
 
+	/// Per-frame workload counters for the frame-time log (ORBITER_VK_FRAMETIMES,
+	/// "@n"): incremented where the work is done, written and cleared once a
+	/// frame (VulkanClient::clbkDisplayFrame). Main thread only.
+	struct FrameStats {
+		uint32_t idleWaits = 0;   // the CPU waited for the GPU to go idle (vkDeviceWaitIdle, ImmediateSubmit, captures)
+		double idleMs = 0.0;      // [ms] time in them (also in the frame's wait)
+		uint32_t immediate = 0;   // ImmediateSubmit calls (each drains the queue)
+		uint32_t bufNew = 0, bufFree = 0, imgNew = 0; // VMA buffers and images made, buffers destroyed
+		uint32_t memNew = 0, memFree = 0; // device memory blocks allocated and freed (VMA)
+		uint64_t memNewBytes = 0;
+		uint32_t deferred = 0;    // deferred destroys run
+		uint32_t texUploads = 0;  // textures made (uploads)
+		uint32_t blas = 0;        // ray tracing bottom-level structures built
+		uint64_t blasTris = 0;    // their triangles
+		uint32_t tilesDrawn = 0, tilesNew = 0, tilesFreed = 0; // terrain tiles (all planets and cloud layers)
+		uint32_t meshPlain = 0, meshGpu = 0; // terrain meshes made on the CPU, on the GPU
+		uint32_t meshApplied = 0, meshPending = 0; // asynchronous meshes applied this frame, still being made
+		uint32_t tileMeshes = 0;  // tiles holding a mesh
+		uint64_t tileBytes = 0;   // their vertex buffers [bytes]
+		uint32_t tileDraws = 0;   // terrain tile draw calls (main pass)
+	};
+	FrameStats &Stats ();
+
 	struct Buffer {
 		VkBuffer buffer = VK_NULL_HANDLE;
 		VmaAllocation alloc = VK_NULL_HANDLE;
@@ -165,6 +188,17 @@ namespace vkc {
 
 		/// Record and execute a command buffer, waiting for completion (resource uploads)
 		void ImmediateSubmit (const std::function<void(VkCommandBuffer)> &record);
+		/// vkDeviceWaitIdle, counted as a wait on the GPU (the frame-time log)
+		void WaitIdle ();
+		/// the device memory heaps' use and budget [bytes] (VK_EXT_memory_budget
+		/// where the device has it, else VMA's estimate); heap: the device-local
+		/// one (-1) or an index. False without an allocator
+		bool HeapBudget (uint64_t &usage, uint64_t &budget, int heap = -1) const;
+		bool MemoryBudgetExt () const { return memoryBudget; }
+		/// the number of frames submitted (EndFrame), and that of the frame
+		/// whose GPU times LastGpuTimes holds
+		uint64_t FrameSerial () const { return frameSerial; }
+		uint64_t LastGpuSerial () const { return lastMarksSerial; }
 
 		/// Destroy a resource once the GPU no longer uses it
 		void DeferDestroy (std::function<void()> fn);
@@ -195,6 +229,8 @@ namespace vkc {
 		const std::vector<std::pair<const char*, double>> &CpuTimes () const { return cpuMarks; }
 		void ClearCpuTimes () { cpuMarks.clear (); }
 		double WaitTotal () const { return waitTotal; } // [ms] all waits on the GPU so far
+		/// [ms] a steady clock less the waits on the GPU: differences are CPU time
+		double CpuClock () const;
 		/// The device for logs: name, driver and its version, as key="value" pairs
 		std::string DeviceStamp () const;
 
@@ -258,7 +294,10 @@ namespace vkc {
 			VkDeviceSize transientUsed = 0;
 			VkQueryPool queries = VK_NULL_HANDLE; // timestamps (profiling)
 			std::vector<const char*> marks;
+			uint64_t serial = 0;  // FrameSerial of the frame submitted in it
 		} frames[FRAMES_IN_FLIGHT];
+		uint64_t frameSerial = 0, lastMarksSerial = 0;
+		bool memoryBudget = false; // VK_EXT_memory_budget enabled
 		static constexpr uint32_t MAX_MARKS = 64;
 		bool profiling = false;
 		double fenceWait = 0.0; // [ms]
@@ -266,6 +305,7 @@ namespace vkc {
 		double cpuLast = 0.0, cpuLastWait = 0.0; // [ms] the last CPU mark: steady clock, waitTotal
 		std::vector<std::pair<const char*, double>> cpuMarks; // [ms]
 		void AddWait (double ms) { fenceWait += ms; waitTotal += ms; }
+		void AddIdleWait (double ms) { AddWait (ms); Stats ().idleWaits++; Stats ().idleMs += ms; }
 		double timestampPeriod = 1.0; // [ns]
 		uint32_t profFrames = 0;
 		std::vector<std::pair<const char*, double>> profSum; // [ms], in order of first appearance

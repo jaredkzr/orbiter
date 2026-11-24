@@ -35,6 +35,7 @@ local ri = oapi.reltrip_info(hv)
 log(string.format("%s: plan ok %s, %.4g h (ship %.4g h), vmax %.4f c", tgt, tostring(ri.ok), ri.time / 3600, ri.shiptime / 3600, ri.vmax / 299792458))
 t0, tw = oapi.get_simtime(), oapi.get_systime()
 oapi.reltrip_engage(hv, true)
+oapi.write_log(string.format("bench: measure at %.3f", oapi.get_simtime()))
 local lastph, warped, tlast = "", false, tw
 local wallmax = tonumber(os.getenv("TRIP_WALLMAX") or "1500")
 while oapi.get_systime() - tw < wallmax do

@@ -186,7 +186,7 @@ void RTLighting::CreateImages (VkImageView prepass, VkImageView velocity, VkImag
 void RTLighting::DestroyImages ()
 {
 	if (generation == ~0u) return;
-	vkDeviceWaitIdle (ctx->device);
+	ctx->WaitIdle ();
 	vkResetDescriptorPool (ctx->device, pool, 0);
 	for (vkc::Image *im : { &rawA, &rawL, &accA[0], &accA[1], &accL[0], &accL[1], &outA, &outL }) ctx->DestroyImage (*im);
 	generation = ~0u;

@@ -11,6 +11,7 @@ local lng0, lat0, hdg = -95.52, 29.62, math.rad(40)
 local R = 6371000
 proc.wait_simdt(1)
 local t0 = oapi.get_simtime()
+oapi.write_log(string.format("bench: measure at %.3f", oapi.get_simtime()))
 while true do
 	local T = oapi.get_simtime() - t0
 	if T >= tend then break end

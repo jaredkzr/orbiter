@@ -253,8 +253,13 @@ private:
 	/// precision lattices in the shaders: detailcore.glsl's DetPoint)
 	void SplitPoint (const VECTOR3 &D, int32_t I[3], float F[3]) const;
 	void PrepareGpuMesh (const Node *n, const Node *src, GpuJob &job, std::vector<float> &pts, MeshData &md) const;
-	/// the vertex buffer of a tile (made if needed)
+	/// the vertex buffer of a tile (made if needed), and its size [bytes]
 	void EnsureVertexBuffer (Node *n);
+	static VkDeviceSize MeshBytes ()
+	{
+		const size_t V = TileRenderer::GRID + 1, nv = V * V + 4 * V;
+		return nv * (sizeof(NTVERTEX) + 6 * sizeof(float));
+	}
 	/// whether a tile may be in the camera's view
 	bool InView (const Node *n) const;
 	/// texture of a tile: its own, or the matching part (uv: offset, scale) of its nearest ancestor's

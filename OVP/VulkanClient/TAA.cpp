@@ -127,7 +127,7 @@ void TemporalAA::CreateImages (VkImageView scene, VkImageView prepass, VkImageVi
 void TemporalAA::DestroyImages ()
 {
 	if (generation == ~0u) return;
-	vkDeviceWaitIdle (ctx->device);
+	ctx->WaitIdle ();
 	vkResetDescriptorPool (ctx->device, pool, 0);
 	for (auto &h : history) ctx->DestroyImage (h);
 	generation = ~0u;

@@ -419,6 +419,10 @@ public:
 	/// rendering the environment probe (not the main view)
 	bool InProbe () const { return inProbe; }
 	void GpuMark (const char *name) { if (!inProbe) ctx->GpuMark (name); }
+	/// the CPU time of the planets' frame preparation by part [ms] this frame
+	/// (VPlanet::PrepareFrame; the frame-time log's "prep ..." sections)
+	double prepMs[4] = {};
+	vkc::Context *Ctx () const { return ctx; }
 	/// Render one face of the environment probe around the focus vessel
 	/// (after the prepass, outside rendering scopes)
 	void RenderProbe ();
