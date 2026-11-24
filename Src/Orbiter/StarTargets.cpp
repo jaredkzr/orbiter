@@ -82,6 +82,7 @@ namespace startargets {
 		gc.designation = "Sgr A* (the model's centre)";
 		gc.pos[0] = galactic::R0, gc.pos[2] = -galactic::ZSUN;
 		stars.push_back (gc);
+		Luminosities ();
 
 		std::ifstream ifs (namedCsv);
 		if (!ifs) {
@@ -106,6 +107,7 @@ namespace startargets {
 			if (s.teff <= 0.0) continue;
 			stars.push_back (s);
 		}
+		Luminosities ();
 		LOGOUT ("Interstellar travel: %zu named stars (epoch %.1f)", stars.size() - 1, epoch);
 		return true;
 	}
@@ -155,10 +157,20 @@ namespace startargets {
 
 	double Catalogue::Luminosity (int i) const
 	{
-		const Star &s = stars[i];
+		return lum[i];
+	}
+
+	double Catalogue::LuminosityOf (const Star &s)
+	{
 		if (!s.IsStar ()) return 0.0;
 		double lv = std::pow (10.0, -0.4 * (s.mv - MV_SUN));
 		return lv * VFraction (TSUN) / VFraction (s.teff);
+	}
+
+	void Catalogue::Luminosities ()
+	{
+		lum.resize (stars.size ());
+		for (size_t i = 0; i < stars.size (); i++) lum[i] = LuminosityOf (stars[i]);
 	}
 
 	double Catalogue::Radius (int i) const
@@ -178,8 +190,9 @@ namespace startargets {
 	int Catalogue::Add (const Star &s)
 	{
 		int i = Find (s.name.c_str ());
-		if (i > 0) { stars[i] = s; return i; }
+		if (i > 0) { stars[i] = s; lum[i] = LuminosityOf (s); return i; }
 		stars.push_back (s);
+		lum.push_back (LuminosityOf (s));
 		return (int)stars.size () - 1;
 	}
 

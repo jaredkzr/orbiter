@@ -71,6 +71,9 @@ namespace startargets {
 
 	private:
 		std::vector<Star> stars;
+		std::vector<double> lum; // (Luminosity's, per star: constant, and asked for every frame)
+		static double LuminosityOf (const Star &s);
+		void Luminosities ();
 		double epoch = 2016.0;
 	};
 
