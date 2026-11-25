@@ -254,7 +254,10 @@ void VVessel::CutGroups ()
 	auto side = [&] (const VECTOR3 &p) { int k = field.PartAt (p); return k < 0 || k >= (int)np || !gone[k]; };
 	// the groups with triangles shown and not shown: each triangle cut
 	// where the surface passes through it (the vessel's frame, unposed:
-	// as the structure was made)
+	// as the structure was made). The groups cut on threads (each its own
+	// lists: 70 ms of a frame at a break), their triangles hidden after
+	struct Job { size_t m; uint32_t g; MESHGROUP *mg; };
+	std::vector<Job> jobs;
 	for (size_t m = 0; m < meshes.size(); m++) {
 		MeshRec &rec = meshes[m];
 		if (!rec.mesh || !(rec.visMode & MESHVIS_EXTERNAL)) continue;
@@ -268,6 +271,15 @@ void VVessel::CutGroups ()
 			bool shown = std::any_of (mask.begin(), mask.end(), [] (BYTE b) { return b != 1; });
 			MESHGROUP *mg = oapiMeshGroup (hm, g);
 			if (!shown || !mg || mg->nIdx / 3 != mask.size()) continue;
+			jobs.push_back ({ m, g, mg });
+		}
+	}
+	auto cutGroup = [&] (const Job &jb) {
+		MeshRec &rec = meshes[jb.m];
+		const uint32_t g = jb.g;
+		MESHGROUP *mg = jb.mg;
+		std::vector<BYTE> &mask = rec.hidden[g];
+		{
 			std::vector<uint8_t> &state = rec.cutState[g];
 			state.assign (mask.size(), 0);
 			for (size_t k = 0; k < mask.size(); k++) {
@@ -285,9 +297,18 @@ void VVessel::CutGroups ()
 				if (r != 2) (r ? rec.cutLose[g] : rec.cutKeep[g]).insert ((r ? rec.cutLose[g] : rec.cutKeep[g]).end(), v, v + 3);
 				state[k] = 1, mask[k] = 1;
 			}
-			rec.mesh->SetHiddenTriangles (g, mask.data());
 		}
+	};
+	{
+		std::atomic<size_t> next{ 0 };
+		auto work = [&] { for (size_t i; (i = next++) < jobs.size (); ) cutGroup (jobs[i]); };
+		unsigned nt = std::min<size_t> (jobs.size (), std::max (1u, std::thread::hardware_concurrency ()));
+		std::vector<std::thread> pool;
+		for (unsigned t = 1; t < nt; t++) pool.emplace_back (work);
+		work ();
+		for (auto &t : pool) t.join ();
 	}
+	for (const Job &jb : jobs) meshes[jb.m].mesh->SetHiddenTriangles (jb.g, meshes[jb.m].hidden[jb.g].data());
 }
 
 void VVessel::BuildWalls ()
