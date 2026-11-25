@@ -366,6 +366,16 @@ DetPoint DetPixelPoint (vec3 posView, out vec3 d)
 float DetFarMottle (vec3 posView, float footprint, float amp)
 {
 	if (amp <= 0.0 || !PartOn (32)) return 1.0;
+	// (the widest octave faded out - seen from orbit, all of them: nothing
+	// to evaluate, as the loop below; the quad's pixels decide together)
+	bool any_ = footprint / 256.0 < 0.3;
+	if (MOTTLE_QUAD) { // (each pixel takes part in both swaps)
+		bool h = subgroupQuadSwapHorizontal (any_);
+		any_ = any_ || h;
+		bool v = subgroupQuadSwapVertical (any_);
+		any_ = any_ || v;
+	}
+	if (!any_) return 1.0;
 	vec3 d;
 	DetPoint pt = DetPixelPoint (posView, d);
 	float m = 0.0;

@@ -418,7 +418,7 @@ public:
 	/// its sky is drawn: how far from the camera its air reaches [m] (else 0)
 	double SkyReach () const;
 	/// its sky over the bodies beyond its air drawn since RenderSky (Scene::Render)
-	void RenderSkyVeil ();
+	void RenderSkyVeil (float maxDepth = 1.0f);
 	/// wholly beyond this distance from the camera [m] (not a star: its disc is the sky pass's own)
 	/// (drawn from tiles: a sphere's mesh takes the air about the camera in its shader)
 	bool Beyond (double dist) const { return !isStar && surface && camDist - size > dist; }

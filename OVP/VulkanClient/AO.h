@@ -32,8 +32,10 @@ public:
 	bool EnsureSize ();
 
 	/// Bind the prepass targets (normal and depth, velocity, material; cleared)
-	void BeginPrepass ();
-	/// Bind them again, their contents kept (after Context::CopySceneDepth)
+	/// (sceneDepth: drawn into the scene's depth buffer, not its own)
+	void BeginPrepass (const vkc::Target *sceneDepth = nullptr);
+	/// Bind them again with its own depth buffer, their contents kept
+	/// (after Context::CopySceneDepthTo)
 	void ResumePrepass ();
 	/// Ambient occlusion from the prepass (fx, fy: projection factors)
 	void Compute (float fx, float fy);

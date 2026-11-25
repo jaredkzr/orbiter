@@ -507,6 +507,17 @@ bool AtmosphereRenderer::Init (vkc::Context *c, TextureManager *tm)
 	ds.depthTestEnable = VK_TRUE;
 	ds.depthWriteEnable = VK_FALSE;
 	ds.depthCompareOp = VK_COMPARE_OP_LESS;
+	// (and where what was drawn is as far as those bodies (depth bounds,
+	// RenderSky): the scene's depth starts as the prepass's, the nearer
+	// ground and vessels in it, drawn over the veil later)
+	VkDynamicState vdyn[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_DEPTH_BOUNDS };
+	VkPipelineDynamicStateCreateInfo vdy = dy;
+	if (ctx->deviceFeatures.depthBounds) {
+		ds.depthBoundsTestEnable = VK_TRUE;
+		ds.minDepthBounds = 0.0f, ds.maxDepthBounds = 1.0f;
+		vdy.dynamicStateCount = 3, vdy.pDynamicStates = vdyn;
+		gpi.pDynamicState = &vdy;
+	}
 	VK_CHECK(vkCreateGraphicsPipelines (ctx->device, VK_NULL_HANDLE, 1, &gpi, nullptr, &veilPipeline));
 	vkDestroyShaderModule (ctx->device, vs, nullptr);
 	vkDestroyShaderModule (ctx->device, fs, nullptr);
@@ -1519,12 +1530,13 @@ void Atmosphere::Update ()
 	visible = present && scene->PixelSize (atmRadius, length (scene->CameraPos() - ppos)) > 2.0;
 }
 
-void Atmosphere::RenderSky (bool veil)
+void Atmosphere::RenderSky (bool veil, float maxDepth)
 {
 	if (!visible) return;
 	AtmosphereRenderer *ar = scene->Atm();
 	VkCommandBuffer cmd = ctx->Cmd();
 	vkCmdBindPipeline (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, veil ? ar->VeilPipeline() : ar->SkyPipeline());
+	if (veil && ctx->deviceFeatures.depthBounds) vkCmdSetDepthBounds (cmd, 0.0f, std::min (std::max (maxDepth, 0.0f), 1.0f));
 	// (the sky-view table: computed for the main view this frame, ComputeSkyLut)
 	bool lut = !veil && skyLutReady && !scene->InProbe ();
 	VkDescriptorSet s[2] = { Set (), lut ? skyLutSet : ar->SkyLutNone () };

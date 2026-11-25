@@ -2804,9 +2804,11 @@ void Scene::RenderPrepass ()
 	// nearer ones are not shaded (the terrain under the vessels, the far
 	// side of hills). The scene's vertices are placed exactly as the
 	// prepass's (invariant positions; the same transforms and meshes), so
-	// that what is seen passes its depth test as before. The cities'
-	// buildings are drawn into the prepass after the copy: those fading out
-	// are dithered in the colour pass, the ground behind seen between.
+	// that what is seen passes its depth test as before. The prepass draws
+	// into the scene's depth buffer itself (a copy cost 0.1 ms). The cities'
+	// buildings are drawn into the prepass after it, with a copy of their
+	// own: those fading out are dithered in the colour pass, the ground
+	// behind seen between.
 	// (ORBITER_VK_DEPTH_REUSE=0: the scene's depth cleared, as before)
 	static const bool depthReuse = [] { const char *e = getenv ("ORBITER_VK_DEPTH_REUSE"); return !e || atoi (e) != 0; }();
 	bool reuse = depthReuse && ctx->sceneSamples == VK_SAMPLE_COUNT_1_BIT
@@ -2814,7 +2816,8 @@ void Scene::RenderPrepass ()
 	deferBuildings = reuse;
 	deferredBuildings.clear ();
 	// (planet surfaces were prepared before the shadow maps)
-	ao->BeginPrepass ();
+	vkc::Target sd = ctx->SceneDepthTarget ();
+	ao->BeginPrepass (reuse ? &sd : nullptr);
 	for (auto &it : visuals) {
 		objOwner = it.second->Id ();
 		VECTOR3 v{};
@@ -2827,7 +2830,12 @@ void Scene::RenderPrepass ()
 	objVel[0] = objVel[1] = objVel[2] = 0.0f;
 	objGround = false;
 	deferBuildings = false;
-	if (reuse && ctx->CopySceneDepth (ao->DepthImage ()) && !deferredBuildings.empty ()) {
+	if (reuse) {
+		ctx->EndTarget ();
+		ctx->SceneDepthDrawn ();
+	}
+	if (reuse && !deferredBuildings.empty ()) {
+		ctx->CopySceneDepthTo (ao->DepthImage ());
 		ao->ResumePrepass ();
 		VkCommandBuffer cmd = ctx->Cmd();
 		VkDescriptorSet fset = FrameSet ();
@@ -3196,15 +3204,29 @@ void Scene::Render ()
 		if (auto *p = dynamic_cast<VPlanet*>(vo))
 			if (!veilOff && p->SkyReach () > 0.0 && (!airP || p->CamDist () < airP->CamDist ())) airP = p;
 	double airReach = airP ? airP->SkyReach () : 0.0;
+	// The veil covers what is stored as at least as far as the nearest of
+	// those bodies that can be on screen (depth bounds; reversed z: depth =
+	// near / z): the scene's depth starts as the prepass's, the nearer
+	// ground and vessels in it (drawn over the veil later, which was marched
+	// under all of them); none when none of them is drawn
 	bool veiled = false;
+	double zFar = 1e300;
 	for (auto *vo : list)
 		if (auto *p = dynamic_cast<VPlanet*>(vo))
 			if (airP && p != airP && p->Beyond (airReach)) {
-				p->Render (RenderPass::Opaque), veiled = true;
+				p->Render (RenderPass::Opaque);
 				p->SetVeilAir (airP->Air ()); // (its cloud layer, drawn later, takes that air in its shader, as its rings do)
+				double R = oapiGetSize (p->Handle ());
+				if (PixelSize (R, p->CamDist ()) < 0.5) continue; // (not drawn: VPlanet::Render)
+				VECTOR3 gp;
+				oapiGetGlobalPos (p->Handle (), &gp);
+				double z = view.TransformPoint (gp - camPos).z, r = 1.01 * R + 30e3; // (its relief and margins)
+				if (z + r <= 0.0) continue; // (behind the camera)
+				veiled = true;
+				zFar = std::min (zFar, std::max (z - r, nearPlane));
 			}
 	if (veiled) {
-		airP->RenderSkyVeil ();
+		airP->RenderSkyVeil ((float)std::min (1.0, 1.001 * nearPlane / zFar));
 		vkCmdBindDescriptorSets (cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout, 0, 1, &fset, 0, nullptr);
 	}
 	for (auto *vo : list)

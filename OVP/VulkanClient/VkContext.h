@@ -132,13 +132,16 @@ namespace vkc {
 		/// contents are discarded afterwards
 		/// keepDepth: the depth buffer stored; resume: none cleared, their
 		/// contents kept (the colours in shader-read layout, the depth buffer
-		/// in transfer-source layout: after CopySceneDepth)
+		/// in transfer-source layout: after CopySceneDepthTo)
 		void BindTargetsWithDepth (const Target *colors, uint32_t nColor, const Target &depth, const float clearColor[4], bool keepDepth = false, bool resume = false);
-		/// The scene's depth buffer starts this frame as a copy of src (a
-		/// single-sample depth image of the render size in depth attachment
-		/// layout, left in transfer-source layout), not cleared. Outside
-		/// rendering scopes; false (nothing done) with multisampling
-		bool CopySceneDepth (VkImage src);
+		/// the scene's depth buffer as a target (a prepass may draw into it:
+		/// then SceneDepthDrawn, the scene loads what was drawn)
+		Target SceneDepthTarget () const { return { depth.image, depth.view, depthFormat, renderExtent }; }
+		void SceneDepthDrawn () { bbState |= BB_DEPTH; }
+		/// a copy of the scene's depth buffer (depth attachment layout, kept)
+		/// into dst (single-sampled, the render size), left in transfer-source
+		/// layout; outside rendering scopes
+		void CopySceneDepthTo (VkImage dst);
 		void EndTarget ();
 		/// Redirect the scene target (BindScene) to another colour and depth
 		/// target, cleared on first use (environment probe faces); nullptr

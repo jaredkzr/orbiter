@@ -341,6 +341,7 @@ bool Context::Init (SDL_Window *wnd, bool enableValidation, bool offscreenMode)
 		fRQ.pNext = f2.pNext, fAS.pNext = &fRQ, f2.pNext = &fAS;
 	}
 	f2.features.samplerAnisotropy = deviceFeatures.samplerAnisotropy;
+	f2.features.depthBounds = deviceFeatures.depthBounds; // (the sky's veil over bodies beyond the air: Atmosphere)
 	f2.features.textureCompressionBC = deviceFeatures.textureCompressionBC;
 	f2.features.largePoints = deviceFeatures.largePoints;
 	f2.features.shaderInt16 = deviceFeatures.shaderInt16;
@@ -663,7 +664,7 @@ bool Context::CreateSwapchain ()
 	ici.arrayLayers = 1;
 	ici.samples = sceneSamples; // the depth buffer belongs to the (multisampled) scene
 	ici.tiling = VK_IMAGE_TILING_OPTIMAL;
-	ici.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT; // (read by the upscaler; PreloadSceneDepth)
+	ici.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT; // (read by the upscaler; Scene::RenderPrepass)
 	VmaAllocationCreateInfo aci{};
 	aci.usage = VMA_MEMORY_USAGE_AUTO;
 	VK_CHECK(vmaCreateImage (allocator, &ici, &aci, &depth.image, &depth.alloc, nullptr));
@@ -1161,30 +1162,31 @@ void Context::BindTarget (const Target &t)
 	cur.extent = t.extent;
 }
 
-bool Context::CopySceneDepth (VkImage src)
+void Context::CopySceneDepthTo (VkImage dst)
 {
-	if (!inFrame || sceneSamples != VK_SAMPLE_COUNT_1_BIT) return false;
 	EndTarget ();
 	VkCommandBuffer cmd = frames[frameIndex].cmd;
 	const VkPipelineStageFlags2 FT = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-	ImageBarrier (cmd, src, VK_IMAGE_ASPECT_DEPTH_BIT,
+	ImageBarrier (cmd, depth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
 		VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 		FT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
 		VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-	ImageBarrier (cmd, depth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+	ImageBarrier (cmd, dst, VK_IMAGE_ASPECT_DEPTH_BIT,
 		VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-		VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT,
+		VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
 		VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
 	VkImageCopy cp{};
 	cp.srcSubresource = cp.dstSubresource = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1 };
 	cp.extent = { renderExtent.width, renderExtent.height, 1 };
-	vkCmdCopyImage (cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, depth.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cp);
+	vkCmdCopyImage (cmd, depth.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cp);
 	ImageBarrier (cmd, depth.image, VK_IMAGE_ASPECT_DEPTH_BIT,
-		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-		VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+		VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+		VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
 		FT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
-	bbState |= BB_DEPTH; // (BindMain: loaded, not cleared)
-	return true;
+	ImageBarrier (cmd, dst, VK_IMAGE_ASPECT_DEPTH_BIT,
+		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+		VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+		VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
 }
 
 void Context::BindTargetsWithDepth (const Target *ts, uint32_t n, const Target &d, const float clearColor[4], bool keepDepth, bool resume)
