@@ -19,6 +19,7 @@
 #include "Vesselbase.h"
 #include "TimeData.h"
 #include <string>
+#include <future>
 #include <memory>
 #include <vector>
 
@@ -28,6 +29,9 @@ extern TimeData td;
 class Debris: public VesselBase {
 	friend class Replay; // (its states shown in the instant replay)
 public:
+	/// make the water model on a thread of its own (pieces breaking off over
+	/// a sea: a crash makes ten, 0.1-0.25 s each, needed in the same steps)
+	void StartWaterModel ();
 	/// The triangles of one group of a mesh of the vessel (debris frame)
 	struct Group {
 		const Mesh *mesh;          ///< the vessel's mesh it came from
@@ -142,6 +146,7 @@ private:
 	bool hidden = false;
 	uint64_t parts = 0;
 	mutable std::shared_ptr<hydro::Model> water_model; // (flooded: its structure's volume)
+	mutable std::future<std::shared_ptr<hydro::Model>> water_job; // (StartWaterModel's)
 	double hit = 0.0, hitT = -1e10;
 	Vector hitPos;
 };

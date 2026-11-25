@@ -2,6 +2,8 @@
 // Licensed under the MIT License
 
 #include "Scene.h"
+#include "Fracture.h"
+#include <future>
 #include "CityKit.h"
 #include "GfxSettings.h"
 #include "AO.h"
@@ -1191,6 +1193,7 @@ void Scene::Update ()
 	// pieces of debris near the camera (not in the object list; handles of
 	// deleted pieces may be reused: told apart by their serial numbers)
 	std::set<OBJHANDLE> debris;
+	std::vector<VDebris*> made; // (new pieces: their geometry made together, below)
 	DWORD nd = oapiGetDebrisCount();
 	for (DWORD i = 0; i < nd; i++) {
 		OBJHANDLE h = oapiGetDebrisByIndex (i);
@@ -1205,15 +1208,41 @@ void Scene::Update ()
 		if (vd && vd->Serial() != info.serial) visuals.erase (it), vd = nullptr;
 		double d = length (p - camPos);
 		bool want = vd ? d < range * 1.2 : d < range;
-		if (want && !vd) visuals[h] = std::make_unique<VDebris> (h, this, info.serial);
+		if (want && !vd) {
+			auto nd = std::make_unique<VDebris> (h, this, info.serial, true);
+			made.push_back (nd.get ());
+			visuals[h] = std::move (nd);
+		}
 		else if (!want && vd) visuals.erase (h);
 	}
+	// the new pieces' geometry (the fracture's cut through their triangles,
+	// its walls: 50-150 ms each, ten in a crash's break-up made one after
+	// another took a second of a frame) on threads of their own while the
+	// other visuals update (the vessel they broke off cuts its own triangles
+	// meanwhile), their meshes made before the first of them updates
+	std::vector<std::future<void>> jobs;
+	if (!made.empty ()) {
+		fracture::CutTriangles (); // (its setting read once, here)
+		for (VDebris *d : made) d->WarmSource ();
+		for (VDebris *d : made) jobs.push_back (std::async (std::launch::async, [d] { d->Build (); }));
+	}
+	bool joined = made.empty ();
+	auto join = [&] () {
+		if (joined) return;
+		joined = true;
+		for (auto &j : jobs) j.get ();
+		for (VDebris *d : made) d->Finish ();
+	};
 	for (auto it = visuals.begin(); it != visuals.end(); ) {
 		if (dynamic_cast<VDebris*>(it->second.get()) && !debris.count (it->first)) it = visuals.erase (it);
 		else ++it;
 	}
 
-	for (auto &it : visuals) it.second->Update();
+	for (auto &it : visuals) {
+		if (!joined && std::find (made.begin (), made.end (), it.second.get ()) != made.end ()) join ();
+		it.second->Update();
+	}
+	join ();
 	if (crashFires) crashFires->Update (this); // (after the debris: a fireball registers its fire)
 
 	// the sea field's slopes for the frame to come (UploadOcean, after the

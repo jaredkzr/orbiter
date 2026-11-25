@@ -2,6 +2,8 @@
 // Licensed under the MIT License
 
 #include "HullWater.h"
+#include <thread>
+#include <atomic>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -74,7 +76,6 @@ Model Build (const std::vector<convex::Polytope> &hulls, const std::function<int
 		hb.push_back (x);
 	}
 	double h = std::max (m.length / 64.0, MIN_CELL);
-	std::vector<int> cand;
 	std::vector<Cell> cells;
 	int nx = 0, ny = 0, nz = 0;
 	Vector o;
@@ -89,7 +90,10 @@ Model Build (const std::vector<convex::Polytope> &hulls, const std::function<int
 		state.assign ((size_t)nx * ny * nz, 0);
 		wv.assign ((size_t)nx * ny * nz, 0.0);
 		cv.assign ((size_t)nx * ny * nz, Vector (0, 0, 0));
-		for (int i = 0; i < nx; i++) {
+		// (the cells' filling: each row of cells on a thread of its own, the
+		// same values: 0.1-0.25 s for a vessel's or a piece's hulls, needed in
+		// the step they reach the water)
+		auto row = [&](int i, std::vector<int> &cand) {
 			double x0 = o.x + i * h, x1 = x0 + h;
 			for (int j = 0; j < ny; j++) {
 				double y0 = o.y + j * h, y1 = y0 + h;
@@ -133,6 +137,15 @@ Model Build (const std::vector<convex::Polytope> &hulls, const std::function<int
 					cv[id] = nin ? cs / (double)nin : c;
 				}
 			}
+		};
+		{
+			unsigned nt = std::min<unsigned> (std::max (1u, std::thread::hardware_concurrency ()), (unsigned)nx);
+			std::atomic<int> next{ 0 };
+			auto work = [&] { std::vector<int> c; for (int i; (i = next++) < nx; ) row (i, c); };
+			std::vector<std::thread> pool;
+			for (unsigned t = 1; t < nt; t++) pool.emplace_back (work);
+			work ();
+			for (auto &t : pool) t.join ();
 		}
 		// mirror symmetry about x = 0 (most vessels: their hulls, a mesh's convex
 		// decomposition, are not): both sides of each pair of cells take the

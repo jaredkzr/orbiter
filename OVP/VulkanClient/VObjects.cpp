@@ -26,6 +26,9 @@
 #include "ParticleStream.h"
 #include "Plasma.h"
 #include <map>
+#include <mutex>
+#include <thread>
+#include <atomic>
 #include <random>
 #include "VesselAPI.h"
 #include <algorithm>
@@ -251,7 +254,10 @@ void VVessel::CutGroups ()
 	auto side = [&] (const VECTOR3 &p) { int k = field.PartAt (p); return k < 0 || k >= (int)np || !gone[k]; };
 	// the groups with triangles shown and not shown: each triangle cut
 	// where the surface passes through it (the vessel's frame, unposed:
-	// as the structure was made)
+	// as the structure was made). The groups cut on threads (each its own
+	// lists: 70 ms of a frame at a break), their triangles hidden after
+	struct Job { size_t m; uint32_t g; MESHGROUP *mg; };
+	std::vector<Job> jobs;
 	for (size_t m = 0; m < meshes.size(); m++) {
 		MeshRec &rec = meshes[m];
 		if (!rec.mesh || !(rec.visMode & MESHVIS_EXTERNAL)) continue;
@@ -265,6 +271,15 @@ void VVessel::CutGroups ()
 			bool shown = std::any_of (mask.begin(), mask.end(), [] (BYTE b) { return b != 1; });
 			MESHGROUP *mg = oapiMeshGroup (hm, g);
 			if (!shown || !mg || mg->nIdx / 3 != mask.size()) continue;
+			jobs.push_back ({ m, g, mg });
+		}
+	}
+	auto cutGroup = [&] (const Job &jb) {
+		MeshRec &rec = meshes[jb.m];
+		const uint32_t g = jb.g;
+		MESHGROUP *mg = jb.mg;
+		std::vector<BYTE> &mask = rec.hidden[g];
+		{
 			std::vector<uint8_t> &state = rec.cutState[g];
 			state.assign (mask.size(), 0);
 			for (size_t k = 0; k < mask.size(); k++) {
@@ -282,9 +297,18 @@ void VVessel::CutGroups ()
 				if (r != 2) (r ? rec.cutLose[g] : rec.cutKeep[g]).insert ((r ? rec.cutLose[g] : rec.cutKeep[g]).end(), v, v + 3);
 				state[k] = 1, mask[k] = 1;
 			}
-			rec.mesh->SetHiddenTriangles (g, mask.data());
 		}
+	};
+	{
+		std::atomic<size_t> next{ 0 };
+		auto work = [&] { for (size_t i; (i = next++) < jobs.size (); ) cutGroup (jobs[i]); };
+		unsigned nt = std::min<size_t> (jobs.size (), std::max (1u, std::thread::hardware_concurrency ()));
+		std::vector<std::thread> pool;
+		for (unsigned t = 1; t < nt; t++) pool.emplace_back (work);
+		work ();
+		for (auto &t : pool) t.join ();
 	}
+	for (const Job &jb : jobs) meshes[jb.m].mesh->SetHiddenTriangles (jb.g, meshes[jb.m].hidden[jb.g].data());
 }
 
 void VVessel::BuildWalls ()
@@ -891,6 +915,8 @@ void VDebris::CutPiece (const VESSEL *src, const DEBRISINFO &info, std::vector<P
 	std::vector<uint8_t> found (info.ngroup, 0);
 	for (DWORD i = 0; i < info.ngroup; i++) {
 		if (!oapiGetDebrisGroup (hObj, i, &dgs[i]) || !dgs[i].hMesh) continue;
+		static std::mutex meshLock; // (Build: pieces made in parallel; a mesh not loaded yet is loaded here)
+		std::lock_guard<std::mutex> lk (meshLock);
 		for (UINT m = 0; m < src->GetMeshCount (); m++) {
 			MESHHANDLE hm = src->GetMeshTemplate (m);
 			if (!hm)
@@ -944,9 +970,35 @@ void VDebris::CutPiece (const VESSEL *src, const DEBRISINFO &info, std::vector<P
 	}
 }
 
-VDebris::VDebris (OBJHANDLE h, Scene *s, DWORD sn)
+VDebris::VDebris (OBJHANDLE h, Scene *s, DWORD sn, bool deferred)
 	: VObject (h, s), serial (sn)
 {
+	if (deferred) return;
+	Build ();
+	Finish ();
+}
+
+void VDebris::WarmSource ()
+{
+	DEBRISINFO i;
+	if (oapiGetDebrisInfo (hObj, &i))
+		if (OBJHANDLE hs = oapiGetVesselByName (i.source))
+			if (VESSEL *v = oapiGetVesselInterface (hs)) v->GetPartAt (_V(0, 0, 0));
+}
+
+void VDebris::Finish ()
+{
+	if (built.empty()) return;
+	VulkanClient *gc = scene->Client();
+	mesh = std::make_unique<VkMesh> (gc->Ctx(), gc->TexMgr(), built);
+	built.clear ();
+	built.shrink_to_fit ();
+}
+
+void VDebris::Build ()
+{
+	// (no GPU calls, nothing of the client's state: the core's data of the
+	// piece and its vessel only, read while the core waits)
 	DEBRISINFO info;
 	if (!oapiGetDebrisInfo (hObj, &info)) return;
 	OBJHANDLE hSrc = oapiGetVesselByName (info.source);
@@ -1048,9 +1100,7 @@ VDebris::VDebris (OBJHANDLE h, Scene *s, DWORD sn)
 	fracture::Walls (tris, depth, 1e-3, serial, walls);
 	for (auto &w : walls) fracture::AddParts (w, parts);
 	fracture::AddParts (inside, parts, true);
-	if (parts.empty()) return;
-	VulkanClient *gc = scene->Client();
-	mesh = std::make_unique<VkMesh> (gc->Ctx(), gc->TexMgr(), parts);
+	built = std::move (parts);
 }
 
 namespace {

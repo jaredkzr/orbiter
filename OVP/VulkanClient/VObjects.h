@@ -16,7 +16,7 @@
 #include <memory>
 #include <vector>
 
-class VkMesh;
+#include "VkMesh.h" // (VDebris::built: VkMesh::Part)
 #include "Contrail.h"
 namespace vkscatter { class Gallery; class Field; }
 namespace vkcity { class Field; }
@@ -201,8 +201,14 @@ private:
 /// charred
 class VDebris : public VObject {
 public:
-	VDebris (OBJHANDLE hObj, Scene *scene, DWORD serial);
+	/// deferred: its geometry made later, Build (any thread: pieces of one
+	/// break-up made in parallel, Scene::Update) then Finish (its mesh)
+	VDebris (OBJHANDLE hObj, Scene *scene, DWORD serial, bool deferred = false);
 	~VDebris ();
+	void Build ();
+	void Finish ();
+	/// (before Builds in parallel: its vessel's structure brought up to date here)
+	void WarmSource ();
 	DWORD Serial () const { return serial; }
 	void Update () override;
 	void Render (RenderPass pass) override;
@@ -217,6 +223,7 @@ private:
 	DWORD serial;
 	bool hidden = false;
 	std::unique_ptr<VkMesh> mesh;
+	std::vector<VkMesh::Part> built; // (Build's, for Finish)
 	DEBRISINFO info{};
 	/// effects: the fireball when it broke off (propellant burning), the
 	/// fire and smoke while it burns, sparks where it slides on the ground,
