@@ -593,10 +593,20 @@ Debris *Debris::Read (std::istream &is, const std::string &name)
 
 namespace { const double FLOOD_DENSITY = 2700.0; } // [kg/m^3] (aluminium)
 
+void Debris::StartWaterModel ()
+{
+	if (water_model || water_job.valid()) return;
+	// (its hulls and size: fixed once made)
+	water_job = std::async (std::launch::async, [h = hulls, sz = Size()] {
+		return std::make_shared<hydro::Model> (h.empty() ? hydro::Sphere (Vector (0, 0, 0), 0.5 * sz) : hydro::Build (h, nullptr));
+	});
+}
+
 const hydro::Model *Debris::WaterModel () const
 {
 	if (water_model) return water_model.get();
-	auto m = std::make_shared<hydro::Model> (hulls.empty() ? hydro::Sphere (Vector (0, 0, 0), 0.5 * Size()) : hydro::Build (hulls, nullptr));
+	auto m = water_job.valid() ? water_job.get() // (StartWaterModel's: the same model)
+		: std::make_shared<hydro::Model> (hulls.empty() ? hydro::Sphere (Vector (0, 0, 0), 0.5 * Size()) : hydro::Build (hulls, nullptr));
 	double vs = mass / FLOOD_DENSITY;
 	if (m->volume > vs && m->volume > 0.0) {
 		double k = vs / m->volume;

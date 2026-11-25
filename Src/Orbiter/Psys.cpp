@@ -169,6 +169,8 @@ bool PlanetarySystem::isDebris (const Body *b) const
 	return std::find (debris.begin(), debris.end(), b) != debris.end();
 }
 
+namespace { const double WATER_PREP_ALT = 2000.0; } // [m]
+
 void PlanetarySystem::AddDebris (Debris *d, VesselBase *from)
 {
 	// (too many: the oldest at rest go, then the oldest)
@@ -184,6 +186,11 @@ void PlanetarySystem::AddDebris (Debris *d, VesselBase *from)
 		if (e->CreatedT() == d->CreatedT() && e->Source() == d->Source()) collider.Released (e, d, true);
 	debris.push_back (d);
 	if (from) collider.Released (from, d, true);
+	// (breaking off low over a sea: its water model made meanwhile, with the
+	// other pieces' - each was made in turn as it first reached the water,
+	// 1.4 s of a crash's step)
+	if (from && from->ProxyPlanet() && from->ProxyPlanet()->GetSea() && from->Altitude() < WATER_PREP_ALT)
+		d->StartWaterModel ();
 }
 
 void PlanetarySystem::DelDebris (Debris *d)
