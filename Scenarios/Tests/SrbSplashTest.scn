@@ -1,0 +1,72 @@
+BEGIN_HYPERDESC
+<h1>Boosters into the sea at time acceleration</h1>
+The two spent Space Shuttle boosters 3 km above the Atlantic, falling at
+140 m/s, as saved from an ascent (the autopilot's) 40 s after separation;
+the damage model on. They come down at 10x time acceleration (as a player
+waiting for them would): each breaks up on the water, and what is left of
+them must float, not spin up without bound. (A player's session ended in
+a segmentation fault here: a booster's remains, with a twentieth of its
+moment of inertia about its length, spun up until its state went
+non-finite, and the swell's grid was indexed with it.)
+END_HYPERDESC
+
+BEGIN_ENVIRONMENT
+  System Sol
+  Date MJD 51983.4958800294
+  Script Tests/SrbSplashTest
+END_ENVIRONMENT
+
+BEGIN_FOCUS
+  Ship WATCH
+END_FOCUS
+
+BEGIN_CAMERA
+  TARGET STS-101-SRB1
+  MODE Extern
+  POS 4 0 -80
+  TRACKMODE TargetRelative
+  FOV 50.00
+END_CAMERA
+
+BEGIN_HUD
+  TYPE Surface
+END_HUD
+
+BEGIN_MFD Left
+  TYPE User
+  MODE AscentAP
+END_MFD
+
+BEGIN_MFD Right
+  TYPE Orbit
+  PROJ Ship
+  FRAME Ecliptic
+  REF Earth
+END_MFD
+
+BEGIN_SHIPS
+STS-101-SRB1:Atlantis_SRB
+  STATUS Orbiting Earth
+  RPOS 294317.501 5100062.704 -3811935.384
+  RVEL 403.1262 -118.7340 106.2604
+  AROT 110.057 -48.736 125.108
+  VROT -0.7344 0.2387 0.0000
+  AFCMODE 7
+  PRPLEVEL 0:0.005727
+END
+STS-101-SRB2:Atlantis_SRB
+  STATUS Orbiting Earth
+  RPOS 291945.864 5102609.198 -3808673.769
+  RVEL 403.0650 -117.4672 104.9347
+  AROT 83.991 -37.619 -42.138
+  VROT 0.7232 0.2457 0.0000
+  AFCMODE 7
+  PRPLEVEL 0:0.005727
+END
+WATCH:ShuttlePB
+  STATUS Landed Earth
+  POS -80.6200 28.6000
+  HEADING 0.00
+  PRPLEVEL 0:0.200
+END
+END_SHIPS

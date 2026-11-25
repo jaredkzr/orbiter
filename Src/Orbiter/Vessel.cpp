@@ -4984,13 +4984,31 @@ int Vessel::BreakPart (int part, double vsep)
 	std::vector<ExtGroup> eg;
 	ExternalGroups (eg);
 	size_t t = 0;
+	// (and the skin left: its area, first and second moments about the
+	// origin, for a floor under the moments of inertia of what is left)
+	double keepA = 0.0, keepS[3] = {0,0,0};
+	Vector keepM;
 	for (const ExtGroup &e : eg) {
 		const GroupSpec *grp = (const GroupSpec*)e.grp;
 		int gi = -1;
 		for (DWORD k = 0; k + 2 < grp->nIdx; k += 3, t++) {
 			if (t >= tp.size()) break;
 			int sl = slot[tp[t]];
-			if (sl < 0) continue;
+			if (sl < 0) {
+				if (tp[t] >= 0 && tp[t] < (int)part_lost.size() && !part_lost[tp[t]]) {
+					Vector p[3];
+					for (int j = 0; j < 3; j++) {
+						const NTVERTEX &v = grp->Vtx[grp->Idx[k+j]];
+						p[j] = Vector (v.x + e.ofs.x, v.y + e.ofs.y, v.z + e.ofs.z);
+					}
+					double a = 0.5 * crossp (p[1]-p[0], p[2]-p[0]).length();
+					Vector sum (p[0] + p[1] + p[2]);
+					keepA += a, keepM += sum * (a / 3.0);
+					for (int j = 0; j < 3; j++)
+						keepS[j] += a / 12.0 * (p[0].data[j]*p[0].data[j] + p[1].data[j]*p[1].data[j] + p[2].data[j]*p[2].data[j] + sum.data[j]*sum.data[j]);
+				}
+				continue;
+			}
 			if (gi < 0) gi = (int)groups.size(), groups.push_back ({ e.meshp, e.group, {}, {}, e.ofs, {} });
 			groups[gi].tris.push_back (k / 3);
 			groups[gi].edge.push_back ((sm.TriangleNeighbours (t) & ~pieceMask) ? 1.0f : 0.0f);
@@ -5061,6 +5079,17 @@ int Vessel::BreakPart (int part, double vsep)
 	// the angular acceleration of any torque grew without bound)
 	if (!pmi_intact_set) pmi_intact = pmi0, pmi_intact_set = true;
 	for (int j = 0; j < 3; j++) pmi1.data[j] = std::max ({ pmi1.data[j], 0.1 * pmi0.data[j], 0.05 * pmi_intact.data[j] });
+	// (nor below half those of the skin left, as a thin shell about the new
+	// centre of gravity - as a piece's own are found: a slender vessel's
+	// small moment about its length, a twentieth of the intact one's, let
+	// the torques of the water and the air spin a booster's remains up
+	// without bound at long steps, to a state that diverged)
+	if (keepA > 0.0) {
+		double Sc[3];
+		for (int j = 0; j < 3; j++) Sc[j] = keepS[j] - 2.0 * cg1.data[j] * keepM.data[j] + cg1.data[j] * cg1.data[j] * keepA;
+		Vector shell ((Sc[1] + Sc[2]) / keepA, (Sc[0] + Sc[2]) / keepA, (Sc[0] + Sc[1]) / keepA);
+		for (int j = 0; j < 3; j++) pmi1.data[j] = std::max (pmi1.data[j], 0.5 * shell.data[j]);
+	}
 	dmg.cg = cg1;
 
 	// pushed apart (momentum conserved)
