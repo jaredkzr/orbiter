@@ -58,6 +58,12 @@ void Result::Clear (int parts)
 	if (parts > 0) partF.assign (parts, Vector (0, 0, 0));
 }
 
+namespace {
+	// (a grid coordinate within [0, n-1): NaN - a body's state gone bad -
+	// at the grid's corner, not an index of INT_MIN)
+	double GridCoord (double u, int n) { return std::fmin (std::fmax (u, 0.0), n - 1.000001); }
+}
+
 double Surface::Height (double x, double z, double *sx, double *sz) const
 {
 	if (n < 2) {
@@ -65,7 +71,7 @@ double Surface::Height (double x, double z, double *sx, double *sz) const
 		if (sz) *sz = 0.0;
 		return 0.0;
 	}
-	double u = std::clamp ((x - x0) / ds, 0.0, n - 1.000001), v = std::clamp ((z - z0) / ds, 0.0, n - 1.000001);
+	double u = GridCoord ((x - x0) / ds, n), v = GridCoord ((z - z0) / ds, n);
 	int i = (int)u, j = (int)v;
 	double fu = u - i, fv = v - j;
 	const double *r0 = &h[(size_t)j * n + i], *r1 = r0 + n;
@@ -78,7 +84,7 @@ double Surface::Height (double x, double z, double *sx, double *sz) const
 Vector Surface::Vel (double x, double z, double d) const
 {
 	if (n < 2) return Vector (0, 0, 0);
-	double u = std::clamp ((x - x0) / ds, 0.0, n - 1.000001), v = std::clamp ((z - z0) / ds, 0.0, n - 1.000001);
+	double u = GridCoord ((x - x0) / ds, n), v = GridCoord ((z - z0) / ds, n);
 	int i = (int)u, j = (int)v;
 	double fu = u - i, fv = v - j;
 	const Vector *r0 = &vel[(size_t)j * n + i], *r1 = r0 + n;

@@ -164,6 +164,21 @@ void VesselBase::HydroStep (double h)
 		if (nsum == 500) { LOGOUT ("Water profile: %.3f ms per step (%s, last %d sub-steps)", tsum / nsum * 1e3, Name(), r.substeps); tsum = 0.0; nsum = 0; }
 	}
 
+	// (a step gone non-finite - a body turning faster than the sub-steps
+	// resolve: its water forces are dropped, not applied nor kept in the
+	// loads' filters, where a NaN would stay and spoil every step after)
+	{
+		auto bad = [](const Vector &v) { return !std::isfinite (v.x) || !std::isfinite (v.y) || !std::isfinite (v.z); };
+		const Matrix &Rb = b.R;
+		if (bad (b.x) || bad (b.v) || bad (b.w) || bad (r.F) || bad (r.T) ||
+			!std::isfinite (Rb.m11 + Rb.m12 + Rb.m13 + Rb.m21 + Rb.m22 + Rb.m23 + Rb.m31 + Rb.m32 + Rb.m33)) {
+			static int nlog = 0;
+			if (nlog++ < 10) LOGOUT_WARN ("%s: the water's step diverged; its forces are dropped", Name());
+			water.wet = false;
+			water.F.Set (0, 0, 0);
+			return;
+		}
+	}
 	bool wet = r.wetted > 0.0 || r.submerged > 0.0 || r.F.length2() > 0.0;
 	if (!wet) water.accFilt = 0.0;
 	if (wet && !water.wet) {
