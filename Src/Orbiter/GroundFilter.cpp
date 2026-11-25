@@ -31,7 +31,14 @@ GroundFilter::NodeVal GroundFilter::Node (int64_t i, int64_t j)
 {
 	// an elevation manager not in use (the data alone)
 	RawElev *re = nullptr;
-	{
+	// (the thread's own from its last node first: its tiles are those about
+	// the next nodes. Taken by whichever thread came first, the managers'
+	// caches held other areas' tiles: copied out of the shared store again,
+	// 134 KB each, under its lock)
+	thread_local RawElev *mine = nullptr;
+	thread_local uint64_t mineSerial = 0;
+	if (mine && mineSerial == serial && mine->m.try_lock ()) re = mine;
+	if (!re) {
 		std::lock_guard<std::mutex> lock (rawMtx);
 		for (auto &r : rawElev)
 			if (r->m.try_lock ()) { re = r.get(); break; }
@@ -43,6 +50,7 @@ GroundFilter::NodeVal GroundFilter::Node (int64_t i, int64_t j)
 			re->em->SetNoDetail ();
 			re->tiles = std::make_unique<std::vector<ElevationTile>> (16);
 		}
+		mine = re, mineSerial = serial;
 	}
 	// n x n samples about the node; a low percentile of the land's
 	double lat = i * prm.step, lng = j * prm.step;
