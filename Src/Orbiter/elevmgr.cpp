@@ -545,6 +545,13 @@ double ElevationManager::Terrain (double lat, double lng, int reqlvl, std::vecto
 
 		int i, lvl, ilat, ilng;
 		ElevationTile *t = 0;
+		// (least recently used by a count of the cache's own uses: the UI
+		// frame's time, as it was, is one value for all of a frame's lookups -
+		// and frozen in the client's loading hold - so a full cache replaced
+		// the same slot each time: worker threads making terrain copied a
+		// 134 KB tile from the shared store every few samples)
+		double newest = 0.0;
+		for (i = 0; i < ntile; i++) newest = std::max (newest, tile[i].last_access);
 
 		for (i = 0; i < ntile; i++) {
 			if (tile[i].data &&
@@ -725,7 +732,7 @@ double ElevationManager::Terrain (double lat, double lng, int reqlvl, std::vecto
 					*normal = Vector (normal->x / normal->y - sx, 1.0, normal->z / normal->y - sz).unit();
 				}
 			}
-			t->last_access = td.UiT0;
+			t->last_access = newest + 1.0;
 			t->lat0 = lat0;
 			t->lng0 = lng0;
 			if (reslvl) *reslvl = t->lvl+7;

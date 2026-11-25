@@ -578,7 +578,8 @@ void VulkanClient::WarmUp ()
 	scene->warmingUp = true;
 	while (std::chrono::duration<double> (std::chrono::steady_clock::now () - t0).count () < cap) {
 		if (!ctx.BeginFrame ()) break;
-		bool last = std::chrono::duration<double> (std::chrono::steady_clock::now () - t0).count () > cap - 0.01;
+		static const bool holdLog = getenv ("ORBITER_VK_WARMUP_LOG") && atoi (getenv ("ORBITER_VK_WARMUP_LOG")); // (what it waits for, every 20th frame)
+		bool last = std::chrono::duration<double> (std::chrono::steady_clock::now () - t0).count () > cap - 0.01 || (holdLog && frames % 20 == 0);
 		busy = scene->WarmUpStep (last);
 		r2d->Flush ();
 		ctx.BindBackbuffer (false);
