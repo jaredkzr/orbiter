@@ -4583,9 +4583,9 @@ double VPlanet::SkyReach () const
 	return atmosphere && atmosphere->SkyVisible () ? camDist + atmosphere->AtmRadius () : 0.0;
 }
 
-void VPlanet::RenderSkyVeil ()
+void VPlanet::RenderSkyVeil (float maxDepth)
 {
-	if (atmosphere) atmosphere->RenderSky (true);
+	if (atmosphere) atmosphere->RenderSky (true, maxDepth);
 }
 
 bool VPlanet::RayHit (const VECTOR3 &o, const VECTOR3 &d, double maxDist, double &t, VECTOR3 &n)

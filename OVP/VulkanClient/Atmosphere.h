@@ -157,7 +157,8 @@ public:
 	/// Draw the sky (if the camera can see the atmosphere)
 	/// the sky; veil: over the bodies beyond the air drawn since (where
 	/// depth was written): dimmed by the air, its light in front of them
-	void RenderSky (bool veil = false);
+	/// (veil: maxDepth, the largest depth of the bodies it veils: reversed z)
+	void RenderSky (bool veil = false, float maxDepth = 1.0f);
 	/// the sky-view table of this frame, for the main view's sky pass (the
 	/// camera in the air; outside rendering scopes; the uniforms written
 	/// later in this frame's recording)

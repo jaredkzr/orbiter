@@ -109,7 +109,7 @@ void AmbientOcclusion::CreateImages ()
 	prepassColor = CreateImage (PREPASS_FORMAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
 	velocity = CreateImage (VELOCITY_FORMAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
 	material = CreateImage (MATERIAL_FORMAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
-	prepassDepth = CreateImage (ctx->depthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_DEPTH_BIT); // (the scene's depth starts as a copy: Scene::RenderPrepass)
+	prepassDepth = CreateImage (ctx->depthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_DEPTH_BIT); // (the prepass draws into the scene's; this one a copy of it for the cities' buildings: Scene::RenderPrepass)
 	aoRaw = CreateImage (VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
 	aoFinal = CreateImage (VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
 
@@ -182,13 +182,13 @@ bool AmbientOcclusion::EnsureSize ()
 	return true;
 }
 
-void AmbientOcclusion::BeginPrepass ()
+void AmbientOcclusion::BeginPrepass (const vkc::Target *sceneDepth)
 {
 	const float clear[4] = { 0.0f, 0.0f, 0.0f, 0.0f }; // depth 0: no geometry
 	vkc::Target t[PREPASS_TARGETS] = { { prepassColor.image, prepassColor.view, PREPASS_FORMAT, extent },
 	                                   { velocity.image, velocity.view, VELOCITY_FORMAT, extent },
 	                                   { material.image, material.view, MATERIAL_FORMAT, extent } };
-	ctx->BindTargetsWithDepth (t, PREPASS_TARGETS, { prepassDepth.image, prepassDepth.view, ctx->depthFormat, extent }, clear, true);
+	ctx->BindTargetsWithDepth (t, PREPASS_TARGETS, sceneDepth ? *sceneDepth : vkc::Target{ prepassDepth.image, prepassDepth.view, ctx->depthFormat, extent }, clear, true);
 }
 
 void AmbientOcclusion::ResumePrepass ()
