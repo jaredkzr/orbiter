@@ -39,6 +39,17 @@ RigidBody::PROPMODE RigidBody::PropMode[MAX_PROP_LEVEL] = {&RigidBody::RK2_LinAn
 
 const double gfielddata_updt_interval = 60.0;
 
+namespace {
+	bool Bad (const Vector &v) { return !std::isfinite (v.x) || !std::isfinite (v.y) || !std::isfinite (v.z); }
+	// (a state gone non-finite: position, velocity, turning or orientation)
+	bool BadState (const StateVectors &s)
+	{
+		const Matrix &R = s.R;
+		return Bad (s.pos) || Bad (s.vel) || Bad (s.omega) ||
+			!std::isfinite (R.m11 + R.m12 + R.m13 + R.m21 + R.m22 + R.m23 + R.m31 + R.m32 + R.m33);
+	}
+}
+
 inline Vector Call_EulerInv_full (RigidBody *body, const Vector &tau, const Vector &omega)
 { return body->EulerInv_full (tau, omega); }
 inline Vector Call_EulerInv_simple (RigidBody *body, const Vector &tau, const Vector &omega)
@@ -297,8 +308,14 @@ void RigidBody::Update (bool force)
 					arot.Set (EulerInv_full (tau, s1->omega));
 				}
 			} while (!ValidateStateUpdate (s1));
-			HydroStep (td.SimDT);
-			if (!SurfaceImpact ()) ResolveContacts (td.SimDT);
+			// (a state gone non-finite in the propagation - a numerical runaway,
+			// a piece's long step at time acceleration - is not handed to the
+			// water or the contacts: their grids and searches indexed with NaN
+			// fault; the step is undone below)
+			if (!BadState (*s1)) {
+				HydroStep (td.SimDT);
+				if (!SurfaceImpact ()) ResolveContacts (td.SimDT);
+			}
 
 			if (updcount++ == 1000) { // flush increments
 				rpos_base += rpos_add;
@@ -334,8 +351,7 @@ void RigidBody::Update (bool force)
 		// (a state gone non-finite - a numerical runaway: the step undone, at
 		// rest relative to the start of it, rather than NaN spreading to
 		// everything near it)
-		auto bad = [](const Vector &v) { return !std::isfinite (v.x) || !std::isfinite (v.y) || !std::isfinite (v.z); };
-		if (bad (s1->pos) || bad (s1->vel) || bad (s1->omega)) {
+		if (BadState (*s1)) {
 			static int nlog = 0;
 			if (nlog++ < 10) LOGOUT_WARN ("%s: the state diverged; the step is undone", Name());
 			s1->Set (*s0);

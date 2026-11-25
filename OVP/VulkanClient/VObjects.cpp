@@ -26,7 +26,6 @@
 #include "ParticleStream.h"
 #include "Plasma.h"
 #include <map>
-#include <mutex>
 #include <thread>
 #include <atomic>
 #include <random>
@@ -252,6 +251,7 @@ void VVessel::CutGroups ()
 	if (!any) return;
 	fracture::Field field (vessel, size, (uint32_t)std::hash<std::string>() (vessel->GetName ()));
 	auto side = [&] (const VECTOR3 &p) { int k = field.PartAt (p); return k < 0 || k >= (int)np || !gone[k]; };
+	vessel->GetPartAt (_V(0, 0, 0)); // (its hulls and structure brought up to date here, not by the threads below)
 	// the groups with triangles shown and not shown: each triangle cut
 	// where the surface passes through it (the vessel's frame, unposed:
 	// as the structure was made). The groups cut on threads (each its own
@@ -913,16 +913,14 @@ void VDebris::CutPiece (const VESSEL *src, const DEBRISINFO &info, std::vector<P
 	std::vector<DEBRISGROUP> dgs (info.ngroup);
 	std::vector<VECTOR3> vofs (info.ngroup);
 	std::vector<uint8_t> found (info.ngroup, 0);
+	// (the vessel's meshes: found by WarmSource on the main thread when
+	// built on a thread - a mesh not loaded yet is loaded there, not here
+	// beside the main thread's own calls)
+	if (!warm) SourceMeshes (src);
 	for (DWORD i = 0; i < info.ngroup; i++) {
 		if (!oapiGetDebrisGroup (hObj, i, &dgs[i]) || !dgs[i].hMesh) continue;
-		static std::mutex meshLock; // (Build: pieces made in parallel; a mesh not loaded yet is loaded here)
-		std::lock_guard<std::mutex> lk (meshLock);
-		for (UINT m = 0; m < src->GetMeshCount (); m++) {
-			MESHHANDLE hm = src->GetMeshTemplate (m);
-			if (!hm)
-				if (const char *name = src->GetMeshName (m)) hm = oapiLoadMeshGlobal (name);
-			if (hm == dgs[i].hMesh) { src->GetMeshOffset (m, vofs[i]); found[i] = 1; break; }
-		}
+		for (const SrcMesh &sm : srcMeshes)
+			if (sm.hm == dgs[i].hMesh) { vofs[i] = sm.ofs; found[i] = 1; break; }
 	}
 	// its parts (not known for pieces from scenarios: those lost where its
 	// triangles are)
@@ -978,12 +976,29 @@ VDebris::VDebris (OBJHANDLE h, Scene *s, DWORD sn, bool deferred)
 	Finish ();
 }
 
+void VDebris::SourceMeshes (const VESSEL *src)
+{
+	srcMeshes.clear ();
+	for (UINT m = 0; m < src->GetMeshCount (); m++) {
+		MESHHANDLE hm = src->GetMeshTemplate (m);
+		if (!hm)
+			if (const char *name = src->GetMeshName (m)) hm = oapiLoadMeshGlobal (name);
+		VECTOR3 ofs{};
+		src->GetMeshOffset (m, ofs);
+		srcMeshes.push_back ({ hm, ofs });
+	}
+}
+
 void VDebris::WarmSource ()
 {
 	DEBRISINFO i;
 	if (oapiGetDebrisInfo (hObj, &i))
 		if (OBJHANDLE hs = oapiGetVesselByName (i.source))
-			if (VESSEL *v = oapiGetVesselInterface (hs)) v->GetPartAt (_V(0, 0, 0));
+			if (VESSEL *v = oapiGetVesselInterface (hs)) {
+				v->GetPartAt (_V(0, 0, 0));
+				SourceMeshes (v);
+				warm = true;
+			}
 }
 
 void VDebris::Finish ()

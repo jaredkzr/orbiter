@@ -370,6 +370,8 @@ if (ORBITER_TEST_EXE)
 	set_tests_properties(Scenario.WaterWarpTest PROPERTIES TIMEOUT 120 ENVIRONMENT "ORBITER_DAMAGE=0")
 	# (the destruction test needs the damage model on)
 	set_tests_properties(Scenario.DestructionTest Scenario.FocusLossTest PROPERTIES ENVIRONMENT "ORBITER_DAMAGE=1")
+	# the Shuttle's boosters into the sea at time acceleration, damage model on
+	set_tests_properties(Scenario.SrbSplashTest PROPERTIES TIMEOUT 120 ENVIRONMENT "ORBITER_DAMAGE=1")
 
 	# Sound rendered offline from a session (ORBITER_AUDIO_RENDER), then
 	# checked by Tests/Audio/analyze.py: 100 steps of 0.02 s, 2 s of sound
