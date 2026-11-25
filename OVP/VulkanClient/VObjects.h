@@ -207,7 +207,8 @@ public:
 	~VDebris ();
 	void Build ();
 	void Finish ();
-	/// (before Builds in parallel: its vessel's structure brought up to date here)
+	/// (before Builds in parallel, on the main thread: its vessel's structure
+	/// brought up to date, its meshes found - loaded if need be - here)
 	void WarmSource ();
 	DWORD Serial () const { return serial; }
 	void Update () override;
@@ -224,6 +225,9 @@ private:
 	bool hidden = false;
 	std::unique_ptr<VkMesh> mesh;
 	std::vector<VkMesh::Part> built; // (Build's, for Finish)
+	struct SrcMesh { MESHHANDLE hm; VECTOR3 ofs; };
+	std::vector<SrcMesh> srcMeshes;  // (WarmSource's: the source vessel's meshes, for CutPiece)
+	bool warm = false;
 	DEBRISINFO info{};
 	/// effects: the fireball when it broke off (propellant burning), the
 	/// fire and smoke while it burns, sparks where it slides on the ground,
@@ -337,6 +341,7 @@ private:
 	/// triangles, and the others' (its frame)
 	struct PieceCut { bool on = false; std::vector<NTVERTEX> keep, lose; };
 	void CutPiece (const VESSEL *src, const DEBRISINFO &info, std::vector<PieceCut> &cuts);
+	void SourceMeshes (const VESSEL *src);
 	double FireballRadius () const;
 };
 
