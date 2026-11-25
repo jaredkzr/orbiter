@@ -1421,9 +1421,23 @@ void PlanetSurface::Request (Node *n, TileLoader::Kind kind)
 	tr->Loader().Push ({ layers, kind, n->lvl, n->ilat, n->ilng });
 }
 
+bool PlanetSurface::RootsIn ()
+{
+	if (!rootJob.valid ()) return true;
+	if (rootJob.wait_for (std::chrono::seconds (0)) != std::future_status::ready) {
+		// (seen: wider than half a pixel)
+		VECTOR3 gp;
+		oapiGetGlobalPos (hPlanet, &gp);
+		double d = length (gp - scene->CameraPos ());
+		if (d > radius && radius / d * scene->PixPerRad () < 0.5) return false;
+	}
+	TakeRoots ();
+	return true;
+}
+
 void PlanetSurface::Update ()
 {
-	TakeRoots ();
+	if (!RootsIn ()) return;
 	TileLoader::Result res;
 	int n = 0;
 	while (n < MAX_UPLOADS && tr->Loader().Pop (res, layers.get())) {
@@ -1650,7 +1664,7 @@ uint32_t PlanetSurface::Select (Node *n, bool &covered)
 
 void PlanetSurface::Prepare ()
 {
-	TakeRoots ();
+	if (!RootsIn ()) return;
 	if (preparedFrame == scene->FrameNo ()) return;
 	preparedFrame = scene->FrameNo ();
 	frame++;
@@ -2121,7 +2135,7 @@ bool PlanetSurface::SubmitMesh (Node *n, JobKind kind, bool detailed)
 
 void PlanetSurface::RenderDepth ()
 {
-	TakeRoots ();
+	if (!RootsIn ()) return;
 	// into the ambient occlusion prepass (bound by the caller)
 	Prepare ();
 	if (drawList.empty() || clouds) return;
@@ -2208,7 +2222,7 @@ void PlanetSurface::AddRTClusters (Node *n, RTScene *rt, bool churn)
 
 void PlanetSurface::RenderShadow (ShadowMap &sm)
 {
-	TakeRoots ();
+	if (!RootsIn ()) return;
 	Prepare ();
 	if (clouds) return;
 	double R = oapiGetSize (hPlanet);
@@ -2228,7 +2242,7 @@ void PlanetSurface::RenderShadow (ShadowMap &sm)
 
 void PlanetSurface::RenderCoverage (const Mat4 &toMap, VkPipelineLayout layout, const VECTOR3 &mapCentre, double mapRadius)
 {
-	TakeRoots ();
+	if (!RootsIn ()) return;
 	Prepare ();
 	// the tiles are in the cloud layer's frame (rotated about the axis
 	// relative to the planet)
@@ -2267,7 +2281,7 @@ void PlanetSurface::RenderCoverage (const Mat4 &toMap, VkPipelineLayout layout, 
 
 void PlanetSurface::Render (Atmosphere *atm)
 {
-	TakeRoots ();
+	if (!RootsIn ()) return;
 	Prepare ();
 	if (drawList.empty()) return;
 
@@ -2292,11 +2306,25 @@ void PlanetSurface::Render (Atmosphere *atm)
 		for (Node *n : probeList) if (InView (n)) DrawNode (n);
 		return;
 	}
-	{ // (ORBITER_VK_TILE_DEBUG: tiles drawn without their mesh, missing from the view)
-		int holes = 0;
-		for (Node *n : drawList) if (InView (n) && !n->vbuf.buffer) holes++;
-		static const bool holeLog = getenv ("ORBITER_VK_TILE_DEBUG") && atoi (getenv ("ORBITER_VK_TILE_DEBUG"));
-		if (holes && holeLog) oapiWriteLogV ("VulkanClient: %d tiles in view without a mesh (frame %llu)", holes, (unsigned long long)frame);
+	{ // (ORBITER_VK_TILE_DEBUG: tiles drawn without their mesh, missing from the view;
+	  // ORBITER_VK_HOLE_LOG=N: those and the tiles standing in for their
+	  // children, coarser than wanted, in view, in each of the first N frames)
+		static const bool tileDebug = getenv ("ORBITER_VK_TILE_DEBUG") && atoi (getenv ("ORBITER_VK_TILE_DEBUG"));
+		static const int holeFrames = getenv ("ORBITER_VK_HOLE_LOG") ? atoi (getenv ("ORBITER_VK_HOLE_LOG")) : 0;
+		if (tileDebug || renderedFrames < holeFrames) {
+			int holes = 0, inView = 0;
+			for (Node *n : drawList) if (InView (n)) { inView++; if (!n->vbuf.buffer) holes++; }
+			if (holes && tileDebug) oapiWriteLogV ("VulkanClient: %d tiles in view without a mesh (frame %llu)", holes, (unsigned long long)frame);
+			if (renderedFrames < holeFrames) { // (Render: frames after the hold, which only prepares)
+				std::set<const Node*> standIn;
+				for (const Node *c : buildList) if (c->parent && c->parent->drawn && InView (c->parent)) standIn.insert (c->parent);
+				char name[64];
+				oapiGetObjectName (hPlanet, name, 64);
+				oapiWriteLogV ("VulkanClient: %s%s frame %d after the hold: %d tiles in view, %d without a mesh, %zu standing in for their children",
+					name, clouds ? " (clouds)" : "", renderedFrames + 1, inView, holes, standIn.size ());
+				renderedFrames++;
+			}
+		}
 	}
 	for (Node *n : drawList) if (InView (n)) DrawNode (n);
 }

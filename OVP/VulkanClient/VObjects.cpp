@@ -4557,7 +4557,7 @@ void VPlanet::UpdateBases ()
 
 void VPlanet::Update ()
 {
-	if (atmosphere && !groundSet) {
+	if (atmosphere && !groundSet && (!surface || surface->RootsIn ()) && (!clouds || clouds->RootsIn ())) { // (a procedural planet's roots: once they are in)
 		groundSet = true;
 		atmosphere->SetGround (surface ? surface->RootTexture (0) : nullptr, surface ? surface->RootTexture (1) : nullptr, colour);
 		if (clouds) {

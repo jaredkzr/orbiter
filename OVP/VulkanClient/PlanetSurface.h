@@ -187,6 +187,12 @@ public:
 	void RenderCoverage (const Mat4 &toMap, VkPipelineLayout layout, const VECTOR3 &mapCentre, double mapRadius);
 	/// level 4 root texture of the western (0) or eastern (1) hemisphere
 	VkTexture *RootTexture (int i) const { TakeRoots (); return root[i] ? root[i]->surf : nullptr; }
+	/// The roots are in (a procedural planet's, made in the background:
+	/// taken now if they are done, or if the planet is near enough to be
+	/// seen - then waited for). False while they are still being made for a
+	/// planet out of sight: its frame preparation and drawing are skipped
+	/// (the loading's hold had waited a second for all the exoplanets')
+	bool RootsIn ();
 	/// the tile layers (shared with the loader thread; SurfaceQuery reads masks through them)
 	const std::shared_ptr<PlanetLayers> &Layers () const { return layers; }
 
@@ -370,6 +376,7 @@ private:
 	uint64_t meshGen = 0;
 	int needMeshes = 0;        // tiles of this frame's selection waiting for a mesh (Prepare)
 	int pendingLoads = 0;      // its tile requests in the loader
+	int renderedFrames = 0;    // (ORBITER_VK_HOLE_LOG)
 	bool detailWarm = false;   // (the core's terrain detail initialised, on the main thread)
 	/// the vertex buffer of a tile (made if needed), and its size [bytes]
 	void EnsureVertexBuffer (Node *n);
