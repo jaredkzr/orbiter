@@ -46,7 +46,9 @@ local function exists(name)
 end
 
 -- vessels on the ground placed in the air, level as on the ground: alt
--- [m] up, speed [m/s] forward, vs [m/s] vertical
+-- [m] up, speed [m/s] forward, vs [m/s] vertical; flat: level with the
+-- horizon instead (a glider on its belly leans 2.5 deg on its touchdown
+-- points), pitched up by pitch [deg]
 local function airborne(list)
 	local rot = {}
 	for i, e in ipairs(list) do
@@ -56,6 +58,15 @@ local function airborne(list)
 		local x = vec.sub(v:local2global({x=1, y=0, z=0}), g)
 		local y = vec.sub(v:local2global({x=0, y=1, z=0}), g)
 		local z = vec.sub(v:local2global({x=0, y=0, z=1}), g)
+		if e.flat then
+			local u = up(v)
+			x = vec.unit(vec.sub(x, vec.mul(u, vec.dotp(x, u))))
+			z = vec.sub(z, vec.mul(u, vec.dotp(z, u)))
+			z = vec.unit(vec.sub(z, vec.mul(x, vec.dotp(z, x))))
+			y = u
+			local p = math.rad(e.pitch or 0)
+			z, y = vec.add(vec.mul(z, math.cos(p)), vec.mul(y, math.sin(p))), vec.sub(vec.mul(y, math.cos(p)), vec.mul(z, math.sin(p)))
+		end
 		local R = {m11=x.x, m12=y.x, m13=z.x, m21=x.y, m22=y.y, m23=z.y, m31=x.z, m32=y.z, m33=z.z}
 		rot[i] = R
 		st.arot = {x=math.atan2(R.m23, R.m33), y=-math.asin(R.m13), z=math.atan2(R.m12, R.m11)}
@@ -77,7 +88,7 @@ local function main()
 	local nparts = drop:get_partcount()
 	local heat = vessel.get_interface("HEAT")
 	airborne({{v=cruise, alt=3000, speed=200, vs=0}, {v=pull, alt=3000, speed=320, vs=0},
-		{v=drop, alt=150, speed=0, vs=0}, {v=hard, alt=3, speed=0, vs=-4},
+		{v=drop, alt=150, speed=0, vs=0, flat=true, pitch=3}, {v=hard, alt=3, speed=0, vs=-4},
 		{v=heat, alt=90000, speed=11000, vs=-2000}})
 
 	-- Jupiter: below the crush depth (23 bar)

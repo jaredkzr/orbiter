@@ -1948,6 +1948,7 @@ private:
 	Vector touchdown_cg;   // projection of CG onto touchdown plane
 	TOUCHDOWN_VTX *touchdown_vtx;
 	DWORD ntouchdown_vtx;    // number of touchdown vertices
+	unsigned td_gen = 0;     // (counts SetTouchdownPoints calls: a landed vessel whose points change while it is created is set down again)
 	DWORD next_hullvtx;      // used by hull vertex iterator
 
 	Vector campos;             // internal camera position (cockpit mode);

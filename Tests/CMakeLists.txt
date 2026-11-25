@@ -492,7 +492,9 @@ if (ORBITER_TEST_EXE)
 		# Their moments (Audio/Contacts.h, logged): on the runway the main gear's
 		# wheels strike, then the nose's, and braking hard from 6 s they are
 		# still wheels (no hull, no leg); on its belly the hull, not the gear;
-		# the Moon's ground is regolith; docking at its closing speed
+		# the Moon's ground is regolith; docking at its closing speed. (The belly's
+		# thud after its release at 1 s: loaded landed with its gear up, it rests
+		# on its belly from the start)
 		foreach(scene Land Belly Moon)
 			add_test(
 				NAME "Audio.Contacts${scene}"
@@ -506,7 +508,7 @@ if (ORBITER_TEST_EXE)
 			PASS_REGULAR_EXPRESSION "contact of LAND: chirp wheel [12] at 1\\.2[0-9]* s.*contact of LAND: impact wheel [12] at 1\\.2[0-9]* s[^\n]*paved.*contact of LAND: impact wheel 0 at 1\\.[23]"
 			FAIL_REGULAR_EXPRESSION "contact of LAND: impact (hull|leg|obstacle)")
 		set_tests_properties(Audio.ContactsBelly PROPERTIES
-			PASS_REGULAR_EXPRESSION "contact of BELLY: impact hull [0-2] at 0\\.4"
+			PASS_REGULAR_EXPRESSION "contact of BELLY: impact hull [0-2] at 1\\.[2-4]"
 			FAIL_REGULAR_EXPRESSION "contact of BELLY: impact (wheel|leg)")
 		set_tests_properties(Audio.ContactsMoon PROPERTIES
 			PASS_REGULAR_EXPRESSION "contact of MOON: impact wheel [0-2] at 1\\.[0-9]+ s[^\n]*regolith"
@@ -591,15 +593,16 @@ if (ORBITER_TEST_EXE)
 		)
 		set_tests_properties(Audio.DockingCabinCheck PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED AudioDockingCabin)
 		# a part breaking off, a crash (Audio/Contacts.h, logged): the structure
-		# test's DROP, dropped flat from 150 m - its forward section breaks off
-		# on the ground at some 40 m/s, then it is destroyed in the impact
+		# test's DROP, dropped from 150 m, flat but its nose 3 deg up - its
+		# forward section breaks off on the ground at some 40 m/s, then it is
+		# destroyed in the impact (what is left of it slowed to 30-40 m/s)
 		add_test(
 			NAME "Audio.Destruction"
 			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${CMAKE_SOURCE_DIR}/Scenarios/Tests/DestructionTest.scn" "--fixedstep=0.02"
 			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
 		)
 		set_tests_properties(Audio.Destruction PROPERTIES TIMEOUT 300
-			PASS_REGULAR_EXPRESSION "contact of DROP: break at [0-9.]+ s: [0-9]+ kg, [2-6][0-9]\\.[0-9]+ m/s.*contact of DROP: crash at [0-9.]+ s: [4-6][0-9]\\.[0-9]+ m/s"
+			PASS_REGULAR_EXPRESSION "contact of DROP: break at [0-9.]+ s: [0-9]+ kg, [2-6][0-9]\\.[0-9]+ m/s.*contact of DROP: crash at [0-9.]+ s: [3-6][0-9]\\.[0-9]+ m/s"
 			ENVIRONMENT "ORBITER_AUDIO_RENDER=${ORBITER_BINARY_ROOT_DIR}/Audio.Destruction.wav;ORBITER_AUDIO_LOG=events;ORBITER_DAMAGE=1;ORBITER_AUDIO_CALLOUTS=0;ORBITER_AUDIO_AMBIENCE=0;ORBITER_AUDIO_RADIO=0")
 		# an explosion's blast (Effects, BlastSynth): a fuelled DG breaking up
 		# 1 km away - silent until its blast arrives, 1001 m / 340 m/s later
@@ -952,6 +955,47 @@ if (ORBITER_TEST_EXE)
 	endif()
 
 endif()
+
+# The damage model (Damage.<scenario>): what flies, lands, docks and crashes
+# with damage off must do the same, or what a test expects of it with damage
+# on (its script asks get_damagemodel), with the damage model on: each scenario
+# test that does not set ORBITER_DAMAGE itself runs again with it on. (Not the
+# long transfer flights: hours of coasting and a few burns, minutes each.)
+if (ORBITER_TEST_EXE)
+	set(_damage_skip TransferFlightTest TransferMarsFlightTest RouteFlightTest)
+	foreach(Scenario ${TestScenarios})
+		get_filename_component(test_name ${Scenario} NAME_WE)
+		get_test_property(Scenario.${test_name} ENVIRONMENT _env)
+		if (NOT _env)
+			set(_env "")
+		endif()
+		if (_env MATCHES "ORBITER_DAMAGE=" OR test_name IN_LIST _damage_skip)
+			continue()
+		endif()
+		add_test(
+			NAME "Damage.${test_name}"
+			COMMAND ${ORBITER_TEST_EXE} "--scenariox=${Scenario}" "--fixedstep=0.02"
+			WORKING_DIRECTORY ${ORBITER_BINARY_ROOT_DIR}
+		)
+		get_test_property(Scenario.${test_name} TIMEOUT _timeout)
+		set_tests_properties(Damage.${test_name} PROPERTIES TIMEOUT ${_timeout})
+		if (_env)
+			set_property(TEST Damage.${test_name} PROPERTY ENVIRONMENT "${_env}")
+		endif()
+		set_property(TEST Damage.${test_name} APPEND PROPERTY ENVIRONMENT "ORBITER_DAMAGE=1")
+	endforeach()
+endif()
+
+# Every test runs with the damage model as it says, never as the build's
+# Orbiter.cfg happens to have it (DamageModel, the Launchpad's option): off
+# where it does not say
+get_property(_orbiter_tests DIRECTORY PROPERTY TESTS)
+foreach(_t ${_orbiter_tests})
+	get_test_property(${_t} ENVIRONMENT _env)
+	if (NOT _env MATCHES "ORBITER_DAMAGE=")
+		set_property(TEST ${_t} APPEND PROPERTY ENVIRONMENT "ORBITER_DAMAGE=0")
+	endif()
+endforeach()
 
 # Every test that runs Orbiter: a log of its own and no saves at its end (ORBITER_LOG, ORBITER_NO_SAVE):
 # tests run side by side in one folder, and Orbiter.log, the config and "(Current state)" are shared

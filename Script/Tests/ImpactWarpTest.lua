@@ -1,6 +1,7 @@
 -- Impacts under high time acceleration (Scenarios/Tests/ImpactWarpTest.scn):
 -- vessels hitting the Moon in long steps are set down and landed, quickly
--- and without their states going bad.
+-- and without their states going bad. With the damage model on, a lone
+-- vessel is destroyed where it hits: its wreck on the ground, at rest.
 
 local failed = false
 local function log(s) oapi.write_log("ImpactWarpTest: " .. s) end
@@ -38,6 +39,14 @@ local function run(name, warp, simt, wallmax)
 	return not bad and alt == alt, st, alt, vr, oapi.get_systime() - w0
 end
 
+-- landed (status 1); with the damage model on, destroyed (its core lost: a
+-- ghost following its wreck) where it hit
+local function down(name, s)
+	local v = vessel.get_interface(name)
+	if v:get_damagemodel() ~= 0 then return v:get_partinfo(0).flags % 2 == 1, "destroyed" end
+	return s == 1, "landed"
+end
+
 local function main()
 	proc.wait_frames(2)
 	moon = oapi.get_objhandle("Moon")
@@ -51,13 +60,15 @@ local function main()
 	proc.wait_frames(5)
 	local ok, s, alt, vr, wall = run("FALL", 1000, 4000, 60)
 	-- (landed: on the terrain, the Moon's surface within +-10 km of its mean radius)
-	check("fall", ok and s == 1 and math.abs(alt) < 11e3 and vr < 10 and wall < 20,
-		string.format("landed at %.3f km, %.1f m/s, %.1f s", alt / 1000, vr, wall))
+	local d, what = down("FALL", s)
+	check("fall", ok and d and math.abs(alt) < 11e3 and vr < 10 and wall < 20,
+		string.format("%s at %.3f km, %.1f m/s, %.1f s", what, alt / 1000, vr, wall))
 
 	-- 2. an orbit through the ground, at 10,000x (stabilised steps of 200 s)
 	ok, s, alt, vr, wall = run("DIVE", 10000, 20000, 60)
-	check("dive", ok and s == 1 and math.abs(alt) < 11e3 and vr < 10 and wall < 20,
-		string.format("landed at %.3f km, %.1f m/s, %.1f s", alt / 1000, vr, wall))
+	d, what = down("DIVE", s)
+	check("dive", ok and d and math.abs(alt) < 11e3 and vr < 10 and wall < 20,
+		string.format("%s at %.3f km, %.1f m/s, %.1f s", what, alt / 1000, vr, wall))
 
 	-- 3. a docked pair (a supervessel) on an orbit through the ground, at
 	-- 1,000x: the group is set down where it hits, as it is

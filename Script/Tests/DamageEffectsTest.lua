@@ -105,6 +105,12 @@ end
 
 local function main()
 	proc.wait_frames(2)
+	-- (loaded landed with its gear up: set down on its belly, not dropped
+	-- onto it from the height of its gear - nothing broken by that)
+	local air = vessel.get_interface("AIR")
+	local lost = 0
+	for i = 0, air:get_partcount() - 1 do if air:get_partinfo(i).flags % 2 == 1 then lost = lost + 1 end end
+	check("AIR", air:get_flightstatus() % 2 == 1 and lost == 0, string.format("loaded landed with its gear up: on its belly, landed, %d parts lost", lost))
 	nose()
 	flight()
 	orbit()

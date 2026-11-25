@@ -47,7 +47,8 @@ local function fly(name, spec, limit)
 		alt = len(sub(v:get_globalpos(), oapi.get_globalpos(ht))) - R,
 		vrel = len(sub(v:get_globalvel(), oapi.get_globalvel(ht))),
 		pe = el.a * (1 - el.e) - R, ap = el.a * (1 + el.e) - R,
-		arrived = arrived, departed = seen.departed, vmax = seen.vmax, dmin = seen.dmin}
+		arrived = arrived, departed = seen.departed, vmax = seen.vmax, dmin = seen.dmin,
+		destroyed = v:get_partinfo(0) ~= nil and v:get_partinfo(0).flags % 2 == 1} -- (its core lost: destroyed)
 	-- (done with: removed, so it doesn't fall or orbit into the later trips' time warp)
 	local nextFocus
 	for _, n in ipairs({"T1", "T2", "T3", "T4", "T5"}) do
@@ -76,9 +77,17 @@ local function main()
 		string.format("at rest above the Moon: %.1f km, %.1f m/s", s.alt / 1000, s.vrel))
 
 	-- (another altitude: not into the first vessel's orbit)
+	local damage = vessel.get_interface("T3"):get_damagemodel() ~= 0
 	s = fly("T3", {target = "Mars", arrival = "orbit", alt = 700e3, accel = 1e5 * G0}, 60)
-	check("mars1e5", s.phase == "Arrived" and s.ref == mars and s.pe > 600e3 and s.ap < 800e3 and s.vmax > 0.8 * C,
-		string.format("Mars orbit %.1f x %.1f km at 100,000 g, top %.3f c", s.pe / 1000, s.ap / 1000, s.vmax / C))
+	if damage then
+		-- (the damage model on: at 100,000 g from low orbit it is past 1,000 km/s
+		-- within a second, still in the thermosphere - it burns up)
+		check("mars1e5", s.destroyed and s.vmax < 0.1 * C,
+			string.format("100,000 g from low orbit: destroyed %s, top %.3f c", tostring(s.destroyed), s.vmax / C))
+	else
+		check("mars1e5", s.phase == "Arrived" and s.ref == mars and s.pe > 600e3 and s.ap < 800e3 and s.vmax > 0.8 * C,
+			string.format("Mars orbit %.1f x %.1f km at 100,000 g, top %.3f c", s.pe / 1000, s.ap / 1000, s.vmax / C))
+	end
 
 	s = fly("T4", {target = "Mars", arrival = "flyby", alt = 1000e3, accel = 1000 * G0}, 60)
 	check("flyby", s.phase == "Arrived" and math.abs(s.dmin - s.R - 1000e3) < 50e3,

@@ -121,7 +121,14 @@ local function main()
 			check(r.name, r.vmax > 3.0, "got going")
 			check(r.name, r.smax > r.D - r.t.radius - 25.0, "came near the obstacle")
 			check(r.name, r.smax < r.D - 0.5 * r.t.radius, "was stopped by it (never reached its centre)")
-			check(r.name, v < 2.0, "ends slow")
+			-- (the damage model on: a crash into a boulder at 10 m/s and more
+			-- breaks it up; its wreck, not it, ends where it ends)
+			local destroyed = r.ves:get_partinfo(0) ~= nil and r.ves:get_partinfo(0).flags % 2 == 1
+			if destroyed then
+				check(r.name, r.ves:get_damagemodel() ~= 0 and r.vmax > 10.0, string.format("broke up in a crash at %.1f m/s (damage on)", r.vmax))
+			else
+				check(r.name, v < 2.0, "ends slow")
+			end
 		end
 	end
 end

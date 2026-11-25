@@ -425,25 +425,23 @@ bool Vessel::RelImpact (const CelestialBody *body, const Vector &rpos, const Vec
 		acc.Set (0, 0, 0);
 	};
 	reldrive.on = false;
-	if (structure::DamageEnabled()) {
-		// (where it hit, as it hit)
-		setState (body->s1->pos + rpos, body->s1->vel + rvel);
-		Destroy (cbuf);
-	} else {
-		// set down on the ground below the impact point, moving with it
-		Vector up (rpos.unit());
-		double rad = body->Size();
-		if (body->Type() == OBJTP_PLANET && ((const Planet*)body)->HasSurface()) {
-			double lng, lat, r;
-			body->LocalToEquatorial (tmul (body->s1->R, up), lng, lat, r);
-			rad += ((const Planet*)body)->Elevation (lng, lat);
-		}
-		Vector p1 (up * (rad + size));
-		Vector p0 (mul (body->s0->R, tmul (body->s1->R, p1)) + body->s0->pos); // (the ground point at the step's start)
-		setState (body->s1->pos + p1, td.SimDT > 0.0 ? (body->s1->pos + p1 - p0) / td.SimDT : body->s1->vel);
-		s1->omega.Set (0, 0, 0);
-		strcat (cbuf, ": the drive stopped");
+	// on the ground below the impact point, moving with it: set down there,
+	// or with the damage simulation destroyed there (its wreck where it hit,
+	// as a long step's impact leaves it - not flying on through the body at
+	// the speed it hit with)
+	Vector up (rpos.unit());
+	double rad = body->Size();
+	if (body->Type() == OBJTP_PLANET && ((const Planet*)body)->HasSurface()) {
+		double lng, lat, r;
+		body->LocalToEquatorial (tmul (body->s1->R, up), lng, lat, r);
+		rad += ((const Planet*)body)->Elevation (lng, lat);
 	}
+	Vector p1 (up * (rad + size));
+	Vector p0 (mul (body->s0->R, tmul (body->s1->R, p1)) + body->s0->pos); // (the ground point at the step's start)
+	setState (body->s1->pos + p1, td.SimDT > 0.0 ? (body->s1->pos + p1 - p0) / td.SimDT : body->s1->vel);
+	s1->omega.Set (0, 0, 0);
+	if (structure::DamageEnabled()) Destroy (cbuf);
+	else strcat (cbuf, ": the drive stopped");
 	if (reltrip) reltrip->Abort (cbuf);
 	LOGOUT ("Relativistic flight: %s %s", Name(), cbuf);
 	if (this == g_focusobj) {

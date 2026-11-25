@@ -806,8 +806,15 @@ void Vessel::PostCreation ()
 void Vessel::ModulePostCreation ()
 {
 	// now let the module do its post-creation stuff
+	unsigned gen = td_gen;
+	bool landed = (fstatus == FLIGHTSTATUS_LANDED && proxyplanet && !attach && !supervessel && !water.afloat);
 	if (modIntf.v->Version() >= 1)
 		((VESSEL2*)modIntf.v)->clbkPostCreation ();
+	// (set down with the touchdown points of its class; the module changed
+	// them for the state it was loaded in - a glider's gear up: set down
+	// again on those, rather than dropped onto them)
+	if (landed && td_gen != gen)
+		InitLanded (proxyplanet, sp.lng, sp.lat, sp.dir);
 	ApplySavedDamage ();
 }
 
@@ -1189,6 +1196,7 @@ bool Vessel::SetTouchdownPoints (const TOUCHDOWNVTX *tdvtx, DWORD ntp)
 		touchdown_vtx = new TOUCHDOWN_VTX[ntouchdown_vtx = ntp];
 	}
 	td_hull_n = (DWORD)-1;
+	td_gen++;
 	for (i = 0; i < ntp; i++) {
 		touchdown_vtx[i].pos.Set (MakeVector(tdvtx[i].pos));
 		touchdown_vtx[i].stiffness = tdvtx[i].stiffness;
@@ -6293,6 +6301,10 @@ void Vessel::Timejump (double dt, int mode)
 			mode = mode & PROP_ORBITAL;
 		else                              // suborbital
 			mode = mode & PROP_SORBITAL;
+		// (on the ground but not landed - resting after losing a part, rolling,
+		// afloat: carried with the surface, not along an orbit into the ground)
+		if (bSurfaceContact && proxyplanet && cbody == proxyplanet)
+			mode = PROP_ORBITAL_FIXEDSURF;
 
 		switch (mode) {
 		case PROP_ORBITAL_ELEMENTS:

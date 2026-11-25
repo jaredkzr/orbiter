@@ -66,7 +66,12 @@ local function main()
 	check("A1", a1:get_flightstatus() % 2 == 1, "stays landed")
 	check("A1", amin[1] > ALT - 0.5, "stays on the deck")
 	check("A2", left and amax2 > ALT + 10.0, "lifted off")
-	check("A2", a2:get_flightstatus() % 2 == 1, "landed again")
+	if a2:get_damagemodel() ~= 0 then
+		-- (the damage model on: down from 60 m with the engines off - a crash)
+		check("A2", a2:get_partinfo(0).flags % 2 == 1, "crashed onto the deck from 60 m (damage on)")
+	else
+		check("A2", a2:get_flightstatus() % 2 == 1, "landed again")
+	end
 	check("A2", amin[2] > ALT - 0.5, "never fell through the deck")
 	check("A2", moved < 40.0, "came down near its pad")
 end
