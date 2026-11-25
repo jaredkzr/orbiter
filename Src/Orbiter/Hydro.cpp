@@ -61,7 +61,13 @@ void Result::Clear (int parts)
 namespace {
 	// (a grid coordinate within [0, n-1): NaN - a body's state gone bad -
 	// at the grid's corner, not an index of INT_MIN)
-	double GridCoord (double u, int n) { return std::fmin (std::fmax (u, 0.0), n - 1.000001); }
+	// (as std::clamp, compares only: fmin/fmax's NaN rules cost in this
+	// innermost lookup)
+	inline double GridCoord (double u, int n)
+	{
+		const double hi = n - 1.000001;
+		return !(u >= 0.0) ? 0.0 : u > hi ? hi : u;
+	}
 }
 
 double Surface::Height (double x, double z, double *sx, double *sz) const
