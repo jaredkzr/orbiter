@@ -26,6 +26,9 @@
 #include "ParticleStream.h"
 #include "Plasma.h"
 #include <map>
+#include <mutex>
+#include <thread>
+#include <atomic>
 #include <random>
 #include "VesselAPI.h"
 #include <algorithm>
@@ -891,6 +894,8 @@ void VDebris::CutPiece (const VESSEL *src, const DEBRISINFO &info, std::vector<P
 	std::vector<uint8_t> found (info.ngroup, 0);
 	for (DWORD i = 0; i < info.ngroup; i++) {
 		if (!oapiGetDebrisGroup (hObj, i, &dgs[i]) || !dgs[i].hMesh) continue;
+		static std::mutex meshLock; // (Build: pieces made in parallel; a mesh not loaded yet is loaded here)
+		std::lock_guard<std::mutex> lk (meshLock);
 		for (UINT m = 0; m < src->GetMeshCount (); m++) {
 			MESHHANDLE hm = src->GetMeshTemplate (m);
 			if (!hm)
@@ -944,9 +949,35 @@ void VDebris::CutPiece (const VESSEL *src, const DEBRISINFO &info, std::vector<P
 	}
 }
 
-VDebris::VDebris (OBJHANDLE h, Scene *s, DWORD sn)
+VDebris::VDebris (OBJHANDLE h, Scene *s, DWORD sn, bool deferred)
 	: VObject (h, s), serial (sn)
 {
+	if (deferred) return;
+	Build ();
+	Finish ();
+}
+
+void VDebris::WarmSource ()
+{
+	DEBRISINFO i;
+	if (oapiGetDebrisInfo (hObj, &i))
+		if (OBJHANDLE hs = oapiGetVesselByName (i.source))
+			if (VESSEL *v = oapiGetVesselInterface (hs)) v->GetPartAt (_V(0, 0, 0));
+}
+
+void VDebris::Finish ()
+{
+	if (built.empty()) return;
+	VulkanClient *gc = scene->Client();
+	mesh = std::make_unique<VkMesh> (gc->Ctx(), gc->TexMgr(), built);
+	built.clear ();
+	built.shrink_to_fit ();
+}
+
+void VDebris::Build ()
+{
+	// (no GPU calls, nothing of the client's state: the core's data of the
+	// piece and its vessel only, read while the core waits)
 	DEBRISINFO info;
 	if (!oapiGetDebrisInfo (hObj, &info)) return;
 	OBJHANDLE hSrc = oapiGetVesselByName (info.source);
@@ -1048,9 +1079,7 @@ VDebris::VDebris (OBJHANDLE h, Scene *s, DWORD sn)
 	fracture::Walls (tris, depth, 1e-3, serial, walls);
 	for (auto &w : walls) fracture::AddParts (w, parts);
 	fracture::AddParts (inside, parts, true);
-	if (parts.empty()) return;
-	VulkanClient *gc = scene->Client();
-	mesh = std::make_unique<VkMesh> (gc->Ctx(), gc->TexMgr(), parts);
+	built = std::move (parts);
 }
 
 namespace {
